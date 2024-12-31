@@ -1,0 +1,49 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# CMake files
+build/
+_build/
+packages/
+
+# User configuration files
+CMakeUserPresets.json
+CMakeUserLists.txt
+.vscode/
+
+vcpkg_installed/
+build-ninja/
+pkg/
+FileContentIndex/
+
+cmake/local.cmake
