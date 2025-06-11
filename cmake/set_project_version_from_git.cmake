@@ -1,0 +1,98 @@
+# Function to set project PROJECT_VERSION from Git
+function(set_project_version_from_git)
+  # Set default return values
+  set(PROJECT_VERSION
+      "1.0.0"
+      PARENT_SCOPE)
+  set(PROJECT_VERSION_MAJOR
+      "1"
+      PARENT_SCOPE)
+  set(PROJECT_VERSION_MINOR
+      "0"
+      PARENT_SCOPE)
+  set(PROJECT_VERSION_PATCH
+      "0"
+      PARENT_SCOPE)
+  set(PROJECT_VERSION_TWEAK
+      ""
+      PARENT_SCOPE)
+  set(BUILD_ID
+      "unknown"
+      PARENT_SCOPE)
+
+  # Try to find Git
+  find_package(Git QUIET)
+  if(NOT GIT_FOUND)
+    message(
+      WARNING "Git not found - using default PROJECT_VERSION ${PROJECT_VERSION}"
+    )
+    return()
+  endif()
+
+  # Get PROJECT_VERSION from git describe
+  execute_process(
+    COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=4 --long --match "v*"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE GIT_PROJECT_VERSION_STRING
+    ERROR_VARIABLE GIT_PROJECT_VERSION_ERROR
+    RESULT_VARIABLE GIT_PROJECT_VERSION_RESULT
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+  # Get commit hash for BUILD_ID
+  execute_process(
+    COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE GIT_COMMIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+  if(NOT GIT_PROJECT_VERSION_RESULT EQUAL 0)
+    # Fallback if no Git tags exist
+    set(PROJECT_VERSION
+        "0.0.0.${GIT_COMMIT_HASH}"
+        PARENT_SCOPE)
+    return()
+  endif()
+
+  # Parse PROJECT_VERSION from git describe (format: v1.2.3-4-gabcd)
+  string(
+    REGEX
+    REPLACE "^v([0-9]+)\\.([0-9]+)\\.([0-9]+)(-([0-9]+))?(-g([a-f0-9]+))?$"
+            "\\1;\\2;\\3;\\5;\\7" PROJECT_VERSION_PARTS
+            "${GIT_PROJECT_VERSION_STRING}")
+
+  list(GET PROJECT_VERSION_PARTS 0 PROJECT_VERSION_MAJOR_LOCAL)
+  list(GET PROJECT_VERSION_PARTS 1 PROJECT_VERSION_MINOR_LOCAL)
+  list(GET PROJECT_VERSION_PARTS 2 PROJECT_VERSION_PATCH_LOCAL)
+  list(GET PROJECT_VERSION_PARTS 3 PROJECT_VERSION_TWEAK_LOCAL)
+
+  # Set the PROJECT_VERSION components in parent scope
+  set(PROJECT_VERSION_MAJOR
+      "${PROJECT_VERSION_MAJOR_LOCAL}"
+      PARENT_SCOPE)
+  set(PROJECT_VERSION_MINOR
+      "${PROJECT_VERSION_MINOR_LOCAL}"
+      PARENT_SCOPE)
+  set(PROJECT_VERSION_PATCH
+      "${PROJECT_VERSION_PATCH_LOCAL}"
+      PARENT_SCOPE)
+  set(PROJECT_VERSION_TWEAK
+      "${PROJECT_VERSION_TWEAK_LOCAL}"
+      PARENT_SCOPE)
+
+  # Handle empty tweak PROJECT_VERSION
+  if("${PROJECT_VERSION_TWEAK_LOCAL}" STREQUAL "")
+    set(PROJECT_VERSION
+        "${PROJECT_VERSION_MAJOR_LOCAL}.${PROJECT_VERSION_MINOR_LOCAL}.${PROJECT_VERSION_PATCH_LOCAL}"
+        PARENT_SCOPE)
+  else()
+    set(PROJECT_VERSION
+        "${PROJECT_VERSION_MAJOR_LOCAL}.${PROJECT_VERSION_MINOR_LOCAL}.${PROJECT_VERSION_PATCH_LOCAL}+${PROJECT_VERSION_TWEAK_LOCAL}.${GIT_COMMIT_HASH}"
+        PARENT_SCOPE)
+  endif()
+
+  # Output for debugging
+  message(
+    STATUS
+      "Project PROJECT_VERSION set to: ${PROJECT_VERSION_MAJOR_LOCAL}.${PROJECT_VERSION_MINOR_LOCAL}.${PROJECT_VERSION_PATCH_LOCAL}+${PROJECT_VERSION_TWEAK_LOCAL}.${GIT_COMMIT_HASH}"
+  )
+endfunction()
