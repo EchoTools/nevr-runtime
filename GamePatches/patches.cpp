@@ -2,7 +2,7 @@
 #include "patches.h"
 #include "processmem.h"
 #include <string>
-#include <detours.h>
+#include <detours/detours.h>
 
 /// <summary>
 /// Indicates whether the patches have been applied (to avoid re-application).
@@ -50,7 +50,7 @@ EchoVR::Json* localConfig = NULL;
 /// If non-zero, sets the timestep override by the given tick rate per second.
 /// If zero, removes tick rate throttling.
 /// </summary>
-UINT64 headlessTimeStep = 120;
+UINT32 headlessTimeStep = 120;
 
 /// <summary>
 /// Reports a fatal error with a message box, then exits the game.
@@ -111,14 +111,14 @@ VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_
         if (!strcmp(formattedLog, "[DEBUGPRINT] PickRandomTip: context = 0x41D2C432172E0810")) // noisy in main menu / loading screen
             return;
         if (!strcmp(formattedLog, "[SCRIPT] 0xA9DB89899292A98F: realdiv(d9a3e735) divide by zero")) // laggy in game
-			return;
+            return;
     }
     else if (!strcmp(format, "[NETGAME] No screen stats info for game mode %s")) // noisy in social lobby
         return;
 
     // Calling the original function and returning here if noConsole is set to avoid putting any extra formatting in the logs.
     if (noConsole) return EchoVR::WriteLog(logLevel, unk, format, vl);
-    
+
     // Print the ANSI color code prefix for the given log level.
     switch (logLevel)
     {
@@ -146,7 +146,7 @@ VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_
 
     // Print the ANSI color code for restoring the default text style.
     printf("\u001B[0m");
-    
+
 
     // Call the original method
     EchoVR::WriteLog(logLevel, unk, format, vl);
@@ -207,13 +207,13 @@ VOID PatchEnableHeadless(PVOID pGame)
     // Note: We do this because attaching to the parent process console would already be detached due to /SUBSYSTEM:WINDOWS.
     // Attaching two processes to a console at once would be messy and.
     AllocConsole();
-    
+
     // Redirect our standard streams to the new console.
     FILE* fConsole;
     freopen_s(&fConsole, "CONIN$", "r", stdin);
     freopen_s(&fConsole, "CONOUT$", "w", stderr);
     freopen_s(&fConsole, "CONOUT$", "w", stdout);
-     
+
     // Enable ANSI color coding on the console.
     HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
     HANDLE hStdErr = GetStdHandle(STD_ERROR_HANDLE);
@@ -428,7 +428,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame)
         {
             // Verify a timestep argument was provided.
             if (i + 1 < argc)
-                headlessTimeStep = std::wcstoull((const WCHAR*)argv[i + 1], nullptr, 10);
+                headlessTimeStep = std::wcstoul((const WCHAR*)argv[i + 1], nullptr, 10);
             else
                 FatalError("No argument provided for -timestep. You must provide a positive number for a fixed tick rate, or a zero value for unthrottled.", NULL);
         }
@@ -488,10 +488,10 @@ UINT64 LoadLocalConfigHook(PVOID pGame)
         // Patches the game to fix the delta time calculation for when using fixedtimestep.
         // Change condtion for if deltatime is higher than timestep tell engine time is deltatime.
         BYTE Patch1[] = {
-        0x73, 0x7A 
+        0x73, 0x7A
         };
         ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xCF46D, Patch1, sizeof(Patch1));
-        
+
     }
 
     // Store a reference to the local config.
@@ -542,7 +542,7 @@ FARPROC GetProcAddressHook(HMODULE hModule, LPCSTR lpProcName)
     // during a RadPluginShutdown call. This could be due to the timing on the patch for dedicated servers causing 
     // some structures to initialize incorrectly or something.
     // For now, we resolve this by simply force exiting the server.
-    
+
     // If we're performing a plugin shutdown, check if this is a user platform DLL such as pnsdemo.dll or pnsovr.dll, 
     // which exports a "Users" method.
     if (isServer && strcmp(lpProcName, "RadPluginShutdown") == 0)
@@ -567,8 +567,8 @@ BOOL SetWindowTextAHook(HWND hWnd, LPCSTR lpString)
     // Store a reference to the window
     hWindow = hWnd;
 
-    // Call the original function and return the result.
-    return EchoVR::SetWindowTextA_(hWnd, lpString);
+    // Call the original function and return the result with explicit cast to avoid data loss warning
+    return (BOOL)EchoVR::SetWindowTextA_(hWnd, lpString);
 }
 
 /// <summary>
@@ -578,13 +578,13 @@ BOOL SetWindowTextAHook(HWND hWnd, LPCSTR lpString)
 BOOL VerifyGameVersion()
 {
     // Definitions to read image file header.
-    #define IMG_SIGNATURE_OFFSET    0x3C
-    #define IMG_SIGNATURE_SIZE      0x04
+#define IMG_SIGNATURE_OFFSET    0x3C
+#define IMG_SIGNATURE_SIZE      0x04
 
-    // Obtain the image file header for the game.
+// Obtain the image file header for the game.
     DWORD* signatureOffset = (DWORD*)(EchoVR::g_GameBaseAddress + IMG_SIGNATURE_OFFSET);
     IMAGE_FILE_HEADER* coffFileHeader = (IMAGE_FILE_HEADER*)(EchoVR::g_GameBaseAddress + (*signatureOffset + IMG_SIGNATURE_SIZE));
-    
+
     // Verify the timestamp for Echo VR (version 34.4.631547.1).
     // Timestamp should be Wednesday, May 3, 2023 10:28:06 PM.
     // Note: For other executables, this may not hold. Reproducible builds have pushed this
@@ -605,7 +605,7 @@ VOID Initialize()
 
     // Verify the game version before patching
     if (!VerifyGameVersion())
-        MessageBox(NULL, L"EchoRelay version check failed. Patches may fail to be applied. Verify you're running the correct version of Echo VR.", L"Echo Relay: Warning", MB_OK);
+        MessageBoxW(NULL, L"EchoRelay version check failed. Patches may fail to be applied. Verify you're running the correct version of Echo VR.", L"Echo Relay: Warning", MB_OK);
 
     // Patch our CLI argument options to add our additional options.
     PatchDetour(&(PVOID&)EchoVR::BuildCmdLineSyntaxDefinitions, BuildCmdLineSyntaxDefinitionsHook);
