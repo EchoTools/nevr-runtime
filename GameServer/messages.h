@@ -22,52 +22,68 @@ const EchoVR::SymbolId SYMBOL_BROADCASTER_LOBBY_VOICE_ENTRY = 0x27504F14881C1A43
 
 // Symbols representing messages to the serverdb.
 
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_REGISTRATION_REQUEST = 0x7777777777777777;  // unofficial
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_REGISTRATION_SUCCESS = -5369924845641990433;
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_REGISTRATION_FAILURE = -5373034290044534839;
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_SUCCESS_V5 = 0x6d4de3650ee3110f;
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_START_SESSION = 0x7777777777770000;             // unofficial
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_STARTED = 0x7777777777770100;           // unofficial
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_END_SESSION = 0x7777777777770200;               // unofficial
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_PLAYER_SESSIONS_LOCKED = 0x7777777777770300;    // unofficial
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_PLAYER_SESSIONS_UNLOCKED = 0x7777777777770400;  // unofficial
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_ACCEPT_PLAYERS = 0x7777777777770500;            // unofficial
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_PLAYERS_ACCEPTED = 0x7777777777770600;          // unofficial
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_PLAYERS_REJECTED = 0x7777777777770700;          // unofficial
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_PLAYERS_REMOVE_PLAYER = 0x7777777777770800;     // unofficial
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_CHALLENGE_REQUEST = 0x7777777777770900;         // unofficial
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_CHALLENGE_RESPONSE = 0x7777777777770A00;        // unofficial
 
-/// <summary>
-/// A message sent from game server to server to register the game server.
-/// </summary>
-struct ERLobbyRegistrationRequest {
+// NEVR Custom Messages
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_SUCCESS_V5 = 0x6d4de3650ee3110f;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_START_V1 = 0x0b59f03ca8bb9433;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_STARTED_V1 = 0x7b841b6f2aeae97d;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_ENDED_V1 = 0x0b4fea39bfab9433;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_ERRORED_V1 = 0x33d3b6b770e2b4a1;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_LOCK_V1 = 0xe59c852331f7af0f;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_UNLOCK_V1 = 0x78c869da818d5adf;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_ENTRANT_JOIN_ATTEMPT_V1 = 0x1b267eeded5ded15;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_ENTRANT_ACCEPT_V1 = 0x119ea15d3b579b79;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_ENTRANT_REJECT_V1 = 0x1363185792779bfb;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_ENTRANT_REMOVED_V1 = 0xab66524706483f2f;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_DATA_V1 = 0xe59c8d2d26fdaf0f;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_STATUS_V1 = 0x7dd7c17f8b6ba38f;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_NEVRPROTOBUF_MESSAGE_V1 = 0x9ee5107d9e29fd63;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_REGISTRATION_REQUEST_V1 = 0x802806fd6110d2bd;
+
+struct NEVRLobbyRegistrationRequestV1 {
+  GUID loginUUID;
   UINT64 serverId;
   UINT32 internalIp;
   UINT16 port;
-  BYTE padding[10];  // Was 4, but somehow compiled into 10, so we'll just go with it and set just in case it compiles
-                     // differently in the future.
   EchoVR::SymbolId regionId;
   EchoVR::SymbolId versionLock;
+  UINT32 timestepUSecs;
 };
 
 /// <summary>
 /// A message sent from game server to server to indicate the current session has ended.
 /// </summary>
-struct ERLobbyEndSession {
-  CHAR unused;
+struct NEVRLobbySessionStartedV1 {
+  GUID lobbySessionId;
+};
+
+struct NEVRLobbyEntrantJoinAttemptV1 {
+  GUID lobbySessionId;
+  UINT64 playerCount;
+  EchoVR::Array<GUID>* playerUuids;
+};
+
+struct NEVRLobbySessionEndedV1 {
+  GUID lobbySessionId;
 };
 
 /// <summary>
 /// A message sent from game server to server to indicate the current session has been locked.
 /// </summary>
-struct ERLobbyPlayerSessionsLocked {
-  CHAR unused;
+struct NEVRLobbySessionLockV1 {
+  GUID lobbySessionId;
 };
 
 /// <summary>
 /// A message sent from game server to server to indicate the current session has been unlocked.
 /// </summary>
-struct ERLobbyPlayerSessionsUnlocked {
-  CHAR unused;
+struct NEVRLobbySessionUnlockV1 {
+  GUID lobbySessionId;
+};
+
+struct NEVRLobbyEntrantRemovedV1 {
+  GUID lobbySessionId;
+  GUID playerUuid;
 };

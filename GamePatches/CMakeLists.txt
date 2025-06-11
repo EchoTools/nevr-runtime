@@ -1,6 +1,6 @@
 # Find Detours
-find_path(DETOURS_INCLUDE_DIRS "detours/detours.h")
 find_library(DETOURS_LIBRARY detours REQUIRED)
+find_path(DETOURS_INCLUDE_DIRS "detours/detours.h")
 
 # Game Patches
 set(PATCHES_SOURCES "dllmain.cpp" "patches.cpp")
