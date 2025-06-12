@@ -282,7 +282,7 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     // full, failed to connect, etc). But at least it doesn't cause the server to get stuck in a "not ready" state
     // in some menu.
     Log(EchoVR::LogLevel::Debug,
-        "[ECHORELAY.PATCH] Dedicated server failed to load level. Resetting session to keep game server "
+        "[NEVR.GAMEPATCHES] Dedicated server failed to load level. Resetting session to keep game server "
         "available.");
     EchoVR::NetGameScheduleReturnToLobby(pGame);
     return;
@@ -509,7 +509,7 @@ VOID Initialize() {
   if (initialized) return;
   initialized = true;
 
-  Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMEPATCHES] version %s (%s) initializing", VERSION, BUILD_ID);
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMEPATCHES] version %s (%s) initializing", VERSION, BUILD_ID);
 
   // Verify the game version before patching
   if (!VerifyGameVersion())

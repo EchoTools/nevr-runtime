@@ -111,10 +111,3 @@ add_subdirectory(GameServer)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
 endif()
-
-option(COPY_TO_GAME_DIR "Copy build artifacts to game directory" ON)
-# Default path for EchoVR binaries - can be overridden
-set(ECHOVR_BIN_PATH
-    "C:/Users/User/source/repos/EchoRelay9/_local/newnakama/echovr-newnakama/bin/win10"
-)
-include("cmake/copy_to_game_directory.cmake")
