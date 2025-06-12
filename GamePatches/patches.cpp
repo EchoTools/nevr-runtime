@@ -140,14 +140,15 @@ VOID PatchEnableHeadless(PVOID pGame) {
 }
 
 /// <summary>
-/// Patches the game to run as a dedicated server, exposing its game server broadcast port, adjusting its log file path.
+/// Patches the game to run as a dedicated server, exposing its game server broadcast port, adjusting its log file
+/// path.
 /// </summary>
 /// <returns>None</returns>
 VOID PatchEnableServer() {
   // Patch the flags for our game to indicate we are a game server. This replaces checks to see if we
   // are a server, with code to set the flag permanently, and skips over the rest of the checking code.
-  BYTE pbPatch[] = {0x48, 0x83, 0x08, 0x06,  // OR QWORD ptr[rax], 0x6 (bit 2 = load sessions received from broadcast,
-                                             // bit 3 = patch flag to set as dedicated server)
+  BYTE pbPatch[] = {0x48, 0x83, 0x08, 0x06,  // OR QWORD ptr[rax], 0x6 (bit 2 = load sessions received from
+                                             // broadcast, bit 3 = patch flag to set as dedicated server)
 
                     0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
                     0x90,  // NOP instructions to replace server flag checks (with above
@@ -166,17 +167,17 @@ VOID PatchEnableServer() {
   BYTE pbPatch3[] = {0xEB, 0x0E};
   ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xFFB0E, pbPatch3, sizeof(pbPatch3));
 
-  // Patch the ./sourcedb/rad15/json/r14/config/netconfig_*.json file parsing routine so the "allow_incoming" key is
-  // always interpreted as `true`. This is necessary for a game server to accept players. Otherwise they will be denied,
-  // disallowing client connections.
+  // Patch the ./sourcedb/rad15/json/r14/config/netconfig_*.json file parsing routine so the "allow_incoming" key
+  // is always interpreted as `true`. This is necessary for a game server to accept players. Otherwise they will
+  // be denied, disallowing client connections.
   BYTE pbPatch4[] = {
       0xB8, 0x01, 0x00, 0x00, 0x00  // MOV eax, 1 (set the flag to `true`).
   };
   ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xF7F904, pbPatch4, sizeof(pbPatch4));
 
   // Patch the CLI pre-processing method to assume the process was provided "-spectatorstream".
-  // This causes the game to enter a "load lobby" state, which as a game server, starts the game server on startup.
-  // Otherwise, you would need to manually click the "play" button before the server began serving.
+  // This causes the game to enter a "load lobby" state, which as a game server, starts the game server on
+  // startup. Otherwise, you would need to manually click the "play" button before the server began serving.
   BYTE pbPatch5[] = {
       0x90, 0x90, 0x90, 0x90, 0x90, 0x90  // NOP the jump that is taken if "-spectatorstream" is not provided.
   };
@@ -184,8 +185,8 @@ VOID PatchEnableServer() {
 }
 
 /// <summary>
-/// Patches the game to run as an offline client, loading a game of the configuration specified by -gametype, -level,
-/// and -region CLI arguments.
+/// Patches the game to run as an offline client, loading a game of the configuration specified by -gametype,
+/// -level, and -region CLI arguments.
 /// </summary>
 /// <returns>None</returns>
 VOID PatchEnableOffline() {
@@ -224,8 +225,8 @@ VOID PatchEnableOffline() {
 }
 
 /// <summary>
-/// Patches the game to allow -noovr (demo accounts) without use of spectator stream. This provides a temporary player
-/// profile.
+/// Patches the game to allow -noovr (demo accounts) without use of spectator stream. This provides a temporary
+/// player profile.
 /// </summary>
 /// <returns>None</returns>
 VOID PatchNoOvrRequiresSpectatorStream() {
@@ -237,15 +238,15 @@ VOID PatchNoOvrRequiresSpectatorStream() {
 }
 
 /// <summary>
-/// Patches the dead lock monitor, which monitors threads to ensure they have not stopped processing. If one does, it
-/// triggers a fatal error. This patch is provided to ensure breakpoints set during testing do not trigger the deadlock
-/// monitor, thereby killing the process.
+/// Patches the dead lock monitor, which monitors threads to ensure they have not stopped processing. If one does,
+/// it triggers a fatal error. This patch is provided to ensure breakpoints set during testing do not trigger the
+/// deadlock monitor, thereby killing the process.
 /// </summary>
 /// <returns>None</returns>
 VOID PatchDeadlockMonitor() {
-  // Patch out the deadlock monitor thread's validation routine. This is necessary during debugging, as this thread acts
-  // as a watchdog for updates and will panic if an update has not occurred for some time (e.g. waiting too long between
-  // breakpoints when debugging).
+  // Patch out the deadlock monitor thread's validation routine. This is necessary during debugging, as this
+  // thread acts as a watchdog for updates and will panic if an update has not occurred for some time (e.g.
+  // waiting too long between breakpoints when debugging).
   BYTE pbPatch[] = {
       0x90, 0x90  // NOPs (to replace the JLE instruction which checks failing deadlock conditions).
   };
@@ -265,11 +266,12 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
   if (isServer && state == EchoVR::NetGameState::LoadFailed) {
     // Schedule a return to lobby. We are already at lobby, but this will quickly end the session, removing
     // all players, and start listening for a new one, to keep the server recycling itself appropriately.
-    // Note: This is an ugly hack, as the client will get an irrelevant connection failure message (server is full,
-    // failed to connect, etc). But at least it doesn't cause the server to get stuck in a "not ready" state in some
-    // menu.
+    // Note: This is an ugly hack, as the client will get an irrelevant connection failure message (server is
+    // full, failed to connect, etc). But at least it doesn't cause the server to get stuck in a "not ready" state
+    // in some menu.
     Log(EchoVR::LogLevel::Debug,
-        "[ECHORELAY.PATCH] Dedicated server failed to load level. Resetting session to keep game server available.");
+        "[ECHORELAY.PATCH] Dedicated server failed to load level. Resetting session to keep game server "
+        "available.");
     EchoVR::NetGameScheduleReturnToLobby(pGame);
     return;
   }
@@ -337,7 +339,8 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
         headlessTimeStep = std::wcstoul((const WCHAR*)argv[i + 1], nullptr, 10);
       else
         FatalError(
-            "No argument provided for -timestep. You must provide a positive number for a fixed tick rate, or a zero "
+            "No argument provided for -timestep. You must provide a positive number for a fixed tick rate, or a "
+            "zero "
             "value for unthrottled.",
             NULL);
     }
@@ -354,12 +357,13 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // If the headless flag was provided, enable it.
   if (isHeadless) PatchEnableHeadless(pGame);
 
-  // If the windowed, server, or headless flags were provided, apply the windowed mode patch to not use a VR headset.
+  // If the windowed, server, or headless flags were provided, apply the windowed mode patch to not use a VR
+  // headset.
   if (isWindowed || isServer || isHeadless) {
     // Set the game to run in windowed mode.
     UINT64* flags = (UINT64*)((CHAR*)pGame + 31456);
-    *flags |= 0x0100000;  // Spectator stream uses 0x2100000 (an additional flag). This changes level setting in some
-                          // way(?). Seemingly unnecessary here.
+    *flags |= 0x0100000;  // Spectator stream uses 0x2100000 (an additional flag). This changes level setting in
+                          // some way(?). Seemingly unnecessary here.
   }
 
   // Apply patches to force the game to load as a server.
@@ -398,8 +402,8 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
 }
 
 /// <summary>
-/// A detour hook for the game's method it uses to connect to an HTTP(S) endpoint. This is used to redirect additional
-/// hardcoded endpoints in the game.
+/// A detour hook for the game's method it uses to connect to an HTTP(S) endpoint. This is used to redirect
+/// additional hardcoded endpoints in the game.
 /// </summary>
 /// <param name="unk">TODO: Unknown</param>
 /// <param name="uri">The HTTP(S) URI string to connect to.</param>
@@ -436,11 +440,11 @@ FARPROC GetProcAddressHook(HMODULE hModule, LPCSTR lpProcName) {
   // some structures to initialize incorrectly or something.
   // For now, we resolve this by simply force exiting the server.
 
-  // If we're performing a plugin shutdown, check if this is a user platform DLL such as pnsdemo.dll or pnsovr.dll,
-  // which exports a "Users" method.
+  // If we're performing a plugin shutdown, check if this is a user platform DLL such as pnsdemo.dll or
+  // pnsovr.dll, which exports a "Users" method.
   if (isServer && strcmp(lpProcName, "RadPluginShutdown") == 0) {
-    // If this is a user platform dll, exit the whole process with a success code instead of continuing to gracefully
-    // unload.
+    // If this is a user platform dll, exit the whole process with a success code instead of continuing to
+    // gracefully unload.
     if (EchoVR::GetProcAddress(hModule, "Users") != NULL) exit(0);
   }
 
@@ -514,8 +518,8 @@ VOID Initialize() {
   // Run some startup patches
   PatchNoOvrRequiresSpectatorStream();
 
-  // Patch out the deadlock monitor thread's validation routine if we're compiling in debug mode, as this will panic
-  // from process suspension.
+  // Patch out the deadlock monitor thread's validation routine if we're compiling in debug mode, as this will
+  // panic from process suspension.
 #if _DEBUG
   PatchDeadlockMonitor();
 #endif
