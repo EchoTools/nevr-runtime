@@ -117,28 +117,40 @@ VOID PatchEnableHeadless(PVOID pGame) {
   // Create a console
   // Note: We do this because attaching to the parent process console would already be detached due to
   // /SUBSYSTEM:WINDOWS. Attaching two processes to a console at once would be messy and.
-  AllocConsole();
 
-  // Redirect our standard streams to the new console.
-  FILE* fConsole;
-  freopen_s(&fConsole, "CONIN$", "r", stdin);
-  freopen_s(&fConsole, "CONOUT$", "w", stderr);
-  freopen_s(&fConsole, "CONOUT$", "w", stdout);
+  // Allocates a new console window for the process if one does not already exist.
+  if (AllocConsole()) {
+    // Redirect standard input to the console
+    FILE* inFile = nullptr;
+    if (freopen_s(&inFile, "CONIN$", "r", stdin) != 0 || inFile == nullptr) {
+      FatalError("Failed to redirect standard input to console.", NULL);
+      // Redirect standard output to the console
+      FILE* outFile = nullptr;
+      if (freopen_s(&outFile, "CONOUT$", "w", stdout) != 0) {
+        FatalError("Failed to redirect standard output to console.", NULL);
+      }
+      // Redirect standard error to the console
+      FILE* errFile = nullptr;
+      if (freopen_s(&errFile, "CONOUT$", "w", stderr) != 0 || errFile == nullptr) {
+        FatalError("Failed to redirect standard error to console.", NULL);
+      }
 
-  // Enable ANSI color coding on the console.
-  HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
-  HANDLE hStdErr = GetStdHandle(STD_ERROR_HANDLE);
-  DWORD consoleMode;
-
-  GetConsoleMode(hStdOut, &consoleMode);
-  consoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
-  SetConsoleMode(hStdOut, consoleMode);
-
-  GetConsoleMode(hStdErr, &consoleMode);
-  consoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
-  SetConsoleMode(hStdErr, consoleMode);
+      // Enable ANSI color coding on the console
+      // ENABLE_VIRTUAL_TERMINAL_PROCESSING is needed for ANSI escape sequences
+      HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+      HANDLE hStdErr = GetStdHandle(STD_ERROR_HANDLE);
+      DWORD consoleMode = 0;
+      if (GetConsoleMode(hStdOut, &consoleMode)) {
+        consoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+        SetConsoleMode(hStdOut, consoleMode);
+      }
+      if (GetConsoleMode(hStdErr, &consoleMode)) {
+        consoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+        SetConsoleMode(hStdErr, consoleMode);
+      }
+    }
+  }
 }
-
 /// <summary>
 /// Patches the game to run as a dedicated server, exposing its game server broadcast port, adjusting its log file
 /// path.
