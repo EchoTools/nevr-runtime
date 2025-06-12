@@ -97,13 +97,13 @@ add_link_options(
 add_link_options("/MANIFESTUAC:NO")
 
 # Include directories
-include_directories(${CMAKE_CURRENT_BINARY_DIR} # For generated files
-                    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}
+                    ${CMAKE_BINARY_DIR} ${CMAKE_SOURCE_DIR}/common)
 
 # Define preprocessor macros
 add_compile_definitions("$<$<CONFIG:Debug>:_DEBUG;_WINDOWS;_USRDLL>"
                         "$<$<CONFIG:Release>:NDEBUG;_WINDOWS;_USRDLL>")
-
+add_subdirectory(common)
 add_subdirectory(GamePatches)
 add_subdirectory(GameServer)
 
@@ -111,3 +111,10 @@ add_subdirectory(GameServer)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
 endif()
+
+option(COPY_TO_GAME_DIR "Copy build artifacts to game directory" ON)
+# Default path for EchoVR binaries - can be overridden
+set(ECHOVR_BIN_PATH
+    "C:/Users/User/source/repos/EchoRelay9/_local/newnakama/echovr-newnakama/bin/win10"
+)
+include("cmake/copy_to_game_directory.cmake")

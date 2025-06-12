@@ -1,7 +1,8 @@
 // dllmain.cpp : Defines the entry point for the DLL application.
 #include "pch.h"
 #include "echovr.h"
-#include "server.h"
+#include "gameserver.h"
+#include "pch.h"
 
 // The initialized ServerLib which Echo VR will call upon to communicate with central services.
 EchoVR::IServerLib* g_ServerLib;

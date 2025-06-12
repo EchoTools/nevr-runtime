@@ -4,7 +4,9 @@
 
 #include <string>
 
-#include "echovrunexported.h"
+#include "echovrInternal.h"
+#include "globals.h"
+#include "logging.h"
 #include "processmem.h"
 
 #ifndef VERSION
@@ -28,15 +30,7 @@ BOOL isServer = FALSE;
 /// A CLI argument flag indicating whether the game is booting as an offline client.
 /// </summary>
 BOOL isOffline = FALSE;
-/// <summary>
-/// A CLI argument flag indicating whether the game is booting in headless mode (no graphics/audio).
-/// </summary>
-BOOL isHeadless = FALSE;
-/// <summary>
-/// A CLI argument flag used to remove the extra console being added by -headless for running servers on fully headless
-/// system.
-/// </summary>
-BOOL noConsole = FALSE;
+
 /// <summary>
 /// A CLI argument flag indicating whether the game is booting in a windowed mode, rather than with a VR headset.
 /// </summary>
@@ -56,31 +50,6 @@ HWND hWindow = NULL;
 /// The local config stored in ./_local/config.json.
 /// </summary>
 EchoVR::Json* localConfig = NULL;
-
-/// <summary>
-/// A timestep value in ticks/updates per second, to be used for headless mode (due to lack of GPU/refresh rate
-/// throttling). If non-zero, sets the timestep override by the given tick rate per second. If zero, removes tick rate
-/// throttling.
-/// </summary>
-UINT32 headlessTimeStep = 120;
-
-/// <summary>
-/// Reports a fatal error with a message box, then exits the game.
-/// </summary>
-/// <param name="msg">The window message to display.</param>
-/// <param name="title">The window title to display.</param>
-/// <returns>None</returns>
-VOID FatalError(const CHAR* msg, const CHAR* title) {
-  // If no title or msg was provided, set it to a generic value.
-  if (title == NULL) title = "Echo Relay: Error";
-  if (msg == NULL) msg = "An unknown error occurred.";
-
-  // Show a message box.
-  MessageBoxA(NULL, msg, title, MB_OK);
-
-  // Force process exit with an error code.
-  exit(1);
-}
 
 /// <summary>
 /// Patches a given function pointer with an hook function (matching the equivalent function signature as the original).
@@ -104,70 +73,11 @@ VOID PatchDetour(PVOID* ppPointer, PVOID pDetour) {
 /// <param name="format">The format string to log with.</param>
 /// <param name="vl">The list of variables to use to format the format string before logging.</param>
 /// <returns>None</returns>
-VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_list vl) {
-  if (!strcmp(format, "[DEBUGPRINT] %s %s") || !strcmp(format, "[SCRIPT] %s: %s")) {
-    // If the overall template matched, format it
-    CHAR formattedLog[0x1000];
-    memset(formattedLog, 0, sizeof(formattedLog));
-    vsprintf_s(formattedLog, format, vl);
-
-    // If the final output matches the strings below, we do not log.
-    if (!strcmp(formattedLog,
-                "[DEBUGPRINT] PickRandomTip: context = 0x41D2C432172E0810"))  // noisy in main menu / loading screen
-      return;
-    if (!strcmp(formattedLog, "[SCRIPT] 0xA9DB89899292A98F: realdiv(d9a3e735) divide by zero"))  // laggy in game
-      return;
-  } else if (!strcmp(format, "[NETGAME] No screen stats info for game mode %s"))  // noisy in social lobby
-    return;
-
-  // Calling the original function and returning here if noConsole is set to avoid putting any extra formatting in the
-  // logs.
-  if (noConsole) return EchoVR::WriteLog(logLevel, unk, format, vl);
-
-  // Print the ANSI color code prefix for the given log level.
-  switch (logLevel) {
-    case EchoVR::LogLevel::Debug:
-      printf("\u001B[36m");
-      break;
-
-    case EchoVR::LogLevel::Warning:
-      printf("\u001B[33m");
-      break;
-
-    case EchoVR::LogLevel::Error:
-      printf("\u001B[31m");
-      break;
-
-    case EchoVR::LogLevel::Info:
-    default:
-      printf("\u001B[0m");
-      break;
-  }
-
-  // Print the output to our allocated console.
-  vprintf(format, vl);
-  printf("\n");
-
-  // Print the ANSI color code for restoring the default text style.
-  printf("\u001B[0m");
-
-  // Call the original method
-  EchoVR::WriteLog(logLevel, unk, format, vl);
-}
 
 /// <summary>
 /// A wrapper for WriteLog, simplifying logging operations.
 /// </summary>
 /// <returns>None</returns>
-VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
-  va_list args;
-  va_start(args, format);
-  if (isHeadless)
-    WriteLogHook(level, 0, format, args);
-  else
-    EchoVR::WriteLog(level, 0, format, args);
-  va_end(args);
-}
 
 /// <summary>
 /// Patches the game to enable headless mode, spawning a console window and applying patches to avoid game crashes.
