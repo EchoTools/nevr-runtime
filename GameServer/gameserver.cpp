@@ -5,6 +5,7 @@
 
 #include "echovr.h"
 #include "echovrInternal.h"
+#include "generated/rtapi.pb.h"
 #include "globals.h"
 #include "logging.h"
 #include "messages.h"
@@ -223,6 +224,14 @@ VOID OnMsgSessionError(GameServerLib* self, VOID* proxymthd, VOID* msg, UINT64 m
 /// <param name="a3">TODO: Unknown</param>
 /// <returns>TODO: Unknown</returns>
 INT64 GameServerLib::UnkFunc0(VOID* unk1, INT64 a2, INT64 a3) { return 1; }
+VOID OnTcpMsgReturnToLobby(GameServerLib* self, VOID* proxymthd, VOID* msg, UINT64 msgSize, EchoVR::Peer destination,
+                           EchoVR::Peer sender) {
+  // NOTE: `msg` here has no substance (one uninitialized byte).
+  return;  // Currently broken
+  Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Returning to lobby");
+  EchoVR::NetGameScheduleReturnToLobby(self);
+}
+UINT16 tcpBroadcastReturnToLobbyCBHandle = 0;
 
 /// <summary>
 /// Initializes the game server library. This is called by the game after the
@@ -236,8 +245,11 @@ INT64 GameServerLib::UnkFunc0(VOID* unk1, INT64 a2, INT64 a3) { return 1; }
 /// resides.</param> <returns>None</returns>
 VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broadcaster, VOID* unk2,
                                 const CHAR* logPath) {
+  // Verify the protobuf version.
+  GOOGLE_PROTOBUF_VERIFY_VERSION;
+
   // Log the server version
-  Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] version %s (%s) initializing...", VERSION, BUILD_ID);
+  Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] version %s (%s) initializing...", PROJECT_VERSION, GIT_COMMIT_HASH);
 
   // Set up our game server state.
   this->lobby = lobby;
@@ -263,6 +275,8 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
       this, SYMBOL_TCPBROADCASTER_LOBBY_SESSION_ENTRANT_REJECT_V1, (VOID*)OnTcpMsgRemovePlayerSession);
   this->tcpBroadcastSessionSuccessCBHandle = ListenForTcpBroadcasterMessage(
       this, SYMBOL_TCPBROADCASTER_LOBBY_SESSION_SUCCESS_V5, (VOID*)OnTcpMsgPlayerConnectDetails);
+  tcpBroadcastReturnToLobbyCBHandle = ListenForTcpBroadcasterMessage(
+      this, SYMBOL_TCPBROADCASTER_LOBBY_SESSION_RETURN_TO_LOBBY_V1, (VOID*)OnTcpMsgReturnToLobby);
 
   // Log the interaction.
   Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Initialized game server");
@@ -290,7 +304,7 @@ VOID GameServerLib::Terminate() { Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Ter
 /// interval.
 /// </summary>
 /// <returns>None</returns>
-VOID GameServerLib::Update() {
+VOID GameServerLib::Update(PVOID pGame) {
   // TODO: This is temporary code to test if the profile JSON is updated (but
   // not sent to server). If it is not updated in this structure, one of the
   // "apply loadout" or "save loadout" operations may trigger the update?
@@ -336,8 +350,6 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR* radId, EchoVR::Sym
     return;
   }
 
-  // TODO: Default port
-
   // Connect to the serverdb websocket service
   this->tcpBroadcasterData->CreatePeer(&this->serverDbPeer, (const EchoVR::UriContainer*)&serverDbUriContainer);
 
@@ -345,18 +357,43 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR* radId, EchoVR::Sym
   UINT32* timeStepUsecs = (UINT32*)(*(CHAR**)(EchoVR::g_GameBaseAddress + 0x020A00E8) + 0x90);
 
   // Construct the registration request message.
-  NEVRLobbyRegistrationRequestV1 regRequest;
-  regRequest.loginUUID = this->loginSessionId;
-  regRequest.serverId = this->serverId;
-  regRequest.port = (UINT16)this->broadcaster->data->broadcastSocketInfo.port;
-  regRequest.internalIp = gameServerAddr.sin_addr.S_un.S_addr;
-  regRequest.regionId = this->regionId;
-  regRequest.versionLock = this->versionLock;
-  regRequest.timestepUSecs = *timeStepUsecs;
+  // Convert GUID to string for the login session ID
+  char loginSessionIdString[37];  // GUID string format: 8-4-4-4-12 + null terminator
+  sprintf_s(loginSessionIdString, sizeof(loginSessionIdString), "%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+            this->loginSessionId.Data1, this->loginSessionId.Data2, this->loginSessionId.Data3,
+            this->loginSessionId.Data4[0], this->loginSessionId.Data4[1], this->loginSessionId.Data4[2],
+            this->loginSessionId.Data4[3], this->loginSessionId.Data4[4], this->loginSessionId.Data4[5],
+            this->loginSessionId.Data4[6], this->loginSessionId.Data4[7]);
 
-  // Send the registration request.
-  SendServerdbTcpMessage(this, SYMBOL_TCPBROADCASTER_LOBBY_SESSION_REGISTRATION_REQUEST_V1, &regRequest,
-                         sizeof(regRequest));
+  // Create the protobuf registration request
+  nevr::rtapi::GameServerRegistrationRequest request;
+  request.set_login_session_id(loginSessionIdString);
+  request.set_server_id(this->serverId);
+  request.set_port(this->broadcaster->data->broadcastSocketInfo.port);
+  request.set_internal_ip(inet_ntoa(gameServerAddr.sin_addr));
+  request.set_region_hash(this->regionId);
+  request.set_version_lock(this->versionLock);
+  request.set_time_step_usecs(*timeStepUsecs);
+  request.set_version(PROJECT_VERSION);
+
+  // Serialize the protobuf message
+  std::string serializedMessage;
+  if (!request.SerializeToString(&serializedMessage)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.SERVER] Failed to serialize game server registration request");
+    return;
+  }
+
+  NEVRProtobufMessageV1 message;
+  message.messageData = (CHAR*)serializedMessage.c_str();
+  UINT64 msgSize = sizeof(NEVRProtobufMessageV1) + serializedMessage.size();
+
+  // Send the registration request to the serverdb websocket service
+  // SendServerdbTcpMessage(this, SYMBOL_TCPBROADCASTER_NEVRPROTOBUF_MESSAGE_V1, (VOID*) message.messageData,
+  //                       serializedMessage.size());
+
+  SendServerdbTcpMessage(this, SYMBOL_TCPBROADCASTER_NEVRPROTOBUF_MESSAGE_V1, &message, msgSize);
+
+  // Register the game server with the lobby.
 
   // Log the interaction.
   Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Requested game server registration");
@@ -390,7 +427,7 @@ VOID GameServerLib::Unregister() {
   EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastPlayersAcceptedCBHandle);
   EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastPlayersRejectedCBHandle);
   EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastSessionSuccessCBHandle);
-
+  EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, tcpBroadcastReturnToLobbyCBHandle);
   // Disconnect from server db.
   this->tcpBroadcasterData->DestroyPeer(this->serverDbPeer);
 
