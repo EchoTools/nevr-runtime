@@ -9,14 +9,6 @@
 #include "logging.h"
 #include "processmem.h"
 
-#ifndef VERSION
-#define VERSION "1.0.0"  // Fallback default version
-#endif
-
-#ifndef BUILD_ID
-#define BUILD_ID "unknown"  // Fallback default build ID
-#endif
-
 /// <summary>
 /// Indicates whether the patches have been applied (to avoid re-application).
 /// </summary>
@@ -509,8 +501,6 @@ VOID Initialize() {
   if (initialized) return;
   initialized = true;
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMEPATCHES] version %s (%s) initializing", VERSION, BUILD_ID);
-
   // Verify the game version before patching
   if (!VerifyGameVersion())
     MessageBoxW(NULL,
@@ -535,4 +525,6 @@ VOID Initialize() {
 #if _DEBUG
   PatchDeadlockMonitor();
 #endif
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMEPATCHES] version %s (%s) initialized", PROJECT_VERSION, GIT_COMMIT_HASH);
 }

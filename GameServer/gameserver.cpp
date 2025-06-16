@@ -10,16 +10,6 @@
 #include "messages.h"
 #include "pch.h"
 
-// Define the version number
-// Get the version number from CMake-generated definition
-#ifndef VERSION
-#define VERSION "1.0.0"  // Fallback default version
-#endif
-
-#ifndef BUILD_ID
-#define BUILD_ID "unknown"  // Fallback default build ID
-#endif
-
 /// <summary>
 /// A wrapper for WriteLog, simplifying logging operations.
 /// </summary>

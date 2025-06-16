@@ -16,7 +16,7 @@ function(set_project_version_from_git)
   set(PROJECT_VERSION_TWEAK
       ""
       PARENT_SCOPE)
-  set(BUILD_ID
+  set(GIT_COMMIT_HASH
       "unknown"
       PARENT_SCOPE)
 
@@ -38,7 +38,7 @@ function(set_project_version_from_git)
     RESULT_VARIABLE GIT_PROJECT_VERSION_RESULT
     OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-  # Get commit hash for BUILD_ID
+  # Get commit hash for GIT_COMMIT_HASH
   execute_process(
     COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
@@ -89,6 +89,10 @@ function(set_project_version_from_git)
         "${PROJECT_VERSION_MAJOR_LOCAL}.${PROJECT_VERSION_MINOR_LOCAL}.${PROJECT_VERSION_PATCH_LOCAL}+${PROJECT_VERSION_TWEAK_LOCAL}.${GIT_COMMIT_HASH}"
         PARENT_SCOPE)
   endif()
+
+  set(GIT_COMMIT_HASH,
+      "${GIT_COMMIT_HASH}"
+      PARENT_SCOPE)
 
   # Output for debugging
   message(

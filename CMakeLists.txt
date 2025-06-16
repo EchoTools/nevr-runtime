@@ -5,10 +5,22 @@ project(NEVRServer LANGUAGES CXX)
 
 # import the version from the git-version.cmake file
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/set_project_version_from_git.cmake")
+
+# Set PROJECT_VERSION and GIT_COMMIT_HASH based on the current git state.
 set_project_version_from_git()
 
+# Define the version and git hash as compile definitions
+add_compile_definitions(
+  PROJECT_VERSION_MAJOR="${PROJECT_VERSION_MAJOR}"
+  PROJECT_VERSION_MINOR="${PROJECT_VERSION_MINOR}"
+  PROJECT_VERSION_PATCH="${PROJECT_VERSION_PATCH}"
+  PROJECT_VERSION_TWEAK="${PROJECT_VERSION_TWEAK}"
+  PROJECT_VERSION="${PROJECT_VERSION}"
+  GIT_COMMIT_HASH="${GIT_COMMIT_HASH}")
+
 # Print out the version that was set by set_project_version_from_git()
-message(STATUS "Project version: ${PROJECT_VERSION}")
+message(STATUS "Project version: ${PROJECT_VERSION} (${GIT_COMMIT_HASH})")
+
 # Set the project output name
 set(PROJECT_OUTPUT_NAME "${CMAKE_PROJECT_NAME}")
 
@@ -42,9 +54,6 @@ set(CMAKE_VERBOSE_MAKEFILE ON)
 
 # Set the CMake generator to Ninja
 set(CMAKE_GENERATOR "Ninja")
-
-# Set the CMake generator platform to x64
-set(CMAKE_GENERATOR_PLATFORM "x64")
 
 # Set the CMake executable linker flags
 set(CMAKE_EXE_LINKER_FLAGS "/SUBSYSTEM:WINDOWS")
@@ -104,6 +113,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}
 add_compile_definitions("$<$<CONFIG:Debug>:_DEBUG;_WINDOWS;_USRDLL>"
                         "$<$<CONFIG:Release>:NDEBUG;_WINDOWS;_USRDLL>")
 add_subdirectory(common)
+add_subdirectory(ProtobufNEVR)
 add_subdirectory(GamePatches)
 add_subdirectory(GameServer)
 
