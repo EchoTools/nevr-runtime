@@ -1,6 +1,9 @@
 #include "gameserver.h"
 
+#include <google/protobuf/util/json_util.h>  // Include for JSON serialization
+
 #include <cstdio>
+#include <string>
 #include <vector>
 
 #include "echovr.h"
@@ -328,6 +331,46 @@ VOID GameServerLib::UnkFunc1(UINT64 unk) {
   // Note: This function is called prior to Initialize.
 }
 
+// Sends a protobuf message to the server, optionally using JSON serialization
+void SendProtobufMessage(GameServerLib* self, const nevr::rtapi::Envelope& protoEnvelope) {
+// #define USEJSON 1  // Define this to enable JSON serialization
+#ifdef USEJSON
+
+  std::string jsonString;
+  google::protobuf::util::JsonPrintOptions jsonOptions;
+  jsonOptions.add_whitespace = true;                        // For pretty printing (optional)
+  jsonOptions.always_print_fields_with_no_presence = true;  // Print all fields, even if unset
+  jsonOptions.preserve_proto_field_names = true;            // Use original .proto field names (snake_case)
+
+  // Serialize the protobuf message to JSON
+  auto status = google::protobuf::util::MessageToJsonString(protoEnvelope, &jsonString, jsonOptions);
+
+  if (!status.ok()) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.SERVER] Failed to serialize protobuf message to JSON: %s",
+        status.ToString().c_str());
+    return;
+  }
+
+  Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] Serialized JSON: %s",
+      jsonString.c_str());  // Log the JSON for debugging
+
+  self->tcpBroadcasterData->SendToPeer(self->serverDbPeer, SYMBOL_TCPBROADCASTER_NEVRPROTOBUF_JSON_MESSAGE_V1, NULL, 0,
+                                       jsonString.c_str(), jsonString.size());
+
+#else  // If not using JSON, serialize the protobuf message directly
+  // Serialize the protobuf message
+  std::string serializedMessage;
+  if (!protoEnvelope.SerializeToString(&serializedMessage)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.SERVER] Failed to serialize protobuf message");
+    return;
+  }
+
+  self->tcpBroadcasterData->SendToPeer(self->serverDbPeer, SYMBOL_TCPBROADCASTER_NEVRPROTOBUF_MESSAGE_V1, NULL, 0,
+                                       serializedMessage.c_str(), serializedMessage.size());
+
+#endif
+}
+
 // Register the game server with the game service.
 VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR* radId, EchoVR::SymbolId regionId,
                                         EchoVR::SymbolId versionLock, const EchoVR::Json* localConfig) {
@@ -366,34 +409,18 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR* radId, EchoVR::Sym
             this->loginSessionId.Data4[6], this->loginSessionId.Data4[7]);
 
   // Create the protobuf registration request
-  nevr::rtapi::GameServerRegistrationRequest request;
-  request.set_login_session_id(loginSessionIdString);
-  request.set_server_id(this->serverId);
-  request.set_port(this->broadcaster->data->broadcastSocketInfo.port);
-  request.set_internal_ip(inet_ntoa(gameServerAddr.sin_addr));
-  request.set_region_hash(this->regionId);
-  request.set_version_lock(this->versionLock);
-  request.set_time_step_usecs(*timeStepUsecs);
-  request.set_version(PROJECT_VERSION);
+  nevr::rtapi::Envelope envelope;
+  nevr::rtapi::GameServerRegistrationRequest* request = envelope.mutable_gameserverregistrationrequest();
+  request->set_login_session_id(loginSessionIdString);
+  request->set_server_id(this->serverId);
+  request->set_port(this->broadcaster->data->broadcastSocketInfo.port);
+  request->set_internal_ip(inet_ntoa(gameServerAddr.sin_addr));
+  request->set_region_hash(this->regionId);
+  request->set_version_lock(this->versionLock);
+  request->set_time_step_usecs(*timeStepUsecs);
+  request->set_version(PROJECT_VERSION);
 
-  // Serialize the protobuf message
-  std::string serializedMessage;
-  if (!request.SerializeToString(&serializedMessage)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.SERVER] Failed to serialize game server registration request");
-    return;
-  }
-
-  NEVRProtobufMessageV1 message;
-  message.messageData = (CHAR*)serializedMessage.c_str();
-  UINT64 msgSize = sizeof(NEVRProtobufMessageV1) + serializedMessage.size();
-
-  // Send the registration request to the serverdb websocket service
-  // SendServerdbTcpMessage(this, SYMBOL_TCPBROADCASTER_NEVRPROTOBUF_MESSAGE_V1, (VOID*) message.messageData,
-  //                       serializedMessage.size());
-
-  SendServerdbTcpMessage(this, SYMBOL_TCPBROADCASTER_NEVRPROTOBUF_MESSAGE_V1, &message, msgSize);
-
-  // Register the game server with the lobby.
+  SendProtobufMessage(this, envelope);
 
   // Log the interaction.
   Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Requested game server registration");

@@ -41,11 +41,8 @@ const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_RETURN_TO_LOBBY_V1 = 
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_DATA_V1 = 0xe59c8d2d26fdaf0f;
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_STATUS_V1 = 0x7dd7c17f8b6ba38f;
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_NEVRPROTOBUF_MESSAGE_V1 = 0x9ee5107d9e29fd63;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_NEVRPROTOBUF_JSON_MESSAGE_V1 = 0xc6b3710cd9c4ef47;
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_REGISTRATION_REQUEST_V1 = 0x802806fd6110d2bd;
-
-struct NEVRProtobufMessageV1 {
-  CHAR* messageData;
-};
 
 /// <summary>
 /// A message sent from game server to server to indicate the current session has ended.
