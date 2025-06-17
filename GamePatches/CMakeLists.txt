@@ -9,10 +9,10 @@ set(PATCHES_HEADERS "patches.h")
 add_library(GamePatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
                                "exports.def")
 
-target_precompile_headers(GamePatches PRIVATE
-                          "${CMAKE_SOURCE_DIR}/common/pch.h")
-target_include_directories(GamePatches PRIVATE ${DETOURS_INCLUDE_DIRS}
-                                               ${CMAKE_CURRENT_SOURCE_DIR})
+target_precompile_headers(GamePatches PRIVATE "${NEVR_COMMON_INCLUDE}/pch.h")
+target_include_directories(
+  GamePatches PRIVATE ${DETOURS_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}
+                      ${NEVR_COMMON_INCLUDE})
 
 target_link_libraries(GamePatches PRIVATE ${DETOURS_LIBRARY} Common)
 
