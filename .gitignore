@@ -47,3 +47,4 @@ pkg/
 FileContentIndex/
 
 cmake/local.cmake
+nevr-server.code-workspace
