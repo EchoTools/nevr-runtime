@@ -106,8 +106,9 @@ add_link_options(
 add_link_options("/MANIFESTUAC:NO")
 
 # Include directories
-include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}
-                    ${CMAKE_BINARY_DIR} ${CMAKE_SOURCE_DIR}/common)
+include_directories(
+  ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_BINARY_DIR}
+  "${CMAKE_SOURCE_DIR}/common" "${CMAKE_SOURCE_DIR}/nevr-common.git/include")
 
 # Define preprocessor macros
 add_compile_definitions("$<$<CONFIG:Debug>:_DEBUG;_WINDOWS;_USRDLL>"

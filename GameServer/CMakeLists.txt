@@ -1,9 +1,7 @@
 # GameServer CMakeLists.txt
 
-set(SERVER_SOURCES "dllmain.cpp" "gameserver.cpp"
-                   "${NEVR_COMMON_INCLUDE}/echovrInternal.hpp")
-set(SERVER_HEADERS "gameserver.h" "${NEVR_COMMON_INCLUDE}/echovrInternal.h"
-                   "${CMAKE_BINARY_DIR}/generated/rtapi.pb.h")
+set(SERVER_SOURCES "dllmain.cpp" "gameserver.cpp")
+set(SERVER_HEADERS "${CMAKE_BINARY_DIR}/generated/rtapi.pb.h" "gameserver.h")
 
 add_library(GameServer SHARED ${SERVER_SOURCES} ${SERVER_HEADERS} "exports.def")
 target_compile_definitions(GameServer PRIVATE PROTOBUF_STATIC_LIB)
@@ -13,7 +11,7 @@ target_precompile_headers(GameServer PRIVATE "${NEVR_COMMON_INCLUDE}/pch.h")
 target_include_directories(GameServer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
                                               ${NEVR_COMMON_INCLUDE})
 target_link_directories(GameServer PRIVATE Common)
-target_link_libraries(GameServer PRIVATE proto_nevr)
+target_link_libraries(GameServer PRIVATE Common proto_nevr)
 # Disable warning C4251: 'identifier': class 'type' needs to have dll-interface
 # to be used by clients of class 'type2'
 

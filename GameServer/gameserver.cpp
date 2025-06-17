@@ -304,7 +304,7 @@ VOID GameServerLib::Terminate() { Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Ter
 /// interval.
 /// </summary>
 /// <returns>None</returns>
-VOID GameServerLib::Update(PVOID pGame) {
+VOID GameServerLib::Update() {
   // TODO: This is temporary code to test if the profile JSON is updated (but
   // not sent to server). If it is not updated in this structure, one of the
   // "apply loadout" or "save loadout" operations may trigger the update?
