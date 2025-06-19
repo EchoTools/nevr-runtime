@@ -34,8 +34,6 @@ const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_ERRORED_V1 = 0x33d3b6
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_LOCK_V1 = 0xe59c852331f7af0f;
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_UNLOCK_V1 = 0x78c869da818d5adf;
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_ENTRANT_JOIN_ATTEMPT_V1 = 0x1b267eeded5ded15;
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_ENTRANT_ACCEPT_V1 = 0x119ea15d3b579b79;
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_ENTRANT_REJECT_V1 = 0x1363185792779bfb;
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_ENTRANT_REMOVED_V1 = 0xab66524706483f2f;
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_RETURN_TO_LOBBY_V1 = 0xc946ed033b99daab;
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_DATA_V1 = 0xe59c8d2d26fdaf0f;
@@ -44,38 +42,15 @@ const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_NEVRPROTOBUF_MESSAGE_V1 = 0x9ee5107
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_NEVRPROTOBUF_JSON_MESSAGE_V1 = 0xc6b3710cd9c4ef47;
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_REGISTRATION_REQUEST_V1 = 0x802806fd6110d2bd;
 
-/// <summary>
-/// A message sent from game server to server to indicate the current session has ended.
-/// </summary>
-struct NEVRLobbySessionStartedV1 {
-  GUID lobbySessionId;
-};
-
-struct NEVRLobbyEntrantJoinAttemptV1 {
-  GUID lobbySessionId;
-  UINT64 playerCount;
-  EchoVR::Array<GUID>* playerUuids;
-};
-
-struct NEVRLobbySessionEndedV1 {
-  GUID lobbySessionId;
-};
-
-/// <summary>
-/// A message sent from game server to server to indicate the current session has been locked.
-/// </summary>
-struct NEVRLobbySessionLockV1 {
-  GUID lobbySessionId;
-};
-
-/// <summary>
-/// A message sent from game server to server to indicate the current session has been unlocked.
-/// </summary>
-struct NEVRLobbySessionUnlockV1 {
-  GUID lobbySessionId;
-};
-
-struct NEVRLobbyEntrantRemovedV1 {
-  GUID lobbySessionId;
-  GUID playerUuid;
+// GameServerSessionStart struct representing the session start message
+// Contains match information, group ID, player limit and entrant details
+struct GameServerSessionStartInternalMessage {
+  GUID LobbySesssionId;  // Unique identifier for the match
+  GUID GroupId;          // Group identifier
+  BYTE PlayerLimit;      // Maximum number of players allowed
+  BYTE EntrantCount;     // Number of entrants
+  BYTE LobbyType;        // Type of lobby
+  BYTE Pad1;             // Padding byte
+  CHAR* SettingsJson;    // JSON settings for the session
+  // Note This ignores the entrant descriptors
 };

@@ -46,18 +46,16 @@ class GameServerLib : public EchoVR::IServerLib {
   UINT64 serverId;
   EchoVR::SymbolId regionId;
   EchoVR::SymbolId versionLock;
-  GUID lobbySessionId;
   sockaddr_in gameServerAddr;
+
+  UINT32 defaultTimeStepUsecs;
 
   // Callbacks
 
   UINT16 broadcastSessionStartCBHandle;
   UINT16 broadcastSessionErrorCBHandle;
 
-  UINT16 tcpBroadcastRegSuccessCBHandle;
-  UINT16 tcpBroadcastRegFailureCBHandle;
-  UINT16 tcpBroadcastStartSessionCBHandle;
-  UINT16 tcpBroadcastPlayersAcceptedCBHandle;
-  UINT16 tcpBroadcastPlayersRejectedCBHandle;
   UINT16 tcpBroadcastSessionSuccessCBHandle;
+  UINT16 tcpBroadcastProtobufMessageCBHandle;
+  UINT16 tcpBroadcastProtobufJsonMessageCBHandle;
 };
