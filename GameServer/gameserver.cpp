@@ -624,6 +624,8 @@ VOID GameServerLib::Unregister() {
 VOID GameServerLib::EndSession() {
   if (sessionActive) {
     sendLobbySessionEvent(this, nevr::rtapi::LobbySessionEventMessage::Code::LobbySessionEventMessage_Code_ENDED);
+    // Set the timestep to a low value (6hz) while idle.
+    SetTimeStepUsecs(166666);  // 6hz
     sessionActive = FALSE;
   }
 }
