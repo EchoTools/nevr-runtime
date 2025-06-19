@@ -96,12 +96,9 @@ VOID PatchEnableHeadless(PVOID pGame) {
   };
   ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x62CA91, pbPatch2, sizeof(pbPatch2));
 
-  // If a timestep is set as non-zero, patch to enable `-fixedtimestep`.
-  if (headlessTimeStep != 0) {
-    // Set the flag for `-fixedtimestep`.
-    UINT64* flags = (UINT64*)((CHAR*)pGame + 2088);
-    *flags |= 0x2000000;
-  }
+  // Set the flag for `-fixedtimestep`.
+  UINT64* gameFlags = (UINT64*)((CHAR*)pGame + 2088);
+  *gameFlags |= 0x2000000;
 
   // Return to avoid the creation of the console when noConsole is set.
   if (noConsole) return;
@@ -340,7 +337,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     else if (lstrcmpW(argv[i], L"-timestep") == 0) {
       // Verify a timestep argument was provided.
       if (i + 1 < argc)
-        headlessTimeStep = std::wcstoul((const WCHAR*)argv[i + 1], nullptr, 10);
+        headlessTickRateHz = std::wcstoul((const WCHAR*)argv[i + 1], nullptr, 10);
       else
         FatalError(
             "No argument provided for -timestep. You must provide a positive number for a fixed tick rate, or a "
@@ -388,14 +385,14 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 UINT64 LoadLocalConfigHook(PVOID pGame) {
   // If a timestep override was provided, configure it.
   // This is placed here, as by this time, the structure to dereference will be initialized.
-  if (isHeadless && headlessTimeStep != 0) {
+  if (isHeadless && headlessTickRateHz != 0) {
     // Patch the fixed time step based on tick count.
     // Fixed time step is in microseconds, tick rate is per second.
     UINT32* timeStep = (UINT32*)(*(CHAR**)(EchoVR::g_GameBaseAddress + 0x020A00E8) + 0x90);
-    *timeStep = 1000000 / headlessTimeStep;
+    *timeStep = 1000000 / headlessTickRateHz;
 
     // Patches the game to fix the delta time calculation for when using fixedtimestep.
-    // Change condtion for if deltatime is higher than timestep tell engine time is deltatime.
+    // Change condition for if deltatime is higher than timestep tell engine time is deltatime.
     BYTE Patch1[] = {0x73, 0x7A};
     ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xCF46D, Patch1, sizeof(Patch1));
   }

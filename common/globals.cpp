@@ -13,4 +13,4 @@ BOOL isHeadless = FALSE;
 /// A timestep value in ticks/updates per second, to be used for headless mode (due to lack of GPU/refresh rate
 /// throttling). If non-zero, sets the timestep override by the given tick rate per second. If zero, removes tick rate
 /// throttling.
-UINT32 headlessTimeStep = 120;
+UINT32 headlessTickRateHz = 120;
