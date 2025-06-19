@@ -305,6 +305,13 @@ VOID lobbySessionCreate(GameServerLib* self, const nevr::rtapi::Envelope& envelo
 
   self->sessionActive = TRUE;
 
+  // If the timestep is set, use it, otherwise default to the game's default timestep
+  if (response.time_step_usecs() > 0) {
+    SetTimeStepUsecs(response.time_step_usecs());
+  } else {
+    SetTimeStepUsecs(self->defaultTimeStepUsecs);
+  }
+
   // message buffer to send to the internal broadcaster.
   auto messageBuffer = new CHAR[sizeof(GameServerSessionStartInternalMessage)];
   memset(messageBuffer, 0, sizeof(GameServerSessionStartInternalMessage));
