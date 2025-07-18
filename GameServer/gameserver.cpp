@@ -9,11 +9,11 @@
 
 #include "echovr.h"
 #include "echovrInternal.h"
-#include "generated/rtapi.pb.h"
 #include "globals.h"
 #include "logging.h"
 #include "messages.h"
 #include "pch.h"
+#include "rtapi/nevr_rtapi.pb.h"
 
 /// A wrapper for WriteLog, simplifying logging operations.
 VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
@@ -312,16 +312,11 @@ VOID lobbySessionCreate(GameServerLib* self, const nevr::rtapi::Envelope& envelo
     SetTimeStepUsecs(self->defaultTimeStepUsecs);
   }
 
-  // message buffer to send to the internal broadcaster.
-  auto messageBuffer = new CHAR[sizeof(GameServerSessionStartInternalMessage)];
-  memset(messageBuffer, 0, sizeof(GameServerSessionStartInternalMessage));
-  // Copy the session start message into the buffer
-  memcpy(messageBuffer, &sessionStartMessage, sizeof(GameServerSessionStartInternalMessage));
+  auto messageBuffer = EncodeSessionStartMessage(sessionStartMessage);
   // Forward the received event to the internal broadcast.
   Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Creating/starting new session");
   EchoVR::BroadcasterReceiveLocalEvent(self->broadcaster, SYMBOL_BROADCASTER_LOBBY_START_SESSION_V4,
-                                       "SNSLobbyStartSessionv4", messageBuffer,
-                                       sizeof(GameServerSessionStartInternalMessage));
+                                       "SNSLobbyStartSessionv4", messageBuffer, sizeof(messageBuffer));
 }
 
 // Event handler for receiving a game server entrant join.

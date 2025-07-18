@@ -54,3 +54,6 @@ struct GameServerSessionStartInternalMessage {
   CHAR* SettingsJson;    // JSON settings for the session
   // Note This ignores the entrant descriptors
 };
+
+// Function to encode a GameServerSessionStartInternalMessage into a binary buffer
+CHAR* EncodeSessionStartMessage(const GameServerSessionStartInternalMessage& message);
