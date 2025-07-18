@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 4.0.0)
 
+# Suppress vcpkg usage text
+set(VCPKG_PRINT_USAGE OFF CACHE BOOL "Disable vcpkg usage information")
+
+
 # Project Name
 project(NEVRServer LANGUAGES CXX)
 
@@ -90,8 +94,8 @@ add_compile_options(
   "/EHsc" # Enable C++ exceptions
   "$<$<CONFIG:Debug>:/D_DEBUG>" # Debug: Define _DEBUG
   "$<$<CONFIG:Release>:/DNDEBUG>" # Release: Define NDEBUG
-  "$<$<CONFIG:Debug>:/Od>" # Debug: Disable optimizations
-  "$<$<CONFIG:Release>:/O2>" # Release: Enable optimizations
+  "$<$<CONFIG:Release>:/Od>" # Debug: Disable optimizations
+  # "$<$<CONFIG:Release>:/O2>" # Release: Enable optimizations
 )
 # Add link options for Debug and Release configurations
 add_link_options(
@@ -108,13 +112,13 @@ add_link_options("/MANIFESTUAC:NO")
 # Include directories
 include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_BINARY_DIR}
-  "${CMAKE_SOURCE_DIR}/common" "${CMAKE_SOURCE_DIR}/nevr-common.git/include")
+  "${CMAKE_SOURCE_DIR}/common" "${CMAKE_SOURCE_DIR}/nevr-common.git/common")
 
 # Define preprocessor macros
 add_compile_definitions("$<$<CONFIG:Debug>:_DEBUG;_WINDOWS;_USRDLL>"
                         "$<$<CONFIG:Release>:NDEBUG;_WINDOWS;_USRDLL>")
 
-set(NEVR_COMMON_INCLUDE "${CMAKE_SOURCE_DIR}/nevr-common.git/include")
+set(NEVR_COMMON_INCLUDE "${CMAKE_SOURCE_DIR}/nevr-common.git/common")
 
 add_subdirectory(common)
 add_subdirectory(ProtobufNEVR)

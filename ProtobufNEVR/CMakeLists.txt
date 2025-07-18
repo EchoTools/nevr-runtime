@@ -1,29 +1,37 @@
-find_package(Protobuf CONFIG REQUIRED)
+# In ProtobufNEVR/CMakeLists.txt
 
-set(COMMON_DIR "${CMAKE_CURRENT_LIST_DIR}/../nevr-common.git")
-add_library(proto-objects OBJECT "${COMMON_DIR}/gameapi/gameapi.proto"
-                                 "${COMMON_DIR}/rtapi/rtapi.proto")
+find_package(Protobuf REQUIRED)
 
-target_link_libraries(proto-objects PUBLIC protobuf::libprotobuf)
 
+# 1. Create the empty static library target first.
+#    The generated files will be added to it.
+add_library(proto_nevr STATIC)
+
+set(NEVRCOMMON_DIR "${CMAKE_CURRENT_LIST_DIR}/../nevr-common.git")
+# Explicitly list only the required .proto files with relative paths.
+file(GLOB PROTO_FILES
+    "${NEVRCOMMON_DIR}/*/*.proto"
+)
+# only include nevr_rtapi.proto and nevr_gameapi.proto
+set(PROTO_FILES
+  ${NEVRCOMMON_DIR}/gameapi/nevr_gameapi.proto
+  ${NEVRCOMMON_DIR}/rtapi/nevr_rtapi.proto
+)
 set(PROTO_BINARY_DIR "${CMAKE_BINARY_DIR}/generated")
-set(PROTO_IMPORT_DIRS "${COMMON_DIR}/gameapi" "${COMMON_DIR}/rtapi")
+# Set the import directories so the protobuf compiler can find dependencies.
+set(PROTO_IMPORT_DIRS
+  ${NEVRCOMMON_DIR}
+)
 
 protobuf_generate(
-  TARGET
-  proto-objects
-  OUT_VAR
-  PROTO_SRCS
-  IMPORT_DIRS
-  ${PROTO_IMPORT_DIRS}
-  PROTOC_OUT_DIR
-  "${PROTO_BINARY_DIR}")
-
-set_source_files_properties(${PROTO_SRCS} PROPERTIES SKIP_UNITY_BUILD_INCLUSION
-                                                     on)
-add_library(proto_nevr STATIC ${PROTO_SRCS})
-target_include_directories(proto_nevr
-                           PUBLIC $<BUILD_INTERFACE:${PROTO_BINARY_DIR}>)
+  TARGET proto_nevr
+  PROTOC_OUT_DIR ${PROTO_BINARY_DIR}
+  PROTOS ${PROTO_FILES}
+  IMPORT_DIRS  ${NEVRCOMMON_DIR}
+)
 
 target_link_libraries(proto_nevr PUBLIC protobuf::libprotobuf)
-target_include_directories(proto_nevr PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
+
+target_include_directories(proto_nevr PUBLIC
+    $<BUILD_INTERFACE:${PROTO_BINARY_DIR}>
+)

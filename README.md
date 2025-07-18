@@ -64,40 +64,6 @@ Add any local customizations to `cmake/local.cmake` file. This file will be incl
 
 By default it includes commands to copy the `dbgcore.dll` and `pnsradgameserver.dll` to the specified game server directory. You can modify this file to add additional configurations or custom commands.
 
-## User Presets
+## Environment requirements
 
-The `CMakeUserPresets.json` file in the root directory to define custom CMake presets. This allows you to easily switch between different build configurations without modifying the main `CMakeLists.txt`.
-Here's an example of a `CMakeUserPresets.json` file:
-
-```json
-{
-  "version": 10,
-  "configurePresets": [
-    {
-      "name": "local-ninja-msvc-debug",
-      "displayName": "Local Ninja - MSVC Debug (User specific paths)",
-      "description": "User-specific preset for Ninja with MSVC compiler (Debug), defining explicit tool paths.",
-      "environment": {
-        "VCPKG_ROOT": "C:/opt/vcpkg",
-        "WINDOWS_KITS_10_PATH": "C:/Program Files (x86)/Windows Kits/10",
-        "WINDOWS_SDK_VERSION": "10.0.26100.0",
-        "VSTUDIO_PATH": "C:/Program Files/Microsoft Visual Studio/2022/Community",
-        "MSVC_VERSION": "14.38.33130",
-        "PATH": "${env:VSTUDIO_PATH}/VC/Tools/MSVC/${env:MSVC_VERSION}/bin/Hostx64/x64;${env:WINDOWS_KITS_10_PATH}/bin/${env:WINDOWS_SDK_VERSION}/x64;${env:VSTUDIO_PATH}/Common7/IDE;${env:VSTUDIO_PATH}/Common7/Tools;C:/Windows/System32;C:/Windows/System32/WindowsPowerShell/v1.0",
-        "INCLUDE": "${env:VSTUDIO_PATH}/VC/Tools/MSVC/${env:MSVC_VERSION}/include;${env:WINDOWS_KITS_10_PATH}/Include/${env:WINDOWS_SDK_VERSION}/ucrt;${env:WINDOWS_KITS_10_PATH}/Include/${env:WINDOWS_SDK_VERSION}/shared;${env:WINDOWS_KITS_10_PATH}/Include/${env:WINDOWS_SDK_VERSION}/um",
-        "LIB": "${env:VSTUDIO_PATH}/VC/Tools/MSVC/${env:MSVC_VERSION}/lib/x64;${env:WINDOWS_KITS_10_PATH}/Lib/${env:WINDOWS_SDK_VERSION}/ucrt/x64;${env:WINDOWS_KITS_10_PATH}/Lib/${env:WINDOWS_SDK_VERSION}/um/x64"
-      },
-      "cacheVariables": {
-        "CMAKE_CXX_COMPILER": {
-          "type": "FILEPATH",
-          "value": "${env:VSTUDIO_PATH}/VC/Tools/MSVC/${env:MSVC_VERSION}/bin/Hostx64/x64/cl.exe"
-        },
-        "CMAKE_C_COMPILER": {
-          "type": "FILEPATH",
-          "value": "${env:VSTUDIO_PATH}/VC/Tools/MSVC/${env:MSVC_VERSION}/bin/Hostx64/x64/cl.exe"
-        }
-      }
-    }
-  ]
-}
-```
+Ensure that the cmake operation is running from `x64 Native Tools Command Prompt for VS 2022`
