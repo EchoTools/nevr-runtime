@@ -1,0 +1,70 @@
+name: Build and Upload Release Assets
+
+on:
+  release:
+    types: [created] # Runs when a draft release is created. Change to [published] to run only on final publication.
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write # Required to upload release assets
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download rcedit
+        run: |
+          Invoke-WebRequest -Uri "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile "rcedit.exe"
+        shell: pwsh
+
+      - name: Get Version Information
+        id: get_version
+        run: |
+          $version = "${{ github.event.release.tag_name }}".TrimStart('v')
+          $versionWithBuild = "$version.${{ github.run_id }}"
+          echo "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "FILE_VERSION_WITH_BUILD=$versionWithBuild" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "COPYRIGHT_YEAR=$(Get-Date -Format 'yyyy')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        shell: pwsh
+
+      - name: Update PowerShell Script Version
+        run: |
+          $scriptPath = "EchoManager.ps1"
+          (Get-Content $scriptPath) | ForEach-Object {
+            $_ -replace '^\$ScriptVersion = ".*?"', "`$ScriptVersion = ""${{ env.RELEASE_VERSION }}"""
+          } | Set-Content $scriptPath
+        shell: pwsh
+
+      - name: Update DLL File Details
+        run: |
+          $dlls = @(
+            @{ FileName = "dbgcore.dll"; Description = "NEVR Game Patches"; ProductName = "NEVR game patches" },
+            @{ FileName = "pnsradgameserver.dll"; Description = "NEVR Game Server"; ProductName = "NEVR Game Server" }
+          )
+          
+          foreach ($dll in $dlls) {
+            Write-Host "Processing $($dll.FileName)..."
+            ./rcedit.exe $dll.FileName `
+              --set-product-version "v31.4.572058" `
+              --set-file-version "${{ env.FILE_VERSION_WITH_BUILD }}" `
+              --set-version-string "CompanyName" "EchoTools" `
+              --set-version-string "FileDescription" $dll.Description `
+              --set-version-string "InternalName" $dll.FileName `
+              --set-version-string "LegalCopyright" "Copyright (C) ${{ env.COPYRIGHT_YEAR }} github.com/EchoTools" `
+              --set-version-string "OriginalFilename" $dll.FileName `
+              --set-version-string "ProductName" $dll.ProductName
+            Write-Host "Successfully updated version info for $($dll.FileName)"
+          }
+        shell: pwsh
+
+      - name: Upload Release Assets
+        run: |
+          $assets = @("EchoManager.ps1", "dbgcore.dll", "pnsradgameserver.dll")
+          foreach ($asset in $assets) {
+            gh release upload ${{ github.event.release.tag_name }} $asset --clobber
+          }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
