@@ -1,4 +1,4 @@
-# My Project
+# NEVR Server
 
 ## Overview
 
@@ -7,7 +7,7 @@ This project consists of two main components: a game patch library and a game se
 ## Directory Structure
 
 ```sh
-native-game-server
+nevr-server
 ├── gamepatch
 │   └── CMakeLists.txt      # Build configuration for the game patch library
 ├── gameserver
