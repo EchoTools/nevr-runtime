@@ -124,6 +124,7 @@ add_subdirectory(common)
 add_subdirectory(ProtobufNEVR)
 add_subdirectory(GamePatches)
 add_subdirectory(GameServer)
+add_subdirectory(Supervisor)
 
 # Include a local cmake script if it exists
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
