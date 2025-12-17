@@ -38,6 +38,34 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
             }
+        },
+        {
+            "name": "linux-wine-base",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/linux-wine-${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/toolchain-msvc-wine.cmake",
+            "cacheVariables": {
+                "CMAKE_COLOR_DIAGNOSTICS": "ON",
+                "VCPKG_TARGET_TRIPLET": "x64-windows",
+                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-windows"
+            }
+        },
+        {
+            "name": "linux-wine-debug",
+            "displayName": "Linux Wine Debug",
+            "inherits": "linux-wine-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "linux-wine-release",
+            "displayName": "Linux Wine Release",
+            "inherits": "linux-wine-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
         }
     ],
     "buildPresets": [
@@ -50,6 +78,16 @@
             "name": "release",
             "displayName": "Build (Release)",
             "configurePreset": "release"
+        },
+        {
+            "name": "linux-wine-debug",
+            "displayName": "Build Linux Wine (Debug)",
+            "configurePreset": "linux-wine-debug"
+        },
+        {
+            "name": "linux-wine-release",
+            "displayName": "Build Linux Wine (Release)",
+            "configurePreset": "linux-wine-release"
         }
     ]
 }

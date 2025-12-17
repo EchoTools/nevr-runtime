@@ -1,8 +1,7 @@
 cmake_minimum_required(VERSION 4.0.0)
 
 # Suppress vcpkg usage text
-set(VCPKG_PRINT_USAGE OFF CACHE BOOL "Disable vcpkg usage information")
-
+# set(VCPKG_PRINT_USAGE OFF CACHE BOOL "Disable vcpkg usage information")
 
 # Project Name
 project(NEVRServer LANGUAGES CXX)
@@ -46,6 +45,7 @@ set(PROJECT_URL "https://github.com/echotools/nevr-server")
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE "Debug")
 endif()
+
 message(STATUS "Build type set to: ${CMAKE_BUILD_TYPE}")
 
 # Sets the VCPKG feature flags for the project. "manifest" enables manifest
@@ -95,8 +95,10 @@ add_compile_options(
   "$<$<CONFIG:Debug>:/D_DEBUG>" # Debug: Define _DEBUG
   "$<$<CONFIG:Release>:/DNDEBUG>" # Release: Define NDEBUG
   "$<$<CONFIG:Release>:/Od>" # Debug: Disable optimizations
+
   # "$<$<CONFIG:Release>:/O2>" # Release: Enable optimizations
 )
+
 # Add link options for Debug and Release configurations
 add_link_options(
   "$<$<CONFIG:Debug>:/DEBUG>" # Debug: Generate debug information
@@ -116,7 +118,7 @@ include_directories(
 
 # Define preprocessor macros
 add_compile_definitions("$<$<CONFIG:Debug>:_DEBUG;_WINDOWS;_USRDLL>"
-                        "$<$<CONFIG:Release>:NDEBUG;_WINDOWS;_USRDLL>")
+  "$<$<CONFIG:Release>:NDEBUG;_WINDOWS;_USRDLL>")
 
 set(NEVR_COMMON_INCLUDE "${CMAKE_SOURCE_DIR}/nevr-common.git/common")
 
