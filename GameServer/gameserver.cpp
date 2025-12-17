@@ -280,30 +280,30 @@ VOID gameServerRegistrationSuccess(GameServerLib* self, const nevr::rtapi::Envel
 VOID lobbySessionCreate(GameServerLib* self, const nevr::rtapi::Envelope& envelope) {
   const auto& response = envelope.lobbysessioncreate();
 
-  // Construct the message to send to the internal broadcaster.
-  GameServerSessionStartInternalMessage sessionStartMessage;
+  GUID lobbySessionId;
+  GUID lobbyGroupId;
+
   // Convert the lobby session ID from string to GUID
-  if (StringToGuid(response.lobby_session_id(), &sessionStartMessage.LobbySesssionId) != ERROR_SUCCESS) {
+  if (StringToGuid(response.lobby_session_id(), &lobbySessionId) != ERROR_SUCCESS) {
     Log(EchoVR::LogLevel::Error, "[NEVR.SERVER] Failed to convert match ID to GUID: %s",
         response.lobby_session_id().c_str());
     return;
   }
   // Convert the group ID from string to GUID
-  if (StringToGuid(response.group_id(), &sessionStartMessage.GroupId) != ERROR_SUCCESS) {
+  if (StringToGuid(response.group_id(), &lobbyGroupId) != ERROR_SUCCESS) {
     Log(EchoVR::LogLevel::Error, "[NEVR.SERVER] Failed to convert group ID to GUID: %s", response.group_id().c_str());
     return;
   }
   // Set the player limit and entrant count
-  sessionStartMessage.PlayerLimit = response.max_entrants();
-  sessionStartMessage.EntrantCount = 0;
-  sessionStartMessage.LobbyType = response.lobby_type();
-  sessionStartMessage.Pad1 = 0;  // Padding byte
-  sessionStartMessage.SettingsJson = new CHAR[response.settings_json().size() + 1];
-  // Copy the settings JSON into the message
-  memset(sessionStartMessage.SettingsJson, 0, response.settings_json().size() + 1);
-  memcpy(sessionStartMessage.SettingsJson, response.settings_json().c_str(), response.settings_json().size());
+  BYTE playerLimit = response.max_entrants();
+  BYTE entrantCount = 0;
+  BYTE lobbyType = response.lobby_type();
+  BYTE pad1 = 0;  // Padding byte
 
-  self->sessionActive = TRUE;
+  CHAR* settingsJson = new CHAR[response.settings_json().size() + 1];
+  // Copy the settings JSON into the message
+  memset(settingsJson, 0, response.settings_json().size() + 1);
+  memcpy(settingsJson, response.settings_json().c_str(), response.settings_json().size());
 
   // If the timestep is set, use it, otherwise default to the game's default timestep
   if (response.time_step_usecs() > 0) {
@@ -312,7 +312,10 @@ VOID lobbySessionCreate(GameServerLib* self, const nevr::rtapi::Envelope& envelo
     SetTimeStepUsecs(self->defaultTimeStepUsecs);
   }
 
-  auto messageBuffer = EncodeSessionStartMessage(sessionStartMessage);
+  auto messageBuffer =
+      EncodeLobbySessionStartV4(lobbySessionId, lobbyGroupId, playerLimit, entrantCount, lobbyType, pad1, settingsJson);
+
+  self->sessionActive = TRUE;
   // Forward the received event to the internal broadcast.
   Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Creating/starting new session");
   EchoVR::BroadcasterReceiveLocalEvent(self->broadcaster, SYMBOL_BROADCASTER_LOBBY_START_SESSION_V4,
