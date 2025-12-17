@@ -15,6 +15,9 @@
 #include "pch.h"
 #include "rtapi/nevr_rtapi.pb.h"
 
+// TelemetryAgent for session recording/streaming
+#include "TelemetryAgent/telemetry_agent.h"
+
 /// A wrapper for WriteLog, simplifying logging operations.
 VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_list args;
@@ -316,6 +319,17 @@ VOID lobbySessionCreate(GameServerLib* self, const nevr::rtapi::Envelope& envelo
       EncodeLobbySessionStartV4(lobbySessionId, lobbyGroupId, playerLimit, entrantCount, lobbyType, pad1, settingsJson);
 
   self->sessionActive = TRUE;
+
+  // Start telemetry session for recording/streaming
+  if (TelemetryAgent_IsInitialized()) {
+    int result = TelemetryAgent_StartSession();
+    if (result == 0) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Telemetry session started");
+    } else {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] Failed to start telemetry session (error: %d)", result);
+    }
+  }
+
   // Forward the received event to the internal broadcast.
   Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Creating/starting new session");
   EchoVR::BroadcasterReceiveLocalEvent(self->broadcaster, SYMBOL_BROADCASTER_LOBBY_START_SESSION_V4,
@@ -628,6 +642,12 @@ VOID GameServerLib::Unregister() {
 /// Signal to the game service that the session has ended.
 VOID GameServerLib::EndSession() {
   if (sessionActive) {
+    // Stop telemetry session
+    if (TelemetryAgent_IsSessionActive()) {
+      TelemetryAgent_StopSession();
+      Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Telemetry session stopped");
+    }
+
     sendLobbySessionEvent(this, nevr::rtapi::LobbySessionEventMessage::Code::LobbySessionEventMessage_Code_ENDED);
     // Set the timestep to a low value (6hz) while idle.
     SetTimeStepUsecs(166666);  // 6hz
@@ -728,6 +748,27 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Initialized game server");
   // lobby->hosting |= 0x1;
 
+  // Initialize telemetry agent for session recording/streaming
+  {
+    TelemetryAgentConfig telemetryConfig;
+    TelemetryAgent_GetDefaultConfig(&telemetryConfig);
+
+    // Configure based on game server settings
+    telemetryConfig.pollingFrequencyHz = 10;  // 10 Hz polling
+    telemetryConfig.dataSource = TELEMETRY_SOURCE_HTTP;
+    telemetryConfig.gameServerHost = "127.0.0.1";
+    telemetryConfig.gameServerPort = static_cast<uint16_t>(this->broadcaster->data->broadcastSocketInfo.port);
+    telemetryConfig.telemetryApiUrl = "http://localhost:8081";  // TODO: Make configurable
+    telemetryConfig.nodeId = "game-server";
+    telemetryConfig.gameBaseAddress = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
+
+    if (TelemetryAgent_Initialize(&telemetryConfig) == 0) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Telemetry agent initialized");
+    } else {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] Failed to initialize telemetry agent");
+    }
+  }
+
 #if _DEBUG
   Log(EchoVR::LogLevel::Debug, "[NEVR.SERVER] EchoVR base address = 0x%p", (VOID*)EchoVR::g_GameBaseAddress);
 #endif
@@ -738,7 +779,15 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
 
 /// Terminates the game server library. This is called by the game prior to
 /// unloading the library.
-VOID GameServerLib::Terminate() { Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Terminated game server"); }
+VOID GameServerLib::Terminate() {
+  // Shutdown telemetry agent
+  if (TelemetryAgent_IsInitialized()) {
+    TelemetryAgent_Shutdown();
+    Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Telemetry agent shutdown");
+  }
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.SERVER] Terminated game server");
+}
 
 /// Updates the game server library. This is called by the game at a frequent
 /// interval.

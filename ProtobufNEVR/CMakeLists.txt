@@ -4,10 +4,11 @@ find_package(Protobuf CONFIG REQUIRED)
 
 set(NEVRCOMMON_DIR "${CMAKE_CURRENT_LIST_DIR}/../nevr-common.git")
 
-# only include nevr_rtapi.proto and nevr_gameapi.proto
+# Include all relevant proto files
 set(PROTO_FILES
-  ${NEVRCOMMON_DIR}/gameapi/nevr_gameapi.proto
-  ${NEVRCOMMON_DIR}/rtapi/nevr_rtapi.proto
+  ${NEVRCOMMON_DIR}/proto/apigame/http_v1.proto
+  ${NEVRCOMMON_DIR}/proto/rtapi/realtime_v1.proto
+  ${NEVRCOMMON_DIR}/proto/rtapi/telemetry_v1.proto
 )
 set(PROTO_BINARY_DIR "${CMAKE_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY ${PROTO_BINARY_DIR})
@@ -21,21 +22,23 @@ if(CMAKE_CROSSCOMPILING)
   if(EXISTS ${VCPKG_PROTOC} AND EXISTS ${PROTOC_WRAPPER})
     message(STATUS "Using vcpkg protoc via Wine wrapper for code generation")
     
-    # Generated files
+    # Generated files - names match the proto file paths
     set(PROTO_GENERATED_SRCS
-      ${PROTO_BINARY_DIR}/gameapi/nevr_gameapi.pb.cc
-      ${PROTO_BINARY_DIR}/rtapi/nevr_rtapi.pb.cc
+      ${PROTO_BINARY_DIR}/apigame/http_v1.pb.cc
+      ${PROTO_BINARY_DIR}/rtapi/realtime_v1.pb.cc
+      ${PROTO_BINARY_DIR}/rtapi/telemetry_v1.pb.cc
     )
     set(PROTO_GENERATED_HDRS
-      ${PROTO_BINARY_DIR}/gameapi/nevr_gameapi.pb.h
-      ${PROTO_BINARY_DIR}/rtapi/nevr_rtapi.pb.h
+      ${PROTO_BINARY_DIR}/apigame/http_v1.pb.h
+      ${PROTO_BINARY_DIR}/rtapi/realtime_v1.pb.h
+      ${PROTO_BINARY_DIR}/rtapi/telemetry_v1.pb.h
     )
     
     # Custom command to generate protobuf files
     add_custom_command(
       OUTPUT ${PROTO_GENERATED_SRCS} ${PROTO_GENERATED_HDRS}
       COMMAND ${PROTOC_WRAPPER} ${VCPKG_PROTOC}
-              --proto_path=${NEVRCOMMON_DIR}
+              --proto_path=${NEVRCOMMON_DIR}/proto
               --cpp_out=${PROTO_BINARY_DIR}
               ${PROTO_FILES}
       DEPENDS ${PROTO_FILES}
@@ -57,7 +60,7 @@ else()
     TARGET proto_nevr
     PROTOC_OUT_DIR ${PROTO_BINARY_DIR}
     PROTOS ${PROTO_FILES}
-    IMPORT_DIRS ${NEVRCOMMON_DIR}
+    IMPORT_DIRS ${NEVRCOMMON_DIR}/proto
   )
 endif()
 

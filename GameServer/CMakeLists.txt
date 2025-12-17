@@ -24,11 +24,12 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
           ${CMAKE_BINARY_DIR}
           "${CMAKE_SOURCE_DIR}/common"
+          "${CMAKE_SOURCE_DIR}"
           "${NEVR_COMMON_INCLUDE}"
 )
 
 # This command correctly tells the linker what to link against.
-target_link_libraries(GameServer PRIVATE Common proto_nevr)
+target_link_libraries(GameServer PRIVATE Common proto_nevr TelemetryAgent)
 
 # Disable specific warnings
 target_compile_options(GameServer PRIVATE /wd4251 /wd4267)
