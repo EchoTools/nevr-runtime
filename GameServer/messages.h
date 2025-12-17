@@ -24,9 +24,9 @@ const EchoVR::SymbolId SYMBOL_BROADCASTER_LOBBY_VOICE_ENTRY = 0x27504F14881C1A43
 
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_REGISTRATION_SUCCESS = -5369924845641990433;
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_REGISTRATION_FAILURE = -5373034290044534839;
+const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_SUCCESS_V5 = 0x6d4de3650ee3110f;
 
 // NEVR Custom Messages
-const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_SUCCESS_V5 = 0x6d4de3650ee3110f;
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_START_V1 = 0x0b59f03ca8bb9433;
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_STARTED_V1 = 0x7b841b6f2aeae97d;
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_ENDED_V1 = 0x0b4fea39bfab9433;
@@ -42,18 +42,5 @@ const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_NEVRPROTOBUF_MESSAGE_V1 = 0x9ee5107
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_NEVRPROTOBUF_JSON_MESSAGE_V1 = 0xc6b3710cd9c4ef47;
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_SESSION_REGISTRATION_REQUEST_V1 = 0x802806fd6110d2bd;
 
-// GameServerSessionStart struct representing the session start message
-// Contains match information, group ID, player limit and entrant details
-struct GameServerSessionStartInternalMessage {
-  GUID LobbySesssionId;  // Unique identifier for the match
-  GUID GroupId;          // Group identifier
-  BYTE PlayerLimit;      // Maximum number of players allowed
-  BYTE EntrantCount;     // Number of entrants
-  BYTE LobbyType;        // Type of lobby
-  BYTE Pad1;             // Padding byte
-  CHAR* SettingsJson;    // JSON settings for the session
-  // Note This ignores the entrant descriptors
-};
-
-// Function to encode a GameServerSessionStartInternalMessage into a binary buffer
-CHAR* EncodeSessionStartMessage(const GameServerSessionStartInternalMessage& message);
+CHAR* EncodeLobbySessionStartV4(const GUID& lobbySessionId, const GUID& groupId, BYTE playerLimit, BYTE entrantCount,
+                                BYTE lobbyType, BYTE pad1, const CHAR* settingsJson);

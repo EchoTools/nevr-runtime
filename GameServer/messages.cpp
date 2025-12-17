@@ -6,9 +6,10 @@
  * @return A newly allocated buffer containing the binary data
  *         Caller is responsible for freeing this memory
  */
-CHAR* EncodeSessionStartMessage(const GameServerSessionStartInternalMessage& message) {
+CHAR* EncodeLobbySessionStartV4(const GUID& lobbySessionId, const GUID& groupId, BYTE playerLimit, BYTE entrantCount,
+                                BYTE lobbyType, BYTE pad1, const CHAR* settingsJson) {
   // Calculate required buffer size
-  size_t settingsJsonLen = strlen(message.SettingsJson) + 1;  // Include null terminator
+  size_t settingsJsonLen = strlen(settingsJson) + 1;  // Include null terminator
 
   // Calculate total buffer size with all fields concatenated
   size_t bufferSize = sizeof(GUID) +    // LobbySesssionId
@@ -27,19 +28,22 @@ CHAR* EncodeSessionStartMessage(const GameServerSessionStartInternalMessage& mes
   size_t offset = 0;
 
   // Copy each field one by one
-  memcpy(buffer + offset, &message.LobbySesssionId, sizeof(GUID));
+  memcpy(buffer + offset, &lobbySessionId, sizeof(GUID));
   offset += sizeof(GUID);
 
-  memcpy(buffer + offset, &message.GroupId, sizeof(GUID));
+  memcpy(buffer + offset, &groupId, sizeof(GUID));
   offset += sizeof(GUID);
 
-  buffer[offset++] = message.PlayerLimit;
-  buffer[offset++] = message.EntrantCount;
-  buffer[offset++] = message.LobbyType;
-  buffer[offset++] = message.Pad1;
+  buffer[offset++] = playerLimit;
+  buffer[offset++] = entrantCount;
+  buffer[offset++] = lobbyType;
+  buffer[offset++] = pad1;
 
   // Copy the settings JSON string including null terminator
-  memcpy(buffer + offset, message.SettingsJson, settingsJsonLen);
+  memcpy(buffer + offset, settingsJson, settingsJsonLen);
 
   return buffer;
 }
+
+// TODO: Implement this function
+CHAR* EncodeLobbySessionSuccessV5() { return nullptr; }

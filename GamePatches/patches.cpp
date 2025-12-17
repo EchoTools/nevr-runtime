@@ -1,6 +1,7 @@
 #include "patches.h"
 
 #include <detours/detours.h>
+#include <shellapi.h>  // For CommandLineToArgvW
 
 #include <string>
 
@@ -197,19 +198,22 @@ VOID PatchEnableOffline() {
 
   // Patch "incidents"
   BYTE pbPatch3[] = {
-      0x75, 0x0A,  // TODO: Can probably be made JMP (0xEB) / NOP
+      0x75,
+      0x0A,  // TODO: Can probably be made JMP (0xEB) / NOP
   };
   ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x17F0B1, pbPatch3, sizeof(pbPatch3));
 
   // TODO: Title
   BYTE pbPatch4[] = {
-      0x74, 0x12,  // TODO: Can probably be made JMP (0xEB) / NOP
+      0x74,
+      0x12,  // TODO: Can probably be made JMP (0xEB) / NOP
   };
   ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x17F77B, pbPatch4, sizeof(pbPatch4));
 
   // Force transaction service to load
   BYTE pbNopConditionalJump[] = {
-      0x90, 0x90,  // NOP condition jump
+      0x90,
+      0x90,  // NOP condition jump
   };
   ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x17F817, pbNopConditionalJump, sizeof(pbNopConditionalJump));
   ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x17F823, pbNopConditionalJump, sizeof(pbNopConditionalJump));
@@ -429,6 +433,23 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
   return EchoVR::HttpConnect(unk, uri);
 }
 
+// TODO: Uncomment and define CUriContainer and EchoVR::SWebSocketDataConnect to enable this hook
+#if 0
+/// <summary>
+/// A detour hook for NRadEngine::SWebSocketData::Connect.
+/// </summary>
+/// <param name="a1">Pointer to SWebSocketData instance.</param>
+/// <param name="a2">Pointer to CUriContainer instance.</param>
+// a1 NRadEngine::SWebSocketData*
+UINT64 SWebSocketDataConnectHook(PVOID wsData, CUriContainer* cUri) {
+  // Example: Log the URI being connected to (assuming CUriContainer has a method or field for the URI string)
+  // Replace 'GetUriString()' with the actual method/field if different.
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMEPATCHES] WebSocket Connect host: %s", cUri->host);
+
+  // Call the original function
+  return EchoVR::SWebSocketDataConnect(wsData, cUri);
+}
+#endif
 /// <summary>
 /// A detour hook for the game's method to wrap GetProcAddress.
 /// </summary>
@@ -500,10 +521,8 @@ VOID Initialize() {
 
   // Verify the game version before patching
   if (!VerifyGameVersion())
-    MessageBoxW(NULL,
-                L"EchoRelay version check failed. Patches may fail to be applied. Verify you're running the correct "
-                L"version of Echo VR.",
-                L"Echo Relay: Warning", MB_OK);
+    MessageBoxW(NULL, L"Game engine version check failed. This NEVR patch is designed for v34.4.631547.1 of Echo VR.\n",
+                L"NEVR: Warning", MB_OK);
 
   // Patch our CLI argument options to add our additional options.
   PatchDetour(&(PVOID&)EchoVR::BuildCmdLineSyntaxDefinitions, BuildCmdLineSyntaxDefinitionsHook);
@@ -511,6 +530,7 @@ VOID Initialize() {
   PatchDetour(&(PVOID&)EchoVR::NetGameSwitchState, NetGameSwitchStateHook);
   PatchDetour(&(PVOID&)EchoVR::LoadLocalConfig, LoadLocalConfigHook);
   PatchDetour(&(PVOID&)EchoVR::HttpConnect, HttpConnectHook);
+  // PatchDetour(&(PVOID&)EchoVR::SWebSocketDataConnect, SWebSocketDataConnectHook);
   PatchDetour(&(PVOID&)EchoVR::GetProcAddress, GetProcAddressHook);
   PatchDetour(&(PVOID&)EchoVR::SetWindowTextA_, SetWindowTextAHook);
 
