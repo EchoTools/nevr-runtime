@@ -22,7 +22,7 @@
 #include "telemetry_client.h"
 
 // Include generated protobuf headers
-#include "rtapi/telemetry_v1.pb.h"
+#include "telemetry/v1/telemetry.pb.h"
 
 namespace {
 
@@ -210,7 +210,7 @@ class TelemetryAgentImpl {
         ++m_framesPolled;
 
         // Process into telemetry frame
-        telemetry::LobbySessionStateFrame frame;
+        telemetry::v1::LobbySessionStateFrame frame;
         bool processed = false;
 
         {
@@ -274,7 +274,7 @@ TELEMETRY_API void TelemetryAgent_GetDefaultConfig(TelemetryAgentConfig* config)
     config->dataSource = TELEMETRY_SOURCE_HTTP;
     config->gameServerHost = "127.0.0.1";
     config->gameServerPort = 6721;
-    config->telemetryApiUrl = "http://localhost:8081";
+    config->telemetryApiUrl = "https://echovrce.com/lobby-session-events";
     config->userId = nullptr;
     config->nodeId = "game-server";
     config->gameBaseAddress = 0;

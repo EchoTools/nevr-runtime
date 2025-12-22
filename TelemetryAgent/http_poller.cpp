@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <sstream>
+#include <vector>
 
 #pragma comment(lib, "winhttp.lib")
 

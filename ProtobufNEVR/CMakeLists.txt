@@ -4,11 +4,17 @@ find_package(Protobuf CONFIG REQUIRED)
 
 set(NEVRCOMMON_DIR "${CMAKE_CURRENT_LIST_DIR}/../nevr-common.git")
 
+set(PROTO_IMPORT_DIRS
+  ${NEVRCOMMON_DIR}/proto
+)
+
 # Include all relevant proto files
 set(PROTO_FILES
+  ${NEVRCOMMON_DIR}/proto/google/api/http.proto
+  ${NEVRCOMMON_DIR}/proto/google/api/annotations.proto
   ${NEVRCOMMON_DIR}/proto/apigame/http_v1.proto
   ${NEVRCOMMON_DIR}/proto/rtapi/realtime_v1.proto
-  ${NEVRCOMMON_DIR}/proto/rtapi/telemetry_v1.proto
+  ${NEVRCOMMON_DIR}/proto/telemetry/v1/telemetry.proto
 )
 set(PROTO_BINARY_DIR "${CMAKE_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY ${PROTO_BINARY_DIR})
@@ -24,14 +30,18 @@ if(CMAKE_CROSSCOMPILING)
     
     # Generated files - names match the proto file paths
     set(PROTO_GENERATED_SRCS
+      ${PROTO_BINARY_DIR}/google/api/http.pb.cc
+      ${PROTO_BINARY_DIR}/google/api/annotations.pb.cc
       ${PROTO_BINARY_DIR}/apigame/http_v1.pb.cc
       ${PROTO_BINARY_DIR}/rtapi/realtime_v1.pb.cc
-      ${PROTO_BINARY_DIR}/rtapi/telemetry_v1.pb.cc
+      ${PROTO_BINARY_DIR}/telemetry/v1/telemetry.pb.cc
     )
     set(PROTO_GENERATED_HDRS
+      ${PROTO_BINARY_DIR}/google/api/http.pb.h
+      ${PROTO_BINARY_DIR}/google/api/annotations.pb.h
       ${PROTO_BINARY_DIR}/apigame/http_v1.pb.h
       ${PROTO_BINARY_DIR}/rtapi/realtime_v1.pb.h
-      ${PROTO_BINARY_DIR}/rtapi/telemetry_v1.pb.h
+      ${PROTO_BINARY_DIR}/telemetry/v1/telemetry.pb.h
     )
     
     # Custom command to generate protobuf files
@@ -60,7 +70,7 @@ else()
     TARGET proto_nevr
     PROTOC_OUT_DIR ${PROTO_BINARY_DIR}
     PROTOS ${PROTO_FILES}
-    IMPORT_DIRS ${NEVRCOMMON_DIR}/proto
+    IMPORT_DIRS ${PROTO_IMPORT_DIRS}
   )
 endif()
 

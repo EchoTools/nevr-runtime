@@ -11,7 +11,7 @@
 #include <sstream>
 
 // Include generated protobuf headers
-#include "rtapi/telemetry_v1.pb.h"
+#include "telemetry/v1/telemetry.pb.h"
 
 #pragma comment(lib, "winhttp.lib")
 
@@ -110,7 +110,7 @@ void TelemetryClient::Stop() {
 
 bool TelemetryClient::IsRunning() const { return m_running; }
 
-bool TelemetryClient::SubmitFrame(const telemetry::LobbySessionStateFrame& frame) {
+bool TelemetryClient::SubmitFrame(const telemetry::v1::LobbySessionStateFrame& frame) {
   if (!m_running) {
     return false;
   }
