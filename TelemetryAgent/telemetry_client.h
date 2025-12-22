@@ -22,8 +22,10 @@
 
 // Forward declaration
 namespace telemetry {
+namespace v1 {
 class LobbySessionStateFrame;
-}
+}  // namespace v1
+}  // namespace telemetry
 
 namespace TelemetryAgent {
 
@@ -85,7 +87,7 @@ class TelemetryClient {
    * @param frame The telemetry frame to send
    * @return true if queued successfully, false if queue is full
    */
-  bool SubmitFrame(const telemetry::LobbySessionStateFrame& frame);
+  bool SubmitFrame(const telemetry::v1::LobbySessionStateFrame& frame);
 
   /**
    * @brief Get the current queue depth

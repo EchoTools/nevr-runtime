@@ -18,8 +18,10 @@
 
 // Forward declarations for protobuf types
 namespace telemetry {
+namespace v1 {
 class LobbySessionStateFrame;
-}
+}  // namespace v1
+}  // namespace telemetry
 
 namespace enginehttp {
 class SessionResponse;
@@ -52,7 +54,7 @@ class FrameProcessor {
    * @param[out] frame The resulting telemetry protobuf frame
    * @return true if processing succeeded
    */
-  bool ProcessFrame(const FrameData& data, telemetry::LobbySessionStateFrame& frame);
+  bool ProcessFrame(const FrameData& data, telemetry::v1::LobbySessionStateFrame& frame);
 
   /**
    * @brief Reset the processor state (call when session ends)
@@ -87,7 +89,7 @@ class FrameProcessor {
    * @param current Current session state
    * @param frame The frame to add events to
    */
-  void DetectEvents(const enginehttp::SessionResponse& current, telemetry::LobbySessionStateFrame& frame);
+  void DetectEvents(const enginehttp::SessionResponse& current, telemetry::v1::LobbySessionStateFrame& frame);
 
  private:
   // Previous frame state for event detection

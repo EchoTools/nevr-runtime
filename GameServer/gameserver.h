@@ -55,6 +55,11 @@ class GameServerLib : public EchoVR::IServerLib {
   UINT16 broadcastSessionStartCBHandle;
   UINT16 broadcastSessionErrorCBHandle;
 
+  UINT16 tcpBroadcastRegSuccessCBHandle;
+  UINT16 tcpBroadcastRegFailureCBHandle;
+  UINT16 tcpBroadcastStartSessionCBHandle;
+  UINT16 tcpBroadcastPlayersAcceptedCBHandle;
+  UINT16 tcpBroadcastPlayersRejectedCBHandle;
   UINT16 tcpBroadcastSessionSuccessCBHandle;
   UINT16 tcpBroadcastProtobufMessageCBHandle;
   UINT16 tcpBroadcastProtobufJsonMessageCBHandle;

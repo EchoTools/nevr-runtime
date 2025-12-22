@@ -11,7 +11,7 @@
 
 // Include generated protobuf headers
 #include "apigame/http_v1.pb.h"
-#include "rtapi/telemetry_v1.pb.h"
+#include "telemetry/v1/telemetry.pb.h"
 
 namespace TelemetryAgent {
 
@@ -19,7 +19,7 @@ FrameProcessor::FrameProcessor() : m_frameIndex(0) {}
 
 FrameProcessor::~FrameProcessor() = default;
 
-bool FrameProcessor::ProcessFrame(const FrameData& data, telemetry::LobbySessionStateFrame& frame) {
+bool FrameProcessor::ProcessFrame(const FrameData& data, telemetry::v1::LobbySessionStateFrame& frame) {
   if (!data.session.valid) {
     return false;
   }
@@ -92,7 +92,7 @@ bool FrameProcessor::ParsePlayerBonesJson(const std::string& json, enginehttp::P
 }
 
 void FrameProcessor::DetectEvents(const enginehttp::SessionResponse& current,
-                                  telemetry::LobbySessionStateFrame& frame) {
+                                  telemetry::v1::LobbySessionStateFrame& frame) {
   if (!m_previousSession) {
     // First frame - detect initial player joins
     for (const auto& team : current.teams()) {
@@ -103,11 +103,11 @@ void FrameProcessor::DetectEvents(const enginehttp::SessionResponse& current,
 
         // Determine role based on team name
         if (team.team_name() == "BLUE TEAM") {
-          playerJoined->set_role(telemetry::Role::BLUE_TEAM);
+          playerJoined->set_role(telemetry::v1::ROLE_BLUE_TEAM);
         } else if (team.team_name() == "ORANGE TEAM") {
-          playerJoined->set_role(telemetry::Role::ORANGE_TEAM);
+          playerJoined->set_role(telemetry::v1::ROLE_ORANGE_TEAM);
         } else {
-          playerJoined->set_role(telemetry::Role::SPECTATOR);
+          playerJoined->set_role(telemetry::v1::ROLE_SPECTATOR);
         }
       }
     }
@@ -166,7 +166,7 @@ void FrameProcessor::DetectEvents(const enginehttp::SessionResponse& current,
     auto* event = frame.add_events();
     auto* possChange = event->mutable_disc_possession_changed();
     possChange->set_player_slot(currPossessor);
-    possChange->set_previous_slot(prevPossessor);
+    possChange->set_previous_player_slot(prevPossessor);
   }
 
   // Detect stat changes for each player
