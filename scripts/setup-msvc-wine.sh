@@ -14,6 +14,9 @@ SDK_VERSION="10.0.26100.0"
 export WINEPREFIX="$HOME/.wine-msvc"
 export WINEARCH="win64"
 export WINEDEBUG="-all"
+# Disable GUI windows (winedbg, crash dialogs, etc.)
+export DISPLAY=""
+export WINEDLLOVERRIDES="winedbg.exe=d"
 
 echo "Setting up Wine prefix for MSVC..."
 mkdir -p "$WINEPREFIX"

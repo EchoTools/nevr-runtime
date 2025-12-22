@@ -10,6 +10,9 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 export WINEPREFIX="$HOME/.wine-msvc"
 export WINEDEBUG="-all"
 export WINEARCH="win64"
+# Disable GUI windows (winedbg, crash dialogs, etc.)
+export DISPLAY=""
+export WINEDLLOVERRIDES="winedbg.exe=d"
 
 # Paths
 WINOS="/mnt/winos"
