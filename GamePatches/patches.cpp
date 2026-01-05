@@ -5,6 +5,7 @@
 
 #include <string>
 
+#include "common/base64.h"
 #include "echovrunexported.h"
 #include "processmem.h"
 
