@@ -4,6 +4,9 @@
 export WINEPREFIX="$HOME/.wine-msvc"
 export WINEDEBUG="-all"
 export WINEARCH="win64"
+# Disable GUI windows (winedbg, crash dialogs, etc.)
+export DISPLAY=""
+export WINEDLLOVERRIDES="winedbg.exe=d"
 
 MSVC_ROOT='w:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207'
 SDK_ROOT='w:\Program Files (x86)\Windows Kits\10'

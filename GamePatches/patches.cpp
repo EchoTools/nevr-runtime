@@ -1,13 +1,12 @@
 #include "patches.h"
 
 #include <detours/detours.h>
-#include <shellapi.h>  // For CommandLineToArgvW
+#include <shellapi.h>
 
 #include <string>
 
-#include "echovrInternal.h"
-#include "globals.h"
-#include "logging.h"
+#include "common/base64.h"
+#include "echovrunexported.h"
 #include "processmem.h"
 
 /// <summary>
@@ -23,7 +22,15 @@ BOOL isServer = FALSE;
 /// A CLI argument flag indicating whether the game is booting as an offline client.
 /// </summary>
 BOOL isOffline = FALSE;
-
+/// <summary>
+/// A CLI argument flag indicating whether the game is booting in headless mode (no graphics/audio).
+/// </summary>
+BOOL isHeadless = FALSE;
+/// <summary>
+/// A CLI argument flag used to remove the extra console being added by -headless for running servers on fully headless
+/// system.
+/// </summary>
+BOOL noConsole = FALSE;
 /// <summary>
 /// A CLI argument flag indicating whether the game is booting in a windowed mode, rather than with a VR headset.
 /// </summary>
@@ -43,6 +50,31 @@ HWND hWindow = NULL;
 /// The local config stored in ./_local/config.json.
 /// </summary>
 EchoVR::Json* localConfig = NULL;
+
+/// <summary>
+/// A timestep value in ticks/updates per second, to be used for headless mode (due to lack of GPU/refresh rate
+/// throttling). If non-zero, sets the timestep override by the given tick rate per second. If zero, removes tick rate
+/// throttling.
+/// </summary>
+UINT32 headlessTimeStep = 120;
+
+/// <summary>
+/// Reports a fatal error with a message box, then exits the game.
+/// </summary>
+/// <param name="msg">The window message to display.</param>
+/// <param name="title">The window title to display.</param>
+/// <returns>None</returns>
+VOID FatalError(const CHAR* msg, const CHAR* title) {
+  // If no title or msg was provided, set it to a generic value.
+  if (title == NULL) title = "Echo Relay: Error";
+  if (msg == NULL) msg = "An unknown error occurred.";
+
+  // Show a message box.
+  MessageBoxA(NULL, msg, title, MB_OK);
+
+  // Force process exit with an error code.
+  exit(1);
+}
 
 /// <summary>
 /// Patches a given function pointer with an hook function (matching the equivalent function signature as the original).
@@ -66,11 +98,70 @@ VOID PatchDetour(PVOID* ppPointer, PVOID pDetour) {
 /// <param name="format">The format string to log with.</param>
 /// <param name="vl">The list of variables to use to format the format string before logging.</param>
 /// <returns>None</returns>
+VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_list vl) {
+  if (!strcmp(format, "[DEBUGPRINT] %s %s") || !strcmp(format, "[SCRIPT] %s: %s")) {
+    // If the overall template matched, format it
+    CHAR formattedLog[0x1000];
+    memset(formattedLog, 0, sizeof(formattedLog));
+    vsprintf_s(formattedLog, format, vl);
+
+    // If the final output matches the strings below, we do not log.
+    if (!strcmp(formattedLog,
+                "[DEBUGPRINT] PickRandomTip: context = 0x41D2C432172E0810"))  // noisy in main menu / loading screen
+      return;
+    if (!strcmp(formattedLog, "[SCRIPT] 0xA9DB89899292A98F: realdiv(d9a3e735) divide by zero"))  // laggy in game
+      return;
+  } else if (!strcmp(format, "[NETGAME] No screen stats info for game mode %s"))  // noisy in social lobby
+    return;
+
+  // Calling the original function and returning here if noConsole is set to avoid putting any extra formatting in the
+  // logs.
+  if (noConsole) return EchoVR::WriteLog(logLevel, unk, format, vl);
+
+  // Print the ANSI color code prefix for the given log level.
+  switch (logLevel) {
+    case EchoVR::LogLevel::Debug:
+      printf("\u001B[36m");
+      break;
+
+    case EchoVR::LogLevel::Warning:
+      printf("\u001B[33m");
+      break;
+
+    case EchoVR::LogLevel::Error:
+      printf("\u001B[31m");
+      break;
+
+    case EchoVR::LogLevel::Info:
+    default:
+      printf("\u001B[0m");
+      break;
+  }
+
+  // Print the output to our allocated console.
+  vprintf(format, vl);
+  printf("\n");
+
+  // Print the ANSI color code for restoring the default text style.
+  printf("\u001B[0m");
+
+  // Call the original method
+  EchoVR::WriteLog(logLevel, unk, format, vl);
+}
 
 /// <summary>
 /// A wrapper for WriteLog, simplifying logging operations.
 /// </summary>
 /// <returns>None</returns>
+VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
+  va_list args;
+  va_start(args, format);
+  if (isHeadless)
+    WriteLogHook(level, 0, format, args);
+  else
+    EchoVR::WriteLog(level, 0, format, args);
+  va_end(args);
+}
 
 /// <summary>
 /// Patches the game to enable headless mode, spawning a console window and applying patches to avoid game crashes.
@@ -97,9 +188,12 @@ VOID PatchEnableHeadless(PVOID pGame) {
   };
   ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x62CA91, pbPatch2, sizeof(pbPatch2));
 
-  // Set the flag for `-fixedtimestep`.
-  UINT64* gameFlags = (UINT64*)((CHAR*)pGame + 2088);
-  *gameFlags |= 0x2000000;
+  // If a timestep is set as non-zero, patch to enable `-fixedtimestep`.
+  if (headlessTimeStep != 0) {
+    // Set the flag for `-fixedtimestep`.
+    UINT64* flags = (UINT64*)((CHAR*)pGame + 2088);
+    *flags |= 0x2000000;
+  }
 
   // Return to avoid the creation of the console when noConsole is set.
   if (noConsole) return;
@@ -107,50 +201,37 @@ VOID PatchEnableHeadless(PVOID pGame) {
   // Create a console
   // Note: We do this because attaching to the parent process console would already be detached due to
   // /SUBSYSTEM:WINDOWS. Attaching two processes to a console at once would be messy and.
+  AllocConsole();
 
-  // Allocates a new console window for the process if one does not already exist.
-  if (AllocConsole()) {
-    // Redirect standard input to the console
-    FILE* inFile = nullptr;
-    if (freopen_s(&inFile, "CONIN$", "r", stdin) != 0 || inFile == nullptr) {
-      FatalError("Failed to redirect standard input to console.", NULL);
-      // Redirect standard output to the console
-      FILE* outFile = nullptr;
-      if (freopen_s(&outFile, "CONOUT$", "w", stdout) != 0) {
-        FatalError("Failed to redirect standard output to console.", NULL);
-      }
-      // Redirect standard error to the console
-      FILE* errFile = nullptr;
-      if (freopen_s(&errFile, "CONOUT$", "w", stderr) != 0 || errFile == nullptr) {
-        FatalError("Failed to redirect standard error to console.", NULL);
-      }
+  // Redirect our standard streams to the new console.
+  FILE* fConsole;
+  freopen_s(&fConsole, "CONIN$", "r", stdin);
+  freopen_s(&fConsole, "CONOUT$", "w", stderr);
+  freopen_s(&fConsole, "CONOUT$", "w", stdout);
 
-      // Enable ANSI color coding on the console
-      // ENABLE_VIRTUAL_TERMINAL_PROCESSING is needed for ANSI escape sequences
-      HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
-      HANDLE hStdErr = GetStdHandle(STD_ERROR_HANDLE);
-      DWORD consoleMode = 0;
-      if (GetConsoleMode(hStdOut, &consoleMode)) {
-        consoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
-        SetConsoleMode(hStdOut, consoleMode);
-      }
-      if (GetConsoleMode(hStdErr, &consoleMode)) {
-        consoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
-        SetConsoleMode(hStdErr, consoleMode);
-      }
-    }
-  }
+  // Enable ANSI color coding on the console.
+  HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+  HANDLE hStdErr = GetStdHandle(STD_ERROR_HANDLE);
+  DWORD consoleMode;
+
+  GetConsoleMode(hStdOut, &consoleMode);
+  consoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+  SetConsoleMode(hStdOut, consoleMode);
+
+  GetConsoleMode(hStdErr, &consoleMode);
+  consoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
+  SetConsoleMode(hStdErr, consoleMode);
 }
+
 /// <summary>
-/// Patches the game to run as a dedicated server, exposing its game server broadcast port, adjusting its log file
-/// path.
+/// Patches the game to run as a dedicated server, exposing its game server broadcast port, adjusting its log file path.
 /// </summary>
 /// <returns>None</returns>
 VOID PatchEnableServer() {
   // Patch the flags for our game to indicate we are a game server. This replaces checks to see if we
   // are a server, with code to set the flag permanently, and skips over the rest of the checking code.
-  BYTE pbPatch[] = {0x48, 0x83, 0x08, 0x06,  // OR QWORD ptr[rax], 0x6 (bit 2 = load sessions received from
-                                             // broadcast, bit 3 = patch flag to set as dedicated server)
+  BYTE pbPatch[] = {0x48, 0x83, 0x08, 0x06,  // OR QWORD ptr[rax], 0x6 (bit 2 = load sessions received from broadcast,
+                                             // bit 3 = patch flag to set as dedicated server)
 
                     0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
                     0x90,  // NOP instructions to replace server flag checks (with above
@@ -169,17 +250,17 @@ VOID PatchEnableServer() {
   BYTE pbPatch3[] = {0xEB, 0x0E};
   ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xFFB0E, pbPatch3, sizeof(pbPatch3));
 
-  // Patch the ./sourcedb/rad15/json/r14/config/netconfig_*.json file parsing routine so the "allow_incoming" key
-  // is always interpreted as `true`. This is necessary for a game server to accept players. Otherwise they will
-  // be denied, disallowing client connections.
+  // Patch the ./sourcedb/rad15/json/r14/config/netconfig_*.json file parsing routine so the "allow_incoming" key is
+  // always interpreted as `true`. This is necessary for a game server to accept players. Otherwise they will be denied,
+  // disallowing client connections.
   BYTE pbPatch4[] = {
       0xB8, 0x01, 0x00, 0x00, 0x00  // MOV eax, 1 (set the flag to `true`).
   };
   ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xF7F904, pbPatch4, sizeof(pbPatch4));
 
   // Patch the CLI pre-processing method to assume the process was provided "-spectatorstream".
-  // This causes the game to enter a "load lobby" state, which as a game server, starts the game server on
-  // startup. Otherwise, you would need to manually click the "play" button before the server began serving.
+  // This causes the game to enter a "load lobby" state, which as a game server, starts the game server on startup.
+  // Otherwise, you would need to manually click the "play" button before the server began serving.
   BYTE pbPatch5[] = {
       0x90, 0x90, 0x90, 0x90, 0x90, 0x90  // NOP the jump that is taken if "-spectatorstream" is not provided.
   };
@@ -187,8 +268,8 @@ VOID PatchEnableServer() {
 }
 
 /// <summary>
-/// Patches the game to run as an offline client, loading a game of the configuration specified by -gametype,
-/// -level, and -region CLI arguments.
+/// Patches the game to run as an offline client, loading a game of the configuration specified by -gametype, -level,
+/// and -region CLI arguments.
 /// </summary>
 /// <returns>None</returns>
 VOID PatchEnableOffline() {
@@ -230,8 +311,8 @@ VOID PatchEnableOffline() {
 }
 
 /// <summary>
-/// Patches the game to allow -noovr (demo accounts) without use of spectator stream. This provides a temporary
-/// player profile.
+/// Patches the game to allow -noovr (demo accounts) without use of spectator stream. This provides a temporary player
+/// profile.
 /// </summary>
 /// <returns>None</returns>
 VOID PatchNoOvrRequiresSpectatorStream() {
@@ -243,15 +324,15 @@ VOID PatchNoOvrRequiresSpectatorStream() {
 }
 
 /// <summary>
-/// Patches the dead lock monitor, which monitors threads to ensure they have not stopped processing. If one does,
-/// it triggers a fatal error. This patch is provided to ensure breakpoints set during testing do not trigger the
-/// deadlock monitor, thereby killing the process.
+/// Patches the dead lock monitor, which monitors threads to ensure they have not stopped processing. If one does, it
+/// triggers a fatal error. This patch is provided to ensure breakpoints set during testing do not trigger the deadlock
+/// monitor, thereby killing the process.
 /// </summary>
 /// <returns>None</returns>
 VOID PatchDeadlockMonitor() {
-  // Patch out the deadlock monitor thread's validation routine. This is necessary during debugging, as this
-  // thread acts as a watchdog for updates and will panic if an update has not occurred for some time (e.g.
-  // waiting too long between breakpoints when debugging).
+  // Patch out the deadlock monitor thread's validation routine. This is necessary during debugging, as this thread acts
+  // as a watchdog for updates and will panic if an update has not occurred for some time (e.g. waiting too long between
+  // breakpoints when debugging).
   BYTE pbPatch[] = {
       0x90, 0x90  // NOPs (to replace the JLE instruction which checks failing deadlock conditions).
   };
@@ -271,12 +352,11 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
   if (isServer && state == EchoVR::NetGameState::LoadFailed) {
     // Schedule a return to lobby. We are already at lobby, but this will quickly end the session, removing
     // all players, and start listening for a new one, to keep the server recycling itself appropriately.
-    // Note: This is an ugly hack, as the client will get an irrelevant connection failure message (server is
-    // full, failed to connect, etc). But at least it doesn't cause the server to get stuck in a "not ready" state
-    // in some menu.
+    // Note: This is an ugly hack, as the client will get an irrelevant connection failure message (server is full,
+    // failed to connect, etc). But at least it doesn't cause the server to get stuck in a "not ready" state in some
+    // menu.
     Log(EchoVR::LogLevel::Debug,
-        "[NEVR.GAMEPATCHES] Dedicated server failed to load level. Resetting session to keep game server "
-        "available.");
+        "[ECHORELAY.PATCH] Dedicated server failed to load level. Resetting session to keep game server available.");
     EchoVR::NetGameScheduleReturnToLobby(pGame);
     return;
   }
@@ -341,11 +421,10 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     else if (lstrcmpW(argv[i], L"-timestep") == 0) {
       // Verify a timestep argument was provided.
       if (i + 1 < argc)
-        headlessTickRateHz = std::wcstoul((const WCHAR*)argv[i + 1], nullptr, 10);
+        headlessTimeStep = std::wcstoul((const WCHAR*)argv[i + 1], nullptr, 10);
       else
         FatalError(
-            "No argument provided for -timestep. You must provide a positive number for a fixed tick rate, or a "
-            "zero "
+            "No argument provided for -timestep. You must provide a positive number for a fixed tick rate, or a zero "
             "value for unthrottled.",
             NULL);
     }
@@ -362,13 +441,12 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // If the headless flag was provided, enable it.
   if (isHeadless) PatchEnableHeadless(pGame);
 
-  // If the windowed, server, or headless flags were provided, apply the windowed mode patch to not use a VR
-  // headset.
+  // If the windowed, server, or headless flags were provided, apply the windowed mode patch to not use a VR headset.
   if (isWindowed || isServer || isHeadless) {
     // Set the game to run in windowed mode.
     UINT64* flags = (UINT64*)((CHAR*)pGame + 31456);
-    *flags |= 0x0100000;  // Spectator stream uses 0x2100000 (an additional flag). This changes level setting in
-                          // some way(?). Seemingly unnecessary here.
+    *flags |= 0x0100000;  // Spectator stream uses 0x2100000 (an additional flag). This changes level setting in some
+                          // way(?). Seemingly unnecessary here.
   }
 
   // Apply patches to force the game to load as a server.
@@ -389,11 +467,11 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 UINT64 LoadLocalConfigHook(PVOID pGame) {
   // If a timestep override was provided, configure it.
   // This is placed here, as by this time, the structure to dereference will be initialized.
-  if (isHeadless && headlessTickRateHz != 0) {
+  if (isHeadless && headlessTimeStep != 0) {
     // Patch the fixed time step based on tick count.
     // Fixed time step is in microseconds, tick rate is per second.
     UINT32* timeStep = (UINT32*)(*(CHAR**)(EchoVR::g_GameBaseAddress + 0x020A00E8) + 0x90);
-    *timeStep = 1000000 / headlessTickRateHz;
+    *timeStep = 1000000 / headlessTimeStep;
 
     // Patches the game to fix the delta time calculation for when using fixedtimestep.
     // Change condition for if deltatime is higher than timestep tell engine time is deltatime.
@@ -407,8 +485,8 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
 }
 
 /// <summary>
-/// A detour hook for the game's method it uses to connect to an HTTP(S) endpoint. This is used to redirect
-/// additional hardcoded endpoints in the game.
+/// A detour hook for the game's method it uses to connect to an HTTP(S) endpoint. This is used to redirect additional
+/// hardcoded endpoints in the game.
 /// </summary>
 /// <param name="unk">TODO: Unknown</param>
 /// <param name="uri">The HTTP(S) URI string to connect to.</param>
@@ -433,23 +511,6 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
   return EchoVR::HttpConnect(unk, uri);
 }
 
-// TODO: Uncomment and define CUriContainer and EchoVR::SWebSocketDataConnect to enable this hook
-#if 0
-/// <summary>
-/// A detour hook for NRadEngine::SWebSocketData::Connect.
-/// </summary>
-/// <param name="a1">Pointer to SWebSocketData instance.</param>
-/// <param name="a2">Pointer to CUriContainer instance.</param>
-// a1 NRadEngine::SWebSocketData*
-UINT64 SWebSocketDataConnectHook(PVOID wsData, CUriContainer* cUri) {
-  // Example: Log the URI being connected to (assuming CUriContainer has a method or field for the URI string)
-  // Replace 'GetUriString()' with the actual method/field if different.
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMEPATCHES] WebSocket Connect host: %s", cUri->host);
-
-  // Call the original function
-  return EchoVR::SWebSocketDataConnect(wsData, cUri);
-}
-#endif
 /// <summary>
 /// A detour hook for the game's method to wrap GetProcAddress.
 /// </summary>
@@ -462,11 +523,11 @@ FARPROC GetProcAddressHook(HMODULE hModule, LPCSTR lpProcName) {
   // some structures to initialize incorrectly or something.
   // For now, we resolve this by simply force exiting the server.
 
-  // If we're performing a plugin shutdown, check if this is a user platform DLL such as pnsdemo.dll or
-  // pnsovr.dll, which exports a "Users" method.
+  // If we're performing a plugin shutdown, check if this is a user platform DLL such as pnsdemo.dll or pnsovr.dll,
+  // which exports a "Users" method.
   if (isServer && strcmp(lpProcName, "RadPluginShutdown") == 0) {
-    // If this is a user platform dll, exit the whole process with a success code instead of continuing to
-    // gracefully unload.
+    // If this is a user platform dll, exit the whole process with a success code instead of continuing to gracefully
+    // unload.
     if (EchoVR::GetProcAddress(hModule, "Users") != NULL) exit(0);
   }
 
@@ -521,8 +582,10 @@ VOID Initialize() {
 
   // Verify the game version before patching
   if (!VerifyGameVersion())
-    MessageBoxW(NULL, L"Game engine version check failed. This NEVR patch is designed for v34.4.631547.1 of Echo VR.\n",
-                L"NEVR: Warning", MB_OK);
+    MessageBoxW(NULL,
+                L"EchoRelay version check failed. Patches may fail to be applied. Verify you're running the correct "
+                L"version of Echo VR.",
+                L"Echo Relay: Warning", MB_OK);
 
   // Patch our CLI argument options to add our additional options.
   PatchDetour(&(PVOID&)EchoVR::BuildCmdLineSyntaxDefinitions, BuildCmdLineSyntaxDefinitionsHook);
@@ -530,18 +593,15 @@ VOID Initialize() {
   PatchDetour(&(PVOID&)EchoVR::NetGameSwitchState, NetGameSwitchStateHook);
   PatchDetour(&(PVOID&)EchoVR::LoadLocalConfig, LoadLocalConfigHook);
   PatchDetour(&(PVOID&)EchoVR::HttpConnect, HttpConnectHook);
-  // PatchDetour(&(PVOID&)EchoVR::SWebSocketDataConnect, SWebSocketDataConnectHook);
   PatchDetour(&(PVOID&)EchoVR::GetProcAddress, GetProcAddressHook);
   PatchDetour(&(PVOID&)EchoVR::SetWindowTextA_, SetWindowTextAHook);
 
   // Run some startup patches
   PatchNoOvrRequiresSpectatorStream();
 
-  // Patch out the deadlock monitor thread's validation routine if we're compiling in debug mode, as this will
-  // panic from process suspension.
+  // Patch out the deadlock monitor thread's validation routine if we're compiling in debug mode, as this will panic
+  // from process suspension.
 #if _DEBUG
   PatchDeadlockMonitor();
 #endif
-
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMEPATCHES] version %s (%s) initialized", PROJECT_VERSION, GIT_COMMIT_HASH);
 }

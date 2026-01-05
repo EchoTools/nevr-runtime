@@ -5,6 +5,9 @@
 export WINEPREFIX="$HOME/.wine-msvc"
 export WINEDEBUG="-all"
 export WINEARCH="win64"
+# Disable GUI windows (winedbg, crash dialogs, etc.)
+export DISPLAY=""
+export WINEDLLOVERRIDES="winedbg.exe=d"
 
 # Function to convert a Unix path to Wine path
 convert_path() {
