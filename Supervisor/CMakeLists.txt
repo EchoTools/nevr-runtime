@@ -8,7 +8,7 @@ set(SCRIPT_FILES
 	logging.ps1
 	ports.ps1
 	instance.ps1
-	serverserver.ps1
+	startserver.ps1
 )
 
 set(OUTPUT_SCRIPT "${CMAKE_BINARY_DIR}/NEVRSupervisor.ps1")
