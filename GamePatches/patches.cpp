@@ -461,7 +461,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
           "[NEVR.PATCH] The -fixed-timestep argument is deprecated and ignored. Use -timestep <N> instead.");
     } else if (lstrcmpW(arg, L"-config-path") == 0) {
       if (i + 1 < argc) {
-        int len = WideCharToMultiByte(CP_ACP, 0, argv[i + 1], -1, customConfigJsonPath, MAX_PATH, NULL, NULL);
+        int len = WideCharToMultiByte(CP_UTF8, 0, argv[i + 1], -1, customConfigJsonPath, MAX_PATH, NULL, NULL);
         if (len == 0) {
           FatalError("Failed to convert -config-path to multi-byte string.", NULL);
         }
