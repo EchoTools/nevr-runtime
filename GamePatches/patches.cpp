@@ -274,7 +274,8 @@ VOID PatchEnableServer() {
   const BYTE serverFlagsCheck[] = {
       0x48, 0x83, 0x08, 0x06,                                      // OR QWORD ptr[rax], 0x6
       0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,  // NOPs to skip conditional checks
-      0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+      0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
+      0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
   static_assert(sizeof(serverFlagsCheck) == SERVER_FLAGS_CHECK_SIZE, "SERVER_FLAGS_CHECK patch size mismatch");
   ApplyPatch(SERVER_FLAGS_CHECK, serverFlagsCheck, sizeof(serverFlagsCheck));
 
@@ -299,7 +300,8 @@ VOID PatchEnableServer() {
   // Bypass "-spectatorstream" requirement (string ref at 0x1416d27b8)
   // This makes the server automatically enter "load lobby" state on startup
   const BYTE spectatorStreamCheck[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};  // 6x NOP
-  static_assert(sizeof(spectatorStreamCheck) == SPECTATORSTREAM_CHECK_SIZE, "SPECTATORSTREAM_CHECK patch size mismatch");
+  static_assert(sizeof(spectatorStreamCheck) == SPECTATORSTREAM_CHECK_SIZE,
+                "SPECTATORSTREAM_CHECK patch size mismatch");
   ApplyPatch(SPECTATORSTREAM_CHECK, spectatorStreamCheck, sizeof(spectatorStreamCheck));
 }
 
