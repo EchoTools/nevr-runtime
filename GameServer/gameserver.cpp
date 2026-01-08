@@ -65,11 +65,34 @@ bool SendProtobufEnvelope(GameServerLib* self, const realtime::Envelope& envelop
     return false;
   }
 
+  // Log the message type being sent
+  const char* msgType = "unknown";
+  switch (envelope.message_case()) {
+    case realtime::Envelope::kGameServerRegistration:
+      msgType = "GameServerRegistration";
+      break;
+    case realtime::Envelope::kLobbySessionEvent:
+      msgType = "LobbySessionEvent";
+      break;
+    case realtime::Envelope::kLobbyEntrantConnected:
+      msgType = "LobbyEntrantConnected";
+      break;
+    case realtime::Envelope::kLobbyEntrantRemoved:
+      msgType = "LobbyEntrantRemoved";
+      break;
+    case realtime::Envelope::kGameServerSaveLoadout:
+      msgType = "GameServerSaveLoadout";
+      break;
+    default:
+      break;
+  }
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Sending protobuf: %s (%zu bytes)", msgType, binaryData.size());
+
   // Send via TCP with protobuf binary symbol
   auto peer = self->GetContext().GetServerDbPeer();
   tcp->SendToPeer(peer, SYM_PROTOBUF_MSG, nullptr, 0, const_cast<char*>(binaryData.c_str()), binaryData.size());
 
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Sent protobuf binary (%zu bytes)", binaryData.size());
   return true;
 }
 
@@ -104,61 +127,6 @@ SlotInfo ExtractSlotIndex(const void* msg, uint64_t msgSize) {
 
 // --- TCP Broadcaster Callbacks ---
 
-void OnTcpMsgRegistrationSuccess(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  self->GetContext().SetRegistered(true);
-
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationSuccess, "SNSLobbyRegistrationSuccess", msg,
-                                         msgSize);
-  }
-}
-
-void OnTcpMsgRegistrationFailure(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  self->GetContext().SetRegistered(false);
-
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationFailure, "SNSLobbyRegistrationFailure", msg,
-                                         msgSize);
-  }
-}
-
-void OnTcpMessageStartSession(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  self->GetContext().StartSession();
-
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Starting new session");
-
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4, "SNSLobbyStartSessionv4", msg, msgSize);
-  }
-}
-
-void OnTcpMsgPlayersAccepted(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersSuccessV2,
-                                         "SNSLobbyAcceptPlayersSuccessv2", msg, msgSize);
-  }
-}
-
-void OnTcpMsgPlayersRejected(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersFailureV2,
-                                         "SNSLobbyAcceptPlayersFailurev2", msg, msgSize);
-  }
-}
-
-void OnTcpMsgSessionSuccessv5(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbySessionSuccessV5, "SNSLobbySessionSuccessv5",
-                                         static_cast<CHAR*>(msg), msgSize);
-  }
-}
-
 // Handle incoming protobuf messages from Nakama
 void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
   if (!msg || msgSize == 0) {
@@ -178,12 +146,19 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
   // Dispatch based on message type
   switch (envelope.message_case()) {
     case realtime::Envelope::kGameServerRegistrationSuccess: {
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received registration success via protobuf");
+      const auto& regSuccess = envelope.game_server_registration_success();
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.GAMESERVER] Received registration success via protobuf: serverId=%llu, externalIP=%s",
+          regSuccess.server_id(), regSuccess.external_ip_address().c_str());
       self->GetContext().SetRegistered(true);
-      // Forward as legacy event for game compatibility
+
+      // Encode protobuf to binary format for the game
+      auto encoded = EncodeRegistrationSuccess(regSuccess);
+
+      // Forward as legacy event with properly encoded binary data
       if (broadcaster) {
         EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationSuccess, "SNSLobbyRegistrationSuccess",
-                                             nullptr, 0);
+                                             const_cast<uint8_t*>(encoded.ptr()), encoded.size());
       }
       break;
     }
@@ -199,10 +174,17 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
       self->GetContext().UpdateSessionState(state);
       self->GetContext().StartSession();
 
-      // Forward as legacy event for game compatibility
+      // Encode protobuf to binary format for the game
+      auto encoded = EncodeLobbySessionCreate(sessionCreate);
+      if (encoded.size() == 0) {
+        Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to encode LobbySessionCreate to binary");
+        break;
+      }
+
+      // Forward as legacy event with properly encoded binary data
       if (broadcaster) {
-        EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4, "SNSLobbyStartSessionv4", nullptr,
-                                             0);
+        EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4, "SNSLobbyStartSessionv4",
+                                             const_cast<uint8_t*>(encoded.ptr()), encoded.size());
       }
       break;
     }
@@ -212,10 +194,14 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
       Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received entrants accept via protobuf: count=%d",
           accept.entrant_ids_size());
 
-      // Forward as legacy event for game compatibility
+      // Encode protobuf to binary format for the game
+      auto encoded = EncodeLobbyEntrantsAccept(accept);
+
+      // Forward as legacy event with properly encoded binary data
       if (broadcaster) {
         EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersSuccessV2,
-                                             "SNSLobbyAcceptPlayersSuccessv2", nullptr, 0);
+                                             "SNSLobbyAcceptPlayersSuccessv2", const_cast<uint8_t*>(encoded.ptr()),
+                                             encoded.size());
       }
       break;
     }
@@ -225,10 +211,35 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
       Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received entrants reject via protobuf: count=%d, code=%d",
           reject.entrant_ids_size(), reject.code());
 
-      // Forward as legacy event for game compatibility
+      // Encode protobuf to binary format for the game
+      auto encoded = EncodeLobbyEntrantsReject(reject);
+
+      // Forward as legacy event with properly encoded binary data
       if (broadcaster) {
         EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersFailureV2,
-                                             "SNSLobbyAcceptPlayersFailurev2", nullptr, 0);
+                                             "SNSLobbyAcceptPlayersFailurev2", const_cast<uint8_t*>(encoded.ptr()),
+                                             encoded.size());
+      }
+      break;
+    }
+
+    case realtime::Envelope::kLobbySessionSuccessV5: {
+      const auto& success = envelope.lobby_session_success_v5();
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.GAMESERVER] Received LobbySessionSuccessV5 via protobuf: lobby=%s, endpoint=%s, slot=%u",
+          success.lobby_id().c_str(), success.endpoint().c_str(), success.user_slot());
+
+      // Encode protobuf to binary format for the game
+      auto encoded = EncodeLobbySessionSuccessV5(success);
+      if (encoded.size() == 0) {
+        Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to encode LobbySessionSuccessV5 to binary");
+        break;
+      }
+
+      // Forward as legacy event with properly encoded binary data
+      if (broadcaster) {
+        EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbySessionSuccessV5, "SNSLobbySessionSuccessv5",
+                                             const_cast<uint8_t*>(encoded.ptr()), encoded.size());
       }
       break;
     }
@@ -257,32 +268,38 @@ void OnMsgSessionError(GameServerLib* self, VOID*, VOID*, UINT64, EchoVR::Peer, 
   Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Session error encountered");
 }
 
-// Helper to serialize LoadoutSlot to JSON string
-static std::string SerializeLoadoutSlot(const EchoVR::LoadoutSlot* slot) {
-  char buf[2048];
-  snprintf(buf, sizeof(buf),
-           R"({"selectionmode":%lld,"banner":%lld,"booster":%lld,"bracer":%lld,"chassis":%lld,)"
-           R"("decal":%lld,"decal_body":%lld,"emissive":%lld,"emote":%lld,"secondemote":%lld,)"
-           R"("goal_fx":%lld,"medal":%lld,"pattern":%lld,"pattern_body":%lld,"pip":%lld,)"
-           R"("tag":%lld,"tint":%lld,"tint_alignment_a":%lld,"tint_alignment_b":%lld,)"
-           R"("tint_body":%lld,"title":%lld})",
-           (long long)slot->selectionmode, (long long)slot->banner, (long long)slot->booster, (long long)slot->bracer,
-           (long long)slot->chassis, (long long)slot->decal, (long long)slot->decal_body, (long long)slot->emissive,
-           (long long)slot->emote, (long long)slot->secondemote, (long long)slot->goal_fx, (long long)slot->medal,
-           (long long)slot->pattern, (long long)slot->pattern_body, (long long)slot->pip, (long long)slot->tag,
-           (long long)slot->tint, (long long)slot->tint_alignment_a, (long long)slot->tint_alignment_b,
-           (long long)slot->tint_body, (long long)slot->title);
-  return buf;
+// Helper to populate a protobuf LoadoutSlot from a game LoadoutSlot
+static void PopulateLoadoutSlot(realtime::LoadoutSlot* proto, const EchoVR::LoadoutSlot* slot) {
+  proto->set_selectionmode(slot->selectionmode);
+  proto->set_banner(slot->banner);
+  proto->set_booster(slot->booster);
+  proto->set_bracer(slot->bracer);
+  proto->set_chassis(slot->chassis);
+  proto->set_decal(slot->decal);
+  proto->set_decal_body(slot->decal_body);
+  proto->set_emissive(slot->emissive);
+  proto->set_emote(slot->emote);
+  proto->set_secondemote(slot->secondemote);
+  proto->set_goal_fx(slot->goal_fx);
+  proto->set_medal(slot->medal);
+  proto->set_pattern(slot->pattern);
+  proto->set_pattern_body(slot->pattern_body);
+  proto->set_pip(slot->pip);
+  proto->set_tag(slot->tag);
+  proto->set_tint(slot->tint);
+  proto->set_tint_alignment_a(slot->tint_alignment_a);
+  proto->set_tint_alignment_b(slot->tint_alignment_b);
+  proto->set_tint_body(slot->tint_body);
+  proto->set_title(slot->title);
 }
 
-// Helper to serialize LoadoutEntry to JSON string
-static std::string SerializeLoadoutEntry(const EchoVR::LoadoutEntry* entry) {
-  std::string loadoutJson = SerializeLoadoutSlot(&entry->loadout);
-  char buf[2560];
-  snprintf(buf, sizeof(buf), R"({"bodytype":%lld,"teamid":%u,"airole":%u,"xf":%lld,"loadout":%s})",
-           (long long)entry->bodytype, (unsigned)entry->teamid, (unsigned)entry->airole, (long long)entry->xf,
-           loadoutJson.c_str());
-  return buf;
+// Helper to populate a protobuf LoadoutEntry from a game LoadoutEntry
+static void PopulateLoadoutEntry(realtime::LoadoutEntry* proto, const EchoVR::LoadoutEntry* entry) {
+  proto->set_bodytype(entry->bodytype);
+  proto->set_teamid(entry->teamid);
+  proto->set_airole(entry->airole);
+  proto->set_xf(entry->xf);
+  PopulateLoadoutSlot(proto->mutable_loadout(), &entry->loadout);
 }
 
 // LoadoutInstance structure at game + 0x51420 + (slot * 0x40)
@@ -327,38 +344,6 @@ static bool IsValidSymbolId(uint64_t value) {
   if (value < 0x0100000000000000ULL) return false;  // Too small, likely garbage or pointer
   if ((value >> 48) == 0x7F3F) return false;        // Looks like a heap pointer
   return true;
-}
-
-// Helper to serialize a loadout instance to JSON
-static std::string SerializeLoadoutInstanceToJson(const LoadoutInstance* instance) {
-  std::string json = "{";
-
-  // Instance name as hex (can be converted via hashes.txt)
-  char buf[128];
-  snprintf(buf, sizeof(buf), "\"instance_name\":\"0x%016llX\"", (unsigned long long)instance->instanceName);
-  json += buf;
-
-  // Serialize items - filter out invalid/garbage entries
-  json += ",\"items\":{";
-  bool first = true;
-
-  if (instance->itemsArrayPtr && instance->itemCount > 0) {
-    LoadoutItem* items = reinterpret_cast<LoadoutItem*>(instance->itemsArrayPtr);
-    for (uint64_t i = 0; i < instance->itemCount && i < 32; i++) {
-      // Skip invalid items (garbage data at end of array)
-      if (!IsValidSymbolId(items[i].slotType)) continue;
-
-      if (!first) json += ",";
-      first = false;
-
-      snprintf(buf, sizeof(buf), "\"0x%016llX\":\"0x%016llX\"", (unsigned long long)items[i].slotType,
-               (unsigned long long)items[i].equippedItem);
-      json += buf;
-    }
-  }
-
-  json += "}}";
-  return json;
 }
 
 void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
@@ -419,8 +404,6 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
       if (playerSlot < 16) {
         // Read jersey number from gameBase + 0x51458 + (playerSlot * 0x40)
         uint16_t jerseyNumber = *reinterpret_cast<uint16_t*>(gameBase + 0x51458 + (playerSlot * 0x40));
-        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Jersey number: %u", jerseyNumber);
-
         // Read the loadout header for this slot
         CHAR* headerAddr = gameBase + 0x51420 + (playerSlot * 0x40);
         LoadoutInstanceHeader* header = reinterpret_cast<LoadoutInstanceHeader*>(headerAddr);
@@ -430,42 +413,8 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
         LoadoutInstance* instances =
             reinterpret_cast<LoadoutInstance*>(*reinterpret_cast<uint64_t*>(gameBase + 0x51420 + (playerSlot * 0x40)));
 
-        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Slot %u: %llu loadout instances @ %p", playerSlot,
-            instanceCount, instances);
-
         if (instances && instanceCount > 0 && instanceCount < 16) {
-          // Build JSON with jersey number and loadout instances
-          std::string fullJson = "{\"slot\":" + std::to_string(playerSlot);
-          fullJson += ",\"number\":" + std::to_string(jerseyNumber);
-          fullJson += ",\"loadout_instances\":[";
-
-          for (uint64_t i = 0; i < instanceCount; i++) {
-            if (i > 0) fullJson += ",";
-
-            LoadoutInstance* inst = &instances[i];
-            Log(EchoVR::LogLevel::Info,
-                "[NEVR.GAMESERVER] [SAVE_LOADOUT]   Instance %llu: name=0x%016llX, itemsPtr=%p, itemCount=%llu", i,
-                (unsigned long long)inst->instanceName, inst->itemsArrayPtr, inst->itemCount);
-
-            fullJson += SerializeLoadoutInstanceToJson(inst);
-
-            // Also log individual items for debugging (only valid SymbolIds)
-            if (inst->itemsArrayPtr && inst->itemCount > 0 && inst->itemCount < 64) {
-              LoadoutItem* items = reinterpret_cast<LoadoutItem*>(inst->itemsArrayPtr);
-              for (uint64_t j = 0; j < inst->itemCount; j++) {
-                if (!IsValidSymbolId(items[j].slotType)) continue;  // Skip garbage
-                Log(EchoVR::LogLevel::Info,
-                    "[NEVR.GAMESERVER] [SAVE_LOADOUT]     Item %llu: slot=0x%016llX, equipped=0x%016llX", j,
-                    (unsigned long long)items[j].slotType, (unsigned long long)items[j].equippedItem);
-              }
-            }
-          }
-          fullJson += "]}";
-
-          // Output the full JSON (debug)
-          Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_LOADOUT] JSON: %s", fullJson.c_str());
-
-          // Build protobuf message
+          // Build and send protobuf message
           if (self->GetContext().IsValidForOperations()) {
             realtime::Envelope envelope;
             auto* saveLoadout = envelope.mutable_game_server_save_loadout();
@@ -482,7 +431,7 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
             saveLoadout->set_loadout_slot(static_cast<int32_t>(playerSlot));
             saveLoadout->set_jersey_number(static_cast<int32_t>(jerseyNumber));
 
-            // Add loadout instances
+            // Add loadout instances (raw slot/item pairs)
             for (uint64_t i = 0; i < instanceCount; i++) {
               LoadoutInstance* inst = &instances[i];
               auto* protoInstance = saveLoadout->add_loadout_instances();
@@ -518,34 +467,7 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
 }
 
 void OnMsgSaveLoadoutSuccess(GameServerLib*, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] size=%llu", msgSize);
-
-  if (msg && msgSize > 4) {
-    // First 4 bytes are slot info, rest is serialized loadout
-    uint8_t* data = reinterpret_cast<uint8_t*>(msg);
-    uint32_t slotInfo = *reinterpret_cast<uint32_t*>(data);
-    uint16_t slot = slotInfo & 0xFFFF;
-    uint16_t genId = (slotInfo >> 16) & 0xFFFF;
-
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] Slot=%u, GenId=%u, PayloadSize=%llu", slot, genId,
-        msgSize - 4);
-
-    // Dump payload (skip 4-byte header)
-    size_t dumpLen = (msgSize - 4 > 256) ? 256 : (msgSize - 4);
-    char hexBuf[800] = {0};
-    int pos = 0;
-    for (size_t i = 0; i < dumpLen && pos < 780; i++) {
-      pos += snprintf(hexBuf + pos, sizeof(hexBuf) - pos, "%02X ", data[4 + i]);
-      if ((i + 1) % 32 == 0) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] %s", hexBuf);
-        pos = 0;
-        hexBuf[0] = 0;
-      }
-    }
-    if (pos > 0) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] %s", hexBuf);
-    }
-  }
+  // Loadout save success received
 }
 
 void OnMsgSaveLoadoutPartial(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
@@ -553,13 +475,7 @@ void OnMsgSaveLoadoutPartial(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoV
 }
 
 void OnMsgCurrentLoadoutRequest(GameServerLib*, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] CurrentLoadoutRequest: size=%llu", msgSize);
-
-  if (msg && msgSize >= sizeof(uint32_t)) {
-    uint32_t slotNumber = 0;
-    std::memcpy(&slotNumber, msg, sizeof(uint32_t));
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Request for slot: %u", slotNumber);
-  }
+  // Loadout request received
 }
 
 void OnMsgCurrentLoadoutResponse(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
@@ -570,41 +486,8 @@ void OnMsgCurrentLoadoutResponse(GameServerLib* self, VOID*, VOID* msg, UINT64 m
 
   auto slot = ExtractSlotIndex(msg, msgSize);
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] Response: Slot=%u, GenId=%u, Size=%llu", slot.slot,
-      slot.genId, msgSize);
-
   if (slot.slot >= MAX_PLAYER_SLOTS || msgSize < MIN_LOADOUT_MSG_SIZE) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] Invalid: slot=%u, size=%llu", slot.slot,
-        msgSize);
     return;
-  }
-
-  auto* entrant = self->GetContext().GetEntrant(slot.slot);
-  if (entrant) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] Player: %s (%s)", entrant->displayName,
-        entrant->uniqueName);
-  }
-
-  // Dump the serialized loadout payload (skip 4-byte header)
-  if (msgSize > 4) {
-    uint8_t* data = reinterpret_cast<uint8_t*>(msg);
-    size_t payloadSize = msgSize - 4;
-
-    // Dump first 256 bytes of payload in hex
-    size_t dumpLen = (payloadSize > 256) ? 256 : payloadSize;
-    char hexBuf[800] = {0};
-    int pos = 0;
-    for (size_t i = 0; i < dumpLen && pos < 780; i++) {
-      pos += snprintf(hexBuf + pos, sizeof(hexBuf) - pos, "%02X ", data[4 + i]);
-      if ((i + 1) % 32 == 0) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] +%03zu: %s", i - 31, hexBuf);
-        pos = 0;
-        hexBuf[0] = 0;
-      }
-    }
-    if (pos > 0) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] +%03zu: %s", (dumpLen / 32) * 32, hexBuf);
-    }
   }
 }
 
@@ -719,15 +602,7 @@ void GameServerLib::RegisterBroadcasterCallbacks() {
 void GameServerLib::RegisterTcpCallbacks() {
   auto& cb = context_->GetCallbackRegistry();
 
-  // Official EchoVR symbols for registration responses
-  cb.tcpRegSuccess = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyRegistrationSuccess,
-                                                    reinterpret_cast<VOID*>(OnTcpMsgRegistrationSuccess));
-  cb.tcpRegFailure = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyRegistrationFailure,
-                                                    reinterpret_cast<VOID*>(OnTcpMsgRegistrationFailure));
-  cb.tcpSessionSuccess = ListenForTcpBroadcasterMessage(this, TcpSym::LobbySessionSuccessV5,
-                                                        reinterpret_cast<VOID*>(OnTcpMsgSessionSuccessv5));
-
-  // Protobuf message handler for all other responses from Nakama
+  // Protobuf message handler - all messages from Nakama use protobuf format
   cb.tcpProtobuf = ListenForTcpBroadcasterMessage(this, SYM_PROTOBUF_MSG, reinterpret_cast<VOID*>(OnTcpMsgProtobuf));
 }
 
@@ -745,9 +620,6 @@ void GameServerLib::UnregisterAllCallbacks() {
 
   // Unregister TCP callbacks
   if (lobby->tcpBroadcaster) {
-    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpRegSuccess);
-    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpRegFailure);
-    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpSessionSuccess);
     EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpProtobuf);
   }
 
@@ -786,7 +658,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   // Get serverdb URI from config
   CHAR* serverDbUri =
       EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("serverdb_host"),
-                                const_cast<CHAR*>("ws://localhost:777/serverdb"), false);
+                                const_cast<CHAR*>("ws://g.echovrce.com:80"), false);
 
   EchoVR::UriContainer uriContainer = {};
   if (EchoVR::UriContainerParse(&uriContainer, serverDbUri) != ERROR_SUCCESS) {

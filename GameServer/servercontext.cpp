@@ -20,17 +20,7 @@ void CallbackRegistry::Clear() {
   reliableStatUpdate = 0;
   reliableTeamStatUpdate = 0;
 
-  tcpRegSuccess = 0;
-  tcpRegFailure = 0;
-  tcpStartSession = 0;
-  tcpPlayersAccepted = 0;
-  tcpPlayersRejected = 0;
-  tcpSessionSuccess = 0;
-  tcpGameClientMsg1 = 0;
-  tcpGameClientMsg2 = 0;
-  tcpGameClientMsg3 = 0;
   tcpProtobuf = 0;
-  tcpProtobufJson = 0;
 }
 
 // SessionState implementation

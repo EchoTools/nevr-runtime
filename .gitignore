@@ -62,3 +62,6 @@ __pycache__/
 hashes*.txt
 lobby_session_*.json
 .gemini/settings.json
+
+# Local EchoVR installation
+ready-at-dawn-echo-arena/

@@ -40,17 +40,7 @@ struct CallbackRegistry {
   uint16_t reliableTeamStatUpdate = 0;
 
   // TCP broadcaster (websocket) callbacks
-  uint16_t tcpRegSuccess = 0;
-  uint16_t tcpRegFailure = 0;
-  uint16_t tcpStartSession = 0;
-  uint16_t tcpPlayersAccepted = 0;
-  uint16_t tcpPlayersRejected = 0;
-  uint16_t tcpSessionSuccess = 0;
-  uint16_t tcpGameClientMsg1 = 0;
-  uint16_t tcpGameClientMsg2 = 0;
-  uint16_t tcpGameClientMsg3 = 0;
   uint16_t tcpProtobuf = 0;
-  uint16_t tcpProtobufJson = 0;
 
   void Clear();
 };
