@@ -187,25 +187,24 @@ VOID PatchEnableHeadless(PVOID pGame) {
   };
   ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xFF581, pbPatch, sizeof(pbPatch));
 
-  // Patch effects resource loading to be skipped over.
-  BYTE pbPatch2[] = {
-      0xEB, 0x41  // JMP 0x43
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x62CA91, pbPatch2, sizeof(pbPatch2));
+  // Skip effects resource loading
+  const BYTE effectsPatch[] = {0xEB, 0x41};  // JMP +0x43
+  ApplyPatch(HEADLESS_EFFECTS, effectsPatch, sizeof(effectsPatch));
 
-  // If a timestep is set as non-zero, patch to enable `-fixedtimestep`.
+  // Enable fixed timestep if configured
   if (headlessTimeStep != 0) {
-    // Set the flag for `-fixedtimestep`.
-    UINT64* flags = (UINT64*)((CHAR*)pGame + 2088);
-    *flags |= 0x2000000;
+    UINT64* timestepFlags = reinterpret_cast<UINT64*>(static_cast<CHAR*>(pGame) + GAME_TIMESTEP_FLAGS_OFFSET);
+    *timestepFlags |= 0x2000000;  // Set fixed timestep flag
   }
 
-  // Return to avoid the creation of the console when noConsole is set.
-  if (noConsole) return;
+  // Skip console creation if -noconsole was specified
+  if (noConsole) {
+    return;
+  }
 
-  // Create a console
-  // Note: We do this because attaching to the parent process console would already be detached due to
-  // /SUBSYSTEM:WINDOWS. Attaching two processes to a console at once would be messy and.
+  // Create a console window for headless mode
+  // Note: We create a new console because the parent console is already detached
+  // due to /SUBSYSTEM:WINDOWS. Attaching multiple processes would be problematic.
   AllocConsole();
 
   // Redirect our standard streams to the new console.
@@ -382,25 +381,25 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
 
   // Add our additional options
   EchoVR::AddArgSyntax(pArgSyntax, "-server", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-server", "[EchoRelay] Run as a dedicated game server");
+  EchoVR::AddArgHelpString(pArgSyntax, "-server", "[NEVR] Run as a dedicated game server");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-offline", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-offline", "[EchoRelay] Run the game in offline mode");
+  EchoVR::AddArgHelpString(pArgSyntax, "-offline", "[NEVR] Run the game in offline mode");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-windowed", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-windowed", "[EchoRelay] Run the game with no headset, in a window");
+  EchoVR::AddArgHelpString(pArgSyntax, "-windowed", "[NEVR] Run the game with no headset, in a window");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-timestep", 1, 1, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-timestep",
-                           "[EchoRelay] Sets the fixed update interval when using -headless (in ticks/updates per "
+                           "[NEVR] Sets the fixed update interval when using -headless (in ticks/updates per "
                            "second). 0 = no fixed time step, 120 = default");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-noconsole", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-noconsole",
-                           "[EchoRelay] Disable the creation of a new console window when using -headless");
+                           "[NEVR] Disable the creation of a new console window when using -headless");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-configjson", 1, 1, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-configjson", "[EchoRelay] Specify a custom path to the config.json file");
+  EchoVR::AddArgHelpString(pArgSyntax, "-configjson", "[NEVR] Specify a custom path to the config.json file");
 
   return result;
 }
@@ -410,55 +409,62 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
 /// </summary>
 /// <param name="pGame">A pointer to the game instance.</param>
 UINT64 PreprocessCommandLineHook(PVOID pGame) {
-  // Check which were set with command line arguments.
-  int argc;
+  // Parse command line arguments.
+  int argc = 0;
   LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-  for (int i = 0; i < argc; i++) {
-    if (lstrcmpW(argv[i], L"-server") == 0)
+
+  for (int i = 0; i < argc; ++i) {
+    const LPWSTR arg = argv[i];
+
+    if (lstrcmpW(arg, L"-server") == 0) {
       isServer = TRUE;
-    else if (lstrcmpW(argv[i], L"-offline") == 0)
+      isNoOVR = TRUE;  // Server mode automatically disables VR
+    } else if (lstrcmpW(arg, L"-offline") == 0) {
       isOffline = TRUE;
-    else if (lstrcmpW(argv[i], L"-noconsole") == 0)
+    } else if (lstrcmpW(arg, L"-noconsole") == 0) {
       noConsole = TRUE;
-    else if (lstrcmpW(argv[i], L"-headless") == 0)
+      isHeadless = TRUE;  // No console implies headless mode
+    } else if (lstrcmpW(arg, L"-headless") == 0) {
       isHeadless = TRUE;
-    else if (lstrcmpW(argv[i], L"-windowed") == 0)
+    } else if (lstrcmpW(arg, L"-windowed") == 0) {
       isWindowed = TRUE;
-    else if (lstrcmpW(argv[i], L"-noovr") == 0)
+    } else if (lstrcmpW(arg, L"-noovr") == 0) {
       isNoOVR = TRUE;
-    else if (lstrcmpW(argv[i], L"-timestep") == 0) {
-      // Verify a timestep argument was provided.
-      if (i + 1 < argc)
-        headlessTimeStep = std::wcstoul((const WCHAR*)argv[i + 1], nullptr, 10);
-      else
-        FatalError(
-            "No argument provided for -timestep. You must provide a positive number for a fixed tick rate, or a zero "
-            "value for unthrottled.",
-            NULL);
-    } else if (lstrcmpW(argv[i], L"-configjson") == 0) {
-      // Verify a config json path argument was provided.
+    } else if (lstrcmpW(arg, L"-timestep") == 0) {
       if (i + 1 < argc) {
-        // Convert wide string to multi-byte string
+        headlessTimeStep = std::wcstoul(argv[i + 1], nullptr, 10);
+      } else {
+        FatalError(
+            "Missing argument for -timestep. Provide a positive number for fixed tick rate, or zero for unthrottled.",
+            NULL);
+      }
+    } else if (lstrcmpW(arg, L"-fixed-timestep") == 0) {
+      LOG_WARN("The -fixed-timestep argument is deprecated and ignored. Use -timestep instead.");
+    } else if (lstrcmpW(arg, L"-configjson") == 0) {
+      if (i + 1 < argc) {
         int len = WideCharToMultiByte(CP_ACP, 0, argv[i + 1], -1, customConfigJsonPath, MAX_PATH, NULL, NULL);
         if (len == 0) {
-          FatalError("Failed to convert -configjson argument to multi-byte string.", NULL);
+          FatalError("Failed to convert -configjson path to multi-byte string.", NULL);
         }
       } else {
-        FatalError("No argument provided for -configjson. You must provide a path to a config.json file.", NULL);
+        FatalError("Missing argument for -configjson. Provide a path to a config.json file.", NULL);
       }
     }
   }
 
-  // Verify server and offline flags are not enabled.
-  if (isServer && isOffline) FatalError("-server and -offline arguments cannot be provided at the same time.", NULL);
+  // Validate argument combinations.
+  if (isServer && isOffline) {
+    FatalError("Arguments -server and -offline are mutually exclusive.", NULL);
+  }
 
-  if (!isHeadless && noConsole) FatalError("-noconsole can only be used with the -headless argument.", NULL);
+  // Apply patches based on arguments.
+  if (isOffline) {
+    PatchEnableOffline();
+  }
 
-  // If offline flag was provided, enable offline.
-  if (isOffline) PatchEnableOffline();
-
-  // If the headless flag was provided, enable it.
-  if (isHeadless) PatchEnableHeadless(pGame);
+  if (isHeadless) {
+    PatchEnableHeadless(pGame);
+  }
 
   // If the windowed, server, or headless flags were provided, apply the windowed mode patch to not use a VR headset.
   if (isWindowed || isServer || isHeadless) {
