@@ -1,449 +1,490 @@
 #include "gameserver.h"
 
 #include <cstdio>
+#include <cstring>
 
+#include "constants.h"
 #include "echovr.h"
 #include "echovrunexported.h"
 #include "messages.h"
 #include "pch.h"
 
-/// <summary>
-/// A wrapper for WriteLog, simplifying logging operations.
-/// </summary>
-/// <returns>None</returns>
-VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
+using namespace GameServer;
+
+// Logging wrapper for game's log system
+void Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_list args;
   va_start(args, format);
   EchoVR::WriteLog(level, 0, format, args);
   va_end(args);
 }
 
-/// <summary>
-/// Subscribes to internal local events for a given message type. These are typically sent internally by the game
-/// to its self, or derived from connected peer's messages (UDP broadcast port forwards events). The provided
-/// function is used as a callback when a message of the type is received from any peer or onesself.
-/// </summary>
-/// <param name="self">The game server library which is listening for the message.</param>
-/// <param name="msgId">The 64-bit symbol used to describe a message type/identifier to listen for.</param>
-/// <param name="isMsgReliable">Indicates whether we are listening for events for messages sent over the reliable or
-/// mailbox game server message inbox types.</param> <param name="func">The function to use as callback when a
-/// broadcaster message of the given type is received.</param> <returns>An identifier/handle for the callback
-/// registration, to be later used in unregistering.</returns>
-UINT16 ListenForBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId, BOOL isMsgReliable, VOID* func) {
-  // Subscribe to the provided message id.
-  EchoVR::DelegateProxy listenerProxy;
-  memset(&listenerProxy, 0, sizeof(listenerProxy));
-  listenerProxy.method[0] = 0xFFFFFFFFFFFFFFFF;
-  listenerProxy.instance = (VOID*)self;
-  listenerProxy.proxyFunc = func;
+// Subscribe to internal broadcaster (UDP) events
+uint16_t ListenForBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId, BOOL isMsgReliable, VOID* func) {
+  EchoVR::DelegateProxy proxy = {};
+  proxy.method[0] = DELEGATE_PROXY_INVALID_METHOD;
+  proxy.instance = static_cast<VOID*>(self);
+  proxy.proxyFunc = func;
 
-  return EchoVR::BroadcasterListen(self->lobby->broadcaster, msgId, isMsgReliable, (VOID*)&listenerProxy, true);
+  auto* lobby = self->GetContext().GetLobby();
+  if (!lobby || !lobby->broadcaster) return 0;
+
+  return EchoVR::BroadcasterListen(lobby->broadcaster, msgId, isMsgReliable, &proxy, true);
 }
 
-/// <summary>
-/// Subscribes the TCP broadcasters (websocket) to a given message type. The provided
-/// function is used as a callback when a message of the type is received from any service.
-/// </summary>
-/// <param name="self">The game server library which is listening for the message.</param>
-/// <param name="msgId">The 64-bit symbol used to describe a message type/identifier to listen for.</param>
-/// <param name="func">The function to use as callback when a TCP/webosocket message of the given type is
-/// received.</param> <returns>None</returns>
-UINT16 ListenForTcpBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId, VOID* func) {
-  // Subscribe to the provided message id.
-  // Normally a proxy function is provided, which calls the underlying method provided, but we just use the proxy
-  // function callback to receive everything to keep it simple.
-  EchoVR::DelegateProxy listenerProxy;
-  memset(&listenerProxy, 0, sizeof(listenerProxy));
-  listenerProxy.method[0] = 0xFFFFFFFFFFFFFFFF;
-  listenerProxy.instance = (VOID*)self;
-  listenerProxy.proxyFunc = func;
+// Subscribe to TCP broadcaster (websocket) events
+uint16_t ListenForTcpBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId, VOID* func) {
+  EchoVR::DelegateProxy proxy = {};
+  proxy.method[0] = DELEGATE_PROXY_INVALID_METHOD;
+  proxy.instance = static_cast<VOID*>(self);
+  proxy.proxyFunc = func;
 
-  return EchoVR::TcpBroadcasterListen(self->lobby->tcpBroadcaster, msgId, 0, 0, 0, (VOID*)&listenerProxy, true);
+  auto* lobby = self->GetContext().GetLobby();
+  if (!lobby || !lobby->tcpBroadcaster) return 0;
+
+  return EchoVR::TcpBroadcasterListen(lobby->tcpBroadcaster, msgId, 0, 0, 0, &proxy, true);
 }
 
-/// <summary>
-/// Sends a message using the TCP broadcaster to the ServerDB websocket service.
-/// </summary>
-/// <param name="self">The game server library which is sending the message to the service.</param>
-/// <param name="msgId">The 64-bit symbol used to describe the message type/identifier being sent.</param>
-/// <param name="msg">A pointer to the message data to be sent.</param>
-/// <param name="msgSize">The size of the msg to be sent, in bytes.</param>
-/// <returns>None</returns>
-VOID SendServerdbTcpMessage(GameServerLib* self, EchoVR::SymbolId msgId, VOID* msg, UINT64 msgSize) {
-  // Wrap the send call provided by the TCP broadcaster.
-  self->tcpBroadcasterData->SendToPeer(self->serverDbPeer, msgId, NULL, 0, msg, msgSize);
+// Send message to ServerDB via TCP broadcaster
+void SendServerdbTcpMessage(GameServerLib* self, EchoVR::SymbolId msgId, VOID* msg, uint64_t msgSize) {
+  auto* tcp = self->GetContext().GetTcpBroadcaster();
+  if (!tcp) return;
+
+  auto peer = self->GetContext().GetServerDbPeer();
+  tcp->SendToPeer(peer, msgId, nullptr, 0, msg, msgSize);
 }
 
-/// <summary>
-/// Event handler for receiving a game server registration success message from the TCP (websocket) ServerDB service.
-/// This message indicates the game server registration with ServerDB was accepted.
-/// </summary>
-/// <returns>None</returns>
-VOID OnTcpMsgRegistrationSuccess(GameServerLib* self, VOID* proxymthd, EchoVR::TcpPeer sender, VOID* msg, VOID* unk,
-                                 UINT64 msgSize) {
-  // Set the registration status
-  self->registered = TRUE;
+// Extract slot index from message payload
+SlotInfo ExtractSlotIndex(const void* msg, uint64_t msgSize) {
+  SlotInfo info = {0, 0};
+  if (!msg || msgSize < sizeof(uint32_t)) return info;
 
-  // Forward the received registration success event to the internal broadcast.
-  EchoVR::BroadcasterReceiveLocalEvent(self->broadcaster, SYMBOL_BROADCASTER_LOBBY_REGISTRATION_SUCCESS,
-                                       "SNSLobbyRegistrationSuccess", msg, msgSize);
+  uint32_t packed = 0;
+  std::memcpy(&packed, msg, sizeof(uint32_t));
+
+  info.slot = static_cast<uint16_t>(packed & SLOT_INDEX_MASK);
+  info.genId = static_cast<uint16_t>((packed >> SLOT_GEN_SHIFT) & SLOT_INDEX_MASK);
+  return info;
 }
 
-/// <summary>
-/// Event handler for receiving a game server registration failure message from the TCP (websocket) ServerDB service.
-/// This message indicates the game server registration with ServerDB was rejected.
-/// </summary>
-/// <returns>None</returns>
-VOID OnTcpMsgRegistrationFailure(GameServerLib* self, VOID* proxymthd, EchoVR::TcpPeer sender, VOID* msg, VOID* unk,
-                                 UINT64 msgSize) {
-  // Set the registration status
-  self->registered = FALSE;
+// --- TCP Broadcaster Callbacks ---
 
-  // Forward the received registration failure event to the internal broadcast.
-  EchoVR::BroadcasterReceiveLocalEvent(self->broadcaster, SYMBOL_BROADCASTER_LOBBY_REGISTRATION_FAILURE,
-                                       "SNSLobbyRegistrationFailure", msg, msgSize);
+void OnTcpMsgRegistrationSuccess(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
+  self->GetContext().SetRegistered(true);
+
+  auto* broadcaster = self->GetContext().GetBroadcaster();
+  if (broadcaster) {
+    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationSuccess, "SNSLobbyRegistrationSuccess", msg,
+                                         msgSize);
+  }
 }
 
-/// <summary>
-/// Event handler for receiving a start session request from the TCP (websocket) ServerDB service.
-/// This message directs the game to start loading a new game session with the provided request arguments.
-/// </summary>
-/// <returns>None</returns>
-VOID OnTcpMessageStartSession(GameServerLib* self, VOID* proxymthd, EchoVR::TcpPeer sender, VOID* msg, VOID* unk,
-                              UINT64 msgSize) {
-  // Set our session to active.
-  self->sessionActive = TRUE;
+void OnTcpMsgRegistrationFailure(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
+  self->GetContext().SetRegistered(false);
 
-  // Forward the received start session event to the internal broadcast.
-  Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER] Starting new session");
-  EchoVR::BroadcasterReceiveLocalEvent(self->broadcaster, SYMBOL_BROADCASTER_LOBBY_START_SESSION_V4,
-                                       "SNSLobbyStartSessionv4", msg, msgSize);
+  auto* broadcaster = self->GetContext().GetBroadcaster();
+  if (broadcaster) {
+    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationFailure, "SNSLobbyRegistrationFailure", msg,
+                                         msgSize);
+  }
 }
 
-/// <summary>
-/// Event handler for receiving a players accepted message from the TCP (websocket) ServerDB service.
-/// This message indicates that ServerDB / Matching services accepted a player into this session, and is now
-/// requesting the game server accept them.
-/// </summary>
-/// <returns>None</returns>
-VOID OnTcpMsgPlayersAccepted(GameServerLib* self, VOID* proxymthd, EchoVR::TcpPeer sender, VOID* msg, VOID* unk,
-                             UINT64 msgSize) {
-  // Forward the received player acceptance success event to the internal broadcast.
-  EchoVR::BroadcasterReceiveLocalEvent(self->broadcaster, SYMBOL_BROADCASTER_LOBBY_ACCEPT_PLAYERS_SUCCESS_V2,
-                                       "SNSLobbyAcceptPlayersSuccessv2", msg, msgSize);
+void OnTcpMessageStartSession(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
+  self->GetContext().StartSession();
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Starting new session");
+
+  auto* broadcaster = self->GetContext().GetBroadcaster();
+  if (broadcaster) {
+    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4, "SNSLobbyStartSessionv4", msg, msgSize);
+  }
 }
 
-/// <summary>
-/// Event handler for receiving a players rejected message from the TCP (websocket) ServerDB service.
-/// This message indicates that ServerDB / Matching services rejected a player from this session, and is now
-/// requesting the game server kick / reject them.
-/// </summary>
-/// <returns>None</returns>
-VOID OnTcpMsgPlayersRejected(GameServerLib* self, VOID* proxymthd, EchoVR::TcpPeer sender, VOID* msg, VOID* unk,
-                             UINT64 msgSize) {
-  // Forward the received player acceptance failure event to the internal broadcast.
-  EchoVR::BroadcasterReceiveLocalEvent(self->broadcaster, SYMBOL_BROADCASTER_LOBBY_ACCEPT_PLAYERS_FAILURE_V2,
-                                       "SNSLobbyAcceptPlayersFailurev2", msg, msgSize);
+void OnTcpMsgPlayersAccepted(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
+  auto* broadcaster = self->GetContext().GetBroadcaster();
+  if (broadcaster) {
+    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersSuccessV2,
+                                         "SNSLobbyAcceptPlayersSuccessv2", msg, msgSize);
+  }
 }
 
-/// <summary>
-/// Event handler for receiving a join session success message from the TCP (websocket) ServerDB service.
-/// This message indicates that ServerDB / Matching matched a player to this server.The message provides
-/// connection parameters for both parties, including encryption / verification keys for client / game server to use.
-/// </summary>
-/// <returns>None</returns>
-VOID OnTcpMsgSessionSuccessv5(GameServerLib* self, VOID* proxymthd, EchoVR::TcpPeer sender, VOID* msg, VOID* unk,
-                              UINT64 msgSize) {
-  // Forward the received join session success event to the internal broadcast.
-  EchoVR::BroadcasterReceiveLocalEvent(self->broadcaster, SYMBOL_BROADCASTER_LOBBY_SESSION_SUCCESS_V5,
-                                       "SNSLobbySessionSuccessv5", (CHAR*)msg, msgSize);
+void OnTcpMsgPlayersRejected(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
+  auto* broadcaster = self->GetContext().GetBroadcaster();
+  if (broadcaster) {
+    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersFailureV2,
+                                         "SNSLobbyAcceptPlayersFailurev2", msg, msgSize);
+  }
 }
 
-/// <summary>
-/// Event handler for receiving a session start success message from events (internal game server broadcast).
-/// This message indicates that a new session is starting.This is triggered after a SNSLobbyStartSessionv4 message
-/// is processed.
-/// </summary>
-/// <returns>None</returns>
-VOID OnMsgSessionStarting(GameServerLib* self, VOID* proxymthd, VOID* msg, UINT64 msgSize, EchoVR::Peer destination,
-                          EchoVR::Peer sender) {
-  // NOTE: `msg` here has no substance (one uninitialized byte).
-  Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER] Session starting");
+void OnTcpMsgSessionSuccessv5(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
+  auto* broadcaster = self->GetContext().GetBroadcaster();
+  if (broadcaster) {
+    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbySessionSuccessV5, "SNSLobbySessionSuccessv5",
+                                         static_cast<CHAR*>(msg), msgSize);
+  }
 }
 
-/// <summary>
-/// Event handler for receiving a session error message from events (internal game server broadcast).
-/// This message indicates that the game session encountered an error either when starting or running.
-/// </summary>
-/// <returns>None</returns>
-VOID OnMsgSessionError(GameServerLib* self, VOID* proxymthd, VOID* msg, UINT64 msgSize, EchoVR::Peer destination,
-                       EchoVR::Peer sender) {
-  // NOTE: `msg` here has no substance (one uninitialized byte).
-  Log(EchoVR::LogLevel::Error, "[ECHORELAY.GAMESERVER] Session error encountered");
+// --- Internal Broadcaster Callbacks ---
+
+void OnMsgSessionStarting(GameServerLib* self, VOID*, VOID*, UINT64, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Session starting");
 }
 
-/// <summary>
-/// TODO: This vtable slot is not verified to be for this purpose.
-/// In any case, it seems not to be called or problematic, so we'll leave this definition as a placeholder.
-/// </summary>
-/// <param name="unk1">TODO: Unknown</param>
-/// <param name="a2">TODO: Unknown</param>
-/// <param name="a3">TODO: Unknown</param>
-/// <returns>TODO: Unknown</returns>
-INT64 GameServerLib::UnkFunc0(VOID* unk1, INT64 a2, INT64 a3) { return 1; }
+void OnMsgSessionError(GameServerLib* self, VOID*, VOID*, UINT64, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Session error encountered");
+}
 
-/// <summary>
-/// Initializes the game server library. This is called by the game after the library has been loaded.
-/// </summary>
-/// <param name="lobby">The current game lobby structure to reference/leverage when operating the game server.</param>
-/// <param name="broadcaster">The internal game server broadcast to use to communicate with clients.</param>
-/// <param name="unk2">TODO: Unknown.</param>
-/// <param name="logPath">The file path where the current log file resides.</param>
-/// <returns>None</returns>
-VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broadcaster, VOID* unk2,
-                                const CHAR* logPath) {
-  // Set up our game server state.
-  this->lobby = lobby;
-  this->broadcaster = broadcaster;
-  this->tcpBroadcasterData = lobby->tcpBroadcaster->data;
+void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
+  if (!msg || msgSize < MIN_LOADOUT_MSG_SIZE) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Invalid message size: %llu", msgSize);
+    return;
+  }
 
-  // Subscribe to broadcaster events
-  this->broadcastSessionStartCBHandle =
-      ListenForBroadcasterMessage(this, SYMBOL_BROADCASTER_LOBBY_SESSION_STARTING, TRUE, (VOID*)OnMsgSessionStarting);
-  this->broadcastSessionErrorCBHandle =
-      ListenForBroadcasterMessage(this, SYMBOL_BROADCASTER_LOBBY_SESSION_ERROR, TRUE, (VOID*)OnMsgSessionError);
+  auto slot = ExtractSlotIndex(msg, msgSize);
 
-  // Subscribe to websocket events.
-  this->tcpBroadcastRegSuccessCBHandle = ListenForTcpBroadcasterMessage(
-      this, SYMBOL_TCPBROADCASTER_LOBBY_REGISTRATION_SUCCESS, (VOID*)OnTcpMsgRegistrationSuccess);
-  this->tcpBroadcastRegFailureCBHandle = ListenForTcpBroadcasterMessage(
-      this, SYMBOL_TCPBROADCASTER_LOBBY_REGISTRATION_FAILURE, (VOID*)OnTcpMsgRegistrationFailure);
-  this->tcpBroadcastStartSessionCBHandle =
-      ListenForTcpBroadcasterMessage(this, SYMBOL_TCPBROADCASTER_LOBBY_START_SESSION, (VOID*)OnTcpMessageStartSession);
-  this->tcpBroadcastPlayersAcceptedCBHandle = ListenForTcpBroadcasterMessage(
-      this, SYMBOL_TCPBROADCASTER_LOBBY_PLAYERS_ACCEPTED, (VOID*)OnTcpMsgPlayersAccepted);
-  this->tcpBroadcastPlayersRejectedCBHandle = ListenForTcpBroadcasterMessage(
-      this, SYMBOL_TCPBROADCASTER_LOBBY_PLAYERS_REJECTED, (VOID*)OnTcpMsgPlayersRejected);
-  this->tcpBroadcastSessionSuccessCBHandle = ListenForTcpBroadcasterMessage(
-      this, SYMBOL_TCPBROADCASTER_LOBBY_SESSION_SUCCESS_V5, (VOID*)OnTcpMsgSessionSuccessv5);
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Slot=%u, GenId=%u, PayloadSize=%llu", slot.slot,
+      slot.genId, msgSize);
 
-  // Log the interaction.
-  Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER] Initialized game server");
-// lobby->hosting |= 0x1;
+  if (slot.slot >= MAX_PLAYER_SLOTS) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Invalid slot index: %u", slot.slot);
+    return;
+  }
 
-// If we built the module in debug mode, print the base address into logs for debugging purposes.
+  // Log player info if available
+  auto* entrant = self->GetContext().GetEntrant(slot.slot);
+  if (entrant) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Player: %s (%s)", entrant->displayName,
+        entrant->uniqueName);
+  }
+
+  // Forward to game service if session is active
+  if (self->GetContext().IsValidForOperations()) {
+    SendServerdbTcpMessage(self, TcpSym::SaveLoadoutRequest, msg, msgSize);
+    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Forwarded %llu bytes to game service", msgSize);
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Not in active session");
+  }
+}
+
+void OnMsgSaveLoadoutSuccess(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Save loadout success (size: %llu)", msgSize);
+}
+
+void OnMsgSaveLoadoutPartial(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Save loadout partial (size: %llu)", msgSize);
+}
+
+void OnMsgCurrentLoadoutRequest(GameServerLib*, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] CurrentLoadoutRequest: size=%llu", msgSize);
+
+  if (msg && msgSize >= sizeof(uint32_t)) {
+    uint32_t slotNumber = 0;
+    std::memcpy(&slotNumber, msg, sizeof(uint32_t));
+    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Request for slot: %u", slotNumber);
+  }
+}
+
+void OnMsgCurrentLoadoutResponse(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
+  if (!msg || msgSize == 0) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] Empty response");
+    return;
+  }
+
+  auto slot = ExtractSlotIndex(msg, msgSize);
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] Response: Slot=%u, GenId=%u, Size=%llu", slot.slot,
+      slot.genId, msgSize);
+
+  if (slot.slot >= MAX_PLAYER_SLOTS || msgSize < MIN_LOADOUT_MSG_SIZE) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] Invalid: slot=%u, size=%llu", slot.slot,
+        msgSize);
+    return;
+  }
+
+  auto* entrant = self->GetContext().GetEntrant(slot.slot);
+  if (entrant) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] Player: %s (%s)", entrant->displayName,
+        entrant->uniqueName);
+  }
+}
+
+void OnMsgRefreshProfileForUser(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Refresh profile for user (size: %llu)", msgSize);
+}
+
+void OnMsgRefreshProfileFromServer(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Refresh profile from server (size: %llu)", msgSize);
+}
+
+void OnMsgLobbySendClientLobbySettings(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Lobby client settings (size: %llu)", msgSize);
+}
+
+void OnMsgTierRewardMsg(GameServerLib* self, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Tier reward (size: %llu)", msgSize);
+  // TODO: Forward to game service if needed
+}
+
+void OnMsgTopAwardsMsg(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Top awards (size: %llu)", msgSize);
+}
+
+void OnMsgNewUnlocks(GameServerLib* self, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] New unlocks (size: %llu)", msgSize);
+  // TODO: Forward to game service if needed
+}
+
+void OnMsgReliableStatUpdate(GameServerLib* self, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Stat update (size: %llu)", msgSize);
+  // TODO: Forward to game service if needed
+}
+
+void OnMsgReliableTeamStatUpdate(GameServerLib* self, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Team stat update (size: %llu)", msgSize);
+  // TODO: Forward to game service if needed
+}
+
+void OnTcpMsgGameClientMsg1(GameServerLib*, VOID*, EchoVR::TcpPeer, VOID*, VOID*, UINT64 msgSize) {
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] TCP game client msg 1 (size: %llu)", msgSize);
+}
+
+void OnTcpMsgGameClientMsg2(GameServerLib*, VOID*, EchoVR::TcpPeer, VOID*, VOID*, UINT64 msgSize) {
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] TCP game client msg 2 (size: %llu)", msgSize);
+}
+
+void OnTcpMsgGameClientMsg3(GameServerLib*, VOID*, EchoVR::TcpPeer, VOID*, VOID*, UINT64 msgSize) {
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] TCP game client msg 3 (size: %llu)", msgSize);
+}
+
+// --- GameServerLib Implementation ---
+
+GameServerLib::GameServerLib() : context_(std::make_unique<ServerContext>()) {}
+
+GameServerLib::~GameServerLib() = default;
+
+INT64 GameServerLib::UnkFunc0(VOID*, INT64, INT64) { return 1; }
+
+VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broadcaster, VOID*, const CHAR*) {
+  context_->Initialize(lobby, broadcaster);
+
+  RegisterBroadcasterCallbacks();
+  RegisterTcpCallbacks();
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Initialized game server");
+
 #if _DEBUG
-  Log(EchoVR::LogLevel::Debug, "[ECHORELAY.GAMESERVER] EchoVR base address = 0x%p", (VOID*)EchoVR::g_GameBaseAddress);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] EchoVR base address = 0x%p", EchoVR::g_GameBaseAddress);
 #endif
 
-  // This should return a valid pointer to simply dereference.
   return this;
 }
 
-/// <summary>
-/// Terminates the game server library. This is called by the game prior to unloading the library.
-/// </summary>
-/// <returns>None</returns>
-VOID GameServerLib::Terminate() { Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER] Terminated game server"); }
+void GameServerLib::RegisterBroadcasterCallbacks() {
+  auto& cb = context_->GetCallbackRegistry();
 
-/// <summary>
-/// Updates the game server library. This is called by the game at a frequent interval.
-/// </summary>
-/// <returns>None</returns>
+  cb.sessionStart =
+      ListenForBroadcasterMessage(this, Sym::LobbySessionStarting, TRUE, reinterpret_cast<VOID*>(OnMsgSessionStarting));
+  cb.sessionError =
+      ListenForBroadcasterMessage(this, Sym::LobbySessionError, TRUE, reinterpret_cast<VOID*>(OnMsgSessionError));
+
+  cb.saveLoadout = ListenForBroadcasterMessage(this, Sym::SaveLoadoutRequest, TRUE,
+                                               reinterpret_cast<VOID*>(OnMsgSaveLoadoutRequest));
+  cb.saveLoadoutSuccess = ListenForBroadcasterMessage(this, Sym::SaveLoadoutSuccess, TRUE,
+                                                      reinterpret_cast<VOID*>(OnMsgSaveLoadoutSuccess));
+  cb.saveLoadoutPartial = ListenForBroadcasterMessage(this, Sym::SaveLoadoutPartial, TRUE,
+                                                      reinterpret_cast<VOID*>(OnMsgSaveLoadoutPartial));
+  cb.currentLoadoutRequest = ListenForBroadcasterMessage(this, Sym::CurrentLoadoutRequest, TRUE,
+                                                         reinterpret_cast<VOID*>(OnMsgCurrentLoadoutRequest));
+  cb.currentLoadoutResponse = ListenForBroadcasterMessage(this, Sym::CurrentLoadoutResponse, TRUE,
+                                                          reinterpret_cast<VOID*>(OnMsgCurrentLoadoutResponse));
+
+  cb.refreshProfileForUser = ListenForBroadcasterMessage(this, Sym::RefreshProfileForUser, TRUE,
+                                                         reinterpret_cast<VOID*>(OnMsgRefreshProfileForUser));
+  cb.refreshProfileFromServer = ListenForBroadcasterMessage(this, Sym::RefreshProfileFromServer, TRUE,
+                                                            reinterpret_cast<VOID*>(OnMsgRefreshProfileFromServer));
+  cb.lobbySendClientSettings = ListenForBroadcasterMessage(this, Sym::LobbySendClientLobbySettings, TRUE,
+                                                           reinterpret_cast<VOID*>(OnMsgLobbySendClientLobbySettings));
+
+  cb.tierReward =
+      ListenForBroadcasterMessage(this, Sym::TierRewardMsg, TRUE, reinterpret_cast<VOID*>(OnMsgTierRewardMsg));
+  cb.topAwards = ListenForBroadcasterMessage(this, Sym::TopAwardsMsg, TRUE, reinterpret_cast<VOID*>(OnMsgTopAwardsMsg));
+  cb.newUnlocks = ListenForBroadcasterMessage(this, Sym::NewUnlocks, TRUE, reinterpret_cast<VOID*>(OnMsgNewUnlocks));
+
+  cb.reliableStatUpdate = ListenForBroadcasterMessage(this, Sym::ReliableStatUpdate, TRUE,
+                                                      reinterpret_cast<VOID*>(OnMsgReliableStatUpdate));
+  cb.reliableTeamStatUpdate = ListenForBroadcasterMessage(this, Sym::ReliableTeamStatUpdate, TRUE,
+                                                          reinterpret_cast<VOID*>(OnMsgReliableTeamStatUpdate));
+}
+
+void GameServerLib::RegisterTcpCallbacks() {
+  auto& cb = context_->GetCallbackRegistry();
+
+  cb.tcpRegSuccess = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyRegistrationSuccess,
+                                                    reinterpret_cast<VOID*>(OnTcpMsgRegistrationSuccess));
+  cb.tcpRegFailure = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyRegistrationFailure,
+                                                    reinterpret_cast<VOID*>(OnTcpMsgRegistrationFailure));
+  cb.tcpStartSession = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyStartSession,
+                                                      reinterpret_cast<VOID*>(OnTcpMessageStartSession));
+  cb.tcpPlayersAccepted = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyPlayersAccepted,
+                                                         reinterpret_cast<VOID*>(OnTcpMsgPlayersAccepted));
+  cb.tcpPlayersRejected = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyPlayersRejected,
+                                                         reinterpret_cast<VOID*>(OnTcpMsgPlayersRejected));
+  cb.tcpSessionSuccess = ListenForTcpBroadcasterMessage(this, TcpSym::LobbySessionSuccessV5,
+                                                        reinterpret_cast<VOID*>(OnTcpMsgSessionSuccessv5));
+}
+
+void GameServerLib::UnregisterAllCallbacks() {
+  auto* lobby = context_->GetLobby();
+  if (!lobby) return;
+
+  auto& cb = context_->GetCallbackRegistry();
+
+  // Unregister broadcaster callbacks
+  if (lobby->broadcaster) {
+    EchoVR::BroadcasterUnlisten(lobby->broadcaster, cb.sessionStart);
+    EchoVR::BroadcasterUnlisten(lobby->broadcaster, cb.sessionError);
+  }
+
+  // Unregister TCP callbacks
+  if (lobby->tcpBroadcaster) {
+    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpRegSuccess);
+    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpRegFailure);
+    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpStartSession);
+    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpPlayersAccepted);
+    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpPlayersRejected);
+    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpSessionSuccess);
+  }
+
+  cb.Clear();
+}
+
+VOID GameServerLib::Terminate() {
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Terminated game server");
+  context_->Terminate();
+}
+
 VOID GameServerLib::Update() {
-  // TODO: This is temporary code to test if the profile JSON is updated (but not sent to server).
-  // If it is not updated in this structure, one of the "apply loadout" or "save loadout" operations may trigger the
-  // update?
-  for (int i = 0; i < this->lobby->entrantData.count; i++) {
-    // Obtain the entrant at the given index.
-    EchoVR::Lobby::EntrantData* entrantData = (this->lobby->entrantData.items + i);
-
-    // TODO: If the entrant is marked dirty...
-    if (entrantData->userId.accountId != 0 && entrantData->dirty) {
+  // Check for dirty entrants (profile updates pending)
+  uint64_t count = context_->GetEntrantCount();
+  for (uint64_t i = 0; i < count; ++i) {
+    auto* entrant = context_->GetEntrant(static_cast<uint32_t>(i));
+    if (entrant && entrant->userId.accountId != 0 && entrant->dirty) {
+      // TODO: Handle dirty entrants
     }
   }
 }
 
-/// <summary>
-/// TODO: Unknown. This is called during initialization with a value of 6. Maybe it is platform/game server
-/// privilege/role related?
-/// </summary>
-/// <param name="unk">TODO: Unknown.</param>
-/// <returns>None</returns>
-VOID GameServerLib::UnkFunc1(UINT64 unk) {
-  // Note: This function is called prior to Initialize.
+VOID GameServerLib::UnkFunc1(UINT64) {
+  // Called prior to Initialize, purpose unknown
 }
 
-/// <summary>
-/// Requests registration of the game server with central TCP/websocket services (ServerDB).
-/// This is called by the game after the library has been initialized.
-/// </summary>
-/// <param name="serverId">The identifier to use for the game server when registering with ServerDB.</param>
-/// <param name="radId">TODO: Unknown.</param>
-/// <param name="regionId">A 64-bit symbol identifier indicating the region that the game server should be registering
-/// to.</param> <param name="versionLock">A version to use when locking out clients which request matching with a
-/// differing version.</param> <param name="localConfig">The game config containing service endpoints (located in
-/// ./_local/config.json from the root of game folder).</param> <returns>None</returns>
-VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR* radId, EchoVR::SymbolId regionId,
-                                        EchoVR::SymbolId versionLock, const EchoVR::Json* localConfig) {
-  // Store the registration information.
-  this->serverId = serverId;
-  this->regionId = regionId;
-  this->versionLock = versionLock;
+VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId regionId, EchoVR::SymbolId versionLock,
+                                        const EchoVR::Json* localConfig) {
+  // Update session state
+  SessionState state = context_->GetSessionState();
+  state.serverId = serverId;
+  state.regionId = regionId;
+  state.versionLock = versionLock;
+  context_->UpdateSessionState(state);
 
-  // Obtain the serverdb URI from our config (or fallback to default)
-  CHAR* serverDbServiceUri = EchoVR::JsonValueAsString((EchoVR::Json*)localConfig, (CHAR*)"serverdb_host",
-                                                       (CHAR*)"ws://localhost:777/serverdb", false);
-  EchoVR::UriContainer serverDbUriContainer;
-  memset(&serverDbUriContainer, 0, sizeof(serverDbUriContainer));
-  if (EchoVR::UriContainerParse(&serverDbUriContainer, serverDbServiceUri) != ERROR_SUCCESS) {
-    Log(EchoVR::LogLevel::Error,
-        "[ECHORELAY.GAMESERVER] Failed to register game server: error parsing serverdb service URI");
+  // Get serverdb URI from config
+  CHAR* serverDbUri =
+      EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("serverdb_host"),
+                                const_cast<CHAR*>("ws://localhost:777/serverdb"), false);
+
+  EchoVR::UriContainer uriContainer = {};
+  if (EchoVR::UriContainerParse(&uriContainer, serverDbUri) != ERROR_SUCCESS) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to parse serverdb URI");
     return;
   }
 
-  // TODO: Default port
+  // Connect to serverdb
+  auto* tcp = context_->GetTcpBroadcaster();
+  if (!tcp) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] TCP broadcaster unavailable");
+    return;
+  }
 
-  // Connect to the serverdb websocket service
-  this->tcpBroadcasterData->CreatePeer(&this->serverDbPeer, (const EchoVR::UriContainer*)&serverDbUriContainer);
+  EchoVR::TcpPeer peer;
+  tcp->CreatePeer(&peer, &uriContainer);
+  context_->SetServerDbPeer(peer);
 
-  // Obtain address information about our game server broadcaster
-  sockaddr_in gameServerAddr = (*(sockaddr_in*)&this->broadcaster->data->addr);
+  // Build registration request
+  auto* broadcaster = context_->GetBroadcaster();
+  if (!broadcaster || !broadcaster->data) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Broadcaster unavailable");
+    return;
+  }
 
-  // Create a registration request.
-  // Note: Only IP address is in network order (big endian).
-  ERLobbyRegistrationRequest regRequest;
-  regRequest.serverId = this->serverId;
-  regRequest.port = (UINT16)this->broadcaster->data->broadcastSocketInfo.port;
-  regRequest.internalIp = gameServerAddr.sin_addr.S_un.S_addr;
-  regRequest.regionId = this->regionId;
-  regRequest.versionLock = this->versionLock;
+  sockaddr_in gameServerAddr = *reinterpret_cast<sockaddr_in*>(&broadcaster->data->addr);
 
-  // Send the registration request.
-  SendServerdbTcpMessage(this, SYMBOL_TCPBROADCASTER_LOBBY_REGISTRATION_REQUEST, &regRequest, sizeof(regRequest));
+  ERLobbyRegistrationRequest request = {};
+  request.serverId = serverId;
+  request.port = static_cast<uint16_t>(broadcaster->data->broadcastSocketInfo.port);
+  request.internalIp = gameServerAddr.sin_addr.S_un.S_addr;
+  request.regionId = regionId;
+  request.versionLock = versionLock;
 
-  // Log the interaction.
-  Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER] Requested game server registration");
+  SendServerdbTcpMessage(this, TcpSym::LobbyRegistrationRequest, &request, sizeof(request));
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Requested game server registration");
 }
 
-/// <summary>
-/// Requests unregistration of the game server with central TCP/websocket services (ServerDB).
-/// This is called by the game during game server library unloading.
-/// </summary>
-/// <returns>None</returns>
 VOID GameServerLib::Unregister() {
-  // Reset our game server library state.
-  registered = FALSE;
-  sessionActive = FALSE;
-  serverId = -1;
-  regionId = -1;
-  versionLock = -1;
+  UnregisterAllCallbacks();
 
-  // TODO: These probably aren't necessary, but it would be good to..
-  // - Set lobbytype to public
-  // - Clear the JSON for lobby
+  // Disconnect from serverdb
+  auto* tcp = context_->GetTcpBroadcaster();
+  if (tcp) {
+    tcp->DestroyPeer(context_->GetServerDbPeer());
+  }
 
-  // Unregister our broadcaster message listeners
-  EchoVR::BroadcasterUnlisten(this->broadcaster, this->broadcastSessionStartCBHandle);
-  EchoVR::BroadcasterUnlisten(this->broadcaster, this->broadcastSessionErrorCBHandle);
+  context_->SetRegistered(false);
+  context_->EndSession();
 
-  EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastRegSuccessCBHandle);
-  EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastRegFailureCBHandle);
-  EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastStartSessionCBHandle);
-  EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastPlayersAcceptedCBHandle);
-  EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastPlayersRejectedCBHandle);
-  EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastSessionSuccessCBHandle);
-
-  // Disconnect from server db.
-  this->tcpBroadcasterData->DestroyPeer(this->serverDbPeer);
-
-  // Log the interaction.
-  Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER] Unregistered game server");
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Unregistered game server");
 }
 
-/// <summary>
-/// Signals the ending of the current game server session with central TCP/websocket services (ServerDB).
-/// This is called by the game when a game has ended, or a session was started but no players joined for some time,
-/// causing the game server to load back to the mainmenu, awaiting further orders from ServerDB.
-/// </summary>
-/// <returns>None</returns>
 VOID GameServerLib::EndSession() {
-  // If there is a running session, inform the websocket so it can track the state change.
-  if (sessionActive) {
-    ERLobbyEndSession message;
-    SendServerdbTcpMessage(this, SYMBOL_TCPBROADCASTER_LOBBY_END_SESSION, &message, sizeof(message));
+  if (context_->IsSessionActive()) {
+    ERLobbyEndSession message = {};
+    SendServerdbTcpMessage(this, TcpSym::LobbyEndSession, &message, sizeof(message));
   }
-  Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER] Signaling end of session");
+
+  context_->EndSession();
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Signaling end of session");
 }
 
-/// <summary>
-/// Signals the locking of player sessions in the current game server session with central TCP/websocket services
-/// (ServerDB), indicating players should no longer be able to join the current game session. This is called by the game
-/// after a game has been started by some time, to avoid players from joining during the later halves of game sessions.
-/// </summary>
-/// <returns>None</returns>
 VOID GameServerLib::LockPlayerSessions() {
-  // If there is a running session, inform the websocket so it can track the state change.
-  if (sessionActive) {
-    ERLobbyPlayerSessionsLocked message;
-    SendServerdbTcpMessage(this, SYMBOL_TCPBROADCASTER_LOBBY_PLAYER_SESSIONS_LOCKED, &message, sizeof(message));
+  if (context_->IsSessionActive()) {
+    ERLobbyPlayerSessionsLocked message = {};
+    SendServerdbTcpMessage(this, TcpSym::LobbyPlayerSessionsLocked, &message, sizeof(message));
   }
 
-  // Log the interaction.
-  Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER] Signaling game server locked");
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Signaling game server locked");
 }
 
-/// <summary>
-/// Signals the unlocking of player sessions in the current game server session with central TCP/websocket services
-/// (ServerDB), indicating players should be able to join the current game session.
-/// </summary>
-/// <returns>None</returns>
 VOID GameServerLib::UnlockPlayerSessions() {
-  // If there is a running session, inform the websocket so it can track the state change.
-  if (sessionActive) {
-    ERLobbyPlayerSessionsUnlocked message;
-    SendServerdbTcpMessage(this, SYMBOL_TCPBROADCASTER_LOBBY_PLAYER_SESSIONS_UNLOCKED, &message, sizeof(message));
+  if (context_->IsSessionActive()) {
+    ERLobbyPlayerSessionsUnlocked message = {};
+    SendServerdbTcpMessage(this, TcpSym::LobbyPlayerSessionsUnlocked, &message, sizeof(message));
   }
 
-  // Log the interaction.
-  Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER] Signaling game server unlocked");
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Signaling game server unlocked");
 }
 
-/// <summary>
-/// Signals acceptance of player sessions by the game server, with central TCP/websocket services (ServerDB).
-/// This is called by the game after a peer connects to the game server, typically after ServerDB signals its
-/// acceptance to game server, and gives peer the appropriate information to join.Both parties must have
-/// exchanged packet encoding settings via receipt of SNSLobbySessionSuccessv5 from ServerDB / Matching to communicate.
-/// </summary>
-/// <param name="playerUuids">An array of player session UUIDs which have been accepted by the game server. </param>
-/// <returns>None</returns>
 VOID GameServerLib::AcceptPlayerSessions(EchoVR::Array<GUID>* playerUuids) {
-  // If we have an active session, signal to serverdb that we are accepting the provided player UUIDs.
-  if (sessionActive) {
-    SendServerdbTcpMessage(this, SYMBOL_TCPBROADCASTER_LOBBY_ACCEPT_PLAYERS, playerUuids->items,
-                           playerUuids->count * sizeof(GUID));
-  } else {
-    // TODO: Receive local event "SNSLobbyAcceptPlayersFailurev2"
+  if (context_->IsSessionActive()) {
+    SendServerdbTcpMessage(this, TcpSym::LobbyAcceptPlayers, playerUuids->items, playerUuids->count * sizeof(GUID));
   }
 
-  // Log the interaction.
-  Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER] Accepted %d players into game server", playerUuids->count);
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Accepted %d players", playerUuids->count);
 }
 
-/// <summary>
-/// Signals rejection of player sessions by the game server, with central TCP/websocket services (ServerDB).
-/// This is called by the game after a peer connects to the game server, but the game server did not accept them,
-/// possibly due to inability to communicate(e.g.invalid packet encoder settings for one party), or due to
-/// general communication / peer state errors.
-/// </summary>
-/// <param name="playerUuid">A single player session UUID which have been removed by the game server.</param>
-/// <returns>None</returns>
 VOID GameServerLib::RemovePlayerSession(GUID* playerUuid) {
-  // If we have an active session, signal to serverdb that we are removing the provided player UUID.
-  if (sessionActive) {
-    SendServerdbTcpMessage(this, SYMBOL_TCPBROADCASTER_LOBBY_PLAYERS_REMOVE_PLAYER, (VOID*)playerUuid, sizeof(GUID));
+  if (context_->IsSessionActive()) {
+    SendServerdbTcpMessage(this, TcpSym::LobbyRemovePlayer, playerUuid, sizeof(GUID));
   }
 
-  // Log the interaction.
-  Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER] Removed a player from game server");
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Removed player from game server");
 }

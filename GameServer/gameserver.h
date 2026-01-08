@@ -1,66 +1,65 @@
 #pragma once
+#ifndef GAMESERVER_H
+#define GAMESERVER_H
 
+#include <memory>
+
+#include "constants.h"
 #include "echovr.h"
 #include "pch.h"
+#include "servercontext.h"
 
-/// <summary>
-/// A symbol representing the game server's special websocket service.
-/// </summary>
-const EchoVR::SymbolId SYMBOL_GAMESERVER_DB = 0x25E886012CED8064;
-
-/// <summary>
-/// A game server library implementation which connects to EchoRelay's ServerDB implementation.
-/// </summary>
+// IServerLib implementation connecting to NEVR's ServerDB service.
+// Manages game server registration, sessions, and player lifecycle.
 class GameServerLib : public EchoVR::IServerLib {
  public:
-  INT64 UnkFunc0(VOID* unk1, INT64 a2, INT64 a3);
-  VOID* Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broadcaster, VOID* unk2, const CHAR* logPath);
-  VOID Terminate();
-  VOID Update();
-  VOID UnkFunc1(UINT64 unk);
+  GameServerLib();
+  ~GameServerLib();
+
+  // IServerLib interface (vtable order matters)
+  INT64 UnkFunc0(VOID* unk1, INT64 a2, INT64 a3) override;
+  VOID* Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broadcaster, VOID* unk2, const CHAR* logPath) override;
+  VOID Terminate() override;
+  VOID Update() override;
+  VOID UnkFunc1(UINT64 unk) override;
 
   VOID RequestRegistration(INT64 serverId, CHAR* radId, EchoVR::SymbolId regionId, EchoVR::SymbolId lockedVersion,
-                           const EchoVR::Json* localConfig);
-  VOID Unregister();
-  VOID EndSession();
-  VOID LockPlayerSessions();
-  VOID UnlockPlayerSessions();
-  VOID AcceptPlayerSessions(EchoVR::Array<GUID>* playerUuids);
-  VOID RemovePlayerSession(GUID* playerUuid);
+                           const EchoVR::Json* localConfig) override;
+  VOID Unregister() override;
+  VOID EndSession() override;
+  VOID LockPlayerSessions() override;
+  VOID UnlockPlayerSessions() override;
+  VOID AcceptPlayerSessions(EchoVR::Array<GUID>* playerUuids) override;
+  VOID RemovePlayerSession(GUID* playerUuid) override;
 
-  // Game related fields
+  // Context accessor for callback handlers
+  GameServer::ServerContext& GetContext() { return *context_; }
+  const GameServer::ServerContext& GetContext() const { return *context_; }
 
-  EchoVR::Lobby* lobby;
-  EchoVR::Broadcaster* broadcaster;
-  EchoVR::TcpBroadcasterData* tcpBroadcasterData;
+ private:
+  std::unique_ptr<GameServer::ServerContext> context_;
 
-  // ServerDB related fields
-
-  EchoVR::TcpPeer serverDbPeer;
-  BOOL registered;
-
-  // Session related fields.
-
-  BOOL sessionActive;
-  GUID loginSessionId;
-  UINT64 serverId;
-  EchoVR::SymbolId regionId;
-  EchoVR::SymbolId versionLock;
-  sockaddr_in gameServerAddr;
-
-  UINT32 defaultTimeStepUsecs;
-
-  // Callbacks
-
-  UINT16 broadcastSessionStartCBHandle;
-  UINT16 broadcastSessionErrorCBHandle;
-
-  UINT16 tcpBroadcastRegSuccessCBHandle;
-  UINT16 tcpBroadcastRegFailureCBHandle;
-  UINT16 tcpBroadcastStartSessionCBHandle;
-  UINT16 tcpBroadcastPlayersAcceptedCBHandle;
-  UINT16 tcpBroadcastPlayersRejectedCBHandle;
-  UINT16 tcpBroadcastSessionSuccessCBHandle;
-  UINT16 tcpBroadcastProtobufMessageCBHandle;
-  UINT16 tcpBroadcastProtobufJsonMessageCBHandle;
+  // Helper methods
+  void RegisterBroadcasterCallbacks();
+  void RegisterTcpCallbacks();
+  void UnregisterAllCallbacks();
 };
+
+// Logging helper (uses game's logging system)
+void Log(EchoVR::LogLevel level, const CHAR* format, ...);
+
+// Callback registration helpers
+uint16_t ListenForBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId, BOOL isMsgReliable, VOID* func);
+uint16_t ListenForTcpBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId, VOID* func);
+
+// TCP message sending
+void SendServerdbTcpMessage(GameServerLib* self, EchoVR::SymbolId msgId, VOID* msg, uint64_t msgSize);
+
+// Slot index extraction from message payloads
+struct SlotInfo {
+  uint16_t slot;
+  uint16_t genId;
+};
+SlotInfo ExtractSlotIndex(const void* msg, uint64_t msgSize);
+
+#endif  // GAMESERVER_H
