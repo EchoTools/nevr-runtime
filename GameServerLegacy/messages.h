@@ -1,8 +1,8 @@
 #pragma once
 
-#include "echovr.h"
+#include "common/echovr.h"
 
-// Symbols representing messages to the broadcaster
+// Internal broadcaster message symbols
 
 const EchoVR::SymbolId SYMBOL_BROADCASTER_LOBBY_REGISTRATION_SUCCESS = 0xFEF8EFEC97A3B98;
 const EchoVR::SymbolId SYMBOL_BROADCASTER_LOBBY_REGISTRATION_FAILURE = 0xCC3A40870CDBC852;
@@ -20,7 +20,7 @@ const EchoVR::SymbolId SYMBOL_BROADCASTER_LOBBY_SMITE_ENTRANT = 0xCCBC52F97F2E0E
 const EchoVR::SymbolId SYMBOL_BROADCASTER_LOBBY_CHAT_ENTRY = 0xDCB7130D1BEB9AC4;
 const EchoVR::SymbolId SYMBOL_BROADCASTER_LOBBY_VOICE_ENTRY = 0x27504F14881C1A43;
 
-// Symbols representing messages to the serverdb.
+// TCP broadcaster message symbols (serverdb)
 
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_REGISTRATION_REQUEST = 0x7777777777777777;  // unofficial
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_REGISTRATION_SUCCESS = -5369924845641990433;
@@ -38,36 +38,25 @@ const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_PLAYERS_REMOVE_PLAYER = 0x777
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_CHALLENGE_REQUEST = 0x7777777777770900;         // unofficial
 const EchoVR::SymbolId SYMBOL_TCPBROADCASTER_LOBBY_CHALLENGE_RESPONSE = 0x7777777777770A00;        // unofficial
 
-/// <summary>
-/// A message sent from game server to server to register the game server.
-/// </summary>
+// Message structures
+
 struct ERLobbyRegistrationRequest {
   UINT64 serverId;
   UINT32 internalIp;
   UINT16 port;
-  BYTE padding[10];  // Was 4, but somehow compiled into 10, so we'll just go with it and set just in case it compiles
-                     // differently in the future.
+  BYTE padding[10];
   EchoVR::SymbolId regionId;
   EchoVR::SymbolId versionLock;
 };
 
-/// <summary>
-/// A message sent from game server to server to indicate the current session has ended.
-/// </summary>
 struct ERLobbyEndSession {
   CHAR unused;
 };
 
-/// <summary>
-/// A message sent from game server to server to indicate the current session has been locked.
-/// </summary>
 struct ERLobbyPlayerSessionsLocked {
   CHAR unused;
 };
 
-/// <summary>
-/// A message sent from game server to server to indicate the current session has been unlocked.
-/// </summary>
 struct ERLobbyPlayerSessionsUnlocked {
   CHAR unused;
 };

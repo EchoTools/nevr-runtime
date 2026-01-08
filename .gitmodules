@@ -1,3 +1,3 @@
-[submodule "nevr-common.git"]
-path = nevr-common.git
-url = git@github.com:echotools/nevr-common.git
+[submodule "extern/nevr-common"]
+	path = extern/nevr-common
+	url = git@github.com:echotools/nevr-common.git

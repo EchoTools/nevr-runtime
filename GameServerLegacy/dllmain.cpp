@@ -1,9 +1,9 @@
-// dllmain.cpp : Defines the entry point for the DLL application.
-#include "echovr.h"
+// Entry point for GameServerLegacy DLL
+#include "common/echovr.h"
+#include "common/pch.h"
 #include "gameserver.h"
-#include "pch.h"
 
-// The initialized ServerLib which Echo VR will call upon to communicate with central services.
+// Global server library instance
 EchoVR::IServerLib* g_ServerLib;
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
