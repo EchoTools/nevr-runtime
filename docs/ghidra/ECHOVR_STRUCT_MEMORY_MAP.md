@@ -68,6 +68,47 @@ Offset: 0xA0     | Field: slotIndex            | Type: uint16 ⭐ COSMETIC KEY
 Offset: 0xA2-24F | Field: _unk_cosmetic_data   | Type: CHAR[424] (HIDDEN COSMETIC DATA)
 ```
 
+### EntrantData.json Structure (Session State)
+
+The `json` field at offset 0x90 contains the player's real-time session state. This is NOT the 
+loadout/cosmetic data - it's the player's current session properties. Access via `json_dumps(entrant->json.root, 0)`.
+
+```json
+{
+  "invr": false,                    // Is player in VR headset
+  "partyid": 0,                     // Party group ID (0 = no party)
+  "voip": {
+    "muted": false,                 // Voice chat muted
+    "deafened": false,              // Voice chat deafened
+    "channelmask": 4294967295,      // Voice channel bitmask (0xFFFFFFFF = all)
+    "modeffect": 0.0                // Voice modulation effect
+  },
+  "bodytype": -2076784106321327439, // SymbolId for body type (e.g., male_a)
+  "mm": {                           // MATCHMAKING STATE
+    "status": 5,                    // Matchmaking status (see enum below)
+    "gametype": -1                  // SymbolId of game type (-1 = none)
+  },
+  "teamname": "",                   // Custom team name
+  "purchasedcombat": true,          // Has purchased combat/arena access
+  "afk": false,                     // Is player AFK
+  "spawned": true                   // Is player spawned in lobby
+}
+```
+
+#### Matchmaking Status Values (mm.status)
+| Value | State | Description |
+|-------|-------|-------------|
+| 5 | Idle | In lobby, not matchmaking |
+| 11 | Searching | Actively searching for match |
+| ? | Queued | In matchmaking queue (TBD) |
+| ? | Found | Match found, connecting (TBD) |
+
+#### Known gametype SymbolIds (mm.gametype)
+| SymbolId | Game Type |
+|----------|-----------|
+| -1 | None (not matchmaking) |
+| -3791849610740453517 | Arena (unverified) |
+
 ### Cosmetic/Loadout Data Access Pattern
 
 #### Step 1: Get Player Slot Index

@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 #include "constants.h"
 #include "echovr.h"
@@ -134,6 +135,110 @@ void OnMsgSessionError(GameServerLib* self, VOID*, VOID*, UINT64, EchoVR::Peer, 
   Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Session error encountered");
 }
 
+// Helper to serialize LoadoutSlot to JSON string
+static std::string SerializeLoadoutSlot(const EchoVR::LoadoutSlot* slot) {
+  char buf[2048];
+  snprintf(buf, sizeof(buf),
+           R"({"selectionmode":%lld,"banner":%lld,"booster":%lld,"bracer":%lld,"chassis":%lld,)"
+           R"("decal":%lld,"decal_body":%lld,"emissive":%lld,"emote":%lld,"secondemote":%lld,)"
+           R"("goal_fx":%lld,"medal":%lld,"pattern":%lld,"pattern_body":%lld,"pip":%lld,)"
+           R"("tag":%lld,"tint":%lld,"tint_alignment_a":%lld,"tint_alignment_b":%lld,)"
+           R"("tint_body":%lld,"title":%lld})",
+           (long long)slot->selectionmode, (long long)slot->banner, (long long)slot->booster, (long long)slot->bracer,
+           (long long)slot->chassis, (long long)slot->decal, (long long)slot->decal_body, (long long)slot->emissive,
+           (long long)slot->emote, (long long)slot->secondemote, (long long)slot->goal_fx, (long long)slot->medal,
+           (long long)slot->pattern, (long long)slot->pattern_body, (long long)slot->pip, (long long)slot->tag,
+           (long long)slot->tint, (long long)slot->tint_alignment_a, (long long)slot->tint_alignment_b,
+           (long long)slot->tint_body, (long long)slot->title);
+  return buf;
+}
+
+// Helper to serialize LoadoutEntry to JSON string
+static std::string SerializeLoadoutEntry(const EchoVR::LoadoutEntry* entry) {
+  std::string loadoutJson = SerializeLoadoutSlot(&entry->loadout);
+  char buf[2560];
+  snprintf(buf, sizeof(buf), R"({"bodytype":%lld,"teamid":%u,"airole":%u,"xf":%lld,"loadout":%s})",
+           (long long)entry->bodytype, (unsigned)entry->teamid, (unsigned)entry->airole, (long long)entry->xf,
+           loadoutJson.c_str());
+  return buf;
+}
+
+// LoadoutInstance structure at game + 0x51420 + (slot * 0x40)
+// This is a pointer array, NOT direct data!
+struct LoadoutInstanceHeader {
+  uint64_t* instancesPtr;  // +0x00: Pointer to array of LoadoutInstance
+  uint64_t _pad08;         // +0x08
+  uint64_t _pad10;         // +0x10
+  uint64_t _pad18;         // +0x18
+  uint64_t _pad20;         // +0x20
+  uint64_t _pad28;         // +0x28
+  uint64_t instanceCount;  // +0x30: Number of loadout instances
+  uint16_t loadoutNumber;  // +0x38
+  uint16_t validation;     // +0x3A
+  uint32_t flags;          // +0x3C
+};
+
+// Each loadout instance (0x40 bytes) in the instances array
+struct LoadoutInstance {
+  EchoVR::SymbolId instanceName;  // +0x00: e.g., "rwd" hash
+  uint64_t* itemsArrayPtr;        // +0x08: Pointer to item pairs (slotType, equippedItem)
+  uint64_t _pad10;                // +0x10
+  uint64_t _pad18;                // +0x18
+  uint64_t _pad20;                // +0x20
+  uint64_t itemCount;             // +0x28: Number of items in the array
+  uint64_t _pad30;                // +0x30
+  uint64_t _pad38;                // +0x38
+};
+
+// Each item is a pair: (slotType SymbolId, equippedItem SymbolId)
+struct LoadoutItem {
+  EchoVR::SymbolId slotType;      // e.g., tint_body = 0xd90c85db5e5629ed
+  EchoVR::SymbolId equippedItem;  // e.g., rwd_tint_0019 = 0x74d228d09dc5dd8f
+};
+
+// Check if a value looks like a valid SymbolId (not a pointer or garbage)
+static bool IsValidSymbolId(uint64_t value) {
+  // Valid SymbolIds have high bits set and don't look like pointers
+  // Pointers on this system start with 0x00007F... or 0x000000...
+  // Garbage values like 0xFEFEFEFE or 0x0000 are also invalid
+  if (value == 0) return false;
+  if (value < 0x0100000000000000ULL) return false;  // Too small, likely garbage or pointer
+  if ((value >> 48) == 0x7F3F) return false;        // Looks like a heap pointer
+  return true;
+}
+
+// Helper to serialize a loadout instance to JSON
+static std::string SerializeLoadoutInstanceToJson(const LoadoutInstance* instance) {
+  std::string json = "{";
+
+  // Instance name as hex (can be converted via hashes.txt)
+  char buf[128];
+  snprintf(buf, sizeof(buf), "\"instance_name\":\"0x%016llX\"", (unsigned long long)instance->instanceName);
+  json += buf;
+
+  // Serialize items - filter out invalid/garbage entries
+  json += ",\"items\":{";
+  bool first = true;
+
+  if (instance->itemsArrayPtr && instance->itemCount > 0) {
+    LoadoutItem* items = reinterpret_cast<LoadoutItem*>(instance->itemsArrayPtr);
+    for (uint64_t i = 0; i < instance->itemCount && i < 32; i++) {
+      // Skip invalid items (garbage data at end of array)
+      if (!IsValidSymbolId(items[i].slotType)) continue;
+
+      if (!first) json += ",";
+      first = false;
+
+      snprintf(buf, sizeof(buf), "\"0x%016llX\":\"0x%016llX\"", (unsigned long long)items[i].slotType,
+               (unsigned long long)items[i].equippedItem);
+      json += buf;
+    }
+  }
+
+  json += "}}";
+  return json;
+}
+
 void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
   if (!msg || msgSize < MIN_LOADOUT_MSG_SIZE) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Invalid message size: %llu", msgSize);
@@ -150,13 +255,101 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
     return;
   }
 
-  // Log player info if available
+  // Log player info
   auto* entrant = self->GetContext().GetEntrant(slot.slot);
   if (entrant) {
     Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Player: %s (%s)", entrant->displayName,
         entrant->uniqueName);
   }
 
+  // Access loadout via global: g_GameContext + 0x8518 = CR15NetGame
+  // Then: CR15NetGame + 0x51420 + (slot * 0x40) = pointer to instances array
+  //       CR15NetGame + 0x51450 + (slot * 0x40) = instance count
+  //
+  // g_GameContext is at static address 0x1420a0478, offset from base = 0x20a0478
+  constexpr uint64_t GAME_CONTEXT_OFFSET = 0x20a0478;
+  constexpr uint64_t NETGAME_OFFSET = 0x8518;
+
+  CHAR* baseAddr = EchoVR::g_GameBaseAddress;
+  if (!baseAddr) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [SAVE_LOADOUT] No game base address");
+    return;
+  }
+
+  // Get g_GameContext
+  VOID** contextPtr = reinterpret_cast<VOID**>(baseAddr + GAME_CONTEXT_OFFSET);
+  VOID* gameContext = *contextPtr;
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Base=%p, Context=%p", baseAddr, gameContext);
+
+  if (gameContext) {
+    // Get CR15NetGame from context + 0x8518
+    CHAR* contextBase = reinterpret_cast<CHAR*>(gameContext);
+    VOID* netGame = *reinterpret_cast<VOID**>(contextBase + NETGAME_OFFSET);
+
+    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] NetGame=%p (from context+0x%X)", netGame,
+        NETGAME_OFFSET);
+
+    if (netGame) {
+      CHAR* gameBase = reinterpret_cast<CHAR*>(netGame);
+      uint16_t playerSlot = slot.slot;
+
+      if (playerSlot < 16) {
+        // Read jersey number from gameBase + 0x51458 + (playerSlot * 0x40)
+        uint16_t jerseyNumber = *reinterpret_cast<uint16_t*>(gameBase + 0x51458 + (playerSlot * 0x40));
+        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Jersey number: %u", jerseyNumber);
+
+        // Read the loadout header for this slot
+        CHAR* headerAddr = gameBase + 0x51420 + (playerSlot * 0x40);
+        LoadoutInstanceHeader* header = reinterpret_cast<LoadoutInstanceHeader*>(headerAddr);
+
+        // Read instance count from +0x30 offset within the header
+        uint64_t instanceCount = *reinterpret_cast<uint64_t*>(gameBase + 0x51450 + (playerSlot * 0x40));
+        LoadoutInstance* instances =
+            reinterpret_cast<LoadoutInstance*>(*reinterpret_cast<uint64_t*>(gameBase + 0x51420 + (playerSlot * 0x40)));
+
+        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Slot %u: %llu loadout instances @ %p", playerSlot,
+            instanceCount, instances);
+
+        if (instances && instanceCount > 0 && instanceCount < 16) {
+          // Build JSON with jersey number and loadout instances
+          std::string fullJson = "{\"slot\":" + std::to_string(playerSlot);
+          fullJson += ",\"number\":" + std::to_string(jerseyNumber);
+          fullJson += ",\"loadout_instances\":[";
+
+          for (uint64_t i = 0; i < instanceCount; i++) {
+            if (i > 0) fullJson += ",";
+
+            LoadoutInstance* inst = &instances[i];
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.GAMESERVER] [SAVE_LOADOUT]   Instance %llu: name=0x%016llX, itemsPtr=%p, itemCount=%llu", i,
+                (unsigned long long)inst->instanceName, inst->itemsArrayPtr, inst->itemCount);
+
+            fullJson += SerializeLoadoutInstanceToJson(inst);
+
+            // Also log individual items for debugging (only valid SymbolIds)
+            if (inst->itemsArrayPtr && inst->itemCount > 0 && inst->itemCount < 64) {
+              LoadoutItem* items = reinterpret_cast<LoadoutItem*>(inst->itemsArrayPtr);
+              for (uint64_t j = 0; j < inst->itemCount; j++) {
+                if (!IsValidSymbolId(items[j].slotType)) continue;  // Skip garbage
+                Log(EchoVR::LogLevel::Info,
+                    "[NEVR.GAMESERVER] [SAVE_LOADOUT]     Item %llu: slot=0x%016llX, equipped=0x%016llX", j,
+                    (unsigned long long)items[j].slotType, (unsigned long long)items[j].equippedItem);
+              }
+            }
+          }
+          fullJson += "]}";
+
+          // Output the full JSON
+          Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] JSON: %s", fullJson.c_str());
+        } else {
+          Log(EchoVR::LogLevel::Warning,
+              "[NEVR.GAMESERVER] [SAVE_LOADOUT] No valid instances found (count=%llu, ptr=%p)", instanceCount,
+              instances);
+        }
+      }
+    }
+  }
   // Forward to game service if session is active
   if (self->GetContext().IsValidForOperations()) {
     SendServerdbTcpMessage(self, TcpSym::SaveLoadoutRequest, msg, msgSize);
@@ -166,8 +359,35 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
   }
 }
 
-void OnMsgSaveLoadoutSuccess(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Save loadout success (size: %llu)", msgSize);
+void OnMsgSaveLoadoutSuccess(GameServerLib*, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] size=%llu", msgSize);
+
+  if (msg && msgSize > 4) {
+    // First 4 bytes are slot info, rest is serialized loadout
+    uint8_t* data = reinterpret_cast<uint8_t*>(msg);
+    uint32_t slotInfo = *reinterpret_cast<uint32_t*>(data);
+    uint16_t slot = slotInfo & 0xFFFF;
+    uint16_t genId = (slotInfo >> 16) & 0xFFFF;
+
+    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] Slot=%u, GenId=%u, PayloadSize=%llu", slot, genId,
+        msgSize - 4);
+
+    // Dump payload (skip 4-byte header)
+    size_t dumpLen = (msgSize - 4 > 256) ? 256 : (msgSize - 4);
+    char hexBuf[800] = {0};
+    int pos = 0;
+    for (size_t i = 0; i < dumpLen && pos < 780; i++) {
+      pos += snprintf(hexBuf + pos, sizeof(hexBuf) - pos, "%02X ", data[4 + i]);
+      if ((i + 1) % 32 == 0) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] %s", hexBuf);
+        pos = 0;
+        hexBuf[0] = 0;
+      }
+    }
+    if (pos > 0) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] %s", hexBuf);
+    }
+  }
 }
 
 void OnMsgSaveLoadoutPartial(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
@@ -205,6 +425,28 @@ void OnMsgCurrentLoadoutResponse(GameServerLib* self, VOID*, VOID* msg, UINT64 m
   if (entrant) {
     Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] Player: %s (%s)", entrant->displayName,
         entrant->uniqueName);
+  }
+
+  // Dump the serialized loadout payload (skip 4-byte header)
+  if (msgSize > 4) {
+    uint8_t* data = reinterpret_cast<uint8_t*>(msg);
+    size_t payloadSize = msgSize - 4;
+
+    // Dump first 256 bytes of payload in hex
+    size_t dumpLen = (payloadSize > 256) ? 256 : payloadSize;
+    char hexBuf[800] = {0};
+    int pos = 0;
+    for (size_t i = 0; i < dumpLen && pos < 780; i++) {
+      pos += snprintf(hexBuf + pos, sizeof(hexBuf) - pos, "%02X ", data[4 + i]);
+      if ((i + 1) % 32 == 0) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] +%03zu: %s", i - 31, hexBuf);
+        pos = 0;
+        hexBuf[0] = 0;
+      }
+    }
+    if (pos > 0) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] +%03zu: %s", (dumpLen / 32) * 32, hexBuf);
+    }
   }
 }
 
