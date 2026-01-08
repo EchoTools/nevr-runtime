@@ -5,6 +5,7 @@
 
 #include <WS2tcpip.h>
 
+#include <cctype>
 #include <cstdarg>
 #include <cstring>
 
@@ -62,7 +63,7 @@ bool ParseUuidToGuid(const std::string& uuidStr, GUID& outGuid) {
       if (c != '-') return false;
     } else {
       // All other positions must be hexadecimal digits
-      if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+      if (!std::isxdigit(static_cast<unsigned char>(c))) {
         return false;
       }
     }

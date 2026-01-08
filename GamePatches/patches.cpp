@@ -429,9 +429,8 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgHelpString(pArgSyntax, "-fixed-timestep", "[NEVR] (Deprecated) Use -timestep instead");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-noconsole", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(
-      pArgSyntax, "-noconsole",
-      "[NEVR] Disable the creation of a new console window when using -headless (requires -headless to be specified)");
+  EchoVR::AddArgHelpString(pArgSyntax, "-noconsole",
+                           "[NEVR] Disable console window creation (requires -headless)");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-config-path", 1, 1, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-config-path", "[NEVR] Specify a custom path to the config.json file");
@@ -496,7 +495,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   }
 
   if (noConsole && !isHeadless) {
-    FatalError("The -noconsole flag requires -headless. Please specify both -headless -noconsole.", NULL);
+    FatalError("The -noconsole flag requires -headless to be specified.", NULL);
   }
 
   // Apply patches based on arguments.
