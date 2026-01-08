@@ -7,12 +7,28 @@
 
 #include "common/base64.h"
 #include "echovrunexported.h"
+#include "patch_addresses.h"
 #include "processmem.h"
+
+/// <summary>
+/// Helper function to apply a memory patch at a specific offset from the game base address.
+/// </summary>
+/// <param name="offset">The offset from the game base address.</param>
+/// <param name="patchData">Pointer to the patch data.</param>
+/// <param name="patchSize">Size of the patch in bytes.</param>
+static inline VOID ApplyPatch(uintptr_t offset, const BYTE* patchData, size_t patchSize) {
+  ProcessMemcpy(EchoVR::g_GameBaseAddress + offset, const_cast<BYTE*>(patchData), patchSize);
+}
 
 /// <summary>
 /// Indicates whether the patches have been applied (to avoid re-application).
 /// </summary>
 BOOL initialized = FALSE;
+
+/// <summary>
+/// Custom config.json path provided via command-line argument. If empty, the default path is used.
+/// </summary>
+CHAR customConfigJsonPath[MAX_PATH] = {0};
 
 /// <summary>
 /// A CLI argument flag indicating whether the game is booting as a dedicated server.
@@ -169,50 +185,51 @@ VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
 /// <param name="pGame">The pointer to the instance of the game structure.</param>
 /// <returns>None</returns>
 VOID PatchEnableHeadless(PVOID pGame) {
-  // Disable audio by clearing the same bits as the `-noaudio` command would.
-  UINT32* flags = (UINT32*)((CHAR*)pGame + 468);
-  *flags &= 0xFFFFFFFD;  // clear second bit
+  using namespace PatchAddresses;
+
+  // Disable audio by clearing the audio enable bit (same as `-noaudio` command)
+  UINT32* audioFlags = reinterpret_cast<UINT32*>(static_cast<CHAR*>(pGame) + GAME_AUDIO_FLAGS_OFFSET);
+  *audioFlags &= 0xFFFFFFFD;  // Clear bit 1 (audio enable)
 
   // Install our hook to capture logs to the console.
   PatchDetour(&(PVOID&)EchoVR::WriteLog, WriteLogHook);
 
-  // Patch the engine initialization/configuration to skip initialization of the rendering providers.
-  BYTE pbPatch[] = {
-      0xA8, 0x00  // TEST al, 0 (replaces a test against 1, to skip the renderer initialization).
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xFF581, pbPatch, sizeof(pbPatch));
+  // Skip renderer initialization
+  const BYTE rendererPatch[] = {0xA8, 0x00};  // TEST al, 0 (always false)
+  static_assert(sizeof(rendererPatch) == HEADLESS_RENDERER_SIZE, "HEADLESS_RENDERER patch size mismatch");
+  ApplyPatch(HEADLESS_RENDERER, rendererPatch, sizeof(rendererPatch));
 
-  // Patch effects resource loading to be skipped over.
-  BYTE pbPatch2[] = {
-      0xEB, 0x41  // JMP 0x43
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x62CA91, pbPatch2, sizeof(pbPatch2));
+  // Skip effects resource loading
+  const BYTE effectsPatch[] = {0xEB, 0x41};  // JMP +0x43
+  static_assert(sizeof(effectsPatch) == HEADLESS_EFFECTS_SIZE, "HEADLESS_EFFECTS patch size mismatch");
+  ApplyPatch(HEADLESS_EFFECTS, effectsPatch, sizeof(effectsPatch));
 
-  // If a timestep is set as non-zero, patch to enable `-fixedtimestep`.
+  // Enable fixed timestep if configured
   if (headlessTimeStep != 0) {
-    // Set the flag for `-fixedtimestep`.
-    UINT64* flags = (UINT64*)((CHAR*)pGame + 2088);
-    *flags |= 0x2000000;
+    UINT64* timestepFlags = reinterpret_cast<UINT64*>(static_cast<CHAR*>(pGame) + GAME_TIMESTEP_FLAGS_OFFSET);
+    *timestepFlags |= 0x2000000;  // Set fixed timestep flag
   }
 
-  // Return to avoid the creation of the console when noConsole is set.
-  if (noConsole) return;
+  // Skip console creation if -noconsole was specified
+  if (noConsole) {
+    return;
+  }
 
-  // Create a console
-  // Note: We do this because attaching to the parent process console would already be detached due to
-  // /SUBSYSTEM:WINDOWS. Attaching two processes to a console at once would be messy and.
+  // Create a console window for headless mode
+  // Note: We create a new console because the parent console is already detached
+  // due to /SUBSYSTEM:WINDOWS. Attaching multiple processes would be problematic.
   AllocConsole();
 
-  // Redirect our standard streams to the new console.
-  FILE* fConsole;
+  // Redirect standard streams to the new console
+  FILE* fConsole = nullptr;
   freopen_s(&fConsole, "CONIN$", "r", stdin);
   freopen_s(&fConsole, "CONOUT$", "w", stderr);
   freopen_s(&fConsole, "CONOUT$", "w", stdout);
 
-  // Enable ANSI color coding on the console.
+  // Enable ANSI color codes in the console
   HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
   HANDLE hStdErr = GetStdHandle(STD_ERROR_HANDLE);
-  DWORD consoleMode;
+  DWORD consoleMode = 0;
 
   GetConsoleMode(hStdOut, &consoleMode);
   consoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
@@ -224,47 +241,66 @@ VOID PatchEnableHeadless(PVOID pGame) {
 }
 
 /// <summary>
+/// Patches the loading tips system to immediately return, avoiding unnecessary log spam and processing.
+/// The loading tips system requires resources that may not be properly configured in server mode.
+/// </summary>
+/// <returns>None</returns>
+VOID PatchDisableLoadingTips() {
+  using namespace PatchAddresses;
+
+  // Patch R15PickLoadingTipNode to immediately return (RET = 0xC3)
+  // All three loading tip functions use the same single-byte RET patch
+  const BYTE retPatch[] = {0xC3};
+  static_assert(sizeof(retPatch) == LOADING_TIP_PICK_SIZE, "LOADING_TIP_PICK patch size mismatch");
+  static_assert(sizeof(retPatch) == LOADING_TIP_SELECT_SIZE, "LOADING_TIP_SELECT patch size mismatch");
+  static_assert(sizeof(retPatch) == LOADING_TIP_SELECT_2_SIZE, "LOADING_TIP_SELECT_2 patch size mismatch");
+  ApplyPatch(LOADING_TIP_PICK, retPatch, sizeof(retPatch));
+  ApplyPatch(LOADING_TIP_SELECT, retPatch, sizeof(retPatch));
+  ApplyPatch(LOADING_TIP_SELECT_2, retPatch, sizeof(retPatch));
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Disabled loading tips system for server mode");
+}
+
+/// <summary>
 /// Patches the game to run as a dedicated server, exposing its game server broadcast port, adjusting its log file path.
 /// </summary>
 /// <returns>None</returns>
 VOID PatchEnableServer() {
-  // Patch the flags for our game to indicate we are a game server. This replaces checks to see if we
-  // are a server, with code to set the flag permanently, and skips over the rest of the checking code.
-  BYTE pbPatch[] = {0x48, 0x83, 0x08, 0x06,  // OR QWORD ptr[rax], 0x6 (bit 2 = load sessions received from broadcast,
-                                             // bit 3 = patch flag to set as dedicated server)
+  using namespace PatchAddresses;
 
-                    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-                    0x90,  // NOP instructions to replace server flag checks (with above
-                           // setting operation) until it sets the 'enabled' flag.
-                    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-                    0x90, 0x90, 0x90, 0x90};
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x1580C3, pbPatch, sizeof(pbPatch));
+  // Patch server flag checks in command line processing (FUN_140116720 in cr15game.cpp)
+  // This sets bit 2 (load sessions from broadcast) and bit 3 (dedicated server flag)
+  // permanently, bypassing the normal conditional checks
+  const BYTE serverFlagsCheck[] = {
+      0x48, 0x83, 0x08, 0x06,                                      // OR QWORD ptr[rax], 0x6
+      0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,  // NOPs to skip conditional checks
+      0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+  static_assert(sizeof(serverFlagsCheck) == SERVER_FLAGS_CHECK_SIZE, "SERVER_FLAGS_CHECK patch size mismatch");
+  ApplyPatch(SERVER_FLAGS_CHECK, serverFlagsCheck, sizeof(serverFlagsCheck));
 
-  // Patch to avoid enabling "r14netserver" logging, as this depends on files we do not have and will panic.
-  BYTE pbPatch2[] = {
-      0x48, 0x89, 0xC3, 0x90  // NOPs to avoid a comparison->move to overwrite "r14netserver"
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xFFA58, pbPatch2, sizeof(pbPatch2));
+  // Disable "r14netserver" logging which depends on missing files
+  // String ref: "r14netserver" at 0x1416d2bb0
+  const BYTE netserverLogging[] = {0x48, 0x89, 0xC3, 0x90};  // MOV RBX, RAX; NOP
+  static_assert(sizeof(netserverLogging) == NETSERVER_LOGGING_SIZE, "NETSERVER_LOGGING patch size mismatch");
+  ApplyPatch(NETSERVER_LOGGING, netserverLogging, sizeof(netserverLogging));
 
-  // Patch the update the logging subject to "r14(server)"
-  BYTE pbPatch3[] = {0xEB, 0x0E};
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xFFB0E, pbPatch3, sizeof(pbPatch3));
+  // Update logging subject to "r14(server)"
+  const BYTE loggingSubject[] = {0xEB, 0x0E};  // JMP short +0x0E
+  static_assert(sizeof(loggingSubject) == LOGGING_SUBJECT_SIZE, "LOGGING_SUBJECT patch size mismatch");
+  ApplyPatch(LOGGING_SUBJECT, loggingSubject, sizeof(loggingSubject));
 
-  // Patch the ./sourcedb/rad15/json/r14/config/netconfig_*.json file parsing routine so the "allow_incoming" key is
-  // always interpreted as `true`. This is necessary for a game server to accept players. Otherwise they will be denied,
-  // disallowing client connections.
-  BYTE pbPatch4[] = {
-      0xB8, 0x01, 0x00, 0x00, 0x00  // MOV eax, 1 (set the flag to `true`).
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xF7F904, pbPatch4, sizeof(pbPatch4));
+  // Force "allow_incoming" in netconfig_*.json to always be true
+  // String ref: "|allow_incoming" at 0x141cd0480
+  // This is essential for accepting client connections
+  const BYTE allowIncoming[] = {0xB8, 0x01, 0x00, 0x00, 0x00};  // MOV eax, 1
+  static_assert(sizeof(allowIncoming) == ALLOW_INCOMING_SIZE, "ALLOW_INCOMING patch size mismatch");
+  ApplyPatch(ALLOW_INCOMING, allowIncoming, sizeof(allowIncoming));
 
-  // Patch the CLI pre-processing method to assume the process was provided "-spectatorstream".
-  // This causes the game to enter a "load lobby" state, which as a game server, starts the game server on startup.
-  // Otherwise, you would need to manually click the "play" button before the server began serving.
-  BYTE pbPatch5[] = {
-      0x90, 0x90, 0x90, 0x90, 0x90, 0x90  // NOP the jump that is taken if "-spectatorstream" is not provided.
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x116F3D, pbPatch5, sizeof(pbPatch5));
+  // Bypass "-spectatorstream" requirement (string ref at 0x1416d27b8)
+  // This makes the server automatically enter "load lobby" state on startup
+  const BYTE spectatorStreamCheck[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};  // 6x NOP
+  static_assert(sizeof(spectatorStreamCheck) == SPECTATORSTREAM_CHECK_SIZE, "SPECTATORSTREAM_CHECK patch size mismatch");
+  ApplyPatch(SPECTATORSTREAM_CHECK, spectatorStreamCheck, sizeof(spectatorStreamCheck));
 }
 
 /// <summary>
@@ -273,41 +309,39 @@ VOID PatchEnableServer() {
 /// </summary>
 /// <returns>None</returns>
 VOID PatchEnableOffline() {
-  // Patch "starting multiplayer"
-  BYTE pbPatch[] = {0xE8, 0xCD, 0x02, 0x00, 0x00};
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xFDE0E, pbPatch, sizeof(pbPatch));
+  using namespace PatchAddresses;
 
-  // Patch "incidents"
-  BYTE pbPatch3[] = {
-      0x75,
-      0x0A,  // TODO: Can probably be made JMP (0xEB) / NOP
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x17F0B1, pbPatch3, sizeof(pbPatch3));
+  // Patch multiplayer initialization for offline mode
+  const BYTE multiplayerPatch[] = {0xE8, 0xCD, 0x02, 0x00, 0x00};  // CALL +0x2CD
+  static_assert(sizeof(multiplayerPatch) == OFFLINE_MULTIPLAYER_SIZE, "OFFLINE_MULTIPLAYER patch size mismatch");
+  ApplyPatch(OFFLINE_MULTIPLAYER, multiplayerPatch, sizeof(multiplayerPatch));
 
-  // TODO: Title
-  BYTE pbPatch4[] = {
-      0x74,
-      0x12,  // TODO: Can probably be made JMP (0xEB) / NOP
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x17F77B, pbPatch4, sizeof(pbPatch4));
+  // Patch incident reporting
+  const BYTE incidentsPatch[] = {0x75, 0x0A};  // JNZ +0x0A
+  static_assert(sizeof(incidentsPatch) == OFFLINE_INCIDENTS_SIZE, "OFFLINE_INCIDENTS patch size mismatch");
+  ApplyPatch(OFFLINE_INCIDENTS, incidentsPatch, sizeof(incidentsPatch));
 
-  // Force transaction service to load
-  BYTE pbNopConditionalJump[] = {
-      0x90,
-      0x90,  // NOP condition jump
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x17F817, pbNopConditionalJump, sizeof(pbNopConditionalJump));
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x17F823, pbNopConditionalJump, sizeof(pbNopConditionalJump));
+  // Patch title/session checks
+  const BYTE titlePatch[] = {0x74, 0x12};  // JZ +0x12
+  static_assert(sizeof(titlePatch) == OFFLINE_TITLE_SIZE, "OFFLINE_TITLE patch size mismatch");
+  ApplyPatch(OFFLINE_TITLE, titlePatch, sizeof(titlePatch));
+
+  // Force transaction service to load (two conditional jumps to NOP)
+  // Both patches use the same 2-byte NOP pattern and share the same SIZE constant
+  const BYTE nopConditionalJump[] = {0x90, 0x90};  // 2x NOP
+  static_assert(sizeof(nopConditionalJump) == OFFLINE_TRANSACTION_SIZE, "OFFLINE_TRANSACTION patch size mismatch");
+  ApplyPatch(OFFLINE_TRANSACTION_1, nopConditionalJump, sizeof(nopConditionalJump));
+  ApplyPatch(OFFLINE_TRANSACTION_2, nopConditionalJump, sizeof(nopConditionalJump));
 
   // Skip failed logon service code
-  BYTE pbPatch5[] = {
-      0xE9, 0x92, 0x00, 0x00, 0x00, 0x00  // JMP 0x97
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x1AC83E, pbPatch5, sizeof(pbPatch5));
+  const BYTE skipLogon[] = {0xE9, 0x92, 0x00, 0x00, 0x00, 0x00};  // JMP +0x97
+  static_assert(sizeof(skipLogon) == OFFLINE_LOGON_SIZE, "OFFLINE_LOGON patch size mismatch");
+  ApplyPatch(OFFLINE_LOGON, skipLogon, sizeof(skipLogon));
 
-  // Redirect "beginning tutorial"
-  BYTE pbPatch6[] = {0xE8, 0xD6, 0x17, 0x68, 0xFF};
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xA7C685, pbPatch6, sizeof(pbPatch6));
+  // Redirect tutorial beginning
+  const BYTE tutorialRedirect[] = {0xE8, 0xD6, 0x17, 0x68, 0xFF};  // CALL relative
+  static_assert(sizeof(tutorialRedirect) == OFFLINE_TUTORIAL_SIZE, "OFFLINE_TUTORIAL patch size mismatch");
+  ApplyPatch(OFFLINE_TUTORIAL, tutorialRedirect, sizeof(tutorialRedirect));
 }
 
 /// <summary>
@@ -316,11 +350,12 @@ VOID PatchEnableOffline() {
 /// </summary>
 /// <returns>None</returns>
 VOID PatchNoOvrRequiresSpectatorStream() {
-  // Patch "-noovr requires -spectatorstream" to allow us to use -noovr independently.
-  BYTE pbPatch[] = {
-      0xEB, 0x35  // JMP (past the respective code).
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x11690D, pbPatch, sizeof(pbPatch));
+  using namespace PatchAddresses;
+
+  // Bypass the error check that requires "-spectatorstream" when using "-noovr"
+  const BYTE noOvrPatch[] = {0xEB, 0x35};  // JMP +0x35 (skip error code)
+  static_assert(sizeof(noOvrPatch) == NOOVR_SPECTATOR_SIZE, "NOOVR_SPECTATOR patch size mismatch");
+  ApplyPatch(NOOVR_SPECTATOR, noOvrPatch, sizeof(noOvrPatch));
 }
 
 /// <summary>
@@ -330,13 +365,13 @@ VOID PatchNoOvrRequiresSpectatorStream() {
 /// </summary>
 /// <returns>None</returns>
 VOID PatchDeadlockMonitor() {
-  // Patch out the deadlock monitor thread's validation routine. This is necessary during debugging, as this thread acts
-  // as a watchdog for updates and will panic if an update has not occurred for some time (e.g. waiting too long between
-  // breakpoints when debugging).
-  BYTE pbPatch[] = {
-      0x90, 0x90  // NOPs (to replace the JLE instruction which checks failing deadlock conditions).
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x1D3881, pbPatch, sizeof(pbPatch));
+  using namespace PatchAddresses;
+
+  // Disable the deadlock monitor's panic condition check
+  // This allows debugging with breakpoints without triggering a timeout
+  const BYTE deadlockPatch[] = {0x90, 0x90};  // 2x NOP (replace JLE instruction)
+  static_assert(sizeof(deadlockPatch) == DEADLOCK_MONITOR_SIZE, "DEADLOCK_MONITOR patch size mismatch");
+  ApplyPatch(DEADLOCK_MONITOR, deadlockPatch, sizeof(deadlockPatch));
 }
 
 /// <summary>
@@ -356,7 +391,7 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     // failed to connect, etc). But at least it doesn't cause the server to get stuck in a "not ready" state in some
     // menu.
     Log(EchoVR::LogLevel::Debug,
-        "[ECHORELAY.PATCH] Dedicated server failed to load level. Resetting session to keep game server available.");
+        "[NEVR.PATCH] Dedicated server failed to load level. Resetting session to keep game server available.");
     EchoVR::NetGameScheduleReturnToLobby(pGame);
     return;
   }
@@ -377,22 +412,28 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
 
   // Add our additional options
   EchoVR::AddArgSyntax(pArgSyntax, "-server", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-server", "[EchoRelay] Run as a dedicated game server");
+  EchoVR::AddArgHelpString(pArgSyntax, "-server", "[NEVR] Run as a dedicated game server");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-offline", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-offline", "[EchoRelay] Run the game in offline mode");
+  EchoVR::AddArgHelpString(pArgSyntax, "-offline", "[NEVR] Run the game in offline mode");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-windowed", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-windowed", "[EchoRelay] Run the game with no headset, in a window");
+  EchoVR::AddArgHelpString(pArgSyntax, "-windowed", "[NEVR] Run the game with no headset, in a window");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-timestep", 1, 1, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-timestep",
-                           "[EchoRelay] Sets the fixed update interval when using -headless (in ticks/updates per "
+                           "[NEVR] Sets the fixed update interval when using -headless (in ticks/updates per "
                            "second). 0 = no fixed time step, 120 = default");
+
+  EchoVR::AddArgSyntax(pArgSyntax, "-fixed-timestep", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-fixed-timestep", "[NEVR] (Deprecated) Use -timestep instead");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-noconsole", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-noconsole",
-                           "[EchoRelay] Disable the creation of a new console window when using -headless");
+                           "[NEVR] Disable console window creation (must be used with -headless)");
+
+  EchoVR::AddArgSyntax(pArgSyntax, "-config-path", 1, 1, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-config-path", "[NEVR] Specify a custom path to the config.json file");
 
   return result;
 }
@@ -402,55 +443,83 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
 /// </summary>
 /// <param name="pGame">A pointer to the game instance.</param>
 UINT64 PreprocessCommandLineHook(PVOID pGame) {
-  // Check which were set with command line arguments.
-  int argc;
+  // Parse command line arguments.
+  int argc = 0;
   LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-  for (int i = 0; i < argc; i++) {
-    if (lstrcmpW(argv[i], L"-server") == 0)
+
+  for (int i = 0; i < argc; ++i) {
+    const LPWSTR arg = argv[i];
+
+    if (lstrcmpW(arg, L"-server") == 0) {
       isServer = TRUE;
-    else if (lstrcmpW(argv[i], L"-offline") == 0)
+      isNoOVR = TRUE;  // Server mode automatically disables VR
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] -server: Automatically enabling -noovr (VR disabled in server mode)");
+    } else if (lstrcmpW(arg, L"-offline") == 0) {
       isOffline = TRUE;
-    else if (lstrcmpW(argv[i], L"-noconsole") == 0)
+    } else if (lstrcmpW(arg, L"-noconsole") == 0) {
       noConsole = TRUE;
-    else if (lstrcmpW(argv[i], L"-headless") == 0)
+    } else if (lstrcmpW(arg, L"-headless") == 0) {
       isHeadless = TRUE;
-    else if (lstrcmpW(argv[i], L"-windowed") == 0)
+    } else if (lstrcmpW(arg, L"-windowed") == 0) {
       isWindowed = TRUE;
-    else if (lstrcmpW(argv[i], L"-noovr") == 0)
+    } else if (lstrcmpW(arg, L"-noovr") == 0) {
       isNoOVR = TRUE;
-    else if (lstrcmpW(argv[i], L"-timestep") == 0) {
-      // Verify a timestep argument was provided.
-      if (i + 1 < argc)
-        headlessTimeStep = std::wcstoul((const WCHAR*)argv[i + 1], nullptr, 10);
-      else
+    } else if (lstrcmpW(arg, L"-timestep") == 0) {
+      if (i + 1 < argc) {
+        headlessTimeStep = std::wcstoul(argv[i + 1], nullptr, 10);
+        ++i;  // Skip the next argument (the value)
+      } else {
         FatalError(
-            "No argument provided for -timestep. You must provide a positive number for a fixed tick rate, or a zero "
-            "value for unthrottled.",
+            "Missing argument for -timestep. Provide a positive number for fixed tick rate, or zero for unthrottled.",
             NULL);
+      }
+    } else if (lstrcmpW(arg, L"-fixed-timestep") == 0) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] The -fixed-timestep argument is deprecated and ignored. Use -timestep <N> instead.");
+    } else if (lstrcmpW(arg, L"-config-path") == 0) {
+      if (i + 1 < argc) {
+        int len = WideCharToMultiByte(CP_UTF8, 0, argv[i + 1], -1, customConfigJsonPath, MAX_PATH, NULL, NULL);
+        if (len == 0) {
+          FatalError("Failed to convert -config-path to multi-byte string.", NULL);
+        }
+        ++i;  // Skip the next argument (the path value)
+      } else {
+        FatalError("Missing argument for -config-path. Provide a path to a config.json file.", NULL);
+      }
     }
   }
 
-  // Verify server and offline flags are not enabled.
-  if (isServer && isOffline) FatalError("-server and -offline arguments cannot be provided at the same time.", NULL);
+  // Validate argument combinations.
+  if (isServer && isOffline) {
+    FatalError("Arguments -server and -offline are mutually exclusive.", NULL);
+  }
 
-  if (!isHeadless && noConsole) FatalError("-noconsole can only be used with the -headless argument.", NULL);
+  if (noConsole && !isHeadless) {
+    FatalError("The -noconsole flag requires -headless to be specified.", NULL);
+  }
 
-  // If offline flag was provided, enable offline.
-  if (isOffline) PatchEnableOffline();
+  // Apply patches based on arguments.
+  if (isOffline) {
+    PatchEnableOffline();
+  }
 
-  // If the headless flag was provided, enable it.
-  if (isHeadless) PatchEnableHeadless(pGame);
+  if (isHeadless) {
+    PatchEnableHeadless(pGame);
+  }
 
   // If the windowed, server, or headless flags were provided, apply the windowed mode patch to not use a VR headset.
   if (isWindowed || isServer || isHeadless) {
-    // Set the game to run in windowed mode.
-    UINT64* flags = (UINT64*)((CHAR*)pGame + 31456);
-    *flags |= 0x0100000;  // Spectator stream uses 0x2100000 (an additional flag). This changes level setting in some
-                          // way(?). Seemingly unnecessary here.
+    using namespace PatchAddresses;
+    // Set windowed mode flag in game structure
+    UINT64* windowedFlags = reinterpret_cast<UINT64*>(static_cast<CHAR*>(pGame) + GAME_WINDOWED_FLAGS_OFFSET);
+    *windowedFlags |= 0x0100000;  // Enable windowed mode (spectator uses 0x2100000 for additional settings)
   }
 
   // Apply patches to force the game to load as a server.
-  if (isServer) PatchEnableServer();
+  if (isServer) {
+    PatchEnableServer();
+    PatchDisableLoadingTips();
+  }
 
   // Update the window title
   if (hWindow != NULL && isNoOVR) EchoVR::SetWindowTextA_(hWindow, "Echo VR - [DEMO]");
@@ -462,26 +531,61 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 
 /// <summary>
 /// A detour hook for the game's function to load the local config.json for the game instance.
+/// If a custom config path was provided via -config-path, it loads that file directly using
+/// the game's internal JSON loading function, bypassing the default _local/config.json.
 /// </summary>
 /// <param name="pGame">A pointer to the game struct to load the config for.</param>
 UINT64 LoadLocalConfigHook(PVOID pGame) {
-  // If a timestep override was provided, configure it.
-  // This is placed here, as by this time, the structure to dereference will be initialized.
-  if (isHeadless && headlessTimeStep != 0) {
-    // Patch the fixed time step based on tick count.
-    // Fixed time step is in microseconds, tick rate is per second.
-    UINT32* timeStep = (UINT32*)(*(CHAR**)(EchoVR::g_GameBaseAddress + 0x020A00E8) + 0x90);
-    *timeStep = 1000000 / headlessTimeStep;
+  UINT64 result;
 
-    // Patches the game to fix the delta time calculation for when using fixedtimestep.
-    // Change condition for if deltatime is higher than timestep tell engine time is deltatime.
-    BYTE Patch1[] = {0x73, 0x7A};
-    ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xCF46D, Patch1, sizeof(Patch1));
+  // If a custom config.json path was provided, load it directly using the game's JSON loader
+  if (customConfigJsonPath[0] != '\0') {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Loading custom config from: %s", customConfigJsonPath);
+
+    // Get the config destination pointer (pGame + 0x63240)
+    using namespace PatchAddresses;
+    EchoVR::Json* configDest = reinterpret_cast<EchoVR::Json*>(static_cast<CHAR*>(pGame) + GAME_LOCAL_CONFIG_OFFSET);
+
+    // Call the game's internal JSON loader directly with our custom path
+    // The third parameter (1) indicates the validation level: 1 = standard validation
+    UINT32 loadResult = EchoVR::LoadJsonFromFile(configDest, customConfigJsonPath, 1);
+
+    if (loadResult != 0) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load custom config file: %s (error %u)",
+          customConfigJsonPath, loadResult);
+      // Fall back to loading the default config
+      result = EchoVR::LoadLocalConfig(pGame);
+    } else {
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Successfully loaded custom config from: %s", customConfigJsonPath);
+      result = 0;  // Success
+    }
+  } else {
+    // No custom config specified, use the default loader
+    result = EchoVR::LoadLocalConfig(pGame);
   }
 
-  // Store a reference to the local config.
-  localConfig = (EchoVR::Json*)((CHAR*)pGame + 0x63240);
-  return EchoVR::LoadLocalConfig(pGame);
+  // Configure fixed timestep if specified
+  // Note: This is placed here because the required structures must be initialized first
+  if (isHeadless && headlessTimeStep != 0) {
+    using namespace PatchAddresses;
+
+    // Set the fixed time step value (in microseconds)
+    // The timestep is stored in a nested structure accessed via pointer
+    UINT32* timeStepPtr = reinterpret_cast<UINT32*>(
+        *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + FIXED_TIMESTEP_PTR) + FIXED_TIMESTEP_OFFSET);
+    *timeStepPtr = 1000000 / headlessTimeStep;  // Convert Hz to microseconds
+
+    // Fix delta time calculation for fixed timestep mode
+    // Changes condition: if (deltaTime > timeStep) to use correct comparison
+    const BYTE deltaTimeFix[] = {0x73, 0x7A};  // JAE +0x7A (unsigned comparison)
+    static_assert(sizeof(deltaTimeFix) == HEADLESS_DELTATIME_SIZE, "HEADLESS_DELTATIME patch size mismatch");
+    ApplyPatch(HEADLESS_DELTATIME, deltaTimeFix, sizeof(deltaTimeFix));
+  }
+
+  // Store a reference to the local config from the game structure
+  using namespace PatchAddresses;
+  localConfig = reinterpret_cast<EchoVR::Json*>(static_cast<CHAR*>(pGame) + GAME_LOCAL_CONFIG_OFFSET);
+  return result;
 }
 
 /// <summary>
@@ -583,7 +687,7 @@ VOID Initialize() {
   // Verify the game version before patching
   if (!VerifyGameVersion())
     MessageBoxW(NULL,
-                L"EchoRelay version check failed. Patches may fail to be applied. Verify you're running the correct "
+                L"NEVR version check failed. Patches may fail to be applied. Verify you're running the correct "
                 L"version of Echo VR.",
                 L"Echo Relay: Warning", MB_OK);
 

@@ -1,5 +1,5 @@
-// dllmain.cpp : Defines the entry point for the DLL application.
-#include "pch.h"
+// DLL entry point
+#include "common/pch.h"
 #include "patches.h"
 
 
