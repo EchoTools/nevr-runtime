@@ -63,6 +63,7 @@ bool ParseUuidToGuid(const std::string& uuidStr, GUID& outGuid) {
       if (c != '-') return false;
     } else {
       // All other positions must be hexadecimal digits
+      // Cast to unsigned char to avoid undefined behavior with negative char values
       if (!std::isxdigit(static_cast<unsigned char>(c))) {
         return false;
       }

@@ -430,7 +430,7 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
 
   EchoVR::AddArgSyntax(pArgSyntax, "-noconsole", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-noconsole",
-                           "[NEVR] Disable console window creation (requires -headless)");
+                           "[NEVR] Disable console window creation (must be used with -headless)");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-config-path", 1, 1, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-config-path", "[NEVR] Specify a custom path to the config.json file");
