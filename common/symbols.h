@@ -53,34 +53,15 @@ constexpr SymbolId ReliableTeamStatUpdate = 0x7ba444f7d419b1a2;
 constexpr SymbolId ProtobufMsg = 0xf62cb25bb5b8a839;
 constexpr SymbolId ProtobufJson = 0x59f3af95e7d44e72;
 
+// NEVR-specific protobuf JSON transport (for Nakama integration)
+constexpr SymbolId NEVRProtobufJSONMessageV1 = 0xc6b3710cd9c4ef47;
+
 namespace Tcp {
 
-// Registration
-constexpr SymbolId LobbyRegistrationRequest = 0x7777777777777777;  // unofficial
+// Registration (official symbols from EchoVR)
 constexpr SymbolId LobbyRegistrationSuccess = -5369924845641990433;
 constexpr SymbolId LobbyRegistrationFailure = -5373034290044534839;
 constexpr SymbolId LobbySessionSuccessV5 = 0x6d4de3650ee3110f;
-
-// Session control (unofficial)
-constexpr SymbolId LobbyStartSession = 0x7777777777770000;
-constexpr SymbolId LobbySessionStarted = 0x7777777777770100;
-constexpr SymbolId LobbyEndSession = 0x7777777777770200;
-constexpr SymbolId LobbyPlayerSessionsLocked = 0x7777777777770300;
-constexpr SymbolId LobbyPlayerSessionsUnlocked = 0x7777777777770400;
-
-// Player management (unofficial)
-constexpr SymbolId LobbyAcceptPlayers = 0x7777777777770500;
-constexpr SymbolId LobbyPlayersAccepted = 0x7777777777770600;
-constexpr SymbolId LobbyPlayersRejected = 0x7777777777770700;
-constexpr SymbolId LobbyRemovePlayer = 0x7777777777770800;
-
-// Challenge/auth (unofficial)
-constexpr SymbolId LobbyChallengeRequest = 0x7777777777770900;
-constexpr SymbolId LobbyChallengeResponse = 0x7777777777770A00;
-
-// Loadout forwarding (unofficial)
-constexpr SymbolId SaveLoadoutRequest = 0x7777777777770B00;
-constexpr SymbolId CurrentLoadoutResponse = 0x7777777777770B01;
 
 // Game client messages (received from game in client mode)
 constexpr SymbolId GameClientMsg1 = 0x5b71b22a4483bda5;

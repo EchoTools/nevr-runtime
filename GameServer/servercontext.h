@@ -59,6 +59,7 @@ struct CallbackRegistry {
 struct SessionState {
   bool active = false;
   GUID loginSessionId = {};
+  std::string lobbySessionId;  // UUID string from LobbySessionSuccessV5
   uint64_t serverId = 0;
   EchoVR::SymbolId regionId = 0;
   EchoVR::SymbolId versionLock = 0;

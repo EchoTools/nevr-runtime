@@ -52,9 +52,6 @@ void Log(EchoVR::LogLevel level, const CHAR* format, ...);
 uint16_t ListenForBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId, BOOL isMsgReliable, VOID* func);
 uint16_t ListenForTcpBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId, VOID* func);
 
-// TCP message sending
-void SendServerdbTcpMessage(GameServerLib* self, EchoVR::SymbolId msgId, VOID* msg, uint64_t msgSize);
-
 // Slot index extraction from message payloads
 struct SlotInfo {
   uint16_t slot;

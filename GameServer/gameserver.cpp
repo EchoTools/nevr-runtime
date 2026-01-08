@@ -9,6 +9,7 @@
 #include "echovrunexported.h"
 #include "messages.h"
 #include "pch.h"
+#include "rtapi/realtime_v1.pb.h"
 
 using namespace GameServer;
 
@@ -46,13 +47,46 @@ uint16_t ListenForTcpBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId ms
   return EchoVR::TcpBroadcasterListen(lobby->tcpBroadcaster, msgId, 0, 0, 0, &proxy, true);
 }
 
-// Send message to ServerDB via TCP broadcaster
-void SendServerdbTcpMessage(GameServerLib* self, EchoVR::SymbolId msgId, VOID* msg, uint64_t msgSize) {
-  auto* tcp = self->GetContext().GetTcpBroadcaster();
-  if (!tcp) return;
+// Symbol ID for NEVRProtobufMessageV1 (binary protobuf)
+constexpr EchoVR::SymbolId SYM_PROTOBUF_MSG = 0x9ee5107d9e29fd63ULL;
 
+// Send a protobuf Envelope to ServerDB as binary
+bool SendProtobufEnvelope(GameServerLib* self, const realtime::Envelope& envelope) {
+  auto* tcp = self->GetContext().GetTcpBroadcaster();
+  if (!tcp) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Cannot send protobuf: TCP broadcaster unavailable");
+    return false;
+  }
+
+  // Serialize envelope to binary
+  std::string binaryData;
+  if (!envelope.SerializeToString(&binaryData)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to serialize protobuf to binary");
+    return false;
+  }
+
+  // Send via TCP with protobuf binary symbol
   auto peer = self->GetContext().GetServerDbPeer();
-  tcp->SendToPeer(peer, msgId, nullptr, 0, msg, msgSize);
+  tcp->SendToPeer(peer, SYM_PROTOBUF_MSG, nullptr, 0, const_cast<char*>(binaryData.c_str()), binaryData.size());
+
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Sent protobuf binary (%zu bytes)", binaryData.size());
+  return true;
+}
+
+// Helper to convert GUID to UUID string format
+static std::string GuidToUuidString(const GUID& guid) {
+  char buf[64];
+  snprintf(buf, sizeof(buf), "%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x", guid.Data1, guid.Data2, guid.Data3,
+           guid.Data4[0], guid.Data4[1], guid.Data4[2], guid.Data4[3], guid.Data4[4], guid.Data4[5], guid.Data4[6],
+           guid.Data4[7]);
+  return buf;
+}
+
+// Helper to convert IPv4 address (uint32_t) to string
+static std::string Ipv4ToString(uint32_t ip) {
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%u.%u.%u.%u", (ip >> 0) & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF);
+  return buf;
 }
 
 // Extract slot index from message payload
@@ -122,6 +156,94 @@ void OnTcpMsgSessionSuccessv5(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID*
   if (broadcaster) {
     EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbySessionSuccessV5, "SNSLobbySessionSuccessv5",
                                          static_cast<CHAR*>(msg), msgSize);
+  }
+}
+
+// Handle incoming protobuf messages from Nakama
+void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
+  if (!msg || msgSize == 0) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Received empty protobuf message");
+    return;
+  }
+
+  // Parse the protobuf Envelope
+  realtime::Envelope envelope;
+  if (!envelope.ParseFromArray(msg, static_cast<int>(msgSize))) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to parse protobuf Envelope");
+    return;
+  }
+
+  auto* broadcaster = self->GetContext().GetBroadcaster();
+
+  // Dispatch based on message type
+  switch (envelope.message_case()) {
+    case realtime::Envelope::kGameServerRegistrationSuccess: {
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received registration success via protobuf");
+      self->GetContext().SetRegistered(true);
+      // Forward as legacy event for game compatibility
+      if (broadcaster) {
+        EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationSuccess, "SNSLobbyRegistrationSuccess",
+                                             nullptr, 0);
+      }
+      break;
+    }
+
+    case realtime::Envelope::kLobbySessionCreate: {
+      const auto& sessionCreate = envelope.lobby_session_create();
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received session create via protobuf: session=%s",
+          sessionCreate.lobby_session_id().c_str());
+
+      // Update session state
+      SessionState state = self->GetContext().GetSessionState();
+      state.lobbySessionId = sessionCreate.lobby_session_id();
+      self->GetContext().UpdateSessionState(state);
+      self->GetContext().StartSession();
+
+      // Forward as legacy event for game compatibility
+      if (broadcaster) {
+        EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4, "SNSLobbyStartSessionv4", nullptr,
+                                             0);
+      }
+      break;
+    }
+
+    case realtime::Envelope::kLobbyEntrantsAccept: {
+      const auto& accept = envelope.lobby_entrants_accept();
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received entrants accept via protobuf: count=%d",
+          accept.entrant_ids_size());
+
+      // Forward as legacy event for game compatibility
+      if (broadcaster) {
+        EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersSuccessV2,
+                                             "SNSLobbyAcceptPlayersSuccessv2", nullptr, 0);
+      }
+      break;
+    }
+
+    case realtime::Envelope::kLobbyEntrantReject: {
+      const auto& reject = envelope.lobby_entrant_reject();
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received entrants reject via protobuf: count=%d, code=%d",
+          reject.entrant_ids_size(), reject.code());
+
+      // Forward as legacy event for game compatibility
+      if (broadcaster) {
+        EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersFailureV2,
+                                             "SNSLobbyAcceptPlayersFailurev2", nullptr, 0);
+      }
+      break;
+    }
+
+    case realtime::Envelope::kError: {
+      const auto& error = envelope.error();
+      Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Received error via protobuf: code=%d, msg=%s", error.code(),
+          error.message().c_str());
+      break;
+    }
+
+    default:
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Received unhandled protobuf message type: %d",
+          envelope.message_case());
+      break;
   }
 }
 
@@ -340,8 +462,51 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
           }
           fullJson += "]}";
 
-          // Output the full JSON
-          Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] JSON: %s", fullJson.c_str());
+          // Output the full JSON (debug)
+          Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_LOADOUT] JSON: %s", fullJson.c_str());
+
+          // Build protobuf message
+          if (self->GetContext().IsValidForOperations()) {
+            realtime::Envelope envelope;
+            auto* saveLoadout = envelope.mutable_game_server_save_loadout();
+
+            // Set session and player info
+            auto sessionState = self->GetContext().GetSessionState();
+            saveLoadout->set_lobby_session_id(sessionState.lobbySessionId);
+
+            // Set entrant ID (account ID as string)
+            if (entrant) {
+              saveLoadout->set_entrant_id(std::to_string(entrant->userId.accountId));
+            }
+
+            saveLoadout->set_loadout_slot(static_cast<int32_t>(playerSlot));
+            saveLoadout->set_jersey_number(static_cast<int32_t>(jerseyNumber));
+
+            // Add loadout instances
+            for (uint64_t i = 0; i < instanceCount; i++) {
+              LoadoutInstance* inst = &instances[i];
+              auto* protoInstance = saveLoadout->add_loadout_instances();
+              protoInstance->set_instance_name(inst->instanceName);
+
+              // Add items
+              if (inst->itemsArrayPtr && inst->itemCount > 0 && inst->itemCount < 64) {
+                LoadoutItem* items = reinterpret_cast<LoadoutItem*>(inst->itemsArrayPtr);
+                for (uint64_t j = 0; j < inst->itemCount; j++) {
+                  if (!IsValidSymbolId(items[j].slotType)) continue;
+                  auto* protoItem = protoInstance->add_items();
+                  protoItem->set_slot_type(items[j].slotType);
+                  protoItem->set_equipped_item(items[j].equippedItem);
+                }
+              }
+            }
+
+            // Send via protobuf
+            if (SendProtobufEnvelope(self, envelope)) {
+              Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Sent protobuf to game service");
+            }
+          } else {
+            Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Not in active session");
+          }
         } else {
           Log(EchoVR::LogLevel::Warning,
               "[NEVR.GAMESERVER] [SAVE_LOADOUT] No valid instances found (count=%llu, ptr=%p)", instanceCount,
@@ -349,13 +514,6 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
         }
       }
     }
-  }
-  // Forward to game service if session is active
-  if (self->GetContext().IsValidForOperations()) {
-    SendServerdbTcpMessage(self, TcpSym::SaveLoadoutRequest, msg, msgSize);
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Forwarded %llu bytes to game service", msgSize);
-  } else {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Not in active session");
   }
 }
 
@@ -561,18 +719,16 @@ void GameServerLib::RegisterBroadcasterCallbacks() {
 void GameServerLib::RegisterTcpCallbacks() {
   auto& cb = context_->GetCallbackRegistry();
 
+  // Official EchoVR symbols for registration responses
   cb.tcpRegSuccess = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyRegistrationSuccess,
                                                     reinterpret_cast<VOID*>(OnTcpMsgRegistrationSuccess));
   cb.tcpRegFailure = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyRegistrationFailure,
                                                     reinterpret_cast<VOID*>(OnTcpMsgRegistrationFailure));
-  cb.tcpStartSession = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyStartSession,
-                                                      reinterpret_cast<VOID*>(OnTcpMessageStartSession));
-  cb.tcpPlayersAccepted = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyPlayersAccepted,
-                                                         reinterpret_cast<VOID*>(OnTcpMsgPlayersAccepted));
-  cb.tcpPlayersRejected = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyPlayersRejected,
-                                                         reinterpret_cast<VOID*>(OnTcpMsgPlayersRejected));
   cb.tcpSessionSuccess = ListenForTcpBroadcasterMessage(this, TcpSym::LobbySessionSuccessV5,
                                                         reinterpret_cast<VOID*>(OnTcpMsgSessionSuccessv5));
+
+  // Protobuf message handler for all other responses from Nakama
+  cb.tcpProtobuf = ListenForTcpBroadcasterMessage(this, SYM_PROTOBUF_MSG, reinterpret_cast<VOID*>(OnTcpMsgProtobuf));
 }
 
 void GameServerLib::UnregisterAllCallbacks() {
@@ -591,10 +747,8 @@ void GameServerLib::UnregisterAllCallbacks() {
   if (lobby->tcpBroadcaster) {
     EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpRegSuccess);
     EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpRegFailure);
-    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpStartSession);
-    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpPlayersAccepted);
-    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpPlayersRejected);
     EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpSessionSuccess);
+    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpProtobuf);
   }
 
   cb.Clear();
@@ -660,16 +814,25 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 
   sockaddr_in gameServerAddr = *reinterpret_cast<sockaddr_in*>(&broadcaster->data->addr);
 
-  ERLobbyRegistrationRequest request = {};
-  request.serverId = serverId;
-  request.port = static_cast<uint16_t>(broadcaster->data->broadcastSocketInfo.port);
-  request.internalIp = gameServerAddr.sin_addr.S_un.S_addr;
-  request.regionId = regionId;
-  request.versionLock = versionLock;
+  // Build protobuf registration request
+  realtime::Envelope envelope;
+  auto* registration = envelope.mutable_game_server_registration();
+  registration->set_login_session_id(GuidToUuidString(state.loginSessionId));
+  registration->set_server_id(static_cast<uint64_t>(serverId));
+  registration->set_internal_ip_address(Ipv4ToString(gameServerAddr.sin_addr.S_un.S_addr));
+  registration->set_port(static_cast<uint32_t>(broadcaster->data->broadcastSocketInfo.port));
+  registration->set_region(regionId);
+  registration->set_version_lock(versionLock);
+  registration->set_time_step_usecs(state.defaultTimeStepUsecs);
+#ifdef NEVR_VERSION
+  registration->set_version(NEVR_VERSION);
+#else
+  registration->set_version("unknown");
+#endif
 
-  SendServerdbTcpMessage(this, TcpSym::LobbyRegistrationRequest, &request, sizeof(request));
+  SendProtobufEnvelope(this, envelope);
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Requested game server registration");
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Requested game server registration via protobuf");
 }
 
 VOID GameServerLib::Unregister() {
@@ -689,8 +852,11 @@ VOID GameServerLib::Unregister() {
 
 VOID GameServerLib::EndSession() {
   if (context_->IsSessionActive()) {
-    ERLobbyEndSession message = {};
-    SendServerdbTcpMessage(this, TcpSym::LobbyEndSession, &message, sizeof(message));
+    realtime::Envelope envelope;
+    auto* event = envelope.mutable_lobby_session_event();
+    event->set_lobby_session_id(context_->GetSessionState().lobbySessionId);
+    event->set_code(realtime::LobbySessionEventMessage::CODE_ENDED);
+    SendProtobufEnvelope(this, envelope);
   }
 
   context_->EndSession();
@@ -699,8 +865,11 @@ VOID GameServerLib::EndSession() {
 
 VOID GameServerLib::LockPlayerSessions() {
   if (context_->IsSessionActive()) {
-    ERLobbyPlayerSessionsLocked message = {};
-    SendServerdbTcpMessage(this, TcpSym::LobbyPlayerSessionsLocked, &message, sizeof(message));
+    realtime::Envelope envelope;
+    auto* event = envelope.mutable_lobby_session_event();
+    event->set_lobby_session_id(context_->GetSessionState().lobbySessionId);
+    event->set_code(realtime::LobbySessionEventMessage::CODE_LOCKED);
+    SendProtobufEnvelope(this, envelope);
   }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Signaling game server locked");
@@ -708,8 +877,11 @@ VOID GameServerLib::LockPlayerSessions() {
 
 VOID GameServerLib::UnlockPlayerSessions() {
   if (context_->IsSessionActive()) {
-    ERLobbyPlayerSessionsUnlocked message = {};
-    SendServerdbTcpMessage(this, TcpSym::LobbyPlayerSessionsUnlocked, &message, sizeof(message));
+    realtime::Envelope envelope;
+    auto* event = envelope.mutable_lobby_session_event();
+    event->set_lobby_session_id(context_->GetSessionState().lobbySessionId);
+    event->set_code(realtime::LobbySessionEventMessage::CODE_UNLOCKED);
+    SendProtobufEnvelope(this, envelope);
   }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Signaling game server unlocked");
@@ -717,7 +889,13 @@ VOID GameServerLib::UnlockPlayerSessions() {
 
 VOID GameServerLib::AcceptPlayerSessions(EchoVR::Array<GUID>* playerUuids) {
   if (context_->IsSessionActive()) {
-    SendServerdbTcpMessage(this, TcpSym::LobbyAcceptPlayers, playerUuids->items, playerUuids->count * sizeof(GUID));
+    realtime::Envelope envelope;
+    auto* connected = envelope.mutable_lobby_entrant_connected();
+    connected->set_lobby_session_id(context_->GetSessionState().lobbySessionId);
+    for (uint32_t i = 0; i < playerUuids->count; i++) {
+      connected->add_entrant_ids(GuidToUuidString(playerUuids->items[i]));
+    }
+    SendProtobufEnvelope(this, envelope);
   }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Accepted %d players", playerUuids->count);
@@ -725,7 +903,12 @@ VOID GameServerLib::AcceptPlayerSessions(EchoVR::Array<GUID>* playerUuids) {
 
 VOID GameServerLib::RemovePlayerSession(GUID* playerUuid) {
   if (context_->IsSessionActive()) {
-    SendServerdbTcpMessage(this, TcpSym::LobbyRemovePlayer, playerUuid, sizeof(GUID));
+    realtime::Envelope envelope;
+    auto* removed = envelope.mutable_lobby_entrant_removed();
+    removed->set_lobby_session_id(context_->GetSessionState().lobbySessionId);
+    removed->set_entrant_id(GuidToUuidString(*playerUuid));
+    removed->set_code(realtime::LobbyEntrantRemovedMessage::CODE_DISCONNECTED);
+    SendProtobufEnvelope(this, envelope);
   }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Removed player from game server");
