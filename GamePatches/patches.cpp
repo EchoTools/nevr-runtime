@@ -7,6 +7,7 @@
 
 #include "common/base64.h"
 #include "echovrunexported.h"
+#include "patch_addresses.h"
 #include "processmem.h"
 
 /// <summary>
