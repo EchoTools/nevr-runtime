@@ -196,10 +196,12 @@ VOID PatchEnableHeadless(PVOID pGame) {
 
   // Skip renderer initialization
   const BYTE rendererPatch[] = {0xA8, 0x00};  // TEST al, 0 (always false)
+  static_assert(sizeof(rendererPatch) == HEADLESS_RENDERER_SIZE, "HEADLESS_RENDERER patch size mismatch");
   ApplyPatch(HEADLESS_RENDERER, rendererPatch, sizeof(rendererPatch));
 
   // Skip effects resource loading
   const BYTE effectsPatch[] = {0xEB, 0x41};  // JMP +0x43
+  static_assert(sizeof(effectsPatch) == HEADLESS_EFFECTS_SIZE, "HEADLESS_EFFECTS patch size mismatch");
   ApplyPatch(HEADLESS_EFFECTS, effectsPatch, sizeof(effectsPatch));
 
   // Enable fixed timestep if configured
@@ -247,7 +249,11 @@ VOID PatchDisableLoadingTips() {
   using namespace PatchAddresses;
 
   // Patch R15PickLoadingTipNode to immediately return (RET = 0xC3)
+  // All three loading tip functions use the same single-byte RET patch
   const BYTE retPatch[] = {0xC3};
+  static_assert(sizeof(retPatch) == LOADING_TIP_PICK_SIZE, "LOADING_TIP_PICK patch size mismatch");
+  static_assert(sizeof(retPatch) == LOADING_TIP_SELECT_SIZE, "LOADING_TIP_SELECT patch size mismatch");
+  static_assert(sizeof(retPatch) == LOADING_TIP_SELECT_2_SIZE, "LOADING_TIP_SELECT_2 patch size mismatch");
   ApplyPatch(LOADING_TIP_PICK, retPatch, sizeof(retPatch));
   ApplyPatch(LOADING_TIP_SELECT, retPatch, sizeof(retPatch));
   ApplyPatch(LOADING_TIP_SELECT_2, retPatch, sizeof(retPatch));
@@ -269,26 +275,31 @@ VOID PatchEnableServer() {
       0x48, 0x83, 0x08, 0x06,                                      // OR QWORD ptr[rax], 0x6
       0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,  // NOPs to skip conditional checks
       0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+  static_assert(sizeof(serverFlagsCheck) == SERVER_FLAGS_CHECK_SIZE, "SERVER_FLAGS_CHECK patch size mismatch");
   ApplyPatch(SERVER_FLAGS_CHECK, serverFlagsCheck, sizeof(serverFlagsCheck));
 
   // Disable "r14netserver" logging which depends on missing files
   // String ref: "r14netserver" at 0x1416d2bb0
   const BYTE netserverLogging[] = {0x48, 0x89, 0xC3, 0x90};  // MOV RBX, RAX; NOP
+  static_assert(sizeof(netserverLogging) == NETSERVER_LOGGING_SIZE, "NETSERVER_LOGGING patch size mismatch");
   ApplyPatch(NETSERVER_LOGGING, netserverLogging, sizeof(netserverLogging));
 
   // Update logging subject to "r14(server)"
   const BYTE loggingSubject[] = {0xEB, 0x0E};  // JMP short +0x0E
+  static_assert(sizeof(loggingSubject) == LOGGING_SUBJECT_SIZE, "LOGGING_SUBJECT patch size mismatch");
   ApplyPatch(LOGGING_SUBJECT, loggingSubject, sizeof(loggingSubject));
 
   // Force "allow_incoming" in netconfig_*.json to always be true
   // String ref: "|allow_incoming" at 0x141cd0480
   // This is essential for accepting client connections
   const BYTE allowIncoming[] = {0xB8, 0x01, 0x00, 0x00, 0x00};  // MOV eax, 1
+  static_assert(sizeof(allowIncoming) == ALLOW_INCOMING_SIZE, "ALLOW_INCOMING patch size mismatch");
   ApplyPatch(ALLOW_INCOMING, allowIncoming, sizeof(allowIncoming));
 
   // Bypass "-spectatorstream" requirement (string ref at 0x1416d27b8)
   // This makes the server automatically enter "load lobby" state on startup
   const BYTE spectatorStreamCheck[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};  // 6x NOP
+  static_assert(sizeof(spectatorStreamCheck) == SPECTATORSTREAM_CHECK_SIZE, "SPECTATORSTREAM_CHECK patch size mismatch");
   ApplyPatch(SPECTATORSTREAM_CHECK, spectatorStreamCheck, sizeof(spectatorStreamCheck));
 }
 
@@ -302,27 +313,34 @@ VOID PatchEnableOffline() {
 
   // Patch multiplayer initialization for offline mode
   const BYTE multiplayerPatch[] = {0xE8, 0xCD, 0x02, 0x00, 0x00};  // CALL +0x2CD
+  static_assert(sizeof(multiplayerPatch) == OFFLINE_MULTIPLAYER_SIZE, "OFFLINE_MULTIPLAYER patch size mismatch");
   ApplyPatch(OFFLINE_MULTIPLAYER, multiplayerPatch, sizeof(multiplayerPatch));
 
   // Patch incident reporting
   const BYTE incidentsPatch[] = {0x75, 0x0A};  // JNZ +0x0A
+  static_assert(sizeof(incidentsPatch) == OFFLINE_INCIDENTS_SIZE, "OFFLINE_INCIDENTS patch size mismatch");
   ApplyPatch(OFFLINE_INCIDENTS, incidentsPatch, sizeof(incidentsPatch));
 
   // Patch title/session checks
   const BYTE titlePatch[] = {0x74, 0x12};  // JZ +0x12
+  static_assert(sizeof(titlePatch) == OFFLINE_TITLE_SIZE, "OFFLINE_TITLE patch size mismatch");
   ApplyPatch(OFFLINE_TITLE, titlePatch, sizeof(titlePatch));
 
   // Force transaction service to load (two conditional jumps to NOP)
+  // Both patches use the same 2-byte NOP pattern and share the same SIZE constant
   const BYTE nopConditionalJump[] = {0x90, 0x90};  // 2x NOP
+  static_assert(sizeof(nopConditionalJump) == OFFLINE_TRANSACTION_SIZE, "OFFLINE_TRANSACTION patch size mismatch");
   ApplyPatch(OFFLINE_TRANSACTION_1, nopConditionalJump, sizeof(nopConditionalJump));
   ApplyPatch(OFFLINE_TRANSACTION_2, nopConditionalJump, sizeof(nopConditionalJump));
 
   // Skip failed logon service code
   const BYTE skipLogon[] = {0xE9, 0x92, 0x00, 0x00, 0x00, 0x00};  // JMP +0x97
+  static_assert(sizeof(skipLogon) == OFFLINE_LOGON_SIZE, "OFFLINE_LOGON patch size mismatch");
   ApplyPatch(OFFLINE_LOGON, skipLogon, sizeof(skipLogon));
 
   // Redirect tutorial beginning
   const BYTE tutorialRedirect[] = {0xE8, 0xD6, 0x17, 0x68, 0xFF};  // CALL relative
+  static_assert(sizeof(tutorialRedirect) == OFFLINE_TUTORIAL_SIZE, "OFFLINE_TUTORIAL patch size mismatch");
   ApplyPatch(OFFLINE_TUTORIAL, tutorialRedirect, sizeof(tutorialRedirect));
 }
 
@@ -336,6 +354,7 @@ VOID PatchNoOvrRequiresSpectatorStream() {
 
   // Bypass the error check that requires "-spectatorstream" when using "-noovr"
   const BYTE noOvrPatch[] = {0xEB, 0x35};  // JMP +0x35 (skip error code)
+  static_assert(sizeof(noOvrPatch) == NOOVR_SPECTATOR_SIZE, "NOOVR_SPECTATOR patch size mismatch");
   ApplyPatch(NOOVR_SPECTATOR, noOvrPatch, sizeof(noOvrPatch));
 }
 
@@ -351,6 +370,7 @@ VOID PatchDeadlockMonitor() {
   // Disable the deadlock monitor's panic condition check
   // This allows debugging with breakpoints without triggering a timeout
   const BYTE deadlockPatch[] = {0x90, 0x90};  // 2x NOP (replace JLE instruction)
+  static_assert(sizeof(deadlockPatch) == DEADLOCK_MONITOR_SIZE, "DEADLOCK_MONITOR patch size mismatch");
   ApplyPatch(DEADLOCK_MONITOR, deadlockPatch, sizeof(deadlockPatch));
 }
 
@@ -410,7 +430,7 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
 
   EchoVR::AddArgSyntax(pArgSyntax, "-noconsole", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-noconsole",
-                           "[NEVR] Disable the creation of a new console window when using -headless");
+                           "[NEVR] Disable console window creation (must be used with -headless)");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-config-path", 1, 1, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-config-path", "[NEVR] Specify a custom path to the config.json file");
@@ -438,9 +458,6 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       isOffline = TRUE;
     } else if (lstrcmpW(arg, L"-noconsole") == 0) {
       noConsole = TRUE;
-      isHeadless = TRUE;  // No console implies headless mode
-      Log(EchoVR::LogLevel::Info,
-          "[NEVR.PATCH] -noconsole: Automatically enabling -headless (no console requires headless mode)");
     } else if (lstrcmpW(arg, L"-headless") == 0) {
       isHeadless = TRUE;
     } else if (lstrcmpW(arg, L"-windowed") == 0) {
@@ -475,6 +492,10 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // Validate argument combinations.
   if (isServer && isOffline) {
     FatalError("Arguments -server and -offline are mutually exclusive.", NULL);
+  }
+
+  if (noConsole && !isHeadless) {
+    FatalError("The -noconsole flag requires -headless to be specified.", NULL);
   }
 
   // Apply patches based on arguments.
@@ -526,6 +547,7 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
     EchoVR::Json* configDest = reinterpret_cast<EchoVR::Json*>(static_cast<CHAR*>(pGame) + GAME_LOCAL_CONFIG_OFFSET);
 
     // Call the game's internal JSON loader directly with our custom path
+    // The third parameter (1) indicates the validation level: 1 = standard validation
     UINT32 loadResult = EchoVR::LoadJsonFromFile(configDest, customConfigJsonPath, 1);
 
     if (loadResult != 0) {
@@ -556,6 +578,7 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
     // Fix delta time calculation for fixed timestep mode
     // Changes condition: if (deltaTime > timeStep) to use correct comparison
     const BYTE deltaTimeFix[] = {0x73, 0x7A};  // JAE +0x7A (unsigned comparison)
+    static_assert(sizeof(deltaTimeFix) == HEADLESS_DELTATIME_SIZE, "HEADLESS_DELTATIME patch size mismatch");
     ApplyPatch(HEADLESS_DELTATIME, deltaTimeFix, sizeof(deltaTimeFix));
   }
 
