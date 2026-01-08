@@ -12,6 +12,10 @@
 #include "rtapi/realtime_v1.pb.h"
 
 // Logging wrapper for game's log system
+// @param level - The log level (Info, Warning, Error, etc.)
+// @param format - Printf-style format string
+// @param ... - Variable arguments for format string
+// Note: The second parameter to EchoVR::WriteLog (0) is an unknown flag/context value
 static void Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_list args;
   va_start(args, format);
@@ -42,10 +46,17 @@ PacketEncoderSettings PacketEncoderSettings::FromFlags(uint64_t flags) {
 bool ParseUuidToGuid(const std::string& uuidStr, GUID& outGuid) {
   if (uuidStr.length() != 36) return false;
 
+  // UUID format positions: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  //                        8       13   18   23
+  constexpr size_t UUID_HYPHEN_POS_1 = 8;
+  constexpr size_t UUID_HYPHEN_POS_2 = 13;
+  constexpr size_t UUID_HYPHEN_POS_3 = 18;
+  constexpr size_t UUID_HYPHEN_POS_4 = 23;
+
   // Validate that the string contains only valid hexadecimal characters and hyphens in the correct positions
   for (size_t i = 0; i < 36; i++) {
     char c = uuidStr[i];
-    if (i == 8 || i == 13 || i == 18 || i == 23) {
+    if (i == UUID_HYPHEN_POS_1 || i == UUID_HYPHEN_POS_2 || i == UUID_HYPHEN_POS_3 || i == UUID_HYPHEN_POS_4) {
       // These positions must be hyphens
       if (c != '-') return false;
     } else {

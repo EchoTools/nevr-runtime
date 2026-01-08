@@ -249,6 +249,7 @@ VOID PatchDisableLoadingTips() {
   using namespace PatchAddresses;
 
   // Patch R15PickLoadingTipNode to immediately return (RET = 0xC3)
+  // All three loading tip functions use the same single-byte RET patch
   const BYTE retPatch[] = {0xC3};
   static_assert(sizeof(retPatch) == LOADING_TIP_PICK_SIZE, "LOADING_TIP_PICK patch size mismatch");
   static_assert(sizeof(retPatch) == LOADING_TIP_SELECT_SIZE, "LOADING_TIP_SELECT patch size mismatch");
