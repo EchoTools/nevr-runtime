@@ -50,3 +50,15 @@ cmake/local.cmake
 nevr-server.code-workspace
 
 vendor/
+
+# Log Files
+*.log
+
+# Python
+__pycache__/
+*.pyc
+
+# Temporary/generated files
+hashes*.txt
+lobby_session_*.json
+.gemini/settings.json
