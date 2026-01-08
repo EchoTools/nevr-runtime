@@ -239,6 +239,23 @@ VOID PatchEnableHeadless(PVOID pGame) {
 }
 
 /// <summary>
+/// Patches the loading tips system to immediately return, avoiding unnecessary log spam and processing.
+/// The loading tips system requires resources that may not be properly configured in server mode.
+/// </summary>
+/// <returns>None</returns>
+VOID PatchDisableLoadingTips() {
+  using namespace PatchAddresses;
+
+  // Patch R15PickLoadingTipNode to immediately return (RET = 0xC3)
+  const BYTE retPatch[] = {0xC3};
+  ApplyPatch(LOADING_TIP_PICK, retPatch, sizeof(retPatch));
+  ApplyPatch(LOADING_TIP_SELECT, retPatch, sizeof(retPatch));
+  ApplyPatch(LOADING_TIP_SELECT_2, retPatch, sizeof(retPatch));
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Disabled loading tips system for server mode");
+}
+
+/// <summary>
 /// Patches the game to run as a dedicated server, exposing its game server broadcast port, adjusting its log file path.
 /// </summary>
 /// <returns>None</returns>
@@ -478,7 +495,10 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   }
 
   // Apply patches to force the game to load as a server.
-  if (isServer) PatchEnableServer();
+  if (isServer) {
+    PatchEnableServer();
+    PatchDisableLoadingTips();
+  }
 
   // Update the window title
   if (hWindow != NULL && isNoOVR) EchoVR::SetWindowTextA_(hWindow, "Echo VR - [DEMO]");
@@ -490,57 +510,36 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 
 /// <summary>
 /// A detour hook for the game's function to load the local config.json for the game instance.
+/// If a custom config path was provided via -config-path, it loads that file directly using
+/// the game's internal JSON loading function, bypassing the default _local/config.json.
 /// </summary>
 /// <param name="pGame">A pointer to the game struct to load the config for.</param>
 UINT64 LoadLocalConfigHook(PVOID pGame) {
-  // If a custom config.json path was provided, attempt to load it instead
+  UINT64 result;
+
+  // If a custom config.json path was provided, load it directly using the game's JSON loader
   if (customConfigJsonPath[0] != '\0') {
     Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Loading custom config from: %s", customConfigJsonPath);
 
-    // Get the JSON load function from the game's exported functions
-    // Try to load the custom config file directly
-    FILE* configFile = nullptr;
-    errno_t err = fopen_s(&configFile, customConfigJsonPath, "rb");
+    // Get the config destination pointer (pGame + 0x63240)
+    using namespace PatchAddresses;
+    EchoVR::Json* configDest = reinterpret_cast<EchoVR::Json*>(static_cast<CHAR*>(pGame) + GAME_LOCAL_CONFIG_OFFSET);
 
-    if (err == 0 && configFile != nullptr) {
-      // Get file size
-      fseek(configFile, 0, SEEK_END);
-      long fileSize = ftell(configFile);
-      fseek(configFile, 0, SEEK_SET);
+    // Call the game's internal JSON loader directly with our custom path
+    UINT32 loadResult = EchoVR::LoadJsonFromFile(configDest, customConfigJsonPath, 1);
 
-      if (fileSize > 0 && fileSize < 1000000) {  // Sanity check: file must be less than 1MB
-        // Read file contents
-        CHAR* fileContents = (CHAR*)malloc(fileSize + 1);
-        if (fileContents != nullptr) {
-          size_t bytesRead = fread(fileContents, 1, fileSize, configFile);
-          fclose(configFile);
-
-          if (bytesRead == fileSize) {
-            fileContents[fileSize] = '\0';
-
-            // Parse the JSON and store it in the game structure
-            // The localConfig pointer should be set to the parsed JSON in pGame + 0x63240
-            // We'll call the game's JSON parsing functions to load it
-            Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Custom config loaded successfully (%ld bytes)", fileSize);
-
-            // For now, we'll just log success and let the normal loading proceed
-            // A more advanced implementation could parse and inject the custom config directly
-            free(fileContents);
-
-            // Continue with normal loading for now
-            return EchoVR::LoadLocalConfig(pGame);
-          }
-
-          free(fileContents);
-        }
-      }
-
-      if (configFile != nullptr) fclose(configFile);
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load custom config: invalid file");
+    if (loadResult != 0) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load custom config file: %s (error %u)",
+          customConfigJsonPath, loadResult);
+      // Fall back to loading the default config
+      result = EchoVR::LoadLocalConfig(pGame);
     } else {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to open custom config file: %s (error %d)",
-          customConfigJsonPath, err);
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Successfully loaded custom config from: %s", customConfigJsonPath);
+      result = 0;  // Success
     }
+  } else {
+    // No custom config specified, use the default loader
+    result = EchoVR::LoadLocalConfig(pGame);
   }
 
   // Configure fixed timestep if specified
@@ -563,7 +562,7 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
   // Store a reference to the local config from the game structure
   using namespace PatchAddresses;
   localConfig = reinterpret_cast<EchoVR::Json*>(static_cast<CHAR*>(pGame) + GAME_LOCAL_CONFIG_OFFSET);
-  return EchoVR::LoadLocalConfig(pGame);
+  return result;
 }
 
 /// <summary>

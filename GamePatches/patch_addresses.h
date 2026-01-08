@@ -113,6 +113,28 @@ constexpr uintptr_t DEADLOCK_MONITOR = 0x1D3881;
 constexpr size_t DEADLOCK_MONITOR_SIZE = 2;
 
 // ============================================================================
+// Loading Tips Patches (PatchDisableLoadingTips)
+// ============================================================================
+
+/// Address: R15PickLoadingTipNode (0x140bd9670)
+/// Entry point for picking a random loading tip during loading screens
+/// Patched to immediately return in server mode to avoid unnecessary processing
+constexpr uintptr_t LOADING_TIP_PICK = 0xBD9670;
+constexpr size_t LOADING_TIP_PICK_SIZE = 1;
+
+/// Address: R15SelectLoadingTipNode (0x140be6d10)
+/// Core logic for selecting a loading tip
+/// Patched to immediately return in server mode
+constexpr uintptr_t LOADING_TIP_SELECT = 0xBE6D10;
+constexpr size_t LOADING_TIP_SELECT_SIZE = 1;
+
+/// Address: R15SelectLoadingTipNode_2 (0x140be7c90)
+/// Secondary implementation of tip selection logic
+/// Patched to immediately return in server mode
+constexpr uintptr_t LOADING_TIP_SELECT_2 = 0xBE7C90;
+constexpr size_t LOADING_TIP_SELECT_2_SIZE = 1;
+
+// ============================================================================
 // Game Structure Offsets
 // ============================================================================
 
