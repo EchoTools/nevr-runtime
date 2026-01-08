@@ -65,11 +65,34 @@ bool SendProtobufEnvelope(GameServerLib* self, const realtime::Envelope& envelop
     return false;
   }
 
+  // Log the message type being sent
+  const char* msgType = "unknown";
+  switch (envelope.message_case()) {
+    case realtime::Envelope::kGameServerRegistration:
+      msgType = "GameServerRegistration";
+      break;
+    case realtime::Envelope::kLobbySessionEvent:
+      msgType = "LobbySessionEvent";
+      break;
+    case realtime::Envelope::kLobbyEntrantConnected:
+      msgType = "LobbyEntrantConnected";
+      break;
+    case realtime::Envelope::kLobbyEntrantRemoved:
+      msgType = "LobbyEntrantRemoved";
+      break;
+    case realtime::Envelope::kGameServerSaveLoadout:
+      msgType = "GameServerSaveLoadout";
+      break;
+    default:
+      break;
+  }
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Sending protobuf: %s (%zu bytes)", msgType, binaryData.size());
+
   // Send via TCP with protobuf binary symbol
   auto peer = self->GetContext().GetServerDbPeer();
   tcp->SendToPeer(peer, SYM_PROTOBUF_MSG, nullptr, 0, const_cast<char*>(binaryData.c_str()), binaryData.size());
 
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Sent protobuf binary (%zu bytes)", binaryData.size());
   return true;
 }
 
@@ -103,61 +126,6 @@ SlotInfo ExtractSlotIndex(const void* msg, uint64_t msgSize) {
 }
 
 // --- TCP Broadcaster Callbacks ---
-
-void OnTcpMsgRegistrationSuccess(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  self->GetContext().SetRegistered(true);
-
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationSuccess, "SNSLobbyRegistrationSuccess", msg,
-                                         msgSize);
-  }
-}
-
-void OnTcpMsgRegistrationFailure(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  self->GetContext().SetRegistered(false);
-
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationFailure, "SNSLobbyRegistrationFailure", msg,
-                                         msgSize);
-  }
-}
-
-void OnTcpMessageStartSession(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  self->GetContext().StartSession();
-
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Starting new session");
-
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4, "SNSLobbyStartSessionv4", msg, msgSize);
-  }
-}
-
-void OnTcpMsgPlayersAccepted(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersSuccessV2,
-                                         "SNSLobbyAcceptPlayersSuccessv2", msg, msgSize);
-  }
-}
-
-void OnTcpMsgPlayersRejected(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersFailureV2,
-                                         "SNSLobbyAcceptPlayersFailurev2", msg, msgSize);
-  }
-}
-
-void OnTcpMsgSessionSuccessv5(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbySessionSuccessV5, "SNSLobbySessionSuccessv5",
-                                         static_cast<CHAR*>(msg), msgSize);
-  }
-}
 
 // Handle incoming protobuf messages from Nakama
 void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
@@ -719,15 +687,7 @@ void GameServerLib::RegisterBroadcasterCallbacks() {
 void GameServerLib::RegisterTcpCallbacks() {
   auto& cb = context_->GetCallbackRegistry();
 
-  // Official EchoVR symbols for registration responses
-  cb.tcpRegSuccess = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyRegistrationSuccess,
-                                                    reinterpret_cast<VOID*>(OnTcpMsgRegistrationSuccess));
-  cb.tcpRegFailure = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyRegistrationFailure,
-                                                    reinterpret_cast<VOID*>(OnTcpMsgRegistrationFailure));
-  cb.tcpSessionSuccess = ListenForTcpBroadcasterMessage(this, TcpSym::LobbySessionSuccessV5,
-                                                        reinterpret_cast<VOID*>(OnTcpMsgSessionSuccessv5));
-
-  // Protobuf message handler for all other responses from Nakama
+  // Protobuf message handler - all messages from Nakama use protobuf format
   cb.tcpProtobuf = ListenForTcpBroadcasterMessage(this, SYM_PROTOBUF_MSG, reinterpret_cast<VOID*>(OnTcpMsgProtobuf));
 }
 
@@ -745,9 +705,6 @@ void GameServerLib::UnregisterAllCallbacks() {
 
   // Unregister TCP callbacks
   if (lobby->tcpBroadcaster) {
-    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpRegSuccess);
-    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpRegFailure);
-    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpSessionSuccess);
     EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpProtobuf);
   }
 
