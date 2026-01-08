@@ -5,9 +5,19 @@
 
 #include <WS2tcpip.h>
 
+#include <cstdarg>
 #include <cstring>
 
+#include "echovrunexported.h"
 #include "rtapi/realtime_v1.pb.h"
+
+// Logging wrapper for game's log system
+static void Log(EchoVR::LogLevel level, const CHAR* format, ...) {
+  va_list args;
+  va_start(args, format);
+  EchoVR::WriteLog(level, 0, format, args);
+  va_end(args);
+}
 
 // Helper: Extract key sizes from encoder flags
 // Format: bits 0-1: encryption/mac enabled
@@ -31,6 +41,20 @@ PacketEncoderSettings PacketEncoderSettings::FromFlags(uint64_t flags) {
 // Helper: Parse UUID string "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" to GUID
 bool ParseUuidToGuid(const std::string& uuidStr, GUID& outGuid) {
   if (uuidStr.length() != 36) return false;
+
+  // Validate that the string contains only valid hexadecimal characters and hyphens in the correct positions
+  for (size_t i = 0; i < 36; i++) {
+    char c = uuidStr[i];
+    if (i == 8 || i == 13 || i == 18 || i == 23) {
+      // These positions must be hyphens
+      if (c != '-') return false;
+    } else {
+      // All other positions must be hexadecimal digits
+      if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+        return false;
+      }
+    }
+  }
 
   unsigned int data1;
   unsigned int data2, data3;
@@ -254,6 +278,7 @@ EncodedMessage EncodeLobbyEntrantsAccept(const realtime::LobbyEntrantsAcceptMess
   for (const auto& entrantIdStr : msg.entrant_ids()) {
     GUID guid = {};
     if (!ParseUuidToGuid(entrantIdStr, guid)) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Skipping invalid entrant GUID: %s", entrantIdStr.c_str());
       continue;  // Skip invalid GUIDs
     }
     WriteGuid(result.data, guid);
@@ -271,6 +296,7 @@ EncodedMessage EncodeLobbyEntrantsReject(const realtime::LobbyEntrantsRejectMess
   for (const auto& entrantIdStr : msg.entrant_ids()) {
     GUID guid = {};
     if (!ParseUuidToGuid(entrantIdStr, guid)) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Skipping invalid entrant GUID: %s", entrantIdStr.c_str());
       continue;  // Skip invalid GUIDs
     }
     WriteGuid(result.data, guid);
