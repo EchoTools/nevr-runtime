@@ -75,79 +75,6 @@ EchoVR::Json* localConfig = NULL;
 UINT32 headlessTimeStep = 120;
 
 /// <summary>
-/// Cached filtered command line with deprecated arguments removed.
-/// </summary>
-static WCHAR filteredCommandLine[32768] = {0};
-static BOOL commandLineFiltered = FALSE;
-
-/// <summary>
-/// Original GetCommandLineW function pointer for calling the real implementation.
-/// </summary>
-typedef LPWSTR(WINAPI* GetCommandLineW_t)();
-static GetCommandLineW_t OriginalGetCommandLineW = NULL;
-
-/// <summary>
-/// Hook for GetCommandLineW that returns a filtered command line without deprecated arguments.
-/// </summary>
-LPWSTR WINAPI GetCommandLineWHook() {
-  if (!commandLineFiltered) {
-    // Get the real command line
-    LPWSTR realCommandLine = OriginalGetCommandLineW();
-
-    // Parse and filter the command line
-    int argc = 0;
-    LPWSTR* argv = CommandLineToArgvW(realCommandLine, &argc);
-
-    // Check if -server is present and if -noovr is already present
-    BOOL hasServer = FALSE;
-    BOOL hasNoOvr = FALSE;
-    for (int i = 0; i < argc; ++i) {
-      if (lstrcmpW(argv[i], L"-server") == 0) {
-        hasServer = TRUE;
-      }
-      if (lstrcmpW(argv[i], L"-noovr") == 0) {
-        hasNoOvr = TRUE;
-      }
-    }
-
-    // Rebuild command line, filtering out -fixed-timestep and adding -noovr if needed
-    size_t pos = 0;
-    for (int i = 0; i < argc && pos < sizeof(filteredCommandLine) - 1; ++i) {
-      const LPWSTR arg = argv[i];
-
-      // Skip -fixed-timestep argument
-      if (lstrcmpW(arg, L"-fixed-timestep") == 0) {
-        continue;
-      }
-
-      // Add space before non-first arguments
-      if (pos > 0 && pos < sizeof(filteredCommandLine) - 1) {
-        filteredCommandLine[pos++] = L' ';
-      }
-
-      // Copy the argument
-      size_t argLen = wcslen(arg);
-      if (pos + argLen < sizeof(filteredCommandLine) - 1) {
-        wcscpy_s(&filteredCommandLine[pos], sizeof(filteredCommandLine) - pos, arg);
-        pos += argLen;
-      }
-    }
-
-    // If -server is present but -noovr is not, add -noovr
-    if (hasServer && !hasNoOvr && pos < sizeof(filteredCommandLine) - 10) {
-      filteredCommandLine[pos++] = L' ';
-      wcscpy_s(&filteredCommandLine[pos], sizeof(filteredCommandLine) - pos, L"-noovr");
-      pos += wcslen(L"-noovr");
-    }
-
-    LocalFree(argv);
-    commandLineFiltered = TRUE;
-  }
-
-  return filteredCommandLine;
-}
-
-/// <summary>
 /// Reports a fatal error with a message box, then exits the game.
 /// </summary>
 /// <param name="msg">The window message to display.</param>
@@ -506,6 +433,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     } else if (lstrcmpW(arg, L"-timestep") == 0) {
       if (i + 1 < argc) {
         headlessTimeStep = std::wcstoul(argv[i + 1], nullptr, 10);
+        ++i;  // Skip the next argument (the value)
       } else {
         FatalError(
             "Missing argument for -timestep. Provide a positive number for fixed tick rate, or zero for unthrottled.",
@@ -520,6 +448,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
         if (len == 0) {
           FatalError("Failed to convert -config-path to multi-byte string.", NULL);
         }
+        ++i;  // Skip the next argument (the path value)
       } else {
         FatalError("Missing argument for -config-path. Provide a path to a config.json file.", NULL);
       }
@@ -739,13 +668,6 @@ VOID Initialize() {
                 L"NEVR version check failed. Patches may fail to be applied. Verify you're running the correct "
                 L"version of Echo VR.",
                 L"Echo Relay: Warning", MB_OK);
-
-  // Hook GetCommandLineW to filter out deprecated arguments before the engine parses them
-  OriginalGetCommandLineW = GetCommandLineW;
-  DetourTransactionBegin();
-  DetourUpdateThread(GetCurrentThread());
-  DetourAttach(&(PVOID&)OriginalGetCommandLineW, GetCommandLineWHook);
-  DetourTransactionCommit();
 
   // Patch our CLI argument options to add our additional options.
   PatchDetour(&(PVOID&)EchoVR::BuildCmdLineSyntaxDefinitions, BuildCmdLineSyntaxDefinitionsHook);
