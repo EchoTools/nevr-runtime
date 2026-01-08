@@ -17,7 +17,7 @@
 /// <param name="patchData">Pointer to the patch data.</param>
 /// <param name="patchSize">Size of the patch in bytes.</param>
 static inline VOID ApplyPatch(uintptr_t offset, const BYTE* patchData, size_t patchSize) {
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + offset, patchData, patchSize);
+  ProcessMemcpy(EchoVR::g_GameBaseAddress + offset, const_cast<BYTE*>(patchData), patchSize);
 }
 
 /// <summary>
@@ -73,6 +73,79 @@ EchoVR::Json* localConfig = NULL;
 /// throttling.
 /// </summary>
 UINT32 headlessTimeStep = 120;
+
+/// <summary>
+/// Cached filtered command line with deprecated arguments removed.
+/// </summary>
+static WCHAR filteredCommandLine[32768] = {0};
+static BOOL commandLineFiltered = FALSE;
+
+/// <summary>
+/// Original GetCommandLineW function pointer for calling the real implementation.
+/// </summary>
+typedef LPWSTR(WINAPI* GetCommandLineW_t)();
+static GetCommandLineW_t OriginalGetCommandLineW = NULL;
+
+/// <summary>
+/// Hook for GetCommandLineW that returns a filtered command line without deprecated arguments.
+/// </summary>
+LPWSTR WINAPI GetCommandLineWHook() {
+  if (!commandLineFiltered) {
+    // Get the real command line
+    LPWSTR realCommandLine = OriginalGetCommandLineW();
+
+    // Parse and filter the command line
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(realCommandLine, &argc);
+
+    // Check if -server is present and if -noovr is already present
+    BOOL hasServer = FALSE;
+    BOOL hasNoOvr = FALSE;
+    for (int i = 0; i < argc; ++i) {
+      if (lstrcmpW(argv[i], L"-server") == 0) {
+        hasServer = TRUE;
+      }
+      if (lstrcmpW(argv[i], L"-noovr") == 0) {
+        hasNoOvr = TRUE;
+      }
+    }
+
+    // Rebuild command line, filtering out -fixed-timestep and adding -noovr if needed
+    size_t pos = 0;
+    for (int i = 0; i < argc && pos < sizeof(filteredCommandLine) - 1; ++i) {
+      const LPWSTR arg = argv[i];
+
+      // Skip -fixed-timestep argument
+      if (lstrcmpW(arg, L"-fixed-timestep") == 0) {
+        continue;
+      }
+
+      // Add space before non-first arguments
+      if (pos > 0 && pos < sizeof(filteredCommandLine) - 1) {
+        filteredCommandLine[pos++] = L' ';
+      }
+
+      // Copy the argument
+      size_t argLen = wcslen(arg);
+      if (pos + argLen < sizeof(filteredCommandLine) - 1) {
+        wcscpy_s(&filteredCommandLine[pos], sizeof(filteredCommandLine) - pos, arg);
+        pos += argLen;
+      }
+    }
+
+    // If -server is present but -noovr is not, add -noovr
+    if (hasServer && !hasNoOvr && pos < sizeof(filteredCommandLine) - 10) {
+      filteredCommandLine[pos++] = L' ';
+      wcscpy_s(&filteredCommandLine[pos], sizeof(filteredCommandLine) - pos, L"-noovr");
+      pos += wcslen(L"-noovr");
+    }
+
+    LocalFree(argv);
+    commandLineFiltered = TRUE;
+  }
+
+  return filteredCommandLine;
+}
 
 /// <summary>
 /// Reports a fatal error with a message box, then exits the game.
@@ -388,12 +461,15 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
                            "[NEVR] Sets the fixed update interval when using -headless (in ticks/updates per "
                            "second). 0 = no fixed time step, 120 = default");
 
+  EchoVR::AddArgSyntax(pArgSyntax, "-fixed-timestep", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-fixed-timestep", "[NEVR] (Deprecated) Use -timestep instead");
+
   EchoVR::AddArgSyntax(pArgSyntax, "-noconsole", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-noconsole",
                            "[NEVR] Disable the creation of a new console window when using -headless");
 
-  EchoVR::AddArgSyntax(pArgSyntax, "-configjson", 1, 1, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-configjson", "[NEVR] Specify a custom path to the config.json file");
+  EchoVR::AddArgSyntax(pArgSyntax, "-config-path", 1, 1, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-config-path", "[NEVR] Specify a custom path to the config.json file");
 
   return result;
 }
@@ -436,15 +512,16 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
             NULL);
       }
     } else if (lstrcmpW(arg, L"-fixed-timestep") == 0) {
-      LOG_WARN("The -fixed-timestep argument is deprecated and ignored. Use -timestep instead.");
-    } else if (lstrcmpW(arg, L"-configjson") == 0) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] The -fixed-timestep argument is deprecated and ignored. Use -timestep <N> instead.");
+    } else if (lstrcmpW(arg, L"-config-path") == 0) {
       if (i + 1 < argc) {
         int len = WideCharToMultiByte(CP_ACP, 0, argv[i + 1], -1, customConfigJsonPath, MAX_PATH, NULL, NULL);
         if (len == 0) {
-          FatalError("Failed to convert -configjson path to multi-byte string.", NULL);
+          FatalError("Failed to convert -config-path to multi-byte string.", NULL);
         }
       } else {
-        FatalError("Missing argument for -configjson. Provide a path to a config.json file.", NULL);
+        FatalError("Missing argument for -config-path. Provide a path to a config.json file.", NULL);
       }
     }
   }
@@ -662,6 +739,13 @@ VOID Initialize() {
                 L"NEVR version check failed. Patches may fail to be applied. Verify you're running the correct "
                 L"version of Echo VR.",
                 L"Echo Relay: Warning", MB_OK);
+
+  // Hook GetCommandLineW to filter out deprecated arguments before the engine parses them
+  OriginalGetCommandLineW = GetCommandLineW;
+  DetourTransactionBegin();
+  DetourUpdateThread(GetCurrentThread());
+  DetourAttach(&(PVOID&)OriginalGetCommandLineW, GetCommandLineWHook);
+  DetourTransactionCommit();
 
   // Patch our CLI argument options to add our additional options.
   PatchDetour(&(PVOID&)EchoVR::BuildCmdLineSyntaxDefinitions, BuildCmdLineSyntaxDefinitionsHook);
