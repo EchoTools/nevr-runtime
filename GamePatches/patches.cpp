@@ -11,6 +11,16 @@
 #include "processmem.h"
 
 /// <summary>
+/// Helper function to apply a memory patch at a specific offset from the game base address.
+/// </summary>
+/// <param name="offset">The offset from the game base address.</param>
+/// <param name="patchData">Pointer to the patch data.</param>
+/// <param name="patchSize">Size of the patch in bytes.</param>
+static inline VOID ApplyPatch(uintptr_t offset, const BYTE* patchData, size_t patchSize) {
+  ProcessMemcpy(EchoVR::g_GameBaseAddress + offset, patchData, patchSize);
+}
+
+/// <summary>
 /// Indicates whether the patches have been applied (to avoid re-application).
 /// </summary>
 BOOL initialized = FALSE;
@@ -175,18 +185,18 @@ VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
 /// <param name="pGame">The pointer to the instance of the game structure.</param>
 /// <returns>None</returns>
 VOID PatchEnableHeadless(PVOID pGame) {
-  // Disable audio by clearing the same bits as the `-noaudio` command would.
-  UINT32* flags = (UINT32*)((CHAR*)pGame + 468);
-  *flags &= 0xFFFFFFFD;  // clear second bit
+  using namespace PatchAddresses;
+
+  // Disable audio by clearing the audio enable bit (same as `-noaudio` command)
+  UINT32* audioFlags = reinterpret_cast<UINT32*>(static_cast<CHAR*>(pGame) + GAME_AUDIO_FLAGS_OFFSET);
+  *audioFlags &= 0xFFFFFFFD;  // Clear bit 1 (audio enable)
 
   // Install our hook to capture logs to the console.
   PatchDetour(&(PVOID&)EchoVR::WriteLog, WriteLogHook);
 
-  // Patch the engine initialization/configuration to skip initialization of the rendering providers.
-  BYTE pbPatch[] = {
-      0xA8, 0x00  // TEST al, 0 (replaces a test against 1, to skip the renderer initialization).
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xFF581, pbPatch, sizeof(pbPatch));
+  // Skip renderer initialization
+  const BYTE rendererPatch[] = {0xA8, 0x00};  // TEST al, 0 (always false)
+  ApplyPatch(HEADLESS_RENDERER, rendererPatch, sizeof(rendererPatch));
 
   // Skip effects resource loading
   const BYTE effectsPatch[] = {0xEB, 0x41};  // JMP +0x43
@@ -208,16 +218,16 @@ VOID PatchEnableHeadless(PVOID pGame) {
   // due to /SUBSYSTEM:WINDOWS. Attaching multiple processes would be problematic.
   AllocConsole();
 
-  // Redirect our standard streams to the new console.
-  FILE* fConsole;
+  // Redirect standard streams to the new console
+  FILE* fConsole = nullptr;
   freopen_s(&fConsole, "CONIN$", "r", stdin);
   freopen_s(&fConsole, "CONOUT$", "w", stderr);
   freopen_s(&fConsole, "CONOUT$", "w", stdout);
 
-  // Enable ANSI color coding on the console.
+  // Enable ANSI color codes in the console
   HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
   HANDLE hStdErr = GetStdHandle(STD_ERROR_HANDLE);
-  DWORD consoleMode;
+  DWORD consoleMode = 0;
 
   GetConsoleMode(hStdOut, &consoleMode);
   consoleMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING | DISABLE_NEWLINE_AUTO_RETURN;
@@ -233,43 +243,36 @@ VOID PatchEnableHeadless(PVOID pGame) {
 /// </summary>
 /// <returns>None</returns>
 VOID PatchEnableServer() {
-  // Patch the flags for our game to indicate we are a game server. This replaces checks to see if we
-  // are a server, with code to set the flag permanently, and skips over the rest of the checking code.
-  BYTE pbPatch[] = {0x48, 0x83, 0x08, 0x06,  // OR QWORD ptr[rax], 0x6 (bit 2 = load sessions received from broadcast,
-                                             // bit 3 = patch flag to set as dedicated server)
+  using namespace PatchAddresses;
 
-                    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-                    0x90,  // NOP instructions to replace server flag checks (with above
-                           // setting operation) until it sets the 'enabled' flag.
-                    0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
-                    0x90, 0x90, 0x90, 0x90};
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x1580C3, pbPatch, sizeof(pbPatch));
+  // Patch server flag checks in command line processing (FUN_140116720 in cr15game.cpp)
+  // This sets bit 2 (load sessions from broadcast) and bit 3 (dedicated server flag)
+  // permanently, bypassing the normal conditional checks
+  const BYTE serverFlagsCheck[] = {
+      0x48, 0x83, 0x08, 0x06,                                      // OR QWORD ptr[rax], 0x6
+      0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,  // NOPs to skip conditional checks
+      0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+  ApplyPatch(SERVER_FLAGS_CHECK, serverFlagsCheck, sizeof(serverFlagsCheck));
 
-  // Patch to avoid enabling "r14netserver" logging, as this depends on files we do not have and will panic.
-  BYTE pbPatch2[] = {
-      0x48, 0x89, 0xC3, 0x90  // NOPs to avoid a comparison->move to overwrite "r14netserver"
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xFFA58, pbPatch2, sizeof(pbPatch2));
+  // Disable "r14netserver" logging which depends on missing files
+  // String ref: "r14netserver" at 0x1416d2bb0
+  const BYTE netserverLogging[] = {0x48, 0x89, 0xC3, 0x90};  // MOV RBX, RAX; NOP
+  ApplyPatch(NETSERVER_LOGGING, netserverLogging, sizeof(netserverLogging));
 
-  // Patch the update the logging subject to "r14(server)"
-  BYTE pbPatch3[] = {0xEB, 0x0E};
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xFFB0E, pbPatch3, sizeof(pbPatch3));
+  // Update logging subject to "r14(server)"
+  const BYTE loggingSubject[] = {0xEB, 0x0E};  // JMP short +0x0E
+  ApplyPatch(LOGGING_SUBJECT, loggingSubject, sizeof(loggingSubject));
 
-  // Patch the ./sourcedb/rad15/json/r14/config/netconfig_*.json file parsing routine so the "allow_incoming" key is
-  // always interpreted as `true`. This is necessary for a game server to accept players. Otherwise they will be denied,
-  // disallowing client connections.
-  BYTE pbPatch4[] = {
-      0xB8, 0x01, 0x00, 0x00, 0x00  // MOV eax, 1 (set the flag to `true`).
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xF7F904, pbPatch4, sizeof(pbPatch4));
+  // Force "allow_incoming" in netconfig_*.json to always be true
+  // String ref: "|allow_incoming" at 0x141cd0480
+  // This is essential for accepting client connections
+  const BYTE allowIncoming[] = {0xB8, 0x01, 0x00, 0x00, 0x00};  // MOV eax, 1
+  ApplyPatch(ALLOW_INCOMING, allowIncoming, sizeof(allowIncoming));
 
-  // Patch the CLI pre-processing method to assume the process was provided "-spectatorstream".
-  // This causes the game to enter a "load lobby" state, which as a game server, starts the game server on startup.
-  // Otherwise, you would need to manually click the "play" button before the server began serving.
-  BYTE pbPatch5[] = {
-      0x90, 0x90, 0x90, 0x90, 0x90, 0x90  // NOP the jump that is taken if "-spectatorstream" is not provided.
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x116F3D, pbPatch5, sizeof(pbPatch5));
+  // Bypass "-spectatorstream" requirement (string ref at 0x1416d27b8)
+  // This makes the server automatically enter "load lobby" state on startup
+  const BYTE spectatorStreamCheck[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};  // 6x NOP
+  ApplyPatch(SPECTATORSTREAM_CHECK, spectatorStreamCheck, sizeof(spectatorStreamCheck));
 }
 
 /// <summary>
@@ -278,41 +281,32 @@ VOID PatchEnableServer() {
 /// </summary>
 /// <returns>None</returns>
 VOID PatchEnableOffline() {
-  // Patch "starting multiplayer"
-  BYTE pbPatch[] = {0xE8, 0xCD, 0x02, 0x00, 0x00};
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xFDE0E, pbPatch, sizeof(pbPatch));
+  using namespace PatchAddresses;
 
-  // Patch "incidents"
-  BYTE pbPatch3[] = {
-      0x75,
-      0x0A,  // TODO: Can probably be made JMP (0xEB) / NOP
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x17F0B1, pbPatch3, sizeof(pbPatch3));
+  // Patch multiplayer initialization for offline mode
+  const BYTE multiplayerPatch[] = {0xE8, 0xCD, 0x02, 0x00, 0x00};  // CALL +0x2CD
+  ApplyPatch(OFFLINE_MULTIPLAYER, multiplayerPatch, sizeof(multiplayerPatch));
 
-  // TODO: Title
-  BYTE pbPatch4[] = {
-      0x74,
-      0x12,  // TODO: Can probably be made JMP (0xEB) / NOP
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x17F77B, pbPatch4, sizeof(pbPatch4));
+  // Patch incident reporting
+  const BYTE incidentsPatch[] = {0x75, 0x0A};  // JNZ +0x0A
+  ApplyPatch(OFFLINE_INCIDENTS, incidentsPatch, sizeof(incidentsPatch));
 
-  // Force transaction service to load
-  BYTE pbNopConditionalJump[] = {
-      0x90,
-      0x90,  // NOP condition jump
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x17F817, pbNopConditionalJump, sizeof(pbNopConditionalJump));
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x17F823, pbNopConditionalJump, sizeof(pbNopConditionalJump));
+  // Patch title/session checks
+  const BYTE titlePatch[] = {0x74, 0x12};  // JZ +0x12
+  ApplyPatch(OFFLINE_TITLE, titlePatch, sizeof(titlePatch));
+
+  // Force transaction service to load (two conditional jumps to NOP)
+  const BYTE nopConditionalJump[] = {0x90, 0x90};  // 2x NOP
+  ApplyPatch(OFFLINE_TRANSACTION_1, nopConditionalJump, sizeof(nopConditionalJump));
+  ApplyPatch(OFFLINE_TRANSACTION_2, nopConditionalJump, sizeof(nopConditionalJump));
 
   // Skip failed logon service code
-  BYTE pbPatch5[] = {
-      0xE9, 0x92, 0x00, 0x00, 0x00, 0x00  // JMP 0x97
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x1AC83E, pbPatch5, sizeof(pbPatch5));
+  const BYTE skipLogon[] = {0xE9, 0x92, 0x00, 0x00, 0x00, 0x00};  // JMP +0x97
+  ApplyPatch(OFFLINE_LOGON, skipLogon, sizeof(skipLogon));
 
-  // Redirect "beginning tutorial"
-  BYTE pbPatch6[] = {0xE8, 0xD6, 0x17, 0x68, 0xFF};
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xA7C685, pbPatch6, sizeof(pbPatch6));
+  // Redirect tutorial beginning
+  const BYTE tutorialRedirect[] = {0xE8, 0xD6, 0x17, 0x68, 0xFF};  // CALL relative
+  ApplyPatch(OFFLINE_TUTORIAL, tutorialRedirect, sizeof(tutorialRedirect));
 }
 
 /// <summary>
@@ -321,11 +315,11 @@ VOID PatchEnableOffline() {
 /// </summary>
 /// <returns>None</returns>
 VOID PatchNoOvrRequiresSpectatorStream() {
-  // Patch "-noovr requires -spectatorstream" to allow us to use -noovr independently.
-  BYTE pbPatch[] = {
-      0xEB, 0x35  // JMP (past the respective code).
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x11690D, pbPatch, sizeof(pbPatch));
+  using namespace PatchAddresses;
+
+  // Bypass the error check that requires "-spectatorstream" when using "-noovr"
+  const BYTE noOvrPatch[] = {0xEB, 0x35};  // JMP +0x35 (skip error code)
+  ApplyPatch(NOOVR_SPECTATOR, noOvrPatch, sizeof(noOvrPatch));
 }
 
 /// <summary>
@@ -335,13 +329,12 @@ VOID PatchNoOvrRequiresSpectatorStream() {
 /// </summary>
 /// <returns>None</returns>
 VOID PatchDeadlockMonitor() {
-  // Patch out the deadlock monitor thread's validation routine. This is necessary during debugging, as this thread acts
-  // as a watchdog for updates and will panic if an update has not occurred for some time (e.g. waiting too long between
-  // breakpoints when debugging).
-  BYTE pbPatch[] = {
-      0x90, 0x90  // NOPs (to replace the JLE instruction which checks failing deadlock conditions).
-  };
-  ProcessMemcpy(EchoVR::g_GameBaseAddress + 0x1D3881, pbPatch, sizeof(pbPatch));
+  using namespace PatchAddresses;
+
+  // Disable the deadlock monitor's panic condition check
+  // This allows debugging with breakpoints without triggering a timeout
+  const BYTE deadlockPatch[] = {0x90, 0x90};  // 2x NOP (replace JLE instruction)
+  ApplyPatch(DEADLOCK_MONITOR, deadlockPatch, sizeof(deadlockPatch));
 }
 
 /// <summary>
@@ -361,7 +354,7 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     // failed to connect, etc). But at least it doesn't cause the server to get stuck in a "not ready" state in some
     // menu.
     Log(EchoVR::LogLevel::Debug,
-        "[ECHORELAY.PATCH] Dedicated server failed to load level. Resetting session to keep game server available.");
+        "[NEVR.PATCH] Dedicated server failed to load level. Resetting session to keep game server available.");
     EchoVR::NetGameScheduleReturnToLobby(pGame);
     return;
   }
@@ -420,11 +413,14 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     if (lstrcmpW(arg, L"-server") == 0) {
       isServer = TRUE;
       isNoOVR = TRUE;  // Server mode automatically disables VR
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] -server: Automatically enabling -noovr (VR disabled in server mode)");
     } else if (lstrcmpW(arg, L"-offline") == 0) {
       isOffline = TRUE;
     } else if (lstrcmpW(arg, L"-noconsole") == 0) {
       noConsole = TRUE;
       isHeadless = TRUE;  // No console implies headless mode
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.PATCH] -noconsole: Automatically enabling -headless (no console requires headless mode)");
     } else if (lstrcmpW(arg, L"-headless") == 0) {
       isHeadless = TRUE;
     } else if (lstrcmpW(arg, L"-windowed") == 0) {
@@ -469,10 +465,10 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 
   // If the windowed, server, or headless flags were provided, apply the windowed mode patch to not use a VR headset.
   if (isWindowed || isServer || isHeadless) {
-    // Set the game to run in windowed mode.
-    UINT64* flags = (UINT64*)((CHAR*)pGame + 31456);
-    *flags |= 0x0100000;  // Spectator stream uses 0x2100000 (an additional flag). This changes level setting in some
-                          // way(?). Seemingly unnecessary here.
+    using namespace PatchAddresses;
+    // Set windowed mode flag in game structure
+    UINT64* windowedFlags = reinterpret_cast<UINT64*>(static_cast<CHAR*>(pGame) + GAME_WINDOWED_FLAGS_OFFSET);
+    *windowedFlags |= 0x0100000;  // Enable windowed mode (spectator uses 0x2100000 for additional settings)
   }
 
   // Apply patches to force the game to load as a server.
@@ -493,7 +489,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 UINT64 LoadLocalConfigHook(PVOID pGame) {
   // If a custom config.json path was provided, attempt to load it instead
   if (customConfigJsonPath[0] != '\0') {
-    Log(EchoVR::LogLevel::Info, "[ECHORELAY.PATCH] Loading custom config from: %s", customConfigJsonPath);
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Loading custom config from: %s", customConfigJsonPath);
 
     // Get the JSON load function from the game's exported functions
     // Try to load the custom config file directly
@@ -519,7 +515,7 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
             // Parse the JSON and store it in the game structure
             // The localConfig pointer should be set to the parsed JSON in pGame + 0x63240
             // We'll call the game's JSON parsing functions to load it
-            Log(EchoVR::LogLevel::Debug, "[ECHORELAY.PATCH] Custom config loaded successfully (%ld bytes)", fileSize);
+            Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Custom config loaded successfully (%ld bytes)", fileSize);
 
             // For now, we'll just log success and let the normal loading proceed
             // A more advanced implementation could parse and inject the custom config directly
@@ -534,29 +530,33 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
       }
 
       if (configFile != nullptr) fclose(configFile);
-      Log(EchoVR::LogLevel::Warning, "[ECHORELAY.PATCH] Failed to load custom config: invalid file");
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load custom config: invalid file");
     } else {
-      Log(EchoVR::LogLevel::Warning, "[ECHORELAY.PATCH] Failed to open custom config file: %s (error %d)",
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to open custom config file: %s (error %d)",
           customConfigJsonPath, err);
     }
   }
 
-  // If a timestep override was provided, configure it.
-  // This is placed here, as by this time, the structure to dereference will be initialized.
+  // Configure fixed timestep if specified
+  // Note: This is placed here because the required structures must be initialized first
   if (isHeadless && headlessTimeStep != 0) {
-    // Patch the fixed time step based on tick count.
-    // Fixed time step is in microseconds, tick rate is per second.
-    UINT32* timeStep = (UINT32*)(*(CHAR**)(EchoVR::g_GameBaseAddress + 0x020A00E8) + 0x90);
-    *timeStep = 1000000 / headlessTimeStep;
+    using namespace PatchAddresses;
 
-    // Patches the game to fix the delta time calculation for when using fixedtimestep.
-    // Change condition for if deltatime is higher than timestep tell engine time is deltatime.
-    BYTE Patch1[] = {0x73, 0x7A};
-    ProcessMemcpy(EchoVR::g_GameBaseAddress + 0xCF46D, Patch1, sizeof(Patch1));
+    // Set the fixed time step value (in microseconds)
+    // The timestep is stored in a nested structure accessed via pointer
+    UINT32* timeStepPtr = reinterpret_cast<UINT32*>(
+        *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + FIXED_TIMESTEP_PTR) + FIXED_TIMESTEP_OFFSET);
+    *timeStepPtr = 1000000 / headlessTimeStep;  // Convert Hz to microseconds
+
+    // Fix delta time calculation for fixed timestep mode
+    // Changes condition: if (deltaTime > timeStep) to use correct comparison
+    const BYTE deltaTimeFix[] = {0x73, 0x7A};  // JAE +0x7A (unsigned comparison)
+    ApplyPatch(HEADLESS_DELTATIME, deltaTimeFix, sizeof(deltaTimeFix));
   }
 
-  // Store a reference to the local config.
-  localConfig = (EchoVR::Json*)((CHAR*)pGame + 0x63240);
+  // Store a reference to the local config from the game structure
+  using namespace PatchAddresses;
+  localConfig = reinterpret_cast<EchoVR::Json*>(static_cast<CHAR*>(pGame) + GAME_LOCAL_CONFIG_OFFSET);
   return EchoVR::LoadLocalConfig(pGame);
 }
 
@@ -659,7 +659,7 @@ VOID Initialize() {
   // Verify the game version before patching
   if (!VerifyGameVersion())
     MessageBoxW(NULL,
-                L"EchoRelay version check failed. Patches may fail to be applied. Verify you're running the correct "
+                L"NEVR version check failed. Patches may fail to be applied. Verify you're running the correct "
                 L"version of Echo VR.",
                 L"Echo Relay: Warning", MB_OK);
 
