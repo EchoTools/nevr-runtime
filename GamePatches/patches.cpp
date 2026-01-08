@@ -327,6 +327,7 @@ VOID PatchEnableOffline() {
   ApplyPatch(OFFLINE_TITLE, titlePatch, sizeof(titlePatch));
 
   // Force transaction service to load (two conditional jumps to NOP)
+  // Both patches use the same 2-byte NOP pattern and share the same SIZE constant
   const BYTE nopConditionalJump[] = {0x90, 0x90};  // 2x NOP
   static_assert(sizeof(nopConditionalJump) == OFFLINE_TRANSACTION_SIZE, "OFFLINE_TRANSACTION patch size mismatch");
   ApplyPatch(OFFLINE_TRANSACTION_1, nopConditionalJump, sizeof(nopConditionalJump));

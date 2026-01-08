@@ -16,6 +16,7 @@
 // @param format - Printf-style format string
 // @param ... - Variable arguments for format string
 // Note: The second parameter to EchoVR::WriteLog (0) is an unknown flag/context value
+// Note: EchoVR::WriteLog accepts va_list as its fourth parameter (verified in echovrInternal.h)
 static void Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_list args;
   va_start(args, format);
