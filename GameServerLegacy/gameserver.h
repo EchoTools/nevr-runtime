@@ -1,16 +1,12 @@
 #pragma once
 
-#include "echovr.h"
-#include "pch.h"
+#include "common/echovr.h"
+#include "common/pch.h"
 
-/// <summary>
-/// A symbol representing the game server's special websocket service.
-/// </summary>
+// ServerDB websocket service symbol
 const EchoVR::SymbolId SYMBOL_GAMESERVER_DB = 0x25E886012CED8064;
 
-/// <summary>
-/// A game server library implementation which connects to EchoRelay's ServerDB implementation.
-/// </summary>
+// Legacy IServerLib implementation for EchoRelay ServerDB
 class GameServerLib : public EchoVR::IServerLib {
  public:
   INT64 UnkFunc0(VOID* unk1, INT64 a2, INT64 a3);

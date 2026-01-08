@@ -2,25 +2,21 @@
 
 #include <cstdio>
 
-#include "echovr.h"
-#include "echovrunexported.h"
+#include "common/echovr.h"
+#include "common/echovrInternal.h"
+#include "common/pch.h"
 #include "messages.h"
-#include "pch.h"
 
-// Define the version number
-// Get the version number from CMake-generated definition
+// Version info from CMake
 #ifndef PROJECT_VERSION
-#define PROJECT_VERSION "1.0.0"  // Fallback default version
+#define PROJECT_VERSION "1.0.0"
 #endif
 
 #ifndef GIT_COMMIT_HASH
-#define GIT_COMMIT_HASH "unknown"  // Fallback default build ID
+#define GIT_COMMIT_HASH "unknown"
 #endif
 
-/// <summary>
-/// A wrapper for WriteLog, simplifying logging operations.
-/// </summary>
-/// <returns>None</returns>
+// Logging wrapper
 VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_list args;
   va_start(args, format);
