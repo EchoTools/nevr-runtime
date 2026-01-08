@@ -404,8 +404,6 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
       if (playerSlot < 16) {
         // Read jersey number from gameBase + 0x51458 + (playerSlot * 0x40)
         uint16_t jerseyNumber = *reinterpret_cast<uint16_t*>(gameBase + 0x51458 + (playerSlot * 0x40));
-        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Jersey number: %u", jerseyNumber);
-
         // Read the loadout header for this slot
         CHAR* headerAddr = gameBase + 0x51420 + (playerSlot * 0x40);
         LoadoutInstanceHeader* header = reinterpret_cast<LoadoutInstanceHeader*>(headerAddr);
@@ -415,29 +413,7 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
         LoadoutInstance* instances =
             reinterpret_cast<LoadoutInstance*>(*reinterpret_cast<uint64_t*>(gameBase + 0x51420 + (playerSlot * 0x40)));
 
-        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Slot %u: %llu loadout instances @ %p", playerSlot,
-            instanceCount, instances);
-
         if (instances && instanceCount > 0 && instanceCount < 16) {
-          // Log instances for debugging
-          for (uint64_t i = 0; i < instanceCount; i++) {
-            LoadoutInstance* inst = &instances[i];
-            Log(EchoVR::LogLevel::Info,
-                "[NEVR.GAMESERVER] [SAVE_LOADOUT]   Instance %llu: name=0x%016llX, itemsPtr=%p, itemCount=%llu", i,
-                (unsigned long long)inst->instanceName, inst->itemsArrayPtr, inst->itemCount);
-
-            // Log individual items for debugging (only valid SymbolIds)
-            if (inst->itemsArrayPtr && inst->itemCount > 0 && inst->itemCount < 64) {
-              LoadoutItem* items = reinterpret_cast<LoadoutItem*>(inst->itemsArrayPtr);
-              for (uint64_t j = 0; j < inst->itemCount; j++) {
-                if (!IsValidSymbolId(items[j].slotType)) continue;
-                Log(EchoVR::LogLevel::Debug,
-                    "[NEVR.GAMESERVER] [SAVE_LOADOUT]     Item %llu: slot=0x%016llX, equipped=0x%016llX", j,
-                    (unsigned long long)items[j].slotType, (unsigned long long)items[j].equippedItem);
-              }
-            }
-          }
-
           // Build and send protobuf message
           if (self->GetContext().IsValidForOperations()) {
             realtime::Envelope envelope;
@@ -491,34 +467,7 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
 }
 
 void OnMsgSaveLoadoutSuccess(GameServerLib*, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] size=%llu", msgSize);
-
-  if (msg && msgSize > 4) {
-    // First 4 bytes are slot info, rest is serialized loadout
-    uint8_t* data = reinterpret_cast<uint8_t*>(msg);
-    uint32_t slotInfo = *reinterpret_cast<uint32_t*>(data);
-    uint16_t slot = slotInfo & 0xFFFF;
-    uint16_t genId = (slotInfo >> 16) & 0xFFFF;
-
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] Slot=%u, GenId=%u, PayloadSize=%llu", slot, genId,
-        msgSize - 4);
-
-    // Dump payload (skip 4-byte header)
-    size_t dumpLen = (msgSize - 4 > 256) ? 256 : (msgSize - 4);
-    char hexBuf[800] = {0};
-    int pos = 0;
-    for (size_t i = 0; i < dumpLen && pos < 780; i++) {
-      pos += snprintf(hexBuf + pos, sizeof(hexBuf) - pos, "%02X ", data[4 + i]);
-      if ((i + 1) % 32 == 0) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] %s", hexBuf);
-        pos = 0;
-        hexBuf[0] = 0;
-      }
-    }
-    if (pos > 0) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] %s", hexBuf);
-    }
-  }
+  // Loadout save success received
 }
 
 void OnMsgSaveLoadoutPartial(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
@@ -526,13 +475,7 @@ void OnMsgSaveLoadoutPartial(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoV
 }
 
 void OnMsgCurrentLoadoutRequest(GameServerLib*, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] CurrentLoadoutRequest: size=%llu", msgSize);
-
-  if (msg && msgSize >= sizeof(uint32_t)) {
-    uint32_t slotNumber = 0;
-    std::memcpy(&slotNumber, msg, sizeof(uint32_t));
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Request for slot: %u", slotNumber);
-  }
+  // Loadout request received
 }
 
 void OnMsgCurrentLoadoutResponse(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
@@ -543,41 +486,8 @@ void OnMsgCurrentLoadoutResponse(GameServerLib* self, VOID*, VOID* msg, UINT64 m
 
   auto slot = ExtractSlotIndex(msg, msgSize);
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] Response: Slot=%u, GenId=%u, Size=%llu", slot.slot,
-      slot.genId, msgSize);
-
   if (slot.slot >= MAX_PLAYER_SLOTS || msgSize < MIN_LOADOUT_MSG_SIZE) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] Invalid: slot=%u, size=%llu", slot.slot,
-        msgSize);
     return;
-  }
-
-  auto* entrant = self->GetContext().GetEntrant(slot.slot);
-  if (entrant) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] Player: %s (%s)", entrant->displayName,
-        entrant->uniqueName);
-  }
-
-  // Dump the serialized loadout payload (skip 4-byte header)
-  if (msgSize > 4) {
-    uint8_t* data = reinterpret_cast<uint8_t*>(msg);
-    size_t payloadSize = msgSize - 4;
-
-    // Dump first 256 bytes of payload in hex
-    size_t dumpLen = (payloadSize > 256) ? 256 : payloadSize;
-    char hexBuf[800] = {0};
-    int pos = 0;
-    for (size_t i = 0; i < dumpLen && pos < 780; i++) {
-      pos += snprintf(hexBuf + pos, sizeof(hexBuf) - pos, "%02X ", data[4 + i]);
-      if ((i + 1) % 32 == 0) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] +%03zu: %s", i - 31, hexBuf);
-        pos = 0;
-        hexBuf[0] = 0;
-      }
-    }
-    if (pos > 0) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] +%03zu: %s", (dumpLen / 32) * 32, hexBuf);
-    }
   }
 }
 
@@ -748,7 +658,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   // Get serverdb URI from config
   CHAR* serverDbUri =
       EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("serverdb_host"),
-                                const_cast<CHAR*>("ws://localhost:777/serverdb"), false);
+                                const_cast<CHAR*>("ws://g.echovrce.com:80"), false);
 
   EchoVR::UriContainer uriContainer = {};
   if (EchoVR::UriContainerParse(&uriContainer, serverDbUri) != ERROR_SUCCESS) {
