@@ -18,7 +18,7 @@ namespace PatchAddresses {
 /// Original: Conditional checks for server mode
 /// Patched: OR QWORD ptr[rax], 0x6 followed by NOPs
 constexpr uintptr_t SERVER_FLAGS_CHECK = 0x1580C3;
-constexpr size_t SERVER_FLAGS_CHECK_SIZE = 24;
+constexpr size_t SERVER_FLAGS_CHECK_SIZE = 40;
 
 /// Address: FUN_1400ff4b0 (Logging initialization)
 /// Reference: String "r14netserver" at 0x1416d2bb0
