@@ -1,6 +1,12 @@
 # GitHub Copilot Instructions for NEVR Server
 
-## Project Overview
+## ⚠️ CRITICAL: Terminal Commands
+
+**ALWAYS use `isBackground: true` for blocking commands** (make, sleep, compilation, etc.)
+- `isBackground: false` truncates output (SIGINT/exit 130)
+- Use `nohup` for long processes + monitor via `read_file` on logs
+
+##  Project Overview
 
 This repository implements the NEVR multiplayer game server and patching system. It consists of:
 - **GameServer**: Multiplayer game server DLL, manages sessions, events, and communication with the game and external services.
