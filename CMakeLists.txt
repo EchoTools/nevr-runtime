@@ -135,3 +135,84 @@ add_subdirectory(TelemetryAgent)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
 endif()
+
+# =============================================================================
+# Distribution Package Target
+# =============================================================================
+# Creates distribution archives (tar.zst and zip) containing DLLs and scripts
+# Usage: cmake --build <build_dir> --target dist
+# =============================================================================
+
+set(DIST_NAME "nevr-server-v${PROJECT_VERSION}")
+set(DIST_DIR "${CMAKE_BINARY_DIR}/dist/${DIST_NAME}")
+
+# List of DLL artifacts to include
+set(DIST_DLLS
+  "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/GamePatches.dll"
+  "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/GamePatchesLegacy.dll"
+  "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/GameServer.dll"
+  "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/GameServerLegacy.dll"
+  "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/TelemetryAgent.dll"
+)
+
+# List of debug symbol files to include
+set(DIST_DBG_FILES
+  "${CMAKE_BINARY_DIR}/GamePatches.dll.dbg"
+  "${CMAKE_BINARY_DIR}/GamePatchesLegacy.dll.dbg"
+  "${CMAKE_BINARY_DIR}/GameServer.dll.dbg"
+  "${CMAKE_BINARY_DIR}/GameServerLegacy.dll.dbg"
+  "${CMAKE_BINARY_DIR}/TelemetryAgent.dll.dbg"
+)
+
+# PowerShell supervisor script
+set(DIST_SCRIPTS
+  "${CMAKE_BINARY_DIR}/NEVRSupervisor.ps1"
+)
+
+# Custom target to prepare distribution directory
+add_custom_target(dist-prepare
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_BINARY_DIR}/dist"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E copy ${DIST_DLLS} "${DIST_DIR}/"
+  COMMAND ${CMAKE_COMMAND} -E copy ${DIST_DBG_FILES} "${DIST_DIR}/"
+  COMMAND ${CMAKE_COMMAND} -E copy ${DIST_SCRIPTS} "${DIST_DIR}/"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_DIR}/"
+  DEPENDS GamePatches GamePatchesLegacy GameServer GameServerLegacy TelemetryAgent combine
+  COMMENT "Preparing distribution directory: ${DIST_DIR}"
+  VERBATIM
+)
+
+# Create tar.zst archive
+add_custom_target(dist-tar
+  COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_BINARY_DIR}/dist"
+    tar --zstd -cvf "${CMAKE_BINARY_DIR}/dist/${DIST_NAME}.tar.zst" "${DIST_NAME}"
+  DEPENDS dist-prepare
+  COMMENT "Creating ${DIST_NAME}.tar.zst"
+  VERBATIM
+)
+
+# Create zip archive
+add_custom_target(dist-zip
+  COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_BINARY_DIR}/dist"
+    ${CMAKE_COMMAND} -E tar cvf "${CMAKE_BINARY_DIR}/dist/${DIST_NAME}.zip" --format=zip "${DIST_NAME}"
+  DEPENDS dist-prepare
+  COMMENT "Creating ${DIST_NAME}.zip"
+  VERBATIM
+)
+
+# Main distribution target that creates both archives
+add_custom_target(dist
+  DEPENDS dist-tar dist-zip
+  COMMENT "Distribution packages created: ${DIST_NAME}.tar.zst and ${DIST_NAME}.zip"
+)
+
+# Print distribution info
+add_custom_command(TARGET dist POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E echo ""
+  COMMAND ${CMAKE_COMMAND} -E echo "========================================"
+  COMMAND ${CMAKE_COMMAND} -E echo "Distribution packages created:"
+  COMMAND ${CMAKE_COMMAND} -E echo "  ${CMAKE_BINARY_DIR}/dist/${DIST_NAME}.tar.zst"
+  COMMAND ${CMAKE_COMMAND} -E echo "  ${CMAKE_BINARY_DIR}/dist/${DIST_NAME}.zip"
+  COMMAND ${CMAKE_COMMAND} -E echo "========================================"
+  VERBATIM
+)
