@@ -216,3 +216,82 @@ add_custom_command(TARGET dist POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E echo "========================================"
   VERBATIM
 )
+
+# =============================================================================
+# Lite Distribution Package Target (stripped, no debug symbols)
+# =============================================================================
+# Creates smaller distribution archives without debug symbols
+# Usage: cmake --build <build_dir> --target dist-lite
+# =============================================================================
+
+set(DIST_LITE_NAME "nevr-server-v${PROJECT_VERSION}-lite")
+set(DIST_LITE_DIR "${CMAKE_BINARY_DIR}/dist/${DIST_LITE_NAME}")
+
+# Find strip tool (use llvm-strip or strip)
+find_program(STRIP_TOOL NAMES llvm-strip strip)
+
+# Custom target to prepare lite distribution directory with stripped DLLs
+add_custom_target(dist-lite-prepare
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${DIST_LITE_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E copy ${DIST_DLLS} "${DIST_LITE_DIR}/"
+  # Strip all DLLs
+  COMMAND ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/GamePatches.dll"
+  COMMAND ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/GamePatchesLegacy.dll"
+  COMMAND ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/GameServer.dll"
+  COMMAND ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/GameServerLegacy.dll"
+  COMMAND ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/TelemetryAgent.dll"
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_LITE_DIR}/"
+  DEPENDS GamePatches GamePatchesLegacy GameServer GameServerLegacy TelemetryAgent combine
+  COMMENT "Preparing lite distribution directory (stripped): ${DIST_LITE_DIR}"
+  VERBATIM
+)
+
+# Optionally copy supervisor script if it exists (non-fatal if missing)
+add_custom_command(TARGET dist-lite-prepare POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_BINARY_DIR}/NEVRSupervisor.ps1" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
+  VERBATIM
+)
+
+# Create lite tar.zst archive
+add_custom_target(dist-lite-tar
+  COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_BINARY_DIR}/dist"
+    tar --zstd -cvf "${CMAKE_BINARY_DIR}/dist/${DIST_LITE_NAME}.tar.zst" "${DIST_LITE_NAME}"
+  DEPENDS dist-lite-prepare
+  COMMENT "Creating ${DIST_LITE_NAME}.tar.zst"
+  VERBATIM
+)
+
+# Create lite zip archive
+add_custom_target(dist-lite-zip
+  COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_BINARY_DIR}/dist"
+    ${CMAKE_COMMAND} -E tar cvf "${CMAKE_BINARY_DIR}/dist/${DIST_LITE_NAME}.zip" --format=zip "${DIST_LITE_NAME}"
+  DEPENDS dist-lite-prepare
+  COMMENT "Creating ${DIST_LITE_NAME}.zip"
+  VERBATIM
+)
+
+# Main lite distribution target that creates both archives
+add_custom_target(dist-lite
+  DEPENDS dist-lite-tar dist-lite-zip
+  COMMENT "Lite distribution packages created: ${DIST_LITE_NAME}.tar.zst and ${DIST_LITE_NAME}.zip"
+)
+
+# Print lite distribution info
+add_custom_command(TARGET dist-lite POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E echo ""
+  COMMAND ${CMAKE_COMMAND} -E echo "========================================"
+  COMMAND ${CMAKE_COMMAND} -E echo "Lite distribution packages created (stripped, no debug symbols):"
+  COMMAND ${CMAKE_COMMAND} -E echo "  ${CMAKE_BINARY_DIR}/dist/${DIST_LITE_NAME}.tar.zst"
+  COMMAND ${CMAKE_COMMAND} -E echo "  ${CMAKE_BINARY_DIR}/dist/${DIST_LITE_NAME}.zip"
+  COMMAND ${CMAKE_COMMAND} -E echo "========================================"
+  VERBATIM
+)
+
+# =============================================================================
+# Combined dist-all target
+# =============================================================================
+add_custom_target(dist-all
+  DEPENDS dist dist-lite
+  COMMENT "All distribution packages created"
+)
