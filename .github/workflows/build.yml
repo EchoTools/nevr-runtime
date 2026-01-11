@@ -9,39 +9,90 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         submodules: recursive
+        fetch-depth: 0  # Needed for git describe to work properly
 
-    - name: Run vcpkg
-      uses: lukka/run-vcpkg@v10
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11
       with:
         vcpkgDirectory: ${{ github.workspace }}/vcpkg
         runVcpkgInstall: true
 
     - name: Configure CMake
-      run: cmake -B ${{ github.workspace }}/build -S ${{ github.workspace }} -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      run: cmake -B ${{ github.workspace }}/build -S ${{ github.workspace }} -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
 
     - name: Build
       run: cmake --build ${{ github.workspace }}/build --config Release
 
-    - name: Upload Release Asset
-      id: upload-release-asset 
-      uses: actions/upload-release-asset@v1
+    - name: Get version
+      id: version
+      shell: bash
+      run: |
+        VERSION=$(git describe --tags --abbrev=4 --long --match "v*" 2>/dev/null | sed 's/^v//' | sed 's/-\([0-9]*\)-g\([a-f0-9]*\)$/+\1.\2/' || echo "0.0.0")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Version: $VERSION"
+
+    - name: Create distribution packages
+      shell: bash
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        DIST_NAME="nevr-server-v${VERSION}"
+        DIST_LITE_NAME="nevr-server-v${VERSION}-lite"
+        DIST_DIR="${{ github.workspace }}/build/dist"
+        
+        # Create full distribution
+        mkdir -p "$DIST_DIR/$DIST_NAME"
+        cp ${{ github.workspace }}/build/bin/Release/*.dll "$DIST_DIR/$DIST_NAME/"
+        cp ${{ github.workspace }}/README.md "$DIST_DIR/$DIST_NAME/"
+        
+        # Create lite distribution (same as full for Windows - no debug symbols in Release)
+        mkdir -p "$DIST_DIR/$DIST_LITE_NAME"
+        cp ${{ github.workspace }}/build/bin/Release/*.dll "$DIST_DIR/$DIST_LITE_NAME/"
+        cp ${{ github.workspace }}/README.md "$DIST_DIR/$DIST_LITE_NAME/"
+        
+        # Create zip archives
+        cd "$DIST_DIR"
+        7z a -tzip "${DIST_NAME}.zip" "$DIST_NAME"
+        7z a -tzip "${DIST_LITE_NAME}.zip" "$DIST_LITE_NAME"
+        
+        # Create tar.zst archives (tar first, then compress with zstd)
+        tar -cvf "${DIST_NAME}.tar" "$DIST_NAME"
+        zstd -19 "${DIST_NAME}.tar" -o "${DIST_NAME}.tar.zst"
+        rm "${DIST_NAME}.tar"
+        
+        tar -cvf "${DIST_LITE_NAME}.tar" "$DIST_LITE_NAME"
+        zstd -19 "${DIST_LITE_NAME}.tar" -o "${DIST_LITE_NAME}.tar.zst"
+        rm "${DIST_LITE_NAME}.tar"
+        
+        echo "Distribution packages created:"
+        ls -lh "$DIST_DIR"/*.{zip,tar.zst}
+
+    - name: Upload full distribution (zip)
+      uses: softprops/action-gh-release@v2
       with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: ${{ github.workspace }}/build/bin/Release/GamePatches.dll
-        asset_name: GamePatches.dll
-        asset_content_type: application/octet-stream
+        files: ${{ github.workspace }}/build/dist/nevr-server-v${{ steps.version.outputs.version }}.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: Upload Release Asset
-      id: upload-release-asset-2
-      uses: actions/upload-release-asset@v1
+
+    - name: Upload full distribution (tar.zst)
+      uses: softprops/action-gh-release@v2
       with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: ${{ github.workspace }}/build/bin/Release/GameServer.dll
-        asset_name: GameServer.dll
-        asset_content_type: application/octet-stream
+        files: ${{ github.workspace }}/build/dist/nevr-server-v${{ steps.version.outputs.version }}.tar.zst
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload lite distribution (zip)
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ${{ github.workspace }}/build/dist/nevr-server-v${{ steps.version.outputs.version }}-lite.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload lite distribution (tar.zst)
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ${{ github.workspace }}/build/dist/nevr-server-v${{ steps.version.outputs.version }}-lite.tar.zst
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
