@@ -20,6 +20,9 @@ void CallbackRegistry::Clear() {
   reliableStatUpdate = 0;
   reliableTeamStatUpdate = 0;
 
+  tcpRegSuccess = 0;
+  tcpRegFailure = 0;
+  tcpSessionSuccess = 0;
   tcpProtobuf = 0;
 }
 
