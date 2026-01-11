@@ -40,6 +40,9 @@ struct CallbackRegistry {
   uint16_t reliableTeamStatUpdate = 0;
 
   // TCP broadcaster (websocket) callbacks
+  uint16_t tcpRegSuccess = 0;
+  uint16_t tcpRegFailure = 0;
+  uint16_t tcpSessionSuccess = 0;
   uint16_t tcpProtobuf = 0;
 
   void Clear();
