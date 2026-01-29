@@ -20,7 +20,7 @@ target_include_directories(
   GameServer
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
           ${CMAKE_BINARY_DIR}
-          "${CMAKE_SOURCE_DIR}/common"
+          "${CMAKE_SOURCE_DIR}/src/common"
           "${CMAKE_SOURCE_DIR}"
           "${NEVR_COMMON_INCLUDE}"
 )

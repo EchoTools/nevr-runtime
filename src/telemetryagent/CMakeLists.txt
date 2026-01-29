@@ -45,7 +45,7 @@ target_include_directories(TelemetryAgent
     PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_BINARY_DIR}
-    "${CMAKE_SOURCE_DIR}/common"
+    "${CMAKE_SOURCE_DIR}/src/common"
     "${NEVR_COMMON_INCLUDE}"
 )
 

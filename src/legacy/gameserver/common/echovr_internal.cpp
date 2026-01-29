@@ -2,7 +2,7 @@
 
 #include "echovr_internal.h"
 
-#include "../../common/platform_stubs.h"
+#include "../../../common/platform_stubs.h"
 #include "echovr.h"
 #include "pch.h"
 

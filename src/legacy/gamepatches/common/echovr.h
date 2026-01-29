@@ -4,9 +4,9 @@
 
 #include <cstdint>
 
-#include "../../common/platform_stubs.h"
-#include "../../extern/nevr-common/common/Windows.h"
-#include "../../extern/nevr-common/common/guiddef.h"
+#include "../../../common/platform_stubs.h"
+#include "../../../../extern/nevr-common/common/Windows.h"
+#include "../../../../extern/nevr-common/common/guiddef.h"
 
 namespace EchoVR {
 

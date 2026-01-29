@@ -2,7 +2,7 @@
 
 find_package(Protobuf CONFIG REQUIRED)
 
-set(NEVRCOMMON_DIR "${CMAKE_CURRENT_LIST_DIR}/../extern/nevr-common")
+set(NEVRCOMMON_DIR "${CMAKE_CURRENT_LIST_DIR}/../../extern/nevr-common")
 
 set(PROTO_IMPORT_DIRS
   ${NEVRCOMMON_DIR}/proto

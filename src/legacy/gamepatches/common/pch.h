@@ -14,11 +14,11 @@
 #include <fstream>
 #include <iostream>
 // Use project-local winsock2.h shim for LSP/CI
-#include "../../winsock2.h"
+#include "../../../../winsock2.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-#include "../../extern/nevr-common/common/shellapi.h"
+#include "../../../../extern/nevr-common/common/shellapi.h"
 
 #endif  // PCH_H

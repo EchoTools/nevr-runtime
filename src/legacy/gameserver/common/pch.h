@@ -14,7 +14,7 @@
 #include <fstream>
 #include <iostream>
 // Use project-local winsock2.h shim for LSP/CI
-#include "../../winsock2.h"
+#include "../../../../winsock2.h"
 
 #define WIN32_LEAN_AND_MEAN
 #include <shellapi.h>
