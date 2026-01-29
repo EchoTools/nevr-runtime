@@ -1,8 +1,7 @@
 #pragma once
 
-#include "echovr_internal.h"
+#include "echovrInternal.h"
 
-#include "../../../common/platform_stubs.h"
 #include "echovr.h"
 #include "pch.h"
 

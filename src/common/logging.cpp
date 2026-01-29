@@ -1,10 +1,7 @@
 #include "logging.h"
 
-#include <stdio.h>
-#include <string.h>
-
+#include "echovrInternal.h"
 #include "globals.h"
-#include "platform_stubs.h"
 
 VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_list vl) {
   if (!strcmp(format, "[DEBUGPRINT] %s %s") || !strcmp(format, "[SCRIPT] %s: %s")) {

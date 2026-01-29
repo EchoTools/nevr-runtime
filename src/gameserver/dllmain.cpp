@@ -18,6 +18,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 }
 
 // RadEngine plugin hooks (required exports, mostly no-op)
+extern "C" {
 HRESULT RadPluginInit() { return ERROR_SUCCESS; }
 HRESULT RadPluginInitMemoryStatics(HMODULE) { return ERROR_SUCCESS; }
 HRESULT RadPluginInitNonMemoryStatics(HMODULE) { return ERROR_SUCCESS; }
@@ -42,3 +43,4 @@ EchoVR::IServerLib* ServerLib() {
   }
   return g_ServerLib;
 }
+}  // extern "C"

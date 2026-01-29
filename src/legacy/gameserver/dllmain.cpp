@@ -17,6 +17,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
   return TRUE;
 }
 
+extern "C" {
+
 HRESULT RadPluginInit() { return ERROR_SUCCESS; }
 HRESULT RadPluginInitMemoryStatics(HMODULE hModule) { return ERROR_SUCCESS; }
 HRESULT RadPluginInitNonMemoryStatics(HMODULE hModule) { return ERROR_SUCCESS; }
@@ -48,3 +50,5 @@ EchoVR::IServerLib* ServerLib() {
   }
   return g_ServerLib;
 }
+
+}  // extern "C"

@@ -1,11 +1,11 @@
 #include "patches.h"
 
-#include <detours/detours.h>
 #include <shellapi.h>
 
 #include <string>
 
-#include "common/echovr_unexported.h"
+#include "common/echovrunexported.h"
+#include "common/hooking.h"
 #include "processmem.h"
 
 #ifndef PROJECT_VERSION
@@ -89,11 +89,9 @@ VOID FatalError(const CHAR* msg, const CHAR* title) {
 /// <param name="ppPointer">The function to detour.</param>
 /// <param name="pDetour">The function hook to use as a detour.</param>
 /// <returns>None</returns>
-VOID PatchDetour(PVOID* ppPointer, PVOID pDetour) {
-  DetourTransactionBegin();
-  DetourUpdateThread(GetCurrentThread());
-  DetourAttach(ppPointer, pDetour);
-  DetourTransactionCommit();
+template <typename T>
+VOID PatchDetour(T* ppPointer, PVOID pDetour) {
+  Hooking::Attach(reinterpret_cast<PVOID*>(ppPointer), pDetour);
 }
 
 /// <summary>
@@ -181,7 +179,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
   *flags &= 0xFFFFFFFD;  // clear second bit
 
   // Install our hook to capture logs to the console.
-  PatchDetour(&(PVOID&)EchoVR::WriteLog, WriteLogHook);
+  PatchDetour(&EchoVR::WriteLog, reinterpret_cast<PVOID>(WriteLogHook));
 
   // Patch the engine initialization/configuration to skip initialization of the rendering providers.
   BYTE pbPatch[] = {
@@ -587,6 +585,12 @@ VOID Initialize() {
   if (initialized) return;
   initialized = true;
 
+  // Initialize the hooking library
+  if (!Hooking::Initialize()) {
+    MessageBoxW(NULL, L"Failed to initialize hooking library.", L"Echo Relay: Error", MB_OK);
+    return;
+  }
+
   Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMEPATCHES.LEGACY] version %s (%s) initializing", PROJECT_VERSION,
       GIT_COMMIT_HASH);
 
@@ -598,13 +602,13 @@ VOID Initialize() {
                 L"Echo Relay: Warning", MB_OK);
 
   // Patch our CLI argument options to add our additional options.
-  PatchDetour(&(PVOID&)EchoVR::BuildCmdLineSyntaxDefinitions, BuildCmdLineSyntaxDefinitionsHook);
-  PatchDetour(&(PVOID&)EchoVR::PreprocessCommandLine, PreprocessCommandLineHook);
-  PatchDetour(&(PVOID&)EchoVR::NetGameSwitchState, NetGameSwitchStateHook);
-  PatchDetour(&(PVOID&)EchoVR::LoadLocalConfig, LoadLocalConfigHook);
-  PatchDetour(&(PVOID&)EchoVR::HttpConnect, HttpConnectHook);
-  PatchDetour(&(PVOID&)EchoVR::GetProcAddress, GetProcAddressHook);
-  PatchDetour(&(PVOID&)EchoVR::SetWindowTextA_, SetWindowTextAHook);
+  PatchDetour(&EchoVR::BuildCmdLineSyntaxDefinitions, reinterpret_cast<PVOID>(BuildCmdLineSyntaxDefinitionsHook));
+  PatchDetour(&EchoVR::PreprocessCommandLine, reinterpret_cast<PVOID>(PreprocessCommandLineHook));
+  PatchDetour(&EchoVR::NetGameSwitchState, reinterpret_cast<PVOID>(NetGameSwitchStateHook));
+  PatchDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook));
+  PatchDetour(&EchoVR::HttpConnect, reinterpret_cast<PVOID>(HttpConnectHook));
+  PatchDetour(&EchoVR::GetProcAddress, reinterpret_cast<PVOID>(GetProcAddressHook));
+  PatchDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook));
 
   // Run some startup patches
   PatchNoOvrRequiresSpectatorStream();

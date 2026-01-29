@@ -6,10 +6,12 @@ set(PATCHES_HEADERS "patches.h")
 add_library(GamePatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
                                "exports.def")
 
+target_compile_definitions(GamePatches PRIVATE USE_MINHOOK)
+
 target_precompile_headers(GamePatches PRIVATE "${NEVR_COMMON_INCLUDE}/pch.h")
 target_include_directories(GamePatches PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(GamePatches PRIVATE minhook Common)
+target_link_libraries(GamePatches PRIVATE minhook Common version)
 target_link_directories(GamePatches PRIVATE Common)
 
 # Disable specific warnings (MSVC only)

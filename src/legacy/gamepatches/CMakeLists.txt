@@ -16,6 +16,8 @@ set(PATCHES_LEGACY_HEADERS
 
 add_library(GamePatchesLegacy SHARED ${PATCHES_LEGACY_SOURCES} ${PATCHES_LEGACY_HEADERS} "exports.def")
 
+target_compile_definitions(GamePatchesLegacy PRIVATE USE_MINHOOK)
+
 target_precompile_headers(GamePatchesLegacy PRIVATE "common/pch.h")
 target_include_directories(GamePatchesLegacy PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}

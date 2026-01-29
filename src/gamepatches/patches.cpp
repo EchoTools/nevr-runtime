@@ -2,9 +2,9 @@
 
 #include <shellapi.h>
 #include <windows.h>
-#include <vector>
 
 #include <string>
+#include <vector>
 
 // SSL/TLS modernization headers (Schannel)
 #define SECURITY_WIN32
@@ -879,7 +879,7 @@ VOID Initialize() {
   if (initialized) return;
   initialized = true;
 
-  EchoVR::InitEchoVR();
+  // EchoVR::InitEchoVR();  // Function not defined in nevr-common submodule
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Initializing GamePatches v%s (%s)", PROJECT_VERSION, GIT_COMMIT_HASH);
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Game Base Address: %p", EchoVR::g_GameBaseAddress);
@@ -887,23 +887,23 @@ VOID Initialize() {
   // Log Version
   CHAR filename[MAX_PATH];
   if (GetModuleFileNameA((HMODULE)EchoVR::g_GameBaseAddress, filename, MAX_PATH)) {
-      DWORD handle;
-      DWORD size = GetFileVersionInfoSizeA(filename, &handle);
-      if (size) {
-          std::vector<BYTE> buffer(size);
-          if (GetFileVersionInfoA(filename, handle, size, buffer.data())) {
-              VS_FIXEDFILEINFO* pFileInfo;
-              UINT len;
-              if (VerQueryValueA(buffer.data(), "\\", (LPVOID*)&pFileInfo, &len)) {
-                  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Game File Version: %d.%d.%d.%d", 
-                      HIWORD(pFileInfo->dwFileVersionMS), LOWORD(pFileInfo->dwFileVersionMS),
-                      HIWORD(pFileInfo->dwFileVersionLS), LOWORD(pFileInfo->dwFileVersionLS));
-                  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Product Version: %d.%d.%d.%d",
-                      HIWORD(pFileInfo->dwProductVersionMS), LOWORD(pFileInfo->dwProductVersionMS),
-                      HIWORD(pFileInfo->dwProductVersionLS), LOWORD(pFileInfo->dwProductVersionLS));
-              }
-          }
+    DWORD handle;
+    DWORD size = GetFileVersionInfoSizeA(filename, &handle);
+    if (size) {
+      std::vector<BYTE> buffer(size);
+      if (GetFileVersionInfoA(filename, handle, size, buffer.data())) {
+        VS_FIXEDFILEINFO* pFileInfo;
+        UINT len;
+        if (VerQueryValueA(buffer.data(), "\\", (LPVOID*)&pFileInfo, &len)) {
+          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Game File Version: %d.%d.%d.%d", HIWORD(pFileInfo->dwFileVersionMS),
+              LOWORD(pFileInfo->dwFileVersionMS), HIWORD(pFileInfo->dwFileVersionLS),
+              LOWORD(pFileInfo->dwFileVersionLS));
+          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Product Version: %d.%d.%d.%d",
+              HIWORD(pFileInfo->dwProductVersionMS), LOWORD(pFileInfo->dwProductVersionMS),
+              HIWORD(pFileInfo->dwProductVersionLS), LOWORD(pFileInfo->dwProductVersionLS));
+        }
       }
+    }
   }
 
   // Initialize the hooking library

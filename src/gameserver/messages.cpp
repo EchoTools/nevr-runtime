@@ -3,7 +3,7 @@
 
 #include "messages.h"
 
-#include <WS2tcpip.h>
+#include <ws2tcpip.h>
 
 #include <cctype>
 #include <cstdarg>

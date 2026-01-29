@@ -25,7 +25,7 @@ target_include_directories(
           "${NEVR_COMMON_INCLUDE}"
 )
 
-target_link_libraries(GameServer PRIVATE Common proto_nevr TelemetryAgent)
+target_link_libraries(GameServer PRIVATE Common proto_nevr TelemetryAgent ws2_32)
 
 # Disable specific warnings
 # Disable specific warnings (MSVC only)
