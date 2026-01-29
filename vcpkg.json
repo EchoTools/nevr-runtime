@@ -1,6 +1,5 @@
 {
   "dependencies": [
-    "protobuf",
-    "googleapis"
+    "protobuf"
   ]
 }
