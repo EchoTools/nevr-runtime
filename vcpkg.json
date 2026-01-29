@@ -1,9 +1,5 @@
 {
   "dependencies": [
-    "curl",
-    "jsoncpp",
-    "minhook",
-    "opus",
     "protobuf"
   ]
 }
