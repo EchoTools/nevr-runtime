@@ -5,7 +5,7 @@
 
 #include <string>
 
-#include "common/echovrunexported.h"
+#include "common/echovr_unexported.h"
 #include "processmem.h"
 
 #ifndef PROJECT_VERSION

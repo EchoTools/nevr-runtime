@@ -1,6 +1,6 @@
 #include "logging.h"
 
-#include "echovrInternal.h"
+#include "echovr_internal.h"
 #include "globals.h"
 
 VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_list vl) {

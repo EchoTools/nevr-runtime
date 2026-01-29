@@ -2,7 +2,7 @@
 
 #include "globals.h"
 
-#include "echovrInternal.h"
+#include "echovr_internal.h"
 /// A CLI argument flag used to remove the extra console being added by -headless for running servers on fully headless
 /// system.
 // Initialize external variables from opts.h

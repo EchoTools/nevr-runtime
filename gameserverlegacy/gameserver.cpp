@@ -3,7 +3,7 @@
 #include <cstdio>
 
 #include "common/echovr.h"
-#include "common/echovrInternal.h"
+#include "common/echovr_internal.h"
 #include "common/pch.h"
 #include "messages.h"
 

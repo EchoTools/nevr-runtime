@@ -1,5 +1,5 @@
 #pragma once
-#include "echovrInternal.h"
+#include "echovr_internal.h"
 
 #ifndef ECHOVR_LOGGING_H
 #define ECHOVR_LOGGING_H
