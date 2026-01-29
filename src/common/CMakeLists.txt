@@ -13,4 +13,7 @@ target_include_directories(
   Common PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/src/common
                  ${CMAKE_SOURCE_DIR}/extern/nevr-common/common)
 
-target_compile_options(Common PRIVATE /wd4251)
+# Disable specific warnings (MSVC only)
+if(MSVC)
+  target_compile_options(Common PRIVATE /wd4251)
+endif()

@@ -2,11 +2,10 @@
 #ifndef ECHOVR_H
 #define ECHOVR_H
 
-#include <cstdint>
+#include <guiddef.h>
+#include <windows.h>
 
-#include "../../../common/platform_stubs.h"
-#include "../../../../extern/nevr-common/common/Windows.h"
-#include "../../../../extern/nevr-common/common/guiddef.h"
+#include <cstdint>
 
 namespace EchoVR {
 
@@ -46,7 +45,7 @@ struct AddressInfo {
 };
 
 // Parsed URI container (size: 0x120)
-const struct UriContainer {
+struct UriContainer {
   CHAR _unk0[0x120];
 };
 

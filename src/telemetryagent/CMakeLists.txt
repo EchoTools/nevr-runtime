@@ -52,5 +52,7 @@ target_include_directories(TelemetryAgent
 # C++17 for std::optional, std::string_view, etc.
 target_compile_features(TelemetryAgent PRIVATE cxx_std_17)
 
-# Disable specific warnings
-target_compile_options(TelemetryAgent PRIVATE /wd4251 /wd4267)
+# Disable specific warnings (MSVC only)
+if(MSVC)
+  target_compile_options(TelemetryAgent PRIVATE /wd4251)
+endif()

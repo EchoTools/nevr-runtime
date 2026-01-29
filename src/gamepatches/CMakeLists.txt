@@ -11,4 +11,8 @@ target_include_directories(GamePatches PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(GamePatches PRIVATE minhook Common)
 target_link_directories(GamePatches PRIVATE Common)
-target_compile_options(GamePatches PRIVATE /wd4251)
+
+# Disable specific warnings (MSVC only)
+if(MSVC)
+  target_compile_options(GamePatches PRIVATE /wd4251)
+endif()

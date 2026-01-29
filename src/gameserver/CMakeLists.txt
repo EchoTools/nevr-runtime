@@ -28,4 +28,7 @@ target_include_directories(
 target_link_libraries(GameServer PRIVATE Common proto_nevr TelemetryAgent)
 
 # Disable specific warnings
-target_compile_options(GameServer PRIVATE /wd4251 /wd4267)
+# Disable specific warnings (MSVC only)
+if(MSVC)
+  target_compile_options(GameServer PRIVATE /wd4251)
+endif()

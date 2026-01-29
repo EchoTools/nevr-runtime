@@ -10,6 +10,7 @@
 #ifndef TELEMETRY_FRAME_PROCESSOR_H
 #define TELEMETRY_FRAME_PROCESSOR_H
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>

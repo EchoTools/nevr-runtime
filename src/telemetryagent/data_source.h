@@ -10,6 +10,7 @@
 #ifndef TELEMETRY_DATA_SOURCE_H
 #define TELEMETRY_DATA_SOURCE_H
 
+#include <cstdint>
 #include <memory>
 #include <string>
 

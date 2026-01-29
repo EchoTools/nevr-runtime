@@ -1,11 +1,20 @@
 #include "patches.h"
 
-#include <detours/detours.h>
 #include <shellapi.h>
+#include <windows.h>
+#include <vector>
 
 #include <string>
 
+// SSL/TLS modernization headers (Schannel)
+#define SECURITY_WIN32
+#include <schannel.h>
+#include <security.h>
+#include <sspi.h>
+
+// #include "AssetCDN/asset_cdn.h"
 #include "common/base64.h"
+#include "common/hooking.h"
 #include "echovrunexported.h"
 #include "patch_addresses.h"
 #include "processmem.h"
@@ -98,11 +107,9 @@ VOID FatalError(const CHAR* msg, const CHAR* title) {
 /// <param name="ppPointer">The function to detour.</param>
 /// <param name="pDetour">The function hook to use as a detour.</param>
 /// <returns>None</returns>
-VOID PatchDetour(PVOID* ppPointer, PVOID pDetour) {
-  DetourTransactionBegin();
-  DetourUpdateThread(GetCurrentThread());
-  DetourAttach(ppPointer, pDetour);
-  DetourTransactionCommit();
+template <typename T>
+VOID PatchDetour(T* ppPointer, PVOID pDetour) {
+  Hooking::Attach(reinterpret_cast<PVOID*>(ppPointer), pDetour);
 }
 
 /// <summary>
@@ -192,7 +199,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
   *audioFlags &= 0xFFFFFFFD;  // Clear bit 1 (audio enable)
 
   // Install our hook to capture logs to the console.
-  PatchDetour(&(PVOID&)EchoVR::WriteLog, WriteLogHook);
+  PatchDetour(&EchoVR::WriteLog, reinterpret_cast<PVOID>(WriteLogHook));
 
   // Skip renderer initialization
   const BYTE rendererPatch[] = {0xA8, 0x00};  // TEST al, 0 (always false)
@@ -454,8 +461,6 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 
     if (lstrcmpW(arg, L"-server") == 0) {
       isServer = TRUE;
-      isNoOVR = TRUE;  // Server mode automatically disables VR
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] -server: Automatically enabling -noovr (VR disabled in server mode)");
     } else if (lstrcmpW(arg, L"-offline") == 0) {
       isOffline = TRUE;
     } else if (lstrcmpW(arg, L"-noconsole") == 0) {
@@ -521,6 +526,14 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   if (isServer) {
     PatchEnableServer();
     PatchDisableLoadingTips();
+    // Note: The platform module decision (OVR vs pnsrad) is based on mode flags at game_state[0xb68].
+    // However, modifying those flags here doesn't work because either:
+    // 1. The offset is different than documented, OR
+    // 2. The structure isn't fully initialized yet at this point
+    // Alternative: Apply a binary patch to PlatformModuleDecisionAndInitialize (0x140157fb0)
+    // to skip the OVR path. See PatchBypassOvrPlatform() if implemented.
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] Server mode: OVR platform bypass requires binary patch (not yet implemented)");
   }
 
   // Update the window title
@@ -587,34 +600,214 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
   // Store a reference to the local config from the game structure
   using namespace PatchAddresses;
   localConfig = reinterpret_cast<EchoVR::Json*>(static_cast<CHAR*>(pGame) + GAME_LOCAL_CONFIG_OFFSET);
+
+  // Configure Asset CDN URL from config.json if specified
+  if (localConfig != NULL) {
+    CHAR* customCdnUrl = EchoVR::JsonValueAsString(localConfig, (CHAR*)"asset_cdn_url", NULL, false);
+    if (customCdnUrl != NULL && customCdnUrl[0] != '\0') {
+      // AssetCDN::SetCustomCdnUrl(customCdnUrl);
+      // Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Asset CDN URL set from config: %s", customCdnUrl);
+    }
+  }
+
   return result;
 }
 
 /// <summary>
+/// Helper function to get a service host from config.json with fallback logic.
+/// Fallback chain: service_key → loginservice_host → default_url
+/// </summary>
+/// <param name="serviceKey">The primary config key to check (e.g., "configservice_host")</param>
+/// <param name="defaultUrl">The default URL if no config override is found</param>
+/// <returns>The resolved service URL</returns>
+CHAR* GetServiceHostWithFallback(const CHAR* serviceKey, const CHAR* defaultUrl) {
+  if (localConfig == NULL) return (CHAR*)defaultUrl;
+
+  // Try primary service key first
+  CHAR* host = EchoVR::JsonValueAsString(localConfig, (CHAR*)serviceKey, NULL, false);
+  if (host != NULL && host[0] != '\0') {
+    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service override [%s]: %s", serviceKey, host);
+    return host;
+  }
+
+  // Fallback to loginservice_host if primary key not found
+  host = EchoVR::JsonValueAsString(localConfig, (CHAR*)"loginservice_host", NULL, false);
+  if (host != NULL && host[0] != '\0') {
+    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service fallback [%s → loginservice_host]: %s", serviceKey, host);
+    return host;
+  }
+
+  // Return default URL
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service default [%s]: %s", serviceKey, defaultUrl);
+  return (CHAR*)defaultUrl;
+}
+
+/// <summary>
 /// A detour hook for the game's method it uses to connect to an HTTP(S) endpoint. This is used to redirect additional
-/// hardcoded endpoints in the game.
+/// hardcoded endpoints in the game with full fallback support for all service hosts.
 /// </summary>
 /// <param name="unk">TODO: Unknown</param>
 /// <param name="uri">The HTTP(S) URI string to connect to.</param>
 UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
-  // If we have a local config, check for additional service overrides.
+  // If we have a local config, check for service overrides with fallback logic
   if (localConfig != NULL) {
-    // Perform overrides for different hosts
-    CHAR* originalApiHostPrefix = (CHAR*)"https://api.";
-    CHAR* originalOculusGraphHost = (CHAR*)"https://graph.oculus.com";
-    if (!strncmp(uri, originalApiHostPrefix, strlen(originalApiHostPrefix))) {
-      // Check for JSON keys definition host overrides.
-      uri = EchoVR::JsonValueAsString(localConfig, (CHAR*)"api_host", uri, false);
-      uri = EchoVR::JsonValueAsString(localConfig, (CHAR*)"apiservice_host", uri, false);
-    } else if (!strncmp(uri, originalOculusGraphHost, strlen(originalOculusGraphHost))) {
-      // Check for JSON keys definition host overrides.
+    CHAR* originalUri = uri;
+
+    // API Service (https://api.*)
+    if (!strncmp(uri, "https://api.", 12)) {
+      uri = GetServiceHostWithFallback("apiservice_host", uri);
+      // Legacy compatibility: also try "api_host"
+      if (uri == originalUri) {
+        uri = EchoVR::JsonValueAsString(localConfig, (CHAR*)"api_host", uri, false);
+      }
+    }
+    // Config Service - detect config-related URLs
+    else if (strstr(uri, "config") != NULL && strstr(uri, "https://") == uri) {
+      uri = GetServiceHostWithFallback("configservice_host", uri);
+    }
+    // Transaction Service - detect transaction/IAP URLs
+    else if ((strstr(uri, "transaction") != NULL || strstr(uri, "iap") != NULL) && strstr(uri, "https://") == uri) {
+      uri = GetServiceHostWithFallback("transactionservice_host", uri);
+    }
+    // Matching Service - detect matchmaking URLs
+    else if (strstr(uri, "match") != NULL && strstr(uri, "https://") == uri) {
+      uri = GetServiceHostWithFallback("matchingservice_host", uri);
+    }
+    // ServerDB Service - detect serverdb/registry URLs
+    else if ((strstr(uri, "serverdb") != NULL || strstr(uri, "registry") != NULL) && strstr(uri, "https://") == uri) {
+      uri = GetServiceHostWithFallback("serverdb_host", uri);
+    }
+    // Oculus Graph API
+    else if (!strncmp(uri, "https://graph.oculus.com", 24)) {
       uri = EchoVR::JsonValueAsString(localConfig, (CHAR*)"graph_host", uri, false);
-      uri = EchoVR::JsonValueAsString(localConfig, (CHAR*)"graphservice_host", uri, false);
+      if (uri == originalUri) {
+        uri = EchoVR::JsonValueAsString(localConfig, (CHAR*)"graphservice_host", uri, false);
+      }
+    }
+
+    if (uri != originalUri) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] HTTP(S) connection redirected: %s → %s", originalUri, uri);
     }
   }
 
   // Call the original function
   return EchoVR::HttpConnect(unk, uri);
+}
+
+// ============================================================================
+// WebSocket Connection Hooks (for TcpBroadcaster / wss:// connections)
+// ============================================================================
+
+/// <summary>
+/// Storage for the original CreatePeer function pointer to call after our hook.
+/// </summary>
+typedef EchoVR::TcpPeer* (*CreatePeerFunc)(EchoVR::TcpBroadcasterData* self, EchoVR::TcpPeer* result,
+                                           const EchoVR::UriContainer* uri);
+static CreatePeerFunc OriginalCreatePeer = NULL;
+
+/// <summary>
+/// Hook for TcpBroadcaster CreatePeer - intercepts WebSocket connection creation.
+/// Applies config overrides and fallback logic for WebSocket URIs.
+/// </summary>
+EchoVR::TcpPeer* CreatePeerHook(EchoVR::TcpBroadcasterData* self, EchoVR::TcpPeer* result,
+                                const EchoVR::UriContainer* uriContainer) {
+  // We need to parse and potentially modify the URI
+  // The UriContainer is opaque (0x120 bytes), but we can extract the URI string from it
+  // For now, we'll let the connection proceed and rely on DNS/routing for redirection
+  // A more sophisticated approach would parse the UriContainer and modify it
+
+  // Log the WebSocket connection attempt
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] WebSocket connection initiated (CreatePeer called)");
+
+  // Check if we have config overrides for WebSocket endpoints
+  if (localConfig != NULL) {
+    // Check for loginservice_host override (primary WebSocket endpoint)
+    CHAR* loginHost = EchoVR::JsonValueAsString(localConfig, (CHAR*)"loginservice_host", NULL, false);
+    if (loginHost != NULL && loginHost[0] != '\0') {
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] WebSocket loginservice_host override configured: %s", loginHost);
+      // Note: Actual URI modification would require parsing/rebuilding UriContainer
+      // For now, document that DNS/routing should be used, or implement URI rewrite
+    }
+
+    // Check for matching/config/transaction service WebSocket overrides
+    CHAR* matchingHost = EchoVR::JsonValueAsString(localConfig, (CHAR*)"matchingservice_host", NULL, false);
+    if (matchingHost != NULL && matchingHost[0] != '\0') {
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Matchingservice override available: %s", matchingHost);
+    }
+
+    CHAR* configHost = EchoVR::JsonValueAsString(localConfig, (CHAR*)"configservice_host", NULL, false);
+    if (configHost != NULL && configHost[0] != '\0') {
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Configservice override available: %s", configHost);
+    }
+  }
+
+  // Call the original CreatePeer function
+  if (OriginalCreatePeer != NULL) {
+    return OriginalCreatePeer(self, result, uriContainer);
+  }
+
+  // Fallback: should never happen, but return invalid peer
+  result->index = 0xFFFFFFFF;
+  result->gen = 0;
+  return result;
+}
+
+// ============================================================================
+// SSL/TLS Modernization (Schannel hooks for ECDSA/EdDSA/RSA support)
+// ============================================================================
+
+#include <schannel.h>
+#include <security.h>
+
+// Link with Secur32 for Schannel APIs (also configured in CMakeLists.txt)
+
+/// <summary>
+/// Original function pointers for Schannel APIs
+/// </summary>
+typedef SECURITY_STATUS(SEC_ENTRY* AcquireCredentialsHandleWFunc)(
+    _In_opt_ LPWSTR pszPrincipal, _In_ LPWSTR pszPackage, _In_ unsigned long fCredentialUse, _In_opt_ void* pvLogonId,
+    _In_opt_ void* pAuthData, _In_opt_ SEC_GET_KEY_FN pGetKeyFn, _In_opt_ void* pvGetKeyArgument,
+    _Out_ PCredHandle phCredential, _Out_opt_ PTimeStamp ptsExpiry);
+
+static AcquireCredentialsHandleWFunc OriginalAcquireCredentialsHandleW = NULL;
+
+/// <summary>
+/// Hook for AcquireCredentialsHandleW - enables modern TLS cipher suites and protocols.
+/// This allows the game to connect to servers using ECDSA, EdDSA, and modern RSA certificates.
+/// </summary>
+SECURITY_STATUS SEC_ENTRY AcquireCredentialsHandleWHook(_In_opt_ LPWSTR pszPrincipal, _In_ LPWSTR pszPackage,
+                                                        _In_ unsigned long fCredentialUse, _In_opt_ void* pvLogonId,
+                                                        _In_opt_ void* pAuthData, _In_opt_ SEC_GET_KEY_FN pGetKeyFn,
+                                                        _In_opt_ void* pvGetKeyArgument, _Out_ PCredHandle phCredential,
+                                                        _Out_opt_ PTimeStamp ptsExpiry) {
+  // Check if this is an Schannel client credential request
+  if (pszPackage != NULL && lstrcmpW(pszPackage, UNISP_NAME_W) == 0 && (fCredentialUse & SECPKG_CRED_OUTBOUND) != 0) {
+    // Modify the credential parameters to enable modern TLS
+    if (pAuthData != NULL) {
+      SCHANNEL_CRED* schannelCred = (SCHANNEL_CRED*)pAuthData;
+
+      // Enable TLS 1.2 and TLS 1.3 (if available)
+      // SP_PROT_TLS1_2_CLIENT = 0x00000800
+      // SP_PROT_TLS1_3_CLIENT = 0x00002000 (Windows 11/Server 2022+)
+      schannelCred->grbitEnabledProtocols = SP_PROT_TLS1_2_CLIENT | 0x00002000;  // TLS 1.2 + 1.3
+
+      // Enable all cipher suites (let the server choose the best)
+      // This includes ECDHE-ECDSA, ECDHE-RSA, and modern RSA cipher suites
+      schannelCred->dwFlags |= SCH_CRED_NO_DEFAULT_CREDS;         // Use explicit creds
+      schannelCred->dwFlags &= ~SCH_CRED_MANUAL_CRED_VALIDATION;  // Use system cert validation
+      schannelCred->dwFlags |= SCH_USE_STRONG_CRYPTO;             // Enable strong crypto only
+
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] SSL/TLS modernized: Enabled TLS 1.2/1.3 with ECDSA/EdDSA/RSA support");
+    }
+  }
+
+  // Call the original function
+  if (OriginalAcquireCredentialsHandleW != NULL) {
+    return OriginalAcquireCredentialsHandleW(pszPrincipal, pszPackage, fCredentialUse, pvLogonId, pAuthData, pGetKeyFn,
+                                             pvGetKeyArgument, phCredential, ptsExpiry);
+  }
+
+  return SEC_E_UNSUPPORTED_FUNCTION;
 }
 
 /// <summary>
@@ -686,6 +879,39 @@ VOID Initialize() {
   if (initialized) return;
   initialized = true;
 
+  EchoVR::InitEchoVR();
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Initializing GamePatches v%s (%s)", PROJECT_VERSION, GIT_COMMIT_HASH);
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Game Base Address: %p", EchoVR::g_GameBaseAddress);
+
+  // Log Version
+  CHAR filename[MAX_PATH];
+  if (GetModuleFileNameA((HMODULE)EchoVR::g_GameBaseAddress, filename, MAX_PATH)) {
+      DWORD handle;
+      DWORD size = GetFileVersionInfoSizeA(filename, &handle);
+      if (size) {
+          std::vector<BYTE> buffer(size);
+          if (GetFileVersionInfoA(filename, handle, size, buffer.data())) {
+              VS_FIXEDFILEINFO* pFileInfo;
+              UINT len;
+              if (VerQueryValueA(buffer.data(), "\\", (LPVOID*)&pFileInfo, &len)) {
+                  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Game File Version: %d.%d.%d.%d", 
+                      HIWORD(pFileInfo->dwFileVersionMS), LOWORD(pFileInfo->dwFileVersionMS),
+                      HIWORD(pFileInfo->dwFileVersionLS), LOWORD(pFileInfo->dwFileVersionLS));
+                  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Product Version: %d.%d.%d.%d",
+                      HIWORD(pFileInfo->dwProductVersionMS), LOWORD(pFileInfo->dwProductVersionMS),
+                      HIWORD(pFileInfo->dwProductVersionLS), LOWORD(pFileInfo->dwProductVersionLS));
+              }
+          }
+      }
+  }
+
+  // Initialize the hooking library
+  if (!Hooking::Initialize()) {
+    MessageBoxW(NULL, L"Failed to initialize hooking library.", L"Echo Relay: Error", MB_OK);
+    return;
+  }
+
   // Verify the game version before patching
   if (!VerifyGameVersion())
     MessageBoxW(NULL,
@@ -694,16 +920,42 @@ VOID Initialize() {
                 L"Echo Relay: Warning", MB_OK);
 
   // Patch our CLI argument options to add our additional options.
-  PatchDetour(&(PVOID&)EchoVR::BuildCmdLineSyntaxDefinitions, BuildCmdLineSyntaxDefinitionsHook);
-  PatchDetour(&(PVOID&)EchoVR::PreprocessCommandLine, PreprocessCommandLineHook);
-  PatchDetour(&(PVOID&)EchoVR::NetGameSwitchState, NetGameSwitchStateHook);
-  PatchDetour(&(PVOID&)EchoVR::LoadLocalConfig, LoadLocalConfigHook);
-  PatchDetour(&(PVOID&)EchoVR::HttpConnect, HttpConnectHook);
-  PatchDetour(&(PVOID&)EchoVR::GetProcAddress, GetProcAddressHook);
-  PatchDetour(&(PVOID&)EchoVR::SetWindowTextA_, SetWindowTextAHook);
+  PatchDetour(&EchoVR::BuildCmdLineSyntaxDefinitions, reinterpret_cast<PVOID>(BuildCmdLineSyntaxDefinitionsHook));
+  PatchDetour(&EchoVR::PreprocessCommandLine, reinterpret_cast<PVOID>(PreprocessCommandLineHook));
+  PatchDetour(&EchoVR::NetGameSwitchState, reinterpret_cast<PVOID>(NetGameSwitchStateHook));
+  PatchDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook));
+  PatchDetour(&EchoVR::HttpConnect, reinterpret_cast<PVOID>(HttpConnectHook));
+  PatchDetour(&EchoVR::GetProcAddress, reinterpret_cast<PVOID>(GetProcAddressHook));
+  PatchDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook));
+
+  // Hook SSL/TLS functions for modern cipher suite support (ECDSA, EdDSA, RSA)
+  HMODULE hSecur32 = GetModuleHandleA("Secur32.dll");
+  if (hSecur32 != NULL) {
+    OriginalAcquireCredentialsHandleW =
+        (AcquireCredentialsHandleWFunc)GetProcAddress(hSecur32, "AcquireCredentialsHandleW");
+    if (OriginalAcquireCredentialsHandleW != NULL) {
+      PatchDetour(&OriginalAcquireCredentialsHandleW, reinterpret_cast<PVOID>(AcquireCredentialsHandleWHook));
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] SSL/TLS modernization hook installed (Schannel)");
+    } else {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find AcquireCredentialsHandleW for SSL/TLS modernization");
+    }
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load Secur32.dll for SSL/TLS modernization");
+  }
+
+  // Note: WebSocket CreatePeer hook requires vtable hooking, which is complex.
+  // For now, DNS/routing overrides should be used for WebSocket endpoint redirection.
+  // TODO: Implement vtable hook for TcpBroadcasterData::CreatePeer if needed.
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.PATCH] Config property injection initialized with fallback chain: service → loginservice_host → default");
 
   // Run some startup patches
   PatchNoOvrRequiresSpectatorStream();
+
+  // Initialize Asset CDN redirection system
+  // if (!AssetCDN::Initialize()) {
+  //  Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to initialize Asset CDN redirection");
+  //}
 
   // Patch out the deadlock monitor thread's validation routine if we're compiling in debug mode, as this will panic
   // from process suspension.

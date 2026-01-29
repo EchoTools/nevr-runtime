@@ -23,4 +23,7 @@ target_include_directories(
 # No external dependencies - fully self-contained
 
 # Disable specific warnings
-target_compile_options(GameServerLegacy PRIVATE /wd4251 /wd4267)
+# Disable specific warnings (MSVC only)
+if(MSVC)
+  target_compile_options(GameServerLegacy PRIVATE /wd4251 /wd4267)
+endif()

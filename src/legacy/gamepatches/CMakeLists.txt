@@ -23,4 +23,7 @@ target_include_directories(GamePatchesLegacy PRIVATE
 )
 
 target_link_libraries(GamePatchesLegacy PRIVATE minhook)
-target_compile_options(GamePatchesLegacy PRIVATE /wd4251)
+# Disable specific warnings (MSVC only)
+if(MSVC)
+  target_compile_options(GamePatchesLegacy PRIVATE /wd4251)
+endif()

@@ -3,7 +3,7 @@
 #ifndef ECHOVR_GLOBALS_H
 #define ECHOVR_GLOBALS_H
 
-#include "platform_stubs.h"
+#include "echovrInternal.h"
 
 #ifndef PROJECT_VERSION          // Set by CMake during the build process
 #define PROJECT_VERSION "1.0.0"  // Fallback default version

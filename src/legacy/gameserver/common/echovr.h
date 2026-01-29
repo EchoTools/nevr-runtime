@@ -5,11 +5,10 @@
 #define ECHOVR_H
 
 // Include necessary headers
-#include <cstdint>
+#include <guiddef.h>
+#include <windows.h>
 
-#include "../../../common/platform_stubs.h"
-#include "../../../../extern/nevr-common/common/Windows.h"
-#include "../../../../extern/nevr-common/common/guiddef.h"
+#include <cstdint>
 
 namespace EchoVR {
 // Forward declarations
@@ -68,7 +67,7 @@ struct AddressInfo {
 /// <summary>
 /// TODO: Parsed URI object.
 /// </summary>
-const struct UriContainer {
+struct UriContainer {
   // TODO: Placeholder to enforce structure size.
   CHAR _unk0[0x120];
 };
