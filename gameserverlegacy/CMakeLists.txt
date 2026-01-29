@@ -4,7 +4,7 @@
 set(SERVER_LEGACY_SOURCES
     "dllmain.cpp"
     "gameserver.cpp"
-    "common/echovrInternal.cpp"
+    "common/echovr_internal.cpp"
 )
 
 add_library(GameServerLegacy SHARED

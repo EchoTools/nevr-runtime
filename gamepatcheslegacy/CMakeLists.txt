@@ -6,15 +6,15 @@ find_path(DETOURS_INCLUDE_DIRS "detours/detours.h")
 set(PATCHES_LEGACY_SOURCES
     "dllmain.cpp"
     "patches.cpp"
-    "common/echovrInternal.cpp"
+    "common/echovr_internal.cpp"
 )
 set(PATCHES_LEGACY_HEADERS
     "patches.h"
     "processmem.h"
     "common/pch.h"
     "common/echovr.h"
-    "common/echovrInternal.h"
-    "common/echovrunexported.h"
+    "common/echovr_internal.h"
+    "common/echovr_unexported.h"
 )
 
 add_library(GamePatchesLegacy SHARED ${PATCHES_LEGACY_SOURCES} ${PATCHES_LEGACY_HEADERS} "exports.def")
