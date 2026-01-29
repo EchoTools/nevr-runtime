@@ -14,12 +14,8 @@
             "inherits": "msvc-flags",
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "$env{HOME}/.vcpkg/scripts/buildsystems/vcpkg.cmake",
             "cacheVariables": {
-                "CMAKE_TOOLCHAIN_FILE": {
-                    "type": "FILEPATH",
-                    "value": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
-                },
-                "VCPKG_VERBOSE": "OFF",
                 "CMAKE_COLOR_DIAGNOSTICS": "ON"
             }
         },
@@ -46,9 +42,7 @@
             "binaryDir": "${sourceDir}/build/linux-wine-${presetName}",
             "toolchainFile": "${sourceDir}/cmake/toolchain-msvc-wine.cmake",
             "cacheVariables": {
-                "CMAKE_COLOR_DIAGNOSTICS": "ON",
-                "VCPKG_TARGET_TRIPLET": "x64-windows",
-                "CMAKE_PREFIX_PATH": "${sourceDir}/vcpkg_installed/x64-windows"
+                "CMAKE_COLOR_DIAGNOSTICS": "ON"
             }
         },
         {
@@ -63,6 +57,36 @@
             "name": "linux-wine-release",
             "displayName": "Linux Wine Release",
             "inherits": "linux-wine-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "mingw-base",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "$env{HOME}/.vcpkg/scripts/buildsystems/vcpkg.cmake",
+            "cacheVariables": {
+                "CMAKE_COLOR_DIAGNOSTICS": "ON",
+                "VCPKG_TARGET_TRIPLET": "x64-mingw-static",
+                "VCPKG_HOST_TRIPLET": "x64-linux",
+                "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchain-mingw64.cmake",
+                "VCPKG_APPLOCAL_DEPS": "OFF"
+            }
+        },
+        {
+            "name": "mingw-debug",
+            "displayName": "MinGW Debug",
+            "inherits": "mingw-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "mingw-release",
+            "displayName": "MinGW Release",
+            "inherits": "mingw-base",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
             }
@@ -88,6 +112,16 @@
             "name": "linux-wine-release",
             "displayName": "Build Linux Wine (Release)",
             "configurePreset": "linux-wine-release"
+        },
+        {
+            "name": "mingw-debug",
+            "displayName": "Build MinGW (Debug)",
+            "configurePreset": "mingw-debug"
+        },
+        {
+            "name": "mingw-release",
+            "displayName": "Build MinGW (Release)",
+            "configurePreset": "mingw-release"
         }
     ]
 }
