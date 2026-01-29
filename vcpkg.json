@@ -1,6 +1,5 @@
 {
   "dependencies": [
-    "detours",
     "protobuf",
     "googleapis"
   ]
