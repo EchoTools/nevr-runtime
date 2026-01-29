@@ -5,10 +5,11 @@
 #define ECHOVR_H
 
 // Include necessary headers
-#include <Windows.h>
-#include <guiddef.h>
-
 #include <cstdint>
+
+#include "../../common/platform_stubs.h"
+#include "../../extern/nevr-common/common/Windows.h"
+#include "../../extern/nevr-common/common/guiddef.h"
 
 namespace EchoVR {
 // Forward declarations

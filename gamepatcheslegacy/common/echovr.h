@@ -2,9 +2,11 @@
 #ifndef ECHOVR_H
 #define ECHOVR_H
 
-#include <Windows.h>
-#include <guiddef.h>
 #include <cstdint>
+
+#include "../../common/platform_stubs.h"
+#include "../../extern/nevr-common/common/Windows.h"
+#include "../../extern/nevr-common/common/guiddef.h"
 
 namespace EchoVR {
 
@@ -66,9 +68,9 @@ enum class LogLevel : INT32 {
 
 // Callback delegate structure
 struct DelegateProxy {
-  VOID* instance;       // Caller instance
-  UINT64 method[2];     // Method to call via proxyFunc
-  VOID* proxyFunc;      // Wrapper function that invokes method
+  VOID* instance;    // Caller instance
+  UINT64 method[2];  // Method to call via proxyFunc
+  VOID* proxyFunc;   // Wrapper function that invokes method
 };
 
 // 64-bit symbol hash identifier
@@ -276,28 +278,28 @@ struct Lobby {
     BYTE padding[6];
   };
 
-  VOID* _unk0;                     // 0x00
-  Broadcaster* broadcaster;        // 0x08
-  TcpBroadcaster* tcpBroadcaster;  // 0x10
-  UINT32 maxEntrants;              // 0x18
-  UINT32 hostingFlags;             // 0x1C (bit 1 = pass host ownership)
-  CHAR _unk2[0x10];                // 0x20
-  INT64 serverLibraryModule;       // 0x30
-  IServerLib* serverLibray;        // 0x38 (typo preserved for ABI)
-  DelegateProxy acceptEntrantFunc; // 0x40
-  CHAR _unk3[0xD0];                // 0x60
-  UINT32 hosting;                  // 0x130
-  CHAR _unk4[0x04];                // 0x134
-  Peer hostPeer;                   // 0x138
-  Peer internalHostPeer;           // 0x140
-  Pool<LocalEntrantv2> localEntrants;              // 0x148
-  CHAR _unk5[0x84 - sizeof(localEntrants)];        // Unknown
-  GUID gameSessionId;              // 0x1CC
-  CHAR _unk6[0x10];                // 0x1DC
-  UINT32 entrantsLocked;           // 0x1EC
-  UINT64 ownerSlot;                // 0x1F0
-  UINT32 ownerChanged;             // 0x1F8 (TODO: verify)
-  CHAR _unk7[0x360 - 0x1FC];       // 0x1FC
+  VOID* _unk0;                                // 0x00
+  Broadcaster* broadcaster;                   // 0x08
+  TcpBroadcaster* tcpBroadcaster;             // 0x10
+  UINT32 maxEntrants;                         // 0x18
+  UINT32 hostingFlags;                        // 0x1C (bit 1 = pass host ownership)
+  CHAR _unk2[0x10];                           // 0x20
+  INT64 serverLibraryModule;                  // 0x30
+  IServerLib* serverLibray;                   // 0x38 (typo preserved for ABI)
+  DelegateProxy acceptEntrantFunc;            // 0x40
+  CHAR _unk3[0xD0];                           // 0x60
+  UINT32 hosting;                             // 0x130
+  CHAR _unk4[0x04];                           // 0x134
+  Peer hostPeer;                              // 0x138
+  Peer internalHostPeer;                      // 0x140
+  Pool<LocalEntrantv2> localEntrants;         // 0x148
+  CHAR _unk5[0x84 - sizeof(localEntrants)];   // Unknown
+  GUID gameSessionId;                         // 0x1CC
+  CHAR _unk6[0x10];                           // 0x1DC
+  UINT32 entrantsLocked;                      // 0x1EC
+  UINT64 ownerSlot;                           // 0x1F0
+  UINT32 ownerChanged;                        // 0x1F8 (TODO: verify)
+  CHAR _unk7[0x360 - 0x1FC];                  // 0x1FC
   HeapArray<Lobby::EntrantData> entrantData;  // 0x360
   CHAR _unk_after_entrants[0x1C0];            // 0x378
 

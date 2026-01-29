@@ -19,14 +19,14 @@ set(PROTO_FILES
 set(PROTO_BINARY_DIR "${CMAKE_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY ${PROTO_BINARY_DIR})
 
-# For cross-compilation from Linux, use vcpkg protoc.exe via Wine wrapper
+# For cross-compilation from Linux, use vcpkg protoc (native Linux binary)
 # to ensure version compatibility with vcpkg protobuf library
 if(CMAKE_CROSSCOMPILING)
-  set(VCPKG_PROTOC "${CMAKE_SOURCE_DIR}/vcpkg_installed/x64-windows/tools/protobuf/protoc.exe")
-  set(PROTOC_WRAPPER "${CMAKE_SOURCE_DIR}/scripts/protoc-wine.sh")
+  # Use the native protoc from vcpkg (x64-linux or x64-mingw-static)
+  set(VCPKG_PROTOC "${CMAKE_SOURCE_DIR}/vcpkg_installed/x64-mingw-static/tools/protobuf/protoc")
   
-  if(EXISTS ${VCPKG_PROTOC} AND EXISTS ${PROTOC_WRAPPER})
-    message(STATUS "Using vcpkg protoc via Wine wrapper for code generation")
+  if(EXISTS ${VCPKG_PROTOC})
+    message(STATUS "Using vcpkg native protoc for code generation")
     
     # Generated files - names match the proto file paths
     set(PROTO_GENERATED_SRCS
@@ -47,12 +47,12 @@ if(CMAKE_CROSSCOMPILING)
     # Custom command to generate protobuf files
     add_custom_command(
       OUTPUT ${PROTO_GENERATED_SRCS} ${PROTO_GENERATED_HDRS}
-      COMMAND ${PROTOC_WRAPPER} ${VCPKG_PROTOC}
+      COMMAND ${VCPKG_PROTOC}
               --proto_path=${NEVRCOMMON_DIR}/proto
               --cpp_out=${PROTO_BINARY_DIR}
               ${PROTO_FILES}
       DEPENDS ${PROTO_FILES}
-      COMMENT "Generating protobuf files via Wine"
+      COMMENT "Generating protobuf files with native protoc"
       VERBATIM
     )
     

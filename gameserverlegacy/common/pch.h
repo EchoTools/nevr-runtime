@@ -11,14 +11,13 @@
 #pragma comment(lib, "Ws2_32.lib")
 
 #include <cstdio>
-#include <iostream>
 #include <fstream>
-#include <winsock2.h>
-
+#include <iostream>
+// Use project-local winsock2.h shim for LSP/CI
+#include "../../winsock2.h"
 
 #define WIN32_LEAN_AND_MEAN
-#include <windows.h>
 #include <shellapi.h>
+#include <windows.h>
 
-
-#endif //PCH_H
+#endif  // PCH_H
