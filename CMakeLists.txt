@@ -150,7 +150,7 @@ find_package(Protobuf REQUIRED)
 
 add_subdirectory(common)
 add_subdirectory(protobufnevr)
-add_subdirectory(dbghooks)
+# add_subdirectory(dbghooks)  # TODO: dbghooks has no CMakeLists.txt - will move to tools/dbghooks/
 add_subdirectory(gamepatches)
 add_subdirectory(gamepatcheslegacy)
 add_subdirectory(gameserver)
@@ -230,7 +230,7 @@ add_custom_target(dist-prepare
    # Package Blazar component resources
    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/../evr-reconstruction/assets/extracted_large/resources/resources/unknown_0xdbaed509c67b8884/" "${DIST_DIR}/blazar_resources" || ${CMAKE_COMMAND} -E true
    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_DIR}/" || ${CMAKE_COMMAND} -E true
-  DEPENDS dbghooks
+  # DEPENDS dbghooks
   COMMENT "Preparing distribution directory: ${DIST_DIR}"
   VERBATIM
 )
@@ -306,7 +306,7 @@ add_custom_target(dist-lite-prepare
    # Package Blazar component resources
    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/../evr-reconstruction/assets/extracted_large/resources/resources/unknown_0xdbaed509c67b8884/" "${DIST_LITE_DIR}/blazar_resources" || ${CMAKE_COMMAND} -E true
    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
-   DEPENDS dbghooks
+   # DEPENDS dbghooks
   COMMENT "Preparing lite distribution directory (stripped): ${DIST_LITE_DIR}"
   VERBATIM
 )

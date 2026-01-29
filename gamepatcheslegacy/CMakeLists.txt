@@ -1,8 +1,5 @@
 # GamePatchesLegacy - self-contained frozen module
-# Find Detours
-find_library(DETOURS_LIBRARY detours REQUIRED)
-find_path(DETOURS_INCLUDE_DIRS "detours/detours.h")
-
+# Uses MinHook for function hooking (built from extern/minhook)
 set(PATCHES_LEGACY_SOURCES
     "dllmain.cpp"
     "patches.cpp"
@@ -21,10 +18,9 @@ add_library(GamePatchesLegacy SHARED ${PATCHES_LEGACY_SOURCES} ${PATCHES_LEGACY_
 
 target_precompile_headers(GamePatchesLegacy PRIVATE "common/pch.h")
 target_include_directories(GamePatchesLegacy PRIVATE
-    ${DETOURS_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/common
 )
 
-target_link_libraries(GamePatchesLegacy PRIVATE ${DETOURS_LIBRARY})
+target_link_libraries(GamePatchesLegacy PRIVATE minhook)
 target_compile_options(GamePatchesLegacy PRIVATE /wd4251)
