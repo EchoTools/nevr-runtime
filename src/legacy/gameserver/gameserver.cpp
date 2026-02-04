@@ -252,6 +252,16 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
 
   // Set up WebSocket message handler to route messages to TCP broadcast handlers
   this->wsClient->SetMessageHandler([this](EchoVR::SymbolId msgId, const VOID* data, UINT64 size) {
+    if (msgId == SYMBOL_SERVERDB_PROTOBUF_ENVELOPE || msgId == SYMBOL_SERVERDB_TCP_CONNECTION_UNREQUIRE) {
+      return;
+    }
+
+    if (msgId == SYMBOL_SERVERDB_BROADCASTER_REGISTRATION_SUCCESS) {
+      EchoVR::BroadcasterReceiveLocalEvent(this->broadcaster, SYMBOL_BROADCASTER_LOBBY_REGISTRATION_SUCCESS,
+                                           "SNSLobbyRegistrationSuccess", (CHAR*)data, size);
+      return;
+    }
+
     switch (msgId) {
       case SYMBOL_TCPBROADCASTER_LOBBY_REGISTRATION_SUCCESS:
         if (this->tcpBroadcastRegSuccessCBHandle) {
@@ -295,19 +305,15 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   this->broadcastSessionErrorCBHandle =
       ListenForBroadcasterMessage(this, SYMBOL_BROADCASTER_LOBBY_SESSION_ERROR, TRUE, (VOID*)OnMsgSessionError);
 
-  // Subscribe to websocket events.
-  this->tcpBroadcastRegSuccessCBHandle = ListenForTcpBroadcasterMessage(
-      this, SYMBOL_TCPBROADCASTER_LOBBY_REGISTRATION_SUCCESS, (VOID*)OnTcpMsgRegistrationSuccess);
-  this->tcpBroadcastRegFailureCBHandle = ListenForTcpBroadcasterMessage(
-      this, SYMBOL_TCPBROADCASTER_LOBBY_REGISTRATION_FAILURE, (VOID*)OnTcpMsgRegistrationFailure);
-  this->tcpBroadcastStartSessionCBHandle =
-      ListenForTcpBroadcasterMessage(this, SYMBOL_TCPBROADCASTER_LOBBY_START_SESSION, (VOID*)OnTcpMessageStartSession);
-  this->tcpBroadcastPlayersAcceptedCBHandle = ListenForTcpBroadcasterMessage(
-      this, SYMBOL_TCPBROADCASTER_LOBBY_PLAYERS_ACCEPTED, (VOID*)OnTcpMsgPlayersAccepted);
-  this->tcpBroadcastPlayersRejectedCBHandle = ListenForTcpBroadcasterMessage(
-      this, SYMBOL_TCPBROADCASTER_LOBBY_PLAYERS_REJECTED, (VOID*)OnTcpMsgPlayersRejected);
-  this->tcpBroadcastSessionSuccessCBHandle = ListenForTcpBroadcasterMessage(
-      this, SYMBOL_TCPBROADCASTER_LOBBY_SESSION_SUCCESS_V5, (VOID*)OnTcpMsgSessionSuccessv5);
+  // NOTE: NOT subscribing via TcpBroadcasterListen because it uses vtable calls that crash with MinGW/MSVC mixing.
+  // Instead, all ServerDB messages are routed through the WebSocket callback handler above (lines 254-290).
+  // Set handles to 0 to indicate no registration.
+  this->tcpBroadcastRegSuccessCBHandle = 0;
+  this->tcpBroadcastRegFailureCBHandle = 0;
+  this->tcpBroadcastStartSessionCBHandle = 0;
+  this->tcpBroadcastPlayersAcceptedCBHandle = 0;
+  this->tcpBroadcastPlayersRejectedCBHandle = 0;
+  this->tcpBroadcastSessionSuccessCBHandle = 0;
 
   // Log the interaction.
   Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER.LEGACY] Initialized game server");
@@ -452,12 +458,7 @@ VOID GameServerLib::Unregister() {
   EchoVR::BroadcasterUnlisten(this->broadcaster, this->broadcastSessionStartCBHandle);
   EchoVR::BroadcasterUnlisten(this->broadcaster, this->broadcastSessionErrorCBHandle);
 
-  EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastRegSuccessCBHandle);
-  EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastRegFailureCBHandle);
-  EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastStartSessionCBHandle);
-  EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastPlayersAcceptedCBHandle);
-  EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastPlayersRejectedCBHandle);
-  EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastSessionSuccessCBHandle);
+  // Skip TcpBroadcasterUnlisten calls - handles were never registered (set to 0) to avoid vtable crashes
 
   // Disconnect from server db using custom WebSocket client
   if (this->wsClient) {
