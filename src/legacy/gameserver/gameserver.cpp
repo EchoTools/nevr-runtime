@@ -177,6 +177,24 @@ VOID OnTcpMsgPlayersRejected(GameServerLib* self, VOID* proxymthd, EchoVR::TcpPe
 }
 
 /// <summary>
+/// Event handler for receiving LobbyEntrantsV3 message from ServerDB.
+/// This is the modern message format that Nakama sends to inform the game server
+/// about player join acceptance. We forward it as ACCEPT_PLAYERS_SUCCESS to maintain
+/// compatibility with the game's internal event system.
+/// Binary format: 1 byte unk0 + 8 bytes EvrID + 16 bytes EntrantID + 2 bytes TeamIndex + 2 bytes GenIndex + 4 bytes
+/// Reserved
+/// </summary>
+/// <returns>None</returns>
+VOID OnTcpMsgLobbyEntrantsV3(GameServerLib* self, VOID* proxymthd, EchoVR::TcpPeer sender, VOID* msg, VOID* unk,
+                             UINT64 msgSize) {
+  Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER.LEGACY] Received SNSLobbyPlayerSessionsSuccessv3");
+
+  // Forward as ACCEPT_PLAYERS_SUCCESS to trigger game's internal player acceptance logic
+  EchoVR::BroadcasterReceiveLocalEvent(self->broadcaster, SYMBOL_BROADCASTER_LOBBY_ACCEPT_PLAYERS_SUCCESS_V2,
+                                       "SNSLobbyAcceptPlayersSuccessv2", msg, msgSize);
+}
+
+/// <summary>
 /// Event handler for receiving a join session success message from the TCP
 /// (websocket) ServerDB service. This message indicates that ServerDB /
 /// Matching matched a player to this server.The message provides connection
@@ -186,7 +204,6 @@ VOID OnTcpMsgPlayersRejected(GameServerLib* self, VOID* proxymthd, EchoVR::TcpPe
 /// <returns>None</returns>
 VOID OnTcpMsgSessionSuccessv5(GameServerLib* self, VOID* proxymthd, EchoVR::TcpPeer sender, VOID* msg, VOID* unk,
                               UINT64 msgSize) {
-  // Forward the received join session success event to the internal broadcast.
   Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER.LEGACY] Received session success (SNSLobbySessionSuccessv5)");
   EchoVR::BroadcasterReceiveLocalEvent(self->broadcaster, SYMBOL_BROADCASTER_LOBBY_SESSION_SUCCESS_V5,
                                        "SNSLobbySessionSuccessv5", (CHAR*)msg, msgSize);
@@ -264,6 +281,11 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
     if (msgId == SYMBOL_SERVERDB_BROADCASTER_REGISTRATION_SUCCESS) {
       EchoVR::BroadcasterReceiveLocalEvent(this->broadcaster, SYMBOL_BROADCASTER_LOBBY_REGISTRATION_SUCCESS,
                                            "SNSLobbyRegistrationSuccess", (CHAR*)data, size);
+      return;
+    }
+
+    if (msgId == SYMBOL_SERVERDB_LOBBY_ENTRANTS_V3) {
+      OnTcpMsgLobbyEntrantsV3(this, nullptr, this->serverDbPeer, const_cast<VOID*>(data), nullptr, size);
       return;
     }
 
