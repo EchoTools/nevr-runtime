@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.0.0)
+cmake_minimum_required(VERSION 3.20.0)
 
 # Suppress vcpkg usage text
 # set(VCPKG_PRINT_USAGE OFF CACHE BOOL "Disable vcpkg usage information")

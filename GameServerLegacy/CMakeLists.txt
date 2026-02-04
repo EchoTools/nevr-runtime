@@ -20,7 +20,9 @@ target_include_directories(
           ${CMAKE_BINARY_DIR}
 )
 
-# No external dependencies - fully self-contained
+# WebSocket client dependency
+find_package(ixwebsocket CONFIG REQUIRED)
+target_link_libraries(GameServerLegacy PRIVATE ixwebsocket::ixwebsocket)
 
 # Disable specific warnings
 target_compile_options(GameServerLegacy PRIVATE /wd4251 /wd4267)

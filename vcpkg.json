@@ -2,6 +2,7 @@
   "dependencies": [
     "detours",
     "protobuf",
-    "googleapis"
+    "googleapis",
+    "ixwebsocket"
   ]
 }
