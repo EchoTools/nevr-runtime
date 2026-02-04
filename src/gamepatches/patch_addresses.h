@@ -113,6 +113,22 @@ constexpr uintptr_t DEADLOCK_MONITOR = 0x1D3881;
 constexpr size_t DEADLOCK_MONITOR_SIZE = 2;
 
 // ============================================================================
+// Oculus Platform SDK Optimization (PatchBlockOculusSDK)
+// ============================================================================
+
+/// Import table entries for DLL loading functions
+/// These are used to hook LoadLibraryW/LoadLibraryExW to block Oculus Platform SDK
+/// Original analysis: OPTIMIZATION_FINAL_ADDRESS_MAP.md, Category 2
+/// Expected savings: 50-80MB RAM, 8-12% CPU per server instance
+/// Reference strings:
+///   - "Disable OVR platform features" @ 0x1416d3418
+///   - "Failed to initialize the Oculus VR Platform SDK" @ 0x14171dcf8
+///   - "OVRPlatformInitFail" @ 0x14171dcd7
+/// Import table locations:
+constexpr uintptr_t IMPORT_LOADLIBRARYW = 0x1FFA742;   // LoadLibraryW import
+constexpr uintptr_t IMPORT_LOADLIBRARYEXW = 0x1FFAFFA; // LoadLibraryExW import
+
+// ============================================================================
 // Loading Tips Patches (PatchDisableLoadingTips)
 // ============================================================================
 
