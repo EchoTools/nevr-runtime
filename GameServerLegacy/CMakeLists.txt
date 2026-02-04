@@ -4,6 +4,7 @@
 set(SERVER_LEGACY_SOURCES
     "dllmain.cpp"
     "gameserver.cpp"
+    "websocket_client.cpp"
     "common/echovrInternal.cpp"
 )
 
