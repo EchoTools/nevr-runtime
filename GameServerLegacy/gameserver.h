@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include "common/echovr.h"
 #include "common/pch.h"
 #include "websocket_client.h"
@@ -36,8 +38,8 @@ class GameServerLib : public EchoVR::IServerLib {
   EchoVR::TcpPeer serverDbPeer;
   BOOL registered;
 
-  // Custom WebSocket client for ServerDB communication
-  WebSocketClient* wsClient;
+  // Custom WebSocket client for ServerDB communication (using smart pointer for automatic cleanup)
+  std::unique_ptr<WebSocketClient> wsClient;
 
   // Session related fields.
 

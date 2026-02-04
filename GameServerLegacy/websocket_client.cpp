@@ -12,10 +12,10 @@ extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
 WebSocketClient::WebSocketClient() : webSocket_(std::make_unique<ix::WebSocket>()), connected_(FALSE) {
   // Initialize network system (required on Windows)
-  static bool netSystemInitialized = false;
-  if (!netSystemInitialized) {
+  static bool s_netSystemInitialized = false;
+  if (!s_netSystemInitialized) {
     ix::initNetSystem();
-    netSystemInitialized = true;
+    s_netSystemInitialized = true;
   }
 
   // Set up the message callback
@@ -58,18 +58,19 @@ BOOL WebSocketClient::Send(EchoVR::SymbolId msgId, const VOID* data, UINT64 size
   }
 
   // Build the message: [8 bytes: SymbolId][N bytes: payload]
-  std::string message;
-  message.resize(sizeof(EchoVR::SymbolId) + size);
+  // Use vector for binary data for better performance and semantics
+  std::vector<uint8_t> messageBuffer(sizeof(EchoVR::SymbolId) + size);
 
   // Copy the SymbolId (first 8 bytes)
-  memcpy(&message[0], &msgId, sizeof(EchoVR::SymbolId));
+  memcpy(messageBuffer.data(), &msgId, sizeof(EchoVR::SymbolId));
 
   // Copy the payload (remaining bytes)
   if (size > 0 && data != nullptr) {
-    memcpy(&message[sizeof(EchoVR::SymbolId)], data, size);
+    memcpy(messageBuffer.data() + sizeof(EchoVR::SymbolId), data, size);
   }
 
-  // Send as binary message
+  // Send as binary message (convert vector to string for ixwebsocket API)
+  std::string message(messageBuffer.begin(), messageBuffer.end());
   auto result = webSocket_->send(message, true);  // true = send as binary
 
   if (!result.success) {
@@ -127,6 +128,7 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
           if (size > 0) {
             data = payload.data() + sizeof(EchoVR::SymbolId);
           }
+          // Note: data may be nullptr when size is 0, which is valid for empty payloads
 
           Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Received message (msgId: 0x%llX, size: %llu bytes)", msgId,
               payload.size());

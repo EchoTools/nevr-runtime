@@ -243,8 +243,13 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   this->broadcaster = broadcaster;
   this->tcpBroadcasterData = lobby->tcpBroadcaster->data;
 
+  // Initialize serverDbPeer to a placeholder value (required for message routing)
+  // The actual peer connection is handled by WebSocketClient, but existing code expects a peer ID
+  this->serverDbPeer.index = 0;
+  this->serverDbPeer.gen = 0;
+
   // Initialize custom WebSocket client for ServerDB
-  this->wsClient = new WebSocketClient();
+  this->wsClient = std::make_unique<WebSocketClient>();
 
   // Set up WebSocket message handler to route messages to TCP broadcast handlers
   this->wsClient->SetMessageHandler([this](EchoVR::SymbolId msgId, const VOID* data, UINT64 size) {
@@ -294,11 +299,7 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
 /// </summary>
 /// <returns>None</returns>
 VOID GameServerLib::Terminate() {
-  // Clean up the WebSocket client
-  if (this->wsClient) {
-    delete this->wsClient;
-    this->wsClient = nullptr;
-  }
+  // WebSocket client cleanup is automatic via unique_ptr destructor
 
   Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER.LEGACY] Terminated game server");
 }
