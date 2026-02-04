@@ -7,23 +7,29 @@ set(SERVER_LEGACY_SOURCES
     "common/echovr_internal.cpp"
 )
 
-add_library(GameServerLegacy SHARED
+add_library(gameserverlegacy SHARED
     ${SERVER_LEGACY_SOURCES}
     "exports.def"
 )
 
-target_precompile_headers(GameServerLegacy PRIVATE "common/pch.h")
+target_precompile_headers(gameserverlegacy PRIVATE "common/pch.h")
 
 target_include_directories(
-  GameServerLegacy
+  gameserverlegacy
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
           ${CMAKE_BINARY_DIR}
 )
 
 # No external dependencies - fully self-contained
 
+# Set output name to remove 'lib' prefix on MinGW
+set_target_properties(gameserverlegacy PROPERTIES
+  OUTPUT_NAME "gameserverlegacy"
+  PREFIX ""
+)
+
 # Disable specific warnings
 # Disable specific warnings (MSVC only)
 if(MSVC)
-  target_compile_options(GameServerLegacy PRIVATE /wd4251 /wd4267)
+  target_compile_options(gameserverlegacy PRIVATE /wd4251 /wd4267)
 endif()

@@ -20,20 +20,20 @@ set(TELEMETRY_HEADERS
     "data_source.h"
 )
 
-add_library(TelemetryAgent SHARED
+add_library(telemetryagent SHARED
     ${TELEMETRY_SOURCES}
     ${TELEMETRY_HEADERS}
 )
 
 # Link against Windows HTTP services and threading
-target_link_libraries(TelemetryAgent 
+target_link_libraries(telemetryagent 
     PRIVATE 
     winhttp
     ws2_32
     proto_nevr
 )
 
-target_compile_definitions(TelemetryAgent 
+target_compile_definitions(telemetryagent 
     PRIVATE 
     TELEMETRY_AGENT_EXPORTS
     PROTOBUF_STATIC_LIB
@@ -41,7 +41,7 @@ target_compile_definitions(TelemetryAgent
     NOMINMAX
 )
 
-target_include_directories(TelemetryAgent
+target_include_directories(telemetryagent
     PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_BINARY_DIR}
@@ -50,9 +50,15 @@ target_include_directories(TelemetryAgent
 )
 
 # C++17 for std::optional, std::string_view, etc.
-target_compile_features(TelemetryAgent PRIVATE cxx_std_17)
+target_compile_features(telemetryagent PRIVATE cxx_std_17)
+
+# Set output name to remove 'lib' prefix on MinGW
+set_target_properties(telemetryagent PROPERTIES
+  OUTPUT_NAME "telemetryagent"
+  PREFIX ""
+)
 
 # Disable specific warnings (MSVC only)
 if(MSVC)
-  target_compile_options(TelemetryAgent PRIVATE /wd4251)
+  target_compile_options(telemetryagent PRIVATE /wd4251)
 endif()

@@ -7,17 +7,17 @@ set(SERVER_SOURCES
     "servercontext.cpp"
 )
 
-add_library(GameServer SHARED
+add_library(gameserver SHARED
     ${SERVER_SOURCES}
     "exports.def"
 )
 
-target_compile_definitions(GameServer PRIVATE PROTOBUF_STATIC_LIB)
+target_compile_definitions(gameserver PRIVATE PROTOBUF_STATIC_LIB)
 
-target_precompile_headers(GameServer PRIVATE "${NEVR_COMMON_INCLUDE}/pch.h")
+target_precompile_headers(gameserver PRIVATE "${NEVR_COMMON_INCLUDE}/pch.h")
 
 target_include_directories(
-  GameServer
+  gameserver
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
           ${CMAKE_BINARY_DIR}
           "${CMAKE_SOURCE_DIR}/src/common"
@@ -25,10 +25,16 @@ target_include_directories(
           "${NEVR_COMMON_INCLUDE}"
 )
 
-target_link_libraries(GameServer PRIVATE Common proto_nevr TelemetryAgent ws2_32)
+target_link_libraries(gameserver PRIVATE common proto_nevr telemetryagent ws2_32)
+
+# Set output name to remove 'lib' prefix on MinGW
+set_target_properties(gameserver PROPERTIES
+  OUTPUT_NAME "gameserver"
+  PREFIX ""
+)
 
 # Disable specific warnings
 # Disable specific warnings (MSVC only)
 if(MSVC)
-  target_compile_options(GameServer PRIVATE /wd4251)
+  target_compile_options(gameserver PRIVATE /wd4251)
 endif()
