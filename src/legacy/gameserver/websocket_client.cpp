@@ -12,7 +12,12 @@
 
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
-WebSocketClient::WebSocketClient() : webSocket_(std::make_unique<ix::WebSocket>()), connected_(FALSE) {
+WebSocketClient::WebSocketClient()
+    : webSocket_(std::make_unique<ix::WebSocket>()),
+      connected_(FALSE),
+      lastMsgId_(0),
+      lastPayloadHash_(0),
+      lastMsgTimestamp_(0) {
   // Initialize network system (required on Windows)
   // Note: Using static variable for one-time initialization across all instances
   static bool netSystemInitialized_ = false;
@@ -21,11 +26,17 @@ WebSocketClient::WebSocketClient() : webSocket_(std::make_unique<ix::WebSocket>(
     netSystemInitialized_ = true;
   }
 
+  // Initialize thread synchronization for received messages
+  InitializeCriticalSection(&receivedMessagesMutex_);
+
   // Set up the message callback
   webSocket_->setOnMessageCallback([this](const ix::WebSocketMessagePtr& msg) { OnMessage(msg); });
 }
 
-WebSocketClient::~WebSocketClient() { Disconnect(); }
+WebSocketClient::~WebSocketClient() {
+  Disconnect();
+  DeleteCriticalSection(&receivedMessagesMutex_);
+}
 
 BOOL WebSocketClient::Connect(const CHAR* uri) {
   if (!uri || strlen(uri) == 0) {
@@ -129,18 +140,42 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
           UINT64 length;
           memcpy(&length, payload.data() + sizeof(UINT64) + sizeof(EchoVR::SymbolId), sizeof(UINT64));
 
-          const VOID* data = nullptr;
           UINT64 actualPayloadSize = payload.size() - sizeof(UINT64) - sizeof(EchoVR::SymbolId) - sizeof(UINT64);
+
+          Log(EchoVR::LogLevel::Info,
+              "[WEBSOCKET] Received message (msgId: 0x%llX, length field: %llu, calculated payload: %llu bytes, total "
+              "frame: %zu bytes)",
+              msgId, length, actualPayloadSize, payload.size());
+
+          // Deduplicate messages: check if this is the same as the last message within 100ms
+          UINT64 payloadHash = 0;
+          if (actualPayloadSize >= 8) {
+            memcpy(&payloadHash, payload.data() + sizeof(UINT64) + sizeof(EchoVR::SymbolId) + sizeof(UINT64), 8);
+          }
+          UINT64 currentTimestamp = GetTickCount64();
+
+          if (msgId == lastMsgId_ && payloadHash == lastPayloadHash_ && (currentTimestamp - lastMsgTimestamp_) < 100) {
+            Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Dropping duplicate message (msgId: 0x%llX)", msgId);
+            return;  // Exit OnMessage entirely, not just the switch case
+          }
+
+          lastMsgId_ = msgId;
+          lastPayloadHash_ = payloadHash;
+          lastMsgTimestamp_ = currentTimestamp;
+
+          // Queue message for processing on main thread (thread-safe)
+          ReceivedMessage receivedMsg;
+          receivedMsg.msgId = msgId;
+          receivedMsg.timestamp = currentTimestamp;
           if (actualPayloadSize > 0) {
-            data = payload.data() + sizeof(UINT64) + sizeof(EchoVR::SymbolId) + sizeof(UINT64);
+            receivedMsg.payload.resize(actualPayloadSize);
+            memcpy(receivedMsg.payload.data(),
+                   payload.data() + sizeof(UINT64) + sizeof(EchoVR::SymbolId) + sizeof(UINT64), actualPayloadSize);
           }
 
-          Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Received message (msgId: 0x%llX, length: %llu, payload: %llu bytes)",
-              msgId, length, actualPayloadSize);
-
-          if (messageCallback_) {
-            messageCallback_(msgId, data, actualPayloadSize);
-          }
+          EnterCriticalSection(&receivedMessagesMutex_);
+          receivedMessages_.push_back(std::move(receivedMsg));
+          LeaveCriticalSection(&receivedMessagesMutex_);
         } else {
           Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Received malformed binary message (too short: %zu bytes)",
               payload.size());
@@ -178,4 +213,19 @@ VOID WebSocketClient::FlushPendingMessages() {
   }
 
   pendingMessages_.clear();
+}
+
+VOID WebSocketClient::ProcessReceivedMessages() {
+  std::vector<ReceivedMessage> messagesToProcess;
+
+  EnterCriticalSection(&receivedMessagesMutex_);
+  messagesToProcess.swap(receivedMessages_);
+  LeaveCriticalSection(&receivedMessagesMutex_);
+
+  for (const auto& msg : messagesToProcess) {
+    if (messageCallback_) {
+      const VOID* data = msg.payload.empty() ? nullptr : msg.payload.data();
+      messageCallback_(msg.msgId, data, msg.payload.size());
+    }
+  }
 }

@@ -81,9 +81,30 @@ class WebSocketClient {
   // Message queue for messages sent before connection established
   std::vector<std::string> pendingMessages_;
 
+  // Buffer to store last received message payload (keeps pointer valid during callback)
+  std::vector<UINT8> lastReceivedPayload_;
+
+  // Message queue for processing on main thread (thread-safe)
+  struct ReceivedMessage {
+    EchoVR::SymbolId msgId;
+    std::vector<UINT8> payload;
+    UINT64 timestamp;  // For deduplication
+  };
+  std::vector<ReceivedMessage> receivedMessages_;
+  CRITICAL_SECTION receivedMessagesMutex_;
+
+  // Last processed message for deduplication (msgId + first 8 bytes of payload)
+  EchoVR::SymbolId lastMsgId_;
+  UINT64 lastPayloadHash_;
+  UINT64 lastMsgTimestamp_;
+
   // Internal message handler for ixwebsocket
   VOID OnMessage(const ix::WebSocketMessagePtr& msg);
 
   // Flush pending messages after connection is established
   VOID FlushPendingMessages();
+
+ public:
+  // Process queued received messages (call from main thread)
+  VOID ProcessReceivedMessages();
 };

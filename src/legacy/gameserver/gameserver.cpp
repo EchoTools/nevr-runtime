@@ -153,6 +153,8 @@ VOID OnTcpMsgPlayersAccepted(GameServerLib* self, VOID* proxymthd, EchoVR::TcpPe
                              UINT64 msgSize) {
   // Forward the received player acceptance success event to the internal
   // broadcast.
+  Log(EchoVR::LogLevel::Info,
+      "[ECHORELAY.GAMESERVER.LEGACY] Received players accepted (SNSLobbyAcceptPlayersSuccessv2)");
   EchoVR::BroadcasterReceiveLocalEvent(self->broadcaster, SYMBOL_BROADCASTER_LOBBY_ACCEPT_PLAYERS_SUCCESS_V2,
                                        "SNSLobbyAcceptPlayersSuccessv2", msg, msgSize);
 }
@@ -168,6 +170,8 @@ VOID OnTcpMsgPlayersRejected(GameServerLib* self, VOID* proxymthd, EchoVR::TcpPe
                              UINT64 msgSize) {
   // Forward the received player acceptance failure event to the internal
   // broadcast.
+  Log(EchoVR::LogLevel::Info,
+      "[ECHORELAY.GAMESERVER.LEGACY] Received players rejected (SNSLobbyAcceptPlayersFailurev2)");
   EchoVR::BroadcasterReceiveLocalEvent(self->broadcaster, SYMBOL_BROADCASTER_LOBBY_ACCEPT_PLAYERS_FAILURE_V2,
                                        "SNSLobbyAcceptPlayersFailurev2", msg, msgSize);
 }
@@ -183,6 +187,7 @@ VOID OnTcpMsgPlayersRejected(GameServerLib* self, VOID* proxymthd, EchoVR::TcpPe
 VOID OnTcpMsgSessionSuccessv5(GameServerLib* self, VOID* proxymthd, EchoVR::TcpPeer sender, VOID* msg, VOID* unk,
                               UINT64 msgSize) {
   // Forward the received join session success event to the internal broadcast.
+  Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER.LEGACY] Received session success (SNSLobbySessionSuccessv5)");
   EchoVR::BroadcasterReceiveLocalEvent(self->broadcaster, SYMBOL_BROADCASTER_LOBBY_SESSION_SUCCESS_V5,
                                        "SNSLobbySessionSuccessv5", (CHAR*)msg, msgSize);
 }
@@ -306,14 +311,14 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
       ListenForBroadcasterMessage(this, SYMBOL_BROADCASTER_LOBBY_SESSION_ERROR, TRUE, (VOID*)OnMsgSessionError);
 
   // NOTE: NOT subscribing via TcpBroadcasterListen because it uses vtable calls that crash with MinGW/MSVC mixing.
-  // Instead, all ServerDB messages are routed through the WebSocket callback handler above (lines 254-290).
-  // Set handles to 0 to indicate no registration.
-  this->tcpBroadcastRegSuccessCBHandle = 0;
-  this->tcpBroadcastRegFailureCBHandle = 0;
-  this->tcpBroadcastStartSessionCBHandle = 0;
-  this->tcpBroadcastPlayersAcceptedCBHandle = 0;
-  this->tcpBroadcastPlayersRejectedCBHandle = 0;
-  this->tcpBroadcastSessionSuccessCBHandle = 0;
+  // Instead, all ServerDB messages are routed through the WebSocket callback handler above (lines 254-300).
+  // Set handles to non-zero dummy values to enable message routing (actual vtable registration is skipped).
+  this->tcpBroadcastRegSuccessCBHandle = 1;
+  this->tcpBroadcastRegFailureCBHandle = 1;
+  this->tcpBroadcastStartSessionCBHandle = 1;
+  this->tcpBroadcastPlayersAcceptedCBHandle = 1;
+  this->tcpBroadcastPlayersRejectedCBHandle = 1;
+  this->tcpBroadcastSessionSuccessCBHandle = 1;
 
   // Log the interaction.
   Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER.LEGACY] Initialized game server");
@@ -346,6 +351,11 @@ VOID GameServerLib::Terminate() {
 /// </summary>
 /// <returns>None</returns>
 VOID GameServerLib::Update() {
+  // Process WebSocket messages on main thread
+  if (this->wsClient) {
+    this->wsClient->ProcessReceivedMessages();
+  }
+
   // TODO: This is temporary code to test if the profile JSON is updated (but
   // not sent to server). If it is not updated in this structure, one of the
   // "apply loadout" or "save loadout" operations may trigger the update?
