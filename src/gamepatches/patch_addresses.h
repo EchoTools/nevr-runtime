@@ -129,6 +129,22 @@ constexpr uintptr_t IMPORT_LOADLIBRARYW = 0x1FFA742;   // LoadLibraryW import
 constexpr uintptr_t IMPORT_LOADLIBRARYEXW = 0x1FFAFFA; // LoadLibraryExW import
 
 // ============================================================================
+// Wwise Audio System Optimization (PatchDisableWwise)
+// ============================================================================
+
+/// Wwise audio system addresses for non-VOIP audio disabling
+/// Original analysis: OPTIMIZATION_FINAL_ADDRESS_MAP.md, Category 3
+/// Expected savings: 20-30MB RAM, 5-8% CPU per server instance
+/// CRITICAL: VOIP components (CR15NetVoipBroadcasterCS @ 0x141208348,
+///           CR15NetVoipReceiverCS @ 0x1412084a5) must remain functional
+/// Reference strings:
+///   - "Wwise Initialization Successful" @ various
+///   - Wwise SDK version strings
+/// Function locations:
+constexpr uintptr_t WWISE_INIT = 0x140209920;           // Wwise initialization
+constexpr uintptr_t WWISE_RENDERAUDIO = 0x140fa5610;    // Audio rendering loop
+
+// ============================================================================
 // Loading Tips Patches (PatchDisableLoadingTips)
 // ============================================================================
 
