@@ -136,13 +136,11 @@ endif()
 # Include directories
 include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_BINARY_DIR}
-  "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/extern/nevr-common/common")
+  "${CMAKE_SOURCE_DIR}/src")
 
 # Define preprocessor macros
 add_compile_definitions("$<$<CONFIG:Debug>:_DEBUG;_WINDOWS;_USRDLL>"
   "$<$<CONFIG:Release>:NDEBUG;_WINDOWS;_USRDLL>")
-
-set(NEVR_COMMON_INCLUDE "${CMAKE_SOURCE_DIR}/extern/nevr-common/common")
 
 add_subdirectory(extern)
 

@@ -1,5 +1,5 @@
 #pragma once
-#include "pch.h"
+#include "common/pch.h"
 
 /// <summary>
 /// Copies memory from a source buffer of a given size to a destination process memory buffer.

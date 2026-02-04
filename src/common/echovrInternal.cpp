@@ -1,6 +1,6 @@
 #pragma once
 
-#include "echovr_internal.h"
+#include "echovrInternal.h"
 
 #include "echovr.h"
 #include "pch.h"
@@ -137,6 +137,9 @@ WriteLogFunc* WriteLog = (WriteLogFunc*)(g_GameBaseAddress + 0xEBE70);
 /// TODO: Seemingly parses an HTTP/HTTPS URI to be connected to.
 /// <returns>TODO: Unknown</returns>
 HttpConnectFunc* HttpConnect = (HttpConnectFunc*)(g_GameBaseAddress + 0x1F60C0);
+
+/// Loads a JSON file from the given path into a Json structure.
+LoadJsonFromFileFunc* LoadJsonFromFile = (LoadJsonFromFileFunc*)(g_GameBaseAddress + 0x5F0990);
 
 /// Loads the local config (located at ./_local/config.json) for the provided game instance.
 LoadLocalConfigFunc* LoadLocalConfig = (LoadLocalConfigFunc*)(g_GameBaseAddress + 0x179EB0);

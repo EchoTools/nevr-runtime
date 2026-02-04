@@ -8,7 +8,7 @@ add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
 
 target_compile_definitions(gamepatches PRIVATE USE_MINHOOK)
 
-target_precompile_headers(gamepatches PRIVATE "${NEVR_COMMON_INCLUDE}/pch.h")
+target_precompile_headers(gamepatches PRIVATE "${CMAKE_SOURCE_DIR}/src/common/pch.h")
 target_include_directories(gamepatches PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(gamepatches PRIVATE minhook common version)
