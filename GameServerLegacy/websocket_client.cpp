@@ -12,10 +12,11 @@ extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
 WebSocketClient::WebSocketClient() : webSocket_(std::make_unique<ix::WebSocket>()), connected_(FALSE) {
   // Initialize network system (required on Windows)
-  static bool s_netSystemInitialized = false;
-  if (!s_netSystemInitialized) {
+  // Note: Using static variable for one-time initialization across all instances
+  static bool netSystemInitialized_ = false;
+  if (!netSystemInitialized_) {
     ix::initNetSystem();
-    s_netSystemInitialized = true;
+    netSystemInitialized_ = true;
   }
 
   // Set up the message callback
@@ -69,7 +70,9 @@ BOOL WebSocketClient::Send(EchoVR::SymbolId msgId, const VOID* data, UINT64 size
     memcpy(messageBuffer.data() + sizeof(EchoVR::SymbolId), data, size);
   }
 
-  // Send as binary message (convert vector to string for ixwebsocket API)
+  // Send as binary message
+  // Note: ixwebsocket API requires std::string for send(). The conversion creates a copy,
+  // but this is unavoidable with the current library API (no zero-copy send available).
   std::string message(messageBuffer.begin(), messageBuffer.end());
   auto result = webSocket_->send(message, true);  // true = send as binary
 
