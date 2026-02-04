@@ -73,3 +73,4 @@ dbghooks/echovr_patched.exe
 dbghooks/echovr.dll
 dbghooks/echovr_patched.dll
 dbghooks/exe_to_dll.exe
+.cache/
