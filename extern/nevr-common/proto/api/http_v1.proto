@@ -1,0 +1,151 @@
+/**
+ * The Nevr server RPC protocol for games and apps.
+ */
+syntax = "proto3";
+
+package api;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/wrappers.proto";
+
+option csharp_namespace = "Nevr.Protobuf";
+option go_package = "github.com/echotools/nevr-common/v4/gen/go/api";
+option java_multiple_files = true;
+option java_outer_classname = "NevrApi";
+option java_package = "com.github.echotools.nevr.api";
+
+// List game servers.
+message ListServersRequest {
+  // Limit the number of returned matches.
+  google.protobuf.Int32Value limit = 1;
+  // Arbitrary label query.
+  google.protobuf.StringValue query = 6;
+}
+
+// List all users that are part of a group.
+message ListGuildGameServersRequest {
+  // The guild ID to list from.
+  string guild_group_id = 1;
+  // Max number of records to return. Between 1 and 100.
+  google.protobuf.Int32Value limit = 2;
+  // The game server state to list.
+  google.protobuf.Int32Value state = 3;
+  // Arbitrary label query.
+  google.protobuf.StringValue query = 5;
+  // An optional next page cursor.
+  string cursor = 4;
+}
+
+message GuildGameServerList {
+  // A single server-state pair.
+  message GuildGameServer {
+    // The server session status.
+    enum State {
+      // Default unspecified state.
+      STATE_UNSPECIFIED = 0;
+      // The session is active and can be connected to.
+      STATE_ACTIVE = 1;
+      // The session is closed and will be deleted soon.
+      STATE_CLOSED = 2;
+    }
+
+    // Server.
+    GameServer game_server = 1;
+    // The user's relationship to the group.
+    google.protobuf.Int32Value state = 2;
+  }
+  // Server-state pairs.
+  repeated GuildGameServer guild_servers = 4;
+  // An optional next page cursor.
+  string cursor = 2;
+}
+
+// Game Server
+message GameServer {
+  // The id of the server.
+  google.protobuf.UInt64Value server_id = 10;
+  // The user ID of the owner of the server.
+  google.protobuf.StringValue operator_id = 4;
+  // The endpoint data used for client connections. (internal_ip:external_ip:port)
+  google.protobuf.StringValue endpoint = 6;
+  // The features of the server.
+  repeated string supported_features = 11;
+  // The timestep duration in nanoseconds.
+  int32 timestep_nanos = 3;
+  // Additional information about the server.
+  map<string, string> metadata = 24;
+}
+
+// Request to create a lobby session.
+message LobbySessionCreateRequest {
+  message EntrantReservation {
+    // A single entrant reservation.
+    enum RoleAlignment {
+      ROLE_ALIGNMENT_UNSPECIFIED = 0;
+      ROLE_ALIGNMENT_BLUE = 1;
+      ROLE_ALIGNMENT_ORANGE = 2;
+      ROLE_ALIGNMENT_SPECTATOR = 3;
+      ROLE_ALIGNMENT_SOCIAL = 4;
+      ROLE_ALIGNMENT_MODERATOR = 5;
+    }
+    // Entrant.
+    LobbyEntrant entrant = 1;
+    // The user's relationship to the group.
+    google.protobuf.Int32Value role_alignment = 2;
+    // The expiry time for the reservations.
+    google.protobuf.Timestamp expiry = 10;
+  }
+  // The game mode, e.g. "echo_arena_private"
+  string mode = 1;
+  // The level to play on, e.g. "mpl_arena"
+  string level = 2;
+  // The number of players per team (1-5), ignored for social modes.
+  int32 team_size = 3;
+  // The guild group ID to which the lobby belongs.
+  string guild_group_id = 6;
+  // The ID of the lobby creator/allocator
+  string owner_id = 5;
+  // The preferred region for the lobby session.
+  string region_code = 8;
+  // Any required features that must be supported by the game server/clients.
+  repeated string required_features = 7;
+  // Entrant reservations.
+  repeated LobbyEntrant reservations = 4;
+  // The time when the match will expire if no players join.
+  google.protobuf.Timestamp match_expiry = 11;
+  // Extra metadata for the lobby session.
+  map<string, string> metadata = 12;
+}
+
+// A single entrant in a lobby session.
+message LobbyEntrant {
+  // The unique ID for this entrant record
+  string id = 1;
+  // The user's game service session ID
+  string session_id = 2;
+  // The user's NEVR user ID
+  string user_id = 3;
+  // The user's cross-platform ID (e.g. OVR-ORG-123412341234)
+  string xpid = 4;
+  // The user's in-game display name
+  string display_name = 10;
+  // RoleIndex as int32, see Role enum below
+  int32 role_alignment = 19;
+  map<string, string> metadata = 23;
+}
+
+// Represents a realtime match.
+message Match {
+  // The ID of the match, can be used to join.
+  string match_id = 1;
+  // True if it's an server-managed authoritative match, false otherwise.
+  bool authoritative = 2;
+  // Match label, if any.
+  google.protobuf.StringValue label = 3;
+  // Current number of users in the match.
+  int32 size = 4;
+  // Tick Rate
+  int32 tick_rate = 5;
+  // Handler name
+  string handler_name = 6;
+}

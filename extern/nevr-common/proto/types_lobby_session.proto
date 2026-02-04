@@ -1,0 +1,6 @@
+syntax = "proto3";
+package types;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/echotools/nevr-common/v4/gen/go/nevr/api/types/v1;typesv1";

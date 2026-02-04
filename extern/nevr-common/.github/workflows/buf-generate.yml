@@ -1,0 +1,77 @@
+name: Buf Generate
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'proto/**/*.proto'
+      - 'proto/buf.yaml'
+      - 'proto/buf.gen.yaml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'proto/**/*.proto'
+      - 'proto/buf.yaml'
+      - 'proto/buf.gen.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install protoc-gen-doc
+        run: |
+          go install github.com/pseudomuto/protoc-gen-doc/cmd/protoc-gen-doc@latest
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Buf Lint
+        working-directory: proto
+        run: buf lint
+
+      - name: Buf Generate
+        working-directory: proto
+        run: buf generate
+
+      - name: Check for changes
+        id: changes
+        run: |
+          git add -A
+          if git diff --staged --quiet; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit and push generated files
+        if: steps.changes.outputs.has_changes == 'true' && github.event_name == 'push'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git commit -m "chore: regenerate protobuf artifacts [skip ci]"
+          git push
+
+      - name: Report changes needed (PR)
+        if: steps.changes.outputs.has_changes == 'true' && github.event_name == 'pull_request'
+        run: |
+          echo "::warning::Generated files are out of date. Please run 'buf generate' locally and commit the changes."
+          exit 1

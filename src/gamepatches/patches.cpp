@@ -1,22 +1,24 @@
 #include "patches.h"
 
-#include <shellapi.h>
+#include <algorithm>
+#include <climits>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
+#include "common/globals.h"
+#include "common/hooking.h"
+#include "common/logging.h"
+#include "processmem.h"
+
+#ifdef USE_MINHOOK
+#include <MinHook.h>
+#endif
+
+#include <processthreadsapi.h>
 #include <windows.h>
 
-#include <algorithm>
-#include <string>
-#include <vector>
-
-// SSL/TLS modernization headers (Schannel)
-#define SECURITY_WIN32
-#include <schannel.h>
-#include <security.h>
-#include <sspi.h>
-
-// #include "AssetCDN/asset_cdn.h"
-#include "common/base64.h"
-#include "common/hooking.h"
-#include "echovrunexported.h"
+#include "common/echovrunexported.h"
 #include "patch_addresses.h"
 #include "processmem.h"
 
@@ -398,9 +400,8 @@ HMODULE WINAPI LoadLibraryW_Hook(LPCWSTR lpLibFileName) {
   if (lpLibFileName != nullptr) {
     std::wstring dllName(lpLibFileName);
     std::transform(dllName.begin(), dllName.end(), dllName.begin(), ::tolower);
-    
-    if (dllName.find(L"libovrplatform") != std::wstring::npos ||
-        dllName.find(L"ovrplatform") != std::wstring::npos) {
+
+    if (dllName.find(L"libovrplatform") != std::wstring::npos || dllName.find(L"ovrplatform") != std::wstring::npos) {
       Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked Oculus Platform SDK load: %S", lpLibFileName);
       SetLastError(ERROR_MOD_NOT_FOUND);
       return NULL;
@@ -413,9 +414,8 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dw
   if (lpLibFileName != nullptr) {
     std::wstring dllName(lpLibFileName);
     std::transform(dllName.begin(), dllName.end(), dllName.begin(), ::tolower);
-    
-    if (dllName.find(L"libovrplatform") != std::wstring::npos ||
-        dllName.find(L"ovrplatform") != std::wstring::npos) {
+
+    if (dllName.find(L"libovrplatform") != std::wstring::npos || dllName.find(L"ovrplatform") != std::wstring::npos) {
       Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked Oculus Platform SDK load: %S", lpLibFileName);
       SetLastError(ERROR_MOD_NOT_FOUND);
       return NULL;
@@ -427,7 +427,7 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dw
 VOID PatchBlockOculusSDK() {
   PatchDetour(&Original_LoadLibraryW, reinterpret_cast<PVOID>(LoadLibraryW_Hook));
   PatchDetour(&Original_LoadLibraryExW, reinterpret_cast<PVOID>(LoadLibraryExW_Hook));
-  
+
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Installed Oculus Platform SDK blocking hooks");
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Expected savings: 50-80MB RAM, 8-12%% CPU per instance");
 }
@@ -436,10 +436,10 @@ VOID PatchBlockOculusSDK() {
 // Wwise Audio Optimization Hooks
 // ===================================================================================================
 
-typedef int (WINAPI* Wwise_Init_t)(PVOID);
+typedef int(WINAPI* Wwise_Init_t)(PVOID);
 Wwise_Init_t Original_Wwise_Init = nullptr;
 
-typedef void (WINAPI* Wwise_RenderAudio_t)(PVOID);
+typedef void(WINAPI* Wwise_RenderAudio_t)(PVOID);
 Wwise_RenderAudio_t Original_Wwise_RenderAudio = nullptr;
 
 int WINAPI Wwise_Init_Hook(PVOID config) {
@@ -447,18 +447,17 @@ int WINAPI Wwise_Init_Hook(PVOID config) {
   return 0;
 }
 
-void WINAPI Wwise_RenderAudio_Hook(PVOID context) {
-}
+void WINAPI Wwise_RenderAudio_Hook(PVOID context) {}
 
 VOID PatchDisableWwise() {
   PVOID base = GetModuleHandleA(NULL);
-  
+
   Original_Wwise_Init = (Wwise_Init_t)((uintptr_t)base + PatchAddresses::WWISE_INIT);
   PatchDetour(&Original_Wwise_Init, (PVOID)Wwise_Init_Hook);
-  
+
   Original_Wwise_RenderAudio = (Wwise_RenderAudio_t)((uintptr_t)base + PatchAddresses::WWISE_RENDERAUDIO);
   PatchDetour(&Original_Wwise_RenderAudio, (PVOID)Wwise_RenderAudio_Hook);
-  
+
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Installed Wwise audio blocking hooks");
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Expected savings: 20-30MB RAM, 5-8%% CPU per instance");
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] VOIP components preserved for multiplayer");
@@ -837,8 +836,10 @@ EchoVR::TcpPeer* CreatePeerHook(EchoVR::TcpBroadcasterData* self, EchoVR::TcpPee
 // SSL/TLS Modernization (Schannel hooks for ECDSA/EdDSA/RSA support)
 // ============================================================================
 
+#define SECURITY_WIN32
 #include <schannel.h>
 #include <security.h>
+#include <sspi.h>
 
 // Link with Secur32 for Schannel APIs (also configured in CMakeLists.txt)
 
@@ -1042,7 +1043,7 @@ VOID Initialize() {
   // from process suspension.
 #if _DEBUG
   PatchDeadlockMonitor();
-  
+
   if (isServer || isHeadless) {
     PatchBlockOculusSDK();
     PatchDisableWwise();

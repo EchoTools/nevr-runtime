@@ -1,0 +1,1115 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "NEVR API v2",
+    "version": "2.0",
+    "contact": {
+      "name": "The NEVR Authors \u0026 Contributors",
+      "url": "https://github.com/echotools/nevr",
+      "email": "a@sprock.io"
+    }
+  },
+  "tags": [
+    {
+      "name": "NevrService"
+    },
+    {
+      "name": "EngineHttpService"
+    }
+  ],
+  "host": "127.0.0.1:7350",
+  "schemes": [
+    "http"
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/session": {
+      "get": {
+        "summary": "GET /session -\u003e returns the current session state as JSON.",
+        "operationId": "EngineHttpService_GetSession",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/enginehttpSessionResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "EngineHttpService"
+        ]
+      }
+    },
+    "/user_bones": {
+      "get": {
+        "summary": "GET /user_bones -\u003e returns the current user bones payload as JSON.",
+        "operationId": "EngineHttpService_GetPlayerBones",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/enginehttpPlayerBonesResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "EngineHttpService"
+        ]
+      }
+    },
+    "/v3/guildgroup/{guildGroupId}/gameservers": {
+      "get": {
+        "summary": "List game servers.",
+        "operationId": "NevrService_ListGuildGameServers",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/apiGuildGameServerList"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "guildGroupId",
+            "description": "The guild ID to list from.",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "description": "Max number of records to return. Between 1 and 100.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "state",
+            "description": "The game server state to list.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "query",
+            "description": "Arbitrary label query.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "cursor",
+            "description": "An optional next page cursor.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "NevrService"
+        ]
+      }
+    },
+    "/v3/lobby/session": {
+      "post": {
+        "summary": "Create a lobby session.",
+        "operationId": "NevrService_LobbySessionCreate",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/apiMatch"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "description": "Request to create a lobby session.",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/apiLobbySessionCreateRequest"
+            }
+          }
+        ],
+        "tags": [
+          "NevrService"
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "GuildGameServerListGuildGameServer": {
+      "type": "object",
+      "properties": {
+        "gameServer": {
+          "$ref": "#/definitions/apiGameServer",
+          "description": "Server."
+        },
+        "state": {
+          "type": "integer",
+          "format": "int32",
+          "description": "The user's relationship to the group."
+        }
+      },
+      "description": "A single server-state pair."
+    },
+    "apiGameServer": {
+      "type": "object",
+      "properties": {
+        "serverId": {
+          "type": "string",
+          "format": "uint64",
+          "description": "The id of the server."
+        },
+        "operatorId": {
+          "type": "string",
+          "description": "The user ID of the owner of the server."
+        },
+        "endpoint": {
+          "type": "string",
+          "title": "The endpoint data used for client connections. (internal_ip:external_ip:port)"
+        },
+        "supportedFeatures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The features of the server."
+        },
+        "timestepNanos": {
+          "type": "integer",
+          "format": "int32",
+          "description": "The timestep duration in nanoseconds."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Additional information about the server."
+        }
+      },
+      "title": "Game Server"
+    },
+    "apiGuildGameServerList": {
+      "type": "object",
+      "properties": {
+        "guildServers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/GuildGameServerListGuildGameServer"
+          },
+          "description": "Server-state pairs."
+        },
+        "cursor": {
+          "type": "string",
+          "description": "An optional next page cursor."
+        }
+      }
+    },
+    "apiLobbyEntrant": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "The unique ID for this entrant record"
+        },
+        "sessionId": {
+          "type": "string",
+          "title": "The user's game service session ID"
+        },
+        "userId": {
+          "type": "string",
+          "title": "The user's NEVR user ID"
+        },
+        "xpid": {
+          "type": "string",
+          "title": "The user's cross-platform ID (e.g. OVR-ORG-123412341234)"
+        },
+        "displayName": {
+          "type": "string",
+          "title": "The user's in-game display name"
+        },
+        "roleAlignment": {
+          "type": "integer",
+          "format": "int32",
+          "title": "RoleIndex as int32, see Role enum below"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "A single entrant in a lobby session."
+    },
+    "apiLobbySessionCreateRequest": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "title": "The game mode, e.g. \"echo_arena_private\""
+        },
+        "level": {
+          "type": "string",
+          "title": "The level to play on, e.g. \"mpl_arena\""
+        },
+        "teamSize": {
+          "type": "integer",
+          "format": "int32",
+          "description": "The number of players per team (1-5), ignored for social modes."
+        },
+        "guildGroupId": {
+          "type": "string",
+          "description": "The guild group ID to which the lobby belongs."
+        },
+        "ownerId": {
+          "type": "string",
+          "title": "The ID of the lobby creator/allocator"
+        },
+        "regionCode": {
+          "type": "string",
+          "description": "The preferred region for the lobby session."
+        },
+        "requiredFeatures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Any required features that must be supported by the game server/clients."
+        },
+        "reservations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/apiLobbyEntrant"
+          },
+          "description": "Entrant reservations."
+        },
+        "matchExpiry": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The time when the match will expire if no players join."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Extra metadata for the lobby session."
+        }
+      },
+      "description": "Request to create a lobby session."
+    },
+    "apiMatch": {
+      "type": "object",
+      "properties": {
+        "matchId": {
+          "type": "string",
+          "description": "The ID of the match, can be used to join."
+        },
+        "authoritative": {
+          "type": "boolean",
+          "description": "True if it's an server-managed authoritative match, false otherwise."
+        },
+        "label": {
+          "type": "string",
+          "description": "Match label, if any."
+        },
+        "size": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Current number of users in the match."
+        },
+        "tickRate": {
+          "type": "integer",
+          "format": "int32",
+          "title": "Tick Rate"
+        },
+        "handlerName": {
+          "type": "string",
+          "title": "Handler name"
+        }
+      },
+      "description": "Represents a realtime match."
+    },
+    "enginehttpBodyPart": {
+      "type": "object",
+      "properties": {
+        "position": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "forward": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "left": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "up": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "description": "Represents an object's head, body, or hand properties."
+    },
+    "enginehttpDisc": {
+      "type": "object",
+      "properties": {
+        "position": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "forward": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "left": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "up": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "velocity": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "bounce_count": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "description": "Represents the disc's physics properties."
+    },
+    "enginehttpHandPart": {
+      "type": "object",
+      "properties": {
+        "pos": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "description": "Represents an object's head, body, or hand properties."
+        },
+        "forward": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "left": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "up": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      }
+    },
+    "enginehttpLastScore": {
+      "type": "object",
+      "properties": {
+        "disc_speed": {
+          "type": "number",
+          "format": "double"
+        },
+        "team": {
+          "type": "string"
+        },
+        "goal_type": {
+          "type": "string"
+        },
+        "point_amount": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "distance_thrown": {
+          "type": "number",
+          "format": "double"
+        },
+        "person_scored": {
+          "type": "string"
+        },
+        "assist_scored": {
+          "type": "string"
+        }
+      },
+      "description": "Represents the last score event."
+    },
+    "enginehttpLastThrowInfo": {
+      "type": "object",
+      "properties": {
+        "arm_speed": {
+          "type": "number",
+          "format": "double"
+        },
+        "total_speed": {
+          "type": "number",
+          "format": "double"
+        },
+        "off_axis_spin_deg": {
+          "type": "number",
+          "format": "double"
+        },
+        "wrist_throw_penalty": {
+          "type": "number",
+          "format": "double"
+        },
+        "rot_per_sec": {
+          "type": "number",
+          "format": "double"
+        },
+        "pot_speed_from_rot": {
+          "type": "number",
+          "format": "double"
+        },
+        "speed_from_arm": {
+          "type": "number",
+          "format": "double"
+        },
+        "speed_from_movement": {
+          "type": "number",
+          "format": "double"
+        },
+        "speed_from_wrist": {
+          "type": "number",
+          "format": "double"
+        },
+        "wrist_align_to_throw_deg": {
+          "type": "number",
+          "format": "double"
+        },
+        "throw_align_to_movement_deg": {
+          "type": "number",
+          "format": "double"
+        },
+        "off_axis_penalty": {
+          "type": "number",
+          "format": "double"
+        },
+        "throw_move_penalty": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "description": "Represents the last throw event."
+    },
+    "enginehttpPauseState": {
+      "type": "object",
+      "properties": {
+        "paused_state": {
+          "type": "string"
+        },
+        "unpaused_team": {
+          "type": "string"
+        },
+        "paused_requested_team": {
+          "type": "string"
+        },
+        "unpaused_timer": {
+          "type": "number",
+          "format": "double"
+        },
+        "paused_timer": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "description": "*\nRepresents the pause state of the game."
+    },
+    "enginehttpPlayerBonesResponse": {
+      "type": "object",
+      "properties": {
+        "user_bones": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/enginehttpUserBones"
+          }
+        },
+        "err_code": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "description": "Top-level message representing the user_bones API response."
+    },
+    "enginehttpPlayerRoot": {
+      "type": "object",
+      "properties": {
+        "vr_left": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "vr_position": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "vr_forward": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "vr_up": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      }
+    },
+    "enginehttpPlayerStats": {
+      "type": "object",
+      "properties": {
+        "possession_time": {
+          "type": "number",
+          "format": "double"
+        },
+        "points": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "saves": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "goals": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "stuns": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "passes": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "catches": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "steals": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "blocks": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "interceptions": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "assists": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "shots_taken": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "description": "Represents player statistics."
+    },
+    "enginehttpSessionResponse": {
+      "type": "object",
+      "properties": {
+        "orange_team_restart_request": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Number of restart requests from the orange team."
+        },
+        "sessionid": {
+          "type": "string",
+          "description": "Unique session identifier."
+        },
+        "game_clock_display": {
+          "type": "string",
+          "description": "Display string for the game clock."
+        },
+        "game_status": {
+          "type": "string",
+          "description": "Current status of the game."
+        },
+        "sessionip": {
+          "type": "string",
+          "description": "IP address of the session."
+        },
+        "match_type": {
+          "type": "string",
+          "description": "Type of match being played."
+        },
+        "map_name": {
+          "type": "string",
+          "description": "Name of the map."
+        },
+        "disc": {
+          "$ref": "#/definitions/enginehttpDisc",
+          "description": "Disc physics properties."
+        },
+        "blue_round_score": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Blue team's round score."
+        },
+        "orange_points": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Orange team's total points."
+        },
+        "private_match": {
+          "type": "boolean",
+          "description": "Indicates if the match is private."
+        },
+        "blue_team_restart_request": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Number of restart requests from the blue team."
+        },
+        "tournament_match": {
+          "type": "boolean",
+          "description": "Indicates if the match is a tournament match."
+        },
+        "orange_round_score": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Orange team's round score."
+        },
+        "total_round_count": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Total number of rounds in the match."
+        },
+        "blue_points": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Blue team's total points."
+        },
+        "last_throw": {
+          "$ref": "#/definitions/enginehttpLastThrowInfo",
+          "description": "Information about the last throw event."
+        },
+        "player": {
+          "$ref": "#/definitions/enginehttpPlayerRoot",
+          "description": "Player root data."
+        },
+        "pause": {
+          "$ref": "#/definitions/enginehttpPauseState",
+          "description": "Pause state of the game."
+        },
+        "possession": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "description": "List of player possession states."
+        },
+        "left_shoulder_pressed": {
+          "type": "number",
+          "format": "double",
+          "description": "Value for left shoulder pressed."
+        },
+        "right_shoulder_pressed": {
+          "type": "number",
+          "format": "double",
+          "description": "Value for right shoulder pressed."
+        },
+        "left_shoulder_pressed2": {
+          "type": "number",
+          "format": "double",
+          "description": "Value for left shoulder pressed (alternate)."
+        },
+        "right_shoulder_pressed2": {
+          "type": "number",
+          "format": "double",
+          "description": "Value for right shoulder pressed (alternate)."
+        },
+        "rules_changed_by": {
+          "type": "string",
+          "description": "Name of the client that changed the rules."
+        },
+        "rules_changed_at": {
+          "type": "string",
+          "format": "uint64",
+          "description": "Timestamp when the rules were changed."
+        },
+        "client_name": {
+          "type": "string",
+          "description": "Name of the client."
+        },
+        "last_score": {
+          "$ref": "#/definitions/enginehttpLastScore",
+          "description": "Information about the last score event."
+        },
+        "teams": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/enginehttpTeam"
+          },
+          "description": "List of teams in the session."
+        },
+        "payload_multiplier": {
+          "type": "number",
+          "format": "double",
+          "description": "Payload multiplier value."
+        },
+        "payload_checkpoint": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Current payload checkpoint."
+        },
+        "payload_distance": {
+          "type": "number",
+          "format": "double",
+          "description": "Distance traveled by the payload."
+        },
+        "payload_defenders": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Number of payload defenders."
+        },
+        "payload_speed": {
+          "type": "number",
+          "format": "double",
+          "description": "Speed of the payload."
+        },
+        "game_clock": {
+          "type": "number",
+          "format": "double",
+          "description": "Current value of the game clock."
+        },
+        "err_code": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Error code for the response."
+        }
+      },
+      "title": "Top-level message representing the entire JSON data.\nEndpoint: /session"
+    },
+    "enginehttpTeam": {
+      "type": "object",
+      "properties": {
+        "players": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/enginehttpTeamMember"
+          }
+        },
+        "team": {
+          "type": "string"
+        },
+        "possession": {
+          "type": "boolean"
+        },
+        "stats": {
+          "$ref": "#/definitions/enginehttpTeamStats"
+        }
+      },
+      "description": "Represents team data."
+    },
+    "enginehttpTeamMember": {
+      "type": "object",
+      "properties": {
+        "Weapon": {
+          "type": "string"
+        },
+        "Ordnance": {
+          "type": "string"
+        },
+        "TacMod": {
+          "type": "string"
+        },
+        "head": {
+          "$ref": "#/definitions/enginehttpBodyPart"
+        },
+        "body": {
+          "$ref": "#/definitions/enginehttpBodyPart"
+        },
+        "userid": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "name": {
+          "type": "string"
+        },
+        "playerid": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "number": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "level": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "ping": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "packetlossratio": {
+          "type": "number",
+          "format": "double"
+        },
+        "stunned": {
+          "type": "boolean"
+        },
+        "invulnerable": {
+          "type": "boolean"
+        },
+        "holding_left": {
+          "type": "string"
+        },
+        "holding_right": {
+          "type": "string"
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "is_emote_playing": {
+          "type": "boolean"
+        },
+        "possession": {
+          "type": "boolean"
+        },
+        "lhand": {
+          "$ref": "#/definitions/enginehttpHandPart"
+        },
+        "rhand": {
+          "$ref": "#/definitions/enginehttpHandPart"
+        },
+        "velocity": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "stats": {
+          "$ref": "#/definitions/enginehttpPlayerStats"
+        }
+      },
+      "description": "Represents individual player data."
+    },
+    "enginehttpTeamStats": {
+      "type": "object",
+      "properties": {
+        "possession_time": {
+          "type": "number",
+          "format": "double"
+        },
+        "points": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "saves": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "goals": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "stuns": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "passes": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "catches": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "steals": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "blocks": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "interceptions": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "assists": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "shots_taken": {
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "description": "Represents team statistics."
+    },
+    "enginehttpUserBones": {
+      "type": "object",
+      "properties": {
+        "bone_t": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "float"
+          }
+        },
+        "playerid": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "bone_o": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "float"
+          }
+        }
+      },
+      "description": "Represents bone data for a single player."
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    },
+    "rpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    }
+  },
+  "securityDefinitions": {
+    "BasicAuth": {
+      "type": "basic"
+    },
+    "BearerJwt": {
+      "type": "apiKey",
+      "name": "Authorization",
+      "in": "header"
+    },
+    "HttpKeyAuth": {
+      "type": "apiKey",
+      "name": "http_key",
+      "in": "header"
+    }
+  },
+  "security": [
+    {
+      "BearerJwt": []
+    }
+  ],
+  "externalDocs": {
+    "description": "NEVR server documentation",
+    "url": "https://github.com/echotools/nevr/docs"
+  }
+}

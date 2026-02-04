@@ -1,0 +1,646 @@
+syntax = "proto3";
+
+package realtime;
+
+import "google/protobuf/timestamp.proto";
+import "telemetry/v1/telemetry.proto";
+
+option csharp_namespace = "Nevr.Protobuf";
+option go_package = "github.com/echotools/nevr-common/v4/gen/go/rtapi";
+option java_multiple_files = true;
+option java_outer_classname = "NevrRealtime";
+option java_package = "com.github.echotools.nevr.rtapi";
+
+message Envelope {
+  string cid = 1;
+  oneof message {
+    // The message is an error.
+    Error error = 2;
+    // A snapshot of the state of a lobby session
+    LobbySessionStateMessage lobby_session_state = 3;
+    // A connectivity statistics message.
+    ConnectivityStatisticsMessage        connectivity_statistics          = 4;
+    GameServerRegistrationMessage        game_server_registration         = 5;
+    GameServerRegistrationSuccessMessage game_server_registration_success = 6;
+    LobbySessionCreateMessage            lobby_session_create             = 7;
+    LobbySessionEventMessage             lobby_session_event              = 8;
+    LobbyEntrantsConnectedMessage        lobby_entrant_connected          = 9;
+    LobbyEntrantsAcceptMessage           lobby_entrants_accept            = 10;
+    LobbyEntrantsRejectMessage           lobby_entrant_reject             = 11;
+    LobbyEntrantRemovedMessage           lobby_entrant_removed            = 12;
+
+    // Unknown message.
+    SNSUnknownMessage unknown_message = 13;
+    // Indicate a TCP event is required.
+    STCPConnectionRequireEvent tcp_connection_require_event = 14;
+    // Indicate a TCP event is no longer required.
+    STCPConnectionUnrequireEvent tcp_connection_unrequire_event = 15;
+    // Request a specific configuration resource.
+    SNSConfigRequestV2Message config_request_v2 = 16;
+    // Indicate a config request succeeded.
+    SNSConfigSuccessV2Message config_success_v2 = 17;
+    // Indicate a config request failed.
+    SNSConfigFailureV2Message config_failure_v2 = 18;
+    // In-app purchase related request.
+    SNSReconcileIAPMessage reconcile_iap = 19;
+    // Request information about in-game channels.
+    SNSChannelInfoRequestMessage channel_info_request = 20;
+    // Provide in-game channel information.
+    SNSChannelInfoResponseMessage channel_info_response = 21;
+    // Request a document resource.
+    SNSDocumentRequestV2Message document_request_v2 = 22;
+    // Indicate a document request succeeded.
+    SNSDocumentSuccessMessage document_success = 23;
+    // Indicate a document request failed.
+    SNSDocumentFailureMessage document_failure = 24;
+    // Provide information on servers available in different regions.
+    SNSLobbyCreateSessionRequestV9Message lobby_create_session_request_v9 = 25;
+    // Request to find an existing game session.
+    SNSLobbyFindSessionRequestv11Message lobby_find_session_request_v11 = 26;
+    // Request to join a specified game session.
+    SNSLobbyJoinSessionRequestV7Message lobby_join_session_request_v7 = 27;
+    // Provide the status of a matchmaking operation.
+    SNSLobbyMatchmakerStatusMessage lobby_matchmaker_status = 28;
+    // Request the status of a pending matchmaking operation.
+    SNSLobbyMatchmakerStatusRequestMessage lobby_matchmaker_status_request = 29;
+    // Indicate intent to cancel pending matchmaker operations.
+    SNSLobbyPendingSessionCancelV2Message lobby_pending_session_cancel_v2 = 30;
+    // Request the client to ping endpoints for optimal server selection.
+    SNSLobbyPingRequestV3Message lobby_ping_request_v3 = 31;
+    // Provide results of a ping request.
+    SNSLobbyPingResponseMessage lobby_ping_response = 32;
+    // Request game server sessions for a list of user identifiers.
+    SNSLobbyPlayerSessionsRequestV5Message lobby_player_sessions_request_v5 = 33;
+    // Indicate a lobby session request failed.
+    SNSLobbySessionFailureV4Message lobby_session_failure_v4 = 34;
+    // Indicate a lobby session request succeeded.
+    SNSLobbySessionSuccessV5Message lobby_session_success_v5 = 35;
+    // Indicate a logged-in user profile request failed.
+    SNSLoggedInUserProfileFailureMessage logged_in_user_profile_failure = 36;
+    // Request the user profile for the logged-in account.
+    SNSLoggedInUserProfileRequestMessage logged_in_user_profile_request = 37;
+    // Indicate a logged-in user profile request succeeded.
+    SNSLoggedInUserProfileSuccessMessage logged_in_user_profile_success = 38;
+    // Indicate a login request failed.
+    SNSLogInFailureMessage log_in_failure = 39;
+    // Request user sign-in.
+    SNSLogInRequestV2Message log_in_request_v2 = 40;
+    // Provide settings for the user after login.
+    SNSLoginSettingsMessage login_settings = 41;
+    // Indicate a login request succeeded and provide a new session token.
+    SNSLogInSuccessMessage log_in_success = 42;
+    // Indicate an other user profile request failed.
+    SNSOtherUserProfileFailureMessage other_user_profile_failure = 43;
+    // Request the user profile for another user.
+    SNSOtherUserProfileRequestMessage other_user_profile_request = 44;
+    // Indicate an other user profile request succeeded.
+    SNSOtherUserProfileSuccessMessage other_user_profile_success = 45;
+    // In-app purchase related response.
+    SNSReconcileIAPResultMessage reconcile_iap_result = 46;
+    // Log client-side data.
+    SNSRemoteLogSetV3Message remote_log_set_v3 = 47;
+    // Request the server to update the user's client profile.
+    SNSUpdateProfileMessage update_profile = 48;
+    // Indicate an update profile request succeeded.
+    SNSUpdateProfileSuccessMessage update_profile_success = 49;
+    // Indicate an update profile request failed.
+    SNSUpdateProfileFailureMessage update_profile_failure = 50;
+    // Request the server to update the user's server profile.
+    SNSUserServerProfileUpdateRequestMessage user_server_profile_update_request = 51;
+    // Indicate a user server profile update request succeeded.
+    SNSUserServerProfileUpdateSuccessMessage user_server_profile_update_success = 52;
+    // Game server requests to save a player's loadout.
+    GameServerSaveLoadoutMessage game_server_save_loadout = 53;
+  }
+}
+
+// A logical error which may occur on the server.
+message Error {
+  // The selection of possible error codes.
+  enum Code {
+    // An unexpected result from the server.
+    CODE_RUNTIME_EXCEPTION_UNSPECIFIED = 0;
+    // The server received a message which is not recognised.
+    CODE_UNRECOGNIZED_PAYLOAD = 1;
+    // A message was expected but contains no content.
+    CODE_MISSING_PAYLOAD = 2;
+    // Fields in the message have an invalid format.
+    CODE_BAD_INPUT = 3;
+    // Game server registration failed
+    CODE_REGISTRATION_FAILED = 4;
+    // The lobby session was not found.
+    CODE_LOBBY_SESSION_NOT_FOUND = 5;
+  }
+  // The error code which should be one of "Error.Code" enums.
+  int32 code = 1;
+  // A message in English to help developers debug the response.
+  string message = 2;
+  // Additional error details which may be different for each response.
+  map<string, string> context = 3;
+}
+
+// LobbySessionEntrantJoinMessage is sent from the server to the service.
+message LobbySessionEventMessage {
+  // The selection of possible session event codes.
+  enum Code {
+    CODE_UNSPECIFIED = 0;
+    // Session started
+    CODE_STARTED = 1;
+    // Session ended
+    CODE_ENDED = 2;
+    // Session locked
+    CODE_LOCKED = 3;
+    // Session unlocked
+    CODE_UNLOCKED = 4;
+  }
+  string lobby_session_id = 1;
+  int32  code             = 2;
+}
+
+// Registration request sent from the server to the service.
+message GameServerRegistrationMessage {
+  string login_session_id    = 1;
+  uint64 server_id           = 2;
+  string internal_ip_address = 3;
+  uint32 port                = 4;
+  uint64 region              = 5;
+  uint64 version_lock        = 6;
+  uint32 time_step_usecs     = 7;
+  string version             = 8;
+}
+
+// Registration success message is sent from the service to the server.
+message GameServerRegistrationSuccessMessage {
+  uint64 server_id           = 1; // The server ID assigned by the server
+  string external_ip_address = 2; // The external address of the server (ip)
+}
+
+// Loadout item slot mapping (slot type hash to equipped item hash)
+message LoadoutItem {
+  fixed64 slot_type     = 1; // SymbolId hash of the slot (e.g., tint_body, bracer)
+  fixed64 equipped_item = 2; // SymbolId hash of the equipped item
+}
+
+// A loadout slot containing all cosmetic item selections (SymbolId hashes)
+message LoadoutSlot {
+  fixed64 selectionmode    = 1;
+  fixed64 banner           = 2;
+  fixed64 booster          = 3;
+  fixed64 bracer           = 4;
+  fixed64 chassis          = 5;
+  fixed64 decal            = 6;
+  fixed64 decal_body       = 7;
+  fixed64 emissive         = 8;
+  fixed64 emote            = 9;
+  fixed64 secondemote      = 10;
+  fixed64 goal_fx          = 11;
+  fixed64 medal            = 12;
+  fixed64 pattern          = 13;
+  fixed64 pattern_body     = 14;
+  fixed64 pip              = 15;
+  fixed64 tag              = 16;
+  fixed64 tint             = 17;
+  fixed64 tint_alignment_a = 18;
+  fixed64 tint_alignment_b = 19;
+  fixed64 tint_body        = 20;
+  fixed64 title            = 21;
+}
+
+// A loadout entry containing body type, team, and the loadout slot
+message LoadoutEntry {
+  fixed64     bodytype = 1;
+  uint32      teamid   = 2;
+  uint32      airole   = 3;
+  fixed64     xf       = 4;
+  LoadoutSlot loadout  = 5;
+}
+
+// A loadout instance within a player's loadout
+message LoadoutInstance {
+  fixed64              instance_name = 1; // SymbolId hash of the instance name
+  repeated LoadoutItem items         = 2; // Items in this instance
+}
+
+// Save loadout message is sent from the game server to the service.
+message GameServerSaveLoadoutMessage {
+  string                   lobby_session_id  = 1; // The lobby session this loadout belongs to
+  string                   entrant_id        = 2; // The entrant UUID who saved the loadout
+  int32                    loadout_slot      = 3; // Which loadout slot (0-based)
+  int32                    jersey_number     = 4; // Player's jersey number
+  repeated LoadoutInstance loadout_instances = 5; // The loadout data (raw instances)
+  LoadoutEntry             loadout_entry     = 6; // The structured loadout entry
+}
+
+// Entrant connect message is sent from the server to the service.
+message LobbyEntrantsConnectedMessage {
+  string          lobby_session_id = 1;
+  repeated string entrant_ids      = 2;
+}
+
+// Entrant accept message is sent from the service to the server.
+message LobbyEntrantsAcceptMessage {
+  repeated string entrant_ids = 1;
+}
+
+// Entrant rejection message is sent from the server to the service.
+message LobbyEntrantsRejectMessage {
+  enum Code {
+    CODE_INTERNAL_UNSPECIFIED = 0; // Internal server error
+    CODE_BAD_REQUEST          = 1; // Bad request from the player
+    CODE_TIMEOUT              = 2; // Player connection timeout
+    CODE_DUPLICATE_USER_ID    = 3; // Duplicate player session
+    CODE_LOBBY_LOCKED         = 4; // Lobby is locked
+    CODE_LOBBY_FULL           = 5; // Lobby is full
+    CODE_LOBBY_ENDING         = 6; // Lobby is ending
+    CODE_KICKED               = 7; // Player was kicked from the server
+    CODE_DISCONNECTED         = 8; // Player was disconnected
+    CODE_INACTIVE             = 9; // Player is inactive
+  }
+  repeated string entrant_ids = 1;
+  int32           code        = 2; // Optional reason for rejection
+}
+
+// Entrant rejection message is sent from the server to the service.
+message LobbyEntrantRemovedMessage {
+  enum Code {
+    CODE_INTERNAL_UNSPECIFIED = 0; // Internal server error
+    CODE_BAD_REQUEST          = 1; // Bad request from the player
+    CODE_TIMEOUT              = 2; // Player connection timeout
+    CODE_DUPLICATE_USER_ID    = 3; // Duplicate player session
+    CODE_LOBBY_LOCKED         = 4; // Lobby is locked
+    CODE_LOBBY_FULL           = 5; // Lobby is full
+    CODE_LOBBY_ENDING         = 6; // Lobby is ending
+    CODE_KICKED               = 7; // Player was kicked from the server
+    CODE_DISCONNECTED         = 8; // Player was disconnected
+    CODE_INACTIVE             = 9; // Player is inactive
+  }
+  string lobby_session_id = 1;
+  string entrant_id       = 2;
+  int32  code             = 3; // Optional reason for rejection
+}
+
+message LobbySessionCreateMessage {
+  enum LobbyType {
+    // A public lobby which is visible to all players.
+    LOBBY_TYPE_PUBLIC_UNSPECIFIED = 0;
+    // A private lobby which is only visible to invited players.
+    LOBBY_TYPE_PRIVATE = 1;
+  }
+  string          lobby_session_id = 1;
+  int32           lobby_type       = 2;
+  string          group_id         = 3;
+  int32           max_entrants     = 4;
+  string          settings_json    = 5;
+  repeated string features         = 6;
+  uint32          time_step_usecs  = 7;
+}
+
+message LobbySessionStateMessage {
+  uint32 time_step_usecs = 1;
+  uint64 tick_count      = 2;
+  oneof state {
+    LobbySessionStateRawMessage         session_state_raw = 3;
+    telemetry.v1.LobbySessionStateFrame session_state     = 4;
+  }
+}
+
+// SessionUpdateMessage is sent from the server to the game service.
+message LobbySessionStateRawMessage {
+  google.protobuf.Timestamp timestamp          = 1;
+  bytes                     session_payload    = 2;
+  bytes                     user_bones_payload = 3;
+}
+
+// ConnectivityStatsMessage is a structure normally only seen in the r14logs
+message ConnectivityStatisticsMessage {
+  float  packet_loss_ratio    = 1;
+  uint64 prediction_offset    = 2;
+  uint64 target               = 3;
+  uint64 local_time           = 4;
+  uint64 server_time          = 5;
+  int64  pending_server_delta = 6;
+  float  discarded_frame_pct  = 7;
+}
+
+// Symbol hash value
+message SymbolHash {
+  fixed64 value = 1;
+}
+
+// Common types
+message XPlatformID {
+  // Platform code
+  string id = 1;
+}
+
+// An unknown message, containing raw bytes.
+message SNSUnknownMessage {
+  // The raw bytes of the unknown message.
+  SymbolHash type = 1;
+  bytes      data = 2;
+}
+
+// A message originating from either party,
+// indicating a TCP event is required.
+message STCPConnectionRequireEvent {}
+
+// A message originating from either party,
+// indicating a TCP event is no longer required.
+message STCPConnectionUnrequireEvent {}
+
+// ConfigRequestv2: client to server requesting a specific
+// configuration resource.
+message SNSConfigRequestV2Message {
+  string request_json = 1;
+}
+
+// ConfigSuccessv2: server to the client indicating a
+// ConfigRequestv2 succeeded. It contains information about the requested config
+// resource.
+message SNSConfigSuccessV2Message {
+  SymbolHash type = 1;
+  SymbolHash id   = 2;
+  string     data = 3;
+}
+
+// ConfigFailurev2: server to client indicating a ConfigRequestv2
+// resulted in a failure.
+message SNSConfigFailureV2Message {
+  string error = 1;
+}
+
+// TODO: In-app purchase related request
+message SNSReconcileIAPMessage {
+  string      session_id = 1;
+  XPlatformID user_id    = 2;
+}
+
+// client to server, requesting information
+// about the various in-game channels.
+message SNSChannelInfoRequestMessage {}
+
+// server to client, providing the in-game
+// channel information requested by a previous ChannelInfoRequest.
+message SNSChannelInfoResponseMessage {
+  string channel_info = 1;
+}
+
+// DocumentRequestv2: client to server requesting a document
+// resource.
+message SNSDocumentRequestV2Message {
+  string language = 1;
+  string type     = 2;
+}
+
+// server to the client indicating a
+// DocumentRequestv2 succeeded. It contains information about the requested
+// document resource.
+message SNSDocumentSuccessMessage {
+  string document_json = 1;
+}
+
+// server to client indicating a
+// DocumentRequestv2 failed.
+message SNSDocumentFailureMessage {
+  string message = 3;
+}
+
+// LobbyCreateSessionRequestv9: client to server requesting the
+// creation of a new game session.
+message SNSLobbyCreateSessionRequestV9Message {
+  SymbolHash           region           = 1;
+  SymbolHash           version_lock     = 2;
+  SymbolHash           mode             = 3;
+  SymbolHash           level            = 4;
+  SymbolHash           platform         = 5;
+  string               login_session_id = 6;
+  repeated XPlatformID entrants         = 7;
+  string               session_settings = 8;
+}
+
+// LobbyFindSessionRequestv11: client to server requesting
+// finding of an existing game session that matches the message's underlying
+// arguments.
+message SNSLobbyFindSessionRequestv11Message {
+  SymbolHash           version_lock     = 1;
+  SymbolHash           mode             = 2;
+  SymbolHash           level            = 3;
+  SymbolHash           platform         = 4;
+  string               login_session_id = 5;
+  string               current_lobby_id = 6;
+  string               group_id         = 7;
+  string               session_settings = 8;
+  repeated XPlatformID entrants         = 9;
+}
+
+// LobbyJoinSessionRequestv7: client to server requesting joining
+// of a specified game session that matches the message's underlying arguments.
+message SNSLobbyJoinSessionRequestV7Message {
+  string     lobby_id         = 1;
+  SymbolHash version_lock     = 2;
+  SymbolHash platform         = 3;
+  string     login_session_id = 4;
+  uint64     flags            = 5;
+}
+
+// server to the client, providing the
+// status of a previously sent LobbyMatchmakerStatusRequest.
+message SNSLobbyMatchmakerStatusMessage {
+  uint32 status_code = 1;
+}
+
+// client to server, requesting the
+// status of a pending matchmaking operation.
+message SNSLobbyMatchmakerStatusRequestMessage {
+  uint32 unk0 = 1;
+  uint32 unk1 = 2;
+  uint32 unk2 = 3;
+}
+
+// client to the server, indicating
+// intent to cancel pending matchmaker operations.
+message SNSLobbyPendingSessionCancelV2Message {
+  string session_id = 1;
+}
+
+// LobbyPingRequestv3: server to client, requesting the client
+// ping a set of endpoints to determine the optimal game server to connect to.
+message SNSLobbyPingRequestV3Message {
+  uint32          unk0      = 1;
+  uint32          unk1      = 2;
+  uint32          rtt_max   = 3;
+  repeated string endpoints = 4;
+}
+
+// client to server, providing the results of
+// a ping request. This tells the server which game servers are optimal for the
+// client.
+message SNSLobbyPingResponseMessage {
+  repeated string results = 1;
+}
+
+// LobbyPlayerSessionsRequestv5: client to server, asking it to
+// obtain game server sessions for a given list of user identifiers.
+message SNSLobbyPlayerSessionsRequestV5Message {
+  string               login_session_id = 1;
+  XPlatformID          user_id          = 2;
+  string               lobby_id         = 3;
+  SymbolHash           platform         = 4;
+  repeated XPlatformID player_xpids     = 5;
+}
+
+// LobbySessionFailurev4: server to client indicating a lobby
+// session request failed.
+message SNSLobbySessionFailureV4Message {
+  uint32 error_code = 1;
+  string message    = 2;
+}
+
+// LobbySessionSuccessv5: server to client indicating that a
+// request to create/join/find a game server session succeeded.
+message SNSLobbySessionSuccessV5Message {
+  fixed64 game_mode            = 1;
+  string  lobby_id             = 2;
+  string  group_id             = 3;
+  string  endpoint             = 4;
+  int32   team_index           = 5;
+  uint32  user_slot            = 6;
+  uint32  flags32              = 7;
+  uint32  session_flags        = 8;
+  uint64  server_encoder_flags = 9;
+  uint64  client_encoder_flags = 10;
+  uint64  server_sequence_id   = 11;
+  bytes   server_mac_key       = 12;
+  bytes   server_enc_key       = 13;
+  bytes   server_random_key    = 14;
+  uint64  client_sequence_id   = 15;
+  bytes   client_mac_key       = 16;
+  bytes   client_enc_key       = 17;
+  bytes   client_random_key    = 18;
+}
+
+// server to client indicating their
+// LoggedInUserProfileRequest failed.
+message SNSLoggedInUserProfileFailureMessage {
+  XPlatformID user_id       = 1;
+  uint64      status_code   = 2;
+  string      error_message = 3;
+}
+
+// client to server requesting the
+// user profile for their logged-in account.
+message SNSLoggedInUserProfileRequestMessage {
+  string      session_id           = 1;
+  XPlatformID user_id              = 2;
+  string      profile_request_data = 3;
+}
+
+// server to the client indicating a
+// LoggedInUserProfileRequest succeeded. It contains profile information about
+// the logged-in user.
+message SNSLoggedInUserProfileSuccessMessage {
+  XPlatformID user_id = 1;
+  string      payload = 2;
+}
+
+// server to client indicating their LoginRequest
+// failed.
+message SNSLogInFailureMessage {
+  XPlatformID user_id       = 1;
+  uint64      status_code   = 2;
+  string      error_message = 3;
+}
+
+// client to server requesting for a user sign-in.
+message SNSLogInRequestV2Message {
+  string      previous_session_id = 1;
+  XPlatformID user_id             = 2;
+  string      payload             = 3;
+}
+
+// server to client, providing the settings for
+// the user after a LoginRequest.
+message SNSLoginSettingsMessage {
+  string config_data = 1;
+}
+
+// server to client indicating their LoginRequest
+// succeeded, providing them a new session token.
+message SNSLogInSuccessMessage {
+  string      session_id = 1;
+  XPlatformID user_id    = 2;
+}
+
+// server to client indicating their
+// OtherUserProfileRequest failed.
+message SNSOtherUserProfileFailureMessage {
+  XPlatformID user_id     = 1;
+  uint64      status_code = 2;
+  string      message     = 3;
+}
+
+// client to server requesting the user
+// profile for another user.
+message SNSOtherUserProfileRequestMessage {
+  XPlatformID user_id = 1;
+  string      data    = 2;
+}
+
+// server to the client indicating a
+// OtherUserProfileRequest succeeded. It contains profile information about the
+// requested user.
+message SNSOtherUserProfileSuccessMessage {
+  XPlatformID user_id = 1;
+  string      profile = 2;
+}
+
+// TODO: In-app purchase related response
+message SNSReconcileIAPResultMessage {
+  XPlatformID user_id  = 1;
+  string      iap_data = 2;
+}
+
+// RemoteLogSetv3: client to the server logging client-side data,
+// as established by login profile data that tells the client how verbosely to
+// log. It contains arbitrary log data about informational state changes,
+// warnings, and errors.
+message SNSRemoteLogSetV3Message {
+  XPlatformID     user_id   = 1;
+  uint64          log_level = 2;
+  repeated string logs      = 3;
+}
+
+// client to server requesting the server update
+// the user's client profile.
+message SNSUpdateProfileMessage {
+  string      login_session_id = 1;
+  XPlatformID user_id          = 2;
+  string      payload          = 3;
+}
+
+// server to client indicating their
+// UpdateProfile request succeeded.
+message SNSUpdateProfileSuccessMessage {
+  XPlatformID user_id = 1;
+}
+
+// server to client indicating their
+// UpdateProfile request failed.
+message SNSUpdateProfileFailureMessage {
+  XPlatformID user_id     = 1;
+  uint64      status_code = 2;
+  string      message     = 3;
+}
+
+// client to server requesting
+// the server update the user's client profile.
+message SNSUserServerProfileUpdateRequestMessage {
+  XPlatformID user_id = 1;
+  string      payload = 2;
+}
+
+// server to client indicating
+// their UserServerProfileUpdateRequest request succeeded.
+message SNSUserServerProfileUpdateSuccessMessage {
+  XPlatformID user_id = 1;
+}

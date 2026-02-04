@@ -1,0 +1,23 @@
+version: v2
+
+modules:
+  - path: .
+    name: buf.build/echotools/nevr-api
+deps:
+  - buf.build/googleapis/googleapis
+  - buf.build/grpc-ecosystem/grpc-gateway
+
+
+lint:
+  use:
+    - STANDARD
+  ignore_only:
+    PACKAGE_DIRECTORY_MATCH:
+      - "*"
+    PACKAGE_VERSION_SUFFIX:
+      - "*"
+
+breaking:
+  use:
+    - PACKAGE
+

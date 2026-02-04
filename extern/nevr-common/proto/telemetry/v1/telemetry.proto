@@ -1,0 +1,284 @@
+/**
+   * The EchoTools NEVR Telemetry.
+   *
+
+*/
+syntax = "proto3";
+
+package telemetry.v1;
+
+import "apigame/http_v1.proto";
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "Nevr.Telemetry.Protobuf";
+// --- Language-specific options ---
+option go_package = "github.com/echotools/nevr-common/v4/gen/go/telemetry/v1;telemetry";
+option java_multiple_files = true;
+option java_outer_classname = "NevrTelemetry";
+option java_package = "com.echotools.nevr.telemetry.v1";
+
+/**
+ * Header contains the metadata for the entire session capture.
+ * This message should be written once at the beginning of the file.
+ * This format is designed for streaming. A capture file should consist of:
+ * 1. A single, length-delimited Header message.
+ * 2. A sequence of one or more length-delimited Frame messages.
+ */
+message TelemetryHeader {
+  // A unique identifier for the capture, e.g., a UUID.
+  string capture_id = 1;
+
+  // The timestamp indicating when the capture was initiated.
+  google.protobuf.Timestamp created_at = 2;
+
+  // An arbitrary key-value store for additional metadata, such as game
+  // version, server IP, or map name.
+  map<string, string> metadata = 3;
+}
+
+// Envelope is a wrapper message that can contain any of the defined telemetry
+// and is primarily used for streaming scenarios.
+message Envelope {
+  oneof message {
+    TelemetryHeader header = 1;
+    LobbySessionStateFrame frame = 2;
+  }
+}
+
+/**
+ * Frame represents a single snapshot of game state data.
+ * A sequence of these messages follows the Header in the data stream.
+ */
+message LobbySessionStateFrame {
+  // The sequential index of the frame, starting from 0.
+  uint32 frame_index = 1;
+
+  // The precise timestamp when this frame's data was captured.
+  google.protobuf.Timestamp timestamp = 2;
+
+  // A list of discrete events that occurred during this frame.
+  repeated LobbySessionEvent events = 3;
+
+  // The session data for this frame, including player locations.
+  enginehttp.SessionResponse session = 4;
+
+  // The user bones data for this frame.
+  enginehttp.PlayerBonesResponse player_bones = 5;
+}
+
+// Defines the possible roles or teams a player can be assigned to.
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_BLUE_TEAM = 1;
+  ROLE_ORANGE_TEAM = 2;
+  ROLE_SPECTATOR = 3;
+  ROLE_SOCIAL_PARTICIPANT = 4;
+  ROLE_MODERATOR = 5;
+}
+
+// A wrapper for any event that can occur during a session.
+message LobbySessionEvent {
+  // The specific event payload.
+  oneof event {
+    // Game State Events
+    RoundStarted round_started = 10;
+    RoundPaused round_paused = 11;
+    RoundUnpaused round_unpaused = 12;
+    RoundEnded round_ended = 13;
+    MatchEnded match_ended = 14;
+    ScoreboardUpdated scoreboard_updated = 15;
+
+    // Player Events
+    PlayerJoined player_joined = 20;
+    PlayerLeft player_left = 21;
+    PlayerSwitchedTeam player_switched_team = 22;
+    EmotePlayed emote_played = 23;
+
+    // Disc Events
+    DiscPossessionChanged disc_possession_changed = 30;
+    DiscThrown disc_thrown = 31;
+    DiscCaught disc_caught = 32;
+
+    // Scoring Events
+    GoalScored goal_scored = 40;
+
+    // Stat-based Events
+    PlayerGoal player_goal = 41;
+    PlayerSave player_save = 50;
+    PlayerStun player_stun = 51;
+    PlayerPass player_pass = 52;
+    PlayerSteal player_steal = 53;
+    PlayerBlock player_block = 54;
+    PlayerInterception player_interception = 55;
+    PlayerAssist player_assist = 56;
+    PlayerShotTaken player_shot_taken = 57;
+  }
+}
+
+// ------------------------------------------------------------------
+// Game State Events
+// ------------------------------------------------------------------
+
+// Fired when the round starts.
+message RoundStarted {
+  int32 round_number = 1;
+}
+
+// Fired when the game is paused.
+message RoundPaused {
+  enginehttp.PauseState pause_state = 1;
+}
+
+// Fired when the game is unpaused.
+message RoundUnpaused {
+  enginehttp.PauseState pause_state = 1;
+}
+
+// Fired when a round finishes.
+message RoundEnded {
+  int32 round_number = 1;
+  Role winning_team = 2;
+}
+
+// Fired when the match is over.
+message MatchEnded {
+  Role winning_team = 1;
+}
+
+// Fired on any change to score or round count.
+message ScoreboardUpdated {
+  int32 blue_points = 1;
+  int32 orange_points = 2;
+  int32 blue_round_score = 3;
+  int32 orange_round_score = 4;
+  string game_clock_display = 5;
+}
+
+// ------------------------------------------------------------------
+// Player Events
+// ------------------------------------------------------------------
+
+// Fired when a new player is detected in the session.
+message PlayerJoined {
+  // Contains the full initial state of the player.
+  enginehttp.TeamMember player = 1;
+  Role role = 2;
+}
+
+// Fired when a player is no longer detected in the session.
+message PlayerLeft {
+  int32 player_slot = 1;
+  string display_name = 2;
+}
+
+// Fired when a player changes teams or roles.
+message PlayerSwitchedTeam {
+  int32 player_slot = 1;
+  Role new_role = 2;
+  Role prev_role = 3;
+}
+
+// Fired when a player starts playing an emote.
+message EmotePlayed {
+  enum EmoteType {
+    EMOTE_TYPE_UNSPECIFIED = 0;
+    EMOTE_TYPE_PRIMARY = 1;
+    EMOTE_TYPE_SECONDARY = 2;
+  }
+  int32 player_slot = 1;
+  EmoteType emote = 2;
+}
+
+// ------------------------------------------------------------------
+// Disc Events
+// ------------------------------------------------------------------
+
+// Fired when possession of the disc changes.
+message DiscPossessionChanged {
+  // The account number of the player who now has possession.
+  int32 player_slot = 1; // This will be -1 if the disc is free.
+  int32 previous_player_slot = 2; // This will be -1 if the disc was previously free.
+}
+
+// Fired when a player throws the disc.
+message DiscThrown {
+  int32 player_slot = 1;
+  // Contains the detailed physics of the throw.
+  enginehttp.LastThrowInfo throw_details = 2;
+}
+
+// Fired when a player catches the disc.
+message DiscCaught {
+  int32 player_slot = 1;
+}
+
+// ------------------------------------------------------------------
+// Scoring Events
+// ------------------------------------------------------------------
+
+// Fired when a goal is scored.
+message GoalScored {
+  // Contains all details about the score.
+  enginehttp.LastScore score_details = 1;
+}
+
+// ------------------------------------------------------------------
+// Stat-based Events
+// ------------------------------------------------------------------
+
+message PlayerGoal {
+  int32 player_slot = 1;
+  int32 total_goals = 2;
+  int32 points = 3;
+}
+
+// Fired when a player's 'saves' stat increments.
+message PlayerSave {
+  int32 player_slot = 1;
+  int32 total_saves = 2;
+}
+
+// Fired when a player's 'stuns' stat increments.
+message PlayerStun {
+  int32 player_slot = 1;
+  int32 total_stuns = 2;
+}
+
+// Fired when a player's 'passes' stat increments.
+message PlayerPass {
+  int32 player_slot = 1;
+  int32 total_passes = 2;
+}
+
+// Fired when a player's 'steals' stat increments.
+message PlayerSteal {
+  int32 player_slot = 1;
+  int32 total_steals = 2;
+  // The slot of the player who had possession before it was stolen.
+  // -1 if unknown or if possession was not tracked.
+  int32 victim_player_slot = 3;
+}
+
+// Fired when a player's 'blocks' stat increments.
+message PlayerBlock {
+  int32 player_slot = 1;
+  int32 total_blocks = 2;
+}
+
+// Fired when a player's 'interceptions' stat increments.
+message PlayerInterception {
+  int32 player_slot = 1;
+  int32 total_interceptions = 2;
+}
+
+// Fired when a player's 'assists' stat increments.
+message PlayerAssist {
+  int32 player_slot = 1;
+  int32 total_assists = 2;
+}
+
+// Fired when a player's 'shots_taken' stat increments.
+message PlayerShotTaken {
+  int32 player_slot = 1;
+  int32 total_shots = 2;
+}

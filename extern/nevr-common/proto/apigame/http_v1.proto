@@ -1,0 +1,261 @@
+/**
+ * EchoVR Engine HTTP API.
+ * Surface: HTTP JSON on /session and /user_bones
+ */
+syntax = "proto3";
+
+package enginehttp;
+
+import "google/api/annotations.proto";
+import "google/protobuf/empty.proto";
+
+option csharp_namespace = "Nevr.Engine.Http.V1";
+option go_package = "github.com/echotools/nevr-common/v4/gen/go/apigame";
+option java_multiple_files = true;
+option java_outer_classname = "EngineHttpProto";
+option java_package = "com.github.echotools.nevr.engine.http.v1";
+
+// HTTP surface that maps to the engine's existing JSON endpoints.
+service EngineHttpService {
+  // GET /session -> returns the current session state as JSON.
+  rpc GetSession(google.protobuf.Empty) returns (SessionResponse) {
+    option (google.api.http) = {get: "/session"};
+  }
+
+  // GET /user_bones -> returns the current user bones payload as JSON.
+  rpc GetPlayerBones(google.protobuf.Empty) returns (PlayerBonesResponse) {
+    option (google.api.http) = {get: "/user_bones"};
+  }
+}
+
+// Represents the disc's physics properties.
+message Disc {
+  repeated double position = 1 [json_name = "position"];
+  repeated double forward = 2 [json_name = "forward"];
+  repeated double left = 3 [json_name = "left"];
+  repeated double up = 4 [json_name = "up"];
+  repeated double velocity = 5 [json_name = "velocity"];
+  int32 bounce_count = 6 [json_name = "bounce_count"];
+}
+
+// Represents an object's head, body, or hand properties.
+message BodyPart {
+  repeated double position = 2 [json_name = "position"];
+  repeated double forward = 3 [json_name = "forward"];
+  repeated double left = 4 [json_name = "left"];
+  repeated double up = 5 [json_name = "up"];
+}
+
+message HandPart {
+  // Represents an object's head, body, or hand properties.
+  repeated double pos = 1 [json_name = "pos"];
+  repeated double forward = 3 [json_name = "forward"];
+  repeated double left = 4 [json_name = "left"];
+  repeated double up = 5 [json_name = "up"];
+}
+
+// Represents player statistics.
+message PlayerStats {
+  double possession_time = 1 [json_name = "possession_time"];
+  int32 points = 2 [json_name = "points"];
+  int32 saves = 3 [json_name = "saves"];
+  int32 goals = 4 [json_name = "goals"];
+  int32 stuns = 5 [json_name = "stuns"];
+  int32 passes = 6 [json_name = "passes"];
+  int32 catches = 7 [json_name = "catches"];
+  int32 steals = 8 [json_name = "steals"];
+  int32 blocks = 9 [json_name = "blocks"];
+  int32 interceptions = 10 [json_name = "interceptions"];
+  int32 assists = 11 [json_name = "assists"];
+  int32 shots_taken = 12 [json_name = "shots_taken"];
+}
+
+// Represents individual player data.
+message TeamMember {
+  string weapon = 1 [json_name = "Weapon"];
+  string ordnance = 2 [json_name = "Ordnance"];
+  string tac_mod = 3 [json_name = "TacMod"];
+  BodyPart head = 5 [json_name = "head"];
+  BodyPart body = 6 [json_name = "body"];
+  uint64 account_number = 7 [json_name = "userid"];
+  string display_name = 8 [json_name = "name"];
+  int32 slot_number = 9 [json_name = "playerid"];
+  int32 jersey_number = 10 [json_name = "number"];
+  int32 level = 11 [json_name = "level"];
+  int32 ping = 12 [json_name = "ping"];
+  double packet_loss_ratio = 13 [json_name = "packetlossratio"];
+  bool is_stunned = 14 [json_name = "stunned"];
+  bool is_invulnerable = 15 [json_name = "invulnerable"];
+  string left_holding_onto = 16 [json_name = "holding_left"];
+  string right_holding_onto = 17 [json_name = "holding_right"];
+  bool is_blocking = 18 [json_name = "blocking"];
+  bool is_emote_playing = 19 [json_name = "is_emote_playing"];
+  bool has_possession = 20 [json_name = "possession"];
+  HandPart left_hand = 21 [json_name = "lhand"];
+  HandPart right_hand = 22 [json_name = "rhand"];
+  repeated double velocity = 23 [json_name = "velocity"];
+  PlayerStats stats = 24 [json_name = "stats"];
+}
+
+// Represents team statistics.
+message TeamStats {
+  double possession_time = 1 [json_name = "possession_time"];
+  int32 points = 2 [json_name = "points"];
+  int32 saves = 3 [json_name = "saves"];
+  int32 goals = 4 [json_name = "goals"];
+  int32 stuns = 5 [json_name = "stuns"];
+  int32 passes = 6 [json_name = "passes"];
+  int32 catches = 7 [json_name = "catches"];
+  int32 steals = 8 [json_name = "steals"];
+  int32 blocks = 9 [json_name = "blocks"];
+  int32 interceptions = 10 [json_name = "interceptions"];
+  int32 assists = 11 [json_name = "assists"];
+  int32 shots_taken = 12 [json_name = "shots_taken"];
+}
+
+// Represents team data.
+message Team {
+  repeated TeamMember players = 1 [json_name = "players"];
+  string team_name = 2 [json_name = "team"];
+  bool has_possession = 3 [json_name = "possession"];
+  TeamStats stats = 4 [json_name = "stats"];
+}
+
+// Represents the last score event.
+message LastScore {
+  double disc_speed = 1 [json_name = "disc_speed"];
+  string team = 2 [json_name = "team"];
+  string goal_type = 3 [json_name = "goal_type"];
+  int32 point_amount = 4 [json_name = "point_amount"];
+  double distance_thrown = 5 [json_name = "distance_thrown"];
+  string person_scored = 6 [json_name = "person_scored"];
+  string assist_scored = 7 [json_name = "assist_scored"];
+}
+
+// Represents the last throw event.
+message LastThrowInfo {
+  double arm_speed = 1 [json_name = "arm_speed"];
+  double total_speed = 2 [json_name = "total_speed"];
+  double off_axis_spin_deg = 3 [json_name = "off_axis_spin_deg"];
+  double wrist_throw_penalty = 4 [json_name = "wrist_throw_penalty"];
+  double rot_per_sec = 5 [json_name = "rot_per_sec"];
+  double pot_speed_from_rot = 6 [json_name = "pot_speed_from_rot"];
+  double speed_from_arm = 7 [json_name = "speed_from_arm"];
+  double speed_from_movement = 8 [json_name = "speed_from_movement"];
+  double speed_from_wrist = 9 [json_name = "speed_from_wrist"];
+  double wrist_align_to_throw_deg = 10 [json_name = "wrist_align_to_throw_deg"];
+  double throw_align_to_movement_deg = 11 [json_name = "throw_align_to_movement_deg"];
+  double off_axis_penalty = 12 [json_name = "off_axis_penalty"];
+  double throw_move_penalty = 13 [json_name = "throw_move_penalty"];
+}
+
+/**
+ * Represents the pause state of the game.
+ */
+message PauseState {
+  string paused_state = 1 [json_name = "paused_state"];
+  string unpaused_team = 2 [json_name = "unpaused_team"];
+  string paused_requested_team = 3 [json_name = "paused_requested_team"];
+  double unpaused_timer = 4 [json_name = "unpaused_timer"];
+  double paused_timer = 5 [json_name = "paused_timer"];
+}
+
+message PlayerRoot {
+  repeated double vr_left = 1 [json_name = "vr_left"];
+  repeated double vr_position = 2 [json_name = "vr_position"];
+  repeated double vr_forward = 3 [json_name = "vr_forward"];
+  repeated double vr_up = 4 [json_name = "vr_up"];
+}
+
+// Top-level message representing the entire JSON data.
+// Endpoint: /session
+message SessionResponse {
+  // Number of restart requests from the orange team.
+  int32 orange_team_restart_request = 1 [json_name = "orange_team_restart_request"];
+  // Unique session identifier.
+  string session_id = 2 [json_name = "sessionid"];
+  // Display string for the game clock.
+  string game_clock_display = 3 [json_name = "game_clock_display"];
+  // Current status of the game.
+  string game_status = 4 [json_name = "game_status"];
+  // IP address of the session.
+  string session_ip = 5 [json_name = "sessionip"];
+  // Type of match being played.
+  string match_type = 6 [json_name = "match_type"];
+  // Name of the map.
+  string map_name = 7 [json_name = "map_name"];
+  // Disc physics properties.
+  Disc disc = 8 [json_name = "disc"];
+  // Blue team's round score.
+  int32 blue_round_score = 11 [json_name = "blue_round_score"];
+  // Orange team's total points.
+  int32 orange_points = 12 [json_name = "orange_points"];
+  // Indicates if the match is private.
+  bool private_match = 14 [json_name = "private_match"];
+  // Number of restart requests from the blue team.
+  int32 blue_team_restart_request = 15 [json_name = "blue_team_restart_request"];
+  // Indicates if the match is a tournament match.
+  bool tournament_match = 16 [json_name = "tournament_match"];
+  // Orange team's round score.
+  int32 orange_round_score = 17 [json_name = "orange_round_score"];
+  // Total number of rounds in the match.
+  int32 total_round_count = 18 [json_name = "total_round_count"];
+  // Blue team's total points.
+  int32 blue_points = 19 [json_name = "blue_points"];
+  // Information about the last throw event.
+  LastThrowInfo last_throw = 20 [json_name = "last_throw"];
+  // Player root data.
+  PlayerRoot player = 21 [json_name = "player"];
+  // Pause state of the game.
+  PauseState pause = 22 [json_name = "pause"];
+  // List of player possession states.
+  repeated int32 possession = 23 [json_name = "possession"];
+  // Value for left shoulder pressed.
+  double left_shoulder_pressed = 24 [json_name = "left_shoulder_pressed"];
+  // Value for right shoulder pressed.
+  double right_shoulder_pressed = 25 [json_name = "right_shoulder_pressed"];
+  // Value for left shoulder pressed (alternate).
+  double left_shoulder_pressed2 = 26 [json_name = "left_shoulder_pressed2"];
+  // Value for right shoulder pressed (alternate).
+  double right_shoulder_pressed2 = 27 [json_name = "right_shoulder_pressed2"];
+  // Name of the client that changed the rules.
+  string rules_changed_by = 28 [json_name = "rules_changed_by"];
+  // Timestamp when the rules were changed.
+  uint64 rules_changed_at = 29 [json_name = "rules_changed_at"];
+  // Name of the client.
+  string client_name = 30 [json_name = "client_name"];
+  // Information about the last score event.
+  LastScore last_score = 31 [json_name = "last_score"];
+  // List of teams in the session.
+  repeated Team teams = 32 [json_name = "teams"];
+  // Payload multiplier value.
+  double payload_multiplier = 34 [json_name = "payload_multiplier"];
+  // Current payload checkpoint.
+  int32 payload_checkpoint = 35 [json_name = "payload_checkpoint"];
+  // Distance traveled by the payload.
+  double payload_distance = 36 [json_name = "payload_distance"];
+  // Number of payload defenders.
+  int32 payload_defenders = 37 [json_name = "payload_defenders"];
+  // Speed of the payload.
+  double payload_speed = 38 [json_name = "payload_speed"];
+  // Current value of the game clock.
+  double game_clock = 39 [json_name = "game_clock"];
+  // Error code for the response.
+  int32 err_code = 40 [json_name = "err_code"];
+}
+
+// endpoint: /user_bones
+// Represents the user_bones API response structure.
+
+// Represents bone data for a single player.
+message UserBones {
+  repeated float bone_t = 1 [json_name = "bone_t"];
+  int32 player_index = 2 [json_name = "playerid"];
+  repeated float bone_o = 3 [json_name = "bone_o"];
+}
+
+// Top-level message representing the user_bones API response.
+message PlayerBonesResponse {
+  repeated UserBones user_bones = 1 [json_name = "user_bones"];
+  int32 err_code = 2 [json_name = "err_code"];
+}
