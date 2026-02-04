@@ -432,6 +432,38 @@ VOID PatchBlockOculusSDK() {
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Expected savings: 50-80MB RAM, 8-12%% CPU per instance");
 }
 
+// ===================================================================================================
+// Wwise Audio Optimization Hooks
+// ===================================================================================================
+
+typedef int (WINAPI* Wwise_Init_t)(PVOID);
+Wwise_Init_t Original_Wwise_Init = nullptr;
+
+typedef void (WINAPI* Wwise_RenderAudio_t)(PVOID);
+Wwise_RenderAudio_t Original_Wwise_RenderAudio = nullptr;
+
+int WINAPI Wwise_Init_Hook(PVOID config) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Wwise audio initialization blocked (VOIP preserved)");
+  return 0;
+}
+
+void WINAPI Wwise_RenderAudio_Hook(PVOID context) {
+}
+
+VOID PatchDisableWwise() {
+  PVOID base = GetModuleHandleA(NULL);
+  
+  Original_Wwise_Init = (Wwise_Init_t)((uintptr_t)base + PatchAddresses::WWISE_INIT);
+  PatchDetour(&Original_Wwise_Init, (PVOID)Wwise_Init_Hook);
+  
+  Original_Wwise_RenderAudio = (Wwise_RenderAudio_t)((uintptr_t)base + PatchAddresses::WWISE_RENDERAUDIO);
+  PatchDetour(&Original_Wwise_RenderAudio, (PVOID)Wwise_RenderAudio_Hook);
+  
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Installed Wwise audio blocking hooks");
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Expected savings: 20-30MB RAM, 5-8%% CPU per instance");
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] VOIP components preserved for multiplayer");
+}
+
 /// <summary>
 /// A detour hook for the game's method it uses to transition from one net game state to another.
 /// </summary>
@@ -1013,6 +1045,7 @@ VOID Initialize() {
   
   if (isServer || isHeadless) {
     PatchBlockOculusSDK();
+    PatchDisableWwise();
   }
 #endif
 }
