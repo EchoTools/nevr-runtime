@@ -84,8 +84,12 @@ UINT16 ListenForTcpBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgI
 /// to the message data to be sent.</param> <param name="msgSize">The size of
 /// the msg to be sent, in bytes.</param> <returns>None</returns>
 VOID SendServerdbTcpMessage(GameServerLib* self, EchoVR::SymbolId msgId, VOID* msg, UINT64 msgSize) {
-  // Wrap the send call provided by the TCP broadcaster.
-  self->tcpBroadcasterData->SendToPeer(self->serverDbPeer, msgId, NULL, 0, msg, msgSize);
+  // Use custom WebSocket client to send message
+  if (self->wsClient) {
+    self->wsClient->Send(msgId, msg, msgSize);
+  } else {
+    Log(EchoVR::LogLevel::Error, "[ECHORELAY.GAMESERVER.LEGACY] Cannot send message - WebSocket client not initialized");
+  }
 }
 
 /// <summary>
@@ -239,6 +243,16 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   this->broadcaster = broadcaster;
   this->tcpBroadcasterData = lobby->tcpBroadcaster->data;
 
+  // Initialize custom WebSocket client for ServerDB
+  this->wsClient = new WebSocketClient();
+
+  // Set up WebSocket message handler to route messages to TCP broadcast handlers
+  this->wsClient->SetMessageHandler([this](EchoVR::SymbolId msgId, const VOID* data, UINT64 size) {
+    // Route the message through the TCP broadcaster's message handling system
+    // This allows existing message handlers to work unchanged
+    EchoVR::TcpBroadcasterHandlePeerData(this->lobby->tcpBroadcaster, msgId, this->serverDbPeer, data, size);
+  });
+
   // Subscribe to broadcaster events
   this->broadcastSessionStartCBHandle =
       ListenForBroadcasterMessage(this, SYMBOL_BROADCASTER_LOBBY_SESSION_STARTING, TRUE, (VOID*)OnMsgSessionStarting);
@@ -279,7 +293,15 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
 /// unloading the library.
 /// </summary>
 /// <returns>None</returns>
-VOID GameServerLib::Terminate() { Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER.LEGACY] Terminated game server"); }
+VOID GameServerLib::Terminate() {
+  // Clean up the WebSocket client
+  if (this->wsClient) {
+    delete this->wsClient;
+    this->wsClient = nullptr;
+  }
+
+  Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER.LEGACY] Terminated game server");
+}
 
 /// <summary>
 /// Updates the game server library. This is called by the game at a frequent
@@ -345,8 +367,12 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR* radId, EchoVR::Sym
 
   // TODO: Default port
 
-  // Connect to the serverdb websocket service
-  this->tcpBroadcasterData->CreatePeer(&this->serverDbPeer, (const EchoVR::UriContainer*)&serverDbUriContainer);
+  // Connect to the serverdb websocket service using custom WebSocket client
+  if (!this->wsClient->Connect(serverDbServiceUri)) {
+    Log(EchoVR::LogLevel::Error,
+        "[ECHORELAY.GAMESERVER.LEGACY] Failed to connect to ServerDB at %s", serverDbServiceUri);
+    return;
+  }
 
   // Obtain address information about our game server broadcaster
   sockaddr_in gameServerAddr = (*(sockaddr_in*)&this->broadcaster->data->addr);
@@ -396,8 +422,10 @@ VOID GameServerLib::Unregister() {
   EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastPlayersRejectedCBHandle);
   EchoVR::TcpBroadcasterUnlisten(this->lobby->tcpBroadcaster, this->tcpBroadcastSessionSuccessCBHandle);
 
-  // Disconnect from server db.
-  this->tcpBroadcasterData->DestroyPeer(this->serverDbPeer);
+  // Disconnect from server db using custom WebSocket client
+  if (this->wsClient) {
+    this->wsClient->Disconnect();
+  }
 
   // Log the interaction.
   Log(EchoVR::LogLevel::Info, "[ECHORELAY.GAMESERVER.LEGACY] Unregistered game server");
