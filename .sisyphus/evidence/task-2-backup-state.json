@@ -1,0 +1,9 @@
+{
+  "http_api_available": false,
+  "port": 6721,
+  "connection_status": "refused",
+  "game_mode": "client",
+  "reason": "Game launched in client mode without HTTP API server. The -httpport flag was accepted but server API not enabled.",
+  "expected_behavior": "Server mode should enable HTTP API on specified port",
+  "actual_behavior": "Client mode launched, no HTTP server listening"
+}

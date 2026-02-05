@@ -1,0 +1,23 @@
+# ACTIVE GAME DIRECTORY
+# Path: /mnt/games/CustomLibrary/ready-at-dawn-echo-arena/bin/win10/
+
+9f506f345eca1af58138f1f90df48782  /mnt/games/CustomLibrary/ready-at-dawn-echo-arena/bin/win10/pnsradgameserver.dll
+84b76f067eae206d10f045e4f17993d7  /mnt/games/CustomLibrary/ready-at-dawn-echo-arena/bin/win10/dbgcore.dll
+b608f13d4e9105f17c1146f5e48da376  /mnt/games/CustomLibrary/ready-at-dawn-echo-arena/bin/win10/gameserverlegacy.dll
+1657310f3e66c361647794f058411e49  /mnt/games/CustomLibrary/ready-at-dawn-echo-arena/bin/win10/gamepatcheslegacy.dll
+bb93aecf6143c03d5b96e4afaece8857  /mnt/games/CustomLibrary/ready-at-dawn-echo-arena/bin/win10/telemetryagent.dll
+
+# BACKUP DLLs
+# Path: /mnt/games/CustomLibrary/echovr-34.4.631547.1/bin/win10/
+
+9f506f345eca1af58138f1f90df48782  /mnt/games/CustomLibrary/echovr-34.4.631547.1/bin/win10/pnsradgameserver.dll
+138faa391a135a0fb69e0b1a55f4408d  /mnt/games/CustomLibrary/echovr-34.4.631547.1/bin/win10/dbgcore.dll
+
+# CURRENT BUILD DLLs
+# Path: /home/andrew/src/nevr-server/dist/nevr-server-v3.2.0+30.83a0518/
+
+7ce1f649d6c58f9dded6beeeb30570ae  /home/andrew/src/nevr-server/dist/nevr-server-v3.2.0+30.83a0518/pnsradgameserver.dll
+de337990c5080f5d13326b4d8e163dd1  /home/andrew/src/nevr-server/dist/nevr-server-v3.2.0+30.83a0518/dbgcore.dll
+2bf1a5b75a557045a74ed88647e4b6ee  /home/andrew/src/nevr-server/dist/nevr-server-v3.2.0+30.83a0518/gameserverlegacy.dll
+1d2de6c493c770fb090daab9902aefea  /home/andrew/src/nevr-server/dist/nevr-server-v3.2.0+30.83a0518/gamepatcheslegacy.dll
+70377e2c1201b9676a9061d566992ab7  /home/andrew/src/nevr-server/dist/nevr-server-v3.2.0+30.83a0518/telemetryagent.dll

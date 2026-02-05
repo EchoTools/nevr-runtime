@@ -1,0 +1,9 @@
+## Task 3 Analysis: CLIENT MODE (NOT SERVER)
+
+The game started in CLIENT MODE and connected to a remote server.
+Remote server: 172.125.239.112:6794
+
+HTTP API Error: Endpoint is restricted in this match type (err_code -6)
+
+This test did NOT exercise NEVR server mode functionality.
+The evr-mcp tool timeout suggests server mode may not have started correctly.

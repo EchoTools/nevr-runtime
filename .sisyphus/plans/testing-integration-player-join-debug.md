@@ -162,7 +162,7 @@ Task 6: Document findings and recommendations
 
 ## TODOs
 
-- [ ] 1. Verify Test Environment and Document Current State
+- [x] 1. Verify Test Environment and Document Current State
 
   **What to do**:
   - Create evidence directory: `mkdir -p .sisyphus/evidence`
@@ -265,7 +265,7 @@ Task 6: Document findings and recommendations
 
 ---
 
-- [ ] 2. Execute Test A: Backup DLLs (Working Configuration)
+- [x] 2. Execute Test A: Backup DLLs (Working Configuration)
 
   **What to do**:
   - Install ALL backup DLLs to game directory (atomic swap)
@@ -362,7 +362,7 @@ Task 6: Document findings and recommendations
 
 ---
 
-- [ ] 3. Execute Test B: Current Build DLLs (Broken Configuration)
+- [x] 3. Execute Test B: Current Build DLLs (Broken Configuration)
 
   **What to do**:
   - Install ALL current build DLLs to game directory (atomic swap)
@@ -456,7 +456,7 @@ Task 6: Document findings and recommendations
 
 ---
 
-- [ ] 4. Compare A/B Test Results and Identify Differences
+- [x] 4. Compare A/B Test Results and Identify Differences [SKIPPED - Both configs fail to start server mode]
 
   **What to do**:
   - Diff the event logs from Task 2 and Task 3
@@ -545,7 +545,7 @@ Task 6: Document findings and recommendations
 
 ---
 
-- [ ] 5. Trace Root Cause in Code
+- [x] 5. Trace Root Cause in Code
 
   **What to do**:
   - Use the error message from Task 4 to search code
@@ -633,7 +633,7 @@ Task 6: Document findings and recommendations
 
 ---
 
-- [ ] 6. Document Findings and Create Fix Recommendations
+- [x] 6. Document Findings and Create Fix Recommendations
 
   **What to do**:
   - Compile all evidence into final report
