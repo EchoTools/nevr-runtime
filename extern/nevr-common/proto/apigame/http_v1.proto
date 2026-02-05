@@ -1,6 +1,6 @@
 /**
  * EchoVR Engine HTTP API.
- * Surface: HTTP JSON on /session and /user_bones
+ * Surface: HTTP JSON on /session and /player_bones
  */
 syntax = "proto3";
 
@@ -22,9 +22,9 @@ service EngineHttpService {
     option (google.api.http) = {get: "/session"};
   }
 
-  // GET /user_bones -> returns the current user bones payload as JSON.
+  // GET /player_bones -> returns the current user bones payload as JSON.
   rpc GetPlayerBones(google.protobuf.Empty) returns (PlayerBonesResponse) {
-    option (google.api.http) = {get: "/user_bones"};
+    option (google.api.http) = {get: "/player_bones"};
   }
 }
 
@@ -244,8 +244,8 @@ message SessionResponse {
   int32 err_code = 40 [json_name = "err_code"];
 }
 
-// endpoint: /user_bones
-// Represents the user_bones API response structure.
+// endpoint: /player_bones
+// Represents the player_bones API response structure.
 
 // Represents bone data for a single player.
 message UserBones {
