@@ -1,0 +1,17 @@
+{
+  "test_type": "backup_dlls",
+  "game_start": "manual_wine_launch",
+  "http_api_status": "restricted_endpoint_error",
+  "error_code": -6,
+  "error_description": "Endpoint is restricted in this match type",
+  "game_mode": "client_mode_not_server",
+  "runtime_seconds": 30,
+  "log_errors_count": 5,
+  "key_errors": [
+    "Failed to enable D3D12 Device Removed Extended Data (DRED)",
+    "CHttpRequest CoCreateInstance failed with hresult 0x80040154",
+    "Win HTTP Error: 0x80040154",
+    "Error performing zstd decompression: Unknown frame descriptor"
+  ],
+  "notes": "evr-mcp_echovr_start timed out (unable to start server mode), manual wine launch succeeded but started client mode instead of server mode"
+}

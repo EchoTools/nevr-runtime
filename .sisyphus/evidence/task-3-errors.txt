@@ -1,0 +1,13 @@
+[02-05-2026] [17:02:05]: Failed to enable D3D12 Device Removed Extended Data (DRED)
+[02-05-2026] [17:02:07]: CHttpRequest CoCreateInstance failed with hresult 0x80040154
+  - 0x2FDA8A8C4D75508F: Win HTTP Error: 0x80040154
+[02-05-2026] [17:02:08]: [NSUSER] Login settings received: {"config_data":{"active_battle_pass_season":{"id":"active_battle_pass_season","starttime":1711497600,"endtime":17911180800},"active_store_entry":{"id":"active_store_entry","starttime":1711497600,"endtime":17911180800},"active_store_featured_entry":{"id":"active_store_featured_entry","starttime":1711497600,"endtime":17911180800}},"env":"live","iap_unlocked":true,"remote_log_errors":false,"remote_log_rich_presence":false,"remote_log_metrics":true,"remote_log_warnings":false,"remote_log_social":false}
+  - 0x2FDA8A8C4D75508F: Error performing zstd decompression: Unknown frame descriptor
+[02-05-2026] [17:02:24]: Reconcile IAP: No Errors
+[02-05-2026] [17:02:38]: Failed to find pooled actor component during CR15NetPooledActorCS::ExclusiveUpdate for actor 0x78D0280604559716
+[02-05-2026] [17:02:38]: Failed to find pooled actor component during CR15NetPooledActorCS::ExclusiveUpdate for actor 0x78D0280604559716
+[02-05-2026] [17:02:38]: Failed to find pooled actor component during CR15NetPooledActorCS::ExclusiveUpdate for actor 0x78D0280604559716
+[02-05-2026] [17:02:38]: Failed to find pooled actor component during CR15NetPooledActorCS::ExclusiveUpdate for actor 0x78D0280604559716
+[02-05-2026] [17:02:38]: Failed to find pooled actor component during CR15NetPooledActorCS::ExclusiveUpdate for actor 0x78D0280604559716
+[02-05-2026] [17:02:38]: Failed to find pooled actor component during CR15NetPooledActorCS::ExclusiveUpdate for actor 0x78D0280604559716
+[02-05-2026] [17:02:38]: Failed to find pooled actor component during CR15NetPooledActorCS::ExclusiveUpdate for actor 0x78D0280604559716
