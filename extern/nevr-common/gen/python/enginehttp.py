@@ -280,7 +280,7 @@ class EngineHttpServiceStub(betterproto.ServiceStub):
 
     async def get_player_bones(self) -> PlayerBonesResponse:
         """
-        GET /user_bones -> returns the current user bones payload as JSON.
+        GET /player_bones -> returns the current user bones payload as JSON.
         """
 
         request = protobuf.Empty()

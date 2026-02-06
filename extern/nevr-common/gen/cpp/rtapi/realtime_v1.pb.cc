@@ -719,6 +719,51 @@ struct LobbyEntrantRemovedMessageDefaultTypeInternal {
 PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT
     PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 LobbyEntrantRemovedMessageDefaultTypeInternal _LobbyEntrantRemovedMessage_default_instance_;
 
+inline constexpr LoadoutSlot::Impl_::Impl_(
+    ::_pbi::ConstantInitialized) noexcept
+      : _cached_size_{0},
+        selectionmode_{::uint64_t{0u}},
+        banner_{::uint64_t{0u}},
+        booster_{::uint64_t{0u}},
+        bracer_{::uint64_t{0u}},
+        chassis_{::uint64_t{0u}},
+        decal_{::uint64_t{0u}},
+        decal_body_{::uint64_t{0u}},
+        emissive_{::uint64_t{0u}},
+        emote_{::uint64_t{0u}},
+        secondemote_{::uint64_t{0u}},
+        goal_fx_{::uint64_t{0u}},
+        medal_{::uint64_t{0u}},
+        pattern_{::uint64_t{0u}},
+        pattern_body_{::uint64_t{0u}},
+        pip_{::uint64_t{0u}},
+        tag_{::uint64_t{0u}},
+        tint_{::uint64_t{0u}},
+        tint_alignment_a_{::uint64_t{0u}},
+        tint_alignment_b_{::uint64_t{0u}},
+        tint_body_{::uint64_t{0u}},
+        title_{::uint64_t{0u}} {}
+
+template <typename>
+PROTOBUF_CONSTEXPR LoadoutSlot::LoadoutSlot(::_pbi::ConstantInitialized)
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+    : ::google::protobuf::Message(LoadoutSlot_class_data_.base()),
+#else   // PROTOBUF_CUSTOM_VTABLE
+    : ::google::protobuf::Message(),
+#endif  // PROTOBUF_CUSTOM_VTABLE
+      _impl_(::_pbi::ConstantInitialized()) {
+}
+struct LoadoutSlotDefaultTypeInternal {
+  PROTOBUF_CONSTEXPR LoadoutSlotDefaultTypeInternal() : _instance(::_pbi::ConstantInitialized{}) {}
+  ~LoadoutSlotDefaultTypeInternal() {}
+  union {
+    LoadoutSlot _instance;
+  };
+};
+
+PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT
+    PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 LoadoutSlotDefaultTypeInternal _LoadoutSlot_default_instance_;
+
 inline constexpr LoadoutItem::Impl_::Impl_(
     ::_pbi::ConstantInitialized) noexcept
       : _cached_size_{0},
@@ -1599,6 +1644,35 @@ struct LoadoutInstanceDefaultTypeInternal {
 PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT
     PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 LoadoutInstanceDefaultTypeInternal _LoadoutInstance_default_instance_;
 
+inline constexpr LoadoutEntry::Impl_::Impl_(
+    ::_pbi::ConstantInitialized) noexcept
+      : _cached_size_{0},
+        loadout_{nullptr},
+        bodytype_{::uint64_t{0u}},
+        teamid_{0u},
+        airole_{0u},
+        xf_{::uint64_t{0u}} {}
+
+template <typename>
+PROTOBUF_CONSTEXPR LoadoutEntry::LoadoutEntry(::_pbi::ConstantInitialized)
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+    : ::google::protobuf::Message(LoadoutEntry_class_data_.base()),
+#else   // PROTOBUF_CUSTOM_VTABLE
+    : ::google::protobuf::Message(),
+#endif  // PROTOBUF_CUSTOM_VTABLE
+      _impl_(::_pbi::ConstantInitialized()) {
+}
+struct LoadoutEntryDefaultTypeInternal {
+  PROTOBUF_CONSTEXPR LoadoutEntryDefaultTypeInternal() : _instance(::_pbi::ConstantInitialized{}) {}
+  ~LoadoutEntryDefaultTypeInternal() {}
+  union {
+    LoadoutEntry _instance;
+  };
+};
+
+PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT
+    PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 LoadoutEntryDefaultTypeInternal _LoadoutEntry_default_instance_;
+
 inline constexpr Error::Impl_::Impl_(
     ::_pbi::ConstantInitialized) noexcept
       : _cached_size_{0},
@@ -1638,6 +1712,7 @@ inline constexpr GameServerSaveLoadoutMessage::Impl_::Impl_(
         entrant_id_(
             &::google::protobuf::internal::fixed_address_empty_string,
             ::_pbi::ConstantInitialized()),
+        loadout_entry_{nullptr},
         loadout_slot_{0},
         jersey_number_{0} {}
 
@@ -1893,6 +1968,64 @@ const ::uint32_t
         0,
         1,
         0x081, // bitmap
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_._has_bits_),
+        24, // hasbit index offset
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.selectionmode_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.banner_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.booster_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.bracer_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.chassis_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.decal_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.decal_body_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.emissive_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.emote_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.secondemote_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.goal_fx_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.medal_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.pattern_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.pattern_body_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.pip_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.tag_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.tint_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.tint_alignment_a_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.tint_alignment_b_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.tint_body_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutSlot, _impl_.title_),
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        0x081, // bitmap
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutEntry, _impl_._has_bits_),
+        8, // hasbit index offset
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutEntry, _impl_.bodytype_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutEntry, _impl_.teamid_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutEntry, _impl_.airole_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutEntry, _impl_.xf_),
+        PROTOBUF_FIELD_OFFSET(::realtime::LoadoutEntry, _impl_.loadout_),
+        1,
+        2,
+        3,
+        4,
+        0,
+        0x081, // bitmap
         PROTOBUF_FIELD_OFFSET(::realtime::LoadoutInstance, _impl_._has_bits_),
         5, // hasbit index offset
         PROTOBUF_FIELD_OFFSET(::realtime::LoadoutInstance, _impl_.instance_name_),
@@ -1901,17 +2034,19 @@ const ::uint32_t
         0,
         0x081, // bitmap
         PROTOBUF_FIELD_OFFSET(::realtime::GameServerSaveLoadoutMessage, _impl_._has_bits_),
-        8, // hasbit index offset
+        9, // hasbit index offset
         PROTOBUF_FIELD_OFFSET(::realtime::GameServerSaveLoadoutMessage, _impl_.lobby_session_id_),
         PROTOBUF_FIELD_OFFSET(::realtime::GameServerSaveLoadoutMessage, _impl_.entrant_id_),
         PROTOBUF_FIELD_OFFSET(::realtime::GameServerSaveLoadoutMessage, _impl_.loadout_slot_),
         PROTOBUF_FIELD_OFFSET(::realtime::GameServerSaveLoadoutMessage, _impl_.jersey_number_),
         PROTOBUF_FIELD_OFFSET(::realtime::GameServerSaveLoadoutMessage, _impl_.loadout_instances_),
+        PROTOBUF_FIELD_OFFSET(::realtime::GameServerSaveLoadoutMessage, _impl_.loadout_entry_),
         1,
         2,
-        3,
         4,
+        5,
         0,
+        3,
         0x081, // bitmap
         PROTOBUF_FIELD_OFFSET(::realtime::LobbyEntrantsConnectedMessage, _impl_._has_bits_),
         5, // hasbit index offset
@@ -2351,58 +2486,60 @@ static const ::_pbi::MigrationSchema
         {134, sizeof(::realtime::GameServerRegistrationMessage)},
         {153, sizeof(::realtime::GameServerRegistrationSuccessMessage)},
         {160, sizeof(::realtime::LoadoutItem)},
-        {167, sizeof(::realtime::LoadoutInstance)},
-        {174, sizeof(::realtime::GameServerSaveLoadoutMessage)},
-        {187, sizeof(::realtime::LobbyEntrantsConnectedMessage)},
-        {194, sizeof(::realtime::LobbyEntrantsAcceptMessage)},
-        {199, sizeof(::realtime::LobbyEntrantsRejectMessage)},
-        {206, sizeof(::realtime::LobbyEntrantRemovedMessage)},
-        {215, sizeof(::realtime::LobbySessionCreateMessage)},
-        {232, sizeof(::realtime::LobbySessionStateMessage)},
-        {245, sizeof(::realtime::LobbySessionStateRawMessage)},
-        {254, sizeof(::realtime::ConnectivityStatisticsMessage)},
-        {271, sizeof(::realtime::SymbolHash)},
-        {276, sizeof(::realtime::XPlatformID)},
-        {281, sizeof(::realtime::SNSUnknownMessage)},
-        {288, sizeof(::realtime::STCPConnectionRequireEvent)},
-        {289, sizeof(::realtime::STCPConnectionUnrequireEvent)},
-        {290, sizeof(::realtime::SNSConfigRequestV2Message)},
-        {295, sizeof(::realtime::SNSConfigSuccessV2Message)},
-        {304, sizeof(::realtime::SNSConfigFailureV2Message)},
-        {309, sizeof(::realtime::SNSReconcileIAPMessage)},
-        {316, sizeof(::realtime::SNSChannelInfoRequestMessage)},
-        {317, sizeof(::realtime::SNSChannelInfoResponseMessage)},
-        {322, sizeof(::realtime::SNSDocumentRequestV2Message)},
-        {329, sizeof(::realtime::SNSDocumentSuccessMessage)},
-        {334, sizeof(::realtime::SNSDocumentFailureMessage)},
-        {339, sizeof(::realtime::SNSLobbyCreateSessionRequestV9Message)},
-        {358, sizeof(::realtime::SNSLobbyFindSessionRequestv11Message)},
-        {379, sizeof(::realtime::SNSLobbyJoinSessionRequestV7Message)},
-        {392, sizeof(::realtime::SNSLobbyMatchmakerStatusMessage)},
-        {397, sizeof(::realtime::SNSLobbyMatchmakerStatusRequestMessage)},
-        {406, sizeof(::realtime::SNSLobbyPendingSessionCancelV2Message)},
-        {411, sizeof(::realtime::SNSLobbyPingRequestV3Message)},
-        {422, sizeof(::realtime::SNSLobbyPingResponseMessage)},
-        {427, sizeof(::realtime::SNSLobbyPlayerSessionsRequestV5Message)},
-        {440, sizeof(::realtime::SNSLobbySessionFailureV4Message)},
-        {447, sizeof(::realtime::SNSLobbySessionSuccessV5Message)},
-        {486, sizeof(::realtime::SNSLoggedInUserProfileFailureMessage)},
-        {495, sizeof(::realtime::SNSLoggedInUserProfileRequestMessage)},
-        {504, sizeof(::realtime::SNSLoggedInUserProfileSuccessMessage)},
-        {511, sizeof(::realtime::SNSLogInFailureMessage)},
-        {520, sizeof(::realtime::SNSLogInRequestV2Message)},
-        {529, sizeof(::realtime::SNSLoginSettingsMessage)},
-        {534, sizeof(::realtime::SNSLogInSuccessMessage)},
-        {541, sizeof(::realtime::SNSOtherUserProfileFailureMessage)},
-        {550, sizeof(::realtime::SNSOtherUserProfileRequestMessage)},
-        {557, sizeof(::realtime::SNSOtherUserProfileSuccessMessage)},
-        {564, sizeof(::realtime::SNSReconcileIAPResultMessage)},
-        {571, sizeof(::realtime::SNSRemoteLogSetV3Message)},
-        {580, sizeof(::realtime::SNSUpdateProfileMessage)},
-        {589, sizeof(::realtime::SNSUpdateProfileSuccessMessage)},
-        {594, sizeof(::realtime::SNSUpdateProfileFailureMessage)},
-        {603, sizeof(::realtime::SNSUserServerProfileUpdateRequestMessage)},
-        {610, sizeof(::realtime::SNSUserServerProfileUpdateSuccessMessage)},
+        {167, sizeof(::realtime::LoadoutSlot)},
+        {212, sizeof(::realtime::LoadoutEntry)},
+        {225, sizeof(::realtime::LoadoutInstance)},
+        {232, sizeof(::realtime::GameServerSaveLoadoutMessage)},
+        {247, sizeof(::realtime::LobbyEntrantsConnectedMessage)},
+        {254, sizeof(::realtime::LobbyEntrantsAcceptMessage)},
+        {259, sizeof(::realtime::LobbyEntrantsRejectMessage)},
+        {266, sizeof(::realtime::LobbyEntrantRemovedMessage)},
+        {275, sizeof(::realtime::LobbySessionCreateMessage)},
+        {292, sizeof(::realtime::LobbySessionStateMessage)},
+        {305, sizeof(::realtime::LobbySessionStateRawMessage)},
+        {314, sizeof(::realtime::ConnectivityStatisticsMessage)},
+        {331, sizeof(::realtime::SymbolHash)},
+        {336, sizeof(::realtime::XPlatformID)},
+        {341, sizeof(::realtime::SNSUnknownMessage)},
+        {348, sizeof(::realtime::STCPConnectionRequireEvent)},
+        {349, sizeof(::realtime::STCPConnectionUnrequireEvent)},
+        {350, sizeof(::realtime::SNSConfigRequestV2Message)},
+        {355, sizeof(::realtime::SNSConfigSuccessV2Message)},
+        {364, sizeof(::realtime::SNSConfigFailureV2Message)},
+        {369, sizeof(::realtime::SNSReconcileIAPMessage)},
+        {376, sizeof(::realtime::SNSChannelInfoRequestMessage)},
+        {377, sizeof(::realtime::SNSChannelInfoResponseMessage)},
+        {382, sizeof(::realtime::SNSDocumentRequestV2Message)},
+        {389, sizeof(::realtime::SNSDocumentSuccessMessage)},
+        {394, sizeof(::realtime::SNSDocumentFailureMessage)},
+        {399, sizeof(::realtime::SNSLobbyCreateSessionRequestV9Message)},
+        {418, sizeof(::realtime::SNSLobbyFindSessionRequestv11Message)},
+        {439, sizeof(::realtime::SNSLobbyJoinSessionRequestV7Message)},
+        {452, sizeof(::realtime::SNSLobbyMatchmakerStatusMessage)},
+        {457, sizeof(::realtime::SNSLobbyMatchmakerStatusRequestMessage)},
+        {466, sizeof(::realtime::SNSLobbyPendingSessionCancelV2Message)},
+        {471, sizeof(::realtime::SNSLobbyPingRequestV3Message)},
+        {482, sizeof(::realtime::SNSLobbyPingResponseMessage)},
+        {487, sizeof(::realtime::SNSLobbyPlayerSessionsRequestV5Message)},
+        {500, sizeof(::realtime::SNSLobbySessionFailureV4Message)},
+        {507, sizeof(::realtime::SNSLobbySessionSuccessV5Message)},
+        {546, sizeof(::realtime::SNSLoggedInUserProfileFailureMessage)},
+        {555, sizeof(::realtime::SNSLoggedInUserProfileRequestMessage)},
+        {564, sizeof(::realtime::SNSLoggedInUserProfileSuccessMessage)},
+        {571, sizeof(::realtime::SNSLogInFailureMessage)},
+        {580, sizeof(::realtime::SNSLogInRequestV2Message)},
+        {589, sizeof(::realtime::SNSLoginSettingsMessage)},
+        {594, sizeof(::realtime::SNSLogInSuccessMessage)},
+        {601, sizeof(::realtime::SNSOtherUserProfileFailureMessage)},
+        {610, sizeof(::realtime::SNSOtherUserProfileRequestMessage)},
+        {617, sizeof(::realtime::SNSOtherUserProfileSuccessMessage)},
+        {624, sizeof(::realtime::SNSReconcileIAPResultMessage)},
+        {631, sizeof(::realtime::SNSRemoteLogSetV3Message)},
+        {640, sizeof(::realtime::SNSUpdateProfileMessage)},
+        {649, sizeof(::realtime::SNSUpdateProfileSuccessMessage)},
+        {654, sizeof(::realtime::SNSUpdateProfileFailureMessage)},
+        {663, sizeof(::realtime::SNSUserServerProfileUpdateRequestMessage)},
+        {670, sizeof(::realtime::SNSUserServerProfileUpdateSuccessMessage)},
 };
 static const ::_pb::Message* PROTOBUF_NONNULL const file_default_instances[] = {
     &::realtime::_Envelope_default_instance_._instance,
@@ -2412,6 +2549,8 @@ static const ::_pb::Message* PROTOBUF_NONNULL const file_default_instances[] = {
     &::realtime::_GameServerRegistrationMessage_default_instance_._instance,
     &::realtime::_GameServerRegistrationSuccessMessage_default_instance_._instance,
     &::realtime::_LoadoutItem_default_instance_._instance,
+    &::realtime::_LoadoutSlot_default_instance_._instance,
+    &::realtime::_LoadoutEntry_default_instance_._instance,
     &::realtime::_LoadoutInstance_default_instance_._instance,
     &::realtime::_GameServerSaveLoadoutMessage_default_instance_._instance,
     &::realtime::_LobbyEntrantsConnectedMessage_default_instance_._instance,
@@ -2622,206 +2761,226 @@ const char descriptor_table_protodef_rtapi_2frealtime_5fv1_2eproto[] ABSL_ATTRIB
     "\n\tserver_id\030\001 \001(\004R\010serverId\022.\n\023external_"
     "ip_address\030\002 \001(\tR\021externalIpAddress\"O\n\013L"
     "oadoutItem\022\033\n\tslot_type\030\001 \001(\006R\010slotType\022"
-    "#\n\requipped_item\030\002 \001(\006R\014equippedItem\"c\n\017"
-    "LoadoutInstance\022#\n\rinstance_name\030\001 \001(\006R\014"
-    "instanceName\022+\n\005items\030\002 \003(\0132\025.realtime.L"
-    "oadoutItemR\005items\"\367\001\n\034GameServerSaveLoad"
-    "outMessage\022(\n\020lobby_session_id\030\001 \001(\tR\016lo"
-    "bbySessionId\022\035\n\nentrant_id\030\002 \001(\tR\tentran"
-    "tId\022!\n\014loadout_slot\030\003 \001(\005R\013loadoutSlot\022#"
-    "\n\rjersey_number\030\004 \001(\005R\014jerseyNumber\022F\n\021l"
-    "oadout_instances\030\005 \003(\0132\031.realtime.Loadou"
-    "tInstanceR\020loadoutInstances\"j\n\035LobbyEntr"
-    "antsConnectedMessage\022(\n\020lobby_session_id"
-    "\030\001 \001(\tR\016lobbySessionId\022\037\n\013entrant_ids\030\002 "
-    "\003(\tR\nentrantIds\"=\n\032LobbyEntrantsAcceptMe"
-    "ssage\022\037\n\013entrant_ids\030\001 \003(\tR\nentrantIds\"\273"
-    "\002\n\032LobbyEntrantsRejectMessage\022\037\n\013entrant"
-    "_ids\030\001 \003(\tR\nentrantIds\022\022\n\004code\030\002 \001(\005R\004co"
-    "de\"\347\001\n\004Code\022\035\n\031CODE_INTERNAL_UNSPECIFIED"
-    "\020\000\022\024\n\020CODE_BAD_REQUEST\020\001\022\020\n\014CODE_TIMEOUT"
-    "\020\002\022\032\n\026CODE_DUPLICATE_USER_ID\020\003\022\025\n\021CODE_L"
-    "OBBY_LOCKED\020\004\022\023\n\017CODE_LOBBY_FULL\020\005\022\025\n\021CO"
-    "DE_LOBBY_ENDING\020\006\022\017\n\013CODE_KICKED\020\007\022\025\n\021CO"
-    "DE_DISCONNECTED\020\010\022\021\n\rCODE_INACTIVE\020\t\"\343\002\n"
-    "\032LobbyEntrantRemovedMessage\022(\n\020lobby_ses"
-    "sion_id\030\001 \001(\tR\016lobbySessionId\022\035\n\nentrant"
-    "_id\030\002 \001(\tR\tentrantId\022\022\n\004code\030\003 \001(\005R\004code"
-    "\"\347\001\n\004Code\022\035\n\031CODE_INTERNAL_UNSPECIFIED\020\000"
-    "\022\024\n\020CODE_BAD_REQUEST\020\001\022\020\n\014CODE_TIMEOUT\020\002"
-    "\022\032\n\026CODE_DUPLICATE_USER_ID\020\003\022\025\n\021CODE_LOB"
-    "BY_LOCKED\020\004\022\023\n\017CODE_LOBBY_FULL\020\005\022\025\n\021CODE"
-    "_LOBBY_ENDING\020\006\022\017\n\013CODE_KICKED\020\007\022\025\n\021CODE"
-    "_DISCONNECTED\020\010\022\021\n\rCODE_INACTIVE\020\t\"\323\002\n\031L"
-    "obbySessionCreateMessage\022(\n\020lobby_sessio"
-    "n_id\030\001 \001(\tR\016lobbySessionId\022\035\n\nlobby_type"
-    "\030\002 \001(\005R\tlobbyType\022\031\n\010group_id\030\003 \001(\tR\007gro"
-    "upId\022!\n\014max_entrants\030\004 \001(\005R\013maxEntrants\022"
-    "#\n\rsettings_json\030\005 \001(\tR\014settingsJson\022\032\n\010"
-    "features\030\006 \003(\tR\010features\022&\n\017time_step_us"
-    "ecs\030\007 \001(\rR\rtimeStepUsecs\"F\n\tLobbyType\022!\n"
-    "\035LOBBY_TYPE_PUBLIC_UNSPECIFIED\020\000\022\026\n\022LOBB"
-    "Y_TYPE_PRIVATE\020\001\"\214\002\n\030LobbySessionStateMe"
-    "ssage\022&\n\017time_step_usecs\030\001 \001(\rR\rtimeStep"
-    "Usecs\022\035\n\ntick_count\030\002 \001(\004R\ttickCount\022S\n\021"
-    "session_state_raw\030\003 \001(\0132%.realtime.Lobby"
-    "SessionStateRawMessageH\000R\017sessionStateRa"
-    "w\022K\n\rsession_state\030\004 \001(\0132$.telemetry.v1."
-    "LobbySessionStateFrameH\000R\014sessionStateB\007"
-    "\n\005state\"\256\001\n\033LobbySessionStateRawMessage\022"
-    "8\n\ttimestamp\030\001 \001(\0132\032.google.protobuf.Tim"
-    "estampR\ttimestamp\022\'\n\017session_payload\030\002 \001"
-    "(\014R\016sessionPayload\022,\n\022user_bones_payload"
-    "\030\003 \001(\014R\020userBonesPayload\"\262\002\n\035Connectivit"
-    "yStatisticsMessage\022*\n\021packet_loss_ratio\030"
-    "\001 \001(\002R\017packetLossRatio\022+\n\021prediction_off"
-    "set\030\002 \001(\004R\020predictionOffset\022\026\n\006target\030\003 "
-    "\001(\004R\006target\022\035\n\nlocal_time\030\004 \001(\004R\tlocalTi"
-    "me\022\037\n\013server_time\030\005 \001(\004R\nserverTime\0220\n\024p"
-    "ending_server_delta\030\006 \001(\003R\022pendingServer"
-    "Delta\022.\n\023discarded_frame_pct\030\007 \001(\002R\021disc"
-    "ardedFramePct\"\"\n\nSymbolHash\022\024\n\005value\030\001 \001"
-    "(\006R\005value\"\035\n\013XPlatformID\022\016\n\002id\030\001 \001(\tR\002id"
-    "\"Q\n\021SNSUnknownMessage\022(\n\004type\030\001 \001(\0132\024.re"
-    "altime.SymbolHashR\004type\022\022\n\004data\030\002 \001(\014R\004d"
-    "ata\"\034\n\032STCPConnectionRequireEvent\"\036\n\034STC"
-    "PConnectionUnrequireEvent\">\n\031SNSConfigRe"
-    "questV2Message\022!\n\014request_json\030\001 \001(\tR\013re"
-    "questJson\"\177\n\031SNSConfigSuccessV2Message\022("
-    "\n\004type\030\001 \001(\0132\024.realtime.SymbolHashR\004type"
-    "\022$\n\002id\030\002 \001(\0132\024.realtime.SymbolHashR\002id\022\022"
-    "\n\004data\030\003 \001(\tR\004data\"1\n\031SNSConfigFailureV2"
-    "Message\022\024\n\005error\030\001 \001(\tR\005error\"g\n\026SNSReco"
-    "ncileIAPMessage\022\035\n\nsession_id\030\001 \001(\tR\tses"
-    "sionId\022.\n\007user_id\030\002 \001(\0132\025.realtime.XPlat"
-    "formIDR\006userId\"\036\n\034SNSChannelInfoRequestM"
-    "essage\"B\n\035SNSChannelInfoResponseMessage\022"
-    "!\n\014channel_info\030\001 \001(\tR\013channelInfo\"M\n\033SN"
-    "SDocumentRequestV2Message\022\032\n\010language\030\001 "
-    "\001(\tR\010language\022\022\n\004type\030\002 \001(\tR\004type\"@\n\031SNS"
-    "DocumentSuccessMessage\022#\n\rdocument_json\030"
-    "\001 \001(\tR\014documentJson\"5\n\031SNSDocumentFailur"
-    "eMessage\022\030\n\007message\030\003 \001(\tR\007message\"\236\003\n%S"
-    "NSLobbyCreateSessionRequestV9Message\022,\n\006"
-    "region\030\001 \001(\0132\024.realtime.SymbolHashR\006regi"
-    "on\0227\n\014version_lock\030\002 \001(\0132\024.realtime.Symb"
-    "olHashR\013versionLock\022(\n\004mode\030\003 \001(\0132\024.real"
-    "time.SymbolHashR\004mode\022*\n\005level\030\004 \001(\0132\024.r"
-    "ealtime.SymbolHashR\005level\0220\n\010platform\030\005 "
-    "\001(\0132\024.realtime.SymbolHashR\010platform\022(\n\020l"
-    "ogin_session_id\030\006 \001(\tR\016loginSessionId\0221\n"
-    "\010entrants\030\007 \003(\0132\025.realtime.XPlatformIDR\010"
-    "entrants\022)\n\020session_settings\030\010 \001(\tR\017sess"
-    "ionSettings\"\264\003\n$SNSLobbyFindSessionReque"
-    "stv11Message\0227\n\014version_lock\030\001 \001(\0132\024.rea"
-    "ltime.SymbolHashR\013versionLock\022(\n\004mode\030\002 "
-    "\001(\0132\024.realtime.SymbolHashR\004mode\022*\n\005level"
-    "\030\003 \001(\0132\024.realtime.SymbolHashR\005level\0220\n\010p"
-    "latform\030\004 \001(\0132\024.realtime.SymbolHashR\010pla"
-    "tform\022(\n\020login_session_id\030\005 \001(\tR\016loginSe"
-    "ssionId\022(\n\020current_lobby_id\030\006 \001(\tR\016curre"
-    "ntLobbyId\022\031\n\010group_id\030\007 \001(\tR\007groupId\022)\n\020"
-    "session_settings\030\010 \001(\tR\017sessionSettings\022"
-    "1\n\010entrants\030\t \003(\0132\025.realtime.XPlatformID"
-    "R\010entrants\"\353\001\n#SNSLobbyJoinSessionReques"
-    "tV7Message\022\031\n\010lobby_id\030\001 \001(\tR\007lobbyId\0227\n"
-    "\014version_lock\030\002 \001(\0132\024.realtime.SymbolHas"
-    "hR\013versionLock\0220\n\010platform\030\003 \001(\0132\024.realt"
-    "ime.SymbolHashR\010platform\022(\n\020login_sessio"
-    "n_id\030\004 \001(\tR\016loginSessionId\022\024\n\005flags\030\005 \001("
-    "\004R\005flags\"B\n\037SNSLobbyMatchmakerStatusMess"
-    "age\022\037\n\013status_code\030\001 \001(\rR\nstatusCode\"d\n&"
-    "SNSLobbyMatchmakerStatusRequestMessage\022\022"
-    "\n\004unk0\030\001 \001(\rR\004unk0\022\022\n\004unk1\030\002 \001(\rR\004unk1\022\022"
-    "\n\004unk2\030\003 \001(\rR\004unk2\"F\n%SNSLobbyPendingSes"
-    "sionCancelV2Message\022\035\n\nsession_id\030\001 \001(\tR"
-    "\tsessionId\"}\n\034SNSLobbyPingRequestV3Messa"
-    "ge\022\022\n\004unk0\030\001 \001(\rR\004unk0\022\022\n\004unk1\030\002 \001(\rR\004un"
-    "k1\022\027\n\007rtt_max\030\003 \001(\rR\006rttMax\022\034\n\tendpoints"
-    "\030\004 \003(\tR\tendpoints\"7\n\033SNSLobbyPingRespons"
-    "eMessage\022\030\n\007results\030\001 \003(\tR\007results\"\211\002\n&S"
-    "NSLobbyPlayerSessionsRequestV5Message\022(\n"
-    "\020login_session_id\030\001 \001(\tR\016loginSessionId\022"
-    ".\n\007user_id\030\002 \001(\0132\025.realtime.XPlatformIDR"
-    "\006userId\022\031\n\010lobby_id\030\003 \001(\tR\007lobbyId\0220\n\010pl"
-    "atform\030\004 \001(\0132\024.realtime.SymbolHashR\010plat"
-    "form\0228\n\014player_xpids\030\005 \003(\0132\025.realtime.XP"
-    "latformIDR\013playerXpids\"Z\n\037SNSLobbySessio"
-    "nFailureV4Message\022\035\n\nerror_code\030\001 \001(\rR\te"
-    "rrorCode\022\030\n\007message\030\002 \001(\tR\007message\"\273\005\n\037S"
-    "NSLobbySessionSuccessV5Message\022\033\n\tgame_m"
-    "ode\030\001 \001(\006R\010gameMode\022\031\n\010lobby_id\030\002 \001(\tR\007l"
-    "obbyId\022\031\n\010group_id\030\003 \001(\tR\007groupId\022\032\n\010end"
-    "point\030\004 \001(\tR\010endpoint\022\035\n\nteam_index\030\005 \001("
-    "\005R\tteamIndex\022\033\n\tuser_slot\030\006 \001(\rR\010userSlo"
-    "t\022\030\n\007flags32\030\007 \001(\rR\007flags32\022#\n\rsession_f"
-    "lags\030\010 \001(\rR\014sessionFlags\0220\n\024server_encod"
-    "er_flags\030\t \001(\004R\022serverEncoderFlags\0220\n\024cl"
-    "ient_encoder_flags\030\n \001(\004R\022clientEncoderF"
-    "lags\022,\n\022server_sequence_id\030\013 \001(\004R\020server"
-    "SequenceId\022$\n\016server_mac_key\030\014 \001(\014R\014serv"
-    "erMacKey\022$\n\016server_enc_key\030\r \001(\014R\014server"
-    "EncKey\022*\n\021server_random_key\030\016 \001(\014R\017serve"
-    "rRandomKey\022,\n\022client_sequence_id\030\017 \001(\004R\020"
-    "clientSequenceId\022$\n\016client_mac_key\030\020 \001(\014"
-    "R\014clientMacKey\022$\n\016client_enc_key\030\021 \001(\014R\014"
-    "clientEncKey\022*\n\021client_random_key\030\022 \001(\014R"
-    "\017clientRandomKey\"\234\001\n$SNSLoggedInUserProf"
-    "ileFailureMessage\022.\n\007user_id\030\001 \001(\0132\025.rea"
-    "ltime.XPlatformIDR\006userId\022\037\n\013status_code"
-    "\030\002 \001(\004R\nstatusCode\022#\n\rerror_message\030\003 \001("
-    "\tR\014errorMessage\"\247\001\n$SNSLoggedInUserProfi"
-    "leRequestMessage\022\035\n\nsession_id\030\001 \001(\tR\tse"
-    "ssionId\022.\n\007user_id\030\002 \001(\0132\025.realtime.XPla"
-    "tformIDR\006userId\0220\n\024profile_request_data\030"
-    "\003 \001(\tR\022profileRequestData\"p\n$SNSLoggedIn"
-    "UserProfileSuccessMessage\022.\n\007user_id\030\001 \001"
-    "(\0132\025.realtime.XPlatformIDR\006userId\022\030\n\007pay"
-    "load\030\002 \001(\tR\007payload\"\216\001\n\026SNSLogInFailureM"
-    "essage\022.\n\007user_id\030\001 \001(\0132\025.realtime.XPlat"
-    "formIDR\006userId\022\037\n\013status_code\030\002 \001(\004R\nsta"
-    "tusCode\022#\n\rerror_message\030\003 \001(\tR\014errorMes"
-    "sage\"\224\001\n\030SNSLogInRequestV2Message\022.\n\023pre"
-    "vious_session_id\030\001 \001(\tR\021previousSessionI"
+    "#\n\requipped_item\030\002 \001(\006R\014equippedItem\"\313\004\n"
+    "\013LoadoutSlot\022$\n\rselectionmode\030\001 \001(\006R\rsel"
+    "ectionmode\022\026\n\006banner\030\002 \001(\006R\006banner\022\030\n\007bo"
+    "oster\030\003 \001(\006R\007booster\022\026\n\006bracer\030\004 \001(\006R\006br"
+    "acer\022\030\n\007chassis\030\005 \001(\006R\007chassis\022\024\n\005decal\030"
+    "\006 \001(\006R\005decal\022\035\n\ndecal_body\030\007 \001(\006R\tdecalB"
+    "ody\022\032\n\010emissive\030\010 \001(\006R\010emissive\022\024\n\005emote"
+    "\030\t \001(\006R\005emote\022 \n\013secondemote\030\n \001(\006R\013seco"
+    "ndemote\022\027\n\007goal_fx\030\013 \001(\006R\006goalFx\022\024\n\005meda"
+    "l\030\014 \001(\006R\005medal\022\030\n\007pattern\030\r \001(\006R\007pattern"
+    "\022!\n\014pattern_body\030\016 \001(\006R\013patternBody\022\020\n\003p"
+    "ip\030\017 \001(\006R\003pip\022\020\n\003tag\030\020 \001(\006R\003tag\022\022\n\004tint\030"
+    "\021 \001(\006R\004tint\022(\n\020tint_alignment_a\030\022 \001(\006R\016t"
+    "intAlignmentA\022(\n\020tint_alignment_b\030\023 \001(\006R"
+    "\016tintAlignmentB\022\033\n\ttint_body\030\024 \001(\006R\010tint"
+    "Body\022\024\n\005title\030\025 \001(\006R\005title\"\233\001\n\014LoadoutEn"
+    "try\022\032\n\010bodytype\030\001 \001(\006R\010bodytype\022\026\n\006teami"
+    "d\030\002 \001(\rR\006teamid\022\026\n\006airole\030\003 \001(\rR\006airole\022"
+    "\016\n\002xf\030\004 \001(\006R\002xf\022/\n\007loadout\030\005 \001(\0132\025.realt"
+    "ime.LoadoutSlotR\007loadout\"c\n\017LoadoutInsta"
+    "nce\022#\n\rinstance_name\030\001 \001(\006R\014instanceName"
+    "\022+\n\005items\030\002 \003(\0132\025.realtime.LoadoutItemR\005"
+    "items\"\264\002\n\034GameServerSaveLoadoutMessage\022("
+    "\n\020lobby_session_id\030\001 \001(\tR\016lobbySessionId"
+    "\022\035\n\nentrant_id\030\002 \001(\tR\tentrantId\022!\n\014loado"
+    "ut_slot\030\003 \001(\005R\013loadoutSlot\022#\n\rjersey_num"
+    "ber\030\004 \001(\005R\014jerseyNumber\022F\n\021loadout_insta"
+    "nces\030\005 \003(\0132\031.realtime.LoadoutInstanceR\020l"
+    "oadoutInstances\022;\n\rloadout_entry\030\006 \001(\0132\026"
+    ".realtime.LoadoutEntryR\014loadoutEntry\"j\n\035"
+    "LobbyEntrantsConnectedMessage\022(\n\020lobby_s"
+    "ession_id\030\001 \001(\tR\016lobbySessionId\022\037\n\013entra"
+    "nt_ids\030\002 \003(\tR\nentrantIds\"=\n\032LobbyEntrant"
+    "sAcceptMessage\022\037\n\013entrant_ids\030\001 \003(\tR\nent"
+    "rantIds\"\273\002\n\032LobbyEntrantsRejectMessage\022\037"
+    "\n\013entrant_ids\030\001 \003(\tR\nentrantIds\022\022\n\004code\030"
+    "\002 \001(\005R\004code\"\347\001\n\004Code\022\035\n\031CODE_INTERNAL_UN"
+    "SPECIFIED\020\000\022\024\n\020CODE_BAD_REQUEST\020\001\022\020\n\014COD"
+    "E_TIMEOUT\020\002\022\032\n\026CODE_DUPLICATE_USER_ID\020\003\022"
+    "\025\n\021CODE_LOBBY_LOCKED\020\004\022\023\n\017CODE_LOBBY_FUL"
+    "L\020\005\022\025\n\021CODE_LOBBY_ENDING\020\006\022\017\n\013CODE_KICKE"
+    "D\020\007\022\025\n\021CODE_DISCONNECTED\020\010\022\021\n\rCODE_INACT"
+    "IVE\020\t\"\343\002\n\032LobbyEntrantRemovedMessage\022(\n\020"
+    "lobby_session_id\030\001 \001(\tR\016lobbySessionId\022\035"
+    "\n\nentrant_id\030\002 \001(\tR\tentrantId\022\022\n\004code\030\003 "
+    "\001(\005R\004code\"\347\001\n\004Code\022\035\n\031CODE_INTERNAL_UNSP"
+    "ECIFIED\020\000\022\024\n\020CODE_BAD_REQUEST\020\001\022\020\n\014CODE_"
+    "TIMEOUT\020\002\022\032\n\026CODE_DUPLICATE_USER_ID\020\003\022\025\n"
+    "\021CODE_LOBBY_LOCKED\020\004\022\023\n\017CODE_LOBBY_FULL\020"
+    "\005\022\025\n\021CODE_LOBBY_ENDING\020\006\022\017\n\013CODE_KICKED\020"
+    "\007\022\025\n\021CODE_DISCONNECTED\020\010\022\021\n\rCODE_INACTIV"
+    "E\020\t\"\323\002\n\031LobbySessionCreateMessage\022(\n\020lob"
+    "by_session_id\030\001 \001(\tR\016lobbySessionId\022\035\n\nl"
+    "obby_type\030\002 \001(\005R\tlobbyType\022\031\n\010group_id\030\003"
+    " \001(\tR\007groupId\022!\n\014max_entrants\030\004 \001(\005R\013max"
+    "Entrants\022#\n\rsettings_json\030\005 \001(\tR\014setting"
+    "sJson\022\032\n\010features\030\006 \003(\tR\010features\022&\n\017tim"
+    "e_step_usecs\030\007 \001(\rR\rtimeStepUsecs\"F\n\tLob"
+    "byType\022!\n\035LOBBY_TYPE_PUBLIC_UNSPECIFIED\020"
+    "\000\022\026\n\022LOBBY_TYPE_PRIVATE\020\001\"\214\002\n\030LobbySessi"
+    "onStateMessage\022&\n\017time_step_usecs\030\001 \001(\rR"
+    "\rtimeStepUsecs\022\035\n\ntick_count\030\002 \001(\004R\ttick"
+    "Count\022S\n\021session_state_raw\030\003 \001(\0132%.realt"
+    "ime.LobbySessionStateRawMessageH\000R\017sessi"
+    "onStateRaw\022K\n\rsession_state\030\004 \001(\0132$.tele"
+    "metry.v1.LobbySessionStateFrameH\000R\014sessi"
+    "onStateB\007\n\005state\"\256\001\n\033LobbySessionStateRa"
+    "wMessage\0228\n\ttimestamp\030\001 \001(\0132\032.google.pro"
+    "tobuf.TimestampR\ttimestamp\022\'\n\017session_pa"
+    "yload\030\002 \001(\014R\016sessionPayload\022,\n\022user_bone"
+    "s_payload\030\003 \001(\014R\020userBonesPayload\"\262\002\n\035Co"
+    "nnectivityStatisticsMessage\022*\n\021packet_lo"
+    "ss_ratio\030\001 \001(\002R\017packetLossRatio\022+\n\021predi"
+    "ction_offset\030\002 \001(\004R\020predictionOffset\022\026\n\006"
+    "target\030\003 \001(\004R\006target\022\035\n\nlocal_time\030\004 \001(\004"
+    "R\tlocalTime\022\037\n\013server_time\030\005 \001(\004R\nserver"
+    "Time\0220\n\024pending_server_delta\030\006 \001(\003R\022pend"
+    "ingServerDelta\022.\n\023discarded_frame_pct\030\007 "
+    "\001(\002R\021discardedFramePct\"\"\n\nSymbolHash\022\024\n\005"
+    "value\030\001 \001(\006R\005value\"\035\n\013XPlatformID\022\016\n\002id\030"
+    "\001 \001(\tR\002id\"Q\n\021SNSUnknownMessage\022(\n\004type\030\001"
+    " \001(\0132\024.realtime.SymbolHashR\004type\022\022\n\004data"
+    "\030\002 \001(\014R\004data\"\034\n\032STCPConnectionRequireEve"
+    "nt\"\036\n\034STCPConnectionUnrequireEvent\">\n\031SN"
+    "SConfigRequestV2Message\022!\n\014request_json\030"
+    "\001 \001(\tR\013requestJson\"\177\n\031SNSConfigSuccessV2"
+    "Message\022(\n\004type\030\001 \001(\0132\024.realtime.SymbolH"
+    "ashR\004type\022$\n\002id\030\002 \001(\0132\024.realtime.SymbolH"
+    "ashR\002id\022\022\n\004data\030\003 \001(\tR\004data\"1\n\031SNSConfig"
+    "FailureV2Message\022\024\n\005error\030\001 \001(\tR\005error\"g"
+    "\n\026SNSReconcileIAPMessage\022\035\n\nsession_id\030\001"
+    " \001(\tR\tsessionId\022.\n\007user_id\030\002 \001(\0132\025.realt"
+    "ime.XPlatformIDR\006userId\"\036\n\034SNSChannelInf"
+    "oRequestMessage\"B\n\035SNSChannelInfoRespons"
+    "eMessage\022!\n\014channel_info\030\001 \001(\tR\013channelI"
+    "nfo\"M\n\033SNSDocumentRequestV2Message\022\032\n\010la"
+    "nguage\030\001 \001(\tR\010language\022\022\n\004type\030\002 \001(\tR\004ty"
+    "pe\"@\n\031SNSDocumentSuccessMessage\022#\n\rdocum"
+    "ent_json\030\001 \001(\tR\014documentJson\"5\n\031SNSDocum"
+    "entFailureMessage\022\030\n\007message\030\003 \001(\tR\007mess"
+    "age\"\236\003\n%SNSLobbyCreateSessionRequestV9Me"
+    "ssage\022,\n\006region\030\001 \001(\0132\024.realtime.SymbolH"
+    "ashR\006region\0227\n\014version_lock\030\002 \001(\0132\024.real"
+    "time.SymbolHashR\013versionLock\022(\n\004mode\030\003 \001"
+    "(\0132\024.realtime.SymbolHashR\004mode\022*\n\005level\030"
+    "\004 \001(\0132\024.realtime.SymbolHashR\005level\0220\n\010pl"
+    "atform\030\005 \001(\0132\024.realtime.SymbolHashR\010plat"
+    "form\022(\n\020login_session_id\030\006 \001(\tR\016loginSes"
+    "sionId\0221\n\010entrants\030\007 \003(\0132\025.realtime.XPla"
+    "tformIDR\010entrants\022)\n\020session_settings\030\010 "
+    "\001(\tR\017sessionSettings\"\264\003\n$SNSLobbyFindSes"
+    "sionRequestv11Message\0227\n\014version_lock\030\001 "
+    "\001(\0132\024.realtime.SymbolHashR\013versionLock\022("
+    "\n\004mode\030\002 \001(\0132\024.realtime.SymbolHashR\004mode"
+    "\022*\n\005level\030\003 \001(\0132\024.realtime.SymbolHashR\005l"
+    "evel\0220\n\010platform\030\004 \001(\0132\024.realtime.Symbol"
+    "HashR\010platform\022(\n\020login_session_id\030\005 \001(\t"
+    "R\016loginSessionId\022(\n\020current_lobby_id\030\006 \001"
+    "(\tR\016currentLobbyId\022\031\n\010group_id\030\007 \001(\tR\007gr"
+    "oupId\022)\n\020session_settings\030\010 \001(\tR\017session"
+    "Settings\0221\n\010entrants\030\t \003(\0132\025.realtime.XP"
+    "latformIDR\010entrants\"\353\001\n#SNSLobbyJoinSess"
+    "ionRequestV7Message\022\031\n\010lobby_id\030\001 \001(\tR\007l"
+    "obbyId\0227\n\014version_lock\030\002 \001(\0132\024.realtime."
+    "SymbolHashR\013versionLock\0220\n\010platform\030\003 \001("
+    "\0132\024.realtime.SymbolHashR\010platform\022(\n\020log"
+    "in_session_id\030\004 \001(\tR\016loginSessionId\022\024\n\005f"
+    "lags\030\005 \001(\004R\005flags\"B\n\037SNSLobbyMatchmakerS"
+    "tatusMessage\022\037\n\013status_code\030\001 \001(\rR\nstatu"
+    "sCode\"d\n&SNSLobbyMatchmakerStatusRequest"
+    "Message\022\022\n\004unk0\030\001 \001(\rR\004unk0\022\022\n\004unk1\030\002 \001("
+    "\rR\004unk1\022\022\n\004unk2\030\003 \001(\rR\004unk2\"F\n%SNSLobbyP"
+    "endingSessionCancelV2Message\022\035\n\nsession_"
+    "id\030\001 \001(\tR\tsessionId\"}\n\034SNSLobbyPingReque"
+    "stV3Message\022\022\n\004unk0\030\001 \001(\rR\004unk0\022\022\n\004unk1\030"
+    "\002 \001(\rR\004unk1\022\027\n\007rtt_max\030\003 \001(\rR\006rttMax\022\034\n\t"
+    "endpoints\030\004 \003(\tR\tendpoints\"7\n\033SNSLobbyPi"
+    "ngResponseMessage\022\030\n\007results\030\001 \003(\tR\007resu"
+    "lts\"\211\002\n&SNSLobbyPlayerSessionsRequestV5M"
+    "essage\022(\n\020login_session_id\030\001 \001(\tR\016loginS"
+    "essionId\022.\n\007user_id\030\002 \001(\0132\025.realtime.XPl"
+    "atformIDR\006userId\022\031\n\010lobby_id\030\003 \001(\tR\007lobb"
+    "yId\0220\n\010platform\030\004 \001(\0132\024.realtime.SymbolH"
+    "ashR\010platform\0228\n\014player_xpids\030\005 \003(\0132\025.re"
+    "altime.XPlatformIDR\013playerXpids\"Z\n\037SNSLo"
+    "bbySessionFailureV4Message\022\035\n\nerror_code"
+    "\030\001 \001(\rR\terrorCode\022\030\n\007message\030\002 \001(\tR\007mess"
+    "age\"\273\005\n\037SNSLobbySessionSuccessV5Message\022"
+    "\033\n\tgame_mode\030\001 \001(\006R\010gameMode\022\031\n\010lobby_id"
+    "\030\002 \001(\tR\007lobbyId\022\031\n\010group_id\030\003 \001(\tR\007group"
+    "Id\022\032\n\010endpoint\030\004 \001(\tR\010endpoint\022\035\n\nteam_i"
+    "ndex\030\005 \001(\005R\tteamIndex\022\033\n\tuser_slot\030\006 \001(\r"
+    "R\010userSlot\022\030\n\007flags32\030\007 \001(\rR\007flags32\022#\n\r"
+    "session_flags\030\010 \001(\rR\014sessionFlags\0220\n\024ser"
+    "ver_encoder_flags\030\t \001(\004R\022serverEncoderFl"
+    "ags\0220\n\024client_encoder_flags\030\n \001(\004R\022clien"
+    "tEncoderFlags\022,\n\022server_sequence_id\030\013 \001("
+    "\004R\020serverSequenceId\022$\n\016server_mac_key\030\014 "
+    "\001(\014R\014serverMacKey\022$\n\016server_enc_key\030\r \001("
+    "\014R\014serverEncKey\022*\n\021server_random_key\030\016 \001"
+    "(\014R\017serverRandomKey\022,\n\022client_sequence_i"
+    "d\030\017 \001(\004R\020clientSequenceId\022$\n\016client_mac_"
+    "key\030\020 \001(\014R\014clientMacKey\022$\n\016client_enc_ke"
+    "y\030\021 \001(\014R\014clientEncKey\022*\n\021client_random_k"
+    "ey\030\022 \001(\014R\017clientRandomKey\"\234\001\n$SNSLoggedI"
+    "nUserProfileFailureMessage\022.\n\007user_id\030\001 "
+    "\001(\0132\025.realtime.XPlatformIDR\006userId\022\037\n\013st"
+    "atus_code\030\002 \001(\004R\nstatusCode\022#\n\rerror_mes"
+    "sage\030\003 \001(\tR\014errorMessage\"\247\001\n$SNSLoggedIn"
+    "UserProfileRequestMessage\022\035\n\nsession_id\030"
+    "\001 \001(\tR\tsessionId\022.\n\007user_id\030\002 \001(\0132\025.real"
+    "time.XPlatformIDR\006userId\0220\n\024profile_requ"
+    "est_data\030\003 \001(\tR\022profileRequestData\"p\n$SN"
+    "SLoggedInUserProfileSuccessMessage\022.\n\007us"
+    "er_id\030\001 \001(\0132\025.realtime.XPlatformIDR\006user"
+    "Id\022\030\n\007payload\030\002 \001(\tR\007payload\"\216\001\n\026SNSLogI"
+    "nFailureMessage\022.\n\007user_id\030\001 \001(\0132\025.realt"
+    "ime.XPlatformIDR\006userId\022\037\n\013status_code\030\002"
+    " \001(\004R\nstatusCode\022#\n\rerror_message\030\003 \001(\tR"
+    "\014errorMessage\"\224\001\n\030SNSLogInRequestV2Messa"
+    "ge\022.\n\023previous_session_id\030\001 \001(\tR\021previou"
+    "sSessionId\022.\n\007user_id\030\002 \001(\0132\025.realtime.X"
+    "PlatformIDR\006userId\022\030\n\007payload\030\003 \001(\tR\007pay"
+    "load\":\n\027SNSLoginSettingsMessage\022\037\n\013confi"
+    "g_data\030\001 \001(\tR\nconfigData\"g\n\026SNSLogInSucc"
+    "essMessage\022\035\n\nsession_id\030\001 \001(\tR\tsessionI"
     "d\022.\n\007user_id\030\002 \001(\0132\025.realtime.XPlatformI"
-    "DR\006userId\022\030\n\007payload\030\003 \001(\tR\007payload\":\n\027S"
-    "NSLoginSettingsMessage\022\037\n\013config_data\030\001 "
-    "\001(\tR\nconfigData\"g\n\026SNSLogInSuccessMessag"
-    "e\022\035\n\nsession_id\030\001 \001(\tR\tsessionId\022.\n\007user"
-    "_id\030\002 \001(\0132\025.realtime.XPlatformIDR\006userId"
-    "\"\216\001\n!SNSOtherUserProfileFailureMessage\022."
-    "\n\007user_id\030\001 \001(\0132\025.realtime.XPlatformIDR\006"
-    "userId\022\037\n\013status_code\030\002 \001(\004R\nstatusCode\022"
-    "\030\n\007message\030\003 \001(\tR\007message\"g\n!SNSOtherUse"
-    "rProfileRequestMessage\022.\n\007user_id\030\001 \001(\0132"
-    "\025.realtime.XPlatformIDR\006userId\022\022\n\004data\030\002"
-    " \001(\tR\004data\"m\n!SNSOtherUserProfileSuccess"
+    "DR\006userId\"\216\001\n!SNSOtherUserProfileFailure"
     "Message\022.\n\007user_id\030\001 \001(\0132\025.realtime.XPla"
-    "tformIDR\006userId\022\030\n\007profile\030\002 \001(\tR\007profil"
-    "e\"i\n\034SNSReconcileIAPResultMessage\022.\n\007use"
-    "r_id\030\001 \001(\0132\025.realtime.XPlatformIDR\006userI"
-    "d\022\031\n\010iap_data\030\002 \001(\tR\007iapData\"{\n\030SNSRemot"
-    "eLogSetV3Message\022.\n\007user_id\030\001 \001(\0132\025.real"
-    "time.XPlatformIDR\006userId\022\033\n\tlog_level\030\002 "
-    "\001(\004R\010logLevel\022\022\n\004logs\030\003 \003(\tR\004logs\"\215\001\n\027SN"
-    "SUpdateProfileMessage\022(\n\020login_session_i"
-    "d\030\001 \001(\tR\016loginSessionId\022.\n\007user_id\030\002 \001(\013"
-    "2\025.realtime.XPlatformIDR\006userId\022\030\n\007paylo"
-    "ad\030\003 \001(\tR\007payload\"P\n\036SNSUpdateProfileSuc"
-    "cessMessage\022.\n\007user_id\030\001 \001(\0132\025.realtime."
-    "XPlatformIDR\006userId\"\213\001\n\036SNSUpdateProfile"
-    "FailureMessage\022.\n\007user_id\030\001 \001(\0132\025.realti"
-    "me.XPlatformIDR\006userId\022\037\n\013status_code\030\002 "
-    "\001(\004R\nstatusCode\022\030\n\007message\030\003 \001(\tR\007messag"
-    "e\"t\n(SNSUserServerProfileUpdateRequestMe"
-    "ssage\022.\n\007user_id\030\001 \001(\0132\025.realtime.XPlatf"
-    "ormIDR\006userId\022\030\n\007payload\030\002 \001(\tR\007payload\""
-    "Z\n(SNSUserServerProfileUpdateSuccessMess"
-    "age\022.\n\007user_id\030\001 \001(\0132\025.realtime.XPlatfor"
-    "mIDR\006userIdBs\n\037com.github.echotools.nevr"
-    ".rtapiB\014NevrRealtimeP\001Z0github.com/echot"
-    "ools/nevr-common/v4/gen/go/rtapi\252\002\rNevr."
-    "Protobufb\006proto3"
+    "tformIDR\006userId\022\037\n\013status_code\030\002 \001(\004R\nst"
+    "atusCode\022\030\n\007message\030\003 \001(\tR\007message\"g\n!SN"
+    "SOtherUserProfileRequestMessage\022.\n\007user_"
+    "id\030\001 \001(\0132\025.realtime.XPlatformIDR\006userId\022"
+    "\022\n\004data\030\002 \001(\tR\004data\"m\n!SNSOtherUserProfi"
+    "leSuccessMessage\022.\n\007user_id\030\001 \001(\0132\025.real"
+    "time.XPlatformIDR\006userId\022\030\n\007profile\030\002 \001("
+    "\tR\007profile\"i\n\034SNSReconcileIAPResultMessa"
+    "ge\022.\n\007user_id\030\001 \001(\0132\025.realtime.XPlatform"
+    "IDR\006userId\022\031\n\010iap_data\030\002 \001(\tR\007iapData\"{\n"
+    "\030SNSRemoteLogSetV3Message\022.\n\007user_id\030\001 \001"
+    "(\0132\025.realtime.XPlatformIDR\006userId\022\033\n\tlog"
+    "_level\030\002 \001(\004R\010logLevel\022\022\n\004logs\030\003 \003(\tR\004lo"
+    "gs\"\215\001\n\027SNSUpdateProfileMessage\022(\n\020login_"
+    "session_id\030\001 \001(\tR\016loginSessionId\022.\n\007user"
+    "_id\030\002 \001(\0132\025.realtime.XPlatformIDR\006userId"
+    "\022\030\n\007payload\030\003 \001(\tR\007payload\"P\n\036SNSUpdateP"
+    "rofileSuccessMessage\022.\n\007user_id\030\001 \001(\0132\025."
+    "realtime.XPlatformIDR\006userId\"\213\001\n\036SNSUpda"
+    "teProfileFailureMessage\022.\n\007user_id\030\001 \001(\013"
+    "2\025.realtime.XPlatformIDR\006userId\022\037\n\013statu"
+    "s_code\030\002 \001(\004R\nstatusCode\022\030\n\007message\030\003 \001("
+    "\tR\007message\"t\n(SNSUserServerProfileUpdate"
+    "RequestMessage\022.\n\007user_id\030\001 \001(\0132\025.realti"
+    "me.XPlatformIDR\006userId\022\030\n\007payload\030\002 \001(\tR"
+    "\007payload\"Z\n(SNSUserServerProfileUpdateSu"
+    "ccessMessage\022.\n\007user_id\030\001 \001(\0132\025.realtime"
+    ".XPlatformIDR\006userIdBs\n\037com.github.echot"
+    "ools.nevr.rtapiB\014NevrRealtimeP\001Z0github."
+    "com/echotools/nevr-common/v4/gen/go/rtap"
+    "i\252\002\rNevr.Protobufb\006proto3"
 };
 static const ::_pbi::DescriptorTable* PROTOBUF_NONNULL const
     descriptor_table_rtapi_2frealtime_5fv1_2eproto_deps[2] = {
@@ -2832,13 +2991,13 @@ static ::absl::once_flag descriptor_table_rtapi_2frealtime_5fv1_2eproto_once;
 PROTOBUF_CONSTINIT const ::_pbi::DescriptorTable descriptor_table_rtapi_2frealtime_5fv1_2eproto = {
     false,
     false,
-    14176,
+    14985,
     descriptor_table_protodef_rtapi_2frealtime_5fv1_2eproto,
     "rtapi/realtime_v1.proto",
     &descriptor_table_rtapi_2frealtime_5fv1_2eproto_once,
     descriptor_table_rtapi_2frealtime_5fv1_2eproto_deps,
     2,
-    59,
+    61,
     schemas,
     file_default_instances,
     TableStruct_rtapi_2frealtime_5fv1_2eproto::offsets,
@@ -7564,6 +7723,1225 @@ void LoadoutItem::InternalSwap(LoadoutItem* PROTOBUF_RESTRICT PROTOBUF_NONNULL o
 }
 // ===================================================================
 
+class LoadoutSlot::_Internal {
+ public:
+  using HasBits =
+      decltype(::std::declval<LoadoutSlot>()._impl_._has_bits_);
+  static constexpr ::int32_t kHasBitsOffset =
+      8 * PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_._has_bits_);
+};
+
+LoadoutSlot::LoadoutSlot(::google::protobuf::Arena* PROTOBUF_NULLABLE arena)
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+    : ::google::protobuf::Message(arena, LoadoutSlot_class_data_.base()) {
+#else   // PROTOBUF_CUSTOM_VTABLE
+    : ::google::protobuf::Message(arena) {
+#endif  // PROTOBUF_CUSTOM_VTABLE
+  SharedCtor(arena);
+  // @@protoc_insertion_point(arena_constructor:realtime.LoadoutSlot)
+}
+LoadoutSlot::LoadoutSlot(
+    ::google::protobuf::Arena* PROTOBUF_NULLABLE arena, const LoadoutSlot& from)
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+    : ::google::protobuf::Message(arena, LoadoutSlot_class_data_.base()),
+#else   // PROTOBUF_CUSTOM_VTABLE
+    : ::google::protobuf::Message(arena),
+#endif  // PROTOBUF_CUSTOM_VTABLE
+      _impl_(from._impl_) {
+  _internal_metadata_.MergeFrom<::google::protobuf::UnknownFieldSet>(
+      from._internal_metadata_);
+}
+PROTOBUF_NDEBUG_INLINE LoadoutSlot::Impl_::Impl_(
+    [[maybe_unused]] ::google::protobuf::internal::InternalVisibility visibility,
+    [[maybe_unused]] ::google::protobuf::Arena* PROTOBUF_NULLABLE arena)
+      : _cached_size_{0} {}
+
+inline void LoadoutSlot::SharedCtor(::_pb::Arena* PROTOBUF_NULLABLE arena) {
+  new (&_impl_) Impl_(internal_visibility(), arena);
+  ::memset(reinterpret_cast<char*>(&_impl_) +
+               offsetof(Impl_, selectionmode_),
+           0,
+           offsetof(Impl_, title_) -
+               offsetof(Impl_, selectionmode_) +
+               sizeof(Impl_::title_));
+}
+LoadoutSlot::~LoadoutSlot() {
+  // @@protoc_insertion_point(destructor:realtime.LoadoutSlot)
+  SharedDtor(*this);
+}
+inline void LoadoutSlot::SharedDtor(MessageLite& self) {
+  LoadoutSlot& this_ = static_cast<LoadoutSlot&>(self);
+  if constexpr (::_pbi::DebugHardenCheckHasBitConsistency()) {
+    this_.CheckHasBitConsistency();
+  }
+  this_._internal_metadata_.Delete<::google::protobuf::UnknownFieldSet>();
+  ABSL_DCHECK(this_.GetArena() == nullptr);
+  this_._impl_.~Impl_();
+}
+
+inline void* PROTOBUF_NONNULL LoadoutSlot::PlacementNew_(
+    const void* PROTOBUF_NONNULL, void* PROTOBUF_NONNULL mem,
+    ::google::protobuf::Arena* PROTOBUF_NULLABLE arena) {
+  return ::new (mem) LoadoutSlot(arena);
+}
+constexpr auto LoadoutSlot::InternalNewImpl_() {
+  return ::google::protobuf::internal::MessageCreator::ZeroInit(sizeof(LoadoutSlot),
+                                            alignof(LoadoutSlot));
+}
+constexpr auto LoadoutSlot::InternalGenerateClassData_() {
+  return ::google::protobuf::internal::ClassDataFull{
+      ::google::protobuf::internal::ClassData{
+          &_LoadoutSlot_default_instance_._instance,
+          &_table_.header,
+          nullptr,  // OnDemandRegisterArenaDtor
+          nullptr,  // IsInitialized
+          &LoadoutSlot::MergeImpl,
+          ::google::protobuf::Message::GetNewImpl<LoadoutSlot>(),
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+          &LoadoutSlot::SharedDtor,
+          ::google::protobuf::Message::GetClearImpl<LoadoutSlot>(), &LoadoutSlot::ByteSizeLong,
+              &LoadoutSlot::_InternalSerialize,
+#endif  // PROTOBUF_CUSTOM_VTABLE
+          PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_._cached_size_),
+          false,
+      },
+      &LoadoutSlot::kDescriptorMethods,
+      &descriptor_table_rtapi_2frealtime_5fv1_2eproto,
+      nullptr,  // tracker
+  };
+}
+
+PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 const
+    ::google::protobuf::internal::ClassDataFull LoadoutSlot_class_data_ =
+        LoadoutSlot::InternalGenerateClassData_();
+
+PROTOBUF_ATTRIBUTE_WEAK const ::google::protobuf::internal::ClassData* PROTOBUF_NONNULL
+LoadoutSlot::GetClassData() const {
+  ::google::protobuf::internal::PrefetchToLocalCache(&LoadoutSlot_class_data_);
+  ::google::protobuf::internal::PrefetchToLocalCache(LoadoutSlot_class_data_.tc_table);
+  return LoadoutSlot_class_data_.base();
+}
+PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1
+const ::_pbi::TcParseTable<5, 21, 0, 0, 2>
+LoadoutSlot::_table_ = {
+  {
+    PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_._has_bits_),
+    0, // no _extensions_
+    21, 248,  // max_field_number, fast_idx_mask
+    offsetof(decltype(_table_), field_lookup_table),
+    4292870144,  // skipmap
+    offsetof(decltype(_table_), field_entries),
+    21,  // num_field_entries
+    0,  // num_aux_entries
+    offsetof(decltype(_table_), field_names),  // no aux_entries
+    LoadoutSlot_class_data_.base(),
+    nullptr,  // post_loop_handler
+    ::_pbi::TcParser::GenericFallback,  // fallback
+    #ifdef PROTOBUF_PREFETCH_PARSE_TABLE
+    ::_pbi::TcParser::GetTable<::realtime::LoadoutSlot>(),  // to_prefetch
+    #endif  // PROTOBUF_PREFETCH_PARSE_TABLE
+  }, {{
+    {::_pbi::TcParser::MiniParse, {}},
+    // fixed64 selectionmode = 1 [json_name = "selectionmode"];
+    {::_pbi::TcParser::FastF64S1,
+     {9, 0, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.selectionmode_)}},
+    // fixed64 banner = 2 [json_name = "banner"];
+    {::_pbi::TcParser::FastF64S1,
+     {17, 1, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.banner_)}},
+    // fixed64 booster = 3 [json_name = "booster"];
+    {::_pbi::TcParser::FastF64S1,
+     {25, 2, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.booster_)}},
+    // fixed64 bracer = 4 [json_name = "bracer"];
+    {::_pbi::TcParser::FastF64S1,
+     {33, 3, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.bracer_)}},
+    // fixed64 chassis = 5 [json_name = "chassis"];
+    {::_pbi::TcParser::FastF64S1,
+     {41, 4, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.chassis_)}},
+    // fixed64 decal = 6 [json_name = "decal"];
+    {::_pbi::TcParser::FastF64S1,
+     {49, 5, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.decal_)}},
+    // fixed64 decal_body = 7 [json_name = "decalBody"];
+    {::_pbi::TcParser::FastF64S1,
+     {57, 6, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.decal_body_)}},
+    // fixed64 emissive = 8 [json_name = "emissive"];
+    {::_pbi::TcParser::FastF64S1,
+     {65, 7, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.emissive_)}},
+    // fixed64 emote = 9 [json_name = "emote"];
+    {::_pbi::TcParser::FastF64S1,
+     {73, 8, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.emote_)}},
+    // fixed64 secondemote = 10 [json_name = "secondemote"];
+    {::_pbi::TcParser::FastF64S1,
+     {81, 9, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.secondemote_)}},
+    // fixed64 goal_fx = 11 [json_name = "goalFx"];
+    {::_pbi::TcParser::FastF64S1,
+     {89, 10, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.goal_fx_)}},
+    // fixed64 medal = 12 [json_name = "medal"];
+    {::_pbi::TcParser::FastF64S1,
+     {97, 11, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.medal_)}},
+    // fixed64 pattern = 13 [json_name = "pattern"];
+    {::_pbi::TcParser::FastF64S1,
+     {105, 12, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.pattern_)}},
+    // fixed64 pattern_body = 14 [json_name = "patternBody"];
+    {::_pbi::TcParser::FastF64S1,
+     {113, 13, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.pattern_body_)}},
+    // fixed64 pip = 15 [json_name = "pip"];
+    {::_pbi::TcParser::FastF64S1,
+     {121, 14, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.pip_)}},
+    // fixed64 tag = 16 [json_name = "tag"];
+    {::_pbi::TcParser::FastF64S2,
+     {385, 15, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.tag_)}},
+    // fixed64 tint = 17 [json_name = "tint"];
+    {::_pbi::TcParser::FastF64S2,
+     {393, 16, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.tint_)}},
+    // fixed64 tint_alignment_a = 18 [json_name = "tintAlignmentA"];
+    {::_pbi::TcParser::FastF64S2,
+     {401, 17, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.tint_alignment_a_)}},
+    // fixed64 tint_alignment_b = 19 [json_name = "tintAlignmentB"];
+    {::_pbi::TcParser::FastF64S2,
+     {409, 18, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.tint_alignment_b_)}},
+    // fixed64 tint_body = 20 [json_name = "tintBody"];
+    {::_pbi::TcParser::FastF64S2,
+     {417, 19, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.tint_body_)}},
+    // fixed64 title = 21 [json_name = "title"];
+    {::_pbi::TcParser::FastF64S2,
+     {425, 20, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.title_)}},
+    {::_pbi::TcParser::MiniParse, {}},
+    {::_pbi::TcParser::MiniParse, {}},
+    {::_pbi::TcParser::MiniParse, {}},
+    {::_pbi::TcParser::MiniParse, {}},
+    {::_pbi::TcParser::MiniParse, {}},
+    {::_pbi::TcParser::MiniParse, {}},
+    {::_pbi::TcParser::MiniParse, {}},
+    {::_pbi::TcParser::MiniParse, {}},
+    {::_pbi::TcParser::MiniParse, {}},
+    {::_pbi::TcParser::MiniParse, {}},
+  }}, {{
+    65535, 65535
+  }}, {{
+    // fixed64 selectionmode = 1 [json_name = "selectionmode"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.selectionmode_), _Internal::kHasBitsOffset + 0, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 banner = 2 [json_name = "banner"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.banner_), _Internal::kHasBitsOffset + 1, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 booster = 3 [json_name = "booster"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.booster_), _Internal::kHasBitsOffset + 2, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 bracer = 4 [json_name = "bracer"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.bracer_), _Internal::kHasBitsOffset + 3, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 chassis = 5 [json_name = "chassis"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.chassis_), _Internal::kHasBitsOffset + 4, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 decal = 6 [json_name = "decal"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.decal_), _Internal::kHasBitsOffset + 5, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 decal_body = 7 [json_name = "decalBody"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.decal_body_), _Internal::kHasBitsOffset + 6, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 emissive = 8 [json_name = "emissive"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.emissive_), _Internal::kHasBitsOffset + 7, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 emote = 9 [json_name = "emote"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.emote_), _Internal::kHasBitsOffset + 8, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 secondemote = 10 [json_name = "secondemote"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.secondemote_), _Internal::kHasBitsOffset + 9, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 goal_fx = 11 [json_name = "goalFx"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.goal_fx_), _Internal::kHasBitsOffset + 10, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 medal = 12 [json_name = "medal"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.medal_), _Internal::kHasBitsOffset + 11, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 pattern = 13 [json_name = "pattern"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.pattern_), _Internal::kHasBitsOffset + 12, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 pattern_body = 14 [json_name = "patternBody"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.pattern_body_), _Internal::kHasBitsOffset + 13, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 pip = 15 [json_name = "pip"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.pip_), _Internal::kHasBitsOffset + 14, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 tag = 16 [json_name = "tag"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.tag_), _Internal::kHasBitsOffset + 15, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 tint = 17 [json_name = "tint"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.tint_), _Internal::kHasBitsOffset + 16, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 tint_alignment_a = 18 [json_name = "tintAlignmentA"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.tint_alignment_a_), _Internal::kHasBitsOffset + 17, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 tint_alignment_b = 19 [json_name = "tintAlignmentB"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.tint_alignment_b_), _Internal::kHasBitsOffset + 18, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 tint_body = 20 [json_name = "tintBody"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.tint_body_), _Internal::kHasBitsOffset + 19, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // fixed64 title = 21 [json_name = "title"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.title_), _Internal::kHasBitsOffset + 20, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+  }},
+  // no aux_entries
+  {{
+  }},
+};
+PROTOBUF_NOINLINE void LoadoutSlot::Clear() {
+// @@protoc_insertion_point(message_clear_start:realtime.LoadoutSlot)
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  ::uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  cached_has_bits = _impl_._has_bits_[0];
+  if (BatchCheckHasBit(cached_has_bits, 0x000000ffU)) {
+    ::memset(&_impl_.selectionmode_, 0, static_cast<::size_t>(
+        reinterpret_cast<char*>(&_impl_.emissive_) -
+        reinterpret_cast<char*>(&_impl_.selectionmode_)) + sizeof(_impl_.emissive_));
+  }
+  if (BatchCheckHasBit(cached_has_bits, 0x0000ff00U)) {
+    ::memset(&_impl_.emote_, 0, static_cast<::size_t>(
+        reinterpret_cast<char*>(&_impl_.tag_) -
+        reinterpret_cast<char*>(&_impl_.emote_)) + sizeof(_impl_.tag_));
+  }
+  if (BatchCheckHasBit(cached_has_bits, 0x001f0000U)) {
+    ::memset(&_impl_.tint_, 0, static_cast<::size_t>(
+        reinterpret_cast<char*>(&_impl_.title_) -
+        reinterpret_cast<char*>(&_impl_.tint_)) + sizeof(_impl_.title_));
+  }
+  _impl_._has_bits_.Clear();
+  _internal_metadata_.Clear<::google::protobuf::UnknownFieldSet>();
+}
+
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+::uint8_t* PROTOBUF_NONNULL LoadoutSlot::_InternalSerialize(
+    const ::google::protobuf::MessageLite& base, ::uint8_t* PROTOBUF_NONNULL target,
+    ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) {
+  const LoadoutSlot& this_ = static_cast<const LoadoutSlot&>(base);
+#else   // PROTOBUF_CUSTOM_VTABLE
+::uint8_t* PROTOBUF_NONNULL LoadoutSlot::_InternalSerialize(
+    ::uint8_t* PROTOBUF_NONNULL target,
+    ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) const {
+  const LoadoutSlot& this_ = *this;
+#endif  // PROTOBUF_CUSTOM_VTABLE
+  if constexpr (::_pbi::DebugHardenCheckHasBitConsistency()) {
+    this_.CheckHasBitConsistency();
+  }
+  // @@protoc_insertion_point(serialize_to_array_start:realtime.LoadoutSlot)
+  ::uint32_t cached_has_bits = 0;
+  (void)cached_has_bits;
+
+  cached_has_bits = this_._impl_._has_bits_[0];
+  // fixed64 selectionmode = 1 [json_name = "selectionmode"];
+  if (CheckHasBit(cached_has_bits, 0x00000001U)) {
+    if (this_._internal_selectionmode() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          1, this_._internal_selectionmode(), target);
+    }
+  }
+
+  // fixed64 banner = 2 [json_name = "banner"];
+  if (CheckHasBit(cached_has_bits, 0x00000002U)) {
+    if (this_._internal_banner() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          2, this_._internal_banner(), target);
+    }
+  }
+
+  // fixed64 booster = 3 [json_name = "booster"];
+  if (CheckHasBit(cached_has_bits, 0x00000004U)) {
+    if (this_._internal_booster() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          3, this_._internal_booster(), target);
+    }
+  }
+
+  // fixed64 bracer = 4 [json_name = "bracer"];
+  if (CheckHasBit(cached_has_bits, 0x00000008U)) {
+    if (this_._internal_bracer() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          4, this_._internal_bracer(), target);
+    }
+  }
+
+  // fixed64 chassis = 5 [json_name = "chassis"];
+  if (CheckHasBit(cached_has_bits, 0x00000010U)) {
+    if (this_._internal_chassis() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          5, this_._internal_chassis(), target);
+    }
+  }
+
+  // fixed64 decal = 6 [json_name = "decal"];
+  if (CheckHasBit(cached_has_bits, 0x00000020U)) {
+    if (this_._internal_decal() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          6, this_._internal_decal(), target);
+    }
+  }
+
+  // fixed64 decal_body = 7 [json_name = "decalBody"];
+  if (CheckHasBit(cached_has_bits, 0x00000040U)) {
+    if (this_._internal_decal_body() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          7, this_._internal_decal_body(), target);
+    }
+  }
+
+  // fixed64 emissive = 8 [json_name = "emissive"];
+  if (CheckHasBit(cached_has_bits, 0x00000080U)) {
+    if (this_._internal_emissive() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          8, this_._internal_emissive(), target);
+    }
+  }
+
+  // fixed64 emote = 9 [json_name = "emote"];
+  if (CheckHasBit(cached_has_bits, 0x00000100U)) {
+    if (this_._internal_emote() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          9, this_._internal_emote(), target);
+    }
+  }
+
+  // fixed64 secondemote = 10 [json_name = "secondemote"];
+  if (CheckHasBit(cached_has_bits, 0x00000200U)) {
+    if (this_._internal_secondemote() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          10, this_._internal_secondemote(), target);
+    }
+  }
+
+  // fixed64 goal_fx = 11 [json_name = "goalFx"];
+  if (CheckHasBit(cached_has_bits, 0x00000400U)) {
+    if (this_._internal_goal_fx() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          11, this_._internal_goal_fx(), target);
+    }
+  }
+
+  // fixed64 medal = 12 [json_name = "medal"];
+  if (CheckHasBit(cached_has_bits, 0x00000800U)) {
+    if (this_._internal_medal() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          12, this_._internal_medal(), target);
+    }
+  }
+
+  // fixed64 pattern = 13 [json_name = "pattern"];
+  if (CheckHasBit(cached_has_bits, 0x00001000U)) {
+    if (this_._internal_pattern() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          13, this_._internal_pattern(), target);
+    }
+  }
+
+  // fixed64 pattern_body = 14 [json_name = "patternBody"];
+  if (CheckHasBit(cached_has_bits, 0x00002000U)) {
+    if (this_._internal_pattern_body() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          14, this_._internal_pattern_body(), target);
+    }
+  }
+
+  // fixed64 pip = 15 [json_name = "pip"];
+  if (CheckHasBit(cached_has_bits, 0x00004000U)) {
+    if (this_._internal_pip() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          15, this_._internal_pip(), target);
+    }
+  }
+
+  // fixed64 tag = 16 [json_name = "tag"];
+  if (CheckHasBit(cached_has_bits, 0x00008000U)) {
+    if (this_._internal_tag() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          16, this_._internal_tag(), target);
+    }
+  }
+
+  // fixed64 tint = 17 [json_name = "tint"];
+  if (CheckHasBit(cached_has_bits, 0x00010000U)) {
+    if (this_._internal_tint() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          17, this_._internal_tint(), target);
+    }
+  }
+
+  // fixed64 tint_alignment_a = 18 [json_name = "tintAlignmentA"];
+  if (CheckHasBit(cached_has_bits, 0x00020000U)) {
+    if (this_._internal_tint_alignment_a() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          18, this_._internal_tint_alignment_a(), target);
+    }
+  }
+
+  // fixed64 tint_alignment_b = 19 [json_name = "tintAlignmentB"];
+  if (CheckHasBit(cached_has_bits, 0x00040000U)) {
+    if (this_._internal_tint_alignment_b() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          19, this_._internal_tint_alignment_b(), target);
+    }
+  }
+
+  // fixed64 tint_body = 20 [json_name = "tintBody"];
+  if (CheckHasBit(cached_has_bits, 0x00080000U)) {
+    if (this_._internal_tint_body() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          20, this_._internal_tint_body(), target);
+    }
+  }
+
+  // fixed64 title = 21 [json_name = "title"];
+  if (CheckHasBit(cached_has_bits, 0x00100000U)) {
+    if (this_._internal_title() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          21, this_._internal_title(), target);
+    }
+  }
+
+  if (ABSL_PREDICT_FALSE(this_._internal_metadata_.have_unknown_fields())) {
+    target =
+        ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
+            this_._internal_metadata_.unknown_fields<::google::protobuf::UnknownFieldSet>(::google::protobuf::UnknownFieldSet::default_instance), target, stream);
+  }
+  // @@protoc_insertion_point(serialize_to_array_end:realtime.LoadoutSlot)
+  return target;
+}
+
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+::size_t LoadoutSlot::ByteSizeLong(const MessageLite& base) {
+  const LoadoutSlot& this_ = static_cast<const LoadoutSlot&>(base);
+#else   // PROTOBUF_CUSTOM_VTABLE
+::size_t LoadoutSlot::ByteSizeLong() const {
+  const LoadoutSlot& this_ = *this;
+#endif  // PROTOBUF_CUSTOM_VTABLE
+  // @@protoc_insertion_point(message_byte_size_start:realtime.LoadoutSlot)
+  ::size_t total_size = 0;
+
+  ::uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void)cached_has_bits;
+
+  ::_pbi::Prefetch5LinesFrom7Lines(&this_);
+  cached_has_bits = this_._impl_._has_bits_[0];
+  if (BatchCheckHasBit(cached_has_bits, 0x000000ffU)) {
+    // fixed64 selectionmode = 1 [json_name = "selectionmode"];
+    if (CheckHasBit(cached_has_bits, 0x00000001U)) {
+      if (this_._internal_selectionmode() != 0) {
+        total_size += 9;
+      }
+    }
+    // fixed64 banner = 2 [json_name = "banner"];
+    if (CheckHasBit(cached_has_bits, 0x00000002U)) {
+      if (this_._internal_banner() != 0) {
+        total_size += 9;
+      }
+    }
+    // fixed64 booster = 3 [json_name = "booster"];
+    if (CheckHasBit(cached_has_bits, 0x00000004U)) {
+      if (this_._internal_booster() != 0) {
+        total_size += 9;
+      }
+    }
+    // fixed64 bracer = 4 [json_name = "bracer"];
+    if (CheckHasBit(cached_has_bits, 0x00000008U)) {
+      if (this_._internal_bracer() != 0) {
+        total_size += 9;
+      }
+    }
+    // fixed64 chassis = 5 [json_name = "chassis"];
+    if (CheckHasBit(cached_has_bits, 0x00000010U)) {
+      if (this_._internal_chassis() != 0) {
+        total_size += 9;
+      }
+    }
+    // fixed64 decal = 6 [json_name = "decal"];
+    if (CheckHasBit(cached_has_bits, 0x00000020U)) {
+      if (this_._internal_decal() != 0) {
+        total_size += 9;
+      }
+    }
+    // fixed64 decal_body = 7 [json_name = "decalBody"];
+    if (CheckHasBit(cached_has_bits, 0x00000040U)) {
+      if (this_._internal_decal_body() != 0) {
+        total_size += 9;
+      }
+    }
+    // fixed64 emissive = 8 [json_name = "emissive"];
+    if (CheckHasBit(cached_has_bits, 0x00000080U)) {
+      if (this_._internal_emissive() != 0) {
+        total_size += 9;
+      }
+    }
+  }
+  if (BatchCheckHasBit(cached_has_bits, 0x0000ff00U)) {
+    // fixed64 emote = 9 [json_name = "emote"];
+    if (CheckHasBit(cached_has_bits, 0x00000100U)) {
+      if (this_._internal_emote() != 0) {
+        total_size += 9;
+      }
+    }
+    // fixed64 secondemote = 10 [json_name = "secondemote"];
+    if (CheckHasBit(cached_has_bits, 0x00000200U)) {
+      if (this_._internal_secondemote() != 0) {
+        total_size += 9;
+      }
+    }
+    // fixed64 goal_fx = 11 [json_name = "goalFx"];
+    if (CheckHasBit(cached_has_bits, 0x00000400U)) {
+      if (this_._internal_goal_fx() != 0) {
+        total_size += 9;
+      }
+    }
+    // fixed64 medal = 12 [json_name = "medal"];
+    if (CheckHasBit(cached_has_bits, 0x00000800U)) {
+      if (this_._internal_medal() != 0) {
+        total_size += 9;
+      }
+    }
+    // fixed64 pattern = 13 [json_name = "pattern"];
+    if (CheckHasBit(cached_has_bits, 0x00001000U)) {
+      if (this_._internal_pattern() != 0) {
+        total_size += 9;
+      }
+    }
+    // fixed64 pattern_body = 14 [json_name = "patternBody"];
+    if (CheckHasBit(cached_has_bits, 0x00002000U)) {
+      if (this_._internal_pattern_body() != 0) {
+        total_size += 9;
+      }
+    }
+    // fixed64 pip = 15 [json_name = "pip"];
+    if (CheckHasBit(cached_has_bits, 0x00004000U)) {
+      if (this_._internal_pip() != 0) {
+        total_size += 9;
+      }
+    }
+    // fixed64 tag = 16 [json_name = "tag"];
+    if (CheckHasBit(cached_has_bits, 0x00008000U)) {
+      if (this_._internal_tag() != 0) {
+        total_size += 10;
+      }
+    }
+  }
+  if (BatchCheckHasBit(cached_has_bits, 0x001f0000U)) {
+    // fixed64 tint = 17 [json_name = "tint"];
+    if (CheckHasBit(cached_has_bits, 0x00010000U)) {
+      if (this_._internal_tint() != 0) {
+        total_size += 10;
+      }
+    }
+    // fixed64 tint_alignment_a = 18 [json_name = "tintAlignmentA"];
+    if (CheckHasBit(cached_has_bits, 0x00020000U)) {
+      if (this_._internal_tint_alignment_a() != 0) {
+        total_size += 10;
+      }
+    }
+    // fixed64 tint_alignment_b = 19 [json_name = "tintAlignmentB"];
+    if (CheckHasBit(cached_has_bits, 0x00040000U)) {
+      if (this_._internal_tint_alignment_b() != 0) {
+        total_size += 10;
+      }
+    }
+    // fixed64 tint_body = 20 [json_name = "tintBody"];
+    if (CheckHasBit(cached_has_bits, 0x00080000U)) {
+      if (this_._internal_tint_body() != 0) {
+        total_size += 10;
+      }
+    }
+    // fixed64 title = 21 [json_name = "title"];
+    if (CheckHasBit(cached_has_bits, 0x00100000U)) {
+      if (this_._internal_title() != 0) {
+        total_size += 10;
+      }
+    }
+  }
+  return this_.MaybeComputeUnknownFieldsSize(total_size,
+                                             &this_._impl_._cached_size_);
+}
+
+void LoadoutSlot::MergeImpl(::google::protobuf::MessageLite& to_msg,
+                            const ::google::protobuf::MessageLite& from_msg) {
+   auto* const _this =
+      static_cast<LoadoutSlot*>(&to_msg);
+  auto& from = static_cast<const LoadoutSlot&>(from_msg);
+  if constexpr (::_pbi::DebugHardenCheckHasBitConsistency()) {
+    from.CheckHasBitConsistency();
+  }
+  // @@protoc_insertion_point(class_specific_merge_from_start:realtime.LoadoutSlot)
+  ABSL_DCHECK_NE(&from, _this);
+  ::uint32_t cached_has_bits = 0;
+  (void)cached_has_bits;
+
+  cached_has_bits = from._impl_._has_bits_[0];
+  if (BatchCheckHasBit(cached_has_bits, 0x000000ffU)) {
+    if (CheckHasBit(cached_has_bits, 0x00000001U)) {
+      if (from._internal_selectionmode() != 0) {
+        _this->_impl_.selectionmode_ = from._impl_.selectionmode_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000002U)) {
+      if (from._internal_banner() != 0) {
+        _this->_impl_.banner_ = from._impl_.banner_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000004U)) {
+      if (from._internal_booster() != 0) {
+        _this->_impl_.booster_ = from._impl_.booster_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000008U)) {
+      if (from._internal_bracer() != 0) {
+        _this->_impl_.bracer_ = from._impl_.bracer_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000010U)) {
+      if (from._internal_chassis() != 0) {
+        _this->_impl_.chassis_ = from._impl_.chassis_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000020U)) {
+      if (from._internal_decal() != 0) {
+        _this->_impl_.decal_ = from._impl_.decal_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000040U)) {
+      if (from._internal_decal_body() != 0) {
+        _this->_impl_.decal_body_ = from._impl_.decal_body_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000080U)) {
+      if (from._internal_emissive() != 0) {
+        _this->_impl_.emissive_ = from._impl_.emissive_;
+      }
+    }
+  }
+  if (BatchCheckHasBit(cached_has_bits, 0x0000ff00U)) {
+    if (CheckHasBit(cached_has_bits, 0x00000100U)) {
+      if (from._internal_emote() != 0) {
+        _this->_impl_.emote_ = from._impl_.emote_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000200U)) {
+      if (from._internal_secondemote() != 0) {
+        _this->_impl_.secondemote_ = from._impl_.secondemote_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000400U)) {
+      if (from._internal_goal_fx() != 0) {
+        _this->_impl_.goal_fx_ = from._impl_.goal_fx_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000800U)) {
+      if (from._internal_medal() != 0) {
+        _this->_impl_.medal_ = from._impl_.medal_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00001000U)) {
+      if (from._internal_pattern() != 0) {
+        _this->_impl_.pattern_ = from._impl_.pattern_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00002000U)) {
+      if (from._internal_pattern_body() != 0) {
+        _this->_impl_.pattern_body_ = from._impl_.pattern_body_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00004000U)) {
+      if (from._internal_pip() != 0) {
+        _this->_impl_.pip_ = from._impl_.pip_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00008000U)) {
+      if (from._internal_tag() != 0) {
+        _this->_impl_.tag_ = from._impl_.tag_;
+      }
+    }
+  }
+  if (BatchCheckHasBit(cached_has_bits, 0x001f0000U)) {
+    if (CheckHasBit(cached_has_bits, 0x00010000U)) {
+      if (from._internal_tint() != 0) {
+        _this->_impl_.tint_ = from._impl_.tint_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00020000U)) {
+      if (from._internal_tint_alignment_a() != 0) {
+        _this->_impl_.tint_alignment_a_ = from._impl_.tint_alignment_a_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00040000U)) {
+      if (from._internal_tint_alignment_b() != 0) {
+        _this->_impl_.tint_alignment_b_ = from._impl_.tint_alignment_b_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00080000U)) {
+      if (from._internal_tint_body() != 0) {
+        _this->_impl_.tint_body_ = from._impl_.tint_body_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00100000U)) {
+      if (from._internal_title() != 0) {
+        _this->_impl_.title_ = from._impl_.title_;
+      }
+    }
+  }
+  _this->_impl_._has_bits_[0] |= cached_has_bits;
+  _this->_internal_metadata_.MergeFrom<::google::protobuf::UnknownFieldSet>(
+      from._internal_metadata_);
+}
+
+void LoadoutSlot::CopyFrom(const LoadoutSlot& from) {
+  // @@protoc_insertion_point(class_specific_copy_from_start:realtime.LoadoutSlot)
+  if (&from == this) return;
+  Clear();
+  MergeFrom(from);
+}
+
+
+void LoadoutSlot::InternalSwap(LoadoutSlot* PROTOBUF_RESTRICT PROTOBUF_NONNULL other) {
+  using ::std::swap;
+  _internal_metadata_.InternalSwap(&other->_internal_metadata_);
+  swap(_impl_._has_bits_[0], other->_impl_._has_bits_[0]);
+  ::google::protobuf::internal::memswap<
+      PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.title_)
+      + sizeof(LoadoutSlot::_impl_.title_)
+      - PROTOBUF_FIELD_OFFSET(LoadoutSlot, _impl_.selectionmode_)>(
+          reinterpret_cast<char*>(&_impl_.selectionmode_),
+          reinterpret_cast<char*>(&other->_impl_.selectionmode_));
+}
+
+::google::protobuf::Metadata LoadoutSlot::GetMetadata() const {
+  return ::google::protobuf::Message::GetMetadataImpl(GetClassData()->full());
+}
+// ===================================================================
+
+class LoadoutEntry::_Internal {
+ public:
+  using HasBits =
+      decltype(::std::declval<LoadoutEntry>()._impl_._has_bits_);
+  static constexpr ::int32_t kHasBitsOffset =
+      8 * PROTOBUF_FIELD_OFFSET(LoadoutEntry, _impl_._has_bits_);
+};
+
+LoadoutEntry::LoadoutEntry(::google::protobuf::Arena* PROTOBUF_NULLABLE arena)
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+    : ::google::protobuf::Message(arena, LoadoutEntry_class_data_.base()) {
+#else   // PROTOBUF_CUSTOM_VTABLE
+    : ::google::protobuf::Message(arena) {
+#endif  // PROTOBUF_CUSTOM_VTABLE
+  SharedCtor(arena);
+  // @@protoc_insertion_point(arena_constructor:realtime.LoadoutEntry)
+}
+PROTOBUF_NDEBUG_INLINE LoadoutEntry::Impl_::Impl_(
+    [[maybe_unused]] ::google::protobuf::internal::InternalVisibility visibility,
+    [[maybe_unused]] ::google::protobuf::Arena* PROTOBUF_NULLABLE arena, const Impl_& from,
+    [[maybe_unused]] const ::realtime::LoadoutEntry& from_msg)
+      : _has_bits_{from._has_bits_},
+        _cached_size_{0} {}
+
+LoadoutEntry::LoadoutEntry(
+    ::google::protobuf::Arena* PROTOBUF_NULLABLE arena,
+    const LoadoutEntry& from)
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+    : ::google::protobuf::Message(arena, LoadoutEntry_class_data_.base()) {
+#else   // PROTOBUF_CUSTOM_VTABLE
+    : ::google::protobuf::Message(arena) {
+#endif  // PROTOBUF_CUSTOM_VTABLE
+  LoadoutEntry* const _this = this;
+  (void)_this;
+  _internal_metadata_.MergeFrom<::google::protobuf::UnknownFieldSet>(
+      from._internal_metadata_);
+  new (&_impl_) Impl_(internal_visibility(), arena, from._impl_, from);
+  ::uint32_t cached_has_bits = _impl_._has_bits_[0];
+  _impl_.loadout_ = (CheckHasBit(cached_has_bits, 0x00000001U))
+                ? ::google::protobuf::Message::CopyConstruct(arena, *from._impl_.loadout_)
+                : nullptr;
+  ::memcpy(reinterpret_cast<char*>(&_impl_) +
+               offsetof(Impl_, bodytype_),
+           reinterpret_cast<const char*>(&from._impl_) +
+               offsetof(Impl_, bodytype_),
+           offsetof(Impl_, xf_) -
+               offsetof(Impl_, bodytype_) +
+               sizeof(Impl_::xf_));
+
+  // @@protoc_insertion_point(copy_constructor:realtime.LoadoutEntry)
+}
+PROTOBUF_NDEBUG_INLINE LoadoutEntry::Impl_::Impl_(
+    [[maybe_unused]] ::google::protobuf::internal::InternalVisibility visibility,
+    [[maybe_unused]] ::google::protobuf::Arena* PROTOBUF_NULLABLE arena)
+      : _cached_size_{0} {}
+
+inline void LoadoutEntry::SharedCtor(::_pb::Arena* PROTOBUF_NULLABLE arena) {
+  new (&_impl_) Impl_(internal_visibility(), arena);
+  ::memset(reinterpret_cast<char*>(&_impl_) +
+               offsetof(Impl_, loadout_),
+           0,
+           offsetof(Impl_, xf_) -
+               offsetof(Impl_, loadout_) +
+               sizeof(Impl_::xf_));
+}
+LoadoutEntry::~LoadoutEntry() {
+  // @@protoc_insertion_point(destructor:realtime.LoadoutEntry)
+  SharedDtor(*this);
+}
+inline void LoadoutEntry::SharedDtor(MessageLite& self) {
+  LoadoutEntry& this_ = static_cast<LoadoutEntry&>(self);
+  if constexpr (::_pbi::DebugHardenCheckHasBitConsistency()) {
+    this_.CheckHasBitConsistency();
+  }
+  this_._internal_metadata_.Delete<::google::protobuf::UnknownFieldSet>();
+  ABSL_DCHECK(this_.GetArena() == nullptr);
+  delete this_._impl_.loadout_;
+  this_._impl_.~Impl_();
+}
+
+inline void* PROTOBUF_NONNULL LoadoutEntry::PlacementNew_(
+    const void* PROTOBUF_NONNULL, void* PROTOBUF_NONNULL mem,
+    ::google::protobuf::Arena* PROTOBUF_NULLABLE arena) {
+  return ::new (mem) LoadoutEntry(arena);
+}
+constexpr auto LoadoutEntry::InternalNewImpl_() {
+  return ::google::protobuf::internal::MessageCreator::ZeroInit(sizeof(LoadoutEntry),
+                                            alignof(LoadoutEntry));
+}
+constexpr auto LoadoutEntry::InternalGenerateClassData_() {
+  return ::google::protobuf::internal::ClassDataFull{
+      ::google::protobuf::internal::ClassData{
+          &_LoadoutEntry_default_instance_._instance,
+          &_table_.header,
+          nullptr,  // OnDemandRegisterArenaDtor
+          nullptr,  // IsInitialized
+          &LoadoutEntry::MergeImpl,
+          ::google::protobuf::Message::GetNewImpl<LoadoutEntry>(),
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+          &LoadoutEntry::SharedDtor,
+          ::google::protobuf::Message::GetClearImpl<LoadoutEntry>(), &LoadoutEntry::ByteSizeLong,
+              &LoadoutEntry::_InternalSerialize,
+#endif  // PROTOBUF_CUSTOM_VTABLE
+          PROTOBUF_FIELD_OFFSET(LoadoutEntry, _impl_._cached_size_),
+          false,
+      },
+      &LoadoutEntry::kDescriptorMethods,
+      &descriptor_table_rtapi_2frealtime_5fv1_2eproto,
+      nullptr,  // tracker
+  };
+}
+
+PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 const
+    ::google::protobuf::internal::ClassDataFull LoadoutEntry_class_data_ =
+        LoadoutEntry::InternalGenerateClassData_();
+
+PROTOBUF_ATTRIBUTE_WEAK const ::google::protobuf::internal::ClassData* PROTOBUF_NONNULL
+LoadoutEntry::GetClassData() const {
+  ::google::protobuf::internal::PrefetchToLocalCache(&LoadoutEntry_class_data_);
+  ::google::protobuf::internal::PrefetchToLocalCache(LoadoutEntry_class_data_.tc_table);
+  return LoadoutEntry_class_data_.base();
+}
+PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1
+const ::_pbi::TcParseTable<3, 5, 1, 0, 2>
+LoadoutEntry::_table_ = {
+  {
+    PROTOBUF_FIELD_OFFSET(LoadoutEntry, _impl_._has_bits_),
+    0, // no _extensions_
+    5, 56,  // max_field_number, fast_idx_mask
+    offsetof(decltype(_table_), field_lookup_table),
+    4294967264,  // skipmap
+    offsetof(decltype(_table_), field_entries),
+    5,  // num_field_entries
+    1,  // num_aux_entries
+    offsetof(decltype(_table_), aux_entries),
+    LoadoutEntry_class_data_.base(),
+    nullptr,  // post_loop_handler
+    ::_pbi::TcParser::GenericFallback,  // fallback
+    #ifdef PROTOBUF_PREFETCH_PARSE_TABLE
+    ::_pbi::TcParser::GetTable<::realtime::LoadoutEntry>(),  // to_prefetch
+    #endif  // PROTOBUF_PREFETCH_PARSE_TABLE
+  }, {{
+    {::_pbi::TcParser::MiniParse, {}},
+    // fixed64 bodytype = 1 [json_name = "bodytype"];
+    {::_pbi::TcParser::FastF64S1,
+     {9, 1, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutEntry, _impl_.bodytype_)}},
+    // uint32 teamid = 2 [json_name = "teamid"];
+    {::_pbi::TcParser::SingularVarintNoZag1<::uint32_t, offsetof(LoadoutEntry, _impl_.teamid_), 2>(),
+     {16, 2, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutEntry, _impl_.teamid_)}},
+    // uint32 airole = 3 [json_name = "airole"];
+    {::_pbi::TcParser::SingularVarintNoZag1<::uint32_t, offsetof(LoadoutEntry, _impl_.airole_), 3>(),
+     {24, 3, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutEntry, _impl_.airole_)}},
+    // fixed64 xf = 4 [json_name = "xf"];
+    {::_pbi::TcParser::FastF64S1,
+     {33, 4, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutEntry, _impl_.xf_)}},
+    // .realtime.LoadoutSlot loadout = 5 [json_name = "loadout"];
+    {::_pbi::TcParser::FastMtS1,
+     {42, 0, 0,
+      PROTOBUF_FIELD_OFFSET(LoadoutEntry, _impl_.loadout_)}},
+    {::_pbi::TcParser::MiniParse, {}},
+    {::_pbi::TcParser::MiniParse, {}},
+  }}, {{
+    65535, 65535
+  }}, {{
+    // fixed64 bodytype = 1 [json_name = "bodytype"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutEntry, _impl_.bodytype_), _Internal::kHasBitsOffset + 1, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // uint32 teamid = 2 [json_name = "teamid"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutEntry, _impl_.teamid_), _Internal::kHasBitsOffset + 2, 0, (0 | ::_fl::kFcOptional | ::_fl::kUInt32)},
+    // uint32 airole = 3 [json_name = "airole"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutEntry, _impl_.airole_), _Internal::kHasBitsOffset + 3, 0, (0 | ::_fl::kFcOptional | ::_fl::kUInt32)},
+    // fixed64 xf = 4 [json_name = "xf"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutEntry, _impl_.xf_), _Internal::kHasBitsOffset + 4, 0, (0 | ::_fl::kFcOptional | ::_fl::kFixed64)},
+    // .realtime.LoadoutSlot loadout = 5 [json_name = "loadout"];
+    {PROTOBUF_FIELD_OFFSET(LoadoutEntry, _impl_.loadout_), _Internal::kHasBitsOffset + 0, 0, (0 | ::_fl::kFcOptional | ::_fl::kMessage | ::_fl::kTvTable)},
+  }},
+  {{
+      {::_pbi::TcParser::GetTable<::realtime::LoadoutSlot>()},
+  }},
+  {{
+  }},
+};
+PROTOBUF_NOINLINE void LoadoutEntry::Clear() {
+// @@protoc_insertion_point(message_clear_start:realtime.LoadoutEntry)
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  ::uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  cached_has_bits = _impl_._has_bits_[0];
+  if (CheckHasBit(cached_has_bits, 0x00000001U)) {
+    ABSL_DCHECK(_impl_.loadout_ != nullptr);
+    _impl_.loadout_->Clear();
+  }
+  if (BatchCheckHasBit(cached_has_bits, 0x0000001eU)) {
+    ::memset(&_impl_.bodytype_, 0, static_cast<::size_t>(
+        reinterpret_cast<char*>(&_impl_.xf_) -
+        reinterpret_cast<char*>(&_impl_.bodytype_)) + sizeof(_impl_.xf_));
+  }
+  _impl_._has_bits_.Clear();
+  _internal_metadata_.Clear<::google::protobuf::UnknownFieldSet>();
+}
+
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+::uint8_t* PROTOBUF_NONNULL LoadoutEntry::_InternalSerialize(
+    const ::google::protobuf::MessageLite& base, ::uint8_t* PROTOBUF_NONNULL target,
+    ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) {
+  const LoadoutEntry& this_ = static_cast<const LoadoutEntry&>(base);
+#else   // PROTOBUF_CUSTOM_VTABLE
+::uint8_t* PROTOBUF_NONNULL LoadoutEntry::_InternalSerialize(
+    ::uint8_t* PROTOBUF_NONNULL target,
+    ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) const {
+  const LoadoutEntry& this_ = *this;
+#endif  // PROTOBUF_CUSTOM_VTABLE
+  if constexpr (::_pbi::DebugHardenCheckHasBitConsistency()) {
+    this_.CheckHasBitConsistency();
+  }
+  // @@protoc_insertion_point(serialize_to_array_start:realtime.LoadoutEntry)
+  ::uint32_t cached_has_bits = 0;
+  (void)cached_has_bits;
+
+  cached_has_bits = this_._impl_._has_bits_[0];
+  // fixed64 bodytype = 1 [json_name = "bodytype"];
+  if (CheckHasBit(cached_has_bits, 0x00000002U)) {
+    if (this_._internal_bodytype() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          1, this_._internal_bodytype(), target);
+    }
+  }
+
+  // uint32 teamid = 2 [json_name = "teamid"];
+  if (CheckHasBit(cached_has_bits, 0x00000004U)) {
+    if (this_._internal_teamid() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteUInt32ToArray(
+          2, this_._internal_teamid(), target);
+    }
+  }
+
+  // uint32 airole = 3 [json_name = "airole"];
+  if (CheckHasBit(cached_has_bits, 0x00000008U)) {
+    if (this_._internal_airole() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteUInt32ToArray(
+          3, this_._internal_airole(), target);
+    }
+  }
+
+  // fixed64 xf = 4 [json_name = "xf"];
+  if (CheckHasBit(cached_has_bits, 0x00000010U)) {
+    if (this_._internal_xf() != 0) {
+      target = stream->EnsureSpace(target);
+      target = ::_pbi::WireFormatLite::WriteFixed64ToArray(
+          4, this_._internal_xf(), target);
+    }
+  }
+
+  // .realtime.LoadoutSlot loadout = 5 [json_name = "loadout"];
+  if (CheckHasBit(cached_has_bits, 0x00000001U)) {
+    target = ::google::protobuf::internal::WireFormatLite::InternalWriteMessage(
+        5, *this_._impl_.loadout_, this_._impl_.loadout_->GetCachedSize(), target,
+        stream);
+  }
+
+  if (ABSL_PREDICT_FALSE(this_._internal_metadata_.have_unknown_fields())) {
+    target =
+        ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
+            this_._internal_metadata_.unknown_fields<::google::protobuf::UnknownFieldSet>(::google::protobuf::UnknownFieldSet::default_instance), target, stream);
+  }
+  // @@protoc_insertion_point(serialize_to_array_end:realtime.LoadoutEntry)
+  return target;
+}
+
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+::size_t LoadoutEntry::ByteSizeLong(const MessageLite& base) {
+  const LoadoutEntry& this_ = static_cast<const LoadoutEntry&>(base);
+#else   // PROTOBUF_CUSTOM_VTABLE
+::size_t LoadoutEntry::ByteSizeLong() const {
+  const LoadoutEntry& this_ = *this;
+#endif  // PROTOBUF_CUSTOM_VTABLE
+  // @@protoc_insertion_point(message_byte_size_start:realtime.LoadoutEntry)
+  ::size_t total_size = 0;
+
+  ::uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void)cached_has_bits;
+
+  ::_pbi::Prefetch5LinesFrom7Lines(&this_);
+  cached_has_bits = this_._impl_._has_bits_[0];
+  if (BatchCheckHasBit(cached_has_bits, 0x0000001fU)) {
+    // .realtime.LoadoutSlot loadout = 5 [json_name = "loadout"];
+    if (CheckHasBit(cached_has_bits, 0x00000001U)) {
+      total_size += 1 +
+                    ::google::protobuf::internal::WireFormatLite::MessageSize(*this_._impl_.loadout_);
+    }
+    // fixed64 bodytype = 1 [json_name = "bodytype"];
+    if (CheckHasBit(cached_has_bits, 0x00000002U)) {
+      if (this_._internal_bodytype() != 0) {
+        total_size += 9;
+      }
+    }
+    // uint32 teamid = 2 [json_name = "teamid"];
+    if (CheckHasBit(cached_has_bits, 0x00000004U)) {
+      if (this_._internal_teamid() != 0) {
+        total_size += ::_pbi::WireFormatLite::UInt32SizePlusOne(
+            this_._internal_teamid());
+      }
+    }
+    // uint32 airole = 3 [json_name = "airole"];
+    if (CheckHasBit(cached_has_bits, 0x00000008U)) {
+      if (this_._internal_airole() != 0) {
+        total_size += ::_pbi::WireFormatLite::UInt32SizePlusOne(
+            this_._internal_airole());
+      }
+    }
+    // fixed64 xf = 4 [json_name = "xf"];
+    if (CheckHasBit(cached_has_bits, 0x00000010U)) {
+      if (this_._internal_xf() != 0) {
+        total_size += 9;
+      }
+    }
+  }
+  return this_.MaybeComputeUnknownFieldsSize(total_size,
+                                             &this_._impl_._cached_size_);
+}
+
+void LoadoutEntry::MergeImpl(::google::protobuf::MessageLite& to_msg,
+                            const ::google::protobuf::MessageLite& from_msg) {
+   auto* const _this =
+      static_cast<LoadoutEntry*>(&to_msg);
+  auto& from = static_cast<const LoadoutEntry&>(from_msg);
+  if constexpr (::_pbi::DebugHardenCheckHasBitConsistency()) {
+    from.CheckHasBitConsistency();
+  }
+  ::google::protobuf::Arena* arena = _this->GetArena();
+  // @@protoc_insertion_point(class_specific_merge_from_start:realtime.LoadoutEntry)
+  ABSL_DCHECK_NE(&from, _this);
+  ::uint32_t cached_has_bits = 0;
+  (void)cached_has_bits;
+
+  cached_has_bits = from._impl_._has_bits_[0];
+  if (BatchCheckHasBit(cached_has_bits, 0x0000001fU)) {
+    if (CheckHasBit(cached_has_bits, 0x00000001U)) {
+      ABSL_DCHECK(from._impl_.loadout_ != nullptr);
+      if (_this->_impl_.loadout_ == nullptr) {
+        _this->_impl_.loadout_ = ::google::protobuf::Message::CopyConstruct(arena, *from._impl_.loadout_);
+      } else {
+        _this->_impl_.loadout_->MergeFrom(*from._impl_.loadout_);
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000002U)) {
+      if (from._internal_bodytype() != 0) {
+        _this->_impl_.bodytype_ = from._impl_.bodytype_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000004U)) {
+      if (from._internal_teamid() != 0) {
+        _this->_impl_.teamid_ = from._impl_.teamid_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000008U)) {
+      if (from._internal_airole() != 0) {
+        _this->_impl_.airole_ = from._impl_.airole_;
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000010U)) {
+      if (from._internal_xf() != 0) {
+        _this->_impl_.xf_ = from._impl_.xf_;
+      }
+    }
+  }
+  _this->_impl_._has_bits_[0] |= cached_has_bits;
+  _this->_internal_metadata_.MergeFrom<::google::protobuf::UnknownFieldSet>(
+      from._internal_metadata_);
+}
+
+void LoadoutEntry::CopyFrom(const LoadoutEntry& from) {
+  // @@protoc_insertion_point(class_specific_copy_from_start:realtime.LoadoutEntry)
+  if (&from == this) return;
+  Clear();
+  MergeFrom(from);
+}
+
+
+void LoadoutEntry::InternalSwap(LoadoutEntry* PROTOBUF_RESTRICT PROTOBUF_NONNULL other) {
+  using ::std::swap;
+  _internal_metadata_.InternalSwap(&other->_internal_metadata_);
+  swap(_impl_._has_bits_[0], other->_impl_._has_bits_[0]);
+  ::google::protobuf::internal::memswap<
+      PROTOBUF_FIELD_OFFSET(LoadoutEntry, _impl_.xf_)
+      + sizeof(LoadoutEntry::_impl_.xf_)
+      - PROTOBUF_FIELD_OFFSET(LoadoutEntry, _impl_.loadout_)>(
+          reinterpret_cast<char*>(&_impl_.loadout_),
+          reinterpret_cast<char*>(&other->_impl_.loadout_));
+}
+
+::google::protobuf::Metadata LoadoutEntry::GetMetadata() const {
+  return ::google::protobuf::Message::GetMetadataImpl(GetClassData()->full());
+}
+// ===================================================================
+
 class LoadoutInstance::_Internal {
  public:
   using HasBits =
@@ -7920,6 +9298,10 @@ GameServerSaveLoadoutMessage::GameServerSaveLoadoutMessage(
   _internal_metadata_.MergeFrom<::google::protobuf::UnknownFieldSet>(
       from._internal_metadata_);
   new (&_impl_) Impl_(internal_visibility(), arena, from._impl_, from);
+  ::uint32_t cached_has_bits = _impl_._has_bits_[0];
+  _impl_.loadout_entry_ = (CheckHasBit(cached_has_bits, 0x00000008U))
+                ? ::google::protobuf::Message::CopyConstruct(arena, *from._impl_.loadout_entry_)
+                : nullptr;
   ::memcpy(reinterpret_cast<char*>(&_impl_) +
                offsetof(Impl_, loadout_slot_),
            reinterpret_cast<const char*>(&from._impl_) +
@@ -7941,10 +9323,10 @@ PROTOBUF_NDEBUG_INLINE GameServerSaveLoadoutMessage::Impl_::Impl_(
 inline void GameServerSaveLoadoutMessage::SharedCtor(::_pb::Arena* PROTOBUF_NULLABLE arena) {
   new (&_impl_) Impl_(internal_visibility(), arena);
   ::memset(reinterpret_cast<char*>(&_impl_) +
-               offsetof(Impl_, loadout_slot_),
+               offsetof(Impl_, loadout_entry_),
            0,
            offsetof(Impl_, jersey_number_) -
-               offsetof(Impl_, loadout_slot_) +
+               offsetof(Impl_, loadout_entry_) +
                sizeof(Impl_::jersey_number_));
 }
 GameServerSaveLoadoutMessage::~GameServerSaveLoadoutMessage() {
@@ -7960,6 +9342,7 @@ inline void GameServerSaveLoadoutMessage::SharedDtor(MessageLite& self) {
   ABSL_DCHECK(this_.GetArena() == nullptr);
   this_._impl_.lobby_session_id_.Destroy();
   this_._impl_.entrant_id_.Destroy();
+  delete this_._impl_.loadout_entry_;
   this_._impl_.~Impl_();
 }
 
@@ -8018,17 +9401,17 @@ GameServerSaveLoadoutMessage::GetClassData() const {
   return GameServerSaveLoadoutMessage_class_data_.base();
 }
 PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1
-const ::_pbi::TcParseTable<3, 5, 1, 72, 2>
+const ::_pbi::TcParseTable<3, 6, 2, 72, 2>
 GameServerSaveLoadoutMessage::_table_ = {
   {
     PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_._has_bits_),
     0, // no _extensions_
-    5, 56,  // max_field_number, fast_idx_mask
+    6, 56,  // max_field_number, fast_idx_mask
     offsetof(decltype(_table_), field_lookup_table),
-    4294967264,  // skipmap
+    4294967232,  // skipmap
     offsetof(decltype(_table_), field_entries),
-    5,  // num_field_entries
-    1,  // num_aux_entries
+    6,  // num_field_entries
+    2,  // num_aux_entries
     offsetof(decltype(_table_), aux_entries),
     GameServerSaveLoadoutMessage_class_data_.base(),
     nullptr,  // post_loop_handler
@@ -8047,18 +9430,21 @@ GameServerSaveLoadoutMessage::_table_ = {
      {18, 2, 0,
       PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_.entrant_id_)}},
     // int32 loadout_slot = 3 [json_name = "loadoutSlot"];
-    {::_pbi::TcParser::SingularVarintNoZag1<::uint32_t, offsetof(GameServerSaveLoadoutMessage, _impl_.loadout_slot_), 3>(),
-     {24, 3, 0,
+    {::_pbi::TcParser::SingularVarintNoZag1<::uint32_t, offsetof(GameServerSaveLoadoutMessage, _impl_.loadout_slot_), 4>(),
+     {24, 4, 0,
       PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_.loadout_slot_)}},
     // int32 jersey_number = 4 [json_name = "jerseyNumber"];
-    {::_pbi::TcParser::SingularVarintNoZag1<::uint32_t, offsetof(GameServerSaveLoadoutMessage, _impl_.jersey_number_), 4>(),
-     {32, 4, 0,
+    {::_pbi::TcParser::SingularVarintNoZag1<::uint32_t, offsetof(GameServerSaveLoadoutMessage, _impl_.jersey_number_), 5>(),
+     {32, 5, 0,
       PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_.jersey_number_)}},
     // repeated .realtime.LoadoutInstance loadout_instances = 5 [json_name = "loadoutInstances"];
     {::_pbi::TcParser::FastMtR1,
      {42, 0, 0,
       PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_.loadout_instances_)}},
-    {::_pbi::TcParser::MiniParse, {}},
+    // .realtime.LoadoutEntry loadout_entry = 6 [json_name = "loadoutEntry"];
+    {::_pbi::TcParser::FastMtS1,
+     {50, 3, 1,
+      PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_.loadout_entry_)}},
     {::_pbi::TcParser::MiniParse, {}},
   }}, {{
     65535, 65535
@@ -8068,14 +9454,17 @@ GameServerSaveLoadoutMessage::_table_ = {
     // string entrant_id = 2 [json_name = "entrantId"];
     {PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_.entrant_id_), _Internal::kHasBitsOffset + 2, 0, (0 | ::_fl::kFcOptional | ::_fl::kUtf8String | ::_fl::kRepAString)},
     // int32 loadout_slot = 3 [json_name = "loadoutSlot"];
-    {PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_.loadout_slot_), _Internal::kHasBitsOffset + 3, 0, (0 | ::_fl::kFcOptional | ::_fl::kInt32)},
+    {PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_.loadout_slot_), _Internal::kHasBitsOffset + 4, 0, (0 | ::_fl::kFcOptional | ::_fl::kInt32)},
     // int32 jersey_number = 4 [json_name = "jerseyNumber"];
-    {PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_.jersey_number_), _Internal::kHasBitsOffset + 4, 0, (0 | ::_fl::kFcOptional | ::_fl::kInt32)},
+    {PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_.jersey_number_), _Internal::kHasBitsOffset + 5, 0, (0 | ::_fl::kFcOptional | ::_fl::kInt32)},
     // repeated .realtime.LoadoutInstance loadout_instances = 5 [json_name = "loadoutInstances"];
     {PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_.loadout_instances_), _Internal::kHasBitsOffset + 0, 0, (0 | ::_fl::kFcRepeated | ::_fl::kMessage | ::_fl::kTvTable)},
+    // .realtime.LoadoutEntry loadout_entry = 6 [json_name = "loadoutEntry"];
+    {PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_.loadout_entry_), _Internal::kHasBitsOffset + 3, 1, (0 | ::_fl::kFcOptional | ::_fl::kMessage | ::_fl::kTvTable)},
   }},
   {{
       {::_pbi::TcParser::GetTable<::realtime::LoadoutInstance>()},
+      {::_pbi::TcParser::GetTable<::realtime::LoadoutEntry>()},
   }},
   {{
     "\45\20\12\0\0\0\0\0"
@@ -8092,7 +9481,7 @@ PROTOBUF_NOINLINE void GameServerSaveLoadoutMessage::Clear() {
   (void) cached_has_bits;
 
   cached_has_bits = _impl_._has_bits_[0];
-  if (BatchCheckHasBit(cached_has_bits, 0x00000007U)) {
+  if (BatchCheckHasBit(cached_has_bits, 0x0000000fU)) {
     if (CheckHasBitForRepeated(cached_has_bits, 0x00000001U)) {
       _impl_.loadout_instances_.Clear();
     }
@@ -8102,8 +9491,12 @@ PROTOBUF_NOINLINE void GameServerSaveLoadoutMessage::Clear() {
     if (CheckHasBit(cached_has_bits, 0x00000004U)) {
       _impl_.entrant_id_.ClearNonDefaultToEmpty();
     }
+    if (CheckHasBit(cached_has_bits, 0x00000008U)) {
+      ABSL_DCHECK(_impl_.loadout_entry_ != nullptr);
+      _impl_.loadout_entry_->Clear();
+    }
   }
-  if (BatchCheckHasBit(cached_has_bits, 0x00000018U)) {
+  if (BatchCheckHasBit(cached_has_bits, 0x00000030U)) {
     ::memset(&_impl_.loadout_slot_, 0, static_cast<::size_t>(
         reinterpret_cast<char*>(&_impl_.jersey_number_) -
         reinterpret_cast<char*>(&_impl_.loadout_slot_)) + sizeof(_impl_.jersey_number_));
@@ -8152,7 +9545,7 @@ PROTOBUF_NOINLINE void GameServerSaveLoadoutMessage::Clear() {
   }
 
   // int32 loadout_slot = 3 [json_name = "loadoutSlot"];
-  if (CheckHasBit(cached_has_bits, 0x00000008U)) {
+  if (CheckHasBit(cached_has_bits, 0x00000010U)) {
     if (this_._internal_loadout_slot() != 0) {
       target =
           ::google::protobuf::internal::WireFormatLite::WriteInt32ToArrayWithField<3>(
@@ -8161,7 +9554,7 @@ PROTOBUF_NOINLINE void GameServerSaveLoadoutMessage::Clear() {
   }
 
   // int32 jersey_number = 4 [json_name = "jerseyNumber"];
-  if (CheckHasBit(cached_has_bits, 0x00000010U)) {
+  if (CheckHasBit(cached_has_bits, 0x00000020U)) {
     if (this_._internal_jersey_number() != 0) {
       target =
           ::google::protobuf::internal::WireFormatLite::WriteInt32ToArrayWithField<4>(
@@ -8180,6 +9573,13 @@ PROTOBUF_NOINLINE void GameServerSaveLoadoutMessage::Clear() {
               5, repfield, repfield.GetCachedSize(),
               target, stream);
     }
+  }
+
+  // .realtime.LoadoutEntry loadout_entry = 6 [json_name = "loadoutEntry"];
+  if (CheckHasBit(cached_has_bits, 0x00000008U)) {
+    target = ::google::protobuf::internal::WireFormatLite::InternalWriteMessage(
+        6, *this_._impl_.loadout_entry_, this_._impl_.loadout_entry_->GetCachedSize(), target,
+        stream);
   }
 
   if (ABSL_PREDICT_FALSE(this_._internal_metadata_.have_unknown_fields())) {
@@ -8207,7 +9607,7 @@ PROTOBUF_NOINLINE void GameServerSaveLoadoutMessage::Clear() {
 
   ::_pbi::Prefetch5LinesFrom7Lines(&this_);
   cached_has_bits = this_._impl_._has_bits_[0];
-  if (BatchCheckHasBit(cached_has_bits, 0x0000001fU)) {
+  if (BatchCheckHasBit(cached_has_bits, 0x0000003fU)) {
     // repeated .realtime.LoadoutInstance loadout_instances = 5 [json_name = "loadoutInstances"];
     if (CheckHasBitForRepeated(cached_has_bits, 0x00000001U)) {
       total_size += 1UL * this_._internal_loadout_instances_size();
@@ -8229,15 +9629,20 @@ PROTOBUF_NOINLINE void GameServerSaveLoadoutMessage::Clear() {
                                         this_._internal_entrant_id());
       }
     }
-    // int32 loadout_slot = 3 [json_name = "loadoutSlot"];
+    // .realtime.LoadoutEntry loadout_entry = 6 [json_name = "loadoutEntry"];
     if (CheckHasBit(cached_has_bits, 0x00000008U)) {
+      total_size += 1 +
+                    ::google::protobuf::internal::WireFormatLite::MessageSize(*this_._impl_.loadout_entry_);
+    }
+    // int32 loadout_slot = 3 [json_name = "loadoutSlot"];
+    if (CheckHasBit(cached_has_bits, 0x00000010U)) {
       if (this_._internal_loadout_slot() != 0) {
         total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(
             this_._internal_loadout_slot());
       }
     }
     // int32 jersey_number = 4 [json_name = "jerseyNumber"];
-    if (CheckHasBit(cached_has_bits, 0x00000010U)) {
+    if (CheckHasBit(cached_has_bits, 0x00000020U)) {
       if (this_._internal_jersey_number() != 0) {
         total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(
             this_._internal_jersey_number());
@@ -8263,7 +9668,7 @@ void GameServerSaveLoadoutMessage::MergeImpl(::google::protobuf::MessageLite& to
   (void)cached_has_bits;
 
   cached_has_bits = from._impl_._has_bits_[0];
-  if (BatchCheckHasBit(cached_has_bits, 0x0000001fU)) {
+  if (BatchCheckHasBit(cached_has_bits, 0x0000003fU)) {
     if (CheckHasBitForRepeated(cached_has_bits, 0x00000001U)) {
       _this->_internal_mutable_loadout_instances()->InternalMergeFromWithArena(
           ::google::protobuf::MessageLite::internal_visibility(), arena,
@@ -8288,11 +9693,19 @@ void GameServerSaveLoadoutMessage::MergeImpl(::google::protobuf::MessageLite& to
       }
     }
     if (CheckHasBit(cached_has_bits, 0x00000008U)) {
+      ABSL_DCHECK(from._impl_.loadout_entry_ != nullptr);
+      if (_this->_impl_.loadout_entry_ == nullptr) {
+        _this->_impl_.loadout_entry_ = ::google::protobuf::Message::CopyConstruct(arena, *from._impl_.loadout_entry_);
+      } else {
+        _this->_impl_.loadout_entry_->MergeFrom(*from._impl_.loadout_entry_);
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000010U)) {
       if (from._internal_loadout_slot() != 0) {
         _this->_impl_.loadout_slot_ = from._impl_.loadout_slot_;
       }
     }
-    if (CheckHasBit(cached_has_bits, 0x00000010U)) {
+    if (CheckHasBit(cached_has_bits, 0x00000020U)) {
       if (from._internal_jersey_number() != 0) {
         _this->_impl_.jersey_number_ = from._impl_.jersey_number_;
       }
@@ -8323,9 +9736,9 @@ void GameServerSaveLoadoutMessage::InternalSwap(GameServerSaveLoadoutMessage* PR
   ::google::protobuf::internal::memswap<
       PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_.jersey_number_)
       + sizeof(GameServerSaveLoadoutMessage::_impl_.jersey_number_)
-      - PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_.loadout_slot_)>(
-          reinterpret_cast<char*>(&_impl_.loadout_slot_),
-          reinterpret_cast<char*>(&other->_impl_.loadout_slot_));
+      - PROTOBUF_FIELD_OFFSET(GameServerSaveLoadoutMessage, _impl_.loadout_entry_)>(
+          reinterpret_cast<char*>(&_impl_.loadout_entry_),
+          reinterpret_cast<char*>(&other->_impl_.loadout_entry_));
 }
 
 ::google::protobuf::Metadata GameServerSaveLoadoutMessage::GetMetadata() const {

@@ -110,7 +110,7 @@ func RegisterEngineHttpServiceHandlerServer(ctx context.Context, mux *runtime.Se
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/enginehttp.EngineHttpService/GetPlayerBones", runtime.WithHTTPPathPattern("/user_bones"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/enginehttp.EngineHttpService/GetPlayerBones", runtime.WithHTTPPathPattern("/player_bones"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -185,7 +185,7 @@ func RegisterEngineHttpServiceHandlerClient(ctx context.Context, mux *runtime.Se
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/enginehttp.EngineHttpService/GetPlayerBones", runtime.WithHTTPPathPattern("/user_bones"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/enginehttp.EngineHttpService/GetPlayerBones", runtime.WithHTTPPathPattern("/player_bones"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -203,7 +203,7 @@ func RegisterEngineHttpServiceHandlerClient(ctx context.Context, mux *runtime.Se
 
 var (
 	pattern_EngineHttpService_GetSession_0     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"session"}, ""))
-	pattern_EngineHttpService_GetPlayerBones_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"user_bones"}, ""))
+	pattern_EngineHttpService_GetPlayerBones_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"player_bones"}, ""))
 )
 
 var (

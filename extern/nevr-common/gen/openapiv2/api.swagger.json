@@ -28,15 +28,15 @@
     "application/json"
   ],
   "paths": {
-    "/session": {
+    "/player_bones": {
       "get": {
-        "summary": "GET /session -\u003e returns the current session state as JSON.",
-        "operationId": "EngineHttpService_GetSession",
+        "summary": "GET /player_bones -\u003e returns the current user bones payload as JSON.",
+        "operationId": "EngineHttpService_GetPlayerBones",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/enginehttpSessionResponse"
+              "$ref": "#/definitions/enginehttpPlayerBonesResponse"
             }
           },
           "default": {
@@ -51,15 +51,15 @@
         ]
       }
     },
-    "/user_bones": {
+    "/session": {
       "get": {
-        "summary": "GET /user_bones -\u003e returns the current user bones payload as JSON.",
-        "operationId": "EngineHttpService_GetPlayerBones",
+        "summary": "GET /session -\u003e returns the current session state as JSON.",
+        "operationId": "EngineHttpService_GetSession",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/enginehttpPlayerBonesResponse"
+              "$ref": "#/definitions/enginehttpSessionResponse"
             }
           },
           "default": {

@@ -316,6 +316,46 @@ class LoadoutItem(betterproto.Message):
 
 
 @dataclass
+class LoadoutSlot(betterproto.Message):
+    """
+    A loadout slot containing all cosmetic item selections (SymbolId hashes)
+    """
+
+    selectionmode: float = betterproto.fixed64_field(1)
+    banner: float = betterproto.fixed64_field(2)
+    booster: float = betterproto.fixed64_field(3)
+    bracer: float = betterproto.fixed64_field(4)
+    chassis: float = betterproto.fixed64_field(5)
+    decal: float = betterproto.fixed64_field(6)
+    decal_body: float = betterproto.fixed64_field(7)
+    emissive: float = betterproto.fixed64_field(8)
+    emote: float = betterproto.fixed64_field(9)
+    secondemote: float = betterproto.fixed64_field(10)
+    goal_fx: float = betterproto.fixed64_field(11)
+    medal: float = betterproto.fixed64_field(12)
+    pattern: float = betterproto.fixed64_field(13)
+    pattern_body: float = betterproto.fixed64_field(14)
+    pip: float = betterproto.fixed64_field(15)
+    tag: float = betterproto.fixed64_field(16)
+    tint: float = betterproto.fixed64_field(17)
+    tint_alignment_a: float = betterproto.fixed64_field(18)
+    tint_alignment_b: float = betterproto.fixed64_field(19)
+    tint_body: float = betterproto.fixed64_field(20)
+    title: float = betterproto.fixed64_field(21)
+
+
+@dataclass
+class LoadoutEntry(betterproto.Message):
+    """A loadout entry containing body type, team, and the loadout slot"""
+
+    bodytype: float = betterproto.fixed64_field(1)
+    teamid: int = betterproto.uint32_field(2)
+    airole: int = betterproto.uint32_field(3)
+    xf: float = betterproto.fixed64_field(4)
+    loadout: "LoadoutSlot" = betterproto.message_field(5)
+
+
+@dataclass
 class LoadoutInstance(betterproto.Message):
     """A loadout instance within a player's loadout"""
 
@@ -332,6 +372,7 @@ class GameServerSaveLoadoutMessage(betterproto.Message):
     loadout_slot: int = betterproto.int32_field(3)
     jersey_number: int = betterproto.int32_field(4)
     loadout_instances: List["LoadoutInstance"] = betterproto.message_field(5)
+    loadout_entry: "LoadoutEntry" = betterproto.message_field(6)
 
 
 @dataclass

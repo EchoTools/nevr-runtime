@@ -99,6 +99,10 @@ class GameServerSaveLoadoutMessage;
 struct GameServerSaveLoadoutMessageDefaultTypeInternal;
 extern GameServerSaveLoadoutMessageDefaultTypeInternal _GameServerSaveLoadoutMessage_default_instance_;
 extern const ::google::protobuf::internal::ClassDataFull GameServerSaveLoadoutMessage_class_data_;
+class LoadoutEntry;
+struct LoadoutEntryDefaultTypeInternal;
+extern LoadoutEntryDefaultTypeInternal _LoadoutEntry_default_instance_;
+extern const ::google::protobuf::internal::ClassDataFull LoadoutEntry_class_data_;
 class LoadoutInstance;
 struct LoadoutInstanceDefaultTypeInternal;
 extern LoadoutInstanceDefaultTypeInternal _LoadoutInstance_default_instance_;
@@ -107,6 +111,10 @@ class LoadoutItem;
 struct LoadoutItemDefaultTypeInternal;
 extern LoadoutItemDefaultTypeInternal _LoadoutItem_default_instance_;
 extern const ::google::protobuf::internal::ClassDataFull LoadoutItem_class_data_;
+class LoadoutSlot;
+struct LoadoutSlotDefaultTypeInternal;
+extern LoadoutSlotDefaultTypeInternal _LoadoutSlot_default_instance_;
+extern const ::google::protobuf::internal::ClassDataFull LoadoutSlot_class_data_;
 class LobbyEntrantRemovedMessage;
 struct LobbyEntrantRemovedMessageDefaultTypeInternal;
 extern LobbyEntrantRemovedMessageDefaultTypeInternal _LobbyEntrantRemovedMessage_default_instance_;
@@ -593,7 +601,7 @@ class XPlatformID final : public ::google::protobuf::Message
     return *reinterpret_cast<const XPlatformID*>(
         &_XPlatformID_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 18;
+  static constexpr int kIndexInFileMessages = 20;
   friend void swap(XPlatformID& a, XPlatformID& b) { a.Swap(&b); }
   inline void Swap(XPlatformID* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -788,7 +796,7 @@ class SymbolHash final : public ::google::protobuf::Message
     return *reinterpret_cast<const SymbolHash*>(
         &_SymbolHash_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 17;
+  static constexpr int kIndexInFileMessages = 19;
   friend void swap(SymbolHash& a, SymbolHash& b) { a.Swap(&b); }
   inline void Swap(SymbolHash* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -977,7 +985,7 @@ class STCPConnectionUnrequireEvent final : public ::google::protobuf::internal::
     return *reinterpret_cast<const STCPConnectionUnrequireEvent*>(
         &_STCPConnectionUnrequireEvent_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 21;
+  static constexpr int kIndexInFileMessages = 23;
   friend void swap(STCPConnectionUnrequireEvent& a, STCPConnectionUnrequireEvent& b) { a.Swap(&b); }
   inline void Swap(STCPConnectionUnrequireEvent* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -1111,7 +1119,7 @@ class STCPConnectionRequireEvent final : public ::google::protobuf::internal::Ze
     return *reinterpret_cast<const STCPConnectionRequireEvent*>(
         &_STCPConnectionRequireEvent_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 20;
+  static constexpr int kIndexInFileMessages = 22;
   friend void swap(STCPConnectionRequireEvent& a, STCPConnectionRequireEvent& b) { a.Swap(&b); }
   inline void Swap(STCPConnectionRequireEvent* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -1246,7 +1254,7 @@ class SNSLoginSettingsMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSLoginSettingsMessage*>(
         &_SNSLoginSettingsMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 47;
+  static constexpr int kIndexInFileMessages = 49;
   friend void swap(SNSLoginSettingsMessage& a, SNSLoginSettingsMessage& b) { a.Swap(&b); }
   inline void Swap(SNSLoginSettingsMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -1441,7 +1449,7 @@ class SNSLobbySessionSuccessV5Message final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSLobbySessionSuccessV5Message*>(
         &_SNSLobbySessionSuccessV5Message_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 41;
+  static constexpr int kIndexInFileMessages = 43;
   friend void swap(SNSLobbySessionSuccessV5Message& a, SNSLobbySessionSuccessV5Message& b) { a.Swap(&b); }
   inline void Swap(SNSLobbySessionSuccessV5Message* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -1880,7 +1888,7 @@ class SNSLobbySessionFailureV4Message final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSLobbySessionFailureV4Message*>(
         &_SNSLobbySessionFailureV4Message_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 40;
+  static constexpr int kIndexInFileMessages = 42;
   friend void swap(SNSLobbySessionFailureV4Message& a, SNSLobbySessionFailureV4Message& b) { a.Swap(&b); }
   inline void Swap(SNSLobbySessionFailureV4Message* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -2087,7 +2095,7 @@ class SNSLobbyPingResponseMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSLobbyPingResponseMessage*>(
         &_SNSLobbyPingResponseMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 38;
+  static constexpr int kIndexInFileMessages = 40;
   friend void swap(SNSLobbyPingResponseMessage& a, SNSLobbyPingResponseMessage& b) { a.Swap(&b); }
   inline void Swap(SNSLobbyPingResponseMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -2289,7 +2297,7 @@ class SNSLobbyPingRequestV3Message final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSLobbyPingRequestV3Message*>(
         &_SNSLobbyPingRequestV3Message_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 37;
+  static constexpr int kIndexInFileMessages = 39;
   friend void swap(SNSLobbyPingRequestV3Message& a, SNSLobbyPingRequestV3Message& b) { a.Swap(&b); }
   inline void Swap(SNSLobbyPingRequestV3Message* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -2527,7 +2535,7 @@ class SNSLobbyPendingSessionCancelV2Message final : public ::google::protobuf::M
     return *reinterpret_cast<const SNSLobbyPendingSessionCancelV2Message*>(
         &_SNSLobbyPendingSessionCancelV2Message_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 36;
+  static constexpr int kIndexInFileMessages = 38;
   friend void swap(SNSLobbyPendingSessionCancelV2Message& a, SNSLobbyPendingSessionCancelV2Message& b) { a.Swap(&b); }
   inline void Swap(SNSLobbyPendingSessionCancelV2Message* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -2722,7 +2730,7 @@ class SNSLobbyMatchmakerStatusRequestMessage final : public ::google::protobuf::
     return *reinterpret_cast<const SNSLobbyMatchmakerStatusRequestMessage*>(
         &_SNSLobbyMatchmakerStatusRequestMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 35;
+  static constexpr int kIndexInFileMessages = 37;
   friend void swap(SNSLobbyMatchmakerStatusRequestMessage& a, SNSLobbyMatchmakerStatusRequestMessage& b) { a.Swap(&b); }
   inline void Swap(SNSLobbyMatchmakerStatusRequestMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -2936,7 +2944,7 @@ class SNSLobbyMatchmakerStatusMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSLobbyMatchmakerStatusMessage*>(
         &_SNSLobbyMatchmakerStatusMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 34;
+  static constexpr int kIndexInFileMessages = 36;
   friend void swap(SNSLobbyMatchmakerStatusMessage& a, SNSLobbyMatchmakerStatusMessage& b) { a.Swap(&b); }
   inline void Swap(SNSLobbyMatchmakerStatusMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -3126,7 +3134,7 @@ class SNSDocumentSuccessMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSDocumentSuccessMessage*>(
         &_SNSDocumentSuccessMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 29;
+  static constexpr int kIndexInFileMessages = 31;
   friend void swap(SNSDocumentSuccessMessage& a, SNSDocumentSuccessMessage& b) { a.Swap(&b); }
   inline void Swap(SNSDocumentSuccessMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -3321,7 +3329,7 @@ class SNSDocumentRequestV2Message final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSDocumentRequestV2Message*>(
         &_SNSDocumentRequestV2Message_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 28;
+  static constexpr int kIndexInFileMessages = 30;
   friend void swap(SNSDocumentRequestV2Message& a, SNSDocumentRequestV2Message& b) { a.Swap(&b); }
   inline void Swap(SNSDocumentRequestV2Message* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -3533,7 +3541,7 @@ class SNSDocumentFailureMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSDocumentFailureMessage*>(
         &_SNSDocumentFailureMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 30;
+  static constexpr int kIndexInFileMessages = 32;
   friend void swap(SNSDocumentFailureMessage& a, SNSDocumentFailureMessage& b) { a.Swap(&b); }
   inline void Swap(SNSDocumentFailureMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -3728,7 +3736,7 @@ class SNSConfigRequestV2Message final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSConfigRequestV2Message*>(
         &_SNSConfigRequestV2Message_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 22;
+  static constexpr int kIndexInFileMessages = 24;
   friend void swap(SNSConfigRequestV2Message& a, SNSConfigRequestV2Message& b) { a.Swap(&b); }
   inline void Swap(SNSConfigRequestV2Message* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -3923,7 +3931,7 @@ class SNSConfigFailureV2Message final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSConfigFailureV2Message*>(
         &_SNSConfigFailureV2Message_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 24;
+  static constexpr int kIndexInFileMessages = 26;
   friend void swap(SNSConfigFailureV2Message& a, SNSConfigFailureV2Message& b) { a.Swap(&b); }
   inline void Swap(SNSConfigFailureV2Message* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -4118,7 +4126,7 @@ class SNSChannelInfoResponseMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSChannelInfoResponseMessage*>(
         &_SNSChannelInfoResponseMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 27;
+  static constexpr int kIndexInFileMessages = 29;
   friend void swap(SNSChannelInfoResponseMessage& a, SNSChannelInfoResponseMessage& b) { a.Swap(&b); }
   inline void Swap(SNSChannelInfoResponseMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -4312,7 +4320,7 @@ class SNSChannelInfoRequestMessage final : public ::google::protobuf::internal::
     return *reinterpret_cast<const SNSChannelInfoRequestMessage*>(
         &_SNSChannelInfoRequestMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 26;
+  static constexpr int kIndexInFileMessages = 28;
   friend void swap(SNSChannelInfoRequestMessage& a, SNSChannelInfoRequestMessage& b) { a.Swap(&b); }
   inline void Swap(SNSChannelInfoRequestMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -4677,7 +4685,7 @@ class LobbySessionCreateMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const LobbySessionCreateMessage*>(
         &_LobbySessionCreateMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 13;
+  static constexpr int kIndexInFileMessages = 15;
   friend void swap(LobbySessionCreateMessage& a, LobbySessionCreateMessage& b) { a.Swap(&b); }
   inline void Swap(LobbySessionCreateMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -4986,7 +4994,7 @@ class LobbyEntrantsRejectMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const LobbyEntrantsRejectMessage*>(
         &_LobbyEntrantsRejectMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 11;
+  static constexpr int kIndexInFileMessages = 13;
   friend void swap(LobbyEntrantsRejectMessage& a, LobbyEntrantsRejectMessage& b) { a.Swap(&b); }
   inline void Swap(LobbyEntrantsRejectMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -5228,7 +5236,7 @@ class LobbyEntrantsConnectedMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const LobbyEntrantsConnectedMessage*>(
         &_LobbyEntrantsConnectedMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 9;
+  static constexpr int kIndexInFileMessages = 11;
   friend void swap(LobbyEntrantsConnectedMessage& a, LobbyEntrantsConnectedMessage& b) { a.Swap(&b); }
   inline void Swap(LobbyEntrantsConnectedMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -5447,7 +5455,7 @@ class LobbyEntrantsAcceptMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const LobbyEntrantsAcceptMessage*>(
         &_LobbyEntrantsAcceptMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 10;
+  static constexpr int kIndexInFileMessages = 12;
   friend void swap(LobbyEntrantsAcceptMessage& a, LobbyEntrantsAcceptMessage& b) { a.Swap(&b); }
   inline void Swap(LobbyEntrantsAcceptMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -5649,7 +5657,7 @@ class LobbyEntrantRemovedMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const LobbyEntrantRemovedMessage*>(
         &_LobbyEntrantRemovedMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 12;
+  static constexpr int kIndexInFileMessages = 14;
   friend void swap(LobbyEntrantRemovedMessage& a, LobbyEntrantRemovedMessage& b) { a.Swap(&b); }
   inline void Swap(LobbyEntrantRemovedMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -5844,6 +5852,436 @@ class LobbyEntrantRemovedMessage final : public ::google::protobuf::Message
 };
 
 extern const ::google::protobuf::internal::ClassDataFull LobbyEntrantRemovedMessage_class_data_;
+// -------------------------------------------------------------------
+
+class LoadoutSlot final : public ::google::protobuf::Message
+/* @@protoc_insertion_point(class_definition:realtime.LoadoutSlot) */ {
+ public:
+  inline LoadoutSlot() : LoadoutSlot(nullptr) {}
+  ~LoadoutSlot() PROTOBUF_FINAL;
+
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+  void operator delete(LoadoutSlot* PROTOBUF_NONNULL msg, ::std::destroying_delete_t) {
+    SharedDtor(*msg);
+    ::google::protobuf::internal::SizedDelete(msg, sizeof(LoadoutSlot));
+  }
+#endif
+
+  template <typename = void>
+  explicit PROTOBUF_CONSTEXPR LoadoutSlot(::google::protobuf::internal::ConstantInitialized);
+
+  inline LoadoutSlot(const LoadoutSlot& from) : LoadoutSlot(nullptr, from) {}
+  inline LoadoutSlot(LoadoutSlot&& from) noexcept
+      : LoadoutSlot(nullptr, ::std::move(from)) {}
+  inline LoadoutSlot& operator=(const LoadoutSlot& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline LoadoutSlot& operator=(LoadoutSlot&& from) noexcept {
+    if (this == &from) return *this;
+    if (::google::protobuf::internal::CanMoveWithInternalSwap(GetArena(), from.GetArena())) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  inline const ::google::protobuf::UnknownFieldSet& unknown_fields() const
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.unknown_fields<::google::protobuf::UnknownFieldSet>(::google::protobuf::UnknownFieldSet::default_instance);
+  }
+  inline ::google::protobuf::UnknownFieldSet* PROTOBUF_NONNULL mutable_unknown_fields()
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.mutable_unknown_fields<::google::protobuf::UnknownFieldSet>();
+  }
+
+  static const ::google::protobuf::Descriptor* PROTOBUF_NONNULL descriptor() {
+    return GetDescriptor();
+  }
+  static const ::google::protobuf::Descriptor* PROTOBUF_NONNULL GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::google::protobuf::Reflection* PROTOBUF_NONNULL GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const LoadoutSlot& default_instance() {
+    return *reinterpret_cast<const LoadoutSlot*>(
+        &_LoadoutSlot_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages = 7;
+  friend void swap(LoadoutSlot& a, LoadoutSlot& b) { a.Swap(&b); }
+  inline void Swap(LoadoutSlot* PROTOBUF_NONNULL other) {
+    if (other == this) return;
+    if (::google::protobuf::internal::CanUseInternalSwap(GetArena(), other->GetArena())) {
+      InternalSwap(other);
+    } else {
+      ::google::protobuf::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(LoadoutSlot* PROTOBUF_NONNULL other) {
+    if (other == this) return;
+    ABSL_DCHECK(GetArena() == other->GetArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  LoadoutSlot* PROTOBUF_NONNULL New(::google::protobuf::Arena* PROTOBUF_NULLABLE arena = nullptr) const {
+    return ::google::protobuf::Message::DefaultConstruct<LoadoutSlot>(arena);
+  }
+  using ::google::protobuf::Message::CopyFrom;
+  void CopyFrom(const LoadoutSlot& from);
+  using ::google::protobuf::Message::MergeFrom;
+  void MergeFrom(const LoadoutSlot& from) { LoadoutSlot::MergeImpl(*this, from); }
+
+  private:
+  static void MergeImpl(::google::protobuf::MessageLite& to_msg,
+                        const ::google::protobuf::MessageLite& from_msg);
+
+  public:
+  bool IsInitialized() const {
+    return true;
+  }
+  ABSL_ATTRIBUTE_REINITIALIZES void Clear() PROTOBUF_FINAL;
+  #if defined(PROTOBUF_CUSTOM_VTABLE)
+  private:
+  static ::size_t ByteSizeLong(const ::google::protobuf::MessageLite& msg);
+  static ::uint8_t* PROTOBUF_NONNULL _InternalSerialize(
+      const ::google::protobuf::MessageLite& msg, ::uint8_t* PROTOBUF_NONNULL target,
+      ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream);
+
+  public:
+  ::size_t ByteSizeLong() const { return ByteSizeLong(*this); }
+  ::uint8_t* PROTOBUF_NONNULL _InternalSerialize(
+      ::uint8_t* PROTOBUF_NONNULL target,
+      ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) const {
+    return _InternalSerialize(*this, target, stream);
+  }
+  #else   // PROTOBUF_CUSTOM_VTABLE
+  ::size_t ByteSizeLong() const final;
+  ::uint8_t* PROTOBUF_NONNULL _InternalSerialize(
+      ::uint8_t* PROTOBUF_NONNULL target,
+      ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) const final;
+  #endif  // PROTOBUF_CUSTOM_VTABLE
+  int GetCachedSize() const { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  static void SharedDtor(MessageLite& self);
+  void InternalSwap(LoadoutSlot* PROTOBUF_NONNULL other);
+ private:
+  template <typename T>
+  friend ::absl::string_view(::google::protobuf::internal::GetAnyMessageName)();
+  static ::absl::string_view FullMessageName() { return "realtime.LoadoutSlot"; }
+
+  explicit LoadoutSlot(::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  LoadoutSlot(::google::protobuf::Arena* PROTOBUF_NULLABLE arena, const LoadoutSlot& from);
+  LoadoutSlot(
+      ::google::protobuf::Arena* PROTOBUF_NULLABLE arena, LoadoutSlot&& from) noexcept
+      : LoadoutSlot(arena) {
+    *this = ::std::move(from);
+  }
+  const ::google::protobuf::internal::ClassData* PROTOBUF_NONNULL GetClassData() const PROTOBUF_FINAL;
+  static void* PROTOBUF_NONNULL PlacementNew_(
+      const void* PROTOBUF_NONNULL, void* PROTOBUF_NONNULL mem,
+      ::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  static constexpr auto InternalNewImpl_();
+
+ public:
+  static constexpr auto InternalGenerateClassData_();
+
+  ::google::protobuf::Metadata GetMetadata() const;
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+  enum : int {
+    kSelectionmodeFieldNumber = 1,
+    kBannerFieldNumber = 2,
+    kBoosterFieldNumber = 3,
+    kBracerFieldNumber = 4,
+    kChassisFieldNumber = 5,
+    kDecalFieldNumber = 6,
+    kDecalBodyFieldNumber = 7,
+    kEmissiveFieldNumber = 8,
+    kEmoteFieldNumber = 9,
+    kSecondemoteFieldNumber = 10,
+    kGoalFxFieldNumber = 11,
+    kMedalFieldNumber = 12,
+    kPatternFieldNumber = 13,
+    kPatternBodyFieldNumber = 14,
+    kPipFieldNumber = 15,
+    kTagFieldNumber = 16,
+    kTintFieldNumber = 17,
+    kTintAlignmentAFieldNumber = 18,
+    kTintAlignmentBFieldNumber = 19,
+    kTintBodyFieldNumber = 20,
+    kTitleFieldNumber = 21,
+  };
+  // fixed64 selectionmode = 1 [json_name = "selectionmode"];
+  void clear_selectionmode() ;
+  ::uint64_t selectionmode() const;
+  void set_selectionmode(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_selectionmode() const;
+  void _internal_set_selectionmode(::uint64_t value);
+
+  public:
+  // fixed64 banner = 2 [json_name = "banner"];
+  void clear_banner() ;
+  ::uint64_t banner() const;
+  void set_banner(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_banner() const;
+  void _internal_set_banner(::uint64_t value);
+
+  public:
+  // fixed64 booster = 3 [json_name = "booster"];
+  void clear_booster() ;
+  ::uint64_t booster() const;
+  void set_booster(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_booster() const;
+  void _internal_set_booster(::uint64_t value);
+
+  public:
+  // fixed64 bracer = 4 [json_name = "bracer"];
+  void clear_bracer() ;
+  ::uint64_t bracer() const;
+  void set_bracer(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_bracer() const;
+  void _internal_set_bracer(::uint64_t value);
+
+  public:
+  // fixed64 chassis = 5 [json_name = "chassis"];
+  void clear_chassis() ;
+  ::uint64_t chassis() const;
+  void set_chassis(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_chassis() const;
+  void _internal_set_chassis(::uint64_t value);
+
+  public:
+  // fixed64 decal = 6 [json_name = "decal"];
+  void clear_decal() ;
+  ::uint64_t decal() const;
+  void set_decal(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_decal() const;
+  void _internal_set_decal(::uint64_t value);
+
+  public:
+  // fixed64 decal_body = 7 [json_name = "decalBody"];
+  void clear_decal_body() ;
+  ::uint64_t decal_body() const;
+  void set_decal_body(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_decal_body() const;
+  void _internal_set_decal_body(::uint64_t value);
+
+  public:
+  // fixed64 emissive = 8 [json_name = "emissive"];
+  void clear_emissive() ;
+  ::uint64_t emissive() const;
+  void set_emissive(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_emissive() const;
+  void _internal_set_emissive(::uint64_t value);
+
+  public:
+  // fixed64 emote = 9 [json_name = "emote"];
+  void clear_emote() ;
+  ::uint64_t emote() const;
+  void set_emote(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_emote() const;
+  void _internal_set_emote(::uint64_t value);
+
+  public:
+  // fixed64 secondemote = 10 [json_name = "secondemote"];
+  void clear_secondemote() ;
+  ::uint64_t secondemote() const;
+  void set_secondemote(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_secondemote() const;
+  void _internal_set_secondemote(::uint64_t value);
+
+  public:
+  // fixed64 goal_fx = 11 [json_name = "goalFx"];
+  void clear_goal_fx() ;
+  ::uint64_t goal_fx() const;
+  void set_goal_fx(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_goal_fx() const;
+  void _internal_set_goal_fx(::uint64_t value);
+
+  public:
+  // fixed64 medal = 12 [json_name = "medal"];
+  void clear_medal() ;
+  ::uint64_t medal() const;
+  void set_medal(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_medal() const;
+  void _internal_set_medal(::uint64_t value);
+
+  public:
+  // fixed64 pattern = 13 [json_name = "pattern"];
+  void clear_pattern() ;
+  ::uint64_t pattern() const;
+  void set_pattern(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_pattern() const;
+  void _internal_set_pattern(::uint64_t value);
+
+  public:
+  // fixed64 pattern_body = 14 [json_name = "patternBody"];
+  void clear_pattern_body() ;
+  ::uint64_t pattern_body() const;
+  void set_pattern_body(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_pattern_body() const;
+  void _internal_set_pattern_body(::uint64_t value);
+
+  public:
+  // fixed64 pip = 15 [json_name = "pip"];
+  void clear_pip() ;
+  ::uint64_t pip() const;
+  void set_pip(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_pip() const;
+  void _internal_set_pip(::uint64_t value);
+
+  public:
+  // fixed64 tag = 16 [json_name = "tag"];
+  void clear_tag() ;
+  ::uint64_t tag() const;
+  void set_tag(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_tag() const;
+  void _internal_set_tag(::uint64_t value);
+
+  public:
+  // fixed64 tint = 17 [json_name = "tint"];
+  void clear_tint() ;
+  ::uint64_t tint() const;
+  void set_tint(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_tint() const;
+  void _internal_set_tint(::uint64_t value);
+
+  public:
+  // fixed64 tint_alignment_a = 18 [json_name = "tintAlignmentA"];
+  void clear_tint_alignment_a() ;
+  ::uint64_t tint_alignment_a() const;
+  void set_tint_alignment_a(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_tint_alignment_a() const;
+  void _internal_set_tint_alignment_a(::uint64_t value);
+
+  public:
+  // fixed64 tint_alignment_b = 19 [json_name = "tintAlignmentB"];
+  void clear_tint_alignment_b() ;
+  ::uint64_t tint_alignment_b() const;
+  void set_tint_alignment_b(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_tint_alignment_b() const;
+  void _internal_set_tint_alignment_b(::uint64_t value);
+
+  public:
+  // fixed64 tint_body = 20 [json_name = "tintBody"];
+  void clear_tint_body() ;
+  ::uint64_t tint_body() const;
+  void set_tint_body(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_tint_body() const;
+  void _internal_set_tint_body(::uint64_t value);
+
+  public:
+  // fixed64 title = 21 [json_name = "title"];
+  void clear_title() ;
+  ::uint64_t title() const;
+  void set_title(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_title() const;
+  void _internal_set_title(::uint64_t value);
+
+  public:
+  // @@protoc_insertion_point(class_scope:realtime.LoadoutSlot)
+ private:
+  class _Internal;
+  friend class ::google::protobuf::internal::TcParser;
+  static const ::google::protobuf::internal::TcParseTable<5, 21,
+                                   0, 0,
+                                   2>
+      _table_;
+
+  friend class ::google::protobuf::MessageLite;
+  friend class ::google::protobuf::Arena;
+  template <typename T>
+  friend class ::google::protobuf::Arena::InternalHelper;
+  using InternalArenaConstructable_ = void;
+  using DestructorSkippable_ = void;
+  struct Impl_ {
+    inline explicit constexpr Impl_(::google::protobuf::internal::ConstantInitialized) noexcept;
+    inline explicit Impl_(
+        ::google::protobuf::internal::InternalVisibility visibility,
+        ::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+    inline explicit Impl_(
+        ::google::protobuf::internal::InternalVisibility visibility,
+        ::google::protobuf::Arena* PROTOBUF_NULLABLE arena, const Impl_& from,
+        const LoadoutSlot& from_msg);
+    ::google::protobuf::internal::HasBits<1> _has_bits_;
+    ::google::protobuf::internal::CachedSize _cached_size_;
+    ::uint64_t selectionmode_;
+    ::uint64_t banner_;
+    ::uint64_t booster_;
+    ::uint64_t bracer_;
+    ::uint64_t chassis_;
+    ::uint64_t decal_;
+    ::uint64_t decal_body_;
+    ::uint64_t emissive_;
+    ::uint64_t emote_;
+    ::uint64_t secondemote_;
+    ::uint64_t goal_fx_;
+    ::uint64_t medal_;
+    ::uint64_t pattern_;
+    ::uint64_t pattern_body_;
+    ::uint64_t pip_;
+    ::uint64_t tag_;
+    ::uint64_t tint_;
+    ::uint64_t tint_alignment_a_;
+    ::uint64_t tint_alignment_b_;
+    ::uint64_t tint_body_;
+    ::uint64_t title_;
+    PROTOBUF_TSAN_DECLARE_MEMBER
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_rtapi_2frealtime_5fv1_2eproto;
+};
+
+extern const ::google::protobuf::internal::ClassDataFull LoadoutSlot_class_data_;
 // -------------------------------------------------------------------
 
 class LoadoutItem final : public ::google::protobuf::Message
@@ -6638,7 +7076,7 @@ class ConnectivityStatisticsMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const ConnectivityStatisticsMessage*>(
         &_ConnectivityStatisticsMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 16;
+  static constexpr int kIndexInFileMessages = 18;
   friend void swap(ConnectivityStatisticsMessage& a, ConnectivityStatisticsMessage& b) { a.Swap(&b); }
   inline void Swap(ConnectivityStatisticsMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -6900,7 +7338,7 @@ class SNSUserServerProfileUpdateSuccessMessage final : public ::google::protobuf
     return *reinterpret_cast<const SNSUserServerProfileUpdateSuccessMessage*>(
         &_SNSUserServerProfileUpdateSuccessMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 58;
+  static constexpr int kIndexInFileMessages = 60;
   friend void swap(SNSUserServerProfileUpdateSuccessMessage& a, SNSUserServerProfileUpdateSuccessMessage& b) { a.Swap(&b); }
   inline void Swap(SNSUserServerProfileUpdateSuccessMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -7095,7 +7533,7 @@ class SNSUserServerProfileUpdateRequestMessage final : public ::google::protobuf
     return *reinterpret_cast<const SNSUserServerProfileUpdateRequestMessage*>(
         &_SNSUserServerProfileUpdateRequestMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 57;
+  static constexpr int kIndexInFileMessages = 59;
   friend void swap(SNSUserServerProfileUpdateRequestMessage& a, SNSUserServerProfileUpdateRequestMessage& b) { a.Swap(&b); }
   inline void Swap(SNSUserServerProfileUpdateRequestMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -7307,7 +7745,7 @@ class SNSUpdateProfileSuccessMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSUpdateProfileSuccessMessage*>(
         &_SNSUpdateProfileSuccessMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 55;
+  static constexpr int kIndexInFileMessages = 57;
   friend void swap(SNSUpdateProfileSuccessMessage& a, SNSUpdateProfileSuccessMessage& b) { a.Swap(&b); }
   inline void Swap(SNSUpdateProfileSuccessMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -7502,7 +7940,7 @@ class SNSUpdateProfileMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSUpdateProfileMessage*>(
         &_SNSUpdateProfileMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 54;
+  static constexpr int kIndexInFileMessages = 56;
   friend void swap(SNSUpdateProfileMessage& a, SNSUpdateProfileMessage& b) { a.Swap(&b); }
   inline void Swap(SNSUpdateProfileMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -7731,7 +8169,7 @@ class SNSUpdateProfileFailureMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSUpdateProfileFailureMessage*>(
         &_SNSUpdateProfileFailureMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 56;
+  static constexpr int kIndexInFileMessages = 58;
   friend void swap(SNSUpdateProfileFailureMessage& a, SNSUpdateProfileFailureMessage& b) { a.Swap(&b); }
   inline void Swap(SNSUpdateProfileFailureMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -7955,7 +8393,7 @@ class SNSUnknownMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSUnknownMessage*>(
         &_SNSUnknownMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 19;
+  static constexpr int kIndexInFileMessages = 21;
   friend void swap(SNSUnknownMessage& a, SNSUnknownMessage& b) { a.Swap(&b); }
   inline void Swap(SNSUnknownMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -8167,7 +8605,7 @@ class SNSRemoteLogSetV3Message final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSRemoteLogSetV3Message*>(
         &_SNSRemoteLogSetV3Message_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 53;
+  static constexpr int kIndexInFileMessages = 55;
   friend void swap(SNSRemoteLogSetV3Message& a, SNSRemoteLogSetV3Message& b) { a.Swap(&b); }
   inline void Swap(SNSRemoteLogSetV3Message* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -8398,7 +8836,7 @@ class SNSReconcileIAPResultMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSReconcileIAPResultMessage*>(
         &_SNSReconcileIAPResultMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 52;
+  static constexpr int kIndexInFileMessages = 54;
   friend void swap(SNSReconcileIAPResultMessage& a, SNSReconcileIAPResultMessage& b) { a.Swap(&b); }
   inline void Swap(SNSReconcileIAPResultMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -8610,7 +9048,7 @@ class SNSReconcileIAPMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSReconcileIAPMessage*>(
         &_SNSReconcileIAPMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 25;
+  static constexpr int kIndexInFileMessages = 27;
   friend void swap(SNSReconcileIAPMessage& a, SNSReconcileIAPMessage& b) { a.Swap(&b); }
   inline void Swap(SNSReconcileIAPMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -8822,7 +9260,7 @@ class SNSOtherUserProfileSuccessMessage final : public ::google::protobuf::Messa
     return *reinterpret_cast<const SNSOtherUserProfileSuccessMessage*>(
         &_SNSOtherUserProfileSuccessMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 51;
+  static constexpr int kIndexInFileMessages = 53;
   friend void swap(SNSOtherUserProfileSuccessMessage& a, SNSOtherUserProfileSuccessMessage& b) { a.Swap(&b); }
   inline void Swap(SNSOtherUserProfileSuccessMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -9034,7 +9472,7 @@ class SNSOtherUserProfileRequestMessage final : public ::google::protobuf::Messa
     return *reinterpret_cast<const SNSOtherUserProfileRequestMessage*>(
         &_SNSOtherUserProfileRequestMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 50;
+  static constexpr int kIndexInFileMessages = 52;
   friend void swap(SNSOtherUserProfileRequestMessage& a, SNSOtherUserProfileRequestMessage& b) { a.Swap(&b); }
   inline void Swap(SNSOtherUserProfileRequestMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -9246,7 +9684,7 @@ class SNSOtherUserProfileFailureMessage final : public ::google::protobuf::Messa
     return *reinterpret_cast<const SNSOtherUserProfileFailureMessage*>(
         &_SNSOtherUserProfileFailureMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 49;
+  static constexpr int kIndexInFileMessages = 51;
   friend void swap(SNSOtherUserProfileFailureMessage& a, SNSOtherUserProfileFailureMessage& b) { a.Swap(&b); }
   inline void Swap(SNSOtherUserProfileFailureMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -9470,7 +9908,7 @@ class SNSLoggedInUserProfileSuccessMessage final : public ::google::protobuf::Me
     return *reinterpret_cast<const SNSLoggedInUserProfileSuccessMessage*>(
         &_SNSLoggedInUserProfileSuccessMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 44;
+  static constexpr int kIndexInFileMessages = 46;
   friend void swap(SNSLoggedInUserProfileSuccessMessage& a, SNSLoggedInUserProfileSuccessMessage& b) { a.Swap(&b); }
   inline void Swap(SNSLoggedInUserProfileSuccessMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -9682,7 +10120,7 @@ class SNSLoggedInUserProfileRequestMessage final : public ::google::protobuf::Me
     return *reinterpret_cast<const SNSLoggedInUserProfileRequestMessage*>(
         &_SNSLoggedInUserProfileRequestMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 43;
+  static constexpr int kIndexInFileMessages = 45;
   friend void swap(SNSLoggedInUserProfileRequestMessage& a, SNSLoggedInUserProfileRequestMessage& b) { a.Swap(&b); }
   inline void Swap(SNSLoggedInUserProfileRequestMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -9911,7 +10349,7 @@ class SNSLoggedInUserProfileFailureMessage final : public ::google::protobuf::Me
     return *reinterpret_cast<const SNSLoggedInUserProfileFailureMessage*>(
         &_SNSLoggedInUserProfileFailureMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 42;
+  static constexpr int kIndexInFileMessages = 44;
   friend void swap(SNSLoggedInUserProfileFailureMessage& a, SNSLoggedInUserProfileFailureMessage& b) { a.Swap(&b); }
   inline void Swap(SNSLoggedInUserProfileFailureMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -10135,7 +10573,7 @@ class SNSLogInSuccessMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSLogInSuccessMessage*>(
         &_SNSLogInSuccessMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 48;
+  static constexpr int kIndexInFileMessages = 50;
   friend void swap(SNSLogInSuccessMessage& a, SNSLogInSuccessMessage& b) { a.Swap(&b); }
   inline void Swap(SNSLogInSuccessMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -10347,7 +10785,7 @@ class SNSLogInRequestV2Message final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSLogInRequestV2Message*>(
         &_SNSLogInRequestV2Message_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 46;
+  static constexpr int kIndexInFileMessages = 48;
   friend void swap(SNSLogInRequestV2Message& a, SNSLogInRequestV2Message& b) { a.Swap(&b); }
   inline void Swap(SNSLogInRequestV2Message* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -10576,7 +11014,7 @@ class SNSLogInFailureMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSLogInFailureMessage*>(
         &_SNSLogInFailureMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 45;
+  static constexpr int kIndexInFileMessages = 47;
   friend void swap(SNSLogInFailureMessage& a, SNSLogInFailureMessage& b) { a.Swap(&b); }
   inline void Swap(SNSLogInFailureMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -10800,7 +11238,7 @@ class SNSLobbyPlayerSessionsRequestV5Message final : public ::google::protobuf::
     return *reinterpret_cast<const SNSLobbyPlayerSessionsRequestV5Message*>(
         &_SNSLobbyPlayerSessionsRequestV5Message_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 39;
+  static constexpr int kIndexInFileMessages = 41;
   friend void swap(SNSLobbyPlayerSessionsRequestV5Message& a, SNSLobbyPlayerSessionsRequestV5Message& b) { a.Swap(&b); }
   inline void Swap(SNSLobbyPlayerSessionsRequestV5Message* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -11065,7 +11503,7 @@ class SNSLobbyJoinSessionRequestV7Message final : public ::google::protobuf::Mes
     return *reinterpret_cast<const SNSLobbyJoinSessionRequestV7Message*>(
         &_SNSLobbyJoinSessionRequestV7Message_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 33;
+  static constexpr int kIndexInFileMessages = 35;
   friend void swap(SNSLobbyJoinSessionRequestV7Message& a, SNSLobbyJoinSessionRequestV7Message& b) { a.Swap(&b); }
   inline void Swap(SNSLobbyJoinSessionRequestV7Message* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -11323,7 +11761,7 @@ class SNSLobbyFindSessionRequestv11Message final : public ::google::protobuf::Me
     return *reinterpret_cast<const SNSLobbyFindSessionRequestv11Message*>(
         &_SNSLobbyFindSessionRequestv11Message_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 32;
+  static constexpr int kIndexInFileMessages = 34;
   friend void swap(SNSLobbyFindSessionRequestv11Message& a, SNSLobbyFindSessionRequestv11Message& b) { a.Swap(&b); }
   inline void Swap(SNSLobbyFindSessionRequestv11Message* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -11656,7 +12094,7 @@ class SNSLobbyCreateSessionRequestV9Message final : public ::google::protobuf::M
     return *reinterpret_cast<const SNSLobbyCreateSessionRequestV9Message*>(
         &_SNSLobbyCreateSessionRequestV9Message_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 31;
+  static constexpr int kIndexInFileMessages = 33;
   friend void swap(SNSLobbyCreateSessionRequestV9Message& a, SNSLobbyCreateSessionRequestV9Message& b) { a.Swap(&b); }
   inline void Swap(SNSLobbyCreateSessionRequestV9Message* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -11972,7 +12410,7 @@ class SNSConfigSuccessV2Message final : public ::google::protobuf::Message
     return *reinterpret_cast<const SNSConfigSuccessV2Message*>(
         &_SNSConfigSuccessV2Message_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 23;
+  static constexpr int kIndexInFileMessages = 25;
   friend void swap(SNSConfigSuccessV2Message& a, SNSConfigSuccessV2Message& b) { a.Swap(&b); }
   inline void Swap(SNSConfigSuccessV2Message* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -12201,7 +12639,7 @@ class LobbySessionStateRawMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const LobbySessionStateRawMessage*>(
         &_LobbySessionStateRawMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 15;
+  static constexpr int kIndexInFileMessages = 17;
   friend void swap(LobbySessionStateRawMessage& a, LobbySessionStateRawMessage& b) { a.Swap(&b); }
   inline void Swap(LobbySessionStateRawMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -12430,7 +12868,7 @@ class LoadoutInstance final : public ::google::protobuf::Message
     return *reinterpret_cast<const LoadoutInstance*>(
         &_LoadoutInstance_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 7;
+  static constexpr int kIndexInFileMessages = 9;
   friend void swap(LoadoutInstance& a, LoadoutInstance& b) { a.Swap(&b); }
   inline void Swap(LoadoutInstance* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -12582,6 +13020,249 @@ class LoadoutInstance final : public ::google::protobuf::Message
 };
 
 extern const ::google::protobuf::internal::ClassDataFull LoadoutInstance_class_data_;
+// -------------------------------------------------------------------
+
+class LoadoutEntry final : public ::google::protobuf::Message
+/* @@protoc_insertion_point(class_definition:realtime.LoadoutEntry) */ {
+ public:
+  inline LoadoutEntry() : LoadoutEntry(nullptr) {}
+  ~LoadoutEntry() PROTOBUF_FINAL;
+
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+  void operator delete(LoadoutEntry* PROTOBUF_NONNULL msg, ::std::destroying_delete_t) {
+    SharedDtor(*msg);
+    ::google::protobuf::internal::SizedDelete(msg, sizeof(LoadoutEntry));
+  }
+#endif
+
+  template <typename = void>
+  explicit PROTOBUF_CONSTEXPR LoadoutEntry(::google::protobuf::internal::ConstantInitialized);
+
+  inline LoadoutEntry(const LoadoutEntry& from) : LoadoutEntry(nullptr, from) {}
+  inline LoadoutEntry(LoadoutEntry&& from) noexcept
+      : LoadoutEntry(nullptr, ::std::move(from)) {}
+  inline LoadoutEntry& operator=(const LoadoutEntry& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline LoadoutEntry& operator=(LoadoutEntry&& from) noexcept {
+    if (this == &from) return *this;
+    if (::google::protobuf::internal::CanMoveWithInternalSwap(GetArena(), from.GetArena())) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  inline const ::google::protobuf::UnknownFieldSet& unknown_fields() const
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.unknown_fields<::google::protobuf::UnknownFieldSet>(::google::protobuf::UnknownFieldSet::default_instance);
+  }
+  inline ::google::protobuf::UnknownFieldSet* PROTOBUF_NONNULL mutable_unknown_fields()
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.mutable_unknown_fields<::google::protobuf::UnknownFieldSet>();
+  }
+
+  static const ::google::protobuf::Descriptor* PROTOBUF_NONNULL descriptor() {
+    return GetDescriptor();
+  }
+  static const ::google::protobuf::Descriptor* PROTOBUF_NONNULL GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::google::protobuf::Reflection* PROTOBUF_NONNULL GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const LoadoutEntry& default_instance() {
+    return *reinterpret_cast<const LoadoutEntry*>(
+        &_LoadoutEntry_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages = 8;
+  friend void swap(LoadoutEntry& a, LoadoutEntry& b) { a.Swap(&b); }
+  inline void Swap(LoadoutEntry* PROTOBUF_NONNULL other) {
+    if (other == this) return;
+    if (::google::protobuf::internal::CanUseInternalSwap(GetArena(), other->GetArena())) {
+      InternalSwap(other);
+    } else {
+      ::google::protobuf::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(LoadoutEntry* PROTOBUF_NONNULL other) {
+    if (other == this) return;
+    ABSL_DCHECK(GetArena() == other->GetArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  LoadoutEntry* PROTOBUF_NONNULL New(::google::protobuf::Arena* PROTOBUF_NULLABLE arena = nullptr) const {
+    return ::google::protobuf::Message::DefaultConstruct<LoadoutEntry>(arena);
+  }
+  using ::google::protobuf::Message::CopyFrom;
+  void CopyFrom(const LoadoutEntry& from);
+  using ::google::protobuf::Message::MergeFrom;
+  void MergeFrom(const LoadoutEntry& from) { LoadoutEntry::MergeImpl(*this, from); }
+
+  private:
+  static void MergeImpl(::google::protobuf::MessageLite& to_msg,
+                        const ::google::protobuf::MessageLite& from_msg);
+
+  public:
+  bool IsInitialized() const {
+    return true;
+  }
+  ABSL_ATTRIBUTE_REINITIALIZES void Clear() PROTOBUF_FINAL;
+  #if defined(PROTOBUF_CUSTOM_VTABLE)
+  private:
+  static ::size_t ByteSizeLong(const ::google::protobuf::MessageLite& msg);
+  static ::uint8_t* PROTOBUF_NONNULL _InternalSerialize(
+      const ::google::protobuf::MessageLite& msg, ::uint8_t* PROTOBUF_NONNULL target,
+      ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream);
+
+  public:
+  ::size_t ByteSizeLong() const { return ByteSizeLong(*this); }
+  ::uint8_t* PROTOBUF_NONNULL _InternalSerialize(
+      ::uint8_t* PROTOBUF_NONNULL target,
+      ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) const {
+    return _InternalSerialize(*this, target, stream);
+  }
+  #else   // PROTOBUF_CUSTOM_VTABLE
+  ::size_t ByteSizeLong() const final;
+  ::uint8_t* PROTOBUF_NONNULL _InternalSerialize(
+      ::uint8_t* PROTOBUF_NONNULL target,
+      ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) const final;
+  #endif  // PROTOBUF_CUSTOM_VTABLE
+  int GetCachedSize() const { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  static void SharedDtor(MessageLite& self);
+  void InternalSwap(LoadoutEntry* PROTOBUF_NONNULL other);
+ private:
+  template <typename T>
+  friend ::absl::string_view(::google::protobuf::internal::GetAnyMessageName)();
+  static ::absl::string_view FullMessageName() { return "realtime.LoadoutEntry"; }
+
+  explicit LoadoutEntry(::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  LoadoutEntry(::google::protobuf::Arena* PROTOBUF_NULLABLE arena, const LoadoutEntry& from);
+  LoadoutEntry(
+      ::google::protobuf::Arena* PROTOBUF_NULLABLE arena, LoadoutEntry&& from) noexcept
+      : LoadoutEntry(arena) {
+    *this = ::std::move(from);
+  }
+  const ::google::protobuf::internal::ClassData* PROTOBUF_NONNULL GetClassData() const PROTOBUF_FINAL;
+  static void* PROTOBUF_NONNULL PlacementNew_(
+      const void* PROTOBUF_NONNULL, void* PROTOBUF_NONNULL mem,
+      ::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  static constexpr auto InternalNewImpl_();
+
+ public:
+  static constexpr auto InternalGenerateClassData_();
+
+  ::google::protobuf::Metadata GetMetadata() const;
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+  enum : int {
+    kLoadoutFieldNumber = 5,
+    kBodytypeFieldNumber = 1,
+    kTeamidFieldNumber = 2,
+    kAiroleFieldNumber = 3,
+    kXfFieldNumber = 4,
+  };
+  // .realtime.LoadoutSlot loadout = 5 [json_name = "loadout"];
+  bool has_loadout() const;
+  void clear_loadout() ;
+  const ::realtime::LoadoutSlot& loadout() const;
+  [[nodiscard]] ::realtime::LoadoutSlot* PROTOBUF_NULLABLE release_loadout();
+  ::realtime::LoadoutSlot* PROTOBUF_NONNULL mutable_loadout();
+  void set_allocated_loadout(::realtime::LoadoutSlot* PROTOBUF_NULLABLE value);
+  void unsafe_arena_set_allocated_loadout(::realtime::LoadoutSlot* PROTOBUF_NULLABLE value);
+  ::realtime::LoadoutSlot* PROTOBUF_NULLABLE unsafe_arena_release_loadout();
+
+  private:
+  const ::realtime::LoadoutSlot& _internal_loadout() const;
+  ::realtime::LoadoutSlot* PROTOBUF_NONNULL _internal_mutable_loadout();
+
+  public:
+  // fixed64 bodytype = 1 [json_name = "bodytype"];
+  void clear_bodytype() ;
+  ::uint64_t bodytype() const;
+  void set_bodytype(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_bodytype() const;
+  void _internal_set_bodytype(::uint64_t value);
+
+  public:
+  // uint32 teamid = 2 [json_name = "teamid"];
+  void clear_teamid() ;
+  ::uint32_t teamid() const;
+  void set_teamid(::uint32_t value);
+
+  private:
+  ::uint32_t _internal_teamid() const;
+  void _internal_set_teamid(::uint32_t value);
+
+  public:
+  // uint32 airole = 3 [json_name = "airole"];
+  void clear_airole() ;
+  ::uint32_t airole() const;
+  void set_airole(::uint32_t value);
+
+  private:
+  ::uint32_t _internal_airole() const;
+  void _internal_set_airole(::uint32_t value);
+
+  public:
+  // fixed64 xf = 4 [json_name = "xf"];
+  void clear_xf() ;
+  ::uint64_t xf() const;
+  void set_xf(::uint64_t value);
+
+  private:
+  ::uint64_t _internal_xf() const;
+  void _internal_set_xf(::uint64_t value);
+
+  public:
+  // @@protoc_insertion_point(class_scope:realtime.LoadoutEntry)
+ private:
+  class _Internal;
+  friend class ::google::protobuf::internal::TcParser;
+  static const ::google::protobuf::internal::TcParseTable<3, 5,
+                                   1, 0,
+                                   2>
+      _table_;
+
+  friend class ::google::protobuf::MessageLite;
+  friend class ::google::protobuf::Arena;
+  template <typename T>
+  friend class ::google::protobuf::Arena::InternalHelper;
+  using InternalArenaConstructable_ = void;
+  using DestructorSkippable_ = void;
+  struct Impl_ {
+    inline explicit constexpr Impl_(::google::protobuf::internal::ConstantInitialized) noexcept;
+    inline explicit Impl_(
+        ::google::protobuf::internal::InternalVisibility visibility,
+        ::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+    inline explicit Impl_(
+        ::google::protobuf::internal::InternalVisibility visibility,
+        ::google::protobuf::Arena* PROTOBUF_NULLABLE arena, const Impl_& from,
+        const LoadoutEntry& from_msg);
+    ::google::protobuf::internal::HasBits<1> _has_bits_;
+    ::google::protobuf::internal::CachedSize _cached_size_;
+    ::realtime::LoadoutSlot* PROTOBUF_NULLABLE loadout_;
+    ::uint64_t bodytype_;
+    ::uint32_t teamid_;
+    ::uint32_t airole_;
+    ::uint64_t xf_;
+    PROTOBUF_TSAN_DECLARE_MEMBER
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_rtapi_2frealtime_5fv1_2eproto;
+};
+
+extern const ::google::protobuf::internal::ClassDataFull LoadoutEntry_class_data_;
 // -------------------------------------------------------------------
 
 class Error final : public ::google::protobuf::Message
@@ -12890,7 +13571,7 @@ class GameServerSaveLoadoutMessage final : public ::google::protobuf::Message
     return *reinterpret_cast<const GameServerSaveLoadoutMessage*>(
         &_GameServerSaveLoadoutMessage_default_instance_);
   }
-  static constexpr int kIndexInFileMessages = 8;
+  static constexpr int kIndexInFileMessages = 10;
   friend void swap(GameServerSaveLoadoutMessage& a, GameServerSaveLoadoutMessage& b) { a.Swap(&b); }
   inline void Swap(GameServerSaveLoadoutMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -12980,6 +13661,7 @@ class GameServerSaveLoadoutMessage final : public ::google::protobuf::Message
     kLoadoutInstancesFieldNumber = 5,
     kLobbySessionIdFieldNumber = 1,
     kEntrantIdFieldNumber = 2,
+    kLoadoutEntryFieldNumber = 6,
     kLoadoutSlotFieldNumber = 3,
     kJerseyNumberFieldNumber = 4,
   };
@@ -13030,6 +13712,21 @@ class GameServerSaveLoadoutMessage final : public ::google::protobuf::Message
   ::std::string* PROTOBUF_NONNULL _internal_mutable_entrant_id();
 
   public:
+  // .realtime.LoadoutEntry loadout_entry = 6 [json_name = "loadoutEntry"];
+  bool has_loadout_entry() const;
+  void clear_loadout_entry() ;
+  const ::realtime::LoadoutEntry& loadout_entry() const;
+  [[nodiscard]] ::realtime::LoadoutEntry* PROTOBUF_NULLABLE release_loadout_entry();
+  ::realtime::LoadoutEntry* PROTOBUF_NONNULL mutable_loadout_entry();
+  void set_allocated_loadout_entry(::realtime::LoadoutEntry* PROTOBUF_NULLABLE value);
+  void unsafe_arena_set_allocated_loadout_entry(::realtime::LoadoutEntry* PROTOBUF_NULLABLE value);
+  ::realtime::LoadoutEntry* PROTOBUF_NULLABLE unsafe_arena_release_loadout_entry();
+
+  private:
+  const ::realtime::LoadoutEntry& _internal_loadout_entry() const;
+  ::realtime::LoadoutEntry* PROTOBUF_NONNULL _internal_mutable_loadout_entry();
+
+  public:
   // int32 loadout_slot = 3 [json_name = "loadoutSlot"];
   void clear_loadout_slot() ;
   ::int32_t loadout_slot() const;
@@ -13054,8 +13751,8 @@ class GameServerSaveLoadoutMessage final : public ::google::protobuf::Message
  private:
   class _Internal;
   friend class ::google::protobuf::internal::TcParser;
-  static const ::google::protobuf::internal::TcParseTable<3, 5,
-                                   1, 72,
+  static const ::google::protobuf::internal::TcParseTable<3, 6,
+                                   2, 72,
                                    2>
       _table_;
 
@@ -13079,6 +13776,7 @@ class GameServerSaveLoadoutMessage final : public ::google::protobuf::Message
     ::google::protobuf::RepeatedPtrField< ::realtime::LoadoutInstance > loadout_instances_;
     ::google::protobuf::internal::ArenaStringPtr lobby_session_id_;
     ::google::protobuf::internal::ArenaStringPtr entrant_id_;
+    ::realtime::LoadoutEntry* PROTOBUF_NULLABLE loadout_entry_;
     ::int32_t loadout_slot_;
     ::int32_t jersey_number_;
     PROTOBUF_TSAN_DECLARE_MEMBER
@@ -13150,7 +13848,7 @@ class LobbySessionStateMessage final : public ::google::protobuf::Message
     kSessionState = 4,
     STATE_NOT_SET = 0,
   };
-  static constexpr int kIndexInFileMessages = 14;
+  static constexpr int kIndexInFileMessages = 16;
   friend void swap(LobbySessionStateMessage& a, LobbySessionStateMessage& b) { a.Swap(&b); }
   inline void Swap(LobbySessionStateMessage* PROTOBUF_NONNULL other) {
     if (other == this) return;
@@ -19802,6 +20500,738 @@ inline void LoadoutItem::_internal_set_equipped_item(::uint64_t value) {
 
 // -------------------------------------------------------------------
 
+// LoadoutSlot
+
+// fixed64 selectionmode = 1 [json_name = "selectionmode"];
+inline void LoadoutSlot::clear_selectionmode() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.selectionmode_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000001U);
+}
+inline ::uint64_t LoadoutSlot::selectionmode() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.selectionmode)
+  return _internal_selectionmode();
+}
+inline void LoadoutSlot::set_selectionmode(::uint64_t value) {
+  _internal_set_selectionmode(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000001U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.selectionmode)
+}
+inline ::uint64_t LoadoutSlot::_internal_selectionmode() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.selectionmode_;
+}
+inline void LoadoutSlot::_internal_set_selectionmode(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.selectionmode_ = value;
+}
+
+// fixed64 banner = 2 [json_name = "banner"];
+inline void LoadoutSlot::clear_banner() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.banner_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000002U);
+}
+inline ::uint64_t LoadoutSlot::banner() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.banner)
+  return _internal_banner();
+}
+inline void LoadoutSlot::set_banner(::uint64_t value) {
+  _internal_set_banner(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000002U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.banner)
+}
+inline ::uint64_t LoadoutSlot::_internal_banner() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.banner_;
+}
+inline void LoadoutSlot::_internal_set_banner(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.banner_ = value;
+}
+
+// fixed64 booster = 3 [json_name = "booster"];
+inline void LoadoutSlot::clear_booster() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.booster_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000004U);
+}
+inline ::uint64_t LoadoutSlot::booster() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.booster)
+  return _internal_booster();
+}
+inline void LoadoutSlot::set_booster(::uint64_t value) {
+  _internal_set_booster(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000004U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.booster)
+}
+inline ::uint64_t LoadoutSlot::_internal_booster() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.booster_;
+}
+inline void LoadoutSlot::_internal_set_booster(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.booster_ = value;
+}
+
+// fixed64 bracer = 4 [json_name = "bracer"];
+inline void LoadoutSlot::clear_bracer() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.bracer_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000008U);
+}
+inline ::uint64_t LoadoutSlot::bracer() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.bracer)
+  return _internal_bracer();
+}
+inline void LoadoutSlot::set_bracer(::uint64_t value) {
+  _internal_set_bracer(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000008U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.bracer)
+}
+inline ::uint64_t LoadoutSlot::_internal_bracer() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.bracer_;
+}
+inline void LoadoutSlot::_internal_set_bracer(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.bracer_ = value;
+}
+
+// fixed64 chassis = 5 [json_name = "chassis"];
+inline void LoadoutSlot::clear_chassis() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.chassis_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000010U);
+}
+inline ::uint64_t LoadoutSlot::chassis() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.chassis)
+  return _internal_chassis();
+}
+inline void LoadoutSlot::set_chassis(::uint64_t value) {
+  _internal_set_chassis(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000010U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.chassis)
+}
+inline ::uint64_t LoadoutSlot::_internal_chassis() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.chassis_;
+}
+inline void LoadoutSlot::_internal_set_chassis(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.chassis_ = value;
+}
+
+// fixed64 decal = 6 [json_name = "decal"];
+inline void LoadoutSlot::clear_decal() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.decal_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000020U);
+}
+inline ::uint64_t LoadoutSlot::decal() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.decal)
+  return _internal_decal();
+}
+inline void LoadoutSlot::set_decal(::uint64_t value) {
+  _internal_set_decal(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000020U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.decal)
+}
+inline ::uint64_t LoadoutSlot::_internal_decal() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.decal_;
+}
+inline void LoadoutSlot::_internal_set_decal(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.decal_ = value;
+}
+
+// fixed64 decal_body = 7 [json_name = "decalBody"];
+inline void LoadoutSlot::clear_decal_body() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.decal_body_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000040U);
+}
+inline ::uint64_t LoadoutSlot::decal_body() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.decal_body)
+  return _internal_decal_body();
+}
+inline void LoadoutSlot::set_decal_body(::uint64_t value) {
+  _internal_set_decal_body(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000040U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.decal_body)
+}
+inline ::uint64_t LoadoutSlot::_internal_decal_body() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.decal_body_;
+}
+inline void LoadoutSlot::_internal_set_decal_body(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.decal_body_ = value;
+}
+
+// fixed64 emissive = 8 [json_name = "emissive"];
+inline void LoadoutSlot::clear_emissive() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.emissive_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000080U);
+}
+inline ::uint64_t LoadoutSlot::emissive() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.emissive)
+  return _internal_emissive();
+}
+inline void LoadoutSlot::set_emissive(::uint64_t value) {
+  _internal_set_emissive(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000080U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.emissive)
+}
+inline ::uint64_t LoadoutSlot::_internal_emissive() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.emissive_;
+}
+inline void LoadoutSlot::_internal_set_emissive(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.emissive_ = value;
+}
+
+// fixed64 emote = 9 [json_name = "emote"];
+inline void LoadoutSlot::clear_emote() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.emote_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000100U);
+}
+inline ::uint64_t LoadoutSlot::emote() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.emote)
+  return _internal_emote();
+}
+inline void LoadoutSlot::set_emote(::uint64_t value) {
+  _internal_set_emote(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000100U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.emote)
+}
+inline ::uint64_t LoadoutSlot::_internal_emote() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.emote_;
+}
+inline void LoadoutSlot::_internal_set_emote(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.emote_ = value;
+}
+
+// fixed64 secondemote = 10 [json_name = "secondemote"];
+inline void LoadoutSlot::clear_secondemote() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.secondemote_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000200U);
+}
+inline ::uint64_t LoadoutSlot::secondemote() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.secondemote)
+  return _internal_secondemote();
+}
+inline void LoadoutSlot::set_secondemote(::uint64_t value) {
+  _internal_set_secondemote(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000200U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.secondemote)
+}
+inline ::uint64_t LoadoutSlot::_internal_secondemote() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.secondemote_;
+}
+inline void LoadoutSlot::_internal_set_secondemote(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.secondemote_ = value;
+}
+
+// fixed64 goal_fx = 11 [json_name = "goalFx"];
+inline void LoadoutSlot::clear_goal_fx() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.goal_fx_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000400U);
+}
+inline ::uint64_t LoadoutSlot::goal_fx() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.goal_fx)
+  return _internal_goal_fx();
+}
+inline void LoadoutSlot::set_goal_fx(::uint64_t value) {
+  _internal_set_goal_fx(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000400U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.goal_fx)
+}
+inline ::uint64_t LoadoutSlot::_internal_goal_fx() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.goal_fx_;
+}
+inline void LoadoutSlot::_internal_set_goal_fx(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.goal_fx_ = value;
+}
+
+// fixed64 medal = 12 [json_name = "medal"];
+inline void LoadoutSlot::clear_medal() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.medal_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000800U);
+}
+inline ::uint64_t LoadoutSlot::medal() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.medal)
+  return _internal_medal();
+}
+inline void LoadoutSlot::set_medal(::uint64_t value) {
+  _internal_set_medal(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000800U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.medal)
+}
+inline ::uint64_t LoadoutSlot::_internal_medal() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.medal_;
+}
+inline void LoadoutSlot::_internal_set_medal(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.medal_ = value;
+}
+
+// fixed64 pattern = 13 [json_name = "pattern"];
+inline void LoadoutSlot::clear_pattern() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.pattern_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00001000U);
+}
+inline ::uint64_t LoadoutSlot::pattern() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.pattern)
+  return _internal_pattern();
+}
+inline void LoadoutSlot::set_pattern(::uint64_t value) {
+  _internal_set_pattern(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00001000U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.pattern)
+}
+inline ::uint64_t LoadoutSlot::_internal_pattern() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.pattern_;
+}
+inline void LoadoutSlot::_internal_set_pattern(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.pattern_ = value;
+}
+
+// fixed64 pattern_body = 14 [json_name = "patternBody"];
+inline void LoadoutSlot::clear_pattern_body() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.pattern_body_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00002000U);
+}
+inline ::uint64_t LoadoutSlot::pattern_body() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.pattern_body)
+  return _internal_pattern_body();
+}
+inline void LoadoutSlot::set_pattern_body(::uint64_t value) {
+  _internal_set_pattern_body(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00002000U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.pattern_body)
+}
+inline ::uint64_t LoadoutSlot::_internal_pattern_body() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.pattern_body_;
+}
+inline void LoadoutSlot::_internal_set_pattern_body(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.pattern_body_ = value;
+}
+
+// fixed64 pip = 15 [json_name = "pip"];
+inline void LoadoutSlot::clear_pip() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.pip_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00004000U);
+}
+inline ::uint64_t LoadoutSlot::pip() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.pip)
+  return _internal_pip();
+}
+inline void LoadoutSlot::set_pip(::uint64_t value) {
+  _internal_set_pip(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00004000U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.pip)
+}
+inline ::uint64_t LoadoutSlot::_internal_pip() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.pip_;
+}
+inline void LoadoutSlot::_internal_set_pip(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.pip_ = value;
+}
+
+// fixed64 tag = 16 [json_name = "tag"];
+inline void LoadoutSlot::clear_tag() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.tag_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00008000U);
+}
+inline ::uint64_t LoadoutSlot::tag() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.tag)
+  return _internal_tag();
+}
+inline void LoadoutSlot::set_tag(::uint64_t value) {
+  _internal_set_tag(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00008000U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.tag)
+}
+inline ::uint64_t LoadoutSlot::_internal_tag() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.tag_;
+}
+inline void LoadoutSlot::_internal_set_tag(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.tag_ = value;
+}
+
+// fixed64 tint = 17 [json_name = "tint"];
+inline void LoadoutSlot::clear_tint() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.tint_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00010000U);
+}
+inline ::uint64_t LoadoutSlot::tint() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.tint)
+  return _internal_tint();
+}
+inline void LoadoutSlot::set_tint(::uint64_t value) {
+  _internal_set_tint(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00010000U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.tint)
+}
+inline ::uint64_t LoadoutSlot::_internal_tint() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.tint_;
+}
+inline void LoadoutSlot::_internal_set_tint(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.tint_ = value;
+}
+
+// fixed64 tint_alignment_a = 18 [json_name = "tintAlignmentA"];
+inline void LoadoutSlot::clear_tint_alignment_a() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.tint_alignment_a_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00020000U);
+}
+inline ::uint64_t LoadoutSlot::tint_alignment_a() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.tint_alignment_a)
+  return _internal_tint_alignment_a();
+}
+inline void LoadoutSlot::set_tint_alignment_a(::uint64_t value) {
+  _internal_set_tint_alignment_a(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00020000U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.tint_alignment_a)
+}
+inline ::uint64_t LoadoutSlot::_internal_tint_alignment_a() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.tint_alignment_a_;
+}
+inline void LoadoutSlot::_internal_set_tint_alignment_a(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.tint_alignment_a_ = value;
+}
+
+// fixed64 tint_alignment_b = 19 [json_name = "tintAlignmentB"];
+inline void LoadoutSlot::clear_tint_alignment_b() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.tint_alignment_b_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00040000U);
+}
+inline ::uint64_t LoadoutSlot::tint_alignment_b() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.tint_alignment_b)
+  return _internal_tint_alignment_b();
+}
+inline void LoadoutSlot::set_tint_alignment_b(::uint64_t value) {
+  _internal_set_tint_alignment_b(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00040000U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.tint_alignment_b)
+}
+inline ::uint64_t LoadoutSlot::_internal_tint_alignment_b() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.tint_alignment_b_;
+}
+inline void LoadoutSlot::_internal_set_tint_alignment_b(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.tint_alignment_b_ = value;
+}
+
+// fixed64 tint_body = 20 [json_name = "tintBody"];
+inline void LoadoutSlot::clear_tint_body() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.tint_body_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00080000U);
+}
+inline ::uint64_t LoadoutSlot::tint_body() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.tint_body)
+  return _internal_tint_body();
+}
+inline void LoadoutSlot::set_tint_body(::uint64_t value) {
+  _internal_set_tint_body(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00080000U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.tint_body)
+}
+inline ::uint64_t LoadoutSlot::_internal_tint_body() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.tint_body_;
+}
+inline void LoadoutSlot::_internal_set_tint_body(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.tint_body_ = value;
+}
+
+// fixed64 title = 21 [json_name = "title"];
+inline void LoadoutSlot::clear_title() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.title_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00100000U);
+}
+inline ::uint64_t LoadoutSlot::title() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutSlot.title)
+  return _internal_title();
+}
+inline void LoadoutSlot::set_title(::uint64_t value) {
+  _internal_set_title(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00100000U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutSlot.title)
+}
+inline ::uint64_t LoadoutSlot::_internal_title() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.title_;
+}
+inline void LoadoutSlot::_internal_set_title(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.title_ = value;
+}
+
+// -------------------------------------------------------------------
+
+// LoadoutEntry
+
+// fixed64 bodytype = 1 [json_name = "bodytype"];
+inline void LoadoutEntry::clear_bodytype() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.bodytype_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000002U);
+}
+inline ::uint64_t LoadoutEntry::bodytype() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutEntry.bodytype)
+  return _internal_bodytype();
+}
+inline void LoadoutEntry::set_bodytype(::uint64_t value) {
+  _internal_set_bodytype(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000002U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutEntry.bodytype)
+}
+inline ::uint64_t LoadoutEntry::_internal_bodytype() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.bodytype_;
+}
+inline void LoadoutEntry::_internal_set_bodytype(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.bodytype_ = value;
+}
+
+// uint32 teamid = 2 [json_name = "teamid"];
+inline void LoadoutEntry::clear_teamid() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.teamid_ = 0u;
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000004U);
+}
+inline ::uint32_t LoadoutEntry::teamid() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutEntry.teamid)
+  return _internal_teamid();
+}
+inline void LoadoutEntry::set_teamid(::uint32_t value) {
+  _internal_set_teamid(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000004U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutEntry.teamid)
+}
+inline ::uint32_t LoadoutEntry::_internal_teamid() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.teamid_;
+}
+inline void LoadoutEntry::_internal_set_teamid(::uint32_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.teamid_ = value;
+}
+
+// uint32 airole = 3 [json_name = "airole"];
+inline void LoadoutEntry::clear_airole() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.airole_ = 0u;
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000008U);
+}
+inline ::uint32_t LoadoutEntry::airole() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutEntry.airole)
+  return _internal_airole();
+}
+inline void LoadoutEntry::set_airole(::uint32_t value) {
+  _internal_set_airole(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000008U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutEntry.airole)
+}
+inline ::uint32_t LoadoutEntry::_internal_airole() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.airole_;
+}
+inline void LoadoutEntry::_internal_set_airole(::uint32_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.airole_ = value;
+}
+
+// fixed64 xf = 4 [json_name = "xf"];
+inline void LoadoutEntry::clear_xf() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.xf_ = ::uint64_t{0u};
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000010U);
+}
+inline ::uint64_t LoadoutEntry::xf() const {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutEntry.xf)
+  return _internal_xf();
+}
+inline void LoadoutEntry::set_xf(::uint64_t value) {
+  _internal_set_xf(value);
+  SetHasBit(_impl_._has_bits_[0], 0x00000010U);
+  // @@protoc_insertion_point(field_set:realtime.LoadoutEntry.xf)
+}
+inline ::uint64_t LoadoutEntry::_internal_xf() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.xf_;
+}
+inline void LoadoutEntry::_internal_set_xf(::uint64_t value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.xf_ = value;
+}
+
+// .realtime.LoadoutSlot loadout = 5 [json_name = "loadout"];
+inline bool LoadoutEntry::has_loadout() const {
+  bool value = CheckHasBit(_impl_._has_bits_[0], 0x00000001U);
+  PROTOBUF_ASSUME(!value || _impl_.loadout_ != nullptr);
+  return value;
+}
+inline void LoadoutEntry::clear_loadout() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  if (_impl_.loadout_ != nullptr) _impl_.loadout_->Clear();
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000001U);
+}
+inline const ::realtime::LoadoutSlot& LoadoutEntry::_internal_loadout() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  const ::realtime::LoadoutSlot* p = _impl_.loadout_;
+  return p != nullptr ? *p : reinterpret_cast<const ::realtime::LoadoutSlot&>(::realtime::_LoadoutSlot_default_instance_);
+}
+inline const ::realtime::LoadoutSlot& LoadoutEntry::loadout() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:realtime.LoadoutEntry.loadout)
+  return _internal_loadout();
+}
+inline void LoadoutEntry::unsafe_arena_set_allocated_loadout(
+    ::realtime::LoadoutSlot* PROTOBUF_NULLABLE value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  if (GetArena() == nullptr) {
+    delete reinterpret_cast<::google::protobuf::MessageLite*>(_impl_.loadout_);
+  }
+  _impl_.loadout_ = reinterpret_cast<::realtime::LoadoutSlot*>(value);
+  if (value != nullptr) {
+    SetHasBit(_impl_._has_bits_[0], 0x00000001U);
+  } else {
+    ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
+  }
+  // @@protoc_insertion_point(field_unsafe_arena_set_allocated:realtime.LoadoutEntry.loadout)
+}
+inline ::realtime::LoadoutSlot* PROTOBUF_NULLABLE LoadoutEntry::release_loadout() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+
+  ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
+  ::realtime::LoadoutSlot* released = _impl_.loadout_;
+  _impl_.loadout_ = nullptr;
+  if (::google::protobuf::internal::DebugHardenForceCopyInRelease()) {
+    auto* old = reinterpret_cast<::google::protobuf::MessageLite*>(released);
+    released = ::google::protobuf::internal::DuplicateIfNonNull(released);
+    if (GetArena() == nullptr) {
+      delete old;
+    }
+  } else {
+    if (GetArena() != nullptr) {
+      released = ::google::protobuf::internal::DuplicateIfNonNull(released);
+    }
+  }
+  return released;
+}
+inline ::realtime::LoadoutSlot* PROTOBUF_NULLABLE LoadoutEntry::unsafe_arena_release_loadout() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:realtime.LoadoutEntry.loadout)
+
+  ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
+  ::realtime::LoadoutSlot* temp = _impl_.loadout_;
+  _impl_.loadout_ = nullptr;
+  return temp;
+}
+inline ::realtime::LoadoutSlot* PROTOBUF_NONNULL LoadoutEntry::_internal_mutable_loadout() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  if (_impl_.loadout_ == nullptr) {
+    auto* p = ::google::protobuf::Message::DefaultConstruct<::realtime::LoadoutSlot>(GetArena());
+    _impl_.loadout_ = reinterpret_cast<::realtime::LoadoutSlot*>(p);
+  }
+  return _impl_.loadout_;
+}
+inline ::realtime::LoadoutSlot* PROTOBUF_NONNULL LoadoutEntry::mutable_loadout()
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  SetHasBit(_impl_._has_bits_[0], 0x00000001U);
+  ::realtime::LoadoutSlot* _msg = _internal_mutable_loadout();
+  // @@protoc_insertion_point(field_mutable:realtime.LoadoutEntry.loadout)
+  return _msg;
+}
+inline void LoadoutEntry::set_allocated_loadout(::realtime::LoadoutSlot* PROTOBUF_NULLABLE value) {
+  ::google::protobuf::Arena* message_arena = GetArena();
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  if (message_arena == nullptr) {
+    delete reinterpret_cast<::google::protobuf::MessageLite*>(_impl_.loadout_);
+  }
+
+  if (value != nullptr) {
+    ::google::protobuf::Arena* submessage_arena = value->GetArena();
+    if (message_arena != submessage_arena) {
+      value = ::google::protobuf::internal::GetOwnedMessage(message_arena, value, submessage_arena);
+    }
+    SetHasBit(_impl_._has_bits_[0], 0x00000001U);
+  } else {
+    ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
+  }
+
+  _impl_.loadout_ = reinterpret_cast<::realtime::LoadoutSlot*>(value);
+  // @@protoc_insertion_point(field_set_allocated:realtime.LoadoutEntry.loadout)
+}
+
+// -------------------------------------------------------------------
+
 // LoadoutInstance
 
 // fixed64 instance_name = 1 [json_name = "instanceName"];
@@ -20024,7 +21454,7 @@ inline void GameServerSaveLoadoutMessage::clear_loadout_slot() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   _impl_.loadout_slot_ = 0;
   ClearHasBit(_impl_._has_bits_[0],
-                  0x00000008U);
+                  0x00000010U);
 }
 inline ::int32_t GameServerSaveLoadoutMessage::loadout_slot() const {
   // @@protoc_insertion_point(field_get:realtime.GameServerSaveLoadoutMessage.loadout_slot)
@@ -20032,7 +21462,7 @@ inline ::int32_t GameServerSaveLoadoutMessage::loadout_slot() const {
 }
 inline void GameServerSaveLoadoutMessage::set_loadout_slot(::int32_t value) {
   _internal_set_loadout_slot(value);
-  SetHasBit(_impl_._has_bits_[0], 0x00000008U);
+  SetHasBit(_impl_._has_bits_[0], 0x00000010U);
   // @@protoc_insertion_point(field_set:realtime.GameServerSaveLoadoutMessage.loadout_slot)
 }
 inline ::int32_t GameServerSaveLoadoutMessage::_internal_loadout_slot() const {
@@ -20049,7 +21479,7 @@ inline void GameServerSaveLoadoutMessage::clear_jersey_number() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   _impl_.jersey_number_ = 0;
   ClearHasBit(_impl_._has_bits_[0],
-                  0x00000010U);
+                  0x00000020U);
 }
 inline ::int32_t GameServerSaveLoadoutMessage::jersey_number() const {
   // @@protoc_insertion_point(field_get:realtime.GameServerSaveLoadoutMessage.jersey_number)
@@ -20057,7 +21487,7 @@ inline ::int32_t GameServerSaveLoadoutMessage::jersey_number() const {
 }
 inline void GameServerSaveLoadoutMessage::set_jersey_number(::int32_t value) {
   _internal_set_jersey_number(value);
-  SetHasBit(_impl_._has_bits_[0], 0x00000010U);
+  SetHasBit(_impl_._has_bits_[0], 0x00000020U);
   // @@protoc_insertion_point(field_set:realtime.GameServerSaveLoadoutMessage.jersey_number)
 }
 inline ::int32_t GameServerSaveLoadoutMessage::_internal_jersey_number() const {
@@ -20123,6 +21553,105 @@ inline ::google::protobuf::RepeatedPtrField<::realtime::LoadoutInstance>* PROTOB
 GameServerSaveLoadoutMessage::_internal_mutable_loadout_instances() {
   ::google::protobuf::internal::TSanRead(&_impl_);
   return &_impl_.loadout_instances_;
+}
+
+// .realtime.LoadoutEntry loadout_entry = 6 [json_name = "loadoutEntry"];
+inline bool GameServerSaveLoadoutMessage::has_loadout_entry() const {
+  bool value = CheckHasBit(_impl_._has_bits_[0], 0x00000008U);
+  PROTOBUF_ASSUME(!value || _impl_.loadout_entry_ != nullptr);
+  return value;
+}
+inline void GameServerSaveLoadoutMessage::clear_loadout_entry() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  if (_impl_.loadout_entry_ != nullptr) _impl_.loadout_entry_->Clear();
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000008U);
+}
+inline const ::realtime::LoadoutEntry& GameServerSaveLoadoutMessage::_internal_loadout_entry() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  const ::realtime::LoadoutEntry* p = _impl_.loadout_entry_;
+  return p != nullptr ? *p : reinterpret_cast<const ::realtime::LoadoutEntry&>(::realtime::_LoadoutEntry_default_instance_);
+}
+inline const ::realtime::LoadoutEntry& GameServerSaveLoadoutMessage::loadout_entry() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:realtime.GameServerSaveLoadoutMessage.loadout_entry)
+  return _internal_loadout_entry();
+}
+inline void GameServerSaveLoadoutMessage::unsafe_arena_set_allocated_loadout_entry(
+    ::realtime::LoadoutEntry* PROTOBUF_NULLABLE value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  if (GetArena() == nullptr) {
+    delete reinterpret_cast<::google::protobuf::MessageLite*>(_impl_.loadout_entry_);
+  }
+  _impl_.loadout_entry_ = reinterpret_cast<::realtime::LoadoutEntry*>(value);
+  if (value != nullptr) {
+    SetHasBit(_impl_._has_bits_[0], 0x00000008U);
+  } else {
+    ClearHasBit(_impl_._has_bits_[0], 0x00000008U);
+  }
+  // @@protoc_insertion_point(field_unsafe_arena_set_allocated:realtime.GameServerSaveLoadoutMessage.loadout_entry)
+}
+inline ::realtime::LoadoutEntry* PROTOBUF_NULLABLE GameServerSaveLoadoutMessage::release_loadout_entry() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+
+  ClearHasBit(_impl_._has_bits_[0], 0x00000008U);
+  ::realtime::LoadoutEntry* released = _impl_.loadout_entry_;
+  _impl_.loadout_entry_ = nullptr;
+  if (::google::protobuf::internal::DebugHardenForceCopyInRelease()) {
+    auto* old = reinterpret_cast<::google::protobuf::MessageLite*>(released);
+    released = ::google::protobuf::internal::DuplicateIfNonNull(released);
+    if (GetArena() == nullptr) {
+      delete old;
+    }
+  } else {
+    if (GetArena() != nullptr) {
+      released = ::google::protobuf::internal::DuplicateIfNonNull(released);
+    }
+  }
+  return released;
+}
+inline ::realtime::LoadoutEntry* PROTOBUF_NULLABLE GameServerSaveLoadoutMessage::unsafe_arena_release_loadout_entry() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:realtime.GameServerSaveLoadoutMessage.loadout_entry)
+
+  ClearHasBit(_impl_._has_bits_[0], 0x00000008U);
+  ::realtime::LoadoutEntry* temp = _impl_.loadout_entry_;
+  _impl_.loadout_entry_ = nullptr;
+  return temp;
+}
+inline ::realtime::LoadoutEntry* PROTOBUF_NONNULL GameServerSaveLoadoutMessage::_internal_mutable_loadout_entry() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  if (_impl_.loadout_entry_ == nullptr) {
+    auto* p = ::google::protobuf::Message::DefaultConstruct<::realtime::LoadoutEntry>(GetArena());
+    _impl_.loadout_entry_ = reinterpret_cast<::realtime::LoadoutEntry*>(p);
+  }
+  return _impl_.loadout_entry_;
+}
+inline ::realtime::LoadoutEntry* PROTOBUF_NONNULL GameServerSaveLoadoutMessage::mutable_loadout_entry()
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  SetHasBit(_impl_._has_bits_[0], 0x00000008U);
+  ::realtime::LoadoutEntry* _msg = _internal_mutable_loadout_entry();
+  // @@protoc_insertion_point(field_mutable:realtime.GameServerSaveLoadoutMessage.loadout_entry)
+  return _msg;
+}
+inline void GameServerSaveLoadoutMessage::set_allocated_loadout_entry(::realtime::LoadoutEntry* PROTOBUF_NULLABLE value) {
+  ::google::protobuf::Arena* message_arena = GetArena();
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  if (message_arena == nullptr) {
+    delete reinterpret_cast<::google::protobuf::MessageLite*>(_impl_.loadout_entry_);
+  }
+
+  if (value != nullptr) {
+    ::google::protobuf::Arena* submessage_arena = value->GetArena();
+    if (message_arena != submessage_arena) {
+      value = ::google::protobuf::internal::GetOwnedMessage(message_arena, value, submessage_arena);
+    }
+    SetHasBit(_impl_._has_bits_[0], 0x00000008U);
+  } else {
+    ClearHasBit(_impl_._has_bits_[0], 0x00000008U);
+  }
+
+  _impl_.loadout_entry_ = reinterpret_cast<::realtime::LoadoutEntry*>(value);
+  // @@protoc_insertion_point(field_set_allocated:realtime.GameServerSaveLoadoutMessage.loadout_entry)
 }
 
 // -------------------------------------------------------------------

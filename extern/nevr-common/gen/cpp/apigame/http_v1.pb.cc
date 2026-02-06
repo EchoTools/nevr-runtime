@@ -1026,15 +1026,15 @@ const char descriptor_table_protodef_apigame_2fhttp_5fv1_2eproto[] ABSL_ATTRIBUT
     "o\030\003 \003(\002R\006bone_o\"h\n\023PlayerBonesResponse\0225"
     "\n\nuser_bones\030\001 \003(\0132\025.enginehttp.UserBone"
     "sR\nuser_bones\022\032\n\010err_code\030\002 \001(\005R\010err_cod"
-    "e2\310\001\n\021EngineHttpService\022S\n\nGetSession\022\026."
+    "e2\312\001\n\021EngineHttpService\022S\n\nGetSession\022\026."
     "google.protobuf.Empty\032\033.enginehttp.Sessi"
-    "onResponse\"\020\202\323\344\223\002\n\022\010/session\022^\n\016GetPlaye"
+    "onResponse\"\020\202\323\344\223\002\n\022\010/session\022`\n\016GetPlaye"
     "rBones\022\026.google.protobuf.Empty\032\037.engineh"
-    "ttp.PlayerBonesResponse\"\023\202\323\344\223\002\r\022\013/user_b"
-    "onesB\207\001\n(com.github.echotools.nevr.engin"
-    "e.http.v1B\017EngineHttpProtoP\001Z2github.com"
-    "/echotools/nevr-common/v4/gen/go/apigame"
-    "\252\002\023Nevr.Engine.Http.V1b\006proto3"
+    "ttp.PlayerBonesResponse\"\025\202\323\344\223\002\017\022\r/player"
+    "_bonesB\207\001\n(com.github.echotools.nevr.eng"
+    "ine.http.v1B\017EngineHttpProtoP\001Z2github.c"
+    "om/echotools/nevr-common/v4/gen/go/apiga"
+    "me\252\002\023Nevr.Engine.Http.V1b\006proto3"
 };
 static const ::_pbi::DescriptorTable* PROTOBUF_NONNULL const
     descriptor_table_apigame_2fhttp_5fv1_2eproto_deps[2] = {
@@ -1045,7 +1045,7 @@ static ::absl::once_flag descriptor_table_apigame_2fhttp_5fv1_2eproto_once;
 PROTOBUF_CONSTINIT const ::_pbi::DescriptorTable descriptor_table_apigame_2fhttp_5fv1_2eproto = {
     false,
     false,
-    5470,
+    5472,
     descriptor_table_protodef_apigame_2fhttp_5fv1_2eproto,
     "apigame/http_v1.proto",
     &descriptor_table_apigame_2fhttp_5fv1_2eproto_once,
