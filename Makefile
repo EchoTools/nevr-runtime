@@ -43,6 +43,25 @@ dist: build
 clean:
 	rm -rf build/ dist/
 
+# System Tests
+.PHONY: test-system test-system-short test-system-dll test-system-verbose
+
+test-system:
+	@echo "Running system tests (full mode)..."
+	cd tests/system && go test -v ./...
+
+test-system-short:
+	@echo "Running system tests (short mode)..."
+	cd tests/system && go test -v -short ./...
+
+test-system-dll:
+	@echo "Running DLL loading tests..."
+	cd tests/system && go test -v -short -run ".*DLL.*" ./...
+
+test-system-verbose:
+	@echo "Running system tests (verbose, no cache)..."
+	cd tests/system && go test -v -count=1 ./...
+
 help:
 	@echo "NEVR Server Build System"
 	@echo "========================"
@@ -55,6 +74,12 @@ help:
 	@echo "  dist          - Build and create dist/ with renamed DLLs"
 	@echo "  clean         - Remove build and dist directories"
 	@echo "  help          - Show this help message"
+	@echo ""
+	@echo "Test targets:"
+	@echo "  test-system       - Run all system tests (full mode)"
+	@echo "  test-system-short - Run quick system tests only (skips slow operations)"
+	@echo "  test-system-dll   - Run DLL loading tests only"
+	@echo "  test-system-verbose - Run system tests with verbose output (no cache)"
 	@echo ""
 	@echo "Build Presets:"
 	@echo "  mingw-debug         - MinGW cross-compile (debug)"
@@ -76,3 +101,4 @@ help:
 	@echo "  make dist                      # Build and create distribution"
 	@echo "  make dist PRESET=mingw-debug   # Build debug distribution"
 	@echo "  make configure PRESET=linux-wine-release  # Configure Wine/MSVC build"
+	@echo "  make test-system-short         # Run quick system tests"
