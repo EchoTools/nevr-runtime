@@ -71,7 +71,8 @@ endif()
 
 message(STATUS "Build type set to: ${CMAKE_BUILD_TYPE}")
 
-set(CMAKE_VERBOSE_MAKEFILE ON)
+# Disable verbose makefile output
+set(CMAKE_VERBOSE_MAKEFILE OFF)
 
 # Set the CMake generator to Ninja
 set(CMAKE_GENERATOR "Ninja")
@@ -264,43 +265,28 @@ add_custom_target(dist-prepare
    COMMAND test -d "${CMAKE_SOURCE_DIR}/../evr-reconstruction/assets/extracted_large/resources/resources/unknown_0xdbaed509c67b8884/" && ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/../evr-reconstruction/assets/extracted_large/resources/resources/unknown_0xdbaed509c67b8884/" "${DIST_DIR}/blazar_resources" || true
    COMMAND test -f "${CMAKE_SOURCE_DIR}/README.md" && ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_DIR}/" || true
   # DEPENDS dbghooks
-  COMMENT "Preparing distribution directory: ${DIST_DIR}"
   VERBATIM
 )
 
 # Create tar.zst archive
 add_custom_target(dist-tar
   COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_SOURCE_DIR}/dist"
-    tar --zstd -cvf "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.tar.zst" "${DIST_NAME}"
+    tar --zstd -cf "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.tar.zst" "${DIST_NAME}"
   DEPENDS dist-prepare
-  COMMENT "Creating ${DIST_NAME}.tar.zst"
   VERBATIM
 )
 
 # Create zip archive
 add_custom_target(dist-zip
   COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_SOURCE_DIR}/dist"
-    ${CMAKE_COMMAND} -E tar cvf "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.zip" --format=zip "${DIST_NAME}"
+    ${CMAKE_COMMAND} -E tar cf "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.zip" --format=zip "${DIST_NAME}"
   DEPENDS dist-prepare
-  COMMENT "Creating ${DIST_NAME}.zip"
   VERBATIM
 )
 
 # Main distribution target that creates both archives
 add_custom_target(dist
   DEPENDS dist-tar dist-zip
-  COMMENT "Distribution packages created: ${DIST_NAME}.tar.zst and ${DIST_NAME}.zip"
-)
-
-# Print distribution info
-add_custom_command(TARGET dist POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E echo ""
-  COMMAND ${CMAKE_COMMAND} -E echo "========================================"
-  COMMAND ${CMAKE_COMMAND} -E echo "Distribution packages created:"
-  COMMAND ${CMAKE_COMMAND} -E echo "  ${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.tar.zst"
-  COMMAND ${CMAKE_COMMAND} -E echo "  ${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.zip"
-  COMMAND ${CMAKE_COMMAND} -E echo "========================================"
-  VERBATIM
 )
 
 # =============================================================================

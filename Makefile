@@ -1,6 +1,9 @@
 # Makefile for NEVR Server
 # Provides a simple interface for building and distributing the project
 
+# Silence make's directory messages
+MAKEFLAGS += --no-print-directory
+
 # Detect OS
 UNAME_S := $(shell uname -s)
 
@@ -14,13 +17,19 @@ endif
 # Extract build type from preset (debug or release)
 BUILD_TYPE := $(shell echo $(PRESET) | grep -o 'debug\|release')
 
-.PHONY: all build dist clean help configure vcpkg-mingw
+.PHONY: all build dist clean help configure vcpkg-mingw verbose-build verbose-dist
 
 all: build
 
+# Verbose variants - show full output
+verbose-build: configure
+	cmake --build --preset $(PRESET)
+
+verbose-dist: build
+	cmake --build --preset $(PRESET) --target dist
+
 # Install vcpkg dependencies for MinGW cross-compilation
 vcpkg-mingw:
-	@echo "Installing vcpkg dependencies for MinGW..."
 	@mkdir -p build/$(PRESET)/vcpkg_installed
 	@cd $(HOME)/.vcpkg && unset VCPKG_ROOT && ./vcpkg install --triplet=x64-mingw-static \
 		--x-manifest-root=$(CURDIR) \
@@ -29,16 +38,17 @@ vcpkg-mingw:
 # Configure with automatic vcpkg install for MinGW presets
 configure:
 	@if echo "$(PRESET)" | grep -q "^mingw-"; then \
-		echo "Detected MinGW preset, installing vcpkg dependencies..."; \
 		$(MAKE) vcpkg-mingw; \
 	fi
-	@unset VCPKG_ROOT && cmake --preset $(PRESET) 2>&1 | grep -v "^All requested installations completed" || true
+	@unset VCPKG_ROOT && cmake --preset $(PRESET) > /dev/null 2>&1 || (unset VCPKG_ROOT && cmake --preset $(PRESET))
 
 build: configure
-	cmake --build --preset $(PRESET)
+	@cmake --build --preset $(PRESET) 2>&1 | grep -E '(error|Error|ERROR|fatal|FAILED)' || true
 
 dist: build
-	cmake --build --preset $(PRESET) --target dist
+	@cmake --build --preset $(PRESET) --target dist 2>&1 | \
+		grep -vE '(^\[|^ninja|Creating.*\.(tar\.zst|zip)|Preparing distribution|Running utility|^===)' | \
+		grep -E '(error|Error|ERROR|fatal|FAILED)' || true
 
 clean:
 	rm -rf build/ dist/
@@ -67,13 +77,15 @@ help:
 	@echo "========================"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  all (default) - Build the project"
-	@echo "  vcpkg-mingw   - Install vcpkg dependencies for MinGW"
-	@echo "  configure     - Configure the project (cmake --preset)"
-	@echo "  build         - Build the project"
-	@echo "  dist          - Build and create dist/ with renamed DLLs"
-	@echo "  clean         - Remove build and dist directories"
-	@echo "  help          - Show this help message"
+	@echo "  all (default)  - Build the project (silent)"
+	@echo "  vcpkg-mingw    - Install vcpkg dependencies for MinGW"
+	@echo "  configure      - Configure the project (cmake --preset)"
+	@echo "  build          - Build the project (silent)"
+	@echo "  dist           - Build and create dist/ with renamed DLLs (silent)"
+	@echo "  verbose-build  - Build with full output"
+	@echo "  verbose-dist   - Create dist with full output"
+	@echo "  clean          - Remove build and dist directories"
+	@echo "  help           - Show this help message"
 	@echo ""
 	@echo "Test targets:"
 	@echo "  test-system       - Run all system tests (full mode)"
