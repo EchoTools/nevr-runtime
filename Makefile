@@ -22,7 +22,7 @@ all: build
 vcpkg-mingw:
 	@echo "Installing vcpkg dependencies for MinGW..."
 	@mkdir -p build/$(PRESET)/vcpkg_installed
-	cd $(HOME)/.vcpkg && ./vcpkg install --triplet=x64-mingw-static \
+	cd $(HOME)/.vcpkg && unset VCPKG_ROOT && ./vcpkg install --triplet=x64-mingw-static \
 		--x-manifest-root=$(CURDIR) \
 		--x-install-root=$(CURDIR)/build/$(PRESET)/vcpkg_installed
 
@@ -32,7 +32,7 @@ configure:
 		echo "Detected MinGW preset, installing vcpkg dependencies..."; \
 		$(MAKE) vcpkg-mingw; \
 	fi
-	cmake --preset $(PRESET)
+	unset VCPKG_ROOT && cmake --preset $(PRESET)
 
 build: configure
 	cmake --build --preset $(PRESET)
