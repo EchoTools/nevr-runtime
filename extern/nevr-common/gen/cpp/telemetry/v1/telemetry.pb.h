@@ -85,6 +85,14 @@ class Envelope;
 struct EnvelopeDefaultTypeInternal;
 extern EnvelopeDefaultTypeInternal _Envelope_default_instance_;
 extern const ::google::protobuf::internal::ClassDataFull Envelope_class_data_;
+class GenericEvent;
+struct GenericEventDefaultTypeInternal;
+extern GenericEventDefaultTypeInternal _GenericEvent_default_instance_;
+extern const ::google::protobuf::internal::ClassDataFull GenericEvent_class_data_;
+class GenericEvent_DataEntry_DoNotUse;
+struct GenericEvent_DataEntry_DoNotUseDefaultTypeInternal;
+extern GenericEvent_DataEntry_DoNotUseDefaultTypeInternal _GenericEvent_DataEntry_DoNotUse_default_instance_;
+extern const ::google::protobuf::internal::ClassDataFull GenericEvent_DataEntry_DoNotUse_class_data_;
 class GoalScored;
 struct GoalScoredDefaultTypeInternal;
 extern GoalScoredDefaultTypeInternal _GoalScored_default_instance_;
@@ -3402,6 +3410,45 @@ class MatchEnded final : public ::google::protobuf::Message
 extern const ::google::protobuf::internal::ClassDataFull MatchEnded_class_data_;
 // -------------------------------------------------------------------
 
+class GenericEvent_DataEntry_DoNotUse final
+    : public ::google::protobuf::internal::MapEntry<::std::string, ::std::string,
+                             ::google::protobuf::internal::WireFormatLite::TYPE_STRING,
+                             ::google::protobuf::internal::WireFormatLite::TYPE_STRING> {
+ public:
+  using SuperType =
+      ::google::protobuf::internal::MapEntry<::std::string, ::std::string,
+                      ::google::protobuf::internal::WireFormatLite::TYPE_STRING,
+                      ::google::protobuf::internal::WireFormatLite::TYPE_STRING>;
+  GenericEvent_DataEntry_DoNotUse();
+  template <typename = void>
+  explicit PROTOBUF_CONSTEXPR GenericEvent_DataEntry_DoNotUse(::google::protobuf::internal::ConstantInitialized);
+  explicit GenericEvent_DataEntry_DoNotUse(::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  static constexpr const void* PROTOBUF_NONNULL internal_default_instance() {
+    return &_GenericEvent_DataEntry_DoNotUse_default_instance_;
+  }
+
+
+  static constexpr auto InternalGenerateClassData_();
+
+ private:
+  friend class ::google::protobuf::MessageLite;
+  friend struct ::TableStruct_telemetry_2fv1_2ftelemetry_2eproto;
+
+  friend class ::google::protobuf::internal::TcParser;
+  static const ::google::protobuf::internal::TcParseTable<1, 2,
+                                   0, 52,
+                                   2>
+      _table_;
+
+  const ::google::protobuf::internal::ClassData* PROTOBUF_NONNULL GetClassData() const PROTOBUF_FINAL;
+  static void* PROTOBUF_NONNULL PlacementNew_(
+      const void* PROTOBUF_NONNULL, void* PROTOBUF_NONNULL mem,
+      ::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  static constexpr auto InternalNewImpl_();
+};
+extern const ::google::protobuf::internal::ClassDataFull GenericEvent_DataEntry_DoNotUse_class_data_;
+// -------------------------------------------------------------------
+
 class EmotePlayed final : public ::google::protobuf::Message
 /* @@protoc_insertion_point(class_definition:telemetry.v1.EmotePlayed) */ {
  public:
@@ -4834,6 +4881,238 @@ class GoalScored final : public ::google::protobuf::Message
 extern const ::google::protobuf::internal::ClassDataFull GoalScored_class_data_;
 // -------------------------------------------------------------------
 
+class GenericEvent final : public ::google::protobuf::Message
+/* @@protoc_insertion_point(class_definition:telemetry.v1.GenericEvent) */ {
+ public:
+  inline GenericEvent() : GenericEvent(nullptr) {}
+  ~GenericEvent() PROTOBUF_FINAL;
+
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+  void operator delete(GenericEvent* PROTOBUF_NONNULL msg, ::std::destroying_delete_t) {
+    SharedDtor(*msg);
+    ::google::protobuf::internal::SizedDelete(msg, sizeof(GenericEvent));
+  }
+#endif
+
+  template <typename = void>
+  explicit PROTOBUF_CONSTEXPR GenericEvent(::google::protobuf::internal::ConstantInitialized);
+
+  inline GenericEvent(const GenericEvent& from) : GenericEvent(nullptr, from) {}
+  inline GenericEvent(GenericEvent&& from) noexcept
+      : GenericEvent(nullptr, ::std::move(from)) {}
+  inline GenericEvent& operator=(const GenericEvent& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline GenericEvent& operator=(GenericEvent&& from) noexcept {
+    if (this == &from) return *this;
+    if (::google::protobuf::internal::CanMoveWithInternalSwap(GetArena(), from.GetArena())) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  inline const ::google::protobuf::UnknownFieldSet& unknown_fields() const
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.unknown_fields<::google::protobuf::UnknownFieldSet>(::google::protobuf::UnknownFieldSet::default_instance);
+  }
+  inline ::google::protobuf::UnknownFieldSet* PROTOBUF_NONNULL mutable_unknown_fields()
+      ABSL_ATTRIBUTE_LIFETIME_BOUND {
+    return _internal_metadata_.mutable_unknown_fields<::google::protobuf::UnknownFieldSet>();
+  }
+
+  static const ::google::protobuf::Descriptor* PROTOBUF_NONNULL descriptor() {
+    return GetDescriptor();
+  }
+  static const ::google::protobuf::Descriptor* PROTOBUF_NONNULL GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::google::protobuf::Reflection* PROTOBUF_NONNULL GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const GenericEvent& default_instance() {
+    return *reinterpret_cast<const GenericEvent*>(
+        &_GenericEvent_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages = 29;
+  friend void swap(GenericEvent& a, GenericEvent& b) { a.Swap(&b); }
+  inline void Swap(GenericEvent* PROTOBUF_NONNULL other) {
+    if (other == this) return;
+    if (::google::protobuf::internal::CanUseInternalSwap(GetArena(), other->GetArena())) {
+      InternalSwap(other);
+    } else {
+      ::google::protobuf::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(GenericEvent* PROTOBUF_NONNULL other) {
+    if (other == this) return;
+    ABSL_DCHECK(GetArena() == other->GetArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  GenericEvent* PROTOBUF_NONNULL New(::google::protobuf::Arena* PROTOBUF_NULLABLE arena = nullptr) const {
+    return ::google::protobuf::Message::DefaultConstruct<GenericEvent>(arena);
+  }
+  using ::google::protobuf::Message::CopyFrom;
+  void CopyFrom(const GenericEvent& from);
+  using ::google::protobuf::Message::MergeFrom;
+  void MergeFrom(const GenericEvent& from) { GenericEvent::MergeImpl(*this, from); }
+
+  private:
+  static void MergeImpl(::google::protobuf::MessageLite& to_msg,
+                        const ::google::protobuf::MessageLite& from_msg);
+
+  public:
+  bool IsInitialized() const {
+    return true;
+  }
+  ABSL_ATTRIBUTE_REINITIALIZES void Clear() PROTOBUF_FINAL;
+  #if defined(PROTOBUF_CUSTOM_VTABLE)
+  private:
+  static ::size_t ByteSizeLong(const ::google::protobuf::MessageLite& msg);
+  static ::uint8_t* PROTOBUF_NONNULL _InternalSerialize(
+      const ::google::protobuf::MessageLite& msg, ::uint8_t* PROTOBUF_NONNULL target,
+      ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream);
+
+  public:
+  ::size_t ByteSizeLong() const { return ByteSizeLong(*this); }
+  ::uint8_t* PROTOBUF_NONNULL _InternalSerialize(
+      ::uint8_t* PROTOBUF_NONNULL target,
+      ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) const {
+    return _InternalSerialize(*this, target, stream);
+  }
+  #else   // PROTOBUF_CUSTOM_VTABLE
+  ::size_t ByteSizeLong() const final;
+  ::uint8_t* PROTOBUF_NONNULL _InternalSerialize(
+      ::uint8_t* PROTOBUF_NONNULL target,
+      ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) const final;
+  #endif  // PROTOBUF_CUSTOM_VTABLE
+  int GetCachedSize() const { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  static void SharedDtor(MessageLite& self);
+  void InternalSwap(GenericEvent* PROTOBUF_NONNULL other);
+ private:
+  template <typename T>
+  friend ::absl::string_view(::google::protobuf::internal::GetAnyMessageName)();
+  static ::absl::string_view FullMessageName() { return "telemetry.v1.GenericEvent"; }
+
+  explicit GenericEvent(::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  GenericEvent(::google::protobuf::Arena* PROTOBUF_NULLABLE arena, const GenericEvent& from);
+  GenericEvent(
+      ::google::protobuf::Arena* PROTOBUF_NULLABLE arena, GenericEvent&& from) noexcept
+      : GenericEvent(arena) {
+    *this = ::std::move(from);
+  }
+  const ::google::protobuf::internal::ClassData* PROTOBUF_NONNULL GetClassData() const PROTOBUF_FINAL;
+  static void* PROTOBUF_NONNULL PlacementNew_(
+      const void* PROTOBUF_NONNULL, void* PROTOBUF_NONNULL mem,
+      ::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+  static constexpr auto InternalNewImpl_();
+
+ public:
+  static constexpr auto InternalGenerateClassData_();
+
+  ::google::protobuf::Metadata GetMetadata() const;
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+  enum : int {
+    kEventTypeFieldNumber = 1,
+    kPayloadFieldNumber = 3,
+    kDataFieldNumber = 2,
+  };
+  // string event_type = 1 [json_name = "eventType"];
+  void clear_event_type() ;
+  const ::std::string& event_type() const;
+  template <typename Arg_ = const ::std::string&, typename... Args_>
+  void set_event_type(Arg_&& arg, Args_... args);
+  ::std::string* PROTOBUF_NONNULL mutable_event_type();
+  [[nodiscard]] ::std::string* PROTOBUF_NULLABLE release_event_type();
+  void set_allocated_event_type(::std::string* PROTOBUF_NULLABLE value);
+
+  private:
+  const ::std::string& _internal_event_type() const;
+  PROTOBUF_ALWAYS_INLINE void _internal_set_event_type(const ::std::string& value);
+  ::std::string* PROTOBUF_NONNULL _internal_mutable_event_type();
+
+  public:
+  // string payload = 3 [json_name = "payload"];
+  void clear_payload() ;
+  const ::std::string& payload() const;
+  template <typename Arg_ = const ::std::string&, typename... Args_>
+  void set_payload(Arg_&& arg, Args_... args);
+  ::std::string* PROTOBUF_NONNULL mutable_payload();
+  [[nodiscard]] ::std::string* PROTOBUF_NULLABLE release_payload();
+  void set_allocated_payload(::std::string* PROTOBUF_NULLABLE value);
+
+  private:
+  const ::std::string& _internal_payload() const;
+  PROTOBUF_ALWAYS_INLINE void _internal_set_payload(const ::std::string& value);
+  ::std::string* PROTOBUF_NONNULL _internal_mutable_payload();
+
+  public:
+  // map<string, string> data = 2 [json_name = "data"];
+  int data_size() const;
+  private:
+  int _internal_data_size() const;
+
+  public:
+  void clear_data() ;
+  const ::google::protobuf::Map<::std::string, ::std::string>& data() const;
+  ::google::protobuf::Map<::std::string, ::std::string>* PROTOBUF_NONNULL mutable_data();
+
+  private:
+  const ::google::protobuf::Map<::std::string, ::std::string>& _internal_data() const;
+  ::google::protobuf::Map<::std::string, ::std::string>* PROTOBUF_NONNULL _internal_mutable_data();
+
+  public:
+  // @@protoc_insertion_point(class_scope:telemetry.v1.GenericEvent)
+ private:
+  class _Internal;
+  friend class ::google::protobuf::internal::TcParser;
+  static const ::google::protobuf::internal::TcParseTable<2, 3,
+                                   1, 55,
+                                   2>
+      _table_;
+
+  friend class ::google::protobuf::MessageLite;
+  friend class ::google::protobuf::Arena;
+  template <typename T>
+  friend class ::google::protobuf::Arena::InternalHelper;
+  using InternalArenaConstructable_ = void;
+  using DestructorSkippable_ = void;
+  struct Impl_ {
+    inline explicit constexpr Impl_(::google::protobuf::internal::ConstantInitialized) noexcept;
+    inline explicit Impl_(
+        ::google::protobuf::internal::InternalVisibility visibility,
+        ::google::protobuf::Arena* PROTOBUF_NULLABLE arena);
+    inline explicit Impl_(
+        ::google::protobuf::internal::InternalVisibility visibility,
+        ::google::protobuf::Arena* PROTOBUF_NULLABLE arena, const Impl_& from,
+        const GenericEvent& from_msg);
+    ::google::protobuf::internal::HasBits<1> _has_bits_;
+    ::google::protobuf::internal::CachedSize _cached_size_;
+    ::google::protobuf::internal::ArenaStringPtr event_type_;
+    ::google::protobuf::internal::ArenaStringPtr payload_;
+    ::google::protobuf::internal::MapField<GenericEvent_DataEntry_DoNotUse, ::std::string, ::std::string,
+                      ::google::protobuf::internal::WireFormatLite::TYPE_STRING,
+                      ::google::protobuf::internal::WireFormatLite::TYPE_STRING>
+        data_;
+    PROTOBUF_TSAN_DECLARE_MEMBER
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_telemetry_2fv1_2ftelemetry_2eproto;
+};
+
+extern const ::google::protobuf::internal::ClassDataFull GenericEvent_class_data_;
+// -------------------------------------------------------------------
+
 class DiscThrown final : public ::google::protobuf::Message
 /* @@protoc_insertion_point(class_definition:telemetry.v1.DiscThrown) */ {
  public:
@@ -5327,6 +5606,7 @@ class LobbySessionEvent final : public ::google::protobuf::Message
     kPlayerInterception = 55,
     kPlayerAssist = 56,
     kPlayerShotTaken = 57,
+    kGenericEvent = 60,
     EVENT_NOT_SET = 0,
   };
   static constexpr int kIndexInFileMessages = 4;
@@ -5439,6 +5719,7 @@ class LobbySessionEvent final : public ::google::protobuf::Message
     kPlayerInterceptionFieldNumber = 55,
     kPlayerAssistFieldNumber = 56,
     kPlayerShotTakenFieldNumber = 57,
+    kGenericEventFieldNumber = 60,
   };
   // .telemetry.v1.RoundStarted round_started = 10 [json_name = "roundStarted"];
   bool has_round_started() const;
@@ -5877,6 +6158,25 @@ class LobbySessionEvent final : public ::google::protobuf::Message
   ::telemetry::v1::PlayerShotTaken* PROTOBUF_NONNULL _internal_mutable_player_shot_taken();
 
   public:
+  // .telemetry.v1.GenericEvent generic_event = 60 [json_name = "genericEvent"];
+  bool has_generic_event() const;
+  private:
+  bool _internal_has_generic_event() const;
+
+  public:
+  void clear_generic_event() ;
+  const ::telemetry::v1::GenericEvent& generic_event() const;
+  [[nodiscard]] ::telemetry::v1::GenericEvent* PROTOBUF_NULLABLE release_generic_event();
+  ::telemetry::v1::GenericEvent* PROTOBUF_NONNULL mutable_generic_event();
+  void set_allocated_generic_event(::telemetry::v1::GenericEvent* PROTOBUF_NULLABLE value);
+  void unsafe_arena_set_allocated_generic_event(::telemetry::v1::GenericEvent* PROTOBUF_NULLABLE value);
+  ::telemetry::v1::GenericEvent* PROTOBUF_NULLABLE unsafe_arena_release_generic_event();
+
+  private:
+  const ::telemetry::v1::GenericEvent& _internal_generic_event() const;
+  ::telemetry::v1::GenericEvent* PROTOBUF_NONNULL _internal_mutable_generic_event();
+
+  public:
   void clear_event();
   EventCase event_case() const;
   // @@protoc_insertion_point(class_scope:telemetry.v1.LobbySessionEvent)
@@ -5905,11 +6205,12 @@ class LobbySessionEvent final : public ::google::protobuf::Message
   void set_has_player_interception();
   void set_has_player_assist();
   void set_has_player_shot_taken();
+  void set_has_generic_event();
   inline bool has_event() const;
   inline void clear_has_event();
   friend class ::google::protobuf::internal::TcParser;
-  static const ::google::protobuf::internal::TcParseTable<0, 23,
-                                   23, 0,
+  static const ::google::protobuf::internal::TcParseTable<0, 24,
+                                   24, 0,
                                    9>
       _table_;
 
@@ -5954,6 +6255,7 @@ class LobbySessionEvent final : public ::google::protobuf::Message
       ::google::protobuf::Message* PROTOBUF_NULLABLE player_interception_;
       ::google::protobuf::Message* PROTOBUF_NULLABLE player_assist_;
       ::google::protobuf::Message* PROTOBUF_NULLABLE player_shot_taken_;
+      ::google::protobuf::Message* PROTOBUF_NULLABLE generic_event_;
     } event_;
     ::google::protobuf::internal::CachedSize _cached_size_;
     ::uint32_t _oneof_case_[1];
@@ -9099,6 +9401,88 @@ inline ::telemetry::v1::PlayerShotTaken* PROTOBUF_NONNULL LobbySessionEvent::mut
   return _msg;
 }
 
+// .telemetry.v1.GenericEvent generic_event = 60 [json_name = "genericEvent"];
+inline bool LobbySessionEvent::has_generic_event() const {
+  return event_case() == kGenericEvent;
+}
+inline bool LobbySessionEvent::_internal_has_generic_event() const {
+  return event_case() == kGenericEvent;
+}
+inline void LobbySessionEvent::set_has_generic_event() {
+  _impl_._oneof_case_[0] = kGenericEvent;
+}
+inline void LobbySessionEvent::clear_generic_event() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  if (event_case() == kGenericEvent) {
+    if (GetArena() == nullptr) {
+      delete _impl_.event_.generic_event_;
+    } else if (::google::protobuf::internal::DebugHardenClearOneofMessageOnArena()) {
+      ::google::protobuf::internal::MaybePoisonAfterClear(_impl_.event_.generic_event_);
+    }
+    clear_has_event();
+  }
+}
+inline ::telemetry::v1::GenericEvent* PROTOBUF_NULLABLE LobbySessionEvent::release_generic_event() {
+  // @@protoc_insertion_point(field_release:telemetry.v1.LobbySessionEvent.generic_event)
+  if (event_case() == kGenericEvent) {
+    clear_has_event();
+    auto* temp = reinterpret_cast<::telemetry::v1::GenericEvent*>(_impl_.event_.generic_event_);
+    if (GetArena() != nullptr) {
+      temp = ::google::protobuf::internal::DuplicateIfNonNull(temp);
+    }
+    _impl_.event_.generic_event_ = nullptr;
+    return temp;
+  } else {
+    return nullptr;
+  }
+}
+inline const ::telemetry::v1::GenericEvent& LobbySessionEvent::_internal_generic_event() const {
+  return event_case() == kGenericEvent ? static_cast<const ::telemetry::v1::GenericEvent&>(*reinterpret_cast<::telemetry::v1::GenericEvent*>(_impl_.event_.generic_event_))
+                     : reinterpret_cast<const ::telemetry::v1::GenericEvent&>(::telemetry::v1::_GenericEvent_default_instance_);
+}
+inline const ::telemetry::v1::GenericEvent& LobbySessionEvent::generic_event() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:telemetry.v1.LobbySessionEvent.generic_event)
+  return _internal_generic_event();
+}
+inline ::telemetry::v1::GenericEvent* PROTOBUF_NULLABLE LobbySessionEvent::unsafe_arena_release_generic_event() {
+  // @@protoc_insertion_point(field_unsafe_arena_release:telemetry.v1.LobbySessionEvent.generic_event)
+  if (event_case() == kGenericEvent) {
+    clear_has_event();
+    auto* temp = reinterpret_cast<::telemetry::v1::GenericEvent*>(_impl_.event_.generic_event_);
+    _impl_.event_.generic_event_ = nullptr;
+    return temp;
+  } else {
+    return nullptr;
+  }
+}
+inline void LobbySessionEvent::unsafe_arena_set_allocated_generic_event(
+    ::telemetry::v1::GenericEvent* PROTOBUF_NULLABLE value) {
+  // We rely on the oneof clear method to free the earlier contents
+  // of this oneof. We can directly use the pointer we're given to
+  // set the new value.
+  clear_event();
+  if (value) {
+    set_has_generic_event();
+    _impl_.event_.generic_event_ = reinterpret_cast<::google::protobuf::Message*>(value);
+  }
+  // @@protoc_insertion_point(field_unsafe_arena_set_allocated:telemetry.v1.LobbySessionEvent.generic_event)
+}
+inline ::telemetry::v1::GenericEvent* PROTOBUF_NONNULL LobbySessionEvent::_internal_mutable_generic_event() {
+  if (event_case() != kGenericEvent) {
+    clear_event();
+    set_has_generic_event();
+    _impl_.event_.generic_event_ = reinterpret_cast<::google::protobuf::Message*>(
+        ::google::protobuf::Message::DefaultConstruct<::telemetry::v1::GenericEvent>(GetArena()));
+  }
+  return reinterpret_cast<::telemetry::v1::GenericEvent*>(_impl_.event_.generic_event_);
+}
+inline ::telemetry::v1::GenericEvent* PROTOBUF_NONNULL LobbySessionEvent::mutable_generic_event()
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  ::telemetry::v1::GenericEvent* _msg = _internal_mutable_generic_event();
+  // @@protoc_insertion_point(field_mutable:telemetry.v1.LobbySessionEvent.generic_event)
+  return _msg;
+}
+
 inline bool LobbySessionEvent::has_event() const {
   return event_case() != EVENT_NOT_SET;
 }
@@ -10768,6 +11152,174 @@ inline ::int32_t PlayerShotTaken::_internal_total_shots() const {
 inline void PlayerShotTaken::_internal_set_total_shots(::int32_t value) {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   _impl_.total_shots_ = value;
+}
+
+// -------------------------------------------------------------------
+
+// -------------------------------------------------------------------
+
+// GenericEvent
+
+// string event_type = 1 [json_name = "eventType"];
+inline void GenericEvent::clear_event_type() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.event_type_.ClearToEmpty();
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000001U);
+}
+inline const ::std::string& GenericEvent::event_type() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:telemetry.v1.GenericEvent.event_type)
+  return _internal_event_type();
+}
+template <typename Arg_, typename... Args_>
+PROTOBUF_ALWAYS_INLINE void GenericEvent::set_event_type(Arg_&& arg, Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  SetHasBit(_impl_._has_bits_[0], 0x00000001U);
+  _impl_.event_type_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:telemetry.v1.GenericEvent.event_type)
+}
+inline ::std::string* PROTOBUF_NONNULL GenericEvent::mutable_event_type()
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  SetHasBit(_impl_._has_bits_[0], 0x00000001U);
+  ::std::string* _s = _internal_mutable_event_type();
+  // @@protoc_insertion_point(field_mutable:telemetry.v1.GenericEvent.event_type)
+  return _s;
+}
+inline const ::std::string& GenericEvent::_internal_event_type() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.event_type_.Get();
+}
+inline void GenericEvent::_internal_set_event_type(const ::std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.event_type_.Set(value, GetArena());
+}
+inline ::std::string* PROTOBUF_NONNULL GenericEvent::_internal_mutable_event_type() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.event_type_.Mutable( GetArena());
+}
+inline ::std::string* PROTOBUF_NULLABLE GenericEvent::release_event_type() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:telemetry.v1.GenericEvent.event_type)
+  if (!CheckHasBit(_impl_._has_bits_[0], 0x00000001U)) {
+    return nullptr;
+  }
+  ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
+  auto* released = _impl_.event_type_.Release();
+  if (::google::protobuf::internal::DebugHardenForceCopyDefaultString()) {
+    _impl_.event_type_.Set("", GetArena());
+  }
+  return released;
+}
+inline void GenericEvent::set_allocated_event_type(::std::string* PROTOBUF_NULLABLE value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  if (value != nullptr) {
+    SetHasBit(_impl_._has_bits_[0], 0x00000001U);
+  } else {
+    ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
+  }
+  _impl_.event_type_.SetAllocated(value, GetArena());
+  if (::google::protobuf::internal::DebugHardenForceCopyDefaultString() && _impl_.event_type_.IsDefault()) {
+    _impl_.event_type_.Set("", GetArena());
+  }
+  // @@protoc_insertion_point(field_set_allocated:telemetry.v1.GenericEvent.event_type)
+}
+
+// map<string, string> data = 2 [json_name = "data"];
+inline int GenericEvent::_internal_data_size() const {
+  return _internal_data().size();
+}
+inline int GenericEvent::data_size() const {
+  return _internal_data_size();
+}
+inline void GenericEvent::clear_data() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.data_.Clear();
+  ClearHasBitForRepeated(_impl_._has_bits_[0],
+                  0x00000004U);
+}
+inline const ::google::protobuf::Map<::std::string, ::std::string>& GenericEvent::_internal_data() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.data_.GetMap();
+}
+inline const ::google::protobuf::Map<::std::string, ::std::string>& GenericEvent::data() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_map:telemetry.v1.GenericEvent.data)
+  return _internal_data();
+}
+inline ::google::protobuf::Map<::std::string, ::std::string>* PROTOBUF_NONNULL GenericEvent::_internal_mutable_data() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.data_.MutableMap();
+}
+inline ::google::protobuf::Map<::std::string, ::std::string>* PROTOBUF_NONNULL GenericEvent::mutable_data()
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  SetHasBitForRepeated(_impl_._has_bits_[0], 0x00000004U);
+  // @@protoc_insertion_point(field_mutable_map:telemetry.v1.GenericEvent.data)
+  return _internal_mutable_data();
+}
+
+// string payload = 3 [json_name = "payload"];
+inline void GenericEvent::clear_payload() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.payload_.ClearToEmpty();
+  ClearHasBit(_impl_._has_bits_[0],
+                  0x00000002U);
+}
+inline const ::std::string& GenericEvent::payload() const
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  // @@protoc_insertion_point(field_get:telemetry.v1.GenericEvent.payload)
+  return _internal_payload();
+}
+template <typename Arg_, typename... Args_>
+PROTOBUF_ALWAYS_INLINE void GenericEvent::set_payload(Arg_&& arg, Args_... args) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  SetHasBit(_impl_._has_bits_[0], 0x00000002U);
+  _impl_.payload_.Set(static_cast<Arg_&&>(arg), args..., GetArena());
+  // @@protoc_insertion_point(field_set:telemetry.v1.GenericEvent.payload)
+}
+inline ::std::string* PROTOBUF_NONNULL GenericEvent::mutable_payload()
+    ABSL_ATTRIBUTE_LIFETIME_BOUND {
+  SetHasBit(_impl_._has_bits_[0], 0x00000002U);
+  ::std::string* _s = _internal_mutable_payload();
+  // @@protoc_insertion_point(field_mutable:telemetry.v1.GenericEvent.payload)
+  return _s;
+}
+inline const ::std::string& GenericEvent::_internal_payload() const {
+  ::google::protobuf::internal::TSanRead(&_impl_);
+  return _impl_.payload_.Get();
+}
+inline void GenericEvent::_internal_set_payload(const ::std::string& value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  _impl_.payload_.Set(value, GetArena());
+}
+inline ::std::string* PROTOBUF_NONNULL GenericEvent::_internal_mutable_payload() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  return _impl_.payload_.Mutable( GetArena());
+}
+inline ::std::string* PROTOBUF_NULLABLE GenericEvent::release_payload() {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  // @@protoc_insertion_point(field_release:telemetry.v1.GenericEvent.payload)
+  if (!CheckHasBit(_impl_._has_bits_[0], 0x00000002U)) {
+    return nullptr;
+  }
+  ClearHasBit(_impl_._has_bits_[0], 0x00000002U);
+  auto* released = _impl_.payload_.Release();
+  if (::google::protobuf::internal::DebugHardenForceCopyDefaultString()) {
+    _impl_.payload_.Set("", GetArena());
+  }
+  return released;
+}
+inline void GenericEvent::set_allocated_payload(::std::string* PROTOBUF_NULLABLE value) {
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  if (value != nullptr) {
+    SetHasBit(_impl_._has_bits_[0], 0x00000002U);
+  } else {
+    ClearHasBit(_impl_._has_bits_[0], 0x00000002U);
+  }
+  _impl_.payload_.SetAllocated(value, GetArena());
+  if (::google::protobuf::internal::DebugHardenForceCopyDefaultString() && _impl_.payload_.IsDefault()) {
+    _impl_.payload_.Set("", GetArena());
+  }
+  // @@protoc_insertion_point(field_set_allocated:telemetry.v1.GenericEvent.payload)
 }
 
 #ifdef __GNUC__

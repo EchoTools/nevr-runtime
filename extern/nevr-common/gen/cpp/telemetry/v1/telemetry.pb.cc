@@ -442,6 +442,24 @@ struct MatchEndedDefaultTypeInternal {
 
 PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT
     PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 MatchEndedDefaultTypeInternal _MatchEnded_default_instance_;
+template <typename>
+PROTOBUF_CONSTEXPR GenericEvent_DataEntry_DoNotUse::GenericEvent_DataEntry_DoNotUse(::_pbi::ConstantInitialized)
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+    : GenericEvent_DataEntry_DoNotUse::MapEntry(GenericEvent_DataEntry_DoNotUse_class_data_.base()){}
+#else   // PROTOBUF_CUSTOM_VTABLE
+    : GenericEvent_DataEntry_DoNotUse::MapEntry() {
+}
+#endif  // PROTOBUF_CUSTOM_VTABLE
+struct GenericEvent_DataEntry_DoNotUseDefaultTypeInternal {
+  PROTOBUF_CONSTEXPR GenericEvent_DataEntry_DoNotUseDefaultTypeInternal() : _instance(::_pbi::ConstantInitialized{}) {}
+  ~GenericEvent_DataEntry_DoNotUseDefaultTypeInternal() {}
+  union {
+    GenericEvent_DataEntry_DoNotUse _instance;
+  };
+};
+
+PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT
+    PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 GenericEvent_DataEntry_DoNotUseDefaultTypeInternal _GenericEvent_DataEntry_DoNotUse_default_instance_;
 
 inline constexpr EmotePlayed::Impl_::Impl_(
     ::_pbi::ConstantInitialized) noexcept
@@ -623,6 +641,37 @@ struct GoalScoredDefaultTypeInternal {
 
 PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT
     PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 GoalScoredDefaultTypeInternal _GoalScored_default_instance_;
+
+inline constexpr GenericEvent::Impl_::Impl_(
+    ::_pbi::ConstantInitialized) noexcept
+      : _cached_size_{0},
+        event_type_(
+            &::google::protobuf::internal::fixed_address_empty_string,
+            ::_pbi::ConstantInitialized()),
+        payload_(
+            &::google::protobuf::internal::fixed_address_empty_string,
+            ::_pbi::ConstantInitialized()),
+        data_{} {}
+
+template <typename>
+PROTOBUF_CONSTEXPR GenericEvent::GenericEvent(::_pbi::ConstantInitialized)
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+    : ::google::protobuf::Message(GenericEvent_class_data_.base()),
+#else   // PROTOBUF_CUSTOM_VTABLE
+    : ::google::protobuf::Message(),
+#endif  // PROTOBUF_CUSTOM_VTABLE
+      _impl_(::_pbi::ConstantInitialized()) {
+}
+struct GenericEventDefaultTypeInternal {
+  PROTOBUF_CONSTEXPR GenericEventDefaultTypeInternal() : _instance(::_pbi::ConstantInitialized{}) {}
+  ~GenericEventDefaultTypeInternal() {}
+  union {
+    GenericEvent _instance;
+  };
+};
+
+PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT
+    PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 GenericEventDefaultTypeInternal _GenericEvent_default_instance_;
 
 inline constexpr DiscThrown::Impl_::Impl_(
     ::_pbi::ConstantInitialized) noexcept
@@ -825,6 +874,7 @@ const ::uint32_t
         PROTOBUF_FIELD_OFFSET(::telemetry::v1::LobbySessionEvent, _impl_.event_),
         PROTOBUF_FIELD_OFFSET(::telemetry::v1::LobbySessionEvent, _impl_.event_),
         PROTOBUF_FIELD_OFFSET(::telemetry::v1::LobbySessionEvent, _impl_.event_),
+        PROTOBUF_FIELD_OFFSET(::telemetry::v1::LobbySessionEvent, _impl_.event_),
         0x081, // bitmap
         PROTOBUF_FIELD_OFFSET(::telemetry::v1::RoundStarted, _impl_._has_bits_),
         4, // hasbit index offset
@@ -986,6 +1036,22 @@ const ::uint32_t
         PROTOBUF_FIELD_OFFSET(::telemetry::v1::PlayerShotTaken, _impl_.total_shots_),
         0,
         1,
+        0x081, // bitmap
+        PROTOBUF_FIELD_OFFSET(::telemetry::v1::GenericEvent_DataEntry_DoNotUse, _impl_._has_bits_),
+        5, // hasbit index offset
+        PROTOBUF_FIELD_OFFSET(::telemetry::v1::GenericEvent_DataEntry_DoNotUse, _impl_.key_),
+        PROTOBUF_FIELD_OFFSET(::telemetry::v1::GenericEvent_DataEntry_DoNotUse, _impl_.value_),
+        0,
+        1,
+        0x081, // bitmap
+        PROTOBUF_FIELD_OFFSET(::telemetry::v1::GenericEvent, _impl_._has_bits_),
+        6, // hasbit index offset
+        PROTOBUF_FIELD_OFFSET(::telemetry::v1::GenericEvent, _impl_.event_type_),
+        PROTOBUF_FIELD_OFFSET(::telemetry::v1::GenericEvent, _impl_.data_),
+        PROTOBUF_FIELD_OFFSET(::telemetry::v1::GenericEvent, _impl_.payload_),
+        0,
+        2,
+        1,
 };
 
 static const ::_pbi::MigrationSchema
@@ -995,29 +1061,31 @@ static const ::_pbi::MigrationSchema
         {16, sizeof(::telemetry::v1::Envelope)},
         {21, sizeof(::telemetry::v1::LobbySessionStateFrame)},
         {34, sizeof(::telemetry::v1::LobbySessionEvent)},
-        {60, sizeof(::telemetry::v1::RoundStarted)},
-        {65, sizeof(::telemetry::v1::RoundPaused)},
-        {70, sizeof(::telemetry::v1::RoundUnpaused)},
-        {75, sizeof(::telemetry::v1::RoundEnded)},
-        {82, sizeof(::telemetry::v1::MatchEnded)},
-        {87, sizeof(::telemetry::v1::ScoreboardUpdated)},
-        {100, sizeof(::telemetry::v1::PlayerJoined)},
-        {107, sizeof(::telemetry::v1::PlayerLeft)},
-        {114, sizeof(::telemetry::v1::PlayerSwitchedTeam)},
-        {123, sizeof(::telemetry::v1::EmotePlayed)},
-        {130, sizeof(::telemetry::v1::DiscPossessionChanged)},
-        {137, sizeof(::telemetry::v1::DiscThrown)},
-        {144, sizeof(::telemetry::v1::DiscCaught)},
-        {149, sizeof(::telemetry::v1::GoalScored)},
-        {154, sizeof(::telemetry::v1::PlayerGoal)},
-        {163, sizeof(::telemetry::v1::PlayerSave)},
-        {170, sizeof(::telemetry::v1::PlayerStun)},
-        {177, sizeof(::telemetry::v1::PlayerPass)},
-        {184, sizeof(::telemetry::v1::PlayerSteal)},
-        {193, sizeof(::telemetry::v1::PlayerBlock)},
-        {200, sizeof(::telemetry::v1::PlayerInterception)},
-        {207, sizeof(::telemetry::v1::PlayerAssist)},
-        {214, sizeof(::telemetry::v1::PlayerShotTaken)},
+        {61, sizeof(::telemetry::v1::RoundStarted)},
+        {66, sizeof(::telemetry::v1::RoundPaused)},
+        {71, sizeof(::telemetry::v1::RoundUnpaused)},
+        {76, sizeof(::telemetry::v1::RoundEnded)},
+        {83, sizeof(::telemetry::v1::MatchEnded)},
+        {88, sizeof(::telemetry::v1::ScoreboardUpdated)},
+        {101, sizeof(::telemetry::v1::PlayerJoined)},
+        {108, sizeof(::telemetry::v1::PlayerLeft)},
+        {115, sizeof(::telemetry::v1::PlayerSwitchedTeam)},
+        {124, sizeof(::telemetry::v1::EmotePlayed)},
+        {131, sizeof(::telemetry::v1::DiscPossessionChanged)},
+        {138, sizeof(::telemetry::v1::DiscThrown)},
+        {145, sizeof(::telemetry::v1::DiscCaught)},
+        {150, sizeof(::telemetry::v1::GoalScored)},
+        {155, sizeof(::telemetry::v1::PlayerGoal)},
+        {164, sizeof(::telemetry::v1::PlayerSave)},
+        {171, sizeof(::telemetry::v1::PlayerStun)},
+        {178, sizeof(::telemetry::v1::PlayerPass)},
+        {185, sizeof(::telemetry::v1::PlayerSteal)},
+        {194, sizeof(::telemetry::v1::PlayerBlock)},
+        {201, sizeof(::telemetry::v1::PlayerInterception)},
+        {208, sizeof(::telemetry::v1::PlayerAssist)},
+        {215, sizeof(::telemetry::v1::PlayerShotTaken)},
+        {222, sizeof(::telemetry::v1::GenericEvent_DataEntry_DoNotUse)},
+        {229, sizeof(::telemetry::v1::GenericEvent)},
 };
 static const ::_pb::Message* PROTOBUF_NONNULL const file_default_instances[] = {
     &::telemetry::v1::_TelemetryHeader_MetadataEntry_DoNotUse_default_instance_._instance,
@@ -1048,6 +1116,8 @@ static const ::_pb::Message* PROTOBUF_NONNULL const file_default_instances[] = {
     &::telemetry::v1::_PlayerInterception_default_instance_._instance,
     &::telemetry::v1::_PlayerAssist_default_instance_._instance,
     &::telemetry::v1::_PlayerShotTaken_default_instance_._instance,
+    &::telemetry::v1::_GenericEvent_DataEntry_DoNotUse_default_instance_._instance,
+    &::telemetry::v1::_GenericEvent_default_instance_._instance,
 };
 const char descriptor_table_protodef_telemetry_2fv1_2ftelemetry_2eproto[] ABSL_ATTRIBUTE_SECTION_VARIABLE(
     protodesc_cold) = {
@@ -1070,7 +1140,7 @@ const char descriptor_table_protodef_telemetry_2fv1_2ftelemetry_2eproto[] ABSL_A
     "bySessionEventR\006events\0225\n\007session\030\004 \001(\0132"
     "\033.enginehttp.SessionResponseR\007session\022B\n"
     "\014player_bones\030\005 \001(\0132\037.enginehttp.PlayerB"
-    "onesResponseR\013playerBones\"\266\014\n\021LobbySessi"
+    "onesResponseR\013playerBones\"\371\014\n\021LobbySessi"
     "onEvent\022A\n\rround_started\030\n \001(\0132\032.telemet"
     "ry.v1.RoundStartedH\000R\014roundStarted\022>\n\014ro"
     "und_paused\030\013 \001(\0132\031.telemetry.v1.RoundPau"
@@ -1110,72 +1180,78 @@ const char descriptor_table_protodef_telemetry_2fv1_2ftelemetry_2eproto[] ABSL_A
     "st\0308 \001(\0132\032.telemetry.v1.PlayerAssistH\000R\014"
     "playerAssist\022K\n\021player_shot_taken\0309 \001(\0132"
     "\035.telemetry.v1.PlayerShotTakenH\000R\017player"
-    "ShotTakenB\007\n\005event\"1\n\014RoundStarted\022!\n\014ro"
-    "und_number\030\001 \001(\005R\013roundNumber\"F\n\013RoundPa"
-    "used\0227\n\013pause_state\030\001 \001(\0132\026.enginehttp.P"
-    "auseStateR\npauseState\"H\n\rRoundUnpaused\0227"
-    "\n\013pause_state\030\001 \001(\0132\026.enginehttp.PauseSt"
-    "ateR\npauseState\"f\n\nRoundEnded\022!\n\014round_n"
-    "umber\030\001 \001(\005R\013roundNumber\0225\n\014winning_team"
-    "\030\002 \001(\0162\022.telemetry.v1.RoleR\013winningTeam\""
-    "C\n\nMatchEnded\0225\n\014winning_team\030\001 \001(\0162\022.te"
-    "lemetry.v1.RoleR\013winningTeam\"\337\001\n\021Scorebo"
-    "ardUpdated\022\037\n\013blue_points\030\001 \001(\005R\nbluePoi"
-    "nts\022#\n\rorange_points\030\002 \001(\005R\014orangePoints"
-    "\022(\n\020blue_round_score\030\003 \001(\005R\016blueRoundSco"
-    "re\022,\n\022orange_round_score\030\004 \001(\005R\020orangeRo"
-    "undScore\022,\n\022game_clock_display\030\005 \001(\tR\020ga"
-    "meClockDisplay\"f\n\014PlayerJoined\022.\n\006player"
-    "\030\001 \001(\0132\026.enginehttp.TeamMemberR\006player\022&"
-    "\n\004role\030\002 \001(\0162\022.telemetry.v1.RoleR\004role\"P"
-    "\n\nPlayerLeft\022\037\n\013player_slot\030\001 \001(\005R\nplaye"
-    "rSlot\022!\n\014display_name\030\002 \001(\tR\013displayName"
-    "\"\225\001\n\022PlayerSwitchedTeam\022\037\n\013player_slot\030\001"
-    " \001(\005R\nplayerSlot\022-\n\010new_role\030\002 \001(\0162\022.tel"
-    "emetry.v1.RoleR\007newRole\022/\n\tprev_role\030\003 \001"
-    "(\0162\022.telemetry.v1.RoleR\010prevRole\"\304\001\n\013Emo"
-    "tePlayed\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlo"
-    "t\0229\n\005emote\030\002 \001(\0162#.telemetry.v1.EmotePla"
-    "yed.EmoteTypeR\005emote\"Y\n\tEmoteType\022\032\n\026EMO"
-    "TE_TYPE_UNSPECIFIED\020\000\022\026\n\022EMOTE_TYPE_PRIM"
-    "ARY\020\001\022\030\n\024EMOTE_TYPE_SECONDARY\020\002\"j\n\025DiscP"
-    "ossessionChanged\022\037\n\013player_slot\030\001 \001(\005R\np"
-    "layerSlot\0220\n\024previous_player_slot\030\002 \001(\005R"
-    "\022previousPlayerSlot\"m\n\nDiscThrown\022\037\n\013pla"
-    "yer_slot\030\001 \001(\005R\nplayerSlot\022>\n\rthrow_deta"
-    "ils\030\002 \001(\0132\031.enginehttp.LastThrowInfoR\014th"
-    "rowDetails\"-\n\nDiscCaught\022\037\n\013player_slot\030"
-    "\001 \001(\005R\nplayerSlot\"H\n\nGoalScored\022:\n\rscore"
-    "_details\030\001 \001(\0132\025.enginehttp.LastScoreR\014s"
-    "coreDetails\"f\n\nPlayerGoal\022\037\n\013player_slot"
-    "\030\001 \001(\005R\nplayerSlot\022\037\n\013total_goals\030\002 \001(\005R"
-    "\ntotalGoals\022\026\n\006points\030\003 \001(\005R\006points\"N\n\nP"
-    "layerSave\022\037\n\013player_slot\030\001 \001(\005R\nplayerSl"
-    "ot\022\037\n\013total_saves\030\002 \001(\005R\ntotalSaves\"N\n\nP"
-    "layerStun\022\037\n\013player_slot\030\001 \001(\005R\nplayerSl"
-    "ot\022\037\n\013total_stuns\030\002 \001(\005R\ntotalStuns\"P\n\nP"
-    "layerPass\022\037\n\013player_slot\030\001 \001(\005R\nplayerSl"
-    "ot\022!\n\014total_passes\030\002 \001(\005R\013totalPasses\"\177\n"
-    "\013PlayerSteal\022\037\n\013player_slot\030\001 \001(\005R\nplaye"
-    "rSlot\022!\n\014total_steals\030\002 \001(\005R\013totalSteals"
-    "\022,\n\022victim_player_slot\030\003 \001(\005R\020victimPlay"
-    "erSlot\"Q\n\013PlayerBlock\022\037\n\013player_slot\030\001 \001"
-    "(\005R\nplayerSlot\022!\n\014total_blocks\030\002 \001(\005R\013to"
-    "talBlocks\"f\n\022PlayerInterception\022\037\n\013playe"
-    "r_slot\030\001 \001(\005R\nplayerSlot\022/\n\023total_interc"
-    "eptions\030\002 \001(\005R\022totalInterceptions\"T\n\014Pla"
-    "yerAssist\022\037\n\013player_slot\030\001 \001(\005R\nplayerSl"
-    "ot\022#\n\rtotal_assists\030\002 \001(\005R\014totalAssists\""
-    "S\n\017PlayerShotTaken\022\037\n\013player_slot\030\001 \001(\005R"
-    "\nplayerSlot\022\037\n\013total_shots\030\002 \001(\005R\ntotalS"
-    "hots*\213\001\n\004Role\022\024\n\020ROLE_UNSPECIFIED\020\000\022\022\n\016R"
-    "OLE_BLUE_TEAM\020\001\022\024\n\020ROLE_ORANGE_TEAM\020\002\022\022\n"
-    "\016ROLE_SPECTATOR\020\003\022\033\n\027ROLE_SOCIAL_PARTICI"
-    "PANT\020\004\022\022\n\016ROLE_MODERATOR\020\005B\217\001\n\037com.echot"
-    "ools.nevr.telemetry.v1B\rNevrTelemetryP\001Z"
-    "Agithub.com/echotools/nevr-common/v4/gen"
-    "/go/telemetry/v1;telemetry\252\002\027Nevr.Teleme"
-    "try.Protobufb\006proto3"
+    "ShotTaken\022A\n\rgeneric_event\030< \001(\0132\032.telem"
+    "etry.v1.GenericEventH\000R\014genericEventB\007\n\005"
+    "event\"1\n\014RoundStarted\022!\n\014round_number\030\001 "
+    "\001(\005R\013roundNumber\"F\n\013RoundPaused\0227\n\013pause"
+    "_state\030\001 \001(\0132\026.enginehttp.PauseStateR\npa"
+    "useState\"H\n\rRoundUnpaused\0227\n\013pause_state"
+    "\030\001 \001(\0132\026.enginehttp.PauseStateR\npauseSta"
+    "te\"f\n\nRoundEnded\022!\n\014round_number\030\001 \001(\005R\013"
+    "roundNumber\0225\n\014winning_team\030\002 \001(\0162\022.tele"
+    "metry.v1.RoleR\013winningTeam\"C\n\nMatchEnded"
+    "\0225\n\014winning_team\030\001 \001(\0162\022.telemetry.v1.Ro"
+    "leR\013winningTeam\"\337\001\n\021ScoreboardUpdated\022\037\n"
+    "\013blue_points\030\001 \001(\005R\nbluePoints\022#\n\rorange"
+    "_points\030\002 \001(\005R\014orangePoints\022(\n\020blue_roun"
+    "d_score\030\003 \001(\005R\016blueRoundScore\022,\n\022orange_"
+    "round_score\030\004 \001(\005R\020orangeRoundScore\022,\n\022g"
+    "ame_clock_display\030\005 \001(\tR\020gameClockDispla"
+    "y\"f\n\014PlayerJoined\022.\n\006player\030\001 \001(\0132\026.engi"
+    "nehttp.TeamMemberR\006player\022&\n\004role\030\002 \001(\0162"
+    "\022.telemetry.v1.RoleR\004role\"P\n\nPlayerLeft\022"
+    "\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\022!\n\014disp"
+    "lay_name\030\002 \001(\tR\013displayName\"\225\001\n\022PlayerSw"
+    "itchedTeam\022\037\n\013player_slot\030\001 \001(\005R\nplayerS"
+    "lot\022-\n\010new_role\030\002 \001(\0162\022.telemetry.v1.Rol"
+    "eR\007newRole\022/\n\tprev_role\030\003 \001(\0162\022.telemetr"
+    "y.v1.RoleR\010prevRole\"\304\001\n\013EmotePlayed\022\037\n\013p"
+    "layer_slot\030\001 \001(\005R\nplayerSlot\0229\n\005emote\030\002 "
+    "\001(\0162#.telemetry.v1.EmotePlayed.EmoteType"
+    "R\005emote\"Y\n\tEmoteType\022\032\n\026EMOTE_TYPE_UNSPE"
+    "CIFIED\020\000\022\026\n\022EMOTE_TYPE_PRIMARY\020\001\022\030\n\024EMOT"
+    "E_TYPE_SECONDARY\020\002\"j\n\025DiscPossessionChan"
+    "ged\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\0220\n\024"
+    "previous_player_slot\030\002 \001(\005R\022previousPlay"
+    "erSlot\"m\n\nDiscThrown\022\037\n\013player_slot\030\001 \001("
+    "\005R\nplayerSlot\022>\n\rthrow_details\030\002 \001(\0132\031.e"
+    "nginehttp.LastThrowInfoR\014throwDetails\"-\n"
+    "\nDiscCaught\022\037\n\013player_slot\030\001 \001(\005R\nplayer"
+    "Slot\"H\n\nGoalScored\022:\n\rscore_details\030\001 \001("
+    "\0132\025.enginehttp.LastScoreR\014scoreDetails\"f"
+    "\n\nPlayerGoal\022\037\n\013player_slot\030\001 \001(\005R\nplaye"
+    "rSlot\022\037\n\013total_goals\030\002 \001(\005R\ntotalGoals\022\026"
+    "\n\006points\030\003 \001(\005R\006points\"N\n\nPlayerSave\022\037\n\013"
+    "player_slot\030\001 \001(\005R\nplayerSlot\022\037\n\013total_s"
+    "aves\030\002 \001(\005R\ntotalSaves\"N\n\nPlayerStun\022\037\n\013"
+    "player_slot\030\001 \001(\005R\nplayerSlot\022\037\n\013total_s"
+    "tuns\030\002 \001(\005R\ntotalStuns\"P\n\nPlayerPass\022\037\n\013"
+    "player_slot\030\001 \001(\005R\nplayerSlot\022!\n\014total_p"
+    "asses\030\002 \001(\005R\013totalPasses\"\177\n\013PlayerSteal\022"
+    "\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\022!\n\014tota"
+    "l_steals\030\002 \001(\005R\013totalSteals\022,\n\022victim_pl"
+    "ayer_slot\030\003 \001(\005R\020victimPlayerSlot\"Q\n\013Pla"
+    "yerBlock\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlo"
+    "t\022!\n\014total_blocks\030\002 \001(\005R\013totalBlocks\"f\n\022"
+    "PlayerInterception\022\037\n\013player_slot\030\001 \001(\005R"
+    "\nplayerSlot\022/\n\023total_interceptions\030\002 \001(\005"
+    "R\022totalInterceptions\"T\n\014PlayerAssist\022\037\n\013"
+    "player_slot\030\001 \001(\005R\nplayerSlot\022#\n\rtotal_a"
+    "ssists\030\002 \001(\005R\014totalAssists\"S\n\017PlayerShot"
+    "Taken\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\022\037"
+    "\n\013total_shots\030\002 \001(\005R\ntotalShots\"\272\001\n\014Gene"
+    "ricEvent\022\035\n\nevent_type\030\001 \001(\tR\teventType\022"
+    "8\n\004data\030\002 \003(\0132$.telemetry.v1.GenericEven"
+    "t.DataEntryR\004data\022\030\n\007payload\030\003 \001(\tR\007payl"
+    "oad\0327\n\tDataEntry\022\020\n\003key\030\001 \001(\tR\003key\022\024\n\005va"
+    "lue\030\002 \001(\tR\005value:\0028\001*\213\001\n\004Role\022\024\n\020ROLE_UN"
+    "SPECIFIED\020\000\022\022\n\016ROLE_BLUE_TEAM\020\001\022\024\n\020ROLE_"
+    "ORANGE_TEAM\020\002\022\022\n\016ROLE_SPECTATOR\020\003\022\033\n\027ROL"
+    "E_SOCIAL_PARTICIPANT\020\004\022\022\n\016ROLE_MODERATOR"
+    "\020\005B\217\001\n\037com.echotools.nevr.telemetry.v1B\r"
+    "NevrTelemetryP\001ZAgithub.com/echotools/ne"
+    "vr-common/v4/gen/go/telemetry/v1;telemet"
+    "ry\252\002\027Nevr.Telemetry.Protobufb\006proto3"
 };
 static const ::_pbi::DescriptorTable* PROTOBUF_NONNULL const
     descriptor_table_telemetry_2fv1_2ftelemetry_2eproto_deps[2] = {
@@ -1186,13 +1262,13 @@ static ::absl::once_flag descriptor_table_telemetry_2fv1_2ftelemetry_2eproto_onc
 PROTOBUF_CONSTINIT const ::_pbi::DescriptorTable descriptor_table_telemetry_2fv1_2ftelemetry_2eproto = {
     false,
     false,
-    4980,
+    5236,
     descriptor_table_protodef_telemetry_2fv1_2ftelemetry_2eproto,
     "telemetry/v1/telemetry.proto",
     &descriptor_table_telemetry_2fv1_2ftelemetry_2eproto_once,
     descriptor_table_telemetry_2fv1_2ftelemetry_2eproto_deps,
     2,
-    28,
+    30,
     schemas,
     file_default_instances,
     TableStruct_telemetry_2fv1_2ftelemetry_2eproto::offsets,
@@ -2838,6 +2914,19 @@ void LobbySessionEvent::set_allocated_player_shot_taken(::telemetry::v1::PlayerS
   }
   // @@protoc_insertion_point(field_set_allocated:telemetry.v1.LobbySessionEvent.player_shot_taken)
 }
+void LobbySessionEvent::set_allocated_generic_event(::telemetry::v1::GenericEvent* PROTOBUF_NULLABLE generic_event) {
+  ::google::protobuf::Arena* message_arena = GetArena();
+  clear_event();
+  if (generic_event) {
+    ::google::protobuf::Arena* submessage_arena = generic_event->GetArena();
+    if (message_arena != submessage_arena) {
+      generic_event = ::google::protobuf::internal::GetOwnedMessage(message_arena, generic_event, submessage_arena);
+    }
+    set_has_generic_event();
+    _impl_.event_.generic_event_ = generic_event;
+  }
+  // @@protoc_insertion_point(field_set_allocated:telemetry.v1.LobbySessionEvent.generic_event)
+}
 LobbySessionEvent::LobbySessionEvent(::google::protobuf::Arena* PROTOBUF_NULLABLE arena)
 #if defined(PROTOBUF_CUSTOM_VTABLE)
     : ::google::protobuf::Message(arena, LobbySessionEvent_class_data_.base()) {
@@ -2939,6 +3028,9 @@ LobbySessionEvent::LobbySessionEvent(
         break;
       case kPlayerShotTaken:
         _impl_.event_.player_shot_taken_ = ::google::protobuf::Message::CopyConstruct(arena, *from._impl_.event_.player_shot_taken_);
+        break;
+      case kGenericEvent:
+        _impl_.event_.generic_event_ = ::google::protobuf::Message::CopyConstruct(arena, *from._impl_.event_.generic_event_);
         break;
   }
 
@@ -3159,6 +3251,14 @@ void LobbySessionEvent::clear_event() {
       }
       break;
     }
+    case kGenericEvent: {
+      if (GetArena() == nullptr) {
+        delete _impl_.event_.generic_event_;
+      } else if (::google::protobuf::internal::DebugHardenClearOneofMessageOnArena()) {
+        ::google::protobuf::internal::MaybePoisonAfterClear(_impl_.event_.generic_event_);
+      }
+      break;
+    }
     case EVENT_NOT_SET: {
       break;
     }
@@ -3210,17 +3310,17 @@ LobbySessionEvent::GetClassData() const {
   return LobbySessionEvent_class_data_.base();
 }
 PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1
-const ::_pbi::TcParseTable<0, 23, 23, 0, 9>
+const ::_pbi::TcParseTable<0, 24, 24, 0, 9>
 LobbySessionEvent::_table_ = {
   {
     0,  // no _has_bits_
     0, // no _extensions_
-    57, 0,  // max_field_number, fast_idx_mask
+    60, 0,  // max_field_number, fast_idx_mask
     offsetof(decltype(_table_), field_lookup_table),
     528974335,  // skipmap
     offsetof(decltype(_table_), field_entries),
-    23,  // num_field_entries
-    23,  // num_aux_entries
+    24,  // num_field_entries
+    24,  // num_aux_entries
     offsetof(decltype(_table_), aux_entries),
     LobbySessionEvent_class_data_.base(),
     nullptr,  // post_loop_handler
@@ -3233,7 +3333,7 @@ LobbySessionEvent::_table_ = {
   }}, {{
     40, 0, 2,
     1020, 13,
-    65532, 21,
+    65516, 21,
     65535, 65535
   }}, {{
     // .telemetry.v1.RoundStarted round_started = 10 [json_name = "roundStarted"];
@@ -3282,6 +3382,8 @@ LobbySessionEvent::_table_ = {
     {PROTOBUF_FIELD_OFFSET(LobbySessionEvent, _impl_.event_.player_assist_), _Internal::kOneofCaseOffset + 0, 21, (0 | ::_fl::kFcOneof | ::_fl::kMessage | ::_fl::kTvTable)},
     // .telemetry.v1.PlayerShotTaken player_shot_taken = 57 [json_name = "playerShotTaken"];
     {PROTOBUF_FIELD_OFFSET(LobbySessionEvent, _impl_.event_.player_shot_taken_), _Internal::kOneofCaseOffset + 0, 22, (0 | ::_fl::kFcOneof | ::_fl::kMessage | ::_fl::kTvTable)},
+    // .telemetry.v1.GenericEvent generic_event = 60 [json_name = "genericEvent"];
+    {PROTOBUF_FIELD_OFFSET(LobbySessionEvent, _impl_.event_.generic_event_), _Internal::kOneofCaseOffset + 0, 23, (0 | ::_fl::kFcOneof | ::_fl::kMessage | ::_fl::kTvTable)},
   }},
   {{
       {::_pbi::TcParser::GetTable<::telemetry::v1::RoundStarted>()},
@@ -3307,6 +3409,7 @@ LobbySessionEvent::_table_ = {
       {::_pbi::TcParser::GetTable<::telemetry::v1::PlayerInterception>()},
       {::_pbi::TcParser::GetTable<::telemetry::v1::PlayerAssist>()},
       {::_pbi::TcParser::GetTable<::telemetry::v1::PlayerShotTaken>()},
+      {::_pbi::TcParser::GetTable<::telemetry::v1::GenericEvent>()},
   }},
   {{
   }},
@@ -3479,6 +3582,12 @@ PROTOBUF_NOINLINE void LobbySessionEvent::Clear() {
           stream);
       break;
     }
+    case kGenericEvent: {
+      target = ::google::protobuf::internal::WireFormatLite::InternalWriteMessage(
+          60, *this_._impl_.event_.generic_event_, this_._impl_.event_.generic_event_->GetCachedSize(), target,
+          stream);
+      break;
+    }
     default:
       break;
   }
@@ -3642,6 +3751,12 @@ PROTOBUF_NOINLINE void LobbySessionEvent::Clear() {
     case kPlayerShotTaken: {
       total_size += 2 +
                     ::google::protobuf::internal::WireFormatLite::MessageSize(*this_._impl_.event_.player_shot_taken_);
+      break;
+    }
+    // .telemetry.v1.GenericEvent generic_event = 60 [json_name = "genericEvent"];
+    case kGenericEvent: {
+      total_size += 2 +
+                    ::google::protobuf::internal::WireFormatLite::MessageSize(*this_._impl_.event_.generic_event_);
       break;
     }
     case EVENT_NOT_SET: {
@@ -3859,6 +3974,14 @@ void LobbySessionEvent::MergeImpl(::google::protobuf::MessageLite& to_msg,
           _this->_impl_.event_.player_shot_taken_ = ::google::protobuf::Message::CopyConstruct(arena, *from._impl_.event_.player_shot_taken_);
         } else {
           _this->_impl_.event_.player_shot_taken_->MergeFrom(*from._impl_.event_.player_shot_taken_);
+        }
+        break;
+      }
+      case kGenericEvent: {
+        if (oneof_needs_init) {
+          _this->_impl_.event_.generic_event_ = ::google::protobuf::Message::CopyConstruct(arena, *from._impl_.event_.generic_event_);
+        } else {
+          _this->_impl_.event_.generic_event_->MergeFrom(*from._impl_.event_.generic_event_);
         }
         break;
       }
@@ -10714,6 +10837,498 @@ void PlayerShotTaken::InternalSwap(PlayerShotTaken* PROTOBUF_RESTRICT PROTOBUF_N
 }
 
 ::google::protobuf::Metadata PlayerShotTaken::GetMetadata() const {
+  return ::google::protobuf::Message::GetMetadataImpl(GetClassData()->full());
+}
+// ===================================================================
+
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+GenericEvent_DataEntry_DoNotUse::GenericEvent_DataEntry_DoNotUse()
+    : SuperType(GenericEvent_DataEntry_DoNotUse_class_data_.base()) {}
+GenericEvent_DataEntry_DoNotUse::GenericEvent_DataEntry_DoNotUse(::google::protobuf::Arena* PROTOBUF_NULLABLE arena)
+    : SuperType(arena, GenericEvent_DataEntry_DoNotUse_class_data_.base()) {}
+#else   // PROTOBUF_CUSTOM_VTABLE
+GenericEvent_DataEntry_DoNotUse::GenericEvent_DataEntry_DoNotUse() : SuperType() {}
+GenericEvent_DataEntry_DoNotUse::GenericEvent_DataEntry_DoNotUse(::google::protobuf::Arena* PROTOBUF_NULLABLE arena) : SuperType(arena) {}
+#endif  // PROTOBUF_CUSTOM_VTABLE
+inline void* PROTOBUF_NONNULL GenericEvent_DataEntry_DoNotUse::PlacementNew_(
+    const void* PROTOBUF_NONNULL, void* PROTOBUF_NONNULL mem,
+    ::google::protobuf::Arena* PROTOBUF_NULLABLE arena) {
+  return ::new (mem) GenericEvent_DataEntry_DoNotUse(arena);
+}
+constexpr auto GenericEvent_DataEntry_DoNotUse::InternalNewImpl_() {
+  return ::google::protobuf::internal::MessageCreator::CopyInit(sizeof(GenericEvent_DataEntry_DoNotUse),
+                                            alignof(GenericEvent_DataEntry_DoNotUse));
+}
+constexpr auto GenericEvent_DataEntry_DoNotUse::InternalGenerateClassData_() {
+  return ::google::protobuf::internal::ClassDataFull{
+      ::google::protobuf::internal::ClassData{
+          &_GenericEvent_DataEntry_DoNotUse_default_instance_._instance,
+          &_table_.header,
+          nullptr,  // OnDemandRegisterArenaDtor
+          nullptr,  // IsInitialized
+          &GenericEvent_DataEntry_DoNotUse::MergeImpl,
+          ::google::protobuf::Message::GetNewImpl<GenericEvent_DataEntry_DoNotUse>(),
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+          &GenericEvent_DataEntry_DoNotUse::SharedDtor,
+          static_cast<void (::google::protobuf::MessageLite::*)()>(&GenericEvent_DataEntry_DoNotUse::ClearImpl),
+              ::google::protobuf::Message::ByteSizeLongImpl, ::google::protobuf::Message::_InternalSerializeImpl
+              ,
+#endif  // PROTOBUF_CUSTOM_VTABLE
+          PROTOBUF_FIELD_OFFSET(GenericEvent_DataEntry_DoNotUse, _impl_._cached_size_),
+          false,
+      },
+      &GenericEvent_DataEntry_DoNotUse::kDescriptorMethods,
+      &descriptor_table_telemetry_2fv1_2ftelemetry_2eproto,
+      nullptr,  // tracker
+  };
+}
+
+PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 const
+    ::google::protobuf::internal::ClassDataFull GenericEvent_DataEntry_DoNotUse_class_data_ =
+        GenericEvent_DataEntry_DoNotUse::InternalGenerateClassData_();
+
+PROTOBUF_ATTRIBUTE_WEAK const ::google::protobuf::internal::ClassData* PROTOBUF_NONNULL
+GenericEvent_DataEntry_DoNotUse::GetClassData() const {
+  ::google::protobuf::internal::PrefetchToLocalCache(&GenericEvent_DataEntry_DoNotUse_class_data_);
+  ::google::protobuf::internal::PrefetchToLocalCache(GenericEvent_DataEntry_DoNotUse_class_data_.tc_table);
+  return GenericEvent_DataEntry_DoNotUse_class_data_.base();
+}
+PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1
+const ::_pbi::TcParseTable<1, 2, 0, 52, 2>
+GenericEvent_DataEntry_DoNotUse::_table_ = {
+  {
+    PROTOBUF_FIELD_OFFSET(GenericEvent_DataEntry_DoNotUse, _impl_._has_bits_),
+    0, // no _extensions_
+    2, 8,  // max_field_number, fast_idx_mask
+    offsetof(decltype(_table_), field_lookup_table),
+    4294967292,  // skipmap
+    offsetof(decltype(_table_), field_entries),
+    2,  // num_field_entries
+    0,  // num_aux_entries
+    offsetof(decltype(_table_), field_names),  // no aux_entries
+    GenericEvent_DataEntry_DoNotUse_class_data_.base(),
+    nullptr,  // post_loop_handler
+    ::_pbi::TcParser::DiscardEverythingFallback,  // fallback
+    #ifdef PROTOBUF_PREFETCH_PARSE_TABLE
+    ::_pbi::TcParser::GetTable<::telemetry::v1::GenericEvent_DataEntry_DoNotUse>(),  // to_prefetch
+    #endif  // PROTOBUF_PREFETCH_PARSE_TABLE
+  }, {{
+    // string value = 2 [json_name = "value"];
+    {::_pbi::TcParser::FastUS1,
+     {18, 1, 0,
+      PROTOBUF_FIELD_OFFSET(GenericEvent_DataEntry_DoNotUse, _impl_.value_)}},
+    // string key = 1 [json_name = "key"];
+    {::_pbi::TcParser::FastUS1,
+     {10, 0, 0,
+      PROTOBUF_FIELD_OFFSET(GenericEvent_DataEntry_DoNotUse, _impl_.key_)}},
+  }}, {{
+    65535, 65535
+  }}, {{
+    // string key = 1 [json_name = "key"];
+    {PROTOBUF_FIELD_OFFSET(GenericEvent_DataEntry_DoNotUse, _impl_.key_), _Internal::kHasBitsOffset + 0, 0, (0 | ::_fl::kFcOptional | ::_fl::kUtf8String | ::_fl::kRepAString)},
+    // string value = 2 [json_name = "value"];
+    {PROTOBUF_FIELD_OFFSET(GenericEvent_DataEntry_DoNotUse, _impl_.value_), _Internal::kHasBitsOffset + 1, 0, (0 | ::_fl::kFcOptional | ::_fl::kUtf8String | ::_fl::kRepAString)},
+  }},
+  // no aux_entries
+  {{
+    "\43\3\5\0\0\0\0\0"
+    "telemetry.v1.GenericEvent.DataEntry"
+    "key"
+    "value"
+  }},
+};
+// ===================================================================
+
+class GenericEvent::_Internal {
+ public:
+  using HasBits =
+      decltype(::std::declval<GenericEvent>()._impl_._has_bits_);
+  static constexpr ::int32_t kHasBitsOffset =
+      8 * PROTOBUF_FIELD_OFFSET(GenericEvent, _impl_._has_bits_);
+};
+
+GenericEvent::GenericEvent(::google::protobuf::Arena* PROTOBUF_NULLABLE arena)
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+    : ::google::protobuf::Message(arena, GenericEvent_class_data_.base()) {
+#else   // PROTOBUF_CUSTOM_VTABLE
+    : ::google::protobuf::Message(arena) {
+#endif  // PROTOBUF_CUSTOM_VTABLE
+  SharedCtor(arena);
+  // @@protoc_insertion_point(arena_constructor:telemetry.v1.GenericEvent)
+}
+PROTOBUF_NDEBUG_INLINE GenericEvent::Impl_::Impl_(
+    [[maybe_unused]] ::google::protobuf::internal::InternalVisibility visibility,
+    [[maybe_unused]] ::google::protobuf::Arena* PROTOBUF_NULLABLE arena, const Impl_& from,
+    [[maybe_unused]] const ::telemetry::v1::GenericEvent& from_msg)
+      : _has_bits_{from._has_bits_},
+        _cached_size_{0},
+        event_type_(arena, from.event_type_),
+        payload_(arena, from.payload_),
+        data_{visibility, arena, from.data_} {}
+
+GenericEvent::GenericEvent(
+    ::google::protobuf::Arena* PROTOBUF_NULLABLE arena,
+    const GenericEvent& from)
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+    : ::google::protobuf::Message(arena, GenericEvent_class_data_.base()) {
+#else   // PROTOBUF_CUSTOM_VTABLE
+    : ::google::protobuf::Message(arena) {
+#endif  // PROTOBUF_CUSTOM_VTABLE
+  GenericEvent* const _this = this;
+  (void)_this;
+  _internal_metadata_.MergeFrom<::google::protobuf::UnknownFieldSet>(
+      from._internal_metadata_);
+  new (&_impl_) Impl_(internal_visibility(), arena, from._impl_, from);
+
+  // @@protoc_insertion_point(copy_constructor:telemetry.v1.GenericEvent)
+}
+PROTOBUF_NDEBUG_INLINE GenericEvent::Impl_::Impl_(
+    [[maybe_unused]] ::google::protobuf::internal::InternalVisibility visibility,
+    [[maybe_unused]] ::google::protobuf::Arena* PROTOBUF_NULLABLE arena)
+      : _cached_size_{0},
+        event_type_(arena),
+        payload_(arena),
+        data_{visibility, arena} {}
+
+inline void GenericEvent::SharedCtor(::_pb::Arena* PROTOBUF_NULLABLE arena) {
+  new (&_impl_) Impl_(internal_visibility(), arena);
+}
+GenericEvent::~GenericEvent() {
+  // @@protoc_insertion_point(destructor:telemetry.v1.GenericEvent)
+  SharedDtor(*this);
+}
+inline void GenericEvent::SharedDtor(MessageLite& self) {
+  GenericEvent& this_ = static_cast<GenericEvent&>(self);
+  if constexpr (::_pbi::DebugHardenCheckHasBitConsistency()) {
+    this_.CheckHasBitConsistency();
+  }
+  this_._internal_metadata_.Delete<::google::protobuf::UnknownFieldSet>();
+  ABSL_DCHECK(this_.GetArena() == nullptr);
+  this_._impl_.event_type_.Destroy();
+  this_._impl_.payload_.Destroy();
+  this_._impl_.~Impl_();
+}
+
+inline void* PROTOBUF_NONNULL GenericEvent::PlacementNew_(
+    const void* PROTOBUF_NONNULL, void* PROTOBUF_NONNULL mem,
+    ::google::protobuf::Arena* PROTOBUF_NULLABLE arena) {
+  return ::new (mem) GenericEvent(arena);
+}
+constexpr auto GenericEvent::InternalNewImpl_() {
+  constexpr auto arena_bits = ::google::protobuf::internal::EncodePlacementArenaOffsets({
+      PROTOBUF_FIELD_OFFSET(GenericEvent, _impl_.data_) +
+          decltype(GenericEvent::_impl_.data_)::
+              InternalGetArenaOffset(
+                  ::google::protobuf::Message::internal_visibility()),
+  });
+  if (arena_bits.has_value()) {
+    return ::google::protobuf::internal::MessageCreator::CopyInit(
+        sizeof(GenericEvent), alignof(GenericEvent), *arena_bits);
+  } else {
+    return ::google::protobuf::internal::MessageCreator(&GenericEvent::PlacementNew_,
+                                 sizeof(GenericEvent),
+                                 alignof(GenericEvent));
+  }
+}
+constexpr auto GenericEvent::InternalGenerateClassData_() {
+  return ::google::protobuf::internal::ClassDataFull{
+      ::google::protobuf::internal::ClassData{
+          &_GenericEvent_default_instance_._instance,
+          &_table_.header,
+          nullptr,  // OnDemandRegisterArenaDtor
+          nullptr,  // IsInitialized
+          &GenericEvent::MergeImpl,
+          ::google::protobuf::Message::GetNewImpl<GenericEvent>(),
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+          &GenericEvent::SharedDtor,
+          ::google::protobuf::Message::GetClearImpl<GenericEvent>(), &GenericEvent::ByteSizeLong,
+              &GenericEvent::_InternalSerialize,
+#endif  // PROTOBUF_CUSTOM_VTABLE
+          PROTOBUF_FIELD_OFFSET(GenericEvent, _impl_._cached_size_),
+          false,
+      },
+      &GenericEvent::kDescriptorMethods,
+      &descriptor_table_telemetry_2fv1_2ftelemetry_2eproto,
+      nullptr,  // tracker
+  };
+}
+
+PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 const
+    ::google::protobuf::internal::ClassDataFull GenericEvent_class_data_ =
+        GenericEvent::InternalGenerateClassData_();
+
+PROTOBUF_ATTRIBUTE_WEAK const ::google::protobuf::internal::ClassData* PROTOBUF_NONNULL
+GenericEvent::GetClassData() const {
+  ::google::protobuf::internal::PrefetchToLocalCache(&GenericEvent_class_data_);
+  ::google::protobuf::internal::PrefetchToLocalCache(GenericEvent_class_data_.tc_table);
+  return GenericEvent_class_data_.base();
+}
+PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1
+const ::_pbi::TcParseTable<2, 3, 1, 55, 2>
+GenericEvent::_table_ = {
+  {
+    PROTOBUF_FIELD_OFFSET(GenericEvent, _impl_._has_bits_),
+    0, // no _extensions_
+    3, 24,  // max_field_number, fast_idx_mask
+    offsetof(decltype(_table_), field_lookup_table),
+    4294967288,  // skipmap
+    offsetof(decltype(_table_), field_entries),
+    3,  // num_field_entries
+    1,  // num_aux_entries
+    offsetof(decltype(_table_), aux_entries),
+    GenericEvent_class_data_.base(),
+    nullptr,  // post_loop_handler
+    ::_pbi::TcParser::GenericFallback,  // fallback
+    #ifdef PROTOBUF_PREFETCH_PARSE_TABLE
+    ::_pbi::TcParser::GetTable<::telemetry::v1::GenericEvent>(),  // to_prefetch
+    #endif  // PROTOBUF_PREFETCH_PARSE_TABLE
+  }, {{
+    {::_pbi::TcParser::MiniParse, {}},
+    // string event_type = 1 [json_name = "eventType"];
+    {::_pbi::TcParser::FastUS1,
+     {10, 0, 0,
+      PROTOBUF_FIELD_OFFSET(GenericEvent, _impl_.event_type_)}},
+    {::_pbi::TcParser::MiniParse, {}},
+    // string payload = 3 [json_name = "payload"];
+    {::_pbi::TcParser::FastUS1,
+     {26, 1, 0,
+      PROTOBUF_FIELD_OFFSET(GenericEvent, _impl_.payload_)}},
+  }}, {{
+    65535, 65535
+  }}, {{
+    // string event_type = 1 [json_name = "eventType"];
+    {PROTOBUF_FIELD_OFFSET(GenericEvent, _impl_.event_type_), _Internal::kHasBitsOffset + 0, 0, (0 | ::_fl::kFcOptional | ::_fl::kUtf8String | ::_fl::kRepAString)},
+    // map<string, string> data = 2 [json_name = "data"];
+    {PROTOBUF_FIELD_OFFSET(GenericEvent, _impl_.data_), _Internal::kHasBitsOffset + 2, 0, (0 | ::_fl::kFcRepeated | ::_fl::kMap)},
+    // string payload = 3 [json_name = "payload"];
+    {PROTOBUF_FIELD_OFFSET(GenericEvent, _impl_.payload_), _Internal::kHasBitsOffset + 1, 0, (0 | ::_fl::kFcOptional | ::_fl::kUtf8String | ::_fl::kRepAString)},
+  }},
+  {{
+      {::_pbi::TcParser::GetMapAuxInfo(
+          1, 0, 9, 9, 0)},
+  }},
+  {{
+    "\31\12\4\7\0\0\0\0"
+    "telemetry.v1.GenericEvent"
+    "event_type"
+    "data"
+    "payload"
+  }},
+};
+PROTOBUF_NOINLINE void GenericEvent::Clear() {
+// @@protoc_insertion_point(message_clear_start:telemetry.v1.GenericEvent)
+  ::google::protobuf::internal::TSanWrite(&_impl_);
+  ::uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  cached_has_bits = _impl_._has_bits_[0];
+  if (BatchCheckHasBit(cached_has_bits, 0x00000007U)) {
+    if (CheckHasBit(cached_has_bits, 0x00000001U)) {
+      _impl_.event_type_.ClearNonDefaultToEmpty();
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000002U)) {
+      _impl_.payload_.ClearNonDefaultToEmpty();
+    }
+    if (CheckHasBitForRepeated(cached_has_bits, 0x00000004U)) {
+      _impl_.data_.Clear();
+    }
+  }
+  _impl_._has_bits_.Clear();
+  _internal_metadata_.Clear<::google::protobuf::UnknownFieldSet>();
+}
+
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+::uint8_t* PROTOBUF_NONNULL GenericEvent::_InternalSerialize(
+    const ::google::protobuf::MessageLite& base, ::uint8_t* PROTOBUF_NONNULL target,
+    ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) {
+  const GenericEvent& this_ = static_cast<const GenericEvent&>(base);
+#else   // PROTOBUF_CUSTOM_VTABLE
+::uint8_t* PROTOBUF_NONNULL GenericEvent::_InternalSerialize(
+    ::uint8_t* PROTOBUF_NONNULL target,
+    ::google::protobuf::io::EpsCopyOutputStream* PROTOBUF_NONNULL stream) const {
+  const GenericEvent& this_ = *this;
+#endif  // PROTOBUF_CUSTOM_VTABLE
+  if constexpr (::_pbi::DebugHardenCheckHasBitConsistency()) {
+    this_.CheckHasBitConsistency();
+  }
+  // @@protoc_insertion_point(serialize_to_array_start:telemetry.v1.GenericEvent)
+  ::uint32_t cached_has_bits = 0;
+  (void)cached_has_bits;
+
+  cached_has_bits = this_._impl_._has_bits_[0];
+  // string event_type = 1 [json_name = "eventType"];
+  if (CheckHasBit(cached_has_bits, 0x00000001U)) {
+    if (!this_._internal_event_type().empty()) {
+      const ::std::string& _s = this_._internal_event_type();
+      ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
+          _s.data(), static_cast<int>(_s.length()), ::google::protobuf::internal::WireFormatLite::SERIALIZE, "telemetry.v1.GenericEvent.event_type");
+      target = stream->WriteStringMaybeAliased(1, _s, target);
+    }
+  }
+
+  // map<string, string> data = 2 [json_name = "data"];
+  if (CheckHasBitForRepeated(cached_has_bits, 0x00000004U)) {
+    if (!this_._internal_data().empty()) {
+      using MapType = ::google::protobuf::Map<::std::string, ::std::string>;
+      using WireHelper = _pbi::MapEntryFuncs<::std::string, ::std::string,
+                                     _pbi::WireFormatLite::TYPE_STRING,
+                                     _pbi::WireFormatLite::TYPE_STRING>;
+      const auto& field = this_._internal_data();
+
+      if (stream->IsSerializationDeterministic() && field.size() > 1) {
+        for (const auto& entry : ::google::protobuf::internal::MapSorterPtr<MapType>(field)) {
+          target = WireHelper::InternalSerialize(
+              2, entry.first, entry.second, target, stream);
+          ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
+              entry.first.data(), static_cast<int>(entry.first.length()),
+ ::google::protobuf::internal::WireFormatLite::SERIALIZE, "telemetry.v1.GenericEvent.data");
+          ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
+              entry.second.data(), static_cast<int>(entry.second.length()),
+ ::google::protobuf::internal::WireFormatLite::SERIALIZE, "telemetry.v1.GenericEvent.data");
+        }
+      } else {
+        for (const auto& entry : field) {
+          target = WireHelper::InternalSerialize(
+              2, entry.first, entry.second, target, stream);
+          ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
+              entry.first.data(), static_cast<int>(entry.first.length()),
+ ::google::protobuf::internal::WireFormatLite::SERIALIZE, "telemetry.v1.GenericEvent.data");
+          ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
+              entry.second.data(), static_cast<int>(entry.second.length()),
+ ::google::protobuf::internal::WireFormatLite::SERIALIZE, "telemetry.v1.GenericEvent.data");
+        }
+      }
+    }
+  }
+
+  // string payload = 3 [json_name = "payload"];
+  if (CheckHasBit(cached_has_bits, 0x00000002U)) {
+    if (!this_._internal_payload().empty()) {
+      const ::std::string& _s = this_._internal_payload();
+      ::google::protobuf::internal::WireFormatLite::VerifyUtf8String(
+          _s.data(), static_cast<int>(_s.length()), ::google::protobuf::internal::WireFormatLite::SERIALIZE, "telemetry.v1.GenericEvent.payload");
+      target = stream->WriteStringMaybeAliased(3, _s, target);
+    }
+  }
+
+  if (ABSL_PREDICT_FALSE(this_._internal_metadata_.have_unknown_fields())) {
+    target =
+        ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
+            this_._internal_metadata_.unknown_fields<::google::protobuf::UnknownFieldSet>(::google::protobuf::UnknownFieldSet::default_instance), target, stream);
+  }
+  // @@protoc_insertion_point(serialize_to_array_end:telemetry.v1.GenericEvent)
+  return target;
+}
+
+#if defined(PROTOBUF_CUSTOM_VTABLE)
+::size_t GenericEvent::ByteSizeLong(const MessageLite& base) {
+  const GenericEvent& this_ = static_cast<const GenericEvent&>(base);
+#else   // PROTOBUF_CUSTOM_VTABLE
+::size_t GenericEvent::ByteSizeLong() const {
+  const GenericEvent& this_ = *this;
+#endif  // PROTOBUF_CUSTOM_VTABLE
+  // @@protoc_insertion_point(message_byte_size_start:telemetry.v1.GenericEvent)
+  ::size_t total_size = 0;
+
+  ::uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void)cached_has_bits;
+
+  ::_pbi::Prefetch5LinesFrom7Lines(&this_);
+  cached_has_bits = this_._impl_._has_bits_[0];
+  if (BatchCheckHasBit(cached_has_bits, 0x00000007U)) {
+    // string event_type = 1 [json_name = "eventType"];
+    if (CheckHasBit(cached_has_bits, 0x00000001U)) {
+      if (!this_._internal_event_type().empty()) {
+        total_size += 1 + ::google::protobuf::internal::WireFormatLite::StringSize(
+                                        this_._internal_event_type());
+      }
+    }
+    // string payload = 3 [json_name = "payload"];
+    if (CheckHasBit(cached_has_bits, 0x00000002U)) {
+      if (!this_._internal_payload().empty()) {
+        total_size += 1 + ::google::protobuf::internal::WireFormatLite::StringSize(
+                                        this_._internal_payload());
+      }
+    }
+    // map<string, string> data = 2 [json_name = "data"];
+    if (CheckHasBitForRepeated(cached_has_bits, 0x00000004U)) {
+      total_size +=
+          1 * ::google::protobuf::internal::FromIntSize(this_._internal_data_size());
+      for (const auto& entry : this_._internal_data()) {
+        total_size += _pbi::MapEntryFuncs<::std::string, ::std::string,
+                                       _pbi::WireFormatLite::TYPE_STRING,
+                                       _pbi::WireFormatLite::TYPE_STRING>::ByteSizeLong(entry.first, entry.second);
+      }
+    }
+  }
+  return this_.MaybeComputeUnknownFieldsSize(total_size,
+                                             &this_._impl_._cached_size_);
+}
+
+void GenericEvent::MergeImpl(::google::protobuf::MessageLite& to_msg,
+                            const ::google::protobuf::MessageLite& from_msg) {
+   auto* const _this =
+      static_cast<GenericEvent*>(&to_msg);
+  auto& from = static_cast<const GenericEvent&>(from_msg);
+  if constexpr (::_pbi::DebugHardenCheckHasBitConsistency()) {
+    from.CheckHasBitConsistency();
+  }
+  // @@protoc_insertion_point(class_specific_merge_from_start:telemetry.v1.GenericEvent)
+  ABSL_DCHECK_NE(&from, _this);
+  ::uint32_t cached_has_bits = 0;
+  (void)cached_has_bits;
+
+  cached_has_bits = from._impl_._has_bits_[0];
+  if (BatchCheckHasBit(cached_has_bits, 0x00000007U)) {
+    if (CheckHasBit(cached_has_bits, 0x00000001U)) {
+      if (!from._internal_event_type().empty()) {
+        _this->_internal_set_event_type(from._internal_event_type());
+      } else {
+        if (_this->_impl_.event_type_.IsDefault()) {
+          _this->_internal_set_event_type("");
+        }
+      }
+    }
+    if (CheckHasBit(cached_has_bits, 0x00000002U)) {
+      if (!from._internal_payload().empty()) {
+        _this->_internal_set_payload(from._internal_payload());
+      } else {
+        if (_this->_impl_.payload_.IsDefault()) {
+          _this->_internal_set_payload("");
+        }
+      }
+    }
+    if (CheckHasBitForRepeated(cached_has_bits, 0x00000004U)) {
+      _this->_impl_.data_.MergeFrom(from._impl_.data_);
+    }
+  }
+  _this->_impl_._has_bits_[0] |= cached_has_bits;
+  _this->_internal_metadata_.MergeFrom<::google::protobuf::UnknownFieldSet>(
+      from._internal_metadata_);
+}
+
+void GenericEvent::CopyFrom(const GenericEvent& from) {
+  // @@protoc_insertion_point(class_specific_copy_from_start:telemetry.v1.GenericEvent)
+  if (&from == this) return;
+  Clear();
+  MergeFrom(from);
+}
+
+
+void GenericEvent::InternalSwap(GenericEvent* PROTOBUF_RESTRICT PROTOBUF_NONNULL other) {
+  using ::std::swap;
+  auto* arena = GetArena();
+  ABSL_DCHECK_EQ(arena, other->GetArena());
+  _internal_metadata_.InternalSwap(&other->_internal_metadata_);
+  swap(_impl_._has_bits_[0], other->_impl_._has_bits_[0]);
+  ::_pbi::ArenaStringPtr::InternalSwap(&_impl_.event_type_, &other->_impl_.event_type_, arena);
+  ::_pbi::ArenaStringPtr::InternalSwap(&_impl_.payload_, &other->_impl_.payload_, arena);
+  _impl_.data_.InternalSwap(&other->_impl_.data_);
+}
+
+::google::protobuf::Metadata GenericEvent::GetMetadata() const {
   return ::google::protobuf::Message::GetMetadataImpl(GetClassData()->full());
 }
 // @@protoc_insertion_point(namespace_scope)

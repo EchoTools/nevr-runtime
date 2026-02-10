@@ -112,6 +112,9 @@ message LobbySessionEvent {
     PlayerInterception player_interception = 55;
     PlayerAssist player_assist = 56;
     PlayerShotTaken player_shot_taken = 57;
+
+    // Misc Events
+    GenericEvent generic_event = 60;
   }
 }
 
@@ -281,4 +284,21 @@ message PlayerAssist {
 message PlayerShotTaken {
   int32 player_slot = 1;
   int32 total_shots = 2;
+}
+
+// ------------------------------------------------------------------
+// Generic/Misc Events
+// ------------------------------------------------------------------
+
+// Generic event for encoding arbitrary data via string.
+// Use for custom events, debugging, or data that doesn't fit existing types.
+message GenericEvent {
+  // Event type identifier (e.g., "custom_debug", "experimental_metric")
+  string event_type = 1;
+  
+  // Arbitrary key-value data
+  map<string, string> data = 2;
+  
+  // Optional raw payload for non-structured data
+  string payload = 3;
 }

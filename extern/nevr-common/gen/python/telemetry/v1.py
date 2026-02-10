@@ -118,6 +118,8 @@ class LobbySessionEvent(betterproto.Message):
     )
     player_assist: "PlayerAssist" = betterproto.message_field(56, group="event")
     player_shot_taken: "PlayerShotTaken" = betterproto.message_field(57, group="event")
+    # Misc Events
+    generic_event: "GenericEvent" = betterproto.message_field(60, group="event")
 
 
 @dataclass
@@ -306,3 +308,20 @@ class PlayerShotTaken(betterproto.Message):
 
     player_slot: int = betterproto.int32_field(1)
     total_shots: int = betterproto.int32_field(2)
+
+
+@dataclass
+class GenericEvent(betterproto.Message):
+    """
+    Generic event for encoding arbitrary data via string. Use for custom
+    events, debugging, or data that doesn't fit existing types.
+    """
+
+    # Event type identifier (e.g., "custom_debug", "experimental_metric")
+    event_type: str = betterproto.string_field(1)
+    # Arbitrary key-value data
+    data: Dict[str, str] = betterproto.map_field(
+        2, betterproto.TYPE_STRING, betterproto.TYPE_STRING
+    )
+    # Optional raw payload for non-structured data
+    payload: str = betterproto.string_field(3)

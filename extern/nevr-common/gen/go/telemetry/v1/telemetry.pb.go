@@ -404,6 +404,7 @@ type LobbySessionEvent struct {
 	//	*LobbySessionEvent_PlayerInterception
 	//	*LobbySessionEvent_PlayerAssist
 	//	*LobbySessionEvent_PlayerShotTaken
+	//	*LobbySessionEvent_GenericEvent
 	Event         isLobbySessionEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -653,6 +654,15 @@ func (x *LobbySessionEvent) GetPlayerShotTaken() *PlayerShotTaken {
 	return nil
 }
 
+func (x *LobbySessionEvent) GetGenericEvent() *GenericEvent {
+	if x != nil {
+		if x, ok := x.Event.(*LobbySessionEvent_GenericEvent); ok {
+			return x.GenericEvent
+		}
+	}
+	return nil
+}
+
 type isLobbySessionEvent_Event interface {
 	isLobbySessionEvent_Event()
 }
@@ -754,6 +764,11 @@ type LobbySessionEvent_PlayerShotTaken struct {
 	PlayerShotTaken *PlayerShotTaken `protobuf:"bytes,57,opt,name=player_shot_taken,json=playerShotTaken,proto3,oneof"`
 }
 
+type LobbySessionEvent_GenericEvent struct {
+	// Misc Events
+	GenericEvent *GenericEvent `protobuf:"bytes,60,opt,name=generic_event,json=genericEvent,proto3,oneof"`
+}
+
 func (*LobbySessionEvent_RoundStarted) isLobbySessionEvent_Event() {}
 
 func (*LobbySessionEvent_RoundPaused) isLobbySessionEvent_Event() {}
@@ -799,6 +814,8 @@ func (*LobbySessionEvent_PlayerInterception) isLobbySessionEvent_Event() {}
 func (*LobbySessionEvent_PlayerAssist) isLobbySessionEvent_Event() {}
 
 func (*LobbySessionEvent_PlayerShotTaken) isLobbySessionEvent_Event() {}
+
+func (*LobbySessionEvent_GenericEvent) isLobbySessionEvent_Event() {}
 
 // Fired when the round starts.
 type RoundStarted struct {
@@ -2024,6 +2041,71 @@ func (x *PlayerShotTaken) GetTotalShots() int32 {
 	return 0
 }
 
+// Generic event for encoding arbitrary data via string.
+// Use for custom events, debugging, or data that doesn't fit existing types.
+type GenericEvent struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Event type identifier (e.g., "custom_debug", "experimental_metric")
+	EventType string `protobuf:"bytes,1,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
+	// Arbitrary key-value data
+	Data map[string]string `protobuf:"bytes,2,rep,name=data,proto3" json:"data,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Optional raw payload for non-structured data
+	Payload       string `protobuf:"bytes,3,opt,name=payload,proto3" json:"payload,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GenericEvent) Reset() {
+	*x = GenericEvent{}
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GenericEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GenericEvent) ProtoMessage() {}
+
+func (x *GenericEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_telemetry_v1_telemetry_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GenericEvent.ProtoReflect.Descriptor instead.
+func (*GenericEvent) Descriptor() ([]byte, []int) {
+	return file_telemetry_v1_telemetry_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *GenericEvent) GetEventType() string {
+	if x != nil {
+		return x.EventType
+	}
+	return ""
+}
+
+func (x *GenericEvent) GetData() map[string]string {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *GenericEvent) GetPayload() string {
+	if x != nil {
+		return x.Payload
+	}
+	return ""
+}
+
 var File_telemetry_v1_telemetry_proto protoreflect.FileDescriptor
 
 const file_telemetry_v1_telemetry_proto_rawDesc = "" +
@@ -2048,7 +2130,7 @@ const file_telemetry_v1_telemetry_proto_rawDesc = "" +
 	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x127\n" +
 	"\x06events\x18\x03 \x03(\v2\x1f.telemetry.v1.LobbySessionEventR\x06events\x125\n" +
 	"\asession\x18\x04 \x01(\v2\x1b.enginehttp.SessionResponseR\asession\x12B\n" +
-	"\fplayer_bones\x18\x05 \x01(\v2\x1f.enginehttp.PlayerBonesResponseR\vplayerBones\"\xb6\f\n" +
+	"\fplayer_bones\x18\x05 \x01(\v2\x1f.enginehttp.PlayerBonesResponseR\vplayerBones\"\xf9\f\n" +
 	"\x11LobbySessionEvent\x12A\n" +
 	"\rround_started\x18\n" +
 	" \x01(\v2\x1a.telemetry.v1.RoundStartedH\x00R\froundStarted\x12>\n" +
@@ -2083,7 +2165,8 @@ const file_telemetry_v1_telemetry_proto_rawDesc = "" +
 	"\fplayer_block\x186 \x01(\v2\x19.telemetry.v1.PlayerBlockH\x00R\vplayerBlock\x12S\n" +
 	"\x13player_interception\x187 \x01(\v2 .telemetry.v1.PlayerInterceptionH\x00R\x12playerInterception\x12A\n" +
 	"\rplayer_assist\x188 \x01(\v2\x1a.telemetry.v1.PlayerAssistH\x00R\fplayerAssist\x12K\n" +
-	"\x11player_shot_taken\x189 \x01(\v2\x1d.telemetry.v1.PlayerShotTakenH\x00R\x0fplayerShotTakenB\a\n" +
+	"\x11player_shot_taken\x189 \x01(\v2\x1d.telemetry.v1.PlayerShotTakenH\x00R\x0fplayerShotTaken\x12A\n" +
+	"\rgeneric_event\x18< \x01(\v2\x1a.telemetry.v1.GenericEventH\x00R\fgenericEventB\a\n" +
 	"\x05event\"1\n" +
 	"\fRoundStarted\x12!\n" +
 	"\fround_number\x18\x01 \x01(\x05R\vroundNumber\"F\n" +
@@ -2189,7 +2272,15 @@ const file_telemetry_v1_telemetry_proto_rawDesc = "" +
 	"\vplayer_slot\x18\x01 \x01(\x05R\n" +
 	"playerSlot\x12\x1f\n" +
 	"\vtotal_shots\x18\x02 \x01(\x05R\n" +
-	"totalShots*\x8b\x01\n" +
+	"totalShots\"\xba\x01\n" +
+	"\fGenericEvent\x12\x1d\n" +
+	"\n" +
+	"event_type\x18\x01 \x01(\tR\teventType\x128\n" +
+	"\x04data\x18\x02 \x03(\v2$.telemetry.v1.GenericEvent.DataEntryR\x04data\x12\x18\n" +
+	"\apayload\x18\x03 \x01(\tR\apayload\x1a7\n" +
+	"\tDataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01*\x8b\x01\n" +
 	"\x04Role\x12\x14\n" +
 	"\x10ROLE_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eROLE_BLUE_TEAM\x10\x01\x12\x14\n" +
@@ -2212,7 +2303,7 @@ func file_telemetry_v1_telemetry_proto_rawDescGZIP() []byte {
 }
 
 var file_telemetry_v1_telemetry_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_telemetry_v1_telemetry_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_telemetry_v1_telemetry_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_telemetry_v1_telemetry_proto_goTypes = []any{
 	(Role)(0),                           // 0: telemetry.v1.Role
 	(EmotePlayed_EmoteType)(0),          // 1: telemetry.v1.EmotePlayed.EmoteType
@@ -2243,24 +2334,26 @@ var file_telemetry_v1_telemetry_proto_goTypes = []any{
 	(*PlayerInterception)(nil),          // 26: telemetry.v1.PlayerInterception
 	(*PlayerAssist)(nil),                // 27: telemetry.v1.PlayerAssist
 	(*PlayerShotTaken)(nil),             // 28: telemetry.v1.PlayerShotTaken
-	nil,                                 // 29: telemetry.v1.TelemetryHeader.MetadataEntry
-	(*timestamppb.Timestamp)(nil),       // 30: google.protobuf.Timestamp
-	(*apigame.SessionResponse)(nil),     // 31: enginehttp.SessionResponse
-	(*apigame.PlayerBonesResponse)(nil), // 32: enginehttp.PlayerBonesResponse
-	(*apigame.PauseState)(nil),          // 33: enginehttp.PauseState
-	(*apigame.TeamMember)(nil),          // 34: enginehttp.TeamMember
-	(*apigame.LastThrowInfo)(nil),       // 35: enginehttp.LastThrowInfo
-	(*apigame.LastScore)(nil),           // 36: enginehttp.LastScore
+	(*GenericEvent)(nil),                // 29: telemetry.v1.GenericEvent
+	nil,                                 // 30: telemetry.v1.TelemetryHeader.MetadataEntry
+	nil,                                 // 31: telemetry.v1.GenericEvent.DataEntry
+	(*timestamppb.Timestamp)(nil),       // 32: google.protobuf.Timestamp
+	(*apigame.SessionResponse)(nil),     // 33: enginehttp.SessionResponse
+	(*apigame.PlayerBonesResponse)(nil), // 34: enginehttp.PlayerBonesResponse
+	(*apigame.PauseState)(nil),          // 35: enginehttp.PauseState
+	(*apigame.TeamMember)(nil),          // 36: enginehttp.TeamMember
+	(*apigame.LastThrowInfo)(nil),       // 37: enginehttp.LastThrowInfo
+	(*apigame.LastScore)(nil),           // 38: enginehttp.LastScore
 }
 var file_telemetry_v1_telemetry_proto_depIdxs = []int32{
-	30, // 0: telemetry.v1.TelemetryHeader.created_at:type_name -> google.protobuf.Timestamp
-	29, // 1: telemetry.v1.TelemetryHeader.metadata:type_name -> telemetry.v1.TelemetryHeader.MetadataEntry
+	32, // 0: telemetry.v1.TelemetryHeader.created_at:type_name -> google.protobuf.Timestamp
+	30, // 1: telemetry.v1.TelemetryHeader.metadata:type_name -> telemetry.v1.TelemetryHeader.MetadataEntry
 	2,  // 2: telemetry.v1.Envelope.header:type_name -> telemetry.v1.TelemetryHeader
 	4,  // 3: telemetry.v1.Envelope.frame:type_name -> telemetry.v1.LobbySessionStateFrame
-	30, // 4: telemetry.v1.LobbySessionStateFrame.timestamp:type_name -> google.protobuf.Timestamp
+	32, // 4: telemetry.v1.LobbySessionStateFrame.timestamp:type_name -> google.protobuf.Timestamp
 	5,  // 5: telemetry.v1.LobbySessionStateFrame.events:type_name -> telemetry.v1.LobbySessionEvent
-	31, // 6: telemetry.v1.LobbySessionStateFrame.session:type_name -> enginehttp.SessionResponse
-	32, // 7: telemetry.v1.LobbySessionStateFrame.player_bones:type_name -> enginehttp.PlayerBonesResponse
+	33, // 6: telemetry.v1.LobbySessionStateFrame.session:type_name -> enginehttp.SessionResponse
+	34, // 7: telemetry.v1.LobbySessionStateFrame.player_bones:type_name -> enginehttp.PlayerBonesResponse
 	6,  // 8: telemetry.v1.LobbySessionEvent.round_started:type_name -> telemetry.v1.RoundStarted
 	7,  // 9: telemetry.v1.LobbySessionEvent.round_paused:type_name -> telemetry.v1.RoundPaused
 	8,  // 10: telemetry.v1.LobbySessionEvent.round_unpaused:type_name -> telemetry.v1.RoundUnpaused
@@ -2284,22 +2377,24 @@ var file_telemetry_v1_telemetry_proto_depIdxs = []int32{
 	26, // 28: telemetry.v1.LobbySessionEvent.player_interception:type_name -> telemetry.v1.PlayerInterception
 	27, // 29: telemetry.v1.LobbySessionEvent.player_assist:type_name -> telemetry.v1.PlayerAssist
 	28, // 30: telemetry.v1.LobbySessionEvent.player_shot_taken:type_name -> telemetry.v1.PlayerShotTaken
-	33, // 31: telemetry.v1.RoundPaused.pause_state:type_name -> enginehttp.PauseState
-	33, // 32: telemetry.v1.RoundUnpaused.pause_state:type_name -> enginehttp.PauseState
-	0,  // 33: telemetry.v1.RoundEnded.winning_team:type_name -> telemetry.v1.Role
-	0,  // 34: telemetry.v1.MatchEnded.winning_team:type_name -> telemetry.v1.Role
-	34, // 35: telemetry.v1.PlayerJoined.player:type_name -> enginehttp.TeamMember
-	0,  // 36: telemetry.v1.PlayerJoined.role:type_name -> telemetry.v1.Role
-	0,  // 37: telemetry.v1.PlayerSwitchedTeam.new_role:type_name -> telemetry.v1.Role
-	0,  // 38: telemetry.v1.PlayerSwitchedTeam.prev_role:type_name -> telemetry.v1.Role
-	1,  // 39: telemetry.v1.EmotePlayed.emote:type_name -> telemetry.v1.EmotePlayed.EmoteType
-	35, // 40: telemetry.v1.DiscThrown.throw_details:type_name -> enginehttp.LastThrowInfo
-	36, // 41: telemetry.v1.GoalScored.score_details:type_name -> enginehttp.LastScore
-	42, // [42:42] is the sub-list for method output_type
-	42, // [42:42] is the sub-list for method input_type
-	42, // [42:42] is the sub-list for extension type_name
-	42, // [42:42] is the sub-list for extension extendee
-	0,  // [0:42] is the sub-list for field type_name
+	29, // 31: telemetry.v1.LobbySessionEvent.generic_event:type_name -> telemetry.v1.GenericEvent
+	35, // 32: telemetry.v1.RoundPaused.pause_state:type_name -> enginehttp.PauseState
+	35, // 33: telemetry.v1.RoundUnpaused.pause_state:type_name -> enginehttp.PauseState
+	0,  // 34: telemetry.v1.RoundEnded.winning_team:type_name -> telemetry.v1.Role
+	0,  // 35: telemetry.v1.MatchEnded.winning_team:type_name -> telemetry.v1.Role
+	36, // 36: telemetry.v1.PlayerJoined.player:type_name -> enginehttp.TeamMember
+	0,  // 37: telemetry.v1.PlayerJoined.role:type_name -> telemetry.v1.Role
+	0,  // 38: telemetry.v1.PlayerSwitchedTeam.new_role:type_name -> telemetry.v1.Role
+	0,  // 39: telemetry.v1.PlayerSwitchedTeam.prev_role:type_name -> telemetry.v1.Role
+	1,  // 40: telemetry.v1.EmotePlayed.emote:type_name -> telemetry.v1.EmotePlayed.EmoteType
+	37, // 41: telemetry.v1.DiscThrown.throw_details:type_name -> enginehttp.LastThrowInfo
+	38, // 42: telemetry.v1.GoalScored.score_details:type_name -> enginehttp.LastScore
+	31, // 43: telemetry.v1.GenericEvent.data:type_name -> telemetry.v1.GenericEvent.DataEntry
+	44, // [44:44] is the sub-list for method output_type
+	44, // [44:44] is the sub-list for method input_type
+	44, // [44:44] is the sub-list for extension type_name
+	44, // [44:44] is the sub-list for extension extendee
+	0,  // [0:44] is the sub-list for field type_name
 }
 
 func init() { file_telemetry_v1_telemetry_proto_init() }
@@ -2335,6 +2430,7 @@ func file_telemetry_v1_telemetry_proto_init() {
 		(*LobbySessionEvent_PlayerInterception)(nil),
 		(*LobbySessionEvent_PlayerAssist)(nil),
 		(*LobbySessionEvent_PlayerShotTaken)(nil),
+		(*LobbySessionEvent_GenericEvent)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2342,7 +2438,7 @@ func file_telemetry_v1_telemetry_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_telemetry_v1_telemetry_proto_rawDesc), len(file_telemetry_v1_telemetry_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   28,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
