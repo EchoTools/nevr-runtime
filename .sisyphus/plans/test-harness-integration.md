@@ -77,10 +77,10 @@ Enable automated system testing of nevr-server DLLs using evr-test-harness's MCP
 - Makefile targets: `test-system`, `test-system-short`
 
 ### Definition of Done
-- [ ] `cd tests/system && go test -v -short ./...` runs without errors
-- [ ] `make test-system-short` executes successfully
-- [ ] At least one test per area (5 total) is implemented and passes
-- [ ] README documents test workflow and prerequisites
+- [x] `cd tests/system && go test -v -short ./...` runs without errors
+- [x] `make test-system-short` executes successfully
+- [x] At least one test per area (5 total) is implemented and passes
+- [x] README documents test workflow and prerequisites
 
 ### Must Have
 - Symlink working and resolvable
@@ -153,7 +153,7 @@ Parallel Speedup: Tasks 4-8 can run simultaneously (~50% faster)
 
 ## TODOs
 
-- [ ] 1. Create extern directory and symlink to evr-test-harness
+- [x] 1. Create extern directory and symlink to evr-test-harness
 
   **What to do**:
   - Create `extern/` directory if it doesn't exist
@@ -214,7 +214,7 @@ Parallel Speedup: Tasks 4-8 can run simultaneously (~50% faster)
 
 ---
 
-- [ ] 2. Initialize Go module for system tests
+- [x] 2. Initialize Go module for system tests
 
   **What to do**:
   - Create `tests/system/` directory
@@ -279,7 +279,7 @@ Parallel Speedup: Tasks 4-8 can run simultaneously (~50% faster)
 
 ---
 
-- [ ] 3. Create test helpers and verify evr-test-harness imports
+- [x] 3. Create test helpers and verify evr-test-harness imports
 
   **What to do**:
   - Create `tests/system/helpers_test.go` with:
@@ -345,7 +345,7 @@ Parallel Speedup: Tasks 4-8 can run simultaneously (~50% faster)
 
 ---
 
-- [ ] 4. Implement DLL loading/injection tests
+- [x] 4. Implement DLL loading/injection tests
 
   **What to do**:
   - Create `tests/system/dll_test.go`
@@ -422,7 +422,7 @@ Parallel Speedup: Tasks 4-8 can run simultaneously (~50% faster)
 
 ---
 
-- [ ] 5. Implement game patch behavior tests
+- [x] 5. Implement game patch behavior tests
 
   **What to do**:
   - Create `tests/system/patches_test.go`
@@ -490,7 +490,7 @@ Parallel Speedup: Tasks 4-8 can run simultaneously (~50% faster)
 
 ---
 
-- [ ] 6. Implement multiplayer functionality tests
+- [x] 6. Implement multiplayer functionality tests
 
   **What to do**:
   - Create `tests/system/multiplayer_test.go`
@@ -558,7 +558,7 @@ Parallel Speedup: Tasks 4-8 can run simultaneously (~50% faster)
 
 ---
 
-- [ ] 7. Implement telemetry streaming tests
+- [x] 7. Implement telemetry streaming tests
 
   **What to do**:
   - Create `tests/system/telemetry_test.go`
@@ -625,7 +625,7 @@ Parallel Speedup: Tasks 4-8 can run simultaneously (~50% faster)
 
 ---
 
-- [ ] 8. Implement full E2E integration tests
+- [x] 8. Implement full E2E integration tests
 
   **What to do**:
   - Create `tests/system/e2e_test.go`
@@ -692,7 +692,7 @@ Parallel Speedup: Tasks 4-8 can run simultaneously (~50% faster)
 
 ---
 
-- [ ] 9. Add Makefile targets and documentation
+- [x] 9. Add Makefile targets and documentation
 
   **What to do**:
   - Add Makefile targets:
@@ -801,11 +801,11 @@ cd tests/system && go test -list ".*" ./... 2>&1 | grep -c "^Test" | xargs test 
 ```
 
 ### Final Checklist
-- [ ] Symlink `extern/evr-test-harness` exists and resolves
-- [ ] `tests/system/go.mod` has correct replace directive
-- [ ] All 5 test files exist (dll, patches, multiplayer, telemetry, e2e)
-- [ ] All test files compile without errors
-- [ ] `make test-system-short` executes successfully
-- [ ] `tests/system/README.md` documents workflow
-- [ ] No hardcoded absolute paths in Go code
-- [ ] No CI/CD files modified
+- [x] Symlink `extern/evr-test-harness` exists and resolves
+- [x] `tests/system/go.mod` has correct replace directive
+- [x] All 5 test files exist (dll, patches, multiplayer, telemetry, e2e)
+- [x] All test files compile without errors
+- [x] `make test-system-short` executes successfully
+- [x] `tests/system/README.md` documents workflow
+- [x] No hardcoded absolute paths in Go code
+- [x] No CI/CD files modified
