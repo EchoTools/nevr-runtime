@@ -3,8 +3,27 @@ cmake_minimum_required(VERSION 4.0.0)
 # Suppress vcpkg root mismatch warning
 unset(ENV{VCPKG_ROOT})
 
-# Suppress vcpkg usage text
-# set(VCPKG_PRINT_USAGE OFF CACHE BOOL "Disable vcpkg usage information")
+# Suppress vcpkg usage text spam
+set(X_VCPKG_APPLOCAL_DEPS_INSTALL OFF CACHE BOOL "" FORCE)
+set(VCPKG_INSTALL_OPTIONS "--no-print-usage" CACHE STRING "" FORCE)
+set(Z_VCPKG_BUILTIN_POWERSHELL_PATH "" CACHE STRING "" FORCE)
+
+# Suppress vcpkg install output
+function(message)
+  list(GET ARGV 0 MessageType)
+  if(MessageType STREQUAL "STATUS")
+    list(GET ARGV 1 MessageText)
+    # Suppress vcpkg installation messages
+    if(MessageText MATCHES "^Running vcpkg install" OR 
+       MessageText MATCHES "^The following packages" OR
+       MessageText MATCHES "^\\*" OR
+       MessageText MATCHES "^  " OR
+       MessageText MATCHES "^All requested installations completed")
+      return()
+    endif()
+  endif()
+  _message(${ARGV})
+endfunction()
 
 # Project Name
 project(NEVRServer LANGUAGES C CXX)
@@ -107,10 +126,23 @@ if(MINGW)
   add_compile_options(
     -Wall
     -Wextra
+    # Disable specific warnings that are unavoidable in this codebase
+    -Wno-unknown-pragmas           # Windows-specific pragmas like #pragma comment
+    -Wno-unused-parameter          # DLL export functions have required but unused params
+    -Wno-cast-function-type        # Windows API requires function pointer casts
+    -Wno-sign-compare              # Mixing signed/unsigned in legacy loops
+    -Wno-maybe-uninitialized       # False positives on struct initialization
+    -Wno-pragma-once-outside-header # .cpp files misused as headers in legacy code
     "$<$<CONFIG:Debug>:-g>"
     "$<$<CONFIG:Debug>:-O0>"
     "$<$<CONFIG:Release>:-O3>"
     "$<$<CONFIG:Release>:-DNDEBUG>"
+  )
+  # C++-only warning suppressions
+  add_compile_options(
+    "$<$<COMPILE_LANGUAGE:CXX>:-Wno-conversion-null>"        # NULL to UINT64 conversions in legacy code
+    "$<$<COMPILE_LANGUAGE:CXX>:-Wno-delete-non-virtual-dtor>" # Game engine interface has no virtual dtor
+    "$<$<COMPILE_LANGUAGE:CXX>:-Wno-reorder>"                # Member initialization order in legacy code
   )
 endif()
 
