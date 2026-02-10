@@ -12,6 +12,9 @@ target_precompile_headers(common PRIVATE "pch.h")
 target_include_directories(
   common PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/src/common)
 
+find_package(jsoncpp CONFIG REQUIRED)
+target_link_libraries(common PRIVATE JsonCpp::JsonCpp)
+
 # Disable specific warnings (MSVC only)
 if(MSVC)
   target_compile_options(common PRIVATE /wd4251)
