@@ -34,7 +34,7 @@
 #include "google/protobuf/map_field.h"
 #include "google/protobuf/generated_enum_reflection.h"
 #include "google/protobuf/unknown_field_set.h"
-#include "apigame/engine_http_v1.pb.h"
+#include "apigame/v1/engine_http_v1.pb.h"
 #include "google/protobuf/timestamp.pb.h"
 // @@protoc_insertion_point(includes)
 
@@ -4440,19 +4440,19 @@ class RoundUnpaused final : public ::google::protobuf::Message
   enum : int {
     kPauseStateFieldNumber = 1,
   };
-  // .enginehttp.PauseState pause_state = 1 [json_name = "pauseState"];
+  // .apigame.v1.PauseState pause_state = 1 [json_name = "pauseState"];
   bool has_pause_state() const;
   void clear_pause_state() ;
-  const ::enginehttp::PauseState& pause_state() const;
-  [[nodiscard]] ::enginehttp::PauseState* PROTOBUF_NULLABLE release_pause_state();
-  ::enginehttp::PauseState* PROTOBUF_NONNULL mutable_pause_state();
-  void set_allocated_pause_state(::enginehttp::PauseState* PROTOBUF_NULLABLE value);
-  void unsafe_arena_set_allocated_pause_state(::enginehttp::PauseState* PROTOBUF_NULLABLE value);
-  ::enginehttp::PauseState* PROTOBUF_NULLABLE unsafe_arena_release_pause_state();
+  const ::apigame::v1::PauseState& pause_state() const;
+  [[nodiscard]] ::apigame::v1::PauseState* PROTOBUF_NULLABLE release_pause_state();
+  ::apigame::v1::PauseState* PROTOBUF_NONNULL mutable_pause_state();
+  void set_allocated_pause_state(::apigame::v1::PauseState* PROTOBUF_NULLABLE value);
+  void unsafe_arena_set_allocated_pause_state(::apigame::v1::PauseState* PROTOBUF_NULLABLE value);
+  ::apigame::v1::PauseState* PROTOBUF_NULLABLE unsafe_arena_release_pause_state();
 
   private:
-  const ::enginehttp::PauseState& _internal_pause_state() const;
-  ::enginehttp::PauseState* PROTOBUF_NONNULL _internal_mutable_pause_state();
+  const ::apigame::v1::PauseState& _internal_pause_state() const;
+  ::apigame::v1::PauseState* PROTOBUF_NONNULL _internal_mutable_pause_state();
 
   public:
   // @@protoc_insertion_point(class_scope:telemetry.v1.RoundUnpaused)
@@ -4481,7 +4481,7 @@ class RoundUnpaused final : public ::google::protobuf::Message
         const RoundUnpaused& from_msg);
     ::google::protobuf::internal::HasBits<1> _has_bits_;
     ::google::protobuf::internal::CachedSize _cached_size_;
-    ::enginehttp::PauseState* PROTOBUF_NULLABLE pause_state_;
+    ::apigame::v1::PauseState* PROTOBUF_NULLABLE pause_state_;
     PROTOBUF_TSAN_DECLARE_MEMBER
   };
   union { Impl_ _impl_; };
@@ -4635,19 +4635,19 @@ class RoundPaused final : public ::google::protobuf::Message
   enum : int {
     kPauseStateFieldNumber = 1,
   };
-  // .enginehttp.PauseState pause_state = 1 [json_name = "pauseState"];
+  // .apigame.v1.PauseState pause_state = 1 [json_name = "pauseState"];
   bool has_pause_state() const;
   void clear_pause_state() ;
-  const ::enginehttp::PauseState& pause_state() const;
-  [[nodiscard]] ::enginehttp::PauseState* PROTOBUF_NULLABLE release_pause_state();
-  ::enginehttp::PauseState* PROTOBUF_NONNULL mutable_pause_state();
-  void set_allocated_pause_state(::enginehttp::PauseState* PROTOBUF_NULLABLE value);
-  void unsafe_arena_set_allocated_pause_state(::enginehttp::PauseState* PROTOBUF_NULLABLE value);
-  ::enginehttp::PauseState* PROTOBUF_NULLABLE unsafe_arena_release_pause_state();
+  const ::apigame::v1::PauseState& pause_state() const;
+  [[nodiscard]] ::apigame::v1::PauseState* PROTOBUF_NULLABLE release_pause_state();
+  ::apigame::v1::PauseState* PROTOBUF_NONNULL mutable_pause_state();
+  void set_allocated_pause_state(::apigame::v1::PauseState* PROTOBUF_NULLABLE value);
+  void unsafe_arena_set_allocated_pause_state(::apigame::v1::PauseState* PROTOBUF_NULLABLE value);
+  ::apigame::v1::PauseState* PROTOBUF_NULLABLE unsafe_arena_release_pause_state();
 
   private:
-  const ::enginehttp::PauseState& _internal_pause_state() const;
-  ::enginehttp::PauseState* PROTOBUF_NONNULL _internal_mutable_pause_state();
+  const ::apigame::v1::PauseState& _internal_pause_state() const;
+  ::apigame::v1::PauseState* PROTOBUF_NONNULL _internal_mutable_pause_state();
 
   public:
   // @@protoc_insertion_point(class_scope:telemetry.v1.RoundPaused)
@@ -4676,7 +4676,7 @@ class RoundPaused final : public ::google::protobuf::Message
         const RoundPaused& from_msg);
     ::google::protobuf::internal::HasBits<1> _has_bits_;
     ::google::protobuf::internal::CachedSize _cached_size_;
-    ::enginehttp::PauseState* PROTOBUF_NULLABLE pause_state_;
+    ::apigame::v1::PauseState* PROTOBUF_NULLABLE pause_state_;
     PROTOBUF_TSAN_DECLARE_MEMBER
   };
   union { Impl_ _impl_; };
@@ -4830,19 +4830,19 @@ class GoalScored final : public ::google::protobuf::Message
   enum : int {
     kScoreDetailsFieldNumber = 1,
   };
-  // .enginehttp.LastScore score_details = 1 [json_name = "scoreDetails"];
+  // .apigame.v1.LastScore score_details = 1 [json_name = "scoreDetails"];
   bool has_score_details() const;
   void clear_score_details() ;
-  const ::enginehttp::LastScore& score_details() const;
-  [[nodiscard]] ::enginehttp::LastScore* PROTOBUF_NULLABLE release_score_details();
-  ::enginehttp::LastScore* PROTOBUF_NONNULL mutable_score_details();
-  void set_allocated_score_details(::enginehttp::LastScore* PROTOBUF_NULLABLE value);
-  void unsafe_arena_set_allocated_score_details(::enginehttp::LastScore* PROTOBUF_NULLABLE value);
-  ::enginehttp::LastScore* PROTOBUF_NULLABLE unsafe_arena_release_score_details();
+  const ::apigame::v1::LastScore& score_details() const;
+  [[nodiscard]] ::apigame::v1::LastScore* PROTOBUF_NULLABLE release_score_details();
+  ::apigame::v1::LastScore* PROTOBUF_NONNULL mutable_score_details();
+  void set_allocated_score_details(::apigame::v1::LastScore* PROTOBUF_NULLABLE value);
+  void unsafe_arena_set_allocated_score_details(::apigame::v1::LastScore* PROTOBUF_NULLABLE value);
+  ::apigame::v1::LastScore* PROTOBUF_NULLABLE unsafe_arena_release_score_details();
 
   private:
-  const ::enginehttp::LastScore& _internal_score_details() const;
-  ::enginehttp::LastScore* PROTOBUF_NONNULL _internal_mutable_score_details();
+  const ::apigame::v1::LastScore& _internal_score_details() const;
+  ::apigame::v1::LastScore* PROTOBUF_NONNULL _internal_mutable_score_details();
 
   public:
   // @@protoc_insertion_point(class_scope:telemetry.v1.GoalScored)
@@ -4871,7 +4871,7 @@ class GoalScored final : public ::google::protobuf::Message
         const GoalScored& from_msg);
     ::google::protobuf::internal::HasBits<1> _has_bits_;
     ::google::protobuf::internal::CachedSize _cached_size_;
-    ::enginehttp::LastScore* PROTOBUF_NULLABLE score_details_;
+    ::apigame::v1::LastScore* PROTOBUF_NULLABLE score_details_;
     PROTOBUF_TSAN_DECLARE_MEMBER
   };
   union { Impl_ _impl_; };
@@ -5258,19 +5258,19 @@ class DiscThrown final : public ::google::protobuf::Message
     kThrowDetailsFieldNumber = 2,
     kPlayerSlotFieldNumber = 1,
   };
-  // .enginehttp.LastThrowInfo throw_details = 2 [json_name = "throwDetails"];
+  // .apigame.v1.LastThrowInfo throw_details = 2 [json_name = "throwDetails"];
   bool has_throw_details() const;
   void clear_throw_details() ;
-  const ::enginehttp::LastThrowInfo& throw_details() const;
-  [[nodiscard]] ::enginehttp::LastThrowInfo* PROTOBUF_NULLABLE release_throw_details();
-  ::enginehttp::LastThrowInfo* PROTOBUF_NONNULL mutable_throw_details();
-  void set_allocated_throw_details(::enginehttp::LastThrowInfo* PROTOBUF_NULLABLE value);
-  void unsafe_arena_set_allocated_throw_details(::enginehttp::LastThrowInfo* PROTOBUF_NULLABLE value);
-  ::enginehttp::LastThrowInfo* PROTOBUF_NULLABLE unsafe_arena_release_throw_details();
+  const ::apigame::v1::LastThrowInfo& throw_details() const;
+  [[nodiscard]] ::apigame::v1::LastThrowInfo* PROTOBUF_NULLABLE release_throw_details();
+  ::apigame::v1::LastThrowInfo* PROTOBUF_NONNULL mutable_throw_details();
+  void set_allocated_throw_details(::apigame::v1::LastThrowInfo* PROTOBUF_NULLABLE value);
+  void unsafe_arena_set_allocated_throw_details(::apigame::v1::LastThrowInfo* PROTOBUF_NULLABLE value);
+  ::apigame::v1::LastThrowInfo* PROTOBUF_NULLABLE unsafe_arena_release_throw_details();
 
   private:
-  const ::enginehttp::LastThrowInfo& _internal_throw_details() const;
-  ::enginehttp::LastThrowInfo* PROTOBUF_NONNULL _internal_mutable_throw_details();
+  const ::apigame::v1::LastThrowInfo& _internal_throw_details() const;
+  ::apigame::v1::LastThrowInfo* PROTOBUF_NONNULL _internal_mutable_throw_details();
 
   public:
   // int32 player_slot = 1 [json_name = "playerSlot"];
@@ -5309,7 +5309,7 @@ class DiscThrown final : public ::google::protobuf::Message
         const DiscThrown& from_msg);
     ::google::protobuf::internal::HasBits<1> _has_bits_;
     ::google::protobuf::internal::CachedSize _cached_size_;
-    ::enginehttp::LastThrowInfo* PROTOBUF_NULLABLE throw_details_;
+    ::apigame::v1::LastThrowInfo* PROTOBUF_NULLABLE throw_details_;
     ::int32_t player_slot_;
     PROTOBUF_TSAN_DECLARE_MEMBER
   };
@@ -5465,19 +5465,19 @@ class PlayerJoined final : public ::google::protobuf::Message
     kPlayerFieldNumber = 1,
     kRoleFieldNumber = 2,
   };
-  // .enginehttp.TeamMember player = 1 [json_name = "player"];
+  // .apigame.v1.TeamMember player = 1 [json_name = "player"];
   bool has_player() const;
   void clear_player() ;
-  const ::enginehttp::TeamMember& player() const;
-  [[nodiscard]] ::enginehttp::TeamMember* PROTOBUF_NULLABLE release_player();
-  ::enginehttp::TeamMember* PROTOBUF_NONNULL mutable_player();
-  void set_allocated_player(::enginehttp::TeamMember* PROTOBUF_NULLABLE value);
-  void unsafe_arena_set_allocated_player(::enginehttp::TeamMember* PROTOBUF_NULLABLE value);
-  ::enginehttp::TeamMember* PROTOBUF_NULLABLE unsafe_arena_release_player();
+  const ::apigame::v1::TeamMember& player() const;
+  [[nodiscard]] ::apigame::v1::TeamMember* PROTOBUF_NULLABLE release_player();
+  ::apigame::v1::TeamMember* PROTOBUF_NONNULL mutable_player();
+  void set_allocated_player(::apigame::v1::TeamMember* PROTOBUF_NULLABLE value);
+  void unsafe_arena_set_allocated_player(::apigame::v1::TeamMember* PROTOBUF_NULLABLE value);
+  ::apigame::v1::TeamMember* PROTOBUF_NULLABLE unsafe_arena_release_player();
 
   private:
-  const ::enginehttp::TeamMember& _internal_player() const;
-  ::enginehttp::TeamMember* PROTOBUF_NONNULL _internal_mutable_player();
+  const ::apigame::v1::TeamMember& _internal_player() const;
+  ::apigame::v1::TeamMember* PROTOBUF_NONNULL _internal_mutable_player();
 
   public:
   // .telemetry.v1.Role role = 2 [json_name = "role"];
@@ -5516,7 +5516,7 @@ class PlayerJoined final : public ::google::protobuf::Message
         const PlayerJoined& from_msg);
     ::google::protobuf::internal::HasBits<1> _has_bits_;
     ::google::protobuf::internal::CachedSize _cached_size_;
-    ::enginehttp::TeamMember* PROTOBUF_NULLABLE player_;
+    ::apigame::v1::TeamMember* PROTOBUF_NULLABLE player_;
     int role_;
     PROTOBUF_TSAN_DECLARE_MEMBER
   };
@@ -6448,34 +6448,34 @@ class LobbySessionStateFrame final : public ::google::protobuf::Message
   ::google::protobuf::Timestamp* PROTOBUF_NONNULL _internal_mutable_timestamp();
 
   public:
-  // .enginehttp.SessionResponse session = 4 [json_name = "session"];
+  // .apigame.v1.SessionResponse session = 4 [json_name = "session"];
   bool has_session() const;
   void clear_session() ;
-  const ::enginehttp::SessionResponse& session() const;
-  [[nodiscard]] ::enginehttp::SessionResponse* PROTOBUF_NULLABLE release_session();
-  ::enginehttp::SessionResponse* PROTOBUF_NONNULL mutable_session();
-  void set_allocated_session(::enginehttp::SessionResponse* PROTOBUF_NULLABLE value);
-  void unsafe_arena_set_allocated_session(::enginehttp::SessionResponse* PROTOBUF_NULLABLE value);
-  ::enginehttp::SessionResponse* PROTOBUF_NULLABLE unsafe_arena_release_session();
+  const ::apigame::v1::SessionResponse& session() const;
+  [[nodiscard]] ::apigame::v1::SessionResponse* PROTOBUF_NULLABLE release_session();
+  ::apigame::v1::SessionResponse* PROTOBUF_NONNULL mutable_session();
+  void set_allocated_session(::apigame::v1::SessionResponse* PROTOBUF_NULLABLE value);
+  void unsafe_arena_set_allocated_session(::apigame::v1::SessionResponse* PROTOBUF_NULLABLE value);
+  ::apigame::v1::SessionResponse* PROTOBUF_NULLABLE unsafe_arena_release_session();
 
   private:
-  const ::enginehttp::SessionResponse& _internal_session() const;
-  ::enginehttp::SessionResponse* PROTOBUF_NONNULL _internal_mutable_session();
+  const ::apigame::v1::SessionResponse& _internal_session() const;
+  ::apigame::v1::SessionResponse* PROTOBUF_NONNULL _internal_mutable_session();
 
   public:
-  // .enginehttp.PlayerBonesResponse player_bones = 5 [json_name = "playerBones"];
+  // .apigame.v1.PlayerBonesResponse player_bones = 5 [json_name = "playerBones"];
   bool has_player_bones() const;
   void clear_player_bones() ;
-  const ::enginehttp::PlayerBonesResponse& player_bones() const;
-  [[nodiscard]] ::enginehttp::PlayerBonesResponse* PROTOBUF_NULLABLE release_player_bones();
-  ::enginehttp::PlayerBonesResponse* PROTOBUF_NONNULL mutable_player_bones();
-  void set_allocated_player_bones(::enginehttp::PlayerBonesResponse* PROTOBUF_NULLABLE value);
-  void unsafe_arena_set_allocated_player_bones(::enginehttp::PlayerBonesResponse* PROTOBUF_NULLABLE value);
-  ::enginehttp::PlayerBonesResponse* PROTOBUF_NULLABLE unsafe_arena_release_player_bones();
+  const ::apigame::v1::PlayerBonesResponse& player_bones() const;
+  [[nodiscard]] ::apigame::v1::PlayerBonesResponse* PROTOBUF_NULLABLE release_player_bones();
+  ::apigame::v1::PlayerBonesResponse* PROTOBUF_NONNULL mutable_player_bones();
+  void set_allocated_player_bones(::apigame::v1::PlayerBonesResponse* PROTOBUF_NULLABLE value);
+  void unsafe_arena_set_allocated_player_bones(::apigame::v1::PlayerBonesResponse* PROTOBUF_NULLABLE value);
+  ::apigame::v1::PlayerBonesResponse* PROTOBUF_NULLABLE unsafe_arena_release_player_bones();
 
   private:
-  const ::enginehttp::PlayerBonesResponse& _internal_player_bones() const;
-  ::enginehttp::PlayerBonesResponse* PROTOBUF_NONNULL _internal_mutable_player_bones();
+  const ::apigame::v1::PlayerBonesResponse& _internal_player_bones() const;
+  ::apigame::v1::PlayerBonesResponse* PROTOBUF_NONNULL _internal_mutable_player_bones();
 
   public:
   // uint32 frame_index = 1 [json_name = "frameIndex"];
@@ -6516,8 +6516,8 @@ class LobbySessionStateFrame final : public ::google::protobuf::Message
     ::google::protobuf::internal::CachedSize _cached_size_;
     ::google::protobuf::RepeatedPtrField< ::telemetry::v1::LobbySessionEvent > events_;
     ::google::protobuf::Timestamp* PROTOBUF_NULLABLE timestamp_;
-    ::enginehttp::SessionResponse* PROTOBUF_NULLABLE session_;
-    ::enginehttp::PlayerBonesResponse* PROTOBUF_NULLABLE player_bones_;
+    ::apigame::v1::SessionResponse* PROTOBUF_NULLABLE session_;
+    ::apigame::v1::PlayerBonesResponse* PROTOBUF_NULLABLE player_bones_;
     ::uint32_t frame_index_;
     PROTOBUF_TSAN_DECLARE_MEMBER
   };
@@ -7325,28 +7325,28 @@ LobbySessionStateFrame::_internal_mutable_events() {
   return &_impl_.events_;
 }
 
-// .enginehttp.SessionResponse session = 4 [json_name = "session"];
+// .apigame.v1.SessionResponse session = 4 [json_name = "session"];
 inline bool LobbySessionStateFrame::has_session() const {
   bool value = CheckHasBit(_impl_._has_bits_[0], 0x00000004U);
   PROTOBUF_ASSUME(!value || _impl_.session_ != nullptr);
   return value;
 }
-inline const ::enginehttp::SessionResponse& LobbySessionStateFrame::_internal_session() const {
+inline const ::apigame::v1::SessionResponse& LobbySessionStateFrame::_internal_session() const {
   ::google::protobuf::internal::TSanRead(&_impl_);
-  const ::enginehttp::SessionResponse* p = _impl_.session_;
-  return p != nullptr ? *p : reinterpret_cast<const ::enginehttp::SessionResponse&>(::enginehttp::_SessionResponse_default_instance_);
+  const ::apigame::v1::SessionResponse* p = _impl_.session_;
+  return p != nullptr ? *p : reinterpret_cast<const ::apigame::v1::SessionResponse&>(::apigame::v1::_SessionResponse_default_instance_);
 }
-inline const ::enginehttp::SessionResponse& LobbySessionStateFrame::session() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
+inline const ::apigame::v1::SessionResponse& LobbySessionStateFrame::session() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
   // @@protoc_insertion_point(field_get:telemetry.v1.LobbySessionStateFrame.session)
   return _internal_session();
 }
 inline void LobbySessionStateFrame::unsafe_arena_set_allocated_session(
-    ::enginehttp::SessionResponse* PROTOBUF_NULLABLE value) {
+    ::apigame::v1::SessionResponse* PROTOBUF_NULLABLE value) {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (GetArena() == nullptr) {
     delete reinterpret_cast<::google::protobuf::MessageLite*>(_impl_.session_);
   }
-  _impl_.session_ = reinterpret_cast<::enginehttp::SessionResponse*>(value);
+  _impl_.session_ = reinterpret_cast<::apigame::v1::SessionResponse*>(value);
   if (value != nullptr) {
     SetHasBit(_impl_._has_bits_[0], 0x00000004U);
   } else {
@@ -7354,11 +7354,11 @@ inline void LobbySessionStateFrame::unsafe_arena_set_allocated_session(
   }
   // @@protoc_insertion_point(field_unsafe_arena_set_allocated:telemetry.v1.LobbySessionStateFrame.session)
 }
-inline ::enginehttp::SessionResponse* PROTOBUF_NULLABLE LobbySessionStateFrame::release_session() {
+inline ::apigame::v1::SessionResponse* PROTOBUF_NULLABLE LobbySessionStateFrame::release_session() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
 
   ClearHasBit(_impl_._has_bits_[0], 0x00000004U);
-  ::enginehttp::SessionResponse* released = _impl_.session_;
+  ::apigame::v1::SessionResponse* released = _impl_.session_;
   _impl_.session_ = nullptr;
   if (::google::protobuf::internal::DebugHardenForceCopyInRelease()) {
     auto* old = reinterpret_cast<::google::protobuf::MessageLite*>(released);
@@ -7373,31 +7373,31 @@ inline ::enginehttp::SessionResponse* PROTOBUF_NULLABLE LobbySessionStateFrame::
   }
   return released;
 }
-inline ::enginehttp::SessionResponse* PROTOBUF_NULLABLE LobbySessionStateFrame::unsafe_arena_release_session() {
+inline ::apigame::v1::SessionResponse* PROTOBUF_NULLABLE LobbySessionStateFrame::unsafe_arena_release_session() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   // @@protoc_insertion_point(field_release:telemetry.v1.LobbySessionStateFrame.session)
 
   ClearHasBit(_impl_._has_bits_[0], 0x00000004U);
-  ::enginehttp::SessionResponse* temp = _impl_.session_;
+  ::apigame::v1::SessionResponse* temp = _impl_.session_;
   _impl_.session_ = nullptr;
   return temp;
 }
-inline ::enginehttp::SessionResponse* PROTOBUF_NONNULL LobbySessionStateFrame::_internal_mutable_session() {
+inline ::apigame::v1::SessionResponse* PROTOBUF_NONNULL LobbySessionStateFrame::_internal_mutable_session() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (_impl_.session_ == nullptr) {
-    auto* p = ::google::protobuf::Message::DefaultConstruct<::enginehttp::SessionResponse>(GetArena());
-    _impl_.session_ = reinterpret_cast<::enginehttp::SessionResponse*>(p);
+    auto* p = ::google::protobuf::Message::DefaultConstruct<::apigame::v1::SessionResponse>(GetArena());
+    _impl_.session_ = reinterpret_cast<::apigame::v1::SessionResponse*>(p);
   }
   return _impl_.session_;
 }
-inline ::enginehttp::SessionResponse* PROTOBUF_NONNULL LobbySessionStateFrame::mutable_session()
+inline ::apigame::v1::SessionResponse* PROTOBUF_NONNULL LobbySessionStateFrame::mutable_session()
     ABSL_ATTRIBUTE_LIFETIME_BOUND {
   SetHasBit(_impl_._has_bits_[0], 0x00000004U);
-  ::enginehttp::SessionResponse* _msg = _internal_mutable_session();
+  ::apigame::v1::SessionResponse* _msg = _internal_mutable_session();
   // @@protoc_insertion_point(field_mutable:telemetry.v1.LobbySessionStateFrame.session)
   return _msg;
 }
-inline void LobbySessionStateFrame::set_allocated_session(::enginehttp::SessionResponse* PROTOBUF_NULLABLE value) {
+inline void LobbySessionStateFrame::set_allocated_session(::apigame::v1::SessionResponse* PROTOBUF_NULLABLE value) {
   ::google::protobuf::Arena* message_arena = GetArena();
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (message_arena == nullptr) {
@@ -7414,32 +7414,32 @@ inline void LobbySessionStateFrame::set_allocated_session(::enginehttp::SessionR
     ClearHasBit(_impl_._has_bits_[0], 0x00000004U);
   }
 
-  _impl_.session_ = reinterpret_cast<::enginehttp::SessionResponse*>(value);
+  _impl_.session_ = reinterpret_cast<::apigame::v1::SessionResponse*>(value);
   // @@protoc_insertion_point(field_set_allocated:telemetry.v1.LobbySessionStateFrame.session)
 }
 
-// .enginehttp.PlayerBonesResponse player_bones = 5 [json_name = "playerBones"];
+// .apigame.v1.PlayerBonesResponse player_bones = 5 [json_name = "playerBones"];
 inline bool LobbySessionStateFrame::has_player_bones() const {
   bool value = CheckHasBit(_impl_._has_bits_[0], 0x00000008U);
   PROTOBUF_ASSUME(!value || _impl_.player_bones_ != nullptr);
   return value;
 }
-inline const ::enginehttp::PlayerBonesResponse& LobbySessionStateFrame::_internal_player_bones() const {
+inline const ::apigame::v1::PlayerBonesResponse& LobbySessionStateFrame::_internal_player_bones() const {
   ::google::protobuf::internal::TSanRead(&_impl_);
-  const ::enginehttp::PlayerBonesResponse* p = _impl_.player_bones_;
-  return p != nullptr ? *p : reinterpret_cast<const ::enginehttp::PlayerBonesResponse&>(::enginehttp::_PlayerBonesResponse_default_instance_);
+  const ::apigame::v1::PlayerBonesResponse* p = _impl_.player_bones_;
+  return p != nullptr ? *p : reinterpret_cast<const ::apigame::v1::PlayerBonesResponse&>(::apigame::v1::_PlayerBonesResponse_default_instance_);
 }
-inline const ::enginehttp::PlayerBonesResponse& LobbySessionStateFrame::player_bones() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
+inline const ::apigame::v1::PlayerBonesResponse& LobbySessionStateFrame::player_bones() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
   // @@protoc_insertion_point(field_get:telemetry.v1.LobbySessionStateFrame.player_bones)
   return _internal_player_bones();
 }
 inline void LobbySessionStateFrame::unsafe_arena_set_allocated_player_bones(
-    ::enginehttp::PlayerBonesResponse* PROTOBUF_NULLABLE value) {
+    ::apigame::v1::PlayerBonesResponse* PROTOBUF_NULLABLE value) {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (GetArena() == nullptr) {
     delete reinterpret_cast<::google::protobuf::MessageLite*>(_impl_.player_bones_);
   }
-  _impl_.player_bones_ = reinterpret_cast<::enginehttp::PlayerBonesResponse*>(value);
+  _impl_.player_bones_ = reinterpret_cast<::apigame::v1::PlayerBonesResponse*>(value);
   if (value != nullptr) {
     SetHasBit(_impl_._has_bits_[0], 0x00000008U);
   } else {
@@ -7447,11 +7447,11 @@ inline void LobbySessionStateFrame::unsafe_arena_set_allocated_player_bones(
   }
   // @@protoc_insertion_point(field_unsafe_arena_set_allocated:telemetry.v1.LobbySessionStateFrame.player_bones)
 }
-inline ::enginehttp::PlayerBonesResponse* PROTOBUF_NULLABLE LobbySessionStateFrame::release_player_bones() {
+inline ::apigame::v1::PlayerBonesResponse* PROTOBUF_NULLABLE LobbySessionStateFrame::release_player_bones() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
 
   ClearHasBit(_impl_._has_bits_[0], 0x00000008U);
-  ::enginehttp::PlayerBonesResponse* released = _impl_.player_bones_;
+  ::apigame::v1::PlayerBonesResponse* released = _impl_.player_bones_;
   _impl_.player_bones_ = nullptr;
   if (::google::protobuf::internal::DebugHardenForceCopyInRelease()) {
     auto* old = reinterpret_cast<::google::protobuf::MessageLite*>(released);
@@ -7466,31 +7466,31 @@ inline ::enginehttp::PlayerBonesResponse* PROTOBUF_NULLABLE LobbySessionStateFra
   }
   return released;
 }
-inline ::enginehttp::PlayerBonesResponse* PROTOBUF_NULLABLE LobbySessionStateFrame::unsafe_arena_release_player_bones() {
+inline ::apigame::v1::PlayerBonesResponse* PROTOBUF_NULLABLE LobbySessionStateFrame::unsafe_arena_release_player_bones() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   // @@protoc_insertion_point(field_release:telemetry.v1.LobbySessionStateFrame.player_bones)
 
   ClearHasBit(_impl_._has_bits_[0], 0x00000008U);
-  ::enginehttp::PlayerBonesResponse* temp = _impl_.player_bones_;
+  ::apigame::v1::PlayerBonesResponse* temp = _impl_.player_bones_;
   _impl_.player_bones_ = nullptr;
   return temp;
 }
-inline ::enginehttp::PlayerBonesResponse* PROTOBUF_NONNULL LobbySessionStateFrame::_internal_mutable_player_bones() {
+inline ::apigame::v1::PlayerBonesResponse* PROTOBUF_NONNULL LobbySessionStateFrame::_internal_mutable_player_bones() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (_impl_.player_bones_ == nullptr) {
-    auto* p = ::google::protobuf::Message::DefaultConstruct<::enginehttp::PlayerBonesResponse>(GetArena());
-    _impl_.player_bones_ = reinterpret_cast<::enginehttp::PlayerBonesResponse*>(p);
+    auto* p = ::google::protobuf::Message::DefaultConstruct<::apigame::v1::PlayerBonesResponse>(GetArena());
+    _impl_.player_bones_ = reinterpret_cast<::apigame::v1::PlayerBonesResponse*>(p);
   }
   return _impl_.player_bones_;
 }
-inline ::enginehttp::PlayerBonesResponse* PROTOBUF_NONNULL LobbySessionStateFrame::mutable_player_bones()
+inline ::apigame::v1::PlayerBonesResponse* PROTOBUF_NONNULL LobbySessionStateFrame::mutable_player_bones()
     ABSL_ATTRIBUTE_LIFETIME_BOUND {
   SetHasBit(_impl_._has_bits_[0], 0x00000008U);
-  ::enginehttp::PlayerBonesResponse* _msg = _internal_mutable_player_bones();
+  ::apigame::v1::PlayerBonesResponse* _msg = _internal_mutable_player_bones();
   // @@protoc_insertion_point(field_mutable:telemetry.v1.LobbySessionStateFrame.player_bones)
   return _msg;
 }
-inline void LobbySessionStateFrame::set_allocated_player_bones(::enginehttp::PlayerBonesResponse* PROTOBUF_NULLABLE value) {
+inline void LobbySessionStateFrame::set_allocated_player_bones(::apigame::v1::PlayerBonesResponse* PROTOBUF_NULLABLE value) {
   ::google::protobuf::Arena* message_arena = GetArena();
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (message_arena == nullptr) {
@@ -7507,7 +7507,7 @@ inline void LobbySessionStateFrame::set_allocated_player_bones(::enginehttp::Pla
     ClearHasBit(_impl_._has_bits_[0], 0x00000008U);
   }
 
-  _impl_.player_bones_ = reinterpret_cast<::enginehttp::PlayerBonesResponse*>(value);
+  _impl_.player_bones_ = reinterpret_cast<::apigame::v1::PlayerBonesResponse*>(value);
   // @@protoc_insertion_point(field_set_allocated:telemetry.v1.LobbySessionStateFrame.player_bones)
 }
 
@@ -9525,28 +9525,28 @@ inline void RoundStarted::_internal_set_round_number(::int32_t value) {
 
 // RoundPaused
 
-// .enginehttp.PauseState pause_state = 1 [json_name = "pauseState"];
+// .apigame.v1.PauseState pause_state = 1 [json_name = "pauseState"];
 inline bool RoundPaused::has_pause_state() const {
   bool value = CheckHasBit(_impl_._has_bits_[0], 0x00000001U);
   PROTOBUF_ASSUME(!value || _impl_.pause_state_ != nullptr);
   return value;
 }
-inline const ::enginehttp::PauseState& RoundPaused::_internal_pause_state() const {
+inline const ::apigame::v1::PauseState& RoundPaused::_internal_pause_state() const {
   ::google::protobuf::internal::TSanRead(&_impl_);
-  const ::enginehttp::PauseState* p = _impl_.pause_state_;
-  return p != nullptr ? *p : reinterpret_cast<const ::enginehttp::PauseState&>(::enginehttp::_PauseState_default_instance_);
+  const ::apigame::v1::PauseState* p = _impl_.pause_state_;
+  return p != nullptr ? *p : reinterpret_cast<const ::apigame::v1::PauseState&>(::apigame::v1::_PauseState_default_instance_);
 }
-inline const ::enginehttp::PauseState& RoundPaused::pause_state() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
+inline const ::apigame::v1::PauseState& RoundPaused::pause_state() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
   // @@protoc_insertion_point(field_get:telemetry.v1.RoundPaused.pause_state)
   return _internal_pause_state();
 }
 inline void RoundPaused::unsafe_arena_set_allocated_pause_state(
-    ::enginehttp::PauseState* PROTOBUF_NULLABLE value) {
+    ::apigame::v1::PauseState* PROTOBUF_NULLABLE value) {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (GetArena() == nullptr) {
     delete reinterpret_cast<::google::protobuf::MessageLite*>(_impl_.pause_state_);
   }
-  _impl_.pause_state_ = reinterpret_cast<::enginehttp::PauseState*>(value);
+  _impl_.pause_state_ = reinterpret_cast<::apigame::v1::PauseState*>(value);
   if (value != nullptr) {
     SetHasBit(_impl_._has_bits_[0], 0x00000001U);
   } else {
@@ -9554,11 +9554,11 @@ inline void RoundPaused::unsafe_arena_set_allocated_pause_state(
   }
   // @@protoc_insertion_point(field_unsafe_arena_set_allocated:telemetry.v1.RoundPaused.pause_state)
 }
-inline ::enginehttp::PauseState* PROTOBUF_NULLABLE RoundPaused::release_pause_state() {
+inline ::apigame::v1::PauseState* PROTOBUF_NULLABLE RoundPaused::release_pause_state() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
 
   ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
-  ::enginehttp::PauseState* released = _impl_.pause_state_;
+  ::apigame::v1::PauseState* released = _impl_.pause_state_;
   _impl_.pause_state_ = nullptr;
   if (::google::protobuf::internal::DebugHardenForceCopyInRelease()) {
     auto* old = reinterpret_cast<::google::protobuf::MessageLite*>(released);
@@ -9573,31 +9573,31 @@ inline ::enginehttp::PauseState* PROTOBUF_NULLABLE RoundPaused::release_pause_st
   }
   return released;
 }
-inline ::enginehttp::PauseState* PROTOBUF_NULLABLE RoundPaused::unsafe_arena_release_pause_state() {
+inline ::apigame::v1::PauseState* PROTOBUF_NULLABLE RoundPaused::unsafe_arena_release_pause_state() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   // @@protoc_insertion_point(field_release:telemetry.v1.RoundPaused.pause_state)
 
   ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
-  ::enginehttp::PauseState* temp = _impl_.pause_state_;
+  ::apigame::v1::PauseState* temp = _impl_.pause_state_;
   _impl_.pause_state_ = nullptr;
   return temp;
 }
-inline ::enginehttp::PauseState* PROTOBUF_NONNULL RoundPaused::_internal_mutable_pause_state() {
+inline ::apigame::v1::PauseState* PROTOBUF_NONNULL RoundPaused::_internal_mutable_pause_state() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (_impl_.pause_state_ == nullptr) {
-    auto* p = ::google::protobuf::Message::DefaultConstruct<::enginehttp::PauseState>(GetArena());
-    _impl_.pause_state_ = reinterpret_cast<::enginehttp::PauseState*>(p);
+    auto* p = ::google::protobuf::Message::DefaultConstruct<::apigame::v1::PauseState>(GetArena());
+    _impl_.pause_state_ = reinterpret_cast<::apigame::v1::PauseState*>(p);
   }
   return _impl_.pause_state_;
 }
-inline ::enginehttp::PauseState* PROTOBUF_NONNULL RoundPaused::mutable_pause_state()
+inline ::apigame::v1::PauseState* PROTOBUF_NONNULL RoundPaused::mutable_pause_state()
     ABSL_ATTRIBUTE_LIFETIME_BOUND {
   SetHasBit(_impl_._has_bits_[0], 0x00000001U);
-  ::enginehttp::PauseState* _msg = _internal_mutable_pause_state();
+  ::apigame::v1::PauseState* _msg = _internal_mutable_pause_state();
   // @@protoc_insertion_point(field_mutable:telemetry.v1.RoundPaused.pause_state)
   return _msg;
 }
-inline void RoundPaused::set_allocated_pause_state(::enginehttp::PauseState* PROTOBUF_NULLABLE value) {
+inline void RoundPaused::set_allocated_pause_state(::apigame::v1::PauseState* PROTOBUF_NULLABLE value) {
   ::google::protobuf::Arena* message_arena = GetArena();
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (message_arena == nullptr) {
@@ -9614,7 +9614,7 @@ inline void RoundPaused::set_allocated_pause_state(::enginehttp::PauseState* PRO
     ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
   }
 
-  _impl_.pause_state_ = reinterpret_cast<::enginehttp::PauseState*>(value);
+  _impl_.pause_state_ = reinterpret_cast<::apigame::v1::PauseState*>(value);
   // @@protoc_insertion_point(field_set_allocated:telemetry.v1.RoundPaused.pause_state)
 }
 
@@ -9622,28 +9622,28 @@ inline void RoundPaused::set_allocated_pause_state(::enginehttp::PauseState* PRO
 
 // RoundUnpaused
 
-// .enginehttp.PauseState pause_state = 1 [json_name = "pauseState"];
+// .apigame.v1.PauseState pause_state = 1 [json_name = "pauseState"];
 inline bool RoundUnpaused::has_pause_state() const {
   bool value = CheckHasBit(_impl_._has_bits_[0], 0x00000001U);
   PROTOBUF_ASSUME(!value || _impl_.pause_state_ != nullptr);
   return value;
 }
-inline const ::enginehttp::PauseState& RoundUnpaused::_internal_pause_state() const {
+inline const ::apigame::v1::PauseState& RoundUnpaused::_internal_pause_state() const {
   ::google::protobuf::internal::TSanRead(&_impl_);
-  const ::enginehttp::PauseState* p = _impl_.pause_state_;
-  return p != nullptr ? *p : reinterpret_cast<const ::enginehttp::PauseState&>(::enginehttp::_PauseState_default_instance_);
+  const ::apigame::v1::PauseState* p = _impl_.pause_state_;
+  return p != nullptr ? *p : reinterpret_cast<const ::apigame::v1::PauseState&>(::apigame::v1::_PauseState_default_instance_);
 }
-inline const ::enginehttp::PauseState& RoundUnpaused::pause_state() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
+inline const ::apigame::v1::PauseState& RoundUnpaused::pause_state() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
   // @@protoc_insertion_point(field_get:telemetry.v1.RoundUnpaused.pause_state)
   return _internal_pause_state();
 }
 inline void RoundUnpaused::unsafe_arena_set_allocated_pause_state(
-    ::enginehttp::PauseState* PROTOBUF_NULLABLE value) {
+    ::apigame::v1::PauseState* PROTOBUF_NULLABLE value) {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (GetArena() == nullptr) {
     delete reinterpret_cast<::google::protobuf::MessageLite*>(_impl_.pause_state_);
   }
-  _impl_.pause_state_ = reinterpret_cast<::enginehttp::PauseState*>(value);
+  _impl_.pause_state_ = reinterpret_cast<::apigame::v1::PauseState*>(value);
   if (value != nullptr) {
     SetHasBit(_impl_._has_bits_[0], 0x00000001U);
   } else {
@@ -9651,11 +9651,11 @@ inline void RoundUnpaused::unsafe_arena_set_allocated_pause_state(
   }
   // @@protoc_insertion_point(field_unsafe_arena_set_allocated:telemetry.v1.RoundUnpaused.pause_state)
 }
-inline ::enginehttp::PauseState* PROTOBUF_NULLABLE RoundUnpaused::release_pause_state() {
+inline ::apigame::v1::PauseState* PROTOBUF_NULLABLE RoundUnpaused::release_pause_state() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
 
   ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
-  ::enginehttp::PauseState* released = _impl_.pause_state_;
+  ::apigame::v1::PauseState* released = _impl_.pause_state_;
   _impl_.pause_state_ = nullptr;
   if (::google::protobuf::internal::DebugHardenForceCopyInRelease()) {
     auto* old = reinterpret_cast<::google::protobuf::MessageLite*>(released);
@@ -9670,31 +9670,31 @@ inline ::enginehttp::PauseState* PROTOBUF_NULLABLE RoundUnpaused::release_pause_
   }
   return released;
 }
-inline ::enginehttp::PauseState* PROTOBUF_NULLABLE RoundUnpaused::unsafe_arena_release_pause_state() {
+inline ::apigame::v1::PauseState* PROTOBUF_NULLABLE RoundUnpaused::unsafe_arena_release_pause_state() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   // @@protoc_insertion_point(field_release:telemetry.v1.RoundUnpaused.pause_state)
 
   ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
-  ::enginehttp::PauseState* temp = _impl_.pause_state_;
+  ::apigame::v1::PauseState* temp = _impl_.pause_state_;
   _impl_.pause_state_ = nullptr;
   return temp;
 }
-inline ::enginehttp::PauseState* PROTOBUF_NONNULL RoundUnpaused::_internal_mutable_pause_state() {
+inline ::apigame::v1::PauseState* PROTOBUF_NONNULL RoundUnpaused::_internal_mutable_pause_state() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (_impl_.pause_state_ == nullptr) {
-    auto* p = ::google::protobuf::Message::DefaultConstruct<::enginehttp::PauseState>(GetArena());
-    _impl_.pause_state_ = reinterpret_cast<::enginehttp::PauseState*>(p);
+    auto* p = ::google::protobuf::Message::DefaultConstruct<::apigame::v1::PauseState>(GetArena());
+    _impl_.pause_state_ = reinterpret_cast<::apigame::v1::PauseState*>(p);
   }
   return _impl_.pause_state_;
 }
-inline ::enginehttp::PauseState* PROTOBUF_NONNULL RoundUnpaused::mutable_pause_state()
+inline ::apigame::v1::PauseState* PROTOBUF_NONNULL RoundUnpaused::mutable_pause_state()
     ABSL_ATTRIBUTE_LIFETIME_BOUND {
   SetHasBit(_impl_._has_bits_[0], 0x00000001U);
-  ::enginehttp::PauseState* _msg = _internal_mutable_pause_state();
+  ::apigame::v1::PauseState* _msg = _internal_mutable_pause_state();
   // @@protoc_insertion_point(field_mutable:telemetry.v1.RoundUnpaused.pause_state)
   return _msg;
 }
-inline void RoundUnpaused::set_allocated_pause_state(::enginehttp::PauseState* PROTOBUF_NULLABLE value) {
+inline void RoundUnpaused::set_allocated_pause_state(::apigame::v1::PauseState* PROTOBUF_NULLABLE value) {
   ::google::protobuf::Arena* message_arena = GetArena();
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (message_arena == nullptr) {
@@ -9711,7 +9711,7 @@ inline void RoundUnpaused::set_allocated_pause_state(::enginehttp::PauseState* P
     ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
   }
 
-  _impl_.pause_state_ = reinterpret_cast<::enginehttp::PauseState*>(value);
+  _impl_.pause_state_ = reinterpret_cast<::apigame::v1::PauseState*>(value);
   // @@protoc_insertion_point(field_set_allocated:telemetry.v1.RoundUnpaused.pause_state)
 }
 
@@ -9971,28 +9971,28 @@ inline void ScoreboardUpdated::set_allocated_game_clock_display(::std::string* P
 
 // PlayerJoined
 
-// .enginehttp.TeamMember player = 1 [json_name = "player"];
+// .apigame.v1.TeamMember player = 1 [json_name = "player"];
 inline bool PlayerJoined::has_player() const {
   bool value = CheckHasBit(_impl_._has_bits_[0], 0x00000001U);
   PROTOBUF_ASSUME(!value || _impl_.player_ != nullptr);
   return value;
 }
-inline const ::enginehttp::TeamMember& PlayerJoined::_internal_player() const {
+inline const ::apigame::v1::TeamMember& PlayerJoined::_internal_player() const {
   ::google::protobuf::internal::TSanRead(&_impl_);
-  const ::enginehttp::TeamMember* p = _impl_.player_;
-  return p != nullptr ? *p : reinterpret_cast<const ::enginehttp::TeamMember&>(::enginehttp::_TeamMember_default_instance_);
+  const ::apigame::v1::TeamMember* p = _impl_.player_;
+  return p != nullptr ? *p : reinterpret_cast<const ::apigame::v1::TeamMember&>(::apigame::v1::_TeamMember_default_instance_);
 }
-inline const ::enginehttp::TeamMember& PlayerJoined::player() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
+inline const ::apigame::v1::TeamMember& PlayerJoined::player() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
   // @@protoc_insertion_point(field_get:telemetry.v1.PlayerJoined.player)
   return _internal_player();
 }
 inline void PlayerJoined::unsafe_arena_set_allocated_player(
-    ::enginehttp::TeamMember* PROTOBUF_NULLABLE value) {
+    ::apigame::v1::TeamMember* PROTOBUF_NULLABLE value) {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (GetArena() == nullptr) {
     delete reinterpret_cast<::google::protobuf::MessageLite*>(_impl_.player_);
   }
-  _impl_.player_ = reinterpret_cast<::enginehttp::TeamMember*>(value);
+  _impl_.player_ = reinterpret_cast<::apigame::v1::TeamMember*>(value);
   if (value != nullptr) {
     SetHasBit(_impl_._has_bits_[0], 0x00000001U);
   } else {
@@ -10000,11 +10000,11 @@ inline void PlayerJoined::unsafe_arena_set_allocated_player(
   }
   // @@protoc_insertion_point(field_unsafe_arena_set_allocated:telemetry.v1.PlayerJoined.player)
 }
-inline ::enginehttp::TeamMember* PROTOBUF_NULLABLE PlayerJoined::release_player() {
+inline ::apigame::v1::TeamMember* PROTOBUF_NULLABLE PlayerJoined::release_player() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
 
   ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
-  ::enginehttp::TeamMember* released = _impl_.player_;
+  ::apigame::v1::TeamMember* released = _impl_.player_;
   _impl_.player_ = nullptr;
   if (::google::protobuf::internal::DebugHardenForceCopyInRelease()) {
     auto* old = reinterpret_cast<::google::protobuf::MessageLite*>(released);
@@ -10019,31 +10019,31 @@ inline ::enginehttp::TeamMember* PROTOBUF_NULLABLE PlayerJoined::release_player(
   }
   return released;
 }
-inline ::enginehttp::TeamMember* PROTOBUF_NULLABLE PlayerJoined::unsafe_arena_release_player() {
+inline ::apigame::v1::TeamMember* PROTOBUF_NULLABLE PlayerJoined::unsafe_arena_release_player() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   // @@protoc_insertion_point(field_release:telemetry.v1.PlayerJoined.player)
 
   ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
-  ::enginehttp::TeamMember* temp = _impl_.player_;
+  ::apigame::v1::TeamMember* temp = _impl_.player_;
   _impl_.player_ = nullptr;
   return temp;
 }
-inline ::enginehttp::TeamMember* PROTOBUF_NONNULL PlayerJoined::_internal_mutable_player() {
+inline ::apigame::v1::TeamMember* PROTOBUF_NONNULL PlayerJoined::_internal_mutable_player() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (_impl_.player_ == nullptr) {
-    auto* p = ::google::protobuf::Message::DefaultConstruct<::enginehttp::TeamMember>(GetArena());
-    _impl_.player_ = reinterpret_cast<::enginehttp::TeamMember*>(p);
+    auto* p = ::google::protobuf::Message::DefaultConstruct<::apigame::v1::TeamMember>(GetArena());
+    _impl_.player_ = reinterpret_cast<::apigame::v1::TeamMember*>(p);
   }
   return _impl_.player_;
 }
-inline ::enginehttp::TeamMember* PROTOBUF_NONNULL PlayerJoined::mutable_player()
+inline ::apigame::v1::TeamMember* PROTOBUF_NONNULL PlayerJoined::mutable_player()
     ABSL_ATTRIBUTE_LIFETIME_BOUND {
   SetHasBit(_impl_._has_bits_[0], 0x00000001U);
-  ::enginehttp::TeamMember* _msg = _internal_mutable_player();
+  ::apigame::v1::TeamMember* _msg = _internal_mutable_player();
   // @@protoc_insertion_point(field_mutable:telemetry.v1.PlayerJoined.player)
   return _msg;
 }
-inline void PlayerJoined::set_allocated_player(::enginehttp::TeamMember* PROTOBUF_NULLABLE value) {
+inline void PlayerJoined::set_allocated_player(::apigame::v1::TeamMember* PROTOBUF_NULLABLE value) {
   ::google::protobuf::Arena* message_arena = GetArena();
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (message_arena == nullptr) {
@@ -10060,7 +10060,7 @@ inline void PlayerJoined::set_allocated_player(::enginehttp::TeamMember* PROTOBU
     ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
   }
 
-  _impl_.player_ = reinterpret_cast<::enginehttp::TeamMember*>(value);
+  _impl_.player_ = reinterpret_cast<::apigame::v1::TeamMember*>(value);
   // @@protoc_insertion_point(field_set_allocated:telemetry.v1.PlayerJoined.player)
 }
 
@@ -10399,28 +10399,28 @@ inline void DiscThrown::_internal_set_player_slot(::int32_t value) {
   _impl_.player_slot_ = value;
 }
 
-// .enginehttp.LastThrowInfo throw_details = 2 [json_name = "throwDetails"];
+// .apigame.v1.LastThrowInfo throw_details = 2 [json_name = "throwDetails"];
 inline bool DiscThrown::has_throw_details() const {
   bool value = CheckHasBit(_impl_._has_bits_[0], 0x00000001U);
   PROTOBUF_ASSUME(!value || _impl_.throw_details_ != nullptr);
   return value;
 }
-inline const ::enginehttp::LastThrowInfo& DiscThrown::_internal_throw_details() const {
+inline const ::apigame::v1::LastThrowInfo& DiscThrown::_internal_throw_details() const {
   ::google::protobuf::internal::TSanRead(&_impl_);
-  const ::enginehttp::LastThrowInfo* p = _impl_.throw_details_;
-  return p != nullptr ? *p : reinterpret_cast<const ::enginehttp::LastThrowInfo&>(::enginehttp::_LastThrowInfo_default_instance_);
+  const ::apigame::v1::LastThrowInfo* p = _impl_.throw_details_;
+  return p != nullptr ? *p : reinterpret_cast<const ::apigame::v1::LastThrowInfo&>(::apigame::v1::_LastThrowInfo_default_instance_);
 }
-inline const ::enginehttp::LastThrowInfo& DiscThrown::throw_details() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
+inline const ::apigame::v1::LastThrowInfo& DiscThrown::throw_details() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
   // @@protoc_insertion_point(field_get:telemetry.v1.DiscThrown.throw_details)
   return _internal_throw_details();
 }
 inline void DiscThrown::unsafe_arena_set_allocated_throw_details(
-    ::enginehttp::LastThrowInfo* PROTOBUF_NULLABLE value) {
+    ::apigame::v1::LastThrowInfo* PROTOBUF_NULLABLE value) {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (GetArena() == nullptr) {
     delete reinterpret_cast<::google::protobuf::MessageLite*>(_impl_.throw_details_);
   }
-  _impl_.throw_details_ = reinterpret_cast<::enginehttp::LastThrowInfo*>(value);
+  _impl_.throw_details_ = reinterpret_cast<::apigame::v1::LastThrowInfo*>(value);
   if (value != nullptr) {
     SetHasBit(_impl_._has_bits_[0], 0x00000001U);
   } else {
@@ -10428,11 +10428,11 @@ inline void DiscThrown::unsafe_arena_set_allocated_throw_details(
   }
   // @@protoc_insertion_point(field_unsafe_arena_set_allocated:telemetry.v1.DiscThrown.throw_details)
 }
-inline ::enginehttp::LastThrowInfo* PROTOBUF_NULLABLE DiscThrown::release_throw_details() {
+inline ::apigame::v1::LastThrowInfo* PROTOBUF_NULLABLE DiscThrown::release_throw_details() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
 
   ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
-  ::enginehttp::LastThrowInfo* released = _impl_.throw_details_;
+  ::apigame::v1::LastThrowInfo* released = _impl_.throw_details_;
   _impl_.throw_details_ = nullptr;
   if (::google::protobuf::internal::DebugHardenForceCopyInRelease()) {
     auto* old = reinterpret_cast<::google::protobuf::MessageLite*>(released);
@@ -10447,31 +10447,31 @@ inline ::enginehttp::LastThrowInfo* PROTOBUF_NULLABLE DiscThrown::release_throw_
   }
   return released;
 }
-inline ::enginehttp::LastThrowInfo* PROTOBUF_NULLABLE DiscThrown::unsafe_arena_release_throw_details() {
+inline ::apigame::v1::LastThrowInfo* PROTOBUF_NULLABLE DiscThrown::unsafe_arena_release_throw_details() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   // @@protoc_insertion_point(field_release:telemetry.v1.DiscThrown.throw_details)
 
   ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
-  ::enginehttp::LastThrowInfo* temp = _impl_.throw_details_;
+  ::apigame::v1::LastThrowInfo* temp = _impl_.throw_details_;
   _impl_.throw_details_ = nullptr;
   return temp;
 }
-inline ::enginehttp::LastThrowInfo* PROTOBUF_NONNULL DiscThrown::_internal_mutable_throw_details() {
+inline ::apigame::v1::LastThrowInfo* PROTOBUF_NONNULL DiscThrown::_internal_mutable_throw_details() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (_impl_.throw_details_ == nullptr) {
-    auto* p = ::google::protobuf::Message::DefaultConstruct<::enginehttp::LastThrowInfo>(GetArena());
-    _impl_.throw_details_ = reinterpret_cast<::enginehttp::LastThrowInfo*>(p);
+    auto* p = ::google::protobuf::Message::DefaultConstruct<::apigame::v1::LastThrowInfo>(GetArena());
+    _impl_.throw_details_ = reinterpret_cast<::apigame::v1::LastThrowInfo*>(p);
   }
   return _impl_.throw_details_;
 }
-inline ::enginehttp::LastThrowInfo* PROTOBUF_NONNULL DiscThrown::mutable_throw_details()
+inline ::apigame::v1::LastThrowInfo* PROTOBUF_NONNULL DiscThrown::mutable_throw_details()
     ABSL_ATTRIBUTE_LIFETIME_BOUND {
   SetHasBit(_impl_._has_bits_[0], 0x00000001U);
-  ::enginehttp::LastThrowInfo* _msg = _internal_mutable_throw_details();
+  ::apigame::v1::LastThrowInfo* _msg = _internal_mutable_throw_details();
   // @@protoc_insertion_point(field_mutable:telemetry.v1.DiscThrown.throw_details)
   return _msg;
 }
-inline void DiscThrown::set_allocated_throw_details(::enginehttp::LastThrowInfo* PROTOBUF_NULLABLE value) {
+inline void DiscThrown::set_allocated_throw_details(::apigame::v1::LastThrowInfo* PROTOBUF_NULLABLE value) {
   ::google::protobuf::Arena* message_arena = GetArena();
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (message_arena == nullptr) {
@@ -10488,7 +10488,7 @@ inline void DiscThrown::set_allocated_throw_details(::enginehttp::LastThrowInfo*
     ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
   }
 
-  _impl_.throw_details_ = reinterpret_cast<::enginehttp::LastThrowInfo*>(value);
+  _impl_.throw_details_ = reinterpret_cast<::apigame::v1::LastThrowInfo*>(value);
   // @@protoc_insertion_point(field_set_allocated:telemetry.v1.DiscThrown.throw_details)
 }
 
@@ -10525,28 +10525,28 @@ inline void DiscCaught::_internal_set_player_slot(::int32_t value) {
 
 // GoalScored
 
-// .enginehttp.LastScore score_details = 1 [json_name = "scoreDetails"];
+// .apigame.v1.LastScore score_details = 1 [json_name = "scoreDetails"];
 inline bool GoalScored::has_score_details() const {
   bool value = CheckHasBit(_impl_._has_bits_[0], 0x00000001U);
   PROTOBUF_ASSUME(!value || _impl_.score_details_ != nullptr);
   return value;
 }
-inline const ::enginehttp::LastScore& GoalScored::_internal_score_details() const {
+inline const ::apigame::v1::LastScore& GoalScored::_internal_score_details() const {
   ::google::protobuf::internal::TSanRead(&_impl_);
-  const ::enginehttp::LastScore* p = _impl_.score_details_;
-  return p != nullptr ? *p : reinterpret_cast<const ::enginehttp::LastScore&>(::enginehttp::_LastScore_default_instance_);
+  const ::apigame::v1::LastScore* p = _impl_.score_details_;
+  return p != nullptr ? *p : reinterpret_cast<const ::apigame::v1::LastScore&>(::apigame::v1::_LastScore_default_instance_);
 }
-inline const ::enginehttp::LastScore& GoalScored::score_details() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
+inline const ::apigame::v1::LastScore& GoalScored::score_details() const ABSL_ATTRIBUTE_LIFETIME_BOUND {
   // @@protoc_insertion_point(field_get:telemetry.v1.GoalScored.score_details)
   return _internal_score_details();
 }
 inline void GoalScored::unsafe_arena_set_allocated_score_details(
-    ::enginehttp::LastScore* PROTOBUF_NULLABLE value) {
+    ::apigame::v1::LastScore* PROTOBUF_NULLABLE value) {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (GetArena() == nullptr) {
     delete reinterpret_cast<::google::protobuf::MessageLite*>(_impl_.score_details_);
   }
-  _impl_.score_details_ = reinterpret_cast<::enginehttp::LastScore*>(value);
+  _impl_.score_details_ = reinterpret_cast<::apigame::v1::LastScore*>(value);
   if (value != nullptr) {
     SetHasBit(_impl_._has_bits_[0], 0x00000001U);
   } else {
@@ -10554,11 +10554,11 @@ inline void GoalScored::unsafe_arena_set_allocated_score_details(
   }
   // @@protoc_insertion_point(field_unsafe_arena_set_allocated:telemetry.v1.GoalScored.score_details)
 }
-inline ::enginehttp::LastScore* PROTOBUF_NULLABLE GoalScored::release_score_details() {
+inline ::apigame::v1::LastScore* PROTOBUF_NULLABLE GoalScored::release_score_details() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
 
   ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
-  ::enginehttp::LastScore* released = _impl_.score_details_;
+  ::apigame::v1::LastScore* released = _impl_.score_details_;
   _impl_.score_details_ = nullptr;
   if (::google::protobuf::internal::DebugHardenForceCopyInRelease()) {
     auto* old = reinterpret_cast<::google::protobuf::MessageLite*>(released);
@@ -10573,31 +10573,31 @@ inline ::enginehttp::LastScore* PROTOBUF_NULLABLE GoalScored::release_score_deta
   }
   return released;
 }
-inline ::enginehttp::LastScore* PROTOBUF_NULLABLE GoalScored::unsafe_arena_release_score_details() {
+inline ::apigame::v1::LastScore* PROTOBUF_NULLABLE GoalScored::unsafe_arena_release_score_details() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   // @@protoc_insertion_point(field_release:telemetry.v1.GoalScored.score_details)
 
   ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
-  ::enginehttp::LastScore* temp = _impl_.score_details_;
+  ::apigame::v1::LastScore* temp = _impl_.score_details_;
   _impl_.score_details_ = nullptr;
   return temp;
 }
-inline ::enginehttp::LastScore* PROTOBUF_NONNULL GoalScored::_internal_mutable_score_details() {
+inline ::apigame::v1::LastScore* PROTOBUF_NONNULL GoalScored::_internal_mutable_score_details() {
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (_impl_.score_details_ == nullptr) {
-    auto* p = ::google::protobuf::Message::DefaultConstruct<::enginehttp::LastScore>(GetArena());
-    _impl_.score_details_ = reinterpret_cast<::enginehttp::LastScore*>(p);
+    auto* p = ::google::protobuf::Message::DefaultConstruct<::apigame::v1::LastScore>(GetArena());
+    _impl_.score_details_ = reinterpret_cast<::apigame::v1::LastScore*>(p);
   }
   return _impl_.score_details_;
 }
-inline ::enginehttp::LastScore* PROTOBUF_NONNULL GoalScored::mutable_score_details()
+inline ::apigame::v1::LastScore* PROTOBUF_NONNULL GoalScored::mutable_score_details()
     ABSL_ATTRIBUTE_LIFETIME_BOUND {
   SetHasBit(_impl_._has_bits_[0], 0x00000001U);
-  ::enginehttp::LastScore* _msg = _internal_mutable_score_details();
+  ::apigame::v1::LastScore* _msg = _internal_mutable_score_details();
   // @@protoc_insertion_point(field_mutable:telemetry.v1.GoalScored.score_details)
   return _msg;
 }
-inline void GoalScored::set_allocated_score_details(::enginehttp::LastScore* PROTOBUF_NULLABLE value) {
+inline void GoalScored::set_allocated_score_details(::apigame::v1::LastScore* PROTOBUF_NULLABLE value) {
   ::google::protobuf::Arena* message_arena = GetArena();
   ::google::protobuf::internal::TSanWrite(&_impl_);
   if (message_arena == nullptr) {
@@ -10614,7 +10614,7 @@ inline void GoalScored::set_allocated_score_details(::enginehttp::LastScore* PRO
     ClearHasBit(_impl_._has_bits_[0], 0x00000001U);
   }
 
-  _impl_.score_details_ = reinterpret_cast<::enginehttp::LastScore*>(value);
+  _impl_.score_details_ = reinterpret_cast<::apigame::v1::LastScore*>(value);
   // @@protoc_insertion_point(field_set_allocated:telemetry.v1.GoalScored.score_details)
 }
 

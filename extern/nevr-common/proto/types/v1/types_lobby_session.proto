@@ -1,0 +1,4 @@
+syntax = "proto3";
+package types.v1;
+
+option go_package = "github.com/echotools/nevr-common/v4/gen/go/nevr/api/types/v1;typesv1";

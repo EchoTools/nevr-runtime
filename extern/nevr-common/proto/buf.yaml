@@ -11,11 +11,6 @@ deps:
 lint:
   use:
     - STANDARD
-  ignore_only:
-    PACKAGE_DIRECTORY_MATCH:
-      - "*"
-    PACKAGE_VERSION_SUFFIX:
-      - "*"
 
 breaking:
   use:

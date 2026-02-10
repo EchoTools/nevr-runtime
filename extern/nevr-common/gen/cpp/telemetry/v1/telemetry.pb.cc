@@ -1122,148 +1122,148 @@ static const ::_pb::Message* PROTOBUF_NONNULL const file_default_instances[] = {
 const char descriptor_table_protodef_telemetry_2fv1_2ftelemetry_2eproto[] ABSL_ATTRIBUTE_SECTION_VARIABLE(
     protodesc_cold) = {
     "\n\034telemetry/v1/telemetry.proto\022\014telemetr"
-    "y.v1\032\034apigame/engine_http_v1.proto\032\037goog"
-    "le/protobuf/timestamp.proto\"\361\001\n\017Telemetr"
-    "yHeader\022\035\n\ncapture_id\030\001 \001(\tR\tcaptureId\0229"
-    "\n\ncreated_at\030\002 \001(\0132\032.google.protobuf.Tim"
-    "estampR\tcreatedAt\022G\n\010metadata\030\003 \003(\0132+.te"
-    "lemetry.v1.TelemetryHeader.MetadataEntry"
-    "R\010metadata\032;\n\rMetadataEntry\022\020\n\003key\030\001 \001(\t"
-    "R\003key\022\024\n\005value\030\002 \001(\tR\005value:\0028\001\"\214\001\n\010Enve"
-    "lope\0227\n\006header\030\001 \001(\0132\035.telemetry.v1.Tele"
-    "metryHeaderH\000R\006header\022<\n\005frame\030\002 \001(\0132$.t"
-    "elemetry.v1.LobbySessionStateFrameH\000R\005fr"
-    "ameB\t\n\007message\"\247\002\n\026LobbySessionStateFram"
-    "e\022\037\n\013frame_index\030\001 \001(\rR\nframeIndex\0228\n\tti"
-    "mestamp\030\002 \001(\0132\032.google.protobuf.Timestam"
-    "pR\ttimestamp\0227\n\006events\030\003 \003(\0132\037.telemetry"
-    ".v1.LobbySessionEventR\006events\0225\n\007session"
-    "\030\004 \001(\0132\033.enginehttp.SessionResponseR\007ses"
-    "sion\022B\n\014player_bones\030\005 \001(\0132\037.enginehttp."
-    "PlayerBonesResponseR\013playerBones\"\371\014\n\021Lob"
-    "bySessionEvent\022A\n\rround_started\030\n \001(\0132\032."
-    "telemetry.v1.RoundStartedH\000R\014roundStarte"
-    "d\022>\n\014round_paused\030\013 \001(\0132\031.telemetry.v1.R"
-    "oundPausedH\000R\013roundPaused\022D\n\016round_unpau"
-    "sed\030\014 \001(\0132\033.telemetry.v1.RoundUnpausedH\000"
-    "R\rroundUnpaused\022;\n\013round_ended\030\r \001(\0132\030.t"
-    "elemetry.v1.RoundEndedH\000R\nroundEnded\022;\n\013"
-    "match_ended\030\016 \001(\0132\030.telemetry.v1.MatchEn"
-    "dedH\000R\nmatchEnded\022P\n\022scoreboard_updated\030"
-    "\017 \001(\0132\037.telemetry.v1.ScoreboardUpdatedH\000"
-    "R\021scoreboardUpdated\022A\n\rplayer_joined\030\024 \001"
-    "(\0132\032.telemetry.v1.PlayerJoinedH\000R\014player"
-    "Joined\022;\n\013player_left\030\025 \001(\0132\030.telemetry."
-    "v1.PlayerLeftH\000R\nplayerLeft\022T\n\024player_sw"
-    "itched_team\030\026 \001(\0132 .telemetry.v1.PlayerS"
-    "witchedTeamH\000R\022playerSwitchedTeam\022>\n\014emo"
-    "te_played\030\027 \001(\0132\031.telemetry.v1.EmotePlay"
-    "edH\000R\013emotePlayed\022]\n\027disc_possession_cha"
-    "nged\030\036 \001(\0132#.telemetry.v1.DiscPossession"
-    "ChangedH\000R\025discPossessionChanged\022;\n\013disc"
-    "_thrown\030\037 \001(\0132\030.telemetry.v1.DiscThrownH"
-    "\000R\ndiscThrown\022;\n\013disc_caught\030  \001(\0132\030.tel"
-    "emetry.v1.DiscCaughtH\000R\ndiscCaught\022;\n\013go"
-    "al_scored\030( \001(\0132\030.telemetry.v1.GoalScore"
-    "dH\000R\ngoalScored\022;\n\013player_goal\030) \001(\0132\030.t"
-    "elemetry.v1.PlayerGoalH\000R\nplayerGoal\022;\n\013"
-    "player_save\0302 \001(\0132\030.telemetry.v1.PlayerS"
-    "aveH\000R\nplayerSave\022;\n\013player_stun\0303 \001(\0132\030"
-    ".telemetry.v1.PlayerStunH\000R\nplayerStun\022;"
-    "\n\013player_pass\0304 \001(\0132\030.telemetry.v1.Playe"
-    "rPassH\000R\nplayerPass\022>\n\014player_steal\0305 \001("
-    "\0132\031.telemetry.v1.PlayerStealH\000R\013playerSt"
-    "eal\022>\n\014player_block\0306 \001(\0132\031.telemetry.v1"
-    ".PlayerBlockH\000R\013playerBlock\022S\n\023player_in"
-    "terception\0307 \001(\0132 .telemetry.v1.PlayerIn"
-    "terceptionH\000R\022playerInterception\022A\n\rplay"
-    "er_assist\0308 \001(\0132\032.telemetry.v1.PlayerAss"
-    "istH\000R\014playerAssist\022K\n\021player_shot_taken"
-    "\0309 \001(\0132\035.telemetry.v1.PlayerShotTakenH\000R"
-    "\017playerShotTaken\022A\n\rgeneric_event\030< \001(\0132"
-    "\032.telemetry.v1.GenericEventH\000R\014genericEv"
-    "entB\007\n\005event\"1\n\014RoundStarted\022!\n\014round_nu"
-    "mber\030\001 \001(\005R\013roundNumber\"F\n\013RoundPaused\0227"
-    "\n\013pause_state\030\001 \001(\0132\026.enginehttp.PauseSt"
-    "ateR\npauseState\"H\n\rRoundUnpaused\0227\n\013paus"
-    "e_state\030\001 \001(\0132\026.enginehttp.PauseStateR\np"
-    "auseState\"f\n\nRoundEnded\022!\n\014round_number\030"
-    "\001 \001(\005R\013roundNumber\0225\n\014winning_team\030\002 \001(\016"
-    "2\022.telemetry.v1.RoleR\013winningTeam\"C\n\nMat"
-    "chEnded\0225\n\014winning_team\030\001 \001(\0162\022.telemetr"
-    "y.v1.RoleR\013winningTeam\"\337\001\n\021ScoreboardUpd"
-    "ated\022\037\n\013blue_points\030\001 \001(\005R\nbluePoints\022#\n"
-    "\rorange_points\030\002 \001(\005R\014orangePoints\022(\n\020bl"
-    "ue_round_score\030\003 \001(\005R\016blueRoundScore\022,\n\022"
-    "orange_round_score\030\004 \001(\005R\020orangeRoundSco"
-    "re\022,\n\022game_clock_display\030\005 \001(\tR\020gameCloc"
-    "kDisplay\"f\n\014PlayerJoined\022.\n\006player\030\001 \001(\013"
-    "2\026.enginehttp.TeamMemberR\006player\022&\n\004role"
-    "\030\002 \001(\0162\022.telemetry.v1.RoleR\004role\"P\n\nPlay"
-    "erLeft\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\022"
-    "!\n\014display_name\030\002 \001(\tR\013displayName\"\225\001\n\022P"
-    "layerSwitchedTeam\022\037\n\013player_slot\030\001 \001(\005R\n"
-    "playerSlot\022-\n\010new_role\030\002 \001(\0162\022.telemetry"
-    ".v1.RoleR\007newRole\022/\n\tprev_role\030\003 \001(\0162\022.t"
-    "elemetry.v1.RoleR\010prevRole\"\304\001\n\013EmotePlay"
-    "ed\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\0229\n\005e"
-    "mote\030\002 \001(\0162#.telemetry.v1.EmotePlayed.Em"
-    "oteTypeR\005emote\"Y\n\tEmoteType\022\032\n\026EMOTE_TYP"
-    "E_UNSPECIFIED\020\000\022\026\n\022EMOTE_TYPE_PRIMARY\020\001\022"
-    "\030\n\024EMOTE_TYPE_SECONDARY\020\002\"j\n\025DiscPossess"
-    "ionChanged\022\037\n\013player_slot\030\001 \001(\005R\nplayerS"
-    "lot\0220\n\024previous_player_slot\030\002 \001(\005R\022previ"
-    "ousPlayerSlot\"m\n\nDiscThrown\022\037\n\013player_sl"
-    "ot\030\001 \001(\005R\nplayerSlot\022>\n\rthrow_details\030\002 "
-    "\001(\0132\031.enginehttp.LastThrowInfoR\014throwDet"
-    "ails\"-\n\nDiscCaught\022\037\n\013player_slot\030\001 \001(\005R"
-    "\nplayerSlot\"H\n\nGoalScored\022:\n\rscore_detai"
-    "ls\030\001 \001(\0132\025.enginehttp.LastScoreR\014scoreDe"
-    "tails\"f\n\nPlayerGoal\022\037\n\013player_slot\030\001 \001(\005"
-    "R\nplayerSlot\022\037\n\013total_goals\030\002 \001(\005R\ntotal"
-    "Goals\022\026\n\006points\030\003 \001(\005R\006points\"N\n\nPlayerS"
-    "ave\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\022\037\n\013"
-    "total_saves\030\002 \001(\005R\ntotalSaves\"N\n\nPlayerS"
-    "tun\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\022\037\n\013"
-    "total_stuns\030\002 \001(\005R\ntotalStuns\"P\n\nPlayerP"
-    "ass\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\022!\n\014"
-    "total_passes\030\002 \001(\005R\013totalPasses\"\177\n\013Playe"
-    "rSteal\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\022"
-    "!\n\014total_steals\030\002 \001(\005R\013totalSteals\022,\n\022vi"
-    "ctim_player_slot\030\003 \001(\005R\020victimPlayerSlot"
-    "\"Q\n\013PlayerBlock\022\037\n\013player_slot\030\001 \001(\005R\npl"
-    "ayerSlot\022!\n\014total_blocks\030\002 \001(\005R\013totalBlo"
-    "cks\"f\n\022PlayerInterception\022\037\n\013player_slot"
-    "\030\001 \001(\005R\nplayerSlot\022/\n\023total_interception"
-    "s\030\002 \001(\005R\022totalInterceptions\"T\n\014PlayerAss"
-    "ist\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\022#\n\r"
-    "total_assists\030\002 \001(\005R\014totalAssists\"S\n\017Pla"
-    "yerShotTaken\022\037\n\013player_slot\030\001 \001(\005R\nplaye"
-    "rSlot\022\037\n\013total_shots\030\002 \001(\005R\ntotalShots\"\272"
-    "\001\n\014GenericEvent\022\035\n\nevent_type\030\001 \001(\tR\teve"
-    "ntType\0228\n\004data\030\002 \003(\0132$.telemetry.v1.Gene"
-    "ricEvent.DataEntryR\004data\022\030\n\007payload\030\003 \001("
-    "\tR\007payload\0327\n\tDataEntry\022\020\n\003key\030\001 \001(\tR\003ke"
-    "y\022\024\n\005value\030\002 \001(\tR\005value:\0028\001*\213\001\n\004Role\022\024\n\020"
-    "ROLE_UNSPECIFIED\020\000\022\022\n\016ROLE_BLUE_TEAM\020\001\022\024"
-    "\n\020ROLE_ORANGE_TEAM\020\002\022\022\n\016ROLE_SPECTATOR\020\003"
-    "\022\033\n\027ROLE_SOCIAL_PARTICIPANT\020\004\022\022\n\016ROLE_MO"
-    "DERATOR\020\005B\217\001\n\037com.echotools.nevr.telemet"
-    "ry.v1B\rNevrTelemetryP\001ZAgithub.com/echot"
-    "ools/nevr-common/v4/gen/go/telemetry/v1;"
-    "telemetry\252\002\027Nevr.Telemetry.Protobufb\006pro"
-    "to3"
+    "y.v1\032\037apigame/v1/engine_http_v1.proto\032\037g"
+    "oogle/protobuf/timestamp.proto\"\361\001\n\017Telem"
+    "etryHeader\022\035\n\ncapture_id\030\001 \001(\tR\tcaptureI"
+    "d\0229\n\ncreated_at\030\002 \001(\0132\032.google.protobuf."
+    "TimestampR\tcreatedAt\022G\n\010metadata\030\003 \003(\0132+"
+    ".telemetry.v1.TelemetryHeader.MetadataEn"
+    "tryR\010metadata\032;\n\rMetadataEntry\022\020\n\003key\030\001 "
+    "\001(\tR\003key\022\024\n\005value\030\002 \001(\tR\005value:\0028\001\"\214\001\n\010E"
+    "nvelope\0227\n\006header\030\001 \001(\0132\035.telemetry.v1.T"
+    "elemetryHeaderH\000R\006header\022<\n\005frame\030\002 \001(\0132"
+    "$.telemetry.v1.LobbySessionStateFrameH\000R"
+    "\005frameB\t\n\007message\"\247\002\n\026LobbySessionStateF"
+    "rame\022\037\n\013frame_index\030\001 \001(\rR\nframeIndex\0228\n"
+    "\ttimestamp\030\002 \001(\0132\032.google.protobuf.Times"
+    "tampR\ttimestamp\0227\n\006events\030\003 \003(\0132\037.teleme"
+    "try.v1.LobbySessionEventR\006events\0225\n\007sess"
+    "ion\030\004 \001(\0132\033.apigame.v1.SessionResponseR\007"
+    "session\022B\n\014player_bones\030\005 \001(\0132\037.apigame."
+    "v1.PlayerBonesResponseR\013playerBones\"\371\014\n\021"
+    "LobbySessionEvent\022A\n\rround_started\030\n \001(\013"
+    "2\032.telemetry.v1.RoundStartedH\000R\014roundSta"
+    "rted\022>\n\014round_paused\030\013 \001(\0132\031.telemetry.v"
+    "1.RoundPausedH\000R\013roundPaused\022D\n\016round_un"
+    "paused\030\014 \001(\0132\033.telemetry.v1.RoundUnpause"
+    "dH\000R\rroundUnpaused\022;\n\013round_ended\030\r \001(\0132"
+    "\030.telemetry.v1.RoundEndedH\000R\nroundEnded\022"
+    ";\n\013match_ended\030\016 \001(\0132\030.telemetry.v1.Matc"
+    "hEndedH\000R\nmatchEnded\022P\n\022scoreboard_updat"
+    "ed\030\017 \001(\0132\037.telemetry.v1.ScoreboardUpdate"
+    "dH\000R\021scoreboardUpdated\022A\n\rplayer_joined\030"
+    "\024 \001(\0132\032.telemetry.v1.PlayerJoinedH\000R\014pla"
+    "yerJoined\022;\n\013player_left\030\025 \001(\0132\030.telemet"
+    "ry.v1.PlayerLeftH\000R\nplayerLeft\022T\n\024player"
+    "_switched_team\030\026 \001(\0132 .telemetry.v1.Play"
+    "erSwitchedTeamH\000R\022playerSwitchedTeam\022>\n\014"
+    "emote_played\030\027 \001(\0132\031.telemetry.v1.EmoteP"
+    "layedH\000R\013emotePlayed\022]\n\027disc_possession_"
+    "changed\030\036 \001(\0132#.telemetry.v1.DiscPossess"
+    "ionChangedH\000R\025discPossessionChanged\022;\n\013d"
+    "isc_thrown\030\037 \001(\0132\030.telemetry.v1.DiscThro"
+    "wnH\000R\ndiscThrown\022;\n\013disc_caught\030  \001(\0132\030."
+    "telemetry.v1.DiscCaughtH\000R\ndiscCaught\022;\n"
+    "\013goal_scored\030( \001(\0132\030.telemetry.v1.GoalSc"
+    "oredH\000R\ngoalScored\022;\n\013player_goal\030) \001(\0132"
+    "\030.telemetry.v1.PlayerGoalH\000R\nplayerGoal\022"
+    ";\n\013player_save\0302 \001(\0132\030.telemetry.v1.Play"
+    "erSaveH\000R\nplayerSave\022;\n\013player_stun\0303 \001("
+    "\0132\030.telemetry.v1.PlayerStunH\000R\nplayerStu"
+    "n\022;\n\013player_pass\0304 \001(\0132\030.telemetry.v1.Pl"
+    "ayerPassH\000R\nplayerPass\022>\n\014player_steal\0305"
+    " \001(\0132\031.telemetry.v1.PlayerStealH\000R\013playe"
+    "rSteal\022>\n\014player_block\0306 \001(\0132\031.telemetry"
+    ".v1.PlayerBlockH\000R\013playerBlock\022S\n\023player"
+    "_interception\0307 \001(\0132 .telemetry.v1.Playe"
+    "rInterceptionH\000R\022playerInterception\022A\n\rp"
+    "layer_assist\0308 \001(\0132\032.telemetry.v1.Player"
+    "AssistH\000R\014playerAssist\022K\n\021player_shot_ta"
+    "ken\0309 \001(\0132\035.telemetry.v1.PlayerShotTaken"
+    "H\000R\017playerShotTaken\022A\n\rgeneric_event\030< \001"
+    "(\0132\032.telemetry.v1.GenericEventH\000R\014generi"
+    "cEventB\007\n\005event\"1\n\014RoundStarted\022!\n\014round"
+    "_number\030\001 \001(\005R\013roundNumber\"F\n\013RoundPause"
+    "d\0227\n\013pause_state\030\001 \001(\0132\026.apigame.v1.Paus"
+    "eStateR\npauseState\"H\n\rRoundUnpaused\0227\n\013p"
+    "ause_state\030\001 \001(\0132\026.apigame.v1.PauseState"
+    "R\npauseState\"f\n\nRoundEnded\022!\n\014round_numb"
+    "er\030\001 \001(\005R\013roundNumber\0225\n\014winning_team\030\002 "
+    "\001(\0162\022.telemetry.v1.RoleR\013winningTeam\"C\n\n"
+    "MatchEnded\0225\n\014winning_team\030\001 \001(\0162\022.telem"
+    "etry.v1.RoleR\013winningTeam\"\337\001\n\021Scoreboard"
+    "Updated\022\037\n\013blue_points\030\001 \001(\005R\nbluePoints"
+    "\022#\n\rorange_points\030\002 \001(\005R\014orangePoints\022(\n"
+    "\020blue_round_score\030\003 \001(\005R\016blueRoundScore\022"
+    ",\n\022orange_round_score\030\004 \001(\005R\020orangeRound"
+    "Score\022,\n\022game_clock_display\030\005 \001(\tR\020gameC"
+    "lockDisplay\"f\n\014PlayerJoined\022.\n\006player\030\001 "
+    "\001(\0132\026.apigame.v1.TeamMemberR\006player\022&\n\004r"
+    "ole\030\002 \001(\0162\022.telemetry.v1.RoleR\004role\"P\n\nP"
+    "layerLeft\022\037\n\013player_slot\030\001 \001(\005R\nplayerSl"
+    "ot\022!\n\014display_name\030\002 \001(\tR\013displayName\"\225\001"
+    "\n\022PlayerSwitchedTeam\022\037\n\013player_slot\030\001 \001("
+    "\005R\nplayerSlot\022-\n\010new_role\030\002 \001(\0162\022.teleme"
+    "try.v1.RoleR\007newRole\022/\n\tprev_role\030\003 \001(\0162"
+    "\022.telemetry.v1.RoleR\010prevRole\"\304\001\n\013EmoteP"
+    "layed\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\0229"
+    "\n\005emote\030\002 \001(\0162#.telemetry.v1.EmotePlayed"
+    ".EmoteTypeR\005emote\"Y\n\tEmoteType\022\032\n\026EMOTE_"
+    "TYPE_UNSPECIFIED\020\000\022\026\n\022EMOTE_TYPE_PRIMARY"
+    "\020\001\022\030\n\024EMOTE_TYPE_SECONDARY\020\002\"j\n\025DiscPoss"
+    "essionChanged\022\037\n\013player_slot\030\001 \001(\005R\nplay"
+    "erSlot\0220\n\024previous_player_slot\030\002 \001(\005R\022pr"
+    "eviousPlayerSlot\"m\n\nDiscThrown\022\037\n\013player"
+    "_slot\030\001 \001(\005R\nplayerSlot\022>\n\rthrow_details"
+    "\030\002 \001(\0132\031.apigame.v1.LastThrowInfoR\014throw"
+    "Details\"-\n\nDiscCaught\022\037\n\013player_slot\030\001 \001"
+    "(\005R\nplayerSlot\"H\n\nGoalScored\022:\n\rscore_de"
+    "tails\030\001 \001(\0132\025.apigame.v1.LastScoreR\014scor"
+    "eDetails\"f\n\nPlayerGoal\022\037\n\013player_slot\030\001 "
+    "\001(\005R\nplayerSlot\022\037\n\013total_goals\030\002 \001(\005R\nto"
+    "talGoals\022\026\n\006points\030\003 \001(\005R\006points\"N\n\nPlay"
+    "erSave\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\022"
+    "\037\n\013total_saves\030\002 \001(\005R\ntotalSaves\"N\n\nPlay"
+    "erStun\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\022"
+    "\037\n\013total_stuns\030\002 \001(\005R\ntotalStuns\"P\n\nPlay"
+    "erPass\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\022"
+    "!\n\014total_passes\030\002 \001(\005R\013totalPasses\"\177\n\013Pl"
+    "ayerSteal\022\037\n\013player_slot\030\001 \001(\005R\nplayerSl"
+    "ot\022!\n\014total_steals\030\002 \001(\005R\013totalSteals\022,\n"
+    "\022victim_player_slot\030\003 \001(\005R\020victimPlayerS"
+    "lot\"Q\n\013PlayerBlock\022\037\n\013player_slot\030\001 \001(\005R"
+    "\nplayerSlot\022!\n\014total_blocks\030\002 \001(\005R\013total"
+    "Blocks\"f\n\022PlayerInterception\022\037\n\013player_s"
+    "lot\030\001 \001(\005R\nplayerSlot\022/\n\023total_intercept"
+    "ions\030\002 \001(\005R\022totalInterceptions\"T\n\014Player"
+    "Assist\022\037\n\013player_slot\030\001 \001(\005R\nplayerSlot\022"
+    "#\n\rtotal_assists\030\002 \001(\005R\014totalAssists\"S\n\017"
+    "PlayerShotTaken\022\037\n\013player_slot\030\001 \001(\005R\npl"
+    "ayerSlot\022\037\n\013total_shots\030\002 \001(\005R\ntotalShot"
+    "s\"\272\001\n\014GenericEvent\022\035\n\nevent_type\030\001 \001(\tR\t"
+    "eventType\0228\n\004data\030\002 \003(\0132$.telemetry.v1.G"
+    "enericEvent.DataEntryR\004data\022\030\n\007payload\030\003"
+    " \001(\tR\007payload\0327\n\tDataEntry\022\020\n\003key\030\001 \001(\tR"
+    "\003key\022\024\n\005value\030\002 \001(\tR\005value:\0028\001*\213\001\n\004Role\022"
+    "\024\n\020ROLE_UNSPECIFIED\020\000\022\022\n\016ROLE_BLUE_TEAM\020"
+    "\001\022\024\n\020ROLE_ORANGE_TEAM\020\002\022\022\n\016ROLE_SPECTATO"
+    "R\020\003\022\033\n\027ROLE_SOCIAL_PARTICIPANT\020\004\022\022\n\016ROLE"
+    "_MODERATOR\020\005B\217\001\n\037com.echotools.nevr.tele"
+    "metry.v1B\rNevrTelemetryP\001ZAgithub.com/ec"
+    "hotools/nevr-common/v4/gen/go/telemetry/"
+    "v1;telemetry\252\002\027Nevr.Telemetry.Protobufb\006"
+    "proto3"
 };
 static const ::_pbi::DescriptorTable* PROTOBUF_NONNULL const
     descriptor_table_telemetry_2fv1_2ftelemetry_2eproto_deps[2] = {
-        &::descriptor_table_apigame_2fengine_5fhttp_5fv1_2eproto,
+        &::descriptor_table_apigame_2fv1_2fengine_5fhttp_5fv1_2eproto,
         &::descriptor_table_google_2fprotobuf_2ftimestamp_2eproto,
 };
 static ::absl::once_flag descriptor_table_telemetry_2fv1_2ftelemetry_2eproto_once;
 PROTOBUF_CONSTINIT const ::_pbi::DescriptorTable descriptor_table_telemetry_2fv1_2ftelemetry_2eproto = {
     false,
     false,
-    5243,
+    5246,
     descriptor_table_protodef_telemetry_2fv1_2ftelemetry_2eproto,
     "telemetry/v1/telemetry.proto",
     &descriptor_table_telemetry_2fv1_2ftelemetry_2eproto_once,
@@ -2343,11 +2343,11 @@ LobbySessionStateFrame::_table_ = {
     {::_pbi::TcParser::FastMtR1,
      {26, 0, 1,
       PROTOBUF_FIELD_OFFSET(LobbySessionStateFrame, _impl_.events_)}},
-    // .enginehttp.SessionResponse session = 4 [json_name = "session"];
+    // .apigame.v1.SessionResponse session = 4 [json_name = "session"];
     {::_pbi::TcParser::FastMtS1,
      {34, 2, 2,
       PROTOBUF_FIELD_OFFSET(LobbySessionStateFrame, _impl_.session_)}},
-    // .enginehttp.PlayerBonesResponse player_bones = 5 [json_name = "playerBones"];
+    // .apigame.v1.PlayerBonesResponse player_bones = 5 [json_name = "playerBones"];
     {::_pbi::TcParser::FastMtS1,
      {42, 3, 3,
       PROTOBUF_FIELD_OFFSET(LobbySessionStateFrame, _impl_.player_bones_)}},
@@ -2362,16 +2362,16 @@ LobbySessionStateFrame::_table_ = {
     {PROTOBUF_FIELD_OFFSET(LobbySessionStateFrame, _impl_.timestamp_), _Internal::kHasBitsOffset + 1, 0, (0 | ::_fl::kFcOptional | ::_fl::kMessage | ::_fl::kTvTable)},
     // repeated .telemetry.v1.LobbySessionEvent events = 3 [json_name = "events"];
     {PROTOBUF_FIELD_OFFSET(LobbySessionStateFrame, _impl_.events_), _Internal::kHasBitsOffset + 0, 1, (0 | ::_fl::kFcRepeated | ::_fl::kMessage | ::_fl::kTvTable)},
-    // .enginehttp.SessionResponse session = 4 [json_name = "session"];
+    // .apigame.v1.SessionResponse session = 4 [json_name = "session"];
     {PROTOBUF_FIELD_OFFSET(LobbySessionStateFrame, _impl_.session_), _Internal::kHasBitsOffset + 2, 2, (0 | ::_fl::kFcOptional | ::_fl::kMessage | ::_fl::kTvTable)},
-    // .enginehttp.PlayerBonesResponse player_bones = 5 [json_name = "playerBones"];
+    // .apigame.v1.PlayerBonesResponse player_bones = 5 [json_name = "playerBones"];
     {PROTOBUF_FIELD_OFFSET(LobbySessionStateFrame, _impl_.player_bones_), _Internal::kHasBitsOffset + 3, 3, (0 | ::_fl::kFcOptional | ::_fl::kMessage | ::_fl::kTvTable)},
   }},
   {{
       {::_pbi::TcParser::GetTable<::google::protobuf::Timestamp>()},
       {::_pbi::TcParser::GetTable<::telemetry::v1::LobbySessionEvent>()},
-      {::_pbi::TcParser::GetTable<::enginehttp::SessionResponse>()},
-      {::_pbi::TcParser::GetTable<::enginehttp::PlayerBonesResponse>()},
+      {::_pbi::TcParser::GetTable<::apigame::v1::SessionResponse>()},
+      {::_pbi::TcParser::GetTable<::apigame::v1::PlayerBonesResponse>()},
   }},
   {{
   }},
@@ -2454,14 +2454,14 @@ PROTOBUF_NOINLINE void LobbySessionStateFrame::Clear() {
     }
   }
 
-  // .enginehttp.SessionResponse session = 4 [json_name = "session"];
+  // .apigame.v1.SessionResponse session = 4 [json_name = "session"];
   if (CheckHasBit(cached_has_bits, 0x00000004U)) {
     target = ::google::protobuf::internal::WireFormatLite::InternalWriteMessage(
         4, *this_._impl_.session_, this_._impl_.session_->GetCachedSize(), target,
         stream);
   }
 
-  // .enginehttp.PlayerBonesResponse player_bones = 5 [json_name = "playerBones"];
+  // .apigame.v1.PlayerBonesResponse player_bones = 5 [json_name = "playerBones"];
   if (CheckHasBit(cached_has_bits, 0x00000008U)) {
     target = ::google::protobuf::internal::WireFormatLite::InternalWriteMessage(
         5, *this_._impl_.player_bones_, this_._impl_.player_bones_->GetCachedSize(), target,
@@ -2506,12 +2506,12 @@ PROTOBUF_NOINLINE void LobbySessionStateFrame::Clear() {
       total_size += 1 +
                     ::google::protobuf::internal::WireFormatLite::MessageSize(*this_._impl_.timestamp_);
     }
-    // .enginehttp.SessionResponse session = 4 [json_name = "session"];
+    // .apigame.v1.SessionResponse session = 4 [json_name = "session"];
     if (CheckHasBit(cached_has_bits, 0x00000004U)) {
       total_size += 1 +
                     ::google::protobuf::internal::WireFormatLite::MessageSize(*this_._impl_.session_);
     }
-    // .enginehttp.PlayerBonesResponse player_bones = 5 [json_name = "playerBones"];
+    // .apigame.v1.PlayerBonesResponse player_bones = 5 [json_name = "playerBones"];
     if (CheckHasBit(cached_has_bits, 0x00000008U)) {
       total_size += 1 +
                     ::google::protobuf::internal::WireFormatLite::MessageSize(*this_._impl_.player_bones_);
@@ -4398,18 +4398,18 @@ RoundPaused::_table_ = {
     ::_pbi::TcParser::GetTable<::telemetry::v1::RoundPaused>(),  // to_prefetch
     #endif  // PROTOBUF_PREFETCH_PARSE_TABLE
   }, {{
-    // .enginehttp.PauseState pause_state = 1 [json_name = "pauseState"];
+    // .apigame.v1.PauseState pause_state = 1 [json_name = "pauseState"];
     {::_pbi::TcParser::FastMtS1,
      {10, 0, 0,
       PROTOBUF_FIELD_OFFSET(RoundPaused, _impl_.pause_state_)}},
   }}, {{
     65535, 65535
   }}, {{
-    // .enginehttp.PauseState pause_state = 1 [json_name = "pauseState"];
+    // .apigame.v1.PauseState pause_state = 1 [json_name = "pauseState"];
     {PROTOBUF_FIELD_OFFSET(RoundPaused, _impl_.pause_state_), _Internal::kHasBitsOffset + 0, 0, (0 | ::_fl::kFcOptional | ::_fl::kMessage | ::_fl::kTvTable)},
   }},
   {{
-      {::_pbi::TcParser::GetTable<::enginehttp::PauseState>()},
+      {::_pbi::TcParser::GetTable<::apigame::v1::PauseState>()},
   }},
   {{
   }},
@@ -4449,7 +4449,7 @@ PROTOBUF_NOINLINE void RoundPaused::Clear() {
   (void)cached_has_bits;
 
   cached_has_bits = this_._impl_._has_bits_[0];
-  // .enginehttp.PauseState pause_state = 1 [json_name = "pauseState"];
+  // .apigame.v1.PauseState pause_state = 1 [json_name = "pauseState"];
   if (CheckHasBit(cached_has_bits, 0x00000001U)) {
     target = ::google::protobuf::internal::WireFormatLite::InternalWriteMessage(
         1, *this_._impl_.pause_state_, this_._impl_.pause_state_->GetCachedSize(), target,
@@ -4480,7 +4480,7 @@ PROTOBUF_NOINLINE void RoundPaused::Clear() {
   (void)cached_has_bits;
 
    {
-    // .enginehttp.PauseState pause_state = 1 [json_name = "pauseState"];
+    // .apigame.v1.PauseState pause_state = 1 [json_name = "pauseState"];
     cached_has_bits = this_._impl_._has_bits_[0];
     if (CheckHasBit(cached_has_bits, 0x00000001U)) {
       total_size += 1 +
@@ -4675,18 +4675,18 @@ RoundUnpaused::_table_ = {
     ::_pbi::TcParser::GetTable<::telemetry::v1::RoundUnpaused>(),  // to_prefetch
     #endif  // PROTOBUF_PREFETCH_PARSE_TABLE
   }, {{
-    // .enginehttp.PauseState pause_state = 1 [json_name = "pauseState"];
+    // .apigame.v1.PauseState pause_state = 1 [json_name = "pauseState"];
     {::_pbi::TcParser::FastMtS1,
      {10, 0, 0,
       PROTOBUF_FIELD_OFFSET(RoundUnpaused, _impl_.pause_state_)}},
   }}, {{
     65535, 65535
   }}, {{
-    // .enginehttp.PauseState pause_state = 1 [json_name = "pauseState"];
+    // .apigame.v1.PauseState pause_state = 1 [json_name = "pauseState"];
     {PROTOBUF_FIELD_OFFSET(RoundUnpaused, _impl_.pause_state_), _Internal::kHasBitsOffset + 0, 0, (0 | ::_fl::kFcOptional | ::_fl::kMessage | ::_fl::kTvTable)},
   }},
   {{
-      {::_pbi::TcParser::GetTable<::enginehttp::PauseState>()},
+      {::_pbi::TcParser::GetTable<::apigame::v1::PauseState>()},
   }},
   {{
   }},
@@ -4726,7 +4726,7 @@ PROTOBUF_NOINLINE void RoundUnpaused::Clear() {
   (void)cached_has_bits;
 
   cached_has_bits = this_._impl_._has_bits_[0];
-  // .enginehttp.PauseState pause_state = 1 [json_name = "pauseState"];
+  // .apigame.v1.PauseState pause_state = 1 [json_name = "pauseState"];
   if (CheckHasBit(cached_has_bits, 0x00000001U)) {
     target = ::google::protobuf::internal::WireFormatLite::InternalWriteMessage(
         1, *this_._impl_.pause_state_, this_._impl_.pause_state_->GetCachedSize(), target,
@@ -4757,7 +4757,7 @@ PROTOBUF_NOINLINE void RoundUnpaused::Clear() {
   (void)cached_has_bits;
 
    {
-    // .enginehttp.PauseState pause_state = 1 [json_name = "pauseState"];
+    // .apigame.v1.PauseState pause_state = 1 [json_name = "pauseState"];
     cached_has_bits = this_._impl_._has_bits_[0];
     if (CheckHasBit(cached_has_bits, 0x00000001U)) {
       total_size += 1 +
@@ -5916,20 +5916,20 @@ PlayerJoined::_table_ = {
     {::_pbi::TcParser::SingularVarintNoZag1<::uint32_t, offsetof(PlayerJoined, _impl_.role_), 1>(),
      {16, 1, 0,
       PROTOBUF_FIELD_OFFSET(PlayerJoined, _impl_.role_)}},
-    // .enginehttp.TeamMember player = 1 [json_name = "player"];
+    // .apigame.v1.TeamMember player = 1 [json_name = "player"];
     {::_pbi::TcParser::FastMtS1,
      {10, 0, 0,
       PROTOBUF_FIELD_OFFSET(PlayerJoined, _impl_.player_)}},
   }}, {{
     65535, 65535
   }}, {{
-    // .enginehttp.TeamMember player = 1 [json_name = "player"];
+    // .apigame.v1.TeamMember player = 1 [json_name = "player"];
     {PROTOBUF_FIELD_OFFSET(PlayerJoined, _impl_.player_), _Internal::kHasBitsOffset + 0, 0, (0 | ::_fl::kFcOptional | ::_fl::kMessage | ::_fl::kTvTable)},
     // .telemetry.v1.Role role = 2 [json_name = "role"];
     {PROTOBUF_FIELD_OFFSET(PlayerJoined, _impl_.role_), _Internal::kHasBitsOffset + 1, 0, (0 | ::_fl::kFcOptional | ::_fl::kOpenEnum)},
   }},
   {{
-      {::_pbi::TcParser::GetTable<::enginehttp::TeamMember>()},
+      {::_pbi::TcParser::GetTable<::apigame::v1::TeamMember>()},
   }},
   {{
   }},
@@ -5970,7 +5970,7 @@ PROTOBUF_NOINLINE void PlayerJoined::Clear() {
   (void)cached_has_bits;
 
   cached_has_bits = this_._impl_._has_bits_[0];
-  // .enginehttp.TeamMember player = 1 [json_name = "player"];
+  // .apigame.v1.TeamMember player = 1 [json_name = "player"];
   if (CheckHasBit(cached_has_bits, 0x00000001U)) {
     target = ::google::protobuf::internal::WireFormatLite::InternalWriteMessage(
         1, *this_._impl_.player_, this_._impl_.player_->GetCachedSize(), target,
@@ -6012,7 +6012,7 @@ PROTOBUF_NOINLINE void PlayerJoined::Clear() {
   ::_pbi::Prefetch5LinesFrom7Lines(&this_);
   cached_has_bits = this_._impl_._has_bits_[0];
   if (BatchCheckHasBit(cached_has_bits, 0x00000003U)) {
-    // .enginehttp.TeamMember player = 1 [json_name = "player"];
+    // .apigame.v1.TeamMember player = 1 [json_name = "player"];
     if (CheckHasBit(cached_has_bits, 0x00000001U)) {
       total_size += 1 +
                     ::google::protobuf::internal::WireFormatLite::MessageSize(*this_._impl_.player_);
@@ -7447,7 +7447,7 @@ DiscThrown::_table_ = {
     ::_pbi::TcParser::GetTable<::telemetry::v1::DiscThrown>(),  // to_prefetch
     #endif  // PROTOBUF_PREFETCH_PARSE_TABLE
   }, {{
-    // .enginehttp.LastThrowInfo throw_details = 2 [json_name = "throwDetails"];
+    // .apigame.v1.LastThrowInfo throw_details = 2 [json_name = "throwDetails"];
     {::_pbi::TcParser::FastMtS1,
      {18, 0, 0,
       PROTOBUF_FIELD_OFFSET(DiscThrown, _impl_.throw_details_)}},
@@ -7460,11 +7460,11 @@ DiscThrown::_table_ = {
   }}, {{
     // int32 player_slot = 1 [json_name = "playerSlot"];
     {PROTOBUF_FIELD_OFFSET(DiscThrown, _impl_.player_slot_), _Internal::kHasBitsOffset + 1, 0, (0 | ::_fl::kFcOptional | ::_fl::kInt32)},
-    // .enginehttp.LastThrowInfo throw_details = 2 [json_name = "throwDetails"];
+    // .apigame.v1.LastThrowInfo throw_details = 2 [json_name = "throwDetails"];
     {PROTOBUF_FIELD_OFFSET(DiscThrown, _impl_.throw_details_), _Internal::kHasBitsOffset + 0, 0, (0 | ::_fl::kFcOptional | ::_fl::kMessage | ::_fl::kTvTable)},
   }},
   {{
-      {::_pbi::TcParser::GetTable<::enginehttp::LastThrowInfo>()},
+      {::_pbi::TcParser::GetTable<::apigame::v1::LastThrowInfo>()},
   }},
   {{
   }},
@@ -7514,7 +7514,7 @@ PROTOBUF_NOINLINE void DiscThrown::Clear() {
     }
   }
 
-  // .enginehttp.LastThrowInfo throw_details = 2 [json_name = "throwDetails"];
+  // .apigame.v1.LastThrowInfo throw_details = 2 [json_name = "throwDetails"];
   if (CheckHasBit(cached_has_bits, 0x00000001U)) {
     target = ::google::protobuf::internal::WireFormatLite::InternalWriteMessage(
         2, *this_._impl_.throw_details_, this_._impl_.throw_details_->GetCachedSize(), target,
@@ -7547,7 +7547,7 @@ PROTOBUF_NOINLINE void DiscThrown::Clear() {
   ::_pbi::Prefetch5LinesFrom7Lines(&this_);
   cached_has_bits = this_._impl_._has_bits_[0];
   if (BatchCheckHasBit(cached_has_bits, 0x00000003U)) {
-    // .enginehttp.LastThrowInfo throw_details = 2 [json_name = "throwDetails"];
+    // .apigame.v1.LastThrowInfo throw_details = 2 [json_name = "throwDetails"];
     if (CheckHasBit(cached_has_bits, 0x00000001U)) {
       total_size += 1 +
                     ::google::protobuf::internal::WireFormatLite::MessageSize(*this_._impl_.throw_details_);
@@ -8008,18 +8008,18 @@ GoalScored::_table_ = {
     ::_pbi::TcParser::GetTable<::telemetry::v1::GoalScored>(),  // to_prefetch
     #endif  // PROTOBUF_PREFETCH_PARSE_TABLE
   }, {{
-    // .enginehttp.LastScore score_details = 1 [json_name = "scoreDetails"];
+    // .apigame.v1.LastScore score_details = 1 [json_name = "scoreDetails"];
     {::_pbi::TcParser::FastMtS1,
      {10, 0, 0,
       PROTOBUF_FIELD_OFFSET(GoalScored, _impl_.score_details_)}},
   }}, {{
     65535, 65535
   }}, {{
-    // .enginehttp.LastScore score_details = 1 [json_name = "scoreDetails"];
+    // .apigame.v1.LastScore score_details = 1 [json_name = "scoreDetails"];
     {PROTOBUF_FIELD_OFFSET(GoalScored, _impl_.score_details_), _Internal::kHasBitsOffset + 0, 0, (0 | ::_fl::kFcOptional | ::_fl::kMessage | ::_fl::kTvTable)},
   }},
   {{
-      {::_pbi::TcParser::GetTable<::enginehttp::LastScore>()},
+      {::_pbi::TcParser::GetTable<::apigame::v1::LastScore>()},
   }},
   {{
   }},
@@ -8059,7 +8059,7 @@ PROTOBUF_NOINLINE void GoalScored::Clear() {
   (void)cached_has_bits;
 
   cached_has_bits = this_._impl_._has_bits_[0];
-  // .enginehttp.LastScore score_details = 1 [json_name = "scoreDetails"];
+  // .apigame.v1.LastScore score_details = 1 [json_name = "scoreDetails"];
   if (CheckHasBit(cached_has_bits, 0x00000001U)) {
     target = ::google::protobuf::internal::WireFormatLite::InternalWriteMessage(
         1, *this_._impl_.score_details_, this_._impl_.score_details_->GetCachedSize(), target,
@@ -8090,7 +8090,7 @@ PROTOBUF_NOINLINE void GoalScored::Clear() {
   (void)cached_has_bits;
 
    {
-    // .enginehttp.LastScore score_details = 1 [json_name = "scoreDetails"];
+    // .apigame.v1.LastScore score_details = 1 [json_name = "scoreDetails"];
     cached_has_bits = this_._impl_._has_bits_[0];
     if (CheckHasBit(cached_has_bits, 0x00000001U)) {
       total_size += 1 +

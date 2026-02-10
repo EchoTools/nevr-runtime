@@ -7,7 +7,7 @@ syntax = "proto3";
 
 package telemetry.v1;
 
-import "apigame/engine_http_v1.proto";
+import "apigame/v1/engine_http_v1.proto";
 import "google/protobuf/timestamp.proto";
 
 option csharp_namespace = "Nevr.Telemetry.Protobuf";
@@ -60,10 +60,10 @@ message LobbySessionStateFrame {
   repeated LobbySessionEvent events = 3;
 
   // The session data for this frame, including player locations.
-  enginehttp.SessionResponse session = 4;
+  apigame.v1.SessionResponse session = 4;
 
   // The user bones data for this frame.
-  enginehttp.PlayerBonesResponse player_bones = 5;
+  apigame.v1.PlayerBonesResponse player_bones = 5;
 }
 
 // Defines the possible roles or teams a player can be assigned to.
@@ -129,12 +129,12 @@ message RoundStarted {
 
 // Fired when the game is paused.
 message RoundPaused {
-  enginehttp.PauseState pause_state = 1;
+  apigame.v1.PauseState pause_state = 1;
 }
 
 // Fired when the game is unpaused.
 message RoundUnpaused {
-  enginehttp.PauseState pause_state = 1;
+  apigame.v1.PauseState pause_state = 1;
 }
 
 // Fired when a round finishes.
@@ -164,7 +164,7 @@ message ScoreboardUpdated {
 // Fired when a new player is detected in the session.
 message PlayerJoined {
   // Contains the full initial state of the player.
-  enginehttp.TeamMember player = 1;
+  apigame.v1.TeamMember player = 1;
   Role role = 2;
 }
 
@@ -207,7 +207,7 @@ message DiscPossessionChanged {
 message DiscThrown {
   int32 player_slot = 1;
   // Contains the detailed physics of the throw.
-  enginehttp.LastThrowInfo throw_details = 2;
+  apigame.v1.LastThrowInfo throw_details = 2;
 }
 
 // Fired when a player catches the disc.
@@ -222,7 +222,7 @@ message DiscCaught {
 // Fired when a goal is scored.
 message GoalScored {
   // Contains all details about the score.
-  enginehttp.LastScore score_details = 1;
+  apigame.v1.LastScore score_details = 1;
 }
 
 // ------------------------------------------------------------------

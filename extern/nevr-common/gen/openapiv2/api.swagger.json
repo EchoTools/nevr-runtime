@@ -36,7 +36,7 @@
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/enginehttpPlayerBonesResponse"
+              "$ref": "#/definitions/v1GetPlayerBonesResponse"
             }
           },
           "default": {
@@ -59,7 +59,7 @@
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/enginehttpSessionResponse"
+              "$ref": "#/definitions/v1GetSessionResponse"
             }
           },
           "default": {
@@ -82,7 +82,7 @@
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/apiGuildGameServerList"
+              "$ref": "#/definitions/v1ListGuildGameServersResponse"
             }
           },
           "default": {
@@ -144,7 +144,7 @@
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/apiMatch"
+              "$ref": "#/definitions/v1LobbySessionCreateResponse"
             }
           },
           "default": {
@@ -161,7 +161,7 @@
             "in": "body",
             "required": true,
             "schema": {
-              "$ref": "#/definitions/apiLobbySessionCreateRequest"
+              "$ref": "#/definitions/v1LobbySessionCreateRequest"
             }
           }
         ],
@@ -176,7 +176,7 @@
       "type": "object",
       "properties": {
         "gameServer": {
-          "$ref": "#/definitions/apiGameServer",
+          "$ref": "#/definitions/v1GameServer",
           "description": "Server."
         },
         "state": {
@@ -187,189 +187,35 @@
       },
       "description": "A single server-state pair."
     },
-    "apiGameServer": {
+    "protobufAny": {
       "type": "object",
       "properties": {
-        "serverId": {
-          "type": "string",
-          "format": "uint64",
-          "description": "The id of the server."
-        },
-        "operatorId": {
-          "type": "string",
-          "description": "The user ID of the owner of the server."
-        },
-        "endpoint": {
-          "type": "string",
-          "title": "The endpoint data used for client connections. (internal_ip:external_ip:port)"
-        },
-        "supportedFeatures": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "The features of the server."
-        },
-        "timestepNanos": {
-          "type": "integer",
-          "format": "int32",
-          "description": "The timestep duration in nanoseconds."
-        },
-        "metadata": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "Additional information about the server."
+        "@type": {
+          "type": "string"
         }
       },
-      "title": "Game Server"
+      "additionalProperties": {}
     },
-    "apiGuildGameServerList": {
+    "rpcStatus": {
       "type": "object",
       "properties": {
-        "guildServers": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
           "type": "array",
           "items": {
             "type": "object",
-            "$ref": "#/definitions/GuildGameServerListGuildGameServer"
-          },
-          "description": "Server-state pairs."
-        },
-        "cursor": {
-          "type": "string",
-          "description": "An optional next page cursor."
+            "$ref": "#/definitions/protobufAny"
+          }
         }
       }
     },
-    "apiLobbyEntrant": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string",
-          "title": "The unique ID for this entrant record"
-        },
-        "sessionId": {
-          "type": "string",
-          "title": "The user's game service session ID"
-        },
-        "userId": {
-          "type": "string",
-          "title": "The user's NEVR user ID"
-        },
-        "xpid": {
-          "type": "string",
-          "title": "The user's cross-platform ID (e.g. OVR-ORG-123412341234)"
-        },
-        "displayName": {
-          "type": "string",
-          "title": "The user's in-game display name"
-        },
-        "roleAlignment": {
-          "type": "integer",
-          "format": "int32",
-          "title": "RoleIndex as int32, see Role enum below"
-        },
-        "metadata": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        }
-      },
-      "description": "A single entrant in a lobby session."
-    },
-    "apiLobbySessionCreateRequest": {
-      "type": "object",
-      "properties": {
-        "mode": {
-          "type": "string",
-          "title": "The game mode, e.g. \"echo_arena_private\""
-        },
-        "level": {
-          "type": "string",
-          "title": "The level to play on, e.g. \"mpl_arena\""
-        },
-        "teamSize": {
-          "type": "integer",
-          "format": "int32",
-          "description": "The number of players per team (1-5), ignored for social modes."
-        },
-        "guildGroupId": {
-          "type": "string",
-          "description": "The guild group ID to which the lobby belongs."
-        },
-        "ownerId": {
-          "type": "string",
-          "title": "The ID of the lobby creator/allocator"
-        },
-        "regionCode": {
-          "type": "string",
-          "description": "The preferred region for the lobby session."
-        },
-        "requiredFeatures": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "description": "Any required features that must be supported by the game server/clients."
-        },
-        "reservations": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/apiLobbyEntrant"
-          },
-          "description": "Entrant reservations."
-        },
-        "matchExpiry": {
-          "type": "string",
-          "format": "date-time",
-          "description": "The time when the match will expire if no players join."
-        },
-        "metadata": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "Extra metadata for the lobby session."
-        }
-      },
-      "description": "Request to create a lobby session."
-    },
-    "apiMatch": {
-      "type": "object",
-      "properties": {
-        "matchId": {
-          "type": "string",
-          "description": "The ID of the match, can be used to join."
-        },
-        "authoritative": {
-          "type": "boolean",
-          "description": "True if it's an server-managed authoritative match, false otherwise."
-        },
-        "label": {
-          "type": "string",
-          "description": "Match label, if any."
-        },
-        "size": {
-          "type": "integer",
-          "format": "int32",
-          "description": "Current number of users in the match."
-        },
-        "tickRate": {
-          "type": "integer",
-          "format": "int32",
-          "title": "Tick Rate"
-        },
-        "handlerName": {
-          "type": "string",
-          "title": "Handler name"
-        }
-      },
-      "description": "Represents a realtime match."
-    },
-    "enginehttpBodyPart": {
+    "v1BodyPart": {
       "type": "object",
       "properties": {
         "position": {
@@ -403,7 +249,7 @@
       },
       "description": "Represents an object's head, body, or hand properties."
     },
-    "enginehttpDisc": {
+    "v1Disc": {
       "type": "object",
       "properties": {
         "position": {
@@ -448,7 +294,80 @@
       },
       "description": "Represents the disc's physics properties."
     },
-    "enginehttpHandPart": {
+    "v1GameServer": {
+      "type": "object",
+      "properties": {
+        "serverId": {
+          "type": "string",
+          "format": "uint64",
+          "description": "The id of the server."
+        },
+        "operatorId": {
+          "type": "string",
+          "description": "The user ID of the owner of the server."
+        },
+        "endpoint": {
+          "type": "string",
+          "title": "The endpoint data used for client connections. (internal_ip:external_ip:port)"
+        },
+        "supportedFeatures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The features of the server."
+        },
+        "timestepNanos": {
+          "type": "integer",
+          "format": "int32",
+          "description": "The timestep duration in nanoseconds."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Additional information about the server."
+        }
+      },
+      "title": "Game Server"
+    },
+    "v1GetPlayerBonesResponse": {
+      "type": "object",
+      "properties": {
+        "playerBones": {
+          "$ref": "#/definitions/v1PlayerBonesResponse"
+        }
+      },
+      "description": "Response message for GetPlayerBones RPC."
+    },
+    "v1GetSessionResponse": {
+      "type": "object",
+      "properties": {
+        "session": {
+          "$ref": "#/definitions/v1SessionResponse"
+        }
+      },
+      "description": "Response message for GetSession RPC."
+    },
+    "v1GuildGameServerList": {
+      "type": "object",
+      "properties": {
+        "guildServers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/GuildGameServerListGuildGameServer"
+          },
+          "description": "Server-state pairs."
+        },
+        "cursor": {
+          "type": "string",
+          "description": "An optional next page cursor."
+        }
+      }
+    },
+    "v1HandPart": {
       "type": "object",
       "properties": {
         "pos": {
@@ -482,7 +401,7 @@
         }
       }
     },
-    "enginehttpLastScore": {
+    "v1LastScore": {
       "type": "object",
       "properties": {
         "disc_speed": {
@@ -512,7 +431,7 @@
       },
       "description": "Represents the last score event."
     },
-    "enginehttpLastThrowInfo": {
+    "v1LastThrowInfo": {
       "type": "object",
       "properties": {
         "arm_speed": {
@@ -570,7 +489,152 @@
       },
       "description": "Represents the last throw event."
     },
-    "enginehttpPauseState": {
+    "v1ListGuildGameServersResponse": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/definitions/v1GuildGameServerList"
+        }
+      },
+      "description": "Response wrapper for ListGuildGameServers RPC."
+    },
+    "v1LobbyEntrant": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "title": "The unique ID for this entrant record"
+        },
+        "sessionId": {
+          "type": "string",
+          "title": "The user's game service session ID"
+        },
+        "userId": {
+          "type": "string",
+          "title": "The user's NEVR user ID"
+        },
+        "xpid": {
+          "type": "string",
+          "title": "The user's cross-platform ID (e.g. OVR-ORG-123412341234)"
+        },
+        "displayName": {
+          "type": "string",
+          "title": "The user's in-game display name"
+        },
+        "roleAlignment": {
+          "type": "integer",
+          "format": "int32",
+          "title": "RoleIndex as int32, see Role enum below"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "A single entrant in a lobby session."
+    },
+    "v1LobbySessionCreateRequest": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "title": "The game mode, e.g. \"echo_arena_private\""
+        },
+        "level": {
+          "type": "string",
+          "title": "The level to play on, e.g. \"mpl_arena\""
+        },
+        "teamSize": {
+          "type": "integer",
+          "format": "int32",
+          "description": "The number of players per team (1-5), ignored for social modes."
+        },
+        "guildGroupId": {
+          "type": "string",
+          "description": "The guild group ID to which the lobby belongs."
+        },
+        "ownerId": {
+          "type": "string",
+          "title": "The ID of the lobby creator/allocator"
+        },
+        "regionCode": {
+          "type": "string",
+          "description": "The preferred region for the lobby session."
+        },
+        "requiredFeatures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Any required features that must be supported by the game server/clients."
+        },
+        "reservations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1LobbyEntrant"
+          },
+          "description": "Entrant reservations."
+        },
+        "matchExpiry": {
+          "type": "string",
+          "format": "date-time",
+          "description": "The time when the match will expire if no players join."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Extra metadata for the lobby session."
+        }
+      },
+      "description": "Request to create a lobby session."
+    },
+    "v1LobbySessionCreateResponse": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "$ref": "#/definitions/v1Match"
+        }
+      },
+      "description": "Response wrapper for LobbySessionCreate RPC."
+    },
+    "v1Match": {
+      "type": "object",
+      "properties": {
+        "matchId": {
+          "type": "string",
+          "description": "The ID of the match, can be used to join."
+        },
+        "authoritative": {
+          "type": "boolean",
+          "description": "True if it's an server-managed authoritative match, false otherwise."
+        },
+        "label": {
+          "type": "string",
+          "description": "Match label, if any."
+        },
+        "size": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Current number of users in the match."
+        },
+        "tickRate": {
+          "type": "integer",
+          "format": "int32",
+          "title": "Tick Rate"
+        },
+        "handlerName": {
+          "type": "string",
+          "title": "Handler name"
+        }
+      },
+      "description": "Represents a realtime match."
+    },
+    "v1PauseState": {
       "type": "object",
       "properties": {
         "paused_state": {
@@ -593,14 +657,14 @@
       },
       "description": "*\nRepresents the pause state of the game."
     },
-    "enginehttpPlayerBonesResponse": {
+    "v1PlayerBonesResponse": {
       "type": "object",
       "properties": {
         "user_bones": {
           "type": "array",
           "items": {
             "type": "object",
-            "$ref": "#/definitions/enginehttpUserBones"
+            "$ref": "#/definitions/v1UserBones"
           }
         },
         "err_code": {
@@ -610,7 +674,7 @@
       },
       "description": "Top-level message representing the user_bones API response."
     },
-    "enginehttpPlayerRoot": {
+    "v1PlayerRoot": {
       "type": "object",
       "properties": {
         "vr_left": {
@@ -643,7 +707,7 @@
         }
       }
     },
-    "enginehttpPlayerStats": {
+    "v1PlayerStats": {
       "type": "object",
       "properties": {
         "possession_time": {
@@ -697,7 +761,7 @@
       },
       "description": "Represents player statistics."
     },
-    "enginehttpSessionResponse": {
+    "v1SessionResponse": {
       "type": "object",
       "properties": {
         "orange_team_restart_request": {
@@ -730,7 +794,7 @@
           "description": "Name of the map."
         },
         "disc": {
-          "$ref": "#/definitions/enginehttpDisc",
+          "$ref": "#/definitions/v1Disc",
           "description": "Disc physics properties."
         },
         "blue_round_score": {
@@ -772,15 +836,15 @@
           "description": "Blue team's total points."
         },
         "last_throw": {
-          "$ref": "#/definitions/enginehttpLastThrowInfo",
+          "$ref": "#/definitions/v1LastThrowInfo",
           "description": "Information about the last throw event."
         },
         "player": {
-          "$ref": "#/definitions/enginehttpPlayerRoot",
+          "$ref": "#/definitions/v1PlayerRoot",
           "description": "Player root data."
         },
         "pause": {
-          "$ref": "#/definitions/enginehttpPauseState",
+          "$ref": "#/definitions/v1PauseState",
           "description": "Pause state of the game."
         },
         "possession": {
@@ -825,14 +889,14 @@
           "description": "Name of the client."
         },
         "last_score": {
-          "$ref": "#/definitions/enginehttpLastScore",
+          "$ref": "#/definitions/v1LastScore",
           "description": "Information about the last score event."
         },
         "teams": {
           "type": "array",
           "items": {
             "type": "object",
-            "$ref": "#/definitions/enginehttpTeam"
+            "$ref": "#/definitions/v1Team"
           },
           "description": "List of teams in the session."
         },
@@ -874,14 +938,14 @@
       },
       "title": "Top-level message representing the entire JSON data.\nEndpoint: /session"
     },
-    "enginehttpTeam": {
+    "v1Team": {
       "type": "object",
       "properties": {
         "players": {
           "type": "array",
           "items": {
             "type": "object",
-            "$ref": "#/definitions/enginehttpTeamMember"
+            "$ref": "#/definitions/v1TeamMember"
           }
         },
         "team": {
@@ -891,12 +955,12 @@
           "type": "boolean"
         },
         "stats": {
-          "$ref": "#/definitions/enginehttpTeamStats"
+          "$ref": "#/definitions/v1TeamStats"
         }
       },
       "description": "Represents team data."
     },
-    "enginehttpTeamMember": {
+    "v1TeamMember": {
       "type": "object",
       "properties": {
         "Weapon": {
@@ -909,10 +973,10 @@
           "type": "string"
         },
         "head": {
-          "$ref": "#/definitions/enginehttpBodyPart"
+          "$ref": "#/definitions/v1BodyPart"
         },
         "body": {
-          "$ref": "#/definitions/enginehttpBodyPart"
+          "$ref": "#/definitions/v1BodyPart"
         },
         "userid": {
           "type": "string",
@@ -963,10 +1027,10 @@
           "type": "boolean"
         },
         "lhand": {
-          "$ref": "#/definitions/enginehttpHandPart"
+          "$ref": "#/definitions/v1HandPart"
         },
         "rhand": {
-          "$ref": "#/definitions/enginehttpHandPart"
+          "$ref": "#/definitions/v1HandPart"
         },
         "velocity": {
           "type": "array",
@@ -976,12 +1040,12 @@
           }
         },
         "stats": {
-          "$ref": "#/definitions/enginehttpPlayerStats"
+          "$ref": "#/definitions/v1PlayerStats"
         }
       },
       "description": "Represents individual player data."
     },
-    "enginehttpTeamStats": {
+    "v1TeamStats": {
       "type": "object",
       "properties": {
         "possession_time": {
@@ -1035,7 +1099,7 @@
       },
       "description": "Represents team statistics."
     },
-    "enginehttpUserBones": {
+    "v1UserBones": {
       "type": "object",
       "properties": {
         "bone_t": {
@@ -1058,34 +1122,6 @@
         }
       },
       "description": "Represents bone data for a single player."
-    },
-    "protobufAny": {
-      "type": "object",
-      "properties": {
-        "@type": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": {}
-    },
-    "rpcStatus": {
-      "type": "object",
-      "properties": {
-        "code": {
-          "type": "integer",
-          "format": "int32"
-        },
-        "message": {
-          "type": "string"
-        },
-        "details": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/protobufAny"
-          }
-        }
-      }
     }
   },
   "securityDefinitions": {
