@@ -7,7 +7,7 @@ syntax = "proto3";
 
 package telemetry.v1;
 
-import "apigame/http_v1.proto";
+import "apigame/engine_http_v1.proto";
 import "google/protobuf/timestamp.proto";
 
 option csharp_namespace = "Nevr.Telemetry.Protobuf";

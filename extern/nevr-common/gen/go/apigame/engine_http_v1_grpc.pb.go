@@ -6,7 +6,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             (unknown)
-// source: apigame/http_v1.proto
+// source: apigame/engine_http_v1.proto
 
 package apigame
 
@@ -166,5 +166,5 @@ var EngineHttpService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "apigame/http_v1.proto",
+	Metadata: "apigame/engine_http_v1.proto",
 }

@@ -20,6 +20,9 @@ plugins:
 
   - local: protoc-gen-doc
     out: ../gen/docs
+    strategy: all
+    opt:
+      - html,index.html
 
   - remote: buf.build/protocolbuffers/go
     out: ../gen/go

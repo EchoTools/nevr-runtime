@@ -6,7 +6,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        (unknown)
-// source: apigame/http_v1.proto
+// source: apigame/engine_http_v1.proto
 
 package apigame
 
@@ -42,7 +42,7 @@ type Disc struct {
 
 func (x *Disc) Reset() {
 	*x = Disc{}
-	mi := &file_apigame_http_v1_proto_msgTypes[0]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -54,7 +54,7 @@ func (x *Disc) String() string {
 func (*Disc) ProtoMessage() {}
 
 func (x *Disc) ProtoReflect() protoreflect.Message {
-	mi := &file_apigame_http_v1_proto_msgTypes[0]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -67,7 +67,7 @@ func (x *Disc) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Disc.ProtoReflect.Descriptor instead.
 func (*Disc) Descriptor() ([]byte, []int) {
-	return file_apigame_http_v1_proto_rawDescGZIP(), []int{0}
+	return file_apigame_engine_http_v1_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *Disc) GetPosition() []float64 {
@@ -125,7 +125,7 @@ type BodyPart struct {
 
 func (x *BodyPart) Reset() {
 	*x = BodyPart{}
-	mi := &file_apigame_http_v1_proto_msgTypes[1]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -137,7 +137,7 @@ func (x *BodyPart) String() string {
 func (*BodyPart) ProtoMessage() {}
 
 func (x *BodyPart) ProtoReflect() protoreflect.Message {
-	mi := &file_apigame_http_v1_proto_msgTypes[1]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -150,7 +150,7 @@ func (x *BodyPart) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BodyPart.ProtoReflect.Descriptor instead.
 func (*BodyPart) Descriptor() ([]byte, []int) {
-	return file_apigame_http_v1_proto_rawDescGZIP(), []int{1}
+	return file_apigame_engine_http_v1_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *BodyPart) GetPosition() []float64 {
@@ -194,7 +194,7 @@ type HandPart struct {
 
 func (x *HandPart) Reset() {
 	*x = HandPart{}
-	mi := &file_apigame_http_v1_proto_msgTypes[2]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -206,7 +206,7 @@ func (x *HandPart) String() string {
 func (*HandPart) ProtoMessage() {}
 
 func (x *HandPart) ProtoReflect() protoreflect.Message {
-	mi := &file_apigame_http_v1_proto_msgTypes[2]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -219,7 +219,7 @@ func (x *HandPart) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HandPart.ProtoReflect.Descriptor instead.
 func (*HandPart) Descriptor() ([]byte, []int) {
-	return file_apigame_http_v1_proto_rawDescGZIP(), []int{2}
+	return file_apigame_engine_http_v1_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *HandPart) GetPos() []float64 {
@@ -271,7 +271,7 @@ type PlayerStats struct {
 
 func (x *PlayerStats) Reset() {
 	*x = PlayerStats{}
-	mi := &file_apigame_http_v1_proto_msgTypes[3]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -283,7 +283,7 @@ func (x *PlayerStats) String() string {
 func (*PlayerStats) ProtoMessage() {}
 
 func (x *PlayerStats) ProtoReflect() protoreflect.Message {
-	mi := &file_apigame_http_v1_proto_msgTypes[3]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -296,7 +296,7 @@ func (x *PlayerStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlayerStats.ProtoReflect.Descriptor instead.
 func (*PlayerStats) Descriptor() ([]byte, []int) {
-	return file_apigame_http_v1_proto_rawDescGZIP(), []int{3}
+	return file_apigame_engine_http_v1_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *PlayerStats) GetPossessionTime() float64 {
@@ -415,7 +415,7 @@ type TeamMember struct {
 
 func (x *TeamMember) Reset() {
 	*x = TeamMember{}
-	mi := &file_apigame_http_v1_proto_msgTypes[4]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -427,7 +427,7 @@ func (x *TeamMember) String() string {
 func (*TeamMember) ProtoMessage() {}
 
 func (x *TeamMember) ProtoReflect() protoreflect.Message {
-	mi := &file_apigame_http_v1_proto_msgTypes[4]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -440,7 +440,7 @@ func (x *TeamMember) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TeamMember.ProtoReflect.Descriptor instead.
 func (*TeamMember) Descriptor() ([]byte, []int) {
-	return file_apigame_http_v1_proto_rawDescGZIP(), []int{4}
+	return file_apigame_engine_http_v1_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *TeamMember) GetWeapon() string {
@@ -625,7 +625,7 @@ type TeamStats struct {
 
 func (x *TeamStats) Reset() {
 	*x = TeamStats{}
-	mi := &file_apigame_http_v1_proto_msgTypes[5]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -637,7 +637,7 @@ func (x *TeamStats) String() string {
 func (*TeamStats) ProtoMessage() {}
 
 func (x *TeamStats) ProtoReflect() protoreflect.Message {
-	mi := &file_apigame_http_v1_proto_msgTypes[5]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -650,7 +650,7 @@ func (x *TeamStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TeamStats.ProtoReflect.Descriptor instead.
 func (*TeamStats) Descriptor() ([]byte, []int) {
-	return file_apigame_http_v1_proto_rawDescGZIP(), []int{5}
+	return file_apigame_engine_http_v1_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *TeamStats) GetPossessionTime() float64 {
@@ -750,7 +750,7 @@ type Team struct {
 
 func (x *Team) Reset() {
 	*x = Team{}
-	mi := &file_apigame_http_v1_proto_msgTypes[6]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -762,7 +762,7 @@ func (x *Team) String() string {
 func (*Team) ProtoMessage() {}
 
 func (x *Team) ProtoReflect() protoreflect.Message {
-	mi := &file_apigame_http_v1_proto_msgTypes[6]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -775,7 +775,7 @@ func (x *Team) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Team.ProtoReflect.Descriptor instead.
 func (*Team) Descriptor() ([]byte, []int) {
-	return file_apigame_http_v1_proto_rawDescGZIP(), []int{6}
+	return file_apigame_engine_http_v1_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Team) GetPlayers() []*TeamMember {
@@ -822,7 +822,7 @@ type LastScore struct {
 
 func (x *LastScore) Reset() {
 	*x = LastScore{}
-	mi := &file_apigame_http_v1_proto_msgTypes[7]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -834,7 +834,7 @@ func (x *LastScore) String() string {
 func (*LastScore) ProtoMessage() {}
 
 func (x *LastScore) ProtoReflect() protoreflect.Message {
-	mi := &file_apigame_http_v1_proto_msgTypes[7]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -847,7 +847,7 @@ func (x *LastScore) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LastScore.ProtoReflect.Descriptor instead.
 func (*LastScore) Descriptor() ([]byte, []int) {
-	return file_apigame_http_v1_proto_rawDescGZIP(), []int{7}
+	return file_apigame_engine_http_v1_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *LastScore) GetDiscSpeed() float64 {
@@ -921,7 +921,7 @@ type LastThrowInfo struct {
 
 func (x *LastThrowInfo) Reset() {
 	*x = LastThrowInfo{}
-	mi := &file_apigame_http_v1_proto_msgTypes[8]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -933,7 +933,7 @@ func (x *LastThrowInfo) String() string {
 func (*LastThrowInfo) ProtoMessage() {}
 
 func (x *LastThrowInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_apigame_http_v1_proto_msgTypes[8]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -946,7 +946,7 @@ func (x *LastThrowInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LastThrowInfo.ProtoReflect.Descriptor instead.
 func (*LastThrowInfo) Descriptor() ([]byte, []int) {
-	return file_apigame_http_v1_proto_rawDescGZIP(), []int{8}
+	return file_apigame_engine_http_v1_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *LastThrowInfo) GetArmSpeed() float64 {
@@ -1055,7 +1055,7 @@ type PauseState struct {
 
 func (x *PauseState) Reset() {
 	*x = PauseState{}
-	mi := &file_apigame_http_v1_proto_msgTypes[9]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1067,7 +1067,7 @@ func (x *PauseState) String() string {
 func (*PauseState) ProtoMessage() {}
 
 func (x *PauseState) ProtoReflect() protoreflect.Message {
-	mi := &file_apigame_http_v1_proto_msgTypes[9]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1080,7 +1080,7 @@ func (x *PauseState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PauseState.ProtoReflect.Descriptor instead.
 func (*PauseState) Descriptor() ([]byte, []int) {
-	return file_apigame_http_v1_proto_rawDescGZIP(), []int{9}
+	return file_apigame_engine_http_v1_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *PauseState) GetPausedState() string {
@@ -1130,7 +1130,7 @@ type PlayerRoot struct {
 
 func (x *PlayerRoot) Reset() {
 	*x = PlayerRoot{}
-	mi := &file_apigame_http_v1_proto_msgTypes[10]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1142,7 +1142,7 @@ func (x *PlayerRoot) String() string {
 func (*PlayerRoot) ProtoMessage() {}
 
 func (x *PlayerRoot) ProtoReflect() protoreflect.Message {
-	mi := &file_apigame_http_v1_proto_msgTypes[10]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1155,7 +1155,7 @@ func (x *PlayerRoot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlayerRoot.ProtoReflect.Descriptor instead.
 func (*PlayerRoot) Descriptor() ([]byte, []int) {
-	return file_apigame_http_v1_proto_rawDescGZIP(), []int{10}
+	return file_apigame_engine_http_v1_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *PlayerRoot) GetVrLeft() []float64 {
@@ -1268,7 +1268,7 @@ type SessionResponse struct {
 
 func (x *SessionResponse) Reset() {
 	*x = SessionResponse{}
-	mi := &file_apigame_http_v1_proto_msgTypes[11]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1280,7 +1280,7 @@ func (x *SessionResponse) String() string {
 func (*SessionResponse) ProtoMessage() {}
 
 func (x *SessionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_apigame_http_v1_proto_msgTypes[11]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1293,7 +1293,7 @@ func (x *SessionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionResponse.ProtoReflect.Descriptor instead.
 func (*SessionResponse) Descriptor() ([]byte, []int) {
-	return file_apigame_http_v1_proto_rawDescGZIP(), []int{11}
+	return file_apigame_engine_http_v1_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *SessionResponse) GetOrangeTeamRestartRequest() int32 {
@@ -1560,7 +1560,7 @@ type UserBones struct {
 
 func (x *UserBones) Reset() {
 	*x = UserBones{}
-	mi := &file_apigame_http_v1_proto_msgTypes[12]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1572,7 +1572,7 @@ func (x *UserBones) String() string {
 func (*UserBones) ProtoMessage() {}
 
 func (x *UserBones) ProtoReflect() protoreflect.Message {
-	mi := &file_apigame_http_v1_proto_msgTypes[12]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1585,7 +1585,7 @@ func (x *UserBones) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserBones.ProtoReflect.Descriptor instead.
 func (*UserBones) Descriptor() ([]byte, []int) {
-	return file_apigame_http_v1_proto_rawDescGZIP(), []int{12}
+	return file_apigame_engine_http_v1_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *UserBones) GetBoneT() []float32 {
@@ -1620,7 +1620,7 @@ type PlayerBonesResponse struct {
 
 func (x *PlayerBonesResponse) Reset() {
 	*x = PlayerBonesResponse{}
-	mi := &file_apigame_http_v1_proto_msgTypes[13]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1632,7 +1632,7 @@ func (x *PlayerBonesResponse) String() string {
 func (*PlayerBonesResponse) ProtoMessage() {}
 
 func (x *PlayerBonesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_apigame_http_v1_proto_msgTypes[13]
+	mi := &file_apigame_engine_http_v1_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1645,7 +1645,7 @@ func (x *PlayerBonesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PlayerBonesResponse.ProtoReflect.Descriptor instead.
 func (*PlayerBonesResponse) Descriptor() ([]byte, []int) {
-	return file_apigame_http_v1_proto_rawDescGZIP(), []int{13}
+	return file_apigame_engine_http_v1_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *PlayerBonesResponse) GetUserBones() []*UserBones {
@@ -1662,11 +1662,11 @@ func (x *PlayerBonesResponse) GetErrCode() int32 {
 	return 0
 }
 
-var File_apigame_http_v1_proto protoreflect.FileDescriptor
+var File_apigame_engine_http_v1_proto protoreflect.FileDescriptor
 
-const file_apigame_http_v1_proto_rawDesc = "" +
+const file_apigame_engine_http_v1_proto_rawDesc = "" +
 	"\n" +
-	"\x15apigame/http_v1.proto\x12\n" +
+	"\x1capigame/engine_http_v1.proto\x12\n" +
 	"enginehttp\x1a\x1cgoogle/api/annotations.proto\x1a\x1bgoogle/protobuf/empty.proto\"\xa0\x01\n" +
 	"\x04Disc\x12\x1a\n" +
 	"\bposition\x18\x01 \x03(\x01R\bposition\x12\x18\n" +
@@ -1854,19 +1854,19 @@ const file_apigame_http_v1_proto_rawDesc = "" +
 	"(com.github.echotools.nevr.engine.http.v1B\x0fEngineHttpProtoP\x01Z2github.com/echotools/nevr-common/v4/gen/go/apigame\xaa\x02\x13Nevr.Engine.Http.V1b\x06proto3"
 
 var (
-	file_apigame_http_v1_proto_rawDescOnce sync.Once
-	file_apigame_http_v1_proto_rawDescData []byte
+	file_apigame_engine_http_v1_proto_rawDescOnce sync.Once
+	file_apigame_engine_http_v1_proto_rawDescData []byte
 )
 
-func file_apigame_http_v1_proto_rawDescGZIP() []byte {
-	file_apigame_http_v1_proto_rawDescOnce.Do(func() {
-		file_apigame_http_v1_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_apigame_http_v1_proto_rawDesc), len(file_apigame_http_v1_proto_rawDesc)))
+func file_apigame_engine_http_v1_proto_rawDescGZIP() []byte {
+	file_apigame_engine_http_v1_proto_rawDescOnce.Do(func() {
+		file_apigame_engine_http_v1_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_apigame_engine_http_v1_proto_rawDesc), len(file_apigame_engine_http_v1_proto_rawDesc)))
 	})
-	return file_apigame_http_v1_proto_rawDescData
+	return file_apigame_engine_http_v1_proto_rawDescData
 }
 
-var file_apigame_http_v1_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
-var file_apigame_http_v1_proto_goTypes = []any{
+var file_apigame_engine_http_v1_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_apigame_engine_http_v1_proto_goTypes = []any{
 	(*Disc)(nil),                // 0: enginehttp.Disc
 	(*BodyPart)(nil),            // 1: enginehttp.BodyPart
 	(*HandPart)(nil),            // 2: enginehttp.HandPart
@@ -1883,7 +1883,7 @@ var file_apigame_http_v1_proto_goTypes = []any{
 	(*PlayerBonesResponse)(nil), // 13: enginehttp.PlayerBonesResponse
 	(*emptypb.Empty)(nil),       // 14: google.protobuf.Empty
 }
-var file_apigame_http_v1_proto_depIdxs = []int32{
+var file_apigame_engine_http_v1_proto_depIdxs = []int32{
 	1,  // 0: enginehttp.TeamMember.head:type_name -> enginehttp.BodyPart
 	1,  // 1: enginehttp.TeamMember.body:type_name -> enginehttp.BodyPart
 	2,  // 2: enginehttp.TeamMember.left_hand:type_name -> enginehttp.HandPart
@@ -1909,26 +1909,26 @@ var file_apigame_http_v1_proto_depIdxs = []int32{
 	0,  // [0:14] is the sub-list for field type_name
 }
 
-func init() { file_apigame_http_v1_proto_init() }
-func file_apigame_http_v1_proto_init() {
-	if File_apigame_http_v1_proto != nil {
+func init() { file_apigame_engine_http_v1_proto_init() }
+func file_apigame_engine_http_v1_proto_init() {
+	if File_apigame_engine_http_v1_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_apigame_http_v1_proto_rawDesc), len(file_apigame_http_v1_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_apigame_engine_http_v1_proto_rawDesc), len(file_apigame_engine_http_v1_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_apigame_http_v1_proto_goTypes,
-		DependencyIndexes: file_apigame_http_v1_proto_depIdxs,
-		MessageInfos:      file_apigame_http_v1_proto_msgTypes,
+		GoTypes:           file_apigame_engine_http_v1_proto_goTypes,
+		DependencyIndexes: file_apigame_engine_http_v1_proto_depIdxs,
+		MessageInfos:      file_apigame_engine_http_v1_proto_msgTypes,
 	}.Build()
-	File_apigame_http_v1_proto = out.File
-	file_apigame_http_v1_proto_goTypes = nil
-	file_apigame_http_v1_proto_depIdxs = nil
+	File_apigame_engine_http_v1_proto = out.File
+	file_apigame_engine_http_v1_proto_goTypes = nil
+	file_apigame_engine_http_v1_proto_depIdxs = nil
 }
