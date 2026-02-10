@@ -5,10 +5,11 @@
 #define ECHOVR_H
 
 // Include necessary headers
-#ifdef _WIN32
+#if defined(_WIN32) || defined(_WINDOWS) || defined(__MINGW32__) || defined(__MINGW64__)
 #include <Windows.h>
 #include <guiddef.h>
 #else
+#include <cstdarg>
 #include <cstdint>
 typedef uint8_t BYTE;
 typedef uint16_t WORD;
@@ -24,6 +25,11 @@ typedef void VOID;
 typedef void* PVOID;
 typedef int BOOL;
 typedef int32_t HRESULT;
+typedef float FLOAT;
+typedef void* FARPROC;
+typedef void* HMODULE;
+typedef void* HWND;
+typedef const char* LPCSTR;
 struct GUID {
   uint32_t Data1;
   uint16_t Data2;
