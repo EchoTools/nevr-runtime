@@ -23,6 +23,7 @@
 #include <mutex>
 #include <vector>
 
+#include "apigame/v1/engine_http_v1.pb.h"
 #include "data_source.h"
 
 namespace TelemetryAgent {
@@ -35,33 +36,19 @@ namespace TelemetryAgent {
  * to the relevant data structures in memory.
  */
 struct MemoryOffsets {
-  // Base offset from game module to session data
-  // PLACEHOLDER: Replace with actual offset once determined
-  uintptr_t sessionBase = 0x020A00E8;
+  static constexpr uintptr_t GAME_CONTEXT_OFFSET = 0x20a0478;
+  static constexpr uintptr_t LOBBY_OFFSET = 0x18;
+  static constexpr uintptr_t GAMESTATE_OFFSET = 0x20;
+  static constexpr uintptr_t PLAYER_ARRAY_OFFSET = 0x178;
+  static constexpr uintptr_t PLAYER_STRIDE = 0x250;
+  static constexpr uintptr_t PLAYER_COUNT_OFFSET = 0xe2;
+  static constexpr uintptr_t PLAYER_STATS_BASE = 0x72ac;
+  static constexpr uintptr_t PLAYER_STATS_STRIDE = 0x4d08;
 
-  // Offset chain to reach session UUID
-  // PLACEHOLDER: Replace with actual pointer chain
-  std::vector<uintptr_t> sessionUUIDChain = {0x0, 0x978};
-
-  // Offset chain to reach game status string
-  // PLACEHOLDER: Replace with actual pointer chain
-  std::vector<uintptr_t> gameStatusChain = {0x0, 0x100};
-
-  // Offset chain to reach player data array
-  // PLACEHOLDER: Replace with actual pointer chain
-  std::vector<uintptr_t> playerDataChain = {0x0, 0x200};
-
-  // Offset chain to reach disc data
-  // PLACEHOLDER: Replace with actual pointer chain
-  std::vector<uintptr_t> discDataChain = {0x0, 0x300};
-
-  // Offset chain to reach team data
-  // PLACEHOLDER: Replace with actual pointer chain
-  std::vector<uintptr_t> teamDataChain = {0x0, 0x400};
-
-  // Offset to player bones array
-  // PLACEHOLDER: Replace with actual offset
-  std::vector<uintptr_t> playerBonesChain = {0x0, 0x500};
+  uintptr_t gameContextBase = GAME_CONTEXT_OFFSET;
+  uintptr_t lobbyOffset = LOBBY_OFFSET;
+  uintptr_t gameStateOffset = GAMESTATE_OFFSET;
+  uintptr_t playerDataOffset = PLAYER_ARRAY_OFFSET;
 };
 
 /**
@@ -113,47 +100,14 @@ class MemoryPoller : public IDataSource {
   bool ValidateMemoryAccess() const;
 
  private:
-  /**
-   * @brief Follow a pointer chain from a base address
-   * @param baseOffset Initial offset from game base
-   * @param chain Vector of offsets to follow
-   * @return Final address, or 0 if invalid
-   */
-  uintptr_t FollowPointerChain(uintptr_t baseOffset, const std::vector<uintptr_t>& chain) const;
-
-  /**
-   * @brief Read a string from memory
-   * @param address Memory address to read from
-   * @param maxLength Maximum string length
-   * @return The string value, or empty if invalid
-   */
   std::string ReadString(uintptr_t address, size_t maxLength) const;
 
-  /**
-   * @brief Read a GUID from memory
-   * @param address Memory address to read from
-   * @return GUID as string, or empty if invalid
-   */
   std::string ReadGUID(uintptr_t address) const;
 
-  /**
-   * @brief Serialize current session state to JSON
-   * @return JSON string representation of session data
-   */
-  std::string SerializeSessionToJson() const;
+  bool PopulateSessionResponse(apigame::v1::SessionResponse* response) const;
 
-  /**
-   * @brief Serialize player bones to JSON
-   * @return JSON string representation of player bones
-   */
-  std::string SerializePlayerBonesToJson() const;
+  bool PopulatePlayerBonesResponse(apigame::v1::PlayerBonesResponse* response) const;
 
-  /**
-   * @brief Check if a memory address is readable
-   * @param address The address to check
-   * @param size Number of bytes to check
-   * @return true if the memory is readable
-   */
   bool IsMemoryReadable(uintptr_t address, size_t size) const;
 
  private:
