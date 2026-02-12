@@ -11,7 +11,12 @@
 
 #include "memory_poller.h"
 
+#include <Windows.h>
+#include <google/protobuf/util/json_util.h>
+
 #include <chrono>
+#include <cstdint>
+#include <iomanip>
 #include <sstream>
 
 namespace TelemetryAgent {
@@ -62,16 +67,31 @@ bool MemoryPoller::GetFrameData(FrameData& data) {
   auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 
   try {
-    if (!PopulateSessionResponse(&data.session.session)) {
+    // Populate session data via protobuf, then serialize to JSON
+    apigame::v1::SessionResponse sessionProto;
+    if (!PopulateSessionResponse(&sessionProto)) {
       data.session.valid = false;
       return false;
     }
+
+    // Serialize protobuf to JSON string
+    std::string sessionJson;
+    google::protobuf::util::MessageToJsonString(sessionProto, &sessionJson);
+
+    data.session.json = sessionJson;
     data.session.valid = true;
     data.session.timestamp_ms = timestamp;
 
-    if (!PopulatePlayerBonesResponse(&data.playerBones.player_bones)) {
+    // Populate player bones data via protobuf, then serialize to JSON
+    apigame::v1::PlayerBonesResponse playerBonesProto;
+    if (!PopulatePlayerBonesResponse(&playerBonesProto)) {
       data.playerBones.valid = false;
     } else {
+      // Serialize protobuf to JSON string
+      std::string playerBonesJson;
+      google::protobuf::util::MessageToJsonString(playerBonesProto, &playerBonesJson);
+
+      data.playerBones.json = playerBonesJson;
       data.playerBones.valid = true;
       data.playerBones.timestamp_ms = timestamp;
     }
