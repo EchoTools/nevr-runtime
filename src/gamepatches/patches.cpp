@@ -251,6 +251,38 @@ VOID PatchEnableHeadless(PVOID pGame) {
 }
 
 /// <summary>
+/// Patches the OVR platform initialization branch within PlatformModuleDecisionAndInitialize.
+/// This function tests platform capability flags (at game_state+0x2da0) and conditionally
+/// initializes OVR, RAD, or other platform modules based on bit flags.
+///
+/// Without this patch, the OVR branch (bit 6, 0x40) causes a crash when OVR DLLs are unavailable.
+/// The surgical fix: NOP the conditional jump to the OVR initialization path (offset 0x1580e5),
+/// allowing normal RAD platform initialization and broadcaster setup to proceed.
+///
+/// Assembly context at 0x1401580df-0x1401580eb:
+///   1401580df:  shr    $0x6,%cl          # Test bit 6 (OVR platform flag)
+///   1401580e2:  test   %cl,%r14b         # Check if OVR flag is set
+///   1401580e5:  jne    0x1401581b2       # Jump to OVR initialization (PATCH THIS)
+///   1401580eb:  mov    0x30(%rsi),%rcx  # Continue with normal init (broadcaster, etc.)
+///
+/// By replacing the 6-byte 'jne' (0F 85 C7 00 00 00) with 6 NOPs (90 90 90 90 90 90),
+/// the OVR code path is skipped while all other initialization continues normally.
+/// </summary>
+/// <returns>None</returns>
+VOID PatchBypassOvrPlatform() {
+  using namespace PatchAddresses;
+
+  // Patch the OVR conditional jump to fall through instead of branching
+  // This allows broadcaster initialization and state machine progression
+  const BYTE nopPatch[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};  // 6 NOPs to replace JNE instruction
+  constexpr uintptr_t OVR_BRANCH_OFFSET = 0x1580e5;              // JNE to OVR initialization path
+
+  ApplyPatch(OVR_BRANCH_OFFSET, nopPatch, sizeof(nopPatch));
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] OVR platform branch bypassed - allowing normal initialization");
+}
+
+/// <summary>
 /// Patches the loading tips system to immediately return, avoiding unnecessary log spam and processing.
 /// The loading tips system requires resources that may not be properly configured in server mode.
 /// </summary>
@@ -606,14 +638,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   if (isServer) {
     PatchEnableServer();
     PatchDisableLoadingTips();
-    // Note: The platform module decision (OVR vs pnsrad) is based on mode flags at game_state[0xb68].
-    // However, modifying those flags here doesn't work because either:
-    // 1. The offset is different than documented, OR
-    // 2. The structure isn't fully initialized yet at this point
-    // Alternative: Apply a binary patch to PlatformModuleDecisionAndInitialize (0x140157fb0)
-    // to skip the OVR path. See PatchBypassOvrPlatform() if implemented.
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.PATCH] Server mode: OVR platform bypass requires binary patch (not yet implemented)");
+    PatchBypassOvrPlatform();
   }
 
   // Update the window title
@@ -952,6 +977,201 @@ BOOL VerifyGameVersion() {
 }
 
 /// <summary>
+/// Hook for CreateProcessA to disable crash reporter (BsSndRpt64.exe) in Wine/headless environments
+/// </summary>
+typedef BOOL(WINAPI* CreateProcessAFunc)(LPCSTR, LPSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD,
+                                         LPVOID, LPCSTR, LPSTARTUPINFOA, LPPROCESS_INFORMATION);
+CreateProcessAFunc OriginalCreateProcessA = nullptr;
+
+BOOL WINAPI CreateProcessAHook(LPCSTR lpApplicationName, LPSTR lpCommandLine, LPSECURITY_ATTRIBUTES lpProcessAttributes,
+                               LPSECURITY_ATTRIBUTES lpThreadAttributes, BOOL bInheritHandles, DWORD dwCreationFlags,
+                               LPVOID lpEnvironment, LPCSTR lpCurrentDirectory, LPSTARTUPINFOA lpStartupInfo,
+                               LPPROCESS_INFORMATION lpProcessInformation) {
+  // Block crash reporter executable (BsSndRpt64.exe) to prevent Wine errors
+  if (lpApplicationName && strstr(lpApplicationName, "BsSndRpt")) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked crash reporter launch (A): %s", lpApplicationName);
+    return FALSE;  // Pretend the process failed to start
+  }
+  if (lpCommandLine && strstr(lpCommandLine, "BsSndRpt")) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked crash reporter launch (cmdline A): %s", lpCommandLine);
+    return FALSE;
+  }
+
+  // Allow all other process launches
+  return OriginalCreateProcessA(lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes,
+                                bInheritHandles, dwCreationFlags, lpEnvironment, lpCurrentDirectory, lpStartupInfo,
+                                lpProcessInformation);
+}
+
+/// <summary>
+/// Hook for CreateProcessW to disable crash reporter (wide-char version)
+/// </summary>
+typedef BOOL(WINAPI* CreateProcessWFunc)(LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD,
+                                         LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
+CreateProcessWFunc OriginalCreateProcessW = nullptr;
+static bool g_crashReporterSuppressed = false;
+
+BOOL WINAPI CreateProcessWHook(LPCWSTR lpApplicationName, LPWSTR lpCommandLine,
+                               LPSECURITY_ATTRIBUTES lpProcessAttributes, LPSECURITY_ATTRIBUTES lpThreadAttributes,
+                               BOOL bInheritHandles, DWORD dwCreationFlags, LPVOID lpEnvironment,
+                               LPCWSTR lpCurrentDirectory, LPSTARTUPINFOW lpStartupInfo,
+                               LPPROCESS_INFORMATION lpProcessInformation) {
+  // Suppress crash reporter executable (BsSndRpt64.exe) by faking successful launch
+  if (lpApplicationName && wcsstr(lpApplicationName, L"BsSndRpt")) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Suppressed crash reporter launch (W): %ls", lpApplicationName);
+    g_crashReporterSuppressed = true;
+    if (lpProcessInformation) {
+      ZeroMemory(lpProcessInformation, sizeof(PROCESS_INFORMATION));
+      lpProcessInformation->hProcess = (HANDLE)0xDEADBEEF;
+      lpProcessInformation->hThread = (HANDLE)0xDEADBEEF;
+      lpProcessInformation->dwProcessId = 0xDEADBEEF;
+      lpProcessInformation->dwThreadId = 0xDEADBEEF;
+    }
+    return TRUE;
+  }
+  if (lpCommandLine && wcsstr(lpCommandLine, L"BsSndRpt")) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Suppressed crash reporter launch (cmdline W): %ls", lpCommandLine);
+    g_crashReporterSuppressed = true;
+    if (lpProcessInformation) {
+      ZeroMemory(lpProcessInformation, sizeof(PROCESS_INFORMATION));
+      lpProcessInformation->hProcess = (HANDLE)0xDEADBEEF;
+      lpProcessInformation->hThread = (HANDLE)0xDEADBEEF;
+      lpProcessInformation->dwProcessId = 0xDEADBEEF;
+      lpProcessInformation->dwThreadId = 0xDEADBEEF;
+    }
+    return TRUE;
+  }
+
+  // Allow all other process launches
+  return OriginalCreateProcessW(lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes,
+                                bInheritHandles, dwCreationFlags, lpEnvironment, lpCurrentDirectory, lpStartupInfo,
+                                lpProcessInformation);
+}
+
+/// <summary>
+/// Hook for CreateDirectoryW to fix "_temp" directory creation failure
+/// </summary>
+typedef BOOL(WINAPI* CreateDirectoryWFunc)(LPCWSTR, LPSECURITY_ATTRIBUTES);
+CreateDirectoryWFunc OriginalCreateDirectoryW = nullptr;
+
+BOOL WINAPI CreateDirectoryWHook(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes) {
+  if (lpPathName && wcsstr(lpPathName, L"_temp")) {
+    wchar_t fixedPath[512];
+    const wchar_t* pathToUse = lpPathName;
+
+    if (wcsncmp(lpPathName, L"\\\\?\\", 4) == 0 && lpPathName[4] != L'\\' && lpPathName[5] != L':') {
+      WCHAR currentDir[MAX_PATH];
+      GetCurrentDirectoryW(MAX_PATH, currentDir);
+      _snwprintf(fixedPath, 512, L"%ls\\%ls", currentDir, lpPathName + 4);
+      pathToUse = fixedPath;
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Fixed malformed NT path: '%ls' -> '%ls'", lpPathName, fixedPath);
+    }
+
+    BOOL result = OriginalCreateDirectoryW(pathToUse, lpSecurityAttributes);
+    DWORD lastError = GetLastError();
+
+    if (!result) {
+      if (lastError == ERROR_ALREADY_EXISTS) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Directory '%ls' already exists - returning success", pathToUse);
+        SetLastError(ERROR_SUCCESS);
+        return TRUE;
+      } else if (lastError == ERROR_FILE_NOT_FOUND || lastError == ERROR_PATH_NOT_FOUND) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Parent path missing for '%ls', creating recursively", pathToUse);
+        wchar_t parentPath[512];
+        wcsncpy(parentPath, pathToUse, 512);
+        wchar_t* lastSlash = wcsrchr(parentPath, L'\\');
+        if (lastSlash && lastSlash != parentPath) {
+          *lastSlash = L'\0';
+          CreateDirectoryWHook(parentPath, lpSecurityAttributes);
+        }
+        result = OriginalCreateDirectoryW(pathToUse, lpSecurityAttributes);
+        if (result || GetLastError() == ERROR_ALREADY_EXISTS) {
+          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Successfully created '%ls' after parent creation", pathToUse);
+          SetLastError(ERROR_SUCCESS);
+          return TRUE;
+        }
+      }
+    } else {
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Successfully created directory '%ls'", pathToUse);
+    }
+
+    SetLastError(lastError);
+    return result;
+  }
+
+  return OriginalCreateDirectoryW(lpPathName, lpSecurityAttributes);
+}
+
+typedef BOOL(WINAPI* CreateDirectoryAFunc)(LPCSTR, LPSECURITY_ATTRIBUTES);
+CreateDirectoryAFunc OriginalCreateDirectoryA = nullptr;
+
+BOOL WINAPI CreateDirectoryAHook(LPCSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateDirectoryA('%s') called", lpPathName ? lpPathName : "<null>");
+
+  BOOL result = OriginalCreateDirectoryA(lpPathName, lpSecurityAttributes);
+  DWORD lastError = GetLastError();
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateDirectoryA result=%d, lastError=%lu", result, lastError);
+
+  if (!result && lastError == ERROR_ALREADY_EXISTS) {
+    if (lpPathName && strstr(lpPathName, "_temp")) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.PATCH] CreateDirectoryA('%s') failed with ERROR_ALREADY_EXISTS - returning success", lpPathName);
+      SetLastError(ERROR_SUCCESS);
+      return TRUE;
+    }
+  }
+
+  SetLastError(lastError);
+  return result;
+}
+
+/// <summary>
+/// Hook for ExitProcess to prevent crash reporter-triggered termination
+/// </summary>
+typedef VOID(WINAPI* ExitProcessFunc)(UINT);
+ExitProcessFunc OriginalExitProcess = nullptr;
+
+VOID WINAPI ExitProcessHook(UINT uExitCode) {
+  if (g_crashReporterSuppressed) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] ExitProcess(%u) suppressed after crash reporter block - server continuing", uExitCode);
+
+    void* stack[32];
+    USHORT frames = CaptureStackBackTrace(0, 32, stack, NULL);
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Call stack (%u frames):", frames);
+    for (USHORT i = 0; i < frames && i < 10; i++) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH]   Frame %u: %p", i, stack[i]);
+    }
+
+    g_crashReporterSuppressed = false;
+    return;
+  }
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ExitProcess(%u) called", uExitCode);
+  OriginalExitProcess(uExitCode);
+}
+
+typedef BOOL(WINAPI* TerminateProcessFunc)(HANDLE, UINT);
+TerminateProcessFunc OriginalTerminateProcess = nullptr;
+
+BOOL WINAPI TerminateProcessHook(HANDLE hProcess, UINT uExitCode) {
+  HANDLE currentProcess = GetCurrentProcess();
+  if (hProcess == currentProcess || hProcess == (HANDLE)-1) {
+    if (g_crashReporterSuppressed) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] TerminateProcess(self, %u) suppressed after crash reporter block - server continuing",
+          uExitCode);
+      g_crashReporterSuppressed = false;
+      return TRUE;
+    }
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] TerminateProcess(self, %u) called - allowing", uExitCode);
+  }
+
+  return OriginalTerminateProcess(hProcess, uExitCode);
+}
+
+/// <summary>
 /// WinHTTP CLSID and IID constants from findings document
 /// </summary>
 static const CLSID CLSID_WinHttpRequest = {
@@ -1056,6 +1276,60 @@ VOID Initialize() {
     }
   } else {
     Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load Secur32.dll for SSL/TLS modernization");
+  }
+
+  // Hook CreateProcessA/W to disable crash reporter in Wine/headless mode
+  HMODULE hKernel32 = GetModuleHandleA("kernel32.dll");
+  if (hKernel32 != NULL) {
+    OriginalCreateProcessA = (CreateProcessAFunc)GetProcAddress(hKernel32, "CreateProcessA");
+    if (OriginalCreateProcessA != NULL) {
+      PatchDetour(&OriginalCreateProcessA, reinterpret_cast<PVOID>(CreateProcessAHook));
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateProcessA hook installed (crash reporter disabled)");
+    } else {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find CreateProcessA");
+    }
+
+    OriginalCreateProcessW = (CreateProcessWFunc)GetProcAddress(hKernel32, "CreateProcessW");
+    if (OriginalCreateProcessW != NULL) {
+      PatchDetour(&OriginalCreateProcessW, reinterpret_cast<PVOID>(CreateProcessWHook));
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateProcessW hook installed (crash reporter disabled)");
+    } else {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find CreateProcessW");
+    }
+
+    OriginalExitProcess = (ExitProcessFunc)GetProcAddress(hKernel32, "ExitProcess");
+    if (OriginalExitProcess != NULL) {
+      PatchDetour(&OriginalExitProcess, reinterpret_cast<PVOID>(ExitProcessHook));
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ExitProcess hook installed (prevents crash reporter termination)");
+    } else {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find ExitProcess");
+    }
+
+    OriginalTerminateProcess = (TerminateProcessFunc)GetProcAddress(hKernel32, "TerminateProcess");
+    if (OriginalTerminateProcess != NULL) {
+      PatchDetour(&OriginalTerminateProcess, reinterpret_cast<PVOID>(TerminateProcessHook));
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] TerminateProcess hook installed (prevents self-termination)");
+    } else {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find TerminateProcess");
+    }
+
+    OriginalCreateDirectoryW = (CreateDirectoryWFunc)GetProcAddress(hKernel32, "CreateDirectoryW");
+    if (OriginalCreateDirectoryW != NULL) {
+      PatchDetour(&OriginalCreateDirectoryW, reinterpret_cast<PVOID>(CreateDirectoryWHook));
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateDirectoryW hook installed (fixes _temp creation)");
+    } else {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find CreateDirectoryW");
+    }
+
+    OriginalCreateDirectoryA = (CreateDirectoryAFunc)GetProcAddress(hKernel32, "CreateDirectoryA");
+    if (OriginalCreateDirectoryA != NULL) {
+      PatchDetour(&OriginalCreateDirectoryA, reinterpret_cast<PVOID>(CreateDirectoryAHook));
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateDirectoryA hook installed (fixes _temp creation)");
+    } else {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find CreateDirectoryA");
+    }
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load kernel32.dll for crash reporter hooks");
   }
 
   // Hook CoCreateInstance for WinHTTP replacement
