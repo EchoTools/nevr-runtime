@@ -48,6 +48,11 @@ class WinHttpRequestStub : public IUnknown {
   std::map<std::wstring, std::wstring> m_responseHeaders;
   long m_statusCode;
   bool m_sent;
+
+  // UTF-8 cached strings to maintain lifetime for curl operations
+  std::string m_method_utf8;
+  std::string m_url_utf8;
+  std::vector<std::string> m_header_lines_utf8;
 };
 
 HRESULT WINAPI CreateWinHttpRequestStub(REFIID riid, void** ppvObject);

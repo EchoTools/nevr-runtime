@@ -249,20 +249,25 @@ HRESULT WinHttpRequestStub::Send(VARIANT Body) {
 
   curl_easy_setopt(curl, CURLOPT_URL, url_utf8.data());
 
+  m_method_utf8.clear();
+  m_url_utf8.clear();
+  m_header_lines_utf8.clear();
+
   int method_len = WideCharToMultiByte(CP_UTF8, 0, m_method.c_str(), -1, nullptr, 0, nullptr, nullptr);
   if (method_len > 0) {
-    std::vector<char> method_utf8(method_len);
-    WideCharToMultiByte(CP_UTF8, 0, m_method.c_str(), -1, method_utf8.data(), method_len, nullptr, nullptr);
+    m_method_utf8.resize(method_len);
+    WideCharToMultiByte(CP_UTF8, 0, m_method.c_str(), -1, m_method_utf8.data(), method_len, nullptr, nullptr);
+    m_method_utf8.pop_back();
 
-    if (_stricmp(method_utf8.data(), "POST") == 0) {
+    if (_stricmp(m_method_utf8.c_str(), "POST") == 0) {
       curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    } else if (_stricmp(method_utf8.data(), "GET") == 0) {
+    } else if (_stricmp(m_method_utf8.c_str(), "GET") == 0) {
       curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
     } else {
-      curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method_utf8.data());
+      curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, m_method_utf8.c_str());
     }
 
-    snprintf(buf, sizeof(buf), "  -> Method: %s", method_utf8.data());
+    snprintf(buf, sizeof(buf), "  -> Method: %s", m_method_utf8.c_str());
     DebugLog(buf);
   }
 
@@ -272,13 +277,17 @@ HRESULT WinHttpRequestStub::Send(VARIANT Body) {
     int value_len = WideCharToMultiByte(CP_UTF8, 0, pair.second.c_str(), -1, nullptr, 0, nullptr, nullptr);
 
     if (header_len > 0 && value_len > 0) {
-      std::vector<char> header_utf8(header_len);
-      std::vector<char> value_utf8(value_len);
+      std::string header_utf8(header_len, '\0');
+      std::string value_utf8(value_len, '\0');
       WideCharToMultiByte(CP_UTF8, 0, pair.first.c_str(), -1, header_utf8.data(), header_len, nullptr, nullptr);
       WideCharToMultiByte(CP_UTF8, 0, pair.second.c_str(), -1, value_utf8.data(), value_len, nullptr, nullptr);
 
-      std::string header_line = std::string(header_utf8.data()) + ": " + std::string(value_utf8.data());
-      headers_list = curl_slist_append(headers_list, header_line.c_str());
+      header_utf8.pop_back();
+      value_utf8.pop_back();
+
+      std::string header_line = header_utf8 + ": " + value_utf8;
+      m_header_lines_utf8.push_back(header_line);
+      headers_list = curl_slist_append(headers_list, m_header_lines_utf8.back().c_str());
     }
   }
 
