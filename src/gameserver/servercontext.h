@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <mutex>
 #include <shared_mutex>
+#include <vector>
 
 #include "echovr.h"
 #include "pch.h"
@@ -76,6 +77,7 @@ class ServerContext {
 
   // Initialization (exclusive lock)
   void Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broadcaster);
+  void FinalizeInitialization();
   void Terminate();
 
   // State transitions (exclusive lock)
@@ -122,7 +124,9 @@ class ServerContext {
   // Game object pointers (not owned, provided by game engine)
   EchoVR::Lobby* lobby_ = nullptr;
   EchoVR::Broadcaster* broadcaster_ = nullptr;
-  EchoVR::TcpBroadcasterData* tcpBroadcaster_ = nullptr;
+
+  // Cached entrant data (owns the data, not pointers from game)
+  std::vector<EchoVR::Lobby::EntrantData> cachedEntrants_;
 
   // ServerDB connection
   EchoVR::TcpPeer serverDbPeer_ = EchoVR::TcpPeer_InvalidPeer;

@@ -41,11 +41,17 @@ void SessionState::Reset() {
 void ServerContext::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broadcaster) {
   std::unique_lock lock(stateMutex_);
 
-  lobby_ = lobby;
+  if (lobby && lobby->entrantData.items) {
+    cachedEntrants_.clear();
+    cachedEntrants_.reserve(lobby->entrantData.count);
+    for (uint64_t i = 0; i < lobby->entrantData.count; ++i) {
+      cachedEntrants_.push_back(lobby->entrantData.items[i]);
+    }
+  }
+
   broadcaster_ = broadcaster;
-  tcpBroadcaster_ = lobby ? lobby->tcpBroadcaster->data : nullptr;
+
   serverDbPeer_ = EchoVR::TcpPeer_InvalidPeer;
-  state_ = ServerState::Initialized;
 
   {
     std::lock_guard sessionLock(sessionMutex_);
@@ -55,13 +61,18 @@ void ServerContext::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broadc
   callbacks_.Clear();
 }
 
+void ServerContext::FinalizeInitialization() {
+  std::unique_lock lock(stateMutex_);
+  state_ = ServerState::Initialized;
+}
+
 void ServerContext::Terminate() {
   std::unique_lock lock(stateMutex_);
 
   state_ = ServerState::Terminated;
   lobby_ = nullptr;
   broadcaster_ = nullptr;
-  tcpBroadcaster_ = nullptr;
+  cachedEntrants_.clear();
   serverDbPeer_ = EchoVR::TcpPeer_InvalidPeer;
 
   {
@@ -154,7 +165,14 @@ EchoVR::Broadcaster* ServerContext::GetBroadcaster() const {
 
 EchoVR::TcpBroadcasterData* ServerContext::GetTcpBroadcaster() const {
   std::shared_lock lock(stateMutex_);
-  return (state_ != ServerState::Uninitialized && state_ != ServerState::Terminated) ? tcpBroadcaster_ : nullptr;
+  if (state_ == ServerState::Uninitialized || state_ == ServerState::Terminated) {
+    return nullptr;
+  }
+  // Dynamically get tcpBroadcaster from lobby instead of caching it
+  if (lobby_ && lobby_->tcpBroadcaster) {
+    return lobby_->tcpBroadcaster->data;
+  }
+  return nullptr;
 }
 
 EchoVR::Lobby::EntrantData* ServerContext::GetEntrant(uint32_t index) const {
@@ -164,15 +182,11 @@ EchoVR::Lobby::EntrantData* ServerContext::GetEntrant(uint32_t index) const {
     return nullptr;
   }
 
-  if (!lobby_ || !lobby_->entrantData.items) {
+  if (index >= cachedEntrants_.size()) {
     return nullptr;
   }
 
-  if (index >= lobby_->entrantData.count) {
-    return nullptr;
-  }
-
-  return &lobby_->entrantData.items[index];
+  return const_cast<EchoVR::Lobby::EntrantData*>(&cachedEntrants_[index]);
 }
 
 uint64_t ServerContext::GetEntrantCount() const {
@@ -182,11 +196,7 @@ uint64_t ServerContext::GetEntrantCount() const {
     return 0;
   }
 
-  if (!lobby_ || !lobby_->entrantData.items) {
-    return 0;
-  }
-
-  return lobby_->entrantData.count;
+  return cachedEntrants_.size();
 }
 
 void ServerContext::SetServerDbPeer(const EchoVR::TcpPeer& peer) {
