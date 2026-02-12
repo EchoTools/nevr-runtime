@@ -952,6 +952,39 @@ BOOL VerifyGameVersion() {
 }
 
 /// <summary>
+/// WinHTTP CLSID and IID constants from findings document
+/// </summary>
+static const CLSID CLSID_WinHttpRequest = {
+    0x88d96a09, 0xf192, 0x11d4, {0xa6, 0x5f, 0x00, 0x40, 0x96, 0x32, 0x51, 0xe5}};
+
+typedef HRESULT(WINAPI* CoCreateInstanceFunc)(REFCLSID, LPUNKNOWN, DWORD, REFIID, LPVOID*);
+CoCreateInstanceFunc OriginalCoCreateInstance = nullptr;
+
+HRESULT WINAPI CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD dwClsContext, REFIID riid,
+                                    LPVOID* ppv) {
+  char logBuf[512];
+  snprintf(logBuf, sizeof(logBuf),
+           "[NEVR.PATCH] CoCreateInstance called: CLSID={%08lX-%04hX-%04hX-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+           rclsid.Data1, rclsid.Data2, rclsid.Data3, rclsid.Data4[0], rclsid.Data4[1], rclsid.Data4[2], rclsid.Data4[3],
+           rclsid.Data4[4], rclsid.Data4[5], rclsid.Data4[6], rclsid.Data4[7]);
+  Log(EchoVR::LogLevel::Info, logBuf);
+
+  if (IsEqualCLSID(rclsid, CLSID_WinHttpRequest)) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] WinHTTP COM object requested - returning stub implementation");
+
+    extern HRESULT CreateWinHttpRequestStub(REFIID riid, void** ppvObject);
+    HRESULT hr = CreateWinHttpRequestStub(riid, ppv);
+
+    snprintf(logBuf, sizeof(logBuf), "[NEVR.PATCH] CreateWinHttpRequestStub returned HRESULT 0x%08lX", hr);
+    Log(EchoVR::LogLevel::Info, logBuf);
+
+    return hr;
+  }
+
+  return OriginalCoCreateInstance(rclsid, pUnkOuter, dwClsContext, riid, ppv);
+}
+
+/// <summary>
 /// Initializes the patcher, executing startup patchs on the game and installing detours/hooks on various game
 /// functions.
 /// </summary>
@@ -1023,6 +1056,20 @@ VOID Initialize() {
     }
   } else {
     Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load Secur32.dll for SSL/TLS modernization");
+  }
+
+  // Hook CoCreateInstance for WinHTTP replacement
+  HMODULE hOle32 = GetModuleHandleA("ole32.dll");
+  if (hOle32 != NULL) {
+    OriginalCoCreateInstance = (CoCreateInstanceFunc)GetProcAddress(hOle32, "CoCreateInstance");
+    if (OriginalCoCreateInstance != NULL) {
+      PatchDetour(&OriginalCoCreateInstance, reinterpret_cast<PVOID>(CoCreateInstanceHook));
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] WinHTTP to libcurl hook installed (CoCreateInstance)");
+    } else {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find CoCreateInstance for WinHTTP hook");
+    }
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load ole32.dll for WinHTTP hook");
   }
 
   // Note: WebSocket CreatePeer hook requires vtable hooking, which is complex.

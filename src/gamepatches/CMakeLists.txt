@@ -1,7 +1,7 @@
 # Game Patches uses MinHook for function hooking
 # MinHook is built from extern/minhook
-set(PATCHES_SOURCES "dllmain.cpp" "patches.cpp")
-set(PATCHES_HEADERS "patches.h")
+set(PATCHES_SOURCES "dllmain.cpp" "patches.cpp" "winhttp_stub.cpp")
+set(PATCHES_HEADERS "patches.h" "winhttp_stub.h")
 
 add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
                                "exports.def")
@@ -11,7 +11,8 @@ target_compile_definitions(gamepatches PRIVATE USE_MINHOOK)
 target_precompile_headers(gamepatches PRIVATE "${CMAKE_SOURCE_DIR}/src/common/pch.h")
 target_include_directories(gamepatches PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(gamepatches PRIVATE minhook common version)
+find_package(CURL REQUIRED)
+target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl)
 target_link_directories(gamepatches PRIVATE common)
 
 # Set output name to remove 'lib' prefix on MinGW
