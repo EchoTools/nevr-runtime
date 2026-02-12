@@ -384,7 +384,17 @@ HRESULT WinHttpRequestStub::get_ResponseBody(VARIANT* Body) {
   void* pData = nullptr;
   HRESULT hr = SafeArrayAccessData(psa, &pData);
   if (SUCCEEDED(hr)) {
+    snprintf(
+        buf, sizeof(buf),
+        "  -> SafeArrayAccessData SUCCESS: pData=%p, size=%zu, m_responseBody.data()=%p, m_responseBody.capacity()=%zu",
+        pData, m_responseBody.size(), m_responseBody.data(), m_responseBody.capacity());
+    DebugLog(buf);
+
     memcpy(pData, m_responseBody.data(), m_responseBody.size());
+
+    snprintf(buf, sizeof(buf), "  -> memcpy completed successfully");
+    DebugLog(buf);
+
     SafeArrayUnaccessData(psa);
 
     Body->vt = VT_ARRAY | VT_UI1;
@@ -393,7 +403,8 @@ HRESULT WinHttpRequestStub::get_ResponseBody(VARIANT* Body) {
     DebugLog("  -> Successfully created SAFEARRAY variant");
   } else {
     SafeArrayDestroy(psa);
-    DebugLog("  -> ERROR: Failed to access SAFEARRAY data");
+    snprintf(buf, sizeof(buf), "  -> ERROR: Failed to access SAFEARRAY data, hr=%lx", hr);
+    DebugLog(buf);
     return hr;
   }
 
