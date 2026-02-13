@@ -1298,26 +1298,26 @@ VOID Initialize() {
     return;
   }
 
-  // Hook CSymbol64_Hash to discover replicated variable names
+  // Hash discovery hooks (disabled by default - enable for reverse engineering)
+  // Uncomment to capture replicated variable names and message type hashes
+  /*
   OriginalCSymbol64_Hash = (CSymbol64_HashFunc)(EchoVR::g_GameBaseAddress + PatchAddresses::CSYMBOL64_HASH);
   PatchDetour(&OriginalCSymbol64_Hash, reinterpret_cast<PVOID>(CSymbol64_HashHook));
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CSymbol64_Hash hook installed (variable name discovery)");
 
-  // Hook CMatSym_Hash to capture message type name strings
   OriginalCMatSym_Hash = (CMatSym_HashFunc)(EchoVR::g_GameBaseAddress + PatchAddresses::CMATSYM_HASH);
   PatchDetour(&OriginalCMatSym_Hash, reinterpret_cast<PVOID>(CMatSym_HashHook));
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CMatSym_Hash hook installed (message type string discovery)");
 
-  // Hook SMatSymData_HashA to capture finalized MatSym hashes
   OriginalSMatSymData_HashA = (SMatSymData_HashAFunc)(EchoVR::g_GameBaseAddress + PatchAddresses::SMATSYMDATA_HASHA);
   PatchDetour(&OriginalSMatSymData_HashA, reinterpret_cast<PVOID>(SMatSymData_HashAHook));
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] SMatSymData_HashA hook installed (final hash discovery)");
 
-  // Hook sns_registry_insert_sorted to capture all registered message types at startup
   OriginalSnsRegistryInsertSorted =
       (SnsRegistryInsertSortedFunc)(EchoVR::g_GameBaseAddress + PatchAddresses::SNS_REGISTRY_INSERT_SORTED);
   PatchDetour(&OriginalSnsRegistryInsertSorted, reinterpret_cast<PVOID>(SnsRegistryInsertSortedHook));
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] sns_registry_insert_sorted hook installed (message registry discovery)");
+  */
 
   // Verify the game version before patching
   if (!VerifyGameVersion())
