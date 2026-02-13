@@ -189,6 +189,57 @@ VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_end(args);
 }
 
+typedef uint64_t (*CSymbol64_HashFunc)(const char* str, uint64_t seed);
+CSymbol64_HashFunc OriginalCSymbol64_Hash = nullptr;
+
+uint64_t CSymbol64_HashHook(const char* str, uint64_t seed) {
+  uint64_t result = OriginalCSymbol64_Hash(str, seed);
+
+  if (str && str[0] != '\0') {
+    Log(EchoVR::LogLevel::Info, "[HASH] \"%s\" -> 0x%016llx (seed=0x%016llx)", str, result, seed);
+  }
+
+  return result;
+}
+
+typedef uint64_t (*CMatSym_HashFunc)(const char* str);
+CMatSym_HashFunc OriginalCMatSym_Hash = nullptr;
+
+uint64_t CMatSym_HashHook(const char* str) {
+  uint64_t intermediate = OriginalCMatSym_Hash(str);
+
+  if (str && str[0] != '\0') {
+    Log(EchoVR::LogLevel::Info, "[CMATSYM] \"%s\" -> intermediate=0x%016llx", str, intermediate);
+  }
+
+  return intermediate;
+}
+
+typedef uint64_t (*SMatSymData_HashAFunc)(uint64_t seed, uint64_t value);
+SMatSymData_HashAFunc OriginalSMatSymData_HashA = nullptr;
+constexpr uint64_t MATSYM_FINALIZE_SEED = 0x6d451003fb4b172eULL;
+
+uint64_t SMatSymData_HashAHook(uint64_t seed, uint64_t value) {
+  uint64_t result = OriginalSMatSymData_HashA(seed, value);
+
+  if (seed == MATSYM_FINALIZE_SEED) {
+    Log(EchoVR::LogLevel::Info, "[MATSYM_FINAL] intermediate=0x%016llx -> FINAL=0x%016llx", value, result);
+  }
+
+  return result;
+}
+
+typedef void (*SnsRegistryInsertSortedFunc)(uint64_t msg_hash, const char* msg_name, uint64_t flags);
+SnsRegistryInsertSortedFunc OriginalSnsRegistryInsertSorted = nullptr;
+
+void SnsRegistryInsertSortedHook(uint64_t msg_hash, const char* msg_name, uint64_t flags) {
+  if (msg_name && msg_name[0] != '\0') {
+    Log(EchoVR::LogLevel::Info, "[MSG_REGISTRY] 0x%016llx = \"%s\" (flags=0x%llx)", msg_hash, msg_name, flags);
+  }
+
+  OriginalSnsRegistryInsertSorted(msg_hash, msg_name, flags);
+}
+
 /// <summary>
 /// Patches the game to enable headless mode, spawning a console window and applying patches to avoid game crashes.
 /// </summary>
@@ -1246,6 +1297,27 @@ VOID Initialize() {
     MessageBoxW(NULL, L"Failed to initialize hooking library.", L"Echo Relay: Error", MB_OK);
     return;
   }
+
+  // Hook CSymbol64_Hash to discover replicated variable names
+  OriginalCSymbol64_Hash = (CSymbol64_HashFunc)(EchoVR::g_GameBaseAddress + PatchAddresses::CSYMBOL64_HASH);
+  PatchDetour(&OriginalCSymbol64_Hash, reinterpret_cast<PVOID>(CSymbol64_HashHook));
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CSymbol64_Hash hook installed (variable name discovery)");
+
+  // Hook CMatSym_Hash to capture message type name strings
+  OriginalCMatSym_Hash = (CMatSym_HashFunc)(EchoVR::g_GameBaseAddress + PatchAddresses::CMATSYM_HASH);
+  PatchDetour(&OriginalCMatSym_Hash, reinterpret_cast<PVOID>(CMatSym_HashHook));
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CMatSym_Hash hook installed (message type string discovery)");
+
+  // Hook SMatSymData_HashA to capture finalized MatSym hashes
+  OriginalSMatSymData_HashA = (SMatSymData_HashAFunc)(EchoVR::g_GameBaseAddress + PatchAddresses::SMATSYMDATA_HASHA);
+  PatchDetour(&OriginalSMatSymData_HashA, reinterpret_cast<PVOID>(SMatSymData_HashAHook));
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] SMatSymData_HashA hook installed (final hash discovery)");
+
+  // Hook sns_registry_insert_sorted to capture all registered message types at startup
+  OriginalSnsRegistryInsertSorted =
+      (SnsRegistryInsertSortedFunc)(EchoVR::g_GameBaseAddress + PatchAddresses::SNS_REGISTRY_INSERT_SORTED);
+  PatchDetour(&OriginalSnsRegistryInsertSorted, reinterpret_cast<PVOID>(SnsRegistryInsertSortedHook));
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] sns_registry_insert_sorted hook installed (message registry discovery)");
 
   // Verify the game version before patching
   if (!VerifyGameVersion())
