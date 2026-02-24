@@ -52,11 +52,7 @@ constexpr EchoVR::SymbolId SYM_PROTOBUF_MSG = 0x9ee5107d9e29fd63ULL;
 
 // Send a protobuf Envelope to ServerDB as binary
 bool SendProtobufEnvelope(GameServerLib* self, const rtapi::v1::Envelope& envelope) {
-  auto* tcp = self->GetContext().GetTcpBroadcaster();
-  if (!tcp) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Cannot send protobuf: TCP broadcaster unavailable");
-    return false;
-  }
+  auto* wsClient = &self->GetWsClient();
 
   // Serialize envelope to binary
   std::string binaryData;
@@ -89,9 +85,8 @@ bool SendProtobufEnvelope(GameServerLib* self, const rtapi::v1::Envelope& envelo
 
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Sending protobuf: %s (%zu bytes)", msgType, binaryData.size());
 
-  // Send via TCP with protobuf binary symbol
-  auto peer = self->GetContext().GetServerDbPeer();
-  tcp->SendToPeer(peer, SYM_PROTOBUF_MSG, nullptr, 0, const_cast<char*>(binaryData.c_str()), binaryData.size());
+  // Send via WebSocketClient with protobuf binary symbol
+  wsClient->Send(SYM_PROTOBUF_MSG, binaryData.c_str(), binaryData.size());
 
   return true;
 }
@@ -675,7 +670,7 @@ void OnTcpMsgGameClientMsg3(GameServerLib*, VOID*, EchoVR::TcpPeer, VOID*, VOID*
 
 // --- GameServerLib Implementation ---
 
-GameServerLib::GameServerLib() : context_(std::make_unique<ServerContext>()) {}
+GameServerLib::GameServerLib() : context_(std::make_unique<ServerContext>()), wsClient_(std::make_unique<WebSocketClient>()) {}
 
 GameServerLib::~GameServerLib() = default;
 
@@ -683,6 +678,7 @@ INT64 GameServerLib::UnkFunc0(VOID*, INT64, INT64) { return 1; }
 
 VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broadcaster, VOID*, const CHAR*) {
   context_->Initialize(lobby, broadcaster);
+  context_->FinalizeInitialization();
 
   RegisterBroadcasterCallbacks();
   RegisterTcpCallbacks();
@@ -736,16 +732,27 @@ void GameServerLib::RegisterBroadcasterCallbacks() {
 void GameServerLib::RegisterTcpCallbacks() {
   auto& cb = context_->GetCallbackRegistry();
 
-  // Official EchoVR symbols for registration responses
-  cb.tcpRegSuccess = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyRegistrationSuccess,
-                                                    reinterpret_cast<VOID*>(OnTcpMsgRegistrationSuccess));
-  cb.tcpRegFailure = ListenForTcpBroadcasterMessage(this, TcpSym::LobbyRegistrationFailure,
-                                                    reinterpret_cast<VOID*>(OnTcpMsgRegistrationFailure));
-  cb.tcpSessionSuccess = ListenForTcpBroadcasterMessage(this, TcpSym::LobbySessionSuccessV5,
-                                                        reinterpret_cast<VOID*>(OnTcpMsgSessionSuccessv5));
+  // Skip TcpBroadcasterListen vtable calls (MinGW/MSVC ABI incompatibility - crashes).
+  // Use dummy handle values so UnregisterAllCallbacks() skips them too.
+  cb.tcpRegSuccess = 1;
+  cb.tcpRegFailure = 1;
+  cb.tcpSessionSuccess = 1;
+  cb.tcpProtobuf = 1;
 
-  // Protobuf message handler for all other responses from Nakama
-  cb.tcpProtobuf = ListenForTcpBroadcasterMessage(this, SYM_PROTOBUF_MSG, reinterpret_cast<VOID*>(OnTcpMsgProtobuf));
+  // Route all incoming ServerDB messages through our WebSocketClient instead.
+  wsClient_->SetMessageHandler([this](EchoVR::SymbolId msgId, const VOID* data, UINT64 size) {
+    if (msgId == TcpSym::LobbyRegistrationSuccess) {
+      OnTcpMsgRegistrationSuccess(this, nullptr, {}, const_cast<VOID*>(data), nullptr, size);
+    } else if (msgId == TcpSym::LobbyRegistrationFailure) {
+      OnTcpMsgRegistrationFailure(this, nullptr, {}, const_cast<VOID*>(data), nullptr, size);
+    } else if (msgId == TcpSym::LobbySessionSuccessV5) {
+      OnTcpMsgSessionSuccessv5(this, nullptr, {}, const_cast<VOID*>(data), nullptr, size);
+    } else if (msgId == SYM_PROTOBUF_MSG) {
+      OnTcpMsgProtobuf(this, nullptr, {}, const_cast<VOID*>(data), nullptr, size);
+    } else {
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Unhandled WebSocket msgId: 0x%llX (size: %llu)", msgId, size);
+    }
+  });
 }
 
 void GameServerLib::UnregisterAllCallbacks() {
@@ -760,14 +767,7 @@ void GameServerLib::UnregisterAllCallbacks() {
     EchoVR::BroadcasterUnlisten(lobby->broadcaster, cb.sessionError);
   }
 
-  // Unregister TCP callbacks
-  if (lobby->tcpBroadcaster) {
-    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpRegSuccess);
-    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpRegFailure);
-    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpSessionSuccess);
-    EchoVR::TcpBroadcasterUnlisten(lobby->tcpBroadcaster, cb.tcpProtobuf);
-  }
-
+  // TCP callbacks are handled by WebSocketClient (not game vtable), nothing to unregister here.
   cb.Clear();
 }
 
@@ -777,6 +777,9 @@ VOID GameServerLib::Terminate() {
 }
 
 VOID GameServerLib::Update() {
+  // Dispatch incoming ServerDB messages on the main thread
+  if (wsClient_) wsClient_->ProcessReceivedMessages();
+
   // Check for dirty entrants (profile updates pending)
   uint64_t count = context_->GetEntrantCount();
   for (uint64_t i = 0; i < count; ++i) {
@@ -805,22 +808,12 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("serverdb_host"),
                                 const_cast<CHAR*>("ws://localhost:777/serverdb"), false);
 
-  EchoVR::UriContainer uriContainer = {};
-  if (EchoVR::UriContainerParse(&uriContainer, serverDbUri) != ERROR_SUCCESS) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to parse serverdb URI");
+
+  // Connect to serverdb via WebSocketClient (avoids TcpBroadcasterListen vtable ABI crash)
+  if (!wsClient_->Connect(serverDbUri)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to initiate WebSocket connection");
     return;
   }
-
-  // Connect to serverdb
-  auto* tcp = context_->GetTcpBroadcaster();
-  if (!tcp) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] TCP broadcaster unavailable");
-    return;
-  }
-
-  EchoVR::TcpPeer peer;
-  tcp->CreatePeer(&peer, &uriContainer);
-  context_->SetServerDbPeer(peer);
 
   // Build registration request
   auto* broadcaster = context_->GetBroadcaster();
@@ -855,11 +848,8 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 VOID GameServerLib::Unregister() {
   UnregisterAllCallbacks();
 
-  // Disconnect from serverdb
-  auto* tcp = context_->GetTcpBroadcaster();
-  if (tcp) {
-    tcp->DestroyPeer(context_->GetServerDbPeer());
-  }
+  // Disconnect WebSocketClient from serverdb
+  if (wsClient_) wsClient_->Disconnect();
 
   context_->SetRegistered(false);
   context_->EndSession();
