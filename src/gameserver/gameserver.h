@@ -8,6 +8,7 @@
 #include "echovr.h"
 #include "pch.h"
 #include "servercontext.h"
+#include "websocket_client.h"
 
 // IServerLib implementation connecting to NEVR's ServerDB service.
 // Manages game server registration, sessions, and player lifecycle.
@@ -36,8 +37,12 @@ class GameServerLib : public EchoVR::IServerLib {
   GameServer::ServerContext& GetContext() { return *context_; }
   const GameServer::ServerContext& GetContext() const { return *context_; }
 
+  // WebSocketClient accessor for SendProtobufEnvelope
+  WebSocketClient& GetWsClient() { return *wsClient_; }
+
  private:
   std::unique_ptr<GameServer::ServerContext> context_;
+  std::unique_ptr<WebSocketClient> wsClient_;
 
   // Helper methods
   void RegisterBroadcasterCallbacks();
@@ -50,7 +55,6 @@ void Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
 // Callback registration helpers
 uint16_t ListenForBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId, BOOL isMsgReliable, VOID* func);
-uint16_t ListenForTcpBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId, VOID* func);
 
 // Slot index extraction from message payloads
 struct SlotInfo {
