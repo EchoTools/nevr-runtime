@@ -1061,6 +1061,7 @@ typedef BOOL(WINAPI* CreateProcessWFunc)(LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES,
                                          LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
 CreateProcessWFunc OriginalCreateProcessW = nullptr;
 static bool g_crashReporterSuppressed = false;
+static bool g_justSuppressedCrash = false;
 
 BOOL WINAPI CreateProcessWHook(LPCWSTR lpApplicationName, LPWSTR lpCommandLine,
                                LPSECURITY_ATTRIBUTES lpProcessAttributes, LPSECURITY_ATTRIBUTES lpThreadAttributes,
@@ -1196,11 +1197,30 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
     }
 
     g_crashReporterSuppressed = false;
+    g_justSuppressedCrash = true;
     return;
   }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ExitProcess(%u) called", uExitCode);
   OriginalExitProcess(uExitCode);
+}
+
+/// <summary>
+/// Vectored Exception Handler to skip the int3 instruction that follows the ExitProcess call site
+/// in the game's fatal error handler. After our ExitProcessHook returns (suppressing the exit),
+/// the CPU executes the int3 padding byte at the return address, which would kill the process.
+/// We advance RIP by 1 to skip it and continue execution.
+/// </summary>
+LONG WINAPI BreakpointVEH(PEXCEPTION_POINTERS pExceptionInfo) {
+  if (pExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT && g_justSuppressedCrash) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] int3 after suppressed ExitProcess at RIP=%p — skipping, server continuing",
+        (void*)pExceptionInfo->ContextRecord->Rip);
+    pExceptionInfo->ContextRecord->Rip += 1;
+    g_justSuppressedCrash = false;
+    return EXCEPTION_CONTINUE_EXECUTION;
+  }
+  return EXCEPTION_CONTINUE_SEARCH;
 }
 
 typedef BOOL(WINAPI* TerminateProcessFunc)(HANDLE, UINT);
@@ -1423,6 +1443,10 @@ VOID Initialize() {
   // TODO: Implement vtable hook for TcpBroadcasterData::CreatePeer if needed.
   Log(EchoVR::LogLevel::Info,
       "[NEVR.PATCH] Config property injection initialized with fallback chain: service → loginservice_host → default");
+
+  // Install VEH to handle int3 that fires after our ExitProcess suppression returns
+  AddVectoredExceptionHandler(1, BreakpointVEH);
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Breakpoint VEH installed (handles int3 after ExitProcess suppression)");
 
   // Run some startup patches
   PatchNoOvrRequiresSpectatorStream();
