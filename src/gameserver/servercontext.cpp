@@ -49,6 +49,7 @@ void ServerContext::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broadc
     }
   }
 
+  lobby_ = lobby;
   broadcaster_ = broadcaster;
 
   serverDbPeer_ = EchoVR::TcpPeer_InvalidPeer;
