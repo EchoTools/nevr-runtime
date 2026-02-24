@@ -1,105 +1,117 @@
-# CDN Cosmetics Loading System
+# CDN Cosmetics Loading — Tint PoC
 
 ## TL;DR
 
-> **Quick Summary**: Build a complete CDN-based cosmetics loading system for Echo VR — define manifest/package binary formats, create Go CLI tools to build them, implement C++ game hooks to download custom cosmetic assets from `https://cdn.echo.taxi/` (Cloudflare R2), cache in `%LOCALAPPDATA%`, and inject into the game's rendering pipeline via resource resolution hooks.
+> **Quick Summary**: Build a tint-first vertical slice of CDN cosmetics for Echo VR. Define file formats (`.evrp` package, JSON manifest), create Go CLI tools in a separate repo (`~/src/nevr-cdn-tools/`) using `evrFileTools` as a library, implement C++ game hooks in nevr-server to download tint assets from `https://cdn.echo.taxi/` (Cloudflare R2), cache in `%LOCALAPPDATA%/EchoVR/cosmetics/`, and inject custom tint data via the `Loadout_ResolveDataFromId` hook.
 >
 > **Deliverables**:
+> - `docs/cosmetics-cdn-format.md` — Format specification (`.evrp` binary layout, manifest JSON schema, CDN URL scheme)
+> - `~/src/nevr-cdn-tools/` — Go module (`github.com/EchoTools/nevr-cdn-tools`) with `pack-tint`, `build-manifest` CLI commands, using `evrFileTools` as dependency
 > - `src/common/symbol_hash.h` — constexpr C++ implementation of CSymbol64_Hash
-> - `src/gamepatches/asset_cdn.h` + `asset_cdn.cpp` — AssetCDN module (manifest fetch, package download, local cache, resource injection)
-> - `tools/cosmetics-manifest/` — Go CLI to build versioned manifest files
-> - `tools/cosmetics-package/` — Go CLI to build asset package files
-> - `docs/cosmetics-cdn-format.md` — Format specification document
-> - Ghidra RE deliverables: validated hook targets, binary format understanding, unknown-SymbolId behavior documentation
+> - `src/gamepatches/asset_cdn.h` + `asset_cdn.cpp` — AssetCDN module (manifest fetch, tint download, local cache, tint injection)
+> - One real custom tint uploaded to CDN and rendering in-game
 >
 > **Estimated Effort**: Large
 > **Parallel Execution**: YES — 5 waves
-> **Critical Path**: Task 1 → Task 6 → Task 12 → Task 13
+> **Critical Path**: Phase 0 gates → Task 4 (symbol_hash) → Task 8 (PoC hook) → Task 11 (AssetCDN module) → Task 13 (startup integration)
 
 ---
 
 ## Context
 
 ### Original Request
-User wants to integrate cosmetics loading from a CDN. Needs manifest/package file format definitions, CLI tools to create them, and game client hooks to download, cache, and render custom cosmetic assets. These are NEW assets (not overwrites). Cached in `%LOCALAPPDATA%`. Hosted on Cloudflare R2 at `https://cdn.echo.taxi/`. Data files must be versioned and immediately auditable. CDN is never human-read.
+User wants CDN-based cosmetics loading for Echo VR. Custom cosmetic assets hosted on Cloudflare R2 at `https://cdn.echo.taxi/`, cached locally, injected into the game's rendering pipeline via function hooks. Starting with **tints** as the simplest proof-of-concept (96 bytes of pure color data — no mesh/texture complexity).
 
 ### Interview Summary
 **Key Discussions**:
-- **Asset type**: New binary asset data — pre-processed GPU-ready (vertex/index buffers, DDS textures)
-- **Format**: Custom format + deep hook — NOT game-native packages. We define our own container, hook deep enough to inject
-- **Hook strategy**: Resource resolution level — `FUN_1404f37a0` @ RVA `0x004F37A0` resolves loadout data → CResourceID. This is our injection point
-- **Slot scope**: All 20 cosmetic equip slots from day one
-- **CLI tools**: Go on Linux (single-binary, easy cross-compile)
-- **Update strategy**: On game startup — fetch manifest once, download missing/updated packages
-- **CDN URL**: `https://cdn.echo.taxi/` with versioned, immediately auditable paths
-- **Network replication**: SymbolIds already broadcast to other players. What they see without assets is UNKNOWN — RE task required
-- **Integrity**: None needed — trust the R2 bucket
-- **Test strategy**: No automated unit tests — agent-executed QA scenarios only
+- **Start with tints**: 96-byte color data, simplest asset type, proves the full pipeline without mesh/texture complexity
+- **Separate repo for Go tools**: `~/src/nevr-cdn-tools/` (module `github.com/EchoTools/nevr-cdn-tools`), NOT inside nevr-server
+- **Use evrFileTools as Go library**: `github.com/EchoTools/evrFileTools` already has tint parsing, manifest/package building, ZSTD compression
+- **Hook strategy**: `Loadout_ResolveDataFromId` @ RVA `0x004F37A0` resolves loadout data. Hook intercepts AFTER resolution to patch tint color data in-place
+- **CDN URL**: `https://cdn.echo.taxi/` with versioned paths
+- **Cache**: `%LOCALAPPDATA%/EchoVR/cosmetics/`
+- **No blocking HTTP on game thread** — ever
+- **Manual R2 upload for PoC** (wrangler CLI or dashboard)
+- **No automated unit tests** — agent-executed QA scenarios only
+- **No Sisyphus footer on commits**
 
 **Research Findings**:
-- Mapped complete project structure: C++ DLLs injected into Echo VR via gamepatches.dll (deployed as dbgcore.dll)
-- Existing hooking: MinHook/Detours via `PatchDetour()` — well-established pattern
-- Commented-out `AssetCDN::Initialize()` at patches.cpp:1430-1433 and `asset_cdn_url` config at patches.cpp:760-767 — prior intent to build this
-- `CSymbol64_Hash` @ 0x1400CE120 — case-insensitive, polynomial 0x95ac9329ac4bc9b5. 21,122 unique hashes captured. New SymbolIds CAN be computed for custom cosmetics
- Go hash implementation exists at `extras/reference/core_hash.go` (vendored from Nakama server)
-- `CResourceID` = int64 SymbolId hash (lookup key for game assets)
-- Existing mesh dump hooks (DISABLED) at AsyncResourceIOCallback (0x0FA16D0) and CGMeshListResource::DeserializeAndUpload (0x0547AB0)
-- ECHOVR_STRUCT_MEMORY_MAP.md has complete LoadoutData structure with exact offsets
-- sourcedb/ JSON files map the full cosmetic ecosystem
+- Tint binary format is 96 bytes: `uint64 resourceID` + 5 × `RGBA float32×4` (main1, accent1, main2, accent2, body) + 8 reserved bytes
+- 48 known tint hashes in `evrFileTools/pkg/tint/tint.go` (e.g., `0x74d228d09dc5dc86` → `rwd_tint_0000`)
+- `evrFileTools` provides: tint read/write/serialize, manifest/package build, ZSTD archive format
+- `core_hash.go` (Go hash) requires a `precache [0x100]uint64` lookup table NOT included in the file — must be extracted from game binary or bypassed via known hashes
+- Existing commented-out `AssetCDN::Initialize()` at `patches.cpp:1430-1433` and `asset_cdn_url` config at `patches.cpp:760-767`
+- Hook target confirmed via RE: `Loadout_ResolveDataFromId` @ `0x1404f37a0`, LoadoutData struct fully mapped (0x4A0 bytes)
+- CosmeticArrays at LoadoutData+0x370, primary CResourceID at +0xB8, fallback at +0x80
+- curl is in vcpkg.json but linkage in CMakeLists.txt needs verification
+- jsoncpp is in vcpkg.json but not linked to gamepatches target
 
 ### Metis Review
-**Identified Gaps** (addressed):
-- **FUN_1404f37a0 must be validated via Ghidra**: Added as explicit RE task (Task 2) before any hook implementation
-- **Vertical slice approach strongly recommended**: Plan restructured — Wave 2 proves injection works with ONE hardcoded asset before building full pipeline
-- **jsoncpp not linked in gamepatches CMakeLists.txt**: Added as Task 5 prerequisite
-- **No blocking HTTP in hooks**: Guardrail added — all HTTP in background thread, never in game thread
-- **Game version detection needed**: Added to Task 13 — guard against wrong game version
-- **Fallback paths required**: Guardrail — graceful degradation if CDN unreachable or asset missing
+**Identified Gaps** (addressed in Phase 0):
+- **File formats are INVENTED, not existing** — `.evrp` doesn't exist anywhere. Must write spec BEFORE any code. Added as Phase 0 gate (Task 1)
+- **Hook target not validated at runtime** — FUN_1404f37a0 needs RE confirmation of tint resolution path. Added as Phase 0 gate (Task 2)
+- **Precache table missing** — `core_hash.go` needs `precache [0x100]uint64` lookup table. Must extract from binary OR use KnownTints map to bypass. Added as Phase 0 gate (Task 3)
+- **Tint data stored in components, not files** — Tints are within CR15NetRewardItemCS component data. Need to confirm raw 96-byte entries can be obtained. Added as Phase 0 gate (Task 3)
+- **curl/jsoncpp linkage unverified** — May not actually be linked in CMakeLists.txt. Added as Task 5
+- **CResourceID struct layout unknown** — Just a uint64? Pointer? Complex object? Addressed in Task 2 RE validation
+
+**Guardrails Applied**:
+- Format Decision Gate: Written spec before ANY code
+- Track A (Go tools) and Track B (C++ hooks) independently testable
+- PoC "Done" must be agent-verifiable (not "game renders tint" — instead: tint bytes match, hook compiles, file downloads)
+- No new C++ dependencies beyond what's in vcpkg.json
+- Hook isolation — self-contained, disableable via PatchDetour pattern
+- Cache directory hardcoded for PoC, no config system
+- ONE game version targeted — document exact version
 
 ---
 
 ## Work Objectives
 
 ### Core Objective
-Implement a complete pipeline: define formats → build tools → hook game → download assets → cache locally → inject into rendering. Validated via vertical slice (one slot, one asset) before full integration.
+Build a complete tint-loading pipeline: define formats → build Go CLI tools → pack real tint data → upload to CDN → hook game → download tint → cache locally → inject tint color data into game memory. Validated by verifying tint bytes in cache match source data.
 
 ### Concrete Deliverables
-1. `src/common/symbol_hash.h` — constexpr C++ CSymbol64_Hash (matching Go implementation)
-2. `src/gamepatches/asset_cdn.h` + `asset_cdn.cpp` — AssetCDN module
-3. `tools/cosmetics-manifest/main.go` — Go CLI tool for manifest generation
-4. `tools/cosmetics-package/main.go` — Go CLI tool for package building
-5. `docs/cosmetics-cdn-format.md` — Format specification (manifest JSON schema, package binary layout, URL scheme)
-6. RE documentation: hook validation, binary format analysis, unknown-SymbolId behavior
+1. `docs/cosmetics-cdn-format.md` — Format spec: `.evrp` binary layout, manifest JSON schema, CDN URL scheme
+2. `~/src/nevr-cdn-tools/` — Go repo with `pack-tint` and `build-manifest` commands
+3. `src/common/symbol_hash.h` — constexpr CSymbol64_Hash
+4. `src/gamepatches/asset_cdn.h` + `asset_cdn.cpp` — AssetCDN module (tint-only for PoC)
+5. One real custom tint `.evrp` file uploaded to `https://cdn.echo.taxi/v1/packages/`
+6. Manifest JSON at `https://cdn.echo.taxi/v1/manifest.json`
 
 ### Definition of Done
- [ ] `symbol_hash.h` computes identical hashes to Go `extras/reference/core_hash.go` for all test vectors
-- [ ] AssetCDN module downloads manifest from `https://cdn.echo.taxi/`, caches packages in `%LOCALAPPDATA%/EchoVR/cosmetics/`
-- [ ] At least ONE custom cosmetic renders correctly on ONE slot in-game (vertical slice proof)
-- [ ] Go CLI tools produce valid manifest and package files
-- [ ] Format spec document is complete and matches implementation
-- [ ] Project builds cleanly with `make build` (or equivalent CMake)
+- [ ] Format spec exists and is internally consistent (`.evrp` matches what Go tools produce and C++ parses)
+- [ ] `pack-tint` CLI takes tint color values → produces valid `.evrp` file
+- [ ] `build-manifest` CLI takes `.evrp` files → produces valid `manifest.json`
+- [ ] `symbol_hash.h` computes identical hashes to Go implementation for all known test vectors
+- [ ] AssetCDN module downloads manifest from CDN, downloads `.evrp` packages, caches in `%LOCALAPPDATA%/EchoVR/cosmetics/`
+- [ ] Project builds cleanly with `make build`
+- [ ] At least ONE custom tint `.evrp` is uploaded to CDN and downloadable via curl
 
 ### Must Have
+- Written format spec BEFORE any implementation (Phase 0 gate)
 - constexpr C++ symbol hash matching Go implementation exactly
-- Manifest format: versioned, binary-auditable, contains SymbolId → package mappings
-- Package format: versioned, contains GPU-ready binary asset data
-- Local cache in `%LOCALAPPDATA%/EchoVR/cosmetics/` (or similar user-local path)
+- `.evrp` package format with magic bytes, version, symbol ID, slot type, asset data
+- JSON manifest mapping symbol IDs → package URLs + checksums
+- Local cache in `%LOCALAPPDATA%/EchoVR/cosmetics/`
 - Background HTTP — never block game thread
 - Graceful degradation — game functions normally if CDN unreachable
-- All 20 cosmetic slot types supported in manifest schema (even if only 1 tested in vertical slice)
-- Game version guard — detect and warn on unsupported game version
+- Tint injection — patching 96-byte tint color data in LoadoutData after resolution
 
 ### Must NOT Have (Guardrails)
-- **No audio, animation, or shader assets** — meshes and textures only in v1
+- **No mesh, texture, DDS, or geometry assets** — TINTS ONLY in this PoC
+- **No audio, animation, or shader assets**
 - **No in-game UI** for cosmetic selection — server assigns via loadout
 - **No hot-reload** — assets loaded at startup, require restart for updates
-- **No multi-player visibility guarantee in v1** — document the unknown behavior, don't try to solve it yet
-- **No cache eviction policy** — cache grows unbounded in v1
 - **No retry logic** — single attempt per download, fail gracefully
 - **No blocking HTTP in game hooks** — all network I/O on background thread
-- **No human-readable CDN paths** — binary/hash-based, versioned and auditable
-- **No assumptions about game internals without exact memory addresses** — all hooks validated via Ghidra RE first
+- **No cache eviction policy** — cache grows unbounded
+- **No CI/CD pipeline for CDN uploads** — manual wrangler/dashboard upload
+- **No multi-player visibility guarantees** — document unknown behavior, don't solve
+- **No config system for cache path** — hardcoded for PoC
+- **No new C++ dependencies beyond vcpkg.json** (curl, jsoncpp already declared)
 - **No overwrites of existing game assets** — only NEW assets with NEW SymbolIds
+- **No assumptions about game internals without RE validation** — all hooks validated via Ghidra first
 
 ---
 
@@ -109,49 +121,67 @@ Implement a complete pipeline: define formats → build tools → hook game → 
 > Acceptance criteria requiring "user manually tests/confirms" are FORBIDDEN.
 
 ### Test Decision
-- **Infrastructure exists**: YES (CMake build system)
+- **Infrastructure exists**: YES (CMake build system for C++, Go toolchain for tools)
 - **Automated tests**: None (user decision — QA via agent-executed scenarios)
 - **Framework**: N/A
-- **Rationale**: Cross-compiled C++ DLL targeting game process — standard unit testing not practical. Go CLI tools could be tested but user opted for QA-only.
+- **Rationale**: Cross-compiled C++ DLL targeting game process — standard unit testing not practical. Go CLI tools verified via QA scenarios with real data.
 
 ### QA Policy
 Every task MUST include agent-executed QA scenarios. Evidence saved to `.sisyphus/evidence/task-{N}-{scenario-slug}.{ext}`.
 
 - **C++ compilation**: Use Bash — `make build` or CMake commands, verify zero errors/warnings
-- **Go CLI tools**: Use Bash — build, run with test inputs, validate output files
-- **Binary format validation**: Use Bash — hexdump, file inspection, format compliance checks
+- **Go CLI tools**: Use Bash — `go build`, `go run` with test inputs, validate output files
+- **Binary format validation**: Use Bash — hexdump, file inspection, format compliance
 - **RE tasks**: Use notghidra tools — decompile, disassemble, validate addresses
 - **Hash verification**: Use Bash — run Go hash and C++ hash, compare outputs
-- **Game integration**: Use Bash — verify DLL builds, hooks compile, no link errors
+- **CDN upload verification**: Use Bash — `curl` the CDN URL, verify file downloads correctly
 
 ---
 
 ## Execution Strategy
 
+### Two-Track Architecture
+
+```
+Track A: Go CLI Tools (~/src/nevr-cdn-tools/)          Track B: C++ Game Hooks (nevr-server)
+─────────────────────────────────────────────          ─────────────────────────────────────
+  evrFileTools (library dep)                             Existing hooking infrastructure
+  ├── pack-tint: colors → .evrp                         ├── symbol_hash.h
+  ├── build-manifest: .evrp files → manifest.json       ├── asset_cdn.h/.cpp (fetch + cache)
+  └── (future: pack-mesh, pack-texture, cdn-push)       └── cosmetics hook in patches.cpp
+
+                    ┌──────────────┐
+                    │  CDN (R2)    │
+                    │  manifest +  │◄── Track A uploads
+                    │  packages    │──► Track B downloads
+                    └──────────────┘
+```
+
+Track A and Track B are **independently testable**. Track A produces files. Track B consumes files. The format spec is the contract between them.
+
 ### Parallel Execution Waves
 
 ```
-Wave 1 (Foundation — prerequisites + parallel RE):
-├── Task 1: symbol_hash.h implementation [quick]
-├── Task 2: RE — Validate FUN_1404f37a0 hook target [deep]
-├── Task 3: RE — Analyze CGMeshListResource binary format [deep]
-├── Task 4: RE — Investigate unknown SymbolId behavior [deep]
-└── Task 5: Build system prep — jsoncpp linking + source scaffolding [quick]
+Phase 0 (Gates — MUST complete before Wave 1):
+├── Task 1: Write format spec (contract between Track A & Track B) [writing]
+├── Task 2: RE — Validate hook target + tint resolution path [deep]
+└── Task 3: RE — Extract precache table + verify tint data availability [deep]
 
-Wave 2 (Vertical Slice — prove injection works):
-├── Task 6: Hardcoded injection PoC [deep]
-└── Task 7: Hash consistency verification — Go vs C++ [quick]
+Wave 1 (Foundation — all start after Phase 0):
+├── Task 4: symbol_hash.h C++ implementation [quick]
+├── Task 5: Build system prep — curl + jsoncpp linking [quick]
+├── Task 6: nevr-cdn-tools repo scaffolding [quick]
+└── Task 7: pack-tint CLI command [unspecified-high]
 
-Wave 3 (Format Design + CDN Pipeline):
-├── Task 8: Design manifest + package formats + URL scheme [unspecified-high]
-├── Task 9: Go CLI — cosmetics-manifest tool [unspecified-high]
-├── Task 10: Go CLI — cosmetics-package tool [unspecified-high]
+Wave 2 (CDN Pipeline + C++ Module):
+├── Task 8: Hardcoded tint injection PoC (prove hook works) [deep]
+├── Task 9: build-manifest CLI command [unspecified-high]
+├── Task 10: Pack real tint + upload to CDN [quick]
 └── Task 11: AssetCDN module — manifest fetch + download + cache [deep]
 
-Wave 4 (Integration — full pipeline):
-├── Task 12: Resource injection hook — generalize to all 20 slots [deep]
-├── Task 13: AssetCDN initialization — startup integration [unspecified-high]
-└── Task 14: Format specification document [writing]
+Wave 3 (Integration):
+├── Task 12: Tint injection from cached .evrp files [deep]
+└── Task 13: Startup integration — AssetCDN::Initialize() [unspecified-high]
 
 Wave FINAL (Verification — 4 parallel reviews):
 ├── F1: Plan compliance audit [oracle]
@@ -159,39 +189,38 @@ Wave FINAL (Verification — 4 parallel reviews):
 ├── F3: Integration QA [unspecified-high]
 └── F4: Scope fidelity check [deep]
 
-Critical Path: Task 1 → Task 6 → Task 12 → Task 13
-Parallel Speedup: ~60% faster than sequential
-Max Concurrent: 5 (Wave 1)
+Critical Path: T1 (spec) → T7 (pack-tint) → T10 (upload) → T11 (fetch) → T12 (inject) → T13 (startup)
+Parallel Speedup: ~65% faster than sequential
+Max Concurrent: 4 (Wave 1)
 ```
 
 ### Dependency Matrix
 
 | Task | Depends On | Blocks | Wave |
 |------|-----------|--------|------|
-| 1 | — | 6, 7 | 1 |
-| 2 | — | 6 | 1 |
-| 3 | — | 8 | 1 |
-| 4 | — | (documentation only) | 1 |
-| 5 | — | 6, 11 | 1 |
-| 6 | 1, 2, 5 | 12 | 2 |
-| 7 | 1 | 9, 10 | 2 |
-| 8 | 3 | 9, 10, 11, 14 | 3 |
-| 9 | 7, 8 | 13 | 3 |
-| 10 | 7, 8 | 13 | 3 |
-| 11 | 5, 8 | 12, 13 | 3 |
-| 12 | 6, 11 | 13 | 4 |
-| 13 | 9, 10, 11, 12 | F1-F4 | 4 |
-| 14 | 8 | F1 | 4 |
-| F1-F4 | 13, 14 | — | FINAL |
+| 1 | — | 4, 5, 6, 7, 8, 9, 10, 11 | Phase 0 |
+| 2 | — | 8 | Phase 0 |
+| 3 | — | 4, 7, 8 | Phase 0 |
+| 4 | 1, 3 | 8, 12 | 1 |
+| 5 | 1 | 8, 11 | 1 |
+| 6 | 1 | 7 | 1 |
+| 7 | 1, 3, 6 | 9, 10 | 1 |
+| 8 | 1, 2, 3, 4, 5 | 12 | 2 |
+| 9 | 1, 7 | 10 | 2 |
+| 10 | 7, 9 | 11 | 2 |
+| 11 | 1, 5, 10 | 12, 13 | 2 |
+| 12 | 4, 8, 11 | 13 | 3 |
+| 13 | 11, 12 | F1-F4 | 3 |
+| F1-F4 | 13 | — | FINAL |
 
 ### Agent Dispatch Summary
 
 | Wave | Tasks | Categories |
 |------|-------|------------|
-| 1 | 5 tasks | T1 → `quick`, T2-T4 → `deep`, T5 → `quick` |
-| 2 | 2 tasks | T6 → `deep`, T7 → `quick` |
-| 3 | 4 tasks | T8 → `unspecified-high`, T9-T10 → `unspecified-high`, T11 → `deep` |
-| 4 | 3 tasks | T12 → `deep`, T13 → `unspecified-high`, T14 → `writing` |
+| Phase 0 | 3 tasks | T1 → `writing`, T2-T3 → `deep` |
+| 1 | 4 tasks | T4 → `quick`, T5 → `quick`, T6 → `quick`, T7 → `unspecified-high` |
+| 2 | 4 tasks | T8 → `deep`, T9 → `unspecified-high`, T10 → `quick`, T11 → `deep` |
+| 3 | 2 tasks | T12 → `deep`, T13 → `unspecified-high` |
 | FINAL | 4 tasks | F1 → `oracle`, F2 → `unspecified-high`, F3 → `unspecified-high`, F4 → `deep` |
 
 ---
@@ -200,62 +229,351 @@ Max Concurrent: 5 (Wave 1)
 
 > Implementation + Verification = ONE Task. Never separate.
 > EVERY task MUST have: Recommended Agent Profile + Parallelization info + QA Scenarios.
+> **A task WITHOUT QA Scenarios is INCOMPLETE. No exceptions.**
 
 <!-- TASKS_START -->
 
+### Phase 0 — Gates (ALL must complete before Wave 1 begins)
 
-### Wave 1 — Foundation (All 5 tasks start immediately, no dependencies)
-
-- [ ] 1. **Implement constexpr CSymbol64_Hash in C++ header**
+- [ ] 1. **Write format specification — `.evrp` + manifest JSON + CDN URL scheme**
 
   **What to do**:
-  - Create `src/common/symbol_hash.h` with a constexpr implementation of the CSymbol64_Hash algorithm
-  - Algorithm: case-insensitive CRC64 with polynomial `0x95ac9329ac4bc9b5`, seed `0xFFFFFFFFFFFFFFFF`
-  - Must handle null terminator, lowercase conversion, and the exact polynomial reduction loop
-  - Port from the Go implementation at `extras/reference/core_hash.go` (vendored into this repo)
-  - Provide both constexpr (compile-time) and runtime variants
-  - Include a `SymbolHash(const char* str)` convenience function
-  - Reference the existing plan `.sisyphus/plans/symbol-hash-implementation.md` for detailed specifications
+  - Create `docs/cosmetics-cdn-format.md` defining the complete contract between Track A (Go tools) and Track B (C++ hooks)
+  - Define `.evrp` package binary layout:
+    ```
+    magic:          [4]byte  "EVRP"
+    format_version: uint32   (little-endian, start at 1)
+    symbol_id:      int64    (little-endian, CSymbol64_Hash of asset name)
+    slot_type:      uint8    (cosmetic slot enum — 0x01 = tint for PoC)
+    reserved:       [7]byte  (zero-filled, future use)
+    data_length:    uint32   (little-endian, length of asset_data)
+    asset_data:     []byte   (type-specific: for tints, 80 bytes = 5 × RGBA float32×4)
+    ```
+  - Note: tint asset_data is 80 bytes (5 colors × 16 bytes), NOT 96 bytes. The 96-byte TintEntry format includes the 8-byte resourceID prefix and 8-byte reserved suffix. The `.evrp` header already carries the symbol_id, so asset_data omits the resourceID. The reserved suffix is also omitted.
+  - Define manifest JSON schema:
+    ```json
+    {
+      "version": 1,
+      "game_version": "34.4.631399.1",
+      "packages": {
+        "74d228d09dc5dc86": {
+          "url": "packages/74d228d09dc5dc86.evrp",
+          "sha256": "abc123...",
+          "slot_type": "tint",
+          "size": 108
+        }
+      }
+    }
+    ```
+  - Define CDN URL scheme:
+    - Manifest: `https://cdn.echo.taxi/v1/manifest.json`
+    - Packages: `https://cdn.echo.taxi/v1/packages/{symbolid_hex}.evrp`
+  - Document slot_type enum values (only `tint = 0x01` for PoC, reserve others)
+  - Document byte order (all little-endian), alignment, and validation rules
+  - Document relationship to evrFileTools formats: `.evrp` is a NEW format we are inventing. It is NOT the same as evrFileTools' archive format. evrFileTools is used to READ source tint data, which we then REPACKAGE into `.evrp`.
 
   **Must NOT do**:
-  - Do not modify any existing files — this is a NEW header only
-  - Do not add unit test framework — verification is via QA scenario
-  - Do not attempt to hook or patch anything — this is a pure utility
+  - Do not define mesh, texture, or geometry slot types — reserve numbers but don't spec
+  - Do not implement anything — this is documentation only
+  - Do not invent a streaming/chunked format — flat file is fine for PoC
 
   **Recommended Agent Profile**:
-  - **Category**: `quick`
-    - Reason: Single header file, well-defined algorithm, direct port from Go
+  - **Category**: `writing`
+    - Reason: Pure documentation task — format specification document
   - **Skills**: []
-    - No special skills needed — straightforward C++ implementation
+    - No special skills needed
 
   **Parallelization**:
-  - **Can Run In Parallel**: YES
-  - **Parallel Group**: Wave 1 (with Tasks 2, 3, 4, 5)
-  - **Blocks**: Tasks 6, 7
+  - **Can Run In Parallel**: YES (with Tasks 2, 3)
+  - **Parallel Group**: Phase 0
+  - **Blocks**: Tasks 4, 5, 6, 7, 8, 9, 10, 11 (everything depends on the format spec)
   - **Blocked By**: None (can start immediately)
 
   **References**:
 
   **Pattern References**:
-  - `extras/reference/core_hash.go` — Go implementation to port. Contains the polynomial, seed, and case-insensitive logic. This is the AUTHORITATIVE reference for correctness. Vendored from the Nakama server repo.
-  - `src/common/symbols.h` — Existing SymbolId type definition (`typedef INT64 SymbolId`) and predefined constants. New header must be compatible with this type.
-  - `.sisyphus/plans/symbol-hash-implementation.md` — Detailed plan with test vectors, API design, and implementation notes. Follow this plan's specifications.
+  - `evrFileTools/pkg/tint/tint.go` — TintEntry struct (96 bytes): 8-byte resourceID + 5×RGBA(16 bytes) + 8 reserved. Our `.evrp` asset_data is the MIDDLE 80 bytes (colors only, no resourceID prefix or reserved suffix)
+  - `evrFileTools/pkg/manifest/` — EVR native manifest format for reference. Our JSON manifest is DIFFERENT — simpler, CDN-oriented, not the binary game format
+  - `evrFileTools/pkg/archive/` — ZSTD archive format for reference. We are NOT using this format, but understanding it helps clarify what `.evrp` is NOT
+
+  **External References**:
+  - `extras/docs/HASH_DISCOVERY_COMPLETE.md` — Documents CSymbol64_Hash algorithm used for symbol_id field
+  - `docs/ghidra/ECHOVR_STRUCT_MEMORY_MAP.md` — LoadoutData struct with cosmetic slot offsets
+
+  **WHY Each Reference Matters**:
+  - `tint.go`: Defines the exact byte layout of tint color data. Our `.evrp` asset_data for tints must match the 80-byte color region (offsets 0x08-0x57 of a TintEntry)
+  - `manifest/` and `archive/`: These are what `.evrp` is NOT. Understanding the native formats prevents confusion
+  - `HASH_DISCOVERY_COMPLETE.md`: The symbol_id in `.evrp` headers uses this hash algorithm
+
+  **Acceptance Criteria**:
+  - [ ] `docs/cosmetics-cdn-format.md` exists
+  - [ ] Document defines `.evrp` binary layout with exact byte offsets
+  - [ ] Document defines manifest JSON schema with example
+  - [ ] Document defines CDN URL scheme
+  - [ ] Document specifies slot_type enum (at least tint = 0x01)
+  - [ ] Document clarifies relationship to evrFileTools formats
+
+  **QA Scenarios:**
+
+  ```
+  Scenario: Format spec is complete and internally consistent
+    Tool: Bash
+    Preconditions: docs/cosmetics-cdn-format.md exists
+    Steps:
+      1. Read the file and verify it contains sections for: .evrp layout, manifest schema, URL scheme, slot types
+      2. Verify .evrp header size: 4 (magic) + 4 (version) + 8 (symbol_id) + 1 (slot_type) + 7 (reserved) + 4 (data_length) = 28 bytes
+      3. Verify tint asset_data size is documented as 80 bytes (5 × 16)
+      4. Verify manifest JSON example is valid JSON (pipe through jq)
+      5. Verify URL scheme matches pattern https://cdn.echo.taxi/v{N}/...
+    Expected Result: All sections present, sizes consistent, JSON valid
+    Failure Indicators: Missing sections, size mismatches, invalid JSON example
+    Evidence: .sisyphus/evidence/task-1-format-spec-review.txt
+  ```
+
+  **Commit**: YES
+  - Message: `docs(cosmetics): add CDN format specification`
+  - Files: `docs/cosmetics-cdn-format.md`
+  - Pre-commit: n/a
+
+---
+
+- [ ] 2. **RE — Validate hook target and tint resolution path**
+
+  **What to do**:
+  - Use notghidra tools to decompile `Loadout_ResolveDataFromId` (RVA `0x004F37A0`, absolute `0x1404F37A0`)
+  - Confirm: function signature, parameters, return type
+  - Determine how tint data flows through this function:
+    - Does it resolve a tint SymbolId → tint color data?
+    - Where is tint color data stored after resolution? (LoadoutData+0x370 CosmeticArrays? Direct memory?)
+    - What is the exact memory layout at the point where we can patch tint colors?
+  - Map CResourceID struct: is it just a uint64 (SymbolId hash)? A pointer? A complex object?
+  - Determine if hooking this function AFTER it returns gives us a writable pointer to tint color data
+  - Document the exact hook strategy: pre-hook vs post-hook, what to read, what to write, at what offset
+  - Check what happens if a SymbolId has no matching game asset (unknown SymbolId behavior)
+  - Document the exact game version this analysis targets
+
+  **Must NOT do**:
+  - Do not write any C++ code — this is RE analysis only
+  - Do not attempt to hook anything — just document the plan
+  - Do not analyze mesh/texture resolution paths — tint path only
+
+  **Recommended Agent Profile**:
+  - **Category**: `deep`
+    - Reason: Complex reverse engineering requiring binary analysis, decompilation, and cross-referencing multiple data structures
+  - **Skills**: []
+    - notghidra tools are available as built-in MCP tools, no skill loading needed
+
+  **Parallelization**:
+  - **Can Run In Parallel**: YES (with Tasks 1, 3)
+  - **Parallel Group**: Phase 0
+  - **Blocks**: Task 8 (PoC hook needs validated hook target)
+  - **Blocked By**: None (can start immediately)
+
+  **References**:
+
+  **Pattern References**:
+  - `src/gamepatches/patches.cpp:1430-1433` — Commented-out `AssetCDN::Initialize()` call. Shows where in startup flow CDN init was intended
+  - `src/gamepatches/patches.cpp:760-767` — Commented-out `asset_cdn_url` config reading. Shows config pattern
+  - `src/common/hooking.h` — `PatchDetour()` API for installing hooks. The validated hook will use this pattern
+  - `src/common/echovr.h` — `SymbolId` typedef (INT64), `LoadoutSlot` enum, cosmetic struct definitions
+  - `src/gamepatches/patch_addresses.h` — Where validated RVA should be added
+
+  **API/Type References**:
+  - `docs/ghidra/ECHOVR_STRUCT_MEMORY_MAP.md` — LoadoutData (0x4A0 bytes), CosmeticArrays at +0x370, primary CResourceID at +0xB8, fallback at +0x80
+  - `docs/ghidra/` — All existing RE documentation for cross-reference
+
+  **External References**:
+  - `evrFileTools/pkg/tint/tint.go` — TintEntry struct layout (96 bytes). Need to determine if game memory matches this layout
+
+  **WHY Each Reference Matters**:
+  - `patches.cpp`: Shows the prior developer's intent — AssetCDN was planned but never built. The hook location in startup flow is already chosen
+  - `ECHOVR_STRUCT_MEMORY_MAP.md`: Contains LoadoutData offsets needed to find tint color data after hook resolution
+  - `hooking.h`: The hook will use PatchDetour — need to understand its calling convention requirements
+  - `tint.go`: Need to verify game memory tint layout matches what evrFileTools expects
+
+  **Acceptance Criteria**:
+  - [ ] FUN_1404f37a0 decompiled and documented
+  - [ ] CResourceID struct layout determined (uint64 vs pointer vs complex)
+  - [ ] Tint resolution path traced: SymbolId → where tint color data lands in memory
+  - [ ] Hook strategy documented: pre/post, read/write addresses, offset calculations
+  - [ ] Unknown SymbolId behavior documented
+  - [ ] Exact game version noted
+
+  **QA Scenarios:**
+
+  ```
+  Scenario: Hook target function is decompilable and analyzable
+    Tool: notghidra (MCP tools)
+    Preconditions: echovr.exe binary imported into notghidra project
+    Steps:
+      1. Use notghidra_functions_decompile with address 0x004F37A0
+      2. Verify decompiled output shows function parameters and return type
+      3. Use notghidra_xrefs_to to find all callers of this function
+      4. Use notghidra_xrefs_from to find all functions it calls
+      5. Document findings in a structured format
+    Expected Result: Function decompiles successfully, shows clear parameter types, callers identified
+    Failure Indicators: Address invalid, function too large to decompile, no callers found
+    Evidence: .sisyphus/evidence/task-2-hook-decompilation.md
+
+  Scenario: CResourceID struct layout determination
+    Tool: notghidra (MCP tools)
+    Preconditions: FUN_1404f37a0 decompiled
+    Steps:
+      1. Find references to LoadoutData+0xB8 and LoadoutData+0x80 in decompiled code
+      2. Trace how CResourceID values are used — passed by value or pointer?
+      3. Check sizeof hints from stack allocation or memcpy calls
+      4. Cross-reference with ECHOVR_STRUCT_MEMORY_MAP.md offsets
+    Expected Result: CResourceID is identified as uint64 or struct with known layout
+    Failure Indicators: Ambiguous usage, multiple possible interpretations
+    Evidence: .sisyphus/evidence/task-2-cresourceid-layout.md
+  ```
+
+  **Commit**: NO (RE documentation only, recorded in evidence files)
+
+---
+
+- [ ] 3. **RE — Extract precache table + verify tint data availability**
+
+  **What to do**:
+  - **Precache table**: `core_hash.go` requires a `precache [0x100]uint64` lookup table as a parameter to `CoreHash()`. This table is NOT embedded in the source — it must be extracted from the game binary or generated.
+    - Option A: Find the precache table in the game binary near `CSymbol64_Hash` @ `0x1400CE120`. It's likely a static 2048-byte array (256 × uint64) used as a CRC lookup table for polynomial `0x95ac9329ac4bc9b5`
+    - Option B: Compute the CRC64 lookup table from the polynomial directly (standard CRC table generation algorithm). This is likely the correct approach — CRC lookup tables are deterministic from the polynomial
+    - Option C: Bypass entirely — use `KnownTints` map from `evrFileTools/pkg/tint/tint.go` (48 pre-computed hashes) for the PoC, defer hash computation to later
+    - Determine which option is viable and document
+  - **Tint data availability**: Verify that raw tint color data (the 80 bytes of 5×RGBA) can be obtained from extracted game assets or constructed from known values
+    - Check if `evrFileTools/cmd/showtints/` can extract real tint data from game files
+    - Check if the `sourcedb/` JSON files contain tint color values
+    - If neither: define synthetic test tint data (custom colors) for the PoC — we don't NEED real game tints, we need custom tints
+  - **Recommendation**: For the PoC, we likely want CUSTOM tints (new colors not in the game), not copies of existing ones. So tint data "availability" means: can we define our own 5-color palette and pack it?
+
+  **Must NOT do**:
+  - Do not implement the hash function — just determine how to get the precache table
+  - Do not extract mesh/texture data — tint data only
+  - Do not modify any source files
+
+  **Recommended Agent Profile**:
+  - **Category**: `deep`
+    - Reason: Binary analysis (precache table extraction) + data archaeology (tint data location)
+  - **Skills**: []
+    - notghidra tools available as built-in MCP
+
+  **Parallelization**:
+  - **Can Run In Parallel**: YES (with Tasks 1, 2)
+  - **Parallel Group**: Phase 0
+  - **Blocks**: Tasks 4 (need precache table for hash impl), 7 (need tint data for pack-tint), 8 (need hash for PoC)
+  - **Blocked By**: None (can start immediately)
+
+  **References**:
+
+  **Pattern References**:
+  - `extras/reference/core_hash.go` — Go hash implementation. Lines 12-38 show `CoreHash()` function requiring `precache [0x100]uint64` parameter. The polynomial is `0x95ac9329ac4bc9b5`
+  - `evrFileTools/pkg/tint/tint.go` — `KnownTints` map with 48 pre-computed symbol → name mappings. If we can't compute hashes, we can use these known values for PoC
+  - `evrFileTools/cmd/showtints/` — CLI tool that displays tint data. May show how to extract/read tint color values
+
+  **API/Type References**:
+  - `evrFileTools/pkg/tint/tint.go:TintEntry` — The 96-byte struct. Fields: ResourceID (uint64), Color0-Color4 (each RGBA float32×4), Reserved (8 bytes)
+
+  **External References**:
+  - CRC64 lookup table generation is a well-known algorithm: for each byte 0-255, compute 8 iterations of `if (bit0) { val = (val >> 1) ^ polynomial } else { val >>= 1 }`
+
+  **WHY Each Reference Matters**:
+  - `core_hash.go`: The precache table is the ONLY missing piece for computing new SymbolId hashes. Without it, we can only use pre-known hashes from KnownTints
+  - `tint.go`: KnownTints provides a fallback if precache table extraction fails — we can map known hashes to names
+  - `showtints/`: May reveal how to read real tint data from game files, giving us real color values to test with
+
+  **Acceptance Criteria**:
+  - [ ] Precache table situation resolved: extracted OR computed OR documented why bypassed
+  - [ ] Tint data source identified: extracted real data OR synthetic test data defined
+  - [ ] Documented recommendation for hash approach in PoC (compute vs known-hashes-only)
+  - [ ] If precache table extracted: 256 uint64 values recorded/saved
+
+  **QA Scenarios:**
+
+  ```
+  Scenario: Precache table resolution
+    Tool: notghidra (MCP tools) + Bash
+    Preconditions: echovr.exe binary imported into notghidra project
+    Steps:
+      1. Use notghidra_functions_disassemble at 0x000CE120 (CSymbol64_Hash)
+      2. Look for data references to a 2048-byte region (256 × 8 bytes)
+      3. If found: use notghidra_data_read to extract 2048 bytes
+      4. If not found: implement CRC64 table generation from polynomial 0x95ac9329ac4bc9b5 and verify against known hash outputs
+      5. Verify by computing hash of "rwd_tint_0000" and comparing to known value 0x74d228d09dc5dc86
+    Expected Result: Either table extracted or computation method verified against known hashes
+    Failure Indicators: Can't find table AND computed table produces wrong hashes
+    Evidence: .sisyphus/evidence/task-3-precache-table.txt
+
+  Scenario: Tint color data for PoC
+    Tool: Bash
+    Preconditions: evrFileTools available
+    Steps:
+      1. Check if showtints CLI can read tint data: cd ~/src/evrFileTools && go run ./cmd/showtints/ --help
+      2. If game assets available: attempt to read real tint data
+      3. If not: define synthetic test tint (5 distinct RGBA colors, e.g., bright red/green/blue/yellow/purple)
+      4. Document the 80 bytes of color data that will be used for pack-tint testing
+    Expected Result: 80 bytes of tint color data ready for use (real or synthetic)
+    Failure Indicators: Cannot define valid tint color data
+    Evidence: .sisyphus/evidence/task-3-tint-data-source.txt
+  ```
+
+  **Commit**: NO (RE analysis, recorded in evidence files)
+
+---
+
+
+### Wave 1 — Foundation (all start after Phase 0 completes)
+
+- [ ] 4. **Implement constexpr CSymbol64_Hash in C++ header**
+
+  **What to do**:
+  - Create `src/common/symbol_hash.h` with a constexpr C++ implementation of CSymbol64_Hash
+  - Algorithm: case-insensitive CRC64 with polynomial `0x95ac9329ac4bc9b5`, seed `0xFFFFFFFFFFFFFFFF`
+  - Must handle null terminator, lowercase conversion, and the exact polynomial reduction loop
+  - Port from Go implementation at `extras/reference/core_hash.go`
+  - Use the precache table obtained from Task 3 (embed as constexpr array OR generate at compile time)
+  - Provide both constexpr (compile-time) and runtime variants
+  - Include `SymbolHash(const char* str)` convenience function returning `SymbolId` (INT64)
+  - Reference `.sisyphus/plans/symbol-hash-implementation.md` for detailed specifications if it exists
+
+  **Must NOT do**:
+  - Do not modify any existing files — this is a NEW header only
+  - Do not add unit test framework — verification is via QA scenario
+  - Do not attempt to hook or patch anything — pure utility
+
+  **Recommended Agent Profile**:
+  - **Category**: `quick`
+    - Reason: Single header file, well-defined algorithm, direct port from Go
+  - **Skills**: []
+
+  **Parallelization**:
+  - **Can Run In Parallel**: YES (with Tasks 5, 6, 7)
+  - **Parallel Group**: Wave 1
+  - **Blocks**: Tasks 8, 12
+  - **Blocked By**: Tasks 1 (format spec for context), 3 (precache table)
+
+  **References**:
+
+  **Pattern References**:
+  - `extras/reference/core_hash.go` — AUTHORITATIVE reference. Contains polynomial, seed, case-insensitive logic. Port exactly.
+  - `src/common/symbols.h` — Existing `SymbolId` type (`typedef INT64 SymbolId`). New header must be compatible.
 
   **API/Type References**:
   - `src/common/echovr.h:SymbolId` — The `INT64` typedef that hash results must be compatible with
 
   **External References**:
-  - `extras/docs/HASH_DISCOVERY_COMPLETE.md` — Documents the hash algorithm discovery: polynomial `0x95ac9329ac4bc9b5`, seed `0xFFFFFFFFFFFFFFFF`, case-insensitive, includes null terminator
+  - `extras/docs/HASH_DISCOVERY_COMPLETE.md` — Polynomial `0x95ac9329ac4bc9b5`, seed `0xFFFFFFFFFFFFFFFF`, case-insensitive, includes null terminator
+  - Evidence from Task 3: `.sisyphus/evidence/task-3-precache-table.txt` — The 256-entry CRC lookup table
 
   **WHY Each Reference Matters**:
-  - `extras/reference/core_hash.go`: This is the ONLY verified-correct implementation. Port exactly, do not improvise.
-  - `symbols.h`: Must return `SymbolId` (INT64) type for compatibility with rest of codebase.
-  - `symbol-hash-implementation.md`: Contains test vectors like `rwd_tint_0019 → 0x74d228d09dc5dd8f` for verification.
+  - `core_hash.go`: ONLY verified-correct implementation. Port exactly, do not improvise
+  - `symbols.h`: Must return `SymbolId` (INT64) for codebase compatibility
+  - Task 3 evidence: Precache table is required input — either embed or compute
 
   **Acceptance Criteria**:
-  - [ ] File `src/common/symbol_hash.h` exists and compiles with MSVC/MinGW
+  - [ ] File `src/common/symbol_hash.h` exists and compiles with MinGW cross-compiler
   - [ ] Header is self-contained (no dependencies beyond standard library)
   - [ ] `constexpr` qualification allows compile-time hash computation
+  - [ ] Hash of `"rwd_tint_0000"` equals `0x74d228d09dc5dc86`
 
   **QA Scenarios:**
 
@@ -265,22 +583,22 @@ Max Concurrent: 5 (Wave 1)
     Preconditions: Project builds successfully
     Steps:
       1. Create a minimal C++ test program that #includes symbol_hash.h
-      2. Compute hashes for: "rwd_tint_0019", "decal_default", "" (empty string)
+      2. Compute hashes for: "rwd_tint_0000", "rwd_tint_0019", "decal_default"
       3. Print results as hex
-      4. Compare against known values from extras/reference/core_hash.go (run Go program with same inputs)
-    Expected Result: All hash values match exactly between C++ and Go
-    Failure Indicators: Any hash mismatch, compilation error, or linker error
-    Evidence: .sisyphus/evidence/task-1-hash-test-vectors.txt
+      4. Compare against known values: rwd_tint_0000=0x74d228d09dc5dc86, rwd_tint_0019=0x74d228d09dc5dd8f
+    Expected Result: All hash values match known values exactly
+    Failure Indicators: Any hash mismatch, compilation error
+    Evidence: .sisyphus/evidence/task-4-hash-test-vectors.txt
 
   Scenario: constexpr compilation — hash used in static_assert
     Tool: Bash
     Preconditions: symbol_hash.h exists
     Steps:
-      1. Create test program with: static_assert(SymbolHash("test") != 0, "hash failed");
-      2. Compile with MSVC or MinGW
+      1. Create test program with: static_assert(SymbolHash("rwd_tint_0000") == 0x74d228d09dc5dc86, "hash mismatch");
+      2. Compile with MinGW cross-compiler
     Expected Result: Compiles without error (proves constexpr works at compile time)
     Failure Indicators: Compiler error about non-constant expression
-    Evidence: .sisyphus/evidence/task-1-constexpr-verify.txt
+    Evidence: .sisyphus/evidence/task-4-constexpr-verify.txt
   ```
 
   **Commit**: YES
@@ -290,1315 +608,860 @@ Max Concurrent: 5 (Wave 1)
 
 ---
 
-- [ ] 2. **RE — Validate FUN_1404f37a0 as hook target via Ghidra**
+- [ ] 5. **Build system prep — verify and link curl + jsoncpp to gamepatches**
 
   **What to do**:
-  - Use notghidra tools to decompile `FUN_1404f37a0` (RVA `0x004F37A0`, absolute `0x1404F37A0`)
-  - Determine: function signature, parameters, return type
-  - Confirm it resolves loadout_id → LoadoutData pointer
-  - Map the CResourceID access pattern at LoadoutData+0x370 (primary at +0xB8, fallback at +0x80)
-  - Identify the slot indexing mechanism (how slot ID maps to CResourceID array index)
-  - Document the full call chain: `net_apply_loadout_items_to_player` → `FUN_1404f37a0` → LoadoutData → CResourceID
-  - Determine if this function can be safely hooked (no inline, no tail-call, sufficient prologue bytes)
-  - Save findings to `docs/ghidra/FUN_1404f37a0_analysis.md`
+  - Verify curl is actually linked (not just declared) in `src/gamepatches/CMakeLists.txt`
+    - Look for `target_link_libraries(gamepatches ... CURL::libcurl ...)` or equivalent
+    - If missing: add it
+  - Verify jsoncpp is linked to gamepatches target
+    - Look for `target_link_libraries(gamepatches ... jsoncpp_lib ...)` or `JsonCpp::JsonCpp`
+    - If missing: add it
+  - Create stub files `src/gamepatches/asset_cdn.h` and `src/gamepatches/asset_cdn.cpp` with:
+    - Empty `AssetCDN` class/namespace with `Initialize()` and `Shutdown()` stubs
+    - `#include <curl/curl.h>` and `#include <json/json.h>` to verify linkage at compile time
+  - Add `asset_cdn.cpp` to CMakeLists.txt source list
+  - Verify `make build` succeeds with curl and jsoncpp headers resolved
 
   **Must NOT do**:
-  - Do not write any C++ hook code — this is analysis only
-  - Do not assume behavior — document exactly what the decompilation shows
-  - Do not modify any source files
-
-  **Recommended Agent Profile**:
-  - **Category**: `deep`
-    - Reason: Requires careful RE analysis, Ghidra decompilation, and understanding of game internals
-  - **Skills**: []
-    - notghidra MCP tools are available by default
-
-  **Parallelization**:
-  - **Can Run In Parallel**: YES
-  - **Parallel Group**: Wave 1 (with Tasks 1, 3, 4, 5)
-  - **Blocks**: Task 6 (PoC depends on validated hook target)
-  - **Blocked By**: None (can start immediately)
-
-  **References**:
-
-  **Pattern References**:
-  - `docs/ghidra/GHIDRA_STRUCT_ANALYSIS.md` — Existing analysis of `net_apply_loadout_items_to_player`. Contains the call chain and initial mapping of FUN_1404f37a0. Start here to understand what's already known.
-  - `docs/ghidra/ECHOVR_STRUCT_MEMORY_MAP.md` — Complete LoadoutData, EntrantData, LoadoutSlot structures with exact offsets. Use to cross-reference decompiled struct access patterns.
-  - `src/gamepatches/patch_addresses.h` — All known RVAs. Check if FUN_1404f37a0 or related functions already have entries.
-
-  **API/Type References**:
-  - `src/common/echovr.h:LoadoutSlot` — The 21-field struct with SymbolId fields. Maps to what FUN_1404f37a0 processes.
-  - `src/common/echovr.h:LoadoutEntry` — Parent struct containing LoadoutSlot at offset 0x30.
-
-  **External References**:
-  - `extras/docs/MESH_DUMP_HOOKS_README.md` — Documents AsyncResourceIOCallback and CGMeshListResource hooks. These are downstream of FUN_1404f37a0 in the resource loading chain.
-
-  **WHY Each Reference Matters**:
-  - `GHIDRA_STRUCT_ANALYSIS.md`: Starting point — contains initial findings about this exact function. Extend, don't duplicate.
-  - `ECHOVR_STRUCT_MEMORY_MAP.md`: Has the LoadoutData offset map. Use to verify decompiled struct field accesses match known offsets.
-  - `patch_addresses.h`: Must check for conflicts. Hook address must not collide with existing patches.
-
-  **Acceptance Criteria**:
-  - [ ] `docs/ghidra/FUN_1404f37a0_analysis.md` exists with complete decompilation analysis
-  - [ ] Function signature documented (params, return type, calling convention)
-  - [ ] CResourceID access pattern confirmed or corrected with exact offsets
-  - [ ] Hookability assessment: YES/NO with reasoning (prologue size, inline status)
-  - [ ] Slot indexing mechanism documented
-
-  **QA Scenarios:**
-
-  ```
-  Scenario: Decompilation produces readable output
-    Tool: Bash (notghidra MCP)
-    Preconditions: Echo VR binary imported into notghidra project. Binary location: `echovr/bin/win10/echovr.exe`
-    Steps:
-      1. Import echovr.exe binary from `echovr/bin/win10/echovr.exe` if not already imported
-      2. Run analysis on the binary
-      3. Decompile function at address 0x1404F37A0
-      4. Verify decompiled output contains recognizable patterns (pointer arithmetic, array indexing)
-    Expected Result: Decompiled C code showing function parameters, local variables, and return value
-    Failure Indicators: Empty decompilation, "analysis failed", or unrecognizable output
-    Evidence: .sisyphus/evidence/task-2-decompilation.txt
-
-  Scenario: Cross-reference validation — callers match expected call chain
-    Tool: Bash (notghidra MCP)
-    Preconditions: Analysis complete
-    Steps:
-      1. Get xrefs TO 0x1404F37A0
-      2. Verify net_apply_loadout_items_to_player (0x140154C00) is among callers
-      3. Document any OTHER callers (may reveal additional hook opportunities or constraints)
-    Expected Result: At least net_apply_loadout_items_to_player is a confirmed caller
-    Failure Indicators: No xrefs found, or expected caller not present
-    Evidence: .sisyphus/evidence/task-2-xrefs-validation.txt
-  ```
-
-  **Commit**: YES (grouped with Tasks 3-4)
-  - Message: `docs(ghidra): RE findings — hook validation, binary format, unknown SymbolId`
-  - Files: `docs/ghidra/FUN_1404f37a0_analysis.md`
-
----
-
-- [ ] 3. **RE — Analyze CGMeshListResource::DeserializeAndUpload binary format**
-
-  **What to do**:
-  - Use notghidra tools to decompile `CGMeshListResource::DeserializeAndUpload` (RVA `0x0547AB0`, absolute `0x140547AB0`)
-  - Determine the input buffer format: what binary data does this function expect?
-  - Map the struct layout it parses: vertex buffer offset/size, index buffer offset/size, texture references
-  - Document the GPU upload sequence: what DirectX calls are made, in what order
-  - Identify the minimum viable binary payload we need to construct for custom assets
-  - Cross-reference with AsyncResourceIOCallback (RVA `0x0FA16D0`) to understand how raw I/O data flows into this function
-  - Save findings to `docs/ghidra/mesh_binary_format.md`
-
-  **Must NOT do**:
-  - Do not write any C++ code — analysis only
-  - Do not attempt to create asset files — format understanding first
-  - Do not reverse-engineer shader compilation — meshes and textures only
-
-  **Recommended Agent Profile**:
-  - **Category**: `deep`
-    - Reason: Complex binary format RE requiring careful struct analysis and DirectX API knowledge
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: YES
-  - **Parallel Group**: Wave 1 (with Tasks 1, 2, 4, 5)
-  - **Blocks**: Task 8 (format design depends on understanding the binary format the game expects)
-  - **Blocked By**: None (can start immediately)
-
-  **References**:
-
-  **Pattern References**:
-  - `extras/docs/MESH_DUMP_HOOKS_README.md` — Documents mesh dump hook addresses and parameter signatures. **NOTE**: This README references `dbghooks/mesh_dump_hooks.cpp` which does NOT exist — the actual hook code is integrated into `src/gamepatches/`. Use this file for RVA addresses and parameter signatures ONLY, not as a code reference. START HERE for address/signature info.
-  - `docs/ghidra/ECHOVR_STRUCT_MEMORY_MAP.md` — Struct layouts that may be referenced by the deserialization function.
-
-  **External References**:
-  - `extras/docs/HASH_HOOKS_TROUBLESHOOTING.md` — Contains RVA `0x0547AB0` for DeserializeAndUpload and `0x0FA16D0` for AsyncResourceIOCallback. Confirms addresses.
-
-  **WHY Each Reference Matters**:
-  - `MESH_DUMP_HOOKS_README.md`: Has the hook signatures — tells you what parameters DeserializeAndUpload receives (buffer pointer, size, context). Essential starting point.
-  - `ECHOVR_STRUCT_MEMORY_MAP.md`: The CGMeshListResource struct may be partially documented here.
-
-  **Acceptance Criteria**:
-  - [ ] `docs/ghidra/mesh_binary_format.md` exists
-  - [ ] Input buffer format documented: header structure, vertex data layout, index data layout
-  - [ ] Minimum viable payload identified: what fields are required vs optional
-  - [ ] DirectX upload sequence documented (which D3D calls, what state)
-
-  **QA Scenarios:**
-
-  ```
-  Scenario: Decompilation of DeserializeAndUpload reveals parseable structure
-    Tool: Bash (notghidra MCP)
-    Preconditions: Echo VR binary analyzed. Binary location: `echovr/bin/win10/echovr.exe`
-    Steps:
-      1. Decompile function at 0x140547AB0
-      2. Identify buffer read operations (memcpy, pointer arithmetic with offsets)
-      3. Map at least 3 distinct fields/sections from the input buffer
-      4. Document the parsing sequence in mesh_binary_format.md
-    Expected Result: At least vertex count, index count, and data offsets identified in decompilation
-    Failure Indicators: Function is too complex to decompile, or no buffer parsing visible
-    Evidence: .sisyphus/evidence/task-3-mesh-decompilation.txt
-  ```
-
-  **Commit**: YES (grouped with Tasks 2, 4)
-  - Message: `docs(ghidra): RE findings — hook validation, binary format, unknown SymbolId`
-  - Files: `docs/ghidra/mesh_binary_format.md`
-
----
-
-- [ ] 4. **RE — Investigate unknown SymbolId behavior (what renders when asset missing?)**
-
-  **What to do**:
-  - Investigate what the game renders when it encounters a SymbolId that has no corresponding asset loaded
-  - Trace the resource resolution path: SymbolId → CResourceID lookup → what happens on lookup failure?
-  - Check: does the game crash? Show invisible model? Show default/fallback? Show T-pose?
-  - Analyze `net_apply_loadout_items_to_player` (RVA `0x00154C00`) error handling paths
-  - Check the fallback CResourceID array at LoadoutData+0x370+0x80 — is this the missing-asset fallback?
-  - Document findings in `docs/ghidra/unknown_symbolid_behavior.md`
-  - This is critical for understanding multi-player visibility: when Player A has custom cosmetics and Player B doesn't have the assets
-
-  **Must NOT do**:
-  - Do not try to fix or solve the multi-player visibility problem — document only
-  - Do not write any C++ code
-  - Do not assume behavior — only document what the decompilation reveals
-
-  **Recommended Agent Profile**:
-  - **Category**: `deep`
-    - Reason: Requires tracing error/fallback paths through decompiled code
-  - **Skills**: []
-
-  **Parallelization**:
-  - **Can Run In Parallel**: YES
-  - **Parallel Group**: Wave 1 (with Tasks 1, 2, 3, 5)
-  - **Blocks**: None directly (documentation-only, informs future work)
-  - **Blocked By**: None (can start immediately)
-
-  **References**:
-
-  **Pattern References**:
-  - `docs/ghidra/GHIDRA_STRUCT_ANALYSIS.md` — Analysis of `net_apply_loadout_items_to_player`. Shows the primary + fallback CResourceID pattern at LoadoutData+0x370. The fallback array may be the missing-asset behavior.
-  - `docs/ghidra/ECHOVR_STRUCT_MEMORY_MAP.md` — LoadoutData struct offsets. The primary (offset +0xB8) and fallback (+0x80) CResourceID arrays are documented here.
-
-  **WHY Each Reference Matters**:
-  - `GHIDRA_STRUCT_ANALYSIS.md`: Shows the dual-array pattern — understanding which array is primary vs fallback is key to understanding missing-asset behavior.
-  - `ECHOVR_STRUCT_MEMORY_MAP.md`: Exact offsets needed to trace the code paths.
-
-  **Acceptance Criteria**:
-  - [ ] `docs/ghidra/unknown_symbolid_behavior.md` exists
-  - [ ] Documented: what happens when CResourceID lookup returns -1/null/invalid
-  - [ ] Documented: role of fallback CResourceID array
-  - [ ] Documented: crash risk assessment (does unknown SymbolId crash the game?)
-
-  **QA Scenarios:**
-
-  ```
-  Scenario: Error handling paths identified in decompilation
-    Tool: Bash (notghidra MCP)
-    Preconditions: Echo VR binary analyzed. Binary location: `echovr/bin/win10/echovr.exe`
-    Steps:
-      1. Decompile net_apply_loadout_items_to_player at 0x140154C00
-      2. Search for conditional branches after CResourceID lookup (if resource == -1, if resource == NULL)
-      3. Trace both the success path and the failure/fallback path
-      4. Document what each path does (render default? skip? crash?)
-    Expected Result: At least one error handling path identified and documented
-    Failure Indicators: No conditional branches found (would mean crash on unknown SymbolId)
-    Evidence: .sisyphus/evidence/task-4-unknown-symbolid.txt
-  ```
-
-  **Commit**: YES (grouped with Tasks 2, 3)
-  - Message: `docs(ghidra): RE findings — hook validation, binary format, unknown SymbolId`
-  - Files: `docs/ghidra/unknown_symbolid_behavior.md`
-
----
-
-- [ ] 5. **Build system prep — add jsoncpp linking + AssetCDN source scaffolding**
-
-  **What to do**:
-  - Edit `src/gamepatches/CMakeLists.txt` to link jsoncpp (already a vcpkg dependency but not linked to gamepatches target)
-  - Create empty `src/gamepatches/asset_cdn.h` with class stub: `namespace AssetCDN { void Initialize(); }`
-  - Create empty `src/gamepatches/asset_cdn.cpp` with stub implementation that just logs "AssetCDN initialized"
-  - Add new source files to CMakeLists.txt
-  - Verify the project still builds cleanly after changes
-  - Uncomment the existing `asset_cdn_url` config reading at `patches.cpp:760-767` (reads URL from config file)
-  - Do NOT uncomment `AssetCDN::Initialize()` call yet (Task 13 will do this)
-
-  **Must NOT do**:
-  - Do not implement any actual CDN functionality — stubs only
-  - Do not uncomment `AssetCDN::Initialize()` call at patches.cpp:1430-1433 (that's Task 13)
-  - Do not add curl usage yet — that's Task 11
+  - Do not implement any CDN logic — stubs only
+  - Do not add new vcpkg dependencies — curl and jsoncpp are already declared
+  - Do not modify vcpkg.json
 
   **Recommended Agent Profile**:
   - **Category**: `quick`
-    - Reason: Small CMake changes + empty source files. Straightforward build system task.
+    - Reason: Build system configuration + stub files, straightforward
   - **Skills**: []
 
   **Parallelization**:
-  - **Can Run In Parallel**: YES
-  - **Parallel Group**: Wave 1 (with Tasks 1, 2, 3, 4)
-  - **Blocks**: Tasks 6, 11
-  - **Blocked By**: None (can start immediately)
+  - **Can Run In Parallel**: YES (with Tasks 4, 6, 7)
+  - **Parallel Group**: Wave 1
+  - **Blocks**: Tasks 8 (needs compilable asset_cdn stubs), 11 (needs curl/jsoncpp)
+  - **Blocked By**: Task 1 (format spec for struct definitions)
 
   **References**:
 
   **Pattern References**:
-  - `src/gamepatches/CMakeLists.txt` — Current build configuration. Look at how other libraries are linked (e.g., curl, minhook). Follow the same pattern for jsoncpp.
-  - `src/gamepatches/patches.cpp:760-767` — Commented-out `asset_cdn_url` config reading. Uncomment this block. It reads from the config file.
-  - `src/gamepatches/patches.cpp:1430-1433` — Commented-out `AssetCDN::Initialize()` call. Do NOT touch this yet.
-
-  **API/Type References**:
-  - `vcpkg.json` — Confirms jsoncpp is already a project dependency. No need to add it to vcpkg.
+  - `src/gamepatches/CMakeLists.txt` — Current build configuration. Check existing `target_link_libraries` calls for pattern to follow
+  - `vcpkg.json` — Declares curl and jsoncpp as dependencies. Verify feature flags and version constraints
+  - `src/gamepatches/patches.cpp:1430-1433` — Commented `AssetCDN::Initialize()` call. Shows expected include and call pattern
+  - `src/gamepatches/patches.cpp:760-767` — Commented `asset_cdn_url` config. Shows config reading pattern
 
   **WHY Each Reference Matters**:
-  - `CMakeLists.txt`: Must follow existing link patterns. Wrong linking will break the build.
-  - `patches.cpp:760-767`: This is pre-existing code that reads the CDN URL. Uncommenting it gives us config support for free.
-  - `vcpkg.json`: Confirms jsoncpp is available — no dependency installation needed.
+  - `CMakeLists.txt`: Need to verify what IS linked and add what's MISSING. Following existing patterns prevents build breakage
+  - `vcpkg.json`: Confirms the dependencies exist in the dependency manifest — we just need to link them
+  - `patches.cpp`: Shows prior developer's intended integration points. The stubs should match these expectations
 
   **Acceptance Criteria**:
-  - [ ] `src/gamepatches/asset_cdn.h` exists with namespace and Initialize() declaration
-  - [ ] `src/gamepatches/asset_cdn.cpp` exists with stub implementation
-  - [ ] `src/gamepatches/CMakeLists.txt` links jsoncpp and includes new source files
-  - [ ] `patches.cpp:760-767` uncommented (asset_cdn_url config reading)
   - [ ] `make build` succeeds with zero errors
+  - [ ] `asset_cdn.h` and `asset_cdn.cpp` exist as stubs
+  - [ ] `#include <curl/curl.h>` compiles without errors in asset_cdn.cpp
+  - [ ] `#include <json/json.h>` compiles without errors in asset_cdn.cpp
+  - [ ] asset_cdn.cpp is in CMakeLists.txt source list
 
   **QA Scenarios:**
 
   ```
-  Scenario: Project builds cleanly with new files and jsoncpp linking
-    Tool: Bash
-    Preconditions: None
+  Scenario: Build succeeds with curl and jsoncpp linked
+    Tool: Bash (isBackground: true)
+    Preconditions: Source files exist
     Steps:
-      1. Run `make build` (or equivalent CMake build command)
-      2. Check for zero compilation errors and zero linker errors
-      3. Verify gamepatches.dll is produced in build output directory
-    Expected Result: Build succeeds, DLL produced, no warnings about jsoncpp
-    Failure Indicators: Linker errors for jsoncpp symbols, missing header errors, DLL not produced
+      1. Run: make build 2>&1 | tee /tmp/build-output.txt
+      2. Check exit code is 0
+      3. Grep build output for "curl/curl.h" errors — should be none
+      4. Grep build output for "json/json.h" errors — should be none
+      5. Verify asset_cdn.o (or equivalent) was produced
+    Expected Result: Clean build, zero errors, zero relevant warnings
+    Failure Indicators: Linker errors for curl/jsoncpp symbols, missing header errors
     Evidence: .sisyphus/evidence/task-5-build-output.txt
-
-  Scenario: Stub files have correct structure
-    Tool: Bash
-    Preconditions: Files created
-    Steps:
-      1. Verify asset_cdn.h contains namespace AssetCDN and Initialize() declaration
-      2. Verify asset_cdn.cpp includes asset_cdn.h and has Initialize() body with Log() call
-      3. Verify CMakeLists.txt contains jsoncpp in target_link_libraries
-    Expected Result: All three files contain expected content
-    Failure Indicators: Missing declarations, wrong namespace, jsoncpp not linked
-    Evidence: .sisyphus/evidence/task-5-stub-verification.txt
   ```
 
   **Commit**: YES
-  - Message: `build(gamepatches): add jsoncpp linking and AssetCDN scaffolding`
-  - Files: `src/gamepatches/CMakeLists.txt`, `src/gamepatches/asset_cdn.h`, `src/gamepatches/asset_cdn.cpp`, `src/gamepatches/patches.cpp`
-  - Pre-commit: `make build`
-
-### Wave 2 — Vertical Slice (Prove injection works before building full pipeline)
-
-- [ ] 6. **Hardcoded injection PoC — hook ONE slot, inject ONE asset, confirm rendering**
-
-  **What to do**:
-  - Using findings from Task 2 (FUN_1404f37a0 validation) and Task 3 (mesh binary format), create a proof-of-concept hook
-  - Hook the validated function (expected: FUN_1404f37a0 @ RVA 0x004F37A0) using the existing PatchDetour() pattern
-  - In the hook: intercept ONE specific cosmetic slot (e.g., `banner` or `tint`) for the local player only
-  - When the intercepted slot is accessed, replace the CResourceID with a hardcoded test SymbolId computed via symbol_hash.h (Task 1)
-  - Create a minimal test asset binary blob (based on Task 3 findings) — even a colored cube is sufficient
-  - Embed the test asset as a hardcoded byte array in the hook code (no file I/O yet)
-  - The goal is to prove: custom SymbolId → custom CResourceID → custom mesh renders in-game
-  - If Task 2 determines FUN_1404f37a0 is NOT hookable, adapt to the recommended alternative from Task 2's analysis
-  - Write the hook in a new file: `src/gamepatches/cosmetics_hook.h` + `cosmetics_hook.cpp`
-
-  **Must NOT do**:
-  - Do not implement file I/O, network requests, or caching — hardcoded data only
-  - Do not hook ALL slots — ONE slot only for proof-of-concept
-  - Do not modify other players' cosmetics — local player only
-  - Do not build a general-purpose injection system — that's Task 12
-  - Do not skip Task 2/3 findings — if RE reveals different hook point or format, use THOSE findings
-
-  **Recommended Agent Profile**:
-  - **Category**: `deep`
-    - Reason: Game hooking with binary data injection requires careful memory management and understanding of decompiled structures
-  - **Skills**: []
-    - notghidra tools available by default if further RE needed during implementation
-
-  **Parallelization**:
-  - **Can Run In Parallel**: YES (with Task 7)
-  - **Parallel Group**: Wave 2 (with Task 7)
-  - **Blocks**: Task 12 (generalization depends on proven PoC)
-  - **Blocked By**: Tasks 1 (symbol_hash.h), 2 (hook target validation), 5 (build scaffolding)
-
-  **References**:
-
-  **Pattern References**:
-  - `src/gamepatches/patches.cpp` — All existing hooks follow PatchDetour() pattern. Search for `PatchDetour(` to see examples. The hook function signature must match the original function exactly.
-  - `src/common/hooking.h` — MinHook/Detours abstraction layer. Provides `PatchDetour()`, `Unpatch()`. Use this — do not call MinHook directly.
-  - `docs/ghidra/FUN_1404f37a0_analysis.md` (OUTPUT of Task 2) — Contains the validated function signature, parameters, and hookability assessment. THIS IS YOUR PRIMARY GUIDE for the hook implementation.
-  - `docs/ghidra/mesh_binary_format.md` (OUTPUT of Task 3) — Contains the minimum viable binary payload format. Use this to construct the test asset byte array.
-
-  **API/Type References**:
-  - `src/common/echovr.h:LoadoutSlot` — The 21-field SymbolId struct. Identifies which field corresponds to which slot.
-  - `src/common/echovr.h:SymbolId` — `INT64` typedef. Your computed hash must be this type.
-  - `src/common/symbol_hash.h` (OUTPUT of Task 1) — Use `SymbolHash()` to compute the custom SymbolId at compile time.
-  - `src/gamepatches/patch_addresses.h` — Add the new hook RVA here following the existing naming pattern.
-
-  **WHY Each Reference Matters**:
-  - `FUN_1404f37a0_analysis.md`: Without this, you don't know the function signature to hook. MUST read first.
-  - `mesh_binary_format.md`: Without this, you don't know what binary data to inject. MUST read second.
-  - `hooking.h`: Use the established pattern — deviation will cause conflicts with other hooks.
-  - `patches.cpp`: See how other hooks are registered in `ApplyPatches()` — follow same structure.
-
-  **Acceptance Criteria**:
-  - [ ] `src/gamepatches/cosmetics_hook.h` and `cosmetics_hook.cpp` exist
-  - [ ] Hook address added to `patch_addresses.h`
-  - [ ] `make build` succeeds with the new hook code
-  - [ ] Hook function signature matches FUN_1404f37a0 exactly (per Task 2 findings)
-  - [ ] At least one hardcoded test SymbolId is computed via symbol_hash.h
-
-  **QA Scenarios:**
-
-  ```
-  Scenario: PoC hook compiles and links cleanly
-    Tool: Bash
-    Preconditions: Tasks 1, 2, 3, 5 completed
-    Steps:
-      1. Verify cosmetics_hook.h includes symbol_hash.h and declares hook function
-      2. Verify cosmetics_hook.cpp implements hook matching FUN_1404f37a0 signature from Task 2
-      3. Run `make build`
-      4. Verify gamepatches.dll is produced without errors
-    Expected Result: Clean build, DLL produced, no linker errors
-    Failure Indicators: Signature mismatch errors, undefined symbol errors, linker failures
-    Evidence: .sisyphus/evidence/task-6-poc-build.txt
-
-  Scenario: Hook function contains correct slot interception logic
-    Tool: Bash
-    Preconditions: cosmetics_hook.cpp exists
-    Steps:
-      1. Read cosmetics_hook.cpp
-      2. Verify it checks for a specific slot ID (e.g., banner slot)
-      3. Verify it replaces CResourceID with computed SymbolHash value
-      4. Verify the original function is called for all non-intercepted slots (pass-through)
-      5. Verify a test asset byte array is defined (even if minimal placeholder)
-    Expected Result: Code contains slot check, hash computation, pass-through for other slots, and embedded test data
-    Failure Indicators: Missing pass-through (would break all cosmetics), missing slot check, no test data
-    Evidence: .sisyphus/evidence/task-6-poc-logic-review.txt
-  ```
-
-  **Commit**: YES
-  - Message: `feat(gamepatches): hardcoded cosmetic injection PoC — single slot proof-of-concept`
-  - Files: `src/gamepatches/cosmetics_hook.h`, `src/gamepatches/cosmetics_hook.cpp`, `src/gamepatches/patch_addresses.h`, `src/gamepatches/CMakeLists.txt`
+  - Message: `build(gamepatches): link curl and jsoncpp, add asset_cdn stubs`
+  - Files: `src/gamepatches/CMakeLists.txt`, `src/gamepatches/asset_cdn.h`, `src/gamepatches/asset_cdn.cpp`
   - Pre-commit: `make build`
 
 ---
 
-- [ ] 7. **Hash consistency verification — Go vs C++ output comparison**
+- [ ] 6. **Scaffold nevr-cdn-tools Go repository**
 
   **What to do**:
-  - Create a verification script that computes hashes using BOTH the Go implementation (`extras/reference/core_hash.go`) and the C++ implementation (`src/common/symbol_hash.h` from Task 1)
-  - Test with a comprehensive set of inputs:
-    - Known cosmetic names from sourcedb (e.g., `rwd_tint_0019`, `rwd_decal_default`, `rwd_chassis_body_s11`)
-    - Edge cases: empty string, single character, very long string, mixed case (`RWD_Tint_0019` vs `rwd_tint_0019`)
-    - Custom cosmetic name patterns we'll use (e.g., `custom_tint_001`, `cdn_banner_test`)
-  - Extract real cosmetic names from `echovr/sourcedb/rad15/json/r14/multiplayer/customization_models.json`
-  - Compare outputs — every single hash must match exactly
-  - This validates that the Go CLI tools (Tasks 9, 10) will produce SymbolIds compatible with the C++ game hooks
+  - Create `~/src/nevr-cdn-tools/` directory
+  - Initialize Go module: `go mod init github.com/EchoTools/nevr-cdn-tools`
+  - Add evrFileTools as dependency: `go get github.com/EchoTools/evrFileTools`
+  - Create directory structure:
+    ```
+    nevr-cdn-tools/
+    ├── go.mod
+    ├── go.sum
+    ├── cmd/
+    │   ├── pack-tint/
+    │   │   └── main.go      (stub: prints "pack-tint: not yet implemented")
+    │   └── build-manifest/
+    │       └── main.go      (stub: prints "build-manifest: not yet implemented")
+    └── internal/
+        └── evrp/
+            └── evrp.go      (stub: EVRP format constants from spec)
+    ```
+  - The `internal/evrp/evrp.go` should define the `.evrp` format constants from the spec (Task 1):
+    - Magic bytes `"EVRP"`
+    - Format version `1`
+    - SlotType constants (`SlotTypeTint = 0x01`)
+    - Header struct matching the spec
+  - Initialize git repo: `git init`
+  - Verify: `go build ./...` succeeds
 
   **Must NOT do**:
-  - Do not modify either hash implementation — this is read-only verification
-  - Do not write a test framework — simple script comparison is sufficient
-  - Do not test more than 100 inputs — diminishing returns
+  - Do not implement pack-tint or build-manifest logic — stubs only
+  - Do not add dependencies beyond evrFileTools
+  - Do not set up CI/CD
 
   **Recommended Agent Profile**:
   - **Category**: `quick`
-    - Reason: Script-based comparison, no complex logic, well-defined pass/fail
+    - Reason: Repo scaffolding, go mod init, stub files
   - **Skills**: []
 
   **Parallelization**:
-  - **Can Run In Parallel**: YES (with Task 6)
-  - **Parallel Group**: Wave 2 (with Task 6)
-  - **Blocks**: Tasks 9, 10 (Go CLI tools depend on proven hash consistency)
-  - **Blocked By**: Task 1 (needs symbol_hash.h)
+  - **Can Run In Parallel**: YES (with Tasks 4, 5, 7 — but 7 depends on 6)
+  - **Parallel Group**: Wave 1
+  - **Blocks**: Task 7 (pack-tint needs repo structure)
+  - **Blocked By**: Task 1 (format spec for evrp.go constants)
 
   **References**:
 
   **Pattern References**:
-  - `extras/reference/core_hash.go` — Go hash implementation. Write a small Go main() that reads names from stdin and outputs `name\thash_hex`. This is the REFERENCE implementation.
-  - `src/common/symbol_hash.h` (OUTPUT of Task 1) — C++ implementation to verify. Write a small C++ main() that does the same stdin → hash_hex output.
-
-  **API/Type References**:
-  - `echovr/sourcedb/rad15/json/r14/multiplayer/customization_models.json` — Contains real cosmetic names. Extract names with `jq` or similar to feed into both hash programs.
+  - `~/src/evrFileTools/go.mod` — Module path is `github.com/EchoTools/evrFileTools`. This is the import path for the dependency
+  - `~/src/evrFileTools/cmd/showtints/` — Example CLI command structure to follow
+  - `~/src/evrFileTools/pkg/tint/tint.go` — Tint types that will be imported
 
   **WHY Each Reference Matters**:
-  - `extras/reference/core_hash.go`: The Go implementation is considered authoritative (used in production Nakama server). C++ must match it.
-  - `customization_models.json`: Real-world cosmetic names ensure we test with actual game data, not synthetic inputs.
+  - `evrFileTools/go.mod`: Need exact module path for `go get`
+  - `showtints/`: Pattern for how cmd/ directories are structured in evrFileTools — follow same convention
 
   **Acceptance Criteria**:
-  - [ ] At least 50 real cosmetic names tested
-  - [ ] At least 10 edge case inputs tested
-  - [ ] 100% hash match between Go and C++ for all inputs
-  - [ ] Results saved as evidence file with name + Go hash + C++ hash columns
+  - [ ] `~/src/nevr-cdn-tools/` directory exists
+  - [ ] `go.mod` references `github.com/EchoTools/nevr-cdn-tools`
+  - [ ] `go.sum` includes evrFileTools
+  - [ ] `go build ./...` succeeds with zero errors
+  - [ ] `go run ./cmd/pack-tint` prints stub message
+  - [ ] `go run ./cmd/build-manifest` prints stub message
 
   **QA Scenarios:**
 
   ```
-  Scenario: All hashes match between Go and C++ implementations
+  Scenario: Go repo builds and stubs run
     Tool: Bash
-    Preconditions: Task 1 (symbol_hash.h) completed, Go installed
+    Preconditions: Go toolchain installed
     Steps:
-      1. Extract cosmetic names from customization_models.json using jq
-      2. Write minimal Go program: reads names from stdin, outputs name<tab>hash per line
-      3. Write minimal C++ program: reads names from stdin, outputs name<tab>hash per line
-      4. Feed same name list to both programs
-      5. diff the outputs — expect zero differences
-    Expected Result: `diff` produces no output (identical hashes for all inputs)
-    Failure Indicators: Any line differs between Go and C++ output
-    Evidence: .sisyphus/evidence/task-7-hash-comparison.txt
-
-  Scenario: Case insensitivity works correctly
-    Tool: Bash
-    Preconditions: Both hash programs built
-    Steps:
-      1. Hash "rwd_tint_0019" and "RWD_TINT_0019" and "Rwd_Tint_0019" with both programs
-      2. All three inputs must produce the same hash value
-      3. Both programs must agree on that value
-    Expected Result: All 6 outputs (3 inputs × 2 programs) produce identical hash
-    Failure Indicators: Any case variation produces different hash
-    Evidence: .sisyphus/evidence/task-7-case-insensitive.txt
+      1. cd ~/src/nevr-cdn-tools && go build ./...
+      2. Verify exit code 0
+      3. go run ./cmd/pack-tint 2>&1 | grep -i "not yet implemented"
+      4. go run ./cmd/build-manifest 2>&1 | grep -i "not yet implemented"
+      5. grep "evrFileTools" go.mod
+    Expected Result: Build succeeds, stubs print messages, evrFileTools in go.mod
+    Failure Indicators: Build errors, missing dependency, stub doesn't run
+    Evidence: .sisyphus/evidence/task-6-repo-scaffold.txt
   ```
 
-  **Commit**: YES
-  - Message: `test(common): verify Go/C++ hash consistency across 50+ cosmetic names`
-  - Files: (test scripts — can be in a temp directory, no permanent files needed)
-  - Pre-commit: both hash programs compile
+  **Commit**: YES (in nevr-cdn-tools repo)
+  - Message: `feat: scaffold nevr-cdn-tools repository with evrFileTools dependency`
+  - Files: all files
+  - Pre-commit: `go build ./...`
 
 ---
 
-### Wave 3 — Format Design + CDN Pipeline (After Waves 1-2)
-
-- [ ] 8. **Design manifest JSON format + package binary format + URL scheme**
+- [ ] 7. **Implement pack-tint CLI command**
 
   **What to do**:
-  - Design the manifest JSON schema that maps SymbolIds to package files. Must include:
-    - Manifest version number (integer, monotonically increasing)
-    - Per-slot-type asset entries keyed by SymbolId (hex string)
-    - Each entry: package filename, package version, file size, slot type
-    - Timestamp of manifest generation
-  - Design the package binary format:
-    - Magic bytes header (e.g., `EVRP`) + format version (uint32)
-    - SymbolId (int64) that this package provides
-    - Slot type identifier (uint8)
-    - Asset data type flags (mesh, texture, or both)
-    - Mesh data section: vertex buffer (position, normal, UV, tangent), index buffer, bounding box
-    - Texture data section: DDS format (pre-compressed, GPU-ready), mip count
-    - All multi-byte values little-endian
-  - Design the URL scheme for `https://cdn.echo.taxi/`:
-    - Manifest URL: `https://cdn.echo.taxi/v{VERSION}/manifest.json`
-    - Package URL: `https://cdn.echo.taxi/v{VERSION}/packages/{symbolid_hex}.evrp`
-    - Version is the manifest version number — auditable by incrementing path
-    - Old versions remain accessible (immutable, append-only)
-  - Produce a design document ONLY (no code) — saved as `docs/cosmetics-cdn-format.md` (DRAFT)
-  - This is the AUTHORITATIVE format reference for Tasks 9, 10, 11, 12
+  - Implement `cmd/pack-tint/main.go` in `~/src/nevr-cdn-tools/`
+  - CLI interface:
+    ```
+    pack-tint --name <tint_name> --colors <color_spec> --output <path.evrp>
+    
+    # or with individual color flags:
+    pack-tint --name "custom_tint_001" \
+      --main1 "1.0,0.0,0.0,1.0" \
+      --accent1 "0.0,1.0,0.0,1.0" \
+      --main2 "0.0,0.0,1.0,1.0" \
+      --accent2 "1.0,1.0,0.0,1.0" \
+      --body "1.0,0.0,1.0,1.0" \
+      --output custom_tint_001.evrp
+    ```
+  - Compute SymbolId hash from `--name` using CSymbol64_Hash (port from Go `core_hash.go` or use evrFileTools if it has hash function)
+  - Note: If Task 3 determined the precache table approach, use that. If bypassing with known hashes, accept `--symbol-id 0x...` as override
+  - Pack into `.evrp` format per spec (Task 1):
+    - Write EVRP magic, version 1, symbol_id, slot_type=0x01 (tint), reserved zeros, data_length=80, 80 bytes of color data
+  - Use `internal/evrp/evrp.go` for format constants and write helpers
+  - Parse RGBA values from comma-separated float strings
+  - Validate: all color components are 0.0-1.0 range
 
   **Must NOT do**:
-  - Do not implement any code — design document only
-  - Do not use protobuf or msgpack — keep it simple (JSON manifest, raw binary packages)
-  - Do not include integrity hashes — trust the R2 bucket (user decision)
-  - Do not include audio, animation, or shader sections in the package format
-  - Do not design for hot-reload or delta updates — full packages only
+  - Do not support any asset type other than tints
+  - Do not add compression — raw bytes for PoC
+  - Do not add encryption or signing
+  - Do not read from game files — colors specified on command line
 
   **Recommended Agent Profile**:
   - **Category**: `unspecified-high`
-    - Reason: Format design requires understanding GPU data layout, binary serialization, and URL architecture — not just code writing
+    - Reason: Non-trivial CLI tool with binary format writing, hash computation, and evrFileTools integration
   - **Skills**: []
 
   **Parallelization**:
-  - **Can Run In Parallel**: NO (this is the first task in Wave 3, blocks the rest)
-  - **Parallel Group**: Wave 3 (starts after Wave 1 Task 3 completes)
-  - **Blocks**: Tasks 9, 10, 11, 14
-  - **Blocked By**: Task 3 (RE mesh binary format — need to understand what data to put in packages)
+  - **Can Run In Parallel**: NO (depends on Task 6 for repo structure)
+  - **Parallel Group**: Wave 1 (starts after Task 6, parallel with 4, 5)
+  - **Blocks**: Tasks 9 (build-manifest needs .evrp files), 10 (upload needs .evrp files)
+  - **Blocked By**: Tasks 1 (format spec), 3 (precache table / hash approach), 6 (repo structure)
 
   **References**:
 
   **Pattern References**:
-  - `docs/ghidra/mesh_binary_format.md` — (Task 3 output) RE analysis of how the game stores mesh data. The package binary format must match what the game expects at the GPU upload level.
-  - `docs/ghidra/ECHOVR_STRUCT_MEMORY_MAP.md` — LoadoutData structure showing how CResourceID maps to cosmetic slots. Slot type identifiers in the package must align with these offsets.
+  - `~/src/evrFileTools/cmd/showtints/main.go` — CLI command pattern in evrFileTools. Follow same flag parsing and error handling style
+  - `~/src/evrFileTools/pkg/tint/tint.go` — TintEntry struct and Color struct. Import and use these types for color data representation
+  - `~/src/nevr-cdn-tools/internal/evrp/evrp.go` — Format constants from Task 6. Use for magic bytes, version, slot types
+  - `docs/cosmetics-cdn-format.md` — THE format spec. Follow exactly for .evrp binary layout
 
   **API/Type References**:
-  - `src/common/echovr.h:LoadoutSlot` — The 21 cosmetic fields (selectionmode through title). The manifest must support entries for all 20 equippable slot types.
-  - `echovr/sourcedb/rad15/json/r14/multiplayer/customization_models.json` — Real cosmetic names and structure. Use as sample data for the manifest schema design.
-  - `echovr/sourcedb/rad15/json/r14/multiplayer/equip_slots.json` — Slot type enumeration. Use for slot type identifiers in the format.
-
-  **External References**:
-  - DDS format specification — Package texture section should store DDS files directly (already GPU-ready, no runtime conversion needed)
+  - `evrFileTools/pkg/tint:TintEntry` — 96-byte struct. We write the 80-byte color portion (offsets 0x08-0x57)
+  - `evrFileTools/pkg/tint:Color` — RGBA float32×4 struct. Use for parsing color inputs
+  - Evidence from Task 3: `.sisyphus/evidence/task-3-precache-table.txt` — Hash computation approach
 
   **WHY Each Reference Matters**:
-  - `mesh_binary_format.md`: Without knowing what vertex attributes the game uses (position, normal, UV layout, tangent), we can't design a compatible package format.
-  - `ECHOVR_STRUCT_MEMORY_MAP.md`: Slot indexing must match game internals exactly.
-  - `LoadoutSlot`: Enumerate ALL slot types so the manifest schema covers them all from day one.
-  - `customization_models.json`: Provides real naming patterns and structure to validate our schema against.
+  - `showtints/main.go`: Establishes CLI conventions (flag names, error output, exit codes) for consistency
+  - `tint.go`: Provides the Color struct we should use — don't reinvent
+  - `evrp.go`: Single source of truth for format constants
+  - `cosmetics-cdn-format.md`: The contract. If pack-tint output doesn't match spec, Track B will fail
 
   **Acceptance Criteria**:
-  - [ ] `docs/cosmetics-cdn-format.md` exists with manifest JSON schema section
-  - [ ] Document includes package binary format with byte-level layout diagram
-  - [ ] Document includes URL scheme with concrete examples
-  - [ ] Manifest schema covers all 20 cosmetic slot types
-  - [ ] Package format includes magic bytes, version, SymbolId, slot type, mesh data, texture data sections
-  - [ ] Format is versioned (both manifest and package have version fields)
+  - [ ] `go run ./cmd/pack-tint --help` shows usage
+  - [ ] Running with valid color flags produces a `.evrp` file
+  - [ ] Output file starts with `EVRP` magic bytes
+  - [ ] Output file is exactly 28 (header) + 80 (tint data) = 108 bytes
+  - [ ] Symbol ID in output matches CSymbol64_Hash of the `--name` value
+  - [ ] Hexdump of output matches spec layout
 
   **QA Scenarios:**
 
   ```
-  Scenario: Manifest JSON schema is valid and parseable
+  Scenario: Pack a test tint and verify binary output
     Tool: Bash
-    Preconditions: docs/cosmetics-cdn-format.md exists
+    Preconditions: nevr-cdn-tools repo built, format spec available
     Steps:
-      1. Extract the example manifest JSON from the design doc
-      2. Pipe it through `python3 -m json.tool` to validate JSON syntax
-      3. Verify it contains: version field, timestamp, at least one slot type with entries
-      4. Verify each entry has: symbolid, package_file, package_version, file_size, slot_type
-    Expected Result: Valid JSON, all required fields present
-    Failure Indicators: JSON parse error, missing required fields
-    Evidence: .sisyphus/evidence/task-8-manifest-schema-valid.txt
+      1. Run: go run ./cmd/pack-tint --name "custom_test_tint" --main1 "1.0,0.0,0.0,1.0" --accent1 "0.0,1.0,0.0,1.0" --main2 "0.0,0.0,1.0,1.0" --accent2 "1.0,1.0,0.0,1.0" --body "0.5,0.5,0.5,1.0" --output /tmp/test_tint.evrp
+      2. Verify file size: stat -c %s /tmp/test_tint.evrp == 108
+      3. Verify magic: hexdump -C -n 4 /tmp/test_tint.evrp | grep "EVRP"
+      4. Verify version: hexdump -C -s 4 -n 4 /tmp/test_tint.evrp (should be 01 00 00 00)
+      5. Verify slot_type at offset 16: hexdump -C -s 16 -n 1 /tmp/test_tint.evrp (should be 01)
+      6. Verify first color (main1 = red = 1.0,0.0,0.0,1.0): hexdump -C -s 28 -n 16 /tmp/test_tint.evrp (should show 00 00 80 3f 00 00 00 00 00 00 00 00 00 00 80 3f)
+    Expected Result: File is 108 bytes, magic EVRP, version 1, slot_type 1, color data correct
+    Failure Indicators: Wrong file size, bad magic, incorrect color encoding
+    Evidence: .sisyphus/evidence/task-7-pack-tint-output.txt
 
-  Scenario: Package binary format has complete byte-level layout
+  Scenario: Invalid input handling
     Tool: Bash
-    Preconditions: docs/cosmetics-cdn-format.md exists
+    Preconditions: pack-tint built
     Steps:
-      1. Search document for magic bytes definition
-      2. Verify byte offsets are specified for: magic (4 bytes), format_version (4 bytes), symbolid (8 bytes), slot_type (1 byte)
-      3. Verify mesh data section and texture data section are both described with offsets
-      4. Verify endianness is specified (little-endian)
-    Expected Result: All sections have explicit byte offsets and sizes
-    Failure Indicators: Vague descriptions without byte offsets, missing sections
-    Evidence: .sisyphus/evidence/task-8-package-format-complete.txt
+      1. Run with missing --name: should error with clear message
+      2. Run with out-of-range color (2.0): should error or clamp
+      3. Run with malformed color string ("abc"): should error
+    Expected Result: Clear error messages, non-zero exit codes
+    Failure Indicators: Panic, cryptic error, silent failure
+    Evidence: .sisyphus/evidence/task-7-pack-tint-errors.txt
   ```
 
-  **Commit**: YES
-  - Message: `docs(cosmetics): design manifest JSON + package binary format + CDN URL scheme`
-  - Files: `docs/cosmetics-cdn-format.md`
-  - Pre-commit: N/A (documentation only)
+  **Commit**: YES (in nevr-cdn-tools repo)
+  - Message: `feat(pack-tint): implement tint packing to .evrp format`
+  - Files: `cmd/pack-tint/main.go`, `internal/evrp/evrp.go` (updated with write helpers)
+  - Pre-commit: `go build ./...`
 
 ---
 
-- [ ] 9. **Go CLI tool — cosmetics-manifest generator**
+### Wave 2 — CDN Pipeline + C++ Module (after Wave 1)
+
+- [ ] 8. **Hardcoded tint injection PoC — prove the hook works**
 
   **What to do**:
-  - Create `tools/cosmetics-manifest/main.go` with `go.mod`
-  - CLI reads a directory of `.evrp` package files and generates a manifest JSON file
-  - Usage: `cosmetics-manifest --packages-dir ./packages/ --version 42 --output manifest.json`
+  - Implement a minimal hook on `Loadout_ResolveDataFromId` (RVA from Task 2) using `PatchDetour()`
+  - The hook should:
+    1. Call the original function (let the game resolve normally)
+    2. Check if the resolved loadout has a tint slot
+    3. Overwrite the tint color data at the known offset with HARDCODED test colors (e.g., bright neon green)
+    4. Log that the override happened: `Log(LOG_INFO, "[AssetCDN] Tint override applied for slot %d", slotIndex)`
+  - This proves: the hook target is correct, the memory offset is writable, and the game renders the overridden tint
+  - Use findings from Task 2 (RE validation) for exact offsets and hook strategy
+  - Use `symbol_hash.h` from Task 4 if needed to identify tint SymbolIds
+  - Implement in `asset_cdn.cpp` (from Task 5 stubs), keep isolated with a `#define CDN_TINT_POC_ENABLED`
+  - Add the hook address to `patch_addresses.h`
+
+  **Must NOT do**:
+  - Do not download anything from CDN — hardcoded colors only
+  - Do not read from cache — hardcoded colors only
+  - Do not hook more than ONE function
+  - Do not implement for all slots — one tint slot only
+  - Do not add config reading
+
+  **Recommended Agent Profile**:
+  - **Category**: `deep`
+    - Reason: Complex C++ hook implementation requiring precise memory manipulation, calling conventions, and game process injection knowledge
+  - **Skills**: []
+
+  **Parallelization**:
+  - **Can Run In Parallel**: NO (depends on multiple Phase 0 + Wave 1 tasks)
+  - **Parallel Group**: Wave 2
+  - **Blocks**: Task 12 (generalized injection needs proven PoC)
+  - **Blocked By**: Tasks 1 (format spec), 2 (RE validation), 3 (hash table), 4 (symbol_hash.h), 5 (build system)
+
+  **References**:
+
+  **Pattern References**:
+  - `src/common/hooking.h` — `PatchDetour()` API. Follow the exact pattern used by existing hooks
+  - `src/gamepatches/patches.cpp` — Existing hook installations (search for `PatchDetour` calls). Follow the same pattern for our new hook
+  - `src/gamepatches/patch_addresses.h` — Where to add the new RVA constant
+  - `src/gamepatches/asset_cdn.h` + `asset_cdn.cpp` — Stub files from Task 5. Implement the hook here
+
+  **API/Type References**:
+  - Evidence from Task 2: `.sisyphus/evidence/task-2-hook-decompilation.md` — Validated function signature, parameters, return type
+  - Evidence from Task 2: `.sisyphus/evidence/task-2-cresourceid-layout.md` — CResourceID struct layout
+  - `src/common/echovr.h` — LoadoutSlot enum, SymbolId type
+  - `docs/ghidra/ECHOVR_STRUCT_MEMORY_MAP.md` — LoadoutData offsets for tint color data
+
+  **WHY Each Reference Matters**:
+  - `hooking.h` + `patches.cpp`: Must follow EXACT existing hook installation pattern or DLL won't load
+  - Task 2 evidence: Contains the validated hook strategy — DO NOT deviate from these findings
+  - `ECHOVR_STRUCT_MEMORY_MAP.md`: Memory offsets are the difference between working hook and crash
+
+  **Acceptance Criteria**:
+  - [ ] Hook compiles and links without errors (`make build`)
+  - [ ] Hook address added to `patch_addresses.h`
+  - [ ] Hook is gated behind `#define CDN_TINT_POC_ENABLED`
+  - [ ] Log message emitted when tint override is applied
+  - [ ] Build produces updated gamepatches.dll
+
+  **QA Scenarios:**
+
+  ```
+  Scenario: PoC hook compiles and is wired correctly
+    Tool: Bash (isBackground: true)
+    Preconditions: Tasks 4, 5 complete (symbol_hash.h exists, asset_cdn stubs exist)
+    Steps:
+      1. Run: make build 2>&1 | tee /tmp/build-poc.txt
+      2. Verify exit code 0
+      3. Grep for asset_cdn in build output to confirm it compiled
+      4. Verify gamepatches.dll was produced
+      5. Grep asset_cdn.cpp for PatchDetour call to confirm hook is installed
+      6. Grep asset_cdn.cpp for Log call to confirm logging exists
+    Expected Result: Clean build, hook installed via PatchDetour, logging present
+    Failure Indicators: Link errors, missing PatchDetour call, no Log statement
+    Evidence: .sisyphus/evidence/task-8-poc-build.txt
+
+  Scenario: Hook is properly isolated
+    Tool: Bash
+    Preconditions: asset_cdn.cpp written
+    Steps:
+      1. Verify #define CDN_TINT_POC_ENABLED exists
+      2. Verify the hook installation is inside an #ifdef CDN_TINT_POC_ENABLED block
+      3. Verify commenting out the #define results in no hook being installed (check with grep)
+    Expected Result: Hook is fully gated behind preprocessor flag
+    Failure Indicators: Hook code outside of ifdef, no define found
+    Evidence: .sisyphus/evidence/task-8-poc-isolation.txt
+  ```
+
+  **Commit**: YES
+  - Message: `feat(gamepatches): add hardcoded tint injection PoC hook`
+  - Files: `src/gamepatches/asset_cdn.h`, `src/gamepatches/asset_cdn.cpp`, `src/gamepatches/patch_addresses.h`
+  - Pre-commit: `make build`
+
+---
+
+- [ ] 9. **Implement build-manifest CLI command**
+
+  **What to do**:
+  - Implement `cmd/build-manifest/main.go` in `~/src/nevr-cdn-tools/`
+  - CLI interface:
+    ```
+    build-manifest --input-dir <dir_of_evrp_files> --game-version <version> --output manifest.json
+    ```
+  - Scan input directory for `.evrp` files
   - For each `.evrp` file:
-    - Read the package header (magic bytes, SymbolId, slot type, format version)
-    - Extract metadata without parsing full asset data
-    - Add entry to manifest keyed by slot type → SymbolId
-  - Include the Go CSymbol64_Hash function (copy from `extras/reference/core_hash.go`) for any name-to-SymbolId lookups
-  - Manifest JSON must exactly match the schema from Task 8
-  - Validate all packages have valid headers before generating manifest
-  - Exit with non-zero code on any invalid package
+    - Read and validate header (check magic, version)
+    - Extract symbol_id, slot_type
+    - Compute SHA256 checksum of entire file
+    - Get file size
+  - Generate manifest JSON per spec (Task 1):
+    ```json
+    {
+      "version": 1,
+      "game_version": "34.4.631399.1",
+      "packages": {
+        "<symbolid_hex>": {
+          "url": "packages/<symbolid_hex>.evrp",
+          "sha256": "<sha256>",
+          "slot_type": "<type_name>",
+          "size": <file_size>
+        }
+      }
+    }
+    ```
+  - Use `internal/evrp/evrp.go` for reading `.evrp` headers
+  - Map slot_type byte → string name (0x01 → "tint")
 
   **Must NOT do**:
-  - Do not parse or validate the full asset data inside packages — header only
-  - Do not upload to R2 — this tool only generates the manifest file locally
-  - Do not add compression — manifest is small JSON, packages are already binary
-  - Do not add dependency on external Go libraries beyond standard library
+  - Do not upload to CDN — just generate the manifest file
+  - Do not validate asset_data contents — just read the header
+  - Do not handle anything other than `.evrp` files
 
   **Recommended Agent Profile**:
   - **Category**: `unspecified-high`
-    - Reason: Go CLI with binary file parsing, must match format spec exactly
+    - Reason: File I/O, binary parsing, JSON generation, SHA256 computation
   - **Skills**: []
 
   **Parallelization**:
-  - **Can Run In Parallel**: YES (with Task 10, once Task 8 is done)
-  - **Parallel Group**: Wave 3 (after Tasks 7 and 8 complete)
-  - **Blocks**: Task 13
-  - **Blocked By**: Task 7 (hash consistency — ensures Go hash is correct), Task 8 (format design)
+  - **Can Run In Parallel**: YES (with Tasks 8, 10, 11)
+  - **Parallel Group**: Wave 2
+  - **Blocks**: Task 10 (needs manifest for CDN upload)
+  - **Blocked By**: Tasks 1 (format spec), 7 (needs .evrp files to test with)
 
   **References**:
 
   **Pattern References**:
-  - `extras/reference/core_hash.go` — Go CSymbol64_Hash implementation. Copy this function into the CLI tool for SymbolId computation. This is the AUTHORITATIVE hash reference.
-  - `docs/cosmetics-cdn-format.md` — (Task 8 output) Format specification. The manifest JSON this tool generates MUST match the schema defined here exactly.
-
-  **API/Type References**:
-  - `docs/cosmetics-cdn-format.md:Package Binary Format` — Header structure (magic, version, SymbolId, slot type) that this tool must parse from `.evrp` files.
-
-  **External References**:
-  - Go `encoding/binary` package — for reading little-endian binary headers from package files
-  - Go `encoding/json` package — for generating the manifest JSON output
+  - `docs/cosmetics-cdn-format.md` — Manifest JSON schema. Follow EXACTLY
+  - `~/src/nevr-cdn-tools/internal/evrp/evrp.go` — Format constants and header struct from Task 6/7
+  - `~/src/evrFileTools/cmd/showtints/main.go` — CLI pattern reference
 
   **WHY Each Reference Matters**:
-  - `extras/reference/core_hash.go`: The hash function must produce SymbolIds identical to the C++ implementation. Copy, don't reimplement.
-  - `cosmetics-cdn-format.md`: This tool is a FORMAT CONSUMER — it must read packages and write manifests that exactly match the spec. Any deviation breaks the pipeline.
+  - `cosmetics-cdn-format.md`: The manifest schema is the contract with Track B. Any deviation breaks C++ parsing
+  - `evrp.go`: Single source of truth for header parsing
 
   **Acceptance Criteria**:
-  - [ ] `tools/cosmetics-manifest/main.go` and `go.mod` exist
-  - [ ] `go build` succeeds with no errors
-  - [ ] Running with `--help` shows usage with --packages-dir, --version, --output flags
-  - [ ] Generates valid JSON matching Task 8 schema
+  - [ ] `go run ./cmd/build-manifest --help` shows usage
+  - [ ] Given a directory with `.evrp` files, produces valid `manifest.json`
+  - [ ] Manifest JSON validates against the spec schema
+  - [ ] SHA256 checksums are correct (verifiable with `sha256sum`)
+  - [ ] Symbol IDs in manifest match those in `.evrp` headers
 
   **QA Scenarios:**
 
   ```
-  Scenario: Build and run with test package directory
+  Scenario: Build manifest from pack-tint output
     Tool: Bash
-    Preconditions: tools/cosmetics-manifest/ exists, Task 8 format doc available
+    Preconditions: pack-tint works (Task 7), at least one .evrp file exists
     Steps:
-      1. cd tools/cosmetics-manifest && go build -o cosmetics-manifest
-      2. Create a temp directory with a synthetic .evrp file (write correct magic bytes + header using printf/dd)
-      3. Run: ./cosmetics-manifest --packages-dir /tmp/test-packages/ --version 1 --output /tmp/manifest.json
-      4. Validate /tmp/manifest.json with python3 -m json.tool
-      5. Verify manifest contains version:1, timestamp, and an entry for the test package's SymbolId
-    Expected Result: Valid manifest JSON with correct entries from test package
-    Failure Indicators: Build failure, runtime panic, invalid JSON, missing entries
-    Evidence: .sisyphus/evidence/task-9-manifest-generation.txt
-
-  Scenario: Invalid package file is rejected
-    Tool: Bash
-    Preconditions: cosmetics-manifest binary built
-    Steps:
-      1. Create a temp directory with a file that has wrong magic bytes (e.g., echo "XXXX" > bad.evrp)
-      2. Run: ./cosmetics-manifest --packages-dir /tmp/bad-packages/ --version 1 --output /tmp/manifest.json
-      3. Check exit code
-    Expected Result: Non-zero exit code, error message about invalid package header
-    Failure Indicators: Exit code 0 (silent success on bad input)
-    Evidence: .sisyphus/evidence/task-9-invalid-package-rejected.txt
+      1. Create temp dir: mkdir -p /tmp/cdn-test/packages
+      2. Pack a test tint: go run ./cmd/pack-tint --name "test_tint" ... --output /tmp/cdn-test/packages/test.evrp
+      3. Run: go run ./cmd/build-manifest --input-dir /tmp/cdn-test/packages --game-version "34.4.631399.1" --output /tmp/cdn-test/manifest.json
+      4. Verify manifest.json is valid JSON: cat /tmp/cdn-test/manifest.json | jq .
+      5. Verify manifest has "version": 1
+      6. Verify manifest has "packages" object with at least one entry
+      7. Verify SHA256 in manifest matches: sha256sum /tmp/cdn-test/packages/test.evrp
+    Expected Result: Valid manifest JSON with correct checksums and package entries
+    Failure Indicators: Invalid JSON, wrong checksums, missing fields
+    Evidence: .sisyphus/evidence/task-9-build-manifest.txt
   ```
 
-  **Commit**: YES
-  - Message: `feat(tools): add cosmetics-manifest Go CLI for generating CDN manifests`
-  - Files: `tools/cosmetics-manifest/main.go`, `tools/cosmetics-manifest/go.mod`
-  - Pre-commit: `cd tools/cosmetics-manifest && go build`
+  **Commit**: YES (in nevr-cdn-tools repo)
+  - Message: `feat(build-manifest): generate CDN manifest from .evrp packages`
+  - Files: `cmd/build-manifest/main.go`, `internal/evrp/evrp.go` (updated with read helpers)
+  - Pre-commit: `go build ./...`
 
 ---
 
-- [ ] 10. **Go CLI tool — cosmetics-package builder**
+- [ ] 10. **Pack real custom tint + upload to CDN**
 
   **What to do**:
-  - Create `tools/cosmetics-package/main.go` with `go.mod`
-  - CLI takes raw asset files (mesh data + DDS texture) and wraps them into the `.evrp` binary package format
-  - Usage: `cosmetics-package --name "custom_tint_001" --slot tint --mesh ./mesh.bin --texture ./texture.dds --output custom_tint_001.evrp`
-  - Writes the package binary format defined in Task 8:
-    - Magic bytes (`EVRP`), format version, SymbolId (computed from --name via CSymbol64_Hash), slot type
-    - Mesh data section with vertex/index buffers
-    - Texture data section with DDS data
-  - Include the Go CSymbol64_Hash function (copy from `extras/reference/core_hash.go`) for name → SymbolId
-  - Validate inputs exist and are non-empty before writing
-  - Support `--mesh-only` and `--texture-only` flags for packages with partial assets
-  - Print the computed SymbolId (hex) to stdout for verification
+  - Use `pack-tint` (Task 7) to create a real custom tint `.evrp` file with distinctive colors
+  - Choose colors that are obviously different from any game tint (e.g., bright neon green body, purple accents)
+  - Use `build-manifest` (Task 9) to generate the manifest
+  - Upload to CDN manually:
+    - Upload `.evrp` file to `https://cdn.echo.taxi/v1/packages/<symbolid_hex>.evrp`
+    - Upload `manifest.json` to `https://cdn.echo.taxi/v1/manifest.json`
+    - Use wrangler CLI (`wrangler r2 object put`) or R2 dashboard
+  - Verify uploads via curl:
+    - `curl -I https://cdn.echo.taxi/v1/manifest.json` → 200 OK
+    - `curl -I https://cdn.echo.taxi/v1/packages/<symbolid_hex>.evrp` → 200 OK
+  - Document the exact SymbolId and file paths used
 
   **Must NOT do**:
-  - Do not convert or process asset data — raw passthrough into the package container
-  - Do not compress — assets are already GPU-ready, compression would require decompression on load
-  - Do not upload to R2 — this tool only creates local `.evrp` files
-  - Do not add dependency on external Go libraries beyond standard library
-  - Do not validate the CONTENT of mesh/texture data — only that files exist and are non-empty
+  - Do not automate uploads — manual for PoC
+  - Do not create multiple tints — one is enough
+  - Do not set up CDN routing rules or caching policies
 
   **Recommended Agent Profile**:
-  - **Category**: `unspecified-high`
-    - Reason: Go CLI with binary file writing, must produce format-compliant output
+  - **Category**: `quick`
+    - Reason: Run existing tools, manual upload, curl verification
   - **Skills**: []
 
   **Parallelization**:
-  - **Can Run In Parallel**: YES (with Task 9, once Task 8 is done)
-  - **Parallel Group**: Wave 3 (after Tasks 7 and 8 complete)
-  - **Blocks**: Task 13
-  - **Blocked By**: Task 7 (hash consistency), Task 8 (format design)
+  - **Can Run In Parallel**: NO (sequential: pack → manifest → upload)
+  - **Parallel Group**: Wave 2
+  - **Blocks**: Task 11 (CDN must have content before fetch module is tested)
+  - **Blocked By**: Tasks 7 (pack-tint), 9 (build-manifest)
 
   **References**:
 
   **Pattern References**:
-  - `extras/reference/core_hash.go` — Go CSymbol64_Hash implementation. Copy for name → SymbolId computation.
-  - `docs/cosmetics-cdn-format.md` — (Task 8 output) Package binary format specification. This tool PRODUCES the format — must match byte-for-byte.
-
-  **API/Type References**:
-  - `docs/cosmetics-cdn-format.md:Package Binary Format` — Byte-level layout: magic, version, SymbolId, slot_type, mesh section header, texture section header. This is the EXACT output format.
-
-  **External References**:
-  - Go `encoding/binary` package — for writing little-endian binary data
-  - DDS file format — texture input is expected to be valid DDS (this tool does NOT validate DDS structure, just wraps it)
+  - Evidence from Task 3: `.sisyphus/evidence/task-3-tint-data-source.txt` — Color values to use
+  - `docs/cosmetics-cdn-format.md` — CDN URL scheme for upload paths
 
   **WHY Each Reference Matters**:
-  - `extras/reference/core_hash.go`: SymbolId must be computed identically to C++ side. Use the same function.
-  - `cosmetics-cdn-format.md`: This tool is a FORMAT PRODUCER — the C++ game hook (Task 12) will read what this tool writes. Any byte-level deviation breaks the pipeline.
+  - Task 3 evidence: Defines the actual color data we're using for the PoC tint
+  - Format spec: Defines exact URL paths for upload destinations
 
   **Acceptance Criteria**:
-  - [ ] `tools/cosmetics-package/main.go` and `go.mod` exist
-  - [ ] `go build` succeeds with no errors
-  - [ ] Running with `--help` shows usage with --name, --slot, --mesh, --texture, --output flags
-  - [ ] Prints computed SymbolId hex to stdout
-  - [ ] Produced `.evrp` file starts with correct magic bytes
+  - [ ] One `.evrp` file exists locally
+  - [ ] `manifest.json` exists locally and references the .evrp file
+  - [ ] `curl -s https://cdn.echo.taxi/v1/manifest.json | jq .` returns valid JSON
+  - [ ] `curl -s -o /tmp/cdn-test.evrp https://cdn.echo.taxi/v1/packages/<id>.evrp && hexdump -C -n 4 /tmp/cdn-test.evrp` shows `EVRP`
+  - [ ] Downloaded file matches local file: `diff <local> /tmp/cdn-test.evrp`
 
   **QA Scenarios:**
 
   ```
-  Scenario: Build and package a test asset
+  Scenario: CDN content is accessible and correct
     Tool: Bash
-    Preconditions: tools/cosmetics-package/ exists, Task 8 format doc available
+    Preconditions: Files uploaded to R2
     Steps:
-      1. cd tools/cosmetics-package && go build -o cosmetics-package
-      2. Create synthetic test data: dd if=/dev/urandom of=/tmp/test_mesh.bin bs=1024 count=4
-      3. Create synthetic texture: dd if=/dev/urandom of=/tmp/test_texture.dds bs=1024 count=8
-      4. Run: ./cosmetics-package --name "test_custom_tint" --slot tint --mesh /tmp/test_mesh.bin --texture /tmp/test_texture.dds --output /tmp/test_custom_tint.evrp
-      5. Verify output file exists and starts with magic bytes: xxd -l 4 /tmp/test_custom_tint.evrp | grep -q "4556 5250" (EVRP)
-      6. Check stdout contains the hex SymbolId for "test_custom_tint"
-    Expected Result: .evrp file created with correct magic bytes, SymbolId printed to stdout
-    Failure Indicators: Build failure, missing output file, wrong magic bytes, no SymbolId output
-    Evidence: .sisyphus/evidence/task-10-package-creation.txt
-
-  Scenario: Missing input file is rejected
-    Tool: Bash
-    Preconditions: cosmetics-package binary built
-    Steps:
-      1. Run: ./cosmetics-package --name "test" --slot tint --mesh /tmp/nonexistent.bin --texture /tmp/nonexistent.dds --output /tmp/out.evrp
-      2. Check exit code
-    Expected Result: Non-zero exit code, error message about missing input files
-    Failure Indicators: Exit code 0 (silently creating empty/corrupt package)
-    Evidence: .sisyphus/evidence/task-10-missing-input-rejected.txt
+      1. curl -s -w "%{http_code}" https://cdn.echo.taxi/v1/manifest.json -o /tmp/cdn-manifest.json
+      2. Verify HTTP 200
+      3. Verify manifest is valid JSON: jq . /tmp/cdn-manifest.json
+      4. Extract first package URL from manifest: jq -r '.packages | to_entries[0].value.url' /tmp/cdn-manifest.json
+      5. Download package: curl -s -o /tmp/cdn-package.evrp https://cdn.echo.taxi/v1/<url_from_step_4>
+      6. Verify magic bytes: hexdump -C -n 4 /tmp/cdn-package.evrp | grep EVRP
+      7. Verify SHA256 matches manifest: sha256sum /tmp/cdn-package.evrp vs jq '.packages | to_entries[0].value.sha256' /tmp/cdn-manifest.json
+    Expected Result: Manifest downloadable, package downloadable, checksums match
+    Failure Indicators: HTTP errors, invalid JSON, checksum mismatch, wrong magic bytes
+    Evidence: .sisyphus/evidence/task-10-cdn-verification.txt
   ```
 
-  **Commit**: YES
-  - Message: `feat(tools): add cosmetics-package Go CLI for building .evrp asset packages`
-  - Files: `tools/cosmetics-package/main.go`, `tools/cosmetics-package/go.mod`
-  - Pre-commit: `cd tools/cosmetics-package && go build`
+  **Commit**: NO (CDN upload, no code changes)
 
 ---
 
 - [ ] 11. **AssetCDN module — manifest fetch + package download + local cache**
 
   **What to do**:
-  - Create `src/gamepatches/asset_cdn.h` and `src/gamepatches/asset_cdn.cpp`
-  - Implement the `AssetCDN` class with these responsibilities:
-    1. **Manifest fetch**: HTTP GET `https://cdn.echo.taxi/v{VERSION}/manifest.json` using libcurl
-       - Parse JSON response using jsoncpp
-       - Store parsed manifest in memory (map of SymbolId → package info per slot type)
-    2. **Package download**: For each manifest entry, check local cache first:
-       - Cache directory: `%LOCALAPPDATA%\EchoVR\cosmetics\v{VERSION}\`
-       - If cached file exists with correct size, skip download
-       - If not cached, HTTP GET the package URL and save to cache directory
-    3. **Local cache management**:
-       - Create cache directory structure on first run
-       - Store packages as `{symbolid_hex}.evrp` in versioned subdirectory
-       - NO cache eviction — grows unbounded (v1 design decision)
-    4. **Asset lookup API**:
-       - `bool HasAsset(SymbolId id, uint8_t slotType)` — check if we have a cached package for this SymbolId+slot
-       - `const AssetData* GetAsset(SymbolId id, uint8_t slotType)` — return pointer to loaded asset data (memory-mapped or loaded from cache)
-       - `bool IsReady()` — whether manifest has been fetched and initial downloads complete
-    5. **Threading**:
-       - ALL HTTP operations (manifest fetch + package downloads) on a background thread (std::thread)
-       - Main game thread only calls HasAsset/GetAsset (lock-free reads after initial load)
-       - Use std::atomic<bool> for ready flag
-       - Mutex only during initial asset map population, not during reads
-    6. **Initialization**:
-       - `static void Initialize(const std::string& cdnUrl)` — starts background thread
-       - Called from patches.cpp during DLL initialization
-       - Reads CDN URL from config (already parsed at patches.cpp:760-767)
-    7. **Graceful degradation**:
-       - If CDN unreachable: log warning, set ready=true with empty asset map
-       - If individual package download fails: log warning, skip that asset, continue with others
-       - Game MUST function normally when no custom assets are available
-  - Integrate with the existing build system — add source files to `src/gamepatches/CMakeLists.txt`
-  - Use the `Log()` macro from `common/logging.h` for all logging
+  - Implement the core AssetCDN module in `asset_cdn.h` / `asset_cdn.cpp` (replacing Task 5 stubs):
+  - **Manifest fetch**:
+    - On `Initialize()`, spawn a background thread
+    - Background thread uses libcurl to GET `https://cdn.echo.taxi/v1/manifest.json`
+    - Parse JSON response with jsoncpp
+    - Store parsed manifest in thread-safe data structure
+  - **Package download**:
+    - For each package in manifest, check if cached file exists at `%LOCALAPPDATA%\\EchoVR\\cosmetics\\packages\\<symbolid_hex>.evrp`
+    - If not cached: download via curl to `.tmp` file, rename to final path on completion (atomic write)
+    - If cached: verify file size matches manifest (skip SHA256 for PoC — too slow)
+  - **Local cache**:
+    - Create cache directory recursively if it doesn't exist: `%LOCALAPPDATA%\\EchoVR\\cosmetics\\packages\\`
+    - Cache path is HARDCODED (no config system)
+  - **State management**:
+    - Track download state: `NOT_STARTED`, `DOWNLOADING`, `READY`, `FAILED`
+    - Provide `IsReady()` — returns true when manifest parsed and all packages cached
+    - Provide `GetTintData(SymbolId id)` — returns pointer to 80-byte tint color data from cached `.evrp` file, or nullptr if not found
+  - **Error handling**:
+    - If manifest fetch fails: log warning, set state to FAILED, game continues normally
+    - If package download fails: log warning per package, skip that package
+    - Never crash, never block game thread
+  - **Async pattern**: Use `std::thread` + `curl_easy_perform` (not curl_multi). One thread for all downloads sequentially. Mutex for shared state.
 
   **Must NOT do**:
-  - Do not block the game thread — ALL HTTP on background thread, no exceptions
-  - Do not implement retry logic — single attempt per download (v1 guardrail)
-  - Do not implement cache eviction — cache grows unbounded (v1 guardrail)
-  - Do not validate package data beyond header magic bytes — trust CDN content
-  - Do not implement hot-reload — assets loaded at startup only, require restart
-  - Do not use raw WinHTTP/WinInet — use libcurl (already a vcpkg dependency)
-  - Do not parse package asset data — just load raw bytes, the injection hook (Task 12) handles interpretation
+  - Do not block game thread — all HTTP on background thread
+  - Do not implement retry logic — single attempt per URL
+  - Do not implement cache eviction — cache grows forever
+  - Do not validate SHA256 — trust the download (PoC only)
+  - Do not implement hot-reload — download once at startup
+  - Do not add config for CDN URL or cache path — hardcoded
 
   **Recommended Agent Profile**:
   - **Category**: `deep`
-    - Reason: Multi-threaded C++ module with HTTP, file I/O, JSON parsing, cache management, and thread-safety considerations. Needs careful design.
+    - Reason: Multi-threaded C++ with curl, jsoncpp, file I/O, error handling, thread safety
   - **Skills**: []
 
   **Parallelization**:
-  - **Can Run In Parallel**: YES (with Tasks 9, 10, once Task 8 is done)
-  - **Parallel Group**: Wave 3 (after Tasks 5 and 8 complete)
-  - **Blocks**: Tasks 12, 13
-  - **Blocked By**: Task 5 (build system prep — jsoncpp linking), Task 8 (format design — manifest schema + package format)
+  - **Can Run In Parallel**: YES (with Tasks 8, 9)
+  - **Parallel Group**: Wave 2
+  - **Blocks**: Tasks 12 (tint injection needs cached data), 13 (startup needs module)
+  - **Blocked By**: Tasks 1 (format spec for parsing), 5 (curl/jsoncpp linked), 10 (CDN has content to download)
 
   **References**:
 
   **Pattern References**:
-  - `src/gamepatches/patches.cpp:760-767` — Existing `asset_cdn_url` config reading (commented out). Uncomment and use this as the CDN URL source. Shows the config parsing pattern.
-  - `src/gamepatches/patches.cpp:1430-1433` — Existing `AssetCDN::Initialize()` call (commented out). This is WHERE initialization should be called from.
-  - `src/common/logging.h` — Use `Log(level, format, ...)` for all output. Follow existing logging patterns.
-  - `src/common/hooking.h` — NOT needed for this module (no hooks), but shows the project's C++ style.
+  - `src/gamepatches/asset_cdn.h` + `asset_cdn.cpp` — Stub files from Task 5. Replace stubs with real implementation
+  - `src/common/logging.h` — `Log(level, format, ...)` for all output. Use `LOG_INFO` for progress, `LOG_WARNING` for errors
+  - `src/gamepatches/patches.cpp` — Existing thread patterns (search for `std::thread` or `CreateThread`). Follow same threading approach
+  - `docs/cosmetics-cdn-format.md` — Manifest JSON schema and `.evrp` binary layout for parsing
 
   **API/Type References**:
-  - `docs/cosmetics-cdn-format.md` — (Task 8 output) Manifest JSON schema and package binary format. This module parses the manifest and reads package headers.
-  - `src/common/echovr.h:SymbolId` — INT64 typedef. All SymbolId parameters and map keys use this type.
+  - `src/common/echovr.h:SymbolId` — INT64 type used as map key for `GetTintData()`
+  - `vcpkg.json` — curl and jsoncpp version/feature constraints
 
   **External References**:
-  - libcurl — `curl_easy_init`, `curl_easy_setopt`, `curl_easy_perform`. Already linked via vcpkg. Use CURLOPT_WRITEFUNCTION for response data.
-  - jsoncpp — `Json::Value`, `Json::Reader`. Must be linked in CMakeLists.txt (Task 5 added this).
-  - Windows API — `SHGetKnownFolderPath(FOLDERID_LocalAppData)` or `getenv("LOCALAPPDATA")` for cache directory. `CreateDirectoryW` for directory creation.
+  - curl easy API: `curl_easy_init()`, `curl_easy_setopt()`, `curl_easy_perform()`, `curl_easy_cleanup()`
+  - jsoncpp: `Json::Reader`, `Json::Value`, `reader.parse(string, root)`
+  - Windows API: `SHGetFolderPathA(CSIDL_LOCAL_APPDATA)` or `std::getenv("LOCALAPPDATA")` for cache path
+  - Windows API: `CreateDirectoryA()` or `std::filesystem::create_directories()` for cache dir creation
 
   **WHY Each Reference Matters**:
-  - `patches.cpp:760-767`: Don't reinvent config reading — the pattern is already there, just uncommented.
-  - `patches.cpp:1430-1433`: The integration point is pre-planned — this exact line is where Initialize() gets called.
-  - `cosmetics-cdn-format.md`: This module CONSUMES both the manifest (JSON parse) and packages (binary read). Format must match exactly.
-  - libcurl/jsoncpp: These are ALREADY in vcpkg.json — don't add new dependencies.
+  - `asset_cdn.cpp` stubs: Starting point — expand, don't replace from scratch
+  - `logging.h`: All output MUST use the logging framework, not printf/cout
+  - `patches.cpp`: Threading patterns must match existing codebase conventions
+  - Format spec: Parsing code must exactly match the documented JSON schema and binary layout
 
   **Acceptance Criteria**:
-  - [ ] `src/gamepatches/asset_cdn.h` and `asset_cdn.cpp` exist
-  - [ ] `make build` succeeds with these new files included
-  - [ ] AssetCDN class has Initialize(), HasAsset(), GetAsset(), IsReady() methods
-  - [ ] All HTTP operations are on background thread (std::thread, not main thread)
-  - [ ] Uses Log() for all output, not printf/cout
+  - [ ] `make build` succeeds
+  - [ ] `Initialize()` spawns background thread (grep for `std::thread`)
+  - [ ] Background thread fetches manifest via curl (grep for `curl_easy`)
+  - [ ] Manifest JSON parsed via jsoncpp
+  - [ ] Packages downloaded to `%LOCALAPPDATA%\\EchoVR\\cosmetics\\packages\\`
+  - [ ] Atomic write: download to `.tmp`, rename to final
+  - [ ] Cache directory created recursively if missing
+  - [ ] `GetTintData(SymbolId)` returns pointer to color data from `.evrp` file
+  - [ ] All errors logged, never crash, never block game thread
 
   **QA Scenarios:**
 
   ```
-  Scenario: Module compiles and links correctly
-    Tool: Bash
-    Preconditions: Task 5 build system prep complete, source files written
+  Scenario: Module compiles and API is complete
+    Tool: Bash (isBackground: true)
+    Preconditions: Tasks 5, 10 complete
     Steps:
-      1. Run: make build (or cmake --build)
-      2. Check build output for any errors or warnings in asset_cdn.cpp
-      3. Verify the output DLL (gamepatches.dll / dbgcore.dll) is produced
-    Expected Result: Clean build, DLL produced, no linker errors for curl/jsoncpp symbols
-    Failure Indicators: Linker errors (unresolved curl_* or Json::*), compilation errors
-    Evidence: .sisyphus/evidence/task-11-build-success.txt
+      1. make build 2>&1 | tee /tmp/build-cdn.txt
+      2. Verify exit code 0
+      3. Grep asset_cdn.h for: Initialize, Shutdown, IsReady, GetTintData declarations
+      4. Grep asset_cdn.cpp for: curl_easy, json, std::thread, CreateDirectory or create_directories
+      5. Grep asset_cdn.cpp for: LOG_WARNING or LOG_INFO (logging present)
+      6. Grep asset_cdn.cpp for: .tmp (atomic write pattern)
+    Expected Result: Clean build, all API functions present, curl/json/thread usage, logging, atomic writes
+    Failure Indicators: Missing API functions, no curl usage, no thread, no logging
+    Evidence: .sisyphus/evidence/task-11-assetcdn-build.txt
 
-  Scenario: Background thread design verification (code review)
+  Scenario: No game-thread blocking
     Tool: Bash
-    Preconditions: asset_cdn.cpp exists
+    Preconditions: asset_cdn.cpp written
     Steps:
-      1. grep -n "std::thread" src/gamepatches/asset_cdn.cpp — verify background thread creation
-      2. grep -n "curl_easy_perform" src/gamepatches/asset_cdn.cpp — verify all curl calls exist
-      3. Verify curl_easy_perform is NOT called from Initialize() directly but from thread function
-      4. grep -n "std::atomic" src/gamepatches/asset_cdn.cpp — verify ready flag is atomic
-      5. Verify HasAsset/GetAsset do NOT call curl or do file I/O
-    Expected Result: All HTTP in thread function, atomic ready flag, HasAsset/GetAsset are pure lookups
-    Failure Indicators: curl_easy_perform in Initialize() body, non-atomic ready flag, I/O in getter functions
-    Evidence: .sisyphus/evidence/task-11-threading-review.txt
+      1. Search for curl_easy_perform in asset_cdn.cpp
+      2. Verify ALL curl_easy_perform calls are inside the background thread function (not in Initialize or GetTintData)
+      3. Verify Initialize() returns immediately (just spawns thread)
+      4. Verify GetTintData() only reads from local cache (no network calls)
+    Expected Result: All network I/O is in the background thread function
+    Failure Indicators: curl_easy_perform in Initialize or GetTintData, blocking calls on game thread
+    Evidence: .sisyphus/evidence/task-11-no-blocking.txt
   ```
 
   **Commit**: YES
-  - Message: `feat(gamepatches): add AssetCDN module — manifest fetch, package download, local cache`
-  - Files: `src/gamepatches/asset_cdn.h`, `src/gamepatches/asset_cdn.cpp`, `src/gamepatches/CMakeLists.txt`
+  - Message: `feat(gamepatches): implement AssetCDN manifest fetch and package cache`
+  - Files: `src/gamepatches/asset_cdn.h`, `src/gamepatches/asset_cdn.cpp`
   - Pre-commit: `make build`
 
 ---
 
-### Wave 4 — Integration + Documentation (after Wave 3)
+### Wave 3 — Integration (after Waves 1-2)
 
-- [ ] 12. **Resource injection hook — generalize PoC to all 20 cosmetic slots with cached CDN assets**
+- [ ] 12. **Tint injection from cached .evrp files**
 
   **What to do**:
-  - Extend the proof-of-concept hook from Task 6 (`cosmetics_hook.h` / `cosmetics_hook.cpp`) to handle ALL 20 cosmetic slot types
-  - Build a **slot dispatch table** mapping each slot index (0–20) to its corresponding `LoadoutSlot` field:
-    - Map the 21 fields: selectionmode, banner, booster, bracer, chassis, decal, decal_body, emissive, emote, secondemote, goal_fx, medal, pattern, pattern_body, pip, tag, tint, tint_alignment_a, tint_alignment_b, tint_body, title
-    - Each entry maps slot index → SymbolId field offset within LoadoutSlot struct
-  - Integrate with `AssetCDN` module (Task 11) to check for cached custom assets:
-    1. When the hooked function `FUN_1404f37a0` is called with a loadout_id and slot:
-       - Read the SymbolId from the player's LoadoutSlot for that slot index
-       - Call `AssetCDN::HasAsset(symbolId, slotType)` to check if a custom asset exists
-       - If YES: call `AssetCDN::GetAsset(symbolId, slotType)` and construct a custom CResourceID pointing to the cached asset data
-       - If NO: fall through to the original `FUN_1404f37a0` for vanilla behavior
-    2. CResourceID construction: Based on Task 2's RE findings on how CResourceID maps to actual asset data. The custom CResourceID must be accepted by the game's downstream resource loading pipeline.
-  - **Graceful fallthrough is CRITICAL**: If AssetCDN is not ready (IsReady() == false), or if the SymbolId is not in the custom asset map, the hook MUST call the original function. Zero chance of crash from missing custom assets.
-  - Add safety checks:
-    - Validate slot index is within bounds (0–20)
-    - Null-check all pointers before dereferencing
-    - Log all custom asset injections at DEBUG level
-    - Log all fallthroughs at TRACE level
-  - Register the hook in the DLL initialization sequence (the actual registration is wired up in Task 13)
+  - Evolve the hardcoded PoC hook (Task 8) to read tint data from the AssetCDN cache (Task 11)
+  - Replace the hardcoded color values with a call to `AssetCDN::GetTintData(symbolId)`
+  - Hook flow:
+    1. Original function resolves loadout data
+    2. Post-hook reads the resolved tint SymbolId
+    3. Calls `AssetCDN::GetTintData(symbolId)` — returns 80-byte color data or nullptr
+    4. If found: memcpy the 80 bytes over the resolved tint color region in LoadoutData
+    5. If not found (nullptr): do nothing, let game use its own tint
+  - Remove the `#define CDN_TINT_POC_ENABLED` gate — this is now the real implementation
+  - Add guard: only apply override if `AssetCDN::IsReady()` returns true
+  - Handle the tint slot specifically — check slot_type before applying
+  - Log when a CDN tint override is applied vs when falling back to game tint
 
   **Must NOT do**:
-  - Do not perform ANY HTTP or file I/O in the hook — it runs on the game thread. Only read from AssetCDN's in-memory cache.
-  - Do not modify the player's LoadoutSlot data — read-only access to SymbolIds
-  - Do not handle audio, animation, or shader assets — mesh/texture cosmetics ONLY (v1 guardrail)
-  - Do not implement hot-reload — hook reads whatever was cached at startup
-  - Do not hardcode SymbolIds (that was Task 6's PoC) — all IDs come from the player's actual loadout data
-  - Do not add new hooking framework code — use existing `PatchDetour()` from `common/hooking.h`
+  - Do not handle mesh/texture/geometry slots — tints only
+  - Do not block if CDN isn't ready — fall through to game tint
+  - Do not modify AssetCDN module — use its public API only
+  - Do not handle multiple slots — tint slot only for PoC
 
   **Recommended Agent Profile**:
   - **Category**: `deep`
-    - Reason: This is the core hook logic — must handle 20+ code paths, integrate with two modules (hooking framework + AssetCDN), requires precise memory layout knowledge from RE tasks, and must be crash-proof. Needs deep reasoning about game thread safety.
+    - Reason: Precise memory manipulation, hook modification, integration between modules
   - **Skills**: []
 
   **Parallelization**:
-  - **Can Run In Parallel**: NO (depends on PoC from Task 6 and AssetCDN from Task 11)
-  - **Parallel Group**: Wave 4 (sequential after Wave 3)
-  - **Blocks**: Task 13 (initialization wiring)
-  - **Blocked By**: Task 6 (PoC hook — provides the base hook code to generalize), Task 11 (AssetCDN module — provides HasAsset/GetAsset API)
+  - **Can Run In Parallel**: NO
+  - **Parallel Group**: Wave 3 (with Task 13, but 13 also depends on 12)
+  - **Blocks**: Task 13 (startup integration)
+  - **Blocked By**: Tasks 4 (symbol_hash), 8 (PoC hook), 11 (AssetCDN module)
 
   **References**:
 
   **Pattern References**:
-  - `src/gamepatches/cosmetics_hook.h` + `cosmetics_hook.cpp` — (Task 6 output) The PoC hook for a single hardcoded slot. This task generalizes it to all slots.
-  - `src/gamepatches/patches.cpp` — Contains all existing `PatchDetour()` calls. Follow the same registration pattern.
-  - `src/common/hooking.h` — `PatchDetour()` API for Detours/MinHook. Hook registration follows: declare original function pointer, write hook function, call PatchDetour.
+  - `src/gamepatches/asset_cdn.cpp` — PoC hook code from Task 8. Evolve this, don't rewrite from scratch
+  - `src/gamepatches/asset_cdn.h` — AssetCDN public API: `IsReady()`, `GetTintData(SymbolId)`
+  - Evidence from Task 2: `.sisyphus/evidence/task-2-hook-decompilation.md` — Memory offsets for tint color data
 
   **API/Type References**:
-  - `src/common/echovr.h:LoadoutSlot` — Struct with 21 SymbolId fields. Map each field to its slot index for the dispatch table.
-  - `src/common/echovr.h:SymbolId` — INT64 typedef. All cosmetic IDs are this type.
-  - `src/gamepatches/asset_cdn.h` — (Task 11 output) `AssetCDN::HasAsset(SymbolId, uint8_t)`, `AssetCDN::GetAsset(SymbolId, uint8_t)`, `AssetCDN::IsReady()`.
-  - `docs/ghidra/FUN_1404f37a0_analysis.md` — (Task 2 output) RE analysis of the hook target. Documents function signature, parameters, return value, and CResourceID construction.
-  - `docs/ghidra/ECHOVR_STRUCT_MEMORY_MAP.md` — Complete LoadoutData and EntrantData struct layouts with exact offsets.
-
-  **External References**:
-  - None — all dependencies are internal.
+  - `src/common/echovr.h:SymbolId` — INT64 used to query GetTintData
+  - `docs/ghidra/ECHOVR_STRUCT_MEMORY_MAP.md` — LoadoutData offsets
+  - `docs/cosmetics-cdn-format.md` — asset_data is 80 bytes for tints (5 colors × 16 bytes)
 
   **WHY Each Reference Matters**:
-  - `cosmetics_hook.*` (Task 6): This IS the code you're extending. The PoC has the hook function signature and original function pointer — generalize, don't rewrite.
-  - `echovr.h:LoadoutSlot`: You need the exact field order to build the slot dispatch table. Field offsets determine how to index into the struct.
-  - `asset_cdn.h`: The HasAsset/GetAsset API is your ONLY interface to cached assets. Do not reach into AssetCDN internals.
-  - `FUN_1404f37a0_analysis.md`: Without this, you don't know what the hook target's parameters mean or what to return. Critical for correctness.
-  - `ECHOVR_STRUCT_MEMORY_MAP.md`: The loadout data comes from runtime memory at specific offsets. Wrong offsets = crash.
+  - `asset_cdn.cpp` (Task 8): The PoC hook structure is already correct — just swap hardcoded values for cache lookup
+  - `asset_cdn.h` API: GetTintData returns exactly what we need to memcpy
 
   **Acceptance Criteria**:
-  - [ ] `cosmetics_hook.cpp` handles all 21 LoadoutSlot fields via dispatch table
-  - [ ] `AssetCDN::HasAsset()` is called to check for custom assets before injection
-  - [ ] Falls through to original function when no custom asset exists or AssetCDN not ready
-  - [ ] No HTTP/file I/O in the hook function body
+  - [ ] PoC `#define CDN_TINT_POC_ENABLED` removed
+  - [ ] Hook calls `AssetCDN::GetTintData()` instead of using hardcoded colors
+  - [ ] Nullptr check: if CDN has no tint for this SymbolId, game tint is preserved
+  - [ ] IsReady() check: if CDN module not ready, skip all overrides
   - [ ] `make build` succeeds
-  - [ ] All 21 slot indices are mapped in the dispatch table
 
   **QA Scenarios:**
 
   ```
-  Scenario: Hook compiles and links with AssetCDN integration
-    Tool: Bash
-    Preconditions: Tasks 6 and 11 complete, source files written
+  Scenario: Cache-based injection compiles and is wired correctly
+    Tool: Bash (isBackground: true)
+    Preconditions: Tasks 8, 11 complete
     Steps:
-      1. Run: make build
-      2. Check build output for errors/warnings in cosmetics_hook.cpp
-      3. Verify output DLL is produced
-    Expected Result: Clean build, no linker errors referencing AssetCDN symbols
-    Failure Indicators: Unresolved symbols for AssetCDN::HasAsset/GetAsset, compilation errors
-    Evidence: .sisyphus/evidence/task-12-build-success.txt
-
-  Scenario: Dispatch table completeness verification (code review)
-    Tool: Bash
-    Preconditions: cosmetics_hook.cpp exists with dispatch table
-    Steps:
-      1. grep -c "selectionmode\|banner\|booster\|bracer\|chassis\|decal\|decal_body\|emissive\|emote\|secondemote\|goal_fx\|medal\|pattern\|pattern_body\|pip\|tag\|tint\|tint_alignment_a\|tint_alignment_b\|tint_body\|title" src/gamepatches/cosmetics_hook.cpp
-      2. Verify count >= 21 (all fields referenced)
-      3. grep -n "HasAsset\|GetAsset\|IsReady" src/gamepatches/cosmetics_hook.cpp — verify AssetCDN integration
-      4. grep -n "original" src/gamepatches/cosmetics_hook.cpp — verify fallthrough to original function exists
-    Expected Result: All 21 slot field names present, AssetCDN calls present, original function fallthrough present
-    Failure Indicators: Missing slot names, no AssetCDN integration, no fallthrough path
-    Evidence: .sisyphus/evidence/task-12-dispatch-review.txt
-
-  Scenario: No blocking I/O in hook path (code review)
-    Tool: Bash
-    Preconditions: cosmetics_hook.cpp exists
-    Steps:
-      1. grep -n "curl_\|fopen\|fread\|ReadFile\|CreateFile\|std::ifstream\|HTTP\|Download" src/gamepatches/cosmetics_hook.cpp
-      2. Verify zero matches (no I/O in hook code)
-    Expected Result: Zero matches — hook only reads from in-memory cache
-    Failure Indicators: Any file I/O or HTTP call found in the hook function
-    Evidence: .sisyphus/evidence/task-12-no-blocking-io.txt
+      1. make build 2>&1 | tee /tmp/build-inject.txt
+      2. Verify exit code 0
+      3. Grep asset_cdn.cpp for GetTintData — should be called in hook
+      4. Grep asset_cdn.cpp for IsReady — should be checked before override
+      5. Grep asset_cdn.cpp for nullptr — null check must exist
+      6. Verify CDN_TINT_POC_ENABLED is NOT in the codebase (removed)
+    Expected Result: Clean build, GetTintData used, IsReady checked, null-safe, PoC flag removed
+    Failure Indicators: PoC flag still present, no null check, no IsReady guard
+    Evidence: .sisyphus/evidence/task-12-injection-build.txt
   ```
 
-  **Commit**: YES
-  - Message: `feat(gamepatches): generalize cosmetics hook to all 20 slots with AssetCDN integration`
-  - Files: `src/gamepatches/cosmetics_hook.h`, `src/gamepatches/cosmetics_hook.cpp`
+  **Commit**: YES (combined with Task 13)
+  - Message: `feat(gamepatches): integrate tint injection with AssetCDN pipeline`
+  - Files: `src/gamepatches/asset_cdn.h`, `src/gamepatches/asset_cdn.cpp`
   - Pre-commit: `make build`
 
-- [ ] 13. **AssetCDN initialization — startup integration + cosmetics hook registration**
+---
+
+- [ ] 13. **Startup integration — wire AssetCDN::Initialize() into game startup**
 
   **What to do**:
-  - Modify `src/gamepatches/patches.cpp` to wire up the full CDN cosmetics pipeline at DLL startup:
-    1. **Uncomment `asset_cdn_url` config reading** (patches.cpp:760-767):
-       - This already reads the CDN URL from the game config file
-       - Verify the parsed URL is stored and accessible
-    2. **Uncomment `AssetCDN::Initialize()` call** (patches.cpp:1430-1433):
-       - Pass the parsed `asset_cdn_url` string to `AssetCDN::Initialize()`
-       - This triggers background manifest fetch and package download (Task 11)
-    3. **Register the cosmetics injection hook**:
-       - After AssetCDN::Initialize(), call the cosmetics hook registration function from Task 12
-       - Use `PatchDetour()` to hook `FUN_1404f37a0` at RVA `0x004F37A0`
-       - Add the hook RVA to `src/gamepatches/patch_addresses.h`
-    4. **Add game version guard**:
-       - Check game version is `34.4.631547.1` before enabling hooks
-       - If wrong version: log warning with detected vs expected version, skip hook registration
-       - Game must still function — just without custom cosmetics
-    5. **Conditional initialization**:
-       - Only call AssetCDN::Initialize() if `asset_cdn_url` is non-empty
-       - Only register cosmetics hook if AssetCDN initialized successfully
-       - Log at INFO level: "CDN cosmetics enabled: {url}" or "CDN cosmetics disabled: no URL configured"
-    6. **Include ordering**:
-       - Add `#include "asset_cdn.h"` and `#include "cosmetics_hook.h"` to patches.cpp
-       - Place includes with existing game patches includes
+  - Uncomment and update the `AssetCDN::Initialize()` call at `patches.cpp:1430-1433`
+  - Uncomment and update the `asset_cdn_url` config reading at `patches.cpp:760-767` (or remove if we're hardcoding the URL)
+  - Ensure `#include "asset_cdn.h"` is at the top of patches.cpp
+  - Call `AssetCDN::Initialize()` at the right point in startup — after config is loaded, before game enters main loop
+  - Call `AssetCDN::Shutdown()` at the appropriate shutdown point (thread join, curl cleanup)
+  - Add game version guard:
+    - Read game version from known location (or compare against hardcoded expected version)
+    - If game version doesn't match, log warning and skip CDN initialization
+    - Document the exact game version this targets
+  - Integration test: build the full DLL, verify it would initialize AssetCDN at startup
 
   **Must NOT do**:
-  - Do not modify AssetCDN module code — only wire it up
-  - Do not modify cosmetics hook code — only register it
-  - Do not add new config keys — use the existing `asset_cdn_url`
-  - Do not add retry/reconnect logic — single initialization attempt
-  - Do not block DLL startup on CDN fetch — AssetCDN::Initialize() is async (launches background thread)
-  - Do not change existing hook registrations — add new ones alongside
+  - Do not add config system — CDN URL is hardcoded in asset_cdn.cpp
+  - Do not add game version auto-detection — hardcoded version check
+  - Do not add UI or user-visible status
 
   **Recommended Agent Profile**:
   - **Category**: `unspecified-high`
-    - Reason: Modifying patches.cpp — the central integration point. Requires understanding of the existing initialization sequence, config parsing, and hook registration patterns. Medium complexity but high impact if wrong.
+    - Reason: Integration task touching existing code (patches.cpp), needs careful placement
   - **Skills**: []
 
   **Parallelization**:
-  - **Can Run In Parallel**: NO (depends on Tasks 9, 10, 11, 12 all being complete)
-  - **Parallel Group**: Wave 4 (sequential — last implementation task before Final Verification)
-  - **Blocks**: F1, F2, F3, F4 (all final verification tasks)
-  - **Blocked By**: Task 9 (Go manifest CLI — must exist for end-to-end), Task 10 (Go package CLI — must exist for end-to-end), Task 11 (AssetCDN module — provides Initialize()), Task 12 (cosmetics hook — provides hook registration function)
+  - **Can Run In Parallel**: NO
+  - **Parallel Group**: Wave 3 (after Task 12)
+  - **Blocks**: F1-F4 (final verification)
+  - **Blocked By**: Tasks 11 (AssetCDN module), 12 (tint injection)
 
   **References**:
 
   **Pattern References**:
-  - `src/gamepatches/patches.cpp:760-767` — Existing `asset_cdn_url` config reading (commented out). UNCOMMENT THIS. Shows exactly how config values are parsed.
-  - `src/gamepatches/patches.cpp:1430-1433` — Existing `AssetCDN::Initialize()` call (commented out). UNCOMMENT THIS. Shows exactly where in the init sequence CDN init was intended.
-  - `src/gamepatches/patches.cpp` (full file) — Contains all existing `PatchDetour()` hook registrations. Follow the same pattern for the cosmetics hook. Note the initialization order.
-  - `src/gamepatches/patch_addresses.h` — All existing RVA definitions. Add `FUN_1404f37a0` RVA here following the same naming convention.
+  - `src/gamepatches/patches.cpp:1430-1433` — Commented `AssetCDN::Initialize()` call. Uncomment and update
+  - `src/gamepatches/patches.cpp:760-767` — Commented `asset_cdn_url` config. Decide: uncomment or remove
+  - `src/gamepatches/patches.cpp` — Search for other `::Initialize()` calls to see the startup order pattern
+  - `src/gamepatches/patches.cpp` — Search for shutdown/cleanup patterns
 
   **API/Type References**:
-  - `src/gamepatches/asset_cdn.h` — (Task 11 output) `AssetCDN::Initialize(const std::string& cdnUrl)`. The function to call.
-  - `src/gamepatches/cosmetics_hook.h` — (Task 12 output) Hook registration function. Contains the `PatchDetour()` call for `FUN_1404f37a0`.
-  - `src/common/hooking.h` — `PatchDetour()` API. Used by the cosmetics hook.
-
-  **External References**:
-  - None — all integration points are internal.
+  - `src/gamepatches/asset_cdn.h` — Public API: `Initialize()`, `Shutdown()`
 
   **WHY Each Reference Matters**:
-  - `patches.cpp:760-767`: This is the EXACT code to uncomment. Don't reinvent config reading.
-  - `patches.cpp:1430-1433`: This is the EXACT insertion point. The prior developers planned for this.
-  - `patches.cpp` (full): You need to understand the init sequence to place new registrations correctly. Wrong ordering = crash or race conditions.
-  - `patch_addresses.h`: New RVA must follow the existing naming pattern. Missing entry = hook can't find target address.
+  - `patches.cpp:1430-1433`: This is the EXACT integration point — prior developer already chose where Initialize goes
+  - Other `::Initialize()` calls: Shows the startup ordering convention — our init must fit in the sequence
+  - Shutdown patterns: Must clean up curl and join background thread
 
   **Acceptance Criteria**:
-  - [ ] `patches.cpp:760-767` is uncommented — `asset_cdn_url` config reading is active
-  - [ ] `patches.cpp:1430-1433` is uncommented — `AssetCDN::Initialize()` call is active
-  - [ ] Cosmetics hook registered via `PatchDetour()` after AssetCDN init
-  - [ ] `FUN_1404f37a0` RVA added to `patch_addresses.h`
-  - [ ] Game version check guards hook registration (version `34.4.631547.1`)
-  - [ ] Conditional init: CDN only enabled if `asset_cdn_url` is non-empty
-  - [ ] `make build` succeeds
-  - [ ] No changes to existing hook registrations
+  - [ ] `AssetCDN::Initialize()` called during startup (uncommented, updated)
+  - [ ] `AssetCDN::Shutdown()` called during shutdown
+  - [ ] `#include "asset_cdn.h"` in patches.cpp
+  - [ ] Game version guard logs warning if version mismatch
+  - [ ] `make build` succeeds with full integration
 
   **QA Scenarios:**
 
   ```
-  Scenario: Startup integration compiles and builds
-    Tool: Bash
-    Preconditions: Tasks 11 and 12 complete, patches.cpp modified
+  Scenario: Startup integration compiles and is correctly placed
+    Tool: Bash (isBackground: true)
+    Preconditions: Tasks 11, 12 complete
     Steps:
-      1. Run: make build
-      2. Check for any errors/warnings in patches.cpp compilation
-      3. Verify output DLL is produced
-    Expected Result: Clean build, DLL produced
-    Failure Indicators: Compilation errors from new includes, linker errors from AssetCDN/cosmetics_hook symbols
-    Evidence: .sisyphus/evidence/task-13-build-success.txt
+      1. make build 2>&1 | tee /tmp/build-final.txt
+      2. Verify exit code 0
+      3. Grep patches.cpp for AssetCDN::Initialize — should NOT be commented out
+      4. Grep patches.cpp for AssetCDN::Shutdown — should exist
+      5. Grep patches.cpp for '#include "asset_cdn.h"' — should exist
+      6. Verify the Initialize call is after config loading (check line ordering)
+    Expected Result: Clean build, Initialize/Shutdown wired, include present
+    Failure Indicators: Still commented, missing shutdown, include missing
+    Evidence: .sisyphus/evidence/task-13-startup-integration.txt
 
-  Scenario: Config reading and conditional init verification (code review)
+  Scenario: Game version guard exists
     Tool: Bash
-    Preconditions: patches.cpp modified
+    Preconditions: patches.cpp or asset_cdn.cpp updated
     Steps:
-      1. grep -n "asset_cdn_url" src/gamepatches/patches.cpp — verify config reading is uncommented (no // prefix)
-      2. grep -n "AssetCDN::Initialize" src/gamepatches/patches.cpp — verify init call is uncommented
-      3. grep -n "34.4.631547.1\|game.*version" src/gamepatches/patches.cpp — verify version check exists
-      4. grep -n "PatchDetour.*37a0\|FUN_1404f37a0\|cosmetics.*hook" src/gamepatches/patches.cpp — verify hook registration
-      5. grep -n "FUN_1404f37a0\|COSMETICS_HOOK" src/gamepatches/patch_addresses.h — verify RVA entry
-    Expected Result: All patterns found, no commented-out versions remaining for the CDN code
-    Failure Indicators: Config reading still commented, missing version check, missing hook registration, missing RVA
-    Evidence: .sisyphus/evidence/task-13-integration-review.txt
-
-  Scenario: Conditional init — CDN disabled when URL empty (code review)
-    Tool: Bash
-    Preconditions: patches.cpp modified
-    Steps:
-      1. grep -A5 "asset_cdn_url" src/gamepatches/patches.cpp — find the conditional check
-      2. Verify there is an if-check that skips Initialize() when URL is empty
-      3. grep -n "CDN cosmetics disabled\|CDN cosmetics enabled\|no URL" src/gamepatches/patches.cpp — verify logging
-    Expected Result: Conditional check present, both enabled/disabled log messages exist
-    Failure Indicators: No conditional check — Initialize() called unconditionally with empty URL
-    Evidence: .sisyphus/evidence/task-13-conditional-init.txt
+      1. Grep for game version string (e.g., "34.4.631399.1") in asset_cdn.cpp or patches.cpp
+      2. Verify there's a version comparison before Initialize proceeds
+      3. Verify a LOG_WARNING is emitted if version doesn't match
+    Expected Result: Version guard present with logging
+    Failure Indicators: No version check, no warning on mismatch
+    Evidence: .sisyphus/evidence/task-13-version-guard.txt
   ```
 
-  **Commit**: YES (grouped with Task 12)
-  - Message: `feat(gamepatches): full resource injection hook + startup integration`
-  - Files: `src/gamepatches/patches.cpp`, `src/gamepatches/patch_addresses.h`
+  **Commit**: YES (combined with Task 12)
+  - Message: `feat(gamepatches): integrate tint injection with AssetCDN pipeline`
+  - Files: `src/gamepatches/patches.cpp`, `src/gamepatches/asset_cdn.h`, `src/gamepatches/asset_cdn.cpp`
   - Pre-commit: `make build`
 
-- [ ] 14. **Format specification document — finalize `docs/cosmetics-cdn-format.md`**
-
-  **What to do**:
-  1. **Read the DRAFT** produced by Task 8 at `docs/cosmetics-cdn-format.md` — this contains the initial format spec written during the RE/format-design phase
-  2. **Cross-reference against final implementations**:
-     - Read `tools/cosmetics-manifest/main.go` (Task 9 output) — verify manifest JSON schema in the doc matches what the CLI actually produces
-     - Read `tools/cosmetics-package/main.go` (Task 10 output) — verify package binary layout in the doc matches what the CLI actually produces
-     - Read `src/gamepatches/asset_cdn.h` and `asset_cdn.cpp` (Task 11 output) — verify the C++ consumer's expectations match the documented format
-     - Read `src/gamepatches/cosmetics_hook.h` and `cosmetics_hook.cpp` (Task 12 output) — verify hook behavior matches documented resource resolution
-  3. **Finalize the following sections** (update DRAFT to match reality):
-     - **Manifest JSON Schema**: Exact fields, types, example with real SymbolId hashes. Must match Go CLI output byte-for-byte.
-     - **Package Binary Layout**: Header magic, version, offset table, chunk format, compression (Zstd). Must match Go CLI output and C++ reader.
-     - **URL Structure**: `https://cdn.echo.taxi/v{N}/manifest.json`, `https://cdn.echo.taxi/v{N}/packages/{hash}.pkg`. Versioned, immediately auditable.
-     - **Versioning & Rollback**: How manifest versions work, how to roll back (point to previous version directory), how clients detect updates.
-     - **Client Cache Behavior**: `%LOCALAPPDATA%/EchoVR/CDN/` structure, file naming, staleness detection (ETag or manifest version comparison).
-     - **CLI Tool Usage**: Complete usage examples for both `cosmetics-manifest` and `cosmetics-package` tools with flags, inputs, outputs.
-     - **SymbolId Generation**: How new cosmetic SymbolIds are computed (CSymbol64_Hash with naming convention), reserved ranges if any.
-     - **Error Handling**: What happens on download failure, corrupt package, version mismatch, unknown SymbolId on other clients.
-  4. **Ensure the document is immediately auditable** per user requirement:
-     - A developer should be able to read the doc, `curl` a manifest URL, and verify every field matches the spec
-     - Include concrete examples with actual hex values, not placeholder descriptions
-     - Include a "Quick Verification" section with copy-paste curl/jq commands
-  5. **Add a version history table** at the bottom:
-     - `| Version | Date | Changes |` format
-     - Initial entry: `v1.0 | {date} | Initial specification`
-
-  **Must NOT do**:
-  - Do not invent format details — only document what was actually implemented in Tasks 8-12
-  - Do not add features not in the implementation (no auth tokens, no signing, no differential updates)
-  - Do not write tutorial-style prose — this is a technical specification, terse and precise
-  - Do not duplicate code — reference source files, don't inline implementation details
-  - Do not add diagrams or images — text-only, machine-parseable where possible
-
-  **Recommended Agent Profile**:
-  - **Category**: `writing`
-    - Reason: Primary output is a technical document. Requires reading multiple source files and synthesizing into a coherent spec. No code changes.
-  - **Skills**: []
-  - **Skills Evaluated but Omitted**:
-    - `playwright`: No browser interaction needed — pure document writing
-    - `git-master`: No git operations — just file editing
-
-  **Parallelization**:
-  - **Can Run In Parallel**: NO (depends on Tasks 8-12 all being complete to cross-reference)
-  - **Parallel Group**: Wave 4 (with Tasks 12, 13 — but sequentially after them)
-  - **Blocks**: F1 (plan compliance audit references this doc)
-  - **Blocked By**: Task 8 (produces the DRAFT), Task 9 (manifest CLI — must exist to cross-reference), Task 10 (package CLI — must exist to cross-reference), Task 11 (AssetCDN module — must exist to cross-reference), Task 12 (cosmetics hook — must exist to cross-reference)
-
-  **References**:
-
-  **Pattern References**:
-  - `docs/ghidra/ECHOVR_STRUCT_MEMORY_MAP.md` — Example of how this project writes technical specs: terse, struct-focused, with exact offsets/sizes. Match this tone.
-  - `extras/docs/HASH_DISCOVERY_COMPLETE.md` — Another reference spec in the project. Note the level of detail and concrete values.
-
-  **API/Type References**:
-  - `docs/cosmetics-cdn-format.md` — (Task 8 DRAFT output) The initial draft to be finalized. This is the file being edited.
-  - `tools/cosmetics-manifest/main.go` — (Task 9 output) Go CLI for manifest generation. Cross-reference JSON output format.
-  - `tools/cosmetics-package/main.go` — (Task 10 output) Go CLI for package building. Cross-reference binary layout.
-  - `src/gamepatches/asset_cdn.h` — (Task 11 output) C++ manifest parser and download logic. Verify it expects what the doc says.
-  - `src/gamepatches/cosmetics_hook.h` — (Task 12 output) C++ resource injection. Verify resource resolution matches doc.
-
-  **External References**:
-  - Cloudflare R2 docs: `https://developers.cloudflare.com/r2/` — For URL structure and caching behavior reference.
-
-  **WHY Each Reference Matters**:
-  - `ECHOVR_STRUCT_MEMORY_MAP.md`: Sets the tone and detail level. Your doc should feel like it belongs next to this one.
-  - `HASH_DISCOVERY_COMPLETE.md`: Shows how concrete values (hex hashes, function addresses) are documented in this project.
-  - Task 8 DRAFT: This is your starting point — don't start from scratch, EDIT the existing draft.
-  - Task 9/10 Go CLIs: The doc MUST match their actual output. Read the code, run the tools, compare.
-  - Task 11/12 C++ code: The doc MUST match what the consumer expects. Any mismatch = runtime failures.
-
-  **Acceptance Criteria**:
-  - [ ] `docs/cosmetics-cdn-format.md` exists and is finalized (not a draft)
-  - [ ] Manifest JSON schema section matches `tools/cosmetics-manifest/` output exactly
-  - [ ] Package binary layout section matches `tools/cosmetics-package/` output exactly
-  - [ ] URL structure section shows versioned paths under `https://cdn.echo.taxi/`
-  - [ ] Client cache section documents `%LOCALAPPDATA%/EchoVR/CDN/` structure
-  - [ ] CLI usage section has complete examples for both tools
-  - [ ] Quick Verification section has copy-paste curl/jq commands
-  - [ ] Version history table present
-  - [ ] No format details that contradict actual implementation
-
-  **QA Scenarios:**
-
-  ```
-  Scenario: Document completeness — all required sections present
-    Tool: Bash
-    Preconditions: docs/cosmetics-cdn-format.md finalized
-    Steps:
-      1. grep -c "## Manifest" docs/cosmetics-cdn-format.md — manifest schema section exists
-      2. grep -c "## Package" docs/cosmetics-cdn-format.md — package layout section exists
-      3. grep -c "## URL" docs/cosmetics-cdn-format.md — URL structure section exists
-      4. grep -c "## Cache\|## Client Cache" docs/cosmetics-cdn-format.md — cache section exists
-      5. grep -c "## CLI\|## Tool" docs/cosmetics-cdn-format.md — CLI usage section exists
-      6. grep -c "## Version History\|## Changelog" docs/cosmetics-cdn-format.md — version history exists
-      7. grep -c "## Quick Verification\|## Verification" docs/cosmetics-cdn-format.md — verification section exists
-    Expected Result: All grep counts >= 1 (every section present)
-    Failure Indicators: Any section missing (grep returns 0)
-    Evidence: .sisyphus/evidence/task-14-doc-completeness.txt
-
-  Scenario: Cross-reference — manifest schema matches Go CLI output
-    Tool: Bash
-    Preconditions: Task 9 complete, docs/cosmetics-cdn-format.md finalized
-    Steps:
-      1. Read the manifest JSON schema from docs/cosmetics-cdn-format.md
-      2. Read the JSON marshaling code in tools/cosmetics-manifest/main.go
-      3. Compare field names, types, and structure — every field in the Go struct must appear in the doc
-      4. Check for fields in the doc that don't exist in the Go code (phantom fields)
-    Expected Result: 1:1 correspondence between documented schema and Go output
-    Failure Indicators: Missing fields, extra fields, wrong types, wrong nesting
-    Evidence: .sisyphus/evidence/task-14-manifest-crossref.txt
-
-  Scenario: Cross-reference — package binary layout matches Go CLI output
-    Tool: Bash
-    Preconditions: Task 10 complete, docs/cosmetics-cdn-format.md finalized
-    Steps:
-      1. Read the package binary layout from docs/cosmetics-cdn-format.md
-      2. Read the binary writing code in tools/cosmetics-package/main.go
-      3. Compare magic bytes, header fields, offset calculations, chunk structure
-      4. Verify documented byte offsets match the Go writer's actual Write() calls
-    Expected Result: Documented layout matches Go implementation exactly
-    Failure Indicators: Wrong magic bytes, wrong field sizes, wrong offset calculations
-    Evidence: .sisyphus/evidence/task-14-package-crossref.txt
-
-  Scenario: Auditability — Quick Verification commands work
-    Tool: Bash
-    Preconditions: docs/cosmetics-cdn-format.md finalized
-    Steps:
-      1. Extract all curl/jq commands from the Quick Verification section
-      2. Verify each command is syntactically valid (curl --help check, jq --help check)
-      3. Verify URL patterns use https://cdn.echo.taxi/ base
-      4. Verify jq filters reference fields from the documented manifest schema
-    Expected Result: All commands are syntactically valid and reference correct fields
-    Failure Indicators: Broken curl syntax, jq filters referencing non-existent fields
-    Evidence: .sisyphus/evidence/task-14-auditability.txt
-  ```
-
-  **Commit**: YES
-  - Message: `docs: finalize cosmetics CDN format specification`
-  - Files: `docs/cosmetics-cdn-format.md`
-  - Pre-commit: `grep -c '## ' docs/cosmetics-cdn-format.md` (verify sections exist)
+---
 
 <!-- TASKS_END -->
 
 ---
 
-## Final Verification Wave (MANDATORY — after ALL implementation tasks)
+## Final Verification Wave
 
 > 4 review agents run in PARALLEL. ALL must APPROVE. Rejection → fix → re-run.
 
 - [ ] F1. **Plan Compliance Audit** — `oracle`
-  Read the plan end-to-end. For each "Must Have": verify implementation exists (read file, run command). For each "Must NOT Have": search codebase for forbidden patterns — reject with file:line if found. Check evidence files exist in .sisyphus/evidence/. Compare deliverables against plan.
+  Read the plan end-to-end. For each "Must Have": verify implementation exists (read file, curl endpoint, run command). For each "Must NOT Have": search codebase for forbidden patterns — reject with file:line if found. Check evidence files exist in `.sisyphus/evidence/`. Compare deliverables against plan.
   Output: `Must Have [N/N] | Must NOT Have [N/N] | Tasks [N/N] | VERDICT: APPROVE/REJECT`
 
 - [ ] F2. **Code Quality Review** — `unspecified-high`
-  Run full build. Review all new/changed files for: `as any`/`@ts-ignore` (N/A for C++), empty catches, raw printf in prod (use Log()), commented-out code, unused includes. Check AI slop: excessive comments, over-abstraction, generic names. Verify symbol_hash.h is constexpr. Verify no blocking HTTP in game thread.
-  Output: `Build [PASS/FAIL] | Files [N clean/N issues] | VERDICT`
+  Run `make build` for C++ and `go build ./...` for Go tools. Review all changed files for: `as any`/`@ts-ignore` equivalents, empty catches, debug prints in prod, commented-out code, unused imports. Check AI slop: excessive comments, over-abstraction, generic variable names.
+  Output: `Build [PASS/FAIL] | Lint [PASS/FAIL] | Files [N clean/N issues] | VERDICT`
 
 - [ ] F3. **Integration QA** — `unspecified-high`
-  Build entire project from clean. Verify: symbol_hash.h compiles and produces correct hashes. Go CLI tools build and produce valid output files. AssetCDN module compiles with no link errors. Manifest/package files pass format validation. Run every QA scenario from every task.
-  Output: `Build [PASS/FAIL] | Scenarios [N/N pass] | VERDICT`
+  Start from clean state. Execute EVERY QA scenario from EVERY task — follow exact steps, capture evidence. Test cross-task integration: pack-tint → build-manifest → curl CDN → verify cached file. Save to `.sisyphus/evidence/final-qa/`.
+  Output: `Scenarios [N/N pass] | Integration [N/N] | Edge Cases [N tested] | VERDICT`
 
 - [ ] F4. **Scope Fidelity Check** — `deep`
-  For each task: read "What to do", read actual code written. Verify 1:1 — everything in spec was built, nothing beyond spec. Check "Must NOT do" compliance. No audio/animation/shader code. No in-game UI. No hot-reload. No blocking HTTP. No cache eviction. No overwrites of existing assets.
-  Output: `Tasks [N/N compliant] | Scope [CLEAN/N issues] | VERDICT`
+  For each task: read "What to do", read actual diff (git log/diff). Verify 1:1 — everything in spec was built (no missing), nothing beyond spec was built (no creep). Check "Must NOT do" compliance. Detect cross-task contamination: Task N touching Task M's files. Flag unaccounted changes.
+  Output: `Tasks [N/N compliant] | Contamination [CLEAN/N issues] | Unaccounted [CLEAN/N files] | VERDICT`
 
 ---
 
 ## Commit Strategy
 
-| After | Commit Message | Key Files |
-|-------|---------------|-----------|
-| Task 1 | `feat(common): add constexpr CSymbol64_Hash implementation` | `src/common/symbol_hash.h` |
-| Tasks 2-4 | `docs(ghidra): RE findings — hook validation, binary format, unknown SymbolId` | `docs/ghidra/*.md` |
-| Task 5 | `build(gamepatches): add jsoncpp linking and AssetCDN scaffolding` | `src/gamepatches/CMakeLists.txt`, `asset_cdn.h`, `asset_cdn.cpp` |
-| Task 6 | `feat(gamepatches): PoC — hardcoded cosmetic injection on single slot` | `src/gamepatches/asset_cdn.cpp` |
-| Task 7 | `test: verify Go/C++ hash consistency` | evidence files |
-| Task 8 | `docs: cosmetics CDN format design (manifest + package + URL scheme)` | `docs/cosmetics-cdn-format.md` (draft) |
-| Tasks 9-10 | `feat(tools): Go CLI tools for cosmetics manifest and package building` | `tools/cosmetics-manifest/`, `tools/cosmetics-package/` |
-| Task 11 | `feat(gamepatches): AssetCDN module — manifest fetch, download, cache` | `src/gamepatches/asset_cdn.*` |
-| Tasks 12-13 | `feat(gamepatches): full resource injection hook + startup integration` | `src/gamepatches/asset_cdn.*`, `patches.cpp` |
-| Task 14 | `docs: finalize cosmetics CDN format specification` | `docs/cosmetics-cdn-format.md` |
+| Group | Message | Files | Pre-commit |
+|-------|---------|-------|------------|
+| Phase 0 | `docs(cosmetics): add CDN format specification` | `docs/cosmetics-cdn-format.md` | n/a |
+| Task 4 | `feat(common): add constexpr CSymbol64_Hash implementation` | `src/common/symbol_hash.h` | compile test |
+| Task 5 | `build(gamepatches): link curl and jsoncpp dependencies` | `src/gamepatches/CMakeLists.txt` | `make build` |
+| Tasks 6-7 | Committed in `~/src/nevr-cdn-tools/` repo separately | all files | `go build ./...` |
+| Task 8 | `feat(gamepatches): add hardcoded tint injection PoC hook` | `asset_cdn.*`, `patches.cpp` | `make build` |
+| Tasks 9-10 | Committed in `~/src/nevr-cdn-tools/` repo separately | manifest files | `go build ./...` |
+| Task 11 | `feat(gamepatches): add AssetCDN manifest fetch and package cache` | `asset_cdn.*` | `make build` |
+| Tasks 12-13 | `feat(gamepatches): integrate tint injection with AssetCDN pipeline` | `asset_cdn.*`, `patches.cpp` | `make build` |
 
 ---
 
@@ -1606,25 +1469,32 @@ Max Concurrent: 5 (Wave 1)
 
 ### Verification Commands
 ```bash
-# Build passes
+# C++ builds cleanly
 make build  # Expected: zero errors, zero warnings
 
-# symbol_hash.h produces correct hashes
-# (Verified in Task 7 — Go vs C++ comparison)
+# Go tools build cleanly
+cd ~/src/nevr-cdn-tools && go build ./...  # Expected: zero errors
 
-# Go CLI tools build
-cd tools/cosmetics-manifest && go build ./...  # Expected: binary produced
-cd tools/cosmetics-package && go build ./...   # Expected: binary produced
+# Pack a test tint
+cd ~/src/nevr-cdn-tools && go run ./cmd/pack-tint --help  # Expected: usage output
 
-# DLL contains AssetCDN symbols
-nm build/*/bin/gamepatches.dll | grep -i assetcdn  # Expected: symbols present
+# Build manifest
+cd ~/src/nevr-cdn-tools && go run ./cmd/build-manifest --help  # Expected: usage output
+
+# CDN manifest is reachable
+curl -s https://cdn.echo.taxi/v1/manifest.json | head -c 200  # Expected: valid JSON
+
+# Cached files exist after game startup
+ls %LOCALAPPDATA%/EchoVR/cosmetics/  # Expected: manifest.json + .evrp files
 ```
 
 ### Final Checklist
-- [ ] All "Must Have" items present and verified
-- [ ] All "Must NOT Have" items absent from codebase
-- [ ] Project builds cleanly
-- [ ] At least ONE cosmetic renders in-game (vertical slice)
-- [ ] Go CLI tools produce valid manifest/package files
-- [ ] Format spec document complete
-- [ ] All evidence files present in `.sisyphus/evidence/`
+- [ ] Format spec written and internally consistent
+- [ ] Go tools build, run, and produce valid output files
+- [ ] C++ builds with zero errors/warnings
+- [ ] symbol_hash.h produces correct hashes for all test vectors
+- [ ] AssetCDN module fetches manifest and downloads packages
+- [ ] At least one .evrp file on CDN and downloadable
+- [ ] Hook compiles and is wired into startup via PatchDetour
+- [ ] All "Must Have" present
+- [ ] All "Must NOT Have" absent
