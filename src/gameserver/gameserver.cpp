@@ -3,6 +3,9 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
+
+#include "globals.h"
 
 #include "constants.h"
 #include "echovr.h"
@@ -776,9 +779,41 @@ VOID GameServerLib::Terminate() {
   context_->Terminate();
 }
 
+// File-static state for -exitonerror disconnect detection
+static bool s_wasConnectedToServerDb = false;
+static bool s_exitPending = false;
+
 VOID GameServerLib::Update() {
   // Dispatch incoming ServerDB messages on the main thread
   if (wsClient_) wsClient_->ProcessReceivedMessages();
+
+  // -exitonerror: detect serverdb disconnect and exit (immediately or deferred)
+  if (exitOnError && wsClient_ && !s_exitPending) {
+    bool nowConnected = wsClient_->IsConnected();
+    if (s_wasConnectedToServerDb && !nowConnected) {
+      s_exitPending = true;
+      if (!context_->IsSessionActive()) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.GAMESERVER] ServerDB disconnected with -exitonerror and no active round -- exiting");
+        exit(1);
+      } else {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.GAMESERVER] ServerDB disconnected with -exitonerror -- round active, will exit at round end + 30s");
+        auto* ctx = context_.get();
+        std::thread([ctx]() {
+          while (ctx->IsSessionActive()) {
+            Sleep(1000);
+          }
+          Log(EchoVR::LogLevel::Warning,
+              "[NEVR.GAMESERVER] Round ended -- waiting 30s grace period before exit");
+          Sleep(30000);
+          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Grace period elapsed -- exiting");
+          exit(1);
+        }).detach();
+      }
+    }
+    s_wasConnectedToServerDb = nowConnected;
+  }
 
   // Check for dirty entrants (profile updates pending)
   uint64_t count = context_->GetEntrantCount();
