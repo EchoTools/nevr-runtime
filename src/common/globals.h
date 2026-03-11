@@ -25,6 +25,7 @@
 
 extern BOOL noConsole;
 extern BOOL isHeadless;
+extern BOOL exitOnError;
 extern UINT32 headlessTickRateHz;
 
 #endif  // ECHOVR_GLOBALS_H
