@@ -68,7 +68,6 @@ BOOL isWindowed = FALSE;
 /// Indicates whether the game was launched with `-noovr`.
 /// </summary>
 BOOL isNoOVR = FALSE;
-
 /// <summary>
 /// The window handle for the current game window.
 /// </summary>
@@ -607,6 +606,10 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgSyntax(pArgSyntax, "-config-path", 1, 1, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-config-path", "[NEVR] Specify a custom path to the config.json file");
 
+  EchoVR::AddArgSyntax(pArgSyntax, "-exitonerror", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-exitonerror",
+                           "[NEVR] Exit server when serverdb connection is lost (deferred to end of round + 30s if round is active)");
+
   return result;
 }
 
@@ -634,6 +637,8 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       isWindowed = TRUE;
     } else if (lstrcmpW(arg, L"-noovr") == 0) {
       isNoOVR = TRUE;
+    } else if (lstrcmpW(arg, L"-exitonerror") == 0) {
+      exitOnError = TRUE;
     } else if (lstrcmpW(arg, L"-timestep") == 0) {
       if (i + 1 < argc) {
         headlessTimeStep = std::wcstoul(argv[i + 1], nullptr, 10);
@@ -1460,10 +1465,10 @@ VOID Initialize() {
   // from process suspension.
 #if _DEBUG
   PatchDeadlockMonitor();
+#endif
 
   if (isServer || isHeadless) {
     PatchBlockOculusSDK();
     PatchDisableWwise();
   }
-#endif
 }

@@ -25,3 +25,9 @@ set_target_properties(gamepatches PROPERTIES
 if(MSVC)
   target_compile_options(gamepatches PRIVATE /wd4251)
 endif()
+
+if(MINGW)
+  target_link_options(gamepatches PRIVATE
+    -Wl,--allow-multiple-definition
+  )
+endif()
