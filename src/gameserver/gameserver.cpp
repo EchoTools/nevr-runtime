@@ -5,11 +5,10 @@
 #include <string>
 #include <thread>
 
-#include "globals.h"
-
 #include "constants.h"
 #include "echovr.h"
 #include "echovrunexported.h"
+#include "globals.h"
 #include "messages.h"
 #include "pch.h"
 #include "rtapi/v1/realtime_v1.pb.h"
@@ -173,6 +172,9 @@ void OnTcpMsgPlayersRejected(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* 
 }
 
 void OnTcpMsgSessionSuccessv5(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received session success (SNSLobbySessionSuccessv5), size=%llu",
+      msgSize);
+
   auto* broadcaster = self->GetContext().GetBroadcaster();
   if (broadcaster) {
     EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbySessionSuccessV5, "SNSLobbySessionSuccessv5",
@@ -199,20 +201,32 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
   // Dispatch based on message type
   switch (envelope.message_case()) {
     case rtapi::v1::Envelope::kGameServerRegistrationSuccess: {
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received registration success via protobuf");
+      const auto& regSuccess = envelope.game_server_registration_success();
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received registration success via protobuf: server_id=%llu, ip=%s",
+          static_cast<unsigned long long>(regSuccess.server_id()), regSuccess.external_ip_address().c_str());
       self->GetContext().SetRegistered(true);
-      // Forward as legacy event for game compatibility
+
+      // Encode protobuf to binary format and forward to game
       if (broadcaster) {
-        EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationSuccess, "SNSLobbyRegistrationSuccess",
-                                             nullptr, 0);
+        auto encoded = EncodeRegistrationSuccess(regSuccess);
+        if (encoded.size() > 0) {
+          EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationSuccess,
+                                               "SNSLobbyRegistrationSuccess",
+                                               const_cast<uint8_t*>(encoded.ptr()), encoded.size());
+        } else {
+          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Failed to encode registration success");
+          EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationSuccess,
+                                               "SNSLobbyRegistrationSuccess", nullptr, 0);
+        }
       }
       break;
     }
 
     case rtapi::v1::Envelope::kLobbySessionCreate: {
       const auto& sessionCreate = envelope.lobby_session_create();
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received session create via protobuf: session=%s",
-          sessionCreate.lobby_session_id().c_str());
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.GAMESERVER] Received session create via protobuf: session=%s, max=%d, type=%d",
+          sessionCreate.lobby_session_id().c_str(), sessionCreate.max_entrants(), sessionCreate.lobby_type());
 
       // Update session state
       SessionState state = self->GetContext().GetSessionState();
@@ -220,10 +234,41 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
       self->GetContext().UpdateSessionState(state);
       self->GetContext().StartSession();
 
-      // Forward as legacy event for game compatibility
+      // Encode protobuf to LobbyStartSessionV4 binary format and forward to game
       if (broadcaster) {
-        EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4, "SNSLobbyStartSessionv4", nullptr,
-                                             0);
+        auto encoded = EncodeLobbySessionCreate(sessionCreate);
+        if (encoded.size() > 0) {
+          EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4, "SNSLobbyStartSessionv4",
+                                               const_cast<uint8_t*>(encoded.ptr()), encoded.size());
+        } else {
+          Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to encode LobbySessionCreate to binary");
+        }
+      }
+      break;
+    }
+
+    case rtapi::v1::Envelope::kLobbySessionSuccessV5: {
+      const auto& sessionSuccess = envelope.lobby_session_success_v5();
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.GAMESERVER] Received session success via protobuf: lobby=%s, endpoint=%s, game_mode=0x%llX",
+          sessionSuccess.lobby_id().c_str(), sessionSuccess.endpoint().c_str(),
+          static_cast<unsigned long long>(sessionSuccess.game_mode()));
+
+      SessionState state = self->GetContext().GetSessionState();
+      if (!sessionSuccess.lobby_id().empty()) {
+        state.lobbySessionId = sessionSuccess.lobby_id();
+      }
+      self->GetContext().UpdateSessionState(state);
+
+      // Encode protobuf to binary format and forward to game
+      if (broadcaster) {
+        auto encoded = EncodeLobbySessionSuccessV5(sessionSuccess);
+        if (encoded.size() > 0) {
+          EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbySessionSuccessV5, "SNSLobbySessionSuccessv5",
+                                               const_cast<uint8_t*>(encoded.ptr()), encoded.size());
+        } else {
+          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Failed to encode LobbySessionSuccessV5");
+        }
       }
       break;
     }
@@ -233,10 +278,16 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
       Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received entrants accept via protobuf: count=%d",
           accept.entrant_ids_size());
 
-      // Forward as legacy event for game compatibility
+      // Encode protobuf to binary format (padding byte + GUIDs) and forward to game
       if (broadcaster) {
-        EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersSuccessV2,
-                                             "SNSLobbyAcceptPlayersSuccessv2", nullptr, 0);
+        auto encoded = EncodeLobbyEntrantsAccept(accept);
+        if (encoded.size() > 0) {
+          EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersSuccessV2,
+                                               "SNSLobbyAcceptPlayersSuccessv2",
+                                               const_cast<uint8_t*>(encoded.ptr()), encoded.size());
+        } else {
+          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Failed to encode entrants accept");
+        }
       }
       break;
     }
@@ -246,10 +297,16 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
       Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received entrants reject via protobuf: count=%d, code=%d",
           reject.entrant_ids_size(), reject.code());
 
-      // Forward as legacy event for game compatibility
+      // Encode protobuf to binary format (error code byte + GUIDs) and forward to game
       if (broadcaster) {
-        EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersFailureV2,
-                                             "SNSLobbyAcceptPlayersFailurev2", nullptr, 0);
+        auto encoded = EncodeLobbyEntrantsReject(reject);
+        if (encoded.size() > 0) {
+          EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersFailureV2,
+                                               "SNSLobbyAcceptPlayersFailurev2",
+                                               const_cast<uint8_t*>(encoded.ptr()), encoded.size());
+        } else {
+          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Failed to encode entrants reject");
+        }
       }
       break;
     }
@@ -673,7 +730,8 @@ void OnTcpMsgGameClientMsg3(GameServerLib*, VOID*, EchoVR::TcpPeer, VOID*, VOID*
 
 // --- GameServerLib Implementation ---
 
-GameServerLib::GameServerLib() : context_(std::make_unique<ServerContext>()), wsClient_(std::make_unique<WebSocketClient>()) {}
+GameServerLib::GameServerLib()
+    : context_(std::make_unique<ServerContext>()), wsClient_(std::make_unique<WebSocketClient>()) {}
 
 GameServerLib::~GameServerLib() = default;
 
@@ -743,15 +801,22 @@ void GameServerLib::RegisterTcpCallbacks() {
   cb.tcpProtobuf = 1;
 
   // Route all incoming ServerDB messages through our WebSocketClient instead.
+  // Nakama sends both protobuf (NEVRProtobufMessageV1) and legacy messages for backwards
+  // compatibility. We handle protobuf messages which properly encode to binary format.
+  // Legacy duplicates (registration success, session success) are skipped to avoid
+  // double-processing (the game would see the event twice and could misbehave).
   wsClient_->SetMessageHandler([this](EchoVR::SymbolId msgId, const VOID* data, UINT64 size) {
-    if (msgId == TcpSym::LobbyRegistrationSuccess) {
-      OnTcpMsgRegistrationSuccess(this, nullptr, {}, const_cast<VOID*>(data), nullptr, size);
-    } else if (msgId == TcpSym::LobbyRegistrationFailure) {
-      OnTcpMsgRegistrationFailure(this, nullptr, {}, const_cast<VOID*>(data), nullptr, size);
-    } else if (msgId == TcpSym::LobbySessionSuccessV5) {
-      OnTcpMsgSessionSuccessv5(this, nullptr, {}, const_cast<VOID*>(data), nullptr, size);
-    } else if (msgId == SYM_PROTOBUF_MSG) {
+    if (msgId == SYM_PROTOBUF_MSG) {
       OnTcpMsgProtobuf(this, nullptr, {}, const_cast<VOID*>(data), nullptr, size);
+    } else if (msgId == TcpSym::LobbyRegistrationFailure) {
+      // Registration failure has no protobuf equivalent, handle legacy
+      OnTcpMsgRegistrationFailure(this, nullptr, {}, const_cast<VOID*>(data), nullptr, size);
+    } else if (msgId == TcpSym::LobbyRegistrationSuccess) {
+      // Skip legacy - handled by protobuf kGameServerRegistrationSuccess
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Skipping legacy registration success (handled via protobuf)");
+    } else if (msgId == TcpSym::LobbySessionSuccessV5) {
+      // Skip legacy - handled by protobuf kLobbySessionSuccessV5
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Skipping legacy session success (handled via protobuf)");
     } else {
       Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Unhandled WebSocket msgId: 0x%llX (size: %llu)", msgId, size);
     }
@@ -804,8 +869,7 @@ VOID GameServerLib::Update() {
           while (ctx->IsSessionActive()) {
             Sleep(1000);
           }
-          Log(EchoVR::LogLevel::Warning,
-              "[NEVR.GAMESERVER] Round ended -- waiting 30s grace period before exit");
+          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Round ended -- waiting 30s grace period before exit");
           Sleep(30000);
           Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Grace period elapsed -- exiting");
           exit(1);
@@ -843,7 +907,6 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("serverdb_host"),
                                 const_cast<CHAR*>("ws://localhost:777/serverdb"), false);
 
-
   // Connect to serverdb via WebSocketClient (avoids TcpBroadcasterListen vtable ABI crash)
   if (!wsClient_->Connect(serverDbUri)) {
     Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to initiate WebSocket connection");
@@ -869,8 +932,8 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   registration->set_region(regionId);
   registration->set_version_lock(versionLock);
   registration->set_time_step_usecs(state.defaultTimeStepUsecs);
-#ifdef NEVR_VERSION
-  registration->set_version(NEVR_VERSION);
+#ifdef GIT_DESCRIBE
+  registration->set_version(GIT_DESCRIBE);
 #else
   registration->set_version("unknown");
 #endif
