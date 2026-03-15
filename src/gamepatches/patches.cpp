@@ -1466,10 +1466,16 @@ VOID Initialize() {
   //  Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to initialize Asset CDN redirection");
   //}
 
-  // Patch out the deadlock monitor thread's validation routine if we're compiling in debug mode, as this will panic
-  // from process suspension.
+  // Patch out the deadlock monitor thread's validation routine.
+  // In debug mode: prevents deadlock panic from debugger breakpoint suspension.
+  // In server/headless mode: prevents false deadlock detection during level transitions
+  // (no GPU to keep frames flowing, causing the monitor thread to see stalls).
 #if _DEBUG
   PatchDeadlockMonitor();
+#else
+  if (isServer || isHeadless) {
+    PatchDeadlockMonitor();
+  }
 #endif
 
   if (isServer || isHeadless) {
