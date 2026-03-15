@@ -716,7 +716,12 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
 
   // If a custom config.json path was provided, load it directly using the game's JSON loader
   if (customConfigJsonPath[0] != '\0') {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Loading custom config from: %s", customConfigJsonPath);
+    // Resolve to full path so the game's loader can find it regardless of CWD
+    CHAR resolvedPath[MAX_PATH] = {0};
+    DWORD len = GetFullPathNameA(customConfigJsonPath, MAX_PATH, resolvedPath, NULL);
+    const CHAR* configPath = (len > 0 && len < MAX_PATH) ? resolvedPath : customConfigJsonPath;
+
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Loading custom config from: %s", configPath);
 
     // Get the config destination pointer (pGame + 0x63240)
     using namespace PatchAddresses;
@@ -724,15 +729,15 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
 
     // Call the game's internal JSON loader directly with our custom path
     // The third parameter (1) indicates the validation level: 1 = standard validation
-    UINT32 loadResult = EchoVR::LoadJsonFromFile(configDest, customConfigJsonPath, 1);
+    UINT32 loadResult = EchoVR::LoadJsonFromFile(configDest, configPath, 1);
 
     if (loadResult != 0) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load custom config file: %s (error %u)",
-          customConfigJsonPath, loadResult);
+          configPath, loadResult);
       // Fall back to loading the default config
       result = EchoVR::LoadLocalConfig(pGame);
     } else {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Successfully loaded custom config from: %s", customConfigJsonPath);
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Successfully loaded custom config from: %s", configPath);
       result = 0;  // Success
     }
   } else {
