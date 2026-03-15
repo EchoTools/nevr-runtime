@@ -1470,13 +1470,10 @@ VOID Initialize() {
   // In debug mode: prevents deadlock panic from debugger breakpoint suspension.
   // In server/headless mode: prevents false deadlock detection during level transitions
   // (no GPU to keep frames flowing, causing the monitor thread to see stalls).
-#if _DEBUG
+  // NOTE: Applied unconditionally because Initialize() runs before command-line parsing
+  // (PreprocessCommandLineHook), so isServer/isHeadless aren't set yet. The deadlock
+  // monitor is harmful in all Wine/headless scenarios and benign to disable on clients.
   PatchDeadlockMonitor();
-#else
-  if (isServer || isHeadless) {
-    PatchDeadlockMonitor();
-  }
-#endif
 
   if (isServer || isHeadless) {
     PatchBlockOculusSDK();
