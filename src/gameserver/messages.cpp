@@ -209,19 +209,16 @@ EncodedMessage EncodeLobbySessionSuccessV5(const rtapi::v1::SNSLobbySessionSucce
   result.data.push_back(static_cast<uint8_t>((externalIP >> 24) & 0xFF));
   WriteBE16(result.data, port);  // Port is big-endian
 
-  // 5. TeamIndex (int16_t LE)
-  WriteLE(result.data, static_cast<int16_t>(msg.team_index()));
+  // 5. TeamIndex (uint16_t LE) — at +0x32
+  WriteLE(result.data, static_cast<uint16_t>(msg.team_index()));
 
-  // 6. UserSlot (uint16_t LE)
-  WriteLE(result.data, static_cast<uint16_t>(msg.user_slot()));
-
-  // 7. Flags32 (uint16_t LE)
-  WriteLE(result.data, static_cast<uint16_t>(msg.flags32()));
-
-  // 8. SessionFlags (uint8_t)
+  // 6. SessionFlags (uint8) at +0x34, followed by 3 bytes padding
   result.data.push_back(static_cast<uint8_t>(msg.session_flags()));
+  result.data.push_back(0);
+  result.data.push_back(0);
+  result.data.push_back(0);
 
-  // 9. ServerEncoderFlags (uint64_t LE)
+  // 7. ServerEncoderFlags (uint64_t LE) — at +0x38
   WriteLE(result.data, msg.server_encoder_flags());
 
   // 10. ClientEncoderFlags (uint64_t LE)

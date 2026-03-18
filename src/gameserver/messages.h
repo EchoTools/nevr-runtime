@@ -45,23 +45,26 @@ EncodedMessage EncodeLobbySessionStartV4(const GUID& lobbySessionId, const GUID&
                                          const std::string& settingsJson);
 
 // Encode LobbySessionSuccessV5 from protobuf to binary format
-// Binary format (little-endian unless noted):
-//   uint64_t gameMode
-//   GUID lobbyId (16 bytes)
-//   GUID groupId (16 bytes)
-//   Endpoint: uint32_t internalIP + uint32_t externalIP + uint16_t port (BE)
-//   int16_t teamIndex
-//   uint32_t userSlot (flags32 + session_flags combined as unk1)
-//   uint64_t serverEncoderFlags
-//   uint64_t clientEncoderFlags
-//   uint64_t serverSequenceId
-//   bytes serverMacKey (dynamic size from encoder flags)
-//   bytes serverEncKey (dynamic size from encoder flags)
-//   bytes serverRandomKey (dynamic size from encoder flags)
-//   uint64_t clientSequenceId
-//   bytes clientMacKey (dynamic size from encoder flags)
-//   bytes clientEncKey (dynamic size from encoder flags)
-//   bytes clientRandomKey (dynamic size from encoder flags)
+// Binary wire format (0x48-byte fixed header + variable key data):
+//   +0x00  uint64_t gameMode (LE)
+//   +0x08  GUID lobbyId (16 bytes)
+//   +0x18  GUID groupId (16 bytes)
+//   +0x28  uint32_t internalIP (network order)
+//   +0x2C  uint32_t externalIP (network order)
+//   +0x30  uint16_t port (BE)
+//   +0x32  uint16_t teamIndex (LE)
+//   +0x34  uint8_t  sessionFlags
+//   +0x35  3 bytes padding (zeroed)
+//   +0x38  uint64_t serverEncoderFlags (LE)
+//   +0x40  uint64_t clientEncoderFlags (LE)
+//   +0x48  uint64_t serverSequenceId (LE)
+//   +0x50  bytes serverMacKey (size from encoder flags)
+//          bytes serverEncKey
+//          bytes serverRandomKey
+//          uint64_t clientSequenceId (LE)
+//          bytes clientMacKey (size from encoder flags)
+//          bytes clientEncKey
+//          bytes clientRandomKey
 EncodedMessage EncodeLobbySessionSuccessV5(const rtapi::v1::SNSLobbySessionSuccessV5Message& msg);
 
 // Encode LobbySessionCreate from protobuf to LobbyStartSessionV4 binary format
