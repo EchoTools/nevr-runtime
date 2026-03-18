@@ -60,7 +60,7 @@ set(PROJECT_VENDOR "EchoTools")
 set(PROJECT_ORGANIZATION "EchoTools")
 
 # Set the project URL
-set(PROJECT_URL "https://github.com/echotools/nevr-server")
+set(PROJECT_URL "https://github.com/echotools/nevr-runtime")
 
 # set(CMAKE_BUILD_TYPE "Release")
 
@@ -212,7 +212,7 @@ endif()
 # Usage: cmake --build <build_dir> --target dist
 # =============================================================================
 
-set(DIST_NAME "nevr-server-v${PROJECT_VERSION}")
+set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}")
 set(DIST_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}")
 
 # List of DLL artifacts to include
@@ -296,7 +296,7 @@ add_custom_target(dist
 # Usage: cmake --build <build_dir> --target dist-lite
 # =============================================================================
 
-set(DIST_LITE_NAME "nevr-server-v${PROJECT_VERSION}-lite")
+set(DIST_LITE_NAME "nevr-runtime-v${PROJECT_VERSION}-lite")
 set(DIST_LITE_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}")
 
 # Find strip tool (use llvm-strip or strip)

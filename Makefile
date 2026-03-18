@@ -1,4 +1,4 @@
-# Makefile for NEVR Server
+# Makefile for NEVR Runtime
 # Provides a simple interface for building and distributing the project
 
 # Silence make's directory messages
@@ -73,7 +73,7 @@ test-system-verbose:
 	cd tests/system && go test -v -count=1 ./...
 
 help:
-	@echo "NEVR Server Build System"
+	@echo "NEVR Runtime Build System"
 	@echo "========================"
 	@echo ""
 	@echo "Available targets:"
