@@ -1,53 +1,58 @@
-# NEVR Server
+# NEVR Runtime
 
 ## Overview
 
-This project provides a multiplayer game server and modding framework for Echo VR. It consists of multiple DLL components for runtime patching, server management, and telemetry collection.
+Runtime patches for Echo VR (echovr.exe) that enable it to connect to [echovrce](https://github.com/echotools) community game services. Both the game client and dedicated game server use these DLLs to communicate with the Nakama-based backend.
+
+Part of the **nEVR** project — keeping Echo VR alive.
 
 ## Components
 
 ### Core DLLs
 
-- **gamepatches** - Runtime game modifications (CLI flags, headless/server modes, Detours-based hooks)
-- **gameserver** - Multiplayer game server (session management, events, external service communication)
-- **telemetryagent** - Game state monitoring and telemetry streaming
+- **gamepatches** → `dbgcore.dll` — Runtime game modifications (CLI flags, headless/server modes, Detours-based hooks). Used by both client and dedicated server.
+- **gameserver** → `pnsradgameserver.dll` — Game server networking (session management, events, external service communication). Used by the dedicated server only.
+- **telemetryagent** — Game state monitoring and telemetry streaming
+
+### Quest Runtime
+
+- **quest** — Standalone runtime patches for Oculus Quest (Android/ARM64)
 
 ### Legacy Components
 
-- **gamepatcheslegacy** - Frozen v1 implementation (self-contained with local common/)
-- **gameserverlegacy** - Frozen v1 implementation (self-contained with local common/)
+- **gamepatcheslegacy** — Frozen v1 implementation (self-contained with local common/)
+- **gameserverlegacy** — Frozen v1 implementation (self-contained with local common/)
 
 ### Development Tools
 
-- **dbghooks** - Debugging hooks and function tracing for reverse engineering
-- **supervisor** - PowerShell scripts for server orchestration (firewall, ports, instance management)
+- **dbghooks** — Debugging hooks and function tracing for reverse engineering
+- **supervisor** — PowerShell scripts for server orchestration (firewall, ports, instance management)
 
 ### Shared Code
 
-- **common** - Shared utilities (logging, globals, base64, symbol resolution)
-- **protobufnevr** - Protocol buffer code generation from extern/nevr-common submodule
+- **common** — Shared utilities (logging, globals, base64, symbol resolution)
+- **protobufnevr** — Protocol buffer code generation from extern/nevr-proto submodule
 
 ## Directory Structure
 
 ```sh
-nevr-server/
-├── gamepatches/         # Game runtime patches DLL
-├── gamepatcheslegacy/   # Legacy patches with local common/
-├── gameserver/          # Multiplayer server DLL
-├── gameserverlegacy/    # Legacy server with local common/
-├── telemetryagent/      # Telemetry collection DLL
-├── dbghooks/            # Debug/dev hooks
-├── protobufnevr/        # Protocol buffer definitions
-├── supervisor/          # PowerShell server management
-├── common/              # Shared C++ utilities
-├── extern/              # External dependencies (minhook, nevr-common)
-├── cmake/               # Build configuration helpers
-├── scripts/             # Build scripts (Wine cross-compilation)
-├── docs/                # Documentation
-├── CMakeLists.txt       # Top-level CMake configuration
-├── CMakePresets.json    # CMake build presets
-├── vcpkg.json           # Dependency manifest
-└── Makefile             # Build convenience wrapper
+nevr-runtime/
+├── src/
+│   ├── gamepatches/         # Game runtime patches DLL (PC)
+│   ├── gameserver/          # Game server networking DLL (PC)
+│   ├── quest/               # Quest standalone runtime (Android/ARM64)
+│   ├── telemetryagent/      # Telemetry collection DLL
+│   ├── legacy/              # Frozen v1 implementations
+│   ├── common/              # Shared C++ utilities
+│   └── protobufnevr/        # Protocol buffer definitions
+├── extern/                  # External dependencies (minhook, nevr-proto)
+├── cmake/                   # Build configuration helpers
+├── scripts/                 # Build scripts (Wine cross-compilation)
+├── docs/                    # Documentation
+├── CMakeLists.txt           # Top-level CMake configuration
+├── CMakePresets.json        # CMake build presets
+├── vcpkg.json               # Dependency manifest
+└── Makefile                 # Build convenience wrapper
 ```
 
 ## Building the Project
@@ -100,10 +105,18 @@ See component-specific README files for detailed usage.
 
 ## Architecture & Data Flow
 
-- **GameServer** and **GamePatches** are loaded into the game process (DLLs)
+- **GamePatches** and **GameServer** are loaded into the game process (DLLs)
 - **GameServer** communicates with the game via in-process hooks and with external services (ServerDB, WebSocket, HTTP)
 - **TelemetryAgent** polls game state via HTTP API or direct memory access
-- All protocol types are defined in `extern/nevr-common` submodule
+- All protocol types are defined in `extern/nevr-proto` submodule
+
+## Related Projects
+
+| Project | Description |
+|---------|-------------|
+| **nevr-runtime** (this repo) | Runtime patches for echovr.exe (PC + Quest) |
+| **nevr-server** | Custom game server (Rust) |
+| **nakama** | echovrce game service backend |
 
 ## Development
 
@@ -137,23 +150,14 @@ Dependencies are managed via vcpkg (see `vcpkg.json`):
 - **protobuf** - Protocol buffer serialization
 
 External submodules (in `extern/`):
-- **nevr-common** - Shared protocol definitions and game structures
+- **nevr-proto** - Shared protocol definitions and game structures
 
 ## Project Conventions
 
 - **Logging**: Use `Log(level, format, ...)` from `common/logging.h`
 - **Game flags**: CLI/mode flags (isHeadless, isServer) are in `gamepatches/patches.cpp`
 - **Protocol messages**: Symbol IDs defined in `gameserver/messages.h`
-- **Protobuf**: All types generated from `extern/nevr-common` - never edit generated files
-
-## Component Comparison: Current vs Legacy
-
-| Feature | Current (gamepatches/gameserver) | Legacy (*legacy) |
-|---------|----------------------------------|------------------|
-| Common code | Links to root `common/` | Self-contained `common/` subdirectory |
-| Dependencies | Uses root dependencies | Minimal dependencies |
-| Status | Active development | Frozen/maintenance |
-| Use case | Production deployment | Compatibility/fallback |
+- **Protobuf**: All types generated from `extern/nevr-proto` - never edit generated files
 
 ## Distribution
 
@@ -165,19 +169,10 @@ make dist-lite  # Stripped binaries without debug symbols
 ```
 
 Outputs:
-- `dist/nevr-server-v{VERSION}.tar.zst`
-- `dist/nevr-server-v{VERSION}.zip`
-- `dist/nevr-server-v{VERSION}-lite.tar.zst`
-- `dist/nevr-server-v{VERSION}-lite.zip`
-
-## Contributing
-
-This is an active development project. Key areas:
-
-1. **Game patching** - Runtime modifications in `gamepatches/`
-2. **Server logic** - Multiplayer functionality in `gameserver/`
-3. **Telemetry** - Game state collection in `telemetryagent/`
-4. **Protocol definitions** - Shared types in `extern/nevr-common`
+- `dist/nevr-runtime-v{VERSION}.tar.zst`
+- `dist/nevr-runtime-v{VERSION}.zip`
+- `dist/nevr-runtime-v{VERSION}-lite.tar.zst`
+- `dist/nevr-runtime-v{VERSION}-lite.zip`
 
 ## License
 

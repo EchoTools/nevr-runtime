@@ -12,7 +12,7 @@ This repository implements the NEVR multiplayer game server and patching system.
 - **GameServer**: Multiplayer game server DLL, manages sessions, events, and communication with the game and external services.
 - **GamePatches**: DLL for patching/modifying game behavior at runtime (Detours-based hooks, CLI flags, headless/server modes).
 - **TelemetryAgent**: DLL for polling game state (via HTTP or memory), processing frames, and streaming telemetry to external APIs.
-- **ProtobufNEVR**: Protobuf codegen for all protocol types, built from extern/nevr-common submodule.
+- **ProtobufNEVR**: Protobuf codegen for all protocol types, built from extern/nevr-proto submodule.
 - **common/**: Shared C++ code (logging, globals, protocol helpers).
 
 ## Architecture & Data Flow
@@ -20,7 +20,7 @@ This repository implements the NEVR multiplayer game server and patching system.
 - **GameServer** and **GamePatches** are loaded into the game process (DLLs).
 - **GameServer** communicates with the game via in-process hooks and with external services (ServerDB, WebSocket, HTTP) using custom binary and protobuf messages.
 - **TelemetryAgent** can poll game state via HTTP API or direct memory access, processes frames, and sends telemetry to a remote API (see `TelemetryAgent/`).
-- All protocol types are defined in the extern/nevr-common submodule (see `ProtobufNEVR/CMakeLists.txt`).
+- All protocol types are defined in the extern/nevr-proto submodule (see `ProtobufNEVR/CMakeLists.txt`).
 
 ## Build & Developer Workflow
 
@@ -40,12 +40,12 @@ This repository implements the NEVR multiplayer game server and patching system.
 - **Logging**: Use `Log(level, format, ...)` from `common/logging.h` for all logging. Fatal errors use `FatalError()`.
 - **Protocol messages**: Symbol IDs for all game/broadcaster/server messages are defined in `GameServer/messages.h`.
 - **Telemetry**: Frame processing and event detection logic is in `TelemetryAgent/frame_processor.cpp`.
-- **Protobuf**: All protocol types are generated from extern/nevr-common. Never edit generated files directly.
+- **Protobuf**: All protocol types are generated from extern/nevr-proto. Never edit generated files directly.
 
 ## Integration & External Dependencies
 
 - **vcpkg**: All C++ dependencies (Detours, protobuf, googleapis) are managed via `vcpkg.json`.
-- **extern/nevr-common**: Submodule for protocol definitions. Update and regenerate as needed.
+- **extern/nevr-proto**: Submodule for protocol definitions. Update and regenerate as needed.
 - **Windows toolchain**: Requires access to a Windows partition with MSVC and Windows SDK for Wine-based builds.
 
 ## Example: Building on Linux with Wine
@@ -57,14 +57,14 @@ This repository implements the NEVR multiplayer game server and patching system.
 
 ## Example: Adding a New Protocol Type
 
-1. Update proto in `extern/nevr-common/proto/`
+1. Update proto in `extern/nevr-proto/proto/`
 2. Rebuild (triggers codegen via Wine/protoc)
 3. Use new types in C++ code (see `ProtobufNEVR/`)
 
 ## References
 - Top-level: `README.md`, `CMakeLists.txt`
 - Build: `scripts/`, `cmake/`
-- Protocols: `extern/nevr-common/`, `ProtobufNEVR/`
+- Protocols: `extern/nevr-proto/`, `ProtobufNEVR/`
 - Game logic: `GameServer/`, `GamePatches/`, `TelemetryAgent/`, `common/`
 
 ---
