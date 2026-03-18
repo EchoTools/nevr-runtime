@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-> **Quick Summary**: Port CSymbol64_Hash into nevr-server as a self-contained C++17 constexpr header, then replace all hardcoded hex symbol constants with `symbol_hash("string")` calls for the 8 known pairs. Rename Tcp::GameClientMsg1/2/3 to their real protocol names. Mark 23 unresolved hashes with TODO comments.
+> **Quick Summary**: Port CSymbol64_Hash into nevr-runtime as a self-contained C++17 constexpr header, then replace all hardcoded hex symbol constants with `symbol_hash("string")` calls for the 8 known pairs. Rename Tcp::GameClientMsg1/2/3 to their real protocol names. Mark 23 unresolved hashes with TODO comments.
 > 
 > **Deliverables**:
 > - `src/common/symbol_hash.h` — constexpr CSymbol64_Hash implementation with static_assert validation
@@ -19,7 +19,7 @@
 ## Context
 
 ### Original Request
-Port the CSymbol64_Hash algorithm into nevr-server and replace hardcoded hex constants with compile-time hash calls.
+Port the CSymbol64_Hash algorithm into nevr-runtime and replace hardcoded hex constants with compile-time hash calls.
 
 ### Interview Summary
 **Key Discussions**:

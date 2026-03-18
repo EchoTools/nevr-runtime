@@ -1,8 +1,8 @@
-# Test Harness Integration for nevr-server
+# Test Harness Integration for nevr-runtime
 
 ## TL;DR
 
-> **Quick Summary**: Set up nevr-server to use evr-test-harness (via symlink) for automated system tests covering DLL loading, game patches, multiplayer, telemetry, and full E2E scenarios.
+> **Quick Summary**: Set up nevr-runtime to use evr-test-harness (via symlink) for automated system tests covering DLL loading, game patches, multiplayer, telemetry, and full E2E scenarios.
 > 
 > **Deliverables**:
 > - Symlink `./extern/evr-test-harness` → `~/src/evr-test-harness`
@@ -19,7 +19,7 @@
 ## Context
 
 ### Original Request
-User wants nevr-server to use `~/src/evr-test-harness` for all automated system tests.
+User wants nevr-runtime to use `~/src/evr-test-harness` for all automated system tests.
 
 ### Interview Summary
 **Key Discussions**:
@@ -32,7 +32,7 @@ User wants nevr-server to use `~/src/evr-test-harness` for all automated system 
 - MCPClient strategy: User chose to refactor evr-test-harness first
 
 **Research Findings**:
-- nevr-server is a C++ DLL project with only manual shell test scripts
+- nevr-runtime is a C++ DLL project with only manual shell test scripts
 - evr-test-harness is a Go MCP server with 21 tools and 44 integration tests
 - MCPClient/TestFixture code currently lives in `tests/integration/main_test.go` (not importable)
 - Port ranges: 6721-6790 for game sessions, 7350-7351 for Nakama
@@ -62,7 +62,7 @@ User wants nevr-server to use `~/src/evr-test-harness` for all automated system 
 ## Work Objectives
 
 ### Core Objective
-Enable automated system testing of nevr-server DLLs using evr-test-harness's MCP-based game control capabilities.
+Enable automated system testing of nevr-runtime DLLs using evr-test-harness's MCP-based game control capabilities.
 
 ### Concrete Deliverables
 - `extern/evr-test-harness` symlink → `~/src/evr-test-harness`
@@ -218,7 +218,7 @@ Parallel Speedup: Tasks 4-8 can run simultaneously (~50% faster)
 
   **What to do**:
   - Create `tests/system/` directory
-  - Initialize Go module: `go mod init github.com/EchoTools/nevr-server/tests/system`
+  - Initialize Go module: `go mod init github.com/EchoTools/nevr-runtime/tests/system`
   - Add `replace` directive for evr-test-harness: `replace github.com/EchoTools/evr-test-harness => ../../extern/evr-test-harness`
   - Add required dependencies (testify)
   - Run `go mod tidy` to verify
@@ -253,7 +253,7 @@ Parallel Speedup: Tasks 4-8 can run simultaneously (~50% faster)
     Preconditions: Task 1 complete, symlink exists
     Steps:
       1. cd tests/system && cat go.mod
-      2. Assert: contains "module github.com/EchoTools/nevr-server/tests/system"
+      2. Assert: contains "module github.com/EchoTools/nevr-runtime/tests/system"
       3. Assert: contains "replace github.com/EchoTools/evr-test-harness"
       4. cd tests/system && go mod tidy
       5. Assert: exit code 0
@@ -310,7 +310,7 @@ Parallel Speedup: Tasks 4-8 can run simultaneously (~50% faster)
   - `~/src/evr-test-harness/pkg/testutil/` - TestFixture and MCPClient interfaces
   - `~/src/evr-test-harness/tests/integration/main_test.go` - patterns for test setup
   - `test-headless-server.sh` - DLL deployment pattern (copy to game dir)
-  - `dist/` - built DLL output location in nevr-server
+  - `dist/` - built DLL output location in nevr-runtime
 
   **Acceptance Criteria**:
 
@@ -350,7 +350,7 @@ Parallel Speedup: Tasks 4-8 can run simultaneously (~50% faster)
   **What to do**:
   - Create `tests/system/dll_test.go`
   - Implement tests for:
-    - Game starts without nevr-server DLLs (baseline)
+    - Game starts without nevr-runtime DLLs (baseline)
     - Game loads with gamepatches.dll injected
     - Game loads with gameserver.dll injected
     - Game loads with telemetryagent.dll injected

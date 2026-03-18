@@ -2,9 +2,9 @@
 
 ## Context
 
-This refactoring is a **prerequisite** for the nevr-server test-harness-integration plan.
+This refactoring is a **prerequisite** for the nevr-runtime test-harness-integration plan.
 
-**Goal:** Export `TestFixture` and `MCPClient` as a reusable library so nevr-server can import them.
+**Goal:** Export `TestFixture` and `MCPClient` as a reusable library so nevr-runtime can import them.
 
 ---
 
@@ -31,7 +31,7 @@ evr-test-harness/
     └── main_test.go        # Import from pkg/testutil
 ```
 
-**Import statement in nevr-server:**
+**Import statement in nevr-runtime:**
 ```go
 import "github.com/EchoTools/evr-test-harness/pkg/testutil"
 ```
@@ -135,7 +135,7 @@ go list -m github.com/EchoTools/evr-test-harness/pkg/testutil
 
 **After completing this refactoring:**
 
-1. Return to nevr-server: `cd ~/src/nevr-server`
+1. Return to nevr-runtime: `cd ~/src/nevr-server`
 2. Resume the test-harness-integration plan: `/start-work`
 3. The plan will automatically continue from Task 1
 
@@ -145,4 +145,4 @@ go list -m github.com/EchoTools/evr-test-harness/pkg/testutil
 
 - **Source:** `tests/integration/main_test.go` (current location)
 - **Target:** `pkg/testutil/fixture.go`, `pkg/testutil/client.go`
-- **Usage example:** See nevr-server plan at `.sisyphus/plans/test-harness-integration.md`
+- **Usage example:** See nevr-runtime plan at `.sisyphus/plans/test-harness-integration.md`

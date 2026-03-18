@@ -132,7 +132,7 @@ There is no explicit server/dedicated flag or config toggle in the harness start
 ### Fix Required
 Identify the actual server-mode activation criteria in the game/patch code, then add a corresponding input field and flag/config to `StartProcess` so `evr-mcp_echovr_start` can pass it.
 
-## [$(date -Iseconds)] Task 5: server mode activation (nevr-server)
+## [$(date -Iseconds)] Task 5: server mode activation (nevr-runtime)
 
 ### Findings
 Server mode is activated only when the `-server` CLI flag is provided.
@@ -166,7 +166,7 @@ Player-join error cannot be tested until server mode starts; HTTP API restrictio
 The investigation into Echo VR server mode integration failures has concluded with a definitive root cause: **Missing `-server` CLI flag**.
 
 ### Key Learnings
-1.  **Flag Gating**: `nevr-server` patches (specifically `dbgcore.dll`) are explicitly gated by the `-server` flag. Without it, dedicated server patches (forcing server flags, allowing incoming connections) are never applied.
+1.  **Flag Gating**: `nevr-runtime` patches (specifically `dbgcore.dll`) are explicitly gated by the `-server` flag. Without it, dedicated server patches (forcing server flags, allowing incoming connections) are never applied.
 2.  **Harness Limitation**: The `evr-test-harness` launcher (`evr-mcp_echovr_start`) was designed for client automation and does not currently support passing the `-server` flag.
 3.  **DLL Versioning**: While a hybrid DLL state was initially found, it was a secondary issue. Both backup and current build DLLs require the `-server` flag to activate server mode.
 4.  **HTTP API Behavior**: Error code `-6` ("Endpoint is restricted in this match type") is a reliable indicator that the game is in client mode rather than server mode.

@@ -28,6 +28,6 @@ NEITHER backup DLLs NOR current build DLLs can start the game in server mode via
 
 ### Recommended Next Steps
 1. Skip Task 4 (no comparison possible - both fail)
-2. Task 5: Analyze server startup code in nevr-server
+2. Task 5: Analyze server startup code in nevr-runtime
 3. Investigate evr-test-harness server startup mechanism
 4. Check if Nakama backend is required dependency

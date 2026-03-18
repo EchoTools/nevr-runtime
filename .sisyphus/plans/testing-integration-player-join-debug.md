@@ -19,7 +19,7 @@
 ## Context
 
 ### Original Request
-User wants to set up testing abilities in nevr-server using evr-test-harness, with the first task being to diagnose why the legacygameserver code errors when a player joins, while the backup DLLs work correctly.
+User wants to set up testing abilities in nevr-runtime using evr-test-harness, with the first task being to diagnose why the legacygameserver code errors when a player joins, while the backup DLLs work correctly.
 
 ### Interview Summary
 **Key Discussions**:

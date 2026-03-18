@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-> **Quick Summary**: Build a tint-first vertical slice of CDN cosmetics for Echo VR. Define file formats (`.evrp` package, JSON manifest), create Go CLI tools in a separate repo (`~/src/nevr-cdn-tools/`) using `evrFileTools` as a library, implement C++ game hooks in nevr-server to download tint assets from `https://cdn.echo.taxi/` (Cloudflare R2), cache in `%LOCALAPPDATA%/EchoVR/cosmetics/`, and inject custom tint data via the `Loadout_ResolveDataFromId` hook.
+> **Quick Summary**: Build a tint-first vertical slice of CDN cosmetics for Echo VR. Define file formats (`.evrp` package, JSON manifest), create Go CLI tools in a separate repo (`~/src/nevr-cdn-tools/`) using `evrFileTools` as a library, implement C++ game hooks in nevr-runtime to download tint assets from `https://cdn.echo.taxi/` (Cloudflare R2), cache in `%LOCALAPPDATA%/EchoVR/cosmetics/`, and inject custom tint data via the `Loadout_ResolveDataFromId` hook.
 >
 > **Deliverables**:
 > - `docs/cosmetics-cdn-format.md` — Format specification (`.evrp` binary layout, manifest JSON schema, CDN URL scheme)
@@ -25,7 +25,7 @@ User wants CDN-based cosmetics loading for Echo VR. Custom cosmetic assets hoste
 ### Interview Summary
 **Key Discussions**:
 - **Start with tints**: 96-byte color data, simplest asset type, proves the full pipeline without mesh/texture complexity
-- **Separate repo for Go tools**: `~/src/nevr-cdn-tools/` (module `github.com/EchoTools/nevr-cdn-tools`), NOT inside nevr-server
+- **Separate repo for Go tools**: `~/src/nevr-cdn-tools/` (module `github.com/EchoTools/nevr-cdn-tools`), NOT inside nevr-runtime
 - **Use evrFileTools as Go library**: `github.com/EchoTools/evrFileTools` already has tint parsing, manifest/package building, ZSTD compression
 - **Hook strategy**: `Loadout_ResolveDataFromId` @ RVA `0x004F37A0` resolves loadout data. Hook intercepts AFTER resolution to patch tint color data in-place
 - **CDN URL**: `https://cdn.echo.taxi/` with versioned paths
@@ -143,7 +143,7 @@ Every task MUST include agent-executed QA scenarios. Evidence saved to `.sisyphu
 ### Two-Track Architecture
 
 ```
-Track A: Go CLI Tools (~/src/nevr-cdn-tools/)          Track B: C++ Game Hooks (nevr-server)
+Track A: Go CLI Tools (~/src/nevr-cdn-tools/)          Track B: C++ Game Hooks (nevr-runtime)
 ─────────────────────────────────────────────          ─────────────────────────────────────
   evrFileTools (library dep)                             Existing hooking infrastructure
   ├── pack-tint: colors → .evrp                         ├── symbol_hash.h

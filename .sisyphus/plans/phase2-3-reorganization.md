@@ -20,7 +20,7 @@
 ## Context
 
 ### Original Request
-User requested detailed execution plan for Phase 2 and Phase 3 of a directory reorganization for the nevr-server C++ CMake project after Phase 1 (lowercase renames) was completed.
+User requested detailed execution plan for Phase 2 and Phase 3 of a directory reorganization for the nevr-runtime C++ CMake project after Phase 1 (lowercase renames) was completed.
 
 ### Interview Summary
 **Key Discussions**:
@@ -46,7 +46,7 @@ User requested detailed execution plan for Phase 2 and Phase 3 of a directory re
 ## Work Objectives
 
 ### Core Objective
-Reorganize nevr-server C++ project from flat directory structure into hierarchical src/, tools/, admin/ layout while maintaining 100% build compatibility and git history.
+Reorganize nevr-runtime C++ project from flat directory structure into hierarchical src/, tools/, admin/ layout while maintaining 100% build compatibility and git history.
 
 ### Concrete Deliverables
 - `src/` directory containing all source components (common, gamepatches, gameserver, telemetryagent, protobufnevr, legacy/gamepatches, legacy/gameserver)

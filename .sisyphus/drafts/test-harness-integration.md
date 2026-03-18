@@ -2,7 +2,7 @@
 
 ## Context
 
-**nevr-server**: C++ DLL-based game server project
+**nevr-runtime**: C++ DLL-based runtime patches project
 - Components: gameserver, gamepatches, telemetryagent, common
 - Build: CMake + vcpkg + MinGW (cross-compiled via Wine)
 - Current Tests: Manual shell scripts only (test-headless-server.sh, test-client.sh)
@@ -25,7 +25,7 @@
 
 ## Requirements (confirmed)
 
-- [x] Integration approach: **Symlink** - `evr-test-harness` symlinked into nevr-server
+- [x] Integration approach: **Symlink** - `evr-test-harness` symlinked into nevr-runtime
 - [x] What to test: **Everything**
   - DLL loading/injection into Echo VR
   - Game behavior changes (patches: headless, server mode, CLI flags)
@@ -55,7 +55,7 @@
 - Update existing integration tests to use new package
 - Ensure tests still pass
 
-**Phase 2 (nevr-server):**
+**Phase 2 (nevr-runtime):**
 - Create symlink to evr-test-harness
 - Set up tests/system/ with go.mod
 - Import evr-test-harness/pkg/testutil
@@ -64,7 +64,7 @@
 
 ## Scope Boundaries
 
-**IN SCOPE (this plan - nevr-server):**
+**IN SCOPE (this plan - nevr-runtime):**
 - Symlink setup: ./extern/evr-test-harness → ~/src/evr-test-harness
 - Test infrastructure: tests/system/ with go.mod
 - Import evr-test-harness/pkg/testutil (assumes refactoring is done)

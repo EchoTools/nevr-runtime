@@ -1,4 +1,4 @@
-# Server mode activation in nevr-server
+# Server mode activation in nevr-runtime
 
 ## Files reviewed
 - `/home/andrew/src/nevr-server/src/gamepatches/patches.cpp`

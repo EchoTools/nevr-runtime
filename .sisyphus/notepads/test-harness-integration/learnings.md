@@ -42,14 +42,14 @@
 
 ### Status: ✅ COMPLETE
 **Date**: 2026-02-07
-**Task**: Initialize Go module `github.com/EchoTools/nevr-server/tests/system` with evr-test-harness dependency
+**Task**: Initialize Go module `github.com/EchoTools/nevr-runtime/tests/system` with evr-test-harness dependency
 
 ### Key Findings
 
 1. **Module Already Initialized**
    - Location: `tests/system/go.mod`
-   - Module name: `github.com/EchoTools/nevr-server/tests/system`
-   - Go version: `1.25.6` (nevr-server uses newer than harness's 1.24.12 - compatible)
+   - Module name: `github.com/EchoTools/nevr-runtime/tests/system`
+   - Go version: `1.25.6` (nevr-runtime uses newer than harness's 1.24.12 - compatible)
    - Replace directive: ✅ Correct relative path `../../extern/evr-test-harness`
 
 2. **Dependencies Resolved**
@@ -67,7 +67,7 @@
 ### Acceptance Criteria Met
 
 **Scenario 1: Go module initializes and resolves dependencies**
-- ✅ Module name: `github.com/EchoTools/nevr-server/tests/system`
+- ✅ Module name: `github.com/EchoTools/nevr-runtime/tests/system`
 - ✅ Replace directive present: `replace github.com/EchoTools/evr-test-harness => ../../extern/evr-test-harness`
 - ✅ `go mod tidy` exit code 0
 - ✅ `go.sum` file exists with resolved dependencies
@@ -82,7 +82,7 @@
 
 **Go Version Compatibility**:
 - evr-test-harness: go 1.24.12
-- nevr-server/tests/system: go 1.25.6
+- nevr-runtime/tests/system: go 1.25.6
 - This is fine - Go is forward compatible, newer minor versions work with older modules
 - Relative imports via replace directive handle version differences
 
@@ -325,7 +325,7 @@ $ cd tests/system && go test -v -short -run ".*DLL.*"
     dll_test.go:155: skipping integration test in short mode
 --- SKIP: TestDLLLoading_CleanupRemovesAllDLLs (0.00s)
 PASS
-ok  	github.com/EchoTools/nevr-server/tests/system	0.003s
+ok  	github.com/EchoTools/nevr-runtime/tests/system	0.003s
 ```
 
 ### Success Criteria Met
@@ -1316,7 +1316,7 @@ cd tests/system && go test -v -short ./...
     telemetry_test.go:203: skipping integration test in short mode
 --- SKIP: TestTelemetry_HTTPPollerDirectQuery (0.00s)
 PASS
-ok  	github.com/EchoTools/nevr-server/tests/system	0.004s
+ok  	github.com/EchoTools/nevr-runtime/tests/system	0.004s
 ```
 
 **Result**: ✅ PASSED

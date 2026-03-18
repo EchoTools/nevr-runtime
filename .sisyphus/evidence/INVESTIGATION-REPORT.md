@@ -3,7 +3,7 @@
 ## 1. Executive Summary
 The investigation into why Echo VR failed to start in server mode during integration testing has concluded. The primary cause is the **absence of the `-server` command-line flag** during the launch process. 
 
-While a "Hybrid DLL" state (a mix of backup and current build binaries) was initially identified, resolving this by deploying a consistent build did not fix the issue. Static analysis of the `nevr-server` source code and the `evr-test-harness` launcher revealed that the game patches explicitly gate dedicated server behavior behind the `-server` flag, which the harness does not currently provide. Consequently, the game consistently boots in client mode, blocking server-specific functionality and HTTP API endpoints.
+While a "Hybrid DLL" state (a mix of backup and current build binaries) was initially identified, resolving this by deploying a consistent build did not fix the issue. Static analysis of the `nevr-runtime` source code and the `evr-test-harness` launcher revealed that the game patches explicitly gate dedicated server behavior behind the `-server` flag, which the harness does not currently provide. Consequently, the game consistently boots in client mode, blocking server-specific functionality and HTTP API endpoints.
 
 ## 2. Investigation Methodology
 The investigation followed a multi-stage approach:
@@ -12,7 +12,7 @@ The investigation followed a multi-stage approach:
 3.  **Current Build Verification**: Deployed the full "Current Build" (v3.2.0) and repeated tests to isolate DLL versioning as a variable (Task 3).
 4.  **Log & API Analysis**: Analyzed `game.log` and HTTP API responses to confirm the game was stuck in client mode (err_code -6).
 5.  **Source Code Analysis**:
-    *   Analyzed `nevr-server/src/gamepatches/patches.cpp` to identify server-mode activation triggers.
+    *   Analyzed `nevr-runtime/src/gamepatches/patches.cpp` to identify server-mode activation triggers.
     *   Analyzed `evr-test-harness/internal/echovr/process.go` to understand the launch command construction.
 
 ## 3. Key Discoveries
@@ -25,7 +25,7 @@ The investigation followed a multi-stage approach:
 ## 4. Root Cause Analysis
 The root cause is a **configuration mismatch between the test harness and the game patches**. 
 
-The `nevr-server` patches are designed to be non-intrusive; they do not force server behavior unless explicitly requested. This safety mechanism ensures that the same DLLs can be used for both client and server roles. Because the `evr-test-harness` was developed primarily for client-side automation, it does not include the `-server` flag in its process startup logic. Without this flag, the `PatchEnableServer()` function in `dbgcore.dll` is never called, and the game remains a standard client session.
+The `nevr-runtime` patches are designed to be non-intrusive; they do not force server behavior unless explicitly requested. This safety mechanism ensures that the same DLLs can be used for both client and server roles. Because the `evr-test-harness` was developed primarily for client-side automation, it does not include the `-server` flag in its process startup logic. Without this flag, the `PatchEnableServer()` function in `dbgcore.dll` is never called, and the game remains a standard client session.
 
 ## 5. Fix Recommendations
 To resolve the issue and enable server-mode testing, the following steps are required:
@@ -43,7 +43,7 @@ To verify the fix:
     ```bash
     wine echovr.exe -noovr -windowed -mp -httpport 6721 -server -level mpl_arena_a
     ```
-2.  **Log Verification**: Check `game.log` for the presence of server-mode initialization logs from `nevr-server`.
+2.  **Log Verification**: Check `game.log` for the presence of server-mode initialization logs from `nevr-runtime`.
 3.  **API Verification**: Query the HTTP API:
     ```bash
     curl http://127.0.0.1:6721/session

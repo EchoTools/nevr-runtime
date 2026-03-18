@@ -8,7 +8,7 @@
 3. **[GHIDRA_STRUCT_ANALYSIS.md](GHIDRA_STRUCT_ANALYSIS.md)** - Deep technical analysis
 
 ### 📁 File Changes
-- **[extern/nevr-common/common/echovr.h](../extern/nevr-common/common/echovr.h)** - Updated struct definitions
+- **[extern/nevr-proto/common/echovr.h](../extern/nevr-proto/common/echovr.h)** - Updated struct definitions
   - EntrantData corrected to 0x250 bytes
   - Added slotIndex field
   - Added cosmetic offset documentation
@@ -225,7 +225,7 @@ for (uint64 i = 0; i < loadout_count; i++) {
 ## 💾 Files Modified
 
 ```
-extern/nevr-common/common/echovr.h
+extern/nevr-proto/common/echovr.h
 └─ Updated EntrantData struct
 └─ Added slotIndex field @ 0xA0
 └─ Added cosmetic data documentation

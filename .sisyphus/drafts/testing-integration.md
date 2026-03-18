@@ -2,8 +2,8 @@
 
 ## Research Findings
 
-### nevr-server Repository
-- **Type**: C++ DLL-based multiplayer game server for Echo VR
+### nevr-runtime Repository
+- **Type**: C++ DLL-based runtime patches for Echo VR
 - **Build System**: CMake + vcpkg + MinGW cross-compilation
 - **Components**:
   - `gameserver.dll` (current) - Protobuf-based, ServerContext abstraction
@@ -151,4 +151,4 @@
 ### EXCLUDE
 - Mock/simulation testing
 - CI/CD integration (for now)
-- Unit tests for nevr-server
+- Unit tests for nevr-runtime
