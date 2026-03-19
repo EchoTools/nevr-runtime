@@ -16,6 +16,7 @@
 #endif
 
 #include <processthreadsapi.h>
+#include <psapi.h>
 #include <windows.h>
 
 #include "common/echovrunexported.h"
@@ -546,6 +547,63 @@ VOID PatchDisableWwise() {
 }
 
 /// <summary>
+/// Disables renderer, effects, and audio for dedicated server mode.
+/// These are the same core patches from PatchEnableHeadless() minus console/log hooks.
+/// Without a GPU driving vsync, servers also need the fixed timestep flag.
+/// </summary>
+/// <param name="pGame">The pointer to the instance of the game structure.</param>
+VOID PatchDisableServerRendering(PVOID pGame) {
+  using namespace PatchAddresses;
+
+  // Disable audio by clearing the audio enable bit (same as `-noaudio` command)
+  UINT32* audioFlags = reinterpret_cast<UINT32*>(static_cast<CHAR*>(pGame) + GAME_AUDIO_FLAGS_OFFSET);
+  *audioFlags &= 0xFFFFFFFD;  // Clear bit 1 (audio enable)
+
+  // Skip renderer initialization
+  const BYTE rendererPatch[] = {0xA8, 0x00};  // TEST al, 0 (always false)
+  static_assert(sizeof(rendererPatch) == HEADLESS_RENDERER_SIZE, "HEADLESS_RENDERER patch size mismatch");
+  ApplyPatch(HEADLESS_RENDERER, rendererPatch, sizeof(rendererPatch));
+
+  // Skip effects resource loading
+  const BYTE effectsPatch[] = {0xEB, 0x41};  // JMP +0x43
+  static_assert(sizeof(effectsPatch) == HEADLESS_EFFECTS_SIZE, "HEADLESS_EFFECTS patch size mismatch");
+  ApplyPatch(HEADLESS_EFFECTS, effectsPatch, sizeof(effectsPatch));
+
+  // Enable fixed timestep if configured
+  if (headlessTimeStep != 0) {
+    UINT64* timestepFlags = reinterpret_cast<UINT64*>(static_cast<CHAR*>(pGame) + GAME_TIMESTEP_FLAGS_OFFSET);
+    *timestepFlags |= 0x2000000;  // Set fixed timestep flag
+  }
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Server rendering disabled (renderer, effects, audio)");
+  if (headlessTimeStep != 0) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Fixed timestep flag set (%u ticks/sec)", headlessTimeStep);
+  }
+}
+
+/// <summary>
+/// Logs a one-time server profile snapshot after all patches are applied.
+/// Reports working set, private bytes, and checks whether GPU/audio/OVR DLLs are loaded.
+/// </summary>
+VOID PatchLogServerProfile() {
+  PROCESS_MEMORY_COUNTERS_EX pmc;
+  memset(&pmc, 0, sizeof(pmc));
+  pmc.cb = sizeof(pmc);
+  if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PROFILE] WorkingSet: %llu MB, PrivateBytes: %llu MB",
+        pmc.WorkingSetSize / (1024 * 1024),
+        pmc.PrivateUsage / (1024 * 1024));
+  }
+
+  const char* checkDlls[] = {"d3d11", "dxgi", "LibOVRPlatform", "AkSoundEngine", NULL};
+  for (int i = 0; checkDlls[i]; i++) {
+    HMODULE h = GetModuleHandleA(checkDlls[i]);
+    Log(EchoVR::LogLevel::Info, "[NEVR.PROFILE] Module %s: %s",
+        checkDlls[i], h ? "LOADED" : "not loaded");
+  }
+}
+
+/// <summary>
 /// A detour hook for the game's method it uses to transition from one net game state to another.
 /// </summary>
 /// <param name="game">A pointer to the game instance.</param>
@@ -596,9 +654,6 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
                            "[NEVR] Sets the fixed update interval when using -headless (in ticks/updates per "
                            "second). 0 = no fixed time step, 120 = default");
 
-  EchoVR::AddArgSyntax(pArgSyntax, "-fixed-timestep", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-fixed-timestep", "[NEVR] (Deprecated) Use -timestep instead");
-
   EchoVR::AddArgSyntax(pArgSyntax, "-noconsole", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-noconsole",
                            "[NEVR] Disable console window creation (must be used with -headless)");
@@ -648,9 +703,6 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
             "Missing argument for -timestep. Provide a positive number for fixed tick rate, or zero for unthrottled.",
             NULL);
       }
-    } else if (lstrcmpW(arg, L"-fixed-timestep") == 0) {
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] The -fixed-timestep argument is deprecated and ignored. Use -timestep <N> instead.");
     } else if (lstrcmpW(arg, L"-config-path") == 0) {
       if (i + 1 < argc) {
         int len = WideCharToMultiByte(CP_UTF8, 0, argv[i + 1], -1, customConfigJsonPath, MAX_PATH, NULL, NULL);
@@ -692,9 +744,13 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 
   // Apply patches to force the game to load as a server.
   if (isServer) {
+    PatchDisableServerRendering(pGame);
     PatchEnableServer();
     PatchDisableLoadingTips();
     PatchBypassOvrPlatform();
+    PatchBlockOculusSDK();
+    PatchDisableWwise();
+    PatchLogServerProfile();
   }
 
   // Update the window title
@@ -747,7 +803,7 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
 
   // Configure fixed timestep if specified
   // Note: This is placed here because the required structures must be initialized first
-  if (isHeadless && headlessTimeStep != 0) {
+  if ((isHeadless || isServer) && headlessTimeStep != 0) {
     using namespace PatchAddresses;
 
     // Set the fixed time step value (in microseconds)
@@ -1475,8 +1531,4 @@ VOID Initialize() {
   // monitor is harmful in all Wine/headless scenarios and benign to disable on clients.
   PatchDeadlockMonitor();
 
-  if (isServer || isHeadless) {
-    PatchBlockOculusSDK();
-    PatchDisableWwise();
-  }
 }
