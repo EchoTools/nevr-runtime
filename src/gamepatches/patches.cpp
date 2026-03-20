@@ -1512,6 +1512,24 @@ VOID Initialize() {
   AddVectoredExceptionHandler(1, BreakpointVEH);
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Breakpoint VEH installed (handles int3 after ExitProcess suppression)");
 
+  // Install console ctrl handler so CTRL+C actually terminates the process.
+  // The game registers its own handler that logs "Console close signal received" but doesn't exit.
+  // Handlers are called LIFO, so ours runs first and terminates before the game's handler can swallow the signal.
+  SetConsoleCtrlHandler(
+      [](DWORD dwCtrlType) -> BOOL {
+        if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_CLOSE_EVENT || dwCtrlType == CTRL_BREAK_EVENT) {
+          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Console signal %lu received — exiting", dwCtrlType);
+          if (OriginalExitProcess)
+            OriginalExitProcess(0);
+          else
+            ExitProcess(0);
+          return TRUE;  // unreachable, but satisfies the signature
+        }
+        return FALSE;
+      },
+      TRUE);
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Console ctrl handler installed (CTRL+C will terminate)");
+
   // Run some startup patches
   PatchNoOvrRequiresSpectatorStream();
 
