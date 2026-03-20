@@ -1,69 +1,179 @@
-# NEVR Server
+# NEVR Runtime
 
 ## Overview
 
-This project consists of two main components: a game patch library and a game server. The game patch library provides functionalities to modify or enhance game behavior, while the game server handles the multiplayer aspects of the game.
+Runtime patches for Echo VR (echovr.exe) that enable it to connect to [echovrce](https://github.com/echotools) community game services. Both the game client and dedicated game server use these DLLs to communicate with the Nakama-based backend.
+
+Part of the **nEVR** project — keeping Echo VR alive.
+
+## Components
+
+### Core DLLs
+
+- **gamepatches** → `dbgcore.dll` — Runtime game modifications (CLI flags, headless/server modes, Detours-based hooks). Used by both client and dedicated server.
+- **gameserver** → `pnsradgameserver.dll` — Game server networking (session management, events, external service communication). Used by the dedicated server only.
+- **telemetryagent** — Game state monitoring and telemetry streaming
+
+### Quest Runtime
+
+- **quest** — Standalone runtime patches for Oculus Quest (Android/ARM64)
+
+### Legacy Components
+
+- **gamepatcheslegacy** — Frozen v1 implementation (self-contained with local common/)
+- **gameserverlegacy** — Frozen v1 implementation (self-contained with local common/)
+
+### Development Tools
+
+- **dbghooks** — Debugging hooks and function tracing for reverse engineering
+- **supervisor** — PowerShell scripts for server orchestration (firewall, ports, instance management)
+
+### Shared Code
+
+- **common** — Shared utilities (logging, globals, base64, symbol resolution)
+- **protobufnevr** — Protocol buffer code generation from extern/nevr-proto submodule
 
 ## Directory Structure
 
 ```sh
-nevr-server
-├── gamepatch
-│   └── CMakeLists.txt      # Build configuration for the game patch library
-├── gameserver
-│   └── CMakeLists.txt      # Build configuration for the game server
-├── CMakeLists.txt          # Top-level CMake configuration
-└── README.md               # Project documentation
+nevr-runtime/
+├── src/
+│   ├── gamepatches/         # Game runtime patches DLL (PC)
+│   ├── gameserver/          # Game server networking DLL (PC)
+│   ├── quest/               # Quest standalone runtime (Android/ARM64)
+│   ├── telemetryagent/      # Telemetry collection DLL
+│   ├── legacy/              # Frozen v1 implementations
+│   ├── common/              # Shared C++ utilities
+│   └── protobufnevr/        # Protocol buffer definitions
+├── extern/                  # External dependencies (minhook, nevr-proto)
+├── cmake/                   # Build configuration helpers
+├── scripts/                 # Build scripts (Wine cross-compilation)
+├── docs/                    # Documentation
+├── CMakeLists.txt           # Top-level CMake configuration
+├── CMakePresets.json        # CMake build presets
+├── vcpkg.json               # Dependency manifest
+└── Makefile                 # Build convenience wrapper
 ```
 
 ## Building the Project
 
 ### Prerequisites
 
-- Cmake 4.0 or higher [Download](https://cmake.org/download/)
-- Visual Studio 2022 or higher [Download](https://visualstudio.microsoft.com/vs/)
+- CMake 3.20 or higher [Download](https://cmake.org/download/)
+- One of:
+  - **MinGW** (cross-compile from Linux) - Recommended
+  - **MSVC via Wine** (Linux with Windows SDK mounted)
+  - **Visual Studio 2022** (native Windows)
 
-### VS Code
-
-Open the command pallet (CTRL+P) and CMake build, when asked to select a kit, select `Visual Studio Community 2022 Release - x86_amd64`.
-
-### Command Line
-
-To build the project, follow these steps:
-
-Create a build directory:
+### MinGW Build (Linux - Recommended)
 
 ```sh
-   mkdir build
-   cd build
+make configure  # Configure with MinGW toolchain
+make build      # Build all components
 ```
 
-Run CMake to configure the project:
+### MSVC via Wine (Linux)
 
-   ```sh
-   cmake ..
-   ```
+```sh
+./scripts/setup-msvc-wine.sh   # One-time setup
+./scripts/build-with-wine.sh   # Full build using MSVC via Wine
+```
 
-1. Build the project:
+### Visual Studio (Windows)
 
-   ```sh
-   cmake --build .
-   ```
+Open the command palette (CTRL+P) and CMake build, when asked to select a kit, select `Visual Studio Community 2022 Release - x86_amd64`.
+
+Or from command line:
+
+```sh
+mkdir build
+cd build
+cmake ..
+cmake --build .
+```
 
 ## Usage
 
-After building the project, you can use the game patch library and game server as per your requirements. Refer to the individual `README.md` files in the `gamepatch` and `gameserver` directories for more specific usage instructions.
+After building, DLL artifacts are in `build/mingw-release/bin/` (MinGW) or `build/release/bin/` (MSVC):
+
+- `gamepatches.dll` → Deploy as `dbgcore.dll` to game directory
+- `gameserver.dll` → Deploy as `pnsradgameserver.dll` to game directory
+- `dbghooks.dll` → For debugging/development only
+- `telemetryagent.dll` → For telemetry collection
+
+See component-specific README files for detailed usage.
+
+## Architecture & Data Flow
+
+- **GamePatches** and **GameServer** are loaded into the game process (DLLs)
+- **GameServer** communicates with the game via in-process hooks and with external services (ServerDB, WebSocket, HTTP)
+- **TelemetryAgent** polls game state via HTTP API or direct memory access
+- All protocol types are defined in `extern/nevr-proto` submodule
+
+## Related Projects
+
+| Project | Description |
+|---------|-------------|
+| **nevr-runtime** (this repo) | Runtime patches for echovr.exe (PC + Quest) |
+| **nevr-server** | Custom game server (Rust) |
+| **nakama** | echovrce game service backend |
+
+## Development
+
+### Build Scripts
+
+- `scripts/build-with-wine.sh` - End-to-end MSVC build via Wine
+- `scripts/cl-wine.sh`, `lib-wine.sh`, `link-wine.sh` - MSVC toolchain wrappers
+- `scripts/protoc-wine.sh` - Protobuf compiler wrapper
+- `scripts/setup-msvc-wine.sh` - Wine environment setup
+
+### Local Configuration
+
+Add local customizations to `cmake/local.cmake` (auto-included if exists). This file can override settings or add custom install rules.
+
+Example:
+```cmake
+# Deploy DLLs to game directory after build
+set(GAME_DIR "C:/Program Files/Echo VR")
+add_custom_command(TARGET gamepatches POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:gamepatches> "${GAME_DIR}/dbgcore.dll"
+)
+```
 
 ## Dependencies
 
-This project may have dependencies that need to be installed separately. Please refer to the respective `CMakeLists.txt` files for details on any external libraries used.
+Dependencies are managed via vcpkg (see `vcpkg.json`):
+- **curl** - HTTP client for external API communication
+- **jsoncpp** - JSON parsing
+- **minhook** - Function hooking (Windows API)
+- **opus** - Audio codec
+- **protobuf** - Protocol buffer serialization
 
-## Local CMake Configuration
+External submodules (in `extern/`):
+- **nevr-proto** - Shared protocol definitions and game structures
 
-Add any local customizations to `cmake/local.cmake` file. This file will be included automatically if it exists, allowing you to override or extend the default CMake configuration.
+## Project Conventions
 
-By default it includes commands to copy the `dbgcore.dll` and `pnsradgameserver.dll` to the specified game server directory. You can modify this file to add additional configurations or custom commands.
+- **Logging**: Use `Log(level, format, ...)` from `common/logging.h`
+- **Game flags**: CLI/mode flags (isHeadless, isServer) are in `gamepatches/patches.cpp`
+- **Protocol messages**: Symbol IDs defined in `gameserver/messages.h`
+- **Protobuf**: All types generated from `extern/nevr-proto` - never edit generated files
 
-## Environment requirements
+## Distribution
 
-Ensure that the cmake operation is running from `x64 Native Tools Command Prompt for VS 2022`
+Create distribution packages:
+
+```sh
+make dist       # Full package with debug symbols
+make dist-lite  # Stripped binaries without debug symbols
+```
+
+Outputs:
+- `dist/nevr-runtime-v{VERSION}.tar.zst`
+- `dist/nevr-runtime-v{VERSION}.zip`
+- `dist/nevr-runtime-v{VERSION}-lite.tar.zst`
+- `dist/nevr-runtime-v{VERSION}-lite.zip`
+
+## License
+
+See LICENSE file for details.

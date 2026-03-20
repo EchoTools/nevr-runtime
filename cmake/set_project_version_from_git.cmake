@@ -19,6 +19,9 @@ function(set_project_version_from_git)
   set(GIT_COMMIT_HASH
       "unknown"
       PARENT_SCOPE)
+  set(GIT_DESCRIBE
+      "unknown"
+      PARENT_SCOPE)
 
   # Try to find Git
   find_package(Git QUIET)
@@ -37,6 +40,16 @@ function(set_project_version_from_git)
     ERROR_VARIABLE GIT_PROJECT_VERSION_ERROR
     RESULT_VARIABLE GIT_PROJECT_VERSION_RESULT
     OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+  # Get raw git describe output (with dirty flag) for GIT_DESCRIBE
+  execute_process(
+    COMMAND ${GIT_EXECUTABLE} describe --tags --always --dirty
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE GIT_DESCRIBE_RAW
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  set(GIT_DESCRIBE
+      "${GIT_DESCRIBE_RAW}"
+      PARENT_SCOPE)
 
   # Get commit hash for GIT_COMMIT_HASH
   execute_process(

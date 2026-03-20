@@ -1,7 +1,10 @@
 {
   "dependencies": [
-    "detours",
-    "protobuf",
-    "googleapis"
+    "curl",
+    "ixwebsocket",
+    "jsoncpp",
+    "minhook",
+    "opus",
+    "protobuf"
   ]
 }

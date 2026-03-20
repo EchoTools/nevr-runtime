@@ -38,8 +38,8 @@ jobs:
       shell: bash
       run: |
         VERSION="${{ steps.version.outputs.version }}"
-        DIST_NAME="nevr-server-v${VERSION}"
-        DIST_LITE_NAME="nevr-server-v${VERSION}-lite"
+        DIST_NAME="nevr-runtime-v${VERSION}"
+        DIST_LITE_NAME="nevr-runtime-v${VERSION}-lite"
         DIST_DIR="${{ github.workspace }}/build/dist"
         
         # Create full distribution
@@ -72,27 +72,27 @@ jobs:
     - name: Upload full distribution (zip)
       uses: softprops/action-gh-release@v2
       with:
-        files: ${{ github.workspace }}/build/dist/nevr-server-v${{ steps.version.outputs.version }}.zip
+        files: ${{ github.workspace }}/build/dist/nevr-runtime-v${{ steps.version.outputs.version }}.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Upload full distribution (tar.zst)
       uses: softprops/action-gh-release@v2
       with:
-        files: ${{ github.workspace }}/build/dist/nevr-server-v${{ steps.version.outputs.version }}.tar.zst
+        files: ${{ github.workspace }}/build/dist/nevr-runtime-v${{ steps.version.outputs.version }}.tar.zst
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Upload lite distribution (zip)
       uses: softprops/action-gh-release@v2
       with:
-        files: ${{ github.workspace }}/build/dist/nevr-server-v${{ steps.version.outputs.version }}-lite.zip
+        files: ${{ github.workspace }}/build/dist/nevr-runtime-v${{ steps.version.outputs.version }}-lite.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Upload lite distribution (tar.zst)
       uses: softprops/action-gh-release@v2
       with:
-        files: ${{ github.workspace }}/build/dist/nevr-server-v${{ steps.version.outputs.version }}-lite.tar.zst
+        files: ${{ github.workspace }}/build/dist/nevr-runtime-v${{ steps.version.outputs.version }}-lite.tar.zst
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

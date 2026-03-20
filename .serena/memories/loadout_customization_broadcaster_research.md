@@ -273,7 +273,7 @@ if (self->registered) {
    - Game sends internal broadcaster message: `SR15NetSaveLoadoutRequest`
    - Handler in game: `OnMsg_R15NetSaveLoadoutRequest` (0x1401a79d0) receives it
 
-2. **Game Server (nevr-server):**
+2. **Game Server (nevr-runtime):**
    - Listens for `SYMBOL_BROADCASTER_SAVE_LOADOUT_REQUEST` on internal broadcaster
    - Handler: `OnMsgSaveLoadoutRequest()` at gameserver.cpp:200
    - **BEFORE FIX:** Only forwarded if BOTH `sessionActive` AND `registered` were true
@@ -313,7 +313,7 @@ if (self->registered)
 
 The loadout synchronization bridge has been fully implemented:
 
-### C++ (nevr-server/GameServer/)
+### C++ (nevr-runtime/GameServer/)
 - `messages.h`: Added `SYMBOL_BROADCASTER_SAVE_LOADOUT_REQUEST` (0x6d451003fb4b172e) and `SYMBOL_TCPBROADCASTER_SAVE_LOADOUT_REQUEST` (0x7777777777770B00)
 - `gameserver.h`: Added `broadcastSaveLoadoutCBHandle` (UINT16)
 - `gameserver.cpp`: Added `OnMsgSaveLoadoutRequest` handler, listener registration in `Initialize()`, cleanup in `Unregister()`
@@ -343,7 +343,7 @@ EVRProfileStore - Profile updated in nakama database
 ```
 
 ### Remaining Tasks
-- [ ] Build and test nevr-server changes
+- [ ] Build and test nevr-runtime changes
 - [ ] Build and test nakama changes
 - [ ] Verify binary serialization format of loadout payload matches expectations
 - [ ] Add error handling for edge cases (nil profile, invalid loadout data)

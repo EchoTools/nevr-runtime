@@ -35,6 +35,7 @@
 build/
 _build/
 packages/
+dist/
 
 # User configuration files
 CMakeUserPresets.json
@@ -65,3 +66,14 @@ lobby_session_*.json
 
 # Local EchoVR installation
 ready-at-dawn-echo-arena/
+
+# External test harness symlink
+extern/evr-test-harness
+
+# Large test binaries in dbghooks (gitignored to prevent repo bloat)
+dbghooks/echovr.exe
+dbghooks/echovr_patched.exe
+dbghooks/echovr.dll
+dbghooks/echovr_patched.dll
+dbghooks/exe_to_dll.exe
+.cache/

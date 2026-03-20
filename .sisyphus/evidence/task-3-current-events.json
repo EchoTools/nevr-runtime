@@ -1,0 +1,27 @@
+{
+  "test_name": "Task 3: Test B - Current Build DLLs",
+  "timestamp": "2026-02-05T17:02:05Z",
+  "dll_config": "current_build",
+  "dll_verification": {
+    "pnsradgameserver.dll": "7ce1f649d6c58f9dded6beeeb30570ae",
+    "dbgcore.dll": "de337990c5080f5d13326b4d8e163dd1",
+    "gameserverlegacy.dll": "2bf1a5b75a557045a74ed88647e4b6ee",
+    "gamepatcheslegacy.dll": "1d2de6c493c770fb090daab9902aefea",
+    "telemetryagent.dll": "70377e2c1201b9676a9061d566992ab7"
+  },
+  "startup_method": "manual_wine",
+  "startup_flags": ["-noovr", "-windowed", "-mp", "-httpport 6721", "-level mpl_arena_a"],
+  "startup_result": "success_client_mode",
+  "evr_mcp_result": "timeout",
+  "http_api_status": "restricted",
+  "http_api_error": "Endpoint is restricted in this match type (err_code -6)",
+  "game_mode": "client",
+  "connected_to_remote": true,
+  "remote_server": "172.125.239.112:6794",
+  "runtime_seconds": 35,
+  "errors_detected": 11,
+  "error_types": ["D3D12_DRED", "CHttpRequest_CoCreateInstance", "zstd_decompression", "pooled_actor_component"],
+  "server_mode_tested": false,
+  "test_status": "incomplete",
+  "issue": "Game launched in client mode instead of server mode. Unable to test NEVR server functionality."
+}

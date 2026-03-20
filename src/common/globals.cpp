@@ -1,0 +1,20 @@
+
+
+#include "globals.h"
+
+#include "../extern/nevr-common/common/echovrInternal.h"
+/// A CLI argument flag used to remove the extra console being added by -headless for running servers on fully headless
+/// system.
+// Initialize external variables from opts.h
+BOOL noConsole = FALSE;
+/// A CLI argument flag indicating whether the game is booting in headless mode (no graphics/audio).
+BOOL isHeadless = FALSE;
+/// A CLI argument flag indicating whether the game should exit when the serverdb connection is lost.
+/// If a round is active, the exit is deferred until the round ends (plus a 30-second grace period).
+BOOL exitOnError = FALSE;
+
+
+/// A timestep value in ticks/updates per second, to be used for headless mode (due to lack of GPU/refresh rate
+/// throttling). If non-zero, sets the timestep override by the given tick rate per second. If zero, removes tick rate
+/// throttling.
+UINT32 headlessTickRateHz = 120;
