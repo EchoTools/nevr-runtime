@@ -30,6 +30,7 @@ void CallbackRegistry::Clear() {
 void SessionState::Reset() {
   active = false;
   loginSessionId = {};
+  lobbySessionId.clear();
   serverId = 0;
   regionId = 0;
   versionLock = 0;
@@ -124,6 +125,7 @@ bool ServerContext::EndSession() {
   {
     std::lock_guard sessionLock(m_sessionMutex);
     m_sessionState.active = false;
+    m_sessionState.lobbySessionId.clear();
   }
 
   return true;
