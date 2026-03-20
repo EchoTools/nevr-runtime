@@ -1,0 +1,74 @@
+# NEVR Runtime Build System
+
+# Default preset: mingw-release on Linux, release on Windows
+default_preset := if os() == "linux" { "mingw-release" } else { "release" }
+preset := env("PRESET", default_preset)
+
+# Show available recipes (default)
+default:
+    @just --list
+
+# Configure CMake
+configure: _vcpkg-mingw
+    @unset VCPKG_ROOT && cmake --preset {{ preset }} > /dev/null 2>&1 || (unset VCPKG_ROOT && cmake --preset {{ preset }})
+
+# Build all components
+build: configure
+    @cmake --build --preset {{ preset }} 2>&1 | grep -E '(error|Error|ERROR|fatal|FAILED)' || true
+
+# Build with full compiler output
+verbose-build: configure
+    cmake --build --preset {{ preset }}
+
+# Create distribution packages
+dist: build
+    @cmake --build --preset {{ preset }} --target dist 2>&1 | \
+        grep -vE '(^\[|^ninja|Creating.*\.(tar\.zst|zip)|Preparing distribution|Running utility|^===)' | \
+        grep -E '(error|Error|ERROR|fatal|FAILED)' || true
+
+# Create distribution with full output
+verbose-dist: build
+    cmake --build --preset {{ preset }} --target dist
+
+# Build stripped binaries without debug symbols
+dist-lite: build
+    cmake --build --preset {{ preset }} --target dist-lite
+
+# Regenerate C++ protobuf from BSR (buf.build/echotools/nevr-api)
+proto:
+    buf generate buf.build/echotools/nevr-api
+
+# Remove build and dist directories
+clean:
+    rm -rf build/ dist/
+
+# --- Tests ---
+
+# Run all system tests
+test-system:
+    cd tests/system && go test -v ./...
+
+# Run quick system tests only
+test-system-short:
+    cd tests/system && go test -v -short ./...
+
+# Run DLL loading tests only
+test-system-dll:
+    cd tests/system && go test -v -short -run ".*DLL.*" ./...
+
+# Run system tests with verbose output, no cache
+test-system-verbose:
+    cd tests/system && go test -v -count=1 ./...
+
+# --- Internal ---
+
+# Install vcpkg dependencies for MinGW cross-compilation (runs only for mingw presets)
+[private]
+_vcpkg-mingw:
+    #!/usr/bin/env bash
+    if [[ "{{ preset }}" == mingw-* ]]; then
+        mkdir -p build/{{ preset }}/vcpkg_installed
+        cd "$HOME/.vcpkg" && unset VCPKG_ROOT && ./vcpkg install --triplet=x64-mingw-static \
+            --x-manifest-root="{{ justfile_directory() }}" \
+            --x-install-root="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed" > /dev/null 2>&1 || true
+    fi
