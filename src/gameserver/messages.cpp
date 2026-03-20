@@ -316,6 +316,18 @@ EncodedMessage EncodeLobbyEntrantsReject(const gameservice::v1::LobbyEntrantsRej
   return result;
 }
 
+EncodedMessage EncodeLobbySmiteEntrant(uint64_t playerId) {
+  EncodedMessage result;
+
+  // Binary wire format (0x10 bytes):
+  //   +0x00  uint64  player_id  (LE)
+  //   +0x08  uint64  reserved   (zero)
+  WriteLE(result.data, playerId);
+  WriteLE(result.data, static_cast<uint64_t>(0));
+
+  return result;
+}
+
 EncodedMessage EncodeRegistrationSuccess(const gameservice::v1::GameServerRegistrationSuccessMessage& msg) {
   EncodedMessage result;
 

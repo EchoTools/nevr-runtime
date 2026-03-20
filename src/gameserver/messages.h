@@ -17,6 +17,7 @@ class LobbySessionCreateMessage;
 class LobbyEntrantsAcceptMessage;
 class LobbyEntrantsRejectMessage;
 class GameServerRegistrationSuccessMessage;
+class SNSLobbySmiteEntrantMessage;
 }  // namespace gameservice::v1
 
 // Binary message encoding result
@@ -76,6 +77,11 @@ EncodedMessage EncodeLobbyEntrantsReject(const gameservice::v1::LobbyEntrantsRej
 // Encode GameServerRegistrationSuccess from protobuf to binary format
 // Binary format: uint64 serverId (LE), 4 bytes IP address, uint64 unk0 (LE)
 EncodedMessage EncodeRegistrationSuccess(const gameservice::v1::GameServerRegistrationSuccessMessage& msg);
+
+// Encode SNSLobbySmiteEntrant from protobuf to binary format
+// Binary format (0x10 bytes): uint64 player_id (LE), uint64 reserved (zero)
+// The entrant_id UUID is resolved to a player_id by the caller.
+EncodedMessage EncodeLobbySmiteEntrant(uint64_t playerId);
 
 // Helper: Parse UUID string to GUID
 bool ParseUuidToGuid(const std::string& uuidStr, GUID& outGuid);

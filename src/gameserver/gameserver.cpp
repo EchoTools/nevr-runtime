@@ -319,6 +319,46 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
       break;
     }
 
+    case gameservice::v1::Envelope::kLobbySmiteEntrant: {
+      const auto& smite = envelope.lobby_smite_entrant();
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received smite entrant via protobuf: entrant=%s, session=%s",
+          smite.entrant_id().c_str(), smite.lobby_session_id().c_str());
+
+      // Resolve entrant UUID to slot index. The game engine's SmiteEntrant
+      // handler uses the player_id as a slot index for entrant removal.
+      GUID entrantGuid = {};
+      if (!ParseUuidToGuid(smite.entrant_id(), entrantGuid)) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Invalid entrant UUID: %s", smite.entrant_id().c_str());
+        break;
+      }
+
+      // Find the entrant's slot index by matching playerSession GUID
+      uint64_t slotIndex = 0;
+      bool found = false;
+      uint64_t entrantCount = self->GetContext().GetEntrantCount();
+      for (uint64_t i = 0; i < entrantCount; i++) {
+        auto* entrant = self->GetContext().GetEntrant(static_cast<uint32_t>(i));
+        if (entrant && memcmp(&entrant->userId, &entrantGuid, sizeof(GUID)) == 0) {
+          slotIndex = i;
+          found = true;
+          break;
+        }
+      }
+
+      if (!found) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Smite entrant not found in lobby: %s",
+            smite.entrant_id().c_str());
+        break;
+      }
+
+      if (broadcaster) {
+        auto encoded = EncodeLobbySmiteEntrant(slotIndex);
+        EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbySmiteEntrant, "SNSLobbySmiteEntrant",
+                                             const_cast<uint8_t*>(encoded.ptr()), encoded.size());
+      }
+      break;
+    }
+
     case gameservice::v1::Envelope::kError: {
       const auto& error = envelope.error();
       Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Received error via protobuf: code=%d, msg=%s", error.code(),
