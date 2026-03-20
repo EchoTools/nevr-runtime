@@ -24,3 +24,5 @@ extern BOOL g_noConsole;
 extern BOOL g_isHeadless;
 extern BOOL g_exitOnError;
 extern UINT32 g_headlessTickRateHz;
+extern BOOL g_telemetryEnabled;
+extern UINT32 g_telemetryRateHz;

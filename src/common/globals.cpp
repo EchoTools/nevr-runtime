@@ -9,3 +9,7 @@ BOOL g_isHeadless = FALSE;
 BOOL g_exitOnError = FALSE;
 /// Headless mode tick rate (ticks/second). Non-zero sets the override; zero removes throttling.
 UINT32 g_headlessTickRateHz = 120;
+/// Whether telemetry streaming is enabled (default TRUE). Disabled by -notelemetry.
+BOOL g_telemetryEnabled = TRUE;
+/// Telemetry streaming rate in Hz (default 10). Set by -telemetryrate <N>.
+UINT32 g_telemetryRateHz = 10;

@@ -6,6 +6,7 @@ set(SERVER_SOURCES
     "gameserver.cpp"
     "server_context.cpp"
     "websocket_client.cpp"
+    "telemetry_streamer.cpp"
 )
 
 add_library(gameserver SHARED
@@ -42,8 +43,8 @@ endif()
 # Link ixwebsocket for WebSocket support
 find_package(ixwebsocket CONFIG REQUIRED)
 
-# Disable PCH for websocket_client.cpp to avoid Windows.h macro pollution
-set_source_files_properties(websocket_client.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# Disable PCH for websocket_client.cpp and telemetry_streamer.cpp to avoid Windows.h macro pollution
+set_source_files_properties(websocket_client.cpp telemetry_streamer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # Fix missing mbedtls dependencies for MinGW
 if(MINGW)

@@ -242,6 +242,15 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
             static_cast<int>(self->GetContext().GetState()), static_cast<int>(ServerState::Registered));
       }
 
+      // Start telemetry streaming for this session
+      if (g_telemetryEnabled) {
+        // Access telemetry via the GameServerLib* — we need to add an accessor
+        // This is called via OnTcpMsgProtobuf which has `self` as GameServerLib*
+        if (self->GetTelemetry().IsConnected()) {
+          self->GetTelemetry().Start(sessionCreate.lobby_session_id(), g_telemetryRateHz);
+        }
+      }
+
       // Encode protobuf to LobbyStartSessionV4 binary format and forward to game
       if (broadcaster) {
         auto encoded = EncodeLobbySessionCreate(sessionCreate);
@@ -739,7 +748,9 @@ void OnTcpMsgGameClientMsg3(GameServerLib*, VOID*, EchoVR::TcpPeer, VOID*, VOID*
 // --- GameServerLib Implementation ---
 
 GameServerLib::GameServerLib()
-    : m_context(std::make_unique<ServerContext>()), m_wsClient(std::make_unique<WebSocketClient>()) {}
+    : m_context(std::make_unique<ServerContext>()),
+      m_wsClient(std::make_unique<WebSocketClient>()),
+      m_telemetry(std::make_unique<TelemetryStreamer>()) {}
 
 GameServerLib::~GameServerLib() = default;
 
@@ -906,6 +917,12 @@ VOID GameServerLib::Update() {
   // Dispatch incoming ServerDB messages on the main thread
   if (m_wsClient) m_wsClient->ProcessReceivedMessages();
 
+  // Telemetry: snapshot game state and process responses
+  if (m_telemetry && m_telemetry->IsActive()) {
+    m_telemetry->SnapshotIfDue();
+    m_telemetry->ProcessResponses();
+  }
+
   // -exitonerror: detect serverdb disconnect and exit (immediately or deferred)
   if (g_exitOnError && m_wsClient && !s_exitPending) {
     bool nowConnected = m_wsClient->IsConnected();
@@ -994,10 +1011,28 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 
   SendProtobufEnvelope(this, envelope);
 
+  // Connect telemetry streamer if enabled
+  if (g_telemetryEnabled && m_telemetry) {
+    CHAR* telemetryUri =
+        EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("telemetry_uri"),
+                                  nullptr, false);
+    if (telemetryUri && telemetryUri[0] != '\0') {
+      m_telemetry->Connect(std::string(telemetryUri));
+    } else {
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] No telemetry_uri in config, telemetry disabled");
+    }
+  }
+
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Requested game server registration via protobuf");
 }
 
 VOID GameServerLib::Unregister() {
+  // Disconnect telemetry before unregistering
+  if (m_telemetry) {
+    m_telemetry->Stop();
+    m_telemetry->Disconnect();
+  }
+
   UnregisterAllCallbacks();
 
   // Disconnect WebSocketClient from serverdb
@@ -1010,6 +1045,11 @@ VOID GameServerLib::Unregister() {
 }
 
 VOID GameServerLib::EndSession() {
+  // Stop telemetry before ending session
+  if (m_telemetry && m_telemetry->IsActive()) {
+    m_telemetry->Stop();
+  }
+
   if (m_context->IsSessionActive()) {
     gameservice::v1::Envelope envelope;
     auto* event = envelope.mutable_lobby_session_event();

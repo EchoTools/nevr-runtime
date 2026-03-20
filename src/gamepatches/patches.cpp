@@ -663,6 +663,13 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
       pArgSyntax, "-exitonerror",
       "[NEVR] Exit server when serverdb connection is lost (deferred to end of round + 30s if round is active)");
 
+  EchoVR::AddArgSyntax(pArgSyntax, "-notelemetry", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-notelemetry", "[NEVR] Disable telemetry streaming to telemetry server");
+
+  EchoVR::AddArgSyntax(pArgSyntax, "-telemetryrate", 1, 1, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-telemetryrate",
+                           "[NEVR] Set telemetry streaming rate in Hz (default 10)");
+
   return result;
 }
 
@@ -692,6 +699,16 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       g_isNoOVR = TRUE;
     } else if (lstrcmpW(arg, L"-exitonerror") == 0) {
       g_exitOnError = TRUE;
+    } else if (lstrcmpW(arg, L"-notelemetry") == 0) {
+      g_telemetryEnabled = FALSE;
+    } else if (lstrcmpW(arg, L"-telemetryrate") == 0) {
+      if (i + 1 < argc) {
+        g_telemetryRateHz = std::wcstoul(argv[i + 1], nullptr, 10);
+        if (g_telemetryRateHz == 0) g_telemetryRateHz = 10;
+        ++i;
+      } else {
+        FatalError("Missing argument for -telemetryrate. Provide a rate in Hz (e.g., 10).", NULL);
+      }
     } else if (lstrcmpW(arg, L"-timestep") == 0) {
       if (i + 1 < argc) {
         g_headlessTimeStep = std::wcstoul(argv[i + 1], nullptr, 10);
