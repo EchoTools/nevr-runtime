@@ -77,7 +77,7 @@ class FrameProcessor {
    * @param[out] session The parsed session response
    * @return true if parsing succeeded
    */
-  bool ParseSessionJson(const std::string& json, apigame::v1::SessionResponse& session);
+  bool ParseSessionJson(const std::string& json, engine::v1::SessionResponse& session);
 
   /**
    * @brief Parse player bones JSON into protobuf
@@ -85,18 +85,18 @@ class FrameProcessor {
    * @param[out] bones The parsed player bones response
    * @return true if parsing succeeded
    */
-  bool ParsePlayerBonesJson(const std::string& json, apigame::v1::PlayerBonesResponse& bones);
+  bool ParsePlayerBonesJson(const std::string& json, engine::v1::PlayerBonesResponse& bones);
 
   /**
    * @brief Detect events by comparing current and previous frames
    * @param current Current session state
    * @param frame The frame to add events to
    */
-  void DetectEvents(const apigame::v1::SessionResponse& current, telemetry::v1::LobbySessionStateFrame& frame);
+  void DetectEvents(const engine::v1::SessionResponse& current, telemetry::v1::LobbySessionStateFrame& frame);
 
  private:
   // Previous frame state for event detection
-  std::unique_ptr<apigame::v1::SessionResponse> m_previousSession;
+  std::unique_ptr<engine::v1::SessionResponse> m_previousSession;
   std::string m_sessionUUID;
   uint32_t m_frameIndex;
 };

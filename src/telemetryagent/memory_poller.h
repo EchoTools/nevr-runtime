@@ -23,7 +23,7 @@
 #include <mutex>
 #include <vector>
 
-#include "apigame/v1/engine_http_v1.pb.h"
+#include "engine/v1/engine_http.pb.h"
 #include "data_source.h"
 
 namespace TelemetryAgent {
@@ -104,9 +104,9 @@ class MemoryPoller : public IDataSource {
 
   std::string ReadGUID(uintptr_t address) const;
 
-  bool PopulateSessionResponse(apigame::v1::SessionResponse* response) const;
+  bool PopulateSessionResponse(engine::v1::SessionResponse* response) const;
 
-  bool PopulatePlayerBonesResponse(apigame::v1::PlayerBonesResponse* response) const;
+  bool PopulatePlayerBonesResponse(engine::v1::PlayerBonesResponse* response) const;
 
   bool IsMemoryReadable(uintptr_t address, size_t size) const;
 

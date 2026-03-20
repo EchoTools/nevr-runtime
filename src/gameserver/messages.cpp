@@ -10,7 +10,7 @@
 #include <cstring>
 
 #include "echovr_functions.h"
-#include "rtapi/v1/realtime_v1.pb.h"
+#include "gameservice/v1/gameservice.pb.h"
 
 // Logging wrapper for game's log system
 // @param level - The log level (Info, Warning, Error, etc.)
@@ -171,7 +171,7 @@ EncodedMessage EncodeLobbySessionStartV4(const GUID& lobbySessionId, const GUID&
   return result;
 }
 
-EncodedMessage EncodeLobbySessionSuccessV5(const rtapi::v1::SNSLobbySessionSuccessV5Message& msg) {
+EncodedMessage EncodeLobbySessionSuccessV5(const gameservice::v1::SNSLobbySessionSuccessV5Message& msg) {
   EncodedMessage result;
 
   // 1. GameMode (uint64_t LE) - use game_mode which is fixed64
@@ -255,7 +255,7 @@ EncodedMessage EncodeLobbySessionSuccessV5(const rtapi::v1::SNSLobbySessionSucce
   return result;
 }
 
-EncodedMessage EncodeLobbySessionCreate(const rtapi::v1::LobbySessionCreateMessage& msg) {
+EncodedMessage EncodeLobbySessionCreate(const gameservice::v1::LobbySessionCreateMessage& msg) {
   EncodedMessage result;
 
   // Parse lobby_session_id to GUID
@@ -280,7 +280,7 @@ EncodedMessage EncodeLobbySessionCreate(const rtapi::v1::LobbySessionCreateMessa
                                    msg.settings_json());
 }
 
-EncodedMessage EncodeLobbyEntrantsAccept(const rtapi::v1::LobbyEntrantsAcceptMessage& msg) {
+EncodedMessage EncodeLobbyEntrantsAccept(const gameservice::v1::LobbyEntrantsAcceptMessage& msg) {
   EncodedMessage result;
 
   // Binary format: 1 byte padding, then array of GUIDs
@@ -298,7 +298,7 @@ EncodedMessage EncodeLobbyEntrantsAccept(const rtapi::v1::LobbyEntrantsAcceptMes
   return result;
 }
 
-EncodedMessage EncodeLobbyEntrantsReject(const rtapi::v1::LobbyEntrantsRejectMessage& msg) {
+EncodedMessage EncodeLobbyEntrantsReject(const gameservice::v1::LobbyEntrantsRejectMessage& msg) {
   EncodedMessage result;
 
   // Binary format: 1 byte error code, then array of GUIDs
@@ -316,7 +316,7 @@ EncodedMessage EncodeLobbyEntrantsReject(const rtapi::v1::LobbyEntrantsRejectMes
   return result;
 }
 
-EncodedMessage EncodeRegistrationSuccess(const rtapi::v1::GameServerRegistrationSuccessMessage& msg) {
+EncodedMessage EncodeRegistrationSuccess(const gameservice::v1::GameServerRegistrationSuccessMessage& msg) {
   EncodedMessage result;
 
   // Binary format: uint64 serverId (LE), 4 bytes IP address, uint64 unk0 (LE)
