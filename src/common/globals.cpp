@@ -15,3 +15,5 @@ BOOL g_telemetryEnabled = TRUE;
 UINT32 g_telemetryRateHz = 10;
 /// Telemetry diagnostic mode. Logs snapshot data instead of sending over WS.
 BOOL g_telemetryDiag = FALSE;
+/// Prefix all log lines with a high-resolution timestamp.
+BOOL g_timestampLogs = FALSE;

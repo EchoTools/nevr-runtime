@@ -27,3 +27,4 @@ extern UINT32 g_headlessTickRateHz;
 extern BOOL g_telemetryEnabled;
 extern UINT32 g_telemetryRateHz;
 extern BOOL g_telemetryDiag;
+extern BOOL g_timestampLogs;

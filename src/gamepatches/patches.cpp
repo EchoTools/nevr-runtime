@@ -139,9 +139,23 @@ VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_
   } else if (!strcmp(format, "[NETGAME] No screen stats info for game mode %s"))  // noisy in social lobby
     return;
 
-  // Calling the original function and returning here if g_noConsole is set to avoid putting any extra formatting in the
-  // logs.
-  if (g_noConsole) return EchoVR::WriteLog(logLevel, unk, format, vl);
+  // Build timestamp prefix if enabled
+  CHAR tsBuf[32] = {0};
+  if (g_timestampLogs) {
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    snprintf(tsBuf, sizeof(tsBuf), "%02d:%02d:%02d.%03d ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+  }
+
+  // If -noconsole, prepend timestamp to the format and pass through to the game's log file writer.
+  if (g_noConsole) {
+    if (g_timestampLogs) {
+      CHAR stampedFmt[0x1000];
+      snprintf(stampedFmt, sizeof(stampedFmt), "%s%s", tsBuf, format);
+      return EchoVR::WriteLog(logLevel, unk, stampedFmt, vl);
+    }
+    return EchoVR::WriteLog(logLevel, unk, format, vl);
+  }
 
   // Print the ANSI color code prefix for the given log level.
   switch (logLevel) {
@@ -163,15 +177,24 @@ VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_
       break;
   }
 
-  // Print the output to our allocated console.
+  // Print timestamp + message to console
+  if (g_timestampLogs) {
+    printf("\u001B[90m%s\u001B[0m", tsBuf);  // dim gray timestamp
+  }
   vprintf(format, vl);
   printf("\n");
 
-  // Print the ANSI color code for restoring the default text style.
+  // Restore default text style
   printf("\u001B[0m");
 
-  // Call the original method
-  EchoVR::WriteLog(logLevel, unk, format, vl);
+  // Call the original method (game log file) with timestamp if enabled
+  if (g_timestampLogs) {
+    CHAR stampedFmt[0x1000];
+    snprintf(stampedFmt, sizeof(stampedFmt), "%s%s", tsBuf, format);
+    EchoVR::WriteLog(logLevel, unk, stampedFmt, vl);
+  } else {
+    EchoVR::WriteLog(logLevel, unk, format, vl);
+  }
 }
 
 /// <summary>
@@ -674,6 +697,10 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgHelpString(pArgSyntax, "-telemetrydiag",
                            "[NEVR] Log telemetry snapshot diagnostics (pointer chain, values) every second");
 
+  EchoVR::AddArgSyntax(pArgSyntax, "-timestamps", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-timestamps",
+                           "[NEVR] Prefix all log lines with high-resolution timestamps");
+
   return result;
 }
 
@@ -715,6 +742,8 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       }
     } else if (lstrcmpW(arg, L"-telemetrydiag") == 0) {
       g_telemetryDiag = TRUE;
+    } else if (lstrcmpW(arg, L"-timestamps") == 0) {
+      g_timestampLogs = TRUE;
     } else if (lstrcmpW(arg, L"-timestep") == 0) {
       if (i + 1 < argc) {
         g_headlessTimeStep = std::wcstoul(argv[i + 1], nullptr, 10);
