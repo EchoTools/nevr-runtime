@@ -158,9 +158,10 @@ void TelemetryStreamer::ResolveFunctionPointers() {
   m_getSymbolHash = reinterpret_cast<GetSymbolHashFn>(base + GameFuncAddr::GET_SYMBOL_HASH);
   m_getFloatProperty = reinterpret_cast<GetFloatPropertyFn>(base + GameFuncAddr::GET_FLOAT_PROPERTY);
   m_getIntProperty = reinterpret_cast<GetIntPropertyFn>(base + GameFuncAddr::GET_INT_PROPERTY);
-  m_getEntityFromTransform = reinterpret_cast<GetEntityFromTransformFn>(base + GameFuncAddr::GET_ENTITY_FROM_TRANSFORM);
+  m_entityLookup = reinterpret_cast<EntityLookupFn>(base + GameFuncAddr::ENTITY_LOOKUP);
+  m_resolveEntityHandle = reinterpret_cast<ResolveEntityHandleFn>(base + GameFuncAddr::RESOLVE_ENTITY_HANDLE);
   m_getBoneData = reinterpret_cast<GetBoneDataFn>(base + GameFuncAddr::GET_BONE_DATA);
-  m_getBoneCount = reinterpret_cast<GetBoneCountFn>(base + GameFuncAddr::GET_BONE_COUNT);
+  m_getTransformComponent = reinterpret_cast<GetTransformComponentFn>(base + GameFuncAddr::GET_TRANSFORM_COMPONENT);
 
   m_funcPtrsResolved = true;
   Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Game function pointers resolved");
@@ -178,8 +179,33 @@ bool TelemetryStreamer::ResolveGamePointers() {
   m_netGame = *reinterpret_cast<void**>(contextBase + GameOffsets::NETGAME_OFFSET);
   if (!m_netGame) return false;
 
-  m_gameStateData = *reinterpret_cast<void**>(reinterpret_cast<CHAR*>(m_netGame) + GameOffsets::GAME_STATE_DATA_OFFSET);
+  CHAR* netGameBase = reinterpret_cast<CHAR*>(m_netGame);
+  m_gameStateData = *reinterpret_cast<void**>(netGameBase + GameOffsets::GAME_STATE_DATA_OFFSET);
+
+  // Entity system pointers
+  m_handleResolver = *reinterpret_cast<void**>(netGameBase + GameOffsets::ENTITY_HANDLE_RESOLVER_OFFSET);
+  void* worldObj = *reinterpret_cast<void**>(netGameBase + GameOffsets::WORLD_OBJECT_OFFSET);
+  if (worldObj) {
+    m_entityManager = *reinterpret_cast<void**>(reinterpret_cast<CHAR*>(worldObj) + GameOffsets::ENTITY_MANAGER_OFFSET);
+  } else {
+    m_entityManager = nullptr;
+  }
+
   return m_gameStateData != nullptr;
+}
+
+void* TelemetryStreamer::ResolvePlayerEntity(uint64_t accountId) {
+  if (!m_resolveEntityHandle || !m_entityLookup || !m_handleResolver || !m_entityManager) return nullptr;
+
+  // FUN_140363610 expects a pair: [accountId, extra_data]
+  // It modifies pair[0] to the transform handle on success
+  int64_t pair[2] = {static_cast<int64_t>(accountId), 0};
+  int result = m_resolveEntityHandle(m_handleResolver, pair);
+  if (result == 0 || pair[0] == -1) return nullptr;
+
+  // Look up entity by the resolved handle
+  void* entity = m_entityLookup(m_entityManager, pair[0]);
+  return entity;
 }
 
 void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
@@ -256,15 +282,114 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
   snap->lastScore.assistPacked = *reinterpret_cast<uint32_t*>(gsdBase + GameOffsets::LAST_SCORE_ASSIST_PACKED_OFFSET);
   snap->lastScore.scorerPacked = *reinterpret_cast<uint32_t*>(gsdBase + GameOffsets::LAST_SCORE_SCORER_PACKED_OFFSET);
 
-  // Player transforms will be implemented in Phase 2 (requires entity system traversal)
-  // For now, transforms are zeroed from Clear()
+  // Player transforms via entity system
+  // For each player, resolve their entity and read transform component data.
+  // The transform component (FUN_14042d690) returns a pointer to transform data
+  // containing position and orientation. We read bone 0 (root) for body position.
+  for (uint16_t i = 0; i < snap->playerCount; i++) {
+    if (snap->playerInfo[i].accountId == 0) continue;
+
+    void* entity = ResolvePlayerEntity(snap->playerInfo[i].accountId);
+    if (!entity) continue;
+
+    // Get transform component for body pose
+    // FUN_14042d690 returns ptr to transform data (position at +0x00, orientation at +0x0C or similar)
+    if (m_getTransformComponent) {
+      // Bone slot 0 = root/body transform
+      void* transformData = m_getTransformComponent(entity, 0);
+      if (transformData) {
+        // Transform data layout: position float[3] at +0x00, orientation quat float[4] at +0x0C
+        float* fdata = reinterpret_cast<float*>(transformData);
+        snap->players[i].bodyPos[0] = fdata[0];
+        snap->players[i].bodyPos[1] = fdata[1];
+        snap->players[i].bodyPos[2] = fdata[2];
+        snap->players[i].bodyRot[0] = fdata[3];
+        snap->players[i].bodyRot[1] = fdata[4];
+        snap->players[i].bodyRot[2] = fdata[5];
+        snap->players[i].bodyRot[3] = fdata[6];
+      }
+    }
+
+    // Read head/hand positions from bone data (more reliable than transform component)
+    // Bone layout per FUN_1408f8090: returns ptr, bone data at various offsets
+    if (m_getBoneData) {
+      // Head bone (bone 4 in Echo VR skeleton)
+      void* headBone = m_getBoneData(entity, 4);
+      if (headBone) {
+        // Bone data: orientation quat float[4] then position float[3]
+        // Offset 0x18 from bone base is where the spectator stream reads from
+        float* boneFloats = reinterpret_cast<float*>(reinterpret_cast<CHAR*>(headBone) + 0x18);
+        snap->players[i].headRot[0] = boneFloats[0];
+        snap->players[i].headRot[1] = boneFloats[1];
+        snap->players[i].headRot[2] = boneFloats[2];
+        snap->players[i].headRot[3] = boneFloats[3];
+        snap->players[i].headPos[0] = boneFloats[4];
+        snap->players[i].headPos[1] = boneFloats[5];
+        snap->players[i].headPos[2] = boneFloats[6];
+      }
+
+      // Left hand bone (bone 10)
+      void* lhBone = m_getBoneData(entity, 10);
+      if (lhBone) {
+        float* boneFloats = reinterpret_cast<float*>(reinterpret_cast<CHAR*>(lhBone) + 0x18);
+        snap->players[i].leftHandRot[0] = boneFloats[0];
+        snap->players[i].leftHandRot[1] = boneFloats[1];
+        snap->players[i].leftHandRot[2] = boneFloats[2];
+        snap->players[i].leftHandRot[3] = boneFloats[3];
+        snap->players[i].leftHandPos[0] = boneFloats[4];
+        snap->players[i].leftHandPos[1] = boneFloats[5];
+        snap->players[i].leftHandPos[2] = boneFloats[6];
+      }
+
+      // Right hand bone (bone 16)
+      void* rhBone = m_getBoneData(entity, 16);
+      if (rhBone) {
+        float* boneFloats = reinterpret_cast<float*>(reinterpret_cast<CHAR*>(rhBone) + 0x18);
+        snap->players[i].rightHandRot[0] = boneFloats[0];
+        snap->players[i].rightHandRot[1] = boneFloats[1];
+        snap->players[i].rightHandRot[2] = boneFloats[2];
+        snap->players[i].rightHandRot[3] = boneFloats[3];
+        snap->players[i].rightHandPos[0] = boneFloats[4];
+        snap->players[i].rightHandPos[1] = boneFloats[5];
+        snap->players[i].rightHandPos[2] = boneFloats[6];
+      }
+    }
+  }
 }
 
 void TelemetryStreamer::SnapshotPlayerBones(TelemetrySnapshot* snap) {
-  // Phase 2: entity lookup → bone accessor for each player (23 bones)
-  // Requires walking the entity system which needs further RE validation.
-  // For now, all bone data is zeroed (valid=false).
-  (void)snap;
+  if (!m_getBoneData || !m_entityManager) return;
+
+  for (uint16_t i = 0; i < snap->playerCount; i++) {
+    if (snap->playerInfo[i].accountId == 0) continue;
+
+    void* entity = ResolvePlayerEntity(snap->playerInfo[i].accountId);
+    if (!entity) continue;
+
+    auto& boneData = snap->playerBones[i];
+
+    // Read all 23 bones
+    bool allValid = true;
+    for (uint32_t b = 0; b < 23; b++) {
+      void* bone = m_getBoneData(entity, static_cast<uint16_t>(b));
+      if (!bone) {
+        allValid = false;
+        break;
+      }
+
+      // Bone data at offset 0x18: [orient_x, orient_y, orient_z, orient_w, pos_x, pos_y, pos_z]
+      float* boneFloats = reinterpret_cast<float*>(reinterpret_cast<CHAR*>(bone) + 0x18);
+      boneData.bones[b][0] = boneFloats[0];  // orient x
+      boneData.bones[b][1] = boneFloats[1];  // orient y
+      boneData.bones[b][2] = boneFloats[2];  // orient z
+      boneData.bones[b][3] = boneFloats[3];  // orient w
+      boneData.bones[b][4] = boneFloats[4];  // pos x
+      boneData.bones[b][5] = boneFloats[5];  // pos y
+      boneData.bones[b][6] = boneFloats[6];  // pos z
+    }
+
+    boneData.valid = allValid;
+  }
 }
 
 // ============================================================================
@@ -482,11 +607,36 @@ void TelemetryStreamer::BuildAndSendFrame(const TelemetrySnapshot& snap) {
     }
   }
 
-  // Drain events from ring buffer
+  // Drain events from ring buffer (broadcaster-pushed events)
   TelemetryEvent event;
   while (m_eventBuffer.Pop(event)) {
-    // Phase 4: convert events to proto EchoEvent and add to frame
-    (void)event;
+    // Convert ring buffer events to proto EchoEvent
+    auto* ev = arena->add_events();
+    switch (event.type) {
+      case TelemetryEvent::GoalScored: {
+        auto* gs = ev->mutable_goal_scored();
+        gs->set_team(static_cast<telemetry::v2::Role>(event.teamIndex));
+        gs->set_point_amount(event.value);
+        break;
+      }
+      case TelemetryEvent::PlayerJoined: {
+        auto* pj = ev->mutable_player_joined();
+        pj->set_slot(event.slot);
+        break;
+      }
+      case TelemetryEvent::PlayerLeft: {
+        auto* pl = ev->mutable_player_left();
+        pl->set_player_slot(event.slot);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  // Phase 4: detect events by comparing current and previous snapshots
+  if (m_frameIndex > 0) {
+    DetectEvents(snap, m_prevSnapshot, arena);
   }
 
   // Serialize and send
@@ -496,6 +646,75 @@ void TelemetryStreamer::BuildAndSendFrame(const TelemetrySnapshot& snap) {
     m_frameIndex++;
   } else {
     Log(EchoVR::LogLevel::Error, "[NEVR.TELEMETRY] Failed to serialize frame %u", m_frameIndex);
+  }
+}
+
+void TelemetryStreamer::DetectEvents(const TelemetrySnapshot& curr, const TelemetrySnapshot& prev,
+                                     telemetry::v2::EchoArenaFrame* frame) {
+  // Detect game status change
+  int32_t currStatus = MapGameStatus(curr.gameStatusHash);
+  int32_t prevStatus = MapGameStatus(prev.gameStatusHash);
+  if (currStatus != prevStatus && prevStatus != 0) {
+    // Status transitions → specific events
+    if (currStatus == static_cast<int32_t>(telemetry::v2::GAME_STATUS_ROUND_START)) {
+      auto* ev = frame->add_events();
+      ev->mutable_round_started();
+    } else if (currStatus == static_cast<int32_t>(telemetry::v2::GAME_STATUS_ROUND_OVER)) {
+      auto* ev = frame->add_events();
+      ev->mutable_round_ended();
+    } else if (currStatus == static_cast<int32_t>(telemetry::v2::GAME_STATUS_POST_MATCH)) {
+      auto* ev = frame->add_events();
+      ev->mutable_match_ended();
+    }
+  }
+
+  // Detect score changes
+  if (curr.bluePoints != prev.bluePoints || curr.orangePoints != prev.orangePoints) {
+    auto* ev = frame->add_events();
+    auto* sb = ev->mutable_scoreboard_updated();
+    sb->set_blue_points(curr.bluePoints);
+    sb->set_orange_points(curr.orangePoints);
+  }
+
+  // Detect goal scored (last score data changed)
+  if (curr.lastScore.scorerPacked != prev.lastScore.scorerPacked &&
+      curr.lastScore.pointAmount > 0) {
+    auto* ev = frame->add_events();
+    auto* gs = ev->mutable_goal_scored();
+    gs->set_team(static_cast<telemetry::v2::Role>(curr.lastScore.team));
+    gs->set_point_amount(curr.lastScore.pointAmount);
+    gs->set_disc_speed(curr.lastScore.discSpeed);
+    gs->set_distance_thrown(curr.lastScore.distanceThrown);
+    gs->set_scorer_slot(curr.lastScore.scorerPacked & 0x1F);
+    if ((curr.lastScore.assistPacked & 0x1F) != 0x1F) {
+      gs->set_assist_slot(curr.lastScore.assistPacked & 0x1F);
+    }
+  }
+
+  // Detect player join/leave
+  for (uint16_t i = 0; i < 16; i++) {
+    bool currPresent = (i < curr.playerCount && curr.playerInfo[i].accountId != 0);
+    bool prevPresent = (i < prev.playerCount && prev.playerInfo[i].accountId != 0);
+
+    if (currPresent && !prevPresent) {
+      auto* ev = frame->add_events();
+      auto* pj = ev->mutable_player_joined();
+      pj->set_slot(i);
+      pj->set_account_number(curr.playerInfo[i].accountId);
+      pj->set_display_name(curr.playerInfo[i].displayName);
+    } else if (!currPresent && prevPresent) {
+      auto* ev = frame->add_events();
+      auto* pl = ev->mutable_player_left();
+      pl->set_player_slot(i);
+    } else if (currPresent && prevPresent) {
+      // Detect team switch
+      if (curr.playerInfo[i].teamIndex != prev.playerInfo[i].teamIndex) {
+        auto* ev = frame->add_events();
+        auto* sw = ev->mutable_player_switched_team();
+        sw->set_player_slot(i);
+        sw->set_new_role(static_cast<telemetry::v2::Role>(curr.playerInfo[i].teamIndex));
+      }
+    }
   }
 }
 

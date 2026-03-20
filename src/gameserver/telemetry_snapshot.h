@@ -69,6 +69,11 @@ constexpr uint64_t GAME_CONTEXT_OFFSET = 0x20a0478;
 constexpr uint64_t NETGAME_OFFSET = 0x8518;
 constexpr uint64_t GAME_STATE_DATA_OFFSET = 0x2AA8;
 
+// Entity system access (from CR15NetGame)
+constexpr uint64_t ENTITY_HANDLE_RESOLVER_OFFSET = 0x08;  // *(CR15NetGame + 8) → handle resolver
+constexpr uint64_t WORLD_OBJECT_OFFSET = 0x2B08;          // *(CR15NetGame + 0x2B08) → world/scene
+constexpr uint64_t ENTITY_MANAGER_OFFSET = 0x08;          // *(world + 8) → entity manager
+
 // Player array: CR15NetGame + 0x178, stride 0x250
 constexpr uint64_t PLAYER_ARRAY_OFFSET = 0x178;
 constexpr uint64_t PLAYER_STRIDE = 0x250;
@@ -122,14 +127,20 @@ using GetFloatPropertyFn = float(__fastcall*)(void* netGame, uint64_t propertyHa
 // FUN_140d05730(GameStateData, hash) → int32_t (blue/orange points)
 using GetIntPropertyFn = int32_t(__fastcall*)(void* gameStateData, uint64_t propertyHash);
 
-// FUN_1404f37a0(transform_ptr) → entity*
-using GetEntityFromTransformFn = void*(__fastcall*)(void* transformPtr);
+// FUN_1404f37a0(entityManager, handle) → entity*
+using EntityLookupFn = void*(__fastcall*)(void* entityManager, int64_t handle);
 
-// FUN_1408f8090(entity, boneSlot) → bone data ptr (7 floats: 4 orient + 3 translate)
-using GetBoneDataFn = float*(__fastcall*)(void* entity, uint32_t boneSlot);
+// FUN_140363610(handleResolver, accountIdPair) → bool (modifies pair[0] to transform handle)
+using ResolveEntityHandleFn = int(__fastcall*)(void* handleResolver, int64_t* accountIdPair);
 
-// FUN_1408f8080(entity) → uint32_t bone count
+// FUN_1408f8090(entity, boneSlot) → bone data ptr
+using GetBoneDataFn = void*(__fastcall*)(void* entity, uint16_t boneSlot);
+
+// FUN_1408f8080(entity) → uint32_t bone count (always 0x17=23)
 using GetBoneCountFn = uint32_t(__fastcall*)(void* entity);
+
+// FUN_14042d690(entity, slot) → transform component ptr (returns ptr+0xa0 into component data)
+using GetTransformComponentFn = void*(__fastcall*)(void* entity, uint16_t slot);
 
 // Property hashes for game function calls
 namespace PropertyHash {
@@ -141,12 +152,14 @@ constexpr uint64_t ORANGE_POINTS = 0x2ED07B1C8C27548D;
 
 // Game function virtual addresses (offsets from base)
 namespace GameFuncAddr {
-constexpr uint64_t GET_SYMBOL_HASH = 0xd5ced0;    // FUN_140d5ced0
-constexpr uint64_t GET_FLOAT_PROPERTY = 0xd36750;  // FUN_140d36750
-constexpr uint64_t GET_INT_PROPERTY = 0xd05730;    // FUN_140d05730
-constexpr uint64_t GET_ENTITY_FROM_TRANSFORM = 0x4f37a0;  // FUN_1404f37a0
-constexpr uint64_t GET_BONE_DATA = 0x8f8090;       // FUN_1408f8090
-constexpr uint64_t GET_BONE_COUNT = 0x8f8080;      // FUN_1408f8080
+constexpr uint64_t GET_SYMBOL_HASH = 0xd5ced0;       // FUN_140d5ced0
+constexpr uint64_t GET_FLOAT_PROPERTY = 0xd36750;    // FUN_140d36750
+constexpr uint64_t GET_INT_PROPERTY = 0xd05730;      // FUN_140d05730
+constexpr uint64_t ENTITY_LOOKUP = 0x4f37a0;         // FUN_1404f37a0(entityMgr, handle)
+constexpr uint64_t RESOLVE_ENTITY_HANDLE = 0x363610;  // FUN_140363610(resolver, pair)
+constexpr uint64_t GET_BONE_DATA = 0x8f8090;          // FUN_1408f8090(entity, slot)
+constexpr uint64_t GET_BONE_COUNT = 0x8f8080;         // FUN_1408f8080() → 0x17
+constexpr uint64_t GET_TRANSFORM_COMPONENT = 0x42d690; // FUN_14042d690(entity, slot)
 }  // namespace GameFuncAddr
 
 // Game status symbol hash → proto enum mapping

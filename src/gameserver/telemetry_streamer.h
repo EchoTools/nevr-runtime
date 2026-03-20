@@ -18,6 +18,9 @@ using WebSocketMessagePtr = std::unique_ptr<WebSocketMessage>;
 namespace GameServer {
 class ServerContext;
 }
+namespace telemetry::v2 {
+class EchoArenaFrame;
+}
 
 // Telemetry event pushed from broadcaster callbacks (game thread).
 struct TelemetryEvent {
@@ -111,19 +114,29 @@ class TelemetryStreamer {
   // Previous snapshot for event diffing (Phase 4)
   TelemetrySnapshot m_prevSnapshot;
 
+  // Detect events by comparing current and previous snapshots
+  void DetectEvents(const TelemetrySnapshot& curr, const TelemetrySnapshot& prev,
+                    telemetry::v2::EchoArenaFrame* frame);
+
   // Game function pointers (resolved once on first snapshot)
   bool m_funcPtrsResolved{false};
   GetSymbolHashFn m_getSymbolHash{nullptr};
   GetFloatPropertyFn m_getFloatProperty{nullptr};
   GetIntPropertyFn m_getIntProperty{nullptr};
-  GetEntityFromTransformFn m_getEntityFromTransform{nullptr};
+  EntityLookupFn m_entityLookup{nullptr};
+  ResolveEntityHandleFn m_resolveEntityHandle{nullptr};
   GetBoneDataFn m_getBoneData{nullptr};
-  GetBoneCountFn m_getBoneCount{nullptr};
+  GetTransformComponentFn m_getTransformComponent{nullptr};
 
   // Cached game pointers (resolved per snapshot)
   void* m_netGame{nullptr};
   void* m_gameStateData{nullptr};
+  void* m_entityManager{nullptr};
+  void* m_handleResolver{nullptr};
 
   void ResolveFunctionPointers();
   bool ResolveGamePointers();
+
+  // Resolve entity for a player by account ID, returns entity pointer or nullptr
+  void* ResolvePlayerEntity(uint64_t accountId);
 };
