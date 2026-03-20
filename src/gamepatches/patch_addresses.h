@@ -141,8 +141,8 @@ constexpr uintptr_t IMPORT_LOADLIBRARYEXW = 0x1FFAFFA;  // LoadLibraryExW import
 ///   - "Wwise Initialization Successful" @ various
 ///   - Wwise SDK version strings
 /// Function locations:
-constexpr uintptr_t WWISE_INIT = 0x140209920;         // Wwise initialization
-constexpr uintptr_t WWISE_RENDERAUDIO = 0x140fa5610;  // Audio rendering loop
+constexpr uintptr_t WWISE_INIT = 0x209920;         // Wwise initialization
+constexpr uintptr_t WWISE_RENDERAUDIO = 0xFA5610;  // Audio rendering loop
 
 // ============================================================================
 // Loading Tips Patches (PatchDisableLoadingTips)
