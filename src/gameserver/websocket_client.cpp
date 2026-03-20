@@ -98,6 +98,8 @@ BOOL WebSocketClient::Send(EchoVR::SymbolId msgId, const VOID* data, UINT64 size
 
 VOID WebSocketClient::SetMessageHandler(MessageCallback callback) { messageCallback_ = callback; }
 
+VOID WebSocketClient::SetConnectionHandler(ConnectionCallback callback) { connectionCallback_ = callback; }
+
 BOOL WebSocketClient::IsConnected() const { return connected_; }
 
 VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
@@ -106,6 +108,9 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
       Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Connected to ServerDB");
       connected_ = TRUE;
       FlushPendingMessages();
+      if (connectionCallback_) {
+        connectionCallback_(TRUE);
+      }
       break;
 
     case ix::WebSocketMessageType::Close:
