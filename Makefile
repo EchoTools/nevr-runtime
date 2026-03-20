@@ -17,7 +17,7 @@ endif
 # Extract build type from preset (debug or release)
 BUILD_TYPE := $(shell echo $(PRESET) | grep -o 'debug\|release')
 
-.PHONY: all build dist clean help configure vcpkg-mingw verbose-build verbose-dist
+.PHONY: all build dist clean help configure vcpkg-mingw verbose-build verbose-dist proto
 
 all: build
 
@@ -49,6 +49,10 @@ dist: build
 	@cmake --build --preset $(PRESET) --target dist 2>&1 | \
 		grep -vE '(^\[|^ninja|Creating.*\.(tar\.zst|zip)|Preparing distribution|Running utility|^===)' | \
 		grep -E '(error|Error|ERROR|fatal|FAILED)' || true
+
+# Regenerate C++ protobuf from BSR (buf.build/echotools/nevr-api)
+proto:
+	buf generate buf.build/echotools/nevr-api
 
 clean:
 	rm -rf build/ dist/

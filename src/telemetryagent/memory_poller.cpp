@@ -68,7 +68,7 @@ bool MemoryPoller::GetFrameData(FrameData& data) {
 
   try {
     // Populate session data via protobuf, then serialize to JSON
-    apigame::v1::SessionResponse sessionProto;
+    engine::v1::SessionResponse sessionProto;
     if (!PopulateSessionResponse(&sessionProto)) {
       data.session.valid = false;
       return false;
@@ -83,7 +83,7 @@ bool MemoryPoller::GetFrameData(FrameData& data) {
     data.session.timestamp_ms = timestamp;
 
     // Populate player bones data via protobuf, then serialize to JSON
-    apigame::v1::PlayerBonesResponse playerBonesProto;
+    engine::v1::PlayerBonesResponse playerBonesProto;
     if (!PopulatePlayerBonesResponse(&playerBonesProto)) {
       data.playerBones.valid = false;
     } else {
@@ -164,7 +164,7 @@ std::string MemoryPoller::ReadGUID(uintptr_t address) const {
   return ss.str();
 }
 
-bool MemoryPoller::PopulateSessionResponse(apigame::v1::SessionResponse* response) const {
+bool MemoryPoller::PopulateSessionResponse(engine::v1::SessionResponse* response) const {
   if (m_gameBaseAddress == 0 || response == nullptr) {
     return false;
   }
@@ -447,7 +447,7 @@ bool MemoryPoller::PopulateSessionResponse(apigame::v1::SessionResponse* respons
   return true;
 }
 
-bool MemoryPoller::PopulatePlayerBonesResponse(apigame::v1::PlayerBonesResponse* response) const {
+bool MemoryPoller::PopulatePlayerBonesResponse(engine::v1::PlayerBonesResponse* response) const {
   if (m_gameBaseAddress == 0 || response == nullptr) {
     return false;
   }

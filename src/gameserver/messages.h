@@ -1,6 +1,4 @@
 #pragma once
-#ifndef GAMESERVER_MESSAGES_H
-#define GAMESERVER_MESSAGES_H
 
 #include <cstdint>
 #include <string>
@@ -9,20 +7,17 @@
 #include "echovr.h"
 #include "symbols.h"
 
-// Namespace aliases for convenience
 namespace Sym = EchoVR::Symbols;
 namespace TcpSym = EchoVR::Symbols::Tcp;
 
-// Forward declaration for protobuf types
-namespace rtapi {
-namespace v1 {
+// Forward declarations for protobuf types
+namespace gameservice::v1 {
 class SNSLobbySessionSuccessV5Message;
 class LobbySessionCreateMessage;
 class LobbyEntrantsAcceptMessage;
 class LobbyEntrantsRejectMessage;
 class GameServerRegistrationSuccessMessage;
-}  // namespace v1
-}  // namespace rtapi
+}  // namespace gameservice::v1
 
 // Binary message encoding result
 struct EncodedMessage {
@@ -65,22 +60,22 @@ EncodedMessage EncodeLobbySessionStartV4(const GUID& lobbySessionId, const GUID&
 //          bytes clientMacKey (size from encoder flags)
 //          bytes clientEncKey
 //          bytes clientRandomKey
-EncodedMessage EncodeLobbySessionSuccessV5(const rtapi::v1::SNSLobbySessionSuccessV5Message& msg);
+EncodedMessage EncodeLobbySessionSuccessV5(const gameservice::v1::SNSLobbySessionSuccessV5Message& msg);
 
 // Encode LobbySessionCreate from protobuf to LobbyStartSessionV4 binary format
-EncodedMessage EncodeLobbySessionCreate(const rtapi::v1::LobbySessionCreateMessage& msg);
+EncodedMessage EncodeLobbySessionCreate(const gameservice::v1::LobbySessionCreateMessage& msg);
 
 // Encode LobbyEntrantsAccept from protobuf to binary format
 // Binary format: 1 byte padding, then array of GUIDs
-EncodedMessage EncodeLobbyEntrantsAccept(const rtapi::v1::LobbyEntrantsAcceptMessage& msg);
+EncodedMessage EncodeLobbyEntrantsAccept(const gameservice::v1::LobbyEntrantsAcceptMessage& msg);
 
 // Encode LobbyEntrantsReject from protobuf to binary format
 // Binary format: 1 byte error code, then array of GUIDs
-EncodedMessage EncodeLobbyEntrantsReject(const rtapi::v1::LobbyEntrantsRejectMessage& msg);
+EncodedMessage EncodeLobbyEntrantsReject(const gameservice::v1::LobbyEntrantsRejectMessage& msg);
 
 // Encode GameServerRegistrationSuccess from protobuf to binary format
 // Binary format: uint64 serverId (LE), 4 bytes IP address, uint64 unk0 (LE)
-EncodedMessage EncodeRegistrationSuccess(const rtapi::v1::GameServerRegistrationSuccessMessage& msg);
+EncodedMessage EncodeRegistrationSuccess(const gameservice::v1::GameServerRegistrationSuccessMessage& msg);
 
 // Helper: Parse UUID string to GUID
 bool ParseUuidToGuid(const std::string& uuidStr, GUID& outGuid);
@@ -100,5 +95,3 @@ struct PacketEncoderSettings {
 
   static PacketEncoderSettings FromFlags(uint64_t flags);
 };
-
-#endif  // GAMESERVER_MESSAGES_H

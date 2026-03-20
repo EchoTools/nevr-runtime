@@ -10,7 +10,7 @@
 #include <chrono>
 
 // Include generated protobuf headers
-#include "apigame/v1/engine_http_v1.pb.h"
+#include "engine/v1/engine_http.pb.h"
 #include "telemetry/v1/telemetry.pb.h"
 
 namespace TelemetryAgent {
@@ -25,7 +25,7 @@ bool FrameProcessor::ProcessFrame(const FrameData& data, telemetry::v1::LobbySes
   }
 
   // Parse session JSON
-  apigame::v1::SessionResponse session;
+  engine::v1::SessionResponse session;
   if (!ParseSessionJson(data.session.json, session)) {
     return false;
   }
@@ -52,7 +52,7 @@ bool FrameProcessor::ProcessFrame(const FrameData& data, telemetry::v1::LobbySes
 
   // Parse and set player bones if available
   if (data.playerBones.valid) {
-    apigame::v1::PlayerBonesResponse bones;
+    engine::v1::PlayerBonesResponse bones;
     if (ParsePlayerBonesJson(data.playerBones.json, bones)) {
       *frame.mutable_player_bones() = bones;
     }
@@ -62,7 +62,7 @@ bool FrameProcessor::ProcessFrame(const FrameData& data, telemetry::v1::LobbySes
   DetectEvents(session, frame);
 
   // Store current frame for next comparison
-  m_previousSession = std::make_unique<apigame::v1::SessionResponse>(session);
+  m_previousSession = std::make_unique<engine::v1::SessionResponse>(session);
 
   return true;
 }
@@ -75,7 +75,7 @@ void FrameProcessor::Reset() {
 
 std::string FrameProcessor::GetSessionUUID() const { return m_sessionUUID; }
 
-bool FrameProcessor::ParseSessionJson(const std::string& json, apigame::v1::SessionResponse& session) {
+bool FrameProcessor::ParseSessionJson(const std::string& json, engine::v1::SessionResponse& session) {
   google::protobuf::util::JsonParseOptions options;
   options.ignore_unknown_fields = true;
 
@@ -83,7 +83,7 @@ bool FrameProcessor::ParseSessionJson(const std::string& json, apigame::v1::Sess
   return status.ok();
 }
 
-bool FrameProcessor::ParsePlayerBonesJson(const std::string& json, apigame::v1::PlayerBonesResponse& bones) {
+bool FrameProcessor::ParsePlayerBonesJson(const std::string& json, engine::v1::PlayerBonesResponse& bones) {
   google::protobuf::util::JsonParseOptions options;
   options.ignore_unknown_fields = true;
 
@@ -91,7 +91,7 @@ bool FrameProcessor::ParsePlayerBonesJson(const std::string& json, apigame::v1::
   return status.ok();
 }
 
-void FrameProcessor::DetectEvents(const apigame::v1::SessionResponse& current,
+void FrameProcessor::DetectEvents(const engine::v1::SessionResponse& current,
                                   telemetry::v1::LobbySessionStateFrame& frame) {
   if (!m_previousSession) {
     // First frame - detect initial player joins
@@ -148,7 +148,7 @@ void FrameProcessor::DetectEvents(const apigame::v1::SessionResponse& current,
   }
 
   // Detect possession changes
-  auto getPossessor = [](const apigame::v1::SessionResponse& s) -> int32_t {
+  auto getPossessor = [](const engine::v1::SessionResponse& s) -> int32_t {
     for (const auto& team : s.teams()) {
       for (const auto& player : team.players()) {
         if (player.has_possession()) {
@@ -170,7 +170,7 @@ void FrameProcessor::DetectEvents(const apigame::v1::SessionResponse& current,
   }
 
   // Detect stat changes for each player
-  auto findPlayer = [](const apigame::v1::SessionResponse& s, int32_t slot) -> const apigame::v1::TeamMember* {
+  auto findPlayer = [](const engine::v1::SessionResponse& s, int32_t slot) -> const engine::v1::TeamMember* {
     for (const auto& team : s.teams()) {
       for (const auto& player : team.players()) {
         if (player.slot_number() == slot) {

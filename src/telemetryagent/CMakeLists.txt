@@ -46,7 +46,7 @@ target_include_directories(telemetryagent
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_BINARY_DIR}
     "${CMAKE_SOURCE_DIR}/src/common"
-    "${NEVR_COMMON_INCLUDE}"
+    "${CMAKE_SOURCE_DIR}/gen/cpp"
 )
 
 # C++17 for std::optional, std::string_view, etc.
