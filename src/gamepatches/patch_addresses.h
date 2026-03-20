@@ -6,6 +6,8 @@
 /// Memory patch addresses for EchoVR game modifications.
 /// These are relative offsets from the game's base address.
 /// Source: Reverse-engineered from echovr.exe
+/// Validated against: echovr-reconstruction (struct/function names, offsets)
+///                    ReVault (Windows PE virtual addresses, decompilation)
 /// </summary>
 namespace PatchAddresses {
 
@@ -13,8 +15,12 @@ namespace PatchAddresses {
 // Server Mode Patches (PatchEnableServer)
 // ============================================================================
 
-/// Address: FUN_140116720 (Command line processing function in cr15game.cpp)
-/// Patches server flag checks to permanently enable dedicated server mode
+/// Address: FUN_140116720 (PreprocessCommandLine, 808+ lines)
+/// Forces bits in game state flags at CR15NetGame + 0x2DA0:
+///   bit 1, bit 2 (loadout_save_allowed), bit 3 (loadout_action_enabled),
+///   bit 6 (LAN), bit 14 (game_mode_active)
+/// The game's CLI registry has NO -server/-dedicated argument — this NOP sled
+/// is the correct approach. See: MatchLifecycle.cpp, CR15NetDedicatedLobby.cpp
 /// Original: Conditional checks for server mode
 /// Patched: OR QWORD ptr[rax], 0x6 followed by NOPs
 constexpr uintptr_t SERVER_FLAGS_CHECK = 0x1580C3;
@@ -35,19 +41,24 @@ constexpr size_t NETSERVER_LOGGING_SIZE = 4;
 constexpr uintptr_t LOGGING_SUBJECT = 0xFFB0E;
 constexpr size_t LOGGING_SUBJECT_SIZE = 2;
 
-/// Address: Network configuration parser
+/// Address: FUN_140f7f8b0 (CBroadcaster::InitializeFromJson, 1440 bytes)
+/// Called from FUN_140145b30 (CR15NetDedicatedLobby constructor)
 /// Reference: String "|allow_incoming" at 0x141cd0480
-/// Forces "allow_incoming" key in netconfig_*.json to always be true
-/// This is necessary for game servers to accept player connections
+/// Forces "allow_incoming" key in netconfig_dedicatedserver.json to always be true.
+/// NOTE: _local/config.json does NOT feed this function (only overrides dedicated_port
+/// and port_retries). The game asset already has allow_incoming: true but this patch
+/// ensures it regardless of asset state or parse failure.
 /// Original: Complex parsing logic
 /// Patched: MOV eax, 1
 constexpr uintptr_t ALLOW_INCOMING = 0xF7F904;
 constexpr size_t ALLOW_INCOMING_SIZE = 5;
 
-/// Address: FUN_140116720 + 0x81D (Within command line processing)
+/// Address: FUN_140116720 + 0x81D (Within PreprocessCommandLine)
 /// Reference: String "-spectatorstream" at 0x1416d27b8
-/// Bypasses check for "-spectatorstream" argument
-/// Causes game to enter "load lobby" state and start server automatically
+/// -spectatorstream IS a registered CLI argument in BuildCmdLineSyntaxDefinitions.
+/// The isspectatorstream game expression variable (int32, symbol 0x993e022a8336e85a)
+/// exists on R15NETGAMEEXPRESSION. Alternative: inject -spectatorstream into command line
+/// or set the expression variable directly. NOP is simplest for fixed binary.
 /// Original: JZ (conditional jump if arg not provided)
 /// Patched: 6x NOP (fall through)
 constexpr uintptr_t SPECTATORSTREAM_CHECK = 0x116F3D;
@@ -88,15 +99,19 @@ constexpr size_t OFFLINE_TUTORIAL_SIZE = 5;
 // Headless Mode Patches (PatchEnableHeadless)
 // ============================================================================
 
-/// Skips renderer initialization for headless mode
+/// ReVault VA 0x1400ff4b0: Game initialization / logging setup (252+ lines)
+/// Quest name: CGRenderer::Initialize @ Quest:0x188e278
+/// Patch at +0xD1 skips renderer initialization
 constexpr uintptr_t HEADLESS_RENDERER = 0xFF581;
 constexpr size_t HEADLESS_RENDERER_SIZE = 2;
 
-/// Skips effects resource loading for headless mode
+/// ReVault VA 0x14062c940: CLevel::Load (d:\projects\rad\dev\src\engine\libs\nodes\clevel.cpp, 447 bytes)
+/// Patch at +0x151 skips effects resource loading
 constexpr uintptr_t HEADLESS_EFFECTS = 0x62CA91;
 constexpr size_t HEADLESS_EFFECTS_SIZE = 2;
 
 /// Fixes delta time calculation when using fixed timestep
+/// Legitimate bug fix: JLE (signed) → JAE (unsigned comparison)
 constexpr uintptr_t HEADLESS_DELTATIME = 0xCF46D;
 constexpr size_t HEADLESS_DELTATIME_SIZE = 2;
 
@@ -108,7 +123,8 @@ constexpr size_t HEADLESS_DELTATIME_SIZE = 2;
 constexpr uintptr_t NOOVR_SPECTATOR = 0x11690D;
 constexpr size_t NOOVR_SPECTATOR_SIZE = 2;
 
-/// Disables deadlock monitor for debugging
+/// ReVault VA 0x1401d3850: Deadlock monitor thread — loops Sleep(1000), logs "Deadlock detected!"
+/// Patch at +0x31 disables the panic condition check
 constexpr uintptr_t DEADLOCK_MONITOR = 0x1D3881;
 constexpr size_t DEADLOCK_MONITOR_SIZE = 2;
 

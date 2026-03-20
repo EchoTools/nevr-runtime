@@ -54,8 +54,7 @@ udp_protocol_handshake_or_intro3Func* udp_protocol_handshake_or_intro3 =
 /// Obtains a pool item/block/memory page from a given pool for the given index.
 PoolFindItemFunc* PoolFindItem = (PoolFindItemFunc*)(g_GameBaseAddress + 0x2CA9E0);
 
-/// Registers a callback for a certain type of websocket message.
-/// <returns>An identifier for the callback registration, to be used for unregistering.</returns>
+/// Registers a callback for a websocket message type. ReVault: FUN_140F81100
 TcpBroadcasterListenFunc* TcpBroadcasterListen = (TcpBroadcasterListenFunc*)(g_GameBaseAddress + 0xF81100);
 
 /// Unregisters a callback for a certain type of websocket message, using the return value from its registration.
@@ -87,7 +86,7 @@ UINT64 TcpBroadcasterUnlisten(EchoVR::TcpBroadcaster* broadcaster, UINT16 cbResu
 }
 
 /// Sends a message to a game server broadcaster.
-/// <returns>TODO: Unverified, probably success result or size.</returns>
+/// ReVault: FUN_140F89AF0 (CBroadcaster_EncodeAndSendPacket)
 BroadcasterSendFunc* BroadcasterSend = (BroadcasterSendFunc*)(g_GameBaseAddress + 0xF89AF0);
 
 /// Receives/relays a local event on the broadcaster, triggering a listener.
@@ -95,8 +94,7 @@ BroadcasterSendFunc* BroadcasterSend = (BroadcasterSendFunc*)(g_GameBaseAddress 
 BroadcasterReceiveLocalEventFunc* BroadcasterReceiveLocalEvent =
     (BroadcasterReceiveLocalEventFunc*)(g_GameBaseAddress + 0xF87AA0);
 
-/// Registers a callback for a certain type of game broadcaster message.
-/// <returns>An identifier for the callback registration, to be used for unregistering.</returns>
+/// Registers a callback for a game broadcaster message type. ReVault: FUN_140F80ED0
 BroadcasterListenFunc* BroadcasterListen = (BroadcasterListenFunc*)(g_GameBaseAddress + 0xF80ED0);
 
 /// Unregisters a callback for a certain type of game broadcast message, using the return value from its registration.
@@ -125,27 +123,28 @@ AddArgSyntaxFunc* AddArgSyntax = (AddArgSyntaxFunc*)(g_GameBaseAddress + 0xD31B0
 AddArgHelpStringFunc* AddArgHelpString = (AddArgHelpStringFunc*)(g_GameBaseAddress + 0xD30D0);
 
 /// Processes the provided command line options for the running process.
-/// <returns>TODO: Unverified, probably success result</returns>
+/// ReVault: FUN_140116720 (PreprocessCommandLine, 808+ lines)
 PreprocessCommandLineFunc* PreprocessCommandLine = (PreprocessCommandLineFunc*)(g_GameBaseAddress + 0x116720);
 
 /// Writes a log to the logger, if all conditions such as log level are met.
 /// <returns>None</returns>
 WriteLogFunc* WriteLog = (WriteLogFunc*)(g_GameBaseAddress + 0xEBE70);
 
-/// TODO: Seemingly parses an HTTP/HTTPS URI to be connected to.
-/// <returns>TODO: Unknown</returns>
+/// HTTP/HTTPS URI connection. ReVault: FUN_1401F60C0 (HttpConnect)
+/// Reconstruction: CServerConfig.h — strips protocol, extracts hostname:port
 HttpConnectFunc* HttpConnect = (HttpConnectFunc*)(g_GameBaseAddress + 0x1F60C0);
 
-/// Loads a JSON file from the given path into a Json structure.
+/// Loads a JSON file from the given path. ReVault: FUN_1405F0990 (CJson_LoadFromPath, 85 lines)
 LoadJsonFromFileFunc* LoadJsonFromFile = (LoadJsonFromFileFunc*)(g_GameBaseAddress + 0x5F0990);
 
 /// Loads the local config (located at ./_local/config.json) for the provided game instance.
 LoadLocalConfigFunc* LoadLocalConfig = (LoadLocalConfigFunc*)(g_GameBaseAddress + 0x179EB0);
 
-/// Switches net game state to a given new state (loading level, logging in, logged in, lobby, etc).
+/// Switches net game state. ReVault: FUN_1401B8650 (Quest: ResetLoadTimeout @ 0x135cde0)
+/// Log: "[NETGAME] NetGame switching state (from %s, to %s)"
 NetGameSwitchStateFunc* NetGameSwitchState = (NetGameSwitchStateFunc*)(g_GameBaseAddress + 0x1B8650);
 
-/// Schedules a return to the lobby in the net game.
+/// Schedules return to lobby. ReVault: FUN_1401A89F0 (Quest: ScheduleReturnToLobby @ 0x134aa6c)
 NetGameScheduleReturnToLobbyFunc* NetGameScheduleReturnToLobby =
     (NetGameScheduleReturnToLobbyFunc*)(g_GameBaseAddress + 0x1A89F0);
 

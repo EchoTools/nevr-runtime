@@ -405,9 +405,10 @@ VOID PatchEnableServer() {
   static_assert(sizeof(loggingSubject) == LOGGING_SUBJECT_SIZE, "LOGGING_SUBJECT patch size mismatch");
   ApplyPatch(LOGGING_SUBJECT, loggingSubject, sizeof(loggingSubject));
 
-  // Force "allow_incoming" in netconfig_*.json to always be true
-  // String ref: "|allow_incoming" at 0x141cd0480
-  // This is essential for accepting client connections
+  // Force "allow_incoming" to always be true in CBroadcaster::InitializeFromJson
+  // (FUN_140f7f8b0, called from CR15NetDedicatedLobby constructor).
+  // This reads from netconfig_dedicatedserver.json (game asset), NOT _local/config.json.
+  // The byte patch is necessary because _local/config.json doesn't feed this function.
   const BYTE allowIncoming[] = {0xB8, 0x01, 0x00, 0x00, 0x00};  // MOV eax, 1
   static_assert(sizeof(allowIncoming) == ALLOW_INCOMING_SIZE, "ALLOW_INCOMING patch size mismatch");
   ApplyPatch(ALLOW_INCOMING, allowIncoming, sizeof(allowIncoming));
@@ -915,11 +916,14 @@ CHAR* GetServiceHostWithFallback(const CHAR* serviceKey, const CHAR* defaultUrl)
 }
 
 /// <summary>
-/// A detour hook for the game's method it uses to connect to an HTTP(S) endpoint. This is used to redirect additional
-/// hardcoded endpoints in the game with full fallback support for all service hosts.
+/// A detour hook for the game's HTTP(S) connect function. Redirects hardcoded endpoints
+/// using config.json overrides with fallback chain: service_key → loginservice_host → default.
+///
+/// The game has NO centralized service endpoint registry. Each service manages its own
+/// endpoint independently (CLoginService: loginservice_host, CNSRadMatchmaking:
+/// matchingservice_host, CHTTPApi: hardcoded api.readyatdawn.com etc.). URL substring
+/// matching is the correct approach given this per-service architecture.
 /// </summary>
-/// <param name="unk">TODO: Unknown</param>
-/// <param name="uri">The HTTP(S) URI string to connect to.</param>
 UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
   // If we have a local config, check for service overrides with fallback logic
   if (g_localConfig != NULL) {
@@ -1026,6 +1030,10 @@ EchoVR::TcpPeer* CreatePeerHook(EchoVR::TcpBroadcasterData* self, EchoVR::TcpPee
 
 // ============================================================================
 // SSL/TLS Modernization (Schannel hooks for ECDSA/EdDSA/RSA support)
+// WinHTTP is replaced by libcurl (CoCreateInstance hook), but Schannel
+// (Windows TLS provider) is still used by game code that makes TLS connections
+// directly through the Windows security APIs. This hook enables modern TLS
+// protocols and cipher suites for those remaining code paths.
 // ============================================================================
 
 #define SECURITY_WIN32
@@ -1086,25 +1094,21 @@ SECURITY_STATUS SEC_ENTRY AcquireCredentialsHandleWHook(_In_opt_ LPWSTR pszPrinc
 
 /// <summary>
 /// A detour hook for the game's method to wrap GetProcAddress.
+/// Intercepts RadPluginShutdown on platform DLLs (pnsdemo/pnsovr) to prevent crash.
+///
+/// The reconstruction confirms RadPluginShutdown is a DLL export on all platform DLLs
+/// (pnsrad.def:7, pnsovr.cpp:147-172, pnsdemo.cpp:140). An alternative approach would
+/// be to hook RadPluginShutdown directly on each platform DLL after load, but this
+/// GetProcAddress interception catches the exact moment the game resolves the function
+/// and is simpler than coordinating with LoadLibrary hooks.
 /// </summary>
-/// <param name="hModule">The module to get the procedure address from.</param>
-/// <param name="lpProcName">The exported procedure name.</param>
-/// <returns>The address of the procedure, or NULL if it was not found.</returns>
 FARPROC GetProcAddressHook(HMODULE hModule, LPCSTR lpProcName) {
-  // If this is a server, unloading pnsdemo.dll or pnsovr.dll currently causes dereferencing of freed memory
-  // during a RadPluginShutdown call. This could be due to the timing on the patch for dedicated servers causing
-  // some structures to initialize incorrectly or something.
-  // For now, we resolve this by simply force exiting the server.
-
-  // If we're performing a plugin shutdown, check if this is a user platform DLL such as pnsdemo.dll or pnsovr.dll,
-  // which exports a "Users" method.
+  // Platform DLLs (pnsdemo/pnsovr) crash during RadPluginShutdown due to freed memory.
+  // Detect platform DLLs by checking for the "Users" export they all define.
   if (g_isServer && strcmp(lpProcName, "RadPluginShutdown") == 0) {
-    // If this is a user platform dll, exit the whole process with a success code instead of continuing to gracefully
-    // unload.
     if (EchoVR::GetProcAddress(hModule, "Users") != NULL) exit(0);
   }
 
-  // Call the original function.
   return EchoVR::GetProcAddress(hModule, lpProcName);
 }
 
@@ -1144,7 +1148,16 @@ BOOL VerifyGameVersion() {
 }
 
 /// <summary>
-/// Hook for CreateProcessA to disable crash reporter (BsSndRpt64.exe) in Wine/headless environments
+/// Crash Reporter Suppression (CreateProcessA/W + ExitProcess + TerminateProcess + VEH)
+///
+/// BugSplat64.dll is a separate third-party DLL imported by echovr.exe that launches
+/// BsSndRpt64.exe. The crash reporter launch happens INSIDE BugSplat64.dll, not in game
+/// code — there is no single hook point in echovr.exe that controls it. We must intercept
+/// at the Windows API level:
+///   - CreateProcessA/W: Block BsSndRpt64.exe launch
+///   - ExitProcess: Suppress termination after crash reporter block
+///   - TerminateProcess: Prevent self-kill after crash reporter block
+///   - VEH (BreakpointVEH): Skip int3 padding byte after suppressed ExitProcess return
 /// </summary>
 typedef BOOL(WINAPI* CreateProcessAFunc)(LPCSTR, LPSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD,
                                          LPVOID, LPCSTR, LPSTARTUPINFOA, LPPROCESS_INFORMATION);

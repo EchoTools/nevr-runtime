@@ -34,6 +34,7 @@ struct GUID {
 #define ERROR_SUCCESS 0
 #endif
 
+#include <cstddef>
 #include <cstdint>
 
 namespace EchoVR {
@@ -122,17 +123,17 @@ enum class LogLevel : INT32 {
 /// <summary>
 /// A structure used to track a method which should be invoked (e.g. as callback) for a given operation.
 /// </summary>
+/// Validated against echovr-reconstruction SNSRegistryImpl.h
+/// sizeof == 0x20, used by BroadcasterListen and TcpBroadcasterListen
 struct DelegateProxy {
-  // The instance of the caller.
-  VOID* instance;
-
-  // The method to actually call through the proxy wrapper `proxyFunc`.
-  UINT64 method[2];
-
-  // The first function to call when the delegate is invoked. This is a wrapper function which is provided
-  // the `method` and `instance` and prepares the data before invoking the underlying `method`.
-  VOID* proxyFunc;
+  VOID* instance;     // +0x00: callback target object (this pointer)
+  UINT64 method[2];   // +0x08: method pointer (2 qwords for virtual dispatch)
+  VOID* proxyFunc;    // +0x18: proxy wrapper function pointer
 };
+static_assert(sizeof(DelegateProxy) == 0x20, "DelegateProxy size mismatch with reconstruction");
+static_assert(offsetof(DelegateProxy, instance) == 0x00, "DelegateProxy::instance offset mismatch");
+static_assert(offsetof(DelegateProxy, method) == 0x08, "DelegateProxy::method offset mismatch");
+static_assert(offsetof(DelegateProxy, proxyFunc) == 0x18, "DelegateProxy::proxyFunc offset mismatch");
 
 /// <summary>
 /// A 64-bit integer identifying a given symbol (which has an associated name, not always known).
@@ -140,13 +141,14 @@ struct DelegateProxy {
 /// </summary>
 typedef INT64 SymbolId;
 
-/// <summary>
-/// A user's primary identifier for the account/platform they play on.
-/// </summary>
+/// Validated against echovr-reconstruction CServerConfig.h (SNSUserID equivalent)
 struct XPlatformId {
-  UINT64 platformCode;
-  UINT64 accountId;
+  UINT64 platformCode;  // +0x00
+  UINT64 accountId;     // +0x08
 };
+static_assert(sizeof(XPlatformId) == 0x10, "XPlatformId size mismatch with reconstruction");
+static_assert(offsetof(XPlatformId, platformCode) == 0x00, "XPlatformId::platformCode offset mismatch");
+static_assert(offsetof(XPlatformId, accountId) == 0x08, "XPlatformId::accountId offset mismatch");
 
 /// <summary>
 /// Peer refers to an index of a connected game server peer.
@@ -301,12 +303,14 @@ struct LoadoutSlot {
   SymbolId tint_body;         // 0x98 - JSON: "tint_body"
   SymbolId title;             // 0xA0 - JSON: "title"
 };
+static_assert(sizeof(LoadoutSlot) == 0xA8, "LoadoutSlot size mismatch with reconstruction");
 
 /// <summary>
 /// LoadoutEntry wraps a LoadoutSlot with additional metadata (body type, team, AI role).
 /// This is the parent struct serialized to JSON for loadout instances.
 /// Total size: 0xD8 bytes (216 bytes)
 ///
+/// Validated against echovr-reconstruction LoadoutStructs.h:53-68.
 /// Serialization functions (Ghidra addresses):
 ///   - LoadoutEntry_Inspect_Deserialize: 0x140133e50 (JSON → struct)
 ///   - LoadoutEntry_Inspect_Serialize:   0x140134090 (struct → JSON)
@@ -320,6 +324,12 @@ struct LoadoutEntry {
   uint8_t _reserved[0x18];  // 0x18 - Reserved/unknown (24 bytes)
   LoadoutSlot loadout;      // 0x30 - JSON: "loadout" - Nested LoadoutSlot (0xA8 bytes)
 };
+static_assert(sizeof(LoadoutEntry) == 0xD8, "LoadoutEntry size mismatch with reconstruction");
+static_assert(offsetof(LoadoutEntry, bodytype) == 0x00, "LoadoutEntry::bodytype offset mismatch");
+static_assert(offsetof(LoadoutEntry, teamid) == 0x08, "LoadoutEntry::teamid offset mismatch");
+static_assert(offsetof(LoadoutEntry, airole) == 0x0A, "LoadoutEntry::airole offset mismatch");
+static_assert(offsetof(LoadoutEntry, xf) == 0x10, "LoadoutEntry::xf offset mismatch");
+static_assert(offsetof(LoadoutEntry, loadout) == 0x30, "LoadoutEntry::loadout offset mismatch");
 
 /// <summary>
 /// Lobby type describes the privacy-access level of a game session.
@@ -361,35 +371,32 @@ enum class NetGameState : INT32 {
 /// Lobby objects can be local, dedicated, etc. As a game server, this is a dedicated lobby object.
 /// </summary>
 struct Lobby {
-  /// <summary>
-  /// Information for each entrant/player in the game server.
-  /// </summary>
+  /// Per-player data in the Lobby. Validated against echovr-reconstruction CServerConfig.h.
+  /// sizeof == 0xA0 (160 bytes)
   struct EntrantData {
-    XPlatformId userId;
-    SymbolId platformId;
-    CHAR uniqueName[36];
-    CHAR displayName[36];
-    CHAR sfwDisplayName[36];
-    INT32 censored;
-    UINT16 owned : 1;
-    UINT16 dirty : 1;
-    UINT16 crossplayEnabled : 1;
+    XPlatformId userId;            // +0x00
+    SymbolId platformId;           // +0x10
+    CHAR uniqueName[36];           // +0x18
+    CHAR displayName[36];          // +0x3C
+    CHAR sfwDisplayName[36];       // +0x60
+    INT32 censored;                // +0x84
+    UINT16 owned : 1;              // +0x88 bit 0
+    UINT16 dirty : 1;              // +0x88 bit 1
+    UINT16 crossplayEnabled : 1;   // +0x88 bit 2
     UINT16 unused : 13;
-    UINT16 ping;
-    UINT16 genIndex;
-    UINT16 teamIndex;
-    Json json;
+    UINT16 ping;                   // +0x8A
+    UINT16 genIndex;               // +0x8C
+    UINT16 teamIndex;              // +0x8E (0=blue, 1=orange, 2=spec)
+    Json json;                     // +0x90 (root + cache pointers, 0x10 bytes)
   };
 
-  /// <summary>
-  /// Information for each local entrant on this machine, in the game server.
-  /// </summary>
+  /// Validated against echovr-reconstruction CServerConfig.h. sizeof == 0x38
   struct LocalEntrantv2 {
-    GUID loginSession;
-    XPlatformId userId;
-    GUID playerSession;
-    UINT16 teamIndex;
-    BYTE padding[6];
+    GUID loginSession;      // +0x00
+    XPlatformId userId;     // +0x10
+    GUID playerSession;     // +0x20
+    UINT16 teamIndex;       // +0x30
+    BYTE padding[6];        // +0x32
   };
 
   // TODO
@@ -443,6 +450,37 @@ struct Lobby {
   // Notes:
   // 0x358 (QWORD) set to 1 will load map instead of load server in some circumstances.
 };
+
+// --- Lobby sub-struct validation (echovr-reconstruction CServerConfig.h, CLobby.h) ---
+static_assert(sizeof(Lobby::EntrantData) == 0xA0, "EntrantData size mismatch with reconstruction");
+static_assert(offsetof(Lobby::EntrantData, userId) == 0x00, "EntrantData::userId offset mismatch");
+static_assert(offsetof(Lobby::EntrantData, platformId) == 0x10, "EntrantData::platformId offset mismatch");
+static_assert(offsetof(Lobby::EntrantData, uniqueName) == 0x18, "EntrantData::uniqueName offset mismatch");
+static_assert(offsetof(Lobby::EntrantData, displayName) == 0x3C, "EntrantData::displayName offset mismatch");
+static_assert(offsetof(Lobby::EntrantData, sfwDisplayName) == 0x60, "EntrantData::sfwDisplayName offset mismatch");
+static_assert(offsetof(Lobby::EntrantData, censored) == 0x84, "EntrantData::censored offset mismatch");
+static_assert(offsetof(Lobby::EntrantData, ping) == 0x8A, "EntrantData::ping offset mismatch");
+static_assert(offsetof(Lobby::EntrantData, genIndex) == 0x8C, "EntrantData::genIndex offset mismatch");
+static_assert(offsetof(Lobby::EntrantData, teamIndex) == 0x8E, "EntrantData::teamIndex offset mismatch");
+static_assert(sizeof(Lobby::LocalEntrantv2) == 0x38, "LocalEntrantv2 size mismatch with reconstruction");
+
+// Lobby field offset validation (echovr-reconstruction CLobby.h)
+// sizeof(Lobby) == 0x378 per reconstruction, but cannot static_assert due to
+// empty Pool<> template affecting padding calculation.
+static_assert(offsetof(Lobby, broadcaster) == 0x08, "Lobby::broadcaster offset mismatch");
+static_assert(offsetof(Lobby, tcpBroadcaster) == 0x10, "Lobby::tcpBroadcaster offset mismatch");
+static_assert(offsetof(Lobby, maxEntrants) == 0x18, "Lobby::maxEntrants offset mismatch");
+static_assert(offsetof(Lobby, hostingFlags) == 0x1C, "Lobby::hostingFlags offset mismatch");
+static_assert(offsetof(Lobby, serverLibraryModule) == 0x30, "Lobby::serverLibraryModule offset mismatch");
+static_assert(offsetof(Lobby, serverLibray) == 0x38, "Lobby::serverLibray offset mismatch");
+static_assert(offsetof(Lobby, hosting) == 0x130, "Lobby::hosting offset mismatch");
+static_assert(offsetof(Lobby, hostPeer) == 0x138, "Lobby::hostPeer offset mismatch");
+static_assert(offsetof(Lobby, internalHostPeer) == 0x140, "Lobby::internalHostPeer offset mismatch");
+static_assert(offsetof(Lobby, gameSessionId) == 0x1CC, "Lobby::gameSessionId offset mismatch");
+static_assert(offsetof(Lobby, entrantsLocked) == 0x1EC, "Lobby::entrantsLocked offset mismatch");
+static_assert(offsetof(Lobby, ownerSlot) == 0x1F0, "Lobby::ownerSlot offset mismatch");
+static_assert(offsetof(Lobby, ownerChanged) == 0x1F8, "Lobby::ownerChanged offset mismatch");
+static_assert(offsetof(Lobby, entrantData) == 0x360, "Lobby::entrantData offset mismatch");
 
 /// <summary>
 /// IServerLib describes an interface for a Echo VR game server library which the game

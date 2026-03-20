@@ -420,8 +420,9 @@ static std::string SerializeLoadoutSlot(const EchoVR::LoadoutSlot* slot) {
   return buf;
 }
 
-// LoadoutInstance structure at game + 0x51420 + (slot * 0x40)
-// This is a pointer array, NOT direct data!
+// LoadoutInstance structure at CR15NetGame + 0x51420 + (slot * 0x40)
+// Validated against echovr-reconstruction LoadoutResolver.h:17-24
+// (LoadoutInstanceEntry: sizeof == 0x40, offsetof(data) == 0x30, offsetof(loadout_id) == 0x38)
 struct LoadoutInstanceHeader {
   uint64_t* instancesPtr;  // +0x00: Pointer to array of LoadoutInstance
   uint64_t _pad08;         // +0x08
@@ -429,11 +430,12 @@ struct LoadoutInstanceHeader {
   uint64_t _pad18;         // +0x18
   uint64_t _pad20;         // +0x20
   uint64_t _pad28;         // +0x28
-  uint64_t instanceCount;  // +0x30: Number of loadout instances
-  uint16_t loadoutNumber;  // +0x38
+  uint64_t instanceCount;  // +0x30: Number of loadout instances (reconstruction: "data")
+  uint16_t loadoutNumber;  // +0x38: (reconstruction: "loadout_id")
   uint16_t validation;     // +0x3A
   uint32_t flags;          // +0x3C
 };
+static_assert(sizeof(LoadoutInstanceHeader) == 0x40, "LoadoutInstanceHeader size mismatch with reconstruction");
 
 // Each loadout instance (0x40 bytes) in the instances array
 struct LoadoutInstance {
@@ -446,6 +448,7 @@ struct LoadoutInstance {
   uint64_t _pad30;                // +0x30
   uint64_t _pad38;                // +0x38
 };
+static_assert(sizeof(LoadoutInstance) == 0x40, "LoadoutInstance size mismatch with reconstruction");
 
 // Each item is a pair: (slotType SymbolId, equippedItem SymbolId)
 struct LoadoutItem {

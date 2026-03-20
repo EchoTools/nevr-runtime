@@ -62,11 +62,15 @@ struct TelemetrySnapshot {
   void Clear() { std::memset(this, 0, sizeof(*this)); }
 };
 
-// Memory layout constants (verified via RE)
+// Memory layout constants
+// Validated against echovr-reconstruction:
+//   CR15NetGame.h: GetNetGameFromContext = *(context + 0x8518), global at DAT_1420a0478
+//   CR15NetGameLayout.h: loadout table, game flags, broadcaster offsets
+//   CServerConfig.h: EntrantData field offsets (player array matches)
 namespace GameOffsets {
 
-constexpr uint64_t GAME_CONTEXT_OFFSET = 0x20a0478;
-constexpr uint64_t NETGAME_OFFSET = 0x8518;
+constexpr uint64_t GAME_CONTEXT_OFFSET = 0x20a0478;  // DAT_1420a0478 (global game context)
+constexpr uint64_t NETGAME_OFFSET = 0x8518;           // GetNetGameFromContext: *(context + 0x8518)
 constexpr uint64_t GAME_STATE_DATA_OFFSET = 0x2AA8;
 
 // Entity system access (from CR15NetGame)
