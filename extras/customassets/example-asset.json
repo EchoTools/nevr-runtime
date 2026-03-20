@@ -1,0 +1,22 @@
+{
+  "version": "1.0",
+  "asset_id": "custom_test_decal",
+  "type": "decal",
+  "resources": [
+    {
+      "type": "texture",
+      "slot": "diffuse",
+      "format": "png",
+      "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+      "width": 1,
+      "height": 1,
+      "comment": "This is a 1x1 red pixel PNG (base64 encoded) for testing"
+    }
+  ],
+  "metadata": {
+    "author": "Test User",
+    "description": "Simple red test decal",
+    "version": "1.0.0",
+    "tags": ["test", "decal"]
+  }
+}

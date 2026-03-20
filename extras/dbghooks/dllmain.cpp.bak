@@ -1,0 +1,78 @@
+// dllmain.cpp : Defines the entry point for the DbgHooks DLL
+#include "gamestart_hooks.h"
+#include "gun2cr_hook.h"
+#include "hash_hooks.h"
+#include "mesh_dump_hooks.h"
+#include "pch.h"
+
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+  switch (ul_reason_for_call) {
+    case DLL_PROCESS_ATTACH: {
+      // Write diagnostic file IMMEDIATELY to prove DllMain is called
+      FILE* diag = fopen("dllmain_trace.txt", "w");
+      if (diag) {
+        fprintf(diag, "DLL_PROCESS_ATTACH called at hModule=%p\n", hModule);
+        fflush(diag);
+      }
+
+      // Try to install hooks immediately (for early injection)
+      // If this fails, hooks won't be installed, but DLL will still load
+
+      try {
+        if (diag) fprintf(diag, "Calling InitializeHashHooks\n"), fflush(diag);
+        InitializeHashHooks();
+        if (diag) fprintf(diag, "InitializeHashHooks returned OK\n"), fflush(diag);
+      } catch (...) {
+        if (diag) fprintf(diag, "EXCEPTION in InitializeHashHooks\n"), fflush(diag);
+      }
+
+      try {
+        if (diag) fprintf(diag, "Calling InitializeGun2CRHook\n"), fflush(diag);
+        InitializeGun2CRHook();
+        if (diag) fprintf(diag, "InitializeGun2CRHook returned OK\n"), fflush(diag);
+      } catch (...) {
+        if (diag) fprintf(diag, "EXCEPTION in InitializeGun2CRHook\n"), fflush(diag);
+      }
+
+      // Skip GameStartHooks for now due to potential crashes
+      // try {
+      //   if (diag) fprintf(diag, "Calling InitializeGameStartHooks\n"), fflush(diag);
+      //   InitializeGameStartHooks();
+      //   if (diag) fprintf(diag, "InitializeGameStartHooks returned OK\n"), fflush(diag);
+      // } catch (...) {
+      //   if (diag) fprintf(diag, "EXCEPTION in InitializeGameStartHooks\n"), fflush(diag);
+      // }
+
+      try {
+        if (diag) fprintf(diag, "Calling InitializeMeshDumpHooks\n"), fflush(diag);
+        InitializeMeshDumpHooks();
+        if (diag) fprintf(diag, "InitializeMeshDumpHooks returned OK\n"), fflush(diag);
+      } catch (...) {
+        if (diag) fprintf(diag, "EXCEPTION in InitializeMeshDumpHooks\n"), fflush(diag);
+      }
+
+      if (diag) {
+        fprintf(diag, "DllMain process attach complete\n");
+        fclose(diag);
+      }
+      break;
+    }
+
+    case DLL_THREAD_ATTACH:
+    case DLL_THREAD_DETACH:
+      break;
+
+    case DLL_PROCESS_DETACH:
+      // Shutdown and flush logs
+      ShutdownMeshDumpHooks();
+      ShutdownGameStartHooks();
+      ShutdownGun2CRHook();
+      ShutdownHashHooks();
+      break;
+  }
+  return TRUE;
+}
+
+extern "C" __declspec(dllexport) void DbgHooksExportPlaceholder() {
+  // Export placeholder for DLL loading
+}

@@ -1,0 +1,28 @@
+version: 1
+description: "dbghooks Automatic Hook Loader Configuration"
+
+hooks:
+  - name: gun2cr_visual_effects_fix
+    enabled: true
+    priority: 10
+    description: "Patches Gun2CR SProperties init with GunCR working values"
+    module: dbghooks
+    function_initialize: InitializeGun2CRHook
+    function_shutdown: ShutdownGun2CRHook
+    required_exports:
+      - InitializeGun2CRHook
+      - ShutdownGun2CRHook
+    config_file: gun2cr_fix/gun2cr_config.ini
+
+  - name: universal_json_override
+    enabled: true
+    priority: 5 # Lower priority, runs before most other hooks
+    description: "Hooks the JSON file loader to allow overriding any game config file via config/json_overrides.json."
+    module: dbghooks
+    function_initialize: InitializeJsonOverrideHook
+    function_shutdown: ShutdownJsonOverrideHook
+    required_exports:
+      - InitializeJsonOverrideHook
+      - ShutdownJsonOverrideHook
+    config_file: config/json_overrides.json
+

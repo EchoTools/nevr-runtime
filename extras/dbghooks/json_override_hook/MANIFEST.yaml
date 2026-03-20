@@ -1,0 +1,4 @@
+hook_name: universal_json_override
+description: Hooks the JSON file loader to allow overriding any game config file via config/json_overrides.json.
+target_function: CJson_LoadFromPath at 0x1405f0990
+status: active

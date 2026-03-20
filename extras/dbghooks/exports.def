@@ -1,0 +1,4 @@
+LIBRARY DbgHooks
+EXPORTS
+    ; Export with ordinal 1 for DLL loading
+    DbgHooksExportPlaceholder @1

@@ -1,0 +1,18 @@
+{
+  "mp_equipment.json": {
+    "weapon_list": {
+      "weapon_pulserifle": {
+        "is_enabled": true
+      },
+      "weapon_shotgun": {
+        "is_enabled": true
+      },
+      "weapon_blaster_pistol": {
+        "is_enabled": true
+      }
+    },
+    "disabled_feature_flags": {
+      "disable_experimental_weapons": false
+    }
+  }
+}

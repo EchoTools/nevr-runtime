@@ -1,0 +1,33 @@
+---
+hook_name: gun2cr_visual_effects_fix
+version: 1.0.0
+author: evr-reconstruction
+description: |
+  Fixes Gun2CR visual effects (bullets, muzzle flash, particles).
+  Root cause: SProperties initialized to zero instead of copying GunCR values.
+  Solution: Hook intercepts trailduration init, patches struct with working values.
+
+target:
+  module: echovr.exe
+  component: CR15NetBullet2CS
+
+injection:
+  method: CreateRemoteThread
+  export_required:
+    - InitializeGun2CRHook
+    - ShutdownGun2CRHook
+  load_order: early
+  priority: 10
+
+status: active
+verified: true
+last_tested: "2026-01-24"
+
+fix_details:
+  broken_field: trailduration (offset +0x38)
+  broken_value: "0x00000000 (0.0)"
+  working_value: "0x3f800000 (1.0)"
+  additional_fields:
+    - collisionpfx (offset +0x58)
+    - trailpfx (offset +0x60)
+    - trailpfx_b (offset +0x78)

@@ -1,0 +1,462 @@
+{
+  "weapons": {
+    "assault": {
+      "name": "assault",
+      "display_name": "PULSAR",
+      "aliases": ["assault rifle"],
+      "enabled": true,
+      "internal_name": "assault",
+      "component_hash": "0x2fd69c8c5f615b9e",
+      "component_resource": "CR15NetGunCR",
+      
+      "damage_table": {
+        "head": 1.5,
+        "arm": 1.0,
+        "leg": 0.75,
+        "torso": 1.0,
+        "ordnance": 1.0,
+        "barrier": 0.5,
+        "ssi": 1.0
+      },
+      
+      "weapon_properties": {
+        "heat_per_shot": 2.25,
+        "heat_per_second": 0.0,
+        "heat_cooldown_delay": 0.33333,
+        "refire_delay": 0.0,
+        "heat_cooling_rate": 20.0,
+        "heat_overheat_venting_rate": 30.0,
+        "heat_venting_rate": 60.0,
+        "projectile_velocity": 80.0,
+        "projectile_damage": 9.0,
+        "fire_delay": 0.125,
+        "min_spread": 0.05,
+        "max_spread": 1.25,
+        "instability_max": 40.0,
+        "instability_per_shot": 1.0,
+        "instability_cooldown_delay": 0.15,
+        "instability_cooldown_rate": 25.0,
+        "hand_ori_prediction_when_firing": 1.0,
+        "hand_pos_prediction_when_firing": 1.0
+      },
+      
+      "sound_settings": {
+        "bullet_impact": {
+          "player": "play_bullet_impact_player",
+          "barrier": "play_bullet_impact_shield",
+          "default": "play_bullet_impact_geo"
+        },
+        "bullet_whizzby": "loop_whizzby_pulsar_start"
+      }
+    },
+
+    "blaster": {
+      "name": "blaster",
+      "display_name": "NOVA",
+      "aliases": ["blaster", "blaster_cone"],
+      "enabled": true,
+      "internal_name": "blaster",
+      "component_hash": "0x2fd5839e4d605298",
+      "component_resource": "CR15NetGunCR",
+      
+      "damage_table": {
+        "head": 2.0,
+        "arm": 0.9,
+        "leg": 0.75,
+        "torso": 1.0,
+        "ordnance": 1.0,
+        "barrier": 0.5,
+        "ssi": 1.0
+      },
+      
+      "blaster_cone_damage": {
+        "head": 2.0,
+        "arm": 0.35,
+        "leg": 0.3,
+        "torso": 1.0,
+        "ordnance": 0.2,
+        "barrier": 0.0,
+        "ssi": 1.0
+      },
+      
+      "weapon_properties": {
+        "heat_per_shot": 13.0,
+        "heat_per_second": 0.0,
+        "heat_cooldown_delay": 1.75,
+        "refire_delay": 0.5,
+        "heat_cooling_rate": 30.0,
+        "heat_overheat_venting_rate": 40.0,
+        "heat_venting_rate": 80.0,
+        "projectile_velocity": 60.0,
+        "projectile_damage": 2.0,
+        "spread": 0.1,
+        "volume_distance": 5.0,
+        "volume_radius_start": 0.05,
+        "volume_radius_end": 0.75,
+        "volume_damage": 12.0,
+        "volume_falloff_exp": 3.0,
+        "cone_tightness": 20.0
+      },
+      
+      "sound_settings": {
+        "bullet_impact": {
+          "player": "play_bullet_impact_player",
+          "barrier": "play_bullet_impact_shield",
+          "default": "play_bullet_impact_geo"
+        },
+        "bullet_whizzby": "loop_bullet_trail_start"
+      }
+    },
+
+    "scout": {
+      "name": "scout",
+      "display_name": "COMET",
+      "aliases": ["scout rifle", "scout rifle explosion", "scout_aoe"],
+      "enabled": true,
+      "internal_name": "scout",
+      "component_hash": "0xe32dc7c9da8051a4",
+      "component_resource": "CR15NetGunCR",
+      
+      "damage_table": {
+        "head": 2.0,
+        "arm": 0.9,
+        "leg": 0.75,
+        "torso": 1.0,
+        "ordnance": 1.0,
+        "barrier": 0.5,
+        "ssi": 1.0
+      },
+      
+      "scout_aoe_damage": {
+        "head": 1.0,
+        "arm": 1.0,
+        "leg": 1.0,
+        "torso": 1.0,
+        "ordnance": 1.0,
+        "barrier": 0.0,
+        "ssi": 1.0
+      },
+      
+      "weapon_properties": {
+        "heat_per_shot": 16.0,
+        "heat_per_second": 4.0,
+        "heat_cooldown_delay": 1.75,
+        "refire_delay": 0.85,
+        "heat_cooling_rate": 20.0,
+        "heat_overheat_venting_rate": 25.0,
+        "heat_venting_rate": 50.0,
+        "fire_input_buffer_time": 0.6,
+        "projectile_velocity_min": 110.0,
+        "projectile_velocity_max": 150.0,
+        "projectile_damage_min": 30.0,
+        "projectile_damage_max": 60.0,
+        "charging_duration": 1.1,
+        "hand_ori_prediction_when_charging": 0.0,
+        "hand_pos_prediction_when_charging": 0.5
+      },
+      
+      "scout_aoe_properties": {
+        "min_charge_explosion_radius": 0.6,
+        "full_charge_explosion_radius_ratio": 1.5,
+        "min_charge_explosion_damage": 7.0,
+        "max_charge_explosion_damage": 21.0,
+        "min_explosion_damage": 1.0
+      },
+      
+      "sound_settings": {
+        "bullet_impact": {
+          "player": "play_bullet_impact_player",
+          "barrier": "play_bullet_impact_shield",
+          "default": "play_bullet_impact_geo"
+        },
+        "bullet_whizzby": "loop_whizzby_comet_start"
+      }
+    },
+
+    "rocket": {
+      "name": "rocket",
+      "display_name": "METEOR",
+      "aliases": ["rocket_aoe"],
+      "enabled": true,
+      "internal_name": "rocket",
+      "component_hash": "0x41d2d5321928020a",
+      "component_resource": "CR15RocketManCR",
+      
+      "damage_table": {
+        "head": 1.0,
+        "arm": 0.5,
+        "leg": 0.3,
+        "torso": 1.0,
+        "ordnance": 1.0,
+        "barrier": 2.0,
+        "ssi": 1.0
+      },
+      
+      "rocket_aoe_damage": {
+        "head": 1.0,
+        "arm": 0.7,
+        "leg": 0.5,
+        "torso": 1.0,
+        "ordnance": 1.0,
+        "barrier": 2.0,
+        "ssi": 1.0
+      },
+      
+      "weapon_properties": {
+        "heat_per_shot": 20.0,
+        "heat_per_second": 0.0,
+        "heat_cooldown_delay": 1.5,
+        "refire_delay": 1.25,
+        "heat_cooling_rate": 20.0,
+        "heat_overheat_venting_rate": 25.0,
+        "heat_venting_rate": 50.0,
+        "fire_input_buffer_time": 0.5,
+        "projectile_velocity": 25.0,
+        "projectile_damage": 30.0,
+        "spread": 0.0
+      },
+      
+      "rocket_aoe_properties": {
+        "explosion_radius_near": 1.0,
+        "explosion_radius_far": 1.75,
+        "explosion_damage": 40.0,
+        "owner_damage_modifier": 0.5,
+        "normal_offset_scale": 0.1
+      },
+      
+      "sound_settings": {
+        "bullet_impact": {
+          "player": "play_bullet_impact_player",
+          "barrier": "play_bullet_impact_shield",
+          "default": "play_bullet_impact_geo"
+        },
+        "bullet_whizzby": "loop_whizzby_meteor_start"
+      }
+    },
+
+    "chain": {
+      "name": "chain",
+      "display_name": "BLAZAR",
+      "aliases": ["chain"],
+      "enabled": true,
+      "internal_name": "chain",
+      "component_hash": "0xe32dc7d9d18e4dbe",
+      "component_resource": "CR15NetGunCR",
+      "resource_location": {
+        "directories": [
+          "unknown_0xdbaed509c67b8884/unknown_0xcb9977f7fc2b4526",
+          "unknown_0xdbaed509c67b8884/unknown_0x43e2da7914642604",
+          "unknown_0xdbaed509c67b8884/unknown_0x42670f2bed45703c",
+          "unknown_0xdbaed509c67b8884/unknown_0x43e2da7a0c623a19",
+          "unknown_0xdbaed509c67b8884/unknown_0xdf5ca7b7dfa383d4"
+        ],
+        "offset": "0x38c0",
+        "note": "BLAZAR component found in extracted resources"
+      },
+      
+      "damage_table": {
+        "head": 1.0,
+        "arm": 1.0,
+        "leg": 1.0,
+        "torso": 1.0,
+        "ordnance": 1.0,
+        "barrier": 1.0,
+        "ssi": 1.0
+      },
+      
+      "weapon_properties": {
+        "heat_per_shot": 2.0,
+        "heat_per_second": 0.0,
+        "heat_cooldown_delay": 0.2,
+        "refire_delay": 0.05,
+        "heat_cooling_rate": 40.0,
+        "heat_overheat_venting_rate": 60.0,
+        "heat_venting_rate": 80.0,
+        "projectile_velocity": 100.0,
+        "projectile_damage": 6.0,
+        "fire_delay": 0.05,
+        "min_spread": 0.02,
+        "max_spread": 0.8,
+        "instability_max": 30.0,
+        "instability_per_shot": 0.8,
+        "instability_cooldown_delay": 0.1,
+        "instability_cooldown_rate": 30.0,
+        "hand_ori_prediction_when_firing": 1.0,
+        "hand_pos_prediction_when_firing": 1.0
+      },
+      
+      "sound_settings": {
+        "bullet_impact": {
+          "player": "play_bullet_impact_player",
+          "barrier": "play_bullet_impact_shield",
+          "default": "play_bullet_impact_geo"
+        },
+        "bullet_whizzby": "loop_bullet_trail_start"
+      }
+    },
+
+    "rifle": {
+      "name": "rifle",
+      "display_name": "STARBURST",
+      "aliases": ["rifle"],
+      "enabled": false,
+      "reason_disabled": "Component resource not found in extracted files - cannot enable via hooks",
+      "internal_name": "rifle",
+      "component_resource": "CR15NetGunCR",
+      
+      "damage_table": {
+        "head": 1.65,
+        "arm": 1.0,
+        "leg": 0.75,
+        "torso": 1.0,
+        "ordnance": 1.0,
+        "barrier": 0.5,
+        "ssi": 1.0
+      },
+      
+      "weapon_properties": {
+        "heat_per_shot": 15.0,
+        "heat_per_second": 0.0,
+        "heat_cooldown_delay": 1.5,
+        "refire_delay": 0.75,
+        "heat_cooling_rate": 25.0,
+        "heat_overheat_venting_rate": 35.0,
+        "heat_venting_rate": 70.0,
+        "projectile_velocity": 90.0,
+        "projectile_damage": 20.0,
+        "fire_delay": 0.15,
+        "min_spread": 0.08,
+        "max_spread": 1.0,
+        "instability_max": 35.0,
+        "instability_per_shot": 0.9,
+        "instability_cooldown_delay": 0.12,
+        "instability_cooldown_rate": 28.0,
+        "hand_ori_prediction_when_firing": 1.0,
+        "hand_pos_prediction_when_firing": 1.0
+      },
+      
+      "sound_settings": {
+        "bullet_impact": {
+          "player": "play_bullet_impact_player",
+          "barrier": "play_bullet_impact_shield",
+          "default": "play_bullet_impact_geo"
+        },
+        "bullet_whizzby": "loop_bullet_trail_start"
+      }
+    },
+
+    "smg": {
+      "name": "smg",
+      "display_name": "QUARK",
+      "aliases": ["smg"],
+      "enabled": false,
+      "reason_disabled": "Component resource not found in extracted files - cannot enable via hooks",
+      "internal_name": "smg",
+      "component_resource": "CR15NetGunCR",
+      
+      "damage_table": {
+        "head": 1.4,
+        "arm": 1.0,
+        "leg": 0.5,
+        "torso": 1.0,
+        "ordnance": 1.0,
+        "barrier": 0.5,
+        "ssi": 1.0
+      },
+      
+      "weapon_properties": {
+        "heat_per_shot": 1.5,
+        "heat_per_second": 0.0,
+        "heat_cooldown_delay": 0.15,
+        "refire_delay": 0.03,
+        "heat_cooling_rate": 45.0,
+        "heat_overheat_venting_rate": 65.0,
+        "heat_venting_rate": 90.0,
+        "projectile_velocity": 75.0,
+        "projectile_damage": 5.0,
+        "fire_delay": 0.03,
+        "min_spread": 0.03,
+        "max_spread": 1.5,
+        "instability_max": 50.0,
+        "instability_per_shot": 1.2,
+        "instability_cooldown_delay": 0.2,
+        "instability_cooldown_rate": 35.0,
+        "hand_ori_prediction_when_firing": 1.0,
+        "hand_pos_prediction_when_firing": 1.0
+      },
+      
+      "sound_settings": {
+        "bullet_impact": {
+          "player": "play_bullet_impact_player_quark",
+          "barrier": "play_bullet_impact_shield_quark",
+          "default": "play_bullet_impact_geo_quark"
+        },
+        "bullet_whizzby": "loop_bullet_trail_start"
+      }
+    },
+
+    "magnum": {
+      "name": "magnum",
+      "display_name": "PROTOSTAR",
+      "aliases": ["magnum"],
+      "enabled": false,
+      "reason_disabled": "Component resource not found in extracted files - cannot enable via hooks",
+      "internal_name": "magnum",
+      "component_resource": "CR15NetGunCR",
+      
+      "damage_table": {
+        "head": 1.5,
+        "arm": 1.0,
+        "leg": 1.0,
+        "torso": 1.0,
+        "ordnance": 1.0,
+        "barrier": 1.75,
+        "ssi": 1.0
+      },
+      
+      "magnum_aoe_damage": {
+        "head": 1.0,
+        "arm": 1.0,
+        "leg": 1.0,
+        "torso": 1.0,
+        "ordnance": 1.0,
+        "barrier": 1.0,
+        "ssi": 1.0
+      },
+      
+      "weapon_properties": {
+        "heat_per_shot": 12.0,
+        "heat_per_second": 0.0,
+        "heat_cooldown_delay": 0.75,
+        "refire_delay": 0.5,
+        "projectile_velocity": 40.0,
+        "projectile_damage": 50.0,
+        "spread": 0.0
+      },
+      
+      "magnum_aoe_properties": {
+        "explosion_radius_near": 0.75,
+        "explosion_radius_far": 0.85,
+        "explosion_damage": 14.0
+      },
+      
+      "sound_settings": {
+        "bullet_impact": {
+          "player": "play_bullet_impact_player",
+          "barrier": "play_bullet_impact_shield",
+          "default": "play_bullet_impact_geo"
+        },
+        "bullet_whizzby": "loop_bullet_trail_start"
+      }
+    }
+  },
+
+  "metadata": {
+    "version": "1.0.0",
+    "description": "Weapon configuration for dbghooks weapon enabler system",
+    "enabled_weapons_count": 5,
+    "disabled_weapons_count": 3,
+    "notes": "Chain (BLAZAR) is the ONLY disabled weapon with extracted component resources. Rifle, SMG, Magnum cannot be enabled via hooks without binary component resources.",
+    "generation_date": "2026-01-25"
+  }
+}

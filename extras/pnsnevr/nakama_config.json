@@ -1,0 +1,19 @@
+{
+	"api_endpoint": "http://127.0.0.1",
+	"http_port": 7350,
+	"grpc_port": 7349,
+	"server_key": "defaultkey",
+	"auth_method": "device",
+	"auto_create_user": true,
+	"max_retries": 3,
+	"retry_delay_ms": 1000,
+	"presence_poll_interval": 5000,
+	"matchmaking_poll_interval": 1000,
+	"features": {
+		"friends": true,
+		"parties": true,
+		"matchmaking": true,
+		"leaderboards": false,
+		"storage": false
+	}
+}

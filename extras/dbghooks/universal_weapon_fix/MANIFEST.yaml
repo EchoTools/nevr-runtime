@@ -1,0 +1,4 @@
+hook_name: universal_weapon_vfx_fix
+description: Hooks the central weapon property deserializer to fix VFX for all broken weapons (magnum, smg, chain, rifle, etc.).
+target_function: FUN_140784bb0
+status: active

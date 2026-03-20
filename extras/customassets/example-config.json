@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "cache_directory": "",
+  "http_settings": {
+    "user_agent": "EchoVR-CustomAssets/1.0",
+    "timeout_ms": 30000,
+    "max_retries": 3
+  },
+  "assets": {
+    "custom_sprockee_emblem": {
+      "url": "https://example.com/assets/sprockee_emblem.json",
+      "checksum": ""
+    },
+    "custom_test_decal": {
+      "url": "http://localhost:8000/test_decal.json",
+      "checksum": ""
+    }
+  }
+}

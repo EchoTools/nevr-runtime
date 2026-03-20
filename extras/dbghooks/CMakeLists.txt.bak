@@ -1,0 +1,113 @@
+# DbgHooks - Debugging and Diagnostic Hooks
+# Implements hooks specified in:
+#   - evr-reconstruction/docs/usage/QUICK_START_HASHING_HOOKS.md (hash discovery)
+#   - evr-reconstruction/docs/hooks/gun2cr_visual_fix_hook.md (Gun2CR visual fix)
+
+# Use vendored MinHook for function hooking
+set(HOOKING_LIBRARY minhook::minhook)
+
+# DbgHooks sources
+set(DBGHOOKS_SOURCES 
+  "dllmain.cpp" 
+  "hash_hooks.cpp"
+  "gun2cr_hook.cpp"
+  "gamestart_hooks.cpp"
+  "mesh_dump_hooks.cpp"
+)
+
+set(DBGHOOKS_HEADERS 
+  "hash_hooks.h"
+  "gun2cr_hook.h"
+  "gamestart_hooks.h"
+  "mesh_dump_hooks.h"
+)
+
+add_library(DbgHooks SHARED 
+  ${DBGHOOKS_SOURCES} 
+  ${DBGHOOKS_HEADERS}
+  "exports.def"
+)
+
+# Set output name to DbgHooks.dll (remove lib prefix)
+set_target_properties(DbgHooks PROPERTIES 
+  PREFIX ""
+  OUTPUT_NAME "dbghooks"
+)
+
+target_compile_definitions(DbgHooks PRIVATE USE_MINHOOK)
+
+target_precompile_headers(DbgHooks PRIVATE "${NEVR_COMMON_INCLUDE}/pch.h")
+target_include_directories(DbgHooks PRIVATE 
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}
+)
+
+target_link_libraries(DbgHooks PRIVATE ${HOOKING_LIBRARY} Common)
+target_link_directories(DbgHooks PRIVATE Common)
+
+# Static link CRT to avoid api-ms-win-crt-* dependencies in Wine
+if(MINGW)
+  target_link_options(DbgHooks PRIVATE -static)
+endif()
+
+if(MSVC)
+  target_compile_options(DbgHooks PRIVATE /wd4251)
+endif()
+
+# =============================================================================
+# echovr_launcher.exe - Early injection launcher for hash discovery
+# =============================================================================
+
+add_executable(echovr_launcher.exe
+  "echovr_launcher.cpp"
+)
+
+set_target_properties(echovr_launcher.exe PROPERTIES
+  OUTPUT_NAME "echovr_launcher.exe"
+)
+
+target_compile_features(echovr_launcher.exe PRIVATE cxx_std_17)
+
+# Static link CRT for standalone executable (testing)
+if(MSVC)
+  # MSVC: Use static CRT (/MT)
+  target_compile_options(echovr_launcher.exe PRIVATE /MT)
+  target_link_options(echovr_launcher.exe PRIVATE /SUBSYSTEM:CONSOLE)
+endif()
+
+if(MINGW)
+  # MinGW: Static link all runtime libraries including MSVCRT
+  target_compile_options(echovr_launcher.exe PRIVATE -static-libgcc -static-libstdc++)
+  target_link_options(echovr_launcher.exe PRIVATE -static -static-libgcc -static-libstdc++ -lmsvcrt)
+endif()
+
+# No dependencies - standalone launcher
+# Links only to Windows APIs (kernel32 is implicit)
+
+# =============================================================================
+# DllLoader - Loads echovr_asdll.dll with hooks installed first
+# =============================================================================
+
+add_executable(DllLoader
+  "DllLoader.cpp"
+)
+
+set_target_properties(DllLoader PROPERTIES
+  OUTPUT_NAME "DllLoader"
+)
+
+target_compile_features(DllLoader PRIVATE cxx_std_17)
+
+# Static link CRT for standalone executable (testing)
+if(MSVC)
+  # MSVC: Use static CRT (/MT)
+  target_compile_options(DllLoader PRIVATE /MT)
+  target_link_options(DllLoader PRIVATE /SUBSYSTEM:CONSOLE)
+endif()
+
+if(MINGW)
+  # MinGW: Static link all runtime libraries including MSVCRT
+  target_compile_options(DllLoader PRIVATE -static-libgcc -static-libstdc++)
+  target_link_options(DllLoader PRIVATE -static -static-libgcc -static-libstdc++ -lmsvcrt)
+endif()
+

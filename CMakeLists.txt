@@ -184,21 +184,11 @@ find_package(Protobuf REQUIRED)
 
 add_subdirectory(src/common)
 add_subdirectory(src/protobufnevr)
-# add_subdirectory(dbghooks)  # TODO: dbghooks has no CMakeLists.txt - will move to tools/dbghooks/
 add_subdirectory(src/gamepatches)
 add_subdirectory(src/legacy/gamepatches)
 add_subdirectory(src/gameserver)
 add_subdirectory(src/legacy/gameserver)
 add_subdirectory(src/telemetryagent)
-# 
-# # PNSOvrDLL - Self-contained Echo VR Platform Services DLL
-# # Provides voice, user management, rooms, presence, IAP, and notifications subsystems
-# # Optional Nakama integration for backend services
-# add_subdirectory(pnsovr-dll)
-# 
-# # SocialPlugin - NEVR Social Plugin (pnsnevr.dll)
-# # Replaces original platform social plugins (pnsovr.dll, pnsrad.dll) with self-hosted solution
-# add_subdirectory(socialplugin)
 
 # Include a local cmake script if it exists
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
@@ -217,7 +207,6 @@ set(DIST_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}")
 
 # List of DLL artifacts to include
 set(DIST_DLLS
-  "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/dbghooks.dll"
   "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatches.dll"
   "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll"
   "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll"
@@ -227,17 +216,11 @@ set(DIST_DLLS
 
 # List of debug symbol files to include
 set(DIST_DBG_FILES
-  "${CMAKE_BINARY_DIR}/dbghooks.dll.dbg"
   "${CMAKE_BINARY_DIR}/gamepatches.dll.dbg"
   "${CMAKE_BINARY_DIR}/gamepatcheslegacy.dll.dbg"
   "${CMAKE_BINARY_DIR}/gameserver.dll.dbg"
   "${CMAKE_BINARY_DIR}/gameserverlegacy.dll.dbg"
   "${CMAKE_BINARY_DIR}/telemetryagent.dll.dbg"
-)
-
-# PowerShell supervisor script
-set(DIST_SCRIPTS
-  "${CMAKE_BINARY_DIR}/NEVRSupervisor.ps1"
 )
 
 # Custom target to prepare distribution directory
@@ -249,7 +232,6 @@ add_custom_target(dist-prepare
   # Copy and rename gameserver.dll -> pnsradgameserver.dll (if exists)
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_DIR}/pnsradgameserver.dll" || true
   # Copy remaining DLLs with original names (if exist)
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/dbghooks.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/dbghooks.dll" "${DIST_DIR}/" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll" "${DIST_DIR}/" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll" "${DIST_DIR}/" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/telemetryagent.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/telemetryagent.dll" "${DIST_DIR}/" || true
@@ -257,14 +239,7 @@ add_custom_target(dist-prepare
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_DIR}/" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_patched.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_patched.dll" "${DIST_DIR}/" || true
   #COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/DllLoader.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/DllLoader.exe" "${DIST_DIR}/" || true
-   # Copy gun2cr_config.ini if it exists
-   COMMAND test -f "${CMAKE_SOURCE_DIR}/tools/dbghooks/gun2cr_config.ini" && ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/tools/dbghooks/gun2cr_config.ini" "${DIST_DIR}/" || true
-   # Copy weapon_config.json if it exists
-   COMMAND test -f "${CMAKE_SOURCE_DIR}/tools/dbghooks/gun2cr_fix/weapon_config.json" && ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/tools/dbghooks/gun2cr_fix/weapon_config.json" "${DIST_DIR}/" || true
-   # Package Blazar component resources
-   COMMAND test -d "${CMAKE_SOURCE_DIR}/../evr-reconstruction/assets/extracted_large/resources/resources/unknown_0xdbaed509c67b8884/" && ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/../evr-reconstruction/assets/extracted_large/resources/resources/unknown_0xdbaed509c67b8884/" "${DIST_DIR}/blazar_resources" || true
    COMMAND test -f "${CMAKE_SOURCE_DIR}/README.md" && ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_DIR}/" || true
-  # DEPENDS dbghooks
   VERBATIM
 )
 
@@ -311,21 +286,13 @@ add_custom_target(dist-lite-prepare
   # Copy and rename gameserver.dll -> pnsradgameserver.dll, then strip (if exists)
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_LITE_DIR}/pnsradgameserver.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/pnsradgameserver.dll" || ${CMAKE_COMMAND} -E true
   # Copy remaining DLLs with original names and strip (if exist)
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/dbghooks.dll" "${DIST_LITE_DIR}/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/dbghooks.dll" || ${CMAKE_COMMAND} -E true
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll" "${DIST_LITE_DIR}/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/gamepatcheslegacy.dll" || ${CMAKE_COMMAND} -E true
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll" "${DIST_LITE_DIR}/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/gameserverlegacy.dll" || ${CMAKE_COMMAND} -E true
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/telemetryagent.dll" "${DIST_LITE_DIR}/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/telemetryagent.dll" || ${CMAKE_COMMAND} -E true
   # Copy executables (launchers and loaders, if exist)
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
   #COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/DllLoader.exe" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
-   # Copy gun2cr_config.ini if it exists
-   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/tools/dbghooks/gun2cr_config.ini" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
-   # Copy weapon_config.json if it exists
-   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/tools/dbghooks/gun2cr_fix/weapon_config.json" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
-   # Package Blazar component resources
-   COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/../evr-reconstruction/assets/extracted_large/resources/resources/unknown_0xdbaed509c67b8884/" "${DIST_LITE_DIR}/blazar_resources" || ${CMAKE_COMMAND} -E true
    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
-   # DEPENDS dbghooks
   COMMENT "Preparing lite distribution directory (stripped): ${DIST_LITE_DIR}"
   VERBATIM
 )
