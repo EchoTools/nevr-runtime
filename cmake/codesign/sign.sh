@@ -9,10 +9,17 @@
 #   CODESIGN_PFX    - Path to PKCS#12 bundle (.pfx/.p12), used instead of cert+key
 #   CODESIGN_PASS   - Password for PFX file (if encrypted)
 #   CODESIGN_TSURL  - Timestamp server URL (optional)
+#   CODESIGN_SKIP   - Set to 1 to skip signing entirely
 #
 # Falls back to cmake/codesign/selfsigned.crt/key if no env vars set.
+# If no credentials are available, skips signing with a warning (non-fatal).
 
 set -euo pipefail
+
+if [[ "${CODESIGN_SKIP:-}" == "1" ]]; then
+    echo "Code signing skipped (CODESIGN_SKIP=1)"
+    exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -25,9 +32,9 @@ elif [[ -n "${CODESIGN_CERT:-}" && -n "${CODESIGN_KEY:-}" ]]; then
 elif [[ -f "$SCRIPT_DIR/selfsigned.crt" && -f "$SCRIPT_DIR/selfsigned.key" ]]; then
     SIGN_ARGS=(-certs "$SCRIPT_DIR/selfsigned.crt" -key "$SCRIPT_DIR/selfsigned.key")
 else
-    echo "Error: No signing credentials found." >&2
+    echo "WARNING: No signing credentials found, skipping code signing." >&2
     echo "Set CODESIGN_PFX or CODESIGN_CERT+CODESIGN_KEY, or generate selfsigned certs." >&2
-    exit 1
+    exit 0
 fi
 
 # Timestamp server
