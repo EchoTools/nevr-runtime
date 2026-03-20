@@ -923,6 +923,11 @@ VOID GameServerLib::Update() {
     m_telemetry->ProcessResponses();
   }
 
+  // Telemetry diagnostics: log snapshot data at 1Hz (no WS needed)
+  if (g_telemetryDiag && m_telemetry) {
+    m_telemetry->RunDiagnostics();
+  }
+
   // -exitonerror: detect serverdb disconnect and exit (immediately or deferred)
   if (g_exitOnError && m_wsClient && !s_exitPending) {
     bool nowConnected = m_wsClient->IsConnected();

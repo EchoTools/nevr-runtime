@@ -146,6 +146,213 @@ void TelemetryStreamer::ProcessResponses() {
 }
 
 // ============================================================================
+// Game thread: Diagnostic mode (-telemetrydiag)
+// ============================================================================
+
+void TelemetryStreamer::RunDiagnostics() {
+  auto now = std::chrono::steady_clock::now();
+  if (now - m_lastDiagTime < std::chrono::seconds(1)) return;
+  m_lastDiagTime = now;
+
+  ResolveFunctionPointers();
+
+  CHAR* base = EchoVR::g_GameBaseAddress;
+  if (!base) {
+    Log(EchoVR::LogLevel::Warning, "[TELEMETRY.DIAG] No game base address");
+    return;
+  }
+
+  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] ========== SNAPSHOT ==========");
+  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] Base=%p", base);
+
+  // --- Pointer chain ---
+  void** contextPtr = reinterpret_cast<void**>(base + GameOffsets::GAME_CONTEXT_OFFSET);
+  void* gameContext = *contextPtr;
+  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] GameContext=%p (base+0x%llX)", gameContext,
+      (unsigned long long)GameOffsets::GAME_CONTEXT_OFFSET);
+
+  if (!gameContext) {
+    Log(EchoVR::LogLevel::Warning, "[TELEMETRY.DIAG] GameContext is NULL — game not initialized yet");
+    return;
+  }
+
+  CHAR* ctxBase = reinterpret_cast<CHAR*>(gameContext);
+  void* netGame = *reinterpret_cast<void**>(ctxBase + GameOffsets::NETGAME_OFFSET);
+  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] CR15NetGame=%p (ctx+0x%X)", netGame,
+      (unsigned)GameOffsets::NETGAME_OFFSET);
+
+  if (!netGame) {
+    Log(EchoVR::LogLevel::Warning, "[TELEMETRY.DIAG] CR15NetGame is NULL — not in game yet");
+    return;
+  }
+
+  CHAR* ngBase = reinterpret_cast<CHAR*>(netGame);
+
+  // GameStateData
+  void* gsd = *reinterpret_cast<void**>(ngBase + GameOffsets::GAME_STATE_DATA_OFFSET);
+  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] GameStateData=%p (ng+0x%X)", gsd,
+      (unsigned)GameOffsets::GAME_STATE_DATA_OFFSET);
+
+  // Entity system pointers
+  void* handleResolver = *reinterpret_cast<void**>(ngBase + GameOffsets::ENTITY_HANDLE_RESOLVER_OFFSET);
+  void* worldObj = *reinterpret_cast<void**>(ngBase + GameOffsets::WORLD_OBJECT_OFFSET);
+  void* entityMgr = nullptr;
+  if (worldObj) {
+    entityMgr = *reinterpret_cast<void**>(reinterpret_cast<CHAR*>(worldObj) + GameOffsets::ENTITY_MANAGER_OFFSET);
+  }
+  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] HandleResolver=%p (ng+0x%X), World=%p (ng+0x%X), EntityMgr=%p (world+0x%X)",
+      handleResolver, (unsigned)GameOffsets::ENTITY_HANDLE_RESOLVER_OFFSET,
+      worldObj, (unsigned)GameOffsets::WORLD_OBJECT_OFFSET,
+      entityMgr, (unsigned)GameOffsets::ENTITY_MANAGER_OFFSET);
+
+  // --- Game function calls ---
+  if (m_getSymbolHash) {
+    uint64_t statusHash = m_getSymbolHash(netGame, PropertyHash::GAME_STATUS);
+    int32_t statusEnum = MapGameStatus(statusHash);
+    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] GameStatus: hash=0x%016llX → enum=%d",
+        (unsigned long long)statusHash, statusEnum);
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[TELEMETRY.DIAG] GetSymbolHash fn not resolved");
+  }
+
+  if (m_getFloatProperty) {
+    float clock = m_getFloatProperty(netGame, PropertyHash::GAME_CLOCK);
+    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] GameClock: %.2f", clock);
+  }
+
+  if (m_getIntProperty && gsd) {
+    int32_t blue = m_getIntProperty(gsd, PropertyHash::BLUE_POINTS);
+    int32_t orange = m_getIntProperty(gsd, PropertyHash::ORANGE_POINTS);
+    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] Scores: blue=%d, orange=%d", blue, orange);
+  }
+
+  // --- Player count ---
+  uint16_t playerCount = *reinterpret_cast<uint16_t*>(ngBase + GameOffsets::PLAYER_COUNT_OFFSET);
+  if (playerCount > 16) playerCount = 16;
+  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] PlayerCount=%u (ng+0x%X)",
+      playerCount, (unsigned)GameOffsets::PLAYER_COUNT_OFFSET);
+
+  // --- Disc state ---
+  if (gsd) {
+    CHAR* gsdBase = reinterpret_cast<CHAR*>(gsd);
+    float* discPos = reinterpret_cast<float*>(gsdBase + GameOffsets::DISC_POS_OFFSET);
+    float* discVel = reinterpret_cast<float*>(gsdBase + GameOffsets::DISC_VEL_OFFSET);
+    float* discOri = reinterpret_cast<float*>(gsdBase + GameOffsets::DISC_ORIENT_OFFSET);
+    uint64_t bounce = *reinterpret_cast<uint64_t*>(gsdBase + GameOffsets::DISC_BOUNCE_OFFSET);
+
+    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] Disc pos=(%.3f, %.3f, %.3f) vel=(%.3f, %.3f, %.3f)",
+        discPos[0], discPos[1], discPos[2], discVel[0], discVel[1], discVel[2]);
+    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] Disc orient=(%.3f, %.3f, %.3f, %.3f) bounce=%llu",
+        discOri[0], discOri[1], discOri[2], discOri[3], (unsigned long long)bounce);
+
+    // Quaternion length check
+    float qlen2 = discOri[0]*discOri[0] + discOri[1]*discOri[1] +
+                   discOri[2]*discOri[2] + discOri[3]*discOri[3];
+    if (qlen2 > 0.01f) {
+      Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] Disc quat |q|^2=%.4f %s",
+          qlen2, (qlen2 > 0.99f && qlen2 < 1.01f) ? "(OK)" : "(BAD - not unit quaternion!)");
+    }
+  }
+
+  // --- Per-player info + entity resolution ---
+  for (uint16_t i = 0; i < playerCount && i < 4; i++) {  // Log first 4 players max
+    CHAR* playerBase = ngBase + GameOffsets::PLAYER_ARRAY_OFFSET + i * GameOffsets::PLAYER_STRIDE;
+    uint16_t flags = *reinterpret_cast<uint16_t*>(playerBase + GameOffsets::PLAYER_FLAGS_OFFSET);
+    uint64_t accountId = *reinterpret_cast<uint64_t*>(playerBase + GameOffsets::PLAYER_ACCOUNT_ID_OFFSET);
+    char* name = playerBase + GameOffsets::PLAYER_DISPLAY_NAME_OFFSET;
+    uint16_t ping = *reinterpret_cast<uint16_t*>(playerBase + GameOffsets::PLAYER_PING_OFFSET);
+    uint16_t team = *reinterpret_cast<uint16_t*>(playerBase + GameOffsets::PLAYER_TEAM_INDEX_OFFSET);
+
+    if (accountId == 0) continue;
+
+    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] Player[%u]: name=%.20s, acct=%llu, flags=0x%04X, team=%u, ping=%u",
+        i, name, (unsigned long long)accountId, flags, team, ping);
+
+    // Try entity resolution
+    if (handleResolver && entityMgr && m_resolveEntityHandle && m_entityLookup) {
+      int64_t pair[2] = {static_cast<int64_t>(accountId), 0};
+      int resolved = m_resolveEntityHandle(handleResolver, pair);
+      Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG]   ResolveHandle: result=%d, handle=0x%llX",
+          resolved, (unsigned long long)pair[0]);
+
+      if (resolved != 0 && pair[0] != -1) {
+        void* entity = m_entityLookup(entityMgr, pair[0]);
+        Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG]   Entity=%p", entity);
+
+        if (entity && m_getBoneData) {
+          // Try reading bone 0 (root/body)
+          void* bone0 = m_getBoneData(entity, 0);
+          Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG]   Bone[0] ptr=%p", bone0);
+
+          if (bone0) {
+            // Try reading at offset 0x18 (our assumed bone data offset)
+            float* b = reinterpret_cast<float*>(reinterpret_cast<CHAR*>(bone0) + 0x18);
+            Log(EchoVR::LogLevel::Info,
+                "[TELEMETRY.DIAG]   Bone[0]+0x18: orient=(%.3f, %.3f, %.3f, %.3f) pos=(%.3f, %.3f, %.3f)",
+                b[0], b[1], b[2], b[3], b[4], b[5], b[6]);
+
+            // Also try at offset 0x00 in case data is there instead
+            float* b0 = reinterpret_cast<float*>(bone0);
+            Log(EchoVR::LogLevel::Info,
+                "[TELEMETRY.DIAG]   Bone[0]+0x00: (%.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f)",
+                b0[0], b0[1], b0[2], b0[3], b0[4], b0[5], b0[6]);
+
+            // Hex dump first 64 bytes of bone data for manual inspection
+            uint8_t* raw = reinterpret_cast<uint8_t*>(bone0);
+            char hex[200] = {0};
+            int pos = 0;
+            for (int j = 0; j < 64 && pos < 190; j++) {
+              pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X ", raw[j]);
+            }
+            Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG]   Bone[0] raw: %s", hex);
+          }
+
+          // Try bone 4 (assumed head)
+          void* bone4 = m_getBoneData(entity, 4);
+          if (bone4) {
+            float* b = reinterpret_cast<float*>(reinterpret_cast<CHAR*>(bone4) + 0x18);
+            Log(EchoVR::LogLevel::Info,
+                "[TELEMETRY.DIAG]   Bone[4/head]+0x18: orient=(%.3f, %.3f, %.3f, %.3f) pos=(%.3f, %.3f, %.3f)",
+                b[0], b[1], b[2], b[3], b[4], b[5], b[6]);
+          }
+        }
+
+        // Try transform component
+        if (entity && m_getTransformComponent) {
+          void* xform = m_getTransformComponent(entity, 0);
+          Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG]   TransformComponent[0]=%p", xform);
+          if (xform) {
+            float* f = reinterpret_cast<float*>(xform);
+            Log(EchoVR::LogLevel::Info,
+                "[TELEMETRY.DIAG]   Transform+0x00: (%.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f)",
+                f[0], f[1], f[2], f[3], f[4], f[5], f[6]);
+          }
+        }
+      }
+    } else {
+      Log(EchoVR::LogLevel::Warning, "[TELEMETRY.DIAG]   Entity resolution unavailable: resolver=%p mgr=%p fn=%p/%p",
+          handleResolver, entityMgr, (void*)m_resolveEntityHandle, (void*)m_entityLookup);
+    }
+
+    // Stats
+    uint16_t teamRole = flags & 0x1F;
+    CHAR* statsBase = ngBase + GameOffsets::STATS_BASE_OFFSET + teamRole * GameOffsets::STATS_STRIDE;
+    uint32_t points = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_POINTS + 4);
+    uint32_t goals = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_GOALS + 4);
+    uint32_t assists = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_ASSISTS + 4);
+    uint32_t stuns = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_STUNS + 4);
+    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG]   Stats: pts=%u, goals=%u, ast=%u, stuns=%u",
+        points, goals, assists, stuns);
+  }
+
+  if (playerCount > 4) {
+    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] ... and %u more players", playerCount - 4);
+  }
+
+  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] ==============================");
+}
+
+// ============================================================================
 // Game thread: Snapshot capture
 // ============================================================================
 

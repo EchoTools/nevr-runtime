@@ -670,6 +670,10 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgHelpString(pArgSyntax, "-telemetryrate",
                            "[NEVR] Set telemetry streaming rate in Hz (default 10)");
 
+  EchoVR::AddArgSyntax(pArgSyntax, "-telemetrydiag", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-telemetrydiag",
+                           "[NEVR] Log telemetry snapshot diagnostics (pointer chain, values) every second");
+
   return result;
 }
 
@@ -709,6 +713,8 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       } else {
         FatalError("Missing argument for -telemetryrate. Provide a rate in Hz (e.g., 10).", NULL);
       }
+    } else if (lstrcmpW(arg, L"-telemetrydiag") == 0) {
+      g_telemetryDiag = TRUE;
     } else if (lstrcmpW(arg, L"-timestep") == 0) {
       if (i + 1 < argc) {
         g_headlessTimeStep = std::wcstoul(argv[i + 1], nullptr, 10);

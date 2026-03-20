@@ -71,6 +71,10 @@ class TelemetryStreamer {
   // Process telemetry WS responses (call from game thread Update).
   void ProcessResponses();
 
+  // Diagnostic mode: log snapshot data to console (game thread, rate-limited to 1Hz).
+  // Called from Update() when -telemetrydiag is set. Does NOT require a WS connection.
+  void RunDiagnostics();
+
  private:
   void Run();  // telemetry thread main loop
 
@@ -102,6 +106,10 @@ class TelemetryStreamer {
   std::atomic<bool> m_stopping{false};
   uint32_t m_rateHz{10};
   std::chrono::steady_clock::time_point m_lastSnapshotTime;
+
+  // Diagnostics (game thread, 1Hz)
+  std::chrono::steady_clock::time_point m_lastDiagTime;
+  TelemetrySnapshot m_diagSnapshot;
 
   // Events from broadcaster callbacks
   EventRingBuffer<TelemetryEvent, 256> m_eventBuffer;
