@@ -63,6 +63,18 @@ class WebSocketClient {
   VOID SetMessageHandler(MessageCallback callback);
 
   /// <summary>
+  /// Callback function type for connection state changes.
+  /// Parameter: TRUE if connected, FALSE if disconnected
+  /// </summary>
+  using ConnectionCallback = std::function<VOID(BOOL connected)>;
+
+  /// <summary>
+  /// Sets the callback function to be invoked when connection state changes.
+  /// Called on reconnection after a disconnect, enabling re-registration.
+  /// </summary>
+  VOID SetConnectionHandler(ConnectionCallback callback);
+
+  /// <summary>
   /// Checks if the WebSocket is currently connected.
   /// </summary>
   /// <returns>TRUE if connected, FALSE otherwise</returns>
@@ -74,6 +86,9 @@ class WebSocketClient {
 
   // Message receive callback
   MessageCallback messageCallback_;
+
+  // Connection state change callback
+  ConnectionCallback connectionCallback_;
 
   // Connection state
   BOOL connected_;

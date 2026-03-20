@@ -77,3 +77,9 @@ dbghooks/echovr.dll
 dbghooks/echovr_patched.dll
 dbghooks/exe_to_dll.exe
 .cache/
+
+# Code signing credentials (self-signed certs for local dev)
+cmake/codesign/selfsigned.key
+cmake/codesign/selfsigned.crt
+cmake/codesign/*.pfx
+cmake/codesign/*.p12

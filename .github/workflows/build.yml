@@ -34,6 +34,29 @@ jobs:
         echo "version=$VERSION" >> $GITHUB_OUTPUT
         echo "Version: $VERSION"
 
+    - name: Import code signing certificate
+      if: env.CODESIGN_PFX_BASE64 != ''
+      env:
+        CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
+      shell: bash
+      run: |
+        echo "$CODESIGN_PFX_BASE64" | base64 -d > "${{ runner.temp }}/codesign.pfx"
+        echo "CODESIGN_PFX=${{ runner.temp }}/codesign.pfx" >> $GITHUB_ENV
+        echo "CODESIGN_PASS=${{ secrets.CODESIGN_PFX_PASSWORD }}" >> $GITHUB_ENV
+
+    - name: Code sign DLLs
+      if: env.CODESIGN_PFX != ''
+      shell: pwsh
+      run: |
+        $dlls = Get-ChildItem "${{ github.workspace }}/build/bin/Release/*.dll"
+        $exes = Get-ChildItem "${{ github.workspace }}/build/bin/Release/*.exe" -ErrorAction SilentlyContinue
+        $files = @($dlls) + @($exes) | Where-Object { $_ }
+        if ($files.Count -eq 0) {
+          Write-Warning "No files to sign"
+          exit 0
+        }
+        & "${{ github.workspace }}/cmake/codesign/sign.ps1" $files.FullName
+
     - name: Create distribution packages
       shell: bash
       run: |
@@ -41,31 +64,31 @@ jobs:
         DIST_NAME="nevr-runtime-v${VERSION}"
         DIST_LITE_NAME="nevr-runtime-v${VERSION}-lite"
         DIST_DIR="${{ github.workspace }}/build/dist"
-        
-        # Create full distribution
+
+        # Create full distribution (DLLs are already signed at this point)
         mkdir -p "$DIST_DIR/$DIST_NAME"
         cp ${{ github.workspace }}/build/bin/Release/*.dll "$DIST_DIR/$DIST_NAME/"
         cp ${{ github.workspace }}/README.md "$DIST_DIR/$DIST_NAME/"
-        
+
         # Create lite distribution (same as full for Windows - no debug symbols in Release)
         mkdir -p "$DIST_DIR/$DIST_LITE_NAME"
         cp ${{ github.workspace }}/build/bin/Release/*.dll "$DIST_DIR/$DIST_LITE_NAME/"
         cp ${{ github.workspace }}/README.md "$DIST_DIR/$DIST_LITE_NAME/"
-        
+
         # Create zip archives
         cd "$DIST_DIR"
         7z a -tzip "${DIST_NAME}.zip" "$DIST_NAME"
         7z a -tzip "${DIST_LITE_NAME}.zip" "$DIST_LITE_NAME"
-        
+
         # Create tar.zst archives (tar first, then compress with zstd)
         tar -cvf "${DIST_NAME}.tar" "$DIST_NAME"
         zstd -19 "${DIST_NAME}.tar" -o "${DIST_NAME}.tar.zst"
         rm "${DIST_NAME}.tar"
-        
+
         tar -cvf "${DIST_LITE_NAME}.tar" "$DIST_LITE_NAME"
         zstd -19 "${DIST_LITE_NAME}.tar" -o "${DIST_LITE_NAME}.tar.zst"
         rm "${DIST_LITE_NAME}.tar"
-        
+
         echo "Distribution packages created:"
         ls -lh "$DIST_DIR"/*.{zip,tar.zst}
 

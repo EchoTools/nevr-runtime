@@ -6,6 +6,7 @@
 #include "echovr.h"
 #include "pch.h"
 #include "server_context.h"
+#include "telemetry_streamer.h"
 #include "websocket_client.h"
 
 // IServerLib implementation connecting to NEVR's ServerDB service.
@@ -38,9 +39,13 @@ class GameServerLib : public EchoVR::IServerLib {
   // WebSocketClient accessor for SendProtobufEnvelope
   WebSocketClient& GetWsClient() { return *m_wsClient; }
 
+  // TelemetryStreamer accessor
+  TelemetryStreamer& GetTelemetry() { return *m_telemetry; }
+
  private:
   std::unique_ptr<GameServer::ServerContext> m_context;
   std::unique_ptr<WebSocketClient> m_wsClient;
+  std::unique_ptr<TelemetryStreamer> m_telemetry;
 
   // Helper methods
   void RegisterBroadcasterCallbacks();

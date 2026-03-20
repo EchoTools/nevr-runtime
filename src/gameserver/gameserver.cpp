@@ -52,6 +52,10 @@ uint16_t ListenForTcpBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId ms
 // Symbol ID for NEVRProtobufMessageV1 (binary protobuf)
 constexpr EchoVR::SymbolId SYM_PROTOBUF_MSG = 0x9ee5107d9e29fd63ULL;
 
+// Legacy symbol IDs sent by Nakama for backwards compatibility (skipped, handled via protobuf)
+constexpr EchoVR::SymbolId SYM_LEGACY_SESSION_START = 0x7777777777770000ULL;
+constexpr EchoVR::SymbolId SYM_LEGACY_PLAYERS_REJECTED = 0x7777777777770700ULL;
+
 // Send a protobuf Envelope to ServerDB as binary
 bool SendProtobufEnvelope(GameServerLib* self, const gameservice::v1::Envelope& envelope) {
   auto* wsClient = &self->GetWsClient();
@@ -231,7 +235,21 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
       SessionState state = self->GetContext().GetSessionState();
       state.lobbySessionId = sessionCreate.lobby_session_id();
       self->GetContext().UpdateSessionState(state);
-      self->GetContext().StartSession();
+
+      if (!self->GetContext().StartSession()) {
+        Log(EchoVR::LogLevel::Error,
+            "[NEVR.GAMESERVER] Failed to start session (state=%d, expected Registered=%d)",
+            static_cast<int>(self->GetContext().GetState()), static_cast<int>(ServerState::Registered));
+      }
+
+      // Start telemetry streaming for this session
+      if (g_telemetryEnabled) {
+        // Access telemetry via the GameServerLib* — we need to add an accessor
+        // This is called via OnTcpMsgProtobuf which has `self` as GameServerLib*
+        if (self->GetTelemetry().IsConnected()) {
+          self->GetTelemetry().Start(sessionCreate.lobby_session_id(), g_telemetryRateHz);
+        }
+      }
 
       // Encode protobuf to LobbyStartSessionV4 binary format and forward to game
       if (broadcaster) {
@@ -730,7 +748,9 @@ void OnTcpMsgGameClientMsg3(GameServerLib*, VOID*, EchoVR::TcpPeer, VOID*, VOID*
 // --- GameServerLib Implementation ---
 
 GameServerLib::GameServerLib()
-    : m_context(std::make_unique<ServerContext>()), m_wsClient(std::make_unique<WebSocketClient>()) {}
+    : m_context(std::make_unique<ServerContext>()),
+      m_wsClient(std::make_unique<WebSocketClient>()),
+      m_telemetry(std::make_unique<TelemetryStreamer>()) {}
 
 GameServerLib::~GameServerLib() = default;
 
@@ -816,9 +836,55 @@ void GameServerLib::RegisterTcpCallbacks() {
     } else if (msgId == TcpSym::LobbySessionSuccessV5) {
       // Skip legacy - handled by protobuf kLobbySessionSuccessV5
       Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Skipping legacy session success (handled via protobuf)");
+    } else if (msgId == SYM_LEGACY_SESSION_START || msgId == SYM_LEGACY_PLAYERS_REJECTED) {
+      // Skip legacy - handled by protobuf kLobbySessionCreate / kLobbyEntrantReject
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Skipping legacy message 0x%llX (handled via protobuf)", msgId);
     } else {
-      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Unhandled WebSocket msgId: 0x%llX (size: %llu)", msgId, size);
+      Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Unhandled WebSocket msgId: 0x%llX (size: %llu)", msgId, size);
     }
+  });
+
+  // Re-register on WebSocket reconnection so nakama knows we're available for new sessions.
+  // During level transitions the game engine stops calling Update(), messages pile up,
+  // and nakama may time out and close the connection. ixwebsocket auto-reconnects but
+  // we must re-register to receive new session assignments.
+  m_wsClient->SetConnectionHandler([this](BOOL connected) {
+    if (!connected) return;
+
+    // Only re-register if we were previously registered (not on first connect)
+    if (!m_context->IsRegistered()) return;
+
+    // End any stale session state from before the disconnect
+    m_context->EndSession();
+
+    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] WebSocket reconnected, re-registering with ServerDB");
+
+    SessionState state = m_context->GetSessionState();
+
+    auto* broadcaster = m_context->GetBroadcaster();
+    if (!broadcaster || !broadcaster->data) {
+      Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Broadcaster unavailable for re-registration");
+      return;
+    }
+
+    sockaddr_in gameServerAddr = *reinterpret_cast<sockaddr_in*>(&broadcaster->data->addr);
+
+    gameservice::v1::Envelope envelope;
+    auto* registration = envelope.mutable_game_server_registration();
+    registration->set_login_session_id(GuidToUuidString(state.loginSessionId));
+    registration->set_server_id(static_cast<uint64_t>(state.serverId));
+    registration->set_internal_ip_address(Ipv4ToString(gameServerAddr.sin_addr.S_un.S_addr));
+    registration->set_port(static_cast<uint32_t>(broadcaster->data->broadcastSocketInfo.port));
+    registration->set_region(state.regionId);
+    registration->set_version_lock(state.versionLock);
+    registration->set_time_step_usecs(state.defaultTimeStepUsecs);
+#ifdef GIT_DESCRIBE
+    registration->set_version(GIT_DESCRIBE);
+#else
+    registration->set_version("unknown");
+#endif
+
+    SendProtobufEnvelope(this, envelope);
   });
 }
 
@@ -850,6 +916,12 @@ static bool s_exitPending = false;
 VOID GameServerLib::Update() {
   // Dispatch incoming ServerDB messages on the main thread
   if (m_wsClient) m_wsClient->ProcessReceivedMessages();
+
+  // Telemetry: snapshot game state and process responses
+  if (m_telemetry && m_telemetry->IsActive()) {
+    m_telemetry->SnapshotIfDue();
+    m_telemetry->ProcessResponses();
+  }
 
   // -exitonerror: detect serverdb disconnect and exit (immediately or deferred)
   if (g_exitOnError && m_wsClient && !s_exitPending) {
@@ -939,10 +1011,28 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 
   SendProtobufEnvelope(this, envelope);
 
+  // Connect telemetry streamer if enabled
+  if (g_telemetryEnabled && m_telemetry) {
+    CHAR* telemetryUri =
+        EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("telemetry_uri"),
+                                  nullptr, false);
+    if (telemetryUri && telemetryUri[0] != '\0') {
+      m_telemetry->Connect(std::string(telemetryUri));
+    } else {
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] No telemetry_uri in config, telemetry disabled");
+    }
+  }
+
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Requested game server registration via protobuf");
 }
 
 VOID GameServerLib::Unregister() {
+  // Disconnect telemetry before unregistering
+  if (m_telemetry) {
+    m_telemetry->Stop();
+    m_telemetry->Disconnect();
+  }
+
   UnregisterAllCallbacks();
 
   // Disconnect WebSocketClient from serverdb
@@ -955,6 +1045,11 @@ VOID GameServerLib::Unregister() {
 }
 
 VOID GameServerLib::EndSession() {
+  // Stop telemetry before ending session
+  if (m_telemetry && m_telemetry->IsActive()) {
+    m_telemetry->Stop();
+  }
+
   if (m_context->IsSessionActive()) {
     gameservice::v1::Envelope envelope;
     auto* event = envelope.mutable_lobby_session_event();
