@@ -36,7 +36,8 @@ message(STATUS "Using pre-generated protobuf files from extern/nevr-common/gen/c
 # Create the library with pre-generated files (no codegen needed)
 add_library(proto_nevr STATIC ${PROTO_GENERATED_SRCS} ${PROTO_GENERATED_HDRS})
 
-# Link to protobuf library from vcpkg
+# TODO: Switch to protobuf::libprotobuf-lite once well-known types (Timestamp)
+# are available in lite form. Currently blocked by vcpkg's protobuf build.
 target_link_libraries(proto_nevr PUBLIC protobuf::libprotobuf)
 
 # Include directories - point to the gen/cpp directory

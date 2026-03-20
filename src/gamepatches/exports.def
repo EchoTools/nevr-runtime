@@ -1,3 +1,4 @@
 LIBRARY GamePatches
 EXPORTS
    DetoursExportPlaceholder			@1
+   MiniDumpWriteDump

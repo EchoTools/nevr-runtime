@@ -25,7 +25,7 @@ target_include_directories(
           "${CMAKE_SOURCE_DIR}"
 )
 
-target_link_libraries(gameserver PRIVATE common proto_nevr telemetryagent ws2_32 ixwebsocket::ixwebsocket)
+target_link_libraries(gameserver PRIVATE common proto_nevr ws2_32 ixwebsocket::ixwebsocket)
 
 # Set output name to remove 'lib' prefix on MinGW
 set_target_properties(gameserver PROPERTIES
@@ -66,9 +66,23 @@ if(MINGW)
   target_link_directories(gameserver BEFORE PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/stubs")
   add_dependencies(gameserver dbghelp_stubs)
 
-  # Add bcrypt for mbedcrypto (BCryptGenRandom). Do NOT use WHOLE_ARCHIVE —
-  # it imports every bcrypt function, including ones missing on older Windows.
-  target_link_libraries(gameserver PRIVATE bcrypt)
+  # mbedcrypto needs BCryptGenRandom from bcrypt.dll. The system import lib
+  # with WHOLE_ARCHIVE imports ~50 functions (some missing on older Windows).
+  # Build a minimal import lib from a .def with only BCryptGenRandom, then
+  # WHOLE_ARCHIVE it so the symbol resolves regardless of link order.
+  add_custom_command(
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/stubs"
+    COMMAND x86_64-w64-mingw32-dlltool -d "${CMAKE_CURRENT_SOURCE_DIR}/bcrypt_minimal.def"
+            -l "${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/bcrypt_minimal.def"
+    COMMENT "Generating minimal bcrypt import library"
+  )
+  add_custom_target(bcrypt_minimal DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a")
+  add_dependencies(gameserver bcrypt_minimal)
+  target_link_libraries(gameserver PRIVATE
+    $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>
+  )
 endif()
 
 # Workaround: ixwebsocket package adds include/ixwebsocket to include path,

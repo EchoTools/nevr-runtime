@@ -188,7 +188,7 @@ add_subdirectory(src/gamepatches)
 add_subdirectory(src/legacy/gamepatches)
 add_subdirectory(src/gameserver)
 add_subdirectory(src/legacy/gameserver)
-add_subdirectory(src/telemetryagent)
+# add_subdirectory(src/telemetryagent)  # TODO: needs protobuf-lite refactor
 
 # Include a local cmake script if it exists
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
@@ -211,7 +211,6 @@ set(DIST_DLLS
   "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll"
   "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll"
   "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll"
-  "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/telemetryagent.dll"
 )
 
 # List of debug symbol files to include
@@ -220,7 +219,6 @@ set(DIST_DBG_FILES
   "${CMAKE_BINARY_DIR}/gamepatcheslegacy.dll.dbg"
   "${CMAKE_BINARY_DIR}/gameserver.dll.dbg"
   "${CMAKE_BINARY_DIR}/gameserverlegacy.dll.dbg"
-  "${CMAKE_BINARY_DIR}/telemetryagent.dll.dbg"
 )
 
 # Custom target to prepare distribution directory
@@ -234,7 +232,6 @@ add_custom_target(dist-prepare
   # Copy remaining DLLs with original names (if exist)
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll" "${DIST_DIR}/" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll" "${DIST_DIR}/" || true
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/telemetryagent.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/telemetryagent.dll" "${DIST_DIR}/" || true
   # Copy executables (launchers and loaders, if exist)
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_DIR}/" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_patched.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_patched.dll" "${DIST_DIR}/" || true
@@ -288,7 +285,6 @@ add_custom_target(dist-lite-prepare
   # Copy remaining DLLs with original names and strip (if exist)
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll" "${DIST_LITE_DIR}/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/gamepatcheslegacy.dll" || ${CMAKE_COMMAND} -E true
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll" "${DIST_LITE_DIR}/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/gameserverlegacy.dll" || ${CMAKE_COMMAND} -E true
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/telemetryagent.dll" "${DIST_LITE_DIR}/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/telemetryagent.dll" || ${CMAKE_COMMAND} -E true
   # Copy executables (launchers and loaders, if exist)
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
   #COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/DllLoader.exe" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
