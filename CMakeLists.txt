@@ -246,8 +246,8 @@ add_custom_target(dist-prepare
 # Signs DLLs/EXEs in the distribution directory using osslsigncode (Linux) or
 # signtool (Windows). Credentials are configured via environment variables:
 #   CODESIGN_PFX / CODESIGN_CERT+CODESIGN_KEY / CODESIGN_THUMBPRINT
-# Falls back to cmake/codesign/selfsigned.crt+key for local development.
-# Set CODESIGN_SKIP=1 to skip signing entirely.
+# Skips gracefully when no credentials are available (default for local builds).
+# Set CODESIGN_SKIP=1 to skip explicitly, or provide credentials to enable.
 # =============================================================================
 
 find_program(OSSLSIGNCODE osslsigncode)
