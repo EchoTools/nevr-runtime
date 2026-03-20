@@ -240,11 +240,41 @@ add_custom_target(dist-prepare
   VERBATIM
 )
 
+# =============================================================================
+# Code Signing
+# =============================================================================
+# Signs DLLs/EXEs in the distribution directory using osslsigncode (Linux) or
+# signtool (Windows). Credentials are configured via environment variables:
+#   CODESIGN_PFX / CODESIGN_CERT+CODESIGN_KEY / CODESIGN_THUMBPRINT
+# Falls back to cmake/codesign/selfsigned.crt+key for local development.
+# Set CODESIGN_SKIP=1 to skip signing entirely.
+# =============================================================================
+
+find_program(OSSLSIGNCODE osslsigncode)
+set(CODESIGN_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/codesign/sign.sh")
+
+# Collect signable artifacts in dist dir (DLLs and EXEs)
+set(DIST_SIGN_GLOB "${DIST_DIR}/*.dll" "${DIST_DIR}/*.exe")
+
+if(OSSLSIGNCODE)
+  add_custom_target(dist-sign
+    COMMAND bash -c "\"${CODESIGN_SCRIPT}\" \"${DIST_DIR}/\"*.dll \"${DIST_DIR}/\"*.exe"
+    DEPENDS dist-prepare
+    COMMENT "Code signing distribution artifacts"
+  )
+else()
+  add_custom_target(dist-sign
+    COMMAND ${CMAKE_COMMAND} -E echo "WARNING: osslsigncode not found, skipping code signing"
+    DEPENDS dist-prepare
+    VERBATIM
+  )
+endif()
+
 # Create tar.zst archive
 add_custom_target(dist-tar
   COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_SOURCE_DIR}/dist"
     tar --zstd -cf "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.tar.zst" "${DIST_NAME}"
-  DEPENDS dist-prepare
+  DEPENDS dist-sign
   VERBATIM
 )
 
@@ -252,7 +282,7 @@ add_custom_target(dist-tar
 add_custom_target(dist-zip
   COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_SOURCE_DIR}/dist"
     ${CMAKE_COMMAND} -E tar cf "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.zip" --format=zip "${DIST_NAME}"
-  DEPENDS dist-prepare
+  DEPENDS dist-sign
   VERBATIM
 )
 
@@ -293,11 +323,26 @@ add_custom_target(dist-lite-prepare
   VERBATIM
 )
 
+# Sign lite distribution artifacts
+if(OSSLSIGNCODE)
+  add_custom_target(dist-lite-sign
+    COMMAND bash -c "\"${CODESIGN_SCRIPT}\" \"${DIST_LITE_DIR}/\"*.dll \"${DIST_LITE_DIR}/\"*.exe"
+    DEPENDS dist-lite-prepare
+    COMMENT "Code signing lite distribution artifacts"
+  )
+else()
+  add_custom_target(dist-lite-sign
+    COMMAND ${CMAKE_COMMAND} -E echo "WARNING: osslsigncode not found, skipping code signing"
+    DEPENDS dist-lite-prepare
+    VERBATIM
+  )
+endif()
+
 # Create lite tar.zst archive
 add_custom_target(dist-lite-tar
   COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_SOURCE_DIR}/dist"
     tar --zstd -cvf "${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.tar.zst" "${DIST_LITE_NAME}"
-  DEPENDS dist-lite-prepare
+  DEPENDS dist-lite-sign
   COMMENT "Creating ${DIST_LITE_NAME}.tar.zst"
   VERBATIM
 )
@@ -306,7 +351,7 @@ add_custom_target(dist-lite-tar
 add_custom_target(dist-lite-zip
   COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_SOURCE_DIR}/dist"
     ${CMAKE_COMMAND} -E tar cvf "${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.zip" --format=zip "${DIST_LITE_NAME}"
-  DEPENDS dist-lite-prepare
+  DEPENDS dist-lite-sign
   COMMENT "Creating ${DIST_LITE_NAME}.zip"
   VERBATIM
 )
