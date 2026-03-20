@@ -1,6 +1,4 @@
-#pragma once
-
-#include "echovrInternal.h"
+#include "echovr_functions.h"
 
 #include "echovr.h"
 #include "pch.h"

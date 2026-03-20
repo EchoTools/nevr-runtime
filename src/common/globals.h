@@ -1,9 +1,6 @@
 #pragma once
 
-#ifndef ECHOVR_GLOBALS_H
-#define ECHOVR_GLOBALS_H
-
-#include "echovrInternal.h"
+#include "echovr_functions.h"
 
 #ifndef PROJECT_VERSION          // Set by CMake during the build process
 #define PROJECT_VERSION "1.0.0"  // Fallback default version
@@ -23,9 +20,7 @@
 #define GIT_COMMIT_HASH "unknown"  // Fallback default commit hash
 #endif
 
-extern BOOL noConsole;
-extern BOOL isHeadless;
-extern BOOL exitOnError;
-extern UINT32 headlessTickRateHz;
-
-#endif  // ECHOVR_GLOBALS_H
+extern BOOL g_noConsole;
+extern BOOL g_isHeadless;
+extern BOOL g_exitOnError;
+extern UINT32 g_headlessTickRateHz;

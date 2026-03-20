@@ -1,8 +1,8 @@
 # Common library for NEVR
-set(COMMON_SOURCES "echovrInternal.cpp" "globals.cpp"
+set(COMMON_SOURCES "echovr_functions.cpp" "globals.cpp"
            "logging.cpp" "base64.cpp")
 set(COMMON_HEADERS
-  "echovr.h" "echovrInternal.h"
+  "echovr.h" "echovr_functions.h"
   "globals.h" "logging.h" "base64.h")
 
 add_library(common STATIC ${COMMON_SOURCES} ${COMMON_HEADERS})

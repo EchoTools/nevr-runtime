@@ -9,7 +9,7 @@
 #include <cstdarg>
 #include <cstring>
 
-#include "echovrunexported.h"
+#include "echovr_functions.h"
 #include "rtapi/v1/realtime_v1.pb.h"
 
 // Logging wrapper for game's log system

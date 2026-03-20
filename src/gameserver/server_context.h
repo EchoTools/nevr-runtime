@@ -1,6 +1,4 @@
 #pragma once
-#ifndef SERVER_CONTEXT_H
-#define SERVER_CONTEXT_H
 
 #include <cstdint>
 #include <mutex>
@@ -116,28 +114,26 @@ class ServerContext {
   const CallbackRegistry& GetCallbackRegistry() const;
 
  private:
-  mutable std::shared_mutex stateMutex_;  // Protects state_ and pointers
-  mutable std::mutex sessionMutex_;       // Protects sessionState_
+  mutable std::shared_mutex m_stateMutex;  // Protects m_state and pointers
+  mutable std::mutex m_sessionMutex;       // Protects m_sessionState
 
-  ServerState state_ = ServerState::Uninitialized;
+  ServerState m_state = ServerState::Uninitialized;
 
   // Game object pointers (not owned, provided by game engine)
-  EchoVR::Lobby* lobby_ = nullptr;
-  EchoVR::Broadcaster* broadcaster_ = nullptr;
+  EchoVR::Lobby* m_lobby = nullptr;
+  EchoVR::Broadcaster* m_broadcaster = nullptr;
 
   // Cached entrant data (owns the data, not pointers from game)
-  std::vector<EchoVR::Lobby::EntrantData> cachedEntrants_;
+  std::vector<EchoVR::Lobby::EntrantData> m_cachedEntrants;
 
   // ServerDB connection
-  EchoVR::TcpPeer serverDbPeer_ = EchoVR::TcpPeer_InvalidPeer;
+  EchoVR::TcpPeer m_serverDbPeer = EchoVR::TcpPeer_InvalidPeer;
 
   // Session state
-  SessionState sessionState_;
+  SessionState m_sessionState;
 
   // Callback handles
-  CallbackRegistry callbacks_;
+  CallbackRegistry m_callbacks;
 };
 
 }  // namespace GameServer
-
-#endif  // SERVER_CONTEXT_H

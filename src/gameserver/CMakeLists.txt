@@ -4,7 +4,7 @@ set(SERVER_SOURCES
     "dllmain.cpp"
     "messages.cpp"
     "gameserver.cpp"
-    "servercontext.cpp"
+    "server_context.cpp"
     "websocket_client.cpp"
 )
 
@@ -50,10 +50,25 @@ if(MINGW)
   target_link_options(gameserver PRIVATE
     -Wl,--allow-multiple-definition
   )
-  # Add bcrypt explicitly - mbedcrypto needs BCryptGenRandom
-  target_link_libraries(gameserver PRIVATE
-    $<LINK_LIBRARY:WHOLE_ARCHIVE,/usr/x86_64-w64-mingw32/lib/libbcrypt.a>
+
+  # Abseil's symbolize library pulls in -ldbghelp, but the real dbghelp.dll
+  # depends on dbgcore.dll which conflicts with our gamepatches DLL hijack.
+  # Build a stub libdbghelp.a that the linker finds before the system one,
+  # providing no-op implementations so dbghelp.dll is never imported.
+  add_library(dbghelp_stubs STATIC dbghelp_stubs.cpp)
+  target_compile_definitions(dbghelp_stubs PRIVATE PROTOBUF_STATIC_LIB)
+  set_target_properties(dbghelp_stubs PROPERTIES
+    OUTPUT_NAME "dbghelp"
+    PREFIX "lib"
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/stubs"
   )
+  # Ensure our stub directory is searched before the system MinGW libs
+  target_link_directories(gameserver BEFORE PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/stubs")
+  add_dependencies(gameserver dbghelp_stubs)
+
+  # Add bcrypt for mbedcrypto (BCryptGenRandom). Do NOT use WHOLE_ARCHIVE —
+  # it imports every bcrypt function, including ones missing on older Windows.
+  target_link_libraries(gameserver PRIVATE bcrypt)
 endif()
 
 # Workaround: ixwebsocket package adds include/ixwebsocket to include path,

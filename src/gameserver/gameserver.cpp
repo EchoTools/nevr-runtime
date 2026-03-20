@@ -7,7 +7,7 @@
 
 #include "constants.h"
 #include "echovr.h"
-#include "echovrunexported.h"
+#include "echovr_functions.h"
 #include "globals.h"
 #include "messages.h"
 #include "pch.h"
@@ -211,8 +211,8 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
         auto encoded = EncodeRegistrationSuccess(regSuccess);
         if (encoded.size() > 0) {
           EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationSuccess,
-                                               "SNSLobbyRegistrationSuccess",
-                                               const_cast<uint8_t*>(encoded.ptr()), encoded.size());
+                                               "SNSLobbyRegistrationSuccess", const_cast<uint8_t*>(encoded.ptr()),
+                                               encoded.size());
         } else {
           Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Failed to encode registration success");
           EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationSuccess,
@@ -224,8 +224,7 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
 
     case rtapi::v1::Envelope::kLobbySessionCreate: {
       const auto& sessionCreate = envelope.lobby_session_create();
-      Log(EchoVR::LogLevel::Info,
-          "[NEVR.GAMESERVER] Received session create via protobuf: session=%s, max=%d, type=%d",
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received session create via protobuf: session=%s, max=%d, type=%d",
           sessionCreate.lobby_session_id().c_str(), sessionCreate.max_entrants(), sessionCreate.lobby_type());
 
       // Update session state
@@ -283,8 +282,8 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
         auto encoded = EncodeLobbyEntrantsAccept(accept);
         if (encoded.size() > 0) {
           EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersSuccessV2,
-                                               "SNSLobbyAcceptPlayersSuccessv2",
-                                               const_cast<uint8_t*>(encoded.ptr()), encoded.size());
+                                               "SNSLobbyAcceptPlayersSuccessv2", const_cast<uint8_t*>(encoded.ptr()),
+                                               encoded.size());
         } else {
           Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Failed to encode entrants accept");
         }
@@ -302,8 +301,8 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
         auto encoded = EncodeLobbyEntrantsReject(reject);
         if (encoded.size() > 0) {
           EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersFailureV2,
-                                               "SNSLobbyAcceptPlayersFailurev2",
-                                               const_cast<uint8_t*>(encoded.ptr()), encoded.size());
+                                               "SNSLobbyAcceptPlayersFailurev2", const_cast<uint8_t*>(encoded.ptr()),
+                                               encoded.size());
         } else {
           Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Failed to encode entrants reject");
         }
@@ -731,15 +730,15 @@ void OnTcpMsgGameClientMsg3(GameServerLib*, VOID*, EchoVR::TcpPeer, VOID*, VOID*
 // --- GameServerLib Implementation ---
 
 GameServerLib::GameServerLib()
-    : context_(std::make_unique<ServerContext>()), wsClient_(std::make_unique<WebSocketClient>()) {}
+    : m_context(std::make_unique<ServerContext>()), m_wsClient(std::make_unique<WebSocketClient>()) {}
 
 GameServerLib::~GameServerLib() = default;
 
 INT64 GameServerLib::UnkFunc0(VOID*, INT64, INT64) { return 1; }
 
 VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broadcaster, VOID*, const CHAR*) {
-  context_->Initialize(lobby, broadcaster);
-  context_->FinalizeInitialization();
+  m_context->Initialize(lobby, broadcaster);
+  m_context->FinalizeInitialization();
 
   RegisterBroadcasterCallbacks();
   RegisterTcpCallbacks();
@@ -754,7 +753,7 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
 }
 
 void GameServerLib::RegisterBroadcasterCallbacks() {
-  auto& cb = context_->GetCallbackRegistry();
+  auto& cb = m_context->GetCallbackRegistry();
 
   cb.sessionStart =
       ListenForBroadcasterMessage(this, Sym::LobbySessionStarting, TRUE, reinterpret_cast<VOID*>(OnMsgSessionStarting));
@@ -791,7 +790,7 @@ void GameServerLib::RegisterBroadcasterCallbacks() {
 }
 
 void GameServerLib::RegisterTcpCallbacks() {
-  auto& cb = context_->GetCallbackRegistry();
+  auto& cb = m_context->GetCallbackRegistry();
 
   // Skip TcpBroadcasterListen vtable calls (MinGW/MSVC ABI incompatibility - crashes).
   // Use dummy handle values so UnregisterAllCallbacks() skips them too.
@@ -805,7 +804,7 @@ void GameServerLib::RegisterTcpCallbacks() {
   // compatibility. We handle protobuf messages which properly encode to binary format.
   // Legacy duplicates (registration success, session success) are skipped to avoid
   // double-processing (the game would see the event twice and could misbehave).
-  wsClient_->SetMessageHandler([this](EchoVR::SymbolId msgId, const VOID* data, UINT64 size) {
+  m_wsClient->SetMessageHandler([this](EchoVR::SymbolId msgId, const VOID* data, UINT64 size) {
     if (msgId == SYM_PROTOBUF_MSG) {
       OnTcpMsgProtobuf(this, nullptr, {}, const_cast<VOID*>(data), nullptr, size);
     } else if (msgId == TcpSym::LobbyRegistrationFailure) {
@@ -824,10 +823,10 @@ void GameServerLib::RegisterTcpCallbacks() {
 }
 
 void GameServerLib::UnregisterAllCallbacks() {
-  auto* lobby = context_->GetLobby();
+  auto* lobby = m_context->GetLobby();
   if (!lobby) return;
 
-  auto& cb = context_->GetCallbackRegistry();
+  auto& cb = m_context->GetCallbackRegistry();
 
   // Unregister broadcaster callbacks
   if (lobby->broadcaster) {
@@ -841,7 +840,7 @@ void GameServerLib::UnregisterAllCallbacks() {
 
 VOID GameServerLib::Terminate() {
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Terminated game server");
-  context_->Terminate();
+  m_context->Terminate();
 }
 
 // File-static state for -exitonerror disconnect detection
@@ -850,21 +849,21 @@ static bool s_exitPending = false;
 
 VOID GameServerLib::Update() {
   // Dispatch incoming ServerDB messages on the main thread
-  if (wsClient_) wsClient_->ProcessReceivedMessages();
+  if (m_wsClient) m_wsClient->ProcessReceivedMessages();
 
   // -exitonerror: detect serverdb disconnect and exit (immediately or deferred)
-  if (exitOnError && wsClient_ && !s_exitPending) {
-    bool nowConnected = wsClient_->IsConnected();
+  if (g_exitOnError && m_wsClient && !s_exitPending) {
+    bool nowConnected = m_wsClient->IsConnected();
     if (s_wasConnectedToServerDb && !nowConnected) {
       s_exitPending = true;
-      if (!context_->IsSessionActive()) {
+      if (!m_context->IsSessionActive()) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.GAMESERVER] ServerDB disconnected with -exitonerror and no active round -- exiting");
         exit(1);
       } else {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.GAMESERVER] ServerDB disconnected with -exitonerror -- round active, will exit at round end + 30s");
-        auto* ctx = context_.get();
+        auto* ctx = m_context.get();
         std::thread([ctx]() {
           while (ctx->IsSessionActive()) {
             Sleep(1000);
@@ -880,9 +879,9 @@ VOID GameServerLib::Update() {
   }
 
   // Check for dirty entrants (profile updates pending)
-  uint64_t count = context_->GetEntrantCount();
+  uint64_t count = m_context->GetEntrantCount();
   for (uint64_t i = 0; i < count; ++i) {
-    auto* entrant = context_->GetEntrant(static_cast<uint32_t>(i));
+    auto* entrant = m_context->GetEntrant(static_cast<uint32_t>(i));
     if (entrant && entrant->userId.accountId != 0 && entrant->dirty) {
       // TODO: Handle dirty entrants
     }
@@ -896,11 +895,11 @@ VOID GameServerLib::UnkFunc1(UINT64) {
 VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId regionId, EchoVR::SymbolId versionLock,
                                         const EchoVR::Json* localConfig) {
   // Update session state
-  SessionState state = context_->GetSessionState();
+  SessionState state = m_context->GetSessionState();
   state.serverId = serverId;
   state.regionId = regionId;
   state.versionLock = versionLock;
-  context_->UpdateSessionState(state);
+  m_context->UpdateSessionState(state);
 
   // Get serverdb URI from config
   CHAR* serverDbUri =
@@ -908,13 +907,13 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
                                 const_cast<CHAR*>("ws://localhost:777/serverdb"), false);
 
   // Connect to serverdb via WebSocketClient (avoids TcpBroadcasterListen vtable ABI crash)
-  if (!wsClient_->Connect(serverDbUri)) {
+  if (!m_wsClient->Connect(serverDbUri)) {
     Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to initiate WebSocket connection");
     return;
   }
 
   // Build registration request
-  auto* broadcaster = context_->GetBroadcaster();
+  auto* broadcaster = m_context->GetBroadcaster();
   if (!broadcaster || !broadcaster->data) {
     Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Broadcaster unavailable");
     return;
@@ -947,32 +946,32 @@ VOID GameServerLib::Unregister() {
   UnregisterAllCallbacks();
 
   // Disconnect WebSocketClient from serverdb
-  if (wsClient_) wsClient_->Disconnect();
+  if (m_wsClient) m_wsClient->Disconnect();
 
-  context_->SetRegistered(false);
-  context_->EndSession();
+  m_context->SetRegistered(false);
+  m_context->EndSession();
 
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Unregistered game server");
 }
 
 VOID GameServerLib::EndSession() {
-  if (context_->IsSessionActive()) {
+  if (m_context->IsSessionActive()) {
     rtapi::v1::Envelope envelope;
     auto* event = envelope.mutable_lobby_session_event();
-    event->set_lobby_session_id(context_->GetSessionState().lobbySessionId);
+    event->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
     event->set_code(rtapi::v1::LobbySessionEventMessage::CODE_ENDED);
     SendProtobufEnvelope(this, envelope);
   }
 
-  context_->EndSession();
+  m_context->EndSession();
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Signaling end of session");
 }
 
 VOID GameServerLib::LockPlayerSessions() {
-  if (context_->IsSessionActive()) {
+  if (m_context->IsSessionActive()) {
     rtapi::v1::Envelope envelope;
     auto* event = envelope.mutable_lobby_session_event();
-    event->set_lobby_session_id(context_->GetSessionState().lobbySessionId);
+    event->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
     event->set_code(rtapi::v1::LobbySessionEventMessage::CODE_LOCKED);
     SendProtobufEnvelope(this, envelope);
   }
@@ -981,10 +980,10 @@ VOID GameServerLib::LockPlayerSessions() {
 }
 
 VOID GameServerLib::UnlockPlayerSessions() {
-  if (context_->IsSessionActive()) {
+  if (m_context->IsSessionActive()) {
     rtapi::v1::Envelope envelope;
     auto* event = envelope.mutable_lobby_session_event();
-    event->set_lobby_session_id(context_->GetSessionState().lobbySessionId);
+    event->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
     event->set_code(rtapi::v1::LobbySessionEventMessage::CODE_UNLOCKED);
     SendProtobufEnvelope(this, envelope);
   }
@@ -993,10 +992,10 @@ VOID GameServerLib::UnlockPlayerSessions() {
 }
 
 VOID GameServerLib::AcceptPlayerSessions(EchoVR::Array<GUID>* playerUuids) {
-  if (context_->IsSessionActive()) {
+  if (m_context->IsSessionActive()) {
     rtapi::v1::Envelope envelope;
     auto* connected = envelope.mutable_lobby_entrant_connected();
-    connected->set_lobby_session_id(context_->GetSessionState().lobbySessionId);
+    connected->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
     for (uint32_t i = 0; i < playerUuids->count; i++) {
       connected->add_entrant_ids(GuidToUuidString(playerUuids->items[i]));
     }
@@ -1007,10 +1006,10 @@ VOID GameServerLib::AcceptPlayerSessions(EchoVR::Array<GUID>* playerUuids) {
 }
 
 VOID GameServerLib::RemovePlayerSession(GUID* playerUuid) {
-  if (context_->IsSessionActive()) {
+  if (m_context->IsSessionActive()) {
     rtapi::v1::Envelope envelope;
     auto* removed = envelope.mutable_lobby_entrant_removed();
-    removed->set_lobby_session_id(context_->GetSessionState().lobbySessionId);
+    removed->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
     removed->set_entrant_id(GuidToUuidString(*playerUuid));
     removed->set_code(rtapi::v1::LobbyEntrantRemovedMessage::CODE_DISCONNECTED);
     SendProtobufEnvelope(this, envelope);

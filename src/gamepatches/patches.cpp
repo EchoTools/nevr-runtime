@@ -9,7 +9,7 @@
 #include "common/globals.h"
 #include "common/hooking.h"
 #include "common/logging.h"
-#include "processmem.h"
+#include "process_mem.h"
 
 #ifdef USE_MINHOOK
 #include <MinHook.h>
@@ -19,9 +19,8 @@
 #include <psapi.h>
 #include <windows.h>
 
-#include "common/echovrunexported.h"
+#include "common/echovr_functions.h"
 #include "patch_addresses.h"
-#include "processmem.h"
 
 /// <summary>
 /// Helper function to apply a memory patch at a specific offset from the game base address.
@@ -36,55 +35,55 @@ static inline VOID ApplyPatch(uintptr_t offset, const BYTE* patchData, size_t pa
 /// <summary>
 /// Indicates whether the patches have been applied (to avoid re-application).
 /// </summary>
-BOOL initialized = FALSE;
+BOOL g_initialized = FALSE;
 
 /// <summary>
 /// Custom config.json path provided via command-line argument. If empty, the default path is used.
 /// </summary>
-CHAR customConfigJsonPath[MAX_PATH] = {0};
+CHAR g_customConfigJsonPath[MAX_PATH] = {0};
 
 /// <summary>
 /// A CLI argument flag indicating whether the game is booting as a dedicated server.
 /// </summary>
-BOOL isServer = FALSE;
+BOOL g_isServer = FALSE;
 /// <summary>
 /// A CLI argument flag indicating whether the game is booting as an offline client.
 /// </summary>
-BOOL isOffline = FALSE;
+BOOL g_isOffline = FALSE;
 /// <summary>
 /// A CLI argument flag indicating whether the game is booting in headless mode (no graphics/audio).
 /// </summary>
-BOOL isHeadless = FALSE;
+BOOL g_isHeadless = FALSE;
 /// <summary>
 /// A CLI argument flag used to remove the extra console being added by -headless for running servers on fully headless
 /// system.
 /// </summary>
-BOOL noConsole = FALSE;
+BOOL g_noConsole = FALSE;
 /// <summary>
 /// A CLI argument flag indicating whether the game is booting in a windowed mode, rather than with a VR headset.
 /// </summary>
-BOOL isWindowed = FALSE;
+BOOL g_isWindowed = FALSE;
 
 /// <summary>
 /// Indicates whether the game was launched with `-noovr`.
 /// </summary>
-BOOL isNoOVR = FALSE;
+BOOL g_isNoOVR = FALSE;
 /// <summary>
 /// The window handle for the current game window.
 /// </summary>
-HWND hWindow = NULL;
+HWND g_hWindow = NULL;
 
 /// <summary>
 /// The local config stored in ./_local/config.json.
 /// </summary>
-EchoVR::Json* localConfig = NULL;
+EchoVR::Json* g_localConfig = NULL;
 
 /// <summary>
 /// A timestep value in ticks/updates per second, to be used for headless mode (due to lack of GPU/refresh rate
 /// throttling). If non-zero, sets the timestep override by the given tick rate per second. If zero, removes tick rate
 /// throttling.
 /// </summary>
-UINT32 headlessTimeStep = 120;
+UINT32 g_headlessTimeStep = 120;
 
 /// <summary>
 /// Reports a fatal error with a message box, then exits the game.
@@ -140,9 +139,9 @@ VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_
   } else if (!strcmp(format, "[NETGAME] No screen stats info for game mode %s"))  // noisy in social lobby
     return;
 
-  // Calling the original function and returning here if noConsole is set to avoid putting any extra formatting in the
+  // Calling the original function and returning here if g_noConsole is set to avoid putting any extra formatting in the
   // logs.
-  if (noConsole) return EchoVR::WriteLog(logLevel, unk, format, vl);
+  if (g_noConsole) return EchoVR::WriteLog(logLevel, unk, format, vl);
 
   // Print the ANSI color code prefix for the given log level.
   switch (logLevel) {
@@ -182,7 +181,7 @@ VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_
 VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_list args;
   va_start(args, format);
-  if (isHeadless)
+  if (g_isHeadless)
     WriteLogHook(level, 0, format, args);
   else
     EchoVR::WriteLog(level, 0, format, args);
@@ -266,13 +265,13 @@ VOID PatchEnableHeadless(PVOID pGame) {
   ApplyPatch(HEADLESS_EFFECTS, effectsPatch, sizeof(effectsPatch));
 
   // Enable fixed timestep if configured
-  if (headlessTimeStep != 0) {
+  if (g_headlessTimeStep != 0) {
     UINT64* timestepFlags = reinterpret_cast<UINT64*>(static_cast<CHAR*>(pGame) + GAME_TIMESTEP_FLAGS_OFFSET);
     *timestepFlags |= 0x2000000;  // Set fixed timestep flag
   }
 
   // Skip console creation if -noconsole was specified
-  if (noConsole) {
+  if (g_noConsole) {
     return;
   }
 
@@ -570,14 +569,14 @@ VOID PatchDisableServerRendering(PVOID pGame) {
   ApplyPatch(HEADLESS_EFFECTS, effectsPatch, sizeof(effectsPatch));
 
   // Enable fixed timestep if configured
-  if (headlessTimeStep != 0) {
+  if (g_headlessTimeStep != 0) {
     UINT64* timestepFlags = reinterpret_cast<UINT64*>(static_cast<CHAR*>(pGame) + GAME_TIMESTEP_FLAGS_OFFSET);
     *timestepFlags |= 0x2000000;  // Set fixed timestep flag
   }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Server rendering disabled (renderer, effects, audio)");
-  if (headlessTimeStep != 0) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Fixed timestep flag set (%u ticks/sec)", headlessTimeStep);
+  if (g_headlessTimeStep != 0) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Fixed timestep flag set (%u ticks/sec)", g_headlessTimeStep);
   }
 }
 
@@ -591,15 +590,13 @@ VOID PatchLogServerProfile() {
   pmc.cb = sizeof(pmc);
   if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) {
     Log(EchoVR::LogLevel::Info, "[NEVR.PROFILE] WorkingSet: %llu MB, PrivateBytes: %llu MB",
-        pmc.WorkingSetSize / (1024 * 1024),
-        pmc.PrivateUsage / (1024 * 1024));
+        pmc.WorkingSetSize / (1024 * 1024), pmc.PrivateUsage / (1024 * 1024));
   }
 
   const char* checkDlls[] = {"d3d11", "dxgi", "LibOVRPlatform", "AkSoundEngine", NULL};
   for (int i = 0; checkDlls[i]; i++) {
     HMODULE h = GetModuleHandleA(checkDlls[i]);
-    Log(EchoVR::LogLevel::Info, "[NEVR.PROFILE] Module %s: %s",
-        checkDlls[i], h ? "LOADED" : "not loaded");
+    Log(EchoVR::LogLevel::Info, "[NEVR.PROFILE] Module %s: %s", checkDlls[i], h ? "LOADED" : "not loaded");
   }
 }
 
@@ -613,7 +610,7 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
   // Hook the net game switch state function, so we can redirect "load level failed" to a ready state again.
   // This way if a client requests a non-existent level, the game server library isn't unloaded due to a state
   // transition to "load failed" (because the level failed to load)
-  if (isServer && state == EchoVR::NetGameState::LoadFailed) {
+  if (g_isServer && state == EchoVR::NetGameState::LoadFailed) {
     // Schedule a return to lobby. We are already at lobby, but this will quickly end the session, removing
     // all players, and start listening for a new one, to keep the server recycling itself appropriately.
     // Note: This is an ugly hack, as the client will get an irrelevant connection failure message (server is full,
@@ -662,8 +659,9 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgHelpString(pArgSyntax, "-config-path", "[NEVR] Specify a custom path to the config.json file");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-exitonerror", 0, 0, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-exitonerror",
-                           "[NEVR] Exit server when serverdb connection is lost (deferred to end of round + 30s if round is active)");
+  EchoVR::AddArgHelpString(
+      pArgSyntax, "-exitonerror",
+      "[NEVR] Exit server when serverdb connection is lost (deferred to end of round + 30s if round is active)");
 
   return result;
 }
@@ -681,22 +679,22 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     const LPWSTR arg = argv[i];
 
     if (lstrcmpW(arg, L"-server") == 0) {
-      isServer = TRUE;
+      g_isServer = TRUE;
     } else if (lstrcmpW(arg, L"-offline") == 0) {
-      isOffline = TRUE;
+      g_isOffline = TRUE;
     } else if (lstrcmpW(arg, L"-noconsole") == 0) {
-      noConsole = TRUE;
+      g_noConsole = TRUE;
     } else if (lstrcmpW(arg, L"-headless") == 0) {
-      isHeadless = TRUE;
+      g_isHeadless = TRUE;
     } else if (lstrcmpW(arg, L"-windowed") == 0) {
-      isWindowed = TRUE;
+      g_isWindowed = TRUE;
     } else if (lstrcmpW(arg, L"-noovr") == 0) {
-      isNoOVR = TRUE;
+      g_isNoOVR = TRUE;
     } else if (lstrcmpW(arg, L"-exitonerror") == 0) {
-      exitOnError = TRUE;
+      g_exitOnError = TRUE;
     } else if (lstrcmpW(arg, L"-timestep") == 0) {
       if (i + 1 < argc) {
-        headlessTimeStep = std::wcstoul(argv[i + 1], nullptr, 10);
+        g_headlessTimeStep = std::wcstoul(argv[i + 1], nullptr, 10);
         ++i;  // Skip the next argument (the value)
       } else {
         FatalError(
@@ -705,7 +703,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       }
     } else if (lstrcmpW(arg, L"-config-path") == 0) {
       if (i + 1 < argc) {
-        int len = WideCharToMultiByte(CP_UTF8, 0, argv[i + 1], -1, customConfigJsonPath, MAX_PATH, NULL, NULL);
+        int len = WideCharToMultiByte(CP_UTF8, 0, argv[i + 1], -1, g_customConfigJsonPath, MAX_PATH, NULL, NULL);
         if (len == 0) {
           FatalError("Failed to convert -config-path to multi-byte string.", NULL);
         }
@@ -717,25 +715,25 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   }
 
   // Validate argument combinations.
-  if (isServer && isOffline) {
+  if (g_isServer && g_isOffline) {
     FatalError("Arguments -server and -offline are mutually exclusive.", NULL);
   }
 
-  if (noConsole && !isHeadless) {
+  if (g_noConsole && !g_isHeadless) {
     FatalError("The -noconsole flag requires -headless to be specified.", NULL);
   }
 
   // Apply patches based on arguments.
-  if (isOffline) {
+  if (g_isOffline) {
     PatchEnableOffline();
   }
 
-  if (isHeadless) {
+  if (g_isHeadless) {
     PatchEnableHeadless(pGame);
   }
 
   // If the windowed, server, or headless flags were provided, apply the windowed mode patch to not use a VR headset.
-  if (isWindowed || isServer || isHeadless) {
+  if (g_isWindowed || g_isServer || g_isHeadless) {
     using namespace PatchAddresses;
     // Set windowed mode flag in game structure
     UINT64* windowedFlags = reinterpret_cast<UINT64*>(static_cast<CHAR*>(pGame) + GAME_WINDOWED_FLAGS_OFFSET);
@@ -743,7 +741,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   }
 
   // Apply patches to force the game to load as a server.
-  if (isServer) {
+  if (g_isServer) {
     PatchDisableServerRendering(pGame);
     PatchEnableServer();
     PatchDisableLoadingTips();
@@ -754,7 +752,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   }
 
   // Update the window title
-  if (hWindow != NULL && isNoOVR) EchoVR::SetWindowTextA_(hWindow, "Echo VR - [DEMO]");
+  if (g_hWindow != NULL && g_isNoOVR) EchoVR::SetWindowTextA_(g_hWindow, "Echo VR - [DEMO]");
 
   // Run the original method
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
@@ -771,11 +769,11 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
   UINT64 result;
 
   // If a custom config.json path was provided, load it directly using the game's JSON loader
-  if (customConfigJsonPath[0] != '\0') {
+  if (g_customConfigJsonPath[0] != '\0') {
     // Resolve to full path so the game's loader can find it regardless of CWD
     CHAR resolvedPath[MAX_PATH] = {0};
-    DWORD len = GetFullPathNameA(customConfigJsonPath, MAX_PATH, resolvedPath, NULL);
-    const CHAR* configPath = (len > 0 && len < MAX_PATH) ? resolvedPath : customConfigJsonPath;
+    DWORD len = GetFullPathNameA(g_customConfigJsonPath, MAX_PATH, resolvedPath, NULL);
+    const CHAR* configPath = (len > 0 && len < MAX_PATH) ? resolvedPath : g_customConfigJsonPath;
 
     Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Loading custom config from: %s", configPath);
 
@@ -788,8 +786,8 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
     UINT32 loadResult = EchoVR::LoadJsonFromFile(configDest, configPath, 1);
 
     if (loadResult != 0) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load custom config file: %s (error %u)",
-          configPath, loadResult);
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load custom config file: %s (error %u)", configPath,
+          loadResult);
       // Fall back to loading the default config
       result = EchoVR::LoadLocalConfig(pGame);
     } else {
@@ -803,14 +801,14 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
 
   // Configure fixed timestep if specified
   // Note: This is placed here because the required structures must be initialized first
-  if ((isHeadless || isServer) && headlessTimeStep != 0) {
+  if ((g_isHeadless || g_isServer) && g_headlessTimeStep != 0) {
     using namespace PatchAddresses;
 
     // Set the fixed time step value (in microseconds)
     // The timestep is stored in a nested structure accessed via pointer
     UINT32* timeStepPtr = reinterpret_cast<UINT32*>(
         *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + FIXED_TIMESTEP_PTR) + FIXED_TIMESTEP_OFFSET);
-    *timeStepPtr = 1000000 / headlessTimeStep;  // Convert Hz to microseconds
+    *timeStepPtr = 1000000 / g_headlessTimeStep;  // Convert Hz to microseconds
 
     // Fix delta time calculation for fixed timestep mode
     // Changes condition: if (deltaTime > timeStep) to use correct comparison
@@ -821,11 +819,11 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
 
   // Store a reference to the local config from the game structure
   using namespace PatchAddresses;
-  localConfig = reinterpret_cast<EchoVR::Json*>(static_cast<CHAR*>(pGame) + GAME_LOCAL_CONFIG_OFFSET);
+  g_localConfig = reinterpret_cast<EchoVR::Json*>(static_cast<CHAR*>(pGame) + GAME_LOCAL_CONFIG_OFFSET);
 
   // Configure Asset CDN URL from config.json if specified
-  if (localConfig != NULL) {
-    CHAR* customCdnUrl = EchoVR::JsonValueAsString(localConfig, (CHAR*)"asset_cdn_url", NULL, false);
+  if (g_localConfig != NULL) {
+    CHAR* customCdnUrl = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"asset_cdn_url", NULL, false);
     if (customCdnUrl != NULL && customCdnUrl[0] != '\0') {
       // AssetCDN::SetCustomCdnUrl(customCdnUrl);
       // Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Asset CDN URL set from config: %s", customCdnUrl);
@@ -843,17 +841,17 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
 /// <param name="defaultUrl">The default URL if no config override is found</param>
 /// <returns>The resolved service URL</returns>
 CHAR* GetServiceHostWithFallback(const CHAR* serviceKey, const CHAR* defaultUrl) {
-  if (localConfig == NULL) return (CHAR*)defaultUrl;
+  if (g_localConfig == NULL) return (CHAR*)defaultUrl;
 
   // Try primary service key first
-  CHAR* host = EchoVR::JsonValueAsString(localConfig, (CHAR*)serviceKey, NULL, false);
+  CHAR* host = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)serviceKey, NULL, false);
   if (host != NULL && host[0] != '\0') {
     Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service override [%s]: %s", serviceKey, host);
     return host;
   }
 
   // Fallback to loginservice_host if primary key not found
-  host = EchoVR::JsonValueAsString(localConfig, (CHAR*)"loginservice_host", NULL, false);
+  host = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"loginservice_host", NULL, false);
   if (host != NULL && host[0] != '\0') {
     Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service fallback [%s → loginservice_host]: %s", serviceKey, host);
     return host;
@@ -872,7 +870,7 @@ CHAR* GetServiceHostWithFallback(const CHAR* serviceKey, const CHAR* defaultUrl)
 /// <param name="uri">The HTTP(S) URI string to connect to.</param>
 UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
   // If we have a local config, check for service overrides with fallback logic
-  if (localConfig != NULL) {
+  if (g_localConfig != NULL) {
     CHAR* originalUri = uri;
 
     // API Service (https://api.*)
@@ -880,7 +878,7 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
       uri = GetServiceHostWithFallback("apiservice_host", uri);
       // Legacy compatibility: also try "api_host"
       if (uri == originalUri) {
-        uri = EchoVR::JsonValueAsString(localConfig, (CHAR*)"api_host", uri, false);
+        uri = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"api_host", uri, false);
       }
     }
     // Config Service - detect config-related URLs
@@ -901,9 +899,9 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
     }
     // Oculus Graph API
     else if (!strncmp(uri, "https://graph.oculus.com", 24)) {
-      uri = EchoVR::JsonValueAsString(localConfig, (CHAR*)"graph_host", uri, false);
+      uri = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"graph_host", uri, false);
       if (uri == originalUri) {
-        uri = EchoVR::JsonValueAsString(localConfig, (CHAR*)"graphservice_host", uri, false);
+        uri = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"graphservice_host", uri, false);
       }
     }
 
@@ -942,9 +940,9 @@ EchoVR::TcpPeer* CreatePeerHook(EchoVR::TcpBroadcasterData* self, EchoVR::TcpPee
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] WebSocket connection initiated (CreatePeer called)");
 
   // Check if we have config overrides for WebSocket endpoints
-  if (localConfig != NULL) {
+  if (g_localConfig != NULL) {
     // Check for loginservice_host override (primary WebSocket endpoint)
-    CHAR* loginHost = EchoVR::JsonValueAsString(localConfig, (CHAR*)"loginservice_host", NULL, false);
+    CHAR* loginHost = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"loginservice_host", NULL, false);
     if (loginHost != NULL && loginHost[0] != '\0') {
       Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] WebSocket loginservice_host override configured: %s", loginHost);
       // Note: Actual URI modification would require parsing/rebuilding UriContainer
@@ -952,12 +950,12 @@ EchoVR::TcpPeer* CreatePeerHook(EchoVR::TcpBroadcasterData* self, EchoVR::TcpPee
     }
 
     // Check for matching/config/transaction service WebSocket overrides
-    CHAR* matchingHost = EchoVR::JsonValueAsString(localConfig, (CHAR*)"matchingservice_host", NULL, false);
+    CHAR* matchingHost = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"matchingservice_host", NULL, false);
     if (matchingHost != NULL && matchingHost[0] != '\0') {
       Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Matchingservice override available: %s", matchingHost);
     }
 
-    CHAR* configHost = EchoVR::JsonValueAsString(localConfig, (CHAR*)"configservice_host", NULL, false);
+    CHAR* configHost = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"configservice_host", NULL, false);
     if (configHost != NULL && configHost[0] != '\0') {
       Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Configservice override available: %s", configHost);
     }
@@ -1048,7 +1046,7 @@ FARPROC GetProcAddressHook(HMODULE hModule, LPCSTR lpProcName) {
 
   // If we're performing a plugin shutdown, check if this is a user platform DLL such as pnsdemo.dll or pnsovr.dll,
   // which exports a "Users" method.
-  if (isServer && strcmp(lpProcName, "RadPluginShutdown") == 0) {
+  if (g_isServer && strcmp(lpProcName, "RadPluginShutdown") == 0) {
     // If this is a user platform dll, exit the whole process with a success code instead of continuing to gracefully
     // unload.
     if (EchoVR::GetProcAddress(hModule, "Users") != NULL) exit(0);
@@ -1066,7 +1064,7 @@ FARPROC GetProcAddressHook(HMODULE hModule, LPCSTR lpProcName) {
 /// <returns>True if successful, false otherwise.</returns>
 BOOL SetWindowTextAHook(HWND hWnd, LPCSTR lpString) {
   // Store a reference to the window
-  hWindow = hWnd;
+  g_hWindow = hWnd;
 
   // Call the original function and return the result with explicit cast to avoid data loss warning
   return (BOOL)EchoVR::SetWindowTextA_(hWnd, lpString);
@@ -1348,8 +1346,8 @@ HRESULT WINAPI CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD 
 /// <returns>None</returns>
 VOID Initialize() {
   // If we already initialized the library, stop.
-  if (initialized) return;
-  initialized = true;
+  if (g_initialized) return;
+  g_initialized = true;
 
   // EchoVR::InitEchoVR();  // Function not defined in nevr-common submodule
 
@@ -1527,8 +1525,7 @@ VOID Initialize() {
   // In server/headless mode: prevents false deadlock detection during level transitions
   // (no GPU to keep frames flowing, causing the monitor thread to see stalls).
   // NOTE: Applied unconditionally because Initialize() runs before command-line parsing
-  // (PreprocessCommandLineHook), so isServer/isHeadless aren't set yet. The deadlock
+  // (PreprocessCommandLineHook), so g_isServer/g_isHeadless aren't set yet. The deadlock
   // monitor is harmful in all Wine/headless scenarios and benign to disable on clients.
   PatchDeadlockMonitor();
-
 }

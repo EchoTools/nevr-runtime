@@ -1,12 +1,10 @@
 #pragma once
-#include "echovrInternal.h"
-
-#ifndef ECHOVR_LOGGING_H
-#define ECHOVR_LOGGING_H
 
 #include <chrono>
 #include <ctime>
 #include <string>
+
+#include "echovr_functions.h"
 
 // Helper function to get ISO8601 timestamp
 extern std::string GetISO8601Timestamp();
@@ -22,5 +20,3 @@ extern VOID __cdecl WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CH
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
 extern VOID FatalError(const CHAR* msg, const CHAR* title);
-
-#endif  // ECHOVR_LOGGING_H

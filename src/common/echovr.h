@@ -1,10 +1,5 @@
 #pragma once
 
-// Ensure this header is only included once
-#ifndef ECHOVR_H
-#define ECHOVR_H
-
-// Include necessary headers
 #if defined(_WIN32) || defined(_WINDOWS) || defined(__MINGW32__) || defined(__MINGW64__)
 #include <Windows.h>
 #include <guiddef.h>
@@ -472,5 +467,3 @@ class IServerLib {
   virtual VOID RemovePlayerSession(GUID* playerUuid) = 0;
 };
 }  // namespace EchoVR
-
-#endif  // ECHOVR_H

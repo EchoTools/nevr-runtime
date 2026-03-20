@@ -1,6 +1,4 @@
 #pragma once
-#ifndef COMMON_SYMBOLS_H
-#define COMMON_SYMBOLS_H
 
 #include "echovr.h"
 
@@ -71,5 +69,3 @@ constexpr SymbolId GameClientMsg3 = 0xa7a9e5a70b2429db;
 }  // namespace Tcp
 
 }  // namespace EchoVR::Symbols
-
-#endif  // COMMON_SYMBOLS_H

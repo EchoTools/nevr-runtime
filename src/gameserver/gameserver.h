@@ -1,13 +1,11 @@
 #pragma once
-#ifndef GAMESERVER_H
-#define GAMESERVER_H
 
 #include <memory>
 
 #include "constants.h"
 #include "echovr.h"
 #include "pch.h"
-#include "servercontext.h"
+#include "server_context.h"
 #include "websocket_client.h"
 
 // IServerLib implementation connecting to NEVR's ServerDB service.
@@ -34,15 +32,15 @@ class GameServerLib : public EchoVR::IServerLib {
   VOID RemovePlayerSession(GUID* playerUuid) override;
 
   // Context accessor for callback handlers
-  GameServer::ServerContext& GetContext() { return *context_; }
-  const GameServer::ServerContext& GetContext() const { return *context_; }
+  GameServer::ServerContext& GetContext() { return *m_context; }
+  const GameServer::ServerContext& GetContext() const { return *m_context; }
 
   // WebSocketClient accessor for SendProtobufEnvelope
-  WebSocketClient& GetWsClient() { return *wsClient_; }
+  WebSocketClient& GetWsClient() { return *m_wsClient; }
 
  private:
-  std::unique_ptr<GameServer::ServerContext> context_;
-  std::unique_ptr<WebSocketClient> wsClient_;
+  std::unique_ptr<GameServer::ServerContext> m_context;
+  std::unique_ptr<WebSocketClient> m_wsClient;
 
   // Helper methods
   void RegisterBroadcasterCallbacks();
@@ -62,5 +60,3 @@ struct SlotInfo {
   uint16_t genId;
 };
 SlotInfo ExtractSlotIndex(const void* msg, uint64_t msgSize);
-
-#endif  // GAMESERVER_H

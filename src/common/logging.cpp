@@ -6,7 +6,7 @@
 #include <sstream>
 
 #include "echovr.h"
-#include "echovrInternal.h"
+#include "echovr_functions.h"
 #include "globals.h"
 
 // Get ISO8601 timestamp in UTC
@@ -79,7 +79,7 @@ VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_
   } else if (!strcmp(format, "[NETGAME] No screen stats info for game mode %s"))
     return;
 
-  if (noConsole) return EchoVR::WriteLog(logLevel, unk, format, vl);
+  if (g_noConsole) return EchoVR::WriteLog(logLevel, unk, format, vl);
 
   CHAR formattedMessage[0x1000];
   memset(formattedMessage, 0, sizeof(formattedMessage));
@@ -102,7 +102,7 @@ VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_
 VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_list args;
   va_start(args, format);
-  if (isHeadless)
+  if (g_isHeadless)
     WriteLogHook(level, 0, format, args);
   else
     EchoVR::WriteLog(level, 0, format, args);
