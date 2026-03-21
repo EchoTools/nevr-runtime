@@ -653,20 +653,31 @@ VOID PatchLogServerProfile() {
 /// <param name="game">A pointer to the game instance.</param>
 /// <param name="state">The state to transition to.</param>
 /// <returns>None</returns>
+/// Tracks whether the server has entered a game session (InGame state).
+/// Used to detect session completion when the state returns to Lobby.
+static BOOL g_serverWasInGame = FALSE;
+
 VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
-  // Hook the net game switch state function, so we can redirect "load level failed" to a ready state again.
-  // This way if a client requests a non-existent level, the game server library isn't unloaded due to a state
-  // transition to "load failed" (because the level failed to load)
-  if (g_isServer && state == EchoVR::NetGameState::LoadFailed) {
-    // Schedule a return to lobby. We are already at lobby, but this will quickly end the session, removing
-    // all players, and start listening for a new one, to keep the server recycling itself appropriately.
-    // Note: This is an ugly hack, as the client will get an irrelevant connection failure message (server is full,
-    // failed to connect, etc). But at least it doesn't cause the server to get stuck in a "not ready" state in some
-    // menu.
-    Log(EchoVR::LogLevel::Debug,
-        "[NEVR.PATCH] Dedicated server failed to load level. Resetting session to keep game server available.");
-    EchoVR::NetGameScheduleReturnToLobby(pGame);
-    return;
+  if (g_isServer) {
+    // Redirect "load level failed" back to lobby instead of getting stuck
+    if (state == EchoVR::NetGameState::LoadFailed) {
+      Log(EchoVR::LogLevel::Debug,
+          "[NEVR.PATCH] Dedicated server failed to load level. Resetting session to keep game server available.");
+      EchoVR::NetGameScheduleReturnToLobby(pGame);
+      return;
+    }
+
+    // Track when we enter a game session
+    if (state == EchoVR::NetGameState::InGame) {
+      g_serverWasInGame = TRUE;
+    }
+
+    // Session ended: we were in-game and now returning to lobby. Exit cleanly
+    // so the fleet manager can spawn a fresh instance.
+    if (g_serverWasInGame && state == EchoVR::NetGameState::Lobby) {
+      Log(EchoVR::LogLevel::Info, "[NEVR] Session ended. Server exiting.");
+      ExitProcess(0);
+    }
   }
 
   // Call the original function
