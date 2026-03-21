@@ -233,6 +233,19 @@ constexpr uintptr_t SMATSYMDATA_HASHA = 0x107fd0;
 constexpr uintptr_t SNS_REGISTRY_INSERT_SORTED = 0xF88080;
 
 // ============================================================================
+// Social Plugin DLL Name Strings
+// ============================================================================
+
+/// String data addresses for social platform DLL selection.
+/// The game selects between pnsovr/pnsdemo/pnsrad via flag-driven logic at
+/// ~0x140109xxx, each followed by a call to fcn.140606690 (social plugin loader).
+/// Overwriting the string data forces all paths to load pnsrad.dll.
+/// Source: revault_search_strings "pnsovr"/"pnsdemo"/"pnsrad"
+constexpr uintptr_t SOCIAL_PLUGIN_STR_PNSOVR = 0x16d35c4;   // "pnsovr" (xref 0x140109993)
+constexpr uintptr_t SOCIAL_PLUGIN_STR_PNSDEMO = 0x16d35e8;  // "pnsdemo" (xref 0x140109a2b)
+constexpr size_t SOCIAL_PLUGIN_STR_SIZE = 7;                  // "pnsrad\0"
+
+// ============================================================================
 // Global Data Addresses
 // ============================================================================
 
