@@ -88,7 +88,7 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
   return true;
 }
 
-void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz) {
+void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz, bool isPrivateMatch) {
   if (m_active.load(std::memory_order_relaxed)) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.TELEMETRY] Already streaming, stopping previous session");
     Stop();
@@ -96,6 +96,7 @@ void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz) {
 
   m_sessionId = sessionId;
   m_rateHz = rateHz > 0 ? rateHz : 30;
+  m_isPrivateMatch = isPrivateMatch;
   m_frameIndex = 0;
   m_sessionStartTime = std::chrono::steady_clock::now();
   m_lastSnapshotTime = m_sessionStartTime;
@@ -641,18 +642,26 @@ void TelemetryStreamer::SnapshotPlayerBones(TelemetrySnapshot* snap) {
 void TelemetryStreamer::Run() {
   Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Telemetry thread started");
 
-  // Wait for connection before sending header
-  auto connectWaitStart = std::chrono::steady_clock::now();
-  while (m_active.load(std::memory_order_relaxed) && !m_wsConnected.load(std::memory_order_acquire)) {
-    if (std::chrono::steady_clock::now() - connectWaitStart > std::chrono::seconds(10)) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.TELEMETRY] Timeout waiting for telemetry server connection");
+  // Wait for connection AND first snapshot before sending header with roster
+  auto waitStart = std::chrono::steady_clock::now();
+  while (m_active.load(std::memory_order_relaxed)) {
+    bool connected = m_wsConnected.load(std::memory_order_acquire);
+    bool hasSnap = m_snapshotReady.load(std::memory_order_acquire);
+    if (connected && hasSnap) break;
+    if (std::chrono::steady_clock::now() - waitStart > std::chrono::seconds(30)) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.TELEMETRY] Timeout waiting for connection + snapshot");
       break;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 
-  if (m_wsConnected.load(std::memory_order_acquire)) {
-    SendHeader();
+  if (m_wsConnected.load(std::memory_order_acquire) && m_snapshotReady.load(std::memory_order_acquire)) {
+    m_snapshotReady.store(false, std::memory_order_release);
+    int readIdx = 1 - m_writeIndex.load(std::memory_order_relaxed);
+    const TelemetrySnapshot& firstSnap = m_snapshots[readIdx];
+    SendHeaderWithSnapshot(firstSnap);
+    BuildAndSendFrame(firstSnap);
+    m_prevSnapshot = firstSnap;
   }
 
   auto frameInterval = std::chrono::microseconds(1000000 / m_rateHz);
@@ -1014,6 +1023,57 @@ void TelemetryStreamer::SendHeader() {
   if (envelope.SerializeToString(&serialized)) {
     SendEnvelope(serialized);
     Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Sent CaptureHeader (%zu bytes)", serialized.size());
+  }
+}
+
+void TelemetryStreamer::SendHeaderWithSnapshot(const TelemetrySnapshot& snap) {
+  telemetry::v2::Envelope envelope;
+  auto* header = envelope.mutable_header();
+
+  header->set_capture_id(m_sessionId);
+  header->set_format_version(2);
+
+  auto* ts = header->mutable_created_at();
+  auto now = std::chrono::system_clock::now();
+  auto secs = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
+  auto nanos =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()) - std::chrono::duration_cast<std::chrono::nanoseconds>(secs);
+  ts->set_seconds(secs.count());
+  ts->set_nanos(static_cast<int32_t>(nanos.count()));
+
+  auto* ah = header->mutable_echo_arena();
+  ah->set_session_id(m_sessionId);
+  ah->set_client_name("nevr-runtime");
+  ah->set_private_match(m_isPrivateMatch);
+  ah->set_match_type(m_isPrivateMatch
+      ? telemetry::v2::MATCH_TYPE_PRIVATE
+      : telemetry::v2::MATCH_TYPE_ARENA);
+  ah->set_map_name("mpl_arena_a");
+  ah->set_total_round_count(3);
+
+  // Skeleton layout (fixed for EchoVR: 23 bones)
+  auto* skel = ah->mutable_skeleton();
+  skel->set_bone_count(23);
+  skel->set_transform_stride(12);    // 3 x float32
+  skel->set_orientation_stride(16);  // 4 x float32
+
+  // Initial roster from snapshot
+  for (uint16_t i = 0; i < snap.playerCount && i < 16; i++) {
+    const auto& pi = snap.playerInfo[i];
+    if (pi.accountId == 0) continue;
+    auto* entry = ah->add_initial_roster();
+    entry->set_slot(i);
+    entry->set_account_number(pi.accountId);
+    entry->set_display_name(pi.displayName);
+    // teamIndex: 0=blue->ROLE_BLUE_TEAM(1), 1=orange->ROLE_ORANGE_TEAM(2), 2=spec->ROLE_SPECTATOR(3)
+    entry->set_role(static_cast<telemetry::v2::Role>(pi.teamIndex + 1));
+  }
+
+  std::string serialized;
+  if (envelope.SerializeToString(&serialized)) {
+    SendEnvelope(serialized);
+    Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Sent CaptureHeader with roster (%zu bytes, %u players)",
+        serialized.size(), snap.playerCount);
   }
 }
 

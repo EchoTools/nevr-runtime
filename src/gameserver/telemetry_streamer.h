@@ -52,7 +52,7 @@ class TelemetryStreamer {
   bool Connect(const std::string& uri, const std::string& token = "");
 
   // Start streaming for a session. Launches the telemetry thread.
-  void Start(const std::string& sessionId, uint32_t rateHz = 30);
+  void Start(const std::string& sessionId, uint32_t rateHz = 30, bool isPrivateMatch = false);
 
   // Stop streaming. Sends footer, joins telemetry thread.
   void Stop();
@@ -87,6 +87,7 @@ class TelemetryStreamer {
   void BuildAndSendFrame(const TelemetrySnapshot& snap);
   void SendEnvelope(const std::string& serialized);
   void SendHeader();
+  void SendHeaderWithSnapshot(const TelemetrySnapshot& snap);
   void SendFooter();
 
   // Map raw game status hash to proto enum value
@@ -127,6 +128,9 @@ class TelemetryStreamer {
 
   // Auth
   std::string m_token;
+
+  // Match metadata
+  bool m_isPrivateMatch{false};
 
   // Session tracking
   std::string m_sessionId;

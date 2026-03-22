@@ -247,7 +247,10 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
         // Access telemetry via the GameServerLib* — we need to add an accessor
         // This is called via OnTcpMsgProtobuf which has `self` as GameServerLib*
         if (self->GetTelemetry().IsConnected()) {
-          self->GetTelemetry().Start(sessionCreate.lobby_session_id(), g_telemetryRateHz);
+          self->GetTelemetry().Start(
+              sessionCreate.lobby_session_id(),
+              g_telemetryRateHz,
+              sessionCreate.lobby_type() == 1);  // LOBBY_TYPE_PRIVATE
         }
       }
 
