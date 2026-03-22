@@ -1064,8 +1064,13 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
     CHAR* telemetryUri =
         EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("telemetry_uri"),
                                   nullptr, false);
+    CHAR* telemetryToken =
+        EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("telemetry_token"),
+                                  nullptr, false);
     if (telemetryUri && telemetryUri[0] != '\0') {
-      m_telemetry->Connect(std::string(telemetryUri));
+      std::string token = (telemetryToken && telemetryToken[0] != '\0')
+          ? std::string(telemetryToken) : "";
+      m_telemetry->Connect(std::string(telemetryUri), token);
     } else {
       Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] No telemetry_uri in config, telemetry disabled");
     }

@@ -48,7 +48,8 @@ class TelemetryStreamer {
   ~TelemetryStreamer();
 
   // Connect to the telemetry ingest server. Non-blocking.
-  bool Connect(const std::string& uri);
+  // Optional token is sent as Bearer auth on the WebSocket upgrade request.
+  bool Connect(const std::string& uri, const std::string& token = "");
 
   // Start streaming for a session. Launches the telemetry thread.
   void Start(const std::string& sessionId, uint32_t rateHz = 30);
@@ -116,6 +117,9 @@ class TelemetryStreamer {
 
   // Reconnection
   std::atomic<bool> m_needsResendHeader{false};
+
+  // Auth
+  std::string m_token;
 
   // Session tracking
   std::string m_sessionId;

@@ -30,11 +30,22 @@ TelemetryStreamer::~TelemetryStreamer() {
   Disconnect();
 }
 
-bool TelemetryStreamer::Connect(const std::string& uri) {
+bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token) {
   if (uri.empty()) return false;
 
+  m_token = token;
   m_ws = std::make_unique<ix::WebSocket>();
   m_ws->setUrl(uri);
+
+  // Auth — send JWT on WebSocket upgrade request
+  if (!m_token.empty()) {
+    ix::WebSocketHttpHeaders headers;
+    headers["Authorization"] = "Bearer " + m_token;
+    m_ws->setExtraHeaders(headers);
+  }
+
+  // Heartbeat — detect dead connections faster than TCP timeout
+  m_ws->setPingInterval(30);
 
   // Auto-reconnect with exponential backoff
   m_ws->enableAutomaticReconnection();
