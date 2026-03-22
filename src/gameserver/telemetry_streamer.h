@@ -114,6 +114,9 @@ class TelemetryStreamer {
   // Events from broadcaster callbacks
   EventRingBuffer<TelemetryEvent, 256> m_eventBuffer;
 
+  // Reconnection
+  std::atomic<bool> m_needsResendHeader{false};
+
   // Session tracking
   std::string m_sessionId;
   std::chrono::steady_clock::time_point m_sessionStartTime;

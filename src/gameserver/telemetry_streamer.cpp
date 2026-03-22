@@ -36,11 +36,19 @@ bool TelemetryStreamer::Connect(const std::string& uri) {
   m_ws = std::make_unique<ix::WebSocket>();
   m_ws->setUrl(uri);
 
+  // Auto-reconnect with exponential backoff
+  m_ws->enableAutomaticReconnection();
+  m_ws->setMinWaitBetweenReconnectionRetries(1000);   // 1s
+  m_ws->setMaxWaitBetweenReconnectionRetries(10000);   // 10s
+
   m_ws->setOnMessageCallback([this](const ix::WebSocketMessagePtr& msg) {
     switch (msg->type) {
       case ix::WebSocketMessageType::Open:
         Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Connected to telemetry server");
         m_wsConnected.store(true, std::memory_order_release);
+        if (m_active.load(std::memory_order_relaxed)) {
+          m_needsResendHeader.store(true, std::memory_order_release);
+        }
         break;
       case ix::WebSocketMessageType::Close:
         Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Disconnected from telemetry server (code: %d)",
@@ -77,6 +85,7 @@ void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz) {
   m_sessionStartTime = std::chrono::steady_clock::now();
   m_lastSnapshotTime = m_sessionStartTime;
   m_prevSnapshot.Clear();
+  m_needsResendHeader.store(false, std::memory_order_relaxed);
   m_snapshotReady.store(false, std::memory_order_relaxed);
   m_stopping.store(false, std::memory_order_relaxed);
 
@@ -632,6 +641,10 @@ void TelemetryStreamer::Run() {
       const TelemetrySnapshot& snap = m_snapshots[readIdx];
 
       if (m_wsConnected.load(std::memory_order_relaxed)) {
+        if (m_needsResendHeader.exchange(false, std::memory_order_acq_rel)) {
+          Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Re-sending header after reconnect");
+          SendHeader();
+        }
         BuildAndSendFrame(snap);
       }
 
