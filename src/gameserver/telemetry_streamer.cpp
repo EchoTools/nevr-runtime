@@ -125,7 +125,14 @@ void TelemetryStreamer::Stop() {
     m_thread.join();
   }
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Telemetry stream stopped (sent %u frames)", m_frameIndex);
+  // Disable auto-reconnect AFTER thread join — thread may reconnect during Run()
+  if (m_ws) {
+    m_ws->disableAutomaticReconnection();
+  }
+
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.TELEMETRY] Stream stopped (sent %u frames, dropped %u, reconnects %u, bytes %llu)",
+      m_frameIndex, m_droppedFrames, m_reconnectCount, (unsigned long long)m_bytesSent);
 }
 
 void TelemetryStreamer::Disconnect() {
