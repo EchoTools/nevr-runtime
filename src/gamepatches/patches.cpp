@@ -361,29 +361,6 @@ VOID PatchBypassOvrPlatform() {
 }
 
 /// <summary>
-/// Overwrites the "pnsovr" and "pnsdemo" string data in memory so all social DLL
-/// selection paths load pnsrad.dll instead. The game's flag-driven selector at
-/// ~0x140109xxx reads these strings and passes them to the social plugin loader
-/// (fcn.140606690 → CModuleLoader). By patching the string data, every code path
-/// resolves to "pnsrad" regardless of which flags are set.
-/// </summary>
-/// <returns>None</returns>
-VOID PatchDefaultSocialPlugin() {
-  using namespace PatchAddresses;
-
-  const BYTE pnsrad[] = {'p', 'n', 's', 'r', 'a', 'd', '\0'};
-  static_assert(sizeof(pnsrad) == SOCIAL_PLUGIN_STR_SIZE, "Social plugin string size mismatch");
-
-  // "pnsovr" → "pnsrad" (same length, safe overwrite)
-  ApplyPatch(SOCIAL_PLUGIN_STR_PNSOVR, pnsrad, SOCIAL_PLUGIN_STR_SIZE);
-
-  // "pnsdemo" → "pnsrad\0" (overwrites first 7 bytes of 8-byte string, null terminates early)
-  ApplyPatch(SOCIAL_PLUGIN_STR_PNSDEMO, pnsrad, SOCIAL_PLUGIN_STR_SIZE);
-
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Social plugin defaulted to pnsrad");
-}
-
-/// <summary>
 /// Patches the loading tips system to immediately return, avoiding unnecessary log spam and processing.
 /// The loading tips system requires resources that may not be properly configured in server mode.
 /// </summary>
@@ -773,7 +750,6 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       g_isWindowed = TRUE;
     } else if (lstrcmpW(arg, L"-noovr") == 0) {
       g_isNoOVR = TRUE;
-      Log(EchoVR::LogLevel::Warning, "[NEVR] -noovr is deprecated. OVR networking is no longer loaded. Use -windowed for non-VR mode.");
     } else if (lstrcmpW(arg, L"-exitonerror") == 0) {
       g_exitOnError = TRUE;
     } else if (lstrcmpW(arg, L"-notelemetry") == 0) {
@@ -817,12 +793,6 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     FatalError("Arguments -server and -offline are mutually exclusive.", NULL);
   }
 
-  // Servers are always headless — no GPU/display needed.
-  if (g_isServer && !g_isHeadless) {
-    g_isHeadless = TRUE;
-    Log(EchoVR::LogLevel::Info, "[NEVR] -server implies -headless");
-  }
-
   if (g_noConsole && !g_isHeadless) {
     FatalError("The -noconsole flag requires -headless to be specified.", NULL);
   }
@@ -844,20 +814,19 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     *windowedFlags |= 0x0100000;  // Enable windowed mode (spectator uses 0x2100000 for additional settings)
   }
 
-  // Always bypass OVR platform branch so PlatformModuleDecisionAndInitialize takes
-  // Path 2 (server/match mode), which uses matchmaking_plugin/server_plugin config
-  // keys and enables the full networking stack that pnsrad.dll expects.
-  PatchBypassOvrPlatform();
-
   // Apply patches to force the game to load as a server.
   if (g_isServer) {
     PatchDisableServerRendering(pGame);
     PatchEnableServer();
     PatchDisableLoadingTips();
+    PatchBypassOvrPlatform();
     PatchBlockOculusSDK();
     PatchDisableWwise();
     PatchLogServerProfile();
   }
+
+  // Update the window title
+  if (g_hWindow != NULL && g_isNoOVR) EchoVR::SetWindowTextA_(g_hWindow, "Echo VR - [DEMO]");
 
   // Run the original method
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
@@ -1649,7 +1618,6 @@ VOID Initialize() {
 
   // Run some startup patches
   PatchNoOvrRequiresSpectatorStream();
-  PatchDefaultSocialPlugin();
 
   // Initialize Asset CDN redirection system
   // if (!AssetCDN::Initialize()) {
