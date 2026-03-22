@@ -117,6 +117,13 @@ class TelemetryStreamer {
 
   // Reconnection
   std::atomic<bool> m_needsResendHeader{false};
+  bool m_hasConnectedOnce{false};
+
+  // Metrics
+  uint32_t m_droppedFrames{0};
+  uint32_t m_reconnectCount{0};
+  uint64_t m_bytesSent{0};
+  static constexpr size_t kMaxWsBufferBytes = 1024 * 1024;  // 1MB ~ 2s at 30Hz
 
   // Auth
   std::string m_token;

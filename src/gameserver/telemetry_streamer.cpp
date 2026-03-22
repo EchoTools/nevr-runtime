@@ -56,6 +56,10 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
     switch (msg->type) {
       case ix::WebSocketMessageType::Open:
         Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Connected to telemetry server");
+        if (m_hasConnectedOnce) {
+          m_reconnectCount++;
+        }
+        m_hasConnectedOnce = true;
         m_wsConnected.store(true, std::memory_order_release);
         if (m_active.load(std::memory_order_relaxed)) {
           m_needsResendHeader.store(true, std::memory_order_release);
@@ -96,6 +100,10 @@ void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz) {
   m_sessionStartTime = std::chrono::steady_clock::now();
   m_lastSnapshotTime = m_sessionStartTime;
   m_prevSnapshot.Clear();
+  m_droppedFrames = 0;
+  m_reconnectCount = 0;
+  m_bytesSent = 0;
+  m_hasConnectedOnce = false;
   m_needsResendHeader.store(false, std::memory_order_relaxed);
   m_snapshotReady.store(false, std::memory_order_relaxed);
   m_stopping.store(false, std::memory_order_relaxed);
@@ -656,7 +664,18 @@ void TelemetryStreamer::Run() {
           Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Re-sending header after reconnect");
           SendHeader();
         }
-        BuildAndSendFrame(snap);
+
+        size_t buffered = m_ws->bufferedAmount();
+        if (buffered > kMaxWsBufferBytes) {
+          m_droppedFrames++;
+          if (m_droppedFrames % 100 == 1) {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.TELEMETRY] Backpressure: dropped %u frames (buffer=%zu bytes)",
+                m_droppedFrames, buffered);
+          }
+        } else {
+          BuildAndSendFrame(snap);
+        }
       }
 
       m_prevSnapshot = snap;
@@ -958,7 +977,12 @@ void TelemetryStreamer::SendEnvelope(const std::string& serialized) {
   std::memcpy(&wire[0], &len, sizeof(uint32_t));
   std::memcpy(&wire[sizeof(uint32_t)], serialized.data(), serialized.size());
 
-  m_ws->send(wire, true);  // binary=true
+  auto info = m_ws->send(wire, true);  // binary=true
+  if (info.success) {
+    m_bytesSent += info.wireSize;
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.TELEMETRY] Send failed (payload=%zu)", info.payloadSize);
+  }
 }
 
 void TelemetryStreamer::SendHeader() {
