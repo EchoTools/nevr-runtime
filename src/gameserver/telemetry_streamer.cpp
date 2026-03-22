@@ -72,7 +72,7 @@ void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz) {
   }
 
   m_sessionId = sessionId;
-  m_rateHz = rateHz > 0 ? rateHz : 10;
+  m_rateHz = rateHz > 0 ? rateHz : 30;
   m_frameIndex = 0;
   m_sessionStartTime = std::chrono::steady_clock::now();
   m_lastSnapshotTime = m_sessionStartTime;

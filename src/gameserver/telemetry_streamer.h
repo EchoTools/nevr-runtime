@@ -51,7 +51,7 @@ class TelemetryStreamer {
   bool Connect(const std::string& uri);
 
   // Start streaming for a session. Launches the telemetry thread.
-  void Start(const std::string& sessionId, uint32_t rateHz = 10);
+  void Start(const std::string& sessionId, uint32_t rateHz = 30);
 
   // Stop streaming. Sends footer, joins telemetry thread.
   void Stop();
@@ -104,7 +104,7 @@ class TelemetryStreamer {
   std::thread m_thread;
   std::atomic<bool> m_active{false};
   std::atomic<bool> m_stopping{false};
-  uint32_t m_rateHz{10};
+  uint32_t m_rateHz{30};
   std::chrono::steady_clock::time_point m_lastSnapshotTime;
 
   // Diagnostics (game thread, 1Hz)

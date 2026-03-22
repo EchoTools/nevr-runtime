@@ -12,7 +12,7 @@ UINT32 g_headlessTickRateHz = 120;
 /// Whether telemetry streaming is enabled (default TRUE). Disabled by -notelemetry.
 BOOL g_telemetryEnabled = TRUE;
 /// Telemetry streaming rate in Hz (default 10). Set by -telemetryrate <N>.
-UINT32 g_telemetryRateHz = 10;
+UINT32 g_telemetryRateHz = 30;
 /// Telemetry diagnostic mode. Logs snapshot data instead of sending over WS.
 BOOL g_telemetryDiag = FALSE;
 /// Prefix all log lines with a high-resolution timestamp.
