@@ -83,3 +83,6 @@ cmake/codesign/selfsigned.key
 cmake/codesign/selfsigned.crt
 cmake/codesign/*.pfx
 cmake/codesign/*.p12
+
+# Git worktrees
+.worktrees/
