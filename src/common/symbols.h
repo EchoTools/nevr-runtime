@@ -54,6 +54,40 @@ constexpr SymbolId ProtobufJson = 0x59f3af95e7d44e72;
 // NEVR-specific protobuf JSON transport (for Nakama integration)
 constexpr SymbolId NEVRProtobufJSONMessageV1 = 0xc6b3710cd9c4ef47;
 
+// ============================================================================
+// Social / Friends (pnsrad SNS messages)
+// Source: echovr-reconstruction/src/pnsrad/Social/CNSRADFriends_protocol.h
+// ============================================================================
+
+namespace Social {
+
+// --- Friends outgoing (pnsrad → server, 3 unique hashes) ---
+constexpr SymbolId FriendSendInviteRequest   = 0x7f0d7a28de3c6f70;  // add_friend_by_id/name
+constexpr SymbolId FriendRemoveRequest       = 0x1bbcb7e810af4620;  // remove_friend (shared w/ Party Join)
+constexpr SymbolId FriendActionRequest       = 0x78908988b7fe6db4;  // accept/reject/block (shared w/ Party Leave)
+
+// --- Friends inbound (server → pnsrad, 12 callback hashes) ---
+constexpr SymbolId FriendListResponse        = 0xa78aeb2a4e89b10b;  // SNSFriendsListResponse (0x20)
+constexpr SymbolId FriendStatusNotify        = 0x26a19dc4d2d5579d;  // SNSFriendNotifyPayload (0x18)
+constexpr SymbolId FriendInviteSuccess       = 0x7f0c6a3ac83c6f77;  // SNSFriendIdPayload (0x10)
+constexpr SymbolId FriendInviteFailure       = 0x7f197e30c72c6e61;  // SNSFriendNotifyPayload (0x18)
+constexpr SymbolId FriendInviteNotify        = 0xca09b0b36bd981b7;  // SNSFriendIdPayload (0x10)
+constexpr SymbolId FriendAcceptSuccess       = 0x1bbda7fa06af4627;  // SNSFriendNotifyPayload (0x18)
+constexpr SymbolId FriendAddFailure          = 0x1ba8b3f009bf4731;  // SNSFriendNotifyPayload (0x18)
+constexpr SymbolId FriendAcceptNotify        = 0xc237c84c31d3ae05;  // SNSFriendNotifyPayload (0x18)
+constexpr SymbolId FriendBlockSuccess        = 0xc2bf83a08ea3a955;  // SNSFriendIdPayload (0x10)
+constexpr SymbolId FriendRemoveNotify        = 0xe06972f49cd72265;  // SNSFriendIdPayload (0x10)
+constexpr SymbolId FriendWithdrawnNotify     = 0x191aa30801ec6d03;  // SNSFriendIdPayload (0x10)
+constexpr SymbolId FriendRejectNotify        = 0xb9b86c0ce8e8d0c1;  // SNSFriendIdPayload (0x10)
+
+// --- Party outgoing (pnsrad → server) ---
+constexpr SymbolId PartyKickRequest          = 0xff02bf488e77bcba;  // SNSPartyTargetPayload (0x30)
+constexpr SymbolId PartyPassOwnershipRequest = 0x352f9d0e16001420;  // SNSPartyTargetPayload (0x30)
+constexpr SymbolId PartyRespondToInvite      = 0xeaf428c8a8a5cd2a;  // SNSPartyTargetPayload (0x30)
+constexpr SymbolId PartyMemberUpdate         = 0x0b7bd21332523994;  // variable
+
+}  // namespace Social
+
 namespace Tcp {
 
 // Registration (official symbols from EchoVR)

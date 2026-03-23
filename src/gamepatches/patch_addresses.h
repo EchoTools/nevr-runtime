@@ -123,6 +123,19 @@ constexpr uintptr_t HEADLESS_APPLY_GRAPHICS = 0x109209;
 constexpr size_t HEADLESS_APPLY_GRAPHICS_SIZE = 5;
 
 // ============================================================================
+// Server Global GameSpace Crash Fix
+// ============================================================================
+
+/// Address: CR15Game::InitializeGlobalGameSpace (0x140110ab0, 450 bytes)
+/// This client-side function searches for a player actor and CDialogueSceneCS
+/// in the global (menu) gamespace. In dedicated server mode there is no local
+/// player, so the actor lookup fails and the function calls the fatal error
+/// handler (ExitProcess(1) + int3). Hook this to return early in server mode,
+/// setting only the gamespace pointer (CR15Game+0x7AF0) which downstream code
+/// needs.
+constexpr uintptr_t INIT_GLOBAL_GAMESPACE = 0x110ab0;
+
+// ============================================================================
 // Other Patches
 // ============================================================================
 
@@ -188,6 +201,19 @@ constexpr size_t LOADING_TIP_SELECT_SIZE = 1;
 /// Patched to immediately return in server mode
 constexpr uintptr_t LOADING_TIP_SELECT_2 = 0xBE7C90;
 constexpr size_t LOADING_TIP_SELECT_2_SIZE = 1;
+
+// ============================================================================
+// Frame Pacing / Timing (PatchServerFramePacing)
+// ============================================================================
+
+/// Address: CPrecisionSleep::BusyWait (0x1401ce4c0, 112 bytes)
+/// Tight QPC + SwitchToThread loop for sub-ms frame timing precision.
+/// On Wine, SwitchToThread doesn't yield efficiently, burning ~35% CPU.
+/// Patch the first byte to RET (0xC3) — function returns immediately.
+/// The WaitableTimer phase in the caller still handles the bulk of the sleep;
+/// we only lose the final ~250μs of busy-wait precision per frame.
+constexpr uintptr_t PRECISION_SLEEP_BUSYWAIT = 0x1CE4C0;
+constexpr size_t PRECISION_SLEEP_BUSYWAIT_SIZE = 1;
 
 // ============================================================================
 // Game Structure Offsets
