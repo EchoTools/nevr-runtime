@@ -234,3 +234,7 @@ VOID WebSocketClient::ProcessReceivedMessages() {
     }
   }
 }
+
+VOID WebSocketClient::DisableReconnection() {
+  if (webSocket_) webSocket_->disableAutomaticReconnection();
+}
