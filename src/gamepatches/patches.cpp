@@ -9,6 +9,7 @@
 #include "common/globals.h"
 #include "common/hooking.h"
 #include "common/logging.h"
+#include "common/symbols.h"
 #include "process_mem.h"
 
 #ifdef USE_MINHOOK
@@ -79,14 +80,18 @@ HWND g_hWindow = NULL;
 EchoVR::Json* g_localConfig = NULL;
 
 /// <summary>
+/// The game instance pointer — stored globally for social message injection.
+/// Set during PreprocessCommandLineHook, used to navigate to the broadcaster.
+/// Path: pGame + 0x8518 → CR15NetGame → lobby → +0x008 → Broadcaster*
+/// </summary>
+PVOID g_pGame = NULL;
+
+/// <summary>
 /// A timestep value in ticks/updates per second, to be used for headless mode (due to lack of GPU/refresh rate
 /// throttling). If non-zero, sets the timestep override by the given tick rate per second. If zero, removes tick rate
 /// throttling.
 /// </summary>
 UINT32 g_headlessTimeStep = 120;
-
-/// Pointer to the game instance, captured in PreprocessCommandLineHook for cross-DLL use.
-static PVOID g_pGame = nullptr;
 
 /// Layout must match the declaration in gameserver.cpp (used via GetProcAddress).
 struct NevRUPnPConfig {
@@ -392,6 +397,29 @@ VOID PatchDisableLoadingTips() {
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Disabled loading tips system for server mode");
 }
 
+// ============================================================================
+// InitializeGlobalGameSpace hook — skip client-only setup in server mode
+// ============================================================================
+
+/// Original function: CR15Game::InitializeGlobalGameSpace @ 0x140110ab0
+/// Signature: void(CR15Game* this, void* gamespace, ...)
+/// In server mode, the global gamespace has no player actor or CDialogueSceneCS.
+/// The original function fatals if either is missing. We set the gamespace pointer
+/// (CR15Game+0x7AF0) that downstream code depends on, then return early.
+typedef VOID InitializeGlobalGameSpaceFunc(PVOID pGame, PVOID pGameSpace);
+InitializeGlobalGameSpaceFunc* OriginalInitializeGlobalGameSpace = nullptr;
+
+VOID InitializeGlobalGameSpaceHook(PVOID pGame, PVOID pGameSpace) {
+  if (g_isServer) {
+    // Set the global gamespace pointer — downstream code reads this
+    *(PVOID*)((CHAR*)pGame + 0x7AF0) = pGameSpace;
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] InitializeGlobalGameSpace skipped in server mode (no local player actor needed)");
+    return;
+  }
+  OriginalInitializeGlobalGameSpace(pGame, pGameSpace);
+}
+
 /// <summary>
 /// Patches the game to run as a dedicated server, exposing its game server broadcast port, adjusting its log file path.
 /// </summary>
@@ -585,6 +613,289 @@ VOID PatchDisableWwise() {
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] VOIP components preserved for multiplayer");
 }
 
+// ===================================================================================================
+// Social Features — pnsrad SNS ↔ Nakama bridge
+// ===================================================================================================
+
+#include "social_messages.h"
+#include "nakama_client.h"
+
+namespace SocialSym = EchoVR::Symbols::Social;
+
+// Global Nakama client for social feature bridge
+static NakamaClient* g_nakamaClient = nullptr;
+
+/// Get the UDP broadcaster from the global game context.
+/// Path: g_GameBaseAddress + 0x20a0478 → game_context → +0x8518 → CR15NetGame
+///       → +0x28C8 → BroadcasterData → +0x08 → Broadcaster*
+/// Offsets from: CR15NetGameLayout.h, telemetry_snapshot.h, echovr.h
+/// Returns nullptr if not yet initialized.
+EchoVR::Broadcaster* GetBroadcasterFromGame() {
+  CHAR* base = EchoVR::g_GameBaseAddress;
+  if (!base) return nullptr;
+
+  // Get global game context (DAT_1420a0478)
+  VOID** ctxPtr = reinterpret_cast<VOID**>(base + 0x20a0478);
+  if (!ctxPtr || !*ctxPtr) return nullptr;
+
+  // CR15NetGame = *(context + 0x8518)
+  VOID** netGamePtr = reinterpret_cast<VOID**>(static_cast<CHAR*>(*ctxPtr) + 0x8518);
+  if (!netGamePtr || !*netGamePtr) return nullptr;
+
+  // CR15NetGame + 0x28C8 = SBroadcasterData (inline)
+  // SBroadcasterData + 0x08 = Broadcaster* owner
+  CHAR* netGame = static_cast<CHAR*>(*netGamePtr);
+  EchoVR::Broadcaster** ownerPtr = reinterpret_cast<EchoVR::Broadcaster**>(netGame + 0x28C8 + 0x08);
+  if (!ownerPtr || !*ownerPtr) return nullptr;
+
+  return *ownerPtr;
+}
+
+// Forward declarations for social functions
+static void RefreshFriendsList();
+VOID SendPlaceholderFriendsList();
+
+/// Send an SNS response back to pnsrad via BroadcasterReceiveLocalEvent.
+static void SendSocialResponse(EchoVR::SymbolId hash, const char* name, void* payload, uint64_t size) {
+  EchoVR::Broadcaster* broadcaster = GetBroadcasterFromGame();
+  if (!broadcaster) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] Cannot send %s — broadcaster unavailable", name);
+    return;
+  }
+  EchoVR::BroadcasterReceiveLocalEvent(broadcaster, hash, name, payload, size);
+}
+
+/// Forward a friend action to Nakama and send the appropriate SNS response.
+static void HandleFriendAction(EchoVR::SymbolId msgId, const SNSFriendsActionPayload* payload) {
+  if (!g_nakamaClient || !g_nakamaClient->IsAuthenticated()) {
+    Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL] Nakama not connected — friend action ignored");
+    return;
+  }
+
+  std::string targetId = std::to_string(payload->target_user_id);
+
+  if (msgId == SocialSym::FriendSendInviteRequest) {
+    // Add friend by ID (or by name if target_user_id == 0)
+    bool ok = (payload->target_user_id != 0)
+        ? g_nakamaClient->AddFriend(targetId)
+        : false;  // TODO: add_by_name needs name string from after payload
+
+    // Send InviteSuccess or InviteFailure
+    if (ok) {
+      SNSFriendIdPayload resp = {};
+      resp.friend_id = payload->target_user_id;
+      SendSocialResponse(SocialSym::FriendInviteSuccess, "SNSFriendInviteSuccess", &resp, sizeof(resp));
+    } else {
+      SNSFriendNotifyPayload resp = {};
+      resp.friend_id = payload->target_user_id;
+      resp.status_code = static_cast<uint8_t>(EFriendInviteError::NotFound);
+      SendSocialResponse(SocialSym::FriendInviteFailure, "SNSFriendInviteFailure", &resp, sizeof(resp));
+    }
+
+  } else if (msgId == SocialSym::FriendRemoveRequest) {
+    g_nakamaClient->DeleteFriend(targetId);
+    SNSFriendIdPayload resp = {};
+    resp.friend_id = payload->target_user_id;
+    SendSocialResponse(SocialSym::FriendRemoveNotify, "SNSFriendRemoveNotify", &resp, sizeof(resp));
+
+  } else if (msgId == SocialSym::FriendActionRequest) {
+    // Accept, reject, or block — server differentiates by state.
+    // For now, treat all FriendActionRequest as "accept" (most common UI action).
+    // TODO: differentiate based on pnsrad's internal state for the target user.
+    bool ok = g_nakamaClient->AddFriend(targetId);
+    if (ok) {
+      SNSFriendNotifyPayload resp = {};
+      resp.friend_id = payload->target_user_id;
+      SendSocialResponse(SocialSym::FriendAcceptSuccess, "SNSFriendAcceptSuccess", &resp, sizeof(resp));
+    }
+  }
+
+  // Refresh friend list after any action
+  RefreshFriendsList();
+}
+
+/// Fetch friends from Nakama and send updated ListResponse to pnsrad.
+static void RefreshFriendsList() {
+  if (!g_nakamaClient || !g_nakamaClient->IsAuthenticated()) {
+    SendPlaceholderFriendsList();
+    return;
+  }
+
+  std::vector<NakamaFriend> friends;
+  if (!g_nakamaClient->ListFriends(-1, friends)) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] Failed to fetch friends from Nakama");
+    SendPlaceholderFriendsList();
+    return;
+  }
+
+  // Count by state and online status
+  uint32_t nonline = 0, noffline = 0, nbusy = 0, nsent = 0, nrecv = 0;
+  for (const auto& f : friends) {
+    switch (f.state) {
+      case 0:  // friend
+        if (f.online) nonline++;
+        else noffline++;
+        break;
+      case 1: nsent++; break;     // invite sent
+      case 2: nrecv++; break;     // invite received
+      case 3: break;              // blocked — don't count
+    }
+  }
+
+  SNSFriendsListResponse response = {};
+  response.nonline = nonline;
+  response.noffline = noffline;
+  response.nbusy = nbusy;
+  response.nsent = nsent;
+  response.nrecv = nrecv;
+
+  SendSocialResponse(SocialSym::FriendListResponse, "SNSFriendsListResponse", &response, sizeof(response));
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Friends list: online=%u offline=%u sent=%u recv=%u (total %zu)",
+      nonline, noffline, nsent, nrecv, friends.size());
+}
+
+/// Log handler for intercepted social SNS messages from pnsrad.
+VOID __fastcall OnSocialMessage(PVOID pGame, EchoVR::SymbolId msgId, PVOID msg, UINT64 msgSize) {
+  const char* name = "unknown";
+
+  // Friends outgoing
+  if (msgId == SocialSym::FriendSendInviteRequest) name = "FriendSendInviteRequest";
+  else if (msgId == SocialSym::FriendRemoveRequest) name = "FriendRemoveRequest";
+  else if (msgId == SocialSym::FriendActionRequest) name = "FriendActionRequest";
+  // Party outgoing
+  else if (msgId == SocialSym::PartyKickRequest) name = "PartyKickRequest";
+  else if (msgId == SocialSym::PartyPassOwnershipRequest) name = "PartyPassOwnershipRequest";
+  else if (msgId == SocialSym::PartyRespondToInvite) name = "PartyRespondToInvite";
+  else if (msgId == SocialSym::PartyMemberUpdate) name = "PartyMemberUpdate";
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] SNS message: %s (hash=0x%llx, size=%llu)",
+      name, (unsigned long long)msgId, (unsigned long long)msgSize);
+
+  // Log hex payload for debugging
+  if (msg && msgSize > 0 && msgSize <= 0x30) {
+    const BYTE* bytes = static_cast<const BYTE*>(msg);
+    CHAR hex[256] = {0};
+    for (UINT64 i = 0; i < msgSize && i < 48; i++) {
+      sprintf(hex + i * 3, "%02x ", bytes[i]);
+    }
+    Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL]   payload: %s", hex);
+  }
+
+  // Forward friend actions to Nakama
+  if (msgSize == sizeof(SNSFriendsActionPayload) &&
+      (msgId == SocialSym::FriendSendInviteRequest ||
+       msgId == SocialSym::FriendRemoveRequest ||
+       msgId == SocialSym::FriendActionRequest)) {
+    const auto* payload = static_cast<const SNSFriendsActionPayload*>(msg);
+    Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL]   routing_id=0x%llx target_user_id=%llu",
+        (unsigned long long)payload->routing_id, (unsigned long long)payload->target_user_id);
+    HandleFriendAction(msgId, payload);
+  }
+
+  // Log party actions with target payload details
+  if (msgSize == sizeof(SNSPartyTargetPayload) &&
+      (msgId == SocialSym::PartyKickRequest ||
+       msgId == SocialSym::PartyPassOwnershipRequest ||
+       msgId == SocialSym::PartyRespondToInvite)) {
+    const auto* payload = static_cast<const SNSPartyTargetPayload*>(msg);
+    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL]   party action: session=0x%llx param=%u",
+        (unsigned long long)payload->session_guid, payload->param);
+    // TODO Phase 5: Forward to Nakama party API
+  }
+
+  // Log party payload details (shared hashes with friends use 0x28 SNSPartyPayload)
+  if (msgSize == sizeof(SNSPartyPayload) &&
+      (msgId == SocialSym::FriendSendInviteRequest ||
+       msgId == SocialSym::FriendRemoveRequest ||
+       msgId == SocialSym::FriendActionRequest)) {
+    const auto* payload = static_cast<const SNSPartyPayload*>(msg);
+    Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL]   party/friend shared: routing=0x%llx target=0x%llx",
+        (unsigned long long)payload->routing_id, (unsigned long long)payload->target_param);
+  }
+}
+
+/// Helper: register a broadcaster listener with a callback function.
+static UINT16 ListenSocial(EchoVR::Broadcaster* broadcaster, EchoVR::SymbolId msgId, VOID* func) {
+  EchoVR::DelegateProxy proxy = {};
+  proxy.method[0] = 0xFFFFFFFFFFFFFFFF;  // DELEGATE_PROXY_INVALID_METHOD
+  proxy.instance = g_pGame;
+  proxy.proxyFunc = func;
+  return EchoVR::BroadcasterListen(broadcaster, msgId, TRUE, &proxy, true);
+}
+
+/// Register listeners for social SNS messages to log and intercept them.
+/// Called when the game enters Lobby state (broadcaster is available by then).
+VOID RegisterSocialListeners() {
+  EchoVR::Broadcaster* broadcaster = GetBroadcasterFromGame();
+  if (!broadcaster) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] Broadcaster not available — social listeners skipped");
+    return;
+  }
+
+  int count = 0;
+
+  // Register for friends outgoing messages
+  if (ListenSocial(broadcaster, SocialSym::FriendSendInviteRequest, reinterpret_cast<VOID*>(OnSocialMessage))) count++;
+  if (ListenSocial(broadcaster, SocialSym::FriendRemoveRequest, reinterpret_cast<VOID*>(OnSocialMessage))) count++;
+  if (ListenSocial(broadcaster, SocialSym::FriendActionRequest, reinterpret_cast<VOID*>(OnSocialMessage))) count++;
+
+  // Register for party outgoing messages
+  if (ListenSocial(broadcaster, SocialSym::PartyKickRequest, reinterpret_cast<VOID*>(OnSocialMessage))) count++;
+  if (ListenSocial(broadcaster, SocialSym::PartyPassOwnershipRequest, reinterpret_cast<VOID*>(OnSocialMessage))) count++;
+  if (ListenSocial(broadcaster, SocialSym::PartyRespondToInvite, reinterpret_cast<VOID*>(OnSocialMessage))) count++;
+  if (ListenSocial(broadcaster, SocialSym::PartyMemberUpdate, reinterpret_cast<VOID*>(OnSocialMessage))) count++;
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Registered %d social message listeners", count);
+}
+
+/// Send a placeholder friends list response to pnsrad via the broadcaster.
+/// This populates pnsrad's internal friend counts so the friends UI renders.
+VOID SendPlaceholderFriendsList() {
+  EchoVR::Broadcaster* broadcaster = GetBroadcasterFromGame();
+  if (!broadcaster) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] Cannot send placeholder friends — broadcaster unavailable");
+    return;
+  }
+
+  // Send a ListResponse with placeholder counts
+  SNSFriendsListResponse response = {};
+  response.header = 0;          // SNS correlation
+  response.nonline = 3;         // 3 online friends
+  response.noffline = 1;        // 1 offline friend
+  response.nbusy = 0;
+  response.nsent = 0;
+  response.nrecv = 1;           // 1 pending friend request
+  response.reserved = 0;
+
+  EchoVR::BroadcasterReceiveLocalEvent(
+      broadcaster,
+      SocialSym::FriendListResponse,
+      "SNSFriendsListResponse",
+      &response,
+      sizeof(response));
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Sent placeholder friends list (online=%u, offline=%u, pending=%u)",
+      response.nonline, response.noffline, response.nrecv);
+}
+
+// ===================================================================================================
+// Server Frame Pacing Optimization
+// ===================================================================================================
+
+/// Patch CPrecisionSleep::BusyWait to return immediately.
+/// The CALL from CPrecisionSleep::Wait still executes normally (clean stack),
+/// but the busy-wait function itself is a no-op. The WaitableTimer phase in
+/// the caller handles the bulk sleep; we only lose ~250μs of precision per frame.
+VOID PatchServerFramePacing() {
+  const BYTE ret[] = {0xC3};  // RET
+  static_assert(sizeof(ret) == PatchAddresses::PRECISION_SLEEP_BUSYWAIT_SIZE,
+                "PRECISION_SLEEP_BUSYWAIT patch size mismatch");
+  ApplyPatch(PatchAddresses::PRECISION_SLEEP_BUSYWAIT, ret, sizeof(ret));
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CPrecisionSleep::BusyWait patched to RET (Wine CPU optimization)");
+}
+
 /// <summary>
 /// Disables renderer, effects, and audio for dedicated server mode.
 /// These are the same core patches from PatchEnableHeadless() minus console/log hooks.
@@ -678,6 +989,44 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     }
   }
 
+  // Initialize social features when entering lobby (broadcaster is available by now)
+  static BOOL g_socialInitialized = FALSE;
+  if (!g_socialInitialized && state == EchoVR::NetGameState::Lobby) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Entering lobby — initializing social features");
+
+    // Configure Nakama client from config.json
+    if (!g_nakamaClient) {
+      g_nakamaClient = new NakamaClient();
+    }
+    if (g_localConfig) {
+      CHAR* nakamaUrl = EchoVR::JsonValueAsString(
+          const_cast<EchoVR::Json*>(g_localConfig), const_cast<CHAR*>("nakama_url"), nullptr, false);
+      CHAR* nakamaHttpKey = EchoVR::JsonValueAsString(
+          const_cast<EchoVR::Json*>(g_localConfig), const_cast<CHAR*>("nakama_http_key"), nullptr, false);
+      CHAR* nakamaServerKey = EchoVR::JsonValueAsString(
+          const_cast<EchoVR::Json*>(g_localConfig), const_cast<CHAR*>("nakama_server_key"), nullptr, false);
+      CHAR* nakamaUsername = EchoVR::JsonValueAsString(
+          const_cast<EchoVR::Json*>(g_localConfig), const_cast<CHAR*>("nakama_username"), nullptr, false);
+      CHAR* nakamaPassword = EchoVR::JsonValueAsString(
+          const_cast<EchoVR::Json*>(g_localConfig), const_cast<CHAR*>("nakama_password"), nullptr, false);
+
+      if (nakamaUrl && nakamaHttpKey && nakamaServerKey && nakamaUsername && nakamaPassword) {
+        g_nakamaClient->Configure(nakamaUrl, nakamaHttpKey, nakamaServerKey, nakamaUsername, nakamaPassword);
+        if (g_nakamaClient->Authenticate()) {
+          Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Nakama authenticated — friends system active");
+        } else {
+          Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] Nakama auth failed — using placeholder data");
+        }
+      } else {
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Nakama not configured (missing config keys) — using placeholders");
+      }
+    }
+
+    RegisterSocialListeners();
+    RefreshFriendsList();  // Uses Nakama if authenticated, else placeholder
+    g_socialInitialized = TRUE;
+  }
+
   // Call the original function
   EchoVR::NetGameSwitchState(pGame, state);
 }
@@ -746,8 +1095,6 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
 /// </summary>
 /// <param name="pGame">A pointer to the game instance.</param>
 UINT64 PreprocessCommandLineHook(PVOID pGame) {
-  g_pGame = pGame;
-
   // Parse command line arguments.
   int argc = 0;
   LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -816,6 +1163,9 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     FatalError("The -noconsole flag requires -headless to be specified.", NULL);
   }
 
+  // Store the game pointer globally for social feature access
+  g_pGame = pGame;
+
   // Apply patches based on arguments.
   if (g_isOffline) {
     PatchEnableOffline();
@@ -842,6 +1192,12 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     PatchBlockOculusSDK();
     PatchDisableWwise();
     PatchLogServerProfile();
+
+    // Replace CPrecisionSleep's QPC busy-wait with Wine-friendly Sleep().
+    // Only for headless servers — clients need precise frame timing for VR rendering.
+    if (g_isHeadless) {
+      PatchServerFramePacing();
+    }
   }
 
   // Update the window title
@@ -1637,6 +1993,13 @@ VOID Initialize() {
   } else {
     Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load ole32.dll for WinHTTP hook");
   }
+
+  // Hook InitializeGlobalGameSpace to prevent fatal crash in server mode
+  // (no local player actor exists in the global gamespace for dedicated servers)
+  OriginalInitializeGlobalGameSpace =
+      (InitializeGlobalGameSpaceFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::INIT_GLOBAL_GAMESPACE);
+  PatchDetour(&OriginalInitializeGlobalGameSpace, reinterpret_cast<PVOID>(InitializeGlobalGameSpaceHook));
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] InitializeGlobalGameSpace hook installed (server crash fix)");
 
   // Note: WebSocket CreatePeer hook requires vtable hooking, which is complex.
   // For now, DNS/routing overrides should be used for WebSocket endpoint redirection.
