@@ -1010,15 +1010,35 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
       CHAR* nakamaPassword = EchoVR::JsonValueAsString(
           const_cast<EchoVR::Json*>(g_localConfig), const_cast<CHAR*>("nakama_password"), nullptr, false);
 
-      if (nakamaUrl && nakamaHttpKey && nakamaServerKey && nakamaUsername && nakamaPassword) {
-        g_nakamaClient->Configure(nakamaUrl, nakamaHttpKey, nakamaServerKey, nakamaUsername, nakamaPassword);
-        if (g_nakamaClient->Authenticate()) {
-          Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Nakama authenticated — friends system active");
-        } else {
-          Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] Nakama auth failed — using placeholder data");
+      if (nakamaUrl && nakamaHttpKey) {
+        // Configure with whatever we have
+        g_nakamaClient->Configure(
+            nakamaUrl, nakamaHttpKey,
+            nakamaServerKey ? nakamaServerKey : "",
+            nakamaUsername ? nakamaUsername : "",
+            nakamaPassword ? nakamaPassword : "");
+
+        bool authenticated = false;
+
+        // Try password auth if credentials are available
+        if (nakamaUsername && nakamaPassword && nakamaServerKey) {
+          authenticated = g_nakamaClient->Authenticate();
+          if (authenticated) {
+            Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Nakama authenticated via password");
+          }
+        }
+
+        // Fall back to device code auth flow
+        if (!authenticated && !g_isServer) {
+          Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Starting device code authentication...");
+          authenticated = g_nakamaClient->RunDeviceAuthFlow();
+        }
+
+        if (!authenticated) {
+          Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] Not authenticated — social features using placeholders");
         }
       } else {
-        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Nakama not configured (missing config keys) — using placeholders");
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Nakama not configured (need nakama_url + nakama_http_key) — using placeholders");
       }
     }
 

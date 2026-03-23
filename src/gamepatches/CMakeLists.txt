@@ -1,7 +1,7 @@
 # Game Patches uses MinHook for function hooking
 # MinHook is built from extern/minhook
-set(PATCHES_SOURCES "dllmain.cpp" "patches.cpp" "winhttp_stub.cpp")
-set(PATCHES_HEADERS "patches.h" "winhttp_stub.h")
+set(PATCHES_SOURCES "dllmain.cpp" "patches.cpp" "winhttp_stub.cpp" "nakama_client.cpp")
+set(PATCHES_HEADERS "patches.h" "winhttp_stub.h" "nakama_client.h" "social_messages.h")
 
 add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
                                "exports.def")
