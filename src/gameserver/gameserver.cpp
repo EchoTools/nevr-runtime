@@ -11,7 +11,37 @@
 #include "globals.h"
 #include "messages.h"
 #include "pch.h"
+#include "upnp.h"
 #include "gameservice/v1/gameservice.pb.h"
+
+/// Must match NevRUPnPConfig in patches.cpp (cross-DLL ABI contract).
+struct NevRUPnPConfig {
+  BOOL   enabled;
+  UINT16 port;
+  CHAR   internalIp[46];
+  CHAR   externalIp[46];
+};
+
+/// Read UPnP config from gamepatches.dll via GetProcAddress.
+/// Returns false if the export is unavailable (e.g. gamepatches not loaded).
+static bool ReadUPnPConfig(NevRUPnPConfig& out) {
+  HMODULE hPatches = GetModuleHandleA("dbgcore.dll");
+  if (!hPatches) return false;
+  using Fn = void(NevRUPnPConfig*);
+  auto* fn = reinterpret_cast<Fn*>(GetProcAddress(hPatches, "NEVR_GetUPnPConfig"));
+  if (!fn) return false;
+  fn(&out);
+  return true;
+}
+
+/// Ask gamepatches.dll to call NetGameScheduleReturnToLobby(g_pGame).
+static void CallScheduleReturnToLobby() {
+  HMODULE hPatches = GetModuleHandleA("dbgcore.dll");
+  if (!hPatches) return;
+  using Fn = void();
+  auto* fn = reinterpret_cast<Fn*>(GetProcAddress(hPatches, "NEVR_ScheduleReturnToLobby"));
+  if (fn) fn();
+}
 
 using namespace GameServer;
 
@@ -1043,14 +1073,36 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   }
 
   sockaddr_in gameServerAddr = *reinterpret_cast<sockaddr_in*>(&broadcaster->data->addr);
+  uint16_t broadcasterPort = broadcaster->data->broadcastSocketInfo.port;
+
+  // Resolve IP addresses and apply UPnP / config overrides
+  std::string internalIp = Ipv4ToString(gameServerAddr.sin_addr.S_un.S_addr);
+  std::string externalIp;  // empty = let UPnP fill it, or falls back to internalIp
+
+  NevRUPnPConfig upnpCfg = {};
+  if (ReadUPnPConfig(upnpCfg)) {
+    if (upnpCfg.internalIp[0] != '\0') internalIp = upnpCfg.internalIp;
+    if (upnpCfg.externalIp[0] != '\0') externalIp = upnpCfg.externalIp;
+
+    if (upnpCfg.enabled) {
+      uint16_t extPort = (upnpCfg.port != 0) ? upnpCfg.port : broadcasterPort;
+      if (UPnPHelper::OpenPort(broadcasterPort, extPort, externalIp)) {
+        broadcasterPort = extPort;
+      } else {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] UPnP port mapping failed — using raw broadcaster port");
+      }
+    }
+  }
+
+  if (externalIp.empty()) externalIp = internalIp;
 
   // Build protobuf registration request
   gameservice::v1::Envelope envelope;
   auto* registration = envelope.mutable_game_server_registration();
   registration->set_login_session_id(GuidToUuidString(state.loginSessionId));
   registration->set_server_id(static_cast<uint64_t>(serverId));
-  registration->set_internal_ip_address(Ipv4ToString(gameServerAddr.sin_addr.S_un.S_addr));
-  registration->set_port(static_cast<uint32_t>(broadcaster->data->broadcastSocketInfo.port));
+  registration->set_internal_ip_address(externalIp);  // public-facing IP
+  registration->set_port(static_cast<uint32_t>(broadcasterPort));
   registration->set_region(regionId);
   registration->set_version_lock(versionLock);
   registration->set_time_step_usecs(state.defaultTimeStepUsecs);
@@ -1083,6 +1135,9 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 }
 
 VOID GameServerLib::Unregister() {
+  // Remove UPnP port mapping if we added one
+  UPnPHelper::ClosePort();
+
   // Disconnect telemetry before unregistering
   if (m_telemetry) {
     m_telemetry->Stop();
