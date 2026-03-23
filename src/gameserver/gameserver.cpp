@@ -405,6 +405,11 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
       const auto& error = envelope.error();
       Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Received error via protobuf: code=%d, msg=%s", error.code(),
           error.message().c_str());
+      // If we receive an error before registration succeeds, treat it as a registration failure.
+      if (g_exitOnError && !self->GetContext().IsRegistered()) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Error received before registration — shutting down");
+        self->BeginGracefulShutdown(true);
+      }
       break;
     }
 
@@ -1004,29 +1009,14 @@ VOID GameServerLib::Update() {
     m_telemetry->RunDiagnostics();
   }
 
-  // -exitonerror: detect serverdb disconnect and exit (immediately or deferred)
+  // -exitonerror: detect serverdb disconnect and trigger graceful shutdown
   if (g_exitOnError && m_wsClient && !s_exitPending) {
     bool nowConnected = m_wsClient->IsConnected();
     if (s_wasConnectedToServerDb && !nowConnected) {
       s_exitPending = true;
-      if (!m_context->IsSessionActive()) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] ServerDB disconnected with -exitonerror and no active round -- exiting");
-        exit(1);
-      } else {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] ServerDB disconnected with -exitonerror -- round active, will exit at round end + 30s");
-        auto* ctx = m_context.get();
-        std::thread([ctx]() {
-          while (ctx->IsSessionActive()) {
-            Sleep(1000);
-          }
-          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Round ended -- waiting 30s grace period before exit");
-          Sleep(30000);
-          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Grace period elapsed -- exiting");
-          exit(1);
-        }).detach();
-      }
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.GAMESERVER] ServerDB disconnected with -exitonerror -- beginning graceful shutdown");
+      BeginGracefulShutdown(false);
     }
     s_wasConnectedToServerDb = nowConnected;
   }
@@ -1043,6 +1033,49 @@ VOID GameServerLib::Update() {
 
 VOID GameServerLib::UnkFunc1(UINT64) {
   // Called prior to Initialize, purpose unknown
+}
+
+void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
+  // Prevent further reconnection attempts so the next disconnect is final.
+  if (m_wsClient) m_wsClient->DisableReconnection();
+
+  if (registrationFailed) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.GAMESERVER] Registration rejected — shutting down");
+  }
+
+  auto* self = this;
+  std::thread([self, registrationFailed]() {
+    constexpr DWORD kMaxWaitMs   = 20 * 60 * 1000;  // 20 minutes
+    constexpr DWORD kGraceMs     = 10 * 1000;        // 10 seconds after round end
+    constexpr DWORD kPollMs      = 1000;
+
+    if (!registrationFailed && self->GetContext().IsSessionActive()) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.GAMESERVER] Round active — calling ScheduleReturnToLobby, waiting up to 20 min for it to end");
+      CallScheduleReturnToLobby();
+
+      DWORD waited = 0;
+      while (self->GetContext().IsSessionActive() && waited < kMaxWaitMs) {
+        Sleep(kPollMs);
+        waited += kPollMs;
+      }
+
+      if (self->GetContext().IsSessionActive()) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Round did not end within 20 min — forcing shutdown");
+      } else {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.GAMESERVER] Round ended — waiting %lu ms grace period", kGraceMs);
+        Sleep(kGraceMs);
+      }
+    }
+
+    self->EndSession();
+    self->Unregister();
+
+    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Graceful shutdown complete — exiting");
+    ExitProcess(0);
+  }).detach();
 }
 
 VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId regionId, EchoVR::SymbolId versionLock,

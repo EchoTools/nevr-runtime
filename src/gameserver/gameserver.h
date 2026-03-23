@@ -51,6 +51,11 @@ class GameServerLib : public EchoVR::IServerLib {
   void RegisterBroadcasterCallbacks();
   void RegisterTcpCallbacks();
   void UnregisterAllCallbacks();
+
+  /// Initiate graceful shutdown: disable reconnection, wait for round end (if active),
+  /// send EndSession, call Unregister, then ExitProcess(0).
+  /// @param registrationFailed  true if we're shutting down because registration was rejected.
+  void BeginGracefulShutdown(bool registrationFailed);
 };
 
 // Logging helper (uses game's logging system)
