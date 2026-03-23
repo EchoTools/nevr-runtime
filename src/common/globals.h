@@ -28,3 +28,7 @@ extern BOOL g_telemetryEnabled;
 extern UINT32 g_telemetryRateHz;
 extern BOOL g_telemetryDiag;
 extern BOOL g_timestampLogs;
+extern BOOL g_upnpEnabled;
+extern UINT16 g_upnpPort;
+extern CHAR g_internalIpOverride[46];
+extern CHAR g_externalIpOverride[46];

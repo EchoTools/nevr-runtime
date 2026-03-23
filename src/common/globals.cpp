@@ -17,3 +17,11 @@ UINT32 g_telemetryRateHz = 30;
 BOOL g_telemetryDiag = FALSE;
 /// Prefix all log lines with a high-resolution timestamp.
 BOOL g_timestampLogs = FALSE;
+/// Whether UPnP port forwarding is enabled. Set by -upnp or config "upnp".
+BOOL g_upnpEnabled = FALSE;
+/// External UPnP port override (0 = use broadcaster port). Set by config "upnp_port".
+UINT16 g_upnpPort = 0;
+/// Internal IP override for registration (empty = auto). Set by config "internal_ip".
+CHAR g_internalIpOverride[46] = {};
+/// External IP override for registration (empty = auto). Set by config "external_ip".
+CHAR g_externalIpOverride[46] = {};
