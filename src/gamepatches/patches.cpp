@@ -85,6 +85,17 @@ EchoVR::Json* g_localConfig = NULL;
 /// </summary>
 UINT32 g_headlessTimeStep = 120;
 
+/// Pointer to the game instance, captured in PreprocessCommandLineHook for cross-DLL use.
+static PVOID g_pGame = nullptr;
+
+/// Layout must match the declaration in gameserver.cpp (used via GetProcAddress).
+struct NevRUPnPConfig {
+  BOOL   enabled;
+  UINT16 port;
+  CHAR   internalIp[46];
+  CHAR   externalIp[46];
+};
+
 /// <summary>
 /// Reports a fatal error with a message box, then exits the game.
 /// </summary>
@@ -723,6 +734,10 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgHelpString(pArgSyntax, "-timestamps",
                            "[NEVR] Prefix all log lines with high-resolution timestamps");
 
+  EchoVR::AddArgSyntax(pArgSyntax, "-upnp", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-upnp",
+                           "[NEVR] Enable UPnP port forwarding for the broadcaster UDP port");
+
   return result;
 }
 
@@ -731,6 +746,8 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
 /// </summary>
 /// <param name="pGame">A pointer to the game instance.</param>
 UINT64 PreprocessCommandLineHook(PVOID pGame) {
+  g_pGame = pGame;
+
   // Parse command line arguments.
   int argc = 0;
   LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -766,6 +783,8 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       g_telemetryDiag = TRUE;
     } else if (lstrcmpW(arg, L"-timestamps") == 0) {
       g_timestampLogs = TRUE;
+    } else if (lstrcmpW(arg, L"-upnp") == 0) {
+      g_upnpEnabled = TRUE;
     } else if (lstrcmpW(arg, L"-timestep") == 0) {
       if (i + 1 < argc) {
         g_headlessTimeStep = std::wcstoul(argv[i + 1], nullptr, 10);
@@ -901,6 +920,37 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
     if (customCdnUrl != NULL && customCdnUrl[0] != '\0') {
       // AssetCDN::SetCustomCdnUrl(customCdnUrl);
       // Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Asset CDN URL set from config: %s", customCdnUrl);
+    }
+
+    // exitonerror
+    CHAR* exitOnErrorVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"exitonerror", NULL, false);
+    if (exitOnErrorVal != NULL && (strcmp(exitOnErrorVal, "true") == 0 || strcmp(exitOnErrorVal, "1") == 0)) {
+      g_exitOnError = TRUE;
+    }
+
+    // upnp
+    CHAR* upnpVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"upnp", NULL, false);
+    if (upnpVal != NULL && (strcmp(upnpVal, "true") == 0 || strcmp(upnpVal, "1") == 0)) {
+      g_upnpEnabled = TRUE;
+    }
+
+    // upnp_port (external port override)
+    CHAR* upnpPortVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"upnp_port", NULL, false);
+    if (upnpPortVal != NULL && upnpPortVal[0] != '\0') {
+      UINT32 port = strtoul(upnpPortVal, nullptr, 10);
+      if (port > 0 && port <= 65535) g_upnpPort = (UINT16)port;
+    }
+
+    // internal_ip override
+    CHAR* internalIpVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"internal_ip", NULL, false);
+    if (internalIpVal != NULL && internalIpVal[0] != '\0') {
+      strncpy(g_internalIpOverride, internalIpVal, sizeof(g_internalIpOverride) - 1);
+    }
+
+    // external_ip override
+    CHAR* externalIpVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"external_ip", NULL, false);
+    if (externalIpVal != NULL && externalIpVal[0] != '\0') {
+      strncpy(g_externalIpOverride, externalIpVal, sizeof(g_externalIpOverride) - 1);
     }
   }
 
@@ -1632,4 +1682,23 @@ VOID Initialize() {
   // (PreprocessCommandLineHook), so g_isServer/g_isHeadless aren't set yet. The deadlock
   // monitor is harmful in all Wine/headless scenarios and benign to disable on clients.
   PatchDeadlockMonitor();
+}
+
+// ============================================================================
+// Cross-DLL exports (called by gameserver.dll via GetProcAddress)
+// ============================================================================
+
+/// Schedules a return to lobby via the game engine. No-op if pGame is not yet set.
+extern "C" __declspec(dllexport) void NEVR_ScheduleReturnToLobby() {
+  if (g_pGame) EchoVR::NetGameScheduleReturnToLobby(g_pGame);
+}
+
+/// Fills *out with the current UPnP configuration globals.
+/// Layout must match NevRUPnPConfig in gameserver.cpp.
+extern "C" __declspec(dllexport) void NEVR_GetUPnPConfig(NevRUPnPConfig* out) {
+  if (!out) return;
+  out->enabled = g_upnpEnabled;
+  out->port    = g_upnpPort;
+  memcpy(out->internalIp, g_internalIpOverride, sizeof(out->internalIp));
+  memcpy(out->externalIp, g_externalIpOverride, sizeof(out->externalIp));
 }
