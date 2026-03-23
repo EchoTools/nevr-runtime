@@ -122,4 +122,7 @@ class WebSocketClient {
  public:
   // Process queued received messages (call from main thread)
   VOID ProcessReceivedMessages();
+
+  /// Disables automatic reconnection so the next disconnect is final.
+  VOID DisableReconnection();
 };

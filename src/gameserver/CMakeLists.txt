@@ -7,6 +7,7 @@ set(SERVER_SOURCES
     "server_context.cpp"
     "websocket_client.cpp"
     "telemetry_streamer.cpp"
+    "upnp.cpp"
 )
 
 add_library(gameserver SHARED
@@ -26,7 +27,7 @@ target_include_directories(
           "${CMAKE_SOURCE_DIR}"
 )
 
-target_link_libraries(gameserver PRIVATE common proto_nevr ws2_32 ixwebsocket::ixwebsocket)
+target_link_libraries(gameserver PRIVATE common proto_nevr ws2_32 ixwebsocket::ixwebsocket miniupnpc::miniupnpc)
 
 # Set output name to remove 'lib' prefix on MinGW
 set_target_properties(gameserver PROPERTIES
@@ -43,8 +44,11 @@ endif()
 # Link ixwebsocket for WebSocket support
 find_package(ixwebsocket CONFIG REQUIRED)
 
-# Disable PCH for websocket_client.cpp and telemetry_streamer.cpp to avoid Windows.h macro pollution
-set_source_files_properties(websocket_client.cpp telemetry_streamer.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# Link miniupnpc for UPnP port forwarding
+find_package(miniupnpc CONFIG REQUIRED)
+
+# Disable PCH for websocket_client.cpp, telemetry_streamer.cpp, and upnp.cpp to avoid Windows.h macro pollution
+set_source_files_properties(websocket_client.cpp telemetry_streamer.cpp upnp.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # Fix missing mbedtls dependencies for MinGW
 if(MINGW)

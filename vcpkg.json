@@ -3,6 +3,7 @@
     "curl",
     "ixwebsocket",
     "jsoncpp",
+    "miniupnpc",
     "minhook",
     "opus",
     "protobuf"
