@@ -1,4 +1,4 @@
-#include "nakama_client.h"
+#include "nevr_client.h"
 #include "common/logging.h"
 
 #include <curl/curl.h>
@@ -14,7 +14,7 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::stri
     return totalSize;
 }
 
-void NakamaClient::Configure(const std::string& url, const std::string& httpKey,
+void NevrClient::Configure(const std::string& url, const std::string& httpKey,
                                const std::string& serverKey, const std::string& username,
                                const std::string& password) {
     m_url = url;
@@ -23,12 +23,12 @@ void NakamaClient::Configure(const std::string& url, const std::string& httpKey,
     m_username = username;
     m_password = password;
     m_configured = true;
-    Log(EchoVR::LogLevel::Info, "[NEVR.NAKAMA] Configured: url=%s, user=%s", url.c_str(), username.c_str());
+    Log(EchoVR::LogLevel::Info, "[NEVR.API] Configured: url=%s, user=%s", url.c_str(), username.c_str());
 }
 
-bool NakamaClient::Authenticate() {
+bool NevrClient::Authenticate() {
     if (!m_configured) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.NAKAMA] Not configured — call Configure() first");
+        Log(EchoVR::LogLevel::Error, "[NEVR.API] Not configured — call Configure() first");
         return false;
     }
 
@@ -38,7 +38,7 @@ bool NakamaClient::Authenticate() {
 
     CURL* curl = curl_easy_init();
     if (!curl) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.NAKAMA] Failed to init curl");
+        Log(EchoVR::LogLevel::Error, "[NEVR.API] Failed to init curl");
         return false;
     }
 
@@ -63,12 +63,12 @@ bool NakamaClient::Authenticate() {
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.NAKAMA] Auth request failed: %s", curl_easy_strerror(res));
+        Log(EchoVR::LogLevel::Error, "[NEVR.API] Auth request failed: %s", curl_easy_strerror(res));
         return false;
     }
 
     if (httpCode != 200) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.NAKAMA] Auth failed (HTTP %ld): %s",
+        Log(EchoVR::LogLevel::Error, "[NEVR.API] Auth failed (HTTP %ld): %s",
             httpCode, response.substr(0, 200).c_str());
         return false;
     }
@@ -77,13 +77,13 @@ bool NakamaClient::Authenticate() {
     // Simple extraction — find "token":"..." pattern
     size_t tokenStart = response.find("\"token\":\"");
     if (tokenStart == std::string::npos) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.NAKAMA] No token in auth response");
+        Log(EchoVR::LogLevel::Error, "[NEVR.API] No token in auth response");
         return false;
     }
     tokenStart += 9;  // skip "token":"
     size_t tokenEnd = response.find("\"", tokenStart);
     if (tokenEnd == std::string::npos) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.NAKAMA] Malformed token in auth response");
+        Log(EchoVR::LogLevel::Error, "[NEVR.API] Malformed token in auth response");
         return false;
     }
 
@@ -91,26 +91,26 @@ bool NakamaClient::Authenticate() {
     // Token expires in 60 min, refresh at 50 min
     m_tokenExpiry = static_cast<uint64_t>(time(nullptr)) + (50 * 60);
 
-    Log(EchoVR::LogLevel::Info, "[NEVR.NAKAMA] Authenticated successfully (token expires in 50min)");
+    Log(EchoVR::LogLevel::Info, "[NEVR.API] Authenticated successfully (token expires in 50min)");
     return true;
 }
 
-std::string NakamaClient::GetToken() {
+std::string NevrClient::GetToken() {
     if (!RefreshTokenIfNeeded()) return "";
     return m_token;
 }
 
-bool NakamaClient::IsAuthenticated() const {
+bool NevrClient::IsAuthenticated() const {
     return !m_token.empty() && static_cast<uint64_t>(time(nullptr)) < m_tokenExpiry;
 }
 
-bool NakamaClient::RefreshTokenIfNeeded() {
+bool NevrClient::RefreshTokenIfNeeded() {
     if (IsAuthenticated()) return true;
-    Log(EchoVR::LogLevel::Info, "[NEVR.NAKAMA] Token expired or missing — re-authenticating");
+    Log(EchoVR::LogLevel::Info, "[NEVR.API] Token expired or missing — re-authenticating");
     return Authenticate();
 }
 
-std::string NakamaClient::HttpGet(const std::string& url) {
+std::string NevrClient::HttpGet(const std::string& url) {
     if (!RefreshTokenIfNeeded()) return "";
 
     CURL* curl = curl_easy_init();
@@ -133,13 +133,13 @@ std::string NakamaClient::HttpGet(const std::string& url) {
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.NAKAMA] GET %s failed: %s", url.c_str(), curl_easy_strerror(res));
+        Log(EchoVR::LogLevel::Error, "[NEVR.API] GET %s failed: %s", url.c_str(), curl_easy_strerror(res));
         return "";
     }
     return response;
 }
 
-std::string NakamaClient::HttpPost(const std::string& url, const std::string& body) {
+std::string NevrClient::HttpPost(const std::string& url, const std::string& body) {
     if (!RefreshTokenIfNeeded()) return "";
 
     CURL* curl = curl_easy_init();
@@ -164,13 +164,13 @@ std::string NakamaClient::HttpPost(const std::string& url, const std::string& bo
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.NAKAMA] POST %s failed: %s", url.c_str(), curl_easy_strerror(res));
+        Log(EchoVR::LogLevel::Error, "[NEVR.API] POST %s failed: %s", url.c_str(), curl_easy_strerror(res));
         return "";
     }
     return response;
 }
 
-std::string NakamaClient::HttpDelete(const std::string& url, const std::string& body) {
+std::string NevrClient::HttpDelete(const std::string& url, const std::string& body) {
     if (!RefreshTokenIfNeeded()) return "";
 
     CURL* curl = curl_easy_init();
@@ -198,13 +198,13 @@ std::string NakamaClient::HttpDelete(const std::string& url, const std::string& 
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.NAKAMA] DELETE %s failed: %s", url.c_str(), curl_easy_strerror(res));
+        Log(EchoVR::LogLevel::Error, "[NEVR.API] DELETE %s failed: %s", url.c_str(), curl_easy_strerror(res));
         return "";
     }
     return response;
 }
 
-bool NakamaClient::ListFriends(int state, std::vector<NakamaFriend>& outFriends) {
+bool NevrClient::ListFriends(int state, std::vector<NevrFriend>& outFriends) {
     std::string url = m_url + "/v2/friend?limit=100";
     if (state >= 0) {
         url += "&state=" + std::to_string(state);
@@ -218,7 +218,7 @@ bool NakamaClient::ListFriends(int state, std::vector<NakamaFriend>& outFriends)
     // Simple extraction — iterate through "user" objects
     size_t pos = 0;
     while ((pos = response.find("\"user\":{", pos)) != std::string::npos) {
-        NakamaFriend f;
+        NevrFriend f;
         pos += 8;  // skip "user":{
 
         // Extract id
@@ -262,41 +262,41 @@ bool NakamaClient::ListFriends(int state, std::vector<NakamaFriend>& outFriends)
         outFriends.push_back(f);
     }
 
-    Log(EchoVR::LogLevel::Info, "[NEVR.NAKAMA] Listed %zu friends (state=%d)", outFriends.size(), state);
+    Log(EchoVR::LogLevel::Info, "[NEVR.API] Listed %zu friends (state=%d)", outFriends.size(), state);
     return true;
 }
 
-bool NakamaClient::AddFriend(const std::string& userId) {
+bool NevrClient::AddFriend(const std::string& userId) {
     std::string url = m_url + "/v2/friend";
     std::string body = "{\"ids\":[\"" + userId + "\"]}";
     std::string response = HttpPost(url, body);
-    Log(EchoVR::LogLevel::Info, "[NEVR.NAKAMA] AddFriend(%s): %s", userId.c_str(),
+    Log(EchoVR::LogLevel::Info, "[NEVR.API] AddFriend(%s): %s", userId.c_str(),
         response.empty() ? "failed" : "ok");
     return !response.empty();
 }
 
-bool NakamaClient::AddFriendByUsername(const std::string& username) {
+bool NevrClient::AddFriendByUsername(const std::string& username) {
     std::string url = m_url + "/v2/friend";
     std::string body = "{\"usernames\":[\"" + username + "\"]}";
     std::string response = HttpPost(url, body);
-    Log(EchoVR::LogLevel::Info, "[NEVR.NAKAMA] AddFriendByUsername(%s): %s", username.c_str(),
+    Log(EchoVR::LogLevel::Info, "[NEVR.API] AddFriendByUsername(%s): %s", username.c_str(),
         response.empty() ? "failed" : "ok");
     return !response.empty();
 }
 
-bool NakamaClient::DeleteFriend(const std::string& userId) {
+bool NevrClient::DeleteFriend(const std::string& userId) {
     std::string url = m_url + "/v2/friend?ids=" + userId;
     std::string response = HttpDelete(url, "");
-    Log(EchoVR::LogLevel::Info, "[NEVR.NAKAMA] DeleteFriend(%s): %s", userId.c_str(),
+    Log(EchoVR::LogLevel::Info, "[NEVR.API] DeleteFriend(%s): %s", userId.c_str(),
         response.empty() ? "failed" : "ok");
     return true;  // DELETE returns empty body on success
 }
 
-bool NakamaClient::BlockFriend(const std::string& userId) {
+bool NevrClient::BlockFriend(const std::string& userId) {
     std::string url = m_url + "/v2/friend/block";
     std::string body = "{\"ids\":[\"" + userId + "\"]}";
     std::string response = HttpPost(url, body);
-    Log(EchoVR::LogLevel::Info, "[NEVR.NAKAMA] BlockFriend(%s): %s", userId.c_str(),
+    Log(EchoVR::LogLevel::Info, "[NEVR.API] BlockFriend(%s): %s", userId.c_str(),
         response.empty() ? "failed" : "ok");
     return !response.empty();
 }
@@ -305,7 +305,7 @@ bool NakamaClient::BlockFriend(const std::string& userId) {
 // Device Code Authentication
 // ============================================================================
 
-std::string NakamaClient::HttpPostPublic(const std::string& url, const std::string& body) {
+std::string NevrClient::HttpPostPublic(const std::string& url, const std::string& body) {
     CURL* curl = curl_easy_init();
     if (!curl) return "";
 
@@ -326,13 +326,13 @@ std::string NakamaClient::HttpPostPublic(const std::string& url, const std::stri
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.NAKAMA] POST %s failed: %s", url.c_str(), curl_easy_strerror(res));
+        Log(EchoVR::LogLevel::Error, "[NEVR.API] POST %s failed: %s", url.c_str(), curl_easy_strerror(res));
         return "";
     }
     return response;
 }
 
-std::string NakamaClient::RequestDeviceCode() {
+std::string NevrClient::RequestDeviceCode() {
     std::string url = m_url + "/v2/rpc/device/auth/request?http_key=" + m_httpKey;
     std::string response = HttpPostPublic(url, "{}");
     if (response.empty()) return "";
@@ -347,7 +347,7 @@ std::string NakamaClient::RequestDeviceCode() {
     return response.substr(codeStart, codeEnd - codeStart);
 }
 
-std::string NakamaClient::PollDeviceCode(const std::string& code) {
+std::string NevrClient::PollDeviceCode(const std::string& code) {
     std::string url = m_url + "/v2/rpc/device/auth/poll?http_key=" + m_httpKey;
     std::string body = "{\"code\":\"" + code + "\"}";
     std::string response = HttpPostPublic(url, body);
@@ -372,21 +372,21 @@ std::string NakamaClient::PollDeviceCode(const std::string& code) {
     return "error";
 }
 
-void NakamaClient::SetToken(const std::string& token, uint64_t expiry) {
+void NevrClient::SetToken(const std::string& token, uint64_t expiry) {
     m_token = token;
     m_tokenExpiry = expiry;
 }
 
-bool NakamaClient::RunDeviceAuthFlow() {
+bool NevrClient::RunDeviceAuthFlow() {
     if (!m_configured) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.NAKAMA] Cannot run device auth — not configured");
+        Log(EchoVR::LogLevel::Error, "[NEVR.API] Cannot run device auth — not configured");
         return false;
     }
 
     // Step 1: Request a device code
     std::string code = RequestDeviceCode();
     if (code.empty()) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.NAKAMA] Failed to request device auth code");
+        Log(EchoVR::LogLevel::Error, "[NEVR.API] Failed to request device auth code");
         return false;
     }
 

@@ -618,12 +618,12 @@ VOID PatchDisableWwise() {
 // ===================================================================================================
 
 #include "social_messages.h"
-#include "nakama_client.h"
+#include "nevr_client.h"
 
 namespace SocialSym = EchoVR::Symbols::Social;
 
 // Global Nakama client for social feature bridge
-static NakamaClient* g_nakamaClient = nullptr;
+static NevrClient* g_nakamaClient = nullptr;
 
 /// Get the UDP broadcaster from the global game context.
 /// Path: g_GameBaseAddress + 0x20a0478 → game_context → +0x8518 → CR15NetGame
@@ -721,7 +721,7 @@ static void RefreshFriendsList() {
     return;
   }
 
-  std::vector<NakamaFriend> friends;
+  std::vector<NevrFriend> friends;
   if (!g_nakamaClient->ListFriends(-1, friends)) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] Failed to fetch friends from Nakama");
     SendPlaceholderFriendsList();
@@ -996,49 +996,32 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
 
     // Configure Nakama client from config.json
     if (!g_nakamaClient) {
-      g_nakamaClient = new NakamaClient();
+      g_nakamaClient = new NevrClient();
     }
     if (g_localConfig) {
       CHAR* nakamaUrl = EchoVR::JsonValueAsString(
-          const_cast<EchoVR::Json*>(g_localConfig), const_cast<CHAR*>("nakama_url"), nullptr, false);
-      CHAR* nakamaHttpKey = EchoVR::JsonValueAsString(
-          const_cast<EchoVR::Json*>(g_localConfig), const_cast<CHAR*>("nakama_http_key"), nullptr, false);
-      CHAR* nakamaServerKey = EchoVR::JsonValueAsString(
-          const_cast<EchoVR::Json*>(g_localConfig), const_cast<CHAR*>("nakama_server_key"), nullptr, false);
-      CHAR* nakamaUsername = EchoVR::JsonValueAsString(
-          const_cast<EchoVR::Json*>(g_localConfig), const_cast<CHAR*>("nakama_username"), nullptr, false);
-      CHAR* nakamaPassword = EchoVR::JsonValueAsString(
-          const_cast<EchoVR::Json*>(g_localConfig), const_cast<CHAR*>("nakama_password"), nullptr, false);
+          const_cast<EchoVR::Json*>(g_localConfig), const_cast<CHAR*>("nevr_url"), nullptr, false);
+      CHAR* nevrHttpKey = EchoVR::JsonValueAsString(
+          const_cast<EchoVR::Json*>(g_localConfig), const_cast<CHAR*>("nevr_http_key"), nullptr, false);
+      CHAR* nevrServerKey = EchoVR::JsonValueAsString(
+          const_cast<EchoVR::Json*>(g_localConfig), const_cast<CHAR*>("nevr_server_key"), nullptr, false);
 
-      if (nakamaUrl && nakamaHttpKey) {
-        // Configure with whatever we have
-        g_nakamaClient->Configure(
-            nakamaUrl, nakamaHttpKey,
-            nakamaServerKey ? nakamaServerKey : "",
-            nakamaUsername ? nakamaUsername : "",
-            nakamaPassword ? nakamaPassword : "");
+      if (nakamaUrl && nevrHttpKey) {
+        g_nakamaClient->Configure(nakamaUrl, nevrHttpKey, nevrServerKey ? nevrServerKey : "", "", "");
 
-        bool authenticated = false;
-
-        // Try password auth if credentials are available
-        if (nakamaUsername && nakamaPassword && nakamaServerKey) {
-          authenticated = g_nakamaClient->Authenticate();
-          if (authenticated) {
-            Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Nakama authenticated via password");
+        // Clients authenticate via device code flow (Discord OAuth on web).
+        // Servers don't need social auth.
+        if (!g_isServer) {
+          // TODO: check for cached token in _local/auth.json first
+          Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Starting device code authentication (Discord OAuth)...");
+          if (g_nakamaClient->RunDeviceAuthFlow()) {
+            Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Authenticated via Discord — social features active");
+          } else {
+            Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] Auth failed — social features using placeholders");
           }
         }
-
-        // Fall back to device code auth flow
-        if (!authenticated && !g_isServer) {
-          Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Starting device code authentication...");
-          authenticated = g_nakamaClient->RunDeviceAuthFlow();
-        }
-
-        if (!authenticated) {
-          Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] Not authenticated — social features using placeholders");
-        }
       } else {
-        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Nakama not configured (need nakama_url + nakama_http_key) — using placeholders");
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] Nakama not configured (need nevr_url + nevr_http_key in config.json)");
       }
     }
 
