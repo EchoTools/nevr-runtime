@@ -297,6 +297,17 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
       break;
     }
 
+    case gameservice::v1::Envelope::kLobbySessionEvent: {
+      const auto& event = envelope.lobby_session_event();
+      if (event.code() == gameservice::v1::LobbySessionEventMessage::CODE_ENDED) {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.GAMESERVER] Received CODE_ENDED from ServerDB — scheduling return to lobby");
+        CallScheduleReturnToLobby();
+        self->GetContext().EndSession();
+      }
+      break;
+    }
+
     case gameservice::v1::Envelope::kLobbySessionSuccessV5: {
       const auto& sessionSuccess = envelope.lobby_session_success_v5();
       Log(EchoVR::LogLevel::Info,
