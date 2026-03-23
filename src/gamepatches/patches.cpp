@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
 
 #include "common/globals.h"
 #include "common/hooking.h"
@@ -155,22 +157,26 @@ VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_
   } else if (!strcmp(format, "[NETGAME] No screen stats info for game mode %s"))  // noisy in social lobby
     return;
 
-  // Build timestamp prefix if enabled
-  CHAR tsBuf[32] = {0};
-  if (g_timestampLogs) {
+  // Build RFC 3339 timestamp (always on): 2026-03-23T02:15:30.123-05:00
+  CHAR tsBuf[40] = {0};
+  {
     SYSTEMTIME st;
     GetLocalTime(&st);
-    snprintf(tsBuf, sizeof(tsBuf), "%02d:%02d:%02d.%03d ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+    TIME_ZONE_INFORMATION tzi;
+    GetTimeZoneInformation(&tzi);
+    int offsetMin = -(int)tzi.Bias;
+    int tzH = offsetMin / 60;
+    int tzM = (offsetMin < 0 ? -offsetMin : offsetMin) % 60;
+    snprintf(tsBuf, sizeof(tsBuf), "%04d-%02d-%02dT%02d:%02d:%02d.%03d%+03d:%02d ",
+             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
+             tzH, tzM);
   }
 
-  // If -noconsole, prepend timestamp to the format and pass through to the game's log file writer.
+  // If -noconsole, prepend timestamp and pass through to the game's log file writer.
   if (g_noConsole) {
-    if (g_timestampLogs) {
-      CHAR stampedFmt[0x1000];
-      snprintf(stampedFmt, sizeof(stampedFmt), "%s%s", tsBuf, format);
-      return EchoVR::WriteLog(logLevel, unk, stampedFmt, vl);
-    }
-    return EchoVR::WriteLog(logLevel, unk, format, vl);
+    CHAR stampedFmt[0x1000];
+    snprintf(stampedFmt, sizeof(stampedFmt), "%s%s", tsBuf, format);
+    return EchoVR::WriteLog(logLevel, unk, stampedFmt, vl);
   }
 
   // Print the ANSI color code prefix for the given log level.
@@ -193,24 +199,18 @@ VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_
       break;
   }
 
-  // Print timestamp + message to console
-  if (g_timestampLogs) {
-    printf("\u001B[90m%s\u001B[0m", tsBuf);  // dim gray timestamp
-  }
+  // Print RFC 3339 timestamp + message to console
+  printf("\u001B[90m%s\u001B[0m", tsBuf);  // dim gray timestamp
   vprintf(format, vl);
   printf("\n");
 
   // Restore default text style
   printf("\u001B[0m");
 
-  // Call the original method (game log file) with timestamp if enabled
-  if (g_timestampLogs) {
-    CHAR stampedFmt[0x1000];
-    snprintf(stampedFmt, sizeof(stampedFmt), "%s%s", tsBuf, format);
-    EchoVR::WriteLog(logLevel, unk, stampedFmt, vl);
-  } else {
-    EchoVR::WriteLog(logLevel, unk, format, vl);
-  }
+  // Call the original method (game log file) with timestamp
+  CHAR stampedFmt[0x1000];
+  snprintf(stampedFmt, sizeof(stampedFmt), "%s%s", tsBuf, format);
+  EchoVR::WriteLog(logLevel, unk, stampedFmt, vl);
 }
 
 /// <summary>
@@ -655,6 +655,51 @@ EchoVR::Broadcaster* GetBroadcasterFromGame() {
 static void RefreshFriendsList();
 VOID SendPlaceholderFriendsList();
 
+/// Helper to convert a 16-byte UUID to a string "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx".
+static std::string UuidBytesToString(const uint8_t uuid[16]) {
+  CHAR buf[37];
+  snprintf(buf, sizeof(buf),
+    "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+    uuid[0], uuid[1], uuid[2], uuid[3], uuid[4], uuid[5], uuid[6], uuid[7],
+    uuid[8], uuid[9], uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15]);
+  return std::string(buf);
+}
+
+/// Forward a party action to Nakama.
+static void HandlePartyAction(EchoVR::SymbolId msgId, const void* msg, UINT64 msgSize) {
+  if (!g_nakamaClient || !g_nakamaClient->IsAuthenticated()) {
+    Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL] Not authenticated — party action ignored");
+    return;
+  }
+
+  std::string partyId = g_nakamaClient->GetCurrentPartyId();
+
+  if (msgId == SocialSym::PartyKickRequest && msgSize == sizeof(SNSPartyTargetPayload)) {
+    const auto* p = static_cast<const SNSPartyTargetPayload*>(msg);
+    std::string targetId = UuidBytesToString(p->target_user_uuid);
+    if (!partyId.empty()) {
+      g_nakamaClient->KickMember(partyId, targetId);
+    }
+  }
+  else if (msgId == SocialSym::PartyPassOwnershipRequest && msgSize == sizeof(SNSPartyTargetPayload)) {
+    const auto* p = static_cast<const SNSPartyTargetPayload*>(msg);
+    std::string targetId = UuidBytesToString(p->target_user_uuid);
+    if (!partyId.empty()) {
+      g_nakamaClient->PromoteMember(partyId, targetId);
+    }
+  }
+  else if (msgId == SocialSym::PartyRespondToInvite && msgSize == sizeof(SNSPartyTargetPayload)) {
+    const auto* p = static_cast<const SNSPartyTargetPayload*>(msg);
+    if (p->param != 0 && !partyId.empty()) {
+      g_nakamaClient->JoinParty(partyId);
+    }
+  }
+  else if (msgId == SocialSym::PartyMemberUpdate && !partyId.empty()) {
+    std::vector<NevrClient::PartyMember> members;
+    g_nakamaClient->ListPartyMembers(partyId, members);
+  }
+}
+
 /// Send an SNS response back to pnsrad via BroadcasterReceiveLocalEvent.
 static void SendSocialResponse(EchoVR::SymbolId hash, const char* name, void* payload, uint64_t size) {
   EchoVR::Broadcaster* broadcaster = GetBroadcasterFromGame();
@@ -793,25 +838,12 @@ VOID __fastcall OnSocialMessage(PVOID pGame, EchoVR::SymbolId msgId, PVOID msg, 
     HandleFriendAction(msgId, payload);
   }
 
-  // Log party actions with target payload details
-  if (msgSize == sizeof(SNSPartyTargetPayload) &&
-      (msgId == SocialSym::PartyKickRequest ||
-       msgId == SocialSym::PartyPassOwnershipRequest ||
-       msgId == SocialSym::PartyRespondToInvite)) {
-    const auto* payload = static_cast<const SNSPartyTargetPayload*>(msg);
-    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL]   party action: session=0x%llx param=%u",
-        (unsigned long long)payload->session_guid, payload->param);
-    // TODO Phase 5: Forward to Nakama party API
-  }
-
-  // Log party payload details (shared hashes with friends use 0x28 SNSPartyPayload)
-  if (msgSize == sizeof(SNSPartyPayload) &&
-      (msgId == SocialSym::FriendSendInviteRequest ||
-       msgId == SocialSym::FriendRemoveRequest ||
-       msgId == SocialSym::FriendActionRequest)) {
-    const auto* payload = static_cast<const SNSPartyPayload*>(msg);
-    Log(EchoVR::LogLevel::Debug, "[NEVR.SOCIAL]   party/friend shared: routing=0x%llx target=0x%llx",
-        (unsigned long long)payload->routing_id, (unsigned long long)payload->target_param);
+  // Forward party actions to Nakama
+  if (msgId == SocialSym::PartyKickRequest ||
+      msgId == SocialSym::PartyPassOwnershipRequest ||
+      msgId == SocialSym::PartyRespondToInvite ||
+      msgId == SocialSym::PartyMemberUpdate) {
+    HandlePartyAction(msgId, msg, msgSize);
   }
 }
 
@@ -1157,12 +1189,21 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     }
   }
 
+  // Auto-enable -noconsole on Wine/Linux (console allocation crashes or hangs)
+  if (!g_noConsole) {
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    if (ntdll && GetProcAddress(ntdll, "wine_get_version") != NULL) {
+      g_noConsole = TRUE;
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Wine detected — forcing -noconsole");
+    }
+  }
+
   // Validate argument combinations.
   if (g_isServer && g_isOffline) {
     FatalError("Arguments -server and -offline are mutually exclusive.", NULL);
   }
 
-  if (g_noConsole && !g_isHeadless) {
+  if (g_noConsole && !g_isHeadless && g_isServer) {
     FatalError("The -noconsole flag requires -headless to be specified.", NULL);
   }
 

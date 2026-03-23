@@ -45,6 +45,16 @@ public:
     bool DeleteFriend(const std::string& userId);
     bool BlockFriend(const std::string& userId);
 
+    // Party API (via Nakama storage-backed RPCs)
+    struct PartyMember { std::string userId; std::string username; };
+    bool CreateParty(std::string& outPartyId, int maxSize = 4, bool open = true);
+    bool JoinParty(const std::string& partyId);
+    bool LeaveParty(const std::string& partyId);
+    bool KickMember(const std::string& partyId, const std::string& userId);
+    bool PromoteMember(const std::string& partyId, const std::string& userId);
+    bool ListPartyMembers(const std::string& partyId, std::vector<PartyMember>& outMembers);
+    std::string GetCurrentPartyId() const { return m_currentPartyId; }
+
     // Device code authentication flow (GitHub-style, Discord OAuth on web)
     // Returns true if a token was obtained, false on timeout/failure.
     // Displays the code in the game log and opens the browser.
@@ -72,6 +82,7 @@ private:
     std::string m_username;
     std::string m_password;
     std::string m_token;
+    std::string m_currentPartyId;
     uint64_t m_tokenExpiry = 0;
     bool m_configured = false;
 };

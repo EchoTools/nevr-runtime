@@ -302,6 +302,91 @@ bool NevrClient::BlockFriend(const std::string& userId) {
 }
 
 // ============================================================================
+// Party API
+// ============================================================================
+
+bool NevrClient::CreateParty(std::string& outPartyId, int maxSize, bool open) {
+    std::string url = m_url + "/v2/rpc/party/create?unwrap&http_key=" + m_httpKey;
+    std::string body = "{\"max_size\":" + std::to_string(maxSize) +
+                       ",\"open\":" + (open ? "true" : "false") + "}";
+    std::string response = HttpPost(url, body);
+    if (response.empty()) return false;
+
+    size_t start = response.find("\"party_id\":\"");
+    if (start == std::string::npos) return false;
+    start += 12;
+    size_t end = response.find("\"", start);
+    if (end == std::string::npos) return false;
+    outPartyId = response.substr(start, end - start);
+    m_currentPartyId = outPartyId;
+    Log(EchoVR::LogLevel::Info, "[NEVR.API] CreateParty: %s", outPartyId.c_str());
+    return true;
+}
+
+bool NevrClient::JoinParty(const std::string& partyId) {
+    std::string url = m_url + "/v2/rpc/party/join?unwrap&http_key=" + m_httpKey;
+    std::string body = "{\"party_id\":\"" + partyId + "\"}";
+    std::string response = HttpPost(url, body);
+    if (response.empty()) return false;
+    m_currentPartyId = partyId;
+    Log(EchoVR::LogLevel::Info, "[NEVR.API] JoinParty: %s", partyId.c_str());
+    return true;
+}
+
+bool NevrClient::LeaveParty(const std::string& partyId) {
+    std::string url = m_url + "/v2/rpc/party/leave?unwrap&http_key=" + m_httpKey;
+    std::string body = "{\"party_id\":\"" + partyId + "\"}";
+    std::string response = HttpPost(url, body);
+    if (m_currentPartyId == partyId) m_currentPartyId.clear();
+    Log(EchoVR::LogLevel::Info, "[NEVR.API] LeaveParty: %s", partyId.c_str());
+    return true;
+}
+
+bool NevrClient::KickMember(const std::string& partyId, const std::string& userId) {
+    std::string url = m_url + "/v2/rpc/party/kick?unwrap&http_key=" + m_httpKey;
+    std::string body = "{\"party_id\":\"" + partyId + "\",\"target_id\":\"" + userId + "\"}";
+    std::string response = HttpPost(url, body);
+    Log(EchoVR::LogLevel::Info, "[NEVR.API] KickMember(%s from %s): %s",
+        userId.c_str(), partyId.c_str(), response.empty() ? "failed" : "ok");
+    return !response.empty();
+}
+
+bool NevrClient::PromoteMember(const std::string& partyId, const std::string& userId) {
+    std::string url = m_url + "/v2/rpc/party/promote?unwrap&http_key=" + m_httpKey;
+    std::string body = "{\"party_id\":\"" + partyId + "\",\"target_id\":\"" + userId + "\"}";
+    std::string response = HttpPost(url, body);
+    Log(EchoVR::LogLevel::Info, "[NEVR.API] PromoteMember(%s in %s): %s",
+        userId.c_str(), partyId.c_str(), response.empty() ? "failed" : "ok");
+    return !response.empty();
+}
+
+bool NevrClient::ListPartyMembers(const std::string& partyId, std::vector<PartyMember>& outMembers) {
+    std::string url = m_url + "/v2/rpc/party/members?unwrap&http_key=" + m_httpKey;
+    std::string body = "{\"party_id\":\"" + partyId + "\"}";
+    std::string response = HttpPost(url, body);
+    if (response.empty()) return false;
+
+    // Parse members array from JSON
+    size_t pos = 0;
+    while ((pos = response.find("\"user_id\":\"", pos)) != std::string::npos) {
+        PartyMember m;
+        pos += 11;
+        size_t end = response.find("\"", pos);
+        if (end != std::string::npos) m.userId = response.substr(pos, end - pos);
+
+        size_t unStart = response.find("\"username\":\"", pos);
+        if (unStart != std::string::npos) {
+            unStart += 12;
+            size_t unEnd = response.find("\"", unStart);
+            if (unEnd != std::string::npos) m.username = response.substr(unStart, unEnd - unStart);
+        }
+        outMembers.push_back(m);
+    }
+    Log(EchoVR::LogLevel::Info, "[NEVR.API] ListPartyMembers(%s): %zu members", partyId.c_str(), outMembers.size());
+    return true;
+}
+
+// ============================================================================
 // Device Code Authentication
 // ============================================================================
 
