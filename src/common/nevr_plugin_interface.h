@@ -47,6 +47,7 @@ enum NvrHostFlags : uint32_t {
     NEVR_HOST_IS_SERVER     = 0x02, /* running as dedicated server */
     NEVR_HOST_IS_CLIENT     = 0x04, /* running as client */
     NEVR_HOST_COMBAT_MODE   = 0x08, /* game is in combat mode */
+    NEVR_HOST_IS_HEADLESS   = 0x10, /* running in headless mode (no graphics/audio) */
 };
 
 /*

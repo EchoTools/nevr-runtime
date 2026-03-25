@@ -3,10 +3,12 @@
 set(PATCHES_LEGACY_SOURCES
     "dllmain.cpp"
     "patches.cpp"
+    "plugin_loader.cpp"
     "common/echovr_internal.cpp"
 )
 set(PATCHES_LEGACY_HEADERS
     "patches.h"
+    "plugin_loader.h"
     "processmem.h"
     "common/pch.h"
     "common/echovr.h"

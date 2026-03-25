@@ -3,12 +3,12 @@
 #include <string>
 #include <vector>
 
-#include "common/globals.h"
-#include "common/logging.h"
+#include "common/echovr_internal.h"
 
-// Defined in patches.cpp (gamepatches-internal, not in globals.h)
-extern BOOL g_isServer;
-extern BOOL g_isHeadless;
+// Legacy uses non-prefixed names (no g_)
+extern BOOL isServer;
+extern BOOL isHeadless;
+extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
 struct LoadedPlugin {
   HMODULE                     hModule;
@@ -67,9 +67,9 @@ void LoadPlugins() {
   ctx.net_game = nullptr;
   ctx.game_state = 0;
   ctx.flags = 0;
-  if (g_isServer) ctx.flags |= NEVR_HOST_IS_SERVER;
+  if (isServer) ctx.flags |= NEVR_HOST_IS_SERVER;
   else ctx.flags |= NEVR_HOST_IS_CLIENT;
-  if (g_isHeadless) ctx.flags |= NEVR_HOST_IS_HEADLESS;
+  if (isHeadless) ctx.flags |= NEVR_HOST_IS_HEADLESS;
 
   for (const auto& path : dllPaths) {
     // Extract filename for logging

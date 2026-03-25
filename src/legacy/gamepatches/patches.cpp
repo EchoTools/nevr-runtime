@@ -6,6 +6,7 @@
 
 #include "common/echovrunexported.h"
 #include "common/hooking.h"
+#include "plugin_loader.h"
 #include "processmem.h"
 
 #ifndef PROJECT_VERSION
@@ -351,6 +352,21 @@ VOID PatchDeadlockMonitor() {
 /// <param name="state">The state to transition to.</param>
 /// <returns>None</returns>
 VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
+  // Notify plugins of state change
+  {
+    static uint32_t s_prevState = 0;
+    NvrGameContext ctx = {};
+    ctx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
+    ctx.net_game = pGame;
+    ctx.game_state = static_cast<uint32_t>(state);
+    ctx.flags = NEVR_HOST_HAS_NETGAME;
+    if (isServer) ctx.flags |= NEVR_HOST_IS_SERVER;
+    else ctx.flags |= NEVR_HOST_IS_CLIENT;
+    if (isHeadless) ctx.flags |= NEVR_HOST_IS_HEADLESS;
+    NotifyPluginsStateChange(&ctx, s_prevState, static_cast<uint32_t>(state));
+    s_prevState = static_cast<uint32_t>(state);
+  }
+
   // Hook the net game switch state function, so we can redirect "load level failed" to a ready state again.
   // This way if a client requests a non-existent level, the game server library isn't unloaded due to a state
   // transition to "load failed" (because the level failed to load)
@@ -618,4 +634,6 @@ VOID Initialize() {
 #if _DEBUG
   PatchDeadlockMonitor();
 #endif
+
+  LoadPlugins();
 }
