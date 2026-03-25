@@ -82,6 +82,13 @@ HWND g_hWindow = NULL;
 EchoVR::Json* g_localConfig = NULL;
 
 /// <summary>
+/// Early-loaded config for URI redirect hooks that fire before the game loads its config.
+/// Loaded during Initialize() from _local/config.json using the game's JSON parser.
+/// </summary>
+static EchoVR::Json g_earlyConfig = {NULL, NULL};
+static EchoVR::Json* g_earlyConfigPtr = NULL;
+
+/// <summary>
 /// The game instance pointer — stored globally for social message injection.
 /// Set during PreprocessCommandLineHook, used to navigate to the broadcaster.
 /// Path: pGame + 0x8518 → CR15NetGame → lobby → +0x008 → Broadcaster*
@@ -452,6 +459,24 @@ INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT
     }
   }
   return OriginalEngineEntityLookup(arg1, arg2, arg3, arg4, arg5);
+}
+
+// ============================================================================
+// Engine entity property dispatch null-check hook — prevent AV in server mode
+// ============================================================================
+
+/// Original function: fcn.140f87aa0 (580 bytes, 8 callers)
+/// Dereferences *(*(int64_t*)arg1 + 0x448) for a flags check. In server mode the
+/// inner pointer can be invalid (e.g. 0x10), causing READ AV at low addresses.
+typedef VOID EngineEntityPropDispatchFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5);
+EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
+
+VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
+  // Skip entirely in server mode — this function dispatches entity property updates
+  // for client-side state (rendering, effects) that doesn't exist in headless mode.
+  // The internal pointer chain is uninitialized, causing cascading AVs.
+  if (g_isServer) return;
+  OriginalEngineEntityPropDispatch(arg1, arg2, arg3, arg4, arg5);
 }
 
 // ============================================================================
@@ -1548,17 +1573,19 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
 /// <param name="defaultUrl">The default URL if no config override is found</param>
 /// <returns>The resolved service URL</returns>
 CHAR* GetServiceHostWithFallback(const CHAR* serviceKey, const CHAR* defaultUrl) {
-  if (g_localConfig == NULL) return (CHAR*)defaultUrl;
+  // Use game config if available, fall back to early-loaded config
+  EchoVR::Json* config = g_localConfig ? g_localConfig : g_earlyConfigPtr;
+  if (config == NULL) return (CHAR*)defaultUrl;
 
   // Try primary service key first
-  CHAR* host = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)serviceKey, NULL, false);
+  CHAR* host = EchoVR::JsonValueAsString(config, (CHAR*)serviceKey, NULL, false);
   if (host != NULL && host[0] != '\0') {
     Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service override [%s]: %s", serviceKey, host);
     return host;
   }
 
   // Fallback to loginservice_host if primary key not found
-  host = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"loginservice_host", NULL, false);
+  host = EchoVR::JsonValueAsString(config, (CHAR*)"loginservice_host", NULL, false);
   if (host != NULL && host[0] != '\0') {
     Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service fallback [%s → loginservice_host]: %s", serviceKey, host);
     return host;
@@ -1625,60 +1652,31 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
 }
 
 // ============================================================================
-// WebSocket Connection Hooks (for TcpBroadcaster / wss:// connections)
+// JsonValueAsString Hook (intercepts config lookups to provide early overrides)
 // ============================================================================
 
 /// <summary>
-/// Storage for the original CreatePeer function pointer to call after our hook.
+/// Hook for JsonValueAsString. When the game's config doesn't have a key (returns the
+/// hardcoded default), check our early-loaded _local/config.json for an override.
+/// This is necessary because the game reads config values before LoadLocalConfig runs,
+/// so hardcoded defaults (readyatdawn.com URLs, "rad15_live", etc.) always win.
 /// </summary>
-typedef EchoVR::TcpPeer* (*CreatePeerFunc)(EchoVR::TcpBroadcasterData* self, EchoVR::TcpPeer* result,
-                                           const EchoVR::UriContainer* uri);
-static CreatePeerFunc OriginalCreatePeer = NULL;
+CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValue, BOOL reportFailure) {
+  // Call the original first
+  CHAR* result = EchoVR::JsonValueAsString(root, keyName, defaultValue, reportFailure);
 
-/// <summary>
-/// Hook for TcpBroadcaster CreatePeer - intercepts WebSocket connection creation.
-/// Applies config overrides and fallback logic for WebSocket URIs.
-/// </summary>
-EchoVR::TcpPeer* CreatePeerHook(EchoVR::TcpBroadcasterData* self, EchoVR::TcpPeer* result,
-                                const EchoVR::UriContainer* uriContainer) {
-  // We need to parse and potentially modify the URI
-  // The UriContainer is opaque (0x120 bytes), but we can extract the URI string from it
-  // For now, we'll let the connection proceed and rely on DNS/routing for redirection
-  // A more sophisticated approach would parse the UriContainer and modify it
-
-  // Log the WebSocket connection attempt
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] WebSocket connection initiated (CreatePeer called)");
-
-  // Check if we have config overrides for WebSocket endpoints
-  if (g_localConfig != NULL) {
-    // Check for loginservice_host override (primary WebSocket endpoint)
-    CHAR* loginHost = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"loginservice_host", NULL, false);
-    if (loginHost != NULL && loginHost[0] != '\0') {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] WebSocket loginservice_host override configured: %s", loginHost);
-      // Note: Actual URI modification would require parsing/rebuilding UriContainer
-      // For now, document that DNS/routing should be used, or implement URI rewrite
-    }
-
-    // Check for matching/config/transaction service WebSocket overrides
-    CHAR* matchingHost = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"matchingservice_host", NULL, false);
-    if (matchingHost != NULL && matchingHost[0] != '\0') {
-      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Matchingservice override available: %s", matchingHost);
-    }
-
-    CHAR* configHost = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"configservice_host", NULL, false);
-    if (configHost != NULL && configHost[0] != '\0') {
-      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Configservice override available: %s", configHost);
+  // If we have an early config, check if it has an override for this key.
+  // Only override when the result equals the default (meaning the game's config didn't have it).
+  // Don't override lookups against our own early config (avoid infinite loop).
+  if (g_earlyConfigPtr != NULL && keyName != NULL && root != g_earlyConfigPtr && result == defaultValue) {
+    CHAR* override = EchoVR::JsonValueAsString(g_earlyConfigPtr, keyName, NULL, false);
+    if (override != NULL && override[0] != '\0') {
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Config override [%s]: %s → %s", keyName,
+          result ? result : "(null)", override);
+      return override;
     }
   }
 
-  // Call the original CreatePeer function
-  if (OriginalCreatePeer != NULL) {
-    return OriginalCreatePeer(self, result, uriContainer);
-  }
-
-  // Fallback: should never happen, but return invalid peer
-  result->index = 0xFFFFFFFF;
-  result->gen = 0;
   return result;
 }
 
@@ -2220,6 +2218,27 @@ VOID Initialize() {
     return;
   }
 
+  // Early-load _local/config.json so URI redirect hooks work before the game loads its config.
+  // The game's JSON loader is available at this point (it's a static function in the EXE).
+  {
+    CHAR configPath[MAX_PATH] = {0};
+    CHAR moduleDir[MAX_PATH] = {0};
+    GetModuleFileNameA((HMODULE)EchoVR::g_GameBaseAddress, moduleDir, MAX_PATH);
+    // Strip the filename to get the directory
+    CHAR* lastSlash = strrchr(moduleDir, '\\');
+    if (lastSlash) *(lastSlash + 1) = '\0';
+    snprintf(configPath, MAX_PATH, "%s_local\\config.json", moduleDir);
+
+    UINT32 loadResult = EchoVR::LoadJsonFromFile(&g_earlyConfig, configPath, 1);
+    if (loadResult == 0 && g_earlyConfig.root != NULL) {
+      g_earlyConfigPtr = &g_earlyConfig;
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Early config loaded from: %s", configPath);
+    } else {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to early-load config from: %s (error %u)", configPath,
+          loadResult);
+    }
+  }
+
   // Hash discovery hooks (disabled by default - enable for reverse engineering)
   // Uncomment to capture replicated variable names and message type hashes
   /*
@@ -2355,6 +2374,11 @@ VOID Initialize() {
   PatchDetour(&OriginalEngineEntityLookup, reinterpret_cast<PVOID>(EngineEntityLookupHook));
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Engine entity lookup hook installed (null-pointer guard)");
 
+  OriginalEngineEntityPropDispatch =
+      (EngineEntityPropDispatchFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::ENGINE_ENTITY_PROP_DISPATCH);
+  PatchDetour(&OriginalEngineEntityPropDispatch, reinterpret_cast<PVOID>(EngineEntityPropDispatchHook));
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Entity prop dispatch hook installed (null-pointer guard)");
+
   // Hook BugSplat crash handler — prevents fatal exits in server mode.
   // The handler is called from 5 sites for missing actors, dialogue scenes, etc.
   // These are non-fatal in headless dedicated server mode.
@@ -2370,11 +2394,9 @@ VOID Initialize() {
   PatchDetour(&OriginalInitializeGlobalGameSpace, reinterpret_cast<PVOID>(InitializeGlobalGameSpaceHook));
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] InitializeGlobalGameSpace hook installed (server crash fix)");
 
-  // Note: WebSocket CreatePeer hook requires vtable hooking, which is complex.
-  // For now, DNS/routing overrides should be used for WebSocket endpoint redirection.
-  // TODO: Implement vtable hook for TcpBroadcasterData::CreatePeer if needed.
+  PatchDetour(&EchoVR::JsonValueAsString, reinterpret_cast<PVOID>(JsonValueAsStringHook));
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.PATCH] Config property injection initialized with fallback chain: service → loginservice_host → default");
+      "[NEVR.PATCH] Service endpoint override hook installed (JsonValueAsString)");
 
   // Install VEH to handle int3 that fires after our ExitProcess suppression returns
   AddVectoredExceptionHandler(1, BreakpointVEH);

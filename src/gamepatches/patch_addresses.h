@@ -152,6 +152,12 @@ constexpr uintptr_t GAME_MAIN = 0x0CD550;
 /// a null-pointer AV at offset 0x3ff8 → target 0x4008. Hook to add null check.
 constexpr uintptr_t ENGINE_ENTITY_LOOKUP = 0xF80ED0;
 
+/// Address: Engine entity property dispatch (0x140f87aa0, 580 bytes)
+/// Called from 8 sites. Dereferences *(int64_t*)arg1 + 0x448 for a flags check,
+/// then accesses deeper offsets. In server mode the inner pointer can be invalid
+/// (0x10 or similar), causing an AV. Hook to add null check.
+constexpr uintptr_t ENGINE_ENTITY_PROP_DISPATCH = 0xF87AA0;
+
 /// Address: BugSplat crash handler (0x1400dbbc0, 141 bytes)
 /// Fatal error handler called from 5 sites in the game. Builds an error report,
 /// calls ExitProcess(1), then executes int3. In server mode we hook this to log
