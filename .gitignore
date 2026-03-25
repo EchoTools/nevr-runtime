@@ -59,6 +59,9 @@ vendor/
 __pycache__/
 *.pyc
 
+# Generated protobuf
+gen/
+
 # Temporary/generated files
 hashes*.txt
 lobby_session_*.json
