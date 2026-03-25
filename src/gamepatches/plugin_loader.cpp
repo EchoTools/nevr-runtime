@@ -5,16 +5,19 @@
 
 #include "common/globals.h"
 #include "common/logging.h"
-#include "common/plugin_api.h"
 
 // Defined in patches.cpp (gamepatches-internal, not in globals.h)
 extern BOOL g_isServer;
+extern BOOL g_isHeadless;
 
 struct LoadedPlugin {
-  HMODULE                hModule;
-  NevRPluginInfo*        info;
-  NevRPluginDestroyFunc  destroy;  // may be NULL
-  std::string            path;
+  HMODULE                     hModule;
+  NvrPluginInfo               info;
+  NvrPluginInit_fn            init;
+  NvrPluginOnFrame_fn         on_frame;
+  NvrPluginOnGameStateChange_fn on_state_change;
+  NvrPluginShutdown_fn        shutdown;
+  std::string                 path;
 };
 
 static std::vector<LoadedPlugin> g_plugins;
@@ -58,12 +61,14 @@ void LoadPlugins() {
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] Found %zu plugin candidate(s)", dllPaths.size());
 
-  NevRPluginContext ctx = {};
-  ctx.api_version = NEVR_PLUGIN_API_VERSION;
-  ctx.nevr_version = PROJECT_VERSION;
-  ctx.game_base = (uintptr_t)EchoVR::g_GameBaseAddress;
-  ctx.is_server = g_isServer != FALSE;
-  ctx.is_headless = g_isHeadless != FALSE;
+  // Build init context
+  NvrGameContext ctx = {};
+  ctx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
+  ctx.net_game = nullptr;
+  ctx.game_state = 0;
+  ctx.flags = 0;
+  if (g_isServer) ctx.flags |= NEVR_HOST_IS_SERVER;
+  else ctx.flags |= NEVR_HOST_IS_CLIENT;
 
   for (const auto& path : dllPaths) {
     // Extract filename for logging
@@ -76,66 +81,41 @@ void LoadPlugins() {
       continue;
     }
 
-    auto createFn = (NevRPluginCreateFunc)GetProcAddress(hPlugin, "NevRPluginCreate");
-    if (!createFn) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] %s: missing NevRPluginCreate export, skipping", filename);
+    auto getInfoFn = (NvrPluginGetInfo_fn)GetProcAddress(hPlugin, "NvrPluginGetInfo");
+    if (!getInfoFn) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] %s: missing NvrPluginGetInfo export, skipping", filename);
       FreeLibrary(hPlugin);
       continue;
     }
 
-    NevRPluginInfo* info = createFn();
-    if (!info) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] %s: NevRPluginCreate returned NULL, skipping", filename);
+    NvrPluginInfo info = getInfoFn();
+    if (!info.name) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] %s: NvrPluginGetInfo returned NULL name, skipping", filename);
       FreeLibrary(hPlugin);
       continue;
     }
 
-    if (info->api_version != NEVR_PLUGIN_API_VERSION) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] %s: API version mismatch (plugin=%u, host=%u), skipping",
-          filename, info->api_version, NEVR_PLUGIN_API_VERSION);
-      FreeLibrary(hPlugin);
-      continue;
-    }
+    // Resolve optional exports
+    auto initFn = (NvrPluginInit_fn)GetProcAddress(hPlugin, "NvrPluginInit");
+    auto onFrameFn = (NvrPluginOnFrame_fn)GetProcAddress(hPlugin, "NvrPluginOnFrame");
+    auto onStateChangeFn = (NvrPluginOnGameStateChange_fn)GetProcAddress(hPlugin, "NvrPluginOnGameStateChange");
+    auto shutdownFn = (NvrPluginShutdown_fn)GetProcAddress(hPlugin, "NvrPluginShutdown");
 
-    // Check mode filter
-    NevRPluginMode mode = info->mode;
-    if (mode == 0) mode = NEVR_PLUGIN_MODE_BOTH;  // default if unset
-
-    bool wantServer = (mode & NEVR_PLUGIN_MODE_SERVER) != 0;
-    bool wantClient = (mode & NEVR_PLUGIN_MODE_CLIENT) != 0;
-
-    if (g_isServer && !wantServer) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] %s (%s): skipped (client-only plugin, running as server)",
-          info->name ? info->name : filename, info->version ? info->version : "?");
-      FreeLibrary(hPlugin);
-      continue;
-    }
-    if (!g_isServer && !wantClient) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] %s (%s): skipped (server-only plugin, running as client)",
-          info->name ? info->name : filename, info->version ? info->version : "?");
-      FreeLibrary(hPlugin);
-      continue;
-    }
-
-    // Call on_load
-    if (info->on_load) {
-      int result = info->on_load(&ctx);
+    // Call init if present
+    if (initFn) {
+      int result = initFn(&ctx);
       if (result != 0) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] %s (%s): on_load failed with code %d, unloading",
-            info->name ? info->name : filename, info->version ? info->version : "?", result);
+        Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] %s (%s): init failed with code %d, unloading",
+            info.name, info.description ? info.description : "?", result);
         FreeLibrary(hPlugin);
         continue;
       }
     }
 
-    auto destroyFn = (NevRPluginDestroyFunc)GetProcAddress(hPlugin, "NevRPluginDestroy");
-
-    g_plugins.push_back({hPlugin, info, destroyFn, path});
-    Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] Loaded: %s v%s [%s]",
-        info->name ? info->name : filename,
-        info->version ? info->version : "?",
-        (mode == NEVR_PLUGIN_MODE_SERVER) ? "server" :
-        (mode == NEVR_PLUGIN_MODE_CLIENT) ? "client" : "both");
+    g_plugins.push_back({hPlugin, info, initFn, onFrameFn, onStateChangeFn, shutdownFn, path});
+    Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] Loaded: %s v%u.%u.%u",
+        info.name,
+        info.version_major, info.version_minor, info.version_patch);
   }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] %zu plugin(s) loaded", g_plugins.size());
@@ -143,13 +123,26 @@ void LoadPlugins() {
 
 void UnloadPlugins() {
   for (auto it = g_plugins.rbegin(); it != g_plugins.rend(); ++it) {
-    if (it->info && it->info->on_unload) {
-      it->info->on_unload();
-    }
-    if (it->destroy && it->info) {
-      it->destroy(it->info);
+    if (it->shutdown) {
+      it->shutdown();
     }
     FreeLibrary(it->hModule);
   }
   g_plugins.clear();
+}
+
+void TickPlugins(const NvrGameContext* ctx) {
+  for (auto& p : g_plugins) {
+    if (p.on_frame) {
+      p.on_frame(ctx);
+    }
+  }
+}
+
+void NotifyPluginsStateChange(const NvrGameContext* ctx, uint32_t old_state, uint32_t new_state) {
+  for (auto& p : g_plugins) {
+    if (p.on_state_change) {
+      p.on_state_change(ctx, old_state, new_state);
+    }
+  }
 }

@@ -1131,6 +1131,20 @@ VOID PatchLogServerProfile() {
 static BOOL g_serverWasInGame = FALSE;
 
 VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
+  // Notify plugins of state change
+  {
+    static uint32_t s_prevState = 0;
+    NvrGameContext ctx = {};
+    ctx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
+    ctx.net_game = pGame;
+    ctx.game_state = static_cast<uint32_t>(state);
+    ctx.flags = NEVR_HOST_HAS_NETGAME;
+    if (g_isServer) ctx.flags |= NEVR_HOST_IS_SERVER;
+    else ctx.flags |= NEVR_HOST_IS_CLIENT;
+    NotifyPluginsStateChange(&ctx, s_prevState, static_cast<uint32_t>(state));
+    s_prevState = static_cast<uint32_t>(state);
+  }
+
   if (g_isServer) {
     // Redirect "load level failed" back to lobby instead of getting stuck
     if (state == EchoVR::NetGameState::LoadFailed) {
