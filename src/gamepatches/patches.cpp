@@ -12,6 +12,7 @@
 #include "common/hooking.h"
 #include "common/logging.h"
 #include "common/symbols.h"
+#include "plugin_loader.h"
 #include "process_mem.h"
 
 #ifdef USE_MINHOOK
@@ -1454,6 +1455,9 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 
   // Update the window title
   if (g_hWindow != NULL && g_isNoOVR) EchoVR::SetWindowTextA_(g_hWindow, "Echo VR - [DEMO]");
+
+  // Load plugins from plugins/ subdirectory (after CLI flags are known)
+  LoadPlugins();
 
   // Run the original method
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
