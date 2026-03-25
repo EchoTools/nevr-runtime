@@ -135,6 +135,30 @@ constexpr size_t HEADLESS_APPLY_GRAPHICS_SIZE = 5;
 /// needs.
 constexpr uintptr_t INIT_GLOBAL_GAMESPACE = 0x110ab0;
 
+/// Address: Game main wrapper (0x1400cd510, 62 bytes)
+/// Called from WinMain. Calls the game's main loop function (fcn.1400cd550) then
+/// calls the BugSplat crash handler if it returns. Hook this to restart the game
+/// loop on crash instead of exiting.
+constexpr uintptr_t GAME_MAIN_WRAPPER = 0x0CD510;
+
+/// Address: Game main function (0x1400cd550, 676 bytes)
+/// The actual game execution — creates CR15Game, enters the game loop via vtable
+/// calls. Returns when the game encounters a fatal error or shuts down.
+constexpr uintptr_t GAME_MAIN = 0x0CD550;
+
+/// Address: Engine entity lookup function (0x140f80ed0, 555 bytes)
+/// Called from 109+ sites. Accesses *(int64_t*)(arg1->ptr + 0x5e0) which is a
+/// hash table pointer. In server mode this can be 0x10 (uninitialized), causing
+/// a null-pointer AV at offset 0x3ff8 → target 0x4008. Hook to add null check.
+constexpr uintptr_t ENGINE_ENTITY_LOOKUP = 0xF80ED0;
+
+/// Address: BugSplat crash handler (0x1400dbbc0, 141 bytes)
+/// Fatal error handler called from 5 sites in the game. Builds an error report,
+/// calls ExitProcess(1), then executes int3. In server mode we hook this to log
+/// the error and return — callers have fallthrough paths so execution continues.
+/// Xrefs: 0x1400cd53f, 0x140110b60, 0x1401d3e31, 0x1401d4052, 0x1401d77af
+constexpr uintptr_t BUGSPLAT_CRASH_HANDLER = 0x0DBBC0;
+
 // ============================================================================
 // Other Patches
 // ============================================================================
@@ -230,6 +254,16 @@ constexpr uintptr_t GAME_WINDOWED_FLAGS_OFFSET = 31456;
 
 /// Offset within game instance structure for local config JSON
 constexpr uintptr_t GAME_LOCAL_CONFIG_OFFSET = 0x63240;
+
+// ============================================================================
+// Arena Rules Override (CJson_GetFloat hook)
+// ============================================================================
+
+/// Address: CJson_GetFloat (0x1405fca60, 22 bytes)
+/// Thunk that calls CJson::Real and casts to float.
+/// 45 direct callers, 623 callers via inspector ReadFloat.
+/// Hooked to override arena rule config values (celebration time, round time).
+constexpr uintptr_t CJSON_GET_FLOAT = 0x5FCA60;
 
 // ============================================================================
 // Hash Function Hooks (for discovering replicated variable names)

@@ -101,6 +101,9 @@ BroadcasterListenFunc* BroadcasterListen = (BroadcasterListenFunc*)(g_GameBaseAd
 /// <returns>None</returns>
 BroadcasterUnlistenFunc* BroadcasterUnlisten = (BroadcasterUnlistenFunc*)(g_GameBaseAddress + 0xF8DF20);
 
+/// Reads a float value from a parsed JSON document at a given path.
+CJsonGetFloatFunc* CJsonGetFloat = (CJsonGetFloatFunc*)(g_GameBaseAddress + 0x5FCA60);
+
 /// Obtains a JSON string value(with a default fallback value if it could not be obtained).
 /// <returns>The resulting string returned from the JSON get string operation.</returns>
 JsonValueAsStringFunc* JsonValueAsString = (JsonValueAsStringFunc*)(g_GameBaseAddress + 0x5FE290);

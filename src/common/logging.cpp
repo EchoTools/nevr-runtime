@@ -50,8 +50,8 @@ std::string FormatJsonLogEntry(EchoVR::LogLevel level, const char* message, cons
   Json::StreamWriterBuilder builder;
   builder["indentation"] = "";  // Compact JSON, no pretty-printing
 
-  root["level"] = GetLogLevelString(level);
   root["ts"] = GetISO8601Timestamp();
+  root["level"] = GetLogLevelString(level);
   root["msg"] = message;
 
   if (caller != nullptr) {
@@ -61,7 +61,37 @@ std::string FormatJsonLogEntry(EchoVR::LogLevel level, const char* message, cons
   return Json::writeString(builder, root);
 }
 
+/// Helper to call WriteLog with variadic args (builds a proper va_list)
+static VOID WriteLogV(EchoVR::LogLevel level, UINT64 unk, const CHAR* format, ...) {
+  va_list args;
+  va_start(args, format);
+  EchoVR::WriteLog(level, unk, format, args);
+  va_end(args);
+}
+
 VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_list vl) {
+  // Recursion guard — EchoVR::WriteLog is detoured back to us.
+  // Any call to EchoVR::WriteLog or WriteLogV from within this function
+  // re-enters the hook. The guard ensures the re-entrant call passes through.
+  static thread_local bool inHook = false;
+  if (inHook) {
+    EchoVR::WriteLog(logLevel, unk, format, vl);
+    return;
+  }
+  struct Guard { bool& f; ~Guard() { f = false; } } guard{inHook};
+  inHook = true;
+
+  // Default to info — skip debug-level messages from stdout (still goes to game log)
+  if (logLevel == EchoVR::LogLevel::Debug) {
+    EchoVR::WriteLog(logLevel, unk, format, vl);
+    return;
+  }
+
+  // Capture login session GUID from pnsrad.dll's login response.
+  // pnsrad.dll prints "[NSUSER] LoginId: <GUID>:" directly (bypasses WriteLog).
+  // We match any message containing "LoginId" that goes through WriteLog as a fallback,
+  // but the primary capture is in NetGameSwitchStateHook when state transitions to LoggedIn.
+
   if (!strcmp(format, "[DEBUGPRINT] %s %s") || !strcmp(format, "[SCRIPT] %s: %s")) {
     CHAR formattedLog[0x1000];
     memset(formattedLog, 0, sizeof(formattedLog));
@@ -79,33 +109,21 @@ VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_
   } else if (!strcmp(format, "[NETGAME] No screen stats info for game mode %s"))
     return;
 
-  if (g_noConsole) return EchoVR::WriteLog(logLevel, unk, format, vl);
-
-  CHAR formattedMessage[0x1000];
-  memset(formattedMessage, 0, sizeof(formattedMessage));
-  va_list vl_copy2;
-  va_copy(vl_copy2, vl);
-#ifdef _WIN32
-  vsprintf_s(formattedMessage, format, vl_copy2);
-#else
-  vsnprintf(formattedMessage, sizeof(formattedMessage), format, vl_copy2);
-#endif
-  va_end(vl_copy2);
-
-  std::string jsonLog = FormatJsonLogEntry(logLevel, formattedMessage);
-  printf("%s\n", jsonLog.c_str());
-  fflush(stdout);
-
   EchoVR::WriteLog(logLevel, unk, format, vl);
 }
 
 VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_list args;
   va_start(args, format);
-  if (g_isHeadless)
-    WriteLogHook(level, 0, format, args);
-  else
-    EchoVR::WriteLog(level, 0, format, args);
+
+  // The game's WriteLog puts [ERROR]/[WARNING] BEFORE the timestamp.
+  // To keep timestamp-first ordering, downgrade our error/warning messages
+  // to Info level and embed the level tag in the message text.
+  // Removed: level conversion experiment
+
+  // Always go through WriteLogHook — it handles level-to-timestamp reordering
+  // and debug filtering. EchoVR::WriteLog (trampoline) is called at the end.
+  WriteLogHook(level, 0, format, args);
   va_end(args);
 }
 

@@ -963,7 +963,7 @@ void GameServerLib::RegisterTcpCallbacks() {
 
     gameservice::v1::Envelope envelope;
     auto* registration = envelope.mutable_game_server_registration();
-    registration->set_login_session_id(GuidToUuidString(state.loginSessionId));
+    registration->set_login_session_id(GuidToUuidString(g_loginSessionId));
     registration->set_server_id(static_cast<uint64_t>(state.serverId));
     registration->set_internal_ip_address(Ipv4ToString(gameServerAddr.sin_addr.S_un.S_addr));
     registration->set_port(static_cast<uint32_t>(broadcaster->data->broadcastSocketInfo.port));
@@ -1143,7 +1143,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   // Build protobuf registration request
   gameservice::v1::Envelope envelope;
   auto* registration = envelope.mutable_game_server_registration();
-  registration->set_login_session_id(GuidToUuidString(state.loginSessionId));
+  registration->set_login_session_id(GuidToUuidString(g_loginSessionId));
   registration->set_server_id(static_cast<uint64_t>(serverId));
   registration->set_internal_ip_address(externalIp);  // public-facing IP
   registration->set_port(static_cast<uint32_t>(broadcasterPort));

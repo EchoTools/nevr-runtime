@@ -25,3 +25,11 @@ UINT16 g_upnpPort = 0;
 CHAR g_internalIpOverride[46] = {};
 /// External IP override for registration (empty = auto). Set by config "external_ip".
 CHAR g_externalIpOverride[46] = {};
+/// Login session GUID captured from game's login response. Used by gameserver registration.
+GUID g_loginSessionId = {};
+/// Arena round time override in seconds (0.0 = use game default 300s). Set by config "arena_round_time".
+FLOAT g_arenaRoundTime = 0.0f;
+/// Arena post-goal celebration time override in seconds (0.0 = use game default 15s). Set by config "arena_celebration_time".
+FLOAT g_arenaCelebrationTime = 0.0f;
+/// Arena mercy rule point spread override (0.0 = use game default 12). Set by config "arena_mercy_score".
+FLOAT g_arenaMercyScore = 0.0f;

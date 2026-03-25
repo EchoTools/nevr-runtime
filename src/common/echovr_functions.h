@@ -45,6 +45,11 @@ extern BroadcasterUnlistenFunc* BroadcasterUnlisten;
 typedef CHAR* JsonValueAsStringFunc(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValue, BOOL reportFailure);
 extern JsonValueAsStringFunc* JsonValueAsString;
 
+/// Reads a float value from a parsed JSON document at a given path.
+/// Path uses pipe separators (e.g. "round_rules|round_time").
+typedef FLOAT CJsonGetFloatFunc(PVOID root, const CHAR* path, FLOAT defaultValue, INT32 required);
+extern CJsonGetFloatFunc* CJsonGetFloat;
+
 /// Parses a URI string into a URI container structure.
 typedef HRESULT UriContainerParseFunc(EchoVR::UriContainer* uriContainer, CHAR* uri);
 extern UriContainerParseFunc* UriContainerParse;

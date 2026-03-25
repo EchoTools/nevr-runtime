@@ -420,6 +420,112 @@ VOID InitializeGlobalGameSpaceHook(PVOID pGame, PVOID pGameSpace) {
   OriginalInitializeGlobalGameSpace(pGame, pGameSpace);
 }
 
+// ============================================================================
+// Engine entity lookup null-check hook — prevent AV in server mode
+// ============================================================================
+
+/// Original function: Engine entity lookup @ 0x140f80ed0
+/// This function dereferences *(*(int64_t*)arg1 + 0x5e0) which is a hash table
+/// pointer. In server mode, this field can be uninitialized (0x10), causing an
+/// access violation at address 0x4008. We add a null check and return -1 (the
+/// function's default "not found" value) when the pointer is invalid.
+typedef INT16 EngineEntityLookupFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5);
+EngineEntityLookupFunc* OriginalEngineEntityLookup = nullptr;
+
+INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
+  if (g_isServer) {
+    // Check if the structure pointer chain is valid before calling original
+    INT64* outerPtr = (INT64*)arg1;
+    if (outerPtr == nullptr) return -1;
+    INT64 innerPtr = *outerPtr;
+    if (innerPtr == 0) return -1;
+    // Check the hash table pointer at +0x5e0
+    INT64 hashTablePtr = *(INT64*)(innerPtr + 0x5e0);
+    if (hashTablePtr < 0x10000) {
+      static volatile LONG guardCount = 0;
+      LONG c = InterlockedIncrement(&guardCount);
+      if (c <= 3) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] Entity lookup null-guard triggered (ptr+0x5e0=%p, count=%ld)", (void*)hashTablePtr, c);
+      }
+      return -1;
+    }
+  }
+  return OriginalEngineEntityLookup(arg1, arg2, arg3, arg4, arg5);
+}
+
+// ============================================================================
+// Game main wrapper hook — restart game loop on crash in server mode
+// ============================================================================
+
+/// Original function: Game main wrapper @ 0x1400cd510
+/// Calls the game's main loop (fcn.1400cd550). If the game loop returns (which
+/// means a fatal error occurred), the original function calls the crash handler.
+/// In server mode, we restart the game loop instead so the server stays alive.
+typedef VOID GameMainWrapperFunc(INT64 arg1);
+GameMainWrapperFunc* OriginalGameMainWrapper = nullptr;
+
+/// Direct pointer to the game's main function (fcn.1400cd550) so we can call
+/// it directly in the restart loop without going through the wrapper.
+typedef VOID GameMainFunc(INT64 arg1);
+GameMainFunc* GameMain = nullptr;
+
+/// Jump buffer for recovering from fatal crashes in the game loop.
+/// When the VEH catches a null-pointer AV in server mode, it longjmps here
+/// to restart the game loop instead of letting the SEH handler terminate.
+#include <setjmp.h>
+static jmp_buf g_gameLoopJmpBuf;
+static volatile bool g_gameLoopJmpBufValid = false;
+
+VOID GameMainWrapperHook(INT64 arg1) {
+  // Always set up the longjmp recovery point — g_isServer isn't set yet when this
+  // runs (CLI args haven't been parsed). The VEH checks g_isServer at exception time.
+  int crashCount = setjmp(g_gameLoopJmpBuf);
+  g_gameLoopJmpBufValid = true;
+
+  if (crashCount > 0) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] Game loop recovered from crash #%d — entering server hold", crashCount);
+    // The game loop crashed and can't be safely restarted (internal state is
+    // corrupted). Keep the process alive — the broadcaster and game server
+    // were already initialized, and the HTTP API may still be listening.
+    while (true) {
+      Sleep(1000);
+    }
+  }
+
+  // Run the game main loop
+  GameMain(arg1);
+
+  // If we get here, the game loop returned normally (shouldn't happen)
+  g_gameLoopJmpBufValid = false;
+  Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Game loop exited normally — entering server hold");
+  while (true) {
+    Sleep(1000);
+  }
+}
+
+// ============================================================================
+// BugSplat crash handler hook — prevent fatal exits in server mode
+// ============================================================================
+
+/// Original function: BugSplat crash handler @ 0x1400dbbc0
+/// Called from 5 sites when the game encounters a fatal error. Builds an error
+/// report, calls ExitProcess(1), then executes int3. In server mode the crash
+/// is non-fatal (missing actors, dialogue scenes, etc.) so we log and return.
+/// Callers have fallthrough code paths, so returning is safe.
+typedef VOID BugSplatCrashHandlerFunc(INT64 exitCode);
+BugSplatCrashHandlerFunc* OriginalBugSplatCrashHandler = nullptr;
+
+VOID BugSplatCrashHandlerHook(INT64 exitCode) {
+  if (g_isServer) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] BugSplat crash handler intercepted (exit code %lld) — suppressed in server mode", exitCode);
+    return;
+  }
+  OriginalBugSplatCrashHandler(exitCode);
+}
+
 /// <summary>
 /// Patches the game to run as a dedicated server, exposing its game server broadcast port, adjusting its log file path.
 /// </summary>
@@ -1021,6 +1127,70 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     }
   }
 
+  // Capture the login session GUID when entering the lobby.
+  // By this point the Lobby is initialized and localEntrants contains the server's
+  // own login session at entrant[0]. The GUID was set by pnsrad.dll's LoginIdResponseCB
+  // after the WebSocket login completed. We read it from the Lobby structure.
+  if (state == EchoVR::NetGameState::Lobby && g_loginSessionId.Data1 == 0 && g_pGame) {
+    // The game's CR15NetGame has a lobby at a known offset. The IServerLib::Initialize
+    // already receives the Lobby*. But here we read it from the Lobby's localEntrants
+    // pool, which contains LoginSession GUIDs for each entrant.
+    // The server's own login session is the first one populated.
+
+    // pnsrad.dll prints "LoginId: <GUID>:" to stdout (bypasses WriteLog), but it
+    // also goes to the game's log file in _local/r14logs/. Find the latest log
+    // and scan for the LoginId line.
+    WIN32_FIND_DATAA fd;
+    HANDLE hFind = FindFirstFileA("_local\\r14logs\\*.log", &fd);
+    if (hFind != INVALID_HANDLE_VALUE) {
+      CHAR newestLog[MAX_PATH] = {};
+      FILETIME newestTime = {};
+      do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+          if (CompareFileTime(&fd.ftLastWriteTime, &newestTime) > 0) {
+            newestTime = fd.ftLastWriteTime;
+            snprintf(newestLog, MAX_PATH, "_local\\r14logs\\%s", fd.cFileName);
+          }
+        }
+      } while (FindNextFileA(hFind, &fd));
+      FindClose(hFind);
+
+      if (newestLog[0] != '\0') {
+        FILE* logFile = fopen(newestLog, "r");
+        if (logFile) {
+          CHAR line[512];
+          while (fgets(line, sizeof(line), logFile)) {
+            CHAR* loginIdStr = strstr(line, "LoginId: ");
+            if (loginIdStr) {
+              loginIdStr += 9;
+              unsigned long d1;
+              unsigned int d2, d3, d4[8];
+              if (sscanf(loginIdStr, "%8lX-%4X-%4X-%2X%2X-%2X%2X%2X%2X%2X%2X",
+                         &d1, &d2, &d3, &d4[0], &d4[1], &d4[2], &d4[3], &d4[4], &d4[5], &d4[6], &d4[7]) == 11) {
+                g_loginSessionId.Data1 = d1;
+                g_loginSessionId.Data2 = (USHORT)d2;
+                g_loginSessionId.Data3 = (USHORT)d3;
+                for (int i = 0; i < 8; i++) g_loginSessionId.Data4[i] = (BYTE)d4[i];
+              }
+            }
+          }
+          fclose(logFile);
+        }
+      }
+    }
+
+    if (g_loginSessionId.Data1 != 0) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.PATCH] Captured login session: %08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+          g_loginSessionId.Data1, g_loginSessionId.Data2, g_loginSessionId.Data3,
+          g_loginSessionId.Data4[0], g_loginSessionId.Data4[1], g_loginSessionId.Data4[2],
+          g_loginSessionId.Data4[3], g_loginSessionId.Data4[4], g_loginSessionId.Data4[5],
+          g_loginSessionId.Data4[6], g_loginSessionId.Data4[7]);
+    } else {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Login session GUID not found in game log");
+    }
+  }
+
   // Initialize social features when entering lobby (broadcaster is available by now)
   static BOOL g_socialInitialized = FALSE;
   if (!g_socialInitialized && state == EchoVR::NetGameState::Lobby) {
@@ -1189,22 +1359,35 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     }
   }
 
-  // Auto-enable -noconsole on Wine/Linux (console allocation crashes or hangs)
+  // -server requires -headless and -noovr — the game's own CLI parser needs these
+  // on the command line for VR init bypass and renderer skip. Set them internally
+  // for our code, but warn if they're missing from the command line since the game
+  // won't have processed them.
+  if (g_isServer) {
+    if (!g_isHeadless) {
+      g_isHeadless = TRUE;
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] -server without -headless — add -headless to the command line");
+    }
+    if (!g_isNoOVR) {
+      g_isNoOVR = TRUE;
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] -server without -noovr — add -noovr to the command line");
+    }
+  }
+
+  // Auto-enable -noconsole on Wine/Linux
   if (!g_noConsole) {
     HMODULE ntdll = GetModuleHandleA("ntdll.dll");
     if (ntdll && GetProcAddress(ntdll, "wine_get_version") != NULL) {
       g_noConsole = TRUE;
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Wine detected — forcing -noconsole");
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Wine detected — defaulting to -noconsole");
     }
   }
 
-  // Validate argument combinations.
+  // Validate argument combinations
   if (g_isServer && g_isOffline) {
     FatalError("Arguments -server and -offline are mutually exclusive.", NULL);
-  }
-
-  if (g_noConsole && !g_isHeadless && g_isServer) {
-    FatalError("The -noconsole flag requires -headless to be specified.", NULL);
   }
 
   // Store the game pointer globally for social feature access
@@ -1785,6 +1968,20 @@ typedef VOID(WINAPI* ExitProcessFunc)(UINT);
 ExitProcessFunc OriginalExitProcess = nullptr;
 
 VOID WINAPI ExitProcessHook(UINT uExitCode) {
+  // In server mode, always suppress ExitProcess — the game's crash reporting
+  // chain calls it from multiple places (crash handler, SEH handler, C runtime).
+  // We need ALL of them suppressed to keep the server alive.
+  if (g_isServer) {
+    static volatile LONG exitSuppressCount = 0;
+    LONG count = InterlockedIncrement(&exitSuppressCount);
+    if (count <= 5) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] ExitProcess(%u) suppressed in server mode (call #%ld)", uExitCode, count);
+    }
+    g_justSuppressedCrash = true;
+    return;
+  }
+
   if (g_crashReporterSuppressed) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] ExitProcess(%u) suppressed after crash reporter block - server continuing", uExitCode);
@@ -1811,6 +2008,82 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
 /// the CPU executes the int3 padding byte at the return address, which would kill the process.
 /// We advance RIP by 1 to skip it and continue execution.
 /// </summary>
+/// Counter for access violation recoveries
+static volatile LONG g_avRecoveryCount = 0;
+
+/// Log a full crash dump: exception info, registers, stack trace with RVAs.
+/// All addresses are logged as RVAs relative to the game base so they match
+/// revault / Ghidra / IDA directly.
+static void LogCrashDump(PEXCEPTION_POINTERS ex) {
+  PEXCEPTION_RECORD rec = ex->ExceptionRecord;
+  PCONTEXT ctx = ex->ContextRecord;
+  DWORD64 base = (DWORD64)EchoVR::g_GameBaseAddress;
+
+  auto rva = [base](DWORD64 addr) -> INT64 {
+    if (addr >= base && addr < base + 0x2000000) return (INT64)(addr - base);
+    return -1;
+  };
+
+  auto fmtAddr = [base, rva](DWORD64 addr, char* buf, size_t sz) {
+    INT64 r = rva(addr);
+    if (r >= 0)
+      snprintf(buf, sz, "0x%llX (game+0x%llX)", (unsigned long long)addr, (unsigned long long)r);
+    else
+      snprintf(buf, sz, "0x%llX (external)", (unsigned long long)addr);
+  };
+
+  // Exception type
+  const char* excName = "Unknown";
+  switch (rec->ExceptionCode) {
+    case EXCEPTION_ACCESS_VIOLATION: excName = "ACCESS_VIOLATION"; break;
+    case EXCEPTION_BREAKPOINT: excName = "BREAKPOINT"; break;
+    case EXCEPTION_ILLEGAL_INSTRUCTION: excName = "ILLEGAL_INSTRUCTION"; break;
+    case EXCEPTION_STACK_OVERFLOW: excName = "STACK_OVERFLOW"; break;
+    case EXCEPTION_INT_DIVIDE_BY_ZERO: excName = "INT_DIVIDE_BY_ZERO"; break;
+  }
+
+  char ripStr[80];
+  fmtAddr(ctx->Rip, ripStr, sizeof(ripStr));
+
+  Log(EchoVR::LogLevel::Error, "=== CRASH DUMP ===");
+  Log(EchoVR::LogLevel::Error, "Exception: %s (0x%08lX)", excName, rec->ExceptionCode);
+  Log(EchoVR::LogLevel::Error, "RIP: %s", ripStr);
+
+  // Access violation details
+  if (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2) {
+    const char* op = rec->ExceptionInformation[0] == 0 ? "READ"
+                   : rec->ExceptionInformation[0] == 1 ? "WRITE"
+                                                       : "EXECUTE";
+    Log(EchoVR::LogLevel::Error, "Access: %s at 0x%llX", op, (unsigned long long)rec->ExceptionInformation[1]);
+  }
+
+  // Register dump
+  Log(EchoVR::LogLevel::Error, "RAX=%016llX  RBX=%016llX  RCX=%016llX  RDX=%016llX",
+      ctx->Rax, ctx->Rbx, ctx->Rcx, ctx->Rdx);
+  Log(EchoVR::LogLevel::Error, "RSI=%016llX  RDI=%016llX  RBP=%016llX  RSP=%016llX",
+      ctx->Rsi, ctx->Rdi, ctx->Rbp, ctx->Rsp);
+  Log(EchoVR::LogLevel::Error, " R8=%016llX   R9=%016llX  R10=%016llX  R11=%016llX",
+      ctx->R8, ctx->R9, ctx->R10, ctx->R11);
+  Log(EchoVR::LogLevel::Error, "R12=%016llX  R13=%016llX  R14=%016llX  R15=%016llX",
+      ctx->R12, ctx->R13, ctx->R14, ctx->R15);
+
+  // Stack scan — x64 doesn't use frame pointers consistently, so scan RSP
+  // for return addresses that point into the game's code range.
+  Log(EchoVR::LogLevel::Error, "Stack scan (game code return addresses):");
+  DWORD64* sp = (DWORD64*)ctx->Rsp;
+  int found = 0;
+  for (int i = 0; i < 256 && found < 16; i++) {
+    if (IsBadReadPtr(sp + i, 8)) break;
+    DWORD64 val = sp[i];
+    INT64 r = rva(val);
+    if (r >= 0 && r < 0x1800000) {
+      Log(EchoVR::LogLevel::Error, "  #%d  [RSP+0x%X] game+0x%llX", found, i * 8, (unsigned long long)r);
+      found++;
+    }
+  }
+  Log(EchoVR::LogLevel::Error, "=== END CRASH DUMP ===");
+}
+
 LONG WINAPI BreakpointVEH(PEXCEPTION_POINTERS pExceptionInfo) {
   if (pExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT && g_justSuppressedCrash) {
     Log(EchoVR::LogLevel::Warning,
@@ -1820,6 +2093,22 @@ LONG WINAPI BreakpointVEH(PEXCEPTION_POINTERS pExceptionInfo) {
     g_justSuppressedCrash = false;
     return EXCEPTION_CONTINUE_EXECUTION;
   }
+
+  // In server mode, catch null-pointer access violations and recover via longjmp
+  if (g_isServer && pExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
+    DWORD64 target = pExceptionInfo->ExceptionRecord->ExceptionInformation[1];
+
+    if (target < 0x10000 && g_gameLoopJmpBufValid) {
+      LONG count = InterlockedIncrement(&g_avRecoveryCount);
+      if (count <= 3) LogCrashDump(pExceptionInfo);
+
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] Null-ptr AV #%ld — longjmp to server hold", count);
+      g_gameLoopJmpBufValid = false;
+      longjmp(g_gameLoopJmpBuf, (int)count);
+    }
+  }
+
   return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -1861,14 +2150,27 @@ HRESULT WINAPI CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD 
   Log(EchoVR::LogLevel::Info, logBuf);
 
   if (IsEqualCLSID(rclsid, CLSID_WinHttpRequest)) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] WinHTTP COM object requested - returning stub implementation");
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] WinHTTP COM → libcurl bridge");
+
+    // The game stores COM-related data (IID, CLSID, type descriptors) in .rdata
+    // which is read-only. Wine's COM implementation writes to these during
+    // marshaling/QI, causing an AV. Make the surrounding pages writable.
+    // The COM data lives around 0x16E8C88..0x16E9000 in the game's address space.
+    static bool s_protectionFixed = false;
+    if (!s_protectionFixed) {
+      DWORD oldProtect;
+      PVOID rdataStart = (PVOID)(EchoVR::g_GameBaseAddress + 0x16E8000);
+      if (VirtualProtect(rdataStart, 0x2000, PAGE_READWRITE, &oldProtect)) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Made COM rdata page writable (was 0x%lX)", oldProtect);
+      }
+      s_protectionFixed = true;
+    }
 
     extern HRESULT CreateWinHttpRequestStub(REFIID riid, void** ppvObject);
     HRESULT hr = CreateWinHttpRequestStub(riid, ppv);
-
-    snprintf(logBuf, sizeof(logBuf), "[NEVR.PATCH] CreateWinHttpRequestStub returned HRESULT 0x%08lX", hr);
-    Log(EchoVR::LogLevel::Info, logBuf);
-
+    if (FAILED(hr)) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] WinHTTP stub creation failed: 0x%08lX", hr);
+    }
     return hr;
   }
 
@@ -2037,6 +2339,29 @@ VOID Initialize() {
   } else {
     Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load ole32.dll for WinHTTP hook");
   }
+
+  // Hook game main wrapper — longjmp recovery on crash keeps server alive
+  GameMain = (GameMainFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN);
+  OriginalGameMainWrapper =
+      (GameMainWrapperFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN_WRAPPER);
+  PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook));
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Game main wrapper hook installed (server crash recovery)");
+
+  // Hook engine entity lookup to prevent null-pointer AV in server mode.
+  // The function dereferences a hash table pointer at +0x5e0 that's uninitialized
+  // in dedicated server mode (no player actor / client-side state).
+  OriginalEngineEntityLookup =
+      (EngineEntityLookupFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::ENGINE_ENTITY_LOOKUP);
+  PatchDetour(&OriginalEngineEntityLookup, reinterpret_cast<PVOID>(EngineEntityLookupHook));
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Engine entity lookup hook installed (null-pointer guard)");
+
+  // Hook BugSplat crash handler — prevents fatal exits in server mode.
+  // The handler is called from 5 sites for missing actors, dialogue scenes, etc.
+  // These are non-fatal in headless dedicated server mode.
+  OriginalBugSplatCrashHandler =
+      (BugSplatCrashHandlerFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::BUGSPLAT_CRASH_HANDLER);
+  PatchDetour(&OriginalBugSplatCrashHandler, reinterpret_cast<PVOID>(BugSplatCrashHandlerHook));
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] BugSplat crash handler hook installed (server crash suppression)");
 
   // Hook InitializeGlobalGameSpace to prevent fatal crash in server mode
   // (no local player actor exists in the global gamespace for dedicated servers)
