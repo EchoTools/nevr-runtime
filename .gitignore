@@ -17,7 +17,7 @@
 *.dll
 
 # Fortran module files
-*.mod
+*.f90.mod
 *.smod
 
 # Compiled Static libraries
