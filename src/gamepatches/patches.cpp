@@ -1560,6 +1560,52 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
     if (externalIpVal != NULL && externalIpVal[0] != '\0') {
       strncpy(g_externalIpOverride, externalIpVal, sizeof(g_externalIpOverride) - 1);
     }
+
+    // Arena rule overrides (float values, 0 = use game default)
+    CHAR* arenaRoundTimeVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"arena_round_time", NULL, false);
+    if (arenaRoundTimeVal != NULL && arenaRoundTimeVal[0] != '\0') {
+      g_arenaRoundTime = (FLOAT)atof(arenaRoundTimeVal);
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Arena round time override: %.0f seconds", g_arenaRoundTime);
+    }
+    CHAR* arenaCelebrationVal =
+        EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"arena_celebration_time", NULL, false);
+    if (arenaCelebrationVal != NULL && arenaCelebrationVal[0] != '\0') {
+      g_arenaCelebrationTime = (FLOAT)atof(arenaCelebrationVal);
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Arena celebration time override: %.1f seconds", g_arenaCelebrationTime);
+    }
+    CHAR* arenaMercyVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"arena_mercy_score", NULL, false);
+    if (arenaMercyVal != NULL && arenaMercyVal[0] != '\0') {
+      g_arenaMercyScore = (FLOAT)atof(arenaMercyVal);
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Arena mercy score override: %.0f", g_arenaMercyScore);
+    }
+  }
+
+  return result;
+}
+
+/// <summary>
+/// Hook for CJson_GetFloat to override arena rule config values at load time.
+/// Matches specific JSON path suffixes and returns overridden values from config.json.
+/// </summary>
+FLOAT CJsonGetFloatHook(PVOID root, const CHAR* path, FLOAT defaultValue, INT32 required) {
+  FLOAT result = EchoVR::CJsonGetFloat(root, path, defaultValue, required);
+
+  if (path != NULL) {
+    // point_score_celebration_time (but not the _private variant)
+    if (g_arenaCelebrationTime > 0.0f && strstr(path, "point_score_celebration_time") != NULL &&
+        strstr(path, "_private") == NULL) {
+      return g_arenaCelebrationTime;
+    }
+    // round_time (but not round_time_private)
+    if (g_arenaRoundTime > 0.0f && strstr(path, "round_time") != NULL && strstr(path, "_private") == NULL &&
+        strstr(path, "round_timer") == NULL && strstr(path, "sudden_death_round_time") == NULL) {
+      return g_arenaRoundTime;
+    }
+    // mercy_win_point_spread (but not the _private variant)
+    if (g_arenaMercyScore > 0.0f && strstr(path, "mercy_win_point_spread") != NULL &&
+        strstr(path, "_private") == NULL) {
+      return g_arenaMercyScore;
+    }
   }
 
   return result;
@@ -2272,6 +2318,7 @@ VOID Initialize() {
   PatchDetour(&EchoVR::PreprocessCommandLine, reinterpret_cast<PVOID>(PreprocessCommandLineHook));
   PatchDetour(&EchoVR::NetGameSwitchState, reinterpret_cast<PVOID>(NetGameSwitchStateHook));
   PatchDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook));
+  PatchDetour(&EchoVR::CJsonGetFloat, reinterpret_cast<PVOID>(CJsonGetFloatHook));
   PatchDetour(&EchoVR::HttpConnect, reinterpret_cast<PVOID>(HttpConnectHook));
   PatchDetour(&EchoVR::GetProcAddress, reinterpret_cast<PVOID>(GetProcAddressHook));
   PatchDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook));
