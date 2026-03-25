@@ -35,8 +35,9 @@ dist-lite: build
     cmake --build --preset {{ preset }} --target dist-lite
 
 # Regenerate C++ protobuf from BSR (buf.build/echotools/nevr-api)
+# Uses vcpkg protoc to match the runtime version. Run `just configure` first.
 proto:
-    buf generate buf.build/echotools/nevr-api
+    PATH="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed/x64-linux/tools/protobuf:$PATH" buf generate buf.build/echotools/nevr-api
 
 # Remove build and dist directories
 clean:
