@@ -476,6 +476,9 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // Update the window title
   if (hWindow != NULL && isNoOVR) EchoVR::SetWindowTextA_(hWindow, "Echo VR - [DEMO]");
 
+  // Load plugins (after CLI flags are known, game instance exists)
+  LoadPlugins();
+
   // Run the original method
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
   return result;
@@ -634,6 +637,4 @@ VOID Initialize() {
 #if _DEBUG
   PatchDeadlockMonitor();
 #endif
-
-  LoadPlugins();
 }
