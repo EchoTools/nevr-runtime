@@ -188,6 +188,7 @@ add_subdirectory(src/gamepatches)
 add_subdirectory(src/legacy/gamepatches)
 add_subdirectory(src/gameserver)
 add_subdirectory(src/legacy/gameserver)
+add_subdirectory(src/server)
 # telemetryagent moved to extras/ — needs protobuf-lite refactor before reintegration
 
 # Include a local cmake script if it exists
@@ -235,6 +236,7 @@ add_custom_target(dist-prepare
   # Copy executables (launchers and loaders, if exist)
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_DIR}/" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_patched.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_patched.dll" "${DIST_DIR}/" || true
+  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" "${DIST_DIR}/" || true
   #COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/DllLoader.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/DllLoader.exe" "${DIST_DIR}/" || true
    COMMAND test -f "${CMAKE_SOURCE_DIR}/README.md" && ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_DIR}/" || true
   VERBATIM
@@ -317,6 +319,7 @@ add_custom_target(dist-lite-prepare
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll" "${DIST_LITE_DIR}/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/gameserverlegacy.dll" || ${CMAKE_COMMAND} -E true
   # Copy executables (launchers and loaders, if exist)
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
   #COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/DllLoader.exe" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
   COMMENT "Preparing lite distribution directory (stripped): ${DIST_LITE_DIR}"
