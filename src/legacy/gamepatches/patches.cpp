@@ -632,9 +632,6 @@ VOID Initialize() {
   // Run some startup patches
   PatchNoOvrRequiresSpectatorStream();
 
-  // Patch out the deadlock monitor thread's validation routine if we're compiling in debug mode, as this will panic
-  // from process suspension.
-#if _DEBUG
+  // Patch out the deadlock monitor — it false-triggers on Wine under load
   PatchDeadlockMonitor();
-#endif
 }
