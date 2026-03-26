@@ -423,14 +423,6 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   return result;
 }
 
-/// Throttles the thread pool dispatch spin loop on Wine. The original burns 60%+ CPU
-/// at idle because its work-stealing loop spins without sleeping.
-/// Sleep(1) = ~1ms on Wine (validated), giving ~1000 checks/sec instead of millions.
-VOID ThreadPoolDispatchHook(INT64 arg1) {
-  EchoVR::ThreadPoolDispatch(arg1);
-  Sleep(1);
-}
-
 /// <summary>
 /// A detour hook for the game's command line pre-processing method, used to parse command line arguments.
 /// </summary>
@@ -488,12 +480,6 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 
   // Update the window title
   if (hWindow != NULL && isNoOVR) EchoVR::SetWindowTextA_(hWindow, "Echo VR - [DEMO]");
-
-  // Throttle thread pool spin loop on headless servers (saves ~60% CPU on Wine)
-  if (isServer && isHeadless) {
-    PatchDetour(&EchoVR::ThreadPoolDispatch, reinterpret_cast<PVOID>(ThreadPoolDispatchHook));
-    Log(EchoVR::LogLevel::Info, "[ECHORELAY.PATCH] Thread pool dispatch hook installed (idle CPU fix)");
-  }
 
   // Load plugins (after CLI flags are known, game instance exists)
   LoadPlugins();
