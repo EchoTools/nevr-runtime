@@ -423,6 +423,14 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   return result;
 }
 
+/// Throttles the thread pool dispatch spin loop on Wine. The original burns 60%+ CPU
+/// at idle because its work-stealing loop spins without sleeping.
+/// Sleep(1) = ~1ms on Wine (validated), giving ~1000 checks/sec instead of millions.
+VOID ThreadPoolDispatchHook(INT64 arg1) {
+  EchoVR::ThreadPoolDispatch(arg1);
+  Sleep(1);
+}
+
 /// <summary>
 /// A detour hook for the game's command line pre-processing method, used to parse command line arguments.
 /// </summary>
@@ -481,6 +489,12 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // Update the window title
   if (hWindow != NULL && isNoOVR) EchoVR::SetWindowTextA_(hWindow, "Echo VR - [DEMO]");
 
+  // Throttle thread pool spin loop on headless servers (saves ~60% CPU on Wine)
+  if (isServer && isHeadless) {
+    PatchDetour(&EchoVR::ThreadPoolDispatch, reinterpret_cast<PVOID>(ThreadPoolDispatchHook));
+    Log(EchoVR::LogLevel::Info, "[ECHORELAY.PATCH] Thread pool dispatch hook installed (idle CPU fix)");
+  }
+
   // Load plugins (after CLI flags are known, game instance exists)
   LoadPlugins();
 
@@ -490,25 +504,32 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 }
 
 /// <summary>
-/// A detour hook for CJson_GetFloat to override arena rule config values at load time.
-/// Intercepts float reads from the game's JSON config system and returns overridden values
-/// for arena round time, celebration time, and mercy score.
+/// A detour hook for CJsonInspectorRead::ReadFloat to override arena rule config values.
+/// This is the 623-caller function that reads float fields from archived binary JSON configs.
+/// CJson_GetFloat (the thunk at 0x5FCA60) is NOT called for archived balance configs —
+/// the game uses the binary inspector path instead.
 /// </summary>
-FLOAT CJsonGetFloatHook(PVOID root, const CHAR* path, FLOAT defaultValue, INT32 required) {
-  FLOAT result = EchoVR::CJsonGetFloat(root, path, defaultValue, required);
+static INT32 s_readFloatTraceCount = 0;
+INT32 CJsonInspectorReadFloatHook(PVOID inspector, FLOAT* outValue, const CHAR* fieldName) {
+  INT32 result = EchoVR::CJsonInspectorReadFloat(inspector, outValue, fieldName);
 
-  if (path != NULL) {
-    if (arenaCelebrationTime > 0.0f && strstr(path, "point_score_celebration_time") != NULL &&
-        strstr(path, "_private") == NULL) {
-      return arenaCelebrationTime;
+  if (fieldName != NULL && outValue != NULL) {
+    // Trace: log any field containing round, time, celebration, mercy, or score
+    if (strstr(fieldName, "round") || strstr(fieldName, "celebration") || strstr(fieldName, "mercy") ||
+        strstr(fieldName, "time") || strstr(fieldName, "score")) {
+      Log(EchoVR::LogLevel::Info, "[ECHORELAY.PATCH] ReadFloat: \"%s\" = %.2f", fieldName, *outValue);
     }
-    if (arenaRoundTime > 0.0f && strstr(path, "round_time") != NULL && strstr(path, "_private") == NULL &&
-        strstr(path, "round_timer") == NULL && strstr(path, "sudden_death_round_time") == NULL) {
-      return arenaRoundTime;
-    }
-    if (arenaMercyScore > 0.0f && strstr(path, "mercy_win_point_spread") != NULL &&
-        strstr(path, "_private") == NULL) {
-      return arenaMercyScore;
+
+    if (arenaCelebrationTime > 0.0f && strcmp(fieldName, "point_score_celebration_time") == 0) {
+      Log(EchoVR::LogLevel::Info, "[ECHORELAY.PATCH] OVERRIDE %s: %.2f -> %.2f", fieldName, *outValue,
+          arenaCelebrationTime);
+      *outValue = arenaCelebrationTime;
+    } else if (arenaRoundTime > 0.0f && strcmp(fieldName, "round_time") == 0) {
+      Log(EchoVR::LogLevel::Info, "[ECHORELAY.PATCH] OVERRIDE %s: %.2f -> %.2f", fieldName, *outValue, arenaRoundTime);
+      *outValue = arenaRoundTime;
+    } else if (arenaMercyScore > 0.0f && strcmp(fieldName, "mercy_win_point_spread") == 0) {
+      Log(EchoVR::LogLevel::Info, "[ECHORELAY.PATCH] OVERRIDE %s: %.2f -> %.2f", fieldName, *outValue, arenaMercyScore);
+      *outValue = arenaMercyScore;
     }
   }
 
@@ -678,7 +699,8 @@ VOID Initialize() {
   PatchDetour(&EchoVR::PreprocessCommandLine, reinterpret_cast<PVOID>(PreprocessCommandLineHook));
   PatchDetour(&EchoVR::NetGameSwitchState, reinterpret_cast<PVOID>(NetGameSwitchStateHook));
   PatchDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook));
-  PatchDetour(&EchoVR::CJsonGetFloat, reinterpret_cast<PVOID>(CJsonGetFloatHook));
+  // TODO: arena timing hook disabled — causes connection failures. Investigation tabled.
+  // PatchDetour(&EchoVR::CJsonInspectorReadFloat, reinterpret_cast<PVOID>(CJsonInspectorReadFloatHook));
   PatchDetour(&EchoVR::HttpConnect, reinterpret_cast<PVOID>(HttpConnectHook));
   PatchDetour(&EchoVR::GetProcAddress, reinterpret_cast<PVOID>(GetProcAddressHook));
   PatchDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook));

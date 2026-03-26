@@ -49,6 +49,16 @@ extern JsonValueAsStringFunc* JsonValueAsString;
 typedef FLOAT CJsonGetFloatFunc(PVOID root, const CHAR* path, FLOAT defaultValue, INT32 required);
 extern CJsonGetFloatFunc* CJsonGetFloat;
 
+// CJsonInspectorRead::ReadFloat — reads float field from binary/JSON inspector context
+// 623 callers. Signature: int(inspector*, float* out_value, const char* field_name)
+typedef INT32 CJsonInspectorReadFloatFunc(PVOID inspector, FLOAT* outValue, const CHAR* fieldName);
+extern CJsonInspectorReadFloatFunc* CJsonInspectorReadFloat;
+
+// Thread pool dispatch function — contains spin loop that burns CPU on Wine
+// perf: 60%+ of idle CPU is in this function's work-stealing loop
+typedef VOID ThreadPoolDispatchFunc(INT64 arg1);
+extern ThreadPoolDispatchFunc* ThreadPoolDispatch;
+
 // URI string parser
 typedef HRESULT UriContainerParseFunc(EchoVR::UriContainer* uriContainer, CHAR* uri);
 extern UriContainerParseFunc* UriContainerParse;

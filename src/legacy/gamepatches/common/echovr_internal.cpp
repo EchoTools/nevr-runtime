@@ -112,6 +112,12 @@ JsonValueAsStringFunc* JsonValueAsString = (JsonValueAsStringFunc*)(g_GameBaseAd
 /// CJson::Float — reads float from JSON path (22-byte thunk that calls CJson::Real and casts to float)
 CJsonGetFloatFunc* CJsonGetFloat = (CJsonGetFloatFunc*)(g_GameBaseAddress + 0x5FCA60);
 
+/// CJsonInspectorRead::ReadFloat — reads float from inspector context (623 callers)
+CJsonInspectorReadFloatFunc* CJsonInspectorReadFloat = (CJsonInspectorReadFloatFunc*)(g_GameBaseAddress + 0x174EC0);
+
+/// Thread pool dispatch — spin loop that burns 60%+ CPU on Wine at idle (perf validated)
+ThreadPoolDispatchFunc* ThreadPoolDispatch = (ThreadPoolDispatchFunc*)(g_GameBaseAddress + 0x1D64F0);
+
 /// Parses a URI string into a URI container structure.
 /// <returns>The result of the URI parsing operation.</returns>
 UriContainerParseFunc* UriContainerParse = (UriContainerParseFunc*)(g_GameBaseAddress + 0x621EC0);
