@@ -109,6 +109,9 @@ BroadcasterUnlistenFunc* BroadcasterUnlisten = (BroadcasterUnlistenFunc*)(g_Game
 /// <returns>The resulting string returned from the JSON get string operation.</returns>
 JsonValueAsStringFunc* JsonValueAsString = (JsonValueAsStringFunc*)(g_GameBaseAddress + 0x5FE290);
 
+/// CJson::Float — reads float from JSON path (22-byte thunk that calls CJson::Real and casts to float)
+CJsonGetFloatFunc* CJsonGetFloat = (CJsonGetFloatFunc*)(g_GameBaseAddress + 0x5FCA60);
+
 /// Parses a URI string into a URI container structure.
 /// <returns>The result of the URI parsing operation.</returns>
 UriContainerParseFunc* UriContainerParse = (UriContainerParseFunc*)(g_GameBaseAddress + 0x621EC0);

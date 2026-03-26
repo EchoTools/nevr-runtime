@@ -66,6 +66,11 @@ EchoVR::Json* localConfig = NULL;
 /// </summary>
 UINT32 headlessTimeStep = 120;
 
+/// Arena rule overrides (0.0 = use game default)
+FLOAT arenaRoundTime = 0.0f;
+FLOAT arenaCelebrationTime = 0.0f;
+FLOAT arenaMercyScore = 0.0f;
+
 /// <summary>
 /// Reports a fatal error with a message box, then exits the game.
 /// </summary>
@@ -485,6 +490,32 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 }
 
 /// <summary>
+/// A detour hook for CJson_GetFloat to override arena rule config values at load time.
+/// Intercepts float reads from the game's JSON config system and returns overridden values
+/// for arena round time, celebration time, and mercy score.
+/// </summary>
+FLOAT CJsonGetFloatHook(PVOID root, const CHAR* path, FLOAT defaultValue, INT32 required) {
+  FLOAT result = EchoVR::CJsonGetFloat(root, path, defaultValue, required);
+
+  if (path != NULL) {
+    if (arenaCelebrationTime > 0.0f && strstr(path, "point_score_celebration_time") != NULL &&
+        strstr(path, "_private") == NULL) {
+      return arenaCelebrationTime;
+    }
+    if (arenaRoundTime > 0.0f && strstr(path, "round_time") != NULL && strstr(path, "_private") == NULL &&
+        strstr(path, "round_timer") == NULL && strstr(path, "sudden_death_round_time") == NULL) {
+      return arenaRoundTime;
+    }
+    if (arenaMercyScore > 0.0f && strstr(path, "mercy_win_point_spread") != NULL &&
+        strstr(path, "_private") == NULL) {
+      return arenaMercyScore;
+    }
+  }
+
+  return result;
+}
+
+/// <summary>
 /// A detour hook for the game's function to load the local config.json for the game instance.
 /// </summary>
 /// <param name="pGame">A pointer to the game struct to load the config for.</param>
@@ -505,7 +536,29 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
 
   // Store a reference to the local config.
   localConfig = (EchoVR::Json*)((CHAR*)pGame + 0x63240);
-  return EchoVR::LoadLocalConfig(pGame);
+  UINT64 result = EchoVR::LoadLocalConfig(pGame);
+
+  // Read arena rule overrides from config.json
+  if (localConfig != NULL) {
+    CHAR* val = EchoVR::JsonValueAsString(localConfig, (CHAR*)"arena_round_time", NULL, false);
+    if (val != NULL && val[0] != '\0') {
+      arenaRoundTime = (FLOAT)atof(val);
+      Log(EchoVR::LogLevel::Info, "[ECHORELAY.PATCH] Arena round time override: %.0f seconds", arenaRoundTime);
+    }
+    val = EchoVR::JsonValueAsString(localConfig, (CHAR*)"arena_celebration_time", NULL, false);
+    if (val != NULL && val[0] != '\0') {
+      arenaCelebrationTime = (FLOAT)atof(val);
+      Log(EchoVR::LogLevel::Info, "[ECHORELAY.PATCH] Arena celebration time override: %.1f seconds",
+          arenaCelebrationTime);
+    }
+    val = EchoVR::JsonValueAsString(localConfig, (CHAR*)"arena_mercy_score", NULL, false);
+    if (val != NULL && val[0] != '\0') {
+      arenaMercyScore = (FLOAT)atof(val);
+      Log(EchoVR::LogLevel::Info, "[ECHORELAY.PATCH] Arena mercy score override: %.0f", arenaMercyScore);
+    }
+  }
+
+  return result;
 }
 
 /// <summary>
@@ -625,6 +678,7 @@ VOID Initialize() {
   PatchDetour(&EchoVR::PreprocessCommandLine, reinterpret_cast<PVOID>(PreprocessCommandLineHook));
   PatchDetour(&EchoVR::NetGameSwitchState, reinterpret_cast<PVOID>(NetGameSwitchStateHook));
   PatchDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook));
+  PatchDetour(&EchoVR::CJsonGetFloat, reinterpret_cast<PVOID>(CJsonGetFloatHook));
   PatchDetour(&EchoVR::HttpConnect, reinterpret_cast<PVOID>(HttpConnectHook));
   PatchDetour(&EchoVR::GetProcAddress, reinterpret_cast<PVOID>(GetProcAddressHook));
   PatchDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook));
