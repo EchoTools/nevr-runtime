@@ -33,7 +33,7 @@ extern UINT16 g_upnpPort;
 extern CHAR g_internalIpOverride[46];
 extern CHAR g_externalIpOverride[46];
 /// Login session GUID captured from the game's login response.
-/// Populated by WriteLogHook when it sees "[NSUSER] LoginId: <GUID>".
+/// Populated by NetGameSwitchStateHook when state transitions to LoggedIn.
 extern GUID g_loginSessionId;
 
 /// Arena rule overrides (0.0 = use game default). Set by config.json keys.

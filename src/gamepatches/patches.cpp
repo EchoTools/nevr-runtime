@@ -140,86 +140,9 @@ VOID PatchDetour(T* ppPointer, PVOID pDetour) {
   Hooking::Attach(reinterpret_cast<PVOID*>(ppPointer), pDetour);
 }
 
-/// <summary>
-/// A detour hook for the game's "write log" function. It intercepts overly noisy logs and ensures they are outputted
-/// over stdout/stderr for headless mode.
-/// </summary>
-/// <param name="logLevel">The level the message was logged with.</param>
-/// <param name="unk">TODO: Unknown</param>
-/// <param name="format">The format string to log with.</param>
-/// <param name="vl">The list of variables to use to format the format string before logging.</param>
-/// <returns>None</returns>
-VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_list vl) {
-  if (!strcmp(format, "[DEBUGPRINT] %s %s") || !strcmp(format, "[SCRIPT] %s: %s")) {
-    // If the overall template matched, format it
-    CHAR formattedLog[0x1000];
-    memset(formattedLog, 0, sizeof(formattedLog));
-    vsprintf_s(formattedLog, format, vl);
-
-    // If the final output matches the strings below, we do not log.
-    if (!strcmp(formattedLog,
-                "[DEBUGPRINT] PickRandomTip: context = 0x41D2C432172E0810"))  // noisy in main menu / loading screen
-      return;
-    if (!strcmp(formattedLog, "[SCRIPT] 0xA9DB89899292A98F: realdiv(d9a3e735) divide by zero"))  // laggy in game
-      return;
-  } else if (!strcmp(format, "[NETGAME] No screen stats info for game mode %s"))  // noisy in social lobby
-    return;
-
-  // Build RFC 3339 timestamp (always on): 2026-03-23T02:15:30.123-05:00
-  CHAR tsBuf[40] = {0};
-  {
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-    TIME_ZONE_INFORMATION tzi;
-    GetTimeZoneInformation(&tzi);
-    int offsetMin = -(int)tzi.Bias;
-    int tzH = offsetMin / 60;
-    int tzM = (offsetMin < 0 ? -offsetMin : offsetMin) % 60;
-    snprintf(tsBuf, sizeof(tsBuf), "%04d-%02d-%02dT%02d:%02d:%02d.%03d%+03d:%02d ",
-             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
-             tzH, tzM);
-  }
-
-  // If -noconsole, prepend timestamp and pass through to the game's log file writer.
-  if (g_noConsole) {
-    CHAR stampedFmt[0x1000];
-    snprintf(stampedFmt, sizeof(stampedFmt), "%s%s", tsBuf, format);
-    return EchoVR::WriteLog(logLevel, unk, stampedFmt, vl);
-  }
-
-  // Print the ANSI color code prefix for the given log level.
-  switch (logLevel) {
-    case EchoVR::LogLevel::Debug:
-      printf("\u001B[36m");
-      break;
-
-    case EchoVR::LogLevel::Warning:
-      printf("\u001B[33m");
-      break;
-
-    case EchoVR::LogLevel::Error:
-      printf("\u001B[31m");
-      break;
-
-    case EchoVR::LogLevel::Info:
-    default:
-      printf("\u001B[0m");
-      break;
-  }
-
-  // Print RFC 3339 timestamp + message to console
-  printf("\u001B[90m%s\u001B[0m", tsBuf);  // dim gray timestamp
-  vprintf(format, vl);
-  printf("\n");
-
-  // Restore default text style
-  printf("\u001B[0m");
-
-  // Call the original method (game log file) with timestamp
-  CHAR stampedFmt[0x1000];
-  snprintf(stampedFmt, sizeof(stampedFmt), "%s%s", tsBuf, format);
-  EchoVR::WriteLog(logLevel, unk, stampedFmt, vl);
-}
+// WriteLogHook removed — log filtering, timestamps, and formatting are now
+// handled by the log_filter plugin. This unblocks the plugin's MinHook on
+// CLog::PrintfImpl which previously failed with MH_ERROR_ALREADY_CREATED.
 
 /// <summary>
 /// A wrapper for WriteLog, simplifying logging operations.
@@ -228,10 +151,7 @@ VOID WriteLogHook(EchoVR::LogLevel logLevel, UINT64 unk, const CHAR* format, va_
 VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_list args;
   va_start(args, format);
-  if (g_isHeadless)
-    WriteLogHook(level, 0, format, args);
-  else
-    EchoVR::WriteLog(level, 0, format, args);
+  EchoVR::WriteLog(level, 0, format, args);
   va_end(args);
 }
 
@@ -298,8 +218,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
   UINT32* audioFlags = reinterpret_cast<UINT32*>(static_cast<CHAR*>(pGame) + GAME_AUDIO_FLAGS_OFFSET);
   *audioFlags &= 0xFFFFFFFD;  // Clear bit 1 (audio enable)
 
-  // Install our hook to capture logs to the console.
-  PatchDetour(&EchoVR::WriteLog, reinterpret_cast<PVOID>(WriteLogHook));
+  // WriteLog hook removed — log_filter plugin now owns CLog::PrintfImpl.
 
   // Skip renderer initialization
   const BYTE rendererPatch[] = {0xA8, 0x00};  // TEST al, 0 (always false)
