@@ -17,6 +17,7 @@ just dist-lite          # Stripped binaries without debug symbols
 just verbose-build      # Build with full compiler output
 just clean              # Remove build/ and dist/
 just preset=mingw-debug build  # Use a specific preset
+just proto                     # Regenerate protobuf from BSR (requires buf CLI)
 ```
 
 Build presets: `mingw-debug`, `mingw-release` (Linux default), `linux-wine-debug`, `linux-wine-release`, `debug`, `release` (Windows default).
@@ -89,12 +90,27 @@ Plugins have their own shared headers in `plugins/common/include/` (`nevr_common
 - **Logging**: Always use `Log(EchoVR::LogLevel::Info, "format %d", val)` from `common/logging.h`. Fatal errors via `FatalError(msg, title)`.
 - **Hooking**: MinHook-based (`USE_MINHOOK` compile flag). Functions use `__fastcall` convention. Use `ListenForBroadcasterMessage()` for game event callbacks.
 - **Protocol messages**: Symbol IDs in `src/gameserver/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
-- **Protobuf**: Generated from `extern/nevr-proto/proto/`. Never edit `.pb.cc`/`.pb.h` files directly.
+- **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
 - **Global state**: CLI flags as globals in `src/common/globals.h`, set in `src/gamepatches/patches.cpp`.
 - **Local overrides**: `cmake/local.cmake` (include currently commented out in root CMakeLists.txt).
 
+## Methodology
+
+- **Plan before code**: Non-trivial changes require a written plan before implementation.
+- **Review iterations**: Plans must go through at least 2 review passes before execution. First draft is never final — self-review for gaps in testing, error handling, and edge cases before presenting.
+- **Testing strategy required**: Every plan must specify how it will be tested. Automated tests first (unit + integration). Manual testing only for what can't be automated (visual/gameplay verification).
+- **Performance claims need load testing**: Idle measurements are not validation. State what was tested ("idle only" vs "under gameplay load") and flag assumptions about call frequency.
+- **Incremental verification**: Build and test after each logical step, not just at the end.
+
+## Guardrails
+
+- **Never commit generated protobuf** (`gen/cpp/*.pb.cc`, `gen/cpp/*.pb.h`) without regenerating from BSR first.
+- **Never modify `src/legacy/`** — frozen v1 code, self-contained by design.
+- **Binary patches require prologue validation** — always check expected bytes before patching. Never blind-write.
+- **Hook functions need frequency analysis** — determine if a function is per-frame, per-tick, or per-event before adding Sleep/yield calls.
+
 ## Dependencies
 
-- **vcpkg** (`~/.vcpkg/`) — curl, ixwebsocket, jsoncpp, miniupnpc, minhook, opus, protobuf
-- **Submodules** (`extern/`) — nevr-proto (protocol defs), minhook, protobuf
+- **vcpkg** — curl, ixwebsocket, jsoncpp, miniupnpc, minhook, opus, protobuf
+- **Submodules** (`extern/`) — evr-test-harness (test harness), minhook, protobuf
 - **Toolchain** — CMake 3.20+, Ninja, MinGW (Linux) or MSVC (Windows)
