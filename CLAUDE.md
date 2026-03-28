@@ -41,13 +41,27 @@ Tests require: Echo VR game binary, evr-test-harness, Go toolchain. See `tests/s
 
 ### DLL Components
 
-| Component | Output DLL | Deploy As | Purpose |
-|-----------|-----------|-----------|---------|
-| `src/gamepatches/` | `gamepatches.dll` | `dbgcore.dll` | Runtime hooks, CLI flags, game modifications |
-| `src/gameserver/` | `gameserver.dll` | `pnsradgameserver.dll` | Multiplayer networking, session management |
-| `src/telemetryagent/` | `telemetryagent.dll` | — | Game state monitoring, telemetry streaming |
+| Component          | Output DLL        | Deploy As              | Purpose                                      |
+| ------------------ | ----------------- | ---------------------- | -------------------------------------------- |
+| `src/gamepatches/` | `gamepatches.dll` | `dbgcore.dll`          | Runtime hooks, CLI flags, game modifications |
+| `src/gameserver/`  | `gameserver.dll`  | `pnsradgameserver.dll` | Multiplayer networking, session management   |
 
 All DLLs are loaded into the game process. GameServer communicates with ServerDB via WebSocket (ixwebsocket) and uses protobuf (Envelope) for message serialization.
+
+### Plugins
+
+Optional DLLs loaded by gamepatches at runtime from a `plugins/` subdirectory next to the game binary. Each plugin implements the `NvrPluginInterface` lifecycle (see `src/common/nevr_plugin_interface.h`). Source lives in `plugins/<name>/`.
+
+| Plugin                | Output DLL                | Purpose                                              |
+| --------------------- | ------------------------- | ---------------------------------------------------- |
+| `log-filter`          | `log_filter.dll`          | Structured log filtering, suppression, file rotation |
+| `server-timing`       | `server_timing.dll`       | Wine CPU optimization for headless servers           |
+| `broadcaster-bridge`  | `broadcaster_bridge.dll`  | Network message mirroring/injection over UDP         |
+| `audio-intercom`      | `audio_intercom.dll`      | VoIP audio streaming via UDP                         |
+| `game-rules-override` | `game_rules_override.dll` | Balance config overrides (health, stun, physics)     |
+| `session-unlocker`    | `session_unlocker.dll`    | Unlock /session HTTP API in all game modes           |
+
+Plugins have their own shared headers in `plugins/common/include/` (`nevr_common.h`, `address_registry.h`, `yaml_config.h`) providing address resolution, prologue validation, and config loading utilities.
 
 ### Shared Libraries (static)
 
@@ -57,15 +71,18 @@ All DLLs are loaded into the game process. GameServer communicates with ServerDB
 ### Key Source Files
 
 - `src/gamepatches/patches.cpp` — Main patch implementation, CLI flag processing
+- `src/gamepatches/plugin_loader.h` — Plugin discovery and lifecycle management
 - `src/gameserver/gameserver.cpp` — IServerLib vtable implementation
 - `src/gameserver/messages.h` — Protocol message symbol IDs (uint64)
 - `src/common/globals.h` — Cross-DLL globals (`isServer`, `isHeadless`, `exitOnError`, etc.)
 - `src/common/logging.h` — `Log(level, format, ...)` and `FatalError()`
+- `plugins/common/include/address_registry.h` — Verified virtual addresses for all plugin hooks
 
-### Legacy & Quest
+### Other Components
 
-- `src/legacy/` — Frozen v1 implementations (self-contained, do not modify)
-- `src/quest/` — Android/ARM64 standalone runtime
+- **`src/server/`** — Thin Windows launcher for dedicated server mode (`echovr_server.exe`)
+- **`src/standalone/`** — Future Android/Quest standalone build (stub — awaiting echovr-reconstruction)
+- **`src/legacy/`** — Frozen v1 implementations (self-contained, do not modify)
 
 ## Conventions
 
@@ -74,10 +91,10 @@ All DLLs are loaded into the game process. GameServer communicates with ServerDB
 - **Protocol messages**: Symbol IDs in `src/gameserver/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
 - **Protobuf**: Generated from `extern/nevr-proto/proto/`. Never edit `.pb.cc`/`.pb.h` files directly.
 - **Global state**: CLI flags as globals in `src/common/globals.h`, set in `src/gamepatches/patches.cpp`.
-- **Local overrides**: `cmake/local.cmake` (auto-included if present).
+- **Local overrides**: `cmake/local.cmake` (include currently commented out in root CMakeLists.txt).
 
 ## Dependencies
 
-- **vcpkg** (`~/.vcpkg/`) — curl, ixwebsocket, jsoncpp, minhook, opus, protobuf
+- **vcpkg** (`~/.vcpkg/`) — curl, ixwebsocket, jsoncpp, miniupnpc, minhook, opus, protobuf
 - **Submodules** (`extern/`) — nevr-proto (protocol defs), minhook, protobuf
 - **Toolchain** — CMake 3.20+, Ninja, MinGW (Linux) or MSVC (Windows)
