@@ -12,21 +12,23 @@ Part of the **nEVR** project — keeping Echo VR alive.
 
 - **gamepatches** → `dbgcore.dll` — Runtime game modifications (CLI flags, headless/server modes, Detours-based hooks). Used by both client and dedicated server.
 - **gameserver** → `pnsradgameserver.dll` — Game server networking (session management, events, external service communication). Used by the dedicated server only.
-- **telemetryagent** — Game state monitoring and telemetry streaming
+- **telemetryagent** — Game state monitoring and telemetry streaming (in `extras/`, needs protobuf-lite refactor)
 
-### Quest Runtime
+### Plugins
 
-- **quest** — Standalone runtime patches for Oculus Quest (Android/ARM64)
+Optional DLLs loaded at runtime from a `plugins/` subdirectory next to the game binary:
+
+- **log-filter** → `log_filter.dll` — Structured log filtering, suppression, and file rotation
+- **server-timing** → `server_timing.dll` — Wine CPU optimization for headless servers
+- **broadcaster-bridge** → `broadcaster_bridge.dll` — Network message mirroring/injection over UDP
+- **audio-intercom** → `audio_intercom.dll` — VoIP audio streaming via UDP
+- **game-rules-override** → `game_rules_override.dll` — Balance config overrides (health, stun, physics)
+- **session-unlocker** → `session_unlocker.dll` — Unlock /session HTTP API in all game modes
 
 ### Legacy Components
 
 - **gamepatcheslegacy** — Frozen v1 implementation (self-contained with local common/)
 - **gameserverlegacy** — Frozen v1 implementation (self-contained with local common/)
-
-### Development Tools
-
-- **dbghooks** — Debugging hooks and function tracing for reverse engineering
-- **supervisor** — PowerShell scripts for server orchestration (firewall, ports, instance management)
 
 ### Shared Code
 
@@ -40,19 +42,26 @@ nevr-runtime/
 ├── src/
 │   ├── gamepatches/         # Game runtime patches DLL (PC)
 │   ├── gameserver/          # Game server networking DLL (PC)
-│   ├── quest/               # Quest standalone runtime (Android/ARM64)
-│   ├── telemetryagent/      # Telemetry collection DLL
+│   ├── server/              # Standalone server executable
 │   ├── legacy/              # Frozen v1 implementations
 │   ├── common/              # Shared C++ utilities
 │   └── protobufnevr/        # Protocol buffer definitions
+├── plugins/
+│   ├── common/              # Shared plugin headers (address registry, config utils)
+│   ├── log-filter/          # Log filtering and rotation
+│   ├── server-timing/       # Wine CPU optimization
+│   ├── broadcaster-bridge/  # Network message mirroring
+│   ├── audio-intercom/      # VoIP audio streaming
+│   ├── game-rules-override/ # Balance config overrides
+│   └── session-unlocker/    # /session API unlock
 ├── extern/                  # External dependencies (minhook, nevr-proto)
 ├── cmake/                   # Build configuration helpers
-├── scripts/                 # Build scripts (Wine cross-compilation)
+├── tests/                   # Go-based system tests
 ├── docs/                    # Documentation
 ├── CMakeLists.txt           # Top-level CMake configuration
 ├── CMakePresets.json        # CMake build presets
-├── vcpkg.json               # Dependency manifest
-└── Makefile                 # Build convenience wrapper
+├── justfile                 # Build recipes
+└── vcpkg.json               # Dependency manifest
 ```
 
 ## Building the Project
@@ -68,28 +77,17 @@ nevr-runtime/
 ### MinGW Build (Linux - Recommended)
 
 ```sh
-make configure  # Configure with MinGW toolchain
-make build      # Build all components
-```
-
-### MSVC via Wine (Linux)
-
-```sh
-./scripts/setup-msvc-wine.sh   # One-time setup
-./scripts/build-with-wine.sh   # Full build using MSVC via Wine
+just configure  # Configure with MinGW toolchain
+just build      # Build all components (core DLLs + plugins)
+just dist       # Build + create distribution packages
+just dist-lite  # Stripped binaries without debug symbols
 ```
 
 ### Visual Studio (Windows)
 
-Open the command palette (CTRL+P) and CMake build, when asked to select a kit, select `Visual Studio Community 2022 Release - x86_amd64`.
-
-Or from command line:
-
 ```sh
-mkdir build
-cd build
-cmake ..
-cmake --build .
+just preset=release configure
+just preset=release build
 ```
 
 ## Usage
@@ -98,16 +96,13 @@ After building, DLL artifacts are in `build/mingw-release/bin/` (MinGW) or `buil
 
 - `gamepatches.dll` → Deploy as `dbgcore.dll` to game directory
 - `gameserver.dll` → Deploy as `pnsradgameserver.dll` to game directory
-- `dbghooks.dll` → For debugging/development only
-- `telemetryagent.dll` → For telemetry collection
-
-See component-specific README files for detailed usage.
+- Plugin DLLs → Deploy to `plugins/` subdirectory next to game binary
 
 ## Architecture & Data Flow
 
 - **GamePatches** and **GameServer** are loaded into the game process (DLLs)
 - **GameServer** communicates with the game via in-process hooks and with external services (ServerDB, WebSocket, HTTP)
-- **TelemetryAgent** polls game state via HTTP API or direct memory access
+- **Plugins** are discovered and loaded by GamePatches at runtime via the `NvrPluginInterface` lifecycle
 - All protocol types are defined in `extern/nevr-proto` submodule
 
 ## Related Projects
@@ -119,13 +114,6 @@ See component-specific README files for detailed usage.
 | **nakama** | echovrce game service backend |
 
 ## Development
-
-### Build Scripts
-
-- `scripts/build-with-wine.sh` - End-to-end MSVC build via Wine
-- `scripts/cl-wine.sh`, `lib-wine.sh`, `link-wine.sh` - MSVC toolchain wrappers
-- `scripts/protoc-wine.sh` - Protobuf compiler wrapper
-- `scripts/setup-msvc-wine.sh` - Wine environment setup
 
 ### Local Configuration
 
@@ -164,8 +152,8 @@ External submodules (in `extern/`):
 Create distribution packages:
 
 ```sh
-make dist       # Full package with debug symbols
-make dist-lite  # Stripped binaries without debug symbols
+just dist       # Full package with debug symbols
+just dist-lite  # Stripped binaries without debug symbols
 ```
 
 Outputs:
