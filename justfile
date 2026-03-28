@@ -61,6 +61,22 @@ test-system-dll:
 test-system-verbose:
     cd tests/system && go test -v -count=1 ./...
 
+# Run plugin ground truth tests (no game binary needed)
+test-plugins-groundtruth:
+    cd tests/plugins && go test -v -run "TestGroundTruth" ./...
+
+# Run all plugin tests (needs game binary + MCP harness)
+test-plugins:
+    cd tests/plugins && go test -v -timeout 10m ./...
+
+# Run plugin tests in short mode (skips integration, runs ground truth only)
+test-plugins-short:
+    cd tests/plugins && go test -v -short ./...
+
+# Run plugin tests with verbose output, no cache
+test-plugins-verbose:
+    cd tests/plugins && go test -v -count=1 -timeout 10m ./...
+
 # --- Internal ---
 
 # Install vcpkg dependencies for MinGW cross-compilation (runs only for mingw presets)
