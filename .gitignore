@@ -89,3 +89,12 @@ cmake/codesign/*.p12
 
 # Git worktrees
 .worktrees/
+
+# Local game directory symlink
+echovr
+
+# Serena language server cache
+.serena/
+
+# Temporary working files
+_temp/
