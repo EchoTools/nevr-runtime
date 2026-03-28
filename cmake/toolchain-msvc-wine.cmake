@@ -9,7 +9,7 @@ set(CMAKE_SYSTEM_VERSION 10.0)
 set(CMAKE_SYSTEM_PROCESSOR AMD64)
 
 # Paths to Windows installation (from mounted Windows partition)
-set(WINOS_ROOT "/mnt/winos" CACHE PATH "Path to Windows installation")
+set(WINOS_ROOT "" CACHE PATH "Path to mounted Windows installation (e.g. /mnt/winos)")
 set(MSVC_VERSION "14.44.35207" CACHE STRING "MSVC toolset version")
 set(SDK_VERSION "10.0.26100.0" CACHE STRING "Windows SDK version")
 

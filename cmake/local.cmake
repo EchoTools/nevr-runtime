@@ -8,10 +8,9 @@ if(NOT DEFINED ENV{ECHOVR_BIN_PATH} AND NOT DEFINED ECHOVR_BIN_PATH)
         set(ECHOVR_BIN_PATH "${CMAKE_SOURCE_DIR}/ready-at-dawn-echo-arena/bin/win10")
         message(STATUS "Using local EchoVR installation in repo root")
     else()
-        set(ECHOVR_BIN_PATH
-            #"C:/Users/User/source/repos/EchoRelay9/_local/newnakama/echovr-newnakama/bin/win10"
-            "/mnt/winos/OculusLibrary/Software/ready-at-dawn-echo-arena/bin/win10"
-        )
+        message(WARNING "ECHOVR_BIN_PATH not set and no local game directory found. "
+                        "Set -DECHOVR_BIN_PATH=<path> or ECHOVR_BIN_PATH env var.")
+        return()
     endif()
 elseif(DEFINED ENV{ECHOVR_BIN_PATH} AND NOT DEFINED ECHOVR_BIN_PATH)
     set(ECHOVR_BIN_PATH "$ENV{ECHOVR_BIN_PATH}")
