@@ -1,0 +1,79 @@
+{
+    // Minimum log level: 1=debug, 2=info, 4=warn, 8=error
+    "min_level": 2,
+
+    // --- Console output ---
+    "console_enabled": true,
+    "console_color": true,       // ANSI color codes (level-based)
+
+    // --- File output ---
+    "file_enabled": true,
+    "file_dir": "",              // directory for log files (empty = logs/ next to binary)
+    "file_jsonl": true,          // true=JSONL, false=plain text
+
+    // --- Rotation ---
+    "rotate_enabled": true,
+    "rotate_max_size_mb": 50,    // rotate when file exceeds this (0=no size limit)
+    "rotate_interval_min": 0,    // rotate every N minutes (0=no time limit)
+    "rotate_keep": 5,            // old log files to keep (0=unlimited)
+
+    // --- Filtering ---
+
+    // Suppress all output containing these channel prefixes
+    "suppress_channels": [
+        "[LOADING TIPS]",
+        "[DIALOGUE]",
+        "[DEBUGPRINT]"
+    ],
+
+    // Suppress lines matching these substrings
+    "suppress_patterns": [
+        "Resetting player data ???-0",
+        "List element 0x",
+        "CGameStats::From (JSON): Stat",
+        "parent set to Auto but parent in Maya",
+        "No item assignment found",
+        "removing feature 'rift'",
+        "could not find CSubtitleCS",
+        "Unable to resolve script actor",
+        "Ran out of pooled objective markers",
+        "SetMaxLoudnessEnabled",
+        "Applying new graphics settings",
+        "Entrant Data Changed",
+        "LobbyOwnerDataChangedCB",
+        "PlayEmoteCB for user",
+        "ghosted False",
+        "expecting peer connection",
+        "realdiv(",
+        "VoIP Muted",
+        "VoIP Deafened",
+        "Is Placeholder",
+        "Is Ghost",
+        "Is Bot",
+        "Is Spectator",
+        "Peer : 184467",
+        "Alignment : 65535",
+        "Loadout Number",
+        "In VR",
+        "UserID Hex",
+        "Countdown UI disabled",
+        "PickRandomTip:",
+        "No screen stats info for game mode"
+    ],
+
+    // Truncate lines matching these prefixes to max_length chars
+    "truncate_patterns": [
+        {"prefix": "[PROFILE] Getting", "max_length": 80},
+        {"prefix": "[PROFILE] Updating", "max_length": 80},
+        {"prefix": "[CONFIGS] ConfigSuccessCB", "max_length": 80}
+    ],
+
+    // Max line length (0 = unlimited)
+    "max_line_length": 500,
+
+    // Include ISO 8601 timestamps
+    "timestamps": true,
+
+    // Pass filtered messages through to original engine handler
+    "passthrough_to_engine": false
+}

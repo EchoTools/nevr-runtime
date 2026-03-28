@@ -1,0 +1,6 @@
+{
+    "enabled": true,
+    "listen_port": 7890,
+    "speaker_id": 4294967295,
+    "volume": 100
+}

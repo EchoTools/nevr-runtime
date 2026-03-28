@@ -1,0 +1,15 @@
+add_subdirectory(common)
+
+if(BUILD_TESTING)
+    find_package(GTest QUIET)
+    if(GTest_FOUND)
+        include(GoogleTest)
+    endif()
+endif()
+
+add_subdirectory(log-filter)
+add_subdirectory(server-timing)
+add_subdirectory(broadcaster-bridge)
+add_subdirectory(audio-intercom)
+add_subdirectory(game-rules-override)
+add_subdirectory(session-unlocker)

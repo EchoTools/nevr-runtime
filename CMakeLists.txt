@@ -191,6 +191,8 @@ add_subdirectory(src/legacy/gameserver)
 add_subdirectory(src/server)
 # telemetryagent moved to extras/ — needs protobuf-lite refactor before reintegration
 
+add_subdirectory(plugins)
+
 # Include a local cmake script if it exists
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
   # include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")

@@ -1,0 +1,87 @@
+# log_filter — Structured log filtering for EchoVR dedicated servers.
+#
+# Hooks CLog::PrintfImpl to intercept all engine log output. Applies
+# level filtering, pattern suppression, line truncation, and emits
+# structured output to console (with ANSI color) and/or JSONL log files
+# with optional rotation.
+#
+# Place this file next to log_filter.dll in the plugins/ directory.
+
+# Minimum log level: 1=debug, 2=info, 4=warn, 8=error
+min_level: 2
+
+# --- Console ---
+console_enabled: true
+console_color: true           # ANSI color codes by log level
+
+# --- File output ---
+# Log files are named: echovr-server-{pid}-{timestamp}.jsonl
+# Each server instance gets its own file (keyed by PID).
+file_enabled: true
+file_dir: ""                  # empty = logs/ subdirectory next to binary
+file_jsonl: true              # true=JSONL, false=plain text (.log)
+
+# --- Rotation ---
+rotate_enabled: true
+rotate_max_size_mb: 50        # rotate when file exceeds this size (0=disabled)
+rotate_interval_min: 0        # rotate every N minutes (0=disabled)
+rotate_keep: 5                # number of old log files to keep (0=unlimited)
+
+# --- Timestamps ---
+timestamps: true              # ISO 8601 UTC timestamps on every line
+
+# --- Suppression ---
+# Lines starting with these prefixes are dropped entirely.
+suppress_channels:
+  - "[LOADING TIPS]"
+  - "[DIALOGUE]"
+  - "[DEBUGPRINT]"
+
+# Lines containing any of these substrings are dropped.
+suppress_patterns:
+  - "Resetting player data ???-0"
+  - "List element 0x"
+  - "CGameStats::From (JSON): Stat"
+  - "parent set to Auto but parent in Maya"
+  - "No item assignment found"
+  - "removing feature 'rift'"
+  - "could not find CSubtitleCS"
+  - "Unable to resolve script actor"
+  - "Ran out of pooled objective markers"
+  - "SetMaxLoudnessEnabled"
+  - "Applying new graphics settings"
+  - "Entrant Data Changed"
+  - "LobbyOwnerDataChangedCB"
+  - "PlayEmoteCB for user"
+  - "ghosted False"
+  - "expecting peer connection"
+  - "realdiv("
+  - "VoIP Muted"
+  - "VoIP Deafened"
+  - "Is Placeholder"
+  - "Is Ghost"
+  - "Is Bot"
+  - "Is Spectator"
+  - "Peer : 184467"
+  - "Alignment : 65535"
+  - "Loadout Number"
+  - "In VR"
+  - "UserID Hex"
+  - "Countdown UI disabled"
+  - "PickRandomTip:"
+  - "No screen stats info for game mode"
+
+# --- Truncation ---
+# Lines matching these prefixes are truncated to max_length characters.
+# Useful for config/profile blobs that dump huge JSON payloads.
+truncate_patterns:
+  - {prefix: "[PROFILE] Getting", max_length: 80}
+  - {prefix: "[PROFILE] Updating", max_length: 80}
+  - {prefix: "[CONFIGS] ConfigSuccessCB", max_length: 80}
+
+# Maximum line length for all other messages (0=unlimited)
+max_line_length: 500
+
+# Pass filtered messages through to the engine's original log handler
+# (game log file). Normally false — the engine log is noise.
+passthrough_to_engine: false

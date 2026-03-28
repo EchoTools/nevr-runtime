@@ -1,0 +1,16 @@
+{
+    // Balance Config Overrides
+    // Set max_health > 0 to enable damage in Arena mode
+    "max_health": 100.0,
+    "max_stun_duration": 3.0,
+
+    // Arena Round Rules
+    // Pub match: 8 min rounds, 3s celebration (not 15s), no mercy rule
+    "round_time": 480.0,
+    "point_score_celebration_time": 3.0,
+    // "mercy_win_point_spread": -1.0,
+    // "pre_match_wait_time": 45.0,
+    // "team_room_wait_time": 0.0,
+
+    // All parameters documented in docs/game_rules_reference.md
+}
