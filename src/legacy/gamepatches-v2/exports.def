@@ -1,0 +1,6 @@
+LIBRARY GamePatches
+EXPORTS
+   DetoursExportPlaceholder			@1
+   MiniDumpWriteDump
+   NEVR_ScheduleReturnToLobby
+   NEVR_GetUPnPConfig
