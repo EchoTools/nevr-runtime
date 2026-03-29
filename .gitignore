@@ -98,3 +98,9 @@ echovr
 
 # Temporary working files
 _temp/
+
+# Environment files
+extras/.env
+
+# Claude Code session logs
+2026-*.txt
