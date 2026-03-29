@@ -1,7 +1,36 @@
-# Game Patches uses MinHook for function hooking
-# MinHook is built from extern/minhook
-set(PATCHES_SOURCES "dllmain.cpp" "patches.cpp" "plugin_loader.cpp" "winhttp_stub.cpp" "nevr_client.cpp")
-set(PATCHES_HEADERS "patches.h" "plugin_loader.h" "winhttp_stub.h" "nevr_client.h" "social_messages.h")
+# Game Patches — modular DLL for runtime hooks and memory patches
+# Uses MinHook for function hooking (built from extern/minhook)
+
+set(PATCHES_SOURCES
+    "dllmain.cpp"
+    "initialize.cpp"
+    "cli.cpp"
+    "boot.cpp"
+    "config.cpp"
+    "mode_patches.cpp"
+    "crash_recovery.cpp"
+    "platform_compat.cpp"
+    "state_machine.cpp"
+    "plugin_loader.cpp"
+    "winhttp_stub.cpp"
+)
+
+set(PATCHES_HEADERS
+    "patches.h"
+    "gamepatches_internal.h"
+    "initialize.h"
+    "cli.h"
+    "boot.h"
+    "config.h"
+    "mode_patches.h"
+    "crash_recovery.h"
+    "platform_compat.h"
+    "state_machine.h"
+    "plugin_loader.h"
+    "winhttp_stub.h"
+    "process_mem.h"
+    "patch_addresses.h"
+)
 
 add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
                                "exports.def")
@@ -24,10 +53,4 @@ set_target_properties(gamepatches PROPERTIES
 # Disable specific warnings (MSVC only)
 if(MSVC)
   target_compile_options(gamepatches PRIVATE /wd4251)
-endif()
-
-if(MINGW)
-  target_link_options(gamepatches PRIVATE
-    -Wl,--allow-multiple-definition
-  )
 endif()

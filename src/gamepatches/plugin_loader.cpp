@@ -6,9 +6,7 @@
 #include "common/globals.h"
 #include "common/logging.h"
 
-// Defined in patches.cpp (gamepatches-internal, not in globals.h)
-extern BOOL g_isServer;
-extern BOOL g_isHeadless;
+#include "cli.h"
 
 struct LoadedPlugin {
   HMODULE                     hModule;
