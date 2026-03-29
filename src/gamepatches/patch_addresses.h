@@ -272,40 +272,6 @@ constexpr uintptr_t GAME_LOCAL_CONFIG_OFFSET = 0x63240;
 constexpr uintptr_t CJSON_GET_FLOAT = 0x5FCA60;
 
 // ============================================================================
-// Hash Function Hooks (for discovering replicated variable names)
-// ============================================================================
-
-/// Address: CSymbol64_Hash (0x1400ce120)
-/// Hash function for game symbols (used for replicated variables)
-/// Algorithm: CRC64 with polynomial 0x95ac9329ac4bc9b5
-/// Hook logs all strings passed to this function to discover variable names
-/// that map to the 270 hashed replicated variables in replicated_variables.json
-constexpr uintptr_t CSYMBOL64_HASH = 0xCE120;
-
-// ============================================================================
-// Message Type Hash Discovery Hooks (for identifying unknown message types)
-// ============================================================================
-
-/// Address: CMatSym::Hash (0x140107f80)
-/// Recursive hash function that processes message type name strings character-by-character
-/// Signature: uint64 __cdecl(const char* str)
-/// Returns intermediate hash (NOT final - needs SMatSymData_HashA finalization)
-constexpr uintptr_t CMATSYM_HASH = 0x107f80;
-
-/// Address: SMatSymData_HashA (0x140107fd0)
-/// Hash finalizer that combines seed with intermediate hash
-/// Signature: uint64 __cdecl(uint64 seed, uint64 value)
-/// When called with seed=0x6d451003fb4b172e, produces final MatSym hash for message dispatch
-constexpr uintptr_t SMATSYMDATA_HASHA = 0x107fd0;
-
-/// Address: sns_registry_insert_sorted (0x140f88080)
-/// Message type registration function called during game initialization
-/// Signature: void(uint64 msg_hash, const char* msg_name, uint64 flags)
-/// Captures complete hash→name mapping for all registered message types
-/// Best hook for complete message type discovery at startup
-constexpr uintptr_t SNS_REGISTRY_INSERT_SORTED = 0xF88080;
-
-// ============================================================================
 // Global Data Addresses
 // ============================================================================
 
