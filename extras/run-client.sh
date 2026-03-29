@@ -13,7 +13,7 @@ CLIENT_DIR="/mnt/games/CustomLibrary/echovr-vanilla"
 SERVER_CMD=(
 	cargo run -p nevr-server-rs --bin nevr-server-rs --
 	--udp-addr 192.168.1.50:6792
-	--fleet-url 'ws://g.echovrce.com:80/spr?discord_id=695081603180789771&guilds=1216923249615835156&password=wibIldIn3Twa&regions=spr-dev'
+	--fleet-url 'ws://g.echovrce.com:80/spr?discord_id=695081603180789771&guilds=1216923249615835156&password=vupCedUgber8&regions=spr-dev'
 	--server-id nevr-server-rs-1
 	--log-level debug
 	--advertise-udp-ip 192.168.1.50
