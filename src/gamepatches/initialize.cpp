@@ -3,6 +3,7 @@
 #include <cstring>
 #include <vector>
 
+#include "asset_cdn.h"
 #include "boot.h"
 #include "cli.h"
 #include "config.h"
@@ -165,4 +166,7 @@ VOID Initialize() {
   // Disable deadlock monitor unconditionally — Initialize() runs before CLI parsing
   // so g_isServer isn't set yet. Harmless on clients, prevents false panics on Wine/headless.
   PatchDeadlockMonitor();
+
+  // --- CDN asset loading ---
+  AssetCDN::Initialize();
 }
