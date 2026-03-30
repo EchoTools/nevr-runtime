@@ -5,6 +5,7 @@
 // handler calls. We forward that export to the real system DLL so crash
 // dumps still work.
 #include "common/pch.h"
+#include "asset_cdn.h"
 #include "patches.h"
 #include "plugin_loader.h"
 
@@ -55,6 +56,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     case DLL_THREAD_DETACH:
     case DLL_PROCESS_DETACH:
       if (ul_reason_for_call == DLL_PROCESS_DETACH) {
+        AssetCDN::Shutdown();
         UnloadPlugins();
         if (g_realDbgCore) {
           FreeLibrary(g_realDbgCore);

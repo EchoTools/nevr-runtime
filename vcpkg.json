@@ -6,6 +6,7 @@
     "miniupnpc",
     "minhook",
     "opus",
+    "nlohmann-json",
     "protobuf"
   ]
 }

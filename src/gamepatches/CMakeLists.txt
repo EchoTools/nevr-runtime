@@ -13,6 +13,7 @@ set(PATCHES_SOURCES
     "state_machine.cpp"
     "plugin_loader.cpp"
     "winhttp_stub.cpp"
+    "asset_cdn.cpp"
 )
 
 set(PATCHES_HEADERS
@@ -28,6 +29,7 @@ set(PATCHES_HEADERS
     "state_machine.h"
     "plugin_loader.h"
     "winhttp_stub.h"
+    "asset_cdn.h"
     "process_mem.h"
     "patch_addresses.h"
 )
@@ -41,7 +43,8 @@ target_precompile_headers(gamepatches PRIVATE "${CMAKE_SOURCE_DIR}/src/common/pc
 target_include_directories(gamepatches PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 find_package(CURL REQUIRED)
-target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl)
+find_package(nlohmann_json CONFIG REQUIRED)
+target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl nlohmann_json::nlohmann_json)
 target_link_directories(gamepatches PRIVATE common)
 
 # Set output name to remove 'lib' prefix on MinGW

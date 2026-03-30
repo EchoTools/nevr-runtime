@@ -272,6 +272,19 @@ constexpr uintptr_t GAME_LOCAL_CONFIG_OFFSET = 0x63240;
 constexpr uintptr_t CJSON_GET_FLOAT = 0x5FCA60;
 
 // ============================================================================
+// Asset CDN / Loadout Hooks
+// ============================================================================
+
+/// Address: Loadout_ResolveDataFromId (RVA 0x004F37A0, 87 bytes)
+/// Signature: void* __fastcall (void* context, int64_t loadout_id)
+/// Resolves loadout cosmetic data from a 64-bit loadout ID.
+/// Two-tier lookup: binary search first, linear scan fallback.
+/// Returns NULL on miss. 261+ call sites — hook must be O(1).
+/// Return value + 0x370 -> resource table; +0xB8 primary, +0x80 fallback.
+/// Prologue: 48 89 5C 24 08 57 48 83 EC 20 (safe for MinHook)
+constexpr uintptr_t LOADOUT_RESOLVE_DATA_FROM_ID = 0x004F37A0;
+
+// ============================================================================
 // Global Data Addresses
 // ============================================================================
 
