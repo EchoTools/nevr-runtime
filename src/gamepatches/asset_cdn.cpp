@@ -475,6 +475,9 @@ void AssetCDN::Initialize() {
     g_hookInstalled = true;
     Log(EchoVR::LogLevel::Info,
         "[NEVR.CDN] Loadout_ResolveDataFromId hook installed at %p", target);
+
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    StartBackgroundFetch();
 }
 
 void AssetCDN::Shutdown() {
@@ -507,6 +510,7 @@ void AssetCDN::Shutdown() {
     g_fetchState.store(FetchState::Idle);
     g_shutdownRequested.store(false);
 
+    curl_global_cleanup();
     Log(EchoVR::LogLevel::Info, "[NEVR.CDN] Shutdown complete");
 }
 
@@ -517,9 +521,10 @@ void AssetCDN::StartBackgroundFetch() {
         return;
     }
 
-    // Reset to Idle so the thread sets its own state
-    g_fetchState.store(FetchState::Idle);
     g_shutdownRequested.store(false);
+    if (g_fetchThread.joinable()) {
+        g_fetchThread.join();
+    }
     g_fetchThread = std::thread(BackgroundFetchThread);
 }
 
