@@ -29,8 +29,8 @@ namespace {
 // Constants
 // ============================================================================
 
-constexpr const char* CDN_BASE_URL = "https://cdn.echo.taxi/v1/";
-constexpr const char* MANIFEST_URL = "https://cdn.echo.taxi/v1/manifest.json";
+constexpr const char* CDN_BASE_URL = "https://r2.echo.taxi/v1/";
+constexpr const char* MANIFEST_URL = "https://r2.echo.taxi/v1/manifest.json";
 constexpr uint32_t EVRP_MAGIC = 0x50525645;  // "EVRP" little-endian
 constexpr uint32_t EVRP_FORMAT_VERSION = 1;
 constexpr uint8_t SLOT_TYPE_TINT = 0x01;

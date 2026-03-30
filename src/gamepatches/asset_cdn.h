@@ -6,7 +6,7 @@
 /// All network I/O runs on a background thread. The hook is O(1) with no allocations.
 ///
 /// Cache location: %LOCALAPPDATA%/EchoVR/cosmetics/v1/packages/
-/// CDN base: https://cdn.echo.taxi/v1/
+/// CDN base: https://r2.echo.taxi/v1/
 ///
 /// Not wired into startup — call AssetCDN::Initialize() / AssetCDN::Shutdown()
 /// explicitly (Task 13 handles integration).
