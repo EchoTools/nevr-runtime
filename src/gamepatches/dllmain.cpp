@@ -56,7 +56,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     case DLL_THREAD_DETACH:
     case DLL_PROCESS_DETACH:
       if (ul_reason_for_call == DLL_PROCESS_DETACH) {
-        AssetCDN::Shutdown();
+        // Only do clean shutdown on dynamic unload (lpReserved == NULL).
+        // During process termination (lpReserved != NULL), threads are already
+        // dead and joining would deadlock under the loader lock.
+        if (lpReserved == NULL) {
+          AssetCDN::Shutdown();
+        }
         UnloadPlugins();
         if (g_realDbgCore) {
           FreeLibrary(g_realDbgCore);
