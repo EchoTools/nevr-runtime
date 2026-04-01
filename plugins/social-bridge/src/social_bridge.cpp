@@ -5,6 +5,7 @@
 #include "nevr_client.h"
 #include "nevr_common.h"
 #include "address_registry.h"
+#include "auth_token.h"
 
 #include "echovr.h"
 #include "symbols.h"
@@ -420,32 +421,14 @@ void SocialBridgeOnStateChange(const NvrGameContext* ctx, uint32_t old_state, ui
             if (!nakamaUrl.empty() && !nevrHttpKey.empty()) {
                 s_nakamaClient->Configure(nakamaUrl, nevrHttpKey, nevrServerKey, "", "");
 
-                // Try cached token from _local/auth.json first (written by token_auth plugin)
-                std::string authStr = nevr::LoadConfigFile("_local/auth.json");
-                if (!authStr.empty()) {
-                    std::string cachedToken;
-                    uint64_t expiry = 0;
-                    try {
-                        auto authJson = nlohmann::json::parse(authStr);
-                        cachedToken = authJson.value("token", "");
-                        expiry = authJson.value("expiry", static_cast<uint64_t>(0));
-                    } catch (const nlohmann::json::exception& e) {
-                        fprintf(stderr, "[NEVR.SOCIAL] Failed to parse _local/auth.json: %s\n", e.what());
-                    }
-                    if (!cachedToken.empty() && expiry > static_cast<uint64_t>(time(nullptr)) + 60) {
-                        s_nakamaClient->SetToken(cachedToken, expiry);
-                        fprintf(stderr, "[NEVR.SOCIAL] Using cached token from auth.json\n");
-                    }
-                }
-
-                // Fall back to device auth if no cached token
-                if (!s_nakamaClient->IsAuthenticated()) {
-                    fprintf(stderr, "[NEVR.SOCIAL] Starting device code authentication (Discord OAuth)...\n");
-                    if (s_nakamaClient->RunDeviceAuthFlow()) {
-                        fprintf(stderr, "[NEVR.SOCIAL] Authenticated via Discord -- social features active\n");
-                    } else {
-                        fprintf(stderr, "[NEVR.SOCIAL] Auth failed -- social features using placeholders\n");
-                    }
+                // Use cached token from token-auth plugin (written to _local/auth.json)
+                auto auth = LoadCachedAuthToken();
+                if (auth.HasValidToken()) {
+                    s_nakamaClient->SetToken(auth.token, auth.token_expiry);
+                    fprintf(stderr, "[NEVR.SOCIAL] Using cached token from auth.json\n");
+                } else {
+                    fprintf(stderr, "[NEVR.SOCIAL] No valid auth token -- social features using placeholders\n");
+                    fprintf(stderr, "[NEVR.SOCIAL] (token-auth plugin handles authentication)\n");
                 }
             } else {
                 fprintf(stderr, "[NEVR.SOCIAL] Nakama not configured (need nevr_url + nevr_http_key in _local/config.json)\n");

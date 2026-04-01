@@ -39,5 +39,9 @@ private:
     std::string m_httpKey;
     std::string m_token;
     uint64_t m_tokenExpiry = 0;
+    std::string m_refreshToken;
+    uint64_t m_refreshTokenExpiry = 0;
+    std::string m_userId;
+    std::string m_username;
     bool m_configured = false;
 };

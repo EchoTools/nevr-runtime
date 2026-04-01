@@ -16,6 +16,8 @@
 #endif
 
 #include "nevr_curl.h"
+#include "auth_token.h"
+#include "auth_token_refresh.h"
 
 void DeviceAuth::Configure(const std::string& url, const std::string& httpKey) {
     m_url = url;
@@ -29,83 +31,63 @@ bool DeviceAuth::IsAuthenticated() const {
 }
 
 bool DeviceAuth::TryLoadCachedToken() {
-    // Search _local/auth.json with parent-directory fallback
-    const char* paths[] = {"_local/auth.json", "..\\_local\\auth.json",
-                           "..\\..\\_local\\auth.json", "../_local/auth.json",
-                           "../../_local/auth.json"};
-    std::string contents;
-    for (const auto* p : paths) {
-        std::ifstream f(p, std::ios::binary);
-        if (f.is_open()) {
-            std::ostringstream ss;
-            ss << f.rdbuf();
-            contents = ss.str();
-            break;
-        }
-    }
-    if (contents.empty()) return false;
+    auto auth = LoadCachedAuthToken();
+    if (auth.token.empty()) return false;
 
-    try {
-        auto j = nlohmann::json::parse(contents);
-        std::string token = j.value("token", "");
-        uint64_t expiry = j.value("expiry", uint64_t(0));
+    // Valid access token — use it directly
+    if (auth.HasValidToken()) {
+        m_token = auth.token;
+        m_tokenExpiry = auth.token_expiry;
+        m_refreshToken = auth.refresh_token;
+        m_refreshTokenExpiry = auth.refresh_token_expiry;
+        m_userId = auth.user_id;
+        m_username = auth.username;
 
-        if (token.empty() || expiry == 0) {
-            fprintf(stderr, "[NEVR.AUTH] auth.json malformed -- will re-authenticate\n");
-            return false;
-        }
-
-        uint64_t now = static_cast<uint64_t>(time(nullptr));
-        if (expiry <= now + 60) {
-            fprintf(stderr, "[NEVR.AUTH] Cached token expired -- will re-authenticate\n");
-            return false;
-        }
-
-        m_token = token;
-        m_tokenExpiry = expiry;
+        uint64_t remaining = (auth.token_expiry - static_cast<uint64_t>(time(nullptr))) / 60;
         fprintf(stderr, "[NEVR.AUTH] Loaded cached token (expires in %llum)\n",
-            (unsigned long long)((expiry - now) / 60));
+            (unsigned long long)remaining);
         return true;
-    } catch (const nlohmann::json::parse_error&) {
-        fprintf(stderr, "[NEVR.AUTH] auth.json parse error -- will re-authenticate\n");
-        return false;
     }
+
+    // Access token expired — try refresh
+    if (auth.HasValidRefreshToken() && m_configured) {
+        fprintf(stderr, "[NEVR.AUTH] Access token expired, attempting refresh...\n");
+        if (RefreshAuthToken(auth, m_url)) {
+            m_token = auth.token;
+            m_tokenExpiry = auth.token_expiry;
+            m_refreshToken = auth.refresh_token;
+            m_refreshTokenExpiry = auth.refresh_token_expiry;
+            m_userId = auth.user_id;
+            m_username = auth.username;
+            return true;
+        }
+        fprintf(stderr, "[NEVR.AUTH] Token refresh failed -- will re-authenticate\n");
+    } else if (!auth.refresh_token.empty()) {
+        fprintf(stderr, "[NEVR.AUTH] Both tokens expired -- will re-authenticate\n");
+    } else {
+        fprintf(stderr, "[NEVR.AUTH] Cached token expired, no refresh token -- will re-authenticate\n");
+    }
+
+    return false;
 }
 
 bool DeviceAuth::SaveToken() {
     if (m_token.empty()) return false;
 
-    // Find existing _local/ dir with parent-directory fallback
-    const char* dirs[] = {"_local", "..\\_local", "..\\..\\_local",
-                          "../_local", "../../_local"};
-    std::string target;
-    for (const auto* d : dirs) {
-        std::string probe = std::string(d) + "/config.json";
-        if (std::ifstream(probe).is_open()) {
-            target = std::string(d) + "/auth.json";
-            break;
-        }
-    }
-    if (target.empty()) {
-#ifdef _WIN32
-        _mkdir("_local");
-#endif
-        target = "_local/auth.json";
-    }
+    CachedAuthToken auth;
+    auth.token = m_token;
+    auth.token_expiry = m_tokenExpiry;
+    auth.refresh_token = m_refreshToken;
+    auth.refresh_token_expiry = m_refreshTokenExpiry;
+    auth.user_id = m_userId;
+    auth.username = m_username;
 
-    std::ofstream out(target, std::ios::trunc);
-    if (!out.is_open()) {
-        fprintf(stderr, "[NEVR.AUTH] Failed to write %s\n", target.c_str());
+    if (!SaveAuthToken(auth)) {
+        fprintf(stderr, "[NEVR.AUTH] Failed to write auth.json\n");
         return false;
     }
 
-    nlohmann::json j;
-    j["token"] = m_token;
-    j["expiry"] = m_tokenExpiry;
-    out << j.dump(2) << "\n";
-    out.close();
-
-    fprintf(stderr, "[NEVR.AUTH] Token saved to %s\n", target.c_str());
+    fprintf(stderr, "[NEVR.AUTH] Token saved to auth.json\n");
     return true;
 }
 
@@ -164,7 +146,11 @@ std::string DeviceAuth::PollDeviceCode(const std::string& code) {
             std::string token = j.value("token", "");
             if (!token.empty()) {
                 m_token = token;
-                m_tokenExpiry = j.value("expiry", static_cast<uint64_t>(time(nullptr)) + 3600);
+                m_tokenExpiry = static_cast<uint64_t>(time(nullptr)) + 3600;
+                m_refreshToken = j.value("refresh_token", "");
+                m_refreshTokenExpiry = static_cast<uint64_t>(time(nullptr)) + (30 * 24 * 3600);
+                m_userId = j.value("user_id", "");
+                m_username = j.value("username", "");
                 return "verified";
             }
         }
