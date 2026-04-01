@@ -215,7 +215,8 @@ LogFilterConfig LoadLogFilterConfig(const char* path) {
         return {};
     }
     std::string p(path);
-    if (p.size() >= 4 && (p.substr(p.size() - 4) == ".yml" || p.substr(p.size() - 5) == ".yaml")) {
+    if ((p.size() >= 4 && p.substr(p.size() - 4) == ".yml") ||
+        (p.size() >= 5 && p.substr(p.size() - 5) == ".yaml")) {
         return ParseYamlLogFilterConfig(content);
     }
     return ParseLogFilterConfigString(content);

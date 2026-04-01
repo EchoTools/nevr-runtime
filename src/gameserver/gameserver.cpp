@@ -1106,12 +1106,14 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 
   // Load auth token for WebSocket connections
   auto auth = LoadCachedAuthToken();
+  std::string wsToken;
   if (auth.HasValidToken()) {
+    wsToken = auth.token;
     Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Using cached auth token for ServerDB");
   }
 
   // Connect to serverdb via WebSocketClient (avoids TcpBroadcasterListen vtable ABI crash)
-  if (!m_wsClient->Connect(serverDbUri, auth.token)) {
+  if (!m_wsClient->Connect(serverDbUri, wsToken)) {
     Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to initiate WebSocket connection");
     return;
   }
@@ -1179,7 +1181,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
         token = telemetryToken;
       } else {
         // Fall back to cached auth token when telemetry_token not configured
-        token = auth.token;
+        token = wsToken;
       }
       m_telemetry->Connect(std::string(telemetryUri), token);
     } else {

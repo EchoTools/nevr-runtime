@@ -8,6 +8,7 @@
 #include <ctime>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -156,8 +157,6 @@ inline bool SaveAuthToken(const CachedAuthToken& auth) {
     SetFileAttributesA(path.c_str(), FILE_ATTRIBUTE_HIDDEN);
 
     // Set restrictive DACL: only current user gets full access
-    PSID pSid = nullptr;
-    SID_IDENTIFIER_AUTHORITY ntAuth = SECURITY_NT_AUTHORITY;
     HANDLE hToken = nullptr;
     if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken)) {
         DWORD len = 0;
