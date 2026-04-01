@@ -27,7 +27,7 @@ target_include_directories(
           "${CMAKE_SOURCE_DIR}"
 )
 
-target_link_libraries(gameserver PRIVATE common proto_nevr ws2_32 ixwebsocket::ixwebsocket miniupnpc::miniupnpc)
+target_link_libraries(gameserver PRIVATE common nevr_api ws2_32 ixwebsocket::ixwebsocket miniupnpc::miniupnpc)
 
 # Set output name to remove 'lib' prefix on MinGW
 set_target_properties(gameserver PROPERTIES

@@ -183,7 +183,7 @@ add_subdirectory(extern)
 find_package(Protobuf REQUIRED)
 
 add_subdirectory(src/common)
-add_subdirectory(src/protobufnevr)
+add_subdirectory(src/nevr_api)
 add_subdirectory(src/gamepatches)
 add_subdirectory(src/legacy/gamepatches)
 add_subdirectory(src/gameserver)

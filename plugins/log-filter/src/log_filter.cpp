@@ -4,6 +4,7 @@
 #include "nevr_plugin_interface.h"
 
 #include <MinHook.h>
+#include <nlohmann/json.hpp>
 #include <atomic>
 #include <algorithm>
 #include <cstdarg>
@@ -111,151 +112,56 @@ static std::string StripComments(const std::string& input) {
     return out;
 }
 
-static bool ExtractUint32(const std::string& json, const char* key, uint32_t& out) {
-    std::string needle = std::string("\"") + key + "\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) return false;
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return false;
-    ++pos;
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) ++pos;
-    char* end = nullptr;
-    long val = std::strtol(json.c_str() + pos, &end, 10);
-    if (end == json.c_str() + pos) return false;
-    out = static_cast<uint32_t>(val);
-    return true;
-}
-
-static bool ExtractInt(const std::string& json, const char* key, int& out) {
-    std::string needle = std::string("\"") + key + "\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) return false;
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return false;
-    ++pos;
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) ++pos;
-    char* end = nullptr;
-    long val = std::strtol(json.c_str() + pos, &end, 10);
-    if (end == json.c_str() + pos) return false;
-    out = static_cast<int>(val);
-    return true;
-}
-
-static bool ExtractBool(const std::string& json, const char* key, bool& out) {
-    std::string needle = std::string("\"") + key + "\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) return false;
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return false;
-    ++pos;
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) ++pos;
-    if (json.compare(pos, 4, "true") == 0) { out = true; return true; }
-    if (json.compare(pos, 5, "false") == 0) { out = false; return true; }
-    return false;
-}
-
-static bool ExtractString(const std::string& json, const char* key, std::string& out) {
-    std::string needle = std::string("\"") + key + "\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) return false;
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return false;
-    auto q1 = json.find('"', pos + 1);
-    if (q1 == std::string::npos) return false;
-    auto q2 = json.find('"', q1 + 1);
-    if (q2 == std::string::npos) return false;
-    out = json.substr(q1 + 1, q2 - q1 - 1);
-    return true;
-}
-
-static void ExtractStringArray(const std::string& json, const char* key, std::vector<std::string>& out) {
-    std::string needle = std::string("\"") + key + "\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) return;
-    pos = json.find('[', pos + needle.size());
-    if (pos == std::string::npos) return;
-    auto end = json.find(']', pos);
-    if (end == std::string::npos) return;
-    std::string arr = json.substr(pos + 1, end - pos - 1);
-
-    size_t i = 0;
-    while (i < arr.size()) {
-        auto q1 = arr.find('"', i);
-        if (q1 == std::string::npos) break;
-        auto q2 = arr.find('"', q1 + 1);
-        if (q2 == std::string::npos) break;
-        out.push_back(arr.substr(q1 + 1, q2 - q1 - 1));
-        i = q2 + 1;
-    }
-}
-
-static void ExtractTruncateRules(const std::string& json, std::vector<TruncateRule>& out) {
-    std::string needle = "\"truncate_patterns\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) return;
-    pos = json.find('[', pos);
-    if (pos == std::string::npos) return;
-
-    size_t i = pos + 1;
-    while (i < json.size()) {
-        auto obj_start = json.find('{', i);
-        if (obj_start == std::string::npos) break;
-        auto obj_end = json.find('}', obj_start);
-        if (obj_end == std::string::npos) break;
-        std::string obj = json.substr(obj_start, obj_end - obj_start + 1);
-
-        TruncateRule rule;
-        auto pq1 = obj.find("\"prefix\"");
-        if (pq1 != std::string::npos) {
-            auto pq2 = obj.find('"', pq1 + 9);
-            if (pq2 != std::string::npos) {
-                auto pq3 = obj.find('"', pq2 + 1);
-                if (pq3 != std::string::npos) {
-                    rule.prefix = obj.substr(pq2 + 1, pq3 - pq2 - 1);
-                }
-            }
-        }
-        auto ml = obj.find("\"max_length\"");
-        if (ml != std::string::npos) {
-            auto colon = obj.find(':', ml + 12);
-            if (colon != std::string::npos) {
-                rule.max_length = std::atoi(obj.c_str() + colon + 1);
-            }
-        }
-
-        if (!rule.prefix.empty() && rule.max_length > 0) {
-            out.push_back(rule);
-        }
-        i = obj_end + 1;
-    }
-}
-
 LogFilterConfig ParseLogFilterConfigString(const std::string& json_str) {
-    std::string json = StripComments(json_str);
+    std::string clean = StripComments(json_str);
     LogFilterConfig cfg;
 
-    ExtractUint32(json, "min_level", cfg.min_level);
-    ExtractStringArray(json, "suppress_channels", cfg.suppress_channels);
-    ExtractStringArray(json, "suppress_patterns", cfg.suppress_patterns);
-    ExtractTruncateRules(json, cfg.truncate_rules);
-    ExtractInt(json, "max_line_length", cfg.max_line_length);
-    ExtractBool(json, "timestamps", cfg.timestamps);
-    ExtractBool(json, "passthrough_to_engine", cfg.passthrough_to_engine);
+    try {
+        auto j = nlohmann::json::parse(clean);
 
-    /* Console */
-    ExtractBool(json, "console_enabled", cfg.console_enabled);
-    ExtractBool(json, "console_color", cfg.console_color);
+        cfg.min_level = j.value("min_level", cfg.min_level);
+        cfg.max_line_length = j.value("max_line_length", cfg.max_line_length);
+        cfg.timestamps = j.value("timestamps", cfg.timestamps);
+        cfg.passthrough_to_engine = j.value("passthrough_to_engine", cfg.passthrough_to_engine);
 
-    /* File */
-    ExtractBool(json, "file_enabled", cfg.file_enabled);
-    ExtractString(json, "file_dir", cfg.file_dir);
-    ExtractBool(json, "file_jsonl", cfg.file_jsonl);
+        /* Console */
+        cfg.console_enabled = j.value("console_enabled", cfg.console_enabled);
+        cfg.console_color = j.value("console_color", cfg.console_color);
 
-    /* Rotation */
-    ExtractBool(json, "rotate_enabled", cfg.rotate_enabled);
-    ExtractInt(json, "rotate_max_size_mb", cfg.rotate_max_size_mb);
-    ExtractInt(json, "rotate_interval_min", cfg.rotate_interval_min);
-    ExtractInt(json, "rotate_keep", cfg.rotate_keep);
+        /* File */
+        cfg.file_enabled = j.value("file_enabled", cfg.file_enabled);
+        cfg.file_dir = j.value("file_dir", cfg.file_dir);
+        cfg.file_jsonl = j.value("file_jsonl", cfg.file_jsonl);
+
+        /* Rotation */
+        cfg.rotate_enabled = j.value("rotate_enabled", cfg.rotate_enabled);
+        cfg.rotate_max_size_mb = j.value("rotate_max_size_mb", cfg.rotate_max_size_mb);
+        cfg.rotate_interval_min = j.value("rotate_interval_min", cfg.rotate_interval_min);
+        cfg.rotate_keep = j.value("rotate_keep", cfg.rotate_keep);
+
+        /* String arrays */
+        if (j.contains("suppress_channels")) {
+            for (const auto& s : j["suppress_channels"])
+                cfg.suppress_channels.push_back(s.get<std::string>());
+        }
+        if (j.contains("suppress_patterns")) {
+            for (const auto& s : j["suppress_patterns"])
+                cfg.suppress_patterns.push_back(s.get<std::string>());
+        }
+
+        /* Truncate rules */
+        if (j.contains("truncate_patterns")) {
+            for (const auto& item : j["truncate_patterns"]) {
+                TruncateRule rule;
+                rule.prefix = item.value("prefix", "");
+                rule.max_length = item.value("max_length", 0);
+                if (!rule.prefix.empty() && rule.max_length > 0)
+                    cfg.truncate_rules.push_back(rule);
+            }
+        }
+    } catch (...) {
+        return cfg; /* return defaults on parse failure */
+    }
 
     if (cfg.max_line_length < 0) cfg.max_line_length = 0;
     cfg.valid = true;
@@ -309,7 +215,8 @@ LogFilterConfig LoadLogFilterConfig(const char* path) {
         return {};
     }
     std::string p(path);
-    if (p.size() >= 4 && (p.substr(p.size() - 4) == ".yml" || p.substr(p.size() - 5) == ".yaml")) {
+    if ((p.size() >= 4 && p.substr(p.size() - 4) == ".yml") ||
+        (p.size() >= 5 && p.substr(p.size() - 5) == ".yaml")) {
         return ParseYamlLogFilterConfig(content);
     }
     return ParseLogFilterConfigString(content);

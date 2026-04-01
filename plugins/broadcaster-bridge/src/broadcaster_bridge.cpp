@@ -3,6 +3,7 @@
 #include "broadcaster_bridge.h"
 #include "nevr_common.h"
 
+#include <nlohmann/json.hpp>
 #include <cstring>
 #include <chrono>
 #include <thread>
@@ -58,78 +59,30 @@ static std::atomic<bool>      g_shutdown_flag{false};
 static std::atomic<uint32_t>  g_send_count{0};
 static std::atomic<int64_t>   g_rate_window_start{0};
 
-/* ── JSON config parser (minimal, no dependency) ───────────────────── */
-
-static std::string ExtractJsonString(const std::string& json, const std::string& key) {
-    std::string needle = "\"" + key + "\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) return {};
-
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return {};
-
-    auto q1 = json.find('"', pos + 1);
-    if (q1 == std::string::npos) return {};
-
-    auto q2 = json.find('"', q1 + 1);
-    if (q2 == std::string::npos) return {};
-
-    return json.substr(q1 + 1, q2 - q1 - 1);
-}
-
-static bool ExtractJsonBool(const std::string& json, const std::string& key, bool default_val) {
-    std::string needle = "\"" + key + "\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) return default_val;
-
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return default_val;
-
-    auto val_start = json.find_first_not_of(" \t\r\n", pos + 1);
-    if (val_start == std::string::npos) return default_val;
-
-    if (json.compare(val_start, 4, "true") == 0) return true;
-    if (json.compare(val_start, 5, "false") == 0) return false;
-    return default_val;
-}
-
-static int ExtractJsonInt(const std::string& json, const std::string& key, int default_val) {
-    std::string needle = "\"" + key + "\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos) return default_val;
-
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return default_val;
-
-    auto val_start = json.find_first_not_of(" \t\r\n", pos + 1);
-    if (val_start == std::string::npos) return default_val;
-
-    char* end = nullptr;
-    long val = std::strtol(json.c_str() + val_start, &end, 10);
-    if (end == json.c_str() + val_start) return default_val;
-    return static_cast<int>(val);
-}
-
 BridgeConfig ParseConfig(const std::string& json_text) {
     BridgeConfig cfg;
     if (json_text.empty()) return cfg;
 
-    /* Parse "udp_debug_target": "host:port" */
-    std::string target = ExtractJsonString(json_text, "udp_debug_target");
-    if (!target.empty()) {
-        auto colon = target.rfind(':');
-        if (colon != std::string::npos) {
-            cfg.target_ip = target.substr(0, colon);
-            cfg.target_port = static_cast<uint16_t>(
-                std::strtol(target.substr(colon + 1).c_str(), nullptr, 10));
-        }
-    }
+    try {
+        auto j = nlohmann::json::parse(json_text);
 
-    cfg.listen_port    = static_cast<uint16_t>(
-        ExtractJsonInt(json_text, "listen_port", cfg.listen_port));
-    cfg.mirror_send    = ExtractJsonBool(json_text, "mirror_send", cfg.mirror_send);
-    cfg.mirror_receive = ExtractJsonBool(json_text, "mirror_receive", cfg.mirror_receive);
-    cfg.log_messages   = ExtractJsonBool(json_text, "log_messages", cfg.log_messages);
+        std::string target = j.value("udp_debug_target", "");
+        if (!target.empty()) {
+            auto colon = target.rfind(':');
+            if (colon != std::string::npos) {
+                cfg.target_ip = target.substr(0, colon);
+                cfg.target_port = static_cast<uint16_t>(
+                    std::strtol(target.substr(colon + 1).c_str(), nullptr, 10));
+            }
+        }
+
+        cfg.listen_port    = static_cast<uint16_t>(j.value("listen_port", static_cast<int>(cfg.listen_port)));
+        cfg.mirror_send    = j.value("mirror_send", cfg.mirror_send);
+        cfg.mirror_receive = j.value("mirror_receive", cfg.mirror_receive);
+        cfg.log_messages   = j.value("log_messages", cfg.log_messages);
+    } catch (...) {
+        /* Return defaults on parse failure */
+    }
 
     return cfg;
 }

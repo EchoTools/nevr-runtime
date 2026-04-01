@@ -10,6 +10,9 @@ target_link_libraries(broadcaster_bridge PRIVATE nevr_plugin_common)
 find_package(minhook CONFIG REQUIRED)
 target_link_libraries(broadcaster_bridge PRIVATE minhook::minhook)
 
+find_package(nlohmann_json CONFIG REQUIRED)
+target_link_libraries(broadcaster_bridge PRIVATE nlohmann_json::nlohmann_json)
+
 if(WIN32 OR MINGW)
     target_link_libraries(broadcaster_bridge PRIVATE ws2_32)
     target_compile_definitions(broadcaster_bridge PRIVATE

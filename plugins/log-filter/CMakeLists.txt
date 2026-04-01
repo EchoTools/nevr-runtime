@@ -8,7 +8,8 @@ target_compile_definitions(log_filter PRIVATE NEVR_PLUGIN_EXPORTS)
 target_link_libraries(log_filter PRIVATE nevr_plugin_common)
 
 find_package(minhook CONFIG REQUIRED)
-target_link_libraries(log_filter PRIVATE minhook::minhook)
+find_package(nlohmann_json CONFIG REQUIRED)
+target_link_libraries(log_filter PRIVATE minhook::minhook nlohmann_json::nlohmann_json)
 
 if(WIN32 OR MINGW)
     target_compile_definitions(log_filter PRIVATE
