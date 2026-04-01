@@ -38,7 +38,7 @@ struct CachedAuthToken {
 };
 
 // Search paths for _local/.credentials.json (supports nested directory layouts).
-static const char* const kAuthJsonPaths[] = {
+static constexpr const char* kAuthJsonPaths[] = {
     "_local/.credentials.json",
     "..\\_local\\.credentials.json",
     "..\\..\\_local\\.credentials.json",
@@ -47,7 +47,7 @@ static const char* const kAuthJsonPaths[] = {
 };
 
 // Search paths for _local/ directory (for saving).
-static const char* const kLocalDirProbes[] = {
+static constexpr const char* kLocalDirProbes[] = {
     "_local/config.json",
     "..\\_local\\config.json",
     "..\\..\\_local\\config.json",
@@ -56,13 +56,17 @@ static const char* const kLocalDirProbes[] = {
 };
 
 // Corresponding directory paths for each probe.
-static const char* const kLocalDirs[] = {
+static constexpr const char* kLocalDirs[] = {
     "_local",
     "..\\_local",
     "..\\..\\_local",
     "../_local",
     "../../_local",
 };
+
+static_assert(sizeof(kLocalDirProbes) / sizeof(kLocalDirProbes[0]) ==
+              sizeof(kLocalDirs) / sizeof(kLocalDirs[0]),
+              "kLocalDirProbes and kLocalDirs must have the same length");
 
 // Reads _local/.credentials.json with parent-directory fallback.
 // Returns empty token on missing file, parse failure, or malformed data.
@@ -120,8 +124,19 @@ inline bool SaveAuthToken(const CachedAuthToken& auth) {
     }
 
     std::string path = target_dir + "/.credentials.json";
+
+#ifndef _WIN32
+    // Set restrictive umask before creating file so it's never world-readable
+    mode_t old_umask = umask(0177);
+#endif
+
     std::ofstream out(path, std::ios::trunc);
-    if (!out.is_open()) return false;
+    if (!out.is_open()) {
+#ifndef _WIN32
+        umask(old_umask);
+#endif
+        return false;
+    }
 
     nlohmann::json j;
     j["token"] = auth.token;
@@ -169,7 +184,7 @@ inline bool SaveAuthToken(const CachedAuthToken& auth) {
         CloseHandle(hToken);
     }
 #else
-    chmod(path.c_str(), 0600);
+    umask(old_umask);
 #endif
 
     return true;

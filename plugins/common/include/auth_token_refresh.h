@@ -8,11 +8,14 @@
 #include <nlohmann/json.hpp>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 // Refresh an expired access token using the refresh token.
-// Calls Nakama's SessionRefresh endpoint. On success, updates auth in-place
-// and saves to disk. Returns true on success.
-inline bool RefreshAuthToken(CachedAuthToken& auth, const std::string& nakama_url) {
+// Calls Nakama's SessionRefresh endpoint with Basic auth (server_key).
+// On success, updates auth in-place and saves to disk. Returns true on success.
+inline bool RefreshAuthToken(CachedAuthToken& auth,
+                             const std::string& nakama_url,
+                             const std::string& server_key) {
     if (auth.refresh_token.empty()) return false;
 
     CURL* curl = curl_easy_init();
@@ -24,6 +27,13 @@ inline bool RefreshAuthToken(CachedAuthToken& auth, const std::string& nakama_ur
 
     std::string post_data = body.dump();
     std::string response;
+
+    // Nakama requires Basic auth with server key for session refresh
+    // Nakama requires Basic auth with server key for session refresh.
+    // Use curl's built-in Basic auth (handles base64 encoding internally).
+    curl_easy_setopt(curl, CURLOPT_USERNAME, server_key.c_str());
+    curl_easy_setopt(curl, CURLOPT_PASSWORD, "");
+    curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
 
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
@@ -57,12 +67,12 @@ inline bool RefreshAuthToken(CachedAuthToken& auth, const std::string& nakama_ur
         }
 
         auth.token = new_token;
-        // Nakama device auth returns 1hr access tokens
+        // Default 1hr access token; TODO: parse exp from JWT claims
         auth.token_expiry = static_cast<uint64_t>(time(nullptr)) + 3600;
 
         if (!new_refresh.empty()) {
             auth.refresh_token = new_refresh;
-            // Nakama device auth returns 30-day refresh tokens
+            // Default 30-day refresh token; TODO: parse exp from JWT claims
             auth.refresh_token_expiry = static_cast<uint64_t>(time(nullptr)) + (30 * 24 * 3600);
         }
 
