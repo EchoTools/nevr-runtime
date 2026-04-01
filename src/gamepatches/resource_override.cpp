@@ -1,48 +1,11 @@
 /*
- * resource_override.cpp — Hook Resource_InitFromBuffers to replace level data.
+ * resource_override.cpp — Hook AsyncResourceIOCallback to replace game resources.
  *
- * Replaces the CComponentSpaceResource for mpl_arena_a with a modified
- * version that includes combat component types/instances merged from
- * combat maps.
+ * Provides a registry-based system for overriding game resources by their
+ * type and name symbol hashes. Overrides can be either embedded data (compiled
+ * into the DLL) or loaded from disk at runtime.
  *
- * The override file is loaded from _overrides/mpl_arena_a relative to
- * the game binary directory.
- *
- * CResource struct layout (Ghidra FUN_140fa2510):
- *   +0x28: type_symbol  (CResourceID, uint64 hash)
- *   +0x38: name_symbol  (CResourceID, uint64 hash)
- *   +0x40: buf1         (primary data buffer)
- *   +0x48: buf2         (secondary data buffer)
- *   +0x50: size1        (primary buffer size)
- *   +0x58: size2        (secondary buffer size)
- *   +0x60: load_state   (uint32, 4 = loaded)
- *
- * FUN_140fa2510 takes ONLY this (RCX). Buffers are read from the struct.
- */
-
-#include "resource_override.h"
-
-#include <cstdio>
-#include <cstring>
-#include <windows.h>
-#include <MinHook.h>
-
-#include "common/globals.h"
-#include "common/logging.h"
-
-namespace {
-
-/* Target type and name hashes (pre-computed) */
-constexpr uint64_t TYPE_COMPONENT_SPACE = 0xe1273b5cac2ce869ULL;
-constexpr uint64_t NAME_MPL_ARENA_A     = 0x576ed3f8428ebc4bULL;
-
-/* Override data */
-static void* g_override_buf = nullptr;
-static uint64_t g_override_size = 0;
-static bool g_applied = false;
-
-/*
- * Hook AsyncResourceIOCallback (0x140fa16d0) instead of FUN_140fa2510.
+ * Hook target: AsyncResourceIOCallback @ 0x140fa16d0
  * The callback receives SIORequestCallbackData:
  *   +0x00: status (4 = success)
  *   +0x08: CResource* pointer
@@ -50,16 +13,55 @@ static bool g_applied = false;
  *   +0x18: data buffer pointer
  *   +0x20: data size
  *
- * It writes buf/size into CResource+0x40/+0x50 then calls the deserializer.
- * We intercept here to swap the buffer BEFORE it's written to the struct.
+ * CResource struct layout:
+ *   +0x28: type_symbol  (uint64 hash)
+ *   +0x38: name_symbol  (uint64 hash)
  */
+
+#include "resource_override.h"
+
+#include <cstdio>
+#include <cstring>
+#include <vector>
+#include <windows.h>
+#include <MinHook.h>
+
+#include "common/globals.h"
+#include "common/logging.h"
+
+/* Embedded assets */
+#include "splash_texture.h"
+
+namespace {
+
+/* ── Override registry ────────────────────────────────────────────── */
+
+struct ResourceOverride {
+    uint64_t type_hash;     /* 0 = match any type */
+    uint64_t name_hash;
+    const void* data;       /* embedded data (not owned) or VirtualAlloc'd (owned) */
+    uint64_t size;
+    bool owned;             /* true if data was allocated and should be freed */
+    const char* label;      /* for logging */
+    bool applied;           /* set to true after first replacement */
+};
+
+static std::vector<ResourceOverride>* g_overrides = nullptr;
+static uint64_t g_total_hits = 0;
+
+/* ── Known asset hashes ───────────────────────────────────────────── */
+
+constexpr uint64_t TYPE_DDS_TEXTURE     = 0xbeac1969cb7b8861ULL;
+constexpr uint64_t NAME_SPLASH_TEXTURE  = 0x1f72c5e0fc9fc8c0ULL;
+
+/* ── Hook ─────────────────────────────────────────────────────────── */
+
 typedef void (__cdecl* AsyncIOCallback_fn)(void* callback_data);
 static AsyncIOCallback_fn g_orig = nullptr;
-
-static int g_dbg_count = 0;
+static void* g_hook_target = nullptr;
 
 static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
-    if (!g_applied && g_override_buf && callback_data) {
+    if (callback_data && g_overrides && !g_overrides->empty()) {
         auto cbd = reinterpret_cast<uintptr_t>(callback_data);
         void* resource = *reinterpret_cast<void**>(cbd + 0x08);
         uint32_t buf_index = *reinterpret_cast<uint32_t*>(cbd + 0x10);
@@ -69,31 +71,33 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
             uint64_t name_hash = *reinterpret_cast<uint64_t*>(res + 0x38);
             uint64_t type_hash = *reinterpret_cast<uint64_t*>(res + 0x28);
 
-            if (g_dbg_count < 30 || name_hash == NAME_MPL_ARENA_A) {
-                Log(EchoVR::LogLevel::Info,
-                    "[NEVR.RESOVERRIDE] IO: name=0x%016llx type=0x%016llx",
-                    (unsigned long long)name_hash, (unsigned long long)type_hash);
-                g_dbg_count++;
-            }
+            for (auto& ovr : *g_overrides) {
+                if (ovr.applied) continue;
+                if (ovr.name_hash != name_hash) continue;
+                if (ovr.type_hash != 0 && ovr.type_hash != type_hash) continue;
 
-            if (name_hash == NAME_MPL_ARENA_A && type_hash == TYPE_COMPONENT_SPACE) {
+                /* Match — replace the buffer */
                 uint64_t orig_size = *reinterpret_cast<uint64_t*>(cbd + 0x20);
-                Log(EchoVR::LogLevel::Info,
-                    "[NEVR.RESOVERRIDE] Replacing mpl_arena_a: orig_size=%llu override_size=%llu",
-                    (unsigned long long)orig_size,
-                    (unsigned long long)g_override_size);
+                *reinterpret_cast<const void**>(cbd + 0x18) = ovr.data;
+                *reinterpret_cast<uint64_t*>(cbd + 0x20) = ovr.size;
+                ovr.applied = true;
+                g_total_hits++;
 
-                /* Replace buffer pointer and size in the callback data.
-                 * AsyncResourceIOCallback will write these into the CResource struct. */
-                *reinterpret_cast<void**>(cbd + 0x18) = g_override_buf;
-                *reinterpret_cast<uint64_t*>(cbd + 0x20) = g_override_size;
-                g_applied = true;
+                Log(EchoVR::LogLevel::Info,
+                    "[NEVR.RESOURCE] Override: %s (0x%016llx) %llu -> %llu bytes",
+                    ovr.label,
+                    static_cast<unsigned long long>(name_hash),
+                    static_cast<unsigned long long>(orig_size),
+                    static_cast<unsigned long long>(ovr.size));
+                break;
             }
         }
     }
 
     g_orig(callback_data);
 }
+
+/* ── File loading helper ──────────────────────────────────────────── */
 
 static void* LoadFileFromDisk(const char* path, uint64_t* out_size) {
     HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
@@ -103,12 +107,12 @@ static void* LoadFileFromDisk(const char* path, uint64_t* out_size) {
     LARGE_INTEGER li;
     if (!GetFileSizeEx(hFile, &li)) { CloseHandle(hFile); return nullptr; }
 
-    uint64_t sz = (uint64_t)li.QuadPart;
+    uint64_t sz = static_cast<uint64_t>(li.QuadPart);
     void* buf = VirtualAlloc(NULL, sz, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!buf) { CloseHandle(hFile); return nullptr; }
 
     DWORD bytesRead = 0;
-    BOOL ok = ReadFile(hFile, buf, (DWORD)sz, &bytesRead, NULL);
+    BOOL ok = ReadFile(hFile, buf, static_cast<DWORD>(sz), &bytesRead, NULL);
     CloseHandle(hFile);
 
     if (!ok || bytesRead != sz) { VirtualFree(buf, 0, MEM_RELEASE); return nullptr; }
@@ -119,51 +123,128 @@ static void* LoadFileFromDisk(const char* path, uint64_t* out_size) {
 
 } // anonymous namespace
 
-void InstallResourceOverride() {
-    /* Disabled: override data is now baked into the rebuilt package archive.
-     * Keeping this function as a no-op so the call from initialize.cpp
-     * doesn't need to be removed. Re-enable if hot-patching is needed. */
-    return;
+/* ── Public API ───────────────────────────────────────────────────── */
 
-    /* Resolve override file path: <game_dir>/_overrides/mpl_arena_a */
+void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
+                              const void* data, uint64_t size,
+                              const char* label) {
+    if (!g_overrides) return;
+    ResourceOverride ovr = {};
+    ovr.type_hash = type_hash;
+    ovr.name_hash = name_hash;
+    ovr.data = data;
+    ovr.size = size;
+    ovr.owned = false;
+    ovr.label = label;
+    g_overrides->push_back(ovr);
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.RESOURCE] Registered embedded override: %s (type=0x%016llx name=0x%016llx, %llu bytes)",
+        label,
+        static_cast<unsigned long long>(type_hash),
+        static_cast<unsigned long long>(name_hash),
+        static_cast<unsigned long long>(size));
+}
+
+void RegisterResourceOverrideFromFile(uint64_t type_hash, uint64_t name_hash,
+                                      const char* file_path,
+                                      const char* label) {
+    if (!g_overrides) return;
+    uint64_t size = 0;
+    void* data = LoadFileFromDisk(file_path, &size);
+    if (!data) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.RESOURCE] Failed to load override file: %s", file_path);
+        return;
+    }
+    ResourceOverride ovr = {};
+    ovr.type_hash = type_hash;
+    ovr.name_hash = name_hash;
+    ovr.data = data;
+    ovr.size = size;
+    ovr.owned = true;
+    ovr.label = label;
+    g_overrides->push_back(ovr);
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.RESOURCE] Registered file override: %s (%s, %llu bytes)",
+        label, file_path, static_cast<unsigned long long>(size));
+}
+
+void InstallResourceOverride() {
+    g_overrides = new std::vector<ResourceOverride>();
+
+    /* ── Register built-in overrides ──────────────────────────────── */
+
+    /* Splash screen texture (EchoVRCE branding) */
+    RegisterResourceOverride(
+        TYPE_DDS_TEXTURE, NAME_SPLASH_TEXTURE,
+        kSplashDDS, kSplashDDS_len,
+        "splash_texture");
+
+    /* ── Scan _overrides/ directory for additional files ──────────── */
+
     char moduleDir[MAX_PATH] = {0};
-    GetModuleFileNameA((HMODULE)EchoVR::g_GameBaseAddress, moduleDir, MAX_PATH);
+    GetModuleFileNameA(NULL, moduleDir, MAX_PATH);
     char* lastSlash = strrchr(moduleDir, '\\');
     if (lastSlash) *(lastSlash + 1) = '\0';
 
-    char overridePath[MAX_PATH];
-    snprintf(overridePath, sizeof(overridePath), "%s_overrides\\mpl_arena_a", moduleDir);
+    char overrideDir[MAX_PATH];
+    snprintf(overrideDir, sizeof(overrideDir), "%s_overrides", moduleDir);
 
-    /* Load override file */
-    g_override_buf = LoadFileFromDisk(overridePath, &g_override_size);
-    if (!g_override_buf) {
-        /* No override file — skip hook installation entirely */
+    WIN32_FIND_DATAA fd;
+    char searchPattern[MAX_PATH];
+    snprintf(searchPattern, sizeof(searchPattern), "%s\\*", overrideDir);
+    HANDLE hFind = FindFirstFileA(searchPattern, &fd);
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+            const char* name = fd.cFileName;
+
+            /* Parse "0xTYPE.0xNAME" or "0xNAME" filename format */
+            uint64_t type_h = 0, name_h = 0;
+            if (name[0] == '0' && (name[1] == 'x' || name[1] == 'X')) {
+                const char* dot = strchr(name, '.');
+                if (dot && dot[1] == '0' && (dot[2] == 'x' || dot[2] == 'X')) {
+                    type_h = strtoull(name + 2, nullptr, 16);
+                    name_h = strtoull(dot + 3, nullptr, 16);
+                } else {
+                    name_h = strtoull(name + 2, nullptr, 16);
+                }
+            }
+
+            if (name_h == 0) continue;
+
+            char filePath[MAX_PATH];
+            snprintf(filePath, sizeof(filePath), "%s\\%s", overrideDir, name);
+            RegisterResourceOverrideFromFile(type_h, name_h, filePath, name);
+        } while (FindNextFileA(hFind, &fd));
+        FindClose(hFind);
+    }
+
+    if (g_overrides->empty()) {
+        /* No overrides registered — don't install the hook */
+        delete g_overrides;
+        g_overrides = nullptr;
+        return;
+    }
+
+    /* ── Install hook ─────────────────────────────────────────────── */
+
+    g_hook_target = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + 0xFA16D0);
+
+    if (MH_CreateHook(g_hook_target, reinterpret_cast<void*>(Hook_AsyncIOCallback),
+                       reinterpret_cast<void**>(&g_orig)) != MH_OK) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.RESOURCE] MH_CreateHook failed");
+        return;
+    }
+
+    if (MH_EnableHook(g_hook_target) != MH_OK) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.RESOURCE] MH_EnableHook failed");
+        MH_RemoveHook(g_hook_target);
         return;
     }
 
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.RESOVERRIDE] Loaded override: %s (%llu bytes, target name=0x%016llx type=0x%016llx)",
-        overridePath, (unsigned long long)g_override_size,
-        (unsigned long long)NAME_MPL_ARENA_A,
-        (unsigned long long)TYPE_COMPONENT_SPACE);
-
-    /* Hook AsyncResourceIOCallback @ 0x140fa16d0 */
-    void* target = (void*)(EchoVR::g_GameBaseAddress + 0xFA16D0);
-
-    if (MH_CreateHook(target, (void*)Hook_AsyncIOCallback, (void**)&g_orig) != MH_OK) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.RESOVERRIDE] MH_CreateHook failed");
-        VirtualFree(g_override_buf, 0, MEM_RELEASE);
-        g_override_buf = nullptr;
-        return;
-    }
-
-    if (MH_EnableHook(target) != MH_OK) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.RESOVERRIDE] MH_EnableHook failed");
-        MH_RemoveHook(target);
-        VirtualFree(g_override_buf, 0, MEM_RELEASE);
-        g_override_buf = nullptr;
-        return;
-    }
-
-    Log(EchoVR::LogLevel::Info, "[NEVR.RESOVERRIDE] Hook installed on AsyncResourceIOCallback");
+        "[NEVR.RESOURCE] Hook installed (%zu overrides registered)",
+        g_overrides->size());
 }
