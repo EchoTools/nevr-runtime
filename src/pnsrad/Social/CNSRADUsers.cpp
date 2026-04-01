@@ -107,7 +107,7 @@ static void CNSIUsers_DestroyMembers(CNSIUsers* self) {
         void** entries = reinterpret_cast<void**>(self->buffer_ctx_.data);
         void** end = entries + count;
         for (void** p = entries; p != end; ++p) {
-            self->OnShutdown();
+            self->OnShutdown(reinterpret_cast<int64_t*>(*p));
         }
     }
     self->active_user_count_ = 0;
@@ -284,7 +284,7 @@ void CNSRADUsers::stub_vtable_0xf8() {}
 // @0x18008e080 — OnShutdown
 // Logs "[NSUSER] Destroying user %s" and cleans up the user's broadcaster registration.
 // @confidence: H
-void CNSRADUsers::OnShutdown() {
+void CNSRADUsers::OnShutdown(int64_t* user) {
     // Full implementation depends on user iteration context.
     // The function logs and calls fcn_18008b3a0 to unregister.
 }

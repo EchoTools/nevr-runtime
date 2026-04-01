@@ -39,7 +39,7 @@ public:
     // --- CNSIUsers overrides (vtable methods) ---
 
     // @0x18008e080 — logs "[NSUSER] Destroying user %s"
-    void OnShutdown() override;
+    void OnShutdown(int64_t* user) override;
 
     // @0x18008e620 — registers 7 SNS callback handlers via hash routing
     void RegisterCallbacks() override;
