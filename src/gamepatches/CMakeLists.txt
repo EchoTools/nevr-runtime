@@ -16,7 +16,7 @@ set(PATCHES_SOURCES
     "winhttp_stub.cpp"
     "builtin_log_filter.cpp"
     "builtin_server_timing.cpp"
-    "builtin_token_auth.cpp"
+    # builtin_token_auth.cpp excluded: requires curl which breaks dbgcore.dll loading
 )
 
 set(PATCHES_HEADERS
@@ -37,7 +37,6 @@ set(PATCHES_HEADERS
     "patch_addresses.h"
     "builtin_log_filter.h"
     "builtin_server_timing.h"
-    "builtin_token_auth.h"
 )
 
 add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}

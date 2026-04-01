@@ -7,8 +7,10 @@ if(BUILD_TESTING)
     endif()
 endif()
 
-# log-filter, server-timing, token-auth are now built into gamepatches.dll
+# log-filter, server-timing are built into gamepatches.dll
 # crash-handler functionality is in gamepatches core (crash_recovery.cpp)
+# token-auth stays external: curl deps break dbgcore.dll loading under Wine
+add_subdirectory(token-auth)
 add_subdirectory(broadcaster-bridge)
 add_subdirectory(audio-intercom)
 add_subdirectory(game-rules-override)
