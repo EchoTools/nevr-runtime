@@ -16,10 +16,10 @@ set(PROTO_GENERATED_SRCS
   ${GEN_DIR}/telemetry/v2/echo_arena.pb.cc
 )
 
-add_library(proto_nevr STATIC ${PROTO_GENERATED_SRCS})
+add_library(nevr_api STATIC ${PROTO_GENERATED_SRCS})
 
-target_link_libraries(proto_nevr PUBLIC protobuf::libprotobuf)
+target_link_libraries(nevr_api PUBLIC protobuf::libprotobuf)
 
-target_include_directories(proto_nevr PUBLIC
+target_include_directories(nevr_api PUBLIC
   $<BUILD_INTERFACE:${GEN_DIR}>
 )
