@@ -9,6 +9,8 @@
 #include "echovr.h"
 #include "symbols.h"
 
+#include <nlohmann/json.hpp>
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -357,27 +359,6 @@ static void SendPlaceholderFriendsList() {
 }
 
 // ===================================================================================================
-// Config loading -- simple JSON key extraction from _local/config.json
-// ===================================================================================================
-
-static std::string ExtractJsonString(const std::string& json, const std::string& key) {
-    std::string needle = "\"" + key + "\"";
-    size_t pos = json.find(needle);
-    if (pos == std::string::npos) return {};
-
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return {};
-
-    size_t q1 = json.find('"', pos + 1);
-    if (q1 == std::string::npos) return {};
-
-    size_t q2 = json.find('"', q1 + 1);
-    if (q2 == std::string::npos) return {};
-
-    return json.substr(q1 + 1, q2 - q1 - 1);
-}
-
-// ===================================================================================================
 // Public API
 // ===================================================================================================
 
@@ -423,31 +404,33 @@ void SocialBridgeOnStateChange(const NvrGameContext* ctx, uint32_t old_state, ui
             s_nakamaClient = new NevrClient();
         }
 
-        // Read config from _local/config.json using simple file I/O
-        std::string configJson = nevr::LoadConfigFile("_local/config.json");
-        if (!configJson.empty()) {
-            std::string nakamaUrl = ExtractJsonString(configJson, "nevr_url");
-            std::string nevrHttpKey = ExtractJsonString(configJson, "nevr_http_key");
-            std::string nevrServerKey = ExtractJsonString(configJson, "nevr_server_key");
+        // Read config from _local/config.json
+        std::string configStr = nevr::LoadConfigFile("_local/config.json");
+        if (!configStr.empty()) {
+            std::string nakamaUrl, nevrHttpKey, nevrServerKey;
+            try {
+                auto configJson = nlohmann::json::parse(configStr);
+                nakamaUrl = configJson.value("nevr_url", "");
+                nevrHttpKey = configJson.value("nevr_http_key", "");
+                nevrServerKey = configJson.value("nevr_server_key", "");
+            } catch (const nlohmann::json::exception& e) {
+                fprintf(stderr, "[NEVR.SOCIAL] Failed to parse _local/config.json: %s\n", e.what());
+            }
 
             if (!nakamaUrl.empty() && !nevrHttpKey.empty()) {
                 s_nakamaClient->Configure(nakamaUrl, nevrHttpKey, nevrServerKey, "", "");
 
                 // Try cached token from _local/auth.json first (written by token_auth plugin)
-                std::string authJson = nevr::LoadConfigFile("_local/auth.json");
-                if (!authJson.empty()) {
-                    std::string cachedToken = ExtractJsonString(authJson, "token");
-                    // Extract expiry (unquoted number)
+                std::string authStr = nevr::LoadConfigFile("_local/auth.json");
+                if (!authStr.empty()) {
+                    std::string cachedToken;
                     uint64_t expiry = 0;
-                    size_t epos = authJson.find("\"expiry\"");
-                    if (epos != std::string::npos) {
-                        epos = authJson.find(':', epos + 8);
-                        if (epos != std::string::npos) {
-                            epos++;
-                            while (epos < authJson.size() && (authJson[epos] == ' ' || authJson[epos] == '\t'))
-                                epos++;
-                            expiry = std::strtoull(authJson.c_str() + epos, nullptr, 10);
-                        }
+                    try {
+                        auto authJson = nlohmann::json::parse(authStr);
+                        cachedToken = authJson.value("token", "");
+                        expiry = authJson.value("expiry", static_cast<uint64_t>(0));
+                    } catch (const nlohmann::json::exception& e) {
+                        fprintf(stderr, "[NEVR.SOCIAL] Failed to parse _local/auth.json: %s\n", e.what());
                     }
                     if (!cachedToken.empty() && expiry > static_cast<uint64_t>(time(nullptr)) + 60) {
                         s_nakamaClient->SetToken(cachedToken, expiry);

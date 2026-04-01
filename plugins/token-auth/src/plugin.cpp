@@ -4,30 +4,13 @@
 #include "nevr_common.h"
 #include "device_auth.h"
 
+#include <nlohmann/json.hpp>
 #include <cstdio>
 #include <cstring>
 #include <string>
 
 static DeviceAuth* s_auth = nullptr;
 static bool s_authAttempted = false;
-
-// Simple JSON string extraction for config loading
-static std::string ExtractJsonString(const std::string& json, const std::string& key) {
-    std::string needle = "\"" + key + "\"";
-    size_t pos = json.find(needle);
-    if (pos == std::string::npos) return {};
-
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return {};
-
-    size_t q1 = json.find('"', pos + 1);
-    if (q1 == std::string::npos) return {};
-
-    size_t q2 = json.find('"', q1 + 1);
-    if (q2 == std::string::npos) return {};
-
-    return json.substr(q1 + 1, q2 - q1 - 1);
-}
 
 NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void) {
     NvrPluginInfo info = {};
@@ -49,14 +32,21 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
     s_auth = new DeviceAuth();
 
     // Load config from _local/config.json
-    std::string configJson = nevr::LoadConfigFile("_local/config.json");
-    if (configJson.empty()) {
+    std::string configStr = nevr::LoadConfigFile("_local/config.json");
+    if (configStr.empty()) {
         fprintf(stderr, "[NEVR.AUTH] Could not read _local/config.json\n");
         return 0;
     }
 
-    std::string nevrUrl = ExtractJsonString(configJson, "nevr_url");
-    std::string nevrHttpKey = ExtractJsonString(configJson, "nevr_http_key");
+    std::string nevrUrl, nevrHttpKey;
+    try {
+        auto cfg = nlohmann::json::parse(configStr);
+        nevrUrl = cfg.value("nevr_url", "");
+        nevrHttpKey = cfg.value("nevr_http_key", "");
+    } catch (const nlohmann::json::parse_error& e) {
+        fprintf(stderr, "[NEVR.AUTH] Failed to parse config.json: %s\n", e.what());
+        return 0;
+    }
 
     if (nevrUrl.empty() || nevrHttpKey.empty()) {
         fprintf(stderr, "[NEVR.AUTH] Missing nevr_url or nevr_http_key in config.json\n");

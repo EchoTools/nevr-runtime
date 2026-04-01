@@ -1,23 +1,17 @@
 #include "nevr_client.h"
 
+#include <nlohmann/json.hpp>
 #include <curl/curl.h>
 #include <ctime>
 #include <cstring>
 #include <cstdio>
 
+#include "nevr_curl.h"
+
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
 #endif
-
-// jsoncpp is not available -- use simple manual JSON parsing for the small
-// response payloads we handle. For production, consider adding jsoncpp.
-
-static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* output) {
-    size_t totalSize = size * nmemb;
-    output->append(static_cast<char*>(contents), totalSize);
-    return totalSize;
-}
 
 void NevrClient::Configure(const std::string& url, const std::string& httpKey,
                                const std::string& serverKey, const std::string& username,
@@ -56,7 +50,7 @@ bool NevrClient::Authenticate() {
     curl_easy_setopt(curl, CURLOPT_URL, authUrl.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nevr::CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);  // TODO: proper cert validation
@@ -79,20 +73,19 @@ bool NevrClient::Authenticate() {
     }
 
     // Extract token from JSON response: {"token":"eyJ...","refresh_token":"..."}
-    // Simple extraction -- find "token":"..." pattern
-    size_t tokenStart = response.find("\"token\":\"");
-    if (tokenStart == std::string::npos) {
-        fprintf(stderr, "[NEVR.SOCIAL] No token in auth response\n");
-        return false;
-    }
-    tokenStart += 9;  // skip "token":"
-    size_t tokenEnd = response.find("\"", tokenStart);
-    if (tokenEnd == std::string::npos) {
-        fprintf(stderr, "[NEVR.SOCIAL] Malformed token in auth response\n");
+    try {
+        auto j = nlohmann::json::parse(response);
+        m_token = j["token"].get<std::string>();
+    } catch (const nlohmann::json::exception& e) {
+        fprintf(stderr, "[NEVR.SOCIAL] Failed to parse auth response: %s\n", e.what());
         return false;
     }
 
-    m_token = response.substr(tokenStart, tokenEnd - tokenStart);
+    if (m_token.empty()) {
+        fprintf(stderr, "[NEVR.SOCIAL] No token in auth response\n");
+        return false;
+    }
+
     // Token expires in 60 min, refresh at 50 min
     m_tokenExpiry = static_cast<uint64_t>(time(nullptr)) + (50 * 60);
 
@@ -128,7 +121,7 @@ std::string NevrClient::HttpGet(const std::string& url) {
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nevr::CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
@@ -159,7 +152,7 @@ std::string NevrClient::HttpPost(const std::string& url, const std::string& body
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nevr::CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
@@ -193,7 +186,7 @@ std::string NevrClient::HttpDelete(const std::string& url, const std::string& bo
     if (!body.empty()) {
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
     }
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nevr::CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
@@ -220,51 +213,23 @@ bool NevrClient::ListFriends(int state, std::vector<NevrFriend>& outFriends) {
 
     // Parse friend list from JSON response
     // Format: {"friends":[{"user":{"id":"...","username":"...","display_name":"...","online":true},"state":0},...]}
-    // Simple extraction -- iterate through "user" objects
-    size_t pos = 0;
-    while ((pos = response.find("\"user\":{", pos)) != std::string::npos) {
-        NevrFriend f;
-        pos += 8;  // skip "user":{
-
-        // Extract id
-        size_t idStart = response.find("\"id\":\"", pos);
-        if (idStart != std::string::npos) {
-            idStart += 6;
-            size_t idEnd = response.find("\"", idStart);
-            if (idEnd != std::string::npos) f.userId = response.substr(idStart, idEnd - idStart);
+    try {
+        auto j = nlohmann::json::parse(response);
+        for (const auto& entry : j.value("friends", nlohmann::json::array())) {
+            NevrFriend f;
+            if (entry.contains("user")) {
+                const auto& user = entry["user"];
+                f.userId = user.value("id", "");
+                f.username = user.value("username", "");
+                f.displayName = user.value("display_name", "");
+                f.online = user.value("online", false);
+            }
+            f.state = entry.value("state", 0);
+            outFriends.push_back(f);
         }
-
-        // Extract username
-        size_t unStart = response.find("\"username\":\"", pos);
-        if (unStart != std::string::npos) {
-            unStart += 12;
-            size_t unEnd = response.find("\"", unStart);
-            if (unEnd != std::string::npos) f.username = response.substr(unStart, unEnd - unStart);
-        }
-
-        // Extract display_name
-        size_t dnStart = response.find("\"display_name\":\"", pos);
-        if (dnStart != std::string::npos) {
-            dnStart += 16;
-            size_t dnEnd = response.find("\"", dnStart);
-            if (dnEnd != std::string::npos) f.displayName = response.substr(dnStart, dnEnd - dnStart);
-        }
-
-        // Extract online status
-        f.online = (response.find("\"online\":true", pos) != std::string::npos &&
-                    response.find("\"online\":true", pos) < response.find("}", pos + 100));
-
-        // Extract state (after the user object closes)
-        size_t stateStart = response.find("\"state\":", pos);
-        if (stateStart != std::string::npos && stateStart < pos + 500) {
-            stateStart += 8;
-            // Skip any whitespace or quotes
-            while (stateStart < response.size() && (response[stateStart] == ' ' || response[stateStart] == '"'))
-                stateStart++;
-            f.state = std::atoi(response.c_str() + stateStart);
-        }
-
-        outFriends.push_back(f);
+    } catch (const nlohmann::json::exception& e) {
+        fprintf(stderr, "[NEVR.SOCIAL] Failed to parse friends response: %s\n", e.what());
+        return false;
     }
 
     fprintf(stderr, "[NEVR.SOCIAL] Listed %zu friends (state=%d)\n", outFriends.size(), state);
@@ -317,12 +282,13 @@ bool NevrClient::CreateParty(std::string& outPartyId, int maxSize, bool open) {
     std::string response = HttpPost(url, body);
     if (response.empty()) return false;
 
-    size_t start = response.find("\"party_id\":\"");
-    if (start == std::string::npos) return false;
-    start += 12;
-    size_t end = response.find("\"", start);
-    if (end == std::string::npos) return false;
-    outPartyId = response.substr(start, end - start);
+    try {
+        auto j = nlohmann::json::parse(response);
+        outPartyId = j["party_id"].get<std::string>();
+    } catch (const nlohmann::json::exception& e) {
+        fprintf(stderr, "[NEVR.SOCIAL] Failed to parse CreateParty response: %s\n", e.what());
+        return false;
+    }
     m_currentPartyId = outPartyId;
     fprintf(stderr, "[NEVR.SOCIAL] CreateParty: %s\n", outPartyId.c_str());
     return true;
@@ -372,20 +338,17 @@ bool NevrClient::ListPartyMembers(const std::string& partyId, std::vector<PartyM
     if (response.empty()) return false;
 
     // Parse members array from JSON
-    size_t pos = 0;
-    while ((pos = response.find("\"user_id\":\"", pos)) != std::string::npos) {
-        PartyMember m;
-        pos += 11;
-        size_t end = response.find("\"", pos);
-        if (end != std::string::npos) m.userId = response.substr(pos, end - pos);
-
-        size_t unStart = response.find("\"username\":\"", pos);
-        if (unStart != std::string::npos) {
-            unStart += 12;
-            size_t unEnd = response.find("\"", unStart);
-            if (unEnd != std::string::npos) m.username = response.substr(unStart, unEnd - unStart);
+    try {
+        auto j = nlohmann::json::parse(response);
+        for (const auto& entry : j.value("members", nlohmann::json::array())) {
+            PartyMember m;
+            m.userId = entry.value("user_id", "");
+            m.username = entry.value("username", "");
+            outMembers.push_back(m);
         }
-        outMembers.push_back(m);
+    } catch (const nlohmann::json::exception& e) {
+        fprintf(stderr, "[NEVR.SOCIAL] Failed to parse ListPartyMembers response: %s\n", e.what());
+        return false;
     }
     fprintf(stderr, "[NEVR.SOCIAL] ListPartyMembers(%s): %zu members\n", partyId.c_str(), outMembers.size());
     return true;
@@ -406,7 +369,7 @@ std::string NevrClient::HttpPostPublic(const std::string& url, const std::string
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nevr::CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
@@ -428,13 +391,13 @@ std::string NevrClient::RequestDeviceCode() {
     if (response.empty()) return "";
 
     // Extract code from: {"code":"XXXX-XXXX","expires_in":300}
-    size_t codeStart = response.find("\"code\":\"");
-    if (codeStart == std::string::npos) return "";
-    codeStart += 8;
-    size_t codeEnd = response.find("\"", codeStart);
-    if (codeEnd == std::string::npos) return "";
-
-    return response.substr(codeStart, codeEnd - codeStart);
+    try {
+        auto j = nlohmann::json::parse(response);
+        return j["code"].get<std::string>();
+    } catch (const nlohmann::json::exception& e) {
+        fprintf(stderr, "[NEVR.SOCIAL] Failed to parse device code response: %s\n", e.what());
+        return "";
+    }
 }
 
 std::string NevrClient::PollDeviceCode(const std::string& code) {
@@ -443,22 +406,20 @@ std::string NevrClient::PollDeviceCode(const std::string& code) {
     std::string response = HttpPostPublic(url, body);
     if (response.empty()) return "error";
 
-    // Check status
-    if (response.find("\"status\":\"verified\"") != std::string::npos) {
-        // Extract token
-        size_t tokenStart = response.find("\"token\":\"");
-        if (tokenStart != std::string::npos) {
-            tokenStart += 9;
-            size_t tokenEnd = response.find("\"", tokenStart);
-            if (tokenEnd != std::string::npos) {
-                m_token = response.substr(tokenStart, tokenEnd - tokenStart);
-                m_tokenExpiry = static_cast<uint64_t>(time(nullptr)) + (50 * 60);
-                return "verified";
-            }
+    try {
+        auto j = nlohmann::json::parse(response);
+        std::string status = j.value("status", "");
+
+        if (status == "verified") {
+            m_token = j["token"].get<std::string>();
+            m_tokenExpiry = static_cast<uint64_t>(time(nullptr)) + (50 * 60);
+            return "verified";
         }
+        if (status == "expired") return "expired";
+        if (status == "pending") return "pending";
+    } catch (const nlohmann::json::exception& e) {
+        fprintf(stderr, "[NEVR.SOCIAL] Failed to parse device poll response: %s\n", e.what());
     }
-    if (response.find("\"status\":\"expired\"") != std::string::npos) return "expired";
-    if (response.find("\"status\":\"pending\"") != std::string::npos) return "pending";
     return "error";
 }
 

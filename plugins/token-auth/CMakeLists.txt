@@ -10,6 +10,9 @@ target_link_libraries(token_auth PRIVATE nevr_plugin_common)
 find_package(CURL REQUIRED)
 target_link_libraries(token_auth PRIVATE CURL::libcurl)
 
+find_package(nlohmann_json CONFIG REQUIRED)
+target_link_libraries(token_auth PRIVATE nlohmann_json::nlohmann_json)
+
 if(WIN32 OR MINGW)
     target_compile_definitions(token_auth PRIVATE
         _CRT_SECURE_NO_WARNINGS WIN32_LEAN_AND_MEAN NOMINMAX
