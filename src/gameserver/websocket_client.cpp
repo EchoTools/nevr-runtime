@@ -38,7 +38,7 @@ WebSocketClient::~WebSocketClient() {
   DeleteCriticalSection(&receivedMessagesMutex_);
 }
 
-BOOL WebSocketClient::Connect(const CHAR* uri) {
+BOOL WebSocketClient::Connect(const CHAR* uri, const std::string& bearerToken) {
   if (!uri || strlen(uri) == 0) {
     Log(EchoVR::LogLevel::Error, "[WEBSOCKET] Invalid URI provided for connection");
     return FALSE;
@@ -48,6 +48,14 @@ BOOL WebSocketClient::Connect(const CHAR* uri) {
 
   // Set the URL
   webSocket_->setUrl(std::string(uri));
+
+  // Attach Bearer token on WebSocket upgrade request
+  if (!bearerToken.empty()) {
+    ix::WebSocketHttpHeaders headers;
+    headers["Authorization"] = "Bearer " + bearerToken;
+    webSocket_->setExtraHeaders(headers);
+    Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Using Bearer auth token");
+  }
 
   // Start the connection (non-blocking)
   webSocket_->start();
