@@ -1,14 +1,19 @@
 // dllmain.cpp : Defines the entry point for the DLL application.
 //
-// This DLL is deployed as dbgcore.dll (DLL hijacking for early load).
-// The real dbgcore.dll exports MiniDumpWriteDump, which the game's crash
-// handler calls. We forward that export to the real system DLL so crash
-// dumps still work.
+// Supports two loading modes:
+//   1. Launcher mode: loaded by echovr.exe (our launcher) via LoadLibrary.
+//      NEVR_SetGameModule(hGame) is called after loading to set the game base
+//      and trigger initialization.
+//   2. Legacy mode: deployed as dbgcore.dll (DLL hijacking for early load).
+//      DllMain detects this and initializes immediately.
 #include "common/pch.h"
+#include "common/echovr_functions.h"
 #include "patches.h"
 #include "plugin_loader.h"
 
 #include <dbghelp.h>
+
+// --- Legacy dbgcore.dll proxy (kept for backwards compatibility) ---
 
 static HMODULE g_realDbgCore = nullptr;
 
@@ -27,7 +32,7 @@ static void LoadRealDbgCore() {
   g_realDbgCore = LoadLibraryW(path.c_str());
   if (g_realDbgCore) {
     g_realMiniDumpWriteDump =
-        (MiniDumpWriteDump_t)GetProcAddress(g_realDbgCore, "MiniDumpWriteDump");
+        (MiniDumpWriteDump_t)::GetProcAddress(g_realDbgCore, "MiniDumpWriteDump");
   }
 }
 
@@ -46,20 +51,31 @@ extern "C" __declspec(dllexport) BOOL WINAPI MiniDumpWriteDump(
   return FALSE;
 }
 
+// --- Launcher entry point ---
+
+extern "C" __declspec(dllexport) void NEVR_SetGameModule(HMODULE hGame) {
+  EchoVR::g_GameBaseAddress = (CHAR*)hGame;
+  Initialize();
+}
+
+// --- DLL entry point ---
+
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
   switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:
-      Initialize();
+      // Detect loading mode: if echovr_game.dll is loaded, we're in launcher mode
+      // and should wait for NEVR_SetGameModule. Otherwise, legacy dbgcore.dll path.
+      if (GetModuleHandleA("echovr_game.dll") == NULL) {
+        // Legacy path: we're inside echovr.exe via DLL hijack
+        EchoVR::g_GameBaseAddress = (CHAR*)GetModuleHandle(NULL);
+        Initialize();
+      }
       break;
-    case DLL_THREAD_ATTACH:
-    case DLL_THREAD_DETACH:
     case DLL_PROCESS_DETACH:
-      if (ul_reason_for_call == DLL_PROCESS_DETACH) {
-        UnloadPlugins();
-        if (g_realDbgCore) {
-          FreeLibrary(g_realDbgCore);
-          g_realDbgCore = nullptr;
-        }
+      UnloadPlugins();
+      if (g_realDbgCore) {
+        FreeLibrary(g_realDbgCore);
+        g_realDbgCore = nullptr;
       }
       break;
   }

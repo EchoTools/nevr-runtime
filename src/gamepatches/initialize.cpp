@@ -116,6 +116,11 @@ VOID Initialize() {
     }
   }
 
+  // Resolve all game function pointers from g_GameBaseAddress.
+  // In launcher mode, g_GameBaseAddress is set by NEVR_SetGameModule before Initialize().
+  // In legacy dbgcore.dll mode, it's set in DllMain from GetModuleHandle(NULL).
+  EchoVR::InitializeFunctionPointers();
+
   // Initialize the hooking library
   if (!Hooking::Initialize()) {
     MessageBoxW(NULL, L"Failed to initialize hooking library.", L"Echo Relay: Error", MB_OK);
