@@ -14,6 +14,9 @@ set(PATCHES_SOURCES
     "plugin_loader.cpp"
     "resource_override.cpp"
     "winhttp_stub.cpp"
+    "builtin_log_filter.cpp"
+    "builtin_server_timing.cpp"
+    "builtin_token_auth.cpp"
 )
 
 set(PATCHES_HEADERS
@@ -32,6 +35,9 @@ set(PATCHES_HEADERS
     "winhttp_stub.h"
     "process_mem.h"
     "patch_addresses.h"
+    "builtin_log_filter.h"
+    "builtin_server_timing.h"
+    "builtin_token_auth.h"
 )
 
 add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
@@ -40,10 +46,15 @@ add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
 target_compile_definitions(gamepatches PRIVATE USE_MINHOOK)
 
 target_precompile_headers(gamepatches PRIVATE "${CMAKE_SOURCE_DIR}/src/common/pch.h")
-target_include_directories(gamepatches PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(gamepatches PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/src/common
+  ${CMAKE_SOURCE_DIR}/plugins/common/include
+)
 
 find_package(CURL REQUIRED)
-target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl)
+find_package(nlohmann_json CONFIG REQUIRED)
+target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl nlohmann_json::nlohmann_json)
 target_link_directories(gamepatches PRIVATE common)
 
 # Set output name to remove 'lib' prefix on MinGW

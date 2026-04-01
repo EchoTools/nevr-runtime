@@ -6,6 +6,8 @@
 #include "common/globals.h"
 #include "common/logging.h"
 
+#include "builtin_server_timing.h"
+#include "builtin_token_auth.h"
 #include "cli.h"
 
 struct LoadedPlugin {
@@ -94,6 +96,15 @@ void LoadPlugins() {
       continue;
     }
 
+    // Skip plugins that are now built into gamepatches
+    std::string pluginName(info.name);
+    if (pluginName == "log_filter" || pluginName == "server_timing" || pluginName == "token_auth") {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PLUGIN] %s is now built-in — remove %s from plugins/ directory", info.name, filename);
+      FreeLibrary(hPlugin);
+      continue;
+    }
+
     // Resolve optional exports
     auto initFn = (NvrPluginInit_fn)GetProcAddress(hPlugin, "NvrPluginInit");
     auto onFrameFn = (NvrPluginOnFrame_fn)GetProcAddress(hPlugin, "NvrPluginOnFrame");
@@ -131,6 +142,9 @@ void UnloadPlugins() {
 }
 
 void TickPlugins(const NvrGameContext* ctx) {
+  // Tick built-in modules first
+  BuiltinServerTiming::OnFrame();
+
   for (auto& p : g_plugins) {
     if (p.on_frame) {
       p.on_frame(ctx);
@@ -139,6 +153,10 @@ void TickPlugins(const NvrGameContext* ctx) {
 }
 
 void NotifyPluginsStateChange(const NvrGameContext* ctx, uint32_t old_state, uint32_t new_state) {
+  // Notify built-in modules first
+  BuiltinServerTiming::OnGameStateChange(old_state, new_state);
+  BuiltinTokenAuth::OnGameStateChange(old_state, new_state);
+
   for (auto& p : g_plugins) {
     if (p.on_state_change) {
       p.on_state_change(ctx, old_state, new_state);

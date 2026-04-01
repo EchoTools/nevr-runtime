@@ -12,6 +12,7 @@
 #include "platform_compat.h"
 #include "resource_override.h"
 #include "state_machine.h"
+#include "builtin_log_filter.h"
 
 #include "common/globals.h"
 #include "common/hooking.h"
@@ -126,6 +127,9 @@ VOID Initialize() {
     MessageBoxW(NULL, L"Failed to initialize hooking library.", L"Echo Relay: Error", MB_OK);
     return;
   }
+
+  // Install built-in log filter early (before any game logging starts)
+  BuiltinLogFilter::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress), false);
 
   // Early-load _local/config.json for URI redirect hooks that fire before game loads config
   LoadEarlyConfig();
