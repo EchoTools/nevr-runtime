@@ -12,8 +12,8 @@ target_precompile_headers(common PRIVATE "pch.h")
 target_include_directories(
   common PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_SOURCE_DIR}/src/common)
 
-find_package(jsoncpp CONFIG REQUIRED)
-target_link_libraries(common PRIVATE JsonCpp::JsonCpp)
+find_package(nlohmann_json CONFIG REQUIRED)
+target_link_libraries(common PRIVATE nlohmann_json::nlohmann_json)
 
 # Disable specific warnings (MSVC only)
 if(MSVC)

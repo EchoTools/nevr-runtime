@@ -2,7 +2,7 @@
   "dependencies": [
     "curl",
     "ixwebsocket",
-    "jsoncpp",
+    "nlohmann-json",
     "miniupnpc",
     "minhook",
     "opus",
