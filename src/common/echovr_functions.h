@@ -7,6 +7,10 @@ namespace EchoVR {
 
 extern CHAR* g_GameBaseAddress;
 
+/// Initialize all function pointers using g_GameBaseAddress.
+/// Must be called after g_GameBaseAddress is set to the game module's base address.
+void InitializeFunctionPointers();
+
 /// Obtains a pool item from a given pool for the given index.
 typedef BYTE* PoolFindItemFunc(PVOID pool, UINT64 index);
 extern PoolFindItemFunc* PoolFindItem;
