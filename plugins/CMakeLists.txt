@@ -9,8 +9,7 @@ endif()
 
 # log-filter, server-timing are built into gamepatches.dll
 # crash-handler functionality is in gamepatches core (crash_recovery.cpp)
-# token-auth stays external: curl deps break dbgcore.dll loading under Wine
-add_subdirectory(token-auth)
+# log-filter, server-timing, token-auth are built into gamepatches (static lib in launcher exe)
 add_subdirectory(broadcaster-bridge)
 add_subdirectory(audio-intercom)
 add_subdirectory(game-rules-override)
@@ -20,3 +19,4 @@ add_subdirectory(social-bridge)
 add_subdirectory(filesystem-loader)
 add_subdirectory(combat-patch)
 add_subdirectory(pnsrad-enabler)
+add_subdirectory(force-push)

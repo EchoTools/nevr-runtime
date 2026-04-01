@@ -1,8 +1,7 @@
-# Game Patches — modular DLL for runtime hooks and memory patches
+# Game Patches — static library linked into the launcher executable
 # Uses MinHook for function hooking (built from extern/minhook)
 
 set(PATCHES_SOURCES
-    "dllmain.cpp"
     "initialize.cpp"
     "cli.cpp"
     "boot.cpp"
@@ -16,7 +15,7 @@ set(PATCHES_SOURCES
     "winhttp_stub.cpp"
     "builtin_log_filter.cpp"
     "builtin_server_timing.cpp"
-    # builtin_token_auth.cpp excluded: requires curl which breaks dbgcore.dll loading
+    "builtin_token_auth.cpp"
 )
 
 set(PATCHES_HEADERS
@@ -37,10 +36,10 @@ set(PATCHES_HEADERS
     "patch_addresses.h"
     "builtin_log_filter.h"
     "builtin_server_timing.h"
+    "builtin_token_auth.h"
 )
 
-add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
-                               "exports.def")
+add_library(gamepatches STATIC ${PATCHES_SOURCES} ${PATCHES_HEADERS})
 
 # Build-time embedded keys (set via cmake -D or cmake/local.cmake)
 set(NEVR_SERVER_KEY "" CACHE STRING "Nakama server key (embedded at build time)")
@@ -66,10 +65,8 @@ find_package(nlohmann_json CONFIG REQUIRED)
 target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl nlohmann_json::nlohmann_json)
 target_link_directories(gamepatches PRIVATE common)
 
-# Set output name to remove 'lib' prefix on MinGW
 set_target_properties(gamepatches PROPERTIES
   OUTPUT_NAME "gamepatches"
-  PREFIX ""
 )
 
 # Disable specific warnings (MSVC only)

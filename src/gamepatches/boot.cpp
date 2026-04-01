@@ -5,6 +5,7 @@
 #include "plugin_loader.h"
 #include "patch_addresses.h"
 #include "builtin_server_timing.h"
+#include "builtin_token_auth.h"
 #include "common/globals.h"
 #include "common/logging.h"
 #include "common/echovr_functions.h"
@@ -127,7 +128,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   uintptr_t base = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
   bool isServer = g_isServer != FALSE;
   BuiltinServerTiming::Init(base, isServer);
-  // Token-auth stays as external plugin — curl deps break dbgcore.dll loading under Wine
+  BuiltinTokenAuth::Init(base, isServer);
 
   // Load external plugins from plugins/ subdirectory
   LoadPlugins();
