@@ -43,7 +43,17 @@ set(PATCHES_HEADERS
 add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
                                "exports.def")
 
-target_compile_definitions(gamepatches PRIVATE USE_MINHOOK)
+# Build-time embedded keys (set via cmake -D or cmake/local.cmake)
+set(NEVR_SERVER_KEY "" CACHE STRING "Nakama server key (embedded at build time)")
+set(NEVR_HTTP_KEY "" CACHE STRING "Nakama HTTP key (embedded at build time)")
+set(NEVR_API_URL "https://api.echovrce.com" CACHE STRING "Nakama API base URL")
+
+target_compile_definitions(gamepatches PRIVATE
+  USE_MINHOOK
+  NEVR_SERVER_KEY="${NEVR_SERVER_KEY}"
+  NEVR_HTTP_KEY="${NEVR_HTTP_KEY}"
+  NEVR_API_URL="${NEVR_API_URL}"
+)
 
 target_precompile_headers(gamepatches PRIVATE "${CMAKE_SOURCE_DIR}/src/common/pch.h")
 target_include_directories(gamepatches PRIVATE
