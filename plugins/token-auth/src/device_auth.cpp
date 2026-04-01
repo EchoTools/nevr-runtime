@@ -1,6 +1,7 @@
 #include "device_auth.h"
 
 #include <curl/curl.h>
+#include <nlohmann/json.hpp>
 #include <ctime>
 #include <cstring>
 #include <cstdio>
@@ -14,69 +15,14 @@
 #include <direct.h>
 #endif
 
-// Simple JSON string extraction (same pattern as social_bridge.cpp)
-static std::string ExtractJsonString(const std::string& json, const std::string& key) {
-    std::string needle = "\"" + key + "\"";
-    size_t pos = json.find(needle);
-    if (pos == std::string::npos) return {};
+#include "nevr_curl.h"
+#include "auth_token.h"
+#include "auth_token_refresh.h"
 
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return {};
-
-    size_t q1 = json.find('"', pos + 1);
-    if (q1 == std::string::npos) return {};
-
-    size_t q2 = json.find('"', q1 + 1);
-    if (q2 == std::string::npos) return {};
-
-    return json.substr(q1 + 1, q2 - q1 - 1);
-}
-
-// Extract a numeric value from JSON (unquoted)
-static uint64_t ExtractJsonUint64(const std::string& json, const std::string& key) {
-    std::string needle = "\"" + key + "\"";
-    size_t pos = json.find(needle);
-    if (pos == std::string::npos) return 0;
-
-    pos = json.find(':', pos + needle.size());
-    if (pos == std::string::npos) return 0;
-
-    // Skip whitespace
-    pos++;
-    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t'))
-        pos++;
-
-    return std::strtoull(json.c_str() + pos, nullptr, 10);
-}
-
-static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* output) {
-    size_t totalSize = size * nmemb;
-    output->append(static_cast<char*>(contents), totalSize);
-    return totalSize;
-}
-
-static std::string ReadFileContents(const char* path) {
-    FILE* f = fopen(path, "rb");
-    if (!f) return {};
-
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    if (len <= 0 || len > 1024 * 1024) {
-        fclose(f);
-        return {};
-    }
-    fseek(f, 0, SEEK_SET);
-
-    std::string contents(static_cast<size_t>(len), '\0');
-    size_t read = fread(&contents[0], 1, static_cast<size_t>(len), f);
-    fclose(f);
-    contents.resize(read);
-    return contents;
-}
-
-void DeviceAuth::Configure(const std::string& url, const std::string& httpKey) {
+void DeviceAuth::Configure(const std::string& url, const std::string& httpKey, const std::string& serverKey) {
     m_url = url;
     m_httpKey = httpKey;
+    m_serverKey = serverKey;
     m_configured = true;
     fprintf(stderr, "[NEVR.AUTH] Configured: url=%s\n", url.c_str());
 }
@@ -86,53 +32,63 @@ bool DeviceAuth::IsAuthenticated() const {
 }
 
 bool DeviceAuth::TryLoadCachedToken() {
-    std::string json = ReadFileContents("_local/auth.json");
-    if (json.empty()) return false;
+    auto auth = LoadCachedAuthToken();
+    if (auth.token.empty()) return false;
 
-    std::string token = ExtractJsonString(json, "token");
-    uint64_t expiry = ExtractJsonUint64(json, "expiry");
+    // Valid access token — use it directly
+    if (auth.HasValidToken()) {
+        m_token = auth.token;
+        m_tokenExpiry = auth.token_expiry;
+        m_refreshToken = auth.refresh_token;
+        m_refreshTokenExpiry = auth.refresh_token_expiry;
+        m_userId = auth.user_id;
+        m_username = auth.username;
 
-    if (token.empty() || expiry == 0) {
-        fprintf(stderr, "[NEVR.AUTH] auth.json malformed -- will re-authenticate\n");
-        return false;
+        uint64_t remaining = (auth.token_expiry - static_cast<uint64_t>(time(nullptr))) / 60;
+        fprintf(stderr, "[NEVR.AUTH] Loaded cached token (expires in %llum)\n",
+            (unsigned long long)remaining);
+        return true;
     }
 
-    uint64_t now = static_cast<uint64_t>(time(nullptr));
-    if (expiry <= now + 60) {
-        fprintf(stderr, "[NEVR.AUTH] Cached token expired -- will re-authenticate\n");
-        return false;
+    // Access token expired — try refresh
+    if (auth.HasValidRefreshToken() && m_configured) {
+        fprintf(stderr, "[NEVR.AUTH] Access token expired, attempting refresh...\n");
+        if (RefreshAuthToken(auth, m_url, m_serverKey)) {
+            m_token = auth.token;
+            m_tokenExpiry = auth.token_expiry;
+            m_refreshToken = auth.refresh_token;
+            m_refreshTokenExpiry = auth.refresh_token_expiry;
+            m_userId = auth.user_id;
+            m_username = auth.username;
+            return true;
+        }
+        fprintf(stderr, "[NEVR.AUTH] Token refresh failed -- will re-authenticate\n");
+    } else if (!auth.refresh_token.empty()) {
+        fprintf(stderr, "[NEVR.AUTH] Both tokens expired -- will re-authenticate\n");
+    } else {
+        fprintf(stderr, "[NEVR.AUTH] Cached token expired, no refresh token -- will re-authenticate\n");
     }
 
-    m_token = token;
-    m_tokenExpiry = expiry;
-    fprintf(stderr, "[NEVR.AUTH] Loaded cached token (expires in %llum)\n",
-        (unsigned long long)((expiry - now) / 60));
-    return true;
+    return false;
 }
 
 bool DeviceAuth::SaveToken() {
     if (m_token.empty()) return false;
 
-#ifdef _WIN32
-    _mkdir("_local");
-#else
-    // On non-Windows (shouldn't happen in production, but for completeness)
-    system("mkdir -p _local");
-#endif
+    CachedAuthToken auth;
+    auth.token = m_token;
+    auth.token_expiry = m_tokenExpiry;
+    auth.refresh_token = m_refreshToken;
+    auth.refresh_token_expiry = m_refreshTokenExpiry;
+    auth.user_id = m_userId;
+    auth.username = m_username;
 
-    std::ofstream out("_local/auth.json", std::ios::trunc);
-    if (!out.is_open()) {
-        fprintf(stderr, "[NEVR.AUTH] Failed to write _local/auth.json\n");
+    if (!SaveAuthToken(auth)) {
+        fprintf(stderr, "[NEVR.AUTH] Failed to write .credentials.json\n");
         return false;
     }
 
-    out << "{\n"
-        << "  \"token\": \"" << m_token << "\",\n"
-        << "  \"expiry\": " << m_tokenExpiry << "\n"
-        << "}\n";
-    out.close();
-
-    fprintf(stderr, "[NEVR.AUTH] Token saved to _local/auth.json\n");
+    fprintf(stderr, "[NEVR.AUTH] Token saved to .credentials.json\n");
     return true;
 }
 
@@ -147,7 +103,7 @@ std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nevr::CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
@@ -168,28 +124,43 @@ std::string DeviceAuth::RequestDeviceCode() {
     std::string response = HttpPostPublic(url, "{}");
     if (response.empty()) return "";
 
-    // Extract code from: {"code":"XXXX-XXXX","expires_in":300}
-    std::string code = ExtractJsonString(response, "code");
-    return code;
+    try {
+        auto j = nlohmann::json::parse(response);
+        return j.value("code", "");
+    } catch (...) {
+        return "";
+    }
 }
 
 std::string DeviceAuth::PollDeviceCode(const std::string& code) {
     std::string url = m_url + "/v2/rpc/device/auth/poll?http_key=" + m_httpKey;
-    std::string body = "{\"code\":\"" + code + "\"}";
-    std::string response = HttpPostPublic(url, body);
+    nlohmann::json reqBody;
+    reqBody["code"] = code;
+    std::string response = HttpPostPublic(url, reqBody.dump());
     if (response.empty()) return "error";
 
-    if (response.find("\"status\":\"verified\"") != std::string::npos) {
-        std::string token = ExtractJsonString(response, "token");
-        if (!token.empty()) {
-            m_token = token;
-            m_tokenExpiry = static_cast<uint64_t>(time(nullptr)) + (50 * 60);
-            return "verified";
+    try {
+        auto j = nlohmann::json::parse(response);
+        std::string status = j.value("status", "");
+
+        if (status == "verified") {
+            std::string token = j.value("token", "");
+            if (!token.empty()) {
+                m_token = token;
+                m_tokenExpiry = static_cast<uint64_t>(time(nullptr)) + 3600;
+                m_refreshToken = j.value("refresh_token", "");
+                m_refreshTokenExpiry = static_cast<uint64_t>(time(nullptr)) + (30 * 24 * 3600);
+                m_userId = j.value("user_id", "");
+                m_username = j.value("username", "");
+                return "verified";
+            }
         }
+        if (status == "expired") return "expired";
+        // Any unrecognized status (including "pending") keeps polling
+        return "pending";
+    } catch (...) {
+        return "error";
     }
-    if (response.find("\"status\":\"expired\"") != std::string::npos) return "expired";
-    if (response.find("\"status\":\"pending\"") != std::string::npos) return "pending";
-    return "error";
 }
 
 void DeviceAuth::DisplayLinkingCode(const std::string& code) {

@@ -9,7 +9,9 @@ target_compile_definitions(social_bridge PRIVATE NEVR_PLUGIN_EXPORTS)
 target_link_libraries(social_bridge PRIVATE nevr_plugin_common)
 
 find_package(CURL REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 target_link_libraries(social_bridge PRIVATE CURL::libcurl)
+target_link_libraries(social_bridge PRIVATE nlohmann_json::nlohmann_json)
 
 if(WIN32 OR MINGW)
     target_compile_definitions(social_bridge PRIVATE
