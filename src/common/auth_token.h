@@ -15,6 +15,9 @@
 #endif
 #include <windows.h>
 #include <direct.h>
+#include <aclapi.h>
+#else
+#include <sys/stat.h>
 #endif
 
 struct CachedAuthToken {
@@ -34,13 +37,13 @@ struct CachedAuthToken {
     }
 };
 
-// Search paths for _local/auth.json (supports nested directory layouts).
+// Search paths for _local/.credentials.json (supports nested directory layouts).
 static const char* const kAuthJsonPaths[] = {
-    "_local/auth.json",
-    "..\\_local\\auth.json",
-    "..\\..\\_local\\auth.json",
-    "../_local/auth.json",
-    "../../_local/auth.json",
+    "_local/.credentials.json",
+    "..\\_local\\.credentials.json",
+    "..\\..\\_local\\.credentials.json",
+    "../_local/.credentials.json",
+    "../../_local/.credentials.json",
 };
 
 // Search paths for _local/ directory (for saving).
@@ -61,7 +64,7 @@ static const char* const kLocalDirs[] = {
     "../../_local",
 };
 
-// Reads _local/auth.json with parent-directory fallback.
+// Reads _local/.credentials.json with parent-directory fallback.
 // Returns empty token on missing file, parse failure, or malformed data.
 // Does NOT validate expiry — caller decides whether to use token or refresh.
 inline CachedAuthToken LoadCachedAuthToken() {
@@ -95,7 +98,7 @@ inline CachedAuthToken LoadCachedAuthToken() {
     }
 }
 
-// Saves auth token to _local/auth.json. Searches for existing _local/ directory
+// Saves auth token to _local/.credentials.json. Searches for existing _local/ directory
 // with parent-directory fallback (same paths as LoadCachedAuthToken). Creates
 // _local/ next to the executable if none found.
 inline bool SaveAuthToken(const CachedAuthToken& auth) {
@@ -116,7 +119,7 @@ inline bool SaveAuthToken(const CachedAuthToken& auth) {
         target_dir = "_local";
     }
 
-    std::string path = target_dir + "/auth.json";
+    std::string path = target_dir + "/.credentials.json";
     std::ofstream out(path, std::ios::trunc);
     if (!out.is_open()) return false;
 
@@ -134,8 +137,39 @@ inline bool SaveAuthToken(const CachedAuthToken& auth) {
     out.close();
 
 #ifdef _WIN32
-    // Hide the file and restrict permissions
+    // Hide the file and restrict to current user only
     SetFileAttributesA(path.c_str(), FILE_ATTRIBUTE_HIDDEN);
+
+    // Set restrictive DACL: only current user gets full access
+    PSID pSid = nullptr;
+    SID_IDENTIFIER_AUTHORITY ntAuth = SECURITY_NT_AUTHORITY;
+    HANDLE hToken = nullptr;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken)) {
+        DWORD len = 0;
+        GetTokenInformation(hToken, TokenUser, nullptr, 0, &len);
+        if (len > 0) {
+            std::vector<BYTE> buf(len);
+            if (GetTokenInformation(hToken, TokenUser, buf.data(), len, &len)) {
+                TOKEN_USER* pUser = reinterpret_cast<TOKEN_USER*>(buf.data());
+                EXPLICIT_ACCESSA ea = {};
+                ea.grfAccessPermissions = GENERIC_ALL;
+                ea.grfAccessMode = SET_ACCESS;
+                ea.grfInheritance = NO_INHERITANCE;
+                ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+                ea.Trustee.ptstrName = reinterpret_cast<LPSTR>(pUser->User.Sid);
+                PACL pAcl = nullptr;
+                if (SetEntriesInAclA(1, &ea, nullptr, &pAcl) == ERROR_SUCCESS) {
+                    SetNamedSecurityInfoA(const_cast<LPSTR>(path.c_str()),
+                        SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                        nullptr, nullptr, pAcl, nullptr);
+                    LocalFree(pAcl);
+                }
+            }
+        }
+        CloseHandle(hToken);
+    }
+#else
+    chmod(path.c_str(), 0600);
 #endif
 
     return true;
