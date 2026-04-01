@@ -57,7 +57,11 @@ bool NevrClient::Authenticate() {
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nevr::CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);  // TODO: proper cert validation
+    #ifdef NEVR_INSECURE_SKIP_TLS_VERIFY
+#ifdef NEVR_INSECURE_SKIP_TLS_VERIFY
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+#endif
+#endif
 
     CURLcode res = curl_easy_perform(curl);
     long httpCode = 0;
@@ -128,7 +132,9 @@ std::string NevrClient::HttpGet(const std::string& url) {
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nevr::CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+#ifdef NEVR_INSECURE_SKIP_TLS_VERIFY
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+#endif
 
     CURLcode res = curl_easy_perform(curl);
     curl_slist_free_all(headers);
@@ -159,7 +165,9 @@ std::string NevrClient::HttpPost(const std::string& url, const std::string& body
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nevr::CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+#ifdef NEVR_INSECURE_SKIP_TLS_VERIFY
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+#endif
 
     CURLcode res = curl_easy_perform(curl);
     curl_slist_free_all(headers);
@@ -193,7 +201,9 @@ std::string NevrClient::HttpDelete(const std::string& url, const std::string& bo
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nevr::CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+#ifdef NEVR_INSECURE_SKIP_TLS_VERIFY
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+#endif
 
     CURLcode res = curl_easy_perform(curl);
     curl_slist_free_all(headers);

@@ -1,6 +1,7 @@
 #include "pe_convert.h"
 
 #include <windows.h>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <vector>

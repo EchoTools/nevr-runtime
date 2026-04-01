@@ -16,6 +16,10 @@ elseif(MSVC)
     target_link_options(echovr_launcher PRIVATE /BASE:0x10000000)
 endif()
 
+if(WIN32 OR MINGW)
+    target_link_libraries(echovr_launcher PRIVATE psapi)
+endif()
+
 set_target_properties(echovr_launcher PROPERTIES
     OUTPUT_NAME "echovr_launcher"
     PREFIX ""
