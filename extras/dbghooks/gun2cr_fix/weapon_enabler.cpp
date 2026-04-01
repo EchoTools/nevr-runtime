@@ -30,24 +30,23 @@ namespace dbghooks::weapon_system {
             return false;
         }
 
-        Json::CharReaderBuilder reader;
-        Json::Value root;
-        std::string errs;
-
-        if (!Json::parseFromStream(reader, file, &root, &errs)) {
-            printf("[WeaponEnabler] ERROR: JSON parse error: %s\n", errs.c_str());
+        nlohmann::json root;
+        try {
+            root = nlohmann::json::parse(file);
+        } catch (const nlohmann::json::parse_error& e) {
+            printf("[WeaponEnabler] ERROR: JSON parse error: %s\n", e.what());
             return false;
         }
 
         // Parse weapons section
-        if (!root.isMember("weapons") || !root["weapons"].isObject()) {
+        if (!root.contains("weapons") || !root["weapons"].is_object()) {
             printf("[WeaponEnabler] ERROR: No 'weapons' object in config\n");
             return false;
         }
 
-        const Json::Value& weapons_obj = root["weapons"];
-        for (const auto& name : weapons_obj.getMemberNames()) {
-            ParseWeaponFromJson(name, weapons_obj[name]);
+        const auto& weapons_obj = root["weapons"];
+        for (const auto& [name, value] : weapons_obj.items()) {
+            ParseWeaponFromJson(name, value);
         }
 
         is_loaded_ = true;
@@ -55,56 +54,56 @@ namespace dbghooks::weapon_system {
         return true;
     }
 
-    void WeaponConfigManager::ParseWeaponFromJson(const std::string& name, const Json::Value& weapon_json) {
+    void WeaponConfigManager::ParseWeaponFromJson(const std::string& name, const nlohmann::json& weapon_json) {
         WeaponDefinition weapon;
         weapon.name = name;
 
         // Parse basic properties
-        if (weapon_json.isMember("display_name")) {
-            weapon.display_name = weapon_json["display_name"].asString();
+        if (weapon_json.contains("display_name")) {
+            weapon.display_name = weapon_json["display_name"].get<std::string>();
         }
 
-        if (weapon_json.isMember("enabled")) {
-            weapon.enabled = weapon_json["enabled"].asBool();
+        if (weapon_json.contains("enabled")) {
+            weapon.enabled = weapon_json["enabled"].get<bool>();
         }
 
-        if (weapon_json.isMember("internal_name")) {
-            weapon.internal_name = weapon_json["internal_name"].asString();
+        if (weapon_json.contains("internal_name")) {
+            weapon.internal_name = weapon_json["internal_name"].get<std::string>();
         }
 
         // Parse aliases
-        if (weapon_json.isMember("aliases") && weapon_json["aliases"].isArray()) {
+        if (weapon_json.contains("aliases") && weapon_json["aliases"].is_array()) {
             for (const auto& alias : weapon_json["aliases"]) {
-                weapon.aliases.push_back(alias.asString());
+                weapon.aliases.push_back(alias.get<std::string>());
             }
         }
 
         // Parse damage table
-        if (weapon_json.isMember("damage_table")) {
+        if (weapon_json.contains("damage_table")) {
             weapon.damage_table = ParseDamageTable(weapon_json["damage_table"]);
         }
 
         // Parse weapon properties
-        if (weapon_json.isMember("weapon_properties")) {
+        if (weapon_json.contains("weapon_properties")) {
             weapon.weapon_properties = ParseWeaponProperties(weapon_json["weapon_properties"]);
         }
 
         // Parse sound settings
-        if (weapon_json.isMember("sound_settings")) {
+        if (weapon_json.contains("sound_settings")) {
             weapon.sound_settings = ParseSoundConfig(weapon_json["sound_settings"]);
         }
 
         // Parse variant damage tables
-        if (weapon_json.isMember("scout_aoe_damage")) {
+        if (weapon_json.contains("scout_aoe_damage")) {
             weapon.variant_damage_tables["aoe"] = ParseDamageTable(weapon_json["scout_aoe_damage"]);
         }
-        if (weapon_json.isMember("blaster_cone_damage")) {
+        if (weapon_json.contains("blaster_cone_damage")) {
             weapon.variant_damage_tables["cone"] = ParseDamageTable(weapon_json["blaster_cone_damage"]);
         }
-        if (weapon_json.isMember("rocket_aoe_damage")) {
+        if (weapon_json.contains("rocket_aoe_damage")) {
             weapon.variant_damage_tables["aoe"] = ParseDamageTable(weapon_json["rocket_aoe_damage"]);
         }
-        if (weapon_json.isMember("magnum_aoe_damage")) {
+        if (weapon_json.contains("magnum_aoe_damage")) {
             weapon.variant_damage_tables["aoe"] = ParseDamageTable(weapon_json["magnum_aoe_damage"]);
         }
 
@@ -117,26 +116,26 @@ namespace dbghooks::weapon_system {
         }
     }
 
-    WeaponDamageTable WeaponConfigManager::ParseDamageTable(const Json::Value& damage_json) {
+    WeaponDamageTable WeaponConfigManager::ParseDamageTable(const nlohmann::json& damage_json) {
         WeaponDamageTable table;
 
-        if (damage_json.isMember("head")) table.head = damage_json["head"].asFloat();
-        if (damage_json.isMember("arm")) table.arm = damage_json["arm"].asFloat();
-        if (damage_json.isMember("leg")) table.leg = damage_json["leg"].asFloat();
-        if (damage_json.isMember("torso")) table.torso = damage_json["torso"].asFloat();
-        if (damage_json.isMember("ordnance")) table.ordnance = damage_json["ordnance"].asFloat();
-        if (damage_json.isMember("barrier")) table.barrier = damage_json["barrier"].asFloat();
-        if (damage_json.isMember("ssi")) table.ssi = damage_json["ssi"].asFloat();
+        if (damage_json.contains("head")) table.head = damage_json["head"].get<float>();
+        if (damage_json.contains("arm")) table.arm = damage_json["arm"].get<float>();
+        if (damage_json.contains("leg")) table.leg = damage_json["leg"].get<float>();
+        if (damage_json.contains("torso")) table.torso = damage_json["torso"].get<float>();
+        if (damage_json.contains("ordnance")) table.ordnance = damage_json["ordnance"].get<float>();
+        if (damage_json.contains("barrier")) table.barrier = damage_json["barrier"].get<float>();
+        if (damage_json.contains("ssi")) table.ssi = damage_json["ssi"].get<float>();
 
         return table;
     }
 
-    WeaponProperties WeaponConfigManager::ParseWeaponProperties(const Json::Value& props_json) {
+    WeaponProperties WeaponConfigManager::ParseWeaponProperties(const nlohmann::json& props_json) {
         WeaponProperties props;
 
         #define PARSE_PROPERTY(field) \
-            if (props_json.isMember(#field)) { \
-                props.field = props_json[#field].asFloat(); \
+            if (props_json.contains(#field)) { \
+                props.field = props_json[#field].get<float>(); \
             }
 
         PARSE_PROPERTY(heat_per_shot)
@@ -161,7 +160,7 @@ namespace dbghooks::weapon_system {
         #undef PARSE_PROPERTY
 
         // Parse any additional properties
-        for (const auto& key : props_json.getMemberNames()) {
+        for (const auto& [key, value] : props_json.items()) {
             // Skip if already parsed
             if (key.find("_when_") != std::string::npos) continue;
             if (key.find("heat_") == 0) continue;
@@ -171,24 +170,24 @@ namespace dbghooks::weapon_system {
             if (key.find("min_") == 0 || key.find("max_") == 0) continue;
             if (key.find("refire_") == 0) continue;
 
-            props.additional_properties[key] = props_json[key].asFloat();
+            props.additional_properties[key] = value.get<float>();
         }
 
         return props;
     }
 
-    WeaponSoundConfig WeaponConfigManager::ParseSoundConfig(const Json::Value& sound_json) {
+    WeaponSoundConfig WeaponConfigManager::ParseSoundConfig(const nlohmann::json& sound_json) {
         WeaponSoundConfig config;
 
-        if (sound_json.isMember("bullet_impact")) {
+        if (sound_json.contains("bullet_impact")) {
             const auto& impact = sound_json["bullet_impact"];
-            if (impact.isMember("player")) config.impact_player = impact["player"].asString();
-            if (impact.isMember("barrier")) config.impact_barrier = impact["barrier"].asString();
-            if (impact.isMember("default")) config.impact_default = impact["default"].asString();
+            if (impact.contains("player")) config.impact_player = impact["player"].get<std::string>();
+            if (impact.contains("barrier")) config.impact_barrier = impact["barrier"].get<std::string>();
+            if (impact.contains("default")) config.impact_default = impact["default"].get<std::string>();
         }
 
-        if (sound_json.isMember("bullet_whizzby")) {
-            config.whizzby_trail = sound_json["bullet_whizzby"].asString();
+        if (sound_json.contains("bullet_whizzby")) {
+            config.whizzby_trail = sound_json["bullet_whizzby"].get<std::string>();
         }
 
         return config;

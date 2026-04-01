@@ -29,7 +29,7 @@ public:
                    const std::string& password = "");
 
     // Authenticate via password -- used by servers only.
-    // Clients should use RunDeviceAuthFlow() instead.
+    // Clients use token-auth plugin for authentication.
     bool Authenticate();
 
     // Get current token, refreshing if expired. Returns empty string on failure.
@@ -55,21 +55,11 @@ public:
     bool ListPartyMembers(const std::string& partyId, std::vector<PartyMember>& outMembers);
     std::string GetCurrentPartyId() const { return m_currentPartyId; }
 
-    // Device code authentication flow (GitHub-style, Discord OAuth on web)
-    // Returns true if a token was obtained, false on timeout/failure.
-    // Displays the code in the game log and opens the browser.
-    bool RunDeviceAuthFlow();
-
-    // Set token directly (e.g., loaded from auth.json)
+    // Set token directly (e.g., loaded from auth.json by token-auth plugin)
     void SetToken(const std::string& token, uint64_t expiry);
 
 private:
-    // Device auth helpers
-    std::string RequestDeviceCode();
-    std::string PollDeviceCode(const std::string& code);
-
     // HTTP helpers
-    std::string HttpPostPublic(const std::string& url, const std::string& body);
     std::string HttpGet(const std::string& url);
     std::string HttpPost(const std::string& url, const std::string& body);
     std::string HttpDelete(const std::string& url, const std::string& body);

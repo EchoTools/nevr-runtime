@@ -1,8 +1,9 @@
 {
   "dependencies": [
     "curl",
+    "gtest",
     "ixwebsocket",
-    "jsoncpp",
+    "nlohmann-json",
     "miniupnpc",
     "minhook",
     "opus",

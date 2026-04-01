@@ -94,6 +94,36 @@ Plugins have their own shared headers in `plugins/common/include/` (`nevr_common
 - **Global state**: CLI flags as globals in `src/common/globals.h`, set in `src/gamepatches/patches.cpp`.
 - **Local overrides**: `cmake/local.cmake` (include currently commented out in root CMakeLists.txt).
 
+## ReVault — Reverse Engineering Data Warehouse
+
+ReVault (`~/src/revault/`) is the single source of truth for binary analysis. It indexes all EchoVR binaries (echovr.exe, pnsrad.dll, etc.) with disassembly, decompilation, xrefs, strings, and annotations. **Use it first, before Ghidra, before guessing.**
+
+Available as an MCP server (`revault` in `.mcp.json`) and CLI:
+
+```sh
+revault fn show <0xVA> --binary pnsrad.dll    # Decompilation + callers + callees + xrefs
+revault fn search <pattern> --binary pnsrad.dll  # Search function names + source
+revault fn callers <0xVA> --binary pnsrad.dll # Who calls this function
+revault fn callees <0xVA> --binary pnsrad.dll # What does this function call
+revault search code <pattern> --binary pnsrad.dll  # Search decompiled source
+revault xref to <0xVA> --binary pnsrad.dll    # Cross-references to address
+revault rename <0xVA> <new-name> --binary pnsrad.dll  # Annotate
+```
+
+When you encounter an unknown function address (`fcn_*`, `DAT_*`, `0x180XXXXXX`), **look it up in revault**. If revault doesn't have it, say so — don't guess.
+
+## Continuity
+
+You are not the first agent to work here, and you won't be the last. Act like it.
+
+- **Search before you build.** The answer probably already exists in revault, `~/src/echovr-reconstruction`, `~/src/evr-reconstruction`, `~/src/evrFileTools`, `~/src/nakama`, or git history. Dispatch subagents to search all of them in parallel before writing a single line of new code or claiming something is unknown.
+- **The reconstruction is the source of truth.** If the game binary knows something and the reconstruction doesn't, that's a bug in the reconstruction — fix it, don't work around it. Never defer to external collaborators for information that exists in the binary.
+- **Use subagents aggressively.** Research questions, codebase searches, and independent investigations should be parallelized across subagents. You are not the only one working. Stop doing sequential searches when you could dispatch five agents at once.
+- **Leave the codebase better than you found it.** Every finding gets committed. Every mapping gets documented. Every `unknown_0x*` you identify gets renamed. Future agents should never repeat your work.
+- **Don't hand off what you can finish.** Writing a handoff doc is not progress. Finishing the work is progress. Handoff docs are for when the session is genuinely ending, not when the problem gets hard.
+- **Measure everything before concluding anything.** One data point is not a finding. If you measure registered component types, also measure loaded component resources. If you compare arena vs combat, compare at every layer — code registration, resource data, runtime state, rendered output. A conclusion from a single measurement is a guess. Cross-validate before declaring anything "critical."
+- **Confirmation bias is not acceptable.** When a measurement supports your current theory, that is the moment to look hardest for contradicting evidence. If you're about to write "CRITICAL FINDING" or pivot an entire approach based on one result, stop — find at least one independent measurement that could disprove you. If you can't disprove it, you haven't tried hard enough.
+
 ## Methodology
 
 - **Plan before code**: Non-trivial changes require a written plan before implementation.

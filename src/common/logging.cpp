@@ -1,6 +1,6 @@
 #include "logging.h"
 
-#include <json/json.h>
+#include <nlohmann/json.hpp>
 
 #include <iomanip>
 #include <sstream>
@@ -46,10 +46,7 @@ const char* GetLogLevelString(EchoVR::LogLevel level) {
 
 // Format a JSON log entry similar to zap.Logger
 std::string FormatJsonLogEntry(EchoVR::LogLevel level, const char* message, const char* caller) {
-  Json::Value root;
-  Json::StreamWriterBuilder builder;
-  builder["indentation"] = "";  // Compact JSON, no pretty-printing
-
+  nlohmann::json root;
   root["ts"] = GetISO8601Timestamp();
   root["level"] = GetLogLevelString(level);
   root["msg"] = message;
@@ -58,7 +55,7 @@ std::string FormatJsonLogEntry(EchoVR::LogLevel level, const char* message, cons
     root["caller"] = caller;
   }
 
-  return Json::writeString(builder, root);
+  return root.dump();
 }
 
 // WriteLogHook removed — log filtering, timestamps, and noise suppression

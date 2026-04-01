@@ -5,6 +5,7 @@
 #include <string>
 #include <thread>
 
+#include "auth_token.h"
 #include "constants.h"
 #include "echovr.h"
 #include "echovr_functions.h"
@@ -1103,8 +1104,16 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("serverdb_host"),
                                 const_cast<CHAR*>("ws://localhost:777/serverdb"), false);
 
+  // Load auth token for WebSocket connections
+  auto auth = LoadCachedAuthToken();
+  std::string wsToken;
+  if (auth.HasValidToken()) {
+    wsToken = auth.token;
+    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Using cached auth token for ServerDB");
+  }
+
   // Connect to serverdb via WebSocketClient (avoids TcpBroadcasterListen vtable ABI crash)
-  if (!m_wsClient->Connect(serverDbUri)) {
+  if (!m_wsClient->Connect(serverDbUri, wsToken)) {
     Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to initiate WebSocket connection");
     return;
   }
@@ -1167,8 +1176,13 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
         EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("telemetry_token"),
                                   nullptr, false);
     if (telemetryUri && telemetryUri[0] != '\0') {
-      std::string token = (telemetryToken && telemetryToken[0] != '\0')
-          ? std::string(telemetryToken) : "";
+      std::string token;
+      if (telemetryToken && telemetryToken[0] != '\0') {
+        token = telemetryToken;
+      } else {
+        // Fall back to cached auth token when telemetry_token not configured
+        token = wsToken;
+      }
       m_telemetry->Connect(std::string(telemetryUri), token);
     } else {
       Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] No telemetry_uri in config, telemetry disabled");
