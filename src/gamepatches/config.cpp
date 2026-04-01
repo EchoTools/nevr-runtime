@@ -35,16 +35,28 @@ VOID LoadEarlyConfig() {
   // Strip the filename to get the directory
   CHAR* lastSlash = strrchr(moduleDir, '\\');
   if (lastSlash) *(lastSlash + 1) = '\0';
-  snprintf(configPath, MAX_PATH, "%s_local\\config.json", moduleDir);
 
-  UINT32 loadResult = EchoVR::LoadJsonFromFile(&g_earlyConfig, configPath, 1);
-  if (loadResult == 0 && g_earlyConfig.root != NULL) {
-    g_earlyConfigPtr = &g_earlyConfig;
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Early config loaded from: %s", configPath);
-  } else {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to early-load config from: %s (error %u)", configPath,
-        loadResult);
+  // Try _local/config.json next to the exe first, then walk up parent directories.
+  // Supports both flat layouts (bin/win10/_local/) and nested layouts (echovr/_local/).
+  const CHAR* searchPaths[] = {
+    "%s_local\\config.json",
+    "%s..\\_local\\config.json",
+    "%s..\\..\\_local\\config.json",
+  };
+
+  UINT32 loadResult = 0xFFFFFFFF;
+  for (int i = 0; i < 3; i++) {
+    snprintf(configPath, MAX_PATH, searchPaths[i], moduleDir);
+    loadResult = EchoVR::LoadJsonFromFile(&g_earlyConfig, configPath, 1);
+    if (loadResult == 0 && g_earlyConfig.root != NULL) {
+      g_earlyConfigPtr = &g_earlyConfig;
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Early config loaded from: %s", configPath);
+      return;
+    }
   }
+
+  Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to early-load config from: %s_local\\config.json (error %u)",
+      moduleDir, loadResult);
 }
 
 /// <summary>
@@ -83,8 +95,31 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
       result = 0;  // Success
     }
   } else {
-    // No custom config specified, use the default loader
+    // No custom config specified — try the default loader first.
+    // If it fails (config not next to exe), search parent directories.
     result = EchoVR::LoadLocalConfig(pGame);
+
+    using namespace PatchAddresses;
+    EchoVR::Json* configDest = reinterpret_cast<EchoVR::Json*>(static_cast<CHAR*>(pGame) + GAME_LOCAL_CONFIG_OFFSET);
+    if (configDest->root == NULL) {
+      // Default loader failed — search parent directories for _local/config.json
+      CHAR moduleDir[MAX_PATH] = {0};
+      GetModuleFileNameA((HMODULE)EchoVR::g_GameBaseAddress, moduleDir, MAX_PATH);
+      CHAR* lastSlash = strrchr(moduleDir, '\\');
+      if (lastSlash) *(lastSlash + 1) = '\0';
+
+      const CHAR* parentPrefixes[] = {"..\\", "..\\..\\"};
+      for (int i = 0; i < 2; i++) {
+        CHAR tryPath[MAX_PATH] = {0};
+        snprintf(tryPath, MAX_PATH, "%s%s_local\\config.json", moduleDir, parentPrefixes[i]);
+        UINT32 loadResult = EchoVR::LoadJsonFromFile(configDest, tryPath, 1);
+        if (loadResult == 0 && configDest->root != NULL) {
+          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Game config loaded from: %s", tryPath);
+          result = 0;
+          break;
+        }
+      }
+    }
   }
 
   // Configure fixed timestep if specified
