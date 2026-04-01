@@ -390,15 +390,8 @@ void BuiltinTokenAuth::OnGameStateChange(uint32_t /*old_state*/, uint32_t new_st
 }
 
 void BuiltinTokenAuth::Shutdown() {
-    // The poll thread is detached, so we don't join. DeviceAuth is safe to
-    // delete once the thread finishes (it only touches its own members and
-    // stack-local curl handles). We signal via s_auth = nullptr so the
-    // thread's Log calls are the last thing referencing the object.
-    // In practice the game is exiting, so this is best-effort cleanup.
-    if (s_auth) {
-        delete s_auth;
-        s_auth = nullptr;
-    }
+    // Do NOT delete s_auth — the detached poll thread may still hold a raw
+    // pointer to it. Leaking intentionally; process is exiting anyway.
     s_authAttempted = false;
     s_pollComplete.store(false, std::memory_order_relaxed);
     Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Shutdown complete");

@@ -555,6 +555,7 @@ static void InitFileLogging() {
 }
 
 static void ShutdownFileLogging() {
+    std::lock_guard<std::mutex> lock(g_file_mutex);
     CloseLogFile();
 }
 

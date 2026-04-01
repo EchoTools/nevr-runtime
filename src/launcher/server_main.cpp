@@ -25,8 +25,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     int argc;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     for (int i = 1; i < argc; i++) {
-        cmdLine += L" ";
+        cmdLine += L" \"";
         cmdLine += argv[i];
+        cmdLine += L"\"";
     }
     LocalFree(argv);
 

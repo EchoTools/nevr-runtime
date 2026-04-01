@@ -120,11 +120,8 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     PatchDisableWwise();
     PatchLogServerProfile();
 
-    // Replace CPrecisionSleep's QPC busy-wait with Wine-friendly Sleep().
-    // Only for headless servers — clients need precise frame timing for VR rendering.
-    if (g_isHeadless) {
-      PatchServerFramePacing();
-    }
+    // Server frame pacing is handled by BuiltinServerTiming (below).
+    // PatchServerFramePacing() removed — BuiltinServerTiming owns all timing hooks.
   }
 
   // Initialize built-in modules (after CLI flags are known)
