@@ -83,10 +83,20 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR cmdLine, int nShow) {
         }
     }
 
-    // Step 5: Call game's real entry point
-    typedef int (WINAPI *WinMain_fn)(HINSTANCE, HINSTANCE, LPSTR, int);
-    auto gameEntry = (WinMain_fn)((char*)hGame + entryRva);
+    // Step 5: Call game's real entry point.
+    // NOTE: AddressOfEntryPoint is the CRT startup stub (WinMainCRTStartup),
+    // not WinMain itself. On x64 the CRT stub takes no arguments — it calls
+    // GetCommandLineW() internally. The args we pass are effectively ignored.
+    // The stub initializes the CRT and calls WinMain. Since our stub DllMain
+    // (injected during PE conversion) prevented the original entry from running
+    // during LoadLibrary, this is the first and only CRT initialization.
+    // The CRT will call GetModuleHandle(NULL) which returns the launcher —
+    // this is the game's hInstance. Game code that depends on its own module
+    // handle should use the value passed to WinMain, which the CRT obtains
+    // from GetModuleHandle(NULL).
+    typedef int (*CrtEntry_fn)();
+    auto gameEntry = (CrtEntry_fn)((char*)hGame + entryRva);
 
     fprintf(stderr, "[NEVR.LAUNCHER] Calling game entry point at 0x%p\n", (void*)gameEntry);
-    return gameEntry(hGame, NULL, GetCommandLineA(), nShow);
+    return gameEntry();
 }
