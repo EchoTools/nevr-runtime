@@ -183,8 +183,10 @@ static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
   curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, CurlHeaderCb);
   curl_easy_setopt(curl, CURLOPT_HEADERDATA, &self->m_responseHeaders);
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+#ifdef NEVR_INSECURE_SKIP_TLS_VERIFY
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+#endif
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
 
   CURLcode res = curl_easy_perform(curl);

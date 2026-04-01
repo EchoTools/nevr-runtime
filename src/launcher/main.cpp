@@ -1,4 +1,6 @@
 #include <windows.h>
+#include <psapi.h>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include "pe_convert.h"
@@ -94,6 +96,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR cmdLine, int nShow) {
     // this is the game's hInstance. Game code that depends on its own module
     // handle should use the value passed to WinMain, which the CRT obtains
     // from GetModuleHandle(NULL).
+    // Validate entry RVA against module size to prevent execution of arbitrary addresses
+    MODULEINFO modInfo = {};
+    if (GetModuleInformation(GetCurrentProcess(), hGame, &modInfo, sizeof(modInfo))) {
+        if (entryRva >= modInfo.SizeOfImage) {
+            fprintf(stderr, "[NEVR.LAUNCHER] Entry RVA 0x%08X exceeds module size 0x%08X\n",
+                entryRva, (uint32_t)modInfo.SizeOfImage);
+            MessageBoxA(NULL, "Invalid entry point. Delete echovr_game.dll to re-convert.",
+                "NEVR Launcher", MB_ICONERROR);
+            return 1;
+        }
+    }
+
     typedef int (*CrtEntry_fn)();
     auto gameEntry = (CrtEntry_fn)((char*)hGame + entryRva);
 
