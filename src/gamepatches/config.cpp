@@ -69,11 +69,11 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
   UINT64 result;
 
   // If a custom config.json path was provided, load it directly using the game's JSON loader
-  if (g_customConfigJsonPath[0] != '\0') {
+  if (g_customConfigPath[0] != '\0') {
     // Resolve to full path so the game's loader can find it regardless of CWD
     CHAR resolvedPath[MAX_PATH] = {0};
-    DWORD len = GetFullPathNameA(g_customConfigJsonPath, MAX_PATH, resolvedPath, NULL);
-    const CHAR* configPath = (len > 0 && len < MAX_PATH) ? resolvedPath : g_customConfigJsonPath;
+    DWORD len = GetFullPathNameA(g_customConfigPath, MAX_PATH, resolvedPath, NULL);
+    const CHAR* configPath = (len > 0 && len < MAX_PATH) ? resolvedPath : g_customConfigPath;
 
     Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Loading custom config from: %s", configPath);
 
@@ -120,24 +120,6 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
         }
       }
     }
-  }
-
-  // Configure fixed timestep if specified
-  // Note: This is placed here because the required structures must be initialized first
-  if ((g_isHeadless || g_isServer) && g_headlessTimeStep != 0) {
-    using namespace PatchAddresses;
-
-    // Set the fixed time step value (in microseconds)
-    // The timestep is stored in a nested structure accessed via pointer
-    UINT32* timeStepPtr = reinterpret_cast<UINT32*>(
-        *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + FIXED_TIMESTEP_PTR) + FIXED_TIMESTEP_OFFSET);
-    *timeStepPtr = 1000000 / g_headlessTimeStep;  // Convert Hz to microseconds
-
-    // Fix delta time calculation for fixed timestep mode
-    // Changes condition: if (deltaTime > timeStep) to use correct comparison
-    const BYTE deltaTimeFix[] = {0x73, 0x7A};  // JAE +0x7A (unsigned comparison)
-    static_assert(sizeof(deltaTimeFix) == HEADLESS_DELTATIME_SIZE, "HEADLESS_DELTATIME patch size mismatch");
-    ApplyPatch(HEADLESS_DELTATIME, deltaTimeFix, sizeof(deltaTimeFix));
   }
 
   // Store a reference to the local config from the game structure
