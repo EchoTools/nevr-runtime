@@ -30,6 +30,10 @@ bool NevrClient::Authenticate() {
         fprintf(stderr, "[NEVR.SOCIAL] API not configured -- call Configure() first\n");
         return false;
     }
+    if (m_username.empty()) {
+        fprintf(stderr, "[NEVR.SOCIAL] No credentials for password auth (use token-auth plugin)\n");
+        return false;
+    }
 
     // POST {url}/v2/rpc/account/authenticate/password?unwrap&http_key={httpKey}
     std::string authUrl = m_url + "/v2/rpc/account/authenticate/password?unwrap&http_key=" + m_httpKey;

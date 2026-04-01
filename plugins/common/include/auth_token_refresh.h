@@ -47,11 +47,21 @@ inline bool RefreshAuthToken(CachedAuthToken& auth,
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
 
     CURLcode res = curl_easy_perform(curl);
+
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
         fprintf(stderr, "[NEVR.AUTH] Token refresh failed: %s\n", curl_easy_strerror(res));
+        return false;
+    }
+
+    if (http_code != 200) {
+        fprintf(stderr, "[NEVR.AUTH] Token refresh HTTP %ld: %s\n", http_code,
+            response.empty() ? "(empty)" : response.substr(0, 200).c_str());
         return false;
     }
 
