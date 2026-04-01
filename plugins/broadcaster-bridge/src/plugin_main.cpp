@@ -36,6 +36,10 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
     return result;
 }
 
+NEVR_PLUGIN_API void NvrPluginOnFrame(const NvrGameContext*) {
+    nevr::broadcaster_bridge::OnFrame();
+}
+
 NEVR_PLUGIN_API void NvrPluginShutdown() {
     nevr::broadcaster_bridge::Shutdown();
 }

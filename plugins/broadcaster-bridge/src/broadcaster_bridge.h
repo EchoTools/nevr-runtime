@@ -41,15 +41,19 @@ typedef void (*CBroadcasterSend_fn)(
 
 /*
  * CBroadcaster_ReceiveLocalEvent function signature.
- * Used for local dispatch of injected packets.
+ * Dispatches a message to all registered listeners.
  *
  * Source: CBroadcaster.cpp in echovr-reconstruction
  * VA: 0x140f87aa0 (VA_BROADCASTER_RECEIVE_LOCAL in address_registry.h)
+ *
+ * Actual signature (from reconstruction @0x140f87aa0):
+ *   uint64_t ReceiveLocalEvent(CBroadcaster* self, CMatSym message_id,
+ *       const char* msg_name, const void* msg, uint64_t msg_size)
  */
-typedef void (*CBroadcasterReceiveLocal_fn)(
+typedef uint64_t (*CBroadcasterReceiveLocal_fn)(
     void*       self,
     uint64_t    msg_sym,
-    int32_t     flags,
+    const char* msg_name,
     const void* payload,
     uint64_t    payload_size);
 
@@ -92,6 +96,11 @@ static_assert(sizeof(InjectionPacketHeader) == 17,
 /* Injection modes */
 static constexpr uint8_t INJECT_MODE_SEND           = 0;
 static constexpr uint8_t INJECT_MODE_LOCAL_DISPATCH  = 1;
+static constexpr uint8_t INJECT_MODE_CHASSIS_SWAP    = 2;  /* Experimental: game flags + combat toggle */
+static constexpr uint8_t INJECT_MODE_READ_LOADOUT    = 3;  /* Read current loadout and mirror back */
+static constexpr uint8_t INJECT_MODE_ENABLE_BODIES   = 4;  /* Call EnableBodyComponents */
+static constexpr uint8_t INJECT_MODE_DUMP_ACTOR_DATA = 5;  /* Dump actorDataRes component type table */
+static constexpr uint8_t INJECT_MODE_DUMP_WEAPON     = 6;  /* Dump weapon scenario data from all CS instances */
 
 /* Guardrail limits */
 static constexpr size_t   MAX_PACKET_SIZE         = 4096;
@@ -132,6 +141,7 @@ bool DeserializeMirrorPacket(const uint8_t* buf, size_t buf_size,
 
 /* Lifecycle */
 int  Initialize(uintptr_t base_addr, const char* config_path);
+void OnFrame();
 void Shutdown();
 
 } // namespace nevr::broadcaster_bridge

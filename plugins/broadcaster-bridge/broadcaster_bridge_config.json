@@ -2,6 +2,6 @@
     "udp_debug_target": "127.0.0.1:9999",
     "listen_port": 9998,
     "mirror_send": true,
-    "mirror_receive": false,
+    "mirror_receive": true,
     "log_messages": false
 }
