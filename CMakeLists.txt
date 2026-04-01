@@ -189,7 +189,8 @@ add_subdirectory(src/legacy/gamepatches)
 add_subdirectory(src/gameserver)
 add_subdirectory(src/pnsrad)
 add_subdirectory(src/legacy/gameserver)
-#add_subdirectory(src/server)  # disabled: echovr_server.exe signing fails
+add_subdirectory(src/launcher)
+#add_subdirectory(src/server)  # deprecated: replaced by src/launcher
 # telemetryagent moved to extras/ — needs protobuf-lite refactor before reintegration
 
 add_subdirectory(plugins)
