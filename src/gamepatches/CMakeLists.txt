@@ -12,7 +12,11 @@ set(PATCHES_SOURCES
     "platform_compat.cpp"
     "state_machine.cpp"
     "plugin_loader.cpp"
+    "resource_override.cpp"
     "winhttp_stub.cpp"
+    "builtin_log_filter.cpp"
+    "builtin_server_timing.cpp"
+    "builtin_token_auth.cpp"
 )
 
 set(PATCHES_HEADERS
@@ -25,23 +29,42 @@ set(PATCHES_HEADERS
     "mode_patches.h"
     "crash_recovery.h"
     "platform_compat.h"
+    "resource_override.h"
     "state_machine.h"
     "plugin_loader.h"
     "winhttp_stub.h"
     "process_mem.h"
     "patch_addresses.h"
+    "builtin_log_filter.h"
+    "builtin_server_timing.h"
+    "builtin_token_auth.h"
 )
 
 add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
                                "exports.def")
 
-target_compile_definitions(gamepatches PRIVATE USE_MINHOOK)
+# Build-time embedded keys (set via cmake -D or cmake/local.cmake)
+set(NEVR_SERVER_KEY "" CACHE STRING "Nakama server key (embedded at build time)")
+set(NEVR_HTTP_KEY "" CACHE STRING "Nakama HTTP key (embedded at build time)")
+set(NEVR_API_URL "https://api.echovrce.com" CACHE STRING "Nakama API base URL")
+
+target_compile_definitions(gamepatches PRIVATE
+  USE_MINHOOK
+  NEVR_SERVER_KEY="${NEVR_SERVER_KEY}"
+  NEVR_HTTP_KEY="${NEVR_HTTP_KEY}"
+  NEVR_API_URL="${NEVR_API_URL}"
+)
 
 target_precompile_headers(gamepatches PRIVATE "${CMAKE_SOURCE_DIR}/src/common/pch.h")
-target_include_directories(gamepatches PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(gamepatches PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_SOURCE_DIR}/src/common
+  ${CMAKE_SOURCE_DIR}/plugins/common/include
+)
 
 find_package(CURL REQUIRED)
-target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl)
+find_package(nlohmann_json CONFIG REQUIRED)
+target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl nlohmann_json::nlohmann_json)
 target_link_directories(gamepatches PRIVATE common)
 
 # Set output name to remove 'lib' prefix on MinGW

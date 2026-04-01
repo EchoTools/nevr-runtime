@@ -6,15 +6,8 @@
 # Use vendored MinHook for function hooking
 set(HOOKING_LIBRARY minhook::minhook)
 
-# Find jsoncpp for weapon configuration (use pkg-config as fallback)
-find_package(jsoncpp QUIET)
-if(NOT jsoncpp_FOUND)
-  find_package(PkgConfig)
-  if(PKG_CONFIG_FOUND)
-    pkg_check_modules(JSONCPP REQUIRED IMPORTED_TARGET jsoncpp)
-    add_library(JsonCpp::JsonCpp ALIAS PkgConfig::JSONCPP)
-  endif()
-endif()
+# Find nlohmann_json for weapon configuration
+find_package(nlohmann_json CONFIG REQUIRED)
 
 # DbgHooks sources
 set(DBGHOOKS_SOURCES 
@@ -54,14 +47,14 @@ target_include_directories(DbgHooksObj INTERFACE
 )
 
 # Link dependencies to the object library so it can compile (find headers)
-target_link_libraries(DbgHooksObj PUBLIC ${HOOKING_LIBRARY} Common JsonCpp::JsonCpp)
+target_link_libraries(DbgHooksObj PUBLIC ${HOOKING_LIBRARY} Common nlohmann_json::nlohmann_json)
 
 add_library(DbgHooks SHARED 
   "dllmain.cpp"
   "exports.def"
 )
 
-target_link_libraries(DbgHooks PRIVATE DbgHooksObj ${HOOKING_LIBRARY} Common JsonCpp::JsonCpp)
+target_link_libraries(DbgHooks PRIVATE DbgHooksObj ${HOOKING_LIBRARY} Common nlohmann_json::nlohmann_json)
 
 target_link_directories(DbgHooks PRIVATE Common)
 
@@ -89,7 +82,7 @@ set_target_properties(echovr_launcher PROPERTIES
 target_compile_features(echovr_launcher PRIVATE cxx_std_17)
 
 # Link DbgHooks statically
-target_link_libraries(echovr_launcher PRIVATE DbgHooksObj ${HOOKING_LIBRARY} Common JsonCpp::JsonCpp)
+target_link_libraries(echovr_launcher PRIVATE DbgHooksObj ${HOOKING_LIBRARY} Common nlohmann_json::nlohmann_json)
 target_link_directories(echovr_launcher PRIVATE Common)
 
 # Static link CRT for standalone executable (testing)

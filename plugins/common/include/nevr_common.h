@@ -45,14 +45,20 @@ inline bool ValidatePrologue(void* addr, const uint8_t* expected, size_t len) {
 
 /*
  * LoadConfigFile - Read an entire file into a string. Intended for loading
- * JSON/JSONC config files. Returns an empty string on failure.
+ * JSON/JSONC config files. Searches the given path, then parent directories
+ * (../ and ../../) to support nested directory layouts. Returns empty on failure.
  */
 inline std::string LoadConfigFile(const std::string& path) {
-    std::ifstream file(path, std::ios::in | std::ios::binary);
-    if (!file.is_open()) return {};
-    std::ostringstream ss;
-    ss << file.rdbuf();
-    return ss.str();
+    const std::string prefixes[] = {"", "..\\", "..\\..\\", "../", "../../"};
+    for (const auto& prefix : prefixes) {
+        std::ifstream file(prefix + path, std::ios::in | std::ios::binary);
+        if (file.is_open()) {
+            std::ostringstream ss;
+            ss << file.rdbuf();
+            return ss.str();
+        }
+    }
+    return {};
 }
 
 } // namespace nevr

@@ -35,16 +35,28 @@ VOID LoadEarlyConfig() {
   // Strip the filename to get the directory
   CHAR* lastSlash = strrchr(moduleDir, '\\');
   if (lastSlash) *(lastSlash + 1) = '\0';
-  snprintf(configPath, MAX_PATH, "%s_local\\config.json", moduleDir);
 
-  UINT32 loadResult = EchoVR::LoadJsonFromFile(&g_earlyConfig, configPath, 1);
-  if (loadResult == 0 && g_earlyConfig.root != NULL) {
-    g_earlyConfigPtr = &g_earlyConfig;
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Early config loaded from: %s", configPath);
-  } else {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to early-load config from: %s (error %u)", configPath,
-        loadResult);
+  // Try _local/config.json next to the exe first, then walk up parent directories.
+  // Supports both flat layouts (bin/win10/_local/) and nested layouts (echovr/_local/).
+  const CHAR* searchPaths[] = {
+    "%s_local\\config.json",
+    "%s..\\_local\\config.json",
+    "%s..\\..\\_local\\config.json",
+  };
+
+  UINT32 loadResult = 0xFFFFFFFF;
+  for (int i = 0; i < 3; i++) {
+    snprintf(configPath, MAX_PATH, searchPaths[i], moduleDir);
+    loadResult = EchoVR::LoadJsonFromFile(&g_earlyConfig, configPath, 1);
+    if (loadResult == 0 && g_earlyConfig.root != NULL) {
+      g_earlyConfigPtr = &g_earlyConfig;
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Early config loaded from: %s", configPath);
+      return;
+    }
   }
+
+  Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to early-load config from: %s_local\\config.json (error %u)",
+      moduleDir, loadResult);
 }
 
 /// <summary>
@@ -57,11 +69,11 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
   UINT64 result;
 
   // If a custom config.json path was provided, load it directly using the game's JSON loader
-  if (g_customConfigJsonPath[0] != '\0') {
+  if (g_customConfigPath[0] != '\0') {
     // Resolve to full path so the game's loader can find it regardless of CWD
     CHAR resolvedPath[MAX_PATH] = {0};
-    DWORD len = GetFullPathNameA(g_customConfigJsonPath, MAX_PATH, resolvedPath, NULL);
-    const CHAR* configPath = (len > 0 && len < MAX_PATH) ? resolvedPath : g_customConfigJsonPath;
+    DWORD len = GetFullPathNameA(g_customConfigPath, MAX_PATH, resolvedPath, NULL);
+    const CHAR* configPath = (len > 0 && len < MAX_PATH) ? resolvedPath : g_customConfigPath;
 
     Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Loading custom config from: %s", configPath);
 
@@ -83,26 +95,31 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
       result = 0;  // Success
     }
   } else {
-    // No custom config specified, use the default loader
+    // No custom config specified — try the default loader first.
+    // If it fails (config not next to exe), search parent directories.
     result = EchoVR::LoadLocalConfig(pGame);
-  }
 
-  // Configure fixed timestep if specified
-  // Note: This is placed here because the required structures must be initialized first
-  if ((g_isHeadless || g_isServer) && g_headlessTimeStep != 0) {
     using namespace PatchAddresses;
+    EchoVR::Json* configDest = reinterpret_cast<EchoVR::Json*>(static_cast<CHAR*>(pGame) + GAME_LOCAL_CONFIG_OFFSET);
+    if (configDest->root == NULL) {
+      // Default loader failed — search parent directories for _local/config.json
+      CHAR moduleDir[MAX_PATH] = {0};
+      GetModuleFileNameA((HMODULE)EchoVR::g_GameBaseAddress, moduleDir, MAX_PATH);
+      CHAR* lastSlash = strrchr(moduleDir, '\\');
+      if (lastSlash) *(lastSlash + 1) = '\0';
 
-    // Set the fixed time step value (in microseconds)
-    // The timestep is stored in a nested structure accessed via pointer
-    UINT32* timeStepPtr = reinterpret_cast<UINT32*>(
-        *reinterpret_cast<CHAR**>(EchoVR::g_GameBaseAddress + FIXED_TIMESTEP_PTR) + FIXED_TIMESTEP_OFFSET);
-    *timeStepPtr = 1000000 / g_headlessTimeStep;  // Convert Hz to microseconds
-
-    // Fix delta time calculation for fixed timestep mode
-    // Changes condition: if (deltaTime > timeStep) to use correct comparison
-    const BYTE deltaTimeFix[] = {0x73, 0x7A};  // JAE +0x7A (unsigned comparison)
-    static_assert(sizeof(deltaTimeFix) == HEADLESS_DELTATIME_SIZE, "HEADLESS_DELTATIME patch size mismatch");
-    ApplyPatch(HEADLESS_DELTATIME, deltaTimeFix, sizeof(deltaTimeFix));
+      const CHAR* parentPrefixes[] = {"..\\", "..\\..\\"};
+      for (int i = 0; i < 2; i++) {
+        CHAR tryPath[MAX_PATH] = {0};
+        snprintf(tryPath, MAX_PATH, "%s%s_local\\config.json", moduleDir, parentPrefixes[i]);
+        UINT32 loadResult = EchoVR::LoadJsonFromFile(configDest, tryPath, 1);
+        if (loadResult == 0 && configDest->root != NULL) {
+          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Game config loaded from: %s", tryPath);
+          result = 0;
+          break;
+        }
+      }
+    }
   }
 
   // Store a reference to the local config from the game structure

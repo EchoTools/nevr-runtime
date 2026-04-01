@@ -245,6 +245,19 @@ LONG WINAPI BreakpointVEH(PEXCEPTION_POINTERS pExceptionInfo) {
     }
   }
 
+  // Log any unhandled fatal exception before passing to the default handler
+  DWORD code = pExceptionInfo->ExceptionRecord->ExceptionCode;
+  if (code == EXCEPTION_ACCESS_VIOLATION ||
+      code == EXCEPTION_ILLEGAL_INSTRUCTION ||
+      code == EXCEPTION_STACK_OVERFLOW ||
+      code == EXCEPTION_INT_DIVIDE_BY_ZERO ||
+      code == STATUS_STACK_BUFFER_OVERRUN) {
+    static volatile LONG g_crashLogCount = 0;
+    if (InterlockedIncrement(&g_crashLogCount) <= 3) {
+      LogCrashDump(pExceptionInfo);
+    }
+  }
+
   return EXCEPTION_CONTINUE_SEARCH;
 }
 

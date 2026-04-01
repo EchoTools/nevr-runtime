@@ -30,7 +30,7 @@ target_link_libraries(telemetryagent
     PRIVATE 
     winhttp
     ws2_32
-    proto_nevr
+    nevr_api
 )
 
 target_compile_definitions(telemetryagent 

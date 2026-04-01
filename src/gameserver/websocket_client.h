@@ -37,7 +37,7 @@ class WebSocketClient {
   /// </summary>
   /// <param name="uri">WebSocket URI (e.g., "ws://localhost:777/serverdb")</param>
   /// <returns>TRUE if connection initiated successfully, FALSE on error</returns>
-  BOOL Connect(const CHAR* uri);
+  BOOL Connect(const CHAR* uri, const std::string& bearerToken = "");
 
   /// <summary>
   /// Disconnects from the ServerDB WebSocket service.

@@ -4,7 +4,7 @@
 #include <string>
 #include <map>
 #include <vector>
-#include <json/json.h>
+#include <nlohmann/json.hpp>
 
 namespace dbghooks::weapon_system {
 
@@ -126,10 +126,10 @@ namespace dbghooks::weapon_system {
         bool is_loaded_ = false;
         
         // Helper methods for JSON parsing
-        void ParseWeaponFromJson(const std::string& name, const Json::Value& weapon_json);
-        WeaponDamageTable ParseDamageTable(const Json::Value& damage_json);
-        WeaponProperties ParseWeaponProperties(const Json::Value& props_json);
-        WeaponSoundConfig ParseSoundConfig(const Json::Value& sound_json);
+        void ParseWeaponFromJson(const std::string& name, const nlohmann::json& weapon_json);
+        WeaponDamageTable ParseDamageTable(const nlohmann::json& damage_json);
+        WeaponProperties ParseWeaponProperties(const nlohmann::json& props_json);
+        WeaponSoundConfig ParseSoundConfig(const nlohmann::json& sound_json);
     };
 
     // Hook interface for weapon system interception

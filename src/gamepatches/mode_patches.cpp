@@ -47,12 +47,6 @@ VOID PatchEnableHeadless(PVOID pGame) {
   static_assert(sizeof(graphicsNop) == HEADLESS_APPLY_GRAPHICS_SIZE, "HEADLESS_APPLY_GRAPHICS patch size mismatch");
   ApplyPatch(HEADLESS_APPLY_GRAPHICS, graphicsNop, sizeof(graphicsNop));
 
-  // Enable fixed timestep if configured
-  if (g_headlessTimeStep != 0) {
-    UINT64* timestepFlags = reinterpret_cast<UINT64*>(static_cast<CHAR*>(pGame) + GAME_TIMESTEP_FLAGS_OFFSET);
-    *timestepFlags |= 0x2000000;  // Set fixed timestep flag
-  }
-
   // Skip console creation if -noconsole was specified
   if (g_noConsole) {
     return;
@@ -549,16 +543,7 @@ VOID PatchDisableServerRendering(PVOID pGame) {
   static_assert(sizeof(graphicsNop) == HEADLESS_APPLY_GRAPHICS_SIZE, "HEADLESS_APPLY_GRAPHICS patch size mismatch");
   ApplyPatch(HEADLESS_APPLY_GRAPHICS, graphicsNop, sizeof(graphicsNop));
 
-  // Enable fixed timestep if configured
-  if (g_headlessTimeStep != 0) {
-    UINT64* timestepFlags = reinterpret_cast<UINT64*>(static_cast<CHAR*>(pGame) + GAME_TIMESTEP_FLAGS_OFFSET);
-    *timestepFlags |= 0x2000000;  // Set fixed timestep flag
-  }
-
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Server rendering disabled (renderer, effects, audio, graphics settings)");
-  if (g_headlessTimeStep != 0) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Fixed timestep flag set (%u ticks/sec)", g_headlessTimeStep);
-  }
 }
 
 // ============================================================================

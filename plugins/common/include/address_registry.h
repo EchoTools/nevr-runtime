@@ -121,6 +121,86 @@ static constexpr uint64_t VA_SET_CAN_BE_GRABBED = 0x140909f10;
 // Hook this for log filtering (NOT the variadic wrapper at 0x1400ebe50).
 static constexpr uint64_t VA_CLOG_PRINTF_IMPL = 0x1400ebe70;
 
+// --- Filesystem Loader ---
+
+// Source: src/NRadEngine/Core/CResource.h in echovr-reconstruction
+// Resource_InitFromBuffers — stores data buffers into CResource and calls
+// vtable[7] (DeserializeAndUpload). 5 parameters:
+//   void __fastcall (CResource* resource, void* buf1, uint64_t size1,
+//                    void* buf2, uint64_t size2)
+static constexpr uint64_t VA_RESOURCE_INIT_FROM_BUFFERS = 0x140fa2510;
+
+// --- Combat Patch ---
+
+// Source: combatpatch.h / PC binary analysis
+// IsCombatGameType — returns 1 if current game type is combat
+static constexpr uint64_t VA_IS_COMBAT_GAME_TYPE = 0x14015C170;
+
+// Source: combatpatch.h / PC binary analysis
+// IsArenaGameType — returns 1 if current game type is arena
+static constexpr uint64_t VA_IS_ARENA_GAME_TYPE = 0x140155B20;
+
+// Source: combatpatch.h / PC binary analysis
+// PlayerInit — player component initialization
+static constexpr uint64_t VA_PLAYER_INIT = 0x140D625C0;
+
+// Source: combatpatch.h / PC binary analysis
+// EquipmentInit — R14NetPlayerEquipment component init
+static constexpr uint64_t VA_EQUIPMENT_INIT = 0x140D02390;
+
+// Source: combatpatch.h / PC binary analysis
+// WeaponActorExpression — animation system weapon entity lookup
+static constexpr uint64_t VA_WEAPON_ACTOR_EXPR = 0x140F0BCF0;
+
+// Source: combatpatch.h / PC binary analysis
+// EntityLookup — gamespace entity hash lookup (hot path)
+static constexpr uint64_t VA_ENTITY_LOOKUP = 0x1404F3700;
+
+// Source: combatpatch.h / PC binary analysis
+// ApplyDefaultLoadout — reapplies full default loadout
+//   void __fastcall (R15NetGame*, uint16_t userIndex)
+static constexpr uint64_t VA_APPLY_DEFAULT_LOADOUT = 0x1401544A0;
+
+// Source: combatpatch.h / PC binary analysis
+// EquipChassisCheck — JZ at this RVA skips weapon item substitution
+// for net_standard_chassis actors. Patch JZ (0x74) -> JMP (0xEB).
+static constexpr uint64_t VA_EQUIP_CHASSIS_CHECK = 0x140D0D1FB;
+
+// Source: combatpatch.h / PC binary analysis
+// WeaponGuardJZ — vtable actor-type check in WeaponSlotSetup
+static constexpr uint64_t VA_WEAPON_GUARD_JZ = 0x140CF5F62;
+
+// Source: combatpatch.h / PC binary analysis
+// WeaponGuardJNZ — server_mode check in WeaponSlotSetup
+static constexpr uint64_t VA_WEAPON_GUARD_JNZ = 0x140CF5F6B;
+
+// Source: combatpatch.h / PC binary analysis
+// HashFunc — CRC64 hash from entity name string
+//   uint64_t __fastcall (char* name, int64_t seed, int registerFlag, int64_t maxLen, int)
+static constexpr uint64_t VA_HASH_FUNC = 0x1400CE120;
+
+// Source: combatpatch.h / PC binary analysis
+// SymTableInsert — registers (hash, name) in gear symbol table
+static constexpr uint64_t VA_SYM_TABLE_INSERT = 0x140C4C050;
+
+// Source: combatpatch.h / PC binary analysis
+// SetWeaponEntities — writes weapon entity names to data tree
+static constexpr uint64_t VA_SET_WEAPON_ENTITIES = 0x140D42E00;
+
+// --- Social Plugin DLL Selection ---
+
+// Source: revault string search "pnsovr"/"pnsdemo", commit e1803da
+// String data for social platform DLL selection at ~0x140109xxx.
+// The game passes these to CModuleLoader (fcn.140606690).
+// Overwriting forces all paths to load pnsrad.dll.
+static constexpr uint64_t VA_SOCIAL_PLUGIN_STR_PNSOVR  = 0x1416d35c4;  // xref 0x140109993
+static constexpr uint64_t VA_SOCIAL_PLUGIN_STR_PNSDEMO = 0x1416d35e8;  // xref 0x140109a2b
+
+// Source: mode_patches.cpp PatchBypassOvrPlatform, commit e1803da
+// OVR conditional branch in PlatformModuleDecisionAndInitialize.
+// 6-byte JNE (0F 85 C7 00 00 00). NOP to skip OVR init and take Path 2.
+static constexpr uint64_t VA_OVR_PLATFORM_BRANCH = 0x1401580e5;
+
 } // namespace nevr::addresses
 
 // Struct offsets within CR15NetGame

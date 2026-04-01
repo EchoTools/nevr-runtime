@@ -4,6 +4,8 @@
 #include "mode_patches.h"
 #include "plugin_loader.h"
 #include "patch_addresses.h"
+#include "builtin_server_timing.h"
+#include "builtin_token_auth.h"
 #include "common/globals.h"
 #include "common/logging.h"
 #include "common/echovr_functions.h"
@@ -29,12 +31,8 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       g_isOffline = TRUE;
     } else if (lstrcmpW(arg, L"-noconsole") == 0) {
       g_noConsole = TRUE;
-    } else if (lstrcmpW(arg, L"-headless") == 0) {
-      g_isHeadless = TRUE;
     } else if (lstrcmpW(arg, L"-windowed") == 0) {
       g_isWindowed = TRUE;
-    } else if (lstrcmpW(arg, L"-noovr") == 0) {
-      g_isNoOVR = TRUE;
     } else if (lstrcmpW(arg, L"-exitonerror") == 0) {
       g_exitOnError = TRUE;
     } else if (lstrcmpW(arg, L"-notelemetry") == 0) {
@@ -44,8 +42,6 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
         g_telemetryRateHz = std::wcstoul(argv[i + 1], nullptr, 10);
         if (g_telemetryRateHz == 0) g_telemetryRateHz = 10;
         ++i;
-      } else {
-        FatalError("Missing argument for -telemetryrate. Provide a rate in Hz (e.g., 10).", NULL);
       }
     } else if (lstrcmpW(arg, L"-telemetrydiag") == 0) {
       g_telemetryDiag = TRUE;
@@ -53,43 +49,31 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       g_timestampLogs = TRUE;
     } else if (lstrcmpW(arg, L"-upnp") == 0) {
       g_upnpEnabled = TRUE;
-    } else if (lstrcmpW(arg, L"-timestep") == 0) {
+    } else if (lstrcmpW(arg, L"-config") == 0 || lstrcmpW(arg, L"-config-path") == 0) {
       if (i + 1 < argc) {
-        g_headlessTimeStep = std::wcstoul(argv[i + 1], nullptr, 10);
-        ++i;  // Skip the next argument (the value)
-      } else {
-        FatalError(
-            "Missing argument for -timestep. Provide a positive number for fixed tick rate, or zero for unthrottled.",
-            NULL);
+        WideCharToMultiByte(CP_UTF8, 0, argv[i + 1], -1, g_customConfigPath, MAX_PATH, NULL, NULL);
+        ++i;
       }
-    } else if (lstrcmpW(arg, L"-config-path") == 0) {
+    } else if (lstrcmpW(arg, L"-region") == 0 || lstrcmpW(arg, L"-serverregion") == 0) {
       if (i + 1 < argc) {
-        int len = WideCharToMultiByte(CP_UTF8, 0, argv[i + 1], -1, g_customConfigJsonPath, MAX_PATH, NULL, NULL);
-        if (len == 0) {
-          FatalError("Failed to convert -config-path to multi-byte string.", NULL);
-        }
-        ++i;  // Skip the next argument (the path value)
-      } else {
-        FatalError("Missing argument for -config-path. Provide a path to a config.json file.", NULL);
+        WideCharToMultiByte(CP_UTF8, 0, argv[i + 1], -1, g_regionOverride, sizeof(g_regionOverride), NULL, NULL);
+        ++i;
       }
+    } else if (lstrcmpW(arg, L"-timestep") == 0 || lstrcmpW(arg, L"-fixedtimestep") == 0) {
+      // Deprecated — silently consume value arg if present
+      if (lstrcmpW(arg, L"-timestep") == 0 && i + 1 < argc) ++i;
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] %ls is deprecated and ignored", arg);
+    } else if (lstrcmpW(arg, L"-headless") == 0 || lstrcmpW(arg, L"-noovr") == 0) {
+      // Deprecated — silently ignored (-server implies headless, -noovr is always on)
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] %ls is deprecated and ignored", arg);
     }
   }
 
-  // -server requires -headless and -noovr — the game's own CLI parser needs these
-  // on the command line for VR init bypass and renderer skip. Set them internally
-  // for our code, but warn if they're missing from the command line since the game
-  // won't have processed them.
+  // -noovr is always applied (no OVR runtime needed)
+  // -server implies headless (all servers are headless)
+  g_isHeadless = g_isHeadless || g_isServer;
   if (g_isServer) {
-    if (!g_isHeadless) {
-      g_isHeadless = TRUE;
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] -server without -headless — add -headless to the command line");
-    }
-    if (!g_isNoOVR) {
-      g_isNoOVR = TRUE;
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] -server without -noovr — add -noovr to the command line");
-    }
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Server mode — headless + noovr applied");
   }
 
   // Auto-enable -noconsole on Wine/Linux
@@ -136,14 +120,17 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     PatchDisableWwise();
     PatchLogServerProfile();
 
-    // Replace CPrecisionSleep's QPC busy-wait with Wine-friendly Sleep().
-    // Only for headless servers — clients need precise frame timing for VR rendering.
-    if (g_isHeadless) {
-      PatchServerFramePacing();
-    }
+    // Server frame pacing is handled by BuiltinServerTiming (below).
+    // PatchServerFramePacing() removed — BuiltinServerTiming owns all timing hooks.
   }
 
-  // Load plugins from plugins/ subdirectory (after CLI flags are known)
+  // Initialize built-in modules (after CLI flags are known)
+  uintptr_t base = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
+  bool isServer = g_isServer != FALSE;
+  BuiltinServerTiming::Init(base, isServer);
+  BuiltinTokenAuth::Init(base, isServer);
+
+  // Load external plugins from plugins/ subdirectory
   LoadPlugins();
 
   // Run the original method

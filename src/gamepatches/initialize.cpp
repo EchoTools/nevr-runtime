@@ -10,7 +10,9 @@
 #include "gamepatches_internal.h"
 #include "mode_patches.h"
 #include "platform_compat.h"
+#include "resource_override.h"
 #include "state_machine.h"
+#include "builtin_log_filter.h"
 
 #include "common/globals.h"
 #include "common/hooking.h"
@@ -115,11 +117,19 @@ VOID Initialize() {
     }
   }
 
+  // Resolve all game function pointers from g_GameBaseAddress.
+  // In launcher mode, g_GameBaseAddress is set by NEVR_SetGameModule before Initialize().
+  // In legacy dbgcore.dll mode, it's set in DllMain from GetModuleHandle(NULL).
+  EchoVR::InitializeFunctionPointers();
+
   // Initialize the hooking library
   if (!Hooking::Initialize()) {
     MessageBoxW(NULL, L"Failed to initialize hooking library.", L"Echo Relay: Error", MB_OK);
     return;
   }
+
+  // Install built-in log filter early (before any game logging starts)
+  BuiltinLogFilter::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress), false);
 
   // Early-load _local/config.json for URI redirect hooks that fire before game loads config
   LoadEarlyConfig();
@@ -158,6 +168,25 @@ VOID Initialize() {
   // --- Exception handling ---
   InstallVEH();
   InstallConsoleCtrlHandler();
+
+  // --- Resource overrides (must install before any resource loading) ---
+  InstallResourceOverride();
+
+  // --- Load external combat patch DLL (MSVC-built, has its own MinHook) ---
+  {
+    CHAR dir[MAX_PATH] = {0};
+    GetModuleFileNameA((HMODULE)EchoVR::g_GameBaseAddress, dir, MAX_PATH);
+    CHAR* slash = strrchr(dir, '\\');
+    if (slash) *(slash + 1) = '\0';
+    std::string path = std::string(dir) + "combatpatch.dll";
+    HMODULE hCombat = LoadLibraryA(path.c_str());
+    if (hCombat) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Loaded combatpatch.dll");
+    } else {
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] combatpatch.dll not found (optional)");
+    }
+  }
+
 
   // --- Startup patches (applied before CLI parsing) ---
   PatchNoOvrRequiresSpectatorStream();
