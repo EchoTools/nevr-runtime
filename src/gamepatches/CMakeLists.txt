@@ -12,6 +12,7 @@ set(PATCHES_SOURCES
     "platform_compat.cpp"
     "state_machine.cpp"
     "plugin_loader.cpp"
+    "resource_override.cpp"
     "winhttp_stub.cpp"
 )
 
@@ -25,6 +26,7 @@ set(PATCHES_HEADERS
     "mode_patches.h"
     "crash_recovery.h"
     "platform_compat.h"
+    "resource_override.h"
     "state_machine.h"
     "plugin_loader.h"
     "winhttp_stub.h"

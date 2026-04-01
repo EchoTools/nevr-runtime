@@ -10,6 +10,7 @@
 #include "gamepatches_internal.h"
 #include "mode_patches.h"
 #include "platform_compat.h"
+#include "resource_override.h"
 #include "state_machine.h"
 
 #include "common/globals.h"
@@ -158,6 +159,25 @@ VOID Initialize() {
   // --- Exception handling ---
   InstallVEH();
   InstallConsoleCtrlHandler();
+
+  // --- Resource overrides (must install before any resource loading) ---
+  InstallResourceOverride();
+
+  // --- Load external combat patch DLL (MSVC-built, has its own MinHook) ---
+  {
+    CHAR dir[MAX_PATH] = {0};
+    GetModuleFileNameA((HMODULE)EchoVR::g_GameBaseAddress, dir, MAX_PATH);
+    CHAR* slash = strrchr(dir, '\\');
+    if (slash) *(slash + 1) = '\0';
+    std::string path = std::string(dir) + "combatpatch.dll";
+    HMODULE hCombat = LoadLibraryA(path.c_str());
+    if (hCombat) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Loaded combatpatch.dll");
+    } else {
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] combatpatch.dll not found (optional)");
+    }
+  }
+
 
   // --- Startup patches (applied before CLI parsing) ---
   PatchNoOvrRequiresSpectatorStream();
