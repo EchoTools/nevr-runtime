@@ -1,0 +1,14 @@
+LIBRARY pnsrad
+EXPORTS
+    RadPluginInit
+    RadPluginInitMemoryStatics
+    RadPluginInitNonMemoryStatics
+    RadPluginMain
+    RadPluginShutdown
+    RadPluginSetAllocator
+    RadPluginSetEnvironment
+    RadPluginSetEnvironmentMethods
+    RadPluginSetFileTypes
+    RadPluginSetPresenceFactory
+    RadPluginSetSymbolDebugMethodsMethod
+    RadPluginSetSystemInfo
