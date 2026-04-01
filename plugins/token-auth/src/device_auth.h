@@ -5,7 +5,7 @@
 
 // Device code authentication with local credential caching.
 // Implements the echovrce.com device code flow (Discord OAuth on web)
-// and persists tokens to _local/auth.json for reuse across launches.
+// and persists tokens to _local/.credentials.json for reuse across launches.
 
 class DeviceAuth {
 public:
@@ -15,7 +15,7 @@ public:
     // Configure API endpoint and HTTP key from _local/config.json values.
     void Configure(const std::string& url, const std::string& httpKey);
 
-    // Try loading a cached token from _local/auth.json.
+    // Try loading a cached token from _local/.credentials.json.
     // Returns true if a valid (non-expired) token was found.
     bool TryLoadCachedToken();
 
@@ -23,7 +23,7 @@ public:
     // open browser, poll for verification, save token on success.
     bool RunDeviceAuthFlow();
 
-    // Save current token to _local/auth.json.
+    // Save current token to _local/.credentials.json.
     bool SaveToken();
 
     // Check if we have a valid (non-expired) session.

@@ -421,11 +421,11 @@ void SocialBridgeOnStateChange(const NvrGameContext* ctx, uint32_t old_state, ui
             if (!nakamaUrl.empty() && !nevrHttpKey.empty()) {
                 s_nakamaClient->Configure(nakamaUrl, nevrHttpKey, nevrServerKey, "", "");
 
-                // Use cached token from token-auth plugin (written to _local/auth.json)
+                // Use cached token from token-auth plugin (written to _local/.credentials.json)
                 auto auth = LoadCachedAuthToken();
                 if (auth.HasValidToken()) {
                     s_nakamaClient->SetToken(auth.token, auth.token_expiry);
-                    fprintf(stderr, "[NEVR.SOCIAL] Using cached token from auth.json\n");
+                    fprintf(stderr, "[NEVR.SOCIAL] Using cached token from .credentials.json\n");
                 } else {
                     fprintf(stderr, "[NEVR.SOCIAL] No valid auth token -- social features using placeholders\n");
                     fprintf(stderr, "[NEVR.SOCIAL] (token-auth plugin handles authentication)\n");

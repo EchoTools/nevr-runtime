@@ -83,11 +83,11 @@ bool DeviceAuth::SaveToken() {
     auth.username = m_username;
 
     if (!SaveAuthToken(auth)) {
-        fprintf(stderr, "[NEVR.AUTH] Failed to write auth.json\n");
+        fprintf(stderr, "[NEVR.AUTH] Failed to write .credentials.json\n");
         return false;
     }
 
-    fprintf(stderr, "[NEVR.AUTH] Token saved to auth.json\n");
+    fprintf(stderr, "[NEVR.AUTH] Token saved to .credentials.json\n");
     return true;
 }
 

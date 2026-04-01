@@ -1,6 +1,7 @@
 {
   "dependencies": [
     "curl",
+    "gtest",
     "ixwebsocket",
     "nlohmann-json",
     "miniupnpc",

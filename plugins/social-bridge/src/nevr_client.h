@@ -29,7 +29,7 @@ public:
                    const std::string& password = "");
 
     // Authenticate via password -- used by servers only.
-    // Clients should use RunDeviceAuthFlow() instead.
+    // Clients use token-auth plugin for authentication.
     bool Authenticate();
 
     // Get current token, refreshing if expired. Returns empty string on failure.

@@ -77,6 +77,21 @@ test-plugins-short:
 test-plugins-verbose:
     cd tests/plugins && go test -v -count=1 -timeout 10m ./...
 
+# Run auth ground truth tests (no game binary, no network)
+test-auth-groundtruth:
+    cd tests/plugins && go test -v -run "TestGroundTruth_No|TestGroundTruth_Auth" ./...
+
+# Run C++ auth unit tests under Wine (cross-compiled GTest)
+test-auth-unit: build
+    wine build/{{preset}}/bin/test_token_auth.exe 2>/dev/null || echo "GTest binary not found (build with -DBUILD_TESTING=ON)"
+
+# Run auth integration tests (needs game binary + MCP harness)
+test-auth-integration:
+    cd tests/system && go test -v -run "TestAuth" ./...
+
+# Run all auth tests
+test-auth: test-auth-groundtruth test-auth-unit
+
 # --- Internal ---
 
 # Install vcpkg dependencies for MinGW cross-compilation (runs only for mingw presets)
