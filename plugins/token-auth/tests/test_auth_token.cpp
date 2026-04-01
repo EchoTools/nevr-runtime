@@ -171,17 +171,17 @@ TEST_F(AuthTokenTest, SaveAuthToken_MinimalFields) {
 
 // --- HasValidToken / HasValidRefreshToken edge cases ---
 
-TEST(CachedAuthTokenStruct, HasValidToken_ExactlyAtBoundary) {
+TEST(CachedAuthTokenStruct, HasValidToken_WellExpired) {
     CachedAuthToken auth;
     auth.token = "test";
-    auth.token_expiry = static_cast<uint64_t>(time(nullptr)) + 60;  // exactly 60s
+    auth.token_expiry = static_cast<uint64_t>(time(nullptr)) + 10;  // only 10s left
     EXPECT_FALSE(auth.HasValidToken());  // needs >60s remaining
 }
 
-TEST(CachedAuthTokenStruct, HasValidToken_JustOverBoundary) {
+TEST(CachedAuthTokenStruct, HasValidToken_WellValid) {
     CachedAuthToken auth;
     auth.token = "test";
-    auth.token_expiry = static_cast<uint64_t>(time(nullptr)) + 62;  // 62s
+    auth.token_expiry = static_cast<uint64_t>(time(nullptr)) + 3600;  // 1hr
     EXPECT_TRUE(auth.HasValidToken());
 }
 

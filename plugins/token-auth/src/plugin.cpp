@@ -38,11 +38,12 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
         return 0;
     }
 
-    std::string nevrUrl, nevrHttpKey;
+    std::string nevrUrl, nevrHttpKey, nevrServerKey;
     try {
         auto cfg = nlohmann::json::parse(configStr);
         nevrUrl = cfg.value("nevr_url", "");
         nevrHttpKey = cfg.value("nevr_http_key", "");
+        nevrServerKey = cfg.value("nevr_server_key", "");
     } catch (const nlohmann::json::parse_error& e) {
         fprintf(stderr, "[NEVR.AUTH] Failed to parse config.json: %s\n", e.what());
         return 0;
@@ -53,7 +54,7 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
         return 0;
     }
 
-    s_auth->Configure(nevrUrl, nevrHttpKey);
+    s_auth->Configure(nevrUrl, nevrHttpKey, nevrServerKey);
 
     // Try cached token first
     if (s_auth->TryLoadCachedToken()) {

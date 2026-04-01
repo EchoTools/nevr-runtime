@@ -19,9 +19,10 @@
 #include "auth_token.h"
 #include "auth_token_refresh.h"
 
-void DeviceAuth::Configure(const std::string& url, const std::string& httpKey) {
+void DeviceAuth::Configure(const std::string& url, const std::string& httpKey, const std::string& serverKey) {
     m_url = url;
     m_httpKey = httpKey;
+    m_serverKey = serverKey;
     m_configured = true;
     fprintf(stderr, "[NEVR.AUTH] Configured: url=%s\n", url.c_str());
 }
@@ -52,7 +53,7 @@ bool DeviceAuth::TryLoadCachedToken() {
     // Access token expired — try refresh
     if (auth.HasValidRefreshToken() && m_configured) {
         fprintf(stderr, "[NEVR.AUTH] Access token expired, attempting refresh...\n");
-        if (RefreshAuthToken(auth, m_url)) {
+        if (RefreshAuthToken(auth, m_url, m_serverKey)) {
             m_token = auth.token;
             m_tokenExpiry = auth.token_expiry;
             m_refreshToken = auth.refresh_token;
@@ -155,8 +156,8 @@ std::string DeviceAuth::PollDeviceCode(const std::string& code) {
             }
         }
         if (status == "expired") return "expired";
-        if (status == "pending") return "pending";
-        return "error";
+        // Any unrecognized status (including "pending") keeps polling
+        return "pending";
     } catch (...) {
         return "error";
     }

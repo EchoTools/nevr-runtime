@@ -13,7 +13,7 @@ public:
     ~DeviceAuth() = default;
 
     // Configure API endpoint and HTTP key from _local/config.json values.
-    void Configure(const std::string& url, const std::string& httpKey);
+    void Configure(const std::string& url, const std::string& httpKey, const std::string& serverKey = "");
 
     // Try loading a cached token from _local/.credentials.json.
     // Returns true if a valid (non-expired) token was found.
@@ -37,6 +37,7 @@ private:
 
     std::string m_url;
     std::string m_httpKey;
+    std::string m_serverKey;
     std::string m_token;
     uint64_t m_tokenExpiry = 0;
     std::string m_refreshToken;
