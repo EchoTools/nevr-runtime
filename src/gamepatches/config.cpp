@@ -311,9 +311,40 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
 /// This is necessary because the game reads config values before LoadLocalConfig runs,
 /// so hardcoded defaults (readyatdawn.com URLs, "rad15_live", etc.) always win.
 /// </summary>
+// Redirect readyatdawn.com service URLs to echovrce.com.
+// The game has hardcoded defaults like "wss://login.readyatdawn.com/rad/rad15_live"
+// for configservice_host, loginservice_host, etc. These servers are dead.
+// We pick the redirect target based on the URL scheme:
+//   wss:// URLs → nevr_socket_uri (WebSocket endpoint)
+//   https:// URLs → nevr_http_uri (HTTP API endpoint)
+static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
+  if (result == NULL || keyName == NULL) return result;
+  if (strstr(result, "readyatdawn.com") == NULL) return result;
+  if (g_earlyConfigPtr == NULL) return result;
+
+  // Select the right config key based on scheme
+  const CHAR* configKey;
+  if (strstr(result, "wss://") == result || strstr(result, "ws://") == result) {
+    configKey = "nevr_socket_uri";
+  } else {
+    configKey = "nevr_http_uri";
+  }
+
+  CHAR* target = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)configKey, NULL, false);
+  if (target == NULL || target[0] == '\0') return result;
+
+  static CHAR redirected[512];
+  snprintf(redirected, sizeof(redirected), "%s", target);
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Service redirect [%s]: %s -> %s", keyName, result, redirected);
+  return redirected;
+}
+
 CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValue, BOOL reportFailure) {
   // Call the original first
   CHAR* result = EchoVR::JsonValueAsString(root, keyName, defaultValue, reportFailure);
+
+  // Redirect any readyatdawn.com service URLs to echovrce.com
+  result = RedirectServiceUrl(keyName, result);
 
   // If we have an early config, check if it has an override for this key.
   // Only override when the result equals the default (meaning the game's config didn't have it).
@@ -321,7 +352,7 @@ CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValu
   if (g_earlyConfigPtr != NULL && keyName != NULL && root != g_earlyConfigPtr && result == defaultValue) {
     CHAR* override = EchoVR::JsonValueAsString(g_earlyConfigPtr, keyName, NULL, false);
     if (override != NULL && override[0] != '\0') {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Config override [%s]: %s → %s", keyName,
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Config override [%s]: %s -> %s", keyName,
           result ? result : "(null)", override);
       return override;
     }
