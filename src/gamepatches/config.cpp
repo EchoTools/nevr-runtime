@@ -335,11 +335,10 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
 
   static CHAR redirected[512];
 
-  // If the WS bridge proxy is active and the target is wss://, redirect to local proxy
+  // All WebSocket connections go through the in-process proxy
   extern bool IsWebSocketBridgeActive();
   extern uint16_t GetWebSocketBridgePort();
   if (IsWebSocketBridgeActive() &&
-      (strstr(target, "wss://") == target) &&
       (strstr(result, "wss://") == result || strstr(result, "ws://") == result)) {
     snprintf(redirected, sizeof(redirected), "ws://127.0.0.1:%u", GetWebSocketBridgePort());
   } else {

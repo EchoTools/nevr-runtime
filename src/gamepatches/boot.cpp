@@ -22,11 +22,10 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   LoadEarlyConfig();
   InstallResourceOverride();
 
-  // Start WebSocket TLS proxy if config points to a wss:// endpoint.
-  // The proxy listens locally on ws:// and forwards to the real wss:// server
-  // via ixwebsocket (mbedTLS), bypassing the game's broken Schannel/Wine TLS.
+  // Start WebSocket TLS proxy. All WebSocket connections go through the proxy —
+  // the game's Schannel TLS is broken under Wine. The proxy uses ixwebsocket (mbedTLS).
   CHAR* socketUri = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_socket_uri", NULL, false);
-  if (socketUri && strncmp(socketUri, "wss://", 6) == 0) {
+  if (socketUri) {
     SetWebSocketBridgeTarget(socketUri);
     InstallWebSocketBridge();
   }
