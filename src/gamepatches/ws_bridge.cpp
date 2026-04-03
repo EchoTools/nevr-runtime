@@ -118,6 +118,8 @@ void InstallWebSocketBridge() {
                     }
                     case ix::WebSocketMessageType::Message:
                       // Forward server→game
+                      Log(EchoVR::LogLevel::Info, "[NEVR.WS] server->game: %zu bytes %s",
+                          rmsg->str.size(), rmsg->binary ? "(binary)" : "(text)");
                       if (rmsg->binary) {
                         gameWsPtr->sendBinary(rmsg->str);
                       } else {
@@ -125,14 +127,15 @@ void InstallWebSocketBridge() {
                       }
                       break;
                     case ix::WebSocketMessageType::Close:
-                      Log(EchoVR::LogLevel::Info, "[NEVR.WS] Remote closed: %d %s",
-                          rmsg->closeInfo.code, rmsg->closeInfo.reason.c_str());
-                      gameWsPtr->close();
+                      Log(EchoVR::LogLevel::Info, "[NEVR.WS] Remote closed (ws=%p): %d %s",
+                          (void*)gameWsPtr, rmsg->closeInfo.code, rmsg->closeInfo.reason.c_str());
+                      // Don't call gameWsPtr->close() — it deadlocks (blocks waiting
+                      // for server thread which may be blocked on g_pairsMutex).
+                      // The game will detect the closed remote on its next send attempt.
                       break;
                     case ix::WebSocketMessageType::Error:
                       Log(EchoVR::LogLevel::Warning, "[NEVR.WS] Remote error: %s",
                           rmsg->errorInfo.reason.c_str());
-                      gameWsPtr->close();
                       break;
                     default:
                       break;
@@ -145,26 +148,36 @@ void InstallWebSocketBridge() {
               std::lock_guard<std::mutex> lk(g_pairsMutex);
               g_pairs[gameWsPtr] = std::move(pair);
             }
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected, bridging to %s",
-                g_remoteUri.c_str());
+            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%s, ws=%p), bridging to %s",
+                connState->getId().c_str(), (void*)gameWsPtr, g_remoteUri.c_str());
             break;
           }
 
           case ix::WebSocketMessageType::Message: {
             // Game→remote forwarding
+            Log(EchoVR::LogLevel::Info, "[NEVR.WS] game->server: %zu bytes %s (conn=%s, ws=%p)",
+                msg->str.size(), msg->binary ? "(binary)" : "(text)",
+                connState->getId().c_str(), (void*)&gameWs);
+            Log(EchoVR::LogLevel::Info, "[NEVR.WS]   acquiring lock...");
             std::lock_guard<std::mutex> lk(g_pairsMutex);
+            Log(EchoVR::LogLevel::Info, "[NEVR.WS]   lock acquired, pairs=%zu", g_pairs.size());
             auto it = g_pairs.find(&gameWs);
             if (it != g_pairs.end()) {
               auto& pair = it->second;
               if (pair->remoteOpen) {
                 if (msg->binary) {
-                  pair->remoteWs->sendBinary(msg->str);
+                  auto info = pair->remoteWs->sendBinary(msg->str);
+                  Log(EchoVR::LogLevel::Info, "[NEVR.WS]   -> forwarded (success=%d)", info.success);
                 } else {
                   pair->remoteWs->sendText(msg->str);
                 }
               } else {
                 pair->pendingToRemote.push_back(msg->str);
+                Log(EchoVR::LogLevel::Info, "[NEVR.WS]   -> queued (remote not open yet, %zu pending)",
+                    pair->pendingToRemote.size());
               }
+            } else {
+              Log(EchoVR::LogLevel::Warning, "[NEVR.WS]   -> DROPPED (no pair found)");
             }
             break;
           }
