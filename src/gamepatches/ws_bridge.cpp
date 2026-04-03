@@ -13,6 +13,7 @@
 
 #include "common/echovr_functions.h"
 #include "common/logging.h"
+#include "common/auth_token.h"
 
 // ============================================================================
 // In-process WebSocket TLS proxy
@@ -84,6 +85,15 @@ void InstallWebSocketBridge() {
             remote->setUrl(g_remoteUri);
             remote->disableAutomaticReconnection();
             remote->disablePerMessageDeflate();
+
+            // Attach Bearer token if we have cached credentials
+            auto cachedAuth = LoadCachedAuthToken();
+            if (cachedAuth.HasValidToken()) {
+              ix::WebSocketHttpHeaders headers;
+              headers["Authorization"] = "Bearer " + cachedAuth.token;
+              remote->setExtraHeaders(headers);
+              Log(EchoVR::LogLevel::Info, "[NEVR.WS] Attaching Bearer token to remote connection");
+            }
 
             auto pair = std::make_unique<ProxyPair>();
             pair->remoteWs = remote;

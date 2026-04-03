@@ -17,6 +17,7 @@ set(PATCHES_SOURCES
     "resource_override.cpp"
     "winhttp_stub.cpp"
     "ws_bridge.cpp"
+    "token_auth.cpp"
 )
 
 set(PATCHES_HEADERS
@@ -52,12 +53,13 @@ target_include_directories(gamepatches PRIVATE
 
 find_package(CURL REQUIRED)
 find_package(ixwebsocket CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
-target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl ixwebsocket::ixwebsocket)
+target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json)
 target_link_directories(gamepatches PRIVATE common)
 
-# Disable PCH for ws_bridge.cpp — ixwebsocket headers conflict with Windows.h macros
-set_source_files_properties(ws_bridge.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
+set_source_files_properties(ws_bridge.cpp token_auth.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 set_target_properties(gamepatches PROPERTIES
   OUTPUT_NAME "BugSplat64"
