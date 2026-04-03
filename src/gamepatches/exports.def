@@ -4,3 +4,13 @@ EXPORTS
    MiniDumpWriteDump
    NEVR_ScheduleReturnToLobby
    NEVR_GetUPnPConfig
+   ; BugSplat MiniDmpSender stubs — MSVC mangled names the game expects
+   ??0MiniDmpSender@@QEAA@PEB_W000K@Z = BugSplat_MiniDmpSender_Ctor
+   ??1MiniDmpSender@@UEAA@XZ = BugSplat_MiniDmpSender_Dtor
+   ?createReport@MiniDmpSender@@QEAAXPEAU_EXCEPTION_POINTERS@@@Z = BugSplat_createReport
+   ?getFlags@MiniDmpSender@@QEBAKXZ = BugSplat_getFlags
+   ?resetAppIdentifier@MiniDmpSender@@QEAAXPEB_W@Z = BugSplat_resetAppIdentifier
+   ?sendAdditionalFile@MiniDmpSender@@QEAAXPEB_W@Z = BugSplat_sendAdditionalFile
+   ?setDefaultUserDescription@MiniDmpSender@@QEAAXPEB_W@Z = BugSplat_setDefaultUserDescription
+   ?setDefaultUserName@MiniDmpSender@@QEAAXPEB_W@Z = BugSplat_setDefaultUserName
+   ?setFlags@MiniDmpSender@@QEAA_NK@Z = BugSplat_setFlags

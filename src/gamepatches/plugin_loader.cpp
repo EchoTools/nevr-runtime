@@ -94,15 +94,6 @@ void LoadPlugins() {
       continue;
     }
 
-    // Skip plugins that are now built into gamepatches
-    std::string pluginName(info.name);
-    if (pluginName == "log_filter" || pluginName == "server_timing" || pluginName == "token_auth") {
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PLUGIN] %s is now built-in — remove %s from plugins/ directory", info.name, filename);
-      FreeLibrary(hPlugin);
-      continue;
-    }
-
     // Resolve optional exports
     auto initFn = (NvrPluginInit_fn)GetProcAddress(hPlugin, "NvrPluginInit");
     auto onFrameFn = (NvrPluginOnFrame_fn)GetProcAddress(hPlugin, "NvrPluginOnFrame");

@@ -250,7 +250,6 @@ add_custom_target(dist-prepare
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/server_timing.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/server_timing.dll" "${DIST_DIR}/plugins/" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/token_auth.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/token_auth.dll" "${DIST_DIR}/plugins/" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/broadcaster_bridge.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/broadcaster_bridge.dll" "${DIST_DIR}/plugins/" || true
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/social_bridge.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/social_bridge.dll" "${DIST_DIR}/plugins/" || true
   VERBATIM
 )
 
@@ -339,7 +338,6 @@ add_custom_target(dist-lite-prepare
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_DIR}/plugins"
   # log_filter, server_timing, token_auth are now built into gamepatches.dll
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/broadcaster_bridge.dll" "${DIST_LITE_DIR}/plugins/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/plugins/broadcaster_bridge.dll" || ${CMAKE_COMMAND} -E true
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/social_bridge.dll" "${DIST_LITE_DIR}/plugins/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/plugins/social_bridge.dll" || ${CMAKE_COMMAND} -E true
   COMMENT "Preparing lite distribution directory (stripped): ${DIST_LITE_DIR}"
   VERBATIM
 )
