@@ -4,6 +4,7 @@
 #include "mode_patches.h"
 #include "resource_override.h"
 #include "plugin_loader.h"
+#include "ws_bridge.h"
 #include "patch_addresses.h"
 #include "common/globals.h"
 #include "common/logging.h"
@@ -20,6 +21,15 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // Deferred from Initialize() — file I/O deadlocks during DllMain loader lock.
   LoadEarlyConfig();
   InstallResourceOverride();
+
+  // Start WebSocket TLS proxy if config points to a wss:// endpoint.
+  // The proxy listens locally on ws:// and forwards to the real wss:// server
+  // via ixwebsocket (mbedTLS), bypassing the game's broken Schannel/Wine TLS.
+  CHAR* socketUri = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_socket_uri", NULL, false);
+  if (socketUri && strncmp(socketUri, "wss://", 6) == 0) {
+    SetWebSocketBridgeTarget(socketUri);
+    InstallWebSocketBridge();
+  }
 
   // Parse command line arguments.
   int argc = 0;
