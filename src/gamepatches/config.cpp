@@ -22,7 +22,7 @@ EchoVR::Json* g_localConfig = NULL;
 /// Loaded during Initialize() from _local/config.json using the game's JSON parser.
 /// </summary>
 static EchoVR::Json g_earlyConfig = {NULL, NULL};
-static EchoVR::Json* g_earlyConfigPtr = NULL;
+EchoVR::Json* g_earlyConfigPtr = NULL;
 
 /// <summary>
 /// Early-load _local/config.json so URI redirect hooks work before the game loads its config.
@@ -334,7 +334,18 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
   if (target == NULL || target[0] == '\0') return result;
 
   static CHAR redirected[512];
-  snprintf(redirected, sizeof(redirected), "%s", target);
+
+  // If the WS bridge proxy is active and the target is wss://, redirect to local proxy
+  extern bool IsWebSocketBridgeActive();
+  extern uint16_t GetWebSocketBridgePort();
+  if (IsWebSocketBridgeActive() &&
+      (strstr(target, "wss://") == target) &&
+      (strstr(result, "wss://") == result || strstr(result, "ws://") == result)) {
+    snprintf(redirected, sizeof(redirected), "ws://127.0.0.1:%u", GetWebSocketBridgePort());
+  } else {
+    snprintf(redirected, sizeof(redirected), "%s", target);
+  }
+
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Service redirect [%s]: %s -> %s", keyName, result, redirected);
   return redirected;
 }

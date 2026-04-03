@@ -12,6 +12,7 @@
 #include "platform_compat.h"
 #include "resource_override.h"
 #include "state_machine.h"
+#include "ws_bridge.h"
 
 #include "common/globals.h"
 #include "common/hooking.h"
@@ -120,8 +121,11 @@ VOID Initialize() {
   PatchDetour(&EchoVR::JsonValueAsString, reinterpret_cast<PVOID>(JsonValueAsStringHook));
   fprintf(stderr, "[NEVR] game hooks OK\n"); fflush(stderr);
   // --- Platform compatibility hooks ---
-  InstallTLSHook();
-  fprintf(stderr, "[NEVR] tls OK\n"); fflush(stderr);
+  // InstallTLSHook() not needed — WebSocket bridge handles TLS via ixwebsocket.
+  // WinHTTP hook (InstallWinHTTPHook) handles TLS for HTTP/REST calls via curl.
+  // WebSocket bridge (InstallWebSocketBridge) is started in PreprocessCommandLineHook
+  // after config is loaded — it needs the wss:// URI from config.json.
+  fprintf(stderr, "[NEVR] tls: ws bridge deferred to boot\n"); fflush(stderr);
   InstallCrashRecoveryHooks();
   fprintf(stderr, "[NEVR] crash OK\n"); fflush(stderr);
   InstallCreateDirectoryHooks();

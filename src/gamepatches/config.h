@@ -41,3 +41,6 @@ FLOAT CJsonGetFloatHook(PVOID root, const CHAR* path, FLOAT defaultValue, INT32 
 /// Early-load _local/config.json so URI redirect hooks work before the game loads its config.
 /// </summary>
 VOID LoadEarlyConfig();
+
+/// Pointer to the early-loaded config JSON (set by LoadEarlyConfig).
+extern EchoVR::Json* g_earlyConfigPtr;
