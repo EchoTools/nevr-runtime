@@ -12,6 +12,6 @@ endif()
 # session-unlocker, skip-splash moved to nevr-runtime-plugins
 add_subdirectory(log-filter)
 add_subdirectory(server-timing)
-add_subdirectory(token-auth)
+# token-auth is now built into gamepatches (runs before game connections)
 add_subdirectory(broadcaster-bridge)
 add_subdirectory(pnsrad-enabler)

@@ -5,6 +5,7 @@
 #include "resource_override.h"
 #include "plugin_loader.h"
 #include "ws_bridge.h"
+#include "token_auth.h"
 #include "patch_addresses.h"
 #include "common/globals.h"
 #include "common/logging.h"
@@ -21,6 +22,10 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // Deferred from Initialize() — file I/O deadlocks during DllMain loader lock.
   LoadEarlyConfig();
   InstallResourceOverride();
+
+  // Authenticate before any game connections. Device code auth blocks until
+  // the user authorizes via Discord or the flow times out.
+  TokenAuth::Init((uintptr_t)EchoVR::g_GameBaseAddress, g_isServer);
 
   // Start WebSocket TLS proxy. All WebSocket connections go through the proxy —
   // the game's Schannel TLS is broken under Wine. The proxy uses ixwebsocket (mbedTLS).
