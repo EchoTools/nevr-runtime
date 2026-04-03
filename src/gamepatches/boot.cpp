@@ -1,8 +1,8 @@
 #include "boot.h"
 #include "cli.h"
 #include "config.h"
-#include "initialize.h"
 #include "mode_patches.h"
+#include "resource_override.h"
 #include "plugin_loader.h"
 #include "patch_addresses.h"
 #include "common/globals.h"
@@ -17,12 +17,9 @@
 /// </summary>
 /// <param name="pGame">A pointer to the game instance.</param>
 UINT64 PreprocessCommandLineHook(PVOID pGame) {
-  // Phase 2: full MinHook initialization — loader lock is released, all DLLs ready.
-  // InitializeEarly() (phase 1) ran in DllMain and installed raw JMP patches for
-  // BuildCmdLineSyntaxDefinitions and this function. Now we install proper MinHook
-  // detours for everything else.
-  Initialize();
+  // Deferred from Initialize() — file I/O deadlocks during DllMain loader lock.
   LoadEarlyConfig();
+  InstallResourceOverride();
 
   // Parse command line arguments.
   int argc = 0;
@@ -116,13 +113,15 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     *windowedFlags |= 0x0100000;  // Enable windowed mode (spectator uses 0x2100000 for additional settings)
   }
 
+  // Block Oculus Platform SDK on all modes — no headset available
+  PatchBypassOvrPlatform();
+  PatchBlockOculusSDK();
+
   // Apply patches to force the game to load as a server.
   if (g_isServer) {
     PatchDisableServerRendering(pGame);
     PatchEnableServer();
     PatchDisableLoadingTips();
-    PatchBypassOvrPlatform();
-    PatchBlockOculusSDK();
     PatchDisableWwise();
     PatchLogServerProfile();
 

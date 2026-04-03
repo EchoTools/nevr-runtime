@@ -64,7 +64,13 @@ std::string FormatJsonLogEntry(EchoVR::LogLevel level, const char* message, cons
 VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_list args;
   va_start(args, format);
-  EchoVR::WriteLog(level, 0, format, args);
+  if (EchoVR::WriteLog != nullptr) {
+    EchoVR::WriteLog(level, 0, format, args);
+  } else {
+    // Game logging not available yet (early DllMain init) — fall back to stderr
+    vfprintf(stderr, format, args);
+    fputc('\n', stderr);
+  }
   va_end(args);
 }
 

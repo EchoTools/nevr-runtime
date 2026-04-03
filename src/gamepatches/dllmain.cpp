@@ -52,6 +52,23 @@ extern "C" __declspec(dllexport) BOOL WINAPI MiniDumpWriteDump(
   return FALSE;
 }
 
+// --- BugSplat MiniDmpSender stubs ---
+// The game imports MiniDmpSender methods using MSVC name mangling.
+// exports.def maps the MSVC names to these C functions.
+
+extern "C" {
+  void BugSplat_MiniDmpSender_Ctor(void*, const wchar_t*, const wchar_t*,
+                                    const wchar_t*, const wchar_t*, unsigned long) {}
+  void BugSplat_MiniDmpSender_Dtor(void*) {}
+  void BugSplat_createReport(void*, PEXCEPTION_POINTERS) {}
+  unsigned long BugSplat_getFlags(void*) { return 0; }
+  void BugSplat_resetAppIdentifier(void*, const wchar_t*) {}
+  void BugSplat_sendAdditionalFile(void*, const wchar_t*) {}
+  void BugSplat_setDefaultUserDescription(void*, const wchar_t*) {}
+  void BugSplat_setDefaultUserName(void*, const wchar_t*) {}
+  int BugSplat_setFlags(void*, unsigned long) { return 1; }
+}
+
 // --- Launcher entry point ---
 
 extern "C" __declspec(dllexport) void NEVR_SetGameModule(HMODULE hGame) {
@@ -65,11 +82,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
   switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:
       if (GetModuleHandleA("echovr_game.dll") == NULL) {
-        // BugSplat64.dll path: set base address and run full initialization.
-        // This works because the game EXE is the host process and its code
-        // sections are fully mapped before DllMain of any static import runs.
         EchoVR::g_GameBaseAddress = (CHAR*)GetModuleHandle(NULL);
-        InitializeEarly();
+        Initialize();
       }
       break;
     case DLL_PROCESS_DETACH:
