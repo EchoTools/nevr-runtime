@@ -2,6 +2,7 @@
 #include <psapi.h>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include "pe_convert.h"
 
@@ -63,6 +64,15 @@ static void CopySelfToEchovr(const char* selfPath, const char* echovrPath) {
 static bool FileExists(const char* path) {
     return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
 }
+
+// =============================================================================
+// BugSplat64.dll elimination
+//
+// echovr_game.dll statically imports BugSplat64.dll (crash reporter). Our build
+// produces an empty stub DLL (bugsplat_stub.c) that satisfies the import. It
+// must be deployed alongside echovr_game.dll (same directory). The game's crash
+// handler at 0x1400dbbc0 is hooked by gamepatches to suppress fatal exits.
+// =============================================================================
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR cmdLine, int nShow) {
     // Resolve our own path and directory
@@ -179,6 +189,16 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR cmdLine, int nShow) {
         } else {
             fprintf(stderr, "[NEVR.RUNTIME] WARNING: VA 0x%llx is occupied, game may be relocated\n",
                 static_cast<unsigned long long>(gameImageBase));
+        }
+    }
+
+    // Verify BugSplat64.dll stub is present. Our build produces an empty stub
+    // that satisfies echovr_game.dll's import. Without it, LoadLibrary fails.
+    {
+        std::string bugSplatPath = std::string(exeDir) + "BugSplat64.dll";
+        if (!FileExists(bugSplatPath.c_str())) {
+            fprintf(stderr, "[NEVR.RUNTIME] ERROR: BugSplat64.dll stub not found next to game DLL\n");
+            fprintf(stderr, "[NEVR.RUNTIME] Deploy BugSplat64.dll from the dist package to: %s\n", exeDir);
         }
     }
 

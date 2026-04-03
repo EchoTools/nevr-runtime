@@ -189,7 +189,7 @@ add_subdirectory(src/legacy/gamepatches)
 add_subdirectory(src/gameserver)
 add_subdirectory(src/pnsrad)
 add_subdirectory(src/legacy/gameserver)
-add_subdirectory(src/launcher)
+#add_subdirectory(src/launcher)  # disabled: Wine can't load game DLL at required base address
 #add_subdirectory(src/server)  # deprecated: replaced by src/launcher
 # telemetryagent moved to extras/ — needs protobuf-lite refactor before reintegration
 
@@ -230,10 +230,9 @@ set(DIST_DBG_FILES
 add_custom_target(dist-prepare
   COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_SOURCE_DIR}/dist"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_DIR}"
-  # Copy gamepatches.dll (launcher loads it directly, no longer renamed to dbgcore.dll)
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatches.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatches.dll" "${DIST_DIR}/gamepatches.dll" || true
-  # Legacy: also copy as dbgcore.dll for users who haven't migrated to the launcher
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatches.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatches.dll" "${DIST_DIR}/dbgcore.dll" || true
+  # BugSplat64.dll — NEVR runtime (replaces the original crash reporter DLL).
+  # The game statically imports it, so it loads at process startup before WinMain.
+  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_DIR}/BugSplat64.dll" || true
   # Copy and rename gameserver.dll -> pnsradgameserver.dll (if exists)
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_DIR}/pnsradgameserver.dll" || true
   # Copy pnsrad.dll (if exists)
@@ -244,11 +243,12 @@ add_custom_target(dist-prepare
   # Copy launcher executables
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_DIR}/echovr.exe" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" "${DIST_DIR}/echovr_server.exe" || true
-  #COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/DllLoader.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/DllLoader.exe" "${DIST_DIR}/" || true
    COMMAND test -f "${CMAKE_SOURCE_DIR}/README.md" && ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_DIR}/" || true
   # Copy plugin DLLs into plugins/ subdirectory
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_DIR}/plugins"
-  # log_filter, server_timing, token_auth are now built into gamepatches.dll
+  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/log_filter.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/log_filter.dll" "${DIST_DIR}/plugins/" || true
+  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/server_timing.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/server_timing.dll" "${DIST_DIR}/plugins/" || true
+  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/token_auth.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/token_auth.dll" "${DIST_DIR}/plugins/" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/broadcaster_bridge.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/broadcaster_bridge.dll" "${DIST_DIR}/plugins/" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/social_bridge.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/social_bridge.dll" "${DIST_DIR}/plugins/" || true
   VERBATIM
@@ -323,8 +323,7 @@ add_custom_target(dist-lite-prepare
   COMMAND ${CMAKE_COMMAND} -E rm -rf "${DIST_LITE_DIR}"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_DIR}"
   # Copy gamepatches.dll + legacy dbgcore.dll alias, then strip
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatches.dll" "${DIST_LITE_DIR}/gamepatches.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/gamepatches.dll" || ${CMAKE_COMMAND} -E true
-  COMMAND ${CMAKE_COMMAND} -E copy "${DIST_LITE_DIR}/gamepatches.dll" "${DIST_LITE_DIR}/dbgcore.dll" || ${CMAKE_COMMAND} -E true
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_LITE_DIR}/BugSplat64.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/BugSplat64.dll" || ${CMAKE_COMMAND} -E true
   # Copy and rename gameserver.dll -> pnsradgameserver.dll, then strip (if exists)
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_LITE_DIR}/pnsradgameserver.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/pnsradgameserver.dll" || ${CMAKE_COMMAND} -E true
   # Copy pnsrad.dll and strip (if exists)

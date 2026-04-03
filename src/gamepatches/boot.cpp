@@ -1,11 +1,10 @@
 #include "boot.h"
 #include "cli.h"
 #include "config.h"
+#include "initialize.h"
 #include "mode_patches.h"
 #include "plugin_loader.h"
 #include "patch_addresses.h"
-#include "builtin_server_timing.h"
-#include "builtin_token_auth.h"
 #include "common/globals.h"
 #include "common/logging.h"
 #include "common/echovr_functions.h"
@@ -18,6 +17,13 @@
 /// </summary>
 /// <param name="pGame">A pointer to the game instance.</param>
 UINT64 PreprocessCommandLineHook(PVOID pGame) {
+  // Phase 2: full MinHook initialization — loader lock is released, all DLLs ready.
+  // InitializeEarly() (phase 1) ran in DllMain and installed raw JMP patches for
+  // BuildCmdLineSyntaxDefinitions and this function. Now we install proper MinHook
+  // detours for everything else.
+  Initialize();
+  LoadEarlyConfig();
+
   // Parse command line arguments.
   int argc = 0;
   LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -120,15 +126,9 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     PatchDisableWwise();
     PatchLogServerProfile();
 
-    // Server frame pacing is handled by BuiltinServerTiming (below).
-    // PatchServerFramePacing() removed — BuiltinServerTiming owns all timing hooks.
+    // Server frame pacing is handled by the server-timing plugin.
+    PatchServerFramePacing();
   }
-
-  // Initialize built-in modules (after CLI flags are known)
-  uintptr_t base = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
-  bool isServer = g_isServer != FALSE;
-  BuiltinServerTiming::Init(base, isServer);
-  BuiltinTokenAuth::Init(base, isServer);
 
   // Load external plugins from plugins/ subdirectory
   LoadPlugins();

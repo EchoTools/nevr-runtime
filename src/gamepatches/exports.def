@@ -1,4 +1,4 @@
-LIBRARY GamePatches
+LIBRARY BugSplat64
 EXPORTS
    DetoursExportPlaceholder			@1
    MiniDumpWriteDump

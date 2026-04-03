@@ -9,6 +9,7 @@
 #include "common/pch.h"
 #include "common/echovr_functions.h"
 #include "patches.h"
+#include "initialize.h"
 #include "plugin_loader.h"
 
 #include <dbghelp.h>
@@ -63,12 +64,12 @@ extern "C" __declspec(dllexport) void NEVR_SetGameModule(HMODULE hGame) {
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
   switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:
-      // Detect loading mode: if echovr_game.dll is loaded, we're in launcher mode
-      // and should wait for NEVR_SetGameModule. Otherwise, legacy dbgcore.dll path.
       if (GetModuleHandleA("echovr_game.dll") == NULL) {
-        // Legacy path: we're inside echovr.exe via DLL hijack
+        // BugSplat64.dll path: set base address and run full initialization.
+        // This works because the game EXE is the host process and its code
+        // sections are fully mapped before DllMain of any static import runs.
         EchoVR::g_GameBaseAddress = (CHAR*)GetModuleHandle(NULL);
-        Initialize();
+        InitializeEarly();
       }
       break;
     case DLL_PROCESS_DETACH:

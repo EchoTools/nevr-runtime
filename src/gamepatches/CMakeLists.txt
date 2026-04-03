@@ -1,7 +1,10 @@
-# Game Patches — static library linked into the launcher executable
+# Game Patches — deployed as BugSplat64.dll (replaces the original crash reporter).
+# The game statically imports BugSplat64.dll, so it loads at process startup
+# before WinMain — giving us the earliest possible hook point.
 # Uses MinHook for function hooking (built from extern/minhook)
 
 set(PATCHES_SOURCES
+    "dllmain.cpp"
     "initialize.cpp"
     "cli.cpp"
     "boot.cpp"
@@ -13,9 +16,6 @@ set(PATCHES_SOURCES
     "plugin_loader.cpp"
     "resource_override.cpp"
     "winhttp_stub.cpp"
-    "builtin_log_filter.cpp"
-    "builtin_server_timing.cpp"
-    "builtin_token_auth.cpp"
 )
 
 set(PATCHES_HEADERS
@@ -34,24 +34,12 @@ set(PATCHES_HEADERS
     "winhttp_stub.h"
     "process_mem.h"
     "patch_addresses.h"
-    "builtin_log_filter.h"
-    "builtin_server_timing.h"
-    "builtin_token_auth.h"
 )
 
-add_library(gamepatches STATIC ${PATCHES_SOURCES} ${PATCHES_HEADERS})
+add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
+                               "exports.def")
 
-# Build-time embedded keys (set via cmake -D or cmake/local.cmake)
-set(NEVR_SERVER_KEY "" CACHE STRING "Nakama server key (embedded at build time)")
-set(NEVR_HTTP_KEY "" CACHE STRING "Nakama HTTP key (embedded at build time)")
-set(NEVR_API_URL "https://api.echovrce.com" CACHE STRING "Nakama API base URL")
-
-target_compile_definitions(gamepatches PRIVATE
-  USE_MINHOOK
-  NEVR_SERVER_KEY="${NEVR_SERVER_KEY}"
-  NEVR_HTTP_KEY="${NEVR_HTTP_KEY}"
-  NEVR_API_URL="${NEVR_API_URL}"
-)
+target_compile_definitions(gamepatches PRIVATE USE_MINHOOK)
 
 target_precompile_headers(gamepatches PRIVATE "${CMAKE_SOURCE_DIR}/src/common/pch.h")
 target_include_directories(gamepatches PRIVATE
@@ -61,12 +49,12 @@ target_include_directories(gamepatches PRIVATE
 )
 
 find_package(CURL REQUIRED)
-find_package(nlohmann_json CONFIG REQUIRED)
-target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl nlohmann_json::nlohmann_json)
+target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl)
 target_link_directories(gamepatches PRIVATE common)
 
 set_target_properties(gamepatches PROPERTIES
-  OUTPUT_NAME "gamepatches"
+  OUTPUT_NAME "BugSplat64"
+  PREFIX ""
 )
 
 # Disable specific warnings (MSVC only)

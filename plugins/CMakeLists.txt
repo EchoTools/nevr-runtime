@@ -7,10 +7,12 @@ if(BUILD_TESTING)
     endif()
 endif()
 
-# log-filter, server-timing, token-auth are built into gamepatches.dll
 # crash-handler functionality is in gamepatches core (crash_recovery.cpp)
 # audio-intercom, combat-patch, filesystem-loader, force-push, game-rules-override,
 # session-unlocker, skip-splash moved to nevr-runtime-plugins
+add_subdirectory(log-filter)
+add_subdirectory(server-timing)
+add_subdirectory(token-auth)
 add_subdirectory(broadcaster-bridge)
 add_subdirectory(social-bridge)
 add_subdirectory(pnsrad-enabler)
