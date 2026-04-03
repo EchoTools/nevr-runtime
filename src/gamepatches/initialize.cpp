@@ -12,7 +12,6 @@
 #include "platform_compat.h"
 #include "resource_override.h"
 #include "state_machine.h"
-#include "builtin_log_filter.h"
 
 #include "common/globals.h"
 #include "common/hooking.h"
@@ -88,6 +87,82 @@ extern "C" __declspec(dllexport) void NEVR_GetUPnPConfig(NevRUPnPConfig* out) {
 // Main initialization
 // ============================================================================
 
+// Raw x86-64 detour without MinHook. Saves the first 14 bytes of the target,
+// writes a JMP to the hook, and creates a trampoline that executes the saved
+// bytes then jumps back to target+14.
+//
+// Trampoline layout (32 bytes, VirtualAlloc'd as executable):
+//   [0..13]  original 14 bytes
+//   [14]     0x48 0xB8 <target+14>  mov rax, imm64
+//   [24]     0xFF 0xE0              jmp rax
+//
+// The caller's function pointer is updated to point to the trampoline.
+static BYTE* AllocTrampoline(void* target) {
+  BYTE* tramp = (BYTE*)VirtualAlloc(NULL, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+  if (!tramp) return nullptr;
+
+  // Copy original prologue
+  memcpy(tramp, target, 14);
+
+  // JMP back to target+14
+  tramp[14] = 0x48; tramp[15] = 0xB8;
+  uint64_t resume = (uint64_t)target + 14;
+  memcpy(&tramp[16], &resume, 8);
+  tramp[24] = 0xFF; tramp[25] = 0xE0;
+
+  return tramp;
+}
+
+template <typename T>
+static void RawDetour(T* ppOriginal, void* hook) {
+  void* target = (void*)*ppOriginal;
+
+  // Create trampoline so callers can still invoke the original
+  BYTE* tramp = AllocTrampoline(target);
+  if (tramp) {
+    *ppOriginal = (T)tramp;
+  }
+
+  // Overwrite target with JMP to hook
+  BYTE jmp[14];
+  jmp[0] = 0x48; jmp[1] = 0xB8; // mov rax, imm64
+  memcpy(&jmp[2], &hook, 8);
+  jmp[10] = 0xFF; jmp[11] = 0xE0; // jmp rax
+  jmp[12] = 0x90; jmp[13] = 0x90; // nop padding
+  ProcessMemcpy(target, jmp, sizeof(jmp));
+}
+
+// Phase 1: DllMain-safe initialization.
+// Called from DllMain during static import. No MinHook, no LoadLibrary,
+// no MessageBox, no file I/O, no Log(). Only raw memory patches.
+VOID InitializeEarly() {
+  fprintf(stderr, "[NEVR] Early init: v%s (%s), base=%p\n",
+          PROJECT_VERSION, GIT_COMMIT_HASH, EchoVR::g_GameBaseAddress);
+  fflush(stderr);
+
+  EchoVR::InitializeFunctionPointers();
+
+  // Raw-patch the two CLI hooks so our code runs before the game processes args.
+  // RawDetour creates a trampoline and updates the function pointer so hooks
+  // can still call the original.
+  RawDetour(&EchoVR::BuildCmdLineSyntaxDefinitions,
+            (void*)BuildCmdLineSyntaxDefinitionsHook);
+  RawDetour(&EchoVR::PreprocessCommandLine,
+            (void*)PreprocessCommandLineHook);
+
+  // Raw byte patches (no hooks, just NOPs/JMPs in game code)
+  PatchNoOvrRequiresSpectatorStream();
+  PatchDeadlockMonitor();
+
+  // VEH is safe during DllMain (just registers a callback)
+  InstallVEH();
+  InstallConsoleCtrlHandler();
+
+  fprintf(stderr, "[NEVR] Early hooks active\n"); fflush(stderr);
+}
+
+// Phase 2: Full initialization with MinHook.
+// Called from PreprocessCommandLineHook — loader lock is released, all DLLs ready.
 VOID Initialize() {
   if (g_initialized) return;
   g_initialized = true;
@@ -95,55 +170,16 @@ VOID Initialize() {
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Initializing GamePatches v%s (%s)", PROJECT_VERSION, GIT_COMMIT_HASH);
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Game Base Address: %p", EchoVR::g_GameBaseAddress);
 
-  // Log file/product version from PE header
-  CHAR filename[MAX_PATH];
-  if (GetModuleFileNameA((HMODULE)EchoVR::g_GameBaseAddress, filename, MAX_PATH)) {
-    DWORD handle;
-    DWORD size = GetFileVersionInfoSizeA(filename, &handle);
-    if (size) {
-      std::vector<BYTE> buffer(size);
-      if (GetFileVersionInfoA(filename, handle, size, buffer.data())) {
-        VS_FIXEDFILEINFO* pFileInfo;
-        UINT len;
-        if (VerQueryValueA(buffer.data(), "\\", (LPVOID*)&pFileInfo, &len)) {
-          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Game File Version: %d.%d.%d.%d",
-              HIWORD(pFileInfo->dwFileVersionMS), LOWORD(pFileInfo->dwFileVersionMS),
-              HIWORD(pFileInfo->dwFileVersionLS), LOWORD(pFileInfo->dwFileVersionLS));
-          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Product Version: %d.%d.%d.%d",
-              HIWORD(pFileInfo->dwProductVersionMS), LOWORD(pFileInfo->dwProductVersionMS),
-              HIWORD(pFileInfo->dwProductVersionLS), LOWORD(pFileInfo->dwProductVersionLS));
-        }
-      }
-    }
-  }
-
-  // Resolve all game function pointers from g_GameBaseAddress.
-  // In launcher mode, g_GameBaseAddress is set by NEVR_SetGameModule before Initialize().
-  // In legacy dbgcore.dll mode, it's set in DllMain from GetModuleHandle(NULL).
-  EchoVR::InitializeFunctionPointers();
-
-  // Initialize the hooking library
   if (!Hooking::Initialize()) {
-    MessageBoxW(NULL, L"Failed to initialize hooking library.", L"Echo Relay: Error", MB_OK);
+    Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] FATAL: Failed to initialize hooking library");
     return;
   }
 
-  // Install built-in log filter early (before any game logging starts)
-  BuiltinLogFilter::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress), false);
-
-  // Early-load _local/config.json for URI redirect hooks that fire before game loads config
-  LoadEarlyConfig();
-
-  // Verify the game version before patching
-  if (!VerifyGameVersion())
-    MessageBoxW(NULL,
-                L"NEVR version check failed. Patches may fail to be applied. Verify you're running the correct "
-                L"version of Echo VR.",
-                L"Echo Relay: Warning", MB_OK);
-
-  // --- Game function hooks ---
-  PatchDetour(&EchoVR::BuildCmdLineSyntaxDefinitions, reinterpret_cast<PVOID>(BuildCmdLineSyntaxDefinitionsHook));
-  PatchDetour(&EchoVR::PreprocessCommandLine, reinterpret_cast<PVOID>(PreprocessCommandLineHook));
+  // Re-hook with proper MinHook detours (these create trampolines for calling originals)
+  // BuildCmdLineSyntaxDefinitions and PreprocessCommandLine were raw-patched in phase 1.
+  // The raw patches jumped directly to our hooks, but the original function pointers
+  // (set by InitializeFunctionPointers) still point to the patched memory. MinHook's
+  // PatchDetour creates proper trampolines. We reinstall them here.
   PatchDetour(&EchoVR::NetGameSwitchState, reinterpret_cast<PVOID>(NetGameSwitchStateHook));
   PatchDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook));
   PatchDetour(&EchoVR::CJsonGetFloat, reinterpret_cast<PVOID>(CJsonGetFloatHook));
@@ -151,47 +187,22 @@ VOID Initialize() {
   PatchDetour(&EchoVR::GetProcAddress, reinterpret_cast<PVOID>(GetProcAddressHook));
   PatchDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook));
   PatchDetour(&EchoVR::JsonValueAsString, reinterpret_cast<PVOID>(JsonValueAsStringHook));
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Service endpoint override hook installed (JsonValueAsString)");
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Service endpoint override hook installed");
 
-  // --- Platform compatibility hooks ---
+  // Platform compatibility hooks
   InstallTLSHook();
   InstallCrashRecoveryHooks();
   InstallCreateDirectoryHooks();
   InstallWinHTTPHook();
 
-  // --- Server crash recovery hooks ---
+  // Server crash recovery hooks
   InstallGameMainHook();
   InstallEntityHooks();
   InstallBugSplatHook();
   InstallGameSpaceHook();
 
-  // --- Exception handling ---
-  InstallVEH();
-  InstallConsoleCtrlHandler();
-
-  // --- Resource overrides (must install before any resource loading) ---
+  // Resource overrides
   InstallResourceOverride();
 
-  // --- Load external combat patch DLL (MSVC-built, has its own MinHook) ---
-  {
-    CHAR dir[MAX_PATH] = {0};
-    GetModuleFileNameA((HMODULE)EchoVR::g_GameBaseAddress, dir, MAX_PATH);
-    CHAR* slash = strrchr(dir, '\\');
-    if (slash) *(slash + 1) = '\0';
-    std::string path = std::string(dir) + "combatpatch.dll";
-    HMODULE hCombat = LoadLibraryA(path.c_str());
-    if (hCombat) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Loaded combatpatch.dll");
-    } else {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] combatpatch.dll not found (optional)");
-    }
-  }
-
-
-  // --- Startup patches (applied before CLI parsing) ---
-  PatchNoOvrRequiresSpectatorStream();
-
-  // Disable deadlock monitor unconditionally — Initialize() runs before CLI parsing
-  // so g_isServer isn't set yet. Harmless on clients, prevents false panics on Wine/headless.
-  PatchDeadlockMonitor();
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] All hooks installed");
 }

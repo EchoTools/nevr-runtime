@@ -424,8 +424,8 @@ VOID PatchDeadlockMonitor() {
 typedef HMODULE(WINAPI* LoadLibraryW_t)(LPCWSTR lpLibFileName);
 typedef HMODULE(WINAPI* LoadLibraryExW_t)(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags);
 
-static LoadLibraryW_t Original_LoadLibraryW = LoadLibraryW;
-static LoadLibraryExW_t Original_LoadLibraryExW = LoadLibraryExW;
+static LoadLibraryW_t Original_LoadLibraryW = nullptr;
+static LoadLibraryExW_t Original_LoadLibraryExW = nullptr;
 
 static HMODULE WINAPI LoadLibraryW_Hook(LPCWSTR lpLibFileName) {
   if (lpLibFileName != nullptr) {
@@ -456,6 +456,8 @@ static HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName, HANDLE hFile, D
 }
 
 VOID PatchBlockOculusSDK() {
+  Original_LoadLibraryW = LoadLibraryW;
+  Original_LoadLibraryExW = LoadLibraryExW;
   PatchDetour(&Original_LoadLibraryW, reinterpret_cast<PVOID>(LoadLibraryW_Hook));
   PatchDetour(&Original_LoadLibraryExW, reinterpret_cast<PVOID>(LoadLibraryExW_Hook));
 
