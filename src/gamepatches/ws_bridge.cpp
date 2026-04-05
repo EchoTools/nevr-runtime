@@ -39,10 +39,82 @@ struct ProxyPair {
   std::shared_ptr<ix::WebSocket> remoteWs;
   std::vector<std::string> pendingToRemote;
   bool remoteOpen = false;
+  bool loginInjected = false;  // true after we inject LoginRequest on this connection
 };
 
 static std::mutex g_pairsMutex;
+static int g_connectionCount = 0;  // tracks connection order (0=config, 1+=login)
 static std::unordered_map<ix::WebSocket*, std::unique_ptr<ProxyPair>> g_pairs;
+
+// ============================================================================
+// LoginRequest builder
+// ============================================================================
+// EchoVR wire format: [marker(8)][symbol(8)][length(8)][payload]
+// LoginRequest payload: [UUID(16)][PlatformCode(8)][AccountId(8)][JSON\0]
+
+static const uint8_t MSG_MARKER[] = {0xf6,0x40,0xbb,0x78,0xa2,0xe7,0x8c,0xbb};
+static const uint64_t SYM_LOGIN_REQUEST = 0xbdb41ea9e67b200a;
+
+static void AppendLE64(std::string& buf, uint64_t val) {
+  for (int i = 0; i < 8; i++) { buf.push_back((char)(val & 0xFF)); val >>= 8; }
+}
+
+static std::string BuildLoginRequest(uint64_t discordId) {
+  // Platform: OVR_ORG = 4 (Go iota: XPlatformIdSize=0, STM=1, PSN=2, XBX=3, OVR_ORG=4)
+  uint64_t platformCode = 4;
+  uint64_t accountId = discordId;
+
+  // LoginProfile JSON — matches the game's SNSLogInRequestv2 format
+  char json[2048];
+  snprintf(json, sizeof(json),
+    "{"
+      "\"accountid\":%llu,"
+      "\"displayname\":\"nEVR\","
+      "\"bypassauth\":false,"
+      "\"access_token\":\"\","
+      "\"nonce\":\"\","
+      "\"buildversion\":631547,"
+      "\"lobbyversion\":0,"
+      "\"appid\":0,"
+      "\"publisher_lock\":\"\","
+      "\"hmdserialnumber\":\"nEVR-Wine\","
+      "\"desiredclientprofileversion\":0,"
+      "\"system_info\":{"
+        "\"headset_type\":\"No VR\","
+        "\"driver_version\":\"\","
+        "\"network_type\":\"WireGuard\","
+        "\"video_card\":\"Wine D3D12\","
+        "\"cpu\":\"Wine\","
+        "\"num_physical_cores\":4,"
+        "\"num_logical_cores\":8,"
+        "\"memory_total\":16384,"
+        "\"memory_used\":8192,"
+        "\"dedicated_gpu_memory\":8192"
+      "}"
+    "}",
+    (unsigned long long)accountId);
+
+  size_t jsonLen = strlen(json) + 1;  // include null terminator
+
+  // Build payload: UUID(16) + PlatformCode(8) + AccountId(8) + JSON+null
+  std::string payload;
+  payload.reserve(16 + 8 + 8 + jsonLen);
+  // UUID = all zeros (no previous session)
+  for (int i = 0; i < 16; i++) payload.push_back('\0');
+  AppendLE64(payload, platformCode);
+  AppendLE64(payload, accountId);
+  payload.append(json, jsonLen);
+
+  // Build full message: marker + symbol + length + payload
+  std::string msg;
+  msg.reserve(8 + 8 + 8 + payload.size());
+  msg.append((const char*)MSG_MARKER, 8);
+  AppendLE64(msg, SYM_LOGIN_REQUEST);
+  AppendLE64(msg, payload.size());
+  msg.append(payload);
+
+  return msg;
+}
 
 // ============================================================================
 // Public API
@@ -81,6 +153,7 @@ void InstallWebSocketBridge() {
         switch (msg->type) {
           case ix::WebSocketMessageType::Open: {
             // Game opened a connection — create remote ws to real server
+            int connIdx = g_connectionCount++;
             auto remote = std::make_shared<ix::WebSocket>();
             remote->setUrl(g_remoteUri);
             remote->disableAutomaticReconnection();
@@ -88,6 +161,7 @@ void InstallWebSocketBridge() {
 
             // Attach Bearer token if we have cached credentials
             auto cachedAuth = LoadCachedAuthToken();
+            uint64_t discordId = 695081603180789771ULL;  // TODO: read from JWT `did` claim
             if (cachedAuth.HasValidToken()) {
               ix::WebSocketHttpHeaders headers;
               headers["Authorization"] = "Bearer " + cachedAuth.token;
@@ -103,29 +177,43 @@ void InstallWebSocketBridge() {
 
             // Remote → game forwarding
             remote->setOnMessageCallback(
-                [pairPtr, gameWsPtr](const ix::WebSocketMessagePtr& rmsg) {
+                [pairPtr, gameWsPtr, connIdx, discordId](const ix::WebSocketMessagePtr& rmsg) {
                   switch (rmsg->type) {
                     case ix::WebSocketMessageType::Open: {
                       std::lock_guard<std::mutex> lk(g_pairsMutex);
                       pairPtr->remoteOpen = true;
-                      Log(EchoVR::LogLevel::Info, "[NEVR.WS] Remote open: %s",
-                          g_remoteUri.c_str());
+                      Log(EchoVR::LogLevel::Info, "[NEVR.WS] Remote open (conn=%d): %s",
+                          connIdx, g_remoteUri.c_str());
+
+                      // Inject LoginRequest on login connections (not config)
+                      if (connIdx > 0 && !pairPtr->loginInjected) {
+                        pairPtr->loginInjected = true;
+                        std::string loginMsg = BuildLoginRequest(discordId);
+                        pairPtr->remoteWs->sendBinary(loginMsg);
+                        Log(EchoVR::LogLevel::Info,
+                            "[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)",
+                            (unsigned long long)discordId, loginMsg.size());
+                      }
+
                       for (auto& pending : pairPtr->pendingToRemote) {
                         pairPtr->remoteWs->sendBinary(pending);
                       }
                       pairPtr->pendingToRemote.clear();
                       break;
                     }
-                    case ix::WebSocketMessageType::Message:
-                      // Forward server→game
-                      Log(EchoVR::LogLevel::Info, "[NEVR.WS] server->game: %zu bytes %s",
-                          rmsg->str.size(), rmsg->binary ? "(binary)" : "(text)");
+                    case ix::WebSocketMessageType::Message: {
+                      // Forward server→game — log symbol ID
+                      uint64_t rsym = 0;
+                      if (rmsg->str.size() >= 8) memcpy(&rsym, rmsg->str.data(), 8);
+                      Log(EchoVR::LogLevel::Info, "[NEVR.WS] server->game: %zu bytes sym=0x%016llx",
+                          rmsg->str.size(), (unsigned long long)rsym);
                       if (rmsg->binary) {
                         gameWsPtr->sendBinary(rmsg->str);
                       } else {
                         gameWsPtr->sendText(rmsg->str);
                       }
                       break;
+                    }
                     case ix::WebSocketMessageType::Close:
                       Log(EchoVR::LogLevel::Info, "[NEVR.WS] Remote closed (ws=%p): %d %s",
                           (void*)gameWsPtr, rmsg->closeInfo.code, rmsg->closeInfo.reason.c_str());
@@ -154,13 +242,40 @@ void InstallWebSocketBridge() {
           }
 
           case ix::WebSocketMessageType::Message: {
-            // Game→remote forwarding
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS] game->server: %zu bytes %s (conn=%s, ws=%p)",
-                msg->str.size(), msg->binary ? "(binary)" : "(text)",
-                connState->getId().c_str(), (void*)&gameWs);
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS]   acquiring lock...");
+            // Game→remote forwarding — dump all message symbols in the frame
+            // EchoVR wire format: [marker(8)][symbol(8)][length(8)][payload(length)]...
+            {
+              const uint8_t marker_bytes[] = {0xf6,0x40,0xbb,0x78,0xa2,0xe7,0x8c,0xbb};
+              const uint8_t* p = (const uint8_t*)msg->str.data();
+              size_t remaining = msg->str.size();
+              int msgIdx = 0;
+              while (remaining >= 24) {
+                if (memcmp(p, marker_bytes, 8) != 0) {
+                  Log(EchoVR::LogLevel::Warning, "[NEVR.WS] game->server: bad marker at offset %zu",
+                      msg->str.size() - remaining);
+                  break;
+                }
+                uint64_t sym, len;
+                memcpy(&sym, p + 8, 8);
+                memcpy(&len, p + 16, 8);
+                Log(EchoVR::LogLevel::Info, "[NEVR.WS] game->server [%d]: sym=0x%016llx len=%llu (conn=%s)",
+                    msgIdx, (unsigned long long)sym, (unsigned long long)len,
+                    connState->getId().c_str());
+                size_t total = 24 + (size_t)len;
+                if (total > remaining) {
+                  Log(EchoVR::LogLevel::Warning, "[NEVR.WS]   truncated: need %llu but only %zu remaining",
+                      (unsigned long long)total, remaining);
+                  break;
+                }
+                p += total;
+                remaining -= total;
+                msgIdx++;
+              }
+              if (remaining > 0 && msgIdx > 0) {
+                Log(EchoVR::LogLevel::Info, "[NEVR.WS]   %zu trailing bytes after %d messages", remaining, msgIdx);
+              }
+            }
             std::lock_guard<std::mutex> lk(g_pairsMutex);
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS]   lock acquired, pairs=%zu", g_pairs.size());
             auto it = g_pairs.find(&gameWs);
             if (it != g_pairs.end()) {
               auto& pair = it->second;
