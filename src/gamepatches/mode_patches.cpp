@@ -110,6 +110,16 @@ VOID PatchBypassOvrPlatform() {
 
   ApplyPatch(OVR_BRANCH_OFFSET, nopPatch, sizeof(nopPatch));
 
+  // CR15NetGame::LogInSuccess checks bit 9 (0x200) of the platform capability flags
+  // at game+0x2DA0 before calling the login state update (fcn.1406157c0). pnsovr sets
+  // this bit during initialization; pnsrad does not. NOP the conditional jump so the
+  // login state update runs regardless of which platform plugin is loaded.
+  //   14017f814:  test cl, 0x1     ; bit 9 of platform flags
+  //   14017f817:  je   +0x1e       ; skip login state update
+  constexpr uintptr_t LOGIN_SUCCESS_CAP_CHECK = 0x17f817;
+  const BYTE nop2[] = {0x90, 0x90};
+  ApplyPatch(LOGIN_SUCCESS_CAP_CHECK, nop2, sizeof(nop2));
+
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] OVR platform branch bypassed - allowing normal initialization");
 }
 
