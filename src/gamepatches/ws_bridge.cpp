@@ -4,6 +4,7 @@
 #include <ixwebsocket/IXWebSocket.h>
 #include <ixwebsocket/IXWebSocketServer.h>
 
+#include <atomic>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -43,7 +44,7 @@ struct ProxyPair {
 };
 
 static std::mutex g_pairsMutex;
-static int g_connectionCount = 0;  // tracks connection order (0=config, 1+=login)
+static std::atomic<int> g_connectionCount{0};  // tracks connection order (0=config, 1+=login)
 static std::unordered_map<ix::WebSocket*, std::unique_ptr<ProxyPair>> g_pairs;
 
 // ============================================================================

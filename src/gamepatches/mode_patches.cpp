@@ -110,15 +110,27 @@ VOID PatchBypassOvrPlatform() {
 
   ApplyPatch(OVR_BRANCH_OFFSET, nopPatch, sizeof(nopPatch));
 
-  // CR15NetGame::LogInSuccess checks bit 9 (0x200) of the platform capability flags
-  // at game+0x2DA0 before calling the login state update (fcn.1406157c0). pnsovr sets
-  // this bit during initialization; pnsrad does not. NOP the conditional jump so the
-  // login state update runs regardless of which platform plugin is loaded.
-  //   14017f814:  test cl, 0x1     ; bit 9 of platform flags
+  // CR15NetGame::LogInSuccess checks a platform capability flag before calling the
+  // login state update (fcn.1406157c0). The code loads flags from game+0x2DA0, shifts
+  // right 9, then tests bit 0 — effectively testing bit 9 of the original value.
+  // pnsovr sets this bit; pnsrad does not. NOP the JE so the state update always runs.
+  //   14017f810:  shr rcx, 0x9     ; shift platform flags right 9
+  //   14017f814:  test cl, 0x1     ; test bit 0 of shifted value (= original bit 9)
   //   14017f817:  je   +0x1e       ; skip login state update
-  constexpr uintptr_t LOGIN_SUCCESS_CAP_CHECK = 0x17f817;
-  const BYTE nop2[] = {0x90, 0x90};
-  ApplyPatch(LOGIN_SUCCESS_CAP_CHECK, nop2, sizeof(nop2));
+  // NOTE: Same address as OFFLINE_TRANSACTION_1 — both patches NOP the same JE for
+  // different reasons. The NOP is idempotent.
+  {
+    constexpr uintptr_t LOGIN_CAP_CHECK = PatchAddresses::OFFLINE_TRANSACTION_1;
+    auto* site = (const BYTE*)(EchoVR::g_GameBaseAddress + LOGIN_CAP_CHECK);
+    if (site[0] == 0x74 && site[1] == 0x1E) {
+      const BYTE nop2[] = {0x90, 0x90};
+      ApplyPatch(LOGIN_CAP_CHECK, nop2, sizeof(nop2));
+    } else if (site[0] != 0x90) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] Unexpected bytes at LogInSuccess cap check +0x%x: %02x %02x",
+          (unsigned)LOGIN_CAP_CHECK, site[0], site[1]);
+    }
+  }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] OVR platform branch bypassed - allowing normal initialization");
 }
