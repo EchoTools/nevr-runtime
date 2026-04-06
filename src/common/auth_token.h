@@ -37,6 +37,38 @@ struct CachedAuthToken {
     bool HasValidRefreshToken() const {
         return !refresh_token.empty() && refresh_token_expiry > static_cast<uint64_t>(time(nullptr)) + 60;
     }
+
+    // Extracts the "did" (discord ID) claim from the JWT access token.
+    // Returns 0 if the token is missing, malformed, or has no "did" claim.
+    uint64_t GetDiscordId() const {
+        if (token.empty()) return 0;
+        // JWT = header.payload.signature — decode the payload (second segment)
+        auto dot1 = token.find('.');
+        if (dot1 == std::string::npos) return 0;
+        auto dot2 = token.find('.', dot1 + 1);
+        if (dot2 == std::string::npos) return 0;
+        std::string encoded = token.substr(dot1 + 1, dot2 - dot1 - 1);
+        // Base64url decode (pad to multiple of 4)
+        for (auto& c : encoded) { if (c == '-') c = '+'; if (c == '_') c = '/'; }
+        while (encoded.size() % 4) encoded += '=';
+        static const std::string b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string decoded;
+        uint32_t buf = 0; int bits = 0;
+        for (char c : encoded) {
+            if (c == '=') break;
+            auto pos = b64.find(c);
+            if (pos == std::string::npos) continue;
+            buf = (buf << 6) | (uint32_t)pos;
+            bits += 6;
+            if (bits >= 8) { bits -= 8; decoded.push_back((char)(buf >> bits)); buf &= (1u << bits) - 1; }
+        }
+        try {
+            auto claims = nlohmann::json::parse(decoded);
+            std::string did = claims.value("did", "");
+            if (!did.empty()) return strtoull(did.c_str(), nullptr, 10);
+        } catch (...) {}
+        return 0;
+    }
 };
 
 // Get the directory containing the main executable.
