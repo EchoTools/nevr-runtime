@@ -162,7 +162,7 @@ void InstallWebSocketBridge() {
 
             // Attach Bearer token if we have cached credentials
             auto cachedAuth = LoadCachedAuthToken();
-            uint64_t discordId = 695081603180789771ULL;  // TODO: read from JWT `did` claim
+            uint64_t discordId = cachedAuth.GetDiscordId();
             if (cachedAuth.HasValidToken()) {
               ix::WebSocketHttpHeaders headers;
               headers["Authorization"] = "Bearer " + cachedAuth.token;
