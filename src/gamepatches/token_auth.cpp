@@ -228,7 +228,8 @@ bool DeviceAuth::RunDeviceAuthFlow() {
     DisplayLinkingCode(code);
 
 #ifdef _WIN32
-    ShellExecuteA(NULL, "open", "https://echovrce.com/login/device", NULL, NULL, SW_SHOWNORMAL);
+    std::string loginUrl = "https://echovrce.com/login/device?code=" + code;
+    ShellExecuteA(NULL, "open", loginUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
 #endif
 
     // Poll every 3 seconds for up to 5 minutes.

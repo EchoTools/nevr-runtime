@@ -185,9 +185,50 @@ void InstallWebSocketBridge() {
                       Log(EchoVR::LogLevel::Info, "[NEVR.WS] Remote open (conn=%d): %s",
                           connIdx, g_remoteUri.c_str());
 
-                      // Inject LoginRequest on login connections (not config)
+                      // Inject LoginRequest on login connections (not config).
+                      // pnsrad.dll won't send its own because it has no user identity
+                      // (OVR SDK is bypassed). The LoginRequest is built and injected here.
+                      //
+                      // Before injecting, set the CNSUser's login state to "logging in"
+                      // so that CNSUser::LogInSuccessCB processes the server's LoginSuccess
+                      // response. Without this, LogInSuccessCB silently discards the message
+                      // because the user's login state at +0x90 is still 0 (logged out).
                       if (connIdx > 0 && !pairPtr->loginInjected) {
                         pairPtr->loginInjected = true;
+
+                        // Set CNSUser login state via pnsrad.dll's Users() singleton
+                        HMODULE hPnsrad = GetModuleHandleA("pnsrad");
+                        if (hPnsrad) {
+                          typedef void* (*UsersFn)();
+                          auto Users = (UsersFn)GetProcAddress(hPnsrad, "Users");
+                          if (Users) {
+                            auto* usersObj = (uint8_t*)Users();
+                            if (usersObj) {
+                              // CNSIUsers layout: +0x368 = buffer_ctx (pointer to first user)
+                              // +0x398 = active_user_count
+                              uint64_t userCount = *(uint64_t*)(usersObj + 0x398);
+                              uint8_t** bufCtx = *(uint8_t***)(usersObj + 0x368);
+                              if (userCount > 0 && bufCtx && *bufCtx) {
+                                uint8_t* user = *bufCtx;
+                                // CNSUser +0x90 = login state (low nibble: 0=out, 2=logging in, 6=in)
+                                // CNSUser +0x9c = state flags (bit 2=connecting, bit 4=offline)
+                                uint64_t* loginState = (uint64_t*)(user + 0x90);
+                                uint32_t* stateFlags = (uint32_t*)(user + 0x9c);
+                                Log(EchoVR::LogLevel::Info,
+                                    "[NEVR.WS] CNSUser BEFORE: state=0x%llx flags=0x%x",
+                                    (unsigned long long)*loginState, *stateFlags);
+                                // Set login state to kLoggingIn (2)
+                                *loginState = (*loginState & ~0xFULL) | 2;
+                                // Clear all flags, set only connecting (bit 2)
+                                *stateFlags = 0x04;
+                                Log(EchoVR::LogLevel::Info,
+                                    "[NEVR.WS] CNSUser AFTER:  state=0x%llx flags=0x%x",
+                                    (unsigned long long)*loginState, *stateFlags);
+                              }
+                            }
+                          }
+                        }
+
                         std::string loginMsg = BuildLoginRequest(discordId);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         Log(EchoVR::LogLevel::Info,
@@ -202,11 +243,29 @@ void InstallWebSocketBridge() {
                       break;
                     }
                     case ix::WebSocketMessageType::Message: {
-                      // Forward server→game — log symbol ID
+                      // Forward server→game — log symbol ID (marker@0, symbol@8, length@16)
                       uint64_t rsym = 0;
-                      if (rmsg->str.size() >= 8) memcpy(&rsym, rmsg->str.data(), 8);
-                      Log(EchoVR::LogLevel::Info, "[NEVR.WS] server->game: %zu bytes sym=0x%016llx",
-                          rmsg->str.size(), (unsigned long long)rsym);
+                      uint64_t rlen = 0;
+                      if (rmsg->str.size() >= 24) {
+                        memcpy(&rsym, rmsg->str.data() + 8, 8);
+                        memcpy(&rlen, rmsg->str.data() + 16, 8);
+                      }
+                      Log(EchoVR::LogLevel::Info, "[NEVR.WS] server->game: %zu bytes sym=0x%016llx payloadLen=%llu",
+                          rmsg->str.size(), (unsigned long long)rsym, (unsigned long long)rlen);
+                      // Decode LoginFailure error message (sym 0xa5b9d5a3021ccf51)
+                      if (rsym == 0xa5b9d5a3021ccf51 && rmsg->str.size() > 48) {
+                        // payload: PlatformCode(8) + AccountId(8) + StatusCode(8) + ErrorMsg\0
+                        uint64_t statusCode = 0;
+                        memcpy(&statusCode, rmsg->str.data() + 24 + 16, 8);
+                        const char* errMsg = rmsg->str.data() + 24 + 24;
+                        size_t errMaxLen = rmsg->str.size() - 48;
+                        Log(EchoVR::LogLevel::Warning, "[NEVR.WS] LOGIN FAILURE: status=%llu msg=%.*s",
+                            (unsigned long long)statusCode, (int)errMaxLen, errMsg);
+                      }
+                      // Decode LoginSuccess (sym 0xa5acc1a90d0cce47)
+                      if (rsym == 0xa5acc1a90d0cce47) {
+                        Log(EchoVR::LogLevel::Info, "[NEVR.WS] LOGIN SUCCESS");
+                      }
                       if (rmsg->binary) {
                         gameWsPtr->sendBinary(rmsg->str);
                       } else {
