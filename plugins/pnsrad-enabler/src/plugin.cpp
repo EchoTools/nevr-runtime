@@ -61,6 +61,28 @@ static constexpr uint8_t   OVR_JNE_EXPECTED[] = {0x0F, 0x85, 0xC7, 0x00, 0x00, 0
 static constexpr uintptr_t PNSRAD_LOGIN_CHECK = 0x85b53;
 static constexpr uint8_t   PNSRAD_JNE_EXPECTED[] = {0x75, 0x1f};
 
+// pnsrad.dll LoginIdResponseCB state check — JE at FUN_18008f140+0x76
+// LoginIdResponseCB checks bit 0x08 at user+0x9c ("authenticated" state flag).
+// Without this patch, the callback silently discards LoginSettings/GameSettings
+// because the externally injected LoginRequest bypasses pnsrad's state machine
+// (which would normally set bit 0x04 via LoginRequest, then echovr.exe sets
+// bit 0x08 via LogInSuccess). NOP the JE so the callback processes GameSettings.
+//   18008f1af:  test   BYTE PTR [rcx+0x9c], 0x08
+//   18008f1b6:  je     0x18008f334  (skip handler)
+static constexpr uintptr_t PNSRAD_LOGIN_STATE_CHECK = 0x8f1b6;
+static constexpr uint8_t   PNSRAD_STATE_JE_EXPECTED[] = {0x0F, 0x84, 0x78, 0x01, 0x00, 0x00};
+
+// pnsrad.dll LogInSuccessCB session/identity guard — JNE at FUN_18008eea0+0x85
+// LogInSuccessCB compares the XPID (platform+account) in the LoginSuccess payload
+// against the locally-stored user identity. Since no OVR SDK populates the local
+// identity, the comparison fails and the callback silently drops the message.
+// NOP the JNE so LogInSuccessCB processes LoginSuccess regardless of identity match.
+//   18008ef1d:  call   0x18008dcd0   ; compare session/identity
+//   18008ef22:  test   rax, rax
+//   18008ef25:  jne    0x18008efc7   (skip handler — NOP this)
+static constexpr uintptr_t PNSRAD_LOGIN_IDENTITY_CHECK = 0x8ef25;
+static constexpr uint8_t   PNSRAD_IDENTITY_JNE_EXPECTED[] = {0x0F, 0x85, 0x9C, 0x00, 0x00, 0x00};
+
 #ifdef _WIN32
 
 static bool PatchMemory(void* addr, const void* data, size_t len) {
@@ -125,6 +147,41 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
         } else {
             Log("WARN: unexpected bytes at pnsrad.dll +0x%x: %02x %02x (expected 75 1f)",
                 (unsigned)PNSRAD_LOGIN_CHECK, patch_site[0], patch_site[1]);
+        }
+
+        // Patch 5: NOP the identity guard in LogInSuccessCB so it processes
+        // LoginSuccess even when the local user identity is uninitialized.
+        {
+            auto* id_site = reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_IDENTITY_CHECK);
+            if (std::memcmp(id_site, PNSRAD_IDENTITY_JNE_EXPECTED, sizeof(PNSRAD_IDENTITY_JNE_EXPECTED)) == 0) {
+                uint8_t nops6[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+                if (PatchMemory(id_site, nops6, sizeof(nops6))) {
+                    Log("patched pnsrad.dll LogInSuccessCB identity guard at +0x%x (JNE -> NOP)", (unsigned)PNSRAD_LOGIN_IDENTITY_CHECK);
+                } else {
+                    Log("WARN: VirtualProtect failed for LogInSuccessCB identity guard");
+                }
+            } else {
+                Log("WARN: unexpected bytes at pnsrad.dll +0x%x: %02x %02x %02x %02x %02x %02x",
+                    (unsigned)PNSRAD_LOGIN_IDENTITY_CHECK,
+                    id_site[0], id_site[1], id_site[2], id_site[3], id_site[4], id_site[5]);
+            }
+        }
+
+        // Patch 6: NOP the state flag check in LoginIdResponseCB so it processes
+        // GameSettings even when the injected LoginRequest bypasses pnsrad's state machine.
+        auto* state_site = reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_STATE_CHECK);
+        if (std::memcmp(state_site, PNSRAD_STATE_JE_EXPECTED, sizeof(PNSRAD_STATE_JE_EXPECTED)) == 0) {
+            uint8_t nops6[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+            if (PatchMemory(state_site, nops6, sizeof(nops6))) {
+                Log("patched pnsrad.dll login state check at +0x%x (JE -> NOP)", (unsigned)PNSRAD_LOGIN_STATE_CHECK);
+            } else {
+                Log("WARN: VirtualProtect failed for pnsrad.dll login state check");
+            }
+        } else {
+            Log("WARN: unexpected bytes at pnsrad.dll +0x%x: %02x %02x %02x %02x %02x %02x",
+                (unsigned)PNSRAD_LOGIN_STATE_CHECK,
+                state_site[0], state_site[1], state_site[2],
+                state_site[3], state_site[4], state_site[5]);
         }
     }
 }
