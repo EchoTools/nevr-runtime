@@ -1,6 +1,7 @@
 /* SYNTHESIS -- custom tool code, not from binary */
 
-#include "builtin_token_auth.h"
+#include "token_auth.h"
+#include "config.h"
 #include "common/logging.h"
 
 #include "common/auth_token.h"
@@ -10,15 +11,8 @@
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 
-#include <atomic>
-#include <cstdio>
-#include <cstring>
 #include <ctime>
-#include <fstream>
-#include <mutex>
-#include <sstream>
 #include <string>
-#include <thread>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -28,16 +22,6 @@
 #include <shellapi.h>
 #endif
 
-// Build-time defaults from CMake — overridable via config.yaml at runtime.
-#ifndef NEVR_API_URL
-#define NEVR_API_URL ""
-#endif
-#ifndef NEVR_HTTP_KEY
-#define NEVR_HTTP_KEY ""
-#endif
-#ifndef NEVR_SERVER_KEY
-#define NEVR_SERVER_KEY ""
-#endif
 
 namespace {
 
@@ -244,7 +228,8 @@ bool DeviceAuth::RunDeviceAuthFlow() {
     DisplayLinkingCode(code);
 
 #ifdef _WIN32
-    ShellExecuteA(NULL, "open", "https://echovrce.com/login/device", NULL, NULL, SW_SHOWNORMAL);
+    std::string loginUrl = "https://echovrce.com/login/device?code=" + code;
+    ShellExecuteA(NULL, "open", loginUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
 #endif
 
     // Poll every 3 seconds for up to 5 minutes.
@@ -289,12 +274,9 @@ bool DeviceAuth::RunDeviceAuthFlow() {
 
 static DeviceAuth* s_auth = nullptr;
 static bool s_authAttempted = false;
-static std::thread s_pollThread;
-static std::atomic<bool> s_pollComplete{false};
-static std::atomic<bool> s_pollResult{false};
 
-// Load config values. Uses build-time macro defaults, overridden by
-// _local/token_auth_config.yaml if present (same search-path logic as plugins).
+// Read config from the already-loaded early config (g_earlyConfigPtr).
+// LoadEarlyConfig() in config.cpp handles the search-path logic.
 struct AuthConfig {
     std::string url;
     std::string httpKey;
@@ -303,48 +285,17 @@ struct AuthConfig {
 
 static AuthConfig LoadAuthConfig() {
     AuthConfig cfg;
-    cfg.url = NEVR_API_URL;
-    cfg.httpKey = NEVR_HTTP_KEY;
-    cfg.serverKey = NEVR_SERVER_KEY;
 
-    // Try JSON config override (_local/config.json next to exe, or parent dirs)
-    const std::string searchPaths[] = {
-        "_local/config.json",
-        "..\\_local\\config.json",
-        "..\\..\\_local\\config.json",
-        "../_local/config.json",
-        "../../_local/config.json",
-    };
-
-    for (const auto& path : searchPaths) {
-        std::ifstream f(path, std::ios::in | std::ios::binary);
-        if (f.is_open()) {
-            std::ostringstream ss;
-            ss << f.rdbuf();
-            try {
-                auto j = nlohmann::json::parse(ss.str());
-                if (j.contains("nevr_url")) cfg.url = j["nevr_url"].get<std::string>();
-                if (j.contains("nevr_http_key")) cfg.httpKey = j["nevr_http_key"].get<std::string>();
-                if (j.contains("nevr_server_key")) cfg.serverKey = j["nevr_server_key"].get<std::string>();
-                Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Loaded config overrides from %s", path.c_str());
-            } catch (...) {}
-            break;
-        }
+    if (g_earlyConfigPtr) {
+        CHAR* url = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_http_uri", NULL, false);
+        CHAR* key = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_http_key", NULL, false);
+        CHAR* skey = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_server_key", NULL, false);
+        if (url) cfg.url = url;
+        if (key) cfg.httpKey = key;
+        if (skey) cfg.serverKey = skey;
     }
 
     return cfg;
-}
-
-// Background thread entry point for the device auth polling loop.
-static void DeviceAuthThreadFunc(DeviceAuth* auth) {
-    bool result = auth->RunDeviceAuthFlow();
-    s_pollResult.store(result, std::memory_order_release);
-    s_pollComplete.store(true, std::memory_order_release);
-    if (result) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Authenticated via Discord");
-    } else {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Authentication failed -- social features may be limited");
-    }
 }
 
 } // anonymous namespace
@@ -353,7 +304,7 @@ static void DeviceAuthThreadFunc(DeviceAuth* auth) {
 // Public API
 // ---------------------------------------------------------------------------
 
-void BuiltinTokenAuth::Init(uintptr_t /*base_addr*/, bool is_server) {
+void TokenAuth::Init(uintptr_t /*base_addr*/, bool is_server) {
     // Servers use password auth, not device code
     if (is_server) {
         Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Running in server mode -- token auth disabled");
@@ -362,7 +313,7 @@ void BuiltinTokenAuth::Init(uintptr_t /*base_addr*/, bool is_server) {
 
     AuthConfig cfg = LoadAuthConfig();
     if (cfg.url.empty() || cfg.httpKey.empty()) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Missing nevr_url or nevr_http_key -- token auth disabled");
+        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Missing nevr_http_uri or nevr_http_key -- token auth disabled");
         return;
     }
 
@@ -373,28 +324,22 @@ void BuiltinTokenAuth::Init(uintptr_t /*base_addr*/, bool is_server) {
     if (s_auth->TryLoadCachedToken()) {
         Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Using cached credentials -- no login needed");
         s_authAttempted = true;
+        return;
+    }
+
+    // No cached credentials — run device auth now, before game connections start.
+    s_authAttempted = true;
+    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] No cached credentials — starting device code auth...");
+    if (s_auth->RunDeviceAuthFlow()) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Authenticated via Discord");
+    } else {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Authentication failed -- social features may be limited");
     }
 }
 
-void BuiltinTokenAuth::OnGameStateChange(uint32_t /*old_state*/, uint32_t new_state) {
-    if (!s_auth || s_authAttempted) return;
-    if (new_state != 5) return;  // NetGameState::Lobby == 5
-
-    s_authAttempted = true;
-    s_pollComplete.store(false, std::memory_order_release);
-
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Starting device code authentication (Discord OAuth)...");
-
-    // Run the polling loop on a background thread so we don't block the game
-    // for up to 5 minutes while waiting for user authorization.
-    s_pollThread = std::thread(DeviceAuthThreadFunc, s_auth);
-    s_pollThread.detach();
-}
-
-void BuiltinTokenAuth::Shutdown() {
-    // Do NOT delete s_auth — the detached poll thread may still hold a raw
-    // pointer to it. Leaking intentionally; process is exiting anyway.
+void TokenAuth::Shutdown() {
+    delete s_auth;
+    s_auth = nullptr;
     s_authAttempted = false;
-    s_pollComplete.store(false, std::memory_order_relaxed);
     Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Shutdown complete");
 }

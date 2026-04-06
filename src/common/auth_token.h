@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <cstdint>
+#include <cstring>
 #include <ctime>
 #include <fstream>
 #include <sstream>
@@ -38,26 +39,24 @@ struct CachedAuthToken {
     }
 };
 
-// Search paths for _local/.credentials.json (supports nested directory layouts).
-static constexpr const char* kAuthJsonPaths[] = {
-    "_local/.credentials.json",
-    "..\\_local\\.credentials.json",
-    "..\\..\\_local\\.credentials.json",
-    "../_local/.credentials.json",
-    "../../_local/.credentials.json",
-};
+// Get the directory containing the main executable.
+// All _local/ paths are resolved relative to this.
+inline std::string GetExeDirectory() {
+#ifdef _WIN32
+    char path[MAX_PATH] = {0};
+    GetModuleFileNameA(NULL, path, MAX_PATH);
+    // Strip filename, keep directory
+    char* last = strrchr(path, '\\');
+    if (!last) last = strrchr(path, '/');
+    if (last) *(last + 1) = '\0';
+    return std::string(path);
+#else
+    return "";  // Non-Windows: use CWD
+#endif
+}
 
-// Search paths for _local/ directory (for saving).
-static constexpr const char* kLocalDirProbes[] = {
-    "_local/config.json",
-    "..\\_local\\config.json",
-    "..\\..\\_local\\config.json",
-    "../_local/config.json",
-    "../../_local/config.json",
-};
-
-// Corresponding directory paths for each probe.
-static constexpr const char* kLocalDirs[] = {
+// Relative suffixes to search for _local/ from the exe directory (and parents).
+static constexpr const char* kLocalSuffixes[] = {
     "_local",
     "..\\_local",
     "..\\..\\_local",
@@ -65,17 +64,15 @@ static constexpr const char* kLocalDirs[] = {
     "../../_local",
 };
 
-static_assert(sizeof(kLocalDirProbes) / sizeof(kLocalDirProbes[0]) ==
-              sizeof(kLocalDirs) / sizeof(kLocalDirs[0]),
-              "kLocalDirProbes and kLocalDirs must have the same length");
-
-// Reads _local/.credentials.json with parent-directory fallback.
+// Reads _local/.credentials.json relative to the executable, with parent-directory fallback.
 // Returns empty token on missing file, parse failure, or malformed data.
 // Does NOT validate expiry — caller decides whether to use token or refresh.
 inline CachedAuthToken LoadCachedAuthToken() {
     std::string contents;
-    for (const auto* p : kAuthJsonPaths) {
-        std::ifstream f(p, std::ios::binary);
+    std::string exeDir = GetExeDirectory();
+    for (const auto* suffix : kLocalSuffixes) {
+        std::string path = exeDir + suffix + "/.credentials.json";
+        std::ifstream f(path, std::ios::binary);
         if (f.is_open()) {
             std::ostringstream ss;
             ss << f.rdbuf();
@@ -109,19 +106,21 @@ inline CachedAuthToken LoadCachedAuthToken() {
 inline bool SaveAuthToken(const CachedAuthToken& auth) {
     if (auth.token.empty()) return false;
 
-    // Find existing _local/ dir
+    // Find existing _local/ dir relative to executable
+    std::string exeDir = GetExeDirectory();
     std::string target_dir;
-    for (size_t i = 0; i < sizeof(kLocalDirProbes) / sizeof(kLocalDirProbes[0]); ++i) {
-        if (std::ifstream(kLocalDirProbes[i]).is_open()) {
-            target_dir = kLocalDirs[i];
+    for (const auto* suffix : kLocalSuffixes) {
+        std::string probe = exeDir + suffix + "/config.json";
+        if (std::ifstream(probe).is_open()) {
+            target_dir = exeDir + suffix;
             break;
         }
     }
     if (target_dir.empty()) {
+        target_dir = exeDir + "_local";
 #ifdef _WIN32
-        _mkdir("_local");
+        _mkdir(target_dir.c_str());
 #endif
-        target_dir = "_local";
     }
 
     std::string path = target_dir + "/.credentials.json";
