@@ -163,6 +163,10 @@ void InstallWebSocketBridge() {
             // Attach Bearer token if we have cached credentials
             auto cachedAuth = LoadCachedAuthToken();
             uint64_t discordId = cachedAuth.GetDiscordId();
+            if (discordId == 0) {
+              Log(EchoVR::LogLevel::Warning,
+                  "[NEVR.WS] No discord ID in JWT — LoginRequest will use account ID 0");
+            }
             if (cachedAuth.HasValidToken()) {
               ix::WebSocketHttpHeaders headers;
               headers["Authorization"] = "Bearer " + cachedAuth.token;
@@ -198,7 +202,7 @@ void InstallWebSocketBridge() {
                         pairPtr->loginInjected = true;
 
                         // Set CNSUser login state via pnsrad.dll's Users() singleton
-                        HMODULE hPnsrad = GetModuleHandleA("pnsrad");
+                        HMODULE hPnsrad = GetModuleHandleA("pnsrad.dll");
                         if (hPnsrad) {
                           typedef void* (*UsersFn)();
                           auto Users = (UsersFn)GetProcAddress(hPnsrad, "Users");
@@ -290,12 +294,12 @@ void InstallWebSocketBridge() {
                   }
                 });
 
-            remote->start();
-
             {
               std::lock_guard<std::mutex> lk(g_pairsMutex);
               g_pairs[gameWsPtr] = std::move(pair);
             }
+            // Start after insertion so the remote callback can find the pair in g_pairs
+            remote->start();
             Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%s, ws=%p), bridging to %s",
                 connState->getId().c_str(), (void*)gameWsPtr, g_remoteUri.c_str());
             break;
