@@ -23,6 +23,20 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   LoadEarlyConfig();
   InstallResourceOverride();
 
+  // Early-detect -server before auth — full CLI parse happens below.
+  // TokenAuth::Init needs to know server mode to skip device code flow.
+  {
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    for (int i = 0; i < argc; ++i) {
+      if (lstrcmpW(argv[i], L"-server") == 0) {
+        g_isServer = TRUE;
+        break;
+      }
+    }
+    LocalFree(argv);
+  }
+
   // Authenticate before any game connections. Device code auth blocks until
   // the user authorizes via Discord or the flow times out.
   TokenAuth::Init((uintptr_t)EchoVR::g_GameBaseAddress, g_isServer);
