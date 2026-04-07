@@ -14,7 +14,7 @@
 
 #include "common/echovr_functions.h"
 #include "common/logging.h"
-#include "common/auth_token.h"
+#include "token_auth.h"
 
 // ============================================================================
 // In-process WebSocket TLS proxy
@@ -160,16 +160,16 @@ void InstallWebSocketBridge() {
             remote->disableAutomaticReconnection();
             remote->disablePerMessageDeflate();
 
-            // Attach Bearer token if we have cached credentials
-            auto cachedAuth = LoadCachedAuthToken();
-            uint64_t discordId = cachedAuth.GetDiscordId();
+            // Get auth token from TokenAuth (refreshed in background)
+            std::string bearerToken = TokenAuth::GetToken();
+            uint64_t discordId = TokenAuth::GetDiscordId();
             if (discordId == 0) {
               Log(EchoVR::LogLevel::Warning,
                   "[NEVR.WS] No discord ID in JWT — LoginRequest will use account ID 0");
             }
-            if (cachedAuth.HasValidToken()) {
+            if (!bearerToken.empty()) {
               ix::WebSocketHttpHeaders headers;
-              headers["Authorization"] = "Bearer " + cachedAuth.token;
+              headers["Authorization"] = "Bearer " + bearerToken;
               remote->setExtraHeaders(headers);
               Log(EchoVR::LogLevel::Info, "[NEVR.WS] Attaching Bearer token to remote connection");
             }
