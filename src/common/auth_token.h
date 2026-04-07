@@ -64,7 +64,15 @@ struct CachedAuthToken {
         }
         try {
             auto claims = nlohmann::json::parse(decoded);
-            std::string did = claims.value("did", "");
+            // Nakama stores custom claims in the "vrs" (vars) map
+            std::string did;
+            if (claims.contains("vrs") && claims["vrs"].is_object()) {
+                did = claims["vrs"].value("did", "");
+            }
+            // Fallback: check top-level "did" for compatibility
+            if (did.empty()) {
+                did = claims.value("did", "");
+            }
             if (!did.empty()) return strtoull(did.c_str(), nullptr, 10);
         } catch (...) {}
         return 0;
