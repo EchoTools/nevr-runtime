@@ -288,6 +288,37 @@ void InstallWebSocketBridge() {
                       if (rsym == 0xa5acc1a90d0cce47) {
                         Log(EchoVR::LogLevel::Info, "[NEVR.WS] LOGIN SUCCESS");
                       }
+                      // Decode SNS friend messages
+                      // InviteFailure (0x7f197e30c72c6e61): Header(8)+FriendID(8)+StatusCode(1)
+                      if (rsym == 0x7f197e30c72c6e61 && rmsg->str.size() >= 24 + 17) {
+                        uint64_t friendId = 0;
+                        uint8_t statusCode = 0;
+                        memcpy(&friendId, rmsg->str.data() + 24 + 8, 8);
+                        statusCode = (uint8_t)rmsg->str.data()[24 + 16];
+                        Log(EchoVR::LogLevel::Warning,
+                            "[NEVR.WS] FRIEND INVITE FAILURE: friendId=%llu status=%u",
+                            (unsigned long long)friendId, statusCode);
+                      }
+                      // InviteSuccess (0x7f0c6a3ac83c6f77): Header(8)+FriendID(8)
+                      if (rsym == 0x7f0c6a3ac83c6f77 && rmsg->str.size() >= 24 + 16) {
+                        uint64_t friendId = 0;
+                        memcpy(&friendId, rmsg->str.data() + 24 + 8, 8);
+                        Log(EchoVR::LogLevel::Info,
+                            "[NEVR.WS] FRIEND INVITE SUCCESS: friendId=%llu",
+                            (unsigned long long)friendId);
+                      }
+                      // FriendListResponse (0xa78aeb2a4e89b10b): counts
+                      if (rsym == 0xa78aeb2a4e89b10b && rmsg->str.size() >= 24 + 0x20) {
+                        uint32_t noff, nbusy, non, nsent, nrecv;
+                        memcpy(&noff, rmsg->str.data() + 24 + 8, 4);
+                        memcpy(&nbusy, rmsg->str.data() + 24 + 12, 4);
+                        memcpy(&non, rmsg->str.data() + 24 + 16, 4);
+                        memcpy(&nsent, rmsg->str.data() + 24 + 20, 4);
+                        memcpy(&nrecv, rmsg->str.data() + 24 + 24, 4);
+                        Log(EchoVR::LogLevel::Info,
+                            "[NEVR.WS] FRIEND LIST: online=%u busy=%u offline=%u sent=%u recv=%u",
+                            non, nbusy, noff, nsent, nrecv);
+                      }
                       if (rmsg->binary) {
                         gameWsPtr->sendBinary(rmsg->str);
                       } else {
@@ -342,6 +373,22 @@ void InstallWebSocketBridge() {
                 Log(EchoVR::LogLevel::Info, "[NEVR.WS] game->server [%d]: sym=0x%016llx len=%llu (conn=%s)",
                     msgIdx, (unsigned long long)sym, (unsigned long long)len,
                     connState->getId().c_str());
+                // Decode outgoing SNS friend messages
+                // FriendInviteRequest (0x7f0d7a28de3c6f70): RoutingID(8)+UUID(16)+SessionGUID(8)+TargetUserID(8)
+                if (sym == 0x7f0d7a28de3c6f70 && len >= 0x28) {
+                  uint64_t routingId, sessionGuid, targetUserId;
+                  memcpy(&routingId, p + 24, 8);
+                  memcpy(&sessionGuid, p + 24 + 24, 8);
+                  memcpy(&targetUserId, p + 24 + 32, 8);
+                  Log(EchoVR::LogLevel::Info,
+                      "[NEVR.WS]   FriendInvite: routing=%llu target=%llu session=%llu",
+                      (unsigned long long)routingId, (unsigned long long)targetUserId,
+                      (unsigned long long)sessionGuid);
+                }
+                // FriendListSubscribe (0xdcfa94680e8d19fc)
+                if (sym == 0xdcfa94680e8d19fc) {
+                  Log(EchoVR::LogLevel::Info, "[NEVR.WS]   FriendListSubscribeRequest sent");
+                }
                 size_t total = 24 + (size_t)len;
                 if (total > remaining) {
                   Log(EchoVR::LogLevel::Warning, "[NEVR.WS]   truncated: need %llu but only %zu remaining",
