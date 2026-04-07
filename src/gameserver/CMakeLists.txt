@@ -25,9 +25,10 @@ target_include_directories(
           ${CMAKE_BINARY_DIR}
           "${CMAKE_SOURCE_DIR}/src/common"
           "${CMAKE_SOURCE_DIR}"
+          "${CMAKE_SOURCE_DIR}/plugins/common/include"
 )
 
-target_link_libraries(gameserver PRIVATE common nevr_api ws2_32 ixwebsocket::ixwebsocket miniupnpc::miniupnpc)
+target_link_libraries(gameserver PRIVATE common nevr_api ws2_32 ixwebsocket::ixwebsocket miniupnpc::miniupnpc CURL::libcurl nlohmann_json::nlohmann_json)
 
 # Set output name to remove 'lib' prefix on MinGW
 set_target_properties(gameserver PROPERTIES
@@ -46,6 +47,10 @@ find_package(ixwebsocket CONFIG REQUIRED)
 
 # Link miniupnpc for UPnP port forwarding
 find_package(miniupnpc CONFIG REQUIRED)
+
+# curl and nlohmann/json for server key auth
+find_package(CURL REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 # Disable PCH for websocket_client.cpp, telemetry_streamer.cpp, and upnp.cpp to avoid Windows.h macro pollution
 set_source_files_properties(websocket_client.cpp telemetry_streamer.cpp upnp.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

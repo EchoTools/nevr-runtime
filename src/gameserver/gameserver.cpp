@@ -5,12 +5,16 @@
 #include <string>
 #include <thread>
 
+#include <curl/curl.h>
+#include <nlohmann/json.hpp>
+
 #include "auth_token.h"
 #include "constants.h"
 #include "echovr.h"
 #include "echovr_functions.h"
 #include "globals.h"
 #include "messages.h"
+#include "nevr_curl.h"
 #include "pch.h"
 #include "upnp.h"
 #include "gameservice/v1/gameservice.pb.h"
@@ -1090,6 +1094,78 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
   }).detach();
 }
 
+// Authenticate the server with Nakama using device identity + server key.
+// Returns a Bearer JWT token, or empty string on failure.
+static std::string AuthenticateServer(const EchoVR::Json* config) {
+    CHAR* httpUri = EchoVR::JsonValueAsString(
+        const_cast<EchoVR::Json*>(config),
+        const_cast<CHAR*>("nevr_http_uri"), NULL, false);
+    CHAR* serverKey = EchoVR::JsonValueAsString(
+        const_cast<EchoVR::Json*>(config),
+        const_cast<CHAR*>("nevr_server_key"), NULL, false);
+
+    if (!httpUri || !serverKey || httpUri[0] == '\0' || serverKey[0] == '\0') {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.GAMESERVER] Missing nevr_http_uri or nevr_server_key — cannot authenticate");
+        return "";
+    }
+
+    // Use hostname as stable device ID
+    char hostname[256] = {0};
+    DWORD len = sizeof(hostname);
+    GetComputerNameA(hostname, &len);
+
+    // POST /v2/account/authenticate/device?create=true
+    // Basic auth: serverKey:""
+    std::string url = std::string(httpUri) + "/v2/account/authenticate/device?create=true";
+    nlohmann::json body;
+    body["id"] = std::string("server-") + hostname;
+
+    CURL* curl = curl_easy_init();
+    if (!curl) return "";
+
+    std::string response;
+    std::string postData = body.dump();
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postData.c_str());
+    curl_easy_setopt(curl, CURLOPT_USERNAME, serverKey);
+    curl_easy_setopt(curl, CURLOPT_PASSWORD, "");
+    curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nevr::CurlWriteCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+#ifdef NEVR_INSECURE_SKIP_TLS_VERIFY
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+#endif
+
+    CURLcode res = curl_easy_perform(curl);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.GAMESERVER] Server auth failed: %s", curl_easy_strerror(res));
+        return "";
+    }
+
+    try {
+        auto j = nlohmann::json::parse(response);
+        std::string token = j.value("token", "");
+        if (!token.empty()) {
+            Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Server authenticated successfully");
+        }
+        return token;
+    } catch (...) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.GAMESERVER] Server auth response parse error");
+        return "";
+    }
+}
+
 VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId regionId, EchoVR::SymbolId versionLock,
                                         const EchoVR::Json* localConfig) {
   // Update session state
@@ -1110,6 +1186,9 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   if (auth.HasValidToken()) {
     wsToken = auth.token;
     Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Using cached auth token for ServerDB");
+  } else {
+    // No cached client token — authenticate as a server
+    wsToken = AuthenticateServer(localConfig);
   }
 
   // Connect to serverdb via WebSocketClient (avoids TcpBroadcasterListen vtable ABI crash)
