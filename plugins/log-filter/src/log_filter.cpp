@@ -622,6 +622,8 @@ bool InstallLogFilterHook(uintptr_t base_addr) {
     /* Initialize file logging if configured */
     InitFileLogging();
 
+    MH_Initialize();
+
     auto* target = nevr::ResolveVA(base_addr, nevr::addresses::VA_CLOG_PRINTF_IMPL);
     MH_STATUS status = MH_CreateHook(target,
                                       reinterpret_cast<void*>(&hook_PrintfImpl),
