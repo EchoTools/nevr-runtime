@@ -90,7 +90,7 @@ bool DeviceAuth::TryLoadCachedToken() {
 
     if (auth.HasValidRefreshToken() && m_configured) {
         Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Access token expired, attempting refresh...");
-        if (RefreshAuthToken(auth, m_url, m_serverKey)) {
+        if (RefreshAuthToken(auth, m_url, m_httpKey)) {
             m_token = auth.token;
             m_tokenExpiry = auth.token_expiry;
             m_refreshToken = auth.refresh_token;
@@ -306,7 +306,7 @@ static AuthConfig LoadAuthConfig() {
 
 } // anonymous namespace
 
-static void RefreshThreadFunc(std::string url, std::string serverKey) {
+static void RefreshThreadFunc(std::string url, std::string httpKey) {
     while (s_refreshRunning) {
         // Sleep 60 seconds between checks
         for (int i = 0; i < 60 && s_refreshRunning; i++) {
@@ -336,7 +336,7 @@ static void RefreshThreadFunc(std::string url, std::string serverKey) {
         }
 
         if (cached.HasValidRefreshToken()) {
-            if (RefreshAuthToken(cached, url, serverKey)) {
+            if (RefreshAuthToken(cached, url, httpKey)) {
                 Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Token refreshed successfully");
             } else {
                 Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Token refresh failed");
@@ -395,9 +395,9 @@ void TokenAuth::Init(uintptr_t /*base_addr*/, bool is_server) {
     }
 
     // Start background refresh thread (both cached and fresh auth paths)
-    if (s_auth->IsAuthenticated() && !cfg.serverKey.empty()) {
+    if (s_auth->IsAuthenticated() && !cfg.httpKey.empty()) {
         s_refreshRunning = true;
-        s_refreshThread = new std::thread(RefreshThreadFunc, cfg.url, cfg.serverKey);
+        s_refreshThread = new std::thread(RefreshThreadFunc, cfg.url, cfg.httpKey);
     }
 }
 

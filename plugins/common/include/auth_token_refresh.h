@@ -11,29 +11,25 @@
 #include <vector>
 
 // Refresh an expired access token using the refresh token.
-// Calls Nakama's SessionRefresh endpoint with Basic auth (server_key).
+// Calls the custom device/auth/refresh RPC (not the standard Nakama session
+// refresh, which uses a different signing key and requires session cache).
 // On success, updates auth in-place and saves to disk. Returns true on success.
 inline bool RefreshAuthToken(CachedAuthToken& auth,
                              const std::string& nakama_url,
-                             const std::string& server_key) {
+                             const std::string& http_key) {
     if (auth.refresh_token.empty()) return false;
 
     CURL* curl = curl_easy_init();
     if (!curl) return false;
 
-    std::string url = nakama_url + "/v2/account/session/refresh";
+    std::string url = nakama_url + "/v2/rpc/device/auth/refresh?http_key=" + http_key;
     nlohmann::json body;
     body["token"] = auth.refresh_token;
 
     std::string post_data = body.dump();
     std::string response;
 
-    // Nakama requires Basic auth with server key for session refresh
-    // Nakama requires Basic auth with server key for session refresh.
-    // Use curl's built-in Basic auth (handles base64 encoding internally).
-    curl_easy_setopt(curl, CURLOPT_USERNAME, server_key.c_str());
-    curl_easy_setopt(curl, CURLOPT_PASSWORD, "");
-    curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+    // No Basic auth needed — the RPC uses http_key in the query param
 
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
