@@ -1143,6 +1143,8 @@ static std::string AuthenticateServer(const EchoVR::Json* config) {
 #endif
 
     CURLcode res = curl_easy_perform(curl);
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
 
@@ -1152,10 +1154,20 @@ static std::string AuthenticateServer(const EchoVR::Json* config) {
         return "";
     }
 
+    if (http_code != 200) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.GAMESERVER] Server auth HTTP %ld: %s", http_code,
+            response.empty() ? "(empty)" : response.substr(0, 200).c_str());
+        return "";
+    }
+
     try {
         auto j = nlohmann::json::parse(response);
         std::string token = j.value("token", "");
-        if (!token.empty()) {
+        if (token.empty()) {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.GAMESERVER] Server auth returned empty token");
+        } else {
             Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Server authenticated successfully");
         }
         return token;
