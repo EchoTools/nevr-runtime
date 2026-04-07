@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "config.h"
 #include "common/echovr_functions.h"
 #include "common/logging.h"
 #include "token_auth.h"
@@ -156,7 +157,23 @@ void InstallWebSocketBridge() {
             // Game opened a connection — create remote ws to real server
             int connIdx = g_connectionCount++;
             auto remote = std::make_shared<ix::WebSocket>();
-            remote->setUrl(g_remoteUri);
+
+            // Build remote URL with optional query param auth
+            // (workaround: production nginx strips Bearer JWT and forces format=evr)
+            std::string remoteUrl = g_remoteUri;
+            if (g_earlyConfigPtr) {
+              CHAR* cfgDiscordId = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_discord_id", NULL, false);
+              CHAR* cfgPassword = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_password", NULL, false);
+              if (cfgDiscordId && cfgDiscordId[0] != '\0' && cfgPassword && cfgPassword[0] != '\0') {
+                char sep = (remoteUrl.find('?') != std::string::npos) ? '&' : '?';
+                remoteUrl += sep;
+                remoteUrl += "discordid=";
+                remoteUrl += cfgDiscordId;
+                remoteUrl += "&password=";
+                remoteUrl += cfgPassword;
+              }
+            }
+            remote->setUrl(remoteUrl);
             remote->disableAutomaticReconnection();
             remote->disablePerMessageDeflate();
 
