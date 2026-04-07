@@ -327,8 +327,13 @@ static void RefreshThreadFunc(std::string url, std::string serverKey) {
         uint64_t now = static_cast<uint64_t>(time(nullptr));
         if (cached.token_expiry > now + 300) continue;  // Still valid for >5 min
 
-        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Token expires in %llus — refreshing",
-            (unsigned long long)(cached.token_expiry - now));
+        if (cached.token_expiry > now) {
+            Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Token expires in %llus — refreshing",
+                (unsigned long long)(cached.token_expiry - now));
+        } else {
+            Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Token expired %llus ago — refreshing",
+                (unsigned long long)(now - cached.token_expiry));
+        }
 
         if (cached.HasValidRefreshToken()) {
             if (RefreshAuthToken(cached, url, serverKey)) {
