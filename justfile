@@ -92,11 +92,11 @@ test-auth-integration:
 # Run all auth tests
 test-auth: test-auth-groundtruth test-auth-unit
 
-# Generate embedded C headers from combat mod resources
-generate-combat-resources build_dir:
+# Generate combat override files from echomod build output
+generate-combat-overrides build_dir:
     python tools/echomod/generate_resources.py \
         --build-dir {{build_dir}} \
-        --output-dir plugins/combat-mod/generated
+        --output-dir echovr/bin/win10/_overrides/combat
 
 # --- Internal ---
 

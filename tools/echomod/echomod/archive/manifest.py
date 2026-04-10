@@ -167,8 +167,9 @@ class Manifest:
         decompressed_size = struct.unpack_from("<Q", data, 8)[0]
         compressed_size = struct.unpack_from("<Q", data, 16)[0]
 
-        # Decompress
-        compressed = data[header_size:]
+        # Decompress — header_size is the size of fields AFTER the 8-byte
+        # magic+size prefix, so compressed data starts at 8 + header_size
+        compressed = data[8 + header_size:]
         dctx = zstd.ZstdDecompressor()
         decompressed = dctx.decompress(compressed, max_output_size=decompressed_size + 1024)
 
