@@ -53,6 +53,10 @@ NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo() {
     return info;
 }
 
+NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) {
+    return NEVR_PLUGIN_API_VERSION;
+}
+
 NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
     g_base = ctx->base_addr;
 

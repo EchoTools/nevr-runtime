@@ -337,6 +337,10 @@ NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void) {
     return info;
 }
 
+NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) {
+    return NEVR_PLUGIN_API_VERSION;
+}
+
 NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
     /* Server-only plugin */
     if (!(ctx->flags & NEVR_HOST_IS_SERVER)) {
