@@ -6,7 +6,6 @@
 #include "plugin_loader.h"
 #include "module_loader.h"
 #include "ws_bridge.h"
-#include "token_auth.h"
 #include "patch_addresses.h"
 #include "common/globals.h"
 #include "common/logging.h"
@@ -55,11 +54,20 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     // Platform compat — Schannel TLS hooks, CreateDirectory fixes, WinHTTP bridge.
     // Must load before any network-using code.
     LoadModule("platform_compat", &moduleCtx);
-  }
 
-  // Authenticate before any game connections. Device code auth blocks until
-  // the user authorizes via Discord or the flow times out.
-  TokenAuth::Init((uintptr_t)EchoVR::g_GameBaseAddress, g_isServer);
+    // Token auth — device code authentication, JWT refresh.
+    // Must load before ws_bridge (ws_bridge reads the JWT via get_proc).
+    LoadModule("token_auth", &moduleCtx);
+
+    // Register token_auth exports for cross-module access (ws_bridge uses these).
+    HMODULE hTokenAuth = GetModuleHandleA("token_auth.dll");
+    if (hTokenAuth) {
+      void* getToken = (void*)GetProcAddress(hTokenAuth, "TokenAuth_GetToken");
+      void* getDiscordId = (void*)GetProcAddress(hTokenAuth, "TokenAuth_GetDiscordId");
+      if (getToken) RegisterModuleProc("TokenAuth_GetToken", getToken);
+      if (getDiscordId) RegisterModuleProc("TokenAuth_GetDiscordId", getDiscordId);
+    }
+  }
 
   // Start WebSocket TLS proxy. All WebSocket connections go through the proxy —
   // the game's Schannel TLS is broken under Wine. The proxy uses ixwebsocket (mbedTLS).

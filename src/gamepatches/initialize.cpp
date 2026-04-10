@@ -9,7 +9,7 @@
 #include "crash_recovery.h"
 #include "gamepatches_internal.h"
 #include "mode_patches.h"
-#include "platform_compat.h"
+// platform_compat hooks moved to module (loaded in boot.cpp)
 #include "resource_override.h"
 #include "state_machine.h"
 #include "ws_bridge.h"
