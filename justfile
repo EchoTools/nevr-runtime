@@ -92,6 +92,12 @@ test-auth-integration:
 # Run all auth tests
 test-auth: test-auth-groundtruth test-auth-unit
 
+# Generate embedded C headers from combat mod resources
+generate-combat-resources build_dir:
+    python tools/echomod/generate_resources.py \
+        --build-dir {{build_dir}} \
+        --output-dir plugins/combat-mod/generated
+
 # --- Internal ---
 
 # Install vcpkg dependencies for MinGW cross-compilation (runs only for mingw presets)
