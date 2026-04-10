@@ -187,6 +187,79 @@ static constexpr uint64_t VA_SYM_TABLE_INSERT = 0x140C4C050;
 // SetWeaponEntities — writes weapon entity names to data tree
 static constexpr uint64_t VA_SET_WEAPON_ENTITIES = 0x140D42E00;
 
+// --- Combat Mod: Script/DLL Loading ---
+
+// Source: scriptpatch.h in echovr_combat_mod / PC binary analysis
+// Engine script DLL loader — loads .dll script modules by path.
+// Signature: int64_t __fastcall (const char* path)
+static constexpr uint64_t VA_LOAD_SCRIPT_DLL = 0x1400EB0F0;
+
+// --- Combat Mod: Network/Events ---
+
+// Source: combatpatch.h in echovr_combat_mod / PC binary analysis
+// SendComponentEvent — dispatches component network events
+static constexpr uint64_t VA_SEND_COMPONENT_EVENT = 0x14012B870;
+
+// Source: combatpatch.h in echovr_combat_mod / PC binary analysis
+// HandleRespawn — player death/respawn handler
+static constexpr uint64_t VA_HANDLE_RESPAWN = 0x140D14080;
+
+// Source: combatpatch.h in echovr_combat_mod / PC binary analysis
+// TeleportPlayerRequest — teleport player to position
+static constexpr uint64_t VA_TELEPORT_PLAYER = 0x14012CD30;
+
+// Source: combatpatch.h in echovr_combat_mod / PC binary analysis
+// Team change handler — captures local player team assignment
+static constexpr uint64_t VA_TEAM_CHANGE = 0x140609310;
+
+// --- Combat Mod: Chassis/Actor Selection ---
+
+// Source: modepatch.h in echovr_combat_mod / PC binary analysis
+// LocalActorTableSelect — chassis selection for local player
+static constexpr uint64_t VA_LOCAL_ACTOR_TABLE_SELECT = 0x140C36580;
+
+// Source: modepatch.h in echovr_combat_mod / PC binary analysis
+// RemoteActorTableSelect — chassis selection for remote players
+static constexpr uint64_t VA_REMOTE_ACTOR_TABLE_SELECT = 0x140C37AA0;
+
+// Source: modepatch.h in echovr_combat_mod / PC binary analysis
+// SetActivePlayerActor — swaps active player actor by hash
+static constexpr uint64_t VA_SET_ACTIVE_PLAYER_ACTOR = 0x140120BE0;
+
+// --- Combat Mod: Model/Visibility ---
+
+// Source: startvisible.h in echovr_combat_mod / PC binary analysis
+// InitModelCI — model component initialization callback
+static constexpr uint64_t VA_INIT_MODEL_CI = 0x1404AD5D0;
+
+// Source: startvisible.h in echovr_combat_mod / PC binary analysis
+// CNode3D::SetVisible — scene graph visibility control
+static constexpr uint64_t VA_CNODE3D_SET_VISIBLE = 0x140632140;
+
+// --- Combat Mod: Level Loading ---
+
+// Source: leveldetect.h in echovr_combat_mod / PC binary analysis
+// Main level load orchestrator
+static constexpr uint64_t VA_LEVEL_LOAD = 0x1404FE050;
+
+// Source: swaptoggle.h in echovr_combat_mod / PC binary analysis
+// Sublevel Y offset function
+static constexpr uint64_t VA_LEVEL_OFFSET_HOOK = 0x14062A830;
+
+// --- Combat 2D (PC Mode Fixes) ---
+
+// Source: echovr.h in echovr_combat_mod / PC binary analysis
+// Hand position conditional jump — NOP to fix 2D hand replication
+static constexpr uint64_t VA_HAND_POSITION_JZ = 0x140D6ECC3;
+
+// Source: echovr.h in echovr_combat_mod / PC binary analysis
+// VR flag byte patch site — force VR flag bit in player state
+static constexpr uint64_t VA_VR_FLAG_PATCH = 0x140D6EC13;
+
+// Source: echovr.h in echovr_combat_mod / PC binary analysis
+// AFK timer patch site — prevent inactivity kick in PC mode
+static constexpr uint64_t VA_AFK_PATCH = 0x1401BC1E2;
+
 // --- Social Plugin DLL Selection ---
 
 // Source: revault string search "pnsovr"/"pnsdemo", commit e1803da
