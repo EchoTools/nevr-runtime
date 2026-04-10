@@ -130,6 +130,13 @@ static constexpr uint64_t VA_CLOG_PRINTF_IMPL = 0x1400ebe70;
 //                    void* buf2, uint64_t size2)
 static constexpr uint64_t VA_RESOURCE_INIT_FROM_BUFFERS = 0x140fa2510;
 
+// Source: ReVault analysis of CArchiveLoader
+// CArchiveLoader::LoadResource — loads a resource by CSymbol64 name hash from
+// the _data archive system. Tries cache, then archive table, then async load.
+//   int32_t __fastcall (CArchiveLoader* self, uint64_t name_hash,
+//                       int64_t params, int64_t callback, int64_t user_data)
+static constexpr uint64_t VA_ARCHIVE_LOADER_LOAD_RESOURCE = 0x1401feb90;
+
 // --- Combat Patch ---
 
 // Source: combatpatch.h / PC binary analysis
