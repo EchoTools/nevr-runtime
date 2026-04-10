@@ -29,10 +29,16 @@
   #define NEVR_MODULE_API extern "C" __attribute__((visibility("default")))
 #endif
 
-/* Host flags (same values as NvrHostFlags for plugins) */
-#define NEVR_HOST_IS_SERVER   0x02
-#define NEVR_HOST_IS_CLIENT   0x04
-#define NEVR_HOST_IS_HEADLESS 0x10
+/* Host flags — use the same values as NvrHostFlags in nevr_plugin_interface.h.
+ * Defined as an enum to avoid #define collisions when both headers are included. */
+#ifndef NEVR_HOST_FLAGS_DEFINED
+#define NEVR_HOST_FLAGS_DEFINED
+enum NvrModuleHostFlags : uint32_t {
+    NEVR_MODULE_HOST_IS_SERVER   = 0x02,
+    NEVR_MODULE_HOST_IS_CLIENT   = 0x04,
+    NEVR_MODULE_HOST_IS_HEADLESS = 0x10,
+};
+#endif
 
 /* Context passed to every module at init time */
 struct NvrModuleContext {

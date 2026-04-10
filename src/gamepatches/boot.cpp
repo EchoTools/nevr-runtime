@@ -5,7 +5,6 @@
 #include "resource_override.h"
 #include "plugin_loader.h"
 #include "module_loader.h"
-#include "ws_bridge.h"
 #include "patch_addresses.h"
 #include "common/globals.h"
 #include "common/logging.h"
@@ -44,9 +43,9 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     moduleCtx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
     moduleCtx.early_config = g_earlyConfigPtr;
     moduleCtx.flags = 0;
-    if (g_isServer)   moduleCtx.flags |= NEVR_HOST_IS_SERVER;
-    if (g_isHeadless) moduleCtx.flags |= NEVR_HOST_IS_HEADLESS;
-    if (!g_isServer)  moduleCtx.flags |= NEVR_HOST_IS_CLIENT;
+    if (g_isServer)   moduleCtx.flags |= NEVR_MODULE_HOST_IS_SERVER;
+    if (g_isHeadless) moduleCtx.flags |= NEVR_MODULE_HOST_IS_HEADLESS;
+    if (!g_isServer)  moduleCtx.flags |= NEVR_MODULE_HOST_IS_CLIENT;
     moduleCtx.log = (void (*)(int, const char*, ...))Log;
     moduleCtx.get_proc = ResolveModuleProc;
     SetModuleContext(&moduleCtx);
@@ -67,14 +66,19 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       if (getToken) RegisterModuleProc("TokenAuth_GetToken", getToken);
       if (getDiscordId) RegisterModuleProc("TokenAuth_GetDiscordId", getDiscordId);
     }
-  }
 
-  // Start WebSocket TLS proxy. All WebSocket connections go through the proxy —
-  // the game's Schannel TLS is broken under Wine. The proxy uses ixwebsocket (mbedTLS).
-  CHAR* socketUri = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_socket_uri", NULL, false);
-  if (socketUri) {
-    SetWebSocketBridgeTarget(socketUri);
-    InstallWebSocketBridge();
+    // WebSocket TLS proxy — reads config and starts bridge in its init.
+    // Must load after token_auth (resolves TokenAuth_GetToken via get_proc).
+    LoadModule("ws_bridge", &moduleCtx);
+
+    // Register ws_bridge exports so config.cpp can resolve them for URL redirects.
+    HMODULE hWsBridge = GetModuleHandleA("ws_bridge.dll");
+    if (hWsBridge) {
+      void* getPort = (void*)GetProcAddress(hWsBridge, "WsBridge_GetPort");
+      void* isActive = (void*)GetProcAddress(hWsBridge, "WsBridge_IsActive");
+      if (getPort) RegisterModuleProc("WsBridge_GetPort", getPort);
+      if (isActive) RegisterModuleProc("WsBridge_IsActive", isActive);
+    }
   }
 
   // Parse command line arguments.
