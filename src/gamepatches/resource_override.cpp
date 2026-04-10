@@ -121,6 +121,30 @@ static void* LoadFileFromDisk(const char* path, uint64_t* out_size) {
     return buf;
 }
 
+/* ── Lazy hook installation ───────────────────────────────────────── */
+
+static void EnsureHookInstalled() {
+    if (g_orig) return;  /* Already installed */
+
+    g_hook_target = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + 0xFA16D0);
+
+    if (MH_CreateHook(g_hook_target, reinterpret_cast<void*>(Hook_AsyncIOCallback),
+                       reinterpret_cast<void**>(&g_orig)) != MH_OK) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.RESOURCE] MH_CreateHook failed");
+        return;
+    }
+
+    if (MH_EnableHook(g_hook_target) != MH_OK) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.RESOURCE] MH_EnableHook failed");
+        MH_RemoveHook(g_hook_target);
+        g_orig = nullptr;
+        return;
+    }
+
+    Log(EchoVR::LogLevel::Info, "[NEVR.RESOURCE] Hook installed");
+}
+
 } // anonymous namespace
 
 /* ── Public API ───────────────────────────────────────────────────── */
@@ -137,6 +161,10 @@ void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
     ovr.owned = false;
     ovr.label = label;
     g_overrides->push_back(ovr);
+
+    /* Lazily install hook if this is the first override after init */
+    EnsureHookInstalled();
+
     Log(EchoVR::LogLevel::Info,
         "[NEVR.RESOURCE] Registered embedded override: %s (type=0x%016llx name=0x%016llx, %llu bytes)",
         label,
@@ -220,31 +248,80 @@ void InstallResourceOverride() {
         FindClose(hFind);
     }
 
-    if (g_overrides->empty()) {
-        /* No overrides registered — don't install the hook */
-        delete g_overrides;
-        g_overrides = nullptr;
-        return;
-    }
-
-    /* ── Install hook ─────────────────────────────────────────────── */
-
-    g_hook_target = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + 0xFA16D0);
-
-    if (MH_CreateHook(g_hook_target, reinterpret_cast<void*>(Hook_AsyncIOCallback),
-                       reinterpret_cast<void**>(&g_orig)) != MH_OK) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.RESOURCE] MH_CreateHook failed");
-        return;
-    }
-
-    if (MH_EnableHook(g_hook_target) != MH_OK) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.RESOURCE] MH_EnableHook failed");
-        MH_RemoveHook(g_hook_target);
-        return;
+    /* Install hook if overrides exist; otherwise keep g_overrides alive
+     * for plugins that register overrides later via the exported API. */
+    if (!g_overrides->empty()) {
+        EnsureHookInstalled();
     }
 
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.RESOURCE] Hook installed (%zu overrides registered)",
+        "[NEVR.RESOURCE] Init complete (%zu overrides registered)",
         g_overrides->size());
 }
+
+void ResetResourceOverrides() {
+    if (!g_overrides) return;
+    uint64_t count = 0;
+    for (auto& ovr : *g_overrides) {
+        if (ovr.applied) {
+            ovr.applied = false;
+            count++;
+        }
+    }
+    if (count > 0) {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.RESOURCE] Reset %llu override(s) for re-application",
+            static_cast<unsigned long long>(count));
+    }
+}
+
+void DeregisterResourceOverrides(const void* data_start, const void* data_end) {
+    if (!g_overrides) return;
+    auto start = reinterpret_cast<uintptr_t>(data_start);
+    auto end = reinterpret_cast<uintptr_t>(data_end);
+    uint64_t removed = 0;
+
+    auto it = g_overrides->begin();
+    while (it != g_overrides->end()) {
+        auto ptr = reinterpret_cast<uintptr_t>(it->data);
+        if (ptr >= start && ptr < end) {
+            /* Free owned file-based data before removing */
+            if (it->owned && it->data) {
+                VirtualFree(const_cast<void*>(it->data), 0, MEM_RELEASE);
+            }
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.RESOURCE] Deregistered override: %s", it->label);
+            it = g_overrides->erase(it);
+            removed++;
+        } else {
+            ++it;
+        }
+    }
+
+    if (removed > 0) {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.RESOURCE] Deregistered %llu override(s)",
+            static_cast<unsigned long long>(removed));
+    }
+}
+
+/* ── Exported wrappers (called by plugins via GetProcAddress) ────── */
+
+extern "C" {
+
+void NEVR_RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
+                                   const void* data, uint64_t size,
+                                   const char* label) {
+    RegisterResourceOverride(type_hash, name_hash, data, size, label);
+}
+
+void NEVR_ResetResourceOverrides() {
+    ResetResourceOverrides();
+}
+
+void NEVR_DeregisterResourceOverrides(const void* data_start,
+                                      const void* data_end) {
+    DeregisterResourceOverrides(data_start, data_end);
+}
+
+} /* extern "C" */
