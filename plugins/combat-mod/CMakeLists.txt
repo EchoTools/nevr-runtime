@@ -35,6 +35,7 @@ if(BUILD_TESTING AND GTest_FOUND)
     )
     target_include_directories(test_safe_memory PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/plugins/common/include
     )
     target_link_libraries(test_safe_memory PRIVATE
         GTest::gtest GTest::gtest_main

@@ -8,7 +8,7 @@
 
 #include "address_registry.h"
 #include "nevr_common.h"
-#include "plugin_log.h"
+#include "combat_log.h"
 
 namespace combat_mod {
 
@@ -34,7 +34,7 @@ bool IsArenaCombat() {
     return g_is_arena_combat.load(std::memory_order_acquire);
 }
 
-void InstallLevelDetect(uintptr_t base, std::vector<void*>& hooks) {
+void InstallLevelDetect(uintptr_t base, nevr::HookManager& hooks) {
     void* target = nevr::ResolveVA(base, nevr::addresses::VA_LEVEL_LOAD);
 
     MH_STATUS status = MH_CreateHook(target,
@@ -53,7 +53,7 @@ void InstallLevelDetect(uintptr_t base, std::vector<void*>& hooks) {
         return;
     }
 
-    hooks.push_back(target);
+    hooks.Track(target);
     combat_mod::PluginLog(
         "[level_detect] Hooked LevelLoad @ VA 0x%llX",
         static_cast<unsigned long long>(nevr::addresses::VA_LEVEL_LOAD));

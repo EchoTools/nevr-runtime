@@ -43,6 +43,10 @@ public:
         m_hooks.clear();
     }
 
+    /* Track an already-installed hook for cleanup.
+     * Use when code already called MH_CreateHook + MH_EnableHook directly. */
+    void Track(void* target) { m_hooks.push_back(target); }
+
     size_t count() const { return m_hooks.size(); }
 };
 

@@ -7,7 +7,7 @@
 
 #include "address_registry.h"
 #include "nevr_common.h"
-#include "plugin_log.h"
+#include "combat_log.h"
 
 namespace combat_mod {
 
@@ -76,22 +76,14 @@ static void __fastcall Hook_SetActivePlayerActor(int64_t game, uint64_t actor_ha
 
 static bool InstallHook(void* target, void* detour, void** original,
                          const char* name, uint64_t va,
-                         std::vector<void*>& hooks) {
-    MH_STATUS status = MH_CreateHook(target, detour, original);
+                         nevr::HookManager& hooks) {
+    MH_STATUS status = hooks.CreateAndEnable(target, detour, original);
     if (status != MH_OK) {
         combat_mod::PluginLog(
-            "[mode_patch] MH_CreateHook failed for %s: %d", name, status);
+            "[mode_patch] Hook failed for %s: %d", name, status);
         return false;
     }
 
-    status = MH_EnableHook(target);
-    if (status != MH_OK) {
-        combat_mod::PluginLog(
-            "[mode_patch] MH_EnableHook failed for %s: %d", name, status);
-        return false;
-    }
-
-    hooks.push_back(target);
     combat_mod::PluginLog(
         "[mode_patch] Hooked %s @ VA 0x%llX", name,
         static_cast<unsigned long long>(va));
@@ -102,7 +94,7 @@ static bool InstallHook(void* target, void* detour, void** original,
 /* Public entry point                                                  */
 /* ------------------------------------------------------------------ */
 
-void InstallModePatch(uintptr_t base, std::vector<void*>& hooks) {
+void InstallModePatch(uintptr_t base, nevr::HookManager& hooks) {
     combat_mod::PluginLog( "[mode_patch] Installing mode patch hooks");
 
     InstallHook(

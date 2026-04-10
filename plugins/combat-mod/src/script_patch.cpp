@@ -18,7 +18,7 @@
 #include <cstring>
 
 #include "safe_memory.h"
-#include "plugin_log.h"
+#include "combat_log.h"
 #include "nevr_common.h"
 #include "address_registry.h"
 
@@ -198,13 +198,13 @@ static int64_t __fastcall Hook_LoadScriptDLL(const char* path) {
 
 namespace combat_mod {
 
-void InstallScriptPatch(uintptr_t base, std::vector<void*>& hooks) {
+void InstallScriptPatch(uintptr_t base, nevr::HookManager& hooks) {
     void* target = nevr::ResolveVA(base, nevr::addresses::VA_LOAD_SCRIPT_DLL);
 
     if (MH_CreateHook(target, reinterpret_cast<void*>(Hook_LoadScriptDLL),
                        reinterpret_cast<void**>(&Orig_LoadScriptDLL)) == MH_OK) {
         MH_EnableHook(target);
-        hooks.push_back(target);
+        hooks.Track(target);
         combat_mod::PluginLog(
             "Script DLL loader hooked — patches apply on load");
     } else {

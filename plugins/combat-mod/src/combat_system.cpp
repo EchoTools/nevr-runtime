@@ -18,7 +18,7 @@
 #include <atomic>
 
 #include "safe_memory.h"
-#include "plugin_log.h"
+#include "combat_log.h"
 #include "nevr_common.h"
 #include "address_registry.h"
 
@@ -435,7 +435,7 @@ constexpr uintptr_t kScriptTickRVA    = 0x67B0;
 constexpr uintptr_t kScriptHandlerRVA = 0xAFA0;
 constexpr uintptr_t kWeaponsTickRVA   = 0x39C0;
 
-bool FindAndHookBodySwapDLLs(std::vector<void*>& hooks) {
+bool FindAndHookBodySwapDLLs(nevr::HookManager& hooks) {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, 0);
     if (snap == INVALID_HANDLE_VALUE) return false;
 
@@ -474,14 +474,14 @@ bool FindAndHookBodySwapDLLs(std::vector<void*>& hooks) {
             if (MH_CreateHook(target, reinterpret_cast<void*>(HookBodySwapTickFns[idx]),
                                reinterpret_cast<void**>(&g_BodySwapOrigTicks[idx])) != MH_OK) continue;
             MH_EnableHook(target);
-            hooks.push_back(target);
+            hooks.Track(target);
 
             g_BodySwap[idx].originalHandler = g_BodySwap[idx].handlerFn;
             void* hTarget = reinterpret_cast<void*>(g_BodySwap[idx].handlerFn);
             if (MH_CreateHook(hTarget, reinterpret_cast<void*>(HookBodySwapHandlerFns[idx]),
                                reinterpret_cast<void**>(&g_BodySwap[idx].originalHandler)) == MH_OK) {
                 MH_EnableHook(hTarget);
-                hooks.push_back(hTarget);
+                hooks.Track(hTarget);
             }
 
             g_BodySwapCount++;
@@ -493,7 +493,7 @@ bool FindAndHookBodySwapDLLs(std::vector<void*>& hooks) {
     return g_BodySwapCount > 0;
 }
 
-bool FindAndHookWeaponsDLLs(std::vector<void*>& hooks) {
+bool FindAndHookWeaponsDLLs(nevr::HookManager& hooks) {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, 0);
     if (snap == INVALID_HANDLE_VALUE) return false;
 
@@ -529,7 +529,7 @@ bool FindAndHookWeaponsDLLs(std::vector<void*>& hooks) {
             if (MH_CreateHook(target, reinterpret_cast<void*>(HookWeaponsTickFns[idx]),
                                reinterpret_cast<void**>(&g_WeaponsOrigTicks[idx])) == MH_OK) {
                 MH_EnableHook(target);
-                hooks.push_back(target);
+                hooks.Track(target);
                 g_WeaponsCount++;
                 combat_mod::PluginLog( "Weapons DLL #%d hooked @ 0x%llX",
                     idx, (unsigned long long)dllBase);
@@ -540,7 +540,7 @@ bool FindAndHookWeaponsDLLs(std::vector<void*>& hooks) {
     return g_WeaponsCount > 0;
 }
 
-bool FindAndHookHealScript(std::vector<void*>& hooks) {
+bool FindAndHookHealScript(nevr::HookManager& hooks) {
     if (g_HealScriptHooked) return true;
 
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, 0);
@@ -559,7 +559,7 @@ bool FindAndHookHealScript(std::vector<void*>& hooks) {
                 if (MH_CreateHook(target, reinterpret_cast<void*>(Hook_HealScriptInit), &origPtr) == MH_OK) {
                     g_OrigHealInit = reinterpret_cast<HealScriptInit_t>(origPtr);
                     MH_EnableHook(target);
-                    hooks.push_back(target);
+                    hooks.Track(target);
                     g_HealScriptHooked = true;
                     found = true;
                     combat_mod::PluginLog( "Heal script init hooked @ 0x%llX+0x38D0",
@@ -574,7 +574,7 @@ bool FindAndHookHealScript(std::vector<void*>& hooks) {
 }
 
 /* Track hooks for deferred DLL discovery */
-std::vector<void*>* g_DeferredHooks = nullptr;
+nevr::HookManager* g_DeferredHooks = nullptr;
 
 } // anonymous namespace
 
@@ -582,7 +582,7 @@ std::vector<void*>* g_DeferredHooks = nullptr;
 
 namespace combat_mod {
 
-void InstallCombatEarly(uintptr_t base, std::vector<void*>& hooks) {
+void InstallCombatEarly(uintptr_t base, nevr::HookManager& hooks) {
     g_GameBase = base;
     g_DeferredHooks = &hooks;
 
@@ -592,19 +592,19 @@ void InstallCombatEarly(uintptr_t base, std::vector<void*>& hooks) {
     if (MH_CreateHook(tc, reinterpret_cast<void*>(Hook_TeamChange), &tcOrig) == MH_OK) {
         g_OrigTeamChange = reinterpret_cast<TeamChange_t>(tcOrig);
         MH_EnableHook(tc);
-        hooks.push_back(tc);
+        hooks.Track(tc);
         combat_mod::PluginLog( "TeamChange hooked (early)");
     }
 }
 
-void InstallCombatLevelHooks(uintptr_t base, std::vector<void*>& hooks) {
+void InstallCombatLevelHooks(uintptr_t base, nevr::HookManager& hooks) {
     /* PlayerInit — spawn detection */
     void* pi = nevr::ResolveVA(base, nevr::addresses::VA_PLAYER_INIT);
     void* piOrig = nullptr;
     if (MH_CreateHook(pi, reinterpret_cast<void*>(Hook_PlayerInit), &piOrig) == MH_OK) {
         g_OrigPlayerInit = reinterpret_cast<PlayerInit_t>(piOrig);
         MH_EnableHook(pi);
-        hooks.push_back(pi);
+        hooks.Track(pi);
         combat_mod::PluginLog( "PlayerInit hooked");
     }
 
@@ -617,7 +617,7 @@ void InstallCombatLevelHooks(uintptr_t base, std::vector<void*>& hooks) {
     if (MH_CreateHook(hr, reinterpret_cast<void*>(Hook_HandleRespawn), &hrOrig) == MH_OK) {
         g_OrigRespawn = reinterpret_cast<HandleRespawn_t>(hrOrig);
         MH_EnableHook(hr);
-        hooks.push_back(hr);
+        hooks.Track(hr);
         combat_mod::PluginLog( "HandleRespawn hooked");
     }
 
@@ -627,18 +627,18 @@ void InstallCombatLevelHooks(uintptr_t base, std::vector<void*>& hooks) {
     if (MH_CreateHook(sce, reinterpret_cast<void*>(Hook_SendComponentEvent), &sceOrig) == MH_OK) {
         g_OrigSCE = reinterpret_cast<SendComponentEvent_t>(sceOrig);
         MH_EnableHook(sce);
-        hooks.push_back(sce);
+        hooks.Track(sce);
         combat_mod::PluginLog( "SendComponentEvent hooked");
     }
 }
 
-void InstallLevelOffset(uintptr_t base, std::vector<void*>& hooks) {
+void InstallLevelOffset(uintptr_t base, nevr::HookManager& hooks) {
     void* lo = nevr::ResolveVA(base, nevr::addresses::VA_LEVEL_OFFSET_HOOK);
     void* loOrig = nullptr;
     if (MH_CreateHook(lo, reinterpret_cast<void*>(Hook_LevelOffset), &loOrig) == MH_OK) {
         g_OrigLevelOffset = reinterpret_cast<FnLevelOffset>(loOrig);
         MH_EnableHook(lo);
-        hooks.push_back(lo);
+        hooks.Track(lo);
         combat_mod::PluginLog( "LevelOffset hooked");
     }
 }

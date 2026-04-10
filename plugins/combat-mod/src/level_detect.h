@@ -1,5 +1,6 @@
 /* SYNTHESIS -- custom tool code, not from binary */
 #pragma once
+#include "hook_manager.h"
 
 #include <cstdint>
 #include <vector>
@@ -11,7 +12,7 @@ namespace combat_mod {
  * mpl_arenacombat by hash.  Appends the hook target to `hooks` so the
  * caller can disable/remove them on shutdown.
  */
-void InstallLevelDetect(uintptr_t base, std::vector<void*>& hooks);
+void InstallLevelDetect(uintptr_t base, nevr::HookManager& hooks);
 
 /*
  * IsArenaCombat -- returns true once a level with the mpl_arenacombat

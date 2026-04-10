@@ -1,5 +1,6 @@
 /* SYNTHESIS -- custom tool code, not from binary */
 #pragma once
+#include "hook_manager.h"
 
 #include <cstdint>
 #include <vector>
@@ -18,6 +19,6 @@ namespace combat_mod {
  *
  * Appends each hook target to `hooks` for shutdown cleanup.
  */
-void InstallModePatch(uintptr_t base, std::vector<void*>& hooks);
+void InstallModePatch(uintptr_t base, nevr::HookManager& hooks);
 
 } // namespace combat_mod
