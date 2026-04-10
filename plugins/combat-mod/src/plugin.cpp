@@ -21,7 +21,8 @@
 #include <MinHook.h>
 
 #include "common/nevr_plugin_interface.h"
-#include "plugin_log.h"
+#include "combat_log.h"
+#include "hook_manager.h"
 
 #include "script_patch.h"
 #include "mode_patch.h"
@@ -30,12 +31,11 @@
 #include "combat_system.h"
 #include "resource_inject.h"
 
-#include <vector>
 #include <cstdint>
 
 namespace {
 
-std::vector<void*> g_ownedHooks;
+nevr::HookManager g_hooks;
 uintptr_t g_base = 0;
 bool g_levelHooksInstalled = false;
 
@@ -53,24 +53,28 @@ NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo() {
     return info;
 }
 
+NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) {
+    return NEVR_PLUGIN_API_VERSION;
+}
+
 NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
     g_base = ctx->base_addr;
 
     combat_mod::PluginLog( "Initializing combat-mod plugin");
 
     /* Phase 1: Immediate hooks (no level gate) */
-    combat_mod::InstallScriptPatch(g_base, g_ownedHooks);
-    combat_mod::InstallModePatch(g_base, g_ownedHooks);
-    combat_mod::InstallStartVisible(g_base, g_ownedHooks);
-    combat_mod::InstallLevelDetect(g_base, g_ownedHooks);
-    combat_mod::InstallLevelOffset(g_base, g_ownedHooks);
-    combat_mod::InstallCombatEarly(g_base, g_ownedHooks);
+    combat_mod::InstallScriptPatch(g_base, g_hooks);
+    combat_mod::InstallModePatch(g_base, g_hooks);
+    combat_mod::InstallStartVisible(g_base, g_hooks);
+    combat_mod::InstallLevelDetect(g_base, g_hooks);
+    combat_mod::InstallLevelOffset(g_base, g_hooks);
+    combat_mod::InstallCombatEarly(g_base, g_hooks);
 
     /* Load combat override resources from _overrides/combat/ */
     int overrides = combat_mod::LoadCombatOverrides(g_base);
 
     combat_mod::PluginLog("Init complete (%zu hooks, %d resources)",
-        g_ownedHooks.size(), overrides);
+        g_hooks.count(), overrides);
 
     return 0;  /* success */
 }
@@ -78,11 +82,11 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
 NEVR_PLUGIN_API void NvrPluginOnFrame(const NvrGameContext* ctx) {
     /* Install level-gated hooks once combat level is detected */
     if (!g_levelHooksInstalled && combat_mod::IsArenaCombat()) {
-        combat_mod::InstallCombatLevelHooks(g_base, g_ownedHooks);
+        combat_mod::InstallCombatLevelHooks(g_base, g_hooks);
         g_levelHooksInstalled = true;
         combat_mod::PluginLog(
             "mpl_arenacombat detected — level hooks installed (%zu total)",
-            g_ownedHooks.size());
+            g_hooks.count());
     }
 
     /* Per-frame combat update (F9, script DLL discovery, offset) */
@@ -99,17 +103,13 @@ NEVR_PLUGIN_API void NvrPluginOnGameStateChange(
 
 NEVR_PLUGIN_API void NvrPluginShutdown() {
     combat_mod::PluginLog( "Shutting down (%zu hooks to remove)",
-        g_ownedHooks.size());
+        g_hooks.count());
 
     /* Deregister resource overrides before DLL unload */
     combat_mod::UnloadCombatOverrides();
 
     /* Disable and remove only this plugin's hooks */
-    for (void* target : g_ownedHooks) {
-        MH_DisableHook(target);
-        MH_RemoveHook(target);
-    }
-    g_ownedHooks.clear();
+    g_hooks.RemoveAll();
     g_levelHooksInstalled = false;
 
     combat_mod::PluginLog("Shutdown complete");
