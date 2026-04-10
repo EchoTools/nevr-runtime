@@ -427,7 +427,7 @@ NEVR_MODULE_API int NvrModuleInit(const NvrModuleContext* ctx) {
     EchoVR::InitializeFunctionPointers();
     s_earlyConfig = ctx->early_config;
 
-    bool is_server = (ctx->flags & NEVR_HOST_IS_SERVER) != 0;
+    bool is_server = (ctx->flags & NEVR_MODULE_HOST_IS_SERVER) != 0;
     TokenAuth::Init(ctx->base_addr, is_server);
 
     Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] token_auth initialized");

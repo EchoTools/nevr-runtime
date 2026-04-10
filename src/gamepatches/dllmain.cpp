@@ -8,7 +8,7 @@
 //      DllMain detects this and initializes immediately.
 #include "common/pch.h"
 #include "common/echovr_functions.h"
-#include "ws_bridge.h"
+#include "module_loader.h"
 #include "patches.h"
 #include "initialize.h"
 #include "plugin_loader.h"
@@ -88,7 +88,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       }
       break;
     case DLL_PROCESS_DETACH:
-      ShutdownWebSocketBridge();
+      UnloadModules();
       UnloadPlugins();
       if (g_realDbgCore) {
         FreeLibrary(g_realDbgCore);
