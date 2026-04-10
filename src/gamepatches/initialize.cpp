@@ -128,9 +128,8 @@ VOID Initialize() {
   fprintf(stderr, "[NEVR] tls: ws bridge deferred to boot\n"); fflush(stderr);
   InstallCrashRecoveryHooks();
   fprintf(stderr, "[NEVR] crash OK\n"); fflush(stderr);
-  InstallCreateDirectoryHooks();
-  InstallWinHTTPHook();
-  fprintf(stderr, "[NEVR] platform OK\n"); fflush(stderr);
+  // CreateDirectory + WinHTTP hooks moved to platform_compat module (loaded in boot.cpp)
+  fprintf(stderr, "[NEVR] platform hooks deferred to module\n"); fflush(stderr);
 
   // --- Server crash recovery hooks ---
   InstallGameMainHook();
