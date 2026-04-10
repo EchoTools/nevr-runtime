@@ -121,6 +121,11 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     }
   }
 
+  // Friends subscription is handled by ws_bridge.cpp — it injects an
+  // SNSFriendListSubscribeRequest directly through the WS connection after
+  // LOGIN SUCCESS. pnsrad's broadcaster handle (field_0x160) is null so
+  // calling CNSRADFriends vtable functions for subscribe/refresh is a no-op.
+
   // Call the original function
   EchoVR::NetGameSwitchState(pGame, state);
 }

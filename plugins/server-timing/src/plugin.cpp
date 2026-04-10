@@ -243,6 +243,7 @@ static bool PatchMemory(void* addr, const void* data, size_t len) {
 
 static ServerTimingConfig g_config;
 static uintptr_t g_base = 0;
+static bool g_initialized = false;
 static bool g_timestep_applied = false;
 static bool g_wait_hook_installed = false;
 static bool g_switchtothread_hook_installed = false;
@@ -425,6 +426,7 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
     }
 #endif
 
+    g_initialized = true;
     Log("initialization complete");
     return 0;
 }
@@ -459,6 +461,7 @@ NEVR_PLUGIN_API void NvrPluginOnGameStateChange(const NvrGameContext* ctx,
                                                  uint32_t old_state,
                                                  uint32_t new_state) {
     (void)old_state;
+    if (!g_initialized) return;
 
 #ifdef _WIN32
     /* First call: enable fixed timestep flag + delta time fix */
@@ -498,6 +501,7 @@ NEVR_PLUGIN_API void NvrPluginOnGameStateChange(const NvrGameContext* ctx,
 
 NEVR_PLUGIN_API void NvrPluginOnFrame(const NvrGameContext* ctx) {
     (void)ctx;
+    if (!g_initialized) return;
 #ifdef _WIN32
     /* Hot-reload: check for tick_rate_override file every ~2 seconds.
        Write a number (Hz) to this file to change tick rate live.

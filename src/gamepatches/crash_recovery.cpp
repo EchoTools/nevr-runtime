@@ -1,6 +1,7 @@
 #include "crash_recovery.h"
 
 #include <processthreadsapi.h>
+#include <psapi.h>
 #include <setjmp.h>
 #include <windows.h>
 
@@ -208,6 +209,31 @@ static void LogCrashDump(PEXCEPTION_POINTERS ex) {
       found++;
     }
   }
+  // Module listing — identify which DLL owns each address
+  Log(EchoVR::LogLevel::Error, "Loaded modules:");
+  HANDLE hProcess = GetCurrentProcess();
+  HMODULE hMods[256];
+  DWORD cbNeeded;
+  if (EnumProcessModules(hProcess, hMods, sizeof(hMods), &cbNeeded)) {
+    DWORD modCount = cbNeeded / sizeof(HMODULE);
+    for (DWORD i = 0; i < modCount && i < 256; i++) {
+      char modName[MAX_PATH] = {0};
+      MODULEINFO mi = {0};
+      GetModuleFileNameA(hMods[i], modName, sizeof(modName));
+      GetModuleInformation(hProcess, hMods[i], &mi, sizeof(mi));
+      // Strip path to just filename
+      const char* basename = strrchr(modName, '\\');
+      if (!basename) basename = strrchr(modName, '/');
+      basename = basename ? basename + 1 : modName;
+      DWORD64 modBase = (DWORD64)mi.lpBaseOfDll;
+      DWORD64 modEnd = modBase + mi.SizeOfImage;
+      // Flag the module that contains the crash RIP
+      const char* flag = (ctx->Rip >= modBase && ctx->Rip < modEnd) ? " <-- CRASH" : "";
+      Log(EchoVR::LogLevel::Error, "  %016llX-%016llX  %s%s",
+          (unsigned long long)modBase, (unsigned long long)modEnd, basename, flag);
+    }
+  }
+
   Log(EchoVR::LogLevel::Error, "=== END CRASH DUMP ===");
 }
 
