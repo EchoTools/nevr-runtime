@@ -34,6 +34,10 @@ verbose-dist: build
 dist-lite: build
     cmake --build --preset {{ preset }} --target dist-lite
 
+# Create legacy distribution package (v1 DLLs only)
+dist-legacy: build
+    cmake --build --preset {{ preset }} --target dist-legacy
+
 # Regenerate C++ protobuf from BSR (buf.build/echotools/nevr-api)
 # Uses vcpkg protoc to match the runtime version. Run `just configure` first.
 proto:
