@@ -13,6 +13,7 @@
  */
 
 #include "common/nevr_plugin_interface.h"
+#include "plugin_logger.h"
 
 #include <windows.h>
 #include <cstdint>
@@ -22,16 +23,9 @@
 #include "nevr_common.h"
 #include "address_registry.h"
 
-namespace {
+NEVR_DEFINE_PLUGIN_LOG("[NEVR.2D]")
 
-void PluginLog(const char* fmt, ...) {
-    std::fprintf(stderr, "[NEVR.2D] ");
-    va_list args;
-    va_start(args, fmt);
-    std::vfprintf(stderr, fmt, args);
-    va_end(args);
-    std::fprintf(stderr, "\n");
-}
+namespace {
 
 uintptr_t g_base = 0;
 
