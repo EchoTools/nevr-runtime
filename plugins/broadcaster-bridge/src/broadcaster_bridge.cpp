@@ -2,6 +2,7 @@
 
 #include "broadcaster_bridge.h"
 #include "nevr_common.h"
+#include "hook_manager.h"
 
 #include <nlohmann/json.hpp>
 #include <cstring>
@@ -35,7 +36,6 @@ inline MH_STATUS MH_EnableHook(void*)                                      { ret
 inline MH_STATUS MH_DisableHook(void*)                                     { return MH_OK; }
 inline MH_STATUS MH_RemoveHook(void*)                                      { return MH_OK; }
 inline MH_STATUS MH_Uninitialize()                                         { return MH_OK; }
-static constexpr void* MH_ALL_HOOKS = nullptr;
 inline void closesocket(socket_t s)                                        { close(s); }
 #endif
 
@@ -44,6 +44,7 @@ namespace nevr::broadcaster_bridge {
 /* ── Module state ──────────────────────────────────────────────────── */
 
 static BridgeConfig           g_config;
+static nevr::HookManager     g_hooks;
 static std::atomic<void*>     g_broadcaster_ptr{nullptr};
 static CBroadcasterSend_fn    g_original_send      = nullptr;
 static CBroadcasterReceiveLocal_fn g_original_receive_local = nullptr;
@@ -871,30 +872,19 @@ int Initialize(uintptr_t base_addr, const char* config_path) {
     void* recv_ptr = nevr::ResolveVA(base_addr, nevr::addresses::VA_BROADCASTER_RECEIVE_LOCAL);
 
     /* Install hooks via MinHook */
-    if (MH_Initialize() != MH_OK) return -2;
+    MH_Initialize();
 
     /* Hook CBroadcaster_Send */
-    if (MH_CreateHook(send_ptr,
+    if (g_hooks.CreateAndEnable(send_ptr,
                       reinterpret_cast<void*>(&HookedBroadcasterSend),
                       reinterpret_cast<void**>(&g_original_send)) != MH_OK) {
-        MH_Uninitialize();
         return -3;
     }
 
-    if (MH_EnableHook(send_ptr) != MH_OK) {
-        MH_RemoveHook(send_ptr);
-        MH_Uninitialize();
-        return -4;
-    }
-
-    /* Hook CBroadcaster_ReceiveLocal */
-    if (MH_CreateHook(recv_ptr,
+    /* Hook CBroadcaster_ReceiveLocal (non-fatal) */
+    g_hooks.CreateAndEnable(recv_ptr,
                       reinterpret_cast<void*>(&HookedBroadcasterReceiveLocal),
-                      reinterpret_cast<void**>(&g_original_receive_local)) != MH_OK) {
-        /* Non-fatal — receive mirroring won't work but send still does */
-    } else {
-        MH_EnableHook(recv_ptr);
-    }
+                      reinterpret_cast<void**>(&g_original_receive_local));
 
     /* Spawn listener thread */
     g_shutdown_flag.store(false, std::memory_order_release);
@@ -936,9 +926,7 @@ void Shutdown() {
     }
 
     /* Remove hooks */
-    void* send_ptr = nullptr; /* MinHook tracks hooks internally */
-    MH_DisableHook(MH_ALL_HOOKS);
-    MH_Uninitialize();
+    g_hooks.RemoveAll();
 
     /* Close sockets */
     if (g_mirror_sock != INVALID_SOCK) {

@@ -94,6 +94,15 @@ void LoadPlugins() {
       continue;
     }
 
+    // Check API version (v1 plugins lack this export)
+    auto apiVersionFn = (NvrPluginGetApiVersion_fn)GetProcAddress(hPlugin, "NvrPluginGetApiVersion");
+    uint32_t apiVersion = apiVersionFn ? apiVersionFn() : 1;
+    if (apiVersion > NEVR_PLUGIN_API_VERSION) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PLUGIN] %s requires API v%u, host supports v%u — loading anyway",
+          filename, apiVersion, NEVR_PLUGIN_API_VERSION);
+    }
+
     // Resolve optional exports
     auto initFn = (NvrPluginInit_fn)GetProcAddress(hPlugin, "NvrPluginInit");
     auto onFrameFn = (NvrPluginOnFrame_fn)GetProcAddress(hPlugin, "NvrPluginOnFrame");
@@ -112,9 +121,10 @@ void LoadPlugins() {
     }
 
     g_plugins.push_back({hPlugin, info, initFn, onFrameFn, onStateChangeFn, shutdownFn, path});
-    Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] Loaded: %s v%u.%u.%u",
+    Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u)",
         info.name,
-        info.version_major, info.version_minor, info.version_patch);
+        info.version_major, info.version_minor, info.version_patch,
+        apiVersion);
   }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] %zu plugin(s) loaded", g_plugins.size());
