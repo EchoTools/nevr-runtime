@@ -92,6 +92,12 @@ test-auth-integration:
 # Run all auth tests
 test-auth: test-auth-groundtruth test-auth-unit
 
+# Generate combat override files from echomod build output
+generate-combat-overrides build_dir:
+    python tools/echomod/generate_resources.py \
+        --build-dir {{build_dir}} \
+        --output-dir echovr/bin/win10/_overrides/combat
+
 # --- Internal ---
 
 # Install vcpkg dependencies for MinGW cross-compilation (runs only for mingw presets)

@@ -119,3 +119,7 @@ vkd3d-proton.cache*
 
 # Node
 node_modules/
+
+# Generated combat mod resources (rebuilt from echomod)
+plugins/combat-mod/generated/
+echovr/bin/win10/_overrides/
