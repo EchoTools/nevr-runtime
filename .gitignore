@@ -102,5 +102,20 @@ _temp/
 # Environment files
 extras/.env
 
-# Claude Code session logs
+# Claude Code session files
 2026-*.txt
+.claude-line/
+*.lock
+
+# MCP config
+.mcp.json
+
+# Wine
+.wineprefix/
+vkd3d-proton.cache*
+
+# Cloudflare
+.wrangler/
+
+# Node
+node_modules/
