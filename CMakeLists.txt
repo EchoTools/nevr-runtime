@@ -213,17 +213,13 @@ set(DIST_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}")
 # List of DLL artifacts to include
 set(DIST_DLLS
   "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll"
-  "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll"
   "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll"
-  "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll"
 )
 
 # List of debug symbol files to include
 set(DIST_DBG_FILES
   "${CMAKE_BINARY_DIR}/BugSplat64.dll.dbg"
-  "${CMAKE_BINARY_DIR}/gamepatcheslegacy.dll.dbg"
   "${CMAKE_BINARY_DIR}/gameserver.dll.dbg"
-  "${CMAKE_BINARY_DIR}/gameserverlegacy.dll.dbg"
 )
 
 # Custom target to prepare distribution directory
@@ -237,9 +233,6 @@ add_custom_target(dist-prepare
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_DIR}/pnsradgameserver.dll" || true
   # Copy pnsrad.dll (if exists)
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad.dll" "${DIST_DIR}/pnsrad.dll" || true
-  # Copy remaining DLLs with original names (if exist)
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll" "${DIST_DIR}/" || true
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll" "${DIST_DIR}/" || true
   # Copy launcher executables
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_DIR}/echovr.exe" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" "${DIST_DIR}/echovr_server.exe" || true
@@ -330,9 +323,6 @@ add_custom_target(dist-lite-prepare
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_LITE_DIR}/pnsradgameserver.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/pnsradgameserver.dll" || ${CMAKE_COMMAND} -E true
   # Copy pnsrad.dll and strip (if exists)
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad.dll" "${DIST_LITE_DIR}/pnsrad.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/pnsrad.dll" || ${CMAKE_COMMAND} -E true
-  # Copy remaining DLLs with original names and strip (if exist)
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll" "${DIST_LITE_DIR}/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/gamepatcheslegacy.dll" || ${CMAKE_COMMAND} -E true
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll" "${DIST_LITE_DIR}/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/gameserverlegacy.dll" || ${CMAKE_COMMAND} -E true
   # Copy launcher executables
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_LITE_DIR}/echovr.exe" || ${CMAKE_COMMAND} -E true
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" "${DIST_LITE_DIR}/echovr_server.exe" || ${CMAKE_COMMAND} -E true
@@ -399,9 +389,62 @@ add_custom_command(TARGET dist-lite POST_BUILD
 )
 
 # =============================================================================
+# Legacy Distribution Package Target
+# =============================================================================
+# Creates distribution archives containing only legacy DLLs (v1 implementations)
+# Usage: cmake --build <build_dir> --target dist-legacy
+# =============================================================================
+
+set(DIST_LEGACY_NAME "nevr-runtime-v${PROJECT_VERSION}-legacy")
+set(DIST_LEGACY_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_LEGACY_NAME}")
+
+add_custom_target(dist-legacy-prepare
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LEGACY_DIR}"
+  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll" "${DIST_LEGACY_DIR}/" || true
+  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll" "${DIST_LEGACY_DIR}/" || true
+  COMMENT "Preparing legacy distribution directory: ${DIST_LEGACY_DIR}"
+  VERBATIM
+)
+
+if(OSSLSIGNCODE)
+  add_custom_target(dist-legacy-sign
+    COMMAND bash -c "\"${CODESIGN_SCRIPT}\" \"${DIST_LEGACY_DIR}/\"*.dll"
+    DEPENDS dist-legacy-prepare
+    COMMENT "Code signing legacy distribution artifacts"
+  )
+else()
+  add_custom_target(dist-legacy-sign
+    COMMAND ${CMAKE_COMMAND} -E echo "WARNING: osslsigncode not found, skipping code signing"
+    DEPENDS dist-legacy-prepare
+    VERBATIM
+  )
+endif()
+
+add_custom_target(dist-legacy-tar
+  COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_SOURCE_DIR}/dist"
+    tar --zstd -cf "${CMAKE_SOURCE_DIR}/dist/${DIST_LEGACY_NAME}.tar.zst" "${DIST_LEGACY_NAME}"
+  DEPENDS dist-legacy-sign
+  COMMENT "Creating ${DIST_LEGACY_NAME}.tar.zst"
+  VERBATIM
+)
+
+add_custom_target(dist-legacy-zip
+  COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_SOURCE_DIR}/dist"
+    ${CMAKE_COMMAND} -E tar cf "${CMAKE_SOURCE_DIR}/dist/${DIST_LEGACY_NAME}.zip" --format=zip "${DIST_LEGACY_NAME}"
+  DEPENDS dist-legacy-sign
+  COMMENT "Creating ${DIST_LEGACY_NAME}.zip"
+  VERBATIM
+)
+
+add_custom_target(dist-legacy
+  DEPENDS dist-legacy-tar dist-legacy-zip
+  COMMENT "Legacy distribution packages created: ${DIST_LEGACY_NAME}.tar.zst and ${DIST_LEGACY_NAME}.zip"
+)
+
+# =============================================================================
 # Combined dist-all target
 # =============================================================================
 add_custom_target(dist-all
-  DEPENDS dist dist-lite
+  DEPENDS dist dist-lite dist-legacy
   COMMENT "All distribution packages created"
 )
