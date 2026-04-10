@@ -11,8 +11,11 @@
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <ctime>
+#include <mutex>
 #include <string>
+#include <thread>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -87,7 +90,7 @@ bool DeviceAuth::TryLoadCachedToken() {
 
     if (auth.HasValidRefreshToken() && m_configured) {
         Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Access token expired, attempting refresh...");
-        if (RefreshAuthToken(auth, m_url, m_serverKey)) {
+        if (RefreshAuthToken(auth, m_url, m_httpKey)) {
             m_token = auth.token;
             m_tokenExpiry = auth.token_expiry;
             m_refreshToken = auth.refresh_token;
@@ -274,6 +277,9 @@ bool DeviceAuth::RunDeviceAuthFlow() {
 
 static DeviceAuth* s_auth = nullptr;
 static bool s_authAttempted = false;
+static std::thread* s_refreshThread = nullptr;
+static std::atomic<bool> s_refreshRunning{false};
+static std::mutex s_tokenMutex;
 
 // Read config from the already-loaded early config (g_earlyConfigPtr).
 // LoadEarlyConfig() in config.cpp handles the search-path logic.
@@ -300,6 +306,58 @@ static AuthConfig LoadAuthConfig() {
 
 } // anonymous namespace
 
+static void RefreshThreadFunc(std::string url, std::string httpKey) {
+    while (s_refreshRunning) {
+        // Sleep 60 seconds between checks
+        for (int i = 0; i < 60 && s_refreshRunning; i++) {
+#ifdef _WIN32
+            Sleep(1000);
+#else
+            struct timespec ts = {1, 0};
+            nanosleep(&ts, nullptr);
+#endif
+        }
+        if (!s_refreshRunning) break;
+
+        std::lock_guard<std::mutex> lk(s_tokenMutex);
+        if (!s_auth) continue;
+
+        // Check if token expires within 5 minutes (or already expired)
+        auto cached = LoadCachedAuthToken();
+        uint64_t now = static_cast<uint64_t>(time(nullptr));
+        if (cached.token_expiry > now + 300) continue;  // Still valid for >5 min
+
+        if (cached.token_expiry > now) {
+            Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Token expires in %llus — refreshing",
+                (unsigned long long)(cached.token_expiry - now));
+        } else {
+            Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Token expired %llus ago — refreshing",
+                (unsigned long long)(now - cached.token_expiry));
+        }
+
+        if (cached.HasValidRefreshToken()) {
+            if (RefreshAuthToken(cached, url, httpKey)) {
+                Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Token refreshed successfully");
+            } else {
+                Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Token refresh failed");
+            }
+        }
+    }
+}
+
+std::string TokenAuth::GetToken() {
+    std::lock_guard<std::mutex> lk(s_tokenMutex);
+    auto cached = LoadCachedAuthToken();
+    if (cached.HasValidToken()) return cached.token;
+    return "";
+}
+
+uint64_t TokenAuth::GetDiscordId() {
+    std::lock_guard<std::mutex> lk(s_tokenMutex);
+    auto cached = LoadCachedAuthToken();
+    return cached.GetDiscordId();
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -324,20 +382,32 @@ void TokenAuth::Init(uintptr_t /*base_addr*/, bool is_server) {
     if (s_auth->TryLoadCachedToken()) {
         Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Using cached credentials -- no login needed");
         s_authAttempted = true;
-        return;
+        // Fall through to start refresh thread below
+    } else {
+        // No cached credentials — run device auth now, before game connections start.
+        s_authAttempted = true;
+        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] No cached credentials — starting device code auth...");
+        if (s_auth->RunDeviceAuthFlow()) {
+            Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Authenticated via Discord");
+        } else {
+            Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Authentication failed -- social features may be limited");
+        }
     }
 
-    // No cached credentials — run device auth now, before game connections start.
-    s_authAttempted = true;
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] No cached credentials — starting device code auth...");
-    if (s_auth->RunDeviceAuthFlow()) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Authenticated via Discord");
-    } else {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Authentication failed -- social features may be limited");
+    // Start background refresh thread (both cached and fresh auth paths)
+    if (s_auth->IsAuthenticated() && !cfg.httpKey.empty()) {
+        s_refreshRunning = true;
+        s_refreshThread = new std::thread(RefreshThreadFunc, cfg.url, cfg.httpKey);
     }
 }
 
 void TokenAuth::Shutdown() {
+    s_refreshRunning = false;
+    if (s_refreshThread) {
+        s_refreshThread->join();
+        delete s_refreshThread;
+        s_refreshThread = nullptr;
+    }
     delete s_auth;
     s_auth = nullptr;
     s_authAttempted = false;
