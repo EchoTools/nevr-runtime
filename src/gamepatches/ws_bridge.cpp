@@ -13,9 +13,9 @@
 #include <vector>
 
 #include "config.h"
+#include "module_loader.h"
 #include "common/echovr_functions.h"
 #include "common/logging.h"
-#include "token_auth.h"
 
 // ============================================================================
 // In-process WebSocket TLS proxy
@@ -177,9 +177,18 @@ void InstallWebSocketBridge() {
             remote->disableAutomaticReconnection();
             remote->disablePerMessageDeflate();
 
-            // Get auth token from TokenAuth (refreshed in background)
-            std::string bearerToken = TokenAuth::GetToken();
-            uint64_t discordId = TokenAuth::GetDiscordId();
+            // Get auth token from token_auth module (resolved via cross-module procs)
+            std::string bearerToken;
+            uint64_t discordId = 0;
+            {
+              auto getTokenFn = (const char* (*)())ResolveModuleProc("TokenAuth_GetToken");
+              auto getDiscordIdFn = (uint64_t (*)())ResolveModuleProc("TokenAuth_GetDiscordId");
+              if (getTokenFn) {
+                const char* tok = getTokenFn();
+                if (tok) bearerToken = tok;
+              }
+              if (getDiscordIdFn) discordId = getDiscordIdFn();
+            }
             if (discordId == 0) {
               Log(EchoVR::LogLevel::Warning,
                   "[NEVR.WS] No discord ID in JWT — LoginRequest will use account ID 0");

@@ -11,14 +11,12 @@ set(PATCHES_SOURCES
     "config.cpp"
     "mode_patches.cpp"
     "crash_recovery.cpp"
-    "platform_compat.cpp"
     "state_machine.cpp"
     "plugin_loader.cpp"
     "module_loader.cpp"
     "resource_override.cpp"
     "winhttp_stub.cpp"
     "ws_bridge.cpp"
-    "token_auth.cpp"
 )
 
 set(PATCHES_HEADERS
