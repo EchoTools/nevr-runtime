@@ -17,7 +17,7 @@
 #include <cstdint>
 
 #include "safe_memory.h"
-#include "plugin_log.h"
+#include "combat_log.h"
 #include "nevr_common.h"
 #include "address_registry.h"
 
@@ -86,12 +86,12 @@ static int64_t __fastcall Hook_InitModelCI(int64_t a1, int64_t a2, void* a3,
 
 namespace combat_mod {
 
-void InstallStartVisible(uintptr_t base, std::vector<void*>& hooks) {
+void InstallStartVisible(uintptr_t base, nevr::HookManager& hooks) {
     void* t1 = nevr::ResolveVA(base, nevr::addresses::VA_INIT_MODEL_CI);
     if (MH_CreateHook(t1, reinterpret_cast<void*>(Hook_InitModelCI),
                        reinterpret_cast<void**>(&o_InitModelCI)) == MH_OK) {
         MH_EnableHook(t1);
-        hooks.push_back(t1);
+        hooks.Track(t1);
         combat_mod::PluginLog( "InitModelCI hooked (StartVisible)");
     }
 
@@ -99,7 +99,7 @@ void InstallStartVisible(uintptr_t base, std::vector<void*>& hooks) {
     if (MH_CreateHook(t2, reinterpret_cast<void*>(Hook_CNodeSetVisible),
                        reinterpret_cast<void**>(&o_CNodeSetVisible)) == MH_OK) {
         MH_EnableHook(t2);
-        hooks.push_back(t2);
+        hooks.Track(t2);
         combat_mod::PluginLog( "CNode3D::SetVisible hooked (StartVisible)");
     }
 }

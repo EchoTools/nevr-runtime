@@ -21,7 +21,8 @@
  */
 
 #include "resource_inject.h"
-#include "plugin_log.h"
+#include "combat_log.h"
+#include "resource_registry.h"
 
 #include <windows.h>
 #include <MinHook.h>
@@ -76,16 +77,7 @@ static int32_t __fastcall Hook_ArchiveLoaderLoadResource(
     return g_origLoadResource(self, name_hash, params, callback, user_data);
 }
 
-/* ── Function pointers resolved from gamepatches exports ──────── */
-
-using NEVR_RegisterResourceOverride_t = void(*)(
-    uint64_t, uint64_t, const void*, uint64_t, const char*);
-using NEVR_DeregisterResourceOverrides_t = void(*)(const void*, const void*);
-using NEVR_ResetResourceOverrides_t = void(*)();
-
-static NEVR_RegisterResourceOverride_t g_fnRegister = nullptr;
-static NEVR_DeregisterResourceOverrides_t g_fnDeregister = nullptr;
-static NEVR_ResetResourceOverrides_t g_fnReset = nullptr;
+/* Resource override functions resolved from gamepatches via resource_registry.h */
 
 /* ── Minimal JSON helpers ──────────────────────────────────────── */
 
@@ -164,35 +156,13 @@ static char* LoadTextFile(const char* path) {
     return text;
 }
 
-/* ── Resolve gamepatches exports ───────────────────────────────── */
-
-static bool ResolveExports() {
-    HMODULE hPatches = GetModuleHandleA("dbgcore.dll");
-    if (!hPatches) {
-        combat_mod::PluginLog("dbgcore.dll not found");
-        return false;
-    }
-    g_fnRegister = reinterpret_cast<NEVR_RegisterResourceOverride_t>(
-        GetProcAddress(hPatches, "NEVR_RegisterResourceOverride"));
-    g_fnDeregister = reinterpret_cast<NEVR_DeregisterResourceOverrides_t>(
-        GetProcAddress(hPatches, "NEVR_DeregisterResourceOverrides"));
-    g_fnReset = reinterpret_cast<NEVR_ResetResourceOverrides_t>(
-        GetProcAddress(hPatches, "NEVR_ResetResourceOverrides"));
-
-    if (!g_fnRegister) {
-        combat_mod::PluginLog("NEVR_RegisterResourceOverride not found");
-        return false;
-    }
-    return true;
-}
+/* Exports resolved via resource_registry.h (lazy, thread-safe) */
 
 } // anonymous namespace
 
 namespace combat_mod {
 
 int LoadCombatOverrides(uintptr_t base) {
-    if (!ResolveExports()) return 0;
-
     /* Install archive loader hook for resource aliasing */
     g_hookTarget = nevr::ResolveVA(base, nevr::addresses::VA_ARCHIVE_LOADER_LOAD_RESOURCE);
     if (MH_CreateHook(g_hookTarget,
@@ -289,7 +259,7 @@ int LoadCombatOverrides(uintptr_t base) {
 
                 char label[128];
                 snprintf(label, sizeof(label), "combat:%s/%s", typeName, levelName);
-                g_fnRegister(typeHash, regNameHash, data, size, label);
+                nevr::RegisterResourceOverride(typeHash, regNameHash, data, size, label);
 
                 OverrideEntry oe = {};
                 oe.type_hash = typeHash;
@@ -337,13 +307,11 @@ bool ShouldAliasResource(uint64_t type_hash, uint64_t name_hash,
 
 void UnloadCombatOverrides() {
     /* Deregister overrides from gamepatches */
-    if (g_fnDeregister) {
-        for (const auto& oe : g_overrides) {
-            if (oe.data) {
-                const void* start = oe.data;
-                const void* end = static_cast<const uint8_t*>(oe.data) + oe.size;
-                g_fnDeregister(start, end);
-            }
+    for (const auto& oe : g_overrides) {
+        if (oe.data) {
+            const void* start = oe.data;
+            const void* end = static_cast<const uint8_t*>(oe.data) + oe.size;
+            nevr::DeregisterResourceOverrides(start, end);
         }
     }
 
