@@ -295,6 +295,10 @@ NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void) {
     return info;
 }
 
+NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) {
+    return NEVR_PLUGIN_API_VERSION;
+}
+
 NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
 #ifdef _WIN32
     g_gameBase = ctx->base_addr;

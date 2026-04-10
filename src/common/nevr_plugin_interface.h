@@ -80,3 +80,19 @@ typedef void (*NvrPluginOnGameStateChange_fn)(const NvrGameContext* ctx,
 
 /* Optional: cleanup before DLL unload */
 typedef void (*NvrPluginShutdown_fn)(void);
+
+/*
+ * Plugin API versioning.
+ *
+ * Bump NEVR_PLUGIN_API_VERSION when NvrPluginInfo, NvrGameContext, or any
+ * cross-DLL export signature changes in a backward-incompatible way.
+ * Adding new optional exports or new NvrHostFlags values does NOT require a bump.
+ *
+ * The host resolves NvrPluginGetApiVersion via GetProcAddress. If absent,
+ * the plugin is v1 (pre-versioning). Fully backward-compatible — existing
+ * plugins don't need recompilation.
+ */
+#define NEVR_PLUGIN_API_VERSION 2
+
+/* Optional: return the API version the plugin was compiled against */
+typedef uint32_t (*NvrPluginGetApiVersion_fn)(void);

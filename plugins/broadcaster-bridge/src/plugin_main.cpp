@@ -19,6 +19,10 @@ NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo() {
     };
 }
 
+NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) {
+    return NEVR_PLUGIN_API_VERSION;
+}
+
 NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
     if (!ctx) return -1;
 
