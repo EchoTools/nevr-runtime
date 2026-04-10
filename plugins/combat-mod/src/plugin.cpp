@@ -28,6 +28,7 @@
 #include "start_visible.h"
 #include "level_detect.h"
 #include "combat_system.h"
+#include "resource_inject.h"
 
 #include <vector>
 #include <cstdint>
@@ -65,8 +66,11 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
     combat_mod::InstallLevelOffset(g_base, g_ownedHooks);
     combat_mod::InstallCombatEarly(g_base, g_ownedHooks);
 
-    combat_mod::PluginLog( "Init complete (%zu hooks installed)",
-        g_ownedHooks.size());
+    /* Load combat override resources from _overrides/combat/ */
+    int overrides = combat_mod::LoadCombatOverrides(g_base);
+
+    combat_mod::PluginLog("Init complete (%zu hooks, %d resources)",
+        g_ownedHooks.size(), overrides);
 
     return 0;  /* success */
 }
@@ -97,6 +101,9 @@ NEVR_PLUGIN_API void NvrPluginShutdown() {
     combat_mod::PluginLog( "Shutting down (%zu hooks to remove)",
         g_ownedHooks.size());
 
+    /* Deregister resource overrides before DLL unload */
+    combat_mod::UnloadCombatOverrides();
+
     /* Disable and remove only this plugin's hooks */
     for (void* target : g_ownedHooks) {
         MH_DisableHook(target);
@@ -105,7 +112,7 @@ NEVR_PLUGIN_API void NvrPluginShutdown() {
     g_ownedHooks.clear();
     g_levelHooksInstalled = false;
 
-    combat_mod::PluginLog( "Shutdown complete");
+    combat_mod::PluginLog("Shutdown complete");
 }
 
 } /* extern "C" */

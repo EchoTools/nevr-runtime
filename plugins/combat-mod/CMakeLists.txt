@@ -7,6 +7,7 @@ add_library(combat_mod SHARED
     src/combat_system.cpp
     src/start_visible.cpp
     src/level_detect.cpp
+    src/resource_inject.cpp
 )
 
 target_compile_definitions(combat_mod PRIVATE NEVR_PLUGIN_EXPORTS)
