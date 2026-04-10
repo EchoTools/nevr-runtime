@@ -212,7 +212,7 @@ set(DIST_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}")
 
 # List of DLL artifacts to include
 set(DIST_DLLS
-  "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatches.dll"
+  "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll"
   "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gamepatcheslegacy.dll"
   "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll"
   "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserverlegacy.dll"
@@ -220,7 +220,7 @@ set(DIST_DLLS
 
 # List of debug symbol files to include
 set(DIST_DBG_FILES
-  "${CMAKE_BINARY_DIR}/gamepatches.dll.dbg"
+  "${CMAKE_BINARY_DIR}/BugSplat64.dll.dbg"
   "${CMAKE_BINARY_DIR}/gamepatcheslegacy.dll.dbg"
   "${CMAKE_BINARY_DIR}/gameserver.dll.dbg"
   "${CMAKE_BINARY_DIR}/gameserverlegacy.dll.dbg"
@@ -250,6 +250,9 @@ add_custom_target(dist-prepare
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/server_timing.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/server_timing.dll" "${DIST_DIR}/plugins/" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/token_auth.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/token_auth.dll" "${DIST_DIR}/plugins/" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/broadcaster_bridge.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/broadcaster_bridge.dll" "${DIST_DIR}/plugins/" || true
+  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_2d.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_2d.dll" "${DIST_DIR}/plugins/" || true
+  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_mod.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_mod.dll" "${DIST_DIR}/plugins/" || true
+  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad_enabler.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad_enabler.dll" "${DIST_DIR}/plugins/" || true
   VERBATIM
 )
 
@@ -338,6 +341,9 @@ add_custom_target(dist-lite-prepare
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_DIR}/plugins"
   # log_filter, server_timing, token_auth are now built into gamepatches.dll
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/broadcaster_bridge.dll" "${DIST_LITE_DIR}/plugins/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/plugins/broadcaster_bridge.dll" || ${CMAKE_COMMAND} -E true
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_2d.dll" "${DIST_LITE_DIR}/plugins/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/plugins/combat_2d.dll" || ${CMAKE_COMMAND} -E true
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_mod.dll" "${DIST_LITE_DIR}/plugins/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/plugins/combat_mod.dll" || ${CMAKE_COMMAND} -E true
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad_enabler.dll" "${DIST_LITE_DIR}/plugins/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/plugins/pnsrad_enabler.dll" || ${CMAKE_COMMAND} -E true
   COMMENT "Preparing lite distribution directory (stripped): ${DIST_LITE_DIR}"
   VERBATIM
 )

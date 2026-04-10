@@ -287,6 +287,26 @@ void InstallWebSocketBridge() {
                       // Decode LoginSuccess (sym 0xa5acc1a90d0cce47)
                       if (rsym == 0xa5acc1a90d0cce47) {
                         Log(EchoVR::LogLevel::Info, "[NEVR.WS] LOGIN SUCCESS");
+                        // Inject SNSFriendListSubscribeRequest directly to server.
+                        // pnsrad's broadcaster handle (field_0x160) is null because
+                        // echovr.exe doesn't provide one for the pnsrad platform
+                        // provider, so pnsrad can't send SNS messages itself. Send
+                        // the subscribe request through the WS bridge instead.
+                        {
+                          static const uint64_t SYM_FRIEND_SUBSCRIBE = 0xcdc02fd1dbee3aaa;
+                          // Payload: 0x20 bytes (provider_id + UUID + token).
+                          // Server ignores the payload, so send zeros.
+                          uint8_t payload[0x20] = {};
+                          std::string subscribeMsg;
+                          subscribeMsg.append((const char*)MSG_MARKER, 8);
+                          AppendLE64(subscribeMsg, SYM_FRIEND_SUBSCRIBE);
+                          AppendLE64(subscribeMsg, sizeof(payload));
+                          subscribeMsg.append((const char*)payload, sizeof(payload));
+                          pairPtr->remoteWs->sendBinary(subscribeMsg);
+                          Log(EchoVR::LogLevel::Info,
+                              "[NEVR.WS] Injected FriendListSubscribeRequest (%zu bytes)",
+                              subscribeMsg.size());
+                        }
                       }
                       // Decode SNS friend messages
                       // InviteFailure (0x7f197e30c72c6e61): Header(8)+FriendID(8)+StatusCode(1)

@@ -121,31 +121,10 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     }
   }
 
-  // Trigger friends list subscription on first lobby entry (client only).
-  // Normally echovr.exe calls CNSRADFriends::vfunction22 when the player
-  // opens the arm computer, but that requires VR input. Call it directly
-  // so friends features work without the arm menu.
-  if (!g_isServer && state == EchoVR::NetGameState::Lobby) {
-    static bool s_friendsSubscribed = false;
-    if (!s_friendsSubscribed) {
-      HMODULE hPnsrad = GetModuleHandleA("pnsrad.dll");
-      if (hPnsrad) {
-        typedef void* (*FriendsFn)();
-        auto Friends = (FriendsFn)GetProcAddress(hPnsrad, "Friends");
-        if (Friends) {
-          void* friendsObj = Friends();
-          if (friendsObj) {
-            // vtable slot 22 (offset +0xB0) = FriendListSubscribeRequest
-            auto** vtable = *(uintptr_t***)friendsObj;
-            auto subscribeFn = (void(__fastcall*)(void*))vtable[22];
-            subscribeFn(friendsObj);
-            s_friendsSubscribed = true;
-            Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Called Friends::Subscribe (vtable+0xB0)");
-          }
-        }
-      }
-    }
-  }
+  // Friends subscription is handled by ws_bridge.cpp — it injects an
+  // SNSFriendListSubscribeRequest directly through the WS connection after
+  // LOGIN SUCCESS. pnsrad's broadcaster handle (field_0x160) is null so
+  // calling CNSRADFriends vtable functions for subscribe/refresh is a no-op.
 
   // Call the original function
   EchoVR::NetGameSwitchState(pGame, state);
