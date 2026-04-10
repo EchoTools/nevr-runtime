@@ -14,6 +14,8 @@
 
 #include "nevr_plugin_interface.h"
 #include "nevr_common.h"
+#include "plugin_logger.h"
+#include "hook_manager.h"
 
 #include <cstdio>
 #include <cstring>
@@ -24,17 +26,11 @@
 #include <MinHook.h>
 #endif
 
+NEVR_DEFINE_PLUGIN_LOG("[crash_handler]")
+
 static uintptr_t g_gameBase = 0;
 static bool g_isServer = false;
-
-static void PluginLog(const char* fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    std::fprintf(stderr, "[crash_handler] ");
-    std::vfprintf(stderr, fmt, args);
-    std::fprintf(stderr, "\n");
-    va_end(args);
-}
+static nevr::HookManager g_hooks;
 
 #ifdef _WIN32
 
@@ -267,12 +263,9 @@ static bool InstallKernelHook(HMODULE hK32, const char* name, void* hook, void**
         PluginLog("WARN: %s not found in kernel32", name);
         return false;
     }
-    if (MH_CreateHook(target, hook, orig) != MH_OK) {
-        PluginLog("WARN: MH_CreateHook failed for %s", name);
-        return false;
-    }
-    if (MH_EnableHook(target) != MH_OK) {
-        PluginLog("WARN: MH_EnableHook failed for %s", name);
+    MH_STATUS s = g_hooks.CreateAndEnable(target, hook, orig);
+    if (s != MH_OK) {
+        PluginLog("WARN: hook failed for %s: %d", name, s);
         return false;
     }
     PluginLog("hooked %s", name);
@@ -312,7 +305,6 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
     HMODULE hK32 = GetModuleHandleA("kernel32.dll");
     if (!hK32) {
         PluginLog("kernel32.dll not found");
-        MH_Uninitialize();
         return -1;
     }
 
@@ -344,8 +336,7 @@ NEVR_PLUGIN_API void NvrPluginShutdown(void) {
         RemoveVectoredExceptionHandler(g_vehHandle);
         g_vehHandle = nullptr;
     }
-    MH_DisableHook(MH_ALL_HOOKS);
-    MH_Uninitialize();
+    g_hooks.RemoveAll();
 #endif
     PluginLog("shutdown");
 }

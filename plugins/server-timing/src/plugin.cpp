@@ -78,6 +78,7 @@
 #include "nevr_common.h"
 #include "address_registry.h"
 #include "yaml_config.h"
+#include "hook_manager.h"
 
 #include <cstdarg>
 #include <cstdio>
@@ -247,6 +248,7 @@ static bool g_initialized = false;
 static bool g_timestep_applied = false;
 static bool g_wait_hook_installed = false;
 static bool g_switchtothread_hook_installed = false;
+static nevr::HookManager g_hooks;
 
 /* --------------------------------------------------------------------
  * CPrecisionSleep::Wait hook — replace with plain Sleep on Wine
@@ -385,9 +387,9 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
     if (g_config.disable_busywait) {
         void* wait_fn = nevr::ResolveVA(g_base, nevr::addresses::VA_PRECISION_SLEEP_WAIT);
         MH_Initialize();
-        if (MH_CreateHook(wait_fn, reinterpret_cast<void*>(&PrecisionSleepWaitHook),
-                          reinterpret_cast<void**>(&s_origWait)) == MH_OK &&
-            MH_EnableHook(wait_fn) == MH_OK) {
+        if (g_hooks.CreateAndEnable(wait_fn,
+                                    reinterpret_cast<void*>(&PrecisionSleepWaitHook),
+                                    reinterpret_cast<void**>(&s_origWait)) == MH_OK) {
             g_wait_hook_installed = true;
             Log("hooked CPrecisionSleep::Wait -> Sleep(ms)");
         } else {
@@ -548,9 +550,6 @@ NEVR_PLUGIN_API void NvrPluginOnFrame(const NvrGameContext* ctx) {
 NEVR_PLUGIN_API void NvrPluginShutdown(void) {
     Log("shutting down");
 #ifdef _WIN32
-    if (g_wait_hook_installed) {
-        MH_DisableHook(MH_ALL_HOOKS);
-        MH_Uninitialize();
-    }
+    g_hooks.RemoveAll();
 #endif
 }
