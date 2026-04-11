@@ -160,7 +160,7 @@ std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string
 }
 
 std::string DeviceAuth::RequestDeviceCode() {
-    std::string url = m_url + "/v2/rpc/device/auth/request?http_key=" + m_httpKey;
+    std::string url = m_url + "/v2/rpc/device/auth/request?http_key=" + m_httpKey + "&unwrap";
     std::string response = HttpPostPublic(url, "{}");
     if (response.empty()) return "";
 
@@ -173,7 +173,7 @@ std::string DeviceAuth::RequestDeviceCode() {
 }
 
 std::string DeviceAuth::PollDeviceCode(const std::string& code) {
-    std::string url = m_url + "/v2/rpc/device/auth/poll?http_key=" + m_httpKey;
+    std::string url = m_url + "/v2/rpc/device/auth/poll?http_key=" + m_httpKey + "&unwrap";
     nlohmann::json reqBody;
     reqBody["code"] = code;
     std::string response = HttpPostPublic(url, reqBody.dump());
