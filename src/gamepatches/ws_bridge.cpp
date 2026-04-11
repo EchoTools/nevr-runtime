@@ -75,8 +75,8 @@ static void AppendLE64(std::string& buf, uint64_t val) {
 }
 
 static std::string BuildLoginRequest(uint64_t discordId) {
-  // Platform: OVR_ORG = 4 (Go iota: XPlatformIdSize=0, STM=1, PSN=2, XBX=3, OVR_ORG=4)
-  uint64_t platformCode = 4;
+  // Platform: DSC = 2 (Go iota: XPlatformIdSize=0, STM=1, PSN/DSC=2, XBX=3, OVR_ORG=4)
+  uint64_t platformCode = 2;
   uint64_t accountId = discordId;
 
   // LoginProfile JSON — matches the game's SNSLogInRequestv2 format
@@ -293,16 +293,22 @@ void InstallWebSocketBridge() {
                                 uint8_t** bufCtx = *(uint8_t***)(usersObj + 0x368);
                                 if (userCount > 0 && bufCtx && *bufCtx) {
                                   uint8_t* user = *bufCtx;
+                                  int64_t*  accountId  = (int64_t*)(user + 0x88);
                                   uint64_t* loginState = (uint64_t*)(user + 0x90);
                                   uint32_t* stateFlags = (uint32_t*)(user + 0x9c);
                                   Log(EchoVR::LogLevel::Info,
-                                      "[NEVR.WS] CNSUser BEFORE: state=0x%llx flags=0x%x",
-                                      (unsigned long long)*loginState, *stateFlags);
-                                  *loginState = (*loginState & ~0xFULL) | 2;
+                                      "[NEVR.WS] CNSUser BEFORE: acct=%lld state=0x%llx flags=0x%x",
+                                      (long long)*accountId, (unsigned long long)*loginState, *stateFlags);
+                                  // Set the user's XPID: account_id and provider enum.
+                                  // +0x88 = account_id (discord ID from JWT)
+                                  // +0x90 low nibble = provider enum (3 = PSN/DSC in binary)
+                                  // +0x9c = state flags (0x04 = connected/logged in)
+                                  *accountId  = (int64_t)discordId;
+                                  *loginState = (*loginState & ~0xFULL) | 3;  // PSN/DSC
                                   *stateFlags = 0x04;
                                   Log(EchoVR::LogLevel::Info,
-                                      "[NEVR.WS] CNSUser AFTER:  state=0x%llx flags=0x%x",
-                                      (unsigned long long)*loginState, *stateFlags);
+                                      "[NEVR.WS] CNSUser AFTER:  acct=%lld state=0x%llx flags=0x%x",
+                                      (long long)*accountId, (unsigned long long)*loginState, *stateFlags);
                                 }
                               }
                             }
@@ -312,7 +318,7 @@ void InstallWebSocketBridge() {
                         std::string loginMsg = BuildLoginRequest(discordId);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         Log(EchoVR::LogLevel::Info,
-                            "[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes, conn=%d)",
+                            "[NEVR.WS] Injected LoginRequest (DSC-%llu, %zu bytes, conn=%d)",
                             (unsigned long long)discordId, loginMsg.size(), connIdx);
                       }
 
