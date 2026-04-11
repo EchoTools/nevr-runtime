@@ -237,11 +237,18 @@ void InstallWebSocketBridge() {
               Log(EchoVR::LogLevel::Warning,
                   "[NEVR.WS] No discord ID in JWT — LoginRequest will use account ID 0");
             }
-            if (!bearerToken.empty()) {
+            // Only attach Bearer token if the URL doesn't already have credentials.
+            // The /spr endpoint authenticates via URL query params (discordid/password).
+            // Sending Bearer on top may cause the server to use the JWT session instead
+            // of the URL-credential session, breaking matchmaker state.
+            bool hasUrlCredentials = remoteUrl.find("discordid=") != std::string::npos;
+            if (!bearerToken.empty() && !hasUrlCredentials) {
               ix::WebSocketHttpHeaders headers;
               headers["Authorization"] = "Bearer " + bearerToken;
               remote->setExtraHeaders(headers);
               Log(EchoVR::LogLevel::Info, "[NEVR.WS] Attaching Bearer token to remote connection");
+            } else if (hasUrlCredentials) {
+              Log(EchoVR::LogLevel::Info, "[NEVR.WS] Using URL credentials (no Bearer token)");
             }
 
             auto pair = std::make_unique<ProxyPair>();
