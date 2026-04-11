@@ -169,26 +169,10 @@ void InstallWebSocketBridge() {
           case ix::WebSocketMessageType::Open: {
             int connIdx = g_connectionCount++;
 
-            // conn>=2 (matchmaker, etc.): reuse the login connection's remote WS.
-            // The original game multiplexes all services on one WS. Nakama tracks
-            // session state per-connection, so matchmaker requests must come from
-            // the same session that logged in.
-            if (connIdx >= 2 && g_loginRemoteWs) {
-              Log(EchoVR::LogLevel::Info,
-                  "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), sharing login session",
-                  connIdx, (void*)&gameWs);
-              auto pair = std::make_unique<ProxyPair>();
-              pair->remoteWs = g_loginRemoteWs;
-              pair->remoteOpen = true;  // login remote is already open
-              pair->loginInjected = true;  // login already happened on this session
-              {
-                std::lock_guard<std::mutex> lk(g_pairsMutex);
-                // Redirect server responses to this game WS (matchmaker)
-                g_activeGameWs = &gameWs;
-                g_pairs[&gameWs] = std::move(pair);
-              }
-              break;
-            }
+            // conn>=2 (matchmaker): pnsradmatchmaking.dll uses protobuf envelopes,
+            // not raw EchoVR binary. It needs its own connection WITHOUT format=evr.
+            // Fall through to create a new remote connection (same as conn=0/1)
+            // but the URL will be adjusted below to remove format=evr.
 
             // conn=0 (config) and conn=1 (login): create new remote ws
             auto remote = std::make_shared<ix::WebSocket>();
@@ -207,6 +191,24 @@ void InstallWebSocketBridge() {
                 remoteUrl += "&password=";
                 remoteUrl += cfgPassword;
               }
+            }
+            // conn>=2 (matchmaker): pnsradmatchmaking uses protobuf, not EchoVR
+            // binary. Strip format=evr so the server uses default protobuf handling.
+            if (connIdx >= 2) {
+              auto pos = remoteUrl.find("format=evr");
+              if (pos != std::string::npos) {
+                // Remove "format=evr" and the preceding ? or &
+                size_t start = (pos > 0 && (remoteUrl[pos-1] == '?' || remoteUrl[pos-1] == '&'))
+                               ? pos - 1 : pos;
+                size_t end = pos + 10;  // len("format=evr")
+                // If there's a trailing & after format=evr, remove it too
+                if (end < remoteUrl.size() && remoteUrl[end] == '&') end++;
+                remoteUrl.erase(start, end - start);
+                // If we left a trailing ? with nothing after, remove it
+                if (!remoteUrl.empty() && remoteUrl.back() == '?') remoteUrl.pop_back();
+              }
+              Log(EchoVR::LogLevel::Info,
+                  "[NEVR.WS] Matchmaker conn=%d using protobuf URL: %s", connIdx, remoteUrl.c_str());
             }
             remote->setUrl(remoteUrl);
             remote->disableAutomaticReconnection();
@@ -372,16 +374,10 @@ void InstallWebSocketBridge() {
                             "[NEVR.WS] FRIEND LIST: online=%u busy=%u offline=%u sent=%u recv=%u",
                             non, nbusy, noff, nsent, nrecv);
                       }
-                      // Send to the active game WS (login or matchmaker).
-                      // g_activeGameWs is swapped when conn>=2 connects, so
-                      // responses go to whichever game WS is currently active.
-                      {
-                        ix::WebSocket* target = g_activeGameWs ? g_activeGameWs : gameWsPtr;
-                        if (rmsg->binary) {
-                          target->sendBinary(rmsg->str);
-                        } else {
-                          target->sendText(rmsg->str);
-                        }
+                      if (rmsg->binary) {
+                        gameWsPtr->sendBinary(rmsg->str);
+                      } else {
+                        gameWsPtr->sendText(rmsg->str);
                       }
                       break;
                     }
@@ -503,16 +499,8 @@ void InstallWebSocketBridge() {
             std::lock_guard<std::mutex> lk(g_pairsMutex);
             auto it = g_pairs.find(&gameWs);
             if (it != g_pairs.end()) {
-              // Don't stop the shared login remote when a secondary disconnects
-              bool isShared = (it->second->remoteWs == g_loginRemoteWs);
-              if (!isShared) {
-                it->second->remoteWs->stop();
-              }
+              it->second->remoteWs->stop();
               g_pairs.erase(it);
-            }
-            // Reset active target if this was the active game WS
-            if (g_activeGameWs == &gameWs) {
-              g_activeGameWs = nullptr;
             }
             Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game disconnected");
             break;
