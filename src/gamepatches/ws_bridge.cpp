@@ -218,34 +218,32 @@ void InstallWebSocketBridge() {
                       if (connIdx > 0 && !pairPtr->loginInjected) {
                         pairPtr->loginInjected = true;
 
-                        // Set CNSUser login state via pnsrad.dll's Users() singleton
-                        HMODULE hPnsrad = GetModuleHandleA("pnsrad.dll");
-                        if (hPnsrad) {
-                          typedef void* (*UsersFn)();
-                          auto Users = (UsersFn)GetProcAddress(hPnsrad, "Users");
-                          if (Users) {
-                            auto* usersObj = (uint8_t*)Users();
-                            if (usersObj) {
-                              // CNSIUsers layout: +0x368 = buffer_ctx (pointer to first user)
-                              // +0x398 = active_user_count
-                              uint64_t userCount = *(uint64_t*)(usersObj + 0x398);
-                              uint8_t** bufCtx = *(uint8_t***)(usersObj + 0x368);
-                              if (userCount > 0 && bufCtx && *bufCtx) {
-                                uint8_t* user = *bufCtx;
-                                // CNSUser +0x90 = login state (low nibble: 0=out, 2=logging in, 6=in)
-                                // CNSUser +0x9c = state flags (bit 2=connecting, bit 4=offline)
-                                uint64_t* loginState = (uint64_t*)(user + 0x90);
-                                uint32_t* stateFlags = (uint32_t*)(user + 0x9c);
-                                Log(EchoVR::LogLevel::Info,
-                                    "[NEVR.WS] CNSUser BEFORE: state=0x%llx flags=0x%x",
-                                    (unsigned long long)*loginState, *stateFlags);
-                                // Set login state to kLoggingIn (2)
-                                *loginState = (*loginState & ~0xFULL) | 2;
-                                // Clear all flags, set only connecting (bit 2)
-                                *stateFlags = 0x04;
-                                Log(EchoVR::LogLevel::Info,
-                                    "[NEVR.WS] CNSUser AFTER:  state=0x%llx flags=0x%x",
-                                    (unsigned long long)*loginState, *stateFlags);
+                        // Set CNSUser login state only on the actual login connection.
+                        // Later connections (matchmaker, etc.) must not reset the state
+                        // or the game loses its logged-in status during lobby join.
+                        if (connIdx == 1) {
+                          HMODULE hPnsrad = GetModuleHandleA("pnsrad.dll");
+                          if (hPnsrad) {
+                            typedef void* (*UsersFn)();
+                            auto Users = (UsersFn)GetProcAddress(hPnsrad, "Users");
+                            if (Users) {
+                              auto* usersObj = (uint8_t*)Users();
+                              if (usersObj) {
+                                uint64_t userCount = *(uint64_t*)(usersObj + 0x398);
+                                uint8_t** bufCtx = *(uint8_t***)(usersObj + 0x368);
+                                if (userCount > 0 && bufCtx && *bufCtx) {
+                                  uint8_t* user = *bufCtx;
+                                  uint64_t* loginState = (uint64_t*)(user + 0x90);
+                                  uint32_t* stateFlags = (uint32_t*)(user + 0x9c);
+                                  Log(EchoVR::LogLevel::Info,
+                                      "[NEVR.WS] CNSUser BEFORE: state=0x%llx flags=0x%x",
+                                      (unsigned long long)*loginState, *stateFlags);
+                                  *loginState = (*loginState & ~0xFULL) | 2;
+                                  *stateFlags = 0x04;
+                                  Log(EchoVR::LogLevel::Info,
+                                      "[NEVR.WS] CNSUser AFTER:  state=0x%llx flags=0x%x",
+                                      (unsigned long long)*loginState, *stateFlags);
+                                }
                               }
                             }
                           }
@@ -254,8 +252,8 @@ void InstallWebSocketBridge() {
                         std::string loginMsg = BuildLoginRequest(discordId);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         Log(EchoVR::LogLevel::Info,
-                            "[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)",
-                            (unsigned long long)discordId, loginMsg.size());
+                            "[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes, conn=%d)",
+                            (unsigned long long)discordId, loginMsg.size(), connIdx);
                       }
 
                       for (auto& pending : pairPtr->pendingToRemote) {
