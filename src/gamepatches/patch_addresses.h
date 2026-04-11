@@ -272,6 +272,31 @@ constexpr uintptr_t GAME_LOCAL_CONFIG_OFFSET = 0x63240;
 constexpr uintptr_t CJSON_GET_FLOAT = 0x5FCA60;
 
 // ============================================================================
+// XPID Provider String Patches (PSN- → DSC-)
+// ============================================================================
+
+/// Platform prefix string table entries for PSN (provider_id 1 in Nakama enum).
+/// Patched to "DSC" / "DSC-" so the game formats/parses Discord-based XPIDs.
+/// All three are in .rdata — ProcessMemcpy handles VirtualProtect.
+///
+/// Source: ReVault search_strings + read_memory on echovr.exe
+/// Region 0x1416D0ED0: "OlPrEfIx" struct array — short platform names
+/// Region 0x1416D0F5C: Dash-suffixed prefix table (SNSUserID StartsWith targets)
+/// Region 0x1416D7130: Compact name table feeding "%s-%llu" format string
+
+/// VA 0x1416D0EE0: "PSN\0" (4 bytes) — short platform name in OlPrEfIx struct
+constexpr uintptr_t XPID_PLATFORM_SHORT_NAME = 0x16D0EE0;
+constexpr size_t XPID_PLATFORM_SHORT_NAME_SIZE = 4;
+
+/// VA 0x1416D0F64: "PSN-" (4 bytes) — dash-prefixed string for CSysString::StartsWith
+constexpr uintptr_t XPID_PLATFORM_DASH_PREFIX = 0x16D0F64;
+constexpr size_t XPID_PLATFORM_DASH_PREFIX_SIZE = 4;
+
+/// VA 0x1416D7138: "PSN\0" (4 bytes) — compact name feeding "%s-%llu" sprintf
+constexpr uintptr_t XPID_PLATFORM_COMPACT_NAME = 0x16D7138;
+constexpr size_t XPID_PLATFORM_COMPACT_NAME_SIZE = 4;
+
+// ============================================================================
 // Global Data Addresses
 // ============================================================================
 

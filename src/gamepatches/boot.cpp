@@ -6,6 +6,7 @@
 #include "plugin_loader.h"
 #include "ws_bridge.h"
 #include "token_auth.h"
+#include "xpid_patch.h"
 #include "patch_addresses.h"
 #include "common/globals.h"
 #include "common/logging.h"
@@ -140,6 +141,10 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     UINT64* windowedFlags = reinterpret_cast<UINT64*>(static_cast<CHAR*>(pGame) + GAME_WINDOWED_FLAGS_OFFSET);
     *windowedFlags |= 0x0100000;  // Enable windowed mode (spectator uses 0x2100000 for additional settings)
   }
+
+  // Replace PSN- provider prefix with DSC- (Discord) in all string tables.
+  // Applied before any game connections so XPID parsing sees "DSC-" from the start.
+  PatchDscProvider();
 
   // Block Oculus Platform SDK on all modes — no headset available
   PatchBypassOvrPlatform();

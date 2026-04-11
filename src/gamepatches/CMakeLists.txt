@@ -18,6 +18,7 @@ set(PATCHES_SOURCES
     "winhttp_stub.cpp"
     "ws_bridge.cpp"
     "token_auth.cpp"
+    "xpid_patch.cpp"
 )
 
 set(PATCHES_HEADERS
@@ -37,6 +38,7 @@ set(PATCHES_HEADERS
     "process_mem.h"
     "patch_addresses.h"
     "ws_bridge.h"
+    "xpid_patch.h"
 )
 
 add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
@@ -95,4 +97,19 @@ if(MINGW)
   target_link_libraries(gamepatches PRIVATE
     $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>
   )
+endif()
+
+# XPID patch unit tests — validates byte constants and address sanity.
+if(BUILD_TESTING)
+  find_package(GTest QUIET)
+  if(GTest_FOUND)
+    include(GoogleTest)
+    add_executable(test_xpid_patch tests/test_xpid_patch.cpp)
+    target_include_directories(test_xpid_patch PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_SOURCE_DIR}/src/common
+    )
+    target_link_libraries(test_xpid_patch PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_xpid_patch)
+  endif()
 endif()
