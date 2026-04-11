@@ -152,7 +152,6 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 
   // Apply patches to force the game to load as a server.
   if (g_isServer) {
-    PatchDisableServerRendering(pGame);
     PatchEnableServer();
     PatchDisableLoadingTips();
     PatchDisableWwise();
