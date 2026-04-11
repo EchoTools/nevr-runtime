@@ -437,6 +437,16 @@ void InstallWebSocketBridge() {
                 Log(EchoVR::LogLevel::Info, "[NEVR.WS] game->server [%d]: sym=0x%016llx len=%llu (conn=%s)",
                     msgIdx, (unsigned long long)sym, (unsigned long long)len,
                     connState->getId().c_str());
+                // Hex dump PlayerSessionRequest (0x9af2fab2a0c81a05) for debugging
+                if (sym == 0x9af2fab2a0c81a05 && len <= 256) {
+                  char hex[1024] = {};
+                  int hoff = 0;
+                  const uint8_t* pp = p + 24;
+                  for (size_t i = 0; i < len && hoff < 1000; i++) {
+                    hoff += snprintf(hex + hoff, sizeof(hex) - hoff, "%02x ", pp[i]);
+                  }
+                  Log(EchoVR::LogLevel::Info, "[NEVR.WS] PlayerSessionReq payload: %s", hex);
+                }
                 // Decode outgoing SNS friend messages
                 // FriendInviteRequest (0x7f0d7a28de3c6f70): RoutingID(8)+UUID(16)+SessionGUID(8)+TargetUserID(8)
                 if (sym == 0x7f0d7a28de3c6f70 && len >= 0x28) {
