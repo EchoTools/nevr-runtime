@@ -4,6 +4,7 @@
 #include <ixwebsocket/IXWebSocket.h>
 #include <ixwebsocket/IXWebSocketServer.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <memory>
@@ -47,6 +48,18 @@ struct ProxyPair {
 static std::mutex g_pairsMutex;
 static std::atomic<int> g_connectionCount{0};  // tracks connection order (0=config, 1+=login)
 static std::unordered_map<ix::WebSocket*, std::unique_ptr<ProxyPair>> g_pairs;
+
+// The login connection's remote WS (conn=1). Connections after login (conn>=2,
+// e.g. matchmaker) reuse this so all traffic shares the same Nakama session.
+// The original game multiplexes config/login/matchmaker on one WS to one server;
+// Nakama correlates matchmaker allocations by session, so the matchmaker must
+// use the same authenticated session as login.
+static std::shared_ptr<ix::WebSocket> g_loginRemoteWs;
+
+// The active game-side WS that should receive server→game messages from the
+// login remote. Initially conn=1 (login), swapped to conn=2 (matchmaker) when
+// it connects, so the game receives matchmaker responses on the right peer.
+static ix::WebSocket* g_activeGameWs = nullptr;
 
 // ============================================================================
 // LoginRequest builder
@@ -154,8 +167,30 @@ void InstallWebSocketBridge() {
          const ix::WebSocketMessagePtr& msg) {
         switch (msg->type) {
           case ix::WebSocketMessageType::Open: {
-            // Game opened a connection — create remote ws to real server
             int connIdx = g_connectionCount++;
+
+            // conn>=2 (matchmaker, etc.): reuse the login connection's remote WS.
+            // The original game multiplexes all services on one WS. Nakama tracks
+            // session state per-connection, so matchmaker requests must come from
+            // the same session that logged in.
+            if (connIdx >= 2 && g_loginRemoteWs) {
+              Log(EchoVR::LogLevel::Info,
+                  "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), sharing login session",
+                  connIdx, (void*)&gameWs);
+              auto pair = std::make_unique<ProxyPair>();
+              pair->remoteWs = g_loginRemoteWs;
+              pair->remoteOpen = true;  // login remote is already open
+              pair->loginInjected = true;  // login already happened on this session
+              {
+                std::lock_guard<std::mutex> lk(g_pairsMutex);
+                // Redirect server responses to this game WS (matchmaker)
+                g_activeGameWs = &gameWs;
+                g_pairs[&gameWs] = std::move(pair);
+              }
+              break;
+            }
+
+            // conn=0 (config) and conn=1 (login): create new remote ws
             auto remote = std::make_shared<ix::WebSocket>();
 
             // Build remote URL with optional query param auth
@@ -337,10 +372,16 @@ void InstallWebSocketBridge() {
                             "[NEVR.WS] FRIEND LIST: online=%u busy=%u offline=%u sent=%u recv=%u",
                             non, nbusy, noff, nsent, nrecv);
                       }
-                      if (rmsg->binary) {
-                        gameWsPtr->sendBinary(rmsg->str);
-                      } else {
-                        gameWsPtr->sendText(rmsg->str);
+                      // Send to the active game WS (login or matchmaker).
+                      // g_activeGameWs is swapped when conn>=2 connects, so
+                      // responses go to whichever game WS is currently active.
+                      {
+                        ix::WebSocket* target = g_activeGameWs ? g_activeGameWs : gameWsPtr;
+                        if (rmsg->binary) {
+                          target->sendBinary(rmsg->str);
+                        } else {
+                          target->sendText(rmsg->str);
+                        }
                       }
                       break;
                     }
@@ -363,11 +404,16 @@ void InstallWebSocketBridge() {
             {
               std::lock_guard<std::mutex> lk(g_pairsMutex);
               g_pairs[gameWsPtr] = std::move(pair);
+              // Save login connection for reuse by matchmaker (conn>=2)
+              if (connIdx == 1) {
+                g_loginRemoteWs = remote;
+                g_activeGameWs = gameWsPtr;
+              }
             }
             // Start after insertion so the remote callback can find the pair in g_pairs
             remote->start();
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%s, ws=%p), bridging to %s",
-                connState->getId().c_str(), (void*)gameWsPtr, g_remoteUri.c_str());
+            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), bridging to %s",
+                connIdx, (void*)gameWsPtr, g_remoteUri.c_str());
             break;
           }
 
@@ -447,8 +493,16 @@ void InstallWebSocketBridge() {
             std::lock_guard<std::mutex> lk(g_pairsMutex);
             auto it = g_pairs.find(&gameWs);
             if (it != g_pairs.end()) {
-              it->second->remoteWs->stop();
+              // Don't stop the shared login remote when a secondary disconnects
+              bool isShared = (it->second->remoteWs == g_loginRemoteWs);
+              if (!isShared) {
+                it->second->remoteWs->stop();
+              }
               g_pairs.erase(it);
+            }
+            // Reset active target if this was the active game WS
+            if (g_activeGameWs == &gameWs) {
+              g_activeGameWs = nullptr;
             }
             Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game disconnected");
             break;
