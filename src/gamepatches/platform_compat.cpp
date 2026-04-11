@@ -186,6 +186,7 @@ HRESULT WINAPI CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD 
 void InstallTLSHook() {
   // Hook SSL/TLS functions for modern cipher suite support (ECDSA, EdDSA, RSA)
   HMODULE hSecur32 = GetModuleHandleA("Secur32.dll");
+  if (hSecur32 == NULL) hSecur32 = LoadLibraryA("Secur32.dll");
   if (hSecur32 != NULL) {
     OriginalAcquireCredentialsHandleW =
         (AcquireCredentialsHandleWFunc)GetProcAddress(hSecur32, "AcquireCredentialsHandleW");
@@ -201,8 +202,11 @@ void InstallTLSHook() {
 }
 
 void InstallWinHTTPHook() {
-  // Hook CoCreateInstance for WinHTTP replacement
+  // Hook CoCreateInstance for WinHTTP replacement.
+  // LoadLibraryA fallback: ole32.dll is not loaded during DllMain (loader lock),
+  // but CoCreateInstance must be hooked before the game's first HTTP call.
   HMODULE hOle32 = GetModuleHandleA("ole32.dll");
+  if (hOle32 == NULL) hOle32 = LoadLibraryA("ole32.dll");
   if (hOle32 != NULL) {
     OriginalCoCreateInstance = (CoCreateInstanceFunc)GetProcAddress(hOle32, "CoCreateInstance");
     if (OriginalCoCreateInstance != NULL) {
