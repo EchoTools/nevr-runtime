@@ -169,10 +169,26 @@ void InstallWebSocketBridge() {
           case ix::WebSocketMessageType::Open: {
             int connIdx = g_connectionCount++;
 
-            // conn>=2 (matchmaker): pnsradmatchmaking.dll uses protobuf envelopes,
-            // not raw EchoVR binary. It needs its own connection WITHOUT format=evr.
-            // Fall through to create a new remote connection (same as conn=0/1)
-            // but the URL will be adjusted below to remove format=evr.
+            // conn>=2 (matchmaker): reuse the login connection's remote WS.
+            // The matchmaker needs the fully-authenticated session (login + profile
+            // exchange) that conn=1 established. A fresh LoginRequest-only session
+            // won't have the server-side state needed for PlayerSessionRequest.
+            // Don't inject LoginRequest — the session is already logged in.
+            if (connIdx >= 2 && g_loginRemoteWs) {
+              Log(EchoVR::LogLevel::Info,
+                  "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), sharing login session (no LoginRequest)",
+                  connIdx, (void*)&gameWs);
+              auto pair = std::make_unique<ProxyPair>();
+              pair->remoteWs = g_loginRemoteWs;
+              pair->remoteOpen = true;
+              pair->loginInjected = true;  // skip LoginRequest — already authenticated
+              {
+                std::lock_guard<std::mutex> lk(g_pairsMutex);
+                g_activeGameWs = &gameWs;
+                g_pairs[&gameWs] = std::move(pair);
+              }
+              break;
+            }
 
             // conn=0 (config) and conn=1 (login): create new remote ws
             auto remote = std::make_shared<ix::WebSocket>();
@@ -252,7 +268,7 @@ void InstallWebSocketBridge() {
                       // so that CNSUser::LogInSuccessCB processes the server's LoginSuccess
                       // response. Without this, LogInSuccessCB silently discards the message
                       // because the user's login state at +0x90 is still 0 (logged out).
-                      if (connIdx > 0 && !pairPtr->loginInjected) {
+                      if (connIdx == 1 && !pairPtr->loginInjected) {
                         pairPtr->loginInjected = true;
 
                         // Set CNSUser login state only on the actual login connection.
@@ -374,10 +390,16 @@ void InstallWebSocketBridge() {
                             "[NEVR.WS] FRIEND LIST: online=%u busy=%u offline=%u sent=%u recv=%u",
                             non, nbusy, noff, nsent, nrecv);
                       }
-                      if (rmsg->binary) {
-                        gameWsPtr->sendBinary(rmsg->str);
-                      } else {
-                        gameWsPtr->sendText(rmsg->str);
+                      // Route to the active game WS. When matchmaker (conn>=2)
+                      // shares the login remote, g_activeGameWs is swapped so
+                      // responses reach the matchmaker's game WS peer.
+                      {
+                        ix::WebSocket* target = g_activeGameWs ? g_activeGameWs : gameWsPtr;
+                        if (rmsg->binary) {
+                          target->sendBinary(rmsg->str);
+                        } else {
+                          target->sendText(rmsg->str);
+                        }
                       }
                       break;
                     }
@@ -499,9 +521,13 @@ void InstallWebSocketBridge() {
             std::lock_guard<std::mutex> lk(g_pairsMutex);
             auto it = g_pairs.find(&gameWs);
             if (it != g_pairs.end()) {
-              it->second->remoteWs->stop();
+              bool isShared = (it->second->remoteWs == g_loginRemoteWs);
+              if (!isShared) {
+                it->second->remoteWs->stop();
+              }
               g_pairs.erase(it);
             }
+            if (g_activeGameWs == &gameWs) g_activeGameWs = nullptr;
             Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game disconnected");
             break;
           }
