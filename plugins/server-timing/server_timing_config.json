@@ -1,7 +1,0 @@
-{
-    "tick_rate_hz": 120,
-    "tick_rate_idle_hz": 6,
-    "disable_busywait": true,
-    "fix_deltatime_comparison": true,
-    "fix_switchtothread": false
-}

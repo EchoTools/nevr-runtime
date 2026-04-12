@@ -391,7 +391,7 @@ void InstallWebSocketBridge() {
                             "[NEVR.WS] FRIEND INVITE SUCCESS: friendId=%llu",
                             (unsigned long long)friendId);
                       }
-                      // FriendListResponse (0xa78aeb2a4e89b10b): counts
+                      // FriendListResponse (0xa78aeb2a4e89b10b): counts + per-friend entries
                       if (rsym == 0xa78aeb2a4e89b10b && rmsg->str.size() >= 24 + 0x20) {
                         uint32_t noff, nbusy, non, nsent, nrecv;
                         memcpy(&noff, rmsg->str.data() + 24 + 8, 4);
@@ -402,6 +402,16 @@ void InstallWebSocketBridge() {
                         Log(EchoVR::LogLevel::Info,
                             "[NEVR.WS] FRIEND LIST: online=%u busy=%u offline=%u sent=%u recv=%u",
                             non, nbusy, noff, nsent, nrecv);
+                        // Hex dump full payload for friend entry analysis
+                        size_t payloadLen = rmsg->str.size() - 24;
+                        const uint8_t* pp = (const uint8_t*)rmsg->str.data() + 24;
+                        char hex[4096] = {};
+                        int hoff = 0;
+                        for (size_t i = 0; i < payloadLen && hoff < 4000; i++) {
+                          hoff += snprintf(hex + hoff, sizeof(hex) - hoff, "%02x ", pp[i]);
+                        }
+                        Log(EchoVR::LogLevel::Info, "[NEVR.WS] FRIEND payload (%zu bytes): %s",
+                            payloadLen, hex);
                       }
                       // Route to the active game WS. When matchmaker (conn>=2)
                       // shares the login remote, g_activeGameWs is swapped so
