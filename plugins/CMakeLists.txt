@@ -15,7 +15,7 @@ add_subdirectory(log-filter)
 
 # token-auth is now built into gamepatches (runs before game connections)
 add_subdirectory(broadcaster-bridge)
-add_subdirectory(pnsrad-enabler)
+# pnsrad-enabler is now built into gamepatches (pnsrad_enabler.cpp)
 # combat plugins disabled while debugging social lobby login
 #add_subdirectory(combat-mod)
 #add_subdirectory(combat-2d)

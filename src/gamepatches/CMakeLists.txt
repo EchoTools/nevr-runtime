@@ -20,6 +20,7 @@ set(PATCHES_SOURCES
     "token_auth.cpp"
     "xpid_patch.cpp"
     "server_timing.cpp"
+    "pnsrad_enabler.cpp"
 )
 
 set(PATCHES_HEADERS
@@ -41,6 +42,7 @@ set(PATCHES_HEADERS
     "ws_bridge.h"
     "xpid_patch.h"
     "server_timing.h"
+    "pnsrad_enabler.h"
 )
 
 add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
