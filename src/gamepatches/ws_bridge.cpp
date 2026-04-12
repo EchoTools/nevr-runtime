@@ -417,7 +417,11 @@ void InstallWebSocketBridge() {
                       // shares the login remote, g_activeGameWs is swapped so
                       // responses reach the matchmaker's game WS peer.
                       {
-                        ix::WebSocket* target = g_activeGameWs ? g_activeGameWs : gameWsPtr;
+                        ix::WebSocket* target = nullptr;
+                        {
+                          std::lock_guard<std::mutex> lk(g_pairsMutex);
+                          target = g_activeGameWs ? g_activeGameWs : gameWsPtr;
+                        }
                         if (rmsg->binary) {
                           target->sendBinary(rmsg->str);
                         } else {
@@ -546,7 +550,11 @@ void InstallWebSocketBridge() {
             if (it != g_pairs.end()) {
               bool isShared = (it->second->remoteWs == g_loginRemoteWs);
               if (!isShared) {
+                // stop() is synchronous — blocks until the connection is closed
+                // and all callbacks have completed. Clear the callback after stop
+                // so no further invocations can reference the freed ProxyPair.
                 it->second->remoteWs->stop();
+                it->second->remoteWs->setOnMessageCallback(nullptr);
               }
               g_pairs.erase(it);
             }

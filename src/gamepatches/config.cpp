@@ -333,7 +333,7 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
   CHAR* target = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)configKey, NULL, false);
   if (target == NULL || target[0] == '\0') return result;
 
-  static CHAR redirected[512];
+  thread_local CHAR redirected[512];
 
   // All WebSocket connections go through the in-process proxy
   extern bool IsWebSocketBridgeActive();

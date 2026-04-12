@@ -102,6 +102,48 @@ generate-combat-overrides build_dir:
         --build-dir {{build_dir}} \
         --output-dir echovr/bin/win10/_overrides/combat
 
+# --- Code Signing ---
+
+# Generate the CA hierarchy (root → intermediate → code-signing)
+generate-certs:
+    ./certs/generate-ca.sh
+
+# Renew intermediate + code-signing certs (root CA stays in pass)
+renew-certs:
+    ./certs/generate-ca.sh --renew
+
+# Sign all DLLs in dist/ with Authenticode
+sign: dist
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cert_dir="{{ justfile_directory() }}/certs"
+    if [[ ! -f "$cert_dir/code-signing.key" || ! -f "$cert_dir/chain.pem" ]]; then
+        echo "ERROR: No signing certs found. Run: just generate-certs" >&2
+        exit 1
+    fi
+    shopt -s nullglob
+    dlls=(dist/**/*.dll dist/**/*.exe)
+    if [[ ${#dlls[@]} -eq 0 ]]; then
+        echo "No DLLs/EXEs found in dist/" >&2
+        exit 1
+    fi
+    for f in "${dlls[@]}"; do
+        echo "Signing $f"
+        osslsigncode sign \
+            -certs "$cert_dir/chain.pem" \
+            -key "$cert_dir/code-signing.key" \
+            -n "nEVR Runtime" \
+            -t http://timestamp.digicert.com \
+            -in "$f" \
+            -out "$f.signed"
+        mv "$f.signed" "$f"
+    done
+    echo "Signed ${#dlls[@]} file(s)"
+
+# Verify Authenticode signature on a file
+verify-sign file:
+    osslsigncode verify -CAfile certs/root-ca.crt -in {{ file }}
+
 # --- Internal ---
 
 # Install vcpkg dependencies for MinGW cross-compilation (runs only for mingw presets)

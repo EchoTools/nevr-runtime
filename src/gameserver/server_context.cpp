@@ -223,7 +223,9 @@ void ServerContext::UpdateSessionState(const SessionState& state) {
 }
 
 CallbackRegistry& ServerContext::GetCallbackRegistry() {
-  // No lock needed - caller should hold appropriate lock if concurrent access
+  // Not synchronized — only safe from the game's main thread.
+  // All current call sites (RegisterBroadcasterCallbacks, UnregisterAllCallbacks,
+  // Initialize, Terminate) run on the main thread.
   return m_callbacks;
 }
 

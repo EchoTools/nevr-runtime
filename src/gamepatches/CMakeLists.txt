@@ -20,6 +20,7 @@ set(PATCHES_SOURCES
     "token_auth.cpp"
     "xpid_patch.cpp"
     "server_timing.cpp"
+    "wave0_instrumentation.cpp"
     "pnsrad_enabler.cpp"
 )
 
@@ -42,6 +43,7 @@ set(PATCHES_HEADERS
     "ws_bridge.h"
     "xpid_patch.h"
     "server_timing.h"
+    "wave0_instrumentation.h"
     "pnsrad_enabler.h"
 )
 
