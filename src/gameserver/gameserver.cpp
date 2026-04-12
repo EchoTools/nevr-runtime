@@ -849,7 +849,19 @@ GameServerLib::GameServerLib()
       m_wsClient(std::make_unique<WebSocketClient>()),
       m_telemetry(std::make_unique<TelemetryStreamer>()) {}
 
-GameServerLib::~GameServerLib() = default;
+GameServerLib::~GameServerLib() {
+  // If a graceful-shutdown thread is running, wait for it before destroying members
+  // it references (m_context, m_wsClient, etc.).
+  if (!m_shutdownComplete.load()) {
+    constexpr int kTimeoutMs = 5000;
+    constexpr int kPollMs = 50;
+    int waited = 0;
+    while (!m_shutdownComplete.load() && waited < kTimeoutMs) {
+      Sleep(kPollMs);
+      waited += kPollMs;
+    }
+  }
+}
 
 INT64 GameServerLib::UnkFunc0(VOID*, INT64, INT64) { return 1; }
 
@@ -964,14 +976,28 @@ void GameServerLib::RegisterTcpCallbacks() {
       return;
     }
 
-    sockaddr_in gameServerAddr = *reinterpret_cast<sockaddr_in*>(&broadcaster->data->addr);
+    // Resolve IP the same way as initial registration: prefer UPnP/config external IP,
+    // fall back to raw socket address. The "internal_ip_address" protobuf field is a
+    // legacy misnomer — ServerDB expects the public-facing IP here.
+    std::string internalIp = Ipv4ToString(
+        reinterpret_cast<sockaddr_in*>(&broadcaster->data->addr)->sin_addr.S_un.S_addr);
+    std::string externalIp;
+    uint16_t broadcasterPort = broadcaster->data->broadcastSocketInfo.port;
+
+    NevRUPnPConfig upnpCfg = {};
+    if (ReadUPnPConfig(upnpCfg)) {
+      if (upnpCfg.internalIp[0] != '\0') internalIp = upnpCfg.internalIp;
+      if (upnpCfg.externalIp[0] != '\0') externalIp = upnpCfg.externalIp;
+      if (upnpCfg.enabled && upnpCfg.port != 0) broadcasterPort = upnpCfg.port;
+    }
+    if (externalIp.empty()) externalIp = internalIp;
 
     gameservice::v1::Envelope envelope;
     auto* registration = envelope.mutable_game_server_registration();
     registration->set_login_session_id(GuidToUuidString(g_loginSessionId));
     registration->set_server_id(static_cast<uint64_t>(state.serverId));
-    registration->set_internal_ip_address(Ipv4ToString(gameServerAddr.sin_addr.S_un.S_addr));
-    registration->set_port(static_cast<uint32_t>(broadcaster->data->broadcastSocketInfo.port));
+    registration->set_internal_ip_address(externalIp);
+    registration->set_port(static_cast<uint32_t>(broadcasterPort));
     registration->set_region(state.regionId);
     registration->set_version_lock(state.versionLock);
     registration->set_time_step_usecs(state.defaultTimeStepUsecs);
@@ -1088,6 +1114,8 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
 
     self->EndSession();
     self->Unregister();
+
+    self->m_shutdownComplete.store(true);
 
     Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Graceful shutdown complete — exiting");
     ExitProcess(0);

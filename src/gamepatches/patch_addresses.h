@@ -304,4 +304,29 @@ constexpr size_t XPID_PLATFORM_COMPACT_NAME_SIZE = 4;
 constexpr uintptr_t FIXED_TIMESTEP_PTR = 0x020A00E8;
 constexpr uintptr_t FIXED_TIMESTEP_OFFSET = 0x90;
 
+// ============================================================================
+// Wave 0 Instrumentation Addresses
+// ============================================================================
+
+/// Address: GetTimeMicroseconds (0x1400d00c0, 68 bytes)
+/// QPC-to-microseconds conversion. 12 callers (physics, network, rendering).
+/// Signature: uint64_t __fastcall() — no parameters, returns microseconds since boot.
+constexpr uintptr_t GET_TIME_MICROSECONDS = 0xD00C0;
+
+/// Address: CTimer_GetMilliSeconds (0x1400d0110, 95 bytes)
+/// QPC-to-milliseconds conversion. 11 callers including CleanupPeers.
+/// Signature: uint64_t __fastcall() — no parameters, returns milliseconds since boot.
+constexpr uintptr_t GET_TIME_MILLISECONDS = 0xD0110;
+
+/// Address: EndMultiplayer (0x140162450, 1196 bytes)
+/// Session teardown. Dereferences *(*(arg1+0x2DA0)) without null check.
+/// Signature: void __fastcall(int64_t game_object, int64_t arg2)
+constexpr uintptr_t END_MULTIPLAYER = 0x162450;
+
+/// Address: HandleDXError (0x140551070, 285 bytes)
+/// Centralized DXGI error handler. 75 callers from render pipeline.
+/// Translates HRESULT to string, calls fatal log. All DX errors are fatal.
+/// Signature: void __fastcall(uint64_t hr, uint64_t ctx_fmt, uint64_t detail, int64_t extra)
+constexpr uintptr_t HANDLE_DX_ERROR = 0x551070;
+
 }  // namespace PatchAddresses

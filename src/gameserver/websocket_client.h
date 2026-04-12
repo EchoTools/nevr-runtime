@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <string>
@@ -90,8 +91,8 @@ class WebSocketClient {
   // Connection state change callback
   ConnectionCallback connectionCallback_;
 
-  // Connection state
-  BOOL connected_;
+  // Connection state (written from ixwebsocket callback thread, read from main thread)
+  std::atomic<bool> connected_{false};
 
   // Message queue for messages sent before connection established
   std::vector<std::string> pendingMessages_;

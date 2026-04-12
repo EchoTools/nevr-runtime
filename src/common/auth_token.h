@@ -160,6 +160,8 @@ inline bool SaveAuthToken(const CachedAuthToken& auth) {
         target_dir = exeDir + "_local";
 #ifdef _WIN32
         _mkdir(target_dir.c_str());
+#else
+        mkdir(target_dir.c_str(), 0755);
 #endif
     }
 
@@ -172,6 +174,7 @@ inline bool SaveAuthToken(const CachedAuthToken& auth) {
 
     std::ofstream out(path, std::ios::trunc);
     if (!out.is_open()) {
+        fprintf(stderr, "[NEVR.AUTH] Failed to open %s for writing\n", path.c_str());
 #ifndef _WIN32
         umask(old_umask);
 #endif

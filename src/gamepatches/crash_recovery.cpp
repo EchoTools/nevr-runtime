@@ -66,30 +66,16 @@ BOOL WINAPI CreateProcessWHook(LPCWSTR lpApplicationName, LPWSTR lpCommandLine,
                                BOOL bInheritHandles, DWORD dwCreationFlags, LPVOID lpEnvironment,
                                LPCWSTR lpCurrentDirectory, LPSTARTUPINFOW lpStartupInfo,
                                LPPROCESS_INFORMATION lpProcessInformation) {
-  // Suppress crash reporter executable (BsSndRpt64.exe) by faking successful launch
+  // Block crash reporter executable (BsSndRpt64.exe) to prevent Wine errors
   if (lpApplicationName && wcsstr(lpApplicationName, L"BsSndRpt")) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Suppressed crash reporter launch (W): %ls", lpApplicationName);
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked crash reporter launch (W): %ls", lpApplicationName);
     g_crashReporterSuppressed = true;
-    if (lpProcessInformation) {
-      ZeroMemory(lpProcessInformation, sizeof(PROCESS_INFORMATION));
-      lpProcessInformation->hProcess = (HANDLE)0xDEADBEEF;
-      lpProcessInformation->hThread = (HANDLE)0xDEADBEEF;
-      lpProcessInformation->dwProcessId = 0xDEADBEEF;
-      lpProcessInformation->dwThreadId = 0xDEADBEEF;
-    }
-    return TRUE;
+    return FALSE;
   }
   if (lpCommandLine && wcsstr(lpCommandLine, L"BsSndRpt")) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Suppressed crash reporter launch (cmdline W): %ls", lpCommandLine);
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked crash reporter launch (cmdline W): %ls", lpCommandLine);
     g_crashReporterSuppressed = true;
-    if (lpProcessInformation) {
-      ZeroMemory(lpProcessInformation, sizeof(PROCESS_INFORMATION));
-      lpProcessInformation->hProcess = (HANDLE)0xDEADBEEF;
-      lpProcessInformation->hThread = (HANDLE)0xDEADBEEF;
-      lpProcessInformation->dwProcessId = 0xDEADBEEF;
-      lpProcessInformation->dwThreadId = 0xDEADBEEF;
-    }
-    return TRUE;
+    return FALSE;
   }
 
   // Allow all other process launches
@@ -137,6 +123,16 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ExitProcess(%u) called", uExitCode);
   OriginalExitProcess(uExitCode);
+}
+
+/// Check whether a memory region is committed and readable without using
+/// the deprecated (and unreliable under Wine) IsBadReadPtr.
+static bool IsReadableMemory(const void* addr, size_t len) {
+  MEMORY_BASIC_INFORMATION mbi;
+  if (VirtualQuery(addr, &mbi, sizeof(mbi)) == 0) return false;
+  if (mbi.State != MEM_COMMIT) return false;
+  if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
+  return true;
 }
 
 /// Log a full crash dump: exception info, registers, stack trace with RVAs.
@@ -201,7 +197,7 @@ static void LogCrashDump(PEXCEPTION_POINTERS ex) {
   DWORD64* sp = (DWORD64*)ctx->Rsp;
   int found = 0;
   for (int i = 0; i < 256 && found < 16; i++) {
-    if (IsBadReadPtr(sp + i, 8)) break;
+    if (!IsReadableMemory(sp + i, 8)) break;
     DWORD64 val = sp[i];
     INT64 r = rva(val);
     if (r >= 0 && r < 0x1800000) {

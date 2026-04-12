@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 
 #include "constants.h"
@@ -51,6 +52,10 @@ class GameServerLib : public EchoVR::IServerLib {
   std::unique_ptr<GameServer::ServerContext> m_context;
   std::unique_ptr<WebSocketClient> m_wsClient;
   std::unique_ptr<TelemetryStreamer> m_telemetry;
+
+  // Set by the detached graceful-shutdown thread when it finishes.
+  // Destructor waits on this before tearing down members.
+  std::atomic<bool> m_shutdownComplete{false};
 
   // Helper methods
   void RegisterBroadcasterCallbacks();

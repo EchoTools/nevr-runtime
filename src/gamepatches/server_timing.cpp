@@ -390,9 +390,10 @@ void ServerTiming::Init(uintptr_t base_addr, bool is_server) {
             g_config = ServerTimingConfig{};
             g_config.valid = true;
         } else {
-            bool is_yaml = config_path.size() >= 4 &&
-                (config_path.substr(config_path.size() - 4) == ".yml" ||
-                 config_path.substr(config_path.size() - 5) == ".yaml");
+            bool is_yaml = (config_path.size() >= 4 &&
+                            config_path.substr(config_path.size() - 4) == ".yml") ||
+                           (config_path.size() >= 5 &&
+                            config_path.substr(config_path.size() - 5) == ".yaml");
             g_config = ParseConfig(content, is_yaml);
         }
     }
