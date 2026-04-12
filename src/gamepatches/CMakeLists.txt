@@ -19,6 +19,7 @@ set(PATCHES_SOURCES
     "ws_bridge.cpp"
     "token_auth.cpp"
     "xpid_patch.cpp"
+    "server_timing.cpp"
 )
 
 set(PATCHES_HEADERS
@@ -39,6 +40,7 @@ set(PATCHES_HEADERS
     "patch_addresses.h"
     "ws_bridge.h"
     "xpid_patch.h"
+    "server_timing.h"
 )
 
 add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
@@ -57,11 +59,11 @@ find_package(CURL REQUIRED)
 find_package(ixwebsocket CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
-target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json)
+target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json ws2_32)
 target_link_directories(gamepatches PRIVATE common)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(ws_bridge.cpp token_auth.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(ws_bridge.cpp token_auth.cpp server_timing.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 set_target_properties(gamepatches PROPERTIES
   OUTPUT_NAME "BugSplat64"
