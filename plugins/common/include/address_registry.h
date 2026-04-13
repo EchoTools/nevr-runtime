@@ -281,6 +281,22 @@ static constexpr uint64_t VA_SOCIAL_PLUGIN_STR_PNSDEMO = 0x1416d35e8;  // xref 0
 // 6-byte JNE (0F 85 C7 00 00 00). NOP to skip OVR init and take Path 2.
 static constexpr uint64_t VA_OVR_PLATFORM_BRANCH = 0x1401580e5;
 
+// --- Animation Debugging ---
+
+// Source: ReVault -- CCharacterAnimationCS::InitRootEvaluator (listed as vfunction14).
+// Quest RTTI at 0x14950a8 confirms the name. Calls RootEvaluator internally;
+// fires DATA:ERROR "no root animation evaluator" if the result is NULL.
+static constexpr uint64_t VA_INIT_ROOT_EVALUATOR = 0x140340280;
+
+// Source: ReVault -- GetPlayerPhysicsBodySymbol.
+// Two-tier physics body lookup (direct ID then CAttachment::GetTree fallback).
+// Called by InitRootEvaluator to resolve the compact pool handle.
+static constexpr uint64_t VA_GET_PLAYER_PHYSICS_BODY = 0x140363680;
+
+// Source: ReVault -- CResourceID::GetName (CSymbol64 -> const char*).
+// Resolves a symbol64 hash to a human-readable resource name string.
+static constexpr uint64_t VA_CRESOURCEID_GET_NAME = 0x1400d0a40;
+
 } // namespace nevr::addresses
 
 // Struct offsets within CR15NetGame
