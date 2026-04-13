@@ -19,6 +19,7 @@
 #include "common/logging.h"
 #include "common/echovr_functions.h"
 #include "patch_addresses.h"
+#include "wave0_instrumentation.h"
 
 #include <windows.h>
 
@@ -151,6 +152,10 @@ VOID Initialize() {
   PatchNoOvrRequiresSpectatorStream();
   PatchDeadlockMonitor();
   fprintf(stderr, "[NEVR] patches OK\n"); fflush(stderr);
+
+  // --- Wave 0 instrumentation (observation-only + EndMultiplayer crash prevention) ---
+  Wave0::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+  fprintf(stderr, "[NEVR] wave0 OK\n"); fflush(stderr);
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] All hooks installed");
 }
