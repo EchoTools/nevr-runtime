@@ -6,13 +6,13 @@ All addresses are virtual addresses (ImageBase `0x140000000`). Analysis via ReVa
 
 ## Summary
 
-| Severity  | Count  |
-| --------- | ------ |
-| Critical  | 2      |
-| High      | 12     |
-| Medium    | 25     |
-| Low       | 16     |
-| **Total** | **55** |
+| Severity  | Count  | Fixed |
+| --------- | ------ | ----- |
+| Critical  | 2      | 2     |
+| High      | 12     | 7     |
+| Medium    | 30     | 0     |
+| Low       | 17     | 0     |
+| **Total** | **61** | **9** |
 
 ## Critical
 
@@ -21,7 +21,7 @@ All addresses are virtual addresses (ImageBase `0x140000000`). Analysis via ReVa
 |             |                                      |
 | ----------- | ------------------------------------ |
 | **Address** | `0x1400D00C0` (68 bytes, 12 callers) |
-| **Status**  | Unpatched                            |
+| **Status**  | **FIXED** (wave0 hook)               |
 
 ```c
 return (perfCount * 1000000) / perfFreq;
@@ -29,14 +29,18 @@ return (perfCount * 1000000) / perfFreq;
 
 `perfCount * 1000000` overflows `INT64_MAX` after ~10.7 days at 10 MHz QPC, ~4.3 days at 25 MHz (Ryzen). Wraps negative, producing garbage timestamps across physics, networking, animation, rendering simultaneously.
 
+**Fix:** Overflow-safe replacement using quotient+remainder split: `(pc/pf)*1000000 + ((pc%pf)*1000000)/pf`. Also caches QPC frequency (was bug #37). Does not call original.
+
 ### 2. Network peer timeout — no sanity check on elapsed time
 
 |             |                                          |
 | ----------- | ---------------------------------------- |
 | **Address** | `0x140F76500` (CleanupPeers, 1939 bytes) |
-| **Status**  | Unpatched                                |
+| **Status**  | **FIXED** (by bug #1 fix)                |
 
 Unsigned subtraction of overflowed timestamp wraps to massive value. Every peer exceeds timeout threshold — all disconnected at once.
+
+**Fix:** Root cause eliminated — GetTimeMicroseconds no longer overflows, so CleanupPeers never sees wrapped timestamps.
 
 ## High
 
@@ -74,18 +78,22 @@ Receive loop processes packets until time budget expires. No packet count limit,
 | ------------- | ---------------------------------------------------------------------------- |
 | **Pattern**   | `*(*(uint32_t**)(arg1 + 0x2DA0))`                                            |
 | **Functions** | EndMultiplayer (`0x140162450`), IsGameModeActive (`0x140113A50`), +17 others |
-| **Status**    | Unpatched                                                                    |
+| **Status**    | **Partial fix** (EndMultiplayer hooked, 19 others unpatched)                 |
 
 Neither pointer level has a null check. EndMultiplayer is called during disconnect cleanup — if session never initialized, crash.
+
+**Fix:** Wave0 hook on EndMultiplayer checks `*(arg1+0x2DA0)` for NULL and returns early. Other 19 functions remain unpatched.
 
 ### 7. All DX errors treated as fatal — no recovery from transient DEVICE_HUNG
 
 |               |                                           |
 | ------------- | ----------------------------------------- |
 | **Addresses** | `0x14059CAD0`, `0x14055CFE0`, 75+ callers |
-| **Status**    | Unpatched                                 |
+| **Status**    | **FIXED** (wave0 hook)                    |
 
 Every DXGI HRESULT failure calls `NRadEngine_LogError(8, ...)` which does not return. `DXGI_ERROR_DEVICE_HUNG` (transient, TDR recoverable) and `DXGI_ERROR_WAS_STILL_DRAWING` (GPU busy) are treated identically to `DEVICE_REMOVED` (unrecoverable).
+
+**Fix:** Wave0 hook on HandleDXError (`0x140551070`) intercepts transient errors (DEVICE_HUNG, WAS_STILL_DRAWING) — logs and returns instead of calling the fatal original. Other DXGI errors still pass through.
 
 ### 8. DLL hijacking — LoadLibraryExW with flags=0
 
@@ -119,36 +127,44 @@ Calls `CreateFileA`, `WriteFile`, `snprintf`, `GetModuleFileName`, `getenv`, and
 |             |                                                  |
 | ----------- | ------------------------------------------------ |
 | **Address** | `0x1401CE0B0` (CPrecisionSleep::Wait, 361 bytes) |
-| **Status**  | Hooked by server_timing (server only)            |
+| **Status**  | **FIXED** (wave0 hook, all modes)                |
 
 `CreateWaitableTimerA` cannot accept `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`. Timer precision depends on global system timer interrupt rate (default 15.625ms). `timeBeginPeriod` imported but no xrefs to call site found.
 
+**Fix:** Wave0 hook replaces with persistent `CreateWaitableTimerExW` using `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` flag (Windows 10 1803+). Falls back to standard timer on older Windows. On servers, server_timing chains on top with WSAPoll-based recv.
+
 ### 12. Timer handle created/destroyed every frame
 
-|             |                                       |
-| ----------- | ------------------------------------- |
-| **Address** | `0x1401CE0B0`                         |
-| **Status**  | Hooked by server_timing (server only) |
+|             |                                   |
+| ----------- | --------------------------------- |
+| **Address** | `0x1401CE0B0`                     |
+| **Status**  | **FIXED** (wave0 hook, all modes) |
 
 Kernel timer object allocated and freed every frame. At 90fps: 180 kernel-mode transitions/sec.
+
+**Fix:** Wave0 creates a single persistent timer handle at init. Same hook as bug #11.
 
 ### 13. BusyWait Sleep(0) spin with no \_mm_pause()
 
 |             |                                                      |
 | ----------- | ---------------------------------------------------- |
 | **Address** | `0x1401CE4C0` (CPrecisionSleep::BusyWait, 112 bytes) |
-| **Status**  | Patched to RET by server_timing (server only)        |
+| **Status**  | **FIXED** (wave0 RET patch, all modes)               |
 
 Tight QPC loop with `Sleep(0)`. No PAUSE instruction — starves HT sibling core's pipeline.
+
+**Fix:** Wave0 patches first byte to RET (0xC3) unconditionally. WaitableTimer phase in Wait handles the bulk of the sleep; only ~250us of busy-wait precision lost.
 
 ### 14. Inverted backoff in CSpinWait::WaitForValue
 
 |             |                                      |
 | ----------- | ------------------------------------ |
 | **Address** | `0x141500ED8` (115 bytes, 3 callers) |
-| **Status**  | Unpatched                            |
+| **Status**  | **FIXED** (wave0 hook)               |
 
 Starts with `Sleep(1)`, degrades to `Sleep(0)` after 10 iterations. Maximum CPU consumption at peak contention.
+
+**Fix:** Wave0 hook replaces with proper increasing backoff (0→10ms) and adds `YieldProcessor()` (PAUSE instruction) for HT-friendly spinning.
 
 ## Medium
 
@@ -473,3 +489,57 @@ If injected DLL modifies MXCSR between save/restore, rounding errors cause occlu
 | **Address** | `0x1400E00B0` |
 
 Wwise low-level I/O uses synchronous file open for some soundbank loads during gameplay. Brief audio stutter on area transitions.
+
+### 56. COM IMMDeviceEnumerator conditional Release
+
+|             |                                                   |
+| ----------- | ------------------------------------------------- |
+| **Address** | `0x14138B1E0` (audio device notification handler) |
+| **Status**  | Unpatched                                         |
+
+`CoCreateInstance` creates `IMMDeviceEnumerator` but `Release()` is only called on the success path. If downstream code assumes the COM object exists after the failure path, potential use-after-free. Related to bug #53 (two notification paths).
+
+### 57. GetUserName player index no bounds check
+
+|             |               |
+| ----------- | ------------- |
+| **Address** | `0x1401C98C0` |
+| **Status**  | Unpatched     |
+
+Player index multiplied by stride `0x250` without validating against player table bounds. Network-reachable if player index comes from a packet. Out-of-bounds read from netgame context.
+
+### 58. Stun duration validation masks sign bit
+
+|             |                      |
+| ----------- | -------------------- |
+| **Address** | `0x140D534F0` (Stun) |
+| **Status**  | Unpatched            |
+
+Validation uses `(uint32_t)arg & 0x7FFFFFFF` (abs value) before comparing to epsilon. Negative stun durations pass validation and are treated as positive.
+
+### 59. Allocator failure vtable call before non-returning error
+
+|             |                                              |
+| ----------- | -------------------------------------------- |
+| **Address** | `0x1400D4EF0` (linear allocator DirectAlloc) |
+| **Status**  | Unpatched                                    |
+
+When allocation exceeds capacity, calls a vtable function and then `NRadEngine_LogError` (non-returning). The vtable result is not checked — if it throws or corrupts state, the subsequent fatal log operates on bad data.
+
+### 60. Crash metadata StrLen cap mismatch
+
+|             |                               |
+| ----------- | ----------------------------- |
+| **Address** | `0x1401D0870` (WriteCrashLog) |
+| **Status**  | Unpatched                     |
+
+Crash metadata buffer is `0x800` bytes but `StrLen` is capped at `0x400`. If JSON content exceeds 0x400 bytes, written length is truncated, potentially leaking uninitialized stack data or producing malformed output.
+
+### 61. AdvanceBodies frame counter int32 wraparound
+
+|             |                                            |
+| ----------- | ------------------------------------------ |
+| **Address** | `0x14068A150` (AdvanceBodies physics loop) |
+| **Status**  | Unpatched                                  |
+
+Physics frame counter is `int32_t`, wraps after ~331 days at 72fps. Reset-to-1 guard only catches wrap to zero, not INT_MAX→INT_MIN transition. Causes frame numbering discontinuity in physics state.
