@@ -301,10 +301,11 @@ void InstallWebSocketBridge() {
                                       (long long)*accountId, (unsigned long long)*loginState, *stateFlags);
                                   // Set the user's XPID: account_id and provider enum.
                                   // +0x88 = account_id (discord ID from JWT)
-                                  // +0x90 low nibble = provider enum (3 = PSN/DSC in binary)
+                                  // +0x90 low nibble = provider enum (2 = PSN in binary,
+                                  //   patched to DSC by PatchDscProvider string table rewrite)
                                   // +0x9c = state flags (0x04 = connected/logged in)
                                   *accountId  = (int64_t)discordId;
-                                  *loginState = (*loginState & ~0xFULL) | 3;  // PSN/DSC
+                                  *loginState = (*loginState & ~0xFULL) | 2;  // PSN (patched to DSC)
                                   *stateFlags = 0x04;
                                   Log(EchoVR::LogLevel::Info,
                                       "[NEVR.WS] CNSUser AFTER:  acct=%lld state=0x%llx flags=0x%x",
