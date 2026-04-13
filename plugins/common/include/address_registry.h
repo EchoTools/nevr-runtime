@@ -297,6 +297,19 @@ static constexpr uint64_t VA_GET_PLAYER_PHYSICS_BODY = 0x140363680;
 // Resolves a symbol64 hash to a human-readable resource name string.
 static constexpr uint64_t VA_CRESOURCEID_GET_NAME = 0x1400d0a40;
 
+// Source: ReVault -- CAnimTree::Create (Quest: 0x26506b8, confirmed name).
+// Factory that loads an AnimSet resource, binary-searches for a tree name,
+// and unpacks it into a CRootEvaluator. Fires "Unable to find animation tree"
+// if the tree name doesn't exist in the AnimSet.
+// Only 3 callers: PlayAnimation x2, fcn.140631e60 (scene setup).
+static constexpr uint64_t VA_ANIM_TREE_CREATE = 0x140fb4640;
+
+// Source: ReVault -- CAnimationCRI init function.
+// Creates a CAnimationCRI (CResourceInstanceT<CAnimationCR>), calls
+// CResourceInstance::LoadAndInit with the .anim resource hash, then binds
+// the skeleton. Returns non-zero if load or bind fails.
+static constexpr uint64_t VA_ANIM_CRI_INIT = 0x14027b6f0;
+
 } // namespace nevr::addresses
 
 // Struct offsets within CR15NetGame

@@ -247,6 +247,30 @@ static CHAR* GetServiceHostWithFallback(const CHAR* serviceKey, const CHAR* defa
 }
 
 /// <summary>
+/// When the WebSocket bridge is active and nevr_socket_uri is configured, build a
+/// relay URL for HTTP(S) service connections that weren't overridden by config.json.
+/// The matching service (pnsradmatchmaking) uses protobuf over WebSocket, so it goes
+/// through the bridge's local proxy just like loginservice and configservice.
+/// Returns the original URL unchanged if the bridge isn't active or no target is set.
+/// </summary>
+static CHAR* AutoRelayThroughBridge(const CHAR* serviceKey, CHAR* url) {
+  extern bool IsWebSocketBridgeActive();
+  extern uint16_t GetWebSocketBridgePort();
+
+  if (!IsWebSocketBridgeActive()) return url;
+  if (g_earlyConfigPtr == NULL) return url;
+
+  CHAR* target = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_socket_uri", NULL, false);
+  if (target == NULL || target[0] == '\0') return url;
+
+  thread_local CHAR relayUrl[512];
+  snprintf(relayUrl, sizeof(relayUrl), "ws://127.0.0.1:%u", GetWebSocketBridgePort());
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Auto-relay [%s] through bridge: %s → %s", serviceKey, url, relayUrl);
+  return relayUrl;
+}
+
+/// <summary>
 /// A detour hook for the game's HTTP(S) connect function. Redirects hardcoded endpoints
 /// using config.json overrides with fallback chain: service_key -> loginservice_host -> default.
 ///
@@ -254,6 +278,9 @@ static CHAR* GetServiceHostWithFallback(const CHAR* serviceKey, const CHAR* defa
 /// endpoint independently (CLoginService: loginservice_host, CNSRadMatchmaking:
 /// matchingservice_host, CHTTPApi: hardcoded api.readyatdawn.com etc.). URL substring
 /// matching is the correct approach given this per-service architecture.
+///
+/// When the WebSocket bridge is active and no explicit config override exists, services
+/// are automatically relayed through the bridge (matchingservice, serverdb, etc.).
 /// </summary>
 UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
   // If we have a local config, check for service overrides with fallback logic
@@ -279,10 +306,16 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
     // Matching Service - detect matchmaking URLs
     else if (strstr(uri, "match") != NULL && strstr(uri, "https://") == uri) {
       uri = GetServiceHostWithFallback("matchingservice_host", uri);
+      if (uri == originalUri) {
+        uri = AutoRelayThroughBridge("matchingservice_host", uri);
+      }
     }
     // ServerDB Service - detect serverdb/registry URLs
     else if ((strstr(uri, "serverdb") != NULL || strstr(uri, "registry") != NULL) && strstr(uri, "https://") == uri) {
       uri = GetServiceHostWithFallback("serverdb_host", uri);
+      if (uri == originalUri) {
+        uri = AutoRelayThroughBridge("serverdb_host", uri);
+      }
     }
     // Oculus Graph API
     else if (!strncmp(uri, "https://graph.oculus.com", 24)) {
