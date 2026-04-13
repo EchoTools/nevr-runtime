@@ -121,7 +121,7 @@ sign: dist
         echo "ERROR: No signing certs found. Run: just generate-certs" >&2
         exit 1
     fi
-    shopt -s nullglob
+    shopt -s nullglob globstar
     dlls=(dist/**/*.dll dist/**/*.exe)
     if [[ ${#dlls[@]} -eq 0 ]]; then
         echo "No DLLs/EXEs found in dist/" >&2
