@@ -326,7 +326,36 @@ constexpr uintptr_t END_MULTIPLAYER = 0x162450;
 /// Address: HandleDXError (0x140551070, 285 bytes)
 /// Centralized DXGI error handler. 75 callers from render pipeline.
 /// Translates HRESULT to string, calls fatal log. All DX errors are fatal.
+/// Hooked to recover from transient DEVICE_HUNG and WAS_STILL_DRAWING.
 /// Signature: void __fastcall(uint64_t hr, uint64_t ctx_fmt, uint64_t detail, int64_t extra)
 constexpr uintptr_t HANDLE_DX_ERROR = 0x551070;
+
+// GetTimeMicroseconds global data addresses (offsets from ImageBase)
+// Used by the overflow-safe replacement hook to replicate the original's
+// paused/fixed time check without calling the buggy original function.
+
+/// Global flag: non-zero means time is paused/fixed, use cached value
+constexpr uintptr_t GET_TIME_OVERRIDE_FLAG = 0x2099038;
+
+/// Cached microsecond value returned when override flag is set
+constexpr uintptr_t GET_TIME_OVERRIDE_VALUE = 0x209CB00;
+
+// ============================================================================
+// Future Wave 1 Hook Targets (validated, not yet hooked)
+// ============================================================================
+
+/// Address: CleanupPeers (0x140F76500, 1939 bytes, 1 caller)
+/// Network peer timeout check. BUG #2: unsigned subtraction of overflowed
+/// timestamp wraps to massive value, disconnecting all peers.
+/// Fixed indirectly by GetTimeMicroseconds overflow fix (BUG #1).
+constexpr uintptr_t CLEANUP_PEERS = 0xF76500;
+
+/// Address: CSpinWait::WaitForValue (0x141500ED8, 115 bytes, 3 callers)
+/// BUG #14: Inverted backoff — starts Sleep(1), degrades to Sleep(0).
+/// Maximum CPU consumption at peak contention.
+constexpr uintptr_t SPINWAIT_WAIT_FOR_VALUE = 0x1500ED8;
+
+/// Global spin iteration limit read by CSpinWait::WaitForValue
+constexpr uintptr_t SPINWAIT_SPIN_LIMIT = 0x2034500;
 
 }  // namespace PatchAddresses
