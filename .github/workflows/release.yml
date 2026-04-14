@@ -1,0 +1,164 @@
+name: AI Semantic Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (don't create release)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  models: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Get commits since last tag
+        id: commits
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            echo "No previous tag found, using full history"
+            COMMITS=$(git log --oneline --no-decorate)
+          else
+            echo "last_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
+            COMMITS=$(git log "${LAST_TAG}..HEAD" --oneline --no-decorate)
+          fi
+          if [ -z "$COMMITS" ]; then
+            echo "No new commits since $LAST_TAG"
+            exit 1
+          fi
+          # Store commits in a file — all AI prompt assembly uses jq for
+          # JSON encoding, so commit messages never hit shell interpolation.
+          echo "$COMMITS" > /tmp/commits.txt
+          echo "count=$(echo "$COMMITS" | wc -l)" >> "$GITHUB_OUTPUT"
+          cat /tmp/commits.txt
+
+      - name: Determine version bump with AI
+        id: ai
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LAST_TAG="${{ steps.commits.outputs.last_tag }}"
+          COMMITS=$(cat /tmp/commits.txt)
+
+          # Build the prompt as a shell variable — commit log is injected
+          # via jq --arg (JSON-escaped), never shell-interpolated.
+          read -r -d '' SYSTEM_PROMPT << 'EOF' || true
+          You are a semantic versioning assistant for a Windows DLL project (nEVR Runtime — game patches for Echo VR).
+
+          Rules:
+          - MAJOR (breaking): changes to DLL interfaces, removed features, protocol changes that break existing clients/servers, renamed deploy-as DLLs
+          - MINOR (feature): new features, new plugins, new CLI flags, new hooks, significant enhancements
+          - PATCH (fix): bug fixes, refactors that don't change behavior, build improvements, documentation
+
+          Respond with EXACTLY this format (no markdown fences, no extra text):
+          BUMP: major|minor|patch
+          TITLE: <one-line release title, imperative mood, no version number>
+          NOTES:
+          <bulleted release notes grouped by: Breaking Changes, Features, Fixes, Other. Omit empty groups. Use markdown.>
+          EOF
+
+          USER_MSG=$(printf 'Current version: %s\n\nCommits since last release:\n%s' "$LAST_TAG" "$COMMITS")
+
+          PAYLOAD=$(jq -n \
+            --arg system "$SYSTEM_PROMPT" \
+            --arg user "$USER_MSG" \
+            '{
+              model: "openai/gpt-4o-mini",
+              messages: [
+                {role: "system", content: $system},
+                {role: "user", content: $user}
+              ],
+              temperature: 0
+            }')
+
+          RESPONSE=$(curl -sf \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "https://models.github.ai/inference/chat/completions")
+
+          CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+          if [ -z "$CONTENT" ]; then
+            echo "::error::AI response failed"
+            echo "$RESPONSE" | jq .
+            exit 1
+          fi
+
+          echo "$CONTENT"
+
+          BUMP=$(echo "$CONTENT" | grep '^BUMP:' | sed 's/BUMP: *//')
+          TITLE=$(echo "$CONTENT" | grep '^TITLE:' | sed 's/TITLE: *//')
+          NOTES=$(echo "$CONTENT" | sed -n '/^NOTES:/,$ { /^NOTES:/d; p }')
+
+          if [[ ! "$BUMP" =~ ^(major|minor|patch)$ ]]; then
+            echo "::error::Invalid bump type: '$BUMP'"
+            exit 1
+          fi
+
+          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+          # Title goes to env file to avoid injection via step output
+          echo "title<<TITLE_EOF" >> "$GITHUB_OUTPUT"
+          echo "$TITLE" >> "$GITHUB_OUTPUT"
+          echo "TITLE_EOF" >> "$GITHUB_OUTPUT"
+
+          echo "$NOTES" > /tmp/release_notes.md
+
+      - name: Calculate new version
+        id: version
+        run: |
+          LAST_TAG="${{ steps.commits.outputs.last_tag }}"
+          BUMP="${{ steps.ai.outputs.bump }}"
+
+          VERSION="${LAST_TAG#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+          case "$BUMP" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+          echo "Version: $LAST_TAG → $NEW_TAG ($BUMP)"
+
+      - name: Create release
+        if: inputs.dry_run == false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TITLE: ${{ steps.ai.outputs.title }}
+          NEW_TAG: ${{ steps.version.outputs.new_tag }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          gh release create "$NEW_TAG" \
+            --title "$NEW_TAG — $RELEASE_TITLE" \
+            --notes-file /tmp/release_notes.md \
+            --target "$TARGET_SHA"
+
+          echo "Created release: $NEW_TAG"
+
+      - name: Dry run summary
+        if: inputs.dry_run
+        env:
+          BUMP: ${{ steps.ai.outputs.bump }}
+          NEW_TAG: ${{ steps.version.outputs.new_tag }}
+          RELEASE_TITLE: ${{ steps.ai.outputs.title }}
+        run: |
+          {
+            echo "## Dry Run Results"
+            echo "**Bump:** $BUMP"
+            echo "**New tag:** $NEW_TAG"
+            echo "**Title:** $RELEASE_TITLE"
+            echo "### Release Notes"
+            cat /tmp/release_notes.md
+          } >> "$GITHUB_STEP_SUMMARY"

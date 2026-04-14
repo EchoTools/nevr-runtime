@@ -1,21 +1,21 @@
 /* SYNTHESIS -- custom tool code, not from binary */
 
 /* ======================================================================
- * builtin_server_timing — Built-in version of the server-timing plugin
+ * server_timing — Server timing and event-driven networking
  *
- * Wine CPU optimization for EchoVR dedicated servers. Adapted from
- * plugins/server-timing/src/plugin.cpp into a built-in gamepatches module.
+ * Wine CPU optimization and event-driven recv for EchoVR dedicated servers.
  *
  * Core patches:
- * 1. CPrecisionSleep::Wait hook — replaces WaitableTimer+BusyWait with Sleep(ms)
+ * 1. CPrecisionSleep::Wait hook — event-driven recv via WSAPoll (falls back to Sleep)
  * 2. SwitchToThread IAT patch — replaces sched_yield spin with Sleep(1)
  * 3. Delta time comparison patch — fixes signed JLE to unsigned JAE
+ * 4. ioctlsocket hook — captures broadcaster UDP socket for WSAPoll
  *
  * See plugins/server-timing/src/plugin.cpp for full problem analysis,
  * measurements, and risk assessment.
  * ====================================================================== */
 
-#include "builtin_server_timing.h"
+#include "server_timing.h"
 #include "patch_addresses.h"
 #include "process_mem.h"
 #include "common/logging.h"
@@ -26,6 +26,7 @@
 #include <string>
 
 #ifdef _WIN32
+#include <winsock2.h>
 #include <windows.h>
 #include <MinHook.h>
 #endif
@@ -40,6 +41,7 @@ struct ServerTimingConfig {
     bool disable_busywait = true;
     bool fix_deltatime_comparison = true;
     bool fix_switchtothread = false;
+    bool event_driven_recv = true;
     bool valid = false;
 };
 
@@ -172,12 +174,14 @@ static ServerTimingConfig ParseConfig(const std::string& text, bool is_yaml) {
         cfg.disable_busywait = YamlGetBool(text, "disable_busywait", true);
         cfg.fix_deltatime_comparison = YamlGetBool(text, "fix_deltatime_comparison", true);
         cfg.fix_switchtothread = YamlGetBool(text, "fix_switchtothread", false);
+        cfg.event_driven_recv = YamlGetBool(text, "event_driven_recv", true);
     } else {
         cfg.tick_rate_hz = ParseUint32(text, "tick_rate_hz", 120);
         cfg.tick_rate_idle_hz = ParseUint32(text, "tick_rate_idle_hz", 6);
         cfg.disable_busywait = ParseBool(text, "disable_busywait", true);
         cfg.fix_deltatime_comparison = ParseBool(text, "fix_deltatime_comparison", true);
         cfg.fix_switchtothread = ParseBool(text, "fix_switchtothread", false);
+        cfg.event_driven_recv = ParseBool(text, "event_driven_recv", true);
     }
     cfg.valid = true;
     return cfg;
@@ -209,6 +213,13 @@ static bool g_wait_hook_installed = false;
 static bool g_switchtothread_hook_installed = false;
 static void* g_wait_hook_target = nullptr;
 
+/* Event-driven recv state */
+#ifdef _WIN32
+static SOCKET g_broadcaster_socket = INVALID_SOCKET;
+static bool g_ioctlsocket_hook_installed = false;
+static void* g_ioctlsocket_hook_target = nullptr;
+#endif
+
 /* Resolve a virtual address from the PC binary to an in-process pointer */
 static inline void* ResolveVA(uintptr_t base, uint64_t va) {
     return reinterpret_cast<void*>(base + (va - 0x140000000));
@@ -230,14 +241,52 @@ static constexpr uint32_t STATE_LOBBY          = 5;
 static constexpr uint32_t STATE_SERVER_LOADING = 6;
 
 /* --------------------------------------------------------------------
+ * ioctlsocket hook — captures the broadcaster UDP socket handle
+ *
+ * The broadcaster calls ioctlsocket(sock, FIONBIO, &1) during init
+ * to set its socket non-blocking. Capture the socket fd on the first
+ * FIONBIO call (likely the broadcaster's UDP socket), then disable
+ * this hook — only need it once.
+ * -------------------------------------------------------------------- */
+
+#ifdef _WIN32
+using ioctlsocket_t = int(PASCAL*)(SOCKET s, long cmd, u_long* argp);
+static ioctlsocket_t s_origIoctlsocket = nullptr;
+
+static int PASCAL IoctlsocketHook(SOCKET s, long cmd, u_long* argp) {
+    int result = s_origIoctlsocket(s, cmd, argp);
+
+    /* Capture the first socket set to non-blocking mode (FIONBIO).
+       Verify it's a UDP socket (SOCK_DGRAM) to avoid capturing TCP sockets
+       from ixwebsocket or other subsystems. */
+    if (cmd == static_cast<long>(FIONBIO) && argp && *argp != 0 &&
+        g_broadcaster_socket == INVALID_SOCKET) {
+        int socktype = 0;
+        int optlen = sizeof(socktype);
+        if (getsockopt(s, SOL_SOCKET, SO_TYPE, reinterpret_cast<char*>(&socktype), &optlen) == 0 &&
+            socktype == SOCK_DGRAM) {
+            g_broadcaster_socket = s;
+            Log(EchoVR::LogLevel::Info,
+                "[server_timing] captured broadcaster UDP socket: %llu",
+                static_cast<unsigned long long>(s));
+        }
+    }
+
+    return result;
+}
+
+/* --------------------------------------------------------------------
  * CPrecisionSleep::Wait hook
  *
- * Replaces WaitableTimer + BusyWait with plain Sleep(ms).
+ * Replaces WaitableTimer + BusyWait with event-driven recv.
+ * When a broadcaster socket is available, uses WSAPoll to sleep
+ * until data arrives or the timeout expires — whichever comes first.
+ * Falls back to Sleep(ms) if no socket is captured yet.
+ *
  * On Wine 9.0 the original returns immediately, spinning the main
  * loop at 100% CPU. See plugin header for full analysis.
  * -------------------------------------------------------------------- */
 
-#ifdef _WIN32
 using PrecisionSleepWait_t = void(__fastcall*)(int64_t microseconds, int64_t unk, void* unk2);
 static PrecisionSleepWait_t s_origWait = nullptr;
 
@@ -254,7 +303,16 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
     if (microseconds > 0) {
         DWORD ms = static_cast<DWORD>(microseconds / 1000);
         if (ms < 1) ms = 1;
-        Sleep(ms);
+
+        /* Event-driven: wake on incoming UDP data or timeout */
+        if (g_broadcaster_socket != INVALID_SOCKET && g_config.event_driven_recv) {
+            WSAPOLLFD pfd = {};
+            pfd.fd = g_broadcaster_socket;
+            pfd.events = POLLIN;
+            WSAPoll(&pfd, 1, static_cast<INT>(ms));
+        } else {
+            Sleep(ms);
+        }
     } else {
         SwitchToThread();
     }
@@ -310,7 +368,7 @@ static void SetTickRate(uint32_t hz) {
  * Public API
  * ==================================================================== */
 
-void BuiltinServerTiming::Init(uintptr_t base_addr, bool is_server) {
+void ServerTiming::Init(uintptr_t base_addr, bool is_server) {
     if (!is_server) return;
 
     g_base = base_addr;
@@ -332,21 +390,23 @@ void BuiltinServerTiming::Init(uintptr_t base_addr, bool is_server) {
             g_config = ServerTimingConfig{};
             g_config.valid = true;
         } else {
-            bool is_yaml = config_path.size() >= 4 &&
-                (config_path.substr(config_path.size() - 4) == ".yml" ||
-                 config_path.substr(config_path.size() - 5) == ".yaml");
+            bool is_yaml = (config_path.size() >= 4 &&
+                            config_path.substr(config_path.size() - 4) == ".yml") ||
+                           (config_path.size() >= 5 &&
+                            config_path.substr(config_path.size() - 5) == ".yaml");
             g_config = ParseConfig(content, is_yaml);
         }
     }
 
     Log(EchoVR::LogLevel::Info,
         "[server_timing] config: tick_rate_hz=%u tick_rate_idle_hz=%u "
-        "disable_busywait=%s fix_deltatime=%s fix_switchtothread=%s",
+        "disable_busywait=%s fix_deltatime=%s fix_switchtothread=%s event_driven_recv=%s",
         g_config.tick_rate_hz,
         g_config.tick_rate_idle_hz,
         g_config.disable_busywait ? "true" : "false",
         g_config.fix_deltatime_comparison ? "true" : "false",
-        g_config.fix_switchtothread ? "true" : "false");
+        g_config.fix_switchtothread ? "true" : "false",
+        g_config.event_driven_recv ? "true" : "false");
 
 #ifdef _WIN32
     /* Hook CPrecisionSleep::Wait -> Sleep(ms) */
@@ -390,12 +450,37 @@ void BuiltinServerTiming::Init(uintptr_t base_addr, bool is_server) {
                 thunk[0], thunk[1], thunk[2]);
         }
     }
+
+    /* Hook ioctlsocket to capture the broadcaster UDP socket handle.
+       Uses MinHook on the WS2_32 import to intercept the FIONBIO call
+       that sets the broadcaster socket to non-blocking mode. */
+    if (g_config.event_driven_recv) {
+        HMODULE ws2 = GetModuleHandleA("WS2_32.dll");
+        if (!ws2) ws2 = LoadLibraryA("WS2_32.dll");
+        if (ws2) {
+            g_ioctlsocket_hook_target = reinterpret_cast<void*>(
+                GetProcAddress(ws2, "ioctlsocket"));
+            if (g_ioctlsocket_hook_target &&
+                MH_CreateHook(g_ioctlsocket_hook_target,
+                              reinterpret_cast<void*>(&IoctlsocketHook),
+                              reinterpret_cast<void**>(&s_origIoctlsocket)) == MH_OK &&
+                MH_EnableHook(g_ioctlsocket_hook_target) == MH_OK) {
+                g_ioctlsocket_hook_installed = true;
+                Log(EchoVR::LogLevel::Info,
+                    "[server_timing] hooked ioctlsocket for broadcaster socket capture");
+            } else {
+                Log(EchoVR::LogLevel::Warning,
+                    "[server_timing] failed to hook ioctlsocket — event_driven_recv disabled");
+                g_config.event_driven_recv = false;
+            }
+        }
+    }
 #endif
 
     Log(EchoVR::LogLevel::Info, "[server_timing] initialization complete");
 }
 
-void BuiltinServerTiming::OnFrame() {
+void ServerTiming::OnFrame() {
     if (!g_is_server) return;
 
 #ifdef _WIN32
@@ -433,7 +518,7 @@ void BuiltinServerTiming::OnFrame() {
 #endif
 }
 
-void BuiltinServerTiming::OnGameStateChange(uint32_t old_state, uint32_t new_state) {
+void ServerTiming::OnGameStateChange(uint32_t old_state, uint32_t new_state) {
     if (!g_is_server) return;
     (void)old_state;
 
@@ -462,7 +547,7 @@ void BuiltinServerTiming::OnGameStateChange(uint32_t old_state, uint32_t new_sta
 #endif
 }
 
-void BuiltinServerTiming::Shutdown() {
+void ServerTiming::Shutdown() {
     if (!g_is_server) return;
 
     Log(EchoVR::LogLevel::Info, "[server_timing] shutting down");
@@ -471,6 +556,12 @@ void BuiltinServerTiming::Shutdown() {
     if (g_wait_hook_installed && g_wait_hook_target) {
         MH_DisableHook(g_wait_hook_target);
         g_wait_hook_installed = false;
+    }
+
+    if (g_ioctlsocket_hook_installed && g_ioctlsocket_hook_target) {
+        MH_DisableHook(g_ioctlsocket_hook_target);
+        g_ioctlsocket_hook_installed = false;
+        g_broadcaster_socket = INVALID_SOCKET;
     }
 
     if (g_switchtothread_hook_installed && s_origSwitchToThread) {

@@ -87,6 +87,12 @@ cmake/codesign/selfsigned.crt
 cmake/codesign/*.pfx
 cmake/codesign/*.p12
 
+# CA hierarchy private keys and generated certs
+certs/*.key
+certs/*.crt
+certs/*.pem
+certs/*.srl
+
 # Git worktrees
 .worktrees/
 

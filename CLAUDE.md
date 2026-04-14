@@ -18,6 +18,8 @@ just verbose-build      # Build with full compiler output
 just clean              # Remove build/ and dist/
 just preset=mingw-debug build  # Use a specific preset
 just proto                     # Regenerate protobuf from BSR (requires buf CLI)
+just sign               # Code-sign all DLLs/EXEs in dist/ (requires certs/)
+just generate-certs     # Generate CA hierarchy for code signing
 ```
 
 Build presets: `mingw-debug`, `mingw-release` (Linux default), `linux-wine-debug`, `linux-wine-release`, `debug`, `release` (Windows default).
@@ -26,14 +28,23 @@ Build output lands in `build/<preset>/bin/`.
 
 ## Testing
 
-Go-based system tests in `tests/system/`:
+Go-based system tests in `tests/system/` and `tests/plugins/`:
 
 ```sh
-just test-system              # All tests
+just test-system              # All system tests
 just test-system-short        # Quick tests only
 just test-system-dll          # DLL loading tests only
 just test-system-verbose      # No cache, verbose
 cd tests/system && go test -v -run TestName ./...  # Single test
+
+just test-plugins-groundtruth # Plugin ground truth tests (no game binary needed)
+just test-plugins             # All plugin tests (needs game binary + MCP harness)
+just test-plugins-short       # Ground truth only, skip integration
+
+just test-auth                # All auth tests (ground truth + unit)
+just test-auth-groundtruth    # Auth ground truth (no game binary, no network)
+just test-auth-unit           # C++ GTest under Wine (build with -DBUILD_TESTING=ON)
+just test-auth-integration    # Auth integration (needs game binary + MCP harness)
 ```
 
 Tests require: Echo VR game binary, evr-test-harness, Go toolchain. See `tests/system/README.md` for prerequisites and environment variables (`NEVR_BUILD_DIR`, `EVR_GAME_DIR`).
@@ -42,25 +53,26 @@ Tests require: Echo VR game binary, evr-test-harness, Go toolchain. See `tests/s
 
 ### DLL Components
 
-| Component          | Output DLL        | Deploy As              | Purpose                                      |
-| ------------------ | ----------------- | ---------------------- | -------------------------------------------- |
-| `src/gamepatches/` | `gamepatches.dll` | `dbgcore.dll`          | Runtime hooks, CLI flags, game modifications |
-| `src/gameserver/`  | `gameserver.dll`  | `pnsradgameserver.dll` | Multiplayer networking, session management   |
+| Component          | Output DLL       | Deploy As              | Purpose                                                                  |
+| ------------------ | ---------------- | ---------------------- | ------------------------------------------------------------------------ |
+| `src/gamepatches/` | `BugSplat64.dll` | `BugSplat64.dll`       | Runtime hooks, CLI flags, game modifications                             |
+| `src/gameserver/`  | `gameserver.dll` | `pnsradgameserver.dll` | Multiplayer networking, session management                               |
+| `src/pnsrad/`      | `pnsrad.dll`     | `pnsrad.dll`           | Reconstructed social/networking layer (friends, party, VoIP, activities) |
 
-All DLLs are loaded into the game process. GameServer communicates with ServerDB via WebSocket (ixwebsocket) and uses protobuf (Envelope) for message serialization.
+GamePatches replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. Several features previously implemented as plugins are now built into gamepatches: server-timing, token-auth, pnsrad-enabler.
+
+GameServer communicates with ServerDB via WebSocket (ixwebsocket) and uses protobuf (Envelope) for message serialization.
 
 ### Plugins
 
 Optional DLLs loaded by gamepatches at runtime from a `plugins/` subdirectory next to the game binary. Each plugin implements the `NvrPluginInterface` lifecycle (see `src/common/nevr_plugin_interface.h`). Source lives in `plugins/<name>/`.
 
-| Plugin                | Output DLL                | Purpose                                              |
-| --------------------- | ------------------------- | ---------------------------------------------------- |
-| `log-filter`          | `log_filter.dll`          | Structured log filtering, suppression, file rotation |
-| `server-timing`       | `server_timing.dll`       | Wine CPU optimization for headless servers           |
-| `broadcaster-bridge`  | `broadcaster_bridge.dll`  | Network message mirroring/injection over UDP         |
-| `audio-intercom`      | `audio_intercom.dll`      | VoIP audio streaming via UDP                         |
-| `game-rules-override` | `game_rules_override.dll` | Balance config overrides (health, stun, physics)     |
-| `session-unlocker`    | `session_unlocker.dll`    | Unlock /session HTTP API in all game modes           |
+| Plugin               | Output DLL               | Purpose                                              |
+| -------------------- | ------------------------ | ---------------------------------------------------- |
+| `log-filter`         | `log_filter.dll`         | Structured log filtering, suppression, file rotation |
+| `broadcaster-bridge` | `broadcaster_bridge.dll` | Network message mirroring/injection over UDP         |
+
+Other plugins (audio-intercom, game-rules-override, session-unlocker, combat-mod, combat-2d) have moved to the `nevr-runtime-plugins` repository or are disabled.
 
 Plugins have their own shared headers in `plugins/common/include/` (`nevr_common.h`, `address_registry.h`, `yaml_config.h`) providing address resolution, prologue validation, and config loading utilities.
 
@@ -71,8 +83,13 @@ Plugins have their own shared headers in `plugins/common/include/` (`nevr_common
 
 ### Key Source Files
 
-- `src/gamepatches/patches.cpp` — Main patch implementation, CLI flag processing
+- `src/gamepatches/dllmain.cpp` — DLL entry point
+- `src/gamepatches/initialize.cpp` — Initialization sequence after DLL load
+- `src/gamepatches/cli.cpp` — CLI flag parsing and processing
+- `src/gamepatches/boot.cpp` — Game boot sequence hooks
+- `src/gamepatches/mode_patches.cpp` — Server/headless/client mode patches
 - `src/gamepatches/plugin_loader.h` — Plugin discovery and lifecycle management
+- `src/gamepatches/patch_addresses.h` — Virtual addresses for game function hooks
 - `src/gameserver/gameserver.cpp` — IServerLib vtable implementation
 - `src/gameserver/messages.h` — Protocol message symbol IDs (uint64)
 - `src/common/globals.h` — Cross-DLL globals (`isServer`, `isHeadless`, `exitOnError`, etc.)
@@ -81,7 +98,7 @@ Plugins have their own shared headers in `plugins/common/include/` (`nevr_common
 
 ### Other Components
 
-- **`src/server/`** — Thin Windows launcher for dedicated server mode (`echovr_server.exe`)
+- **`src/launcher/`** — Game launcher with PE conversion (disabled — Wine can't load game DLL at required base address)
 - **`src/standalone/`** — Future Android/Quest standalone build (stub — awaiting echovr-reconstruction)
 - **`src/legacy/`** — Frozen v1 implementations (self-contained, do not modify)
 
@@ -91,7 +108,7 @@ Plugins have their own shared headers in `plugins/common/include/` (`nevr_common
 - **Hooking**: MinHook-based (`USE_MINHOOK` compile flag). Functions use `__fastcall` convention. Use `ListenForBroadcasterMessage()` for game event callbacks.
 - **Protocol messages**: Symbol IDs in `src/gameserver/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
 - **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
-- **Global state**: CLI flags as globals in `src/common/globals.h`, set in `src/gamepatches/patches.cpp`.
+- **Global state**: CLI flags as globals in `src/common/globals.h`, set in `src/gamepatches/cli.cpp`.
 - **Local overrides**: `cmake/local.cmake` (include currently commented out in root CMakeLists.txt).
 
 ## ReVault — Reverse Engineering Data Warehouse
@@ -155,6 +172,6 @@ This applies regardless of context — even if the task seems to require it, eve
 
 ## Dependencies
 
-- **vcpkg** — curl, ixwebsocket, jsoncpp, miniupnpc, minhook, opus, protobuf
+- **vcpkg** — curl, gtest, ixwebsocket, nlohmann-json, miniupnpc, minhook, opus, protobuf
 - **Submodules** (`extern/`) — evr-test-harness (test harness), minhook, protobuf
 - **Toolchain** — CMake 3.20+, Ninja, MinGW (Linux) or MSVC (Windows)

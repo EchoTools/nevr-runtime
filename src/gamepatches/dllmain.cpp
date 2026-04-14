@@ -12,6 +12,7 @@
 #include "patches.h"
 #include "initialize.h"
 #include "plugin_loader.h"
+#include "wave0_instrumentation.h"
 
 #include <dbghelp.h>
 
@@ -88,6 +89,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       }
       break;
     case DLL_PROCESS_DETACH:
+      Wave0::Shutdown();
       ShutdownWebSocketBridge();
       UnloadPlugins();
       if (g_realDbgCore) {

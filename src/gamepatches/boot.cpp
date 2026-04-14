@@ -7,6 +7,7 @@
 #include "ws_bridge.h"
 #include "token_auth.h"
 #include "xpid_patch.h"
+#include "wave0_instrumentation.h"
 #include "patch_addresses.h"
 #include "common/globals.h"
 #include "common/logging.h"
@@ -101,6 +102,8 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     }
   }
 
+  LocalFree(argv);
+
   // -noovr is always applied (no OVR runtime needed)
   // -server implies headless (all servers are headless)
   g_isHeadless = g_isHeadless || g_isServer;
@@ -152,7 +155,6 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 
   // Apply patches to force the game to load as a server.
   if (g_isServer) {
-    PatchDisableServerRendering(pGame);
     PatchEnableServer();
     PatchDisableLoadingTips();
     PatchDisableWwise();
@@ -161,6 +163,9 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     // Server frame pacing is handled by the server-timing plugin.
     PatchServerFramePacing();
   }
+
+  // Wave 0 — instrumentation hooks for binary bug detection
+  Wave0::Init((uintptr_t)EchoVR::g_GameBaseAddress);
 
   // Load external plugins from plugins/ subdirectory
   LoadPlugins();

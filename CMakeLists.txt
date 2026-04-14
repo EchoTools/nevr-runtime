@@ -240,12 +240,13 @@ add_custom_target(dist-prepare
   # Copy plugin DLLs into plugins/ subdirectory
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_DIR}/plugins"
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/log_filter.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/log_filter.dll" "${DIST_DIR}/plugins/" || true
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/server_timing.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/server_timing.dll" "${DIST_DIR}/plugins/" || true
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/token_auth.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/token_auth.dll" "${DIST_DIR}/plugins/" || true
+  # server_timing, token_auth are now built into gamepatches
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/broadcaster_bridge.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/broadcaster_bridge.dll" "${DIST_DIR}/plugins/" || true
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_2d.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_2d.dll" "${DIST_DIR}/plugins/" || true
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_mod.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_mod.dll" "${DIST_DIR}/plugins/" || true
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad_enabler.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad_enabler.dll" "${DIST_DIR}/plugins/" || true
+  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/anim_debugger.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/anim_debugger.dll" "${DIST_DIR}/plugins/" || true
+  # pnsrad_enabler is now built into gamepatches
+  # combat plugins disabled while debugging social lobby login
+  #COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_2d.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_2d.dll" "${DIST_DIR}/plugins/" || true
+  #COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_mod.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_mod.dll" "${DIST_DIR}/plugins/" || true
   VERBATIM
 )
 
@@ -329,11 +330,14 @@ add_custom_target(dist-lite-prepare
    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
   # Copy and strip plugin DLLs into plugins/ subdirectory
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_DIR}/plugins"
-  # log_filter, server_timing, token_auth are now built into gamepatches.dll
+  # server_timing, token_auth are now built into gamepatches.dll
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/log_filter.dll" "${DIST_LITE_DIR}/plugins/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/plugins/log_filter.dll" || ${CMAKE_COMMAND} -E true
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/broadcaster_bridge.dll" "${DIST_LITE_DIR}/plugins/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/plugins/broadcaster_bridge.dll" || ${CMAKE_COMMAND} -E true
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_2d.dll" "${DIST_LITE_DIR}/plugins/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/plugins/combat_2d.dll" || ${CMAKE_COMMAND} -E true
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_mod.dll" "${DIST_LITE_DIR}/plugins/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/plugins/combat_mod.dll" || ${CMAKE_COMMAND} -E true
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad_enabler.dll" "${DIST_LITE_DIR}/plugins/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/plugins/pnsrad_enabler.dll" || ${CMAKE_COMMAND} -E true
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/anim_debugger.dll" "${DIST_LITE_DIR}/plugins/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/plugins/anim_debugger.dll" || ${CMAKE_COMMAND} -E true
+  # pnsrad_enabler is now built into gamepatches
+  # combat plugins disabled while debugging social lobby login
+  #COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_2d.dll" "${DIST_LITE_DIR}/plugins/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/plugins/combat_2d.dll" || ${CMAKE_COMMAND} -E true
+  #COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/combat_mod.dll" "${DIST_LITE_DIR}/plugins/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/plugins/combat_mod.dll" || ${CMAKE_COMMAND} -E true
   COMMENT "Preparing lite distribution directory (stripped): ${DIST_LITE_DIR}"
   VERBATIM
 )

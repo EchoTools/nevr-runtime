@@ -536,41 +536,6 @@ VOID PatchServerFramePacing() {
 }
 
 // ============================================================================
-// PatchDisableServerRendering — disable renderer/effects/audio for servers
-// ============================================================================
-
-/// <summary>
-/// Disables renderer, effects, and audio for dedicated server mode.
-/// These are the same core patches from PatchEnableHeadless() minus console/log hooks.
-/// Without a GPU driving vsync, servers also need the fixed timestep flag.
-/// </summary>
-/// <param name="pGame">The pointer to the instance of the game structure.</param>
-VOID PatchDisableServerRendering(PVOID pGame) {
-  using namespace PatchAddresses;
-
-  // Disable audio by clearing the audio enable bit (same as `-noaudio` command)
-  UINT32* audioFlags = reinterpret_cast<UINT32*>(static_cast<CHAR*>(pGame) + GAME_AUDIO_FLAGS_OFFSET);
-  *audioFlags &= 0xFFFFFFFD;  // Clear bit 1 (audio enable)
-
-  // Skip renderer initialization
-  const BYTE rendererPatch[] = {0xA8, 0x00};  // TEST al, 0 (always false)
-  static_assert(sizeof(rendererPatch) == HEADLESS_RENDERER_SIZE, "HEADLESS_RENDERER patch size mismatch");
-  ApplyPatch(HEADLESS_RENDERER, rendererPatch, sizeof(rendererPatch));
-
-  // Skip effects resource loading
-  const BYTE effectsPatch[] = {0xEB, 0x41};  // JMP +0x43
-  static_assert(sizeof(effectsPatch) == HEADLESS_EFFECTS_SIZE, "HEADLESS_EFFECTS patch size mismatch");
-  ApplyPatch(HEADLESS_EFFECTS, effectsPatch, sizeof(effectsPatch));
-
-  // Skip ApplyGraphicsSettings call — it calls ~66 CGRenderer methods that crash without a renderer
-  const BYTE graphicsNop[] = {0x90, 0x90, 0x90, 0x90, 0x90};  // 5x NOP over CALL instruction
-  static_assert(sizeof(graphicsNop) == HEADLESS_APPLY_GRAPHICS_SIZE, "HEADLESS_APPLY_GRAPHICS patch size mismatch");
-  ApplyPatch(HEADLESS_APPLY_GRAPHICS, graphicsNop, sizeof(graphicsNop));
-
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Server rendering disabled (renderer, effects, audio, graphics settings)");
-}
-
-// ============================================================================
 // PatchLogServerProfile — log memory and module snapshot
 // ============================================================================
 
