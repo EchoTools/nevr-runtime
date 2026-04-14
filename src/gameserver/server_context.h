@@ -109,7 +109,10 @@ class ServerContext {
   SessionState GetSessionState() const;
   void UpdateSessionState(const SessionState& state);
 
-  // Callback registry (exclusive lock)
+  // Callback registry — NOT internally synchronized.
+  // Safe to call without locking when all access is from the game's main thread
+  // (RegisterBroadcasterCallbacks, UnregisterAllCallbacks, Initialize, Terminate).
+  // Must not be called from ixwebsocket or other background threads.
   CallbackRegistry& GetCallbackRegistry();
   const CallbackRegistry& GetCallbackRegistry() const;
 

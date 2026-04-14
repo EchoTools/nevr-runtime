@@ -31,6 +31,8 @@ elif [[ -n "${CODESIGN_CERT:-}" && -n "${CODESIGN_KEY:-}" ]]; then
     SIGN_ARGS=(-certs "$CODESIGN_CERT" -key "$CODESIGN_KEY")
 elif [[ -f "$SCRIPT_DIR/selfsigned.crt" && -f "$SCRIPT_DIR/selfsigned.key" ]]; then
     SIGN_ARGS=(-certs "$SCRIPT_DIR/selfsigned.crt" -key "$SCRIPT_DIR/selfsigned.key")
+elif [[ -f "$SCRIPT_DIR/../../certs/chain.pem" && -f "$SCRIPT_DIR/../../certs/code-signing.key" ]]; then
+    SIGN_ARGS=(-certs "$SCRIPT_DIR/../../certs/chain.pem" -key "$SCRIPT_DIR/../../certs/code-signing.key")
 else
     echo "WARNING: No signing credentials found, skipping code signing." >&2
     echo "Set CODESIGN_PFX or CODESIGN_CERT+CODESIGN_KEY, or generate selfsigned certs." >&2
@@ -51,7 +53,7 @@ for file in "$@"; do
     echo "Signing: $file"
     osslsigncode sign \
         "${SIGN_ARGS[@]}" \
-        -n "NEVR Runtime" \
+        -n "nEVR Runtime" \
         -h sha256 \
         -in "$file" \
         -out "$file.signed" && \

@@ -14,7 +14,6 @@ extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
 WebSocketClient::WebSocketClient()
     : webSocket_(std::make_unique<ix::WebSocket>()),
-      connected_(FALSE),
       lastMsgId_(0),
       lastPayloadHash_(0),
       lastMsgTimestamp_(0) {
@@ -67,7 +66,7 @@ VOID WebSocketClient::Disconnect() {
   if (webSocket_) {
     Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Disconnecting from ServerDB");
     webSocket_->stop();
-    connected_ = FALSE;
+    connected_.store(false);
   }
 }
 
@@ -83,8 +82,16 @@ BOOL WebSocketClient::Send(EchoVR::SymbolId msgId, const VOID* data, UINT64 size
 
   std::string message(messageBuffer.begin(), messageBuffer.end());
 
-  if (!connected_) {
+  if (!connected_.load(std::memory_order_relaxed)) {
+    EnterCriticalSection(&receivedMessagesMutex_);
+    if (pendingMessages_.size() >= 256) {
+      LeaveCriticalSection(&receivedMessagesMutex_);
+      Log(EchoVR::LogLevel::Warning,
+          "[WEBSOCKET] Pending message queue full (256) — dropping message (msgId: 0x%llX)", msgId);
+      return FALSE;
+    }
     pendingMessages_.push_back(message);
+    LeaveCriticalSection(&receivedMessagesMutex_);
     Log(EchoVR::LogLevel::Debug,
         "[WEBSOCKET] Queued message (msgId: 0x%llX, size: %llu bytes, payload: %llu bytes) - will send when connected",
         msgId, size, size);
@@ -108,13 +115,13 @@ VOID WebSocketClient::SetMessageHandler(MessageCallback callback) { messageCallb
 
 VOID WebSocketClient::SetConnectionHandler(ConnectionCallback callback) { connectionCallback_ = callback; }
 
-BOOL WebSocketClient::IsConnected() const { return connected_; }
+BOOL WebSocketClient::IsConnected() const { return connected_.load(std::memory_order_relaxed); }
 
 VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
   switch (msg->type) {
     case ix::WebSocketMessageType::Open:
       Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Connected to ServerDB");
-      connected_ = TRUE;
+      connected_.store(true);
       FlushPendingMessages();
       if (connectionCallback_) {
         connectionCallback_(TRUE);
@@ -124,12 +131,12 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
     case ix::WebSocketMessageType::Close:
       Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Disconnected from ServerDB (code: %d, reason: %s)", msg->closeInfo.code,
           msg->closeInfo.reason.c_str());
-      connected_ = FALSE;
+      connected_.store(false);
       break;
 
     case ix::WebSocketMessageType::Error:
       Log(EchoVR::LogLevel::Error, "[WEBSOCKET] Connection error: %s", msg->errorInfo.reason.c_str());
-      connected_ = FALSE;
+      connected_.store(false);
       break;
 
     case ix::WebSocketMessageType::Message:
@@ -154,6 +161,12 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
           memcpy(&length, payload.data() + sizeof(UINT64) + sizeof(EchoVR::SymbolId), sizeof(UINT64));
 
           UINT64 actualPayloadSize = payload.size() - sizeof(UINT64) - sizeof(EchoVR::SymbolId) - sizeof(UINT64);
+
+          if (length != actualPayloadSize) {
+            Log(EchoVR::LogLevel::Warning,
+                "[WEBSOCKET] Message length field mismatch (msgId: 0x%llX, length field: %llu, actual payload: %llu bytes)",
+                msgId, length, actualPayloadSize);
+          }
 
           Log(EchoVR::LogLevel::Info,
               "[WEBSOCKET] Received message (msgId: 0x%llX, length field: %llu, calculated payload: %llu bytes, total "
@@ -209,13 +222,19 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
 }
 
 VOID WebSocketClient::FlushPendingMessages() {
-  if (pendingMessages_.empty()) {
+  std::vector<std::string> toSend;
+
+  EnterCriticalSection(&receivedMessagesMutex_);
+  toSend.swap(pendingMessages_);
+  LeaveCriticalSection(&receivedMessagesMutex_);
+
+  if (toSend.empty()) {
     return;
   }
 
-  Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Flushing %zu pending messages", pendingMessages_.size());
+  Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Flushing %zu pending messages", toSend.size());
 
-  for (const auto& message : pendingMessages_) {
+  for (const auto& message : toSend) {
     Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Sending pending message: size=%zu bytes", message.size());
     auto result = webSocket_->send(message, true);
     if (!result.success) {
@@ -224,8 +243,6 @@ VOID WebSocketClient::FlushPendingMessages() {
       Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Successfully sent pending message");
     }
   }
-
-  pendingMessages_.clear();
 }
 
 VOID WebSocketClient::ProcessReceivedMessages() {

@@ -160,7 +160,7 @@ std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string
 }
 
 std::string DeviceAuth::RequestDeviceCode() {
-    std::string url = m_url + "/v2/rpc/device/auth/request?http_key=" + m_httpKey;
+    std::string url = m_url + "/v2/rpc/device/auth/request?http_key=" + m_httpKey + "&unwrap";
     std::string response = HttpPostPublic(url, "{}");
     if (response.empty()) return "";
 
@@ -173,7 +173,7 @@ std::string DeviceAuth::RequestDeviceCode() {
 }
 
 std::string DeviceAuth::PollDeviceCode(const std::string& code) {
-    std::string url = m_url + "/v2/rpc/device/auth/poll?http_key=" + m_httpKey;
+    std::string url = m_url + "/v2/rpc/device/auth/poll?http_key=" + m_httpKey + "&unwrap";
     nlohmann::json reqBody;
     reqBody["code"] = code;
     std::string response = HttpPostPublic(url, reqBody.dump());
@@ -187,9 +187,20 @@ std::string DeviceAuth::PollDeviceCode(const std::string& code) {
             std::string token = j.value("token", "");
             if (!token.empty()) {
                 m_token = token;
-                m_tokenExpiry = static_cast<uint64_t>(time(nullptr)) + 3600;
+                uint64_t now = static_cast<uint64_t>(time(nullptr));
+                if (j.contains("token_expiry") && j["token_expiry"].is_number()) {
+                    m_tokenExpiry = j["token_expiry"].get<uint64_t>();
+                } else if (j.contains("expires_in") && j["expires_in"].is_number()) {
+                    m_tokenExpiry = now + j["expires_in"].get<uint64_t>();
+                } else {
+                    m_tokenExpiry = now + 3600;
+                }
                 m_refreshToken = j.value("refresh_token", "");
-                m_refreshTokenExpiry = static_cast<uint64_t>(time(nullptr)) + (30 * 24 * 3600);
+                if (j.contains("refresh_token_expiry") && j["refresh_token_expiry"].is_number()) {
+                    m_refreshTokenExpiry = j["refresh_token_expiry"].get<uint64_t>();
+                } else {
+                    m_refreshTokenExpiry = now + (30 * 24 * 3600);
+                }
                 m_userId = j.value("user_id", "");
                 m_username = j.value("username", "");
                 return "verified";

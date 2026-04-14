@@ -22,7 +22,7 @@ inline bool RefreshAuthToken(CachedAuthToken& auth,
     CURL* curl = curl_easy_init();
     if (!curl) return false;
 
-    std::string url = nakama_url + "/v2/rpc/device/auth/refresh?http_key=" + http_key;
+    std::string url = nakama_url + "/v2/rpc/device/auth/refresh?http_key=" + http_key + "&unwrap";
     nlohmann::json body;
     body["token"] = auth.refresh_token;
 
