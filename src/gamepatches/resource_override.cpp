@@ -275,6 +275,27 @@ void ResetResourceOverrides() {
     }
 }
 
+void ShutdownResourceOverride() {
+    if (g_hook_target && g_orig) {
+        MH_DisableHook(g_hook_target);
+        MH_RemoveHook(g_hook_target);
+        g_hook_target = nullptr;
+        g_orig = nullptr;
+    }
+
+    if (g_overrides) {
+        for (auto& ovr : *g_overrides) {
+            if (ovr.owned && ovr.data) {
+                VirtualFree(const_cast<void*>(ovr.data), 0, MEM_RELEASE);
+            }
+        }
+        delete g_overrides;
+        g_overrides = nullptr;
+    }
+
+    Log(EchoVR::LogLevel::Info, "[NEVR.RESOURCE] Shutdown complete");
+}
+
 void DeregisterResourceOverrides(const void* data_start, const void* data_end) {
     if (!g_overrides) return;
     auto start = reinterpret_cast<uintptr_t>(data_start);

@@ -20,6 +20,9 @@ void RegisterResourceOverrideFromFile(uint64_t type_hash, uint64_t name_hash,
 /// Reset all applied flags so overrides can re-trigger on next level load.
 void ResetResourceOverrides();
 
+/// Deallocate the resource override registry and uninstall hooks.
+void ShutdownResourceOverride();
+
 /// Remove all overrides whose data pointer falls within [data_start, data_end).
 /// Call from plugin shutdown before the plugin DLL is freed to prevent
 /// dangling pointers in the override registry.
