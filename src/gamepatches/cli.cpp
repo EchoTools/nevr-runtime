@@ -5,6 +5,7 @@
 BOOL g_isServer = FALSE;
 BOOL g_isOffline = FALSE;
 BOOL g_isWindowed = FALSE;
+BOOL g_legacyLogNames = FALSE;
 CHAR g_customConfigPath[MAX_PATH] = {0};
 CHAR g_regionOverride[64] = {0};
 
@@ -52,6 +53,9 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
 
   EchoVR::AddArgSyntax(pArgSyntax, "-upnp", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-upnp", "[NEVR] Enable UPnP port forwarding");
+
+  EchoVR::AddArgSyntax(pArgSyntax, "-legacy-log-names", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-legacy-log-names", "[NEVR] Keep EchoVR native log filename format ([r14(server)]-[date]_[time]_N.log)");
 
   // Backwards compat: accept deprecated flags without error (they're silently ignored)
   EchoVR::AddArgSyntax(pArgSyntax, "-timestep", 1, 1, FALSE);
