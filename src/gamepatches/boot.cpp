@@ -82,6 +82,8 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       g_timestampLogs = TRUE;
     } else if (lstrcmpW(arg, L"-upnp") == 0) {
       g_upnpEnabled = TRUE;
+    } else if (lstrcmpW(arg, L"-legacy-log-names") == 0) {
+      g_legacyLogNames = TRUE;
     } else if (lstrcmpW(arg, L"-config") == 0 || lstrcmpW(arg, L"-config-path") == 0) {
       if (i + 1 < argc) {
         WideCharToMultiByte(CP_UTF8, 0, argv[i + 1], -1, g_customConfigPath, MAX_PATH, NULL, NULL);

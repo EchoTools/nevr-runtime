@@ -58,7 +58,8 @@ func TestPatches_ServerMode(t *testing.T) {
 	// - Server broadcast port is exposed
 	// - Loading tips system is disabled (reduces log spam)
 	// - "allow_incoming" is forced to true (accepts connections)
-	// - Log files use "r14(server)" subject instead of "r14netserver"
+	// - Game log files in _local\r14logs\ are named nevr-server-YYYYMMDD-HHMMSS.log
+	//   (pass -legacy-log-names to revert to [r14(server)]-[MM-DD-YYYY]_[HH-MM-SS]_N.log)
 	//
 	// Verification approach:
 	// 1. Start game with: echovr.exe -server -headless
