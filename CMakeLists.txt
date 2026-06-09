@@ -189,8 +189,6 @@ add_subdirectory(src/legacy/gamepatches)
 add_subdirectory(src/gameserver)
 add_subdirectory(src/pnsrad)
 add_subdirectory(src/legacy/gameserver)
-#add_subdirectory(src/launcher)  # disabled: Wine can't load game DLL at required base address
-#add_subdirectory(src/server)  # deprecated: replaced by src/launcher
 # telemetryagent moved to extras/ — needs protobuf-lite refactor before reintegration
 
 add_subdirectory(plugins)
@@ -233,9 +231,6 @@ add_custom_target(dist-prepare
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_DIR}/pnsradgameserver.dll" || true
   # Copy pnsrad.dll (if exists)
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad.dll" "${DIST_DIR}/pnsrad.dll" || true
-  # Copy launcher executables
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_DIR}/echovr.exe" || true
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" "${DIST_DIR}/echovr_server.exe" || true
    COMMAND test -f "${CMAKE_SOURCE_DIR}/README.md" && ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_DIR}/" || true
   # Copy plugin DLLs into plugins/ subdirectory
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_DIR}/plugins"
@@ -324,9 +319,6 @@ add_custom_target(dist-lite-prepare
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_LITE_DIR}/pnsradgameserver.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/pnsradgameserver.dll" || ${CMAKE_COMMAND} -E true
   # Copy pnsrad.dll and strip (if exists)
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad.dll" "${DIST_LITE_DIR}/pnsrad.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/pnsrad.dll" || ${CMAKE_COMMAND} -E true
-  # Copy launcher executables
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_LITE_DIR}/echovr.exe" || ${CMAKE_COMMAND} -E true
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" "${DIST_LITE_DIR}/echovr_server.exe" || ${CMAKE_COMMAND} -E true
    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
   # Copy and strip plugin DLLs into plugins/ subdirectory
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_DIR}/plugins"
