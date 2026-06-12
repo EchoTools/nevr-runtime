@@ -957,7 +957,7 @@ void TelemetryStreamer::DetectEvents(const TelemetrySnapshot& curr, const Teleme
     }
   }
 
-  // Detect player join/leave
+  // Detect player join/leave and stat changes
   for (uint16_t i = 0; i < 16; i++) {
     bool currPresent = (i < curr.playerCount && curr.playerInfo[i].accountId != 0);
     bool prevPresent = (i < prev.playerCount && prev.playerInfo[i].accountId != 0);
@@ -979,6 +979,49 @@ void TelemetryStreamer::DetectEvents(const TelemetrySnapshot& curr, const Teleme
         auto* sw = ev->mutable_player_switched_team();
         sw->set_player_slot(i);
         sw->set_new_role(static_cast<telemetry::v2::Role>(curr.playerInfo[i].teamIndex));
+      }
+
+      // Detect stat changes (stuns, blocks, saves, etc.)
+      const auto& cs = curr.stats[i];
+      const auto& ps = prev.stats[i];
+
+      if (cs.stuns > ps.stuns) {
+        auto* ev = frame->add_events();
+        auto* stun = ev->mutable_player_stun();
+        stun->set_player_slot(i);
+        stun->set_total_stuns(cs.stuns);
+      }
+      if (cs.blocks > ps.blocks) {
+        auto* ev = frame->add_events();
+        auto* block = ev->mutable_player_block();
+        block->set_player_slot(i);
+        block->set_total_blocks(cs.blocks);
+      }
+      if (cs.saves > ps.saves) {
+        auto* ev = frame->add_events();
+        auto* save = ev->mutable_player_save();
+        save->set_player_slot(i);
+        save->set_total_saves(cs.saves);
+      }
+      if (cs.interceptions > ps.interceptions) {
+        auto* ev = frame->add_events();
+        auto* interception = ev->mutable_player_interception();
+        interception->set_player_slot(i);
+      }
+      if (cs.steals > ps.steals) {
+        auto* ev = frame->add_events();
+        auto* steal = ev->mutable_player_steal();
+        steal->set_player_slot(i);
+      }
+      if (cs.passes > ps.passes) {
+        auto* ev = frame->add_events();
+        auto* pass = ev->mutable_player_pass();
+        pass->set_player_slot(i);
+      }
+      if (cs.shotsTaken > ps.shotsTaken) {
+        auto* ev = frame->add_events();
+        auto* shot = ev->mutable_player_shot_taken();
+        shot->set_player_slot(i);
       }
     }
   }
