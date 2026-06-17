@@ -104,7 +104,7 @@ static constexpr uint8_t INJECT_MODE_DUMP_WEAPON     = 6;  /* Dump weapon scenar
 
 /* Guardrail limits */
 static constexpr size_t   MAX_PACKET_SIZE         = 4096;
-static constexpr uint32_t MAX_MIRROR_PACKETS_PER_SEC = 10000;
+static constexpr uint32_t MAX_MIRROR_PACKETS_PER_SEC = 500;
 
 /* Plugin configuration */
 struct BridgeConfig {

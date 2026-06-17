@@ -71,7 +71,11 @@ VOID WebSocketClient::Disconnect() {
 }
 
 BOOL WebSocketClient::Send(EchoVR::SymbolId msgId, const VOID* data, UINT64 size) {
-  std::vector<uint8_t> messageBuffer(sizeof(EchoVR::SymbolId) + sizeof(UINT64) + size);
+  if (size > 1024 * 1024) {
+    Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Rejecting oversized send (msgId: 0x%llX, size: %llu)", msgId, size);
+    return FALSE;
+  }
+  std::vector<uint8_t> messageBuffer(sizeof(EchoVR::SymbolId) + sizeof(UINT64) + static_cast<size_t>(size));
 
   memcpy(messageBuffer.data(), &msgId, sizeof(EchoVR::SymbolId));
   memcpy(messageBuffer.data() + sizeof(EchoVR::SymbolId), &size, sizeof(UINT64));
@@ -189,6 +193,13 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
           lastPayloadHash_ = payloadHash;
           lastMsgTimestamp_ = currentTimestamp;
 
+          // Reject oversized payloads (max 1MB — largest game message is ~64KB)
+          if (actualPayloadSize > 1024 * 1024) {
+            Log(EchoVR::LogLevel::Warning,
+                "[WEBSOCKET] Dropping oversized message (msgId: 0x%llX, size: %llu bytes)", msgId, actualPayloadSize);
+            break;
+          }
+
           // Queue message for processing on main thread (thread-safe)
           ReceivedMessage receivedMsg;
           receivedMsg.msgId = msgId;
@@ -200,6 +211,12 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
           }
 
           EnterCriticalSection(&receivedMessagesMutex_);
+          if (receivedMessages_.size() >= 1024) {
+            LeaveCriticalSection(&receivedMessagesMutex_);
+            Log(EchoVR::LogLevel::Warning,
+                "[WEBSOCKET] Receive queue full (1024) — dropping message (msgId: 0x%llX)", msgId);
+            break;
+          }
           receivedMessages_.push_back(std::move(receivedMsg));
           LeaveCriticalSection(&receivedMessagesMutex_);
         } else {
