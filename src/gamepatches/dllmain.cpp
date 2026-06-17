@@ -9,6 +9,7 @@
 #include "common/pch.h"
 #include "common/echovr_functions.h"
 #include "asset_cdn.h"
+#include "module_loader.h"
 #include "ws_bridge.h"
 #include "patches.h"
 #include "initialize.h"
@@ -98,6 +99,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // During process termination (lpReserved != NULL), threads are already
       // dead and joining would deadlock under the loader lock.
       if (lpReserved == NULL) {
+        UnloadModules();
         AssetCDN::Shutdown();
         Wave0::Shutdown();
         TokenAuth::Shutdown();

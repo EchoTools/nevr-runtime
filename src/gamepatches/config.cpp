@@ -1,5 +1,6 @@
 #include "config.h"
 #include "cli.h"
+#include "module_loader.h"
 #include "common/globals.h"
 #include "common/logging.h"
 #include "common/echovr_functions.h"
@@ -366,14 +367,16 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
   CHAR* target = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)configKey, NULL, false);
   if (target == NULL || target[0] == '\0') return result;
 
-  thread_local CHAR redirected[512];
+  thread_local static CHAR redirected[512];
 
-  // All WebSocket connections go through the in-process proxy
-  extern bool IsWebSocketBridgeActive();
-  extern uint16_t GetWebSocketBridgePort();
-  if (IsWebSocketBridgeActive() &&
+  // All WebSocket connections go through the in-process proxy (ws_bridge module)
+  using IsActiveFn = bool (*)();
+  using GetPortFn = uint16_t (*)();
+  auto isActive = (IsActiveFn)ResolveModuleProc("WsBridge_IsActive");
+  auto getPort = (GetPortFn)ResolveModuleProc("WsBridge_GetPort");
+  if (isActive && isActive() &&
       (strstr(result, "wss://") == result || strstr(result, "ws://") == result)) {
-    snprintf(redirected, sizeof(redirected), "ws://127.0.0.1:%u", GetWebSocketBridgePort());
+    snprintf(redirected, sizeof(redirected), "ws://127.0.0.1:%u", getPort ? getPort() : 0);
   } else {
     snprintf(redirected, sizeof(redirected), "%s", target);
   }

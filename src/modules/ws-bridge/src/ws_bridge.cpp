@@ -4,7 +4,6 @@
 #include <ixwebsocket/IXWebSocket.h>
 #include <ixwebsocket/IXWebSocketServer.h>
 
-#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <memory>
@@ -13,10 +12,13 @@
 #include <unordered_map>
 #include <vector>
 
-#include "config.h"
-#include "module_loader.h"
+#include "common/nevr_module_interface.h"
 #include "common/echovr_functions.h"
 #include "common/logging.h"
+
+// Stored from NvrModuleContext for cross-module proc resolution
+static void* (*s_getProc)(const char*) = nullptr;
+static void* s_earlyConfig = nullptr;
 
 // ============================================================================
 // In-process WebSocket TLS proxy
@@ -49,18 +51,6 @@ static std::mutex g_pairsMutex;
 static std::atomic<int> g_connectionCount{0};  // tracks connection order (0=config, 1+=login)
 static std::unordered_map<ix::WebSocket*, std::unique_ptr<ProxyPair>> g_pairs;
 
-// The login connection's remote WS (conn=1). Connections after login (conn>=2,
-// e.g. matchmaker) reuse this so all traffic shares the same Nakama session.
-// The original game multiplexes config/login/matchmaker on one WS to one server;
-// Nakama correlates matchmaker allocations by session, so the matchmaker must
-// use the same authenticated session as login.
-static std::shared_ptr<ix::WebSocket> g_loginRemoteWs;
-
-// The active game-side WS that should receive server→game messages from the
-// login remote. Initially conn=1 (login), swapped to conn=2 (matchmaker) when
-// it connects, so the game receives matchmaker responses on the right peer.
-static ix::WebSocket* g_activeGameWs = nullptr;
-
 // ============================================================================
 // LoginRequest builder
 // ============================================================================
@@ -75,8 +65,8 @@ static void AppendLE64(std::string& buf, uint64_t val) {
 }
 
 static std::string BuildLoginRequest(uint64_t discordId) {
-  // Platform: DSC = 2 (Go iota: XPlatformIdSize=0, STM=1, PSN/DSC=2, XBX=3, OVR_ORG=4)
-  uint64_t platformCode = 2;
+  // Platform: OVR_ORG = 4 (Go iota: XPlatformIdSize=0, STM=1, PSN=2, XBX=3, OVR_ORG=4)
+  uint64_t platformCode = 4;
   uint64_t accountId = discordId;
 
   // LoginProfile JSON — matches the game's SNSLogInRequestv2 format
@@ -167,38 +157,16 @@ void InstallWebSocketBridge() {
          const ix::WebSocketMessagePtr& msg) {
         switch (msg->type) {
           case ix::WebSocketMessageType::Open: {
+            // Game opened a connection — create remote ws to real server
             int connIdx = g_connectionCount++;
-
-            // conn>=2 (matchmaker): reuse the login connection's remote WS.
-            // The matchmaker needs the fully-authenticated session (login + profile
-            // exchange) that conn=1 established. A fresh LoginRequest-only session
-            // won't have the server-side state needed for PlayerSessionRequest.
-            // Don't inject LoginRequest — the session is already logged in.
-            if (connIdx >= 2 && g_loginRemoteWs) {
-              Log(EchoVR::LogLevel::Info,
-                  "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), sharing login session (no LoginRequest)",
-                  connIdx, (void*)&gameWs);
-              auto pair = std::make_unique<ProxyPair>();
-              pair->remoteWs = g_loginRemoteWs;
-              pair->remoteOpen = true;
-              pair->loginInjected = true;  // skip LoginRequest — already authenticated
-              {
-                std::lock_guard<std::mutex> lk(g_pairsMutex);
-                g_activeGameWs = &gameWs;
-                g_pairs[&gameWs] = std::move(pair);
-              }
-              break;
-            }
-
-            // conn=0 (config) and conn=1 (login): create new remote ws
             auto remote = std::make_shared<ix::WebSocket>();
 
             // Build remote URL with optional query param auth
             // (workaround: production nginx strips Bearer JWT and forces format=evr)
             std::string remoteUrl = g_remoteUri;
-            if (g_earlyConfigPtr) {
-              CHAR* cfgDiscordId = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_discord_id", NULL, false);
-              CHAR* cfgPassword = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_password", NULL, false);
+            if ((EchoVR::Json*)s_earlyConfig) {
+              CHAR* cfgDiscordId = EchoVR::JsonValueAsString((EchoVR::Json*)s_earlyConfig, (CHAR*)"nevr_discord_id", NULL, false);
+              CHAR* cfgPassword = EchoVR::JsonValueAsString((EchoVR::Json*)s_earlyConfig, (CHAR*)"nevr_password", NULL, false);
               if (cfgDiscordId && cfgDiscordId[0] != '\0' && cfgPassword && cfgPassword[0] != '\0') {
                 char sep = (remoteUrl.find('?') != std::string::npos) ? '&' : '?';
                 remoteUrl += sep;
@@ -208,24 +176,6 @@ void InstallWebSocketBridge() {
                 remoteUrl += cfgPassword;
               }
             }
-            // conn>=2 (matchmaker): pnsradmatchmaking uses protobuf, not EchoVR
-            // binary. Strip format=evr so the server uses default protobuf handling.
-            if (connIdx >= 2) {
-              auto pos = remoteUrl.find("format=evr");
-              if (pos != std::string::npos) {
-                // Remove "format=evr" and the preceding ? or &
-                size_t start = (pos > 0 && (remoteUrl[pos-1] == '?' || remoteUrl[pos-1] == '&'))
-                               ? pos - 1 : pos;
-                size_t end = pos + 10;  // len("format=evr")
-                // If there's a trailing & after format=evr, remove it too
-                if (end < remoteUrl.size() && remoteUrl[end] == '&') end++;
-                remoteUrl.erase(start, end - start);
-                // If we left a trailing ? with nothing after, remove it
-                if (!remoteUrl.empty() && remoteUrl.back() == '?') remoteUrl.pop_back();
-              }
-              Log(EchoVR::LogLevel::Info,
-                  "[NEVR.WS] Matchmaker conn=%d using protobuf URL: %s", connIdx, remoteUrl.c_str());
-            }
             remote->setUrl(remoteUrl);
             remote->disableAutomaticReconnection();
             remote->disablePerMessageDeflate();
@@ -234,8 +184,8 @@ void InstallWebSocketBridge() {
             std::string bearerToken;
             uint64_t discordId = 0;
             {
-              auto getTokenFn = (const char* (*)())ResolveModuleProc("TokenAuth_GetToken");
-              auto getDiscordIdFn = (uint64_t (*)())ResolveModuleProc("TokenAuth_GetDiscordId");
+              auto getTokenFn = (const char* (*)())s_getProc("TokenAuth_GetToken");
+              auto getDiscordIdFn = (uint64_t (*)())s_getProc("TokenAuth_GetDiscordId");
               if (getTokenFn) {
                 const char* tok = getTokenFn();
                 if (tok) bearerToken = tok;
@@ -246,18 +196,11 @@ void InstallWebSocketBridge() {
               Log(EchoVR::LogLevel::Warning,
                   "[NEVR.WS] No discord ID in JWT — LoginRequest will use account ID 0");
             }
-            // Only attach Bearer token if the URL doesn't already have credentials.
-            // The /spr endpoint authenticates via URL query params (discordid/password).
-            // Sending Bearer on top may cause the server to use the JWT session instead
-            // of the URL-credential session, breaking matchmaker state.
-            bool hasUrlCredentials = remoteUrl.find("discordid=") != std::string::npos;
-            if (!bearerToken.empty() && !hasUrlCredentials) {
+            if (!bearerToken.empty()) {
               ix::WebSocketHttpHeaders headers;
               headers["Authorization"] = "Bearer " + bearerToken;
               remote->setExtraHeaders(headers);
               Log(EchoVR::LogLevel::Info, "[NEVR.WS] Attaching Bearer token to remote connection");
-            } else if (hasUrlCredentials) {
-              Log(EchoVR::LogLevel::Info, "[NEVR.WS] Using URL credentials (no Bearer token)");
             }
 
             auto pair = std::make_unique<ProxyPair>();
@@ -284,42 +227,37 @@ void InstallWebSocketBridge() {
                       // so that CNSUser::LogInSuccessCB processes the server's LoginSuccess
                       // response. Without this, LogInSuccessCB silently discards the message
                       // because the user's login state at +0x90 is still 0 (logged out).
-                      if (connIdx == 1 && !pairPtr->loginInjected) {
+                      if (connIdx > 0 && !pairPtr->loginInjected) {
                         pairPtr->loginInjected = true;
 
-                        // Set CNSUser login state only on the actual login connection.
-                        // Later connections (matchmaker, etc.) must not reset the state
-                        // or the game loses its logged-in status during lobby join.
-                        if (connIdx == 1) {
-                          HMODULE hPnsrad = GetModuleHandleA("pnsrad.dll");
-                          if (hPnsrad) {
-                            typedef void* (*UsersFn)();
-                            auto Users = (UsersFn)GetProcAddress(hPnsrad, "Users");
-                            if (Users) {
-                              auto* usersObj = (uint8_t*)Users();
-                              if (usersObj) {
-                                uint64_t userCount = *(uint64_t*)(usersObj + 0x398);
-                                uint8_t** bufCtx = *(uint8_t***)(usersObj + 0x368);
-                                if (userCount > 0 && bufCtx && *bufCtx) {
-                                  uint8_t* user = *bufCtx;
-                                  int64_t*  accountId  = (int64_t*)(user + 0x88);
-                                  uint64_t* loginState = (uint64_t*)(user + 0x90);
-                                  uint32_t* stateFlags = (uint32_t*)(user + 0x9c);
-                                  Log(EchoVR::LogLevel::Info,
-                                      "[NEVR.WS] CNSUser BEFORE: acct=%lld state=0x%llx flags=0x%x",
-                                      (long long)*accountId, (unsigned long long)*loginState, *stateFlags);
-                                  // Set the user's XPID: account_id and provider enum.
-                                  // +0x88 = account_id (discord ID from JWT)
-                                  // +0x90 low nibble = provider enum (2 = PSN in binary,
-                                  //   patched to DSC by PatchDscProvider string table rewrite)
-                                  // +0x9c = state flags (0x04 = connected/logged in)
-                                  *accountId  = (int64_t)discordId;
-                                  *loginState = (*loginState & ~0xFULL) | 2;  // PSN (patched to DSC)
-                                  *stateFlags = 0x04;
-                                  Log(EchoVR::LogLevel::Info,
-                                      "[NEVR.WS] CNSUser AFTER:  acct=%lld state=0x%llx flags=0x%x",
-                                      (long long)*accountId, (unsigned long long)*loginState, *stateFlags);
-                                }
+                        // Set CNSUser login state via pnsrad.dll's Users() singleton
+                        HMODULE hPnsrad = GetModuleHandleA("pnsrad.dll");
+                        if (hPnsrad) {
+                          typedef void* (*UsersFn)();
+                          auto Users = (UsersFn)GetProcAddress(hPnsrad, "Users");
+                          if (Users) {
+                            auto* usersObj = (uint8_t*)Users();
+                            if (usersObj) {
+                              // CNSIUsers layout: +0x368 = buffer_ctx (pointer to first user)
+                              // +0x398 = active_user_count
+                              uint64_t userCount = *(uint64_t*)(usersObj + 0x398);
+                              uint8_t** bufCtx = *(uint8_t***)(usersObj + 0x368);
+                              if (userCount > 0 && bufCtx && *bufCtx) {
+                                uint8_t* user = *bufCtx;
+                                // CNSUser +0x90 = login state (low nibble: 0=out, 2=logging in, 6=in)
+                                // CNSUser +0x9c = state flags (bit 2=connecting, bit 4=offline)
+                                uint64_t* loginState = (uint64_t*)(user + 0x90);
+                                uint32_t* stateFlags = (uint32_t*)(user + 0x9c);
+                                Log(EchoVR::LogLevel::Info,
+                                    "[NEVR.WS] CNSUser BEFORE: state=0x%llx flags=0x%x",
+                                    (unsigned long long)*loginState, *stateFlags);
+                                // Set login state to kLoggingIn (2)
+                                *loginState = (*loginState & ~0xFULL) | 2;
+                                // Clear all flags, set only connecting (bit 2)
+                                *stateFlags = 0x04;
+                                Log(EchoVR::LogLevel::Info,
+                                    "[NEVR.WS] CNSUser AFTER:  state=0x%llx flags=0x%x",
+                                    (unsigned long long)*loginState, *stateFlags);
                               }
                             }
                           }
@@ -328,8 +266,8 @@ void InstallWebSocketBridge() {
                         std::string loginMsg = BuildLoginRequest(discordId);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         Log(EchoVR::LogLevel::Info,
-                            "[NEVR.WS] Injected LoginRequest (DSC-%llu, %zu bytes, conn=%d)",
-                            (unsigned long long)discordId, loginMsg.size(), connIdx);
+                            "[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)",
+                            (unsigned long long)discordId, loginMsg.size());
                       }
 
                       for (auto& pending : pairPtr->pendingToRemote) {
@@ -401,7 +339,7 @@ void InstallWebSocketBridge() {
                             "[NEVR.WS] FRIEND INVITE SUCCESS: friendId=%llu",
                             (unsigned long long)friendId);
                       }
-                      // FriendListResponse (0xa78aeb2a4e89b10b): counts + per-friend entries
+                      // FriendListResponse (0xa78aeb2a4e89b10b): counts
                       if (rsym == 0xa78aeb2a4e89b10b && rmsg->str.size() >= 24 + 0x20) {
                         uint32_t noff, nbusy, non, nsent, nrecv;
                         memcpy(&noff, rmsg->str.data() + 24 + 8, 4);
@@ -412,31 +350,11 @@ void InstallWebSocketBridge() {
                         Log(EchoVR::LogLevel::Info,
                             "[NEVR.WS] FRIEND LIST: online=%u busy=%u offline=%u sent=%u recv=%u",
                             non, nbusy, noff, nsent, nrecv);
-                        // Hex dump full payload for friend entry analysis
-                        size_t payloadLen = rmsg->str.size() - 24;
-                        const uint8_t* pp = (const uint8_t*)rmsg->str.data() + 24;
-                        char hex[4096] = {};
-                        int hoff = 0;
-                        for (size_t i = 0; i < payloadLen && hoff < 4000; i++) {
-                          hoff += snprintf(hex + hoff, sizeof(hex) - hoff, "%02x ", pp[i]);
-                        }
-                        Log(EchoVR::LogLevel::Info, "[NEVR.WS] FRIEND payload (%zu bytes): %s",
-                            payloadLen, hex);
                       }
-                      // Route to the active game WS. When matchmaker (conn>=2)
-                      // shares the login remote, g_activeGameWs is swapped so
-                      // responses reach the matchmaker's game WS peer.
-                      {
-                        ix::WebSocket* target = nullptr;
-                        {
-                          std::lock_guard<std::mutex> lk(g_pairsMutex);
-                          target = g_activeGameWs ? g_activeGameWs : gameWsPtr;
-                        }
-                        if (rmsg->binary) {
-                          target->sendBinary(rmsg->str);
-                        } else {
-                          target->sendText(rmsg->str);
-                        }
+                      if (rmsg->binary) {
+                        gameWsPtr->sendBinary(rmsg->str);
+                      } else {
+                        gameWsPtr->sendText(rmsg->str);
                       }
                       break;
                     }
@@ -459,16 +377,11 @@ void InstallWebSocketBridge() {
             {
               std::lock_guard<std::mutex> lk(g_pairsMutex);
               g_pairs[gameWsPtr] = std::move(pair);
-              // Save login connection for reuse by matchmaker (conn>=2)
-              if (connIdx == 1) {
-                g_loginRemoteWs = remote;
-                g_activeGameWs = gameWsPtr;
-              }
             }
             // Start after insertion so the remote callback can find the pair in g_pairs
             remote->start();
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), bridging to %s",
-                connIdx, (void*)gameWsPtr, g_remoteUri.c_str());
+            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%s, ws=%p), bridging to %s",
+                connState->getId().c_str(), (void*)gameWsPtr, g_remoteUri.c_str());
             break;
           }
 
@@ -492,16 +405,6 @@ void InstallWebSocketBridge() {
                 Log(EchoVR::LogLevel::Info, "[NEVR.WS] game->server [%d]: sym=0x%016llx len=%llu (conn=%s)",
                     msgIdx, (unsigned long long)sym, (unsigned long long)len,
                     connState->getId().c_str());
-                // Hex dump PlayerSessionRequest (0x9af2fab2a0c81a05) for debugging
-                if (sym == 0x9af2fab2a0c81a05 && len <= 256) {
-                  char hex[1024] = {};
-                  int hoff = 0;
-                  const uint8_t* pp = p + 24;
-                  for (size_t i = 0; i < len && hoff < 1000; i++) {
-                    hoff += snprintf(hex + hoff, sizeof(hex) - hoff, "%02x ", pp[i]);
-                  }
-                  Log(EchoVR::LogLevel::Info, "[NEVR.WS] PlayerSessionReq payload: %s", hex);
-                }
                 // Decode outgoing SNS friend messages
                 // FriendInviteRequest (0x7f0d7a28de3c6f70): RoutingID(8)+UUID(16)+SessionGUID(8)+TargetUserID(8)
                 if (sym == 0x7f0d7a28de3c6f70 && len >= 0x28) {
@@ -558,17 +461,9 @@ void InstallWebSocketBridge() {
             std::lock_guard<std::mutex> lk(g_pairsMutex);
             auto it = g_pairs.find(&gameWs);
             if (it != g_pairs.end()) {
-              bool isShared = (it->second->remoteWs == g_loginRemoteWs);
-              if (!isShared) {
-                // stop() is synchronous — blocks until the connection is closed
-                // and all callbacks have completed. Clear the callback after stop
-                // so no further invocations can reference the freed ProxyPair.
-                it->second->remoteWs->stop();
-                it->second->remoteWs->setOnMessageCallback(nullptr);
-              }
+              it->second->remoteWs->stop();
               g_pairs.erase(it);
             }
-            if (g_activeGameWs == &gameWs) g_activeGameWs = nullptr;
             Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game disconnected");
             break;
           }
@@ -598,4 +493,45 @@ void ShutdownWebSocketBridge() {
   g_bridgeEnabled = false;
   // Do NOT call g_server->stop() — runs under loader lock during DLL_PROCESS_DETACH.
   // Thread joins can deadlock. OS reclaims everything on process exit.
+}
+
+// ---------------------------------------------------------------------------
+// Module interface
+// ---------------------------------------------------------------------------
+
+NEVR_MODULE_API int NvrModuleInit(const NvrModuleContext* ctx) {
+  EchoVR::g_GameBaseAddress = (CHAR*)ctx->base_addr;
+  EchoVR::InitializeFunctionPointers();
+  s_getProc = ctx->get_proc;
+  s_earlyConfig = ctx->early_config;
+
+  // Read socket URI from config
+  if (s_earlyConfig) {
+    CHAR* socketUri = EchoVR::JsonValueAsString(
+        (EchoVR::Json*)s_earlyConfig, (CHAR*)"nevr_socket_uri", NULL, false);
+    if (socketUri) {
+      SetWebSocketBridgeTarget(socketUri);
+      InstallWebSocketBridge();
+    } else {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.WS] No nevr_socket_uri in config — bridge disabled");
+    }
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.WS] No early config — bridge disabled");
+  }
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] ws_bridge initialized");
+  return 0;
+}
+
+NEVR_MODULE_API void NvrModuleShutdown(void) {
+  ShutdownWebSocketBridge();
+}
+
+// C exports for cross-module resolution (config.cpp URL redirect uses these)
+NEVR_MODULE_API uint16_t WsBridge_GetPort(void) {
+  return GetWebSocketBridgePort();
+}
+
+NEVR_MODULE_API bool WsBridge_IsActive(void) {
+  return IsWebSocketBridgeActive();
 }
