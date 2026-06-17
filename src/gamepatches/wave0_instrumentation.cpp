@@ -323,14 +323,14 @@ static void __fastcall WaitForValueHook(volatile uint32_t* ptr, uint32_t expecte
 void Wave0::Init(uintptr_t base_addr) {
     g_base = base_addr;
 
-    Log(EchoVR::LogLevel::Info, "[wave0] installing bug fix hooks");
+    fprintf(stderr, "[wave0] installing bug fix hooks\n"); fflush(stderr);
 
 #ifdef _WIN32
     // Cache QPC frequency (constant per process, ~20ns on Windows, ~1-5us on Wine)
     LARGE_INTEGER freq;
     QueryPerformanceFrequency(&freq);
     s_cached_perf_freq = freq.QuadPart;
-    Log(EchoVR::LogLevel::Info, "[wave0] QPC frequency: %lld Hz", (long long)s_cached_perf_freq);
+    fprintf(stderr, "[wave0] QPC frequency: %lld Hz\n", (long long)s_cached_perf_freq); fflush(stderr);
 
     // Create persistent high-res waitable timer (BUG #11, #12 fix)
     // Try high-res first (Windows 10 1803+), fall back to standard
@@ -338,13 +338,13 @@ void Wave0::Init(uintptr_t base_addr) {
         CREATE_WAITABLE_TIMER_MANUAL_RESET | CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
         TIMER_ALL_ACCESS);
     if (s_cached_timer) {
-        Log(EchoVR::LogLevel::Info, "[wave0] created high-resolution waitable timer");
+        fprintf(stderr, "[wave0] created high-resolution waitable timer\n"); fflush(stderr);
     } else {
         s_cached_timer = CreateWaitableTimerW(NULL, TRUE, NULL);
         if (s_cached_timer) {
-            Log(EchoVR::LogLevel::Info, "[wave0] created standard waitable timer (high-res unavailable)");
+            fprintf(stderr, "[wave0] created standard waitable timer (high-res unavailable)\n"); fflush(stderr);
         } else {
-            Log(EchoVR::LogLevel::Warning, "[wave0] failed to create waitable timer, Sleep fallback");
+            fprintf(stderr, "[wave0] WARN: failed to create waitable timer, Sleep fallback\n"); fflush(stderr);
         }
     }
 
@@ -375,12 +375,12 @@ void Wave0::Init(uintptr_t base_addr) {
         void* target = ResolveVA(g_base, h.va);
         if (MH_CreateHook(target, h.detour, h.original) == MH_OK &&
             MH_EnableHook(target) == MH_OK) {
-            Log(EchoVR::LogLevel::Info, "[wave0] hooked %s at 0x%llx", h.name,
-                (unsigned long long)h.va);
+            fprintf(stderr, "[wave0] hooked %s at 0x%llx\n", h.name,
+                (unsigned long long)h.va); fflush(stderr);
             installed++;
         } else {
-            Log(EchoVR::LogLevel::Warning, "[wave0] FAILED to hook %s at 0x%llx", h.name,
-                (unsigned long long)h.va);
+            fprintf(stderr, "[wave0] FAILED to hook %s at 0x%llx\n", h.name,
+                (unsigned long long)h.va); fflush(stderr);
         }
     }
 
@@ -391,19 +391,18 @@ void Wave0::Init(uintptr_t base_addr) {
     void* busywait = ResolveVA(g_base, VA_PRECISION_SLEEP_BUSYWAIT);
     uint8_t ret_byte = 0xC3;
     ProcessMemcpy(busywait, &ret_byte, 1);
-    Log(EchoVR::LogLevel::Info, "[wave0] patched CPrecisionSleep::BusyWait -> RET (BUG#13 fix)");
+    fprintf(stderr, "[wave0] patched CPrecisionSleep::BusyWait -> RET (BUG#13 fix)\n"); fflush(stderr);
     installed++;
 
-    Log(EchoVR::LogLevel::Info, "[wave0] complete: %d hooks/patches installed",
-        installed);
+    fprintf(stderr, "[wave0] complete: %d hooks/patches installed\n", installed); fflush(stderr);
     g_initialized = (installed > 0);
 #endif
 }
 
 void Wave0::Shutdown() {
     if (!g_initialized) return;
-    Log(EchoVR::LogLevel::Info, "[wave0] shutdown — overflow_ms=%ld null_deref=%ld dx_fatal=%ld dx_transient=%ld",
-        s_overflow_ms_count, s_null_deref_count, s_dx_error_count, s_dx_transient_count);
+    fprintf(stderr, "[wave0] shutdown — overflow_ms=%ld null_deref=%ld dx_fatal=%ld dx_transient=%ld\n",
+        s_overflow_ms_count, s_null_deref_count, s_dx_error_count, s_dx_transient_count); fflush(stderr);
 #ifdef _WIN32
     struct { void** orig; uint64_t va; } entries[] = {
         { (void**)&s_origGetTimeMicroseconds, VA_GET_TIME_MICROSECONDS },
