@@ -15,6 +15,7 @@
 #include "state_machine.h"
 #include "ws_bridge.h"
 
+#include "builtin_log_filter.h"
 #include "common/globals.h"
 #include "common/hooking.h"
 #include "common/logging.h"
@@ -105,6 +106,11 @@ VOID Initialize() {
     return;
   }
   fprintf(stderr, "[NEVR] minhook OK, hooking...\n"); fflush(stderr);
+
+  // --- Log filter (hooks CLog::PrintfImpl to capture/filter/file game output) ---
+  // g_isServer not set yet (CLI not parsed); pass false — log filter works regardless
+  BuiltinLogFilter::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress), false);
+  fprintf(stderr, "[NEVR] log filter OK\n"); fflush(stderr);
 
   // --- Game function hooks ---
   fprintf(stderr, "[NEVR] BuildCmdLine target=%p\n", (void*)EchoVR::BuildCmdLineSyntaxDefinitions); fflush(stderr);

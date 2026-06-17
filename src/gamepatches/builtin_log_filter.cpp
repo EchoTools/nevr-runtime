@@ -522,26 +522,47 @@ static void RotateIfNeeded() {
     OpenLogFile();
 }
 
+static std::string GetDefaultLogDir() {
+#ifdef _WIN32
+    // %LOCALAPPDATA%\EchoVR\logs — proper var directory, not application dir
+    char buf[MAX_PATH];
+    DWORD len = GetEnvironmentVariableA("LOCALAPPDATA", buf, MAX_PATH);
+    if (len > 0 && len < MAX_PATH) {
+        std::string dir(buf, len);
+        dir += "\\EchoVR";
+        CreateDirectoryA(dir.c_str(), nullptr);
+        dir += "\\logs";
+        CreateDirectoryA(dir.c_str(), nullptr);
+        return dir;
+    }
+    // Fallback: module directory (shouldn't happen but be safe)
+    char mod_path[MAX_PATH];
+    GetModuleFileNameA(nullptr, mod_path, MAX_PATH);
+    std::string dir(mod_path);
+    auto slash = dir.find_last_of("\\/");
+    if (slash != std::string::npos) dir = dir.substr(0, slash);
+    dir += "\\logs";
+    CreateDirectoryA(dir.c_str(), nullptr);
+    return dir;
+#else
+    const char* home = getenv("HOME");
+    if (!home) home = "/tmp";
+    std::string dir = std::string(home) + "/.local/share/echovr/logs";
+    mkdir((std::string(home) + "/.local").c_str(), 0755);
+    mkdir((std::string(home) + "/.local/share").c_str(), 0755);
+    mkdir((std::string(home) + "/.local/share/echovr").c_str(), 0755);
+    mkdir(dir.c_str(), 0755);
+    return dir;
+#endif
+}
+
 static void InitFileLogging() {
     if (!g_config.file_enabled) return;
 
-    char pid_str[16];
-    snprintf(pid_str, sizeof(pid_str), "%u", GetPid());
-    g_log_file_prefix = std::string("echovr-server-") + pid_str;
+    g_log_file_prefix = "nevr";
 
     if (g_config.file_dir.empty()) {
-#ifdef _WIN32
-        char mod_path[MAX_PATH];
-        GetModuleFileNameA(nullptr, mod_path, MAX_PATH);
-        std::string dir(mod_path);
-        auto slash = dir.find_last_of("\\/");
-        if (slash != std::string::npos) dir = dir.substr(0, slash);
-        g_log_dir = dir + "\\logs";
-        CreateDirectoryA(g_log_dir.c_str(), nullptr);
-#else
-        g_log_dir = "logs";
-        mkdir(g_log_dir.c_str(), 0755);
-#endif
+        g_log_dir = GetDefaultLogDir();
     } else {
         g_log_dir = g_config.file_dir;
 #ifdef _WIN32
