@@ -11,12 +11,5 @@ endif()
 # audio-intercom, combat-patch, filesystem-loader, force-push, game-rules-override,
 # session-unlocker, skip-splash moved to nevr-runtime-plugins
 add_subdirectory(log-filter)
-# server-timing is now built into gamepatches (builtin_server_timing.cpp)
-
-# token-auth is now built into gamepatches (runs before game connections)
 add_subdirectory(broadcaster-bridge)
 add_subdirectory(anim-debugger)
-# pnsrad-enabler is now built into gamepatches (pnsrad_enabler.cpp)
-# combat plugins disabled while debugging social lobby login
-#add_subdirectory(combat-mod)
-#add_subdirectory(combat-2d)
