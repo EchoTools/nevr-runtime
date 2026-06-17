@@ -8,6 +8,7 @@
 //      DllMain detects this and initializes immediately.
 #include "common/pch.h"
 #include "common/echovr_functions.h"
+#include "asset_cdn.h"
 #include "ws_bridge.h"
 #include "patches.h"
 #include "initialize.h"
@@ -93,12 +94,18 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       }
       break;
     case DLL_PROCESS_DETACH:
-      Wave0::Shutdown();
-      TokenAuth::Shutdown();
-      BuiltinLogFilter::Shutdown();
-      ServerTiming::Shutdown();
-      ShutdownResourceOverride();
-      ShutdownWebSocketBridge();
+      // Only do clean shutdown on dynamic unload (lpReserved == NULL).
+      // During process termination (lpReserved != NULL), threads are already
+      // dead and joining would deadlock under the loader lock.
+      if (lpReserved == NULL) {
+        AssetCDN::Shutdown();
+        Wave0::Shutdown();
+        TokenAuth::Shutdown();
+        BuiltinLogFilter::Shutdown();
+        ServerTiming::Shutdown();
+        ShutdownResourceOverride();
+        ShutdownWebSocketBridge();
+      }
       UnloadPlugins();
       if (g_realDbgCore) {
         FreeLibrary(g_realDbgCore);

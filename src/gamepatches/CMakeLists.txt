@@ -23,6 +23,7 @@ set(PATCHES_SOURCES
     "wave0_instrumentation.cpp"
     "pnsrad_enabler.cpp"
     "builtin_log_filter.cpp"
+    "asset_cdn.cpp"
 )
 
 set(PATCHES_HEADERS
@@ -39,6 +40,7 @@ set(PATCHES_HEADERS
     "state_machine.h"
     "plugin_loader.h"
     "winhttp_stub.h"
+    "asset_cdn.h"
     "process_mem.h"
     "patch_addresses.h"
     "ws_bridge.h"

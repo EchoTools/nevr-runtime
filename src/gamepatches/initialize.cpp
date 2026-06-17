@@ -3,6 +3,7 @@
 #include <cstring>
 #include <vector>
 
+#include "asset_cdn.h"
 #include "boot.h"
 #include "cli.h"
 #include "config.h"
@@ -156,6 +157,9 @@ VOID Initialize() {
   // --- Wave 0 instrumentation (observation-only + EndMultiplayer crash prevention) ---
   Wave0::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
   fprintf(stderr, "[NEVR] wave0 OK\n"); fflush(stderr);
+
+  // --- CDN asset loading ---
+  AssetCDN::Initialize();
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] All hooks installed");
 }
