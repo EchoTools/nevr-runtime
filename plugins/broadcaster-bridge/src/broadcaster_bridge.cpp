@@ -1041,10 +1041,28 @@ void Shutdown() {
     g_original_receive_local = nullptr;
 }
 
+static std::atomic<int64_t> g_last_stats_time{0};
+
 void OnFrame() {
     int cmd = g_deferred_cmd.exchange(0, std::memory_order_acq_rel);
     if (cmd == 4 && g_game_base) {
         HandleEnableBodies(g_game_base);
+    }
+
+    /* Periodic security stats (every 60s) */
+    auto now = std::chrono::steady_clock::now().time_since_epoch();
+    int64_t now_s = std::chrono::duration_cast<std::chrono::seconds>(now).count();
+    int64_t last = g_last_stats_time.load(std::memory_order_relaxed);
+    if (now_s - last >= 60) {
+        g_last_stats_time.store(now_s, std::memory_order_relaxed);
+        uint64_t src = g_rejected_source.load(std::memory_order_relaxed);
+        uint64_t sym = g_rejected_symbol.load(std::memory_order_relaxed);
+        uint64_t rate = g_rejected_rate.load(std::memory_order_relaxed);
+        if (src > 0 || sym > 0 || rate > 0) {
+            std::fprintf(stderr,
+                "[broadcaster_bridge] security: rejected_source=%llu rejected_symbol=%llu rejected_rate=%llu\n",
+                (unsigned long long)src, (unsigned long long)sym, (unsigned long long)rate);
+        }
     }
 }
 
