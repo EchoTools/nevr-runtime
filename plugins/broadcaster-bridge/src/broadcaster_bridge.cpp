@@ -56,13 +56,19 @@ static sockaddr_in            g_target_addr{};
 static std::thread            g_listener_thread;
 static std::atomic<bool>      g_shutdown_flag{false};
 
-/* Rate limiter state */
+/* Rate limiter state — outgoing mirror */
 static std::atomic<uint32_t>  g_send_count{0};
 static std::atomic<int64_t>   g_rate_window_start{0};
+
+/* Rate limiter state — incoming injection */
+static std::atomic<uint32_t>  g_inject_count{0};
+static std::atomic<int64_t>   g_inject_window_start{0};
+static constexpr uint32_t     MAX_INJECT_PACKETS_PER_SEC = 200;
 
 /* Security counters */
 static std::atomic<uint64_t>  g_rejected_source{0};
 static std::atomic<uint64_t>  g_rejected_symbol{0};
+static std::atomic<uint64_t>  g_rejected_rate{0};
 
 BridgeConfig ParseConfig(const std::string& json_text) {
     BridgeConfig cfg;
@@ -770,6 +776,20 @@ static void ListenerThreadFunc() {
         if (ntohl(from.sin_addr.s_addr) != INADDR_LOOPBACK) {
             g_rejected_source.fetch_add(1, std::memory_order_relaxed);
             continue;
+        }
+
+        /* Rate limit incoming injections */
+        {
+            auto now = std::chrono::steady_clock::now().time_since_epoch();
+            int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+            int64_t window = g_inject_window_start.load(std::memory_order_relaxed);
+            if (now_ms - window >= 1000) {
+                g_inject_window_start.store(now_ms, std::memory_order_relaxed);
+                g_inject_count.store(1, std::memory_order_relaxed);
+            } else if (g_inject_count.fetch_add(1, std::memory_order_relaxed) >= MAX_INJECT_PACKETS_PER_SEC) {
+                g_rejected_rate.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
         }
 
         /* Need at least injection header */
