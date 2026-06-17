@@ -22,6 +22,7 @@ set(PATCHES_SOURCES
     "server_timing.cpp"
     "wave0_instrumentation.cpp"
     "pnsrad_enabler.cpp"
+    "builtin_log_filter.cpp"
 )
 
 set(PATCHES_HEADERS
@@ -45,6 +46,7 @@ set(PATCHES_HEADERS
     "server_timing.h"
     "wave0_instrumentation.h"
     "pnsrad_enabler.h"
+    "builtin_log_filter.h"
 )
 
 add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
