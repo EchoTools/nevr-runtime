@@ -60,6 +60,10 @@ static std::atomic<bool>      g_shutdown_flag{false};
 static std::atomic<uint32_t>  g_send_count{0};
 static std::atomic<int64_t>   g_rate_window_start{0};
 
+/* Security counters */
+static std::atomic<uint64_t>  g_rejected_source{0};
+static std::atomic<uint64_t>  g_rejected_symbol{0};
+
 BridgeConfig ParseConfig(const std::string& json_text) {
     BridgeConfig cfg;
     if (json_text.empty()) return cfg;
@@ -687,6 +691,58 @@ static void HandleDumpActorData(uintptr_t base) {
     }
 }
 
+/* ── Message symbol allowlist for injection ───────────────────────── */
+
+static bool IsAllowedInjectionSymbol(uint64_t sym) {
+    /* Only server→game messages are allowed through the injection path.
+       This prevents external tools from injecting arbitrary broadcaster
+       messages (e.g., player state updates that bypass validation). */
+    switch (sym) {
+    /* Registration / session lifecycle */
+    case 0xFEF8EFEC97A3B98ULL:   /* LobbyRegistrationSuccess */
+    case 0xCC3A40870CDBC852ULL:  /* LobbyRegistrationFailure */
+    case 0x233E6E7E3A13BABCULL:  /* LobbySessionStarting */
+    case 0x425393736F0CDB8BULL:  /* LobbySessionError */
+    case 0x96101C684E7F325ULL:   /* LobbyStartSessionV4 */
+    case 0xB4D724E8564BFE88ULL:  /* LobbyJoinRequestedV4 */
+    case 0x5A44AB3E283D136DULL:  /* LobbyAddEntrantRequestV4 */
+    case 0x83E96504A9FC81C6ULL:  /* LobbySessionSuccessV5 */
+    case 0xFCBA8F2834F8DE40ULL:  /* LobbyAcceptPlayersSuccessV2 */
+    case 0xED9A4B86F8F3640AULL:  /* LobbyAcceptPlayersFailureV2 */
+    case 0xCCBC52F97F2E0EF1ULL:  /* LobbySmiteEntrant */
+    /* Loadout / cosmetics */
+    case 0xa3749626d6d20ef7ULL:  /* SaveLoadoutRequest */
+    case 0xdb64d31f58e19f74ULL:  /* SaveLoadoutSuccess */
+    case 0x0d12f3b7fa1d20a0ULL:  /* SaveLoadoutPartial */
+    case 0xc66ca34bb55fdc28ULL:  /* CurrentLoadoutRequest */
+    case 0xa52712ec66b2db48ULL:  /* CurrentLoadoutResponse */
+    /* Profile */
+    case 0x4aa419e5505280e9ULL:  /* RefreshProfileForUser */
+    case 0x06877b856e8d785fULL:  /* RefreshProfileFromServer */
+    /* Settings / rewards */
+    case 0xd26c901b8d4c56a6ULL:  /* LobbySendClientLobbySettings */
+    case 0xb3acdcc23a081c92ULL:  /* TierRewardMsg */
+    case 0xf28582c141e30960ULL:  /* TopAwardsMsg */
+    case 0x187008fe3940a327ULL:  /* NewUnlocks */
+    /* Stats */
+    case 0x5d84b0c2d4bb6cfcULL:  /* ReliableStatUpdate */
+    case 0x7ba444f7d419b1a2ULL:  /* ReliableTeamStatUpdate */
+    /* Transport */
+    case 0xf62cb25bb5b8a839ULL:  /* ProtobufMsg */
+    case 0x59f3af95e7d44e72ULL:  /* ProtobufJson */
+    case 0xc6b3710cd9c4ef47ULL:  /* NEVRProtobufJSONMessageV1 */
+    case 0x9ee5107d9e29fd63ULL:  /* SYM_PROTOBUF_MSG (gameserver) */
+    /* Social */
+    case 0xa78aeb2a4e89b10bULL:  /* FriendListResponse */
+    case 0x26a19dc4d2d5579dULL:  /* FriendStatusNotify */
+    case 0xDCB7130D1BEB9AC4ULL:  /* LobbyChatEntry */
+    case 0x27504F14881C1A43ULL:  /* LobbyVoiceEntry */
+        return true;
+    default:
+        return false;
+    }
+}
+
 /* ── Listener thread ──────────────────────────────────────────────── */
 
 static uintptr_t g_game_base = 0;
@@ -709,6 +765,12 @@ static void ListenerThreadFunc() {
 
         if (n <= 0) continue;
         if (g_shutdown_flag.load(std::memory_order_acquire)) break;
+
+        /* Reject non-loopback sources (defense in depth — socket already bound to 127.0.0.1) */
+        if (ntohl(from.sin_addr.s_addr) != INADDR_LOOPBACK) {
+            g_rejected_source.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
 
         /* Need at least injection header */
         if (static_cast<size_t>(n) < sizeof(InjectionPacketHeader)) continue;
@@ -744,6 +806,12 @@ static void ListenerThreadFunc() {
 
         void* broadcaster = g_broadcaster_ptr.load(std::memory_order_acquire);
         if (!broadcaster) continue;
+
+        if ((mode == INJECT_MODE_SEND || mode == INJECT_MODE_LOCAL_DISPATCH) &&
+            !IsAllowedInjectionSymbol(hdr.msg_symbol)) {
+            g_rejected_symbol.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
 
         if (mode == INJECT_MODE_SEND && g_original_send) {
             g_original_send(broadcaster, hdr.msg_symbol,
@@ -821,7 +889,7 @@ static socket_t CreateBlockingUdpSocket(uint16_t port) {
 
     sockaddr_in addr{};
     addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port        = htons(port);
 
     if (bind(s, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0) {
