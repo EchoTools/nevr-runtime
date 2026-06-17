@@ -11,9 +11,9 @@ set(PATCHES_SOURCES
     "config.cpp"
     "mode_patches.cpp"
     "crash_recovery.cpp"
-    "platform_compat.cpp"
     "state_machine.cpp"
     "plugin_loader.cpp"
+    "module_loader.cpp"
     "resource_override.cpp"
     "winhttp_stub.cpp"
     "ws_bridge.cpp"
@@ -39,6 +39,7 @@ set(PATCHES_HEADERS
     "resource_override.h"
     "state_machine.h"
     "plugin_loader.h"
+    "module_loader.h"
     "winhttp_stub.h"
     "asset_cdn.h"
     "process_mem.h"
@@ -64,6 +65,7 @@ target_include_directories(gamepatches PRIVATE
 )
 
 find_package(CURL REQUIRED)
+
 find_package(ixwebsocket CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 

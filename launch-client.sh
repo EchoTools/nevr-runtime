@@ -13,6 +13,6 @@ fi
 
 export DISPLAY=:101
 export WINEDLLOVERRIDES="dxgi=b"
-export WINEPREFIX=/home/andrew/src/nevr-runtime/.wineprefix
+export WINEPREFIX=/home/andrew/src/nevr-runtime/echovr/.wineprefix
 
-cd echovr/bin/win10 && wine ./echovr.exe -windowed -mp 2>&1 | grep -v -e fixme -e dxgi
+cd echovr/bin/win10 && wine ./echovr.exe -noovr -windowed -mp 2>&1 | grep -v -e fixme -e dxgi -e vkd3d

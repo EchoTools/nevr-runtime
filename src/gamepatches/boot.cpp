@@ -4,6 +4,7 @@
 #include "mode_patches.h"
 #include "resource_override.h"
 #include "plugin_loader.h"
+#include "module_loader.h"
 #include "ws_bridge.h"
 #include "token_auth.h"
 #include "xpid_patch.h"
@@ -12,6 +13,7 @@
 #include "common/globals.h"
 #include "common/logging.h"
 #include "common/echovr_functions.h"
+#include "common/nevr_module_interface.h"
 
 #include <cstdlib>
 #include <shellapi.h>
@@ -39,16 +41,48 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     LocalFree(argv);
   }
 
-  // Authenticate before any game connections. Device code auth blocks until
-  // the user authorizes via Discord or the flow times out.
-  TokenAuth::Init((uintptr_t)EchoVR::g_GameBaseAddress, g_isServer);
+  // Load modules. Order matters — dependencies must load first.
+  {
+    static NvrModuleContext moduleCtx = {};
+    moduleCtx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
+    moduleCtx.early_config = g_earlyConfigPtr;
+    moduleCtx.flags = 0;
+    if (g_isServer)   moduleCtx.flags |= NEVR_MODULE_HOST_IS_SERVER;
+    if (g_isHeadless) moduleCtx.flags |= NEVR_MODULE_HOST_IS_HEADLESS;
+    if (!g_isServer)  moduleCtx.flags |= NEVR_MODULE_HOST_IS_CLIENT;
+    moduleCtx.log = (void (*)(int, const char*, ...))Log;
+    moduleCtx.get_proc = ResolveModuleProc;
+    SetModuleContext(&moduleCtx);
 
-  // Start WebSocket TLS proxy. All WebSocket connections go through the proxy —
-  // the game's Schannel TLS is broken under Wine. The proxy uses ixwebsocket (mbedTLS).
-  CHAR* socketUri = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_socket_uri", NULL, false);
-  if (socketUri) {
-    SetWebSocketBridgeTarget(socketUri);
-    InstallWebSocketBridge();
+    // Platform compat — Schannel TLS hooks, CreateDirectory fixes, WinHTTP bridge.
+    // Must load before any network-using code.
+    LoadModule("platform_compat", &moduleCtx);
+
+    // Token auth — device code authentication, JWT refresh.
+    // Must load before ws_bridge (ws_bridge reads the JWT via get_proc).
+    LoadModule("token_auth", &moduleCtx);
+
+    // Register token_auth exports for cross-module access (ws_bridge uses these).
+    HMODULE hTokenAuth = GetModuleHandleA("token_auth.dll");
+    if (hTokenAuth) {
+      void* getToken = (void*)GetProcAddress(hTokenAuth, "TokenAuth_GetToken");
+      void* getDiscordId = (void*)GetProcAddress(hTokenAuth, "TokenAuth_GetDiscordId");
+      if (getToken) RegisterModuleProc("TokenAuth_GetToken", getToken);
+      if (getDiscordId) RegisterModuleProc("TokenAuth_GetDiscordId", getDiscordId);
+    }
+
+    // WebSocket TLS proxy — reads config and starts bridge in its init.
+    // Must load after token_auth (resolves TokenAuth_GetToken via get_proc).
+    LoadModule("ws_bridge", &moduleCtx);
+
+    // Register ws_bridge exports so config.cpp can resolve them for URL redirects.
+    HMODULE hWsBridge = GetModuleHandleA("ws_bridge.dll");
+    if (hWsBridge) {
+      void* getPort = (void*)GetProcAddress(hWsBridge, "WsBridge_GetPort");
+      void* isActive = (void*)GetProcAddress(hWsBridge, "WsBridge_IsActive");
+      if (getPort) RegisterModuleProc("WsBridge_GetPort", getPort);
+      if (isActive) RegisterModuleProc("WsBridge_IsActive", isActive);
+    }
   }
 
   // Parse command line arguments.
