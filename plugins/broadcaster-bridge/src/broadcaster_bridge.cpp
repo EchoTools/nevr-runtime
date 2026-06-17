@@ -91,6 +91,7 @@ BridgeConfig ParseConfig(const std::string& json_text) {
         cfg.mirror_send    = j.value("mirror_send", cfg.mirror_send);
         cfg.mirror_receive = j.value("mirror_receive", cfg.mirror_receive);
         cfg.log_messages   = j.value("log_messages", cfg.log_messages);
+        cfg.enable_debug_commands = j.value("enable_debug_commands", cfg.enable_debug_commands);
     } catch (...) {
         /* Return defaults on parse failure */
     }
@@ -802,6 +803,11 @@ static void ListenerThreadFunc() {
         MirrorPacketHeader hdr;
         const uint8_t* payload = nullptr;
         if (!DeserializeMirrorPacket(mirror_data, mirror_len, hdr, payload)) continue;
+
+        /* Debug commands (modes 2-6) are disabled by default — enable via config */
+        if (mode >= INJECT_MODE_CHASSIS_SWAP && !g_config.enable_debug_commands) {
+            continue;
+        }
 
         /* Handle commands that don't need broadcaster first */
         if (mode == INJECT_MODE_READ_LOADOUT && g_game_base) {

@@ -114,6 +114,7 @@ struct BridgeConfig {
     bool        mirror_send    = true;
     bool        mirror_receive = false;
     bool        log_messages   = false;
+    bool        enable_debug_commands = false;  /* modes 2-6: chassis swap, loadout dump, etc. */
 };
 
 /*
