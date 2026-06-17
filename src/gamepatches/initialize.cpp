@@ -98,6 +98,10 @@ VOID Initialize() {
   fprintf(stderr, "[NEVR.PATCH] Initializing v%s base=%p\n", PROJECT_VERSION, EchoVR::g_GameBaseAddress);
   fflush(stderr);
 
+  if (!VerifyGameVersion()) {
+    fprintf(stderr, "[NEVR] WARNING: game binary version mismatch — hooks may crash\n"); fflush(stderr);
+  }
+
   EchoVR::InitializeFunctionPointers();
   fprintf(stderr, "[NEVR] fn ptrs OK\n"); fflush(stderr);
 

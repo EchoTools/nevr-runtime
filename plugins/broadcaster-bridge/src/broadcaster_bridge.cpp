@@ -412,11 +412,7 @@ static void HandleChassisSwap(uintptr_t base, const ChassisSwapPayload* payload)
     /* Read game flags: *(*(netgame+0x2DA0)) — double deref, first byte is the bitfield */
     uint64_t* flagsPtrPtr = reinterpret_cast<uint64_t*>(ng + 0x2DA0);
     uint64_t flagsPtr = *flagsPtrPtr;
-    uint8_t flagsByte = flagsPtr ? *reinterpret_cast<uint8_t*>(flagsPtr) : 0;
-
-    /* Also read game_flags at context+0x7AE0 (CR15Game flags, different bitfield) */
-    uint64_t gameFlags = *reinterpret_cast<uint64_t*>(
-        *reinterpret_cast<char**>(reinterpret_cast<char*>(base) + GAME_CONTEXT_OFFSET) + 0x7AE0);
+    (void)flagsPtr; /* used only in dump below */
 
     /* Dump 64 bytes from the flags pointer for analysis */
     uint8_t dump[64] = {};

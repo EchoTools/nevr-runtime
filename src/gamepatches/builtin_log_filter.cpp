@@ -121,14 +121,6 @@ static_assert(sizeof(va_list) == sizeof(void*),
 /* Platform helpers                                                    */
 /* ------------------------------------------------------------------ */
 
-static uint32_t GetPid() {
-#ifdef _WIN32
-    return static_cast<uint32_t>(_getpid());
-#else
-    return static_cast<uint32_t>(getpid());
-#endif
-}
-
 static uint64_t GetEpochSeconds() {
 #ifdef _WIN32
     FILETIME ft;
