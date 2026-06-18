@@ -303,6 +303,46 @@ static void OnD3d11Load(const char* dll_name, HMODULE module) {
     }
 }
 
+/* ========================================================================
+ * D3D12CreateDevice hook — echovr.exe is actually DX12
+ * ======================================================================== */
+
+typedef HRESULT (WINAPI *D3D12CreateDevice_t)(
+    void* pAdapter,           /* IUnknown* (IDXGIAdapter) */
+    UINT minFeatureLevel,     /* D3D_FEATURE_LEVEL */
+    const void* riid,         /* REFIID */
+    void** ppDevice           /* void** */
+);
+static D3D12CreateDevice_t g_origD3D12CreateDevice = nullptr;
+
+static HRESULT WINAPI D3D12CreateDevice_Hook(
+    void* pAdapter, UINT minFeatureLevel, const void* riid, void** ppDevice)
+{
+    if (g_isHeadless) {
+        if (ppDevice) *ppDevice = nullptr;
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.HEADLESS] D3D12CreateDevice intercepted — returning null device (no GPU)");
+        return DXGI_ERROR_NOT_FOUND_;
+    }
+    return g_origD3D12CreateDevice(pAdapter, minFeatureLevel, riid, ppDevice);
+}
+
+static void OnD3d12Load(const char* dll_name, HMODULE module) {
+    FARPROC fn = GetProcAddress(module, "D3D12CreateDevice");
+    if (fn) {
+        g_origD3D12CreateDevice = (D3D12CreateDevice_t)fn;
+        if (MH_CreateHook((void*)fn, (void*)&D3D12CreateDevice_Hook,
+                          (void**)&g_origD3D12CreateDevice) == MH_OK &&
+            MH_EnableHook((void*)fn) == MH_OK) {
+            fprintf(stderr, "[NEVR.HEADLESS] hooked D3D12CreateDevice at %p\n", (void*)fn);
+            fflush(stderr);
+        } else {
+            fprintf(stderr, "[NEVR.HEADLESS] FAILED to hook D3D12CreateDevice\n");
+            fflush(stderr);
+        }
+    }
+}
+
 #endif /* _WIN32 */
 
 /* ========================================================================
@@ -311,13 +351,11 @@ static void OnD3d11Load(const char* dll_name, HMODULE module) {
 
 void InstallHeadlessGraphicsHooks() {
 #ifdef _WIN32
-    /* Register callbacks so hooks install when the DLLs actually load.
-     * If the DLLs are already loaded (shouldn't be this early), OnLoad
-     * fires the callback immediately. */
     DllLoadHook::OnLoad("dxgi.dll", OnDxgiLoad);
     DllLoadHook::OnLoad("d3d11.dll", OnD3d11Load);
+    DllLoadHook::OnLoad("d3d12.dll", OnD3d12Load);
 
-    fprintf(stderr, "[NEVR.HEADLESS] registered DXGI/D3D11 headless hooks "
+    fprintf(stderr, "[NEVR.HEADLESS] registered DXGI/D3D11/D3D12 headless hooks "
                     "(active when g_isHeadless=%d)\n", (int)g_isHeadless);
     fflush(stderr);
 #endif
