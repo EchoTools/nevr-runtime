@@ -194,12 +194,29 @@ static void* ShimServerLib() {
   return &g_shim;
 }
 
+static void* LazyPnsradUsers();  // forward decl — defined below CSysDLL_GetSymbol section
+
 static FARPROC GetProcAddressHook(HMODULE hModule, LPCSTR lpProcName) {
   // Platform DLLs (pnsdemo/pnsovr) crash during RadPluginShutdown due to freed memory.
   // Detect platform DLLs by checking for the "Users" export they all define.
   if (g_isServer && strcmp(lpProcName, "RadPluginShutdown") == 0) {
     if (EchoVR::GetProcAddress(hModule, "Users") != NULL) exit(0);
   }
+
+  // Proxy pnsdemo's "Users" → pnsrad's Users (lazy, handles load ordering)
+  if (lpProcName && strcmp(lpProcName, "Users") == 0) {
+    // Check if this is pnsdemo.dll by looking for its ProviderID export
+    if (EchoVR::GetProcAddress(hModule, "ProviderID") != NULL) {
+      static bool logged = false;
+      if (!logged) {
+        fprintf(stderr, "[NEVR.SHIM] GetProcAddress('Users') from platform DLL → lazy pnsrad proxy\n");
+        fflush(stderr);
+        logged = true;
+      }
+      return reinterpret_cast<FARPROC>(&LazyPnsradUsers);
+    }
+  }
+
   return EchoVR::GetProcAddress(hModule, lpProcName);
 }
 
@@ -209,6 +226,31 @@ static FARPROC GetProcAddressHook(HMODULE hModule, LPCSTR lpProcName) {
 // ============================================================================
 // CSysDLL_GetSymbol @ 0x1400eaef0 — the game's own GetProcAddress wrapper.
 // Used by CNSLobby_LoadServerSupport to resolve "ServerLib" from pnsradgameserver.dll.
+
+// Lazy Users proxy: returns pnsrad's Users object when called, falling back to
+// pnsdemo's if pnsrad isn't loaded yet. This handles the ordering problem where
+// pnsdemo loads and the game queries Users before pnsrad exists.
+static void* LazyPnsradUsers() {
+  HMODULE pnsrad = GetModuleHandleA("pnsrad.dll");
+  if (pnsrad) {
+    typedef void* (*UsersFn)();
+    UsersFn fn = reinterpret_cast<UsersFn>(GetProcAddress(pnsrad, "Users"));
+    if (fn) {
+      void* obj = fn();
+      static bool logged = false;
+      if (!logged) {
+        fprintf(stderr, "[NEVR.SHIM] LazyPnsradUsers → pnsrad Users obj=%p\n", obj);
+        fflush(stderr);
+        logged = true;
+      }
+      return obj;
+    }
+  }
+  // pnsrad not loaded yet — shouldn't happen if called after init
+  fprintf(stderr, "[NEVR.SHIM] LazyPnsradUsers — pnsrad.dll not loaded, returning null\n");
+  fflush(stderr);
+  return nullptr;
+}
 
 typedef void* (*CSysDLL_GetSymbol_fn)(void* dll_handle, const char* symbol_name);
 static CSysDLL_GetSymbol_fn g_original_GetSymbol = nullptr;
@@ -226,15 +268,18 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
     return reinterpret_cast<void*>(&ShimServerLib);
   }
 
-  // Log all symbol resolutions to understand the game's DLL loading
-  if (symbol_name) {
-    static int log_count = 0;
-    if (log_count < 50) {
-      fprintf(stderr, "[NEVR.SYMDLL] GetSymbol(handle=%p, '%s') = %p\n",
-              dll_handle, symbol_name, result);
+  // Proxy pnsdemo's "Users" export → lazy wrapper that returns pnsrad's Users.
+  // At resolution time pnsrad.dll may not be loaded yet, so we return a wrapper
+  // function that resolves pnsrad's Users on first call.
+  if (symbol_name && strcmp(symbol_name, "Users") == 0 && result != nullptr) {
+    static void* pnsdemo_users_result = result; // save pnsdemo's original
+    static bool logged = false;
+    if (!logged) {
+      fprintf(stderr, "[NEVR.SHIM] intercepting 'Users' export → lazy pnsrad proxy\n");
       fflush(stderr);
-      log_count++;
+      logged = true;
     }
+    return reinterpret_cast<void*>(&LazyPnsradUsers);
   }
 
   return result;

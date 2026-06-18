@@ -4,12 +4,34 @@
 #include "../Plugin/Globals.h"
 #include "../Core/TLSMemory.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 /* @module: pnsrad.dll */
 /* @purpose: CNSRADUsers and CNSIUsers implementation — user management via SNS */
 
+// ============================================================================
+// Config access — resolved at link time from gamepatches module
+// ============================================================================
+
+// The game's early-loaded _local/config.json, set by gamepatches LoadEarlyConfig.
+// Declared as void* to avoid pulling in EchoVR::Json into pnsrad's namespace.
+extern "C" void* g_earlyConfigPtr;
+
+// EchoVR::JsonValueAsString — reads a string key from a JSON config object.
+// Signature: CHAR* (Json* root, CHAR* keyName, CHAR* defaultValue, BOOL reportFailure)
+// The function pointer is initialized by gamepatches InitializeFunctionPointers.
+namespace EchoVR {
+    typedef char* JsonValueAsStringFunc(void* root, char* keyName, char* defaultValue, int reportFailure);
+    extern JsonValueAsStringFunc* JsonValueAsString;
+}
+
 namespace NRadEngine {
+
+// Static storage for the per-login user sub-object
+CNSRADLoggedInUser CNSRADUsers::s_logged_in_user_ = {};
+bool CNSRADUsers::s_user_initialized_ = false;
 
 // ============================================================================
 // External function declarations (pnsrad.dll internal)
@@ -87,11 +109,9 @@ extern void* vtable_NRadEngine_CNSIUsers;
 // ============================================================================
 
 // @0x18008d6c0 — CNSIUsers::~CNSIUsers (non-deleting destructor)
-// The binary function at this VA sets vtable to CNSIUsers then runs
-// CNSIUsers_DestroyMembers. In the C++ model, the derived dtor calls
-// CNSIUsers_DestroyMembers explicitly, and then the implicit base dtor
-// call runs with an empty body (MSVC emits the destroy body only once
-// and shares it between base and derived dtor thunks).
+// Non-virtual: MSVC only places the scalar deleting destructor (at +0x28)
+// in the vtable. The non-deleting destructor is called internally by
+// DeletingDestructor and by derived dtors.
 // @confidence: H
 CNSIUsers::~CNSIUsers() {
     // Intentionally empty — the shared destroy body is modeled by
@@ -250,6 +270,43 @@ CNSRADUsers::CNSRADUsers() {
 // @confidence: H
 CNSRADUsers::~CNSRADUsers() {
     CNSIUsers_DestroyMembers(this);
+}
+
+// ============================================================================
+// CNSRADUsers — GetLoggedInUser / GetLoggedInUserID
+// ============================================================================
+
+// Slot 0 (+0x00): GetLoggedInUser — returns per-login user sub-object.
+// The sub-object is a 0xC0-byte struct with the numeric user ID at +0x88.
+// On first call, reads "nevr_discord_id" from the game's early config and
+// stores it in the static sub-object. Subsequent calls return the cached object.
+//
+// The original pnsdemo.dll allocates this in its slot 0 impl (@0x18007ee60).
+// The game's consumption site at echovr.exe @0x140606ea8 constructs the XPID
+// string as "%s-%llu" using the provider name and this ID.
+// @confidence: H (slot mapping from RE session spritzs-echovr-re 2026-06-18)
+void* CNSRADUsers::GetLoggedInUser() {
+    if (!s_user_initialized_) {
+        memset(&s_logged_in_user_, 0, sizeof(s_logged_in_user_));
+
+        // Read Discord ID from config
+        uint64_t discord_id = 0;
+        if (g_earlyConfigPtr && EchoVR::JsonValueAsString) {
+            char* id_str = EchoVR::JsonValueAsString(
+                g_earlyConfigPtr, (char*)"nevr_discord_id", nullptr, 0);
+            if (id_str && id_str[0] != '\0') {
+                discord_id = strtoull(id_str, nullptr, 10);
+            }
+        }
+
+        s_logged_in_user_.user_id = discord_id;
+        s_user_initialized_ = true;
+
+        fprintf(stderr, "[PNSRAD] GetLoggedInUser: user_id=%llu\n",
+                (unsigned long long)discord_id);
+        fflush(stderr);
+    }
+    return &s_logged_in_user_;
 }
 
 // ============================================================================
@@ -428,12 +485,17 @@ void CNSRADUsers::GetUserString(uint64_t id, const char* path) {
     (void)id; (void)path;
 }
 
-// @0x18009c4f0 — CJsonTraversal::HandleArray (forwarding stub)
-// Implementation in CJsonTraversal.cpp. This vtable slot forwards to CJsonTraversal.
-// @confidence: H
-void CNSRADUsers::BatchUpdate(uint64_t param2, uint64_t param3) {
-    // Forwards to CJsonTraversal::HandleArray — see CJsonTraversal.cpp
-    (void)param2; (void)param3;
+// Slot 13 (+0x68): GetLoggedInUserID — returns the numeric user ID.
+// In the original binary this was at pnsdemo.dll @0x180082d40.
+// The game calls this to get the XPID numeric part (e.g. "OVR-ORG-1234567890").
+// Reads sub-object+0x88 from the per-login user created by GetLoggedInUser.
+// @confidence: H (slot mapping from RE session spritzs-echovr-re 2026-06-18)
+uint64_t CNSRADUsers::GetLoggedInUserID() {
+    if (!s_user_initialized_) {
+        // Force initialization of the sub-object
+        GetLoggedInUser();
+    }
+    return s_logged_in_user_.user_id;
 }
 
 // @0x18009cdd0 — CJsonTraversal::HandleObject (forwarding stub)

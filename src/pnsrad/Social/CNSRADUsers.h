@@ -18,6 +18,20 @@
 
 namespace NRadEngine {
 
+// Per-login user sub-object returned by GetLoggedInUser (vtable slot 0).
+// Binary layout: 0xC0 bytes minimum, user_id at +0x88.
+// Modeled after CNSUser but lighter — only the fields the game reads.
+// The game reads sub-object+0x88 (session_id/user_id) via GetLoggedInUserID.
+#pragma pack(push, 1)
+struct CNSRADLoggedInUser {
+    uint8_t  pad_00[0x88];     // +0x00: zeroed (callbacks, parent, guid, profile, flags)
+    uint64_t user_id;          // +0x88: the numeric user ID (Discord ID for NEVR)
+    uint8_t  pad_90[0x30];     // +0x90: remaining fields (login_state, local_user_id, etc.)
+};
+#pragma pack(pop)
+static_assert(sizeof(CNSRADLoggedInUser) == 0xC0);
+static_assert(offsetof(CNSRADLoggedInUser, user_id) == 0x88);
+
 /* @addr: vtable at 0x180229600 (pnsrad.dll)
  * @size: 0x428
  * @confidence: H
@@ -30,13 +44,13 @@ public:
     // user_pool, and tail sentinel.
     CNSRADUsers();
 
-    // @0x18008d6c0 — CNSIUsers destructor
-    // Iterates buffer_ctx entries calling OnShutdown for each,
-    // resets session GUID to defaults, destroys user_pool,
-    // destroys pending_callback, releases buffer_ctx.
-    ~CNSRADUsers() override;
+    // @0x18008d6c0 — CNSIUsers destructor (non-virtual, called by DeletingDestructor)
+    ~CNSRADUsers();
 
     // --- CNSIUsers overrides (vtable methods) ---
+
+    // Slot 0 (+0x00): returns per-login user sub-object with user ID from config
+    void* GetLoggedInUser() override;
 
     // @0x18008e080 — logs "[NSUSER] Destroying user %s"
     void OnShutdown(int64_t* user) override;
@@ -62,8 +76,8 @@ public:
     // @0x18009d690 — string field accessor with JSON path
     void GetUserString(uint64_t id, const char* path) override;
 
-    // @0x18009c4f0 — array iteration, updates multiple users
-    void BatchUpdate(uint64_t param2, uint64_t param3) override;
+    // Slot 13 (+0x68): returns the logged-in user's numeric ID (uint64)
+    uint64_t GetLoggedInUserID() override;
 
     // @0x18009cdd0 — dictionary iteration with TLS ctx
     void IterateDict(uint64_t param2, uint64_t param3) override;
@@ -98,6 +112,11 @@ public:
     void stub_vtable_0xd0() override;
     void stub_vtable_0xd8() override;
     void stub_vtable_0xf8() override;
+
+private:
+    // Cached per-login user sub-object (allocated on first GetLoggedInUser call)
+    static CNSRADLoggedInUser s_logged_in_user_;
+    static bool s_user_initialized_;
 };
 
 // No extra fields — inherits size from CNSIUsers

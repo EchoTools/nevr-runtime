@@ -29,6 +29,10 @@ using ovrID               = uint64_t;
 using ovrMessageHandle    = void*;
 using ovrPlatformHandle   = void*;
 
+// Monotonic request ID counter.  The real SDK returns unique non-zero handles
+// for async operations; callers check (handle == 0) to detect submission failure.
+static ovrRequest g_nextRequestId = 0x4E455652; // "NEVR" as a seed
+
 // ============================================================================
 // Platform initialization  (GetProcAddress-resolved in pnsovr.dll)
 // ============================================================================
@@ -40,17 +44,19 @@ EXPORT ovrRequest ovr_PlatformInitializeWindows(uint64_t appId) {
 
 EXPORT ovrRequest ovr_PlatformInitializeWindowsAsynchronous(uint64_t appId) {
     STUB_LOG("%s(appId=%llu)", __func__, (unsigned long long)appId);
-    return 0;
+    // Async init returns a request handle (non-zero = submitted, 0 = failure).
+    // The actual result arrives via ovr_PopMessage as ovrMessage_PlatformInitializeWindowsAsynchronous.
+    return g_nextRequestId++;
 }
 
 EXPORT ovrRequest ovr_PlatformInitializeWithAccessToken(uint64_t appId, const char* token) {
-    STUB_LOG("%s(appId=%llu)", __func__, (unsigned long long)appId);
-    return 0;
+    STUB_LOG("%s(appId=%llu, token=%s)", __func__, (unsigned long long)appId, token ? token : "(null)");
+    return 0; // Sync: 0 = ovrPlatformInitialize_Success
 }
 
 EXPORT ovrRequest ovr_PlatformInitializeWithAccessTokenAndOptions(uint64_t appId, const char* token, void* opts) {
-    STUB_LOG("%s(appId=%llu)", __func__, (unsigned long long)appId);
-    return 0;
+    STUB_LOG("%s(appId=%llu, token=%s)", __func__, (unsigned long long)appId, token ? token : "(null)");
+    return 0; // Sync: 0 = ovrPlatformInitialize_Success
 }
 
 EXPORT ovrMessageHandle ovr_PopMessage() {
@@ -59,13 +65,15 @@ EXPORT ovrMessageHandle ovr_PopMessage() {
 }
 
 EXPORT ovrRequest ovr_PlatformInitializeStandaloneAccessToken(uint64_t appId, const char* token, const char* orgId) {
-    STUB_LOG("%s(appId=%llu)", __func__, (unsigned long long)appId);
-    return 1;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s(appId=%llu) -> req %llu", __func__, (unsigned long long)appId, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_Platform_InitializeStandaloneOculus(uint64_t appId, const char* orgId) {
-    STUB_LOG("%s(appId=%llu)", __func__, (unsigned long long)appId);
-    return 1;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s(appId=%llu) -> req %llu", __func__, (unsigned long long)appId, (unsigned long long)id);
+    return id;
 }
 
 EXPORT int ovr_IsPlatformInitialized() {
@@ -170,27 +178,31 @@ EXPORT int ovr_Error_GetHttpCode(void* error) {
 // ============================================================================
 
 EXPORT ovrRequest ovr_User_GetLoggedInUser() {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_User_GetAccessToken() {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_User_GetUserProof() {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_User_Get(ovrID userID) {
-    STUB_LOG("%s(userID=%llu)", __func__, (unsigned long long)userID);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s(userID=%llu) -> req %llu", __func__, (unsigned long long)userID, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrID ovr_User_GetID(void* user) {
-    return 0;
+    return 1000; // Fake user ID
 }
 
 EXPORT const char* ovr_User_GetOculusID(void* user) {
@@ -198,18 +210,21 @@ EXPORT const char* ovr_User_GetOculusID(void* user) {
 }
 
 EXPORT ovrRequest ovr_User_GetOrgScopedID(ovrID userID) {
-    STUB_LOG("%s(userID=%llu)", __func__, (unsigned long long)userID);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s(userID=%llu) -> req %llu", __func__, (unsigned long long)userID, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_User_GetLoggedInUserFriends() {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_User_GetLoggedInUserRecentlyMetUsersAndRooms(int filter) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT void* ovr_User_GetPresence(void* user) {
@@ -230,17 +245,17 @@ EXPORT const char* ovr_User_GetInviteToken(void* user) {
 
 EXPORT ovrRequest ovr_User_GetNextUserArrayPage(void* userArray) {
     STUB_LOG("%s called", __func__);
-    return 0;
+    return 0; // 0 = no more pages
 }
 
 EXPORT ovrRequest ovr_User_GetNextUserAndRoomArrayPage(void* userAndRoomArray) {
     STUB_LOG("%s called", __func__);
-    return 0;
+    return 0; // 0 = no more pages
 }
 
 EXPORT ovrID ovr_GetLoggedInUserID() {
     STUB_LOG("%s called", __func__);
-    return 0;
+    return 1000; // Fake user ID — non-zero so callers don't treat as "no user"
 }
 
 EXPORT void ovrID_FromString(ovrID* outId, const char* str) {
@@ -314,23 +329,27 @@ EXPORT ovrRequest ovr_Entitlement_GetIsViewerEntitled() {
 // ============================================================================
 
 EXPORT ovrRequest ovr_IAP_GetProductsBySKU(const char** skus, int count) {
-    STUB_LOG("%s(count=%d)", __func__, count);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s(count=%d) -> req %llu", __func__, count, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_IAP_GetViewerPurchases() {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_IAP_GetViewerPurchasesDurableCache() {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_IAP_LaunchCheckoutFlow(const char* sku) {
-    STUB_LOG("%s(sku=\"%s\")", __func__, sku ? sku : "(null)");
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s(sku=\"%s\") -> req %llu", __func__, sku ? sku : "(null)", (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_IAP_GetNextProductArrayPage(void* arr) {
@@ -367,18 +386,21 @@ EXPORT const char* ovr_Purchase_GetSKU(void* purchase) { return ""; }
 // ============================================================================
 
 EXPORT ovrRequest ovr_RichPresence_Set(void* options) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_RichPresence_Clear() {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_RichPresence_GetDestinations() {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_RichPresence_GetNextDestinationArrayPage(void* arr) {
@@ -417,13 +439,15 @@ EXPORT const char* ovr_Destination_GetDisplayName(void* dest) { return ""; }
 // ============================================================================
 
 EXPORT ovrRequest ovr_Room_CreateAndJoinPrivate2(int joinPolicy, unsigned int maxUsers, void* opts) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_Room_Get(ovrID roomID) {
-    STUB_LOG("%s(roomID=%llu)", __func__, (unsigned long long)roomID);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s(roomID=%llu) -> req %llu", __func__, (unsigned long long)roomID, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrID ovr_Room_GetID(void* room) { return 0; }
@@ -434,53 +458,63 @@ EXPORT int ovr_Room_GetJoinPolicy(void* room) { return 0; }
 EXPORT int ovr_Room_GetIsMembershipLocked(void* room) { return 0; }
 
 EXPORT ovrRequest ovr_Room_GetInvitableUsers2(ovrID roomID, void* opts) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_Room_Join2(ovrID roomID, void* opts) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_Room_Leave(ovrID roomID) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_Room_KickUser(ovrID roomID, ovrID userID) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_Room_InviteUser(ovrID roomID, const char* inviteToken) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_Room_UpdateDataStore(ovrID roomID, void* data, int count) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_Room_UpdateOwner(ovrID roomID, ovrID newOwner) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_Room_UpdateMembershipLockStatus(ovrID roomID, int membershipLockStatus) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_Room_UpdatePrivateRoomJoinPolicy(ovrID roomID, int joinPolicy) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_Room_LaunchInvitableUserFlow(ovrID roomID) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT void* ovr_RoomOptions_Create() { return nullptr; }
@@ -499,8 +533,9 @@ EXPORT void* ovr_RoomInviteNotificationArray_GetElement(void* arr, uint64_t inde
 EXPORT int ovr_RoomInviteNotificationArray_HasNextPage(void* arr) { return 0; }
 
 EXPORT ovrRequest ovr_Notification_GetRoomInvites() {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_Notification_GetNextRoomInviteNotificationArrayPage(void* arr) {
@@ -508,8 +543,9 @@ EXPORT ovrRequest ovr_Notification_GetNextRoomInviteNotificationArrayPage(void* 
 }
 
 EXPORT ovrRequest ovr_Notification_MarkAsRead(ovrID notifID) {
-    STUB_LOG("%s(notifID=%llu)", __func__, (unsigned long long)notifID);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s(notifID=%llu) -> req %llu", __func__, (unsigned long long)notifID, (unsigned long long)id);
+    return id;
 }
 
 // ============================================================================
@@ -517,23 +553,27 @@ EXPORT ovrRequest ovr_Notification_MarkAsRead(ovrID notifID) {
 // ============================================================================
 
 EXPORT ovrRequest ovr_Party_GetCurrent() {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_Party_Create() {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_Party_Invite(ovrID userID) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_Party_Leave(ovrID partyID) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 // ============================================================================
@@ -541,18 +581,21 @@ EXPORT ovrRequest ovr_Party_Leave(ovrID partyID) {
 // ============================================================================
 
 EXPORT ovrRequest ovr_ApplicationLifecycle_GetLaunchDetails() {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_ApplicationInvite_GetInvites() {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT ovrRequest ovr_ApplicationInvite_Send(void* opts) {
-    STUB_LOG("%s called", __func__);
-    return 0;
+    ovrRequest id = g_nextRequestId++;
+    STUB_LOG("%s called -> req %llu", __func__, (unsigned long long)id);
+    return id;
 }
 
 EXPORT int ovr_LaunchDetails_GetLaunchType(void* details) { return 0; }
@@ -711,4 +754,25 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID reserved) {
     return TRUE;
 }
 #endif
-EXPORT const char* ovrPlatformInitializeResult_ToString(int result) { return "Success"; }
+// Result code → human-readable string (matches real Oculus SDK enum values).
+// The real SDK returns "ovrPlatformInitialize_Success" etc.  We include the
+// numeric code in brackets so the game's error dialog becomes diagnostic.
+EXPORT const char* ovrPlatformInitializeResult_ToString(int result) {
+    // Thread-unsafe but fine — only called once during init error path.
+    static char buf[128];
+    switch (result) {
+    case  0: return "Success";
+    case -1: return "Uninitialized [-1]";
+    case -2: return "PreLoaded [-2]";
+    case -3: return "FileInvalid [-3]";
+    case -4: return "SignatureInvalid [-4]";
+    case -5: return "UnableToVerify [-5]";
+    case -6: return "VersionMismatch [-6]";
+    case -7: return "Unknown [-7]";
+    case -8: return "InvalidCredentials [-8]";
+    case -9: return "NotEntitled [-9]";
+    default:
+        snprintf(buf, sizeof(buf), "UnknownResult [%d / 0x%08X]", result, (unsigned)result);
+        return buf;
+    }
+}
