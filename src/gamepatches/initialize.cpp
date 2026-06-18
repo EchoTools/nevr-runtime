@@ -15,7 +15,9 @@
 #include "state_machine.h"
 #include "ws_bridge.h"
 
+#include "broadcaster_guard.h"
 #include "builtin_log_filter.h"
+#include "dll_load_hook.h"
 #include "common/globals.h"
 #include "common/hooking.h"
 #include "common/logging.h"
@@ -44,7 +46,153 @@ static BOOL SetWindowTextAHook(HWND hWnd, LPCSTR lpString) {
 
 // ============================================================================
 // GetProcAddress hook — prevents server crash during platform DLL shutdown
+// + ServerLib vtable shim for MinGW/MSVC ABI compatibility
 // ============================================================================
+
+// The game calls IServerLib methods via vtable dispatch: call [rax+N].
+// MinGW and MSVC generate incompatible vtable layouts (RTTI, typeinfo
+// offsets differ). Instead of letting the game use our C++ vtable, we
+// intercept GetProcAddress("ServerLib") and return a shim factory that
+// produces a raw C-layout struct with function pointers at the exact
+// byte offsets the game expects. No RTTI, no typeinfo, no compiler magic.
+//
+// The game sees: obj -> vtable_ptr -> [fn0, fn1, fn2, ...]
+// We provide:    shim -> raw_array -> [thunk0, thunk1, thunk2, ...]
+
+// ============================================================================
+// pnsdemo.dll user ID override
+// ============================================================================
+// CNSIUser vtable layout (from RE agent session spritzs-echovr-re, 2026-06-18):
+//   Slot  0 (+0x00): GetLoggedInUser — returns per-login CNSDemoUser* (0xC0 bytes)
+//   Slot 13 (+0x68): GetLoggedInUserID — reads uint64 at sub-object+0x88
+//   The sub-object is allocated in slot 0, cached globally.
+//   pnsdemo.dll slot 0 impl: 0x18007ee60
+//   pnsdemo.dll slot 13 impl: 0x180082d40
+//   echovr.exe consumption site: 0x140606ea8 (XPID construction "%s-%llu")
+//
+// TODO(revault): import these findings into ReVault when it's rebuilt:
+//   - CNSDemoUser sub-object: 0xC0 bytes, vtable at +0x00, user_id at +0x88
+//   - CNSDemoUsers manager: 0x428 bytes, vtable at +0x00
+//   - CNSIUser vtable: 32 slots, slot 0 = GetLoggedInUser, slot 13 = GetLoggedInUserID
+
+typedef void* (*PnsdemoSlot0Fn)(void* self);
+static PnsdemoSlot0Fn g_pnsdemo_orig_slot0 = nullptr;
+static uint64_t g_pnsdemo_discord_id = 0;
+
+static void* PnsdemoGetLoggedInUserHook(void* self) {
+  void* user = g_pnsdemo_orig_slot0(self);
+  if (user && g_pnsdemo_discord_id != 0) {
+    uint64_t* id_field = reinterpret_cast<uint64_t*>(
+        reinterpret_cast<uint8_t*>(user) + 0x88);
+    uint64_t old_id = *id_field;
+    *id_field = g_pnsdemo_discord_id;
+    static bool logged = false;
+    if (!logged) {
+      fprintf(stderr, "[NEVR.DLLHOOK] pnsdemo: user ID overridden %llu → %llu\n",
+              (unsigned long long)old_id, (unsigned long long)g_pnsdemo_discord_id);
+      fflush(stderr);
+      logged = true;
+    }
+  }
+  return user;
+}
+
+// ============================================================================
+// ServerLib vtable shim
+// ============================================================================
+
+struct ServerLibShim {
+  void** vtable;
+  // 0x50 bytes of padding to match original 0x58 total size
+  uint8_t padding[0x50];
+};
+
+static void* g_shim_vtable[14] = {};
+static ServerLibShim g_shim = {};
+static void* g_real_serverlib = nullptr;
+
+// Thunks: call the real GameServerLib methods via GetProcAddress on our DLL.
+// Each thunk strips the shim 'this' and forwards to the real object.
+// x64 calling convention: rcx=this, rdx=arg1, r8=arg2, r9=arg3, stack=rest
+
+typedef INT64  (*Fn_UnkFunc0)(void*, void*, INT64, INT64);
+typedef void*  (*Fn_Initialize)(void*, void*, void*, void*, const char*);
+typedef void   (*Fn_Terminate)(void*);
+typedef void   (*Fn_Update)(void*);
+typedef void   (*Fn_UnkFunc1)(void*, UINT64);
+typedef void   (*Fn_RequestReg)(void*, INT64, char*, UINT64, UINT64, const void*);
+typedef void   (*Fn_Unregister)(void*);
+typedef void   (*Fn_EndSession)(void*);
+typedef void   (*Fn_LockPlayers)(void*);
+typedef void   (*Fn_UnlockPlayers)(void*);
+typedef void   (*Fn_AcceptPlayers)(void*, void*);
+typedef void   (*Fn_RemovePlayer)(void*, void*);
+
+static void** g_real_vtable = nullptr;
+
+#define REAL_CALL(slot, type, ...) \
+  (reinterpret_cast<type>(g_real_vtable[slot])(g_real_serverlib, ##__VA_ARGS__))
+
+static INT64 Shim_UnkFunc0(void*, void* a, INT64 b, INT64 c) { return REAL_CALL(0, Fn_UnkFunc0, a, b, c); }
+static void* Shim_Initialize(void*, void* a, void* b, void* c, const char* d) { return REAL_CALL(1, Fn_Initialize, a, b, c, d); }
+static void  Shim_Terminate(void*) { REAL_CALL(2, Fn_Terminate); }
+static void  Shim_Update(void*) { REAL_CALL(3, Fn_Update); }
+static void  Shim_UnkFunc1(void*, UINT64 a) { REAL_CALL(4, Fn_UnkFunc1, a); }
+static void  Shim_RequestReg(void*, INT64 a, char* b, UINT64 c, UINT64 d, const void* e) { REAL_CALL(5, Fn_RequestReg, a, b, c, d, e); }
+static void  Shim_Unregister(void*) { REAL_CALL(6, Fn_Unregister); }
+static void  Shim_EndSession(void*) { REAL_CALL(7, Fn_EndSession); }
+static void  Shim_LockPlayers(void*) { REAL_CALL(8, Fn_LockPlayers); }
+static void  Shim_UnlockPlayers(void*) { REAL_CALL(9, Fn_UnlockPlayers); }
+static void  Shim_AcceptPlayers(void*, void* a) { REAL_CALL(10, Fn_AcceptPlayers, a); }
+static void  Shim_RemovePlayer(void*, void* a) { REAL_CALL(11, Fn_RemovePlayer, a); }
+
+static void* ShimServerLib() {
+  if (!g_real_serverlib) {
+    // Get the real ServerLib from the gameserver DLL
+    HMODULE dll = GetModuleHandleA("pnsradgameserver.dll");
+    if (!dll) dll = GetModuleHandleA("pnsradgameserver");
+    if (!dll) {
+      fprintf(stderr, "[NEVR.SHIM] pnsradgameserver.dll not loaded\n"); fflush(stderr);
+      return nullptr;
+    }
+
+    typedef void* (*RealServerLibFn)();
+    RealServerLibFn real_fn = reinterpret_cast<RealServerLibFn>(
+        EchoVR::GetProcAddress(dll, "ServerLib"));
+    if (!real_fn) {
+      fprintf(stderr, "[NEVR.SHIM] ServerLib export not found\n"); fflush(stderr);
+      return nullptr;
+    }
+
+    g_real_serverlib = real_fn();
+    g_real_vtable = *reinterpret_cast<void***>(g_real_serverlib);
+
+    fprintf(stderr, "[NEVR.SHIM] real obj=%p vtable=%p\n",
+            g_real_serverlib, (void*)g_real_vtable); fflush(stderr);
+
+    // Build shim vtable — raw function pointers at known offsets
+    g_shim_vtable[0]  = reinterpret_cast<void*>(&Shim_UnkFunc0);
+    g_shim_vtable[1]  = reinterpret_cast<void*>(&Shim_Initialize);
+    g_shim_vtable[2]  = reinterpret_cast<void*>(&Shim_Terminate);
+    g_shim_vtable[3]  = reinterpret_cast<void*>(&Shim_Update);
+    g_shim_vtable[4]  = reinterpret_cast<void*>(&Shim_UnkFunc1);
+    g_shim_vtable[5]  = reinterpret_cast<void*>(&Shim_RequestReg);
+    g_shim_vtable[6]  = reinterpret_cast<void*>(&Shim_Unregister);
+    g_shim_vtable[7]  = reinterpret_cast<void*>(&Shim_EndSession);
+    g_shim_vtable[8]  = reinterpret_cast<void*>(&Shim_LockPlayers);
+    g_shim_vtable[9]  = reinterpret_cast<void*>(&Shim_UnlockPlayers);
+    g_shim_vtable[10] = reinterpret_cast<void*>(&Shim_AcceptPlayers);
+    g_shim_vtable[11] = reinterpret_cast<void*>(&Shim_RemovePlayer);
+
+    g_shim.vtable = g_shim_vtable;
+    memset(g_shim.padding, 0, sizeof(g_shim.padding));
+
+    fprintf(stderr, "[NEVR.SHIM] shim=%p shim_vtable=%p Initialize=%p\n",
+            (void*)&g_shim, (void*)g_shim_vtable,
+            g_shim_vtable[1]); fflush(stderr);
+  }
+  return &g_shim;
+}
 
 static FARPROC GetProcAddressHook(HMODULE hModule, LPCSTR lpProcName) {
   // Platform DLLs (pnsdemo/pnsovr) crash during RadPluginShutdown due to freed memory.
@@ -53,6 +201,43 @@ static FARPROC GetProcAddressHook(HMODULE hModule, LPCSTR lpProcName) {
     if (EchoVR::GetProcAddress(hModule, "Users") != NULL) exit(0);
   }
   return EchoVR::GetProcAddress(hModule, lpProcName);
+}
+
+// ============================================================================
+// CSysDLL_GetSymbol hook — intercepts game's internal DLL symbol resolution
+// to provide MinGW/MSVC vtable-compatible shim for ServerLib
+// ============================================================================
+// CSysDLL_GetSymbol @ 0x1400eaef0 — the game's own GetProcAddress wrapper.
+// Used by CNSLobby_LoadServerSupport to resolve "ServerLib" from pnsradgameserver.dll.
+
+typedef void* (*CSysDLL_GetSymbol_fn)(void* dll_handle, const char* symbol_name);
+static CSysDLL_GetSymbol_fn g_original_GetSymbol = nullptr;
+
+static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
+  void* result = g_original_GetSymbol(dll_handle, symbol_name);
+
+  if (symbol_name && strcmp(symbol_name, "ServerLib") == 0 && result != nullptr) {
+    static bool logged = false;
+    if (!logged) {
+      fprintf(stderr, "[NEVR.SHIM] CSysDLL_GetSymbol('ServerLib') intercepted → shim factory\n");
+      fflush(stderr);
+      logged = true;
+    }
+    return reinterpret_cast<void*>(&ShimServerLib);
+  }
+
+  // Log all symbol resolutions to understand the game's DLL loading
+  if (symbol_name) {
+    static int log_count = 0;
+    if (log_count < 50) {
+      fprintf(stderr, "[NEVR.SYMDLL] GetSymbol(handle=%p, '%s') = %p\n",
+              dll_handle, symbol_name, result);
+      fflush(stderr);
+      log_count++;
+    }
+  }
+
+  return result;
 }
 
 // ============================================================================
@@ -110,6 +295,84 @@ VOID Initialize() {
     return;
   }
   fprintf(stderr, "[NEVR] minhook OK, hooking...\n"); fflush(stderr);
+
+  // --- DLL load interceptor (patch DLLs as they load) ---
+  DllLoadHook::Install();
+  fprintf(stderr, "[NEVR] DLL load hooks OK\n"); fflush(stderr);
+
+  // Register pnsdemo.dll patcher: override user ID with Discord ID from config.
+  //
+  // The game calls CNSIUser vtable slot 13 (GetLoggedInUserID, +0x68) to get the
+  // numeric part of the XPID. The user ID lives at +0x88 in a per-login sub-object
+  // (0xC0 bytes) created by manager vtable slot 0 (GetLoggedInUser).
+  //
+  // Hook: intercept manager slot 0, call original, write Discord ID to ret+0x88.
+  // Confirmed by RE agent: echovr.exe reads slot 13 at 0x140606ea8, pnsdemo slot 0
+  // at 0x18007ee60, field written at sub-object+0x88, read by slot 13 at 0x180082d40.
+  DllLoadHook::OnLoad("pnsdemo.dll", [](const char*, HMODULE module) {
+    CHAR* cfgDiscordId = nullptr;
+    if (g_earlyConfigPtr) {
+      cfgDiscordId = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_discord_id", NULL, false);
+    }
+    if (!cfgDiscordId || cfgDiscordId[0] == '\0') {
+      fprintf(stderr, "[NEVR.DLLHOOK] pnsdemo: no nevr_discord_id in config, skipping\n");
+      fflush(stderr);
+      return;
+    }
+
+    g_pnsdemo_discord_id = strtoull(cfgDiscordId, nullptr, 10);
+
+    typedef void* (*UsersFn)();
+    UsersFn getUsersObj = reinterpret_cast<UsersFn>(GetProcAddress(module, "Users"));
+    if (!getUsersObj) {
+      fprintf(stderr, "[NEVR.DLLHOOK] pnsdemo: no 'Users' export\n"); fflush(stderr);
+      return;
+    }
+
+    void* usersObj = getUsersObj();
+    if (!usersObj) {
+      fprintf(stderr, "[NEVR.DLLHOOK] pnsdemo: Users() returned null\n"); fflush(stderr);
+      return;
+    }
+
+    // Read the vtable from the Users manager object
+    void** vtable = *reinterpret_cast<void***>(usersObj);
+    if (!vtable) {
+      fprintf(stderr, "[NEVR.DLLHOOK] pnsdemo: Users vtable is null\n"); fflush(stderr);
+      return;
+    }
+
+    // Save original slot 0 (GetLoggedInUser) and patch the vtable
+    g_pnsdemo_orig_slot0 = reinterpret_cast<PnsdemoSlot0Fn>(vtable[0]);
+
+    DWORD oldProtect;
+    if (VirtualProtect(&vtable[0], sizeof(void*), PAGE_READWRITE, &oldProtect)) {
+      vtable[0] = reinterpret_cast<void*>(&PnsdemoGetLoggedInUserHook);
+      VirtualProtect(&vtable[0], sizeof(void*), oldProtect, &oldProtect);
+      fprintf(stderr, "[NEVR.DLLHOOK] pnsdemo: patched vtable slot 0 — user ID will be %llu\n",
+              (unsigned long long)g_pnsdemo_discord_id);
+    } else {
+      fprintf(stderr, "[NEVR.DLLHOOK] pnsdemo: VirtualProtect failed on vtable\n");
+    }
+    fflush(stderr);
+  });
+
+  // --- CSysDLL_GetSymbol hook (intercepts game's DLL symbol resolution for vtable shim) ---
+  {
+    void* sym_target = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + (0x1400eaef0 - 0x140000000));
+    if (MH_CreateHook(sym_target, reinterpret_cast<void*>(&CSysDLL_GetSymbolHook),
+            reinterpret_cast<void**>(&g_original_GetSymbol)) == MH_OK &&
+        MH_EnableHook(sym_target) == MH_OK) {
+      fprintf(stderr, "[NEVR] CSysDLL_GetSymbol hook OK\n"); fflush(stderr);
+    } else {
+      fprintf(stderr, "[NEVR] CSysDLL_GetSymbol hook FAILED\n"); fflush(stderr);
+    }
+  }
+
+  // --- Broadcaster dispatch guard ---
+  BroadcasterGuard::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+  fprintf(stderr, "[NEVR] broadcaster guard OK\n"); fflush(stderr);
 
   // --- Log filter (hooks CLog::PrintfImpl to capture/filter/file game output) ---
   // g_isServer not set yet (CLI not parsed); pass false — log filter works regardless

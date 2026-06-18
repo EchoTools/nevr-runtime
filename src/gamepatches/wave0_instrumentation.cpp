@@ -85,9 +85,21 @@ static HANDLE s_cached_timer = NULL;    // Persistent waitable timer for frame p
 #endif
 #endif
 
-/* Resolve a virtual address from the PC binary to an in-process pointer */
+/* Hot-path address resolution — targets validated at init time */
 static inline void* ResolveVA(uintptr_t base, uint64_t va) {
     return reinterpret_cast<void*>(base + (va - 0x140000000));
+}
+
+/* Validated resolution for init-time setup — returns nullptr on bad address */
+static inline void* ResolveVA_Safe(uintptr_t base, uint64_t va) {
+    if (va < 0x140000000ULL) return nullptr;
+    void* addr = reinterpret_cast<void*>(base + (va - 0x140000000));
+#ifdef _WIN32
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery(addr, &mbi, sizeof(mbi)) == 0) return nullptr;
+    if (mbi.State != MEM_COMMIT) return nullptr;
+#endif
+    return addr;
 }
 
 #ifdef _WIN32
@@ -372,7 +384,12 @@ void Wave0::Init(uintptr_t base_addr) {
 
     int installed = 0;
     for (auto& h : hooks) {
-        void* target = ResolveVA(g_base, h.va);
+        void* target = ResolveVA_Safe(g_base, h.va);
+        if (!target) {
+            fprintf(stderr, "[wave0] SKIP %s — address 0x%llx resolved to unmapped memory\n",
+                    h.name, (unsigned long long)h.va); fflush(stderr);
+            continue;
+        }
         if (MH_CreateHook(target, h.detour, h.original) == MH_OK &&
             MH_EnableHook(target) == MH_OK) {
             fprintf(stderr, "[wave0] hooked %s at 0x%llx\n", h.name,
@@ -388,11 +405,16 @@ void Wave0::Init(uintptr_t base_addr) {
     // Eliminates tight QPC+SwitchToThread spin loop that starves HT sibling.
     // The WaitableTimer phase in Wait handles the bulk of the sleep;
     // only the final ~250us of busy-wait precision is lost.
-    void* busywait = ResolveVA(g_base, VA_PRECISION_SLEEP_BUSYWAIT);
-    uint8_t ret_byte = 0xC3;
-    ProcessMemcpy(busywait, &ret_byte, 1);
-    fprintf(stderr, "[wave0] patched CPrecisionSleep::BusyWait -> RET (BUG#13 fix)\n"); fflush(stderr);
-    installed++;
+    void* busywait = ResolveVA_Safe(g_base, VA_PRECISION_SLEEP_BUSYWAIT);
+    if (!busywait) {
+        fprintf(stderr, "[wave0] SKIP CPrecisionSleep::BusyWait — address resolved to unmapped memory\n");
+        fflush(stderr);
+    } else {
+        uint8_t ret_byte = 0xC3;
+        ProcessMemcpy(busywait, &ret_byte, 1);
+        fprintf(stderr, "[wave0] patched CPrecisionSleep::BusyWait -> RET (BUG#13 fix)\n"); fflush(stderr);
+        installed++;
+    }
 
     fprintf(stderr, "[wave0] complete: %d hooks/patches installed\n", installed); fflush(stderr);
     g_initialized = (installed > 0);

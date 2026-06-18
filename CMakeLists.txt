@@ -194,6 +194,8 @@ add_subdirectory(src/pnsrad)
 add_subdirectory(src/legacy/gameserver)
 # telemetryagent moved to extras/ — needs protobuf-lite refactor before reintegration
 
+add_subdirectory(src/libovr-stub)
+
 add_subdirectory(plugins)
 
 # Include a local cmake script if it exists

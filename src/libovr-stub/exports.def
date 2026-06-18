@@ -1,0 +1,272 @@
+; LibOVRPlatform64_1.dll — stub export definitions
+; Minimum set required for pnsovr.dll to load without the real Oculus SDK.
+; Built from IAT analysis + GetProcAddress strings in the EchoVR reconstruction.
+;
+; Two import vectors in pnsovr.dll:
+;   1. GetProcAddress (OVRPlatformInit.cpp:ovr_ResolveSDKFunctions) — 7 init functions
+;   2. IAT static imports — everything else (voip, microphone, users, rooms, etc.)
+
+LIBRARY LibOVRPlatform64_1
+EXPORTS
+    ; =========================================================================
+    ; Platform initialization (GetProcAddress-resolved in pnsovr.dll)
+    ; =========================================================================
+    ovr_PlatformInitializeWindows
+    ovr_PlatformInitializeWindowsAsynchronous
+    ovr_PlatformInitializeWithAccessToken
+    ovr_PlatformInitializeWithAccessTokenAndOptions
+    ovr_PopMessage
+    ovr_PlatformInitializeStandaloneAccessToken
+    ovr_Platform_InitializeStandaloneOculus
+    ovr_IsPlatformInitialized
+
+    ; =========================================================================
+    ; Message handling
+    ; =========================================================================
+    ovr_FreeMessage
+    ovr_Message_GetType
+    ovr_Message_GetRequestID
+    ovr_Message_IsError
+    ovr_Message_GetString
+    ovr_Message_GetError
+    ovr_Message_GetUser
+    ovr_Message_GetUserArray
+    ovr_Message_GetUserAndRoomArray
+    ovr_Message_GetUserProof
+    ovr_Message_GetOrgScopedID
+    ovr_Message_GetProductArray
+    ovr_Message_GetPurchase
+    ovr_Message_GetPurchaseArray
+    ovr_Message_GetDestinationArray
+    ovr_Message_GetRoom
+    ovr_Message_GetRoomInviteNotification
+    ovr_Message_GetRoomInviteNotificationArray
+
+    ; =========================================================================
+    ; Error handling
+    ; =========================================================================
+    ovr_Error_GetMessage
+    ovr_Error_GetCode
+    ovr_Error_GetHttpCode
+
+    ; =========================================================================
+    ; User functions
+    ; =========================================================================
+    ovr_User_GetLoggedInUser
+    ovr_User_GetAccessToken
+    ovr_User_GetUserProof
+    ovr_User_Get
+    ovr_User_GetID
+    ovr_User_GetOculusID
+    ovr_User_GetOrgScopedID
+    ovr_User_GetLoggedInUserFriends
+    ovr_User_GetLoggedInUserRecentlyMetUsersAndRooms
+    ovr_User_GetPresence
+    ovr_User_GetPresenceStatus
+    ovr_User_GetPresenceDeeplinkMessage
+    ovr_User_GetInviteToken
+    ovr_User_GetNextUserArrayPage
+    ovr_User_GetNextUserAndRoomArrayPage
+    ovr_GetLoggedInUserID
+    ovrID_FromString
+
+    ; =========================================================================
+    ; User proof
+    ; =========================================================================
+    ovr_UserProof_GetNonce
+
+    ; =========================================================================
+    ; Org-scoped ID
+    ; =========================================================================
+    ovr_OrgScopedID_GetID
+
+    ; =========================================================================
+    ; User arrays
+    ; =========================================================================
+    ovr_UserArray_GetSize
+    ovr_UserArray_GetElement
+    ovr_UserArray_HasNextPage
+
+    ; =========================================================================
+    ; UserAndRoom arrays
+    ; =========================================================================
+    ovr_UserAndRoomArray_GetSize
+    ovr_UserAndRoomArray_GetElement
+    ovr_UserAndRoomArray_HasNextPage
+    ovr_UserAndRoom_GetUser
+
+    ; =========================================================================
+    ; Entitlement
+    ; =========================================================================
+    ovr_Entitlement_GetIsViewerEntitled
+
+    ; =========================================================================
+    ; IAP (in-app purchases)
+    ; =========================================================================
+    ovr_IAP_GetProductsBySKU
+    ovr_IAP_GetViewerPurchases
+    ovr_IAP_GetViewerPurchasesDurableCache
+    ovr_IAP_LaunchCheckoutFlow
+    ovr_IAP_GetNextProductArrayPage
+    ovr_IAP_GetNextPurchaseArrayPage
+
+    ; =========================================================================
+    ; Product arrays
+    ; =========================================================================
+    ovr_ProductArray_GetSize
+    ovr_ProductArray_GetElement
+    ovr_ProductArray_HasNextPage
+    ovr_Product_GetSKU
+    ovr_Product_GetName
+    ovr_Product_GetDescription
+    ovr_Product_GetFormattedPrice
+
+    ; =========================================================================
+    ; Purchase arrays
+    ; =========================================================================
+    ovr_PurchaseArray_GetSize
+    ovr_PurchaseArray_GetElement
+    ovr_PurchaseArray_HasNextPage
+    ovr_Purchase_GetSKU
+
+    ; =========================================================================
+    ; Rich Presence
+    ; =========================================================================
+    ovr_RichPresence_Set
+    ovr_RichPresence_Clear
+    ovr_RichPresence_GetDestinations
+    ovr_RichPresence_GetNextDestinationArrayPage
+    ovr_RichPresenceOptions_Create
+    ovr_RichPresenceOptions_Destroy
+    ovr_RichPresenceOptions_SetApiName
+    ovr_RichPresenceOptions_SetCurrentCapacity
+    ovr_RichPresenceOptions_SetMaxCapacity
+    ovr_RichPresenceOptions_SetStartTime
+    ovr_RichPresenceOptions_SetEndTime
+    ovr_RichPresenceOptions_SetIsJoinable
+    ovr_RichPresenceOptions_SetLobbySessionId
+    ovr_RichPresenceOptions_SetExtraContext
+    ovr_RichPresenceOptions_SetDeeplinkMessageOverride
+    ovr_RichPresenceOptions_SetInstanceId
+
+    ; =========================================================================
+    ; Destination arrays
+    ; =========================================================================
+    ovr_DestinationArray_GetSize
+    ovr_DestinationArray_GetElement
+    ovr_DestinationArray_HasNextPage
+    ovr_Destination_GetApiName
+    ovr_Destination_GetDisplayName
+
+    ; =========================================================================
+    ; Rooms
+    ; =========================================================================
+    ovr_Room_CreateAndJoinPrivate2
+    ovr_Room_Get
+    ovr_Room_GetID
+    ovr_Room_GetOwner
+    ovr_Room_GetUsers
+    ovr_Room_GetDataStore
+    ovr_Room_GetJoinPolicy
+    ovr_Room_GetIsMembershipLocked
+    ovr_Room_GetInvitableUsers2
+    ovr_Room_Join2
+    ovr_Room_Leave
+    ovr_Room_KickUser
+    ovr_Room_InviteUser
+    ovr_Room_UpdateDataStore
+    ovr_Room_UpdateOwner
+    ovr_Room_UpdateMembershipLockStatus
+    ovr_Room_UpdatePrivateRoomJoinPolicy
+    ovr_Room_LaunchInvitableUserFlow
+    ovr_RoomOptions_Create
+    ovr_RoomOptions_Destroy
+    ovr_RoomOptions_SetOrdering
+
+    ; =========================================================================
+    ; Room invite notifications
+    ; =========================================================================
+    ovr_RoomInviteNotification_GetID
+    ovr_RoomInviteNotification_GetRoomID
+    ovr_RoomInviteNotification_GetSentTime
+    ovr_RoomInviteNotificationArray_GetSize
+    ovr_RoomInviteNotificationArray_GetElement
+    ovr_RoomInviteNotificationArray_HasNextPage
+    ovr_Notification_GetRoomInvites
+    ovr_Notification_GetNextRoomInviteNotificationArrayPage
+    ovr_Notification_MarkAsRead
+
+    ; =========================================================================
+    ; Party
+    ; =========================================================================
+    ovr_Party_GetCurrent
+    ovr_Party_Create
+    ovr_Party_Invite
+    ovr_Party_Leave
+
+    ; =========================================================================
+    ; Application / Lifecycle
+    ; =========================================================================
+    ovr_ApplicationLifecycle_GetLaunchDetails
+    ovr_ApplicationInvite_GetInvites
+    ovr_ApplicationInvite_Send
+    ovr_LaunchDetails_GetLaunchType
+    ovr_LaunchDetails_GetLaunchSource
+    ovr_LaunchDetails_GetDeeplinkMessage
+    ovr_LaunchDetails_GetDestinationApiName
+    ovr_LaunchDetails_GetRoomID
+    ovr_DataStore_GetValue
+
+    ; =========================================================================
+    ; Networking (P2P)
+    ; =========================================================================
+    ovr_Net_SendPacket
+    ovr_Net_SendPacketToCurrentRoom
+    ovr_Net_ReadPacket
+    ovr_Net_AcceptForCurrentRoom
+    ovr_Net_CloseForCurrentRoom
+    ovr_Packet_GetBytes
+    ovr_Packet_GetSize
+    ovr_Packet_GetSenderID
+    ovr_Packet_Free
+
+    ; =========================================================================
+    ; VoIP
+    ; =========================================================================
+    ovr_Voip_Start
+    ovr_Voip_Stop
+    ovr_Voip_Accept
+    ovr_Voip_GetPCM
+    ovr_Voip_GetPCMSize
+    ovr_Voip_GetOutputBufferMaxSize
+    ovr_Voip_SetMicrophoneMuted
+    ovr_Voip_SendPacket
+    ovr_Voip_CreateEncoder
+    ovr_Voip_CreateDecoder
+    ovr_Voip_DestroyEncoder
+    ovr_Voip_DestroyDecoder
+
+    ; =========================================================================
+    ; VoIP codec (low-level encoder/decoder)
+    ; =========================================================================
+    ovr_VoipEncoder_Create
+    ovr_VoipEncoder_AddPCM
+    ovr_VoipEncoder_GetCompressedData
+    ovr_VoipDecoder_Decode
+    ovr_VoipDecoder_GetDecodedPCM
+
+    ; =========================================================================
+    ; Microphone
+    ; =========================================================================
+    ovr_Microphone_Create
+    ovr_Microphone_Destroy
+    ovr_Microphone_Start
+    ovr_Microphone_Stop
+    ovr_Microphone_GetPCM
+
+    ; =========================================================================
+    ; Memory
+    ; =========================================================================
+    ovr_Malloc
+    ovr_Free
+    ovrPlatformInitializeResult_ToString

@@ -9,6 +9,7 @@
 #include "common/pch.h"
 #include "common/echovr_functions.h"
 #include "asset_cdn.h"
+#include "broadcaster_guard.h"
 #include "module_loader.h"
 #include "ws_bridge.h"
 #include "patches.h"
@@ -103,6 +104,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         AssetCDN::Shutdown();
         Wave0::Shutdown();
         TokenAuth::Shutdown();
+        BroadcasterGuard::Shutdown();
         BuiltinLogFilter::Shutdown();
         ServerTiming::Shutdown();
         ShutdownResourceOverride();
