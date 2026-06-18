@@ -18,6 +18,7 @@
 #include "broadcaster_guard.h"
 #include "builtin_log_filter.h"
 #include "dll_load_hook.h"
+#include "headless_graphics.h"
 #include "common/globals.h"
 #include "common/hooking.h"
 #include "common/logging.h"
@@ -268,6 +269,22 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
     return reinterpret_cast<void*>(&ShimServerLib);
   }
 
+  // XInput stubs — return "not connected" for headless server.
+  // The game resolves XInputGetState/XInputGetCapabilities via CSysDLL_GetSymbol.
+  if (symbol_name && result != nullptr) {
+    static auto xinput_get_state = +[](uint32_t, void*) -> uint32_t { return 0x48F; /* ERROR_DEVICE_NOT_CONNECTED */ };
+    static auto xinput_set_state = +[](uint32_t, void*) -> uint32_t { return 0x48F; };
+    static auto xinput_get_caps  = +[](uint32_t, uint32_t, void*) -> uint32_t { return 0x48F; };
+
+    if (strcmp(symbol_name, "XInputGetState") == 0) {
+      static bool logged = false;
+      if (!logged) { fprintf(stderr, "[NEVR.SHIM] XInputGetState → stub (not connected)\n"); fflush(stderr); logged = true; }
+      return reinterpret_cast<void*>(xinput_get_state);
+    }
+    if (strcmp(symbol_name, "XInputSetState") == 0) return reinterpret_cast<void*>(xinput_set_state);
+    if (strcmp(symbol_name, "XInputGetCapabilities") == 0) return reinterpret_cast<void*>(xinput_get_caps);
+  }
+
   // Proxy pnsdemo's "Users" export → lazy wrapper that returns pnsrad's Users.
   // At resolution time pnsrad.dll may not be loaded yet, so we return a wrapper
   // function that resolves pnsrad's Users on first call.
@@ -344,6 +361,14 @@ VOID Initialize() {
   // --- DLL load interceptor (patch DLLs as they load) ---
   DllLoadHook::Install();
   fprintf(stderr, "[NEVR] DLL load hooks OK\n"); fflush(stderr);
+
+  // --- Headless graphics stubs (DXGI/D3D11 interception) ---
+  // Register callbacks now so they fire when the game loads dxgi.dll/d3d11.dll.
+  // g_isHeadless may not be set yet (CLI not parsed), but the hook checks it at
+  // call time — if the game is running in headless mode the stubs activate,
+  // otherwise they pass through to real DirectX.
+  InstallHeadlessGraphicsHooks();
+  fprintf(stderr, "[NEVR] headless graphics hooks registered\n"); fflush(stderr);
 
   // Register pnsdemo.dll patcher: override user ID with Discord ID from config.
   //
