@@ -26,6 +26,7 @@ set(PATCHES_SOURCES
     "broadcaster_guard.cpp"
     "dll_load_hook.cpp"
     "asset_cdn.cpp"
+    "headless_graphics.cpp"
 )
 
 set(PATCHES_HEADERS
@@ -54,6 +55,7 @@ set(PATCHES_HEADERS
     "builtin_log_filter.h"
     "broadcaster_guard.h"
     "dll_load_hook.h"
+    "headless_graphics.h"
 )
 
 add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
