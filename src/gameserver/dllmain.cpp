@@ -40,6 +40,10 @@ HRESULT RadPluginShutdown() {
 EchoVR::IServerLib* ServerLib() {
   if (!g_ServerLib) {
     g_ServerLib = new GameServerLib();
+    void** vtable = *reinterpret_cast<void***>(g_ServerLib);
+    fprintf(stderr, "[NEVR.GAMESERVER] ServerLib() created obj=%p vtable=%p vtable[1]=%p\n",
+            (void*)g_ServerLib, (void*)vtable, vtable ? vtable[1] : nullptr);
+    fflush(stderr);
   }
   return g_ServerLib;
 }

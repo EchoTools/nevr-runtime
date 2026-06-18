@@ -8,6 +8,10 @@
 #include <sstream>
 
 #ifdef _WIN32
+#include <windows.h>
+#endif
+
+#ifdef _WIN32
 #define NEVR_EXPORT __declspec(dllexport)
 #define NEVR_IMPORT __declspec(dllimport)
 #else
@@ -20,14 +24,36 @@
 
 namespace nevr {
 
+static constexpr uint64_t ECHOVR_DEFAULT_IMAGE_BASE = 0x140000000ULL;
+
 /*
  * ResolveVA - Convert a virtual address from the PC binary to an in-process pointer.
  *
  * The PC binary has an image base of 0x140000000. Given the actual base address
  * where the module is loaded, this computes the real pointer for a known VA.
+ *
+ * Returns nullptr if the VA is below the image base (underflow) or the resolved
+ * address falls outside the loaded image (detects MinHook trampolines, unmapped
+ * sections, and arithmetic bugs).
  */
 inline void* ResolveVA(uintptr_t base, uint64_t va) {
-    return reinterpret_cast<void*>(base + (va - 0x140000000));
+    if (va < ECHOVR_DEFAULT_IMAGE_BASE) return nullptr;
+    uint64_t rva = va - ECHOVR_DEFAULT_IMAGE_BASE;
+#ifdef _WIN32
+    MEMORY_BASIC_INFORMATION mbi;
+    void* addr = reinterpret_cast<void*>(base + rva);
+    if (VirtualQuery(addr, &mbi, sizeof(mbi)) == 0) return nullptr;
+    if (mbi.State != MEM_COMMIT) return nullptr;
+    return addr;
+#else
+    return reinterpret_cast<void*>(base + rva);
+#endif
+}
+
+/* Unchecked variant for hot paths where the address is known-good (e.g. hook
+   targets verified at init time). Prefer ResolveVA for new code. */
+inline void* ResolveVA_Unchecked(uintptr_t base, uint64_t va) {
+    return reinterpret_cast<void*>(base + (va - ECHOVR_DEFAULT_IMAGE_BASE));
 }
 
 /*
