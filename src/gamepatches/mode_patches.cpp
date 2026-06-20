@@ -308,6 +308,49 @@ static VOID BugSplatCrashHandlerHook(INT64 exitCode) {
 }
 
 // ============================================================================
+// Game log file rename hook
+// ============================================================================
+//
+// The EchoVR logging system writes to _local\r14logs\[r14(server)]-[MM-DD-YYYY]_[HH-MM-SS]_N.log.
+// This hook intercepts CreateFileA calls that target that directory and redirects
+// them to nevr-server-YYYYMMDD-HHMMSS.log, which is sortable and grep-friendly.
+// Active only in server mode and only when -legacy-log-names is not set.
+
+typedef HANDLE (WINAPI *CreateFileA_t)(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
+static CreateFileA_t orig_CreateFileA = nullptr;
+
+static bool IsGameLogPath(const char* path) {
+  if (!path) return false;
+  const char* p = strstr(path, "r14logs");
+  if (!p) return false;
+  p += 7;
+  if (*p == '\\' || *p == '/') p++;
+  return p[0] == '[';  // native EVR format starts with '[r14...'
+}
+
+static HANDLE WINAPI CreateFileAHook(
+    LPCSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode,
+    LPSECURITY_ATTRIBUTES lpSecurityAttributes, DWORD dwCreationDisposition,
+    DWORD dwFlagsAndAttributes, HANDLE hTemplateFile)
+{
+  if (IsGameLogPath(lpFileName)) {
+    const char* r14 = strstr(lpFileName, "r14logs");
+    std::string dir(lpFileName, static_cast<size_t>(r14 - lpFileName) + 7);
+
+    char ts[16];
+    SYSTEMTIME st;
+    GetSystemTime(&st);
+    snprintf(ts, sizeof(ts), "%04d%02d%02d-%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+    std::string newPath = dir + "\\nevr-server-" + ts + ".log";
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] Renaming game log: %s -> %s", lpFileName, newPath.c_str());
+    return orig_CreateFileA(newPath.c_str(), dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+  }
+  return orig_CreateFileA(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+}
+
+// ============================================================================
 // PatchEnableServer — force dedicated server mode
 // ============================================================================
 
@@ -354,6 +397,24 @@ VOID PatchEnableServer() {
   static_assert(sizeof(spectatorStreamCheck) == SPECTATORSTREAM_CHECK_SIZE,
                 "SPECTATORSTREAM_CHECK patch size mismatch");
   ApplyPatch(SPECTATORSTREAM_CHECK, spectatorStreamCheck, sizeof(spectatorStreamCheck));
+
+  // Redirect game log filenames from the native EchoVR bracketed format to
+  // nevr-server-YYYYMMDD-HHMMSS.log, unless -legacy-log-names was passed.
+  if (!g_legacyLogNames) {
+    PVOID pTarget = reinterpret_cast<PVOID>(
+        GetProcAddress(GetModuleHandleA("kernel32"), "CreateFileA"));
+    if (pTarget) {
+      orig_CreateFileA = reinterpret_cast<CreateFileA_t>(pTarget);
+      if (Hooking::Attach(&pTarget, reinterpret_cast<PVOID>(CreateFileAHook))) {
+        orig_CreateFileA = reinterpret_cast<CreateFileA_t>(pTarget);
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.PATCH] Game log rename active — files will use nevr-server-YYYYMMDD-HHMMSS.log");
+      } else {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to hook CreateFileA for log rename");
+        orig_CreateFileA = nullptr;
+      }
+    }
+  }
 }
 
 // ============================================================================
