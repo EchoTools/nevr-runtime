@@ -203,21 +203,6 @@ static FARPROC GetProcAddressHook(HMODULE hModule, LPCSTR lpProcName) {
   if (g_isServer && strcmp(lpProcName, "RadPluginShutdown") == 0) {
     if (EchoVR::GetProcAddress(hModule, "Users") != NULL) exit(0);
   }
-
-  // Proxy pnsdemo's "Users" → pnsrad's Users (lazy, handles load ordering)
-  if (lpProcName && strcmp(lpProcName, "Users") == 0) {
-    // Check if this is pnsdemo.dll by looking for its ProviderID export
-    if (EchoVR::GetProcAddress(hModule, "ProviderID") != NULL) {
-      static bool logged = false;
-      if (!logged) {
-        fprintf(stderr, "[NEVR.SHIM] GetProcAddress('Users') from platform DLL → lazy pnsrad proxy\n");
-        fflush(stderr);
-        logged = true;
-      }
-      return reinterpret_cast<FARPROC>(&LazyPnsradUsers);
-    }
-  }
-
   return EchoVR::GetProcAddress(hModule, lpProcName);
 }
 
@@ -262,11 +247,13 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
   if (symbol_name && strcmp(symbol_name, "ServerLib") == 0 && result != nullptr) {
     static bool logged = false;
     if (!logged) {
-      fprintf(stderr, "[NEVR.SHIM] CSysDLL_GetSymbol('ServerLib') intercepted → shim factory\n");
+      fprintf(stderr, "[NEVR.SHIM] CSysDLL_GetSymbol('ServerLib') → passthrough (no vtable shim)\n");
       fflush(stderr);
       logged = true;
     }
-    return reinterpret_cast<void*>(&ShimServerLib);
+    // Return the real ServerLib directly — MinGW/MSVC single-inheritance
+    // vtable layouts are compatible for this case.
+    return result;
   }
 
   // XInput stubs — return "not connected" for headless server.
@@ -427,18 +414,10 @@ VOID Initialize() {
     fflush(stderr);
   });
 
-  // --- CSysDLL_GetSymbol hook (intercepts game's DLL symbol resolution for vtable shim) ---
-  {
-    void* sym_target = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + (0x1400eaef0 - 0x140000000));
-    if (MH_CreateHook(sym_target, reinterpret_cast<void*>(&CSysDLL_GetSymbolHook),
-            reinterpret_cast<void**>(&g_original_GetSymbol)) == MH_OK &&
-        MH_EnableHook(sym_target) == MH_OK) {
-      fprintf(stderr, "[NEVR] CSysDLL_GetSymbol hook OK\n"); fflush(stderr);
-    } else {
-      fprintf(stderr, "[NEVR] CSysDLL_GetSymbol hook FAILED\n"); fflush(stderr);
-    }
-  }
+  // CSysDLL_GetSymbol hook REMOVED — game calls ServerLib directly through the
+  // normal DLL path. The shim/proxy approach caused vtable corruption.
+  // pnsrad_enabler handles pnsovr→pnsrad via binary string patching instead.
+  fprintf(stderr, "[NEVR] CSysDLL_GetSymbol hook SKIPPED (direct ServerLib path)\n"); fflush(stderr);
 
   // --- Broadcaster dispatch guard ---
   BroadcasterGuard::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));

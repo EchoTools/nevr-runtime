@@ -1,5 +1,6 @@
 // GameServer DLL entry point
 #include "echovr.h"
+#include "echovr_functions.h"
 #include "gameserver.h"
 #include "pch.h"
 
@@ -9,6 +10,9 @@ EchoVR::IServerLib* g_ServerLib;
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
   switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:
+      EchoVR::g_GameBaseAddress = (CHAR*)GetModuleHandle(NULL);
+      EchoVR::InitializeFunctionPointers();
+      break;
     case DLL_THREAD_ATTACH:
     case DLL_THREAD_DETACH:
     case DLL_PROCESS_DETACH:

@@ -75,13 +75,15 @@ BOOL WebSocketClient::Send(EchoVR::SymbolId msgId, const VOID* data, UINT64 size
     Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Rejecting oversized send (msgId: 0x%llX, size: %llu)", msgId, size);
     return FALSE;
   }
-  std::vector<uint8_t> messageBuffer(sizeof(EchoVR::SymbolId) + sizeof(UINT64) + static_cast<size_t>(size));
+  const UINT64 MAGIC = 0xBB8CE7A278BB40F6;
+  std::vector<uint8_t> messageBuffer(sizeof(UINT64) + sizeof(EchoVR::SymbolId) + sizeof(UINT64) + static_cast<size_t>(size));
 
-  memcpy(messageBuffer.data(), &msgId, sizeof(EchoVR::SymbolId));
-  memcpy(messageBuffer.data() + sizeof(EchoVR::SymbolId), &size, sizeof(UINT64));
+  memcpy(messageBuffer.data(), &MAGIC, sizeof(UINT64));
+  memcpy(messageBuffer.data() + sizeof(UINT64), &msgId, sizeof(EchoVR::SymbolId));
+  memcpy(messageBuffer.data() + sizeof(UINT64) + sizeof(EchoVR::SymbolId), &size, sizeof(UINT64));
 
   if (size > 0 && data != nullptr) {
-    memcpy(messageBuffer.data() + sizeof(EchoVR::SymbolId) + sizeof(UINT64), data, size);
+    memcpy(messageBuffer.data() + sizeof(UINT64) + sizeof(EchoVR::SymbolId) + sizeof(UINT64), data, size);
   }
 
   std::string message(messageBuffer.begin(), messageBuffer.end());
@@ -147,67 +149,79 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
       if (msg->binary) {
         const std::string& payload = msg->str;
         const UINT64 MAGIC = 0xBB8CE7A278BB40F6;
+        const size_t HEADER_SIZE = sizeof(UINT64) + sizeof(EchoVR::SymbolId) + sizeof(UINT64);
 
-        if (payload.size() >= sizeof(UINT64) + sizeof(EchoVR::SymbolId) + sizeof(UINT64)) {
+        // Parse concatenated messages from the frame. Nakama may batch
+        // multiple [magic][symbol][length][payload] messages in one frame.
+        size_t offset = 0;
+        int msgCount = 0;
+
+        while (offset + HEADER_SIZE <= payload.size()) {
           UINT64 magic;
-          memcpy(&magic, payload.data(), sizeof(UINT64));
+          memcpy(&magic, payload.data() + offset, sizeof(UINT64));
 
           if (magic != MAGIC) {
-            Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Received message with invalid magic: 0x%llX (expected 0x%llX)",
-                magic, MAGIC);
+            if (msgCount == 0) {
+              Log(EchoVR::LogLevel::Warning,
+                  "[WEBSOCKET] Received message with invalid magic: 0x%llX (expected 0x%llX)", magic, MAGIC);
+            } else {
+              Log(EchoVR::LogLevel::Warning,
+                  "[WEBSOCKET] Unexpected bytes at offset %zu after %d message(s) in frame", offset, msgCount);
+            }
             break;
           }
 
           EchoVR::SymbolId msgId;
-          memcpy(&msgId, payload.data() + sizeof(UINT64), sizeof(EchoVR::SymbolId));
+          memcpy(&msgId, payload.data() + offset + sizeof(UINT64), sizeof(EchoVR::SymbolId));
 
           UINT64 length;
-          memcpy(&length, payload.data() + sizeof(UINT64) + sizeof(EchoVR::SymbolId), sizeof(UINT64));
+          memcpy(&length, payload.data() + offset + sizeof(UINT64) + sizeof(EchoVR::SymbolId), sizeof(UINT64));
 
-          UINT64 actualPayloadSize = payload.size() - sizeof(UINT64) - sizeof(EchoVR::SymbolId) - sizeof(UINT64);
+          size_t remaining = payload.size() - offset - HEADER_SIZE;
 
-          if (length != actualPayloadSize) {
+          if (length > remaining) {
             Log(EchoVR::LogLevel::Warning,
-                "[WEBSOCKET] Message length field mismatch (msgId: 0x%llX, length field: %llu, actual payload: %llu bytes)",
-                msgId, length, actualPayloadSize);
+                "[WEBSOCKET] Message length exceeds frame (msgId: 0x%llX, length: %llu, remaining: %zu)",
+                msgId, length, remaining);
+            break;
           }
 
           Log(EchoVR::LogLevel::Info,
-              "[WEBSOCKET] Received message (msgId: 0x%llX, length field: %llu, calculated payload: %llu bytes, total "
-              "frame: %zu bytes)",
-              msgId, length, actualPayloadSize, payload.size());
+              "[WEBSOCKET] Received message (msgId: 0x%llX, length: %llu bytes, frame offset: %zu)",
+              msgId, length, offset);
 
-          // Deduplicate messages: check if this is the same as the last message within 100ms
+          // Deduplicate: check if same as last message within 100ms
           UINT64 payloadHash = 0;
-          if (actualPayloadSize >= 8) {
-            memcpy(&payloadHash, payload.data() + sizeof(UINT64) + sizeof(EchoVR::SymbolId) + sizeof(UINT64), 8);
+          if (length >= 8) {
+            memcpy(&payloadHash, payload.data() + offset + HEADER_SIZE, 8);
           }
           UINT64 currentTimestamp = GetTickCount64();
 
           if (msgId == lastMsgId_ && payloadHash == lastPayloadHash_ && (currentTimestamp - lastMsgTimestamp_) < 100) {
             Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Dropping duplicate message (msgId: 0x%llX)", msgId);
-            return;  // Exit OnMessage entirely, not just the switch case
+            offset += HEADER_SIZE + static_cast<size_t>(length);
+            msgCount++;
+            continue;
           }
 
           lastMsgId_ = msgId;
           lastPayloadHash_ = payloadHash;
           lastMsgTimestamp_ = currentTimestamp;
 
-          // Reject oversized payloads (max 1MB — largest game message is ~64KB)
-          if (actualPayloadSize > 1024 * 1024) {
+          if (length > 1024 * 1024) {
             Log(EchoVR::LogLevel::Warning,
-                "[WEBSOCKET] Dropping oversized message (msgId: 0x%llX, size: %llu bytes)", msgId, actualPayloadSize);
-            break;
+                "[WEBSOCKET] Dropping oversized message (msgId: 0x%llX, size: %llu bytes)", msgId, length);
+            offset += HEADER_SIZE + static_cast<size_t>(length);
+            msgCount++;
+            continue;
           }
 
-          // Queue message for processing on main thread (thread-safe)
           ReceivedMessage receivedMsg;
           receivedMsg.msgId = msgId;
           receivedMsg.timestamp = currentTimestamp;
-          if (actualPayloadSize > 0) {
-            receivedMsg.payload.resize(actualPayloadSize);
-            memcpy(receivedMsg.payload.data(),
-                   payload.data() + sizeof(UINT64) + sizeof(EchoVR::SymbolId) + sizeof(UINT64), actualPayloadSize);
+          if (length > 0) {
+            receivedMsg.payload.resize(static_cast<size_t>(length));
+            memcpy(receivedMsg.payload.data(), payload.data() + offset + HEADER_SIZE, static_cast<size_t>(length));
           }
 
           EnterCriticalSection(&receivedMessagesMutex_);
@@ -219,8 +233,16 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
           }
           receivedMessages_.push_back(std::move(receivedMsg));
           LeaveCriticalSection(&receivedMessagesMutex_);
-        } else {
+
+          offset += HEADER_SIZE + static_cast<size_t>(length);
+          msgCount++;
+        }
+
+        if (msgCount == 0 && payload.size() < HEADER_SIZE) {
           Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Received malformed binary message (too short: %zu bytes)",
+              payload.size());
+        } else if (msgCount > 1) {
+          Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Parsed %d messages from single frame (%zu bytes)", msgCount,
               payload.size());
         }
       } else {

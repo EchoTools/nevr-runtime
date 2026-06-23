@@ -19,6 +19,7 @@
 // Stored from NvrModuleContext for cross-module proc resolution
 static void* (*s_getProc)(const char*) = nullptr;
 static void* s_earlyConfig = nullptr;
+static bool g_isServer = false;
 
 // ============================================================================
 // In-process WebSocket TLS proxy
@@ -180,7 +181,9 @@ void InstallWebSocketBridge() {
             remote->disableAutomaticReconnection();
             remote->disablePerMessageDeflate();
 
-            // Get auth token from token_auth module (resolved via cross-module procs)
+            // Get auth token and Discord ID.
+            // In server mode, token_auth is disabled so the JWT may be absent or stale.
+            // Fall back to nevr_discord_id from config.
             std::string bearerToken;
             uint64_t discordId = 0;
             {
@@ -192,9 +195,19 @@ void InstallWebSocketBridge() {
               }
               if (getDiscordIdFn) discordId = getDiscordIdFn();
             }
+            if (discordId == 0 && (EchoVR::Json*)s_earlyConfig) {
+              CHAR* cfgId = EchoVR::JsonValueAsString(
+                  (EchoVR::Json*)s_earlyConfig, (CHAR*)"nevr_discord_id", NULL, false);
+              if (cfgId && cfgId[0] != '\0') {
+                discordId = strtoull(cfgId, nullptr, 10);
+                Log(EchoVR::LogLevel::Info,
+                    "[NEVR.WS] Using nevr_discord_id from config: %llu",
+                    (unsigned long long)discordId);
+              }
+            }
             if (discordId == 0) {
               Log(EchoVR::LogLevel::Warning,
-                  "[NEVR.WS] No discord ID in JWT — LoginRequest will use account ID 0");
+                  "[NEVR.WS] No discord ID available — LoginRequest will use account ID 0");
             }
             if (!bearerToken.empty()) {
               ix::WebSocketHttpHeaders headers;
@@ -288,13 +301,40 @@ void InstallWebSocketBridge() {
                           rmsg->str.size(), (unsigned long long)rsym, (unsigned long long)rlen);
                       // Decode LoginFailure error message (sym 0xa5b9d5a3021ccf51)
                       if (rsym == 0xa5b9d5a3021ccf51 && rmsg->str.size() > 48) {
-                        // payload: PlatformCode(8) + AccountId(8) + StatusCode(8) + ErrorMsg\0
                         uint64_t statusCode = 0;
                         memcpy(&statusCode, rmsg->str.data() + 24 + 16, 8);
                         const char* errMsg = rmsg->str.data() + 24 + 24;
                         size_t errMaxLen = rmsg->str.size() - 48;
                         Log(EchoVR::LogLevel::Warning, "[NEVR.WS] LOGIN FAILURE: status=%llu msg=%.*s",
                             (unsigned long long)statusCode, (int)errMaxLen, errMsg);
+
+                        // Server mode: fake a LoginSuccess to advance past login gate.
+                        // The GameServerLib handles its own auth to ServerDB separately.
+                        if (g_isServer && connIdx > 0) {
+                          Log(EchoVR::LogLevel::Info,
+                              "[NEVR.WS] Server mode — injecting fake LoginSuccess to bypass login gate");
+                          static const uint64_t SYM_LOGIN_SUCCESS = 0xa5acc1a90d0cce47;
+                          // LoginSuccess payload: Session UUID(16) + PlatformCode(8) + AccountId(8)
+                          uint8_t payload[32] = {};
+                          // Generate a dummy session UUID (non-zero)
+                          payload[0] = 0x4E; payload[1] = 0x45; payload[2] = 0x56; payload[3] = 0x52; // "NEVR"
+                          payload[4] = 0x53; payload[5] = 0x52; payload[6] = 0x56; payload[7] = 0x52; // "SRVR"
+                          // PlatformCode: OVR_ORG = 4
+                          uint64_t platformCode = 4;
+                          memcpy(payload + 16, &platformCode, 8);
+                          // AccountId: the server's Discord ID
+                          memcpy(payload + 24, &discordId, 8);
+
+                          std::string fakeSuccess;
+                          fakeSuccess.append((const char*)MSG_MARKER, 8);
+                          AppendLE64(fakeSuccess, SYM_LOGIN_SUCCESS);
+                          AppendLE64(fakeSuccess, sizeof(payload));
+                          fakeSuccess.append((const char*)payload, sizeof(payload));
+                          gameWsPtr->sendBinary(fakeSuccess);
+
+                          // Don't forward the failure to the game
+                          break;
+                        }
                       }
                       // Decode LoginSuccess (sym 0xa5acc1a90d0cce47)
                       if (rsym == 0xa5acc1a90d0cce47) {
@@ -504,6 +544,7 @@ NEVR_MODULE_API int NvrModuleInit(const NvrModuleContext* ctx) {
   EchoVR::InitializeFunctionPointers();
   s_getProc = ctx->get_proc;
   s_earlyConfig = ctx->early_config;
+  g_isServer = (ctx->flags & NEVR_MODULE_HOST_IS_SERVER) != 0;
 
   // Read socket URI from config
   if (s_earlyConfig) {

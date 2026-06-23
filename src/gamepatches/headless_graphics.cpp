@@ -63,43 +63,106 @@ struct StubUnknown {
 };
 
 /* ========================================================================
- * StubDXGIFactory — minimal IDXGIFactory1 stub
+ * Stub DXGI Adapter — fake GPU for headless servers
  *
- * The game calls these IDXGIFactory1 methods (vtable slot numbers):
- *   Slot 0: QueryInterface
- *   Slot 1: AddRef
- *   Slot 2: Release
- *   Slot 7: EnumAdapters  (IDXGIFactory::EnumAdapters)
- *   Slot 12: EnumAdapters1 (IDXGIFactory1::EnumAdapters1)
- *
- * We return DXGI_ERROR_NOT_FOUND from EnumAdapters/EnumAdapters1 at
- * index 0, telling the game there are no display adapters.  All other
- * methods return E_NOTIMPL.
+ * The game enumerates adapters and dies if it finds zero. We return one
+ * fake adapter at index 0 with a plausible description. The adapter
+ * reports no display outputs (EnumOutputs → DXGI_ERROR_NOT_FOUND) and
+ * passes CheckInterfaceSupport. The real renderer init is NOPped by
+ * PatchEnableHeadless(), so the adapter is never actually used.
  * ======================================================================== */
 
-/* Forward declarations for vtable functions */
+static HRESULT STDMETHODCALLTYPE Stub_NotImpl() { return E_NOTIMPL; }
+
+/* Forward declarations */
 static HRESULT STDMETHODCALLTYPE Stub_QueryInterface(StubUnknown* self, const GUID* riid, void** ppv);
 static ULONG   STDMETHODCALLTYPE Stub_AddRef(StubUnknown* self);
 static ULONG   STDMETHODCALLTYPE Stub_Release(StubUnknown* self);
-static HRESULT STDMETHODCALLTYPE Stub_NotImpl() { return E_NOTIMPL; }
-static HRESULT STDMETHODCALLTYPE Stub_EnumAdapters(StubUnknown* self, UINT adapter, void** ppAdapter);
-static HRESULT STDMETHODCALLTYPE Stub_EnumAdapters1(StubUnknown* self, UINT adapter, void** ppAdapter);
+
+/* --- DXGI_ADAPTER_DESC (enough to satisfy GetDesc) --- */
+struct StubAdapterDesc {
+    WCHAR Description[128];
+    UINT VendorId;
+    UINT DeviceId;
+    UINT SubSysId;
+    UINT Revision;
+    SIZE_T DedicatedVideoMemory;
+    SIZE_T DedicatedSystemMemory;
+    SIZE_T SharedSystemMemory;
+    GUID AdapterLuid;  /* LUID is 8 bytes, same as GUID.Data1+Data2 */
+};
+
+/* IDXGIAdapter vtable slots:
+ *  [0] QueryInterface  [1] AddRef  [2] Release
+ *  [3] SetPrivateData  [4] SetPrivateDataInterface  [5] GetPrivateData
+ *  [6] GetParent  [7] EnumOutputs  [8] GetDesc  [9] CheckInterfaceSupport
+ *  IDXGIAdapter1 adds: [10] GetDesc1
+ */
+
+static HRESULT STDMETHODCALLTYPE StubAdapter_EnumOutputs(StubUnknown*, UINT, void** ppOutput) {
+    if (ppOutput) *ppOutput = nullptr;
+    return DXGI_ERROR_NOT_FOUND_;
+}
+
+static HRESULT STDMETHODCALLTYPE StubAdapter_GetDesc(StubUnknown*, StubAdapterDesc* pDesc) {
+    if (!pDesc) return E_POINTER;
+    memset(pDesc, 0, sizeof(*pDesc));
+    const WCHAR name[] = L"NEVR Headless Adapter";
+    memcpy(pDesc->Description, name, sizeof(name));
+    pDesc->VendorId = 0x10DE;  /* NVIDIA vendor ID */
+    pDesc->DeviceId = 0x2488;
+    pDesc->DedicatedVideoMemory = (SIZE_T)8ULL * 1024 * 1024 * 1024;
+    pDesc->SharedSystemMemory = (SIZE_T)16ULL * 1024 * 1024 * 1024;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE StubAdapter_CheckInterfaceSupport(StubUnknown*, const GUID*, INT64* pUMDVersion) {
+    if (pUMDVersion) *pUMDVersion = 0;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE StubAdapter_GetDesc1(StubUnknown* self, void* pDesc) {
+    /* GetDesc1 layout starts with the same fields as GetDesc, plus Flags at end.
+     * Zero everything and fill the common prefix via GetDesc. */
+    if (!pDesc) return E_POINTER;
+    memset(pDesc, 0, 304);  /* DXGI_ADAPTER_DESC1 is ~304 bytes */
+    return StubAdapter_GetDesc(self, (StubAdapterDesc*)pDesc);
+}
+
+static void* g_adapter_vtable[11] = {};
+static StubUnknown g_stub_adapter = {};
+static bool g_adapter_vtable_init = false;
+
+static void InitAdapterVtable() {
+    if (g_adapter_vtable_init) return;
+    for (int i = 0; i < 11; i++)
+        g_adapter_vtable[i] = (void*)&Stub_NotImpl;
+    g_adapter_vtable[0] = (void*)&Stub_QueryInterface;
+    g_adapter_vtable[1] = (void*)&Stub_AddRef;
+    g_adapter_vtable[2] = (void*)&Stub_Release;
+    g_adapter_vtable[7] = (void*)&StubAdapter_EnumOutputs;
+    g_adapter_vtable[8] = (void*)&StubAdapter_GetDesc;
+    g_adapter_vtable[9] = (void*)&StubAdapter_CheckInterfaceSupport;
+    g_adapter_vtable[10] = (void*)&StubAdapter_GetDesc1;
+    g_stub_adapter.vtable = g_adapter_vtable;
+    g_stub_adapter.refcount = 1;
+    g_adapter_vtable_init = true;
+}
+
+/* ========================================================================
+ * StubDXGIFactory — returns the stub adapter at index 0
+ * ======================================================================== */
+
+static HRESULT STDMETHODCALLTYPE Stub_EnumAdapters(StubUnknown*, UINT adapter, void** ppAdapter);
+static HRESULT STDMETHODCALLTYPE Stub_EnumAdapters1(StubUnknown*, UINT adapter, void** ppAdapter);
 
 /* IDXGIFactory1 vtable layout:
- *  [0]  QueryInterface
- *  [1]  AddRef
- *  [2]  Release
- *  [3]  SetPrivateData
- *  [4]  SetPrivateDataInterface
- *  [5]  GetPrivateData
+ *  [0]  QueryInterface  [1] AddRef  [2] Release
+ *  [3]  SetPrivateData  [4] SetPrivateDataInterface  [5] GetPrivateData
  *  [6]  GetParent
- *  [7]  EnumAdapters
- *  [8]  MakeWindowAssociation
- *  [9]  GetWindowAssociation
- *  [10] CreateSwapChain
- *  [11] CreateSoftwareAdapter
- *  [12] EnumAdapters1
- *  [13] IsCurrent
+ *  [7]  EnumAdapters  [8] MakeWindowAssociation  [9] GetWindowAssociation
+ *  [10] CreateSwapChain  [11] CreateSoftwareAdapter
+ *  [12] EnumAdapters1  [13] IsCurrent
  */
 static void* g_factory_vtable[14] = {};
 static StubUnknown g_stub_factory = {};
@@ -107,28 +170,24 @@ static bool g_factory_vtable_init = false;
 
 static void InitFactoryVtable() {
     if (g_factory_vtable_init) return;
-    /* Fill with E_NOTIMPL stubs first */
+    InitAdapterVtable();
     for (int i = 0; i < 14; i++)
         g_factory_vtable[i] = (void*)&Stub_NotImpl;
-
     g_factory_vtable[0]  = (void*)&Stub_QueryInterface;
     g_factory_vtable[1]  = (void*)&Stub_AddRef;
     g_factory_vtable[2]  = (void*)&Stub_Release;
     g_factory_vtable[7]  = (void*)&Stub_EnumAdapters;
     g_factory_vtable[12] = (void*)&Stub_EnumAdapters1;
-
     g_stub_factory.vtable = g_factory_vtable;
     g_stub_factory.refcount = 1;
     g_factory_vtable_init = true;
 }
 
-/* IUnknown implementation */
+/* IUnknown — shared by factory and adapter */
 static HRESULT STDMETHODCALLTYPE Stub_QueryInterface(StubUnknown* self, const GUID* riid, void** ppv) {
     if (!ppv) return E_POINTER;
-    /* Accept IUnknown and IDXGIFactory1 — return ourselves */
     static const GUID IID_IUnknown =
         {0x00000000, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
-
     if (memcmp(riid, &IID_IUnknown, sizeof(GUID)) == 0 ||
         memcmp(riid, &IID_IDXGIFactory1, sizeof(GUID)) == 0) {
         InterlockedIncrement(&self->refcount);
@@ -145,19 +204,30 @@ static ULONG STDMETHODCALLTYPE Stub_AddRef(StubUnknown* self) {
 
 static ULONG STDMETHODCALLTYPE Stub_Release(StubUnknown* self) {
     LONG ref = InterlockedDecrement(&self->refcount);
-    /* Static object — never actually free */
     if (ref <= 0) self->refcount = 1;
     return (ULONG)(ref > 0 ? ref : 1);
 }
 
-/* EnumAdapters — return "not found" so the game sees zero adapters */
+/* EnumAdapters — return stub adapter at index 0, NOT_FOUND for anything else */
 static HRESULT STDMETHODCALLTYPE Stub_EnumAdapters(StubUnknown*, UINT adapter, void** ppAdapter) {
-    if (ppAdapter) *ppAdapter = nullptr;
+    if (!ppAdapter) return E_POINTER;
+    if (adapter == 0) {
+        InterlockedIncrement(&g_stub_adapter.refcount);
+        *ppAdapter = &g_stub_adapter;
+        return S_OK;
+    }
+    *ppAdapter = nullptr;
     return DXGI_ERROR_NOT_FOUND_;
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_EnumAdapters1(StubUnknown*, UINT adapter, void** ppAdapter) {
-    if (ppAdapter) *ppAdapter = nullptr;
+    if (!ppAdapter) return E_POINTER;
+    if (adapter == 0) {
+        InterlockedIncrement(&g_stub_adapter.refcount);
+        *ppAdapter = &g_stub_adapter;
+        return S_OK;
+    }
+    *ppAdapter = nullptr;
     return DXGI_ERROR_NOT_FOUND_;
 }
 

@@ -863,9 +863,24 @@ GameServerLib::~GameServerLib() {
   }
 }
 
-INT64 GameServerLib::UnkFunc0(VOID*, INT64, INT64) { return 1; }
+INT64 GameServerLib::UnkFunc0(VOID* a1, INT64 a2, INT64 a3) {
+  fprintf(stderr, "[NEVR.GAMESERVER] UnkFunc0(this=%p, a1=%p, a2=0x%llx, a3=0x%llx)\n",
+          (void*)this, a1, (unsigned long long)a2, (unsigned long long)a3);
+  fflush(stderr);
+  return 1;
+}
 
-VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broadcaster, VOID*, const CHAR*) {
+VOID GameServerLib::UnkFunc1(UINT64 unk) {
+  fprintf(stderr, "[NEVR.GAMESERVER] UnkFunc1(this=%p, unk=0x%llx)\n",
+          (void*)this, (unsigned long long)unk);
+  fflush(stderr);
+}
+
+VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broadcaster, VOID* unk2, const CHAR* logPath) {
+  fprintf(stderr, "[NEVR.GAMESERVER] Initialize(this=%p, lobby=%p, bc=%p, unk2=%p, logPath=%s)\n",
+          (void*)this, (void*)lobby, (void*)broadcaster, unk2, logPath ? logPath : "(null)");
+  fflush(stderr);
+
   m_context->Initialize(lobby, broadcaster);
   m_context->FinalizeInitialization();
 
@@ -1073,9 +1088,7 @@ VOID GameServerLib::Update() {
   }
 }
 
-VOID GameServerLib::UnkFunc1(UINT64) {
-  // Called prior to Initialize, purpose unknown
-}
+// UnkFunc1 moved up near UnkFunc0 for vtable logging
 
 void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
   // Prevent further reconnection attempts so the next disconnect is final.
@@ -1215,10 +1228,33 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   state.versionLock = versionLock;
   m_context->UpdateSessionState(state);
 
-  // Get serverdb URI from config
+  // Get serverdb URI from config. If not explicitly set, construct from
+  // nevr_socket_uri + nevr_discord_id + nevr_password (the common config pattern).
   CHAR* serverDbUri =
       EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("serverdb_host"),
-                                const_cast<CHAR*>("ws://localhost:777/serverdb"), false);
+                                nullptr, false);
+
+  thread_local static CHAR constructedUri[1024];
+  if (!serverDbUri || serverDbUri[0] == '\0') {
+    CHAR* socketUri = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
+                                                 const_cast<CHAR*>("nevr_socket_uri"), nullptr, false);
+    CHAR* discordId = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
+                                                 const_cast<CHAR*>("nevr_discord_id"), nullptr, false);
+    CHAR* password = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
+                                                const_cast<CHAR*>("nevr_password"), nullptr, false);
+    if (socketUri && socketUri[0] != '\0' && discordId && discordId[0] != '\0') {
+      if (password && password[0] != '\0') {
+        snprintf(constructedUri, sizeof(constructedUri), "%s?discord_id=%s&password=%s", socketUri, discordId, password);
+      } else {
+        snprintf(constructedUri, sizeof(constructedUri), "%s?discord_id=%s", socketUri, discordId);
+      }
+      serverDbUri = constructedUri;
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Constructed serverdb URI from config fields");
+    } else {
+      serverDbUri = const_cast<CHAR*>("ws://localhost:777/serverdb");
+      Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] No serverdb_host or nevr_socket_uri in config, using default");
+    }
+  }
 
   // Load auth token for WebSocket connections
   auto auth = LoadCachedAuthToken();
