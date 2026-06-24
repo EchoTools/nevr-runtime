@@ -122,6 +122,14 @@ constexpr size_t HEADLESS_DELTATIME_SIZE = 2;
 constexpr uintptr_t HEADLESS_APPLY_GRAPHICS = 0x109209;
 constexpr size_t HEADLESS_APPLY_GRAPHICS_SIZE = 5;
 
+/// Address: DirectInput8Create call in CSceneRenderPipeline input init (0x141055DBB)
+/// Source: ReVault — fcn.141055d90 calls DirectInput8Create via delay-load thunk.
+///   CSceneRenderPipeline::Create → fcn.141056090 → fcn.141055d90 → DirectInput8Create
+/// The call spawns a DInput Enumeration Thread that polls HID devices indefinitely.
+/// Patch: NOP the 5-byte CALL instruction to prevent DirectInput initialization.
+constexpr uintptr_t HEADLESS_DINPUT = 0x1055DBB;
+constexpr size_t HEADLESS_DINPUT_SIZE = 5;
+
 // ============================================================================
 // Server Global GameSpace Crash Fix
 // ============================================================================

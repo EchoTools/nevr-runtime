@@ -47,6 +47,11 @@ VOID PatchEnableHeadless(PVOID pGame) {
   static_assert(sizeof(graphicsNop) == HEADLESS_APPLY_GRAPHICS_SIZE, "HEADLESS_APPLY_GRAPHICS patch size mismatch");
   ApplyPatch(HEADLESS_APPLY_GRAPHICS, graphicsNop, sizeof(graphicsNop));
 
+  // Kill DirectInput8Create call — prevents HID enumeration thread from spinning
+  const BYTE dinputNop[] = {0x90, 0x90, 0x90, 0x90, 0x90};
+  static_assert(sizeof(dinputNop) == HEADLESS_DINPUT_SIZE, "HEADLESS_DINPUT patch size mismatch");
+  ApplyPatch(HEADLESS_DINPUT, dinputNop, sizeof(dinputNop));
+
   // Skip console creation if -noconsole was specified
   if (g_noConsole) {
     return;
