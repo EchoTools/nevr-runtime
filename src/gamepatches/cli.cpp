@@ -34,9 +34,13 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgSyntax(pArgSyntax, "-serverregion", 1, 1, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-serverregion", "[NEVR] Set the server fleet region");
 
+  EchoVR::AddArgSyntax(pArgSyntax, "-noexitonerror", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-noexitonerror",
+      "[NEVR] Keep server running after serverdb disconnect (default: exit)");
+
   EchoVR::AddArgSyntax(pArgSyntax, "-exitonerror", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-exitonerror",
-      "[NEVR] Exit server when serverdb connection is lost");
+      "[NEVR] Deprecated — exit-on-error is now the default");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-notelemetry", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-notelemetry", "[NEVR] Disable telemetry streaming");

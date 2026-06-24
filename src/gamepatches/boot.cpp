@@ -101,8 +101,11 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       g_noConsole = TRUE;
     } else if (lstrcmpW(arg, L"-windowed") == 0) {
       g_isWindowed = TRUE;
+    } else if (lstrcmpW(arg, L"-noexitonerror") == 0) {
+      g_exitOnError = FALSE;
     } else if (lstrcmpW(arg, L"-exitonerror") == 0) {
-      g_exitOnError = TRUE;
+      // Deprecated — exit-on-error is now the default
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] -exitonerror is deprecated (now default)");
     } else if (lstrcmpW(arg, L"-notelemetry") == 0) {
       g_telemetryEnabled = FALSE;
     } else if (lstrcmpW(arg, L"-telemetryrate") == 0) {

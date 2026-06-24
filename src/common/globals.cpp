@@ -6,7 +6,8 @@ BOOL g_noConsole = FALSE;
 BOOL g_isHeadless = FALSE;
 /// Whether the game should exit when the serverdb connection is lost.
 /// If a round is active, the exit is deferred until the round ends (plus a 30-second grace period).
-BOOL g_exitOnError = FALSE;
+/// Default TRUE — suppress with -noexitonerror.
+BOOL g_exitOnError = TRUE;
 /// Headless mode tick rate (ticks/second). Non-zero sets the override; zero removes throttling.
 UINT32 g_headlessTickRateHz = 120;
 /// Whether telemetry streaming is enabled (default TRUE). Disabled by -notelemetry.
