@@ -27,6 +27,12 @@ set(PATCHES_SOURCES
     "dll_load_hook.cpp"
     "asset_cdn.cpp"
     "headless_graphics.cpp"
+    "gameserver/gameserver.cpp"
+    "gameserver/messages.cpp"
+    "gameserver/server_context.cpp"
+    "gameserver/websocket_client.cpp"
+    "gameserver/telemetry_streamer.cpp"
+    "gameserver/upnp.cpp"
 )
 
 set(PATCHES_HEADERS
@@ -56,30 +62,43 @@ set(PATCHES_HEADERS
     "broadcaster_guard.h"
     "dll_load_hook.h"
     "headless_graphics.h"
+    "gameserver/gameserver.h"
+    "gameserver/server_context.h"
+    "gameserver/websocket_client.h"
+    "gameserver/telemetry_streamer.h"
+    "gameserver/messages.h"
+    "gameserver/upnp.h"
+    "gameserver/constants.h"
+    "gameserver/event_ring_buffer.h"
+    "gameserver/telemetry_snapshot.h"
 )
 
 add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
                                "exports.def")
 
-target_compile_definitions(gamepatches PRIVATE USE_MINHOOK)
+target_compile_definitions(gamepatches PRIVATE USE_MINHOOK PROTOBUF_STATIC_LIB)
 
 target_precompile_headers(gamepatches PRIVATE "${CMAKE_SOURCE_DIR}/src/common/pch.h")
 target_include_directories(gamepatches PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/gameserver
   ${CMAKE_SOURCE_DIR}/src/common
   ${CMAKE_SOURCE_DIR}/plugins/common/include
+  ${CMAKE_BINARY_DIR}
 )
 
 find_package(CURL REQUIRED)
 
 find_package(ixwebsocket CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(miniupnpc CONFIG REQUIRED)
 
-target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json ws2_32)
+target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32)
 target_link_directories(gamepatches PRIVATE common)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
 set_source_files_properties(ws_bridge.cpp token_auth.cpp server_timing.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(gameserver/websocket_client.cpp gameserver/telemetry_streamer.cpp gameserver/upnp.cpp gameserver/gameserver.cpp gameserver/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 set_target_properties(gamepatches PROPERTIES
   OUTPUT_NAME "BugSplat64"
@@ -115,6 +134,22 @@ if(MINGW)
   target_link_libraries(gamepatches PRIVATE
     $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>
   )
+endif()
+
+if(MINGW)
+  add_library(dbghelp_stubs_gp STATIC gameserver/dbghelp_stubs.cpp)
+  target_compile_definitions(dbghelp_stubs_gp PRIVATE PROTOBUF_STATIC_LIB)
+  set_target_properties(dbghelp_stubs_gp PROPERTIES
+    OUTPUT_NAME "dbghelp"
+    PREFIX "lib"
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/stubs"
+  )
+  target_link_directories(gamepatches BEFORE PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/stubs")
+  add_dependencies(gamepatches dbghelp_stubs_gp)
+endif()
+
+if(MINGW)
+  target_link_options(gamepatches PRIVATE -Wl,--allow-multiple-definition)
 endif()
 
 # XPID patch unit tests — validates byte constants and address sanity.

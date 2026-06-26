@@ -189,7 +189,7 @@ add_subdirectory(src/modules/platform-compat)
 add_subdirectory(src/modules/token-auth)
 add_subdirectory(src/modules/ws-bridge)
 add_subdirectory(src/legacy/gamepatches)
-add_subdirectory(src/gameserver)
+# add_subdirectory(src/gameserver)  # merged into gamepatches
 add_subdirectory(src/pnsrad)
 add_subdirectory(src/legacy/gameserver)
 # telemetryagent moved to extras/ — needs protobuf-lite refactor before reintegration
@@ -216,13 +216,13 @@ set(DIST_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}")
 # List of DLL artifacts to include
 set(DIST_DLLS
   "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll"
-  "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll"
+  # "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll"  # merged into gamepatches
 )
 
 # List of debug symbol files to include
 set(DIST_DBG_FILES
   "${CMAKE_BINARY_DIR}/BugSplat64.dll.dbg"
-  "${CMAKE_BINARY_DIR}/gameserver.dll.dbg"
+  # "${CMAKE_BINARY_DIR}/gameserver.dll.dbg"  # merged into gamepatches
 )
 
 # Custom target to prepare distribution directory
@@ -232,8 +232,8 @@ add_custom_target(dist-prepare
   # BugSplat64.dll — NEVR runtime (replaces the original crash reporter DLL).
   # The game statically imports it, so it loads at process startup before WinMain.
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_DIR}/BugSplat64.dll" || true
-  # Copy and rename gameserver.dll -> pnsradgameserver.dll (if exists)
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_DIR}/pnsradgameserver.dll" || true
+  # gameserver.dll merged into gamepatches — no separate DLL to copy
+  # COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_DIR}/pnsradgameserver.dll" || true
   # Copy pnsrad.dll (if exists)
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad.dll" "${DIST_DIR}/pnsrad.dll" || true
   # Launcher executables — not built yet (module-extraction infrastructure present but launchers not wired)
@@ -318,8 +318,8 @@ add_custom_target(dist-lite-prepare
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_DIR}"
   # Copy gamepatches.dll + legacy dbgcore.dll alias, then strip
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_LITE_DIR}/BugSplat64.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/BugSplat64.dll" || ${CMAKE_COMMAND} -E true
-  # Copy and rename gameserver.dll -> pnsradgameserver.dll, then strip (if exists)
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_LITE_DIR}/pnsradgameserver.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/pnsradgameserver.dll" || ${CMAKE_COMMAND} -E true
+  # gameserver.dll merged into gamepatches — no separate DLL to copy
+  # COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_LITE_DIR}/pnsradgameserver.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/pnsradgameserver.dll" || ${CMAKE_COMMAND} -E true
   # Copy pnsrad.dll and strip (if exists)
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad.dll" "${DIST_LITE_DIR}/pnsrad.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/pnsrad.dll" || ${CMAKE_COMMAND} -E true
   # Launcher executables — not built yet (module-extraction infrastructure present but launchers not wired)
