@@ -289,16 +289,10 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
         }
       }
 
-      // Encode protobuf to LobbyStartSessionV4 binary format and forward to game
-      if (broadcaster) {
-        auto encoded = EncodeLobbySessionCreate(sessionCreate);
-        if (encoded.size() > 0) {
-          EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4, "SNSLobbyStartSessionv4",
-                                               const_cast<uint8_t*>(encoded.ptr()), encoded.size());
-        } else {
-          Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to encode LobbySessionCreate to binary");
-        }
-      }
+      // Don't forward protobuf session create to the game — the legacy
+      // GameServerSessionStart message carries entrants and resolved level
+      // that the protobuf lacks. See the SYM_LEGACY_SESSION_START handler
+      // in RegisterTcpCallbacks for the passthrough hack.
       break;
     }
 
@@ -960,9 +954,23 @@ void GameServerLib::RegisterTcpCallbacks() {
     } else if (msgId == TcpSym::LobbySessionSuccessV5) {
       // Skip legacy - handled by protobuf kLobbySessionSuccessV5
       Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Skipping legacy session success (handled via protobuf)");
-    } else if (msgId == SYM_LEGACY_SESSION_START || msgId == SYM_LEGACY_PLAYERS_REJECTED) {
-      // Skip legacy - handled by protobuf kLobbySessionCreate / kLobbyEntrantReject
-      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Skipping legacy message 0x%llX (handled via protobuf)", msgId);
+    } else if (msgId == SYM_LEGACY_SESSION_START) {
+      // HACK: Forward legacy GameServerSessionStart directly to the game broadcaster.
+      // The protobuf kLobbySessionCreate doesn't carry the entrant descriptors or
+      // resolved level that the game needs to set up peer connections. The legacy
+      // message does. Once we move to nevr-server-rs with a proper protobuf protocol,
+      // this passthrough goes away — the protobuf should carry everything.
+      auto* broadcaster = GetContext().GetBroadcaster();
+      if (broadcaster) {
+        EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4,
+                                             "SNSLobbyStartSessionv4",
+                                             const_cast<VOID*>(data), size);
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.GAMESERVER] Forwarded legacy SessionStart to game (HACK — protobuf lacks entrants/level)");
+      }
+    } else if (msgId == SYM_LEGACY_PLAYERS_REJECTED) {
+      // Skip legacy - handled by protobuf kLobbyEntrantReject
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Skipping legacy players rejected (handled via protobuf)");
     } else {
       Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Unhandled WebSocket msgId: 0x%llX (size: %llu)", msgId, size);
     }
@@ -1242,11 +1250,22 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
                                                  const_cast<CHAR*>("nevr_discord_id"), nullptr, false);
     CHAR* password = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
                                                 const_cast<CHAR*>("nevr_password"), nullptr, false);
+    CHAR* guilds = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
+                                              const_cast<CHAR*>("nevr_guilds"), nullptr, false);
+    CHAR* regions = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
+                                               const_cast<CHAR*>("nevr_regions"), nullptr, false);
     if (socketUri && socketUri[0] != '\0' && discordId && discordId[0] != '\0') {
+      int written = 0;
       if (password && password[0] != '\0') {
-        snprintf(constructedUri, sizeof(constructedUri), "%s?discord_id=%s&password=%s", socketUri, discordId, password);
+        written = snprintf(constructedUri, sizeof(constructedUri), "%s?discord_id=%s&password=%s", socketUri, discordId, password);
       } else {
-        snprintf(constructedUri, sizeof(constructedUri), "%s?discord_id=%s", socketUri, discordId);
+        written = snprintf(constructedUri, sizeof(constructedUri), "%s?discord_id=%s", socketUri, discordId);
+      }
+      if (guilds && guilds[0] != '\0' && written > 0 && written < (int)sizeof(constructedUri)) {
+        written += snprintf(constructedUri + written, sizeof(constructedUri) - written, "&guilds=%s", guilds);
+      }
+      if (regions && regions[0] != '\0' && written > 0 && written < (int)sizeof(constructedUri)) {
+        snprintf(constructedUri + written, sizeof(constructedUri) - written, "&regions=%s", regions);
       }
       serverDbUri = constructedUri;
       Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Constructed serverdb URI from config fields");
