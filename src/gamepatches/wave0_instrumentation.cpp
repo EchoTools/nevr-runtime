@@ -42,8 +42,11 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <cstring>
 #include <MinHook.h>
 #include "process_mem.h"
+#include "cli.h"              // g_isServer
+#include "crash_recovery.h"   // ForceFatalExit
 #endif
 
 /* --------------------------------------------------------------------
@@ -57,6 +60,12 @@ static constexpr uint64_t VA_HANDLE_DX_ERROR         = 0x140551070;
 static constexpr uint64_t VA_PRECISION_SLEEP_WAIT    = 0x1401CE0B0;
 static constexpr uint64_t VA_PRECISION_SLEEP_BUSYWAIT = 0x1401CE4C0;
 static constexpr uint64_t VA_SPINWAIT_WAIT_FOR_VALUE = 0x141500ED8;
+static constexpr uint64_t VA_HTTP_LISTENER_BRINGUP   = 0x1401F5B00;  // BUG #62
+
+/* Expected prologue at VA_HTTP_LISTENER_BRINGUP: MOV [RSP+8],RBX (relocatable,
+ * clean 5-byte hook boundary). Validated before hooking to guard against the
+ * loaded binary diverging from the ReVault-indexed echovr.exe. */
+static constexpr uint8_t HTTP_LISTENER_PROLOGUE[5] = {0x48, 0x89, 0x5C, 0x24, 0x08};
 
 /* CSpinWait::WaitForValue global spin limit offset (from ImageBase) */
 static constexpr uintptr_t OFF_SPINWAIT_SPIN_LIMIT   = 0x2034500;
@@ -326,6 +335,37 @@ static void __fastcall WaitForValueHook(volatile uint32_t* ptr, uint32_t expecte
     }
 }
 
+/* --------------------------------------------------------------------
+ * Hook 0h — httpport HTTP-listener bind failure -> fatal (BUG #62, High)
+ *
+ * fcn.1401F5B00 is the game's HTTP API listener bring-up wrapper:
+ *   uint64_t __fastcall(state, address, port) -> 1 on success, 0 on failure.
+ * On a bind failure (port already in use) it frees the listener and returns 0,
+ * but the caller (fcn.140157FB0) only logs "[NETGAME] Failed to bind HTTP
+ * listener" and continues. The server then runs headless with a dead session
+ * API — invisible to nevr-agent, so every match it hosts records ZERO tape
+ * (silent, total data loss). Observed on gameserver-chi1 2026-06-28.
+ *
+ * Fix: in server mode, a 0 return is fatal. Force a real process exit (via
+ * ForceFatalExit, which bypasses the server-mode ExitProcess suppression).
+ * Client mode and the success path are passed through unchanged.
+ * -------------------------------------------------------------------- */
+
+using HttpListenerBringup_t = uint64_t(__fastcall*)(int64_t* state, const char* address, uint16_t port);
+static HttpListenerBringup_t s_origHttpListenerBringup = nullptr;
+
+static uint64_t __fastcall HttpListenerBringupHook(int64_t* state, const char* address, uint16_t port) {
+    uint64_t result = s_origHttpListenerBringup(state, address, port);
+    if (result == 0 && g_isServer) {
+        Log(EchoVR::LogLevel::Error,
+            "[wave0] HTTP API listener failed to bind %s:%u (port in use). A server with "
+            "no HTTP API records zero tape — silent data loss. Forcing fatal exit (BUG #62).",
+            address ? address : "(null)", static_cast<unsigned>(port));
+        ForceFatalExit(62);  // bypasses server-mode ExitProcess suppression
+    }
+    return result;  // success, or client mode — preserve original behavior
+}
+
 #endif  // _WIN32
 
 /* ====================================================================
@@ -416,6 +456,28 @@ void Wave0::Init(uintptr_t base_addr) {
         installed++;
     }
 
+    // BUG #62 fix: httpport HTTP-listener bind failure must be fatal (server mode).
+    // Validate the prologue before hooking — this is going toward production, and a
+    // wrong/mismatched target would be a blind hook into the wrong code.
+    {
+        void* target = ResolveVA_Safe(g_base, VA_HTTP_LISTENER_BRINGUP);
+        if (!target) {
+            fprintf(stderr, "[wave0] SKIP HTTP listener bringup — address unmapped\n"); fflush(stderr);
+        } else if (memcmp(target, HTTP_LISTENER_PROLOGUE, sizeof(HTTP_LISTENER_PROLOGUE)) != 0) {
+            fprintf(stderr, "[wave0] SKIP HTTP listener bringup — prologue mismatch at 0x%llx "
+                    "(binary version drift?)\n", (unsigned long long)VA_HTTP_LISTENER_BRINGUP); fflush(stderr);
+        } else if (MH_CreateHook(target, (void*)&HttpListenerBringupHook,
+                                 (void**)&s_origHttpListenerBringup) == MH_OK &&
+                   MH_EnableHook(target) == MH_OK) {
+            fprintf(stderr, "[wave0] hooked HTTP listener bringup at 0x%llx (BUG#62 fix)\n",
+                    (unsigned long long)VA_HTTP_LISTENER_BRINGUP); fflush(stderr);
+            installed++;
+        } else {
+            fprintf(stderr, "[wave0] FAILED to hook HTTP listener bringup at 0x%llx\n",
+                    (unsigned long long)VA_HTTP_LISTENER_BRINGUP); fflush(stderr);
+        }
+    }
+
     fprintf(stderr, "[wave0] complete: %d hooks/patches installed\n", installed); fflush(stderr);
     g_initialized = (installed > 0);
 #endif
@@ -433,6 +495,7 @@ void Wave0::Shutdown() {
         { (void**)&s_origHandleDXError, VA_HANDLE_DX_ERROR },
         { (void**)&s_origPrecisionSleepWait, VA_PRECISION_SLEEP_WAIT },
         { (void**)&s_origWaitForValue, VA_SPINWAIT_WAIT_FOR_VALUE },
+        { (void**)&s_origHttpListenerBringup, VA_HTTP_LISTENER_BRINGUP },
     };
     for (auto& e : entries) {
         if (*e.orig != nullptr) {

@@ -367,3 +367,20 @@ void InstallConsoleCtrlHandler() {
       TRUE);
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Console ctrl handler installed (CTRL+C will terminate)");
 }
+
+void ForceFatalExit(unsigned int code) {
+  // ExitProcessHook suppresses ALL ExitProcess calls in server mode to keep the
+  // server alive through the game's crash-reporter chain. That suppression would
+  // also swallow an intentional fail-loud exit. Bypass it by calling the real
+  // kernel32 ExitProcess captured at hook-install time — the same path the console
+  // ctrl handler uses to actually terminate a server.
+  Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] ForceFatalExit(%u) — terminating process", code);
+  if (OriginalExitProcess != nullptr) {
+    OriginalExitProcess(code);
+  }
+  // Fallbacks if the ExitProcess hook was never installed (OriginalExitProcess
+  // null) or somehow returned. TerminateProcess(self) is allowed outside the
+  // crash-reporter-suppression window; _exit is the last resort.
+  TerminateProcess(GetCurrentProcess(), code);
+  _exit((int)code);
+}
