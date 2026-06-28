@@ -115,6 +115,64 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
 }
 
 // ============================================================================
+// CSysDLL_Load (CModule load wrapper) hook — completes the gameserver migration
+// ============================================================================
+// 0x14105aa70 — the game's DLL load wrapper. LoadServerSupport (0x14060bb70)
+// calls it to load "pnsradgameserver" BEFORE resolving "ServerLib" via
+// CSysDLL_GetSymbol. Now that the gameserver lives in BugSplat64.dll and the
+// external file is gone, that load fails and the game bails with "Unable to
+// load server library" — before the GetSymbol hook above can supply the factory.
+//
+// Fix: when the REAL load of pnsradgameserver fails, return a benign pinned
+// HMODULE (kernel32) so LoadServerSupport proceeds to GetSymbol("ServerLib"),
+// which is redirected to ServerLibFactory above. Verified against the binary:
+// on the success path the handle is only stored (this+0x30) and passed to
+// GetSymbol — never freed or dereferenced as a CModule. kernel32 exports
+// neither "ServerLib" nor "RadPluginShutdown" and tolerates the teardown
+// FreeLibrary cleanly. Calling the original first keeps the real-file path
+// (and its RadPlugin bootstrap) intact if the DLL is ever present again.
+
+typedef void* (*CSysDLL_Load_fn)(void* name_buf, void* plugin_ctx);
+static CSysDLL_Load_fn g_original_LoadModule = nullptr;
+
+// Case-insensitive substring check against the ANSI name string at name_buf[0].
+// needle must be lowercase. Bounded scan to avoid a runaway read.
+static bool LoadNameContains(const void* name_buf, const char* needle) {
+  if (!name_buf) return false;
+  const char* hay = reinterpret_cast<const char*>(name_buf);
+  char low[512];
+  size_t i = 0;
+  for (; i < sizeof(low) - 1 && hay[i] != '\0'; ++i) {
+    char c = hay[i];
+    low[i] = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+  }
+  low[i] = '\0';
+  return strstr(low, needle) != nullptr;
+}
+
+static void* CSysDLL_LoadHook(void* name_buf, void* plugin_ctx) {
+  void* real = g_original_LoadModule(name_buf, plugin_ctx);
+  if (real != nullptr) return real;  // normal load (file present) or non-target DLL
+
+  // Load failed. If this is the migrated server library, hand back a benign
+  // pinned handle so the GetSymbol("ServerLib") hook can supply the factory.
+  if (LoadNameContains(name_buf, "pnsradgameserver")) {
+    static HMODULE s_fakeServerLibModule = LoadLibraryA("kernel32.dll");
+    if (s_fakeServerLibModule) {
+      static bool logged = false;
+      if (!logged) {
+        fprintf(stderr, "[NEVR.GAMESERVER] pnsradgameserver load redirected to in-process "
+                        "ServerLib factory (DLL eliminated, code lives in BugSplat64)\n");
+        fflush(stderr);
+        logged = true;
+      }
+      return reinterpret_cast<void*>(s_fakeServerLibModule);
+    }
+  }
+  return nullptr;
+}
+
+// ============================================================================
 // Game version verification
 // ============================================================================
 
@@ -191,6 +249,22 @@ VOID Initialize() {
         fprintf(stderr, "[NEVR] CSysDLL_GetSymbol hook OK\n"); fflush(stderr);
       } else {
         fprintf(stderr, "[NEVR] CSysDLL_GetSymbol hook FAILED\n"); fflush(stderr);
+      }
+  }
+
+  {
+      void* load_target = reinterpret_cast<void*>(
+          reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + (0x14105aa70 - 0x140000000));
+      static const unsigned char kLoadModulePrologue[8] = {0x40, 0x53, 0x48, 0x81, 0xEC, 0x20, 0x04, 0x00};
+      if (memcmp(load_target, kLoadModulePrologue, sizeof(kLoadModulePrologue)) != 0) {
+        fprintf(stderr, "[NEVR] CSysDLL_Load hook SKIPPED — prologue mismatch at 0x14105aa70 (binary drift?)\n");
+        fflush(stderr);
+      } else if (MH_CreateHook(load_target, reinterpret_cast<void*>(&CSysDLL_LoadHook),
+                     reinterpret_cast<void**>(&g_original_LoadModule)) == MH_OK &&
+                 MH_EnableHook(load_target) == MH_OK) {
+        fprintf(stderr, "[NEVR] CSysDLL_Load hook OK (pnsradgameserver -> in-process ServerLib)\n"); fflush(stderr);
+      } else {
+        fprintf(stderr, "[NEVR] CSysDLL_Load hook FAILED\n"); fflush(stderr);
       }
   }
 
