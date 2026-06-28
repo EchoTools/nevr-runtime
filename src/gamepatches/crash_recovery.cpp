@@ -90,7 +90,19 @@ BOOL WINAPI CreateProcessWHook(LPCWSTR lpApplicationName, LPWSTR lpCommandLine,
 typedef VOID(WINAPI* ExitProcessFunc)(UINT);
 ExitProcessFunc OriginalExitProcess = nullptr;
 
+// Set by ForceFatalExit when an intentional exit is underway. While true, the
+// server-mode ExitProcess suppression is lifted so the real termination — and any
+// ExitProcess the OS/CRT re-enters during it — can actually complete. Without this
+// a server-mode exit deadlocks: the termination's own ExitProcess calls get
+// re-suppressed and the process spins forever instead of dying.
+volatile bool g_forceExitInProgress = false;
+
 VOID WINAPI ExitProcessHook(UINT uExitCode) {
+  // Intentional fail-loud / graceful exit underway — never suppress; let it die.
+  if (g_forceExitInProgress) {
+    if (OriginalExitProcess != nullptr) OriginalExitProcess(uExitCode);
+    return;  // if original is null, returns to ForceFatalExit's TerminateProcess fallback
+  }
   // In server mode, always suppress ExitProcess — the game's crash reporting
   // chain calls it from multiple places (crash handler, SEH handler, C runtime).
   // We need ALL of them suppressed to keep the server alive.
@@ -369,18 +381,24 @@ void InstallConsoleCtrlHandler() {
 }
 
 void ForceFatalExit(unsigned int code) {
-  // ExitProcessHook suppresses ALL ExitProcess calls in server mode to keep the
-  // server alive through the game's crash-reporter chain. That suppression would
-  // also swallow an intentional fail-loud exit. Bypass it by calling the real
-  // kernel32 ExitProcess captured at hook-install time — the same path the console
-  // ctrl handler uses to actually terminate a server.
+  // ExitProcessHook suppresses ALL ExitProcess in server mode to survive the game's
+  // crash-reporter chain. Lift it for THIS exit: set g_forceExitInProgress so the
+  // intentional ExitProcess — and every ExitProcess the OS/CRT re-enters during
+  // termination — passes through to the real kernel32 ExitProcess. (Calling
+  // OriginalExitProcess directly is NOT enough: the termination it kicks off
+  // re-enters the still-active hook from game threads, which re-suppresses, and the
+  // process spins on suppressed ExitProcess forever instead of dying.)
   Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] ForceFatalExit(%u) — terminating process", code);
-  if (OriginalExitProcess != nullptr) {
-    OriginalExitProcess(code);
+  // Lift the ExitProcess suppression in case anything re-enters it during teardown.
+  g_forceExitInProgress = true;
+  // TerminateProcess kills all threads immediately with NO DLL detach / atexit, so it
+  // can't hang on a stuck thread or deadlock the loader the way ExitProcess does under
+  // Wine (which spins/hangs on termination). Call the real kernel32 TerminateProcess
+  // directly to bypass the crash-reporter TerminateProcess hook.
+  HANDLE self = GetCurrentProcess();
+  if (OriginalTerminateProcess != nullptr) {
+    OriginalTerminateProcess(self, code);
   }
-  // Fallbacks if the ExitProcess hook was never installed (OriginalExitProcess
-  // null) or somehow returned. TerminateProcess(self) is allowed outside the
-  // crash-reporter-suppression window; _exit is the last resort.
-  TerminateProcess(GetCurrentProcess(), code);
-  _exit((int)code);
+  TerminateProcess(self, code);  // fallback (hook allows self-terminate outside crash window)
+  ExitProcess(code);             // last resort
 }

@@ -16,6 +16,7 @@
 #include "messages.h"
 
 #include "../config.h"
+#include "../crash_recovery.h"
 #include "../gamepatches_internal.h"
 #include "nevr_curl.h"
 #include "pch.h"
@@ -1126,7 +1127,12 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
     self->m_shutdownComplete.store(true);
 
     Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Graceful shutdown complete — exiting");
-    ExitProcess(0);
+    // Route through ForceFatalExit: the crash_recovery ExitProcessHook suppresses
+    // raw ExitProcess in server mode (to survive the game's crash reporter), which
+    // would otherwise swallow this intentional shutdown and leave the process
+    // running on torn-down state until it access-violates. ForceFatalExit bypasses
+    // the suppression via the saved kernel32 ExitProcess.
+    ForceFatalExit(0);
   }).detach();
 }
 
