@@ -1254,8 +1254,15 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 
   thread_local static CHAR constructedUri[1024];
   if (!serverDbUri || serverDbUri[0] == '\0') {
+    // Registration uses its OWN endpoint (nevr_serverdb_uri -> the token route),
+    // distinct from nevr_socket_uri (the client/login bridge, which stays on the
+    // url-param /spr path). Fall back to nevr_socket_uri if unset.
     CHAR* socketUri = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
-                                                 const_cast<CHAR*>("nevr_socket_uri"), nullptr, false);
+                                                 const_cast<CHAR*>("nevr_serverdb_uri"), nullptr, false);
+    if (!socketUri || socketUri[0] == '\0') {
+      socketUri = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
+                                             const_cast<CHAR*>("nevr_socket_uri"), nullptr, false);
+    }
     CHAR* guilds = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
                                               const_cast<CHAR*>("nevr_guilds"), nullptr, false);
     CHAR* regions = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
@@ -1263,7 +1270,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
     if (socketUri && socketUri[0] != '\0' && !wsToken.empty()) {
       // Token auth (BAC-2): identity is carried by the Bearer JWT (sent by Connect()).
       // The legacy discord_id/password url-params are dropped; guilds/regions stay as
-      // registration metadata. nevr_socket_uri must point at the token route that
+      // registration metadata. nevr_serverdb_uri must point at the token route that
       // forwards the real Authorization header (docs/token-auth-migration.md).
       int written = snprintf(constructedUri, sizeof(constructedUri), "%s", socketUri);
       const char* sep = "?";
