@@ -1254,25 +1254,22 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 
   thread_local static CHAR constructedUri[1024];
   if (!serverDbUri || serverDbUri[0] == '\0') {
-    // Registration uses its OWN endpoint (nevr_serverdb_uri -> the token route),
-    // distinct from nevr_socket_uri (the client/login bridge, which stays on the
-    // url-param /spr path). Fall back to nevr_socket_uri if unset.
-    CHAR* socketUri = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
-                                                 const_cast<CHAR*>("nevr_serverdb_uri"), nullptr, false);
-    if (!socketUri || socketUri[0] == '\0') {
-      socketUri = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
-                                             const_cast<CHAR*>("nevr_socket_uri"), nullptr, false);
-    }
     CHAR* guilds = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
                                               const_cast<CHAR*>("nevr_guilds"), nullptr, false);
     CHAR* regions = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
                                                const_cast<CHAR*>("nevr_regions"), nullptr, false);
-    if (socketUri && socketUri[0] != '\0' && !wsToken.empty()) {
-      // Token auth (BAC-2): identity is carried by the Bearer JWT (sent by Connect()).
-      // The legacy discord_id/password url-params are dropped; guilds/regions stay as
-      // registration metadata. nevr_serverdb_uri must point at the token route that
-      // forwards the real Authorization header (docs/token-auth-migration.md).
-      int written = snprintf(constructedUri, sizeof(constructedUri), "%s", socketUri);
+    // Token auth is opt-in: only when nevr_serverdb_uri (the token route, e.g. /nevr) is
+    // configured AND a token was acquired. Otherwise fall back to the legacy url-param
+    // path so a deploy that hasn't set nevr_serverdb_uri keeps working (no footgun).
+    CHAR* tokenUri = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
+                                                const_cast<CHAR*>("nevr_serverdb_uri"), nullptr, false);
+
+    if (tokenUri && tokenUri[0] != '\0' && !wsToken.empty()) {
+      // Token auth (BAC-2): identity via the Bearer JWT (sent by Connect()); discord_id/
+      // password dropped; guilds/regions stay as registration metadata. nevr_serverdb_uri
+      // points at the token route that forwards the real Authorization header
+      // (docs/token-auth-migration.md).
+      int written = snprintf(constructedUri, sizeof(constructedUri), "%s", tokenUri);
       const char* sep = "?";
       if (guilds && guilds[0] != '\0' && written > 0 && written < (int)sizeof(constructedUri)) {
         written += snprintf(constructedUri + written, sizeof(constructedUri) - written, "%sguilds=%s", sep, guilds);
@@ -1284,9 +1281,34 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       serverDbUri = constructedUri;
       Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Constructed serverdb URI for token auth");
     } else {
-      serverDbUri = const_cast<CHAR*>("ws://localhost:777/serverdb");
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.GAMESERVER] No nevr_socket_uri or no auth token — using default serverdb URI");
+      // Legacy url-param auth (no nevr_serverdb_uri configured): connect via
+      // nevr_socket_uri with discord_id+password — the pre-token-auth behavior.
+      CHAR* socketUri = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
+                                                   const_cast<CHAR*>("nevr_socket_uri"), nullptr, false);
+      CHAR* discordId = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
+                                                   const_cast<CHAR*>("nevr_discord_id"), nullptr, false);
+      CHAR* password = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
+                                                  const_cast<CHAR*>("nevr_password"), nullptr, false);
+      if (socketUri && socketUri[0] != '\0' && discordId && discordId[0] != '\0') {
+        int written = 0;
+        if (password && password[0] != '\0') {
+          written = snprintf(constructedUri, sizeof(constructedUri), "%s?discord_id=%s&password=%s", socketUri, discordId, password);
+        } else {
+          written = snprintf(constructedUri, sizeof(constructedUri), "%s?discord_id=%s", socketUri, discordId);
+        }
+        if (guilds && guilds[0] != '\0' && written > 0 && written < (int)sizeof(constructedUri)) {
+          written += snprintf(constructedUri + written, sizeof(constructedUri) - written, "&guilds=%s", guilds);
+        }
+        if (regions && regions[0] != '\0' && written > 0 && written < (int)sizeof(constructedUri)) {
+          snprintf(constructedUri + written, sizeof(constructedUri) - written, "&regions=%s", regions);
+        }
+        serverDbUri = constructedUri;
+        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Constructed serverdb URI from config fields (legacy url-param auth)");
+      } else {
+        serverDbUri = const_cast<CHAR*>("ws://localhost:777/serverdb");
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.GAMESERVER] No nevr_serverdb_uri/nevr_socket_uri — using default serverdb URI");
+      }
     }
   }
 
