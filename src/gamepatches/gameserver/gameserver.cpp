@@ -1136,32 +1136,39 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
   }).detach();
 }
 
-// Authenticate the server with Nakama using device identity + server key.
-// Returns a Bearer JWT token, or empty string on failure.
+// Authenticate the server with Nakama using the operator's discord_id + password.
+// Returns a session access JWT, or empty string on failure.
+//
+// Uses the non-interactive password RPC (docs/token-auth-migration.md F1):
+//   POST {nevr_http_uri}/v2/rpc/account/authenticate/password?http_key=<key>&unwrap
+//   body {"discord_id","password"} -> {"token","refresh_token"}
+// (nakama server/evr_runtime_rpc.go:1137 AuthenticatePasswordRPC, RequireAuth:false;
+//  http_key is the transport credential, not server_key Basic auth.) The access
+// token's uid is the operator's discord-linked account, which carries the
+// server-host role checked at registration (gg.IsServerHost). Verified live
+// 2026-06-29: uid=metis.sprock, access token (no vrs.refresh), TTL ~1h.
 static std::string AuthenticateServer(const EchoVR::Json* config) {
     CHAR* httpUri = EchoVR::JsonValueAsString(
-        const_cast<EchoVR::Json*>(config),
-        const_cast<CHAR*>("nevr_http_uri"), NULL, false);
-    CHAR* serverKey = EchoVR::JsonValueAsString(
-        const_cast<EchoVR::Json*>(config),
-        const_cast<CHAR*>("nevr_server_key"), NULL, false);
+        const_cast<EchoVR::Json*>(config), const_cast<CHAR*>("nevr_http_uri"), NULL, false);
+    CHAR* httpKey = EchoVR::JsonValueAsString(
+        const_cast<EchoVR::Json*>(config), const_cast<CHAR*>("nevr_http_key"), NULL, false);
+    CHAR* discordId = EchoVR::JsonValueAsString(
+        const_cast<EchoVR::Json*>(config), const_cast<CHAR*>("nevr_discord_id"), NULL, false);
+    CHAR* password = EchoVR::JsonValueAsString(
+        const_cast<EchoVR::Json*>(config), const_cast<CHAR*>("nevr_password"), NULL, false);
 
-    if (!httpUri || !serverKey || httpUri[0] == '\0' || serverKey[0] == '\0') {
+    if (!httpUri || !httpKey || !discordId || !password ||
+        httpUri[0] == '\0' || httpKey[0] == '\0' || discordId[0] == '\0' || password[0] == '\0') {
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] Missing nevr_http_uri or nevr_server_key — cannot authenticate");
+            "[NEVR.GAMESERVER] Missing nevr_http_uri/nevr_http_key/nevr_discord_id/nevr_password — cannot authenticate");
         return "";
     }
 
-    // Use hostname as stable device ID
-    char hostname[256] = {0};
-    DWORD len = sizeof(hostname);
-    GetComputerNameA(hostname, &len);
-
-    // POST /v2/account/authenticate/device?create=true
-    // Basic auth: serverKey:""
-    std::string url = std::string(httpUri) + "/v2/account/authenticate/device?create=true";
+    std::string url = std::string(httpUri) +
+        "/v2/rpc/account/authenticate/password?http_key=" + httpKey + "&unwrap";
     nlohmann::json body;
-    body["id"] = std::string("server-") + hostname;
+    body["discord_id"] = discordId;
+    body["password"] = password;
 
     CURL* curl = curl_easy_init();
     if (!curl) return "";
@@ -1174,9 +1181,6 @@ static std::string AuthenticateServer(const EchoVR::Json* config) {
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postData.c_str());
-    curl_easy_setopt(curl, CURLOPT_USERNAME, serverKey);
-    curl_easy_setopt(curl, CURLOPT_PASSWORD, "");
-    curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, nevr::CurlWriteCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
@@ -1210,7 +1214,7 @@ static std::string AuthenticateServer(const EchoVR::Json* config) {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.GAMESERVER] Server auth returned empty token");
         } else {
-            Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Server authenticated successfully");
+            Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Server authenticated (token acquired)");
         }
         return token;
     } catch (...) {
@@ -1235,51 +1239,81 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("serverdb_host"),
                                 nullptr, false);
 
+  // Acquire a session JWT for the operator's server-host account (token auth, BAC-1).
+  // Re-auth each registration: the access token TTL is ~1h (BAC-5).
+  std::string wsToken;
+  {
+    auto auth = LoadCachedAuthToken();
+    if (auth.HasValidToken()) {
+      wsToken = auth.token;
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Using cached auth token for ServerDB");
+    } else {
+      wsToken = AuthenticateServer(localConfig);
+    }
+  }
+
   thread_local static CHAR constructedUri[1024];
   if (!serverDbUri || serverDbUri[0] == '\0') {
-    CHAR* socketUri = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
-                                                 const_cast<CHAR*>("nevr_socket_uri"), nullptr, false);
-    CHAR* discordId = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
-                                                 const_cast<CHAR*>("nevr_discord_id"), nullptr, false);
-    CHAR* password = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
-                                                const_cast<CHAR*>("nevr_password"), nullptr, false);
     CHAR* guilds = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
                                               const_cast<CHAR*>("nevr_guilds"), nullptr, false);
     CHAR* regions = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
                                                const_cast<CHAR*>("nevr_regions"), nullptr, false);
-    if (socketUri && socketUri[0] != '\0' && discordId && discordId[0] != '\0') {
-      int written = 0;
-      if (password && password[0] != '\0') {
-        written = snprintf(constructedUri, sizeof(constructedUri), "%s?discord_id=%s&password=%s", socketUri, discordId, password);
-      } else {
-        written = snprintf(constructedUri, sizeof(constructedUri), "%s?discord_id=%s", socketUri, discordId);
-      }
+    // Token auth is opt-in: only when nevr_serverdb_uri (the token route, e.g. /nevr) is
+    // configured AND a token was acquired. Otherwise fall back to the legacy url-param
+    // path so a deploy that hasn't set nevr_serverdb_uri keeps working (no footgun).
+    CHAR* tokenUri = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
+                                                const_cast<CHAR*>("nevr_serverdb_uri"), nullptr, false);
+
+    if (tokenUri && tokenUri[0] != '\0' && !wsToken.empty()) {
+      // Token auth (BAC-2): identity via the Bearer JWT (sent by Connect()); discord_id/
+      // password dropped; guilds/regions stay as registration metadata. nevr_serverdb_uri
+      // points at the token route that forwards the real Authorization header
+      // (docs/token-auth-migration.md).
+      int written = snprintf(constructedUri, sizeof(constructedUri), "%s", tokenUri);
+      const char* sep = "?";
       if (guilds && guilds[0] != '\0' && written > 0 && written < (int)sizeof(constructedUri)) {
-        written += snprintf(constructedUri + written, sizeof(constructedUri) - written, "&guilds=%s", guilds);
+        written += snprintf(constructedUri + written, sizeof(constructedUri) - written, "%sguilds=%s", sep, guilds);
+        sep = "&";
       }
       if (regions && regions[0] != '\0' && written > 0 && written < (int)sizeof(constructedUri)) {
-        snprintf(constructedUri + written, sizeof(constructedUri) - written, "&regions=%s", regions);
+        snprintf(constructedUri + written, sizeof(constructedUri) - written, "%sregions=%s", sep, regions);
       }
       serverDbUri = constructedUri;
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Constructed serverdb URI from config fields");
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Constructed serverdb URI for token auth");
     } else {
-      serverDbUri = const_cast<CHAR*>("ws://localhost:777/serverdb");
-      Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] No serverdb_host or nevr_socket_uri in config, using default");
+      // Legacy url-param auth (no nevr_serverdb_uri configured): connect via
+      // nevr_socket_uri with discord_id+password — the pre-token-auth behavior.
+      CHAR* socketUri = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
+                                                   const_cast<CHAR*>("nevr_socket_uri"), nullptr, false);
+      CHAR* discordId = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
+                                                   const_cast<CHAR*>("nevr_discord_id"), nullptr, false);
+      CHAR* password = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
+                                                  const_cast<CHAR*>("nevr_password"), nullptr, false);
+      if (socketUri && socketUri[0] != '\0' && discordId && discordId[0] != '\0') {
+        int written = 0;
+        if (password && password[0] != '\0') {
+          written = snprintf(constructedUri, sizeof(constructedUri), "%s?discord_id=%s&password=%s", socketUri, discordId, password);
+        } else {
+          written = snprintf(constructedUri, sizeof(constructedUri), "%s?discord_id=%s", socketUri, discordId);
+        }
+        if (guilds && guilds[0] != '\0' && written > 0 && written < (int)sizeof(constructedUri)) {
+          written += snprintf(constructedUri + written, sizeof(constructedUri) - written, "&guilds=%s", guilds);
+        }
+        if (regions && regions[0] != '\0' && written > 0 && written < (int)sizeof(constructedUri)) {
+          snprintf(constructedUri + written, sizeof(constructedUri) - written, "&regions=%s", regions);
+        }
+        serverDbUri = constructedUri;
+        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Constructed serverdb URI from config fields (legacy url-param auth)");
+      } else {
+        serverDbUri = const_cast<CHAR*>("ws://localhost:777/serverdb");
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.GAMESERVER] No nevr_serverdb_uri/nevr_socket_uri — using default serverdb URI");
+      }
     }
   }
 
-  // Load auth token for WebSocket connections
-  auto auth = LoadCachedAuthToken();
-  std::string wsToken;
-  if (auth.HasValidToken()) {
-    wsToken = auth.token;
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Using cached auth token for ServerDB");
-  } else {
-    // No cached client token — authenticate as a server
-    wsToken = AuthenticateServer(localConfig);
-  }
-
-  // Connect to serverdb via WebSocketClient (avoids TcpBroadcasterListen vtable ABI crash)
+  // Connect with the JWT as Authorization: Bearer; the token route forwards it
+  // to Nakama's acceptor, which sets the operator identity (BAC-2/3).
   if (!m_wsClient->Connect(serverDbUri, wsToken)) {
     Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to initiate WebSocket connection");
     return;

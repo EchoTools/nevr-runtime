@@ -96,6 +96,10 @@ test-auth-integration:
 # Run all auth tests
 test-auth: test-auth-groundtruth test-auth-unit
 
+# ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)
+test-token-auth config="echovr/_local/config.json":
+    bash tests/token-auth-smoke.sh {{config}}
+
 # Generate combat override files from echomod build output
 generate-combat-overrides build_dir:
     python tools/echomod/generate_resources.py \
