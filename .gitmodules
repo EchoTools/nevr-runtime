@@ -1,3 +1,9 @@
 [submodule "extern/minhook"]
 	path = extern/minhook
 	url = https://github.com/TsudaKageyu/minhook.git
+[submodule "extern/breakpad"]
+	path = extern/breakpad
+	url = https://github.com/google/breakpad.git
+[submodule "extern/lss"]
+	path = extern/lss
+	url = https://chromium.googlesource.com/linux-syscall-support
