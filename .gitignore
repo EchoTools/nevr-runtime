@@ -131,3 +131,8 @@ plugins/combat-mod/generated/
 echovr/bin/win10/_overrides/
 .clangd
 dump.rdb
+
+# Optional drop-in build modules (see modules/README.md).
+# The tree is empty by default; only the README is tracked.
+/modules/*
+!/modules/README.md

@@ -198,6 +198,21 @@ add_subdirectory(src/libovr-stub)
 
 add_subdirectory(plugins)
 
+# =============================================================================
+# Optional drop-in build modules (modules/*/CMakeLists.txt)
+# =============================================================================
+# Each subdirectory under modules/ that contains a CMakeLists.txt is
+# auto-discovered here and added via add_subdirectory(). No-op when modules/
+# is empty or absent. See modules/README.md.
+# =============================================================================
+file(GLOB NEVR_MODULE_LISTS "${CMAKE_CURRENT_SOURCE_DIR}/modules/*/CMakeLists.txt")
+foreach(module_list ${NEVR_MODULE_LISTS})
+  get_filename_component(module_dir "${module_list}" DIRECTORY)
+  get_filename_component(module_name "${module_dir}" NAME)
+  message(STATUS "[modules] adding ${module_name}")
+  add_subdirectory("${module_dir}")
+endforeach()
+
 # Include a local cmake script if it exists
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
   # include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
