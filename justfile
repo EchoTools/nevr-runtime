@@ -84,6 +84,63 @@ android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_tr
     echo "Renamed original -> $out/libovrplatformloader_orig.so (soname patched)"
     readelf -d "$out/libovrplatformloader_orig.so" | grep -i soname
 
+# Full sideload repack: hijack an APK's libovrplatformloader.so with our shim,
+# forwarding to the renamed original. Produces a zipaligned, DEBUG-signed APK and
+# verifies both libs' ELF shape from the SIGNED output (no headset needed).
+# All work under build/android-arm64/repack — never mutates the source APK or shim.
+# `apk` is required (the store APK path); the debug keystore is throwaway, NOT prod.
+android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.so" ks="build/android-arm64/repack/debug.keystore":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$(pwd)"
+    apk="{{ apk }}"; shim="{{ shim }}"; ks="{{ ks }}"
+    work="$root/build/android-arm64/repack"
+    for t in unzip patchelf zip zipalign apksigner readelf nm keytool; do
+        command -v "$t" >/dev/null || { echo "MISSING required tool: $t" >&2; exit 1; }
+    done
+    [ -f "$apk" ]  || { echo "APK not found: $apk" >&2; exit 1; }
+    [ -f "$shim" ] || { echo "shim not found (build it: just build-android): $shim" >&2; exit 1; }
+    mkdir -p "$work/stage/lib/arm64-v8a" "$work/orig"
+    # Debug keystore — generated once, self-signed, for sideload only (never prod).
+    if [ ! -f "$ks" ]; then
+        mkdir -p "$(dirname "$ks")"
+        keytool -genkeypair -v -keystore "$ks" -alias nevrdebug -keyalg RSA -keysize 2048 \
+            -validity 10000 -storepass android -keypass android \
+            -dname "CN=NEVR Debug, OU=nevr-runtime, O=Sprock, C=US"
+    fi
+    # 1. extract the real original loader from the store APK
+    unzip -o -q "$apk" lib/arm64-v8a/libovrplatformloader.so -d "$work/orig"
+    # 2. rename original + patch soname so the NEEDED string matches the file on disk
+    patchelf --set-soname libovrplatformloader_orig.so \
+        --output "$work/stage/lib/arm64-v8a/libovrplatformloader_orig.so" \
+        "$work/orig/lib/arm64-v8a/libovrplatformloader.so"
+    # 3. drop our shim in under the hijacked name
+    cp "$shim" "$work/stage/lib/arm64-v8a/libovrplatformloader.so"
+    # 4. fresh APK copy, strip the store's v1 signature, inject both libs STORED (-0)
+    unsigned="$work/r15-repacked.apk"
+    aligned="$work/r15-repacked-aligned.apk"
+    signed="$work/r15_nevr-sentinel_signed.apk"
+    cp -f "$apk" "$unsigned"
+    zip -q -d "$unsigned" 'META-INF/*.RSA' 'META-INF/*.SF' 'META-INF/*.MF' || true
+    ( cd "$work/stage" && zip -q -0 -X "$unsigned" \
+        lib/arm64-v8a/libovrplatformloader.so lib/arm64-v8a/libovrplatformloader_orig.so )
+    # 5. page-align uncompressed .so, then sign (v2/v3) — align BEFORE sign
+    zipalign -p -f 4 "$unsigned" "$aligned"
+    apksigner sign --ks "$ks" --ks-key-alias nevrdebug \
+        --ks-pass pass:android --key-pass pass:android --out "$signed" "$aligned"
+    apksigner verify --print-certs "$signed" | head -1
+    # 6. VERIFY from the SIGNED apk — the headless packaging proof
+    rm -rf "$work/verify"; mkdir -p "$work/verify"
+    unzip -o -q "$signed" 'lib/arm64-v8a/libovrplatformloader*.so' -d "$work/verify"
+    echo "== shim  lib/arm64-v8a/libovrplatformloader.so =="
+    readelf -d "$work/verify/lib/arm64-v8a/libovrplatformloader.so" | grep -iE 'soname|needed'
+    nm -D "$work/verify/lib/arm64-v8a/libovrplatformloader.so" | grep nevr_sentinel_marker
+    echo "== renamed original  lib/arm64-v8a/libovrplatformloader_orig.so =="
+    readelf -d "$work/verify/lib/arm64-v8a/libovrplatformloader_orig.so" | grep -i soname
+    echo ""
+    echo "Signed sideload APK ready -> $signed"
+    echo "Install with: adb install -r \"$signed\""
+
 # --- Tests ---
 
 # Run all system tests
