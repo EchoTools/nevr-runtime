@@ -1,0 +1,26 @@
+{
+    "version": 4,
+    "configurePresets": [
+        {
+            "name": "android-arm64",
+            "displayName": "Android arm64-v8a (NDK r26d, API 26)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/../../build/android-arm64",
+            "toolchainFile": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
+            "cacheVariables": {
+                "ANDROID_ABI": "arm64-v8a",
+                "ANDROID_PLATFORM": "android-26",
+                "ANDROID_STL": "c++_static",
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_COLOR_DIAGNOSTICS": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "android-arm64",
+            "displayName": "Build Android arm64-v8a",
+            "configurePreset": "android-arm64"
+        }
+    ]
+}

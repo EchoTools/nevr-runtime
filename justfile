@@ -47,6 +47,43 @@ proto:
 clean:
     rm -rf build/ dist/
 
+# --- Android / Quest (arm64-v8a) ---
+# Self-contained NDK sub-project at src/quest (root CMake is MinGW-only).
+# NDK: r26d by default; override with ANDROID_NDK_HOME.
+
+ndk := env("ANDROID_NDK_HOME", "/home/andrew/src/android-ndk-r26d")
+
+# Configure the Android arm64-v8a build (NDK r26d, API 26, static libc++)
+configure-android:
+    cd src/quest && ANDROID_NDK_HOME="{{ ndk }}" cmake --preset android-arm64
+
+# Build the Android arm64-v8a crash-reporter .so
+build-android: configure-android
+    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-arm64 -j
+
+# Build with full compiler output
+verbose-build-android: configure-android
+    ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-arm64 -v
+
+# Run the Quest .so ground-truth (ELF-shape) tests
+test-android: build-android
+    cd tests/quest && go test -v ./...
+
+# Repack: rename the real libovrplatformloader.so -> _orig.so (fixes soname).
+# Operates on a COPY under build/; never mutates the source-of-truth extract.
+# On-device install (repack APK + sideload) is out of scope here — no prod deploy.
+android-repack-libovr src="/mnt/games/evr/-src-evr-reconstruction/cache/quest_triage/apk_contents/lib/arm64-v8a/libovrplatformloader.so":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/android-arm64/repacked"
+    mkdir -p "$out"
+    cp "{{ src }}" "$out/libovrplatformloader.so"
+    patchelf --set-soname libovrplatformloader_orig.so \
+        --output "$out/libovrplatformloader_orig.so" "$out/libovrplatformloader.so"
+    rm -f "$out/libovrplatformloader.so"
+    echo "Renamed original -> $out/libovrplatformloader_orig.so (soname patched)"
+    readelf -d "$out/libovrplatformloader_orig.so" | grep -i soname
+
 # --- Tests ---
 
 # Run all system tests
