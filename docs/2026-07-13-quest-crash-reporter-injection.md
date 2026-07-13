@@ -102,20 +102,24 @@ $ comm -12 <exports of ovrplatformloader> <undefined syms of libr15>
 ```
 
 The real consumer is **`libpnsovr.so`** (the Oculus Platform social layer), which binds
-**all 175** of its undefined `ovr_*` symbols directly from `libovrplatformloader.so`:
+**170** undefined `ovr_*` symbols directly from `libovrplatformloader.so` (175 counting
+the 5 non-`ovr_` but `ovr`-prefixed symbols — all 175 resolve):
 
 ```
-$ nm -D -u libpnsovr.so | grep -c '^ovr'                          # 175
-$ comm -12 ovrpl_exports.txt pnsovr_undef_ovr.txt | wc -l         # 175  (all resolve)
-$ readelf -d libpnsrad.so           | grep ovrplatform            # NEEDED (0 ovr syms)
-$ readelf -d libpnsradmatchmaking.so| grep ovrplatform            # NEEDED (0 ovr syms)
+$ nm -D -u libpnsovr.so | awk '{print $2}' | grep -c '^ovr_'      # 170  (strict ovr_*)
+$ nm -D -u libpnsovr.so | awk '{print $2}' | grep '^ovr' | sort -u | wc -l   # 175 (all ovr*)
+$ comm -12 ovrpl_exports.txt pnsovr_undef.txt | wc -l            # 175  (all resolve)
+$ readelf -d libpnsrad.so           | grep ovrplatform           # NEEDED (0 ovr syms)
+$ readelf -d libpnsradmatchmaking.so| grep ovrplatform           # NEEDED (0 ovr syms)
 ```
 
-`libovrplatformloader.so` exports **1423** dynamic symbols total (1154 `ovr_*` C
-functions + a `JNI_OnLoad`, `setupUnityShim`, a `NativeJava`/`OVRPlatformException`
-C++ helper surface, etc.). The 175 that `libpnsovr.so` resolves at link time are the
-**hard requirement**: if they don't resolve, `libpnsovr.so` fails to load and the game
-never boots.
+`libovrplatformloader.so` exports **1420** genuine (FUNC/OBJECT) dynamic symbols — 1154
+`ovr`-prefixed C functions (1045 strictly `ovr_*`) + a `JNI_OnLoad`, `setupUnityShim`, a
+`NativeJava`/`OVRPlatformException` C++ helper surface, etc. (`nm -D --defined-only`
+reports 1423, which additionally counts the 3 linker-generated NOTYPE symbols
+`__bss_start`/`_edata`/`_end`). The 170 `ovr_*` that `libpnsovr.so` resolves at link time
+are the **hard requirement**: if they don't resolve, `libpnsovr.so` fails to load and the
+game never boots.
 
 Example resolved symbols (from `libpnsovr.so`):
 `ovr_GetLoggedInUserID`, `ovr_FreeMessage`, `ovr_Error_GetMessage`,
@@ -136,7 +140,7 @@ Our shim (the hook): libovrplatformloader.so        (small; arms breakpad, forwa
 Consumers (`libpnsovr.so`, `libpnsrad.so`, `libpnsradmatchmaking.so`, `libr15.so`)
 still `DT_NEEDED "libovrplatformloader.so"` — **unchanged**. They now load *our* shim.
 
-### 2.2 How forwarding works on Bionic — WITHOUT 1423 hand-written trampolines
+### 2.2 How forwarding works on Bionic — WITHOUT 1420 hand-written trampolines
 
 Two mechanisms combine, and we rely on both:
 
@@ -149,11 +153,11 @@ Two mechanisms combine, and we rely on both:
    Bionic's symbol lookup for any library in that group searches every member of the
    group. So when `libpnsovr.so` needs `ovr_GetLoggedInUserID`, the linker finds the
    real definition in `libovrplatformloader_orig.so` (same group). **No re-export or
-   trampoline is required for the 175 (or all 1423) symbols.**
+   trampoline is required for the 170 (or all 1420) symbols.**
 
 This is the elegant path: the shim is a *thin* library whose only jobs are (a) arm the
 crash handler in its constructor, and (b) `DT_NEEDED` the renamed original so it comes
-along. It re-exports nothing and does not need to enumerate the 1423 symbols.
+along. It re-exports nothing and does not need to enumerate the 1420 symbols.
 
 ### 2.3 Fallback if group-scope resolution surprises us on-device
 
@@ -162,12 +166,12 @@ Bionic's group-lookup semantics have shifted across Android versions (namespaces
 `ovr_*` through the group, the fallback is **explicit re-export forwarders**:
 
 - In the shim constructor, `dlopen("libovrplatformloader_orig.so", RTLD_NOW|RTLD_GLOBAL)`.
-- For every one of the 1423 exported symbols, ship a same-named exported trampoline
+- For every one of the 1420 exported symbols, ship a same-named exported trampoline
   that tail-jumps to the `dlsym`'d original. These are code-generated from
   `nm -D --defined-only libovrplatformloader_orig.so` (a Go/CMake codegen step, not
   hand-written), producing naked `B` (branch) thunks for the C `ovr_*` surface. C++
   symbols (`_ZN10NativeJava…`) are only needed if a consumer binds them — none of the
-  three consumers do (all 175 are `ovr_*`), so the C surface is sufficient.
+  three consumers do (170 strict `ovr_*` + 5 plain-C `ovr`-prefixed like `ovrID_FromString`), so the C surface is sufficient.
 
 The primary design (2.2) is preferred and tried first; the codegen forwarder is the
 documented safety valve. Which one is needed is an **on-device determination**.
@@ -273,6 +277,6 @@ Test runs **RED first** (asserts against a not-yet-built artifact → fails), th
 real output.
 
 **Remains for on-device (named, not hidden):** load-order timestamp vs libr15;
-group-scope symbol resolution for `libpnsovr`'s 175 imports (else engage §2.3 codegen
+group-scope symbol resolution for `libpnsovr`'s 170 ovr_* imports (else engage §2.3 codegen
 forwarders); a real signal → real minidump written to the app-writable path;
 minidump symbolication against `libr15.so`.

@@ -109,7 +109,8 @@ void Arm() {
     std::call_once(g_once, [] {
         g_dumpDir = ResolveDumpDir();
         google_breakpad::MinidumpDescriptor descriptor(g_dumpDir);
-        // install_handler=true installs SIGSEGV/SIGABRT/SIGBUS/SIGILL/SIGFPE.
+        // install_handler=true installs breakpad's 6 handlers:
+        // SIGSEGV/SIGABRT/SIGBUS/SIGILL/SIGFPE/SIGTRAP.
         g_handler = new google_breakpad::ExceptionHandler(
             descriptor,
             /*filter=*/nullptr,

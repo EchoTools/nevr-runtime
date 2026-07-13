@@ -5,7 +5,7 @@
  * constructor runs before any game code — the arm64/Bionic analogue of the
  * Windows BugSplat64.dll static-import trick. The real Oculus Platform loader
  * is renamed libovrplatformloader_orig.so and pulled in via an added DT_NEEDED
- * (see the patchelf --add-needed post-build step); its 1423 exports resolve to
+ * (see the patchelf --add-needed post-build step); its 1420 exports resolve to
  * consumers through Bionic's local-group symbol lookup.
  */
 
