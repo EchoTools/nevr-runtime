@@ -191,9 +191,11 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // Applied before any game connections so XPID parsing sees "DSC-" from the start.
   PatchDscProvider();
 
-  // Block Oculus Platform SDK on all modes — no headset available
-  PatchBypassOvrPlatform();
-  PatchBlockOculusSDK();
+  // Block Oculus Platform SDK on server/headless — client needs Oculus Platform services
+  if (g_isServer || g_isHeadless) {
+    PatchBypassOvrPlatform();
+    PatchBlockOculusSDK();
+  }
 
   // Apply patches to force the game to load as a server.
   if (g_isServer) {
