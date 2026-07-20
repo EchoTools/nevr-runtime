@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/EchoTools/evr-test-harness/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,14 +19,6 @@ const (
 	// EVR_GAME_DIR points to the Echo VR game installation directory
 	envGameDir     = "EVR_GAME_DIR"
 	defaultGameDir = "../../ready-at-dawn-echo-arena"
-)
-
-// Helper functions from evr-test-harness
-var (
-	AssertProcessRunning = testutil.AssertProcessRunning
-	AssertProcessStopped = testutil.AssertProcessStopped
-	AssertHTTPResponds   = testutil.AssertHTTPResponds
-	AssertHTTPFails      = testutil.AssertHTTPFails
 )
 
 // getBuildDir returns the build directory from environment or default

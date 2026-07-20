@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/EchoTools/evr-test-harness/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,13 +31,6 @@ const (
 
 	envPluginsSourceDir     = "NEVR_PLUGINS_SOURCE_DIR"
 	defaultPluginsSourceDir = "../../../nevr-runtime-plugins"
-)
-
-var (
-	AssertProcessRunning = testutil.AssertProcessRunning
-	AssertProcessStopped = testutil.AssertProcessStopped
-	AssertHTTPResponds   = testutil.AssertHTTPResponds
-	AssertHTTPFails      = testutil.AssertHTTPFails
 )
 
 func getPluginsBuildDir() string {
