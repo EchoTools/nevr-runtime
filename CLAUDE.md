@@ -173,5 +173,38 @@ This applies regardless of context — even if the task seems to require it, eve
 ## Dependencies
 
 - **vcpkg** — curl, gtest, ixwebsocket, nlohmann-json, miniupnpc, minhook, opus, protobuf
-- **Submodules** (`extern/`) — evr-test-harness (test harness), minhook, protobuf
+- **Submodules** (`extern/`) — minhook, protobuf (the `evr-test-harness` symlink is excised — see below)
 - **Toolchain** — CMake 3.20+, Ninja, MinGW (Linux) or MSVC (Windows)
+
+## Onboarding conventions (all-the-way-down)
+
+This repo is onboarded to the `~/src/all-the-way-down` canon (authorized by
+RULINGS.md 2026-07-20 "nevr onboarding"). Process machinery is governed by
+`DRIVER-CHARTER.md` (five slots filled) and the `nevr-work` gate skill
+(`.claude/skills/nevr-work/`, gitignored). The following process decisions bind:
+
+- **Work ledger = `BUGS.md` `# NEVR Runtime Source Bugs` section (N-prefix IDs).**
+  This is a distinct ID namespace from the binary-audit integer IDs elsewhere in
+  the same file (which audit the *original* game binary). Next-ID rule:
+  `grep '^### N' BUGS.md` → highest, take next. Entries follow the `bugs-ledger`
+  shape (What measured → Where file:line → Evidence → Impact → Fix direction →
+  Status); amend, never rewrite. (Basis: day-one-kit §1 precondition — "if a file
+  of that name is a domain artifact, pick a distinct path"; here the distinct path
+  is a distinct *section+namespace* within `BUGS.md`. A process-layer decision, no
+  citable owner basis at the process layer — new decision per RULINGS.md 2026-07-19
+  "Process ownership".)
+- **Commit identity.** Author `agents@sprock.io`, unsigned (`--no-gpg-sign`), with
+  two `Co-authored-by` trailers (`Metis Sprock <m@sprock.io>`,
+  `Andrew Bates <a@sprock.io>`). Verify after each commit:
+  `git log --format='%h %G? %an %ae' -1`. Never commit as the owner's name/email.
+  (Basis: RULINGS.md 2026-07-20 "Commit identity (nevr)".)
+- **Mandatory pre-read gate.** Before any C++/build work, read
+  `~/src/metis-core/CPP-MINGW-ADDENDUM-GENERIC.md` in full — its Hard-Stops bind
+  every build/config change. (Basis: day-one-kit §Order 1.)
+- **Scratch dir.** All agent scratch/staging/evidence files live under
+  `/var/tmp/work-nevr-runtime/`, never `/tmp` (RAM-backed on this host) and never
+  in the repo. (Basis: RULINGS.md 2026-07-20 "Scratch dir (nevr)".)
+- **Verify entry point.** `just verify` is the single closed-loop gate
+  (`just build` + hardened `test-auth-unit`, fail-close). The Go integration suites
+  are excised (RULINGS.md 2026-07-20 "Test harness excised") and are not part of
+  `just verify`.
