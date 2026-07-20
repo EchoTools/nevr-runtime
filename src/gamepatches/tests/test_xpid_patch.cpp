@@ -117,3 +117,42 @@ TEST(XpidPatch, ValidationRejectsWrongBytes) {
   // Verify the validation would fail.
   EXPECT_NE(memcmp(buf.data() + XPID_PLATFORM_SHORT_NAME, kPsnShort, 4), 0);
 }
+
+// ---------------------------------------------------------------------------
+// Headless graphics-gate skips (N6/N7/N8): pin the ground-truth RVAs and the
+// je(0x74)->jmp(0xEB) branch-force convention. Each gate is a 2-byte `je rel8`
+// that the game takes natively when its renderer-enable bit is clear; we force
+// jmp so a headless server takes the device-free branch. echovr.exe ImageBase is
+// 0x140000000, image extent 0x2231000 — all four RVAs are in the .text range.
+// ---------------------------------------------------------------------------
+
+TEST(HeadlessGates, Dx12BranchForceConvention) {
+  using namespace PatchAddresses;
+  // je -> jmp, opcode-only edit (rel8 displacement preserved).
+  EXPECT_EQ(HEADLESS_DX12_INIT_EXPECT, 0x74);  // je rel8
+  EXPECT_EQ(HEADLESS_DX12_INIT_PATCH, 0xEB);   // jmp rel8
+  EXPECT_NE(HEADLESS_DX12_INIT_EXPECT, HEADLESS_DX12_INIT_PATCH);
+}
+
+TEST(HeadlessGates, GateRvasPinnedToGroundTruth) {
+  using namespace PatchAddresses;
+  // Ground-truth VAs (VA - 0x140000000) verified via objdump on echovr.exe.
+  EXPECT_EQ(HEADLESS_DX12_INIT, 0x154AF7Fu);
+  EXPECT_EQ(HEADLESS_ENGINE_RENDER_INIT, 0x154B0E4u);
+  EXPECT_EQ(HEADLESS_GUI_INIT, 0x154B38Fu);
+  EXPECT_EQ(HEADLESS_RENDER_SUBMIT_INIT, 0x154D7E4u);  // N8 gate
+}
+
+TEST(HeadlessGates, GateRvasInCodeRangeAndDistinct) {
+  using namespace PatchAddresses;
+  const uintptr_t kImageExtent = 0x2231000;  // echovr.exe virtual size
+  for (uintptr_t rva : {HEADLESS_DX12_INIT, HEADLESS_ENGINE_RENDER_INIT,
+                        HEADLESS_GUI_INIT, HEADLESS_RENDER_SUBMIT_INIT}) {
+    EXPECT_GT(rva, 0x100000u);
+    EXPECT_LT(rva, kImageExtent);
+  }
+  // Each gate is a distinct 2-byte site.
+  EXPECT_NE(HEADLESS_ENGINE_RENDER_INIT, HEADLESS_DX12_INIT);
+  EXPECT_NE(HEADLESS_GUI_INIT, HEADLESS_ENGINE_RENDER_INIT);
+  EXPECT_NE(HEADLESS_RENDER_SUBMIT_INIT, HEADLESS_GUI_INIT);
+}

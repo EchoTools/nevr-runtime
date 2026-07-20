@@ -112,6 +112,16 @@ VOID PatchEnableHeadless(PVOID pGame) {
   // loads early-return. Reproduces the game's own "no renderer -> no GUI" branch.
   ForceHeadlessSkip(HEADLESS_GUI_INIT, "GUI subsystem init skipped");
 
+  // Skip the render-submit-context init cluster (fcn.14102f630) — the LAST bit-0x1
+  // gate in FUN_14154a950. It is gated by the same renderer-enable bit 0x1 at
+  // CEngine+0x2cfec as the renderer-init gate above; because we branch-force that
+  // gate rather than clearing the bit, the bit stays set and this later gate would
+  // otherwise run the init, whose chain (fcn.14054b5e0 -> fcn.14059dcb0 ->
+  // CRenderSubmitContext::RequestBuffer) divides by a zero GPU-derived granularity
+  // with no device (N8, INT_DIVIDE_BY_ZERO @ 0x1405bc52a). Forcing the je->jmp takes
+  // the game's own renderer-disabled branch so the render-submit path never runs.
+  ForceHeadlessSkip(HEADLESS_RENDER_SUBMIT_INIT, "render-submit-context init skipped");
+
   // Skip console creation if -noconsole was specified
   if (g_noConsole) {
     return;

@@ -178,6 +178,26 @@ constexpr uintptr_t HEADLESS_ENGINE_RENDER_INIT = 0x154B0E4;
 /// same rel8 displacement 0x45. Prologue-VALIDATED.
 constexpr uintptr_t HEADLESS_GUI_INIT = 0x154B38F;
 
+/// Ground-truth VA 0x14154d7e4 (RVA 0x154d7e4): the render-submit-context init gate,
+/// the LAST bit-0x1 gate in the same CEngine init (FUN_14154a950), tail block:
+///   14154d7dd: testb $0x1,0x2cfec(%rbx)   ; renderer-enable bit 0x1 at CEngine+0x2cfec
+///   14154d7e4: je    0x14154d7ef          ; bit clear -> game's own "no renderer -> skip" branch
+///   14154d7e6: lea   0x8(%rbx),%rcx
+///   14154d7ea: call  0x14102f630          ; bit set  -> render-submit-context init cluster
+///   14154d7ef: (ret)
+/// FUN_14102f630 initializes render-submit contexts; its chain
+/// FUN_14054b5e0 -> FUN_14059dcb0 -> CRenderSubmitContext::RequestBuffer @ 0x1405bc4d0
+/// computes align_up(size, granularity) via `div r15` @ 0x1405bc52a with granularity
+/// (the buffer descriptor's uint16 field +0x5c) = 0 when no GPU device exists ->
+/// INT_DIVIDE_BY_ZERO (N8). We force-skip the renderer INIT (0x14154b0e4) but never
+/// clear bit 0x1, so it stays SET and this later gate's je is not taken -> the init
+/// runs -> div-by-zero. Verified by the N8 crash stack: frame #7 return = 0x14154d7ef
+/// (right after this call), frame #6 inside FUN_14102f630, frame #5 inside
+/// FUN_14054b5e0, frame #2 inside FUN_14059dcb0. Force je(0x74)->jmp(0xEB), same rel8
+/// displacement 0x09, so headless takes the game's native renderer-disabled branch and
+/// the render-submit path never runs. Skip, not stub. Prologue-VALIDATED.
+constexpr uintptr_t HEADLESS_RENDER_SUBMIT_INIT = 0x154D7E4;
+
 // ============================================================================
 // Server Global GameSpace Crash Fix
 // ============================================================================
