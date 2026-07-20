@@ -15,6 +15,32 @@
 #include "process_mem.h"
 
 // ============================================================================
+// Headless graphics-gate skip helper
+// ============================================================================
+
+/// The CEngine init function (FUN_14154a950) enables graphics subsystems one by
+/// one, each gated by a bit in the graphics-enable word at CEngine+0x2cfec. Each
+/// gate is a `je <skip>` taken when the bit is clear (the game's own device-free
+/// branch). In server mode the bits are set, so the game runs the GPU init and
+/// asserts. Forcing `je`(0x74)->`jmp`(0xEB) — same rel8 displacement — makes the
+/// game take its native graphics-disabled branch. Prologue-VALIDATED: patches
+/// only when the current byte is the expected `je` opcode (never blind-write).
+static VOID ForceHeadlessSkip(uintptr_t offset, const char* what) {
+  const BYTE* site = reinterpret_cast<const BYTE*>(EchoVR::g_GameBaseAddress + offset);
+  if (*site == 0x74) {
+    const BYTE jmp = 0xEB;
+    ProcessMemcpy(EchoVR::g_GameBaseAddress + offset, const_cast<BYTE*>(&jmp), 1);
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.HEADLESS] %s — forced device-free branch (je->jmp) at +0x%lx",
+        what, static_cast<unsigned long>(offset));
+  } else {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.HEADLESS] %s — prologue mismatch at +0x%lx (got 0x%02x, want 0x74) — NOT patched",
+        what, static_cast<unsigned long>(offset), static_cast<unsigned>(*site));
+  }
+}
+
+// ============================================================================
 // PatchEnableHeadless — enable headless mode with console window
 // ============================================================================
 
@@ -74,6 +100,11 @@ VOID PatchEnableHeadless(PVOID pGame) {
           static_cast<unsigned long>(HEADLESS_DX12_INIT), static_cast<unsigned>(*gate));
     }
   }
+
+  // Skip the CEngine renderer init (fcn.141549ec0) — the next graphics gate after
+  // the D3D12 skip. Bit 0x1 at CEngine+0x2cfec gates it; forcing the je->jmp takes
+  // the game's own renderer-disabled branch (it backfills CEngine+0x2cec0 itself).
+  ForceHeadlessSkip(HEADLESS_ENGINE_RENDER_INIT, "renderer init skipped");
 
   // Skip console creation if -noconsole was specified
   if (g_noConsole) {

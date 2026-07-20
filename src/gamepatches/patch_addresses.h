@@ -149,6 +149,19 @@ constexpr uintptr_t HEADLESS_DX12_INIT = 0x154AF7F;
 constexpr unsigned char HEADLESS_DX12_INIT_EXPECT = 0x74;  // je rel8
 constexpr unsigned char HEADLESS_DX12_INIT_PATCH = 0xEB;   // jmp rel8 (same displacement)
 
+/// Ground-truth VA 0x14154b0e4 (RVA 0x154b0e4): the renderer-init gate in the same
+/// CEngine init (FUN_14154a950), gated by graphics-enable bit 0x1 at CEngine+0x2cfec:
+///   14154b0dc: testb $0x1,0x2cfec(%r14)
+///   14154b0e4: je    0x14154b117        ; bit clear -> skip renderer init entirely
+///   14154b0e6: lea   "Initializing renderer" ; log
+///   14154b0fd: call  0x141549ec0        ; bit set  -> renderer init (asserts, no GPU)
+///   14154b117: (success continuation)
+/// The renderer init (fcn.141549ec0) sets CEngine+0x2cec0; the success path at
+/// 0x14154b11c re-checks that field and BACKFILLS it (call 0x14154a1f0) when the
+/// init was skipped — i.e. the game natively supports the renderer-disabled path.
+/// Force je(0x74)->jmp(0xEB), same rel8 displacement 0x31, so headless takes it.
+constexpr uintptr_t HEADLESS_ENGINE_RENDER_INIT = 0x154B0E4;
+
 // ============================================================================
 // Server Global GameSpace Crash Fix
 // ============================================================================
