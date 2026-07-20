@@ -66,19 +66,30 @@ static size_t CurlHeaderCb(char* buf, size_t sz, size_t n, void* ud) {
 static HRESULT STDMETHODCALLTYPE Stub_QueryInterface(void* pThis, REFIID riid, void** ppv) {
   if (!ppv) return E_POINTER;
   if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_IDispatch) || IsEqualIID(riid, IID_IWinHttpRequest)) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] QI accepted — returning stub (riid match)");
     *ppv = pThis;
     SELF(pThis)->m_refCount++;
     return S_OK;
   }
+  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] QI rejected {%08lX-%04hX-%04hX-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+      riid.Data1, riid.Data2, riid.Data3,
+      riid.Data4[0], riid.Data4[1], riid.Data4[2], riid.Data4[3],
+      riid.Data4[4], riid.Data4[5], riid.Data4[6], riid.Data4[7]);
   *ppv = nullptr;
   return E_NOINTERFACE;
 }
 
-static ULONG STDMETHODCALLTYPE Stub_AddRef(void* pThis) { return ++SELF(pThis)->m_refCount; }
+static ULONG STDMETHODCALLTYPE Stub_AddRef(void* pThis) {
+  auto* self = SELF(pThis);
+  ULONG n = ++self->m_refCount;
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] AddRef -> %lu", n);
+  return n;
+}
 
 static ULONG STDMETHODCALLTYPE Stub_Release(void* pThis) {
   auto* self = SELF(pThis);
   ULONG n = --self->m_refCount;
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Release -> %lu", n);
   if (n == 0) {
     self->~WinHttpRequestStub();
     free(self);
@@ -87,8 +98,16 @@ static ULONG STDMETHODCALLTYPE Stub_Release(void* pThis) {
 }
 
 // ============================================================================
-// IDispatch — vtable slots [3..6] (stubs — game uses vtable, not Invoke)
+// IDispatch — vtable slots [3..6]
 // ============================================================================
+
+// Forward declarations — these are defined below in the IWinHttpRequest section.
+static HRESULT STDMETHODCALLTYPE Stub_Open(void* pThis, BSTR Method, BSTR Url, VARIANT);
+static HRESULT STDMETHODCALLTYPE Stub_SetRequestHeader(void* pThis, BSTR Header, BSTR Value);
+static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT);
+static HRESULT STDMETHODCALLTYPE Stub_get_Status(void* pThis, long* Status);
+static HRESULT STDMETHODCALLTYPE Stub_get_ResponseText(void* pThis, BSTR* Body);
+static HRESULT STDMETHODCALLTYPE Stub_get_ResponseBody(void* pThis, VARIANT* Body);
 
 static HRESULT STDMETHODCALLTYPE Stub_GetTypeInfoCount(void*, UINT* p) {
   if (p) *p = 0;
@@ -96,23 +115,224 @@ static HRESULT STDMETHODCALLTYPE Stub_GetTypeInfoCount(void*, UINT* p) {
 }
 static HRESULT STDMETHODCALLTYPE Stub_GetTypeInfo(void*, UINT, LCID, ITypeInfo** p) {
   if (p) *p = nullptr;
-  return E_NOTIMPL;
+  return S_OK;
 }
-static HRESULT STDMETHODCALLTYPE Stub_GetIDsOfNames(void*, REFIID, LPOLESTR*, UINT, LCID, DISPID*) {
-  return E_NOTIMPL;
+
+// DISPID-to-name lookup tables for IWinHttpRequest.
+// DISPIDs are from the WinHTTP type library (winhttp.dll).
+static constexpr LONG kDispId_Open = 1;
+static constexpr LONG kDispId_SetProxy = 2;
+static constexpr LONG kDispId_SetCredentials = 3;
+static constexpr LONG kDispId_SetRequestHeader = 4;
+static constexpr LONG kDispId_Send = 5;
+static constexpr LONG kDispId_WaitForResponse = 6;
+static constexpr LONG kDispId_Abort = 7;
+static constexpr LONG kDispId_Status = 8;
+static constexpr LONG kDispId_StatusText = 9;
+static constexpr LONG kDispId_ResponseText = 10;
+static constexpr LONG kDispId_ResponseBody = 11;
+static constexpr LONG kDispId_ResponseStream = 12;
+static constexpr LONG kDispId_AllResponseHeaders = 13;
+static constexpr LONG kDispId_ResponseHeader = 14;
+static constexpr LONG kDispId_Option = 15;
+static constexpr LONG kDispId_SetTimeouts = 17;
+static constexpr LONG kDispId_SetClientCertificate = 18;
+static constexpr LONG kDispId_SetAutoLogonPolicy = 19;
+
+struct DispIdEntry {
+  const wchar_t* name;
+  LONG dispId;
+};
+
+static const DispIdEntry g_DispIdTable[] = {
+    {L"Open", kDispId_Open},
+    {L"SetProxy", kDispId_SetProxy},
+    {L"SetCredentials", kDispId_SetCredentials},
+    {L"SetRequestHeader", kDispId_SetRequestHeader},
+    {L"Send", kDispId_Send},
+    {L"WaitForResponse", kDispId_WaitForResponse},
+    {L"Abort", kDispId_Abort},
+    {L"Status", kDispId_Status},
+    {L"StatusText", kDispId_StatusText},
+    {L"ResponseText", kDispId_ResponseText},
+    {L"ResponseBody", kDispId_ResponseBody},
+    {L"ResponseStream", kDispId_ResponseStream},
+    {L"AllResponseHeaders", kDispId_AllResponseHeaders},
+    {L"ResponseHeader", kDispId_ResponseHeader},
+    {L"Option", kDispId_Option},
+    {L"SetTimeouts", kDispId_SetTimeouts},
+    {L"SetClientCertificate", kDispId_SetClientCertificate},
+    {L"SetAutoLogonPolicy", kDispId_SetAutoLogonPolicy},
+};
+static constexpr size_t kDispIdTableSize = sizeof(g_DispIdTable) / sizeof(g_DispIdTable[0]);
+
+static HRESULT STDMETHODCALLTYPE Stub_GetIDsOfNames(void*, REFIID, LPOLESTR* rgszNames, UINT cNames, LCID,
+                                                    DISPID* rgDispId) {
+  if (!rgszNames || !rgDispId) return E_POINTER;
+  for (UINT i = 0; i < cNames; i++) {
+    rgDispId[i] = DISPID_UNKNOWN;
+    if (rgszNames[i]) {
+      for (size_t j = 0; j < kDispIdTableSize; j++) {
+        if (wcscmp(rgszNames[i], g_DispIdTable[j].name) == 0) {
+          rgDispId[i] = g_DispIdTable[j].dispId;
+          break;
+        }
+      }
+    }
+  }
+  // Return S_OK even if some names were not found — COM convention:
+  // caller checks for DISPID_UNKNOWN on each entry.
+  return S_OK;
 }
-static HRESULT STDMETHODCALLTYPE Stub_Invoke(void*, DISPID, REFIID, LCID, WORD, DISPPARAMS*, VARIANT*, EXCEPINFO*,
+
+static HRESULT STDMETHODCALLTYPE Stub_Invoke(void* pThis, DISPID dispIdMember, REFIID, LCID, WORD wFlags,
+                                              DISPPARAMS* pDispParams, VARIANT* pVarResult, EXCEPINFO*,
                                               UINT*) {
-  return E_NOTIMPL;
+  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] Invoke DISPID=%ld flags=0x%04x cArgs=%u",
+      static_cast<long>(dispIdMember), wFlags,
+      pDispParams ? pDispParams->cArgs : 0);
+
+  auto* self = SELF(pThis);
+
+  // Helper: extract BSTR from reversed DISPPARAMS args (index 0 = rightmost arg).
+  auto ArgBstr = [&](UINT idx) -> BSTR {
+    if (!pDispParams || idx >= pDispParams->cArgs) return nullptr;
+    VARIANTARG& va = pDispParams->rgvarg[pDispParams->cArgs - 1 - idx];
+    return (va.vt == VT_BSTR) ? va.bstrVal : nullptr;
+  };
+
+  if (wFlags & DISPATCH_PROPERTYGET) {
+    switch (dispIdMember) {
+      case kDispId_Status: {
+        long status = 0;
+        Stub_get_Status(pThis, &status);
+        if (status == 0) status = 200;  // default: pretend success
+        if (pVarResult) { pVarResult->vt = VT_I4; pVarResult->lVal = status; }
+        return S_OK;
+      }
+      case kDispId_StatusText:
+        if (pVarResult) { pVarResult->vt = VT_BSTR; pVarResult->bstrVal = SysAllocString(L"OK"); }
+        return S_OK;
+      case kDispId_ResponseText: {
+        BSTR body = nullptr;
+        Stub_get_ResponseText(pThis, &body);
+        if (pVarResult) {
+          if (body) {
+            pVarResult->vt = VT_BSTR; pVarResult->bstrVal = body;
+          } else {
+            pVarResult->vt = VT_BSTR; pVarResult->bstrVal = SysAllocString(L"");
+          }
+        }
+        return S_OK;
+      }
+      case kDispId_ResponseBody: {
+        VARIANT body; VariantInit(&body);
+        Stub_get_ResponseBody(pThis, &body);
+        if (pVarResult) { *pVarResult = body; }
+        return S_OK;
+      }
+      case kDispId_AllResponseHeaders:
+        if (pVarResult) { pVarResult->vt = VT_BSTR; pVarResult->bstrVal = SysAllocString(L""); }
+        return S_OK;
+      case kDispId_ResponseHeader:
+        // ResponseHeader(index) → BSTR value
+        if (pVarResult) { pVarResult->vt = VT_BSTR; pVarResult->bstrVal = SysAllocString(L""); }
+        return S_OK;
+      case kDispId_Option:
+        if (pVarResult) { pVarResult->vt = VT_EMPTY; }
+        return S_OK;
+      case kDispId_ResponseStream:
+        if (pVarResult) { pVarResult->vt = VT_EMPTY; }
+        return S_OK;
+      default:
+        // Unknown property get
+        if (pVarResult) { pVarResult->vt = VT_EMPTY; }
+        return S_OK;
+    }
+  }
+
+  if (wFlags & DISPATCH_PROPERTYPUT) {
+    switch (dispIdMember) {
+      case kDispId_Option:
+        return S_OK;
+      default:
+        return S_OK;
+    }
+  }
+
+  // DISPATCH_METHOD
+  switch (dispIdMember) {
+    case kDispId_Open: {
+      // Open(Method, Url [, Async])
+      BSTR method = ArgBstr(0);
+      BSTR url = ArgBstr(1);
+      VARIANT async; VariantInit(&async);
+      if (pDispParams && pDispParams->cArgs >= 3)
+        async = pDispParams->rgvarg[0];  // rightmost = Async
+      return Stub_Open(pThis, method, url, async);
+    }
+    break;
+    case kDispId_SetRequestHeader: {
+      // SetRequestHeader(Header, Value)
+      BSTR header = ArgBstr(0);
+      BSTR value = ArgBstr(1);
+      return Stub_SetRequestHeader(pThis, header, value);
+    }
+    break;
+    case kDispId_Send: {
+      // Send([Body]) — no-op: succeed without real HTTP.
+      // The game calls this for Oculus telemetry/health checks which no longer
+      // exist. The ws_bridge handles actual service traffic independently.
+      Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] Send DISPID=5 (no-op) url=%ls",
+          self->m_url.empty() ? L"(none)" : self->m_url.c_str());
+      self->m_sent = true;
+      self->m_statusCode = 200;
+      return S_OK;
+    }
+    break;
+    case kDispId_SetProxy:
+      return S_OK;
+    case kDispId_SetCredentials:
+      return S_OK;
+    case kDispId_WaitForResponse:
+      if (pVarResult) { pVarResult->vt = VT_BOOL; pVarResult->boolVal = VARIANT_TRUE; }
+      return S_OK;
+    case kDispId_Abort:
+      return S_OK;
+    case kDispId_SetTimeouts:
+      return S_OK;
+    case kDispId_SetClientCertificate:
+      return S_OK;
+    case kDispId_SetAutoLogonPolicy:
+      return S_OK;
+    case kDispId_ResponseHeader: {
+      // ResponseHeader(index) — dispatch as getter
+      if (pVarResult) { pVarResult->vt = VT_BSTR; pVarResult->bstrVal = SysAllocString(L""); }
+      return S_OK;
+    }
+    default:
+      Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Invoke unhandled DISPID=%ld returning S_OK",
+          static_cast<long>(dispIdMember));
+      return S_OK;
+  }
 }
 
 // ============================================================================
 // IWinHttpRequest — vtable slots [7..25]
 // ============================================================================
 
-static HRESULT STDMETHODCALLTYPE Stub_SetProxy(void*, long, VARIANT, VARIANT) { return S_OK; }
+static HRESULT STDMETHODCALLTYPE Stub_SetProxy(void*, long, VARIANT, VARIANT) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] SetProxy called");
+  return S_OK;
+}
 
-static HRESULT STDMETHODCALLTYPE Stub_SetCredentials(void*, BSTR, BSTR, long) { return S_OK; }
+// SetCredentials — present in Windows IWinHttpRequest but absent from the Xbox One
+// interface the game actually uses. Kept for reference; not in the vtable.
+__attribute__((unused))
+static HRESULT STDMETHODCALLTYPE Stub_SetCredentials(void*, BSTR, BSTR, long) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] SetCredentials called");
+  return S_OK;
+}
 
 static HRESULT STDMETHODCALLTYPE Stub_Open(void* pThis, BSTR Method, BSTR Url, VARIANT) {
   auto* self = SELF(pThis);
@@ -122,16 +342,18 @@ static HRESULT STDMETHODCALLTYPE Stub_Open(void* pThis, BSTR Method, BSTR Url, V
   self->m_responseBody.clear();
   self->m_responseHeaders.clear();
   self->m_statusCode = 0;
-  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Open %ls %ls", Method ? Method : L"(null)", Url ? Url : L"(null)");
+  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] Open %ls %ls", Method ? Method : L"(null)", Url ? Url : L"(null)");
   return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_SetRequestHeader(void* pThis, BSTR Header, BSTR Value) {
   if (Header && Value) SELF(pThis)->m_requestHeaders[Header] = Value;
+  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] SetRequestHeader %ls: %ls", Header ? Header : L"(null)", Value ? Value : L"(null)");
   return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_GetResponseHeader(void* pThis, BSTR Header, BSTR* Value) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] GetResponseHeader called");
   if (!Value) return E_POINTER;
   *Value = nullptr;
   auto* self = SELF(pThis);
@@ -153,6 +375,7 @@ static HRESULT STDMETHODCALLTYPE Stub_GetAllResponseHeaders(void* pThis, BSTR* H
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] Send (vtbl, url=%ls)", SELF(pThis)->m_url.empty() ? L"(none)" : SELF(pThis)->m_url.c_str());
   auto* self = SELF(pThis);
   CURL* curl = curl_easy_init();
   if (!curl) return E_FAIL;
@@ -160,7 +383,7 @@ static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
   std::string url = WideToUtf8(self->m_url.c_str());
   std::string method = WideToUtf8(self->m_method.c_str());
 
-  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Send %s %s", method.c_str(), url.c_str());
+  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] Send %s %s", method.c_str(), url.c_str());
 
   curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
   if (_stricmp(method.c_str(), "POST") == 0)
@@ -209,16 +432,19 @@ static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_get_Status(void* pThis, long* Status) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] get_Status called (status=%ld)", SELF(pThis)->m_statusCode);
   if (Status) *Status = SELF(pThis)->m_statusCode;
   return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_get_StatusText(void*, BSTR* S) {
-  if (S) *S = nullptr;
+  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] get_StatusText called");
+  if (S) *S = SysAllocString(L"OK");
   return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_get_ResponseText(void* pThis, BSTR* Body) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] get_ResponseText called");
   if (!Body) return E_POINTER;
   *Body = nullptr;
   auto* self = SELF(pThis);
@@ -253,7 +479,7 @@ static HRESULT STDMETHODCALLTYPE Stub_get_ResponseBody(void* pThis, VARIANT* Bod
 
 static HRESULT STDMETHODCALLTYPE Stub_get_ResponseStream(void*, VARIANT* V) {
   if (V) VariantInit(V);
-  return E_NOTIMPL;
+  return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE Stub_get_Option(void*, long, VARIANT* V) {
   if (V) VariantInit(V);
@@ -261,6 +487,7 @@ static HRESULT STDMETHODCALLTYPE Stub_get_Option(void*, long, VARIANT* V) {
 }
 static HRESULT STDMETHODCALLTYPE Stub_put_Option(void*, long, VARIANT) { return S_OK; }
 static HRESULT STDMETHODCALLTYPE Stub_WaitForResponse(void*, VARIANT, VARIANT_BOOL* S) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] WaitForResponse called");
   if (S) *S = VARIANT_TRUE;
   return S_OK;
 }
@@ -270,10 +497,10 @@ static HRESULT STDMETHODCALLTYPE Stub_SetClientCertificate(void*, BSTR) { return
 static HRESULT STDMETHODCALLTYPE Stub_SetAutoLogonPolicy(void*, long) { return S_OK; }
 
 // ============================================================================
-// Static vtable — 26 slots, COM ABI exact layout
+// Static vtable — 25 slots for Xbox One IWinHttpRequest (no SetCredentials)
 // ============================================================================
 
-static void* s_vtbl[26] = {
+static void* s_vtbl[25] = {
     (void*)Stub_QueryInterface,       // [0]  IUnknown
     (void*)Stub_AddRef,               // [1]
     (void*)Stub_Release,              // [2]
@@ -281,25 +508,24 @@ static void* s_vtbl[26] = {
     (void*)Stub_GetTypeInfo,          // [4]
     (void*)Stub_GetIDsOfNames,        // [5]
     (void*)Stub_Invoke,               // [6]
-    (void*)Stub_SetProxy,             // [7]  IWinHttpRequest
-    (void*)Stub_SetCredentials,       // [8]
-    (void*)Stub_Open,                 // [9]
-    (void*)Stub_SetRequestHeader,     // [10]
-    (void*)Stub_GetResponseHeader,    // [11]
-    (void*)Stub_GetAllResponseHeaders,// [12]
-    (void*)Stub_Send,                 // [13]
-    (void*)Stub_get_Status,           // [14]
-    (void*)Stub_get_StatusText,       // [15]
-    (void*)Stub_get_ResponseText,     // [16]
-    (void*)Stub_get_ResponseBody,     // [17]
-    (void*)Stub_get_ResponseStream,   // [18]
-    (void*)Stub_get_Option,           // [19]
-    (void*)Stub_put_Option,           // [20]
-    (void*)Stub_WaitForResponse,      // [21]
-    (void*)Stub_Abort,                // [22]
-    (void*)Stub_SetTimeouts,          // [23]
-    (void*)Stub_SetClientCertificate, // [24]
-    (void*)Stub_SetAutoLogonPolicy,   // [25]
+    (void*)Stub_SetProxy,             // [7]  IWinHttpRequest (XB1: no SetCredentials)
+    (void*)Stub_Open,                 // [8]
+    (void*)Stub_SetRequestHeader,     // [9]
+    (void*)Stub_GetResponseHeader,    // [10]
+    (void*)Stub_GetAllResponseHeaders,// [11]
+    (void*)Stub_Send,                 // [12]
+    (void*)Stub_get_Status,           // [13]
+    (void*)Stub_get_StatusText,       // [14]
+    (void*)Stub_get_ResponseText,     // [15]
+    (void*)Stub_get_ResponseBody,     // [16]
+    (void*)Stub_get_ResponseStream,   // [17]
+    (void*)Stub_get_Option,           // [18]
+    (void*)Stub_put_Option,           // [19]
+    (void*)Stub_WaitForResponse,      // [20]
+    (void*)Stub_Abort,                // [21]
+    (void*)Stub_SetTimeouts,          // [22]
+    (void*)Stub_SetClientCertificate, // [23]
+    (void*)Stub_SetAutoLogonPolicy,   // [24]
 };
 
 // ============================================================================

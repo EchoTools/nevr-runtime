@@ -18,10 +18,10 @@ typedef long WinHttpRequestAutoLogonPolicy;
 /// Uses a hand-rolled vtable to guarantee COM ABI layout. MinGW's C++ vtable
 /// includes virtual destructors and RTTI entries that shift method offsets,
 /// breaking the COM interface the game expects. The manual vtable has exactly
-/// 26 function pointers in the correct order:
+/// 25 function pointers for the Xbox One IWinHttpRequest (no SetCredentials):
 ///   [0-2]   IUnknown:        QueryInterface, AddRef, Release
 ///   [3-6]   IDispatch:       GetTypeInfoCount, GetTypeInfo, GetIDsOfNames, Invoke
-///   [7-25]  IWinHttpRequest: SetProxy .. SetAutoLogonPolicy
+///   [7-24]  IWinHttpRequest: SetProxy .. SetAutoLogonPolicy
 class WinHttpRequestStub {
  public:
   WinHttpRequestStub();
