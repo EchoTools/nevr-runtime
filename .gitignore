@@ -136,3 +136,6 @@ dump.rdb
 # The tree is empty by default; only the README is tracked.
 /modules/*
 !/modules/README.md
+
+# Local Claude Code assets (private hardening tooling) — never commit
+.claude/
