@@ -106,6 +106,12 @@ VOID PatchEnableHeadless(PVOID pGame) {
   // the game's own renderer-disabled branch (it backfills CEngine+0x2cec0 itself).
   ForceHeadlessSkip(HEADLESS_ENGINE_RENDER_INIT, "renderer init skipped");
 
+  // Skip GUI subsystem init (fcn.140f92b70) — the next gate after renderer. It
+  // creates GPU resources (crashes N7 @ 0x1413581E4 on the null device) and sets
+  // the GUI-ready flag; skipping it keeps that flag clear so all font/GUI resource
+  // loads early-return. Reproduces the game's own "no renderer -> no GUI" branch.
+  ForceHeadlessSkip(HEADLESS_GUI_INIT, "GUI subsystem init skipped");
+
   // Skip console creation if -noconsole was specified
   if (g_noConsole) {
     return;

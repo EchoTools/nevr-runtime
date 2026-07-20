@@ -162,6 +162,22 @@ constexpr unsigned char HEADLESS_DX12_INIT_PATCH = 0xEB;   // jmp rel8 (same dis
 /// Force je(0x74)->jmp(0xEB), same rel8 displacement 0x31, so headless takes it.
 constexpr uintptr_t HEADLESS_ENGINE_RENDER_INIT = 0x154B0E4;
 
+/// Ground-truth VA 0x14154b38f (RVA 0x154b38f): the GUI-subsystem-init gate in the
+/// same CEngine init (FUN_14154a950). GUI Initialize (0x140f92b70, single caller
+/// here) creates GPU resources (fcn.1405933c0 -> the crashing fcn.14053f170) and
+/// sets the "GUI ready" flag DAT_1420db9b1. The call is natively gated by r15d,
+/// which is set to 1 (0x14154b345) ONLY when the renderer-enable bit 0x1 at
+/// CEngine+0x2cfec AND renderer-status bit 16 at CEngine+0x2cff0 are both set:
+///   14154b38c: test %r15d,%r15d
+///   14154b38f: je   0x14154b3d6        ; r15d==0 -> game's own "no renderer -> skip GUI init" branch
+///   14154b3d1: call 0x140f92b70        ; r15d!=0 -> GUI init (GPU resource create, asserts no GPU)
+/// Skipping GUI init keeps DAT_1420db9b1=0, so ALL font/GUI resource loads
+/// (fcn.140f90990, gui.cpp) early-return instead of creating GPU resources against
+/// the null device (N7 crash @ 0x1413581E4). A dedicated server has no UI, so this
+/// reproduces the game's own headless GUI-absent path. Force je(0x74)->jmp(0xEB),
+/// same rel8 displacement 0x45. Prologue-VALIDATED.
+constexpr uintptr_t HEADLESS_GUI_INIT = 0x154B38F;
+
 // ============================================================================
 // Server Global GameSpace Crash Fix
 // ============================================================================
