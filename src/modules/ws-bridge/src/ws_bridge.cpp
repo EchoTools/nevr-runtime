@@ -66,8 +66,11 @@ static void AppendLE64(std::string& buf, uint64_t val) {
 }
 
 static std::string BuildLoginRequest(uint64_t discordId) {
-  // Platform: OVR_ORG = 4 (Go iota: XPlatformIdSize=0, STM=1, PSN=2, XBX=3, OVR_ORG=4)
-  uint64_t platformCode = 4;
+  // Platform: DSC = 2 (Go iota: XPlatformIdSize=0, STM=1, PSN/DSC=2, XBX=3, OVR_ORG=4)
+  // PSN=2 slot is reused for DSC by PatchDscProvider (xpid_patch.cpp) which
+  // rewrites "PSN"->"DSC" in the game's string tables so all ~70+ inlined
+  // format switches produce "DSC-" from provider_id 2.
+  uint64_t platformCode = 2;
   uint64_t accountId = discordId;
 
   // LoginProfile JSON — matches the game's SNSLogInRequestv2 format
@@ -279,7 +282,7 @@ void InstallWebSocketBridge() {
                         std::string loginMsg = BuildLoginRequest(discordId);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         Log(EchoVR::LogLevel::Info,
-                            "[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)",
+                            "[NEVR.WS] Injected LoginRequest (DSC-%llu, %zu bytes)",
                             (unsigned long long)discordId, loginMsg.size());
                       }
 
@@ -321,8 +324,8 @@ void InstallWebSocketBridge() {
                           // Generate a dummy session UUID (non-zero)
                           payload[0] = 0x4E; payload[1] = 0x45; payload[2] = 0x56; payload[3] = 0x52; // "NEVR"
                           payload[4] = 0x53; payload[5] = 0x52; payload[6] = 0x56; payload[7] = 0x52; // "SRVR"
-                          // PlatformCode: OVR_ORG = 4
-                          uint64_t platformCode = 4;
+                          // PlatformCode: DSC = 2
+                          uint64_t platformCode = 2;
                           memcpy(payload + 16, &platformCode, 8);
                           // AccountId: the server's Discord ID
                           memcpy(payload + 24, &discordId, 8);
@@ -442,7 +445,7 @@ void InstallWebSocketBridge() {
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         Log(EchoVR::LogLevel::Info,
                             "[NEVR.WS] Injected LoginRequest on config connection "
-                            "(OVR-ORG-%llu, %zu bytes)",
+                            "(DSC-%llu, %zu bytes)",
                             (unsigned long long)discordId, loginMsg.size());
                       }
                       if (rmsg->binary) {
