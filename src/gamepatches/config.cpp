@@ -353,12 +353,21 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
 //   https:// URLs → nevr_http_uri (HTTP API endpoint)
 static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
   if (result == NULL || keyName == NULL) return result;
-  if (strstr(result, "readyatdawn.com") == NULL) return result;
   if (g_earlyConfigPtr == NULL) return result;
+
+  bool isWebSocket = (strstr(result, "wss://") == result || strstr(result, "ws://") == result);
+  bool isReadyAtDawn = (strstr(result, "readyatdawn.com") != NULL);
+
+  // Redirect all WebSocket URLs through the bridge, not just readyatdawn.com ones.
+  // The server's config response may overwrite service hosts with non-RaD URLs
+  // (e.g. echovrce.com), and those need bridge routing too — the game's native
+  // Schannel/Wine GnuTLS WebSocket can't handle modern TLS.
+  // For https:// URLs, only redirect known-dead readyatdawn.com endpoints.
+  if (!isWebSocket && !isReadyAtDawn) return result;
 
   // Select the right config key based on scheme
   const CHAR* configKey;
-  if (strstr(result, "wss://") == result || strstr(result, "ws://") == result) {
+  if (isWebSocket) {
     configKey = "nevr_socket_uri";
   } else {
     configKey = "nevr_http_uri";
@@ -374,8 +383,7 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
   using GetPortFn = uint16_t (*)();
   auto isActive = (IsActiveFn)ResolveModuleProc("WsBridge_IsActive");
   auto getPort = (GetPortFn)ResolveModuleProc("WsBridge_GetPort");
-  if (isActive && isActive() &&
-      (strstr(result, "wss://") == result || strstr(result, "ws://") == result)) {
+  if (isActive && isActive() && isWebSocket) {
     snprintf(redirected, sizeof(redirected), "ws://127.0.0.1:%u", getPort ? getPort() : 0);
   } else {
     snprintf(redirected, sizeof(redirected), "%s", target);
@@ -388,6 +396,13 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
 CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValue, BOOL reportFailure) {
   // Call the original first
   CHAR* result = EchoVR::JsonValueAsString(root, keyName, defaultValue, reportFailure);
+
+  // Diagnostic: log every config key lookup so we can trace service-host reads
+  // (Debug level — enable via log_filter config for investigations)
+  if (keyName != NULL) {
+    Log(EchoVR::LogLevel::Debug, "[NEVR.CONFIG] JsonValueAsString key='%s' result='%s' default='%s'",
+        keyName, result ? result : "(null)", defaultValue ? defaultValue : "(null)");
+  }
 
   // Redirect any readyatdawn.com service URLs to echovrce.com
   result = RedirectServiceUrl(keyName, result);

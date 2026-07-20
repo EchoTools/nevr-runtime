@@ -228,6 +228,16 @@ constexpr uintptr_t HEADLESS_RENDER_SETUP = 0x154B683;
 /// [RCX+0x54] = [CEngine+0x2cfec].
 constexpr uintptr_t CENGINE_CONFIG_COPY = 0x1547360;
 
+/// Address: SYSNET internet-connectivity check (fcn.1401f6fa0, 124 bytes)
+/// Called from fcn.140157fb0 (multiplayer init orchestrator) to verify
+/// internet connectivity before loading server support and setting service hosts.
+/// Uses CoCreateInstance(INetworkListManager) + InternetGetConnectedState.
+/// In headless/server mode under Wine, this fails → NoNetwork transition →
+/// BeginMultiplayer never completes. Hook to always return TRUE.
+/// Return type: int64_t (1 = connected, 0 = not connected)
+/// Prologue: 48 89 5c 24 08 57 48 83 ec 20 (MinHook-safe: 10 bytes)
+constexpr uintptr_t SYSNET_CHECK = 0x1F6FA0;
+
 // ============================================================================
 // Server Global GameSpace Crash Fix
 // ============================================================================

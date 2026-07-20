@@ -187,6 +187,31 @@ VOID PatchEnableHeadless(PVOID pGame) {
   // @ 0x14056d560). Force jne->jmp to take the native renderer-disabled branch.
   ForceHeadlessSkip(HEADLESS_RENDER_SETUP, 0x75, "renderer setup skipped");
 
+  // Hook the SYSNET internet-connectivity check to always return TRUE in server
+  // mode.  SYSNET (fcn.1401f6fa0) is called from fcn.140157fb0 (the multiplayer
+  // init orchestrator) to verify internet connectivity before calling
+  // LoadServerSupport / setting login_host / TcpBroadcasterListen.  Under Wine
+  // with no real network manager (NLM), CoCreateInstance(INetworkListManager)
+  // returns a stub, InternetGetConnectedState reports no internet, and the game
+  // transitions to NoNetwork — which interrupts BeginMultiplayer before it
+  // reaches LoadServerSupport and the login/transaction host setters.  Hooking
+  // SYSNET to always return TRUE lets the orchestrator proceed through the full
+  // multiplayer init chain (LoadServerSupport → ServerLib factory → ServerDB
+  // registration) without the NoNetwork detour.
+  {
+    typedef int64_t (*SysNetCheckFn)();
+    static const auto kSysNetHook = +[]() -> int64_t {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.HEADLESS] SYSNET check — returning TRUE (internet-connected) for server mode");
+      return 1;
+    };
+    SysNetCheckFn target =
+        reinterpret_cast<SysNetCheckFn>(EchoVR::g_GameBaseAddress + PatchAddresses::SYSNET_CHECK);
+    PatchDetour(&target, reinterpret_cast<PVOID>(static_cast<SysNetCheckFn>(kSysNetHook)));
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.HEADLESS] SYSNET check hooked — will always report internet-connected");
+  }
+
   // Skip console creation if -noconsole was specified
   if (g_noConsole) {
     return;

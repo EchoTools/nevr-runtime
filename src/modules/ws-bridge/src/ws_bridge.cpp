@@ -310,7 +310,9 @@ void InstallWebSocketBridge() {
 
                         // Server mode: fake a LoginSuccess to advance past login gate.
                         // The GameServerLib handles its own auth to ServerDB separately.
-                        if (g_isServer && connIdx > 0) {
+                        // connIdx >= 0 covers both the config connection (0) and
+                        // explicit login connections (>0).
+                        if (g_isServer && connIdx >= 0) {
                           Log(EchoVR::LogLevel::Info,
                               "[NEVR.WS] Server mode — injecting fake LoginSuccess to bypass login gate");
                           static const uint64_t SYM_LOGIN_SUCCESS = 0xa5acc1a90d0cce47;
@@ -390,6 +392,58 @@ void InstallWebSocketBridge() {
                         Log(EchoVR::LogLevel::Info,
                             "[NEVR.WS] FRIEND LIST: online=%u busy=%u offline=%u sent=%u recv=%u",
                             non, nbusy, noff, nsent, nrecv);
+                      }
+                      // Inject LoginRequest on config connection (conn=0) after first
+                      // server→game message (config data).  The server at /spr sends
+                      // config then waits for a login request; if none arrives within
+                      // ~5s it closes the connection.  Injecting here ensures login
+                      // proceeds even if the game never opens a second connection for
+                      // login_host (e.g. because the server config overwrote the URL
+                      // with a non-readyatdawn.com value before the redirect could fire).
+                      if (connIdx == 0 && !pairPtr->loginInjected && pairPtr->remoteOpen) {
+                        pairPtr->loginInjected = true;
+
+                        // Set CNSUser login state via pnsrad.dll's Users() singleton.
+                        // On the config connection the user may not exist yet; if so,
+                        // the LoginRequest is still sent — the LoginFailure handler
+                        // above will inject a fake LoginSuccess in server mode.
+                        HMODULE hPnsrad = GetModuleHandleA("pnsrad.dll");
+                        if (hPnsrad) {
+                          typedef void* (*UsersFn)();
+                          auto Users = (UsersFn)GetProcAddress(hPnsrad, "Users");
+                          if (Users) {
+                            auto* usersObj = (uint8_t*)Users();
+                            if (usersObj) {
+                              uint64_t userCount = *(uint64_t*)(usersObj + 0x398);
+                              uint8_t** bufCtx = *(uint8_t***)(usersObj + 0x368);
+                              if (userCount > 0 && bufCtx && *bufCtx) {
+                                uint8_t* user = *bufCtx;
+                                uint64_t* loginState = (uint64_t*)(user + 0x90);
+                                uint32_t* stateFlags = (uint32_t*)(user + 0x9c);
+                                Log(EchoVR::LogLevel::Info,
+                                    "[NEVR.WS] CNSUser BEFORE: state=0x%llx flags=0x%x",
+                                    (unsigned long long)*loginState, *stateFlags);
+                                *loginState = (*loginState & ~0xFULL) | 2;
+                                *stateFlags = 0x04;
+                                Log(EchoVR::LogLevel::Info,
+                                    "[NEVR.WS] CNSUser AFTER:  state=0x%llx flags=0x%x",
+                                    (unsigned long long)*loginState, *stateFlags);
+                              } else {
+                                Log(EchoVR::LogLevel::Info,
+                                    "[NEVR.WS] CNSUser not yet created (count=%llu) — "
+                                    "LoginRequest sent without state prep; LoginFailure handler will inject fake success",
+                                    (unsigned long long)userCount);
+                              }
+                            }
+                          }
+                        }
+
+                        std::string loginMsg = BuildLoginRequest(discordId);
+                        pairPtr->remoteWs->sendBinary(loginMsg);
+                        Log(EchoVR::LogLevel::Info,
+                            "[NEVR.WS] Injected LoginRequest on config connection "
+                            "(OVR-ORG-%llu, %zu bytes)",
+                            (unsigned long long)discordId, loginMsg.size());
                       }
                       if (rmsg->binary) {
                         gameWsPtr->sendBinary(rmsg->str);
