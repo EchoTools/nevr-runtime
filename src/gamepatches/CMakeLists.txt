@@ -163,6 +163,11 @@ if(BUILD_TESTING)
       ${CMAKE_SOURCE_DIR}/src/common
     )
     target_link_libraries(test_xpid_patch PRIVATE GTest::gtest GTest::gtest_main)
-    gtest_discover_tests(test_xpid_patch)
+    # DISCOVERY_MODE PRE_TEST: defer test discovery to ctest-invocation time instead
+    # of running the cross-compiled .exe as a POST_BUILD step. The default POST_BUILD
+    # discovery executes the Windows binary on the Linux build host under Wine with a
+    # 5s timeout, which the Wine cold-start exceeds — failing the build even though the
+    # tests themselves pass. PRE_TEST keeps `cmake --build` from launching Wine.
+    gtest_discover_tests(test_xpid_patch DISCOVERY_MODE PRE_TEST)
   endif()
 endif()

@@ -179,9 +179,26 @@ test-plugins-verbose:
 test-auth-groundtruth:
     cd tests/plugins && go test -v -run "TestGroundTruth_No|TestGroundTruth_Auth" ./...
 
-# Run C++ auth unit tests under Wine (cross-compiled GTest)
-test-auth-unit: build
-    wine build/{{preset}}/bin/test_token_auth.exe 2>/dev/null || echo "GTest binary not found (build with -DBUILD_TESTING=ON)"
+# Run the C++ GTest suite under Wine (cross-compiled). Fail-close: exits nonzero if
+# the GTest binary cannot be built or found, or if any test fails. Builds the test
+# target with -DBUILD_TESTING=ON (the default presets do not enable it). Currently
+# covers test_xpid_patch — the only C++ GTest target in the tree; add new GTest
+# executables here as they land. (The prior recipe pointed at a never-built
+# test_token_auth.exe and masked the miss with `|| echo`.)
+test-auth-unit:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    unset VCPKG_ROOT
+    cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
+        || cmake --preset {{ preset }} -DBUILD_TESTING=ON
+    cmake --build --preset {{ preset }} --target test_xpid_patch
+    bin="build/{{ preset }}/bin/test_xpid_patch.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        echo "       (is 'gtest' available in vcpkg for triplet x64-mingw-static?)" >&2
+        exit 1
+    fi
+    wine "$bin"
 
 # Run auth integration tests (needs game binary + MCP harness)
 test-auth-integration:
@@ -189,6 +206,25 @@ test-auth-integration:
 
 # Run all auth tests
 test-auth: test-auth-groundtruth test-auth-unit
+
+# --- Verify (closed-loop gate) ---
+
+# Aggregate verify gate for the all-the-way-down canon: build everything, then run
+# the hardened C++ GTest suite under Wine. Fail-close: exits nonzero on any failure.
+# Success derives from the real compiler/linker + test artifacts, not a proxy
+# [day-one-kit §5]. EXCLUDES the Go integration suites — the evr-test-harness
+# dependency is excised [RULINGS.md 2026-07-20 "Test harness excised"].
+verify:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    unset VCPKG_ROOT
+    just build
+    # `just build` filters its output through grep and always exits 0, so its exit
+    # code is a proxy, not a pass/fail signal. Re-run the real build to derive success
+    # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
+    cmake --build --preset {{ preset }}
+    just test-auth-unit
+    echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)
 test-token-auth config="echovr/_local/config.json":
