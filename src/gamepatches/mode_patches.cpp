@@ -24,19 +24,24 @@
 /// branch). In server mode the bits are set, so the game runs the GPU init and
 /// asserts. Forcing `je`(0x74)->`jmp`(0xEB) — same rel8 displacement — makes the
 /// game take its native graphics-disabled branch. Prologue-VALIDATED: patches
-/// only when the current byte is the expected `je` opcode (never blind-write).
-static VOID ForceHeadlessSkip(uintptr_t offset, const char* what) {
+/// only when the current byte is the expected conditional-jump opcode (never
+/// blind-write). `expectedOpcode` is the game's conditional jump — `je` (0x74)
+/// for a direct bit test, `jne` (0x75) where the game inverts the flag first
+/// (`not`/`test`/`jne`). Both become an unconditional `jmp` (0xEB) with the same
+/// rel8 displacement, forcing the skip branch.
+static VOID ForceHeadlessSkip(uintptr_t offset, BYTE expectedOpcode, const char* what) {
   const BYTE* site = reinterpret_cast<const BYTE*>(EchoVR::g_GameBaseAddress + offset);
-  if (*site == 0x74) {
+  if (*site == expectedOpcode) {
     const BYTE jmp = 0xEB;
     ProcessMemcpy(EchoVR::g_GameBaseAddress + offset, const_cast<BYTE*>(&jmp), 1);
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.HEADLESS] %s — forced device-free branch (je->jmp) at +0x%lx",
-        what, static_cast<unsigned long>(offset));
+        "[NEVR.HEADLESS] %s — forced device-free branch (0x%02x->jmp) at +0x%lx",
+        what, static_cast<unsigned>(expectedOpcode), static_cast<unsigned long>(offset));
   } else {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.HEADLESS] %s — prologue mismatch at +0x%lx (got 0x%02x, want 0x74) — NOT patched",
-        what, static_cast<unsigned long>(offset), static_cast<unsigned>(*site));
+        "[NEVR.HEADLESS] %s — prologue mismatch at +0x%lx (got 0x%02x, want 0x%02x) — NOT patched",
+        what, static_cast<unsigned long>(offset), static_cast<unsigned>(*site),
+        static_cast<unsigned>(expectedOpcode));
   }
 }
 
@@ -104,13 +109,13 @@ VOID PatchEnableHeadless(PVOID pGame) {
   // Skip the CEngine renderer init (fcn.141549ec0) — the next graphics gate after
   // the D3D12 skip. Bit 0x1 at CEngine+0x2cfec gates it; forcing the je->jmp takes
   // the game's own renderer-disabled branch (it backfills CEngine+0x2cec0 itself).
-  ForceHeadlessSkip(HEADLESS_ENGINE_RENDER_INIT, "renderer init skipped");
+  ForceHeadlessSkip(HEADLESS_ENGINE_RENDER_INIT, 0x74, "renderer init skipped");
 
   // Skip GUI subsystem init (fcn.140f92b70) — the next gate after renderer. It
   // creates GPU resources (crashes N7 @ 0x1413581E4 on the null device) and sets
   // the GUI-ready flag; skipping it keeps that flag clear so all font/GUI resource
   // loads early-return. Reproduces the game's own "no renderer -> no GUI" branch.
-  ForceHeadlessSkip(HEADLESS_GUI_INIT, "GUI subsystem init skipped");
+  ForceHeadlessSkip(HEADLESS_GUI_INIT, 0x74, "GUI subsystem init skipped");
 
   // Skip the render-submit-context init cluster (fcn.14102f630) — the LAST bit-0x1
   // gate in FUN_14154a950. It is gated by the same renderer-enable bit 0x1 at
@@ -120,7 +125,16 @@ VOID PatchEnableHeadless(PVOID pGame) {
   // CRenderSubmitContext::RequestBuffer) divides by a zero GPU-derived granularity
   // with no device (N8, INT_DIVIDE_BY_ZERO @ 0x1405bc52a). Forcing the je->jmp takes
   // the game's own renderer-disabled branch so the render-submit path never runs.
-  ForceHeadlessSkip(HEADLESS_RENDER_SUBMIT_INIT, "render-submit-context init skipped");
+  ForceHeadlessSkip(HEADLESS_RENDER_SUBMIT_INIT, 0x74, "render-submit-context init skipped");
+
+  // Skip the renderer-setup path in FUN_14154b670 (fcn.14154da10 -> fcn.14056d560,
+  // a float getter that derefs a null render object with no device). Gated by the
+  // same renderer-enable bit 0x1 at CEngine+0x2cfec, but via the inverted-test idiom
+  // (`not`/`test`/`jne`), so the game's skip branch is a `jne` (0x75) not a `je`.
+  // Same root cause as the render-submit gate: bit 0x1 is left SET by the branch-force
+  // strategy, so this renderer-gated function runs and crashes (N9, ACCESS_VIOLATION
+  // @ 0x14056d560). Force jne->jmp to take the native renderer-disabled branch.
+  ForceHeadlessSkip(HEADLESS_RENDER_SETUP, 0x75, "renderer setup skipped");
 
   // Skip console creation if -noconsole was specified
   if (g_noConsole) {

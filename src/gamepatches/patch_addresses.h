@@ -198,6 +198,22 @@ constexpr uintptr_t HEADLESS_GUI_INIT = 0x154B38F;
 /// the render-submit path never runs. Skip, not stub. Prologue-VALIDATED.
 constexpr uintptr_t HEADLESS_RENDER_SUBMIT_INIT = 0x154D7E4;
 
+/// Ground-truth VA 0x14154b683 (RVA 0x154b683): the renderer-enable gate in
+/// FUN_14154b670, using the inverted-test idiom (opcode `jne` 0x75, not `je`):
+///   14154b676: mov  0x2cfec(%rcx),%eax   ; graphics-enable word [CEngine+0x2cfec]
+///   14154b67f: not  %eax
+///   14154b681: test $0x1,%al             ; renderer-enable bit 0x1
+///   14154b683: jne  0x14154b6dd          ; bit CLEAR -> skip renderer work (native branch)
+///   14154b6a9: call 0x14154da10          ; bit SET  -> runs -> fcn.14056d560 null deref
+/// fcn.14056d560 is a float getter (`movss 0x1258(%rcx),%xmm0`) that dereferences a
+/// null render object (RCX from [CEngine+0x2cee0]) when no device exists ->
+/// ACCESS_VIOLATION @ 0x14056d560 (N9). Same root cause as N8: bit 0x1 is left SET by
+/// the branch-force strategy, so this renderer-gated function runs. Verified by the N9
+/// crash stack: frame #2 return = 0x14154b6ae (right after `call 0x14154da10`), #13 in
+/// GAME_MAIN. Force jne(0x75)->jmp(0xEB), same rel8 displacement 0x58, so headless takes
+/// the game's native renderer-disabled branch. Skip, not stub. Prologue-VALIDATED.
+constexpr uintptr_t HEADLESS_RENDER_SETUP = 0x154B683;
+
 // ============================================================================
 // Server Global GameSpace Crash Fix
 // ============================================================================
