@@ -214,6 +214,20 @@ constexpr uintptr_t HEADLESS_RENDER_SUBMIT_INIT = 0x154D7E4;
 /// the game's native renderer-disabled branch. Skip, not stub. Prologue-VALIDATED.
 constexpr uintptr_t HEADLESS_RENDER_SETUP = 0x154B683;
 
+/// Address: CEngineConfig::operator= (0x141547360, FUN_141547360)
+/// Called from CRenderPipeline::InitStages — single caller (ReVault-verified)
+/// to copy the source engine config struct into CEngine+0x2cf98. Copies ~0x98
+/// bytes via MOVUPS/MOV/MOVSD, including the 32-bit graphics-enable word at
+/// offset 0x54 into the copy (== CEngine+0x2cfec). Hooked in server mode to
+/// clear renderer-enable bit 0x1 AFTER the copy, so ALL downstream bit-0x1
+/// tests in the CEngine init take their native je device-free branches
+/// uniformly — covering render-worker threads that per-gate branch-force
+/// patches cannot reach.
+/// Prologue: 48 89 5c 24 08 57 48 83 ec 20 (MinHook-safe: 10 bytes before
+/// first branch). RCX at entry = CEngine+0x2cf98 (dest); bit clear is at
+/// [RCX+0x54] = [CEngine+0x2cfec].
+constexpr uintptr_t CENGINE_CONFIG_COPY = 0x1547360;
+
 // ============================================================================
 // Server Global GameSpace Crash Fix
 // ============================================================================

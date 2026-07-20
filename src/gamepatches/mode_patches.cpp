@@ -46,6 +46,43 @@ static VOID ForceHeadlessSkip(uintptr_t offset, BYTE expectedOpcode, const char*
 }
 
 // ============================================================================
+// CEngineConfig copy hook — root-cause bit-0x1 clear for headless render
+// ============================================================================
+
+/// CEngineConfig::operator= (FUN_141547360) copies the source engine config
+/// struct into CEngine+0x2cf98. Offset 0x54 in the copy is the 32-bit
+/// graphics-enable word at CEngine+0x2cfec, which includes renderer-enable
+/// bit 0x1. In server mode the source config has bit 0x1 SET; clearing it
+/// AFTER the copy makes the ENTIRE render subsystem take the game's native
+/// device-free path uniformly — covering render-worker threads that per-gate
+/// branch-force byte patches cannot reach. Single caller (ReVault-verified:
+/// CRenderPipeline::InitStages), so hooking here is safe and targeted.
+typedef VOID CEngineConfigCopyFunc(PVOID dst, PVOID src);
+static CEngineConfigCopyFunc* OriginalCEngineConfigCopy = nullptr;
+
+static VOID CEngineConfigCopyHook(PVOID dst, PVOID src) {
+  // Let the original copy complete — all fields including the graphics-enable
+  // word are written normally.
+  OriginalCEngineConfigCopy(dst, src);
+
+  if (g_isServer) {
+    // Clear renderer-enable bit 0x1 at [dst+0x54] = [CEngine+0x2cfec].
+    // The copy destination (dst = CEngine+0x2cf98) receives the full config
+    // struct from the source; offset 0x54 is the graphics-enable dword.
+    // Clearing bit 0x1 makes ALL downstream bit-0x1 gates in the CEngine
+    // init and render-worker threads take their native je device-free branches.
+    uint32_t* enableWord = reinterpret_cast<uint32_t*>(static_cast<char*>(dst) + 0x54);
+    uint32_t before = *enableWord;
+    *enableWord &= ~0x1u;
+    uint32_t after = *enableWord;
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.HEADLESS] CEngine config copy — cleared renderer bit 0x1: "
+        "0x%08x -> 0x%08x",
+        before, after);
+  }
+}
+
+// ============================================================================
 // PatchEnableHeadless — enable headless mode with console window
 // ============================================================================
 
@@ -56,6 +93,20 @@ static VOID ForceHeadlessSkip(uintptr_t offset, BYTE expectedOpcode, const char*
 /// <returns>None</returns>
 VOID PatchEnableHeadless(PVOID pGame) {
   using namespace PatchAddresses;
+
+  // Hook CEngineConfig::operator= (FUN_141547360) to clear renderer-enable
+  // bit 0x1 at [CEngine+0x2cfec] AFTER the config copy. Single-caller hook,
+  // so MinHook installed once during init and fires during CEngine boot.
+  // The bit-clear makes ALL downstream bit-0x1 gates (including on render-
+  // worker threads) take their native je device-free branches.  The per-gate
+  // branch-force byte patches below are redundant once this hook fires, but
+  // they are harmless (je->jmp when the native je is already taken) and
+  // serve as a defense-in-depth fallback.
+  OriginalCEngineConfigCopy =
+      reinterpret_cast<CEngineConfigCopyFunc*>(EchoVR::g_GameBaseAddress + CENGINE_CONFIG_COPY);
+  PatchDetour(&OriginalCEngineConfigCopy, reinterpret_cast<PVOID>(CEngineConfigCopyHook));
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.HEADLESS] CEngineConfig copy hook installed — bit-0x1 will be cleared after config copy");
 
   // Disable audio by clearing the audio enable bit (same as `-noaudio` command)
   UINT32* audioFlags = reinterpret_cast<UINT32*>(static_cast<CHAR*>(pGame) + GAME_AUDIO_FLAGS_OFFSET);
