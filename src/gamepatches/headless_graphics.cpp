@@ -79,6 +79,27 @@ static HRESULT STDMETHODCALLTYPE Stub_QueryInterface(StubUnknown* self, const GU
 static ULONG   STDMETHODCALLTYPE Stub_AddRef(StubUnknown* self);
 static ULONG   STDMETHODCALLTYPE Stub_Release(StubUnknown* self);
 
+/* Durable diagnostic: log a requested COM IID (all four GUID fields) with the
+ * stub object it was requested on and the verdict. Called only on the headless
+ * stub path (a handful of QueryInterface calls during renderer init), so it is
+ * low-frequency, not per-frame. Kept in as leave-it-better instrumentation:
+ * a future interface-refusal shows up in the JSONL log with the exact GUID. */
+static void LogStubIid(const char* ctx, const char* obj, const GUID* riid, const char* verdict) {
+    if (!riid) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.HEADLESS] %s obj=%s riid=NULL -> %s", ctx, obj, verdict);
+        return;
+    }
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.HEADLESS] %s obj=%s riid={%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X} -> %s",
+        ctx, obj, static_cast<unsigned long>(riid->Data1),
+        static_cast<unsigned>(riid->Data2), static_cast<unsigned>(riid->Data3),
+        static_cast<unsigned>(riid->Data4[0]), static_cast<unsigned>(riid->Data4[1]),
+        static_cast<unsigned>(riid->Data4[2]), static_cast<unsigned>(riid->Data4[3]),
+        static_cast<unsigned>(riid->Data4[4]), static_cast<unsigned>(riid->Data4[5]),
+        static_cast<unsigned>(riid->Data4[6]), static_cast<unsigned>(riid->Data4[7]),
+        verdict);
+}
+
 /* --- DXGI_ADAPTER_DESC (enough to satisfy GetDesc) --- */
 struct StubAdapterDesc {
     WCHAR Description[128];
@@ -126,24 +147,112 @@ static HRESULT STDMETHODCALLTYPE StubAdapter_GetDesc1(StubUnknown* self, void* p
      * Zero everything and fill the common prefix via GetDesc. */
     if (!pDesc) return E_POINTER;
     memset(pDesc, 0, 304);  /* DXGI_ADAPTER_DESC1 is ~304 bytes */
-    return StubAdapter_GetDesc(self, (StubAdapterDesc*)pDesc);
+    return StubAdapter_GetDesc(self, static_cast<StubAdapterDesc*>(pDesc));
 }
 
-static void* g_adapter_vtable[11] = {};
+static HRESULT STDMETHODCALLTYPE StubAdapter_GetDesc2(StubUnknown* self, void* pDesc) {
+    /* DXGI_ADAPTER_DESC2 shares the DESC prefix, adding Flags + two preemption-
+     * granularity enums. Zero a conservative 312 bytes (<= real struct size, so
+     * never overruns the caller's buffer) then fill the shared prefix. */
+    if (!pDesc) return E_POINTER;
+    memset(pDesc, 0, 312);
+    return StubAdapter_GetDesc(self, static_cast<StubAdapterDesc*>(pDesc));
+}
+
+/* IDXGIAdapter3::QueryVideoMemoryInfo out-parameter layout */
+struct StubVideoMemoryInfo {
+    UINT64 Budget;
+    UINT64 CurrentUsage;
+    UINT64 AvailableForReservation;
+    UINT64 CurrentReservation;
+};
+
+static HRESULT STDMETHODCALLTYPE StubAdapter_QueryVideoMemoryInfo(
+    StubUnknown*, UINT /*NodeIndex*/, UINT /*MemorySegmentGroup*/, StubVideoMemoryInfo* pInfo) {
+    if (!pInfo) return E_POINTER;
+    pInfo->Budget = 8ULL * 1024 * 1024 * 1024;   /* 8 GB budget */
+    pInfo->CurrentUsage = 0;
+    pInfo->AvailableForReservation = 4ULL * 1024 * 1024 * 1024;
+    pInfo->CurrentReservation = 0;
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE StubAdapter_SetVideoMemoryReservation(
+    StubUnknown*, UINT /*NodeIndex*/, UINT /*MemorySegmentGroup*/, UINT64 /*Reservation*/) {
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE StubAdapter_RegisterVMBudgetEvent(
+    StubUnknown*, HANDLE /*hEvent*/, DWORD* pdwCookie) {
+    if (pdwCookie) *pdwCookie = 1;
+    return S_OK;
+}
+
+/* Adapter interface IIDs. IID_IDXGIAdapter3 is runtime-confirmed as the gate
+ * (echovr cgs_dx12 refuses on it); the others are canonical DXGI IIDs and, if
+ * any is wrong, the StubAdapter_QueryInterface REFUSED log line will name it. */
+static const GUID IID_IDXGIAdapter =
+    {0x2411e7e1, 0x12ac, 0x4ccf, {0xbd, 0x14, 0x97, 0x98, 0xe8, 0x53, 0x4d, 0xc0}};
+static const GUID IID_IDXGIAdapter1 =
+    {0x29038f61, 0x3839, 0x4626, {0x91, 0xfd, 0x08, 0x68, 0x79, 0x01, 0x1a, 0x05}};
+static const GUID IID_IDXGIAdapter2 =
+    {0x0aa1ae0a, 0xfa0e, 0x4b84, {0x86, 0x44, 0xe0, 0x5f, 0xf8, 0xe5, 0xac, 0xb5}};
+static const GUID IID_IDXGIAdapter3 =
+    {0x645967a4, 0x1392, 0x4310, {0xa7, 0x98, 0x80, 0x53, 0xce, 0x3e, 0x93, 0xfd}};
+
+/* Adapter-specific QueryInterface: answers the IDXGIAdapter family (and
+ * IUnknown), NOT IDXGIFactory*. Separate from the factory's QI. */
+static HRESULT STDMETHODCALLTYPE StubAdapter_QueryInterface(StubUnknown* self, const GUID* riid, void** ppv) {
+    if (!ppv) return E_POINTER;
+    static const GUID IID_IUnknown_ =
+        {0x00000000, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+    if (memcmp(riid, &IID_IUnknown_,    sizeof(GUID)) == 0 ||
+        memcmp(riid, &IID_IDXGIAdapter,  sizeof(GUID)) == 0 ||
+        memcmp(riid, &IID_IDXGIAdapter1, sizeof(GUID)) == 0 ||
+        memcmp(riid, &IID_IDXGIAdapter2, sizeof(GUID)) == 0 ||
+        memcmp(riid, &IID_IDXGIAdapter3, sizeof(GUID)) == 0) {
+        InterlockedIncrement(&self->refcount);
+        *ppv = self;
+        LogStubIid("StubAdapter_QueryInterface", "adapter", riid, "S_OK");
+        return S_OK;
+    }
+    LogStubIid("StubAdapter_QueryInterface", "adapter", riid, "E_NOINTERFACE (REFUSED)");
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+}
+
+/* IDXGIAdapter3 full vtable (18 methods, slots 0-17); one spare slot. */
+static void* g_adapter_vtable[19] = {};
 static StubUnknown g_stub_adapter = {};
 static bool g_adapter_vtable_init = false;
 
 static void InitAdapterVtable() {
     if (g_adapter_vtable_init) return;
-    for (int i = 0; i < 11; i++)
-        g_adapter_vtable[i] = (void*)&Stub_NotImpl;
-    g_adapter_vtable[0] = (void*)&Stub_QueryInterface;
-    g_adapter_vtable[1] = (void*)&Stub_AddRef;
-    g_adapter_vtable[2] = (void*)&Stub_Release;
-    g_adapter_vtable[7] = (void*)&StubAdapter_EnumOutputs;
-    g_adapter_vtable[8] = (void*)&StubAdapter_GetDesc;
-    g_adapter_vtable[9] = (void*)&StubAdapter_CheckInterfaceSupport;
-    g_adapter_vtable[10] = (void*)&StubAdapter_GetDesc1;
+    for (int i = 0; i < 19; i++)
+        g_adapter_vtable[i] = reinterpret_cast<void*>(&Stub_NotImpl);
+    /* IUnknown */
+    g_adapter_vtable[0]  = reinterpret_cast<void*>(&StubAdapter_QueryInterface);
+    g_adapter_vtable[1]  = reinterpret_cast<void*>(&Stub_AddRef);
+    g_adapter_vtable[2]  = reinterpret_cast<void*>(&Stub_Release);
+    /* IDXGIObject [3..6]: SetPrivateData/SetPrivateDataInterface/GetPrivateData/
+     * GetParent — left as Stub_NotImpl (not exercised by the headless path). */
+    /* IDXGIAdapter */
+    g_adapter_vtable[7]  = reinterpret_cast<void*>(&StubAdapter_EnumOutputs);
+    g_adapter_vtable[8]  = reinterpret_cast<void*>(&StubAdapter_GetDesc);
+    g_adapter_vtable[9]  = reinterpret_cast<void*>(&StubAdapter_CheckInterfaceSupport);
+    /* IDXGIAdapter1 / IDXGIAdapter2 */
+    g_adapter_vtable[10] = reinterpret_cast<void*>(&StubAdapter_GetDesc1);
+    g_adapter_vtable[11] = reinterpret_cast<void*>(&StubAdapter_GetDesc2);
+    /* IDXGIAdapter3 [12..17]:
+     *  [12] RegisterHardwareContentProtectionTeardownStatusEvent -> NotImpl
+     *  [13] UnregisterHardwareContentProtectionTeardownStatus     -> NotImpl (void)
+     *  [14] QueryVideoMemoryInfo
+     *  [15] SetVideoMemoryReservation
+     *  [16] RegisterVideoMemoryBudgetChangeNotificationEvent
+     *  [17] UnregisterVideoMemoryBudgetChangeNotification          -> NotImpl (void) */
+    g_adapter_vtable[14] = reinterpret_cast<void*>(&StubAdapter_QueryVideoMemoryInfo);
+    g_adapter_vtable[15] = reinterpret_cast<void*>(&StubAdapter_SetVideoMemoryReservation);
+    g_adapter_vtable[16] = reinterpret_cast<void*>(&StubAdapter_RegisterVMBudgetEvent);
     g_stub_adapter.vtable = g_adapter_vtable;
     g_stub_adapter.refcount = 1;
     g_adapter_vtable_init = true;
@@ -186,14 +295,19 @@ static void InitFactoryVtable() {
 /* IUnknown — shared by factory and adapter */
 static HRESULT STDMETHODCALLTYPE Stub_QueryInterface(StubUnknown* self, const GUID* riid, void** ppv) {
     if (!ppv) return E_POINTER;
+    const char* obj = (self == &g_stub_factory) ? "factory"
+                    : (self == &g_stub_adapter) ? "adapter"
+                    : "unknown";
     static const GUID IID_IUnknown =
         {0x00000000, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
     if (memcmp(riid, &IID_IUnknown, sizeof(GUID)) == 0 ||
         memcmp(riid, &IID_IDXGIFactory1, sizeof(GUID)) == 0) {
         InterlockedIncrement(&self->refcount);
         *ppv = self;
+        LogStubIid("Stub_QueryInterface", obj, riid, "S_OK");
         return S_OK;
     }
+    LogStubIid("Stub_QueryInterface", obj, riid, "E_NOINTERFACE (REFUSED)");
     *ppv = nullptr;
     return E_NOINTERFACE;
 }
@@ -243,6 +357,7 @@ static HRESULT WINAPI CreateDXGIFactory1_Hook(const GUID* riid, void** ppFactory
     if (g_isHeadless) {
         InitFactoryVtable();
         if (ppFactory) *ppFactory = &g_stub_factory;
+        LogStubIid("CreateDXGIFactory1", "factory-create", riid, "stub");
         Log(EchoVR::LogLevel::Info,
             "[NEVR.HEADLESS] CreateDXGIFactory1 intercepted — returning stub factory (no GPU)");
         return S_OK;
