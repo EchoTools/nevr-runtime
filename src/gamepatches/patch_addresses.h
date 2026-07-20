@@ -130,6 +130,25 @@ constexpr size_t HEADLESS_APPLY_GRAPHICS_SIZE = 5;
 constexpr uintptr_t HEADLESS_DINPUT = 0x1055DBB;
 constexpr size_t HEADLESS_DINPUT_SIZE = 5;
 
+/// Ground-truth VA 0x14154af7f (RVA 0x154af7f): the ONLY caller of the cgs_dx12
+/// D3D12 device-init fcn.14058e7f0 (verified: single direct E8 call @ 0x14154af86).
+/// The call block is gated by graphics-enable bit 0x100 at CEngine+0x2cfec:
+///   14154af74: testl $0x100,0x2cfec(%r14)
+///   14154af7f: je    0x14154afde        ; flag clear -> game's own device-free init
+///   14154af81: call  0x1405977f0        ; flag set  -> graphics init prelude
+///   14154af86: call  0x14058e7f0        ; flag set  -> D3D12 device create (asserts, no GPU)
+///   14154afde: call  0x140599000        ; device-free init variant (je target)
+///   14154afe3: call  0x140565320        ; both paths converge here
+/// In server/headless the bit is re-set by the CEngineConfig copy at function
+/// entry (so clearing it at entry is ineffective — measured, N6), and the game
+/// runs full D3D12 init and aborts ("Unknown error while loading the game").
+/// Force je(0x74) -> jmp(0xEB), same rel8 displacement 0x5d, so the game takes
+/// its native graphics-disabled path (fcn.140599000) unconditionally. Skip, not
+/// stub — reproduces the game's own device-free branch. Prologue-VALIDATED.
+constexpr uintptr_t HEADLESS_DX12_INIT = 0x154AF7F;
+constexpr unsigned char HEADLESS_DX12_INIT_EXPECT = 0x74;  // je rel8
+constexpr unsigned char HEADLESS_DX12_INIT_PATCH = 0xEB;   // jmp rel8 (same displacement)
+
 // ============================================================================
 // Server Global GameSpace Crash Fix
 // ============================================================================

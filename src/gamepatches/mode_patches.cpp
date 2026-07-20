@@ -52,6 +52,29 @@ VOID PatchEnableHeadless(PVOID pGame) {
   static_assert(sizeof(dinputNop) == HEADLESS_DINPUT_SIZE, "HEADLESS_DINPUT patch size mismatch");
   ApplyPatch(HEADLESS_DINPUT, dinputNop, sizeof(dinputNop));
 
+  // Skip cgs_dx12 D3D12 device/factory/adapter init (fcn.14058e7f0). Its single
+  // call site is gated by the graphics-enable bit (0x100 at CEngine+0x2cfec); in
+  // server mode the bit is re-set by the config copy at function entry (measured,
+  // N6), so the game runs full D3D12 init and asserts ("Unknown error while
+  // loading the game") with no GPU. Force the game's own device-free branch
+  // (je -> jmp) so it takes its native graphics-disabled path instead of creating
+  // a device. Prologue-VALIDATED (never blind-write): only patch if the current
+  // byte is the expected `je` opcode.
+  {
+    const BYTE* gate = reinterpret_cast<const BYTE*>(EchoVR::g_GameBaseAddress + HEADLESS_DX12_INIT);
+    if (*gate == HEADLESS_DX12_INIT_EXPECT) {
+      const BYTE jmp = HEADLESS_DX12_INIT_PATCH;
+      ProcessMemcpy(EchoVR::g_GameBaseAddress + HEADLESS_DX12_INIT, const_cast<BYTE*>(&jmp), 1);
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.HEADLESS] D3D12 device init skipped — forced device-free branch at +0x%lx",
+          static_cast<unsigned long>(HEADLESS_DX12_INIT));
+    } else {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.HEADLESS] D3D12-skip prologue mismatch at +0x%lx (got 0x%02x, want 0x74) — NOT patched",
+          static_cast<unsigned long>(HEADLESS_DX12_INIT), static_cast<unsigned>(*gate));
+    }
+  }
+
   // Skip console creation if -noconsole was specified
   if (g_noConsole) {
     return;
