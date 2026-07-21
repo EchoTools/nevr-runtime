@@ -208,9 +208,6 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     PatchServerFramePacing();
   }
 
-  // Wave 0 — instrumentation hooks for binary bug detection
-  Wave0::Init((uintptr_t)EchoVR::g_GameBaseAddress);
-
   // Load external plugins from plugins/ subdirectory
   LoadPlugins();
 

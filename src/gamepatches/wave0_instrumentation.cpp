@@ -11,8 +11,12 @@
  *     This also prevents BUG #2 (CleanupPeers mass disconnect) since
  *     bad timestamps never propagate.
  *
- * 0b. CTimer_GetMilliSeconds — overflow observation (Low priority)
- *     Millisecond variant overflows after ~10675 days. Observation only.
+ * 0b. CTimer_GetMilliSeconds — overflow-safe replacement (BUG #2, High)
+ *     Original: computes µs first (×10^6) then ÷1000 — same intermediate
+ *     overflow as BUG #1 at ~10.68 days. CleanupPeers (the BUG #2 site)
+ *     calls this function, so the µs fix alone does NOT prevent BUG #2.
+ *     Fix: direct ms computation via quotient+remainder split to avoid
+ *     intermediate overflow. Does NOT call original.
  *
  * 0c. EndMultiplayer — null deref prevention (BUG #6, High)
  *     Check pointer at arg1+0x2DA0 before double-deref that crashes.
@@ -158,31 +162,52 @@ static uint64_t __fastcall GetTimeMicrosecondsHook() {
 }
 
 /* --------------------------------------------------------------------
- * Hook 0b — CTimer_GetMilliSeconds overflow detection
+ * Hook 0b — CTimer_GetMilliSeconds overflow-safe replacement (BUG #2, High)
  *
- * Millisecond variant: (perfCount * 1000) / perfFreq.
- * Overflow at INT64_MAX / 1000 = 9,223,372,036,854,775 ticks.
- * At 10MHz: ~10675 days. At 25MHz: ~4270 days. Not urgent.
- * Warn at 90% of 106-day threshold (conservative for high-freq systems).
- * 95 days = 8,208,000,000,000 ms.
+ * Original fcn.1400d0110 (ReVault-verified): computes microseconds first
+ *   (perfCount * 1000000) / perfFreq, then divides by 1000. The x10^6
+ *   intermediate overflows INT64_MAX after ~10.68 days at 10MHz QPC
+ *   (~4.3 days at 25MHz) — same overflow as BUG #1.
+ *
+ * 8 callers including CleanupPeers @ 0x140F76500 (the BUG #2 mass
+ * peer-disconnect site). The GetTimeMicroseconds fix (0a) does NOT
+ * prevent BUG #2 because CleanupPeers calls this ms variant, not the
+ * us variant — so BUG #2 was unmitigated until this fix.
+ *
+ * Fix: split into quotient + remainder to avoid intermediate overflow.
+ *   (a * 1000) / c  =  (a / c) * 1000  +  ((a % c) * 1000) / c
+ * Since perfFreq is typically 10-25MHz, (a % c) * 1000 is at most
+ * ~25 * 10^9, well within int64 range (~9.2 * 10^18).
+ *
+ * Does NOT call original — replaces computation entirely.
+ * Replicates the global override check for paused/fixed time.
  * -------------------------------------------------------------------- */
 
 using GetTimeMilliseconds_t = uint64_t(__fastcall*)();
 static GetTimeMilliseconds_t s_origGetTimeMilliseconds = nullptr;
-static volatile LONG s_overflow_ms_count = 0;
 
 static uint64_t __fastcall GetTimeMillisecondsHook() {
-    uint64_t result = s_origGetTimeMilliseconds();
-    static constexpr uint64_t WARN_THRESHOLD_MS = 8208000000000ULL;
-    if (result > WARN_THRESHOLD_MS) {
-        LONG count = InterlockedIncrement(&s_overflow_ms_count);
-        if (count == 1 || (count % 10000) == 0) {
-            Log(EchoVR::LogLevel::Warning,
-                "[wave0] CTimer_GetMilliSeconds near overflow: %llu ms (count=%ld)",
-                (unsigned long long)result, count);
-        }
+    // Replicate the original's global override check.
+    // When time is paused/fixed, the override stores microseconds.
+    // CTimer_GetMilliSeconds returns that cached us value / 1000.
+    volatile int64_t* override_flag = reinterpret_cast<volatile int64_t*>(
+        g_base + OFF_TIME_OVERRIDE_FLAG);
+    if (*override_flag != 0) {
+        uint64_t us = *reinterpret_cast<volatile uint64_t*>(
+            g_base + OFF_TIME_OVERRIDE_VALUE);
+        return us / 1000;  // ms from cached us
     }
-    return result;
+
+    LARGE_INTEGER counter;
+    QueryPerformanceCounter(&counter);
+    int64_t pc = counter.QuadPart;
+    int64_t pf = s_cached_perf_freq;
+
+    // Overflow-safe: (pc * 1000) / pf without intermediate overflow
+    int64_t whole = (pc / pf) * 1000LL;
+    int64_t frac  = ((pc % pf) * 1000LL) / pf;
+
+    return static_cast<uint64_t>(whole + frac);
 }
 
 /* --------------------------------------------------------------------
@@ -375,6 +400,11 @@ static uint64_t __fastcall HttpListenerBringupHook(int64_t* state, const char* a
 void Wave0::Init(uintptr_t base_addr) {
     g_base = base_addr;
 
+    if (g_initialized) {
+        fprintf(stderr, "[wave0] already initialized, skipping duplicate Init\n"); fflush(stderr);
+        return;
+    }
+
     fprintf(stderr, "[wave0] installing bug fix hooks\n"); fflush(stderr);
 
 #ifdef _WIN32
@@ -386,6 +416,10 @@ void Wave0::Init(uintptr_t base_addr) {
 
     // Create persistent high-res waitable timer (BUG #11, #12 fix)
     // Try high-res first (Windows 10 1803+), fall back to standard
+    if (s_cached_timer != NULL) {
+        CloseHandle(s_cached_timer);
+        s_cached_timer = NULL;
+    }
     s_cached_timer = CreateWaitableTimerExW(NULL, NULL,
         CREATE_WAITABLE_TIMER_MANUAL_RESET | CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
         TIMER_ALL_ACCESS);
@@ -485,8 +519,8 @@ void Wave0::Init(uintptr_t base_addr) {
 
 void Wave0::Shutdown() {
     if (!g_initialized) return;
-    fprintf(stderr, "[wave0] shutdown — overflow_ms=%ld null_deref=%ld dx_fatal=%ld dx_transient=%ld\n",
-        s_overflow_ms_count, s_null_deref_count, s_dx_error_count, s_dx_transient_count); fflush(stderr);
+    fprintf(stderr, "[wave0] shutdown — null_deref=%ld dx_fatal=%ld dx_transient=%ld\n",
+        s_null_deref_count, s_dx_error_count, s_dx_transient_count); fflush(stderr);
 #ifdef _WIN32
     struct { void** orig; uint64_t va; } entries[] = {
         { (void**)&s_origGetTimeMicroseconds, VA_GET_TIME_MICROSECONDS },

@@ -476,7 +476,7 @@ constexpr uintptr_t GET_TIME_OVERRIDE_VALUE = 0x209CB00;
 /// Address: CleanupPeers (0x140F76500, 1939 bytes, 1 caller)
 /// Network peer timeout check. BUG #2: unsigned subtraction of overflowed
 /// timestamp wraps to massive value, disconnecting all peers.
-/// Fixed indirectly by GetTimeMicroseconds overflow fix (BUG #1).
+/// Fixed by GetTimeMilliseconds overflow-safe replacement (N22).
 constexpr uintptr_t CLEANUP_PEERS = 0xF76500;
 
 /// Address: CSpinWait::WaitForValue (0x141500ED8, 115 bytes, 3 callers)
