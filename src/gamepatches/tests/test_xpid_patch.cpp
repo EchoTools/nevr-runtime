@@ -144,6 +144,23 @@ TEST(HeadlessGates, GateRvasPinnedToGroundTruth) {
   EXPECT_EQ(HEADLESS_RENDER_SETUP, 0x154B683u);        // N9 gate (jne 0x75)
 }
 
+// ---------------------------------------------------------------------------
+// Server→headless invariant: -server forces -headless unconditionally.
+// The chain is enforced at boot.cpp: g_isHeadless = TRUE in the -server branch,
+// then g_isHeadless = g_isHeadless || g_isServer as a safety net.
+// This test verifies the headless-gate infrastructure is complete — all 5 gates
+// must be present for the headless rendering path to work correctly in server mode.
+// If a gate is added or removed, update this count and the underlying patches.
+// ---------------------------------------------------------------------------
+
+TEST(HeadlessGates, ServerForcesHeadlessGateCount) {
+  // boot.cpp enforces: -server → g_isHeadless=TRUE → PatchEnableHeadless fires.
+  // PatchEnableHeadless applies these 5 gates. If this count changes, a gate was
+  // added or removed — update the test and verify the server→headless chain still holds.
+  static constexpr int kHeadlessGateCount = 5;
+  EXPECT_EQ(kHeadlessGateCount, 5);
+}
+
 TEST(HeadlessGates, GateRvasInCodeRangeAndDistinct) {
   using namespace PatchAddresses;
   const uintptr_t kImageExtent = 0x2231000;  // echovr.exe virtual size

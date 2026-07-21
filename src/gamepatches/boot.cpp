@@ -95,6 +95,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 
     if (lstrcmpW(arg, L"-server") == 0) {
       g_isServer = TRUE;
+      g_isHeadless = TRUE;  // -server forces -headless unconditionally (never separable)
     } else if (lstrcmpW(arg, L"-offline") == 0) {
       g_isOffline = TRUE;
     } else if (lstrcmpW(arg, L"-noconsole") == 0) {
@@ -135,15 +136,19 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       if (lstrcmpW(arg, L"-timestep") == 0 && i + 1 < argc) ++i;
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] %ls is deprecated and ignored", arg);
     } else if (lstrcmpW(arg, L"-headless") == 0 || lstrcmpW(arg, L"-noovr") == 0) {
-      // Deprecated — silently ignored (-server implies headless, -noovr is always on)
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] %ls is deprecated and ignored", arg);
+      // -server now forces -headless unconditionally. Passing -headless or -noovr
+      // separately is a configuration error — these are not separable from -server.
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] %ls is redundant — -server forces -headless unconditionally. "
+          "Remove this flag from your command line.", arg);
     }
   }
 
   LocalFree(argv);
 
-  // -noovr is always applied (no OVR runtime needed)
-  // -server implies headless (all servers are headless)
+  // -server forces -headless unconditionally (set in the -server branch above).
+  // The OR here is a safety net: if g_isHeadless was set to TRUE for any other
+  // reason, -noovr is also applied. In practice, g_isHeadless is only set by -server.
   g_isHeadless = g_isHeadless || g_isServer;
   if (g_isServer) {
     Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Server mode — headless + noovr applied");
