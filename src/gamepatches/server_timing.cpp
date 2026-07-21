@@ -368,117 +368,12 @@ static void SetTickRate(uint32_t hz) {
  * Public API
  * ==================================================================== */
 
-void ServerTiming::Init(uintptr_t base_addr, bool is_server) {
-    if (!is_server) return;
-
-    g_base = base_addr;
-    g_is_server = true;
-
-    Log(EchoVR::LogLevel::Info, "[server_timing] initializing (base=0x%llx)",
-        static_cast<unsigned long long>(g_base));
-
-    /* Load config */
-    std::string config_path = FindConfigFile();
-    if (config_path.empty()) {
-        Log(EchoVR::LogLevel::Info, "[server_timing] no config file found, using defaults");
-        g_config = ServerTimingConfig{};
-        g_config.valid = true;
-    } else {
-        std::string content = ReadFileToString(config_path);
-        if (content.empty()) {
-            Log(EchoVR::LogLevel::Warning, "[server_timing] config file empty or unreadable, using defaults");
-            g_config = ServerTimingConfig{};
-            g_config.valid = true;
-        } else {
-            bool is_yaml = (config_path.size() >= 4 &&
-                            config_path.substr(config_path.size() - 4) == ".yml") ||
-                           (config_path.size() >= 5 &&
-                            config_path.substr(config_path.size() - 5) == ".yaml");
-            g_config = ParseConfig(content, is_yaml);
-        }
-    }
-
-    Log(EchoVR::LogLevel::Info,
-        "[server_timing] config: tick_rate_hz=%u tick_rate_idle_hz=%u "
-        "disable_busywait=%s fix_deltatime=%s fix_switchtothread=%s event_driven_recv=%s",
-        g_config.tick_rate_hz,
-        g_config.tick_rate_idle_hz,
-        g_config.disable_busywait ? "true" : "false",
-        g_config.fix_deltatime_comparison ? "true" : "false",
-        g_config.fix_switchtothread ? "true" : "false",
-        g_config.event_driven_recv ? "true" : "false");
-
-#ifdef _WIN32
-    /* Hook CPrecisionSleep::Wait -> Sleep(ms) */
-    if (g_config.disable_busywait) {
-        g_wait_hook_target = ResolveVA(g_base, VA_PRECISION_SLEEP_WAIT);
-        if (MH_CreateHook(g_wait_hook_target, reinterpret_cast<void*>(&PrecisionSleepWaitHook),
-                          reinterpret_cast<void**>(&s_origWait)) == MH_OK &&
-            MH_EnableHook(g_wait_hook_target) == MH_OK) {
-            g_wait_hook_installed = true;
-            Log(EchoVR::LogLevel::Info, "[server_timing] hooked CPrecisionSleep::Wait -> Sleep(ms)");
-        } else {
-            Log(EchoVR::LogLevel::Warning,
-                "[server_timing] failed to hook CPrecisionSleep::Wait, falling back to BusyWait RET patch");
-            void* busywait = ResolveVA(g_base, VA_PRECISION_SLEEP_BUSYWAIT);
-            uint8_t ret = 0xC3;
-            if (PatchMemory(busywait, &ret, 1)) {
-                Log(EchoVR::LogLevel::Info, "[server_timing] patched CPrecisionSleep::BusyWait -> RET (fallback)");
-            }
-        }
-    }
-
-    /* Patch SwitchToThread IAT entry -> Sleep(1) wrapper.
-       The thunk is rex.W jmp [rip+disp32]; parse disp32 to find IAT slot. */
-    if (g_config.fix_switchtothread) {
-        auto* thunk = reinterpret_cast<uint8_t*>(ResolveVA(g_base, VA_SWITCH_TO_THREAD));
-        if (thunk[0] == 0x48 && thunk[1] == 0xFF && thunk[2] == 0x25) {
-            int32_t disp = *reinterpret_cast<int32_t*>(thunk + 3);
-            auto** iat_slot = reinterpret_cast<void**>(thunk + 7 + disp);
-            s_origSwitchToThread = reinterpret_cast<SwitchToThread_t>(*iat_slot);
-            void* hook_ptr = reinterpret_cast<void*>(&SwitchToThreadHook);
-            if (PatchMemory(iat_slot, &hook_ptr, sizeof(void*))) {
-                g_switchtothread_hook_installed = true;
-                Log(EchoVR::LogLevel::Info,
-                    "[server_timing] patched SwitchToThread IAT -> Sleep(1) (10 call sites)");
-            } else {
-                Log(EchoVR::LogLevel::Warning, "[server_timing] failed to patch SwitchToThread IAT slot");
-            }
-        } else {
-            Log(EchoVR::LogLevel::Warning,
-                "[server_timing] SwitchToThread thunk unexpected encoding: %02x %02x %02x",
-                thunk[0], thunk[1], thunk[2]);
-        }
-    }
-
-    /* Hook ioctlsocket to capture the broadcaster UDP socket handle.
-       Uses MinHook on the WS2_32 import to intercept the FIONBIO call
-       that sets the broadcaster socket to non-blocking mode. */
-    if (g_config.event_driven_recv) {
-        HMODULE ws2 = GetModuleHandleA("WS2_32.dll");
-        if (!ws2) ws2 = LoadLibraryA("WS2_32.dll");
-        if (ws2) {
-            g_ioctlsocket_hook_target = reinterpret_cast<void*>(
-                GetProcAddress(ws2, "ioctlsocket"));
-            if (g_ioctlsocket_hook_target &&
-                MH_CreateHook(g_ioctlsocket_hook_target,
-                              reinterpret_cast<void*>(&IoctlsocketHook),
-                              reinterpret_cast<void**>(&s_origIoctlsocket)) == MH_OK &&
-                MH_EnableHook(g_ioctlsocket_hook_target) == MH_OK) {
-                g_ioctlsocket_hook_installed = true;
-                Log(EchoVR::LogLevel::Info,
-                    "[server_timing] hooked ioctlsocket for broadcaster socket capture");
-            } else {
-                Log(EchoVR::LogLevel::Warning,
-                    "[server_timing] failed to hook ioctlsocket — event_driven_recv disabled");
-                g_config.event_driven_recv = false;
-            }
-        }
-    }
-#endif
-
-    Log(EchoVR::LogLevel::Info, "[server_timing] initialization complete");
-}
+// REMOVED (N26): ServerTiming::Init — dead code, zero call sites anywhere in
+// the codebase. Only ServerTiming::Shutdown was wired (dllmain.cpp:109).
+// OnFrame and OnGameStateChange also have no call sites but are retained
+// pending a decision on wiring the module from the boot sequence.
+// Shutdown is safe to call without Init: g_is_server defaults to false,
+// so it returns immediately.
 
 void ServerTiming::OnFrame() {
     if (!g_is_server) return;
