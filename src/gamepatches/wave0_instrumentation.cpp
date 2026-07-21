@@ -68,8 +68,8 @@ static constexpr uint8_t HTTP_LISTENER_PROLOGUE[5] = {0x48, 0x89, 0x5C, 0x24, 0x
 
 /* Expected prologue at VA_GET_TIME_MICROSECONDS (0x1400D00C0): SUB RSP,0x28
  * Same prologue at VA_GET_TIME_MILLISECONDS (0x1400D0110). Both ReVault-verified. */
-static constexpr uint8_t GET_TIME_MICROSECONDS_PROLOGUE[5] = {0x48, 0x83, 0xEC, 0x28};
-static constexpr uint8_t GET_TIME_MILLISECONDS_PROLOGUE[5] = {0x48, 0x83, 0xEC, 0x28};
+static constexpr uint8_t GET_TIME_MICROSECONDS_PROLOGUE[4] = {0x48, 0x83, 0xEC, 0x28};
+static constexpr uint8_t GET_TIME_MILLISECONDS_PROLOGUE[4] = {0x48, 0x83, 0xEC, 0x28};
 
 /* Expected prologue at VA_END_MULTIPLAYER (0x140162450): MOV [RSP+0x10],RBX
  * ReVault-verified: 0x140162450: 48 89 5c 24 10. */
@@ -393,24 +393,25 @@ void Wave0::Init(uintptr_t base_addr) {
         void** original;
         const char* name;
         const uint8_t* prologue;  // nullptr = skip prologue validation
+        uint8_t prologue_len;     // byte count for prologue comparison (0 if no prologue)
     };
 
     HookEntry hooks[] = {
         { VA_GET_TIME_MICROSECONDS, (void*)&GetTimeMicrosecondsHook,
           (void**)&s_origGetTimeMicroseconds, "GetTimeMicroseconds (BUG#1 fix)",
-          GET_TIME_MICROSECONDS_PROLOGUE },
+          GET_TIME_MICROSECONDS_PROLOGUE, sizeof(GET_TIME_MICROSECONDS_PROLOGUE) },
         { VA_GET_TIME_MILLISECONDS, (void*)&GetTimeMillisecondsHook,
           (void**)&s_origGetTimeMilliseconds, "CTimer_GetMilliSeconds",
-          GET_TIME_MILLISECONDS_PROLOGUE },
+          GET_TIME_MILLISECONDS_PROLOGUE, sizeof(GET_TIME_MILLISECONDS_PROLOGUE) },
         { VA_END_MULTIPLAYER, (void*)&EndMultiplayerHook,
           (void**)&s_origEndMultiplayer, "EndMultiplayer (BUG#6 fix)",
-          END_MULTIPLAYER_PROLOGUE },
+          END_MULTIPLAYER_PROLOGUE, sizeof(END_MULTIPLAYER_PROLOGUE) },
         { VA_PRECISION_SLEEP_WAIT, (void*)&PrecisionSleepWaitHook,
           (void**)&s_origPrecisionSleepWait, "CPrecisionSleep::Wait (BUG#11/#12 fix)",
-          nullptr },
+          nullptr, 0 },
         { VA_SPINWAIT_WAIT_FOR_VALUE, (void*)&WaitForValueHook,
           (void**)&s_origWaitForValue, "CSpinWait::WaitForValue (BUG#14 fix)",
-          nullptr },
+          nullptr, 0 },
     };
 
     int installed = 0;
@@ -421,7 +422,8 @@ void Wave0::Init(uintptr_t base_addr) {
                     h.name, (unsigned long long)h.va); fflush(stderr);
             continue;
         }
-        if (h.prologue && memcmp(target, h.prologue, 5) != 0) {
+        if (h.prologue && h.prologue_len > 0 &&
+            memcmp(target, h.prologue, h.prologue_len) != 0) {
             fprintf(stderr, "[wave0] SKIP %s — prologue mismatch at 0x%llx "
                     "(binary version drift?)\n",
                     h.name, (unsigned long long)h.va); fflush(stderr);
