@@ -691,6 +691,11 @@ VOID PatchDisableWwise() {
 /// The CALL from CPrecisionSleep::Wait still executes normally (clean stack),
 /// but the busy-wait function itself is a no-op. The WaitableTimer phase in
 /// the caller handles the bulk sleep; we only lose ~250μs of precision per frame.
+///
+/// DEPRECATED (N25): wave0_instrumentation.cpp is the canonical BusyWait RET patch
+/// site. It installs unconditionally during Wave0::Init, making this server-gated
+/// duplicate redundant. This function is retained for now to avoid breaking any
+/// callers during migration; remove once all paths route through Wave0::Init.
 VOID PatchServerFramePacing() {
   const BYTE ret[] = {0xC3};  // RET
   static_assert(sizeof(ret) == PatchAddresses::PRECISION_SLEEP_BUSYWAIT_SIZE,

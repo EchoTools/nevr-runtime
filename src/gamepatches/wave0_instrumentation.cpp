@@ -66,6 +66,15 @@ static constexpr uint64_t VA_HTTP_LISTENER_BRINGUP   = 0x1401F5B00;  // BUG #62
  * loaded binary diverging from the ReVault-indexed echovr.exe. */
 static constexpr uint8_t HTTP_LISTENER_PROLOGUE[5] = {0x48, 0x89, 0x5C, 0x24, 0x08};
 
+/* Expected prologue at VA_GET_TIME_MICROSECONDS (0x1400D00C0): SUB RSP,0x28
+ * Same prologue at VA_GET_TIME_MILLISECONDS (0x1400D0110). Both ReVault-verified. */
+static constexpr uint8_t GET_TIME_MICROSECONDS_PROLOGUE[5] = {0x48, 0x83, 0xEC, 0x28};
+static constexpr uint8_t GET_TIME_MILLISECONDS_PROLOGUE[5] = {0x48, 0x83, 0xEC, 0x28};
+
+/* Expected prologue at VA_END_MULTIPLAYER (0x140162450): MOV [RSP+0x10],RBX
+ * ReVault-verified: 0x140162450: 48 89 5c 24 10. */
+static constexpr uint8_t END_MULTIPLAYER_PROLOGUE[5] = {0x48, 0x89, 0x5C, 0x24, 0x10};
+
 /* CSpinWait::WaitForValue global spin limit offset (from ImageBase) */
 static constexpr uintptr_t OFF_SPINWAIT_SPIN_LIMIT   = 0x2034500;
 
@@ -383,19 +392,25 @@ void Wave0::Init(uintptr_t base_addr) {
         void* detour;
         void** original;
         const char* name;
+        const uint8_t* prologue;  // nullptr = skip prologue validation
     };
 
     HookEntry hooks[] = {
         { VA_GET_TIME_MICROSECONDS, (void*)&GetTimeMicrosecondsHook,
-          (void**)&s_origGetTimeMicroseconds, "GetTimeMicroseconds (BUG#1 fix)" },
+          (void**)&s_origGetTimeMicroseconds, "GetTimeMicroseconds (BUG#1 fix)",
+          GET_TIME_MICROSECONDS_PROLOGUE },
         { VA_GET_TIME_MILLISECONDS, (void*)&GetTimeMillisecondsHook,
-          (void**)&s_origGetTimeMilliseconds, "CTimer_GetMilliSeconds" },
+          (void**)&s_origGetTimeMilliseconds, "CTimer_GetMilliSeconds",
+          GET_TIME_MILLISECONDS_PROLOGUE },
         { VA_END_MULTIPLAYER, (void*)&EndMultiplayerHook,
-          (void**)&s_origEndMultiplayer, "EndMultiplayer (BUG#6 fix)" },
+          (void**)&s_origEndMultiplayer, "EndMultiplayer (BUG#6 fix)",
+          END_MULTIPLAYER_PROLOGUE },
         { VA_PRECISION_SLEEP_WAIT, (void*)&PrecisionSleepWaitHook,
-          (void**)&s_origPrecisionSleepWait, "CPrecisionSleep::Wait (BUG#11/#12 fix)" },
+          (void**)&s_origPrecisionSleepWait, "CPrecisionSleep::Wait (BUG#11/#12 fix)",
+          nullptr },
         { VA_SPINWAIT_WAIT_FOR_VALUE, (void*)&WaitForValueHook,
-          (void**)&s_origWaitForValue, "CSpinWait::WaitForValue (BUG#14 fix)" },
+          (void**)&s_origWaitForValue, "CSpinWait::WaitForValue (BUG#14 fix)",
+          nullptr },
     };
 
     int installed = 0;
@@ -403,6 +418,12 @@ void Wave0::Init(uintptr_t base_addr) {
         void* target = ResolveVA_Safe(g_base, h.va);
         if (!target) {
             fprintf(stderr, "[wave0] SKIP %s — address 0x%llx resolved to unmapped memory\n",
+                    h.name, (unsigned long long)h.va); fflush(stderr);
+            continue;
+        }
+        if (h.prologue && memcmp(target, h.prologue, 5) != 0) {
+            fprintf(stderr, "[wave0] SKIP %s — prologue mismatch at 0x%llx "
+                    "(binary version drift?)\n",
                     h.name, (unsigned long long)h.va); fflush(stderr);
             continue;
         }
