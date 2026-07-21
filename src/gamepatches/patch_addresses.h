@@ -452,13 +452,6 @@ constexpr uintptr_t GET_TIME_MILLISECONDS = 0xD0110;
 /// Signature: void __fastcall(int64_t game_object, int64_t arg2)
 constexpr uintptr_t END_MULTIPLAYER = 0x162450;
 
-/// Address: HandleDXError (0x140551070, 285 bytes)
-/// Centralized DXGI error handler. 75 callers from render pipeline.
-/// Translates HRESULT to string, calls fatal log. All DX errors are fatal.
-/// Hooked to recover from transient DEVICE_HUNG and WAS_STILL_DRAWING.
-/// Signature: void __fastcall(uint64_t hr, uint64_t ctx_fmt, uint64_t detail, int64_t extra)
-constexpr uintptr_t HANDLE_DX_ERROR = 0x551070;
-
 // GetTimeMicroseconds global data addresses (offsets from ImageBase)
 // Used by the overflow-safe replacement hook to replicate the original's
 // paused/fixed time check without calling the buggy original function.

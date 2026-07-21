@@ -21,21 +21,17 @@
  * 0c. EndMultiplayer — null deref prevention (BUG #6, High)
  *     Check pointer at arg1+0x2DA0 before double-deref that crashes.
  *
- * 0d. HandleDXError — transient error recovery (BUG #7, High)
- *     Original: all DXGI errors are fatal. Fix: recover from transient
- *     DEVICE_HUNG and WAS_STILL_DRAWING instead of crashing.
- *
- * 0e. CPrecisionSleep::Wait — cached high-res timer (BUG #11, #12, High)
+ * 0d. CPrecisionSleep::Wait — cached high-res timer (BUG #11, #12, High)
  *     Original: creates/destroys kernel timer each frame (180 kernel
  *     transitions/sec at 90fps) with standard-res timer. Fix: persistent
  *     high-res waitable timer created once at init.
  *
- * 0f. CSpinWait::WaitForValue — corrected backoff (BUG #14, High)
+ * 0e. CSpinWait::WaitForValue — corrected backoff (BUG #14, High)
  *     Original: sleep_ms starts at 10 and decrements to 0 (maximum CPU
  *     at peak contention). Fix: start at 0, increment to 10 (proper
  *     increasing backoff). Adds YieldProcessor() for HT friendliness.
  *
- * 0g. CPrecisionSleep::BusyWait — RET patch (BUG #13, High)
+ * 0f. CPrecisionSleep::BusyWait — RET patch (BUG #13, High)
  *     Patches first byte to 0xC3 (RET). Eliminates tight QPC+SwitchToThread
  *     spin loop. Only loses ~250us of busy-wait precision per frame.
  * ====================================================================== */
@@ -60,7 +56,6 @@
 static constexpr uint64_t VA_GET_TIME_MICROSECONDS   = 0x1400D00C0;
 static constexpr uint64_t VA_GET_TIME_MILLISECONDS   = 0x1400D0110;
 static constexpr uint64_t VA_END_MULTIPLAYER         = 0x140162450;
-static constexpr uint64_t VA_HANDLE_DX_ERROR         = 0x140551070;
 static constexpr uint64_t VA_PRECISION_SLEEP_WAIT    = 0x1401CE0B0;
 static constexpr uint64_t VA_PRECISION_SLEEP_BUSYWAIT = 0x1401CE4C0;
 static constexpr uint64_t VA_SPINWAIT_WAIT_FOR_VALUE = 0x141500ED8;
@@ -77,10 +72,6 @@ static constexpr uintptr_t OFF_SPINWAIT_SPIN_LIMIT   = 0x2034500;
 /* GetTimeMicroseconds global data offsets (from ImageBase 0x140000000) */
 static constexpr uintptr_t OFF_TIME_OVERRIDE_FLAG  = 0x2099038;  // int64, non-zero = use cached value
 static constexpr uintptr_t OFF_TIME_OVERRIDE_VALUE = 0x209CB00;  // uint64, cached microsecond value
-
-/* DXGI transient error codes (as signed HRESULT) */
-static constexpr int32_t DXGI_ERROR_DEVICE_HUNG_      = static_cast<int32_t>(0x887A0006);
-static constexpr int32_t DXGI_ERROR_WAS_STILL_DRAWING_ = static_cast<int32_t>(0x887A000A);
 
 /* --------------------------------------------------------------------
  * Module state
@@ -236,54 +227,7 @@ static void __fastcall EndMultiplayerHook(int64_t arg1, int64_t arg2) {
 }
 
 /* --------------------------------------------------------------------
- * Hook 0d — HandleDXError transient recovery (BUG #7, High)
- *
- * Centralized DXGI error handler with 75+ callers. The original treats
- * every HRESULT failure as fatal (non-returning NRadEngine_LogError).
- *
- * Fix: intercept transient errors that are recoverable:
- *   DXGI_ERROR_DEVICE_HUNG (0x887A0006) — TDR recovery possible
- *   DXGI_ERROR_WAS_STILL_DRAWING (0x887A000A) — GPU busy, retry later
- * Log and return for these instead of calling the fatal original.
- * All other errors pass through to the original fatal handler.
- * -------------------------------------------------------------------- */
-
-using HandleDXError_t = void(__fastcall*)(uint64_t hr, uint64_t context_fmt,
-                                          uint64_t detail_str, int64_t extra_info);
-static HandleDXError_t s_origHandleDXError = nullptr;
-static volatile LONG s_dx_error_count = 0;
-static volatile LONG s_dx_transient_count = 0;
-
-static void __fastcall HandleDXErrorHook(uint64_t hr, uint64_t context_fmt,
-                                         uint64_t detail_str, int64_t extra_info) {
-    int32_t hresult = static_cast<int32_t>(hr);
-
-    if (hresult < 0) {
-        const char* detail = detail_str ? reinterpret_cast<const char*>(detail_str) : "(null)";
-
-        // Recover from transient DXGI errors instead of crashing
-        if (hresult == DXGI_ERROR_DEVICE_HUNG_ ||
-            hresult == DXGI_ERROR_WAS_STILL_DRAWING_) {
-            LONG count = InterlockedIncrement(&s_dx_transient_count);
-            if (count <= 10 || (count % 1000) == 0) {
-                Log(EchoVR::LogLevel::Warning,
-                    "[wave0] HandleDXError: transient HRESULT=0x%08X recovered (detail=%s, count=%ld)",
-                    static_cast<unsigned int>(hresult), detail, count);
-            }
-            return;  // Don't call original — it's fatal and non-returning
-        }
-
-        LONG count = InterlockedIncrement(&s_dx_error_count);
-        Log(EchoVR::LogLevel::Warning,
-            "[wave0] HandleDXError: fatal HRESULT=0x%08X detail=%s (count=%ld)",
-            static_cast<unsigned int>(hresult), detail, count);
-    }
-
-    s_origHandleDXError(hr, context_fmt, detail_str, extra_info);
-}
-
-/* --------------------------------------------------------------------
- * Hook 0e — CPrecisionSleep::Wait replacement (BUG #11, #12, High)
+ * Hook 0d — CPrecisionSleep::Wait replacement (BUG #11, #12, High)
  *
  * Original creates and destroys a kernel timer handle every frame
  * (180 kernel transitions/sec at 90fps) and uses a standard timer
@@ -328,7 +272,7 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
 }
 
 /* --------------------------------------------------------------------
- * Hook 0f — CSpinWait::WaitForValue backoff fix (BUG #14, High)
+ * Hook 0e — CSpinWait::WaitForValue backoff fix (BUG #14, High)
  *
  * Original starts sleep_ms at 10 and decrements to 0 — maximum CPU
  * consumption at peak contention. Fix: start at 0 and increment to
@@ -361,7 +305,7 @@ static void __fastcall WaitForValueHook(volatile uint32_t* ptr, uint32_t expecte
 }
 
 /* --------------------------------------------------------------------
- * Hook 0h — httpport HTTP-listener bind failure -> fatal (BUG #62, High)
+ * Hook 0g — httpport HTTP-listener bind failure -> fatal (BUG #62, High)
  *
  * fcn.1401F5B00 is the game's HTTP API listener bring-up wrapper:
  *   uint64_t __fastcall(state, address, port) -> 1 on success, 0 on failure.
@@ -448,8 +392,6 @@ void Wave0::Init(uintptr_t base_addr) {
           (void**)&s_origGetTimeMilliseconds, "CTimer_GetMilliSeconds" },
         { VA_END_MULTIPLAYER, (void*)&EndMultiplayerHook,
           (void**)&s_origEndMultiplayer, "EndMultiplayer (BUG#6 fix)" },
-        { VA_HANDLE_DX_ERROR, (void*)&HandleDXErrorHook,
-          (void**)&s_origHandleDXError, "HandleDXError (BUG#7 fix)" },
         { VA_PRECISION_SLEEP_WAIT, (void*)&PrecisionSleepWaitHook,
           (void**)&s_origPrecisionSleepWait, "CPrecisionSleep::Wait (BUG#11/#12 fix)" },
         { VA_SPINWAIT_WAIT_FOR_VALUE, (void*)&WaitForValueHook,
@@ -519,14 +461,12 @@ void Wave0::Init(uintptr_t base_addr) {
 
 void Wave0::Shutdown() {
     if (!g_initialized) return;
-    fprintf(stderr, "[wave0] shutdown — null_deref=%ld dx_fatal=%ld dx_transient=%ld\n",
-        s_null_deref_count, s_dx_error_count, s_dx_transient_count); fflush(stderr);
+    fprintf(stderr, "[wave0] shutdown — null_deref=%ld\n", s_null_deref_count); fflush(stderr);
 #ifdef _WIN32
     struct { void** orig; uint64_t va; } entries[] = {
         { (void**)&s_origGetTimeMicroseconds, VA_GET_TIME_MICROSECONDS },
         { (void**)&s_origGetTimeMilliseconds, VA_GET_TIME_MILLISECONDS },
         { (void**)&s_origEndMultiplayer, VA_END_MULTIPLAYER },
-        { (void**)&s_origHandleDXError, VA_HANDLE_DX_ERROR },
         { (void**)&s_origPrecisionSleepWait, VA_PRECISION_SLEEP_WAIT },
         { (void**)&s_origWaitForValue, VA_SPINWAIT_WAIT_FOR_VALUE },
         { (void**)&s_origHttpListenerBringup, VA_HTTP_LISTENER_BRINGUP },
