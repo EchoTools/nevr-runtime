@@ -243,7 +243,7 @@ void InstallWebSocketBridge() {
                       // so that CNSUser::LogInSuccessCB processes the server's LoginSuccess
                       // response. Without this, LogInSuccessCB silently discards the message
                       // because the user's login state at +0x90 is still 0 (logged out).
-                      if (connIdx > 0 && !pairPtr->loginInjected) {
+                      if (!pairPtr->loginInjected) {
                         pairPtr->loginInjected = true;
 
                         // Set CNSUser login state via pnsrad.dll's Users() singleton
@@ -300,8 +300,8 @@ void InstallWebSocketBridge() {
                         memcpy(&rsym, rmsg->str.data() + 8, 8);
                         memcpy(&rlen, rmsg->str.data() + 16, 8);
                       }
-                      Log(EchoVR::LogLevel::Info, "[NEVR.WS] server->game: %zu bytes sym=0x%016llx payloadLen=%llu",
-                          rmsg->str.size(), (unsigned long long)rsym, (unsigned long long)rlen);
+                      Log(EchoVR::LogLevel::Info, "[NEVR.WS] server->game [conn=%d]: %zu bytes sym=0x%016llx payloadLen=%llu",
+                          connIdx, rmsg->str.size(), (unsigned long long)rsym, (unsigned long long)rlen);
                       // Decode LoginFailure error message (sym 0xa5b9d5a3021ccf51)
                       if (rsym == 0xa5b9d5a3021ccf51 && rmsg->str.size() > 48) {
                         uint64_t statusCode = 0;
@@ -324,7 +324,6 @@ void InstallWebSocketBridge() {
                           // Generate a dummy session UUID (non-zero)
                           payload[0] = 0x4E; payload[1] = 0x45; payload[2] = 0x56; payload[3] = 0x52; // "NEVR"
                           payload[4] = 0x53; payload[5] = 0x52; payload[6] = 0x56; payload[7] = 0x52; // "SRVR"
-                          // PlatformCode: DSC = 2
                           uint64_t platformCode = 2;
                           memcpy(payload + 16, &platformCode, 8);
                           // AccountId: the server's Discord ID
@@ -403,7 +402,7 @@ void InstallWebSocketBridge() {
                       // proceeds even if the game never opens a second connection for
                       // login_host (e.g. because the server config overwrote the URL
                       // with a non-readyatdawn.com value before the redirect could fire).
-                      if (connIdx == 0 && !pairPtr->loginInjected && pairPtr->remoteOpen) {
+                      if (!pairPtr->loginInjected && pairPtr->remoteOpen) {
                         pairPtr->loginInjected = true;
 
                         // Set CNSUser login state via pnsrad.dll's Users() singleton.
