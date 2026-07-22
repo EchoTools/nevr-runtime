@@ -181,18 +181,23 @@ test-auth-groundtruth:
 
 # Run the C++ GTest suite under Wine (cross-compiled). Fail-close: exits nonzero if
 # the GTest binary cannot be built or found, or if any test fails. Builds the test
-# target with -DBUILD_TESTING=ON (the default presets do not enable it). Currently
-# covers test_xpid_patch — the only C++ GTest target in the tree; add new GTest
-# executables here as they land. (The prior recipe pointed at a never-built
-# test_token_auth.exe and masked the miss with `|| echo`.)
+# target with -DBUILD_TESTING=ON (the default presets do not enable it). Add new
+# GTest executables here as they land.
 test-auth-unit:
     #!/usr/bin/env bash
     set -euo pipefail
     unset VCPKG_ROOT
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        echo "       (is 'gtest' available in vcpkg for triplet x64-mingw-static?)" >&2
+        exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_parse_endpoint.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         echo "       (is 'gtest' available in vcpkg for triplet x64-mingw-static?)" >&2

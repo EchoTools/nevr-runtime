@@ -6,7 +6,10 @@
 #include <ws2tcpip.h>
 
 #include <cctype>
+#include <cerrno>
+#include <climits>
 #include <cstdarg>
+#include <cstdlib>
 #include <cstring>
 
 #include "echovr_functions.h"
@@ -187,8 +190,23 @@ bool ParseEndpoint(const std::string& endpointStr, uint32_t& internalIP, uint32_
   internalIP = inAddr.s_addr;  // Already in network byte order, but we want host order for LE storage
   externalIP = exAddr.s_addr;
 
-  // Parse port
-  port = static_cast<uint16_t>(std::stoul(portStr));
+  // Parse port with errno checking (defense against N1 — std::stoul can throw)
+  errno = 0;
+  char* endptr = nullptr;
+  unsigned long portVal = strtoul(portStr.c_str(), &endptr, 10);
+  if (errno != 0 || endptr == portStr.c_str() || *endptr != '\0') {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.GAMESERVER] ParseEndpoint port parse failed port_str=%s endpoint=%s",
+        portStr.c_str(), endpointStr.c_str());
+    return false;
+  }
+  if (portVal > UINT16_MAX) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.GAMESERVER] ParseEndpoint port out of range port=%lu max=%u endpoint=%s",
+        portVal, UINT16_MAX, endpointStr.c_str());
+    return false;
+  }
+  port = static_cast<uint16_t>(portVal);
   return true;
 }
 
