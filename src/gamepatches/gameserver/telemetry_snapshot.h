@@ -89,8 +89,12 @@ constexpr uint64_t PLAYER_TEAM_INDEX_OFFSET = 0x8E;
 constexpr uint64_t PLAYER_COUNT_OFFSET = 0xE2;
 
 // Player stats: CR15NetGame + 0x72AC + teamRole * 0x4D08
+// teamRole = flags & 0x1F (5 bits → 0–31), but the actual table capacity
+// is smaller (per-slot data for up to 16 players).  Clamp to prevent OOB
+// reads when a corrupted/edge-case flags byte produces a high index.
 constexpr uint64_t STATS_BASE_OFFSET = 0x72AC;
 constexpr uint64_t STATS_STRIDE = 0x4D08;
+constexpr uint16_t STATS_TABLE_MAX_ENTRIES = 16;
 // Each stat entry: { uint32_t type, uint32_t count, double value } = 16 bytes
 constexpr uint64_t STAT_POINTS = 0x000;
 constexpr uint64_t STAT_GOALS = 0x010;

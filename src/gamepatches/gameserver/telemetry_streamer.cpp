@@ -372,6 +372,12 @@ void TelemetryStreamer::RunDiagnostics() {
 
     // Stats
     uint16_t teamRole = flags & 0x1F;
+    if (teamRole >= GameOffsets::STATS_TABLE_MAX_ENTRIES) {
+      Log(EchoVR::LogLevel::Warning,
+          "[TELEMETRY.DIAG]   Stats: teamRole=%u out of bounds (max=%u), clamping to 0",
+          teamRole, GameOffsets::STATS_TABLE_MAX_ENTRIES);
+      teamRole = 0;
+    }
     CHAR* statsBase = ngBase + GameOffsets::STATS_BASE_OFFSET + teamRole * GameOffsets::STATS_STRIDE;
     uint32_t points = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_POINTS + 4);
     uint32_t goals = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_GOALS + 4);
@@ -493,6 +499,12 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
   // Player stats
   for (uint16_t i = 0; i < snap->playerCount; i++) {
     uint16_t teamRole = snap->playerInfo[i].flags & 0x1F;
+    if (teamRole >= GameOffsets::STATS_TABLE_MAX_ENTRIES) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.TELEMETRY] Stats: teamRole=%u out of bounds (max=%u) for player %u, clamping to 0",
+          teamRole, GameOffsets::STATS_TABLE_MAX_ENTRIES, i);
+      teamRole = 0;
+    }
     CHAR* statsBase = netGameBase + GameOffsets::STATS_BASE_OFFSET + teamRole * GameOffsets::STATS_STRIDE;
     auto& s = snap->stats[i];
 
