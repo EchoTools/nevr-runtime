@@ -18,3 +18,11 @@ extern std::string FormatJsonLogEntry(EchoVR::LogLevel level, const char* messag
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
 extern VOID FatalError(const CHAR* msg, const CHAR* title);
+
+/// Typedef for a fatal error handler — called by FatalError when registered,
+/// before MessageBoxA/exit. The handler is responsible for logging and terminating
+/// the process. Registered via SetFatalErrorHandler (typically by gamepatches when
+/// booting in server mode to prevent blocking on a modal dialog).
+typedef VOID (*FatalErrorHandlerFunc)(const CHAR* msg, const CHAR* title);
+extern FatalErrorHandlerFunc g_fatalErrorHandler;
+void SetFatalErrorHandler(FatalErrorHandlerFunc handler);

@@ -19,3 +19,11 @@ void InstallConsoleCtrlHandler();
 /// terminate in server mode), with TerminateProcess/_exit fallbacks. For fail-loud
 /// conditions where the server MUST die rather than run silently degraded.
 void ForceFatalExit(unsigned int code);
+
+/// Installs a fatal-error handler via SetFatalErrorHandler that routes fatal errors
+/// through a structured log + ForceFatalExit instead of blocking on MessageBoxA.
+/// Call AFTER g_isServer is known, BEFORE any code path that can hit FatalError
+/// (specifically, before LoadModule calls in PreprocessCommandLineHook).
+/// In client mode the handler is NOT installed — users at the screen should see
+/// the modal dialog so they know the game fatally failed.
+void InstallFatalErrorHandler();

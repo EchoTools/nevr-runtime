@@ -1,6 +1,7 @@
 #include "boot.h"
 #include "cli.h"
 #include "config.h"
+#include "crash_recovery.h"
 #include "mode_patches.h"
 #include "resource_override.h"
 #include "plugin_loader.h"
@@ -40,6 +41,15 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       }
     }
     LocalFree(argv);
+  }
+
+  // Install server-mode fatal error handler BEFORE loading modules.
+  // If a required module fails to load, module_loader.cpp calls FatalError,
+  // which must route through ForceFatalExit rather than blocking on a modal
+  // MessageBoxA. In client mode the handler is NOT installed — the user at the
+  // screen should see the modal dialog so they know the game fatally failed.
+  if (g_isServer) {
+    InstallFatalErrorHandler();
   }
 
   // Load modules. Order matters — dependencies must load first.

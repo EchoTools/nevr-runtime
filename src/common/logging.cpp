@@ -74,9 +74,21 @@ VOID Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_end(args);
 }
 
+FatalErrorHandlerFunc g_fatalErrorHandler = nullptr;
+
+void SetFatalErrorHandler(FatalErrorHandlerFunc handler) { g_fatalErrorHandler = handler; }
+
 VOID FatalError(const CHAR* msg, const CHAR* title) {
   if (title == NULL) title = "Echo Relay: Error";
   if (msg == NULL) msg = "An unknown error occurred.";
+
+  // If a fatal-error handler is registered (e.g., by gamepatches for server mode),
+  // delegate to it — NEVER block on a modal dialog. The handler is responsible for
+  // logging and terminating the process.
+  if (g_fatalErrorHandler != nullptr) {
+    g_fatalErrorHandler(msg, title);
+    return;  // handler must terminate the process — unreachable after ForceFatalExit
+  }
 
 #ifdef _WIN32
   MessageBoxA(NULL, msg, title, 0x00000000L);  // MB_OK
