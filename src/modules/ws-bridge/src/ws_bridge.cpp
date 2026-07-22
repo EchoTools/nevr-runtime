@@ -65,12 +65,21 @@ static void AppendLE64(std::string& buf, uint64_t val) {
   for (int i = 0; i < 8; i++) { buf.push_back((char)(val & 0xFF)); val >>= 8; }
 }
 
-static std::string BuildLoginRequest(uint64_t discordId) {
+static const char* PlatformPrefix(uint64_t platformCode) {
+  switch (platformCode) {
+    case 1: return "STM";
+    case 2: return "DSC";
+    case 3: return "XBX";
+    case 4: return "OVR-ORG";
+    default: return "UNK";
+  }
+}
+
+static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode = 2) {
   // Platform: DSC = 2 (Go iota: XPlatformIdSize=0, STM=1, PSN/DSC=2, XBX=3, OVR_ORG=4)
   // PSN=2 slot is reused for DSC by PatchDscProvider (xpid_patch.cpp) which
   // rewrites "PSN"->"DSC" in the game's string tables so all ~70+ inlined
   // format switches produce "DSC-" from provider_id 2.
-  uint64_t platformCode = 2;
   uint64_t accountId = discordId;
 
   // LoginProfile JSON — matches the game's SNSLogInRequestv2 format
@@ -279,11 +288,13 @@ void InstallWebSocketBridge() {
                           }
                         }
 
-                        std::string loginMsg = BuildLoginRequest(discordId);
+                        uint64_t platformCode = 2;  // DSC
+                        std::string loginMsg = BuildLoginRequest(discordId, platformCode);
                         pairPtr->remoteWs->sendBinary(loginMsg);
+                        std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
                         Log(EchoVR::LogLevel::Info,
-                            "[NEVR.WS] Injected LoginRequest (DSC-%llu, %zu bytes)",
-                            (unsigned long long)discordId, loginMsg.size());
+                            "[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu",
+                            xpid.c_str(), static_cast<int>(platformCode), connIdx, loginMsg.size());
                       }
 
                       for (auto& pending : pairPtr->pendingToRemote) {
@@ -440,12 +451,13 @@ void InstallWebSocketBridge() {
                           }
                         }
 
-                        std::string loginMsg = BuildLoginRequest(discordId);
+                        uint64_t platformCode = 2;  // DSC
+                        std::string loginMsg = BuildLoginRequest(discordId, platformCode);
                         pairPtr->remoteWs->sendBinary(loginMsg);
+                        std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
                         Log(EchoVR::LogLevel::Info,
-                            "[NEVR.WS] Injected LoginRequest on config connection "
-                            "(DSC-%llu, %zu bytes)",
-                            (unsigned long long)discordId, loginMsg.size());
+                            "[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu",
+                            xpid.c_str(), static_cast<int>(platformCode), connIdx, loginMsg.size());
                       }
                       if (rmsg->binary) {
                         gameWsPtr->sendBinary(rmsg->str);
