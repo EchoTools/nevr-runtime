@@ -25,6 +25,84 @@ static void Log(EchoVR::LogLevel level, const CHAR* format, ...) {
   va_end(args);
 }
 
+// Maximum key sizes enforced on encoder settings received from ServerDB.
+// These bounds are derived from the game engine's crypto layer:
+//   - SSymCrypt::SetSecret (NRadCrypt.h:112) accepts only 16, 24, or 32 byte
+//     AES keys. Any other encryptionKeySize will fail at EVP_CipherInit_ex.
+//   - SHmacProvider::key_len (NRadCrypt.h:92) is uint32_t; OpenSSL HMAC_Init_ex
+//     accepts keys up to EVP_MAX_MD_SIZE (64 for SHA-512). We allow 128 as a
+//     generous ceiling that covers the SHA-512 block size.
+//   - CRandom1600::Seed (CRandom1600.h:31) processes arbitrary length in 8-byte
+//     words — 256 bytes is a generous bound.
+//   - macDigestSize: the game uses SHA-256 (32) or SHA-512 (64) exclusively.
+//     Values outside {32, 64} produce HMAC tags the game cannot verify.
+// Evidence: Nakama server-side tests (match_session_success_test.go:23-27)
+//   use 0x20 (32) for all three key sizes and 0x40 (64) for macDigestSize.
+namespace {
+constexpr int kMaxEncryptionKeySize = 32;
+constexpr int kMaxMacKeySize = 128;
+constexpr int kMaxRandomKeySize = 256;
+constexpr int kValidEncryptionKeySizes[] = {16, 24, 32};
+constexpr int kValidMacDigestSizes[] = {32, 64};
+}  // namespace
+
+// Validate encoder settings against the game's known crypto bounds.
+// Returns true if all key sizes are within acceptable ranges.
+// Logs a WARNING with the offending field and value on rejection.
+static bool ValidatePacketEncoderSettings(const PacketEncoderSettings& settings, const char* which) {
+  // Validate encryption key size: must be one of {16, 24, 32}
+  bool encOk = false;
+  for (int validSize : kValidEncryptionKeySizes) {
+    if (settings.encryptionKeySize == validSize) {
+      encOk = true;
+      break;
+    }
+  }
+  if (!encOk) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.GAMESERVER] Rejected %s encoder settings: encryptionKeySize=%d "
+        "(expected 16, 24, or 32)",
+        which, settings.encryptionKeySize);
+    return false;
+  }
+
+  // Validate MAC key size: must be <= 128
+  if (settings.macKeySize < 0 || settings.macKeySize > kMaxMacKeySize) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.GAMESERVER] Rejected %s encoder settings: macKeySize=%d "
+        "(max %d)",
+        which, settings.macKeySize, kMaxMacKeySize);
+    return false;
+  }
+
+  // Validate random key size: must be <= 256
+  if (settings.randomKeySize < 0 || settings.randomKeySize > kMaxRandomKeySize) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.GAMESERVER] Rejected %s encoder settings: randomKeySize=%d "
+        "(max %d)",
+        which, settings.randomKeySize, kMaxRandomKeySize);
+    return false;
+  }
+
+  // Validate MAC digest size: must be one of {32, 64} (SHA-256 or SHA-512)
+  bool digestOk = false;
+  for (int validSize : kValidMacDigestSizes) {
+    if (settings.macDigestSize == validSize) {
+      digestOk = true;
+      break;
+    }
+  }
+  if (!digestOk) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.GAMESERVER] Rejected %s encoder settings: macDigestSize=%d "
+        "(expected 32 or 64)",
+        which, settings.macDigestSize);
+    return false;
+  }
+
+  return true;
+}
+
 // Helper: Extract key sizes from encoder flags
 // Format: bits 0-1: encryption/mac enabled
 //         bits 2-13: macDigestSize
@@ -227,6 +305,14 @@ EncodedMessage EncodeLobbySessionSuccessV5(const gameservice::v1::SNSLobbySessio
   // Get key sizes from flags
   auto serverSettings = PacketEncoderSettings::FromFlags(msg.server_encoder_flags());
   auto clientSettings = PacketEncoderSettings::FromFlags(msg.client_encoder_flags());
+
+  // Validate key sizes against the game engine's crypto bounds before forwarding.
+  // Reject (return empty) if ServerDB sent malicious or malformed sizes that would
+  // cause a fixed-buffer overflow or invalid key install in the game's encoder.
+  if (!ValidatePacketEncoderSettings(serverSettings, "server") ||
+      !ValidatePacketEncoderSettings(clientSettings, "client")) {
+    return result;  // Empty EncodedMessage — caller logs and skips forward
+  }
 
   // 11. ServerSequenceId (uint64_t LE)
   WriteLE(result.data, msg.server_sequence_id());
