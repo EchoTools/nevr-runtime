@@ -329,6 +329,7 @@ static LogFilterConfig MakeDefaultConfig() {
     };
 
     cfg.suppress_patterns = {
+        // -- original patterns --------------------------------------------------
         "Resetting player data",
         "List element 0x",
         "CGameStats::From (JSON): Stat",
@@ -360,6 +361,53 @@ static LogFilterConfig MakeDefaultConfig() {
         "Countdown UI disabled",
         "PickRandomTip:",
         "No screen stats info for game mode",
+
+        // -- N18 audit additions (LOGGING.md Rule 4) ---------------------------
+        //
+        // DATA: sampled echovr-server-32-2026-06-28T21-47-43.698.jsonl
+        //       (299,187 lines, ~50 MB rotated). 97.5% of sustained lines were
+        //       "[NEVR.PATCH] ExitProcess(3) suppressed in server mode (call #N)".
+        //       Game-native startup lines (graphics settings, engine init,
+        //       battle-pass/store cosmetics, allocator stats) accounted for the
+        //       remainder.
+
+        // #1 noise source: ExitProcess suppression log (per-call, INFO level,
+        // generates 97.5% of sustained log volume on a running server).
+        "ExitProcess(",
+
+        // Graphics settings block — irrelevant for headless server, repeated at
+        // startup, no operational value in any mode.
+        "Graphics quality:",
+        "MSAA mode:",
+        "TAA:",
+        "Multi-Res:",
+        "Adaptive Res:",
+        "Resolution Scale:",
+        "Fullscreen:",
+        "[SETTINGS TRANSLATOR] processing setting",
+
+        // Engine internal initialization chatter — bounded at startup but pure
+        // noise with no diagnostic value for operators.
+        "Loading global archives",
+        "Loading game archives",
+        "Loading archive 0x",
+        "Finished initializing engine",
+        "Initializing enumerate thread",
+        "Forking enumerate thread",
+
+        // Oculus / RAD provider init detail — engine lifecycle that no operator
+        // reads.
+        "Creating OVR provider",
+        "Creating RAD provider",
+        "Using RAD provider for mic input",
+
+        // Battle pass and store cosmetic state — 186650 days remaining means
+        // "forever"; this is commerce config, not ops.
+        "CR15NetBattlePass",
+        "CR15NetStore",
+
+        // Memory allocator stats per level load — verbose internal detail.
+        "[LEVELLOAD] Allocator used:",
     };
 
     cfg.truncate_rules = {
