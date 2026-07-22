@@ -169,5 +169,13 @@ if(BUILD_TESTING)
     # 5s timeout, which the Wine cold-start exceeds — failing the build even though the
     # tests themselves pass. PRE_TEST keeps `cmake --build` from launching Wine.
     gtest_discover_tests(test_xpid_patch DISCOVERY_MODE PRE_TEST)
+
+    # ParseEndpoint unit tests — validates N1 fix (strtoul + errno vs std::stoul throw)
+    add_executable(test_parse_endpoint tests/test_parse_endpoint.cpp)
+    target_include_directories(test_parse_endpoint PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(test_parse_endpoint PRIVATE GTest::gtest GTest::gtest_main ws2_32)
+    gtest_discover_tests(test_parse_endpoint DISCOVERY_MODE PRE_TEST)
   endif()
 endif()
