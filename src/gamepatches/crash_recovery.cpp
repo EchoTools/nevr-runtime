@@ -402,3 +402,22 @@ void ForceFatalExit(unsigned int code) {
   TerminateProcess(self, code);  // fallback (hook allows self-terminate outside crash window)
   ExitProcess(code);             // last resort
 }
+
+/// Server-mode fatal error handler — logs to the structured logger and terminates
+/// via ForceFatalExit. NEVER blocks on a modal dialog (no MessageBoxA).
+/// Replaces the default FatalError behavior (MessageBoxA + exit(1)) when the
+/// dedicated server must be absolutely non-interactive.
+static VOID ServerFatalErrorHandler(const CHAR* msg, const CHAR* title) {
+  Log(EchoVR::LogLevel::Error, "[FATAL] %s: %s", title ? title : "Echo Relay: Error",
+      msg ? msg : "An unknown error occurred.");
+  // ForceFatalExit sets g_forceExitInProgress to lift the ExitProcess suppression,
+  // then calls the real TerminateProcess directly. The server dies immediately
+  // with a nonzero exit code so a supervisor (systemd, Docker, watchdog) can
+  // restart it — never a silent hang.
+  ForceFatalExit(1);
+}
+
+void InstallFatalErrorHandler() {
+  SetFatalErrorHandler(ServerFatalErrorHandler);
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Fatal error handler installed — server will exit on fatal errors");
+}
