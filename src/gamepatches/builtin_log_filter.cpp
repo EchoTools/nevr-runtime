@@ -13,6 +13,7 @@
  */
 
 #include "builtin_log_filter.h"
+#include "common/logging.h"
 
 #include <MinHook.h>
 #include <nlohmann/json.hpp>
@@ -823,18 +824,33 @@ void BuiltinLogFilter::Init(uintptr_t base_addr, bool is_server) {
                                       reinterpret_cast<void*>(&hook_PrintfImpl),
                                       reinterpret_cast<void**>(&orig_PrintfImpl));
     if (status != MH_OK) {
-        BlfLog("MH_CreateHook failed for CLog::PrintfImpl: %d", status);
+        uint8_t actual[4] = {0};
+        memcpy(actual, g_hook_target, 4);
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] hook failed name=CLog::PrintfImpl va=0x%llX "
+            "expected=00000000 actual=%02x%02x%02x%02x status=%d",
+            static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL),
+            actual[0], actual[1], actual[2], actual[3],
+            static_cast<int>(status));
         return;
     }
 
     status = MH_EnableHook(g_hook_target);
     if (status != MH_OK) {
-        BlfLog("MH_EnableHook failed: %d", status);
+        uint8_t actual[4] = {0};
+        memcpy(actual, g_hook_target, 4);
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] hook failed name=CLog::PrintfImpl va=0x%llX "
+            "expected=00000000 actual=%02x%02x%02x%02x status=%d",
+            static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL),
+            actual[0], actual[1], actual[2], actual[3],
+            static_cast<int>(status));
         return;
     }
 
-    BlfLog("hook installed on CLog::PrintfImpl @ 0x%llx",
-           static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL));
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] hooked name=CLog::PrintfImpl va=0x%llX",
+        static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL));
 }
 
 void BuiltinLogFilter::Shutdown() {
