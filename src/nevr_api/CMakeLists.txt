@@ -7,6 +7,7 @@ set(GEN_DIR "${CMAKE_SOURCE_DIR}/gen/cpp")
 
 set(PROTO_GENERATED_SRCS
   ${GEN_DIR}/engine/v1/engine_http.pb.cc
+  ${GEN_DIR}/gameservice/v1/activities.pb.cc
   ${GEN_DIR}/gameservice/v1/friends.pb.cc
   ${GEN_DIR}/gameservice/v1/gameservice.pb.cc
   ${GEN_DIR}/gameservice/v1/party.pb.cc

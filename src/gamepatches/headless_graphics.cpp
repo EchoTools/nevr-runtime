@@ -448,11 +448,17 @@ static void OnDxgiLoad(const char* dll_name, HMODULE module) {
         if (MH_CreateHook((void*)fn1, (void*)&CreateDXGIFactory1_Hook,
                           (void**)&g_origCreateDXGIFactory1) == MH_OK &&
             MH_EnableHook((void*)fn1) == MH_OK) {
-            fprintf(stderr, "[NEVR.HEADLESS] hooked CreateDXGIFactory1 at %p\n", (void*)fn1);
-            fflush(stderr);
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.HEADLESS] hooked name=CreateDXGIFactory1 va=0x%llX",
+                reinterpret_cast<unsigned long long>(fn1));
         } else {
-            fprintf(stderr, "[NEVR.HEADLESS] FAILED to hook CreateDXGIFactory1\n");
-            fflush(stderr);
+            uint8_t actual[4] = {0};
+            memcpy(actual, (void*)fn1, 4);
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.HEADLESS] hook failed name=CreateDXGIFactory1 va=0x%llX "
+                "expected=00000000 actual=%02x%02x%02x%02x",
+                reinterpret_cast<unsigned long long>(fn1),
+                actual[0], actual[1], actual[2], actual[3]);
         }
     }
 
@@ -463,11 +469,17 @@ static void OnDxgiLoad(const char* dll_name, HMODULE module) {
         if (MH_CreateHook((void*)fn0, (void*)&CreateDXGIFactory_Hook,
                           (void**)&g_origCreateDXGIFactory) == MH_OK &&
             MH_EnableHook((void*)fn0) == MH_OK) {
-            fprintf(stderr, "[NEVR.HEADLESS] hooked CreateDXGIFactory at %p\n", (void*)fn0);
-            fflush(stderr);
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.HEADLESS] hooked name=CreateDXGIFactory va=0x%llX",
+                reinterpret_cast<unsigned long long>(fn0));
         } else {
-            fprintf(stderr, "[NEVR.HEADLESS] FAILED to hook CreateDXGIFactory\n");
-            fflush(stderr);
+            uint8_t actual[4] = {0};
+            memcpy(actual, (void*)fn0, 4);
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.HEADLESS] hook failed name=CreateDXGIFactory va=0x%llX "
+                "expected=00000000 actual=%02x%02x%02x%02x",
+                reinterpret_cast<unsigned long long>(fn0),
+                actual[0], actual[1], actual[2], actual[3]);
         }
     }
 }
@@ -479,11 +491,17 @@ static void OnD3d11Load(const char* dll_name, HMODULE module) {
         if (MH_CreateHook((void*)fn, (void*)&D3D11CreateDevice_Hook,
                           (void**)&g_origD3D11CreateDevice) == MH_OK &&
             MH_EnableHook((void*)fn) == MH_OK) {
-            fprintf(stderr, "[NEVR.HEADLESS] hooked D3D11CreateDevice at %p\n", (void*)fn);
-            fflush(stderr);
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.HEADLESS] hooked name=D3D11CreateDevice va=0x%llX",
+                reinterpret_cast<unsigned long long>(fn));
         } else {
-            fprintf(stderr, "[NEVR.HEADLESS] FAILED to hook D3D11CreateDevice\n");
-            fflush(stderr);
+            uint8_t actual[4] = {0};
+            memcpy(actual, (void*)fn, 4);
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.HEADLESS] hook failed name=D3D11CreateDevice va=0x%llX "
+                "expected=00000000 actual=%02x%02x%02x%02x",
+                reinterpret_cast<unsigned long long>(fn),
+                actual[0], actual[1], actual[2], actual[3]);
         }
     }
 }
@@ -519,11 +537,17 @@ static void OnD3d12Load(const char* dll_name, HMODULE module) {
         if (MH_CreateHook((void*)fn, (void*)&D3D12CreateDevice_Hook,
                           (void**)&g_origD3D12CreateDevice) == MH_OK &&
             MH_EnableHook((void*)fn) == MH_OK) {
-            fprintf(stderr, "[NEVR.HEADLESS] hooked D3D12CreateDevice at %p\n", (void*)fn);
-            fflush(stderr);
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.HEADLESS] hooked name=D3D12CreateDevice va=0x%llX",
+                reinterpret_cast<unsigned long long>(fn));
         } else {
-            fprintf(stderr, "[NEVR.HEADLESS] FAILED to hook D3D12CreateDevice\n");
-            fflush(stderr);
+            uint8_t actual[4] = {0};
+            memcpy(actual, (void*)fn, 4);
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.HEADLESS] hook failed name=D3D12CreateDevice va=0x%llX "
+                "expected=00000000 actual=%02x%02x%02x%02x",
+                reinterpret_cast<unsigned long long>(fn),
+                actual[0], actual[1], actual[2], actual[3]);
         }
     }
 }
@@ -540,8 +564,8 @@ void InstallHeadlessGraphicsHooks() {
     DllLoadHook::OnLoad("d3d11.dll", OnD3d11Load);
     DllLoadHook::OnLoad("d3d12.dll", OnD3d12Load);
 
-    fprintf(stderr, "[NEVR.HEADLESS] registered DXGI/D3D11/D3D12 headless hooks "
-                    "(active when g_isHeadless=%d)\n", (int)g_isHeadless);
-    fflush(stderr);
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.HEADLESS] registered dxgi/d3d11/d3d12 hooks g_isHeadless=%d",
+        static_cast<int>(g_isHeadless));
 #endif
 }

@@ -43,6 +43,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <cstring>
+#include <string>
 #include <MinHook.h>
 #include "process_mem.h"
 #include "cli.h"              // g_isServer
@@ -375,14 +376,15 @@ static uint64_t __fastcall HttpListenerBringupHook(int64_t* state, const char* a
 void Wave0::Init(uintptr_t base_addr) {
     g_base = base_addr;
 
-    fprintf(stderr, "[wave0] installing bug fix hooks\n"); fflush(stderr);
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] wave0 installing bug fix hooks");
 
 #ifdef _WIN32
     // Cache QPC frequency (constant per process, ~20ns on Windows, ~1-5us on Wine)
     LARGE_INTEGER freq;
     QueryPerformanceFrequency(&freq);
     s_cached_perf_freq = freq.QuadPart;
-    fprintf(stderr, "[wave0] QPC frequency: %lld Hz\n", (long long)s_cached_perf_freq); fflush(stderr);
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] wave0 qpc_freq=%lld Hz",
+        static_cast<long long>(s_cached_perf_freq));
 
     // Create persistent high-res waitable timer (BUG #11, #12 fix)
     // Try high-res first (Windows 10 1803+), fall back to standard
@@ -390,13 +392,15 @@ void Wave0::Init(uintptr_t base_addr) {
         CREATE_WAITABLE_TIMER_MANUAL_RESET | CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
         TIMER_ALL_ACCESS);
     if (s_cached_timer) {
-        fprintf(stderr, "[wave0] created high-resolution waitable timer\n"); fflush(stderr);
+        Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] wave0 timer=high_resolution");
     } else {
         s_cached_timer = CreateWaitableTimerW(NULL, TRUE, NULL);
         if (s_cached_timer) {
-            fprintf(stderr, "[wave0] created standard waitable timer (high-res unavailable)\n"); fflush(stderr);
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.PATCH] wave0 timer=standard (high-res unavailable)");
         } else {
-            fprintf(stderr, "[wave0] WARN: failed to create waitable timer, Sleep fallback\n"); fflush(stderr);
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] wave0 timer=failed fallback=sleep");
         }
     }
 
@@ -423,21 +427,40 @@ void Wave0::Init(uintptr_t base_addr) {
     };
 
     int installed = 0;
+    int failed = 0;
+    std::string failedNames;
+
     for (auto& h : hooks) {
         void* target = ResolveVA_Safe(g_base, h.va);
         if (!target) {
-            fprintf(stderr, "[wave0] SKIP %s — address 0x%llx resolved to unmapped memory\n",
-                    h.name, (unsigned long long)h.va); fflush(stderr);
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] hook skipped name=%s va=0x%llX reason=address_unmapped",
+                h.name, static_cast<unsigned long long>(h.va));
+            if (!failedNames.empty()) failedNames += ", ";
+            failedNames += h.name;
+            failed++;
             continue;
         }
+
+        // Read actual prologue bytes before hooking for Rule 5 failure reporting
+        uint8_t actual[4] = {0};
+        memcpy(actual, target, 4);
+
         if (MH_CreateHook(target, h.detour, h.original) == MH_OK &&
             MH_EnableHook(target) == MH_OK) {
-            fprintf(stderr, "[wave0] hooked %s at 0x%llx\n", h.name,
-                (unsigned long long)h.va); fflush(stderr);
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.PATCH] hooked name=%s va=0x%llX",
+                h.name, static_cast<unsigned long long>(h.va));
             installed++;
         } else {
-            fprintf(stderr, "[wave0] FAILED to hook %s at 0x%llx\n", h.name,
-                (unsigned long long)h.va); fflush(stderr);
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] hook failed name=%s va=0x%llX "
+                "expected=00000000 actual=%02x%02x%02x%02x",
+                h.name, static_cast<unsigned long long>(h.va),
+                actual[0], actual[1], actual[2], actual[3]);
+            if (!failedNames.empty()) failedNames += ", ";
+            failedNames += h.name;
+            failed++;
         }
     }
 
@@ -447,12 +470,18 @@ void Wave0::Init(uintptr_t base_addr) {
     // only the final ~250us of busy-wait precision is lost.
     void* busywait = ResolveVA_Safe(g_base, VA_PRECISION_SLEEP_BUSYWAIT);
     if (!busywait) {
-        fprintf(stderr, "[wave0] SKIP CPrecisionSleep::BusyWait — address resolved to unmapped memory\n");
-        fflush(stderr);
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] hook skipped name=CPrecisionSleep::BusyWait va=0x%llX reason=address_unmapped",
+            static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT));
+        if (!failedNames.empty()) failedNames += ", ";
+        failedNames += "CPrecisionSleep::BusyWait";
+        failed++;
     } else {
         uint8_t ret_byte = 0xC3;
         ProcessMemcpy(busywait, &ret_byte, 1);
-        fprintf(stderr, "[wave0] patched CPrecisionSleep::BusyWait -> RET (BUG#13 fix)\n"); fflush(stderr);
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.PATCH] patched name=CPrecisionSleep::BusyWait va=0x%llX (BUG#13 fix, RET patch)",
+            static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT));
         installed++;
     }
 
@@ -462,31 +491,63 @@ void Wave0::Init(uintptr_t base_addr) {
     {
         void* target = ResolveVA_Safe(g_base, VA_HTTP_LISTENER_BRINGUP);
         if (!target) {
-            fprintf(stderr, "[wave0] SKIP HTTP listener bringup — address unmapped\n"); fflush(stderr);
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] hook skipped name=HTTPListenerBringup va=0x%llX reason=address_unmapped",
+                static_cast<unsigned long long>(VA_HTTP_LISTENER_BRINGUP));
+            if (!failedNames.empty()) failedNames += ", ";
+            failedNames += "HTTPListenerBringup";
+            failed++;
         } else if (memcmp(target, HTTP_LISTENER_PROLOGUE, sizeof(HTTP_LISTENER_PROLOGUE)) != 0) {
-            fprintf(stderr, "[wave0] SKIP HTTP listener bringup — prologue mismatch at 0x%llx "
-                    "(binary version drift?)\n", (unsigned long long)VA_HTTP_LISTENER_BRINGUP); fflush(stderr);
+            uint8_t actual[4];
+            memcpy(actual, target, 4);
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] hook failed name=HTTPListenerBringup va=0x%llX "
+                "expected=%02x%02x%02x%02x actual=%02x%02x%02x%02x reason=prologue_mismatch",
+                static_cast<unsigned long long>(VA_HTTP_LISTENER_BRINGUP),
+                HTTP_LISTENER_PROLOGUE[0], HTTP_LISTENER_PROLOGUE[1],
+                HTTP_LISTENER_PROLOGUE[2], HTTP_LISTENER_PROLOGUE[3],
+                actual[0], actual[1], actual[2], actual[3]);
+            if (!failedNames.empty()) failedNames += ", ";
+            failedNames += "HTTPListenerBringup";
+            failed++;
         } else if (MH_CreateHook(target, (void*)&HttpListenerBringupHook,
                                  (void**)&s_origHttpListenerBringup) == MH_OK &&
                    MH_EnableHook(target) == MH_OK) {
-            fprintf(stderr, "[wave0] hooked HTTP listener bringup at 0x%llx (BUG#62 fix)\n",
-                    (unsigned long long)VA_HTTP_LISTENER_BRINGUP); fflush(stderr);
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.PATCH] hooked name=HTTPListenerBringup va=0x%llX (BUG#62 fix)",
+                static_cast<unsigned long long>(VA_HTTP_LISTENER_BRINGUP));
             installed++;
         } else {
-            fprintf(stderr, "[wave0] FAILED to hook HTTP listener bringup at 0x%llx\n",
-                    (unsigned long long)VA_HTTP_LISTENER_BRINGUP); fflush(stderr);
+            uint8_t actual[4];
+            memcpy(actual, target, 4);
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] hook failed name=HTTPListenerBringup va=0x%llX "
+                "expected=%02x%02x%02x%02x actual=%02x%02x%02x%02x",
+                static_cast<unsigned long long>(VA_HTTP_LISTENER_BRINGUP),
+                HTTP_LISTENER_PROLOGUE[0], HTTP_LISTENER_PROLOGUE[1],
+                HTTP_LISTENER_PROLOGUE[2], HTTP_LISTENER_PROLOGUE[3],
+                actual[0], actual[1], actual[2], actual[3]);
+            if (!failedNames.empty()) failedNames += ", ";
+            failedNames += "HTTPListenerBringup";
+            failed++;
         }
     }
 
-    fprintf(stderr, "[wave0] complete: %d hooks/patches installed\n", installed); fflush(stderr);
+    // Aggregate summary per LOGGING.md Rule 5
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] hooks installed: %d succeeded, %d failed (failed: %s)",
+        installed, failed,
+        failedNames.empty() ? "none" : failedNames.c_str());
+
     g_initialized = (installed > 0);
 #endif
 }
 
 void Wave0::Shutdown() {
     if (!g_initialized) return;
-    fprintf(stderr, "[wave0] shutdown — overflow_ms=%ld null_deref=%ld dx_fatal=%ld dx_transient=%ld\n",
-        s_overflow_ms_count, s_null_deref_count, s_dx_error_count, s_dx_transient_count); fflush(stderr);
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] wave0 shutdown overflow_ms=%ld null_deref=%ld dx_fatal=%ld dx_transient=%ld",
+        s_overflow_ms_count, s_null_deref_count, s_dx_error_count, s_dx_transient_count);
 #ifdef _WIN32
     struct { void** orig; uint64_t va; } entries[] = {
         { (void**)&s_origGetTimeMicroseconds, VA_GET_TIME_MICROSECONDS },
