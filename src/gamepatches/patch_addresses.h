@@ -412,6 +412,14 @@ constexpr size_t XPID_PLATFORM_DASH_PREFIX_SIZE = 4;
 constexpr uintptr_t XPID_PLATFORM_COMPACT_NAME = 0x16D7138;
 constexpr size_t XPID_PLATFORM_COMPACT_NAME_SIZE = 4;
 
+/// VA 0x1416D0F9C: "???-" (4 bytes) — catch-all fallback for unrecognized provider_code.
+/// When CNSUser state isn't set yet during early init (login_state=0), the game's
+/// platform-name lookup hits this fallback and formats "[NSUSER] Creating user ???-1".
+/// Patched to "DSC-" so the early-init fallback matches the EULA-cache directory prefix
+/// (N14: EULA acceptance cached per-platform-prefix, so a ???- prefix breaks cache lookup).
+constexpr uintptr_t XPID_PLATFORM_FALLBACK_PREFIX = 0x16D0F9C;
+constexpr size_t XPID_PLATFORM_FALLBACK_PREFIX_SIZE = 4;
+
 // ============================================================================
 // Asset CDN / Loadout Hooks
 // ============================================================================

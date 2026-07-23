@@ -7,6 +7,7 @@
 // Expected original bytes at each patch site (for validation).
 static const BYTE kPsnShort[] = {0x50, 0x53, 0x4E, 0x00};  // "PSN\0"
 static const BYTE kPsnDash[]  = {0x50, 0x53, 0x4E, 0x2D};  // "PSN-"
+static const BYTE kQmarkDash[] = {0x3F, 0x3F, 0x3F, 0x2D}; // "???-"
 
 // Replacement bytes.
 static const BYTE kDscShort[] = {0x44, 0x53, 0x43, 0x00};  // "DSC\0"
@@ -21,7 +22,7 @@ VOID PatchDscProvider() {
   using namespace PatchAddresses;
   const CHAR* base = EchoVR::g_GameBaseAddress;
 
-  // Validate all three sites before patching any.
+  // Validate all four sites before patching any.
   bool ok = true;
   if (!ValidateBytes(base, XPID_PLATFORM_SHORT_NAME, kPsnShort, sizeof(kPsnShort))) {
     Log(EchoVR::LogLevel::Error,
@@ -38,20 +39,27 @@ VOID PatchDscProvider() {
         "[NEVR.XPID] Compact name mismatch at RVA 0x%X — expected \"PSN\\0\"", XPID_PLATFORM_COMPACT_NAME);
     ok = false;
   }
+  if (!ValidateBytes(base, XPID_PLATFORM_FALLBACK_PREFIX, kQmarkDash, sizeof(kQmarkDash))) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.XPID] Fallback prefix mismatch at RVA 0x%X — expected \"???-\"", XPID_PLATFORM_FALLBACK_PREFIX);
+    ok = false;
+  }
 
   if (!ok) {
     Log(EchoVR::LogLevel::Error, "[NEVR.XPID] Aborting DSC provider patch — prologue validation failed");
     return;
   }
 
-  // Apply all three patches.
+  // Apply all four patches.
   static_assert(sizeof(kDscShort) == XPID_PLATFORM_SHORT_NAME_SIZE);
   static_assert(sizeof(kDscDash)  == XPID_PLATFORM_DASH_PREFIX_SIZE);
   static_assert(sizeof(kDscShort) == XPID_PLATFORM_COMPACT_NAME_SIZE);
+  static_assert(sizeof(kDscDash)  == XPID_PLATFORM_FALLBACK_PREFIX_SIZE);
 
   ApplyPatch(XPID_PLATFORM_SHORT_NAME,  kDscShort, sizeof(kDscShort));
   ApplyPatch(XPID_PLATFORM_DASH_PREFIX, kDscDash,  sizeof(kDscDash));
   ApplyPatch(XPID_PLATFORM_COMPACT_NAME, kDscShort, sizeof(kDscShort));
+  ApplyPatch(XPID_PLATFORM_FALLBACK_PREFIX, kDscDash, sizeof(kDscDash));
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.XPID] DSC provider patch applied (PSN- → DSC- at 3 sites)");
+  Log(EchoVR::LogLevel::Info, "[NEVR.XPID] DSC provider patch applied (PSN-/?\?- → DSC- at 4 sites)");
 }
