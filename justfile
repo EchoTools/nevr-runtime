@@ -16,6 +16,10 @@ configure: _vcpkg-mingw
 build: configure
     @cmake --build --preset {{ preset }} 2>&1 | grep -E '(error|Error|ERROR|fatal|FAILED)' || true
 
+# Build only the echovr_server.exe launcher
+launcher: configure
+    cmake --build --preset {{ preset }} --target echovr_server
+
 # Build with full compiler output
 verbose-build: configure
     cmake --build --preset {{ preset }}
