@@ -6,6 +6,8 @@
 #include <signal.h>
 #include <windows.h>
 
+#include <unistd.h>
+
 #include "cli.h"
 #include "common/echovr_functions.h"
 #include "common/globals.h"
@@ -362,18 +364,26 @@ void InstallVEH() {
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Breakpoint VEH installed (handles int3 after ExitProcess suppression)");
 }
 
-// POSIX signal handler — sets the shutdown flag. The flag is checked each
-// game tick by PrecisionSleepWaitHook, which runs the full graceful teardown.
-// Needed on Wine/Linux where SetConsoleCtrlHandler never fires because
-// -noconsole is auto-enabled and no console exists to deliver CTRL_C_EVENT.
-// Uses fprintf (not Log) because Log() is not signal-safe.
+// POSIX signal handler — initiates shutdown DIRECTLY.
+// The prior flag-based approach (set g_shutdownRequested, check per-frame in
+// PrecisionSleepWaitHook) loses the race: after SIGINT, the game begins teardown
+// before the next frame runs, so PerformGracefulShutdown was never invoked and
+// the listening socket survived as a zombie (N13/N38 root cause re-open).
+// Uses write() for async-signal-safe diagnostics (not fprintf/Log).
+// PerformGracefulShutdown is NOT formally async-signal-safe (calls Log, GetProcAddress,
+// etc.), but called directly from here because the flag alternative is proven broken:
+// the per-frame check never fires after signal delivery. Re-entrant-safe via
+// InterlockedExchange gate inside PerformGracefulShutdown.
 static void PosixSignalHandler(int sig) {
-  const char* name = (sig == SIGINT) ? "SIGINT" : (sig == SIGTERM) ? "SIGTERM" : "SIGNAL";
-  fprintf(stderr, "[NEVR.PATCH] Received %s (%d) — requesting graceful shutdown\n", name, sig);
-  fflush(stderr);
-  g_shutdownRequested = 1;
-  // Re-register in case the OS resets to SIG_DFL (SysV semantics on some platforms)
-  signal(sig, PosixSignalHandler);
+  if (sig == SIGINT) {
+    write(STDERR_FILENO, "[NEVR.PATCH] SIGINT received — direct shutdown\n", 47);
+  } else if (sig == SIGTERM) {
+    write(STDERR_FILENO, "[NEVR.PATCH] SIGTERM received — direct shutdown\n", 48);
+  } else {
+    write(STDERR_FILENO, "[NEVR.PATCH] signal received — direct shutdown\n", 45);
+  }
+  PerformGracefulShutdown(0);
+  // Unreachable — PerformGracefulShutdown calls ForceFatalExit which terminates.
 }
 
 void InstallConsoleCtrlHandler() {
@@ -383,15 +393,16 @@ void InstallConsoleCtrlHandler() {
   SetConsoleCtrlHandler(
       [](DWORD dwCtrlType) -> BOOL {
         if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_CLOSE_EVENT || dwCtrlType == CTRL_BREAK_EVENT) {
-          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Console signal %lu received — requesting graceful shutdown",
+          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Console signal %lu received — direct shutdown",
               dwCtrlType);
-          g_shutdownRequested = 1;
+          PerformGracefulShutdown(0);
+          // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
           return TRUE;
         }
         return FALSE;
       },
       TRUE);
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Console ctrl handler installed (CTRL+C will request shutdown)");
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Console ctrl handler installed (CTRL+C will trigger shutdown)");
 
   // Register POSIX signal handlers for Wine/Linux.
   // On Wine, SetConsoleCtrlHandler requires a console (which doesn't exist with
@@ -399,13 +410,17 @@ void InstallConsoleCtrlHandler() {
   // POSIX signal() works under Wine because Wine's msvcrt delegates to the host's
   // libc signal handling. On native Windows, signal() may be a no-op for SIGINT/
   // SIGTERM — that's fine; the console handler above covers that case.
+  //
+  // These handlers call PerformGracefulShutdown DIRECTLY — the prior flag-based
+  // approach (set g_shutdownRequested, check per-frame) lost the race to game
+  // teardown; the per-frame check never ran after signal delivery (N13/N38 re-open).
   if (signal(SIGINT, PosixSignalHandler) == SIG_ERR) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to register SIGINT handler");
   }
   if (signal(SIGTERM, PosixSignalHandler) == SIG_ERR) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to register SIGTERM handler");
   }
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] POSIX signal handlers installed (SIGINT/SIGTERM -> graceful shutdown)");
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] POSIX signal handlers installed (SIGINT/SIGTERM -> direct shutdown)");
 }
 
 void ForceFatalExit(unsigned int code) {
@@ -451,10 +466,11 @@ void InstallFatalErrorHandler() {
 }
 
 void PerformGracefulShutdown(unsigned int exitCode) {
-  // Prevent re-entry: if two check points fire simultaneously (e.g. the
-  // per-frame PrecisionSleepWaitHook and the per-transition NetGameSwitchStateHook
-  // see the flag in the same tick), only the first call runs the shutdown
-  // sequence. Subsequent calls arrive after TerminateProcess — unreachable.
+  // Prevent re-entry: if the POSIX signal handler fires while another thread
+  // is already running this sequence, only the first call executes. The
+  // second call arrives after TerminateProcess — unreachable.
+  // This gate also handles the (now-dead-code) per-frame / per-transition
+  // flag checks in PrecisionSleepWaitHook and NetGameSwitchStateHook.
   static volatile LONG s_shuttingDown = 0;
   if (InterlockedExchange(&s_shuttingDown, 1) != 0) {
     // Already shutting down — another thread is running the sequence.
