@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <memory>
+#include <thread>
 
 #include "constants.h"
 #include "echovr.h"
@@ -53,9 +54,13 @@ class GameServerLib : public EchoVR::IServerLib {
   std::unique_ptr<WebSocketClient> m_wsClient;
   std::unique_ptr<TelemetryStreamer> m_telemetry;
 
-  // Set by the detached graceful-shutdown thread when it finishes.
+  // Set by the graceful-shutdown thread when it finishes.
   // Destructor waits on this before tearing down members.
   std::atomic<bool> m_shutdownComplete{false};
+
+  // Joinable handle for the shutdown thread — replaces detached thread.
+  // Joined in ~GameServerLib to prevent use-after-free on member destruction.
+  std::thread m_shutdownThread;
 
   // Helper methods
   void RegisterBroadcasterCallbacks();

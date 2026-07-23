@@ -832,16 +832,14 @@ GameServerLib::GameServerLib()
       m_telemetry(std::make_unique<TelemetryStreamer>()) {}
 
 GameServerLib::~GameServerLib() {
-  // If a graceful-shutdown thread is running, wait for it before destroying members
-  // it references (m_context, m_wsClient, etc.).
-  if (!m_shutdownComplete.load()) {
-    constexpr int kTimeoutMs = 5000;
-    constexpr int kPollMs = 50;
-    int waited = 0;
-    while (!m_shutdownComplete.load() && waited < kTimeoutMs) {
-      Sleep(kPollMs);
-      waited += kPollMs;
-    }
+  // Join the shutdown thread so it finishes before members are destroyed.
+  // The thread calls ForceFatalExit (TerminateProcess) at completion, so in the
+  // normal graceful-shutdown path the join is interrupted by process death and
+  // this destructor never finishes — which is correct.  When the destructor runs
+  // without a prior BeginGracefulShutdown call the thread is not joinable and
+  // the join is a no-op.
+  if (m_shutdownThread.joinable()) {
+    m_shutdownThread.join();
   }
 }
 
@@ -1087,6 +1085,13 @@ VOID GameServerLib::Update() {
 // UnkFunc1 moved up near UnkFunc0 for vtable logging
 
 void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
+  // Re-entry guard: if a shutdown thread is already running, don't spawn another.
+  if (m_shutdownThread.joinable()) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.GAMESERVER] BeginGracefulShutdown already in progress — ignoring redundant call");
+    return;
+  }
+
   // Prevent further reconnection attempts so the next disconnect is final.
   if (m_wsClient) m_wsClient->DisableReconnection();
 
@@ -1096,7 +1101,7 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
   }
 
   auto* self = this;
-  std::thread([self, registrationFailed]() {
+  m_shutdownThread = std::thread([self, registrationFailed]() {
     constexpr DWORD kMaxWaitMs   = 20 * 60 * 1000;  // 20 minutes
     constexpr DWORD kGraceMs     = 10 * 1000;        // 10 seconds after round end
     constexpr DWORD kPollMs      = 1000;
@@ -1133,7 +1138,7 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
     // running on torn-down state until it access-violates. ForceFatalExit bypasses
     // the suppression via the saved kernel32 ExitProcess.
     ForceFatalExit(0);
-  }).detach();
+  });
 }
 
 // Authenticate the server with Nakama using the operator's discord_id + password.
