@@ -436,8 +436,11 @@ void TokenAuth::Shutdown() {
         delete s_refreshThread;
         s_refreshThread = nullptr;
     }
-    delete s_auth;
-    s_auth = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(s_tokenMutex);
+        delete s_auth;
+        s_auth = nullptr;
+    }
     s_authAttempted = false;
     Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Shutdown complete");
 }
