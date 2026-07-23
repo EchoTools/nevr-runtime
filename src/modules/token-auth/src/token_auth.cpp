@@ -41,6 +41,9 @@ public:
     bool RunDeviceAuthFlow();
     bool SaveToken();
     bool IsAuthenticated() const;
+    std::string GetTokenValue() const { return m_token; }
+    uint64_t GetDiscordIdValue() const { return m_discordId; }
+    void UpdateFromRefresh(const CachedAuthToken& auth);
 
 private:
     std::string RequestDeviceCode();
@@ -57,6 +60,7 @@ private:
     uint64_t m_refreshTokenExpiry = 0;
     std::string m_userId;
     std::string m_username;
+    uint64_t m_discordId = 0;
     bool m_configured = false;
 };
 
@@ -83,6 +87,7 @@ bool DeviceAuth::TryLoadCachedToken() {
         m_refreshTokenExpiry = auth.refresh_token_expiry;
         m_userId = auth.user_id;
         m_username = auth.username;
+        m_discordId = auth.GetDiscordId();
 
         uint64_t remaining = (auth.token_expiry - static_cast<uint64_t>(time(nullptr))) / 60;
         Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Loaded cached token (expires in %llum)",
@@ -99,6 +104,7 @@ bool DeviceAuth::TryLoadCachedToken() {
             m_refreshTokenExpiry = auth.refresh_token_expiry;
             m_userId = auth.user_id;
             m_username = auth.username;
+            m_discordId = auth.GetDiscordId();
             return true;
         }
         Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Token refresh failed -- will re-authenticate");
@@ -111,12 +117,24 @@ bool DeviceAuth::TryLoadCachedToken() {
     return false;
 }
 
+void DeviceAuth::UpdateFromRefresh(const CachedAuthToken& auth) {
+    m_token = auth.token;
+    m_tokenExpiry = auth.token_expiry;
+    if (!auth.refresh_token.empty()) {
+        m_refreshToken = auth.refresh_token;
+        m_refreshTokenExpiry = auth.refresh_token_expiry;
+    }
+    if (!auth.user_id.empty()) m_userId = auth.user_id;
+    if (!auth.username.empty()) m_username = auth.username;
+    m_discordId = auth.GetDiscordId();
+}
+
 bool DeviceAuth::SaveToken() {
-    if (m_token.empty()) return false;
+    if (m_refreshToken.empty()) return false;
 
     CachedAuthToken auth;
-    auth.token = m_token;
-    auth.token_expiry = m_tokenExpiry;
+    // Access token deliberately NOT set — SaveAuthToken only persists
+    // refresh_token + user_id + username.
     auth.refresh_token = m_refreshToken;
     auth.refresh_token_expiry = m_refreshTokenExpiry;
     auth.user_id = m_userId;
@@ -127,7 +145,7 @@ bool DeviceAuth::SaveToken() {
         return false;
     }
 
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Token saved to .credentials.json");
+    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Refresh token saved to .credentials.json");
     return true;
 }
 
@@ -189,11 +207,17 @@ std::string DeviceAuth::PollDeviceCode(const std::string& code) {
             std::string token = j.value("token", "");
             if (!token.empty()) {
                 m_token = token;
-                m_tokenExpiry = static_cast<uint64_t>(time(nullptr)) + 3600;
+                m_tokenExpiry = static_cast<uint64_t>(time(nullptr)) + 60;
                 m_refreshToken = j.value("refresh_token", "");
                 m_refreshTokenExpiry = static_cast<uint64_t>(time(nullptr)) + (30 * 24 * 3600);
                 m_userId = j.value("user_id", "");
                 m_username = j.value("username", "");
+                // Parse discord ID from the JWT access token
+                {
+                    CachedAuthToken tmp;
+                    tmp.token = m_token;
+                    m_discordId = tmp.GetDiscordId();
+                }
                 return "verified";
             }
         }
@@ -339,6 +363,9 @@ static void RefreshThreadFunc(std::string url, std::string httpKey) {
         if (cached.HasValidRefreshToken()) {
             if (RefreshAuthToken(cached, url, httpKey)) {
                 Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Token refreshed successfully");
+                // Update the in-memory DeviceAuth instance so GetToken/GetDiscordId
+                // return the new token immediately (they no longer read from disk).
+                s_auth->UpdateFromRefresh(cached);
             } else {
                 Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Token refresh failed");
             }
@@ -348,15 +375,15 @@ static void RefreshThreadFunc(std::string url, std::string httpKey) {
 
 std::string TokenAuth::GetToken() {
     std::lock_guard<std::mutex> lk(s_tokenMutex);
-    auto cached = LoadCachedAuthToken();
-    if (cached.HasValidToken()) return cached.token;
-    return "";
+    if (!s_auth) return "";
+    if (!s_auth->IsAuthenticated()) return "";
+    return s_auth->GetTokenValue();
 }
 
 uint64_t TokenAuth::GetDiscordId() {
     std::lock_guard<std::mutex> lk(s_tokenMutex);
-    auto cached = LoadCachedAuthToken();
-    return cached.GetDiscordId();
+    if (!s_auth) return 0;
+    return s_auth->GetDiscordIdValue();
 }
 
 // ---------------------------------------------------------------------------

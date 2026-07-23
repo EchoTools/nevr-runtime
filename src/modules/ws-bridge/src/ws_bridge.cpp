@@ -228,8 +228,9 @@ void InstallWebSocketBridge() {
             remote->disablePerMessageDeflate();
 
             // Get auth token and Discord ID.
-            // In server mode, token_auth is disabled so the JWT may be absent or stale.
-            // Fall back to nevr_discord_id from config.
+            // In client mode, the identity comes from the token_auth module's JWT.
+            // In server mode, token_auth is disabled so the JWT may be absent — fall
+            // back to nevr_discord_id from config (server identity is static).
             std::string bearerToken;
             uint64_t discordId = 0;
             {
@@ -241,7 +242,7 @@ void InstallWebSocketBridge() {
               }
               if (getDiscordIdFn) discordId = getDiscordIdFn();
             }
-            if (discordId == 0 && (EchoVR::Json*)s_earlyConfig) {
+            if (discordId == 0 && g_isServer && (EchoVR::Json*)s_earlyConfig) {
               CHAR* cfgId = EchoVR::JsonValueAsString(
                   (EchoVR::Json*)s_earlyConfig, (CHAR*)"nevr_discord_id", NULL, false);
               if (cfgId && cfgId[0] != '\0') {

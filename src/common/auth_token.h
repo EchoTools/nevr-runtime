@@ -79,6 +79,11 @@ struct CachedAuthToken {
     }
 };
 
+// Access token maximum lifetime, seconds (client-side cap).
+// The server may issue a longer-lived token; we clamp to this value so that a
+// leaked access token has a negligible window.
+static constexpr uint64_t kMaxAccessTokenLifetimeSec = 60;
+
 // Get the directory containing the main executable.
 // All _local/ paths are resolved relative to this.
 inline std::string GetExeDirectory() {
@@ -134,17 +139,30 @@ inline CachedAuthToken LoadCachedAuthToken() {
         result.refresh_token_expiry = j.value("refresh_token_expiry", uint64_t(0));
         result.user_id = j.value("user_id", "");
         result.username = j.value("username", "");
+
+        // Client-side cap: access token lifetime is at most 60 seconds.
+        // The server may have issued a longer-lived token (legacy files, or a
+        // refresh that stored it before this cap was added). Clamp so that a
+        // leaked access token from disk has a negligible window.
+        uint64_t now = static_cast<uint64_t>(time(nullptr));
+        uint64_t maxExpiry = now + kMaxAccessTokenLifetimeSec;
+        if (result.token_expiry > maxExpiry) {
+            result.token_expiry = maxExpiry;
+        }
+
         return result;
     } catch (...) {
         return {};
     }
 }
 
-// Saves auth token to _local/.credentials.json. Searches for existing _local/ directory
-// with parent-directory fallback (same paths as LoadCachedAuthToken). Creates
-// _local/ next to the executable if none found.
+// Saves the REFRESH TOKEN (and identity) to _local/.credentials.json.
+// The access token is deliberately NOT persisted — it lives in memory only.
+// Searches for existing _local/ directory with parent-directory fallback
+// (same paths as LoadCachedAuthToken). Creates _local/ next to the executable
+// if none found.
 inline bool SaveAuthToken(const CachedAuthToken& auth) {
-    if (auth.token.empty()) return false;
+    if (auth.refresh_token.empty()) return false;
 
     // Find existing _local/ dir relative to executable
     std::string exeDir = GetExeDirectory();
@@ -182,12 +200,10 @@ inline bool SaveAuthToken(const CachedAuthToken& auth) {
     }
 
     nlohmann::json j;
-    j["token"] = auth.token;
-    j["token_expiry"] = auth.token_expiry;
-    if (!auth.refresh_token.empty()) {
-        j["refresh_token"] = auth.refresh_token;
-        j["refresh_token_expiry"] = auth.refresh_token_expiry;
-    }
+    // Access token deliberately NOT written — lives in memory only (60s lifetime).
+    // The refresh token is the only persistent credential.
+    j["refresh_token"] = auth.refresh_token;
+    j["refresh_token_expiry"] = auth.refresh_token_expiry;
     if (!auth.user_id.empty()) j["user_id"] = auth.user_id;
     if (!auth.username.empty()) j["username"] = auth.username;
 
