@@ -57,6 +57,10 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgSyntax(pArgSyntax, "-upnp", 0, 0, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-upnp", "[NEVR] Enable UPnP port forwarding");
 
+  EchoVR::AddArgSyntax(pArgSyntax, "-allow-dbgcore", 0, 0, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-allow-dbgcore",
+      "[NEVR] Allow dbgcore.dll in the game directory (legacy injection)");
+
   // Backwards compat: accept deprecated flags without error (they're silently ignored)
   EchoVR::AddArgSyntax(pArgSyntax, "-timestep", 1, 1, FALSE);
   EchoVR::AddArgSyntax(pArgSyntax, "-fixedtimestep", 0, 0, FALSE);

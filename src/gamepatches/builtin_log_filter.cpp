@@ -408,6 +408,15 @@ static LogFilterConfig MakeDefaultConfig() {
 
         // Memory allocator stats per level load — verbose internal detail.
         "[LEVELLOAD] Allocator used:",
+
+        // -- dbgcore.dll symbol handler failure (harmless under Wine) ------------
+        // The game's symbol handler tries to load Windows debug-help DLLs
+        // (dbgcore.dll, dbghelp.dll, symsrv.dll) at Error level. Under Wine,
+        // dbgcore.dll is not available — the failure is cosmetic since the
+        // symbol handler is a debug facility, not a functional requirement.
+        // The same "Failed to initialize symbol handler" prefix fires for all
+        // three DLLs; we suppress only dbgcore (the one Wine definitively lacks).
+        "couldn't load dbgcore.dll",
     };
 
     cfg.truncate_rules = {
