@@ -65,6 +65,13 @@ static std::shared_ptr<ix::WebSocket> g_loginRemoteWs;
 // it connects, so the game receives matchmaker responses on the right peer.
 static ix::WebSocket* g_activeGameWs = nullptr;
 
+// The game-side WS that registered the shared remote's onMessageCallback
+// (conn=1 — login). When this connection closes, the lambda's captured pointers
+// (pairPtr, gameWsPtr) become dangling. Used in the Close handler to clear the
+// callback only when the owning pair is destroyed, not when a sharing pair
+// (conn>=2, matchmaker) closes.
+static ix::WebSocket* g_loginGameWs = nullptr;
+
 // ============================================================================
 // LoginRequest builder
 // ============================================================================
@@ -521,6 +528,7 @@ void InstallWebSocketBridge() {
               if (connIdx == 1) {
                 g_loginRemoteWs = remote;
                 g_activeGameWs = gameWsPtr;
+                g_loginGameWs = gameWsPtr;
               }
             }
             // Start after insertion so the remote callback can find the pair in g_pairs
@@ -631,6 +639,13 @@ void InstallWebSocketBridge() {
                 // and all callbacks have completed. Clear the callback after stop
                 // so no further invocations can reference the freed ProxyPair.
                 it->second->remoteWs->stop();
+                it->second->remoteWs->setOnMessageCallback(nullptr);
+              } else if (&gameWs == g_loginGameWs) {
+                // The login pair (conn=1) that registered the remote's callback
+                // is closing, but the remote is shared with other connections
+                // (conn>=2 matchmaker). Clear the callback so the lambda's
+                // captured pointers (pairPtr, gameWsPtr) don't dangle, but
+                // don't stop() — other connections still use the remote.
                 it->second->remoteWs->setOnMessageCallback(nullptr);
               }
               g_pairs.erase(it);

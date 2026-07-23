@@ -606,7 +606,13 @@ void InstallWebSocketBridge() {
             std::lock_guard<std::mutex> lk(g_pairsMutex);
             auto it = g_pairs.find(&gameWs);
             if (it != g_pairs.end()) {
+              // stop() is synchronous — blocks until the remote's thread
+              // terminates and no more callbacks can fire. Clear the callback
+              // after stop so the lambda's captured raw pointers
+              // (pairPtr, gameWsPtr) are released immediately rather than
+              // outliving the destroyed ProxyPair in memory.
               it->second->remoteWs->stop();
+              it->second->remoteWs->setOnMessageCallback(nullptr);
               g_pairs.erase(it);
             }
             Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game disconnected");
