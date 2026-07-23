@@ -32,7 +32,8 @@ void InstallFatalErrorHandler();
 /// socket FD to prevent wineserver zombie — N38 root cause), (2) unhooks Wave0
 /// MinHook hooks, (3) calls ForceFatalExit to terminate the process.
 /// Safe to call from any thread — uses InterlockedExchange to prevent re-entry.
-/// Called from the per-frame PrecisionSleepWaitHook (flag check), the
-/// per-transition NetGameSwitchStateHook (flag check + session-end path),
-/// and the POSIX signal handler path (via flag → next tick check).
+/// Primary call sites: POSIX signal handler (SIGINT/SIGTERM — direct call, NOT
+/// flag-deferred), SetConsoleCtrlHandler lambda (direct), per-frame
+/// PrecisionSleepWaitHook (flag check, now dead-code defense), per-transition
+/// NetGameSwitchStateHook (flag check + session-end path).
 void PerformGracefulShutdown(unsigned int exitCode);
