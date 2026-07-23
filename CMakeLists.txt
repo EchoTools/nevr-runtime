@@ -196,6 +196,9 @@ add_subdirectory(src/legacy/gameserver)
 
 add_subdirectory(src/libovr-stub)
 
+# Server launcher — thin CreateProcess wrapper that spawns echovr.exe -server -noconsole
+add_subdirectory(src/launcher)
+
 add_subdirectory(plugins)
 
 # =============================================================================
