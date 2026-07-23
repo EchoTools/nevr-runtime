@@ -1,0 +1,496 @@
+[NEVR.PATCH] Initializing v3.2.0+377.b965894 base=0000000140000000
+[NEVR] fn ptrs OK
+[NEVR] minhook OK, hooking...
+[NEVR.DLLHOOK] LoadLibrary hooks OK
+[NEVR] DLL load hooks OK
+[NEVR] headless graphics hooks registered
+[NEVR] CSysDLL_GetSymbol hook OK
+[NEVR] CSysDLL_Load hook OK (pnsradgameserver -> in-process ServerLib)
+[NEVR] broadcaster guard OK
+[builtin_log_filter] initializing (base=0x140000000, server=false)
+[builtin_log_filter] no config file found, using built-in defaults (52 suppress patterns)
+[builtin_log_filter] logging to: C:\users\andrew\AppData\Local\EchoVR\logs/nevr-2026-07-23T06-53-11.050.jsonl
+[90m2026-07-23T06:53:11.051Z[0m [0minfo[0m [NEVR.PATCH] hooked name=CLog::PrintfImpl va=0x1400EBE70[0m
+[NEVR] log filter OK
+[NEVR] BuildCmdLine target=00000001400fea00
+[NEVR] BuildCmdLine hook: OK
+[NEVR] PreprocessCmd hook: OK
+[NEVR] game hooks OK
+[NEVR] tls: ws bridge deferred to boot
+[90m2026-07-23T06:53:11.056Z[0m [0minfo[0m [NEVR.PATCH] CreateProcessA hook installed (crash reporter disabled)[0m
+[90m2026-07-23T06:53:11.057Z[0m [0minfo[0m [NEVR.PATCH] CreateProcessW hook installed (crash reporter disabled)[0m
+[90m2026-07-23T06:53:11.057Z[0m [0minfo[0m [NEVR.PATCH] ExitProcess hook installed (prevents crash reporter termination)[0m
+[90m2026-07-23T06:53:11.058Z[0m [0minfo[0m [NEVR.PATCH] TerminateProcess hook installed (prevents self-termination)[0m
+[NEVR] crash OK
+[NEVR] platform hooks deferred to module
+[90m2026-07-23T06:53:11.058Z[0m [0minfo[0m [NEVR.PATCH] Game main wrapper hook installed (server crash recovery)[0m
+[90m2026-07-23T06:53:11.059Z[0m [0minfo[0m [NEVR.PATCH] Engine entity lookup hook installed (null-pointer guard)[0m
+[90m2026-07-23T06:53:11.059Z[0m [0minfo[0m [NEVR.PATCH] Entity prop dispatch hook installed (null-pointer guard)[0m
+[90m2026-07-23T06:53:11.060Z[0m [0minfo[0m [NEVR.PATCH] BugSplat crash handler hook installed (server crash suppression)[0m
+[90m2026-07-23T06:53:11.060Z[0m [0minfo[0m [NEVR.PATCH] InitializeGlobalGameSpace hook installed (server crash fix)[0m
+[NEVR] server hooks OK
+[90m2026-07-23T06:53:11.060Z[0m [0minfo[0m [NEVR.PATCH] Breakpoint VEH installed (handles int3 after ExitProcess suppression)[0m
+[NEVR] veh OK
+[90m2026-07-23T06:53:11.060Z[0m [0minfo[0m [NEVR.PATCH] Console ctrl handler installed (CTRL+C will request shutdown)[0m
+[90m2026-07-23T06:53:11.060Z[0m [0minfo[0m [NEVR.PATCH] POSIX signal handlers installed (SIGINT/SIGTERM -> graceful shutdown)[0m
+[NEVR] console OK
+[NEVR] patches OK
+[90m2026-07-23T06:53:11.060Z[0m [0minfo[0m [NEVR.PATCH] wave0 installing bug fix hooks[0m
+[90m2026-07-23T06:53:11.060Z[0m [0minfo[0m [NEVR.PATCH] wave0 qpc_freq=10000000 Hz[0m
+[90m2026-07-23T06:53:11.060Z[0m [0minfo[0m [NEVR.PATCH] wave0 timer=high_resolution[0m
+[90m2026-07-23T06:53:11.061Z[0m [0minfo[0m [NEVR.PATCH] hooked name=GetTimeMicroseconds (BUG#1 fix) va=0x1400D00C0[0m
+[90m2026-07-23T06:53:11.061Z[0m [0minfo[0m [NEVR.PATCH] hooked name=CTimer_GetMilliSeconds va=0x1400D0110[0m
+[90m2026-07-23T06:53:11.062Z[0m [0minfo[0m [NEVR.PATCH] hooked name=EndMultiplayer (BUG#6 fix) va=0x140162450[0m
+[90m2026-07-23T06:53:11.062Z[0m [0minfo[0m [NEVR.PATCH] hooked name=CPrecisionSleep::Wait (BUG#11/#12 fix) va=0x1401CE0B0[0m
+[90m2026-07-23T06:53:11.063Z[0m [0minfo[0m [NEVR.PATCH] hooked name=CSpinWait::WaitForValue (BUG#14 fix) va=0x141500ED8[0m
+[90m2026-07-23T06:53:11.063Z[0m [0minfo[0m [NEVR.PATCH] patched name=CPrecisionSleep::BusyWait va=0x1401CE4C0 (BUG#13 fix, RET patch)[0m
+[90m2026-07-23T06:53:11.063Z[0m [0minfo[0m [NEVR.PATCH] hooked name=HTTPListenerBringup va=0x1401F5B00 (BUG#62 fix)[0m
+[90m2026-07-23T06:53:11.063Z[0m [0minfo[0m [NEVR.PATCH] hooks installed: 7 succeeded, 0 failed (failed: none)[0m
+[NEVR] wave0 OK
+[90m2026-07-23T06:53:11.064Z[0m [0minfo[0m [NEVR.CDN] Loadout_ResolveDataFromId hook installed at 00000001404f37a0[0m
+[90m2026-07-23T06:53:11.064Z[0m [0minfo[0m [NEVR.PATCH] All hooks installed[0m
+[90m2026-07-23T06:53:11.065Z[0m [0minfo[0m [NEVR.CDN] Background fetch started[0m
+[90m2026-07-23T06:53:11.067Z[0m [31merror[0m Failed to initialize symbol handler: couldn't load dbgcore.dll (Module not found.) [Z:\home\andrew\src\nevr-runtime\echovr\bin\win10\dbgcore.dll][0m
+[90m2026-07-23T06:53:11.067Z[0m [0minfo[0m ==========================================================
+ Echo VR
+==========================================================[0m
+[90m2026-07-23T06:53:11.070Z[0m [31merror[0m 0x1f234cb1527e2544:
+    While operating on file 'Z:\home\andrew\src\nevr-runtime\echovr\bin\win10\_local\config.json'
+    Windows Error (3): Path not found.
+    ...in d:\projects\rad\dev\src\engine\libs\os\csysfile_win_xb1.cpp at line 179[0m
+[90m2026-07-23T06:53:11.071Z[0m [31merror[0m 0x1f234cb1527e2544:
+    While operating on file 'Z:\home\andrew\src\nevr-runtime\echovr\bin\win10\..\_local\config.json'
+    Windows Error (3): Path not found.
+    ...in d:\projects\rad\dev\src\engine\libs\os\csysfile_win_xb1.cpp at line 179[0m
+[90m2026-07-23T06:53:11.072Z[0m [0minfo[0m [NEVR.PATCH] Early config loaded from: Z:\home\andrew\src\nevr-runtime\echovr\bin\win10\..\..\_local\config.json[0m
+[90m2026-07-23T06:53:11.260Z[0m [0minfo[0m [NEVR.RESOURCE] Hook installed[0m
+[90m2026-07-23T06:53:11.260Z[0m [0minfo[0m [NEVR.RESOURCE] Registered embedded override: splash_texture (type=0xbeac1969cb7b8861 name=0x1f72c5e0fc9fc8c0, 1050548 bytes)[0m
+[90m2026-07-23T06:53:11.261Z[0m [0minfo[0m [NEVR.RESOURCE] Init complete (1 overrides registered)[0m
+[90m2026-07-23T06:53:11.261Z[0m [0minfo[0m [NEVR.PATCH] Fatal error handler installed — server will exit on fatal errors[0m
+[90m2026-07-23T06:53:11.261Z[0m [0minfo[0m [NEVR.MODULE] Loading: platform_compat[0m
+[90m2026-07-23T06:53:11.267Z[0m [0minfo[0m [NEVR.PATCH] SSL/TLS modernization hook installed (Schannel)[0m
+[90m2026-07-23T06:53:11.268Z[0m [0minfo[0m [NEVR.PATCH] CreateDirectoryW hook installed[0m
+[90m2026-07-23T06:53:11.269Z[0m [0minfo[0m [NEVR.PATCH] CreateDirectoryA hook installed[0m
+[90m2026-07-23T06:53:11.269Z[0m [0minfo[0m [NEVR.PATCH] WinHTTP to libcurl hook installed (CoCreateInstance)[0m
+[90m2026-07-23T06:53:11.269Z[0m [0minfo[0m [NEVR.MODULE] platform_compat initialized[0m
+[90m2026-07-23T06:53:11.269Z[0m [0minfo[0m [NEVR.MODULE] Loaded: platform_compat[0m
+[90m2026-07-23T06:53:11.269Z[0m [0minfo[0m [NEVR.MODULE] Loading: token_auth[0m
+[90m2026-07-23T06:53:11.275Z[0m [0minfo[0m [NEVR.AUTH] Running in server mode -- token auth disabled[0m
+[90m2026-07-23T06:53:11.275Z[0m [0minfo[0m [NEVR.MODULE] token_auth initialized[0m
+[90m2026-07-23T06:53:11.275Z[0m [0minfo[0m [NEVR.MODULE] Loaded: token_auth[0m
+[90m2026-07-23T06:53:11.275Z[0m [0minfo[0m [NEVR.MODULE] Loading: ws_bridge[0m
+[90m2026-07-23T06:53:11.280Z[0m [0minfo[0m [NEVR.PATCH] SSL/TLS modernized: Enabled TLS 1.2/1.3 with ECDSA/EdDSA/RSA support[0m
+[90m2026-07-23T06:53:11.280Z[0m [0minfo[0m [NEVR.PATCH] Service redirect [nevr_socket_uri]: ws://g.echovrce.com:80/spr -> ws://g.echovrce.com:80/spr[0m
+[90m2026-07-23T06:53:11.285Z[0m [0minfo[0m [NEVR.WS] Proxy listening on ws://127.0.0.1:56666 -> ws://g.echovrce.com:80/spr[0m
+[90m2026-07-23T06:53:11.285Z[0m [0minfo[0m [NEVR.MODULE] ws_bridge initialized[0m
+[90m2026-07-23T06:53:11.285Z[0m [0minfo[0m [NEVR.MODULE] Loaded: ws_bridge[0m
+[90m2026-07-23T06:53:11.285Z[0m [0minfo[0m [NEVR.PATCH] Server mode — headless + noovr applied[0m
+[90m2026-07-23T06:53:11.286Z[0m [0minfo[0m [NEVR.HEADLESS] CEngineConfig copy hook installed — bit-0x1 will be cleared after config copy[0m
+[90m2026-07-23T06:53:11.286Z[0m [0minfo[0m [NEVR.HEADLESS] D3D12 device init skipped — forced device-free branch at +0x154af7f[0m
+[90m2026-07-23T06:53:11.286Z[0m [0minfo[0m [NEVR.HEADLESS] renderer init skipped — forced device-free branch (0x74->jmp) at +0x154b0e4[0m
+[90m2026-07-23T06:53:11.286Z[0m [0minfo[0m [NEVR.HEADLESS] GUI subsystem init skipped — forced device-free branch (0x74->jmp) at +0x154b38f[0m
+[90m2026-07-23T06:53:11.286Z[0m [0minfo[0m [NEVR.HEADLESS] render-submit-context init skipped — forced device-free branch (0x74->jmp) at +0x154d7e4[0m
+[90m2026-07-23T06:53:11.286Z[0m [0minfo[0m [NEVR.HEADLESS] renderer setup skipped — forced device-free branch (0x75->jmp) at +0x154b683[0m
+[90m2026-07-23T06:53:11.287Z[0m [0minfo[0m [NEVR.HEADLESS] SYSNET check hooked — will always report internet-connected[0m
+[90m2026-07-23T06:53:11.287Z[0m [0minfo[0m [pnsrad] patched "pnsovr" -> "pnsrad"[0m
+[90m2026-07-23T06:53:11.287Z[0m [0minfo[0m [pnsrad] patched "pnsdemo" -> "pnsrad"[0m
+[90m2026-07-23T06:53:11.287Z[0m [0minfo[0m [pnsrad] patched OVR branch at +0x1580e5[0m
+[90m2026-07-23T06:53:11.287Z[0m [0minfo[0m [pnsrad] registered DLL notification for pnsrad.dll patches[0m
+[90m2026-07-23T06:53:11.287Z[0m [0minfo[0m [pnsrad] init complete (3 echovr.exe patches)[0m
+[90m2026-07-23T06:53:11.287Z[0m [0minfo[0m [NEVR.XPID] DSC provider patch applied (PSN-/??- → DSC- at 4 sites)[0m
+[90m2026-07-23T06:53:11.288Z[0m [0minfo[0m [NEVR.PATCH] OVR platform branch bypassed - allowing normal initialization[0m
+[90m2026-07-23T06:53:11.288Z[0m [0minfo[0m [NEVR.PATCH] Installed Oculus Platform SDK blocking hooks[0m
+[90m2026-07-23T06:53:11.288Z[0m [0minfo[0m [NEVR.PATCH] Expected savings: 50-80MB RAM, 8-12% CPU per instance[0m
+[90m2026-07-23T06:53:11.288Z[0m [0minfo[0m [NEVR.PATCH] Disabled loading tips system for server mode[0m
+[90m2026-07-23T06:53:11.290Z[0m [0minfo[0m [NEVR.PATCH] Installed Wwise audio blocking hooks[0m
+[90m2026-07-23T06:53:11.290Z[0m [0minfo[0m [NEVR.PATCH] Expected savings: 20-30MB RAM, 5-8% CPU per instance[0m
+[90m2026-07-23T06:53:11.290Z[0m [0minfo[0m [NEVR.PATCH] VOIP components preserved for multiplayer[0m
+[90m2026-07-23T06:53:11.290Z[0m [0minfo[0m [NEVR.PROFILE] WorkingSet: 129 MB, PrivateBytes: 0 MB[0m
+[90m2026-07-23T06:53:11.290Z[0m [0minfo[0m [NEVR.PROFILE] Module d3d11: not loaded[0m
+[90m2026-07-23T06:53:11.290Z[0m [0minfo[0m [NEVR.PROFILE] Module LibOVRPlatform: not loaded[0m
+[90m2026-07-23T06:53:11.290Z[0m [0minfo[0m [NEVR.PROFILE] Module AkSoundEngine: not loaded[0m
+[90m2026-07-23T06:53:11.290Z[0m [0minfo[0m [NEVR.PATCH] CPrecisionSleep::BusyWait patched to RET (Wine CPU optimization)[0m
+[90m2026-07-23T06:53:11.291Z[0m [0minfo[0m [NEVR.PLUGIN] Scanning for plugins in: Z:\home\andrew\src\nevr-runtime\echovr\bin\win10\plugins\[0m
+[90m2026-07-23T06:53:11.291Z[0m [0minfo[0m [NEVR.PLUGIN] Found 3 plugin candidate(s)[0m
+[anim_debugger] initializing (base=0x140000000)
+[anim_debugger]   hook 1: InitRootEvaluator @ VA 0x140340280
+[anim_debugger]   hook 2: CAnimTree::Create @ VA 0x140fb4640
+[anim_debugger]   hook 3: CAnimationCRI init @ VA 0x14027b6f0
+[anim_debugger] initialization complete (3/3 hooks installed)
+[90m2026-07-23T06:53:11.298Z[0m [0minfo[0m [NEVR.PLUGIN] Loaded: anim_debugger v2.0.0 (API v2)[0m
+[broadcaster_bridge] Resolved: send=0000000140f89af0 recv=0000000140f87aa0
+[broadcaster_bridge] Send prologue: 48 8B C4 48 89 58 08 4C
+[broadcaster_bridge] Prologue mismatch — proceeding anyway (Wine compatibility)
+[90m2026-07-23T06:53:11.312Z[0m [0minfo[0m [NEVR.PLUGIN] Loaded: broadcaster_bridge v1.0.0 (API v2)[0m
+[log_filter] initializing (base=0x140000000)
+[log_filter] no config file found, using built-in defaults (31 suppress patterns)
+[90m2026-07-23T06:53:11.324Z[0m [0minfo[0m [NEVR.PATCH] CreateDirectoryA('Z:\home\andrew\src\nevr-runtime\echovr\bin\win10\logs') called[0m
+[90m2026-07-23T06:53:11.324Z[0m [0minfo[0m [NEVR.PATCH] CreateDirectoryA result=0, lastError=183[0m
+[log_filter] logging to: Z:\home\andrew\src\nevr-runtime\echovr\bin\win10\logs/echovr-server-32-2026-07-23T06-53-11.324.jsonl
+[log_filter] hook installed on CLog::PrintfImpl @ 0x1400ebe70
+[log_filter] initialization complete — engine logging is now filtered
+[90m2026-07-23T06:53:11.326Z[0m [0minfo[0m [NEVR.PLUGIN] Loaded: log_filter v2.0.0 (API v2)[0m
+[90m2026-07-23T06:53:11.326Z[0m [0minfo[0m [NEVR.PLUGIN] 3 plugin(s) loaded[0m
+[90m2026-07-23T06:53:11.331Z[0m [0minfo[0m [NEVR.HEADLESS] CEngine config copy — cleared renderer bit 0x1: 0x00000195 -> 0x00000194[0m
+[90m2026-07-23T06:53:11.423Z[0m [0minfo[0m [NEVR.CDN] Manifest loaded: 2 packages[0m
+[90m2026-07-23T06:53:11.424Z[0m [0minfo[0m [NEVR.CDN] Fetch complete: 0 downloaded, 2 cached, 0 failed, 2 tints loaded[0m
+libEGL warning: pci id for fd 37: 10de:2488, driver (null)
+
+pci id for fd 38: 10de:2488, driver (null)
+pci id for fd 39: 10de:2488, driver (null)
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: pci id for fd 37: 10de:2488, driver (null)
+
+pci id for fd 38: 10de:2488, driver (null)
+pci id for fd 39: 10de:2488, driver (null)
+libEGL warning: egl: failed to create dri2 screen
+libEGL warning: pci id for fd 37: 10de:2488, driver (null)
+
+0090:err:winediag:nodrv_CreateWindow Application tried to create a window, but no driver could be loaded.
+0090:err:winediag:nodrv_CreateWindow L"The explorer process failed to start."
+0090:err:systray:initialize_systray Could not create tray window
+0024:err:winediag:nodrv_CreateWindow Application tried to create a window, but no driver could be loaded.
+0024:err:winediag:nodrv_CreateWindow L"Make sure that your display server is running and that its variables are set."
+[90m2026-07-23T06:53:11.669Z[0m [0minfo[0m [NEVR.HEADLESS] CEngine config copy — cleared renderer bit 0x1: 0x00000175 -> 0x00000174[0m
+[90m2026-07-23T06:53:11.670Z[0m [0minfo[0m CL Args: "Z:\home\andrew\src\nevr-runtime\echovr\bin\win10\echovr.exe" -server -noconsole[0m
+[90m2026-07-23T06:53:11.670Z[0m [0minfo[0m ---> Starting 10 worker threads in the scheduler.[0m
+[90m2026-07-23T06:53:11.741Z[0m [0minfo[0m Initializing enumerate thread: 0000000000000000[0m
+[90m2026-07-23T06:53:11.741Z[0m [0minfo[0m Forking enumerate thread: 00000001420dfa20 : 0000000000000000[0m
+ (not connected)
+[90m2026-07-23T06:53:11.764Z[0m [0minfo[0m Loading global archives[0m
+[90m2026-07-23T06:53:11.764Z[0m [0minfo[0m Loading archive 0xCB3A93530D07FDC5[0m
+[90m2026-07-23T06:53:11.769Z[0m [0minfo[0m Loading game archives[0m
+[90m2026-07-23T06:53:11.779Z[0m [0minfo[0m Finished initializing engine[0m
+[90m2026-07-23T06:53:11.788Z[0m [0minfo[0m Loading archive 0xC6BC8607972268C9[0m
+[90m2026-07-23T06:53:11.795Z[0m [0minfo[0m Creating OVR provider[0m
+[90m2026-07-23T06:53:11.805Z[0m [0minfo[0m [pnsrad] patched login check at +0x85b53[0m
+[90m2026-07-23T06:53:11.805Z[0m [0minfo[0m [pnsrad] patched identity guard at +0x8ef25[0m
+[90m2026-07-23T06:53:11.805Z[0m [0minfo[0m [pnsrad] patched state check at +0x8f1b6[0m
+[90m2026-07-23T06:53:11.805Z[0m [0minfo[0m Creating RAD provider[0m
+[90m2026-07-23T06:53:11.805Z[0m [0minfo[0m Using RAD provider for mic input[0m
+[90m2026-07-23T06:53:11.806Z[0m [0minfo[0m [NETGAME] Resetting local connection stats[0m
+[90m2026-07-23T06:53:11.806Z[0m [0minfo[0m [NEVR.PATCH] Service redirect [config_host]: wss://config.readyatdawn.com/rad/rad15_live -> ws://127.0.0.1:56666[0m
+[90m2026-07-23T06:53:11.806Z[0m [0minfo[0m [NEVR.PATCH] Service redirect [configservice_host]: ws://127.0.0.1:56666 -> ws://127.0.0.1:56666[0m
+[90m2026-07-23T06:53:11.806Z[0m [0minfo[0m [NSUSER] Setting local user data storage directory to C:\users\andrew\AppData\Local\RAD\EchoVR\users[0m
+[90m2026-07-23T06:53:11.807Z[0m [0minfo[0m [NETGAME] NetGame switching state (from logged out, to loading root)[0m
+[90m2026-07-23T06:53:11.807Z[0m [0minfo[0m [LEVELLOAD] Loading level '0xAC360E41E4EDE056'[0m
+[90m2026-07-23T06:53:11.895Z[0m [0minfo[0m [LEVELLOAD] Loading level '0x43934C379CF1E366'[0m
+[90m2026-07-23T06:53:11.900Z[0m [33mwarn[0m There are less R15NetRewardItem assignments than components (Did you get or make a change to item_assignment.json without rebuilding?)[0m
+[90m2026-07-23T06:53:11.902Z[0m [0minfo[0m [SETTINGS TRANSLATOR] processing setting 'game|experimentalthrowing'[0m
+[90m2026-07-23T06:53:11.902Z[0m [0minfo[0m     Graphics quality: Low[0m
+[90m2026-07-23T06:53:11.902Z[0m [0minfo[0m     MSAA mode: None[0m
+[90m2026-07-23T06:53:11.902Z[0m [0minfo[0m     TAA: Enabled[0m
+[90m2026-07-23T06:53:11.902Z[0m [0minfo[0m     Multi-Res: Enabled[0m
+[90m2026-07-23T06:53:11.902Z[0m [0minfo[0m     Adaptive Res: Enabled[0m
+[90m2026-07-23T06:53:11.902Z[0m [0minfo[0m     Resolution Scale: 1.000000[0m
+[90m2026-07-23T06:53:11.902Z[0m [0minfo[0m     Fullscreen: Enabled[0m
+[90m2026-07-23T06:53:11.902Z[0m [0minfo[0m [LEVELLOAD] Finished loading level '0x43934C379CF1E366' in 7 ms[0m
+[90m2026-07-23T06:53:11.902Z[0m [0minfo[0m [LEVELLOAD] Allocator used: 643352, available: 133574376[0m
+[90m2026-07-23T06:53:11.902Z[0m [0minfo[0m [LEVELLOAD] Enabling level '0x43934C379CF1E366'[0m
+[90m2026-07-23T06:53:11.903Z[0m [0minfo[0m [LEVELLOAD] Level '0xAC360E41E4EDE056' offset by (0.000, 0.000, 0.000)[0m
+[90m2026-07-23T06:53:11.908Z[0m [0minfo[0m [SETTINGS TRANSLATOR] processing setting 'game|experimentalthrowing'[0m
+[90m2026-07-23T06:53:11.908Z[0m [0minfo[0m     Graphics quality: Low[0m
+[90m2026-07-23T06:53:11.908Z[0m [0minfo[0m     MSAA mode: None[0m
+[90m2026-07-23T06:53:11.908Z[0m [0minfo[0m     TAA: Enabled[0m
+[90m2026-07-23T06:53:11.908Z[0m [0minfo[0m     Multi-Res: Enabled[0m
+[90m2026-07-23T06:53:11.908Z[0m [0minfo[0m     Adaptive Res: Enabled[0m
+[90m2026-07-23T06:53:11.909Z[0m [0minfo[0m     Resolution Scale: 1.000000[0m
+[90m2026-07-23T06:53:11.909Z[0m [0minfo[0m     Fullscreen: Enabled[0m
+[90m2026-07-23T06:53:11.910Z[0m [0minfo[0m [CONFIGS] RequestConfig: type=main_menu, id=main_menu[0m
+[90m2026-07-23T06:53:11.911Z[0m [31merror[0m ~ Scriptnode can't find actor in gamespace ~
+	Script Actor:     0x710CD6662636E6B8
+	Script:           0x26EBC7ED80EBA931
+	Node Type:        EnableComponentNode
+	Node UUID:        c9971725
+	Target Actor:     0x41D2D7311B3A020C
+	Gamespace:        
+: raduri://0x26EBC7ED80EBA931?elementname=c9971725&elementtype=scriptnodeelementtype=scriptproperty[0m
+[90m2026-07-23T06:53:11.912Z[0m [0minfo[0m [LEVELLOAD] Finished loading level '0xAC360E41E4EDE056' in 104 ms[0m
+[90m2026-07-23T06:53:11.912Z[0m [0minfo[0m [LEVELLOAD] Allocator used: 5798744, available: 128418984[0m
+[90m2026-07-23T06:53:11.912Z[0m [0minfo[0m [LEVELLOAD] Enabling level '0xAC360E41E4EDE056'[0m
+[90m2026-07-23T06:53:11.912Z[0m [0minfo[0m [NEVR.PATCH] WinHTTP COM → libcurl bridge[0m
+[90m2026-07-23T06:53:11.912Z[0m [0minfo[0m [NEVR.PATCH] Made COM rdata page writable (was 0x2)[0m
+[90m2026-07-23T06:53:11.912Z[0m [0minfo[0m [NEVR.HTTP] QI accepted — returning stub (riid match)[0m
+[90m2026-07-23T06:53:11.912Z[0m [0minfo[0m [NEVR.HTTP] SetRequestHeader User-Agent: rad-http[0m
+[90m2026-07-23T06:53:11.912Z[0m [0minfo[0m [NEVR.HTTP] SetProxy called[0m
+[90m2026-07-23T06:53:11.912Z[0m [0minfo[0m [NEVR.HEADLESS] SYSNET check — returning TRUE (internet-connected) for server mode[0m
+[90m2026-07-23T06:53:11.925Z[0m [0minfo[0m [NEVR.PATCH] Service redirect [login_host]: wss://login.readyatdawn.com/rad/rad15_live -> ws://127.0.0.1:56666[0m
+[90m2026-07-23T06:53:11.925Z[0m [0minfo[0m [NEVR.PATCH] Service redirect [loginservice_host]: ws://127.0.0.1:56666 -> ws://127.0.0.1:56666[0m
+[90m2026-07-23T06:53:11.925Z[0m [0minfo[0m [NSUSER] Creating user ???-1[0m
+[90m2026-07-23T06:53:11.925Z[0m [0minfo[0m [NETGAME] Logging in...[0m
+[90m2026-07-23T06:53:11.925Z[0m [0minfo[0m [NETGAME] NetGame switching state (from loading root, to logging in)[0m
+[90m2026-07-23T06:53:11.926Z[0m [31merror[0m [SCRIPT] 0xEDC9026F9F7DA90C: Tried to call function Disable externally but concurrent calls were set too low. Increase on FunctionDef node.[0m
+[90m2026-07-23T06:53:11.929Z[0m [0minfo[0m [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:56666 established[0m
+[90m2026-07-23T06:53:11.929Z[0m [0minfo[0m [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:56666 established[0m
+[90m2026-07-23T06:53:11.929Z[0m [0minfo[0m [NEVR.WS] Using nevr_discord_id from config: 1492861453923913968[0m
+[90m2026-07-23T06:53:11.929Z[0m [0minfo[0m [NEVR.WS] Using nevr_discord_id from config: 1492861453923913968[0m
+[90m2026-07-23T06:53:11.929Z[0m [0minfo[0m [NEVR.WS] Proxy: game connected (conn=0, ws=00007fffffa84750), bridging to ws://g.echovrce.com:80/spr[0m
+[90m2026-07-23T06:53:11.929Z[0m [0minfo[0m [NEVR.WS] Proxy: game connected (conn=1, ws=00007fffffacc3e0), bridging to ws://g.echovrce.com:80/spr[0m
+[90m2026-07-23T06:53:11.930Z[0m [0minfo[0m [NEVR.WS] game->server [0]: sym=0x82869f0b37eb4378 len=39 (conn=0)[0m
+[90m2026-07-23T06:53:11.930Z[0m [0minfo[0m [NEVR.WS]   -> queued (remote not open yet, 1 pending)[0m
+[90m2026-07-23T06:53:12.039Z[0m [0minfo[0m [NEVR.WS] Remote open (conn=0): ws://g.echovrce.com:80/spr[0m
+[90m2026-07-23T06:53:12.039Z[0m [0minfo[0m [NEVR.WS] CNSUser BEFORE: state=0x0 flags=0x32[0m
+[90m2026-07-23T06:53:12.039Z[0m [0minfo[0m [NEVR.WS] CNSUser AFTER:  state=0x2 flags=0x4[0m
+[90m2026-07-23T06:53:12.039Z[0m [0minfo[0m [NEVR.WS] login injected xpid=DSC-1492861453923913968 platform=2 conn=0 size=528[0m
+[90m2026-07-23T06:53:12.043Z[0m [0minfo[0m [NEVR.WS] Remote open (conn=1): ws://g.echovrce.com:80/spr[0m
+[90m2026-07-23T06:53:12.043Z[0m [0minfo[0m [NEVR.WS] CNSUser BEFORE: state=0x2 flags=0x4[0m
+[90m2026-07-23T06:53:12.043Z[0m [0minfo[0m [NEVR.WS] CNSUser AFTER:  state=0x2 flags=0x4[0m
+[90m2026-07-23T06:53:12.043Z[0m [0minfo[0m [NEVR.WS] login injected xpid=DSC-1492861453923913968 platform=2 conn=1 size=528[0m
+[90m2026-07-23T06:53:12.181Z[0m [0minfo[0m [NEVR.WS] server->game [conn=1]: 560 bytes sym=0xa5acc1a90d0cce47 payloadLen=32[0m
+[90m2026-07-23T06:53:12.181Z[0m [0minfo[0m [NEVR.WS] LOGIN SUCCESS[0m
+[90m2026-07-23T06:53:12.181Z[0m [0minfo[0m [NEVR.WS] Injected FriendListSubscribeRequest (56 bytes)[0m
+[NSUSER] LoginId: 2BD2B749-8663-11F1-BA33-383EC87527A1:
+
+[NSUSER] Login settings received: {"config_data":{"active_battle_pass_season":{"id":"active_battle_pass_season","starttime":1711497600,"endtime":17911180800},"active_store_entry":{"id":"active_store_entry","starttime":1711497600,"endtime":17911180800},"active_store_featured_entry":{"id":"active_store_featured_entry","starttime":1711497600,"endtime":17911180800}},"env":"live","iap_unlocked":true,"remote_log_errors":false,"remote_log_rich_presence":false,"remote_log_metrics":true,"remote_log_warnings":false,"remote_log_social":false}
+[90m2026-07-23T06:53:12.182Z[0m [0minfo[0m [CONFIGS] RequestConfig: type=active_battle_pass_season, id=active_battle_pass_season[0m
+[90m2026-07-23T06:53:12.182Z[0m [0minfo[0m [CONFIGS] RequestConfig: type=active_store_entry, id=active_store_entry[0m
+[90m2026-07-23T06:53:12.182Z[0m [0minfo[0m [CONFIGS] RequestConfig: type=active_store_featured_entry, id=active_store_featured_entry[0m
+[90m2026-07-23T06:53:12.182Z[0m [0minfo[0m [PROFILE] Getting logged in user DSC-1's profile: {"defaultclientprofileid":"def[0m
+[90m2026-07-23T06:53:12.182Z[0m [0minfo[0m [DOCUMENTS] Requesting document (eula)[0m
+[90m2026-07-23T06:53:12.182Z[0m [0minfo[0m [NEVR.WS] game->server [0]: sym=0x82869f0b37eb4378 len=71 (conn=0)[0m
+[90m2026-07-23T06:53:12.182Z[0m [0minfo[0m [NEVR.WS] game->server [0]: sym=0xfb772a4221fc8d70 len=301 (conn=1)[0m
+[90m2026-07-23T06:53:12.183Z[0m [0minfo[0m [NEVR.WS] game->server [1]: sym=0x82869f0b37eb4378 len=57 (conn=0)[0m
+[90m2026-07-23T06:53:12.183Z[0m [0minfo[0m [NEVR.WS] game->server [1]: sym=0xfcced6f169822bb8 len=8 (conn=1)[0m
+[90m2026-07-23T06:53:12.183Z[0m [0minfo[0m [NEVR.WS] game->server [2]: sym=0x82869f0b37eb4378 len=75 (conn=0)[0m
+[90m2026-07-23T06:53:12.183Z[0m [0minfo[0m [NEVR.WS]   -> forwarded (success=1)[0m
+[90m2026-07-23T06:53:12.183Z[0m [0minfo[0m [NEVR.WS]   -> forwarded (success=1)[0m
+[90m2026-07-23T06:53:12.183Z[0m [0minfo[0m [NEVR.WS] server->game [conn=0]: 311 bytes sym=0xa5acc1a90d0cce47 payloadLen=32[0m
+[90m2026-07-23T06:53:12.183Z[0m [0minfo[0m [NEVR.WS] LOGIN SUCCESS[0m
+[90m2026-07-23T06:53:12.183Z[0m [0minfo[0m [NEVR.WS] Injected FriendListSubscribeRequest (56 bytes)[0m
+[90m2026-07-23T06:53:12.184Z[0m [0minfo[0m [NEVR.WS] server->game [conn=0]: 277 bytes sym=0xb9cdaf586f7bd012 payloadLen=228[0m
+[90m2026-07-23T06:53:12.184Z[0m [0minfo[0m [CONFIGS] ConfigSuccessCB: type=0x1509EE27440E1D7B, id=0x1509EE27440E1D7B {"news[0m
+[90m2026-07-23T06:53:12.186Z[0m [0minfo[0m [NEVR.WS] server->game [conn=0]: 249 bytes sym=0xfabf5f8719bfebf3 payloadLen=200[0m
+[90m2026-07-23T06:53:12.215Z[0m [0minfo[0m [NEVR.WS] server->game [conn=1]: 56 bytes sym=0xa78aeb2a4e89b10b payloadLen=32[0m
+[90m2026-07-23T06:53:12.215Z[0m [0minfo[0m [NEVR.WS] FRIEND LIST: online=0 busy=0 offline=0 sent=0 recv=0[0m
+[90m2026-07-23T06:53:12.218Z[0m [0minfo[0m [NEVR.WS] server->game [conn=0]: 1608 bytes sym=0xb9cdaf586f7bd012 payloadLen=510[0m
+[90m2026-07-23T06:53:12.219Z[0m [0minfo[0m [CONFIGS] ConfigSuccessCB: type=0x794E13955045C77E, id=0x794E13955045C77E {"days[0m
+[90m2026-07-23T06:53:12.219Z[0m [0minfo[0m [NETGAME] CR15NetBattlePass start time: 2024-03-27T00:00:00Z[0m
+[90m2026-07-23T06:53:12.219Z[0m [0minfo[0m [NETGAME] CR15NetBattlePass end time: 2537-08-01T08:00:00Z[0m
+[90m2026-07-23T06:53:12.219Z[0m [0minfo[0m [NETGAME] CR15NetBattlePass remaining time: 186648 days[0m
+[90m2026-07-23T06:53:12.219Z[0m [0minfo[0m [CONFIGS] ConfigSuccessCB: type=0x59DB56ABEC422DC9, id=0x59DB56ABEC422DC9 {"days[0m
+[90m2026-07-23T06:53:12.219Z[0m [0minfo[0m [NETGAME] CR15NetStore start time: 2024-03-27T00:00:00Z[0m
+[90m2026-07-23T06:53:12.219Z[0m [0minfo[0m [NETGAME] CR15NetStore end time: 2537-08-01T08:00:00Z[0m
+[90m2026-07-23T06:53:12.219Z[0m [0minfo[0m [NETGAME] CR15NetStore remaining time: 186648 days[0m
+[90m2026-07-23T06:53:12.219Z[0m [0minfo[0m [CONFIGS] ConfigSuccessCB: type=0x554922B112D2F931, id=0x554922B112D2F931 {"days[0m
+[90m2026-07-23T06:53:12.219Z[0m [0minfo[0m [NETGAME] CR15NetStore featured start time: 2024-03-27T00:00:00Z[0m
+[90m2026-07-23T06:53:12.220Z[0m [0minfo[0m [NETGAME] CR15NetStore featurned end time: 2537-08-01T08:00:00Z[0m
+[90m2026-07-23T06:53:12.220Z[0m [0minfo[0m [NETGAME] CR15NetStore featured remaining time: 186648 days[0m
+[90m2026-07-23T06:53:12.221Z[0m [0minfo[0m [NEVR.WS] server->game [conn=0]: 56 bytes sym=0xa78aeb2a4e89b10b payloadLen=32[0m
+[90m2026-07-23T06:53:12.221Z[0m [0minfo[0m [NEVR.WS] FRIEND LIST: online=0 busy=0 offline=0 sent=0 recv=0[0m
+[90m2026-07-23T06:53:12.301Z[0m [0minfo[0m [NEVR.WS] server->game [conn=1]: 7569 bytes sym=0xfb763a5037fc8d77 payloadLen=7253[0m
+[NSUSER] saved C:\users\andrew\AppData\Local\RAD\EchoVR\users\PSN\1\clientprofile.json: {"ability":"heal","displayname":"Metis","newunlocks":[-9113421417707657637,-8872509825382237577,-8729672745834380727,-8658775097807741970,-8281096881920345707,-8281079289834767979,-8281077082120980075,-8106152226332935931,-7930800130152373434,-7660961057178344384,-7549224101165345636,-7516501381508432875,-7475733174194079309,-7361781484717663804,-7352053475158112655,-7279617125764481270,-7019007040605659447,-6772412918192458061,-6761480143968406473,-6313053507205593127,-6149481314322152527,-6132374970799490072,-6120555604499134869,-6116222400552556109,-6079176325296841695,-6043811132517505839,-6033796993513948049,-6013150202855405436,-5661859437086347055,-5647306570269021088,-5034942619448660325,-4802450381415258979,-4686018702471121110,-4597990150322412454,-4387491041672461676,-4022451731634086793,-3869505254593563771,-3837937774520931127,-3725648499910764066,-3685506774871742195,-3612451547212703661,-3543244815356616591,-3501550802861539568,-3469420300554944039,-3357550851986752198,-3264188812933313335,-3209659148156135809,-3020290126368781067,-2846319705607060749,-2775030580100927525,-2582340594989479923,-2574836323652367791,-2301137977660935953,-2061468529868251443,-2034959760415509704,-1999011572498153923,-1903113270464963432,-1796109148458480972,-1709777449636589058,-1659028090300923997,-1483498460553529552,-1096878782343096097,-1094943437323206513,-1003463870810028769,-938386116679038841,-804153293995759734,-625400854698386419,-560457985118470441,-414697194364113328,-391284697026708911,-389186404894177643,-326634413391079381,-308088105570857977,-289155625856340843,-253621570709612241,-253617159576872657,-211478215724753471,-34346654328336171,319414070875049759,322238685814312735,324211304180535071,366464395209096285,387554181942005535,680226016194626541,681415463003892543,751323524782776709,898365992237015439,974770426565173555,978152821246507176,1089508459056694421,1206784282562878540,1286161297665143781,1374109800054348307,1374109800054348308,1374109800054348309,1374109800054348311,1374109800054348314,1374109800054348315,1374109800054348561,1374109800054348562,1374109800054348563,1374109800054348566,1374109800054348567,1468382261719237613,1585628333869550707,1585912063469538419,1590702563002731635,1723476088178678193,1757675562535973069,1780919751229945583,1871151464951431889,1871154772076249809,1871167957642625745,1872050086366597168,1872050086366597169,1872050086366597177,1872050086366597178,1872050086366597179,1872050086366597180,1872050086366597181,1872050086366597182,1872050086366597183,1872050086366597432,1872050086366597433,1872050086366597434,1872050086366597435,1872050086366597436,1872050086366597693,1979852933500382015,2045114885362365855,2047129906832091967,2112370031044982738,2161988610137709435,2164521846307806075,2165922624019225467,2170138199130692475,2170169028304755579,2240863658232866797,2299102591752259334,2695520837846646145,2764418393478370953,2795115365701921730,2936159782541238255,2952489854151659197,3266456657784417289,3266473249259336478,3415120586922502884,3415123898545385724,3606699071610850767,3722280202403631611,3723388497558295035,3726781556080235003,3726784888976495099,3727892097117377019,3728749707346694651,3732619670538476079,3796864283980420204,3806921166288889559,3886962422135616881,3902327890907126115,4110915838760560141,4114285897247335949,4126015619879301832,4126850119171588573,4316275531138518822,4547043369117599701,4706878038474508757,4853071649863432793,4886098704076625027,4942124128481747609,4981332183457094742,5047716389507332760,5153242551054849995,5285608610770837970,5388052359457041057,5388052359457041062,5388052359457041068,5388052359457041316,5388052359457041317,5556523142959182957,5622804931207434429,5625584247860881479,5953524551038565170,5953524551038565171,5953524551038565172,5953524551038565173,5953524551038565175,5960648307537084941,6116603858574432879,6196815240271638415,6276744857618429948,6294389970321613816,6306264424321945387,6416582742918772737,6416584941657470977,6416584950381557761,6566622538533609084,6875154532741156013,7016313325852023567,7057515839219030395,7062602258271859384,7078407220388584041,7189120478063516659,7193067664678280179,7193651470841175027,7692316419532746469,7824978496787252392,7824997072570620863,7877975647377156594,7882558913576660575,7960140283893108540,7970512221360980751,8093517657199395463,8096528299404106099,8104353127715114262,8228205473093295469,8393049256930951313,8408233299544011985,8475129724722241481,8515641390705056289,8616953036317464857,8623746703408020709,8935999311621828754,8948791380575264981,8949795991557155191,8950700342923747575],"customization":{"new_unlocks_poi_version":1,"battlepass_season_poi_version":3246,"store_entry_poi_version":1,"clear_new_unlocks_version":1},"xplatformid":"DSC-1492861453923913968","modifytime":1784789592,"npe":{"firstmatch":{"completed":true},"lobby":{"completed":true},"movement":{"completed":true},"social_tab_seen":{"version":1},"arenabasics":{"completed":true},"pointer":{"version":1},"blue_tint_tab_seen":{"version":1},"heraldry_tab_seen":{"version":1},"orange_tint_tab_seen":{"version":1}},"weapon":"assault","grenade":"det","mute":{"users":[]},"weaponarm":0,"legal":{"points_policy_version":1,"splash_screen_version":2},"social":{"group":"147AFC9D-2819-4197-926D-5B3F92790EDC","community_values_version":1,"setup_version":1},"ghost":{"users":[]},"earlyquit":{"numsteadyearlyquits":0,"penaltyts":0,"numearlyquits":0,"numsteadymatches":0,"penaltylevel":0,"steadyplayerlevel":0}}
+[NSUSER] saved C:\users\andrew\AppData\Local\RAD\EchoVR\users\PSN\1\serverprofile.json: {"loadout":{"instances":{"unified":{"slots":{"emote":"emote_blink_smiley_a","banner":"rwd_banner_s1_default","decal":"decal_default","goal_fx":"rwd_goal_fx_default","booster":"rwd_booster_default","bracer":"rwd_bracer_default","chassis":"rwd_chassis_body_s11_a","decal_body":"decal_default","secondemote":"emote_blink_smiley_a","pattern":"pattern_default","emissive":"emissive_default","medal":"rwd_medal_default","pattern_body":"pattern_default","pip":"rwd_decalback_default","tag":"rwd_tag_s1_a_secondary","tint_alignment_a":"tint_blue_a_default","tint":"tint_neutral_a_default","tint_alignment_b":"tint_orange_a_default","tint_body":"tint_neutral_a_default","title":"rwd_title_title_default"}}},"number":0},"publisher_lock":"echovrce","purchasedcombat":1,"displayname":"Metis","social":{"group":"147AFC9D-2819-4197-926D-5B3F92790EDC"},"lobbyversion":1680630467,"xplatformid":"DSC-1492861453923913968","_version":4,"unlocks":{"arena":{"decal_combat_logo_a":true,"decal_combat_trex_skull_a":true,"rwd_emissive_0023":true,"rwd_booster_reptile_a":true,"emote_uwu_s2_a":true,"rwd_title_guardian_a":true,"decal_combat_anniversary_a":true,"rwd_pip_0008":true,"emote_scared_a":true,"tint_blue_h_default":true,"decal_bomb_a":true,"rwd_bracer_organic_a":true,"emote_sick_face_a":true,"decal_alien_head_a":true,"decal_anniversary_cupcake_a":true,"rwd_banner_s1_tritip":true,"rwd_banner_0003":true,"rwd_bracer_anubis_a_horus":true,"rwd_xp_boost_individual_s06_02":true,"rwd_pattern_circuit_board_a":true,"decal_combat_medic_a":true,"pattern_stars_a":true,"decal_bear_paw_a":true,"decal_combat_flamingo_a":true,"decal_bow_a":true,"rwd_emote_0008":true,"rwd_title_s2_a":true,"decal_combat_flying_saucer_a":true,"decal_combat_demon_a":true,"rwd_tint_0025":true,"rwd_banner_lone_echo_2_a":true,"decal_combat_puppy_a":true,"tint_blue_g_default":true,"rwd_title_ronin_a":true,"rwd_pattern_trex_skull_a":true,"decal_combat_ice_cream_a":true,"rwd_bracer_paladin_a":true,"rwd_booster_frost_a":true,"decal_combat_nova_a":true,"emote_pumpkin_face_a":true,"rwd_title_title_d":true,"rwd_chassis_junkyard_a":true,"rwd_currency_s07_01":true,"rwd_goal_fx_0002":true,"decal_crosshair_a":true,"decal_bullseye_a":true,"rwd_xp_boost_individual_s06_01":true,"rwd_banner_0016":true,"rwd_booster_avian_a":true,"emote_default":true,"emote_question_mark_a":true,"pattern_tablecloth_a":true,"decal_cat_a":true,"rwd_tag_0019":true,"decal_combat_lion_a":true,"rwd_xp_boost_group_s02_03":true,"emote_one_a":true,"decal_combat_comet_a":true,"rwd_emissive_0038":true,"decal_combat_pizza_a":true,"rwd_emissive_0007":true,"rwd_booster_samurai_a":true,"emote_loading_a":true,"decal_summer_whale_a":true,"decal_dinosaur_a":true,"rwd_tag_s1_h_secondary":true,"rwd_banner_0026":true,"rwd_booster_fume_a_daydream":true,"decal_spider_a":true,"rwd_emissive_0029":true,"decal_combat_meteor_a":true,"emote_heart_eyes_a":true,"decal_combat_military_badge_a":true,"rwd_currency_s04_04":true,"rwd_banner_s2_gears":true,"rwd_emote_meteor_s1_a":true,"decal_disc_a":true,"decal_combat_pig_a":true,"rwd_bracer_speedform_a":true,"decal_combat_octopus_a":true,"tint_neutral_n_default":true,"tint_neutral_k_default":true,"rwd_booster_lava_a":true,"rwd_tint_0022":true,"emote_sleepy_zzz_a":true,"emote_dancing_octopus_a":true,"rwd_bracer_arcade_var_s1_a":true,"rwd_emote_0010":true,"tint_neutral_xmas_d_default":true,"decal_combat_pulsar_a":true,"rwd_currency_s02_03":true,"decal_radioactive_bio_a":true,"rwd_tint_0013":true,"decal_combat_rage_bear_a":true,"decal_summer_submarine_a":true,"rwd_tag_0004":true,"rwd_pip_0002":true,"decal_combat_scratch_a":true,"emote_combat_anniversary_a":true,"rwd_banner_s2_ladybug":true,"decal_santa_cubesat_a":true,"emote_lightbulb_a":true,"decal_halloween_cauldron_a":true,"emote_bats_a":true,"rwd_xp_boost_individual_s04_05":true,"decal_combat_skull_crossbones_a":true,"decal_crown_a":true,"rwd_xp_boost_individual_s05_04":true,"emote_flying_hearts_a":true,"decal_cupcake_a":true,"rwd_chassis_exo_a":true,"decal_default":true,"tint_neutral_xmas_c_default":true,"decal_koi_fish_a":true,"pattern_hawaiian_a":true,"rwd_bracer_fume_a":true,"rwd_emissive_0016":true,"rwd_decal_axolotl_s2_a":true,"decal_eagle_a":true,"rwd_bracer_nuclear_a_hydro":true,"decal_halloween_skull_a":true,"rwd_bracer_covenant_a_flame":true,"rwd_goal_fx_0008":true,"pattern_dumbbells_a":true,"rwd_pip_0015":true,"rwd_emissive_0006":true,"decal_halloween_bat_a":true,"rwd_medal_default":true,"decal_fangs_a":true,"decal_halloween_ghost_a":true,"emote_sound_wave_s2_a":true,"rwd_emote_0005":true,"rwd_xp_boost_individual_s02_03":true,"decal_fireball_a":true,"rwd_booster_fume_a":true,"rwd_emote_0004":true,"decal_gingerbread_a":true,"rwd_title_0014":true,"rwd_tag_0031":true,"rwd_booster_flamingo_a":true,"pattern_spooky_skulls_a":true,"decal_halloween_cat_a":true,"decal_rose_a":true,"decal_music_note_a":true,"rwd_bracer_exo_a":true,"emote_moustache_a":true,"rwd_emote_0014":true,"pattern_xmas_snowflakes_a":true,"rwd_currency_s07_04":true,"rwd_decal_0011":true,"rwd_tag_0012":true,"rwd_medal_s1_quest_launch":true,"decal_halloween_pumpkin_a":true,"rwd_pattern_s1_b":true,"rwd_pattern_0020":true,"decal_halloween_scythe_a":true,"rwd_title_s1_b":true,"emote_fire_a":true,"rwd_chassis_trex_a_skelerex":true,"rwd_emissive_0001":true,"rwd_emissive_0028":true,"rwd_tag_0006":true,"pattern_diamond_plate_a":true,"rwd_bracer_lazurlite_a":true,"decal_halloween_zombie_a":true,"decal_penguin_a":true,"emote_smirk_face_a":true,"decal_hamburger_a":true,"rwd_booster_streetwear_a":true,"emote_skull_crossbones_a":true,"decal_kronos_a":true,"decal_lightning_bolt_a":true,"rwd_pattern_s2_a":true,"rwd_booster_aurum_a":true,"decal_sheldon_a":true,"rwd_tag_0016":true,"pattern_inset_cubes_a":true,"decal_reindeer_a":true,"rwd_emissive_0012":true,"rwd_banner_s1_bold_stripe":true,"pattern_bananas_a":true,"decal_present_a":true,"rwd_banner_s1_basic":true,"rwd_goal_fx_0010":true,"decal_profile_wolf_a":true,"rwd_emote_0001":true,"rwd_medal_s2_echo_pass_gold":true,"rwd_bracer_ninja_a":true,"rwd_tag_0029":true,"rwd_emote_0002":true,"decal_radioactive_a":true,"decal_summer_pirate_a":true,"decal_rage_wolf_a":true,"emote_wifi_symbol_a":true,"rwd_booster_s11_s1_a_retro":true,"rwd_tint_0023":true,"rwd_tint_0010":true,"emote_clock_a":true,"rwd_medal_0005":true,"rwd_banner_0010":true,"tint_orange_b_default":true,"emote_spider_a":true,"rwd_emissive_0024":true,"rwd_banner_s2_lines":true,"rwd_title_0018":true,"decal_ray_gun_a":true,"rwd_banner_s1_digi":true,"decal_rocket_a":true,"decal_salt_shaker_a":true,"rwd_bracer_spartan_a_hero":true,"rwd_booster_funk_a":true,"decal_saturn_a":true,"rwd_xp_boost_group_s07_04":true,"rwd_tag_0018":true,"pattern_paws_a":true,"rwd_booster_anubis_a_horus":true,"rwd_bracer_covenant_a":true,"decal_skull_a":true,"rwd_title_0007":true,"emote_reticle_a":true,"rwd_currency_s01_01":true,"rwd_tag_s1_g_secondary":true,"decal_snowflake_a":true,"tint_neutral_f_default":true,"rwd_xp_boost_individual_s04_01":true,"pattern_tiger_a":true,"rwd_banner_0002":true,"decal_snowman_a":true,"decal_summer_shark_a":true,"rwd_xp_boost_individual_s02_02":true,"loadout_number":true,"decal_swords_a":true,"heraldry_default":true,"decal_wreath_a":true,"rwd_bracer_fragment_a":true,"rwd_tag_0038":true,"emissive_default":true,"rwd_currency_s06_01":true,"emote_angry_face_a":true,"emote_exclamation_point_a":true,"emote_blink_smiley_a":true,"tint_blue_c_default":true,"emote_broken_heart_a":true,"rwd_tag_0024":true,"rwd_pattern_0016":true,"rwd_banner_0009":true,"emote_crying_face_a":true,"emote_dizzy_eyes_a":true,"emote_dead_face_a":true,"emote_deal_glasses_a":true,"emote_ding":true,"pattern_xmas_flourish_a":true,"emote_dollar_eyes_a":true,"rwd_currency_starter_pack_01":true,"rwd_tag_0033":true,"rwd_chassis_s8b_a":true,"rwd_currency_s04_02":true,"tint_orange_c_default":true,"emote_shifty_eyes_s2_a":true,"emote_eye_roll_a":true,"pattern_cubes_a":true,"rwd_xp_boost_group_s04_02":true,"rwd_bracer_overgrown_a":true,"emote_gg_a":true,"rwd_bracer_fume_a_daydream":true,"rwd_tag_diamonds_a":true,"emote_gingerbread_man_a":true,"rwd_tint_s1_a_default":true,"e
+[90m2026-07-23T06:53:12.307Z[0m [0minfo[0m [NEVR.PATCH] Service redirect [transaction_host]: wss://transaction.readyatdawn.com/rad/rad15_live -> ws://127.0.0.1:56666[0m
+[90m2026-07-23T06:53:12.307Z[0m [0minfo[0m [NEVR.PATCH] Service redirect [transactionservice_host]: ws://127.0.0.1:56666 -> ws://127.0.0.1:56666[0m
+[90m2026-07-23T06:53:12.307Z[0m [0minfo[0m [NETGAME] NetGame switching state (from logging in, to logged in)[0m
+[90m2026-07-23T06:53:12.307Z[0m [0minfo[0m [DOCUMENTS] Document received (0xC8C33E483F6612B1) {"type":"eula","lang":"en","link_cc":"https://github.com/EchoTools","mark_as_read_profile_key":"legal|eula_version","version":0,"link_pp":"https://github.com/EchoTools","version_ga":0,"mark_as_read_profile_key_ga":"legal|game_admin_version","text":"Blank EULA for NoVR clients. You should only see this once.","text_ga":"Blank EULA for NoVR clients. You should only see this once.","link_ec":"https://github.com/EchoTools","link_cp":"https://github.[0m
+[90m2026-07-23T06:53:12.308Z[0m [33mwarn[0m [DynLoadTexture] Element '0x82EEA8BD15A151B9' has no texture specified[0m
+[90m2026-07-23T06:53:12.308Z[0m [0minfo[0m [NEVR.WS] game->server [0]: sym=0x90758e58515724e0 len=1 (conn=1)[0m
+[90m2026-07-23T06:53:12.308Z[0m [0minfo[0m [NEVR.WS]   -> forwarded (success=1)[0m
+[90m2026-07-23T06:53:12.341Z[0m [0minfo[0m [NEVR.WS] server->game [conn=1]: 402 bytes sym=0x6c8f16cd9f8964c5 payloadLen=353[0m
+[90m2026-07-23T06:53:12.341Z[0m [0minfo[0m [SOCIALGROUPS] Social lobby group info received[0m
+[90m2026-07-23T06:53:12.342Z[0m [0minfo[0m [SOCIALGROUPS] active group = Echo VR Lounge[0m
+[90m2026-07-23T06:53:17.221Z[0m [0minfo[0m [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:56666 lost[0m
+[90m2026-07-23T06:53:17.256Z[0m [0minfo[0m [NEVR.WS] Remote closed (ws=00007fffffa84750): 1000 Normal closure[0m
+[90m2026-07-23T06:53:17.257Z[0m [0minfo[0m [NEVR.WS] Proxy: game disconnected[0m
+[90m2026-07-23T06:53:23.020Z[0m [0minfo[0m Beginning multiplayer[0m
+[90m2026-07-23T06:53:23.024Z[0m [0minfo[0m [NEVR.PATCH] Service redirect [transaction_host]: wss://transaction.readyatdawn.com/rad/rad15_live -> ws://127.0.0.1:56666[0m
+[90m2026-07-23T06:53:23.024Z[0m [0minfo[0m [NEVR.PATCH] Service redirect [transactionservice_host]: ws://127.0.0.1:56666 -> ws://127.0.0.1:56666[0m
+[90m2026-07-23T06:53:23.028Z[0m [0minfo[0m [SYSNET] Clearing low latency option[0m
+[90m2026-07-23T06:53:23.031Z[0m [0minfo[0m Dedicated: broadcaster initialized at [10.0.8.50:6793][0m
+[90m2026-07-23T06:53:23.031Z[0m [0minfo[0m [NSLOBBY] loading server library 'pnsradgameserver' with log path 'z:\home\andrew\src\nevr-runtime\echovr\_local\r14logs'[0m
+[90m2026-07-23T06:53:23.031Z[0m [31merror[0m  - 0x2FD48A8D4C79448D
+  - 0x2FDA8A8C4D75508F: failed to load module 'z:\home\andrew\src\nevr-runtime\echovr\bin\win10\pnsradgameserver'
+  - 0xB4130B7A4AC7E049: 
+  - 0xC8C33E483C7A12B5: d:\projects\rad\dev\src\engine\libs\plugin\cmoduleloader.cpp
+  - 0xC8C33E48367A10B5: 116
+  - 0x5CDBDD908EB88C3B: 0xe8cc523d0fc9e5fe
+[0m
+[NEVR.GAMESERVER] pnsradgameserver load redirected to in-process ServerLib factory (DLL eliminated, code lives in BugSplat64)
+[NEVR] CSysDLL_GetSymbol('ServerLib') → gamepatches factory
+[NEVR.GAMESERVER] ServerLib() created obj=00007fffffa84530
+[NEVR.GAMESERVER] UnkFunc1(this=00007fffffa84530, unk=0x6)
+[NEVR.GAMESERVER] Initialize(this=00007fffffa84530, lobby=00007f8bf8f799d8, bc=00007f8bf592dba0, unk2=00007f8bf590da60, logPath=z:\home\andrew\src\nevr-runtime\echovr\_local\r14logs)
+[90m2026-07-23T06:53:23.031Z[0m [0minfo[0m [NEVR.GAMESERVER] Initialized game server[0m
+[90m2026-07-23T06:53:23.031Z[0m [0minfo[0m {"message":"server library loaded","category":"serverlib","server_library_name":"pnsradgameserver"}[0m
+[90m2026-07-23T06:53:23.031Z[0m [0minfo[0m [NETGAME] NetGame switching state (from logged in, to loading global)[0m
+[90m2026-07-23T06:53:23.032Z[0m [0minfo[0m Ending multiplayer gameplay[0m
+[90m2026-07-23T06:53:23.032Z[0m [0minfo[0m [NETGAME] Resetting local connection stats[0m
+[90m2026-07-23T06:53:23.032Z[0m [0minfo[0m [NETGAME] AFK detection enabled (by init)[0m
+[90m2026-07-23T06:53:23.032Z[0m [0minfo[0m [NETGAME] Initializing HTTP API[0m
+[90m2026-07-23T06:53:23.033Z[0m [0minfo[0m [NETGAME] Bound HTTP listener to 127.0.0.1:6719, responding to /session[0m
+[90m2026-07-23T06:53:23.033Z[0m [0minfo[0m [LEVELLOAD] Loading level '0x3F9915D3001DC28E'[0m
+[90m2026-07-23T06:53:23.132Z[0m [0minfo[0m [LEVELLOAD] Level '0x3F9915D3001DC28E' offset by (0.000, 0.000, 0.000)[0m
+[90m2026-07-23T06:53:23.190Z[0m [0minfo[0m [NEVR.PATCH] InitializeGlobalGameSpace skipped in server mode (no local player actor needed)[0m
+[90m2026-07-23T06:53:23.190Z[0m [0minfo[0m [LEVELLOAD] Finished loading level '0x3F9915D3001DC28E' in 157 ms[0m
+[90m2026-07-23T06:53:23.190Z[0m [0minfo[0m [LEVELLOAD] Allocator used: 43870728, available: 90347000[0m
+[90m2026-07-23T06:53:23.191Z[0m [33mwarn[0m [NEVR.PATCH] Login session GUID not found in game log[0m
+[90m2026-07-23T06:53:23.191Z[0m [0minfo[0m [NETGAME] NetGame switching state (from loading global, to lobby)[0m
+[90m2026-07-23T06:53:23.226Z[0m [0minfo[0m [NEVR.PATCH] SSL/TLS modernized: Enabled TLS 1.2/1.3 with ECDSA/EdDSA/RSA support[0m
+[90m2026-07-23T06:53:23.472Z[0m [0minfo[0m [NEVR.GAMESERVER] Server authenticated (token acquired)[0m
+[90m2026-07-23T06:53:23.472Z[0m [0minfo[0m [NEVR.GAMESERVER] Constructed serverdb URI for token auth[0m
+[90m2026-07-23T06:53:23.472Z[0m [0minfo[0m [WEBSOCKET] Connecting to ServerDB at ws://g.echovrce.com:80/nevr?guilds=1216923249615835156[0m
+[90m2026-07-23T06:53:23.472Z[0m [0minfo[0m [WEBSOCKET] Using Bearer auth token[0m
+[90m2026-07-23T06:53:23.557Z[0m [0minfo[0m [WEBSOCKET] Connected to ServerDB[0m
+[90m2026-07-23T06:53:25.543Z[0m [0minfo[0m [NEVR.UPNP] Port mapping added: 6793 (ext) -> 6793 (int) UDP, WAN IP: 154.36.247.148[0m
+[90m2026-07-23T06:53:25.543Z[0m [0minfo[0m [NEVR.GAMESERVER] Sending protobuf: GameServerRegistration (111 bytes)[0m
+[90m2026-07-23T06:53:25.543Z[0m [0minfo[0m [NEVR.GAMESERVER] No telemetry_uri in config, telemetry disabled[0m
+[90m2026-07-23T06:53:25.543Z[0m [0minfo[0m [NEVR.GAMESERVER] Requested game server registration via protobuf[0m
+[90m2026-07-23T06:53:25.543Z[0m [0minfo[0m [NSLOBBY] Registered lobby (id: 15113569631499578804, radid: '', region: 'default', version: 1680630467, publisherlock: 'echovrce')[0m
+[90m2026-07-23T06:53:27.612Z[0m [0minfo[0m [WEBSOCKET] Received message (msgId: 0x9EE5107D9E29FD63, length: 29 bytes, frame offset: 0)[0m
+[90m2026-07-23T06:53:27.612Z[0m [0minfo[0m [WEBSOCKET] Received message (msgId: 0xB57A31CDD0F6FEDF, length: 20 bytes, frame offset: 53)[0m
+[90m2026-07-23T06:53:27.612Z[0m [0minfo[0m [WEBSOCKET] Received message (msgId: 0x43E6963AC76BEEE4, length: 1 bytes, frame offset: 97)[0m
+[90m2026-07-23T06:53:27.612Z[0m [0minfo[0m [NEVR.GAMESERVER] Received registration success via protobuf: server_id=15113569631499578804, ip=154.36.247.148[0m
+[90m2026-07-23T06:53:27.613Z[0m [33mwarn[0m [NEVR.GAMESERVER] Unhandled WebSocket msgId: 0x43E6963AC76BEEE4 (size: 1)[0m
+[90m2026-07-23T06:53:29.034Z[0m [0minfo[0m [NEVR.WS] game->server [0]: sym=0x244b47685187eae1 len=863 (conn=1)[0m
+[90m2026-07-23T06:53:29.034Z[0m [0minfo[0m [NEVR.WS]   -> forwarded (success=1)[0m
+[90m2026-07-23T06:53:32.181Z[0m [0minfo[0m [NEVR.WS] server->game [conn=1]: 249 bytes sym=0xfabf5f8719bfebf3 payloadLen=200[0m
+[90m2026-07-23T06:53:52.182Z[0m [0minfo[0m [NEVR.WS] server->game [conn=1]: 249 bytes sym=0xfabf5f8719bfebf3 payloadLen=200[0m
+[90m2026-07-23T06:54:12.098Z[0m [0minfo[0m Console close signal received[0m
+[90m2026-07-23T06:54:12.098Z[0m [0minfo[0m Ending multiplayer[0m
+[90m2026-07-23T06:54:12.098Z[0m [0minfo[0m [NETGAME] EndMultiplayer[0m
+[90m2026-07-23T06:54:12.099Z[0m [0minfo[0m [NETGAME] LeaveGame[0m
+[90m2026-07-23T06:54:12.099Z[0m [0minfo[0m [NETGAME] Removing all users...[0m
+[90m2026-07-23T06:54:12.099Z[0m [0minfo[0m [NETLOBBY] Ending session[0m
+[90m2026-07-23T06:54:12.099Z[0m [0minfo[0m [NSLOBBY] ending session[0m
+[90m2026-07-23T06:54:12.099Z[0m [0minfo[0m [NSLOBBY] leaving session[0m
+[90m2026-07-23T06:54:12.099Z[0m [0minfo[0m [NEVR.GAMESERVER] Signaling end of session[0m
+[90m2026-07-23T06:54:12.099Z[0m [0minfo[0m [NETGAME] NetGame switching state (from lobby, to logged in)[0m
+[90m2026-07-23T06:54:12.099Z[0m [0minfo[0m [NSLOBBY] leaving session[0m
+[90m2026-07-23T06:54:12.099Z[0m [0minfo[0m [NSLOBBY] ending session[0m
+[90m2026-07-23T06:54:12.099Z[0m [0minfo[0m [NSLOBBY] leaving session[0m
+[90m2026-07-23T06:54:12.100Z[0m [0minfo[0m [NEVR.GAMESERVER] Signaling end of session[0m
+[90m2026-07-23T06:54:12.100Z[0m [0minfo[0m [NSLOBBY] unregistering[0m
+[90m2026-07-23T06:54:12.183Z[0m [0minfo[0m [NEVR.WS] server->game [conn=1]: 105 bytes sym=0xfabf5f8719bfebf3 payloadLen=56[0m
+[90m2026-07-23T06:54:14.176Z[0m [0minfo[0m [NEVR.UPNP] Port mapping removed: 6793 UDP[0m
+[90m2026-07-23T06:54:14.176Z[0m [0minfo[0m [WEBSOCKET] Disconnecting from ServerDB[0m
+[90m2026-07-23T06:54:14.211Z[0m [0minfo[0m [WEBSOCKET] Disconnected from ServerDB (code: 1000, reason: Normal closure)[0m
+[90m2026-07-23T06:54:14.211Z[0m [0minfo[0m [NEVR.GAMESERVER] Unregistered game server[0m
+[90m2026-07-23T06:54:14.211Z[0m [0minfo[0m [NEVR.GAMESERVER] Terminated game server[0m
+[90m2026-07-23T06:54:14.211Z[0m [0minfo[0m [NETGAME] Destroying global gs[0m
+[90m2026-07-23T06:54:14.215Z[0m [0minfo[0m [LEVELLOAD] Disabling level '0xAC360E41E4EDE056'[0m
+[90m2026-07-23T06:54:14.215Z[0m [0minfo[0m [LEVELLOAD] Disabling level '0x43934C379CF1E366'[0m
+[90m2026-07-23T06:54:14.215Z[0m [0minfo[0m [SCRIPT] 0x75041E1B64042FAA: stringcondition(c2cf3726) | value_true = ui_menu_splash_screen_poster_a_default_clr
+	Actor: 0x33b5ccda495ba9b4[0m
+[90m2026-07-23T06:54:14.215Z[0m [0minfo[0m [SCRIPT] 0x75041E1B64042FAA: stringcondition(c2cf3726) | value_false = ui_menu_splash_screen_poster_a_shutdown_clr
+	Actor: 0x33b5ccda495ba9b4[0m
+[90m2026-07-23T06:54:14.215Z[0m [0minfo[0m [SCRIPT] 0x75041E1B64042FAA: stringcondition(c2cf3726) | condition = 0
+	Actor: 0x33b5ccda495ba9b4[0m
+[90m2026-07-23T06:54:14.216Z[0m [0minfo[0m [SCRIPT] 0x75041E1B64042FAA: stringcondition(c2cf3726) | value_out = ui_menu_splash_screen_poster_a_shutdown_clr
+	Actor: 0x33b5ccda495ba9b4[0m
+[90m2026-07-23T06:54:14.216Z[0m [0minfo[0m [LEVELLOAD] Unloading level '0xAC360E41E4EDE056'[0m
+[90m2026-07-23T06:54:14.219Z[0m [0minfo[0m [LEVELLOAD] Unloading level '0x3F9915D3001DC28E'[0m
+[90m2026-07-23T06:54:14.228Z[0m [0minfo[0m [LEVELLOAD] Unloading level '0x43934C379CF1E366'[0m
+[NSUSER] Destroying user PSN-1
+[LOGIN] Logging PSN-1 out
+[90m2026-07-23T06:54:14.782Z[0m [0minfo[0m [SYSNET] Clearing low latency option[0m
+[90m2026-07-23T06:54:14.782Z[0m [31merror[0m === CRASH DUMP ===[0m
+[90m2026-07-23T06:54:14.782Z[0m [31merror[0m Exception: ACCESS_VIOLATION (0xC0000005)[0m
+[90m2026-07-23T06:54:14.782Z[0m [31merror[0m RIP: 0x7F8BF592CAE0 (external)[0m
+[90m2026-07-23T06:54:14.782Z[0m [31merror[0m Access: EXECUTE at 0x7F8BF592CAE0[0m
+[90m2026-07-23T06:54:14.782Z[0m [31merror[0m RAX=00007F8BEBE86FC0  RBX=00007F8BF592CB00  RCX=00007F8BF592CB00  RDX=0000000000000000[0m
+[90m2026-07-23T06:54:14.782Z[0m [31merror[0m RSI=0000000142100780  RDI=0000000142100780  RBP=00000001400CF050  RSP=00007FFFFE20FAF8[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m  R8=00007F8BEBE86FC0   R9=00007FFFFF000000  R10=0000000142100780  R11=00007FFFFE20FAF0[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m R12=0000000000000000  R13=0000000142100780  R14=0000000000000000  R15=00000001416D0AE8[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m Stack scan (game code return addresses):[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #0  [RSP+0x10] game+0xCF050[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #1  [RSP+0x28] game+0xCF050[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #2  [RSP+0x40] game+0x105AE50[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #3  [RSP+0x70] game+0x1226C6[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #4  [RSP+0x98] game+0x171EFE0[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #5  [RSP+0xC0] game+0x5122A9[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #6  [RSP+0x120] game+0x121EBA[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #7  [RSP+0x128] game+0xCF050[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #8  [RSP+0x140] game+0x16F2A2F[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #9  [RSP+0x170] game+0x50B7E8[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #10  [RSP+0x1A0] game+0xCD754[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #11  [RSP+0x1B0] game+0xCDD60[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #12  [RSP+0x1B8] game+0xCDD60[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #13  [RSP+0x310] game+0x151D46A[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #14  [RSP+0x360] game+0x1324EB6[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   #15  [RSP+0x3A0] game+0x14EDE0A[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m Loaded modules:[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   0000000140000000-0000000142231000  echovr.exe[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   00006FFFFFBA0000-00006FFFFFFE1000  ntdll.dll[0m
+[90m2026-07-23T06:54:14.783Z[0m [31merror[0m   00006FFFFF9C0000-00006FFFFFB8F000  kernel32.dll[0m
+[90m2026-07-23T06:54:14.784Z[0m [31merror[0m   00006FFFFF320000-00006FFFFF9A2000  kernelbase.dll[0m
+[90m2026-07-23T06:54:14.784Z[0m [31merror[0m   00006FFFFD5F0000-00006FFFFDC19000  USER32.dll[0m
+[90m2026-07-23T06:54:14.784Z[0m [31merror[0m   00006FFFFF1D0000-00006FFFFF310000  advapi32.dll[0m
+[90m2026-07-23T06:54:14.784Z[0m [31merror[0m   00006FFFFEE20000-00006FFFFF1BF000  msvcrt.dll[0m
+[90m2026-07-23T06:54:14.784Z[0m [31merror[0m   00006FFFFED70000-00006FFFFEE01000  sechost.dll[0m
+[90m2026-07-23T06:54:14.784Z[0m [31merror[0m   00006FFFFE910000-00006FFFFED5B000  ucrtbase.dll[0m
+[90m2026-07-23T06:54:14.784Z[0m [31merror[0m   00006FFFFDC30000-00006FFFFDEEF000  gdi32.dll[0m
+[90m2026-07-23T06:54:14.784Z[0m [31merror[0m   00006FFFFD590000-00006FFFFD5DF000  win32u.dll[0m
+[90m2026-07-23T06:54:14.784Z[0m [31merror[0m   00006FFFFC750000-00006FFFFD57A000  SHELL32.dll[0m
+[90m2026-07-23T06:54:14.784Z[0m [31merror[0m   00006FFFFE300000-00006FFFFE427000  shlwapi.dll[0m
+[90m2026-07-23T06:54:14.784Z[0m [31merror[0m   00006FFFFE570000-00006FFFFE5D0000  shcore.dll[0m
+[90m2026-07-23T06:54:14.784Z[0m [31merror[0m   00006FFFFE130000-00006FFFFE2EC000  WINMM.dll[0m
+[90m2026-07-23T06:54:14.785Z[0m [31merror[0m   00006FFFFE090000-00006FFFFE115000  msacm32.dll[0m
+[90m2026-07-23T06:54:14.785Z[0m [31merror[0m   00006FFFFC320000-00006FFFFC739000  ole32.dll[0m
+[90m2026-07-23T06:54:14.785Z[0m [31merror[0m   00006FFFFC140000-00006FFFFC304000  combase.dll[0m
+[90m2026-07-23T06:54:14.785Z[0m [31merror[0m   00006FFFFE620000-00006FFFFE8F5000  rpcrt4.dll[0m
+[90m2026-07-23T06:54:14.785Z[0m [31merror[0m   00006FFFFE5E0000-00006FFFFE609000  cryptbase.dll[0m
+[90m2026-07-23T06:54:14.785Z[0m [31merror[0m   00006FFFFE020000-00006FFFFE080000  coml2.dll[0m
+[90m2026-07-23T06:54:14.785Z[0m [31merror[0m   00006FFFFDF60000-00006FFFFE00D000  IPHLPAPI.DLL[0m
+[90m2026-07-23T06:54:14.785Z[0m [31merror[0m   00006FFFFC0D0000-00006FFFFC123000  dnsapi.dll[0m
+[90m2026-07-23T06:54:14.785Z[0m [31merror[0m   00006FFFFE530000-00006FFFFE558000  nsi.dll[0m
+[90m2026-07-23T06:54:14.785Z[0m [31merror[0m   00006FFFFC000000-00006FFFFC0BD000  ws2_32.dll[0m
+[90m2026-07-23T06:54:14.785Z[0m [31merror[0m   00006FFFFE470000-00006FFFFE4F8000  IMM32.dll[0m
+[90m2026-07-23T06:54:14.785Z[0m [31merror[0m   00006FFFF9FE0000-00006FFFFB537000  BugSplat64.dll[0m
+[90m2026-07-23T06:54:14.785Z[0m [31merror[0m   00006FFFFBBF0000-00006FFFFBFE4000  CRYPT32.dll[0m
+[90m2026-07-23T06:54:14.785Z[0m [31merror[0m   00006FFFFB960000-00006FFFFBBD7000  bcrypt.dll[0m
+[90m2026-07-23T06:54:14.785Z[0m [31merror[0m   00006FFFFDF20000-00006FFFFDF4D000  ncrypt.dll[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFF9C30000-00006FFFF9FC7000  OLEAUT32.dll[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFF9B50000-00006FFFF9C17000  Secur32.dll[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFFB6C0000-00006FFFFB6F2000  WSOCK32.dll[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFF98F0000-00006FFFF9B3E000  WININET.dll[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFF9870000-00006FFFF98DC000  mpr.dll[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFFB930000-00006FFFFB950000  amd_ags_x64.dll[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFFB670000-00006FFFFB6AC000  HID.DLL[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFFB710000-00006FFFFB91A000  SETUPAPI.dll[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFFB5A0000-00006FFFFB641000  cfgmgr32.dll[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFF9820000-00006FFFF9858000  Kerberos.dll[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFF97B0000-00006FFFF9806000  MSV1_0.dll[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFF96F0000-00006FFFF9792000  netapi32.dll[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFF96B0000-00006FFFF96D2000  netutils.dll[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFF8B50000-00006FFFF969D000  platform_compat.dll[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFF7F50000-00006FFFF8B3D000  token_auth.dll[0m
+[90m2026-07-23T06:54:14.786Z[0m [31merror[0m   00006FFFF72E0000-00006FFFF7F3E000  ws_bridge.dll[0m
+[90m2026-07-23T06:54:14.787Z[0m [31merror[0m   00006FFFF72A0000-00006FFFF72C7000  schannel.dll[0m
+[90m2026-07-23T06:54:14.787Z[0m [31merror[0m   00006FFFF7080000-00006FFFF728B000  anim_debugger.dll[0m
+[90m2026-07-23T06:54:14.787Z[0m [31merror[0m   00006FFFF6550000-00006FFFF7065000  broadcaster_bridge.dll[0m
+[90m2026-07-23T06:54:14.787Z[0m [31merror[0m   00006FFFF5A30000-00006FFFF6536000  log_filter.dll[0m
+[90m2026-07-23T06:54:14.787Z[0m [31merror[0m   00006FFFF5940000-00006FFFF5A13000  uxtheme.dll[0m
+[90m2026-07-23T06:54:14.787Z[0m [31merror[0m   00006FFFF5650000-00006FFFF583D000  rsaenh.dll[0m
+[90m2026-07-23T06:54:14.787Z[0m [31merror[0m   00006FFFF55E0000-00006FFFF5636000  netprofm.dll[0m
+[90m2026-07-23T06:54:14.787Z[0m [31merror[0m   00006FFFF55B0000-00006FFFF55CE000  XInput9_1_0.dll[0m
+[90m2026-07-23T06:54:14.787Z[0m [31merror[0m   00006FFFF5450000-00006FFFF559A000  DINPUT8.dll[0m
+[90m2026-07-23T06:54:14.787Z[0m [31merror[0m   00006FFFF4F90000-00006FFFF5436000  comctl32.dll[0m
+[90m2026-07-23T06:54:14.787Z[0m [31merror[0m   00006FFFF4BB0000-00006FFFF4F7C000  pnsrad.dll[0m
+[90m2026-07-23T06:54:14.787Z[0m [31merror[0m === END CRASH DUMP ===[0m
+[90m2026-07-23T06:54:15.313Z[0m [0minfo[0m === System Info ===[0m
+[90m2026-07-23T06:54:15.313Z[0m [0minfo[0m CPU: AMD Ryzen 9 5950X 16-Core Processor            [0m
+[90m2026-07-23T06:54:15.313Z[0m [0minfo[0m Num Physical Cores: 16[0m
+[90m2026-07-23T06:54:15.313Z[0m [0minfo[0m Num Logical Cores: 32[0m
+[90m2026-07-23T06:54:15.313Z[0m [0minfo[0m Memory: 31 GB[0m
+[90m2026-07-23T06:54:15.313Z[0m [0minfo[0m Process Committed Memory: 0 MB[0m
+[90m2026-07-23T06:54:15.313Z[0m [0minfo[0m Process Peak Committed Memory: 482 MB[0m
+[90m2026-07-23T06:54:15.313Z[0m [0minfo[0m Process Working Set: 517 MB[0m
+[90m2026-07-23T06:54:15.313Z[0m [0minfo[0m Process Peak Working Set: 570 MB[0m
+[90m2026-07-23T06:54:15.314Z[0m [0minfo[0m System Committed Memory: 22496 MB[0m
+[90m2026-07-23T06:54:15.314Z[0m [0minfo[0m System Peak Committed Memory: 0 MB[0m
+[90m2026-07-23T06:54:15.315Z[0m [0minfo[0m System Max Committed Memory: 48384 MB[0m
+[90m2026-07-23T06:54:15.315Z[0m [0minfo[0m System Physical Memory Used: 12800 MB[0m
+[90m2026-07-23T06:54:15.315Z[0m [0minfo[0m Video Card: [0m
+[90m2026-07-23T06:54:15.315Z[0m [0minfo[0m Driver Version: [0m
+[90m2026-07-23T06:54:15.315Z[0m [0minfo[0m Dedicated GPU Memory: 0 MB[0m
+[90m2026-07-23T06:54:15.315Z[0m [0minfo[0m Dedicated GPU Memory Usage: 0 MB[0m
+[90m2026-07-23T06:54:15.315Z[0m [0minfo[0m Dedicated GPU Memory OS Budget: 0 MB[0m
+[90m2026-07-23T06:54:15.315Z[0m [0minfo[0m Shared GPU Memory Usage: 0 MB[0m
+[90m2026-07-23T06:54:15.315Z[0m [0minfo[0m Shared GPU Memory OS Budget: 0 MB[0m
+[90m2026-07-23T06:54:15.315Z[0m [0minfo[0m [NEVR.PATCH] Fixed malformed NT path: '\\?\_temp' -> 'Z:\home\andrew\src\nevr-runtime\echovr\bin\win10\_temp'[0m
+[90m2026-07-23T06:54:15.315Z[0m [0minfo[0m [NEVR.PATCH] Directory 'Z:\home\andrew\src\nevr-runtime\echovr\bin\win10\_temp' already exists - returning success[0m
+[90m2026-07-23T06:54:15.315Z[0m [0minfo[0m [NEVR.PATCH] Fixed malformed NT path: '\\?\_temp' -> 'Z:\home\andrew\src\nevr-runtime\echovr\bin\win10\_temp'[0m
+[90m2026-07-23T06:54:15.315Z[0m [0minfo[0m [NEVR.PATCH] Directory 'Z:\home\andrew\src\nevr-runtime\echovr\bin\win10\_temp' already exists - returning success[0m
+[90m2026-07-23T06:54:15.315Z[0m [0minfo[0m [NEVR.PATCH] Fixed malformed NT path: '\\?\_temp\crashes' -> 'Z:\home\andrew\src\nevr-runtime\echovr\bin\win10\_temp\crashes'[0m
+[90m2026-07-23T06:54:15.316Z[0m [0minfo[0m [NEVR.PATCH] Directory 'Z:\home\andrew\src\nevr-runtime\echovr\bin\win10\_temp\crashes' already exists - returning success[0m
