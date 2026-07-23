@@ -9,6 +9,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -166,10 +167,43 @@ void InstallWebSocketBridge() {
   static bool netInit = false;
   if (!netInit) { ix::initNetSystem(); netInit = true; }
 
-  // Start local ws:// server on a dynamic port
-  g_server = std::make_unique<ix::WebSocketServer>(6821, "127.0.0.1");
-  g_server->disablePerMessageDeflate();
+  // Bind to a high-range ephemeral port with retry.
+  // Port 6821 is permanently poisoned on this host (see N37/N39).
+  constexpr int kMaxBindAttempts = 10;
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<uint16_t> dist(49152, 65535);
 
+  bool bound = false;
+  for (int attempt = 0; attempt < kMaxBindAttempts; ++attempt) {
+    uint16_t tryPort = dist(gen);
+    g_server = std::make_unique<ix::WebSocketServer>(tryPort, "127.0.0.1");
+    g_server->disablePerMessageDeflate();
+
+    auto [ok, errMsg] = g_server->listen();
+    if (ok) {
+      g_proxyPort = tryPort;
+      bound = true;
+      break;
+    }
+
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.WS] Port %u bind failed: %s — retrying (%d/%d)",
+        tryPort, errMsg.c_str(), attempt + 1, kMaxBindAttempts);
+    g_server.reset();
+  }
+
+  if (!bound) {
+    g_server.reset();
+    char errBuf[128];
+    snprintf(errBuf, sizeof(errBuf),
+             "WebSocket bridge: failed to bind any port after %d attempts",
+             kMaxBindAttempts);
+    FatalError(errBuf, "ws_bridge bind failure");
+    return;
+  }
+
+  // Callbacks set after successful listen(), before start().
   g_server->setOnClientMessageCallback(
       [](std::shared_ptr<ix::ConnectionState> connState,
          ix::WebSocket& gameWs,
@@ -589,15 +623,7 @@ void InstallWebSocketBridge() {
         }
       });
 
-  auto [ok, errMsg] = g_server->listen();
-  if (!ok) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.WS] Failed to listen: %s", errMsg.c_str());
-    g_server.reset();
-    return;
-  }
-
   g_server->start();
-  g_proxyPort = g_server->getPort();
   g_bridgeEnabled = true;
 
   Log(EchoVR::LogLevel::Info,
