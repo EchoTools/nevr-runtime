@@ -38,6 +38,49 @@ void PrintError(const char* msg, DWORD err) {
                static_cast<unsigned long>(err));
 }
 
+// Quote an argument for Windows CommandLineToArgvW rules.
+// Returns the argument quoted-and-escaped if it contains characters that would
+// be misinterpreted (whitespace, double-quotes, or empty), or verbatim if not.
+// Rules (from CommandLineToArgvW documentation):
+//   1. Whitespace (space, tab) or empty -> wrap in double quotes.
+//   2. Backslashes before a double-quote are doubled to prevent escape.
+//   3. A double-quote is escaped as \" inside a quoted argument.
+//   4. Trailing backslashes before the closing quote are doubled.
+std::string QuoteArgForWindows(const std::string& arg) {
+  if (!arg.empty() &&
+      arg.find_first_of(" \t\"") == std::string::npos) {
+    return arg;
+  }
+
+  std::string result = "\"";
+  size_t i = 0;
+  while (i < arg.size()) {
+    size_t num_backslashes = 0;
+    while (i < arg.size() && arg[i] == '\\') {
+      ++i;
+      ++num_backslashes;
+    }
+
+    if (i >= arg.size()) {
+      // End of string: double trailing backslashes so the closing double-quote
+      // is not consumed as part of an escape sequence.
+      result.append(num_backslashes * 2, '\\');
+    } else if (arg[i] == '"') {
+      // Before a literal double-quote: double the backslashes and escape the
+      // quote so CommandLineToArgvW treats it as a literal character.
+      result.append(num_backslashes * 2, '\\');
+      result.append("\\\"");
+      ++i;
+    } else {
+      result.append(num_backslashes, '\\');
+      result += arg[i];
+      ++i;
+    }
+  }
+  result += '"';
+  return result;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -60,10 +103,12 @@ int main(int argc, char* argv[]) {
   }
 
   // Build command line: echovr.exe -server -noconsole [user args...]
+  // Each argument is Windows-quoted so paths with spaces (e.g. -config-path
+  // "C:\Program Files\Echo VR") are not split by CommandLineToArgvW.
   std::string cmd_line = "echovr.exe -server -noconsole";
   for (int i = 1; i < argc; ++i) {
     cmd_line += " ";
-    cmd_line += argv[i];
+    cmd_line += QuoteArgForWindows(argv[i]);
   }
 
   std::fprintf(stderr, "[echovr_server] Launching: %s\n", cmd_line.c_str());
