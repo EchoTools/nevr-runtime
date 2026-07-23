@@ -3,6 +3,7 @@
 #include <processthreadsapi.h>
 #include <psapi.h>
 #include <setjmp.h>
+#include <signal.h>
 #include <windows.h>
 
 #include "cli.h"
@@ -11,6 +12,7 @@
 #include "common/logging.h"
 #include "gamepatches_internal.h"
 #include "patch_addresses.h"
+#include "wave0_instrumentation.h"
 
 // Defined in mode_patches.cpp — used by VEH for server crash recovery
 extern jmp_buf g_gameLoopJmpBuf;
@@ -360,6 +362,20 @@ void InstallVEH() {
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Breakpoint VEH installed (handles int3 after ExitProcess suppression)");
 }
 
+// POSIX signal handler — sets the shutdown flag. The flag is checked each
+// game tick by PrecisionSleepWaitHook, which runs the full graceful teardown.
+// Needed on Wine/Linux where SetConsoleCtrlHandler never fires because
+// -noconsole is auto-enabled and no console exists to deliver CTRL_C_EVENT.
+// Uses fprintf (not Log) because Log() is not signal-safe.
+static void PosixSignalHandler(int sig) {
+  const char* name = (sig == SIGINT) ? "SIGINT" : (sig == SIGTERM) ? "SIGTERM" : "SIGNAL";
+  fprintf(stderr, "[NEVR.PATCH] Received %s (%d) — requesting graceful shutdown\n", name, sig);
+  fflush(stderr);
+  g_shutdownRequested = 1;
+  // Re-register in case the OS resets to SIG_DFL (SysV semantics on some platforms)
+  signal(sig, PosixSignalHandler);
+}
+
 void InstallConsoleCtrlHandler() {
   // Install console ctrl handler so CTRL+C actually terminates the process.
   // The game registers its own handler that logs "Console close signal received" but doesn't exit.
@@ -367,17 +383,29 @@ void InstallConsoleCtrlHandler() {
   SetConsoleCtrlHandler(
       [](DWORD dwCtrlType) -> BOOL {
         if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_CLOSE_EVENT || dwCtrlType == CTRL_BREAK_EVENT) {
-          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Console signal %lu received — exiting", dwCtrlType);
-          if (OriginalExitProcess)
-            OriginalExitProcess(0);
-          else
-            ExitProcess(0);
-          return TRUE;  // unreachable, but satisfies the signature
+          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Console signal %lu received — requesting graceful shutdown",
+              dwCtrlType);
+          g_shutdownRequested = 1;
+          return TRUE;
         }
         return FALSE;
       },
       TRUE);
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Console ctrl handler installed (CTRL+C will terminate)");
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Console ctrl handler installed (CTRL+C will request shutdown)");
+
+  // Register POSIX signal handlers for Wine/Linux.
+  // On Wine, SetConsoleCtrlHandler requires a console (which doesn't exist with
+  // -noconsole), so CTRL+C/SIGINT from the host never reaches the handler above.
+  // POSIX signal() works under Wine because Wine's msvcrt delegates to the host's
+  // libc signal handling. On native Windows, signal() may be a no-op for SIGINT/
+  // SIGTERM — that's fine; the console handler above covers that case.
+  if (signal(SIGINT, PosixSignalHandler) == SIG_ERR) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to register SIGINT handler");
+  }
+  if (signal(SIGTERM, PosixSignalHandler) == SIG_ERR) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to register SIGTERM handler");
+  }
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] POSIX signal handlers installed (SIGINT/SIGTERM -> graceful shutdown)");
 }
 
 void ForceFatalExit(unsigned int code) {
@@ -420,4 +448,53 @@ static VOID ServerFatalErrorHandler(const CHAR* msg, const CHAR* title) {
 void InstallFatalErrorHandler() {
   SetFatalErrorHandler(ServerFatalErrorHandler);
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Fatal error handler installed — server will exit on fatal errors");
+}
+
+void PerformGracefulShutdown(unsigned int exitCode) {
+  // Prevent re-entry: if two check points fire simultaneously (e.g. the
+  // per-frame PrecisionSleepWaitHook and the per-transition NetGameSwitchStateHook
+  // see the flag in the same tick), only the first call runs the shutdown
+  // sequence. Subsequent calls arrive after TerminateProcess — unreachable.
+  static volatile LONG s_shuttingDown = 0;
+  if (InterlockedExchange(&s_shuttingDown, 1) != 0) {
+    // Already shutting down — another thread is running the sequence.
+    // Sleep briefly to yield, but this path should be unreachable because
+    // ForceFatalExit calls TerminateProcess which kills all threads.
+    Sleep(100);
+    return;
+  }
+
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Graceful shutdown initiated (code=%u)", exitCode);
+
+  // 1. Stop the ws_bridge listener — this is the critical step that releases
+  //    the socket FD, preventing the wineserver from holding port 6821 as a
+  //    zombie LISTEN socket after the process exits (N38 root cause).
+  {
+    HMODULE hWsBridge = GetModuleHandleA("ws_bridge.dll");
+    if (hWsBridge) {
+      typedef void (*ShutdownFn)(void);
+      auto shutdownFn = (ShutdownFn)GetProcAddress(hWsBridge, "WsBridge_Shutdown");
+      if (shutdownFn) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Stopping ws_bridge listener...");
+        shutdownFn();
+        Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ws_bridge listener stopped — socket released");
+      } else {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] WsBridge_Shutdown export not found in ws_bridge.dll — listener may leak");
+      }
+    } else {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] ws_bridge.dll not loaded — no listener to stop");
+    }
+  }
+
+  // 2. Unhook MinHook hooks installed by Wave0 instrumentation.
+  Wave0::Shutdown();
+
+  // 3. Force exit (bypasses server-mode ExitProcess suppression).
+  //    ForceFatalExit sets g_forceExitInProgress, then calls
+  //    OriginalTerminateProcess which kills all threads immediately.
+  //    On Wine, this also terminates the wineserver association, so the
+  //    listener socket released in step 1 is reclaimed by the kernel.
+  ForceFatalExit(exitCode);
 }

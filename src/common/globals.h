@@ -1,5 +1,7 @@
 #pragma once
 
+#include <signal.h>
+
 #include "echovr_functions.h"
 
 #ifndef PROJECT_VERSION          // Set by CMake during the build process
@@ -40,3 +42,9 @@ extern GUID g_loginSessionId;
 extern FLOAT g_arenaRoundTime;
 extern FLOAT g_arenaCelebrationTime;
 extern FLOAT g_arenaMercyScore;
+
+/// Set to 1 by SIGINT/SIGTERM handler to request graceful shutdown.
+/// Checked per-frame by PrecisionSleepWaitHook and per-transition by
+/// NetGameSwitchStateHook. Once set, PerformGracefulShutdown() runs the
+/// full teardown sequence (ws_bridge listener stop, unhook, exit).
+extern volatile sig_atomic_t g_shutdownRequested;

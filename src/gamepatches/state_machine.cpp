@@ -5,6 +5,7 @@
 
 #include "cli.h"
 #include "config.h"
+#include "crash_recovery.h"
 #include "plugin_loader.h"
 #include "common/globals.h"
 #include "common/logging.h"
@@ -21,6 +22,17 @@ static BOOL g_serverWasInGame = FALSE;
 /// <param name="state">The state to transition to.</param>
 /// <returns>None</returns>
 VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
+  // Check for graceful shutdown request (set by POSIX signal handler or
+  // SetConsoleCtrlHandler). Per-frame check lives in PrecisionSleepWaitHook;
+  // this per-transition check is a fallback for when the frame pacer does not
+  // fire (startup, shutdown, stalled game loop).
+  if (g_shutdownRequested) {
+    Log(EchoVR::LogLevel::Info, "[NEVR] Shutdown flag set — executing graceful teardown");
+    PerformGracefulShutdown(0);
+    // Unreachable — PerformGracefulShutdown calls ForceFatalExit which kills
+    // the process via TerminateProcess.
+  }
+
   // Notify plugins of state change
   {
     static uint32_t s_prevState = 0;
@@ -64,8 +76,9 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     // Session ended: we were in-game and now returning to lobby. Exit cleanly
     // so the fleet manager can spawn a fresh instance.
     if (g_serverWasInGame && state == EchoVR::NetGameState::Lobby) {
-      Log(EchoVR::LogLevel::Info, "[NEVR] Session ended. Server exiting.");
-      ExitProcess(0);
+      Log(EchoVR::LogLevel::Info, "[NEVR] Session ended. Server exiting via graceful shutdown.");
+      PerformGracefulShutdown(0);
+      // Unreachable
     }
   }
 

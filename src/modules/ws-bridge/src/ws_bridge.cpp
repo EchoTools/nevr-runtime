@@ -603,6 +603,45 @@ void ShutdownWebSocketBridge() {
   // Thread joins can deadlock. OS reclaims everything on process exit.
 }
 
+// Graceful shutdown — called from gamepatches when NOT under the loader lock
+// (CTRL+C signal handler, session-end teardown, etc.). Actually stops the
+// listener and remote connections, releasing the socket FD so the wineserver
+// doesn't leak it as a zombie LISTEN socket.
+NEVR_MODULE_API void WsBridge_Shutdown(void) {
+  fprintf(stderr, "[NEVR.WS] WsBridge_Shutdown: stopping listener and remote connections\n");
+  fflush(stderr);
+  g_bridgeEnabled = false;
+
+  // Stop all remote connections. Extract shared_ptrs under the lock,
+  // then stop outside to avoid deadlock with callback threads.
+  {
+    std::vector<std::shared_ptr<ix::WebSocket>> remotes;
+    {
+      std::lock_guard<std::mutex> lk(g_pairsMutex);
+      for (auto& pair : g_pairs) {
+        if (pair.second && pair.second->remoteWs) {
+          remotes.push_back(pair.second->remoteWs);
+        }
+      }
+      g_pairs.clear();
+    }
+    for (auto& ws : remotes) {
+      ws->stop();
+    }
+    fprintf(stderr, "[NEVR.WS] Stopped %zu remote connections\n", remotes.size());
+    fflush(stderr);
+  }
+
+  // Stop the listener — this is the critical step that releases the socket FD
+  // and prevents the wineserver zombie on Linux/Wine.
+  if (g_server) {
+    g_server->stop();
+    g_server.reset();
+    fprintf(stderr, "[NEVR.WS] Listener stopped — socket released\n");
+    fflush(stderr);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Module interface
 // ---------------------------------------------------------------------------
