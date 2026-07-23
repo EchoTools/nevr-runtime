@@ -37,6 +37,7 @@ enum NvrModuleHostFlags : uint32_t {
     NEVR_MODULE_HOST_IS_SERVER   = 0x02,
     NEVR_MODULE_HOST_IS_CLIENT   = 0x04,
     NEVR_MODULE_HOST_IS_HEADLESS = 0x10,
+    NEVR_MODULE_HOST_IS_NOOVR    = 0x20,
 };
 #endif
 

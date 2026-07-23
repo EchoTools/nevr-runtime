@@ -17,6 +17,7 @@
 #include "config.h"
 #include "module_loader.h"
 #include "common/echovr_functions.h"
+#include "common/globals.h"
 #include "common/logging.h"
 
 // ============================================================================
@@ -81,6 +82,7 @@ static const char* PlatformPrefix(uint64_t platformCode) {
     case 2: return "DSC";
     case 3: return "XBX";
     case 4: return "OVR-ORG";
+    case 5: return "DSC-NOVR";
     default: return "UNK";
   }
 }
@@ -368,7 +370,7 @@ void InstallWebSocketBridge() {
                           }
                         }
 
-                        uint64_t platformCode = 2;  // DSC
+                        uint64_t platformCode = g_noOvr ? static_cast<uint64_t>(5) : static_cast<uint64_t>(2);
                         std::string loginMsg = BuildLoginRequest(discordId, platformCode);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
