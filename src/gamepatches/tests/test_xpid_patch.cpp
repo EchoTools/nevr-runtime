@@ -12,6 +12,7 @@
 static const uint8_t kPsnShort[]  = {0x50, 0x53, 0x4E, 0x00};  // "PSN\0"
 static const uint8_t kPsnDash[]   = {0x50, 0x53, 0x4E, 0x2D};  // "PSN-"
 static const uint8_t kQmarkDash[] = {0x3F, 0x3F, 0x3F, 0x2D};  // "???-"
+static const uint8_t kQmarkNull[] = {0x3F, 0x3F, 0x3F, 0x00};  // "???\0"
 static const uint8_t kDscShort[]  = {0x44, 0x53, 0x43, 0x00};  // "DSC\0"
 static const uint8_t kDscDash[]   = {0x44, 0x53, 0x43, 0x2D};  // "DSC-"
 
@@ -41,10 +42,12 @@ TEST(XpidPatch, ReplacementSameLength) {
   EXPECT_EQ(sizeof(kPsnShort),  sizeof(kDscShort));
   EXPECT_EQ(sizeof(kPsnDash),   sizeof(kDscDash));
   EXPECT_EQ(sizeof(kQmarkDash), sizeof(kDscDash));
+  EXPECT_EQ(sizeof(kQmarkNull), sizeof(kDscShort));
   EXPECT_EQ(sizeof(kPsnShort),  PatchAddresses::XPID_PLATFORM_SHORT_NAME_SIZE);
   EXPECT_EQ(sizeof(kPsnDash),   PatchAddresses::XPID_PLATFORM_DASH_PREFIX_SIZE);
   EXPECT_EQ(sizeof(kPsnShort),  PatchAddresses::XPID_PLATFORM_COMPACT_NAME_SIZE);
   EXPECT_EQ(sizeof(kQmarkDash), PatchAddresses::XPID_PLATFORM_FALLBACK_PREFIX_SIZE);
+  EXPECT_EQ(sizeof(kQmarkNull), PatchAddresses::XPID_PLATFORM_COMPACT_FALLBACK_NAME_SIZE);
 }
 
 // ---------------------------------------------------------------------------
@@ -63,6 +66,8 @@ TEST(XpidPatch, AddressesInRdataRange) {
   EXPECT_LT(XPID_PLATFORM_COMPACT_NAME, 0x2000000u);
   EXPECT_GT(XPID_PLATFORM_FALLBACK_PREFIX, 0x1000000u);
   EXPECT_LT(XPID_PLATFORM_FALLBACK_PREFIX, 0x2000000u);
+  EXPECT_GT(XPID_PLATFORM_COMPACT_FALLBACK_NAME, 0x1000000u);
+  EXPECT_LT(XPID_PLATFORM_COMPACT_FALLBACK_NAME, 0x2000000u);
 }
 
 TEST(XpidPatch, AddressesDontOverlap) {
@@ -79,6 +84,10 @@ TEST(XpidPatch, AddressesDontOverlap) {
   EXPECT_EQ(overlaps(XPID_PLATFORM_DASH_PREFIX, 4, XPID_PLATFORM_FALLBACK_PREFIX, 4), false);
   EXPECT_EQ(overlaps(XPID_PLATFORM_SHORT_NAME, 4, XPID_PLATFORM_FALLBACK_PREFIX, 4), false);
   EXPECT_EQ(overlaps(XPID_PLATFORM_COMPACT_NAME, 4, XPID_PLATFORM_FALLBACK_PREFIX, 4), false);
+  EXPECT_EQ(overlaps(XPID_PLATFORM_SHORT_NAME, 4, XPID_PLATFORM_COMPACT_FALLBACK_NAME, 4), false);
+  EXPECT_EQ(overlaps(XPID_PLATFORM_DASH_PREFIX, 4, XPID_PLATFORM_COMPACT_FALLBACK_NAME, 4), false);
+  EXPECT_EQ(overlaps(XPID_PLATFORM_COMPACT_NAME, 4, XPID_PLATFORM_COMPACT_FALLBACK_NAME, 4), false);
+  EXPECT_EQ(overlaps(XPID_PLATFORM_FALLBACK_PREFIX, 4, XPID_PLATFORM_COMPACT_FALLBACK_NAME, 4), false);
 }
 
 // ---------------------------------------------------------------------------
@@ -89,26 +98,31 @@ TEST(XpidPatch, MockPatchReplacesCorrectly) {
   using namespace PatchAddresses;
 
   // Allocate a buffer large enough to hold the highest patch offset + 4 bytes.
-  const size_t buf_size = std::max(XPID_PLATFORM_COMPACT_NAME, XPID_PLATFORM_FALLBACK_PREFIX) + 4;
+  const size_t buf_size = std::max({XPID_PLATFORM_SHORT_NAME, XPID_PLATFORM_DASH_PREFIX,
+                                    XPID_PLATFORM_COMPACT_NAME, XPID_PLATFORM_FALLBACK_PREFIX,
+                                    XPID_PLATFORM_COMPACT_FALLBACK_NAME}) + 4;
   std::vector<uint8_t> buf(buf_size, 0xCC);  // fill with INT3 as sentinel
 
-  // Plant original bytes at the four patch sites.
+  // Plant original bytes at all five patch sites.
   memcpy(buf.data() + XPID_PLATFORM_SHORT_NAME,  kPsnShort,  4);
   memcpy(buf.data() + XPID_PLATFORM_DASH_PREFIX,  kPsnDash,   4);
   memcpy(buf.data() + XPID_PLATFORM_COMPACT_NAME, kPsnShort,  4);
   memcpy(buf.data() + XPID_PLATFORM_FALLBACK_PREFIX, kQmarkDash, 4);
+  memcpy(buf.data() + XPID_PLATFORM_COMPACT_FALLBACK_NAME, kQmarkNull, 4);
 
   // Simulate the patch (plain memcpy — the real one uses ProcessMemcpy for VirtualProtect).
   memcpy(buf.data() + XPID_PLATFORM_SHORT_NAME,  kDscShort, 4);
   memcpy(buf.data() + XPID_PLATFORM_DASH_PREFIX,  kDscDash,  4);
   memcpy(buf.data() + XPID_PLATFORM_COMPACT_NAME, kDscShort, 4);
   memcpy(buf.data() + XPID_PLATFORM_FALLBACK_PREFIX, kDscDash, 4);
+  memcpy(buf.data() + XPID_PLATFORM_COMPACT_FALLBACK_NAME, kDscShort, 4);
 
   // Verify each site now contains DSC.
   EXPECT_EQ(memcmp(buf.data() + XPID_PLATFORM_SHORT_NAME,  "DSC",  4), 0);
   EXPECT_EQ(memcmp(buf.data() + XPID_PLATFORM_DASH_PREFIX,  "DSC-", 4), 0);
   EXPECT_EQ(memcmp(buf.data() + XPID_PLATFORM_COMPACT_NAME, "DSC",  4), 0);
   EXPECT_EQ(memcmp(buf.data() + XPID_PLATFORM_FALLBACK_PREFIX, "DSC-", 4), 0);
+  EXPECT_EQ(memcmp(buf.data() + XPID_PLATFORM_COMPACT_FALLBACK_NAME, "DSC", 4), 0);
 
   // Verify sentinel bytes around patch sites are untouched.
   if (XPID_PLATFORM_SHORT_NAME > 0) {
@@ -124,7 +138,9 @@ TEST(XpidPatch, MockPatchReplacesCorrectly) {
 TEST(XpidPatch, ValidationRejectsWrongBytes) {
   using namespace PatchAddresses;
 
-  const size_t buf_size = std::max(XPID_PLATFORM_COMPACT_NAME, XPID_PLATFORM_FALLBACK_PREFIX) + 4;
+  const size_t buf_size = std::max({XPID_PLATFORM_SHORT_NAME, XPID_PLATFORM_DASH_PREFIX,
+                                    XPID_PLATFORM_COMPACT_NAME, XPID_PLATFORM_FALLBACK_PREFIX,
+                                    XPID_PLATFORM_COMPACT_FALLBACK_NAME}) + 4;
   std::vector<uint8_t> buf(buf_size, 0x00);
 
   // Plant wrong bytes at the first site.
@@ -134,12 +150,19 @@ TEST(XpidPatch, ValidationRejectsWrongBytes) {
   // Verify the validation would fail.
   EXPECT_NE(memcmp(buf.data() + XPID_PLATFORM_SHORT_NAME, kPsnShort, 4), 0);
 
-  // Plant wrong bytes at the fallback site.
+  // Plant wrong bytes at the fallback prefix site.
   const uint8_t wrongDash[] = {0x42, 0x4F, 0x54, 0x2D};  // "BOT-"
   memcpy(buf.data() + XPID_PLATFORM_FALLBACK_PREFIX, wrongDash, 4);
 
   // Verify the validation would fail for the fallback.
   EXPECT_NE(memcmp(buf.data() + XPID_PLATFORM_FALLBACK_PREFIX, kQmarkDash, 4), 0);
+
+  // Plant wrong bytes at the compact fallback name site.
+  const uint8_t wrongNull[] = {0x42, 0x4F, 0x54, 0x00};  // "BOT\0"
+  memcpy(buf.data() + XPID_PLATFORM_COMPACT_FALLBACK_NAME, wrongNull, 4);
+
+  // Verify the validation would fail for the compact fallback.
+  EXPECT_NE(memcmp(buf.data() + XPID_PLATFORM_COMPACT_FALLBACK_NAME, kQmarkNull, 4), 0);
 }
 
 // ---------------------------------------------------------------------------

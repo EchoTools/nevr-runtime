@@ -9,7 +9,6 @@
 #include "ws_bridge.h"
 #include "token_auth.h"
 #include "pnsrad_enabler.h"
-#include "xpid_patch.h"
 #include "wave0_instrumentation.h"
 #include "patch_addresses.h"
 #include "common/globals.h"
@@ -201,10 +200,6 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // Force the game to load pnsrad.dll instead of pnsovr.dll.
   // Must run before the game's module loader starts.
   PnsradEnabler::Init((uintptr_t)EchoVR::g_GameBaseAddress);
-
-  // Replace PSN- provider prefix with DSC- (Discord) in all string tables.
-  // Applied before any game connections so XPID parsing sees "DSC-" from the start.
-  PatchDscProvider();
 
   // Block Oculus Platform SDK on server/headless — client needs Oculus Platform services
   if (g_isServer || g_isHeadless) {
