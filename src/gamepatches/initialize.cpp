@@ -26,6 +26,7 @@
 #include "common/echovr_functions.h"
 #include "patch_addresses.h"
 #include "wave0_instrumentation.h"
+#include "xpid_patch.h"
 
 #include <windows.h>
 
@@ -322,6 +323,7 @@ VOID Initialize() {
   // --- Startup patches (applied before CLI parsing) ---
   PatchNoOvrRequiresSpectatorStream();
   PatchDeadlockMonitor();
+  PatchDscProvider();
   fprintf(stderr, "[NEVR] patches OK\n"); fflush(stderr);
 
   // --- Wave 0 instrumentation (observation-only + EndMultiplayer crash prevention) ---
