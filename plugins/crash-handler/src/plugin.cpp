@@ -19,6 +19,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cstdarg>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -159,6 +160,35 @@ static BOOL WINAPI HookTerminateProcess(HANDLE hProcess, UINT uExitCode) {
 }
 
 // ============================================================================
+// Async-signal-safe formatted print for VEH context
+// ============================================================================
+
+// Formats a message using vsnprintf to a stack buffer, then writes to stderr
+// via WriteFile. No heap, no CRT locks, no fprintf mutex — safe to call from
+// Vectored Exception Handler context where the stderr lock may be held by the
+// crashing thread or the heap may be corrupted.
+static void VehPrintf(const char* fmt, ...) {
+    constexpr size_t kBufSize = 1024;
+    char buf[kBufSize];
+
+    va_list args;
+    va_start(args, fmt);
+    int len = vsnprintf(buf, kBufSize - 2, fmt, args);
+    va_end(args);
+    if (len <= 0) return;
+
+    size_t slen = static_cast<size_t>(len);
+    if (slen >= kBufSize - 1) slen = kBufSize - 2;
+    buf[slen] = '\n';
+    buf[slen + 1] = '\0';
+
+    HANDLE hStderr = GetStdHandle(STD_ERROR_HANDLE);
+    if (!hStderr || hStderr == INVALID_HANDLE_VALUE) return;
+    DWORD written = 0;
+    WriteFile(hStderr, buf, static_cast<DWORD>(slen + 1), &written, nullptr);
+}
+
+// ============================================================================
 // Crash dump logger
 // ============================================================================
 
@@ -193,41 +223,48 @@ static void LogCrashDump(PEXCEPTION_POINTERS ex) {
     char ripStr[80];
     fmtAddr(ctx->Rip, ripStr, sizeof(ripStr));
 
-    PluginLog("=== CRASH DUMP ===");
-    PluginLog("Exception: %s (0x%08lX)", excName, rec->ExceptionCode);
-    PluginLog("RIP: %s", ripStr);
+    VehPrintf("=== CRASH DUMP ===");
+    VehPrintf("Exception: %s (0x%08lX)", excName, rec->ExceptionCode);
+    VehPrintf("RIP: %s", ripStr);
 
     if (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2) {
         const char* op = rec->ExceptionInformation[0] == 0 ? "READ"
                        : rec->ExceptionInformation[0] == 1 ? "WRITE"
                                                            : "EXECUTE";
-        PluginLog("Access: %s at 0x%llX", op,
+        VehPrintf("Access: %s at 0x%llX", op,
             (unsigned long long)rec->ExceptionInformation[1]);
     }
 
-    PluginLog("RAX=%016llX  RBX=%016llX  RCX=%016llX  RDX=%016llX",
+    VehPrintf("RAX=%016llX  RBX=%016llX  RCX=%016llX  RDX=%016llX",
         ctx->Rax, ctx->Rbx, ctx->Rcx, ctx->Rdx);
-    PluginLog("RSI=%016llX  RDI=%016llX  RBP=%016llX  RSP=%016llX",
+    VehPrintf("RSI=%016llX  RDI=%016llX  RBP=%016llX  RSP=%016llX",
         ctx->Rsi, ctx->Rdi, ctx->Rbp, ctx->Rsp);
-    PluginLog(" R8=%016llX   R9=%016llX  R10=%016llX  R11=%016llX",
+    VehPrintf(" R8=%016llX   R9=%016llX  R10=%016llX  R11=%016llX",
         ctx->R8, ctx->R9, ctx->R10, ctx->R11);
-    PluginLog("R12=%016llX  R13=%016llX  R14=%016llX  R15=%016llX",
+    VehPrintf("R12=%016llX  R13=%016llX  R14=%016llX  R15=%016llX",
         ctx->R12, ctx->R13, ctx->R14, ctx->R15);
 
-    PluginLog("Stack scan (game code return addresses):");
-    DWORD64* sp = (DWORD64*)ctx->Rsp;
+    VehPrintf("Stack scan (game code return addresses):");
+    DWORD64* sp = reinterpret_cast<DWORD64*>(ctx->Rsp);
     int found = 0;
-    for (int i = 0; i < 256 && found < 16; i++) {
-        if (IsBadReadPtr(sp + i, 8)) break;
+    for (int i = 0; i < 64 && found < 8; i++) {
+        MEMORY_BASIC_INFORMATION mbi = {};
+        SIZE_T ret = VirtualQuery(static_cast<const void*>(sp + i), &mbi, sizeof(mbi));
+        if (ret == 0 ||
+            (mbi.State & MEM_COMMIT) == 0 ||
+            (mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
+                            PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) == 0) {
+            break;
+        }
         DWORD64 val = sp[i];
         INT64 r = rva(val);
         if (r >= 0 && r < 0x1800000) {
-            PluginLog("  #%d  [RSP+0x%X] game+0x%llX",
+            VehPrintf("  #%d  [RSP+0x%X] game+0x%llX",
                 found, i * 8, (unsigned long long)r);
             found++;
         }
     }
-    PluginLog("=== END CRASH DUMP ===");
+    VehPrintf("=== END CRASH DUMP ===");
 }
 
 // ============================================================================
@@ -238,7 +275,7 @@ static LONG WINAPI CrashVEH(PEXCEPTION_POINTERS pEx) {
     // Skip int3 after suppressed ExitProcess
     if (pEx->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT &&
         g_justSuppressedCrash) {
-        PluginLog("int3 after suppressed ExitProcess at RIP=%p — skipping",
+        VehPrintf("int3 after suppressed ExitProcess at RIP=%p — skipping",
             (void*)pEx->ContextRecord->Rip);
         pEx->ContextRecord->Rip += 1;
         g_justSuppressedCrash = false;
