@@ -268,7 +268,7 @@ static bool ParseEvrpTint(const std::vector<uint8_t>& data, int64_t& out_symbol_
 // ============================================================================
 
 static void BackgroundFetchThread() {
-    Log(EchoVR::LogLevel::Info, "[NEVR.CDN] Background fetch started");
+    Log(EchoVR::LogLevel::Debug, "[NEVR.CDN] Background fetch started");
 
     // Fetch manifest
     g_fetchState.store(AssetCDN::FetchState::FetchingManifest);
@@ -281,7 +281,7 @@ static void BackgroundFetchThread() {
     if (g_shutdownRequested.load()) return;
 
     if (g_manifestPackages.empty()) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.CDN] Manifest has no packages — nothing to download");
+        Log(EchoVR::LogLevel::Debug, "[NEVR.CDN] Manifest has no packages — nothing to download");
         g_fetchState.store(AssetCDN::FetchState::Complete);
         return;
     }

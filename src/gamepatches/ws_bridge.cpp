@@ -218,7 +218,7 @@ void InstallWebSocketBridge() {
             // won't have the server-side state needed for PlayerSessionRequest.
             // Don't inject LoginRequest — the session is already logged in.
             if (connIdx >= 2 && g_loginRemoteWs) {
-              Log(EchoVR::LogLevel::Info,
+              Log(EchoVR::LogLevel::Debug,
                   "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), sharing login session (no LoginRequest)",
                   connIdx, (void*)&gameWs);
               auto pair = std::make_unique<ProxyPair>();
@@ -266,7 +266,7 @@ void InstallWebSocketBridge() {
                 // If we left a trailing ? with nothing after, remove it
                 if (!remoteUrl.empty() && remoteUrl.back() == '?') remoteUrl.pop_back();
               }
-              Log(EchoVR::LogLevel::Info,
+              Log(EchoVR::LogLevel::Debug,
                   "[NEVR.WS] Matchmaker conn=%d using protobuf URL: %s", connIdx, remoteUrl.c_str());
             }
             remote->setUrl(remoteUrl);
@@ -298,9 +298,9 @@ void InstallWebSocketBridge() {
               ix::WebSocketHttpHeaders headers;
               headers["Authorization"] = "Bearer " + bearerToken;
               remote->setExtraHeaders(headers);
-              Log(EchoVR::LogLevel::Info, "[NEVR.WS] Attaching Bearer token to remote connection");
+              Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Attaching Bearer token to remote connection");
             } else if (hasUrlCredentials) {
-              Log(EchoVR::LogLevel::Info, "[NEVR.WS] Using URL credentials (no Bearer token)");
+              Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Using URL credentials (no Bearer token)");
             }
 
             auto pair = std::make_unique<ProxyPair>();
@@ -316,7 +316,7 @@ void InstallWebSocketBridge() {
                     case ix::WebSocketMessageType::Open: {
                       std::lock_guard<std::mutex> lk(g_pairsMutex);
                       pairPtr->remoteOpen = true;
-                      Log(EchoVR::LogLevel::Info, "[NEVR.WS] Remote open (conn=%d): %s",
+                      Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Remote open (conn=%d): %s",
                           connIdx, g_remoteUri.c_str());
 
                       // Inject LoginRequest on login connections (not config).
@@ -348,7 +348,7 @@ void InstallWebSocketBridge() {
                                   int64_t*  accountId  = (int64_t*)(user + 0x88);
                                   uint64_t* loginState = (uint64_t*)(user + 0x90);
                                   uint32_t* stateFlags = (uint32_t*)(user + 0x9c);
-                                  Log(EchoVR::LogLevel::Info,
+                                  Log(EchoVR::LogLevel::Debug,
                                       "[NEVR.WS] CNSUser BEFORE: acct=%lld state=0x%llx flags=0x%x",
                                       (long long)*accountId, (unsigned long long)*loginState, *stateFlags);
                                   // Set the user's XPID: account_id and provider enum.
@@ -359,7 +359,7 @@ void InstallWebSocketBridge() {
                                   *accountId  = (int64_t)discordId;
                                   *loginState = (*loginState & ~0xFULL) | 2;  // PSN (patched to DSC)
                                   *stateFlags = 0x04;
-                                  Log(EchoVR::LogLevel::Info,
+                                  Log(EchoVR::LogLevel::Debug,
                                       "[NEVR.WS] CNSUser AFTER:  acct=%lld state=0x%llx flags=0x%x",
                                       (long long)*accountId, (unsigned long long)*loginState, *stateFlags);
                                 }
@@ -372,7 +372,7 @@ void InstallWebSocketBridge() {
                         std::string loginMsg = BuildLoginRequest(discordId, platformCode);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
-                        Log(EchoVR::LogLevel::Info,
+                        Log(EchoVR::LogLevel::Debug,
                             "[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu",
                             xpid.c_str(), static_cast<int>(platformCode), connIdx, loginMsg.size());
                       }
@@ -391,7 +391,7 @@ void InstallWebSocketBridge() {
                         memcpy(&rsym, rmsg->str.data() + 8, 8);
                         memcpy(&rlen, rmsg->str.data() + 16, 8);
                       }
-                      Log(EchoVR::LogLevel::Info, "[NEVR.WS] server->game: %zu bytes sym=0x%016llx payloadLen=%llu",
+                      Log(EchoVR::LogLevel::Debug, "[NEVR.WS] server->game: %zu bytes sym=0x%016llx payloadLen=%llu",
                           rmsg->str.size(), (unsigned long long)rsym, (unsigned long long)rlen);
                       // Decode LoginFailure error message (sym 0xa5b9d5a3021ccf51)
                       if (rsym == 0xa5b9d5a3021ccf51 && rmsg->str.size() > 48) {
@@ -422,7 +422,7 @@ void InstallWebSocketBridge() {
                           AppendLE64(subscribeMsg, sizeof(payload));
                           subscribeMsg.append((const char*)payload, sizeof(payload));
                           pairPtr->remoteWs->sendBinary(subscribeMsg);
-                          Log(EchoVR::LogLevel::Info,
+                          Log(EchoVR::LogLevel::Debug,
                               "[NEVR.WS] Injected FriendListSubscribeRequest (%zu bytes)",
                               subscribeMsg.size());
                         }
@@ -442,7 +442,7 @@ void InstallWebSocketBridge() {
                       if (rsym == 0x7f0c6a3ac83c6f77 && rmsg->str.size() >= 24 + 16) {
                         uint64_t friendId = 0;
                         memcpy(&friendId, rmsg->str.data() + 24 + 8, 8);
-                        Log(EchoVR::LogLevel::Info,
+                        Log(EchoVR::LogLevel::Debug,
                             "[NEVR.WS] FRIEND INVITE SUCCESS: friendId=%llu",
                             (unsigned long long)friendId);
                       }
@@ -454,7 +454,7 @@ void InstallWebSocketBridge() {
                         memcpy(&non, rmsg->str.data() + 24 + 16, 4);
                         memcpy(&nsent, rmsg->str.data() + 24 + 20, 4);
                         memcpy(&nrecv, rmsg->str.data() + 24 + 24, 4);
-                        Log(EchoVR::LogLevel::Info,
+                        Log(EchoVR::LogLevel::Debug,
                             "[NEVR.WS] FRIEND LIST: online=%u busy=%u offline=%u sent=%u recv=%u",
                             non, nbusy, noff, nsent, nrecv);
                         // Hex dump full payload for friend entry analysis
@@ -465,7 +465,7 @@ void InstallWebSocketBridge() {
                         for (size_t i = 0; i < payloadLen && hoff < 4000; i++) {
                           hoff += snprintf(hex + hoff, sizeof(hex) - hoff, "%02x ", pp[i]);
                         }
-                        Log(EchoVR::LogLevel::Info, "[NEVR.WS] FRIEND payload (%zu bytes): %s",
+                        Log(EchoVR::LogLevel::Debug, "[NEVR.WS] FRIEND payload (%zu bytes): %s",
                             payloadLen, hex);
                       }
                       // Route to the active game WS. When matchmaker (conn>=2)
@@ -486,7 +486,7 @@ void InstallWebSocketBridge() {
                       break;
                     }
                     case ix::WebSocketMessageType::Close:
-                      Log(EchoVR::LogLevel::Info, "[NEVR.WS] Remote closed (ws=%p): %d %s",
+                      Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Remote closed (ws=%p): %d %s",
                           (void*)gameWsPtr, rmsg->closeInfo.code, rmsg->closeInfo.reason.c_str());
                       // Don't call gameWsPtr->close() — it deadlocks (blocks waiting
                       // for server thread which may be blocked on g_pairsMutex).
@@ -534,7 +534,7 @@ void InstallWebSocketBridge() {
                 uint64_t sym, len;
                 memcpy(&sym, p + 8, 8);
                 memcpy(&len, p + 16, 8);
-                Log(EchoVR::LogLevel::Info, "[NEVR.WS] game->server [%d]: sym=0x%016llx len=%llu (conn=%s)",
+                Log(EchoVR::LogLevel::Debug, "[NEVR.WS] game->server [%d]: sym=0x%016llx len=%llu (conn=%s)",
                     msgIdx, (unsigned long long)sym, (unsigned long long)len,
                     connState->getId().c_str());
                 // Hex dump PlayerSessionRequest (0x9af2fab2a0c81a05) for debugging
@@ -545,7 +545,7 @@ void InstallWebSocketBridge() {
                   for (size_t i = 0; i < len && hoff < 1000; i++) {
                     hoff += snprintf(hex + hoff, sizeof(hex) - hoff, "%02x ", pp[i]);
                   }
-                  Log(EchoVR::LogLevel::Info, "[NEVR.WS] PlayerSessionReq payload: %s", hex);
+                  Log(EchoVR::LogLevel::Debug, "[NEVR.WS] PlayerSessionReq payload: %s", hex);
                 }
                 // Decode outgoing SNS friend messages
                 // FriendInviteRequest (0x7f0d7a28de3c6f70): RoutingID(8)+UUID(16)+SessionGUID(8)+TargetUserID(8)
@@ -554,14 +554,14 @@ void InstallWebSocketBridge() {
                   memcpy(&routingId, p + 24, 8);
                   memcpy(&sessionGuid, p + 24 + 24, 8);
                   memcpy(&targetUserId, p + 24 + 32, 8);
-                  Log(EchoVR::LogLevel::Info,
+                  Log(EchoVR::LogLevel::Debug,
                       "[NEVR.WS]   FriendInvite: routing=%llu target=%llu session=%llu",
                       (unsigned long long)routingId, (unsigned long long)targetUserId,
                       (unsigned long long)sessionGuid);
                 }
                 // FriendListSubscribe (0xdcfa94680e8d19fc)
                 if (sym == 0xdcfa94680e8d19fc) {
-                  Log(EchoVR::LogLevel::Info, "[NEVR.WS]   FriendListSubscribeRequest sent");
+                  Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   FriendListSubscribeRequest sent");
                 }
                 size_t total = 24 + (size_t)len;
                 if (total > remaining) {
@@ -574,7 +574,7 @@ void InstallWebSocketBridge() {
                 msgIdx++;
               }
               if (remaining > 0 && msgIdx > 0) {
-                Log(EchoVR::LogLevel::Info, "[NEVR.WS]   %zu trailing bytes after %d messages", remaining, msgIdx);
+                Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   %zu trailing bytes after %d messages", remaining, msgIdx);
               }
             }
             std::lock_guard<std::mutex> lk(g_pairsMutex);
@@ -584,13 +584,13 @@ void InstallWebSocketBridge() {
               if (pair->remoteOpen) {
                 if (msg->binary) {
                   auto info = pair->remoteWs->sendBinary(msg->str);
-                  Log(EchoVR::LogLevel::Info, "[NEVR.WS]   -> forwarded (success=%d)", info.success);
+                  Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> forwarded (success=%d)", info.success);
                 } else {
                   pair->remoteWs->sendText(msg->str);
                 }
               } else {
                 pair->pendingToRemote.push_back(msg->str);
-                Log(EchoVR::LogLevel::Info, "[NEVR.WS]   -> queued (remote not open yet, %zu pending)",
+                Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> queued (remote not open yet, %zu pending)",
                     pair->pendingToRemote.size());
               }
             } else {

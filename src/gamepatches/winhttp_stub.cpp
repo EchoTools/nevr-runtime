@@ -66,12 +66,12 @@ static size_t CurlHeaderCb(char* buf, size_t sz, size_t n, void* ud) {
 static HRESULT STDMETHODCALLTYPE Stub_QueryInterface(void* pThis, REFIID riid, void** ppv) {
   if (!ppv) return E_POINTER;
   if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_IDispatch) || IsEqualIID(riid, IID_IWinHttpRequest)) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] QI accepted — returning stub (riid match)");
+    Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] QI accepted — returning stub (riid match)");
     *ppv = pThis;
     SELF(pThis)->m_refCount++;
     return S_OK;
   }
-  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] QI rejected {%08lX-%04hX-%04hX-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] QI rejected {%08lX-%04hX-%04hX-%02X%02X-%02X%02X%02X%02X%02X%02X}",
       riid.Data1, riid.Data2, riid.Data3,
       riid.Data4[0], riid.Data4[1], riid.Data4[2], riid.Data4[3],
       riid.Data4[4], riid.Data4[5], riid.Data4[6], riid.Data4[7]);
@@ -188,7 +188,7 @@ static HRESULT STDMETHODCALLTYPE Stub_GetIDsOfNames(void*, REFIID, LPOLESTR* rgs
 static HRESULT STDMETHODCALLTYPE Stub_Invoke(void* pThis, DISPID dispIdMember, REFIID, LCID, WORD wFlags,
                                               DISPPARAMS* pDispParams, VARIANT* pVarResult, EXCEPINFO*,
                                               UINT*) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] Invoke DISPID=%ld flags=0x%04x cArgs=%u",
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Invoke DISPID=%ld flags=0x%04x cArgs=%u",
       static_cast<long>(dispIdMember), wFlags,
       pDispParams ? pDispParams->cArgs : 0);
 
@@ -283,7 +283,7 @@ static HRESULT STDMETHODCALLTYPE Stub_Invoke(void* pThis, DISPID dispIdMember, R
       // Send([Body]) — no-op: succeed without real HTTP.
       // The game calls this for Oculus telemetry/health checks which no longer
       // exist. The ws_bridge handles actual service traffic independently.
-      Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] Send DISPID=5 (no-op) url=%ls",
+      Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Send DISPID=5 (no-op) url=%ls",
           self->m_url.empty() ? L"(none)" : self->m_url.c_str());
       self->m_sent = true;
       self->m_statusCode = 200;
@@ -322,7 +322,7 @@ static HRESULT STDMETHODCALLTYPE Stub_Invoke(void* pThis, DISPID dispIdMember, R
 // ============================================================================
 
 static HRESULT STDMETHODCALLTYPE Stub_SetProxy(void*, long, VARIANT, VARIANT) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] SetProxy called");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetProxy called");
   return S_OK;
 }
 
@@ -330,7 +330,7 @@ static HRESULT STDMETHODCALLTYPE Stub_SetProxy(void*, long, VARIANT, VARIANT) {
 // interface the game actually uses. Kept for reference; not in the vtable.
 __attribute__((unused))
 static HRESULT STDMETHODCALLTYPE Stub_SetCredentials(void*, BSTR, BSTR, long) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] SetCredentials called");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetCredentials called");
   return S_OK;
 }
 
@@ -342,18 +342,18 @@ static HRESULT STDMETHODCALLTYPE Stub_Open(void* pThis, BSTR Method, BSTR Url, V
   self->m_responseBody.clear();
   self->m_responseHeaders.clear();
   self->m_statusCode = 0;
-  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] Open %ls %ls", Method ? Method : L"(null)", Url ? Url : L"(null)");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Open %ls %ls", Method ? Method : L"(null)", Url ? Url : L"(null)");
   return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_SetRequestHeader(void* pThis, BSTR Header, BSTR Value) {
   if (Header && Value) SELF(pThis)->m_requestHeaders[Header] = Value;
-  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] SetRequestHeader %ls: %ls", Header ? Header : L"(null)", Value ? Value : L"(null)");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetRequestHeader %ls: %ls", Header ? Header : L"(null)", Value ? Value : L"(null)");
   return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_GetResponseHeader(void* pThis, BSTR Header, BSTR* Value) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] GetResponseHeader called");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] GetResponseHeader called");
   if (!Value) return E_POINTER;
   *Value = nullptr;
   auto* self = SELF(pThis);
@@ -375,7 +375,7 @@ static HRESULT STDMETHODCALLTYPE Stub_GetAllResponseHeaders(void* pThis, BSTR* H
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] Send (vtbl, url=%ls)", SELF(pThis)->m_url.empty() ? L"(none)" : SELF(pThis)->m_url.c_str());
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Send (vtbl, url=%ls)", SELF(pThis)->m_url.empty() ? L"(none)" : SELF(pThis)->m_url.c_str());
   auto* self = SELF(pThis);
   CURL* curl = curl_easy_init();
   if (!curl) return E_FAIL;
@@ -383,7 +383,7 @@ static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
   std::string url = WideToUtf8(self->m_url.c_str());
   std::string method = WideToUtf8(self->m_method.c_str());
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] Send %s %s", method.c_str(), url.c_str());
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Send %s %s", method.c_str(), url.c_str());
 
   curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
   if (_stricmp(method.c_str(), "POST") == 0)
@@ -432,19 +432,19 @@ static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_get_Status(void* pThis, long* Status) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] get_Status called (status=%ld)", SELF(pThis)->m_statusCode);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] get_Status called (status=%ld)", SELF(pThis)->m_statusCode);
   if (Status) *Status = SELF(pThis)->m_statusCode;
   return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_get_StatusText(void*, BSTR* S) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] get_StatusText called");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] get_StatusText called");
   if (S) *S = SysAllocString(L"OK");
   return S_OK;
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_get_ResponseText(void* pThis, BSTR* Body) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] get_ResponseText called");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] get_ResponseText called");
   if (!Body) return E_POINTER;
   *Body = nullptr;
   auto* self = SELF(pThis);
@@ -487,7 +487,7 @@ static HRESULT STDMETHODCALLTYPE Stub_get_Option(void*, long, VARIANT* V) {
 }
 static HRESULT STDMETHODCALLTYPE Stub_put_Option(void*, long, VARIANT) { return S_OK; }
 static HRESULT STDMETHODCALLTYPE Stub_WaitForResponse(void*, VARIANT, VARIANT_BOOL* S) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.HTTP] WaitForResponse called");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] WaitForResponse called");
   if (S) *S = VARIANT_TRUE;
   return S_OK;
 }

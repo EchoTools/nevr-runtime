@@ -53,7 +53,7 @@ BOOL WebSocketClient::Connect(const CHAR* uri, const std::string& bearerToken) {
     ix::WebSocketHttpHeaders headers;
     headers["Authorization"] = "Bearer " + bearerToken;
     webSocket_->setExtraHeaders(headers);
-    Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Using Bearer auth token");
+    Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Using Bearer auth token");
   }
 
   // Start the connection (non-blocking)
@@ -271,7 +271,7 @@ VOID WebSocketClient::FlushPendingMessages() {
     return;
   }
 
-  Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Flushing %zu pending messages", toSend.size());
+  Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Flushing %zu pending messages", toSend.size());
 
   for (const auto& message : toSend) {
     Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Sending pending message: size=%zu bytes", message.size());

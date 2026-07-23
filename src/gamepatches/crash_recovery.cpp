@@ -40,11 +40,11 @@ BOOL WINAPI CreateProcessAHook(LPCSTR lpApplicationName, LPSTR lpCommandLine, LP
                                LPPROCESS_INFORMATION lpProcessInformation) {
   // Block crash reporter executable (BsSndRpt64.exe) to prevent Wine errors
   if (lpApplicationName && strstr(lpApplicationName, "BsSndRpt")) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked crash reporter launch (A): %s", lpApplicationName);
+    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Blocked crash reporter launch (A): %s", lpApplicationName);
     return FALSE;  // Pretend the process failed to start
   }
   if (lpCommandLine && strstr(lpCommandLine, "BsSndRpt")) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked crash reporter launch (cmdline A): %s", lpCommandLine);
+    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Blocked crash reporter launch (cmdline A): %s", lpCommandLine);
     return FALSE;
   }
 
@@ -70,12 +70,12 @@ BOOL WINAPI CreateProcessWHook(LPCWSTR lpApplicationName, LPWSTR lpCommandLine,
                                LPPROCESS_INFORMATION lpProcessInformation) {
   // Block crash reporter executable (BsSndRpt64.exe) to prevent Wine errors
   if (lpApplicationName && wcsstr(lpApplicationName, L"BsSndRpt")) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked crash reporter launch (W): %ls", lpApplicationName);
+    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Blocked crash reporter launch (W): %ls", lpApplicationName);
     g_crashReporterSuppressed = true;
     return FALSE;
   }
   if (lpCommandLine && wcsstr(lpCommandLine, L"BsSndRpt")) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked crash reporter launch (cmdline W): %ls", lpCommandLine);
+    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Blocked crash reporter launch (cmdline W): %ls", lpCommandLine);
     g_crashReporterSuppressed = true;
     return FALSE;
   }
@@ -125,9 +125,9 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
 
     void* stack[32];
     USHORT frames = CaptureStackBackTrace(0, 32, stack, NULL);
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Call stack (%u frames):", frames);
+    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Call stack (%u frames):", frames);
     for (USHORT i = 0; i < frames && i < 10; i++) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH]   Frame %u: %p", i, stack[i]);
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH]   Frame %u: %p", i, stack[i]);
     }
 
     g_crashReporterSuppressed = false;
@@ -135,7 +135,7 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
     return;
   }
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ExitProcess(%u) called", uExitCode);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] ExitProcess(%u) called", uExitCode);
   OriginalExitProcess(uExitCode);
 }
 
@@ -323,7 +323,7 @@ void InstallCrashRecoveryHooks() {
     OriginalCreateProcessA = (CreateProcessAFunc)GetProcAddress(hKernel32, "CreateProcessA");
     if (OriginalCreateProcessA != NULL) {
       PatchDetour(&OriginalCreateProcessA, reinterpret_cast<PVOID>(CreateProcessAHook));
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateProcessA hook installed (crash reporter disabled)");
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CreateProcessA hook installed (crash reporter disabled)");
     } else {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find CreateProcessA");
     }
@@ -331,7 +331,7 @@ void InstallCrashRecoveryHooks() {
     OriginalCreateProcessW = (CreateProcessWFunc)GetProcAddress(hKernel32, "CreateProcessW");
     if (OriginalCreateProcessW != NULL) {
       PatchDetour(&OriginalCreateProcessW, reinterpret_cast<PVOID>(CreateProcessWHook));
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateProcessW hook installed (crash reporter disabled)");
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CreateProcessW hook installed (crash reporter disabled)");
     } else {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find CreateProcessW");
     }
@@ -339,7 +339,7 @@ void InstallCrashRecoveryHooks() {
     OriginalExitProcess = (ExitProcessFunc)GetProcAddress(hKernel32, "ExitProcess");
     if (OriginalExitProcess != NULL) {
       PatchDetour(&OriginalExitProcess, reinterpret_cast<PVOID>(ExitProcessHook));
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ExitProcess hook installed (prevents crash reporter termination)");
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] ExitProcess hook installed (prevents crash reporter termination)");
     } else {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find ExitProcess");
     }
@@ -347,7 +347,7 @@ void InstallCrashRecoveryHooks() {
     OriginalTerminateProcess = (TerminateProcessFunc)GetProcAddress(hKernel32, "TerminateProcess");
     if (OriginalTerminateProcess != NULL) {
       PatchDetour(&OriginalTerminateProcess, reinterpret_cast<PVOID>(TerminateProcessHook));
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] TerminateProcess hook installed (prevents self-termination)");
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] TerminateProcess hook installed (prevents self-termination)");
     } else {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find TerminateProcess");
     }
@@ -359,7 +359,7 @@ void InstallCrashRecoveryHooks() {
 void InstallVEH() {
   // Install VEH to handle int3 that fires after our ExitProcess suppression returns
   AddVectoredExceptionHandler(1, BreakpointVEH);
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Breakpoint VEH installed (handles int3 after ExitProcess suppression)");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Breakpoint VEH installed (handles int3 after ExitProcess suppression)");
 }
 
 // POSIX signal handler — sets the shutdown flag. The flag is checked each
@@ -383,7 +383,7 @@ void InstallConsoleCtrlHandler() {
   SetConsoleCtrlHandler(
       [](DWORD dwCtrlType) -> BOOL {
         if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_CLOSE_EVENT || dwCtrlType == CTRL_BREAK_EVENT) {
-          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Console signal %lu received — requesting graceful shutdown",
+          Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Console signal %lu received — requesting graceful shutdown",
               dwCtrlType);
           g_shutdownRequested = 1;
           return TRUE;
@@ -475,9 +475,9 @@ void PerformGracefulShutdown(unsigned int exitCode) {
       typedef void (*ShutdownFn)(void);
       auto shutdownFn = (ShutdownFn)GetProcAddress(hWsBridge, "WsBridge_Shutdown");
       if (shutdownFn) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Stopping ws_bridge listener...");
+        Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Stopping ws_bridge listener...");
         shutdownFn();
-        Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ws_bridge listener stopped — socket released");
+        Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] ws_bridge listener stopped — socket released");
       } else {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] WsBridge_Shutdown export not found in ws_bridge.dll — listener may leak");

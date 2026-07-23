@@ -124,7 +124,7 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
             if (ValidatePrologue(site, PNSRAD_JNE_EXPECTED, sizeof(PNSRAD_JNE_EXPECTED))) {
                 uint8_t nops[] = {0x90, 0x90};
                 if (PatchMemory(site, nops, sizeof(nops))) {
-                    Log(EchoVR::LogLevel::Info, "[pnsrad] patched login check at +0x%x", (unsigned)PNSRAD_LOGIN_CHECK);
+                    Log(EchoVR::LogLevel::Debug, "[pnsrad] patched login check at +0x%x", (unsigned)PNSRAD_LOGIN_CHECK);
                 }
             } else {
                 Log(EchoVR::LogLevel::Warning, "[pnsrad] unexpected bytes at login check +0x%x", (unsigned)PNSRAD_LOGIN_CHECK);
@@ -137,7 +137,7 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
             if (ValidatePrologue(site, PNSRAD_IDENTITY_JNE_EXPECTED, sizeof(PNSRAD_IDENTITY_JNE_EXPECTED))) {
                 uint8_t nops[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
                 if (PatchMemory(site, nops, sizeof(nops))) {
-                    Log(EchoVR::LogLevel::Info, "[pnsrad] patched identity guard at +0x%x", (unsigned)PNSRAD_LOGIN_IDENTITY_CHECK);
+                    Log(EchoVR::LogLevel::Debug, "[pnsrad] patched identity guard at +0x%x", (unsigned)PNSRAD_LOGIN_IDENTITY_CHECK);
                 }
             } else {
                 Log(EchoVR::LogLevel::Warning, "[pnsrad] unexpected bytes at identity guard +0x%x", (unsigned)PNSRAD_LOGIN_IDENTITY_CHECK);
@@ -150,7 +150,7 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
             if (ValidatePrologue(site, PNSRAD_STATE_JE_EXPECTED, sizeof(PNSRAD_STATE_JE_EXPECTED))) {
                 uint8_t nops[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
                 if (PatchMemory(site, nops, sizeof(nops))) {
-                    Log(EchoVR::LogLevel::Info, "[pnsrad] patched state check at +0x%x", (unsigned)PNSRAD_LOGIN_STATE_CHECK);
+                    Log(EchoVR::LogLevel::Debug, "[pnsrad] patched state check at +0x%x", (unsigned)PNSRAD_LOGIN_STATE_CHECK);
                 }
             } else {
                 Log(EchoVR::LogLevel::Warning, "[pnsrad] unexpected bytes at state check +0x%x", (unsigned)PNSRAD_LOGIN_STATE_CHECK);
@@ -203,7 +203,7 @@ void PnsradEnabler::Init(uintptr_t base_addr) {
         } else if (ValidatePrologue(p, OVR_JNE_EXPECTED, sizeof(OVR_JNE_EXPECTED))) {
             uint8_t nops[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
             if (PatchMemory(p, nops, sizeof(nops))) {
-                Log(EchoVR::LogLevel::Info, "[pnsrad] patched OVR branch at +0x%x", (unsigned)OVR_BRANCH);
+                Log(EchoVR::LogLevel::Debug, "[pnsrad] patched OVR branch at +0x%x", (unsigned)OVR_BRANCH);
                 patched++;
             }
         } else {
@@ -219,7 +219,7 @@ void PnsradEnabler::Init(uintptr_t base_addr) {
         if (regFn) {
             NTSTATUS status = regFn(0, OnDllLoaded, nullptr, &s_dllNotifCookie);
             if (status == 0) {
-                Log(EchoVR::LogLevel::Info, "[pnsrad] registered DLL notification for pnsrad.dll patches");
+                Log(EchoVR::LogLevel::Debug, "[pnsrad] registered DLL notification for pnsrad.dll patches");
             } else {
                 Log(EchoVR::LogLevel::Warning, "[pnsrad] LdrRegisterDllNotification failed: 0x%lx", (unsigned long)status);
             }

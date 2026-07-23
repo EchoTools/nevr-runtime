@@ -112,7 +112,7 @@ bool SendProtobufEnvelope(GameServerLib* self, const gameservice::v1::Envelope& 
       break;
   }
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Sending protobuf: %s (%zu bytes)", msgType, binaryData.size());
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Sending protobuf: %s (%zu bytes)", msgType, binaryData.size());
 
   // Send via WebSocketClient with protobuf binary symbol
   wsClient->Send(SYM_PROTOBUF_MSG, binaryData.c_str(), binaryData.size());
@@ -199,7 +199,7 @@ void OnTcpMsgPlayersRejected(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* 
 }
 
 void OnTcpMsgSessionSuccessv5(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received session success (SNSLobbySessionSuccessv5), size=%llu",
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Received session success (SNSLobbySessionSuccessv5), size=%llu",
       msgSize);
 
   auto* broadcaster = self->GetContext().GetBroadcaster();
@@ -251,7 +251,7 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
 
     case gameservice::v1::Envelope::kLobbySessionCreate: {
       const auto& sessionCreate = envelope.lobby_session_create();
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received session create via protobuf: session=%s, max=%d, type=%d",
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Received session create via protobuf: session=%s, max=%d, type=%d",
           sessionCreate.lobby_session_id().c_str(), sessionCreate.max_entrants(), sessionCreate.lobby_type());
 
       // Update session state
@@ -323,7 +323,7 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
 
     case gameservice::v1::Envelope::kLobbyEntrantsAccept: {
       const auto& accept = envelope.lobby_entrants_accept();
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received entrants accept via protobuf: count=%d",
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Received entrants accept via protobuf: count=%d",
           accept.entrant_ids_size());
 
       // Encode protobuf to binary format (padding byte + GUIDs) and forward to game
@@ -342,7 +342,7 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
 
     case gameservice::v1::Envelope::kLobbyEntrantReject: {
       const auto& reject = envelope.lobby_entrant_reject();
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received entrants reject via protobuf: count=%d, code=%d",
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Received entrants reject via protobuf: count=%d, code=%d",
           reject.entrant_ids_size(), reject.code());
 
       // Encode protobuf to binary format (error code byte + GUIDs) and forward to game
@@ -361,7 +361,7 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
 
     case gameservice::v1::Envelope::kLobbySmiteEntrant: {
       const auto& smite = envelope.lobby_smite_entrant();
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Received smite entrant via protobuf: entrant=%s, session=%s",
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Received smite entrant via protobuf: entrant=%s, session=%s",
           smite.entrant_id().c_str(), smite.lobby_session_id().c_str());
 
       // Resolve entrant UUID to slot index. The game engine's SmiteEntrant
@@ -543,7 +543,7 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
 
   auto slot = ExtractSlotIndex(msg, msgSize);
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Slot=%u, GenId=%u, PayloadSize=%llu", slot.slot,
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Slot=%u, GenId=%u, PayloadSize=%llu", slot.slot,
       slot.genId, msgSize);
 
   if (slot.slot >= MAX_PLAYER_SLOTS) {
@@ -554,7 +554,7 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
   // Log player info
   auto* entrant = self->GetContext().GetEntrant(slot.slot);
   if (entrant) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Player: %s (%s)", entrant->displayName,
+    Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Player: %s (%s)", entrant->displayName,
         entrant->uniqueName);
   }
 
@@ -576,14 +576,14 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
   VOID** contextPtr = reinterpret_cast<VOID**>(baseAddr + GAME_CONTEXT_OFFSET);
   VOID* gameContext = *contextPtr;
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Base=%p, Context=%p", baseAddr, gameContext);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Base=%p, Context=%p", baseAddr, gameContext);
 
   if (gameContext) {
     // Get CR15NetGame from context + 0x8518
     CHAR* contextBase = reinterpret_cast<CHAR*>(gameContext);
     VOID* netGame = *reinterpret_cast<VOID**>(contextBase + NETGAME_OFFSET);
 
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] NetGame=%p (from context+0x%X)", netGame,
+    Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_LOADOUT] NetGame=%p (from context+0x%X)", netGame,
         NETGAME_OFFSET);
 
     if (netGame) {
@@ -593,7 +593,7 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
       if (playerSlot < 16) {
         // Read jersey number from gameBase + 0x51458 + (playerSlot * 0x40)
         uint16_t jerseyNumber = *reinterpret_cast<uint16_t*>(gameBase + 0x51458 + (playerSlot * 0x40));
-        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Jersey number: %u", jerseyNumber);
+        Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Jersey number: %u", jerseyNumber);
 
         CHAR* headerAddr = gameBase + 0x51420 + (playerSlot * 0x40);
         (void)headerAddr;
@@ -602,7 +602,7 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
         LoadoutInstance* instances =
             reinterpret_cast<LoadoutInstance*>(*reinterpret_cast<uint64_t*>(gameBase + 0x51420 + (playerSlot * 0x40)));
 
-        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Slot %u: %llu loadout instances @ %p", playerSlot,
+        Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Slot %u: %llu loadout instances @ %p", playerSlot,
             instanceCount, instances);
 
         if (instances && instanceCount > 0 && instanceCount < 16) {
@@ -674,7 +674,7 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
 
             // Send via protobuf
             if (SendProtobufEnvelope(self, envelope)) {
-              Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Sent protobuf to game service");
+              Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Sent protobuf to game service");
             }
           } else {
             Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Not in active session");
@@ -690,7 +690,7 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
 }
 
 void OnMsgSaveLoadoutSuccess(GameServerLib*, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] size=%llu", msgSize);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_SUCCESS] size=%llu", msgSize);
 
   if (msg && msgSize > 4) {
     // First 4 bytes are slot info, rest is serialized loadout
@@ -699,7 +699,7 @@ void OnMsgSaveLoadoutSuccess(GameServerLib*, VOID*, VOID* msg, UINT64 msgSize, E
     uint16_t slot = slotInfo & 0xFFFF;
     uint16_t genId = (slotInfo >> 16) & 0xFFFF;
 
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] Slot=%u, GenId=%u, PayloadSize=%llu", slot, genId,
+    Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_SUCCESS] Slot=%u, GenId=%u, PayloadSize=%llu", slot, genId,
         msgSize - 4);
 
     // Dump payload (skip 4-byte header)
@@ -709,13 +709,13 @@ void OnMsgSaveLoadoutSuccess(GameServerLib*, VOID*, VOID* msg, UINT64 msgSize, E
     for (size_t i = 0; i < dumpLen && pos < 780; i++) {
       pos += snprintf(hexBuf + pos, sizeof(hexBuf) - pos, "%02X ", data[4 + i]);
       if ((i + 1) % 32 == 0) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] %s", hexBuf);
+        Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_SUCCESS] %s", hexBuf);
         pos = 0;
         hexBuf[0] = 0;
       }
     }
     if (pos > 0) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [SAVE_SUCCESS] %s", hexBuf);
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_SUCCESS] %s", hexBuf);
     }
   }
 }
@@ -725,12 +725,12 @@ void OnMsgSaveLoadoutPartial(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoV
 }
 
 void OnMsgCurrentLoadoutRequest(GameServerLib*, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] CurrentLoadoutRequest: size=%llu", msgSize);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] CurrentLoadoutRequest: size=%llu", msgSize);
 
   if (msg && msgSize >= sizeof(uint32_t)) {
     uint32_t slotNumber = 0;
     std::memcpy(&slotNumber, msg, sizeof(uint32_t));
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Request for slot: %u", slotNumber);
+    Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Request for slot: %u", slotNumber);
   }
 }
 
@@ -742,7 +742,7 @@ void OnMsgCurrentLoadoutResponse(GameServerLib* self, VOID*, VOID* msg, UINT64 m
 
   auto slot = ExtractSlotIndex(msg, msgSize);
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] Response: Slot=%u, GenId=%u, Size=%llu", slot.slot,
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] Response: Slot=%u, GenId=%u, Size=%llu", slot.slot,
       slot.genId, msgSize);
 
   if (slot.slot >= MAX_PLAYER_SLOTS || msgSize < MIN_LOADOUT_MSG_SIZE) {
@@ -753,7 +753,7 @@ void OnMsgCurrentLoadoutResponse(GameServerLib* self, VOID*, VOID* msg, UINT64 m
 
   auto* entrant = self->GetContext().GetEntrant(slot.slot);
   if (entrant) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] Player: %s (%s)", entrant->displayName,
+    Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] Player: %s (%s)", entrant->displayName,
         entrant->uniqueName);
   }
 
@@ -769,23 +769,23 @@ void OnMsgCurrentLoadoutResponse(GameServerLib* self, VOID*, VOID* msg, UINT64 m
     for (size_t i = 0; i < dumpLen && pos < 780; i++) {
       pos += snprintf(hexBuf + pos, sizeof(hexBuf) - pos, "%02X ", data[4 + i]);
       if ((i + 1) % 32 == 0) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] +%03zu: %s", i - 31, hexBuf);
+        Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] +%03zu: %s", i - 31, hexBuf);
         pos = 0;
         hexBuf[0] = 0;
       }
     }
     if (pos > 0) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] +%03zu: %s", (dumpLen / 32) * 32, hexBuf);
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] +%03zu: %s", (dumpLen / 32) * 32, hexBuf);
     }
   }
 }
 
 void OnMsgRefreshProfileForUser(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Refresh profile for user (size: %llu)", msgSize);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Refresh profile for user (size: %llu)", msgSize);
 }
 
 void OnMsgRefreshProfileFromServer(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Refresh profile from server (size: %llu)", msgSize);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Refresh profile from server (size: %llu)", msgSize);
 }
 
 void OnMsgLobbySendClientLobbySettings(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
@@ -793,7 +793,7 @@ void OnMsgLobbySendClientLobbySettings(GameServerLib*, VOID*, VOID*, UINT64 msgS
 }
 
 void OnMsgTierRewardMsg(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Tier reward (size: %llu)", msgSize);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Tier reward (size: %llu)", msgSize);
 }
 
 void OnMsgTopAwardsMsg(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
@@ -801,7 +801,7 @@ void OnMsgTopAwardsMsg(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Pee
 }
 
 void OnMsgNewUnlocks(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] New unlocks (size: %llu)", msgSize);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] New unlocks (size: %llu)", msgSize);
 }
 
 void OnMsgReliableStatUpdate(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
@@ -977,7 +977,7 @@ void GameServerLib::RegisterTcpCallbacks() {
     // End any stale session state from before the disconnect
     m_context->EndSession();
 
-    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] WebSocket reconnected, re-registering with ServerDB");
+    Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] WebSocket reconnected, re-registering with ServerDB");
 
     SessionState state = m_context->GetSessionState();
 
@@ -1246,7 +1246,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
     auto auth = LoadCachedAuthToken();
     if (auth.HasValidToken()) {
       wsToken = auth.token;
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Using cached auth token for ServerDB");
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Using cached auth token for ServerDB");
     } else {
       wsToken = AuthenticateServer(localConfig);
     }
@@ -1279,7 +1279,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
         snprintf(constructedUri + written, sizeof(constructedUri) - written, "%sregions=%s", sep, regions);
       }
       serverDbUri = constructedUri;
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Constructed serverdb URI for token auth");
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Constructed serverdb URI for token auth");
     } else {
       // Legacy url-param auth (no nevr_serverdb_uri configured): connect via
       // nevr_socket_uri with discord_id+password — the pre-token-auth behavior.
@@ -1303,7 +1303,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
           snprintf(constructedUri + written, sizeof(constructedUri) - written, "&regions=%s", regions);
         }
         serverDbUri = constructedUri;
-        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Constructed serverdb URI from config fields (legacy url-param auth)");
+        Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Constructed serverdb URI from config fields (legacy url-param auth)");
       } else {
         serverDbUri = const_cast<CHAR*>("ws://localhost:777/serverdb");
         Log(EchoVR::LogLevel::Warning,
@@ -1386,7 +1386,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       }
       m_telemetry->Connect(std::string(telemetryUri), token);
     } else {
-      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] No telemetry_uri in config, telemetry disabled");
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] No telemetry_uri in config, telemetry disabled");
     }
   }
 
@@ -1429,7 +1429,7 @@ VOID GameServerLib::EndSession() {
   }
 
   m_context->EndSession();
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Signaling end of session");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Signaling end of session");
 }
 
 VOID GameServerLib::LockPlayerSessions() {
@@ -1441,7 +1441,7 @@ VOID GameServerLib::LockPlayerSessions() {
     SendProtobufEnvelope(this, envelope);
   }
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Signaling game server locked");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Signaling game server locked");
 }
 
 VOID GameServerLib::UnlockPlayerSessions() {
@@ -1453,7 +1453,7 @@ VOID GameServerLib::UnlockPlayerSessions() {
     SendProtobufEnvelope(this, envelope);
   }
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Signaling game server unlocked");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Signaling game server unlocked");
 }
 
 VOID GameServerLib::AcceptPlayerSessions(EchoVR::Array<GUID>* playerUuids) {
@@ -1467,7 +1467,7 @@ VOID GameServerLib::AcceptPlayerSessions(EchoVR::Array<GUID>* playerUuids) {
     SendProtobufEnvelope(this, envelope);
   }
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Accepted %d players", playerUuids->count);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Accepted %d players", playerUuids->count);
 }
 
 VOID GameServerLib::RemovePlayerSession(GUID* playerUuid) {
@@ -1480,5 +1480,5 @@ VOID GameServerLib::RemovePlayerSession(GUID* playerUuid) {
     SendProtobufEnvelope(this, envelope);
   }
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Removed player from game server");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Removed player from game server");
 }

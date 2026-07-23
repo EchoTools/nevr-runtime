@@ -375,7 +375,7 @@ void Wave0::Init(uintptr_t base_addr) {
     LARGE_INTEGER freq;
     QueryPerformanceFrequency(&freq);
     s_cached_perf_freq = freq.QuadPart;
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] wave0 qpc_freq=%lld Hz",
+    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] wave0 qpc_freq=%lld Hz",
         static_cast<long long>(s_cached_perf_freq));
 
     // Create persistent high-res waitable timer (BUG #11, #12 fix)
@@ -388,7 +388,7 @@ void Wave0::Init(uintptr_t base_addr) {
         CREATE_WAITABLE_TIMER_MANUAL_RESET | CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
         TIMER_ALL_ACCESS);
     if (s_cached_timer) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] wave0 timer=high_resolution");
+        Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] wave0 timer=high_resolution");
     } else {
         s_cached_timer = CreateWaitableTimerW(NULL, TRUE, NULL);
         if (s_cached_timer) {
