@@ -6,6 +6,7 @@
 set(PATCHES_SOURCES
     "dllmain.cpp"
     "initialize.cpp"
+    "boot_log_tee.cpp"
     "cli.cpp"
     "boot.cpp"
     "config.cpp"
@@ -39,6 +40,7 @@ set(PATCHES_HEADERS
     "patches.h"
     "gamepatches_internal.h"
     "initialize.h"
+    "boot_log_tee.h"
     "cli.h"
     "boot.h"
     "config.h"
