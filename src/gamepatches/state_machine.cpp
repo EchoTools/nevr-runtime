@@ -27,7 +27,7 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
   // this per-transition check is a fallback for when the frame pacer does not
   // fire (startup, shutdown, stalled game loop).
   if (g_shutdownRequested) {
-    Log(EchoVR::LogLevel::Info, "[NEVR] Shutdown flag set — executing graceful teardown");
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Shutdown flag set — executing graceful teardown");
     PerformGracefulShutdown(0);
     // Unreachable — PerformGracefulShutdown calls ForceFatalExit which kills
     // the process via TerminateProcess.
@@ -76,7 +76,7 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     // Session ended: we were in-game and now returning to lobby. Exit cleanly
     // so the fleet manager can spawn a fresh instance.
     if (g_serverWasInGame && state == EchoVR::NetGameState::Lobby) {
-      Log(EchoVR::LogLevel::Info, "[NEVR] Session ended. Server exiting via graceful shutdown.");
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Session ended. Server exiting via graceful shutdown.");
       PerformGracefulShutdown(0);
       // Unreachable
     }
