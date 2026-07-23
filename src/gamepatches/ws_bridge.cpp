@@ -1,4 +1,5 @@
 #include "ws_bridge.h"
+#include "symbol_corpus.h"
 
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXWebSocket.h>
@@ -6,6 +7,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -391,8 +393,17 @@ void InstallWebSocketBridge() {
                         memcpy(&rsym, rmsg->str.data() + 8, 8);
                         memcpy(&rlen, rmsg->str.data() + 16, 8);
                       }
-                      Log(EchoVR::LogLevel::Debug, "[NEVR.WS] server->game: %zu bytes sym=0x%016llx payloadLen=%llu",
-                          rmsg->str.size(), (unsigned long long)rsym, (unsigned long long)rlen);
+                      char symBuf[192];
+                      const char* name = EchoVR::LookupSymbolName(rsym);
+                      if (name) {
+                        snprintf(symBuf, sizeof(symBuf), "0x%016llx (%s)",
+                                 (unsigned long long)rsym, name);
+                      } else {
+                        snprintf(symBuf, sizeof(symBuf), "0x%016llx",
+                                 (unsigned long long)rsym);
+                      }
+                      Log(EchoVR::LogLevel::Debug, "[NEVR.WS] server->game: %zu bytes sym=%s payloadLen=%llu",
+                          rmsg->str.size(), symBuf, (unsigned long long)rlen);
                       // Decode LoginFailure error message (sym 0xa5b9d5a3021ccf51)
                       if (rsym == 0xa5b9d5a3021ccf51 && rmsg->str.size() > 48) {
                         // payload: PlatformCode(8) + AccountId(8) + StatusCode(8) + ErrorMsg\0
@@ -534,8 +545,17 @@ void InstallWebSocketBridge() {
                 uint64_t sym, len;
                 memcpy(&sym, p + 8, 8);
                 memcpy(&len, p + 16, 8);
-                Log(EchoVR::LogLevel::Debug, "[NEVR.WS] game->server [%d]: sym=0x%016llx len=%llu (conn=%s)",
-                    msgIdx, (unsigned long long)sym, (unsigned long long)len,
+                char symBuf[192];
+                const char* symName = EchoVR::LookupSymbolName(sym);
+                if (symName) {
+                  snprintf(symBuf, sizeof(symBuf), "0x%016llx (%s)",
+                           (unsigned long long)sym, symName);
+                } else {
+                  snprintf(symBuf, sizeof(symBuf), "0x%016llx",
+                           (unsigned long long)sym);
+                }
+                Log(EchoVR::LogLevel::Debug, "[NEVR.WS] game->server [%d]: sym=%s len=%llu (conn=%s)",
+                    msgIdx, symBuf, (unsigned long long)len,
                     connState->getId().c_str());
                 // Hex dump PlayerSessionRequest (0x9af2fab2a0c81a05) for debugging
                 if (sym == 0x9af2fab2a0c81a05 && len <= 256) {

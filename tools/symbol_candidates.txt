@@ -1,0 +1,318 @@
+# ============================================================================
+# Pre-computed hash -> name entries (from symbols.h / messages.h internal labels)
+# ============================================================================
+@0x0FEF8EFEC97A3B98 LobbyRegistrationSuccess
+@0xCC3A40870CDBC852 LobbyRegistrationFailure
+@0x233E6E7E3A13BABC LobbySessionStarting
+@0x425393736F0CDB8B LobbySessionError
+@0xF0FA52B6F8A33A49 LobbyTerminateProcess
+@0x096101C684E7F325 LobbyStartSessionV4
+@0xB4D724E8564BFE88 LobbyJoinRequestedV4
+@0x5A44AB3E283D136D LobbyAddEntrantRequestV4
+@0x83E96504A9FC81C6 LobbySessionSuccessV5
+@0xFCBA8F2834F8DE40 LobbyAcceptPlayersSuccessV2
+@0xED9A4B86F8F3640A LobbyAcceptPlayersFailureV2
+@0xCCBC52F97F2E0EF1 LobbySmiteEntrant
+@0xDCB7130D1BEB9AC4 LobbyChatEntry
+@0x27504F14881C1A43 LobbyVoiceEntry
+@0xA3749626D6D20EF7 SaveLoadoutRequest
+@0xDB64D31F58E19F74 SaveLoadoutSuccess
+@0x0D12F3B7FA1D20A0 SaveLoadoutPartial
+@0xC66CA34BB55FDC28 CurrentLoadoutRequest
+@0xA52712EC66B2DB48 CurrentLoadoutResponse
+@0x4AA419E5505280E9 RefreshProfileForUser
+@0x06877B856E8D785F RefreshProfileFromServer
+@0xD26C901B8D4C56A6 LobbySendClientLobbySettings
+@0xB3ACDCC23A081C92 TierRewardMsg
+@0xF28582C141E30960 TopAwardsMsg
+@0x187008FE3940A327 NewUnlocks
+@0x5D84B0C2D4BB6CFC ReliableStatUpdate
+@0x7BA444F7D419B1A2 ReliableTeamStatUpdate
+@0xF62CB25BB5B8A839 ProtobufMsg
+@0x59F3AF95E7D44E72 ProtobufJson
+@0xC6B3710CD9C4EF47 NEVRProtobufJSONMessageV1
+# Social / Friends
+@0x7F0D7A28DE3C6F70 FriendSendInviteRequest
+@0x1BBCB7E810AF4620 FriendRemoveRequest
+@0x78908988B7FE6DB4 FriendActionRequest
+@0xA78AEB2A4E89B10B FriendListResponse
+@0x26A19DC4D2D5579D FriendStatusNotify
+@0x7F0C6A3AC83C6F77 FriendInviteSuccess
+@0x7F197E30C72C6E61 FriendInviteFailure
+@0xCA09B0B36BD981B7 FriendInviteNotify
+@0x1BBDA7FA06AF4627 FriendAcceptSuccess
+@0x1BA8B3F009BF4731 FriendAddFailure
+@0xC237C84C31D3AE05 FriendAcceptNotify
+@0xC2BF83A08EA3A955 FriendBlockSuccess
+@0xE06972F49CD72265 FriendRemoveNotify
+@0x191AA30801EC6D03 FriendWithdrawnNotify
+@0xB9B86C0CE8E8D0C1 FriendRejectNotify
+@0xFF02BF488E77BCBA PartyKickRequest
+@0x352F9D0E16001420 PartyPassOwnershipRequest
+@0xEAF428C8A8A5CD2A PartyRespondToInvite
+@0x0B7BD21332523994 PartyMemberUpdate
+# TCP registration
+@0x6D4DE3650EE3110F LobbySessionSuccessV5_TCP
+# Known player session request hash (from ws_bridge.cpp hardcoded check)
+@0x9AF2FAB2A0C81A05 PlayerSessionRequest
+# Tint/loadout known symbols
+@0xD90C85DB5E5629ED tint_body
+@0x74D228D09DC5DC86 rwd_tint_0000
+@0x74D228D09DC5DD8F rwd_tint_0019
+@0x25E886012CED8064 serverdb
+
+# ============================================================================
+# Candidate strings for forward hashing (CSymbol64 + SNS pipeline)
+# ============================================================================
+
+# --- Level names (from ReVault) ---
+mpl_lobby_b_arena
+mpl_arena_a
+mpl_tutorial_arena
+mpl_tutorial_lobby
+mpl_tutorial_master
+mpl_combat_fission
+mpl_combat_gauss
+mpl_combat_pebbles
+mpl_combat_combustion
+mpl_combat_dyson
+echo_arena
+echo_arena_private
+echo_arena_first_match
+echo_arena_practice_ai
+echo_arena_tournament
+echo_arena_public_ai
+echo_arena_private_ai
+echo_arena_npe
+frontend
+loading_screen
+
+# --- Resource / asset types (from ReVault) ---
+rwd_tint_0000
+rwd_tint_0001
+rwd_tint_0019
+rwd_chassis_body_s11_a
+rwd_booster_default
+rwd_bracer_default
+tint_body
+tint_primary
+tint_secondary
+tint_secondary2
+tint_alignment_a
+tint_alignment_b
+pattern_tint_0
+pattern_tint_100
+layer1_albedo_tint_color
+layer2_albedo_tint_color
+splash_texture
+splash_screen
+serverdb
+NEVRProtobufJSONMessageV1
+
+# --- UI / config names ---
+event_mpl_interface_creatingmatch
+event_mpl_interface_joiningparty
+pty_mpl_combat_pebbles
+loading_tips
+
+# --- Delegate / event names (from ReVault, used by FireEvent functions) ---
+delegate_ongamesettingschanged
+delegate_OnNetTouchOwnershipTransfer
+delegate_OnFlagBaseScore
+delegate_onlobbyjoinerrorinternal
+delegate_onlobbyjoinerrorbadrequest
+delegate_onlobbyjoinerrortimeout
+delegate_onlobbyjoinerrorlobbyinvalid
+delegate_onlobbyjoinerrorlobbyincompatible
+delegate_onlobbyjoinerrorlobbyoffline
+delegate_onlobbyjoinerrorlobbylocked
+delegate_onlobbyjoinerrorlobbyfull
+delegate_onlobbyjoinerrormissingentitlement
+delegate_onlobbyjoinerrorpartychange
+delegate_onlobbyjoinerroraccessdenied
+delegate_onmatchmakingqueued
+delegate_onmatchmakingstartedcreating
+delegate_onmatchmakingstartedfinding
+delegate_onmatchmakingstartedjoining
+delegate_onmatchmakingsucceededjoinqueued
+delegate_onmatchmakingsucceededjoining
+delegate_onmatchmakingfailed
+delegate_onmatchmakingcanceled
+delegate_OnBalanceSettingsUpdate
+delegate_OnRegenStarted
+delegate_OnRegenFinished
+delegate_WeaponChanged
+delegate_AbilityChanged
+delegate_GrenadeChanged
+delegate_OnStun
+delegate_OnReboot
+delegate_onlobbymemberleft
+delegate_onlobbymemberteamchanged
+delegate_onlobbymemberalignmentchanged
+delegate_onlobbymemberspawned
+delegate_onlobbymemberactorchanged
+delegate_onlobbymemberjoined
+delegate_onpartyjoinabilitychanged
+delegate_onnetgameloggingin
+delegate_onnetgameloggedin
+delegate_onnetgameloadingmultiplayer
+delegate_onnetgamelobbying
+delegate_onnetgameserverloading
+delegate_onnetgameloadingmap
+delegate_onnetgamereadyforgame
+delegate_onnetgameingame
+delegate_onlobbymembervarchanged
+delegate_onlobbymemberleavequeued
+delegate_onnewunlockschanged
+delegate_onloginsettingsreceived
+delegate_onearlyquitconfigupdate
+delegate_onearlyquitfeatureflagsupdate
+delegate_onearlyquitpenaltyupdate
+delegate_onlobbysettingsreceived
+delegate_onserversettingsreceived
+delegate_onlobbymemberprofilereceived
+delegate_onpartymemberprofilereceived
+delegate_onproductsrefreshed
+delegate_onplatformpurchasesuccess
+delegate_onplatformpurchasefailure
+delegate_ondeeplinkerrorfirstmatchnotcompleted
+delegate_onpartycreated
+delegate_onnetgamemenupartyjoined
+delegate_onpartyjoined
+delegate_onpartyjoinerrornotfound
+delegate_onpartyjoinerrornopermission
+delegate_onpartyjoinerrorlocked
+delegate_onpartyjoinerrorfull
+delegate_onpartyjoinerrorversion
+delegate_onpartyjoinerrorunknown
+delegate_onpartyupdated
+delegate_onpartyhostchanged
+delegate_onpartyleft
+delegate_onpartykicked
+delegate_onpartymemberjoined
+delegate_onpartymemberupdated
+delegate_onpartymemberleft
+delegate_onpartyinviteerroruninvitable
+delegate_onpartyinviteerrorunjoinable
+delegate_onpartyinviteerrorunknown
+delegate_onpartyinvitereceived
+delegate_onserviceconfigreceived
+delegate_onserviceconfigerror
+delegate_onservicedocumentreceived
+delegate_onservicedocumenterror
+delegate_onnetgameerror
+delegate_onvoipmuted
+delegate_onvoipunmuted
+delegate_oninputfocusgained
+delegate_oninputfocuslost
+delegate_on_equip
+delegate_onpartyinviteerrorfirstmatchnotcompleted
+delegate_onpartyinviteerroroffline
+delegate_OnPossessionChanged
+delegate_onmatchmakerqueuepositionchanged
+delegate_onmatchmakerqueueestimatedwaittimechanged
+delegate_onmatchmakerqueueaccepted
+delegate_onsocialgroupsupdated
+delegate_onsocialgroupschangedactive
+delegate_oniappurchaseditem
+delegate_OnActorChanged
+
+# NRadGame replicated event delegate names (from reconstruction)
+delegate_OnDamageableDealDamage
+delegate_OnDamageablePlayerKilled
+delegate_OnPropertyModifiersAdd
+delegate_OnActivateExplosion
+delegate_OnDamageableShieldRepaired
+delegate_OnDamageableBulletCollision
+delegate_OnDamageableDamageDealt
+delegate_OnDamageablePlayerRespawn
+delegate_OnDamageablePlayerRespawnComplete
+delegate_OnDamageableHealthBroadcast
+delegate_OnDamageableLocallyTrackedDamage
+delegate_OnExplosionPlayerDamage
+delegate_OnExplosionNothingHit
+delegate_OnPhysicsSimStateEvent
+delegate_OnGameSpawnMagazine
+delegate_OnGameDestroyMagazine
+delegate_OnGameSetMagazineState
+
+# --- SNS Message names (tried with and without 'S' prefix by the generator) ---
+SBroadcasterIntroduceFinEvent
+SNSLobbySmiteEntrant
+SNSRefreshProfileForUser
+SNSRefreshProfileFromServer
+SNSFriendListResponse
+SNSFriendStatusNotify
+SNSConfigRequestv2
+SNSConfigSuccessv2
+SNSConfigFailurev2
+SNSDocumentRequestv2
+SNSDocumentSuccess
+SNSDocumentFailure
+SNSLoginSettings
+SNSLoggedInUserProfileRequest
+SNSOtherUserProfileRequest
+SNSOtherUserProfileSuccess
+SNSOtherUserProfileFailure
+SNSUserServerProfileUpdateRequest
+SNSUserServerProfileUpdateSuccess
+SNSUserServerProfileUpdateFailure
+SNSPurchaseItems
+SNSPurchaseItemsResult
+SNSReconcileIAP
+SNSReconcileIAPResult
+SNSRewardsSettings
+SNSNewUnlocksNotification
+SNSTelemetryEvent
+SNSMatchEndedv5
+SNSRemoveTournament
+SNSServerSettingsResponsev2
+SNSRemoteLogSetv3
+SNSChannelInfoRequest
+SNSEarlyQuitConfig
+SNSEarlyQuitFeatureFlags
+SNSEarlyQuitUpdateNotification
+SNSLobbyStatusNotifyv2
+SNSLobbyRegistrationSuccess
+SNSLobbyRegistrationFailure
+SNSLobbySessionStarting
+SNSLobbySessionError
+SNSLobbyTerminateProcess
+SNSLobbyStartSessionV4
+SNSLobbyJoinRequestedV4
+SNSLobbyAddEntrantRequestV4
+SNSLobbySessionSuccessV5
+SNSLobbyAcceptPlayersSuccessV2
+SNSLobbyAcceptPlayersFailureV2
+SNSLobbyChatEntry
+SNSLobbyVoiceEntry
+SNSLobbySendClientLobbySettings
+R15NetSaveLoadoutRequest
+R15NetSaveLoadoutSuccess
+R15NetSaveLoadoutPartial
+R15NetCurrentLoadoutRequest
+R15NetCurrentLoadoutResponse
+R15NetTierRewardMsg
+R15NetTopAwardsMsg
+R15NetNewUnlocks
+R15NetReliableStatUpdate
+R15NetReliableTeamStatUpdate
+R15NetProtobufMsg
+R15NetProtobufJson
+SNSFriendSendInviteRequest
+SNSFriendRemoveRequest
+SNSFriendActionRequest
+SNSFriendInviteSuccess
+SNSFriendInviteFailure
+SNSFriendInviteNotify
+SNSFriendAcceptSuccess
+SNSFriendAddFailure
+SNSFriendAcceptNotify
+SNSFriendBlockSuccess
+SNSFriendRemoveNotify
+SNSFriendWithdrawnNotify
+SNSFriendRejectNotify
+SNSPartyKickRequest
+SNSPartyPassOwnershipRequest
+SNSPartyRespondToInvite
+SNSPartyMemberUpdate
