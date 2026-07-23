@@ -563,12 +563,7 @@ void InstallHeadlessGraphicsHooks() {
     DllLoadHook::OnLoad("dxgi.dll", OnDxgiLoad);
     DllLoadHook::OnLoad("d3d11.dll", OnD3d11Load);
     DllLoadHook::OnLoad("d3d12.dll", OnD3d12Load);
-
-    // fprintf, NOT Log() — this runs during DllMain (loader lock). EchoVR::WriteLog
-    // is not initialized yet; calling it here crashes with c0000005. The callbacks
-    // (OnDxgiLoad etc.) fire post-WinMain when logging IS ready and may use Log().
-    fprintf(stderr, "[NEVR.HEADLESS] registered dxgi/d3d11/d3d12 hooks g_isHeadless=%d\n",
-            static_cast<int>(g_isHeadless));
-    fflush(stderr);
+    // Intent logged in initialize.cpp before calling this function;
+    // the callbacks (OnDxgiLoad etc.) fire post-WinMain when Log() is safe.
 #endif
 }
