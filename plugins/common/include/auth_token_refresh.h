@@ -79,8 +79,8 @@ inline bool RefreshAuthToken(CachedAuthToken& auth,
         }
 
         auth.token = new_token;
-        // Default 1hr access token; TODO: parse exp from JWT claims
-        auth.token_expiry = static_cast<uint64_t>(time(nullptr)) + 3600;
+        // Client-side cap: 60s access token lifetime.
+        auth.token_expiry = static_cast<uint64_t>(time(nullptr)) + 60;
 
         if (!new_refresh.empty()) {
             auth.refresh_token = new_refresh;
