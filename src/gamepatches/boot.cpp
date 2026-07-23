@@ -131,6 +131,8 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       g_timestampLogs = TRUE;
     } else if (lstrcmpW(arg, L"-upnp") == 0) {
       g_upnpEnabled = TRUE;
+    } else if (lstrcmpW(arg, L"-allow-dbgcore") == 0) {
+      g_allowDbgCore = TRUE;
     } else if (lstrcmpW(arg, L"-config") == 0 || lstrcmpW(arg, L"-config-path") == 0) {
       if (i + 1 < argc) {
         WideCharToMultiByte(CP_UTF8, 0, argv[i + 1], -1, g_customConfigPath, MAX_PATH, NULL, NULL);
@@ -176,6 +178,43 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // Validate argument combinations
   if (g_isServer && g_isOffline) {
     FatalError("Arguments -server and -offline are mutually exclusive.", NULL);
+  }
+
+  // Detect dbgcore.dll in the game directory — prevents accidental hijack.
+  // In the launcher path, BugSplat64.dll is loaded by echovr_game.dll. If a
+  // leftover dbgcore.dll is also present in the game directory, the OS loader
+  // resolves it during import resolution BEFORE the launcher can intervene,
+  // causing a double-load condition. The -allow-dbgcore flag permits this
+  // intentionally for the legacy injection path.
+  {
+    char exePath[MAX_PATH];
+    DWORD len = GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    if (len > 0 && len < MAX_PATH) {
+      char* lastSlash = strrchr(exePath, '\\');
+      if (!lastSlash) lastSlash = strrchr(exePath, '/');
+      if (lastSlash) {
+        *(lastSlash + 1) = '\0';
+        char dbgcorePath[MAX_PATH];
+        int written = snprintf(dbgcorePath, MAX_PATH, "%sdbgcore.dll", exePath);
+        if (written > 0 && written < MAX_PATH) {
+          if (GetFileAttributesA(dbgcorePath) != INVALID_FILE_ATTRIBUTES) {
+            if (g_allowDbgCore) {
+              Log(EchoVR::LogLevel::Info,
+                  "[NEVR.PATCH] dbgcore.dll present in game directory — "
+                  "legacy injection permitted (-allow-dbgcore)");
+            } else {
+              FatalError(
+                  "dbgcore.dll detected in the game directory.\n\n"
+                  "This file is a legacy DLL hijack artifact. If you are intentionally using "
+                  "the legacy injection path, add -allow-dbgcore to your command line.\n\n"
+                  "If you are using the NEVR launcher, remove dbgcore.dll from the game "
+                  "directory and use BugSplat64.dll instead.",
+                  "dbgcore.dll hijack detected");
+            }
+          }
+        }
+      }
+    }
   }
 
   // Store the game pointer globally for social feature access

@@ -18,6 +18,9 @@ UINT32 g_telemetryRateHz = 30;
 BOOL g_telemetryDiag = FALSE;
 /// Prefix all log lines with a high-resolution timestamp.
 BOOL g_timestampLogs = FALSE;
+/// Allow dbgcore.dll in the game directory (legacy DLL hijack injection path).
+/// Default FALSE — a present dbgcore.dll without this flag is treated as a configuration error.
+BOOL g_allowDbgCore = FALSE;
 /// Whether UPnP port forwarding is enabled. Set by -upnp or config "upnp".
 BOOL g_upnpEnabled = FALSE;
 /// External UPnP port override (0 = use broadcaster port). Set by config "upnp_port".
