@@ -88,7 +88,7 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
   if (symbol_name && strcmp(symbol_name, "ServerLib") == 0) {
     static bool logged = false;
     if (!logged) {
-        fprintf(stderr, "[NEVR] CSysDLL_GetSymbol('ServerLib') → gamepatches factory\n");
+        fprintf(stderr, "[NEVR.BOOT] CSysDLL_GetSymbol('ServerLib') → gamepatches factory\n");
         fflush(stderr);
         logged = true;
     }
@@ -216,21 +216,21 @@ VOID Initialize() {
   fflush(stderr);
 
   if (!VerifyGameVersion()) {
-    fprintf(stderr, "[NEVR] WARNING: game binary version mismatch — hooks may crash\n"); fflush(stderr);
+    fprintf(stderr, "[NEVR.BOOT] WARNING: game binary version mismatch — hooks may crash\n"); fflush(stderr);
   }
 
   EchoVR::InitializeFunctionPointers();
-  fprintf(stderr, "[NEVR] fn ptrs OK\n"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] fn ptrs OK\n"); fflush(stderr);
 
   if (!Hooking::Initialize()) {
-    fprintf(stderr, "[NEVR] FATAL: hooking init failed\n");
+    fprintf(stderr, "[NEVR.BOOT] FATAL: hooking init failed\n");
     return;
   }
-  fprintf(stderr, "[NEVR] minhook OK, hooking...\n"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] minhook OK, hooking...\n"); fflush(stderr);
 
   // --- DLL load interceptor (patch DLLs as they load) ---
   DllLoadHook::Install();
-  fprintf(stderr, "[NEVR] DLL load hooks OK\n"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] DLL load hooks OK\n"); fflush(stderr);
 
   // --- Headless graphics stubs (DXGI/D3D11 interception) ---
   // Register callbacks now so they fire when the game loads dxgi.dll/d3d11.dll.
@@ -238,7 +238,7 @@ VOID Initialize() {
   // call time — if the game is running in headless mode the stubs activate,
   // otherwise they pass through to real DirectX.
   InstallHeadlessGraphicsHooks();
-  fprintf(stderr, "[NEVR] headless graphics hooks registered\n"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] headless graphics hooks registered\n"); fflush(stderr);
 
   {
       void* sym_target = reinterpret_cast<void*>(
@@ -246,9 +246,9 @@ VOID Initialize() {
       if (MH_CreateHook(sym_target, reinterpret_cast<void*>(&CSysDLL_GetSymbolHook),
               reinterpret_cast<void**>(&g_original_GetSymbol)) == MH_OK &&
           MH_EnableHook(sym_target) == MH_OK) {
-        fprintf(stderr, "[NEVR] CSysDLL_GetSymbol hook OK\n"); fflush(stderr);
+        fprintf(stderr, "[NEVR.BOOT] CSysDLL_GetSymbol hook OK\n"); fflush(stderr);
       } else {
-        fprintf(stderr, "[NEVR] CSysDLL_GetSymbol hook FAILED\n"); fflush(stderr);
+        fprintf(stderr, "[NEVR.BOOT] CSysDLL_GetSymbol hook FAILED\n"); fflush(stderr);
       }
   }
 
@@ -257,34 +257,34 @@ VOID Initialize() {
           reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + (0x14105aa70 - 0x140000000));
       static const unsigned char kLoadModulePrologue[8] = {0x40, 0x53, 0x48, 0x81, 0xEC, 0x20, 0x04, 0x00};
       if (memcmp(load_target, kLoadModulePrologue, sizeof(kLoadModulePrologue)) != 0) {
-        fprintf(stderr, "[NEVR] CSysDLL_Load hook SKIPPED — prologue mismatch at 0x14105aa70 (binary drift?)\n");
+        fprintf(stderr, "[NEVR.BOOT] CSysDLL_Load hook SKIPPED — prologue mismatch at 0x14105aa70 (binary drift?)\n");
         fflush(stderr);
       } else if (MH_CreateHook(load_target, reinterpret_cast<void*>(&CSysDLL_LoadHook),
                      reinterpret_cast<void**>(&g_original_LoadModule)) == MH_OK &&
                  MH_EnableHook(load_target) == MH_OK) {
-        fprintf(stderr, "[NEVR] CSysDLL_Load hook OK (pnsradgameserver -> in-process ServerLib)\n"); fflush(stderr);
+        fprintf(stderr, "[NEVR.BOOT] CSysDLL_Load hook OK (pnsradgameserver -> in-process ServerLib)\n"); fflush(stderr);
       } else {
-        fprintf(stderr, "[NEVR] CSysDLL_Load hook FAILED\n"); fflush(stderr);
+        fprintf(stderr, "[NEVR.BOOT] CSysDLL_Load hook FAILED\n"); fflush(stderr);
       }
   }
 
   // --- Broadcaster dispatch guard ---
   BroadcasterGuard::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
-  fprintf(stderr, "[NEVR] broadcaster guard OK\n"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] broadcaster guard OK\n"); fflush(stderr);
 
   // --- Log filter (hooks CLog::PrintfImpl to capture/filter/file game output) ---
   // g_isServer not set yet (CLI not parsed); pass false — log filter works regardless
   BuiltinLogFilter::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress), false);
-  fprintf(stderr, "[NEVR] log filter OK\n"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] log filter OK\n"); fflush(stderr);
 
   // --- Game function hooks ---
-  fprintf(stderr, "[NEVR] BuildCmdLine target=%p\n", (void*)EchoVR::BuildCmdLineSyntaxDefinitions); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] BuildCmdLine target=%p\n", (void*)EchoVR::BuildCmdLineSyntaxDefinitions); fflush(stderr);
   BOOL r1 = Hooking::Attach(reinterpret_cast<PVOID*>(&EchoVR::BuildCmdLineSyntaxDefinitions),
                              reinterpret_cast<PVOID>(BuildCmdLineSyntaxDefinitionsHook));
-  fprintf(stderr, "[NEVR] BuildCmdLine hook: %s\n", r1 ? "OK" : "FAILED"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] BuildCmdLine hook: %s\n", r1 ? "OK" : "FAILED"); fflush(stderr);
   BOOL r2 = Hooking::Attach(reinterpret_cast<PVOID*>(&EchoVR::PreprocessCommandLine),
                              reinterpret_cast<PVOID>(PreprocessCommandLineHook));
-  fprintf(stderr, "[NEVR] PreprocessCmd hook: %s\n", r2 ? "OK" : "FAILED"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] PreprocessCmd hook: %s\n", r2 ? "OK" : "FAILED"); fflush(stderr);
   PatchDetour(&EchoVR::NetGameSwitchState, reinterpret_cast<PVOID>(NetGameSwitchStateHook));
   PatchDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook));
   PatchDetour(&EchoVR::CJsonGetFloat, reinterpret_cast<PVOID>(CJsonGetFloatHook));
@@ -292,29 +292,29 @@ VOID Initialize() {
   PatchDetour(&EchoVR::GetProcAddress, reinterpret_cast<PVOID>(GetProcAddressHook));
   PatchDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook));
   PatchDetour(&EchoVR::JsonValueAsString, reinterpret_cast<PVOID>(JsonValueAsStringHook));
-  fprintf(stderr, "[NEVR] game hooks OK\n"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] game hooks OK\n"); fflush(stderr);
   // --- Platform compatibility hooks ---
   // InstallTLSHook() not needed — WebSocket bridge handles TLS via ixwebsocket.
   // WinHTTP hook (InstallWinHTTPHook) handles TLS for HTTP/REST calls via curl.
   // WebSocket bridge (InstallWebSocketBridge) is started in PreprocessCommandLineHook
   // after config is loaded — it needs the wss:// URI from config.json.
-  fprintf(stderr, "[NEVR] tls: ws bridge deferred to boot\n"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] tls: ws bridge deferred to boot\n"); fflush(stderr);
   InstallCrashRecoveryHooks();
-  fprintf(stderr, "[NEVR] crash OK\n"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] crash OK\n"); fflush(stderr);
   // CreateDirectory + WinHTTP hooks moved to platform_compat module (loaded in boot.cpp)
-  fprintf(stderr, "[NEVR] platform hooks deferred to module\n"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] platform hooks deferred to module\n"); fflush(stderr);
 
   // --- Server crash recovery hooks ---
   InstallGameMainHook();
   InstallEntityHooks();
   InstallBugSplatHook();
   InstallGameSpaceHook();
-  fprintf(stderr, "[NEVR] server hooks OK\n"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] server hooks OK\n"); fflush(stderr);
   // --- Exception handling ---
   InstallVEH();
-  fprintf(stderr, "[NEVR] veh OK\n"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] veh OK\n"); fflush(stderr);
   InstallConsoleCtrlHandler();
-  fprintf(stderr, "[NEVR] console OK\n"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] console OK\n"); fflush(stderr);
 
   // NOTE: InstallResourceOverride() deferred to PreprocessCommandLineHook —
   // directory scanning deadlocks during DllMain loader lock.
@@ -322,11 +322,11 @@ VOID Initialize() {
   // --- Startup patches (applied before CLI parsing) ---
   PatchNoOvrRequiresSpectatorStream();
   PatchDeadlockMonitor();
-  fprintf(stderr, "[NEVR] patches OK\n"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] patches OK\n"); fflush(stderr);
 
   // --- Wave 0 instrumentation (observation-only + EndMultiplayer crash prevention) ---
   Wave0::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
-  fprintf(stderr, "[NEVR] wave0 OK\n"); fflush(stderr);
+  fprintf(stderr, "[NEVR.BOOT] wave0 OK\n"); fflush(stderr);
 
   // --- CDN asset loading ---
   AssetCDN::Initialize();
