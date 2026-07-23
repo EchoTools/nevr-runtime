@@ -89,7 +89,7 @@ bool UPnPHelper::OpenPort(uint16_t internalPort, uint16_t externalPort,
 
   s_active = true;
   s_mappedExternalPort = externalPort;
-  Log(EchoVR::LogLevel::Info,
+  Log(EchoVR::LogLevel::Debug,
       "[NEVR.UPNP] Port mapping added: %u (ext) -> %u (int) UDP, WAN IP: %s",
       externalPort, internalPort, outExternalIp.c_str());
   return true;
@@ -129,7 +129,7 @@ void UPnPHelper::ClosePort() {
           "[NEVR.UPNP] DeletePortMapping failed: %s (code=%d)",
           strupnperror(r), r);
     } else {
-      Log(EchoVR::LogLevel::Info,
+      Log(EchoVR::LogLevel::Debug,
           "[NEVR.UPNP] Port mapping removed: %u UDP",
           s_mappedExternalPort);
     }

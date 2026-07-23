@@ -86,7 +86,7 @@ static ULONG   STDMETHODCALLTYPE Stub_Release(StubUnknown* self);
  * a future interface-refusal shows up in the JSONL log with the exact GUID. */
 static void LogStubIid(const char* ctx, const char* obj, const GUID* riid, const char* verdict) {
     if (!riid) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.HEADLESS] %s obj=%s riid=NULL -> %s", ctx, obj, verdict);
+        Log(EchoVR::LogLevel::Debug, "[NEVR.HEADLESS] %s obj=%s riid=NULL -> %s", ctx, obj, verdict);
         return;
     }
     Log(EchoVR::LogLevel::Info,

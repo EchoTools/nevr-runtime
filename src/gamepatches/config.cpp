@@ -170,18 +170,18 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
     CHAR* arenaRoundTimeVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"arena_round_time", NULL, false);
     if (arenaRoundTimeVal != NULL && arenaRoundTimeVal[0] != '\0') {
       g_arenaRoundTime = (FLOAT)atof(arenaRoundTimeVal);
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Arena round time override: %.0f seconds", g_arenaRoundTime);
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Arena round time override: %.0f seconds", g_arenaRoundTime);
     }
     CHAR* arenaCelebrationVal =
         EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"arena_celebration_time", NULL, false);
     if (arenaCelebrationVal != NULL && arenaCelebrationVal[0] != '\0') {
       g_arenaCelebrationTime = (FLOAT)atof(arenaCelebrationVal);
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Arena celebration time override: %.1f seconds", g_arenaCelebrationTime);
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Arena celebration time override: %.1f seconds", g_arenaCelebrationTime);
     }
     CHAR* arenaMercyVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"arena_mercy_score", NULL, false);
     if (arenaMercyVal != NULL && arenaMercyVal[0] != '\0') {
       g_arenaMercyScore = (FLOAT)atof(arenaMercyVal);
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Arena mercy score override: %.0f", g_arenaMercyScore);
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Arena mercy score override: %.0f", g_arenaMercyScore);
     }
   }
 

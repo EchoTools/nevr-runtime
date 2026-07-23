@@ -34,7 +34,7 @@ static VOID ForceHeadlessSkip(uintptr_t offset, BYTE expectedOpcode, const char*
   if (*site == expectedOpcode) {
     const BYTE jmp = 0xEB;
     ProcessMemcpy(EchoVR::g_GameBaseAddress + offset, const_cast<BYTE*>(&jmp), 1);
-    Log(EchoVR::LogLevel::Info,
+    Log(EchoVR::LogLevel::Debug,
         "[NEVR.HEADLESS] %s — forced device-free branch (0x%02x->jmp) at +0x%lx",
         what, static_cast<unsigned>(expectedOpcode), static_cast<unsigned long>(offset));
   } else {
@@ -75,7 +75,7 @@ static VOID CEngineConfigCopyHook(PVOID dst, PVOID src) {
     uint32_t before = *enableWord;
     *enableWord &= ~0x1u;
     uint32_t after = *enableWord;
-    Log(EchoVR::LogLevel::Info,
+    Log(EchoVR::LogLevel::Debug,
         "[NEVR.HEADLESS] CEngine config copy — cleared renderer bit 0x1: "
         "0x%08x -> 0x%08x",
         before, after);
@@ -105,7 +105,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
   OriginalCEngineConfigCopy =
       reinterpret_cast<CEngineConfigCopyFunc*>(EchoVR::g_GameBaseAddress + CENGINE_CONFIG_COPY);
   PatchDetour(&OriginalCEngineConfigCopy, reinterpret_cast<PVOID>(CEngineConfigCopyHook));
-  Log(EchoVR::LogLevel::Info,
+  Log(EchoVR::LogLevel::Debug,
       "[NEVR.HEADLESS] CEngineConfig copy hook installed — bit-0x1 will be cleared after config copy");
 
   // Disable audio by clearing the audio enable bit (same as `-noaudio` command)
@@ -147,7 +147,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
     if (*gate == HEADLESS_DX12_INIT_EXPECT) {
       const BYTE jmp = HEADLESS_DX12_INIT_PATCH;
       ProcessMemcpy(EchoVR::g_GameBaseAddress + HEADLESS_DX12_INIT, const_cast<BYTE*>(&jmp), 1);
-      Log(EchoVR::LogLevel::Info,
+      Log(EchoVR::LogLevel::Debug,
           "[NEVR.HEADLESS] D3D12 device init skipped — forced device-free branch at +0x%lx",
           static_cast<unsigned long>(HEADLESS_DX12_INIT));
     } else {
@@ -201,14 +201,14 @@ VOID PatchEnableHeadless(PVOID pGame) {
   {
     typedef int64_t (*SysNetCheckFn)();
     static const auto kSysNetHook = +[]() -> int64_t {
-      Log(EchoVR::LogLevel::Info,
+      Log(EchoVR::LogLevel::Debug,
           "[NEVR.HEADLESS] SYSNET check — returning TRUE (internet-connected) for server mode");
       return 1;
     };
     SysNetCheckFn target =
         reinterpret_cast<SysNetCheckFn>(EchoVR::g_GameBaseAddress + PatchAddresses::SYSNET_CHECK);
     PatchDetour(&target, reinterpret_cast<PVOID>(static_cast<SysNetCheckFn>(kSysNetHook)));
-    Log(EchoVR::LogLevel::Info,
+    Log(EchoVR::LogLevel::Debug,
         "[NEVR.HEADLESS] SYSNET check hooked — will always report internet-connected");
   }
 
@@ -341,7 +341,7 @@ static VOID InitializeGlobalGameSpaceHook(PVOID pGame, PVOID pGameSpace) {
   if (g_isServer) {
     // Set the global gamespace pointer — downstream code reads this
     *(PVOID*)((CHAR*)pGame + 0x7AF0) = pGameSpace;
-    Log(EchoVR::LogLevel::Info,
+    Log(EchoVR::LogLevel::Debug,
         "[NEVR.PATCH] InitializeGlobalGameSpace skipped in server mode (no local player actor needed)");
     return;
   }
@@ -620,7 +620,7 @@ static HMODULE WINAPI LoadLibraryW_Hook(LPCWSTR lpLibFileName) {
     std::transform(dllName.begin(), dllName.end(), dllName.begin(), ::tolower);
 
     if (dllName.find(L"libovrplatform") != std::wstring::npos || dllName.find(L"ovrplatform") != std::wstring::npos) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked Oculus Platform SDK load: %S", lpLibFileName);
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Blocked Oculus Platform SDK load: %S", lpLibFileName);
       SetLastError(ERROR_MOD_NOT_FOUND);
       return NULL;
     }
@@ -634,7 +634,7 @@ static HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName, HANDLE hFile, D
     std::transform(dllName.begin(), dllName.end(), dllName.begin(), ::tolower);
 
     if (dllName.find(L"libovrplatform") != std::wstring::npos || dllName.find(L"ovrplatform") != std::wstring::npos) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked Oculus Platform SDK load: %S", lpLibFileName);
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Blocked Oculus Platform SDK load: %S", lpLibFileName);
       SetLastError(ERROR_MOD_NOT_FOUND);
       return NULL;
     }
@@ -648,8 +648,8 @@ VOID PatchBlockOculusSDK() {
   PatchDetour(&Original_LoadLibraryW, reinterpret_cast<PVOID>(LoadLibraryW_Hook));
   PatchDetour(&Original_LoadLibraryExW, reinterpret_cast<PVOID>(LoadLibraryExW_Hook));
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Installed Oculus Platform SDK blocking hooks");
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Expected savings: 50-80MB RAM, 8-12%% CPU per instance");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Installed Oculus Platform SDK blocking hooks");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Expected savings: 50-80MB RAM, 8-12%% CPU per instance");
 }
 
 // ===================================================================================================
@@ -663,7 +663,7 @@ typedef void(WINAPI* Wwise_RenderAudio_t)(PVOID);
 static Wwise_RenderAudio_t Original_Wwise_RenderAudio = nullptr;
 
 static int WINAPI Wwise_Init_Hook(PVOID config) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Wwise audio initialization blocked (VOIP preserved)");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Wwise audio initialization blocked (VOIP preserved)");
   return 0;
 }
 
@@ -678,9 +678,9 @@ VOID PatchDisableWwise() {
   Original_Wwise_RenderAudio = (Wwise_RenderAudio_t)((uintptr_t)base + PatchAddresses::WWISE_RENDERAUDIO);
   PatchDetour(&Original_Wwise_RenderAudio, (PVOID)Wwise_RenderAudio_Hook);
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Installed Wwise audio blocking hooks");
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Expected savings: 20-30MB RAM, 5-8%% CPU per instance");
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] VOIP components preserved for multiplayer");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Installed Wwise audio blocking hooks");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Expected savings: 20-30MB RAM, 5-8%% CPU per instance");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] VOIP components preserved for multiplayer");
 }
 
 // ===================================================================================================
@@ -702,7 +702,7 @@ VOID PatchServerFramePacing() {
                 "PRECISION_SLEEP_BUSYWAIT patch size mismatch");
   ApplyPatch(PatchAddresses::PRECISION_SLEEP_BUSYWAIT, ret, sizeof(ret));
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CPrecisionSleep::BusyWait patched to RET (Wine CPU optimization)");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CPrecisionSleep::BusyWait patched to RET (Wine CPU optimization)");
 }
 
 // ============================================================================
@@ -718,14 +718,14 @@ VOID PatchLogServerProfile() {
   memset(&pmc, 0, sizeof(pmc));
   pmc.cb = sizeof(pmc);
   if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PROFILE] WorkingSet: %llu MB, PrivateBytes: %llu MB",
+    Log(EchoVR::LogLevel::Debug, "[NEVR.PROFILE] WorkingSet: %llu MB, PrivateBytes: %llu MB",
         pmc.WorkingSetSize / (1024 * 1024), pmc.PrivateUsage / (1024 * 1024));
   }
 
   const char* checkDlls[] = {"d3d11", "dxgi", "LibOVRPlatform", "AkSoundEngine", NULL};
   for (int i = 0; checkDlls[i]; i++) {
     HMODULE h = GetModuleHandleA(checkDlls[i]);
-    Log(EchoVR::LogLevel::Info, "[NEVR.PROFILE] Module %s: %s", checkDlls[i], h ? "LOADED" : "not loaded");
+    Log(EchoVR::LogLevel::Debug, "[NEVR.PROFILE] Module %s: %s", checkDlls[i], h ? "LOADED" : "not loaded");
   }
 }
 
@@ -740,12 +740,12 @@ VOID InstallEntityHooks() {
   OriginalEngineEntityLookup =
       (EngineEntityLookupFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::ENGINE_ENTITY_LOOKUP);
   PatchDetour(&OriginalEngineEntityLookup, reinterpret_cast<PVOID>(EngineEntityLookupHook));
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Engine entity lookup hook installed (null-pointer guard)");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Engine entity lookup hook installed (null-pointer guard)");
 
   OriginalEngineEntityPropDispatch =
       (EngineEntityPropDispatchFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::ENGINE_ENTITY_PROP_DISPATCH);
   PatchDetour(&OriginalEngineEntityPropDispatch, reinterpret_cast<PVOID>(EngineEntityPropDispatchHook));
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Entity prop dispatch hook installed (null-pointer guard)");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Entity prop dispatch hook installed (null-pointer guard)");
 }
 
 VOID InstallBugSplatHook() {
@@ -755,7 +755,7 @@ VOID InstallBugSplatHook() {
   OriginalBugSplatCrashHandler =
       (BugSplatCrashHandlerFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::BUGSPLAT_CRASH_HANDLER);
   PatchDetour(&OriginalBugSplatCrashHandler, reinterpret_cast<PVOID>(BugSplatCrashHandlerHook));
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] BugSplat crash handler hook installed (server crash suppression)");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] BugSplat crash handler hook installed (server crash suppression)");
 }
 
 VOID InstallGameSpaceHook() {
@@ -764,7 +764,7 @@ VOID InstallGameSpaceHook() {
   OriginalInitializeGlobalGameSpace =
       (InitializeGlobalGameSpaceFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::INIT_GLOBAL_GAMESPACE);
   PatchDetour(&OriginalInitializeGlobalGameSpace, reinterpret_cast<PVOID>(InitializeGlobalGameSpaceHook));
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] InitializeGlobalGameSpace hook installed (server crash fix)");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] InitializeGlobalGameSpace hook installed (server crash fix)");
 }
 
 VOID InstallGameMainHook() {
@@ -773,5 +773,5 @@ VOID InstallGameMainHook() {
   OriginalGameMainWrapper =
       (GameMainWrapperFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN_WRAPPER);
   PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook));
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Game main wrapper hook installed (server crash recovery)");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Game main wrapper hook installed (server crash recovery)");
 }

@@ -896,7 +896,7 @@ void BuiltinLogFilter::Init(uintptr_t base_addr, bool is_server) {
         return;
     }
 
-    Log(EchoVR::LogLevel::Info,
+    Log(EchoVR::LogLevel::Debug,
         "[NEVR.PATCH] hooked name=CLog::PrintfImpl va=0x%llX",
         static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL));
 }

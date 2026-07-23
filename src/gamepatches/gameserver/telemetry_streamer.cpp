@@ -138,7 +138,7 @@ void TelemetryStreamer::Stop() {
 
 void TelemetryStreamer::Disconnect() {
   if (m_ws) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Disconnecting from telemetry server");
+    Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Disconnecting from telemetry server");
     m_ws->stop();
     m_ws.reset();
     m_wsConnected.store(false, std::memory_order_relaxed);
@@ -198,13 +198,13 @@ void TelemetryStreamer::RunDiagnostics() {
     return;
   }
 
-  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] ========== SNAPSHOT ==========");
-  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] Base=%p", base);
+  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] ========== SNAPSHOT ==========");
+  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Base=%p", base);
 
   // --- Pointer chain ---
   void** contextPtr = reinterpret_cast<void**>(base + GameOffsets::GAME_CONTEXT_OFFSET);
   void* gameContext = *contextPtr;
-  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] GameContext=%p (base+0x%llX)", gameContext,
+  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] GameContext=%p (base+0x%llX)", gameContext,
       (unsigned long long)GameOffsets::GAME_CONTEXT_OFFSET);
 
   if (!gameContext) {
@@ -214,7 +214,7 @@ void TelemetryStreamer::RunDiagnostics() {
 
   CHAR* ctxBase = reinterpret_cast<CHAR*>(gameContext);
   void* netGame = *reinterpret_cast<void**>(ctxBase + GameOffsets::NETGAME_OFFSET);
-  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] CR15NetGame=%p (ctx+0x%X)", netGame,
+  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] CR15NetGame=%p (ctx+0x%X)", netGame,
       (unsigned)GameOffsets::NETGAME_OFFSET);
 
   if (!netGame) {
@@ -226,7 +226,7 @@ void TelemetryStreamer::RunDiagnostics() {
 
   // GameStateData
   void* gsd = *reinterpret_cast<void**>(ngBase + GameOffsets::GAME_STATE_DATA_OFFSET);
-  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] GameStateData=%p (ng+0x%X)", gsd,
+  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] GameStateData=%p (ng+0x%X)", gsd,
       (unsigned)GameOffsets::GAME_STATE_DATA_OFFSET);
 
   // Entity system pointers
@@ -236,7 +236,7 @@ void TelemetryStreamer::RunDiagnostics() {
   if (worldObj) {
     entityMgr = *reinterpret_cast<void**>(reinterpret_cast<CHAR*>(worldObj) + GameOffsets::ENTITY_MANAGER_OFFSET);
   }
-  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] HandleResolver=%p (ng+0x%X), World=%p (ng+0x%X), EntityMgr=%p (world+0x%X)",
+  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] HandleResolver=%p (ng+0x%X), World=%p (ng+0x%X), EntityMgr=%p (world+0x%X)",
       handleResolver, (unsigned)GameOffsets::ENTITY_HANDLE_RESOLVER_OFFSET,
       worldObj, (unsigned)GameOffsets::WORLD_OBJECT_OFFSET,
       entityMgr, (unsigned)GameOffsets::ENTITY_MANAGER_OFFSET);
@@ -245,7 +245,7 @@ void TelemetryStreamer::RunDiagnostics() {
   if (m_getSymbolHash) {
     uint64_t statusHash = m_getSymbolHash(netGame, PropertyHash::GAME_STATUS);
     int32_t statusEnum = MapGameStatus(statusHash);
-    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] GameStatus: hash=0x%016llX → enum=%d",
+    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] GameStatus: hash=0x%016llX → enum=%d",
         (unsigned long long)statusHash, statusEnum);
   } else {
     Log(EchoVR::LogLevel::Warning, "[TELEMETRY.DIAG] GetSymbolHash fn not resolved");
@@ -253,19 +253,19 @@ void TelemetryStreamer::RunDiagnostics() {
 
   if (m_getFloatProperty) {
     float clock = m_getFloatProperty(netGame, PropertyHash::GAME_CLOCK);
-    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] GameClock: %.2f", clock);
+    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] GameClock: %.2f", clock);
   }
 
   if (m_getIntProperty && gsd) {
     int32_t blue = m_getIntProperty(gsd, PropertyHash::BLUE_POINTS);
     int32_t orange = m_getIntProperty(gsd, PropertyHash::ORANGE_POINTS);
-    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] Scores: blue=%d, orange=%d", blue, orange);
+    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Scores: blue=%d, orange=%d", blue, orange);
   }
 
   // --- Player count ---
   uint16_t playerCount = *reinterpret_cast<uint16_t*>(ngBase + GameOffsets::PLAYER_COUNT_OFFSET);
   if (playerCount > 16) playerCount = 16;
-  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] PlayerCount=%u (ng+0x%X)",
+  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] PlayerCount=%u (ng+0x%X)",
       playerCount, (unsigned)GameOffsets::PLAYER_COUNT_OFFSET);
 
   // --- Disc state ---
@@ -276,16 +276,16 @@ void TelemetryStreamer::RunDiagnostics() {
     float* discOri = reinterpret_cast<float*>(gsdBase + GameOffsets::DISC_ORIENT_OFFSET);
     uint64_t bounce = *reinterpret_cast<uint64_t*>(gsdBase + GameOffsets::DISC_BOUNCE_OFFSET);
 
-    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] Disc pos=(%.3f, %.3f, %.3f) vel=(%.3f, %.3f, %.3f)",
+    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Disc pos=(%.3f, %.3f, %.3f) vel=(%.3f, %.3f, %.3f)",
         discPos[0], discPos[1], discPos[2], discVel[0], discVel[1], discVel[2]);
-    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] Disc orient=(%.3f, %.3f, %.3f, %.3f) bounce=%llu",
+    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Disc orient=(%.3f, %.3f, %.3f, %.3f) bounce=%llu",
         discOri[0], discOri[1], discOri[2], discOri[3], (unsigned long long)bounce);
 
     // Quaternion length check
     float qlen2 = discOri[0]*discOri[0] + discOri[1]*discOri[1] +
                    discOri[2]*discOri[2] + discOri[3]*discOri[3];
     if (qlen2 > 0.01f) {
-      Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] Disc quat |q|^2=%.4f %s",
+      Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Disc quat |q|^2=%.4f %s",
           qlen2, (qlen2 > 0.99f && qlen2 < 1.01f) ? "(OK)" : "(BAD - not unit quaternion!)");
     }
   }
@@ -301,24 +301,24 @@ void TelemetryStreamer::RunDiagnostics() {
 
     if (accountId == 0) continue;
 
-    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] Player[%u]: name=%.20s, acct=%llu, flags=0x%04X, team=%u, ping=%u",
+    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Player[%u]: name=%.20s, acct=%llu, flags=0x%04X, team=%u, ping=%u",
         i, name, (unsigned long long)accountId, flags, team, ping);
 
     // Try entity resolution
     if (handleResolver && entityMgr && m_resolveEntityHandle && m_entityLookup) {
       int64_t pair[2] = {static_cast<int64_t>(accountId), 0};
       int resolved = m_resolveEntityHandle(handleResolver, pair);
-      Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG]   ResolveHandle: result=%d, handle=0x%llX",
+      Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   ResolveHandle: result=%d, handle=0x%llX",
           resolved, (unsigned long long)pair[0]);
 
       if (resolved != 0 && pair[0] != -1) {
         void* entity = m_entityLookup(entityMgr, pair[0]);
-        Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG]   Entity=%p", entity);
+        Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   Entity=%p", entity);
 
         if (entity && m_getBoneData) {
           // Try reading bone 0 (root/body)
           void* bone0 = m_getBoneData(entity, 0);
-          Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG]   Bone[0] ptr=%p", bone0);
+          Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   Bone[0] ptr=%p", bone0);
 
           if (bone0) {
             // Try reading at offset 0x18 (our assumed bone data offset)
@@ -340,7 +340,7 @@ void TelemetryStreamer::RunDiagnostics() {
             for (int j = 0; j < 64 && pos < 190; j++) {
               pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X ", raw[j]);
             }
-            Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG]   Bone[0] raw: %s", hex);
+            Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   Bone[0] raw: %s", hex);
           }
 
           // Try bone 4 (assumed head)
@@ -356,7 +356,7 @@ void TelemetryStreamer::RunDiagnostics() {
         // Try transform component
         if (entity && m_getTransformComponent) {
           void* xform = m_getTransformComponent(entity, 0);
-          Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG]   TransformComponent[0]=%p", xform);
+          Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   TransformComponent[0]=%p", xform);
           if (xform) {
             float* f = reinterpret_cast<float*>(xform);
             Log(EchoVR::LogLevel::Info,
@@ -383,15 +383,15 @@ void TelemetryStreamer::RunDiagnostics() {
     uint32_t goals = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_GOALS + 4);
     uint32_t assists = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_ASSISTS + 4);
     uint32_t stuns = *reinterpret_cast<uint32_t*>(statsBase + GameOffsets::STAT_STUNS + 4);
-    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG]   Stats: pts=%u, goals=%u, ast=%u, stuns=%u",
+    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   Stats: pts=%u, goals=%u, ast=%u, stuns=%u",
         points, goals, assists, stuns);
   }
 
   if (playerCount > 4) {
-    Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] ... and %u more players", playerCount - 4);
+    Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] ... and %u more players", playerCount - 4);
   }
 
-  Log(EchoVR::LogLevel::Info, "[TELEMETRY.DIAG] ==============================");
+  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] ==============================");
 }
 
 // ============================================================================
@@ -413,7 +413,7 @@ void TelemetryStreamer::ResolveFunctionPointers() {
   m_getTransformComponent = reinterpret_cast<GetTransformComponentFn>(base + GameFuncAddr::GET_TRANSFORM_COMPONENT);
 
   m_funcPtrsResolved = true;
-  Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Game function pointers resolved");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Game function pointers resolved");
 }
 
 bool TelemetryStreamer::ResolveGamePointers() {
@@ -652,7 +652,7 @@ void TelemetryStreamer::SnapshotPlayerBones(TelemetrySnapshot* snap) {
 // ============================================================================
 
 void TelemetryStreamer::Run() {
-  Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Telemetry thread started");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Telemetry thread started");
 
   // Wait for connection AND first snapshot before sending header with roster
   auto waitStart = std::chrono::steady_clock::now();
@@ -689,7 +689,7 @@ void TelemetryStreamer::Run() {
 
       if (m_wsConnected.load(std::memory_order_relaxed)) {
         if (m_needsResendHeader.exchange(false, std::memory_order_acq_rel)) {
-          Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Re-sending header after reconnect");
+          Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Re-sending header after reconnect");
           SendHeader();
         }
 
@@ -721,7 +721,7 @@ void TelemetryStreamer::Run() {
     SendFooter();
   }
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Telemetry thread exiting");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Telemetry thread exiting");
 }
 
 // ============================================================================
@@ -1077,7 +1077,7 @@ void TelemetryStreamer::SendHeader() {
   std::string serialized;
   if (envelope.SerializeToString(&serialized)) {
     SendEnvelope(serialized);
-    Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Sent CaptureHeader (%zu bytes)", serialized.size());
+    Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Sent CaptureHeader (%zu bytes)", serialized.size());
   }
 }
 
@@ -1127,7 +1127,7 @@ void TelemetryStreamer::SendHeaderWithSnapshot(const TelemetrySnapshot& snap) {
   std::string serialized;
   if (envelope.SerializeToString(&serialized)) {
     SendEnvelope(serialized);
-    Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Sent CaptureHeader with roster (%zu bytes, %u players)",
+    Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Sent CaptureHeader with roster (%zu bytes, %u players)",
         serialized.size(), snap.playerCount);
   }
 }
@@ -1145,7 +1145,7 @@ void TelemetryStreamer::SendFooter() {
   std::string serialized;
   if (envelope.SerializeToString(&serialized)) {
     SendEnvelope(serialized);
-    Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Sent CaptureFooter (frames=%u, duration=%ums)", m_frameIndex,
+    Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Sent CaptureFooter (frames=%u, duration=%ums)", m_frameIndex,
         footer->duration_ms());
   }
 }

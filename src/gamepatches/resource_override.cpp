@@ -142,7 +142,7 @@ static void EnsureHookInstalled() {
         return;
     }
 
-    Log(EchoVR::LogLevel::Info, "[NEVR.RESOURCE] Hook installed");
+    Log(EchoVR::LogLevel::Debug, "[NEVR.RESOURCE] Hook installed");
 }
 
 } // anonymous namespace

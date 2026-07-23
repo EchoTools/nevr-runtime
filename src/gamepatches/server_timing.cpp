@@ -358,7 +358,7 @@ static void SetTickRate(uint32_t hz) {
     *timestep = 1000000 / hz;
     g_current_tick_rate = hz;
 
-    Log(EchoVR::LogLevel::Info, "[server_timing] tick rate: %u Hz (%u us/tick)", hz, *timestep);
+    Log(EchoVR::LogLevel::Debug, "[server_timing] tick rate: %u Hz (%u us/tick)", hz, *timestep);
 #else
     (void)hz;
 #endif
@@ -426,7 +426,7 @@ void ServerTiming::OnGameStateChange(uint32_t old_state, uint32_t new_state) {
             uint8_t patch[] = {0x73, 0x7A};  /* JLE -> JAE */
             void* addr = ResolveVA(g_base, VA_HEADLESS_DELTATIME);
             if (PatchMemory(addr, patch, sizeof(patch))) {
-                Log(EchoVR::LogLevel::Info, "[server_timing] patched deltatime comparison (JLE -> JAE)");
+                Log(EchoVR::LogLevel::Debug, "[server_timing] patched deltatime comparison (JLE -> JAE)");
             }
         }
     }
@@ -445,7 +445,7 @@ void ServerTiming::OnGameStateChange(uint32_t old_state, uint32_t new_state) {
 void ServerTiming::Shutdown() {
     if (!g_is_server) return;
 
-    Log(EchoVR::LogLevel::Info, "[server_timing] shutting down");
+    Log(EchoVR::LogLevel::Debug, "[server_timing] shutting down");
 
 #ifdef _WIN32
     if (g_wait_hook_installed && g_wait_hook_target) {

@@ -80,7 +80,7 @@ BOOL WINAPI CreateDirectoryWHook(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSec
       GetCurrentDirectoryW(MAX_PATH, currentDir);
       _snwprintf(fixedPath, 512, L"%ls\\%ls", currentDir, lpPathName + 4);
       pathToUse = fixedPath;
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Fixed malformed NT path: '%ls' -> '%ls'", lpPathName, fixedPath);
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Fixed malformed NT path: '%ls' -> '%ls'", lpPathName, fixedPath);
     }
 
     BOOL result = OriginalCreateDirectoryW(pathToUse, lpSecurityAttributes);
@@ -88,11 +88,11 @@ BOOL WINAPI CreateDirectoryWHook(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSec
 
     if (!result) {
       if (lastError == ERROR_ALREADY_EXISTS) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Directory '%ls' already exists - returning success", pathToUse);
+        Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Directory .%ls. already exists - returning success", pathToUse);
         SetLastError(ERROR_SUCCESS);
         return TRUE;
       } else if (lastError == ERROR_FILE_NOT_FOUND || lastError == ERROR_PATH_NOT_FOUND) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Parent path missing for '%ls', creating recursively", pathToUse);
+        Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Parent path missing for '%ls', creating recursively", pathToUse);
         wchar_t parentPath[512];
         wcsncpy(parentPath, pathToUse, 512);
         wchar_t* lastSlash = wcsrchr(parentPath, L'\\');
@@ -102,7 +102,7 @@ BOOL WINAPI CreateDirectoryWHook(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSec
         }
         result = OriginalCreateDirectoryW(pathToUse, lpSecurityAttributes);
         if (result || GetLastError() == ERROR_ALREADY_EXISTS) {
-          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Successfully created '%ls' after parent creation", pathToUse);
+          Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Successfully created .%ls. after parent creation", pathToUse);
           SetLastError(ERROR_SUCCESS);
           return TRUE;
         }
@@ -122,11 +122,11 @@ typedef BOOL(WINAPI* CreateDirectoryAFunc)(LPCSTR, LPSECURITY_ATTRIBUTES);
 static CreateDirectoryAFunc OriginalCreateDirectoryA = nullptr;
 
 BOOL WINAPI CreateDirectoryAHook(LPCSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateDirectoryA('%s') called", lpPathName ? lpPathName : "<null>");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CreateDirectoryA(.%s.) called", lpPathName ? lpPathName : "<null>");
 
   BOOL result = OriginalCreateDirectoryA(lpPathName, lpSecurityAttributes);
   DWORD lastError = GetLastError();
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateDirectoryA result=%d, lastError=%lu", result, lastError);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CreateDirectoryA result=%d, lastError=%lu", result, lastError);
 
   if (!result && lastError == ERROR_ALREADY_EXISTS) {
     if (lpPathName && strstr(lpPathName, "_temp")) {
@@ -154,14 +154,14 @@ static CoCreateInstanceFunc OriginalCoCreateInstance = nullptr;
 HRESULT WINAPI CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD dwClsContext,
                                     REFIID riid, LPVOID* ppv) {
   if (IsEqualCLSID(rclsid, CLSID_WinHttpRequest)) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] WinHTTP COM → libcurl bridge");
+    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] WinHTTP COM → libcurl bridge");
 
     static bool s_protectionFixed = false;
     if (!s_protectionFixed) {
       DWORD oldProtect;
       PVOID rdataStart = (PVOID)(EchoVR::g_GameBaseAddress + 0x16E8000);
       if (VirtualProtect(rdataStart, 0x2000, PAGE_READWRITE, &oldProtect)) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Made COM rdata page writable (was 0x%lX)", oldProtect);
+        Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Made COM rdata page writable (was 0x%lX)", oldProtect);
       }
       s_protectionFixed = true;
     }
@@ -195,7 +195,7 @@ static bool InstallTLSHook() {
         Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] Failed to install AcquireCredentialsHandleW hook");
         return false;
       }
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] SSL/TLS modernization hook installed (Schannel)");
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] SSL/TLS modernization hook installed (Schannel)");
       return true;
     }
     Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find AcquireCredentialsHandleW");
@@ -217,7 +217,7 @@ static bool InstallCreateDirectoryHooks() {
       Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] Failed to install CreateDirectoryW hook");
       ok = false;
     } else {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateDirectoryW hook installed");
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CreateDirectoryW hook installed");
     }
   }
 
@@ -228,7 +228,7 @@ static bool InstallCreateDirectoryHooks() {
       Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] Failed to install CreateDirectoryA hook");
       ok = false;
     } else {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateDirectoryA hook installed");
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CreateDirectoryA hook installed");
     }
   }
   return ok;
@@ -247,7 +247,7 @@ static bool InstallWinHTTPHook() {
         Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] Failed to install CoCreateInstance hook — WinHTTP bridge inactive");
         return false;
       }
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] WinHTTP to libcurl hook installed (CoCreateInstance)");
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] WinHTTP to libcurl hook installed (CoCreateInstance)");
       return true;
     }
     Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find CoCreateInstance");
