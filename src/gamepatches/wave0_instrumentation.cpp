@@ -38,6 +38,7 @@
 
 #include "wave0_instrumentation.h"
 #include "patch_addresses.h"
+#include "common/globals.h"
 #include "common/logging.h"
 
 #ifdef _WIN32
@@ -47,7 +48,7 @@
 #include <MinHook.h>
 #include "process_mem.h"
 #include "cli.h"              // g_isServer
-#include "crash_recovery.h"   // ForceFatalExit
+#include "crash_recovery.h"   // ForceFatalExit, PerformGracefulShutdown
 #endif
 
 /* --------------------------------------------------------------------
@@ -258,6 +259,14 @@ static PrecisionSleepWait_t s_origPrecisionSleepWait = nullptr;
 static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk, void* unk2) {
     (void)unk;
     (void)unk2;
+
+    // Check for graceful shutdown request (set by SIGINT/SIGTERM handler).
+    // This fires every game tick, so CTRL+C responsiveness is bounded by the
+    // frame interval (~8ms at 120Hz, ~16ms at 60Hz).
+    if (g_shutdownRequested) {
+      PerformGracefulShutdown(0);
+      // Unreachable — ForceFatalExit calls TerminateProcess.
+    }
 
     if (microseconds <= 0) {
         SwitchToThread();

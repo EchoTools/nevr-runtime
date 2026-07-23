@@ -27,3 +27,12 @@ void ForceFatalExit(unsigned int code);
 /// In client mode the handler is NOT installed — users at the screen should see
 /// the modal dialog so they know the game fatally failed.
 void InstallFatalErrorHandler();
+
+/// Initiates graceful shutdown: (1) stops the ws_bridge listener (releases the
+/// socket FD to prevent wineserver zombie — N38 root cause), (2) unhooks Wave0
+/// MinHook hooks, (3) calls ForceFatalExit to terminate the process.
+/// Safe to call from any thread — uses InterlockedExchange to prevent re-entry.
+/// Called from the per-frame PrecisionSleepWaitHook (flag check), the
+/// per-transition NetGameSwitchStateHook (flag check + session-end path),
+/// and the POSIX signal handler path (via flag → next tick check).
+void PerformGracefulShutdown(unsigned int exitCode);
