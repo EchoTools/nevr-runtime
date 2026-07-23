@@ -21,6 +21,7 @@
 static void* (*s_getProc)(const char*) = nullptr;
 static void* s_earlyConfig = nullptr;
 static bool g_isServer = false;
+static bool g_noOvr = false;
 
 // ============================================================================
 // In-process WebSocket TLS proxy
@@ -72,6 +73,7 @@ static const char* PlatformPrefix(uint64_t platformCode) {
     case 2: return "DSC";
     case 3: return "XBX";
     case 4: return "OVR-ORG";
+    case 5: return "DSC-NOVR";
     default: return "UNK";
   }
 }
@@ -323,7 +325,7 @@ void InstallWebSocketBridge() {
                           }
                         }
 
-                        uint64_t platformCode = 2;  // DSC
+                        uint64_t platformCode = g_noOvr ? static_cast<uint64_t>(5) : static_cast<uint64_t>(2);
                         std::string loginMsg = BuildLoginRequest(discordId, platformCode);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
@@ -370,7 +372,7 @@ void InstallWebSocketBridge() {
                           // Generate a dummy session UUID (non-zero)
                           payload[0] = 0x4E; payload[1] = 0x45; payload[2] = 0x56; payload[3] = 0x52; // "NEVR"
                           payload[4] = 0x53; payload[5] = 0x52; payload[6] = 0x56; payload[7] = 0x52; // "SRVR"
-                          uint64_t platformCode = 2;
+                          uint64_t platformCode = g_noOvr ? static_cast<uint64_t>(5) : static_cast<uint64_t>(2);
                           memcpy(payload + 16, &platformCode, 8);
                           // AccountId: the server's Discord ID
                           memcpy(payload + 24, &discordId, 8);
@@ -486,7 +488,7 @@ void InstallWebSocketBridge() {
                           }
                         }
 
-                        uint64_t platformCode = 2;  // DSC
+                        uint64_t platformCode = g_noOvr ? static_cast<uint64_t>(5) : static_cast<uint64_t>(2);
                         std::string loginMsg = BuildLoginRequest(discordId, platformCode);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
@@ -679,6 +681,7 @@ NEVR_MODULE_API int NvrModuleInit(const NvrModuleContext* ctx) {
   s_getProc = ctx->get_proc;
   s_earlyConfig = ctx->early_config;
   g_isServer = (ctx->flags & NEVR_MODULE_HOST_IS_SERVER) != 0;
+  g_noOvr = (ctx->flags & NEVR_MODULE_HOST_IS_NOOVR) != 0;
 
   // Read socket URI from config
   if (s_earlyConfig) {

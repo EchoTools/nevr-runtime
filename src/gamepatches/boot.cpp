@@ -36,6 +36,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     for (int i = 0; i < argc; ++i) {
       if (lstrcmpW(argv[i], L"-server") == 0) {
         g_isServer = TRUE;
+        g_noOvr = TRUE;  // -server implies -noovr unconditionally
         break;
       }
     }
@@ -59,6 +60,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     moduleCtx.flags = 0;
     if (g_isServer)   moduleCtx.flags |= NEVR_MODULE_HOST_IS_SERVER;
     if (g_isHeadless) moduleCtx.flags |= NEVR_MODULE_HOST_IS_HEADLESS;
+    if (g_noOvr)      moduleCtx.flags |= NEVR_MODULE_HOST_IS_NOOVR;
     if (!g_isServer)  moduleCtx.flags |= NEVR_MODULE_HOST_IS_CLIENT;
     moduleCtx.log = (void (*)(int, const char*, ...))Log;
     moduleCtx.get_proc = ResolveModuleProc;
@@ -152,6 +154,9 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.PATCH] %ls is redundant — -server forces -headless unconditionally. "
           "Remove this flag from your command line.", arg);
+      if (lstrcmpW(arg, L"-noovr") == 0) {
+        g_noOvr = TRUE;
+      }
     }
   }
 
@@ -161,6 +166,8 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // The OR here is a safety net: if g_isHeadless was set to TRUE for any other
   // reason, -noovr is also applied. In practice, g_isHeadless is only set by -server.
   g_isHeadless = g_isHeadless || g_isServer;
+  // -server implies -noovr unconditionally.
+  g_noOvr = g_noOvr || g_isServer;
   if (g_isServer) {
     Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Server mode — headless + noovr applied");
   }
