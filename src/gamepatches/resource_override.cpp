@@ -19,6 +19,7 @@
  */
 
 #include "resource_override.h"
+#include "symbol_corpus.h"
 
 #include <cstdio>
 #include <cstring>
@@ -165,11 +166,22 @@ void RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
     /* Lazily install hook if this is the first override after init */
     EnsureHookInstalled();
 
+    char typeBuf[128], nameBuf[128];
+    const char* typeName = EchoVR::LookupSymbolName(type_hash);
+    const char* resName = EchoVR::LookupSymbolName(name_hash);
+    snprintf(typeBuf, sizeof(typeBuf), "0x%016llx%s%s",
+             static_cast<unsigned long long>(type_hash),
+             typeName ? " (" : "", typeName ? typeName : "");
+    if (typeName) strncat(typeBuf, ")", sizeof(typeBuf) - strlen(typeBuf) - 1);
+    snprintf(nameBuf, sizeof(nameBuf), "0x%016llx%s%s",
+             static_cast<unsigned long long>(name_hash),
+             resName ? " (" : "", resName ? resName : "");
+    if (resName) strncat(nameBuf, ")", sizeof(nameBuf) - strlen(nameBuf) - 1);
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.RESOURCE] Registered embedded override: %s (type=0x%016llx name=0x%016llx, %llu bytes)",
+        "[NEVR.RESOURCE] Registered embedded override: %s (type=%s name=%s, %llu bytes)",
         label,
-        static_cast<unsigned long long>(type_hash),
-        static_cast<unsigned long long>(name_hash),
+        typeBuf,
+        nameBuf,
         static_cast<unsigned long long>(size));
 }
 
