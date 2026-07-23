@@ -37,3 +37,13 @@ void InstallFatalErrorHandler();
 /// PrecisionSleepWaitHook (flag check, now dead-code defense), per-transition
 /// NetGameSwitchStateHook (flag check + session-end path).
 void PerformGracefulShutdown(unsigned int exitCode);
+
+/// Server-mode fatal exit — logs the cause as the last log line and immediately
+/// terminates via ForceFatalExit. In client mode (g_isServer=FALSE) the condition
+/// is logged as a Warning and execution continues — these conditions are only
+/// fatal when the server, not a human at the screen, would otherwise run degraded
+/// for hours.
+/// Call ONLY after g_isServer is known (i.e., after early -server detection in
+/// PreprocessCommandLineHook). For code that runs earlier (Initialize/DllMain),
+/// set a deferred flag and check it after handler installation.
+void ServerFatal(const CHAR* format, ...);
