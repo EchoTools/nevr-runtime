@@ -423,6 +423,26 @@ void InstallConsoleCtrlHandler() {
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] POSIX signal handlers installed (SIGINT/SIGTERM -> direct shutdown)");
 }
 
+void ServerFatal(const CHAR* format, ...) {
+  char buf[1024];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(buf, sizeof(buf), format, args);
+  va_end(args);
+
+  // These conditions are ONLY fatal in server mode where no human is watching
+  // the screen. In client mode, log as a Warning and let the user see it in
+  // the game's console output — a degraded hook or missing config won't
+  // silently break their session.
+  if (!g_isServer) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.FATAL] (non-fatal, client mode) %s", buf);
+    return;
+  }
+
+  Log(EchoVR::LogLevel::Error, "[NEVR.FATAL] %s", buf);
+  ForceFatalExit(1);
+}
+
 void ForceFatalExit(unsigned int code) {
   // ExitProcessHook suppresses ALL ExitProcess in server mode to survive the game's
   // crash-reporter chain. Lift it for THIS exit: set g_forceExitInProgress so the

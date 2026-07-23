@@ -35,6 +35,7 @@
 // ============================================================================
 
 static BOOL g_initialized = FALSE;
+bool g_bootHookFailed = false;
 
 HWND g_hWindow = NULL;
 
@@ -226,6 +227,7 @@ VOID Initialize() {
 
   if (!Hooking::Initialize()) {
     BootLogTee::TeeFprintf("[NEVR] FATAL: hooking init failed\n");
+    g_bootHookFailed = true;
     return;
   }
   BootLogTee::TeeFprintf("[NEVR] minhook OK, hooking...\n");
@@ -251,6 +253,7 @@ VOID Initialize() {
         BootLogTee::TeeFprintf("[NEVR] CSysDLL_GetSymbol hook OK\n");
       } else {
         BootLogTee::TeeFprintf("[NEVR] CSysDLL_GetSymbol hook FAILED\n");
+        g_bootHookFailed = true;
       }
   }
 
@@ -266,6 +269,7 @@ VOID Initialize() {
         BootLogTee::TeeFprintf("[NEVR] CSysDLL_Load hook OK (pnsradgameserver -> in-process ServerLib)\n");
       } else {
         BootLogTee::TeeFprintf("[NEVR] CSysDLL_Load hook FAILED\n");
+        g_bootHookFailed = true;
       }
   }
 
@@ -283,9 +287,11 @@ VOID Initialize() {
   BOOL r1 = Hooking::Attach(reinterpret_cast<PVOID*>(&EchoVR::BuildCmdLineSyntaxDefinitions),
                              reinterpret_cast<PVOID>(BuildCmdLineSyntaxDefinitionsHook));
   BootLogTee::TeeFprintf("[NEVR] BuildCmdLine hook: %s\n", r1 ? "OK" : "FAILED");
+  if (!r1) g_bootHookFailed = true;
   BOOL r2 = Hooking::Attach(reinterpret_cast<PVOID*>(&EchoVR::PreprocessCommandLine),
                              reinterpret_cast<PVOID>(PreprocessCommandLineHook));
   BootLogTee::TeeFprintf("[NEVR] PreprocessCmd hook: %s\n", r2 ? "OK" : "FAILED");
+  if (!r2) g_bootHookFailed = true;
   PatchDetour(&EchoVR::NetGameSwitchState, reinterpret_cast<PVOID>(NetGameSwitchStateHook));
   PatchDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook));
   PatchDetour(&EchoVR::CJsonGetFloat, reinterpret_cast<PVOID>(CJsonGetFloatHook));

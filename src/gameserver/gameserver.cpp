@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include "auth_token.h"
+#include "common/logging.h"
 #include "constants.h"
 #include "echovr.h"
 #include "echovr_functions.h"
@@ -181,6 +182,12 @@ void OnTcpMsgRegistrationFailure(GameServerLib* self, VOID*, EchoVR::TcpPeer, VO
     EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationFailure, "SNSLobbyRegistrationFailure", msg,
                                          msgSize);
   }
+
+  // Server-mode registration failure is fatal — the server cannot operate without
+  // a successful ServerDB registration. (GameServerLib is only instantiated in
+  // server mode, so FatalError will route through the installed handler to
+  // ForceFatalExit.)
+  FatalError("GameServer registration rejected by ServerDB", "Registration Failure");
 }
 
 void OnTcpMessageStartSession(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
@@ -1284,6 +1291,9 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   } else {
     // No cached client token — authenticate as a server
     wsToken = AuthenticateServer(localConfig);
+    if (wsToken.empty()) {
+      FatalError("Server authentication failed — no valid token for ServerDB connection", "Auth Failure");
+    }
   }
 
   // Connect to serverdb via WebSocketClient (avoids TcpBroadcasterListen vtable ABI crash)

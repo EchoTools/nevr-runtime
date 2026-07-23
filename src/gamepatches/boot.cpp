@@ -2,6 +2,7 @@
 #include "cli.h"
 #include "config.h"
 #include "crash_recovery.h"
+#include "initialize.h"
 #include "mode_patches.h"
 #include "resource_override.h"
 #include "plugin_loader.h"
@@ -49,6 +50,18 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // screen should see the modal dialog so they know the game fatally failed.
   if (g_isServer) {
     InstallFatalErrorHandler();
+
+    // Deferred fatal-condition checks — these conditions are detected in
+    // Initialize()/LoadEarlyConfig() before g_isServer is known, so we check
+    // them now that the fatal-error handler is installed.  If any fail, the
+    // server dies immediately with the cause as the last log line rather than
+    // limping along in a degraded state for hours.
+    if (g_earlyConfigPtr == NULL) {
+      ServerFatal("_local/config.json not found or unparseable — server requires configuration");
+    }
+    if (g_bootHookFailed) {
+      ServerFatal("One or more boot hooks failed to install — server would be degraded");
+    }
   }
 
   // Load modules. Order matters — dependencies must load first.
