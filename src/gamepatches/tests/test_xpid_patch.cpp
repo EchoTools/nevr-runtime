@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -8,10 +9,11 @@
 
 // Byte constants duplicated from xpid_patch.cpp for independent verification.
 // If the source changes, these must be updated — a mismatch is a test failure.
-static const uint8_t kPsnShort[] = {0x50, 0x53, 0x4E, 0x00};  // "PSN\0"
-static const uint8_t kPsnDash[]  = {0x50, 0x53, 0x4E, 0x2D};  // "PSN-"
-static const uint8_t kDscShort[] = {0x44, 0x53, 0x43, 0x00};  // "DSC\0"
-static const uint8_t kDscDash[]  = {0x44, 0x53, 0x43, 0x2D};  // "DSC-"
+static const uint8_t kPsnShort[]  = {0x50, 0x53, 0x4E, 0x00};  // "PSN\0"
+static const uint8_t kPsnDash[]   = {0x50, 0x53, 0x4E, 0x2D};  // "PSN-"
+static const uint8_t kQmarkDash[] = {0x3F, 0x3F, 0x3F, 0x2D};  // "???-"
+static const uint8_t kDscShort[]  = {0x44, 0x53, 0x43, 0x00};  // "DSC\0"
+static const uint8_t kDscDash[]   = {0x44, 0x53, 0x43, 0x2D};  // "DSC-"
 
 // ---------------------------------------------------------------------------
 // Verify byte constants spell the right ASCII strings
@@ -20,6 +22,10 @@ static const uint8_t kDscDash[]  = {0x44, 0x53, 0x43, 0x2D};  // "DSC-"
 TEST(XpidPatch, PsnBytesMatchAscii) {
   EXPECT_EQ(memcmp(kPsnShort, "PSN",  4), 0);  // includes null terminator
   EXPECT_EQ(memcmp(kPsnDash,  "PSN-", 4), 0);
+}
+
+TEST(XpidPatch, QmarkBytesMatchAscii) {
+  EXPECT_EQ(memcmp(kQmarkDash, "\x3F\x3F\x3F-", 4), 0);
 }
 
 TEST(XpidPatch, DscBytesMatchAscii) {
@@ -32,11 +38,13 @@ TEST(XpidPatch, DscBytesMatchAscii) {
 // ---------------------------------------------------------------------------
 
 TEST(XpidPatch, ReplacementSameLength) {
-  EXPECT_EQ(sizeof(kPsnShort), sizeof(kDscShort));
-  EXPECT_EQ(sizeof(kPsnDash),  sizeof(kDscDash));
-  EXPECT_EQ(sizeof(kPsnShort), PatchAddresses::XPID_PLATFORM_SHORT_NAME_SIZE);
-  EXPECT_EQ(sizeof(kPsnDash),  PatchAddresses::XPID_PLATFORM_DASH_PREFIX_SIZE);
-  EXPECT_EQ(sizeof(kPsnShort), PatchAddresses::XPID_PLATFORM_COMPACT_NAME_SIZE);
+  EXPECT_EQ(sizeof(kPsnShort),  sizeof(kDscShort));
+  EXPECT_EQ(sizeof(kPsnDash),   sizeof(kDscDash));
+  EXPECT_EQ(sizeof(kQmarkDash), sizeof(kDscDash));
+  EXPECT_EQ(sizeof(kPsnShort),  PatchAddresses::XPID_PLATFORM_SHORT_NAME_SIZE);
+  EXPECT_EQ(sizeof(kPsnDash),   PatchAddresses::XPID_PLATFORM_DASH_PREFIX_SIZE);
+  EXPECT_EQ(sizeof(kPsnShort),  PatchAddresses::XPID_PLATFORM_COMPACT_NAME_SIZE);
+  EXPECT_EQ(sizeof(kQmarkDash), PatchAddresses::XPID_PLATFORM_FALLBACK_PREFIX_SIZE);
 }
 
 // ---------------------------------------------------------------------------
@@ -53,6 +61,8 @@ TEST(XpidPatch, AddressesInRdataRange) {
   EXPECT_LT(XPID_PLATFORM_DASH_PREFIX, 0x2000000u);
   EXPECT_GT(XPID_PLATFORM_COMPACT_NAME, 0x1000000u);
   EXPECT_LT(XPID_PLATFORM_COMPACT_NAME, 0x2000000u);
+  EXPECT_GT(XPID_PLATFORM_FALLBACK_PREFIX, 0x1000000u);
+  EXPECT_LT(XPID_PLATFORM_FALLBACK_PREFIX, 0x2000000u);
 }
 
 TEST(XpidPatch, AddressesDontOverlap) {
@@ -66,6 +76,9 @@ TEST(XpidPatch, AddressesDontOverlap) {
   EXPECT_EQ(overlaps(XPID_PLATFORM_SHORT_NAME, 4, XPID_PLATFORM_DASH_PREFIX, 4), false);
   EXPECT_EQ(overlaps(XPID_PLATFORM_SHORT_NAME, 4, XPID_PLATFORM_COMPACT_NAME, 4), false);
   EXPECT_EQ(overlaps(XPID_PLATFORM_DASH_PREFIX, 4, XPID_PLATFORM_COMPACT_NAME, 4), false);
+  EXPECT_EQ(overlaps(XPID_PLATFORM_DASH_PREFIX, 4, XPID_PLATFORM_FALLBACK_PREFIX, 4), false);
+  EXPECT_EQ(overlaps(XPID_PLATFORM_SHORT_NAME, 4, XPID_PLATFORM_FALLBACK_PREFIX, 4), false);
+  EXPECT_EQ(overlaps(XPID_PLATFORM_COMPACT_NAME, 4, XPID_PLATFORM_FALLBACK_PREFIX, 4), false);
 }
 
 // ---------------------------------------------------------------------------
@@ -76,23 +89,26 @@ TEST(XpidPatch, MockPatchReplacesCorrectly) {
   using namespace PatchAddresses;
 
   // Allocate a buffer large enough to hold the highest patch offset + 4 bytes.
-  const size_t buf_size = XPID_PLATFORM_COMPACT_NAME + 4;
+  const size_t buf_size = std::max(XPID_PLATFORM_COMPACT_NAME, XPID_PLATFORM_FALLBACK_PREFIX) + 4;
   std::vector<uint8_t> buf(buf_size, 0xCC);  // fill with INT3 as sentinel
 
-  // Plant original PSN bytes at the three patch sites.
-  memcpy(buf.data() + XPID_PLATFORM_SHORT_NAME,  kPsnShort, 4);
-  memcpy(buf.data() + XPID_PLATFORM_DASH_PREFIX,  kPsnDash,  4);
-  memcpy(buf.data() + XPID_PLATFORM_COMPACT_NAME, kPsnShort, 4);
+  // Plant original bytes at the four patch sites.
+  memcpy(buf.data() + XPID_PLATFORM_SHORT_NAME,  kPsnShort,  4);
+  memcpy(buf.data() + XPID_PLATFORM_DASH_PREFIX,  kPsnDash,   4);
+  memcpy(buf.data() + XPID_PLATFORM_COMPACT_NAME, kPsnShort,  4);
+  memcpy(buf.data() + XPID_PLATFORM_FALLBACK_PREFIX, kQmarkDash, 4);
 
   // Simulate the patch (plain memcpy — the real one uses ProcessMemcpy for VirtualProtect).
   memcpy(buf.data() + XPID_PLATFORM_SHORT_NAME,  kDscShort, 4);
   memcpy(buf.data() + XPID_PLATFORM_DASH_PREFIX,  kDscDash,  4);
   memcpy(buf.data() + XPID_PLATFORM_COMPACT_NAME, kDscShort, 4);
+  memcpy(buf.data() + XPID_PLATFORM_FALLBACK_PREFIX, kDscDash, 4);
 
   // Verify each site now contains DSC.
   EXPECT_EQ(memcmp(buf.data() + XPID_PLATFORM_SHORT_NAME,  "DSC",  4), 0);
   EXPECT_EQ(memcmp(buf.data() + XPID_PLATFORM_DASH_PREFIX,  "DSC-", 4), 0);
   EXPECT_EQ(memcmp(buf.data() + XPID_PLATFORM_COMPACT_NAME, "DSC",  4), 0);
+  EXPECT_EQ(memcmp(buf.data() + XPID_PLATFORM_FALLBACK_PREFIX, "DSC-", 4), 0);
 
   // Verify sentinel bytes around patch sites are untouched.
   if (XPID_PLATFORM_SHORT_NAME > 0) {
@@ -108,7 +124,8 @@ TEST(XpidPatch, MockPatchReplacesCorrectly) {
 TEST(XpidPatch, ValidationRejectsWrongBytes) {
   using namespace PatchAddresses;
 
-  std::vector<uint8_t> buf(XPID_PLATFORM_COMPACT_NAME + 4, 0x00);
+  const size_t buf_size = std::max(XPID_PLATFORM_COMPACT_NAME, XPID_PLATFORM_FALLBACK_PREFIX) + 4;
+  std::vector<uint8_t> buf(buf_size, 0x00);
 
   // Plant wrong bytes at the first site.
   const uint8_t wrong[] = {0x58, 0x42, 0x58, 0x00};  // "XBX\0"
@@ -116,6 +133,13 @@ TEST(XpidPatch, ValidationRejectsWrongBytes) {
 
   // Verify the validation would fail.
   EXPECT_NE(memcmp(buf.data() + XPID_PLATFORM_SHORT_NAME, kPsnShort, 4), 0);
+
+  // Plant wrong bytes at the fallback site.
+  const uint8_t wrongDash[] = {0x42, 0x4F, 0x54, 0x2D};  // "BOT-"
+  memcpy(buf.data() + XPID_PLATFORM_FALLBACK_PREFIX, wrongDash, 4);
+
+  // Verify the validation would fail for the fallback.
+  EXPECT_NE(memcmp(buf.data() + XPID_PLATFORM_FALLBACK_PREFIX, kQmarkDash, 4), 0);
 }
 
 // ---------------------------------------------------------------------------
