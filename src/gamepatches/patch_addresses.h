@@ -8,6 +8,13 @@
 /// Source: Reverse-engineered from echovr.exe
 /// Validated against: echovr-reconstruction (struct/function names, offsets)
 ///                    ReVault (Windows PE virtual addresses, decompilation)
+///
+/// CALLER-COUNT CONVENTION (N32): Numeric caller counts in this file are
+/// ReVault snapshots stamped with date and the exact revault command to
+/// refresh them. They are NOT authoritative — ReVault re-analysis discovers
+/// new callers. Before relying on a count for blast-radius analysis, run
+/// the Keep-current command listed in the comment. Counts without a
+/// Keep-current command are stale and should not be trusted.
 /// </summary>
 namespace PatchAddresses {
 
@@ -383,7 +390,8 @@ constexpr uintptr_t GAME_LOCAL_CONFIG_OFFSET = 0x63240;
 
 /// Address: CJson_GetFloat (0x1405fca60, 22 bytes)
 /// Thunk that calls CJson::Real and casts to float.
-/// 45 direct callers, 623 callers via inspector ReadFloat.
+/// ReVault snapshot (2025-01): 45 direct callers, 623 callers via inspector ReadFloat.
+/// Keep-current: revault fn callers 0x1405fca60 --binary echovr.exe
 /// Hooked to override arena rule config values (celebration time, round time).
 constexpr uintptr_t CJSON_GET_FLOAT = 0x5FCA60;
 
@@ -453,12 +461,16 @@ constexpr uintptr_t FIXED_TIMESTEP_OFFSET = 0x90;
 // ============================================================================
 
 /// Address: GetTimeMicroseconds (0x1400d00c0, 68 bytes)
-/// QPC-to-microseconds conversion. 12 callers (physics, network, rendering).
+/// QPC-to-microseconds conversion.
+/// ReVault snapshot (2025-01): 12 callers (physics, network, rendering).
+/// Keep-current: revault fn callers 0x1400d00c0 --binary echovr.exe
 /// Signature: uint64_t __fastcall() — no parameters, returns microseconds since boot.
 constexpr uintptr_t GET_TIME_MICROSECONDS = 0xD00C0;
 
 /// Address: CTimer_GetMilliSeconds (0x1400d0110, 95 bytes)
-/// QPC-to-milliseconds conversion. 11 callers including CleanupPeers.
+/// QPC-to-milliseconds conversion.
+/// ReVault snapshot (2025-01): 11 callers including CleanupPeers.
+/// Keep-current: revault fn callers 0x1400d0110 --binary echovr.exe
 /// Signature: uint64_t __fastcall() — no parameters, returns milliseconds since boot.
 constexpr uintptr_t GET_TIME_MILLISECONDS = 0xD0110;
 
@@ -481,13 +493,17 @@ constexpr uintptr_t GET_TIME_OVERRIDE_VALUE = 0x209CB00;
 // Future Wave 1 Hook Targets (validated, not yet hooked)
 // ============================================================================
 
-/// Address: CleanupPeers (0x140F76500, 1939 bytes, 1 caller)
+/// Address: CleanupPeers (0x140F76500, 1939 bytes)
+/// ReVault snapshot (2025-01): 1 caller.
+/// Keep-current: revault fn callers 0x140F76500 --binary echovr.exe
 /// Network peer timeout check. BUG #2: unsigned subtraction of overflowed
 /// timestamp wraps to massive value, disconnecting all peers.
 /// Fixed by GetTimeMilliseconds overflow-safe replacement (N22).
 constexpr uintptr_t CLEANUP_PEERS = 0xF76500;
 
-/// Address: CSpinWait::WaitForValue (0x141500ED8, 115 bytes, 3 callers)
+/// Address: CSpinWait::WaitForValue (0x141500ED8, 115 bytes)
+/// ReVault snapshot (2025-01): 3 callers.
+/// Keep-current: revault fn callers 0x141500ED8 --binary echovr.exe
 /// BUG #14: Inverted backoff — starts Sleep(1), degrades to Sleep(0).
 /// Maximum CPU consumption at peak contention.
 constexpr uintptr_t SPINWAIT_WAIT_FOR_VALUE = 0x1500ED8;
