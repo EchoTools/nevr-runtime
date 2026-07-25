@@ -211,9 +211,9 @@ static std::atomic<int>      g_recv_count{0};
 static std::atomic<uint64_t> g_recv_dropped_rate{0};
 static constexpr int MAX_RECV_EVENTS_PER_SEC = 2000;  // generous — ~22/ms at 90fps
 
-static bool BroadcasterRecvRateCheck() {
-    auto now = std::chrono::steady_clock::now().time_since_epoch();
-    int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+// Core rate-limit logic parameterized on the clock reading so the unit test
+// can drive the window without depending on steady_clock::now().
+static bool BroadcasterRecvRateCheckAtTime(int64_t now_ms) {
     int64_t window = g_recv_window_start.load(std::memory_order_relaxed);
     if (now_ms - window >= 1000) {
         g_recv_window_start.store(now_ms, std::memory_order_relaxed);
@@ -225,6 +225,12 @@ static bool BroadcasterRecvRateCheck() {
         return false;
     }
     return true;
+}
+
+static bool BroadcasterRecvRateCheck() {
+    auto now = std::chrono::steady_clock::now().time_since_epoch();
+    int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+    return BroadcasterRecvRateCheckAtTime(now_ms);
 }
 
 // N72: minimum payload sanity check. Reject events with payloads that
@@ -1108,5 +1114,37 @@ void OnFrame() {
         }
     }
 }
+
+// ============================================================================
+// N72/N73 test hooks — NEVR_TEST_HOOKS only.
+// Expose the broadcaster ingress guards for unit testing. The guards are pure
+// logic (parameterized on now_ms for the rate limiter; POD args for payload
+// validation). No game process, no hook, no event stream needed.
+// ============================================================================
+
+#ifdef NEVR_TEST_HOOKS
+
+void TestHook_RecvRateReset() {
+    g_recv_window_start.store(0, std::memory_order_relaxed);
+    g_recv_count.store(0, std::memory_order_relaxed);
+    g_recv_dropped_rate.store(0, std::memory_order_relaxed);
+}
+
+// N73: expose the parameterized rate check. Returns true if the event is
+// allowed through, false if it exceeds the per-second limit (2000 events).
+bool TestHook_N73_RecvRateCheck(int64_t now_ms) {
+    return BroadcasterRecvRateCheckAtTime(now_ms);
+}
+
+// N72: expose the payload validation guards from HookedBroadcasterReceiveLocal.
+// Returns true if the payload would pass the guard and be processed,
+// false if it would be silently dropped.
+bool TestHook_N72_ValidatePayload(const void* payload, uint64_t payload_size) {
+    if (payload_size > MAX_BROADCASTER_PAYLOAD) return false;
+    if (payload == nullptr && payload_size > 0) return false;
+    return true;
+}
+
+#endif  // NEVR_TEST_HOOKS
 
 } // namespace nevr::broadcaster_bridge

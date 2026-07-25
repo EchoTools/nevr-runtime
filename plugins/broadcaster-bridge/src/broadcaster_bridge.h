@@ -145,4 +145,17 @@ int  Initialize(uintptr_t base_addr, const char* config_path);
 void OnFrame();
 void Shutdown();
 
+// ============================================================================
+// N72/N73 test hooks — NEVR_TEST_HOOKS only.
+// ============================================================================
+
+#ifdef NEVR_TEST_HOOKS
+/// Reset rate-limiter state for a clean test.
+void TestHook_RecvRateReset();
+/// N73: rate check at a given now_ms (bypasses steady_clock::now()).
+bool TestHook_N73_RecvRateCheck(int64_t now_ms);
+/// N72: payload validation guard. Returns true if the payload passes.
+bool TestHook_N72_ValidatePayload(const void* payload, uint64_t payload_size);
+#endif
+
 } // namespace nevr::broadcaster_bridge

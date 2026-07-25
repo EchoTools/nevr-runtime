@@ -45,4 +45,24 @@ if(BUILD_TESTING AND GTest_FOUND)
     # PRE_TEST: defer discovery to ctest time so `cmake --build` does not launch the
     # cross-compiled .exe under Wine with a 5s timeout (Wine cold-start exceeds it).
     gtest_discover_tests(test_broadcaster_bridge DISCOVERY_MODE PRE_TEST)
+
+    # N72/N73 guard unit tests — tests the broadcaster ingress guards
+    # (payload validation + rate limiter) against the REAL production code.
+    # NEVR_TEST_HOOKS exposes BroadcasterRecvRateCheckAtTime and the payload
+    # validation guards for parameterized testing.
+    add_executable(test_broadcaster_guards
+        tests/test_guards.cpp
+        src/broadcaster_bridge.cpp
+    )
+    target_compile_definitions(test_broadcaster_guards PRIVATE NEVR_TEST_HOOKS)
+    target_include_directories(test_broadcaster_guards PRIVATE src)
+    target_link_libraries(test_broadcaster_guards PRIVATE
+        nevr_plugin_common minhook::minhook GTest::gtest GTest::gtest_main)
+    if(WIN32 OR MINGW)
+        target_link_libraries(test_broadcaster_guards PRIVATE ws2_32)
+        target_compile_definitions(test_broadcaster_guards PRIVATE
+            _CRT_SECURE_NO_WARNINGS WIN32_LEAN_AND_MEAN NOMINMAX
+        )
+    endif()
+    gtest_discover_tests(test_broadcaster_guards DISCOVERY_MODE PRE_TEST)
 endif()

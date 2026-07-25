@@ -193,7 +193,7 @@ test-auth-unit:
     unset VCPKG_ROOT
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_broadcaster_bridge --target test_broadcaster_guards
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -213,6 +213,16 @@ test-auth-unit:
         echo "ERROR: GTest binary not found: $bin" >&2
         echo "       (is 'gtest' available in vcpkg for triplet x64-mingw-static?)" >&2
         exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_broadcaster_bridge.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2; exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_broadcaster_guards.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2; exit 1
     fi
     wine "$bin"
 
