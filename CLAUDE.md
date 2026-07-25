@@ -49,6 +49,15 @@ just test-auth-integration    # Auth integration (needs game binary + MCP harnes
 
 Tests require: Echo VR game binary, evr-test-harness, Go toolchain. See `tests/system/README.md` for prerequisites and environment variables (`NEVR_BUILD_DIR`, `EVR_GAME_DIR`).
 
+## Startup Timing (N76)
+
+The game has a ~15-20 second splash-screen delay at startup before any NEVR code runs. The first NEVR log lines appear well after `echovr.exe` process creation. When judging server liveness:
+
+- **Minimum patience window: 45 seconds from process start** before concluding the server is hung.
+- The splash screen runs BEFORE `DllMain` / `WinMain` — NEVR has no control over this phase.
+- Startup timeout checks must account for this delay. A server that hasn't logged anything at t=10s is normal; a server with no output at t=60s is dead.
+- The `-noconsole` flag suppresses the splash UI but NOT the delay — the game still runs its startup sequence.
+
 ## Architecture
 
 ### DLL Components
