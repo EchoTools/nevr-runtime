@@ -862,6 +862,17 @@ bool TestHook_N61_HasActiveCallback() {
   return g_loginRemoteWs != nullptr;
 }
 
+// Check whether g_pairsMutex is currently free (not held by any thread).
+// WOULD-FAIL-IF: delete the `} // g_pairsMutex RELEASED` line at the Close handler —
+// without releasing the mutex before stop(), try_lock fails after Close returns.
+#ifdef NEVR_TEST_HOOKS
+bool TestHook_N60_IsMutexFree() {
+    bool free = g_pairsMutex.try_lock();
+    if (free) g_pairsMutex.unlock();
+    return free;
+}
+#endif
+
 // Reset all internal bridge state for the next test.
 void TestHook_N61_ResetState() {
   std::lock_guard<std::mutex> lk(g_pairsMutex);

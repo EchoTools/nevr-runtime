@@ -233,11 +233,15 @@ static bool BroadcasterRecvRateCheck() {
     return BroadcasterRecvRateCheckAtTime(now_ms);
 }
 
-// N72: minimum payload sanity check. Reject events with payloads that
-// exceed reasonable bounds. A null payload with size 0 is valid (some
-// SNS notifications have no body). A payload exceeding MAX_PACKET_SIZE
-// indicates a malformed or malicious packet.
-static constexpr uint64_t MAX_BROADCASTER_PAYLOAD = 65536;  // 64 KiB — well above any real SNS message
+// N72: payload sanity check — SHARED between the production hook and the
+// unit test. Delete this guard and BOTH break (one implementation, two callers).
+static constexpr uint64_t MAX_BROADCASTER_PAYLOAD = 65536;
+
+static bool ValidateBroadcasterPayload(const void* payload, uint64_t payload_size) {
+    if (payload_size > MAX_BROADCASTER_PAYLOAD) return false;
+    if (payload == nullptr && payload_size > 0) return false;
+    return true;
+}
 
 static uint64_t HookedBroadcasterReceiveLocal(
     void*       self,
@@ -246,16 +250,9 @@ static uint64_t HookedBroadcasterReceiveLocal(
     const void* payload,
     uint64_t    payload_size)
 {
-    // N72: reject events with insane payload sizes before any processing.
-    // A null payload with size 0 is valid. A non-null payload must be
-    // within bounds; oversized payloads indicate a bad decode or malicious
-    // packet and must not reach game event handlers.
-    if (payload_size > MAX_BROADCASTER_PAYLOAD) {
-        return 0;  // drop silently — the game's caller ignores the return value
-    }
-    // Null payload with non-zero size is a malformed event.
-    if (payload == nullptr && payload_size > 0) {
-        return 0;
+    // N72: reject malformed/oversized events before any processing.
+    if (!ValidateBroadcasterPayload(payload, payload_size)) {
+        return 0;  // drop silently
     }
 
     // N73: rate-limit incoming broadcaster events. At 90fps this allows
@@ -1136,13 +1133,12 @@ bool TestHook_N73_RecvRateCheck(int64_t now_ms) {
     return BroadcasterRecvRateCheckAtTime(now_ms);
 }
 
-// N72: expose the payload validation guards from HookedBroadcasterReceiveLocal.
-// Returns true if the payload would pass the guard and be processed,
-// false if it would be silently dropped.
+// N72: exposes the shared ValidateBroadcasterPayload — ONE implementation.
+// WOULD-FAIL-IF: delete the guard condition inside ValidateBroadcasterPayload
+// (e.g. comment out "if (payload_size > MAX_BROADCASTER_PAYLOAD) return false").
+// The production hook AND this test call the same function → both break.
 bool TestHook_N72_ValidatePayload(const void* payload, uint64_t payload_size) {
-    if (payload_size > MAX_BROADCASTER_PAYLOAD) return false;
-    if (payload == nullptr && payload_size > 0) return false;
-    return true;
+    return ValidateBroadcasterPayload(payload, payload_size);
 }
 
 #endif  // NEVR_TEST_HOOKS

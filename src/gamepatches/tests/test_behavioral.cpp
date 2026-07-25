@@ -300,6 +300,25 @@ TEST_F(N61_WsBridgeTest, CallbackClearedWhenNoMatchmaker) {
       << "Callback should be cleared when no connections remain (UAF prevention)";
 }
 
+// WOULD-FAIL-IF: delete the mutex-unlock before stop() in the production
+// Close handler — g_pairsMutex would still be held, try_lock would fail.
+TEST_F(N61_WsBridgeTest, N60_StopCalledOutsideMutex) {
+  auto remote = MockWsHandle::Create();
+  auto gameWs = MockWsHandle::Create();
+  void* gameRaw = TestHook_N61_RegisterLogin(remote.handle, gameWs.handle);
+  ASSERT_NE(gameRaw, nullptr);
+
+  // Pre-condition: mutex is free.
+  EXPECT_TRUE(TestHook_N60_IsMutexFree());
+
+  // Drive the real Close handler — locks, snapshots, unlocks, then calls stop().
+  TestHook_N61_SimulateCloseAndCheckCleared(gameRaw);
+
+  // Post-condition: mutex is free. If stop() were inside the lock, this fails.
+  EXPECT_TRUE(TestHook_N60_IsMutexFree())
+      << "N60: mutex must be free after Close — stop() was called inside the lock";
+}
+
 // ============================================================================
 // N66 behavioral tests — FormatSymbolId guard logic (production-linked)
 // ============================================================================
