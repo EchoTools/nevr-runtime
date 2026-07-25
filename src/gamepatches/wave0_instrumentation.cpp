@@ -40,6 +40,8 @@
 #include "patch_addresses.h"
 #include "common/globals.h"
 #include "common/logging.h"
+#include "plugin_loader.h"    // N68: TickPlugins
+#include "module_loader.h"    // N68: TickModules
 
 #ifdef _WIN32
 #include <windows.h>
@@ -270,6 +272,23 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
     if (g_shutdownRequested) {
       PerformGracefulShutdown(0);
       // Unreachable — ForceFatalExit calls TerminateProcess.
+    }
+
+    // N68: tick plugin + module per-frame callbacks. The broadcaster-bridge
+    // plugin registers NvrPluginOnFrame (plugin_main.cpp:43) and the plugin
+    // API is documented (plugins/example/README.md), but these were never
+    // called from any per-frame loop.
+    {
+      NvrGameContext gctx = {};
+      gctx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
+      gctx.flags = NEVR_HOST_IS_SERVER;  // always server at this point
+      if (g_isHeadless) gctx.flags |= NEVR_HOST_IS_HEADLESS;
+      TickPlugins(&gctx);
+
+      NvrModuleContext mctx = {};
+      mctx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
+      mctx.flags = NEVR_HOST_IS_SERVER;
+      TickModules(&mctx);
     }
 
     if (microseconds <= 0) {

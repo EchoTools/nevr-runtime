@@ -6,6 +6,7 @@
 #include "cli.h"
 #include "config.h"
 #include "crash_recovery.h"
+#include "module_loader.h"
 #include "plugin_loader.h"
 #include "common/globals.h"
 #include "common/logging.h"
@@ -44,6 +45,14 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     if (g_isServer) ctx.flags |= NEVR_HOST_IS_SERVER;
     else ctx.flags |= NEVR_HOST_IS_CLIENT;
     NotifyPluginsStateChange(&ctx, s_prevState, static_cast<uint32_t>(state));
+    {
+      NvrModuleContext mctx = {};
+      mctx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
+      mctx.flags = NEVR_HOST_HAS_NETGAME;
+      if (g_isServer) mctx.flags |= NEVR_HOST_IS_SERVER;
+      else mctx.flags |= NEVR_HOST_IS_CLIENT;
+      NotifyModulesStateChange(&mctx, s_prevState, static_cast<uint32_t>(state));  // N68
+    }
     s_prevState = static_cast<uint32_t>(state);
   }
 
