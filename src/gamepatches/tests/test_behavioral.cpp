@@ -124,6 +124,13 @@ void* g_earlyConfigPtr = nullptr;
 #include "symbol_corpus.h"
 #include "patch_addresses.h"
 
+// WOULD-FAIL-IF (N68): delete TickPlugins iteration loop in plugin_loader.cpp.
+// WOULD-FAIL-IF (N68-module): delete TickModules loop in module_loader.cpp.
+// WOULD-FAIL-IF (N68-state): delete NotifyPluginsStateChange/NotifyModulesStateChange loops.
+// WOULD-FAIL-IF (N61): delete matchmaker callback registration at conn>=2 in ws_bridge.cpp.
+// WOULD-FAIL-IF (N60): delete mutex-unlock before stop() in ws_bridge Close handler.
+// WOULD-FAIL-IF (N66): delete maxLen<=0||buf==nullptr guard in symbol_corpus.cpp FormatSymbolId.
+// WOULD-FAIL-IF (N65): delete HEADLESS_GATE_TABLE entry or change HEADLESS_GATE_COUNT static_assert.
 // ============================================================================
 // N68 behavioral tests — plugin tick dispatch
 // ============================================================================

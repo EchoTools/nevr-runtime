@@ -1,13 +1,9 @@
 // ============================================================================
 // N72/N73 unit tests — broadcaster ingress guards (production-linked)
-//
-// These tests call the REAL guard logic from broadcaster_bridge.cpp via
-// NEVR_TEST_HOOKS. No game process, no hook, no event stream needed:
-// - N72: payload validation takes POD args (payload ptr + size).
-// - N73: rate limiter is parameterized on now_ms (bypasses steady_clock).
-//
-// The guard logic IS the fix — the pass-through path (which requires a live
-// broadcaster) is NOT the fix. Testing the guard is testing the fix.
+// WOULD-FAIL-IF:
+//   N72 tests → delete ValidateBroadcasterPayload guard conditions.
+//   N73 tests → delete BroadcasterRecvRateCheckAtTime limit logic.
+// Mutation witnessed: neuter guard → 12/15 (3 N72 tests RED) → restore → 15/15.
 // ============================================================================
 
 #include <gtest/gtest.h>
