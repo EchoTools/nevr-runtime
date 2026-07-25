@@ -22,13 +22,16 @@ unset WAYLAND_DISPLAY
 export WINEDLLOVERRIDES="dxgi=b"
 export WINEPREFIX=/home/andrew/src/nevr-runtime/echovr/.wineprefix
 
-# Suppress Wine debug output at the source so we don't need a | grep -v pipeline.
-# A pipeline puts wine/echovr in a separate process group from the terminal's
-# foreground PGID, so terminal CTRL+C (SIGINT to the foreground process group)
-# never reaches echovr.exe — the grep dies but the server keeps running.
-# WINEDEBUG=-all suppresses Wine's fixme/dxgi/vkd3d messages without a pipeline;
-# SIGINT reaches the wine-hosted echovr.exe directly → the POSIX handler fires.
-export WINEDEBUG=-all
+# Suppress Wine's noisy fixme/dxgi/vkd3d channels WITHOUT suppressing err:,
+# which carries the crash/driver-failure diagnostic output. fixme-all turns
+# off everything EXCEPT the err: channel — the pipeline-free property is
+# preserved (no pipeline) so echovr stays in the terminal's foreground PGID.
+export WINEDEBUG=fixme-all
 
 echo "=== Starting echovr.exe ==="
 cd echovr/bin/win10 && wine ./echovr.exe -server -noconsole 2>&1
+exit_code=$?
+if [[ $exit_code -ne 0 ]]; then
+  echo "=== echovr.exe exited with code $exit_code ===" >&2
+fi
+exit $exit_code
