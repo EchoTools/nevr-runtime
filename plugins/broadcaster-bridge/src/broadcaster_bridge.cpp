@@ -204,6 +204,35 @@ static void HookedBroadcasterSend(
 
 /* ── Hook: CBroadcaster_ReceiveLocal ──────────────────────────────── */
 
+// N73: rate-limit broadcaster receive events to prevent CPU exhaustion
+// from packet floods. Separate from the injection rate limiter.
+static std::atomic<int64_t>  g_recv_window_start{0};
+static std::atomic<int>      g_recv_count{0};
+static std::atomic<uint64_t> g_recv_dropped_rate{0};
+static constexpr int MAX_RECV_EVENTS_PER_SEC = 2000;  // generous — ~22/ms at 90fps
+
+static bool BroadcasterRecvRateCheck() {
+    auto now = std::chrono::steady_clock::now().time_since_epoch();
+    int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+    int64_t window = g_recv_window_start.load(std::memory_order_relaxed);
+    if (now_ms - window >= 1000) {
+        g_recv_window_start.store(now_ms, std::memory_order_relaxed);
+        g_recv_count.store(1, std::memory_order_relaxed);
+        return true;
+    }
+    if (g_recv_count.fetch_add(1, std::memory_order_relaxed) >= MAX_RECV_EVENTS_PER_SEC) {
+        g_recv_dropped_rate.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    return true;
+}
+
+// N72: minimum payload sanity check. Reject events with payloads that
+// exceed reasonable bounds. A null payload with size 0 is valid (some
+// SNS notifications have no body). A payload exceeding MAX_PACKET_SIZE
+// indicates a malformed or malicious packet.
+static constexpr uint64_t MAX_BROADCASTER_PAYLOAD = 65536;  // 64 KiB — well above any real SNS message
+
 static uint64_t HookedBroadcasterReceiveLocal(
     void*       self,
     uint64_t    msg_sym,
@@ -211,6 +240,24 @@ static uint64_t HookedBroadcasterReceiveLocal(
     const void* payload,
     uint64_t    payload_size)
 {
+    // N72: reject events with insane payload sizes before any processing.
+    // A null payload with size 0 is valid. A non-null payload must be
+    // within bounds; oversized payloads indicate a bad decode or malicious
+    // packet and must not reach game event handlers.
+    if (payload_size > MAX_BROADCASTER_PAYLOAD) {
+        return 0;  // drop silently — the game's caller ignores the return value
+    }
+    // Null payload with non-zero size is a malformed event.
+    if (payload == nullptr && payload_size > 0) {
+        return 0;
+    }
+
+    // N73: rate-limit incoming broadcaster events. At 90fps this allows
+    // ~22 events/frame — far above normal operation (~2-5 events/frame).
+    if (!BroadcasterRecvRateCheck()) {
+        return 0;  // drop — above rate limit
+    }
+
     /* Mirror incoming packet before dispatching */
     if (g_config.mirror_receive && g_mirror_sock != INVALID_SOCK && RateLimitCheck()) {
         uint32_t psize = static_cast<uint32_t>(

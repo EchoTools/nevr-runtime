@@ -290,6 +290,16 @@ verify:
         echo "verify: FAIL — N64 WsBridge_Shutdown call missing from BeginGracefulShutdown" >&2
         exit 1
     fi
+    # N72: broadcaster ingress min-packet sanity check
+    if ! grep -q 'MAX_BROADCASTER_PAYLOAD' plugins/broadcaster-bridge/src/broadcaster_bridge.cpp; then
+        echo "verify: FAIL — N72 min-packet sanity check missing from broadcaster ingress" >&2
+        exit 1
+    fi
+    # N73: broadcaster ingress receive rate limiter
+    if ! grep -q 'BroadcasterRecvRateCheck' plugins/broadcaster-bridge/src/broadcaster_bridge.cpp; then
+        echo "verify: FAIL — N73 receive rate limiter missing from broadcaster ingress" >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)
