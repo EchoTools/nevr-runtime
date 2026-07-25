@@ -236,6 +236,42 @@ void InstallWebSocketBridge() {
               pair->remoteWs = g_loginRemoteWs;
               pair->remoteOpen = true;
               pair->loginInjected = true;  // skip LoginRequest — already authenticated
+
+              auto* pairPtr = pair.get();
+              ix::WebSocket* gameWsPtr = &gameWs;
+
+              // N61: register an independent callback for each matchmaker
+              // connection on the shared remote. Previously matchmaker relied
+              // entirely on the login connection's callback — when login
+              // disconnected and B2/N54 nulled that callback, all matchmaker
+              // server→game message routing silently died.
+              g_loginRemoteWs->setOnMessageCallback(
+                  [pairPtr, gameWsPtr](const ix::WebSocketMessagePtr& rmsg) {
+                    switch (rmsg->type) {
+                      case ix::WebSocketMessageType::Message: {
+                        ix::WebSocket* target = nullptr;
+                        {
+                          std::lock_guard<std::mutex> lk(g_pairsMutex);
+                          target = g_activeGameWs ? g_activeGameWs : gameWsPtr;
+                        }
+                        if (rmsg->binary) {
+                          target->sendBinary(rmsg->str);
+                        } else {
+                          target->sendText(rmsg->str);
+                        }
+                        break;
+                      }
+                      case ix::WebSocketMessageType::Close:
+                        Log(EchoVR::LogLevel::Debug,
+                            "[NEVR.WS] Remote closed (matchmaker ws=%p): %d %s",
+                            (void*)gameWsPtr, rmsg->closeInfo.code,
+                            rmsg->closeInfo.reason.c_str());
+                        break;
+                      default:
+                        break;
+                    }
+                  });
+
               {
                 std::lock_guard<std::mutex> lk(g_pairsMutex);
                 g_activeGameWs = &gameWs;
@@ -630,27 +666,35 @@ void InstallWebSocketBridge() {
           }
 
           case ix::WebSocketMessageType::Close: {
-            std::lock_guard<std::mutex> lk(g_pairsMutex);
-            auto it = g_pairs.find(&gameWs);
-            if (it != g_pairs.end()) {
-              bool isShared = (it->second->remoteWs == g_loginRemoteWs);
-              if (!isShared) {
-                // stop() is synchronous — blocks until the connection is closed
-                // and all callbacks have completed. Clear the callback after stop
-                // so no further invocations can reference the freed ProxyPair.
-                it->second->remoteWs->stop();
-                it->second->remoteWs->setOnMessageCallback(nullptr);
-              } else if (&gameWs == g_loginGameWs) {
-                // The login pair (conn=1) that registered the remote's callback
-                // is closing, but the remote is shared with other connections
-                // (conn>=2 matchmaker). Clear the callback so the lambda's
-                // captured pointers (pairPtr, gameWsPtr) don't dangle, but
-                // don't stop() — other connections still use the remote.
-                it->second->remoteWs->setOnMessageCallback(nullptr);
+            // N60: snapshot the ProxyPair's remoteWs under the lock, then
+            // release the lock BEFORE calling stop(). stop() blocks until the
+            // remote thread exits, and the remote callback may be waiting on
+            // g_pairsMutex (Open handler line 328, Message handler line 497).
+            // Holding the mutex across stop() → ABBA deadlock.
+            std::shared_ptr<ix::WebSocket> remoteToStop;
+            {
+              std::lock_guard<std::mutex> lk(g_pairsMutex);
+              auto it = g_pairs.find(&gameWs);
+              if (it != g_pairs.end()) {
+                bool isShared = (it->second->remoteWs == g_loginRemoteWs);
+                if (!isShared) {
+                  // Snapshot the remote — we'll stop it OUTSIDE the lock.
+                  remoteToStop = it->second->remoteWs;
+                  // Clear callback under lock so no further invocations
+                  // reference the freed ProxyPair after erase.
+                  it->second->remoteWs->setOnMessageCallback(nullptr);
+                } else if (&gameWs == g_loginGameWs) {
+                  // Login pair closing — shared remote, other connections
+                  // still use it. Clear callback to prevent UAF, don't stop.
+                  it->second->remoteWs->setOnMessageCallback(nullptr);
+                }
+                g_pairs.erase(it);
               }
-              g_pairs.erase(it);
+              if (g_activeGameWs == &gameWs) g_activeGameWs = nullptr;
+            } // g_pairsMutex RELEASED here — safe to call stop()
+            if (remoteToStop) {
+              remoteToStop->stop();
             }
-            if (g_activeGameWs == &gameWs) g_activeGameWs = nullptr;
             Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game disconnected");
             break;
           }

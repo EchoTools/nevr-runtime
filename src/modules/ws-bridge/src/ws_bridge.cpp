@@ -603,17 +603,25 @@ void InstallWebSocketBridge() {
           }
 
           case ix::WebSocketMessageType::Close: {
-            std::lock_guard<std::mutex> lk(g_pairsMutex);
-            auto it = g_pairs.find(&gameWs);
-            if (it != g_pairs.end()) {
-              // stop() is synchronous — blocks until the remote's thread
-              // terminates and no more callbacks can fire. Clear the callback
-              // after stop so the lambda's captured raw pointers
-              // (pairPtr, gameWsPtr) are released immediately rather than
-              // outliving the destroyed ProxyPair in memory.
-              it->second->remoteWs->stop();
-              it->second->remoteWs->setOnMessageCallback(nullptr);
-              g_pairs.erase(it);
+            // N60: snapshot the remote WS under the lock, then release
+            // the lock BEFORE calling stop(). stop() blocks until the
+            // remote thread exits, and the remote callback may be waiting
+            // on g_pairsMutex → ABBA deadlock.
+            std::shared_ptr<ix::WebSocket> remoteToStop;
+            {
+              std::lock_guard<std::mutex> lk(g_pairsMutex);
+              auto it = g_pairs.find(&gameWs);
+              if (it != g_pairs.end()) {
+                // Snapshot the remote — stop it OUTSIDE the lock.
+                remoteToStop = it->second->remoteWs;
+                // Clear callback under lock so no further invocations
+                // reference the freed ProxyPair after erase.
+                it->second->remoteWs->setOnMessageCallback(nullptr);
+                g_pairs.erase(it);
+              }
+            } // g_pairsMutex RELEASED here — safe to call stop()
+            if (remoteToStop) {
+              remoteToStop->stop();
             }
             Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game disconnected");
             break;
