@@ -17,8 +17,35 @@ if [ ! -e echovr/_local/config.json ]; then
   exit 1
 fi
 
-export DISPLAY=:101
+# Display precondition — Andrew's rule: "either it runs in a Xephyr, or it runs
+# server... NO EXCEPTIONS." Verify the display is LIVE before launching; a dead
+# display fails deep inside wine as cryptic 'no driver could be loaded' errors
+# that were invisible under WINEDEBUG=-all. Fail LOUD and ACTIONABLE here.
+XEPHYR_DISPLAY="${XEPHYR_DISPLAY:-:101}"
+export DISPLAY="$XEPHYR_DISPLAY"
 unset WAYLAND_DISPLAY
+
+if ! xdpyinfo -display "$XEPHYR_DISPLAY" >/dev/null 2>&1; then
+  echo "=== DISPLAY $XEPHYR_DISPLAY is DEAD ===" >&2
+  echo "" >&2
+  echo "The Xephyr at $XEPHYR_DISPLAY is not running. Start it with:" >&2
+  echo "  Xephyr $XEPHYR_DISPLAY -ac -noreset -screen 1280x720 &" >&2
+  echo "" >&2
+  echo "Or if you want the launcher to start it for you, set XEPHYR_AUTOSTART=1." >&2
+  if [[ "${XEPHYR_AUTOSTART:-}" == "1" ]]; then
+    echo "=== Starting Xephyr $XEPHYR_DISPLAY ===" >&2
+    Xephyr "$XEPHYR_DISPLAY" -ac -noreset -screen 1280x720 &
+    sleep 2
+    if ! xdpyinfo -display "$XEPHYR_DISPLAY" >/dev/null 2>&1; then
+      echo "FATAL: Xephyr failed to start on $XEPHYR_DISPLAY" >&2
+      exit 1
+    fi
+  else
+    exit 1
+  fi
+fi
+
+echo "=== Display $XEPHYR_DISPLAY is LIVE ==="
 export WINEDLLOVERRIDES="dxgi=b"
 export WINEPREFIX=/home/andrew/src/nevr-runtime/echovr/.wineprefix
 
