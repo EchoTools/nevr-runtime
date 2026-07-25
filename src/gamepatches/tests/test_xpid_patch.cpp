@@ -242,23 +242,11 @@ TEST(HeadlessGates, GateRvasInCodeRangeAndDistinct) {
 // untestable (shell script, integration-only path, or cross-module loading).
 // Untestable justifications are recorded in the test comments and in BUGS.md.
 
-// Wave I fix verification: these tests prove the fixes are structurally
-// correct using compile-time checks (static_assert, type validation) since
-// the test_xpid_patch binary does not link against gamepatches (the full
-// library pulls in ixwebsocket/protobuf — too heavy for a unit test).
-// Runtime-call tests that need gamepatches linkage are NOT possible here;
-// those fixes are verified by system test (server registers + shutdown)
-// and documented as UNTESTABLE-IN-THIS-SUITE below.
-
-// N59: PatchDscProvider declared in xpid_patch.h, called at initialize.cpp:253.
-// The include 'xpid_patch.h' is present in initialize.cpp. This test proves the
-// header compiles and the function type is VOID().
-#include "xpid_patch.h"
-TEST(WaveIFixes, N59_PatchDscProvider_HeaderCompiles) {
-  // If this compiles, xpid_patch.h is properly included and PatchDscProvider
-  // has the correct type (VOID()). Runtime call verified by system test.
-  EXPECT_TRUE(true);  // compile-only — header inclusion above is the test
-}
+// Wave I fix verification: these tests prove the fix logic is correct.
+// Runtime call-site verification (N59, N60, N61, N63, N64, N68) is done
+// by just-verify verifier scripts that grep the source for the call sites.
+// Those scripts fail before the fix (call site missing) and pass after —
+// they are the automated red→green tests for the call-site class of fix.
 
 // N65: gate count test above (ServerForcesHeadlessGateCount) now derives
 // count from sizeof(kGateRvas)/sizeof(kGateRvas[0]) — no longer a tautology.

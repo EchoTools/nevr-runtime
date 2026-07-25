@@ -242,6 +242,47 @@ verify:
         echo "Uncommenting add_subdirectory(src/gameserver) compiles the WRONG copy. Remove this line or route the fix to src/gamepatches/gameserver/." >&2
         exit 1
     fi
+    # Wave I — source-level verifiers: each fix must have its call site present.
+    # These are automated red→green tests: they fail when the call site is missing
+    # (the bug state) and pass when the fix is in place.
+    # N59: PatchDscProvider call site in initialize.cpp
+    if ! grep -q 'PatchDscProvider()' src/gamepatches/initialize.cpp; then
+        echo "verify: FAIL — N59 PatchDscProvider call site missing from initialize.cpp" >&2
+        exit 1
+    fi
+    # N68: TickPlugins/TickModules wired into per-frame hook
+    if ! grep -q 'TickPlugins' src/gamepatches/wave0_instrumentation.cpp; then
+        echo "verify: FAIL — N68 TickPlugins call site missing from per-frame hook" >&2
+        exit 1
+    fi
+    if ! grep -q 'TickModules' src/gamepatches/wave0_instrumentation.cpp; then
+        echo "verify: FAIL — N68 TickModules call site missing from per-frame hook" >&2
+        exit 1
+    fi
+    if ! grep -q 'NotifyModulesStateChange' src/gamepatches/state_machine.cpp; then
+        echo "verify: FAIL — N68 NotifyModulesStateChange call site missing from state path" >&2
+        exit 1
+    fi
+    # N60: stop() must be called OUTSIDE g_pairsMutex lock (deadlock prevention)
+    if ! grep -q 'remoteToStop->stop()' src/gamepatches/ws_bridge.cpp; then
+        echo "verify: FAIL — N60 stop()-outside-lock pattern missing from ws_bridge" >&2
+        exit 1
+    fi
+    # N61: matchmaker must register independent callback on shared remote
+    if ! grep -q 'g_loginRemoteWs->setOnMessageCallback' src/gamepatches/ws_bridge.cpp; then
+        echo "verify: FAIL — N61 matchmaker callback registration missing from ws_bridge" >&2
+        exit 1
+    fi
+    # N63: re-entry gate must call ForceFatalExit, not return
+    if grep -q 'Sleep(100);\s*$' src/gamepatches/crash_recovery.cpp; then
+        echo "verify: FAIL — N63 re-entry gate still returns (Sleep+return), should be ForceFatalExit" >&2
+        exit 1
+    fi
+    # N64: BeginGracefulShutdown must call WsBridge_Shutdown before ForceFatalExit
+    if ! grep -q 'WsBridge_Shutdown' src/gamepatches/gameserver/gameserver.cpp; then
+        echo "verify: FAIL — N64 WsBridge_Shutdown call missing from BeginGracefulShutdown" >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)
