@@ -22,7 +22,13 @@ unset WAYLAND_DISPLAY
 export WINEDLLOVERRIDES="dxgi=b"
 export WINEPREFIX=/home/andrew/src/nevr-runtime/echovr/.wineprefix
 
-# -server implies -headless (enforced in boot.cpp). -noconsole blocks the game's
-# debug console on Wine. The grep strips Wine fixme/dxgi/vkd3d noise.
+# Suppress Wine debug output at the source so we don't need a | grep -v pipeline.
+# A pipeline puts wine/echovr in a separate process group from the terminal's
+# foreground PGID, so terminal CTRL+C (SIGINT to the foreground process group)
+# never reaches echovr.exe — the grep dies but the server keeps running.
+# WINEDEBUG=-all suppresses Wine's fixme/dxgi/vkd3d messages without a pipeline;
+# SIGINT reaches the wine-hosted echovr.exe directly → the POSIX handler fires.
+export WINEDEBUG=-all
+
 echo "=== Starting echovr.exe ==="
-cd echovr/bin/win10 && wine ./echovr.exe -server -noconsole 2>&1 | grep -v -e fixme -e dxgi -e vkd3d
+cd echovr/bin/win10 && wine ./echovr.exe -server -noconsole 2>&1
