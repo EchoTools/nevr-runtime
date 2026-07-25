@@ -181,5 +181,34 @@ if(BUILD_TESTING)
     )
     target_link_libraries(test_parse_endpoint PRIVATE GTest::gtest GTest::gtest_main ws2_32)
     gtest_discover_tests(test_parse_endpoint DISCOVERY_MODE PRE_TEST)
+
+    # Behavioral tests — N68 (plugin/module tick dispatch) + N61 (callback lifecycle).
+    # Links plugin_loader.cpp and module_loader.cpp compiled with NEVR_TEST_HOOKS
+    # to enable mock-callback injection into the static plugin/module registries.
+    # The test file provides stubs for game globals (Log, FatalError, EchoVR
+    # function pointers) so the test does not need the full gamepatches DLL.
+    add_executable(test_behavioral
+      tests/test_behavioral.cpp
+      plugin_loader.cpp
+      module_loader.cpp
+    )
+    target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS)
+    # Disable PCH — the test has its own stub headers and must not depend on
+    # the gamepatches precompiled header (which pulls in MinHook, etc.).
+    set_source_files_properties(
+      tests/test_behavioral.cpp
+      plugin_loader.cpp
+      module_loader.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON
+    )
+    target_include_directories(test_behavioral PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}
+      ${CMAKE_CURRENT_SOURCE_DIR}/gameserver
+      ${CMAKE_SOURCE_DIR}/src/common
+      ${CMAKE_SOURCE_DIR}/plugins/common/include
+      ${CMAKE_BINARY_DIR}
+    )
+    target_link_libraries(test_behavioral PRIVATE GTest::gtest GTest::gtest_main ws2_32)
+    gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
   endif()
 endif()

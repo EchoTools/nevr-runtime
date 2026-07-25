@@ -108,3 +108,40 @@ void NotifyModulesStateChange(const NvrModuleContext* ctx, uint32_t old_state, u
     }
   }
 }
+
+// ============================================================================
+// Test hooks — NEVR_TEST_HOOKS enables unit-test injection of mock callbacks
+// into the static module registry, so behavioral tests can verify that
+// TickModules / NotifyModulesStateChange actually fire registered callbacks.
+// These are NEVER compiled into production builds (gamepatches.dll).
+// ============================================================================
+
+#ifdef NEVR_TEST_HOOKS
+
+void TestHook_RegisterModuleOnFrame(NvrModuleOnFrame_fn fn) {
+  LoadedModule m = {};
+  m.hModule = nullptr;
+  m.name = "test_mock";
+  m.init = nullptr;
+  m.shutdown = nullptr;
+  m.on_frame = fn;
+  m.on_state = nullptr;
+  g_modules.push_back(m);
+}
+
+void TestHook_RegisterModuleOnStateChange(NvrModuleOnGameStateChange_fn fn) {
+  LoadedModule m = {};
+  m.hModule = nullptr;
+  m.name = "test_mock";
+  m.init = nullptr;
+  m.shutdown = nullptr;
+  m.on_frame = nullptr;
+  m.on_state = fn;
+  g_modules.push_back(m);
+}
+
+void TestHook_ClearModules() {
+  g_modules.clear();
+}
+
+#endif  // NEVR_TEST_HOOKS

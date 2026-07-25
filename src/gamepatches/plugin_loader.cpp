@@ -155,3 +155,36 @@ void NotifyPluginsStateChange(const NvrGameContext* ctx, uint32_t old_state, uin
     }
   }
 }
+
+// ============================================================================
+// Test hooks — NEVR_TEST_HOOKS enables unit-test injection of mock callbacks
+// into the static plugin registry, so behavioral tests can verify that
+// TickPlugins / NotifyPluginsStateChange actually fire registered callbacks.
+// These are NEVER compiled into production builds (gamepatches.dll).
+// ============================================================================
+
+#ifdef NEVR_TEST_HOOKS
+
+void TestHook_RegisterPluginOnFrame(NvrPluginOnFrame_fn fn) {
+  LoadedPlugin p = {};
+  p.hModule = nullptr;
+  p.on_frame = fn;
+  p.on_state_change = nullptr;
+  p.shutdown = nullptr;
+  g_plugins.push_back(p);
+}
+
+void TestHook_RegisterPluginOnStateChange(NvrPluginOnGameStateChange_fn fn) {
+  LoadedPlugin p = {};
+  p.hModule = nullptr;
+  p.on_frame = nullptr;
+  p.on_state_change = fn;
+  p.shutdown = nullptr;
+  g_plugins.push_back(p);
+}
+
+void TestHook_ClearPlugins() {
+  g_plugins.clear();
+}
+
+#endif  // NEVR_TEST_HOOKS

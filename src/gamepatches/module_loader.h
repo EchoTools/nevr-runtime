@@ -26,3 +26,15 @@ void RegisterModuleProc(const char* name, void* proc);
 
 /// Resolve a named proc registered by another module.
 void* ResolveModuleProc(const char* name);
+
+// ============================================================================
+// Test hooks — enabled only when NEVR_TEST_HOOKS is defined.
+// Allow unit tests to inject mock callbacks into the module registry
+// so TickModules / NotifyModulesStateChange behavior can be verified.
+// ============================================================================
+
+#ifdef NEVR_TEST_HOOKS
+void TestHook_RegisterModuleOnFrame(NvrModuleOnFrame_fn fn);
+void TestHook_RegisterModuleOnStateChange(NvrModuleOnGameStateChange_fn fn);
+void TestHook_ClearModules();
+#endif
