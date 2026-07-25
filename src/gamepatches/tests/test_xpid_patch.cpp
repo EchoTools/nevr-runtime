@@ -201,17 +201,16 @@ TEST(HeadlessGates, GateRvasPinnedToGroundTruth) {
 // ---------------------------------------------------------------------------
 
 TEST(HeadlessGates, ServerForcesHeadlessGateCount) {
-  // N65: the count is derived from PatchAddresses::HEADLESS_GATE_RVAS (defined
-  // in patch_addresses.h — the single source of truth). Adding or removing a gate
-  // from that array changes HEADLESS_GATE_COUNT, and the static_assert in
-  // patch_addresses.h catches mismatches with the ForceHeadlessSkip call sites.
-  // This test verifies the gate count matches the known ground truth (5 gates).
+  // N65: the count is derived from PatchAddresses::HEADLESS_GATE_TABLE (defined
+  // in patch_addresses.h). mode_patches.cpp iterates this table to install gates,
+  // so adding/removing a gate from the table is the ONLY way to change what gets
+  // installed. HEADLESS_GATE_COUNT follows mechanically via sizeof division.
   using namespace PatchAddresses;
   EXPECT_EQ(HEADLESS_GATE_COUNT, 5);
-  // Validate each gate RVA in the production array is sane.
-  for (uintptr_t rva : HEADLESS_GATE_RVAS) {
-    EXPECT_GT(rva, 0x100000u);
-    EXPECT_LT(rva, 0x2231000u);
+  // Validate each gate RVA in the production table is sane.
+  for (const auto& gate : HEADLESS_GATE_TABLE) {
+    EXPECT_GT(gate.rva, 0x100000u);
+    EXPECT_LT(gate.rva, 0x2231000u);
   }
 }
 
@@ -245,17 +244,19 @@ TEST(HeadlessGates, GateRvasInCodeRangeAndDistinct) {
 // they are the automated red→green tests for the call-site class of fix.
 
 // N65: gate count derived from PatchAddresses::HEADLESS_GATE_COUNT, which comes
-// from the production array in patch_addresses.h (the single source of truth).
-// Adding/removing a gate from HEADLESS_GATE_RVAS changes HEADLESS_GATE_COUNT
-// and a static_assert guards against mismatch with the ForceHeadlessSkip calls.
-TEST(WaveIFixes, N65_GateCount_DerivedFromProductionArray) {
+// from HEADLESS_GATE_TABLE in patch_addresses.h. mode_patches.cpp iterates this
+// table, so it IS the single source of truth — gate install can't drift.
+TEST(WaveIFixes, N65_GateCount_DerivedFromProductionTable) {
   using namespace PatchAddresses;
-  // The count must equal 5 (the number of ForceHeadlessSkip calls in mode_patches.cpp).
   EXPECT_EQ(HEADLESS_GATE_COUNT, 5);
-  // Verify each RVA in the production array is within .text range.
-  for (uintptr_t rva : HEADLESS_GATE_RVAS) {
-    EXPECT_GT(rva, 0x100000u);
-    EXPECT_LT(rva, 0x2231000u);
+  // Verify each gate in the production table is within .text range and has a
+  // valid expected opcode (0x74=je or 0x75=jne).
+  for (const auto& gate : HEADLESS_GATE_TABLE) {
+    EXPECT_GT(gate.rva, 0x100000u);
+    EXPECT_LT(gate.rva, 0x2231000u);
+    EXPECT_TRUE(gate.expected_opcode == 0x74 || gate.expected_opcode == 0x75)
+        << "Gate at " << std::hex << gate.rva << " has unexpected opcode";
+    EXPECT_NE(gate.description, nullptr);
   }
 }
 

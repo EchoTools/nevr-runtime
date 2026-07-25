@@ -157,35 +157,16 @@ VOID PatchEnableHeadless(PVOID pGame) {
     }
   }
 
-  // Skip the CEngine renderer init (fcn.141549ec0) — the next graphics gate after
-  // the D3D12 skip. Bit 0x1 at CEngine+0x2cfec gates it; forcing the je->jmp takes
-  // the game's own renderer-disabled branch (it backfills CEngine+0x2cec0 itself).
-  ForceHeadlessSkip(HEADLESS_ENGINE_RENDER_INIT, 0x74, "renderer init skipped");
-
-  // Skip GUI subsystem init (fcn.140f92b70) — the next gate after renderer. It
-  // creates GPU resources (crashes N7 @ 0x1413581E4 on the null device) and sets
-  // the GUI-ready flag; skipping it keeps that flag clear so all font/GUI resource
-  // loads early-return. Reproduces the game's own "no renderer -> no GUI" branch.
-  ForceHeadlessSkip(HEADLESS_GUI_INIT, 0x74, "GUI subsystem init skipped");
-
-  // Skip the render-submit-context init cluster (fcn.14102f630) — the LAST bit-0x1
-  // gate in FUN_14154a950. It is gated by the same renderer-enable bit 0x1 at
-  // CEngine+0x2cfec as the renderer-init gate above; because we branch-force that
-  // gate rather than clearing the bit, the bit stays set and this later gate would
-  // otherwise run the init, whose chain (fcn.14054b5e0 -> fcn.14059dcb0 ->
-  // CRenderSubmitContext::RequestBuffer) divides by a zero GPU-derived granularity
-  // with no device (N8, INT_DIVIDE_BY_ZERO @ 0x1405bc52a). Forcing the je->jmp takes
-  // the game's own renderer-disabled branch so the render-submit path never runs.
-  ForceHeadlessSkip(HEADLESS_RENDER_SUBMIT_INIT, 0x74, "render-submit-context init skipped");
-
-  // Skip the renderer-setup path in FUN_14154b670 (fcn.14154da10 -> fcn.14056d560,
-  // a float getter that derefs a null render object with no device). Gated by the
-  // same renderer-enable bit 0x1 at CEngine+0x2cfec, but via the inverted-test idiom
-  // (`not`/`test`/`jne`), so the game's skip branch is a `jne` (0x75) not a `je`.
-  // Same root cause as the render-submit gate: bit 0x1 is left SET by the branch-force
-  // strategy, so this renderer-gated function runs and crashes (N9, ACCESS_VIOLATION
-  // @ 0x14056d560). Force jne->jmp to take the native renderer-disabled branch.
-  ForceHeadlessSkip(HEADLESS_RENDER_SETUP, 0x75, "renderer setup skipped");
+  // Install the remaining 4 headless render gates via the production gate table.
+  // N65: HEADLESS_GATE_TABLE is the single source of truth — adding a gate means
+  // adding an entry to the table; the loop mechanically installs it. Call sites
+  // CANNOT drift from the table.
+  for (const auto& gate : PatchAddresses::HEADLESS_GATE_TABLE) {
+    // Skip the D3D12 init gate — it has its own expect/patch constants and
+    // prologue-validated install above.
+    if (gate.rva == HEADLESS_DX12_INIT) continue;
+    ForceHeadlessSkip(gate.rva, gate.expected_opcode, gate.description);
+  }
 
   // Hook the SYSNET internet-connectivity check to always return TRUE in server
   // mode.  SYSNET (fcn.1401f6fa0) is called from fcn.140157fb0 (the multiplayer

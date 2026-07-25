@@ -353,22 +353,26 @@ TEST(N66_FormatSymbolId, ValidInput_DoesNotOverflow) {
 }
 
 // ============================================================================
-// N65 behavioral verification — gate count from production array
+// N65 behavioral verification — gate count from production table
 // ============================================================================
-// The gate count is derived from PatchAddresses::HEADLESS_GATE_COUNT which
-// is computed from HEADLESS_GATE_RVAS in patch_addresses.h (single source of
-// truth). Adding/removing a gate from that array changes the count, and a
-// static_assert catches mismatches with the ForceHeadlessSkip calls.
+// mode_patches.cpp iterates HEADLESS_GATE_TABLE to install gates. The table is
+// the single source of truth — gate install CANNOT drift from it. The test
+// reads HEADLESS_GATE_COUNT which follows mechanically.
 // ============================================================================
 
-TEST(N65_GateCount, DerivedFromProductionArray) {
+TEST(N65_GateCount, DerivedFromProductionTable) {
   using namespace PatchAddresses;
   EXPECT_EQ(HEADLESS_GATE_COUNT, 5)
-      << "Gate count must match the 5 ForceHeadlessSkip calls in mode_patches.cpp";
-  // Verify the array entries are distinct.
+      << "Gate count must match the 5 entries in HEADLESS_GATE_TABLE";
+  // Verify table entries are distinct and have valid metadata.
   for (int i = 0; i < HEADLESS_GATE_COUNT; i++) {
+    EXPECT_TRUE(HEADLESS_GATE_TABLE[i].expected_opcode == 0x74 ||
+                HEADLESS_GATE_TABLE[i].expected_opcode == 0x75)
+        << "Gate " << i << " has invalid expected opcode";
+    EXPECT_NE(HEADLESS_GATE_TABLE[i].description, nullptr)
+        << "Gate " << i << " has null description";
     for (int j = i + 1; j < HEADLESS_GATE_COUNT; j++) {
-      EXPECT_NE(HEADLESS_GATE_RVAS[i], HEADLESS_GATE_RVAS[j])
+      EXPECT_NE(HEADLESS_GATE_TABLE[i].rva, HEADLESS_GATE_TABLE[j].rva)
           << "Gate RVAs must be distinct";
     }
   }
@@ -377,9 +381,9 @@ TEST(N65_GateCount, DerivedFromProductionArray) {
 TEST(N65_GateCount, AllGatesInCodeRange) {
   using namespace PatchAddresses;
   for (int i = 0; i < HEADLESS_GATE_COUNT; i++) {
-    EXPECT_GT(HEADLESS_GATE_RVAS[i], 0x100000u)
+    EXPECT_GT(HEADLESS_GATE_TABLE[i].rva, 0x100000u)
         << "Gate " << i << " RVA below .text section";
-    EXPECT_LT(HEADLESS_GATE_RVAS[i], 0x2231000u)
+    EXPECT_LT(HEADLESS_GATE_TABLE[i].rva, 0x2231000u)
         << "Gate " << i << " RVA above image extent";
   }
 }

@@ -221,21 +221,26 @@ constexpr uintptr_t HEADLESS_RENDER_SUBMIT_INIT = 0x154D7E4;
 /// the game's native renderer-disabled branch. Skip, not stub. Prologue-VALIDATED.
 constexpr uintptr_t HEADLESS_RENDER_SETUP = 0x154B683;
 
-/// Single-source-of-truth array of all headless render-gate RVAs.
-/// Adding or removing a gate MUST update this array — the test derives its count
-/// from sizeof(HEADLESS_GATE_RVAS), so a mismatch between the array and the actual
-/// ForceHeadlessSkip calls in mode_patches.cpp is caught at compile/run time.
-/// AND the GateRvasPinnedToGroundTruth test ensures these match the binary.
-constexpr uintptr_t HEADLESS_GATE_RVAS[] = {
-    HEADLESS_DX12_INIT,
-    HEADLESS_ENGINE_RENDER_INIT,
-    HEADLESS_GUI_INIT,
-    HEADLESS_RENDER_SUBMIT_INIT,
-    HEADLESS_RENDER_SETUP,
+/// Per-gate metadata for the headless render-gate install loop in mode_patches.cpp.
+/// ADDING OR REMOVING A GATE: add/remove an entry here — the loop in mode_patches.cpp
+/// iterates this table, so the call sites CANNOT drift from it. The test reads
+/// HEADLESS_GATE_COUNT which changes mechanically.
+struct HeadlessGate {
+    uintptr_t rva;
+    unsigned char expected_opcode;  // 0x74=je, 0x75=jne — all patched to jmp (0xEB)
+    const char* description;
 };
-constexpr int HEADLESS_GATE_COUNT = sizeof(HEADLESS_GATE_RVAS) / sizeof(HEADLESS_GATE_RVAS[0]);
+constexpr HeadlessGate HEADLESS_GATE_TABLE[] = {
+    {HEADLESS_DX12_INIT, HEADLESS_DX12_INIT_EXPECT, "D3D12 device init skipped"},
+    {HEADLESS_ENGINE_RENDER_INIT, 0x74, "renderer init skipped"},
+    {HEADLESS_GUI_INIT, 0x74, "GUI subsystem init skipped"},
+    {HEADLESS_RENDER_SUBMIT_INIT, 0x74, "render-submit-context init skipped"},
+    {HEADLESS_RENDER_SETUP, 0x75, "renderer setup skipped"},
+};
+constexpr int HEADLESS_GATE_COUNT = sizeof(HEADLESS_GATE_TABLE) / sizeof(HEADLESS_GATE_TABLE[0]);
 static_assert(HEADLESS_GATE_COUNT == 5,
-    "Gate count changed — update HEADLESS_GATE_RVAS and the ForceHeadlessSkip calls in mode_patches.cpp");
+    "Gate count changed — update HEADLESS_GATE_TABLE entries only; "
+    "mode_patches.cpp iterates this table mechanically");
 
 /// Address: CEngineConfig::operator= (0x141547360, FUN_141547360)
 /// Called from CRenderPipeline::InitStages — single caller (ReVault-verified)
