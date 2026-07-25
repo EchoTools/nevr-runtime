@@ -216,6 +216,17 @@ foreach(module_list ${NEVR_MODULE_LISTS})
   add_subdirectory("${module_dir}")
 endforeach()
 
+# Generic module auto-link: each module under modules/*/ self-registers its
+# target by appending to NEVR_MODULE_TARGETS in its own CMakeLists.
+# This block names NO specific module — the list is accumulated generically.
+get_property(NEVR_MODULES GLOBAL PROPERTY NEVR_MODULE_TARGETS)
+if(NEVR_MODULES)
+  message(STATUS "[gamepatches] linking modules: ${NEVR_MODULES}")
+  target_link_libraries(gamepatches PRIVATE ${NEVR_MODULES})
+else()
+  message(STATUS "[gamepatches] no modules to link (empty)")
+endif()
+
 # Include a local cmake script if it exists
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
   # include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/local.cmake")
