@@ -232,3 +232,41 @@ platform_compat is a runtime-loaded module like ws_bridge/token_auth but uses [N
 5. **Dead code removal** (S8, R1 SMELL-4/5, R6 S1) — ~1,700 lines dbghooks, PatchServerFramePacing, BroadcasterGuard stub.
 
 6. **Pattern standardization** (P2-P7) — unify error handling, commenting, naming, include conventions. Low blast-radius but high consistency value.
+
+---
+
+## Phase 2 Verification (2026-07-23) — owner "verified hazards only"
+
+Per the owner's Phase 2 directive, each High-severity bug was verified against
+the BUILT path before fixing. Findings marked STALE are confirmed non-issues on
+the target platform; findings marked CONFIRMED-LIVE were fixed.
+
+### B5 — STALE (false positive on x64-mingw target)
+`builtin_log_filter.cpp:118` has `static_assert(sizeof(va_list) == sizeof(void*))`
+guarding the `reinterpret_cast<va_list>(varargs)`. On x64-mingw, `va_list` IS a
+`void*` — the static_assert proves the assumption holds on THIS target. The
+reinterpret_cast is technically UB in standard C++ but safe on the project's sole
+target platform. No fix needed.
+
+### B7 — STALE (already fixed by N4)
+The FatalError `MessageBoxA` path flagged by B7 is only reachable when no
+`g_fatalErrorHandler` is installed. Per N4 (`52d2c73`), `InstallFatalErrorHandler()`
+is called in `PreprocessCommandLineHook` before any code path that can trigger
+`FatalError`. The MessageBoxA path is dead in server mode. In legacy dbgcore mode
+(DllMain → Initialize before handler install), no current code in `Initialize()`
+calls `FatalError`. The finding is correct about the latent risk but not a live
+defect — the handler is always installed before any fatal can fire. No fix needed.
+
+### B8 — STALE (null path unreachable)
+`InitializeFunctionPointers()` is called from `Initialize()` at
+`initialize.cpp:222`, immediately after `g_GameBaseAddress` is set at
+`dllmain.cpp:94`. The null-dereference path flagged by B8 is not reachable in
+the current call chain. Adding a defensive null check would be harmless but
+provides no observable benefit. No fix needed.
+
+### CONFIRMED-LIVE and fixed:
+- **B2** — ws_bridge (gamepatches) use-after-free in shared remote callback (N54)
+- **B3** — token_auth data race on `s_auth` in Shutdown (N55)
+- **B4** — gameserver use-after-free in shutdown detached thread (N56)
+- **B6** — crash-handler VEH calls fprintf from signal context (N57)
+- **B9** — launcher argv not escaped for CreateProcess (N58)
