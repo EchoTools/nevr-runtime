@@ -745,6 +745,11 @@ const char* LookupSymbolName(uint64_t hash) {
 }
 
 int FormatSymbolId(char* buf, int maxLen, uint64_t hash) {
+    // N66: guard against negative maxLen — static_cast<size_t> of a negative
+    // int produces a value near SIZE_MAX, which snprintf interprets as a huge
+    // buffer → heap overflow. The only call site passes sizeof(buf) (always
+    // positive), but the function signature is dangerous for future callers.
+    if (maxLen <= 0 || buf == nullptr) return 0;
     const char* name = LookupSymbolName(hash);
     if (name != nullptr) {
         return snprintf(buf, static_cast<size_t>(maxLen), "%s", name);
