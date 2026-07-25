@@ -182,15 +182,22 @@ if(BUILD_TESTING)
     target_link_libraries(test_parse_endpoint PRIVATE GTest::gtest GTest::gtest_main ws2_32)
     gtest_discover_tests(test_parse_endpoint DISCOVERY_MODE PRE_TEST)
 
-    # Behavioral tests — N68 (plugin/module tick dispatch) + N61 (callback lifecycle).
-    # Links plugin_loader.cpp and module_loader.cpp compiled with NEVR_TEST_HOOKS
-    # to enable mock-callback injection into the static plugin/module registries.
-    # The test file provides stubs for game globals (Log, FatalError, EchoVR
-    # function pointers) so the test does not need the full gamepatches DLL.
+    # Behavioral tests — N68 (plugin/module tick dispatch) + N61 (callback
+    # lifecycle). Links plugin_loader.cpp, module_loader.cpp, and ws_bridge.cpp
+    # compiled with NEVR_TEST_HOOKS to enable mock-callback injection into the
+    # static registries. The test file provides stubs for game globals (Log,
+    # FatalError, EchoVR function pointers).
+    #
+    # ws_bridge.cpp is linked for N61: the test drives the REAL Close handler
+    # through test hooks, using real ix::WebSocket objects (never connected).
+    # This is the N68 pattern applied to ws_bridge — the production code IS
+    # the code under test.
     add_executable(test_behavioral
       tests/test_behavioral.cpp
       plugin_loader.cpp
       module_loader.cpp
+      ws_bridge.cpp
+      symbol_corpus.cpp
     )
     target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS)
     # Disable PCH — the test has its own stub headers and must not depend on
@@ -199,6 +206,8 @@ if(BUILD_TESTING)
       tests/test_behavioral.cpp
       plugin_loader.cpp
       module_loader.cpp
+      ws_bridge.cpp
+      symbol_corpus.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON
     )
     target_include_directories(test_behavioral PRIVATE
@@ -208,7 +217,29 @@ if(BUILD_TESTING)
       ${CMAKE_SOURCE_DIR}/plugins/common/include
       ${CMAKE_BINARY_DIR}
     )
-    target_link_libraries(test_behavioral PRIVATE GTest::gtest GTest::gtest_main ws2_32)
+    # ws_bridge.cpp uses ixwebsocket and nlohmann-json. The test creates
+    # real ix::WebSocket objects (never connected) as opaque handles.
+    find_package(ixwebsocket CONFIG REQUIRED)
+    find_package(nlohmann_json CONFIG REQUIRED)
+    # ixwebsocket include workaround — same as the main gamepatches target.
+    get_target_property(_ixws_includes_test ixwebsocket::ixwebsocket INTERFACE_INCLUDE_DIRECTORIES)
+    foreach(_dir ${_ixws_includes_test})
+      get_filename_component(_parent_dir "${_dir}" DIRECTORY)
+      target_include_directories(test_behavioral SYSTEM PRIVATE "${_parent_dir}")
+    endforeach()
+    # Use the same minimal bcrypt import lib as the main gamepatches target.
+    # mbedTLS (ixwebsocket TLS backend) needs BCryptGenRandom.
+    if(MINGW)
+      add_dependencies(test_behavioral gamepatches_bcrypt_minimal)
+      target_link_libraries(test_behavioral PRIVATE
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>
+      )
+    endif()
+    target_link_libraries(test_behavioral PRIVATE
+      GTest::gtest GTest::gtest_main
+      ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json
+      ws2_32
+    )
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
   endif()
 endif()

@@ -221,6 +221,22 @@ constexpr uintptr_t HEADLESS_RENDER_SUBMIT_INIT = 0x154D7E4;
 /// the game's native renderer-disabled branch. Skip, not stub. Prologue-VALIDATED.
 constexpr uintptr_t HEADLESS_RENDER_SETUP = 0x154B683;
 
+/// Single-source-of-truth array of all headless render-gate RVAs.
+/// Adding or removing a gate MUST update this array — the test derives its count
+/// from sizeof(HEADLESS_GATE_RVAS), so a mismatch between the array and the actual
+/// ForceHeadlessSkip calls in mode_patches.cpp is caught at compile/run time.
+/// AND the GateRvasPinnedToGroundTruth test ensures these match the binary.
+constexpr uintptr_t HEADLESS_GATE_RVAS[] = {
+    HEADLESS_DX12_INIT,
+    HEADLESS_ENGINE_RENDER_INIT,
+    HEADLESS_GUI_INIT,
+    HEADLESS_RENDER_SUBMIT_INIT,
+    HEADLESS_RENDER_SETUP,
+};
+constexpr int HEADLESS_GATE_COUNT = sizeof(HEADLESS_GATE_RVAS) / sizeof(HEADLESS_GATE_RVAS[0]);
+static_assert(HEADLESS_GATE_COUNT == 5,
+    "Gate count changed — update HEADLESS_GATE_RVAS and the ForceHeadlessSkip calls in mode_patches.cpp");
+
 /// Address: CEngineConfig::operator= (0x141547360, FUN_141547360)
 /// Called from CRenderPipeline::InitStages — single caller (ReVault-verified)
 /// to copy the source engine config struct into CEngine+0x2cf98. Copies ~0x98

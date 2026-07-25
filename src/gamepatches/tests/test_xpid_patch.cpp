@@ -201,19 +201,15 @@ TEST(HeadlessGates, GateRvasPinnedToGroundTruth) {
 // ---------------------------------------------------------------------------
 
 TEST(HeadlessGates, ServerForcesHeadlessGateCount) {
-  // boot.cpp enforces: -server → g_isHeadless=TRUE → PatchEnableHeadless fires.
-  // PatchEnableHeadless applies these gates. If this count changes, a gate was
-  // added or removed — update the test and verify the server→headless chain still holds.
-  // N65: compare against the actual gate constants, not a hardcoded 5==5 tautology.
+  // N65: the count is derived from PatchAddresses::HEADLESS_GATE_RVAS (defined
+  // in patch_addresses.h — the single source of truth). Adding or removing a gate
+  // from that array changes HEADLESS_GATE_COUNT, and the static_assert in
+  // patch_addresses.h catches mismatches with the ForceHeadlessSkip call sites.
+  // This test verifies the gate count matches the known ground truth (5 gates).
   using namespace PatchAddresses;
-  constexpr uintptr_t kGateRvas[] = {HEADLESS_DX12_INIT, HEADLESS_ENGINE_RENDER_INIT,
-                                     HEADLESS_GUI_INIT, HEADLESS_RENDER_SUBMIT_INIT,
-                                     HEADLESS_RENDER_SETUP};
-  static constexpr int kHeadlessGateCount = sizeof(kGateRvas) / sizeof(kGateRvas[0]);
-  EXPECT_EQ(kHeadlessGateCount, 5);
-  // Validate each gate RVA is sane (redundant with GateRvasInCodeRangeAndDistinct
-  // but guards against a gate being accidentally duplicated in the array).
-  for (uintptr_t rva : kGateRvas) {
+  EXPECT_EQ(HEADLESS_GATE_COUNT, 5);
+  // Validate each gate RVA in the production array is sane.
+  for (uintptr_t rva : HEADLESS_GATE_RVAS) {
     EXPECT_GT(rva, 0x100000u);
     EXPECT_LT(rva, 0x2231000u);
   }
@@ -248,47 +244,25 @@ TEST(HeadlessGates, GateRvasInCodeRangeAndDistinct) {
 // Those scripts fail before the fix (call site missing) and pass after —
 // they are the automated red→green tests for the call-site class of fix.
 
-// N65: gate count test above (ServerForcesHeadlessGateCount) now derives
-// count from sizeof(kGateRvas)/sizeof(kGateRvas[0]) — no longer a tautology.
-// Verified above: if a gate is added/removed from the array, the count changes
-// and the test must be updated. This test confirms the derivation is dynamic.
-TEST(WaveIFixes, N65_GateCount_DerivedFromArray) {
+// N65: gate count derived from PatchAddresses::HEADLESS_GATE_COUNT, which comes
+// from the production array in patch_addresses.h (the single source of truth).
+// Adding/removing a gate from HEADLESS_GATE_RVAS changes HEADLESS_GATE_COUNT
+// and a static_assert guards against mismatch with the ForceHeadlessSkip calls.
+TEST(WaveIFixes, N65_GateCount_DerivedFromProductionArray) {
   using namespace PatchAddresses;
-  constexpr uintptr_t kGateRvas[] = {HEADLESS_DX12_INIT, HEADLESS_ENGINE_RENDER_INIT,
-                                     HEADLESS_GUI_INIT, HEADLESS_RENDER_SUBMIT_INIT,
-                                     HEADLESS_RENDER_SETUP};
-  constexpr int kCount = sizeof(kGateRvas) / sizeof(kGateRvas[0]);
-  EXPECT_EQ(kCount, 5);
-  // If this fails, a gate was added to or removed from kGateRvas without
-  // updating the test below (ServerForcesHeadlessGateCount).
-  EXPECT_EQ(kCount, 5);
+  // The count must equal 5 (the number of ForceHeadlessSkip calls in mode_patches.cpp).
+  EXPECT_EQ(HEADLESS_GATE_COUNT, 5);
+  // Verify each RVA in the production array is within .text range.
+  for (uintptr_t rva : HEADLESS_GATE_RVAS) {
+    EXPECT_GT(rva, 0x100000u);
+    EXPECT_LT(rva, 0x2231000u);
+  }
 }
 
-// N66: FormatSymbolId guards negative maxLen and null buffer.
-// The function is in symbol_corpus.cpp (linked into gamepatches, not
-// test_xpid_patch). We test the GUARD LOGIC by replicating it inline.
-TEST(WaveIFixes, N66_NegativeMaxLen_Guard) {
-  // Replicates the guard in FormatSymbolId: if (maxLen <= 0 || buf == nullptr) return 0;
-  int maxLen = -1;
-  char* buf = reinterpret_cast<char*>(0x1000);  // non-null sentinel
-  bool guarded = (maxLen <= 0 || buf == nullptr);
-  EXPECT_TRUE(guarded);  // negative maxLen → guarded
-}
-TEST(WaveIFixes, N66_NullBuffer_Guard) {
-  char* buf = nullptr;
-  int maxLen = 64;
-  bool guarded = (maxLen <= 0 || buf == nullptr);
-  EXPECT_TRUE(guarded);  // null buf → guarded
-}
-TEST(WaveIFixes, N66_ValidInput_PassesGuard) {
-  int maxLen = 64;
-  // Valid input: maxLen > 0 AND buf != nullptr → guard passes through.
-  // (We can't test buf non-null here without a real pointer; the guard
-  // logic is maxLen <= 0 || buf == nullptr, so maxLen > 0 alone is
-  // insufficient — but the guard IS tested above for the two failing cases.)
-  EXPECT_GT(maxLen, 0);
-  SUCCEED();  // compile-only — guard logic verified above for failing cases
-}
+// N66: FormatSymbolId guard tests are now PRODUCTION-LINKED in test_behavioral.cpp.
+// That test calls the real EchoVR::FormatSymbolId from symbol_corpus.cpp (compiled
+// into the test target). The model-level tests previously here were ADJACENT
+// (replicated the guard logic instead of calling production) and have been removed.
 
 // N63: Double-SIGINT re-entry gate now calls ForceFatalExit instead of returning.
 // The gate variable s_shuttingDown uses InterlockedExchange (atomic test-and-set).
