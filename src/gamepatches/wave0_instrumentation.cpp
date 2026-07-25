@@ -63,6 +63,10 @@ static constexpr uint64_t VA_PRECISION_SLEEP_BUSYWAIT = 0x1401CE4C0;
 static constexpr uint64_t VA_SPINWAIT_WAIT_FOR_VALUE = 0x141500ED8;
 static constexpr uint64_t VA_HTTP_LISTENER_BRINGUP   = 0x1401F5B00;  // BUG #62
 
+// N33: save original byte at BusyWait before RET patch, restore on Shutdown.
+static uint8_t  s_busywait_original_byte = 0;
+static bool     s_busywait_patched       = false;
+
 /* Expected prologue at VA_HTTP_LISTENER_BRINGUP: MOV [RSP+8],RBX (relocatable,
  * clean 5-byte hook boundary). Validated before hooking to guard against the
  * loaded binary diverging from the ReVault-indexed echovr.exe. */
@@ -496,11 +500,15 @@ void Wave0::Init(uintptr_t base_addr) {
         failedNames += "CPrecisionSleep::BusyWait";
         failed++;
     } else {
+        // Save original byte before overwriting — N33: restore on Shutdown.
+        memcpy(&s_busywait_original_byte, busywait, 1);
+        s_busywait_patched = true;
         uint8_t ret_byte = 0xC3;
         ProcessMemcpy(busywait, &ret_byte, 1);
         Log(EchoVR::LogLevel::Info,
-            "[NEVR.PATCH] patched name=CPrecisionSleep::BusyWait va=0x%llX (BUG#13 fix, RET patch)",
-            static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT));
+            "[NEVR.PATCH] patched name=CPrecisionSleep::BusyWait va=0x%llX (BUG#13 fix, RET patch, saved orig=0x%02X)",
+            static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT),
+            static_cast<unsigned int>(s_busywait_original_byte));
         installed++;
     }
 
@@ -580,6 +588,19 @@ void Wave0::Shutdown() {
         if (*e.orig != nullptr) {
             MH_DisableHook(ResolveVA(g_base, e.va));
         }
+    }
+    // N33: restore original byte at BusyWait — the RET patch is a direct
+    // ProcessMemcpy, not a MinHook table hook, so it must be undone manually.
+    if (s_busywait_patched) {
+        void* busywait = ResolveVA_Safe(g_base, VA_PRECISION_SLEEP_BUSYWAIT);
+        if (busywait) {
+            ProcessMemcpy(busywait, &s_busywait_original_byte, 1);
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.PATCH] wave0 shutdown restored BusyWait byte 0x%02X at va=0x%llX",
+                static_cast<unsigned int>(s_busywait_original_byte),
+                static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT));
+        }
+        s_busywait_patched = false;
     }
     if (s_cached_timer != NULL) {
         CloseHandle(s_cached_timer);
