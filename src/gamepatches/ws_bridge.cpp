@@ -236,6 +236,42 @@ void InstallWebSocketBridge() {
               pair->remoteWs = g_loginRemoteWs;
               pair->remoteOpen = true;
               pair->loginInjected = true;  // skip LoginRequest — already authenticated
+
+              auto* pairPtr = pair.get();
+              ix::WebSocket* gameWsPtr = &gameWs;
+
+              // N61: register an independent callback for each matchmaker
+              // connection on the shared remote. Previously matchmaker relied
+              // entirely on the login connection's callback — when login
+              // disconnected and B2/N54 nulled that callback, all matchmaker
+              // server→game message routing silently died.
+              g_loginRemoteWs->setOnMessageCallback(
+                  [pairPtr, gameWsPtr](const ix::WebSocketMessagePtr& rmsg) {
+                    switch (rmsg->type) {
+                      case ix::WebSocketMessageType::Message: {
+                        ix::WebSocket* target = nullptr;
+                        {
+                          std::lock_guard<std::mutex> lk(g_pairsMutex);
+                          target = g_activeGameWs ? g_activeGameWs : gameWsPtr;
+                        }
+                        if (rmsg->binary) {
+                          target->sendBinary(rmsg->str);
+                        } else {
+                          target->sendText(rmsg->str);
+                        }
+                        break;
+                      }
+                      case ix::WebSocketMessageType::Close:
+                        Log(EchoVR::LogLevel::Debug,
+                            "[NEVR.WS] Remote closed (matchmaker ws=%p): %d %s",
+                            (void*)gameWsPtr, rmsg->closeInfo.code,
+                            rmsg->closeInfo.reason.c_str());
+                        break;
+                      default:
+                        break;
+                    }
+                  });
+
               {
                 std::lock_guard<std::mutex> lk(g_pairsMutex);
                 g_activeGameWs = &gameWs;
