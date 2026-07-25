@@ -29,8 +29,12 @@ export WINEPREFIX=/home/andrew/src/nevr-runtime/echovr/.wineprefix
 export WINEDEBUG=fixme-all
 
 echo "=== Starting echovr.exe ==="
+# set -e kills the script before we can capture the exit code. Temporarily
+# disable it so the status echo below is reachable on failure.
+set +e
 cd echovr/bin/win10 && wine ./echovr.exe -server -noconsole 2>&1
 exit_code=$?
+set -e
 if [[ $exit_code -ne 0 ]]; then
   echo "=== echovr.exe exited with code $exit_code ===" >&2
 fi

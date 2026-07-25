@@ -86,28 +86,19 @@ static BOOL WINAPI HookCreateProcessW(LPCWSTR lpApp, LPWSTR lpCmd,
     BOOL bInherit, DWORD dwFlags, LPVOID lpEnv, LPCWSTR lpDir,
     LPSTARTUPINFOW lpSI, LPPROCESS_INFORMATION lpPI) {
     if (lpApp && wcsstr(lpApp, L"BsSndRpt")) {
-        PluginLog("suppressed crash reporter (W)");
+        PluginLog("blocked crash reporter (W): reporter prevented, game will take clean-failure path");
         g_crashReporterSuppressed = true;
-        if (lpPI) {
-            ZeroMemory(lpPI, sizeof(PROCESS_INFORMATION));
-            lpPI->hProcess = (HANDLE)0xDEADBEEF;
-            lpPI->hThread = (HANDLE)0xDEADBEEF;
-            lpPI->dwProcessId = 0xDEADBEEF;
-            lpPI->dwThreadId = 0xDEADBEEF;
-        }
-        return TRUE;
+        // Return FALSE — the game's crash handler has a working "reporter failed
+        // to launch" path that skips WaitForSingleObject/CloseHandle on pi.
+        // Returning TRUE with 0xDEADBEEF handles caused the handler to wait on
+        // or close an invalid handle inside the exception handler → handler
+        // destroyed → dump truncated at System Info, no stack.
+        return FALSE;
     }
     if (lpCmd && wcsstr(lpCmd, L"BsSndRpt")) {
-        PluginLog("suppressed crash reporter (cmdline W)");
+        PluginLog("blocked crash reporter (cmdline W): reporter prevented, game will take clean-failure path");
         g_crashReporterSuppressed = true;
-        if (lpPI) {
-            ZeroMemory(lpPI, sizeof(PROCESS_INFORMATION));
-            lpPI->hProcess = (HANDLE)0xDEADBEEF;
-            lpPI->hThread = (HANDLE)0xDEADBEEF;
-            lpPI->dwProcessId = 0xDEADBEEF;
-            lpPI->dwThreadId = 0xDEADBEEF;
-        }
-        return TRUE;
+        return FALSE;
     }
     return OrigCreateProcessW(lpApp, lpCmd, lpProcAttr, lpThreadAttr,
         bInherit, dwFlags, lpEnv, lpDir, lpSI, lpPI);
