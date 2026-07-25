@@ -62,6 +62,9 @@ __pycache__/
 # Generated protobuf
 gen/
 
+# Upstream protobuf source (was a submodule; gitlink removed N31/N33 worktrees)
+extern/protobuf/
+
 # Temporary/generated files
 hashes*.txt
 lobby_session_*.json
