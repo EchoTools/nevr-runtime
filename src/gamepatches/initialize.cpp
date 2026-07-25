@@ -27,6 +27,7 @@
 #include "common/echovr_functions.h"
 #include "patch_addresses.h"
 #include "wave0_instrumentation.h"
+#include "xpid_patch.h"
 
 #include <windows.h>
 
@@ -243,6 +244,13 @@ VOID Initialize() {
   // otherwise they pass through to real DirectX.
   InstallHeadlessGraphicsHooks();
   BootLogTee::TeeFprintf("[NEVR] headless graphics hooks registered\n");
+
+  // N59: re-wire PatchDscProvider — the call site was lost when N43's
+  // Initialize() rewrite merged over N41's include+call (a6bb57d).
+  // Without this, the 5-site PSN→DSC + ???→DSC string-table rewrite
+  // never executes — game sends PSN-/???- instead of DSC- in provider
+  // strings (RULINGS.md 2026-07-20 login-prefix).
+  PatchDscProvider();
 
   {
       void* sym_target = reinterpret_cast<void*>(
