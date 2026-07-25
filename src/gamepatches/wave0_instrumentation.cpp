@@ -304,10 +304,25 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
 using WaitForValue_t = void(__fastcall*)(volatile uint32_t* ptr, uint32_t expected, uint32_t mask);
 static WaitForValue_t s_origWaitForValue = nullptr;
 
+// Reasonable bounds for the game's native spin-limit global.
+// The true value on echovr.exe 34 is ~4000; anything outside [100, 50000]
+// indicates a version-drift silent misread (N31).
+static constexpr uint32_t SPIN_LIMIT_MIN = 100;
+static constexpr uint32_t SPIN_LIMIT_MAX = 50000;
+static constexpr uint32_t SPIN_LIMIT_DEFAULT = 4000;
+
 static void __fastcall WaitForValueHook(volatile uint32_t* ptr, uint32_t expected, uint32_t mask) {
-    // Read configurable spin limit from game's global data
+    // Read configurable spin limit from game's global data.
+    // Validated against bounds to catch version-drift silent misread (N31).
     uint32_t spin_limit = *reinterpret_cast<volatile uint32_t*>(g_base + OFF_SPINWAIT_SPIN_LIMIT);
-    if (spin_limit == 0) spin_limit = 4000;
+    if (spin_limit < SPIN_LIMIT_MIN || spin_limit > SPIN_LIMIT_MAX) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] WaitForValue spin_limit=%u out of bounds [%u,%u] — "
+            "possible version drift at offset 0x%X, using default %u",
+            spin_limit, SPIN_LIMIT_MIN, SPIN_LIMIT_MAX,
+            static_cast<unsigned int>(OFF_SPINWAIT_SPIN_LIMIT), SPIN_LIMIT_DEFAULT);
+        spin_limit = SPIN_LIMIT_DEFAULT;
+    }
 
     uint32_t spin_count = 0;
     uint32_t sleep_ms = 0;  // Start at 0, increase under contention (not inverted)
