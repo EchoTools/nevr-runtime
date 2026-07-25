@@ -233,6 +233,15 @@ verify:
     # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
     cmake --build --preset {{ preset }}
     just test-auth-unit
+    # N34: mechanical guard — src/gameserver/ is dead code. The compiled path is
+    # src/gamepatches/gameserver/. If add_subdirectory(src/gameserver) is ever
+    # uncommented (not preceded by #), fail the verify gate. Sensor over lock:
+    # the dead path must stay dead; re-enabling it silently compiles the wrong copy.
+    if grep -Pn '^\s*add_subdirectory\s*\(\s*src/gameserver\s*\)' CMakeLists.txt; then
+        echo "verify: FAIL — src/gameserver/ is DEAD CODE (N34). Compiled path is src/gamepatches/gameserver/." >&2
+        echo "Uncommenting add_subdirectory(src/gameserver) compiles the WRONG copy. Remove this line or route the fix to src/gamepatches/gameserver/." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)
