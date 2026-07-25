@@ -17,6 +17,7 @@
 #include "plugin_logger.h"
 #include "hook_manager.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <cstdarg>
@@ -39,8 +40,11 @@ static nevr::HookManager g_hooks;
 // State
 // ============================================================================
 
-static bool g_crashReporterSuppressed = false;
-static bool g_justSuppressedCrash = false;
+// N67: std::atomic — accessed from CreateProcess hooks (any thread) and
+// ExitProcess (any thread) and VEH (faulting thread). Plain bool lacks
+// memory ordering guarantees across threads.
+static std::atomic<bool> g_crashReporterSuppressed = false;
+static std::atomic<bool> g_justSuppressedCrash = false;
 static PVOID g_vehHandle = nullptr;
 
 // ============================================================================

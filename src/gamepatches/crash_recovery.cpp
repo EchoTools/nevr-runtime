@@ -493,11 +493,11 @@ void PerformGracefulShutdown(unsigned int exitCode) {
   // flag checks in PrecisionSleepWaitHook and NetGameSwitchStateHook.
   static volatile LONG s_shuttingDown = 0;
   if (InterlockedExchange(&s_shuttingDown, 1) != 0) {
-    // Already shutting down — another thread is running the sequence.
-    // Sleep briefly to yield, but this path should be unreachable because
-    // ForceFatalExit calls TerminateProcess which kills all threads.
-    Sleep(100);
-    return;
+    // N63: re-entry — another signal arrived while shutdown was in
+    // progress. The first shutdown may be stuck (deadlocked on N62
+    // signal-unsafe locks). Don't return (the caller PosixSignalHandler
+    // would return without terminating the process); force-exit now.
+    ForceFatalExit(1);
   }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Graceful shutdown initiated (code=%u)", exitCode);

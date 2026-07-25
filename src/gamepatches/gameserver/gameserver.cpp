@@ -1132,6 +1132,17 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
     self->m_shutdownComplete.store(true);
 
     Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Graceful shutdown complete — exiting");
+
+    // N64: release the ws_bridge listening socket before ForceFatalExit.
+    // PerformGracefulShutdown (crash_recovery.cpp) does this correctly;
+    // BeginGracefulShutdown's shutdown thread was missing this step.
+    // Without it, the wineserver may keep the socket alive as a zombie.
+    auto hWsBridge = GetModuleHandleA("ws_bridge.dll");
+    if (hWsBridge) {
+      auto pfn = (void (*)())GetProcAddress(hWsBridge, "WsBridge_Shutdown");
+      if (pfn) pfn();
+    }
+
     // Route through ForceFatalExit: the crash_recovery ExitProcessHook suppresses
     // raw ExitProcess in server mode (to survive the game's crash reporter), which
     // would otherwise swallow this intentional shutdown and leave the process

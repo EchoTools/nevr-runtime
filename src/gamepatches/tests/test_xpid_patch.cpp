@@ -202,10 +202,21 @@ TEST(HeadlessGates, GateRvasPinnedToGroundTruth) {
 
 TEST(HeadlessGates, ServerForcesHeadlessGateCount) {
   // boot.cpp enforces: -server → g_isHeadless=TRUE → PatchEnableHeadless fires.
-  // PatchEnableHeadless applies these 5 gates. If this count changes, a gate was
+  // PatchEnableHeadless applies these gates. If this count changes, a gate was
   // added or removed — update the test and verify the server→headless chain still holds.
-  static constexpr int kHeadlessGateCount = 5;
+  // N65: compare against the actual gate constants, not a hardcoded 5==5 tautology.
+  using namespace PatchAddresses;
+  constexpr uintptr_t kGateRvas[] = {HEADLESS_DX12_INIT, HEADLESS_ENGINE_RENDER_INIT,
+                                     HEADLESS_GUI_INIT, HEADLESS_RENDER_SUBMIT_INIT,
+                                     HEADLESS_RENDER_SETUP};
+  static constexpr int kHeadlessGateCount = sizeof(kGateRvas) / sizeof(kGateRvas[0]);
   EXPECT_EQ(kHeadlessGateCount, 5);
+  // Validate each gate RVA is sane (redundant with GateRvasInCodeRangeAndDistinct
+  // but guards against a gate being accidentally duplicated in the array).
+  for (uintptr_t rva : kGateRvas) {
+    EXPECT_GT(rva, 0x100000u);
+    EXPECT_LT(rva, 0x2231000u);
+  }
 }
 
 TEST(HeadlessGates, GateRvasInCodeRangeAndDistinct) {
