@@ -518,6 +518,32 @@ verify:
         echo "a signal handler may portably touch)." >&2
         exit 1
     fi
+    # N86: the per-frame tick MUST be dispatched from a site that runs in server
+    # mode. PrecisionSleep::Wait does not (measured: 0 entries over a full run),
+    # which left plugins, modules and N69's stack reserve silently dead there.
+    # N68's original sensor only checked that TickPlugins appeared in the file —
+    # which it did, in a hook that never executed. Check the LIVE site.
+    if ! awk '/^static void DispatchPerFrameWork/,/^}/' src/gamepatches/wave0_instrumentation.cpp \
+         | grep -q 'TickPlugins'; then
+        echo "verify: FAIL — N86 TickPlugins missing from DispatchPerFrameWork; the server-mode" >&2
+        echo "per-frame tick is dead again (PrecisionSleep::Wait never runs on a server)." >&2
+        exit 1
+    fi
+    if ! awk '/^static void DispatchPerFrameWork/,/^}/' src/gamepatches/wave0_instrumentation.cpp \
+         | grep -q 'TickModules'; then
+        echo "verify: FAIL — N86 TickModules missing from DispatchPerFrameWork." >&2
+        exit 1
+    fi
+    if ! awk '/^static void DispatchPerFrameWork/,/^}/' src/gamepatches/wave0_instrumentation.cpp \
+         | grep -q 'if (InterlockedExchange(&g_tickReentry, 1) != 0) return;'; then
+        echo "verify: FAIL — N86 re-entrancy gate missing from DispatchPerFrameWork; a plugin" >&2
+        echo "OnFrame that calls GetTimeMicroseconds would recurse without bound." >&2
+        exit 1
+    fi
+    if ! grep -q 'DispatchPerFrameWork(nowUs)' src/gamepatches/wave0_instrumentation.cpp; then
+        echo "verify: FAIL — N86 DispatchPerFrameWork call site missing from the live tick hook." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)

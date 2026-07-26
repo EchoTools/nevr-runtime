@@ -23,3 +23,7 @@ VOID InstallEntityHooks();
 VOID InstallBugSplatHook();
 VOID InstallGameSpaceHook();
 VOID InstallGameMainHook();
+
+/// N83/N84: report how many times the broadcaster hooks were ENTERED. Distinguishes
+/// "guard never tripped" from "hook never ran" — only the first is evidence.
+void LogBroadcasterHookStats();

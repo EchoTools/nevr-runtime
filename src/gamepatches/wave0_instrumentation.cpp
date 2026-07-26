@@ -37,6 +37,7 @@
  * ====================================================================== */
 
 #include "wave0_instrumentation.h"
+#include "mode_patches.h"
 #include "patch_addresses.h"
 #include "common/globals.h"
 #include "common/logging.h"
@@ -147,6 +148,63 @@ static inline void* ResolveVA_Safe(uintptr_t base, uint64_t va) {
 using GetTimeMicroseconds_t = uint64_t(__fastcall*)();
 static GetTimeMicroseconds_t s_origGetTimeMicroseconds = nullptr;
 
+// ---------------------------------------------------------------------------
+// N86 — the per-frame tick site that actually runs on a dedicated server
+// ---------------------------------------------------------------------------
+//
+// N68 wired TickPlugins/TickModules into PrecisionSleepWaitHook and closed on
+// `just verify` green. That proved the CALL SITE existed in source; it did not
+// prove the site ever executes. Measured on a live headless server:
+// CPrecisionSleep::Wait is hooked successfully ("hooks installed: 7 succeeded,
+// 0 failed") and then called ZERO times for the entire run. Plugins never got
+// OnFrame, modules never got their tick, and N69's per-thread stack reserve was
+// never claimed on any game thread.
+//
+// GetTimeMicroseconds IS live in server mode (measured, same run). It is far
+// hotter than one call per frame, so the dispatch is rate-limited by elapsed
+// time using this function's OWN return value — no extra clock, and it tracks
+// real time rather than a call count that varies with engine load.
+static volatile LONG g_tickReentry = 0;
+static uint64_t g_lastTickUs = 0;
+
+static constexpr uint64_t kTickIntervalUs = 8000;  // ~125 Hz, the frame-pacer cadence
+
+/// Dispatch per-frame work from a site known to run. Re-entrancy is guarded
+/// because plugin/module OnFrame handlers may themselves call anything that
+/// calls GetTimeMicroseconds — without the gate that is unbounded recursion.
+static void DispatchPerFrameWork(uint64_t nowUs) {
+    if (nowUs - g_lastTickUs < kTickIntervalUs) return;
+    if (InterlockedExchange(&g_tickReentry, 1) != 0) return;  // already inside
+    g_lastTickUs = nowUs;
+
+    EnsureStackReserve();  // N69: covers whatever thread drives the loop
+
+    // Liveness + N83/N84 evidence, ~every 30s (3750 ticks x 8ms).
+    {
+        static volatile LONG s_ticks = 0;
+        const LONG t = InterlockedIncrement(&s_ticks);
+        if (t == 1) {
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.PATCH] per-frame tick ALIVE via GetTimeMicroseconds (N86) — "
+                "plugin/module OnFrame now dispatched in server mode");
+        }
+        if ((t % 3750) == 0) LogBroadcasterHookStats();
+    }
+
+    NvrGameContext gctx = {};
+    gctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
+    gctx.flags = g_isServer ? NEVR_HOST_IS_SERVER : NEVR_HOST_IS_CLIENT;
+    if (g_isHeadless) gctx.flags |= NEVR_HOST_IS_HEADLESS;
+    TickPlugins(&gctx);
+
+    NvrModuleContext mctx = {};
+    mctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
+    mctx.flags = gctx.flags;
+    TickModules(&mctx);
+
+    InterlockedExchange(&g_tickReentry, 0);
+}
+
 static uint64_t __fastcall GetTimeMicrosecondsHook() {
     // Replicate the original's global override check.
     // When the engine pauses or fixes time, it sets a flag and cached value.
@@ -165,8 +223,13 @@ static uint64_t __fastcall GetTimeMicrosecondsHook() {
     // Overflow-safe: (pc * 1000000) / pf without intermediate overflow
     int64_t whole = (pc / pf) * 1000000LL;
     int64_t frac  = ((pc % pf) * 1000000LL) / pf;
+    const uint64_t nowUs = static_cast<uint64_t>(whole + frac);
 
-    return static_cast<uint64_t>(whole + frac);
+    // N86: drive per-frame work from here — this site is live in server mode,
+    // PrecisionSleep::Wait is not. Rate-limited and re-entrancy-guarded inside.
+    DispatchPerFrameWork(nowUs);
+
+    return nowUs;
 }
 
 /* --------------------------------------------------------------------
@@ -271,6 +334,16 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
     // game thread that reaches our per-frame hook. thread_local one-shot — after
     // the first call on a thread this is a single bool test.
     EnsureStackReserve();
+
+    // N83/N84: periodic broadcaster-hook entry counts. ~every 30s at 8ms frames.
+    {
+        // N86: this hook (CPrecisionSleep::Wait) is NOT called in server mode —
+        // measured 0 entries across a full run. Retained for client mode, where
+        // it is the correct frame-pacer site. Server-mode dispatch happens in
+        // DispatchPerFrameWork, driven by GetTimeMicroseconds.
+        static volatile LONG s_frames = 0;
+        InterlockedIncrement(&s_frames);
+    }
 
     // Check for graceful shutdown request (set by SIGINT/SIGTERM handler).
     // This fires every game tick, so CTRL+C responsiveness is bounded by the

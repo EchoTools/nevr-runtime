@@ -359,7 +359,22 @@ static EngineEntityLookupFunc* OriginalEngineEntityLookup = nullptr;
 // Whether it ever trips on a real server is THE open question for N83, and the
 // log line below is the only instrument that answers it. If you are debugging a
 // server that registers but receives nothing, grep the log for it first.
+static volatile LONG g_listenHookEntries = 0;
+static volatile LONG g_dispatchHookEntries = 0;
+
+// N83/N84 exit condition: "if the guard does not trip across representative runs,
+// remove the detour." That inference is only valid if the hook RAN. A guard that
+// never trips because its function is never called is not evidence of anything.
+// These counters make the two states distinguishable.
+void LogBroadcasterHookStats() {
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.PATCH] broadcaster hook stats listen_entries=%ld dispatch_entries=%ld "
+      "(N83/N84 evidence — zero entries means idle runs prove nothing)",
+      g_listenHookEntries, g_dispatchHookEntries);
+}
+
 static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
+  InterlockedIncrement(&g_listenHookEntries);
   if (g_isServer) {
     // Check if the structure pointer chain is valid before calling original
     INT64* outerPtr = (INT64*)arg1;
@@ -418,6 +433,7 @@ static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
 // So: skip only when that chain is actually unsafe; dispatch whenever it is valid.
 // The original protection is preserved; the collateral severance is not.
 static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
+  InterlockedIncrement(&g_dispatchHookEntries);
   if (g_isServer) {
     // Exact AV condition from the disassembly above — nothing broader.
     if (arg1 == 0) return;
