@@ -290,17 +290,48 @@ constexpr uintptr_t GAME_MAIN_WRAPPER = 0x0CD510;
 /// calls. Returns when the game encounters a fatal error or shuts down.
 constexpr uintptr_t GAME_MAIN = 0x0CD550;
 
-/// Address: Engine entity lookup function (0x140f80ed0, 555 bytes)
-/// Called from 109+ sites. Accesses *(int64_t*)(arg1->ptr + 0x5e0) which is a
-/// hash table pointer. In server mode this can be 0x10 (uninitialized), causing
-/// a null-pointer AV at offset 0x3ff8 → target 0x4008. Hook to add null check.
-constexpr uintptr_t ENGINE_ENTITY_LOOKUP = 0xF80ED0;
-
-/// Address: Engine entity property dispatch (0x140f87aa0, 580 bytes)
-/// Called from 8 sites. Dereferences *(int64_t*)arg1 + 0x448 for a flags check,
-/// then accesses deeper offsets. In server mode the inner pointer can be invalid
-/// (0x10 or similar), causing an AV. Hook to add null check.
-constexpr uintptr_t ENGINE_ENTITY_PROP_DISPATCH = 0xF87AA0;
+/// ###########################################################################
+/// ## THESE TWO NAMES ARE WRONG. DO NOT REASON FROM THEM. (N83)              ##
+/// ###########################################################################
+///
+/// If you are about to conclude "this is entity/rendering code, therefore it is
+/// safe to skip on a headless server" — that is the exact inference that severed
+/// the ServerDB→game message path. Stop and read N83 in BUGS.md.
+///
+/// Verified by disassembly (revault_disassemble, echovr.exe):
+///   0xF80ED0 is CBroadcaster::Listen — message-listener REGISTRATION.
+///            Returns a uint16 listener id; 0xFFFF is its failure sentinel
+///            (MOV ESI,0xffff @0x140f80f24; MOVZX EAX,SI @0x140f81046).
+///   0xF87AA0 is CBroadcaster::ReceiveLocalEvent — the listener DISPATCHER.
+///            Invokes each registered delegate at
+///            CALL qword ptr [R10+0x28] @0x140f87c90. Nothing else reaches it.
+///
+/// The names below are retained ONLY because renaming them is a wide,
+/// behaviour-adjacent edit that must be made together with the N83 fix, not
+/// ahead of it. The size and offset facts in the original comments were right;
+/// the identity was invented, and every later reader inherited it.
+///
+/// Corrections to the original annotations:
+///   - "Called from 109+ sites"  -> ReVault reports 17 callers.
+///   - "entity property dispatch" -> it is the broadcaster listener dispatch.
+///   - the +0x448 flags check     -> real, but only in the TRACE block, which is
+///     skipped when bit 0x800 is clear. It does not describe the dispatch half
+///     that our hook actually suppresses.
+///
+/// STILL TRUE, and why these hooks are not simply deleted: the AV they guard is
+/// real. [inner+0x5e0] IS the first thing CBroadcaster::Listen dereferences
+/// (0x140f80f17 -> reads [RAX+0x3ff8] @0x140f80f1e), and a garbage pointer of
+/// 0x10 lands exactly on the documented 0x4008. Someone hit a genuine crash.
+/// Whether it still occurs is the open question in
+/// docs/2026-07-26-N83-broadcaster-severance-primer.md — answerable only by a
+/// live run, not by reading.
+///
+/// Both RVAs are ALSO assigned as live function pointers in
+/// src/common/echovr_functions.cpp:87-88, so detouring them makes our own calls
+/// re-enter our own hooks. tools/verify_hook_invariants.py fails the build if a
+/// NEW address joins that intersection.
+constexpr uintptr_t ENGINE_ENTITY_LOOKUP = 0xF80ED0;          // = CBroadcaster::Listen
+constexpr uintptr_t ENGINE_ENTITY_PROP_DISPATCH = 0xF87AA0;   // = CBroadcaster::ReceiveLocalEvent
 
 /// Address: BugSplat crash handler (0x1400dbbc0, 141 bytes)
 /// Fatal error handler called from 5 sites in the game. Builds an error report,

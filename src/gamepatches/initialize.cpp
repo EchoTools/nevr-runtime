@@ -283,7 +283,11 @@ VOID Initialize() {
 
   // --- Broadcaster dispatch guard ---
   BroadcasterGuard::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
-  BootLogTee::TeeFprintf("[NEVR.PATCH] broadcaster guard installed\n");
+  // Truthful outcome: Install() is an empty placeholder (broadcaster_guard.cpp).
+  // The previous line here read "broadcaster guard installed" — a log line
+  // asserting a fact that is false in the source it describes. An operator (or
+  // an agent) reading it would conclude a dispatch guard exists. None does.
+  BootLogTee::TeeFprintf("[NEVR.PATCH] broadcaster guard: no-op placeholder, nothing installed\n");
 
   // --- Log filter (hooks CLog::PrintfImpl to capture/filter/file game output) ---
   // g_isServer not set yet (CLI not parsed); pass false — log filter works regardless

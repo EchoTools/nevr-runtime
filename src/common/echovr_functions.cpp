@@ -84,6 +84,21 @@ void InitializeFunctionPointers() {
   PoolFindItem = (PoolFindItemFunc*)(g_GameBaseAddress + 0x2CA9E0);
   TcpBroadcasterListen = (TcpBroadcasterListenFunc*)(g_GameBaseAddress + 0xF81100);
   BroadcasterSend = (BroadcasterSendFunc*)(g_GameBaseAddress + 0xF89AF0);
+  // !! N83 — THESE TWO RVAs ARE ALSO DETOURED (mode_patches.cpp:721-728, as
+  // !! PatchAddresses::ENGINE_ENTITY_LOOKUP / ENGINE_ENTITY_PROP_DISPATCH).
+  //
+  // MinHook writes a JMP at the function entry, so these pointers do NOT reach
+  // the game's code — they reach our own hooks. Calling
+  // EchoVR::BroadcasterReceiveLocalEvent on a dedicated server currently returns
+  // without dispatching anything, because EngineEntityPropDispatchHook does
+  // `if (g_isServer) return;`.
+  //
+  // RULE FOR ANYONE ADDING A POINTER TO THIS TABLE: an address the runtime CALLS
+  // through must not also be an address the runtime DETOURS. If it is, our own
+  // call site re-enters our own hook and inherits mode guards written for
+  // entirely different callers. tools/verify_hook_invariants.py enforces this —
+  // a NEW address in that intersection fails `just verify`. These two are on its
+  // known-bug register, not silently exempt.
   BroadcasterReceiveLocalEvent = (BroadcasterReceiveLocalEventFunc*)(g_GameBaseAddress + 0xF87AA0);
   BroadcasterListen = (BroadcasterListenFunc*)(g_GameBaseAddress + 0xF80ED0);
   BroadcasterUnlisten = (BroadcasterUnlistenFunc*)(g_GameBaseAddress + 0xF8DF20);

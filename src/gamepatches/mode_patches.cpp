@@ -341,6 +341,24 @@ static VOID InitializeGlobalGameSpaceHook(PVOID pGame, PVOID pGameSpace) {
 typedef INT16 EngineEntityLookupFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5);
 static EngineEntityLookupFunc* OriginalEngineEntityLookup = nullptr;
 
+// N83: this hooks CBroadcaster::Listen (0xF80ED0), NOT an entity lookup — see
+// patch_addresses.h. What that means for the code below:
+//
+//   - The guard's ARITHMETIC IS CORRECT and empirically derived. [inner+0x5e0]
+//     really is this function's first dereference, and 0x10 + 0x3ff8 = 0x4008 is
+//     exactly the AV address in the original annotation. Do not remove it on the
+//     grounds that the name was wrong.
+//   - But `return -1` is not "skip a lookup". It is a FAILED LISTENER
+//     REGISTRATION, and -1 collides with 0xFFFF, this function's own native
+//     failure sentinel. Callers do not check it: RegisterClientCallbacks
+//     (0x14060e780) stores the value straight into its listener-id array with no
+//     CMP AX,0xFFFF in between, and CR15NetDedicatedLobby::SetupDedicatedMode
+//     (0x14019c280) discards EAX after each of its five calls. So a trip here is
+//     silent to the game and only visible in the Warning below (first 3 only).
+//
+// Whether it ever trips on a real server is THE open question for N83, and the
+// log line below is the only instrument that answers it. If you are debugging a
+// server that registers but receives nothing, grep the log for it first.
 static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
   if (g_isServer) {
     // Check if the structure pointer chain is valid before calling original
@@ -374,9 +392,35 @@ typedef VOID EngineEntityPropDispatchFunc(INT64 arg1, INT64 arg2, INT64 arg3, IN
 static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
 
 static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
-  // Skip entirely in server mode — this function dispatches entity property updates
-  // for client-side state (rendering, effects) that doesn't exist in headless mode.
-  // The internal pointer chain is uninitialized, causing cascading AVs.
+  // !! N83 — THE COMMENT THAT USED TO BE HERE WAS FALSE. Preserved verbatim so
+  // !! the next reader can recognise the shape of the mistake:
+  // !!
+  // !!   "Skip entirely in server mode — this function dispatches entity property
+  // !!    updates for client-side state (rendering, effects) that doesn't exist in
+  // !!    headless mode. The internal pointer chain is uninitialized, causing
+  // !!    cascading AVs."
+  //
+  // This is not entity property dispatch. 0xF87AA0 is
+  // CBroadcaster::ReceiveLocalEvent — the broadcaster's LISTENER DISPATCHER. The
+  // early return below therefore does not skip rendering work; it skips message
+  // delivery. ReVault's caller list is FinalizeEntrant, InitEntrantSlots,
+  // CommitPlaceholder, CreateAndJoinOfflineSession — entrant and session
+  // lifecycle, not rendering. The stated justification was falsified by its own
+  // callers; nobody re-checked because the constant was named ENGINE_ENTITY_*.
+  //
+  // Worse, src/common/echovr_functions.cpp:87 points
+  // EchoVR::BroadcasterReceiveLocalEvent at this same RVA, so all 15 injection
+  // sites in gameserver/gameserver.cpp re-enter THIS hook and hit THIS return.
+  // That is the entire ServerDB→game path: LobbyRegistrationSuccess/Failure,
+  // LobbyStartSessionV4, LobbyAcceptPlayersSuccess/FailureV2,
+  // LobbySessionSuccessV5, LobbySmiteEntrant.
+  //
+  // The `return` is LEFT IN PLACE deliberately. Removing it is a behaviour change
+  // on a path that was added in response to a real AV, and whether that AV still
+  // occurs is not statically determinable. Procedure to settle it:
+  // docs/2026-07-26-N83-broadcaster-severance-primer.md. Do not "fix" this by
+  // deleting the line because the name was wrong — that is the same error in the
+  // opposite direction.
   if (g_isServer) return;
   OriginalEngineEntityPropDispatch(arg1, arg2, arg3, arg4, arg5);
 }
