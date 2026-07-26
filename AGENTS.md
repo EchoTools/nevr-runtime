@@ -1,11 +1,35 @@
 # AGENTS.md — start here
 
 Entry point for any agent working in this repository. It exists so that "I did
-not know that document was binding" is never available as an explanation.
+not know that document was binding" shall not be available as an explanation.
 
-Everything listed under **Binding** below is mandatory. Not advisory, not
-"consider" — a change that violates one is rejected in review regardless of
-whether it works.
+Everything listed under **Binding** below binds. A change that violates one is
+rejected in review regardless of whether it works.
+
+---
+
+## Normative language
+
+These documents are addressed to an agent that acts. The words below are used in
+their specification sense and carry obligation, not description.
+
+| Term | Meaning |
+| ---- | ------- |
+| **SHALL** | An obligation on the agent. Doing the work without doing this is not doing the work. Non-compliance is a rejected change, not a judgement call. |
+| **SHALL NOT** | A prohibition on the agent. There is no case in which this is the right move; if you believe you have found one, escalate with a Decision-line instead of proceeding. |
+| **SHOULD** | A strong recommendation. Departing from it is permitted and **shall** be stated, with the reason, in the change that departs. |
+| **MAY** | Genuinely optional. No justification is owed either way. |
+
+"Must" and "never" are avoided deliberately. *Must* describes a property of the
+world — "the build must succeed" — and *never* describes a frequency. Neither
+places a duty on anyone. **Shall** and **shall not** bind a party who will act,
+which is what every rule in these documents is doing.
+
+**Every SHALL is mechanically enforced where it can be.** A SHALL that could be a
+check in `just verify` and is not is a defect in this documentation, not a
+standard — prose cannot enforce, and a rule nothing enforces has already been
+violated silently at least once. Where a SHALL cannot be mechanized, it **shall**
+say so and say why.
 
 ---
 
@@ -28,28 +52,29 @@ work in this repository — it is the enforcement path for the documents above.
 ## Binding
 
 **`CLAUDE.md`** — project conventions and guardrails. Note in particular:
-production deploy is forbidden without per-instance owner approval; never modify
-`src/legacy/`; prologue-validate before any binary patch; never commit generated
-protobuf without regenerating from BSR.
+you **shall not** deploy to production without per-instance owner approval; you
+**shall not** modify `src/legacy/`; you **shall** prologue-validate before any
+binary patch; you **shall not** commit generated protobuf without regenerating
+from BSR.
 
 **`docs/standards/verification.md`** — the meaning of "verified". Ranks evidence,
 defines the four shapes of a component that reports success while doing nothing,
-and requires that every check added to `just verify` be broken and observed
-failing before it is trusted. Written because seven checks authored in a single
+and the rule that every check added to `just verify` **shall** be broken and
+observed failing before it is trusted. Written because seven checks authored in a single
 session were silently inert.
 
-**`docs/standards/logging.md`** — what a component must say. Subsystem tags,
+**`docs/standards/logging.md`** — what a component **shall** say. Subsystem tags,
 level guidelines, and ten rules including "silence is not success".
 
 **`BUGS.md`** — the ledger. Two ID namespaces in one file: bare integers audit
 the *original game binary*; `N`-prefixed IDs are this project's own work ledger.
 Next ID: `grep '^### N' BUGS.md`, take the highest and add one. Every entry
-carries the **invariant** it protects. Amend entries; never rewrite them —
-closed entries live in git history and a silent deletion is indistinguishable
-from the finding never existing.
+carries the **invariant** it protects. You **shall** amend entries and **shall
+not** rewrite them — closed entries live in git history, and a silent deletion is
+indistinguishable from the finding never having existed.
 
 **`~/src/metis-core/CPP-MINGW-ADDENDUM-GENERIC.md`** — cross-compilation hard
-stops. Read in full before touching the build.
+stops. You **shall** read it in full before touching the build.
 
 On conflict: the CPP addendum and `CLAUDE.md` win over everything here.
 
@@ -61,13 +86,14 @@ On conflict: the CPP addendum and `CLAUDE.md` win over everything here.
 just verify     # build + fail-closed GTest under Wine + all invariant sensors
 ```
 
-It must exit **0**. Read the exit code from a file, never `$?` after a pipe —
+It **shall** exit **0**. You **shall** read the exit code from a file and
+**shall not** read `$?` after a pipe —
 `just build` greps its own output and always exits 0, so its exit code is a
 proxy, not a signal.
 
-Server behaviour is tested **only** with `./launch-server.sh`. Do not modify that
-script and do not invoke `echovr.exe` with other arguments. Allow ≥45s from
-process start before judging a server hung (`CLAUDE.md` §Startup Timing).
+Server behaviour **shall** be tested only with `./launch-server.sh`. You **shall
+not** modify that script and **shall not** invoke `echovr.exe` with other
+arguments. You **shall** allow ≥45s from process start before judging a server hung (`CLAUDE.md` §Startup Timing).
 
 ---
 
@@ -83,7 +109,7 @@ src/gamepatches/   BugSplat64.dll — hooks, CLI, mode patches, crash recovery,
                    config, module/plugin loading, in-process gameserver
 src/modules/       runtime-loaded modules: platform-compat, token-auth, ws-bridge
 src/common/        libcommon.a — logging, globals, symbols, hooking
-src/legacy/        FROZEN v1 — never modify
+src/legacy/        FROZEN v1 — shall not be modified
 plugins/           optional plugins loaded from plugins/ next to the game binary
 tools/             build/verify tooling (hook invariants, symbol corpus)
 docs/
@@ -104,11 +130,15 @@ ISO date prefix (`2026-07-26-thing.md`); durable ones do not.
 
 ## Before you finish
 
-- `just verify` exits 0, and you quoted its tail.
-- Every check you added was **falsified** — broken, observed failing, restored.
-- The ledger entry states its evidence rank (`docs/standards/verification.md`).
+- `just verify` exits 0, and you **shall** have quoted its tail.
+- Every check you added **shall** have been falsified — broken, observed
+  failing, restored.
+- The ledger entry **shall** state its evidence rank
+  (`docs/standards/verification.md`).
 - Commits: author `agents@sprock.io`, `--no-gpg-sign`, conventional prefix, one
   logical change each. Verify with `git log --format='%h %G? %an %ae' -1`.
-- No worktrees left behind; scratch under `/var/tmp/work-nevr-runtime/`, never in
-  the repo and never `/tmp` (RAM-backed on this host).
-- Anything unverified is named as unverified, in the same breath as what is.
+- No worktrees left behind. Scratch **shall** live under
+  `/var/tmp/work-nevr-runtime/`, and **shall not** live in the repo or in `/tmp`
+  (RAM-backed on this host).
+- Anything unverified **shall** be named as unverified, in the same breath as
+  what is.

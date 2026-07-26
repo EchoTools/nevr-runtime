@@ -26,7 +26,7 @@ how an agent triangulates a correct log line.
 - A review gate: the "Hard Stops" table at the end of this document is
   enforced. A log line that fails any check is rejected in review.
 - A definition of what constitutes noise (see N18) and what a log line
-  MUST carry to be actionable.
+  SHALL carry to be actionable.
 - The single authority on log level usage in this project. If you are
   unsure whether something is INFO or DEBUG, the answer is here.
 
@@ -42,45 +42,45 @@ how an agent triangulates a correct log line.
   in every `.cpp` and `.h` file is in scope. If it ships, it must meet
   the standard.
 
-### You MUST
+### You SHALL
 
-- Use `Log(EchoVR::LogLevel::level, "format", ...)` as the single entry
+- You **shall** use `Log(EchoVR::LogLevel::level, "format", ...)` as the single entry
   point. No `printf`, no `fprintf`, no `cerr`, no `OutputDebugString`,
   no `std::cout`. (`logging.h:18`, `CPP-MINGW-ADDENDUM-GENERIC.md` "Logging (Structured, Always)").
-- Include a subsystem tag on EVERY log line. The tag identifies which
+- You **shall** include a subsystem tag on EVERY log line. The tag identifies which
   NEVR component produced the line. See the Subsystem Tags table below.
-- Log the outcome. A log line that says "connecting" without a
+- You **shall** log the outcome. A log line that says "connecting" without a
   corresponding "connected" or "connection failed" is incomplete.
-- Log the relevant identifier. Connection index, session ID, XPID
+- You **shall** log the relevant identifier. Connection index, session ID, XPID
   string, server ID, or request ID — there is always one identifier
   that the operator needs to trace the event through the system.
-- Use the correct log level per the Level Guidelines below. When in
+- You **shall** use the correct log level per the Level Guidelines below. When in
   doubt, go one level higher (DEBUG -> INFO, INFO -> WARNING) — a
   too-verbose log can be filtered; a missing log cannot be recovered.
-- Log identity at login. Every login/acquisition path MUST include the
+- You **shall** log identity at login. Every login/acquisition path SHALL include the
   full platform-identity string (XPID) as a structured field (see Rule 2).
 
-### You must NEVER
+### You SHALL NOT
 
-- Log a bare free-text message with no subsystem tag and no identifier.
+- You **shall not** log a bare free-text message with no subsystem tag and no identifier.
   `Log(Info, "Connected")` is not a log line — it is a riddle.
-- Log at INFO level inside a per-frame or per-tick hot path. Use DEBUG
+- You **shall not** log at INFO level inside a per-frame or per-tick hot path. Use DEBUG
   or (better) a rate-limited counter summary.
-- Log a state transition without also logging the state it transitioned
+- You **shall not** log a state transition without also logging the state it transitioned
   FROM and TO. "State changed" without the old and new states is
   useless.
-- Log an error without the error code. `"Failed to connect"` without
+- You **shall not** log an error without the error code. `"Failed to connect"` without
   the `WSAGetLastError` or HRESULT is not actionable.
-- Suppress a hook installation failure silently. Hook failures are
+- You **shall not** suppress a hook installation failure silently. Hook failures are
   WARNING-level events with the target address, expected prologue, and
   actual bytes (see Rule 5).
-- Log raw binary data, hex dumps, or pointer values at INFO level.
-  These are DEBUG-level diagnostics and MUST be gated by a verbosity
+- You **shall not** log raw binary data, hex dumps, or pointer values at INFO level.
+  These are DEBUG-level diagnostics and SHALL be gated by a verbosity
   flag or compile-time guard.
-- Use `Log(Debug, ...)` for anything you expect an operator to need
+- You **shall not** you **shall** use `Log(Debug, ...)` for anything you expect an operator to need
   during a production incident. DEBUG is off by default in production
   builds. If an operator needs it, it is INFO.
-- Leave a `// TODO: add logging` comment without a BUGS.md N-ledger
+- You **shall not** leave a `// TODO: add logging` comment without a BUGS.md N-ledger
   entry. A TODO without a ticket is a wish.
 
 ---
@@ -116,7 +116,7 @@ for review.
 
 | Level   | When to Use                                                                 | Production |
 | ------- | --------------------------------------------------------------------------- | ---------- |
-| ERROR   | Something is broken and the operator MUST act. Crash dump, protobuf parse   | Always on  |
+| ERROR   | Something is broken and the operator SHALL act. Crash dump, protobuf parse   | Always on  |
 |         | failure, module init failure, unrecoverable state.                          |            |
 | WARNING | Degraded but running. Hook install failure, config key missing, login       | Always on  |
 |         | failure (retryable), retry attempt, suppressed NoNetwork transition.        |            |
@@ -171,9 +171,9 @@ Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] websocket connected uri=%s conn_i
 **Where:** This rule applies to every `Log()` call site. Existing
 violations are recorded in BUGS.md N19 (no logging standards exist).
 
-### Rule 2: XPID MUST be logged at login
+### Rule 2: XPID shall be logged at login
 
-The login/acquisition path MUST log the full platform-identity string
+The login/acquisition path SHALL log the full platform-identity string
 being used. The XPID is the external identifier that ties a log session
 to a specific user account — it is the single most important identifier
 in the log.
@@ -192,7 +192,7 @@ Log(EchoVR::LogLevel::Info,
     xpid.c_str(), platformCode, connIdx, loginMsg.size());
 ```
 
-The platform prefix MUST be derived from the actual platform code in the
+The platform prefix SHALL be derived from the actual platform code in the
 login payload, not hardcoded. If the platform is DSC (Discord, code 2),
 the XPID is `DSC-<id>`, not `OVR-ORG-<id>`. See BUGS.md N14 (platform
 prefix hardcoded as OVR_ORG in module ws_bridge).
@@ -205,7 +205,7 @@ BUGS.md N15.
 ### Rule 3: Silence is not success
 
 A subsystem that produces no log lines is indistinguishable from one
-that never ran. Every significant state transition MUST produce a log
+that never ran. Every significant state transition SHALL produce a log
 line at the point of transition.
 
 The following transitions are **mandatory** INFO-level log points:
@@ -227,7 +227,7 @@ The following transitions are **mandatory** INFO-level log points:
   closed.
 
 A component that initializes silently is a component whose failure is
-undetectable. Every `Init()` function MUST log at entry and exit, with
+undetectable. Every `Init()` function SHALL log at entry and exit, with
 the exit log including success/failure and any relevant state.
 
 ### Rule 4: Noise is a defect
@@ -246,7 +246,7 @@ What constitutes noise:
   is noise. See Rule 1.
 - **Game-native lines that NEVR doesn't annotate.** Lines from
   `echovr.exe` that pass through unmodified, without a NEVR subsystem
-  tag or structured wrapper, are noise. The log_filter MUST suppress
+  tag or structured wrapper, are noise. The log_filter SHALL suppress
   these in production server builds.
 - **Per-frame or per-tick diagnostics at INFO level.** These are DEBUG.
   If they appear at INFO level, that is a bug.
@@ -266,7 +266,7 @@ What constitutes noise:
 
 ### Rule 5: Hook failures are WARNINGS, not silent drops
 
-Hook installation failures (wave0, MinHook, prologue validation) MUST
+Hook installation failures (wave0, MinHook, prologue validation) SHALL
 be logged at WARNING level with:
 
 - The target address (hex VA).
@@ -294,7 +294,7 @@ line:
 ```
 
 Failures that are benign (target address changed between binary builds,
-function removed) MUST still be logged; an operator seeing a new failure
+function removed) SHALL still be logged; an operator seeing a new failure
 in the summary cannot distinguish "this was always failing" from "this
 just started failing" without a baseline.
 
@@ -335,7 +335,7 @@ human-readable text and machine-extractable key=value pairs.
 
 ### Rule 7: State transitions log FROM -> TO
 
-Every state machine transition MUST log both the old state and the new
+Every state machine transition SHALL log both the old state and the new
 state. The operator cannot diagnose a stuck state machine from a log
 that only says "state changed."
 
@@ -360,7 +360,7 @@ This applies to:
 
 ### Rule 8: Connection-scoped events carry the connection index
 
-Every log line that relates to a specific WebSocket connection MUST
+Every log line that relates to a specific WebSocket connection SHALL
 include the connection index (`conn=%d`). Connections are identified by
 index in the ws-bridge (0 = config connection, 1+ = game login
 connections). Without the index, an operator cannot correlate the
@@ -377,7 +377,7 @@ Log(EchoVR::LogLevel::Info, "[NEVR.WS] remote opened conn=%d uri=%s",
 
 ### Rule 9: Error paths log the error code
 
-Every ERROR or WARNING log line that reports a failure MUST include the
+Every ERROR or WARNING log line that reports a failure SHALL include the
 error code that caused it. `"Failed to load module"` without the
 `GetLastError()` value is not actionable — the operator cannot
 distinguish "file not found" from "access denied" from "out of memory."
@@ -394,7 +394,7 @@ Log(EchoVR::LogLevel::Error,
 
 ### Rule 10: Config values logged at load time
 
-Every config value that affects runtime behavior MUST be logged at
+Every config value that affects runtime behavior SHALL be logged at
 INFO level when it is loaded. This includes:
 
 - CLI flags (`-server`, `-headless`, `-timestep`, `-telemetry`).
