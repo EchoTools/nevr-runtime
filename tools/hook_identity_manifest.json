@@ -1,0 +1,198 @@
+{
+  "_comment": "Pinned by tools/verify_hook_invariants.py --write-manifest. prologue = first 8 bytes at va in echovr/bin/win10/echovr.exe. A mismatch means the binary changed OR the address was never what its constant claims. Re-derive from ReVault, do not re-pin.",
+  "image_base": "0x140000000",
+  "addresses": [
+    {
+      "va": "0x1400CD510",
+      "name": "GAME_MAIN_WRAPPER",
+      "prologue": "4883ec3848c74424"
+    },
+    {
+      "va": "0x1400D30D0",
+      "name": "EchoVR::AddArgHelpString",
+      "prologue": "48895c2410564883"
+    },
+    {
+      "va": "0x1400D31B0",
+      "name": "EchoVR::AddArgSyntax",
+      "prologue": "48895c241848896c"
+    },
+    {
+      "va": "0x1400DBBC0",
+      "name": "BUGSPLAT_CRASH_HANDLER",
+      "prologue": "48895c2408574881"
+    },
+    {
+      "va": "0x1400EAEF0",
+      "name": "EchoVR::GetProcAddress",
+      "prologue": "4881eca800000048"
+    },
+    {
+      "va": "0x1400EBE70",
+      "name": "EchoVR::WriteLog",
+      "prologue": "48895c241848896c"
+    },
+    {
+      "va": "0x1400FEA00",
+      "name": "EchoVR::BuildCmdLineSyntaxDefinitions",
+      "prologue": "48895c2408574883"
+    },
+    {
+      "va": "0x140110AB0",
+      "name": "INIT_GLOBAL_GAMESPACE",
+      "prologue": "48895c2418555657"
+    },
+    {
+      "va": "0x140116720",
+      "name": "EchoVR::PreprocessCommandLine",
+      "prologue": "405557488d6c24b1"
+    },
+    {
+      "va": "0x140179EB0",
+      "name": "EchoVR::LoadLocalConfig",
+      "prologue": "48895c2408574881"
+    },
+    {
+      "va": "0x1401A89F0",
+      "name": "EchoVR::NetGameScheduleReturnToLobby",
+      "prologue": "40534883ec3033d2"
+    },
+    {
+      "va": "0x1401B8650",
+      "name": "EchoVR::NetGameSwitchState",
+      "prologue": "4055574157488dac"
+    },
+    {
+      "va": "0x1401F60C0",
+      "name": "EchoVR::HttpConnect",
+      "prologue": "48895c240848896c"
+    },
+    {
+      "va": "0x1401F8D90",
+      "name": "EchoVR::udp_recvfrom_sockaddr_storage",
+      "prologue": "48895c2408488974"
+    },
+    {
+      "va": "0x140209920",
+      "name": "WWISE_INIT",
+      "prologue": "48895c2408555657"
+    },
+    {
+      "va": "0x1402CA9E0",
+      "name": "EchoVR::PoolFindItem",
+      "prologue": "40534883ec20488b"
+    },
+    {
+      "va": "0x1404FC170",
+      "name": "EchoVR::udp_protocol_lookup_or_dispatch",
+      "prologue": "48895c2418488974"
+    },
+    {
+      "va": "0x1404FC240",
+      "name": "EchoVR::udp_protocol_get_state",
+      "prologue": "48895c2418555657"
+    },
+    {
+      "va": "0x1404FC300",
+      "name": "EchoVR::udp_protocol_get_peer_id",
+      "prologue": "48895c2418488974"
+    },
+    {
+      "va": "0x1405105F0",
+      "name": "EchoVR::SetWindowTextA_",
+      "prologue": "48895c2408574883"
+    },
+    {
+      "va": "0x140511020",
+      "name": "EchoVR::udp_protocol_handshake_or_intro2",
+      "prologue": "48895c2408488974"
+    },
+    {
+      "va": "0x14059A4A0",
+      "name": "EchoVR::udp_protocol_find_peer_by_addr",
+      "prologue": "4c8b891802000045"
+    },
+    {
+      "va": "0x1405C7730",
+      "name": "EchoVR::udp_protocol_handshake_or_intro3",
+      "prologue": "4889542410574883"
+    },
+    {
+      "va": "0x1405EC330",
+      "name": "EchoVR::udp_protocol_find_peer",
+      "prologue": "4c8b89a806000045"
+    },
+    {
+      "va": "0x1405F0990",
+      "name": "EchoVR::LoadJsonFromFile",
+      "prologue": "48895c2408555657"
+    },
+    {
+      "va": "0x1405FCA60",
+      "name": "EchoVR::CJsonGetFloat",
+      "prologue": "4883ec28f30f5ad2"
+    },
+    {
+      "va": "0x1405FE290",
+      "name": "EchoVR::JsonValueAsString",
+      "prologue": "48895c241048896c"
+    },
+    {
+      "va": "0x140600F90",
+      "name": "EchoVR::ListenProxy",
+      "prologue": "48895c240848896c"
+    },
+    {
+      "va": "0x140621EC0",
+      "name": "EchoVR::UriContainerParse",
+      "prologue": "48895c2420488954"
+    },
+    {
+      "va": "0x140631B40",
+      "name": "EchoVR::udp_protocol_get_context",
+      "prologue": "488b91c801000033"
+    },
+    {
+      "va": "0x140F80ED0",
+      "name": "BroadcasterListen (CBroadcaster::Listen)",
+      "prologue": "48895c241048896c",
+      "note": "patch_addresses.h calls this ENGINE_ENTITY_LOOKUP \u2014 wrong (N83)"
+    },
+    {
+      "va": "0x140F81100",
+      "name": "EchoVR::TcpBroadcasterListen",
+      "prologue": "488b09e908000000"
+    },
+    {
+      "va": "0x140F87AA0",
+      "name": "CBroadcaster::ReceiveLocalEvent",
+      "prologue": "40535741564881ec",
+      "note": "patch_addresses.h calls this ENGINE_ENTITY_PROP_DISPATCH \u2014 wrong (N83)"
+    },
+    {
+      "va": "0x140F89AF0",
+      "name": "EchoVR::BroadcasterSend",
+      "prologue": "488bc4488958084c"
+    },
+    {
+      "va": "0x140F8DF20",
+      "name": "EchoVR::BroadcasterUnlisten",
+      "prologue": "48895c2420565741"
+    },
+    {
+      "va": "0x140FA5610",
+      "name": "WWISE_RENDERAUDIO",
+      "prologue": "4883ec28b101e895"
+    },
+    {
+      "va": "0x141071000",
+      "name": "EchoVR::CleanupPings",
+      "prologue": "4053574883ec4848"
+    },
+    {
+      "va": "0x141071B90",
+      "name": "EchoVR::udp_protocol_handshake_or_intro1",
+      "prologue": "48895c2420555641"
+    }
+  ]
+}

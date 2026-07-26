@@ -430,6 +430,12 @@ verify:
         echo "verify: FAIL — N81 bare [NEVR] log tag found; use a subsystem tag from the LOGGING.md table." >&2
         exit 1
     fi
+    # --- Tier-0 hook invariants (N83/N84) ------------------------------------
+    # Static: no Wine, no game process, no execution. Catches the failure that
+    # produced the whole broadcaster thread — an address given a name nobody
+    # re-derived, then reasoned about by that name forever after.
+    # Known bugs warn (and stay visible); anything NEW is a hard failure.
+    python3 tools/verify_hook_invariants.py
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)
