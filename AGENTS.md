@@ -20,10 +20,19 @@ their specification sense and carry obligation, not description.
 | **SHOULD** | A strong recommendation. Departing from it is permitted and **shall** be stated, with the reason, in the change that departs. |
 | **MAY** | Genuinely optional. No justification is owed either way. |
 
-"Must" and "never" are avoided deliberately. *Must* describes a property of the
-world — "the build must succeed" — and *never* describes a frequency. Neither
-places a duty on anyone. **Shall** and **shall not** bind a party who will act,
-which is what every rule in these documents is doing.
+"Must" and "never" are avoided deliberately. **Must is an assertion; shall is
+imperative.**
+
+That is a difference in grammatical mood, not tone. An assertion is truth-apt —
+"the build must succeed" is a claim you can evaluate, and evaluating it invites
+the reader to decide whether it holds *in their case*. An imperative is not
+truth-apt. "You shall falsify the check" cannot be true or false; it can only be
+complied with or not. Instructions to an agent that acts are imperatives, and
+writing them as assertions is what lets a rule be read as an opinion about the
+world rather than a duty.
+
+"Never" has the same defect: it is a claim about frequency, not a prohibition on
+anyone.
 
 **Every SHALL is mechanically enforced where it can be.** A SHALL that could be a
 check in `just verify` and is not is a defect in this documentation, not a
@@ -109,9 +118,28 @@ src/gamepatches/   BugSplat64.dll — hooks, CLI, mode patches, crash recovery,
                    config, module/plugin loading, in-process gameserver
 src/modules/       runtime-loaded modules: platform-compat, token-auth, ws-bridge
 src/common/        libcommon.a — logging, globals, symbols, hooking
+src/gameserver/    DEAD CODE. The compiled path is src/gamepatches/gameserver/.
+                   `just verify` fails if it is re-added to the build (N34)
 src/legacy/        FROZEN v1 — shall not be modified
+src/pnsrad/        reconstructed social layer (friends, party, VoIP)
+src/nevr_api/      generated protobuf (from BSR — see `just proto`)
+src/launcher/      game launcher — disabled, see CLAUDE.md
+src/standalone/    Android/Quest build — stub
+src/quest/         Quest crash-reporter shim (own NDK sub-project)
+src/NRadEngine/    engine reconstruction headers
+src/libovr-stub/   Oculus runtime stub
+
 plugins/           optional plugins loaded from plugins/ next to the game binary
 tools/             build/verify tooling (hook invariants, symbol corpus)
+tests/             Go system/plugin suites (excised from `just verify`)
+extern/            submodules — minhook, protobuf
+gen/               generated protobuf output — shall not be hand-edited
+cmake/             toolchain and helper modules
+certs/             code-signing CA hierarchy (`just generate-certs`)
+extras/            unbuilt reference material — not part of any target
+echovr/            local game install (gitignored)
+modules/           hardening overlay hook (gitignored)
+
 docs/
   standards/       binding standards — logging, verification
   process/         governance — driver charter
@@ -135,10 +163,9 @@ ISO date prefix (`2026-07-26-thing.md`); durable ones do not.
   failing, restored.
 - The ledger entry **shall** state its evidence rank
   (`docs/standards/verification.md`).
-- Commits: author `agents@sprock.io`, `--no-gpg-sign`, conventional prefix, one
-  logical change each. Verify with `git log --format='%h %G? %an %ae' -1`.
-- No worktrees left behind. Scratch **shall** live under
-  `/var/tmp/work-nevr-runtime/`, and **shall not** live in the repo or in `/tmp`
-  (RAM-backed on this host).
+- Commit identity and scratch location follow `CLAUDE.md` §Onboarding
+  conventions — that is the authority; this file **shall not** restate the rules,
+  because three copies drifted apart once already.
+- No worktrees left behind.
 - Anything unverified **shall** be named as unverified, in the same breath as
   what is.

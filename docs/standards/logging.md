@@ -5,7 +5,7 @@ _Authored by @agents._
 **Required reading** for ANY agent writing, reviewing, or modifying code
 that produces log output in the nevr-runtime repository. Read this BEFORE
 adding a `Log()` call, BEFORE reviewing a PR that touches logging, and
-BEFORE tuning the log_filter plugin.
+BEFORE tuning the built-in log filter.
 
 ---
 
@@ -46,7 +46,7 @@ how an agent triangulates a correct log line.
 
 - You **shall** use `Log(EchoVR::LogLevel::level, "format", ...)` as the single entry
   point. No `printf`, no `fprintf`, no `cerr`, no `OutputDebugString`,
-  no `std::cout`. (`logging.h:18`, `CPP-MINGW-ADDENDUM-GENERIC.md` "Logging (Structured, Always)").
+  no `std::cout`. (`logging.h:31`, `CPP-MINGW-ADDENDUM-GENERIC.md` "Logging (Structured, Always)").
 - You **shall** include a subsystem tag on EVERY log line. The tag identifies which
   NEVR component produced the line. See the Subsystem Tags table below.
 - You **shall** log the outcome. A log line that says "connecting" without a
@@ -104,6 +104,15 @@ subsystems that NEVR annotates.
 | `[NEVR.XPID]`         | Platform-identity patches (DSC provider)      |
 | `[NEVR.CONFIG]`       | Config loading, service redirects             |
 | `[NEVR.CRASH]`        | Crash recovery, dump, longjmp                 |
+| `[NEVR.AUTH]`         | Token acquisition, device-code flow, refresh  |
+| `[NEVR.CDN]`          | Asset CDN download and override              |
+| `[NEVR.HTTP]`         | WinHTTP/curl bridge                          |
+| `[NEVR.UPNP]`         | UPnP port mapping                            |
+| `[NEVR.RESOURCE]`     | Resource override / embedded asset injection |
+| `[NEVR.LOGFILTER]`    | The log filter's own health and rate summary |
+| `[NEVR.DLLHOOK]`      | LoadLibrary interception                     |
+| `[NEVR.PROFILE]`      | Server profile / memory snapshot             |
+| `[NEVR.FATAL]`        | Fatal-error path (ServerFatal)               |
 | `[server_timing]`     | Server tick-rate / timing patches             |
 
 **Rule:** If you add a new component, add its tag to this table. If you
@@ -233,7 +242,7 @@ the exit log including success/failure and any relevant state.
 ### Rule 4: Noise is a defect
 
 echovr-native log lines are "objectively 97% worthless" (owner). The
-log_filter plugin exists to suppress them (see BUGS.md N18). If noise is
+built-in log filter exists to suppress them (see BUGS.md N18). If noise is
 reaching the production log, the filter is broken and that is a defect.
 
 What constitutes noise:
@@ -254,7 +263,8 @@ What constitutes noise:
   are DEBUG, gated by a verbosity flag.
 
 **Filter audit checklist (N18 fix direction):**
-1. Verify the log_filter plugin loads in the production build
+1. Verify the built-in log filter is capturing game lines (its health line
+   reports `game_lines=`; zero means another module has taken the hook — N89)
    configuration.
 2. Capture a representative server log from a live session.
 3. Count lines per subsystem tag; any tag with >50% of total lines is a
@@ -327,7 +337,7 @@ OutputDebugStringA("got here");
 std::cerr << "failed" << std::endl;
 ```
 
-The `FormatJsonLogEntry` helper exists in `logging.cpp:48` but is not
+The `FormatJsonLogEntry` helper exists in `logging.cpp:70` but is not
 yet wired into the `Log()` output path. When structured JSON logging is
 implemented, every `Log()` call will automatically emit JSON; the format
 string conventions in this document are designed to be parseable as both
@@ -478,7 +488,10 @@ failing any of these checks is rejected until the violation is fixed.
 ## References
 
 - **BUGS.md N15** — Login XPID not logged at injection time.
-- **BUGS.md N18** — log_filter plugin not suppressing noise effectively.
+- **BUGS.md N18** — log filter not suppressing noise effectively.
+- **BUGS.md N89** — the `log_filter.dll` *plugin* is superseded by the built-in
+  filter and is refused by the loader. `src/gamepatches/builtin_log_filter.cpp`
+  is the shipping path; do not reintroduce the plugin.
 - **BUGS.md N19** — No logging standards exist (this document).
 - **BUGS.md N17** — Startup hook errors not systematically tracked.
 - **BUGS.md N14** — Platform prefix hardcoded as OVR_ORG (affects XPID correctness).

@@ -1,167 +1,149 @@
 # NEVR Runtime
 
-## Overview
-
-Runtime patches for Echo VR (echovr.exe) that enable it to connect to [echovrce](https://github.com/echotools) community game services. Both the game client and dedicated game server use these DLLs to communicate with the Nakama-based backend.
+Runtime patches for Echo VR (`echovr.exe`) that let it connect to
+[echovrce](https://github.com/echotools) community game services. Both the game
+client and the dedicated server load these DLLs to talk to the Nakama-based
+backend.
 
 Part of the **nEVR** project — keeping Echo VR alive.
 
-## Components
+> Working in this repo as an agent? Start at [`AGENTS.md`](AGENTS.md).
 
-### Core DLLs
+## What gets built
 
-- **gamepatches** → `dbgcore.dll` — Runtime game modifications (CLI flags, headless/server modes, Detours-based hooks). Used by both client and dedicated server.
-- **gameserver** → `pnsradgameserver.dll` — Game server networking (session management, events, external service communication). Used by the dedicated server only.
-- **telemetryagent** — Game state monitoring and telemetry streaming (in `extras/`, needs protobuf-lite refactor)
+### The main DLL
+
+**`src/gamepatches/` → `BugSplat64.dll`**, deployed under that same name.
+
+The game statically imports `BugSplat64.dll` (the original crash reporter), so
+replacing it gives the earliest possible hook point — it loads before `WinMain`.
+It carries the boot hooks, CLI flags, headless/server mode patches, crash
+recovery, config and service redirection, the module and plugin loaders, the
+built-in log filter, and the in-process game server
+(`src/gamepatches/gameserver/`).
+
+Hooking is [MinHook](https://github.com/TsudaKageyu/minhook)-based.
+
+### Runtime-loaded modules
+
+Built from `src/modules/`, loaded from `modules/` next to the game binary before
+plugins. Required, not optional — they use `NvrModuleContext`, not the plugin
+interface.
+
+| Module | Output | Purpose |
+| ------ | ------ | ------- |
+| `platform-compat` | `platform_compat.dll` | Schannel TLS modernisation, WinHTTP→libcurl bridge, Wine `_temp` fix |
+| `token-auth` | `token_auth.dll` | Device-code auth, token cache |
+| `ws-bridge` | `ws_bridge.dll` | WebSocket TLS proxy and login injection |
+
+The bridge is why the game never negotiates TLS for its WebSocket traffic: it
+speaks plaintext to a local proxy, and the proxy terminates TLS outbound.
 
 ### Plugins
 
-Optional DLLs loaded at runtime from a `plugins/` subdirectory next to the game binary:
+Optional, discovered from a `plugins/` directory next to the game binary and
+loaded via the `NvrPluginInterface` lifecycle.
 
-- **log-filter** → `log_filter.dll` — Structured log filtering, suppression, and file rotation
-- **server-timing** → `server_timing.dll` — Wine CPU optimization for headless servers
-- **broadcaster-bridge** → `broadcaster_bridge.dll` — Network message mirroring/injection over UDP
-- **audio-intercom** → `audio_intercom.dll` — VoIP audio streaming via UDP
-- **game-rules-override** → `game_rules_override.dll` — Balance config overrides (health, stun, physics)
-- **session-unlocker** → `session_unlocker.dll` — Unlock /session HTTP API in all game modes
+| Plugin | Output | Purpose |
+| ------ | ------ | ------- |
+| `log-filter` | `log_filter.dll` | Superseded by the built-in filter; the loader refuses it |
+| `anim-debugger` | `anim_debugger.dll` | Animation-tree RE instrumentation (diagnostic) |
+| `example` | `example.dll` | Reference implementation for new plugin authors |
 
-### Legacy Components
+Gameplay and tooling plugins live in the separate `nevr-runtime-plugins`
+repository.
 
-- **gamepatcheslegacy** — Frozen v1 implementation (self-contained with local common/)
-- **gameserverlegacy** — Frozen v1 implementation (self-contained with local common/)
+### Other targets
 
-### Shared Code
+- `src/pnsrad/` → `pnsrad.dll` — reconstructed social layer (friends, party, VoIP)
+- `src/nevr_api/` — protobuf, generated into `gen/cpp/` (`just proto`)
+- `src/common/` → `libcommon.a` — logging, globals, base64, symbol helpers
+- `src/launcher/` → thin `CreateProcess` wrapper spawning `echovr.exe -server -noconsole`
+- `src/libovr-stub/` → `LibOVRPlatform64_1.dll` — Oculus platform stub
+- `src/legacy/` — **frozen** v1 implementations, self-contained; do not modify
+- `src/gameserver/` — **dead code.** The compiled copy is
+  `src/gamepatches/gameserver/`. `just verify` fails if this is re-added to the
+  build.
 
-- **common** — Shared utilities (logging, globals, base64, symbol resolution)
-- **protobufnevr** — Protocol buffer code generation from extern/nevr-proto submodule
+## Building
 
-## Directory Structure
-
-```sh
-nevr-runtime/
-├── src/
-│   ├── gamepatches/         # Game runtime patches DLL (PC)
-│   ├── gameserver/          # Game server networking DLL (PC)
-│   ├── server/              # Standalone server executable
-│   ├── legacy/              # Frozen v1 implementations
-│   ├── common/              # Shared C++ utilities
-│   └── protobufnevr/        # Protocol buffer definitions
-├── plugins/
-│   ├── common/              # Shared plugin headers (address registry, config utils)
-│   ├── log-filter/          # Log filtering and rotation
-│   ├── server-timing/       # Wine CPU optimization
-│   ├── broadcaster-bridge/  # Network message mirroring
-│   ├── audio-intercom/      # VoIP audio streaming
-│   ├── game-rules-override/ # Balance config overrides
-│   └── session-unlocker/    # /session API unlock
-├── extern/                  # External dependencies (minhook, nevr-proto)
-├── cmake/                   # Build configuration helpers
-├── tests/                   # Go-based system tests
-├── docs/                    # Documentation
-├── CMakeLists.txt           # Top-level CMake configuration
-├── CMakePresets.json        # CMake build presets
-├── justfile                 # Build recipes
-└── vcpkg.json               # Dependency manifest
-```
-
-## Building the Project
-
-### Prerequisites
-
-- CMake 3.20 or higher [Download](https://cmake.org/download/)
-- One of:
-  - **MinGW** (cross-compile from Linux) - Recommended
-  - **MSVC via Wine** (Linux with Windows SDK mounted)
-  - **Visual Studio 2022** (native Windows)
-
-### MinGW Build (Linux - Recommended)
+Requires CMake 3.20+, Ninja, and MinGW (`x86_64-w64-mingw32-g++`) to
+cross-compile from Linux. Dependencies come from the vcpkg manifest.
 
 ```sh
-just configure  # Configure with MinGW toolchain
-just build      # Build all components (core DLLs + plugins)
-just dist       # Build + create distribution packages
-just dist-lite  # Stripped binaries without debug symbols
+just                # list recipes
+just build          # build everything
+just verify         # THE GATE — build + tests under Wine + invariant sensors
+just dist           # distribution packages
+just dist-lite      # stripped, no debug symbols
 ```
 
-### Visual Studio (Windows)
+Presets: `mingw-debug`, `mingw-release` (Linux default), `debug`, `release`
+(Windows). Output lands in `build/<preset>/bin/`.
 
-```sh
-just preset=release configure
-just preset=release build
+`just verify` is the only gate that means anything — `just build` filters its own
+output and always exits 0.
+
+## Deployment
+
+From `build/mingw-release/bin/`:
+
+| Artifact | Destination |
+| -------- | ----------- |
+| `BugSplat64.dll` | game directory (replaces the crash reporter) |
+| `modules/*.dll` | `modules/` next to the game binary |
+| `plugins/*.dll` | `plugins/` next to the game binary |
+
+## Repository layout
+
+```
+src/gamepatches/   BugSplat64.dll — hooks, modes, crash recovery, gameserver
+src/modules/       runtime-loaded modules (platform-compat, token-auth, ws-bridge)
+src/common/        libcommon.a
+src/pnsrad/        reconstructed social layer
+src/nevr_api/      protobuf target
+src/legacy/        FROZEN v1
+src/gameserver/    DEAD — see above
+plugins/           optional plugins
+tools/             build and verify tooling
+tests/             Go system suites (not part of `just verify`)
+extern/            submodules: minhook, breakpad, lss
+gen/               generated protobuf — do not hand-edit
+docs/              see docs/README.md
 ```
 
-## Usage
+## Documentation
 
-After building, DLL artifacts are in `build/mingw-release/bin/` (MinGW) or `build/release/bin/` (MSVC):
-
-- `gamepatches.dll` → Deploy as `dbgcore.dll` to game directory
-- `gameserver.dll` → Deploy as `pnsradgameserver.dll` to game directory
-- Plugin DLLs → Deploy to `plugins/` subdirectory next to game binary
-
-## Architecture & Data Flow
-
-- **GamePatches** and **GameServer** are loaded into the game process (DLLs)
-- **GameServer** communicates with the game via in-process hooks and with external services (ServerDB, WebSocket, HTTP)
-- **Plugins** are discovered and loaded by GamePatches at runtime via the `NvrPluginInterface` lifecycle
-- All protocol types are defined in `extern/nevr-proto` submodule
-
-## Related Projects
-
-| Project | Description |
-|---------|-------------|
-| **nevr-runtime** (this repo) | Runtime patches for echovr.exe (PC + Quest) |
-| **nevr-server** | Custom game server (Rust) |
-| **nakama** | echovrce game service backend |
-
-## Development
-
-### Local Configuration
-
-Add local customizations to `cmake/local.cmake` (auto-included if exists). This file can override settings or add custom install rules.
-
-Example:
-```cmake
-# Deploy DLLs to game directory after build
-set(GAME_DIR "C:/Program Files/Echo VR")
-add_custom_command(TARGET gamepatches POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:gamepatches> "${GAME_DIR}/dbgcore.dll"
-)
-```
+| | |
+| - | - |
+| [`AGENTS.md`](AGENTS.md) | Entry point for agents — what binds, and the gate |
+| [`CLAUDE.md`](CLAUDE.md) | Project conventions, build/test commands, guardrails |
+| [`BUGS.md`](BUGS.md) | Work ledger (`N`-prefix) + original-binary audit |
+| [`docs/`](docs/) | Standards, guides, reference, design, audits |
 
 ## Dependencies
 
-Dependencies are managed via vcpkg (see `vcpkg.json`):
-- **curl** - HTTP client for external API communication
-- **jsoncpp** - JSON parsing
-- **minhook** - Function hooking (Windows API)
-- **opus** - Audio codec
-- **protobuf** - Protocol buffer serialization
+vcpkg manifest (`vcpkg.json`): curl, gtest, ixwebsocket, nlohmann-json,
+miniupnpc, minhook, opus, protobuf.
 
-External submodules (in `extern/`):
-- **nevr-proto** - Shared protocol definitions and game structures
+Submodules in `extern/`: `minhook`, `breakpad`, `lss`.
 
-## Project Conventions
+## Related projects
 
-- **Logging**: Use `Log(level, format, ...)` from `common/logging.h`
-- **Game flags**: CLI/mode flags (isHeadless, isServer) are in `gamepatches/patches.cpp`
-- **Protocol messages**: Symbol IDs defined in `gameserver/messages.h`
-- **Protobuf**: All types generated from `extern/nevr-proto` - never edit generated files
+| Project | Description |
+| ------- | ----------- |
+| **nevr-runtime** (this repo) | Runtime patches for `echovr.exe` |
+| **nevr-runtime-plugins** | Gameplay and tooling plugins |
+| **nakama** | echovrce game service backend |
+| **revault** | Reverse-engineering data warehouse for the game binaries |
 
-## Distribution
+## Local configuration
 
-Create distribution packages:
+`cmake/local.cmake` is auto-included when present (the include is currently
+commented out in the root `CMakeLists.txt`). Use it for local install rules:
 
-```sh
-just dist       # Full package with debug symbols
-just dist-lite  # Stripped binaries without debug symbols
+```cmake
+set(GAME_DIR "/path/to/echovr/bin/win10")
+add_custom_command(TARGET gamepatches POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:gamepatches> "${GAME_DIR}/BugSplat64.dll")
 ```
-
-Outputs:
-- `dist/nevr-runtime-v{VERSION}.tar.zst`
-- `dist/nevr-runtime-v{VERSION}.zip`
-- `dist/nevr-runtime-v{VERSION}-lite.tar.zst`
-- `dist/nevr-runtime-v{VERSION}-lite.zip`
-
-## License
-
-See LICENSE file for details.

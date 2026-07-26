@@ -39,13 +39,13 @@ reasoning alone. Everything below is measured; where it isn't, it says so.
 
 ## The finding in one paragraph
 
-`src/common/echovr_functions.cpp:87-88` assigns two live function pointers to
-RVAs `0xF87AA0` and `0xF80ED0`. `src/gamepatches/mode_patches.cpp:721-728`
+`src/common/echovr_functions.cpp:102` assigns two live function pointers to
+RVAs `0xF87AA0` and `0xF80ED0`. `src/gamepatches/mode_patches.cpp:343`
 installs MinHook detours on those same two RVAs, under the names
 `ENGINE_ENTITY_PROP_DISPATCH` and `ENGINE_ENTITY_LOOKUP`
 (`patch_addresses.h:297,303`). MinHook writes a `JMP` at the entry, so **our own
 calls re-enter our own hooks.** `EngineEntityPropDispatchHook` does
-`if (g_isServer) return;` — so on a dedicated server, all 15
+`if (g_isServer) return;` — so on a dedicated server, all 13
 `EchoVR::BroadcasterReceiveLocalEvent` call sites in
 `src/gamepatches/gameserver/gameserver.cpp` do nothing.
 
@@ -86,7 +86,8 @@ written for may still exist. That is the open question.
 **Does the `+0x5e0` guard ever actually trip on a real server?**
 
 Not statically determinable — I tried. It needs the line
-`[NEVR.PATCH] Entity lookup null-guard triggered` (`mode_patches.cpp:357`,
+`[NEVR.PATCH] Entity lookup null-guard triggered` (Listen) or
+`[NEVR.PATCH] broadcaster dispatch guard tripped` (ReceiveLocalEvent) (`mode_patches.cpp:393`,
 first 3 occurrences only) to appear, or not appear, in a real run's log.
 
 - If it **never trips**: the guard is dead weight, the AV it was written for no
@@ -135,7 +136,7 @@ that produced this bug.
 - `broadcaster_bridge.dll` also hooks `0x140f87aa0` (N84) and is deployed. If you
   change hook ordering, HookGuard will now tell you at ERROR level.
 - Both `EngineEntityLookupHook` and `EngineEntityPropDispatchHook` are installed
-  unconditionally from `initialize.cpp:324`, before CLI parsing — `g_isServer` is
+  unconditionally from `initialize.cpp:329`, before CLI parsing — `g_isServer` is
   read at call time, not install time.
 
 ## Unrelated but outstanding

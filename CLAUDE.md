@@ -65,7 +65,7 @@ The game has a ~15-20 second splash-screen delay at startup before any NEVR code
 | Component          | Output DLL       | Deploy As              | Purpose                                                                  |
 | ------------------ | ---------------- | ---------------------- | ------------------------------------------------------------------------ |
 | `src/gamepatches/` | `BugSplat64.dll` | `BugSplat64.dll`       | Runtime hooks, CLI flags, game modifications                             |
-| `src/gameserver/`  | `gameserver.dll` | `pnsradgameserver.dll` | Multiplayer networking, session management                               |
+| `src/gamepatches/gameserver/` | *(in `BugSplat64.dll`)* | *(in-process)* | Multiplayer networking, session management. `src/gameserver/` is DEAD — see below |
 | `src/pnsrad/`      | `pnsrad.dll`     | `pnsrad.dll`           | Reconstructed social/networking layer (friends, party, VoIP, activities) |
 
 GamePatches replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. Several features previously implemented as plugins are now built into gamepatches: server-timing, token-auth, pnsrad-enabler.
@@ -79,16 +79,33 @@ Optional DLLs loaded by gamepatches at runtime from a `plugins/` subdirectory ne
 | Plugin               | Output DLL               | Purpose                                              |
 | -------------------- | ------------------------ | ---------------------------------------------------- |
 | `log-filter`         | `log_filter.dll`         | Structured log filtering, suppression, file rotation |
-| `broadcaster-bridge` | `broadcaster_bridge.dll` | Network message mirroring/injection over UDP         |
+| `anim-debugger`      | `anim_debugger.dll`      | Animation-tree RE instrumentation (diagnostic only)  |
+| `example`            | `example.dll`            | Reference implementation for new plugin authors      |
 
-Other plugins (audio-intercom, game-rules-override, session-unlocker, combat-mod, combat-2d) have moved to the `nevr-runtime-plugins` repository or are disabled.
+`broadcaster-bridge` moved to `nevr-runtime-plugins` on 2026-07-26 — this repo is
+public and it is a broadcaster injection tool. `log_filter.dll` is superseded by
+the built-in filter and the loader refuses to load it (N89). Other plugins
+(audio-intercom, game-rules-override, session-unlocker, combat-mod, combat-2d)
+live in `nevr-runtime-plugins`.
 
 Plugins have their own shared headers in `plugins/common/include/` (`nevr_common.h`, `address_registry.h`, `yaml_config.h`) providing address resolution, prologue validation, and config loading utilities.
+
+### Runtime-loaded modules
+
+Built from `src/modules/`, loaded by `module_loader` from `modules/` next to the
+game binary, before plugins. These are **not** plugins — they use
+`NvrModuleContext` and are required, not optional.
+
+| Module | Output | Purpose |
+| ------ | ------ | ------- |
+| `src/modules/platform-compat/` | `platform_compat.dll` | Schannel TLS modernisation, WinHTTP→curl bridge, Wine `_temp` fix |
+| `src/modules/token-auth/` | `token_auth.dll` | Device-code auth, token cache, `TokenAuth_GetToken`/`GetDiscordId` |
+| `src/modules/ws-bridge/` | `ws_bridge.dll` | WebSocket TLS proxy and login injection (the **shipping** bridge — see N92) |
 
 ### Shared Libraries (static)
 
 - **`src/common/`** → `libcommon.a` — Logging, globals, base64, symbol helpers
-- **`src/protobufnevr/`** → `libproto_nevr.a` — Pre-generated protobuf from `extern/nevr-proto/gen/cpp/`
+- **`src/nevr_api/`** → protobuf target, generated into `gen/cpp/` (see `just proto`)
 
 ### Key Source Files
 
@@ -99,15 +116,20 @@ Plugins have their own shared headers in `plugins/common/include/` (`nevr_common
 - `src/gamepatches/mode_patches.cpp` — Server/headless/client mode patches
 - `src/gamepatches/plugin_loader.h` — Plugin discovery and lifecycle management
 - `src/gamepatches/patch_addresses.h` — Virtual addresses for game function hooks
-- `src/gameserver/gameserver.cpp` — IServerLib vtable implementation
-- `src/gameserver/messages.h` — Protocol message symbol IDs (uint64)
+- `src/gamepatches/gameserver/gameserver.cpp` — IServerLib vtable implementation
+  (**not** `src/gameserver/` — that copy is dead code and `just verify` fails if it
+  is re-added to the build, N34)
+- `src/gamepatches/gameserver/messages.h` — Protocol message symbol IDs (uint64)
 - `src/common/globals.h` — Cross-DLL globals (`isServer`, `isHeadless`, `exitOnError`, etc.)
 - `src/common/logging.h` — `Log(level, format, ...)` and `FatalError()`
 - `plugins/common/include/address_registry.h` — Verified virtual addresses for all plugin hooks
 
 ### Other Components
 
-- **`src/launcher/`** — Game launcher with PE conversion (disabled — Wine can't load game DLL at required base address)
+- **`src/launcher/`** — thin `CreateProcess` wrapper that spawns
+  `echovr.exe -server -noconsole` (built; `CMakeLists.txt:200`, `just launcher`).
+  The older PE-conversion launcher is gone — Wine could not load the game DLL at
+  the required base address.
 - **`src/standalone/`** — Future Android/Quest standalone build (stub — awaiting echovr-reconstruction)
 - **`src/legacy/`** — Frozen v1 implementations (self-contained, do not modify)
 
@@ -182,7 +204,9 @@ This applies regardless of context — even if the task seems to require it, eve
 ## Dependencies
 
 - **vcpkg** — curl, gtest, ixwebsocket, nlohmann-json, miniupnpc, minhook, opus, protobuf
-- **Submodules** (`extern/`) — minhook, protobuf (the `evr-test-harness` symlink is excised — see below)
+- **Submodules** (`extern/`) — `minhook`, `breakpad`, `lss` (per `.gitmodules`).
+  `extern/protobuf` is a plain directory, not a submodule. The `evr-test-harness`
+  symlink is excised — see below.
 - **Toolchain** — CMake 3.20+, Ninja, MinGW (Linux) or MSVC (Windows)
 
 ## Onboarding conventions (all-the-way-down)
@@ -202,10 +226,14 @@ RULINGS.md 2026-07-20 "nevr onboarding"). Process machinery is governed by
   is a distinct *section+namespace* within `BUGS.md`. A process-layer decision, no
   citable owner basis at the process layer — new decision per RULINGS.md 2026-07-19
   "Process ownership".)
-- **Commit identity.** Author `agents@sprock.io`, unsigned (`--no-gpg-sign`), with
-  two `Co-authored-by` trailers (`Metis Sprock <m@sprock.io>`,
-  `Andrew Bates <a@sprock.io>`). Verify after each commit:
-  `git log --format='%h %G? %an %ae' -1`. Never commit as the owner's name/email.
+- **Commit identity.** Author `agents@sprock.io`, unsigned (`--no-gpg-sign`),
+  with a single `Co-authored-by: Andrew Bates <a@sprock.io>` trailer, a
+  conventional prefix, and one logical change per commit. You **shall** verify
+  after each commit: `git log --format='%h %G? %an %ae' -1`. You **shall not**
+  commit as the owner's name/email.
+  (Updated 2026-07-26 by owner instruction: the `Metis Sprock <m@sprock.io>`
+  trailer was dropped — she was not involved in this work. Commits before
+  `624f795` carry it and are left as they are.)
   (Basis: RULINGS.md 2026-07-20 "Commit identity (nevr)".)
 - **Mandatory pre-read gate.** Before any C++/build work, read
   `~/src/metis-core/CPP-MINGW-ADDENDUM-GENERIC.md` in full — its Hard-Stops bind
@@ -213,7 +241,9 @@ RULINGS.md 2026-07-20 "nevr onboarding"). Process machinery is governed by
 - **Scratch dir.** All agent scratch/staging/evidence files live under
   `/var/tmp/work-nevr-runtime/`, never `/tmp` (RAM-backed on this host) and never
   in the repo. (Basis: RULINGS.md 2026-07-20 "Scratch dir (nevr)".)
-- **Verify entry point.** `just verify` is the single closed-loop gate
-  (`just build` + hardened `test-auth-unit`, fail-close). The Go integration suites
+- **Verify entry point.** `just verify` is the single closed-loop gate:
+  `just build`, then a second real `cmake --build` (because `just build` greps its
+  own output and always exits 0), then `test-auth-unit` under Wine, then ~35
+  source-invariant sensors, then `tools/verify_hook_invariants.py`. Fail-close. The Go integration suites
   are excised (RULINGS.md 2026-07-20 "Test harness excised") and are not part of
   `just verify`.
