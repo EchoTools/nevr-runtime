@@ -22,6 +22,11 @@ void InstallCrashFilterInstrumentation();
 /// from a handler (it takes the loader lock).
 void RefreshModuleCache();
 
+/// N62: resolve WsBridge_Shutdown once, at init, so the signal-delivered shutdown
+/// path never calls GetModuleHandleA/GetProcAddress (both take the loader lock).
+/// Must run AFTER modules load.
+void ResolveShutdownDependencies();
+
 /// N69: reserve stack below the guard page so the stack-overflow handler has room
 /// to run. Per-thread and idempotent (thread_local one-shot) — call it from any
 /// hook that runs on a thread which could fault. Cheap after the first call on a

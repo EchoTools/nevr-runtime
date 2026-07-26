@@ -23,6 +23,12 @@
 extern jmp_buf g_gameLoopJmpBuf;
 extern volatile bool g_gameLoopJmpBufValid;
 
+// N62: set for the duration of a signal-context shutdown. `volatile sig_atomic_t`
+// is the only type the C standard permits a handler to touch. Read by the
+// shutdown path to choose an async-signal-safe reporting transport.
+static volatile sig_atomic_t g_inSignalContext = 0;
+
+
 /// <summary>
 /// Crash Reporter Suppression (CreateProcessA/W + ExitProcess + TerminateProcess + VEH)
 ///
@@ -769,6 +775,7 @@ static void PosixSignalHandler(int sig) {
   } else {
     write(STDERR_FILENO, "[NEVR.PATCH] signal received — direct shutdown\n", 45);
   }
+  g_inSignalContext = 1;  // N62: switches reporting to the async-signal-safe path
   PerformGracefulShutdown(0);
   // Unreachable — PerformGracefulShutdown calls ForceFatalExit which terminates.
 }
@@ -872,6 +879,42 @@ void InstallFatalErrorHandler() {
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Fatal error handler installed — server will exit on fatal errors");
 }
 
+// N62: WsBridge_Shutdown resolved ONCE at init. The signal path must never call
+// GetModuleHandleA/GetProcAddress — both serialise on the loader lock, and a
+// signal delivered while any thread holds it would deadlock the shutdown.
+typedef void (*WsBridgeShutdownFn)(void);
+static WsBridgeShutdownFn g_wsBridgeShutdown = nullptr;
+
+void ResolveShutdownDependencies() {
+  HMODULE hWsBridge = GetModuleHandleA("ws_bridge.dll");
+  if (hWsBridge != nullptr) {
+    g_wsBridgeShutdown =
+        reinterpret_cast<WsBridgeShutdownFn>(GetProcAddress(hWsBridge, "WsBridge_Shutdown"));
+  }
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.PATCH] shutdown deps resolved ws_bridge=%s WsBridge_Shutdown=%s "
+      "(pre-resolved so the signal path takes no loader lock, N62)",
+      hWsBridge ? "loaded" : "absent", g_wsBridgeShutdown ? "found" : "null");
+}
+
+// N62: report from the shutdown path using a transport that is safe for the
+// context we are actually in. Log() reaches vfprintf, which takes the stderr
+// FILE lock — a signal delivered while the interrupted thread held that lock
+// deadlocks the handler on it. VehPrintf uses only a fixed stack buffer plus
+// WriteFile, so it is safe from a signal handler.
+static void ShutdownReport(const char* fmt, ...) {
+  char buf[512];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+  if (g_inSignalContext) {
+    VehPrintf("%s", buf);
+  } else {
+    Log(EchoVR::LogLevel::Info, "%s", buf);
+  }
+}
+
 void PerformGracefulShutdown(unsigned int exitCode) {
   // Prevent re-entry: if the POSIX signal handler fires while another thread
   // is already running this sequence, only the first call executes. The
@@ -887,27 +930,23 @@ void PerformGracefulShutdown(unsigned int exitCode) {
     ForceFatalExit(1);
   }
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Graceful shutdown initiated (code=%u)", exitCode);
+  ShutdownReport("[NEVR.PATCH] Graceful shutdown initiated (code=%u signal_ctx=%d)",
+                 exitCode, static_cast<int>(g_inSignalContext));
 
   // 1. Stop the ws_bridge listener — this is the critical step that releases
   //    the socket FD, preventing the wineserver from holding port 6821 as a
   //    zombie LISTEN socket after the process exits (N38 root cause).
   {
-    HMODULE hWsBridge = GetModuleHandleA("ws_bridge.dll");
-    if (hWsBridge) {
-      typedef void (*ShutdownFn)(void);
-      auto shutdownFn = (ShutdownFn)GetProcAddress(hWsBridge, "WsBridge_Shutdown");
-      if (shutdownFn) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Stopping ws_bridge listener...");
-        shutdownFn();
-        Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ws_bridge listener stopped — socket released");
-      } else {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] WsBridge_Shutdown export not found in ws_bridge.dll — listener may leak");
-      }
+    // N62: use the pointer resolved at init — NO GetModuleHandleA/GetProcAddress
+    // here. Both take the loader lock; a signal arriving while another thread
+    // holds it would deadlock this shutdown permanently.
+    if (g_wsBridgeShutdown != nullptr) {
+      ShutdownReport("[NEVR.PATCH] Stopping ws_bridge listener...");
+      g_wsBridgeShutdown();
+      ShutdownReport("[NEVR.PATCH] ws_bridge listener stopped — socket released");
     } else {
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] ws_bridge.dll not loaded — no listener to stop");
+      ShutdownReport("[NEVR.PATCH] ws_bridge shutdown unavailable (not loaded at init) "
+                     "— listener may leak");
     }
   }
 

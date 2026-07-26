@@ -282,6 +282,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 
   // Crash frames in modules/plugins are unattributable without this (N85).
   RefreshModuleCache();
+  ResolveShutdownDependencies();  // N62
 
   // Run the original method
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);

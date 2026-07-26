@@ -494,6 +494,30 @@ verify:
             exit 1
         fi
     done
+    # N62: the SIGINT/SIGTERM path must not deadlock. Two sources were removed —
+    # the stderr FILE lock (Log -> vfprintf) and the loader lock
+    # (GetModuleHandleA/GetProcAddress). Both must stay out of PerformGracefulShutdown.
+    # Strip comment lines first: the function's own comment says "NO
+    # GetModuleHandleA/GetProcAddress", and a naive match flags the rule as a
+    # violation of itself. Same false positive the N81 and N85 sensors hit.
+    if awk '/^void PerformGracefulShutdown/,/^}/' src/gamepatches/crash_recovery.cpp \
+         | grep -vE '^[[:space:]]*(//|\*|/\*)' \
+         | grep -qE 'GetModuleHandleA|GetProcAddress'; then
+        echo "verify: FAIL — N62 PerformGracefulShutdown resolves symbols at shutdown time;" >&2
+        echo "both take the loader lock, so a signal arriving while it is held deadlocks shutdown." >&2
+        echo "Use the pointer cached by ResolveShutdownDependencies()." >&2
+        exit 1
+    fi
+    if ! grep -q 'ResolveShutdownDependencies();' src/gamepatches/boot.cpp; then
+        echo "verify: FAIL — N62 ResolveShutdownDependencies() call site missing; the cached" >&2
+        echo "WsBridge_Shutdown pointer stays null and the listener leaks on every shutdown." >&2
+        exit 1
+    fi
+    if ! grep -q 'volatile sig_atomic_t g_inSignalContext' src/gamepatches/crash_recovery.cpp; then
+        echo "verify: FAIL — N62 signal-context flag is not volatile sig_atomic_t (the only type" >&2
+        echo "a signal handler may portably touch)." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)
