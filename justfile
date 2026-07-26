@@ -193,7 +193,7 @@ test-auth-unit:
     unset VCPKG_ROOT
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_broadcaster_bridge --target test_broadcaster_guards
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -215,16 +215,9 @@ test-auth-unit:
         exit 1
     fi
     wine "$bin"
-    bin="build/{{ preset }}/bin/test_broadcaster_bridge.exe"
-    if [[ ! -f "$bin" ]]; then
-        echo "ERROR: GTest binary not found: $bin" >&2; exit 1
-    fi
-    wine "$bin"
-    bin="build/{{ preset }}/bin/test_broadcaster_guards.exe"
-    if [[ ! -f "$bin" ]]; then
-        echo "ERROR: GTest binary not found: $bin" >&2; exit 1
-    fi
-    wine "$bin"
+    # test_broadcaster_bridge / test_broadcaster_guards moved to
+    # ~/src/nevr-runtime-plugins with the broadcaster-bridge plugin (2026-07-26).
+    # The N72/N73 guards they cover now live and are tested there.
 
 # Run auth integration tests (needs game binary + MCP harness)
 test-auth-integration:
@@ -300,16 +293,12 @@ verify:
         echo "verify: FAIL — N64 WsBridge_Shutdown call missing from BeginGracefulShutdown" >&2
         exit 1
     fi
-    # N72: broadcaster ingress min-packet sanity check
-    if ! grep -q 'MAX_BROADCASTER_PAYLOAD' plugins/broadcaster-bridge/src/broadcaster_bridge.cpp; then
-        echo "verify: FAIL — N72 min-packet sanity check missing from broadcaster ingress" >&2
-        exit 1
-    fi
-    # N73: broadcaster ingress receive rate limiter
-    if ! grep -q 'BroadcasterRecvRateCheck' plugins/broadcaster-bridge/src/broadcaster_bridge.cpp; then
-        echo "verify: FAIL — N73 receive rate limiter missing from broadcaster ingress" >&2
-        exit 1
-    fi
+    # N72/N73: the broadcaster ingress guards moved with the plugin to
+    # ~/src/nevr-runtime-plugins on 2026-07-26 (this repo is PUBLIC and the
+    # plugin is a broadcaster injection tool). Their sensors moved with them —
+    # asserting on a path that no longer exists here would fail-closed forever,
+    # and asserting nothing would silently drop the guarantee. Recorded in the
+    # N72/N73 ledger entries instead, which name the new owning repo.
     # --- Crash-path invariants (N67/N69/N70) ---------------------------------
     # These are call-graph assertions, not behavioural tests. A crash handler that
     # violates them fails only during a crash, where no test is watching — so the
