@@ -104,6 +104,12 @@ static LogFilterConfig g_config;
 static uintptr_t g_base_addr = 0;
 static std::atomic<uint64_t> g_suppressed_count{0};
 static std::atomic<uint64_t> g_emitted_count{0};
+/* N89 follow-up: count lines the GAME produced, separately from our own
+ * [NEVR.*] output. N79's emitted/suppressed totals could not catch N89 because
+ * our own lines kept them nonzero while the filter captured zero game output for
+ * an entire run. "Is it emitting?" was the wrong question; "is it seeing the
+ * thing it exists to filter?" is the right one. */
+static std::atomic<uint64_t> g_game_line_count{0};
 
 /* File output state */
 static FILE* g_log_file = nullptr;
@@ -926,11 +932,29 @@ static void EmitLine(uint32_t level, const char* message, int len) {
  * cadence from a path the running process actually takes.
  */
 
-static constexpr uint32_t kHealthIntervalSec = 300;
+/* 120s, not 300s. Two reasons, both learned by falsifying this check: the delta
+ * test needs TWO reports before it can fire, so 300s left an inert filter
+ * unreported for 6 minutes; and verifying the check needed a 7-minute server
+ * run, which is how a diagnostic ends up never re-verified. 120s gives detection
+ * in ~3 min at 30 lines/hour. */
+static constexpr uint32_t kHealthIntervalSec = 120;
+/* First report comes early: a filter that is inert from the start should be
+ * visible within a minute, not after five. */
+static constexpr uint32_t kFirstHealthSec = 60;
+static std::atomic<bool> g_first_health_done{false};
 static std::atomic<uint64_t> g_last_health_report{0};
 
 static void EmitLine(uint32_t level, const char* message, int len);  /* fwd */
 
+/* N89 follow-up, second defect: this was called ONLY from inside hook_PrintfImpl.
+ * When another module takes the CLog hook, our handler stops running — so the
+ * health check stopped running too, and could never report the one failure it
+ * exists to detect. Falsified end-to-end: with the superseded plugin allowed to
+ * load, NO health line appeared at all.
+ *
+ * It is now also driven from the N86 per-frame tick, a site whose liveness is
+ * independently proven. Same lesson as N86 and N88: a monitor must not depend on
+ * the thing it monitors. */
 static void MaybeEmitHealth() {
     const uint64_t now = GetEpochSeconds();
     uint64_t last = g_last_health_report.load(std::memory_order_relaxed);
@@ -938,23 +962,50 @@ static void MaybeEmitHealth() {
         g_last_health_report.store(now, std::memory_order_relaxed);
         return;
     }
-    if (now - last < kHealthIntervalSec) return;
+    const uint32_t due = g_first_health_done.load(std::memory_order_relaxed)
+                             ? kHealthIntervalSec : kFirstHealthSec;
+    if (now - last < due) return;
     /* Only one thread reports per window; a lost race just defers to the next. */
     if (!g_last_health_report.compare_exchange_strong(last, now, std::memory_order_relaxed)) return;
+
+    g_first_health_done.store(true, std::memory_order_relaxed);
 
     const uint64_t emitted = g_emitted_count.load(std::memory_order_relaxed);
     const uint64_t suppressed = g_suppressed_count.load(std::memory_order_relaxed);
     const uint64_t total = emitted + suppressed;
     const unsigned pct = total ? static_cast<unsigned>((suppressed * 100) / total) : 0;
 
-    char line[256];
+    const uint64_t gameLines = g_game_line_count.load(std::memory_order_relaxed);
+
+    char line[320];
     const int n = snprintf(line, sizeof(line),
                            "[NEVR.LOGFILTER] health emitted=%llu suppressed=%llu "
-                           "suppression_pct=%u interval_s=%u",
+                           "suppression_pct=%u game_lines=%llu interval_s=%u",
                            static_cast<unsigned long long>(emitted),
                            static_cast<unsigned long long>(suppressed), pct,
+                           static_cast<unsigned long long>(gameLines),
                            kHealthIntervalSec);
     if (n > 0) EmitLine(LOG_LEVEL_INFO, line, n);
+
+    /* Must be a RATE, not a total. Falsified: with the superseded plugin allowed
+     * to load, the cumulative count sat at 13 — lines captured in the seconds
+     * before the plugin took the hook — so a `== 0` test never fired even though
+     * the filter had been inert ever since. What matters is whether game lines
+     * are arriving NOW. */
+    static uint64_t s_lastGameLines = 0;
+    const uint64_t delta = gameLines - s_lastGameLines;
+    s_lastGameLines = gameLines;
+
+    if (delta == 0) {
+        char warn[320];
+        const int wn = snprintf(warn, sizeof(warn),
+                                "[NEVR.LOGFILTER] CAPTURED ZERO GAME LINES this interval "
+                                "(total=%llu) — the CLog hook is installed but receiving "
+                                "nothing. Another module has almost certainly taken the target "
+                                "(N89). Filtering, truncation and file logging are all inert.",
+                                static_cast<unsigned long long>(gameLines));
+        if (wn > 0) EmitLine(LOG_LEVEL_WARNING, warn, wn);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -993,6 +1044,10 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
         if (g_config.passthrough_to_engine && orig_PrintfImpl)
             orig_PrintfImpl(level, category, fmt, varargs);
         return;
+    }
+
+    if (!(len >= 6 && std::strncmp(buf, "[NEVR.", 6) == 0)) {
+        g_game_line_count.fetch_add(1, std::memory_order_relaxed);
     }
 
     MaybeEmitHealth();  /* N79 */
@@ -1078,6 +1133,10 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
 static constexpr uintptr_t kPnsradPrintfImplRva = 0x929C0;
 static constexpr uint8_t kPnsradPrintfImplPrologue[5] = {0x48, 0x89, 0x5C, 0x24, 0x18};
 static void* g_pnsrad_hook_target = nullptr;
+
+void BuiltinLogFilter::PollHealth() {
+    MaybeEmitHealth();
+}
 
 void BuiltinLogFilter::InstallPnsradHook() {
     if (g_pnsrad_hook_target != nullptr) return;  /* already installed */

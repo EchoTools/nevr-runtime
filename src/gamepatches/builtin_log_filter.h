@@ -11,4 +11,9 @@ namespace BuiltinLogFilter {
 /// copy does not cover it — measured: our hook never saw "[NSUSER] saved" while
 /// those lines reached the console. Call AFTER pnsrad.dll is loaded; idempotent.
 void InstallPnsradHook();
+
+/// Drive the periodic health report from OUTSIDE the log hook. If another module
+/// takes the CLog target, the hook stops running — and a health check called only
+/// from inside it stops with it, exactly when its warning is needed (N89).
+void PollHealth();
 }

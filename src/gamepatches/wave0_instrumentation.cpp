@@ -181,6 +181,7 @@ static void DispatchPerFrameWork(uint64_t nowUs) {
 
     EnsureStackReserve();  // N69: covers whatever thread drives the loop
     BuiltinLogFilter::InstallPnsradHook();  // N90: idempotent; installs once pnsrad.dll loads
+    BuiltinLogFilter::PollHealth();         // N89: health must not depend on the hook it watches
 
     // Liveness + N83/N84 evidence, ~every 30s (3750 ticks x 8ms).
     {
