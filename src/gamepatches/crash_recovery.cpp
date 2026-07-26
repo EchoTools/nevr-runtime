@@ -295,6 +295,82 @@ void EnsureStackReserve() {
   SetThreadStackGuarantee(&bytes);
 }
 
+
+// ============================================================================
+// N71 — known session-flags null-deref sites
+// ============================================================================
+//
+// These functions load *(this + 0x2DA0) and immediately dereference it with no
+// null check. Verified by disassembly, e.g. DispatchEvent @0x140c540a0:
+//   0x140c541a0  MOV RAX, qword ptr [RDI + 0x2da0]   ; game_flags ptr
+//   0x140c541a7  MOV RCX, qword ptr [RAX]            ; <-- AV when RAX == 0
+//
+// DELIBERATELY NOT HOOKED. The original plan was a MinHook null-guard on each of
+// ~25-30 functions. Rejected on evidence:
+//
+//   1. BreakpointVEH already catches this ENTIRE class — any AV with a target
+//      below 0x10000 in server mode is dumped and recovered via longjmp. That
+//      covers these 19 sites AND every site nobody enumerated, which a hand-built
+//      list can never do.
+//   2. Every hook is blast radius. Two hooks added for a hazard that was never
+//      re-derived (N83) silently severed the ServerDB message path for months.
+//      DispatchEvent is per-event; 10 hooks there is per-event overhead for a
+//      fault no one has observed.
+//   3. Only ONE site in this family has ever been seen to fault (EndMultiplayer,
+//      BUG#6), and it is already guarded in Wave0.
+//
+// What was actually missing is attribution: when the VEH fires, an operator got a
+// bare RVA and had to resolve it by hand. This table closes that gap — it costs
+// one linear scan on a path that is already crashing, and adds no runtime hook.
+struct KnownNullDerefSite {
+  DWORD64 rva;
+  const char* name;
+};
+
+static const KnownNullDerefSite kN71Sites[] = {
+    // DispatchEvent family — bit-test on game_flags
+    {0xC540A0, "DispatchEvent[0]"},  {0xC54470, "DispatchEvent[1]"},
+    {0xC54840, "DispatchEvent[2]"},  {0xC553B0, "DispatchEvent[3]"},
+    {0xC55780, "DispatchEvent[4]"},  {0xC55B50, "DispatchEvent[5]"},
+    {0xC55F20, "DispatchEvent[6]"},  {0xC562F0, "DispatchEvent[7]"},
+    {0xC566C0, "DispatchEvent[8]"},  {0xC56A90, "DispatchEvent[9]"},
+    // Combat-mode queries
+    {0xD09D60, "IsCompactPoolHandleValid_B"},
+    {0xD098C0, "IsPunchableInCombatMode"},
+    {0xD09E80, "GetPlayerBlockingState"},
+    {0xD09CD0, "LookupPlayerWeaponHandle"},
+    {0xD09DB0, "IsPlayerInUnassignedWeaponState"},
+    {0xD09EB0, "IsPlayerInPunchState"},
+    // Loadout broadcast
+    {0x12C2D0, "LoadoutBroadcast[0]"}, {0x130B00, "LoadoutBroadcast[1]"},
+    {0x130E00, "LoadoutBroadcast[2]"}, {0x1A9B20, "LoadoutBroadcast[3]"},
+    {0x1A9D60, "LoadoutBroadcast[4]"},
+    // Miscellaneous
+    {0x14E540, "~CR15NetLobby"},      {0x1B1910, "FindSpawnPoint"},
+    {0x15F530, "OnMsgCurrentLoadoutRequest"},
+    {0x1A79D0, "OnMsgSaveLoadoutRequest"},
+    {0x1C98C0, "GetUserName"},        {0x113A90, "GetNetGameFromContext"},
+    {0x170770, "GetHeadsetTypeName"}, {0x170730, "GetHeadsetTypeName_B"},
+    {0x170750, "GetHeadsetTypeName_C"},
+};
+
+/// Returns the enclosing known site for a game RVA, or nullptr. Sites are
+/// function entries; a fault lands a little past one, so match the nearest entry
+/// at or below the RVA within a plausible function span.
+static const char* LookupKnownNullDerefSite(INT64 rva) {
+  if (rva < 0) return nullptr;
+  const DWORD64 r = static_cast<DWORD64>(rva);
+  const char* best = nullptr;
+  DWORD64 bestBase = 0;
+  for (const auto& site : kN71Sites) {
+    if (r >= site.rva && r - site.rva < 0x800 && site.rva >= bestBase) {
+      best = site.name;
+      bestBase = site.rva;
+    }
+  }
+  return best;
+}
+
 /// Write a full crash dump: exception info, registers, stack trace with RVAs.
 /// All addresses are emitted as RVAs relative to the game base so they match
 /// revault / Ghidra / IDA directly.
@@ -330,6 +406,11 @@ static void WriteCrashDump(PEXCEPTION_POINTERS ex) {
 
   const INT64 ripRva = rva(ctx->Rip);
   VehPrintf("[NEVR.CRASH] === CRASH DUMP ===");
+  if (const char* site = LookupKnownNullDerefSite(ripRva)) {
+    VehPrintf("[NEVR.CRASH] known_site=%s class=session_flags_null_deref ledger=N71 "
+              "note=*(this+0x2DA0) dereferenced without a null check",
+              site);
+  }
   VehPrintf("[NEVR.CRASH] exception name=%s code=0x%08lX rip=0x%llX rip_rva=%s0x%llX tid=%lu",
             excName, rec->ExceptionCode, static_cast<unsigned long long>(ctx->Rip),
             ripRva >= 0 ? "game+" : "external:",

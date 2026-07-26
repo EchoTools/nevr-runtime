@@ -462,6 +462,22 @@ verify:
         echo "An empty std::function invoked by ixwebsocket throws std::bad_function_call and kills the server." >&2
         exit 1
     fi
+    # N71: the session-flags null-deref class is covered by BreakpointVEH's
+    # generic null-ptr branch, NOT by per-site hooks. Two things must hold: the
+    # generic branch still exists, and the attribution table is still populated
+    # (without it a fire reports a bare RVA and the class is unrecognisable).
+    if ! grep -q 'target < 0x10000' src/gamepatches/crash_recovery.cpp; then
+        echo "verify: FAIL — N71 generic null-ptr AV branch missing from BreakpointVEH; the whole" >&2
+        echo "session-flags deref class loses its only guard (no per-site hooks exist by design)." >&2
+        exit 1
+    fi
+    # Count ENTRIES, not lines — the table packs two per line.
+    N71_SITES=$(grep -oE '\{0x[0-9A-F]+, "' src/gamepatches/crash_recovery.cpp | wc -l)
+    if [ "$N71_SITES" -lt 25 ]; then
+        echo "verify: FAIL — N71 known-site table has $N71_SITES entries (expected >= 25);" >&2
+        echo "a crash at these RVAs would report a bare address with no class attribution." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)
