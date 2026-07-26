@@ -75,6 +75,36 @@ void LoadPlugins() {
     const char* filename = strrchr(path.c_str(), '\\');
     filename = filename ? filename + 1 : path.c_str();
 
+    // N89: skip plugins whose function is now BUILT IN to gamepatches. Loading
+    // one makes two MinHook instances (gamepatches links extern/minhook, plugins
+    // link the vcpkg port — separate static copies, separate hook tables) fight
+    // over the same target.
+    //
+    // Measured with log_filter.dll deployed: the builtin filter's JSONL contains
+    // only [NEVR.*] lines and stops exactly at plugin load — ZERO game log lines
+    // for the whole run — and max_line_length stopped applying, so 8 KB
+    // "[NSUSER] saved <path>: <8KB JSON>" profile dumps reached the console
+    // untruncated (30.5% of one server log). The limit was never removed; the
+    // second hook broke the chain that applied it.
+    //
+    // CLAUDE.md already records log-filter as built in. A stale deployed copy is
+    // therefore not a plugin the operator chose — it is a leftover.
+    {
+      static const char* kSupersededByBuiltin[] = {"log_filter.dll", "log-filter.dll"};
+      bool superseded = false;
+      for (const char* s : kSupersededByBuiltin) {
+        if (_stricmp(filename, s) == 0) { superseded = true; break; }
+      }
+      if (superseded) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PLUGIN] SKIPPED %s — superseded by the built-in log filter. Loading it "
+            "would install a second MinHook on CLog::PrintfImpl and silently disable both "
+            "file logging and max_line_length truncation (N89). Delete it from plugins/.",
+            filename);
+        continue;
+      }
+    }
+
     HMODULE hPlugin = LoadLibraryA(path.c_str());
     if (!hPlugin) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] Failed to load %s: error %lu", filename, GetLastError());

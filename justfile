@@ -573,6 +573,15 @@ verify:
         echo "wiring (N86) — the tool would manufacture the false alarm it exists to prevent." >&2
         exit 1
     fi
+    # N89: log_filter.dll duplicates the built-in filter. Loading it installs a
+    # SECOND MinHook on CLog::PrintfImpl from a different static MinHook copy,
+    # which measurably killed the built-in filter's game-line capture (67 game
+    # lines -> 0) and stopped max_line_length from applying.
+    if ! grep -q 'kSupersededByBuiltin' src/gamepatches/plugin_loader.cpp; then
+        echo "verify: FAIL — N89 superseded-plugin skip missing from plugin_loader; a stale" >&2
+        echo "log_filter.dll would silently disable the built-in log filter's file output." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)

@@ -1019,7 +1019,34 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
     EmitLine(level, buf, emit_len);
 
     if (g_config.passthrough_to_engine && orig_PrintfImpl) {
-        orig_PrintfImpl(level, category, fmt, varargs);
+        /* N89: max_line_length used to apply ONLY to our JSONL file. The
+         * passthrough below re-sent the ORIGINAL fmt+varargs, so the game
+         * reformatted the FULL line to console — which is what
+         * launch-server.sh captures. Measured: two `[NSUSER] saved ...` profile
+         * dumps (5600 and 8192 bytes) were 30.5% of an entire server log while
+         * max_line_length was 500. The setting silently did nothing for the
+         * output an operator actually reads.
+         *
+         * When truncation applied, pass the TRUNCATED text through instead.
+         * '%' is escaped so the game's formatter performs no conversions and
+         * consumes no varargs — passing an already-consumed va_list a second
+         * time is what the untruncated branch still does (pre-existing; it
+         * works because Win64 va_list is a by-value pointer, but it is not
+         * something to add new instances of). */
+        if (emit_len < len) {
+            char safe[2600];
+            int o = 0;
+            const int cap = static_cast<int>(sizeof(safe)) - 48;
+            for (int i = 0; i < emit_len && o < cap; i++) {
+                if (buf[i] == '%') { safe[o++] = '%'; safe[o++] = '%'; }
+                else                { safe[o++] = buf[i]; }
+            }
+            snprintf(safe + o, sizeof(safe) - static_cast<size_t>(o),
+                     " ...[+%d bytes truncated]", len - emit_len);
+            orig_PrintfImpl(level, category, safe, varargs);
+        } else {
+            orig_PrintfImpl(level, category, fmt, varargs);
+        }
     }
 }
 
