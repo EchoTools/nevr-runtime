@@ -266,6 +266,12 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
     (void)unk;
     (void)unk2;
 
+    // N69: claim crash-handler stack reserve on whatever thread runs the frame
+    // pacer. InstallVEH only covers the thread that called it; this covers every
+    // game thread that reaches our per-frame hook. thread_local one-shot — after
+    // the first call on a thread this is a single bool test.
+    EnsureStackReserve();
+
     // Check for graceful shutdown request (set by SIGINT/SIGTERM handler).
     // This fires every game tick, so CTRL+C responsiveness is bounded by the
     // frame interval (~8ms at 120Hz, ~16ms at 60Hz).

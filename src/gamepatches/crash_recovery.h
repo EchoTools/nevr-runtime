@@ -8,7 +8,16 @@ void InstallCrashRecoveryHooks();
 
 /// Installs the BreakpointVEH that handles int3 after suppressed ExitProcess
 /// and null-pointer AV recovery via longjmp in server mode.
+/// Also snapshots the module table (N70 — the handler must never enumerate,
+/// which would take the loader lock) and reserves crash-handler stack for the
+/// calling thread (N69).
 void InstallVEH();
+
+/// N69: reserve stack below the guard page so the stack-overflow handler has room
+/// to run. Per-thread and idempotent (thread_local one-shot) — call it from any
+/// hook that runs on a thread which could fault. Cheap after the first call on a
+/// given thread: a single thread_local bool test.
+void EnsureStackReserve();
 
 /// Installs the console ctrl handler so CTRL+C actually terminates the process.
 void InstallConsoleCtrlHandler();

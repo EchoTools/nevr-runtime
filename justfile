@@ -310,6 +310,73 @@ verify:
         echo "verify: FAIL — N73 receive rate limiter missing from broadcaster ingress" >&2
         exit 1
     fi
+    # --- Crash-path invariants (N67/N69/N70) ---------------------------------
+    # These are call-graph assertions, not behavioural tests. A crash handler that
+    # violates them fails only during a crash, where no test is watching — so the
+    # sensor has to be the source itself.
+    #
+    # N70: no Log() anywhere in the VEH call graph. Log() reaches
+    # std::lock_guard(g_file_mutex) in builtin_log_filter, so a fault raised while
+    # that mutex was held would deadlock the handler on its own log lock. The
+    # crash path must use VehPrintf (raw WriteFile) exclusively.
+    # Matches the call form `Log(EchoVR::LogLevel` — 348 of 355 `Log(` occurrences in
+    # src/gamepatches, and every real call site (the remainder are prose in comments).
+    # Deliberately NOT a word-boundary regex: `\bLog\(` also matches the phrase "Log()"
+    # in the explanatory comments inside these very functions. Deliberately NOT the
+    # `(^|[^a-zA-Z_])Log\(` idiom either — GNU grep's ERE mishandles `^` inside an
+    # alternation group and that pattern silently matches nothing (verified 2026-07-26).
+    if awk '/^LONG WINAPI BreakpointVEH/,/^}/' src/gamepatches/crash_recovery.cpp | grep -qF 'Log(EchoVR::LogLevel'; then
+        echo "verify: FAIL — N70 BreakpointVEH calls Log(); crash path must use VehPrintf (raw WriteFile)." >&2
+        echo "Log() reaches std::lock_guard(g_file_mutex) — a crash during log emission would self-deadlock." >&2
+        exit 1
+    fi
+    if awk '/^static void WriteCrashDump/,/^}/' src/gamepatches/crash_recovery.cpp | grep -qF 'Log(EchoVR::LogLevel'; then
+        echo "verify: FAIL — N70 WriteCrashDump calls Log(); crash path must use VehPrintf (raw WriteFile)." >&2
+        exit 1
+    fi
+    # N70: the handler must never enumerate modules (loader lock). The snapshot is
+    # taken at init by CacheModuleTable and read from the cache during a crash.
+    if awk '/^static void WriteCrashDump/,/^}/' src/gamepatches/crash_recovery.cpp | grep -q 'EnumProcessModules'; then
+        echo "verify: FAIL — N70 WriteCrashDump enumerates modules; takes the loader lock. Read g_moduleCache instead." >&2
+        exit 1
+    fi
+    if ! grep -q 'CacheModuleTable()' src/gamepatches/crash_recovery.cpp; then
+        echo "verify: FAIL — N70 CacheModuleTable() call site missing; handler would have no module snapshot." >&2
+        exit 1
+    fi
+    # N69: stack reserve must be claimed, or the overflow handler has no room to run.
+    if ! grep -q 'SetThreadStackGuarantee' src/gamepatches/crash_recovery.cpp; then
+        echo "verify: FAIL — N69 SetThreadStackGuarantee missing; stack-overflow handler cannot run." >&2
+        exit 1
+    fi
+    if ! grep -q 'EnsureStackReserve()' src/gamepatches/wave0_instrumentation.cpp; then
+        echo "verify: FAIL — N69 EnsureStackReserve() missing from per-frame hook; game threads uncovered." >&2
+        exit 1
+    fi
+    # N67: the crash flags are written from any thread and read from the faulting
+    # thread. VERIFIED-BY-TYPE only binds the artifact that ships — this grep asserts
+    # the type is on THIS file, the one the linker consumes (the earlier fix landed
+    # in plugins/crash-handler/, which CMake does not build).
+    if ! grep -q 'std::atomic<bool> g_crashReporterSuppressed' src/gamepatches/crash_recovery.cpp; then
+        echo "verify: FAIL — N67 g_crashReporterSuppressed is not std::atomic<bool> in the SHIPPING path." >&2
+        exit 1
+    fi
+    if ! grep -q 'std::atomic<bool> g_justSuppressedCrash' src/gamepatches/crash_recovery.cpp; then
+        echo "verify: FAIL — N67 g_justSuppressedCrash is not std::atomic<bool> in the SHIPPING path." >&2
+        exit 1
+    fi
+    # N36: Log() is unsafe under the loader lock. Initialize() runs from DllMain, and
+    # the Log() fallback to stderr stops applying the moment
+    # InitializeFunctionPointers() makes EchoVR::WriteLog non-null. Everything after
+    # that point in Initialize() must use BootLogTee::TeeFprintf. Exactly one Log()
+    # call is permitted — the final line, emitted after BootLogTee::Close().
+    LOGS_IN_INIT=$(awk '/^VOID Initialize\(\)/,/^}/' src/gamepatches/initialize.cpp | grep -cF 'Log(EchoVR::LogLevel' || true)
+    if [ "$LOGS_IN_INIT" -gt 1 ]; then
+        echo "verify: FAIL — N36 Initialize() contains $LOGS_IN_INIT Log() calls (max 1, the final line)." >&2
+        echo "Initialize() runs under the DllMain loader lock; after InitializeFunctionPointers() the" >&2
+        echo "stderr fallback in logging.cpp no longer fires and Log() enters the game logger. Use BootLogTee::TeeFprintf." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)

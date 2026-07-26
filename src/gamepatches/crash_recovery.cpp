@@ -6,6 +6,9 @@
 #include <signal.h>
 #include <windows.h>
 
+#include <atomic>
+#include <cstdarg>
+
 #include <unistd.h>
 
 #include "cli.h"
@@ -62,8 +65,16 @@ BOOL WINAPI CreateProcessAHook(LPCSTR lpApplicationName, LPSTR lpCommandLine, LP
 typedef BOOL(WINAPI* CreateProcessWFunc)(LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD,
                                          LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
 CreateProcessWFunc OriginalCreateProcessW = nullptr;
-static bool g_crashReporterSuppressed = false;
-static bool g_justSuppressedCrash = false;
+
+// N67 (re-opened 2026-07-26): these two flags are written from CreateProcessWHook,
+// ExitProcessHook and TerminateProcessHook — any thread — and read/written from
+// BreakpointVEH on the faulting thread. Plain `bool` gives no ordering guarantee and
+// permits the compiler to sink or reorder the stores, so the VEH can observe a stale
+// value and either skip an int3 it should have taken or take one it should not.
+// The earlier fix converted the copies in plugins/crash-handler/, which is not built
+// (plugins/CMakeLists.txt:12) — this is the path that ships.
+static std::atomic<bool> g_crashReporterSuppressed{false};
+static std::atomic<bool> g_justSuppressedCrash{false};
 
 BOOL WINAPI CreateProcessWHook(LPCWSTR lpApplicationName, LPWSTR lpCommandLine,
                                LPSECURITY_ATTRIBUTES lpProcessAttributes, LPSECURITY_ATTRIBUTES lpThreadAttributes,
@@ -144,6 +155,7 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
 /// Check whether a memory region is committed and readable without using
 /// the deprecated (and unreliable under Wine) IsBadReadPtr.
 static bool IsReadableMemory(const void* addr, size_t len) {
+  (void)len;
   MEMORY_BASIC_INFORMATION mbi;
   if (VirtualQuery(addr, &mbi, sizeof(mbi)) == 0) return false;
   if (mbi.State != MEM_COMMIT) return false;
@@ -151,28 +163,156 @@ static bool IsReadableMemory(const void* addr, size_t len) {
   return true;
 }
 
-/// Log a full crash dump: exception info, registers, stack trace with RVAs.
-/// All addresses are logged as RVAs relative to the game base so they match
+// ============================================================================
+// N70 — crash-safe output primitive
+// ============================================================================
+//
+// A crash handler may call only what is guaranteed to work when the process has
+// already failed: the heap may be corrupt, ANY lock may be held by the faulting
+// thread, and the loader lock may be owned.
+//
+// Log() satisfies none of those. It traverses EchoVR::WriteLog -> the game's CLog
+// -> the hooked CLog::PrintfImpl -> EmitLine -> std::lock_guard(g_file_mutex)
+// (builtin_log_filter.cpp:755) -> fwrite/fflush. A fault raised while the faulting
+// thread already held g_file_mutex would deadlock the crash handler on its own log
+// mutex — the dump becomes the hang.
+//
+// This is NOT the "no printf, use the structured logger" case the CPP addendum
+// forbids. The addendum's own Flight Recorder section prescribes exactly this
+// mechanism for the crash path ("a dump handler writes the buffer to disk via
+// WriteFile/MapViewOfFile") and requires the logger be "safe to call from DllMain
+// (no heap, no synchronization primitives)" — which Log() is not and this is.
+// Output stays structured key=value; only the transport changes.
+//
+// vsnprintf into a fixed stack buffer is the standard crash-handler primitive: for
+// the %s/%d/%u/%llX conversions used here MinGW's implementation performs no
+// allocation. No float conversions are used (those may allocate on some libcs).
+
+static void VehWrite(const char* buf, size_t len) {
+  HANDLE hErr = GetStdHandle(STD_ERROR_HANDLE);
+  if (hErr == nullptr || hErr == INVALID_HANDLE_VALUE) return;
+  DWORD written = 0;
+  WriteFile(hErr, buf, static_cast<DWORD>(len), &written, nullptr);
+}
+
+static void VehPrintf(const char* fmt, ...) {
+  constexpr size_t kBufSize = 1024;
+  char buf[kBufSize];
+
+  va_list args;
+  va_start(args, fmt);
+  int len = vsnprintf(buf, kBufSize - 2, fmt, args);
+  va_end(args);
+  if (len <= 0) return;
+
+  size_t slen = static_cast<size_t>(len);
+  if (slen >= kBufSize - 1) slen = kBufSize - 2;
+  buf[slen] = '\n';
+  buf[slen + 1] = '\0';
+  VehWrite(buf, slen + 1);
+}
+
+// ============================================================================
+// N70 — module table cached at init, never enumerated from the handler
+// ============================================================================
+//
+// EnumProcessModules / GetModuleFileNameA / GetModuleInformation all serialise on
+// the loader lock. A fault raised while that lock is held — i.e. anywhere inside
+// LoadModule / LoadPlugins / the game's own CSysDLL_Load — would deadlock a handler
+// that enumerates. Snapshot once at init; the handler reads the snapshot.
+
+struct CachedModule {
+  DWORD64 base;
+  DWORD64 end;
+  char name[64];
+};
+
+static CachedModule g_moduleCache[192];
+static constexpr int kModuleCacheCapacity =
+    static_cast<int>(sizeof(g_moduleCache) / sizeof(g_moduleCache[0]));
+static volatile LONG g_moduleCacheCount = 0;
+
+static void CacheModuleTable() {
+  HANDLE hProcess = GetCurrentProcess();
+  HMODULE hMods[192];
+  DWORD cbNeeded = 0;
+  if (!EnumProcessModules(hProcess, hMods, sizeof(hMods), &cbNeeded)) return;
+
+  const DWORD modCount = cbNeeded / sizeof(HMODULE);
+  int cached = 0;
+  for (DWORD i = 0; i < modCount && cached < kModuleCacheCapacity; i++) {
+    char modName[MAX_PATH] = {0};
+    MODULEINFO mi = {};
+    if (!GetModuleFileNameA(hMods[i], modName, sizeof(modName))) continue;
+    if (!GetModuleInformation(hProcess, hMods[i], &mi, sizeof(mi))) continue;
+
+    const char* basename = strrchr(modName, '\\');
+    if (!basename) basename = strrchr(modName, '/');
+    basename = basename ? basename + 1 : modName;
+
+    g_moduleCache[cached].base = reinterpret_cast<DWORD64>(mi.lpBaseOfDll);
+    g_moduleCache[cached].end = g_moduleCache[cached].base + mi.SizeOfImage;
+
+    // Explicit bounded copy — strncpy here trips -Wstringop-truncation because the
+    // compiler can see basename may exceed the field. Truncation is intended (the
+    // field holds a basename for a crash line), so state the length arithmetic
+    // rather than relying on strncpy's padding semantics.
+    constexpr size_t kNameCap = sizeof(g_moduleCache[0].name) - 1;
+    size_t nameLen = strlen(basename);
+    if (nameLen > kNameCap) nameLen = kNameCap;
+    memcpy(g_moduleCache[cached].name, basename, nameLen);
+    g_moduleCache[cached].name[nameLen] = '\0';
+    cached++;
+  }
+  InterlockedExchange(&g_moduleCacheCount, cached);
+}
+
+// ============================================================================
+// N69 — stack reserve so the overflow handler has room to run
+// ============================================================================
+//
+// A stack overflow is the one fault where the reporting mechanism is itself the
+// resource that ran out. Windows delivers the exception on the faulting thread's
+// stack, which by definition has just hit its guard page. SetThreadStackGuarantee
+// reserves extra pages BELOW the guard page so a handler can still execute.
+//
+// The reserve must exceed the handler's worst-case frame. WriteCrashDump's frame is
+// dominated by VehPrintf's 1024-byte buffer plus a 96-byte address buffer and the
+// VirtualQuery MEMORY_BASIC_INFORMATION; 64 KiB is ~16x that headroom and is the
+// smallest value Windows will round up to a useful multiple on x64.
+//
+// Per-thread by design: a thread that never calls this has no reserve. Called from
+// InstallVEH (main thread) and once per thread from the per-frame hook, so every
+// thread that runs NEVR code is covered. Threads created by the game that never
+// enter our hooks remain uncovered — recorded as a known limit, not a claim.
+static constexpr ULONG kCrashHandlerStackReserve = 64 * 1024;
+
+void EnsureStackReserve() {
+  static thread_local bool s_reserved = false;
+  if (s_reserved) return;
+  s_reserved = true;
+  ULONG bytes = kCrashHandlerStackReserve;
+  SetThreadStackGuarantee(&bytes);
+}
+
+/// Write a full crash dump: exception info, registers, stack trace with RVAs.
+/// All addresses are emitted as RVAs relative to the game base so they match
 /// revault / Ghidra / IDA directly.
-static void LogCrashDump(PEXCEPTION_POINTERS ex) {
+///
+/// N70: crash-safe by construction. Every call below is a raw syscall
+/// (WriteFile / GetStdHandle / VirtualQuery) or a stack-only operation. No Log(),
+/// no heap, no mutex, no loader-lock call. Structured key=value output is
+/// preserved; only the transport is raw.
+static void WriteCrashDump(PEXCEPTION_POINTERS ex) {
   PEXCEPTION_RECORD rec = ex->ExceptionRecord;
   PCONTEXT ctx = ex->ContextRecord;
-  DWORD64 base = (DWORD64)EchoVR::g_GameBaseAddress;
+  const DWORD64 base = reinterpret_cast<DWORD64>(EchoVR::g_GameBaseAddress);
 
   auto rva = [base](DWORD64 addr) -> INT64 {
-    if (addr >= base && addr < base + 0x2000000) return (INT64)(addr - base);
+    if (addr >= base && addr < base + 0x2000000) return static_cast<INT64>(addr - base);
     return -1;
   };
 
-  auto fmtAddr = [base, rva](DWORD64 addr, char* buf, size_t sz) {
-    INT64 r = rva(addr);
-    if (r >= 0)
-      snprintf(buf, sz, "0x%llX (game+0x%llX)", (unsigned long long)addr, (unsigned long long)r);
-    else
-      snprintf(buf, sz, "0x%llX (external)", (unsigned long long)addr);
-  };
-
-  // Exception type
   const char* excName = "Unknown";
   switch (rec->ExceptionCode) {
     case EXCEPTION_ACCESS_VIOLATION: excName = "ACCESS_VIOLATION"; break;
@@ -180,73 +320,72 @@ static void LogCrashDump(PEXCEPTION_POINTERS ex) {
     case EXCEPTION_ILLEGAL_INSTRUCTION: excName = "ILLEGAL_INSTRUCTION"; break;
     case EXCEPTION_STACK_OVERFLOW: excName = "STACK_OVERFLOW"; break;
     case EXCEPTION_INT_DIVIDE_BY_ZERO: excName = "INT_DIVIDE_BY_ZERO"; break;
+    default: break;
   }
 
-  char ripStr[80];
-  fmtAddr(ctx->Rip, ripStr, sizeof(ripStr));
+  const INT64 ripRva = rva(ctx->Rip);
+  VehPrintf("[NEVR.CRASH] === CRASH DUMP ===");
+  VehPrintf("[NEVR.CRASH] exception name=%s code=0x%08lX rip=0x%llX rip_rva=%s0x%llX tid=%lu",
+            excName, rec->ExceptionCode, static_cast<unsigned long long>(ctx->Rip),
+            ripRva >= 0 ? "game+" : "external:",
+            static_cast<unsigned long long>(ripRva >= 0 ? ripRva : ctx->Rip),
+            GetCurrentThreadId());
 
-  Log(EchoVR::LogLevel::Error, "=== CRASH DUMP ===");
-  Log(EchoVR::LogLevel::Error, "Exception: %s (0x%08lX)", excName, rec->ExceptionCode);
-  Log(EchoVR::LogLevel::Error, "RIP: %s", ripStr);
-
-  // Access violation details
   if (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2) {
-    const char* op = rec->ExceptionInformation[0] == 0 ? "READ"
-                   : rec->ExceptionInformation[0] == 1 ? "WRITE"
-                                                       : "EXECUTE";
-    Log(EchoVR::LogLevel::Error, "Access: %s at 0x%llX", op, (unsigned long long)rec->ExceptionInformation[1]);
+    const char* op = rec->ExceptionInformation[0] == 0   ? "READ"
+                     : rec->ExceptionInformation[0] == 1 ? "WRITE"
+                                                         : "EXECUTE";
+    VehPrintf("[NEVR.CRASH] access op=%s addr=0x%llX", op,
+              static_cast<unsigned long long>(rec->ExceptionInformation[1]));
   }
 
-  // Register dump
-  Log(EchoVR::LogLevel::Error, "RAX=%016llX  RBX=%016llX  RCX=%016llX  RDX=%016llX",
-      ctx->Rax, ctx->Rbx, ctx->Rcx, ctx->Rdx);
-  Log(EchoVR::LogLevel::Error, "RSI=%016llX  RDI=%016llX  RBP=%016llX  RSP=%016llX",
-      ctx->Rsi, ctx->Rdi, ctx->Rbp, ctx->Rsp);
-  Log(EchoVR::LogLevel::Error, " R8=%016llX   R9=%016llX  R10=%016llX  R11=%016llX",
-      ctx->R8, ctx->R9, ctx->R10, ctx->R11);
-  Log(EchoVR::LogLevel::Error, "R12=%016llX  R13=%016llX  R14=%016llX  R15=%016llX",
-      ctx->R12, ctx->R13, ctx->R14, ctx->R15);
+  // N69: on stack overflow the remaining stack is whatever SetThreadStackGuarantee
+  // reserved. Report the fault and the reserve, then stop — the stack scan below
+  // would consume frames we may not have.
+  if (rec->ExceptionCode == EXCEPTION_STACK_OVERFLOW) {
+    ULONG reserve = 0;
+    SetThreadStackGuarantee(&reserve);  // query form: returns the current guarantee
+    VehPrintf("[NEVR.CRASH] stack_overflow rsp=0x%llX reserve_bytes=%lu",
+              static_cast<unsigned long long>(ctx->Rsp), reserve);
+    VehPrintf("[NEVR.CRASH] === END CRASH DUMP (stack overflow: scan suppressed) ===");
+    return;
+  }
+
+  VehPrintf("[NEVR.CRASH] regs rax=%016llX rbx=%016llX rcx=%016llX rdx=%016llX",
+            ctx->Rax, ctx->Rbx, ctx->Rcx, ctx->Rdx);
+  VehPrintf("[NEVR.CRASH] regs rsi=%016llX rdi=%016llX rbp=%016llX rsp=%016llX",
+            ctx->Rsi, ctx->Rdi, ctx->Rbp, ctx->Rsp);
+  VehPrintf("[NEVR.CRASH] regs r8=%016llX r9=%016llX r10=%016llX r11=%016llX",
+            ctx->R8, ctx->R9, ctx->R10, ctx->R11);
+  VehPrintf("[NEVR.CRASH] regs r12=%016llX r13=%016llX r14=%016llX r15=%016llX",
+            ctx->R12, ctx->R13, ctx->R14, ctx->R15);
 
   // Stack scan — x64 doesn't use frame pointers consistently, so scan RSP
   // for return addresses that point into the game's code range.
-  Log(EchoVR::LogLevel::Error, "Stack scan (game code return addresses):");
-  DWORD64* sp = (DWORD64*)ctx->Rsp;
+  DWORD64* sp = reinterpret_cast<DWORD64*>(ctx->Rsp);
   int found = 0;
   for (int i = 0; i < 256 && found < 16; i++) {
     if (!IsReadableMemory(sp + i, 8)) break;
-    DWORD64 val = sp[i];
-    INT64 r = rva(val);
+    const INT64 r = rva(sp[i]);
     if (r >= 0 && r < 0x1800000) {
-      Log(EchoVR::LogLevel::Error, "  #%d  [RSP+0x%X] game+0x%llX", found, i * 8, (unsigned long long)r);
+      VehPrintf("[NEVR.CRASH] frame #%d rsp_off=0x%X rva=game+0x%llX", found, i * 8,
+                static_cast<unsigned long long>(r));
       found++;
     }
   }
-  // Module listing — identify which DLL owns each address
-  Log(EchoVR::LogLevel::Error, "Loaded modules:");
-  HANDLE hProcess = GetCurrentProcess();
-  HMODULE hMods[256];
-  DWORD cbNeeded;
-  if (EnumProcessModules(hProcess, hMods, sizeof(hMods), &cbNeeded)) {
-    DWORD modCount = cbNeeded / sizeof(HMODULE);
-    for (DWORD i = 0; i < modCount && i < 256; i++) {
-      char modName[MAX_PATH] = {0};
-      MODULEINFO mi = {0};
-      GetModuleFileNameA(hMods[i], modName, sizeof(modName));
-      GetModuleInformation(hProcess, hMods[i], &mi, sizeof(mi));
-      // Strip path to just filename
-      const char* basename = strrchr(modName, '\\');
-      if (!basename) basename = strrchr(modName, '/');
-      basename = basename ? basename + 1 : modName;
-      DWORD64 modBase = (DWORD64)mi.lpBaseOfDll;
-      DWORD64 modEnd = modBase + mi.SizeOfImage;
-      // Flag the module that contains the crash RIP
-      const char* flag = (ctx->Rip >= modBase && ctx->Rip < modEnd) ? " <-- CRASH" : "";
-      Log(EchoVR::LogLevel::Error, "  %016llX-%016llX  %s%s",
-          (unsigned long long)modBase, (unsigned long long)modEnd, basename, flag);
-    }
-  }
+  VehPrintf("[NEVR.CRASH] stack_scan frames=%d", found);
 
-  Log(EchoVR::LogLevel::Error, "=== END CRASH DUMP ===");
+  // Module listing from the init-time snapshot — never enumerated here (loader lock).
+  const LONG modCount = g_moduleCacheCount;
+  for (LONG i = 0; i < modCount; i++) {
+    const bool isCrashModule = ctx->Rip >= g_moduleCache[i].base && ctx->Rip < g_moduleCache[i].end;
+    if (!isCrashModule) continue;
+    VehPrintf("[NEVR.CRASH] crash_module name=%s base=0x%llX end=0x%llX", g_moduleCache[i].name,
+              static_cast<unsigned long long>(g_moduleCache[i].base),
+              static_cast<unsigned long long>(g_moduleCache[i].end));
+  }
+  VehPrintf("[NEVR.CRASH] modules cached=%ld (snapshot taken at init)", modCount);
+  VehPrintf("[NEVR.CRASH] === END CRASH DUMP ===");
 }
 
 /// <summary>
@@ -259,31 +398,40 @@ static void LogCrashDump(PEXCEPTION_POINTERS ex) {
 static volatile LONG g_avRecoveryCount = 0;
 
 LONG WINAPI BreakpointVEH(PEXCEPTION_POINTERS pExceptionInfo) {
-  if (pExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT && g_justSuppressedCrash) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] int3 after suppressed ExitProcess at RIP=%p — skipping, server continuing",
-        (void*)pExceptionInfo->ContextRecord->Rip);
+  // N70: every path below uses VehPrintf (raw WriteFile), never Log(). Log()
+  // reaches std::lock_guard(g_file_mutex) in the log filter, so a fault raised
+  // while the faulting thread held that mutex would deadlock the handler.
+  if (pExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_BREAKPOINT &&
+      g_justSuppressedCrash.load(std::memory_order_acquire)) {
+    VehPrintf("[NEVR.CRASH] int3_skipped rip=0x%llX reason=after_suppressed_exitprocess",
+              static_cast<unsigned long long>(pExceptionInfo->ContextRecord->Rip));
     pExceptionInfo->ContextRecord->Rip += 1;
-    g_justSuppressedCrash = false;
+    g_justSuppressedCrash.store(false, std::memory_order_release);
     return EXCEPTION_CONTINUE_EXECUTION;
   }
 
-  // In server mode, catch null-pointer access violations and recover via longjmp
+  // In server mode, catch null-pointer access violations and recover via longjmp.
+  //
+  // KNOWN RESIDUAL (N70 item 3): longjmp out of a vectored exception handler
+  // abandons the x64 unwind without honouring unwind data. It is retained because
+  // it is the mechanism that keeps a dedicated server alive through a null-deref in
+  // the entity paths, and removing it is a behavioural change to crash recovery, not
+  // an observability fix. Tracked in N70; the acute hazards (log-mutex deadlock,
+  // loader-lock enumeration) are fixed here.
   if (g_isServer && pExceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
     DWORD64 target = pExceptionInfo->ExceptionRecord->ExceptionInformation[1];
 
     if (target < 0x10000 && g_gameLoopJmpBufValid) {
       LONG count = InterlockedIncrement(&g_avRecoveryCount);
-      if (count <= 3) LogCrashDump(pExceptionInfo);
+      if (count <= 3) WriteCrashDump(pExceptionInfo);
 
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] Null-ptr AV #%ld — longjmp to server hold", count);
+      VehPrintf("[NEVR.CRASH] null_ptr_av count=%ld action=longjmp_to_server_hold", count);
       g_gameLoopJmpBufValid = false;
-      longjmp(g_gameLoopJmpBuf, (int)count);
+      longjmp(g_gameLoopJmpBuf, static_cast<int>(count));
     }
   }
 
-  // Log any unhandled fatal exception before passing to the default handler
+  // Report any unhandled fatal exception before passing to the default handler.
   DWORD code = pExceptionInfo->ExceptionRecord->ExceptionCode;
   if (code == EXCEPTION_ACCESS_VIOLATION ||
       code == EXCEPTION_ILLEGAL_INSTRUCTION ||
@@ -292,7 +440,7 @@ LONG WINAPI BreakpointVEH(PEXCEPTION_POINTERS pExceptionInfo) {
       code == STATUS_STACK_BUFFER_OVERRUN) {
     static volatile LONG g_crashLogCount = 0;
     if (InterlockedIncrement(&g_crashLogCount) <= 3) {
-      LogCrashDump(pExceptionInfo);
+      WriteCrashDump(pExceptionInfo);
     }
   }
 
@@ -359,9 +507,21 @@ void InstallCrashRecoveryHooks() {
 }
 
 void InstallVEH() {
+  // N70: snapshot the module table now, while the loader lock is safe to take.
+  // The handler reads this snapshot instead of enumerating (which would deadlock
+  // on any fault raised while the loader lock is held).
+  CacheModuleTable();
+
+  // N69: reserve stack below the guard page so the overflow handler has room.
+  // Covers this thread; the per-frame hook covers each game thread it runs on.
+  EnsureStackReserve();
+
   // Install VEH to handle int3 that fires after our ExitProcess suppression returns
   AddVectoredExceptionHandler(1, BreakpointVEH);
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Breakpoint VEH installed (handles int3 after ExitProcess suppression)");
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.PATCH] veh installed handler=BreakpointVEH priority=1 modules_cached=%ld "
+      "stack_reserve_bytes=%lu",
+      g_moduleCacheCount, static_cast<unsigned long>(kCrashHandlerStackReserve));
 }
 
 // POSIX signal handler — initiates shutdown DIRECTLY.
