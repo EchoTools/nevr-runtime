@@ -5,7 +5,7 @@
  * loader so a load-time constructor arms breakpad before libr15's game code
  * runs, then forwards to the renamed original (libovrplatformloader_orig.so).
  *
- * See docs/2026-07-13-quest-crash-reporter-injection.md.
+ * See docs/design/2026-07-13-quest-crash-reporter-injection.md.
  */
 #pragma once
 

@@ -1155,7 +1155,7 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
 // Authenticate the server with Nakama using the operator's discord_id + password.
 // Returns a session access JWT, or empty string on failure.
 //
-// Uses the non-interactive password RPC (docs/token-auth-migration.md F1):
+// Uses the non-interactive password RPC (docs/guides/token-auth-migration.md F1):
 //   POST {nevr_http_uri}/v2/rpc/account/authenticate/password?http_key=<key>&unwrap
 //   body {"discord_id","password"} -> {"token","refresh_token"}
 // (nakama server/evr_runtime_rpc.go:1137 AuthenticatePasswordRPC, RequireAuth:false;
@@ -1284,7 +1284,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       // Token auth (BAC-2): identity via the Bearer JWT (sent by Connect()); discord_id/
       // password dropped; guilds/regions stay as registration metadata. nevr_serverdb_uri
       // points at the token route that forwards the real Authorization header
-      // (docs/token-auth-migration.md).
+      // (docs/guides/token-auth-migration.md).
       int written = snprintf(constructedUri, sizeof(constructedUri), "%s", tokenUri);
       const char* sep = "?";
       if (guilds && guilds[0] != '\0' && written > 0 && written < (int)sizeof(constructedUri)) {

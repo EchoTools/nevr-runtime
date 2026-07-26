@@ -386,7 +386,7 @@ verify:
     fi
     # N78: frequent lines are collapsed into a counted summary, never deleted.
     if ! grep -q 'RateVerdict::Collapse' src/gamepatches/builtin_log_filter.cpp; then
-        echo "verify: FAIL — N78 rate-limited summarisation missing; filter can only delete, not summarise (LOGGING.md Rule 4)." >&2
+        echo "verify: FAIL — N78 rate-limited summarisation missing; filter can only delete, not summarise (docs/standards/logging.md Rule 4)." >&2
         exit 1
     fi
     # N79: filter health must be emitted while the process is alive. Shutdown() is
@@ -411,12 +411,12 @@ verify:
     # src/gamepatches/cli.cpp is excluded deliberately, not by oversight: its 14
     # "[NEVR] " strings are all AddArgHelpString descriptions, where the marker
     # distinguishes NEVR-added flags from the game's own in `--help` output. That is
-    # a usage contract (RULINGS.md "Usage contracts"), not a log tag — LOGGING.md's
+    # a usage contract (RULINGS.md "Usage contracts"), not a log tag — docs/standards/logging.md's
     # subsystem-tag rule governs log lines. Verified 2026-07-26: every [NEVR] hit in
     # that file is a help string, zero are log calls.
     if grep -rn '"\[NEVR\] ' src/gamepatches src/common src/gameserver 2>/dev/null \
          | grep -v legacy | grep -v 'src/gamepatches/cli.cpp'; then
-        echo "verify: FAIL — N81 bare [NEVR] log tag found; use a subsystem tag from the LOGGING.md table." >&2
+        echo "verify: FAIL — N81 bare [NEVR] log tag found; use a subsystem tag from the docs/standards/logging.md table." >&2
         exit 1
     fi
     # --- Tier-0 hook invariants (N83/N84) ------------------------------------

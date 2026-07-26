@@ -689,7 +689,7 @@ void Wave0::Init(uintptr_t base_addr) {
         }
     }
 
-    // Aggregate summary per LOGGING.md Rule 5
+    // Aggregate summary per docs/standards/logging.md Rule 5
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] hooks installed: %d succeeded, %d failed (failed: %s)",
         installed, failed,

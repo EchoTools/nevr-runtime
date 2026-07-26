@@ -323,7 +323,7 @@ constexpr uintptr_t GAME_MAIN = 0x0CD550;
 /// (0x140f80f17 -> reads [RAX+0x3ff8] @0x140f80f1e), and a garbage pointer of
 /// 0x10 lands exactly on the documented 0x4008. Someone hit a genuine crash.
 /// Whether it still occurs is the open question in
-/// docs/2026-07-26-N83-broadcaster-severance-primer.md — answerable only by a
+/// docs/primers/2026-07-26-n83-broadcaster-severance.md — answerable only by a
 /// live run, not by reading.
 ///
 /// Both RVAs are ALSO assigned as live function pointers in

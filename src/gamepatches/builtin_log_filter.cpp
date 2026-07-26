@@ -368,7 +368,7 @@ static LogFilterConfig MakeDefaultConfig() {
         "PickRandomTip:",
         "No screen stats info for game mode",
 
-        // -- N18 audit additions (LOGGING.md Rule 4) ---------------------------
+        // -- N18 audit additions (docs/standards/logging.md Rule 4) ---------------------------
         //
         // DATA: sampled echovr-server-32-2026-06-28T21-47-43.698.jsonl
         //       (299,187 lines, ~50 MB rotated). 97.5% of sustained lines were
@@ -687,7 +687,7 @@ static const char* LevelStr(uint32_t level) {
     }
 }
 
-/* N77: a line NEVR emitted, identified by its subsystem tag. LOGGING.md requires
+/* N77: a line NEVR emitted, identified by its subsystem tag. docs/standards/logging.md requires
  * every NEVR line to begin with `[NEVR.` — that prefix is the discriminator. */
 static bool IsNevrLine(const char* message) {
     return std::strncmp(message, "[NEVR.", 6) == 0;
@@ -732,7 +732,7 @@ static bool ShouldSuppress(const char* message, uint32_t level) {
 /* N78 — rate-limited summarisation                                    */
 /* ------------------------------------------------------------------ */
 /*
- * LOGGING.md Rule 4 requires that a line repeating more than once per second be
+ * docs/standards/logging.md Rule 4 requires that a line repeating more than once per second be
  * collapsed into "X repeated N times in the last T seconds". No such mechanism
  * existed: ShouldSuppress returned bool and the caller returned, so the only two
  * expressible actions were pass and delete. That forced every high-frequency line

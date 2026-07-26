@@ -189,7 +189,7 @@ This applies regardless of context — even if the task seems to require it, eve
 
 This repo is onboarded to the `~/src/all-the-way-down` canon (authorized by
 RULINGS.md 2026-07-20 "nevr onboarding"). Process machinery is governed by
-`DRIVER-CHARTER.md` (five slots filled) and the `nevr-work` gate skill
+`docs/process/driver-charter.md` (five slots filled) and the `nevr-work` gate skill
 (`.claude/skills/nevr-work/`, gitignored). The following process decisions bind:
 
 - **Work ledger = `BUGS.md` `# NEVR Runtime Source Bugs` section (N-prefix IDs).**

@@ -37,7 +37,7 @@ The `g_proxyPort` is the **discovered** port — it's zero until `listen()` succ
 | File:Line | Value |
 |-----------|-------|
 | `echovr/_local/config.json:10` | `"matchingservice_host": "ws://127.0.0.1:6821"` |
-| `docs/module-extraction-plan.md:85` | Documents expected log line with `:6821` |
+| `docs/design/module-extraction-plan.md:85` | Documents expected log line with `:6821` |
 | `BUGS.md` (multiple lines) | Documents `127.0.0.1:6821` in evidence/log excerpts |
 
 ### Scripts (`launch-server.sh`)
@@ -124,7 +124,7 @@ The only coupling is that the hardcoded `6821` at the bind site must be replaced
 ```
 This is a LOCAL config override. If the ws_bridge port changes, this config value must be updated to match. With a dynamic port, this config key becomes either incorrect or must be removed (letting the game's own service-redirect handle it). This is the **only external consumer that would break.**
 
-**docs/module-extraction-plan.md:85:** Documents expected log output — not a consumer, just documentation.
+**docs/design/module-extraction-plan.md:85:** Documents expected log output — not a consumer, just documentation.
 
 **No other external consumers found.** No plugins, scripts, tests, dashboards, or tools connect to port 6821. The broadcaster-bridge plugin connects to the game's UDP broadcaster port, not the ws_bridge. No test references 6821. No script references 6821.
 

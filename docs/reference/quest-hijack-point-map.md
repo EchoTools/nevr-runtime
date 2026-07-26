@@ -164,7 +164,7 @@ substitute), so the whole `CSysDLL_Load`/`GetSymbol` injection dance is
 | PatchBypassOvrPlatform (`0x1580e5` JNE NOP) | skip OVR-platform init branch when DLL unavailable | branch inside `CR15Game` platform-decision (`PlatformModuleDecisionAndInitialize`) — needs decompilation for the arm64 branch | libr15 | partial |
 | PatchBlockOculusSDK (LoadLibraryW/ExW hook blocks `libovrplatform*`) | save RAM/CPU by blocking OVR SDK load | on Quest `libovrplatformloader.so` is a hard `DT_NEEDED` of libr15 — cannot simply be blocked; would stub the exports instead | libovrplatformloader | n/a (DIVERGENT strategy) |
 | LibOVRPlatform64_1 import (statically imported, replaced on Windows) | platform SDK entry points | `libovrplatformloader.so` exports **1 056 `ovr_*` functions** (`ovr_PlatformInitialize*`, `ovr_Message_*`, `ovr_AbuseReport_*`, achievements, …) | libovrplatformloader | yes |
-| LibOVRRT64 render loader (`FUN_141360790`, 73 `GetProcAddress`) — the leVR swapchain surface | HMD swapchain / `ovr_CreateTextureSwapChainDX` etc. | Quest is **native Vulkan** via `vrapi` (`libvrapi.so` bundled) + `CVR_VK::CreateRenderTarget`; the D3D→OpenXR bridge is Windows/Wine-only | libr15 / libvrapi | DIVERGENT — see `docs/2026-06-09-levr-porting-analysis.md` |
+| LibOVRRT64 render loader (`FUN_141360790`, 73 `GetProcAddress`) — the leVR swapchain surface | HMD swapchain / `ovr_CreateTextureSwapChainDX` etc. | Quest is **native Vulkan** via `vrapi` (`libvrapi.so` bundled) + `CVR_VK::CreateRenderTarget`; the D3D→OpenXR bridge is Windows/Wine-only | libr15 / libvrapi | DIVERGENT — see `docs/design/2026-06-09-levr-porting-analysis.md` |
 
 ## 7. XPID provider string patch (echovr.exe .rdata → libr15.so .rodata)
 
