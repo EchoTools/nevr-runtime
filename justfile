@@ -478,6 +478,22 @@ verify:
         echo "a crash at these RVAs would report a bare address with no class attribution." >&2
         exit 1
     fi
+    # N37: ixwebsocket never sets SO_REUSEADDR and exposes no socket-option hook,
+    # so a zombie LISTEN socket can refuse a bind. That gap is UNFIXABLE from here
+    # (upstream vcpkg dep) and is instead made unreachable by N39: pick a random
+    # ephemeral port and retry. Both properties must survive, or the old
+    # hardcoded-port failure returns with no way to fix it.
+    for f in src/modules/ws-bridge/src/ws_bridge.cpp src/gamepatches/ws_bridge.cpp; do
+        if ! grep -q 'uniform_int_distribution<uint16_t> dist(49152, 65535)' "$f"; then
+            echo "verify: FAIL — N37/N39 random ephemeral-port selection missing from $f;" >&2
+            echo "a fixed port reintroduces the zombie-socket bind failure ixwebsocket cannot recover from." >&2
+            exit 1
+        fi
+        if ! grep -q 'kMaxBindAttempts' "$f"; then
+            echo "verify: FAIL — N37/N39 bind retry loop missing from $f." >&2
+            exit 1
+        fi
+    done
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)
