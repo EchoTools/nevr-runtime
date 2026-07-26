@@ -97,6 +97,41 @@ typedef NTSTATUS (NTAPI *LdrUnregisterDllNotification_fn)(void* cookie);
 static void* s_dllNotifCookie = nullptr;
 static bool  s_pnsradPatched  = false;
 
+/* Patch accounting (2026-07-26).
+ *
+ * These three patches logged success at Debug and prologue-mismatch at Warning,
+ * and logged NOTHING AT ALL when PatchMemory itself failed. With min_level=INFO
+ * that makes a fully-successful run and a never-fired callback look identical in
+ * the log — the N86 failure mode, and the reason "is pnsrad enabled?" could not
+ * be answered from a server log.
+ *
+ * One aggregate at Info, in the shape N17 defined for hook installs. */
+static int s_pnsradOk = 0;
+static int s_pnsradFail = 0;
+
+/* Apply one NOP patch, counting and reporting every outcome including the
+ * previously-silent PatchMemory failure. */
+static void PnsradNopPatch(uint8_t* site, const uint8_t* expected, size_t expLen,
+                           size_t nopLen, const char* what, unsigned rva) {
+    if (!ValidatePrologue(site, expected, expLen)) {
+        Log(EchoVR::LogLevel::Warning,
+            "[pnsrad] unexpected bytes at %s +0x%x — NOT patched", what, rva);
+        s_pnsradFail++;
+        return;
+    }
+    uint8_t nops[8];
+    for (size_t i = 0; i < nopLen && i < sizeof(nops); i++) nops[i] = 0x90;
+    if (PatchMemory(site, nops, nopLen)) {
+        Log(EchoVR::LogLevel::Debug, "[pnsrad] patched %s at +0x%x", what, rva);
+        s_pnsradOk++;
+    } else {
+        Log(EchoVR::LogLevel::Warning,
+            "[pnsrad] PatchMemory FAILED at %s +0x%x — prologue matched but the write "
+            "did not land", what, rva);
+        s_pnsradFail++;
+    }
+}
+
 static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* data, void*) {
     if (reason != 1 || s_pnsradPatched || !data || !data->BaseDllName) return;
 
@@ -118,44 +153,23 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
         s_pnsradPatched = true;
         uintptr_t base = reinterpret_cast<uintptr_t>(data->DllBase);
 
-        // Patch: login provider check (JNE -> NOP)
-        {
-            auto* site = reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_CHECK);
-            if (ValidatePrologue(site, PNSRAD_JNE_EXPECTED, sizeof(PNSRAD_JNE_EXPECTED))) {
-                uint8_t nops[] = {0x90, 0x90};
-                if (PatchMemory(site, nops, sizeof(nops))) {
-                    Log(EchoVR::LogLevel::Debug, "[pnsrad] patched login check at +0x%x", (unsigned)PNSRAD_LOGIN_CHECK);
-                }
-            } else {
-                Log(EchoVR::LogLevel::Warning, "[pnsrad] unexpected bytes at login check +0x%x", (unsigned)PNSRAD_LOGIN_CHECK);
-            }
-        }
+        PnsradNopPatch(reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_CHECK),
+                       PNSRAD_JNE_EXPECTED, sizeof(PNSRAD_JNE_EXPECTED), 2,
+                       "login check", (unsigned)PNSRAD_LOGIN_CHECK);
+        PnsradNopPatch(reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_IDENTITY_CHECK),
+                       PNSRAD_IDENTITY_JNE_EXPECTED, sizeof(PNSRAD_IDENTITY_JNE_EXPECTED), 6,
+                       "identity guard", (unsigned)PNSRAD_LOGIN_IDENTITY_CHECK);
+        PnsradNopPatch(reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_STATE_CHECK),
+                       PNSRAD_STATE_JE_EXPECTED, sizeof(PNSRAD_STATE_JE_EXPECTED), 6,
+                       "state check", (unsigned)PNSRAD_LOGIN_STATE_CHECK);
 
-        // Patch: LogInSuccessCB identity guard (JNE -> NOP)
-        {
-            auto* site = reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_IDENTITY_CHECK);
-            if (ValidatePrologue(site, PNSRAD_IDENTITY_JNE_EXPECTED, sizeof(PNSRAD_IDENTITY_JNE_EXPECTED))) {
-                uint8_t nops[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-                if (PatchMemory(site, nops, sizeof(nops))) {
-                    Log(EchoVR::LogLevel::Debug, "[pnsrad] patched identity guard at +0x%x", (unsigned)PNSRAD_LOGIN_IDENTITY_CHECK);
-                }
-            } else {
-                Log(EchoVR::LogLevel::Warning, "[pnsrad] unexpected bytes at identity guard +0x%x", (unsigned)PNSRAD_LOGIN_IDENTITY_CHECK);
-            }
-        }
-
-        // Patch: LoginIdResponseCB state check (JE -> NOP)
-        {
-            auto* site = reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_STATE_CHECK);
-            if (ValidatePrologue(site, PNSRAD_STATE_JE_EXPECTED, sizeof(PNSRAD_STATE_JE_EXPECTED))) {
-                uint8_t nops[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-                if (PatchMemory(site, nops, sizeof(nops))) {
-                    Log(EchoVR::LogLevel::Debug, "[pnsrad] patched state check at +0x%x", (unsigned)PNSRAD_LOGIN_STATE_CHECK);
-                }
-            } else {
-                Log(EchoVR::LogLevel::Warning, "[pnsrad] unexpected bytes at state check +0x%x", (unsigned)PNSRAD_LOGIN_STATE_CHECK);
-            }
-        }
+        Log(EchoVR::LogLevel::Info,
+            "[pnsrad] module patches: %d succeeded, %d failed — social layer "
+            "(friends/party/login) %s",
+            s_pnsradOk, s_pnsradFail,
+            (s_pnsradFail == 0 && s_pnsradOk == 3) ? "ENABLED"
+            : (s_pnsradOk == 0) ? "NOT PATCHED"
+                                : "PARTIALLY PATCHED");
     }
 }
 
