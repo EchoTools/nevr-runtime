@@ -50,21 +50,17 @@ MANIFEST = REPO / "tools" / "hook_identity_manifest.json"
 # Presence here = "we know, it is filed, it is not fixed yet". Absence = hard fail.
 
 KNOWN_SELF_COLLISIONS = {
-    0x140F87AA0: ("N83", "CBroadcaster::ReceiveLocalEvent — called via "
-                         "EchoVR::BroadcasterReceiveLocalEvent (echovr_functions.cpp:87) AND "
-                         "detoured as ENGINE_ENTITY_PROP_DISPATCH (mode_patches.cpp:728). "
-                         "All 15 ServerLib injection sites re-enter the hook, which returns "
-                         "early when g_isServer."),
     0x140F80ED0: ("N83", "CBroadcaster::Listen — called via EchoVR::BroadcasterListen "
                          "(echovr_functions.cpp:88) AND detoured as ENGINE_ENTITY_LOOKUP "
                          "(mode_patches.cpp:723)."),
 }
 
 KNOWN_DOUBLE_DETOURS = {
-    0x140F87AA0: ("N84", "broadcaster_bridge.dll hooks VA_BROADCASTER_RECEIVE_LOCAL with the "
-                         "vcpkg MinHook copy; gamepatches already detoured the same RVA with "
-                         "extern/minhook. Separate hook tables — the plugin trampolines off "
-                         "the existing JMP stub, and the result is discarded unchecked."),
+    # Empty. 0x140F87AA0 was here until 2026-07-26: gamepatches detoured it as
+    # ENGINE_ENTITY_PROP_DISPATCH while broadcaster_bridge hooked it as
+    # VA_BROADCASTER_RECEIVE_LOCAL. Removing the unjustified gamepatches detour
+    # (N83) left the plugin as sole owner, which resolved this too. If a second
+    # owner reappears, that is a NEW violation and fails hard.
 }
 
 

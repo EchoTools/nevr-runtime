@@ -391,7 +391,9 @@ static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 ar
 typedef VOID EngineEntityPropDispatchFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5);
 static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
 
-static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
+// NOT INSTALLED as of 2026-07-26 (N83) — see InstallEntityHooks below for why.
+// Retained as the record of what was removed and on what evidence.
+[[maybe_unused]] static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
   // !! N83 — THE COMMENT THAT USED TO BE HERE WAS FALSE. Preserved verbatim so
   // !! the next reader can recognise the shape of the mistake:
   // !!
@@ -767,10 +769,30 @@ VOID InstallEntityHooks() {
   PatchDetour(&OriginalEngineEntityLookup, reinterpret_cast<PVOID>(EngineEntityLookupHook));
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Engine entity lookup hook installed (null-pointer guard)");
 
-  OriginalEngineEntityPropDispatch =
-      (EngineEntityPropDispatchFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::ENGINE_ENTITY_PROP_DISPATCH);
-  PatchDetour(&OriginalEngineEntityPropDispatch, reinterpret_cast<PVOID>(EngineEntityPropDispatchHook));
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Entity prop dispatch hook installed (null-pointer guard)");
+  // N83 — REMOVED 2026-07-26: the detour on ENGINE_ENTITY_PROP_DISPATCH
+  // (0xF87AA0 = CBroadcaster::ReceiveLocalEvent).
+  //
+  // This was NOT a Chesterton's fence. `git log -S EngineEntityPropDispatchHook`
+  // finds no originating commit — it arrived in a49a837 (2026-03-29), a pure
+  // refactor ("split monolithic patches.cpp into modules"). No one built it for
+  // a reason; it was carried across during reorganisation. There is no AV
+  // evidence for this VA anywhere in the repo, and its own stated justification
+  // ("client-side rendering state") is refuted by its caller list
+  // (FinalizeEntrant, InitEntrantSlots, CommitPlaceholder — session lifecycle).
+  // docs/quest-hijack-point-map.md:125 already recorded that this VA is the same
+  // one as BroadcasterReceiveLocal; it was observed and walked past.
+  //
+  // The hook body carried no guard at all — just `if (g_isServer) return;`. Its
+  // only effect was to suppress the broadcaster's listener dispatch on servers,
+  // which severed all 15 ServerLib injection sites (they reach this VA through
+  // EchoVR::BroadcasterReceiveLocalEvent, echovr_functions.cpp:87).
+  //
+  // Kept in the file, uninstalled, because it is the paired evidence for the
+  // ENGINE_ENTITY_LOOKUP guard below — which DOES have evidence and stays.
+  // If this needs to come back, it needs a recorded AV first.
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.PATCH] entity prop dispatch hook NOT installed name=CBroadcaster::ReceiveLocalEvent "
+      "va=0x140F87AA0 reason=N83_no_recorded_justification");
 }
 
 VOID InstallBugSplatHook() {
