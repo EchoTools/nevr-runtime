@@ -582,6 +582,19 @@ verify:
         echo "log_filter.dll would silently disable the built-in log filter's file output." >&2
         exit 1
     fi
+    # N90: pnsrad.dll links its OWN copy of CLog, so hooking echovr.exe's
+    # CLog::PrintfImpl does not cover it. Without this second hook its output
+    # bypasses the filter entirely — measured: 8191-byte profile dumps on console
+    # while max_line_length was 500.
+    if ! grep -q 'InstallPnsradHook' src/gamepatches/builtin_log_filter.cpp; then
+        echo "verify: FAIL — N90 pnsrad log hook missing; pnsrad.dll output bypasses the filter." >&2
+        exit 1
+    fi
+    if ! grep -q 'BuiltinLogFilter::InstallPnsradHook();' src/gamepatches/wave0_instrumentation.cpp; then
+        echo "verify: FAIL — N90 InstallPnsradHook call site missing from the live tick; the hook" >&2
+        echo "would never install, since pnsrad.dll loads long after filter init." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)

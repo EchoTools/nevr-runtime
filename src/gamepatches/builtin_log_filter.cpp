@@ -1054,6 +1054,84 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* N90 — pnsrad.dll carries its OWN statically-linked copy of CLog      */
+/* ------------------------------------------------------------------ */
+/*
+ * Hooking echovr.exe's CLog::PrintfImpl does NOT capture pnsrad.dll's logging.
+ * Measured: a probe placed before every suppress/truncate decision in our hook
+ * never fired for "[NSUSER] saved" while two such lines (5599 and 8191 bytes)
+ * reached the console — so the hook was not merely dropping them, it never saw
+ * them.
+ *
+ * `strings` shows the format string "[NSUSER] saved %s: %s" in echovr.exe AND
+ * pnsrad.dll AND pnsovr.dll AND pnsdemo.dll — each social-layer DLL links its
+ * own copy of the logging code. ReVault: the string lives at 0x180229f10 in
+ * pnsrad.dll with one xref at 0x180090ce2, whose call goes to 0x1800929a0 — a
+ * varargs wrapper (205 call sites) over 0x1800929c0 (2 call sites), which has
+ * the SAME prologue as echovr's CLog::PrintfImpl. A structural mirror.
+ *
+ * So hook pnsrad.dll's copy at RVA 0x929c0 with the same handler. Prologue is
+ * validated first — pnsrad.dll is a relocatable DLL and this address is derived
+ * from a different image than the one ReVault indexed.
+ */
+static constexpr uintptr_t kPnsradPrintfImplRva = 0x929C0;
+static constexpr uint8_t kPnsradPrintfImplPrologue[5] = {0x48, 0x89, 0x5C, 0x24, 0x18};
+static void* g_pnsrad_hook_target = nullptr;
+
+void BuiltinLogFilter::InstallPnsradHook() {
+    if (g_pnsrad_hook_target != nullptr) return;  /* already installed */
+
+    /* pnsrad.dll loads well after our init, so this is driven from the per-frame
+     * tick and retries until the module appears. Bounded so a build that never
+     * loads pnsrad does not retry forever; the give-up is logged once, because a
+     * silent give-up is how N86 stayed invisible. */
+    static int s_attempts = 0;
+    static bool s_gaveUp = false;
+    if (s_gaveUp) return;
+
+    HMODULE hPnsrad = GetModuleHandleA("pnsrad.dll");
+    if (hPnsrad == nullptr) {
+        if (++s_attempts > 4000) {  /* ~32s at 125Hz */
+            s_gaveUp = true;
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] pnsrad.dll never loaded after %d attempts — its log copy is "
+                "NOT filtered; its output bypasses max_line_length (N90)",
+                s_attempts);
+        }
+        return;
+    }
+
+    void* target = reinterpret_cast<uint8_t*>(hPnsrad) + kPnsradPrintfImplRva;
+    uint8_t actual[5] = {0};
+    memcpy(actual, target, sizeof(actual));
+    if (memcmp(actual, kPnsradPrintfImplPrologue, sizeof(actual)) != 0) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] hook skipped name=pnsrad!CLog::PrintfImpl rva=0x%llX "
+            "reason=prologue_mismatch expected=48895c2418 actual=%02x%02x%02x%02x%02x (N90)",
+            static_cast<unsigned long long>(kPnsradPrintfImplRva),
+            actual[0], actual[1], actual[2], actual[3], actual[4]);
+        return;
+    }
+
+    /* Same handler: the signature is identical, and the filter is stateless with
+     * respect to which image produced the line. */
+    void* orig = nullptr;
+    if (MH_CreateHook(target, reinterpret_cast<void*>(&hook_PrintfImpl), &orig) != MH_OK ||
+        MH_EnableHook(target) != MH_OK) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] hook failed name=pnsrad!CLog::PrintfImpl rva=0x%llX (N90)",
+            static_cast<unsigned long long>(kPnsradPrintfImplRva));
+        return;
+    }
+
+    g_pnsrad_hook_target = target;
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] hooked name=pnsrad!CLog::PrintfImpl rva=0x%llX — pnsrad log output "
+        "now filtered and truncated (N90)",
+        static_cast<unsigned long long>(kPnsradPrintfImplRva));
+}
+
 void BuiltinLogFilter::Init(uintptr_t base_addr, bool is_server) {
     BlfLog("initializing (base=0x%llx, server=%s)",
            static_cast<unsigned long long>(base_addr),

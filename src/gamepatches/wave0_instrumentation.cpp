@@ -39,6 +39,7 @@
 #include "wave0_instrumentation.h"
 #include "mode_patches.h"
 #include "hook_liveness.h"
+#include "builtin_log_filter.h"
 #include "patch_addresses.h"
 #include "common/globals.h"
 #include "common/logging.h"
@@ -179,6 +180,7 @@ static void DispatchPerFrameWork(uint64_t nowUs) {
     g_lastTickUs = nowUs;
 
     EnsureStackReserve();  // N69: covers whatever thread drives the loop
+    BuiltinLogFilter::InstallPnsradHook();  // N90: idempotent; installs once pnsrad.dll loads
 
     // Liveness + N83/N84 evidence, ~every 30s (3750 ticks x 8ms).
     {
