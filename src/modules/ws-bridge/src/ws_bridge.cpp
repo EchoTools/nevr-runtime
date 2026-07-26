@@ -363,7 +363,7 @@ void InstallWebSocketBridge() {
                         std::string loginMsg = BuildLoginRequest(discordId, platformCode);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
-                        Log(EchoVR::LogLevel::Debug,
+                        Log(EchoVR::LogLevel::Info,
                             "[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu",
                             xpid.c_str(), static_cast<int>(platformCode), connIdx, loginMsg.size());
                       }
@@ -526,7 +526,7 @@ void InstallWebSocketBridge() {
                         std::string loginMsg = BuildLoginRequest(discordId, platformCode);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
-                        Log(EchoVR::LogLevel::Debug,
+                        Log(EchoVR::LogLevel::Info,
                             "[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu",
                             xpid.c_str(), static_cast<int>(platformCode), connIdx, loginMsg.size());
                       }
