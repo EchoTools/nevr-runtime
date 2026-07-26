@@ -13,6 +13,15 @@ void InstallCrashRecoveryHooks();
 /// calling thread (N69).
 void InstallVEH();
 
+/// Hooks the game's CrashExceptionFilter to report WHY the game entered its crash
+/// path. Purely diagnostic — always calls the original.
+void InstallCrashFilterInstrumentation();
+
+/// Re-snapshot the module table after modules and plugins have loaded, so crash
+/// frames inside them can be attributed. Must be called from normal code, never
+/// from a handler (it takes the loader lock).
+void RefreshModuleCache();
+
 /// N69: reserve stack below the guard page so the stack-overflow handler has room
 /// to run. Per-thread and idempotent (thread_local one-shot) — call it from any
 /// hook that runs on a thread which could fault. Cheap after the first call on a

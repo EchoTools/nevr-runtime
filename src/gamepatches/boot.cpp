@@ -280,6 +280,9 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // Load external plugins from plugins/ subdirectory
   LoadPlugins();
 
+  // Crash frames in modules/plugins are unattributable without this (N85).
+  RefreshModuleCache();
+
   // Run the original method
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
   return result;

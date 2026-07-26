@@ -16,6 +16,40 @@
 #include "common/nevr_module_interface.h"
 #include "common/echovr_functions.h"
 #include "common/logging.h"
+#include <exception>
+#include <utility>
+
+// ============================================================================
+// N85 — exception boundary for ixwebsocket callbacks (module ws_bridge)
+// ============================================================================
+//
+// These lambdas are invoked BY ixwebsocket on ixwebsocket's own threads, which
+// makes each one a library boundary. The CPP addendum's rule applies: an
+// exception must never unwind across it.
+//
+// Measured: a throw escaping here was killing the dedicated server. The game is
+// MSVC-built and cannot raise exception code 0x20474343 ('GCC ', the MinGW throw
+// magic), so when that code reached the game's top-level unhandled-exception
+// filter (0x1401CEE70 -> HandleCrashDump -> WriteCrashSystemInfo, the source of
+// "=== System Info ===") the thrower could only have been a NEVR DLL. Crash-dump
+// frame attribution named this module.
+//
+// std::exception is named explicitly rather than catch(...) per the addendum. A
+// non-std::exception throw still escapes, deliberately — that would be something
+// we do not model and should stay visible.
+template <typename Fn>
+static auto GuardWsCallback(const char* what, Fn&& fn) {
+  return [what, fn = std::forward<Fn>(fn)](auto&&... args) {
+    try {
+      fn(std::forward<decltype(args)>(args)...);
+    } catch (const std::exception& e) {
+      Log(EchoVR::LogLevel::Error,
+          "[NEVR.WS] callback threw and was CONTAINED at=%s what=%s — server continues "
+          "(an escape here reaches the game's unhandled-exception filter and kills it, N85)",
+          what, e.what());
+    }
+  };
+}
 
 // Stored from NvrModuleContext for cross-module proc resolution
 static void* (*s_getProc)(const char*) = nullptr;
@@ -200,7 +234,7 @@ void InstallWebSocketBridge() {
   }
 
   // Callbacks set after successful listen(), before start().
-  g_server->setOnClientMessageCallback(
+  g_server->setOnClientMessageCallback(GuardWsCallback("module_ws_bridge:setOnClientMessageCallback", 
       [](std::shared_ptr<ix::ConnectionState> connState,
          ix::WebSocket& gameWs,
          const ix::WebSocketMessagePtr& msg) {
@@ -272,7 +306,7 @@ void InstallWebSocketBridge() {
             ix::WebSocket* gameWsPtr = &gameWs;
 
             // Remote → game forwarding
-            remote->setOnMessageCallback(
+            remote->setOnMessageCallback(GuardWsCallback("module_ws_bridge:setOnMessageCallback", 
                 [pairPtr, gameWsPtr, connIdx, discordId](const ix::WebSocketMessagePtr& rmsg) {
                   switch (rmsg->type) {
                     case ix::WebSocketMessageType::Open: {
@@ -517,7 +551,7 @@ void InstallWebSocketBridge() {
                     default:
                       break;
                   }
-                });
+                }));
 
             {
               std::lock_guard<std::mutex> lk(g_pairsMutex);
@@ -616,7 +650,13 @@ void InstallWebSocketBridge() {
                 remoteToStop = it->second->remoteWs;
                 // Clear callback under lock so no further invocations
                 // reference the freed ProxyPair after erase.
-                it->second->remoteWs->setOnMessageCallback(nullptr);
+                // N85: no-op, NOT nullptr. ixwebsocket invokes _onMessageCallback
+                // unconditionally; an empty std::function throws std::bad_function_call,
+                // which unwinds out of ixwebsocket's own thread, reaches the game's
+                // unhandled-exception filter as GCC throw code 0x20474343, and kills the
+                // dedicated server. Confirmed from a crash-dump stack:
+                // __cxa_allocate_exception -> __cxa_throw -> std::bad_function_call.
+                it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
                 g_pairs.erase(it);
               }
             } // g_pairsMutex RELEASED here — safe to call stop()
@@ -630,7 +670,7 @@ void InstallWebSocketBridge() {
           default:
             break;
         }
-      });
+      }));
 
   g_server->start();
   g_bridgeEnabled = true;

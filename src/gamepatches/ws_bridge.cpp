@@ -21,6 +21,40 @@
 #include "common/echovr_functions.h"
 #include "common/globals.h"
 #include "common/logging.h"
+#include <exception>
+#include <utility>
+
+// ============================================================================
+// N85 — exception boundary for ixwebsocket callbacks
+// ============================================================================
+//
+// These lambdas are invoked BY ixwebsocket, on ixwebsocket's own threads. That
+// makes each one a DLL/library boundary, and the CPP addendum's rule applies:
+// never let an exception unwind across it.
+//
+// Measured consequence of not doing so: a C++ throw escaping one of these
+// callbacks reaches the game's top-level unhandled-exception filter
+// (0x1401CEE70 -> HandleCrashDump -> WriteCrashSystemInfo, which is what prints
+// "=== System Info ==="), and the server dies. Exception code 0x20474343 is
+// 'GCC ' — the MinGW throw magic. The game is MSVC-built and cannot raise it,
+// so any 0x20474343 in a server log came from a NEVR DLL.
+//
+// std::exception is named explicitly rather than catch(...) per the addendum.
+// A non-std::exception throw would still escape, and that is deliberate: it
+// would indicate something we do not model, and should be visible.
+template <typename Fn>
+static auto GuardWsCallback(const char* what, Fn&& fn) {
+  return [what, fn = std::forward<Fn>(fn)](auto&&... args) {
+    try {
+      fn(std::forward<decltype(args)>(args)...);
+    } catch (const std::exception& e) {
+      Log(EchoVR::LogLevel::Error,
+          "[NEVR.WS] callback threw and was CONTAINED at=%s what=%s — server continues "
+          "(an escape here reaches the game's unhandled-exception filter and kills it, N85)",
+          what, e.what());
+    }
+  };
+}
 
 // ============================================================================
 // In-process WebSocket TLS proxy
@@ -215,7 +249,7 @@ void InstallWebSocketBridge() {
   }
 
   // Callbacks set after successful listen(), before start().
-  g_server->setOnClientMessageCallback(
+  g_server->setOnClientMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnClientMessageCallback", 
       [](std::shared_ptr<ix::ConnectionState> connState,
          ix::WebSocket& gameWs,
          const ix::WebSocketMessagePtr& msg) {
@@ -245,7 +279,7 @@ void InstallWebSocketBridge() {
               // entirely on the login connection's callback — when login
               // disconnected and B2/N54 nulled that callback, all matchmaker
               // server→game message routing silently died.
-              g_loginRemoteWs->setOnMessageCallback(
+              g_loginRemoteWs->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback", 
                   [pairPtr, gameWsPtr](const ix::WebSocketMessagePtr& rmsg) {
                     switch (rmsg->type) {
                       case ix::WebSocketMessageType::Message: {
@@ -270,7 +304,7 @@ void InstallWebSocketBridge() {
                       default:
                         break;
                     }
-                  });
+                  }));
 
               {
                 std::lock_guard<std::mutex> lk(g_pairsMutex);
@@ -357,7 +391,7 @@ void InstallWebSocketBridge() {
             ix::WebSocket* gameWsPtr = &gameWs;
 
             // Remote → game forwarding
-            remote->setOnMessageCallback(
+            remote->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback", 
                 [pairPtr, gameWsPtr, connIdx, discordId](const ix::WebSocketMessagePtr& rmsg) {
                   switch (rmsg->type) {
                     case ix::WebSocketMessageType::Open: {
@@ -555,7 +589,7 @@ void InstallWebSocketBridge() {
                     default:
                       break;
                   }
-                });
+                }));
 
             {
               std::lock_guard<std::mutex> lk(g_pairsMutex);
@@ -682,7 +716,13 @@ void InstallWebSocketBridge() {
                   remoteToStop = it->second->remoteWs;
                   // Clear callback under lock so no further invocations
                   // reference the freed ProxyPair after erase.
-                  it->second->remoteWs->setOnMessageCallback(nullptr);
+                  // N85: no-op, NOT nullptr. ixwebsocket invokes _onMessageCallback
+                  // unconditionally; an empty std::function throws std::bad_function_call,
+                  // which unwinds out of ixwebsocket's own thread, reaches the game's
+                  // unhandled-exception filter as GCC throw code 0x20474343, and kills the
+                  // dedicated server. Confirmed from a crash-dump stack:
+                  // __cxa_allocate_exception -> __cxa_throw -> std::bad_function_call.
+                  it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
                 } else if (&gameWs == g_loginGameWs) {
                   // Login pair closing — shared remote. N61: only clear the
                   // callback if NO matchmaker connection is sharing the remote.
@@ -691,7 +731,7 @@ void InstallWebSocketBridge() {
                   // kill matchmaker routing — the regression N61 was supposed
                   // to prevent.
                   if (g_activeGameWs == nullptr || g_activeGameWs == &gameWs) {
-                    it->second->remoteWs->setOnMessageCallback(nullptr);
+                    it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
                   }
                   // If a matchmaker is active, leave its callback intact.
                 }
@@ -709,7 +749,7 @@ void InstallWebSocketBridge() {
           default:
             break;
         }
-      });
+      }));
 
   g_server->start();
   g_bridgeEnabled = true;
@@ -793,10 +833,10 @@ void* TestHook_N61_RegisterMatchmaker(void* gameWsHandle, bool* callbackFired) {
 
   // N61: matchmaker registers its own callback on the shared remote.
   bool* fired = callbackFired;
-  g_loginRemoteWs->setOnMessageCallback(
+  g_loginRemoteWs->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback", 
       [fired](const ix::WebSocketMessagePtr&) {
         if (fired) *fired = true;
-      });
+      }));
 
   {
     std::lock_guard<std::mutex> lk(g_pairsMutex);
@@ -808,7 +848,8 @@ void* TestHook_N61_RegisterMatchmaker(void* gameWsHandle, bool* callbackFired) {
 }
 
 // Run the production Close handler for the given game WS and report whether
-// the shared remote's callback was cleared (setOnMessageCallback(nullptr)).
+// the shared remote's callback was cleared (replaced with a no-op — N85:
+// never nullptr, which ixwebsocket would invoke and throw bad_function_call).
 // Returns true if the callback WAS cleared, false if it survived.
 //
 // This is NOT a reimplementation — it runs the SAME code as the production
@@ -829,12 +870,12 @@ bool TestHook_N61_SimulateCloseAndCheckCleared(void* rawGameWsPtr) {
         bool isShared = (it->second->remoteWs == g_loginRemoteWs);
         if (!isShared) {
           remoteToStop = it->second->remoteWs;
-          it->second->remoteWs->setOnMessageCallback(nullptr);
+          it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
           callbackWasCleared = true;
         } else if (gameWs == g_loginGameWs) {
           // N61 guard: only clear if no matchmaker is sharing.
           if (g_activeGameWs == nullptr || g_activeGameWs == gameWs) {
-            it->second->remoteWs->setOnMessageCallback(nullptr);
+            it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
             callbackWasCleared = true;
           }
           // Else: matchmaker is active → callback SURVIVES (post-fix).

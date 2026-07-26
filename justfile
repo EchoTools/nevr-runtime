@@ -448,6 +448,20 @@ verify:
         echo "verify: FAIL — N84 HookGuard::VerifyAll missing from the plugin load path; third-party re-hooks undetectable." >&2
         exit 1
     fi
+    # N85: never hand ixwebsocket an empty std::function. It invokes
+    # _onMessageCallback unconditionally, so nullptr throws std::bad_function_call,
+    # which unwinds out of ixwebsocket's own thread, reaches the game's
+    # unhandled-exception filter as GCC throw code 0x20474343, and kills the
+    # dedicated server. Use a no-op lambda.
+    # Match the CALL form ('->setOnMessageCallback(nullptr)') and drop comment
+    # lines. A looser pattern flags prose describing the bug — the same false
+    # positive the N81 sensor hit on cli.cpp's --help strings.
+    if grep -rn -- '->setOnMessageCallback(nullptr)' src/gamepatches src/modules src/common 2>/dev/null \
+         | grep -v legacy | grep -vE ':[[:space:]]*(//|\*)'; then
+        echo "verify: FAIL — N85 setOnMessageCallback(nullptr) reintroduced; use a no-op lambda." >&2
+        echo "An empty std::function invoked by ixwebsocket throws std::bad_function_call and kills the server." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)

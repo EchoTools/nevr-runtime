@@ -333,6 +333,17 @@ constexpr uintptr_t GAME_MAIN = 0x0CD550;
 constexpr uintptr_t ENGINE_ENTITY_LOOKUP = 0xF80ED0;          // = CBroadcaster::Listen
 constexpr uintptr_t ENGINE_ENTITY_PROP_DISPATCH = 0xF87AA0;   // = CBroadcaster::ReceiveLocalEvent
 
+/// Address: CrashExceptionFilter (0x1401cef00, 49 instructions) — ReVault-verified.
+/// The game's crash entry point. Registered as an unhandled-exception filter (no
+/// static callers), and the ONLY path to HandleCrashDump -> WriteCrashSystemInfo,
+/// which prints "=== System Info ===". If that banner appears in a server log, the
+/// game came through here. Signature (from disassembly): three args, R8 holds a
+/// pointer to an EXCEPTION_POINTERS-like struct; the function special-cases
+/// *(DWORD*)(*R8) == 0xC00000FD (STACK_OVERFLOW) at 0x1401cef3a.
+/// Prologue: 48 89 5C 24 08 (MOV [RSP+8],RBX) — MinHook-safe.
+constexpr uintptr_t CRASH_EXCEPTION_FILTER = 0x1CEF00;
+constexpr unsigned char CRASH_EXCEPTION_FILTER_PROLOGUE[5] = {0x48, 0x89, 0x5C, 0x24, 0x08};
+
 /// Address: BugSplat crash handler (0x1400dbbc0, 141 bytes)
 /// Fatal error handler called from 5 sites in the game. Builds an error report,
 /// calls ExitProcess(1), then executes int3. In server mode we hook this to log

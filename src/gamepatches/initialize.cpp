@@ -331,6 +331,7 @@ VOID Initialize() {
   BootLogTee::TeeFprintf("[NEVR.PATCH] server crash-recovery hooks installed\n");
   // --- Exception handling ---
   InstallVEH();
+  InstallCrashFilterInstrumentation();
   BootLogTee::TeeFprintf("[NEVR.CRASH] veh installed\n");
   InstallConsoleCtrlHandler();
   BootLogTee::TeeFprintf("[NEVR.PATCH] console ctrl handler installed\n");

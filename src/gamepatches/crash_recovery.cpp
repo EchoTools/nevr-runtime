@@ -320,6 +320,11 @@ static void WriteCrashDump(PEXCEPTION_POINTERS ex) {
     case EXCEPTION_ILLEGAL_INSTRUCTION: excName = "ILLEGAL_INSTRUCTION"; break;
     case EXCEPTION_STACK_OVERFLOW: excName = "STACK_OVERFLOW"; break;
     case EXCEPTION_INT_DIVIDE_BY_ZERO: excName = "INT_DIVIDE_BY_ZERO"; break;
+    // 0x20474343 == 'GCC ' — the GNU C++ throw magic used by MinGW's __cxa_throw.
+    // The game is MSVC-built and cannot raise this; it can only come from a NEVR
+    // DLL. An unhandled one reaches the game's top-level filter and kills the
+    // server (CPP addendum: never throw across a DLL boundary).
+    case 0x20474343: excName = "CXX_THROW_FROM_NEVR_DLL"; break;
     default: break;
   }
 
@@ -364,13 +369,26 @@ static void WriteCrashDump(PEXCEPTION_POINTERS ex) {
   // for return addresses that point into the game's code range.
   DWORD64* sp = reinterpret_cast<DWORD64*>(ctx->Rsp);
   int found = 0;
-  for (int i = 0; i < 256 && found < 16; i++) {
+  for (int i = 0; i < 512 && found < 24; i++) {
     if (!IsReadableMemory(sp + i, 8)) break;
-    const INT64 r = rva(sp[i]);
+    const DWORD64 v = sp[i];
+    const INT64 r = rva(v);
     if (r >= 0 && r < 0x1800000) {
-      VehPrintf("[NEVR.CRASH] frame #%d rsp_off=0x%X rva=game+0x%llX", found, i * 8,
+      VehPrintf("[NEVR.CRASH] frame #%d rsp_off=0x%X mod=echovr.exe rva=0x%llX", found, i * 8,
                 static_cast<unsigned long long>(r));
       found++;
+      continue;
+    }
+    // Attribute to a NEVR module — this is what names the DLL that threw.
+    const LONG mc = g_moduleCacheCount;
+    for (LONG m = 0; m < mc; m++) {
+      if (v >= g_moduleCache[m].base && v < g_moduleCache[m].end) {
+        VehPrintf("[NEVR.CRASH] frame #%d rsp_off=0x%X mod=%s rva=0x%llX", found, i * 8,
+                  g_moduleCache[m].name,
+                  static_cast<unsigned long long>(v - g_moduleCache[m].base));
+        found++;
+        break;
+      }
     }
   }
   VehPrintf("[NEVR.CRASH] stack_scan frames=%d", found);
@@ -437,7 +455,8 @@ LONG WINAPI BreakpointVEH(PEXCEPTION_POINTERS pExceptionInfo) {
       code == EXCEPTION_ILLEGAL_INSTRUCTION ||
       code == EXCEPTION_STACK_OVERFLOW ||
       code == EXCEPTION_INT_DIVIDE_BY_ZERO ||
-      code == STATUS_STACK_BUFFER_OVERRUN) {
+      code == STATUS_STACK_BUFFER_OVERRUN ||
+      code == 0x20474343) {  // C++ throw from a NEVR DLL — see WriteCrashDump
     static volatile LONG g_crashLogCount = 0;
     if (InterlockedIncrement(&g_crashLogCount) <= 3) {
       WriteCrashDump(pExceptionInfo);
@@ -503,6 +522,133 @@ void InstallCrashRecoveryHooks() {
     }
   } else {
     Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load kernel32.dll for crash reporter hooks");
+  }
+}
+
+// ============================================================================
+// CrashExceptionFilter instrumentation — why did the game decide to crash?
+// ============================================================================
+//
+// The game prints "=== System Info ===" only from WriteCrashSystemInfo, reachable
+// only from HandleCrashDump, reachable only from CrashExceptionFilter
+// (ReVault-verified call chain). So that banner in a server log means the game
+// entered its crash path — but it says nothing about WHY, and a WINEDEBUG=+seh
+// trace of a failing run showed NO access violation and no unhandled exception.
+//
+// Instrument the entry point itself and report the exception record the game was
+// handed. Uses VehPrintf, not Log(): this may run from an exception context
+// (N70).
+typedef INT64 (*CrashExceptionFilterFunc)(void*, void*, void**);
+static CrashExceptionFilterFunc OriginalCrashExceptionFilter = nullptr;
+
+static INT64 CrashExceptionFilterHook(void* a1, void* a2, void** ppExRecords) {
+  VehPrintf("[NEVR.CRASH] CrashExceptionFilter ENTERED ret=%p tid=%lu",
+            __builtin_return_address(0), GetCurrentThreadId());
+  return OriginalCrashExceptionFilter(a1, a2, ppExRecords);
+}
+
+// HandleCrashDump — the function that actually prints "=== System Info ===" (via
+// WriteCrashSystemInfo). ReVault reports its only static caller is
+// CrashExceptionFilter, but a probe on that filter did NOT fire while the banner
+// still appeared, which means HandleCrashDump is reached indirectly. Hook it
+// directly and report the return address so the real caller is named rather than
+// guessed.
+typedef INT64 (*HandleCrashDumpFunc)(void*, void*, void*, void*);
+static HandleCrashDumpFunc OriginalHandleCrashDump = nullptr;
+
+static INT64 HandleCrashDumpHook(void* a1, void* a2, void* a3, void* a4) {
+  const DWORD64 base = reinterpret_cast<DWORD64>(EchoVR::g_GameBaseAddress);
+  const DWORD64 ret = reinterpret_cast<DWORD64>(__builtin_return_address(0));
+  VehPrintf("[NEVR.CRASH] HandleCrashDump ENTERED ret=0x%llX rva=%s0x%llX tid=%lu "
+            "a1=%p a2=%p a3=%p a4=%p",
+            static_cast<unsigned long long>(ret),
+            (ret >= base && ret < base + 0x2000000) ? "game+" : "abs:",
+            static_cast<unsigned long long>((ret >= base && ret < base + 0x2000000) ? ret - base : ret),
+            GetCurrentThreadId(), a1, a2, a3, a4);
+  // a3 is EXCEPTION_POINTERS** (the caller at 0x1401CEE70 is the
+  // SetUnhandledExceptionFilter callback: it spills RCX to the stack and passes
+  // its address). Decode it to name the actual fault.
+  if (a3 != nullptr && IsReadableMemory(a3, sizeof(void*))) {
+    PEXCEPTION_POINTERS ep = *static_cast<PEXCEPTION_POINTERS*>(a3);
+    if (ep != nullptr && IsReadableMemory(ep, sizeof(EXCEPTION_POINTERS)) &&
+        ep->ExceptionRecord != nullptr &&
+        IsReadableMemory(ep->ExceptionRecord, sizeof(EXCEPTION_RECORD))) {
+      const DWORD64 ea = reinterpret_cast<DWORD64>(ep->ExceptionRecord->ExceptionAddress);
+      VehPrintf("[NEVR.CRASH] >>> EXCEPTION code=0x%08lX flags=0x%lX addr=0x%llX rva=%s0x%llX "
+                "nparams=%lu p0=0x%llX p1=0x%llX",
+                ep->ExceptionRecord->ExceptionCode, ep->ExceptionRecord->ExceptionFlags,
+                static_cast<unsigned long long>(ea),
+                (ea >= base && ea < base + 0x2000000) ? "game+" : "abs:",
+                static_cast<unsigned long long>((ea >= base && ea < base + 0x2000000) ? ea - base : ea),
+                ep->ExceptionRecord->NumberParameters,
+                static_cast<unsigned long long>(ep->ExceptionRecord->NumberParameters > 0
+                                                    ? ep->ExceptionRecord->ExceptionInformation[0] : 0),
+                static_cast<unsigned long long>(ep->ExceptionRecord->NumberParameters > 1
+                                                    ? ep->ExceptionRecord->ExceptionInformation[1] : 0));
+      if (ep->ContextRecord != nullptr && IsReadableMemory(ep->ContextRecord, sizeof(CONTEXT))) {
+        const DWORD64 rip = ep->ContextRecord->Rip;
+        VehPrintf("[NEVR.CRASH] >>> rip=0x%llX rva=%s0x%llX rsp=0x%llX rcx=0x%llX rdx=0x%llX",
+                  static_cast<unsigned long long>(rip),
+                  (rip >= base && rip < base + 0x2000000) ? "game+" : "abs:",
+                  static_cast<unsigned long long>((rip >= base && rip < base + 0x2000000) ? rip - base : rip),
+                  ep->ContextRecord->Rsp, ep->ContextRecord->Rcx, ep->ContextRecord->Rdx);
+      }
+    } else {
+      VehPrintf("[NEVR.CRASH] >>> no EXCEPTION_POINTERS (ep=%p) — fatal-error path, not a fault",
+                static_cast<void*>(ep));
+    }
+  }
+
+  // Stack scan for game-code return addresses — names the call chain.
+  DWORD64* sp = reinterpret_cast<DWORD64*>(&a1);
+  int found = 0;
+  for (int i = 0; i < 96 && found < 10; i++) {
+    if (!IsReadableMemory(sp + i, 8)) break;
+    const DWORD64 v = sp[i];
+    if (v >= base && v < base + 0x1800000) {
+      VehPrintf("[NEVR.CRASH]   caller#%d game+0x%llX", found,
+                static_cast<unsigned long long>(v - base));
+      found++;
+    }
+  }
+  return OriginalHandleCrashDump(a1, a2, a3, a4);
+}
+
+// N70/N85: the init-time snapshot is taken in InstallVEH, which runs during
+// Initialize() — BEFORE modules (ws_bridge, token_auth, platform_compat) and
+// plugins load. Without a refresh, a crash inside any of those is attributed to
+// nothing, which is exactly what happened while chasing N85. Re-snapshot once
+// the module set is final. Still never called from the handler itself.
+void RefreshModuleCache() {
+  CacheModuleTable();
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.CRASH] module cache refreshed count=%ld (post module/plugin load)",
+      g_moduleCacheCount);
+}
+
+void InstallCrashFilterInstrumentation() {
+  void* filt = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress +
+                                       PatchAddresses::CRASH_EXCEPTION_FILTER);
+  if (memcmp(filt, PatchAddresses::CRASH_EXCEPTION_FILTER_PROLOGUE,
+             sizeof(PatchAddresses::CRASH_EXCEPTION_FILTER_PROLOGUE)) == 0) {
+    OriginalCrashExceptionFilter = reinterpret_cast<CrashExceptionFilterFunc>(filt);
+    PatchDetour(&OriginalCrashExceptionFilter,
+                reinterpret_cast<PVOID>(CrashExceptionFilterHook), "CrashExceptionFilter");
+  }
+
+  // HandleCrashDump @ 0x1401CEFE0 — prologue read from the live image and
+  // validated at install; never blind-write.
+  void* hcd = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress + 0x1CEFE0);
+  OriginalHandleCrashDump = reinterpret_cast<HandleCrashDumpFunc>(hcd);
+  const unsigned char* pb = static_cast<const unsigned char*>(hcd);
+  if (PatchDetour(&OriginalHandleCrashDump,
+                  reinterpret_cast<PVOID>(HandleCrashDumpHook), "HandleCrashDump")) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.CRASH] hooked name=HandleCrashDump va=0x1401CEFE0 prologue=%02x%02x%02x%02x%02x "
+        "(why-did-we-crash probe)",
+        pb[0], pb[1], pb[2], pb[3], pb[4]);
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.CRASH] hook failed name=HandleCrashDump");
   }
 }
 
