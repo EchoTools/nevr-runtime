@@ -584,6 +584,17 @@ verify:
         echo "would never install, since pnsrad.dll loads long after filter init." >&2
         exit 1
     fi
+    # N75: plugins and modules must load with a restricted search path. With
+    # dwFlags=0 the search starts at the application directory, so a dll dropped
+    # next to echovr.exe can satisfy a dependency ahead of the real one. N89
+    # demonstrated the mechanism accidentally.
+    for f in src/gamepatches/plugin_loader.cpp src/gamepatches/module_loader.cpp; do
+        if ! grep -q 'LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR' "$f"; then
+            echo "verify: FAIL — N75 restricted search flags missing from $f;" >&2
+            echo "dependencies would resolve from the application directory first." >&2
+            exit 1
+        fi
+    done
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)

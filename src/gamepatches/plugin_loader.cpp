@@ -105,7 +105,30 @@ void LoadPlugins() {
       }
     }
 
-    HMODULE hPlugin = LoadLibraryA(path.c_str());
+    /* N75: LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32.
+     *
+     * The risk was never loading OUR dll — we pass a full path. It is how ITS
+     * dependencies resolve: with dwFlags=0 the search order starts at the
+     * application directory, so a dll dropped next to echovr.exe can satisfy a
+     * dependency ahead of the real one. These flags restrict the search to the
+     * loaded dll's own directory plus System32.
+     *
+     * Not hypothetical: N89 was a stale dll sitting in plugins/ silently taking
+     * over the log filter for entire runs. That was an accident; the same directory
+     * and the same loader are what an attacker would use deliberately.
+     *
+     * The flags require an absolute path (we have one). If the OS rejects them we
+     * log and fall back rather than failing to load — but we say so, because a
+     * silent fallback would defeat the whole point. */
+    HMODULE hPlugin = LoadLibraryExA(path.c_str(), nullptr,
+                                     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR |
+                                     LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!hPlugin && GetLastError() == ERROR_INVALID_PARAMETER) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PLUGIN] %s: restricted search flags unsupported — falling back to "
+          "default search order (N75 hardening inactive for this load)", filename);
+      hPlugin = LoadLibraryA(path.c_str());
+    }
     if (!hPlugin) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] Failed to load %s: error %lu", filename, GetLastError());
       continue;
