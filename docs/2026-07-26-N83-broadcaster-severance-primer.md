@@ -1,5 +1,33 @@
 # Primer — N83: the broadcaster self-collision, and how to finish it
 
+> **UPDATED 2026-07-26 (later, same day).** This primer was written before three
+> things happened. Read this block before the body — parts of the body below are
+> now historical.
+>
+> 1. **The `0xF87AA0` half is fixed.** It is no longer an unconditional
+>    `if (g_isServer) return;`. It is a real null-guard on the exact fault chain
+>    (`inner = *arg1`; `table = *(inner+0x5e0)`; AV at `[table + bucket*4]`), so
+>    the broadcaster's listener dispatch runs normally when the structure is valid.
+> 2. **The originating commit WAS found**, contradicting this primer's body: it is
+>    `7beccee` (2026-03-24, Andrew Bates), whose message says *"Entity property
+>    dispatch null-guard (fcn.140f87aa0) to prevent AV in server mode from
+>    uninitialized client-side state."* The earlier "no originating commit" claim
+>    came from `git log -S` scoped to `mode_patches.cpp` — a file created by a
+>    LATER refactor, so that search could not have found it. The recorded intent
+>    does not make the diagnosis correct (the explanation is falsified by the
+>    function's own callers), but there WAS a builder and a reason.
+> 3. **The open question now has partial data.** Hook-entry counters on a live
+>    headless server report `listen_entries=82 dispatch_entries=1` with **0** guard
+>    trips, stable across 4 samples. So the hooks run and the AV does not occur
+>    during boot or registration. It is NOT settled: `dispatch_entries=1` shows the
+>    message path is unexercised when idle, so gameplay/entrant churn is untested.
+>    A Decision-line is recorded in N83.
+>
+> Also relevant and not in the body: the dedicated server now reaches
+> registration (N85 — an empty `std::function` handed to ixwebsocket was killing
+> it), and the per-frame tick that reports these counters had to be moved off a
+> dead hook (N86).
+
 **For the next agent.** This is multi-swipe work. Read this before touching
 `mode_patches.cpp`, `echovr_functions.cpp`, or anything named `ENGINE_ENTITY_*`.
 
