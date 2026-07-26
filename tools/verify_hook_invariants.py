@@ -298,6 +298,58 @@ def write_manifest():
     return 0
 
 
+
+# --- N82: one owner for the int3-skip decision -------------------------------
+
+# The designated owner of EXCEPTION_BREAKPOINT. Every other vectored exception
+# handler must return EXCEPTION_CONTINUE_SEARCH for it.
+VEH_BREAKPOINT_OWNER = "src/gamepatches/crash_recovery.cpp"
+
+# Not built: plugins/CMakeLists.txt add_subdirectory()s only log-filter,
+# broadcaster-bridge, anim-debugger, example. This file ships nowhere, so it
+# cannot be a second live owner. If it is ever added to the build it MUST be
+# reworked first — hence it is excluded by path, not by pretending it is clean.
+VEH_UNBUILT = {"plugins/crash-handler/src/plugin.cpp"}
+
+
+def check_veh_ownership(failures, warnings):
+    """
+    Two vectored handlers that both act on EXCEPTION_BREAKPOINT will disagree,
+    and the order that resolves the disagreement is registration timing, not
+    design. AddVectoredExceptionHandler(1, ...) puts the newest handler FIRST,
+    so 'priority 1' does not mean 'the one you meant'.
+
+    The rule is narrow on purpose: any number of VEHs may coexist (safe_memory.h
+    legitimately installs a scoped one), but exactly one may consume int3.
+    """
+    for path in sorted(REPO.rglob("*.cpp")) + sorted(REPO.rglob("*.h")):
+        try:
+            rel = path.relative_to(REPO).as_posix()
+        except ValueError:
+            continue
+        if not (rel.startswith("src/") or rel.startswith("plugins/")):
+            continue
+        if "legacy" in rel or rel in VEH_UNBUILT or rel == VEH_BREAKPOINT_OWNER:
+            continue
+        text = path.read_text(errors="replace")
+        if "AddVectoredExceptionHandler" not in text:
+            continue
+        if "EXCEPTION_BREAKPOINT" in text:
+            failures.append(
+                f"VEH-OWNERSHIP: {rel} registers a vectored exception handler AND "
+                f"references EXCEPTION_BREAKPOINT. Only {VEH_BREAKPOINT_OWNER} may act "
+                f"on int3 — a second handler makes the skip decision depend on plugin "
+                f"load order (N82). Return EXCEPTION_CONTINUE_SEARCH for it.")
+
+    # The owner must still exist and still handle it.
+    owner = read(VEH_BREAKPOINT_OWNER)
+    if "EXCEPTION_BREAKPOINT" not in owner:
+        failures.append(
+            f"VEH-OWNERSHIP: {VEH_BREAKPOINT_OWNER} no longer handles "
+            f"EXCEPTION_BREAKPOINT — the int3 skip after a suppressed ExitProcess "
+            f"has no owner at all (N82).")
+
+
 def main() -> int:
     if "--write-manifest" in sys.argv:
         return write_manifest()
@@ -306,6 +358,7 @@ def main() -> int:
     check_self_collision(failures, warnings)
     check_double_detour(failures, warnings)
     check_identity(failures, warnings)
+    check_veh_ownership(failures, warnings)
 
     for w in warnings:
         print(f"hook-invariants: WARN {w}")
