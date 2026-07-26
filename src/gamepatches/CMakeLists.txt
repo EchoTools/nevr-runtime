@@ -13,6 +13,7 @@ set(PATCHES_SOURCES
     "mode_patches.cpp"
     "crash_recovery.cpp"
     "hook_guard.cpp"
+    "hook_liveness.cpp"
     "state_machine.cpp"
     "plugin_loader.cpp"
     "module_loader.cpp"

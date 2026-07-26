@@ -12,6 +12,7 @@
 #include "common/logging.h"
 #include "common/echovr_functions.h"
 #include "patch_addresses.h"
+#include "hook_liveness.h"
 #include "process_mem.h"
 
 // ============================================================================
@@ -375,6 +376,7 @@ void LogBroadcasterHookStats() {
 
 static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
   InterlockedIncrement(&g_listenHookEntries);
+  HookLiveness::Mark(HookLiveness::kBroadcasterListen);
   if (g_isServer) {
     // Check if the structure pointer chain is valid before calling original
     INT64* outerPtr = (INT64*)arg1;
@@ -434,6 +436,7 @@ static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
 // The original protection is preserved; the collateral severance is not.
 static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
   InterlockedIncrement(&g_dispatchHookEntries);
+  HookLiveness::Mark(HookLiveness::kBroadcasterReceiveLocal);
   if (g_isServer) {
     // Exact AV condition from the disassembly above — nothing broader.
     if (arg1 == 0) return;

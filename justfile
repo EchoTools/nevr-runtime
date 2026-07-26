@@ -553,6 +553,26 @@ verify:
         echo "identity must come from the presented credential or config, never the binary." >&2
         exit 1
     fi
+    # N86-class: HookLiveness reports "entered=NO" for a hook that never runs.
+    # If an ID is DECLARED but never Mark()ed, it reports NO forever — which is
+    # indistinguishable from genuinely dead wiring, i.e. the tool would generate
+    # exactly the false signal it exists to remove. Every declared ID must have
+    # at least one Mark() call site.
+    # Match enumerators with or without an explicit initialiser: the first is
+    # written "kGetTimeMicroseconds = 0,". An earlier regex required a bare
+    # "kName," and so undercounted by one, making the comparison below
+    # unsatisfiable — the sensor could never fire. kCount has no trailing comma
+    # and is excluded by construction.
+    DECLARED=$(awk '/^enum Id/,/^};/' src/gamepatches/hook_liveness.h \
+               | grep -cE '^[[:space:]]+k[A-Za-z]+([[:space:]]*=[^,]*)?,')
+    MARKED=$(grep -rhoE 'HookLiveness::Mark\(HookLiveness::k[A-Za-z]+\)' src/gamepatches \
+             | sort -u | wc -l)
+    if [ "$MARKED" -lt "$DECLARED" ]; then
+        echo "verify: FAIL — HookLiveness declares $DECLARED ids but only $MARKED are Mark()ed." >&2
+        echo "An unmarked id reports entered=NO forever, which is indistinguishable from dead" >&2
+        echo "wiring (N86) — the tool would manufacture the false alarm it exists to prevent." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)

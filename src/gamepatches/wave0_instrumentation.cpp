@@ -38,6 +38,7 @@
 
 #include "wave0_instrumentation.h"
 #include "mode_patches.h"
+#include "hook_liveness.h"
 #include "patch_addresses.h"
 #include "common/globals.h"
 #include "common/logging.h"
@@ -188,7 +189,13 @@ static void DispatchPerFrameWork(uint64_t nowUs) {
                 "[NEVR.PATCH] per-frame tick ALIVE via GetTimeMicroseconds (N86) — "
                 "plugin/module OnFrame now dispatched in server mode");
         }
-        if ((t % 3750) == 0) LogBroadcasterHookStats();
+        if ((t % 3750) == 0) {
+            LogBroadcasterHookStats();
+            // N86-class standing check: name every hook that installed and has
+            // never been entered. This is the measurement whose absence let a
+            // dead per-frame tick ship for a day.
+            HookLiveness::Report("periodic");
+        }
     }
 
     NvrGameContext gctx = {};
@@ -206,6 +213,7 @@ static void DispatchPerFrameWork(uint64_t nowUs) {
 }
 
 static uint64_t __fastcall GetTimeMicrosecondsHook() {
+    HookLiveness::Mark(HookLiveness::kGetTimeMicroseconds);
     // Replicate the original's global override check.
     // When the engine pauses or fixes time, it sets a flag and cached value.
     volatile int64_t* override_flag = reinterpret_cast<volatile int64_t*>(
@@ -258,6 +266,7 @@ using GetTimeMilliseconds_t = uint64_t(__fastcall*)();
 static GetTimeMilliseconds_t s_origGetTimeMilliseconds = nullptr;
 
 static uint64_t __fastcall GetTimeMillisecondsHook() {
+    HookLiveness::Mark(HookLiveness::kGetTimeMilliseconds);
     // Replicate the original's global override check.
     // When time is paused/fixed, the override stores microseconds.
     // CTimer_GetMilliSeconds returns that cached us value / 1000.
@@ -293,6 +302,7 @@ static EndMultiplayer_t s_origEndMultiplayer = nullptr;
 static volatile LONG s_null_deref_count = 0;
 
 static void __fastcall EndMultiplayerHook(int64_t arg1, int64_t arg2) {
+    HookLiveness::Mark(HookLiveness::kEndMultiplayer);
     if (arg1 != 0) {
         int64_t* session_ptr = reinterpret_cast<int64_t*>(arg1 + 0x2DA0);
         if (*session_ptr == 0) {
@@ -326,6 +336,7 @@ using PrecisionSleepWait_t = void(__fastcall*)(int64_t microseconds, int64_t unk
 static PrecisionSleepWait_t s_origPrecisionSleepWait = nullptr;
 
 static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk, void* unk2) {
+    HookLiveness::Mark(HookLiveness::kPrecisionSleepWait);
     (void)unk;
     (void)unk2;
 
@@ -414,6 +425,7 @@ static constexpr uint32_t SPIN_LIMIT_MAX = 50000;
 static constexpr uint32_t SPIN_LIMIT_DEFAULT = 4000;
 
 static void __fastcall WaitForValueHook(volatile uint32_t* ptr, uint32_t expected, uint32_t mask) {
+    HookLiveness::Mark(HookLiveness::kSpinWaitForValue);
     // Read configurable spin limit from game's global data.
     // Validated against bounds to catch version-drift silent misread (N31).
     uint32_t spin_limit = *reinterpret_cast<volatile uint32_t*>(g_base + OFF_SPINWAIT_SPIN_LIMIT);
@@ -460,6 +472,7 @@ using HttpListenerBringup_t = uint64_t(__fastcall*)(int64_t* state, const char* 
 static HttpListenerBringup_t s_origHttpListenerBringup = nullptr;
 
 static uint64_t __fastcall HttpListenerBringupHook(int64_t* state, const char* address, uint16_t port) {
+    HookLiveness::Mark(HookLiveness::kHttpListenerBringup);
     uint64_t result = s_origHttpListenerBringup(state, address, port);
     if (result == 0 && g_isServer) {
         Log(EchoVR::LogLevel::Error,
