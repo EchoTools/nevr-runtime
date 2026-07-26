@@ -49,7 +49,6 @@ set(PATCHES_HEADERS
     "config.h"
     "mode_patches.h"
     "crash_recovery.h"
-    "platform_compat.h"
     "resource_override.h"
     "state_machine.h"
     "plugin_loader.h"

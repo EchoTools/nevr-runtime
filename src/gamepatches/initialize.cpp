@@ -11,7 +11,8 @@
 #include "crash_recovery.h"
 #include "gamepatches_internal.h"
 #include "mode_patches.h"
-// platform_compat hooks moved to module (loaded in boot.cpp)
+// platform_compat lives in src/modules/platform-compat (loaded in boot.cpp).
+// The gamepatches copy was deleted 2026-07-26: never compiled, zero call sites.
 #include "resource_override.h"
 #include "state_machine.h"
 #include "ws_bridge.h"
