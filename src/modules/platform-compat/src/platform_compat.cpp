@@ -267,11 +267,32 @@ NEVR_MODULE_API int NvrModuleInit(const NvrModuleContext* ctx) {
 
   Hooking::Initialize();
 
-  InstallTLSHook();
-  InstallCreateDirectoryHooks();
-  InstallWinHTTPHook();
+  /* All three return bool and the returns were DISCARDED, while success logged
+   * nothing and only failure logged. So this function printed "initialized"
+   * identically whether three hooks installed or zero did — which is precisely
+   * how a silently-failing WinHTTP hook looks like a working one, and why
+   * "the WinHTTP errors are back" had no corresponding log change.
+   *
+   * Report each outcome by name, plus an aggregate, in the shape N17 defined for
+   * hook installs. */
+  const bool tlsOk = InstallTLSHook();
+  const bool dirOk = InstallCreateDirectoryHooks();
+  const bool httpOk = InstallWinHTTPHook();
+  const int okCount = (tlsOk ? 1 : 0) + (dirOk ? 1 : 0) + (httpOk ? 1 : 0);
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] platform_compat initialized");
+  Log(okCount == 3 ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+      "[NEVR.MODULE] platform_compat initialized: %d/3 hooks installed "
+      "(tls=%s createdir=%s winhttp=%s)",
+      okCount, tlsOk ? "ok" : "FAILED", dirOk ? "ok" : "FAILED",
+      httpOk ? "ok" : "FAILED");
+
+  /* The WinHTTP bridge is the one whose absence is silent-but-fatal: without it
+   * the game falls back to its own HTTP stack and reports NoNetwork (N11). */
+  if (!httpOk) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.MODULE] WinHTTP bridge NOT installed — the game will use its own "
+        "HTTP stack and may report NoNetwork (N11)");
+  }
   return 0;
 }
 
