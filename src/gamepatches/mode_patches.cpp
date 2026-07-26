@@ -391,9 +391,56 @@ static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 ar
 typedef VOID EngineEntityPropDispatchFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5);
 static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
 
-// NOT INSTALLED as of 2026-07-26 (N83) — see InstallEntityHooks below for why.
-// Retained as the record of what was removed and on what evidence.
-[[maybe_unused]] static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
+// N83 (2026-07-26): re-implemented as the null-guard it was always described as.
+//
+// ORIGIN, corrected: 7beccee (2026-03-24, Andrew Bates) added this and stated its
+// purpose in the commit message — "Entity property dispatch null-guard
+// (fcn.140f87aa0) to prevent AV in server mode from uninitialized client-side
+// state". An earlier pass here claimed there was no recorded justification; that
+// was a bad search (git log -S scoped to a file created by a later refactor, so it
+// could not have found the originating commit). The fence had a builder and a reason.
+//
+// What was actually wrong was the GAP between that intent and the code. The stated
+// intent is a null-guard. The implementation was `if (g_isServer) return;` — an
+// unconditional skip with no null check at all. Because 0xF87AA0 is
+// CBroadcaster::ReceiveLocalEvent (the listener dispatcher, not entity property
+// dispatch), that skip suppressed all message delivery on a server, including our
+// own 15 ServerLib injections which reach this VA via
+// EchoVR::BroadcasterReceiveLocalEvent (echovr_functions.cpp:87).
+//
+// The AV is guarded precisely instead. Disassembly gives the exact fault chain:
+//   0x140f87b81  MOV R8, qword ptr [RDI]          ; inner = *arg1
+//   0x140f87b8d  MOV RAX, qword ptr [R8 + 0x5e0]  ; listener index table
+//   0x140f87b94  MOV EDX, dword ptr [RAX+RCX*4]   ; <-- AV when table is garbage
+// Same +0x5e0 structure the sibling Listen guard checks, which is consistent: one
+// broadcaster, one table.
+//
+// So: skip only when that chain is actually unsafe; dispatch whenever it is valid.
+// The original protection is preserved; the collateral severance is not.
+static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
+  if (g_isServer) {
+    // Exact AV condition from the disassembly above — nothing broader.
+    if (arg1 == 0) return;
+    const INT64 inner = *reinterpret_cast<INT64*>(arg1);
+    if (inner == 0) return;
+    const INT64 table = *reinterpret_cast<INT64*>(inner + 0x5e0);
+    if (table < 0x10000) {
+      static volatile LONG guardCount = 0;
+      const LONG c = InterlockedIncrement(&guardCount);
+      if (c <= 3) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] broadcaster dispatch guard tripped table=0x%llX count=%ld "
+            "va=0x140F87AA0 fn=CBroadcaster::ReceiveLocalEvent (N83)",
+            static_cast<unsigned long long>(table), c);
+      }
+      return;  // the AV 7beccee was written to prevent
+    }
+  }
+  OriginalEngineEntityPropDispatch(arg1, arg2, arg3, arg4, arg5);
+}
+
+// Historical record — the body as originally written, and why it was replaced.
+[[maybe_unused]] static VOID EngineEntityPropDispatchHook_Original(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
   // !! N83 — THE COMMENT THAT USED TO BE HERE WAS FALSE. Preserved verbatim so
   // !! the next reader can recognise the shape of the mistake:
   // !!
@@ -769,30 +816,14 @@ VOID InstallEntityHooks() {
   PatchDetour(&OriginalEngineEntityLookup, reinterpret_cast<PVOID>(EngineEntityLookupHook));
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Engine entity lookup hook installed (null-pointer guard)");
 
-  // N83 — REMOVED 2026-07-26: the detour on ENGINE_ENTITY_PROP_DISPATCH
-  // (0xF87AA0 = CBroadcaster::ReceiveLocalEvent).
-  //
-  // This was NOT a Chesterton's fence. `git log -S EngineEntityPropDispatchHook`
-  // finds no originating commit — it arrived in a49a837 (2026-03-29), a pure
-  // refactor ("split monolithic patches.cpp into modules"). No one built it for
-  // a reason; it was carried across during reorganisation. There is no AV
-  // evidence for this VA anywhere in the repo, and its own stated justification
-  // ("client-side rendering state") is refuted by its caller list
-  // (FinalizeEntrant, InitEntrantSlots, CommitPlaceholder — session lifecycle).
-  // docs/quest-hijack-point-map.md:125 already recorded that this VA is the same
-  // one as BroadcasterReceiveLocal; it was observed and walked past.
-  //
-  // The hook body carried no guard at all — just `if (g_isServer) return;`. Its
-  // only effect was to suppress the broadcaster's listener dispatch on servers,
-  // which severed all 15 ServerLib injection sites (they reach this VA through
-  // EchoVR::BroadcasterReceiveLocalEvent, echovr_functions.cpp:87).
-  //
-  // Kept in the file, uninstalled, because it is the paired evidence for the
-  // ENGINE_ENTITY_LOOKUP guard below — which DOES have evidence and stays.
-  // If this needs to come back, it needs a recorded AV first.
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.PATCH] entity prop dispatch hook NOT installed name=CBroadcaster::ReceiveLocalEvent "
-      "va=0x140F87AA0 reason=N83_no_recorded_justification");
+  // N83: re-installed 2026-07-26 with a real null-guard body (see above). The
+  // hook now preserves the AV protection 7beccee intended while allowing the
+  // broadcaster's listener dispatch through when the structure is valid.
+  OriginalEngineEntityPropDispatch =
+      (EngineEntityPropDispatchFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::ENGINE_ENTITY_PROP_DISPATCH);
+  PatchDetour(&OriginalEngineEntityPropDispatch, reinterpret_cast<PVOID>(EngineEntityPropDispatchHook));
+  Log(EchoVR::LogLevel::Debug,
+      "[NEVR.PATCH] hooked name=CBroadcaster::ReceiveLocalEvent va=0x140F87AA0 mode=null_guard");
 }
 
 VOID InstallBugSplatHook() {

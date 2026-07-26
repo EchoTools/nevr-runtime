@@ -50,13 +50,28 @@ MANIFEST = REPO / "tools" / "hook_identity_manifest.json"
 # Presence here = "we know, it is filed, it is not fixed yet". Absence = hard fail.
 
 KNOWN_SELF_COLLISIONS = {
+    0x140F87AA0: ("N83", "CBroadcaster::ReceiveLocalEvent — called via "
+                         "EchoVR::BroadcasterReceiveLocalEvent (echovr_functions.cpp:87) AND "
+                         "detoured as ENGINE_ENTITY_PROP_DISPATCH (mode_patches.cpp). "
+                         "ACCEPTED: since 2026-07-26 the hook is a pass-through null-guard, not "
+                         "an early return, so a re-entering call is checked and then dispatched. "
+                         "Our own injections get the same guard, which is arguably correct. "
+                         "Re-evaluate if that hook ever regains an unconditional return path."),
     0x140F80ED0: ("N83", "CBroadcaster::Listen — called via EchoVR::BroadcasterListen "
                          "(echovr_functions.cpp:88) AND detoured as ENGINE_ENTITY_LOOKUP "
                          "(mode_patches.cpp:723)."),
 }
 
 KNOWN_DOUBLE_DETOURS = {
-    # Empty. 0x140F87AA0 was here until 2026-07-26: gamepatches detoured it as
+    0x140F87AA0: ("N84", "REGRESSION, knowingly accepted and time-boxed. gamepatches detours this "
+                         "again as of 2026-07-26 (N83 null-guard), so broadcaster_bridge is no "
+                         "longer sole owner and the two-MinHook-instance hazard is back. This is "
+                         "a real cost of the N83 fix, not a benign entry. EXIT CONDITION: the "
+                         "guard now logs when it trips. If it does not trip across representative "
+                         "server runs, the AV it guards is not occurring — remove the gamepatches "
+                         "detour entirely and this closes permanently. Runtime HookGuard reports "
+                         "the collision at ERROR if the plugin's install actually overwrites ours."),
+    # Previously empty. 0x140F87AA0 was here until 2026-07-26: gamepatches detoured it as
     # ENGINE_ENTITY_PROP_DISPATCH while broadcaster_bridge hooked it as
     # VA_BROADCASTER_RECEIVE_LOCAL. Removing the unjustified gamepatches detour
     # (N83) left the plugin as sole owner, which resolved this too. If a second
