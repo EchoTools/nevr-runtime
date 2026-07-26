@@ -25,6 +25,7 @@
 #include "echovr.h"
 #include "echovr_functions.h"
 #include "logging.h"
+#include "hook_guard.h"
 
 // ============================================================================
 // Stubs for extern symbols declared by project headers but not provided by
@@ -413,3 +414,96 @@ TEST(N65_GateCount, AllGatesInCodeRange) {
         << "Gate " << i << " RVA above image extent";
   }
 }
+
+// ============================================================================
+// N84 — HookGuard: detect a second detour on an address gamepatches owns
+//
+// Production-linked: these drive the REAL HookGuard from hook_guard.cpp, not a
+// model of it. The guard exists because gamepatches links extern/minhook while
+// plugins link the vcpkg minhook port — separate static copies with separate
+// private hook tables, so neither library can report that the other already
+// owns an address. A third-party plugin is a DLL we never compile, so the only
+// detection that reaches it is byte-level: snapshot after our install, re-check
+// after each plugin loads.
+//
+// A page of executable-ish memory stands in for a hooked function. That is
+// exactly what the guard reads in production — it never interprets the bytes,
+// only compares them.
+// ============================================================================
+
+namespace {
+
+// VirtualAlloc'd scratch that outlives each test body.
+struct GuardScratch {
+    void* page;
+    GuardScratch() {
+        page = VirtualAlloc(nullptr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    }
+    ~GuardScratch() {
+        if (page) VirtualFree(page, 0, MEM_RELEASE);
+    }
+};
+
+}  // namespace
+
+TEST(N84_HookGuard, UnchangedBytes_NoMismatch) {
+    HookGuard::ResetForTest();
+    GuardScratch s;
+    ASSERT_NE(s.page, nullptr);
+    memset(s.page, 0x90, 32);  // NOPs stand in for an untouched prologue
+
+    HookGuard::Record(s.page, "N84_unchanged");
+    EXPECT_EQ(HookGuard::VerifyAll("test:unchanged"), 0)
+        << "guard reported a mismatch on bytes nothing modified";
+}
+
+TEST(N84_HookGuard, OverwrittenBytes_Detected) {
+    HookGuard::ResetForTest();
+    GuardScratch s;
+    ASSERT_NE(s.page, nullptr);
+    memset(s.page, 0x90, 32);
+
+    HookGuard::Record(s.page, "N84_overwritten");
+    ASSERT_EQ(HookGuard::VerifyAll("test:baseline"), 0)
+        << "precondition: freshly recorded bytes must match";
+
+    // Simulate a second MinHook instance writing its own JMP rel32 over ours.
+    unsigned char* p = static_cast<unsigned char*>(s.page);
+    p[0] = 0xE9;  // JMP rel32
+    p[1] = 0x11;
+    p[2] = 0x22;
+    p[3] = 0x33;
+    p[4] = 0x44;
+
+    EXPECT_EQ(HookGuard::VerifyAll("test:overwritten"), 1)
+        << "guard did NOT detect a foreign detour overwriting a recorded address";
+}
+
+TEST(N84_HookGuard, NullTarget_Ignored) {
+    HookGuard::ResetForTest();
+    const int before = HookGuard::RecordedCount();
+    HookGuard::Record(nullptr, "N84_null");
+    EXPECT_EQ(HookGuard::RecordedCount(), before)
+        << "null target was recorded; a bad call site would occupy a guard slot";
+}
+
+TEST(N84_HookGuard, UnreadableTarget_Ignored) {
+    HookGuard::ResetForTest();
+    const int before = HookGuard::RecordedCount();
+    // Reserved-but-not-committed: readable-looking pointer, unreadable memory.
+    void* reserved = VirtualAlloc(nullptr, 4096, MEM_RESERVE, PAGE_NOACCESS);
+    ASSERT_NE(reserved, nullptr);
+    HookGuard::Record(reserved, "N84_unreadable");
+    EXPECT_EQ(HookGuard::RecordedCount(), before)
+        << "uncommitted memory was recorded; VerifyAll would fault reading it";
+    VirtualFree(reserved, 0, MEM_RELEASE);
+}
+
+// WOULD-FAIL-IF (N84): delete the memcmp in HookGuard::VerifyAll (hook_guard.cpp)
+//   -> OverwrittenBytes_Detected fails: a foreign detour goes unreported.
+// WOULD-FAIL-IF (N84-record): delete the Readable() check in HookGuard::Record
+//   -> UnreadableTarget_Ignored fails, and production VerifyAll faults on the
+//      uncommitted page instead of skipping it.
+// WOULD-FAIL-IF (N84-wiring): delete HookGuard::VerifyAll(filename) from
+//   plugin_loader.cpp -> not caught here (call-site wiring), caught by the
+//   `just verify` grep sensor instead.

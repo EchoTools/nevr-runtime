@@ -436,6 +436,18 @@ verify:
     # re-derived, then reasoned about by that name forever after.
     # Known bugs warn (and stay visible); anything NEW is a hard failure.
     python3 tools/verify_hook_invariants.py
+    # N84 runtime counterpart. The static check above scans source, so it only
+    # sees plugins in THIS tree — a third-party plugin is a DLL we never compile.
+    # HookGuard detects the effect (our bytes changed) instead of the source.
+    # Both call sites are wiring, invisible to the GTest, so they get a sensor.
+    if ! grep -q 'HookGuard::Record(target, name)' src/gamepatches/gamepatches_internal.h; then
+        echo "verify: FAIL — N84 HookGuard::Record missing from PatchDetour; new detours would be unguarded." >&2
+        exit 1
+    fi
+    if ! grep -q 'HookGuard::VerifyAll(filename)' src/gamepatches/plugin_loader.cpp; then
+        echo "verify: FAIL — N84 HookGuard::VerifyAll missing from the plugin load path; third-party re-hooks undetectable." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)

@@ -12,6 +12,7 @@ set(PATCHES_SOURCES
     "config.cpp"
     "mode_patches.cpp"
     "crash_recovery.cpp"
+    "hook_guard.cpp"
     "state_machine.cpp"
     "plugin_loader.cpp"
     "module_loader.cpp"
@@ -198,6 +199,10 @@ if(BUILD_TESTING)
       module_loader.cpp
       ws_bridge.cpp
       symbol_corpus.cpp
+      # N84: plugin_loader calls HookGuard::VerifyAll after each plugin init.
+      # Linked as production source (not a stub) so the test drives the real
+      # guard — a stub here would make the N84 tests tautological.
+      hook_guard.cpp
     )
     target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS)
     # Disable PCH — the test has its own stub headers and must not depend on

@@ -7,6 +7,7 @@
 #include "common/logging.h"
 
 #include "cli.h"
+#include "hook_guard.h"
 
 struct LoadedPlugin {
   HMODULE                     hModule;
@@ -118,6 +119,13 @@ void LoadPlugins() {
         FreeLibrary(hPlugin);
         continue;
       }
+
+      // N84: a plugin installs its hooks in init. Re-verify every address
+      // gamepatches already detoured — if the bytes changed, this plugin hooked
+      // an address we own. Detects third-party plugins, which no source-level
+      // check can see: gamepatches and plugins link SEPARATE static MinHook
+      // copies, so neither library can report the collision itself.
+      HookGuard::VerifyAll(filename);
     }
 
     g_plugins.push_back({hPlugin, info, initFn, onFrameFn, onStateChangeFn, shutdownFn, path});
