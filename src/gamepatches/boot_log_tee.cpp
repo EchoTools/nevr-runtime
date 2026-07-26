@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "common/logging.h"  // GetRunId (N80)
+
 // ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
@@ -111,6 +113,11 @@ void BootLogTee::Init() {
 
     // Seek to end for append semantics
     SetFilePointer(g_boot_handle, 0, nullptr, FILE_END);
+
+    // N80: this file accumulates every run. Without a delimiter an operator reading
+    // it cannot tell where the current run's boot lines begin — the previous five
+    // runs sit directly above them with nothing separating the sequences.
+    TeeFprintf("[NEVR.PATCH] boot log opened run=%s", GetRunId());
 }
 
 void BootLogTee::TeeFprintf(const char* fmt, ...) {
@@ -148,10 +155,14 @@ void BootLogTee::TeeFprintf(const char* fmt, ...) {
     char escaped[4096];
     int esc_len = JsonEscape(msg_buf, msg_len, escaped, sizeof(escaped));
 
-    // Build the JSONL line: {"level":"info","msg":"<escaped>"}\n
+    // Build the JSONL line: {"run":"<id>","level":"info","msg":"<escaped>"}\n
+    // N80: the run ID is what lets these lines be joined to the runtime log (which
+    // lives in a different directory) and, because this file is opened in append
+    // mode across runs, what lets one run's boot lines be separated from the last.
     char line_buf[4224];  // 4096 escaped + overhead
     int line_len = snprintf(line_buf, sizeof(line_buf),
-                            "{\"level\":\"info\",\"msg\":\"%s\"}\n", escaped);
+                            "{\"run\":\"%s\",\"level\":\"info\",\"msg\":\"%s\"}\n",
+                            GetRunId(), escaped);
     if (line_len <= 0 || line_len >= static_cast<int>(sizeof(line_buf))) {
         return;
     }

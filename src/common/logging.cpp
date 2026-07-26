@@ -28,6 +28,28 @@ std::string GetISO8601Timestamp() {
   return oss.str();
 }
 
+// N80: per-process run ID = PID + process creation time, so every writer in the
+// process derives the same value independently. Computed once; the benign race on
+// first call has both racers writing identical bytes.
+const CHAR* GetRunId() {
+  static CHAR s_runId[40] = {0};
+  if (s_runId[0] != '\0') return s_runId;
+
+#ifdef _WIN32
+  FILETIME createTime{}, exitTime{}, kernelTime{}, userTime{};
+  unsigned long long start = 0;
+  if (GetProcessTimes(GetCurrentProcess(), &createTime, &exitTime, &kernelTime, &userTime)) {
+    start = (static_cast<unsigned long long>(createTime.dwHighDateTime) << 32) |
+            createTime.dwLowDateTime;
+  }
+  snprintf(s_runId, sizeof(s_runId), "%lx-%llx",
+           static_cast<unsigned long>(GetCurrentProcessId()), start);
+#else
+  snprintf(s_runId, sizeof(s_runId), "%lx-0", static_cast<unsigned long>(getpid()));
+#endif
+  return s_runId;
+}
+
 // Convert LogLevel enum to string
 const char* GetLogLevelString(EchoVR::LogLevel level) {
   switch (level) {

@@ -9,6 +9,19 @@
 // Helper function to get ISO8601 timestamp
 extern std::string GetISO8601Timestamp();
 
+/// N80: stable per-process run identifier, shared by every log writer in the
+/// process so lines from different files can be correlated to one run.
+///
+/// Derived from the PID and the process creation time — not from a counter or a
+/// call-time clock — so BootLogTee (which writes <exedir>\logs\nevr-boot.jsonl,
+/// append-mode across runs) and the log filter (which writes a per-run file under
+/// %LOCALAPPDATA%) independently compute the SAME value. Without it the two files
+/// cannot be joined, and the append-mode boot log cannot even be split by run.
+///
+/// Returns a stable pointer to a static buffer. Safe to call from DllMain: no heap,
+/// no loader-lock call, no CRT locale dependency.
+extern const CHAR* GetRunId();
+
 // Helper function to get log level string
 extern const char* GetLogLevelString(EchoVR::LogLevel level);
 

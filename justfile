@@ -377,6 +377,59 @@ verify:
         echo "stderr fallback in logging.cpp no longer fires and Log() enters the game logger. Use BootLogTee::TeeFprintf." >&2
         exit 1
     fi
+    # --- Observability invariants (N77/N78/N79/N80/N81) ----------------------
+    # N77: NEVR's own lines must be exempt from game-noise suppression patterns.
+    # Without the guard, a substring rule aimed at echovr noise silently deletes
+    # NEVR structured output — it previously erased "Finished initializing engine"
+    # (the witness cited in the N7/N8/N10 closes) and masked real ExitProcess reports.
+    if ! grep -q 'if (IsNevrLine(message)) return false;' src/gamepatches/builtin_log_filter.cpp; then
+        echo "verify: FAIL — N77 NEVR-line exemption missing from ShouldSuppress; game-noise patterns can delete NEVR output." >&2
+        exit 1
+    fi
+    # N77: these two patterns must never return to the blanket suppress list.
+    if grep -qF '"Finished initializing engine",' src/gamepatches/builtin_log_filter.cpp; then
+        echo "verify: FAIL — N77 'Finished initializing engine' is suppressed again; that string is the headless-boot witness (N7/N8/N10)." >&2
+        exit 1
+    fi
+    if grep -qF '"ExitProcess(",' src/gamepatches/builtin_log_filter.cpp; then
+        echo "verify: FAIL — N77 'ExitProcess(' is suppressed again; it masks real process-exit reports. Use rate limiting (N78)." >&2
+        exit 1
+    fi
+    # N78: frequent lines are collapsed into a counted summary, never deleted.
+    if ! grep -q 'RateVerdict::Collapse' src/gamepatches/builtin_log_filter.cpp; then
+        echo "verify: FAIL — N78 rate-limited summarisation missing; filter can only delete, not summarise (LOGGING.md Rule 4)." >&2
+        exit 1
+    fi
+    # N79: filter health must be emitted while the process is alive. Shutdown() is
+    # unreachable in production — every server exit is TerminateProcess, which runs
+    # no DLL detach.
+    if ! grep -q 'MaybeEmitHealth();' src/gamepatches/builtin_log_filter.cpp; then
+        echo "verify: FAIL — N79 periodic health emission missing; suppression ratio only reachable at a shutdown that never runs." >&2
+        exit 1
+    fi
+    # N80: both log writers must stamp the shared run ID, or the two files cannot be joined.
+    if ! grep -q 'GetRunId()' src/gamepatches/boot_log_tee.cpp; then
+        echo "verify: FAIL — N80 run ID missing from BootLogTee; boot log cannot be correlated or split by run." >&2
+        exit 1
+    fi
+    if ! grep -q 'GetRunId()' src/gamepatches/builtin_log_filter.cpp; then
+        echo "verify: FAIL — N80 run ID missing from the runtime log writer." >&2
+        exit 1
+    fi
+    # N81/N45: no bare [NEVR] tag on a LOG line — it names every component and so
+    # discriminates none.
+    #
+    # src/gamepatches/cli.cpp is excluded deliberately, not by oversight: its 14
+    # "[NEVR] " strings are all AddArgHelpString descriptions, where the marker
+    # distinguishes NEVR-added flags from the game's own in `--help` output. That is
+    # a usage contract (RULINGS.md "Usage contracts"), not a log tag — LOGGING.md's
+    # subsystem-tag rule governs log lines. Verified 2026-07-26: every [NEVR] hit in
+    # that file is a help string, zero are log calls.
+    if grep -rn '"\[NEVR\] ' src/gamepatches src/common src/gameserver 2>/dev/null \
+         | grep -v legacy | grep -v 'src/gamepatches/cli.cpp'; then
+        echo "verify: FAIL — N81 bare [NEVR] log tag found; use a subsystem tag from the LOGGING.md table." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)

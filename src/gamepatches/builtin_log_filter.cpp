@@ -371,9 +371,15 @@ static LogFilterConfig MakeDefaultConfig() {
         //       battle-pass/store cosmetics, allocator stats) accounted for the
         //       remainder.
 
-        // #1 noise source: ExitProcess suppression log (per-call, INFO level,
-        // generates 97.5% of sustained log volume on a running server).
-        "ExitProcess(",
+        // REMOVED 2026-07-26 (N77/N78): "ExitProcess(".
+        // It was the #1 noise source (97.5% of sustained volume) — but it is a
+        // NEVR-emitted line, and matching it by substring also deleted
+        // "[NEVR.PATCH] ExitProcess(%u) called" (crash_recovery.cpp:140), the report
+        // of a REAL, allowed process exit. A rule that cannot tell a suppressed exit
+        // from a real one is not a noise rule. NEVR lines are now exempt from these
+        // patterns (ShouldSuppress/N77) and the volume is handled by rate-limited
+        // summarisation (RateCheck/N78), which collapses the run into a counted line
+        // instead of erasing the event.
 
         // Graphics settings block — irrelevant for headless server, repeated at
         // startup, no operational value in any mode.
@@ -391,7 +397,11 @@ static LogFilterConfig MakeDefaultConfig() {
         "Loading global archives",
         "Loading game archives",
         "Loading archive 0x",
-        "Finished initializing engine",
+        // REMOVED 2026-07-26 (N77): "Finished initializing engine".
+        // This string is the witness quoted in the N7, N8 and N10 close records as
+        // the proof that headless boot advanced past each render gate. It fires ONCE
+        // per boot, so suppressing it saved nothing measurable and destroyed the
+        // evidence the next headless regression would be diagnosed with.
         "Initializing enumerate thread",
         "Forking enumerate thread",
 
@@ -671,6 +681,29 @@ static const char* LevelStr(uint32_t level) {
     }
 }
 
+/* N77: a line NEVR emitted, identified by its subsystem tag. LOGGING.md requires
+ * every NEVR line to begin with `[NEVR.` — that prefix is the discriminator. */
+static bool IsNevrLine(const char* message) {
+    return std::strncmp(message, "[NEVR.", 6) == 0;
+}
+
+/* N77 — suppression is scoped to the emitter it targets.
+ *
+ * `suppress_patterns` exist to delete echovr-native noise. They are matched with
+ * strstr against the FULLY FORMATTED message, so before this guard they also
+ * deleted NEVR's own structured output whenever a substring happened to collide.
+ * That was not hypothetical: `"Finished initializing engine"` is the witness string
+ * quoted in the N7/N8/N10 close records as proof headless boot advanced, and
+ * `"ExitProcess("` masked `[NEVR.PATCH] ExitProcess(%u) called` — the report of a
+ * REAL process exit — alongside the noisy suppression line it was aimed at.
+ *
+ * A NEVR line is therefore exempt from game-noise patterns. NEVR lines that are
+ * genuinely too frequent are handled by rate-limited summarisation (N78), which
+ * collapses them into a counted line instead of deleting them: "this event is
+ * frequent" and "this event does not matter" are different claims.
+ *
+ * min_level and suppress_channels still apply to NEVR lines — those are level and
+ * emitter decisions, not content guesses. */
 static bool ShouldSuppress(const char* message, uint32_t level) {
     if (!g_config.valid) return false;
 
@@ -680,11 +713,104 @@ static bool ShouldSuppress(const char* message, uint32_t level) {
         if (std::strncmp(message, ch.c_str(), ch.size()) == 0) return true;
     }
 
+    if (IsNevrLine(message)) return false;  // N77
+
     for (const auto& pat : g_config.suppress_patterns) {
         if (std::strstr(message, pat.c_str()) != nullptr) return true;
     }
 
     return false;
+}
+
+/* ------------------------------------------------------------------ */
+/* N78 — rate-limited summarisation                                    */
+/* ------------------------------------------------------------------ */
+/*
+ * LOGGING.md Rule 4 requires that a line repeating more than once per second be
+ * collapsed into "X repeated N times in the last T seconds". No such mechanism
+ * existed: ShouldSuppress returned bool and the caller returned, so the only two
+ * expressible actions were pass and delete. That forced every high-frequency line
+ * into a binary choice between flooding the log and erasing the event.
+ *
+ * Identity is a digit-insensitive hash: "ExitProcess(3) ... (call #41)" and
+ * "ExitProcess(3) ... (call #42)" must collapse together, so runs of digits are
+ * folded to a single sentinel before hashing. Fixed-size table, no heap in the hot
+ * path, its own mutex (never g_file_mutex — that is the lock the crash path used to
+ * deadlock on, see N70).
+ */
+
+static constexpr uint32_t kRateWindowSec = 5;
+static constexpr uint32_t kRateThreshold = 3;   /* allow this many per window, then collapse */
+static constexpr size_t   kRateTableSize = 128;
+
+struct RateEntry {
+    uint64_t hash = 0;
+    uint64_t window_start = 0;
+    uint32_t seen = 0;        /* total occurrences this window */
+    uint32_t emitted = 0;     /* how many we let through this window */
+    char     sample[128] = {};
+};
+
+static RateEntry g_rate[kRateTableSize];
+static std::mutex g_rate_mutex;
+
+/* FNV-1a over the message with digit runs folded to a single 0x01 sentinel, so
+ * lines differing only in counters/IDs share an identity. */
+static uint64_t NormalizedHash(const char* s, int len) {
+    uint64_t h = 1469598103934665603ULL;
+    bool in_digits = false;
+    for (int i = 0; i < len; i++) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c >= '0' && c <= '9') {
+            if (in_digits) continue;
+            in_digits = true;
+            c = 0x01;
+        } else {
+            in_digits = false;
+        }
+        h ^= c;
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+enum class RateVerdict { Emit, Collapse };
+
+/* Decides whether this line is emitted or folded into a counter. When a window
+ * closes with folded lines, `out_summary` is filled with the summary to emit. */
+static RateVerdict RateCheck(const char* msg, int len, char* out_summary, size_t summary_cap) {
+    out_summary[0] = '\0';
+    const uint64_t h = NormalizedHash(msg, len);
+    const uint64_t now = GetEpochSeconds();
+
+    std::lock_guard<std::mutex> lock(g_rate_mutex);
+    RateEntry& e = g_rate[h % kRateTableSize];
+
+    /* Different line hashing to this slot, or the window has expired: close out the
+     * previous occupant first (emitting its summary if it collapsed anything). */
+    if (e.hash != h || now - e.window_start >= kRateWindowSec) {
+        if (e.hash != 0 && e.seen > e.emitted) {
+            snprintf(out_summary, summary_cap,
+                     "[NEVR.LOGFILTER] repeated count=%u window_s=%llu msg=\"%s\"",
+                     e.seen - e.emitted,
+                     static_cast<unsigned long long>(now - e.window_start),
+                     e.sample);
+        }
+        e.hash = h;
+        e.window_start = now;
+        e.seen = 0;
+        e.emitted = 0;
+        int copy = len < static_cast<int>(sizeof(e.sample)) - 1 ? len : static_cast<int>(sizeof(e.sample)) - 1;
+        memcpy(e.sample, msg, static_cast<size_t>(copy));
+        e.sample[copy] = '\0';
+    }
+
+    e.seen++;
+    if (e.emitted < kRateThreshold) {
+        e.emitted++;
+        return RateVerdict::Emit;
+    }
+    return RateVerdict::Collapse;
 }
 
 static int ApplyTruncation(const char* message, int len) {
@@ -757,6 +883,8 @@ static void EmitLine(uint32_t level, const char* message, int len) {
         if (g_config.file_jsonl) {
             std::string line = "{\"ts\":\"";
             line += ts;
+            line += "\",\"run\":\"";   /* N80 — correlates with nevr-boot.jsonl */
+            line += GetRunId();
             line += "\",\"level\":\"";
             line += lvl;
             line += "\",\"msg\":\"";
@@ -780,6 +908,53 @@ static void EmitLine(uint32_t level, const char* message, int len) {
     }
 
     g_emitted_count++;
+}
+
+/* ------------------------------------------------------------------ */
+/* N79 — filter health, emitted while the process is alive             */
+/* ------------------------------------------------------------------ */
+/*
+ * g_emitted_count / g_suppressed_count were reported only from
+ * BuiltinLogFilter::Shutdown(), which runs only from DllMain's DLL_PROCESS_DETACH
+ * with lpReserved == NULL (dllmain.cpp:102) — i.e. dynamic unload only. Every real
+ * server exit goes ForceFatalExit -> TerminateProcess (crash_recovery.cpp:463),
+ * which performs no DLL detach at all. So the one metric that says whether the
+ * filter is working was structurally unreachable in production.
+ *
+ * N18's invariant is "validated by a measured suppression ratio". A ratio only
+ * measurable at a shutdown that never happens is not instrumentation. Emit it on a
+ * cadence from a path the running process actually takes.
+ */
+
+static constexpr uint32_t kHealthIntervalSec = 300;
+static std::atomic<uint64_t> g_last_health_report{0};
+
+static void EmitLine(uint32_t level, const char* message, int len);  /* fwd */
+
+static void MaybeEmitHealth() {
+    const uint64_t now = GetEpochSeconds();
+    uint64_t last = g_last_health_report.load(std::memory_order_relaxed);
+    if (last == 0) {
+        g_last_health_report.store(now, std::memory_order_relaxed);
+        return;
+    }
+    if (now - last < kHealthIntervalSec) return;
+    /* Only one thread reports per window; a lost race just defers to the next. */
+    if (!g_last_health_report.compare_exchange_strong(last, now, std::memory_order_relaxed)) return;
+
+    const uint64_t emitted = g_emitted_count.load(std::memory_order_relaxed);
+    const uint64_t suppressed = g_suppressed_count.load(std::memory_order_relaxed);
+    const uint64_t total = emitted + suppressed;
+    const unsigned pct = total ? static_cast<unsigned>((suppressed * 100) / total) : 0;
+
+    char line[256];
+    const int n = snprintf(line, sizeof(line),
+                           "[NEVR.LOGFILTER] health emitted=%llu suppressed=%llu "
+                           "suppression_pct=%u interval_s=%u",
+                           static_cast<unsigned long long>(emitted),
+                           static_cast<unsigned long long>(suppressed), pct,
+                           kHealthIntervalSec);
+    if (n > 0) EmitLine(LOG_LEVEL_INFO, line, n);
 }
 
 /* ------------------------------------------------------------------ */
@@ -820,12 +995,26 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
         return;
     }
 
+    MaybeEmitHealth();  /* N79 */
+
     if (ShouldSuppress(buf, level)) {
         g_suppressed_count++;
         return;
     }
 
     int emit_len = ApplyTruncation(buf, len);
+
+    /* N78: collapse repeats instead of deleting them. A closing window emits its
+     * summary first so the count appears adjacent to the run it describes. */
+    char summary[256];
+    const RateVerdict verdict = RateCheck(buf, emit_len, summary, sizeof(summary));
+    if (summary[0] != '\0') {
+        EmitLine(LOG_LEVEL_INFO, summary, static_cast<int>(std::strlen(summary)));
+    }
+    if (verdict == RateVerdict::Collapse) {
+        g_suppressed_count++;
+        return;
+    }
 
     EmitLine(level, buf, emit_len);
 
