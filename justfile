@@ -544,6 +544,15 @@ verify:
         echo "verify: FAIL — N86 DispatchPerFrameWork call site missing from the live tick hook." >&2
         exit 1
     fi
+    # N20: no platform identity may be compiled into the binary. The login
+    # injection must take it from token-auth (JWT) or, in server mode, from
+    # config — never a literal. Matches an 18-20 digit account/discord ID.
+    if grep -rnE '\b1[0-9]{17,19}\b' src/gamepatches src/modules src/common 2>/dev/null \
+         | grep -v legacy | grep -viE 'hash|symbol|0x|SYM_'; then
+        echo "verify: FAIL — N20 an account/discord ID literal is compiled into source;" >&2
+        echo "identity must come from the presented credential or config, never the binary." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)
