@@ -180,7 +180,16 @@ std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string
 }
 
 std::string DeviceAuth::RequestDeviceCode() {
-    std::string url = m_url + "/v2/rpc/device/auth/request?http_key=" + m_httpKey;
+    // STRANDED FIX, recovered 2026-07-27. Commit 7a03d8b ("fix: Nakama RPC unwrap
+    // and LoadLibraryA fallbacks for hook install", 2026-04-10) added `&unwrap` to
+    // both device-auth endpoints in src/gamepatches/token_auth.cpp. This module was
+    // extracted the SAME DAY and the fix never crossed. That commit fixed two
+    // things; the LoadLibraryA half reached platform-compat, this half did not.
+    //
+    // Without &unwrap, Nakama wraps an RPC response as {"payload":"<json string>"},
+    // so the parse below looks for "token"/"status" at the top level and finds
+    // nothing — device auth silently never completes.
+    std::string url = m_url + "/v2/rpc/device/auth/request?http_key=" + m_httpKey + "&unwrap";
     std::string response = HttpPostPublic(url, "{}");
     if (response.empty()) return "";
 
@@ -193,7 +202,7 @@ std::string DeviceAuth::RequestDeviceCode() {
 }
 
 std::string DeviceAuth::PollDeviceCode(const std::string& code) {
-    std::string url = m_url + "/v2/rpc/device/auth/poll?http_key=" + m_httpKey;
+    std::string url = m_url + "/v2/rpc/device/auth/poll?http_key=" + m_httpKey + "&unwrap";
     nlohmann::json reqBody;
     reqBody["code"] = code;
     std::string response = HttpPostPublic(url, reqBody.dump());

@@ -672,6 +672,18 @@ verify:
         echo "Two strong definitions is an ODR violation; the winner is link-order dependent." >&2
         exit 1
     fi
+    # Nakama RPC responses are wrapped as {"payload":"<json>"} unless &unwrap is
+    # passed. Commit 7a03d8b fixed this in the gamepatches copy on the same day
+    # the module was extracted, and the fix never crossed — device auth would
+    # silently never complete. Recovered 2026-07-27.
+    for u in request poll; do
+        if ! grep -q "device/auth/$u?http_key=\" + m_httpKey + \"&unwrap" \
+             src/modules/token-auth/src/token_auth.cpp; then
+            echo "verify: FAIL — token-auth device/auth/$u endpoint is missing &unwrap;" >&2
+            echo "Nakama will wrap the response and the token parse will find nothing." >&2
+            exit 1
+        fi
+    done
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)
