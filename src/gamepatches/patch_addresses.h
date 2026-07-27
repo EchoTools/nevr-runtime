@@ -117,10 +117,13 @@ constexpr size_t HEADLESS_RENDERER_SIZE = 2;
 constexpr uintptr_t HEADLESS_EFFECTS = 0x62CA91;
 constexpr size_t HEADLESS_EFFECTS_SIZE = 2;
 
-/// Fixes delta time calculation when using fixed timestep
-/// Legitimate bug fix: JLE (signed) → JAE (unsigned comparison)
-constexpr uintptr_t HEADLESS_DELTATIME = 0xCF46D;
-constexpr size_t HEADLESS_DELTATIME_SIZE = 2;
+/// HEADLESS_DELTATIME (0xCF46D, JLE->JAE) removed 2026-07-27 — it had zero users
+/// here, and that is CORRECT, not a regression. The fix only matters under fixed
+/// timestep, and `-timestep`/`-fixedtimestep` are deprecated-and-ignored in this
+/// build (boot.cpp: logs "is deprecated and ignored"). v1 applies it inside
+/// `if (isHeadless && headlessTimeStep != 0)`, a condition that can no longer be
+/// true. Do not "restore" this patch without first re-enabling fixed timestep —
+/// applying it unconditionally patches the game for a mode it is not in.
 
 /// ReVault VA 0x140109209: CALL to FUN_140c31870 (ApplyGraphicsSettings) inside FUN_1401090c0
 /// FUN_140c31870 calls ~66 CGRenderer methods (MSAA, TAA, resolution scale, etc.)

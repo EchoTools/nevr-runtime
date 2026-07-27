@@ -330,9 +330,14 @@ static void __fastcall EndMultiplayerHook(int64_t arg1, int64_t arg2) {
  * Timer precision improves from ~15.6ms to ~0.5ms on Windows 10 1803+.
  * Falls back to standard timer on older Windows.
  *
- * On servers, server_timing hooks this function later with WSAPoll-
- * based event-driven recv. That hook chains on top and never calls
- * this version (it replaces Wait entirely), so no conflict.
+ * N26 flagged the comment that used to sit here as "doubly false": it claimed
+ * server_timing hooks this function later with WSAPoll-based event-driven recv
+ * and chains on top. server_timing's Init had zero call sites, so no hook was
+ * ever installed, and the file was deleted entirely on 2026-07-27. This hook is
+ * the only owner of CPrecisionSleep::Wait.
+ *
+ * Note it does NOT run in server mode at all (N86, measured: zero entries over a
+ * full run) — server-mode per-frame work is driven from GetTimeMicroseconds.
  * -------------------------------------------------------------------- */
 
 using PrecisionSleepWait_t = void(__fastcall*)(int64_t microseconds, int64_t unk, void* unk2);

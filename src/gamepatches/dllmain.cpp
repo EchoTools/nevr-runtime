@@ -18,7 +18,6 @@
 #include "wave0_instrumentation.h"
 #include "token_auth.h"
 #include "builtin_log_filter.h"
-#include "server_timing.h"
 #include "resource_override.h"
 
 #include <dbghelp.h>
@@ -106,7 +105,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         TokenAuth::Shutdown();
         BroadcasterGuard::Shutdown();
         BuiltinLogFilter::Shutdown();
-        ServerTiming::Shutdown();
         ShutdownResourceOverride();
         ShutdownWebSocketBridge();
       }
