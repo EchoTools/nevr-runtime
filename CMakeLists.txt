@@ -202,7 +202,8 @@ add_subdirectory(src/legacy/gamepatches)
 # It was also the only consumer of a symlink into a PRIVATE repo, which broke
 # every clean clone. The pure-RE copy lives in echovr-reconstruction.
 add_subdirectory(src/legacy/gameserver)
-# telemetryagent moved to extras/ — needs protobuf-lite refactor before reintegration
+# telemetryagent lives in nevr-runtime-plugins (extras/ moved there 2026-07-27) —
+# needs a protobuf-lite refactor before it could be reintegrated here
 
 add_subdirectory(src/libovr-stub)
 

@@ -10,7 +10,7 @@ wrong in a way anything notices.
 Scope: CURRENT-STATE documents only. A record is immutable — `BUGS.md` entries and
 `docs/audits/` describe the tree as it was when written, and a path that has since
 moved is correct history, not a defect. Amending them would violate the ledger's
-own append-only rule. `extras/` is quarantine, reviewed by the owner separately.
+own append-only rule. (`extras/` moved to nevr-runtime-plugins on 2026-07-27.)
 
 Checked: README.md, AGENTS.md, CLAUDE.md, docs/ (except audits), tests/**/README.md.
 
@@ -46,8 +46,6 @@ def claimed_paths():
     files = subprocess.run(["git", "ls-files", "*.md"], cwd=REPO,
                            capture_output=True, text=True).stdout.split()
     for f in files:
-        if f.startswith("extras/"):          # owner-managed quarantine
-            continue
         if f == "BUGS.md" or f.startswith("docs/audits/"):
             continue                          # immutable records — see module docstring
         text = (REPO / f).read_text(errors="replace")

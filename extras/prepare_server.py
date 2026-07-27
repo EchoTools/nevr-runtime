@@ -1,1 +1,0 @@
-/home/andrew/src/nakama/_local/prepare_server.py
