@@ -263,10 +263,20 @@ void InstallWebSocketBridge() {
             remote->disableAutomaticReconnection();
             remote->disablePerMessageDeflate();
 
-            // Get auth token and Discord ID.
-            // In client mode, the identity comes from the token_auth module's JWT.
-            // In server mode, token_auth is disabled so the JWT may be absent — fall
-            // back to nevr_discord_id from config (server identity is static).
+            // Get auth token and Discord ID. JWT first: the identity normally comes
+            // from the token_auth module's JWT. When that yields nothing — always in
+            // server mode, where token_auth is disabled, and in client mode whenever
+            // the JWT is absent or carries no id — fall back to nevr_discord_id from
+            // config.
+            //
+            // The fallback is deliberately NOT gated on server mode (owner decision,
+            // 2026-07-27). It used to be, which meant a CLIENT with a perfectly good
+            // nevr_discord_id in config still logged in as account 0. early_config is
+            // populated in both modes — boot.cpp calls LoadEarlyConfig() before mode
+            // is even known (boot.cpp:29) and assigns moduleCtx.early_config
+            // unconditionally (boot.cpp:72) — so there is nothing mode-specific for
+            // this branch to respect. The `s_earlyConfig` null test stays, because a
+            // client tolerates a missing config where a server fatals on it.
             std::string bearerToken;
             uint64_t discordId = 0;
             {
@@ -278,12 +288,16 @@ void InstallWebSocketBridge() {
               }
               if (getDiscordIdFn) discordId = getDiscordIdFn();
             }
-            if (discordId == 0 && g_isServer && (EchoVR::Json*)s_earlyConfig) {
+            if (discordId == 0 && (EchoVR::Json*)s_earlyConfig) {
               CHAR* cfgId = EchoVR::JsonValueAsString(
                   (EchoVR::Json*)s_earlyConfig, (CHAR*)"nevr_discord_id", NULL, false);
               if (cfgId && cfgId[0] != '\0') {
                 discordId = strtoull(cfgId, nullptr, 10);
-                Log(EchoVR::LogLevel::Debug,
+                // Info, not Debug: this is the outcome of an identity decision, and
+                // production keeps Info. At Debug, "logged in as the config id" and
+                // "logged in as 0" were indistinguishable in a shipped log
+                // [docs/standards/verification.md, "Success logged at DEBUG"].
+                Log(EchoVR::LogLevel::Info,
                     "[NEVR.WS] Using nevr_discord_id from config: %llu",
                     (unsigned long long)discordId);
               }

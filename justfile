@@ -542,6 +542,25 @@ verify:
         echo "identity must come from the presented credential or config, never the binary." >&2
         exit 1
     fi
+    # N20 (owner decision, 2026-07-27): the nevr_discord_id config fallback applies
+    # in CLIENT mode too, not only server mode. Two assertions, because either one
+    # alone is satisfiable by the bug — the first fires if the fallback is deleted,
+    # the second if it is re-gated on server mode. Both failures are silent in
+    # production: the only symptom is a WARNING line and a login as account 0.
+    # Asserted against src/modules/ws-bridge/ because THAT is the copy that ships —
+    # InstallWebSocketBridge has exactly one call site, in the module's
+    # NvrModuleInit; the src/gamepatches/ws_bridge.cpp copy compiles and never runs
+    # (N92). A sensor on the gamepatches copy would watch dead code.
+    if ! grep -q 'Using nevr_discord_id from config' src/modules/ws-bridge/src/ws_bridge.cpp; then
+        echo "verify: FAIL — N20 nevr_discord_id config fallback missing from the shipping" >&2
+        echo "ws-bridge module (src/modules/ws-bridge/src/ws_bridge.cpp)." >&2
+        exit 1
+    fi
+    if grep -n 'discordId == 0 &&.*g_isServer' src/modules/ws-bridge/src/ws_bridge.cpp; then
+        echo "verify: FAIL — N20 the config discord-id fallback is gated on g_isServer;" >&2
+        echo "the owner decision (2026-07-27) is that it applies in CLIENT mode too." >&2
+        exit 1
+    fi
     # N86-class: HookLiveness reports "entered=NO" for a hook that never runs.
     # If an ID is DECLARED but never Mark()ed, it reports NO forever — which is
     # indistinguishable from genuinely dead wiring, i.e. the tool would generate
