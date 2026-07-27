@@ -29,7 +29,7 @@ The system test suite verifies:
 Before running system tests, ensure:
 
 ### 1. evr-test-harness Symlink
-The `evr-test-harness` project must be symlinked at `extern/evr-test-harness`:
+The `evr-test-harness` project must be symlinked at the evr-test-harness submodule (excised — these suites are not part of `just verify`):
 
 ```bash
 # Create symlink (one-time setup)

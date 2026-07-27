@@ -595,6 +595,12 @@ verify:
             exit 1
         fi
     done
+    # Doc paths: every src/, plugins/, extern/, docs/, tools/ or gen/ path claimed
+    # in a root document shall resolve. Four phantom paths (src/protobufnevr,
+    # extern/nevr-proto, src/server, gamepatches/patches.cpp) survived for months
+    # in README.md and CLAUDE.md because nothing checked. A fact about the tree
+    # asserted in prose drifts silently; this is the cheapest possible enforcement.
+    python3 tools/verify_doc_paths.py
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)

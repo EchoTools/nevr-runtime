@@ -59,7 +59,7 @@ yay -S android-sdk-build-tools     # installs apksigner, zipalign, aapt, aapt2 u
 ```
 
 **Optional (Part B symbolication):** `minidump_stackwalk` is **not installed**. It is
-built from the vendored breakpad processor (`src/quest/third_party/breakpad`, host
+built from the vendored breakpad processor (`extern/breakpad`, host
 build) — not required to *capture* a dump, only to stackwalk one offline. See Part B.5.
 
 **Source APK:** the Quest store build lives on tethys at
