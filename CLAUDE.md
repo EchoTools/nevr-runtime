@@ -79,14 +79,16 @@ Optional DLLs loaded by gamepatches at runtime from a `plugins/` subdirectory ne
 | Plugin               | Output DLL               | Purpose                                              |
 | -------------------- | ------------------------ | ---------------------------------------------------- |
 | `log-filter`         | `log_filter.dll`         | Structured log filtering, suppression, file rotation |
-| `anim-debugger`      | `anim_debugger.dll`      | Animation-tree RE instrumentation (diagnostic only)  |
 | `example`            | `example.dll`            | Reference implementation for new plugin authors      |
 
 `broadcaster-bridge` moved to `nevr-runtime-plugins` on 2026-07-26 — this repo is
-public and it is a broadcaster injection tool. `log_filter.dll` is superseded by
-the built-in filter and the loader refuses to load it (N89). Other plugins
-(audio-intercom, game-rules-override, session-unlocker, combat-mod, combat-2d)
-live in `nevr-runtime-plugins`.
+public and it is a broadcaster injection tool. `anim-debugger` moved there on
+2026-07-27 for the same reason: it is RE instrumentation that hooks three engine
+animation entry points and publishes a map of animation internals, and it does
+nothing on a dedicated server. `log_filter.dll` is superseded by the built-in
+filter and the loader refuses to load it (N89). Other plugins (audio-intercom,
+game-rules-override, session-unlocker, combat-mod, combat-2d) live in
+`nevr-runtime-plugins`.
 
 Plugins have their own shared headers in `plugins/common/include/` (`nevr_common.h`, `address_registry.h`, `yaml_config.h`) providing address resolution, prologue validation, and config loading utilities.
 
