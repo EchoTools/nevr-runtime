@@ -66,7 +66,6 @@ The game has a ~15-20 second splash-screen delay at startup before any NEVR code
 | ------------------ | ---------------- | ---------------------- | ------------------------------------------------------------------------ |
 | `src/gamepatches/` | `BugSplat64.dll` | `BugSplat64.dll`       | Runtime hooks, CLI flags, game modifications                             |
 | `src/gamepatches/gameserver/` | *(in `BugSplat64.dll`)* | *(in-process)* | Multiplayer networking, session management. `src/gameserver/` is DEAD — see below |
-| `src/pnsrad/`      | `pnsrad.dll`     | `pnsrad.dll`           | Reconstructed social/networking layer (friends, party, VoIP, activities) |
 
 GamePatches replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. Several features previously implemented as plugins are now built into gamepatches: server-timing, token-auth, pnsrad-enabler.
 

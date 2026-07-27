@@ -54,7 +54,6 @@ repository.
 
 ### Other targets
 
-- `src/pnsrad/` → `pnsrad.dll` — reconstructed social layer (friends, party, VoIP)
 - `src/nevr_api/` — protobuf, generated into `gen/cpp/` (`just proto`)
 - `src/common/` → `libcommon.a` — logging, globals, base64, symbol helpers
 - `src/launcher/` → thin `CreateProcess` wrapper spawning `echovr.exe -server -noconsole`
@@ -99,7 +98,6 @@ From `build/mingw-release/bin/`:
 src/gamepatches/   BugSplat64.dll — hooks, modes, crash recovery, gameserver
 src/modules/       runtime-loaded modules (platform-compat, token-auth, ws-bridge)
 src/common/        libcommon.a
-src/pnsrad/        reconstructed social layer
 src/nevr_api/      protobuf target
 src/legacy/        FROZEN v1
 src/gameserver/    DEAD — see above

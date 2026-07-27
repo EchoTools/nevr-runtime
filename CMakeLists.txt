@@ -193,7 +193,14 @@ add_subdirectory(src/modules/token-auth)
 # removal — see the N92 ledger entry.
 add_subdirectory(src/legacy/gamepatches)
 # add_subdirectory(src/gameserver)  # merged into gamepatches
-add_subdirectory(src/pnsrad)
+# src/pnsrad and its src/NRadEngine symlink were removed 2026-07-27. It was an
+# OBJECT library that NOTHING consumed — 28 objects compiled into no artifact —
+# and its approach (a replacement pnsrad.dll whose GetLoggedInUser reads
+# nevr_discord_id from config) is superseded by the shipping one: ws_bridge pokes
+# the game's ORIGINAL pnsrad.dll at the same offsets (+0x88 account_id,
+# +0x90 login state, +0x9c flags), and those layouts are documented there.
+# It was also the only consumer of a symlink into a PRIVATE repo, which broke
+# every clean clone. The pure-RE copy lives in echovr-reconstruction.
 add_subdirectory(src/legacy/gameserver)
 # telemetryagent moved to extras/ — needs protobuf-lite refactor before reintegration
 
@@ -266,8 +273,6 @@ add_custom_target(dist-prepare
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_DIR}/BugSplat64.dll" || true
   # gameserver.dll merged into gamepatches — no separate DLL to copy
   # COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_DIR}/pnsradgameserver.dll" || true
-  # Copy pnsrad.dll (if exists)
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad.dll" "${DIST_DIR}/pnsrad.dll" || true
   # Launcher executables — not built yet (module-extraction infrastructure present but launchers not wired)
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_DIR}/echovr.exe" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" "${DIST_DIR}/echovr_server.exe" || true
@@ -350,8 +355,6 @@ add_custom_target(dist-lite-prepare
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_LITE_DIR}/BugSplat64.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/BugSplat64.dll" || ${CMAKE_COMMAND} -E true
   # gameserver.dll merged into gamepatches — no separate DLL to copy
   # COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_LITE_DIR}/pnsradgameserver.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/pnsradgameserver.dll" || ${CMAKE_COMMAND} -E true
-  # Copy pnsrad.dll and strip (if exists)
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/pnsrad.dll" "${DIST_LITE_DIR}/pnsrad.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/pnsrad.dll" || ${CMAKE_COMMAND} -E true
   # Launcher executables — not built yet (module-extraction infrastructure present but launchers not wired)
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_LITE_DIR}/echovr.exe" || ${CMAKE_COMMAND} -E true
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" "${DIST_LITE_DIR}/echovr_server.exe" || ${CMAKE_COMMAND} -E true

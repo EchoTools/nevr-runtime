@@ -121,12 +121,10 @@ src/common/        libcommon.a — logging, globals, symbols, hooking
 src/gameserver/    DEAD CODE. The compiled path is src/gamepatches/gameserver/.
                    `just verify` fails if it is re-added to the build (N34)
 src/legacy/        FROZEN v1 — shall not be modified
-src/pnsrad/        reconstructed social layer (friends, party, VoIP)
 src/nevr_api/      generated protobuf (from BSR — see `just proto`)
 src/launcher/      game launcher — disabled, see CLAUDE.md
 src/standalone/    Android/Quest build — stub
 src/quest/         Quest crash-reporter shim (own NDK sub-project)
-src/NRadEngine/    engine reconstruction headers
 src/libovr-stub/   Oculus runtime stub
 
 plugins/           optional plugins loaded from plugins/ next to the game binary

@@ -80,14 +80,16 @@ itself. Windows VA = ImageBase `0x140000000` + RVA. Quest VA from `nm -DC`.
 
 ## 2. pnsrad — social + networking reconstruction (pnsrad.dll → libpnsrad.so)
 
-**This is the cleanest map in the set: `src/pnsrad/` is a from-scratch
+**This is the cleanest map in the set: the pnsrad reconstruction (`~/src/echovr-reconstruction/src/pnsrad/`, removed from this repo
+2026-07-27 — it built into nothing and was superseded by the ws_bridge
+runtime approach) is a from-scratch
 reconstruction of the RAD social platform library, and `libpnsrad.so` IS the
 Quest build of that same library.** Every reconstructed `NRadEngine::*` class
 is present in libpnsrad.so with dozens of named methods each. The port target
 is essentially "build our pnsrad reconstruction for arm64 / match its ABI to
 libpnsrad.so," not a byte-patch.
 
-| Reconstructed class (`src/pnsrad/`) | Quest symbol (representative) | .so | method count | found |
+| Reconstructed class (echovr-reconstruction, src/pnsrad) | Quest symbol (representative) | .so | method count | found |
 | --- | --- | --- | --- | --- |
 | `NRadEngine::CNSRADUsers` | `CNSRADUsers::CreateUserInternal(LocalUserID)`, `CNSRADUsers::CNSRADUsers(CTcpBroadcaster&)` | libpnsrad | 8 | yes |
 | `NRadEngine::CNSRADFriends` | (+ `CNSRADFriends_protocol.h`) | libpnsrad | 62 | yes |
