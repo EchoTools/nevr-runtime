@@ -601,6 +601,23 @@ verify:
     # in README.md and CLAUDE.md because nothing checked. A fact about the tree
     # asserted in prose drifts silently; this is the cheapest possible enforcement.
     python3 tools/verify_doc_paths.py
+    # N92: exactly one ws_bridge. Two divergent copies existed for months — only
+    # the module ran, while N61's matchmaker fix landed in the gamepatches copy
+    # that never did. The fold is only safe while the module cannot come back.
+    if grep -qE '^\s*add_subdirectory\(src/modules/ws-bridge\)' CMakeLists.txt; then
+        echo "verify: FAIL — N92 the ws-bridge MODULE is being built again. The bridge is" >&2
+        echo "compiled into gamepatches; two copies is the bug (fixes land in the dead one)." >&2
+        exit 1
+    fi
+    if grep -q 'LoadModule("ws_bridge"' src/gamepatches/boot.cpp; then
+        echo "verify: FAIL — N92 boot.cpp still loads ws_bridge as a required module; with the" >&2
+        echo "DLL gone the loader fail-fasts and the server never starts." >&2
+        exit 1
+    fi
+    if ! grep -q 'InstallWebSocketBridge();' src/gamepatches/boot.cpp; then
+        echo "verify: FAIL — N92 the in-process bridge is never started; no proxy, no login." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)

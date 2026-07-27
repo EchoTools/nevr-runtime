@@ -1,4 +1,5 @@
 #include "config.h"
+#include "ws_bridge.h"
 #include "cli.h"
 #include "module_loader.h"
 #include "common/globals.h"
@@ -378,13 +379,12 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
 
   thread_local static CHAR redirected[512];
 
-  // All WebSocket connections go through the in-process proxy (ws_bridge module)
-  using IsActiveFn = bool (*)();
-  using GetPortFn = uint16_t (*)();
-  auto isActive = (IsActiveFn)ResolveModuleProc("WsBridge_IsActive");
-  auto getPort = (GetPortFn)ResolveModuleProc("WsBridge_GetPort");
-  if (isActive && isActive() && isWebSocket) {
-    snprintf(redirected, sizeof(redirected), "ws://127.0.0.1:%u", getPort ? getPort() : 0);
+  // N92: the bridge is compiled into this DLL — direct calls, no module lookup.
+  // It used to live in modules/ws_bridge.dll and be resolved with
+  // ResolveModuleProc; that indirection is what let a second, divergent copy of
+  // the bridge exist in this tree while nothing noticed which one ran.
+  if (IsWebSocketBridgeActive() && isWebSocket) {
+    snprintf(redirected, sizeof(redirected), "ws://127.0.0.1:%u", GetWebSocketBridgePort());
   } else {
     snprintf(redirected, sizeof(redirected), "%s", target);
   }

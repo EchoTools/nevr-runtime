@@ -96,18 +96,15 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       if (getDiscordId) RegisterModuleProc("TokenAuth_GetDiscordId", getDiscordId);
     }
 
-    // WebSocket TLS proxy — reads config and starts bridge in its init.
-    // Must load after token_auth (resolves TokenAuth_GetToken via get_proc).
-    LoadModule("ws_bridge", &moduleCtx);
-
-    // Register ws_bridge exports so config.cpp can resolve them for URL redirects.
-    HMODULE hWsBridge = GetModuleHandleA("ws_bridge.dll");
-    if (hWsBridge) {
-      void* getPort = (void*)GetProcAddress(hWsBridge, "WsBridge_GetPort");
-      void* isActive = (void*)GetProcAddress(hWsBridge, "WsBridge_IsActive");
-      if (getPort) RegisterModuleProc("WsBridge_GetPort", getPort);
-      if (isActive) RegisterModuleProc("WsBridge_IsActive", isActive);
-    }
+    // N92: ws_bridge is no longer a module. It is compiled into this DLL and
+    // started below, after the CLI is parsed. The LoadModule call and the
+    // RegisterModuleProc registrations are gone with it — config.cpp now calls
+    // IsWebSocketBridgeActive()/GetWebSocketBridgePort() directly.
+    //
+    // Removing the LoadModule call is REQUIRED, not cosmetic: ws_bridge was on
+    // the required-module list, so with the DLL gone the loader correctly
+    // fail-fasts with "[FATAL] ws_bridge: Required module missing" and exit 1.
+    // Measured, 2026-07-27.
   }
 
   // Parse command line arguments.
@@ -275,6 +272,27 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 
     // Server frame pacing is handled by the server-timing plugin.
     PatchServerFramePacing();
+  }
+
+  // N92: start the WebSocket bridge in-process. It used to be
+  // modules/ws_bridge.dll, started from that module's NvrModuleInit. Folding it
+  // into this DLL removes the second, divergent copy that had drifted apart from
+  // the shipping one — session sharing lived in the copy that never ran, and the
+  // fake-LoginSuccess path lived only in the one that did.
+  //
+  // Started here, before plugins, because config.cpp's service redirect needs the
+  // bridge port and the game asks for redirects during PreprocessCommandLine.
+  if (g_earlyConfigPtr) {
+    CHAR* socketUri = EchoVR::JsonValueAsString(
+        (EchoVR::Json*)g_earlyConfigPtr, (CHAR*)"nevr_socket_uri", NULL, false);
+    if (socketUri && socketUri[0] != '\0') {
+      SetWebSocketBridgeTarget(socketUri);
+      InstallWebSocketBridge();
+    } else {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.WS] no nevr_socket_uri in early config — bridge NOT started; the game "
+          "will talk to services directly and login injection cannot fire");
+    }
   }
 
   // Load external plugins from plugins/ subdirectory

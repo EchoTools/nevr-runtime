@@ -20,6 +20,7 @@
 #include "module_loader.h"
 #include "common/echovr_functions.h"
 #include "common/globals.h"
+#include "cli.h"  // g_isServer
 #include "common/logging.h"
 #include <exception>
 #include <utility>
@@ -98,6 +99,18 @@ static std::shared_ptr<ix::WebSocket> g_loginRemoteWs;
 // login remote. Initially conn=1 (login), swapped to conn=2 (matchmaker) when
 // it connects, so the game receives matchmaker responses on the right peer.
 static ix::WebSocket* g_activeGameWs = nullptr;
+
+// N91: process-wide, not per-ProxyPair. `loginInjected` lives on the ProxyPair, so
+// the Open-handler test passed independently on every connection and a
+// LoginRequest was injected on conn=0 (config) as well as conn=1 — two logins,
+// two OCS sessions, measured. The conn=0 injection is a deliberate SAFETY NET for
+// the case where the game never opens a second connection; it shall fire only
+// when the primary path has not already logged in.
+static std::atomic<bool> g_loginInjectedAnywhere{false};
+
+// Account id used by the last injection — the server-mode fake LoginSuccess (N92)
+// echoes it back so the game sees a consistent identity.
+static uint64_t g_lastInjectedDiscordId = 0;
 
 // The game-side WS that registered the shared remote's onMessageCallback
 // (conn=1 — login). When this connection closes, the lambda's captured pointers
@@ -366,9 +379,28 @@ void InstallWebSocketBridge() {
               }
               if (getDiscordIdFn) discordId = getDiscordIdFn();
             }
+            // N92 + N20: config fallback, ported from the ws-bridge module during the
+            // monolithic fold. Without it the fold logs in with account id 0 —
+            // measured: "login injected xpid=DSC-NOVR-0". The module had this and
+            // this copy did not, which is the divergence N92 is about.
+            //
+            // N20 (owner decision, 2026-07-27): the fallback applies in CLIENT mode
+            // too, not only when g_isServer. JWT first, config second, regardless of
+            // mode.
+            if (discordId == 0 && g_earlyConfigPtr) {
+              CHAR* cfgId = EchoVR::JsonValueAsString(
+                  (EchoVR::Json*)g_earlyConfigPtr, (CHAR*)"nevr_discord_id", NULL, false);
+              if (cfgId && cfgId[0] != '\0') {
+                discordId = strtoull(cfgId, nullptr, 10);
+                Log(EchoVR::LogLevel::Info,
+                    "[NEVR.WS] Using nevr_discord_id from config: %llu",
+                    (unsigned long long)discordId);
+              }
+            }
             if (discordId == 0) {
               Log(EchoVR::LogLevel::Warning,
-                  "[NEVR.WS] No discord ID in JWT — LoginRequest will use account ID 0");
+                  "[NEVR.WS] No discord ID from JWT or config — LoginRequest will use "
+                  "account ID 0");
             }
             // Only attach Bearer token if the URL doesn't already have credentials.
             // The /spr endpoint authenticates via URL query params (discordid/password).
@@ -409,6 +441,7 @@ void InstallWebSocketBridge() {
                       // response. Without this, LogInSuccessCB silently discards the message
                       // because the user's login state at +0x90 is still 0 (logged out).
                       if (connIdx == 1 && !pairPtr->loginInjected) {
+                        g_loginInjectedAnywhere.store(true, std::memory_order_release);
                         pairPtr->loginInjected = true;
 
                         // Set CNSUser login state only on the actual login connection.
@@ -450,6 +483,7 @@ void InstallWebSocketBridge() {
                         }
 
                         uint64_t platformCode = g_noOvr ? static_cast<uint64_t>(5) : static_cast<uint64_t>(2);
+                        g_lastInjectedDiscordId = discordId;
                         std::string loginMsg = BuildLoginRequest(discordId, platformCode);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
@@ -492,6 +526,33 @@ void InstallWebSocketBridge() {
                         size_t errMaxLen = rmsg->str.size() - 48;
                         Log(EchoVR::LogLevel::Warning, "[NEVR.WS] LOGIN FAILURE: status=%llu msg=%.*s",
                             (unsigned long long)statusCode, (int)errMaxLen, errMsg);
+
+                        // N92: ported from the ws-bridge module, which was the shipping
+                        // copy until the monolithic fold. A dedicated server has no
+                        // interactive login; ServerDB answers LoginRequest with
+                        // LoginFailure, and without this the game stalls at the login
+                        // gate. Synthesize the LoginSuccess the game is waiting for and
+                        // do NOT forward the failure.
+                        if (g_isServer) {
+                          Log(EchoVR::LogLevel::Debug,
+                              "[NEVR.WS] Server mode — injecting fake LoginSuccess to bypass login gate");
+                          static const uint64_t SYM_LOGIN_SUCCESS = 0xa5acc1a90d0cce47;
+                          // LoginSuccess payload: Session UUID(16) + PlatformCode(8) + AccountId(8)
+                          uint8_t payload[32] = {};
+                          payload[0] = 0x4E; payload[1] = 0x45; payload[2] = 0x56; payload[3] = 0x52; // "NEVR"
+                          payload[4] = 0x53; payload[5] = 0x52; payload[6] = 0x56; payload[7] = 0x52; // "SRVR"
+                          uint64_t platformCode = g_noOvr ? static_cast<uint64_t>(5) : static_cast<uint64_t>(2);
+                          memcpy(payload + 16, &platformCode, 8);
+                          memcpy(payload + 24, &g_lastInjectedDiscordId, 8);
+
+                          std::string fakeSuccess;
+                          fakeSuccess.append(reinterpret_cast<const char*>(MSG_MARKER), 8);
+                          AppendLE64(fakeSuccess, SYM_LOGIN_SUCCESS);
+                          AppendLE64(fakeSuccess, sizeof(payload));
+                          fakeSuccess.append(reinterpret_cast<const char*>(payload), sizeof(payload));
+                          gameWsPtr->sendBinary(fakeSuccess);
+                          break;  // failure is not forwarded to the game
+                        }
                       }
                       // Decode LoginSuccess (sym 0xa5acc1a90d0cce47)
                       if (rsym == 0xa5acc1a90d0cce47) {

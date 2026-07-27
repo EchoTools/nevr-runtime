@@ -33,6 +33,12 @@ ALLOWED_ABSENT = {
     # N34: the dead copy is cited precisely so agents avoid it.
     "src/gameserver",
     "src/gameserver/gameserver.cpp",
+    # Gitignored, machine-local. Present in the owner's checkout, absent in every
+    # fresh clone and worktree — so requiring it made this checker pass ONLY on
+    # one machine, which is the exact "green on the author's box" failure that
+    # docs/standards/verification.md exists to prevent. Two independent agents hit
+    # it in fresh worktrees on 2026-07-27.
+    "extern/protobuf",
 }
 
 
