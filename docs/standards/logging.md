@@ -77,7 +77,7 @@ how an agent triangulates a correct log line.
 - You **shall not** log raw binary data, hex dumps, or pointer values at INFO level.
   These are DEBUG-level diagnostics and SHALL be gated by a verbosity
   flag or compile-time guard.
-- You **shall not** you **shall** use `Log(Debug, ...)` for anything you expect an operator to need
+- You **shall not** use `Log(Debug, ...)` for anything you expect an operator to need
   during a production incident. DEBUG is off by default in production
   builds. If an operator needs it, it is INFO.
 - You **shall not** leave a `// TODO: add logging` comment without a BUGS.md N-ledger

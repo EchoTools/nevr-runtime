@@ -637,6 +637,25 @@ verify:
         echo "verify: FAIL — N92 the in-process bridge is never started; no proxy, no login." >&2
         exit 1
     fi
+    # docs/standards/logging.md Rule 2: the login path SHALL log the full XPID at
+    # Info. This rule existed in prose and went unenforced for months — N91 shipped
+    # with the identity line at Debug, invisible in production, which is how a
+    # duplicate LoginRequest and an account-id-0 login both went unnoticed. The
+    # rule was right; nothing checked it.
+    if ! awk '/login injected/{found=1} found && /Log\(EchoVR::LogLevel::Info/{ok=1} END{exit !ok}' \
+         src/gamepatches/ws_bridge.cpp; then
+        if ! grep -B3 'login injected' src/gamepatches/ws_bridge.cpp | grep -q 'LogLevel::Info'; then
+            echo "verify: FAIL — logging.md Rule 2: the login-injection line is not at Info." >&2
+            echo "Identity at login shall be visible in a production log (N91)." >&2
+            exit 1
+        fi
+    fi
+    if ! grep -q 'xpid=%s' src/gamepatches/ws_bridge.cpp; then
+        echo "verify: FAIL — logging.md Rule 2: login injection does not log the XPID." >&2
+        exit 1
+    fi
+    # logging.md: no INFO-level logging inside a per-frame hot path (~125Hz).
+    python3 tools/verify_log_rules.py
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)
