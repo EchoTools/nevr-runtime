@@ -305,10 +305,12 @@ def write_manifest():
 # handler must return EXCEPTION_CONTINUE_SEARCH for it.
 VEH_BREAKPOINT_OWNER = "src/gamepatches/crash_recovery.cpp"
 
-# Not built: plugins/CMakeLists.txt add_subdirectory()s only log-filter,
-# broadcaster-bridge, anim-debugger, example. This file ships nowhere, so it
-# cannot be a second live owner. If it is ever added to the build it MUST be
-# reworked first — hence it is excluded by path, not by pretending it is clean.
+# Not built: plugins/CMakeLists.txt add_subdirectory()s only log-filter and
+# example. (broadcaster-bridge moved out 2026-07-26, anim-debugger 2026-07-27 —
+# both to nevr-runtime-plugins, because this repo is PUBLIC.) This file ships
+# nowhere, so it cannot be a second live owner. If it is ever added to the build
+# it MUST be reworked first — hence it is excluded by path, not by pretending it
+# is clean.
 VEH_UNBUILT = {"plugins/crash-handler/src/plugin.cpp"}
 
 

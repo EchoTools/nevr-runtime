@@ -47,7 +47,6 @@ loaded via the `NvrPluginInterface` lifecycle.
 | Plugin | Output | Purpose |
 | ------ | ------ | ------- |
 | `log-filter` | `log_filter.dll` | Superseded by the built-in filter; the loader refuses it |
-| `anim-debugger` | `anim_debugger.dll` | Animation-tree RE instrumentation (diagnostic) |
 | `example` | `example.dll` | Reference implementation for new plugin authors |
 
 Gameplay and tooling plugins live in the separate `nevr-runtime-plugins`
