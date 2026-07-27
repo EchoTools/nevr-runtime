@@ -110,8 +110,25 @@ struct StubAdapterDesc {
     SIZE_T DedicatedVideoMemory;
     SIZE_T DedicatedSystemMemory;
     SIZE_T SharedSystemMemory;
-    GUID AdapterLuid;  /* LUID is 8 bytes, same as GUID.Data1+Data2 */
+    /* E1: this was `GUID AdapterLuid` with the comment "LUID is 8 bytes, same as
+     * GUID.Data1+Data2" — wrong twice. sizeof(GUID) is 16 (4+2+2+8), and
+     * Data1+Data2 is 6, not 8. LUID is 4+4 = 8.
+     *
+     * The consequence was not cosmetic: this struct was 8 bytes LARGER than the
+     * real DXGI_ADAPTER_DESC, and StubAdapter_GetDesc does
+     * `memset(pDesc, 0, sizeof(*pDesc))` on a buffer the CALLER owns — so every
+     * headless server zeroed 8 bytes past the end of the game's own struct. */
+    LUID AdapterLuid;
 };
+
+/* E1: the size is now enforced, not asserted in prose. StubAdapter_GetDesc does
+ * memset(pDesc, 0, sizeof(*pDesc)) into a CALLER-owned buffer, so this struct
+ * being one byte too large is an out-of-bounds write on the game's memory. The
+ * previous `GUID AdapterLuid` made it 8 bytes too large and nothing noticed. */
+static_assert(sizeof(StubAdapterDesc) ==
+                  128 * sizeof(WCHAR) + 4 * sizeof(UINT) + 3 * sizeof(SIZE_T) + sizeof(LUID),
+              "StubAdapterDesc must match DXGI_ADAPTER_DESC exactly — GetDesc memsets "
+              "sizeof(*pDesc) into a caller-owned buffer");
 
 /* IDXGIAdapter vtable slots:
  *  [0] QueryInterface  [1] AddRef  [2] Release

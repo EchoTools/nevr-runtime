@@ -104,6 +104,7 @@ echovr
 
 # Serena language server cache
 .serena/
+.sisyphus/
 
 # Temporary working files
 _temp/

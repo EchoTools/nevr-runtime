@@ -656,6 +656,22 @@ verify:
     fi
     # logging.md: no INFO-level logging inside a per-frame hot path (~125Hz).
     python3 tools/verify_log_rules.py
+    # D1/N78: exactly ONE strong definition of ::Log. gameserver.cpp used to define
+    # a second one with no WriteLog null-check, so which definition every call in
+    # the DLL bound to was link-order dependent — and if that one won, the
+    # early-boot stderr fallback silently did not exist.
+    # .cpp only (a header carries the declaration), and tests are exempt — they
+    # deliberately stub Log to run without the game.
+    LOG_DEFS=$(grep -rlE '^(VOID|void) Log\(EchoVR::LogLevel' \
+                 --include='*.cpp' src/common src/gamepatches src/modules 2>/dev/null \
+               | grep -v '/tests/' | wc -l)
+    if [ "$LOG_DEFS" -ne 1 ]; then
+        echo "verify: FAIL — D1 found $LOG_DEFS definitions of ::Log (want exactly 1)." >&2
+        grep -rlE '^(VOID|void) Log\(EchoVR::LogLevel' --include='*.cpp' \
+             src/common src/gamepatches src/modules | grep -v '/tests/' >&2
+        echo "Two strong definitions is an ODR violation; the winner is link-order dependent." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)

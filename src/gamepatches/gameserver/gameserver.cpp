@@ -36,15 +36,23 @@ static void CallScheduleReturnToLobby() {
     if (g_pGame) EchoVR::NetGameScheduleReturnToLobby(g_pGame);
 }
 
+#include "common/logging.h"
+
 using namespace GameServer;
 
-// Logging wrapper for game's log system
-void Log(EchoVR::LogLevel level, const CHAR* format, ...) {
-  va_list args;
-  va_start(args, format);
-  EchoVR::WriteLog(level, 0, format, args);
-  va_end(args);
-}
+// D1/N78: this file used to define its own ::Log — a SECOND strong definition of
+// the same mangled symbol as src/common/logging.cpp, both linked into
+// BugSplat64.dll. Confirmed with nm: `T _Z3LogN6EchoVR8LogLevelEPKcz` in both
+// gamepatches.dir/gameserver/gameserver.cpp.obj and common.dir/logging.cpp.obj.
+//
+// That is an ODR violation, and the two were NOT equivalent: this copy called
+// EchoVR::WriteLog unconditionally, while common/logging.cpp null-checks it and
+// falls back to stderr. Which one every Log() call in the DLL bound to was
+// link-order dependent — and if this one won, every early-boot log line was a
+// null function-pointer call and the stderr fallback silently did not exist.
+//
+// Deleted. common/logging.h declares the guarded one; this file already
+// includes it.
 
 // Subscribe to internal broadcaster (UDP) events
 uint16_t ListenForBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId, BOOL isMsgReliable, VOID* func) {
