@@ -40,13 +40,17 @@ struct CachedAuthToken {
 
     // Extracts the "did" (discord ID) claim from the JWT access token.
     // Returns 0 if the token is missing, malformed, or has no "did" claim.
-    uint64_t GetDiscordId() const {
-        if (token.empty()) return 0;
+    /// Decode the JWT payload (segment 2) into its claims object.
+    /// Factored out of GetDiscordId so expiry can reuse it — the base64url
+    /// decode was otherwise about to exist twice.
+    /// Returns an empty object if the token is absent or malformed.
+    nlohmann::json DecodeClaims() const {
+        if (token.empty()) return nlohmann::json::object();
         // JWT = header.payload.signature — decode the payload (second segment)
         auto dot1 = token.find('.');
-        if (dot1 == std::string::npos) return 0;
+        if (dot1 == std::string::npos) return nlohmann::json::object();
         auto dot2 = token.find('.', dot1 + 1);
-        if (dot2 == std::string::npos) return 0;
+        if (dot2 == std::string::npos) return nlohmann::json::object();
         std::string encoded = token.substr(dot1 + 1, dot2 - dot1 - 1);
         // Base64url decode (pad to multiple of 4)
         for (auto& c : encoded) { if (c == '-') c = '+'; if (c == '_') c = '/'; }
@@ -63,26 +67,60 @@ struct CachedAuthToken {
             if (bits >= 8) { bits -= 8; decoded.push_back((char)(buf >> bits)); buf &= (1u << bits) - 1; }
         }
         try {
-            auto claims = nlohmann::json::parse(decoded);
-            // Nakama stores custom claims in the "vrs" (vars) map
-            std::string did;
-            if (claims.contains("vrs") && claims["vrs"].is_object()) {
-                did = claims["vrs"].value("did", "");
-            }
-            // Fallback: check top-level "did" for compatibility
-            if (did.empty()) {
-                did = claims.value("did", "");
-            }
-            if (!did.empty()) return strtoull(did.c_str(), nullptr, 10);
-        } catch (...) {}
+            return nlohmann::json::parse(decoded);
+        } catch (const nlohmann::json::exception&) {
+            return nlohmann::json::object();
+        }
+    }
+
+    uint64_t GetDiscordId() const {
+        const auto claims = DecodeClaims();
+        // Nakama stores custom claims in the "vrs" (vars) map
+        std::string did;
+        if (claims.contains("vrs") && claims["vrs"].is_object()) {
+            did = claims["vrs"].value("did", "");
+        }
+        // Fallback: check top-level "did" for compatibility
+        if (did.empty()) {
+            did = claims.value("did", "");
+        }
+        if (!did.empty()) return strtoull(did.c_str(), nullptr, 10);
+        return 0;
+    }
+
+    /// Expiry from the JWT's own `exp` claim (RFC 7519: seconds since epoch).
+    /// Returns 0 when the token carries no usable `exp`.
+    ///
+    /// This is the authority for when to refresh. The previous code hardcoded
+    /// now+60 regardless of what the server issued, so the client refreshed on
+    /// its own schedule instead of the token's — and a token that was still
+    /// valid for an hour was thrown away every minute.
+    uint64_t GetJwtExpiry() const {
+        const auto claims = DecodeClaims();
+        if (claims.contains("exp") && claims["exp"].is_number_unsigned()) {
+            return claims["exp"].get<uint64_t>();
+        }
         return 0;
     }
 };
 
-// Access token maximum lifetime, seconds (client-side cap).
-// The server may issue a longer-lived token; we clamp to this value so that a
-// leaked access token has a negligible window.
-static constexpr uint64_t kMaxAccessTokenLifetimeSec = 60;
+// Fallback access-token lifetime, seconds — used ONLY when the JWT carries no
+// usable `exp` claim. The token's own `exp` is the authority (see GetJwtExpiry).
+//
+// This was `kMaxAccessTokenLifetimeSec`, a hard 60s cap applied unconditionally,
+// justified as limiting the window of a LEAKED access token. That rationale is
+// about a token at rest — and the access token is never persisted: SaveToken
+// writes only refresh_token + user_id + username, deliberately. So the cap was
+// defending a threat this design does not have, while forcing a refresh every
+// 60s no matter what the server issued.
+static constexpr uint64_t kFallbackAccessTokenLifetimeSec = 300;
+
+// Separate concern, deliberately kept (N51): an access token read FROM DISK is
+// clamped hard. A legacy .credentials.json may still contain one, and a token at
+// rest on disk IS the leak scenario the original cap was written for. This bound
+// applies to the load path only — never to a freshly issued token, whose own
+// `exp` governs.
+static constexpr uint64_t kMaxDiskAccessTokenLifetimeSec = 60;
 
 // Get the directory containing the main executable.
 // All _local/ paths are resolved relative to this.
@@ -140,12 +178,12 @@ inline CachedAuthToken LoadCachedAuthToken() {
         result.user_id = j.value("user_id", "");
         result.username = j.value("username", "");
 
-        // Client-side cap: access token lifetime is at most 60 seconds.
-        // The server may have issued a longer-lived token (legacy files, or a
-        // refresh that stored it before this cap was added). Clamp so that a
-        // leaked access token from disk has a negligible window.
+        // Client-side cap for a token read FROM DISK. Current code never writes
+        // the access token, but a legacy file may carry one — and a token at rest
+        // is exactly the leak scenario this bounds. Fresh tokens are governed by
+        // their own JWT `exp` (GetJwtExpiry), not by this.
         uint64_t now = static_cast<uint64_t>(time(nullptr));
-        uint64_t maxExpiry = now + kMaxAccessTokenLifetimeSec;
+        uint64_t maxExpiry = now + kMaxDiskAccessTokenLifetimeSec;
         if (result.token_expiry > maxExpiry) {
             result.token_expiry = maxExpiry;
         }

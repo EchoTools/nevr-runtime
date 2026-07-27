@@ -216,7 +216,37 @@ std::string DeviceAuth::PollDeviceCode(const std::string& code) {
             std::string token = j.value("token", "");
             if (!token.empty()) {
                 m_token = token;
-                m_tokenExpiry = static_cast<uint64_t>(time(nullptr)) + 60;
+                // Respect the token's OWN expiry (owner decision 2026-07-27).
+                // This was `time(nullptr) + 60` — the client refreshed on its own
+                // hardcoded schedule instead of the server's, discarding a token
+                // that might still have been valid for an hour. The JWT `exp`
+                // claim is the authority; `expires_in` from the response is the
+                // first fallback; a conservative constant only if neither is
+                // present.
+                {
+                    CachedAuthToken probe;
+                    probe.token = m_token;
+                    const uint64_t jwtExp = probe.GetJwtExpiry();
+                    const uint64_t now = static_cast<uint64_t>(time(nullptr));
+                    if (jwtExp > now) {
+                        m_tokenExpiry = jwtExp;
+                        Log(EchoVR::LogLevel::Info,
+                            "[NEVR.AUTH] token expiry from JWT exp: %llu (%llus from now)",
+                            static_cast<unsigned long long>(jwtExp),
+                            static_cast<unsigned long long>(jwtExp - now));
+                    } else if (j.contains("expires_in") && j["expires_in"].is_number_unsigned()) {
+                        m_tokenExpiry = now + j["expires_in"].get<uint64_t>();
+                        Log(EchoVR::LogLevel::Info,
+                            "[NEVR.AUTH] token expiry from expires_in: %llus",
+                            static_cast<unsigned long long>(j["expires_in"].get<uint64_t>()));
+                    } else {
+                        m_tokenExpiry = now + kFallbackAccessTokenLifetimeSec;
+                        Log(EchoVR::LogLevel::Warning,
+                            "[NEVR.AUTH] token carries no exp and no expires_in — "
+                            "falling back to %llus",
+                            static_cast<unsigned long long>(kFallbackAccessTokenLifetimeSec));
+                    }
+                }
                 m_refreshToken = j.value("refresh_token", "");
                 m_refreshTokenExpiry = static_cast<uint64_t>(time(nullptr)) + (30 * 24 * 3600);
                 m_userId = j.value("user_id", "");

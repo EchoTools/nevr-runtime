@@ -684,6 +684,20 @@ verify:
             exit 1
         fi
     done
+    # Token expiry shall come from the JWT, not a hardcoded value (owner
+    # decision 2026-07-27). The access token is never persisted, so the old
+    # unconditional 60s cap defended a threat this design does not have while
+    # discarding tokens the server had issued for far longer.
+    if grep -qE 'm_tokenExpiry = static_cast<uint64_t>\(time\(nullptr\)\) \+ [0-9]+;' \
+         src/modules/token-auth/src/token_auth.cpp; then
+        echo "verify: FAIL — token-auth sets m_tokenExpiry from a hardcoded offset;" >&2
+        echo "the JWT's own exp claim is the authority (GetJwtExpiry)." >&2
+        exit 1
+    fi
+    if ! grep -q 'GetJwtExpiry()' src/modules/token-auth/src/token_auth.cpp; then
+        echo "verify: FAIL — token-auth does not consult the JWT exp claim." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)
