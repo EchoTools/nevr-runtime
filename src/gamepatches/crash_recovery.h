@@ -34,7 +34,26 @@ void ResolveShutdownDependencies();
 void EnsureStackReserve();
 
 /// Installs the console ctrl handler so CTRL+C actually terminates the process.
+/// N87: under Wine a tty SIGINT is delivered here (as CTRL_C_EVENT) and NOT to
+/// the CRT signal table, with or without a console. Installed this early the
+/// handler sits BEHIND the game's own — see RearmConsoleCtrlHandler.
 void InstallConsoleCtrlHandler();
+
+/// N87: moves our console ctrl handler to the front of the LIFO handler chain.
+/// Console handlers run in reverse registration order and the first to return
+/// TRUE ends the chain; the game installs its own handler after ours and returns
+/// TRUE, so without this ours never runs. Call only from a site that runs after
+/// the game is fully initialised (GameServerLib::Initialize) — before that there
+/// is no handler behind us to hand the event to.
+void RearmConsoleCtrlHandler();
+
+/// N87: TRUE once a console CTRL+C/close/break event has been observed. Read by
+/// GameServerLib::Terminate to exit cleanly at the end of the game's own
+/// teardown, instead of letting the game fault in the client-side teardown that
+/// follows it. Distinct from g_shutdownRequested, which triggers an immediate
+/// PerformGracefulShutdown from the per-frame and per-state-transition hooks and
+/// would therefore kill the process before the lobby is unregistered.
+bool ConsoleShutdownPending();
 
 /// Forces a genuine process exit with the given code, bypassing the server-mode
 /// ExitProcess suppression in ExitProcessHook. Uses the real kernel32 ExitProcess

@@ -869,6 +869,14 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
 
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Initialized game server");
 
+  // N87: the game has installed its own console ctrl handler by now, which sits
+  // in front of the one InstallConsoleCtrlHandler() registered during
+  // Initialize() and swallows CTRL+C by returning TRUE. Move ours back to the
+  // front so the shutdown is reported and bounded; ours returns FALSE so the
+  // game's teardown (lobby unregistration + ServerDB close) still runs behind
+  // it, and we exit cleanly in Terminate() below.
+  RearmConsoleCtrlHandler();
+
 #if _DEBUG
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] EchoVR base address = 0x%p", EchoVR::g_GameBaseAddress);
 #endif
@@ -1039,6 +1047,24 @@ void GameServerLib::UnregisterAllCallbacks() {
 VOID GameServerLib::Terminate() {
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Terminated game server");
   m_context->Terminate();
+
+  // N87: on the CTRL+C path this is the last point at which the server-visible
+  // work is provably finished — "[NSLOBBY] unregistering", "[WEBSOCKET]
+  // Disconnected from ServerDB (code: 1000, Normal closure)" and
+  // "[NEVR.GAMESERVER] Unregistered game server" are all logged above this line.
+  // Everything the game does after this is client-side teardown (level unload,
+  // user destruction) that a terminating dedicated server does not need, and it
+  // is where the game faults — ACCESS_VIOLATION on an EXECUTE in freed memory,
+  // then exit code 5 through its crash-dump path. Exit cleanly here instead.
+  // Gated on the console-shutdown flag so a Terminate on any other path is
+  // unaffected.
+  if (ConsoleShutdownPending()) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.GAMESERVER] CTRL+C teardown complete (lobby unregistered, ServerDB socket closed) "
+        "— exiting cleanly before the game's client-side teardown");
+    PerformGracefulShutdown(0);
+    // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
+  }
 }
 
 // File-static state for -exitonerror disconnect detection

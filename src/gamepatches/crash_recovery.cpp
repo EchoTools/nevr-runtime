@@ -780,30 +780,171 @@ static void PosixSignalHandler(int sig) {
   // Unreachable — PerformGracefulShutdown calls ForceFatalExit which terminates.
 }
 
-void InstallConsoleCtrlHandler() {
-  // Install console ctrl handler so CTRL+C actually terminates the process.
-  // The game registers its own handler that logs "Console close signal received" but doesn't exit.
-  // Handlers are called LIFO, so ours runs first and terminates before the game's handler can swallow the signal.
-  SetConsoleCtrlHandler(
-      [](DWORD dwCtrlType) -> BOOL {
-        if (dwCtrlType == CTRL_C_EVENT || dwCtrlType == CTRL_CLOSE_EVENT || dwCtrlType == CTRL_BREAK_EVENT) {
-          Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Console signal %lu received — direct shutdown",
-              dwCtrlType);
-          PerformGracefulShutdown(0);
-          // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
-          return TRUE;
-        }
-        return FALSE;
-      },
-      TRUE);
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Console ctrl handler installed (CTRL+C will trigger shutdown)");
+// ---------------------------------------------------------------------------
+// N87 — CTRL+C shutdown under Wine.
+//
+// Measured, Wine 11.13, GUI-subsystem PE launched as `wine ./x.exe` from a tty
+// with NO console at all (GetConsoleWindow() == NULL, and
+// AttachConsole(ATTACH_PARENT_PROCESS) fails with ERROR_INVALID_HANDLE):
+//
+//   * a tty SIGINT to the process group IS delivered to SetConsoleCtrlHandler
+//     handlers as CTRL_C_EVENT. No console is required, and none can be
+//     obtained. Attaching one is neither possible nor necessary.
+//   * the CRT signal(SIGINT) handler is NOT called. Wine does not route the
+//     event through the CRT signal table.
+//   * handlers run in reverse registration order and the first one returning
+//     TRUE ends the chain.
+//
+// Consequence for this process: InstallConsoleCtrlHandler() runs during
+// Initialize(), long before the game installs its own handler, so ours sits
+// BEHIND the game's. The game's handler logs "Console close signal received",
+// runs a complete and correct server teardown (unregisters the lobby, closes
+// the ServerDB WebSocket), and returns TRUE — so ours never ran and no
+// "[NEVR.PATCH]" shutdown line was ever emitted. The game then faults in its
+// client-side teardown after that point and exits 5 via its crash-dump path.
+//
+// The fix is therefore NOT to take the signal away from the game (its teardown
+// is the graceful part) but to sit in FRONT of it, report, let it run, and
+// exit cleanly the moment its server-visible work is done — see
+// RearmConsoleCtrlHandler() and GameServerLib::Terminate().
+// ---------------------------------------------------------------------------
 
-  // Register POSIX signal handlers for Wine/Linux.
-  // On Wine, SetConsoleCtrlHandler requires a console (which doesn't exist with
-  // -noconsole), so CTRL+C/SIGINT from the host never reaches the handler above.
-  // POSIX signal() works under Wine because Wine's msvcrt delegates to the host's
-  // libc signal handling. On native Windows, signal() may be a no-op for SIGINT/
-  // SIGTERM — that's fine; the console handler above covers that case.
+static void ShutdownReport(const char* fmt, ...);
+
+// Set by ConsoleCtrlHandler when a CTRL+C/close/break event arrives.
+//
+// Deliberately NOT g_shutdownRequested: that flag is polled by
+// NetGameSwitchStateHook (state_machine.cpp:30) and by the per-frame hook
+// (wave0_instrumentation.cpp:365), and both call PerformGracefulShutdown the
+// instant they see it. The game's own teardown switches NetGame state as its
+// FIRST step, so setting g_shutdownRequested here would force-exit the process
+// before the lobby is unregistered — the precise opposite of graceful.
+static volatile LONG s_consoleShutdownPending = 0;
+
+// Non-zero once RearmConsoleCtrlHandler() has moved us to the front of the
+// chain, which is also the point at which we know there is a handler BEHIND us
+// to hand the event to. Before that, returning FALSE would hand the event to
+// nobody, so we must do the shutdown ourselves.
+static volatile LONG s_deferToGameTeardown = 0;
+
+// Upper bound on the game's own teardown. Measured at ~3.1s from
+// "Console close signal received" to "Terminated game server"
+// (/var/tmp/work-nevr-runtime/n13-run.log, 10:11:51.280 -> 10:11:53.391).
+// If it ever exceeds this we must still die: a hung shutdown is worse than an
+// ugly one, and a server blocked forever is the failure mode of N4.
+static constexpr DWORD kGameTeardownWatchdogMs = 20000;
+static HANDLE s_shutdownWatchdogEvent = nullptr;
+
+static DWORD WINAPI ShutdownWatchdogThread(LPVOID) {
+  if (WaitForSingleObject(s_shutdownWatchdogEvent, kGameTeardownWatchdogMs) == WAIT_TIMEOUT) {
+    ShutdownReport("[NEVR.PATCH] shutdown watchdog expired after %lu ms — the game teardown never "
+                   "reached GameServerLib::Terminate; forcing exit",
+                   static_cast<unsigned long>(kGameTeardownWatchdogMs));
+    PerformGracefulShutdown(1);
+    // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
+  }
+  return 0;
+}
+
+// Teardown path for this thread: it never outlives the process. Either the
+// deferred shutdown reaches GameServerLib::Terminate and TerminateProcess kills
+// it, or the wait times out and it terminates the process itself.
+static void StartShutdownWatchdog() {
+  s_shutdownWatchdogEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (s_shutdownWatchdogEvent == nullptr) {
+    ShutdownReport("[NEVR.PATCH] shutdown watchdog NOT armed (CreateEvent failed err=%lu) — a "
+                   "stuck game teardown will not be force-exited",
+                   GetLastError());
+    return;
+  }
+  HANDLE thread = CreateThread(nullptr, 0, ShutdownWatchdogThread, nullptr, 0, nullptr);
+  if (thread == nullptr) {
+    ShutdownReport("[NEVR.PATCH] shutdown watchdog NOT armed (CreateThread failed err=%lu) — a "
+                   "stuck game teardown will not be force-exited",
+                   GetLastError());
+    return;
+  }
+  CloseHandle(thread);
+  ShutdownReport("[NEVR.PATCH] shutdown watchdog armed timeout_ms=%lu",
+                 static_cast<unsigned long>(kGameTeardownWatchdogMs));
+}
+
+bool ConsoleShutdownPending() { return s_consoleShutdownPending != 0; }
+
+static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
+  if (dwCtrlType != CTRL_C_EVENT && dwCtrlType != CTRL_CLOSE_EVENT &&
+      dwCtrlType != CTRL_BREAK_EVENT) {
+    return FALSE;
+  }
+
+  if (InterlockedExchange(&s_consoleShutdownPending, 1) != 0) {
+    // Second CTRL+C. The operator is telling us the first one is stuck; stop
+    // waiting on the game and go.
+    ShutdownReport("[NEVR.PATCH] shutdown signal received again (ctrl_type=%lu) — teardown already "
+                   "in progress, forcing exit now",
+                   dwCtrlType);
+    PerformGracefulShutdown(1);
+    return TRUE;
+  }
+
+  ShutdownReport("[NEVR.PATCH] shutdown signal received — console ctrl event %lu "
+                 "(CTRL+C; a tty SIGINT arrives here under Wine) defer_to_game=%ld",
+                 dwCtrlType, static_cast<long>(s_deferToGameTeardown));
+
+  if (s_deferToGameTeardown != 0) {
+    // Return FALSE so the chain continues to the game's own handler, which is
+    // what actually unregisters the lobby and closes the ServerDB socket. We
+    // exit cleanly at the end of GameServerLib::Terminate(), once that work is
+    // provably done.
+    StartShutdownWatchdog();
+    ShutdownReport("[NEVR.PATCH] deferring to the game's console handler for lobby unregistration "
+                   "and ServerDB close; clean exit follows at GameServerLib::Terminate");
+    return FALSE;
+  }
+
+  // Nobody behind us in the chain yet — do it ourselves.
+  PerformGracefulShutdown(0);
+  // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
+  return TRUE;
+}
+
+void RearmConsoleCtrlHandler() {
+  // Remove-then-add moves us to the front of the LIFO chain without leaving a
+  // duplicate entry behind. Call this only from a site that runs AFTER the game
+  // has installed its own handler.
+  SetConsoleCtrlHandler(ConsoleCtrlHandler, FALSE);
+  if (SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE) == FALSE) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] console ctrl handler re-arm FAILED err=%lu — CTRL+C will be consumed by the "
+        "game's handler and our shutdown will not report",
+        GetLastError());
+    return;
+  }
+  InterlockedExchange(&s_deferToGameTeardown, 1);
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.PATCH] console ctrl handler re-armed to front of chain (CTRL+C reaches us first; the "
+      "game's teardown runs behind us)");
+}
+
+void InstallConsoleCtrlHandler() {
+  // Installed here, this handler sits BEHIND the game's (registered later, and
+  // the chain is LIFO). It only becomes reachable once RearmConsoleCtrlHandler()
+  // moves it to the front. Registering now still matters: it covers a CTRL+C
+  // that arrives before the game has installed its own handler, where
+  // s_deferToGameTeardown is 0 and we shut down directly.
+  if (SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE) == FALSE) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] SetConsoleCtrlHandler FAILED err=%lu",
+        GetLastError());
+  } else {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] Console ctrl handler installed (behind the game's until re-armed)");
+  }
+
+  // Register POSIX signal handlers too.
+  // MEASURED (N87, Wine 11.13): signal(SIGINT, ...) registers successfully but
+  // is NEVER called — Wine delivers a tty SIGINT to console ctrl handlers, not
+  // to the CRT signal table. These registrations are retained for native
+  // Windows and for a hosted SIGTERM, not because they fire under Wine.
   //
   // These handlers call PerformGracefulShutdown DIRECTLY — the prior flag-based
   // approach (set g_shutdownRequested, check per-frame) lost the race to game
