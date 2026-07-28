@@ -624,7 +624,7 @@ bool InstallLogFilterHook(uintptr_t base_addr) {
 
     MH_Initialize();
 
-    auto* target = nevr::ResolveVA(base_addr, nevr::addresses::VA_CLOG_PRINTF_IMPL);
+    auto* target = nevr::ResolveVA_Checked(base_addr, nevr::addresses::VA_CLOG_PRINTF_IMPL);
     MH_STATUS status = MH_CreateHook(target,
                                       reinterpret_cast<void*>(&hook_PrintfImpl),
                                       reinterpret_cast<void**>(&orig_PrintfImpl));
@@ -646,7 +646,7 @@ bool InstallLogFilterHook(uintptr_t base_addr) {
 
 void RemoveLogFilterHook() {
     if (g_base_addr != 0) {
-        auto* target = nevr::ResolveVA(g_base_addr, nevr::addresses::VA_CLOG_PRINTF_IMPL);
+        auto* target = nevr::ResolveVA_Checked(g_base_addr, nevr::addresses::VA_CLOG_PRINTF_IMPL);
         MH_DisableHook(target);
         MH_RemoveHook(target);
         PluginLog("hook removed (emitted: %llu, suppressed: %llu)",

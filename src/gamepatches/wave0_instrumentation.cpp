@@ -45,6 +45,7 @@
 #include "common/logging.h"
 #include "plugin_loader.h"    // N68: TickPlugins
 #include "module_loader.h"    // N68: TickModules
+#include "nevr_common.h"      // N96: ResolveVA_Checked / ResolveVA_Unchecked
 
 #ifdef _WIN32
 #include <windows.h>
@@ -57,7 +58,7 @@
 #endif
 
 /* --------------------------------------------------------------------
- * Address constants (full VAs for ResolveVA)
+ * Address constants (full VAs for address resolution)
  * -------------------------------------------------------------------- */
 
 static constexpr uint64_t VA_GET_TIME_MICROSECONDS   = 0x1400D00C0;
@@ -109,22 +110,9 @@ static HANDLE s_cached_timer = NULL;    // Persistent waitable timer for frame p
 #endif
 #endif
 
-/* Hot-path address resolution — targets validated at init time */
-static inline void* ResolveVA(uintptr_t base, uint64_t va) {
-    return reinterpret_cast<void*>(base + (va - 0x140000000));
-}
-
-/* Validated resolution for init-time setup — returns nullptr on bad address */
-static inline void* ResolveVA_Safe(uintptr_t base, uint64_t va) {
-    if (va < 0x140000000ULL) return nullptr;
-    void* addr = reinterpret_cast<void*>(base + (va - 0x140000000));
-#ifdef _WIN32
-    MEMORY_BASIC_INFORMATION mbi;
-    if (VirtualQuery(addr, &mbi, sizeof(mbi)) == 0) return nullptr;
-    if (mbi.State != MEM_COMMIT) return nullptr;
-#endif
-    return addr;
-}
+/* Address resolution comes from nevr_common.h — nevr::ResolveVA_Checked for
+   init-time setup, nevr::ResolveVA_Unchecked for the one Shutdown site that
+   needs it (N96). This file used to carry its own file-static pair. */
 
 #ifdef _WIN32
 
@@ -570,7 +558,7 @@ void Wave0::Init(uintptr_t base_addr) {
     std::string failedNames;
 
     for (auto& h : hooks) {
-        void* target = ResolveVA_Safe(g_base, h.va);
+        void* target = nevr::ResolveVA_Checked(g_base, h.va);
         if (!target) {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.PATCH] hook skipped name=%s va=0x%llX reason=address_unmapped",
@@ -625,7 +613,7 @@ void Wave0::Init(uintptr_t base_addr) {
     // Eliminates tight QPC+SwitchToThread spin loop that starves HT sibling.
     // The WaitableTimer phase in Wait handles the bulk of the sleep;
     // only the final ~250us of busy-wait precision is lost.
-    void* busywait = ResolveVA_Safe(g_base, VA_PRECISION_SLEEP_BUSYWAIT);
+    void* busywait = nevr::ResolveVA_Checked(g_base, VA_PRECISION_SLEEP_BUSYWAIT);
     if (!busywait) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] hook skipped name=CPrecisionSleep::BusyWait va=0x%llX reason=address_unmapped",
@@ -650,7 +638,7 @@ void Wave0::Init(uintptr_t base_addr) {
     // Validate the prologue before hooking — this is going toward production, and a
     // wrong/mismatched target would be a blind hook into the wrong code.
     {
-        void* target = ResolveVA_Safe(g_base, VA_HTTP_LISTENER_BRINGUP);
+        void* target = nevr::ResolveVA_Checked(g_base, VA_HTTP_LISTENER_BRINGUP);
         if (!target) {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.PATCH] hook skipped name=HTTPListenerBringup va=0x%llX reason=address_unmapped",
@@ -718,15 +706,23 @@ void Wave0::Shutdown() {
         { (void**)&s_origWaitForValue, VA_SPINWAIT_WAIT_FOR_VALUE },
         { (void**)&s_origHttpListenerBringup, VA_HTTP_LISTENER_BRINGUP },
     };
+    // Unchecked deliberately (N96). Two reasons, both measured:
+    //   1. The `*e.orig != nullptr` guard IS the record that the install-time
+    //      checked resolve succeeded — MinHook writes *ppOriginal only on
+    //      success (extern/minhook/src/hook.c:633-634).
+    //   2. It is the SAFER form here. MH_ALL_HOOKS is NULL
+    //      (extern/minhook/include/MinHook.h:88), so a checked resolve
+    //      returning nullptr would turn this into MH_DisableHook(MH_ALL_HOOKS)
+    //      and disable every hook in the process instead of one.
     for (auto& e : entries) {
         if (*e.orig != nullptr) {
-            MH_DisableHook(ResolveVA(g_base, e.va));
+            MH_DisableHook(nevr::ResolveVA_Unchecked(g_base, e.va));
         }
     }
     // N33: restore original byte at BusyWait — the RET patch is a direct
     // ProcessMemcpy, not a MinHook table hook, so it must be undone manually.
     if (s_busywait_patched) {
-        void* busywait = ResolveVA_Safe(g_base, VA_PRECISION_SLEEP_BUSYWAIT);
+        void* busywait = nevr::ResolveVA_Checked(g_base, VA_PRECISION_SLEEP_BUSYWAIT);
         if (busywait) {
             ProcessMemcpy(busywait, &s_busywait_original_byte, 1);
             Log(EchoVR::LogLevel::Info,

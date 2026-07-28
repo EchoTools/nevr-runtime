@@ -14,7 +14,7 @@
  * Helper libraries used:
  *   plugin_logger.h   — NEVR_DEFINE_PLUGIN_LOG macro for printf-style logging
  *   hook_manager.h    — nevr::HookManager for scoped MinHook lifecycle
- *   nevr_common.h     — ResolveVA, ValidatePrologue, LoadConfigFile
+ *   nevr_common.h     — ResolveVA_Checked, ValidatePrologue, LoadConfigFile
  *   yaml_config.h     — ParseYamlConfig (YAML subset parser)
  *   nlohmann/json     — JSON config parsing (pulled in via vcpkg)
  *
@@ -136,7 +136,7 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
         return -1;
     }
 
-    void* target = nevr::ResolveVA(ctx->base_addr, kHookTargetVA);
+    void* target = nevr::ResolveVA_Checked(ctx->base_addr, kHookTargetVA);
     if (target == nullptr) {
         PluginLog("hook: VA 0x%llx not valid in this process — no game binary loaded",
                   static_cast<unsigned long long>(kHookTargetVA));

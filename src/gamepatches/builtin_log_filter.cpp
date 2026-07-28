@@ -1228,7 +1228,7 @@ void BuiltinLogFilter::Init(uintptr_t base_addr, bool is_server) {
     InitFileLogging();
 
     /* Install hook on CLog::PrintfImpl */
-    g_hook_target = nevr::ResolveVA(base_addr, nevr::addresses::VA_CLOG_PRINTF_IMPL);
+    g_hook_target = nevr::ResolveVA_Checked(base_addr, nevr::addresses::VA_CLOG_PRINTF_IMPL);
 
     MH_STATUS status = MH_CreateHook(g_hook_target,
                                       reinterpret_cast<void*>(&hook_PrintfImpl),

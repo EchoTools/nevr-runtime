@@ -811,6 +811,25 @@ verify:
     # its own explanatory comment — which quotes the very string it forbids — so
     # it failed on a correct tree. Comment lines are stripped; the pattern is
     # anchored to the PatchDetour signature.
+    # N96: no symbol spelled plain `ResolveVA`. Two definitions of that name once
+    # coexisted in BugSplat64.dll with IDENTICAL signatures and different
+    # guarantees — wave0_instrumentation.cpp's file-static did no validation,
+    # nevr_common.h's did — so adding an #include or moving a line between the
+    # two files would have flipped validation with no compiler diagnostic. The
+    # spelling has to carry the guarantee. Comment lines are stripped so the
+    # prose above cannot satisfy its own check; `_Checked`/`_Unchecked` are
+    # excluded by the negative lookahead (grep -P, not -E: `-E` silently
+    # overrides `-P` when both are passed and \s is not ERE syntax, which
+    # produces a sensor that matches nothing and looks like it passes).
+    N96_RC=0; N96_HITS=$(grep -rn --include='*.cpp' --include='*.h' -P 'ResolveVA(?!_Checked|_Unchecked)' src plugins) || N96_RC=$?
+    sensor_stage1 "N96 bare ResolveVA" "src plugins" "$N96_RC"
+    if [ "$N96_RC" -eq 0 ] && printf '%s\n' "$N96_HITS" \
+         | grep -v legacy | grep -vE ':[[:space:]]*(//|\*|/\*)' | grep .; then
+        echo "verify: FAIL — N96 a bare 'ResolveVA' spelling is back. Use" >&2
+        echo "nevr::ResolveVA_Checked or nevr::ResolveVA_Unchecked — the name shall state" >&2
+        echo "whether the address was validated (BUGS.md N96)." >&2
+        exit 1
+    fi
     C2_RC=0; C2_CODE=$(grep -vE '^\s*(///|//|\*)' src/gamepatches/gamepatches_internal.h) || C2_RC=$?
     sensor_stage1 "C2 PatchDetour default name" "src/gamepatches/gamepatches_internal.h" "$C2_RC"
     if printf '%s\n' "$C2_CODE" \

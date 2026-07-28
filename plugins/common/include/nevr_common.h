@@ -27,16 +27,25 @@ namespace nevr {
 static constexpr uint64_t ECHOVR_DEFAULT_IMAGE_BASE = 0x140000000ULL;
 
 /*
- * ResolveVA - Convert a virtual address from the PC binary to an in-process pointer.
+ * ResolveVA_Checked / ResolveVA_Unchecked - Convert a virtual address from the
+ * PC binary to an in-process pointer.
  *
  * The PC binary has an image base of 0x140000000. Given the actual base address
  * where the module is loaded, this computes the real pointer for a known VA.
  *
- * Returns nullptr if the VA is below the image base (underflow) or the resolved
- * address falls outside the loaded image (detects MinHook trampolines, unmapped
- * sections, and arithmetic bugs).
+ * There is deliberately NO symbol spelled plain `ResolveVA` (N96). Two
+ * definitions of that name once coexisted in this DLL with identical
+ * signatures and different guarantees — one validated, one did not — so adding
+ * an #include or moving a line between two files would have flipped validation
+ * with no compiler diagnostic. The name now states which one you get.
+ *
+ * _Checked returns nullptr if the VA is below the image base (underflow) or the
+ * page at the resolved address is not committed. Note what that does NOT prove:
+ * VirtualQuery + MEM_COMMIT tests only that the page is mapped and committed.
+ * It does not bound the address to the loaded image, and a MinHook trampoline
+ * is committed memory that passes.
  */
-inline void* ResolveVA(uintptr_t base, uint64_t va) {
+inline void* ResolveVA_Checked(uintptr_t base, uint64_t va) {
     if (va < ECHOVR_DEFAULT_IMAGE_BASE) return nullptr;
     uint64_t rva = va - ECHOVR_DEFAULT_IMAGE_BASE;
 #ifdef _WIN32
@@ -51,7 +60,9 @@ inline void* ResolveVA(uintptr_t base, uint64_t va) {
 }
 
 /* Unchecked variant for hot paths where the address is known-good (e.g. hook
-   targets verified at init time). Prefer ResolveVA for new code. */
+   targets verified at init time), and for the one case where a nullptr return
+   would be MORE dangerous than an unvalidated pointer — see the Wave0::Shutdown
+   call site. Prefer ResolveVA_Checked for new code. */
 inline void* ResolveVA_Unchecked(uintptr_t base, uint64_t va) {
     return reinterpret_cast<void*>(base + (va - ECHOVR_DEFAULT_IMAGE_BASE));
 }
