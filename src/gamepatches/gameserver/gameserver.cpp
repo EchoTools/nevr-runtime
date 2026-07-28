@@ -177,6 +177,12 @@ void OnTcpMsgRegistrationFailure(GameServerLib* self, VOID*, EchoVR::TcpPeer, VO
     EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationFailure, "SNSLobbyRegistrationFailure", msg,
                                          msgSize);
   }
+
+  // N102: a dedicated server that ServerDB refused registration to cannot host
+  // anything — it would sit idle for hours with nobody watching. Fail fast.
+  // ServerFatal (not FatalError) because it is mode-gated: in client mode this
+  // is a Warning and execution continues.
+  ServerFatal("GameServer registration rejected by ServerDB");
 }
 
 void OnTcpMessageStartSession(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
@@ -1299,6 +1305,12 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Using cached auth token for ServerDB");
     } else {
       wsToken = AuthenticateServer(localConfig);
+      // N102: no token means every ServerDB connection below will be rejected.
+      // Continuing produces a server that logs connection failures forever
+      // instead of exiting with a cause.
+      if (wsToken.empty()) {
+        ServerFatal("Server authentication failed — no valid token for ServerDB connection");
+      }
     }
   }
 
