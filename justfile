@@ -822,6 +822,47 @@ verify:
     # its own explanatory comment — which quotes the very string it forbids — so
     # it failed on a correct tree. Comment lines are stripped; the pattern is
     # anchored to the PatchDetour signature.
+    # N100: docs/standards/verification.md:44 requires every "fixed"/"closed"
+    # claim to state its evidence rank. Nothing checked it. Scope is entries
+    # ADDED on or after 2026-07-26, when that standard landed; earlier entries
+    # are pre-standard and stand as written. That date is not readable from file
+    # content, so the sensor uses N-ID as a proxy — and the proxy is MEASURED,
+    # not assumed (first appearance of each heading in BUGS.md's own history):
+    #     N83  a51966b  2026-07-26
+    #     N79  548df84  2026-07-25
+    # so N-ID >= 83 is exactly "added on or after 2026-07-26".
+    # Only rows that NAME a verification method are in scope: an entry that
+    # claims no method (N83 "Guard measured", N84 "RE-OPENED") has no rank to
+    # state. Vacuity guard below, because a scope that matched nothing would
+    # pass forever.
+    # One awk pass emits both the offender list and the scope size, tagged, so
+    # there is no temp file (scratch shall not go in /tmp — CLAUDE.md).
+    N100_RC=0; N100_RAW=$(awk '
+        /^### N[0-9]+\./ { id = $2; sub(/^N/, "", id); sub(/\./, "", id); cur = id }
+        /^\| \*\*Status\*\*/ {
+            if (cur + 0 >= 83) {
+                inscope++
+                if ($0 ~ /Verification|SYSTEM-TEST|SENSOR|falsif/ && $0 !~ /[Rr]ank[ ]*([0-9]|N\/A)/)
+                    print "OFFENDER N" cur
+            }
+        }
+        END { print "INSCOPE " inscope + 0 }
+    ' BUGS.md) || N100_RC=$?
+    sensor_stage1 "N100 ledger evidence rank" "BUGS.md" "$N100_RC"
+    sensor_nonempty "N100 ledger evidence rank" "N-entry Status rows in BUGS.md" "$N100_RAW"
+    N100_INSCOPE=$(printf '%s\n' "$N100_RAW" | sed -n 's/^INSCOPE //p')
+    N100_OFFENDERS=$(printf '%s\n' "$N100_RAW" | sed -n 's/^OFFENDER //p')
+    if [ -z "$N100_INSCOPE" ] || [ "$N100_INSCOPE" -lt 1 ]; then
+        echo "verify: FAIL — sensor 'N100 ledger evidence rank': the scope is EMPTY, so the check" >&2
+        echo "could never fire. Either the heading/Status shapes changed or the awk broke." >&2
+        exit 1
+    fi
+    if [ -n "$N100_OFFENDERS" ]; then
+        echo "verify: FAIL — N100 these N-entry Status rows name a verification method but no" >&2
+        echo "evidence rank (docs/standards/verification.md:44). State the ladder rank:" >&2
+        printf '%s\n' "$N100_OFFENDERS" >&2
+        exit 1
+    fi
     # --- N99: -server shall apply the game's own headless mask --------------
     # `-headless` is a NATIVE echovr.exe token. Its whole effect in the binary
     # is one instruction (0x140504566, `and dword [rbx+0x1D4], 0xFFFEFEFE`),
