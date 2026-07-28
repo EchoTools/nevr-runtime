@@ -38,7 +38,6 @@ set(PATCHES_SOURCES
 )
 
 set(PATCHES_HEADERS
-    "patches.h"
     "gamepatches_internal.h"
     "initialize.h"
     "boot_log_tee.h"

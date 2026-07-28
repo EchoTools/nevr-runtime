@@ -12,7 +12,6 @@
 #include "broadcaster_guard.h"
 #include "module_loader.h"
 #include "ws_bridge.h"
-#include "patches.h"
 #include "initialize.h"
 #include "plugin_loader.h"
 #include "wave0_instrumentation.h"
