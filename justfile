@@ -340,7 +340,9 @@ verify:
         exit 1
     fi
     # N63: re-entry gate must call ForceFatalExit, not return
-    if grep -q 'Sleep(100);\s*$' src/gamepatches/crash_recovery.cpp; then
+    N63_RC=0; grep -q 'Sleep(100);\s*$' src/gamepatches/crash_recovery.cpp || N63_RC=$?
+    sensor_stage1 "N63 re-entry gate" "src/gamepatches/crash_recovery.cpp" "$N63_RC"
+    if [ "$N63_RC" -eq 0 ]; then
         echo "verify: FAIL — N63 re-entry gate still returns (Sleep+return), should be ForceFatalExit" >&2
         exit 1
     fi
@@ -463,11 +465,15 @@ verify:
         exit 1
     fi
     # N77: these two patterns must never return to the blanket suppress list.
-    if grep -qF '"Finished initializing engine",' src/gamepatches/builtin_log_filter.cpp; then
+    N77A_RC=0; grep -qF '"Finished initializing engine",' src/gamepatches/builtin_log_filter.cpp || N77A_RC=$?
+    sensor_stage1 "N77 boot-witness suppression" "src/gamepatches/builtin_log_filter.cpp" "$N77A_RC"
+    if [ "$N77A_RC" -eq 0 ]; then
         echo "verify: FAIL — N77 'Finished initializing engine' is suppressed again; that string is the headless-boot witness (N7/N8/N10)." >&2
         exit 1
     fi
-    if grep -qF '"ExitProcess(",' src/gamepatches/builtin_log_filter.cpp; then
+    N77B_RC=0; grep -qF '"ExitProcess(",' src/gamepatches/builtin_log_filter.cpp || N77B_RC=$?
+    sensor_stage1 "N77 ExitProcess suppression" "src/gamepatches/builtin_log_filter.cpp" "$N77B_RC"
+    if [ "$N77B_RC" -eq 0 ]; then
         echo "verify: FAIL — N77 'ExitProcess(' is suppressed again; it masks real process-exit reports. Use rate limiting (N78)." >&2
         exit 1
     fi
@@ -751,12 +757,16 @@ verify:
     # N92: exactly one ws_bridge. Two divergent copies existed for months — only
     # the module ran, while N61's matchmaker fix landed in the gamepatches copy
     # that never did. The fold is only safe while the module cannot come back.
-    if grep -qE '^\s*add_subdirectory\(src/modules/ws-bridge\)' CMakeLists.txt; then
+    N92A_RC=0; grep -qE '^\s*add_subdirectory\(src/modules/ws-bridge\)' CMakeLists.txt || N92A_RC=$?
+    sensor_stage1 "N92 ws-bridge module build" "CMakeLists.txt" "$N92A_RC"
+    if [ "$N92A_RC" -eq 0 ]; then
         echo "verify: FAIL — N92 the ws-bridge MODULE is being built again. The bridge is" >&2
         echo "compiled into gamepatches; two copies is the bug (fixes land in the dead one)." >&2
         exit 1
     fi
-    if grep -q 'LoadModule("ws_bridge"' src/gamepatches/boot.cpp; then
+    N92B_RC=0; grep -q 'LoadModule("ws_bridge"' src/gamepatches/boot.cpp || N92B_RC=$?
+    sensor_stage1 "N92 ws_bridge module load" "src/gamepatches/boot.cpp" "$N92B_RC"
+    if [ "$N92B_RC" -eq 0 ]; then
         echo "verify: FAIL — N92 boot.cpp still loads ws_bridge as a required module; with the" >&2
         echo "DLL gone the loader fail-fasts and the server never starts." >&2
         exit 1
@@ -816,8 +826,10 @@ verify:
     # decision 2026-07-27). The access token is never persisted, so the old
     # unconditional 60s cap defended a threat this design does not have while
     # discarding tokens the server had issued for far longer.
-    if grep -qE 'm_tokenExpiry = static_cast<uint64_t>\(time\(nullptr\)\) \+ [0-9]+;' \
-         src/modules/token-auth/src/token_auth.cpp; then
+    TEXP_RC=0; grep -qE 'm_tokenExpiry = static_cast<uint64_t>\(time\(nullptr\)\) \+ [0-9]+;' \
+         src/modules/token-auth/src/token_auth.cpp || TEXP_RC=$?
+    sensor_stage1 "token-auth hardcoded expiry" "src/modules/token-auth/src/token_auth.cpp" "$TEXP_RC"
+    if [ "$TEXP_RC" -eq 0 ]; then
         echo "verify: FAIL — token-auth sets m_tokenExpiry from a hardcoded offset;" >&2
         echo "the JWT's own exp claim is the authority (GetJwtExpiry)." >&2
         exit 1
