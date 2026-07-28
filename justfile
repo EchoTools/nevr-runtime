@@ -830,6 +830,23 @@ verify:
         echo "whether the address was validated (BUGS.md N96)." >&2
         exit 1
     fi
+    # N97: exactly ONE definition of ValidatePrologue. Two file-local copies
+    # existed; pnsrad_enabler.cpp's was a bare memcmp, so a zero length returned
+    # TRUE (memcmp of 0 bytes is defined to return 0 — measured) and a null
+    # address was undefined behaviour. That copy answered "the prologue matched"
+    # for a comparison of nothing, to a function whose next statement writes
+    # NOPs into the target, directly under the invariant that a binary patch
+    # validates before it writes. Same -P (not -PE) reasoning as N96.
+    N97_RC=0; N97_HITS=$(grep -rn --include='*.cpp' --include='*.h' -P '^\s*(static\s+)?(inline\s+)?bool\s+ValidatePrologue\s*\(' src plugins) || N97_RC=$?
+    sensor_stage1 "N97 ValidatePrologue definitions" "src plugins" "$N97_RC"
+    N97_DEFS=$(printf '%s\n' "$N97_HITS" | grep -c 'ValidatePrologue' || true)
+    if [ "$N97_RC" -ne 0 ] || [ "$N97_DEFS" -ne 1 ]; then
+        echo "verify: FAIL — N97 found $N97_DEFS definitions of ValidatePrologue (want exactly 1," >&2
+        echo "nevr::ValidatePrologue in plugins/common/include/nevr_common.h). A second copy is how" >&2
+        echo "a bare-memcmp version returned TRUE for a zero-length check (BUGS.md N97)." >&2
+        printf '%s\n' "$N97_HITS" >&2
+        exit 1
+    fi
     C2_RC=0; C2_CODE=$(grep -vE '^\s*(///|//|\*)' src/gamepatches/gamepatches_internal.h) || C2_RC=$?
     sensor_stage1 "C2 PatchDetour default name" "src/gamepatches/gamepatches_internal.h" "$C2_RC"
     if printf '%s\n' "$C2_CODE" \

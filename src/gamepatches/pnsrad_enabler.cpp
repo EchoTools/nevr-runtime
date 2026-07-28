@@ -25,6 +25,7 @@
 
 #include "pnsrad_enabler.h"
 #include "common/logging.h"
+#include "nevr_common.h"      // N97: the one ValidatePrologue
 
 #include <cstring>
 
@@ -72,10 +73,6 @@ static bool PatchMemory(void* addr, const void* data, size_t len) {
     return true;
 }
 
-static bool ValidatePrologue(const uint8_t* site, const uint8_t* expected, size_t len) {
-    return std::memcmp(site, expected, len) == 0;
-}
-
 /* --------------------------------------------------------------------
  * LdrDllNotification — patches pnsrad.dll when it loads
  * -------------------------------------------------------------------- */
@@ -113,7 +110,7 @@ static int s_pnsradFail = 0;
  * previously-silent PatchMemory failure. */
 static void PnsradNopPatch(uint8_t* site, const uint8_t* expected, size_t expLen,
                            size_t nopLen, const char* what, unsigned rva) {
-    if (!ValidatePrologue(site, expected, expLen)) {
+    if (!nevr::ValidatePrologue(site, expected, expLen)) {
         Log(EchoVR::LogLevel::Warning,
             "[pnsrad] unexpected bytes at %s +0x%x — NOT patched", what, rva);
         s_pnsradFail++;
@@ -214,7 +211,7 @@ void PnsradEnabler::Init(uintptr_t base_addr) {
         auto* p = reinterpret_cast<uint8_t*>(base_addr + OVR_BRANCH);
         if (p[0] == 0x90 && p[1] == 0x90) {
             Log(EchoVR::LogLevel::Debug, "[pnsrad] OVR branch already NOPed");
-        } else if (ValidatePrologue(p, OVR_JNE_EXPECTED, sizeof(OVR_JNE_EXPECTED))) {
+        } else if (nevr::ValidatePrologue(p, OVR_JNE_EXPECTED, sizeof(OVR_JNE_EXPECTED))) {
             uint8_t nops[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
             if (PatchMemory(p, nops, sizeof(nops))) {
                 Log(EchoVR::LogLevel::Debug, "[pnsrad] patched OVR branch at +0x%x", (unsigned)OVR_BRANCH);

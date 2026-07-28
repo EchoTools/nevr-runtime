@@ -70,8 +70,18 @@ inline void* ResolveVA_Unchecked(uintptr_t base, uint64_t va) {
 /*
  * ValidatePrologue - Check that the bytes at a resolved address match an expected
  * function prologue. Returns true if the first `len` bytes match.
+ *
+ * This is the ONLY definition (N97). The guards are not decoration: a bare
+ * `memcmp(site, expected, len) == 0` — which is what two local copies were —
+ * returns TRUE for len == 0, because memcmp of zero bytes is defined to return
+ * 0. A validator that answers "the prologue matched" for a comparison of
+ * nothing, to a caller whose next statement writes into the target, defeats the
+ * invariant it exists to enforce. Null `addr`/`expected` are undefined
+ * behaviour in that form; here they are false.
+ *
+ * `addr` is const: this function reads and never writes.
  */
-inline bool ValidatePrologue(void* addr, const uint8_t* expected, size_t len) {
+inline bool ValidatePrologue(const void* addr, const uint8_t* expected, size_t len) {
     if (!addr || !expected || len == 0) return false;
     const auto* bytes = static_cast<const uint8_t*>(addr);
     for (size_t i = 0; i < len; ++i) {

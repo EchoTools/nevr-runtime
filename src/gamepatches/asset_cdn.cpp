@@ -19,6 +19,7 @@
 #include "common/echovr_functions.h"
 #include "common/hooking.h"
 #include "common/logging.h"
+#include "nevr_common.h"      // N97: the one ValidatePrologue
 #include "patch_addresses.h"
 
 using json = nlohmann::json;
@@ -132,11 +133,10 @@ static const uint8_t EXPECTED_PROLOGUE[] = {
 };
 constexpr size_t PROLOGUE_LEN = sizeof(EXPECTED_PROLOGUE);
 
-static bool ValidatePrologue(const void* addr) {
-    if (!addr) return false;
-    const auto* bytes = static_cast<const uint8_t*>(addr);
-    return memcmp(bytes, EXPECTED_PROLOGUE, PROLOGUE_LEN) == 0;
-}
+// Validation is nevr::ValidatePrologue (N97). The zero-extra-arg wrapper this
+// file used to carry is not preserved: with one call site it bought nothing,
+// and a file-local ValidatePrologue taking a different argument list is exactly
+// the one-name-two-meanings defect N96 removed.
 
 // ============================================================================
 // curl write callback
@@ -452,7 +452,7 @@ void AssetCDN::Initialize() {
     void* target = reinterpret_cast<void*>(
         EchoVR::g_GameBaseAddress + PatchAddresses::LOADOUT_RESOLVE_DATA_FROM_ID);
 
-    if (!ValidatePrologue(target)) {
+    if (!nevr::ValidatePrologue(target, EXPECTED_PROLOGUE, PROLOGUE_LEN)) {
         Log(EchoVR::LogLevel::Error,
             "[NEVR.CDN] Prologue validation failed for Loadout_ResolveDataFromId at %p — hook NOT installed",
             target);
