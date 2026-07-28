@@ -243,6 +243,38 @@ verify:
     # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
     cmake --build --preset {{ preset }}
     just test-auth-unit
+    # --- Sensor plumbing (N93) -----------------------------------------------
+    # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
+    # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
+    # unreadable subject, bad pattern) hands stage 2 an empty stream, stage 2
+    # answers "no match" (rc 1), and the positive-form `if` reads the pipeline as
+    # clean: the sensor PASSES while observing nothing. Measured 2026-07-28:
+    # `grep -rn P /nonexistent` alone rc=2; piped through `grep -v legacy` rc=1.
+    # Rule: stage 1 runs ALONE, output and exit code captured; sensor_stage1
+    # asserts the code before any filtering (rc 0 = hits, rc 1 = genuinely no
+    # match, rc >= 2 = abort naming the subject). It is called OUTSIDE any
+    # pipeline on purpose — a pipeline element runs in a subshell, so an `exit 1`
+    # inside one kills only the subshell and the recipe carries on, reproducing
+    # the exact blindness this helper removes. Captures are per-sensor variables
+    # so `set -u` catches a deleted capture that still has a consumer.
+    # KNOWN-OPEN (measured, ledger N93): the single-stage positive sensors
+    # (`if grep -q P subject; then FAIL`) are blind the same way — `if` cannot
+    # tell rc 1 from rc 2. Left for a follow-up unit; do not add new ones.
+    sensor_stage1() { # $1 sensor name, $2 subject, $3 stage-1 exit code
+        if [ "$3" -ge 2 ]; then
+            echo "verify: FAIL — sensor '$1': stage-1 exited $3 (an error, not 'no match'). The sensor could not read its subject: $2" >&2
+            exit 1
+        fi
+    }
+    # Same class, different shape: an awk body-extraction that finds nothing
+    # (renamed function, restructured file) exits 0 with EMPTY output, and every
+    # downstream check of the empty body silently passes.
+    sensor_nonempty() { # $1 sensor name, $2 what was being extracted, $3 captured text
+        if [ -z "$3" ]; then
+            echo "verify: FAIL — sensor '$1': subject extraction produced nothing ($2 not found). The sensor is watching a range that no longer exists." >&2
+            exit 1
+        fi
+    }
     # N34: mechanical guard — src/gameserver/ is dead code. The compiled path is
     # src/gamepatches/gameserver/. If add_subdirectory(src/gameserver) is ever
     # uncommented (not preceded by #), fail the verify gate. Sensor over lock:
@@ -314,18 +346,24 @@ verify:
     # in the explanatory comments inside these very functions. Deliberately NOT the
     # `(^|[^a-zA-Z_])Log\(` idiom either — GNU grep's ERE mishandles `^` inside an
     # alternation group and that pattern silently matches nothing (verified 2026-07-26).
-    if awk '/^LONG WINAPI BreakpointVEH/,/^}/' src/gamepatches/crash_recovery.cpp | grep -qF 'Log(EchoVR::LogLevel'; then
+    N70_VEH_RC=0; N70_VEH_BODY=$(awk '/^LONG WINAPI BreakpointVEH/,/^}/' src/gamepatches/crash_recovery.cpp) || N70_VEH_RC=$?
+    sensor_stage1 "N70 BreakpointVEH" "src/gamepatches/crash_recovery.cpp" "$N70_VEH_RC"
+    sensor_nonempty "N70 BreakpointVEH" "BreakpointVEH() body in src/gamepatches/crash_recovery.cpp" "$N70_VEH_BODY"
+    if printf '%s\n' "$N70_VEH_BODY" | grep -qF 'Log(EchoVR::LogLevel'; then
         echo "verify: FAIL — N70 BreakpointVEH calls Log(); crash path must use VehPrintf (raw WriteFile)." >&2
         echo "Log() reaches std::lock_guard(g_file_mutex) — a crash during log emission would self-deadlock." >&2
         exit 1
     fi
-    if awk '/^static void WriteCrashDump/,/^}/' src/gamepatches/crash_recovery.cpp | grep -qF 'Log(EchoVR::LogLevel'; then
+    N70_WCD_RC=0; N70_WCD_BODY=$(awk '/^static void WriteCrashDump/,/^}/' src/gamepatches/crash_recovery.cpp) || N70_WCD_RC=$?
+    sensor_stage1 "N70 WriteCrashDump" "src/gamepatches/crash_recovery.cpp" "$N70_WCD_RC"
+    sensor_nonempty "N70 WriteCrashDump" "WriteCrashDump() body in src/gamepatches/crash_recovery.cpp" "$N70_WCD_BODY"
+    if printf '%s\n' "$N70_WCD_BODY" | grep -qF 'Log(EchoVR::LogLevel'; then
         echo "verify: FAIL — N70 WriteCrashDump calls Log(); crash path must use VehPrintf (raw WriteFile)." >&2
         exit 1
     fi
     # N70: the handler must never enumerate modules (loader lock). The snapshot is
     # taken at init by CacheModuleTable and read from the cache during a crash.
-    if awk '/^static void WriteCrashDump/,/^}/' src/gamepatches/crash_recovery.cpp | grep -q 'EnumProcessModules'; then
+    if printf '%s\n' "$N70_WCD_BODY" | grep -q 'EnumProcessModules'; then
         echo "verify: FAIL — N70 WriteCrashDump enumerates modules; takes the loader lock. Read g_moduleCache instead." >&2
         exit 1
     fi
@@ -359,7 +397,10 @@ verify:
     # InitializeFunctionPointers() makes EchoVR::WriteLog non-null. Everything after
     # that point in Initialize() must use BootLogTee::TeeFprintf. Exactly one Log()
     # call is permitted — the final line, emitted after BootLogTee::Close().
-    LOGS_IN_INIT=$(awk '/^VOID Initialize\(\)/,/^}/' src/gamepatches/initialize.cpp | grep -cF 'Log(EchoVR::LogLevel' || true)
+    N36_RC=0; N36_BODY=$(awk '/^VOID Initialize\(\)/,/^}/' src/gamepatches/initialize.cpp) || N36_RC=$?
+    sensor_stage1 "N36 Initialize Log census" "src/gamepatches/initialize.cpp" "$N36_RC"
+    sensor_nonempty "N36 Initialize Log census" "Initialize() body in src/gamepatches/initialize.cpp" "$N36_BODY"
+    LOGS_IN_INIT=$(printf '%s\n' "$N36_BODY" | grep -cF 'Log(EchoVR::LogLevel' || true)
     if [ "$LOGS_IN_INIT" -gt 1 ]; then
         echo "verify: FAIL — N36 Initialize() contains $LOGS_IN_INIT Log() calls (max 1, the final line)." >&2
         echo "Initialize() runs under the DllMain loader lock; after InitializeFunctionPointers() the" >&2
@@ -414,8 +455,10 @@ verify:
     # a usage contract (RULINGS.md "Usage contracts"), not a log tag — docs/standards/logging.md's
     # subsystem-tag rule governs log lines. Verified 2026-07-26: every [NEVR] hit in
     # that file is a help string, zero are log calls.
-    if grep -rn '"\[NEVR\] ' src/gamepatches src/common src/gameserver 2>/dev/null \
-         | grep -v legacy | grep -v 'src/gamepatches/cli.cpp'; then
+    N81_RC=0; N81_HITS=$(grep -rn '"\[NEVR\] ' src/gamepatches src/common src/gameserver) || N81_RC=$?
+    sensor_stage1 "N81 bare [NEVR] tag" "src/gamepatches src/common src/gameserver" "$N81_RC"
+    if [ "$N81_RC" -eq 0 ] && printf '%s\n' "$N81_HITS" \
+         | grep -v legacy | grep -v 'src/gamepatches/cli.cpp' | grep .; then
         echo "verify: FAIL — N81 bare [NEVR] log tag found; use a subsystem tag from the docs/standards/logging.md table." >&2
         exit 1
     fi
@@ -445,8 +488,10 @@ verify:
     # Match the CALL form ('->setOnMessageCallback(nullptr)') and drop comment
     # lines. A looser pattern flags prose describing the bug — the same false
     # positive the N81 sensor hit on cli.cpp's --help strings.
-    if grep -rn -- '->setOnMessageCallback(nullptr)' src/gamepatches src/modules src/common 2>/dev/null \
-         | grep -v legacy | grep -vE ':[[:space:]]*(//|\*)'; then
+    N85_RC=0; N85_HITS=$(grep -rn -- '->setOnMessageCallback(nullptr)' src/gamepatches src/modules src/common) || N85_RC=$?
+    sensor_stage1 "N85 empty ws callback" "src/gamepatches src/modules src/common" "$N85_RC"
+    if [ "$N85_RC" -eq 0 ] && printf '%s\n' "$N85_HITS" \
+         | grep -v legacy | grep -vE ':[[:space:]]*(//|\*)' | grep .; then
         echo "verify: FAIL — N85 setOnMessageCallback(nullptr) reintroduced; use a no-op lambda." >&2
         echo "An empty std::function invoked by ixwebsocket throws std::bad_function_call and kills the server." >&2
         exit 1
@@ -489,7 +534,10 @@ verify:
     # Strip comment lines first: the function's own comment says "NO
     # GetModuleHandleA/GetProcAddress", and a naive match flags the rule as a
     # violation of itself. Same false positive the N81 and N85 sensors hit.
-    if awk '/^void PerformGracefulShutdown/,/^}/' src/gamepatches/crash_recovery.cpp \
+    N62_RC=0; N62_BODY=$(awk '/^void PerformGracefulShutdown/,/^}/' src/gamepatches/crash_recovery.cpp) || N62_RC=$?
+    sensor_stage1 "N62 shutdown loader-lock" "src/gamepatches/crash_recovery.cpp" "$N62_RC"
+    sensor_nonempty "N62 shutdown loader-lock" "PerformGracefulShutdown() body in src/gamepatches/crash_recovery.cpp" "$N62_BODY"
+    if printf '%s\n' "$N62_BODY" \
          | grep -vE '^[[:space:]]*(//|\*|/\*)' \
          | grep -qE 'GetModuleHandleA|GetProcAddress'; then
         echo "verify: FAIL — N62 PerformGracefulShutdown resolves symbols at shutdown time;" >&2
@@ -536,8 +584,10 @@ verify:
     # N20: no platform identity may be compiled into the binary. The login
     # injection must take it from token-auth (JWT) or, in server mode, from
     # config — never a literal. Matches an 18-20 digit account/discord ID.
-    if grep -rnE '\b1[0-9]{17,19}\b' src/gamepatches src/modules src/common 2>/dev/null \
-         | grep -v legacy | grep -viE 'hash|symbol|0x|SYM_'; then
+    N20_RC=0; N20_HITS=$(grep -rnE '\b1[0-9]{17,19}\b' src/gamepatches src/modules src/common) || N20_RC=$?
+    sensor_stage1 "N20 identity literal" "src/gamepatches src/modules src/common" "$N20_RC"
+    if [ "$N20_RC" -eq 0 ] && printf '%s\n' "$N20_HITS" \
+         | grep -v legacy | grep -viE 'hash|symbol|0x|SYM_' | grep .; then
         echo "verify: FAIL — N20 an account/discord ID literal is compiled into source;" >&2
         echo "identity must come from the presented credential or config, never the binary." >&2
         exit 1
@@ -571,8 +621,19 @@ verify:
     # "kName," and so undercounted by one, making the comparison below
     # unsatisfiable — the sensor could never fire. kCount has no trailing comma
     # and is excluded by construction.
-    DECLARED=$(awk '/^enum Id/,/^};/' src/gamepatches/hook_liveness.h \
-               | grep -cE '^[[:space:]]+k[A-Za-z]+([[:space:]]*=[^,]*)?,')
+    HL_RC=0; HL_ENUM=$(awk '/^enum Id/,/^};/' src/gamepatches/hook_liveness.h) || HL_RC=$?
+    sensor_stage1 "HookLiveness enum census" "src/gamepatches/hook_liveness.h" "$HL_RC"
+    sensor_nonempty "HookLiveness enum census" "enum Id in src/gamepatches/hook_liveness.h" "$HL_ENUM"
+    DECLARED=$(printf '%s\n' "$HL_ENUM" \
+               | grep -cE '^[[:space:]]+k[A-Za-z]+([[:space:]]*=[^,]*)?,' || true)
+    if [ "$DECLARED" -lt 1 ]; then
+        echo "verify: FAIL — HookLiveness enum census matched zero enumerators; the enum's" >&2
+        echo "spelling no longer fits the pattern and the DECLARED/MARKED comparison below" >&2
+        echo "would be vacuous." >&2
+        exit 1
+    fi
+    # MARKED needs no stage-1 capture: src/gamepatches is the repo itself, and a
+    # zero count makes MARKED < DECLARED fail closed below (measured direction).
     MARKED=$(grep -rhoE 'HookLiveness::Mark\(HookLiveness::k[A-Za-z]+\)' src/gamepatches \
              | sort -u | wc -l)
     if [ "$MARKED" -lt "$DECLARED" ]; then
@@ -704,7 +765,9 @@ verify:
     # its own explanatory comment — which quotes the very string it forbids — so
     # it failed on a correct tree. Comment lines are stripped; the pattern is
     # anchored to the PatchDetour signature.
-    if grep -vE '^\s*(///|//|\*)' src/gamepatches/gamepatches_internal.h \
+    C2_RC=0; C2_CODE=$(grep -vE '^\s*(///|//|\*)' src/gamepatches/gamepatches_internal.h) || C2_RC=$?
+    sensor_stage1 "C2 PatchDetour default name" "src/gamepatches/gamepatches_internal.h" "$C2_RC"
+    if printf '%s\n' "$C2_CODE" \
          | grep -qE 'PatchDetour\(.*const char\* name\s*='; then
         echo "verify: FAIL — C2 PatchDetour's name parameter has a default again." >&2
         echo "22 of 24 sites omitted it when it was defaultable, so HookGuard's overwrite" >&2
