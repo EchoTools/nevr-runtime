@@ -105,7 +105,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
   // serve as a defense-in-depth fallback.
   OriginalCEngineConfigCopy =
       reinterpret_cast<CEngineConfigCopyFunc*>(EchoVR::g_GameBaseAddress + CENGINE_CONFIG_COPY);
-  PatchDetour(&OriginalCEngineConfigCopy, reinterpret_cast<PVOID>(CEngineConfigCopyHook));
+  PatchDetour(&OriginalCEngineConfigCopy, reinterpret_cast<PVOID>(CEngineConfigCopyHook), "CEngineConfigCopy");
   Log(EchoVR::LogLevel::Debug,
       "[NEVR.HEADLESS] CEngineConfig copy hook installed — bit-0x1 will be cleared after config copy");
 
@@ -189,7 +189,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
     };
     SysNetCheckFn target =
         reinterpret_cast<SysNetCheckFn>(EchoVR::g_GameBaseAddress + PatchAddresses::SYSNET_CHECK);
-    PatchDetour(&target, reinterpret_cast<PVOID>(static_cast<SysNetCheckFn>(kSysNetHook)));
+    PatchDetour(&target, reinterpret_cast<PVOID>(static_cast<SysNetCheckFn>(kSysNetHook)), "SysNetCheck");
     Log(EchoVR::LogLevel::Debug,
         "[NEVR.HEADLESS] SYSNET check hooked — will always report internet-connected");
   }
@@ -738,8 +738,8 @@ static HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName, HANDLE hFile, D
 VOID PatchBlockOculusSDK() {
   Original_LoadLibraryW = LoadLibraryW;
   Original_LoadLibraryExW = LoadLibraryExW;
-  PatchDetour(&Original_LoadLibraryW, reinterpret_cast<PVOID>(LoadLibraryW_Hook));
-  PatchDetour(&Original_LoadLibraryExW, reinterpret_cast<PVOID>(LoadLibraryExW_Hook));
+  PatchDetour(&Original_LoadLibraryW, reinterpret_cast<PVOID>(LoadLibraryW_Hook), "LoadLibraryW");
+  PatchDetour(&Original_LoadLibraryExW, reinterpret_cast<PVOID>(LoadLibraryExW_Hook), "LoadLibraryExW");
 
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Installed Oculus Platform SDK blocking hooks");
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Expected savings: 50-80MB RAM, 8-12%% CPU per instance");
@@ -766,10 +766,10 @@ VOID PatchDisableWwise() {
   PVOID base = GetModuleHandleA(NULL);
 
   Original_Wwise_Init = (Wwise_Init_t)((uintptr_t)base + PatchAddresses::WWISE_INIT);
-  PatchDetour(&Original_Wwise_Init, (PVOID)Wwise_Init_Hook);
+  PatchDetour(&Original_Wwise_Init, (PVOID)Wwise_Init_Hook, "AK::SoundEngine::Init");
 
   Original_Wwise_RenderAudio = (Wwise_RenderAudio_t)((uintptr_t)base + PatchAddresses::WWISE_RENDERAUDIO);
-  PatchDetour(&Original_Wwise_RenderAudio, (PVOID)Wwise_RenderAudio_Hook);
+  PatchDetour(&Original_Wwise_RenderAudio, (PVOID)Wwise_RenderAudio_Hook, "AK::SoundEngine::RenderAudio");
 
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Installed Wwise audio blocking hooks");
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Expected savings: 20-30MB RAM, 5-8%% CPU per instance");
@@ -832,7 +832,7 @@ VOID InstallEntityHooks() {
   // in dedicated server mode (no player actor / client-side state).
   OriginalEngineEntityLookup =
       (EngineEntityLookupFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::ENGINE_ENTITY_LOOKUP);
-  PatchDetour(&OriginalEngineEntityLookup, reinterpret_cast<PVOID>(EngineEntityLookupHook));
+  PatchDetour(&OriginalEngineEntityLookup, reinterpret_cast<PVOID>(EngineEntityLookupHook), "EngineEntityLookup");
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Engine entity lookup hook installed (null-pointer guard)");
 
   // N83: re-installed 2026-07-26 with a real null-guard body (see above). The
@@ -840,7 +840,7 @@ VOID InstallEntityHooks() {
   // broadcaster's listener dispatch through when the structure is valid.
   OriginalEngineEntityPropDispatch =
       (EngineEntityPropDispatchFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::ENGINE_ENTITY_PROP_DISPATCH);
-  PatchDetour(&OriginalEngineEntityPropDispatch, reinterpret_cast<PVOID>(EngineEntityPropDispatchHook));
+  PatchDetour(&OriginalEngineEntityPropDispatch, reinterpret_cast<PVOID>(EngineEntityPropDispatchHook), "EngineEntityPropDispatch");
   Log(EchoVR::LogLevel::Debug,
       "[NEVR.PATCH] hooked name=CBroadcaster::ReceiveLocalEvent va=0x140F87AA0 mode=null_guard");
 }
@@ -851,7 +851,7 @@ VOID InstallBugSplatHook() {
   // These are non-fatal in headless dedicated server mode.
   OriginalBugSplatCrashHandler =
       (BugSplatCrashHandlerFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::BUGSPLAT_CRASH_HANDLER);
-  PatchDetour(&OriginalBugSplatCrashHandler, reinterpret_cast<PVOID>(BugSplatCrashHandlerHook));
+  PatchDetour(&OriginalBugSplatCrashHandler, reinterpret_cast<PVOID>(BugSplatCrashHandlerHook), "BugSplatCrashHandler");
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] BugSplat crash handler hook installed (server crash suppression)");
 }
 
@@ -860,7 +860,7 @@ VOID InstallGameSpaceHook() {
   // (no local player actor exists in the global gamespace for dedicated servers)
   OriginalInitializeGlobalGameSpace =
       (InitializeGlobalGameSpaceFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::INIT_GLOBAL_GAMESPACE);
-  PatchDetour(&OriginalInitializeGlobalGameSpace, reinterpret_cast<PVOID>(InitializeGlobalGameSpaceHook));
+  PatchDetour(&OriginalInitializeGlobalGameSpace, reinterpret_cast<PVOID>(InitializeGlobalGameSpaceHook), "InitializeGlobalGameSpace");
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] InitializeGlobalGameSpace hook installed (server crash fix)");
 }
 
@@ -869,6 +869,6 @@ VOID InstallGameMainHook() {
   GameMain = (GameMainFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN);
   OriginalGameMainWrapper =
       (GameMainWrapperFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN_WRAPPER);
-  PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook));
+  PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper");
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Game main wrapper hook installed (server crash recovery)");
 }

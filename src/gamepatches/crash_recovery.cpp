@@ -578,7 +578,7 @@ void InstallCrashRecoveryHooks() {
   if (hKernel32 != NULL) {
     OriginalCreateProcessA = (CreateProcessAFunc)GetProcAddress(hKernel32, "CreateProcessA");
     if (OriginalCreateProcessA != NULL) {
-      PatchDetour(&OriginalCreateProcessA, reinterpret_cast<PVOID>(CreateProcessAHook));
+      PatchDetour(&OriginalCreateProcessA, reinterpret_cast<PVOID>(CreateProcessAHook), "CreateProcessA");
       Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateProcessA hook installed (crash reporter disabled)");
     } else {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find CreateProcessA");
@@ -586,7 +586,7 @@ void InstallCrashRecoveryHooks() {
 
     OriginalCreateProcessW = (CreateProcessWFunc)GetProcAddress(hKernel32, "CreateProcessW");
     if (OriginalCreateProcessW != NULL) {
-      PatchDetour(&OriginalCreateProcessW, reinterpret_cast<PVOID>(CreateProcessWHook));
+      PatchDetour(&OriginalCreateProcessW, reinterpret_cast<PVOID>(CreateProcessWHook), "CreateProcessW");
       Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateProcessW hook installed (crash reporter disabled)");
     } else {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find CreateProcessW");
@@ -594,7 +594,7 @@ void InstallCrashRecoveryHooks() {
 
     OriginalExitProcess = (ExitProcessFunc)GetProcAddress(hKernel32, "ExitProcess");
     if (OriginalExitProcess != NULL) {
-      PatchDetour(&OriginalExitProcess, reinterpret_cast<PVOID>(ExitProcessHook));
+      PatchDetour(&OriginalExitProcess, reinterpret_cast<PVOID>(ExitProcessHook), "ExitProcess");
       Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ExitProcess hook installed (prevents crash reporter termination)");
     } else {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find ExitProcess");
@@ -602,7 +602,7 @@ void InstallCrashRecoveryHooks() {
 
     OriginalTerminateProcess = (TerminateProcessFunc)GetProcAddress(hKernel32, "TerminateProcess");
     if (OriginalTerminateProcess != NULL) {
-      PatchDetour(&OriginalTerminateProcess, reinterpret_cast<PVOID>(TerminateProcessHook));
+      PatchDetour(&OriginalTerminateProcess, reinterpret_cast<PVOID>(TerminateProcessHook), "TerminateProcess");
       Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] TerminateProcess hook installed (prevents self-termination)");
     } else {
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find TerminateProcess");

@@ -698,6 +698,14 @@ verify:
         echo "verify: FAIL — token-auth does not consult the JWT exp claim." >&2
         exit 1
     fi
+    # C2/N84: every PatchDetour shall name its hook. The parameter is required at
+    # compile time, so this is belt-and-braces against someone re-adding a default.
+    if grep -qE 'const char\* name = nullptr' src/gamepatches/gamepatches_internal.h; then
+        echo "verify: FAIL — C2 PatchDetour's name parameter has a default again." >&2
+        echo "22 of 24 sites omitted it when it was defaultable, so HookGuard's overwrite" >&2
+        echo "alarm printed name=(unnamed) for almost every address it guards." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)

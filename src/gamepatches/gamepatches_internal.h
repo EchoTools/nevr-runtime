@@ -25,8 +25,13 @@ static inline VOID ApplyPatch(uintptr_t offset, const BYTE* patchData, size_t pa
 /// here rather than at each call site means every PatchDetour is covered and a
 /// new one cannot forget to opt in. The target must be read BEFORE Attach —
 /// afterwards *ppPointer is the trampoline, not the function we hooked.
+/// N84/C2: `name` is REQUIRED, not defaulted. It was `const char* name = nullptr`
+/// and 22 of 24 call sites omitted it — so HookGuard's overwrite alarm, whose
+/// whole diagnostic value is naming the clobbered address, printed
+/// `name=(unnamed)` for almost every address it guarded. A default argument made
+/// the omission invisible; making it required turns it into a compile error.
 template <typename T>
-inline BOOL PatchDetour(T* ppPointer, PVOID pDetour, const char* name = nullptr) {
+inline BOOL PatchDetour(T* ppPointer, PVOID pDetour, const char* name) {
   void* target = *reinterpret_cast<void**>(ppPointer);
   const BOOL ok = Hooking::Attach(reinterpret_cast<PVOID*>(ppPointer), pDetour);
   if (ok) HookGuard::Record(target, name);

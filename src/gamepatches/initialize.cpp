@@ -305,13 +305,13 @@ VOID Initialize() {
                              reinterpret_cast<PVOID>(PreprocessCommandLineHook));
   BootLogTee::TeeFprintf("[NEVR.PATCH] hook name=PreprocessCommandLine result=%s\n", r2 ? "OK" : "FAILED");
   if (!r2) g_bootHookFailed = true;
-  PatchDetour(&EchoVR::NetGameSwitchState, reinterpret_cast<PVOID>(NetGameSwitchStateHook));
-  PatchDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook));
-  PatchDetour(&EchoVR::CJsonGetFloat, reinterpret_cast<PVOID>(CJsonGetFloatHook));
-  PatchDetour(&EchoVR::HttpConnect, reinterpret_cast<PVOID>(HttpConnectHook));
-  PatchDetour(&EchoVR::GetProcAddress, reinterpret_cast<PVOID>(GetProcAddressHook));
-  PatchDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook));
-  PatchDetour(&EchoVR::JsonValueAsString, reinterpret_cast<PVOID>(JsonValueAsStringHook));
+  PatchDetour(&EchoVR::NetGameSwitchState, reinterpret_cast<PVOID>(NetGameSwitchStateHook), "EchoVR::NetGameSwitchState");
+  PatchDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook), "EchoVR::LoadLocalConfig");
+  PatchDetour(&EchoVR::CJsonGetFloat, reinterpret_cast<PVOID>(CJsonGetFloatHook), "EchoVR::CJsonGetFloat");
+  PatchDetour(&EchoVR::HttpConnect, reinterpret_cast<PVOID>(HttpConnectHook), "EchoVR::HttpConnect");
+  PatchDetour(&EchoVR::GetProcAddress, reinterpret_cast<PVOID>(GetProcAddressHook), "EchoVR::GetProcAddress");
+  PatchDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook), "EchoVR::SetWindowTextA_");
+  PatchDetour(&EchoVR::JsonValueAsString, reinterpret_cast<PVOID>(JsonValueAsStringHook), "EchoVR::JsonValueAsString");
   BootLogTee::TeeFprintf("[NEVR.PATCH] game hooks installed\n");
   // --- Platform compatibility hooks ---
   // InstallTLSHook() not needed — WebSocket bridge handles TLS via ixwebsocket.
