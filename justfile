@@ -346,6 +346,27 @@ verify:
         echo "verify: FAIL — N63 re-entry gate still returns (Sleep+return), should be ForceFatalExit" >&2
         exit 1
     fi
+    # N106: the OAuth2 device-flow credential must remain REACHABLE on a server.
+    # 571a41b stopped persisting the access token (refresh token only, on disk),
+    # which made `HasValidToken()` permanently false in a fresh process — so the
+    # cached-token branch became dead code and every server silently fell back to
+    # password auth. Nothing else refreshes in server mode: TokenAuth::Init
+    # returns early on is_server, before the background refresh thread starts.
+    # This exchange is the ONLY place a dedicated server can mint an access token.
+    N106_RC=0; N106_GS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/gamepatches/gameserver/gameserver.cpp) || N106_RC=$?
+    sensor_stage1 "N106 OAuth2 refresh reachable" "src/gamepatches/gameserver/gameserver.cpp" "$N106_RC"
+    sensor_nonempty "N106 OAuth2 refresh reachable" "non-comment lines of gameserver.cpp" "$N106_GS"
+    if ! grep -q 'HasValidRefreshToken()' <<<"$N106_GS"; then
+        echo "verify: FAIL — N106 the gameserver no longer exchanges a refresh token for an" >&2
+        echo "access token. The OAuth2 device-flow path becomes unreachable on a server and" >&2
+        echo "every registration silently degrades to password auth (BUGS.md N106)." >&2
+        exit 1
+    fi
+    if ! grep -q 'RefreshAuthToken(auth' <<<"$N106_GS"; then
+        echo "verify: FAIL — N106 HasValidRefreshToken() is checked but RefreshAuthToken is" >&2
+        echo "never called — the branch tests the credential and then discards it." >&2
+        exit 1
+    fi
     # N64/N105: BeginGracefulShutdown must release the listener before ForceFatalExit.
     # The old sensor matched the STRING 'WsBridge_Shutdown', which a
     # GetProcAddress returning null satisfies perfectly — and did, on every run

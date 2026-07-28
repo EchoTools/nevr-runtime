@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include "auth_token.h"
+#include "auth_token_refresh.h"
 #include "constants.h"
 #include "echovr.h"
 #include "echovr_functions.h"
@@ -1301,7 +1302,37 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
     if (auth.HasValidToken()) {
       wsToken = auth.token;
       Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Using cached auth token for ServerDB");
-    } else {
+    } else if (auth.HasValidRefreshToken()) {
+      // N106: exchange the refresh token for an access token.
+      //
+      // This branch was MISSING, which made the OAuth2 device-flow path
+      // unreachable on a dedicated server. 571a41b ("access token in-memory
+      // only, 60s lifetime, refresh token on disk") stopped persisting the
+      // access token — SaveAuthToken writes only refresh_token — so
+      // LoadCachedAuthToken().token is ALWAYS empty and HasValidToken() is
+      // ALWAYS false in a fresh process. The consumer here was never updated to
+      // match, so every server fell through to password auth while a perfectly
+      // valid refresh token sat unused on disk.
+      //
+      // Nothing else refreshes in server mode either: TokenAuth::Init returns
+      // early on is_server, before the background refresh thread starts. This is
+      // the only place a server can mint an access token.
+      CHAR* httpUri = EchoVR::JsonValueAsString(
+          const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("nevr_http_uri"), NULL, false);
+      CHAR* httpKey = EchoVR::JsonValueAsString(
+          const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("nevr_http_key"), NULL, false);
+      if (httpUri && httpKey && httpUri[0] != '\0' && httpKey[0] != '\0' &&
+          RefreshAuthToken(auth, httpUri, httpKey)) {
+        wsToken = auth.token;
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.GAMESERVER] ServerDB auth via refreshed OAuth2 token (device-flow credential)");
+      } else {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.GAMESERVER] Refresh token present but exchange failed — falling back to password auth");
+      }
+    }
+
+    if (wsToken.empty()) {
       wsToken = AuthenticateServer(localConfig);
       // N102: no token means every ServerDB connection below will be rejected.
       // Continuing produces a server that logs connection failures forever
