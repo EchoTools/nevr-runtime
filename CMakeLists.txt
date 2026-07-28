@@ -192,7 +192,6 @@ add_subdirectory(src/modules/token-auth)
 # other. One owner now. Source retained at src/modules/ws-bridge/ pending
 # removal — see the N92 ledger entry.
 add_subdirectory(src/legacy/gamepatches)
-# add_subdirectory(src/gameserver)  # merged into gamepatches
 # src/pnsrad and its src/NRadEngine symlink were removed 2026-07-27. It was an
 # OBJECT library that NOTHING consumed — 28 objects compiled into no artifact —
 # and its approach (a replacement pnsrad.dll whose GetLoggedInUser reads

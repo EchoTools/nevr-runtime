@@ -59,9 +59,6 @@ repository.
 - `src/launcher/` → thin `CreateProcess` wrapper spawning `echovr.exe -server -noconsole`
 - `src/libovr-stub/` → `LibOVRPlatform64_1.dll` — Oculus platform stub
 - `src/legacy/` — **frozen** v1 implementations, self-contained; do not modify
-- `src/gameserver/` — **dead code.** The compiled copy is
-  `src/gamepatches/gameserver/`. `just verify` fails if this is re-added to the
-  build.
 
 ## Building
 
@@ -100,7 +97,6 @@ src/modules/       runtime-loaded modules (platform-compat, token-auth, ws-bridg
 src/common/        libcommon.a
 src/nevr_api/      protobuf target
 src/legacy/        FROZEN v1
-src/gameserver/    DEAD — see above
 plugins/           optional plugins
 tools/             build and verify tooling
 tests/             Go system suites (not part of `just verify`)

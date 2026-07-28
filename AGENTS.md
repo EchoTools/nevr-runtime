@@ -132,8 +132,6 @@ src/gamepatches/   BugSplat64.dll — hooks, CLI, mode patches, crash recovery,
                    config, module/plugin loading, in-process gameserver
 src/modules/       runtime-loaded modules: platform-compat, token-auth, ws-bridge
 src/common/        libcommon.a — logging, globals, symbols, hooking
-src/gameserver/    DEAD CODE. The compiled path is src/gamepatches/gameserver/.
-                   `just verify` fails if it is re-added to the build (N34)
 src/legacy/        FROZEN v1 — shall not be modified
 src/nevr_api/      generated protobuf (from BSR — see `just proto`)
 src/launcher/      game launcher — disabled, see CLAUDE.md

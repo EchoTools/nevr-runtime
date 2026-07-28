@@ -65,7 +65,7 @@ The game has a ~15-20 second splash-screen delay at startup before any NEVR code
 | Component          | Output DLL       | Deploy As              | Purpose                                                                  |
 | ------------------ | ---------------- | ---------------------- | ------------------------------------------------------------------------ |
 | `src/gamepatches/` | `BugSplat64.dll` | `BugSplat64.dll`       | Runtime hooks, CLI flags, game modifications                             |
-| `src/gamepatches/gameserver/` | *(in `BugSplat64.dll`)* | *(in-process)* | Multiplayer networking, session management. `src/gameserver/` is DEAD — see below |
+| `src/gamepatches/gameserver/` | *(in `BugSplat64.dll`)* | *(in-process)* | Multiplayer networking, session management |
 
 GamePatches replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. Several features previously implemented as plugins are now built into gamepatches: server-timing, token-auth, pnsrad-enabler.
 
@@ -118,8 +118,6 @@ game binary, before plugins. These are **not** plugins — they use
 - `src/gamepatches/plugin_loader.h` — Plugin discovery and lifecycle management
 - `src/gamepatches/patch_addresses.h` — Virtual addresses for game function hooks
 - `src/gamepatches/gameserver/gameserver.cpp` — IServerLib vtable implementation
-  (**not** `src/gameserver/` — that copy is dead code and `just verify` fails if it
-  is re-added to the build, N34)
 - `src/gamepatches/gameserver/messages.h` — Protocol message symbol IDs (uint64)
 - `src/common/globals.h` — Cross-DLL globals (`isServer`, `isHeadless`, `exitOnError`, etc.)
 - `src/common/logging.h` — `Log(level, format, ...)` and `FatalError()`
@@ -138,7 +136,7 @@ game binary, before plugins. These are **not** plugins — they use
 
 - **Logging**: Always use `Log(EchoVR::LogLevel::Info, "format %d", val)` from `common/logging.h`. Fatal errors via `FatalError(msg, title)`.
 - **Hooking**: MinHook-based (`USE_MINHOOK` compile flag). Functions use `__fastcall` convention. Use `ListenForBroadcasterMessage()` for game event callbacks.
-- **Protocol messages**: Symbol IDs in `src/gameserver/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
+- **Protocol messages**: Symbol IDs in `src/gamepatches/gameserver/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
 - **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
 - **Global state**: CLI flags as globals in `src/common/globals.h`, set in `src/gamepatches/cli.cpp`.
 - **Local overrides**: `cmake/local.cmake` (include currently commented out in root CMakeLists.txt).

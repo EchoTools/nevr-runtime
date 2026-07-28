@@ -298,13 +298,14 @@ verify:
     # whitespace, `/`, or end of line. Use this spelling, not the obvious one.
     #   ^-anchored (file content):  ^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)
     #   :-anchored (grep -n output): :[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)
-    # N34: mechanical guard — src/gameserver/ is dead code. The compiled path is
-    # src/gamepatches/gameserver/. If add_subdirectory(src/gameserver) is ever
-    # uncommented (not preceded by #), fail the verify gate. Sensor over lock:
-    # the dead path must stay dead; re-enabling it silently compiles the wrong copy.
+    # N34/N103: src/gameserver/ was DELETED on 2026-07-28 after its one piece of
+    # stranded work (N48's fail-fast) was recovered as N102. This guard remains
+    # so the tree cannot be recreated and wired: a second gameserver copy is how
+    # N48 shipped half-implemented for five weeks. CMake would now hard-fail on a
+    # missing directory, but this names the reason instead of the symptom.
     if grep -Pn '^\s*add_subdirectory\s*\(\s*src/gameserver\s*\)' CMakeLists.txt; then
-        echo "verify: FAIL — src/gameserver/ is DEAD CODE (N34). Compiled path is src/gamepatches/gameserver/." >&2
-        echo "Uncommenting add_subdirectory(src/gameserver) compiles the WRONG copy. Remove this line or route the fix to src/gamepatches/gameserver/." >&2
+        echo "verify: FAIL — src/gameserver/ was removed (N103). The compiled path is src/gamepatches/gameserver/." >&2
+        echo "Re-adding that tree recreates the two-copy split that let N48 ship half-implemented. Route the change to src/gamepatches/gameserver/." >&2
         exit 1
     fi
     # Wave I — source-level verifiers: each fix must have its call site present.
@@ -500,8 +501,8 @@ verify:
     # a usage contract (RULINGS.md "Usage contracts"), not a log tag — docs/standards/logging.md's
     # subsystem-tag rule governs log lines. Verified 2026-07-26: every [NEVR] hit in
     # that file is a help string, zero are log calls.
-    N81_RC=0; N81_HITS=$(grep -rn '"\[NEVR\] ' src/gamepatches src/common src/gameserver) || N81_RC=$?
-    sensor_stage1 "N81 bare [NEVR] tag" "src/gamepatches src/common src/gameserver" "$N81_RC"
+    N81_RC=0; N81_HITS=$(grep -rn '"\[NEVR\] ' src/gamepatches src/common) || N81_RC=$?
+    sensor_stage1 "N81 bare [NEVR] tag" "src/gamepatches src/common" "$N81_RC"
     if [ "$N81_RC" -eq 0 ] && printf '%s\n' "$N81_HITS" \
          | grep -v legacy | grep -v 'src/gamepatches/cli.cpp' | grep .; then
         echo "verify: FAIL — N81 bare [NEVR] log tag found; use a subsystem tag from the docs/standards/logging.md table." >&2
