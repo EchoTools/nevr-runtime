@@ -278,9 +278,10 @@ add_custom_target(dist-prepare
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_DIR}/echovr.exe" || true
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" "${DIST_DIR}/echovr_server.exe" || true
    COMMAND test -f "${CMAKE_SOURCE_DIR}/README.md" && ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_DIR}/" || true
-  # Copy plugin DLLs into plugins/ subdirectory
+  # plugins/ ships EMPTY on purpose — it is the drop-point for optional operator
+  # plugins. log_filter.dll is deliberately not packaged (N95): the loader
+  # refuses it by name.
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_DIR}/plugins"
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/log_filter.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/log_filter.dll" "${DIST_DIR}/plugins/" || true
   VERBATIM
 )
 
@@ -360,9 +361,8 @@ add_custom_target(dist-lite-prepare
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_LITE_DIR}/echovr.exe" || ${CMAKE_COMMAND} -E true
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" "${DIST_LITE_DIR}/echovr_server.exe" || ${CMAKE_COMMAND} -E true
    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
-  # Copy and strip plugin DLLs into plugins/ subdirectory
+  # plugins/ ships EMPTY on purpose — see the dist-prepare note above (N95).
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_DIR}/plugins"
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/log_filter.dll" "${DIST_LITE_DIR}/plugins/" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/plugins/log_filter.dll" || ${CMAKE_COMMAND} -E true
   COMMENT "Preparing lite distribution directory (stripped): ${DIST_LITE_DIR}"
   VERBATIM
 )

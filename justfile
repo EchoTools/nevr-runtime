@@ -651,6 +651,27 @@ verify:
         echo "log_filter.dll would silently disable the built-in log filter's file output." >&2
         exit 1
     fi
+    # N95: and we shall not PRODUCE the DLL the loader above refuses. Two
+    # independent sensors, because either alone is satisfiable by the bug:
+    # re-adding the build target ships it again the moment any dist rule
+    # globs plugins/, and re-adding a dist rule ships whatever a stale build
+    # tree still holds. Comment lines are stripped before matching so the
+    # prose forbidding the thing cannot satisfy its own check.
+    N95_TGT_RC=0; N95_TGT=$(grep -vE '^\s*#' plugins/CMakeLists.txt) || N95_TGT_RC=$?
+    sensor_stage1 "N95 log-filter build target" "plugins/CMakeLists.txt" "$N95_TGT_RC"
+    sensor_nonempty "N95 log-filter build target" "non-comment lines of plugins/CMakeLists.txt" "$N95_TGT"
+    if printf '%s\n' "$N95_TGT" | grep -q 'add_subdirectory(log-filter)'; then
+        echo "verify: FAIL — N95 log-filter is a build target again; plugin_loader.cpp refuses" >&2
+        echo "log_filter.dll by name, so building it produces a DLL our own loader rejects (N89)." >&2
+        exit 1
+    fi
+    N95_DIST_RC=0; N95_DIST=$(grep -vE '^\s*#' CMakeLists.txt) || N95_DIST_RC=$?
+    sensor_stage1 "N95 log-filter packaging" "CMakeLists.txt" "$N95_DIST_RC"
+    sensor_nonempty "N95 log-filter packaging" "non-comment lines of CMakeLists.txt" "$N95_DIST"
+    if printf '%s\n' "$N95_DIST" | grep -q 'log_filter'; then
+        echo "verify: FAIL — N95 a dist rule packages the superseded log_filter.dll." >&2
+        exit 1
+    fi
     # N90: pnsrad.dll links its OWN copy of CLog, so hooking echovr.exe's
     # CLog::PrintfImpl does not cover it. Without this second hook its output
     # bypasses the filter entirely — measured: 8191-byte profile dumps on console

@@ -17,5 +17,11 @@ endif()
 # crash-handler functionality is in gamepatches core (crash_recovery.cpp)
 # audio-intercom, combat-patch, filesystem-loader, force-push, game-rules-override,
 # session-unlocker, skip-splash moved to nevr-runtime-plugins
-add_subdirectory(log-filter)
+# log-filter is NOT built (N95). plugin_loader.cpp refuses log_filter.dll by
+# name — loading it installs a second MinHook on CLog::PrintfImpl from a
+# different static MinHook copy, which took the built-in filter's game-line
+# capture to zero (N89). Producing a DLL our own loader is guaranteed to reject
+# is the defect. The SOURCE stays: its history carries fixes not yet audited
+# against src/gamepatches/builtin_log_filter.cpp, and deleting first is what
+# stranded a fix twice here (N93, N94).
 add_subdirectory(example)
