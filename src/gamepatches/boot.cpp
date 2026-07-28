@@ -157,15 +157,24 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
       // Deprecated — silently consume value arg if present
       if (lstrcmpW(arg, L"-timestep") == 0 && i + 1 < argc) ++i;
       Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] %ls is deprecated and ignored", arg);
-    } else if (lstrcmpW(arg, L"-headless") == 0 || lstrcmpW(arg, L"-noovr") == 0) {
-      // -server now forces -headless unconditionally. Passing -headless or -noovr
-      // separately is a configuration error — these are not separable from -server.
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] %ls is redundant — -server forces -headless unconditionally. "
-          "Remove this flag from your command line.", arg);
-      if (lstrcmpW(arg, L"-noovr") == 0) {
-        g_noOvr = TRUE;
-      }
+    } else if (lstrcmpW(arg, L"-headless") == 0) {
+      // N99: this branch used to call -headless "redundant" and tell the
+      // operator to remove it. That was false and it cost a real regression —
+      // a unit believed the message, removed the flag, and a window opened on
+      // the owner's screen. -headless is a NATIVE echovr.exe token; the game's
+      // own arg handler applies pGame+0x1D4 &= 0xFFFEFEFE only when it is
+      // present. NEVR now applies that same mask for -server
+      // (PatchEnableHeadless), and AND-masking is idempotent, so the token is
+      // harmless either way. Say only what was measured, and instruct the
+      // operator to remove nothing.
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.PATCH] -headless: native echovr.exe flag; -server applies the same "
+          "engine-flags mask, so this token is a harmless no-op here.");
+    } else if (lstrcmpW(arg, L"-noovr") == 0) {
+      // NOT the same class as -headless, and deliberately not claimed as
+      // covered: -noovr is also native and the game consumes it (pGame+0x178),
+      // while NEVR still only sets a global. Filed open in BUGS.md N99.
+      g_noOvr = TRUE;
     }
   }
 

@@ -109,9 +109,40 @@ VOID PatchEnableHeadless(PVOID pGame) {
   Log(EchoVR::LogLevel::Debug,
       "[NEVR.HEADLESS] CEngineConfig copy hook installed — bit-0x1 will be cleared after config copy");
 
-  // Disable audio by clearing the audio enable bit (same as `-noaudio` command)
-  UINT32* audioFlags = reinterpret_cast<UINT32*>(static_cast<CHAR*>(pGame) + GAME_AUDIO_FLAGS_OFFSET);
-  *audioFlags &= 0xFFFFFFFD;  // Clear bit 1 (audio enable)
+  // Engine flags word at pGame+0x1D4 (N99).
+  //
+  // `-headless` is NOT a NEVR flag — it is native to echovr.exe, and its entire
+  // effect in the whole binary is the single mask at 0x140504566, applied by
+  // the game's own arg handler only when that literal token is present.
+  // `-server` is NEVR-invented (there is no standalone "-server" string in
+  // echovr.exe), so the game's parser never acted on it and NOTHING applied
+  // that mask. g_isHeadless gated OUR patches only. This block wrote just
+  // ENGINE_FLAGS_NOAUDIO_MASK, so bit 0 — the render/window master bit — stayed
+  // SET on every `-server`-only run. Measured before this fix, `-server` alone:
+  //   engine flags 0x00000137 -> 0x00000135 (bit0_render=SET(WINDOWED))
+  // with one game window present for the entire run.
+  //
+  // Ordering is what makes applying it here correct: this function runs from
+  // boot.cpp's `if (g_isHeadless)` block, strictly after `-server` sets that
+  // global in the same hook and strictly before the trailing
+  // EchoVR::PreprocessCommandLine(pGame) — which is where the game applies this
+  // identical mask when the token IS present. So our write lands earlier in the
+  // same call chain than the game's own known-sufficient write, and precedes
+  // every consumer that write precedes. AND-masking is idempotent, so passing
+  // the token as well remains a no-op.
+  UINT32* engineFlags = reinterpret_cast<UINT32*>(static_cast<CHAR*>(pGame) + GAME_ENGINE_FLAGS_OFFSET);
+  const UINT32 flagsBefore = *engineFlags;
+  *engineFlags &= ENGINE_FLAGS_NOAUDIO_MASK & ENGINE_FLAGS_HEADLESS_MASK;
+  const UINT32 flagsAfter = *engineFlags;
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.HEADLESS] engine flags 0x%08X -> 0x%08X (bit0_render=%s)",
+      static_cast<unsigned>(flagsBefore), static_cast<unsigned>(flagsAfter),
+      (flagsAfter & ENGINE_FLAGS_RENDER_BIT) ? "SET(WINDOWED)" : "CLEAR(HEADLESS)");
+  if (flagsAfter & ENGINE_FLAGS_RENDER_BIT) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.HEADLESS] render bit still SET after masking — a window will open. "
+        "The engine-flags offset or mask no longer matches this build of echovr.exe.");
+  }
 
   // WriteLog hook removed — log_filter plugin now owns CLog::PrintfImpl.
 

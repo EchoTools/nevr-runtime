@@ -458,8 +458,34 @@ constexpr size_t PRECISION_SLEEP_BUSYWAIT_SIZE = 1;
 // Game Structure Offsets
 // ============================================================================
 
-/// Offset within game instance structure for audio flags
-constexpr uintptr_t GAME_AUDIO_FLAGS_OFFSET = 468;
+/// Engine flags word at pGame+0x1D4 (468). Named "audio flags" until N99 —
+/// audio is ONE BIT of it. The game's own arg handler (fcn.140503ab0, reached
+/// from PreprocessCommandLine @0x140116732) is the only writer of the two masks
+/// below, and applies each only when its literal token is on the command line.
+///
+/// Constructor default is 0x137 (CncaGame::CncaGame @0x1404E04C0 writes
+/// `movl $0x137,0x1d4(%rsi)` at 0x1404E0CAD).
+constexpr uintptr_t GAME_ENGINE_FLAGS_OFFSET = 0x1D4;
+
+/// `-noaudio`. Verified byte-for-byte in the shipped echovr.exe at 0x140503C15:
+///   83 a3 d4 01 00 00 fd   =  and dword ptr [rbx+0x1D4], 0xFFFFFFFD
+constexpr uint32_t ENGINE_FLAGS_NOAUDIO_MASK = 0xFFFFFFFDu;
+
+/// `-headless`. Verified byte-for-byte in the shipped echovr.exe at 0x140504566:
+///   81 a3 d4 01 00 00 fe fe fe ff   =  and dword ptr [rbx+0x1D4], 0xFFFEFEFE
+/// This instruction is UNIQUE in the whole binary — nothing else applies this
+/// mask — and it is gated on the literal "-headless" token (string at
+/// 0x14171F760) being present in CMainArgs.
+///
+/// ~0xFFFEFEFE = 0x00010101, so it clears bits 0, 8 and 16. Bit 0 is the one
+/// that matters: fcn.1404F5870 reads it (`mov ebp,[rsi+0x1D4]; not ebp;
+/// and ebp,1`) and propagates it to pGame[0x105] bit 0x100000 via BTS/BTR,
+/// then takes the window-creation branch when it is SET.
+constexpr uint32_t ENGINE_FLAGS_HEADLESS_MASK = 0xFFFEFEFEu;
+
+/// Bit 0 of the engine flags word — the render/window master bit. CLEAR means
+/// headless.
+constexpr uint32_t ENGINE_FLAGS_RENDER_BIT = 0x1u;
 
 /// Offset within game instance structure for fixed timestep flag
 constexpr uintptr_t GAME_TIMESTEP_FLAGS_OFFSET = 2088;

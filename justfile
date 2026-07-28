@@ -275,6 +275,17 @@ verify:
             exit 1
         fi
     }
+    # THE COMMENT STRIPPER (N99). Sensors strip comment lines before matching so
+    # that the prose explaining a rule cannot satisfy the rule's own check. The
+    # obvious spelling for that is `^[[:space:]]*(//|\*|/\*)` — and it is WRONG
+    # in C: `  *engineFlags &= MASK;` is a pointer dereference at statement
+    # start, and `^[[:space:]]*\*` eats it. The N99 sensor was written that way,
+    # deleted the exact line it was watching, and failed on a CORRECT tree
+    # (measured: seven consecutive `just verify` runs red, including the clean
+    # control). A `*` begins a comment continuation only when followed by
+    # whitespace, `/`, or end of line. Use this spelling, not the obvious one.
+    #   ^-anchored (file content):  ^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)
+    #   :-anchored (grep -n output): :[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)
     # N34: mechanical guard — src/gameserver/ is dead code. The compiled path is
     # src/gamepatches/gameserver/. If add_subdirectory(src/gameserver) is ever
     # uncommented (not preceded by #), fail the verify gate. Sensor over lock:
@@ -491,7 +502,7 @@ verify:
     N85_RC=0; N85_HITS=$(grep -rn -- '->setOnMessageCallback(nullptr)' src/gamepatches src/modules src/common) || N85_RC=$?
     sensor_stage1 "N85 empty ws callback" "src/gamepatches src/modules src/common" "$N85_RC"
     if [ "$N85_RC" -eq 0 ] && printf '%s\n' "$N85_HITS" \
-         | grep -v legacy | grep -vE ':[[:space:]]*(//|\*)' | grep .; then
+         | grep -v legacy | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
         echo "verify: FAIL — N85 setOnMessageCallback(nullptr) reintroduced; use a no-op lambda." >&2
         echo "An empty std::function invoked by ixwebsocket throws std::bad_function_call and kills the server." >&2
         exit 1
@@ -538,7 +549,7 @@ verify:
     sensor_stage1 "N62 shutdown loader-lock" "src/gamepatches/crash_recovery.cpp" "$N62_RC"
     sensor_nonempty "N62 shutdown loader-lock" "PerformGracefulShutdown() body in src/gamepatches/crash_recovery.cpp" "$N62_BODY"
     if printf '%s\n' "$N62_BODY" \
-         | grep -vE '^[[:space:]]*(//|\*|/\*)' \
+         | grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' \
          | grep -qE 'GetModuleHandleA|GetProcAddress'; then
         echo "verify: FAIL — N62 PerformGracefulShutdown resolves symbols at shutdown time;" >&2
         echo "both take the loader lock, so a signal arriving while it is held deadlocks shutdown." >&2
@@ -811,6 +822,39 @@ verify:
     # its own explanatory comment — which quotes the very string it forbids — so
     # it failed on a correct tree. Comment lines are stripped; the pattern is
     # anchored to the PatchDetour signature.
+    # --- N99: -server shall apply the game's own headless mask --------------
+    # `-headless` is a NATIVE echovr.exe token. Its whole effect in the binary
+    # is one instruction (0x140504566, `and dword [rbx+0x1D4], 0xFFFEFEFE`),
+    # applied by the game's own arg handler ONLY when that literal token is on
+    # the command line. `-server` is NEVR-invented, so nothing applied it for
+    # us and bit 0 — the render/window master bit — stayed SET on every
+    # -server-only run. Three assertions; any one alone is satisfiable by the
+    # bug.
+    N99_RC=0; N99_MP=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/gamepatches/mode_patches.cpp) || N99_RC=$?
+    sensor_stage1 "N99 headless mask" "src/gamepatches/mode_patches.cpp" "$N99_RC"
+    sensor_nonempty "N99 headless mask" "non-comment lines of src/gamepatches/mode_patches.cpp" "$N99_MP"
+    if ! printf '%s\n' "$N99_MP" | grep -q 'ENGINE_FLAGS_HEADLESS_MASK'; then
+        echo "verify: FAIL — N99 PatchEnableHeadless no longer applies ENGINE_FLAGS_HEADLESS_MASK." >&2
+        echo "-server would leave bit 0 of pGame+0x1D4 SET and the game would open a window." >&2
+        exit 1
+    fi
+    # The mask constant shall keep the value measured in the shipped binary.
+    if ! grep -q 'ENGINE_FLAGS_HEADLESS_MASK = 0xFFFEFEFEu' src/gamepatches/patch_addresses.h; then
+        echo "verify: FAIL — N99 ENGINE_FLAGS_HEADLESS_MASK is not 0xFFFEFEFE, the value" >&2
+        echo "verified byte-for-byte at 0x140504566 in the shipped echovr.exe." >&2
+        exit 1
+    fi
+    # And boot.cpp shall not tell the operator to remove a flag that is native
+    # to the game. A unit believed that message, removed -headless, and a
+    # window opened on the owner's screen.
+    N99_BOOT_RC=0; N99_BOOT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/gamepatches/boot.cpp) || N99_BOOT_RC=$?
+    sensor_stage1 "N99 boot flag advice" "src/gamepatches/boot.cpp" "$N99_BOOT_RC"
+    sensor_nonempty "N99 boot flag advice" "non-comment lines of src/gamepatches/boot.cpp" "$N99_BOOT"
+    if printf '%s\n' "$N99_BOOT" | grep -qE 'is redundant|Remove this flag'; then
+        echo "verify: FAIL — N99 boot.cpp tells the operator a flag is redundant / to remove it." >&2
+        echo "-headless and -noovr are NATIVE echovr.exe flags the game itself consumes." >&2
+        exit 1
+    fi
     # N96: no symbol spelled plain `ResolveVA`. Two definitions of that name once
     # coexisted in BugSplat64.dll with IDENTICAL signatures and different
     # guarantees — wave0_instrumentation.cpp's file-static did no validation,
@@ -824,7 +868,7 @@ verify:
     N96_RC=0; N96_HITS=$(grep -rn --include='*.cpp' --include='*.h' -P 'ResolveVA(?!_Checked|_Unchecked)' src plugins) || N96_RC=$?
     sensor_stage1 "N96 bare ResolveVA" "src plugins" "$N96_RC"
     if [ "$N96_RC" -eq 0 ] && printf '%s\n' "$N96_HITS" \
-         | grep -v legacy | grep -vE ':[[:space:]]*(//|\*|/\*)' | grep .; then
+         | grep -v legacy | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
         echo "verify: FAIL — N96 a bare 'ResolveVA' spelling is back. Use" >&2
         echo "nevr::ResolveVA_Checked or nevr::ResolveVA_Unchecked — the name shall state" >&2
         echo "whether the address was validated (BUGS.md N96)." >&2
@@ -847,7 +891,7 @@ verify:
         printf '%s\n' "$N97_HITS" >&2
         exit 1
     fi
-    C2_RC=0; C2_CODE=$(grep -vE '^\s*(///|//|\*)' src/gamepatches/gamepatches_internal.h) || C2_RC=$?
+    C2_RC=0; C2_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/gamepatches/gamepatches_internal.h) || C2_RC=$?
     sensor_stage1 "C2 PatchDetour default name" "src/gamepatches/gamepatches_internal.h" "$C2_RC"
     if printf '%s\n' "$C2_CODE" \
          | grep -qE 'PatchDetour\(.*const char\* name\s*='; then
