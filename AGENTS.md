@@ -100,9 +100,23 @@ It **shall** exit **0**. You **shall** read the exit code from a file and
 `just build` greps its own output and always exits 0, so its exit code is a
 proxy, not a signal.
 
-Server behaviour **shall** be tested only with `./launch-server.sh`. You **shall
-not** modify that script and **shall not** invoke `echovr.exe` with other
-arguments. You **shall** allow ≥45s from process start before judging a server hung (`CLAUDE.md` §Startup Timing).
+Server behaviour **shall** be tested only with `./launch-server.sh` or
+`./verify-server.sh`. You **shall not** modify `launch-server.sh` — it is the
+operator entry point — and **shall not** invoke `echovr.exe` directly with your
+own arguments. You **shall** allow ≥45s from process start before judging a
+server hung (`CLAUDE.md` §Startup Timing).
+
+`./verify-server.sh <run-name> [default|noflag] [seconds]` is the script for
+**verification** runs (owner-authorised 2026-07-28). It exists so that work
+needing a different flag set, or needing the log as a file rather than a
+terminal stream, does not edit the operator's launcher. It deploys identically,
+captures the log and exit code to files under `/var/tmp/work-nevr-runtime/`,
+refuses a run shorter than 45s, records whether `DISPLAY` was set, counts game
+windows by PID attribution across the run, and sends SIGINT for teardown. Its
+`default` flag set is byte-identical to `launch-server.sh`'s; `noflag` drops the
+`-headless` token, which is the discriminator N99 needed. Every number in its
+summary is read back from a file — you **shall not** pipe a live server log
+through `grep`, which block-buffers and makes a healthy run look hung.
 
 ---
 
