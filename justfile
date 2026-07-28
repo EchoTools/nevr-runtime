@@ -275,6 +275,18 @@ verify:
             exit 1
         fi
     }
+    # SIGPIPE + pipefail = a FALSE FAIL (N101). `cmd | grep -q P` under
+    # `set -o pipefail` returns 141 WHEN THE PATTERN IS FOUND: grep -q exits at
+    # the first match, the upstream write end is still writing, the kernel raises
+    # SIGPIPE on it, and pipefail promotes 141 to the pipeline status. `if !`
+    # then takes the FAIL branch on a correct tree. It is a RACE — it only fires
+    # when the match sits early in a capture large enough that the writer has not
+    # finished. Measured: 55,887-byte capture, match at line 185 of 1350 -> rc=141.
+    # Rule: feed a captured variable to grep with a HERESTRING, never a pipeline.
+    #   RIGHT:  grep -qF "$pat" <<<"$CAPTURE"
+    #   WRONG:  printf '%s\n' "$CAPTURE" | grep -qF "$pat"
+    # (Pipelines whose last stage reads ALL input -- grep -c, grep -v, plain
+    # grep -- are safe; only early-exit readers like grep -q race.)
     # THE COMMENT STRIPPER (N99). Sensors strip comment lines before matching so
     # that the prose explaining a rule cannot satisfy the rule's own check. The
     # obvious spelling for that is `^[[:space:]]*(//|\*|/\*)` — and it is WRONG
@@ -336,6 +348,28 @@ verify:
         echo "verify: FAIL — N64 WsBridge_Shutdown call missing from BeginGracefulShutdown" >&2
         exit 1
     fi
+    # N102: the two fail-fast sites N48 introduced must live in the copy that
+    # SHIPS. 647cca7 wrote them into src/gameserver/ — a tree that stopped being
+    # built on 2026-06-26 — so the feature was recorded as done while production
+    # had no fatal path at all for either condition. Assert on the compiled file
+    # (src/gamepatches/gameserver/), never the dead one.
+    N102_RC=0; N102_GS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/gamepatches/gameserver/gameserver.cpp) || N102_RC=$?
+    sensor_stage1 "N102 gameserver fail-fast" "src/gamepatches/gameserver/gameserver.cpp" "$N102_RC"
+    sensor_nonempty "N102 gameserver fail-fast" "non-comment lines of src/gamepatches/gameserver/gameserver.cpp" "$N102_GS"
+    for site in 'registration rejected by ServerDB' 'no valid token for ServerDB connection'; do
+        if ! grep -qF "$site" <<<"$N102_GS"; then
+            echo "verify: FAIL — N102 the fail-fast for '${site}' is missing from the SHIPPING gameserver." >&2
+            echo "Without it the server runs degraded for hours instead of exiting with a cause (BUGS.md N102)." >&2
+            exit 1
+        fi
+    done
+    # Both sites shall use ServerFatal, not FatalError: ServerFatal is mode-gated
+    # (Warning in client mode) and calls ForceFatalExit directly. The stranded
+    # original used FatalError, which depends on a handler being installed first.
+    if grep -qE 'FatalError\("(GameServer registration|Server authentication)' <<<"$N102_GS"; then
+        echo "verify: FAIL — N102 a gameserver fail-fast uses FatalError; use ServerFatal (mode-gated)." >&2
+        exit 1
+    fi
     # N72/N73: the broadcaster ingress guards moved with the plugin to
     # ~/src/nevr-runtime-plugins on 2026-07-26 (this repo is PUBLIC and the
     # plugin is a broadcaster injection tool). Their sensors moved with them —
@@ -360,7 +394,7 @@ verify:
     N70_VEH_RC=0; N70_VEH_BODY=$(awk '/^LONG WINAPI BreakpointVEH/,/^}/' src/gamepatches/crash_recovery.cpp) || N70_VEH_RC=$?
     sensor_stage1 "N70 BreakpointVEH" "src/gamepatches/crash_recovery.cpp" "$N70_VEH_RC"
     sensor_nonempty "N70 BreakpointVEH" "BreakpointVEH() body in src/gamepatches/crash_recovery.cpp" "$N70_VEH_BODY"
-    if printf '%s\n' "$N70_VEH_BODY" | grep -qF 'Log(EchoVR::LogLevel'; then
+    if grep -qF 'Log(EchoVR::LogLevel' <<<"$N70_VEH_BODY"; then
         echo "verify: FAIL — N70 BreakpointVEH calls Log(); crash path must use VehPrintf (raw WriteFile)." >&2
         echo "Log() reaches std::lock_guard(g_file_mutex) — a crash during log emission would self-deadlock." >&2
         exit 1
@@ -368,13 +402,13 @@ verify:
     N70_WCD_RC=0; N70_WCD_BODY=$(awk '/^static void WriteCrashDump/,/^}/' src/gamepatches/crash_recovery.cpp) || N70_WCD_RC=$?
     sensor_stage1 "N70 WriteCrashDump" "src/gamepatches/crash_recovery.cpp" "$N70_WCD_RC"
     sensor_nonempty "N70 WriteCrashDump" "WriteCrashDump() body in src/gamepatches/crash_recovery.cpp" "$N70_WCD_BODY"
-    if printf '%s\n' "$N70_WCD_BODY" | grep -qF 'Log(EchoVR::LogLevel'; then
+    if grep -qF 'Log(EchoVR::LogLevel' <<<"$N70_WCD_BODY"; then
         echo "verify: FAIL — N70 WriteCrashDump calls Log(); crash path must use VehPrintf (raw WriteFile)." >&2
         exit 1
     fi
     # N70: the handler must never enumerate modules (loader lock). The snapshot is
     # taken at init by CacheModuleTable and read from the cache during a crash.
-    if printf '%s\n' "$N70_WCD_BODY" | grep -q 'EnumProcessModules'; then
+    if grep -q 'EnumProcessModules' <<<"$N70_WCD_BODY"; then
         echo "verify: FAIL — N70 WriteCrashDump enumerates modules; takes the loader lock. Read g_moduleCache instead." >&2
         exit 1
     fi
@@ -671,7 +705,7 @@ verify:
     N95_TGT_RC=0; N95_TGT=$(grep -vE '^\s*#' plugins/CMakeLists.txt) || N95_TGT_RC=$?
     sensor_stage1 "N95 log-filter build target" "plugins/CMakeLists.txt" "$N95_TGT_RC"
     sensor_nonempty "N95 log-filter build target" "non-comment lines of plugins/CMakeLists.txt" "$N95_TGT"
-    if printf '%s\n' "$N95_TGT" | grep -q 'add_subdirectory(log-filter)'; then
+    if grep -q 'add_subdirectory(log-filter)' <<<"$N95_TGT"; then
         echo "verify: FAIL — N95 log-filter is a build target again; plugin_loader.cpp refuses" >&2
         echo "log_filter.dll by name, so building it produces a DLL our own loader rejects (N89)." >&2
         exit 1
@@ -679,7 +713,7 @@ verify:
     N95_DIST_RC=0; N95_DIST=$(grep -vE '^\s*#' CMakeLists.txt) || N95_DIST_RC=$?
     sensor_stage1 "N95 log-filter packaging" "CMakeLists.txt" "$N95_DIST_RC"
     sensor_nonempty "N95 log-filter packaging" "non-comment lines of CMakeLists.txt" "$N95_DIST"
-    if printf '%s\n' "$N95_DIST" | grep -q 'log_filter'; then
+    if grep -q 'log_filter' <<<"$N95_DIST"; then
         echo "verify: FAIL — N95 a dist rule packages the superseded log_filter.dll." >&2
         exit 1
     fi
@@ -811,7 +845,7 @@ verify:
         N94_RC=0; N94_CTX=$(grep -B1 -F "$msg" "$N94_FILE") || N94_RC=$?
         sensor_stage1 "N94 auth log taxonomy" "$N94_FILE" "$N94_RC"
         sensor_nonempty "N94 auth log taxonomy" "message '$msg' in $N94_FILE" "$N94_CTX"
-        if printf '%s\n' "$N94_CTX" | grep -q 'LogLevel::Info'; then
+        if grep -q 'LogLevel::Info' <<<"$N94_CTX"; then
             echo "verify: FAIL — N94 the '[NEVR.AUTH] ${msg}' line is at Info; the N47 taxonomy pins it at Debug (merge 2f29312 once reverted all nine — BUGS.md N94)." >&2
             exit 1
         fi
@@ -874,7 +908,7 @@ verify:
     N99_RC=0; N99_MP=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/gamepatches/mode_patches.cpp) || N99_RC=$?
     sensor_stage1 "N99 headless mask" "src/gamepatches/mode_patches.cpp" "$N99_RC"
     sensor_nonempty "N99 headless mask" "non-comment lines of src/gamepatches/mode_patches.cpp" "$N99_MP"
-    if ! printf '%s\n' "$N99_MP" | grep -q 'ENGINE_FLAGS_HEADLESS_MASK'; then
+    if ! grep -q 'ENGINE_FLAGS_HEADLESS_MASK' <<<"$N99_MP"; then
         echo "verify: FAIL — N99 PatchEnableHeadless no longer applies ENGINE_FLAGS_HEADLESS_MASK." >&2
         echo "-server would leave bit 0 of pGame+0x1D4 SET and the game would open a window." >&2
         exit 1
@@ -891,7 +925,7 @@ verify:
     N99_BOOT_RC=0; N99_BOOT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/gamepatches/boot.cpp) || N99_BOOT_RC=$?
     sensor_stage1 "N99 boot flag advice" "src/gamepatches/boot.cpp" "$N99_BOOT_RC"
     sensor_nonempty "N99 boot flag advice" "non-comment lines of src/gamepatches/boot.cpp" "$N99_BOOT"
-    if printf '%s\n' "$N99_BOOT" | grep -qE 'is redundant|Remove this flag'; then
+    if grep -qE 'is redundant|Remove this flag' <<<"$N99_BOOT"; then
         echo "verify: FAIL — N99 boot.cpp tells the operator a flag is redundant / to remove it." >&2
         echo "-headless and -noovr are NATIVE echovr.exe flags the game itself consumes." >&2
         exit 1
