@@ -700,7 +700,12 @@ verify:
     fi
     # C2/N84: every PatchDetour shall name its hook. The parameter is required at
     # compile time, so this is belt-and-braces against someone re-adding a default.
-    if grep -qE 'const char\* name = nullptr' src/gamepatches/gamepatches_internal.h; then
+    # Match the DECLARATION, not prose. The first version of this check matched
+    # its own explanatory comment — which quotes the very string it forbids — so
+    # it failed on a correct tree. Comment lines are stripped; the pattern is
+    # anchored to the PatchDetour signature.
+    if grep -vE '^\s*(///|//|\*)' src/gamepatches/gamepatches_internal.h \
+         | grep -qE 'PatchDetour\(.*const char\* name\s*='; then
         echo "verify: FAIL — C2 PatchDetour's name parameter has a default again." >&2
         echo "22 of 24 sites omitted it when it was defaultable, so HookGuard's overwrite" >&2
         echo "alarm printed name=(unnamed) for almost every address it guards." >&2
