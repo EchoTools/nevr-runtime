@@ -1,5 +1,9 @@
 /* SYNTHESIS -- custom tool code, not from binary */
 /* Module version — uses NvrModuleContext instead of config.h globals */
+/* Log levels follow the N47 taxonomy: phase outcomes at Info, per-step detail
+ * at Debug. Merge 2f29312 once reverted nine Debug demotions here by taking a
+ * stale branch copy wholesale — a revert-by-merge diffs clean against both
+ * parents, so the N94 verify sensor pins those nine lines at Debug instead. */
 
 #include "token_auth.h"
 #include "common/nevr_module_interface.h"
@@ -90,13 +94,13 @@ bool DeviceAuth::TryLoadCachedToken() {
         m_discordId = auth.GetDiscordId();
 
         uint64_t remaining = (auth.token_expiry - static_cast<uint64_t>(time(nullptr))) / 60;
-        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Loaded cached token (expires in %llum)",
+        Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Loaded cached token (expires in %llum)",
             (unsigned long long)remaining);
         return true;
     }
 
     if (auth.HasValidRefreshToken() && m_configured) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Access token expired, attempting refresh...");
+        Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Access token expired, attempting refresh...");
         if (RefreshAuthToken(auth, m_url, m_httpKey)) {
             m_token = auth.token;
             m_tokenExpiry = auth.token_expiry;
@@ -109,9 +113,9 @@ bool DeviceAuth::TryLoadCachedToken() {
         }
         Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Token refresh failed -- will re-authenticate");
     } else if (!auth.refresh_token.empty()) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Both tokens expired -- will re-authenticate");
+        Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Both tokens expired -- will re-authenticate");
     } else {
-        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Cached token expired, no refresh token -- will re-authenticate");
+        Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Cached token expired, no refresh token -- will re-authenticate");
     }
 
     return false;
@@ -145,7 +149,7 @@ bool DeviceAuth::SaveToken() {
         return false;
     }
 
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Refresh token saved to .credentials.json");
+    Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Refresh token saved to .credentials.json");
     return true;
 }
 
@@ -327,7 +331,7 @@ bool DeviceAuth::RunDeviceAuthFlow() {
             return false;
         }
         if (i % 10 == 9) {
-            Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Still waiting for authorization... (%ds remaining)",
+            Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Still waiting for authorization... (%ds remaining)",
                 (maxPolls - i) * 3);
         }
     }
@@ -392,16 +396,16 @@ static void RefreshThreadFunc(std::string url, std::string httpKey) {
         if (cached.token_expiry > now + 300) continue;  // Still valid for >5 min
 
         if (cached.token_expiry > now) {
-            Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Token expires in %llus — refreshing",
+            Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Token expires in %llus — refreshing",
                 (unsigned long long)(cached.token_expiry - now));
         } else {
-            Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Token expired %llus ago — refreshing",
+            Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Token expired %llus ago — refreshing",
                 (unsigned long long)(now - cached.token_expiry));
         }
 
         if (cached.HasValidRefreshToken()) {
             if (RefreshAuthToken(cached, url, httpKey)) {
-                Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Token refreshed successfully");
+                Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Token refreshed successfully");
                 // Update the in-memory DeviceAuth instance so GetToken/GetDiscordId
                 // return the new token immediately (they no longer read from disk).
                 s_auth->UpdateFromRefresh(cached);

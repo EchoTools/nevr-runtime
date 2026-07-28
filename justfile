@@ -759,6 +759,31 @@ verify:
         echo "verify: FAIL — token-auth does not consult the JWT exp claim." >&2
         exit 1
     fi
+    # N94: nine [NEVR.AUTH] per-step detail lines are pinned at Debug (N47
+    # taxonomy, cfe96de). Merge 2f29312 reverted all nine to Info at once by
+    # taking a stale branch copy of this file wholesale; a revert-by-merge shows
+    # no diff against either parent, so only a content pin can catch a
+    # recurrence. If a pinned message is reworded, update this list in the same
+    # change — the nonempty guard makes a vanished message fail closed.
+    N94_FILE=src/modules/token-auth/src/token_auth.cpp
+    for msg in \
+        'Loaded cached token (expires in' \
+        'Access token expired, attempting refresh' \
+        'Both tokens expired -- will re-authenticate' \
+        'Cached token expired, no refresh token' \
+        'token saved to .credentials.json' \
+        'Still waiting for authorization' \
+        'Token expires in %llus' \
+        'Token expired %llus ago' \
+        'Token refreshed successfully'; do
+        N94_RC=0; N94_CTX=$(grep -B1 -F "$msg" "$N94_FILE") || N94_RC=$?
+        sensor_stage1 "N94 auth log taxonomy" "$N94_FILE" "$N94_RC"
+        sensor_nonempty "N94 auth log taxonomy" "message '$msg' in $N94_FILE" "$N94_CTX"
+        if printf '%s\n' "$N94_CTX" | grep -q 'LogLevel::Info'; then
+            echo "verify: FAIL — N94 the '[NEVR.AUTH] ${msg}' line is at Info; the N47 taxonomy pins it at Debug (merge 2f29312 once reverted all nine — BUGS.md N94)." >&2
+            exit 1
+        fi
+    done
     # C2/N84: every PatchDetour shall name its hook. The parameter is required at
     # compile time, so this is belt-and-braces against someone re-adding a default.
     # Match the DECLARATION, not prose. The first version of this check matched
