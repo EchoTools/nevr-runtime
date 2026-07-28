@@ -14,8 +14,16 @@ uint16_t GetWebSocketBridgePort();
 /// Returns true if the proxy is active and listening.
 bool IsWebSocketBridgeActive();
 
-/// Flag-only shutdown (avoids loader-lock deadlock).
+/// Flag-only shutdown. Safe under the loader lock (DLL_PROCESS_DETACH), where a
+/// thread join would deadlock. Does NOT release the listening socket.
 void ShutdownWebSocketBridge();
+
+/// N105: the real stop — closes remote connections and the listener, releasing
+/// the socket FD. Call ONLY from a context that does not hold the loader lock:
+/// the SIGINT/SIGTERM graceful path and gameserver's BeginGracefulShutdown.
+/// Replaces the GetProcAddress("ws_bridge.dll", "WsBridge_Shutdown") lookup that
+/// has resolved to null on every run since the N92 fold.
+void StopWebSocketBridgeListener();
 
 // ============================================================================
 // N61 behavioral test hooks — NEVR_TEST_HOOKS only.

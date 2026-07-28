@@ -824,6 +824,48 @@ void ShutdownWebSocketBridge() {
   g_bridgeEnabled = false;
   // Do NOT call g_server->stop() — runs under loader lock during DLL_PROCESS_DETACH.
   // Thread joins can deadlock. OS reclaims everything on process exit.
+  // The graceful path uses StopWebSocketBridgeListener() instead; see below.
+}
+
+// N105: the REAL stop, for callers that are NOT under the loader lock — the
+// SIGINT/SIGTERM graceful path and gameserver's BeginGracefulShutdown.
+//
+// This capability was lost by the N92 fold: the only definition of
+// WsBridge_Shutdown lives in src/modules/ws-bridge/, a module that stopped
+// being built, while two shipping call sites still resolved it with
+// GetProcAddress("ws_bridge.dll") and got null. Every server run since has
+// logged `ws_bridge=absent WsBridge_Shutdown=null` and left the listener up.
+//
+// Stopping the listener is what releases the socket FD. ixwebsocket never sets
+// SO_REUSEADDR (N37), so a leaked LISTEN socket is precisely the zombie-bind
+// condition N39's random-ephemeral-port retry exists to route around — that
+// workaround has been carrying the whole load alone.
+void StopWebSocketBridgeListener() {
+  g_bridgeEnabled = false;
+
+  // N60: collect under the lock, stop OUTSIDE it. stop() joins the callback
+  // thread, which may itself be waiting on g_pairsMutex — holding it here
+  // deadlocks shutdown.
+  std::vector<std::shared_ptr<ix::WebSocket>> remotes;
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    for (auto& pair : g_pairs) {
+      if (pair.second && pair.second->remoteWs) remotes.push_back(pair.second->remoteWs);
+    }
+    g_pairs.clear();
+    g_activeGameWs = nullptr;
+  }
+  for (auto& ws : remotes) {
+    ws->stop();
+  }
+
+  if (g_server) {
+    g_server->stop();
+    g_server.reset();
+  }
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.WS] listener stopped, %zu remote connection(s) closed — socket released (N105)",
+      remotes.size());
 }
 
 // ============================================================================

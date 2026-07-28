@@ -130,7 +130,7 @@ AGENTS.md          this file
 
 src/gamepatches/   BugSplat64.dll — hooks, CLI, mode patches, crash recovery,
                    config, module/plugin loading, in-process gameserver
-src/modules/       runtime-loaded modules: platform-compat, token-auth, ws-bridge
+src/modules/       runtime-loaded modules: platform-compat, token-auth
 src/common/        libcommon.a — logging, globals, symbols, hooking
 src/legacy/        FROZEN v1 — shall not be modified
 src/nevr_api/      generated protobuf (from BSR — see `just proto`)

@@ -34,7 +34,6 @@ interface.
 | ------ | ------ | ------- |
 | `platform-compat` | `platform_compat.dll` | Schannel TLS modernisation, WinHTTP→libcurl bridge, Wine `_temp` fix |
 | `token-auth` | `token_auth.dll` | Device-code auth, token cache |
-| `ws-bridge` | `ws_bridge.dll` | WebSocket TLS proxy and login injection |
 
 The bridge is why the game never negotiates TLS for its WebSocket traffic: it
 speaks plaintext to a local proxy, and the proxy terminates TLS outbound.
@@ -93,7 +92,7 @@ From `build/mingw-release/bin/`:
 
 ```
 src/gamepatches/   BugSplat64.dll — hooks, modes, crash recovery, gameserver
-src/modules/       runtime-loaded modules (platform-compat, token-auth, ws-bridge)
+src/modules/       runtime-loaded modules (platform-compat, token-auth)
 src/common/        libcommon.a
 src/nevr_api/      protobuf target
 src/legacy/        FROZEN v1

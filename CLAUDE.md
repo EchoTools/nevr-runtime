@@ -101,7 +101,6 @@ game binary, before plugins. These are **not** plugins — they use
 | ------ | ------ | ------- |
 | `src/modules/platform-compat/` | `platform_compat.dll` | Schannel TLS modernisation, WinHTTP→curl bridge, Wine `_temp` fix |
 | `src/modules/token-auth/` | `token_auth.dll` | Device-code auth, token cache, `TokenAuth_GetToken`/`GetDiscordId` |
-| `src/modules/ws-bridge/` | `ws_bridge.dll` | WebSocket TLS proxy and login injection (the **shipping** bridge — see N92) |
 
 ### Shared Libraries (static)
 

@@ -1,4 +1,5 @@
 #include "crash_recovery.h"
+#include "ws_bridge.h"
 
 #include <processthreadsapi.h>
 #include <psapi.h>
@@ -1020,22 +1021,19 @@ void InstallFatalErrorHandler() {
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Fatal error handler installed — server will exit on fatal errors");
 }
 
-// N62: WsBridge_Shutdown resolved ONCE at init. The signal path must never call
-// GetModuleHandleA/GetProcAddress — both serialise on the loader lock, and a
-// signal delivered while any thread holds it would deadlock the shutdown.
-typedef void (*WsBridgeShutdownFn)(void);
-static WsBridgeShutdownFn g_wsBridgeShutdown = nullptr;
-
+// N62/N105: the signal path must never take the loader lock — GetModuleHandleA
+// and GetProcAddress both serialise on it, and a signal arriving while another
+// thread holds it deadlocks shutdown permanently. N62 satisfied that by
+// resolving WsBridge_Shutdown ONCE at init; N105 satisfies it completely by
+// removing the lookup altogether. The bridge is compiled into this DLL (N92),
+// so PerformGracefulShutdown calls StopWebSocketBridgeListener() directly.
+//
+// The old lookup targeted ws_bridge.dll, which has not been built since the N92
+// fold — it returned null on every run and the listener was never stopped.
 void ResolveShutdownDependencies() {
-  HMODULE hWsBridge = GetModuleHandleA("ws_bridge.dll");
-  if (hWsBridge != nullptr) {
-    g_wsBridgeShutdown =
-        reinterpret_cast<WsBridgeShutdownFn>(GetProcAddress(hWsBridge, "WsBridge_Shutdown"));
-  }
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.PATCH] shutdown deps resolved ws_bridge=%s WsBridge_Shutdown=%s "
-      "(pre-resolved so the signal path takes no loader lock, N62)",
-      hWsBridge ? "loaded" : "absent", g_wsBridgeShutdown ? "found" : "null");
+      "[NEVR.PATCH] shutdown deps resolved ws_bridge=in-process "
+      "StopWebSocketBridgeListener=direct (no loader lock on the signal path, N62/N105)");
 }
 
 // N62: report from the shutdown path using a transport that is safe for the
@@ -1078,17 +1076,18 @@ void PerformGracefulShutdown(unsigned int exitCode) {
   //    the socket FD, preventing the wineserver from holding port 6821 as a
   //    zombie LISTEN socket after the process exits (N38 root cause).
   {
-    // N62: use the pointer resolved at init — NO GetModuleHandleA/GetProcAddress
-    // here. Both take the loader lock; a signal arriving while another thread
-    // holds it would deadlock this shutdown permanently.
-    if (g_wsBridgeShutdown != nullptr) {
-      ShutdownReport("[NEVR.PATCH] Stopping ws_bridge listener...");
-      g_wsBridgeShutdown();
-      ShutdownReport("[NEVR.PATCH] ws_bridge listener stopped — socket released");
-    } else {
-      ShutdownReport("[NEVR.PATCH] ws_bridge shutdown unavailable (not loaded at init) "
-                     "— listener may leak");
-    }
+    // N105: direct call into the in-process bridge. The N62 concern — never take
+    // the loader lock on the signal path — is satisfied more completely than
+    // before: there is no module handle and no symbol lookup at all, at init or
+    // here. The bridge is compiled into this DLL (N92).
+    //
+    // This replaces a GetProcAddress("ws_bridge.dll", "WsBridge_Shutdown") that
+    // has returned NULL on every run since the N92 fold, taking the else-branch
+    // and leaking the listener. Measured on three live runs 2026-07-28:
+    //   shutdown deps resolved ws_bridge=absent WsBridge_Shutdown=null
+    ShutdownReport("[NEVR.PATCH] Stopping ws_bridge listener...");
+    StopWebSocketBridgeListener();
+    ShutdownReport("[NEVR.PATCH] ws_bridge listener stopped — socket released");
   }
 
   // 2. Unhook MinHook hooks installed by Wave0 instrumentation.

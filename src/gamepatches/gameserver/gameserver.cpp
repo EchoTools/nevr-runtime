@@ -16,6 +16,7 @@
 #include "messages.h"
 
 #include "../config.h"
+#include "../ws_bridge.h"
 #include "../crash_recovery.h"
 #include "../gamepatches_internal.h"
 #include "nevr_curl.h"
@@ -1173,15 +1174,12 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
 
     Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Graceful shutdown complete — exiting");
 
-    // N64: release the ws_bridge listening socket before ForceFatalExit.
-    // PerformGracefulShutdown (crash_recovery.cpp) does this correctly;
-    // BeginGracefulShutdown's shutdown thread was missing this step.
-    // Without it, the wineserver may keep the socket alive as a zombie.
-    auto hWsBridge = GetModuleHandleA("ws_bridge.dll");
-    if (hWsBridge) {
-      auto pfn = (void (*)())GetProcAddress(hWsBridge, "WsBridge_Shutdown");
-      if (pfn) pfn();
-    }
+    // N64/N105: release the ws_bridge listening socket before ForceFatalExit,
+    // or the wineserver keeps it alive as a zombie LISTEN socket.
+    // Was a GetProcAddress into ws_bridge.dll — a module that has not been built
+    // since the N92 fold, so the lookup returned null and this step silently did
+    // nothing. Direct call now; the bridge is in this DLL.
+    StopWebSocketBridgeListener();
 
     // Route through ForceFatalExit: the crash_recovery ExitProcessHook suppresses
     // raw ExitProcess in server mode (to survive the game's crash reporter), which

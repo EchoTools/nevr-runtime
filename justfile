@@ -346,9 +346,34 @@ verify:
         echo "verify: FAIL — N63 re-entry gate still returns (Sleep+return), should be ForceFatalExit" >&2
         exit 1
     fi
-    # N64: BeginGracefulShutdown must call WsBridge_Shutdown before ForceFatalExit
-    if ! grep -q 'WsBridge_Shutdown' src/gamepatches/gameserver/gameserver.cpp; then
-        echo "verify: FAIL — N64 WsBridge_Shutdown call missing from BeginGracefulShutdown" >&2
+    # N64/N105: BeginGracefulShutdown must release the listener before ForceFatalExit.
+    # The old sensor matched the STRING 'WsBridge_Shutdown', which a
+    # GetProcAddress returning null satisfies perfectly — and did, on every run
+    # from the N92 fold until 2026-07-28. Assert the DIRECT call instead: a
+    # symbol the linker must resolve, not a name looked up at runtime.
+    if ! grep -q 'StopWebSocketBridgeListener()' src/gamepatches/gameserver/gameserver.cpp; then
+        echo "verify: FAIL — N64/N105 BeginGracefulShutdown does not call StopWebSocketBridgeListener();" >&2
+        echo "the ws bridge listening socket leaks as a wineserver zombie (N37: no SO_REUSEADDR)." >&2
+        exit 1
+    fi
+    # The graceful signal path must release it too, and must not reintroduce a
+    # runtime symbol lookup on a path that cannot take the loader lock (N62).
+    if ! grep -q 'StopWebSocketBridgeListener()' src/gamepatches/crash_recovery.cpp; then
+        echo "verify: FAIL — N105 PerformGracefulShutdown does not call StopWebSocketBridgeListener()." >&2
+        exit 1
+    fi
+    # Scoped to ResolveShutdownDependencies, NOT the whole file: crash_recovery.cpp
+    # legitimately resolves the four kernel32 hooks (CreateProcessA/W, ExitProcess,
+    # TerminateProcess) at INIT, where the loader lock is fine. The constraint is
+    # that the shutdown-dependency resolver no longer performs a lookup at all —
+    # the bridge is in-process now. PerformGracefulShutdown's own body is covered
+    # separately by the N62 sensor above.
+    N105_RC=0; N105_RSD=$(awk '/^void ResolveShutdownDependencies/,/^}/' src/gamepatches/crash_recovery.cpp) || N105_RC=$?
+    sensor_stage1 "N105 shutdown resolver" "src/gamepatches/crash_recovery.cpp" "$N105_RC"
+    sensor_nonempty "N105 shutdown resolver" "ResolveShutdownDependencies() body" "$N105_RSD"
+    if grep -qE 'GetProcAddress|GetModuleHandleA' <<<"$N105_RSD"; then
+        echo "verify: FAIL — N62/N105 ResolveShutdownDependencies resolves a symbol at runtime again." >&2
+        echo "The ws bridge is compiled into this DLL; call StopWebSocketBridgeListener() directly." >&2
         exit 1
     fi
     # N102: the two fail-fast sites N48 introduced must live in the copy that
@@ -569,7 +594,7 @@ verify:
     # (upstream vcpkg dep) and is instead made unreachable by N39: pick a random
     # ephemeral port and retry. Both properties must survive, or the old
     # hardcoded-port failure returns with no way to fix it.
-    for f in src/modules/ws-bridge/src/ws_bridge.cpp src/gamepatches/ws_bridge.cpp; do
+    for f in src/gamepatches/ws_bridge.cpp; do
         if ! grep -q 'uniform_int_distribution<uint16_t> dist(49152, 65535)' "$f"; then
             echo "verify: FAIL — N37/N39 random ephemeral-port selection missing from $f;" >&2
             echo "a fixed port reintroduces the zombie-socket bind failure ixwebsocket cannot recover from." >&2
@@ -649,16 +674,22 @@ verify:
     # alone is satisfiable by the bug — the first fires if the fallback is deleted,
     # the second if it is re-gated on server mode. Both failures are silent in
     # production: the only symptom is a WARNING line and a login as account 0.
-    # Asserted against src/modules/ws-bridge/ because THAT is the copy that ships —
-    # InstallWebSocketBridge has exactly one call site, in the module's
-    # NvrModuleInit; the src/gamepatches/ws_bridge.cpp copy compiles and never runs
-    # (N92). A sensor on the gamepatches copy would watch dead code.
-    if ! grep -q 'Using nevr_discord_id from config' src/modules/ws-bridge/src/ws_bridge.cpp; then
+    # RETARGETED 2026-07-28 (N105). This sensor read: "asserted against
+    # src/modules/ws-bridge/ because THAT is the copy that ships". That was true
+    # when written and the N92 fold INVERTED it — gamepatches became the shipping
+    # copy and the module stopped being built — so from 2026-07-27 this guarantee
+    # was asserted against code that never runs. The invariant does hold in the
+    # shipping copy (ws_bridge.cpp:396); only the sensor was aimed wrong.
+    N20A_RC=0; grep -q 'Using nevr_discord_id from config' src/gamepatches/ws_bridge.cpp || N20A_RC=$?
+    sensor_stage1 "N20 discord-id config fallback" "src/gamepatches/ws_bridge.cpp" "$N20A_RC"
+    if [ "$N20A_RC" -ne 0 ]; then
         echo "verify: FAIL — N20 nevr_discord_id config fallback missing from the shipping" >&2
-        echo "ws-bridge module (src/modules/ws-bridge/src/ws_bridge.cpp)." >&2
+        echo "ws bridge (src/gamepatches/ws_bridge.cpp)." >&2
         exit 1
     fi
-    if grep -n 'discordId == 0 &&.*g_isServer' src/modules/ws-bridge/src/ws_bridge.cpp; then
+    N20B_RC=0; grep -n 'discordId == 0 &&.*g_isServer' src/gamepatches/ws_bridge.cpp || N20B_RC=$?
+    sensor_stage1 "N20 fallback not server-gated" "src/gamepatches/ws_bridge.cpp" "$N20B_RC"
+    if [ "$N20B_RC" -eq 0 ]; then
         echo "verify: FAIL — N20 the config discord-id fallback is gated on g_isServer;" >&2
         echo "the owner decision (2026-07-27) is that it applies in CLIENT mode too." >&2
         exit 1
@@ -754,9 +785,11 @@ verify:
     # in README.md and CLAUDE.md because nothing checked. A fact about the tree
     # asserted in prose drifts silently; this is the cheapest possible enforcement.
     python3 tools/verify_doc_paths.py
-    # N92: exactly one ws_bridge. Two divergent copies existed for months — only
-    # the module ran, while N61's matchmaker fix landed in the gamepatches copy
-    # that never did. The fold is only safe while the module cannot come back.
+    # N92/N105: exactly one ws_bridge. Two divergent copies existed for months —
+    # only the module ran, while N61's matchmaker fix landed in the gamepatches
+    # copy that never did. The module tree was DELETED 2026-07-28 once its last
+    # unique symbol (WsBridge_Shutdown) was brought in-process as
+    # StopWebSocketBridgeListener. This guard keeps it from coming back.
     N92A_RC=0; grep -qE '^\s*add_subdirectory\(src/modules/ws-bridge\)' CMakeLists.txt || N92A_RC=$?
     sensor_stage1 "N92 ws-bridge module build" "CMakeLists.txt" "$N92A_RC"
     if [ "$N92A_RC" -eq 0 ]; then

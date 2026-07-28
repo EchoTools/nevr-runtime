@@ -187,10 +187,6 @@ add_subdirectory(src/nevr_api)
 add_subdirectory(src/gamepatches)
 add_subdirectory(src/modules/platform-compat)
 add_subdirectory(src/modules/token-auth)
-# N92: ws-bridge folded into gamepatches (BugSplat64.dll) on 2026-07-27.
-# Two divergent copies existed; only the module ran, while fixes landed in the
-# other. One owner now. Source retained at src/modules/ws-bridge/ pending
-# removal — see the N92 ledger entry.
 add_subdirectory(src/legacy/gamepatches)
 # src/pnsrad and its src/NRadEngine symlink were removed 2026-07-27. It was an
 # OBJECT library that NOTHING consumed — 28 objects compiled into no artifact —
