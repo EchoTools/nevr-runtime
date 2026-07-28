@@ -20,7 +20,6 @@ set(PATCHES_SOURCES
     "resource_override.cpp"
     "winhttp_stub.cpp"
     "ws_bridge.cpp"
-    "token_auth.cpp"
     "xpid_patch.cpp"
     "wave0_instrumentation.cpp"
     "pnsrad_enabler.cpp"
@@ -100,7 +99,7 @@ target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl i
 target_link_directories(gamepatches PRIVATE common)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(ws_bridge.cpp token_auth.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(ws_bridge.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(gameserver/websocket_client.cpp gameserver/telemetry_streamer.cpp gameserver/upnp.cpp gameserver/gameserver.cpp gameserver/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 set_target_properties(gamepatches PROPERTIES

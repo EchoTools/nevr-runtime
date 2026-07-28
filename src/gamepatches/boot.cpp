@@ -8,7 +8,6 @@
 #include "plugin_loader.h"
 #include "module_loader.h"
 #include "ws_bridge.h"
-#include "token_auth.h"
 #include "pnsrad_enabler.h"
 #include "wave0_instrumentation.h"
 #include "patch_addresses.h"
@@ -30,7 +29,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   InstallResourceOverride();
 
   // Early-detect -server before auth — full CLI parse happens below.
-  // TokenAuth::Init needs to know server mode to skip device code flow.
+  // The token_auth MODULE needs to know server mode to skip the device-code flow.
   {
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);

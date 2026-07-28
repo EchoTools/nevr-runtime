@@ -16,7 +16,6 @@
 #include "initialize.h"
 #include "plugin_loader.h"
 #include "wave0_instrumentation.h"
-#include "token_auth.h"
 #include "builtin_log_filter.h"
 #include "resource_override.h"
 
@@ -102,7 +101,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         UnloadModules();
         AssetCDN::Shutdown();
         Wave0::Shutdown();
-        TokenAuth::Shutdown();
         BroadcasterGuard::Shutdown();
         BuiltinLogFilter::Shutdown();
         ShutdownResourceOverride();
