@@ -117,13 +117,33 @@ constexpr size_t HEADLESS_RENDERER_SIZE = 2;
 constexpr uintptr_t HEADLESS_EFFECTS = 0x62CA91;
 constexpr size_t HEADLESS_EFFECTS_SIZE = 2;
 
-/// HEADLESS_DELTATIME (0xCF46D, JLE->JAE) removed 2026-07-27 — it had zero users
-/// here, and that is CORRECT, not a regression. The fix only matters under fixed
-/// timestep, and `-timestep`/`-fixedtimestep` are deprecated-and-ignored in this
-/// build (boot.cpp: logs "is deprecated and ignored"). v1 applies it inside
-/// `if (isHeadless && headlessTimeStep != 0)`, a condition that can no longer be
-/// true. Do not "restore" this patch without first re-enabling fixed timestep —
-/// applying it unconditionally patches the game for a mode it is not in.
+/// HEADLESS_DELTATIME (0xCF46D) removed 2026-07-27. Two independent reasons, and
+/// the SECOND is the decisive one — an earlier version of this note gave only the
+/// first, which understates how wrong restoring it would be.
+///
+/// (1) It only matters under fixed timestep, and `-timestep`/`-fixedtimestep` are
+///     deprecated-and-ignored in this build (boot.cpp logs "is deprecated and
+///     ignored" and discards the value). v1 applies it inside
+///     `if (isHeadless && headlessTimeStep != 0)` — a condition that can no
+///     longer be true.
+///
+/// (2) THE PATCH IS ALREADY IN THE SHIPPED BINARY, AND THE v1 BYTES NO LONGER
+///     MATCH IT. Measured on echovr/bin/win10/echovr.exe:
+///
+///         shipped at RVA 0xCF46D : 73 67     (jae +0x67 -> 0x1400CF4D6)
+///         v1 patch writes        : 73 7a     (jae +0x7a -> 0x1400CF4E9)
+///
+///     Opcode 0x73 is identical — the "JLE (signed) -> JAE (unsigned)" fix the v1
+///     comment describes is ALREADY PRESENT in the game as shipped. Only the
+///     displacement differs, so applying the v1 patch today would not fix a
+///     comparison; it would RETARGET THE JUMP by 0x13 bytes into an unrelated
+///     branch (0x1400CF4E9: `lea 0x8(%rdi),%rcx` + call). That patch was written
+///     against a DIFFERENT BUILD of echovr.exe.
+///
+/// So this is not dead weight that happens to be harmless — restoring it would
+/// corrupt control flow. If you find the v1 DLLs applying it and conclude this
+/// build has a regression, re-read the shipped bytes first. That is exactly the
+/// conclusion the evidence invites and it is wrong.
 
 /// ReVault VA 0x140109209: CALL to FUN_140c31870 (ApplyGraphicsSettings) inside FUN_1401090c0
 /// FUN_140c31870 calls ~66 CGRenderer methods (MSAA, TAA, resolution scale, etc.)
