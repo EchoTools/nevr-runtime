@@ -68,7 +68,7 @@ Fixes are grouped into **waves**. Each wave is a logical unit that can be tested
 **Risk:** Low. Hooks modify function prologues via MinHook. Use atomic counters (InterlockedIncrement) for multi-threaded call sites — GetTimeMicroseconds has 12 callers across physics/render/network threads. Log only on overflow detection, not every call. Install hooks before game threads start.
 **Test:** Run server + client for extended session. Check logs for trigger counts.
 **Deploy:** Server first (gate on g_isServer). Client after 48h server soak.
-**Implementation:** New file `src/runtime/patch/binary_bug_fixes.cpp`. Follow the MinHook trampoline pattern from `builtin_server_timing.cpp` (MH_CreateHook → MH_EnableHook, store original in static function pointer). Call from `patches.cpp` initialization after `Hooking::Initialize()`.
+**Implementation:** New file `src/runtime/patch/binary_bug_fixes.cpp`. Follow the MinHook trampoline pattern already in that file (MH_CreateHook -> MH_EnableHook, original stored in a static function pointer). (This said "follow the pattern from builtin_server_timing.cpp" — that file was found to be 100% dead code and deleted in `c7c9d51`, finishing what ledger N26 started. It is not a pattern to copy from because it never ran. patches.cpp is likewise gone; the call site is `src/runtime/lifecycle/initialize.cpp`.)
 
 ### Wave 1 — Crash prevention (null checks, bounds checks)
 

@@ -54,6 +54,36 @@ ALLOWED_ABSENT = {
 # convincing-looking pointer to nothing.
 CITATION_RE = re.compile(r"git show ([0-9a-f]{40}):([A-Za-z0-9_./-]+)")
 
+# A backticked BARE filename — `foo.cpp`, not `src/runtime/foo.cpp`. The
+# directory-prefixed check below cannot see these, because it only inspects
+# tokens starting with a known ROOT. That blind spot let two renames rot in
+# place: `wave0_instrumentation.cpp` (renamed to binary_bug_fixes.cpp in the
+# 2026-07-29 reorganisation) and `builtin_server_timing.cpp` (deleted as dead
+# code, ledger N26). Both read as current source files and neither existed.
+#
+# A bare filename is resolved against every tracked BASENAME in the repo, so it
+# does not care which directory the file lives in — which is exactly right: a
+# rename that only moves a file should not fail, and a rename that changes the
+# NAME should.
+BARE_FILE_RE = re.compile(r"`([A-Za-z0-9_][A-Za-z0-9_.\-]*\.(?:cpp|h|hpp|py|def|cmake|sh))`")
+
+# Bare filenames that legitimately do not resolve here. Each needs a reason —
+# this list is how the check stays useful rather than becoming a place to dump
+# anything inconvenient.
+BARE_ALLOWED = {
+    # Naming-convention EXAMPLES, not files. Deliberately not real.
+    "SHOUTY.md", "lowercase-kebab-case.md", "2026-07-26-thing.md",
+    # Files owned by other projects / toolchains, correctly named and not ours.
+    "android.toolchain.cmake",          # Android NDK
+    "CPP-MINGW-ADDENDUM-GENERIC.md",    # ~/src/metis-core, a mandatory pre-read
+    "CNSRADFriends_protocol.h",         # echovr-reconstruction
+    "pnsrad.def",                       # echovr-reconstruction
+    "dxvk-interop.h",                   # DXVK, referenced as a porting option
+    # A file a design doc PROPOSES and which was deliberately never built.
+    # See the status header on 2026-06-09-streaming-integration.md.
+    "stream_client.cpp",
+}
+
 
 def citations():
     """(file, sha, path) for every `git show <sha>:<path>` in a tracked .md."""
@@ -102,6 +132,25 @@ def main() -> int:
 
     cited = cited_paths()
 
+    # Bare backticked filenames, resolved by basename against the tracked tree.
+    tracked = subprocess.run(["git", "ls-files"], cwd=REPO,
+                             capture_output=True, text=True).stdout.split()
+    basenames = {pathlib.Path(t).name for t in tracked}
+    bare_bad = []
+    for f in subprocess.run(["git", "ls-files", "*.md"], cwd=REPO,
+                            capture_output=True, text=True).stdout.split():
+        if f == "BUGS.md" or f.startswith("docs/audits/"):
+            continue
+        for m in BARE_FILE_RE.finditer((REPO / f).read_text(errors="replace")):
+            name = m.group(1)
+            if name in BARE_ALLOWED or name in basenames:
+                continue
+            bare_bad.append((f, name))
+    for f, name in bare_bad:
+        print(f"doc-paths: FAIL {f} names `{name}` — no file with that basename "
+              f"exists. If it was renamed, use the new name; if removed, drop the "
+              f"backticks or cite `git show <sha>:<path>`.", file=sys.stderr)
+
     bad = []
     for f, raw, p in claimed_paths():
         if p in ALLOWED_ABSENT:
@@ -112,7 +161,7 @@ def main() -> int:
             bad.append((f, raw))
     for f, raw in bad:
         print(f"doc-paths: FAIL {f} claims `{raw}` — no such path", file=sys.stderr)
-    if bad or dead_citations:
+    if bad or dead_citations or bare_bad:
         if bad:
             print(f"\ndoc-paths: {len(bad)} claimed path(s) do not exist. A document that "
                   f"names a path that is not there sends the next reader somewhere real "
@@ -123,6 +172,12 @@ def main() -> int:
                   f"resolve. Get the sha with `git log -1 --format=%H -- <path>` and "
                   f"confirm with `git show <sha>:<path>` BEFORE writing it down.",
                   file=sys.stderr)
+        return 1
+    if bare_bad:
+        print(f"\ndoc-paths: {len(bare_bad)} bare filename(s) name nothing in the tree. "
+              f"These are invisible to the path check above, which only inspects tokens "
+              f"starting with a known root — that blind spot is how two renames rotted "
+              f"in place.", file=sys.stderr)
         return 1
     n = len(cited_paths())
     print(f"doc-paths: OK (all claimed repo paths resolve"

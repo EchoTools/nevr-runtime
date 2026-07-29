@@ -17,7 +17,7 @@ offset / prologue / branch that each Windows patch rewrites. Those are the
 
 | Side | Source | Command |
 | --- | --- | --- |
-| Windows | `src/runtime/hook/addresses.h`, `mode_patches.cpp`, `wave0_instrumentation.cpp`, `asset_cdn.cpp`, `initialize.cpp`, `src/abi/echovr_functions.cpp`, `plugins/common/include/address_registry.h`, `plugins/{broadcaster-bridge,log-filter,crash-handler}` | source read |
+| Windows | `src/runtime/hook/addresses.h`, `mode_patches.cpp`, `binary_bug_fixes.cpp`, `asset_cdn.cpp`, `initialize.cpp`, `src/abi/echovr_functions.cpp`, `plugins/common/include/address_registry.h`, `plugins/{broadcaster-bridge,log-filter,crash-handler}` | source read |
 | Quest symbols | `.../quest_triage/apk_contents/lib/arm64-v8a/{libr15,libpnsrad,libpnsovr,libpnsradmatchmaking,libovrplatformloader}.so` | `nm -DC <lib>` (demangled name + arm64 VA) |
 | Quest addresses | ReVault binary **id 576 = libr15.so** (aarch64 ELF, base `0x0`) | `revault fn show <0xVA> --binary libr15.so` |
 
@@ -123,7 +123,17 @@ social backend, mirrors Windows `pnsovr.dll`) and **libpnsradmatchmaking.so**
 | BroadcasterReceiveLocal (`VA_BROADCASTER_RECEIVE_LOCAL`) | `0x140f87aa0` | local-event receive tap | `NRadEngine::CBroadcaster::SendLocalEvent(CMatSym, unsigned int, void const*, unsigned long long)` + `ReceiveLocalEvent` path | libr15 | `0x24eda04` | yes |
 | BroadcasterListen (`VA_BROADCASTER_LISTEN`) — also `ENGINE_ENTITY_LOOKUP` null-guard target | `0x140f80ed0` | message listen registration | `NRadEngine::CBroadcaster::ListenProxy<SBroadcasterData, S*Event>(...)` (per-message templates) | libr15 | `0x250bbd4`… | yes |
 | TcpBroadcasterListen | `0x140f81100` | TCP listen registration | `NRadEngine::CTcpBroadcaster::ListenProxy<CNSConfigs, S*>(...)` | libr15 | `0x1936978`… | yes |
-| EnableBodyComponents (bridge `VA_ENABLE_BODY_COMPONENTS`) | `0x140cd07e0` | spectator body-component enable for mirror | `NRadEngine::NRadGame::CR15NetSpectatorCameraCS::EnableBodyComponents(unsigned int, CncaGameSpaceMT*)` | libr15 | `0x219c8dc` | yes |
+| EnableBodyComponents (was bridge `VA_ENABLE_BODY_COMPONENTS`, **no longer in this repo** — see note below) | `0x140cd07e0` | spectator body-component enable for mirror | `NRadEngine::NRadGame::CR15NetSpectatorCameraCS::EnableBodyComponents(unsigned int, CncaGameSpaceMT*)` | libr15 | `0x219c8dc` | yes |
+
+> **`VA_ENABLE_BODY_COMPONENTS` is not resolvable from this repository.** It lived
+> only in the `broadcaster-bridge` plugin, which moved to `nevr-runtime-plugins` on
+> 2026-07-26 (`85d483e`) because this repo is public and the plugin is a broadcaster
+> injection tool. `git log -S'VA_ENABLE_BODY_COMPONENTS'` confirms it never existed
+> anywhere else here. The VA above stands on its own; the constant name does not.
+> (Same treatment as the pnsrad note in section 2.) The sibling broadcaster
+> constants — `VA_BROADCASTER_SEND`, `_RECEIVE_LOCAL`, `_LISTEN` — ARE still live, in
+> the shared `plugins/common/include/address_registry.h`.
+
 | ENGINE_ENTITY_PROP_DISPATCH null-guard (`fcn.140f87aa0`) | `0x140f87aa0` | server-mode AV guard (same VA as ReceiveLocal) | (as BroadcasterReceiveLocal above) | libr15 | `0x24eda04` | yes |
 
 **Note:** the Windows patch set overloads three raw VAs
