@@ -41,8 +41,8 @@
 #include "hook_liveness.h"
 #include "builtin_log_filter.h"
 #include "patch_addresses.h"
-#include "common/globals.h"
-#include "common/logging.h"
+#include "core/globals.h"
+#include "core/logging.h"
 #include "plugin_loader.h"    // N68: TickPlugins
 #include "module_loader.h"    // N68: TickModules
 #include "nevr_common.h"      // N96: ResolveVA_Checked / ResolveVA_Unchecked

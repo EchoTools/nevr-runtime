@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/nevr_plugin_interface.h"
+#include "extension/plugin_interface.h"
 
 // Discover and load all plugins from the plugins/ subdirectory.
 // Must be called after Hooking::Initialize() and after g_isServer/g_isHeadless are known.

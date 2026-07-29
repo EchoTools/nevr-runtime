@@ -1,7 +1,7 @@
 #pragma once
 
-#include "common/pch.h"
-#include "common/echovr.h"
+#include "core/pch.h"
+#include "abi/echovr.h"
 
 /// <summary>
 /// The game instance pointer -- stored globally for social message injection.

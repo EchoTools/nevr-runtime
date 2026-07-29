@@ -11,10 +11,10 @@
 #include "pnsrad_enabler.h"
 #include "wave0_instrumentation.h"
 #include "patch_addresses.h"
-#include "common/globals.h"
-#include "common/logging.h"
-#include "common/echovr_functions.h"
-#include "common/nevr_module_interface.h"
+#include "core/globals.h"
+#include "core/logging.h"
+#include "abi/echovr_functions.h"
+#include "extension/module_interface.h"
 
 #include <cstdlib>
 #include <shellapi.h>

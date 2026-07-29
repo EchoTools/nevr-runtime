@@ -2,7 +2,7 @@
 
 #pragma once
 
-#include "auth_token.h"
+#include "core/auth_token.h"
 #include "nevr_curl.h"
 
 #include <nlohmann/json.hpp>

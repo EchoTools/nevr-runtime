@@ -8,12 +8,12 @@
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 
-#include "auth_token.h"
+#include "core/auth_token.h"
 #include "auth_token_refresh.h"
 #include "constants.h"
-#include "echovr.h"
-#include "echovr_functions.h"
-#include "globals.h"
+#include "abi/echovr.h"
+#include "abi/echovr_functions.h"
+#include "core/globals.h"
 #include "messages.h"
 
 #include "../config.h"
@@ -21,7 +21,7 @@
 #include "../crash_recovery.h"
 #include "../gamepatches_internal.h"
 #include "nevr_curl.h"
-#include "pch.h"
+#include "core/pch.h"
 #include "upnp.h"
 #include "gameservice/v1/gameservice.pb.h"
 
@@ -38,12 +38,12 @@ static void CallScheduleReturnToLobby() {
     if (g_pGame) EchoVR::NetGameScheduleReturnToLobby(g_pGame);
 }
 
-#include "common/logging.h"
+#include "core/logging.h"
 
 using namespace GameServer;
 
 // D1/N78: this file used to define its own ::Log — a SECOND strong definition of
-// the same mangled symbol as src/common/logging.cpp, both linked into
+// the same mangled symbol as src/core/logging.cpp, both linked into
 // BugSplat64.dll. Confirmed with nm: `T _Z3LogN6EchoVR8LogLevelEPKcz` in both
 // gamepatches.dir/gameserver/gameserver.cpp.obj and common.dir/logging.cpp.obj.
 //

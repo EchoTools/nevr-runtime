@@ -6,11 +6,11 @@
  * parents, so the N94 verify sensor pins those nine lines at Debug instead. */
 
 #include "token_auth.h"
-#include "common/nevr_module_interface.h"
-#include "common/echovr_functions.h"
-#include "common/logging.h"
+#include "extension/module_interface.h"
+#include "abi/echovr_functions.h"
+#include "core/logging.h"
 
-#include "common/auth_token.h"
+#include "core/auth_token.h"
 #include "auth_token_refresh.h"
 #include "nevr_curl.h"
 

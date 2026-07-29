@@ -30,8 +30,8 @@
 
 #include "headless_graphics.h"
 #include "dll_load_hook.h"
-#include "common/globals.h"
-#include "common/logging.h"
+#include "core/globals.h"
+#include "core/logging.h"
 
 #include <cstdio>
 #include <cstring>

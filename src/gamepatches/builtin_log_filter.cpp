@@ -13,7 +13,7 @@
  */
 
 #include "builtin_log_filter.h"
-#include "common/logging.h"
+#include "core/logging.h"
 
 #include <MinHook.h>
 #include <nlohmann/json.hpp>

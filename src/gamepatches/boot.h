@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/pch.h"
+#include "core/pch.h"
 
 /// <summary>
 /// A detour hook for the game's command line pre-processing method, used to parse command line arguments.

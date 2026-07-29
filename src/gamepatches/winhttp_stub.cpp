@@ -6,7 +6,7 @@
 #include <cstring>
 #include <new>
 
-#include "common/logging.h"
+#include "core/logging.h"
 
 // IWinHttpRequest IID — {A1C9FEEE-0617-4F23-9D58-8961EA43567C}
 static const IID IID_IWinHttpRequest = {0xA1C9FEEE, 0x0617, 0x4F23, {0x9D, 0x58, 0x89, 0x61, 0xEA, 0x43, 0x56, 0x7C}};

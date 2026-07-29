@@ -24,7 +24,7 @@
  * ====================================================================== */
 
 #include "pnsrad_enabler.h"
-#include "common/logging.h"
+#include "core/logging.h"
 #include "nevr_common.h"      // N97: the one ValidatePrologue
 
 #include <cstring>

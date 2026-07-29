@@ -1,7 +1,7 @@
 #include "xpid_patch.h"
 
 #include "gamepatches_internal.h"
-#include "common/logging.h"
+#include "core/logging.h"
 #include "patch_addresses.h"
 
 // Expected original bytes at each patch site (for validation).

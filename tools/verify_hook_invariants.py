@@ -123,7 +123,7 @@ def norm_va(value: int) -> int:
 # place to update, and so forgetting to update it fails loudly instead of
 # quietly reducing this gate to a no-op.
 
-FN_POINTER_SRC = "src/common/echovr_functions.cpp"
+FN_POINTER_SRC = "src/abi/echovr_functions.cpp"
 PATCH_ADDR_HDR = "src/gamepatches/patch_addresses.h"
 ADDR_REGISTRY_HDR = "plugins/common/include/address_registry.h"
 DETOUR_SCAN_ROOT = "src/gamepatches"
@@ -322,7 +322,7 @@ def check_self_collision(failures, warnings, seen):
     for va in sorted(set(called) & set(detoured)):
         seen.add(va)
         desc = (f"0x{va:X} is CALLED as EchoVR::{called[va]} "
-                f"(src/common/echovr_functions.cpp) and DETOURED as "
+                f"(src/abi/echovr_functions.cpp) and DETOURED as "
                 f"PatchAddresses::{detoured[va]} (src/gamepatches/). "
                 f"Our own calls re-enter our own hook.")
         if va in KNOWN_SELF_COLLISIONS:

@@ -16,9 +16,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "common/echovr_functions.h"
-#include "common/hooking.h"
-#include "common/logging.h"
+#include "abi/echovr_functions.h"
+#include "core/hooking.h"
+#include "core/logging.h"
 #include "nevr_common.h"      // N97: the one ValidatePrologue
 #include "patch_addresses.h"
 

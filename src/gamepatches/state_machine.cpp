@@ -8,9 +8,9 @@
 #include "crash_recovery.h"
 #include "module_loader.h"
 #include "plugin_loader.h"
-#include "common/globals.h"
-#include "common/logging.h"
-#include "common/echovr_functions.h"
+#include "core/globals.h"
+#include "core/logging.h"
+#include "abi/echovr_functions.h"
 
 /// Tracks whether the server has entered a game session (InGame state).
 /// Used to detect session completion when the state returns to Lobby.

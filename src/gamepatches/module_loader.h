@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/nevr_module_interface.h"
+#include "extension/module_interface.h"
 
 /// Load a module DLL from the modules/ subdirectory next to echovr.exe.
 /// Calls NvrModuleInit — on failure, calls FatalError (game exits).

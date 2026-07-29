@@ -6,8 +6,8 @@
 //      and trigger initialization.
 //   2. Legacy mode: deployed as dbgcore.dll (DLL hijacking for early load).
 //      DllMain detects this and initializes immediately.
-#include "common/pch.h"
-#include "common/echovr_functions.h"
+#include "core/pch.h"
+#include "abi/echovr_functions.h"
 #include "asset_cdn.h"
 #include "broadcaster_guard.h"
 #include "module_loader.h"

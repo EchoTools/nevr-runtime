@@ -73,7 +73,7 @@ GameServer communicates with ServerDB via WebSocket (ixwebsocket) and uses proto
 
 ### Plugins
 
-Optional DLLs loaded by gamepatches at runtime from a `plugins/` subdirectory next to the game binary. Each plugin implements the `NvrPluginInterface` lifecycle (see `src/common/nevr_plugin_interface.h`). Source lives in `plugins/<name>/`.
+Optional DLLs loaded by gamepatches at runtime from a `plugins/` subdirectory next to the game binary. Each plugin implements the `NvrPluginInterface` lifecycle (see `src/extension/plugin_interface.h`). Source lives in `plugins/<name>/`.
 
 | Plugin               | Output DLL               | Purpose                                              |
 | -------------------- | ------------------------ | ---------------------------------------------------- |
@@ -104,8 +104,33 @@ game binary, before plugins. These are **not** plugins — they use
 
 ### Shared Libraries (static)
 
-- **`src/common/`** → `libcommon.a` — Logging, globals, base64, symbol helpers
+Split by **what the knowledge is**, not by who uses it. A single directory named
+"common" used to hold all three — the classic junk drawer.
+
+- **`src/abi/`** → `libnevr_abi.a` — the echovr.exe ABI surface: game types
+  (`echovr.h`), the function pointers we call through (`echovr_functions.cpp`),
+  symbol IDs (`symbols.h`), CSymbol64 hashing (`symbol_hash.h`). Membership test:
+  *the binary told us this*. If a fact here is wrong, the reconstruction is wrong.
+- **`src/core/`** → `libnevr_core.a` — NEVR's own primitives: logging, CLI-flag
+  globals, base64, the hooking abstraction, the auth-token model, `pch.h`.
+  Membership test: *we wrote this*. Links `nevr_abi` PUBLIC.
+- **`src/extension/`** — header-only published C ABI for third-party DLLs
+  (`plugin_interface.h`, `module_interface.h`). Membership test: *someone else
+  compiles against this*, so changing it is a breaking change.
 - **`src/nevr_api/`** → protobuf target, generated into `gen/cpp/` (see `just proto`)
+
+**The dependency runs `core` → `abi`, never the reverse** (`EchoVR::LogLevel` is a
+game enum, so logging genuinely sits on the ABI layer). `just verify` enforces it.
+
+Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
+`#include "echovr.h"`. `src/` is on the global include path (root
+`CMakeLists.txt`), so the spelling states which layer a dependency crosses.
+
+- **`src/legacy-compat/`** — two forwarding headers, existing solely because
+  `src/legacy/gamepatches` is frozen yet resolves `common/hooking.h` and
+  `common/nevr_plugin_interface.h` out of the pre-2026-07-29 shared directory.
+  Scoped to that
+  one target. Delete with `src/legacy/`.
 
 ### Key Source Files
 
@@ -118,8 +143,8 @@ game binary, before plugins. These are **not** plugins — they use
 - `src/gamepatches/patch_addresses.h` — Virtual addresses for game function hooks
 - `src/gamepatches/gameserver/gameserver.cpp` — IServerLib vtable implementation
 - `src/gamepatches/gameserver/messages.h` — Protocol message symbol IDs (uint64)
-- `src/common/globals.h` — Cross-DLL globals (`isServer`, `isHeadless`, `exitOnError`, etc.)
-- `src/common/logging.h` — `Log(level, format, ...)` and `FatalError()`
+- `src/core/globals.h` — Cross-DLL globals (`isServer`, `isHeadless`, `exitOnError`, etc.)
+- `src/core/logging.h` — `Log(level, format, ...)` and `FatalError()`
 - `plugins/common/include/address_registry.h` — Verified virtual addresses for all plugin hooks
 
 ### Other Components
@@ -137,7 +162,7 @@ game binary, before plugins. These are **not** plugins — they use
 - **Hooking**: MinHook-based (`USE_MINHOOK` compile flag). Functions use `__fastcall` convention. Use `ListenForBroadcasterMessage()` for game event callbacks.
 - **Protocol messages**: Symbol IDs in `src/gamepatches/gameserver/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
 - **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
-- **Global state**: CLI flags as globals in `src/common/globals.h`, set in `src/gamepatches/cli.cpp`.
+- **Global state**: CLI flags as globals in `src/core/globals.h`, set in `src/gamepatches/cli.cpp`.
 - **Local overrides**: `cmake/local.cmake` (include currently commented out in root CMakeLists.txt).
 
 ## ReVault — Reverse Engineering Data Warehouse

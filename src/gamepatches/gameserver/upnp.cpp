@@ -11,7 +11,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "echovr.h"
+#include "abi/echovr.h"
 
 // Forward-declare Log from gameserver.cpp (same DLL, no extra header needed)
 extern void Log(EchoVR::LogLevel level, const char* format, ...);

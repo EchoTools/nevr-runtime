@@ -8,7 +8,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-#include "echovr.h"
+#include "abi/echovr.h"
 
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 

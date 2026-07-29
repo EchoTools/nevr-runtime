@@ -182,12 +182,23 @@ add_subdirectory(extern)
 
 find_package(Protobuf REQUIRED)
 
-add_subdirectory(src/common)
+add_subdirectory(src/abi)
+add_subdirectory(src/core)
 add_subdirectory(src/nevr_api)
 add_subdirectory(src/gamepatches)
 add_subdirectory(src/modules/platform-compat)
 add_subdirectory(src/modules/token-auth)
 add_subdirectory(src/legacy/gamepatches)
+# src/legacy/ is frozen and may not be edited, and it is NOT self-contained:
+# gamepatcheslegacy resolves two headers out of the old src/common/ —
+# "common/hooking.h" (patches.cpp:8) and "common/nevr_plugin_interface.h"
+# (plugin_loader.h:3). Confirmed from the compiler's dependency graph:
+#   ninja -C build/<preset> -t deps | grep gamepatcheslegacy | grep src/common
+# The 2026-07-29 reorganization moved both. Rather than edit a frozen file, give
+# this ONE target a compatibility include root holding two forwarding headers.
+# Scoped to the target so nothing else in the tree can resolve the old spelling.
+# Delete src/legacy-compat/ and this line together when legacy is retired.
+target_include_directories(gamepatcheslegacy PRIVATE "${CMAKE_SOURCE_DIR}/src/legacy-compat")
 # src/pnsrad and its src/NRadEngine symlink were removed 2026-07-27. It was an
 # OBJECT library that NOTHING consumed — 28 objects compiled into no artifact —
 # and its approach (a replacement pnsrad.dll whose GetLoggedInUser reads

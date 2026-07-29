@@ -22,9 +22,9 @@
 
 // Project headers for type info. winsock2/windows already included above,
 // so pch.h includes become no-ops via include guards.
-#include "echovr.h"
-#include "echovr_functions.h"
-#include "logging.h"
+#include "abi/echovr.h"
+#include "abi/echovr_functions.h"
+#include "core/logging.h"
 #include "hook_guard.h"
 
 // ============================================================================

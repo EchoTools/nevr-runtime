@@ -12,7 +12,7 @@
  *   - VEH: Log crash dump, skip int3 after suppressed ExitProcess
  */
 
-#include "nevr_plugin_interface.h"
+#include "extension/plugin_interface.h"
 #include "nevr_common.h"
 #include "plugin_logger.h"
 #include "hook_manager.h"

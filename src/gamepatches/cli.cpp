@@ -1,6 +1,6 @@
 #include "cli.h"
-#include "common/echovr_functions.h"
-#include "common/logging.h"
+#include "abi/echovr_functions.h"
+#include "core/logging.h"
 
 BOOL g_isServer = FALSE;
 BOOL g_isOffline = FALSE;

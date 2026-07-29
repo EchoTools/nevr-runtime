@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/pch.h"
-#include "common/echovr.h"
+#include "core/pch.h"
+#include "abi/echovr.h"
 
 VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state);

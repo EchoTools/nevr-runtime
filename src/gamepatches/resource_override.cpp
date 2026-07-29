@@ -27,8 +27,8 @@
 #include <windows.h>
 #include <MinHook.h>
 
-#include "common/globals.h"
-#include "common/logging.h"
+#include "core/globals.h"
+#include "core/logging.h"
 
 /* Embedded assets */
 #include "splash_texture.h"

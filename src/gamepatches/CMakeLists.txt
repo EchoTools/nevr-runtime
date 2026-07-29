@@ -79,11 +79,11 @@ add_library(gamepatches SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
 
 target_compile_definitions(gamepatches PRIVATE USE_MINHOOK PROTOBUF_STATIC_LIB)
 
-target_precompile_headers(gamepatches PRIVATE "${CMAKE_SOURCE_DIR}/src/common/pch.h")
+target_precompile_headers(gamepatches PRIVATE "${CMAKE_SOURCE_DIR}/src/core/pch.h")
 target_include_directories(gamepatches PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/gameserver
-  ${CMAKE_SOURCE_DIR}/src/common
+  ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_SOURCE_DIR}/plugins/common/include
   ${CMAKE_BINARY_DIR}
 )
@@ -94,8 +94,7 @@ find_package(ixwebsocket CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(miniupnpc CONFIG REQUIRED)
 
-target_link_libraries(gamepatches PRIVATE minhook common version CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32)
-target_link_directories(gamepatches PRIVATE common)
+target_link_libraries(gamepatches PRIVATE minhook nevr_core version CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
 set_source_files_properties(ws_bridge.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -161,7 +160,7 @@ if(BUILD_TESTING)
     add_executable(test_xpid_patch tests/test_xpid_patch.cpp)
     target_include_directories(test_xpid_patch PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}
-      ${CMAKE_SOURCE_DIR}/src/common
+      ${CMAKE_SOURCE_DIR}/src
     )
     target_link_libraries(test_xpid_patch PRIVATE GTest::gtest GTest::gtest_main)
     # DISCOVERY_MODE PRE_TEST: defer test discovery to ctest-invocation time instead
@@ -214,7 +213,7 @@ if(BUILD_TESTING)
     target_include_directories(test_behavioral PRIVATE
       ${CMAKE_CURRENT_SOURCE_DIR}
       ${CMAKE_CURRENT_SOURCE_DIR}/gameserver
-      ${CMAKE_SOURCE_DIR}/src/common
+      ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/plugins/common/include
       ${CMAKE_BINARY_DIR}
     )

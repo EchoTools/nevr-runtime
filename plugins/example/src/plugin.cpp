@@ -22,7 +22,7 @@
  *   just build  — compiles alongside all other plugins
  */
 
-#include "nevr_plugin_interface.h"
+#include "extension/plugin_interface.h"
 #include "plugin_logger.h"
 #include "hook_manager.h"
 #include "nevr_common.h"

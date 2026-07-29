@@ -12,7 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "echovr_functions.h"
+#include "abi/echovr_functions.h"
 #include "gameservice/v1/gameservice.pb.h"
 
 // Logging wrapper for game's log system

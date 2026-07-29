@@ -1,7 +1,7 @@
 #include "echovr_functions.h"
 
 #include "echovr.h"
-#include "pch.h"
+#include "core/pch.h"
 
 namespace EchoVR {
 // Game base address — set by NEVR_SetGameModule (launcher path) or DllMain (legacy dbgcore.dll path).

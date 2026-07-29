@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "echovr.h"
+#include "abi/echovr.h"
 
 namespace ix {
 class WebSocket;

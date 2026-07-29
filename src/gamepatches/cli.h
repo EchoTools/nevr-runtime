@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/pch.h"
+#include "core/pch.h"
 
 /// A CLI argument flag indicating whether the game is booting as a dedicated server.
 /// When true, headless and noovr patches are applied automatically.

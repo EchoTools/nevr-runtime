@@ -15,7 +15,7 @@
  */
 
 #include "dll_load_hook.h"
-#include "common/hooking.h"
+#include "core/hooking.h"
 
 #include <cstdio>
 #include <cstring>

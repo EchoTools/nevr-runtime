@@ -5,8 +5,8 @@
 #include <thread>
 
 #include "constants.h"
-#include "echovr.h"
-#include "pch.h"
+#include "abi/echovr.h"
+#include "core/pch.h"
 #include "server_context.h"
 #include "telemetry_streamer.h"
 #include "websocket_client.h"

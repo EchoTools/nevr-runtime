@@ -4,7 +4,7 @@
 
 #include <cstring>
 
-#include "common/logging.h"
+#include "core/logging.h"
 
 namespace {
 

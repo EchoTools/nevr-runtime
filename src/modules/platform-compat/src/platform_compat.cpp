@@ -19,10 +19,10 @@
 #include <security.h>
 #include <sspi.h>
 
-#include "common/nevr_module_interface.h"
-#include "common/hooking.h"
-#include "common/echovr_functions.h"
-#include "common/logging.h"
+#include "extension/module_interface.h"
+#include "core/hooking.h"
+#include "abi/echovr_functions.h"
+#include "core/logging.h"
 
 // ---------------------------------------------------------------------------
 // Schannel TLS hook

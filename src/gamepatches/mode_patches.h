@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/pch.h"
+#include "core/pch.h"
 
 // ============================================================================
 // Memory patches and optimization hooks

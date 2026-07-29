@@ -4,8 +4,8 @@
 #include <string>
 #include <vector>
 
-#include "echovr.h"
-#include "symbols.h"
+#include "abi/echovr.h"
+#include "abi/symbols.h"
 
 namespace Sym = EchoVR::Symbols;
 namespace TcpSym = EchoVR::Symbols::Tcp;

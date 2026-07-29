@@ -39,7 +39,7 @@ reasoning alone. Everything below is measured; where it isn't, it says so.
 
 ## The finding in one paragraph
 
-`src/common/echovr_functions.cpp:102` assigns two live function pointers to
+`src/abi/echovr_functions.cpp:102` assigns two live function pointers to
 RVAs `0xF87AA0` and `0xF80ED0`. `src/gamepatches/mode_patches.cpp:343`
 installs MinHook detours on those same two RVAs, under the names
 `ENGINE_ENTITY_PROP_DISPATCH` and `ENGINE_ENTITY_LOOKUP`

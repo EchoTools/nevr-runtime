@@ -1,8 +1,8 @@
 #pragma once
 
-#include "common/pch.h"
-#include "common/hooking.h"
-#include "common/echovr_functions.h"
+#include "core/pch.h"
+#include "core/hooking.h"
+#include "abi/echovr_functions.h"
 #include "process_mem.h"
 #include "patch_addresses.h"
 #include "hook_guard.h"

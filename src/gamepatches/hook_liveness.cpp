@@ -2,7 +2,7 @@
 
 #include <windows.h>
 
-#include "common/logging.h"
+#include "core/logging.h"
 
 namespace {
 

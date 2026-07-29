@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/pch.h"
+#include "core/pch.h"
 
 /// Installs CreateProcessA, CreateProcessW, ExitProcess, and TerminateProcess hooks
 /// to suppress the BugSplat crash reporter and prevent crash-triggered termination.

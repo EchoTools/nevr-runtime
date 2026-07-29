@@ -553,8 +553,35 @@ verify:
     # a usage contract (RULINGS.md "Usage contracts"), not a log tag — docs/standards/logging.md's
     # subsystem-tag rule governs log lines. Verified 2026-07-26: every [NEVR] hit in
     # that file is a help string, zero are log calls.
-    N81_RC=0; N81_HITS=$(grep -rn '"\[NEVR\] ' src/gamepatches src/common) || N81_RC=$?
-    sensor_stage1 "N81 bare [NEVR] tag" "src/gamepatches src/common" "$N81_RC"
+    # --- N108: the shared layer's dependency direction --------------------------
+    # src/abi/ encodes what the GAME BINARY told us. src/core/ is what WE wrote.
+    # The dependency runs core -> abi (EchoVR::LogLevel is a game enum, so logging
+    # genuinely sits on the ABI layer). The reverse is forbidden: an abi/ header
+    # that reaches into core/ makes the reconstruction surface depend on our own
+    # conveniences, and the split stops meaning anything the first time it happens.
+    #
+    # pch.h is the ONE sanctioned exception and it is exempted BY NAME, not by a
+    # loose pattern: it is the precompiled header, build plumbing rather than a
+    # layer dependency. Widening this exemption re-merges the two directories in
+    # everything but name.
+    N108_RC=0; N108_HITS=$(grep -rn '#include "\(core\|extension\)/' src/abi) || N108_RC=$?
+    sensor_stage1 "N108 abi->core direction" "src/abi" "$N108_RC"
+    if [ "$N108_RC" -eq 0 ] && printf '%s\n' "$N108_HITS" | grep -v '#include "core/pch.h"' | grep .; then
+        echo "verify: FAIL — N108 src/abi/ includes src/core/. The dependency runs core -> abi, never the reverse." >&2
+        echo "The ABI layer records what the binary told us; it must not depend on our own primitives. Move the shared piece INTO abi/, or stop using it there." >&2
+        exit 1
+    fi
+    # No "do these directories still exist" loop here on purpose. It was written,
+    # then removed as unfalsifiable: emptying any of the three fails EARLIER than
+    # this point and for a different reason, so the loop could never be shown to
+    # be the thing that caught it. Measured 2026-07-29 — emptying src/extension/
+    # dies at configure with `No SOURCES given to target: nevr_core`, because the
+    # headers are listed in src/core/CMakeLists.txt. What actually fail-closes:
+    #   src/abi      -> sensor_stage1 above (grep rc>=2 on a missing subject)
+    #   src/core     -> the same, via the N81/N85/N20 path sets
+    #   src/extension-> CMake, since its headers are in nevr_core's source list
+    N81_RC=0; N81_HITS=$(grep -rn '"\[NEVR\] ' src/gamepatches src/abi src/core) || N81_RC=$?
+    sensor_stage1 "N81 bare [NEVR] tag" "src/gamepatches src/abi src/core" "$N81_RC"
     if [ "$N81_RC" -eq 0 ] && printf '%s\n' "$N81_HITS" \
          | grep -v legacy | grep -v 'src/gamepatches/cli.cpp' | grep .; then
         echo "verify: FAIL — N81 bare [NEVR] log tag found; use a subsystem tag from the docs/standards/logging.md table." >&2
@@ -586,8 +613,8 @@ verify:
     # Match the CALL form ('->setOnMessageCallback(nullptr)') and drop comment
     # lines. A looser pattern flags prose describing the bug — the same false
     # positive the N81 sensor hit on cli.cpp's --help strings.
-    N85_RC=0; N85_HITS=$(grep -rn -- '->setOnMessageCallback(nullptr)' src/gamepatches src/modules src/common) || N85_RC=$?
-    sensor_stage1 "N85 empty ws callback" "src/gamepatches src/modules src/common" "$N85_RC"
+    N85_RC=0; N85_HITS=$(grep -rn -- '->setOnMessageCallback(nullptr)' src/gamepatches src/modules src/abi src/core) || N85_RC=$?
+    sensor_stage1 "N85 empty ws callback" "src/gamepatches src/modules src/abi src/core" "$N85_RC"
     if [ "$N85_RC" -eq 0 ] && printf '%s\n' "$N85_HITS" \
          | grep -v legacy | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
         echo "verify: FAIL — N85 setOnMessageCallback(nullptr) reintroduced; use a no-op lambda." >&2
@@ -682,8 +709,8 @@ verify:
     # N20: no platform identity may be compiled into the binary. The login
     # injection must take it from token-auth (JWT) or, in server mode, from
     # config — never a literal. Matches an 18-20 digit account/discord ID.
-    N20_RC=0; N20_HITS=$(grep -rnE '\b1[0-9]{17,19}\b' src/gamepatches src/modules src/common) || N20_RC=$?
-    sensor_stage1 "N20 identity literal" "src/gamepatches src/modules src/common" "$N20_RC"
+    N20_RC=0; N20_HITS=$(grep -rnE '\b1[0-9]{17,19}\b' src/gamepatches src/modules src/abi src/core) || N20_RC=$?
+    sensor_stage1 "N20 identity literal" "src/gamepatches src/modules src/abi src/core" "$N20_RC"
     if [ "$N20_RC" -eq 0 ] && printf '%s\n' "$N20_HITS" \
          | grep -v legacy | grep -viE 'hash|symbol|0x|SYM_' | grep .; then
         echo "verify: FAIL — N20 an account/discord ID literal is compiled into source;" >&2
@@ -855,12 +882,12 @@ verify:
     # .cpp only (a header carries the declaration), and tests are exempt — they
     # deliberately stub Log to run without the game.
     LOG_DEFS=$(grep -rlE '^(VOID|void) Log\(EchoVR::LogLevel' \
-                 --include='*.cpp' src/common src/gamepatches src/modules 2>/dev/null \
+                 --include='*.cpp' src/abi src/core src/gamepatches src/modules 2>/dev/null \
                | grep -v '/tests/' | wc -l)
     if [ "$LOG_DEFS" -ne 1 ]; then
         echo "verify: FAIL — D1 found $LOG_DEFS definitions of ::Log (want exactly 1)." >&2
         grep -rlE '^(VOID|void) Log\(EchoVR::LogLevel' --include='*.cpp' \
-             src/common src/gamepatches src/modules | grep -v '/tests/' >&2
+             src/abi src/core src/gamepatches src/modules | grep -v '/tests/' >&2
         echo "Two strong definitions is an ODR violation; the winner is link-order dependent." >&2
         exit 1
     fi

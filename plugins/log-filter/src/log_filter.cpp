@@ -1,7 +1,7 @@
 /* SYNTHESIS -- custom tool code, not from binary */
 
 #include "log_filter.h"
-#include "nevr_plugin_interface.h"
+#include "extension/plugin_interface.h"
 
 #include <MinHook.h>
 #include <nlohmann/json.hpp>

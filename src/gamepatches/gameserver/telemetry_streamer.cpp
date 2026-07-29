@@ -8,8 +8,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-#include "echovr.h"
-#include "echovr_functions.h"
+#include "abi/echovr.h"
+#include "abi/echovr_functions.h"
 #include "telemetry/v2/capture.pb.h"
 #include "telemetry/v2/echo_arena.pb.h"
 

@@ -17,7 +17,7 @@ offset / prologue / branch that each Windows patch rewrites. Those are the
 
 | Side | Source | Command |
 | --- | --- | --- |
-| Windows | `src/gamepatches/patch_addresses.h`, `mode_patches.cpp`, `wave0_instrumentation.cpp`, `asset_cdn.cpp`, `initialize.cpp`, `src/common/echovr_functions.cpp`, `plugins/common/include/address_registry.h`, `plugins/{broadcaster-bridge,log-filter,crash-handler}` | source read |
+| Windows | `src/gamepatches/patch_addresses.h`, `mode_patches.cpp`, `wave0_instrumentation.cpp`, `asset_cdn.cpp`, `initialize.cpp`, `src/abi/echovr_functions.cpp`, `plugins/common/include/address_registry.h`, `plugins/{broadcaster-bridge,log-filter,crash-handler}` | source read |
 | Quest symbols | `.../quest_triage/apk_contents/lib/arm64-v8a/{libr15,libpnsrad,libpnsovr,libpnsradmatchmaking,libovrplatformloader}.so` | `nm -DC <lib>` (demangled name + arm64 VA) |
 | Quest addresses | ReVault binary **id 576 = libr15.so** (aarch64 ELF, base `0x0`) | `revault fn show <0xVA> --binary libr15.so` |
 

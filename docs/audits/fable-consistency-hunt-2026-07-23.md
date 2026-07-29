@@ -32,11 +32,11 @@ When conn=1 closes but its remote was shared with conn>=2, the Close handler era
 `CrashVEH` calls `PluginLog` → `fprintf(stderr, ...)` from inside Vectored Exception Handler. stderr lock may be held by crashing thread → deadlock. Heap may be corrupted → recursive crash. `LogCrashDump` loops up to 256 IsBadReadPtr calls.
 **Fix:** Use WriteFile(GetStdHandle(STD_ERROR_HANDLE), ...) or pre-allocated ring buffer.
 
-### B7 [H] — `src/common/logging.cpp:81-99` — FatalError MessageBoxA + exit(1) under loader lock (R4a)
+### B7 [H] — `src/core/logging.cpp:81-99` — FatalError MessageBoxA + exit(1) under loader lock (R4a)
 `FatalError` unconditionally calls MessageBoxA (modal message loop) when no handler registered. Called from DllMain during loader lock = deadlock. Guard delegates to handler if set, but in legacy dbgcore path, handler not installed until PreprocessCommandLineHook.
 **Fix:** Add DllMain-awareness flag routing to vfprintf+TerminateProcess instead of MessageBoxA+exit.
 
-### B8 [H] — `src/common/echovr_functions.cpp:71-75` — InitializeFunctionPointers null g_GameBaseAddress — UB (R4a)
+### B8 [H] — `src/abi/echovr_functions.cpp:71-75` — InitializeFunctionPointers null g_GameBaseAddress — UB (R4a)
 All 34 function-pointer assignments dereference `g_GameBaseAddress + offset` with no null check. If called before GameBaseAddress is set, every line is UB.
 **Fix:** Add `assert(g_GameBaseAddress)` or `if (!g_GameBaseAddress) return;` at top.
 
@@ -84,7 +84,7 @@ Written in InstallWebSocketBridge (main thread), read/written in WsBridge_Shutdo
 Mirror socket sendto return discarded. Buffer-full condition causes silent packet loss with no backoff. Repeated system calls waste CPU.
 **Fix:** Log EWOULDBLOCK/EAGAIN, add failure counter that disables mirroring after N drops.
 
-### B20 [M] — `src/common/auth_token.h:215,234-236` — Credential DACL/hidden-attribute failures silently ignored (R4a)
+### B20 [M] — `src/core/auth_token.h:215,234-236` — Credential DACL/hidden-attribute failures silently ignored (R4a)
 SetFileAttributesA(HIDDEN) and SetNamedSecurityInfoA(DACL) return values discarded. On failure, .credentials.json is world-readable on multi-user system.
 **Fix:** Check returns; log warning on failure (best-effort hardening).
 

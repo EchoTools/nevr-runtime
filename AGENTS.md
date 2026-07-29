@@ -131,7 +131,9 @@ AGENTS.md          this file
 src/gamepatches/   BugSplat64.dll — hooks, CLI, mode patches, crash recovery,
                    config, module/plugin loading, in-process gameserver
 src/modules/       runtime-loaded modules: platform-compat, token-auth
-src/common/        libcommon.a — logging, globals, symbols, hooking
+src/abi/           libnevr_abi.a — echovr.exe ABI: types, fn pointers, symbols
+src/core/          libnevr_core.a — logging, globals, base64, hooking, pch
+src/extension/     header-only C ABI published to third-party DLLs
 src/legacy/        FROZEN v1 — shall not be modified
 src/nevr_api/      generated protobuf (from BSR — see `just proto`)
 src/launcher/      game launcher — disabled, see CLAUDE.md

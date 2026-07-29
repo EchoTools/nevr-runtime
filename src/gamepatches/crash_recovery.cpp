@@ -13,9 +13,9 @@
 #include <unistd.h>
 
 #include "cli.h"
-#include "common/echovr_functions.h"
-#include "common/globals.h"
-#include "common/logging.h"
+#include "abi/echovr_functions.h"
+#include "core/globals.h"
+#include "core/logging.h"
 #include "gamepatches_internal.h"
 #include "patch_addresses.h"
 #include "wave0_instrumentation.h"

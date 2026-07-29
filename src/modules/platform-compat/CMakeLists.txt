@@ -13,14 +13,12 @@ target_compile_definitions(platform_compat PRIVATE USE_MINHOOK NEVR_MODULE_EXPOR
 
 target_include_directories(platform_compat PRIVATE
     ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/common
     ${CMAKE_SOURCE_DIR}/src/gamepatches
 )
 
-target_precompile_headers(platform_compat PRIVATE "${CMAKE_SOURCE_DIR}/src/common/pch.h")
+target_precompile_headers(platform_compat PRIVATE "${CMAKE_SOURCE_DIR}/src/core/pch.h")
 
-target_link_libraries(platform_compat PRIVATE minhook common CURL::libcurl)
-target_link_directories(platform_compat PRIVATE common)
+target_link_libraries(platform_compat PRIVATE minhook nevr_core CURL::libcurl)
 
 set_target_properties(platform_compat PROPERTIES
     PREFIX ""

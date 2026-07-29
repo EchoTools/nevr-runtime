@@ -350,7 +350,7 @@ constexpr uintptr_t GAME_MAIN = 0x0CD550;
 /// live run, not by reading.
 ///
 /// Both RVAs are ALSO assigned as live function pointers in
-/// src/common/echovr_functions.cpp:87-88, so detouring them makes our own calls
+/// src/abi/echovr_functions.cpp:87-88, so detouring them makes our own calls
 /// re-enter our own hooks. tools/verify_hook_invariants.py fails the build if a
 /// NEW address joins that intersection.
 constexpr uintptr_t ENGINE_ENTITY_LOOKUP = 0xF80ED0;          // = CBroadcaster::Listen

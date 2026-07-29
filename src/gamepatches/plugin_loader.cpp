@@ -3,8 +3,8 @@
 #include <string>
 #include <vector>
 
-#include "common/globals.h"
-#include "common/logging.h"
+#include "core/globals.h"
+#include "core/logging.h"
 
 #include "cli.h"
 #include "hook_guard.h"

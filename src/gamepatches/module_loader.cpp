@@ -4,8 +4,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "common/globals.h"
-#include "common/logging.h"
+#include "core/globals.h"
+#include "core/logging.h"
 
 struct LoadedModule {
   HMODULE                       hModule;

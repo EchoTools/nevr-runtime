@@ -1,7 +1,7 @@
 #pragma once
 
 #include "echovr.h"
-#include "pch.h"
+#include "core/pch.h"
 
 namespace EchoVR {
 

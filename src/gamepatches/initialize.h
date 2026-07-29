@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/pch.h"
+#include "core/pch.h"
 
 /// Main initialization entry point — installs all hooks and patches.
 VOID Initialize();

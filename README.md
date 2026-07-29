@@ -54,7 +54,11 @@ repository.
 ### Other targets
 
 - `src/nevr_api/` — protobuf, generated into `gen/cpp/` (`just proto`)
-- `src/common/` → `libcommon.a` — logging, globals, base64, symbol helpers
+- `src/abi/` → `libnevr_abi.a` — the echovr.exe ABI surface: game types, function
+  pointers, symbol IDs, CSymbol64 hashing
+- `src/core/` → `libnevr_core.a` — our own primitives: logging, globals, base64,
+  hooking, auth-token model, `pch.h` (links `nevr_abi`)
+- `src/extension/` — header-only published C ABI for third-party plugins/modules
 - `src/launcher/` → thin `CreateProcess` wrapper spawning `echovr.exe -server -noconsole`
 - `src/libovr-stub/` → `LibOVRPlatform64_1.dll` — Oculus platform stub
 - `src/legacy/` — **frozen** v1 implementations, self-contained; do not modify
@@ -93,9 +97,12 @@ From `build/mingw-release/bin/`:
 ```
 src/gamepatches/   BugSplat64.dll — hooks, modes, crash recovery, gameserver
 src/modules/       runtime-loaded modules (platform-compat, token-auth)
-src/common/        libcommon.a
+src/abi/           libnevr_abi.a  — the echovr.exe ABI surface
+src/core/          libnevr_core.a — our own primitives (links nevr_abi)
+src/extension/     header-only C ABI published to third-party DLLs
 src/nevr_api/      protobuf target
 src/legacy/        FROZEN v1
+src/legacy-compat/ two forwarding headers; frozen legacy needs them
 plugins/           optional plugins
 tools/             build and verify tooling
 tests/             Go system suites (not part of `just verify`)

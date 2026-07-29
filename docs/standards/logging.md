@@ -33,7 +33,7 @@ how an agent triangulates a correct log line.
 ### This is NOT
 
 - A tutorial on the `Log()` function signature. That is in
-  `src/common/logging.h` and `CLAUDE.md`. This document defines WHAT
+  `src/core/logging.h` and `CLAUDE.md`. This document defines WHAT
   goes in the format string, not how to call the function.
 - A style preference. The "Hard Stops" are not negotiable; they are the
   mechanical difference between a log that diagnoses a problem and one
@@ -317,7 +317,7 @@ just started failing" without a baseline.
 ### Rule 6: The Log() function is the single entry point
 
 `Log(EchoVR::LogLevel::level, "format %d", val)` from
-`src/common/logging.h:18` is the mechanism. This standard defines WHAT
+`src/core/logging.h:18` is the mechanism. This standard defines WHAT
 goes in the format string and what level to use. No other output
 mechanism is permitted.
 
@@ -497,5 +497,5 @@ failing any of these checks is rejected until the violation is fixed.
 - **BUGS.md N14** — Platform prefix hardcoded as OVR_ORG (affects XPID correctness).
 - **CLAUDE.md** — Project conventions, `Log()` usage, subsystem architecture.
 - **CPP-MINGW-ADDENDUM-GENERIC.md** — "Logging (Structured, Always)" section, "No printf" rule.
-- **`src/common/logging.h`** — `Log()` and `FatalError()` declarations.
-- **`src/common/logging.cpp`** — `Log()` implementation, `FormatJsonLogEntry`.
+- **`src/core/logging.h`** — `Log()` and `FatalError()` declarations.
+- **`src/core/logging.cpp`** — `Log()` implementation, `FormatJsonLogEntry`.

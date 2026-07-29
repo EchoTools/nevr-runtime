@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "common/logging.h"  // GetRunId (N80)
+#include "core/logging.h"  // GetRunId (N80)
 
 // ---------------------------------------------------------------------------
 // Internal state

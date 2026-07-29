@@ -5,8 +5,8 @@
 #include <shared_mutex>
 #include <vector>
 
-#include "echovr.h"
-#include "pch.h"
+#include "abi/echovr.h"
+#include "core/pch.h"
 
 namespace GameServer {
 
