@@ -564,6 +564,33 @@ verify:
     # a usage contract (RULINGS.md "Usage contracts"), not a log tag — docs/standards/logging.md's
     # subsystem-tag rule governs log lines. Verified 2026-07-26: every [NEVR] hit in
     # that file is a help string, zero are log calls.
+    # --- N116: pre-reorg audit records must keep their pre-reorg paths -----------
+    # An audit states what was measured on a date, so its file:line citations
+    # describe the tree AS IT WAS. Rewriting them to today's layout does not
+    # modernise the record — it falsifies it, pairing a current path with a line
+    # number from months ago, both halves looking authoritative.
+    #
+    # This happened: on 2026-07-29 the N108/N109 mechanical path rewriter walked
+    # this directory and changed 21 citations across two records. Nothing caught
+    # it, because verify_doc_paths.py deliberately does NOT scan docs/audits/ —
+    # the exclusion that keeps old paths from failing the build also meant nothing
+    # noticed them being rewritten. This sensor closes that specific gap.
+    #
+    # Scoped by NAME to the records that predate the reorganisation. A future
+    # audit written after 2026-07-29 will legitimately cite src/runtime/ and must
+    # not be caught by this.
+    for _rec in docs/audits/fable-consistency-hunt-2026-07-23.md docs/audits/recon-owner-bug-batch-RESULTS.md; do
+        if [ ! -f "$_rec" ]; then
+            echo "verify: FAIL — N116 audit record $_rec is missing. Records are immutable; if it was deliberately removed, cite <sha>:<path> in docs/audits/README.md and drop it from this list in the same commit." >&2
+            exit 1
+        fi
+        if grep -qE 'src/(runtime|abi|core|extension)/' "$_rec"; then
+            echo "verify: FAIL — N116 $_rec cites a POST-reorganisation path, but it records measurements taken before the reorganisation." >&2
+            echo "Its line numbers are from the old tree, so a new path makes the citation wrong in a way that still looks authoritative. Revert the record and use the mapping table in docs/audits/README.md to follow old citations." >&2
+            exit 1
+        fi
+    done
+
     # --- N115: the login system_info block must be MEASURED, not invented --------
     # It used to be literals — "cpu":"Wine", 4 physical cores, 8 logical, 16384 MB
     # total, 8192 used — emitted as though read from the machine. Measured on this

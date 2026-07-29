@@ -8,7 +8,7 @@ READ-ONLY validation. Next free N-ID: **N39** (highest in BUGS.md: N38).
 
 **CONFIRMED.** All 27 boot-sequence log lines in `initialize.cpp` and `headless_graphics.cpp` confirm completion AFTER each step — none announce intent without having attempted the action first. The complete ordered list:
 
-### `src/runtime/lifecycle/initialize.cpp` — `Initialize()` (lines 211–334)
+### `src/gamepatches/initialize.cpp` — `Initialize()` (lines 211–334)
 
 | # | File:Line | Message | Timing |
 |---|-----------|---------|--------|
@@ -40,7 +40,7 @@ READ-ONLY validation. Next free N-ID: **N39** (highest in BUGS.md: N38).
 | 26 | `:329` | `"[NEVR] wave0 OK\n"` | Confirms AFTER |
 | 27 | `:334` | `"[NEVR.PATCH] All hooks installed"` (via `Log(Info, ...)`) | Confirms AFTER — summary |
 
-### `src/runtime/patch/headless_graphics.cpp`
+### `src/gamepatches/headless_graphics.cpp`
 
 | # | File:Line | Message | Timing |
 |---|-----------|---------|--------|
@@ -149,7 +149,7 @@ Runtime intercept log lines (when `g_isHeadless` is true at call time):
 
 ## Item 3 — Default-loaded modules/plugins
 
-**CONFIRMED.** Three modules loaded unconditionally in `src/runtime/lifecycle/boot.cpp`, inside `PreprocessCommandLineHook()`:
+**CONFIRMED.** Three modules loaded unconditionally in `src/gamepatches/boot.cpp`, inside `PreprocessCommandLineHook()`:
 
 | # | Module name | File:Line | Reason |
 |---|---|---|---|
@@ -160,7 +160,7 @@ Runtime intercept log lines (when `g_isHeadless` is true at call time):
 All three are **runtime-loaded via `LoadLibrary`** from a `modules/` subdirectory next to echovr.exe. `LoadModule()` in `module_loader.cpp:42-83` constructs `<modules dir>\modules\<name>.dll` and calls `LoadLibraryA`.
 
 **`builtin_log_filter.cpp` is compiled into BugSplat64.dll**, not loaded as a module:
-- `src/runtime/CMakeLists.txt:25` — `"builtin_log_filter.cpp"` in `PATCHES_SOURCES`
+- `src/gamepatches/CMakeLists.txt:25` — `"builtin_log_filter.cpp"` in `PATCHES_SOURCES`
 - `initialize.cpp:277` — `BuiltinLogFilter::Init(...)` called during `Initialize()`
 
 **Plugins** are discovered at runtime from `plugins/` subdir via glob (`*.dll`). `plugin_loader.cpp:23-131` (`LoadPlugins()`) calls `FindFirstFileA`/`FindNextFileA`. No plugins ship by default; only what's on disk loads. Called from `boot.cpp:227`.
@@ -181,7 +181,7 @@ plugins/crash-handler/
 plugins/log-filter/
 ```
 
-Plugin API v2 header: `src/extension/plugin_interface.h:95` — `NEVR_PLUGIN_API_VERSION = 2`. Shared plugin-author headers in `plugins/common/include/`: `nevr_common.h`, `nevr_curl.h`, `yaml_config.h`, `plugin_logger.h`, `hook_manager.h`, `address_registry.h`, `resource_registry.h`, `safe_memory.h`, `auth_token_refresh.h`.
+Plugin API v2 header: `src/common/nevr_plugin_interface.h:95` — `NEVR_PLUGIN_API_VERSION = 2`. Shared plugin-author headers in `plugins/common/include/`: `nevr_common.h`, `nevr_curl.h`, `yaml_config.h`, `plugin_logger.h`, `hook_manager.h`, `address_registry.h`, `resource_registry.h`, `safe_memory.h`, `auth_token_refresh.h`.
 
 **Existing N-entry:** None.
 
@@ -394,9 +394,9 @@ Key log lines:
 
 **NOT-FOUND.** No runtime hash→name reverse lookup table exists.
 
-- `src/abi/symbol_hash.h:66-85` — `CSymbol64Hash()`: custom CRC64, polynomial `0x95ac9329ac4bc9b5`, one-way (forward only, no reverse).
-- `src/abi/symbols.h` — ~40 compile-time name→hash constants (forward-only, static).
-- `src/runtime/patch/resource_override.cpp` — matches by raw numeric `(type_hash, name_hash)` pairs, no name strings.
+- `src/common/symbol_hash.h:66-85` — `CSymbol64Hash()`: custom CRC64, polynomial `0x95ac9329ac4bc9b5`, one-way (forward only, no reverse).
+- `src/common/symbols.h` — ~40 compile-time name→hash constants (forward-only, static).
+- `src/gamepatches/resource_override.cpp` — matches by raw numeric `(type_hash, name_hash)` pairs, no name strings.
 - `gameserver/gameserver.cpp:510` — comment: `"Instance name as hex (can be converted via hashes.txt)"` — but `hashes.txt` does not exist in the repository.
 - `~/src/revault/` — exists, but managed store is not populated for reverse lookup. ReVault `search_strings` and `search_code` work for forward queries.
 
@@ -408,7 +408,7 @@ Key log lines:
 
 **CONFIRMED.**
 
-### Log() function (`src/core/logging.cpp:64-75`)
+### Log() function (`src/common/logging.cpp:64-75`)
 - When `WriteLog` is non-null (normal operation): delegates to `EchoVR::WriteLog(level, 0, format, args)` → game's `CLog::PrintfImpl`.
 - When `WriteLog` IS null (early DllMain): falls back to `vfprintf(stderr, format, args); fputc('\n', stderr)` — **stderr only, no file.**
 
@@ -524,7 +524,7 @@ N20 from BUGS.md (lines 1293-1306):
 
 1. **`_local/config.json`** — loaded by `LoadEarlyConfig()` at `config.cpp:32-61`. Contains `nevr_discord_id` (read at `modules/ws-bridge/src/ws_bridge.cpp:181,212`, `gamepatches/ws_bridge.cpp:209`, `gamepatches/gameserver/gameserver.cpp:1156`, `pnsrad/Social/CNSRADUsers.cpp:296`).
 
-2. **`_local/.credentials.json`** — saved by `DeviceAuth::SaveToken()` at `modules/token-auth/src/token_auth.cpp:114-130`. Loaded by `LoadCachedAuthToken()` at `src/core/auth_token.h:110-141`. Contains JWT access token, refresh token, user_id, username. Stored with `FILE_ATTRIBUTE_HIDDEN` + restrictive DACL (Windows) or `umask(0177)` (non-Windows).
+2. **`_local/.credentials.json`** — saved by `DeviceAuth::SaveToken()` at `modules/token-auth/src/token_auth.cpp:114-130`. Loaded by `LoadCachedAuthToken()` at `src/common/auth_token.h:110-141`. Contains JWT access token, refresh token, user_id, username. Stored with `FILE_ATTRIBUTE_HIDDEN` + restrictive DACL (Windows) or `umask(0177)` (non-Windows).
 
 3. **`nevr_defaults.h`** — **removed** at `1a91c1d` per N5. Previously contained compile-time default keys.
 
