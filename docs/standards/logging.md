@@ -337,11 +337,33 @@ OutputDebugStringA("got here");
 std::cerr << "failed" << std::endl;
 ```
 
-The `FormatJsonLogEntry` helper exists in `logging.cpp:70` but is not
-yet wired into the `Log()` output path. When structured JSON logging is
-implemented, every `Log()` call will automatically emit JSON; the format
-string conventions in this document are designed to be parseable as both
-human-readable text and machine-extractable key=value pairs.
+### `Log()` does not emit JSON, and that was a decision — not an omission
+
+`FormatJsonLogEntry` exists in `src/core/logging.cpp:70` and is called from
+nowhere in production (the only other reference is a test stub). It is not
+"not yet wired": it WAS wired, and was deliberately unwired.
+
+  a658d42  2026-02-09  added it, and called it from Log()
+  6c0369f  2026-03-24  removed that call; Log() now routes to the game's own
+                       EchoVR::WriteLog, falling back to vfprintf(stderr) only
+                       before the game logger exists
+
+So NEVR lines go through the game's logger and appear in its stream, rather than
+being emitted as a second, parallel JSON format. Do not "finish" the JSON path on
+the assumption it was left half-done — it was superseded four months ago, and
+re-wiring it would double every log line.
+
+**Structured JSONL does ship, from a different place**: the built-in filter writes
+a per-run JSONL file (`src/runtime/log/builtin_filter.cpp`), and its schema is NOT
+the one `FormatJsonLogEntry` produces — it carries a `run` field and has no
+`caller` field.
+
+`docs/reference/logging-format.md` documented the `FormatJsonLogEntry` shape as
+though it were the live output. It was removed 2026-07-29 rather than corrected,
+since it described a format that has not shipped since March and contradicted this
+section. Retrieve it with:
+
+    git show 9bf274450e2ddbcbba5f61dc67f23f14f5c3e064:docs/reference/logging-format.md
 
 ### Rule 7: State transitions log FROM -> TO
 

@@ -43,6 +43,32 @@ ALLOWED_ABSENT = {
 }
 
 
+# A historical citation: `git show <sha>:<path>`. The path deliberately does NOT
+# exist on disk — that is the point of citing it. Recording a 40-hex sha plus the
+# path is what makes deleting a stale document safe, so this checker must not
+# demand the file be present.
+#
+# It does something better instead: it VERIFIES the citation, with
+# `git cat-file -e <sha>:<path>`. A citation nobody checked is worse than no
+# citation, because it looks like evidence. Typo the sha and you get a
+# convincing-looking pointer to nothing.
+CITATION_RE = re.compile(r"git show ([0-9a-f]{40}):([A-Za-z0-9_./-]+)")
+
+
+def citations():
+    """(file, sha, path) for every `git show <sha>:<path>` in a tracked .md."""
+    files = subprocess.run(["git", "ls-files", "*.md"], cwd=REPO,
+                           capture_output=True, text=True).stdout.split()
+    for f in files:
+        text = (REPO / f).read_text(errors="replace")
+        for m in CITATION_RE.finditer(text):
+            yield f, m.group(1), m.group(2)
+
+
+def cited_paths() -> set:
+    return {path for _f, _sha, path in citations()}
+
+
 def claimed_paths():
     files = subprocess.run(["git", "ls-files", "*.md"], cwd=REPO,
                            capture_output=True, text=True).stdout.split()
@@ -63,20 +89,44 @@ def claimed_paths():
 
 
 def main() -> int:
+    # Verify every historical citation actually resolves in git history.
+    dead_citations = []
+    for f, sha, path in citations():
+        rc = subprocess.run(["git", "cat-file", "-e", f"{sha}:{path}"],
+                            cwd=REPO, capture_output=True).returncode
+        if rc != 0:
+            dead_citations.append((f, sha, path))
+    for f, sha, path in dead_citations:
+        print(f"doc-paths: FAIL {f} cites `git show {sha[:12]}...:{path}` "
+              f"but that object does not exist in this repository.", file=sys.stderr)
+
+    cited = cited_paths()
+
     bad = []
     for f, raw, p in claimed_paths():
         if p in ALLOWED_ABSENT:
             continue
+        if p in cited:
+            continue      # deliberately deleted and cited; the citation was checked above
         if not (REPO / p).exists():
             bad.append((f, raw))
     for f, raw in bad:
         print(f"doc-paths: FAIL {f} claims `{raw}` — no such path", file=sys.stderr)
-    if bad:
-        print(f"\ndoc-paths: {len(bad)} claimed path(s) do not exist. A document that "
-              f"names a path that is not there sends the next reader somewhere real "
-              f"and wrong.", file=sys.stderr)
+    if bad or dead_citations:
+        if bad:
+            print(f"\ndoc-paths: {len(bad)} claimed path(s) do not exist. A document that "
+                  f"names a path that is not there sends the next reader somewhere real "
+                  f"and wrong. If the file was deliberately removed, cite it instead: "
+                  f"`git show <40-hex-sha>:<path>`.", file=sys.stderr)
+        if dead_citations:
+            print(f"\ndoc-paths: {len(dead_citations)} historical citation(s) do not "
+                  f"resolve. Get the sha with `git log -1 --format=%H -- <path>` and "
+                  f"confirm with `git show <sha>:<path>` BEFORE writing it down.",
+                  file=sys.stderr)
         return 1
-    print("doc-paths: OK (all claimed repo paths resolve)")
+    n = len(cited_paths())
+    print(f"doc-paths: OK (all claimed repo paths resolve"
+          + (f"; {n} historical citation(s) verified against git history)" if n else ")"))
     return 0
 
 

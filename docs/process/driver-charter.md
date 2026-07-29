@@ -86,7 +86,14 @@ sending, never after.
    RAM-backed) [RULINGS.md "Scratch dir (nevr)" 2026-07-20]. Worktrees live on disk
    inside `{REPO}`, never on tmpfs.
 9. **Commit identity.** Author `agents@sprock.io`, `--no-gpg-sign`, two
-   Co-authored-by trailers (Metis Sprock <m@sprock.io> + Andrew Bates <a@sprock.io>).
+   a single Co-authored-by trailer (Andrew Bates <a@sprock.io>).
+   CORRECTED 2026-07-29: this line mandated TWO trailers, quoting RULINGS.md
+   2026-07-20. That ruling was superseded on 2026-07-26 by owner instruction —
+   the `Metis Sprock <m@sprock.io>` trailer was dropped, she was not involved in
+   this work — and the change was recorded in CLAUDE.md but never propagated
+   here. Every commit since has carried one trailer, so this document has
+   contradicted both the governing rule and actual practice for three days.
+   Commits before `624f795` carry the second trailer and are left as they are.
    Verify after committing: `git log --format='%h %G? %an %ae' -1`. Never commit as
    the owner's name/email [RULINGS.md "Commit identity (nevr)" 2026-07-20].
 10. **CPP pre-read gate.** Before any C++/build work a unit reads

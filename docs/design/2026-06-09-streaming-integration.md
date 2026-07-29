@@ -1,5 +1,20 @@
 # nevr-runtime → nevr-stream Integration
 
+> **STATUS 2026-07-29: the capability already existed when this was written.**
+> The doc proposes a `stream_client.cpp` that was never built — but direct
+> WebSocket telemetry streaming that bypasses nakama, using exactly the
+> `telemetry.v2.Envelope` / 4-byte-LE-prefix / CaptureHeader-Frame-Footer protocol
+> described here, had already shipped in `src/runtime/server/telemetry_streamer.cpp`
+> as of commit `488461b` (2026-03-20) — **eleven weeks before this document**. It is
+> configured with a plain `telemetry_uri` key.
+>
+> **The one gap this doc identifies that is still real**: there is no local capture
+> or queue fallback when the stream disconnects. Frames are dropped
+> (`telemetry_streamer.cpp:687-699`).
+>
+> Kept for that gap and for the protocol rationale. Ignore the "not implemented"
+> framing.
+
 ## The Goal
 
 nevr-runtime (the in-process game hook DLL) streams telemetry frames directly to nevr-stream (the standalone ingestion service) via WebSocket, bypassing nakama entirely.

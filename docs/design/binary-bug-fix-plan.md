@@ -1,5 +1,23 @@
 # EchoVR Bug Fix Plan
 
+> **STATUS 2026-07-29: PARTIALLY EXECUTED, and the deploy methodology below was
+> not followed.** What actually ships is listed in the header block of
+> `src/runtime/patch/binary_bug_fixes.cpp` — bugs #1, #2, #6 (partial), #11, #12,
+> #13, #14, #62. Bug #7 was implemented and then REMOVED when its premise was
+> falsified (ledger N24). Waves 1, 4, 5 and 6 are entirely unexecuted; `BUGS.md`'s
+> own summary still marks #3, #9, #10, #15, #16, #27, #28, #30, #35, #38, #42 and
+> #43 as `Unpatched`.
+>
+> **The plan says "Server first (gate on `g_isServer`). Client after 48h server
+> soak" in four places. That is not what happens.** `BinaryBugFixes::Init()` is
+> called unconditionally at `src/runtime/lifecycle/initialize.cpp:349`, with no
+> mode gate, so every fix that shipped went to clients and servers at the same
+> time. Read the deploy sections as a proposal that was not adopted, not as a
+> description of how these fixes reached production.
+>
+> Kept rather than removed because the unexecuted waves are still a live backlog
+> with per-bug analysis that exists nowhere else.
+
 Systematic plan for runtime-patching verified binary bugs. Each fix is a MinHook function hook or direct memory patch applied by gamepatches.dll or a plugin at process load time.
 
 ## Principles
