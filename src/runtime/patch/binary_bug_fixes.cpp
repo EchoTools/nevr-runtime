@@ -163,6 +163,9 @@ static constexpr uint64_t kTickIntervalUs = 8000;  // ~125 Hz, the frame-pacer c
 /// because plugin/module OnFrame handlers may themselves call anything that
 /// calls GetTimeMicroseconds — without the gate that is unbounded recursion.
 static void DispatchPerFrameWork(uint64_t nowUs) {
+    // 0 means QpcMicroseconds() had no cached frequency. Bail rather than let
+    // the unsigned subtraction below wrap to a huge value and fire the tick.
+    if (nowUs == 0) return;
     if (nowUs - g_lastTickUs < kTickIntervalUs) return;
     if (InterlockedExchange(&g_tickReentry, 1) != 0) return;  // already inside
     g_lastTickUs = nowUs;
@@ -203,6 +206,25 @@ static void DispatchPerFrameWork(uint64_t nowUs) {
     InterlockedExchange(&g_tickReentry, 0);
 }
 
+/// Monotonic microseconds from QPC, overflow-safe.
+///
+/// (pc * 1000000) / pf overflows INT64_MAX after ~10.68 days at a 10 MHz QPC —
+/// the same truncation this file exists to fix — so the whole and fractional
+/// parts are computed separately and never multiplied together.
+///
+/// Returns 0 if the frequency was never cached; every caller treats 0 as
+/// "no usable clock" rather than dividing by it.
+static inline uint64_t QpcMicroseconds() {
+    const int64_t pf = s_cached_perf_freq;
+    if (pf <= 0) return 0;
+    LARGE_INTEGER counter;
+    QueryPerformanceCounter(&counter);
+    const int64_t pc = counter.QuadPart;
+    const int64_t whole = (pc / pf) * 1000000LL;
+    const int64_t frac  = ((pc % pf) * 1000000LL) / pf;
+    return static_cast<uint64_t>(whole + frac);
+}
+
 static uint64_t __fastcall GetTimeMicrosecondsHook() {
     HookLiveness::Mark(HookLiveness::kGetTimeMicroseconds);
     // Replicate the original's global override check.
@@ -214,15 +236,7 @@ static uint64_t __fastcall GetTimeMicrosecondsHook() {
             g_base + OFF_TIME_OVERRIDE_VALUE);
     }
 
-    LARGE_INTEGER counter;
-    QueryPerformanceCounter(&counter);
-    int64_t pc = counter.QuadPart;
-    int64_t pf = s_cached_perf_freq;
-
-    // Overflow-safe: (pc * 1000000) / pf without intermediate overflow
-    int64_t whole = (pc / pf) * 1000000LL;
-    int64_t frac  = ((pc % pf) * 1000000LL) / pf;
-    const uint64_t nowUs = static_cast<uint64_t>(whole + frac);
+    const uint64_t nowUs = QpcMicroseconds();
 
     // N86: drive per-frame work from here — this site is live in server mode,
     // PrecisionSleep::Wait is not. Rate-limited and re-entrancy-guarded inside.
@@ -342,15 +356,9 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
     // the first call on a thread this is a single bool test.
     EnsureStackReserve();
 
-    // N83/N84: periodic broadcaster-hook entry counts. ~every 30s at 8ms frames.
-    {
-        // N86: this hook (CPrecisionSleep::Wait) is NOT called in server mode —
-        // measured 0 entries across a full run. Retained for client mode, where
-        // it is the correct frame-pacer site. Server-mode dispatch happens in
-        // DispatchPerFrameWork, driven by GetTimeMicroseconds.
-        static volatile LONG s_frames = 0;
-        InterlockedIncrement(&s_frames);
-    }
+    // (A dead frame counter lived here: declared static, incremented, and read
+    // by nothing in the repo. Removed 2026-07-29 — HookLiveness::Mark above is
+    // the entry evidence this hook actually needs.)
 
     // Check for graceful shutdown request (set by SIGINT/SIGTERM handler).
     // This fires every game tick, so CTRL+C responsiveness is bounded by the
@@ -360,22 +368,19 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
       // Unreachable — ForceFatalExit calls TerminateProcess.
     }
 
-    // N68: tick plugin + module per-frame callbacks. The broadcaster-bridge
-    // plugin registers NvrPluginOnFrame (plugin_main.cpp:43) and the plugin
-    // API is documented (plugins/example/README.md), but these were never
-    // called from any per-frame loop.
-    {
-      NvrGameContext gctx = {};
-      gctx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
-      gctx.flags = NEVR_HOST_IS_SERVER;  // always server at this point
-      if (g_isHeadless) gctx.flags |= NEVR_HOST_IS_HEADLESS;
-      TickPlugins(&gctx);
-
-      NvrModuleContext mctx = {};
-      mctx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
-      mctx.flags = NEVR_HOST_IS_SERVER;
-      TickModules(&mctx);
-    }
+    // N68/N86/N110: ONE dispatcher, shared with GetTimeMicrosecondsHook.
+    //
+    // This block used to be a second, divergent copy of the dispatch, and it
+    // hard-coded `gctx.flags = NEVR_HOST_IS_SERVER` with the comment "always
+    // server at this point". That was exactly inverted: hook_liveness.cpp:18
+    // records this hook as "CLIENT ONLY — never runs on a server (N86)". So the
+    // one path that runs ONLY on a client told every plugin and module that it
+    // was running on a server. N86 measured the truth and added the dispatcher
+    // below, but left this copy asserting the opposite.
+    //
+    // Calling the shared dispatcher fixes the flags and gives the client path
+    // the rate limit and re-entrancy guard the server path already had.
+    DispatchPerFrameWork(QpcMicroseconds());
 
     if (microseconds <= 0) {
         SwitchToThread();

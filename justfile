@@ -553,6 +553,42 @@ verify:
     # a usage contract (RULINGS.md "Usage contracts"), not a log tag — docs/standards/logging.md's
     # subsystem-tag rule governs log lines. Verified 2026-07-26: every [NEVR] hit in
     # that file is a help string, zero are log calls.
+    # --- N110: exactly ONE per-frame dispatcher ---------------------------------
+    # There were two. The second (inside PrecisionSleepWaitHook) hard-coded
+    # gctx.flags = NEVR_HOST_IS_SERVER with the comment "always server at this
+    # point", while hook_liveness.cpp records that same hook as "CLIENT ONLY —
+    # never runs on a server (N86)". The one path that runs only on a client told
+    # every plugin it was on a server, for as long as both copies existed.
+    #
+    # Two copies is the shape, not the typo: N86 measured the truth, added a
+    # correct dispatcher, and left the old one asserting the opposite. So the
+    # invariant is about COUNT, not about the flag value.
+    N110_RC=0; N110_TICKS=$(grep -rn 'TickPlugins(&\|TickModules(&' src/runtime --include='*.cpp') || N110_RC=$?
+    sensor_stage1 "N110 single dispatcher" "src/runtime/**/*.cpp" "$N110_RC"
+    sensor_nonempty "N110 single dispatcher" "Tick*(&...) call sites" "$N110_TICKS"
+    # Comment-stripped before counting: `// TickModules(&mctx);` still matches the
+    # grep above, so a dispatcher commented OUT would leave the count at 2 and the
+    # sensor would pass while the tick was dead. Measured 2026-07-29 — this exact
+    # break went green before the filter was added. Uses the repo's :-anchored
+    # stripper (the * arm requires whitespace/slash/EOL after it, so it does not
+    # eat a C pointer dereference).
+    N110_PROD=$(grep -v '/tests/' <<<"$N110_TICKS" \
+                | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep -c . || true)
+    if [ "$N110_PROD" -ne 2 ]; then
+        echo "verify: FAIL — N110 expected exactly 2 production Tick*(&) call sites (one TickPlugins, one TickModules, both inside DispatchPerFrameWork); found $N110_PROD." >&2
+        grep -v '/tests/' <<<"$N110_TICKS" >&2
+        echo "A second dispatcher is how the client path came to report NEVR_HOST_IS_SERVER. Call DispatchPerFrameWork instead of inlining another copy." >&2
+        exit 1
+    fi
+    # ...and the surviving one must derive the host flag, never assert it.
+    N110_BODY=$(awk '/^static void DispatchPerFrameWork/,/^}/' src/runtime/patch/binary_bug_fixes.cpp)
+    sensor_nonempty "N110 dispatcher body" "DispatchPerFrameWork() body" "$N110_BODY"
+    if ! grep -q 'gctx.flags = g_isServer ?' <<<"$N110_BODY"; then
+        echo "verify: FAIL — N110 DispatchPerFrameWork no longer derives the host flag from g_isServer." >&2
+        echo "Hard-coding NEVR_HOST_IS_SERVER is the original defect: this dispatcher runs from a client-only hook too." >&2
+        exit 1
+    fi
+
     # --- N109: src/runtime/ must not re-flatten its own namespace ---------------
     # The reason 44 files piled into one directory is that the target put its own
     # source dir (and gameserver/) on the include path, so any file could include
