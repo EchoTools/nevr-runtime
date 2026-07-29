@@ -76,7 +76,7 @@ itself. Windows VA = ImageBase `0x140000000` + RVA. Quest VA from `nm -DC`.
 | GetTimeMicroseconds (wave0 0a; BUG#1 overflow) | `0x1400d00c0` | overflow-safe µs clock | `NRadEngine::CSysTime::IcGetElapsedUs(unsigned long long, unsigned long long)` | libr15 | `0x379d050` (guard var; fn body via ReVault) | yes | µs elapsed-time primitive present. The `(count*1e6)/freq` overflow may or may not exist in the arm64 build — verify by decompilation |
 | CTimer_GetMilliSeconds (wave0 0b) | `0x1400d0110` | ms overflow observation | `NRadEngine::CTimer::DelayTicks(...)`, `CSysTime::*` | libr15 | `0x11cd290` | partial | ms accessor not 1:1 named; observation-only, low priority |
 | CleanupPeers (BUG#2, fixed via BUG#1) | `0x140f76500` | peer-timeout mass-disconnect | `NRadEngine::SBroadcasterData::CleanupPeers()`; `SClientData::CleanupPeers()` | libr15 | `0x24ef9b0` / `0x250114c` | yes | exact; fixed indirectly by the GetTime fix so no direct patch needed |
-| HandleDXError (wave0 0d; BUG#7) | `0x140551070` | recover transient DXGI errors | — | — | — | **no** | D3D11/DXGI is Windows; Quest renders **Vulkan** (`CVR_VK`, `CGTimerQueryPoolVK`, VkLayers bundled) — DIVERGENT, needs a Vulkan-error analogue |
+| ~~HandleDXError~~ **NOT A REAL FIX — see N24** (was 0d; BUG#7) | `0x140551070` | ~~recover transient DXGI errors~~ — the x86 hook was removed: the original only handles DEVICE_REMOVED, so there were no transient errors to recover. ReVault names it `ReportDXGIDeviceRemoved`. **Nothing to port.** | — | — | — | **no** | D3D11/DXGI is Windows; Quest renders **Vulkan** (`CVR_VK`, `CGTimerQueryPoolVK`, VkLayers bundled) — DIVERGENT, needs a Vulkan-error analogue |
 
 ## 2. pnsrad — social + networking reconstruction (pnsrad.dll → libpnsrad.so)
 
@@ -222,7 +222,7 @@ be ported. Priority order (highest = blocks the most of the hack set):
 | Windows point | Why divergent |
 | --- | --- |
 | DirectInput8Create kill (`HEADLESS_DINPUT` `0x141055DBB`) | DirectInput is Win32; Quest input is Android/OpenXR/vrapi. No analogue |
-| HandleDXError transient recovery (`0x140551070`; BUG#7) | D3D11/DXGI is Windows. Quest is Vulkan (`CVR_VK`, `CGTimerQueryPoolVK`, bundled VkLayers). A Vulkan device-lost analogue would be a *new* fix, not a port |
+| ~~HandleDXError transient recovery~~ (`0x140551070`; BUG#7) | **Struck 2026-07-29.** Two reasons, and the first is sufficient: the x86 fix does not exist — it was removed when its premise was falsified (N24), so there is no port to make and a Vulkan device-lost analogue would be a new fix justified by nothing. (The second reason, that DXGI is Windows-only and Quest is Vulkan, stands but is now moot.) |
 | Headless graphics stubs (DXGI/D3D11 interception, `InstallHeadlessGraphicsHooks`) | same — Vulkan surface; the leVR bridge doc covers the render port separately |
 | PatchBlockOculusSDK (LoadLibraryW/ExW hook) | `libovrplatformloader.so` is a hard `DT_NEEDED`; you cannot block-load it. Would stub exports instead |
 | LibOVRRT64 D3D→OpenXR swapchain bridge (`FUN_141360790`) | Windows/Wine-only; Quest renders native Vulkan via `vrapi`. See `2026-06-09-levr-porting-analysis.md` |

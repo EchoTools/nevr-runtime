@@ -303,9 +303,25 @@ constexpr uintptr_t SYSNET_CHECK = 0x1F6FA0;
 constexpr uintptr_t INIT_GLOBAL_GAMESPACE = 0x110ab0;
 
 /// Address: Game main wrapper (0x1400cd510, 62 bytes)
-/// Called from WinMain. Calls the game's main loop function (fcn.1400cd550) then
-/// calls the BugSplat crash handler if it returns. Hook this to restart the game
-/// loop on crash instead of exiting.
+/// Called from WinMain. An MSVC SEH frame around the game's main function.
+///
+/// This comment used to say it "calls the BugSplat crash handler if it returns",
+/// which is wrong twice over. The bytes (ReVault, 2026-07-29):
+///
+///   SUB  RSP,0x38
+///   MOV  qword [RSP+0x20],0
+///   CALL 0x1400cd550          ; CR15Game main
+///   MOV  qword [RSP+0x20],RAX ; store the result
+///   JMP  0x1400cd549          ; -> epilogue
+///   ...                       ; __except block, SKIPPED on the normal path
+///   ADD  RSP,0x38
+///   RET
+///
+/// There is NO test of the return value — it is stored and never read — and the
+/// handler is NOT reached by falling through. It is a `__try/__except` block
+/// entered by the OS exception dispatcher during unwinding. So "hook this to
+/// restart the game loop on crash" describes a control flow that does not
+/// exist: on a normal return this function simply returns.
 constexpr uintptr_t GAME_MAIN_WRAPPER = 0x0CD510;
 
 /// Address: Game main function (0x1400cd550, 676 bytes)
