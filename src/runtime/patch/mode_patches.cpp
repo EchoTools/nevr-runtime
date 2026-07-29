@@ -374,7 +374,7 @@ typedef INT16 EngineEntityLookupFunc(INT64 arg1, INT64 arg2, INT64 arg3, INT64 a
 static EngineEntityLookupFunc* OriginalEngineEntityLookup = nullptr;
 
 // N83: this hooks CBroadcaster::Listen (0xF80ED0), NOT an entity lookup — see
-// patch_addresses.h. What that means for the code below:
+// hook/addresses.h. What that means for the code below:
 //
 //   - The guard's ARITHMETIC IS CORRECT and empirically derived. [inner+0x5e0]
 //     really is this function's first dereference, and 0x10 + 0x3ff8 = 0x4008 is

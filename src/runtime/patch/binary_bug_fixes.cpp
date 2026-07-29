@@ -32,7 +32,7 @@
  *     increasing backoff). Adds YieldProcessor() for HT friendliness.
  *
  * 0f. CPrecisionSleep::BusyWait — RET patch (BUG #13, High)
- *     Patches first byte to 0xC3 (RET). Eliminates tight QPC+SwitchToThread
+ *     Patches first byte to 0xC3 (RET). Eliminates the tight QPC + Sleep(0)
  *     spin loop. Only loses ~250us of busy-wait precision per frame.
  * ====================================================================== */
 
@@ -555,7 +555,11 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
     }
 
     // BUG #13 fix: patch CPrecisionSleep::BusyWait to RET (0xC3)
-    // Eliminates tight QPC+SwitchToThread spin loop that starves HT sibling.
+    // Eliminates the tight QPC + Sleep(0) spin loop that starves the HT sibling.
+    // NOT SwitchToThread — ReVault measured the call at 0x1401CE510 as Sleep, and
+    // SwitchToThread's IAT slot (0x1416C37F0) has only two xrefs in the whole
+    // binary, both CRT/ConcRT, none in this function. This file claimed
+    // SwitchToThread until 2026-07-29.
     // The WaitableTimer phase in Wait handles the bulk of the sleep;
     // only the final ~250us of busy-wait precision is lost.
     void* busywait = nevr::ResolveVA_Checked(g_base, VA_PRECISION_SLEEP_BUSYWAIT);

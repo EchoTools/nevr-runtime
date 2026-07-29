@@ -446,8 +446,16 @@ constexpr size_t LOADING_TIP_SELECT_2_SIZE = 1;
 // ============================================================================
 
 /// Address: CPrecisionSleep::BusyWait (0x1401ce4c0, 112 bytes)
-/// Tight QPC + SwitchToThread loop for sub-ms frame timing precision.
-/// On Wine, SwitchToThread doesn't yield efficiently, burning ~35% CPU.
+/// Tight QPC + Sleep(0) loop for sub-ms frame timing precision.
+///
+/// NOT SwitchToThread: ReVault measured the call at 0x1401CE510 as Sleep, and
+/// SwitchToThread's IAT slot (0x1416C37F0) has exactly two xrefs in the binary,
+/// both CRT/ConcRT and neither in this function. This comment said
+/// SwitchToThread until 2026-07-29 — an unverified name reasoned from for months.
+///
+/// The measured effect stands regardless of the primitive: RET-patching this
+/// function is what lets a server run under Wine without pinning a core. The
+/// ~35% figure was measured, not derived from any property of SwitchToThread.
 /// Patch the first byte to RET (0xC3) — function returns immediately.
 /// The WaitableTimer phase in the caller still handles the bulk of the sleep;
 /// we only lose the final ~250μs of busy-wait precision per frame.

@@ -202,7 +202,7 @@ TEST(HeadlessGates, GateRvasPinnedToGroundTruth) {
 
 TEST(HeadlessGates, ServerForcesHeadlessGateCount) {
   // N65: the count is derived from PatchAddresses::HEADLESS_GATE_TABLE (defined
-  // in patch_addresses.h). mode_patches.cpp iterates this table to install gates,
+  // in hook/addresses.h). mode_patches.cpp iterates this table to install gates,
   // so adding/removing a gate from the table is the ONLY way to change what gets
   // installed. HEADLESS_GATE_COUNT follows mechanically via sizeof division.
   using namespace PatchAddresses;
@@ -244,7 +244,7 @@ TEST(HeadlessGates, GateRvasInCodeRangeAndDistinct) {
 // they are the automated red→green tests for the call-site class of fix.
 
 // N65: gate count derived from PatchAddresses::HEADLESS_GATE_COUNT, which comes
-// from HEADLESS_GATE_TABLE in patch_addresses.h. mode_patches.cpp iterates this
+// from HEADLESS_GATE_TABLE in hook/addresses.h. mode_patches.cpp iterates this
 // table, so it IS the single source of truth — gate install can't drift.
 TEST(WaveIFixes, N65_GateCount_DerivedFromProductionTable) {
   using namespace PatchAddresses;
