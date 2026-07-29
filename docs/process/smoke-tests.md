@@ -109,8 +109,15 @@ regenerate.
    the deployed `echovr/bin/win10/plugins/` is empty and the plugin loader has
    never been exercised in any captured run. It logs
    `No plugins directory or no plugins found` every time. Plugin checks require
-   **manual staging** (run R2). This also means the API v3 capability work (N114)
-   has zero runtime evidence.
+   **manual staging** (run R2).
+
+   **Resolved by staging, 2026-07-29 (N119).** R2 and R3 have now been executed:
+   staging `nevr_example.dll` by hand flips P02–P04 to PASS, and R3 confirms the
+   N89 refusal fires without being over-broad. The loader and the ABI are sound;
+   only the build/deploy wiring is missing. `nevr_example.dll` is left staged in
+   `echovr/bin/win10/plugins/` so subsequent runs keep covering P01–P04 — if that
+   directory is ever cleared, P02 goes back to FAIL and the cause is staging, not
+   code.
 2. **Stale DLLs in the build tree.** `build/mingw-release/bin/` still holds
    `anim_debugger.dll`, `broadcaster_bridge.dll` and `log_filter.dll` from 26–28
    Jul. The first two moved to the private `nevr-runtime-plugins` repo and the

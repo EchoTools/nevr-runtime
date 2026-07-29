@@ -1,5 +1,5 @@
 /*
- * plugin.cpp — Minimal reference plugin for the nEVR plugin API v2.
+ * plugin.cpp — Minimal reference plugin for the nEVR plugin API v3.
  *
  * Demonstrates every required and optional plugin lifecycle export, config
  * loading, and a safe MinHook hook with prologue validation and graceful
@@ -82,7 +82,7 @@ NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void)
 {
     NvrPluginInfo info = {};
     info.name         = "nevr_example";
-    info.description  = "Minimal reference plugin for the nEVR plugin API v2";
+    info.description  = "Minimal reference plugin for the nEVR plugin API v3";
     info.version_major = 1;
     info.version_minor = 0;
     info.version_patch = 0;
