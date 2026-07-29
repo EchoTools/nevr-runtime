@@ -308,6 +308,17 @@ verify:
         echo "Re-adding that tree recreates the two-copy split that let N48 ship half-implemented. Route the change to src/runtime/server/." >&2
         exit 1
     fi
+    # N111: the per-frame dispatcher, COMMENT-STRIPPED once and reused below.
+    # `grep -q 'EnsureStackReserve()' tick.cpp` matches `// EnsureStackReserve();`
+    # just as happily as the real call, so every one of these "the call site is
+    # present" sensors passed on a commented-out call site. Measured 2026-07-29:
+    # commenting the call out left `just verify` GREEN.
+    # Herestring, never a pipeline — `grep -vE ... | grep -q P` returns 141 on a
+    # match because grep -q exits early and SIGPIPEs stage 1 (N101).
+    TICK_RC=0; TICK_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/frame/tick.cpp) || TICK_RC=$?
+    sensor_stage1 "N111 tick dispatcher" "src/runtime/frame/tick.cpp" "$TICK_RC"
+    sensor_nonempty "N111 tick dispatcher" "non-comment lines of src/runtime/frame/tick.cpp" "$TICK_CODE"
+
     # Wave I — source-level verifiers: each fix must have its call site present.
     # These are automated red→green tests: they fail when the call site is missing
     # (the bug state) and pass when the fix is in place.
@@ -317,11 +328,11 @@ verify:
         exit 1
     fi
     # N68: TickPlugins/TickModules wired into per-frame hook
-    if ! grep -q 'TickPlugins' src/runtime/patch/binary_bug_fixes.cpp; then
+    if ! grep -q 'TickPlugins' <<<"$TICK_CODE"; then
         echo "verify: FAIL — N68 TickPlugins call site missing from per-frame hook" >&2
         exit 1
     fi
-    if ! grep -q 'TickModules' src/runtime/patch/binary_bug_fixes.cpp; then
+    if ! grep -q 'TickModules' <<<"$TICK_CODE"; then
         echo "verify: FAIL — N68 TickModules call site missing from per-frame hook" >&2
         exit 1
     fi
@@ -470,7 +481,7 @@ verify:
         echo "verify: FAIL — N69 SetThreadStackGuarantee missing; stack-overflow handler cannot run." >&2
         exit 1
     fi
-    if ! grep -q 'EnsureStackReserve()' src/runtime/patch/binary_bug_fixes.cpp; then
+    if ! grep -q 'EnsureStackReserve()' <<<"$TICK_CODE"; then
         echo "verify: FAIL — N69 EnsureStackReserve() missing from per-frame hook; game threads uncovered." >&2
         exit 1
     fi
@@ -581,7 +592,7 @@ verify:
         exit 1
     fi
     # ...and the surviving one must derive the host flag, never assert it.
-    N110_BODY=$(awk '/^static void DispatchPerFrameWork/,/^}/' src/runtime/patch/binary_bug_fixes.cpp)
+    N110_BODY=$(awk '/^void DispatchPerFrameWork/,/^}/' src/runtime/frame/tick.cpp)
     sensor_nonempty "N110 dispatcher body" "DispatchPerFrameWork() body" "$N110_BODY"
     if ! grep -q 'gctx.flags = g_isServer ?' <<<"$N110_BODY"; then
         echo "verify: FAIL — N110 DispatchPerFrameWork no longer derives the host flag from g_isServer." >&2
@@ -740,24 +751,24 @@ verify:
     # which left plugins, modules and N69's stack reserve silently dead there.
     # N68's original sensor only checked that TickPlugins appeared in the file —
     # which it did, in a hook that never executed. Check the LIVE site.
-    if ! awk '/^static void DispatchPerFrameWork/,/^}/' src/runtime/patch/binary_bug_fixes.cpp \
+    if ! awk '/^void DispatchPerFrameWork/,/^}/' src/runtime/frame/tick.cpp \
          | grep -q 'TickPlugins'; then
         echo "verify: FAIL — N86 TickPlugins missing from DispatchPerFrameWork; the server-mode" >&2
         echo "per-frame tick is dead again (PrecisionSleep::Wait never runs on a server)." >&2
         exit 1
     fi
-    if ! awk '/^static void DispatchPerFrameWork/,/^}/' src/runtime/patch/binary_bug_fixes.cpp \
+    if ! awk '/^void DispatchPerFrameWork/,/^}/' src/runtime/frame/tick.cpp \
          | grep -q 'TickModules'; then
         echo "verify: FAIL — N86 TickModules missing from DispatchPerFrameWork." >&2
         exit 1
     fi
-    if ! awk '/^static void DispatchPerFrameWork/,/^}/' src/runtime/patch/binary_bug_fixes.cpp \
+    if ! awk '/^void DispatchPerFrameWork/,/^}/' src/runtime/frame/tick.cpp \
          | grep -q 'if (InterlockedExchange(&g_tickReentry, 1) != 0) return;'; then
         echo "verify: FAIL — N86 re-entrancy gate missing from DispatchPerFrameWork; a plugin" >&2
         echo "OnFrame that calls GetTimeMicroseconds would recurse without bound." >&2
         exit 1
     fi
-    if ! grep -q 'DispatchPerFrameWork(nowUs)' src/runtime/patch/binary_bug_fixes.cpp; then
+    if ! grep -q 'Frame::DispatchPerFrameWork(nowUs)' src/runtime/patch/binary_bug_fixes.cpp; then
         echo "verify: FAIL — N86 DispatchPerFrameWork call site missing from the live tick hook." >&2
         exit 1
     fi
@@ -866,7 +877,7 @@ verify:
         echo "verify: FAIL — N90 pnsrad log hook missing; pnsrad.dll output bypasses the filter." >&2
         exit 1
     fi
-    if ! grep -q 'BuiltinLogFilter::InstallPnsradHook();' src/runtime/patch/binary_bug_fixes.cpp; then
+    if ! grep -q 'BuiltinLogFilter::InstallPnsradHook();' <<<"$TICK_CODE"; then
         echo "verify: FAIL — N90 InstallPnsradHook call site missing from the live tick; the hook" >&2
         echo "would never install, since pnsrad.dll loads long after filter init." >&2
         exit 1

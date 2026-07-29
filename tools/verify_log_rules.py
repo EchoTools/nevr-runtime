@@ -23,8 +23,13 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 
 # (file, function, regex matching an acceptable guard in the preceding lines)
 HOT_PATHS = [
-    ("src/runtime/patch/binary_bug_fixes.cpp", "DispatchPerFrameWork",
-     r"if \(t == 1\)|% 3750|s_ticks|first call"),
+    # The regex must match an actual GUARD, not merely the counter it guards on.
+    # `s_ticks` was one of the alternatives, so the bare presence of the counter
+    # declaration satisfied it: measured 2026-07-29, deleting `if (t == 1)`
+    # entirely left this check GREEN because `s_ticks` still appeared in the
+    # lookback window. A hot-path Log() with no guard at all was passing.
+    ("src/runtime/frame/tick.cpp", "DispatchPerFrameWork",
+     r"if \(t == 1\)|% 3750|% kLivenessReportEvery|first call"),
 ]
 LOOKBACK = 6
 

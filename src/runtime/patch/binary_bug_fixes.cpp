@@ -37,6 +37,8 @@
  * ====================================================================== */
 
 #include "runtime/patch/binary_bug_fixes.h"
+
+#include "runtime/frame/tick.h"
 #include "runtime/patch/mode_patches.h"
 #include "runtime/hook/hook_liveness.h"
 #include "runtime/log/builtin_filter.h"
@@ -138,73 +140,11 @@ static HANDLE s_cached_timer = NULL;    // Persistent waitable timer for frame p
 using GetTimeMicroseconds_t = uint64_t(__fastcall*)();
 static GetTimeMicroseconds_t s_origGetTimeMicroseconds = nullptr;
 
-// ---------------------------------------------------------------------------
-// N86 — the per-frame tick site that actually runs on a dedicated server
-// ---------------------------------------------------------------------------
-//
-// N68 wired TickPlugins/TickModules into PrecisionSleepWaitHook and closed on
-// `just verify` green. That proved the CALL SITE existed in source; it did not
-// prove the site ever executes. Measured on a live headless server:
-// CPrecisionSleep::Wait is hooked successfully ("hooks installed: 7 succeeded,
-// 0 failed") and then called ZERO times for the entire run. Plugins never got
-// OnFrame, modules never got their tick, and N69's per-thread stack reserve was
-// never claimed on any game thread.
-//
-// GetTimeMicroseconds IS live in server mode (measured, same run). It is far
-// hotter than one call per frame, so the dispatch is rate-limited by elapsed
-// time using this function's OWN return value — no extra clock, and it tracks
-// real time rather than a call count that varies with engine load.
-static volatile LONG g_tickReentry = 0;
-static uint64_t g_lastTickUs = 0;
-
-static constexpr uint64_t kTickIntervalUs = 8000;  // ~125 Hz, the frame-pacer cadence
-
-/// Dispatch per-frame work from a site known to run. Re-entrancy is guarded
-/// because plugin/module OnFrame handlers may themselves call anything that
-/// calls GetTimeMicroseconds — without the gate that is unbounded recursion.
-static void DispatchPerFrameWork(uint64_t nowUs) {
-    // 0 means QpcMicroseconds() had no cached frequency. Bail rather than let
-    // the unsigned subtraction below wrap to a huge value and fire the tick.
-    if (nowUs == 0) return;
-    if (nowUs - g_lastTickUs < kTickIntervalUs) return;
-    if (InterlockedExchange(&g_tickReentry, 1) != 0) return;  // already inside
-    g_lastTickUs = nowUs;
-
-    EnsureStackReserve();  // N69: covers whatever thread drives the loop
-    BuiltinLogFilter::InstallPnsradHook();  // N90: idempotent; installs once pnsrad.dll loads
-    BuiltinLogFilter::PollHealth();         // N89: health must not depend on the hook it watches
-
-    // Liveness + N83/N84 evidence, ~every 30s (3750 ticks x 8ms).
-    {
-        static volatile LONG s_ticks = 0;
-        const LONG t = InterlockedIncrement(&s_ticks);
-        if (t == 1) {
-            Log(EchoVR::LogLevel::Info,
-                "[NEVR.PATCH] per-frame tick ALIVE via GetTimeMicroseconds (N86) — "
-                "plugin/module OnFrame now dispatched in server mode");
-        }
-        if ((t % 3750) == 0) {
-            LogBroadcasterHookStats();
-            // N86-class standing check: name every hook that installed and has
-            // never been entered. This is the measurement whose absence let a
-            // dead per-frame tick ship for a day.
-            HookLiveness::Report("periodic");
-        }
-    }
-
-    NvrGameContext gctx = {};
-    gctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
-    gctx.flags = g_isServer ? NEVR_HOST_IS_SERVER : NEVR_HOST_IS_CLIENT;
-    if (g_isHeadless) gctx.flags |= NEVR_HOST_IS_HEADLESS;
-    TickPlugins(&gctx);
-
-    NvrModuleContext mctx = {};
-    mctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
-    mctx.flags = gctx.flags;
-    TickModules(&mctx);
-
-    InterlockedExchange(&g_tickReentry, 0);
-}
+// The per-frame dispatcher moved to runtime/frame/tick.cpp on 2026-07-29.
+// It lived here only because the hook that drives it lives here; it shared no
+// state with any of the bug fixes in this file. Both call sites below hand it a
+// microsecond timestamp — see that file for why GetTimeMicroseconds drives it
+// rather than the engine's own frame pacer (N86).
 
 /// Monotonic microseconds from QPC, overflow-safe.
 ///
@@ -240,7 +180,7 @@ static uint64_t __fastcall GetTimeMicrosecondsHook() {
 
     // N86: drive per-frame work from here — this site is live in server mode,
     // PrecisionSleep::Wait is not. Rate-limited and re-entrancy-guarded inside.
-    DispatchPerFrameWork(nowUs);
+    Frame::DispatchPerFrameWork(nowUs);
 
     return nowUs;
 }
@@ -380,7 +320,7 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
     //
     // Calling the shared dispatcher fixes the flags and gives the client path
     // the rate limit and re-entrancy guard the server path already had.
-    DispatchPerFrameWork(QpcMicroseconds());
+    Frame::DispatchPerFrameWork(QpcMicroseconds());
 
     if (microseconds <= 0) {
         SwitchToThread();
