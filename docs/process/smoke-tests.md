@@ -51,6 +51,44 @@ Two signals are **Debug** level (`timer=high_resolution` among them) and are
 filtered out at default verbosity. They are deliberately not in the table — a row
 that can only ever be ABSENT is a row that cannot fail.
 
+### Scoring `all` auto-detects the profile
+
+Some rows are each other's negatives: `C02` fails on `host=server`, which is the
+*correct* output for a server run. Scoring both profiles against one log therefore
+manufactured a FAIL out of a healthy server. With no group argument the scorer
+detects server vs client from the log and scores only the applicable profile,
+reporting `groups = all (detected: server)`. Passing a group explicitly still
+overrides, so a deliberate cross-check remains possible.
+
+## Known environmental state — read before chasing a regression
+
+**As of 2026-07-29, ServerDB registration fails on this host, and it is not a code
+defect.** S23–S25, S36, S37 and S41 come back ABSENT: the server reaches
+`Initialized game server`, starts loading level `0x3F9915D3001DC28E`, and never
+finishes it. Instead it emits `[SYSNET] Setting low latency option for peer` for a
+handful of implausible addresses, and sometimes takes an access violation
+(`0xC0000005` at `game+0x14F47AE`, faulting pointer `0x7F7263FF0000`).
+
+This was **measured, not assumed**, and the obvious hypothesis was disproved:
+
+| Run | HEAD | Date | Registered? |
+| --- | --- | --- | --- |
+| `n105-shutdown` | `d654cd1` | 28 Jul | **yes** |
+| `bisect-d654cd1` | `d654cd1` | 29 Jul | **no** |
+| `smoke-r1` / `r1b` | `de1babf` | 29 Jul | **no** |
+
+The **same commit** registered on 28 Jul and fails on 29 Jul. Eighteen commits
+landed in between and none of them is responsible — the cause is outside this
+repository (service-side; the owner was reworking the protobuf schema and the BSR
+module on 29 Jul). Six earlier runs across four commits all registered cleanly, so
+the 28 Jul behaviour is the norm, not a fluke.
+
+**Do not bisect this.** Re-check it after the service side settles: if S23–S25 come
+back on an unchanged tree, it was never ours. The protobuf contract is generated
+from the BSR (`just proto` → `buf generate buf.build/echotools/nevr-api`); there is
+no local proto checkout in this repo, so a schema change reaches us only through a
+regenerate.
+
 ## Prerequisites
 
 - Build present at `build/mingw-release/bin/` (`just build`).

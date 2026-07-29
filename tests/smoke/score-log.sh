@@ -41,6 +41,20 @@ PLAIN="$(mktemp -t nevr-smoke-XXXXXX)"
 trap 'rm -f "$PLAIN"' EXIT
 sed -E 's/\x1b\[[0-9;]*m//g' "$LOG" > "$PLAIN"
 
+# `all` auto-detects server vs client, because some rows are each other's
+# negatives: C02 fails on `host=server`, which is CORRECT output for a server run.
+# Scoring both profiles against one log therefore manufactured a FAIL out of a
+# healthy server. Detect the mode and score only the applicable profile; an
+# explicit group argument still overrides, so a deliberate cross-check is possible.
+DETECTED=""
+if [ "$WANT" = "all" ]; then
+  if grep -qE 'Server mode . headless \+ noovr applied|bit0_render=CLEAR\(HEADLESS\)' "$PLAIN"; then
+    DETECTED="server"
+  elif grep -qE 'bit0_render=SET\(WINDOWED\)|\[NEVR\.AUTH\]' "$PLAIN"; then
+    DETECTED="client"
+  fi
+fi
+
 # ID @@ group @@ feature @@ pass-regex @@ fail-regex
 # An empty fail-regex means the feature emits no distinct failure line, so it can
 # only be PASS or ABSENT — absence is the only negative evidence available.
@@ -138,7 +152,13 @@ while IFS= read -r row; do
   pass_re="${rest%%@@*}";      fail_re="${rest#*@@}"
 
   case "$WANT" in
-    all) ;;
+    all)
+      # Under auto-detection, skip the profile that does not apply to this log.
+      case "$group" in
+        server) [ "$DETECTED" = "client" ] && continue ;;
+        client) [ "$DETECTED" = "server" ] && continue ;;
+      esac
+      ;;
     "$group") ;;
     *) continue ;;
   esac
@@ -160,7 +180,7 @@ done <<< "$TABLE"
 
 printf '%s\n' "-------------------------------------------------------------------------------------"
 printf 'log     = %s\n' "$LOG"
-printf 'groups  = %s\n' "$WANT"
+printf 'groups  = %s%s\n' "$WANT" "${DETECTED:+ (detected: $DETECTED)}"
 printf 'PASS=%d  FAIL=%d  ABSENT=%d\n' "$pass" "$fail" "$absent"
 [ -n "$failed_ids" ] && printf 'failed  =%s\n' "$failed_ids"
 echo
