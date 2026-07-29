@@ -171,9 +171,16 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
           "[NEVR.PATCH] -headless: native echovr.exe flag; -server applies the same "
           "engine-flags mask, so this token is a harmless no-op here.");
     } else if (lstrcmpW(arg, L"-noovr") == 0) {
-      // NOT the same class as -headless, and deliberately not claimed as
-      // covered: -noovr is also native and the game consumes it (pGame+0x178),
-      // while NEVR still only sets a global. Filed open in BUGS.md N99.
+      // Native token, and the game handles it itself: a single flag write,
+      // orq $0x8000000, 0x7ae0(%rdi) at 0x1401168BA. NOT pGame+0x178 — that is
+      // the CMainArgs POINTER, and the claim that it was a flag field is what
+      // kept this open in N99 for a week. Closed not-a-defect in N113.
+      //
+      // g_noOvr is not "only a global": it drives NEVR_MODULE_HOST_IS_NOOVR
+      // (:75) and the login platform code 5-vs-2 (compat/ws_bridge.cpp:485,544),
+      // which is the behaviour -noovr exists to produce. The game's own
+      // -noovr-requires--spectatorstream assert is bypassed by
+      // PatchNoOvrRequiresSpectatorStream, inert unless the token is present.
       g_noOvr = TRUE;
     }
   }
@@ -278,8 +285,11 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     PatchDisableWwise();
     PatchLogServerProfile();
 
-    // Server frame pacing is handled by the server-timing plugin.
-    PatchServerFramePacing();
+    // (PatchServerFramePacing removed 2026-07-29 — N113. It blind-wrote 0xC3 to
+    // CPrecisionSleep::BusyWait with no address validation and no original-byte
+    // save, duplicating the canonical patch in patch/binary_bug_fixes.cpp which
+    // does both. Two writers to an address whose ORIGINAL byte a shutdown
+    // restore depends on; safe only because Init happened to run first.)
   }
 
   // N92: start the WebSocket bridge in-process. It used to be

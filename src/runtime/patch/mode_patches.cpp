@@ -811,23 +811,14 @@ VOID PatchDisableWwise() {
 // Server Frame Pacing Optimization
 // ===================================================================================================
 
-/// Patch CPrecisionSleep::BusyWait to return immediately.
-/// The CALL from CPrecisionSleep::Wait still executes normally (clean stack),
-/// but the busy-wait function itself is a no-op. The WaitableTimer phase in
-/// the caller handles the bulk sleep; we only lose ~250μs of precision per frame.
-///
-/// DEPRECATED (N25): binary_bug_fixes.cpp is the canonical BusyWait RET patch
-/// site. It installs unconditionally during BinaryBugFixes::Init, making this server-gated
-/// duplicate redundant. This function is retained for now to avoid breaking any
-/// callers during migration; remove once all paths route through BinaryBugFixes::Init.
-VOID PatchServerFramePacing() {
-  const BYTE ret[] = {0xC3};  // RET
-  static_assert(sizeof(ret) == PatchAddresses::PRECISION_SLEEP_BUSYWAIT_SIZE,
-                "PRECISION_SLEEP_BUSYWAIT patch size mismatch");
-  ApplyPatch(PatchAddresses::PRECISION_SLEEP_BUSYWAIT, ret, sizeof(ret));
-
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CPrecisionSleep::BusyWait patched to RET (Wine CPU optimization)");
-}
+// PatchServerFramePacing was removed 2026-07-29 (N113). It wrote 0xC3 to
+// CPrecisionSleep::BusyWait via ApplyPatch with NO prologue validation and no
+// original-byte save — both of which the canonical site in
+// patch/binary_bug_fixes.cpp does (ResolveVA_Checked, then memcpy the original
+// into s_busywait_original_byte for the N33 shutdown restore). It was marked
+// DEPRECATED by N25 with the exit condition "remove once all paths route
+// through BinaryBugFixes::Init"; that condition was already met, since Init
+// patches unconditionally while this copy was server-gated.
 
 // ============================================================================
 // PatchLogServerProfile — log memory and module snapshot

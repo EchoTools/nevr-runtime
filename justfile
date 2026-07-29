@@ -564,6 +564,31 @@ verify:
     # a usage contract (RULINGS.md "Usage contracts"), not a log tag — docs/standards/logging.md's
     # subsystem-tag rule governs log lines. Verified 2026-07-26: every [NEVR] hit in
     # that file is a help string, zero are log calls.
+    # --- N113: exactly ONE writer to CPrecisionSleep::BusyWait -------------------
+    # BinaryBugFixes::Init saves the original byte before writing 0xC3 and restores
+    # it on Shutdown (N33). A SECOND writer defeats that silently: if it runs first,
+    # Init saves the already-patched 0xC3 as "the original" and the restore becomes
+    # a no-op with the true byte lost for the process lifetime.
+    #
+    # That was the live arrangement until 2026-07-29 — PatchServerFramePacing
+    # blind-wrote the same VA with no validation and no save. It was safe only
+    # because Init happened to run first, which is an ordering accident, not a
+    # design. It stays deleted.
+    if grep -rn 'PatchServerFramePacing' src/runtime --include='*.cpp' --include='*.h' \
+         | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
+        echo "verify: FAIL — N113 PatchServerFramePacing is back. It blind-writes CPrecisionSleep::BusyWait with no prologue validation and no original-byte save." >&2
+        echo "patch/binary_bug_fixes.cpp is the canonical site and does both. A second writer defeats the N33 shutdown restore whenever it runs first." >&2
+        exit 1
+    fi
+    # The canonical site must still pair the save with the write.
+    N113_RC=0; N113_BODY=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/patch/binary_bug_fixes.cpp) || N113_RC=$?
+    sensor_stage1 "N113 busywait save/restore" "src/runtime/patch/binary_bug_fixes.cpp" "$N113_RC"
+    sensor_nonempty "N113 busywait save/restore" "non-comment lines of patch/binary_bug_fixes.cpp" "$N113_BODY"
+    if ! grep -q 'memcpy(&s_busywait_original_byte' <<<"$N113_BODY"; then
+        echo "verify: FAIL — N113 the BusyWait RET patch no longer saves the original byte; the N33 shutdown restore has nothing to restore." >&2
+        exit 1
+    fi
+
     # --- N110: exactly ONE per-frame dispatcher ---------------------------------
     # There were two. The second (inside PrecisionSleepWaitHook) hard-coded
     # gctx.flags = NEVR_HOST_IS_SERVER with the comment "always server at this

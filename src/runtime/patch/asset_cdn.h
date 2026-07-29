@@ -8,8 +8,9 @@
 /// Cache location: %LOCALAPPDATA%/EchoVR/cosmetics/v1/packages/
 /// CDN base: https://r2.echo.taxi/v1/
 ///
-/// Not wired into startup — call AssetCDN::Initialize() / AssetCDN::Shutdown()
-/// explicitly (Task 13 handles integration).
+/// Wired into startup: AssetCDN::Initialize() is called from
+/// lifecycle/initialize.cpp:353. (This block said "Not wired into startup"
+/// until 2026-07-29, long after it was wired — corrected in N113.)
 
 #include <cstdint>
 #include <string>
