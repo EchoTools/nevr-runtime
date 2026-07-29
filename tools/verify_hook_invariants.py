@@ -79,50 +79,124 @@ KNOWN_DOUBLE_DETOURS = {
 }
 
 
+# Register entries whose COUNTERPART is not in this repository, so this checker
+# structurally cannot observe them. Deleting such an entry because "it is not
+# detected" is precisely the failure this repo calls the devolution ratchet:
+# unwire -> declare dead -> delete. The hazard is real for an operator who
+# installs the plugin; only our visibility of it is gone. So the knowledge stays,
+# the entry is exempt from the must-be-observed rule, and it is printed every run.
+#
+# If one of these ever DOES become observable, that is new information and fails
+# hard — it means the counterpart came back into the tree.
+# Keyed by (check-name, VA) — NOT by VA alone. 0x140F87AA0 is observable as a
+# self-collision (both sides are in this tree) and unobservable as a double
+# detour (the second owner is not), so an address-only exemption would be wrong
+# in both directions at once.
+UNOBSERVABLE_HERE = {
+    ("double detour", 0x140F87AA0):
+                 ("N84", "the second owner is broadcaster-bridge, which moved to "
+                         "nevr-runtime-plugins (private) on 2026-07-26 because THIS "
+                         "repo is public. Nothing in this tree hooks this address a "
+                         "second time, so the collision cannot be reproduced from "
+                         "here. It still occurs at runtime for any operator who "
+                         "installs that plugin — verify there, not here."),
+}
+
+
 def norm_va(value: int) -> int:
     """Accept either an RVA (patch_addresses.h) or a full VA (address_registry.h)."""
     return value if value >= IMAGE_BASE else value + IMAGE_BASE
 
 
+# --- Input contract ----------------------------------------------------------
+# Every source this checker reads is declared here, and a missing one is a HARD
+# FAILURE — never a silent empty read.
+#
+# This is not hypothetical tidiness. Three of the extractors below return an
+# empty dict when their input is absent, and `set() & set()` is empty, so every
+# check passed while inspecting nothing: the tool printed
+# "hook-invariants: OK (0 known bug(s) tracked)" and exited 0. The count in that
+# line was the only surviving evidence that it had gone blind, and nothing read
+# it. Moving src/gamepatches/ to another directory was sufficient to trigger it.
+#
+# Declared here rather than inline so a directory reorganization has exactly one
+# place to update, and so forgetting to update it fails loudly instead of
+# quietly reducing this gate to a no-op.
+
+FN_POINTER_SRC = "src/common/echovr_functions.cpp"
+PATCH_ADDR_HDR = "src/gamepatches/patch_addresses.h"
+ADDR_REGISTRY_HDR = "plugins/common/include/address_registry.h"
+DETOUR_SCAN_ROOT = "src/gamepatches"
+PLUGIN_SCAN_ROOT = "plugins"
+
+
+class InputMissing(Exception):
+    """An input this checker depends on is absent, unreadable, or yielded nothing."""
+
+
 def read(rel: str) -> str:
     p = REPO / rel
-    return p.read_text(errors="replace") if p.exists() else ""
+    if not p.exists():
+        raise InputMissing(f"{rel} does not exist")
+    return p.read_text(errors="replace")
+
+
+def scan_cpp(rel_root: str) -> list:
+    """Every .cpp under rel_root. An empty result is an error, not an empty scan."""
+    root = REPO / rel_root
+    if not root.is_dir():
+        raise InputMissing(f"{rel_root}/ is not a directory")
+    files = sorted(root.rglob("*.cpp"))
+    if not files:
+        raise InputMissing(f"{rel_root}/**/*.cpp matched no files")
+    return files
+
+
+def require_nonempty(value, rel: str, what: str):
+    """A parsed input that yields nothing means the file moved, or the shape changed."""
+    if not value:
+        raise InputMissing(
+            f"{rel} exists but yielded no {what} — the extraction pattern no "
+            f"longer matches the file's contents")
+    return value
 
 
 # --- Extraction --------------------------------------------------------------
 
 def live_function_pointers() -> dict:
-    """RVAs the runtime CALLS through, from src/common/echovr_functions.cpp."""
-    src = read("src/common/echovr_functions.cpp")
+    """RVAs the runtime CALLS through, from FN_POINTER_SRC."""
+    src = read(FN_POINTER_SRC)
     out = {}
     for m in re.finditer(
         r"^\s*(\w+)\s*=\s*\([^)]*\)\s*\(\s*g_GameBaseAddress\s*\+\s*(0x[0-9A-Fa-f]+)\s*\)",
         src, re.M,
     ):
         out[norm_va(int(m.group(2), 16))] = m.group(1)
-    return out
+    return require_nonempty(out, FN_POINTER_SRC, "live function pointers")
 
 
 def patch_address_constants() -> dict:
-    """name -> normalized VA, from src/gamepatches/patch_addresses.h."""
-    src = read("src/gamepatches/patch_addresses.h")
-    return {
+    """name -> normalized VA, from PATCH_ADDR_HDR."""
+    src = read(PATCH_ADDR_HDR)
+    out = {
         m.group(1): norm_va(int(m.group(2), 16))
         for m in re.finditer(
             r"constexpr\s+uintptr_t\s+(\w+)\s*=\s*(0x[0-9A-Fa-f]+)\s*;", src
         )
     }
+    return require_nonempty(out, PATCH_ADDR_HDR, "address constants")
 
 
 def registry_constants() -> dict:
-    """name -> normalized VA, from plugins/common/include/address_registry.h."""
-    src = read("plugins/common/include/address_registry.h")
-    return {
+    """name -> normalized VA, from ADDR_REGISTRY_HDR."""
+    src = read(ADDR_REGISTRY_HDR)
+    out = {
         m.group(1): norm_va(int(m.group(2), 16))
         for m in re.finditer(
             r"constexpr\s+uint64_t\s+(\w+)\s*=\s*(0x[0-9A-Fa-f]+)\s*;", src
         )
     }
+    return require_nonempty(out, ADDR_REGISTRY_HDR, "registry constants")
 
 
 def gamepatches_detour_targets() -> dict:
@@ -135,7 +209,7 @@ def gamepatches_detour_targets() -> dict:
     """
     consts = patch_address_constants()
     found = {}
-    for path in sorted((REPO / "src" / "gamepatches").rglob("*.cpp")):
+    for path in scan_cpp(DETOUR_SCAN_ROOT):
         text = path.read_text(errors="replace")
         if "PatchDetour" not in text and "MH_CreateHook" not in text:
             continue
@@ -147,14 +221,14 @@ def gamepatches_detour_targets() -> dict:
                 continue
             if re.search(rf"(PatchDetour|MH_CreateHook)\s*\(\s*&?\s*{re.escape(var)}\b", text):
                 found[consts[const]] = const
-    return found
+    return require_nonempty(found, DETOUR_SCAN_ROOT, "detour targets")
 
 
 def plugin_hooked_vas() -> dict:
     """VA -> (plugin, registry-constant) for address_registry constants used in plugins."""
     reg = registry_constants()
     found = {}
-    for path in sorted((REPO / "plugins").rglob("*.cpp")):
+    for path in scan_cpp(PLUGIN_SCAN_ROOT):
         text = path.read_text(errors="replace")
         if "CreateAndEnable" not in text and "MH_CreateHook" not in text:
             continue
@@ -196,10 +270,57 @@ def read_at_va(data, sections, va: int, count: int):
 
 # --- Checks ------------------------------------------------------------------
 
-def check_self_collision(failures, warnings):
+def check_registers_observed(failures, notices, seen_self, seen_double, plugin_side):
+    """
+    Every entry on a known-bug register must actually be OBSERVED by the check
+    that registered it.
+
+    This is the load-bearing anti-blindness invariant. An entry that stops being
+    observed means exactly one of two things, and both demand action:
+      - the bug was fixed, and the entry is now stale -> delete it
+      - the extractor went blind (a path moved, a code shape changed) -> fix it
+    Silently dropping from "2 known bugs tracked" to "0" is the failure this
+    exists to prevent, and the only way to tell those two cases apart is to look.
+    """
+    for kind, register, seen in (
+        ("self-collision", KNOWN_SELF_COLLISIONS, seen_self),
+        ("double detour", KNOWN_DOUBLE_DETOURS, seen_double),
+    ):
+        for va, (lid, _) in sorted(register.items()):
+            if va in seen:
+                continue
+            if (kind, va) in UNOBSERVABLE_HERE:
+                continue  # reported as a NOTE below, exempt by design
+            failures.append(
+                f"REGISTER-STALE: known {kind} 0x{va:X} [{lid}] is on the register "
+                f"but was NOT observed. Either it is fixed — delete the entry — or "
+                f"the extractor went blind and is now checking nothing. Do not "
+                f"ignore this to make the gate green.")
+
+    observed_by_kind = {"self-collision": seen_self, "double detour": seen_double}
+    for (kind, va), (lid, why) in sorted(UNOBSERVABLE_HERE.items()):
+        if va in observed_by_kind.get(kind, ()):
+            failures.append(
+                f"UNOBSERVABLE-RETURNED: {kind} 0x{va:X} [{lid}] is listed as impossible "
+                f"to observe from this repo, but was just observed. The counterpart came "
+                f"back into the tree. Remove it from UNOBSERVABLE_HERE and treat the "
+                f"collision as live.")
+        else:
+            notices.append(f"[{lid}] {kind} 0x{va:X} tracked but NOT checkable here: {why}")
+
+    # The double-detour check needs BOTH sides. Report when the plugin side is
+    # empty rather than reporting a pass it did not earn.
+    if not plugin_side:
+        notices.append(
+            f"double-detour check is VACUOUS: no plugin under {PLUGIN_SCAN_ROOT}/ "
+            f"installs a hook, so there is no second owner to collide with.")
+
+
+def check_self_collision(failures, warnings, seen):
     called = live_function_pointers()
     detoured = gamepatches_detour_targets()
     for va in sorted(set(called) & set(detoured)):
+        seen.add(va)
         desc = (f"0x{va:X} is CALLED as EchoVR::{called[va]} "
                 f"(src/common/echovr_functions.cpp) and DETOURED as "
                 f"PatchAddresses::{detoured[va]} (src/gamepatches/). "
@@ -211,10 +332,11 @@ def check_self_collision(failures, warnings):
             failures.append("SELF-COLLISION: " + desc)
 
 
-def check_double_detour(failures, warnings):
+def check_double_detour(failures, warnings, seen):
     gp = gamepatches_detour_targets()
     pl = plugin_hooked_vas()
     for va in sorted(set(gp) & set(pl)):
+        seen.add(va)
         plugin, const = pl[va]
         desc = (f"0x{va:X} is detoured by gamepatches (PatchAddresses::{gp[va]}) "
                 f"and by plugin '{plugin}' ({const}). Separate MinHook instances "
@@ -354,14 +476,32 @@ def check_veh_ownership(failures, warnings):
 
 def main() -> int:
     if "--write-manifest" in sys.argv:
-        return write_manifest()
+        try:
+            return write_manifest()
+        except InputMissing as e:
+            print(f"cannot write manifest: input contract broken — {e}", file=sys.stderr)
+            return 1
 
-    failures, warnings = [], []
-    check_self_collision(failures, warnings)
-    check_double_detour(failures, warnings)
-    check_identity(failures, warnings)
-    check_veh_ownership(failures, warnings)
+    failures, warnings, notices = [], [], []
+    seen_self, seen_double = set(), set()
+    try:
+        check_self_collision(failures, warnings, seen_self)
+        check_double_detour(failures, warnings, seen_double)
+        check_identity(failures, notices)
+        check_veh_ownership(failures, warnings)
+        check_registers_observed(failures, notices, seen_self, seen_double,
+                                 plugin_hooked_vas())
+    except InputMissing as e:
+        print(f"hook-invariants: FAIL input contract broken — {e}.\n"
+              f"This checker reads a fixed set of paths declared at the top of "
+              f"{pathlib.Path(__file__).name}. One of them no longer resolves, so the "
+              f"checks below it would have inspected an empty set and reported a pass "
+              f"they did not earn. Update the path constants — do not delete the check.",
+              file=sys.stderr)
+        return 1
 
+    for n in notices:
+        print(f"hook-invariants: NOTE {n}")
     for w in warnings:
         print(f"hook-invariants: WARN {w}")
     for f in failures:
@@ -373,6 +513,10 @@ def main() -> int:
               f"or called without the collision being considered.", file=sys.stderr)
         return 1
 
+    # The count is load-bearing: it is the only signal distinguishing "checked
+    # everything and found the two known bugs" from "checked nothing". Registers
+    # are cross-checked against observation above, so a drop here now fails hard
+    # rather than printing a smaller, greener-looking number.
     print(f"hook-invariants: OK ({len(warnings)} known bug(s) tracked)")
     return 0
 
