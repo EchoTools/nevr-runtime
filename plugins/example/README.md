@@ -1,6 +1,6 @@
 # nevr_example — Minimal Reference Plugin
 
-A minimal, fully-documented plugin for the nEVR runtime plugin API v2.
+A minimal, fully-documented plugin for the nEVR runtime plugin API v3.
 Use this as a starting point when creating new plugins.
 
 ## What it demonstrates
@@ -9,6 +9,7 @@ Use this as a starting point when creating new plugins.
 |---|---|
 | Plugin metadata | `NvrPluginGetInfo()` returns name, description, version |
 | API versioning | `NvrPluginGetApiVersion()` returns `NEVR_PLUGIN_API_VERSION` |
+| Capability declaration | `NvrPluginGetCapabilities()` returns what the plugin **does** |
 | Structured logging | `NEVR_DEFINE_PLUGIN_LOG` macro from `plugin_logger.h` |
 | Config loading | Reads `_local/config.json` with `LoadConfigFile` + `nlohmann::json` |
 | Safe hooking | `nevr::ResolveVA` + `nevr::ValidatePrologue` before `HookManager::CreateAndEnable` |
@@ -41,6 +42,9 @@ The output DLL lands at `build/<preset>/bin/nevr_example.dll`.
 ```
 NvrPluginGetInfo()       — required: returns metadata used by the plugin loader
 NvrPluginGetApiVersion() — optional: API version compiled against. Absent = v1.
+NvrPluginGetCapabilities() — optional but PLEASE DECLARE: what this plugin does.
+                             Absent = UNDECLARED, which a server reads as
+                             "unknown", not as "harmless".
 NvrPluginInit(ctx)       — optional: init. Called once after game modules load.
                             Receives NvrGameContext with base_addr and flags.
                             Return 0 for success, non-zero to abort load.
@@ -95,7 +99,20 @@ When adding a hook to your plugin:
 | Plugin exports | API version |
 |---|---|
 | No `NvrPluginGetApiVersion` | v1 (pre-versioning) |
-| `NvrPluginGetApiVersion` returns 2 | v2 (current) |
+| `NvrPluginGetApiVersion` returns 2 | v2 |
+| `NvrPluginGetApiVersion` returns 3 | v3 (current) — adds `NvrPluginGetCapabilities` |
+
+### Declaring capabilities
+
+`NvrPluginGetCapabilities()` returns a bitwise OR of `NvrPluginCapabilities`:
+`OBSERVES_ONLY`, `COSMETIC`, `ALTERS_GAMEPLAY`, `ALTERS_RULES`, `NETWORK`,
+`HOOKS_ENGINE`. A server needs this to judge whether a session is valid when
+community game-mode plugins are loaded.
+
+It is a **declaration, not an enforcement** — the host cannot verify it, and a
+plugin that lies is believed. That is precisely why an inaccurate declaration is
+worse than none: it spends trust the ecosystem needs. Declare honestly and
+specifically.
 
 The host logs a warning if a plugin requires a newer API version but loads it
 anyway. Adding new optional exports or host flags does not require a version

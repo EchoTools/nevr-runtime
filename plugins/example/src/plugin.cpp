@@ -8,6 +8,7 @@
  * API surface demonstrated:
  *   NvrPluginGetInfo        — required: plugin metadata
  *   NvrPluginGetApiVersion  — optional: API version the plugin was built against
+ *   NvrPluginGetCapabilities— optional: what this plugin DOES (declare it)
  *   NvrPluginInit           — optional: one-time init (reads config, installs hook)
  *   NvrPluginShutdown       — optional: cleanup before unload
  *
@@ -86,6 +87,22 @@ NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void)
     info.version_minor = 0;
     info.version_patch = 0;
     return info;
+}
+
+/*
+ * Declare what this plugin does. Optional, but DECLARE IT — a server needs to
+ * know which loaded plugins affect gameplay before it can judge a session, and
+ * a plugin that declares nothing is treated as unknown rather than harmless.
+ *
+ * Be honest and be specific. If you alter the rules of a match, say
+ * ALTERS_RULES; if you only draw things, say COSMETIC. The host cannot check
+ * you, which is exactly why an inaccurate declaration is worse than none.
+ *
+ * This example only reads state and logs, so it observes and nothing more.
+ */
+NEVR_PLUGIN_API uint32_t NvrPluginGetCapabilities(void)
+{
+    return NEVR_PLUGIN_CAP_OBSERVES_ONLY;
 }
 
 NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void)

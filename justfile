@@ -564,6 +564,31 @@ verify:
     # a usage contract (RULINGS.md "Usage contracts"), not a log tag — docs/standards/logging.md's
     # subsystem-tag rule governs log lines. Verified 2026-07-26: every [NEVR] hit in
     # that file is a help string, zero are log calls.
+    # --- N114: the plugin capability channel must stay WIRED ---------------------
+    # A plugin declaring what it does is only useful if the host actually asks.
+    # Declaring the export in the header and never resolving it would leave the
+    # ABI looking complete while every plugin read as UNDECLARED — a decorative
+    # channel, and exactly the class of half-wiring this repo keeps finding
+    # (N48 shipped half-implemented for five weeks the same way).
+    #
+    # Comment-stripped: `// GetProcAddress(... "NvrPluginGetCapabilities")` would
+    # otherwise satisfy a plain grep (N111).
+    N114_RC=0; N114_LOADER=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/ext/plugin_loader.cpp) || N114_RC=$?
+    sensor_stage1 "N114 plugin capabilities wired" "src/runtime/ext/plugin_loader.cpp" "$N114_RC"
+    sensor_nonempty "N114 plugin capabilities wired" "non-comment lines of ext/plugin_loader.cpp" "$N114_LOADER"
+    if ! grep -q 'GetProcAddress(hPlugin, "NvrPluginGetCapabilities")' <<<"$N114_LOADER"; then
+        echo "verify: FAIL — N114 the host no longer resolves NvrPluginGetCapabilities." >&2
+        echo "The ABI would still declare the export while every plugin read as UNDECLARED. A server cannot judge a session it cannot ask about." >&2
+        exit 1
+    fi
+    N114_RC2=0; N114_ABI=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/extension/plugin_interface.h) || N114_RC2=$?
+    sensor_stage1 "N114 plugin capability ABI" "src/extension/plugin_interface.h" "$N114_RC2"
+    sensor_nonempty "N114 plugin capability ABI" "non-comment lines of extension/plugin_interface.h" "$N114_ABI"
+    if ! grep -q 'NEVR_PLUGIN_API_VERSION 3' <<<"$N114_ABI"; then
+        echo "verify: FAIL — N114 NEVR_PLUGIN_API_VERSION is not 3; the capability declaration landed in v3." >&2
+        exit 1
+    fi
+
     # --- N113: exactly ONE writer to CPrecisionSleep::BusyWait -------------------
     # BinaryBugFixes::Init saves the original byte before writing 0xC3 and restores
     # it on Shutdown (N33). A SECOND writer defeats that silently: if it runs first,

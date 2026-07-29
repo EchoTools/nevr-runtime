@@ -12,6 +12,8 @@
 struct LoadedPlugin {
   HMODULE                     hModule;
   NvrPluginInfo               info;
+  uint32_t                    api_version;
+  uint32_t                    capabilities;  /* NvrPluginCapabilities bitmask; 0 = UNDECLARED */
   NvrPluginInit_fn            init;
   NvrPluginOnFrame_fn         on_frame;
   NvrPluginOnGameStateChange_fn on_state_change;
@@ -157,6 +159,14 @@ void LoadPlugins() {
           filename, apiVersion, NEVR_PLUGIN_API_VERSION);
     }
 
+    // What does this plugin DO? (API v3, optional export — absent => UNDECLARED.)
+    // A declaration, not an enforcement: the host cannot verify these bits and a
+    // plugin that lies is believed. It exists so honest plugins are legible, so a
+    // server can require a declaration before accepting a session, and so an
+    // operator can see the answer without reading the plugin's source.
+    auto capsFn = (NvrPluginGetCapabilities_fn)GetProcAddress(hPlugin, "NvrPluginGetCapabilities");
+    const uint32_t caps = capsFn ? capsFn() : NEVR_PLUGIN_CAP_UNDECLARED;
+
     // Resolve optional exports
     auto initFn = (NvrPluginInit_fn)GetProcAddress(hPlugin, "NvrPluginInit");
     auto onFrameFn = (NvrPluginOnFrame_fn)GetProcAddress(hPlugin, "NvrPluginOnFrame");
@@ -181,11 +191,21 @@ void LoadPlugins() {
       HookGuard::VerifyAll(filename);
     }
 
-    g_plugins.push_back({hPlugin, info, initFn, onFrameFn, onStateChangeFn, shutdownFn, path});
-    Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u)",
+    g_plugins.push_back({hPlugin, info, apiVersion, caps, initFn, onFrameFn,
+                         onStateChangeFn, shutdownFn, path});
+    Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u) caps=0x%02X%s",
         info.name,
         info.version_major, info.version_minor, info.version_patch,
-        apiVersion);
+        apiVersion, caps,
+        caps == NEVR_PLUGIN_CAP_UNDECLARED ? " UNDECLARED" : "");
+    if (caps == NEVR_PLUGIN_CAP_UNDECLARED) {
+      // Not a warning about THIS plugin — a warning that we cannot answer the
+      // question a server will ask. Info, because every pre-v3 plugin is here.
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.PLUGIN] %s declares no capabilities (pre-v3 or omitted). It is not "
+          "known whether it affects gameplay; treat as unknown, not as harmless.",
+          info.name);
+    }
   }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] %zu plugin(s) loaded", g_plugins.size());
