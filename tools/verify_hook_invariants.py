@@ -95,11 +95,17 @@ KNOWN_DOUBLE_DETOURS = {
 UNOBSERVABLE_HERE = {
     ("double detour", 0x140F87AA0):
                  ("N84", "the second owner is broadcaster-bridge, which moved to "
-                         "nevr-runtime-plugins (private) on 2026-07-26 because THIS "
-                         "repo is public. Nothing in this tree hooks this address a "
-                         "second time, so the collision cannot be reproduced from "
-                         "here. It still occurs at runtime for any operator who "
-                         "installs that plugin — verify there, not here."),
+                         "nevr-runtime-plugins on 2026-07-26 because THIS repo is "
+                         "public. Nothing in this tree hooks this address a second "
+                         "time, so no SOURCE scan can reproduce the collision. Do "
+                         "not go looking for it there: that repo is a holding area, "
+                         "not a maintained consumer, and a static check of it would "
+                         "still miss any plugin we never compile. The real coverage "
+                         "is at runtime and is source-independent — HookGuard "
+                         "snapshots each guarded address and VerifyAll() re-checks "
+                         "them after EVERY plugin init "
+                         "(runtime/ext/plugin_loader.cpp), logging at ERROR with the "
+                         "offending plugin's filename. Close N84 on those logs."),
 }
 
 
