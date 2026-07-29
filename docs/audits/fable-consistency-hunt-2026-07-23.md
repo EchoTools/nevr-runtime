@@ -12,7 +12,7 @@ Model: `claude-fable-5`. 8 regions, 3 lenses, read-only. Findings ranked by seve
 The Open-handler lambda injects LoginRequest for every connection instead of only conn==1. By the time the Message-handler tries conn=0 injection, `loginInjected` is already true — dead code. The gamepatches copy (ws_bridge.cpp:334) has the correct `connIdx == 1 && !pairPtr->loginInjected` guard.
 **Fix:** Change guard to `if (connIdx == 1 && !pairPtr->loginInjected)`.
 
-### B2 [H] — `src/gamepatches/ws_bridge.cpp:628-634` — Use-after-free in shared remote callback after login conn disconnects (R3)
+### B2 [H] — `src/runtime/compat/ws_bridge.cpp:628-634` — Use-after-free in shared remote callback after login conn disconnects (R3)
 When conn=1 closes but its remote was shared with conn>=2, the Close handler erases ProxyPair but does not clear the remote's `setOnMessageCallback`. The lambda holds dangling `pairPtr`/`gameWsPtr` pointers. Subsequent messages hit freed memory.
 **Fix:** Clear callback with `setOnMessageCallback(nullptr)` before erasing when `isShared`.
 
@@ -20,7 +20,7 @@ When conn=1 closes but its remote was shared with conn>=2, the Close handler era
 `Shutdown()` deletes `s_auth` without holding `s_tokenMutex`. `GetToken()` reads `s_auth` under the mutex. If ws_bridge callback calls GetToken concurrently with Shutdown, use-after-free.
 **Fix:** Wrap delete/null in `std::lock_guard<std::mutex>`.
 
-### B4 [H] — `src/gamepatches/gameserver/gameserver.cpp:1098-1136` — Use-after-free in shutdown detached thread (R2)
+### B4 [H] — `src/runtime/server/gameserver.cpp:1098-1136` — Use-after-free in shutdown detached thread (R2)
 `BeginGracefulShutdown` spawns a detached thread capturing raw `this`. Destructor waits 5s max then destroys members. Detached thread still runs, calling `self->GetContext()`, `self->EndSession()`, `self->Unregister()` on destroyed object.
 **Fix:** Join the shutdown thread instead of detaching, or use shared_ptr ownership.
 
@@ -48,11 +48,11 @@ argv[i] concatenated directly into command-line string without quoting/escaping.
 log-filter uses raw MH_CreateHook/MH_EnableHook instead of nevr::HookManager. Hooks not tracked for cleanup, RemoveLogFilterHook must manually disable/remove. Future global cleanup misses log-filter hooks.
 **Fix:** Switch to nevr::HookManager::CreateAndEnable.
 
-### B11 [M] — `src/gamepatches/winhttp_stub.cpp:84-90` — Non-atomic COM refcounts (R1)
+### B11 [M] — `src/runtime/compat/winhttp_stub.cpp:84-90` — Non-atomic COM refcounts (R1)
 Stub_AddRef/Stub_Release/Stub_QueryInterface use raw `++`/`--` on m_refCount, not InterlockedIncrement/Decrement. Concurrent access from COM marshaling can underflow/overflow refcount.
 **Fix:** Replace with InterlockedIncrement/InterlockedDecrement.
 
-### B12 [M] — `src/gamepatches/initialize.cpp:295-301` — Seven PatchDetour calls discard BOOL return (R1)
+### B12 [M] — `src/runtime/lifecycle/initialize.cpp:295-301` — Seven PatchDetour calls discard BOOL return (R1)
 BuildCmdLine/PreprocessCmd check returns and set g_bootHookFailed, but 7 subsequent PatchDetour calls (NetGameSwitchState through JsonValueAsString) discard every return. Silent hook failure leaves game running degraded.
 **Fix:** Capture returns and OR into g_bootHookFailed.
 
@@ -88,11 +88,11 @@ Mirror socket sendto return discarded. Buffer-full condition causes silent packe
 SetFileAttributesA(HIDDEN) and SetNamedSecurityInfoA(DACL) return values discarded. On failure, .credentials.json is world-readable on multi-user system.
 **Fix:** Check returns; log warning on failure (best-effort hardening).
 
-### B21 [M] — `src/gamepatches/gameserver/gameserver.cpp:933-964` — const_cast on received WebSocket data — UB if game modifies (R2)
+### B21 [M] — `src/runtime/server/gameserver.cpp:933-964` — const_cast on received WebSocket data — UB if game modifies (R2)
 Message handler const_casts binary data from const std::string to VOID*, passes to BroadcasterReceiveLocalEvent as non-const. If game writes through non-const pointer, UB on const object.
 **Fix:** Copy data before passing, or change callback signature to mutable buffer.
 
-### B22 [M] — `src/gamepatches/gameserver/server_context.cpp:225-229` — Unsynchronized callback-registry from background thread (R2)
+### B22 [M] — `src/runtime/server/server_context.cpp:225-229` — Unsynchronized callback-registry from background thread (R2)
 GetCallbackRegistry() documented as "NOT internally synchronized — Must not be called from background threads." Yet shutdown thread calls Unregister → UnregisterAllCallbacks → GetCallbackRegistry. Data race with game thread.
 **Fix:** Acquire m_stateMutex around callback registry, or defer cleanup to main thread.
 

@@ -128,8 +128,9 @@ CLAUDE.md          project conventions — tool-loaded, stays at root
 README.md          what this project is
 AGENTS.md          this file
 
-src/gamepatches/   BugSplat64.dll — hooks, CLI, mode patches, crash recovery,
-                   config, module/plugin loading, in-process gameserver
+src/runtime/   BugSplat64.dll — split by responsibility:
+                   lifecycle/ hook/ patch/ server/ compat/ ext/ log/ link/
+                   Includes are path-qualified: "runtime/hook/addresses.h"
 src/modules/       runtime-loaded modules: platform-compat, token-auth
 src/abi/           libnevr_abi.a — echovr.exe ABI: types, fn pointers, symbols
 src/core/          libnevr_core.a — logging, globals, base64, hooking, pch

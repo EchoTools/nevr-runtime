@@ -76,7 +76,7 @@ static constexpr uint64_t VA_CREATE_SESSION = 0x14015e920;
 
 // --- Server Timing ---
 
-// Source: src/gamepatches/patch_addresses.h in nevr-runtime
+// Source: src/runtime/hook/addresses.h in nevr-runtime
 // CPrecisionSleep::BusyWait — tight QPC+SwitchToThread loop for sub-ms frame timing.
 // On Wine, SwitchToThread doesn't yield, burning ~35% CPU. Patch to RET.
 // Source: echovr-reconstruction/src/NRadEngine/Core/CTiming.h
@@ -95,13 +95,13 @@ static constexpr uint64_t VA_PRECISION_SLEEP_BUSYWAIT = 0x1401CE4C0;
 // On Wine, maps to sched_yield() which returns immediately → spin loops.
 static constexpr uint64_t VA_SWITCH_TO_THREAD = 0x1401CE4B0;
 
-// Source: src/gamepatches/patch_addresses.h in nevr-runtime
+// Source: src/runtime/hook/addresses.h in nevr-runtime
 // Delta time comparison — signed JLE should be unsigned JAE
 static constexpr uint64_t VA_HEADLESS_DELTATIME = 0x1400CF46D;
 
 // --- Arena Rules (CJson_GetFloat hook) ---
 
-// Source: src/gamepatches/patch_addresses.h in nevr-runtime
+// Source: src/runtime/hook/addresses.h in nevr-runtime
 // CJson_GetFloat thunk — 45 direct callers, 623 via inspector ReadFloat.
 // Signature: float(void* root, const char* path, float defaultValue, int32_t required)
 static constexpr uint64_t VA_CJSON_GET_FLOAT = 0x1405FCA60;

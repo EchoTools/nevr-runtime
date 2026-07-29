@@ -208,7 +208,7 @@ prefix hardcoded as OVR_ORG in module ws_bridge).
 
 **Where:** `src/modules/ws-bridge/src/ws_bridge.cpp:281-283` (conn>0
 injection), `:441-444` (conn=0 injection),
-`src/gamepatches/ws_bridge.cpp:331` (gamepatches copy). Tracked as
+`src/runtime/compat/ws_bridge.cpp:331` (gamepatches copy). Tracked as
 BUGS.md N15.
 
 ### Rule 3: Silence is not success
@@ -308,10 +308,10 @@ function removed) SHALL still be logged; an operator seeing a new failure
 in the summary cannot distinguish "this was always failing" from "this
 just started failing" without a baseline.
 
-**Where:** `src/gamepatches/wave0_instrumentation.cpp:435-439`,
-`src/gamepatches/headless_graphics.cpp:454-525`,
-`src/gamepatches/resource_override.cpp:134`,
-`src/gamepatches/builtin_log_filter.cpp:826`. Tracked as BUGS.md N17
+**Where:** `src/runtime/patch/binary_bug_fixes.cpp:435-439`,
+`src/runtime/patch/headless_graphics.cpp:454-525`,
+`src/runtime/patch/resource_override.cpp:134`,
+`src/runtime/log/builtin_filter.cpp:826`. Tracked as BUGS.md N17
 (startup hook errors not systematically tracked).
 
 ### Rule 6: The Log() function is the single entry point
@@ -490,7 +490,7 @@ failing any of these checks is rejected until the violation is fixed.
 - **BUGS.md N15** — Login XPID not logged at injection time.
 - **BUGS.md N18** — log filter not suppressing noise effectively.
 - **BUGS.md N89** — the `log_filter.dll` *plugin* is superseded by the built-in
-  filter and is refused by the loader. `src/gamepatches/builtin_log_filter.cpp`
+  filter and is refused by the loader. `src/runtime/log/builtin_filter.cpp`
   is the shipping path; do not reintroduce the plugin.
 - **BUGS.md N19** — No logging standards exist (this document).
 - **BUGS.md N17** — Startup hook errors not systematically tracked.

@@ -117,16 +117,16 @@ def norm_va(value: int) -> int:
 # check passed while inspecting nothing: the tool printed
 # "hook-invariants: OK (0 known bug(s) tracked)" and exited 0. The count in that
 # line was the only surviving evidence that it had gone blind, and nothing read
-# it. Moving src/gamepatches/ to another directory was sufficient to trigger it.
+# it. Moving src/runtime/ to another directory was sufficient to trigger it.
 #
 # Declared here rather than inline so a directory reorganization has exactly one
 # place to update, and so forgetting to update it fails loudly instead of
 # quietly reducing this gate to a no-op.
 
 FN_POINTER_SRC = "src/abi/echovr_functions.cpp"
-PATCH_ADDR_HDR = "src/gamepatches/patch_addresses.h"
+PATCH_ADDR_HDR = "src/runtime/hook/addresses.h"
 ADDR_REGISTRY_HDR = "plugins/common/include/address_registry.h"
-DETOUR_SCAN_ROOT = "src/gamepatches"
+DETOUR_SCAN_ROOT = "src/runtime"
 PLUGIN_SCAN_ROOT = "plugins"
 
 
@@ -323,7 +323,7 @@ def check_self_collision(failures, warnings, seen):
         seen.add(va)
         desc = (f"0x{va:X} is CALLED as EchoVR::{called[va]} "
                 f"(src/abi/echovr_functions.cpp) and DETOURED as "
-                f"PatchAddresses::{detoured[va]} (src/gamepatches/). "
+                f"PatchAddresses::{detoured[va]} (src/runtime/). "
                 f"Our own calls re-enter our own hook.")
         if va in KNOWN_SELF_COLLISIONS:
             lid, why = KNOWN_SELF_COLLISIONS[va]
@@ -425,7 +425,7 @@ def write_manifest():
 
 # The designated owner of EXCEPTION_BREAKPOINT. Every other vectored exception
 # handler must return EXCEPTION_CONTINUE_SEARCH for it.
-VEH_BREAKPOINT_OWNER = "src/gamepatches/crash_recovery.cpp"
+VEH_BREAKPOINT_OWNER = "src/runtime/lifecycle/crash_recovery.cpp"
 
 # Not built: plugins/CMakeLists.txt add_subdirectory()s only log-filter and
 # example. (broadcaster-bridge moved out 2026-07-26, anim-debugger 2026-07-27 —

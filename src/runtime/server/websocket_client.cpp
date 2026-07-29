@@ -1,0 +1,304 @@
+#include "runtime/server/websocket_client.h"
+
+#include <ixwebsocket/IXNetSystem.h>
+#include <ixwebsocket/IXWebSocket.h>
+
+#include <cstring>
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+#include "abi/echovr.h"
+
+extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
+
+WebSocketClient::WebSocketClient()
+    : webSocket_(std::make_unique<ix::WebSocket>()),
+      lastMsgId_(0),
+      lastPayloadHash_(0),
+      lastMsgTimestamp_(0) {
+  // Initialize network system (required on Windows)
+  // Note: Using static variable for one-time initialization across all instances
+  static bool netSystemInitialized_ = false;
+  if (!netSystemInitialized_) {
+    ix::initNetSystem();
+    netSystemInitialized_ = true;
+  }
+
+  // Initialize thread synchronization for received messages
+  InitializeCriticalSection(&receivedMessagesMutex_);
+
+  // Set up the message callback
+  webSocket_->setOnMessageCallback([this](const ix::WebSocketMessagePtr& msg) { OnMessage(msg); });
+}
+
+WebSocketClient::~WebSocketClient() {
+  Disconnect();
+  DeleteCriticalSection(&receivedMessagesMutex_);
+}
+
+BOOL WebSocketClient::Connect(const CHAR* uri, const std::string& bearerToken) {
+  if (!uri || strlen(uri) == 0) {
+    Log(EchoVR::LogLevel::Error, "[WEBSOCKET] Invalid URI provided for connection");
+    return FALSE;
+  }
+
+  Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Connecting to ServerDB at %s", uri);
+
+  // Set the URL
+  webSocket_->setUrl(std::string(uri));
+
+  // Attach Bearer token on WebSocket upgrade request
+  if (!bearerToken.empty()) {
+    ix::WebSocketHttpHeaders headers;
+    headers["Authorization"] = "Bearer " + bearerToken;
+    webSocket_->setExtraHeaders(headers);
+    Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Using Bearer auth token");
+  }
+
+  // Start the connection (non-blocking)
+  webSocket_->start();
+
+  return TRUE;
+}
+
+VOID WebSocketClient::Disconnect() {
+  if (webSocket_) {
+    Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Disconnecting from ServerDB");
+    webSocket_->stop();
+    connected_.store(false);
+  }
+}
+
+BOOL WebSocketClient::Send(EchoVR::SymbolId msgId, const VOID* data, UINT64 size) {
+  if (size > 1024 * 1024) {
+    Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Rejecting oversized send (msgId: 0x%llX, size: %llu)", msgId, size);
+    return FALSE;
+  }
+  const UINT64 MAGIC = 0xBB8CE7A278BB40F6;
+  std::vector<uint8_t> messageBuffer(sizeof(UINT64) + sizeof(EchoVR::SymbolId) + sizeof(UINT64) + static_cast<size_t>(size));
+
+  memcpy(messageBuffer.data(), &MAGIC, sizeof(UINT64));
+  memcpy(messageBuffer.data() + sizeof(UINT64), &msgId, sizeof(EchoVR::SymbolId));
+  memcpy(messageBuffer.data() + sizeof(UINT64) + sizeof(EchoVR::SymbolId), &size, sizeof(UINT64));
+
+  if (size > 0 && data != nullptr) {
+    memcpy(messageBuffer.data() + sizeof(UINT64) + sizeof(EchoVR::SymbolId) + sizeof(UINT64), data, size);
+  }
+
+  std::string message(messageBuffer.begin(), messageBuffer.end());
+
+  if (!connected_.load(std::memory_order_relaxed)) {
+    EnterCriticalSection(&receivedMessagesMutex_);
+    if (pendingMessages_.size() >= 256) {
+      LeaveCriticalSection(&receivedMessagesMutex_);
+      Log(EchoVR::LogLevel::Warning,
+          "[WEBSOCKET] Pending message queue full (256) — dropping message (msgId: 0x%llX)", msgId);
+      return FALSE;
+    }
+    pendingMessages_.push_back(message);
+    LeaveCriticalSection(&receivedMessagesMutex_);
+    Log(EchoVR::LogLevel::Debug,
+        "[WEBSOCKET] Queued message (msgId: 0x%llX, size: %llu bytes, payload: %llu bytes) - will send when connected",
+        msgId, size, size);
+    return TRUE;
+  }
+
+  auto result = webSocket_->send(message, true);
+
+  if (!result.success) {
+    Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Failed to send message (msgId: 0x%llX)", msgId);
+    return FALSE;
+  }
+
+  Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Sent message (msgId: 0x%llX, size: %llu bytes, total: %zu bytes)", msgId,
+      size, messageBuffer.size());
+
+  return TRUE;
+}
+
+VOID WebSocketClient::SetMessageHandler(MessageCallback callback) { messageCallback_ = callback; }
+
+VOID WebSocketClient::SetConnectionHandler(ConnectionCallback callback) { connectionCallback_ = callback; }
+
+BOOL WebSocketClient::IsConnected() const { return connected_.load(std::memory_order_relaxed); }
+
+VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
+  switch (msg->type) {
+    case ix::WebSocketMessageType::Open:
+      Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Connected to ServerDB");
+      connected_.store(true);
+      FlushPendingMessages();
+      if (connectionCallback_) {
+        connectionCallback_(TRUE);
+      }
+      break;
+
+    case ix::WebSocketMessageType::Close:
+      Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Disconnected from ServerDB (code: %d, reason: %s)", msg->closeInfo.code,
+          msg->closeInfo.reason.c_str());
+      connected_.store(false);
+      break;
+
+    case ix::WebSocketMessageType::Error:
+      Log(EchoVR::LogLevel::Error, "[WEBSOCKET] Connection error: %s", msg->errorInfo.reason.c_str());
+      connected_.store(false);
+      break;
+
+    case ix::WebSocketMessageType::Message:
+      if (msg->binary) {
+        const std::string& payload = msg->str;
+        const UINT64 MAGIC = 0xBB8CE7A278BB40F6;
+        const size_t HEADER_SIZE = sizeof(UINT64) + sizeof(EchoVR::SymbolId) + sizeof(UINT64);
+
+        // Parse concatenated messages from the frame. Nakama may batch
+        // multiple [magic][symbol][length][payload] messages in one frame.
+        size_t offset = 0;
+        int msgCount = 0;
+
+        while (offset + HEADER_SIZE <= payload.size()) {
+          UINT64 magic;
+          memcpy(&magic, payload.data() + offset, sizeof(UINT64));
+
+          if (magic != MAGIC) {
+            if (msgCount == 0) {
+              Log(EchoVR::LogLevel::Warning,
+                  "[WEBSOCKET] Received message with invalid magic: 0x%llX (expected 0x%llX)", magic, MAGIC);
+            } else {
+              Log(EchoVR::LogLevel::Warning,
+                  "[WEBSOCKET] Unexpected bytes at offset %zu after %d message(s) in frame", offset, msgCount);
+            }
+            break;
+          }
+
+          EchoVR::SymbolId msgId;
+          memcpy(&msgId, payload.data() + offset + sizeof(UINT64), sizeof(EchoVR::SymbolId));
+
+          UINT64 length;
+          memcpy(&length, payload.data() + offset + sizeof(UINT64) + sizeof(EchoVR::SymbolId), sizeof(UINT64));
+
+          size_t remaining = payload.size() - offset - HEADER_SIZE;
+
+          if (length > remaining) {
+            Log(EchoVR::LogLevel::Warning,
+                "[WEBSOCKET] Message length exceeds frame (msgId: 0x%llX, length: %llu, remaining: %zu)",
+                msgId, length, remaining);
+            break;
+          }
+
+          Log(EchoVR::LogLevel::Info,
+              "[WEBSOCKET] Received message (msgId: 0x%llX, length: %llu bytes, frame offset: %zu)",
+              msgId, length, offset);
+
+          // Deduplicate: check if same as last message within 100ms
+          UINT64 payloadHash = 0;
+          if (length >= 8) {
+            memcpy(&payloadHash, payload.data() + offset + HEADER_SIZE, 8);
+          }
+          UINT64 currentTimestamp = GetTickCount64();
+
+          if (msgId == lastMsgId_ && payloadHash == lastPayloadHash_ && (currentTimestamp - lastMsgTimestamp_) < 100) {
+            Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Dropping duplicate message (msgId: 0x%llX)", msgId);
+            offset += HEADER_SIZE + static_cast<size_t>(length);
+            msgCount++;
+            continue;
+          }
+
+          lastMsgId_ = msgId;
+          lastPayloadHash_ = payloadHash;
+          lastMsgTimestamp_ = currentTimestamp;
+
+          if (length > 1024 * 1024) {
+            Log(EchoVR::LogLevel::Warning,
+                "[WEBSOCKET] Dropping oversized message (msgId: 0x%llX, size: %llu bytes)", msgId, length);
+            offset += HEADER_SIZE + static_cast<size_t>(length);
+            msgCount++;
+            continue;
+          }
+
+          ReceivedMessage receivedMsg;
+          receivedMsg.msgId = msgId;
+          receivedMsg.timestamp = currentTimestamp;
+          if (length > 0) {
+            receivedMsg.payload.resize(static_cast<size_t>(length));
+            memcpy(receivedMsg.payload.data(), payload.data() + offset + HEADER_SIZE, static_cast<size_t>(length));
+          }
+
+          EnterCriticalSection(&receivedMessagesMutex_);
+          if (receivedMessages_.size() >= 1024) {
+            LeaveCriticalSection(&receivedMessagesMutex_);
+            Log(EchoVR::LogLevel::Warning,
+                "[WEBSOCKET] Receive queue full (1024) — dropping message (msgId: 0x%llX)", msgId);
+            break;
+          }
+          receivedMessages_.push_back(std::move(receivedMsg));
+          LeaveCriticalSection(&receivedMessagesMutex_);
+
+          offset += HEADER_SIZE + static_cast<size_t>(length);
+          msgCount++;
+        }
+
+        if (msgCount == 0 && payload.size() < HEADER_SIZE) {
+          Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Received malformed binary message (too short: %zu bytes)",
+              payload.size());
+        } else if (msgCount > 1) {
+          Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Parsed %d messages from single frame (%zu bytes)", msgCount,
+              payload.size());
+        }
+      } else {
+        Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Received unexpected text message: %s", msg->str.c_str());
+      }
+      break;
+
+    case ix::WebSocketMessageType::Ping:
+    case ix::WebSocketMessageType::Pong:
+      // Handled automatically by ixwebsocket
+      break;
+
+    case ix::WebSocketMessageType::Fragment:
+      break;
+  }
+}
+
+VOID WebSocketClient::FlushPendingMessages() {
+  std::vector<std::string> toSend;
+
+  EnterCriticalSection(&receivedMessagesMutex_);
+  toSend.swap(pendingMessages_);
+  LeaveCriticalSection(&receivedMessagesMutex_);
+
+  if (toSend.empty()) {
+    return;
+  }
+
+  Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Flushing %zu pending messages", toSend.size());
+
+  for (const auto& message : toSend) {
+    Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Sending pending message: size=%zu bytes", message.size());
+    auto result = webSocket_->send(message, true);
+    if (!result.success) {
+      Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Failed to send pending message");
+    } else {
+      Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Successfully sent pending message");
+    }
+  }
+}
+
+VOID WebSocketClient::ProcessReceivedMessages() {
+  std::vector<ReceivedMessage> messagesToProcess;
+
+  EnterCriticalSection(&receivedMessagesMutex_);
+  messagesToProcess.swap(receivedMessages_);
+  LeaveCriticalSection(&receivedMessagesMutex_);
+
+  for (const auto& msg : messagesToProcess) {
+    if (messageCallback_) {
+      const VOID* data = msg.payload.empty() ? nullptr : msg.payload.data();
+      messageCallback_(msg.msgId, data, msg.payload.size());
+    }
+  }
+}
+
+VOID WebSocketClient::DisableReconnection() {
+  if (webSocket_) webSocket_->disableAutomaticReconnection();
+}

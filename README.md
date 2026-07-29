@@ -13,14 +13,14 @@ Part of the **nEVR** project — keeping Echo VR alive.
 
 ### The main DLL
 
-**`src/gamepatches/` → `BugSplat64.dll`**, deployed under that same name.
+**`src/runtime/` → `BugSplat64.dll`**, deployed under that same name.
 
 The game statically imports `BugSplat64.dll` (the original crash reporter), so
 replacing it gives the earliest possible hook point — it loads before `WinMain`.
 It carries the boot hooks, CLI flags, headless/server mode patches, crash
 recovery, config and service redirection, the module and plugin loaders, the
 built-in log filter, and the in-process game server
-(`src/gamepatches/gameserver/`).
+(`src/runtime/server/`).
 
 Hooking is [MinHook](https://github.com/TsudaKageyu/minhook)-based.
 
@@ -95,7 +95,7 @@ From `build/mingw-release/bin/`:
 ## Repository layout
 
 ```
-src/gamepatches/   BugSplat64.dll — hooks, modes, crash recovery, gameserver
+src/runtime/   BugSplat64.dll — hooks, modes, crash recovery, gameserver
 src/modules/       runtime-loaded modules (platform-compat, token-auth)
 src/abi/           libnevr_abi.a  — the echovr.exe ABI surface
 src/core/          libnevr_core.a — our own primitives (links nevr_abi)
@@ -143,6 +143,6 @@ commented out in the root `CMakeLists.txt`). Use it for local install rules:
 
 ```cmake
 set(GAME_DIR "/path/to/echovr/bin/win10")
-add_custom_command(TARGET gamepatches POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:gamepatches> "${GAME_DIR}/BugSplat64.dll")
+add_custom_command(TARGET nevr_runtime POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_runtime> "${GAME_DIR}/BugSplat64.dll")
 ```

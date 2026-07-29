@@ -6,7 +6,7 @@
 
 ## Why
 
-The monolithic loader (src/gamepatches/) contains ~3500 lines mixing unrelated concerns: TLS hooks, WinHTTP bridging, WebSocket proxy, auth flow, directory fixes, log filtering, server timing. Extracting into modules enables:
+The monolithic loader (src/runtime/) contains ~3500 lines mixing unrelated concerns: TLS hooks, WinHTTP bridging, WebSocket proxy, auth flow, directory fixes, log filtering, server timing. Extracting into modules enables:
 
 - Independent testing of each subsystem
 - Conditional loading (skip server-timing on clients)

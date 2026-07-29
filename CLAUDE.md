@@ -64,16 +64,34 @@ The game has a ~15-20 second splash-screen delay at startup before any NEVR code
 
 | Component          | Output DLL       | Deploy As              | Purpose                                                                  |
 | ------------------ | ---------------- | ---------------------- | ------------------------------------------------------------------------ |
-| `src/gamepatches/` | `BugSplat64.dll` | `BugSplat64.dll`       | Runtime hooks, CLI flags, game modifications                             |
-| `src/gamepatches/gameserver/` | *(in `BugSplat64.dll`)* | *(in-process)* | Multiplayer networking, session management |
+| `src/runtime/` | `BugSplat64.dll` | `BugSplat64.dll`       | Runtime hooks, CLI flags, game modifications                             |
+| `src/runtime/server/` | *(in `BugSplat64.dll`)* | *(in-process)* | Multiplayer networking, session management |
 
-GamePatches replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. Several features previously implemented as plugins are now built into gamepatches: server-timing, token-auth, pnsrad-enabler.
+The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. Several features previously implemented as plugins are now built in: server-timing, token-auth, pnsrad-enabler.
+
+`src/runtime/` is split by responsibility. Each subdirectory has a membership test:
+
+| Directory | Holds | Membership test |
+| --- | --- | --- |
+| `src/runtime/lifecycle/` | dllmain, initialize, boot, cli, config, state_machine, crash_recovery | the process's life from `DllMain` to exit |
+| `src/runtime/hook/` | patching.h, addresses.h, process_memory.h, hook_guard, hook_liveness, dll_load_hook, symbol_corpus | *how* we attach to the binary at all |
+| `src/runtime/patch/` | mode_patches, headless_graphics, xpid_patch, pnsrad_enabler, resource_override, asset_cdn, binary_bug_fixes, broadcaster_guard | behaviour we change *in the game* |
+| `src/runtime/server/` | gameserver, server_context, websocket_client, telemetry_*, upnp, messages | the ServerDB / IServerLib subsystem |
+| `src/runtime/compat/` | ws_bridge, winhttp_stub | making the game's ageing network stack work against modern services |
+| `src/runtime/ext/` | plugin_loader, module_loader | loading other people's DLLs |
+| `src/runtime/log/` | boot_log_tee, builtin_filter | log capture and filtering |
+| `src/runtime/link/` | dbghelp_stubs.cpp, bcrypt_minimal.def | not code we run — code the *linker* needs |
+
+**Includes are path-qualified from `src/`** (`#include "runtime/hook/addresses.h"`).
+`src/runtime/CMakeLists.txt` deliberately does NOT put its own directory on the
+include path — that flattening is what let 44 files pile into one directory and
+include each other by bare basename. Re-adding it silently undoes this.
 
 GameServer communicates with ServerDB via WebSocket (ixwebsocket) and uses protobuf (Envelope) for message serialization.
 
 ### Plugins
 
-Optional DLLs loaded by gamepatches at runtime from a `plugins/` subdirectory next to the game binary. Each plugin implements the `NvrPluginInterface` lifecycle (see `src/extension/plugin_interface.h`). Source lives in `plugins/<name>/`.
+Optional DLLs loaded by the runtime from a `plugins/` subdirectory next to the game binary. Each plugin implements the `NvrPluginInterface` lifecycle (see `src/extension/plugin_interface.h`). Source lives in `plugins/<name>/`.
 
 | Plugin               | Output DLL               | Purpose                                              |
 | -------------------- | ------------------------ | ---------------------------------------------------- |
@@ -134,15 +152,15 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 
 ### Key Source Files
 
-- `src/gamepatches/dllmain.cpp` — DLL entry point
-- `src/gamepatches/initialize.cpp` — Initialization sequence after DLL load
-- `src/gamepatches/cli.cpp` — CLI flag parsing and processing
-- `src/gamepatches/boot.cpp` — Game boot sequence hooks
-- `src/gamepatches/mode_patches.cpp` — Server/headless/client mode patches
-- `src/gamepatches/plugin_loader.h` — Plugin discovery and lifecycle management
-- `src/gamepatches/patch_addresses.h` — Virtual addresses for game function hooks
-- `src/gamepatches/gameserver/gameserver.cpp` — IServerLib vtable implementation
-- `src/gamepatches/gameserver/messages.h` — Protocol message symbol IDs (uint64)
+- `src/runtime/lifecycle/dllmain.cpp` — DLL entry point
+- `src/runtime/lifecycle/initialize.cpp` — Initialization sequence after DLL load
+- `src/runtime/lifecycle/cli.cpp` — CLI flag parsing and processing
+- `src/runtime/lifecycle/boot.cpp` — Game boot sequence hooks
+- `src/runtime/patch/mode_patches.cpp` — Server/headless/client mode patches
+- `src/runtime/ext/plugin_loader.h` — Plugin discovery and lifecycle management
+- `src/runtime/hook/addresses.h` — Virtual addresses for game function hooks
+- `src/runtime/server/gameserver.cpp` — IServerLib vtable implementation
+- `src/runtime/server/messages.h` — Protocol message symbol IDs (uint64)
 - `src/core/globals.h` — Cross-DLL globals (`isServer`, `isHeadless`, `exitOnError`, etc.)
 - `src/core/logging.h` — `Log(level, format, ...)` and `FatalError()`
 - `plugins/common/include/address_registry.h` — Verified virtual addresses for all plugin hooks
@@ -160,9 +178,9 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 
 - **Logging**: Always use `Log(EchoVR::LogLevel::Info, "format %d", val)` from `common/logging.h`. Fatal errors via `FatalError(msg, title)`.
 - **Hooking**: MinHook-based (`USE_MINHOOK` compile flag). Functions use `__fastcall` convention. Use `ListenForBroadcasterMessage()` for game event callbacks.
-- **Protocol messages**: Symbol IDs in `src/gamepatches/gameserver/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
+- **Protocol messages**: Symbol IDs in `src/runtime/server/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
 - **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
-- **Global state**: CLI flags as globals in `src/core/globals.h`, set in `src/gamepatches/cli.cpp`.
+- **Global state**: CLI flags as globals in `src/core/globals.h`, set in `src/runtime/lifecycle/cli.cpp`.
 - **Local overrides**: `cmake/local.cmake` (include currently commented out in root CMakeLists.txt).
 
 ## ReVault — Reverse Engineering Data Warehouse

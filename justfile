@@ -304,44 +304,44 @@ verify:
     # N48 shipped half-implemented for five weeks. CMake would now hard-fail on a
     # missing directory, but this names the reason instead of the symptom.
     if grep -Pn '^\s*add_subdirectory\s*\(\s*src/gameserver\s*\)' CMakeLists.txt; then
-        echo "verify: FAIL — src/gameserver/ was removed (N103). The compiled path is src/gamepatches/gameserver/." >&2
-        echo "Re-adding that tree recreates the two-copy split that let N48 ship half-implemented. Route the change to src/gamepatches/gameserver/." >&2
+        echo "verify: FAIL — src/gameserver/ was removed (N103). The compiled path is src/runtime/server/." >&2
+        echo "Re-adding that tree recreates the two-copy split that let N48 ship half-implemented. Route the change to src/runtime/server/." >&2
         exit 1
     fi
     # Wave I — source-level verifiers: each fix must have its call site present.
     # These are automated red→green tests: they fail when the call site is missing
     # (the bug state) and pass when the fix is in place.
     # N59: PatchDscProvider call site in initialize.cpp
-    if ! grep -q 'PatchDscProvider()' src/gamepatches/initialize.cpp; then
+    if ! grep -q 'PatchDscProvider()' src/runtime/lifecycle/initialize.cpp; then
         echo "verify: FAIL — N59 PatchDscProvider call site missing from initialize.cpp" >&2
         exit 1
     fi
     # N68: TickPlugins/TickModules wired into per-frame hook
-    if ! grep -q 'TickPlugins' src/gamepatches/wave0_instrumentation.cpp; then
+    if ! grep -q 'TickPlugins' src/runtime/patch/binary_bug_fixes.cpp; then
         echo "verify: FAIL — N68 TickPlugins call site missing from per-frame hook" >&2
         exit 1
     fi
-    if ! grep -q 'TickModules' src/gamepatches/wave0_instrumentation.cpp; then
+    if ! grep -q 'TickModules' src/runtime/patch/binary_bug_fixes.cpp; then
         echo "verify: FAIL — N68 TickModules call site missing from per-frame hook" >&2
         exit 1
     fi
-    if ! grep -q 'NotifyModulesStateChange' src/gamepatches/state_machine.cpp; then
+    if ! grep -q 'NotifyModulesStateChange' src/runtime/lifecycle/state_machine.cpp; then
         echo "verify: FAIL — N68 NotifyModulesStateChange call site missing from state path" >&2
         exit 1
     fi
     # N60: stop() must be called OUTSIDE g_pairsMutex lock (deadlock prevention)
-    if ! grep -q 'remoteToStop->stop()' src/gamepatches/ws_bridge.cpp; then
+    if ! grep -q 'remoteToStop->stop()' src/runtime/compat/ws_bridge.cpp; then
         echo "verify: FAIL — N60 stop()-outside-lock pattern missing from ws_bridge" >&2
         exit 1
     fi
     # N61: matchmaker must register independent callback on shared remote
-    if ! grep -q 'g_loginRemoteWs->setOnMessageCallback' src/gamepatches/ws_bridge.cpp; then
+    if ! grep -q 'g_loginRemoteWs->setOnMessageCallback' src/runtime/compat/ws_bridge.cpp; then
         echo "verify: FAIL — N61 matchmaker callback registration missing from ws_bridge" >&2
         exit 1
     fi
     # N63: re-entry gate must call ForceFatalExit, not return
-    N63_RC=0; grep -q 'Sleep(100);\s*$' src/gamepatches/crash_recovery.cpp || N63_RC=$?
-    sensor_stage1 "N63 re-entry gate" "src/gamepatches/crash_recovery.cpp" "$N63_RC"
+    N63_RC=0; grep -q 'Sleep(100);\s*$' src/runtime/lifecycle/crash_recovery.cpp || N63_RC=$?
+    sensor_stage1 "N63 re-entry gate" "src/runtime/lifecycle/crash_recovery.cpp" "$N63_RC"
     if [ "$N63_RC" -eq 0 ]; then
         echo "verify: FAIL — N63 re-entry gate still returns (Sleep+return), should be ForceFatalExit" >&2
         exit 1
@@ -353,8 +353,8 @@ verify:
     # password auth. Nothing else refreshes in server mode: TokenAuth::Init
     # returns early on is_server, before the background refresh thread starts.
     # This exchange is the ONLY place a dedicated server can mint an access token.
-    N106_RC=0; N106_GS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/gamepatches/gameserver/gameserver.cpp) || N106_RC=$?
-    sensor_stage1 "N106 OAuth2 refresh reachable" "src/gamepatches/gameserver/gameserver.cpp" "$N106_RC"
+    N106_RC=0; N106_GS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp) || N106_RC=$?
+    sensor_stage1 "N106 OAuth2 refresh reachable" "src/runtime/server/gameserver.cpp" "$N106_RC"
     sensor_nonempty "N106 OAuth2 refresh reachable" "non-comment lines of gameserver.cpp" "$N106_GS"
     if ! grep -q 'HasValidRefreshToken()' <<<"$N106_GS"; then
         echo "verify: FAIL — N106 the gameserver no longer exchanges a refresh token for an" >&2
@@ -372,14 +372,14 @@ verify:
     # GetProcAddress returning null satisfies perfectly — and did, on every run
     # from the N92 fold until 2026-07-28. Assert the DIRECT call instead: a
     # symbol the linker must resolve, not a name looked up at runtime.
-    if ! grep -q 'StopWebSocketBridgeListener()' src/gamepatches/gameserver/gameserver.cpp; then
+    if ! grep -q 'StopWebSocketBridgeListener()' src/runtime/server/gameserver.cpp; then
         echo "verify: FAIL — N64/N105 BeginGracefulShutdown does not call StopWebSocketBridgeListener();" >&2
         echo "the ws bridge listening socket leaks as a wineserver zombie (N37: no SO_REUSEADDR)." >&2
         exit 1
     fi
     # The graceful signal path must release it too, and must not reintroduce a
     # runtime symbol lookup on a path that cannot take the loader lock (N62).
-    if ! grep -q 'StopWebSocketBridgeListener()' src/gamepatches/crash_recovery.cpp; then
+    if ! grep -q 'StopWebSocketBridgeListener()' src/runtime/lifecycle/crash_recovery.cpp; then
         echo "verify: FAIL — N105 PerformGracefulShutdown does not call StopWebSocketBridgeListener()." >&2
         exit 1
     fi
@@ -389,8 +389,8 @@ verify:
     # that the shutdown-dependency resolver no longer performs a lookup at all —
     # the bridge is in-process now. PerformGracefulShutdown's own body is covered
     # separately by the N62 sensor above.
-    N105_RC=0; N105_RSD=$(awk '/^void ResolveShutdownDependencies/,/^}/' src/gamepatches/crash_recovery.cpp) || N105_RC=$?
-    sensor_stage1 "N105 shutdown resolver" "src/gamepatches/crash_recovery.cpp" "$N105_RC"
+    N105_RC=0; N105_RSD=$(awk '/^void ResolveShutdownDependencies/,/^}/' src/runtime/lifecycle/crash_recovery.cpp) || N105_RC=$?
+    sensor_stage1 "N105 shutdown resolver" "src/runtime/lifecycle/crash_recovery.cpp" "$N105_RC"
     sensor_nonempty "N105 shutdown resolver" "ResolveShutdownDependencies() body" "$N105_RSD"
     if grep -qE 'GetProcAddress|GetModuleHandleA' <<<"$N105_RSD"; then
         echo "verify: FAIL — N62/N105 ResolveShutdownDependencies resolves a symbol at runtime again." >&2
@@ -401,10 +401,10 @@ verify:
     # SHIPS. 647cca7 wrote them into src/gameserver/ — a tree that stopped being
     # built on 2026-06-26 — so the feature was recorded as done while production
     # had no fatal path at all for either condition. Assert on the compiled file
-    # (src/gamepatches/gameserver/), never the dead one.
-    N102_RC=0; N102_GS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/gamepatches/gameserver/gameserver.cpp) || N102_RC=$?
-    sensor_stage1 "N102 gameserver fail-fast" "src/gamepatches/gameserver/gameserver.cpp" "$N102_RC"
-    sensor_nonempty "N102 gameserver fail-fast" "non-comment lines of src/gamepatches/gameserver/gameserver.cpp" "$N102_GS"
+    # (src/runtime/server/), never the dead one.
+    N102_RC=0; N102_GS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp) || N102_RC=$?
+    sensor_stage1 "N102 gameserver fail-fast" "src/runtime/server/gameserver.cpp" "$N102_RC"
+    sensor_nonempty "N102 gameserver fail-fast" "non-comment lines of src/runtime/server/gameserver.cpp" "$N102_GS"
     for site in 'registration rejected by ServerDB' 'no valid token for ServerDB connection'; do
         if ! grep -qF "$site" <<<"$N102_GS"; then
             echo "verify: FAIL — N102 the fail-fast for '${site}' is missing from the SHIPPING gameserver." >&2
@@ -435,22 +435,22 @@ verify:
     # that mutex was held would deadlock the handler on its own log lock. The
     # crash path must use VehPrintf (raw WriteFile) exclusively.
     # Matches the call form `Log(EchoVR::LogLevel` — 348 of 355 `Log(` occurrences in
-    # src/gamepatches, and every real call site (the remainder are prose in comments).
+    # src/runtime, and every real call site (the remainder are prose in comments).
     # Deliberately NOT a word-boundary regex: `\bLog\(` also matches the phrase "Log()"
     # in the explanatory comments inside these very functions. Deliberately NOT the
     # `(^|[^a-zA-Z_])Log\(` idiom either — GNU grep's ERE mishandles `^` inside an
     # alternation group and that pattern silently matches nothing (verified 2026-07-26).
-    N70_VEH_RC=0; N70_VEH_BODY=$(awk '/^LONG WINAPI BreakpointVEH/,/^}/' src/gamepatches/crash_recovery.cpp) || N70_VEH_RC=$?
-    sensor_stage1 "N70 BreakpointVEH" "src/gamepatches/crash_recovery.cpp" "$N70_VEH_RC"
-    sensor_nonempty "N70 BreakpointVEH" "BreakpointVEH() body in src/gamepatches/crash_recovery.cpp" "$N70_VEH_BODY"
+    N70_VEH_RC=0; N70_VEH_BODY=$(awk '/^LONG WINAPI BreakpointVEH/,/^}/' src/runtime/lifecycle/crash_recovery.cpp) || N70_VEH_RC=$?
+    sensor_stage1 "N70 BreakpointVEH" "src/runtime/lifecycle/crash_recovery.cpp" "$N70_VEH_RC"
+    sensor_nonempty "N70 BreakpointVEH" "BreakpointVEH() body in src/runtime/lifecycle/crash_recovery.cpp" "$N70_VEH_BODY"
     if grep -qF 'Log(EchoVR::LogLevel' <<<"$N70_VEH_BODY"; then
         echo "verify: FAIL — N70 BreakpointVEH calls Log(); crash path must use VehPrintf (raw WriteFile)." >&2
         echo "Log() reaches std::lock_guard(g_file_mutex) — a crash during log emission would self-deadlock." >&2
         exit 1
     fi
-    N70_WCD_RC=0; N70_WCD_BODY=$(awk '/^static void WriteCrashDump/,/^}/' src/gamepatches/crash_recovery.cpp) || N70_WCD_RC=$?
-    sensor_stage1 "N70 WriteCrashDump" "src/gamepatches/crash_recovery.cpp" "$N70_WCD_RC"
-    sensor_nonempty "N70 WriteCrashDump" "WriteCrashDump() body in src/gamepatches/crash_recovery.cpp" "$N70_WCD_BODY"
+    N70_WCD_RC=0; N70_WCD_BODY=$(awk '/^static void WriteCrashDump/,/^}/' src/runtime/lifecycle/crash_recovery.cpp) || N70_WCD_RC=$?
+    sensor_stage1 "N70 WriteCrashDump" "src/runtime/lifecycle/crash_recovery.cpp" "$N70_WCD_RC"
+    sensor_nonempty "N70 WriteCrashDump" "WriteCrashDump() body in src/runtime/lifecycle/crash_recovery.cpp" "$N70_WCD_BODY"
     if grep -qF 'Log(EchoVR::LogLevel' <<<"$N70_WCD_BODY"; then
         echo "verify: FAIL — N70 WriteCrashDump calls Log(); crash path must use VehPrintf (raw WriteFile)." >&2
         exit 1
@@ -461,16 +461,16 @@ verify:
         echo "verify: FAIL — N70 WriteCrashDump enumerates modules; takes the loader lock. Read g_moduleCache instead." >&2
         exit 1
     fi
-    if ! grep -q 'CacheModuleTable()' src/gamepatches/crash_recovery.cpp; then
+    if ! grep -q 'CacheModuleTable()' src/runtime/lifecycle/crash_recovery.cpp; then
         echo "verify: FAIL — N70 CacheModuleTable() call site missing; handler would have no module snapshot." >&2
         exit 1
     fi
     # N69: stack reserve must be claimed, or the overflow handler has no room to run.
-    if ! grep -q 'SetThreadStackGuarantee' src/gamepatches/crash_recovery.cpp; then
+    if ! grep -q 'SetThreadStackGuarantee' src/runtime/lifecycle/crash_recovery.cpp; then
         echo "verify: FAIL — N69 SetThreadStackGuarantee missing; stack-overflow handler cannot run." >&2
         exit 1
     fi
-    if ! grep -q 'EnsureStackReserve()' src/gamepatches/wave0_instrumentation.cpp; then
+    if ! grep -q 'EnsureStackReserve()' src/runtime/patch/binary_bug_fixes.cpp; then
         echo "verify: FAIL — N69 EnsureStackReserve() missing from per-frame hook; game threads uncovered." >&2
         exit 1
     fi
@@ -478,11 +478,11 @@ verify:
     # thread. VERIFIED-BY-TYPE only binds the artifact that ships — this grep asserts
     # the type is on THIS file, the one the linker consumes (the earlier fix landed
     # in plugins/crash-handler/, which CMake does not build).
-    if ! grep -q 'std::atomic<bool> g_crashReporterSuppressed' src/gamepatches/crash_recovery.cpp; then
+    if ! grep -q 'std::atomic<bool> g_crashReporterSuppressed' src/runtime/lifecycle/crash_recovery.cpp; then
         echo "verify: FAIL — N67 g_crashReporterSuppressed is not std::atomic<bool> in the SHIPPING path." >&2
         exit 1
     fi
-    if ! grep -q 'std::atomic<bool> g_justSuppressedCrash' src/gamepatches/crash_recovery.cpp; then
+    if ! grep -q 'std::atomic<bool> g_justSuppressedCrash' src/runtime/lifecycle/crash_recovery.cpp; then
         echo "verify: FAIL — N67 g_justSuppressedCrash is not std::atomic<bool> in the SHIPPING path." >&2
         exit 1
     fi
@@ -491,9 +491,9 @@ verify:
     # InitializeFunctionPointers() makes EchoVR::WriteLog non-null. Everything after
     # that point in Initialize() must use BootLogTee::TeeFprintf. Exactly one Log()
     # call is permitted — the final line, emitted after BootLogTee::Close().
-    N36_RC=0; N36_BODY=$(awk '/^VOID Initialize\(\)/,/^}/' src/gamepatches/initialize.cpp) || N36_RC=$?
-    sensor_stage1 "N36 Initialize Log census" "src/gamepatches/initialize.cpp" "$N36_RC"
-    sensor_nonempty "N36 Initialize Log census" "Initialize() body in src/gamepatches/initialize.cpp" "$N36_BODY"
+    N36_RC=0; N36_BODY=$(awk '/^VOID Initialize\(\)/,/^}/' src/runtime/lifecycle/initialize.cpp) || N36_RC=$?
+    sensor_stage1 "N36 Initialize Log census" "src/runtime/lifecycle/initialize.cpp" "$N36_RC"
+    sensor_nonempty "N36 Initialize Log census" "Initialize() body in src/runtime/lifecycle/initialize.cpp" "$N36_BODY"
     LOGS_IN_INIT=$(printf '%s\n' "$N36_BODY" | grep -cF 'Log(EchoVR::LogLevel' || true)
     if [ "$LOGS_IN_INIT" -gt 1 ]; then
         echo "verify: FAIL — N36 Initialize() contains $LOGS_IN_INIT Log() calls (max 1, the final line)." >&2
@@ -506,53 +506,72 @@ verify:
     # Without the guard, a substring rule aimed at echovr noise silently deletes
     # NEVR structured output — it previously erased "Finished initializing engine"
     # (the witness cited in the N7/N8/N10 closes) and masked real ExitProcess reports.
-    if ! grep -q 'if (IsNevrLine(message)) return false;' src/gamepatches/builtin_log_filter.cpp; then
+    if ! grep -q 'if (IsNevrLine(message)) return false;' src/runtime/log/builtin_filter.cpp; then
         echo "verify: FAIL — N77 NEVR-line exemption missing from ShouldSuppress; game-noise patterns can delete NEVR output." >&2
         exit 1
     fi
     # N77: these two patterns must never return to the blanket suppress list.
-    N77A_RC=0; grep -qF '"Finished initializing engine",' src/gamepatches/builtin_log_filter.cpp || N77A_RC=$?
-    sensor_stage1 "N77 boot-witness suppression" "src/gamepatches/builtin_log_filter.cpp" "$N77A_RC"
+    N77A_RC=0; grep -qF '"Finished initializing engine",' src/runtime/log/builtin_filter.cpp || N77A_RC=$?
+    sensor_stage1 "N77 boot-witness suppression" "src/runtime/log/builtin_filter.cpp" "$N77A_RC"
     if [ "$N77A_RC" -eq 0 ]; then
         echo "verify: FAIL — N77 'Finished initializing engine' is suppressed again; that string is the headless-boot witness (N7/N8/N10)." >&2
         exit 1
     fi
-    N77B_RC=0; grep -qF '"ExitProcess(",' src/gamepatches/builtin_log_filter.cpp || N77B_RC=$?
-    sensor_stage1 "N77 ExitProcess suppression" "src/gamepatches/builtin_log_filter.cpp" "$N77B_RC"
+    N77B_RC=0; grep -qF '"ExitProcess(",' src/runtime/log/builtin_filter.cpp || N77B_RC=$?
+    sensor_stage1 "N77 ExitProcess suppression" "src/runtime/log/builtin_filter.cpp" "$N77B_RC"
     if [ "$N77B_RC" -eq 0 ]; then
         echo "verify: FAIL — N77 'ExitProcess(' is suppressed again; it masks real process-exit reports. Use rate limiting (N78)." >&2
         exit 1
     fi
     # N78: frequent lines are collapsed into a counted summary, never deleted.
-    if ! grep -q 'RateVerdict::Collapse' src/gamepatches/builtin_log_filter.cpp; then
+    if ! grep -q 'RateVerdict::Collapse' src/runtime/log/builtin_filter.cpp; then
         echo "verify: FAIL — N78 rate-limited summarisation missing; filter can only delete, not summarise (docs/standards/logging.md Rule 4)." >&2
         exit 1
     fi
     # N79: filter health must be emitted while the process is alive. Shutdown() is
     # unreachable in production — every server exit is TerminateProcess, which runs
     # no DLL detach.
-    if ! grep -q 'MaybeEmitHealth();' src/gamepatches/builtin_log_filter.cpp; then
+    if ! grep -q 'MaybeEmitHealth();' src/runtime/log/builtin_filter.cpp; then
         echo "verify: FAIL — N79 periodic health emission missing; suppression ratio only reachable at a shutdown that never runs." >&2
         exit 1
     fi
     # N80: both log writers must stamp the shared run ID, or the two files cannot be joined.
-    if ! grep -q 'GetRunId()' src/gamepatches/boot_log_tee.cpp; then
+    if ! grep -q 'GetRunId()' src/runtime/log/boot_log_tee.cpp; then
         echo "verify: FAIL — N80 run ID missing from BootLogTee; boot log cannot be correlated or split by run." >&2
         exit 1
     fi
-    if ! grep -q 'GetRunId()' src/gamepatches/builtin_log_filter.cpp; then
+    if ! grep -q 'GetRunId()' src/runtime/log/builtin_filter.cpp; then
         echo "verify: FAIL — N80 run ID missing from the runtime log writer." >&2
         exit 1
     fi
     # N81/N45: no bare [NEVR] tag on a LOG line — it names every component and so
     # discriminates none.
     #
-    # src/gamepatches/cli.cpp is excluded deliberately, not by oversight: its 14
+    # src/runtime/lifecycle/cli.cpp is excluded deliberately, not by oversight: its 14
     # "[NEVR] " strings are all AddArgHelpString descriptions, where the marker
     # distinguishes NEVR-added flags from the game's own in `--help` output. That is
     # a usage contract (RULINGS.md "Usage contracts"), not a log tag — docs/standards/logging.md's
     # subsystem-tag rule governs log lines. Verified 2026-07-26: every [NEVR] hit in
     # that file is a help string, zero are log calls.
+    # --- N109: src/runtime/ must not re-flatten its own namespace ---------------
+    # The reason 44 files piled into one directory is that the target put its own
+    # source dir (and gameserver/) on the include path, so any file could include
+    # any other by bare basename and nothing ever forced a decision about where a
+    # file belonged. Every include is now path-qualified from src/.
+    #
+    # Re-adding ${CMAKE_CURRENT_SOURCE_DIR} to this target restores the flat
+    # namespace silently: nothing fails, and the next file lands wherever. This
+    # sensor is the only thing standing between that one line and the tree we
+    # just spent a reorganization undoing.
+    N109_RC=0; N109_INC=$(awk '/^target_include_directories\(nevr_runtime/,/\)/' src/runtime/CMakeLists.txt) || N109_RC=$?
+    sensor_stage1 "N109 runtime include roots" "src/runtime/CMakeLists.txt" "$N109_RC"
+    sensor_nonempty "N109 runtime include roots" "target_include_directories(nevr_runtime …) block" "$N109_INC"
+    if grep -q 'CMAKE_CURRENT_SOURCE_DIR' <<<"$N109_INC"; then
+        echo "verify: FAIL — N109 src/runtime/CMakeLists.txt puts its own source dir on the include path." >&2
+        echo "That re-enables bare-basename includes across all of src/runtime/, which is how 44 files ended up flat in one directory. Include path-qualified from src/ instead: \"runtime/hook/addresses.h\"." >&2
+        exit 1
+    fi
+
     # --- N108: the shared layer's dependency direction --------------------------
     # src/abi/ encodes what the GAME BINARY told us. src/core/ is what WE wrote.
     # The dependency runs core -> abi (EchoVR::LogLevel is a game enum, so logging
@@ -580,10 +599,10 @@ verify:
     #   src/abi      -> sensor_stage1 above (grep rc>=2 on a missing subject)
     #   src/core     -> the same, via the N81/N85/N20 path sets
     #   src/extension-> CMake, since its headers are in nevr_core's source list
-    N81_RC=0; N81_HITS=$(grep -rn '"\[NEVR\] ' src/gamepatches src/abi src/core) || N81_RC=$?
-    sensor_stage1 "N81 bare [NEVR] tag" "src/gamepatches src/abi src/core" "$N81_RC"
+    N81_RC=0; N81_HITS=$(grep -rn '"\[NEVR\] ' src/runtime src/abi src/core) || N81_RC=$?
+    sensor_stage1 "N81 bare [NEVR] tag" "src/runtime src/abi src/core" "$N81_RC"
     if [ "$N81_RC" -eq 0 ] && printf '%s\n' "$N81_HITS" \
-         | grep -v legacy | grep -v 'src/gamepatches/cli.cpp' | grep .; then
+         | grep -v legacy | grep -v 'src/runtime/lifecycle/cli.cpp' | grep .; then
         echo "verify: FAIL — N81 bare [NEVR] log tag found; use a subsystem tag from the docs/standards/logging.md table." >&2
         exit 1
     fi
@@ -597,11 +616,11 @@ verify:
     # sees plugins in THIS tree — a third-party plugin is a DLL we never compile.
     # HookGuard detects the effect (our bytes changed) instead of the source.
     # Both call sites are wiring, invisible to the GTest, so they get a sensor.
-    if ! grep -q 'HookGuard::Record(target, name)' src/gamepatches/gamepatches_internal.h; then
+    if ! grep -q 'HookGuard::Record(target, name)' src/runtime/hook/patching.h; then
         echo "verify: FAIL — N84 HookGuard::Record missing from PatchDetour; new detours would be unguarded." >&2
         exit 1
     fi
-    if ! grep -q 'HookGuard::VerifyAll(filename)' src/gamepatches/plugin_loader.cpp; then
+    if ! grep -q 'HookGuard::VerifyAll(filename)' src/runtime/ext/plugin_loader.cpp; then
         echo "verify: FAIL — N84 HookGuard::VerifyAll missing from the plugin load path; third-party re-hooks undetectable." >&2
         exit 1
     fi
@@ -613,8 +632,8 @@ verify:
     # Match the CALL form ('->setOnMessageCallback(nullptr)') and drop comment
     # lines. A looser pattern flags prose describing the bug — the same false
     # positive the N81 sensor hit on cli.cpp's --help strings.
-    N85_RC=0; N85_HITS=$(grep -rn -- '->setOnMessageCallback(nullptr)' src/gamepatches src/modules src/abi src/core) || N85_RC=$?
-    sensor_stage1 "N85 empty ws callback" "src/gamepatches src/modules src/abi src/core" "$N85_RC"
+    N85_RC=0; N85_HITS=$(grep -rn -- '->setOnMessageCallback(nullptr)' src/runtime src/modules src/abi src/core) || N85_RC=$?
+    sensor_stage1 "N85 empty ws callback" "src/runtime src/modules src/abi src/core" "$N85_RC"
     if [ "$N85_RC" -eq 0 ] && printf '%s\n' "$N85_HITS" \
          | grep -v legacy | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
         echo "verify: FAIL — N85 setOnMessageCallback(nullptr) reintroduced; use a no-op lambda." >&2
@@ -625,13 +644,13 @@ verify:
     # generic null-ptr branch, NOT by per-site hooks. Two things must hold: the
     # generic branch still exists, and the attribution table is still populated
     # (without it a fire reports a bare RVA and the class is unrecognisable).
-    if ! grep -q 'target < 0x10000' src/gamepatches/crash_recovery.cpp; then
+    if ! grep -q 'target < 0x10000' src/runtime/lifecycle/crash_recovery.cpp; then
         echo "verify: FAIL — N71 generic null-ptr AV branch missing from BreakpointVEH; the whole" >&2
         echo "session-flags deref class loses its only guard (no per-site hooks exist by design)." >&2
         exit 1
     fi
     # Count ENTRIES, not lines — the table packs two per line.
-    N71_SITES=$(grep -oE '\{0x[0-9A-F]+, "' src/gamepatches/crash_recovery.cpp | wc -l)
+    N71_SITES=$(grep -oE '\{0x[0-9A-F]+, "' src/runtime/lifecycle/crash_recovery.cpp | wc -l)
     if [ "$N71_SITES" -lt 25 ]; then
         echo "verify: FAIL — N71 known-site table has $N71_SITES entries (expected >= 25);" >&2
         echo "a crash at these RVAs would report a bare address with no class attribution." >&2
@@ -642,7 +661,7 @@ verify:
     # (upstream vcpkg dep) and is instead made unreachable by N39: pick a random
     # ephemeral port and retry. Both properties must survive, or the old
     # hardcoded-port failure returns with no way to fix it.
-    for f in src/gamepatches/ws_bridge.cpp; do
+    for f in src/runtime/compat/ws_bridge.cpp; do
         if ! grep -q 'uniform_int_distribution<uint16_t> dist(49152, 65535)' "$f"; then
             echo "verify: FAIL — N37/N39 random ephemeral-port selection missing from $f;" >&2
             echo "a fixed port reintroduces the zombie-socket bind failure ixwebsocket cannot recover from." >&2
@@ -659,9 +678,9 @@ verify:
     # Strip comment lines first: the function's own comment says "NO
     # GetModuleHandleA/GetProcAddress", and a naive match flags the rule as a
     # violation of itself. Same false positive the N81 and N85 sensors hit.
-    N62_RC=0; N62_BODY=$(awk '/^void PerformGracefulShutdown/,/^}/' src/gamepatches/crash_recovery.cpp) || N62_RC=$?
-    sensor_stage1 "N62 shutdown loader-lock" "src/gamepatches/crash_recovery.cpp" "$N62_RC"
-    sensor_nonempty "N62 shutdown loader-lock" "PerformGracefulShutdown() body in src/gamepatches/crash_recovery.cpp" "$N62_BODY"
+    N62_RC=0; N62_BODY=$(awk '/^void PerformGracefulShutdown/,/^}/' src/runtime/lifecycle/crash_recovery.cpp) || N62_RC=$?
+    sensor_stage1 "N62 shutdown loader-lock" "src/runtime/lifecycle/crash_recovery.cpp" "$N62_RC"
+    sensor_nonempty "N62 shutdown loader-lock" "PerformGracefulShutdown() body in src/runtime/lifecycle/crash_recovery.cpp" "$N62_BODY"
     if printf '%s\n' "$N62_BODY" \
          | grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' \
          | grep -qE 'GetModuleHandleA|GetProcAddress'; then
@@ -670,12 +689,12 @@ verify:
         echo "Use the pointer cached by ResolveShutdownDependencies()." >&2
         exit 1
     fi
-    if ! grep -q 'ResolveShutdownDependencies();' src/gamepatches/boot.cpp; then
+    if ! grep -q 'ResolveShutdownDependencies();' src/runtime/lifecycle/boot.cpp; then
         echo "verify: FAIL — N62 ResolveShutdownDependencies() call site missing; the cached" >&2
         echo "WsBridge_Shutdown pointer stays null and the listener leaks on every shutdown." >&2
         exit 1
     fi
-    if ! grep -q 'volatile sig_atomic_t g_inSignalContext' src/gamepatches/crash_recovery.cpp; then
+    if ! grep -q 'volatile sig_atomic_t g_inSignalContext' src/runtime/lifecycle/crash_recovery.cpp; then
         echo "verify: FAIL — N62 signal-context flag is not volatile sig_atomic_t (the only type" >&2
         echo "a signal handler may portably touch)." >&2
         exit 1
@@ -685,32 +704,32 @@ verify:
     # which left plugins, modules and N69's stack reserve silently dead there.
     # N68's original sensor only checked that TickPlugins appeared in the file —
     # which it did, in a hook that never executed. Check the LIVE site.
-    if ! awk '/^static void DispatchPerFrameWork/,/^}/' src/gamepatches/wave0_instrumentation.cpp \
+    if ! awk '/^static void DispatchPerFrameWork/,/^}/' src/runtime/patch/binary_bug_fixes.cpp \
          | grep -q 'TickPlugins'; then
         echo "verify: FAIL — N86 TickPlugins missing from DispatchPerFrameWork; the server-mode" >&2
         echo "per-frame tick is dead again (PrecisionSleep::Wait never runs on a server)." >&2
         exit 1
     fi
-    if ! awk '/^static void DispatchPerFrameWork/,/^}/' src/gamepatches/wave0_instrumentation.cpp \
+    if ! awk '/^static void DispatchPerFrameWork/,/^}/' src/runtime/patch/binary_bug_fixes.cpp \
          | grep -q 'TickModules'; then
         echo "verify: FAIL — N86 TickModules missing from DispatchPerFrameWork." >&2
         exit 1
     fi
-    if ! awk '/^static void DispatchPerFrameWork/,/^}/' src/gamepatches/wave0_instrumentation.cpp \
+    if ! awk '/^static void DispatchPerFrameWork/,/^}/' src/runtime/patch/binary_bug_fixes.cpp \
          | grep -q 'if (InterlockedExchange(&g_tickReentry, 1) != 0) return;'; then
         echo "verify: FAIL — N86 re-entrancy gate missing from DispatchPerFrameWork; a plugin" >&2
         echo "OnFrame that calls GetTimeMicroseconds would recurse without bound." >&2
         exit 1
     fi
-    if ! grep -q 'DispatchPerFrameWork(nowUs)' src/gamepatches/wave0_instrumentation.cpp; then
+    if ! grep -q 'DispatchPerFrameWork(nowUs)' src/runtime/patch/binary_bug_fixes.cpp; then
         echo "verify: FAIL — N86 DispatchPerFrameWork call site missing from the live tick hook." >&2
         exit 1
     fi
     # N20: no platform identity may be compiled into the binary. The login
     # injection must take it from token-auth (JWT) or, in server mode, from
     # config — never a literal. Matches an 18-20 digit account/discord ID.
-    N20_RC=0; N20_HITS=$(grep -rnE '\b1[0-9]{17,19}\b' src/gamepatches src/modules src/abi src/core) || N20_RC=$?
-    sensor_stage1 "N20 identity literal" "src/gamepatches src/modules src/abi src/core" "$N20_RC"
+    N20_RC=0; N20_HITS=$(grep -rnE '\b1[0-9]{17,19}\b' src/runtime src/modules src/abi src/core) || N20_RC=$?
+    sensor_stage1 "N20 identity literal" "src/runtime src/modules src/abi src/core" "$N20_RC"
     if [ "$N20_RC" -eq 0 ] && printf '%s\n' "$N20_HITS" \
          | grep -v legacy | grep -viE 'hash|symbol|0x|SYM_' | grep .; then
         echo "verify: FAIL — N20 an account/discord ID literal is compiled into source;" >&2
@@ -728,15 +747,15 @@ verify:
     # copy and the module stopped being built — so from 2026-07-27 this guarantee
     # was asserted against code that never runs. The invariant does hold in the
     # shipping copy (ws_bridge.cpp:396); only the sensor was aimed wrong.
-    N20A_RC=0; grep -q 'Using nevr_discord_id from config' src/gamepatches/ws_bridge.cpp || N20A_RC=$?
-    sensor_stage1 "N20 discord-id config fallback" "src/gamepatches/ws_bridge.cpp" "$N20A_RC"
+    N20A_RC=0; grep -q 'Using nevr_discord_id from config' src/runtime/compat/ws_bridge.cpp || N20A_RC=$?
+    sensor_stage1 "N20 discord-id config fallback" "src/runtime/compat/ws_bridge.cpp" "$N20A_RC"
     if [ "$N20A_RC" -ne 0 ]; then
         echo "verify: FAIL — N20 nevr_discord_id config fallback missing from the shipping" >&2
-        echo "ws bridge (src/gamepatches/ws_bridge.cpp)." >&2
+        echo "ws bridge (src/runtime/compat/ws_bridge.cpp)." >&2
         exit 1
     fi
-    N20B_RC=0; grep -n 'discordId == 0 &&.*g_isServer' src/gamepatches/ws_bridge.cpp || N20B_RC=$?
-    sensor_stage1 "N20 fallback not server-gated" "src/gamepatches/ws_bridge.cpp" "$N20B_RC"
+    N20B_RC=0; grep -n 'discordId == 0 &&.*g_isServer' src/runtime/compat/ws_bridge.cpp || N20B_RC=$?
+    sensor_stage1 "N20 fallback not server-gated" "src/runtime/compat/ws_bridge.cpp" "$N20B_RC"
     if [ "$N20B_RC" -eq 0 ]; then
         echo "verify: FAIL — N20 the config discord-id fallback is gated on g_isServer;" >&2
         echo "the owner decision (2026-07-27) is that it applies in CLIENT mode too." >&2
@@ -752,9 +771,9 @@ verify:
     # "kName," and so undercounted by one, making the comparison below
     # unsatisfiable — the sensor could never fire. kCount has no trailing comma
     # and is excluded by construction.
-    HL_RC=0; HL_ENUM=$(awk '/^enum Id/,/^};/' src/gamepatches/hook_liveness.h) || HL_RC=$?
-    sensor_stage1 "HookLiveness enum census" "src/gamepatches/hook_liveness.h" "$HL_RC"
-    sensor_nonempty "HookLiveness enum census" "enum Id in src/gamepatches/hook_liveness.h" "$HL_ENUM"
+    HL_RC=0; HL_ENUM=$(awk '/^enum Id/,/^};/' src/runtime/hook/hook_liveness.h) || HL_RC=$?
+    sensor_stage1 "HookLiveness enum census" "src/runtime/hook/hook_liveness.h" "$HL_RC"
+    sensor_nonempty "HookLiveness enum census" "enum Id in src/runtime/hook/hook_liveness.h" "$HL_ENUM"
     DECLARED=$(printf '%s\n' "$HL_ENUM" \
                | grep -cE '^[[:space:]]+k[A-Za-z]+([[:space:]]*=[^,]*)?,' || true)
     if [ "$DECLARED" -lt 1 ]; then
@@ -763,9 +782,9 @@ verify:
         echo "would be vacuous." >&2
         exit 1
     fi
-    # MARKED needs no stage-1 capture: src/gamepatches is the repo itself, and a
+    # MARKED needs no stage-1 capture: src/runtime is the repo itself, and a
     # zero count makes MARKED < DECLARED fail closed below (measured direction).
-    MARKED=$(grep -rhoE 'HookLiveness::Mark\(HookLiveness::k[A-Za-z]+\)' src/gamepatches \
+    MARKED=$(grep -rhoE 'HookLiveness::Mark\(HookLiveness::k[A-Za-z]+\)' src/runtime \
              | sort -u | wc -l)
     if [ "$MARKED" -lt "$DECLARED" ]; then
         echo "verify: FAIL — HookLiveness declares $DECLARED ids but only $MARKED are Mark()ed." >&2
@@ -777,7 +796,7 @@ verify:
     # SECOND MinHook on CLog::PrintfImpl from a different static MinHook copy,
     # which measurably killed the built-in filter's game-line capture (67 game
     # lines -> 0) and stopped max_line_length from applying.
-    if ! grep -q 'kSupersededByBuiltin' src/gamepatches/plugin_loader.cpp; then
+    if ! grep -q 'kSupersededByBuiltin' src/runtime/ext/plugin_loader.cpp; then
         echo "verify: FAIL — N89 superseded-plugin skip missing from plugin_loader; a stale" >&2
         echo "log_filter.dll would silently disable the built-in log filter's file output." >&2
         exit 1
@@ -807,11 +826,11 @@ verify:
     # CLog::PrintfImpl does not cover it. Without this second hook its output
     # bypasses the filter entirely — measured: 8191-byte profile dumps on console
     # while max_line_length was 500.
-    if ! grep -q 'InstallPnsradHook' src/gamepatches/builtin_log_filter.cpp; then
+    if ! grep -q 'InstallPnsradHook' src/runtime/log/builtin_filter.cpp; then
         echo "verify: FAIL — N90 pnsrad log hook missing; pnsrad.dll output bypasses the filter." >&2
         exit 1
     fi
-    if ! grep -q 'BuiltinLogFilter::InstallPnsradHook();' src/gamepatches/wave0_instrumentation.cpp; then
+    if ! grep -q 'BuiltinLogFilter::InstallPnsradHook();' src/runtime/patch/binary_bug_fixes.cpp; then
         echo "verify: FAIL — N90 InstallPnsradHook call site missing from the live tick; the hook" >&2
         echo "would never install, since pnsrad.dll loads long after filter init." >&2
         exit 1
@@ -820,7 +839,7 @@ verify:
     # dwFlags=0 the search starts at the application directory, so a dll dropped
     # next to echovr.exe can satisfy a dependency ahead of the real one. N89
     # demonstrated the mechanism accidentally.
-    for f in src/gamepatches/plugin_loader.cpp src/gamepatches/module_loader.cpp; do
+    for f in src/runtime/ext/plugin_loader.cpp src/runtime/ext/module_loader.cpp; do
         if ! grep -q 'LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR' "$f"; then
             echo "verify: FAIL — N75 restricted search flags missing from $f;" >&2
             echo "dependencies would resolve from the application directory first." >&2
@@ -845,14 +864,14 @@ verify:
         echo "compiled into gamepatches; two copies is the bug (fixes land in the dead one)." >&2
         exit 1
     fi
-    N92B_RC=0; grep -q 'LoadModule("ws_bridge"' src/gamepatches/boot.cpp || N92B_RC=$?
-    sensor_stage1 "N92 ws_bridge module load" "src/gamepatches/boot.cpp" "$N92B_RC"
+    N92B_RC=0; grep -q 'LoadModule("ws_bridge"' src/runtime/lifecycle/boot.cpp || N92B_RC=$?
+    sensor_stage1 "N92 ws_bridge module load" "src/runtime/lifecycle/boot.cpp" "$N92B_RC"
     if [ "$N92B_RC" -eq 0 ]; then
         echo "verify: FAIL — N92 boot.cpp still loads ws_bridge as a required module; with the" >&2
         echo "DLL gone the loader fail-fasts and the server never starts." >&2
         exit 1
     fi
-    if ! grep -q 'InstallWebSocketBridge();' src/gamepatches/boot.cpp; then
+    if ! grep -q 'InstallWebSocketBridge();' src/runtime/lifecycle/boot.cpp; then
         echo "verify: FAIL — N92 the in-process bridge is never started; no proxy, no login." >&2
         exit 1
     fi
@@ -862,14 +881,14 @@ verify:
     # duplicate LoginRequest and an account-id-0 login both went unnoticed. The
     # rule was right; nothing checked it.
     if ! awk '/login injected/{found=1} found && /Log\(EchoVR::LogLevel::Info/{ok=1} END{exit !ok}' \
-         src/gamepatches/ws_bridge.cpp; then
-        if ! grep -B3 'login injected' src/gamepatches/ws_bridge.cpp | grep -q 'LogLevel::Info'; then
+         src/runtime/compat/ws_bridge.cpp; then
+        if ! grep -B3 'login injected' src/runtime/compat/ws_bridge.cpp | grep -q 'LogLevel::Info'; then
             echo "verify: FAIL — logging.md Rule 2: the login-injection line is not at Info." >&2
             echo "Identity at login shall be visible in a production log (N91)." >&2
             exit 1
         fi
     fi
-    if ! grep -q 'xpid=%s' src/gamepatches/ws_bridge.cpp; then
+    if ! grep -q 'xpid=%s' src/runtime/compat/ws_bridge.cpp; then
         echo "verify: FAIL — logging.md Rule 2: login injection does not log the XPID." >&2
         exit 1
     fi
@@ -882,12 +901,12 @@ verify:
     # .cpp only (a header carries the declaration), and tests are exempt — they
     # deliberately stub Log to run without the game.
     LOG_DEFS=$(grep -rlE '^(VOID|void) Log\(EchoVR::LogLevel' \
-                 --include='*.cpp' src/abi src/core src/gamepatches src/modules 2>/dev/null \
+                 --include='*.cpp' src/abi src/core src/runtime src/modules 2>/dev/null \
                | grep -v '/tests/' | wc -l)
     if [ "$LOG_DEFS" -ne 1 ]; then
         echo "verify: FAIL — D1 found $LOG_DEFS definitions of ::Log (want exactly 1)." >&2
         grep -rlE '^(VOID|void) Log\(EchoVR::LogLevel' --include='*.cpp' \
-             src/abi src/core src/gamepatches src/modules | grep -v '/tests/' >&2
+             src/abi src/core src/runtime src/modules | grep -v '/tests/' >&2
         echo "Two strong definitions is an ODR violation; the winner is link-order dependent." >&2
         exit 1
     fi
@@ -999,16 +1018,16 @@ verify:
     # us and bit 0 — the render/window master bit — stayed SET on every
     # -server-only run. Three assertions; any one alone is satisfiable by the
     # bug.
-    N99_RC=0; N99_MP=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/gamepatches/mode_patches.cpp) || N99_RC=$?
-    sensor_stage1 "N99 headless mask" "src/gamepatches/mode_patches.cpp" "$N99_RC"
-    sensor_nonempty "N99 headless mask" "non-comment lines of src/gamepatches/mode_patches.cpp" "$N99_MP"
+    N99_RC=0; N99_MP=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/patch/mode_patches.cpp) || N99_RC=$?
+    sensor_stage1 "N99 headless mask" "src/runtime/patch/mode_patches.cpp" "$N99_RC"
+    sensor_nonempty "N99 headless mask" "non-comment lines of src/runtime/patch/mode_patches.cpp" "$N99_MP"
     if ! grep -q 'ENGINE_FLAGS_HEADLESS_MASK' <<<"$N99_MP"; then
         echo "verify: FAIL — N99 PatchEnableHeadless no longer applies ENGINE_FLAGS_HEADLESS_MASK." >&2
         echo "-server would leave bit 0 of pGame+0x1D4 SET and the game would open a window." >&2
         exit 1
     fi
     # The mask constant shall keep the value measured in the shipped binary.
-    if ! grep -q 'ENGINE_FLAGS_HEADLESS_MASK = 0xFFFEFEFEu' src/gamepatches/patch_addresses.h; then
+    if ! grep -q 'ENGINE_FLAGS_HEADLESS_MASK = 0xFFFEFEFEu' src/runtime/hook/addresses.h; then
         echo "verify: FAIL — N99 ENGINE_FLAGS_HEADLESS_MASK is not 0xFFFEFEFE, the value" >&2
         echo "verified byte-for-byte at 0x140504566 in the shipped echovr.exe." >&2
         exit 1
@@ -1016,9 +1035,9 @@ verify:
     # And boot.cpp shall not tell the operator to remove a flag that is native
     # to the game. A unit believed that message, removed -headless, and a
     # window opened on the owner's screen.
-    N99_BOOT_RC=0; N99_BOOT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/gamepatches/boot.cpp) || N99_BOOT_RC=$?
-    sensor_stage1 "N99 boot flag advice" "src/gamepatches/boot.cpp" "$N99_BOOT_RC"
-    sensor_nonempty "N99 boot flag advice" "non-comment lines of src/gamepatches/boot.cpp" "$N99_BOOT"
+    N99_BOOT_RC=0; N99_BOOT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/boot.cpp) || N99_BOOT_RC=$?
+    sensor_stage1 "N99 boot flag advice" "src/runtime/lifecycle/boot.cpp" "$N99_BOOT_RC"
+    sensor_nonempty "N99 boot flag advice" "non-comment lines of src/runtime/lifecycle/boot.cpp" "$N99_BOOT"
     if grep -qE 'is redundant|Remove this flag' <<<"$N99_BOOT"; then
         echo "verify: FAIL — N99 boot.cpp tells the operator a flag is redundant / to remove it." >&2
         echo "-headless and -noovr are NATIVE echovr.exe flags the game itself consumes." >&2
@@ -1026,7 +1045,7 @@ verify:
     fi
     # N96: no symbol spelled plain `ResolveVA`. Two definitions of that name once
     # coexisted in BugSplat64.dll with IDENTICAL signatures and different
-    # guarantees — wave0_instrumentation.cpp's file-static did no validation,
+    # guarantees — binary_bug_fixes.cpp's file-static did no validation,
     # nevr_common.h's did — so adding an #include or moving a line between the
     # two files would have flipped validation with no compiler diagnostic. The
     # spelling has to carry the guarantee. Comment lines are stripped so the
@@ -1060,8 +1079,8 @@ verify:
         printf '%s\n' "$N97_HITS" >&2
         exit 1
     fi
-    C2_RC=0; C2_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/gamepatches/gamepatches_internal.h) || C2_RC=$?
-    sensor_stage1 "C2 PatchDetour default name" "src/gamepatches/gamepatches_internal.h" "$C2_RC"
+    C2_RC=0; C2_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/hook/patching.h) || C2_RC=$?
+    sensor_stage1 "C2 PatchDetour default name" "src/runtime/hook/patching.h" "$C2_RC"
     if printf '%s\n' "$C2_CODE" \
          | grep -qE 'PatchDetour\(.*const char\* name\s*='; then
         echo "verify: FAIL — C2 PatchDetour's name parameter has a default again." >&2

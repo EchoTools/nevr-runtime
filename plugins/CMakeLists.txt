@@ -22,6 +22,6 @@ endif()
 # different static MinHook copy, which took the built-in filter's game-line
 # capture to zero (N89). Producing a DLL our own loader is guaranteed to reject
 # is the defect. The SOURCE stays: its history carries fixes not yet audited
-# against src/gamepatches/builtin_log_filter.cpp, and deleting first is what
+# against src/runtime/log/builtin_filter.cpp, and deleting first is what
 # stranded a fix twice here (N93, N94).
 add_subdirectory(example)

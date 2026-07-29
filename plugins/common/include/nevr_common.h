@@ -61,7 +61,7 @@ inline void* ResolveVA_Checked(uintptr_t base, uint64_t va) {
 
 /* Unchecked variant for hot paths where the address is known-good (e.g. hook
    targets verified at init time), and for the one case where a nullptr return
-   would be MORE dangerous than an unvalidated pointer — see the Wave0::Shutdown
+   would be MORE dangerous than an unvalidated pointer — see the BinaryBugFixes::Shutdown
    call site. Prefer ResolveVA_Checked for new code. */
 inline void* ResolveVA_Unchecked(uintptr_t base, uint64_t va) {
     return reinterpret_cast<void*>(base + (va - ECHOVR_DEFAULT_IMAGE_BASE));

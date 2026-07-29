@@ -40,14 +40,14 @@ reasoning alone. Everything below is measured; where it isn't, it says so.
 ## The finding in one paragraph
 
 `src/abi/echovr_functions.cpp:102` assigns two live function pointers to
-RVAs `0xF87AA0` and `0xF80ED0`. `src/gamepatches/mode_patches.cpp:343`
+RVAs `0xF87AA0` and `0xF80ED0`. `src/runtime/patch/mode_patches.cpp:343`
 installs MinHook detours on those same two RVAs, under the names
 `ENGINE_ENTITY_PROP_DISPATCH` and `ENGINE_ENTITY_LOOKUP`
 (`patch_addresses.h:297,303`). MinHook writes a `JMP` at the entry, so **our own
 calls re-enter our own hooks.** `EngineEntityPropDispatchHook` does
 `if (g_isServer) return;` — so on a dedicated server, all 13
 `EchoVR::BroadcasterReceiveLocalEvent` call sites in
-`src/gamepatches/gameserver/gameserver.cpp` do nothing.
+`src/runtime/server/gameserver.cpp` do nothing.
 
 Those two addresses are not entity functions. Per disassembly:
 `0x140f80ed0` is `CBroadcaster::Listen`; `0x140f87aa0` is
@@ -76,7 +76,7 @@ written for may still exist. That is the open question.
   are on an explicit register keyed by ledger ID and WARN; anything new is a
   hard failure. **When you fix N83, delete its entries from
   `KNOWN_SELF_COLLISIONS` — the checker then enforces it stays fixed.**
-- **Runtime guard** `src/gamepatches/hook_guard.{h,cpp}` (N84) — detects a
+- **Runtime guard** `src/runtime/hook_guard.{h,cpp}` (N84) — detects a
   foreign detour on an address we own, including from third-party plugins.
 - Ledger entries **N83** (Critical) and **N84** carry the full disassembly
   evidence. Read them before this doc if you want the raw bytes.
@@ -126,7 +126,7 @@ that produced this bug.
 
 - `src/gameserver/` is **dead code** — `CMakeLists.txt:192` has
   `# add_subdirectory(src/gameserver)`. The compiled copy is
-  `src/gamepatches/gameserver/`. The two files are near-identical, so editing the
+  `src/runtime/server/`. The two files are near-identical, so editing the
   wrong one compiles clean and changes nothing. `just verify` guards this (N34).
 - `revault fn show` CLI fails without `DATABASE_URL`; use the MCP tools. And note
   `revault_function` may return a *reconstruction* view rather than raw

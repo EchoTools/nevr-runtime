@@ -6,14 +6,14 @@ find_package(CURL REQUIRED)
 
 add_library(platform_compat SHARED
     src/platform_compat.cpp
-    "${CMAKE_SOURCE_DIR}/src/gamepatches/winhttp_stub.cpp"
+    "${CMAKE_SOURCE_DIR}/src/runtime/compat/winhttp_stub.cpp"
 )
 
 target_compile_definitions(platform_compat PRIVATE USE_MINHOOK NEVR_MODULE_EXPORTS)
 
 target_include_directories(platform_compat PRIVATE
     ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/gamepatches
+    ${CMAKE_SOURCE_DIR}/src/runtime
 )
 
 target_precompile_headers(platform_compat PRIVATE "${CMAKE_SOURCE_DIR}/src/core/pch.h")

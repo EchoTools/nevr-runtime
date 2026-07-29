@@ -186,7 +186,7 @@ std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string
 std::string DeviceAuth::RequestDeviceCode() {
     // STRANDED FIX, recovered 2026-07-27. Commit 7a03d8b ("fix: Nakama RPC unwrap
     // and LoadLibraryA fallbacks for hook install", 2026-04-10) added `&unwrap` to
-    // both device-auth endpoints in src/gamepatches/token_auth.cpp. This module was
+    // both device-auth endpoints in src/runtime/token_auth.cpp. This module was
     // extracted the SAME DAY and the fix never crossed. That commit fixed two
     // things; the LoadLibraryA half reached platform-compat, this half did not.
     //

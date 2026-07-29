@@ -23,7 +23,7 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 
 # (file, function, regex matching an acceptable guard in the preceding lines)
 HOT_PATHS = [
-    ("src/gamepatches/wave0_instrumentation.cpp", "DispatchPerFrameWork",
+    ("src/runtime/patch/binary_bug_fixes.cpp", "DispatchPerFrameWork",
      r"if \(t == 1\)|% 3750|s_ticks|first call"),
 ]
 LOOKBACK = 6

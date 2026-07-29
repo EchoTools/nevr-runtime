@@ -8,7 +8,7 @@ READ-ONLY validation. Next free N-ID: **N39** (highest in BUGS.md: N38).
 
 **CONFIRMED.** All 27 boot-sequence log lines in `initialize.cpp` and `headless_graphics.cpp` confirm completion AFTER each step — none announce intent without having attempted the action first. The complete ordered list:
 
-### `src/gamepatches/initialize.cpp` — `Initialize()` (lines 211–334)
+### `src/runtime/lifecycle/initialize.cpp` — `Initialize()` (lines 211–334)
 
 | # | File:Line | Message | Timing |
 |---|-----------|---------|--------|
@@ -40,7 +40,7 @@ READ-ONLY validation. Next free N-ID: **N39** (highest in BUGS.md: N38).
 | 26 | `:329` | `"[NEVR] wave0 OK\n"` | Confirms AFTER |
 | 27 | `:334` | `"[NEVR.PATCH] All hooks installed"` (via `Log(Info, ...)`) | Confirms AFTER — summary |
 
-### `src/gamepatches/headless_graphics.cpp`
+### `src/runtime/patch/headless_graphics.cpp`
 
 | # | File:Line | Message | Timing |
 |---|-----------|---------|--------|
@@ -149,7 +149,7 @@ Runtime intercept log lines (when `g_isHeadless` is true at call time):
 
 ## Item 3 — Default-loaded modules/plugins
 
-**CONFIRMED.** Three modules loaded unconditionally in `src/gamepatches/boot.cpp`, inside `PreprocessCommandLineHook()`:
+**CONFIRMED.** Three modules loaded unconditionally in `src/runtime/lifecycle/boot.cpp`, inside `PreprocessCommandLineHook()`:
 
 | # | Module name | File:Line | Reason |
 |---|---|---|---|
@@ -160,7 +160,7 @@ Runtime intercept log lines (when `g_isHeadless` is true at call time):
 All three are **runtime-loaded via `LoadLibrary`** from a `modules/` subdirectory next to echovr.exe. `LoadModule()` in `module_loader.cpp:42-83` constructs `<modules dir>\modules\<name>.dll` and calls `LoadLibraryA`.
 
 **`builtin_log_filter.cpp` is compiled into BugSplat64.dll**, not loaded as a module:
-- `src/gamepatches/CMakeLists.txt:25` — `"builtin_log_filter.cpp"` in `PATCHES_SOURCES`
+- `src/runtime/CMakeLists.txt:25` — `"builtin_log_filter.cpp"` in `PATCHES_SOURCES`
 - `initialize.cpp:277` — `BuiltinLogFilter::Init(...)` called during `Initialize()`
 
 **Plugins** are discovered at runtime from `plugins/` subdir via glob (`*.dll`). `plugin_loader.cpp:23-131` (`LoadPlugins()`) calls `FindFirstFileA`/`FindNextFileA`. No plugins ship by default; only what's on disk loads. Called from `boot.cpp:227`.
@@ -396,7 +396,7 @@ Key log lines:
 
 - `src/abi/symbol_hash.h:66-85` — `CSymbol64Hash()`: custom CRC64, polynomial `0x95ac9329ac4bc9b5`, one-way (forward only, no reverse).
 - `src/abi/symbols.h` — ~40 compile-time name→hash constants (forward-only, static).
-- `src/gamepatches/resource_override.cpp` — matches by raw numeric `(type_hash, name_hash)` pairs, no name strings.
+- `src/runtime/patch/resource_override.cpp` — matches by raw numeric `(type_hash, name_hash)` pairs, no name strings.
 - `gameserver/gameserver.cpp:510` — comment: `"Instance name as hex (can be converted via hashes.txt)"` — but `hashes.txt` does not exist in the repository.
 - `~/src/revault/` — exists, but managed store is not populated for reverse lookup. ReVault `search_strings` and `search_code` work for forward queries.
 

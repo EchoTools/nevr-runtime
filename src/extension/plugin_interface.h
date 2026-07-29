@@ -6,7 +6,7 @@
  * that the host calls at defined lifecycle points.
  *
  * Drop this header into:
- *   nevr-runtime/src/gamepatches/nevr_plugin_interface.h
+ *   nevr-runtime/src/runtime/nevr_plugin_interface.h
  *   nevr-runtime/src/legacy/nevr_plugin_interface.h
  */
 

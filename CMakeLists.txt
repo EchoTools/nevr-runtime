@@ -185,7 +185,7 @@ find_package(Protobuf REQUIRED)
 add_subdirectory(src/abi)
 add_subdirectory(src/core)
 add_subdirectory(src/nevr_api)
-add_subdirectory(src/gamepatches)
+add_subdirectory(src/runtime)
 add_subdirectory(src/modules/platform-compat)
 add_subdirectory(src/modules/token-auth)
 add_subdirectory(src/legacy/gamepatches)
@@ -238,10 +238,10 @@ endforeach()
 # This block names NO specific module — the list is accumulated generically.
 get_property(NEVR_MODULES GLOBAL PROPERTY NEVR_MODULE_TARGETS)
 if(NEVR_MODULES)
-  message(STATUS "[gamepatches] linking modules: ${NEVR_MODULES}")
-  target_link_libraries(gamepatches PRIVATE ${NEVR_MODULES})
+  message(STATUS "[nevr_runtime] linking modules: ${NEVR_MODULES}")
+  target_link_libraries(nevr_runtime PRIVATE ${NEVR_MODULES})
 else()
-  message(STATUS "[gamepatches] no modules to link (empty)")
+  message(STATUS "[nevr_runtime] no modules to link (empty)")
 endif()
 
 # Include a local cmake script if it exists
@@ -262,13 +262,13 @@ set(DIST_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}")
 # List of DLL artifacts to include
 set(DIST_DLLS
   "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll"
-  # "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll"  # merged into gamepatches
+  # "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll"  # merged into nevr_runtime
 )
 
 # List of debug symbol files to include
 set(DIST_DBG_FILES
   "${CMAKE_BINARY_DIR}/BugSplat64.dll.dbg"
-  # "${CMAKE_BINARY_DIR}/gameserver.dll.dbg"  # merged into gamepatches
+  # "${CMAKE_BINARY_DIR}/gameserver.dll.dbg"  # merged into nevr_runtime
 )
 
 # Custom target to prepare distribution directory
@@ -278,7 +278,7 @@ add_custom_target(dist-prepare
   # BugSplat64.dll — NEVR runtime (replaces the original crash reporter DLL).
   # The game statically imports it, so it loads at process startup before WinMain.
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_DIR}/BugSplat64.dll" || true
-  # gameserver.dll merged into gamepatches — no separate DLL to copy
+  # gameserver.dll merged into nevr_runtime — no separate DLL to copy
   # COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_DIR}/pnsradgameserver.dll" || true
   # Launcher executables — not built yet (module-extraction infrastructure present but launchers not wired)
   COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_DIR}/echovr.exe" || true
@@ -359,9 +359,9 @@ find_program(STRIP_TOOL NAMES llvm-strip strip)
 add_custom_target(dist-lite-prepare
   COMMAND ${CMAKE_COMMAND} -E rm -rf "${DIST_LITE_DIR}"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_DIR}"
-  # Copy gamepatches.dll + legacy dbgcore.dll alias, then strip
+  # Copy the runtime DLL + legacy dbgcore.dll alias, then strip
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_LITE_DIR}/BugSplat64.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/BugSplat64.dll" || ${CMAKE_COMMAND} -E true
-  # gameserver.dll merged into gamepatches — no separate DLL to copy
+  # gameserver.dll merged into nevr_runtime — no separate DLL to copy
   # COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_LITE_DIR}/pnsradgameserver.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/pnsradgameserver.dll" || ${CMAKE_COMMAND} -E true
   # Launcher executables — not built yet (module-extraction infrastructure present but launchers not wired)
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_LITE_DIR}/echovr.exe" || ${CMAKE_COMMAND} -E true

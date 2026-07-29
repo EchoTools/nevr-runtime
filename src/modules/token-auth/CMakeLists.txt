@@ -11,7 +11,7 @@ target_compile_definitions(token_auth PRIVATE NEVR_MODULE_EXPORTS)
 
 target_include_directories(token_auth PRIVATE
     ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/gamepatches
+    ${CMAKE_SOURCE_DIR}/src/runtime
     ${CMAKE_SOURCE_DIR}/plugins/common/include
 )
 

@@ -49,7 +49,7 @@ A Go test client exists at `/tmp/test-stream-bin` with source at `/tmp/test-stre
 ## What Needs to Happen
 
 1. **In nevr-runtime**: Add a WebSocket client module that connects to nevr-stream and sends tape envelopes. The existing `gameserver` module already has WebSocket infrastructure via `ixwebsocket` — this can be reused.
-   - File to create: a proposed stream_client.cpp under src/gamepatches (never implemented) (or similar)
+   - File to create: a proposed stream_client.cpp under src/runtime (never implemented) (or similar)
    - Configuration: nevr-stream URL (default `ws://fortytwo.echovrce.com:8080/ws`)
 
 2. **Capture flow**: When a match starts, nevr-runtime connects to nevr-stream, sends header, streams frames during gameplay, sends footer on match end.
