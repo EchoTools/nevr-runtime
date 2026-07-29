@@ -20,6 +20,7 @@
 #include "runtime/ext/module_loader.h"
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
+#include "core/system_info.h"
 #include "runtime/lifecycle/cli.h"  // g_isServer
 #include "core/logging.h"
 #include <exception>
@@ -147,6 +148,23 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   // Platform: DSC = 2 (Go iota: XPlatformIdSize=0, STM=1, PSN/DSC=2, XBX=3, OVR_ORG=4)
   uint64_t accountId = discordId;
 
+  // Host facts, MEASURED. Every value in this block used to be a literal —
+  // "cpu":"Wine", "video_card":"Wine D3D12", 4 physical cores, 8 logical,
+  // 16384 MB total, 8192 used — sent as though read from the machine. That is
+  // worse than sending nothing: absent data is visibly absent, while invented
+  // data is indistinguishable from a reading and gets acted on.
+  //
+  // Fields this process cannot honestly determine are now sent EMPTY or 0
+  // rather than guessed. video_card and dedicated_gpu_memory have no truthful
+  // answer on a headless server with no device enumerated, and network_type
+  // was never anything but a guess. Empty is a true statement; "Wine D3D12" is
+  // not. N112.
+  const SystemInfo::Host& host = SystemInfo::Get();
+  const std::string driverVersion =
+      host.IsWine() ? ("Wine " + host.wine_version +
+                       (host.wine_host_os.empty() ? "" : " on " + host.wine_host_os))
+                    : std::string();
+
   // LoginProfile JSON — matches the game's SNSLogInRequestv2 format
   char json[2048];
   snprintf(json, sizeof(json),
@@ -164,18 +182,24 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
       "\"desiredclientprofileversion\":0,"
       "\"system_info\":{"
         "\"headset_type\":\"No VR\","
-        "\"driver_version\":\"\","
-        "\"network_type\":\"WireGuard\","
-        "\"video_card\":\"Wine D3D12\","
-        "\"cpu\":\"Wine\","
-        "\"num_physical_cores\":4,"
-        "\"num_logical_cores\":8,"
-        "\"memory_total\":16384,"
-        "\"memory_used\":8192,"
-        "\"dedicated_gpu_memory\":8192"
+        "\"driver_version\":\"%s\","
+        "\"network_type\":\"\","
+        "\"video_card\":\"\","
+        "\"cpu\":\"%s\","
+        "\"num_physical_cores\":%u,"
+        "\"num_logical_cores\":%u,"
+        "\"memory_total\":%llu,"
+        "\"memory_used\":%llu,"
+        "\"dedicated_gpu_memory\":0"
       "}"
     "}",
-    (unsigned long long)accountId);
+    (unsigned long long)accountId,
+    driverVersion.c_str(),
+    host.cpu_brand.c_str(),
+    host.physical_cores,
+    host.logical_cores,
+    (unsigned long long)host.memory_total_mb,
+    (unsigned long long)host.memory_used_mb);
 
   size_t jsonLen = strlen(json) + 1;  // include null terminator
 

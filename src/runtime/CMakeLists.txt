@@ -194,6 +194,12 @@ if(BUILD_TESTING)
     # the code under test.
     add_executable(test_behavioral
       tests/test_behavioral.cpp
+      # ws_bridge.cpp calls SystemInfo::Get(). Linked as a source rather than
+      # via nevr_core, because this test deliberately does NOT link core — it
+      # provides its own stubs for Log/FatalError and linking the real ones
+      # would collide. system_info.cpp depends on nothing but Win32, so it
+      # drops in cleanly and the test drives the REAL measurement code.
+      "${CMAKE_SOURCE_DIR}/src/core/system_info.cpp"
       ext/plugin_loader.cpp
       ext/module_loader.cpp
       compat/ws_bridge.cpp
@@ -207,6 +213,7 @@ if(BUILD_TESTING)
     # Disable PCH — the test has its own stub headers and must not depend on
     # the nevr_runtime precompiled header (which pulls in MinHook, etc.).
     set_source_files_properties(
+      "${CMAKE_SOURCE_DIR}/src/core/system_info.cpp"
       tests/test_behavioral.cpp
       ext/plugin_loader.cpp
       ext/module_loader.cpp

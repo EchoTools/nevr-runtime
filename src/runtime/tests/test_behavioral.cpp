@@ -26,6 +26,7 @@
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
+#include "core/system_info.h"
 
 // ============================================================================
 // Stubs for extern symbols declared by project headers but not provided by
@@ -507,3 +508,61 @@ TEST(N84_HookGuard, UnreadableTarget_Ignored) {
 // WOULD-FAIL-IF (N84-wiring): delete HookGuard::VerifyAll(filename) from
 //   plugin_loader.cpp -> not caught here (call-site wiring), caught by the
 //   `just verify` grep sensor instead.
+
+
+// ============================================================================
+// N112 — SystemInfo must MEASURE, not invent.
+//
+// The login payload's system_info block was string literals: "cpu":"Wine",
+// 4 physical cores, 8 logical, 16384 MB. It read like telemetry and was not.
+// These tests exist because a plausible constant and a real reading are
+// indistinguishable downstream — the only way to tell them apart is here,
+// where we can check the value against the machine actually running the test.
+// ============================================================================
+
+TEST(SystemInfo, ReportsRealCpuAndMemory) {
+    const SystemInfo::Host& h = SystemInfo::Get();
+
+    EXPECT_GT(h.logical_cores, 0u) << "logical core count was never measured";
+    EXPECT_GT(h.memory_total_mb, 0u) << "physical memory was never measured";
+    EXPECT_LE(h.memory_used_mb, h.memory_total_mb) << "used exceeds total — derivation is wrong";
+
+    // The old fabricated tuple, guarded as a set. Any single value could
+    // legitimately match on some machine; all of them matching means the
+    // literals came back.
+    const bool all_old_literals = (h.physical_cores == 4 && h.logical_cores == 8 &&
+                                   h.memory_total_mb == 16384 && h.memory_used_mb == 8192);
+    EXPECT_FALSE(all_old_literals)
+        << "every field equals the pre-N112 hardcoded tuple (4/8/16384/8192) — "
+           "the fabricated constants are back";
+
+    // physical <= logical whenever both are known. 0 means "could not
+    // determine", which is a permitted answer and deliberately not an error.
+    if (h.physical_cores > 0) {
+        EXPECT_LE(h.physical_cores, h.logical_cores)
+            << "more physical cores than logical — the relation table was misparsed";
+    }
+    std::printf("[system_info] cpu='%s' cores=%u/%u mem=%llu/%llu MB wine='%s' host='%s' build=%u\n",
+                h.cpu_brand.c_str(), h.physical_cores, h.logical_cores,
+                (unsigned long long)h.memory_used_mb, (unsigned long long)h.memory_total_mb,
+                h.wine_version.c_str(), h.wine_host_os.c_str(), h.os_build);
+}
+
+TEST(SystemInfo, WineDetectionIsTheVersionString) {
+    const SystemInfo::Host& h = SystemInfo::Get();
+    // IsWine() must be exactly "we got a version from ntdll", with no second
+    // source of truth that could disagree with the string we transmit.
+    EXPECT_EQ(h.IsWine(), !h.wine_version.empty());
+}
+
+TEST(SystemInfo, IsCachedNotRemeasured) {
+    // Callers may hit this on a login path; the probes (CPUID,
+    // GetLogicalProcessorInformation) are not free. Same object every call.
+    EXPECT_EQ(&SystemInfo::Get(), &SystemInfo::Get());
+}
+
+// WOULD-FAIL-IF (N112): restore the literals in ws_bridge.cpp's system_info
+//   block -> not caught here (that is a format string, not a value this test
+//   can reach). ReportsRealCpuAndMemory catches the case where SystemInfo
+//   itself starts returning the old tuple; the `just verify` sensor catches
+//   the format string.

@@ -6,9 +6,9 @@
 # Depends on nevr_abi (PUBLIC): EchoVR::LogLevel is the game's enum, so logging
 # genuinely sits on top of the ABI layer. The reverse dependency is forbidden.
 
-set(CORE_SOURCES "logging.cpp" "globals.cpp" "base64.cpp")
+set(CORE_SOURCES "logging.cpp" "globals.cpp" "base64.cpp" "system_info.cpp")
 set(CORE_HEADERS
-  "logging.h" "globals.h" "base64.h"
+  "logging.h" "globals.h" "base64.h" "system_info.h"
   "hooking.h" "auth_token.h" "pch.h"
   # Header-only published C ABI for third-party DLLs. Listed here so it appears
   # in IDE/target views; it has no compiled sources of its own.

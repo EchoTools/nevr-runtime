@@ -564,6 +564,36 @@ verify:
     # a usage contract (RULINGS.md "Usage contracts"), not a log tag — docs/standards/logging.md's
     # subsystem-tag rule governs log lines. Verified 2026-07-26: every [NEVR] hit in
     # that file is a help string, zero are log calls.
+    # --- N115: the login system_info block must be MEASURED, not invented --------
+    # It used to be literals — "cpu":"Wine", 4 physical cores, 8 logical, 16384 MB
+    # total, 8192 used — emitted as though read from the machine. Measured on this
+    # host, the truth was 16/32 cores and 32000 MB. Every field was wrong, and
+    # nothing could tell, because invented data and a real reading look identical
+    # once they are on the wire.
+    #
+    # The unit tests cover SystemInfo itself; they cannot see this format string.
+    # This sensor is the half that watches the wire format.
+    N115_RC=0; N115_WS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/ws_bridge.cpp) || N115_RC=$?
+    sensor_stage1 "N115 login system_info measured" "src/runtime/compat/ws_bridge.cpp" "$N115_RC"
+    sensor_nonempty "N115 login system_info measured" "non-comment lines of compat/ws_bridge.cpp" "$N115_WS"
+    if ! grep -q 'SystemInfo::Get()' <<<"$N115_WS"; then
+        echo "verify: FAIL — N115 the login payload no longer reads measured host facts (SystemInfo::Get)." >&2
+        exit 1
+    fi
+    # The JSON lives inside a C string literal, so every quote in the source is
+    # backslash-escaped. Matching that through a justfile recipe means three
+    # layers of escaping and it WAS wrong the first time — the check silently
+    # matched nothing and the break went green. Strip the backslashes once and
+    # compare plain text instead of trying to out-escape the stack.
+    N115_FLAT=$(tr -d '\\' <<<"$N115_WS")
+    for _lit in '"num_physical_cores":4' '"num_logical_cores":8' '"memory_total":16384' '"memory_used":8192' '"cpu":"Wine"' '"video_card":"Wine D3D12"'; do
+        if grep -qF "$_lit" <<<"$N115_FLAT"; then
+            echo "verify: FAIL — N115 a fabricated system_info literal is back in the login payload: $_lit" >&2
+            echo "Invented telemetry is worse than none: it is indistinguishable from a real reading and gets acted on. Send the measured value, or send empty/0." >&2
+            exit 1
+        fi
+    done
+
     # --- N114: the plugin capability channel must stay WIRED ---------------------
     # A plugin declaring what it does is only useful if the host actually asks.
     # Declaring the export in the header and never resolving it would leave the
