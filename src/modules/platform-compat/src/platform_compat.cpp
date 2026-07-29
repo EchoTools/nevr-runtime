@@ -293,6 +293,33 @@ NEVR_MODULE_API int NvrModuleInit(const NvrModuleContext* ctx) {
         "[NEVR.MODULE] WinHTTP bridge NOT installed — the game will use its own "
         "HTTP stack and may report NoNetwork (N11)");
   }
+
+  /* N120. This returned 0 — success — no matter how many hooks failed, including
+   * the one the comment above calls silent-but-fatal. So a server whose TLS or
+   * HTTP bridge never installed reported "module loaded" and ran on to fail later
+   * somewhere unrelated, which is the worst of both: broken, and misattributed.
+   *
+   * On a dedicated server there is nobody watching a console, so report the
+   * failure and let module_loader's existing FatalError kill the process at the
+   * point of the actual defect.
+   *
+   * Mandatory = tls + winhttp. NOT createdir: that hook fixes a malformed NT path
+   * Wine produces (the `_temp` bug) and has no counterpart on native Windows, so
+   * requiring it would refuse to boot on the platform where it is meaningless.
+   *
+   * Server-gated deliberately. module_loader treats a non-zero init as fatal in
+   * BOTH modes, so returning non-zero unconditionally would newly hard-fail a
+   * client that previously limped along with degraded HTTP — the opposite of the
+   * rule, which is that a server dies and a client warns. */
+  const bool isServer = (ctx->flags & NEVR_MODULE_HOST_IS_SERVER) != 0;
+  if (isServer && (!tlsOk || !httpOk)) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.MODULE] platform_compat FAILED on a server (tls=%s winhttp=%s) — "
+        "reporting init failure; a server must not run with a degraded network "
+        "stack (N120)",
+        tlsOk ? "ok" : "FAILED", httpOk ? "ok" : "FAILED");
+    return 1;
+  }
   return 0;
 }
 

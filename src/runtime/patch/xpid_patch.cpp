@@ -3,6 +3,14 @@
 #include "runtime/hook/patching.h"
 #include "core/logging.h"
 #include "runtime/hook/addresses.h"
+// N120. This runs from initialize.cpp BEFORE the built-in log filter is up, and
+// its Log() output reached neither the console log nor nevr-boot.jsonl — so
+// across every captured run the patch reported NOTHING, success or failure, and
+// whether the game's provider strings were actually rewritten was unknowable.
+// (`login injected xpid=DSC-...` does not prove it: ws_bridge builds that prefix
+// itself, so it is green even when this patch never ran.) Tee the outcome.
+#include "runtime/log/boot_log_tee.h"
+#include "runtime/lifecycle/crash_recovery.h"  // ServerFatal
 
 // Expected original bytes at each patch site (for validation).
 static const BYTE kPsnShort[] = {0x50, 0x53, 0x4E, 0x00};  // "PSN\0"
@@ -42,7 +50,7 @@ VOID PatchDscProvider() {
   }
   if (!ValidateBytes(base, XPID_PLATFORM_FALLBACK_PREFIX, kQmarkDash, sizeof(kQmarkDash))) {
     Log(EchoVR::LogLevel::Error,
-        "[NEVR.XPID] Fallback prefix mismatch at RVA 0x%X — expected \"???-\"", XPID_PLATFORM_FALLBACK_PREFIX);
+        "[NEVR.XPID] Fallback prefix mismatch at RVA 0x%X — expected \"?\?\?-\"", XPID_PLATFORM_FALLBACK_PREFIX);
     ok = false;
   }
   if (!ValidateBytes(base, XPID_PLATFORM_COMPACT_FALLBACK_NAME, kQmarkNull, sizeof(kQmarkNull))) {
@@ -53,6 +61,16 @@ VOID PatchDscProvider() {
 
   if (!ok) {
     Log(EchoVR::LogLevel::Error, "[NEVR.XPID] Aborting DSC provider patch — prologue validation failed");
+    BootLogTee::TeeFprintf("[NEVR.XPID] validation FAILED — provider strings stay PSN-/?\?\?-\n");
+    // N120. These five sites are validated against literal bytes in the loaded
+    // image, so a mismatch means the binary is not the build this runtime targets.
+    // Every other address in addresses.h is then suspect too — continuing would
+    // apply patches derived from a different build, and the first visible symptom
+    // would be somewhere unrelated. Verified safe to make fatal: a real server run
+    // reports "DSC provider patch applied at 5 sites", so this fires only on an
+    // actual binary mismatch, never on a healthy boot.
+    ServerFatal("XPID provider-string validation failed — echovr.exe is not the "
+                "build this runtime targets; every patched address is suspect");
     return;
   }
 
@@ -70,4 +88,5 @@ VOID PatchDscProvider() {
   ApplyPatch(XPID_PLATFORM_COMPACT_FALLBACK_NAME, kDscShort, sizeof(kDscShort));
 
   Log(EchoVR::LogLevel::Info, "[NEVR.XPID] DSC provider patch applied (PSN-/?\?- → DSC- at 5 sites)");
+  BootLogTee::TeeFprintf("[NEVR.XPID] DSC provider patch applied at 5 sites\n");
 }

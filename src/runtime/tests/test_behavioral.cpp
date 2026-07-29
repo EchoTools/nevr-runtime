@@ -110,6 +110,24 @@ void FatalError(const char* msg, const char* title) {
   fprintf(stderr, "[TEST] FatalError: %s: %s\n", title ? title : "?", msg ? msg : "?");
 }
 
+// N120. ServerFatal lives in crash_recovery.cpp, which this target does not
+// compile (it drags in the VEH, the ExitProcess hooks and the whole crash path).
+// Record the call instead of terminating, so the seam that makes the link work
+// also makes the new behaviour observable: a test can assert that a condition
+// DID reach ServerFatal, which a void stub could not.
+int g_serverFatalCalls = 0;
+std::string g_lastServerFatal;
+void ServerFatal(const CHAR* format, ...) {
+  char buf[1024];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(buf, sizeof(buf), format, args);
+  va_end(args);
+  g_serverFatalCalls++;
+  g_lastServerFatal = buf;
+  fprintf(stderr, "[TEST] ServerFatal: %s\n", buf);
+}
+
 // --- config.h extern (used by ws_bridge.cpp) ---
 void* g_earlyConfigPtr = nullptr;
 

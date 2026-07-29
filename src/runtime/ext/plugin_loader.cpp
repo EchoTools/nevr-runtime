@@ -7,6 +7,7 @@
 #include "core/logging.h"
 
 #include "runtime/lifecycle/cli.h"
+#include "runtime/lifecycle/crash_recovery.h"  // ServerFatal
 #include "runtime/hook/hook_guard.h"
 
 struct LoadedPlugin {
@@ -180,6 +181,13 @@ void LoadPlugins() {
         Log(EchoVR::LogLevel::Warning, "[NEVR.PLUGIN] %s (%s): init failed with code %d, unloading",
             info.name, info.description ? info.description : "?", result);
         FreeLibrary(hPlugin);
+        // N120. A plugin that fails init on a dedicated server has already had a
+        // chance to install hooks, and whatever it was loaded to provide is now
+        // absent — a game mode, a rule change — while the server keeps accepting
+        // sessions as though nothing is missing. Operators cannot see a Warning
+        // on a headless box. Client keeps the Warning-and-continue path.
+        ServerFatal("Plugin %s failed init with code %d — a server must not run "
+                    "with a plugin that did not start", filename, result);
         continue;
       }
 
@@ -188,7 +196,18 @@ void LoadPlugins() {
       // an address we own. Detects third-party plugins, which no source-level
       // check can see: gamepatches and plugins link SEPARATE static MinHook
       // copies, so neither library can report the collision itself.
-      HookGuard::VerifyAll(filename);
+      //
+      // N120: the return used to be DISCARDED. The collision was logged at ERROR
+      // and the plugin loaded anyway, so the detection existed and changed
+      // nothing. A non-zero count means a third party now owns an address we
+      // detoured: OUR patch is silently not applied, and every conclusion drawn
+      // from "the hook is installed" is wrong from here on.
+      const int collisions = HookGuard::VerifyAll(filename);
+      if (collisions > 0) {
+        ServerFatal("Plugin %s re-hooked %d address(es) this runtime already owns "
+                    "— our patches at those addresses are no longer applied",
+                    filename, collisions);
+      }
     }
 
     g_plugins.push_back({hPlugin, info, apiVersion, caps, initFn, onFrameFn,

@@ -621,6 +621,67 @@ verify:
         fi
     done
 
+    # --- N120: on a server, a degraded runtime must not keep running -------------
+    # Four conditions used to be logged and stepped over. On a dedicated server
+    # nobody reads a console, so "logged" means "lost", and the process ran on to
+    # fail later somewhere unrelated — broken AND misattributed.
+    #
+    # All four are comment-stripped: a commented-out ServerFatal would satisfy a
+    # plain grep and the sensor would pass on a disabled guard (N111).
+    N120_RC=0; N120_LOADER=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/ext/plugin_loader.cpp) || N120_RC=$?
+    sensor_stage1 "N120 server-fatal plugin guards" "src/runtime/ext/plugin_loader.cpp" "$N120_RC"
+    sensor_nonempty "N120 server-fatal plugin guards" "non-comment lines of ext/plugin_loader.cpp" "$N120_LOADER"
+
+    # The HookGuard verdict must be CONSUMED. `HookGuard::VerifyAll(filename);` as
+    # a bare statement is the pre-N120 bug: the collision was detected, logged at
+    # ERROR, and the plugin loaded anyway — detection that changed nothing.
+    if ! grep -qE '(int|auto) +[a-z_]+ *= *HookGuard::VerifyAll' <<<"$N120_LOADER"; then
+        echo "verify: FAIL — N120 HookGuard::VerifyAll's return is no longer captured." >&2
+        echo "A discarded verdict means a plugin can re-hook an address this runtime owns, our patch silently stops applying, and the load continues as though nothing happened." >&2
+        exit 1
+    fi
+    if ! grep -q 'ServerFatal' <<<"$N120_LOADER"; then
+        echo "verify: FAIL — N120 plugin_loader no longer escalates to ServerFatal." >&2
+        echo "A plugin that failed init, or that stole one of our hooks, would again be tolerated on a dedicated server." >&2
+        exit 1
+    fi
+
+    # platform_compat returned 0 even when the hook its own comment calls
+    # silent-but-fatal had failed. It must report failure so module_loader's
+    # existing FatalError fires at the point of the defect.
+    N120_RC2=0; N120_PC=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/modules/platform-compat/src/platform_compat.cpp) || N120_RC2=$?
+    sensor_stage1 "N120 platform_compat reports failure" "src/modules/platform-compat/src/platform_compat.cpp" "$N120_RC2"
+    sensor_nonempty "N120 platform_compat reports failure" "non-comment lines of platform_compat.cpp" "$N120_PC"
+    if ! grep -q 'NEVR_MODULE_HOST_IS_SERVER' <<<"$N120_PC"; then
+        echo "verify: FAIL — N120 platform_compat no longer distinguishes server from client." >&2
+        echo "It must return failure ONLY on a server: module_loader treats a non-zero init as fatal in both modes, so an unconditional failure would hard-fail a client that should merely warn." >&2
+        exit 1
+    fi
+    if ! grep -qE 'if *\( *isServer *&& *\( *!tlsOk *\|\| *!httpOk *\) *\)' <<<"$N120_PC"; then
+        echo "verify: FAIL — N120 platform_compat no longer fails a server run on a missing TLS or WinHTTP hook." >&2
+        echo "Without this it returns success with a degraded network stack, which is how a silently-failing WinHTTP hook looked identical to a working one." >&2
+        exit 1
+    fi
+
+    # The XPID patch's outcome was unobservable: it runs before the log filter is
+    # up and its Log() output reached neither the console log nor nevr-boot.jsonl,
+    # so across every captured run it reported nothing at all. `login injected
+    # xpid=DSC-` does NOT cover it — ws_bridge builds that prefix itself and stays
+    # green even when this patch never ran.
+    N120_RC3=0; N120_XPID=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/patch/xpid_patch.cpp) || N120_RC3=$?
+    sensor_stage1 "N120 xpid outcome observable" "src/runtime/patch/xpid_patch.cpp" "$N120_RC3"
+    sensor_nonempty "N120 xpid outcome observable" "non-comment lines of patch/xpid_patch.cpp" "$N120_XPID"
+    if [ "$(grep -c 'BootLogTee::TeeFprintf' <<<"$N120_XPID")" -lt 2 ]; then
+        echo "verify: FAIL — N120 the XPID patch no longer tees BOTH outcomes to the boot log." >&2
+        echo "Success and failure must each leave a record, or whether the game's provider strings were rewritten is unknowable from a run." >&2
+        exit 1
+    fi
+    if ! grep -q 'ServerFatal' <<<"$N120_XPID"; then
+        echo "verify: FAIL — N120 the XPID patch no longer escalates a validation failure." >&2
+        echo "These sites are validated against literal bytes in the loaded image: a mismatch means echovr.exe is not the build this runtime targets, so every other patched address is suspect too." >&2
+        exit 1
+    fi
+
     # --- N114: the plugin capability channel must stay WIRED ---------------------
     # A plugin declaring what it does is only useful if the host actually asks.
     # Declaring the export in the header and never resolving it would leave the
