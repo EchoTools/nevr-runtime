@@ -731,11 +731,26 @@ static HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName, HANDLE hFile, D
 VOID PatchBlockOculusSDK() {
   Original_LoadLibraryW = LoadLibraryW;
   Original_LoadLibraryExW = LoadLibraryExW;
-  PatchDetour(&Original_LoadLibraryW, reinterpret_cast<PVOID>(LoadLibraryW_Hook), "LoadLibraryW");
-  PatchDetour(&Original_LoadLibraryExW, reinterpret_cast<PVOID>(LoadLibraryExW_Hook), "LoadLibraryExW");
-
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Installed Oculus Platform SDK blocking hooks");
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Expected savings: 50-80MB RAM, 8-12%% CPU per instance");
+  // N127. Both of these fail under Wine. MEASURED: the targets resolve into Wine's
+  // system-DLL region (0x6fffff…, not the game's 0x140… image) and MinHook cannot
+  // install there. INFERRED: consistent with Wine exporting kernel32 LoadLibraryW/
+  // ExW as forwarder thunks that MinHook cannot relocate — not verified at the
+  // byte level. PatchDetour now reports the failure at Warning (N126); this log
+  // used to claim "Installed" unconditionally, so the feature has never worked
+  // under Wine and always said it did. Report the truth instead.
+  //
+  // Harmless in practice: a headless server never loads the Oculus Platform SDK
+  // (the OVR platform branch is bypassed by PatchBypassOvrPlatform and pnsrad's
+  // OVR-branch NOP, and no captured run ever attempts an ovrplatform LoadLibrary),
+  // so there is nothing for these hooks to block. NOT made fatal deliberately —
+  // "all server errors are fatal" is for degradations that matter; bricking every
+  // Wine server over a redundant optimization that can't install is not that.
+  const BOOL wOk  = PatchDetour(&Original_LoadLibraryW, reinterpret_cast<PVOID>(LoadLibraryW_Hook), "LoadLibraryW");
+  const BOOL exOk = PatchDetour(&Original_LoadLibraryExW, reinterpret_cast<PVOID>(LoadLibraryExW_Hook), "LoadLibraryExW");
+  Log((wOk && exOk) ? EchoVR::LogLevel::Debug : EchoVR::LogLevel::Warning,
+      "[NEVR.PATCH] Oculus Platform SDK blocking hooks: LoadLibraryW=%s LoadLibraryExW=%s "
+      "(redundant on headless — OVR SDK is never loaded; N127)",
+      wOk ? "ok" : "FAILED", exOk ? "ok" : "FAILED");
 }
 
 // ===================================================================================================

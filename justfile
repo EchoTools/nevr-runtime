@@ -621,6 +621,25 @@ verify:
         fi
     done
 
+    # --- N127: the Oculus-SDK block must report its real result ----------------
+    # PatchBlockOculusSDK logged "Installed Oculus Platform SDK blocking hooks"
+    # unconditionally while both PatchDetour calls fail under Wine — so it claimed
+    # success on every boot for a feature that never worked. The success claim must
+    # be gated on the actual returns.
+    N127_RC=0; N127_MP=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/patch/mode_patches.cpp) || N127_RC=$?
+    sensor_stage1 "N127 oculus-block reports result" "src/runtime/patch/mode_patches.cpp" "$N127_RC"
+    sensor_nonempty "N127 oculus-block reports result" "non-comment lines of mode_patches.cpp" "$N127_MP"
+    if grep -q 'Installed Oculus Platform SDK blocking hooks' <<<"$N127_MP"; then
+        echo "verify: FAIL — N127 the unconditional 'Installed Oculus Platform SDK blocking hooks' claim is back." >&2
+        echo "Both LoadLibrary detours fail under Wine; an unconditional success line claims a feature that never installed." >&2
+        exit 1
+    fi
+    if ! grep -qE '(BOOL|auto) +[a-zA-Z]+ *= *PatchDetour\(&Original_LoadLibraryW' <<<"$N127_MP"; then
+        echo "verify: FAIL — N127 PatchBlockOculusSDK no longer captures the LoadLibraryW detour result." >&2
+        echo "Without checking the return it cannot report FAILED, and the silent-success regression returns." >&2
+        exit 1
+    fi
+
     # --- N126: a failed hook must not be silent --------------------------------
     # PatchDetour is the one choke point every detour passes through. A failed
     # Attach used to return FALSE and log nothing, and 9 of 10 mode_patches call

@@ -309,6 +309,15 @@ VOID Initialize() {
   PatchDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook), "EchoVR::LoadLocalConfig");
   PatchDetour(&EchoVR::CJsonGetFloat, reinterpret_cast<PVOID>(CJsonGetFloatHook), "EchoVR::CJsonGetFloat");
   PatchDetour(&EchoVR::HttpConnect, reinterpret_cast<PVOID>(HttpConnectHook), "EchoVR::HttpConnect");
+  // N127: this detour FAILS to install on every boot (surfaced by N126). The
+  // target 0x1400eaef0 (CModule::GetProcAddress) is correct and its prologue
+  // (SUB RSP,0xa8) is cleanly relocatable, and its batch-neighbours here install
+  // fine — so the Wine-forwarder-thunk cause of the LoadLibrary failures does NOT
+  // apply, and the reason is undetermined (would need the MH_STATUS that
+  // Hooking::Attach currently discards). Harmless in practice: its only job is a
+  // RadPluginShutdown crash-avoidance on platform DLLs, and server shutdowns are
+  // clean across every captured run without it. Left attempting: if it ever
+  // starts installing, the crash-avoidance is a bonus, not a regression.
   PatchDetour(&EchoVR::GetProcAddress, reinterpret_cast<PVOID>(GetProcAddressHook), "EchoVR::GetProcAddress");
   PatchDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook), "EchoVR::SetWindowTextA_");
   PatchDetour(&EchoVR::JsonValueAsString, reinterpret_cast<PVOID>(JsonValueAsStringHook), "EchoVR::JsonValueAsString");
