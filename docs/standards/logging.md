@@ -189,7 +189,9 @@ in the log.
 
 ```cpp
 // BEFORE (N15 — numeric account ID only, no platform prefix, no full XPID)
-// src/modules/ws-bridge/src/ws_bridge.cpp:281-283
+// was: src/modules/ws-bridge/src/ws_bridge.cpp:281-283 — directory deleted in
+// 2e5b4ec; retrieve with
+// git show d654cd192e95767227fda0313d713e9d5effe4c9:src/modules/ws-bridge/src/ws_bridge.cpp
 Log(EchoVR::LogLevel::Info,
     "[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)",
     (unsigned long long)discordId, loginMsg.size());
@@ -206,10 +208,12 @@ login payload, not hardcoded. If the platform is DSC (Discord, code 2),
 the XPID is `DSC-<id>`, not `OVR-ORG-<id>`. See BUGS.md N14 (platform
 prefix hardcoded as OVR_ORG in module ws_bridge).
 
-**Where:** `src/modules/ws-bridge/src/ws_bridge.cpp:281-283` (conn>0
-injection), `:441-444` (conn=0 injection),
-`src/runtime/compat/ws_bridge.cpp:331` (gamepatches copy). Tracked as
-BUGS.md N15.
+**Where:** the module copy is GONE — `src/modules/ws-bridge/` was deleted in
+`2e5b4ec` (N105) after N92 folded the bridge into `BugSplat64.dll`. Its content
+is still retrievable:
+`git show d654cd192e95767227fda0313d713e9d5effe4c9:src/modules/ws-bridge/src/ws_bridge.cpp`
+(conn>0 injection at :281-283, conn=0 at :441-444). The surviving injection site
+is `src/runtime/compat/ws_bridge.cpp:515`. Tracked as BUGS.md N15.
 
 ### Rule 3: Silence is not success
 
