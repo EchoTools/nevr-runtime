@@ -67,6 +67,25 @@ Expected: **56 PASS, 0 FAIL.** Anything FAIL stops the release.
 | 0.9 | Telemetry stream | B2 | E3 | add `telemetry_uri` + run a listener | `[NEVR.TELEMETRY] Connected`. With no listener, S30 ABSENT is correct — **not** a failure. S43 must still PASS: the server states its telemetry decision either way (N124). |
 | 0.10 | Server survives 30+ min idle | B3 | E2 | `./verify-server.sh soak default 2000` | still registered, no crash, memory flat |
 | 0.11 | Idle CPU is sane | B2 | E2 | `top -H -p $(pgrep -f echovr.exe)` during soak | **open question** — record the number, do not conclude from one run |
+| 0.12 | No *real* hook failure (S44) | B4 | E1 | scored automatically | `hook FAILED` for a reason **other than** `MH_ERROR_ALREADY_CREATED` is a regression — a hook genuinely could not install. |
+
+### Expected on a healthy headless boot — do NOT flag these
+
+Since N126, a healthy server logs **exactly three** `hook FAILED` warnings, and they
+are baseline, not regressions (N128 — two NEVR features each want the same address;
+MinHook allows one detour per target, second loses, both losers are empirically
+unnecessary):
+
+```
+hook FAILED name=EchoVR::GetProcAddress reason=MH_ERROR_ALREADY_CREATED
+hook FAILED name=LoadLibraryW           reason=MH_ERROR_ALREADY_CREATED
+hook FAILED name=LoadLibraryExW         reason=MH_ERROR_ALREADY_CREATED
+```
+
+**More than three, a different name, or any reason other than
+`MH_ERROR_ALREADY_CREATED`** means a hook genuinely failed to install — investigate.
+Row **S44** encodes exactly this: it passes on the three collisions and fails on any
+real (non-collision) hook failure, keyed on the `reason=` code that N128 added.
 
 ---
 

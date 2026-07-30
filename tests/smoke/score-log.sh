@@ -32,6 +32,14 @@
 # patch never ran. S42 tests the patch itself. A row that passes for the wrong
 # reason is worse than a missing row, because it reads as coverage.
 #
+# S44 is a NEGATIVE guard, not a feature: N126 made failed hooks visible and a
+# healthy headless boot has exactly THREE — GetProcAddress, LoadLibraryW,
+# LoadLibraryExW, all MH_ERROR_ALREADY_CREATED (NEVR-internal double-hooks, N128,
+# empirically harmless). Those are baseline. S44 fails only when a hook fails for a
+# REAL reason (prologue can't relocate, memory, target missing) — a genuine
+# regression the collisions must not mask. It keys on the reason= code from N128,
+# which is exactly why capturing MH_STATUS was worth doing.
+#
 # Never pipe the game's live output into this script. Capture to a file, then
 # score the file: grep block-buffers on a live pipe and the run looks hung.
 set -uo pipefail
@@ -122,6 +130,7 @@ S28@@server@@CDN tints loaded into memory@@\[NEVR\.CDN\] Fetch complete: .*[1-9]
 S29@@server@@UPnP port mapping added@@\[NEVR\.UPNP\] Port mapping added:@@\[NEVR\.UPNP\] No UPnP devices found|AddPortMapping failed|No valid IGD
 S30@@server@@Telemetry stream connected@@\[NEVR\.TELEMETRY\] Connected to telemetry server@@\[NEVR\.TELEMETRY\] Connection error
 S43@@server@@Telemetry state is stated either way@@Connected to telemetry server|telemetry disabled@@
+S44@@server@@No hook failed for a real (non-collision) reason@@\[NEVR\.PATCH\] All hooks installed@@reason=MH_ERROR_(UNSUPPORTED_FUNCTION|NOT_EXECUTABLE|MEMORY_ALLOC|MODULE_NOT_FOUND|FUNCTION_NOT_FOUND|UNABLE_TO_UNINSTALL|UNKNOWN)
 S31@@server@@Shutdown signal handlers installed@@POSIX signal handlers installed|console ctrl handler installed@@SetConsoleCtrlHandler FAILED|Failed to register SIG
 S32@@server@@Ctrl handler re-armed to front of chain@@console ctrl handler re-armed to front of chain@@
 S33@@server@@Shutdown deps pre-resolved (no loader lock)@@shutdown deps resolved@@
@@ -176,10 +185,17 @@ while IFS= read -r row; do
   hit_fail=0
   [ -n "$fail_re" ] && hit_fail=$(grep -Ec -- "$fail_re" "$PLAIN" 2>/dev/null || true)
 
-  if [ "${hit_pass:-0}" -gt 0 ]; then
-    result="PASS    (${hit_pass}x)"; pass=$((pass+1))
-  elif [ "${hit_fail:-0}" -gt 0 ]; then
+  # FAIL takes precedence over PASS: an explicit failure signal must override a
+  # success signal in the same log, not be masked by it. This matters for negative
+  # guards like S44 whose pass-regex ("All hooks installed") is present on EVERY
+  # healthy boot — pass-first would let it hide a real hook failure. Safe for all
+  # existing rows: on a healthy run no fail-regex matches (the 66-PASS baseline),
+  # so the outcome is unchanged; it only flips genuinely-failed runs, where FAIL is
+  # the correct answer anyway.
+  if [ "${hit_fail:-0}" -gt 0 ]; then
     result="FAIL    (${hit_fail}x)"; fail=$((fail+1)); failed_ids="$failed_ids $id"
+  elif [ "${hit_pass:-0}" -gt 0 ]; then
+    result="PASS    (${hit_pass}x)"; pass=$((pass+1))
   else
     result="ABSENT  (not reached)"; absent=$((absent+1))
   fi
