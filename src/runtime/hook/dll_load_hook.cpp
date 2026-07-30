@@ -137,18 +137,40 @@ static HMODULE WINAPI HookedLoadLibraryExW(LPCWSTR lpFileName, HANDLE hFile, DWO
 
 void Install() {
 #ifdef _WIN32
-    auto hook = [](void* target, void* detour, void** original) {
-        return MH_CreateHook(target, detour, original) == MH_OK &&
-               MH_EnableHook(target) == MH_OK;
+    // N129. This is the N75/N89 search-path hardening — it hooks LoadLibrary so a
+    // DLL dropped next to the exe cannot satisfy a dependency ahead of the real
+    // one. The old code accumulated `ok &=` across all four variants and logged a
+    // single "OK"/"PARTIAL", which hid WHICH variant failed and WHY. In the one
+    // path where a silently-unhooked LoadLibrary is a hijack gap, that is the worst
+    // place to be vague. Report each variant and its MH_STATUS, mirroring N126/N128
+    // for the PatchDetour path. (This path does not go through PatchDetour, so it
+    // needs its own reporting — it was the last MinHook install site without it.)
+    struct HookSpec { const char* name; void* target; void* detour; void** original; };
+    const HookSpec specs[] = {
+        {"LoadLibraryA",   (void*)&LoadLibraryA,   (void*)&HookedLoadLibraryA,   (void**)&g_origLoadLibraryA},
+        {"LoadLibraryW",   (void*)&LoadLibraryW,   (void*)&HookedLoadLibraryW,   (void**)&g_origLoadLibraryW},
+        {"LoadLibraryExA", (void*)&LoadLibraryExA, (void*)&HookedLoadLibraryExA, (void**)&g_origLoadLibraryExA},
+        {"LoadLibraryExW", (void*)&LoadLibraryExW, (void*)&HookedLoadLibraryExW, (void**)&g_origLoadLibraryExW},
     };
 
-    bool ok = true;
-    ok &= hook((void*)&LoadLibraryA,   (void*)&HookedLoadLibraryA,   (void**)&g_origLoadLibraryA);
-    ok &= hook((void*)&LoadLibraryW,   (void*)&HookedLoadLibraryW,   (void**)&g_origLoadLibraryW);
-    ok &= hook((void*)&LoadLibraryExA, (void*)&HookedLoadLibraryExA, (void**)&g_origLoadLibraryExA);
-    ok &= hook((void*)&LoadLibraryExW, (void*)&HookedLoadLibraryExW, (void**)&g_origLoadLibraryExW);
+    int okCount = 0;
+    for (const auto& s : specs) {
+        MH_STATUS st = MH_CreateHook(s.target, s.detour, s.original);
+        if (st == MH_OK) st = MH_EnableHook(s.target);
+        if (st == MH_OK) {
+            okCount++;
+        } else {
+            fprintf(stderr,
+                    "[NEVR.DLLHOOK] hook FAILED name=%s reason=%s — search-path "
+                    "hardening inactive for this variant (N129)\n",
+                    s.name, MH_StatusToString(st));
+        }
+    }
 
-    fprintf(stderr, "[NEVR.DLLHOOK] LoadLibrary hooks %s\n", ok ? "OK" : "PARTIAL");
+    // Keep "LoadLibrary hooks OK" as a substring on full success (smoke row B09),
+    // and always report the count so PARTIAL is never a bare word without a number.
+    fprintf(stderr, "[NEVR.DLLHOOK] LoadLibrary hooks %s (%d/4)\n",
+            okCount == 4 ? "OK" : "PARTIAL", okCount);
     fflush(stderr);
 #endif
 }

@@ -621,6 +621,25 @@ verify:
         fi
     done
 
+    # --- N129: the DLL-load hardening must report per-hook failures --------------
+    # DllLoadHook (N75/N89 search-path hardening) installs its four LoadLibrary
+    # hooks OUTSIDE PatchDetour, so N126/N128's reporting doesn't cover it. It used
+    # to accumulate ok &= and log one "OK"/"PARTIAL", hiding which variant failed
+    # and why — the worst place to be vague, since a silently-unhooked LoadLibrary
+    # is a DLL-hijack gap. It must name the variant and the MH_STATUS on failure.
+    N129_RC=0; N129_DL=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/hook/dll_load_hook.cpp) || N129_RC=$?
+    sensor_stage1 "N129 dll-hook reports per-variant" "src/runtime/hook/dll_load_hook.cpp" "$N129_RC"
+    sensor_nonempty "N129 dll-hook reports per-variant" "non-comment lines of dll_load_hook.cpp" "$N129_DL"
+    if ! grep -q 'MH_StatusToString' <<<"$N129_DL"; then
+        echo "verify: FAIL — N129 DllLoadHook::Install no longer reports the MH_STATUS on a failed LoadLibrary hook." >&2
+        echo "It would revert to a bare OK/PARTIAL that hides which search-path hook failed — a silent DLL-hijack gap." >&2
+        exit 1
+    fi
+    if grep -qE 'bool ok = true;.*ok &=' <<<"$(tr '\n' ' ' <<<"$N129_DL")"; then
+        echo "verify: FAIL — N129 the accumulate-and-hide 'ok &=' aggregate is back in DllLoadHook." >&2
+        exit 1
+    fi
+
     # --- N128: a failed hook must report WHICH MinHook error ---------------------
     # N126 made a failed detour visible; N128 made it DIAGNOSABLE. Hooking::Attach
     # captures MH_StatusToString on failure and PatchDetour surfaces it, so the log
