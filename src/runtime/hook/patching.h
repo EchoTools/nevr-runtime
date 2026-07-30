@@ -2,6 +2,7 @@
 
 #include "core/pch.h"
 #include "core/hooking.h"
+#include "core/logging.h"   // N126: PatchDetour reports a failed hook at Warning
 #include "abi/echovr_functions.h"
 #include "runtime/hook/process_memory.h"
 #include "runtime/hook/addresses.h"
@@ -34,7 +35,21 @@ template <typename T>
 inline BOOL PatchDetour(T* ppPointer, PVOID pDetour, const char* name) {
   void* target = *reinterpret_cast<void**>(ppPointer);
   const BOOL ok = Hooking::Attach(reinterpret_cast<PVOID*>(ppPointer), pDetour);
-  if (ok) HookGuard::Record(target, name);
+  if (ok) {
+    HookGuard::Record(target, name);
+  } else {
+    // N126. A failed hook was SILENT and its return was ignored by 9 of 10 call
+    // sites, which log "installed" unconditionally on the next line — so a
+    // server-critical patch that never installed (BugSplat crash suppression,
+    // the GameSpace crash fix) still printed "installed", and there was no
+    // failure signal at ANY level. Report it here, at the one choke point every
+    // detour passes through, so no call site can forget. Warning, not Debug: a
+    // missing hook is an operator-actionable degradation, and this fires ONLY on
+    // failure — a healthy boot, where every hook installs, adds no new line.
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] hook FAILED name=%s target=%p — detour not installed (N126)",
+        name ? name : "(unnamed)", target);
+  }
   return ok;
 }
 

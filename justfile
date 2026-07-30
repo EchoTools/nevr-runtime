@@ -621,6 +621,21 @@ verify:
         fi
     done
 
+    # --- N126: a failed hook must not be silent --------------------------------
+    # PatchDetour is the one choke point every detour passes through. A failed
+    # Attach used to return FALSE and log nothing, and 9 of 10 mode_patches call
+    # sites ignore the return and log "installed" on the next line regardless — so
+    # a server-critical hook that never installed still printed "installed" and
+    # produced no failure signal at any level. The failure branch must Log.
+    N126_RC=0; N126_PD=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/hook/patching.h) || N126_RC=$?
+    sensor_stage1 "N126 failed hook is reported" "src/runtime/hook/patching.h" "$N126_RC"
+    sensor_nonempty "N126 failed hook is reported" "non-comment lines of patching.h" "$N126_PD"
+    if ! grep -qE 'else' <<<"$N126_PD" || ! grep -q 'hook FAILED name=' <<<"$N126_PD"; then
+        echo "verify: FAIL — N126 PatchDetour no longer logs on the failure path." >&2
+        echo "A failed detour would return silently again, and the 'installed' line at the call site (unconditional at 9 of 10 sites) would be the only output — claiming success on failure." >&2
+        exit 1
+    fi
+
     # --- N125: the game-loop setjmp and its longjmp live in the SAME file --------
     # g_gameLoopJmpBuf is a crash-recovery jump buffer: GameMainWrapperHook does the
     # setjmp, the VEH does the longjmp. They used to sit in different translation
