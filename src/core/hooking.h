@@ -28,20 +28,37 @@ inline VOID Shutdown() {
 #endif
 }
 
+// N127: the reason the most recent Attach() failed — which MinHook stage and its
+// MH_STATUS — so the caller (PatchDetour) can name it in one Warning line instead
+// of leaving "undetermined". MH_StatusToString returns a static string literal, so
+// storing the pointer is safe. Written only on the init thread, where hooks
+// install one at a time and PatchDetour reads this immediately after each; not for
+// cross-thread use.
+inline const char*& LastAttachErrorRef() {
+  static const char* s = "";
+  return s;
+}
+inline const char* LastAttachError() { return LastAttachErrorRef(); }
+
 // Attach a hook to a function
 // ppOriginal: Pointer to the original function pointer (will be updated to trampoline)
 // pDetour: The hook function
 inline BOOL Attach(PVOID* ppOriginal, PVOID pDetour) {
+  LastAttachErrorRef() = "";
 #ifdef USE_MINHOOK
   // MinHook needs the target address, then gives us the trampoline
   PVOID pTarget = *ppOriginal;
   PVOID pTrampoline = nullptr;
 
-  if (MH_CreateHook(pTarget, pDetour, &pTrampoline) != MH_OK) {
+  MH_STATUS st = MH_CreateHook(pTarget, pDetour, &pTrampoline);
+  if (st != MH_OK) {
+    LastAttachErrorRef() = MH_StatusToString(st);  // e.g. MH_ERROR_UNSUPPORTED_FUNCTION
     return FALSE;
   }
 
-  if (MH_EnableHook(pTarget) != MH_OK) {
+  st = MH_EnableHook(pTarget);
+  if (st != MH_OK) {
+    LastAttachErrorRef() = MH_StatusToString(st);  // e.g. MH_ERROR_NOT_EXECUTABLE
     return FALSE;
   }
 
@@ -53,6 +70,7 @@ inline BOOL Attach(PVOID* ppOriginal, PVOID pDetour) {
   DetourUpdateThread(GetCurrentThread());
   LONG result = DetourAttach(ppOriginal, pDetour);
   DetourTransactionCommit();
+  if (result != NO_ERROR) LastAttachErrorRef() = "DetourAttach failed";
   return result == NO_ERROR;
 #endif
 }

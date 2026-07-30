@@ -309,15 +309,17 @@ VOID Initialize() {
   PatchDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook), "EchoVR::LoadLocalConfig");
   PatchDetour(&EchoVR::CJsonGetFloat, reinterpret_cast<PVOID>(CJsonGetFloatHook), "EchoVR::CJsonGetFloat");
   PatchDetour(&EchoVR::HttpConnect, reinterpret_cast<PVOID>(HttpConnectHook), "EchoVR::HttpConnect");
-  // N127: this detour FAILS to install on every boot (surfaced by N126). The
-  // target 0x1400eaef0 (CModule::GetProcAddress) is correct and its prologue
-  // (SUB RSP,0xa8) is cleanly relocatable, and its batch-neighbours here install
-  // fine — so the Wine-forwarder-thunk cause of the LoadLibrary failures does NOT
-  // apply, and the reason is undetermined (would need the MH_STATUS that
-  // Hooking::Attach currently discards). Harmless in practice: its only job is a
-  // RadPluginShutdown crash-avoidance on platform DLLs, and server shutdowns are
-  // clean across every captured run without it. Left attempting: if it ever
-  // starts installing, the crash-avoidance is a bonus, not a regression.
+  // N128: this detour FAILS with MH_ERROR_ALREADY_CREATED on every boot, and the
+  // reason is now KNOWN (N127 left it undetermined; the MH_STATUS capture added in
+  // N128 resolved it). EchoVR::GetProcAddress is 0x1400eaef0 — the SAME address
+  // already hooked above as CSysDLL_GetSymbol (line ~258, the pnsradgameserver ->
+  // in-process ServerLib redirect). CModule::GetProcAddress, CSysDLL_GetSymbol and
+  // EchoVR::GetProcAddress are one function; MinHook allows one detour per target,
+  // and CSysDLL_GetSymbol wins because it installs first. So this RadPluginShutdown
+  // crash-avoidance never installs. Empirically harmless — shutdowns are clean
+  // across every captured run without it. Proper fix (flagged, not done): fold the
+  // RadPluginShutdown check into CSysDLL_GetSymbolHook, since it already intercepts
+  // symbol lookups on this exact function.
   PatchDetour(&EchoVR::GetProcAddress, reinterpret_cast<PVOID>(GetProcAddressHook), "EchoVR::GetProcAddress");
   PatchDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook), "EchoVR::SetWindowTextA_");
   PatchDetour(&EchoVR::JsonValueAsString, reinterpret_cast<PVOID>(JsonValueAsStringHook), "EchoVR::JsonValueAsString");

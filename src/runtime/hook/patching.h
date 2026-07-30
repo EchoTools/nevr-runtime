@@ -47,8 +47,8 @@ inline BOOL PatchDetour(T* ppPointer, PVOID pDetour, const char* name) {
     // missing hook is an operator-actionable degradation, and this fires ONLY on
     // failure — a healthy boot, where every hook installs, adds no new line.
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] hook FAILED name=%s target=%p — detour not installed (N126)",
-        name ? name : "(unnamed)", target);
+        "[NEVR.PATCH] hook FAILED name=%s target=%p reason=%s — detour not installed (N126/N128)",
+        name ? name : "(unnamed)", target, Hooking::LastAttachError());
   }
   return ok;
 }

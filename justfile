@@ -621,6 +621,29 @@ verify:
         fi
     done
 
+    # --- N128: a failed hook must report WHICH MinHook error ---------------------
+    # N126 made a failed detour visible; N128 made it DIAGNOSABLE. Hooking::Attach
+    # captures MH_StatusToString on failure and PatchDetour surfaces it, so the log
+    # names the reason (MH_ERROR_ALREADY_CREATED etc.) instead of leaving it
+    # undetermined. Without this the three known double-hook collisions read as
+    # "failed" with no cause, and my Wine-forwarder guess would still stand. Guard
+    # both halves of the wiring.
+    N128_RC=0; N128_HK=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/core/hooking.h) || N128_RC=$?
+    sensor_stage1 "N128 attach captures MH_STATUS" "src/core/hooking.h" "$N128_RC"
+    sensor_nonempty "N128 attach captures MH_STATUS" "non-comment lines of hooking.h" "$N128_HK"
+    if ! grep -q 'MH_StatusToString' <<<"$N128_HK"; then
+        echo "verify: FAIL — N128 Hooking::Attach no longer records the MH_STATUS reason." >&2
+        echo "A failed hook would report 'reason=' empty again, and a double-hook collision would read as an unexplained failure." >&2
+        exit 1
+    fi
+    N128_RC2=0; N128_PD=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/hook/patching.h) || N128_RC2=$?
+    sensor_stage1 "N128 failure log surfaces reason" "src/runtime/hook/patching.h" "$N128_RC2"
+    sensor_nonempty "N128 failure log surfaces reason" "non-comment lines of patching.h" "$N128_PD"
+    if ! grep -q 'Hooking::LastAttachError()' <<<"$N128_PD"; then
+        echo "verify: FAIL — N128 PatchDetour's failure log no longer includes the attach reason." >&2
+        exit 1
+    fi
+
     # --- N127: the Oculus-SDK block must report its real result ----------------
     # PatchBlockOculusSDK logged "Installed Oculus Platform SDK blocking hooks"
     # unconditionally while both PatchDetour calls fail under Wine — so it claimed

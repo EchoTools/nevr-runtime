@@ -731,13 +731,17 @@ static HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName, HANDLE hFile, D
 VOID PatchBlockOculusSDK() {
   Original_LoadLibraryW = LoadLibraryW;
   Original_LoadLibraryExW = LoadLibraryExW;
-  // N127. Both of these fail under Wine. MEASURED: the targets resolve into Wine's
-  // system-DLL region (0x6fffff…, not the game's 0x140… image) and MinHook cannot
-  // install there. INFERRED: consistent with Wine exporting kernel32 LoadLibraryW/
-  // ExW as forwarder thunks that MinHook cannot relocate — not verified at the
-  // byte level. PatchDetour now reports the failure at Warning (N126); this log
-  // used to claim "Installed" unconditionally, so the feature has never worked
-  // under Wine and always said it did. Report the truth instead.
+  // N128 (corrects N127). These fail with MH_ERROR_ALREADY_CREATED, NOT a Wine
+  // limitation — my earlier "forwarder thunk" guess was wrong, and the MH_STATUS
+  // capability added in N128 disproved it. DllLoadHook::Install() (N75 search-path
+  // hardening, initialize.cpp:238) hooks LoadLibraryW/ExW FIRST and wins; this
+  // second detour on the same two addresses loses. MinHook allows one detour per
+  // target. So the Oculus filter here never installs — but it is moot on a
+  // headless server anyway (the OVR SDK is never loaded), and DllLoadHook's own
+  // hook does not do Oculus blocking. PatchDetour now reports the failure with its
+  // reason (N126/N128); this log used to claim "Installed" unconditionally.
+  // Proper fix (flagged, not done): fold the ovrplatform filter into DllLoadHook's
+  // HookedLoadLibraryW so one hook serves both, or drop these as redundant.
   //
   // Harmless in practice: a headless server never loads the Oculus Platform SDK
   // (the OVR platform branch is bypassed by PatchBypassOvrPlatform and pnsrad's
