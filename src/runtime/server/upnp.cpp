@@ -89,7 +89,13 @@ bool UPnPHelper::OpenPort(uint16_t internalPort, uint16_t externalPort,
 
   s_active = true;
   s_mappedExternalPort = externalPort;
-  Log(EchoVR::LogLevel::Debug,
+  // N122. This was Debug — off in production — while EVERY failure path here logs
+  // at Warning. So a working UPnP mapping and a UPnP that never ran produced
+  // byte-identical output: nothing. Four captured runs were read as "UPnP never
+  // fired" when it had in fact discovered an IGD and added the mapping every time.
+  // Whether this server's port is actually forwarded is exactly what an operator
+  // needs during an incident, which is the standard's definition of Info.
+  Log(EchoVR::LogLevel::Info,
       "[NEVR.UPNP] Port mapping added: %u (ext) -> %u (int) UDP, WAN IP: %s",
       externalPort, internalPort, outExternalIp.c_str());
   return true;

@@ -147,6 +147,13 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
     if (upnpVal != NULL && (strcmp(upnpVal, "true") == 0 || strcmp(upnpVal, "1") == 0)) {
       g_upnpEnabled = TRUE;
     }
+    // N122. Whether this key was found was UNOBSERVABLE: a missing key, a key
+    // holding an unexpected value, and a key read correctly all produced exactly
+    // the same output — none. Four captured runs had `"upnp":"true"` in the
+    // config file and emitted no UPnP line of any kind, success or failure, so
+    // there was no way to tell "disabled" from "never asked".
+    Log(EchoVR::LogLevel::Info, "[NEVR.UPNP] config key upnp=%s -> enabled=%d",
+        upnpVal ? upnpVal : "<absent>", g_upnpEnabled ? 1 : 0);
 
     // upnp_port (external port override)
     CHAR* upnpPortVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"upnp_port", NULL, false);

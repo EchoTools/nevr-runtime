@@ -1436,6 +1436,14 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       } else {
         Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] UPnP port mapping failed — using raw broadcaster port");
       }
+    } else {
+      // N122. The disabled branch was SILENT, so a server that never attempted a
+      // mapping looked identical in the log to one where the attempt was never
+      // reached at all. Registration announces this port to ServerDB either way,
+      // so whether it was forwarded is exactly the thing an operator needs to know.
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.UPNP] disabled — announcing raw broadcaster port %u, no mapping attempted "
+          "(set \"upnp\" in config or pass -upnp)", broadcasterPort);
     }
   }
 

@@ -63,7 +63,7 @@ Expected: **56 PASS, 0 FAIL.** Anything FAIL stops the release.
 | 0.5 | Port immediately re-bindable | B3 | E2 | after CTRL+C, start again at once | second run binds, no "address in use" |
 | 0.6 | Plugin loads | B3 | E2 | stage `nevr_example.dll` into `echovr/bin/win10/plugins/` | `Loaded: … (API v3) caps=0x` |
 | 0.7 | Loader refuses `log_filter.dll` | B2 | E2 | also stage `log_filter.dll` | `SKIPPED … superseded by the built-in log filter` |
-| 0.8 | **UPnP port mapping** | B2 | E2 | config already has `"upnp":"true"` — just run | **SUSPECT.** `[NEVR.UPNP] Port mapping added:`. Fired in **zero** of 4 runs despite the config key parsing correctly. If still absent, file it. |
+| 0.8 | **UPnP port mapping** | B2 | E2 | config already has `"upnp":"true"` — just run | `[NEVR.UPNP] Port mapping added:`. **Was never broken — it was invisible** (N122): the success line was Debug-level while every failure path logged at Warning, so a working mapping and a UPnP that never ran produced identical output. Now Info. **Live confirmation still pending** — the two runs after the fix did not reach registration (service-side), so this line has not yet been observed on a registering run. First green run closes it. |
 | 0.9 | Telemetry stream | B2 | E3 | add `telemetry_uri` + run a listener | `[NEVR.TELEMETRY] Connected` |
 | 0.10 | Server survives 30+ min idle | B3 | E2 | `./verify-server.sh soak default 2000` | still registered, no crash, memory flat |
 | 0.11 | Idle CPU is sane | B2 | E2 | `top -H -p $(pgrep -f echovr.exe)` during soak | **open question** — record the number, do not conclude from one run |
