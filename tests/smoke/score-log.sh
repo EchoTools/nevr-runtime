@@ -120,7 +120,8 @@ S26@@server@@Asset CDN hook installed@@\[NEVR\.CDN\] Loadout_ResolveDataFromId h
 S27@@server@@CDN manifest fetched@@\[NEVR\.CDN\] Manifest loaded: [0-9]+ packages@@Manifest fetch failed|Failed to resolve cache directory
 S28@@server@@CDN tints loaded into memory@@\[NEVR\.CDN\] Fetch complete: .*[1-9][0-9]* tints loaded@@\.evrp bad magic|\.evrp file too small
 S29@@server@@UPnP port mapping added@@\[NEVR\.UPNP\] Port mapping added:@@\[NEVR\.UPNP\] No UPnP devices found|AddPortMapping failed|No valid IGD
-S30@@server@@Telemetry stream connected@@\[NEVR\.TELEMETRY\] Connected to telemetry server@@No telemetry_uri in config|\[NEVR\.TELEMETRY\] Connection error
+S30@@server@@Telemetry stream connected@@\[NEVR\.TELEMETRY\] Connected to telemetry server@@\[NEVR\.TELEMETRY\] Connection error
+S43@@server@@Telemetry state is stated either way@@Connected to telemetry server|telemetry disabled@@
 S31@@server@@Shutdown signal handlers installed@@POSIX signal handlers installed|console ctrl handler installed@@SetConsoleCtrlHandler FAILED|Failed to register SIG
 S32@@server@@Ctrl handler re-armed to front of chain@@console ctrl handler re-armed to front of chain@@
 S33@@server@@Shutdown deps pre-resolved (no loader lock)@@shutdown deps resolved@@

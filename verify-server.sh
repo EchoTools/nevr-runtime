@@ -17,12 +17,14 @@
 # flag-set:
 #   default    -server -headless -noconsole   (byte-identical to launch-server.sh)
 #   noflag     -server -noconsole             (drops the -headless token)
+#   upnp       default + -upnp                (flag path to g_upnpEnabled, not config)
+#   notelem    default + -notelemetry         (telemetry explicitly disabled)
 #
 # Never pipe this script's log through grep while it runs — grep block-buffers
 # and the run looks hung. Read the files after it exits.
 set -uo pipefail
 
-RUN_NAME="${1:?usage: verify-server.sh <run-name> [default|noflag] [seconds]}"
+RUN_NAME="${1:?usage: verify-server.sh <run-name> [default|noflag|upnp|notelem] [seconds]}"
 FLAGSET="${2:-default}"
 RUN_SECONDS="${3:-100}"
 
@@ -35,7 +37,15 @@ LOG="$OUT/server.log"
 case "$FLAGSET" in
   default) ARGS=(-server -headless -noconsole) ;;
   noflag)  ARGS=(-server -noconsole) ;;
-  *) echo "unknown flag-set: $FLAGSET (use 'default' or 'noflag')" >&2; exit 2 ;;
+  # N122/R4: exercises the FLAG path to g_upnpEnabled (boot.cpp) rather than the
+  # config-key path (config.cpp). Both set the same global, but only one of them
+  # is covered by a run that relies on config.json — and a flag that silently
+  # stopped working would look identical to a config that silently kept working.
+  upnp)    ARGS=(-server -headless -noconsole -upnp) ;;
+  # R5: telemetry is gated on telemetry_uri in config, not on a flag. This flagset
+  # exists so the disabled path is exercised deliberately rather than by omission.
+  notelem) ARGS=(-server -headless -noconsole -notelemetry) ;;
+  *) echo "unknown flag-set: $FLAGSET (use default, noflag, upnp or notelem)" >&2; exit 2 ;;
 esac
 
 if [ "$RUN_SECONDS" -lt 45 ]; then
