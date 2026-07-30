@@ -14,4 +14,10 @@ std::string GetToken();
 
 // Returns the discord ID from the current JWT, or 0 if not authenticated.
 uint64_t GetDiscordId();
+
+// Returns the account's username, or empty if unknown. Survives restarts — it is
+// persisted to the credential cache alongside the refresh token. Callers SHALL
+// treat empty as "no honest answer" and must not substitute a placeholder that
+// looks like a real name (N123).
+std::string GetUsername();
 }

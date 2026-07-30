@@ -144,7 +144,15 @@ static const char* PlatformPrefix(uint64_t platformCode) {
   }
 }
 
-static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode = 2) {
+// N123. displayName was the hardcoded literal "nEVR", so every NEVR client in a
+// session announced the identical name — eight players would render eight
+// identical nameplates. token_auth already parsed a username from the auth
+// response and already persisted it to the credential cache; it had just never
+// been exposed. Empty means "not known", and the caller below sends the account
+// id rather than substituting something that looks like a real name (N115: absent
+// data is visibly absent, invented data is indistinguishable from a reading).
+static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode = 2,
+                                     const std::string& displayName = std::string()) {
   // Platform: DSC = 2 (Go iota: XPlatformIdSize=0, STM=1, PSN/DSC=2, XBX=3, OVR_ORG=4)
   uint64_t accountId = discordId;
 
@@ -165,12 +173,32 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
                        (host.wine_host_os.empty() ? "" : " on " + host.wine_host_os))
                     : std::string();
 
+  // N123. The name goes inside a hand-built JSON string, so a username carrying a
+  // quote or a backslash would produce a malformed payload. Escape the two
+  // characters that can break the document, and drop control characters rather
+  // than emit a raw byte the parser will reject.
+  auto jsonEscape = [](const std::string& in) {
+    std::string out;
+    out.reserve(in.size() + 8);
+    for (char c : in) {
+      if (c == '"' || c == '\\') { out.push_back('\\'); out.push_back(c); }
+      else if (static_cast<unsigned char>(c) >= 0x20) { out.push_back(c); }
+    }
+    return out;
+  };
+
+  // Empty means the account's name is genuinely not known yet. Fall back to the
+  // account id — a true, unique identifier — rather than a constant. A shared
+  // placeholder is what made every NEVR client announce the same name.
+  std::string resolvedName = jsonEscape(displayName);
+  if (resolvedName.empty()) resolvedName = std::to_string(accountId);
+
   // LoginProfile JSON — matches the game's SNSLogInRequestv2 format
   char json[2048];
   snprintf(json, sizeof(json),
     "{"
       "\"accountid\":%llu,"
-      "\"displayname\":\"nEVR\","
+      "\"displayname\":\"%s\","
       "\"bypassauth\":false,"
       "\"access_token\":\"\","
       "\"nonce\":\"\","
@@ -194,6 +222,7 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
       "}"
     "}",
     (unsigned long long)accountId,
+    resolvedName.c_str(),
     driverVersion.c_str(),
     host.cpu_brand.c_str(),
     host.physical_cores,
@@ -393,15 +422,24 @@ void InstallWebSocketBridge() {
 
             // Get auth token from token_auth module (resolved via cross-module procs)
             std::string bearerToken;
+            std::string accountName;  // N123 — empty means "not known", never a placeholder
             uint64_t discordId = 0;
             {
               auto getTokenFn = (const char* (*)())ResolveModuleProc("TokenAuth_GetToken");
               auto getDiscordIdFn = (uint64_t (*)())ResolveModuleProc("TokenAuth_GetDiscordId");
+              // N123. Optional by design: an older token_auth.dll without this
+              // export must still load. A null here means "no name available",
+              // which BuildLoginRequest already handles.
+              auto getUsernameFn = (const char* (*)())ResolveModuleProc("TokenAuth_GetUsername");
               if (getTokenFn) {
                 const char* tok = getTokenFn();
                 if (tok) bearerToken = tok;
               }
               if (getDiscordIdFn) discordId = getDiscordIdFn();
+              if (getUsernameFn) {
+                const char* name = getUsernameFn();
+                if (name) accountName = name;
+              }
             }
             // N92 + N20: config fallback, ported from the ws-bridge module during the
             // monolithic fold. Without it the fold logs in with account id 0 —
@@ -448,7 +486,9 @@ void InstallWebSocketBridge() {
 
             // Remote → game forwarding
             remote->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback", 
-                [pairPtr, gameWsPtr, connIdx, discordId](const ix::WebSocketMessagePtr& rmsg) {
+                // accountName captured BY VALUE alongside discordId — this callback
+                // outlives the enclosing scope, so a reference would dangle (N123).
+                [pairPtr, gameWsPtr, connIdx, discordId, accountName](const ix::WebSocketMessagePtr& rmsg) {
                   switch (rmsg->type) {
                     case ix::WebSocketMessageType::Open: {
                       std::lock_guard<std::mutex> lk(g_pairsMutex);
@@ -508,7 +548,7 @@ void InstallWebSocketBridge() {
 
                         uint64_t platformCode = g_noOvr ? static_cast<uint64_t>(5) : static_cast<uint64_t>(2);
                         g_lastInjectedDiscordId = discordId;
-                        std::string loginMsg = BuildLoginRequest(discordId, platformCode);
+                        std::string loginMsg = BuildLoginRequest(discordId, platformCode, accountName);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
                         Log(EchoVR::LogLevel::Info,

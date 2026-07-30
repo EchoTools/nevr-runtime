@@ -47,6 +47,7 @@ public:
     bool IsAuthenticated() const;
     std::string GetTokenValue() const { return m_token; }
     uint64_t GetDiscordIdValue() const { return m_discordId; }
+    std::string GetUsernameValue() const { return m_username; }
     void UpdateFromRefresh(const CachedAuthToken& auth);
 
 private:
@@ -429,6 +430,17 @@ uint64_t TokenAuth::GetDiscordId() {
     return s_auth->GetDiscordIdValue();
 }
 
+// N123. The username was already parsed from the auth response and already
+// persisted to the credential cache — it had simply never been exposed, so the
+// login payload sent a hardcoded literal instead. Deliberately does NOT require
+// IsAuthenticated(): a cached username from a previous session is still a truer
+// answer than a constant, and the caller falls back on empty.
+std::string TokenAuth::GetUsername() {
+    std::lock_guard<std::mutex> lk(s_tokenMutex);
+    if (!s_auth) return "";
+    return s_auth->GetUsernameValue();
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -494,6 +506,7 @@ void TokenAuth::Shutdown() {
 
 // Thread-local buffer for GetToken C export
 static thread_local std::string s_tokenBuf;
+static thread_local std::string s_usernameBuf;  // N123, same lifetime contract as s_tokenBuf
 
 NEVR_MODULE_API int NvrModuleInit(const NvrModuleContext* ctx) {
     EchoVR::g_GameBaseAddress = (CHAR*)ctx->base_addr;
@@ -519,4 +532,11 @@ NEVR_MODULE_API const char* TokenAuth_GetToken(void) {
 
 NEVR_MODULE_API uint64_t TokenAuth_GetDiscordId(void) {
     return TokenAuth::GetDiscordId();
+}
+
+// N123. Returns "" when unknown — the caller decides what to do with an absent
+// name. Same static-buffer shape as TokenAuth_GetToken above.
+NEVR_MODULE_API const char* TokenAuth_GetUsername(void) {
+    s_usernameBuf = TokenAuth::GetUsername();
+    return s_usernameBuf.c_str();
 }

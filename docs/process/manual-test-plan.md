@@ -177,7 +177,7 @@ mechanics, scoring, and real load.
 | 4.4 | Round timer and mercy rule | B3 | E2 | round-time and mercy-score overrides behave |
 | 4.5 | Server stable under 8 | **B5** | E2 | no crash, no dump, no disconnects |
 | 4.6 | Server CPU under load | B3 | E2 | measure during play — **this is the load test the idle measurement cannot substitute for** |
-| 4.7 | All 8 nameplates correct | B2 | E1 | every name renders; note any tofu/boxes (unicode) |
+| 4.7 | All 8 nameplates correct | B3 | E1 | every name renders and **all eight differ** — this is the first real check of N123. Note any tofu/boxes (unicode); per the ReVault sweep the atlas depends on the viewer's UI language. |
 | 4.8 | VOIP with 8 | B3 | E2 | no dropouts or robotic audio |
 | 4.9 | Cosmetics visible cross-client | B2 | E2 | each player's tints render **on everyone else's screen** |
 | 4.10 | Mid-match join/leave | B3 | E3 | a player leaving and rejoining is handled |
@@ -193,7 +193,7 @@ mechanics, scoring, and real load.
 | Quest / standalone | `src/standalone/` is a stub and does not build. Nothing to test. |
 | Broadcaster guard | `BroadcasterGuard::Install()` is an empty placeholder that logs `no-op placeholder, nothing installed`. |
 | Build identity / plugin manifest at login | Not built (N112). `buildversion` is still the hardcoded literal `631547` and `publisher_lock` is empty in every login. |
-| `displayname` from account | Not built. Every client currently announces the hardcoded literal `"nEVR"`. Test 4.7 will show identical names unless this lands first. |
+| `displayname` from account | **Built 2026-07-30 (N123).** Sourced from the account's username via `TokenAuth_GetUsername`, falling back to the account id (unique) rather than a shared constant. **Unobserved** — needs a client run, so treat 4.7 as the confirmation. |
 | Third-party game-mode plugins | The ABI exists at v3 with capability declaration, but no third-party plugin exists to test. Test 0.6 covers the loader, not the ecosystem. |
 
 ## Recording results

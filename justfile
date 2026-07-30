@@ -621,6 +621,42 @@ verify:
         fi
     done
 
+    # --- N123: the login display name must be SOURCED, not a literal -------------
+    # Every NEVR client announced the identical hardcoded name, so eight players in
+    # one session rendered eight identical nameplates. The name was available the
+    # whole time — token_auth parsed it from the auth response and persisted it to
+    # the credential cache — it had simply never been exposed.
+    #
+    # Flattened before matching (tr -d '\\'): the JSON lives inside a C string
+    # literal, so every quote is backslash-escaped and matching it through a
+    # justfile recipe means three layers of escaping. N115's sensor silently
+    # matched NOTHING for exactly this reason and its falsification went green.
+    N123_RC=0; N123_WS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/ws_bridge.cpp) || N123_RC=$?
+    sensor_stage1 "N123 login display name sourced" "src/runtime/compat/ws_bridge.cpp" "$N123_RC"
+    sensor_nonempty "N123 login display name sourced" "non-comment lines of compat/ws_bridge.cpp" "$N123_WS"
+    N123_FLAT=$(tr -d '\\' <<<"$N123_WS")
+    if ! grep -qF '"displayname":"%s"' <<<"$N123_FLAT"; then
+        echo "verify: FAIL — N123 the login displayname is no longer a substituted field." >&2
+        echo "A literal here makes every client announce the same name; eight players render eight identical nameplates and the service cannot tell them apart." >&2
+        exit 1
+    fi
+    # Anchored on the exact call form: a rename that APPENDS characters
+    # (TokenAuth_GetUsernameX) still contains the bare symbol as a substring and
+    # would satisfy a loose grep. Found while falsifying this very sensor.
+    if ! grep -qF 'ResolveModuleProc("TokenAuth_GetUsername")' <<<"$N123_WS"; then
+        echo "verify: FAIL — N123 ws_bridge no longer resolves TokenAuth_GetUsername." >&2
+        echo "The field would fall back to the account id on every login even when the real name is known and cached." >&2
+        exit 1
+    fi
+    N123_RC2=0; N123_TA=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/modules/token-auth/src/token_auth.cpp) || N123_RC2=$?
+    sensor_stage1 "N123 username export" "src/modules/token-auth/src/token_auth.cpp" "$N123_RC2"
+    sensor_nonempty "N123 username export" "non-comment lines of token_auth.cpp" "$N123_TA"
+    if ! grep -qF 'TokenAuth_GetUsername(void)' <<<"$N123_TA"; then
+        echo "verify: FAIL — N123 token_auth no longer exports TokenAuth_GetUsername." >&2
+        echo "ws_bridge resolves this optionally, so its absence is silent: logins would quietly revert to the account id." >&2
+        exit 1
+    fi
+
     # --- N120: on a server, a degraded runtime must not keep running -------------
     # Four conditions used to be logged and stepped over. On a dedicated server
     # nobody reads a console, so "logged" means "lost", and the process ran on to
