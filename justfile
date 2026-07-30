@@ -621,6 +621,44 @@ verify:
         fi
     done
 
+    # --- N125: the game-loop setjmp and its longjmp live in the SAME file --------
+    # g_gameLoopJmpBuf is a crash-recovery jump buffer: GameMainWrapperHook does the
+    # setjmp, the VEH does the longjmp. They used to sit in different translation
+    # units coupled by an `extern`, which is the seam that reads as "which file owns
+    # crash recovery?". N125 co-located them in crash_recovery.cpp. This fails if the
+    # setjmp side drifts back to mode_patches.cpp — a split nobody would notice,
+    # because no run crashes the server on purpose and the smoke suite cannot reach
+    # the recovery path.
+    # Comment-stripped: mode_patches.cpp's own N125 breadcrumb NAMES g_gameLoopJmpBuf
+    # to say it moved. A raw grep flags that breadcrumb and the sensor fires on a
+    # correct tree — which it did on first write. Match only live code.
+    N125_MP=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/patch/mode_patches.cpp)
+    if grep -q 'g_gameLoopJmpBuf' <<<"$N125_MP"; then
+        echo "verify: FAIL — N125 mode_patches.cpp references g_gameLoopJmpBuf again." >&2
+        echo "The setjmp and longjmp of the crash-recovery jump buffer must stay in one file (crash_recovery.cpp). A cross-file split is coupled only by an extern and is invisible to every test, because nothing exercises the recovery path." >&2
+        exit 1
+    fi
+    N125_RC=0; N125_CR=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/crash_recovery.cpp) || N125_RC=$?
+    sensor_stage1 "N125 crash-recovery pair co-located" "src/runtime/lifecycle/crash_recovery.cpp" "$N125_RC"
+    sensor_nonempty "N125 crash-recovery pair co-located" "non-comment lines of crash_recovery.cpp" "$N125_CR"
+    if ! grep -q 'setjmp(g_gameLoopJmpBuf)' <<<"$N125_CR"; then
+        echo "verify: FAIL — N125 the setjmp on g_gameLoopJmpBuf is no longer in crash_recovery.cpp." >&2
+        echo "Its longjmp lives here; separating the two is the coupling N125 removed." >&2
+        exit 1
+    fi
+    if ! grep -q 'longjmp(g_gameLoopJmpBuf' <<<"$N125_CR"; then
+        echo "verify: FAIL — N125 the longjmp on g_gameLoopJmpBuf left crash_recovery.cpp." >&2
+        exit 1
+    fi
+    # The recovery hook must still be INSTALLED — the move surfaced that nothing
+    # verified this. A dropped InstallGameMainHook() call means the server no longer
+    # sets up its longjmp point and dies on the first crash it was built to survive.
+    if ! grep -q 'InstallGameMainHook()' src/runtime/lifecycle/initialize.cpp; then
+        echo "verify: FAIL — N125 initialize.cpp no longer calls InstallGameMainHook()." >&2
+        echo "Without it there is no setjmp recovery point: the VEH's longjmp has nowhere to land and a server crash terminates instead of recovering." >&2
+        exit 1
+    fi
+
     # --- N123: the login display name must be SOURCED, not a literal -------------
     # Every NEVR client announced the identical hardcoded name, so eight players in
     # one session rendered eight identical nameplates. The name was available the

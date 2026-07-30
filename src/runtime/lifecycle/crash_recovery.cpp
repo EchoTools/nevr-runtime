@@ -20,9 +20,62 @@
 #include "runtime/hook/addresses.h"
 #include "runtime/patch/binary_bug_fixes.h"
 
-// Defined in mode_patches.cpp — used by VEH for server crash recovery
-extern jmp_buf g_gameLoopJmpBuf;
-extern volatile bool g_gameLoopJmpBufValid;
+// N125: the game-loop crash-recovery mechanism. The longjmp CONSUMER (VEH) has
+// always lived here; its setjmp PRODUCER (GameMainWrapperHook) and this shared
+// jmp_buf used to live in mode_patches.cpp, coupled across the file boundary by
+// an `extern`. A setjmp in one translation unit and its matching longjmp in
+// another, communicating through a global, is exactly the seam that reads as
+// "which file owns crash recovery?" and answers it in two places. Both halves now
+// live in this file; the definition is here and mode_patches.cpp no longer knows
+// about it.
+jmp_buf g_gameLoopJmpBuf;
+volatile bool g_gameLoopJmpBufValid = false;
+
+// --- game-loop wrapper: the setjmp side of the recovery pair ---------------
+typedef VOID GameMainWrapperFunc(INT64 arg1);
+static GameMainWrapperFunc* OriginalGameMainWrapper = nullptr;
+
+/// Direct pointer to the game's main function (fcn.1400cd550) so we can call
+/// it directly in the restart loop without going through the wrapper.
+typedef VOID GameMainFunc(INT64 arg1);
+static GameMainFunc* GameMain = nullptr;
+
+static VOID GameMainWrapperHook(INT64 arg1) {
+  // Always set up the longjmp recovery point — g_isServer isn't set yet when this
+  // runs (CLI args haven't been parsed). The VEH checks g_isServer at exception time.
+  int crashCount = setjmp(g_gameLoopJmpBuf);
+  g_gameLoopJmpBufValid = true;
+
+  if (crashCount > 0) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] Game loop recovered from crash #%d — entering server hold", crashCount);
+    // The game loop crashed and can't be safely restarted (internal state is
+    // corrupted). Keep the process alive — the broadcaster and game server
+    // were already initialized, and the HTTP API may still be listening.
+    while (true) {
+      Sleep(1000);
+    }
+  }
+
+  // Run the game main loop
+  GameMain(arg1);
+
+  // If we get here, the game loop returned normally (shouldn't happen)
+  g_gameLoopJmpBufValid = false;
+  Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Game loop exited normally — entering server hold");
+  while (true) {
+    Sleep(1000);
+  }
+}
+
+void InstallGameMainHook() {
+  // Hook game main wrapper — longjmp recovery on crash keeps server alive
+  GameMain = (GameMainFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN);
+  OriginalGameMainWrapper =
+      (GameMainWrapperFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN_WRAPPER);
+  PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Game main wrapper hook installed (server crash recovery)");
+}
 
 // N62: set for the duration of a signal-context shutdown. `volatile sig_atomic_t`
 // is the only type the C standard permits a handler to touch. Read by the

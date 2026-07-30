@@ -532,48 +532,10 @@ static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT
 /// Calls the game's main loop (fcn.1400cd550). If the game loop returns (which
 /// means a fatal error occurred), the original function calls the crash handler.
 /// In server mode, we restart the game loop instead so the server stays alive.
-typedef VOID GameMainWrapperFunc(INT64 arg1);
-static GameMainWrapperFunc* OriginalGameMainWrapper = nullptr;
-
-/// Direct pointer to the game's main function (fcn.1400cd550) so we can call
-/// it directly in the restart loop without going through the wrapper.
-typedef VOID GameMainFunc(INT64 arg1);
-static GameMainFunc* GameMain = nullptr;
-
-/// Jump buffer for recovering from fatal crashes in the game loop.
-/// When the VEH catches a null-pointer AV in server mode, it longjmps here
-/// to restart the game loop instead of letting the SEH handler terminate.
-// Non-static: crash_recovery.cpp's VEH needs extern access for longjmp recovery
-jmp_buf g_gameLoopJmpBuf;
-volatile bool g_gameLoopJmpBufValid = false;
-
-static VOID GameMainWrapperHook(INT64 arg1) {
-  // Always set up the longjmp recovery point — g_isServer isn't set yet when this
-  // runs (CLI args haven't been parsed). The VEH checks g_isServer at exception time.
-  int crashCount = setjmp(g_gameLoopJmpBuf);
-  g_gameLoopJmpBufValid = true;
-
-  if (crashCount > 0) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] Game loop recovered from crash #%d — entering server hold", crashCount);
-    // The game loop crashed and can't be safely restarted (internal state is
-    // corrupted). Keep the process alive — the broadcaster and game server
-    // were already initialized, and the HTTP API may still be listening.
-    while (true) {
-      Sleep(1000);
-    }
-  }
-
-  // Run the game main loop
-  GameMain(arg1);
-
-  // If we get here, the game loop returned normally (shouldn't happen)
-  g_gameLoopJmpBufValid = false;
-  Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Game loop exited normally — entering server hold");
-  while (true) {
-    Sleep(1000);
-  }
-}
+// N125: GameMainWrapperHook, GameMain/OriginalGameMainWrapper, the g_gameLoopJmpBuf
+// definition, and InstallGameMainHook moved to lifecycle/crash_recovery.cpp — that
+// file owns the longjmp side, so the setjmp side belongs beside it rather than
+// coupled across an extern.
 
 // ============================================================================
 // BugSplat crash handler hook — prevent fatal exits in server mode
@@ -886,11 +848,3 @@ VOID InstallGameSpaceHook() {
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] InitializeGlobalGameSpace hook installed (server crash fix)");
 }
 
-VOID InstallGameMainHook() {
-  // Hook game main wrapper — longjmp recovery on crash keeps server alive
-  GameMain = (GameMainFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN);
-  OriginalGameMainWrapper =
-      (GameMainWrapperFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN_WRAPPER);
-  PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper");
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Game main wrapper hook installed (server crash recovery)");
-}

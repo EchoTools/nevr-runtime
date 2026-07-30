@@ -21,7 +21,8 @@ VOID PatchLogServerProfile();
 VOID InstallEntityHooks();
 VOID InstallBugSplatHook();
 VOID InstallGameSpaceHook();
-VOID InstallGameMainHook();
+// InstallGameMainHook moved to lifecycle/crash_recovery.h (N125) — it installs the
+// setjmp side of the game-loop recovery whose longjmp lives in crash_recovery.cpp.
 
 /// N83/N84: report how many times the broadcaster hooks were ENTERED. Distinguishes
 /// "guard never tripped" from "hook never ran" — only the first is evidence.

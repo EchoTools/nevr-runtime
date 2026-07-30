@@ -6,6 +6,12 @@
 /// to suppress the BugSplat crash reporter and prevent crash-triggered termination.
 void InstallCrashRecoveryHooks();
 
+/// Hooks the game-main wrapper to establish the setjmp recovery point. On a
+/// null-pointer AV in server mode the VEH here longjmps back to it, holding the
+/// process alive instead of terminating. Moved from mode_patches (N125) to sit
+/// with its longjmp counterpart. Called from Initialize.
+void InstallGameMainHook();
+
 /// Installs the BreakpointVEH that handles int3 after suppressed ExitProcess
 /// and null-pointer AV recovery via longjmp in server mode.
 /// Also snapshots the module table (N70 — the handler must never enumerate,
