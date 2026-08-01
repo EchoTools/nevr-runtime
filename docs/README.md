@@ -1,32 +1,22 @@
-# Documentation
+# NEVR Runtime Documentation
 
-Start at [`../AGENTS.md`](../AGENTS.md) — it names the reading order and which
-documents bind.
+## Design
 
-| Directory | Holds | Lifetime |
-| --------- | ----- | -------- |
-| [`standards/`](standards/) | Binding standards. Violations are rejected in review. | Durable |
-| [`process/`](process/) | Governance and fleet protocol. | Durable |
-| [`guides/`](guides/) | Runbooks and how-tos — procedures you follow. | Durable |
-| [`reference/`](reference/) | Format specs, address maps, lookup tables. | Durable |
-| [`design/`](design/) | Plans and analyses. Records what was intended and why. | Point-in-time |
-| [`primers/`](primers/) | Handoffs for work spanning multiple sessions. | Until the work lands |
-| [`audits/`](audits/) | Audit outputs and captured evidence. | Point-in-time |
+Design documents, architecture decisions, and porting analysis.
 
-## Standards
+| File | Description | Audience |
+| ---- | ----------- | -------- |
+| `2026-06-09-levr-porting-analysis.md` | leVR D3D11-to-OpenXR/Vulkan porting architecture via DXVK interop | Engine porting developers |
+| `2026-06-09-streaming-integration.md` | WebSocket telemetry protocol contract between nevr-runtime and nevr-stream | Runtime and nevr-stream developers |
+| `2026-06-29-serverdb-token-auth.md` | ADR: game-server ServerDB auth migration from URL-param credentials to JWT tokens | Runtime and ops developers |
+| `2026-07-13-quest-crash-reporter-injection.md` | Quest arm64 crash-reporter injection design via libovrplatformloader.so hijack | Quest porting developers |
 
-- [`standards/verification.md`](standards/verification.md) — what "verified"
-  means. Evidence ranks, the four shapes of silent failure, and the requirement
-  to falsify every check before trusting it.
-- [`standards/logging.md`](standards/logging.md) — what a component must say.
-  Subsystem tags, levels, ten rules, Hard Stops.
+## Reference
 
-## Conventions
+Format specifications, symbol maps, and procedural runbooks.
 
-- Filenames under `docs/` are `lowercase-kebab-case.md`.
-- Point-in-time documents carry an ISO date prefix: `2026-07-26-thing.md`.
-  Durable ones do not — a dated standard implies it expires.
-- A primer is deleted or moved to `design/` once its work lands. A stale primer
-  is worse than none: it hands the next reader a confident, outdated account.
-- The work ledger is [`../BUGS.md`](../BUGS.md), not a document here. Findings
-  go there; documents explain, the ledger records.
+| File | Description | Audience |
+| ---- | ----------- | -------- |
+| `cosmetics-cdn-format.md` | Normative `.evrp` binary format and CDN manifest schema for cosmetic assets | CDN tooling and game-hook developers |
+| `quest-hijack-point-map.md` | Symbol-level inventory mapping every Windows hook/patch point to its Quest arm64 equivalent | Quest porting developers |
+| `quest-sideload-runbook.md` | Step-by-step APK repack and sideload procedure for the Quest crash reporter | Quest testers and Andrew |
