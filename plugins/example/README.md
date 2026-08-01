@@ -2,11 +2,11 @@
 
 This is THE reference plugin for the nEVR runtime plugin API. Community plugin
 authors copy from it. Every plugin feature the host supports is demonstrated in
-`src/plugin.cpp` with comments that explain WHY, not just WHAT.
+`plugins/example/src/plugin.cpp` with comments that explain WHY, not just WHAT.
 
 **This file is the Behavioral Acceptance Criterion for the plugin API.** When the
 API adds a feature, this file demonstrates it. When a community author asks "how
-do I...", the answer is in `src/plugin.cpp`.
+do I...", the answer is in `plugins/example/src/plugin.cpp`.
 
 ## What it demonstrates
 
