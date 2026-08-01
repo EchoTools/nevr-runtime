@@ -102,6 +102,12 @@ find_package(miniupnpc CONFIG REQUIRED)
 
 target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32)
 
+# yaml-cpp backs src/core/nevr_config (compiled into nevr_core as an archive with
+# unresolved yaml symbols). The DLL is where those symbols get resolved — this is
+# the ONLY production link of yaml-cpp. The module DLLs never reference nevr_config,
+# so yaml-cpp does not reach them.
+target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
+
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
 set_source_files_properties(ws_bridge.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(server/websocket_client.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -181,6 +187,20 @@ if(BUILD_TESTING)
     )
     target_link_libraries(test_parse_endpoint PRIVATE GTest::gtest GTest::gtest_main ws2_32)
     gtest_discover_tests(test_parse_endpoint DISCOVERY_MODE PRE_TEST)
+
+    # nevr_config unit tests (N133 S2) — parse a sample config.yaml in isolation:
+    # nested plugin args, ${VAR:?} secrets interpolation (set and unset->fail),
+    # ${VAR:-default}, and unknown-top-level-key rejection. Links the real
+    # nevr_config (in nevr_core) + yaml-cpp; no consumer is wired yet.
+    add_executable(test_nevr_config tests/test_nevr_config.cpp)
+    # The test includes only nevr_config.h (yaml-cpp-free via pImpl), so it needs
+    # no yaml headers and no windows/PCH gymnastics — but skip the PCH anyway to
+    # match the other test targets and keep it independent of the runtime PCH.
+    set_source_files_properties(tests/test_nevr_config.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_nevr_config PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_nevr_config PRIVATE
+      GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp)
+    gtest_discover_tests(test_nevr_config DISCOVERY_MODE PRE_TEST)
 
     # Behavioral tests — N68 (plugin/module tick dispatch) + N61 (callback
     # lifecycle). Links plugin_loader.cpp, module_loader.cpp, and ws_bridge.cpp

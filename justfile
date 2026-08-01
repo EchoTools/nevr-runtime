@@ -193,7 +193,7 @@ test-auth-unit:
     unset VCPKG_ROOT
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_nevr_config
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -212,6 +212,13 @@ test-auth-unit:
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         echo "       (is 'gtest' available in vcpkg for triplet x64-mingw-static?)" >&2
+        exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_nevr_config.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        echo "       (is 'gtest'/'yaml-cpp' available in vcpkg for triplet x64-mingw-static?)" >&2
         exit 1
     fi
     wine "$bin"
