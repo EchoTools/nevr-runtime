@@ -179,9 +179,9 @@ This applies regardless of context — even if the task seems to require it, eve
 ## Onboarding conventions (all-the-way-down)
 
 This repo is onboarded to the `~/src/all-the-way-down` canon (authorized by
-RULINGS.md 2026-07-20 "nevr onboarding"). Process machinery is governed by
-`DRIVER-CHARTER.md` (five slots filled) and the `nevr-work` gate skill
-(`.claude/skills/nevr-work/`, gitignored). The following process decisions bind:
+RULINGS.md 2026-07-20 "nevr onboarding"). Process machinery is governed by the `nevr-work` gate skill
+(`.claude/skills/nevr-work/SKILL.md`, gitignored), which subsumes the former
+`DRIVER-CHARTER.md` (five slots + fleet protocol inlined into the skill). The following process decisions bind:
 
 - **Work ledger = `BUGS.md` `# NEVR Runtime Source Bugs` section (N-prefix IDs).**
   This is a distinct ID namespace from the binary-audit integer IDs elsewhere in
