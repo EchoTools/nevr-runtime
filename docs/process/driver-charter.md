@@ -14,7 +14,7 @@ file and ROLES.md/FORMS.md disagree, the canon wins.
 | `{REPO}` | `~/src/nevr-runtime` |
 | `{VERIFY_CMD}` | `just verify` — the single closed-loop aggregate (`just build` + hardened `test-auth-unit`, fail-close). Excludes the Go integration suites, which are excised per RULINGS.md 2026-07-20 "Test harness excised". |
 | `{LEDGER_PATH}` | `BUGS.md`, the `# NEVR Runtime Source Bugs` section, **N-prefix** IDs. This is a distinct namespace from the binary-audit integer IDs in the same file (which audit the *original* game binary). Next-ID rule: `grep '^### N' BUGS.md` → highest, take next. |
-| `{INVARIANTS}` | Never modify `src/legacy/` [CLAUDE.md §Guardrails]; never commit generated protobuf [CLAUDE.md §Guardrails]; prologue-validate before any binary patch [CLAUDE.md §Guardrails]; hook frequency analysis before sleeps [CLAUDE.md §Guardrails]; production deploy forbidden without per-instance approval [CLAUDE.md §Production Deployment]; plus CPP addendum hard-stops — `-Werror`, no C-style casts, no `catch(...)`, never throw across a DLL boundary, no I/O from DllMain, Ninja-only, vcpkg-manifest deps only [~/src/metis-core/CPP-MINGW-ADDENDUM-GENERIC.md §You must NEVER / §Code Review Hard Stops]. |
+| `{INVARIANTS}` | Never modify `src/legacy/` [AGENTS.md §Guardrails]; never commit generated protobuf [AGENTS.md §Guardrails]; prologue-validate before any binary patch [AGENTS.md §Guardrails]; hook frequency analysis before sleeps [AGENTS.md §Guardrails]; production deploy forbidden without per-instance approval [AGENTS.md §Production Deployment]; plus CPP addendum hard-stops — `-Werror`, no C-style casts, no `catch(...)`, never throw across a DLL boundary, no I/O from DllMain, Ninja-only, vcpkg-manifest deps only [~/src/metis-core/CPP-MINGW-ADDENDUM-GENERIC.md §You must NEVER / §Code Review Hard Stops]. |
 | `{EXPERTISE_PREREADS}` | `~/src/metis-core/CPP-MINGW-ADDENDUM-GENERIC.md` — mandatory pre-read gate before any C++/build work. |
 
 A slot left unfilled means the charter is not yet ready — the driver's day-one job
@@ -90,7 +90,7 @@ sending, never after.
    CORRECTED 2026-07-29: this line mandated TWO trailers, quoting RULINGS.md
    2026-07-20. That ruling was superseded on 2026-07-26 by owner instruction —
    the `Metis Sprock <m@sprock.io>` trailer was dropped, she was not involved in
-   this work — and the change was recorded in CLAUDE.md but never propagated
+   this work — and the change was recorded in AGENTS.md but never propagated
    here. Every commit since has carried one trailer, so this document has
    contradicted both the governing rule and actual practice for three days.
    Commits before `624f795` carry the second trailer and are left as they are.

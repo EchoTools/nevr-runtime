@@ -113,7 +113,7 @@ that produced this bug.
 2. **One traced run, hooks ENABLED.** Capture the full log. Grep for
    `Entity lookup null-guard triggered`. That single line answers the open
    question above. Note `DISPLAY` state and allow ≥45 s before judging liveness
-   (`CLAUDE.md` §Startup Timing).
+   (`AGENTS.md` §Startup Timing).
 
 3. **One traced run, `InstallEntityHooks()` commented out.** Diff the two traces.
    Look for: does the server reach `Server Registered`; do the ServerDB→game

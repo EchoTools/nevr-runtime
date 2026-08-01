@@ -36,7 +36,7 @@ an exception. Silence, and a gate that accepted it.
 - A testing tutorial. It does not tell you how to write a GTest.
 - Optional for "obvious" fixes. Every entry in the table below was obvious to
   the agent that wrote it.
-- A substitute for `CLAUDE.md` §Methodology or the CPP addendum. On conflict,
+- A substitute for `AGENTS.md` §Methodology or the CPP addendum. On conflict,
   those win.
 
 ### You SHALL
@@ -204,7 +204,7 @@ Enforced in review. A change that fails any of these is rejected until fixed.
 
 - **`docs/standards/logging.md`** — what a component must say. Rule 3 ("Silence is not
   success") is the same principle applied to output.
-- **`CLAUDE.md`** §Methodology, §Continuity — plan-before-code, measure before
+- **`AGENTS.md`** §Methodology, §Continuity — plan-before-code, measure before
   concluding, confirmation bias.
 - **`~/src/metis-core/CPP-MINGW-ADDENDUM-GENERIC.md`** — build and C++ hard stops.
 - **`BUGS.md`** — the N-ledger. Every entry carries the invariant it protects.

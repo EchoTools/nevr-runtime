@@ -179,7 +179,7 @@ State these as untested rather than letting an empty result read as green.
 | Build identity / attestation at login | **Not built.** The login JSON still hard-codes `buildversion:631547` and an empty `publisher_lock` (`src/runtime/compat/ws_bridge.cpp`). This is the open N112 work; there is no signal to test yet. |
 | Plugin manifest transmission | **Not built.** Also N112. Capability *declaration* exists (v3); *transmission* does not. |
 | Go integration suites | **Excised** from `just verify` (RULINGS.md 2026-07-20 "Test harness excised"). Present under `tests/system/` and `tests/plugins/` but not part of any gate. |
-| `crash-handler` plugin | Present in `plugins/` but absent from the CLAUDE.md plugin table and not built by `plugins/CMakeLists.txt` (only `common` and `example` are). Unwired — resolve before smoke-testing it. |
+| `crash-handler` plugin | Present in `plugins/` but absent from the AGENTS.md plugin table and not built by `plugins/CMakeLists.txt` (only `common` and `example` are). Unwired — resolve before smoke-testing it. |
 
 ## Recording results
 

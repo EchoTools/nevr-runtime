@@ -24,7 +24,7 @@ offset / prologue / branch that each Windows patch rewrites. Those are the
 Symbol counts (defined dynsyms): libr15 110 621, libpnsrad 16 070,
 libpnsovr 15 982, libpnsradmatchmaking 15 514, libovrplatformloader 1 487.
 
-**Injection vector (from the skill / `CLAUDE.md`):** Windows statically imports
+**Injection vector (from the skill / `AGENTS.md`):** Windows statically imports
 `BugSplat64.dll` + `LibOVRPlatform64_1.dll`; nevr ships replacements under those
 names. On Quest there is **no BugSplat .so** — the crash reporter is
 statically-linked `google_breakpad` (confirmed below). The Quest startup vector

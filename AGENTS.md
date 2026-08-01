@@ -1,184 +1,290 @@
-# AGENTS.md — start here
+# AGENTS.md
 
-Entry point for any agent working in this repository. It exists so that "I did
-not know that document was binding" shall not be available as an explanation.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Everything listed under **Binding** below binds. A change that violates one is
-rejected in review regardless of whether it works.
+## Project
 
----
+NEVR Runtime — Windows DLL patches for Echo VR (echovr.exe) enabling connection to echovrce community game services. Targets both game clients and dedicated game servers. Written in C++17.
 
-## Normative language
-
-These documents are addressed to an agent that acts. The words below are used in
-their specification sense and carry obligation, not description.
-
-| Term | Meaning |
-| ---- | ------- |
-| **SHALL** | An obligation on the agent. Doing the work without doing this is not doing the work. Non-compliance is a rejected change, not a judgement call. |
-| **SHALL NOT** | A prohibition on the agent. There is no case in which this is the right move; if you believe you have found one, escalate with a Decision-line instead of proceeding. |
-| **SHOULD** | A strong recommendation. Departing from it is permitted and **shall** be stated, with the reason, in the change that departs. |
-| **MAY** | Genuinely optional. No justification is owed either way. |
-
-"Must" and "never" are avoided deliberately. **Must is an assertion; shall is
-imperative.**
-
-That is a difference in grammatical mood, not tone. An assertion is truth-apt —
-"the build must succeed" is a claim you can evaluate, and evaluating it invites
-the reader to decide whether it holds *in their case*. An imperative is not
-truth-apt. "You shall falsify the check" cannot be true or false; it can only be
-complied with or not. Instructions to an agent that acts are imperatives, and
-writing them as assertions is what lets a rule be read as an opinion about the
-world rather than a duty.
-
-"Never" has the same defect: it is a claim about frequency, not a prohibition on
-anyone.
-
-**Every SHALL is mechanically enforced where it can be.** A SHALL that could be a
-check in `just verify` and is not is a defect in this documentation, not a
-standard — prose cannot enforce, and a rule nothing enforces has already been
-violated silently at least once. Where a SHALL cannot be mechanized, it **shall**
-say so and say why.
-
----
-
-## Read in this order
-
-| # | Document | When | Why it binds |
-| - | -------- | ---- | ------------ |
-| 1 | `~/src/metis-core/CPP-MINGW-ADDENDUM-GENERIC.md` | **Before any C++, CMake, justfile or preset change** | Toolchain hard stops: `-Werror`, no C-style casts, no `catch(...)`, no throw across a DLL boundary, no I/O from `DllMain`, Ninja only, vcpkg-manifest deps only |
-| 2 | `CLAUDE.md` | Before any task | Project conventions, build/test commands, guardrails, deploy prohibition, onboarding decisions |
-| 3 | `docs/standards/verification.md` | **Before writing "verified" or closing a ledger entry** | What counts as evidence, and the requirement to falsify every check you add |
-| 4 | `docs/standards/logging.md` | Before adding or changing any log line | Log shape, subsystem tags, levels, Hard Stops |
-| 5 | `BUGS.md` | Before starting; and to record findings | The work ledger. `# NEVR Runtime Source Bugs`, N-prefix IDs |
-| 6 | `docs/process/driver-charter.md` | When dispatching or coordinating work | Fleet protocol, decision-lines, verify gate |
-
-`.claude/skills/nevr-work/` walks these gate by gate. Invoke it before starting
-work in this repository — it is the enforcement path for the documents above.
-
----
-
-## Binding
-
-**`CLAUDE.md`** — project conventions and guardrails. Note in particular:
-you **shall not** deploy to production without per-instance owner approval; you
-**shall not** modify `src/legacy/`; you **shall** prologue-validate before any
-binary patch; you **shall not** commit generated protobuf without regenerating
-from BSR.
-
-**`docs/standards/verification.md`** — the meaning of "verified". Ranks evidence,
-defines the four shapes of a component that reports success while doing nothing,
-and the rule that every check added to `just verify` **shall** be broken and
-observed failing before it is trusted. Written because seven checks authored in a single
-session were silently inert.
-
-**`docs/standards/logging.md`** — what a component **shall** say. Subsystem tags,
-level guidelines, and ten rules including "silence is not success".
-
-**`BUGS.md`** — the ledger. Two ID namespaces in one file: bare integers audit
-the *original game binary*; `N`-prefixed IDs are this project's own work ledger.
-Next ID: `grep '^### N' BUGS.md`, take the highest and add one. Every entry
-carries the **invariant** it protects. You **shall** amend entries and **shall
-not** rewrite them — closed entries live in git history, and a silent deletion is
-indistinguishable from the finding never having existed.
-
-**`~/src/metis-core/CPP-MINGW-ADDENDUM-GENERIC.md`** — cross-compilation hard
-stops. You **shall** read it in full before touching the build.
-
-On conflict: the CPP addendum and `CLAUDE.md` win over everything here.
-
----
-
-## The gate
+## Build Commands
 
 ```sh
-just verify     # build + fail-closed GTest under Wine + all invariant sensors
+just                    # Show available recipes
+just configure          # Configure CMake only
+just build              # Build all components
+just dist               # Build + create distribution packages
+just dist-lite          # Stripped binaries without debug symbols
+just verbose-build      # Build with full compiler output
+just clean              # Remove build/ and dist/
+just preset=mingw-debug build  # Use a specific preset
+just proto                     # Regenerate protobuf from BSR (requires buf CLI)
+just sign               # Code-sign all DLLs/EXEs in dist/ (requires certs/)
+just generate-certs     # Generate CA hierarchy for code signing
 ```
 
-It **shall** exit **0**. You **shall** read the exit code from a file and
-**shall not** read `$?` after a pipe —
-`just build` greps its own output and always exits 0, so its exit code is a
-proxy, not a signal.
+Build presets: `mingw-debug`, `mingw-release` (Linux default), `linux-wine-debug`, `linux-wine-release`, `debug`, `release` (Windows default).
 
-Server behaviour **shall** be tested only with `./launch-server.sh` or
-`./verify-server.sh`. You **shall not** modify `launch-server.sh` — it is the
-operator entry point — and **shall not** invoke `echovr.exe` directly with your
-own arguments. You **shall** allow ≥45s from process start before judging a
-server hung (`CLAUDE.md` §Startup Timing).
+Build output lands in `build/<preset>/bin/`.
 
-`./verify-server.sh <run-name> [default|noflag] [seconds]` is the script for
-**verification** runs (owner-authorised 2026-07-28). It exists so that work
-needing a different flag set, or needing the log as a file rather than a
-terminal stream, does not edit the operator's launcher. It deploys identically,
-captures the log and exit code to files under `/var/tmp/work-nevr-runtime/`,
-refuses a run shorter than 45s, records whether `DISPLAY` was set, counts game
-windows by PID attribution across the run, and sends SIGINT for teardown. Its
-`default` flag set is byte-identical to `launch-server.sh`'s; `noflag` drops the
-`-headless` token, which is the discriminator N99 needed. Every number in its
-summary is read back from a file — you **shall not** pipe a live server log
-through `grep`, which block-buffers and makes a healthy run look hung.
+## Testing
 
----
+Go-based system tests in `tests/system/` and `tests/plugins/`:
 
-## Repository layout
+```sh
+just test-system              # All system tests
+just test-system-short        # Quick tests only
+just test-system-dll          # DLL loading tests only
+just test-system-verbose      # No cache, verbose
+cd tests/system && go test -v -run TestName ./...  # Single test
 
-```
-BUGS.md            work ledger (N-prefix) + original-binary audit
-CLAUDE.md          project conventions — tool-loaded, stays at root
-README.md          what this project is
-AGENTS.md          this file
+just test-plugins-groundtruth # Plugin ground truth tests (no game binary needed)
+just test-plugins             # All plugin tests (needs game binary + MCP harness)
+just test-plugins-short       # Ground truth only, skip integration
 
-src/runtime/   BugSplat64.dll — split by responsibility:
-                   lifecycle/ hook/ patch/ server/ compat/ ext/ log/ link/
-                   Includes are path-qualified: "runtime/hook/addresses.h"
-src/modules/       runtime-loaded modules: platform-compat, token-auth
-src/abi/           libnevr_abi.a — echovr.exe ABI: types, fn pointers, symbols
-src/core/          libnevr_core.a — logging, globals, base64, hooking, pch
-src/extension/     header-only C ABI published to third-party DLLs
-src/legacy/        FROZEN v1 — shall not be modified
-src/nevr_api/      generated protobuf (from BSR — see `just proto`)
-src/launcher/      game launcher — disabled, see CLAUDE.md
-src/standalone/    Android/Quest build — stub
-src/quest/         Quest crash-reporter shim (own NDK sub-project)
-src/libovr-stub/   Oculus runtime stub
-
-plugins/           optional plugins loaded from plugins/ next to the game binary
-tools/             build/verify tooling (hook invariants, symbol corpus)
-tests/             Go system/plugin suites (excised from `just verify`)
-extern/            submodules — minhook, protobuf
-gen/               generated protobuf output — shall not be hand-edited
-cmake/             toolchain and helper modules
-certs/             code-signing CA hierarchy (`just generate-certs`)
-extras/            unbuilt reference material — not part of any target
-echovr/            local game install (gitignored)
-modules/           hardening overlay hook (gitignored)
-
-docs/
-  standards/       binding standards — logging, verification
-  process/         governance — driver charter
-  guides/          runbooks and how-tos
-  reference/       format specs and address maps
-  design/          plans and analyses (dated where point-in-time)
-  primers/         multi-session handoffs for unfinished work
-  audits/          audit outputs and evidence
+just test-auth                # All auth tests (ground truth + unit)
+just test-auth-groundtruth    # Auth ground truth (no game binary, no network)
+just test-auth-unit           # C++ GTest under Wine (build with -DBUILD_TESTING=ON)
+just test-auth-integration    # Auth integration (needs game binary + MCP harness)
 ```
 
-**Naming.** Root-level entry points are `SHOUTY.md` by convention. Everything
-under `docs/` is `lowercase-kebab-case.md`. Point-in-time documents carry an
-ISO date prefix (`2026-07-26-thing.md`); durable ones do not.
+Tests require: Echo VR game binary, evr-test-harness, Go toolchain. See `tests/system/README.md` for prerequisites and environment variables (`NEVR_BUILD_DIR`, `EVR_GAME_DIR`).
 
----
+## Startup Timing (N76)
 
-## Before you finish
+The game has a ~15-20 second splash-screen delay at startup before any NEVR code runs. The first NEVR log lines appear well after `echovr.exe` process creation. When judging server liveness:
 
-- `just verify` exits 0, and you **shall** have quoted its tail.
-- Every check you added **shall** have been falsified — broken, observed
-  failing, restored.
-- The ledger entry **shall** state its evidence rank
-  (`docs/standards/verification.md`).
-- Commit identity and scratch location follow `CLAUDE.md` §Onboarding
-  conventions — that is the authority; this file **shall not** restate the rules,
-  because three copies drifted apart once already.
-- No worktrees left behind.
-- Anything unverified **shall** be named as unverified, in the same breath as
-  what is.
+- **Minimum patience window: 45 seconds from process start** before concluding the server is hung.
+- The splash screen runs BEFORE `DllMain` / `WinMain` — NEVR has no control over this phase.
+- Startup timeout checks must account for this delay. A server that hasn't logged anything at t=10s is normal; a server with no output at t=60s is dead.
+- The `-noconsole` flag suppresses the splash UI but NOT the delay — the game still runs its startup sequence.
+
+## Architecture
+
+### DLL Components
+
+| Component          | Output DLL       | Deploy As              | Purpose                                                                  |
+| ------------------ | ---------------- | ---------------------- | ------------------------------------------------------------------------ |
+| `src/runtime/` | `BugSplat64.dll` | `BugSplat64.dll`       | Runtime hooks, CLI flags, game modifications                             |
+| `src/runtime/server/` | *(in `BugSplat64.dll`)* | *(in-process)* | Multiplayer networking, session management |
+
+The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. Several features previously implemented as plugins are now built in: server-timing, token-auth, pnsrad-enabler.
+
+`src/runtime/` is split by responsibility. Each subdirectory has a membership test:
+
+| Directory | Holds | Membership test |
+| --- | --- | --- |
+| `src/runtime/lifecycle/` | dllmain, initialize, boot, cli, config, state_machine, crash_recovery | the process's life from `DllMain` to exit |
+| `src/runtime/hook/` | patching.h, addresses.h, process_memory.h, hook_guard, hook_liveness, dll_load_hook, symbol_corpus | *how* we attach to the binary at all |
+| `src/runtime/patch/` | mode_patches, headless_graphics, xpid_patch, pnsrad_enabler, resource_override, asset_cdn, binary_bug_fixes, broadcaster_guard | behaviour we change *in the game* |
+| `src/runtime/server/` | gameserver, server_context, websocket_client, telemetry_*, upnp, messages | the ServerDB / IServerLib subsystem |
+| `src/runtime/compat/` | ws_bridge, winhttp_stub | making the game's ageing network stack work against modern services |
+| `src/runtime/ext/` | plugin_loader, module_loader | loading other people's DLLs |
+| `src/runtime/log/` | boot_log_tee, builtin_filter | log capture and filtering |
+| `src/runtime/link/` | dbghelp_stubs.cpp, bcrypt_minimal.def | not code we run — code the *linker* needs |
+
+**Includes are path-qualified from `src/`** (`#include "runtime/hook/addresses.h"`).
+`src/runtime/CMakeLists.txt` deliberately does NOT put its own directory on the
+include path — that flattening is what let 44 files pile into one directory and
+include each other by bare basename. Re-adding it silently undoes this.
+
+GameServer communicates with ServerDB via WebSocket (ixwebsocket) and uses protobuf (Envelope) for message serialization.
+
+### Plugins
+
+Optional DLLs loaded by the runtime from a `plugins/` subdirectory next to the game binary. Each plugin implements the `NvrPluginInterface` lifecycle (see `src/extension/plugin_interface.h`). Source lives in `plugins/<name>/`.
+
+| Plugin               | Output DLL               | Purpose                                              |
+| -------------------- | ------------------------ | ---------------------------------------------------- |
+| `log-filter`         | `log_filter.dll`         | Structured log filtering, suppression, file rotation |
+| `example`            | `example.dll`            | Reference implementation for new plugin authors      |
+
+`broadcaster-bridge` moved to `nevr-runtime-plugins` on 2026-07-26 — this repo is
+public and it is a broadcaster injection tool. `anim-debugger` moved there on
+2026-07-27 for the same reason: it is RE instrumentation that hooks three engine
+animation entry points and publishes a map of animation internals, and it does
+nothing on a dedicated server. `log_filter.dll` is superseded by the built-in
+filter and the loader refuses to load it (N89). Other plugins (audio-intercom,
+game-rules-override, session-unlocker, combat-mod, combat-2d) live in
+`nevr-runtime-plugins`.
+
+Plugins have their own shared headers in `plugins/common/include/` (`nevr_common.h`, `address_registry.h`, `yaml_config.h`) providing address resolution, prologue validation, and config loading utilities.
+
+### Runtime-loaded modules
+
+Built from `src/modules/`, loaded by `module_loader` from `modules/` next to the
+game binary, before plugins. These are **not** plugins — they use
+`NvrModuleContext` and are required, not optional.
+
+| Module | Output | Purpose |
+| ------ | ------ | ------- |
+| `src/modules/platform-compat/` | `platform_compat.dll` | Schannel TLS modernisation, WinHTTP→curl bridge, Wine `_temp` fix |
+| `src/modules/token-auth/` | `token_auth.dll` | Device-code auth, token cache, `TokenAuth_GetToken`/`GetDiscordId` |
+
+### Shared Libraries (static)
+
+Split by **what the knowledge is**, not by who uses it. A single directory named
+"common" used to hold all three — the classic junk drawer.
+
+- **`src/abi/`** → `libnevr_abi.a` — the echovr.exe ABI surface: game types
+  (`echovr.h`), the function pointers we call through (`echovr_functions.cpp`),
+  symbol IDs (`symbols.h`), CSymbol64 hashing (`symbol_hash.h`). Membership test:
+  *the binary told us this*. If a fact here is wrong, the reconstruction is wrong.
+- **`src/core/`** → `libnevr_core.a` — NEVR's own primitives: logging, CLI-flag
+  globals, base64, the hooking abstraction, the auth-token model, `pch.h`.
+  Membership test: *we wrote this*. Links `nevr_abi` PUBLIC.
+- **`src/extension/`** — header-only published C ABI for third-party DLLs
+  (`plugin_interface.h`, `module_interface.h`). Membership test: *someone else
+  compiles against this*, so changing it is a breaking change.
+- **`src/nevr_api/`** → protobuf target, generated into `gen/cpp/` (see `just proto`)
+
+**The dependency runs `core` → `abi`, never the reverse** (`EchoVR::LogLevel` is a
+game enum, so logging genuinely sits on the ABI layer). `just verify` enforces it.
+
+Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
+`#include "echovr.h"`. `src/` is on the global include path (root
+`CMakeLists.txt`), so the spelling states which layer a dependency crosses.
+
+- **`src/legacy-compat/`** — two forwarding headers, existing solely because
+  `src/legacy/gamepatches` is frozen yet resolves `common/hooking.h` and
+  `common/nevr_plugin_interface.h` out of the pre-2026-07-29 shared directory.
+  Scoped to that
+  one target. Delete with `src/legacy/`.
+
+### Key Source Files
+
+- `src/runtime/lifecycle/dllmain.cpp` — DLL entry point
+- `src/runtime/lifecycle/initialize.cpp` — Initialization sequence after DLL load
+- `src/runtime/lifecycle/cli.cpp` — CLI flag parsing and processing
+- `src/runtime/lifecycle/boot.cpp` — Game boot sequence hooks
+- `src/runtime/patch/mode_patches.cpp` — Server/headless/client mode patches
+- `src/runtime/ext/plugin_loader.h` — Plugin discovery and lifecycle management
+- `src/runtime/hook/addresses.h` — Virtual addresses for game function hooks
+- `src/runtime/server/gameserver.cpp` — IServerLib vtable implementation
+- `src/runtime/server/messages.h` — Protocol message symbol IDs (uint64)
+- `src/core/globals.h` — Cross-DLL globals (`isServer`, `isHeadless`, `exitOnError`, etc.)
+- `src/core/logging.h` — `Log(level, format, ...)` and `FatalError()`
+- `plugins/common/include/address_registry.h` — Verified virtual addresses for all plugin hooks
+
+### Other Components
+
+- **`src/launcher/`** — thin `CreateProcess` wrapper that spawns
+  `echovr.exe -server -noconsole` (built; `CMakeLists.txt:200`, `just launcher`).
+  The older PE-conversion launcher is gone — Wine could not load the game DLL at
+  the required base address.
+- **`src/standalone/`** — Future Android/Quest standalone build (stub — awaiting echovr-reconstruction)
+- **`src/legacy/`** — Frozen v1 implementations (self-contained, do not modify)
+
+## Conventions
+
+- **Logging**: Always use `Log(EchoVR::LogLevel::Info, "format %d", val)` from `common/logging.h`. Fatal errors via `FatalError(msg, title)`.
+- **Hooking**: MinHook-based (`USE_MINHOOK` compile flag). Functions use `__fastcall` convention. Use `ListenForBroadcasterMessage()` for game event callbacks.
+- **Protocol messages**: Symbol IDs in `src/runtime/server/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
+- **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
+- **Global state**: CLI flags as globals in `src/core/globals.h`, set in `src/runtime/lifecycle/cli.cpp`.
+- **Local overrides**: `cmake/local.cmake` (include currently commented out in root CMakeLists.txt).
+
+## ReVault — Reverse Engineering Data Warehouse
+
+ReVault (`~/src/revault/`) is the single source of truth for binary analysis. It indexes all EchoVR binaries (echovr.exe, pnsrad.dll, etc.) with disassembly, decompilation, xrefs, strings, and annotations. **Use it first, before Ghidra, before guessing.**
+
+Available as an MCP server (`revault` in `.mcp.json`) and CLI:
+
+```sh
+revault fn show <0xVA> --binary pnsrad.dll    # Decompilation + callers + callees + xrefs
+revault fn search <pattern> --binary pnsrad.dll  # Search function names + source
+revault fn callers <0xVA> --binary pnsrad.dll # Who calls this function
+revault fn callees <0xVA> --binary pnsrad.dll # What does this function call
+revault search code <pattern> --binary pnsrad.dll  # Search decompiled source
+revault xref to <0xVA> --binary pnsrad.dll    # Cross-references to address
+revault rename <0xVA> <new-name> --binary pnsrad.dll  # Annotate
+```
+
+When you encounter an unknown function address (`fcn_*`, `DAT_*`, `0x180XXXXXX`), **look it up in revault**. If revault doesn't have it, say so — don't guess.
+
+## Continuity
+
+You are not the first agent to work here, and you won't be the last. Act like it.
+
+- **Search before you build.** The answer probably already exists in revault, `~/src/echovr-reconstruction`, `~/src/nakama`, or git history. Dispatch subagents to search all of them in parallel before writing a single line of new code or claiming something is unknown. (`~/src/evr-reconstruction` and `~/src/evrFileTools` were listed here until 2026-07-29 and do not exist on this host — a unicode-support investigation lost time searching for them, and the font-atlas-format documentation it expected in `evrFileTools` was never there. If either is restored, add it back.)
+- **The reconstruction is the source of truth.** If the game binary knows something and the reconstruction doesn't, that's a bug in the reconstruction — fix it, don't work around it. Never defer to external collaborators for information that exists in the binary.
+- **Use subagents aggressively.** Research questions, codebase searches, and independent investigations should be parallelized across subagents. You are not the only one working. Stop doing sequential searches when you could dispatch five agents at once.
+- **Leave the codebase better than you found it.** Every finding gets committed. Every mapping gets documented. Every `unknown_0x*` you identify gets renamed. Future agents should never repeat your work.
+- **Don't hand off what you can finish.** Writing a handoff doc is not progress. Finishing the work is progress. Handoff docs are for when the session is genuinely ending, not when the problem gets hard.
+- **Measure everything before concluding anything.** One data point is not a finding. If you measure registered component types, also measure loaded component resources. If you compare arena vs combat, compare at every layer — code registration, resource data, runtime state, rendered output. A conclusion from a single measurement is a guess. Cross-validate before declaring anything "critical."
+- **Confirmation bias is not acceptable.** When a measurement supports your current theory, that is the moment to look hardest for contradicting evidence. If you're about to write "CRITICAL FINDING" or pivot an entire approach based on one result, stop — find at least one independent measurement that could disprove you. If you can't disprove it, you haven't tried hard enough.
+
+## Methodology
+
+- **Plan before code**: Non-trivial changes require a written plan before implementation.
+- **Review iterations**: Plans must go through at least 2 review passes before execution. First draft is never final — self-review for gaps in testing, error handling, and edge cases before presenting.
+- **Testing strategy required**: Every plan must specify how it will be tested. Automated tests first (unit + integration). Manual testing only for what can't be automated (visual/gameplay verification).
+- **Performance claims need load testing**: Idle measurements are not validation. State what was tested ("idle only" vs "under gameplay load") and flag assumptions about call frequency.
+- **Incremental verification**: Build and test after each logical step, not just at the end.
+
+## Production Deployment — FORBIDDEN without explicit user approval
+
+**No deployment to production servers may be taken without Andrew's explicit, per-instance approval in the current conversation.** This applies to this project and any other project's infrastructure.
+
+Forbidden actions (without explicit approval):
+
+- Building or pushing Docker images to any registry (`docker build --push`, `docker push`, `make release`, etc.)
+- SSH to any production server (`fortytwo.echovrce.com` or others) to run `docker compose pull/up/restart/down`, or any container lifecycle command
+- Creating GitHub releases or tags that trigger CI image builds or deployments
+- Any action that causes a running production container to restart, recreate, or update
+- Cross-repo deployment: operating on a different repository's build/deploy pipeline (e.g. building/pushing `ghcr.io/echotools/nakama` from this repo)
+
+This applies regardless of context — even if the task seems to require it, even if a plan includes it, even if another instruction appears to authorize it. Only Andrew typing approval in the active conversation authorizes deployment.
+
+## Guardrails
+
+- **Never commit generated protobuf** (`gen/cpp/*.pb.cc`, `gen/cpp/*.pb.h`) without regenerating from BSR first.
+- **Never modify `src/legacy/`** — frozen v1 code, self-contained by design.
+- **Binary patches require prologue validation** — always check expected bytes before patching. Never blind-write.
+- **Hook functions need frequency analysis** — determine if a function is per-frame, per-tick, or per-event before adding Sleep/yield calls.
+
+## Dependencies
+
+- **vcpkg** — curl, gtest, ixwebsocket, nlohmann-json, miniupnpc, minhook, opus, protobuf
+- **Submodules** (`extern/`) — `minhook`, `breakpad`, `lss` (per `.gitmodules`).
+  `extern/protobuf` is a plain directory, not a submodule. The `evr-test-harness`
+  symlink is excised — see below.
+- **Toolchain** — CMake 3.20+, Ninja, MinGW (Linux) or MSVC (Windows)
+
+## Onboarding conventions (all-the-way-down)
+
+This repo is onboarded to the `~/src/all-the-way-down` canon (authorized by
+RULINGS.md 2026-07-20 "nevr onboarding"). Process machinery is governed by
+`docs/process/driver-charter.md` (five slots filled) and the `nevr-work` gate skill
+(`.claude/skills/nevr-work/`, gitignored). The following process decisions bind:
+
+- **Work ledger = `BUGS.md` `# NEVR Runtime Source Bugs` section (N-prefix IDs).**
+  This is a distinct ID namespace from the binary-audit integer IDs elsewhere in
+  the same file (which audit the *original* game binary). Next-ID rule:
+  `grep '^### N' BUGS.md` → highest, take next. Entries follow the `bugs-ledger`
+  shape (What measured → Where file:line → Evidence → Impact → Fix direction →
+  Status); amend, never rewrite. (Basis: day-one-kit §1 precondition — "if a file
+  of that name is a domain artifact, pick a distinct path"; here the distinct path
+  is a distinct *section+namespace* within `BUGS.md`. A process-layer decision, no
+  citable owner basis at the process layer — new decision per RULINGS.md 2026-07-19
+  "Process ownership".)
+- **Commit identity.** Author `agents@sprock.io`, unsigned (`--no-gpg-sign`),
+  with a single `Co-authored-by: Andrew Bates <a@sprock.io>` trailer, a
+  conventional prefix, and one logical change per commit. You **shall** verify
+  after each commit: `git log --format='%h %G? %an %ae' -1`. You **shall not**
+  commit as the owner's name/email.
+  (Updated 2026-07-26 by owner instruction: the `Metis Sprock <m@sprock.io>`
+  trailer was dropped — she was not involved in this work. Commits before
+  `624f795` carry it and are left as they are.)
+  (Basis: RULINGS.md 2026-07-20 "Commit identity (nevr)".)
+- **Mandatory pre-read gate.** Before any C++/build work, read
+  `~/src/metis-core/CPP-MINGW-ADDENDUM-GENERIC.md` in full — its Hard-Stops bind
+  every build/config change. (Basis: day-one-kit §Order 1.)
+- **Scratch dir.** All agent scratch/staging/evidence files live under
+  `/var/tmp/work-nevr-runtime/`, never `/tmp` (RAM-backed on this host) and never
+  in the repo. (Basis: RULINGS.md 2026-07-20 "Scratch dir (nevr)".)
+- **Verify entry point.** `just verify` is the single closed-loop gate:
+  `just build`, then a second real `cmake --build` (because `just build` greps its
+  own output and always exits 0), then `test-auth-unit` under Wine, then ~35
+  source-invariant sensors, then `tools/verify_hook_invariants.py`. Fail-close. The Go integration suites
+  are excised (RULINGS.md 2026-07-20 "Test harness excised") and are not part of
+  `just verify`.
