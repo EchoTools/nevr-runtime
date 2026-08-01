@@ -24,7 +24,7 @@ void Install(uintptr_t) {
      * emptiness, was the defect.
      *
      * The real dispatch-integrity work is N83/N84: see
-     * docs/primers/2026-07-26-n83-broadcaster-severance.md. */
+     * BUGS.md#N83 (the primer was folded into this entry on 2026-08-01). */
 }
 
 void Shutdown() {}
