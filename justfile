@@ -1532,6 +1532,63 @@ verify:
         echo "alarm printed name=(unnamed) for almost every address it guards." >&2
         exit 1
     fi
+    # N133 S7 — config cutover invariant sensors. The cutover (S0-S5) migrated
+    # all 29 NEVR config keys off the game-JSON path onto config.yaml. These
+    # sensors prove the cutover IS complete and catch regressions (a reverted
+    # key, a flat-map entry added without a test, a stale sample config).
+    #
+    # S7a — cutover integrity: no nevr_* key literal in a game-JSON read.
+    # The only surviving JsonValueAsString(g_earlyConfigPtr, ...) calls are the
+    # wildcard override forward (keyName variable, not a literal) and the
+    # trampoline (also a variable). A literal "nevr_*" here means a key was
+    # reverted or a new one was read from game JSON instead of config.yaml.
+    N133_S7A_RC=0
+    N133_S7A=$(grep -rn 'JsonValueAsString\|CJsonGetFloat' src/runtime/ src/modules/ \
+        2>/dev/null | grep -v '/test_\|/legacy/' | grep '"nevr_') || N133_S7A_RC=$?
+    sensor_stage1 "N133 S7a cutover" "src/runtime/ + src/modules/" "$N133_S7A_RC"
+    if [ -n "$N133_S7A" ]; then
+        echo "verify: FAIL — N133 S7a: a nevr_* key is read from the game JSON:" >&2
+        printf '%s\n' "$N133_S7A" >&2
+        echo "The config cutover migrated ALL nevr_* keys to config.yaml via the" >&2
+        echo "flat map in service_map.cpp. This key was added or reverted to the" >&2
+        echo "game-JSON path — add it to the flat map and read through NevrCfgGetFlat." >&2
+        exit 1
+    fi
+    # S7b — flat-map structural gate: exactly 29 entries. Adding or removing a
+    # flat-map entry without updating this number fails the build — a deliberate
+    # reminder to also add a test for the new mapping. The 29 entries are the
+    # complete key surface measured in S0, verified migrated through S3-S5b.
+    N133_S7B=$(grep -cE '^\s*\{"' src/runtime/lifecycle/service_map.cpp)
+    if [ "$N133_S7B" -ne 29 ]; then
+        echo "verify: FAIL — N133 S7b: flat map has $N133_S7B entries, expected 29." >&2
+        echo "A key was added or removed from the cutover map in service_map.cpp." >&2
+        echo "If adding: also add a test to test_service_map.cpp and update this count." >&2
+        echo "If removing: that key's reader must be deleted first, or it silently" >&2
+        echo "falls back to the old game-JSON path (exactly what the cutover prevents)." >&2
+        exit 1
+    fi
+    # S7c — the module context config_get accessor (S5 deliverable) must remain
+    # present in module_interface.h. Its removal would silently break token_auth's
+    # config.yaml reads and revert modules to the game-JSON path.
+    if ! grep -q 'config_get' src/extension/module_interface.h; then
+        echo "verify: FAIL — N133 S7c: NvrModuleContext.config_get removed from" >&2
+        echo "module_interface.h. This is the S5 deliverable that lets modules read" >&2
+        echo "config.yaml. Without it token_auth reverts to game-JSON reads." >&2
+        exit 1
+    fi
+    # S7d — the sample config.yaml must remain valid YAML and contain the minimum
+    # keys a server needs to boot (auth, services, identity sections). A missing
+    # or corrupted sample breaks launch-server.sh with an inscrutable YAML error.
+    N133_S7D_RC=0
+    N133_S7D=$(grep -cE '^\s*(auth:|services:|identity:|version:)' \
+        echovr/_local/config.yaml) || N133_S7D_RC=$?
+    sensor_stage1 "N133 S7d sample config" "echovr/_local/config.yaml" "$N133_S7D_RC"
+    if [ "$N133_S7D" -lt 4 ]; then
+        echo "verify: FAIL — N133 S7d: sample config.yaml missing required sections" >&2
+        echo "(found $N133_S7D of 4: auth, services, identity, version)." >&2
+        echo "launch-server.sh reads this file; a broken sample breaks every server boot." >&2
+        exit 1
+    fi
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)
