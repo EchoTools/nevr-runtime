@@ -368,13 +368,21 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
   if (result == NULL || keyName == NULL) return result;
   if (g_earlyConfigPtr == NULL) return result;
 
-  // N133 S3: the ws/wss redirect target (nevr_socket_uri) now resolves from
-  // config.yaml inside NevrCfgRedirect. The https target (nevr_http_uri) is NOT
-  // migrated in S3 — it is S4/S5's key — so it is still read from the early game
-  // JSON here and passed through. NevrCfgRedirect runs the identical scheme
+  // N133 S3: the ws/wss redirect target (nevr_socket_uri) resolves from
+  // config.yaml inside NevrCfgRedirect. N133 S5b: the https target
+  // (nevr_http_uri) now ALSO resolves from config.yaml — auth.http_uri, the same
+  // key gameserver reads (S4b) — via NevrCfgGetFlat, instead of the game's early
+  // JSON. This was the LAST nevr_* read off g_earlyConfigPtr; nothing NEVR now
+  // reads its keys from the game config.
+  //
+  // The `g_earlyConfigPtr == NULL` guard above STAYS: it is not a nevr_* read,
+  // it is the S3-era gate on whether ANY redirect fires at all (no config.json
+  // -> no redirect). Keeping it preserves today's client behaviour exactly; on a
+  // server g_earlyConfigPtr is always non-null (boot.cpp:61 fatals otherwise) so
+  // the guard is a no-op there. NevrCfgRedirect runs the identical scheme
   // detection + bridge rewrite (ws/wss any-host or https readyatdawn.com only;
   // bridge-active ws -> ws://127.0.0.1:<port>; https never hits the bridge).
-  CHAR* httpTarget = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_http_uri", NULL, false);
+  const char* httpTarget = NevrCfgGetFlat("nevr_http_uri");
   const char* redirected =
       NevrCfgRedirect(result, httpTarget, IsWebSocketBridgeActive() ? 1 : 0, GetWebSocketBridgePort());
   if (redirected == NULL) return result;
