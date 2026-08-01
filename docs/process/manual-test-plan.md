@@ -528,16 +528,16 @@ investigate before continuing.
 
 | # | Feature | Citation | How to test | PASS signal | FAIL signal | Testable on | Silent break risk |
 |---|---------|----------|-------------|-------------|-------------|-------------|-------------------|
-| F01 | Wave0 instrumentation init | `wave0_instrumentation.cpp` | Start server | `[NEVR] wave0 OK` from initialize.cpp:329 | Wave0 hooks not installed | wine | Binary bug detection disabled |
-| F02 | Wave0 shutdown | `wave0_instrumentation.cpp` via `dllmain.cpp:105` | Stop server | Wave0 shutdown called | Hooks left installed | wine | **SILENT** -- no shutdown log |
+| F01 | Wave0 instrumentation init | `binary_bug_fixes.cpp` (formerly wave0_instrumentation.cpp) | Start server | `[NEVR] wave0 OK` from initialize.cpp:329 | Wave0 hooks not installed | wine | Binary bug detection disabled |
+| F02 | Wave0 shutdown | `binary_bug_fixes.cpp` (formerly wave0_instrumentation.cpp) via `dllmain.cpp:105` | Stop server | Wave0 shutdown called | Hooks left installed | wine | **SILENT** -- no shutdown log |
 | F03 | DLL load hook -- intercept LoadLibrary | `dll_load_hook.cpp` | Start server | `[NEVR] DLL load hooks OK` from initialize.cpp:233 | DLL interception not installed | wine | DXGI/D3D11 load without interception |
 | F04 | Built-in log filter init | `builtin_log_filter.cpp` | Start server | `[NEVR] log filter OK` from initialize.cpp:278; filter health lines in log | Game log lines unfiltered | wine | Log noise floods output |
 | F05 | Log filter -- config load | `builtin_log_filter.cpp:257` | Start server with filter config | `config loaded: min_level=..., N channels, N patterns...` or `no config file found, using built-in defaults` | Config parse failure; default rules used | wine | Wrong suppression rules; important lines filtered or noise unfiltered |
 | F06 | Log filter -- file output | `builtin_log_filter.cpp:437` | Start server | `logging to: <path>` | Log file not created | wine | Log output lost on disk |
 | F07 | Log filter -- hook install | `builtin_log_filter.cpp:836` | Start server | `hook installed on CLog::PrintfImpl @ 0x...` | `MH_CreateHook failed` or `MH_EnableHook failed` | wine | Game log lines not intercepted |
 | F08 | Log filter -- shutdown | `builtin_log_filter.cpp:841-847` | Stop server | `hook removed (emitted: N, suppressed: N)` | Filter not cleaned up; hook left | wine | Next run may have stale hook |
-| F09 | Server timing -- tick rate control | `server_timing.cpp` | Start server | Server tick rate managed | Default tick behavior | wine | Server tick rate uncontrolled |
-| F10 | Server timing -- shutdown | `server_timing.cpp` via `dllmain.cpp:109` | Stop server | ServerTiming::Shutdown() called | Tick control persists after shutdown | wine | **SILENT** -- no shutdown log |
+| F09 | Server timing -- tick rate control | `frame/tick.cpp` (server_timing.cpp was deleted dead code) | Start server | Server tick rate managed | Default tick behavior | wine | Server tick rate uncontrolled |
+| F10 | Server timing -- shutdown | `frame/tick.cpp` (server_timing.cpp was deleted dead code) via `dllmain.cpp:109` | Stop server | ServerTiming::Shutdown() called | Tick control persists after shutdown | wine | **SILENT** -- no shutdown log |
 | F11 | Broadcaster guard -- no-op placeholder | `broadcaster_guard.cpp` | Start server | `[NEVR] broadcaster guard OK` from initialize.cpp:273; nothing actually installed | No observable difference | wine | **NOT IMPLEMENTED** -- `BroadcasterGuard::Install()` is an empty placeholder |
 | F12 | WinHTTP stub -- vtable fix | `winhttp_stub.cpp` | Start server | WinHTTP calls intercepted | Game WinHTTP calls fail under Wine | wine | HTTP requests fail; services unreachable |
 | F13 | XInput stubs -- GetState/SetState/GetCaps | `initialize.cpp:101-111` | Start server | XInput calls return DEVICE_NOT_CONNECTED (0x48F) | Game tries real XInput; error or hang | wine | **SILENT** -- no log on stub invocation (one-time stderr) |
