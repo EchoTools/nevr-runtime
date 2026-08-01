@@ -1,5 +1,13 @@
 # leVR Porting Analysis — Echo VR to OpenXR/Linux
 
+> **This doc is about a separate project** (`github.com/EchoTools/levr`), not about
+> nevr-runtime. It lives in this repo because it was authored here and shares
+> tooling context (ReVault, the echovr.exe binary, the Mingw-w64 build pipeline).
+> Its audience is the leVR porting team. The VAs and analysis are specific to
+> `echovr.exe` goldmaster 631547 and `libr15.so` v34.4.
+
+# leVR Porting Analysis — Echo VR to OpenXR/Linux
+
 **Date:** 2026-06-09
 **Source Binary:** echovr.exe goldmaster 631547 (SHA256: `b6d08277...`)
 **Quest Binary:** libr15.so v34.4 (same CVR engine, Vulkan on Android/Linux)

@@ -1,5 +1,15 @@
 # Quest (arm64-v8a) Crash-Reporter `.so` — Injection Recon & Design
 
+> **STATUS 2026-08-01: DESIGN COMPLETE, BUILD NOT YET VERIFIED ON MAIN.**
+> The `src/quest/` sub-project described in §5 has its own CMake toolchain
+> and NDK build (`just configure-android`, `just build-android`). The ELF-shape
+> BACs in §6 are verified offline; on-device verification (Part B of the sideload
+> runbook at docs/quest-sideload-runbook.md (deleted 2026-08-01)) requires a physical Quest 2 headset
+> and has not been executed. This doc is the canonical design reference for the
+> Quest hijack; it is load-bearing for anyone working on the Quest port.
+
+# Quest (arm64-v8a) Crash-Reporter `.so` — Injection Recon & Design
+
 **Date:** 2026-07-13
 **Author:** Spritz Metis Sprock (`spritz@sprock.io`)
 **Target:** Meta Quest, `com.readyatdawn.r15` (Echo VR), arm64-v8a

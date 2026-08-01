@@ -1,3 +1,13 @@
+# Game-Server ServerDB Auth: URL-param → Token (JWT)
+
+> **Record, not a procedure.** This documents what was built and is live on prod
+> (2026-06-29). The original ADR body — which proposed a `/sprt` route and reusing
+> `nevr_socket_uri` — was removed on 2026-07-27: `/sprt` was rejected in favour of
+> `/nevr`, and the doc's own text records that pointing `nevr_socket_uri` at the
+> token route **broke login**. Anyone following those sections would have
+> implemented the documented failure. Full text in git history.
+>
+
 # ServerDB auth: URL-param → JWT (as built, 2026-06-29)
 
 > **Record, not a procedure.** This documents what was built and is live on
@@ -21,7 +31,7 @@ Author: Spritz.
   kept distinct from `nevr_socket_uri` (→ `/spr`, the client/login bridge, which
   is unchanged and still uses `discord_id`+`password`). Pointing the shared
   `nevr_socket_uri` at `/nevr` broke login — that's why the keys are split.
-- **Verified E2E** (`tests/token-auth-smoke.sh`, all BACs green): login via `/spr`
+- **Verified E2E** (tests/token-auth-smoke.sh (deleted 2026-08-01), all BACs green): login via `/spr`
   succeeds, registration acquires a JWT + connects `/nevr` + stays connected
   (0 disconnects, full window). `/nevr`+valid JWT→101, `/nevr`+garbage→401.
 
