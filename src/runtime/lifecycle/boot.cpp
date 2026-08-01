@@ -78,6 +78,11 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     if (!g_isServer)  moduleCtx.flags |= NEVR_MODULE_HOST_IS_CLIENT;
     moduleCtx.log = (void (*)(int, const char*, ...))Log;
     moduleCtx.get_proc = ResolveModuleProc;
+    // N133 S5: modules read config.yaml through the SAME accessor the runtime uses,
+    // so a module never parses the game JSON and never sees a value the runtime
+    // wouldn't. NevrCfgGetFlat's fail-loud is mode-aware (server=fatal/client=warn),
+    // which a module inherits by calling through this pointer.
+    moduleCtx.config_get = &NevrCfgGetFlat;
     SetModuleContext(&moduleCtx);
 
     // Platform compat — Schannel TLS hooks, CreateDirectory fixes, WinHTTP bridge.

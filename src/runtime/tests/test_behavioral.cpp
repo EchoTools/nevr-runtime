@@ -255,6 +255,35 @@ TEST_F(N68_ModuleTickTest, OnStateChange_Fires_When_Registered) {
 }
 
 // ============================================================================
+// N133 S5 — module API version gate. The loader refuses a module whose reported
+// version exceeds the host's (module_loader.cpp LoadModule -> FatalError, N120).
+// LoadModule itself is not unit-testable (real LoadLibraryExA + a process-killing
+// FatalError), so the refusal RULE is factored into the header-only predicate
+// NvrModuleApiVersionSupported, which the loader and these tests share. Verifying
+// the predicate verifies the mismatch decision without spawning a process.
+// ============================================================================
+
+TEST(N133_ModuleApiVersion, HostVersionIsTwo) {
+  // The bump this change makes: implicit v1 (pre-versioning) -> explicit v2 (adds
+  // config_get to NvrModuleContext).
+  EXPECT_EQ(static_cast<uint32_t>(NEVR_MODULE_API_VERSION), 2u);
+}
+
+TEST(N133_ModuleApiVersion, AcceptsEqualAndOlder) {
+  // v1 (absent export) and v2 (our modules) both load — appended context fields an
+  // older module does not know about are simply unused.
+  EXPECT_TRUE(NvrModuleApiVersionSupported(1u));
+  EXPECT_TRUE(NvrModuleApiVersionSupported(2u));
+}
+
+TEST(N133_ModuleApiVersion, RefusesNewer) {
+  // A module built against a newer ABI expects context fields this host does not
+  // set -> refused (the loader turns this false into a FatalError).
+  EXPECT_FALSE(NvrModuleApiVersionSupported(3u));
+  EXPECT_FALSE(NvrModuleApiVersionSupported(999u));
+}
+
+// ============================================================================
 // N61 behavioral tests — production-linked via ws_bridge.cpp test hooks
 // ============================================================================
 //

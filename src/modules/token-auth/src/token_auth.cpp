@@ -350,7 +350,10 @@ static bool s_authAttempted = false;
 static std::thread* s_refreshThread = nullptr;
 static std::atomic<bool> s_refreshRunning{false};
 static std::mutex s_tokenMutex;
-static void* s_earlyConfig = nullptr;  // stored from NvrModuleContext
+// N133 S5: the host's config accessor (ctx->config_get), stored at init. Reads
+// config.yaml through the same path the runtime uses instead of the game JSON
+// (early_config). May be NULL if loaded by a pre-v2 host.
+static const char* (*s_configGet)(const char*) = nullptr;
 
 struct AuthConfig {
     std::string url;
@@ -361,12 +364,15 @@ struct AuthConfig {
 static AuthConfig LoadAuthConfig() {
     AuthConfig cfg;
 
-    if (s_earlyConfig) {
-        CHAR* url = EchoVR::JsonValueAsString((EchoVR::Json*)s_earlyConfig, (CHAR*)"nevr_http_uri", NULL, false);
-        CHAR* key = EchoVR::JsonValueAsString((EchoVR::Json*)s_earlyConfig, (CHAR*)"nevr_http_key", NULL, false);
-        CHAR* skey = EchoVR::JsonValueAsString((EchoVR::Json*)s_earlyConfig, (CHAR*)"nevr_server_key", NULL, false);
-        if (url) cfg.url = url;
-        if (key) cfg.httpKey = key;
+    if (s_configGet) {
+        // config_get returns NULL for an absent/unmapped key — same "missing"
+        // signal the old JsonValueAsString(..., NULL, false) form returned, so
+        // an absent key keeps token_auth's existing behaviour (warn + disable).
+        const char* url  = s_configGet("nevr_http_uri");
+        const char* key  = s_configGet("nevr_http_key");
+        const char* skey = s_configGet("nevr_server_key");
+        if (url)  cfg.url = url;
+        if (key)  cfg.httpKey = key;
         if (skey) cfg.serverKey = skey;
     }
 
@@ -508,10 +514,14 @@ void TokenAuth::Shutdown() {
 static thread_local std::string s_tokenBuf;
 static thread_local std::string s_usernameBuf;  // N123, same lifetime contract as s_tokenBuf
 
+NEVR_MODULE_API uint32_t NvrModuleApiVersion(void) {
+    return NEVR_MODULE_API_VERSION;
+}
+
 NEVR_MODULE_API int NvrModuleInit(const NvrModuleContext* ctx) {
     EchoVR::g_GameBaseAddress = (CHAR*)ctx->base_addr;
     EchoVR::InitializeFunctionPointers();
-    s_earlyConfig = ctx->early_config;
+    s_configGet = ctx->config_get;  // N133 S5: read config.yaml, not early_config JSON
 
     bool is_server = (ctx->flags & NEVR_MODULE_HOST_IS_SERVER) != 0;
     TokenAuth::Init(ctx->base_addr, is_server);

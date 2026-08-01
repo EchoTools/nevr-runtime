@@ -261,6 +261,14 @@ static bool InstallWinHTTPHook() {
 // Module interface
 // ---------------------------------------------------------------------------
 
+// N133 S5: report the module API version so the loader can refuse a module built
+// against a newer host ABI. platform_compat reads no config keys, so the config_get
+// addition is transparent to it — but it must still recompile against the new
+// NvrModuleContext and report the current version.
+NEVR_MODULE_API uint32_t NvrModuleApiVersion(void) {
+  return NEVR_MODULE_API_VERSION;
+}
+
 NEVR_MODULE_API int NvrModuleInit(const NvrModuleContext* ctx) {
   EchoVR::g_GameBaseAddress = (CHAR*)ctx->base_addr;
   EchoVR::InitializeFunctionPointers();

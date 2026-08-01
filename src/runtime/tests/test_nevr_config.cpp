@@ -158,6 +158,31 @@ TEST(NevrConfig, AuthPasswordRequiredRefUnsetFailsLoud) {
   }
 }
 
+// S5 — auth.server_key is a token_auth secret. It reads through the module config
+// accessor (ctx->config_get -> NevrCfgGetFlat), which shares this singleton's
+// mode-aware fail-loud: a ${VAR:?} secret resolves when set, and throws
+// NevrConfigError (-> ServerFatal, server=fatal/client=warn) when unset. Locks the
+// contract on the exact key S5 adds. (token_auth reads server_key only on a CLIENT,
+// where ServerFatal warns rather than exits — see crash_recovery.cpp ServerFatal.)
+TEST(NevrConfig, AuthServerKeyRequiredRefResolvesWhenSet) {
+  SetEnv("NEVR_S5_SERVER_KEY", "a-real-server-key");
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "auth:\n  server_key: \"${NEVR_S5_SERVER_KEY:?NEVR_S5_SERVER_KEY must be set}\"\n");
+  EXPECT_EQ(cfg.GetString("auth.server_key").value_or(""), "a-real-server-key");
+}
+
+TEST(NevrConfig, AuthServerKeyRequiredRefUnsetFailsLoud) {
+  UnsetEnv("NEVR_S5_SERVER_KEY");  // empty == unset
+  try {
+    nevr::NevrConfig::LoadFromString(
+        "auth:\n  server_key: \"${NEVR_S5_SERVER_KEY:?NEVR_S5_SERVER_KEY must be set}\"\n");
+    FAIL() << "expected NevrConfigError for an unset ${NEVR_S5_SERVER_KEY:?} secret";
+  } catch (const nevr::NevrConfigError& e) {
+    EXPECT_NE(std::string(e.what()).find("NEVR_S5_SERVER_KEY must be set"),
+              std::string::npos);
+  }
+}
+
 TEST(NevrConfig, BareRequiredVarUnsetThrows) {
   UnsetEnv("NEVR_TEST_BARE");
   EXPECT_THROW(nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"${NEVR_TEST_BARE}\"\n"),

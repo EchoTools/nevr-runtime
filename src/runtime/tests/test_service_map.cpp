@@ -83,6 +83,7 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
   EXPECT_EQ(FlatKeyToYamlPath("nevr_password"), "auth.password");
   EXPECT_EQ(FlatKeyToYamlPath("nevr_http_uri"), "auth.http_uri");
   EXPECT_EQ(FlatKeyToYamlPath("nevr_http_key"), "auth.http_key");
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_server_key"), "auth.server_key");  // S5 — token_auth
   // network
   EXPECT_EQ(FlatKeyToYamlPath("external_ip"), "network.external_ip");
   EXPECT_EQ(FlatKeyToYamlPath("internal_ip"), "network.internal_ip");
@@ -107,11 +108,10 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
 }
 
 TEST(ServiceMap, FlatKeyToYamlPath_UnmigratedKeysAreEmpty) {
-  // Keys no consumer reads through the flat map: nevr_server_key and
-  // publisher_lock are read elsewhere (or not at all); anything unknown is empty.
-  // (nevr_http_uri, nevr_serverdb_uri, telemetry_uri/token moved to the migrated
-  // set above in S4b; nevr_discord_id/nevr_password moved in S4a.)
-  EXPECT_EQ(FlatKeyToYamlPath("nevr_server_key"), "");
+  // Keys no consumer reads through the flat map: publisher_lock is read elsewhere
+  // (or not at all); anything unknown is empty. (nevr_http_uri, nevr_serverdb_uri,
+  // telemetry_uri/token moved to the migrated set above in S4b;
+  // nevr_discord_id/nevr_password moved in S4a; nevr_server_key moved in S5.)
   EXPECT_EQ(FlatKeyToYamlPath("publisher_lock"), "");
   EXPECT_EQ(FlatKeyToYamlPath("bogus_key"), "");
   EXPECT_EQ(FlatKeyToYamlPath(""), "");
@@ -131,7 +131,32 @@ TEST(ServiceMap, LookupFlat_PresentKeysResolve) {
   EXPECT_EQ(LookupFlat(cfg, "upnp_port").value_or(""), "6789");
   EXPECT_EQ(LookupFlat(cfg, "arena_round_time").value_or(""), "240");
   EXPECT_EQ(LookupFlat(cfg, "exitonerror").value_or(""), "true");
-  // Unmapped key -> nullopt regardless of the config content.
+  // nevr_server_key is mapped (S5) but kFullYaml has no auth block, so it resolves
+  // to nullopt here (absent), NOT because it is unmapped. See LookupFlat_AuthSecretsResolve.
+  EXPECT_FALSE(LookupFlat(cfg, "nevr_server_key").has_value());
+}
+
+// S5 — token_auth reads http_uri/http_key/server_key through the module config
+// accessor, which is NevrCfgGetFlat -> LookupFlat under the hood. Lock that all
+// three auth keys resolve from an auth block, so config_get hands token_auth the
+// same values the runtime reads.
+TEST(ServiceMap, LookupFlat_AuthSecretsResolve) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "auth:\n"
+      "  http_uri: \"https://auth.example\"\n"
+      "  http_key: \"hk-fixture\"\n"
+      "  server_key: \"sk-fixture\"\n");
+  EXPECT_EQ(LookupFlat(cfg, "nevr_http_uri").value_or(""), "https://auth.example");
+  EXPECT_EQ(LookupFlat(cfg, "nevr_http_key").value_or(""), "hk-fixture");
+  EXPECT_EQ(LookupFlat(cfg, "nevr_server_key").value_or(""), "sk-fixture");
+}
+
+// S5 — absent auth keys stay nullopt, so token_auth keeps its "missing -> warn +
+// disable" behaviour unchanged (Hazard: no default change).
+TEST(ServiceMap, LookupFlat_AuthSecretsAbsentIsNullopt) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString("version: \"1\"\n");
+  EXPECT_FALSE(LookupFlat(cfg, "nevr_http_uri").has_value());
+  EXPECT_FALSE(LookupFlat(cfg, "nevr_http_key").has_value());
   EXPECT_FALSE(LookupFlat(cfg, "nevr_server_key").has_value());
 }
 

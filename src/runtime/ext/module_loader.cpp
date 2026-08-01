@@ -89,6 +89,24 @@ void LoadModule(const char* name, const NvrModuleContext* ctx) {
     return;
   }
 
+  // N133 S5: enforce the module API version BEFORE init. A module exports its
+  // compiled-against version via NvrModuleApiVersion; absent means v1 (pre-
+  // versioning). A version exceeding this host's is refused — it would expect
+  // NvrModuleContext fields (e.g. config_get) this host does not set. Modules are
+  // required, so an unsupported version is fatal (N120), not a warning.
+  auto verFn = reinterpret_cast<NvrModuleGetApiVersion_fn>(
+      GetProcAddress(hModule, "NvrModuleApiVersion"));
+  uint32_t moduleApiVersion = verFn ? verFn() : 1u;
+  if (!NvrModuleApiVersionSupported(moduleApiVersion)) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.MODULE] %s: API v%u exceeds host v%u — refusing (rebuild the module "
+        "against this host)", name, moduleApiVersion,
+        static_cast<uint32_t>(NEVR_MODULE_API_VERSION));
+    FreeLibrary(hModule);
+    FatalError("Module API version unsupported", name);
+    return;
+  }
+
   int result = initFn(ctx);
   if (result != 0) {
     Log(EchoVR::LogLevel::Error, "[NEVR.MODULE] %s: init failed with code %d", name, result);
@@ -102,7 +120,7 @@ void LoadModule(const char* name, const NvrModuleContext* ctx) {
   auto onStateFn = (NvrModuleOnGameStateChange_fn)GetProcAddress(hModule, "NvrModuleOnGameStateChange");
 
   g_modules.push_back({hModule, name, initFn, shutdownFn, onFrameFn, onStateFn, dllPath});
-  Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] Loaded: %s", name);
+  Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] Loaded: %s (API v%u)", name, moduleApiVersion);
 }
 
 void UnloadModules() {

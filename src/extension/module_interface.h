@@ -44,7 +44,9 @@ enum NvrModuleHostFlags : uint32_t {
 /* Context passed to every module at init time */
 struct NvrModuleContext {
     uintptr_t base_addr;      /* echovr.exe ImageBase */
-    void*     early_config;   /* g_earlyConfigPtr (game JSON), may be NULL */
+    void*     early_config;   /* g_earlyConfigPtr (game JSON), may be NULL.
+                               * KEPT for ABI stability; new code should read
+                               * config through config_get (below) instead. */
     uint32_t  flags;          /* NEVR_HOST_IS_* flags */
 
     /* Log callback — modules use this instead of importing Log directly.
@@ -53,7 +55,46 @@ struct NvrModuleContext {
 
     /* Cross-module proc resolution — returns NULL if not registered */
     void* (*get_proc)(const char* name);
+
+    /* Config accessor (module API v2, N133 S5). Returns the runtime's config.yaml
+     * value for a flat NEVR key (e.g. "nevr_http_uri"), or NULL when the key is
+     * unmapped or absent. The returned pointer is process-lifetime stable (interned
+     * in the host). Reading through this gives a module the SAME config.yaml values
+     * the runtime itself uses, without parsing the game JSON via early_config. The
+     * host's accessor is mode-aware: a malformed/incomplete config fails loud only
+     * in server mode and warns in client mode — a module inherits that, so a module
+     * must NOT treat a NULL as fatal on its own. May be NULL when set by a v1 host. */
+    const char* (*config_get)(const char* flat_key);
 };
+
+/*
+ * Module API versioning (N133 S5).
+ *
+ * v1 is the pre-versioning ABI: NvrModuleContext WITHOUT config_get, and no
+ * version export (a module that does not export NvrModuleApiVersion is treated
+ * as v1, mirroring the plugin convention). v2 appends config_get to
+ * NvrModuleContext — a layout change to this published cross-DLL struct, so it
+ * is a backward-incompatible bump.
+ *
+ * A module reports the version it was compiled against via the optional
+ * NvrModuleApiVersion export. The loader REFUSES (FatalError — modules are
+ * required, N120 fatal-on-failure) a module whose reported version EXCEEDS the
+ * host's: such a module was built against a newer ABI and would expect context
+ * fields this host does not set. An older/equal module is accepted — appended
+ * fields it does not know about are simply unused. (Unlike plugins, which are
+ * optional and load-anyway-with-a-warning, a module mismatch is fatal.)
+ */
+#define NEVR_MODULE_API_VERSION 2
+
+/* Optional export: the API version the module was compiled against. */
+typedef uint32_t (*NvrModuleGetApiVersion_fn)(void);
+
+/* Host acceptance predicate. A module version is supported iff it does not
+ * exceed the host's. Header-only + constexpr so the loader and the unit test
+ * share exactly one definition of the refusal rule. */
+constexpr bool NvrModuleApiVersionSupported(uint32_t module_version) {
+    return module_version <= NEVR_MODULE_API_VERSION;
+}
 
 /* Required export: called once after LoadLibrary. Return 0 on success, non-zero on failure.
  * On failure, the loader calls FatalError and the game does not start. */

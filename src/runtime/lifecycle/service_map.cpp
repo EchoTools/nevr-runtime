@@ -43,6 +43,11 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
       // owns that residual); adding it here only routes gameserver's read.
       {"nevr_http_uri", "auth.http_uri"},
       {"nevr_http_key", "auth.http_key"},  // SECRET
+      // S5 — token_auth (device-code auth) reads these three via the module
+      // config accessor (ctx->config_get), not the game JSON. server_key is a
+      // SECRET and, like http_key, is only ever read on a CLIENT (token_auth is
+      // disabled in server mode), so it never fatals a headless server.
+      {"nevr_server_key", "auth.server_key"},  // SECRET
       // network (config.cpp LoadLocalConfigHook; S4b adds regions)
       {"external_ip", "network.external_ip"},
       {"internal_ip", "network.internal_ip"},
