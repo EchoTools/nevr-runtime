@@ -398,6 +398,10 @@ NEVR_PLUGIN_API uint32_t NvrPluginGetCapabilities(void)
     return NEVR_PLUGIN_CAP_OBSERVES_ONLY;
 }
 
+// Forward declaration — NvrPluginInitEx delegates to this so both init
+// paths share the same hook-setup logic. Defined below at the v3 section.
+NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx);
+
 /*
  * ── NvrPluginInitEx ─────────────────────────────────────────────────
  *
