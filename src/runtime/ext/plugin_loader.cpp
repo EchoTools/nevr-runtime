@@ -1,5 +1,6 @@
 #include "runtime/ext/plugin_loader.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,53 @@ struct LoadedPlugin {
 };
 
 static std::vector<LoadedPlugin> g_plugins;
+
+// N134 S8: query API — lets a plugin discover its neighbours at runtime.
+// Called through ctx->get_plugin_count / ctx->get_plugin_info (function
+// pointers filled into NvrGameContext by LoadPlugins and every per-frame/
+// per-state-change ctx construction). Returns the count of successfully
+// loaded plugins; a plugin that failed init or was refused (N89) is not in
+// g_plugins and therefore not counted.
+
+int GetLoadedPluginCount(void) {
+  return static_cast<int>(g_plugins.size());
+}
+
+const NvrLoadedPluginInfo* GetLoadedPluginInfo(int index) {
+  if (index < 0 || static_cast<size_t>(index) >= g_plugins.size()) return nullptr;
+  const LoadedPlugin& p = g_plugins[index];
+  // NvrLoadedPluginInfo is a SUBSET of LoadedPlugin's fields in the same
+  // layout — so a reinterpret_cast is sound and the returned pointer is
+  // process-lifetime stable (g_plugins never shrinks after load).
+  return reinterpret_cast<const NvrLoadedPluginInfo*>(&p.info);
+}
+
+// N134 S8: caps-based load-order priority. Within a priority band the config
+// order is preserved. The bands are risk-ordered: observers before modifiers,
+// modifiers before engine-hookers. UNDECLARED (0x00) sorts HIGHEST (unknown
+// risk → load first, so a declared-altering plugin's hooks land on top).
+static constexpr int CapsLoadPriority(uint32_t caps) {
+  // Undeclared is the unknown — load it first in its config-order position.
+  if (caps == NEVR_PLUGIN_CAP_UNDECLARED) return 0;
+  // Observed priority bands, high-to-low:
+  //   0: UNDECLARED (unknown risk — load earliest so a declared plugin's hooks
+  //      land on top, where HookGuard can catch a collision)
+  //   1: OBSERVES_ONLY    (reads state, never writes)
+  //   2: COSMETIC          (visuals/audio only)
+  //   3: ALTERS_GAMEPLAY   (physics, weapons, movement)
+  //   4: ALTERS_RULES      (rules, scoring, game mode itself)
+  //   5: NETWORK           (external sockets — load BEFORE engine hookers, as
+  //      engine hooker may depend on the network channel being up)
+  //   6: HOOKS_ENGINE      (own detours — load LAST so every other plugin's
+  //      hooks are installed first; N84 collision lands on this one)
+  if (caps & NEVR_PLUGIN_CAP_HOOKS_ENGINE)     return 6;
+  if (caps & NEVR_PLUGIN_CAP_ALTERS_RULES)     return 4;
+  if (caps & NEVR_PLUGIN_CAP_NETWORK)          return 5;
+  if (caps & NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY)  return 3;
+  if (caps & NEVR_PLUGIN_CAP_COSMETIC)         return 2;
+  if (caps & NEVR_PLUGIN_CAP_OBSERVES_ONLY)    return 1;
+  return 0;  // unrecognised bits — treat as undeclared
+}
 
 // N134 S6: required-aware load failure. A plugin the config declared
 // `required: true` that fails to load or init is FATAL on a dedicated server
@@ -78,6 +126,35 @@ void LoadPlugins() {
   if (g_isServer) ctx.flags |= NEVR_HOST_IS_SERVER;
   else ctx.flags |= NEVR_HOST_IS_CLIENT;
   if (g_isHeadless) ctx.flags |= NEVR_HOST_IS_HEADLESS;
+  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.get_plugin_count = GetLoadedPluginCount;
+  ctx.get_plugin_info = GetLoadedPluginInfo;
+
+  // --- Pass 1: LoadLibrary + resolve exports for every plugin, collecting into
+  // a staging list. Init is deferred to pass 2 so we can stable-sort by
+  // capability priority (N134 S8): observers before modifiers, modifiers before
+  // engine-hookers. Within a priority band the config.yaml order is preserved.
+  struct StagedPlugin {
+    HMODULE                  hModule;
+    PluginLoadItem            item;
+    NvrPluginInfo             info;
+    uint32_t                  apiVersion;
+    uint32_t                  caps;      // NvrPluginCapabilities, for pass-2 sorting
+    NvrPluginInitEx_fn        initExFn;
+    NvrPluginInit_fn          initFn;
+    NvrPluginOnFrame_fn       onFrameFn;
+    NvrPluginOnGameStateChange_fn onStateChangeFn;
+    NvrPluginShutdown_fn      shutdownFn;
+    PluginInitKind            initKind;
+    std::string               path;       // full path to DLL on disk
+  };
+  std::vector<StagedPlugin> staged;
+
+  // Caps-priority sort predicate: lower `priority` loads first. Within a
+  // single priority band the stable_sort preserves the config.yaml order.
+  auto capsOrder = [](const StagedPlugin& a, const StagedPlugin& b) -> bool {
+    return CapsLoadPriority(a.caps) < CapsLoadPriority(b.caps);
+  };
 
   for (const auto& item : plan) {
     const std::string path = pluginDir + item.file;
@@ -182,9 +259,6 @@ void LoadPlugins() {
 
     const PluginInitKind initKind =
         ChoosePluginInit(initExFn != nullptr, initFn != nullptr);
-    const char* initVia =
-        initKind == PluginInitKind::Ex ? "InitEx" :
-        initKind == PluginInitKind::Legacy ? "Init" : "no-init";
 
     // A v3 plugin (only NvrPluginInit) has no args channel — if the operator
     // configured args for it, say so rather than dropping them silently. Do NOT
@@ -195,53 +269,73 @@ void LoadPlugins() {
           "NvrPluginInit (no args channel) — args ignored", filename);
     }
 
+    // Stage for pass-2 caps-ordered init (N134 S8).
+    staged.push_back({hPlugin, item, info, apiVersion, caps,
+                      initExFn, initFn, onFrameFn, onStateChangeFn, shutdownFn,
+                      initKind, path});
+
+  } // for (const auto& item : plan)
+
+  // Pass 2: stable-sort by capability priority (config order preserved within
+  // a band), then init each plugin in that order.
+  std::stable_sort(staged.begin(), staged.end(), capsOrder);
+
+  // Log the sorted order so an operator can see the load sequence.
+  for (size_t i = 0; i < staged.size(); i++) {
+    const StagedPlugin& s = staged[i];
+    const char* initVia = s.initKind == PluginInitKind::Ex ? "InitEx" :
+                          s.initKind == PluginInitKind::Legacy ? "Init" : "no-init";
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PLUGIN] [%zu/%zu] %s v%u.%u.%u (API v%u) caps=0x%02X via %s (priority=%d)",
+        i + 1, staged.size(),
+        s.item.name.c_str(),
+        s.info.version_major, s.info.version_minor, s.info.version_patch,
+        s.apiVersion, s.caps, initVia, CapsLoadPriority(s.caps));
+  }
+
+  for (const StagedPlugin& s : staged) {
+    const char* initVia = s.initKind == PluginInitKind::Ex ? "InitEx" :
+                          s.initKind == PluginInitKind::Legacy ? "Init" : "no-init";
     int result = 0;
-    switch (initKind) {
-      case PluginInitKind::Ex:     result = initExFn(&ctx, item.args_json.c_str()); break;
-      case PluginInitKind::Legacy: result = initFn(&ctx); break;
-      case PluginInitKind::None:   break;  // no init export — plugin still loads (init optional)
+    switch (s.initKind) {
+      case PluginInitKind::Ex:     result = s.initExFn(&ctx, s.item.args_json.c_str()); break;
+      case PluginInitKind::Legacy: result = s.initFn(&ctx); break;
+      case PluginInitKind::None:   break;  // no init export — plugin still loads
     }
     if (result != 0) {
-      FreeLibrary(hPlugin);
-      FailPluginLoad(item, std::string(initVia) + " returned code " + std::to_string(result));
+      FreeLibrary(s.hModule);
+      FailPluginLoad(s.item, std::string(initVia) + " returned code " + std::to_string(result));
       continue;
     }
 
-    // N84: a plugin installs its hooks in init. Re-verify every address
-    // gamepatches already detoured — if the bytes changed, this plugin hooked
-    // an address we own. Detects third-party plugins, which no source-level
-    // check can see: gamepatches and plugins link SEPARATE static MinHook
-    // copies, so neither library can report the collision itself.
-    //
-    // N120: the return used to be DISCARDED. The collision was logged at ERROR
-    // and the plugin loaded anyway, so the detection existed and changed
-    // nothing. A non-zero count means a third party now owns an address we
-    // detoured: OUR patch is silently not applied, and every conclusion drawn
-    // from "the hook is installed" is wrong from here on.
-    if (initKind != PluginInitKind::None) {
-      const int collisions = HookGuard::VerifyAll(filename);
+    // N84: re-verify hooked addresses after this plugin's init may have
+    // installed its own detours (see the full comment in the original; moved
+    // here as the guard is unchanged from S6 except the variables are now
+    // on the staged struct).
+    if (s.initKind != PluginInitKind::None) {
+      const int collisions = HookGuard::VerifyAll(s.item.file.c_str());
       if (collisions > 0) {
         ServerFatal("Plugin %s re-hooked %d address(es) this runtime already owns "
                     "— our patches at those addresses are no longer applied",
-                    filename, collisions);
+                    s.item.file.c_str(), collisions);
       }
     }
 
-    g_plugins.push_back({hPlugin, info, apiVersion, caps, initFn, onFrameFn,
-                         onStateChangeFn, shutdownFn, path});
-    Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u) caps=0x%02X%s via %s",
-        info.name,
-        info.version_major, info.version_minor, info.version_patch,
-        apiVersion, caps,
-        caps == NEVR_PLUGIN_CAP_UNDECLARED ? " UNDECLARED" : "",
+    g_plugins.push_back({s.hModule, s.info, s.apiVersion, s.caps,
+                         s.initFn, s.onFrameFn,
+                         s.onStateChangeFn, s.shutdownFn, s.path});
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u) caps=0x%02X%s via %s",
+        s.info.name,
+        s.info.version_major, s.info.version_minor, s.info.version_patch,
+        s.apiVersion, s.caps,
+        s.caps == NEVR_PLUGIN_CAP_UNDECLARED ? " UNDECLARED" : "",
         initVia);
-    if (caps == NEVR_PLUGIN_CAP_UNDECLARED) {
-      // Not a warning about THIS plugin — a warning that we cannot answer the
-      // question a server will ask. Info, because every pre-v3 plugin is here.
+    if (s.caps == NEVR_PLUGIN_CAP_UNDECLARED) {
       Log(EchoVR::LogLevel::Info,
           "[NEVR.PLUGIN] %s declares no capabilities (pre-v3 or omitted). It is not "
           "known whether it affects gameplay; treat as unknown, not as harmless.",
-          info.name);
+          s.info.name);
     }
   }
 

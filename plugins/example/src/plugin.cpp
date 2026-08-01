@@ -196,6 +196,30 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
  */
 NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_json)
 {
+    // N134 S8: demonstrate the ctx_size pattern — how a v5+ plugin discovers
+    // at runtime whether the host provides the query API. The host always fills
+    // ctx_size = sizeof(NvrGameContext); we compare against our own compile-time
+    // sizeof to know which trailing fields are present.
+    if (ctx->ctx_size >= sizeof(NvrGameContext)) {
+        const int count = ctx->get_plugin_count();
+        PluginLog("initex: host v5+ (ctx_size=%u). %d plugin(s) loaded already at init time.",
+                  ctx->ctx_size, count);
+        // Log our neighbours' names — a plugin can use this to discover
+        // whether a dependency is present without probing via GetProcAddress.
+        for (int i = 0; i < count; i++) {
+            const NvrLoadedPluginInfo* other = ctx->get_plugin_info(i);
+            if (other) {
+                PluginLog("initex: neighbour[%d]: %s v%u.%u.%u caps=0x%02X",
+                          i, other->name,
+                          other->version_major, other->version_minor, other->version_patch,
+                          other->capabilities);
+            }
+        }
+    } else {
+        PluginLog("initex: host pre-v5 (ctx_size=%u < %u) — query API unavailable",
+                  ctx->ctx_size, (unsigned)sizeof(NvrGameContext));
+    }
+
     if (args_json != nullptr) {
         try {
             auto a = nlohmann::json::parse(args_json);

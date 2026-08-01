@@ -33,12 +33,37 @@ struct NvrPluginInfo {
     uint32_t    version_patch;
 };
 
-/* Game context passed to the plugin by the host */
+/* Plugin info returned by the host's plugin-query API (get_plugin_info, v5+).
+ * A plugin calling get_plugin_info(n) receives a pointer to this struct. The
+ * pointer is process-lifetime stable (g_plugins never shrinks after load). */
+struct NvrLoadedPluginInfo {
+    const char* name;
+    const char* description;
+    uint32_t    version_major;
+    uint32_t    version_minor;
+    uint32_t    version_patch;
+    uint32_t    api_version;     /* NEVR_PLUGIN_API_VERSION the plugin was compiled against */
+    uint32_t    capabilities;    /* NvrPluginCapabilities bitmask (0 = UNDECLARED) */
+};
+
+/* Game context passed to the plugin by the host.
+ *
+ * The host fills every field; a pre-v5 plugin compiled without the trailing
+ * fields still reads the first four at their original offsets. A v5+ plugin can
+ * check ctx_size to decide whether ctx->get_plugin_count and friends are valid. */
 struct NvrGameContext {
     uintptr_t   base_addr;      /* echovr.exe base address (ImageBase) */
     void*       net_game;       /* CR15NetGame* if available, else nullptr */
     uint32_t    game_state;     /* ENetGameState enum value */
     uint32_t    flags;          /* host capability flags */
+
+    /* --- v5 additions (N134 S8) --- */
+    uint32_t    ctx_size;       /* sizeof(NvrGameContext) as the host sees it —
+                                 *   a plugin compares this against its own
+                                 *   compile-time sizeof to decide which trailing
+                                 *   fields are present. */
+    int         (*get_plugin_count)(void);
+    const NvrLoadedPluginInfo* (*get_plugin_info)(int index);
 };
 
 /* Host capability flags */
@@ -53,15 +78,26 @@ enum NvrHostFlags : uint32_t {
 /*
  * Plugin lifecycle:
  *
- *   1. Host calls LoadLibrary on plugin DLL
- *   2. Host calls NvrPluginGetInfo() to read metadata
- *   3. Host calls NvrPluginInit(context) once after game init
- *   4. Host calls NvrPluginOnFrame(context) each server/client tick (optional)
- *   5. Host calls NvrPluginOnGameStateChange(context, old, new) on state transitions
- *   6. Host calls NvrPluginShutdown() before unload
+ *   1. Host loads plugins from config.yaml in list order (v5: ordered by
+ *      capability priority within each explicit-ordering band).
+ *   2. Host calls LoadLibrary on plugin DLL
+ *   3. Host calls NvrPluginGetInfo() to read metadata
+ *   4. Host calls NvrPluginInitEx(ctx, args_json) if exported (v4); otherwise
+ *      NvrPluginInit(ctx) if exported (v3); else skips init (init is optional).
+ *   5. Host calls NvrPluginOnFrame(ctx) each server/client tick (optional)
+ *   6. Host calls NvrPluginOnGameStateChange(ctx, old, new) on state transitions
+ *   7. Host calls NvrPluginShutdown() in REVERSE load order before unload
+ *      (last loaded shuts down first, so hooks installed on top of earlier
+ *      plugins' hooks are torn down before what they depend on).
  *
  * All functions are optional except NvrPluginGetInfo.
  * The host checks GetProcAddress for each and skips if not exported.
+ *
+ * v5 addition: ctx->get_plugin_count() and ctx->get_plugin_info(n) let a plugin
+ * discover its neighbours at runtime. A plugin compiled against v5 checks
+ * ctx->ctx_size >= sizeof(NvrGameContext) before calling these — a pre-v5 host
+ * sends a smaller ctx struct, so the pointers land at offsets the host didn't
+ * fill and their values are undefined.
  */
 
 /* Required: return plugin metadata */
@@ -108,17 +144,27 @@ typedef void (*NvrPluginShutdown_fn)(void);
  * cross-DLL export signature changes in a backward-incompatible way.
  * Adding new optional exports or new NvrHostFlags values does NOT require a bump.
  *
- * v4 (N134): the additive NvrPluginInitEx(ctx, args_json) export + config-driven
+ * v5 (N134 S8): adds ctx_size + get_plugin_count / get_plugin_info to the TAIL
+ * of NvrGameContext. This is backward-compatible — a pre-v5 plugin still reads
+ * base_addr / net_game / game_state / flags at their original offsets — so the
+ * bump is a CAPABILITY signal, not a break: a plugin can check ctx_size at
+ * runtime to discover whether the host provides the query API, and the host can
+ * check a plugin's declared API version to know whether it understands ctx_size.
+ *
+ * v4 (N134 S6): the additive NvrPluginInitEx(ctx, args_json) export + config-driven
  * ordered loading. This is a compatible addition — a v3 plugin (NvrPluginInit
  * only) still loads — so the bump is a CAPABILITY signal, not a break: a plugin
  * can query the host version to decide whether to rely on receiving args. The
  * args_json string shape is part of this version's contract (see NvrPluginInitEx).
  *
+ * v3 (N114): added NvrPluginGetCapabilities export (a plugin can declare what it
+ * does). Additive; existing plugins keep loading.
+ *
  * The host resolves NvrPluginGetApiVersion via GetProcAddress. If absent,
  * the plugin is v1 (pre-versioning). Fully backward-compatible — existing
  * plugins don't need recompilation.
  */
-#define NEVR_PLUGIN_API_VERSION 4
+#define NEVR_PLUGIN_API_VERSION 5
 
 /* Optional: return the API version the plugin was compiled against */
 typedef uint32_t (*NvrPluginGetApiVersion_fn)(void);

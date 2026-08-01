@@ -907,8 +907,8 @@ verify:
     # REGRESSION below the version where the capability channel (v3) and the args
     # channel (v4) landed — a deliberate bump updates this line, exactly as this
     # one did.
-    if ! grep -q 'NEVR_PLUGIN_API_VERSION 4' <<<"$N114_ABI"; then
-        echo "verify: FAIL — N114 NEVR_PLUGIN_API_VERSION is not 4; the capability (v3) + args (v4) channels must not regress below v4." >&2
+    if ! grep -q 'NEVR_PLUGIN_API_VERSION 5' <<<"$N114_ABI"; then
+        echo "verify: FAIL — N114 NEVR_PLUGIN_API_VERSION is not 5; the capability (v3) + args (v4) + query-API (v5) channels must not regress below v5." >&2
         exit 1
     fi
     # N134 S7: the host must resolve NvrPluginInitEx — the v4 per-plugin-args init
@@ -922,6 +922,17 @@ verify:
     fi
     if ! grep -q 'GetProcAddress(hPlugin, "NvrPluginInitEx")' <<<"$N114_LOADER"; then
         echo "verify: FAIL — N114 S7 the loader no longer resolves NvrPluginInitEx; a v4 plugin (InitEx + args_json) would fall through to Init (no args)." >&2
+        exit 1
+    fi
+    # N134 S8: ctx_size must be set at every NvrGameContext construction site.
+    # The field is how a v5+ plugin discovers the query API at runtime.
+    # Falsified: remove any ctx_size = sizeof(NvrGameContext) line.
+    if ! grep -q 'ctx_size = sizeof(NvrGameContext)' <<<"$N114_LOADER"; then
+        echo "verify: FAIL — N134 S8 ctx_size not set in LoadPlugins; a v5 plugin cannot discover the query API." >&2
+        exit 1
+    fi
+    if ! grep -q 'get_plugin_count = GetLoadedPluginCount' <<<"$N114_LOADER"; then
+        echo "verify: FAIL — N134 S8 get_plugin_count function pointer not filled in LoadPlugins." >&2
         exit 1
     fi
 
@@ -1053,7 +1064,7 @@ verify:
         echo "verify: FAIL — N84 HookGuard::Record missing from PatchDetour; new detours would be unguarded." >&2
         exit 1
     fi
-    if ! grep -q 'HookGuard::VerifyAll(filename)' src/runtime/ext/plugin_loader.cpp; then
+    if ! grep -qE 'HookGuard::VerifyAll\((filename|s\.item\.file\.c_str\(\))\)' src/runtime/ext/plugin_loader.cpp; then
         echo "verify: FAIL — N84 HookGuard::VerifyAll missing from the plugin load path; third-party re-hooks undetectable." >&2
         exit 1
     fi

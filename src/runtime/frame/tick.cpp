@@ -86,6 +86,9 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     gctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
     gctx.flags = g_isServer ? NEVR_HOST_IS_SERVER : NEVR_HOST_IS_CLIENT;
     if (g_isHeadless) gctx.flags |= NEVR_HOST_IS_HEADLESS;
+    gctx.ctx_size = sizeof(NvrGameContext);
+    gctx.get_plugin_count = GetLoadedPluginCount;
+    gctx.get_plugin_info = GetLoadedPluginInfo;
     TickPlugins(&gctx);
 
     NvrModuleContext mctx = {};

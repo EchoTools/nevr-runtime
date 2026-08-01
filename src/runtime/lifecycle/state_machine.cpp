@@ -44,6 +44,9 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     ctx.flags = NEVR_HOST_HAS_NETGAME;
     if (g_isServer) ctx.flags |= NEVR_HOST_IS_SERVER;
     else ctx.flags |= NEVR_HOST_IS_CLIENT;
+    ctx.ctx_size = sizeof(NvrGameContext);
+    ctx.get_plugin_count = GetLoadedPluginCount;
+    ctx.get_plugin_info = GetLoadedPluginInfo;
     NotifyPluginsStateChange(&ctx, s_prevState, static_cast<uint32_t>(state));
     {
       NvrModuleContext mctx = {};

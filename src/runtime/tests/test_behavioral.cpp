@@ -197,6 +197,9 @@ TEST_F(N68_PluginTickTest, OnFrame_Fires_When_Registered) {
   NvrGameContext ctx = {};
   ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
   ctx.flags = NEVR_HOST_IS_SERVER;
+  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.get_plugin_count = GetLoadedPluginCount;
+  ctx.get_plugin_info = GetLoadedPluginInfo;
   TickPlugins(&ctx);
   EXPECT_EQ(s_pluginFrameCount, 1);
   TickPlugins(&ctx);
@@ -218,6 +221,9 @@ TEST_F(N68_PluginTickTest, OnStateChange_Fires_When_Registered) {
   NvrGameContext ctx = {};
   ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
   ctx.flags = NEVR_HOST_IS_SERVER;
+  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.get_plugin_count = GetLoadedPluginCount;
+  ctx.get_plugin_info = GetLoadedPluginInfo;
   NotifyPluginsStateChange(&ctx, 3, 5);
   EXPECT_EQ(s_stateChangeCount, 1);
   EXPECT_EQ(s_stateChangeOld, 3u);
