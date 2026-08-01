@@ -164,7 +164,7 @@ substitute), so the whole `CSysDLL_Load`/`GetSymbol` injection dance is
 | PatchBypassOvrPlatform (`0x1580e5` JNE NOP) | skip OVR-platform init branch when DLL unavailable | branch inside `CR15Game` platform-decision (`PlatformModuleDecisionAndInitialize`) — needs decompilation for the arm64 branch | libr15 | partial |
 | PatchBlockOculusSDK (LoadLibraryW/ExW hook blocks `libovrplatform*`) | save RAM/CPU by blocking OVR SDK load | on Quest `libovrplatformloader.so` is a hard `DT_NEEDED` of libr15 — cannot simply be blocked; would stub the exports instead | libovrplatformloader | n/a (DIVERGENT strategy) |
 | LibOVRPlatform64_1 import (statically imported, replaced on Windows) | platform SDK entry points | `libovrplatformloader.so` exports **1 056 `ovr_*` functions** (`ovr_PlatformInitialize*`, `ovr_Message_*`, `ovr_AbuseReport_*`, achievements, …) | libovrplatformloader | yes |
-| LibOVRRT64 render loader (`FUN_141360790`, 73 `GetProcAddress`) — the leVR swapchain surface | HMD swapchain / `ovr_CreateTextureSwapChainDX` etc. | Quest is **native Vulkan** via `vrapi` (`libvrapi.so` bundled) + `CVR_VK::CreateRenderTarget`; the D3D→OpenXR bridge is Windows/Wine-only | libr15 / libvrapi | DIVERGENT — see `docs/2026-06-09-levr-porting-analysis.md` |
+| LibOVRRT64 render loader (`FUN_141360790`, 73 `GetProcAddress`) — the leVR swapchain surface | HMD swapchain / `ovr_CreateTextureSwapChainDX` etc. | Quest is **native Vulkan** via `vrapi` (`libvrapi.so` bundled) + `CVR_VK::CreateRenderTarget`; the D3D→OpenXR bridge is Windows/Wine-only | libr15 / libvrapi | DIVERGENT — see `../design/2026-06-09-levr-porting-analysis.md` |
 
 ## 7. XPID provider string patch (echovr.exe .rdata → libr15.so .rodata)
 
@@ -223,7 +223,7 @@ be ported. Priority order (highest = blocks the most of the hack set):
 | HandleDXError transient recovery (`0x140551070`; BUG#7) | D3D11/DXGI is Windows. Quest is Vulkan (`CVR_VK`, `CGTimerQueryPoolVK`, bundled VkLayers). A Vulkan device-lost analogue would be a *new* fix, not a port |
 | Headless graphics stubs (DXGI/D3D11 interception, `InstallHeadlessGraphicsHooks`) | same — Vulkan surface; the leVR bridge doc covers the render port separately |
 | PatchBlockOculusSDK (LoadLibraryW/ExW hook) | `libovrplatformloader.so` is a hard `DT_NEEDED`; you cannot block-load it. Would stub exports instead |
-| LibOVRRT64 D3D→OpenXR swapchain bridge (`FUN_141360790`) | Windows/Wine-only; Quest renders native Vulkan via `vrapi`. See `2026-06-09-levr-porting-analysis.md` |
+| LibOVRRT64 D3D→OpenXR swapchain bridge (`FUN_141360790`) | Windows/Wine-only; Quest renders native Vulkan via `vrapi`. See `../design/2026-06-09-levr-porting-analysis.md` |
 | CPrecisionSleep::Wait `WaitableTimer` rewrite (BUG#11/#12) | Windows kernel-timer specific; Android backing is nanosleep — the *bug* may not exist on arm64 |
 | CSysDLL_GetSymbol / CSysDLL_Load ServerLib injection | Quest server is `CR15NetServer` in-process; no external `pnsradgameserver.dll` to substitute, so no injection needed |
 | GetProcAddress `RadPluginShutdown` exit(0) guard | Windows FreeLibrary teardown crash; Quest `dlclose` teardown is a different (if analogous) concern |

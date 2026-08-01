@@ -20,7 +20,7 @@ reporter arms before the game and writes a real minidump on crash.
 
 The design rationale (why hijacking `libovrplatformloader.so` runs our constructor
 before any game code, and the forward-to-renamed-original mechanism) is in
-`docs/2026-07-13-quest-crash-reporter-injection.md`. This runbook is the how-to.
+`../design/2026-07-13-quest-crash-reporter-injection.md`. This runbook is the how-to.
 
 ---
 
