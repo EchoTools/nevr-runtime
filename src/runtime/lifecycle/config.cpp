@@ -1,6 +1,7 @@
 #include "runtime/lifecycle/config.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/cli.h"
+#include "runtime/lifecycle/service_config.h"  // N133 S3: NEVR keys now come from config.yaml
 #include "runtime/ext/module_loader.h"
 #include "core/globals.h"
 #include "core/logging.h"
@@ -128,22 +129,26 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
   using namespace PatchAddresses;
   g_localConfig = reinterpret_cast<EchoVR::Json*>(static_cast<CHAR*>(pGame) + GAME_LOCAL_CONFIG_OFFSET);
 
-  // Configure Asset CDN URL from config.json if specified
+  // NEVR config keys now come from config.yaml (N133 S3), not the game JSON. The
+  // game's OWN config load above (into g_localConfig) is untouched, and the
+  // JsonValueAsStringHook wildcard below still forwards any game key to the early
+  // JSON — only OUR keys moved. g_localConfig stays the "game config struct
+  // present" gate it always was (a pGame-offset pointer, ~always non-null here).
   if (g_localConfig != NULL) {
-    CHAR* customCdnUrl = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"asset_cdn_url", NULL, false);
+    const CHAR* customCdnUrl = NevrCfgGetFlat("asset_cdn_url");
     if (customCdnUrl != NULL && customCdnUrl[0] != '\0') {
-      // AssetCDN::SetCustomCdnUrl(customCdnUrl);
-      // Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Asset CDN URL set from config: %s", customCdnUrl);
+      // AssetCDN::SetCustomCdnUrl(customCdnUrl);  // still inert — the use was
+      // commented out long before the cutover; only the READ moved to config.yaml.
     }
 
     // exitonerror
-    CHAR* exitOnErrorVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"exitonerror", NULL, false);
+    const CHAR* exitOnErrorVal = NevrCfgGetFlat("exitonerror");
     if (exitOnErrorVal != NULL && (strcmp(exitOnErrorVal, "true") == 0 || strcmp(exitOnErrorVal, "1") == 0)) {
       g_exitOnError = TRUE;
     }
 
     // upnp
-    CHAR* upnpVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"upnp", NULL, false);
+    const CHAR* upnpVal = NevrCfgGetFlat("upnp");
     if (upnpVal != NULL && (strcmp(upnpVal, "true") == 0 || strcmp(upnpVal, "1") == 0)) {
       g_upnpEnabled = TRUE;
     }
@@ -156,37 +161,36 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
         upnpVal ? upnpVal : "<absent>", g_upnpEnabled ? 1 : 0);
 
     // upnp_port (external port override)
-    CHAR* upnpPortVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"upnp_port", NULL, false);
+    const CHAR* upnpPortVal = NevrCfgGetFlat("upnp_port");
     if (upnpPortVal != NULL && upnpPortVal[0] != '\0') {
       UINT32 port = strtoul(upnpPortVal, nullptr, 10);
       if (port > 0 && port <= 65535) g_upnpPort = (UINT16)port;
     }
 
     // internal_ip override
-    CHAR* internalIpVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"internal_ip", NULL, false);
+    const CHAR* internalIpVal = NevrCfgGetFlat("internal_ip");
     if (internalIpVal != NULL && internalIpVal[0] != '\0') {
       strncpy(g_internalIpOverride, internalIpVal, sizeof(g_internalIpOverride) - 1);
     }
 
     // external_ip override
-    CHAR* externalIpVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"external_ip", NULL, false);
+    const CHAR* externalIpVal = NevrCfgGetFlat("external_ip");
     if (externalIpVal != NULL && externalIpVal[0] != '\0') {
       strncpy(g_externalIpOverride, externalIpVal, sizeof(g_externalIpOverride) - 1);
     }
 
     // Arena rule overrides (float values, 0 = use game default)
-    CHAR* arenaRoundTimeVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"arena_round_time", NULL, false);
+    const CHAR* arenaRoundTimeVal = NevrCfgGetFlat("arena_round_time");
     if (arenaRoundTimeVal != NULL && arenaRoundTimeVal[0] != '\0') {
       g_arenaRoundTime = (FLOAT)atof(arenaRoundTimeVal);
       Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Arena round time override: %.0f seconds", g_arenaRoundTime);
     }
-    CHAR* arenaCelebrationVal =
-        EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"arena_celebration_time", NULL, false);
+    const CHAR* arenaCelebrationVal = NevrCfgGetFlat("arena_celebration_time");
     if (arenaCelebrationVal != NULL && arenaCelebrationVal[0] != '\0') {
       g_arenaCelebrationTime = (FLOAT)atof(arenaCelebrationVal);
       Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Arena celebration time override: %.1f seconds", g_arenaCelebrationTime);
     }
-    CHAR* arenaMercyVal = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"arena_mercy_score", NULL, false);
+    const CHAR* arenaMercyVal = NevrCfgGetFlat("arena_mercy_score");
     if (arenaMercyVal != NULL && arenaMercyVal[0] != '\0') {
       g_arenaMercyScore = (FLOAT)atof(arenaMercyVal);
       Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Arena mercy score override: %.0f", g_arenaMercyScore);
@@ -232,27 +236,23 @@ FLOAT CJsonGetFloatHook(PVOID root, const CHAR* path, FLOAT defaultValue, INT32 
 /// <param name="defaultUrl">The default URL if no config override is found</param>
 /// <returns>The resolved service URL</returns>
 static CHAR* GetServiceHostWithFallback(const CHAR* serviceKey, const CHAR* defaultUrl) {
-  // Use game config if available, fall back to early-loaded config
-  EchoVR::Json* config = g_localConfig ? g_localConfig : g_earlyConfigPtr;
-  if (config == NULL) return (CHAR*)defaultUrl;
-
-  // Try primary service key first
-  CHAR* host = EchoVR::JsonValueAsString(config, (CHAR*)serviceKey, NULL, false);
-  if (host != NULL && host[0] != '\0') {
+  // N133 S3: the service host + loginservice_host fallback now resolve from
+  // config.yaml (nevr_cfg::ResolveServiceHost). Behaviour is unchanged — the same
+  // primary -> loginservice_host -> default chain and the same three log lines —
+  // and, load-bearing for HttpConnectHook's `uri == originalUri` identity check,
+  // the EXACT defaultUrl pointer is returned when neither key is configured.
+  int source = 2;  // 0 primary, 1 loginservice_host fallback, 2 none (use default)
+  const char* host = NevrCfgServiceHost(serviceKey, &source);
+  if (source == 0) {
     Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service override [%s]: %s", serviceKey, host);
-    return host;
+    return const_cast<CHAR*>(host);
   }
-
-  // Fallback to loginservice_host if primary key not found
-  host = EchoVR::JsonValueAsString(config, (CHAR*)"loginservice_host", NULL, false);
-  if (host != NULL && host[0] != '\0') {
+  if (source == 1) {
     Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service fallback [%s → loginservice_host]: %s", serviceKey, host);
-    return host;
+    return const_cast<CHAR*>(host);
   }
-
-  // Return default URL
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service default [%s]: %s", serviceKey, defaultUrl);
-  return (CHAR*)defaultUrl;
+  return const_cast<CHAR*>(defaultUrl);
 }
 
 /// <summary>
@@ -267,16 +267,15 @@ static CHAR* AutoRelayThroughBridge(const CHAR* serviceKey, CHAR* url) {
   extern uint16_t GetWebSocketBridgePort();
 
   if (!IsWebSocketBridgeActive()) return url;
-  if (g_earlyConfigPtr == NULL) return url;
 
-  CHAR* target = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_socket_uri", NULL, false);
-  if (target == NULL || target[0] == '\0') return url;
-
-  thread_local CHAR relayUrl[512];
-  snprintf(relayUrl, sizeof(relayUrl), "ws://127.0.0.1:%u", GetWebSocketBridgePort());
+  // N133 S3: nevr_socket_uri now comes from config.yaml. NevrCfgAutoRelay returns
+  // the interned ws://127.0.0.1:<port> relay when socket_uri is configured, else
+  // null (the old early-JSON presence check + thread_local buffer, migrated).
+  const char* relayUrl = NevrCfgAutoRelay(GetWebSocketBridgePort());
+  if (relayUrl == NULL) return url;
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Auto-relay [%s] through bridge: %s → %s", serviceKey, url, relayUrl);
-  return relayUrl;
+  return const_cast<CHAR*>(relayUrl);
 }
 
 /// <summary>
@@ -299,9 +298,12 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
     // API Service (https://api.*)
     if (!strncmp(uri, "https://api.", 12)) {
       uri = GetServiceHostWithFallback("apiservice_host", uri);
-      // Legacy compatibility: also try "api_host"
+      // Legacy compatibility: also try "api_host" (N133 S3: from config.yaml).
+      // Present -> use it (JsonValueAsString returned the value); absent -> uri
+      // stays the game default, exactly as the old default=uri argument did.
       if (uri == originalUri) {
-        uri = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"api_host", uri, false);
+        const char* apiHost = NevrCfgGetFlat("api_host");
+        if (apiHost != NULL) uri = const_cast<CHAR*>(apiHost);
       }
     }
     // Config Service - detect config-related URLs
@@ -326,11 +328,14 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
         uri = AutoRelayThroughBridge("serverdb_host", uri);
       }
     }
-    // Oculus Graph API
+    // Oculus Graph API (N133 S3: graph_host / graphservice_host from config.yaml).
+    // Present -> use the value; absent -> uri stays the game default (old default=uri).
     else if (!strncmp(uri, "https://graph.oculus.com", 24)) {
-      uri = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"graph_host", uri, false);
+      const char* graphHost = NevrCfgGetFlat("graph_host");
+      if (graphHost != NULL) uri = const_cast<CHAR*>(graphHost);
       if (uri == originalUri) {
-        uri = EchoVR::JsonValueAsString(g_localConfig, (CHAR*)"graphservice_host", uri, false);
+        const char* graphSvc = NevrCfgGetFlat("graphservice_host");
+        if (graphSvc != NULL) uri = const_cast<CHAR*>(graphSvc);
       }
     }
 
@@ -363,41 +368,19 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
   if (result == NULL || keyName == NULL) return result;
   if (g_earlyConfigPtr == NULL) return result;
 
-  bool isWebSocket = (strstr(result, "wss://") == result || strstr(result, "ws://") == result);
-  bool isReadyAtDawn = (strstr(result, "readyatdawn.com") != NULL);
-
-  // Redirect all WebSocket URLs through the bridge, not just readyatdawn.com ones.
-  // The server's config response may overwrite service hosts with non-RaD URLs
-  // (e.g. echovrce.com), and those need bridge routing too — the game's native
-  // Schannel/Wine GnuTLS WebSocket can't handle modern TLS.
-  // For https:// URLs, only redirect known-dead readyatdawn.com endpoints.
-  if (!isWebSocket && !isReadyAtDawn) return result;
-
-  // Select the right config key based on scheme
-  const CHAR* configKey;
-  if (isWebSocket) {
-    configKey = "nevr_socket_uri";
-  } else {
-    configKey = "nevr_http_uri";
-  }
-
-  CHAR* target = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)configKey, NULL, false);
-  if (target == NULL || target[0] == '\0') return result;
-
-  thread_local static CHAR redirected[512];
-
-  // N92: the bridge is compiled into this DLL — direct calls, no module lookup.
-  // It used to live in modules/ws_bridge.dll and be resolved with
-  // ResolveModuleProc; that indirection is what let a second, divergent copy of
-  // the bridge exist in this tree while nothing noticed which one ran.
-  if (IsWebSocketBridgeActive() && isWebSocket) {
-    snprintf(redirected, sizeof(redirected), "ws://127.0.0.1:%u", GetWebSocketBridgePort());
-  } else {
-    snprintf(redirected, sizeof(redirected), "%s", target);
-  }
+  // N133 S3: the ws/wss redirect target (nevr_socket_uri) now resolves from
+  // config.yaml inside NevrCfgRedirect. The https target (nevr_http_uri) is NOT
+  // migrated in S3 — it is S4/S5's key — so it is still read from the early game
+  // JSON here and passed through. NevrCfgRedirect runs the identical scheme
+  // detection + bridge rewrite (ws/wss any-host or https readyatdawn.com only;
+  // bridge-active ws -> ws://127.0.0.1:<port>; https never hits the bridge).
+  CHAR* httpTarget = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_http_uri", NULL, false);
+  const char* redirected =
+      NevrCfgRedirect(result, httpTarget, IsWebSocketBridgeActive() ? 1 : 0, GetWebSocketBridgePort());
+  if (redirected == NULL) return result;
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Service redirect [%s]: %s -> %s", keyName, result, redirected);
-  return redirected;
+  return const_cast<CHAR*>(redirected);
 }
 
 CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValue, BOOL reportFailure) {

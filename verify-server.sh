@@ -129,6 +129,11 @@ ls -t "$REPO/echovr/bin/win10/logs/"*.jsonl 2>/dev/null | head -1 > "$OUT/jsonl_
   echo "bridges listening   = $(grep -c 'Proxy listening on' "$LOG")"
   echo "login injections    = $(grep -c 'login injected' "$LOG")"
   echo "graceful shutdown   = $(grep -c 'Graceful shutdown initiated' "$LOG")"
+  # Service-endpoint redirect/resolution lines (N133 config-cutover verification).
+  # The bridge port is random per run (N39), so a baseline-vs-post diff must
+  # normalise ws://127.0.0.1:<port> before comparing.
+  echo "service redirects   = $(grep -c 'Service redirect' "$LOG")"
+  echo "http redirects      = $(grep -c 'HTTP(S) connection redirected' "$LOG")"
   echo "engine flags lines  = $(grep -c 'engine flags' "$LOG")"
   grep 'engine flags' "$LOG" || true
   echo "log                 = $LOG"

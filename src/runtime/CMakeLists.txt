@@ -10,6 +10,8 @@ set(PATCHES_SOURCES
     "lifecycle/cli.cpp"
     "lifecycle/boot.cpp"
     "lifecycle/config.cpp"
+    "lifecycle/service_map.cpp"
+    "lifecycle/service_config.cpp"
     "patch/mode_patches.cpp"
     "lifecycle/crash_recovery.cpp"
     "hook/hook_guard.cpp"
@@ -45,6 +47,8 @@ set(PATCHES_HEADERS
     "lifecycle/cli.h"
     "lifecycle/boot.h"
     "lifecycle/config.h"
+    "lifecycle/service_map.h"
+    "lifecycle/service_config.h"
     "patch/mode_patches.h"
     "lifecycle/crash_recovery.h"
     "patch/resource_override.h"
@@ -110,6 +114,11 @@ target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
 set_source_files_properties(ws_bridge.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
+# test can link it) and service_config.cpp (defines NOMINMAX before windows.h, as
+# the core PCH pulls windows.h WITHOUT NOMINMAX and its min/max macros break
+# <optional>/<set>). Same reason nevr_config.cpp skips the PCH.
+set_source_files_properties(lifecycle/service_map.cpp lifecycle/service_config.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(server/websocket_client.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 set_target_properties(nevr_runtime PROPERTIES
@@ -201,6 +210,22 @@ if(BUILD_TESTING)
     target_link_libraries(test_nevr_config PRIVATE
       GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp)
     gtest_discover_tests(test_nevr_config DISCOVERY_MODE PRE_TEST)
+
+    # service_map behaviour-equivalence tests (N133 S3) — the PURE resolution core
+    # of the config.cpp cutover (flat->path map, service-host fallback, scheme
+    # redirect). Compiles service_map.cpp directly (the same TU nevr_runtime links)
+    # + nevr_core (nevr_config) + yaml-cpp. No game stubs: service_map.cpp has no
+    # windows/Log/extern dependencies. The impure half (service_config.cpp) is NOT
+    # linked here — it is exercised by the differential server run.
+    add_executable(test_service_map
+      tests/test_service_map.cpp
+      lifecycle/service_map.cpp)
+    set_source_files_properties(tests/test_service_map.cpp lifecycle/service_map.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_service_map PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_service_map PRIVATE
+      GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp)
+    gtest_discover_tests(test_service_map DISCOVERY_MODE PRE_TEST)
 
     # Behavioral tests — N68 (plugin/module tick dispatch) + N61 (callback
     # lifecycle). Links plugin_loader.cpp, module_loader.cpp, and ws_bridge.cpp
