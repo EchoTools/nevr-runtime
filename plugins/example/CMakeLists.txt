@@ -24,4 +24,5 @@ endif()
 set_target_properties(nevr_example PROPERTIES
     OUTPUT_NAME "nevr_example"
     PREFIX ""
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/plugins"
 )

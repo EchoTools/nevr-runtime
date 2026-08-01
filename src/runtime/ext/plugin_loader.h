@@ -23,6 +23,29 @@ void NotifyPluginsStateChange(const NvrGameContext* ctx, uint32_t old_state, uin
 int  GetLoadedPluginCount(void);
 const NvrLoadedPluginInfo* GetLoadedPluginInfo(int index);
 
+// N134 S8: caps-based load-order priority. Lower loads first. This is the
+// sort key consumed by the loader's stable_sort in LoadPlugins. Defined
+// inline so both the loader and the test share one truth.
+inline constexpr int CapsLoadPriority(uint32_t caps) {
+  if (caps == NEVR_PLUGIN_CAP_UNDECLARED) return 0;
+  // Bands, lowest-first:
+  //   0: UNDECLARED (unknown risk — load earliest, let declared plugins land
+  //      on top where HookGuard catches collisions)
+  //   1: OBSERVES_ONLY (reads state, never writes)
+  //   2: COSMETIC (visuals/audio only)
+  //   3: ALTERS_GAMEPLAY (physics, weapons, movement)
+  //   4: ALTERS_RULES (rules, scoring, game mode itself)
+  //   5: NETWORK (external sockets)
+  //   6: HOOKS_ENGINE (own detours — load LAST)
+  if (caps & NEVR_PLUGIN_CAP_HOOKS_ENGINE)     return 6;
+  if (caps & NEVR_PLUGIN_CAP_ALTERS_RULES)     return 4;
+  if (caps & NEVR_PLUGIN_CAP_NETWORK)          return 5;
+  if (caps & NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY)  return 3;
+  if (caps & NEVR_PLUGIN_CAP_COSMETIC)         return 2;
+  if (caps & NEVR_PLUGIN_CAP_OBSERVES_ONLY)    return 1;
+  return 0;
+}
+
 // ============================================================================
 // Test hooks — enabled only when NEVR_TEST_HOOKS is defined.
 // Allow unit tests to inject mock callbacks into the plugin registry

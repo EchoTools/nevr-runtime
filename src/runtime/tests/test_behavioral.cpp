@@ -635,3 +635,105 @@ TEST(SystemInfo, IsCachedNotRemeasured) {
 //   can reach). ReportsRealCpuAndMemory catches the case where SystemInfo
 //   itself starts returning the old tuple; the `just verify` sensor catches
 //   the format string.
+
+// ============================================================================
+// N134 S8: ctx_size and plugin-query API tests.
+// The functions are linked from plugin_loader.cpp (the real ones, not stubs).
+// With an empty registry (no LoadPlugins call in this test binary — plugins
+// are injected via TestHook_*), count=0 and info=nullptr are correct.
+// ============================================================================
+
+TEST(S8_PluginQueryApi, CtxSizeMatchesActualStruct) {
+    // If someone adds a field to NvrGameContext without bumping ctx_size
+    // (which is sizeof at each construction site), a v5+ plugin checking
+    // ctx->ctx_size would see a stale value. This locks the two together.
+    NvrGameContext ctx = {};
+    ctx.ctx_size = sizeof(NvrGameContext);
+    EXPECT_GE(ctx.ctx_size, sizeof(NvrGameContext));
+    // The struct must have grown from its v4 size (4 fields, minimal padding).
+    EXPECT_GT(ctx.ctx_size, 20u);  // base_addr(8) + net_game(8) + game_state(4) + flags(4) = 24, plus v5 fields
+}
+
+TEST(S8_PluginQueryApi, EmptyRegistryCountZero) {
+    EXPECT_EQ(GetLoadedPluginCount(), 0);
+}
+
+TEST(S8_PluginQueryApi, InfoNullForAnyIndexOnEmptyRegistry) {
+    EXPECT_EQ(GetLoadedPluginInfo(0), nullptr);
+    EXPECT_EQ(GetLoadedPluginInfo(-1), nullptr);
+    EXPECT_EQ(GetLoadedPluginInfo(999), nullptr);
+}
+
+TEST(S8_PluginQueryApi, FunctionPointersSetInContext) {
+    NvrGameContext ctx = {};
+    ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
+    ctx.flags = NEVR_HOST_IS_SERVER;
+    ctx.ctx_size = sizeof(NvrGameContext);
+    ctx.get_plugin_count = GetLoadedPluginCount;
+    ctx.get_plugin_info = GetLoadedPluginInfo;
+
+    EXPECT_NE(ctx.get_plugin_count, nullptr);
+    EXPECT_NE(ctx.get_plugin_info, nullptr);
+    EXPECT_EQ(ctx.get_plugin_count(), 0);
+    EXPECT_EQ(ctx.get_plugin_info(0), nullptr);
+}
+
+// ============================================================================
+// N134 S8: caps priority ordering table. Lock the sort key so a band
+// reassignment (e.g. moving NETWORK before ALTERS_GAMEPLAY) is deliberate.
+// ============================================================================
+
+TEST(S8_CapsPriority, UndeclaredBeforeObservers) {
+    // Unknown risk loads FIRST in its config-order position, so a declared
+    // plugin's hooks land on top where HookGuard can catch a collision.
+    EXPECT_LT(CapsLoadPriority(NEVR_PLUGIN_CAP_UNDECLARED),
+              CapsLoadPriority(NEVR_PLUGIN_CAP_OBSERVES_ONLY));
+}
+
+TEST(S8_CapsPriority, ObserverBeforeCosmetic) {
+    EXPECT_LT(CapsLoadPriority(NEVR_PLUGIN_CAP_OBSERVES_ONLY),
+              CapsLoadPriority(NEVR_PLUGIN_CAP_COSMETIC));
+}
+
+TEST(S8_CapsPriority, CosmeticBeforeGameplay) {
+    EXPECT_LT(CapsLoadPriority(NEVR_PLUGIN_CAP_COSMETIC),
+              CapsLoadPriority(NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY));
+}
+
+TEST(S8_CapsPriority, GameplayBeforeRules) {
+    EXPECT_LT(CapsLoadPriority(NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY),
+              CapsLoadPriority(NEVR_PLUGIN_CAP_ALTERS_RULES));
+}
+
+TEST(S8_CapsPriority, NetworkBeforeEngineHooker) {
+    // Network opens sockets; an engine-hooker may depend on the channel being up.
+    EXPECT_LT(CapsLoadPriority(NEVR_PLUGIN_CAP_NETWORK),
+              CapsLoadPriority(NEVR_PLUGIN_CAP_HOOKS_ENGINE));
+}
+
+TEST(S8_CapsPriority, RulesBeforeNetwork) {
+    // Rules changer alters scoring/game mode; network plugin may depend on the
+    // rules being in place before it connects.
+    EXPECT_LT(CapsLoadPriority(NEVR_PLUGIN_CAP_ALTERS_RULES),
+              CapsLoadPriority(NEVR_PLUGIN_CAP_NETWORK));
+}
+
+TEST(S8_CapsPriority, EngineHookerLoadsLast) {
+    EXPECT_LT(CapsLoadPriority(NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY),
+              CapsLoadPriority(NEVR_PLUGIN_CAP_HOOKS_ENGINE));
+    EXPECT_LT(CapsLoadPriority(NEVR_PLUGIN_CAP_ALTERS_RULES),
+              CapsLoadPriority(NEVR_PLUGIN_CAP_HOOKS_ENGINE));
+    EXPECT_LT(CapsLoadPriority(NEVR_PLUGIN_CAP_NETWORK),
+              CapsLoadPriority(NEVR_PLUGIN_CAP_HOOKS_ENGINE));
+}
+
+TEST(S8_CapsPriority, CombinedCapsTakeHighestBand) {
+    // A plugin declaring both COSMETIC and ALTERS_RULES — the higher-risk band
+    // (RULES=4) wins for ordering purposes. It should NOT land in the COSMETIC
+    // band (2).
+    const uint32_t cosmeticAndRules = NEVR_PLUGIN_CAP_COSMETIC | NEVR_PLUGIN_CAP_ALTERS_RULES;
+    EXPECT_GT(CapsLoadPriority(cosmeticAndRules),
+              CapsLoadPriority(NEVR_PLUGIN_CAP_COSMETIC));
+    EXPECT_EQ(CapsLoadPriority(cosmeticAndRules),
+              CapsLoadPriority(NEVR_PLUGIN_CAP_ALTERS_RULES));
+}

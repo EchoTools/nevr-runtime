@@ -46,32 +46,6 @@ const NvrLoadedPluginInfo* GetLoadedPluginInfo(int index) {
   return reinterpret_cast<const NvrLoadedPluginInfo*>(&p.info);
 }
 
-// N134 S8: caps-based load-order priority. Within a priority band the config
-// order is preserved. The bands are risk-ordered: observers before modifiers,
-// modifiers before engine-hookers. UNDECLARED (0x00) sorts HIGHEST (unknown
-// risk → load first, so a declared-altering plugin's hooks land on top).
-static constexpr int CapsLoadPriority(uint32_t caps) {
-  // Undeclared is the unknown — load it first in its config-order position.
-  if (caps == NEVR_PLUGIN_CAP_UNDECLARED) return 0;
-  // Observed priority bands, high-to-low:
-  //   0: UNDECLARED (unknown risk — load earliest so a declared plugin's hooks
-  //      land on top, where HookGuard can catch a collision)
-  //   1: OBSERVES_ONLY    (reads state, never writes)
-  //   2: COSMETIC          (visuals/audio only)
-  //   3: ALTERS_GAMEPLAY   (physics, weapons, movement)
-  //   4: ALTERS_RULES      (rules, scoring, game mode itself)
-  //   5: NETWORK           (external sockets — load BEFORE engine hookers, as
-  //      engine hooker may depend on the network channel being up)
-  //   6: HOOKS_ENGINE      (own detours — load LAST so every other plugin's
-  //      hooks are installed first; N84 collision lands on this one)
-  if (caps & NEVR_PLUGIN_CAP_HOOKS_ENGINE)     return 6;
-  if (caps & NEVR_PLUGIN_CAP_ALTERS_RULES)     return 4;
-  if (caps & NEVR_PLUGIN_CAP_NETWORK)          return 5;
-  if (caps & NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY)  return 3;
-  if (caps & NEVR_PLUGIN_CAP_COSMETIC)         return 2;
-  if (caps & NEVR_PLUGIN_CAP_OBSERVES_ONLY)    return 1;
-  return 0;  // unrecognised bits — treat as undeclared
-}
 
 // N134 S6: required-aware load failure. A plugin the config declared
 // `required: true` that fails to load or init is FATAL on a dedicated server

@@ -95,7 +95,9 @@ M05@@module@@Wine _temp directory fix@@createdir=ok@@Failed to install CreateDir
 M06@@module@@Module loaded: token_auth@@token_auth initialized@@Failed to load token_auth
 P01@@plugin@@Plugin directory scanned or list read@@\[NEVR\.PLUGIN\] (Scanning for plugins in:|[0-9]+ plugin\(s\) configured; loading in list order)@@
 P02@@plugin@@At least one plugin in the load plan@@(Found [1-9][0-9]* plugin candidate|[0-9]+ plugin\(s\) configured)|[1-9][0-9]* plugin\(s\) loaded@@(No plugins directory or no plugins found|no plugins configured in config\.yaml)
-P03@@plugin@@Plugin loaded at API v4 with capabilities@@\[NEVR\.PLUGIN\] Loaded: .*\(API v[0-9]+\) caps=0x@@init failed with code
+P03@@plugin@@Plugin loaded at API v5 with capabilities@@\[NEVR\.PLUGIN\] Loaded: .*\(API v[0-9]+\) caps=0x@@init failed with code
+P06@@plugin@@Caps priority computed per plugin@@\[NEVR\.PLUGIN\] \[[0-9]+/[0-9]+\] .*\(priority=[0-9]+\)@@
+P07@@plugin@@Plugin discovered host v5 query API@@initex: host v5\+@@
 P04@@plugin@@Plugin received host context@@init: base=0x[0-9a-f]+ flags=0x@@init: context is null
 P05@@plugin@@Superseded log_filter.dll refused (N89)@@SKIPPED .* superseded by the built-in log filter@@
 S01@@server@@Server mode applied@@Server mode . headless \+ noovr applied@@
