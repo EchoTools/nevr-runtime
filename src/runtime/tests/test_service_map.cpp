@@ -10,6 +10,7 @@
 // Pure: links service_map.cpp + nevr_core + yaml-cpp, no game stubs. Built under
 // -DBUILD_TESTING=ON and run under Wine by `just test-auth-unit` (`just verify`).
 
+#include <cstdlib>
 #include <optional>
 #include <string>
 
@@ -23,8 +24,14 @@ namespace {
 using nevr_cfg::FlatKeyToYamlPath;
 using nevr_cfg::HostSource;
 using nevr_cfg::LookupFlat;
+using nevr_cfg::LookupFlatCsv;
 using nevr_cfg::ResolveRedirect;
 using nevr_cfg::ResolveServiceHost;
+
+// nevr_config treats an empty env value as unset (never send an empty secret,
+// N115), so "" is the unset case — mirrors test_nevr_config.
+void SetEnv(const char* name, const char* value) { _putenv_s(name, value); }
+void UnsetEnv(const char* name) { _putenv_s(name, ""); }
 
 // Every migrated NEVR key present, at the value config.json used to carry (the
 // two ws hosts) plus representative values for the rest. Mirrors the on-disk
@@ -71,32 +78,41 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
   EXPECT_EQ(FlatKeyToYamlPath("graph_host"), "services.graph");
   EXPECT_EQ(FlatKeyToYamlPath("graphservice_host"), "services.graph_service");
   EXPECT_EQ(FlatKeyToYamlPath("nevr_socket_uri"), "services.socket_uri");
-  // identity / auth (S4a — ws_bridge login injection)
+  // identity / auth (S4a — ws_bridge login injection; S4b — gameserver auth POST)
   EXPECT_EQ(FlatKeyToYamlPath("nevr_discord_id"), "identity.discord_id");
   EXPECT_EQ(FlatKeyToYamlPath("nevr_password"), "auth.password");
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_http_uri"), "auth.http_uri");
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_http_key"), "auth.http_key");
   // network
   EXPECT_EQ(FlatKeyToYamlPath("external_ip"), "network.external_ip");
   EXPECT_EQ(FlatKeyToYamlPath("internal_ip"), "network.internal_ip");
   EXPECT_EQ(FlatKeyToYamlPath("upnp"), "network.upnp");
   EXPECT_EQ(FlatKeyToYamlPath("upnp_port"), "network.upnp_port");
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_regions"), "network.regions");  // S4b schema-gap home
   // assets / arena / misc
   EXPECT_EQ(FlatKeyToYamlPath("asset_cdn_url"), "assets.cdn_url");
   EXPECT_EQ(FlatKeyToYamlPath("arena_round_time"), "arena.round_time");
   EXPECT_EQ(FlatKeyToYamlPath("arena_celebration_time"), "arena.celebration_time");
   EXPECT_EQ(FlatKeyToYamlPath("arena_mercy_score"), "arena.mercy_score");
   EXPECT_EQ(FlatKeyToYamlPath("exitonerror"), "x-exitonerror");
+  // S4b — gameserver ServerDB dial URI, telemetry, guilds.
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_serverdb_uri"), "services.serverdb_uri");
+  EXPECT_EQ(FlatKeyToYamlPath("telemetry_uri"), "telemetry.uri");
+  EXPECT_EQ(FlatKeyToYamlPath("telemetry_token"), "telemetry.token");
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_guilds"), "guilds");
+  // serverdb_host (S3, the redirect HOST) and nevr_serverdb_uri (S4b, the dial
+  // URI) are DISTINCT paths — the cutover must never collapse them together.
+  EXPECT_EQ(FlatKeyToYamlPath("serverdb_host"), "services.serverdb");
+  EXPECT_NE(FlatKeyToYamlPath("serverdb_host"), FlatKeyToYamlPath("nevr_serverdb_uri"));
 }
 
 TEST(ServiceMap, FlatKeyToYamlPath_UnmigratedKeysAreEmpty) {
-  // nevr_http_uri is deliberately NOT migrated in S4a (gameserver.cpp / S4b + S5
-  // own it): the https branch of RedirectServiceUrl and the auth POST must keep
-  // reading the game JSON until then.
-  EXPECT_EQ(FlatKeyToYamlPath("nevr_http_uri"), "");
-  // S4b/S5 keys and anything unknown are not this step's business. (nevr_discord_id
-  // and nevr_password moved to the migrated set above in S4a.)
-  EXPECT_EQ(FlatKeyToYamlPath("nevr_serverdb_uri"), "");
-  EXPECT_EQ(FlatKeyToYamlPath("telemetry_uri"), "");
-  EXPECT_EQ(FlatKeyToYamlPath("telemetry_token"), "");
+  // Keys no consumer reads through the flat map: nevr_server_key and
+  // publisher_lock are read elsewhere (or not at all); anything unknown is empty.
+  // (nevr_http_uri, nevr_serverdb_uri, telemetry_uri/token moved to the migrated
+  // set above in S4b; nevr_discord_id/nevr_password moved in S4a.)
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_server_key"), "");
+  EXPECT_EQ(FlatKeyToYamlPath("publisher_lock"), "");
   EXPECT_EQ(FlatKeyToYamlPath("bogus_key"), "");
   EXPECT_EQ(FlatKeyToYamlPath(""), "");
 }
@@ -115,8 +131,8 @@ TEST(ServiceMap, LookupFlat_PresentKeysResolve) {
   EXPECT_EQ(LookupFlat(cfg, "upnp_port").value_or(""), "6789");
   EXPECT_EQ(LookupFlat(cfg, "arena_round_time").value_or(""), "240");
   EXPECT_EQ(LookupFlat(cfg, "exitonerror").value_or(""), "true");
-  // Unmigrated key -> nullopt regardless of the config content.
-  EXPECT_FALSE(LookupFlat(cfg, "nevr_http_uri").has_value());
+  // Unmapped key -> nullopt regardless of the config content.
+  EXPECT_FALSE(LookupFlat(cfg, "nevr_server_key").has_value());
 }
 
 TEST(ServiceMap, LookupFlat_AbsentKeyIsNullopt) {
@@ -244,6 +260,103 @@ TEST(ServiceMap, ResolveRedirect_NoTargetLeavesUnchanged) {
   EXPECT_FALSE(ResolveRedirect("wss://login.readyatdawn.com/x", std::optional<std::string>(""),
                                std::nullopt, false, 0)
                    .has_value());
+}
+
+// ---------------------------------------------------------------------------
+// S4b — gameserver.cpp reads. The scalar auth/services/telemetry keys resolve
+// through the same flat->path map that config.cpp/ws_bridge use.
+// ---------------------------------------------------------------------------
+TEST(ServiceMap, LookupFlat_S4bGameserverScalarKeysResolve) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  serverdb_uri: \"ws://g.example:80/nevr\"\n"
+      "auth:\n  http_uri: \"https://g.example:7350\"\n  http_key: \"key-123\"\n"
+      "telemetry:\n  uri: \"wss://stream.example/ws\"\n");
+  EXPECT_EQ(LookupFlat(cfg, "nevr_serverdb_uri").value_or(""), "ws://g.example:80/nevr");
+  EXPECT_EQ(LookupFlat(cfg, "nevr_http_uri").value_or(""), "https://g.example:7350");
+  EXPECT_EQ(LookupFlat(cfg, "nevr_http_key").value_or(""), "key-123");
+  EXPECT_EQ(LookupFlat(cfg, "telemetry_uri").value_or(""), "wss://stream.example/ws");
+  // telemetry.token absent here -> nullopt (optional; gameserver falls back to
+  // the ServerDB auth token, never fatal).
+  EXPECT_FALSE(LookupFlat(cfg, "telemetry_token").has_value());
+}
+
+TEST(ServiceMap, LookupFlat_S4bAbsentGameserverKeysAreNullopt) {
+  // Absent -> nullopt -> gameserver keeps its today-default (no auth / construct
+  // the dial URI / telemetry disabled). HARD RISK #2: no default drift.
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString("version: \"1\"\n");
+  for (const char* key : {"nevr_serverdb_uri", "nevr_http_uri", "nevr_http_key",
+                          "telemetry_uri", "telemetry_token"}) {
+    EXPECT_FALSE(LookupFlat(cfg, key).has_value()) << key;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// S4b — guilds/regions are LIST-shaped registration metadata. LookupFlatCsv must
+// preserve the CSV shape gameserver builds into guilds=/regions= URL params: a
+// yaml list joins with commas, a scalar CSV passes through as one element, and an
+// absent key is nullopt (so no URL param is appended — config.json carried no
+// regions, and that absence must survive the cutover). Short fake ids: an 18-20
+// digit literal in src/ trips the N20 identity-literal sensor.
+// ---------------------------------------------------------------------------
+TEST(ServiceMap, LookupFlatCsv_ListJoinsToCsv) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "guilds:\n  - \"111\"\n  - \"222\"\n  - \"333\"\n"
+      "network:\n  regions:\n    - \"us-c\"\n    - \"eu-w\"\n");
+  EXPECT_EQ(LookupFlatCsv(cfg, "nevr_guilds").value_or(""), "111,222,333");
+  EXPECT_EQ(LookupFlatCsv(cfg, "nevr_regions").value_or(""), "us-c,eu-w");
+}
+
+TEST(ServiceMap, LookupFlatCsv_ScalarStaysSingleElement) {
+  // config.json's shape: nevr_guilds is a scalar (one id, or a comma string). It
+  // must pass through verbatim as one element, not be re-split.
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString("guilds: \"111,222\"\n");
+  EXPECT_EQ(LookupFlatCsv(cfg, "nevr_guilds").value_or(""), "111,222");
+}
+
+TEST(ServiceMap, LookupFlatCsv_AbsentOrUnmappedIsNullopt) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString("version: \"1\"\n");
+  EXPECT_FALSE(LookupFlatCsv(cfg, "nevr_guilds").has_value());
+  EXPECT_FALSE(LookupFlatCsv(cfg, "nevr_regions").has_value());
+  EXPECT_FALSE(LookupFlatCsv(cfg, "bogus_key").has_value());
+}
+
+// ---------------------------------------------------------------------------
+// S4b — the required-vs-optional secret contract, per key's today-requirement.
+//   auth.http_key : SECRET, REQUIRED for the auth POST (without it a fresh server
+//                   cannot mint a ServerDB token -> ServerFatal, N102). Its
+//                   ${VAR:?} form must fail LOUD at load (-> ServerFatal at the
+//                   config.yaml singleton) when the env is unset.
+//   telemetry.*   : OPTIONAL. Must NEVER fail loud — an absent uri/token is a
+//                   correct disabled state. Getting this wrong (a ${VAR:?} on
+//                   telemetry) breaks a legitimate no-telemetry run.
+// ---------------------------------------------------------------------------
+TEST(ServiceMap, S4b_HttpKeyRequiredRefUnsetFailsLoud) {
+  UnsetEnv("NEVR_S4B_HTTP_KEY");  // empty == unset
+  try {
+    nevr::NevrConfig::LoadFromString(
+        "auth:\n  http_key: \"${NEVR_S4B_HTTP_KEY:?NEVR_S4B_HTTP_KEY must be set for server auth}\"\n");
+    FAIL() << "expected NevrConfigError for an unset ${NEVR_HTTP_KEY:?} secret";
+  } catch (const nevr::NevrConfigError& e) {
+    EXPECT_NE(std::string(e.what()).find("NEVR_S4B_HTTP_KEY must be set for server auth"),
+              std::string::npos);
+  }
+}
+
+TEST(ServiceMap, S4b_HttpKeyRequiredRefResolvesWhenSet) {
+  SetEnv("NEVR_S4B_HTTP_KEY", "a-real-http-key");
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "auth:\n  http_key: \"${NEVR_S4B_HTTP_KEY:?must be set}\"\n");
+  EXPECT_EQ(LookupFlat(cfg, "nevr_http_key").value_or(""), "a-real-http-key");
+}
+
+TEST(ServiceMap, S4b_TelemetryTokenOptionalNeverFailsLoud) {
+  UnsetEnv("NEVR_S4B_TT");  // unset
+  // The ${VAR:-} optional form loads clean even with the env unset...
+  EXPECT_NO_THROW(nevr::NevrConfig::LoadFromString("telemetry:\n  token: \"${NEVR_S4B_TT:-}\"\n"));
+  // ...and an entirely absent telemetry block is nullopt, never a throw.
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString("version: \"1\"\n");
+  EXPECT_FALSE(LookupFlat(cfg, "telemetry_token").has_value());
+  EXPECT_FALSE(LookupFlat(cfg, "telemetry_uri").has_value());
 }
 
 }  // namespace

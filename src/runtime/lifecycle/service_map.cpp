@@ -26,17 +26,41 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
       {"graph_host", "services.graph"},
       {"graphservice_host", "services.graph_service"},
       {"nevr_socket_uri", "services.socket_uri"},
-      // identity / auth (S4a — ws_bridge login injection). Left column = the exact
-      // key ws_bridge's JSON reader used. auth.password is a SECRET: its ${VAR:?}
-      // form fails loud on an unset env in server mode (see service_config.cpp
-      // NevrCfg()). config.cpp does NOT read these — only ws_bridge does.
+      // S4b — gameserver.cpp's ServerDB DIAL URI (the token route, e.g. /nevr).
+      // DISTINCT from serverdb_host -> services.serverdb (S3, the redirect HOST):
+      // one is the address the gameserver dials, the other is a service-endpoint
+      // override the game's URL producer rewrites through. Different keys, no
+      // collision — both live under services with distinct child names.
+      {"nevr_serverdb_uri", "services.serverdb_uri"},
+      // identity / auth (S4a — ws_bridge login injection; S4b — gameserver auth
+      // POST + ServerDB dial). Left column = the exact key the JSON readers used.
+      // auth.password and auth.http_key are SECRETS: the ${VAR:?} form fails loud
+      // on an unset env in server mode (see service_config.cpp NevrCfg()).
       {"nevr_discord_id", "identity.discord_id"},
       {"nevr_password", "auth.password"},
-      // network (config.cpp LoadLocalConfigHook)
+      // S4b — gameserver auth POST (AuthenticateServer) + OAuth2 refresh exchange.
+      // http_uri is also read (unmigrated) by config.cpp's https redirect (S5
+      // owns that residual); adding it here only routes gameserver's read.
+      {"nevr_http_uri", "auth.http_uri"},
+      {"nevr_http_key", "auth.http_key"},  // SECRET
+      // network (config.cpp LoadLocalConfigHook; S4b adds regions)
       {"external_ip", "network.external_ip"},
       {"internal_ip", "network.internal_ip"},
       {"upnp", "network.upnp"},
       {"upnp_port", "network.upnp_port"},
+      // S4b — nevr_regions: registration metadata appended to the ServerDB dial
+      // URI (regions=...), read CSV via LookupFlatCsv. SCHEMA GAP: the plan schema
+      // had no regions home; network.regions is the S4b choice (no new top-level
+      // allowlist key), owner-reversible (a top-level regions:, parallel to
+      // guilds:, is the arguably-more-consistent alternative).
+      {"nevr_regions", "network.regions"},
+      // S4b — telemetry (nevr-stream). OPTIONAL: an absent uri/token is a correct
+      // disabled state, never fatal. No ${VAR:?} is forced on these.
+      {"telemetry_uri", "telemetry.uri"},
+      {"telemetry_token", "telemetry.token"},
+      // S4b — nevr_guilds: registration metadata (guilds=...), list-shaped in the
+      // schema, read CSV via LookupFlatCsv (a scalar stays a single element).
+      {"nevr_guilds", "guilds"},
       // assets
       {"asset_cdn_url", "assets.cdn_url"},
       // arena rule overrides (floats)
@@ -56,6 +80,24 @@ std::optional<std::string> LookupFlat(const nevr::NevrConfig& cfg, const std::st
   const std::string path = FlatKeyToYamlPath(flatKey);
   if (path.empty()) return std::nullopt;  // not a migrated key
   return cfg.GetString(path);
+}
+
+std::optional<std::string> LookupFlatCsv(const nevr::NevrConfig& cfg, const std::string& flatKey) {
+  // For LIST-shaped keys (guilds, regions). GetStringList turns a sequence into
+  // its elements and a lone scalar into a single element, so a config.yaml list
+  // `[a, b]` and a scalar CSV `"a,b"` both yield the same "a,b" the game-JSON
+  // readers built into `guilds=%s` / `regions=%s`. nullopt when unmapped or the
+  // path is absent/empty (an empty scalar yields one empty element -> "").
+  const std::string path = FlatKeyToYamlPath(flatKey);
+  if (path.empty()) return std::nullopt;  // not a migrated key
+  const std::vector<std::string> items = cfg.GetStringList(path);
+  if (items.empty()) return std::nullopt;  // absent
+  std::string joined;
+  for (std::size_t i = 0; i < items.size(); ++i) {
+    if (i != 0) joined += ",";
+    joined += items[i];
+  }
+  return joined;
 }
 
 ServiceHostResult ResolveServiceHost(const nevr::NevrConfig& cfg, const std::string& flatServiceKey) {

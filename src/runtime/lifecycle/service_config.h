@@ -17,6 +17,11 @@
 /// absent; may be a stable "" if the key is present-but-empty (caller checks [0]).
 const char* NevrCfgGetFlat(const char* flatKey);
 
+/// A LIST-shaped migrated flat key (guilds, regions) as a CSV string — a yaml list
+/// `[a, b]` and a scalar CSV `"a,b"` both return "a,b" (the shape the game-JSON
+/// readers built into guilds=/regions= URL params). Null if unmapped or absent.
+const char* NevrCfgGetFlatCsv(const char* flatKey);
+
 /// Service host with the loginservice_host fallback (GetServiceHostWithFallback).
 /// Returns the resolved host, or null when neither the service key nor
 /// loginservice_host is set. *outSource (if non-null) reports which source hit:

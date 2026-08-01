@@ -37,6 +37,12 @@ std::string FlatKeyToYamlPath(const std::string& flatKey);
 /// (the caller applies the same `[0] != '\0'` check the JSON readers did).
 std::optional<std::string> LookupFlat(const nevr::NevrConfig& cfg, const std::string& flatKey);
 
+/// Read a LIST-shaped migrated flat key (guilds, regions) as a CSV string — the
+/// shape the game-JSON readers built into `guilds=%s` / `regions=%s`. A config.yaml
+/// list `[a, b]` and a scalar CSV `"a,b"` both resolve to "a,b". nullopt when the
+/// key is unmapped or the path is absent (an empty present value resolves to "").
+std::optional<std::string> LookupFlatCsv(const nevr::NevrConfig& cfg, const std::string& flatKey);
+
 /// Which source satisfied a service-host lookup — preserved so the adapter can
 /// reproduce config.cpp's three distinct Debug log lines verbatim.
 enum class HostSource {

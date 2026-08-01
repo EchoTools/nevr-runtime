@@ -141,6 +141,15 @@ const char* NevrCfgGetFlat(const char* flatKey) {
   return InternCStr(*v);   // present (possibly ""): caller applies its own [0] check
 }
 
+const char* NevrCfgGetFlatCsv(const char* flatKey) {
+  // List-shaped keys (guilds, regions): a yaml list or a scalar CSV both come
+  // back as the "a,b" string gameserver builds into guilds=/regions= URL params.
+  if (flatKey == nullptr) return nullptr;
+  const std::optional<std::string> v = nevr_cfg::LookupFlatCsv(NevrCfg(), flatKey);
+  if (!v) return nullptr;  // unmapped or absent
+  return InternCStr(*v);
+}
+
 const char* NevrCfgServiceHost(const char* flatServiceKey, int* outSource) {
   const nevr_cfg::ServiceHostResult r =
       nevr_cfg::ResolveServiceHost(NevrCfg(), flatServiceKey ? flatServiceKey : "");

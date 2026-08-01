@@ -17,6 +17,7 @@
 #include "runtime/server/messages.h"
 
 #include "runtime/lifecycle/config.h"
+#include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat / NevrCfgGetFlatCsv (N133 S4b: config.yaml reads)
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/hook/patching.h"
@@ -1202,15 +1203,13 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
 // token's uid is the operator's discord-linked account, which carries the
 // server-host role checked at registration (gg.IsServerHost). Verified live
 // 2026-06-29: uid=metis.sprock, access token (no vrs.refresh), TTL ~1h.
-static std::string AuthenticateServer(const EchoVR::Json* config) {
-    CHAR* httpUri = EchoVR::JsonValueAsString(
-        const_cast<EchoVR::Json*>(config), const_cast<CHAR*>("nevr_http_uri"), NULL, false);
-    CHAR* httpKey = EchoVR::JsonValueAsString(
-        const_cast<EchoVR::Json*>(config), const_cast<CHAR*>("nevr_http_key"), NULL, false);
-    CHAR* discordId = EchoVR::JsonValueAsString(
-        const_cast<EchoVR::Json*>(config), const_cast<CHAR*>("nevr_discord_id"), NULL, false);
-    CHAR* password = EchoVR::JsonValueAsString(
-        const_cast<EchoVR::Json*>(config), const_cast<CHAR*>("nevr_password"), NULL, false);
+static std::string AuthenticateServer() {
+    // N133 S4b: config.yaml (nevr_config), not the game JSON. auth.http_key is a
+    // SECRET; its ${VAR:?} form fails loud at config load in server mode.
+    const char* httpUri = NevrCfgGetFlat("nevr_http_uri");
+    const char* httpKey = NevrCfgGetFlat("nevr_http_key");
+    const char* discordId = NevrCfgGetFlat("nevr_discord_id");
+    const char* password = NevrCfgGetFlat("nevr_password");
 
     if (!httpUri || !httpKey || !discordId || !password ||
         httpUri[0] == '\0' || httpKey[0] == '\0' || discordId[0] == '\0' || password[0] == '\0') {
@@ -1279,8 +1278,12 @@ static std::string AuthenticateServer(const EchoVR::Json* config) {
     }
 }
 
+// N133 S4b: all NEVR-key reads moved from the game-passed config JSON to
+// config.yaml (nevr_config). The IServerLib vtable slot still passes the game's
+// localConfig pointer, but the runtime no longer reads NEVR keys from it, so the
+// parameter is intentionally unnamed.
 VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId regionId, EchoVR::SymbolId versionLock,
-                                        const EchoVR::Json* localConfig) {
+                                        const EchoVR::Json*) {
   // Update session state
   SessionState state = m_context->GetSessionState();
   state.serverId = serverId;
@@ -1290,9 +1293,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 
   // Get serverdb URI from config. If not explicitly set, construct from
   // nevr_socket_uri + nevr_discord_id + nevr_password (the common config pattern).
-  CHAR* serverDbUri =
-      EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("serverdb_host"),
-                                nullptr, false);
+  const char* serverDbUri = NevrCfgGetFlat("serverdb_host");
 
   // Acquire a session JWT for the operator's server-host account (token auth, BAC-1).
   // Re-auth each registration: the access token TTL is ~1h (BAC-5).
@@ -1317,10 +1318,8 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       // Nothing else refreshes in server mode either: TokenAuth::Init returns
       // early on is_server, before the background refresh thread starts. This is
       // the only place a server can mint an access token.
-      CHAR* httpUri = EchoVR::JsonValueAsString(
-          const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("nevr_http_uri"), NULL, false);
-      CHAR* httpKey = EchoVR::JsonValueAsString(
-          const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("nevr_http_key"), NULL, false);
+      const char* httpUri = NevrCfgGetFlat("nevr_http_uri");
+      const char* httpKey = NevrCfgGetFlat("nevr_http_key");
       if (httpUri && httpKey && httpUri[0] != '\0' && httpKey[0] != '\0' &&
           RefreshAuthToken(auth, httpUri, httpKey)) {
         wsToken = auth.token;
@@ -1333,7 +1332,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
     }
 
     if (wsToken.empty()) {
-      wsToken = AuthenticateServer(localConfig);
+      wsToken = AuthenticateServer();
       // N102: no token means every ServerDB connection below will be rejected.
       // Continuing produces a server that logs connection failures forever
       // instead of exiting with a cause.
@@ -1345,15 +1344,14 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 
   thread_local static CHAR constructedUri[1024];
   if (!serverDbUri || serverDbUri[0] == '\0') {
-    CHAR* guilds = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
-                                              const_cast<CHAR*>("nevr_guilds"), nullptr, false);
-    CHAR* regions = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
-                                               const_cast<CHAR*>("nevr_regions"), nullptr, false);
+    // guilds/regions are list-shaped registration metadata; read CSV so a yaml
+    // list `[a, b]` and a scalar CSV both build the same guilds=/regions= param.
+    const char* guilds = NevrCfgGetFlatCsv("nevr_guilds");
+    const char* regions = NevrCfgGetFlatCsv("nevr_regions");
     // Token auth is opt-in: only when nevr_serverdb_uri (the token route, e.g. /nevr) is
     // configured AND a token was acquired. Otherwise fall back to the legacy url-param
     // path so a deploy that hasn't set nevr_serverdb_uri keeps working (no footgun).
-    CHAR* tokenUri = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
-                                                const_cast<CHAR*>("nevr_serverdb_uri"), nullptr, false);
+    const char* tokenUri = NevrCfgGetFlat("nevr_serverdb_uri");
 
     if (tokenUri && tokenUri[0] != '\0' && !wsToken.empty()) {
       // Token auth (BAC-2): identity via the Bearer JWT (sent by Connect()); discord_id/
@@ -1374,12 +1372,9 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
     } else {
       // Legacy url-param auth (no nevr_serverdb_uri configured): connect via
       // nevr_socket_uri with discord_id+password — the pre-token-auth behavior.
-      CHAR* socketUri = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
-                                                   const_cast<CHAR*>("nevr_socket_uri"), nullptr, false);
-      CHAR* discordId = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
-                                                   const_cast<CHAR*>("nevr_discord_id"), nullptr, false);
-      CHAR* password = EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig),
-                                                  const_cast<CHAR*>("nevr_password"), nullptr, false);
+      const char* socketUri = NevrCfgGetFlat("nevr_socket_uri");
+      const char* discordId = NevrCfgGetFlat("nevr_discord_id");
+      const char* password = NevrCfgGetFlat("nevr_password");
       if (socketUri && socketUri[0] != '\0' && discordId && discordId[0] != '\0') {
         int written = 0;
         if (password && password[0] != '\0') {
@@ -1396,7 +1391,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
         serverDbUri = constructedUri;
         Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Constructed serverdb URI from config fields (legacy url-param auth)");
       } else {
-        serverDbUri = const_cast<CHAR*>("ws://localhost:777/serverdb");
+        serverDbUri = "ws://localhost:777/serverdb";
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.GAMESERVER] No nevr_serverdb_uri/nevr_socket_uri — using default serverdb URI");
       }
@@ -1469,12 +1464,11 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 
   // Connect telemetry streamer if enabled
   if (g_telemetryEnabled && m_telemetry) {
-    CHAR* telemetryUri =
-        EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("telemetry_uri"),
-                                  nullptr, false);
-    CHAR* telemetryToken =
-        EchoVR::JsonValueAsString(const_cast<EchoVR::Json*>(localConfig), const_cast<CHAR*>("telemetry_token"),
-                                  nullptr, false);
+    // OPTIONAL (N133 S4b): an absent telemetry.uri/token is a correct disabled
+    // state, never fatal — NevrCfgGetFlat returns null/"" and the else-branch logs
+    // "telemetry disabled". No ${VAR:?} is forced on these keys.
+    const char* telemetryUri = NevrCfgGetFlat("telemetry_uri");
+    const char* telemetryToken = NevrCfgGetFlat("telemetry_token");
     if (telemetryUri && telemetryUri[0] != '\0') {
       std::string token;
       if (telemetryToken && telemetryToken[0] != '\0') {
