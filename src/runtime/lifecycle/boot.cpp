@@ -5,6 +5,7 @@
 #include "runtime/lifecycle/initialize.h"
 #include "runtime/patch/mode_patches.h"
 #include "runtime/patch/resource_override.h"
+#include "runtime/patch/asset_cdn.h"
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/module_loader.h"
 #include "runtime/compat/ws_bridge.h"
@@ -290,6 +291,18 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     // save, duplicating the canonical patch in patch/binary_bug_fixes.cpp which
     // does both. Two writers to an address whose ORIGINAL byte a shutdown
     // restore depends on; safe only because Init happened to run first.)
+  }
+
+  // N131: cosmetics are client-only — a headless server has nothing to render and
+  // must not open the CDN connection (it opens ServerDB + login only). AssetCDN
+  // was called UNCONDITIONALLY from initialize.cpp:364, which runs before the CLI
+  // is parsed, so g_isServer was still FALSE there and a server fetched tints it
+  // never draws. Moved here, post-CLI-parse where g_isServer is known, gated on
+  // client — the same deferral InstallResourceOverride uses (boot.cpp:29). The
+  // loadout SAVE/CURRENT protocol in gameserver.cpp is independent of this hook,
+  // so gating it off on a server does not affect loadout handling.
+  if (!g_isServer) {
+    AssetCDN::Initialize();
   }
 
   // N92: start the WebSocket bridge in-process. It used to be

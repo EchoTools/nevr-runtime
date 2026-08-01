@@ -621,6 +621,35 @@ verify:
         fi
     done
 
+    # --- N131: the Asset CDN must not fetch on a server --------------------------
+    # A headless server has nothing to render, so it must not open the CDN
+    # connection (it opens ServerDB + login only). AssetCDN::Initialize used to run
+    # unconditionally from initialize.cpp BEFORE the CLI was parsed, so g_isServer
+    # was FALSE there and a gate could not distinguish server from client. The call
+    # now lives in boot.cpp, post-CLI-parse, gated on the client. Guard both facts.
+    N131_RC=0; N131_BOOT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/boot.cpp) || N131_RC=$?
+    sensor_stage1 "N131 CDN gated off servers" "src/runtime/lifecycle/boot.cpp" "$N131_RC"
+    sensor_nonempty "N131 CDN gated off servers" "non-comment lines of boot.cpp" "$N131_BOOT"
+    # Whitespace-flattened and matched CONTIGUOUSLY: two separate greps ("some
+    # !g_isServer exists" AND "AssetCDN::Initialize exists") passed blind, because
+    # boot.cpp has OTHER !g_isServer gates — removing THIS gate while leaving the
+    # call unconditional still satisfied both. Require the call inside the gate.
+    N131_FLAT=$(tr -s '[:space:]' ' ' <<<"$N131_BOOT")
+    if ! grep -qE 'if \( *!g_isServer *\) *\{ *AssetCDN::Initialize\(\)' <<<"$N131_FLAT"; then
+        echo "verify: FAIL — N131 AssetCDN::Initialize is no longer inside an if (!g_isServer) gate in boot.cpp." >&2
+        echo "Without the client-gate a headless server fetches cosmetics it never renders, opening a needless outbound connection." >&2
+        exit 1
+    fi
+    # And it must NOT be called unconditionally from initialize.cpp (pre-CLI-parse).
+    N131_RC2=0; N131_INIT=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/lifecycle/initialize.cpp) || N131_RC2=$?
+    sensor_stage1 "N131 CDN not in initialize" "src/runtime/lifecycle/initialize.cpp" "$N131_RC2"
+    sensor_nonempty "N131 CDN not in initialize" "non-comment lines of initialize.cpp" "$N131_INIT"
+    if grep -q 'AssetCDN::Initialize' <<<"$N131_INIT"; then
+        echo "verify: FAIL — N131 AssetCDN::Initialize is back in initialize.cpp, where g_isServer is not yet set." >&2
+        echo "It would run before the CLI is parsed, so the server-gate cannot apply and the CDN fetches on every host." >&2
+        exit 1
+    fi
+
     # --- N129: the DLL-load hardening must report per-hook failures --------------
     # DllLoadHook (N75/N89 search-path hardening) installs its four LoadLibrary
     # hooks OUTSIDE PatchDetour, so N126/N128's reporting doesn't cover it. It used

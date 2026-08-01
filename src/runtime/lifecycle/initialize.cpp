@@ -3,7 +3,6 @@
 #include <cstring>
 #include <vector>
 
-#include "runtime/patch/asset_cdn.h"
 #include "runtime/log/boot_log_tee.h"
 #include "runtime/lifecycle/boot.h"
 #include "runtime/lifecycle/cli.h"
@@ -361,7 +360,10 @@ VOID Initialize() {
   BootLogTee::TeeFprintf("[NEVR.PATCH] binary bug fix hooks installed\n");
 
   // --- CDN asset loading ---
-  AssetCDN::Initialize();
+  // N131: moved to boot.cpp, gated `if (!g_isServer)`. g_isServer is NOT set yet
+  // here (CLI is parsed later, in the PreprocessCommandLine hook), so a gate here
+  // could not distinguish server from client. The call now lives where g_isServer
+  // is known so a headless server never opens the CDN connection.
 
   // Boot phase complete — close the boot log file.  From here on, Log() and
   // the builtin_log_filter own the rotating JSONL file.  Any remaining
