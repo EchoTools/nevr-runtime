@@ -1,0 +1,331 @@
+# NEVR Runtime Configuration
+#
+# This file lives at: echovr/_local/config.yaml
+# It is parsed once at boot by the game's internal JSON parser via NEVR's
+# LoadLocalConfigHook — the game natively loads a JSON config; NEVR intercepts
+# the load and provides the YAML contents through a yaml-cpp → Json bridge.
+#
+# Config keys are read by the gamepatches DLL (BugSplat64.dll) and the
+# gameserver DLL (pnsradgameserver.dll). Both run in-process with echovr.exe.
+#
+# Secrets (keys, tokens, passwords) MUST use ${VAR:?error} environment-variable
+# substitution in production. The literal form is for local dev only and MUST
+# NEVER be committed to version control.
+# ---------------------------------------------------------------------------
+
+# Schema version. Bump when adding new required sections or restructuring
+# existing ones. Currently always 1.
+# Reader: gamepatches config.cpp (LoadLocalConfigHook)
+version: 1
+
+# ---------------------------------------------------------------------------
+# services — URL overrides for game service endpoints
+#
+# The game hardcodes *.readyatdawn.com URLs that no longer resolve. These keys
+# let you redirect each service to NEVR's community infrastructure. Every key
+# is optional; when absent the game's hardcoded default is used (and the
+# connection will fail unless the WebSocket bridge is active).
+#
+# Fallback chain (per-key, in GetServiceHostWithFallback):
+#   1. Specific service key (e.g. configservice_host)
+#   2. loginservice_host (shared fallback)
+#   3. Game hardcoded default
+#
+# Reader: gamepatches config.cpp (HttpConnectHook, GetServiceHostWithFallback)
+# ---------------------------------------------------------------------------
+
+services:
+  # Login / authentication service. Also serves as the shared fallback for
+  # every other service key that is not explicitly set.
+  # Default (absent): https://login.readyatdawn.com
+  # Not a secret.
+  # loginservice_host: "https://login.echovrce.com"
+
+  # Config / settings service (game config, feature flags, etc.).
+  # Fallback: loginservice_host
+  # Default (absent): https://config.readyatdawn.com
+  # Not a secret.
+  # configservice_host: "https://config.echovrce.com"
+
+  # General API service (REST endpoints for account, inventory, etc.).
+  # Legacy key "api_host" is also checked if apiservice_host is absent.
+  # Fallback: loginservice_host
+  # Default (absent): https://api.readyatdawn.com
+  # Not a secret.
+  # apiservice_host: "https://api.echovrce.com"
+
+  # Transaction / IAP service.
+  # Fallback: loginservice_host
+  # Default (absent): https://transaction.readyatdawn.com
+  # Not a secret.
+  # transactionservice_host: "https://transaction.echovrce.com"
+
+  # Matchmaking service (lobby creation, server discovery).
+  # When the WebSocket bridge is active and no explicit override is set,
+  # this service is auto-relayed through the bridge's local proxy.
+  # Fallback: loginservice_host
+  # Default (absent): wss://matchmaking.readyatdawn.com
+  # Not a secret.
+  # matchingservice_host: "wss://matchmaking.echovrce.com"
+
+  # ServerDB / registry service (game server registration and heartbeat).
+  # Auto-relayed through the WebSocket bridge when active.
+  # Fallback: loginservice_host
+  # Default (absent): wss://serverdb.readyatdawn.com
+  # Not a secret.
+  # serverdb_host: "wss://serverdb.echovrce.com"
+
+  # Oculus Graph API. Only relevant if the game still queries Oculus services.
+  # Legacy key "graphservice_host" is also checked.
+  # Default (absent): https://graph.oculus.com
+  # Not a secret.
+  # graph_host: "https://graph.oculus.com"
+
+# ---------------------------------------------------------------------------
+# network — IP and port configuration for server hosting
+#
+# Controls how the game server advertises itself to ServerDB and which
+# IP addresses it uses for peer-to-peer connections. All keys are optional.
+#
+# Reader: gamepatches config.cpp (LoadLocalConfigHook), gameserver.cpp
+# ---------------------------------------------------------------------------
+
+network:
+  # Internal IP address to advertise for LAN / same-host connections.
+  # Use when the auto-detected IP is wrong (multi-homed hosts, Docker, VPNs).
+  # Absent: auto-detected from the first non-loopback interface.
+  # Not a secret.
+  # internal_ip: "192.168.1.100"
+
+  # External / public IP address to advertise to ServerDB.
+  # Use when the server is behind NAT and auto-detection picks the wrong IP.
+  # Absent: auto-detected via UPnP WAN IP (if UPnP is enabled) or falls back
+  # to internal_ip.
+  # Not a secret.
+  # external_ip: "203.0.113.5"
+
+  # Enable UPnP IGD port mapping for the broadcaster UDP port.
+  # When true, the runtime probes for a UPnP IGD and attempts to map the port.
+  # CLI flag "-upnp" overrides this value to true.
+  # Absent: false (no UPnP).
+  # Not a secret.
+  # upnp: true
+
+  # External port to request from UPnP. Only used when upnp is enabled.
+  # If absent or 0, the internal broadcaster port is used as the external port.
+  # Valid range: 1-65535.
+  # Absent: 0 (use internal port).
+  # Not a secret.
+  # upnp_port: 7777
+
+# ---------------------------------------------------------------------------
+# identity — server identity fields sent during ServerDB registration
+#
+# These identify the server instance to the community infrastructure.
+# All keys are optional but a server without them will fail to register.
+#
+# Reader: gameserver.cpp (RequestRegistration), ws_bridge.cpp
+# ---------------------------------------------------------------------------
+
+identity:
+  # Discord user ID of the server owner. Sent as a query parameter in the
+  # ServerDB WebSocket URI. Required for server registration.
+  # Absent: ServerDB connection uses ws://localhost:777/serverdb (fallback)
+  # Not a secret, but personally identifying — do not commit to public repos.
+  # discord_id: "${NEVR_DISCORD_ID:?discord_id is required for server registration}"
+
+  # Server password. Sent as a query parameter in the ServerDB WebSocket URI.
+  # Optional; absent means no password auth.
+  # SECRET — use env-var substitution in production.
+  # password: "${NEVR_PASSWORD:?password is required}"
+
+# ---------------------------------------------------------------------------
+# auth — authentication and API endpoint configuration
+#
+# Used for server authentication with Nakama (device-auth flow) and for HTTP
+# API calls. The ws_bridge module also reads socket_uri to establish its
+# outbound WebSocket connection to the community relay.
+#
+# Reader: gamepatches config.cpp (RedirectServiceUrl, JsonValueAsStringHook),
+#         gamepatches token_auth.cpp, gameserver.cpp (AuthenticateServer),
+#         ws_bridge.cpp
+# ---------------------------------------------------------------------------
+
+auth:
+  # WebSocket endpoint for all game services (login, matchmaking, config,
+  # serverdb). Used by the JsonValueAsStringHook to rewrite hardcoded
+  # wss://*.readyatdawn.com URLs. Also read by the ws_bridge module as its
+  # outbound target.
+  # When the ws_bridge is active, game WebSocket connections are proxied
+  # through ws://127.0.0.1:<bridge_port> instead of connecting directly.
+  # Absent: game hardcoded defaults remain (readyatdawn.com — dead).
+  # Not a secret.
+  # socket_uri: "wss://g.echovrce.com/ws"
+
+  # HTTP endpoint for REST API calls (Nakama device auth, account operations).
+  # Used to rewrite hardcoded https://*.readyatdawn.com URLs and by
+  # AuthenticateServer for the Nakama device-auth flow.
+  # Absent: game hardcoded defaults remain (readyatdawn.com — dead).
+  # Not a secret.
+  # http_uri: "https://api.echovrce.com"
+
+  # HTTP API key. Sent as Bearer auth on REST calls when the game's internal
+  # token cache is empty. Read by token_auth.cpp during device-auth flow.
+  # SECRET — use env-var substitution in production.
+  # http_key: "${NEVR_HTTP_KEY:?http_key is required}"
+
+  # Server authentication key. Used as the Basic-auth username when
+  # authenticating a server with Nakama (POST /v2/account/authenticate/device).
+  # Required for dedicated server operation.
+  # SECRET — use env-var substitution in production.
+  # server_key: "${NEVR_SERVER_KEY:?server_key is required for servers}"
+
+# ---------------------------------------------------------------------------
+# guilds — guild filter for server registration
+#
+# Comma-separated list of guild IDs. When set, the server only registers
+# with the specified guilds' ServerDB instances. Sent as a query parameter
+# in the ServerDB WebSocket URI.
+# Absent: no guild filter (server registers with all guilds).
+# Not a secret.
+# Reader: gameserver.cpp (RequestRegistration)
+# ---------------------------------------------------------------------------
+# guilds: "guild-abc123,guild-def456"
+
+# ---------------------------------------------------------------------------
+# regions — region filter for server registration
+#
+# Comma-separated list of region codes (e.g. "us-west,us-east"). When set,
+# the server only registers in the specified regions. Sent as a query
+# parameter in the ServerDB WebSocket URI.
+# Absent: no region filter.
+# Not a secret.
+# Reader: gameserver.cpp (RequestRegistration)
+# ---------------------------------------------------------------------------
+# regions: "us-west"
+
+# ---------------------------------------------------------------------------
+# telemetry — real-time game state streaming
+#
+# When enabled (via the "-telemetry" CLI flag, which is the default for
+# servers), the server streams match telemetry over a dedicated WebSocket
+# to a telemetry ingest server. Disable with "-notelemetry".
+#
+# Reader: gameserver.cpp (RequestRegistration, telemetry_streamer)
+# ---------------------------------------------------------------------------
+
+telemetry:
+  # Telemetry ingest WebSocket URI. If set and CLI telemetry is enabled,
+  # the server connects and streams match data.
+  # Absent: telemetry is silently disabled even if the CLI flag is set.
+  # Not a secret.
+  # uri: "wss://telemetry.echovrce.com/ingest"
+
+  # Bearer token sent on the telemetry WebSocket upgrade request.
+  # If absent, the cached Nakama auth token is used as a fallback.
+  # SECRET — use env-var substitution in production.
+  # token: "${NEVR_TELEMETRY_TOKEN:-}"
+
+# ---------------------------------------------------------------------------
+# arena — Arena game mode rule overrides
+#
+# Override the Arena rule config that the game normally loads from its
+# internal netconfig_dedicatedserver.json asset. Values are floats; 0 means
+# "use the game default." All keys are optional.
+#
+# Reader: gamepatches config.cpp (LoadLocalConfigHook, CJsonGetFloatHook)
+# ---------------------------------------------------------------------------
+
+arena:
+  # Round time in seconds. Overrides the game's "round_time" config value.
+  # Absent: game default (typically 180.0).
+  # Not a secret.
+  # round_time: 300.0
+
+  # Post-score celebration time in seconds. Overrides the game's
+  # "point_score_celebration_time" config value.
+  # Absent: game default (typically 5.0).
+  # Not a secret.
+  # celebration_time: 10.0
+
+  # Mercy-rule point spread. If one team leads by this many points, the
+  # mercy rule triggers. Overrides the game's "mercy_win_point_spread" value.
+  # Absent: game default.
+  # Not a secret.
+  # mercy_score: 15.0
+
+# ---------------------------------------------------------------------------
+# asset_cdn_url — custom CDN for game asset downloads
+#
+# Override the base URL the game uses to download asset bundles (cosmetics,
+# arena geometry, etc.). When set, the runtime hooks the asset download
+# pipeline and redirects requests to this URL.
+# Absent: game downloads from the hardcoded Ready At Dawn CDN (dead).
+# Not a secret.
+# Reader: gamepatches config.cpp (LoadLocalConfigHook)
+# ---------------------------------------------------------------------------
+# asset_cdn_url: "https://cdn.echovrce.com/assets"
+
+# ---------------------------------------------------------------------------
+# exitonerror — exit the process on fatal errors
+#
+# When true, the game process calls ExitProcess on fatal errors (e.g.
+# ServerDB disconnection) rather than showing a crash dialog. This is the
+# default behavior for dedicated servers. CLI flag "-noexitonerror" overrides
+# to false; "-exitonerror" is deprecated (it's now the default).
+# Absent: true (exit on error).
+# Not a secret.
+# Reader: gamepatches config.cpp (LoadLocalConfigHook)
+# ---------------------------------------------------------------------------
+# exitonerror: true
+
+# ---------------------------------------------------------------------------
+# plugins — plugin loading and configuration
+#
+# Plugins are optional DLLs loaded from the plugins/ subdirectory next to
+# echovr.exe. Each plugin exports the NvrPluginInterface lifecycle:
+#
+#   NvrPluginGetInfo()      — returns name, version, description (REQUIRED)
+#   NvrPluginGetApiVersion() — returns API version number (optional; v1 assumed)
+#   NvrPluginInit(ctx)      — called once at load time (optional)
+#   NvrPluginOnFrame(ctx)   — called each game frame (optional)
+#   NvrPluginOnGameStateChange(ctx, old, new) — state transition hook (optional)
+#   NvrPluginShutdown()     — called at unload time (optional)
+#
+# InitEx contract (NvrPluginInitEx, API v2+): plugins that export
+# NvrPluginInitEx receive an opaque config pointer parsed from this section.
+# The runtime passes the plugin's entry as a nlohmann::json object; the
+# plugin is responsible for extracting the keys it understands and ignoring
+# the rest. A plugin MUST NOT fail if its config entry is absent — it should
+# use sensible defaults.
+#
+# Each plugin entry has these keys:
+#   name      — DLL basename (without .dll), matched against plugins/*.dll
+#   enabled   — if false, the plugin DLL is skipped even if present on disk
+#   required  — if true, runtime calls FatalError when the plugin fails to load
+#   args      — plugin-specific arguments, passed as config JSON to InitEx
+#   target    — (optional) "server" | "client" | "both" (default: both);
+#               the loader skips server-only plugins on clients and vice-versa
+#
+# All keys except "name" are optional. Absent enabled defaults to true.
+# Absent required defaults to false.
+# Absent args means the plugin gets an empty JSON object.
+# Absent target means the plugin loads on both servers and clients.
+#
+# Reader: gamepatches plugin_loader.cpp
+# ---------------------------------------------------------------------------
+
+plugins:
+  # Example 1: A server-only plugin that is required for server operation.
+  # - name: combat_mod
+  #   enabled: true
+  #   required: true
+  #   target: server
+  #   args:
+  #     damage_multiplier: 1.5
+  #     friendly_fire: false
+
+  # Example 2: An optional plugin with no special config.
+  # - name: audio_intercom
+  #   enabled: true
+  #   target: both

@@ -1,121 +1,67 @@
-name: Build and Upload to Release
+name: Build
 
 on:
+  push:
+    branches: [main]
   release:
     types: [created]
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
       with:
         submodules: recursive
-        fetch-depth: 0  # Needed for git describe to work properly
+        fetch-depth: 0
+
+    - name: Install MinGW toolchain
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y g++-mingw-w64-x86-64 ninja-build
 
     - name: Setup vcpkg
-      uses: lukka/run-vcpkg@v11
-      with:
-        vcpkgDirectory: ${{ github.workspace }}/vcpkg
-        runVcpkgInstall: true
+      run: |
+        git clone https://github.com/Microsoft/vcpkg.git "$HOME/.vcpkg"
+        "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+        "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static \
+          curl \
+          gtest \
+          ixwebsocket \
+          nlohmann-json \
+          miniupnpc \
+          minhook \
+          opus \
+          protobuf
 
     - name: Configure CMake
-      run: cmake -B ${{ github.workspace }}/build -S ${{ github.workspace }} -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      run: cmake --preset mingw-release
 
     - name: Build
-      run: cmake --build ${{ github.workspace }}/build --config Release
+      run: cmake --build --preset mingw-release
+
+    - name: Verify
+      run: just verify
 
     - name: Get version
+      if: github.event_name == 'release'
       id: version
-      shell: bash
       run: |
-        VERSION=$(git describe --tags --abbrev=4 --long --match "v*" 2>/dev/null | sed 's/^v//' | sed 's/-\([0-9]*\)-g\([a-f0-9]*\)$/+\1.\2/' || echo "0.0.0")
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Version: $VERSION"
-
-    - name: Import code signing certificate
-      if: env.CODESIGN_PFX_BASE64 != ''
-      env:
-        CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
-      shell: bash
-      run: |
-        echo "$CODESIGN_PFX_BASE64" | base64 -d > "${{ runner.temp }}/codesign.pfx"
-        echo "CODESIGN_PFX=${{ runner.temp }}/codesign.pfx" >> $GITHUB_ENV
-        echo "CODESIGN_PASS=${{ secrets.CODESIGN_PFX_PASSWORD }}" >> $GITHUB_ENV
-
-    - name: Code sign DLLs
-      if: env.CODESIGN_PFX != ''
-      shell: pwsh
-      run: |
-        $dlls = Get-ChildItem "${{ github.workspace }}/build/bin/Release/*.dll"
-        $exes = Get-ChildItem "${{ github.workspace }}/build/bin/Release/*.exe" -ErrorAction SilentlyContinue
-        $files = @($dlls) + @($exes) | Where-Object { $_ }
-        if ($files.Count -eq 0) {
-          Write-Warning "No files to sign"
-          exit 0
-        }
-        & "${{ github.workspace }}/cmake/codesign/sign.ps1" $files.FullName
+        VERSION=$(git describe --tags --always)
+        echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+        echo "Version: ${VERSION#v}"
 
     - name: Create distribution packages
-      shell: bash
-      run: |
-        VERSION="${{ steps.version.outputs.version }}"
-        DIST_NAME="nevr-runtime-v${VERSION}"
-        DIST_LITE_NAME="nevr-runtime-v${VERSION}-lite"
-        DIST_DIR="${{ github.workspace }}/build/dist"
+      if: github.event_name == 'release'
+      run: cmake --build --preset mingw-release --target dist
 
-        # Create full distribution (DLLs are already signed at this point)
-        mkdir -p "$DIST_DIR/$DIST_NAME"
-        cp ${{ github.workspace }}/build/bin/Release/*.dll "$DIST_DIR/$DIST_NAME/"
-        cp ${{ github.workspace }}/README.md "$DIST_DIR/$DIST_NAME/"
-
-        # Create lite distribution (same as full for Windows - no debug symbols in Release)
-        mkdir -p "$DIST_DIR/$DIST_LITE_NAME"
-        cp ${{ github.workspace }}/build/bin/Release/*.dll "$DIST_DIR/$DIST_LITE_NAME/"
-        cp ${{ github.workspace }}/README.md "$DIST_DIR/$DIST_LITE_NAME/"
-
-        # Create zip archives
-        cd "$DIST_DIR"
-        7z a -tzip "${DIST_NAME}.zip" "$DIST_NAME"
-        7z a -tzip "${DIST_LITE_NAME}.zip" "$DIST_LITE_NAME"
-
-        # Create tar.zst archives (tar first, then compress with zstd)
-        tar -cvf "${DIST_NAME}.tar" "$DIST_NAME"
-        zstd -19 "${DIST_NAME}.tar" -o "${DIST_NAME}.tar.zst"
-        rm "${DIST_NAME}.tar"
-
-        tar -cvf "${DIST_LITE_NAME}.tar" "$DIST_LITE_NAME"
-        zstd -19 "${DIST_LITE_NAME}.tar" -o "${DIST_LITE_NAME}.tar.zst"
-        rm "${DIST_LITE_NAME}.tar"
-
-        echo "Distribution packages created:"
-        ls -lh "$DIST_DIR"/*.{zip,tar.zst}
-
-    - name: Upload full distribution (zip)
+    - name: Upload dist artifacts
+      if: github.event_name == 'release'
       uses: softprops/action-gh-release@v2
       with:
-        files: ${{ github.workspace }}/build/dist/nevr-runtime-v${{ steps.version.outputs.version }}.zip
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Upload full distribution (tar.zst)
-      uses: softprops/action-gh-release@v2
-      with:
-        files: ${{ github.workspace }}/build/dist/nevr-runtime-v${{ steps.version.outputs.version }}.tar.zst
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Upload lite distribution (zip)
-      uses: softprops/action-gh-release@v2
-      with:
-        files: ${{ github.workspace }}/build/dist/nevr-runtime-v${{ steps.version.outputs.version }}-lite.zip
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Upload lite distribution (tar.zst)
-      uses: softprops/action-gh-release@v2
-      with:
-        files: ${{ github.workspace }}/build/dist/nevr-runtime-v${{ steps.version.outputs.version }}-lite.tar.zst
+        files: |
+          build/mingw-release/dist/*.zip
+          build/mingw-release/dist/*.tar.zst
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
