@@ -11,7 +11,6 @@ they survive tmpfs sweeps and are discoverable by future agents.
 |------|------|-------------|
 | `recon-owner-bug-batch-RESULTS.md` | 2026-07-22 | 19-item validation report from the owner bug batch |
 | `fable-consistency-hunt-2026-07-23.md` | 2026-07-23 | Ranked consistency/quality ledger; its High findings became N54-N58 |
-| `server-run-wave-a-verify.log` | 2026-07-23 | Trimmed registration witness from Wave A server verification run |
 
 ### Removed, and where to read them
 
@@ -80,6 +79,5 @@ whose value was consumed during the work:
 - `verify-*` — per-run verification output, not findings
 - `worktree-check.md` — temporary check artifact
 - `q-*` files — one-shot query fragments
-- Build/run logs (except `server-run-wave-a-verify.log`) — ephemeral output
 - `*.patch` files — already applied or discarded
 - Configuration extracts (`cfg*.txt`, `*.txt` extracts)
