@@ -18,6 +18,7 @@ set(PATCHES_SOURCES
     "hook/hook_liveness.cpp"
     "lifecycle/state_machine.cpp"
     "ext/plugin_loader.cpp"
+    "ext/plugin_load_plan.cpp"
     "ext/module_loader.cpp"
     "patch/resource_override.cpp"
     "compat/winhttp_stub.cpp"
@@ -54,6 +55,8 @@ set(PATCHES_HEADERS
     "patch/resource_override.h"
     "lifecycle/state_machine.h"
     "ext/plugin_loader.h"
+    "ext/plugin_load_plan.h"
+    "ext/plugin_load_plan_build.h"
     "ext/module_loader.h"
     "compat/winhttp_stub.h"
     "patch/asset_cdn.h"
@@ -119,6 +122,10 @@ set_source_files_properties(ws_bridge.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # the core PCH pulls windows.h WITHOUT NOMINMAX and its min/max macros break
 # <optional>/<set>). Same reason nevr_config.cpp skips the PCH.
 set_source_files_properties(lifecycle/service_map.cpp lifecycle/service_config.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# N134 S6: plugin_load_plan.cpp is the pure builder — nevr_config + nlohmann-json,
+# no windows.h. Same reason as service_map.cpp: it must stay PCH-agnostic (defines
+# NOMINMAX before nlohmann, which pulls <limits>) so the test links it standalone.
+set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(server/websocket_client.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 set_target_properties(nevr_runtime PROPERTIES
@@ -226,6 +233,24 @@ if(BUILD_TESTING)
     target_link_libraries(test_service_map PRIVATE
       GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp)
     gtest_discover_tests(test_service_map DISCOVERY_MODE PRE_TEST)
+
+    # plugin_load_plan tests (N134 S6) — the PURE core of the config-driven plugin
+    # loader: BuildLoadPlan (ordered/enabled-only selection, file defaulting,
+    # required/target carry), ArgsToJson (the v4 args_json contract), and
+    # ChoosePluginInit (v4-preferred/v3-fallback). Compiles plugin_load_plan.cpp
+    # directly (the same TU nevr_runtime links) + nevr_core (nevr_config) + yaml-cpp
+    # + nlohmann-json. No game stubs: the builder has no windows/Log/extern deps.
+    # The LoadLibrary-entangled loader (plugin_loader.cpp) is NOT linked here — it
+    # is exercised by the differential server run.
+    add_executable(test_plugin_load_plan
+      tests/test_plugin_load_plan.cpp
+      ext/plugin_load_plan.cpp)
+    set_source_files_properties(tests/test_plugin_load_plan.cpp ext/plugin_load_plan.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_plugin_load_plan PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_plugin_load_plan PRIVATE
+      GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_plugin_load_plan DISCOVERY_MODE PRE_TEST)
 
     # Behavioral tests — N68 (plugin/module tick dispatch) + N61 (callback
     # lifecycle). Links plugin_loader.cpp, module_loader.cpp, and ws_bridge.cpp

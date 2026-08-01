@@ -193,7 +193,7 @@ test-auth-unit:
     unset VCPKG_ROOT
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_nevr_config --target test_service_map
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_nevr_config --target test_service_map --target test_plugin_load_plan
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -223,6 +223,13 @@ test-auth-unit:
     fi
     wine "$bin"
     bin="build/{{ preset }}/bin/test_service_map.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        echo "       (is 'gtest'/'yaml-cpp' available in vcpkg for triplet x64-mingw-static?)" >&2
+        exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_plugin_load_plan.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         echo "       (is 'gtest'/'yaml-cpp' available in vcpkg for triplet x64-mingw-static?)" >&2
@@ -895,8 +902,26 @@ verify:
     N114_RC2=0; N114_ABI=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/extension/plugin_interface.h) || N114_RC2=$?
     sensor_stage1 "N114 plugin capability ABI" "src/extension/plugin_interface.h" "$N114_RC2"
     sensor_nonempty "N114 plugin capability ABI" "non-comment lines of extension/plugin_interface.h" "$N114_ABI"
-    if ! grep -q 'NEVR_PLUGIN_API_VERSION 3' <<<"$N114_ABI"; then
-        echo "verify: FAIL — N114 NEVR_PLUGIN_API_VERSION is not 3; the capability declaration landed in v3." >&2
+    # Pinned to the CURRENT ABI version (N134 S6 bumped it 3->4 for the additive
+    # NvrPluginInitEx per-plugin-args export). The pin guards against a silent
+    # REGRESSION below the version where the capability channel (v3) and the args
+    # channel (v4) landed — a deliberate bump updates this line, exactly as this
+    # one did.
+    if ! grep -q 'NEVR_PLUGIN_API_VERSION 4' <<<"$N114_ABI"; then
+        echo "verify: FAIL — N114 NEVR_PLUGIN_API_VERSION is not 4; the capability (v3) + args (v4) channels must not regress below v4." >&2
+        exit 1
+    fi
+    # N134 S7: the host must resolve NvrPluginInitEx — the v4 per-plugin-args init
+    # export. This check is in the ABI header (typedef), the loader resolves the
+    # symbol at runtime, so the static check is that the typedef exists and the
+    # loader's GetProcAddress references it. Falsified: comment out the typedef;
+    # rename the loader's "NvrPluginInitEx" string; revert API version to 3.
+    if ! grep -q 'typedef.*NvrPluginInitEx_fn' <<<"$N114_ABI"; then
+        echo "verify: FAIL — N114 S7 NvrPluginInitEx typedef removed from plugin_interface.h; the v4 args channel is dead without it." >&2
+        exit 1
+    fi
+    if ! grep -q 'GetProcAddress(hPlugin, "NvrPluginInitEx")' <<<"$N114_LOADER"; then
+        echo "verify: FAIL — N114 S7 the loader no longer resolves NvrPluginInitEx; a v4 plugin (InitEx + args_json) would fall through to Init (no args)." >&2
         exit 1
     fi
 

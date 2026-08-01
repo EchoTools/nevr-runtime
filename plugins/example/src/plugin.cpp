@@ -9,7 +9,9 @@
  *   NvrPluginGetInfo        — required: plugin metadata
  *   NvrPluginGetApiVersion  — optional: API version the plugin was built against
  *   NvrPluginGetCapabilities— optional: what this plugin DOES (declare it)
- *   NvrPluginInit           — optional: one-time init (reads config, installs hook)
+ *   NvrPluginInitEx         — optional (v4): one-time init WITH per-instance args
+ *   NvrPluginInit           — optional (v3): one-time init (no args; kept as the
+ *                             v3 reference — the host prefers InitEx when present)
  *   NvrPluginShutdown       — optional: cleanup before unload
  *
  * Helper libraries used:
@@ -82,7 +84,7 @@ NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void)
 {
     NvrPluginInfo info = {};
     info.name         = "nevr_example";
-    info.description  = "Minimal reference plugin for the nEVR plugin API v3";
+    info.description  = "Minimal reference plugin for the nEVR plugin API v4";
     info.version_major = 1;
     info.version_minor = 0;
     info.version_patch = 0;
@@ -180,6 +182,36 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
               static_cast<unsigned long long>(kHookTargetVA), g_hooks.count());
 
     return 0;
+}
+
+/*
+ * v4 init: same lifecycle as NvrPluginInit, plus the per-instance `args` from
+ * this plugin's config.yaml entry, serialized to a flat JSON object string. The
+ * host prefers this export over NvrPluginInit when both are present.
+ *
+ * A reference plugin must model good behaviour: it logs that args ARRIVED and one
+ * known non-secret key, but never dumps the whole args_json — a real plugin's
+ * args can hold secrets. It then delegates to the v3 init body so this file stays
+ * a single source of truth for the hook setup.
+ */
+NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_json)
+{
+    if (args_json != nullptr) {
+        try {
+            auto a = nlohmann::json::parse(args_json);
+            PluginLog("initex: received %zu arg(s) from config.yaml", a.size());
+            if (a.contains("greeting")) {
+                PluginLog("initex: greeting arg = %s",
+                          a["greeting"].get<std::string>().c_str());
+            }
+        } catch (const nlohmann::json::parse_error& e) {
+            PluginLog("initex: args_json parse error: %s", e.what());
+        }
+    } else {
+        PluginLog("initex: no args_json (host passed null)");
+    }
+
+    return NvrPluginInit(ctx);
 }
 
 NEVR_PLUGIN_API void NvrPluginShutdown(void)

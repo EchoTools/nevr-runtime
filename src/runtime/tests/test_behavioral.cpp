@@ -26,6 +26,7 @@
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
+#include "runtime/ext/plugin_load_plan.h"  // PluginLoadItem / NevrCfgPluginLoadPlan (N134 S6)
 #include "core/system_info.h"
 
 // ============================================================================
@@ -137,6 +138,14 @@ void* g_earlyConfigPtr = nullptr;
 // URL-credential path exactly as an absent identity.discord_id/auth.password
 // would. The N61 tests drive the Close handler, not login injection.
 const char* NevrCfgGetFlat(const char* /*flatKey*/) { return nullptr; }
+
+// --- plugin_load_plan.h (N134 S6, referenced by plugin_loader.cpp LoadPlugins) ---
+// service_config.cpp defines the real one (BuildLoadPlan over the config.yaml
+// singleton), which this target does not link. LoadPlugins is never CALLED by the
+// N68 tick-dispatch tests — they inject via TestHook_* — so an empty plan is a
+// sound stub: the symbol resolves and the pure selection logic lives in
+// test_plugin_load_plan, not here.
+std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return {}; }
 
 // symbol_corpus.cpp provides the real LookupSymbolName function (670-entry table)
 // and FormatSymbolId. It is compiled into this test target.

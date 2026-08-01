@@ -17,6 +17,8 @@
 #include "runtime/lifecycle/service_map.h"
 #include "runtime/lifecycle/cli.h"        // g_customConfigPath, g_isServer (drags core/pch.h -> windows.h, now NOMINMAX)
 #include "runtime/lifecycle/crash_recovery.h"  // ServerFatal (S4a fail-loud)
+#include "runtime/ext/plugin_load_plan.h"        // PluginLoadItem / NevrCfgPluginLoadPlan (N134 S6)
+#include "runtime/ext/plugin_load_plan_build.h"  // BuildLoadPlan (pure builder)
 #include "abi/echovr_functions.h"         // EchoVR::g_GameBaseAddress
 #include "core/logging.h"                 // Log()
 #include "core/nevr_config.h"
@@ -181,4 +183,13 @@ const char* NevrCfgAutoRelay(unsigned bridgePort) {
   const std::optional<std::string> socketTarget = nevr_cfg::LookupFlat(NevrCfg(), "nevr_socket_uri");
   if (!socketTarget || socketTarget->empty()) return nullptr;
   return InternCStr(std::string("ws://127.0.0.1:") + std::to_string(bridgePort));
+}
+
+// N134 S6 — the plugin loader's config source. The impure half: reads the same
+// config.yaml singleton (loaded + fail-loud-validated once, above) and hands the
+// loader the ordered, enabled-only plan built by the pure BuildLoadPlan. Kept
+// here (not in plugin_load_plan.cpp) so the pure builder stays singleton-free and
+// the test links it without dragging the singleton/Windows/Log surface.
+std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() {
+  return nevr_plugincfg::BuildLoadPlan(NevrCfg());
 }

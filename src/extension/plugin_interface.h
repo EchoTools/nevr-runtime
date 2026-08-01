@@ -70,6 +70,26 @@ typedef NvrPluginInfo (*NvrPluginGetInfo_fn)(void);
 /* Optional: one-time initialization after game modules are loaded */
 typedef int (*NvrPluginInit_fn)(const NvrGameContext* ctx);
 
+/*
+ * Optional (API v4): one-time initialization WITH per-instance args.
+ *
+ * The host passes the plugin's `args` map from its config.yaml entry, serialized
+ * to a JSON object string. When the entry declared no args, `args_json` is the
+ * empty object "{}" (never null). Return 0 on success, non-zero to fail the load
+ * (a `required: true` plugin that returns non-zero is fatal on a server).
+ *
+ * Backward compatibility (REQUIRED): the host prefers NvrPluginInitEx when the
+ * plugin exports it, and otherwise calls NvrPluginInit(ctx) — so a v3 plugin
+ * that exports only NvrPluginInit still loads unchanged, just without args. A
+ * plugin exporting BOTH gets NvrPluginInitEx (NvrPluginInit is not also called).
+ *
+ * args_json shape (v4 contract): a FLAT JSON object whose keys are the entry's
+ * args flattened to dotted paths (a nested `a: {b: 1}` becomes "a.b") and whose
+ * values are strings (post-interpolation; the runtime interpolates ${VAR} refs
+ * before serialization). Example: {"greeting":"hi","limits.max":"5"}.
+ */
+typedef int (*NvrPluginInitEx_fn)(const NvrGameContext* ctx, const char* args_json);
+
 /* Optional: per-frame tick */
 typedef void (*NvrPluginOnFrame_fn)(const NvrGameContext* ctx);
 
@@ -88,11 +108,17 @@ typedef void (*NvrPluginShutdown_fn)(void);
  * cross-DLL export signature changes in a backward-incompatible way.
  * Adding new optional exports or new NvrHostFlags values does NOT require a bump.
  *
+ * v4 (N134): the additive NvrPluginInitEx(ctx, args_json) export + config-driven
+ * ordered loading. This is a compatible addition — a v3 plugin (NvrPluginInit
+ * only) still loads — so the bump is a CAPABILITY signal, not a break: a plugin
+ * can query the host version to decide whether to rely on receiving args. The
+ * args_json string shape is part of this version's contract (see NvrPluginInitEx).
+ *
  * The host resolves NvrPluginGetApiVersion via GetProcAddress. If absent,
  * the plugin is v1 (pre-versioning). Fully backward-compatible — existing
  * plugins don't need recompilation.
  */
-#define NEVR_PLUGIN_API_VERSION 3
+#define NEVR_PLUGIN_API_VERSION 4
 
 /* Optional: return the API version the plugin was compiled against */
 typedef uint32_t (*NvrPluginGetApiVersion_fn)(void);
