@@ -71,6 +71,9 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
   EXPECT_EQ(FlatKeyToYamlPath("graph_host"), "services.graph");
   EXPECT_EQ(FlatKeyToYamlPath("graphservice_host"), "services.graph_service");
   EXPECT_EQ(FlatKeyToYamlPath("nevr_socket_uri"), "services.socket_uri");
+  // identity / auth (S4a — ws_bridge login injection)
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_discord_id"), "identity.discord_id");
+  EXPECT_EQ(FlatKeyToYamlPath("nevr_password"), "auth.password");
   // network
   EXPECT_EQ(FlatKeyToYamlPath("external_ip"), "network.external_ip");
   EXPECT_EQ(FlatKeyToYamlPath("internal_ip"), "network.internal_ip");
@@ -85,13 +88,15 @@ TEST(ServiceMap, FlatKeyToYamlPath_EveryMigratedKey) {
 }
 
 TEST(ServiceMap, FlatKeyToYamlPath_UnmigratedKeysAreEmpty) {
-  // nevr_http_uri is deliberately NOT migrated in S3 (S4/S5 owns it): the https
-  // branch of RedirectServiceUrl must keep reading the game JSON.
+  // nevr_http_uri is deliberately NOT migrated in S4a (gameserver.cpp / S4b + S5
+  // own it): the https branch of RedirectServiceUrl and the auth POST must keep
+  // reading the game JSON until then.
   EXPECT_EQ(FlatKeyToYamlPath("nevr_http_uri"), "");
-  // S4/S5 keys and anything unknown are not this step's business.
+  // S4b/S5 keys and anything unknown are not this step's business. (nevr_discord_id
+  // and nevr_password moved to the migrated set above in S4a.)
   EXPECT_EQ(FlatKeyToYamlPath("nevr_serverdb_uri"), "");
-  EXPECT_EQ(FlatKeyToYamlPath("nevr_discord_id"), "");
   EXPECT_EQ(FlatKeyToYamlPath("telemetry_uri"), "");
+  EXPECT_EQ(FlatKeyToYamlPath("telemetry_token"), "");
   EXPECT_EQ(FlatKeyToYamlPath("bogus_key"), "");
   EXPECT_EQ(FlatKeyToYamlPath(""), "");
 }
@@ -118,6 +123,27 @@ TEST(ServiceMap, LookupFlat_AbsentKeyIsNullopt) {
   const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString("version: \"1\"\n");
   EXPECT_FALSE(LookupFlat(cfg, "matchingservice_host").has_value());
   EXPECT_FALSE(LookupFlat(cfg, "external_ip").has_value());
+}
+
+// ---------------------------------------------------------------------------
+// S4a — ws_bridge login-injection keys resolve through the same flat->path map.
+// The discord_id fixture is a SHORT fake on purpose: an 18-20 digit literal in
+// src/ trips the N20 identity-literal sensor (justfile). The real id lives only
+// in echovr/_local/config.yaml.
+// ---------------------------------------------------------------------------
+TEST(ServiceMap, LookupFlat_IdentityAndAuthResolve) {
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "identity:\n  discord_id: \"1234567890\"\nauth:\n  password: \"s3cr3t-pw\"\n");
+  EXPECT_EQ(LookupFlat(cfg, "nevr_discord_id").value_or(""), "1234567890");
+  EXPECT_EQ(LookupFlat(cfg, "nevr_password").value_or(""), "s3cr3t-pw");
+}
+
+TEST(ServiceMap, LookupFlat_IdentityAndAuthAbsentIsNullopt) {
+  // Absent identity/auth -> nullopt, so ws_bridge keeps its no-injection default
+  // (guard on cfgDiscordId[0]/cfgPassword[0]) — Hazard C, no default change.
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString("version: \"1\"\n");
+  EXPECT_FALSE(LookupFlat(cfg, "nevr_discord_id").has_value());
+  EXPECT_FALSE(LookupFlat(cfg, "nevr_password").has_value());
 }
 
 // ---------------------------------------------------------------------------

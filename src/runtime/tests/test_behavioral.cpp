@@ -131,6 +131,13 @@ void ServerFatal(const CHAR* format, ...) {
 // --- config.h extern (used by ws_bridge.cpp) ---
 void* g_earlyConfigPtr = nullptr;
 
+// --- service_config.h accessor (N133 S4a, used by ws_bridge.cpp login injection) ---
+// service_config.cpp is not linked here (it drags the config.yaml singleton +
+// file discovery). A null return == "key absent", so ws_bridge's guard skips the
+// URL-credential path exactly as an absent identity.discord_id/auth.password
+// would. The N61 tests drive the Close handler, not login injection.
+const char* NevrCfgGetFlat(const char* /*flatKey*/) { return nullptr; }
+
 // symbol_corpus.cpp provides the real LookupSymbolName function (670-entry table)
 // and FormatSymbolId. It is compiled into this test target.
 

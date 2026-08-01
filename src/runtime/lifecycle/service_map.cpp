@@ -26,6 +26,12 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
       {"graph_host", "services.graph"},
       {"graphservice_host", "services.graph_service"},
       {"nevr_socket_uri", "services.socket_uri"},
+      // identity / auth (S4a — ws_bridge login injection). Left column = the exact
+      // key ws_bridge's JSON reader used. auth.password is a SECRET: its ${VAR:?}
+      // form fails loud on an unset env in server mode (see service_config.cpp
+      // NevrCfg()). config.cpp does NOT read these — only ws_bridge does.
+      {"nevr_discord_id", "identity.discord_id"},
+      {"nevr_password", "auth.password"},
       // network (config.cpp LoadLocalConfigHook)
       {"external_ip", "network.external_ip"},
       {"internal_ip", "network.internal_ip"},

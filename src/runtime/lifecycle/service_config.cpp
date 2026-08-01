@@ -15,7 +15,8 @@
 
 #include "runtime/lifecycle/service_config.h"
 #include "runtime/lifecycle/service_map.h"
-#include "runtime/lifecycle/cli.h"        // g_customConfigPath (drags core/pch.h -> windows.h, now NOMINMAX)
+#include "runtime/lifecycle/cli.h"        // g_customConfigPath, g_isServer (drags core/pch.h -> windows.h, now NOMINMAX)
+#include "runtime/lifecycle/crash_recovery.h"  // ServerFatal (S4a fail-loud)
 #include "abi/echovr_functions.h"         // EchoVR::g_GameBaseAddress
 #include "core/logging.h"                 // Log()
 #include "core/nevr_config.h"
@@ -71,13 +72,24 @@ std::string FindNevrConfigYamlPath() {
 // The one parsed config.yaml, loaded lazily on first access. Thread-safe init via
 // the C++11 magic-static rule.
 //
-// Load policy for S3 is NON-FATAL on both a missing and a malformed file: it
-// warns and yields an empty config (every migrated key then resolves to its
-// hardcoded default). Rationale: (1) S3's key set has NO secrets, so HARD RISK
-// #3 (fail-loud-or-send-empty, N115) does not apply here; (2) first access can
-// pre-date the fatal-error handler install, and a fatal there would block on an
-// invisible MessageBox (the very hang the primer warns about). S4/S5, which add
-// secrets, can reintroduce fail-loud once handler-before-first-access is assured.
+// Load policy (S4a): a MISSING config.yaml is non-fatal in both modes — warn and
+// yield an empty config (every migrated key then resolves to its hardcoded
+// default; "no config" is a legitimate defaults-only run). But a config.yaml that
+// EXISTS and is malformed OR references an unset required ${VAR:?} secret FAILS
+// LOUD in server mode via ServerFatal -> ForceFatalExit — never a silent degrade
+// to no-login on an empty secret (HARD RISK #3 / N115). ServerFatal warns and
+// returns in client mode, so the client path stays warn+empty as before.
+//
+// Ordering — why the S3 hazard (a fatal that pre-dates the handler install could
+// block on an invisible MessageBox) does NOT apply here: ServerFatal terminates
+// via ForceFatalExit (TerminateProcess), never MessageBoxA. And by first access
+// the whole install chain is up regardless: first access is boot.cpp
+// PreprocessCommandLineHook, which runs after Initialize() installed every hook,
+// AFTER g_isServer is set (boot.cpp:39) and AFTER InstallFatalErrorHandler()
+// (boot.cpp:53), and the lazy load stays after the CLI loop so -config-path
+// (g_customConfigPath) is honoured. The secret itself is not accessed until ws
+// login, far later still. So an unset ${NEVR_PASSWORD:?} fails loud at first
+// access (the socket_uri read, boot.cpp) instead of ever reaching ws_bridge.
 const nevr::NevrConfig& NevrCfg() {
   static const nevr::NevrConfig cfg = []() -> nevr::NevrConfig {
     const std::string path = FindNevrConfigYamlPath();
@@ -91,6 +103,12 @@ const nevr::NevrConfig& NevrCfg() {
       Log(EchoVR::LogLevel::Info, "[NEVR.CONFIG] config.yaml loaded from: %s", path.c_str());
       return c;
     } catch (const nevr::NevrConfigError& e) {
+      // Server: fail loud (ServerFatal -> ForceFatalExit). Client: ServerFatal
+      // warns and returns, then we fall through to the warn+empty client path.
+      ServerFatal("config.yaml at %s is invalid: %s — refusing to run a server on a "
+                  "broken or incomplete config (an unset required secret must fail loud, "
+                  "never silently degrade to no login)",
+                  path.c_str(), e.what());
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.CONFIG] config.yaml parse error (%s) — NEVR config keys use built-in defaults",
           e.what());

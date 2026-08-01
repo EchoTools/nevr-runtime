@@ -135,6 +135,29 @@ TEST(NevrConfig, RequiredSecretUnsetThrows) {
   }
 }
 
+// S4a — auth.password is the ws_bridge login secret. Pin its required-by-ref
+// contract on the exact key that ships: ${NEVR_PASSWORD:?} resolves when the env
+// is set, and fails loud (throws NevrConfigError -> ServerFatal at the singleton)
+// when unset. An empty env is treated as unset (never send an empty secret, N115).
+TEST(NevrConfig, AuthPasswordRequiredRefResolvesWhenSet) {
+  SetEnv("NEVR_S4A_PASSWORD", "a-real-server-password");
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "auth:\n  password: \"${NEVR_S4A_PASSWORD:?NEVR_S4A_PASSWORD must be set for server login}\"\n");
+  EXPECT_EQ(cfg.GetString("auth.password").value_or(""), "a-real-server-password");
+}
+
+TEST(NevrConfig, AuthPasswordRequiredRefUnsetFailsLoud) {
+  UnsetEnv("NEVR_S4A_PASSWORD");  // empty == unset
+  try {
+    nevr::NevrConfig::LoadFromString(
+        "auth:\n  password: \"${NEVR_S4A_PASSWORD:?NEVR_S4A_PASSWORD must be set for server login}\"\n");
+    FAIL() << "expected NevrConfigError for an unset ${NEVR_PASSWORD:?} secret";
+  } catch (const nevr::NevrConfigError& e) {
+    EXPECT_NE(std::string(e.what()).find("NEVR_S4A_PASSWORD must be set for server login"),
+              std::string::npos);
+  }
+}
+
 TEST(NevrConfig, BareRequiredVarUnsetThrows) {
   UnsetEnv("NEVR_TEST_BARE");
   EXPECT_THROW(nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"${NEVR_TEST_BARE}\"\n"),

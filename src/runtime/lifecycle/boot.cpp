@@ -1,6 +1,7 @@
 #include "runtime/lifecycle/boot.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"
+#include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/lifecycle/initialize.h"
 #include "runtime/patch/mode_patches.h"
@@ -313,15 +314,21 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   //
   // Started here, before plugins, because config.cpp's service redirect needs the
   // bridge port and the game asks for redirects during PreprocessCommandLine.
-  if (g_earlyConfigPtr) {
-    CHAR* socketUri = EchoVR::JsonValueAsString(
-        (EchoVR::Json*)g_earlyConfigPtr, (CHAR*)"nevr_socket_uri", NULL, false);
+  // N133 S4a: the bridge target (nevr_socket_uri) now comes from config.yaml
+  // services.socket_uri via nevr_config, not the game JSON. No g_earlyConfigPtr
+  // guard here — the value no longer lives in the early game config; the bridge
+  // starts iff socket_uri is configured (absent -> no bridge, unchanged). First
+  // NevrCfg() access happens here, after the CLI loop (so -config-path is
+  // honoured), after g_isServer/InstallFatalErrorHandler — a bad config.yaml or
+  // an unset required secret fails loud at this point in server mode.
+  {
+    const char* socketUri = NevrCfgGetFlat("nevr_socket_uri");
     if (socketUri && socketUri[0] != '\0') {
       SetWebSocketBridgeTarget(socketUri);
       InstallWebSocketBridge();
     } else {
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.WS] no nevr_socket_uri in early config — bridge NOT started; the game "
+          "[NEVR.WS] no services.socket_uri in config.yaml — bridge NOT started; the game "
           "will talk to services directly and login injection cannot fire");
     }
   }

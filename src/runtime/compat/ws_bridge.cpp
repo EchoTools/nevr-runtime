@@ -22,6 +22,7 @@
 #include "core/globals.h"
 #include "core/system_info.h"
 #include "runtime/lifecycle/cli.h"  // g_isServer
+#include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
 #include "core/logging.h"
 #include <exception>
 #include <utility>
@@ -386,9 +387,17 @@ void InstallWebSocketBridge() {
             // Build remote URL with optional query param auth
             // (workaround: production nginx strips Bearer JWT and forces format=evr)
             std::string remoteUrl = g_remoteUri;
-            if (g_earlyConfigPtr) {
-              CHAR* cfgDiscordId = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_discord_id", NULL, false);
-              CHAR* cfgPassword = EchoVR::JsonValueAsString(g_earlyConfigPtr, (CHAR*)"nevr_password", NULL, false);
+            // N133 S4a: discord id + password come from config.yaml
+            // (identity.discord_id / auth.password) via nevr_config, not the game
+            // JSON. Both must be present and non-empty to attach URL credentials.
+            // An unset required auth.password already failed the server loud at
+            // config load (service_config.cpp), so reaching here with an empty
+            // password just means "no URL credentials" — we fall through to the
+            // Bearer/JWT path and never put an empty secret on the wire (N115).
+            // The password value is never logged.
+            {
+              const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
+              const char* cfgPassword = NevrCfgGetFlat("nevr_password");
               if (cfgDiscordId && cfgDiscordId[0] != '\0' && cfgPassword && cfgPassword[0] != '\0') {
                 char sep = (remoteUrl.find('?') != std::string::npos) ? '&' : '?';
                 remoteUrl += sep;
@@ -449,9 +458,11 @@ void InstallWebSocketBridge() {
             // N20 (owner decision, 2026-07-27): the fallback applies in CLIENT mode
             // too, not only when g_isServer. JWT first, config second, regardless of
             // mode.
-            if (discordId == 0 && g_earlyConfigPtr) {
-              CHAR* cfgId = EchoVR::JsonValueAsString(
-                  (EchoVR::Json*)g_earlyConfigPtr, (CHAR*)"nevr_discord_id", NULL, false);
+            if (discordId == 0) {
+              // N133 S4a: fallback discord id from config.yaml identity.discord_id
+              // (was the game JSON nevr_discord_id). NOT gated on g_isServer — N20
+              // (owner, 2026-07-27) applies the fallback in client mode too.
+              const char* cfgId = NevrCfgGetFlat("nevr_discord_id");
               if (cfgId && cfgId[0] != '\0') {
                 discordId = strtoull(cfgId, nullptr, 10);
                 Log(EchoVR::LogLevel::Info,
