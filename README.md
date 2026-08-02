@@ -117,7 +117,6 @@ docs/              see docs/README.md
 | - | - |
 | [`AGENTS.md`](AGENTS.md) | Entry point for agents — what binds, and the gate |
 | [`AGENTS.md`](AGENTS.md) | Project conventions, build/test commands, guardrails |
-| [`BUGS.md`](BUGS.md) | Work ledger (`N`-prefix) + original-binary audit |
 | [`docs/`](docs/) | Standards, guides, reference, design, audits |
 
 ## Dependencies

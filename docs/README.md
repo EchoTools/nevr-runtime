@@ -10,8 +10,6 @@ Design documents, architecture decisions, and porting analysis.
 | `2026-06-09-streaming-integration.md` | WebSocket telemetry protocol contract between nevr-runtime and nevr-stream | Runtime and nevr-stream developers |
 | `2026-06-29-serverdb-token-auth.md` | ADR: game-server ServerDB auth migration from URL-param credentials to JWT tokens | Runtime and ops developers |
 | `2026-07-13-quest-crash-reporter-injection.md` | Quest arm64 crash-reporter injection design via libovrplatformloader.so hijack | Quest porting developers |
-| `binary-bug-fix-plan.md` | Binary bug fix wave plan — remaining unpatched game bugs and their priority | Runtime developers |
-
 ## Reference
 
 Format specifications, symbol maps, and procedural runbooks.
@@ -28,7 +26,6 @@ Operational procedures and testing protocols.
 
 | File | Description | Audience |
 | ---- | ----------- | -------- |
-| `smoke-tests.md` | Per-feature smoke test suite with 77 signal rows, scorer, and run table | Operators and agents |
 
 ## Standards
 

@@ -77,7 +77,7 @@ OVR-ORG's.
 (compact). The game also carries the string **`generating bot account id`** at
 `0x16D7160`. So a bot/spectator identity namespace is not something that has to be
 invented; the engine already has one. This is directly relevant to the
-player-plus-own-spectator collision (manual-test-plan test 3.9), and it matches the
+player-plus-own-spectator collision, and it matches the
 `BOT-<snowflake>` device-ID convention already in use on the Nakama side.
 
 **The XPID format string is `%s-%llu`** at `0x16D7158` — prefix, hyphen, unsigned

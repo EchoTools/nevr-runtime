@@ -517,7 +517,7 @@ static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT
   // The `return` is LEFT IN PLACE deliberately. Removing it is a behaviour change
   // on a path that was added in response to a real AV, and whether that AV still
   // occurs is not statically determinable. Procedure to settle it:
-  // BUGS.md#N83 (the primer was folded into this entry on 2026-08-01). Do not "fix" this by
+  // N83 (self-collision — two code paths detour the same address). Do not "fix" this by
   // deleting the line because the name was wrong — that is the same error in the
   // opposite direction.
   if (g_isServer) return;

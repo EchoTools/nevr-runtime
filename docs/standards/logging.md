@@ -80,7 +80,7 @@ how an agent triangulates a correct log line.
 - You **shall not** use `Log(Debug, ...)` for anything you expect an operator to need
   during a production incident. DEBUG is off by default in production
   builds. If an operator needs it, it is INFO.
-- You **shall not** leave a `// TODO: add logging` comment without a BUGS.md N-ledger
+- You **shall not** leave a `// TODO: add logging` comment without a N-ledger
   entry. A TODO without a ticket is a wish.
 
 ---
@@ -178,7 +178,7 @@ Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] websocket connected uri=%s conn_i
 ```
 
 **Where:** This rule applies to every `Log()` call site. Existing
-violations are recorded in BUGS.md N19 (no logging standards exist).
+violations are recorded in N19 (no logging standards exist).
 
 ### Rule 2: XPID shall be logged at login
 
@@ -205,7 +205,7 @@ Log(EchoVR::LogLevel::Info,
 
 The platform prefix SHALL be derived from the actual platform code in the
 login payload, not hardcoded. If the platform is DSC (Discord, code 2),
-the XPID is `DSC-<id>`, not `OVR-ORG-<id>`. See BUGS.md N14 (platform
+the XPID is `DSC-<id>`, not `OVR-ORG-<id>`. See N14 (platform
 prefix hardcoded as OVR_ORG in module ws_bridge).
 
 **Where:** the module copy is GONE — `src/modules/ws-bridge/` was deleted in
@@ -213,7 +213,7 @@ prefix hardcoded as OVR_ORG in module ws_bridge).
 is still retrievable:
 `git show d654cd192e95767227fda0313d713e9d5effe4c9:src/modules/ws-bridge/src/ws_bridge.cpp`
 (conn>0 injection at :281-283, conn=0 at :441-444). The surviving injection site
-is `src/runtime/compat/ws_bridge.cpp:515`. Tracked as BUGS.md N15.
+is `src/runtime/compat/ws_bridge.cpp:515`. Tracked as N15.
 
 ### Rule 3: Silence is not success
 
@@ -246,7 +246,7 @@ the exit log including success/failure and any relevant state.
 ### Rule 4: Noise is a defect
 
 echovr-native log lines are "objectively 97% worthless" (owner). The
-built-in log filter exists to suppress them (see BUGS.md N18). If noise is
+built-in log filter exists to suppress them (see N18). If noise is
 reaching the production log, the filter is broken and that is a defect.
 
 What constitutes noise:
@@ -315,7 +315,7 @@ just started failing" without a baseline.
 **Where:** `src/runtime/patch/binary_bug_fixes.cpp:435-439`,
 `src/runtime/patch/headless_graphics.cpp:454-525`,
 `src/runtime/patch/resource_override.cpp:134`,
-`src/runtime/log/builtin_filter.cpp:826`. Tracked as BUGS.md N17
+`src/runtime/log/builtin_filter.cpp:826`. Tracked as N17
 (startup hook errors not systematically tracked).
 
 ### Rule 6: The Log() function is the single entry point
@@ -513,14 +513,14 @@ failing any of these checks is rejected until the violation is fixed.
 
 ## References
 
-- **BUGS.md N15** — Login XPID not logged at injection time.
-- **BUGS.md N18** — log filter not suppressing noise effectively.
-- **BUGS.md N89** — the `log_filter.dll` *plugin* is superseded by the built-in
+- **N15** — Login XPID not logged at injection time.
+- **N18** — log filter not suppressing noise effectively.
+- **N89** — the `log_filter.dll` *plugin* is superseded by the built-in
   filter and is refused by the loader. `src/runtime/log/builtin_filter.cpp`
   is the shipping path; do not reintroduce the plugin.
-- **BUGS.md N19** — No logging standards exist (this document).
-- **BUGS.md N17** — Startup hook errors not systematically tracked.
-- **BUGS.md N14** — Platform prefix hardcoded as OVR_ORG (affects XPID correctness).
+- **N19** — No logging standards exist (this document).
+- **N17** — Startup hook errors not systematically tracked.
+- **N14** — Platform prefix hardcoded as OVR_ORG (affects XPID correctness).
 - **AGENTS.md** — Project conventions, `Log()` usage, subsystem architecture.
 - **CPP-MINGW-ADDENDUM-GENERIC.md** — "Logging (Structured, Always)" section, "No printf" rule.
 - **`src/core/logging.h`** — `Log()` and `FatalError()` declarations.

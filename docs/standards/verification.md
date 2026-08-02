@@ -2,7 +2,7 @@
 
 _Authored by @agents._
 
-**Required reading** for ANY agent claiming a fix works, closing a `BUGS.md`
+**Required reading** for ANY agent claiming a fix works, closing an N-ledger
 entry, or adding a check to `just verify`. Read this BEFORE writing "verified",
 BEFORE closing an N-entry, and BEFORE trusting a green gate.
 
@@ -24,7 +24,7 @@ an exception. Silence, and a gate that accepted it.
 
 ### This IS
 
-- A binding standard for the word "verified" in `BUGS.md` and in commit messages.
+- A binding standard for the word "verified" in commit messages.
 - A definition of what counts as evidence, ranked, so a claim can be graded
   rather than argued about.
 - A required procedure for adding any check to `just verify`: you must break it
@@ -207,5 +207,5 @@ Enforced in review. A change that fails any of these is rejected until fixed.
 - **`AGENTS.md`** §Methodology, §Continuity — plan-before-code, measure before
   concluding, confirmation bias.
 - **`~/src/metis-core/CPP-MINGW-ADDENDUM-GENERIC.md`** — build and C++ hard stops.
-- **`BUGS.md`** — the N-ledger. Every entry carries the invariant it protects.
+- **The N-ledger** — every entry carries the invariant it protects.
 - Worked precedents: **N67**, **N83**, **N86**, **N88**, **N89**, **N90**, **N92**.

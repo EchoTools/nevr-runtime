@@ -149,7 +149,7 @@ gameserver.cpp has 8 calls to SendProtobufEnvelope; 7 ignore the bool return. Se
 **Fix:** Log warning on failure; consider retry for registration/reconnection.
 
 ### S8 [M] — ~1,700 lines dead source in extras/dbghooks/ never compiled (R7/S1)
-12 .cpp/.h files on disk not in any CMake target. Largest is weapon_system_trace.cpp (407 lines). echovr_launcher.cpp IS compiled but superseded per BUGS.md.
+12 .cpp/.h files on disk not in any CMake target. Largest is weapon_system_trace.cpp (407 lines). echovr_launcher.cpp IS compiled but superseded.
 **Fix:** Remove dead files or archive them.
 
 ### S9 [M] — Duplicate UPnP device discovery (R2/F2.02)

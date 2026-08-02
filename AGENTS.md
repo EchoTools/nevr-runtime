@@ -257,16 +257,11 @@ RULINGS.md 2026-07-20 "nevr onboarding"). Process machinery is governed by
 the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), which subsumes the former `DRIVER-CHARTER.md` (five slots + fleet protocol inlined into the skill)
 (`.claude/skills/nevr-work/`, gitignored). The following process decisions bind:
 
-- **Work ledger = `BUGS.md` `# NEVR Runtime Source Bugs` section (N-prefix IDs).**
-  This is a distinct ID namespace from the binary-audit integer IDs elsewhere in
-  the same file (which audit the *original* game binary). Next-ID rule:
-  `grep '^### N' BUGS.md` → highest, take next. Entries follow the `bugs-ledger`
-  shape (What measured → Where file:line → Evidence → Impact → Fix direction →
-  Status); amend, never rewrite. (Basis: day-one-kit §1 precondition — "if a file
-  of that name is a domain artifact, pick a distinct path"; here the distinct path
-  is a distinct *section+namespace* within `BUGS.md`. A process-layer decision, no
-  citable owner basis at the process layer — new decision per RULINGS.md 2026-07-19
-  "Process ownership".)
+- **Resolved defects are in git history.** The N-ledger (N-prefix IDs) recorded
+  every defect found and fixed during development. All entries are now resolved or
+  acknowledged. New defects go to GitHub issues. The N-ID namespace is closed —
+  no new N-entries should be created. (Basis: owner decision 2026-08-02 to retire
+  the file-based ledger in favor of GitHub issues.)
 - **Commit identity.** Author `agents@sprock.io`, unsigned (`--no-gpg-sign`),
   with a single `Co-authored-by: Andrew Bates <a@sprock.io>` trailer, a
   conventional prefix, and one logical change per commit. You **shall** verify

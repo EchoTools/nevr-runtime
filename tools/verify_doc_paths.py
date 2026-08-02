@@ -7,7 +7,7 @@ carried four paths that did not exist (`src/protobufnevr/`, `extern/nevr-proto`,
 `src/server/`, `gamepatches/patches.cpp`) for months, because prose cannot be
 wrong in a way anything notices.
 
-Scope: CURRENT-STATE documents only. A record is immutable — `BUGS.md` entries and
+Scope: CURRENT-STATE documents only. A record is immutable — audit records and
 `docs/audits/` describe the tree as it was when written, and a path that has since
 moved is correct history, not a defect. Amending them would violate the ledger's
 own append-only rule. (`extras/` moved to nevr-runtime-plugins on 2026-07-27.)
@@ -142,7 +142,7 @@ def all_doc_files():
                              capture_output=True, text=True).stdout.split()
     seen = set()
     for f in list(tracked) + list(local_docs()):
-        if f == "BUGS.md" or f.startswith("docs/audits/"):
+        if f.startswith("docs/audits/"):
             continue                          # immutable records — see module docstring
         if f not in seen:
             seen.add(f)

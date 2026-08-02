@@ -235,7 +235,7 @@ TEST(HeadlessGates, GateRvasInCodeRangeAndDistinct) {
 // ============================================================================
 // Each Wave I bug fix gets a unit test here unless the fix is explicitly
 // untestable (shell script, integration-only path, or cross-module loading).
-// Untestable justifications are recorded in the test comments and in BUGS.md.
+// Untestable justifications are recorded in the test comments.
 
 // Wave I fix verification: these tests prove the fix logic is correct.
 // Runtime call-site verification (N59, N60, N61, N63, N64, N68) is done

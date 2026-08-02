@@ -394,7 +394,7 @@ verify:
     if ! grep -q 'HasValidRefreshToken()' <<<"$N106_GS"; then
         echo "verify: FAIL — N106 the gameserver no longer exchanges a refresh token for an" >&2
         echo "access token. The OAuth2 device-flow path becomes unreachable on a server and" >&2
-        echo "every registration silently degrades to password auth (BUGS.md N106)." >&2
+        echo "every registration silently degrades to password auth (N106)." >&2
         exit 1
     fi
     if ! grep -q 'RefreshAuthToken(auth' <<<"$N106_GS"; then
@@ -443,7 +443,7 @@ verify:
     for site in 'registration rejected by ServerDB' 'no valid token for ServerDB connection'; do
         if ! grep -qF "$site" <<<"$N102_GS"; then
             echo "verify: FAIL — N102 the fail-fast for '${site}' is missing from the SHIPPING gameserver." >&2
-            echo "Without it the server runs degraded for hours instead of exiting with a cause (BUGS.md N102)." >&2
+            echo "Without it the server runs degraded for hours instead of exiting with a cause (N102)." >&2
             exit 1
         fi
     done
@@ -1406,7 +1406,7 @@ verify:
         sensor_stage1 "N94 auth log taxonomy" "$N94_FILE" "$N94_RC"
         sensor_nonempty "N94 auth log taxonomy" "message '$msg' in $N94_FILE" "$N94_CTX"
         if grep -q 'LogLevel::Info' <<<"$N94_CTX"; then
-            echo "verify: FAIL — N94 the '[NEVR.AUTH] ${msg}' line is at Info; the N47 taxonomy pins it at Debug (merge 2f29312 once reverted all nine — BUGS.md N94)." >&2
+            echo "verify: FAIL — N94 the '[NEVR.AUTH] ${msg}' line is at Info; the N47 taxonomy pins it at Debug (merge 2f29312 once reverted all nine — N94)." >&2
             exit 1
         fi
     done
@@ -1416,47 +1416,10 @@ verify:
     # its own explanatory comment — which quotes the very string it forbids — so
     # it failed on a correct tree. Comment lines are stripped; the pattern is
     # anchored to the PatchDetour signature.
-    # N100: docs/standards/verification.md:44 requires every "fixed"/"closed"
-    # claim to state its evidence rank. Nothing checked it. Scope is entries
-    # ADDED on or after 2026-07-26, when that standard landed; earlier entries
-    # are pre-standard and stand as written. That date is not readable from file
-    # content, so the sensor uses N-ID as a proxy — and the proxy is MEASURED,
-    # not assumed (first appearance of each heading in BUGS.md's own history):
-    #     N83  a51966b  2026-07-26
-    #     N79  548df84  2026-07-25
-    # so N-ID >= 83 is exactly "added on or after 2026-07-26".
-    # Only rows that NAME a verification method are in scope: an entry that
-    # claims no method (N83 "Guard measured", N84 "RE-OPENED") has no rank to
-    # state. Vacuity guard below, because a scope that matched nothing would
-    # pass forever.
-    # One awk pass emits both the offender list and the scope size, tagged, so
-    # there is no temp file (scratch shall not go in /tmp — CLAUDE.md).
-    N100_RC=0; N100_RAW=$(awk '
-        /^### N[0-9]+\./ { id = $2; sub(/^N/, "", id); sub(/\./, "", id); cur = id }
-        /^\| \*\*Status\*\*/ {
-            if (cur + 0 >= 83) {
-                inscope++
-                if ($0 ~ /Verification|SYSTEM-TEST|SENSOR|falsif/ && $0 !~ /[Rr]ank[ ]*([0-9]|N\/A)/)
-                    print "OFFENDER N" cur
-            }
-        }
-        END { print "INSCOPE " inscope + 0 }
-    ' BUGS.md) || N100_RC=$?
-    sensor_stage1 "N100 ledger evidence rank" "BUGS.md" "$N100_RC"
-    sensor_nonempty "N100 ledger evidence rank" "N-entry Status rows in BUGS.md" "$N100_RAW"
-    N100_INSCOPE=$(printf '%s\n' "$N100_RAW" | sed -n 's/^INSCOPE //p')
-    N100_OFFENDERS=$(printf '%s\n' "$N100_RAW" | sed -n 's/^OFFENDER //p')
-    if [ -z "$N100_INSCOPE" ] || [ "$N100_INSCOPE" -lt 1 ]; then
-        echo "verify: FAIL — sensor 'N100 ledger evidence rank': the scope is EMPTY, so the check" >&2
-        echo "could never fire. Either the heading/Status shapes changed or the awk broke." >&2
-        exit 1
-    fi
-    if [ -n "$N100_OFFENDERS" ]; then
-        echo "verify: FAIL — N100 these N-entry Status rows name a verification method but no" >&2
-        echo "evidence rank (docs/standards/verification.md:44). State the ladder rank:" >&2
-        printf '%s\n' "$N100_OFFENDERS" >&2
-        exit 1
-    fi
+    # N100 sensor removed 2026-08-02: its subject (BUGS.md) is being purged from
+    # the public repo. The evidence-rank rule it enforced lives on in
+    # docs/standards/verification.md; the N-ledger entries it checked are now
+    # git history or migrated to ADRs.
     # --- N99: -server shall apply the game's own headless mask --------------
     # `-headless` is a NATIVE echovr.exe token. Its whole effect in the binary
     # is one instruction (0x140504566, `and dword [rbx+0x1D4], 0xFFFEFEFE`),
@@ -1506,7 +1469,7 @@ verify:
          | grep -v legacy | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
         echo "verify: FAIL — N96 a bare 'ResolveVA' spelling is back. Use" >&2
         echo "nevr::ResolveVA_Checked or nevr::ResolveVA_Unchecked — the name shall state" >&2
-        echo "whether the address was validated (BUGS.md N96)." >&2
+        echo "whether the address was validated (N96)." >&2
         exit 1
     fi
     # N97: exactly ONE definition of ValidatePrologue. Two file-local copies
@@ -1522,7 +1485,7 @@ verify:
     if [ "$N97_RC" -ne 0 ] || [ "$N97_DEFS" -ne 1 ]; then
         echo "verify: FAIL — N97 found $N97_DEFS definitions of ValidatePrologue (want exactly 1," >&2
         echo "nevr::ValidatePrologue in plugins/common/include/nevr_common.h). A second copy is how" >&2
-        echo "a bare-memcmp version returned TRUE for a zero-length check (BUGS.md N97)." >&2
+        echo "a bare-memcmp version returned TRUE for a zero-length check (N97)." >&2
         printf '%s\n' "$N97_HITS" >&2
         exit 1
     fi

@@ -24,7 +24,7 @@ void Install(uintptr_t) {
      * emptiness, was the defect.
      *
      * The real dispatch-integrity work is N83/N84: see
-     * BUGS.md#N83 (the primer was folded into this entry on 2026-08-01). */
+     * N83 (self-collision — two code paths detour the same address, 2026-08-01). */
 }
 
 void Shutdown() {}

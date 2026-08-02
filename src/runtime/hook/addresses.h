@@ -335,7 +335,7 @@ constexpr uintptr_t GAME_MAIN = 0x0CD550;
 ///
 /// If you are about to conclude "this is entity/rendering code, therefore it is
 /// safe to skip on a headless server" — that is the exact inference that severed
-/// the ServerDB→game message path. Stop and read N83 in BUGS.md.
+/// the ServerDB→game message path. See N83 (self-collision — two code paths detour the same address).
 ///
 /// Verified by disassembly (revault_disassemble, echovr.exe):
 ///   0xF80ED0 is CBroadcaster::Listen — message-listener REGISTRATION.
@@ -362,7 +362,7 @@ constexpr uintptr_t GAME_MAIN = 0x0CD550;
 /// (0x140f80f17 -> reads [RAX+0x3ff8] @0x140f80f1e), and a garbage pointer of
 /// 0x10 lands exactly on the documented 0x4008. Someone hit a genuine crash.
 /// Whether it still occurs is the open question in
-/// BUGS.md#N83 (the primer was folded into this entry on 2026-08-01) — answerable only by a
+/// N83 (self-collision — primer folded into this entry 2026-08-01) — answerable only by a
 /// live run, not by reading.
 ///
 /// Both RVAs are ALSO assigned as live function pointers in
