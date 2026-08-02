@@ -37,14 +37,14 @@ func getGameDir() string {
 	return defaultGameDir
 }
 
-// getDLLPath resolves the full path to a DLL file in the build directory
-// dllName: the name of the DLL file (e.g., "gamepatches.dll")
-// Returns: absolute path to the DLL file
+// getDLLPath resolves the full path to a DLL file in the build directory.
+// The current build layout puts DLLs under bin/ (e.g. bin/BugSplat64.dll).
+// dllName: the name of the DLL file (e.g., "BugSplat64.dll")
 func getDLLPath(dllName string) string {
 	buildDir := getBuildDir()
-	absPath, err := filepath.Abs(filepath.Join(buildDir, dllName))
+	absPath, err := filepath.Abs(filepath.Join(buildDir, "bin", dllName))
 	if err != nil {
-		return filepath.Join(buildDir, dllName)
+		return filepath.Join(buildDir, "bin", dllName)
 	}
 	return absPath
 }
@@ -112,11 +112,9 @@ func cleanupDLLs(gameDir string) error {
 
 	dllDir := filepath.Join(absGameDir, "bin", "win10")
 
-	// List of NEVR DLL files to remove
+	// Monolithic DLL (2026-08-02: gamepatches, gameserver, telemetryagent folded into BugSplat64)
 	dllNames := []string{
-		"gamepatches.dll",
-		"gameserver.dll",
-		"telemetryagent.dll",
+		"BugSplat64.dll",
 	}
 
 	var errors []error
@@ -141,9 +139,7 @@ func cleanupDLLs(gameDir string) error {
 func deployAllDLLs(t *testing.T) {
 	gameDir := getGameDir()
 	dllNames := []string{
-		"gamepatches.dll",
-		"gameserver.dll",
-		"telemetryagent.dll",
+		"BugSplat64.dll",
 	}
 
 	for _, dllName := range dllNames {

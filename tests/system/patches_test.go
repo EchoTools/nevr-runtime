@@ -12,11 +12,11 @@ func TestPatches_HeadlessMode(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	// Deploy gamepatches.dll which provides -headless flag support
-	dllPath := getDLLPath("gamepatches.dll")
+	// Deploy BugSplat64.dll which provides -headless flag support
+	dllPath := getDLLPath("BugSplat64.dll")
 	gameDir := getGameDir()
 	err := deployDLL(dllPath, gameDir)
-	require.NoError(t, err, "Failed to deploy gamepatches.dll")
+	require.NoError(t, err, "Failed to deploy BugSplat64.dll")
 
 	defer cleanupAllDLLs(t)
 
@@ -44,11 +44,11 @@ func TestPatches_ServerMode(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	// Deploy gamepatches.dll which provides -server flag support
-	dllPath := getDLLPath("gamepatches.dll")
+	// Deploy BugSplat64.dll which provides -server flag support
+	dllPath := getDLLPath("BugSplat64.dll")
 	gameDir := getGameDir()
 	err := deployDLL(dllPath, gameDir)
-	require.NoError(t, err, "Failed to deploy gamepatches.dll")
+	require.NoError(t, err, "Failed to deploy BugSplat64.dll")
 
 	defer cleanupAllDLLs(t)
 
@@ -78,11 +78,11 @@ func TestPatches_NoOVRMode(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	// Deploy gamepatches.dll which provides -noovr flag support
-	dllPath := getDLLPath("gamepatches.dll")
+	// Deploy BugSplat64.dll which provides -noovr flag support
+	dllPath := getDLLPath("BugSplat64.dll")
 	gameDir := getGameDir()
 	err := deployDLL(dllPath, gameDir)
-	require.NoError(t, err, "Failed to deploy gamepatches.dll")
+	require.NoError(t, err, "Failed to deploy BugSplat64.dll")
 
 	defer cleanupAllDLLs(t)
 
@@ -111,11 +111,11 @@ func TestPatches_WindowedMode(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	// Deploy gamepatches.dll which provides -windowed flag support
-	dllPath := getDLLPath("gamepatches.dll")
+	// Deploy BugSplat64.dll which provides -windowed flag support
+	dllPath := getDLLPath("BugSplat64.dll")
 	gameDir := getGameDir()
 	err := deployDLL(dllPath, gameDir)
-	require.NoError(t, err, "Failed to deploy gamepatches.dll")
+	require.NoError(t, err, "Failed to deploy BugSplat64.dll")
 
 	defer cleanupAllDLLs(t)
 
@@ -144,11 +144,11 @@ func TestPatches_FlagCombinations(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	// Deploy gamepatches.dll
-	dllPath := getDLLPath("gamepatches.dll")
+	// Deploy BugSplat64.dll
+	dllPath := getDLLPath("BugSplat64.dll")
 	gameDir := getGameDir()
 	err := deployDLL(dllPath, gameDir)
-	require.NoError(t, err, "Failed to deploy gamepatches.dll")
+	require.NoError(t, err, "Failed to deploy BugSplat64.dll")
 
 	defer cleanupAllDLLs(t)
 
@@ -204,11 +204,11 @@ func TestPatches_InvalidFlagCombinations(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	// Deploy gamepatches.dll
-	dllPath := getDLLPath("gamepatches.dll")
+	// Deploy BugSplat64.dll
+	dllPath := getDLLPath("BugSplat64.dll")
 	gameDir := getGameDir()
 	err := deployDLL(dllPath, gameDir)
-	require.NoError(t, err, "Failed to deploy gamepatches.dll")
+	require.NoError(t, err, "Failed to deploy BugSplat64.dll")
 
 	defer cleanupAllDLLs(t)
 
@@ -253,11 +253,11 @@ func TestPatches_TimestepConfiguration(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	// Deploy gamepatches.dll
-	dllPath := getDLLPath("gamepatches.dll")
+	// Deploy BugSplat64.dll
+	dllPath := getDLLPath("BugSplat64.dll")
 	gameDir := getGameDir()
 	err := deployDLL(dllPath, gameDir)
-	require.NoError(t, err, "Failed to deploy gamepatches.dll")
+	require.NoError(t, err, "Failed to deploy BugSplat64.dll")
 
 	defer cleanupAllDLLs(t)
 
