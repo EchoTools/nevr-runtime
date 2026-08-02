@@ -1052,7 +1052,9 @@ void GameServerLib::RegisterTcpCallbacks() {
       registration->set_version(ver);
     }
 
-    SendProtobufEnvelope(this, envelope);
+    if (!SendProtobufEnvelope(this, envelope)) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] SendProtobufEnvelope failed for re-registration");
+    }
   });
 }
 
@@ -1477,7 +1479,9 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
     registration->set_version(ver);
   }
 
-  SendProtobufEnvelope(this, envelope);
+  if (!SendProtobufEnvelope(this, envelope)) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] SendProtobufEnvelope failed for initial registration");
+  }
 
   // Connect telemetry streamer if enabled
   if (g_telemetryEnabled && m_telemetry) {
@@ -1549,7 +1553,9 @@ VOID GameServerLib::EndSession() {
     auto* event = envelope.mutable_lobby_session_event();
     event->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
     event->set_code(gameservice::v1::LobbySessionEventMessage::CODE_ENDED);
-    SendProtobufEnvelope(this, envelope);
+    if (!SendProtobufEnvelope(this, envelope)) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] SendProtobufEnvelope failed for EndSession");
+    }
   }
 
   m_context->EndSession();
@@ -1562,7 +1568,9 @@ VOID GameServerLib::LockPlayerSessions() {
     auto* event = envelope.mutable_lobby_session_event();
     event->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
     event->set_code(gameservice::v1::LobbySessionEventMessage::CODE_LOCKED);
-    SendProtobufEnvelope(this, envelope);
+    if (!SendProtobufEnvelope(this, envelope)) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] SendProtobufEnvelope failed for LockPlayerSessions");
+    }
   }
 
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Signaling game server locked");
@@ -1574,7 +1582,9 @@ VOID GameServerLib::UnlockPlayerSessions() {
     auto* event = envelope.mutable_lobby_session_event();
     event->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
     event->set_code(gameservice::v1::LobbySessionEventMessage::CODE_UNLOCKED);
-    SendProtobufEnvelope(this, envelope);
+    if (!SendProtobufEnvelope(this, envelope)) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] SendProtobufEnvelope failed for UnlockPlayerSessions");
+    }
   }
 
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Signaling game server unlocked");
@@ -1588,7 +1598,9 @@ VOID GameServerLib::AcceptPlayerSessions(EchoVR::Array<GUID>* playerUuids) {
     for (uint32_t i = 0; i < playerUuids->count; i++) {
       connected->add_entrant_ids(GuidToUuidString(playerUuids->items[i]));
     }
-    SendProtobufEnvelope(this, envelope);
+    if (!SendProtobufEnvelope(this, envelope)) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] SendProtobufEnvelope failed for AcceptPlayerSessions");
+    }
   }
 
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Accepted %d players", playerUuids->count);
@@ -1601,7 +1613,9 @@ VOID GameServerLib::RemovePlayerSession(GUID* playerUuid) {
     removed->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
     removed->set_entrant_id(GuidToUuidString(*playerUuid));
     removed->set_code(gameservice::v1::LobbyEntrantRemovedMessage::CODE_DISCONNECTED);
-    SendProtobufEnvelope(this, envelope);
+    if (!SendProtobufEnvelope(this, envelope)) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] SendProtobufEnvelope failed for RemovePlayerSession");
+    }
   }
 
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Removed player from game server");

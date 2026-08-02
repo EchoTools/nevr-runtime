@@ -11,6 +11,8 @@
 #include <sstream>
 #include <vector>
 
+#include "core/logging.h"
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -250,7 +252,10 @@ inline bool SaveAuthToken(const CachedAuthToken& auth) {
 
 #ifdef _WIN32
     // Hide the file and restrict to current user only
-    SetFileAttributesA(path.c_str(), FILE_ATTRIBUTE_HIDDEN);
+    if (!SetFileAttributesA(path.c_str(), FILE_ATTRIBUTE_HIDDEN)) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] SetFileAttributesA failed for %s: %lu",
+            path.c_str(), GetLastError());
+    }
 
     // Set restrictive DACL: only current user gets full access
     HANDLE hToken = nullptr;
@@ -269,9 +274,13 @@ inline bool SaveAuthToken(const CachedAuthToken& auth) {
                 ea.Trustee.ptstrName = reinterpret_cast<LPSTR>(pUser->User.Sid);
                 PACL pAcl = nullptr;
                 if (SetEntriesInAclA(1, &ea, nullptr, &pAcl) == ERROR_SUCCESS) {
-                    SetNamedSecurityInfoA(const_cast<LPSTR>(path.c_str()),
+                    DWORD aclErr = SetNamedSecurityInfoA(const_cast<LPSTR>(path.c_str()),
                         SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
                         nullptr, nullptr, pAcl, nullptr);
+                    if (aclErr != ERROR_SUCCESS) {
+                        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] SetNamedSecurityInfoA failed for %s: %lu",
+                            path.c_str(), aclErr);
+                    }
                     LocalFree(pAcl);
                 }
             }

@@ -3,7 +3,6 @@
 #include "log_filter.h"
 #include "extension/plugin_interface.h"
 
-#include <MinHook.h>
 #include <nlohmann/json.hpp>
 #include <atomic>
 #include <algorithm>
@@ -23,6 +22,7 @@
 #endif
 
 #include "address_registry.h"
+#include "hook_manager.h"
 #include "nevr_common.h"
 #include "yaml_config.h"
 
@@ -47,6 +47,7 @@ static LogFilterConfig g_config;
 static uintptr_t g_base_addr = 0;
 static std::atomic<uint64_t> g_suppressed_count{0};
 static std::atomic<uint64_t> g_emitted_count{0};
+static nevr::HookManager g_hooks;
 
 /* File output state */
 static FILE* g_log_file = nullptr;
@@ -625,33 +626,27 @@ bool InstallLogFilterHook(uintptr_t base_addr) {
     MH_Initialize();
 
     auto* target = nevr::ResolveVA_Checked(base_addr, nevr::addresses::VA_CLOG_PRINTF_IMPL);
-    MH_STATUS status = MH_CreateHook(target,
-                                      reinterpret_cast<void*>(&hook_PrintfImpl),
-                                      reinterpret_cast<void**>(&orig_PrintfImpl));
+    MH_STATUS status = g_hooks.CreateAndEnable(target,
+                                                reinterpret_cast<void*>(&hook_PrintfImpl),
+                                                reinterpret_cast<void**>(&orig_PrintfImpl));
     if (status != MH_OK) {
-        PluginLog("MH_CreateHook failed for CLog::PrintfImpl: %d", status);
+        PluginLog("HookManager::CreateAndEnable failed for CLog::PrintfImpl: %s", MH_StatusToString(status));
         return false;
     }
 
-    status = MH_EnableHook(target);
-    if (status != MH_OK) {
-        PluginLog("MH_EnableHook failed: %d", status);
-        return false;
-    }
-
-    PluginLog("hook installed on CLog::PrintfImpl @ 0x%llx",
-              static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL));
+    PluginLog("hook installed on CLog::PrintfImpl @ 0x%llx (%zu hooks tracked)",
+              static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL),
+              g_hooks.count());
     return true;
 }
 
 void RemoveLogFilterHook() {
-    if (g_base_addr != 0) {
-        auto* target = nevr::ResolveVA_Checked(g_base_addr, nevr::addresses::VA_CLOG_PRINTF_IMPL);
-        MH_DisableHook(target);
-        MH_RemoveHook(target);
-        PluginLog("hook removed (emitted: %llu, suppressed: %llu)",
+    if (g_hooks.count() > 0) {
+        PluginLog("removing %zu hook(s) (emitted: %llu, suppressed: %llu)",
+                  g_hooks.count(),
                   static_cast<unsigned long long>(g_emitted_count.load()),
                   static_cast<unsigned long long>(g_suppressed_count.load()));
+        g_hooks.RemoveAll();
     }
     ShutdownFileLogging();
 }

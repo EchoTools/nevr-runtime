@@ -226,6 +226,7 @@ VOID Initialize() {
   EchoVR::InitializeFunctionPointers();
   BootLogTee::TeeFprintf("[NEVR.PATCH] function pointers resolved\n");
 
+  BootLogTee::TeeFprintf("[NEVR.BOOT] initializing hooking engine...\n");
   if (!Hooking::Initialize()) {
     BootLogTee::TeeFprintf("[NEVR.PATCH] FATAL hooking init failed\n");
     g_bootHookFailed = true;
@@ -234,6 +235,7 @@ VOID Initialize() {
   BootLogTee::TeeFprintf("[NEVR.PATCH] minhook initialized\n");
 
   // --- DLL load interceptor (patch DLLs as they load) ---
+  BootLogTee::TeeFprintf("[NEVR.BOOT] installing DLL load hooks...\n");
   DllLoadHook::Install();
   BootLogTee::TeeFprintf("[NEVR.PATCH] dll load hooks installed\n");
 
@@ -242,6 +244,7 @@ VOID Initialize() {
   // g_isHeadless may not be set yet (CLI not parsed), but the hook checks it at
   // call time — if the game is running in headless mode the stubs activate,
   // otherwise they pass through to real DirectX.
+  BootLogTee::TeeFprintf("[NEVR.BOOT] registering headless graphics hooks...\n");
   InstallHeadlessGraphicsHooks();
   BootLogTee::TeeFprintf("[NEVR.HEADLESS] graphics hooks registered\n");
 
@@ -250,8 +253,10 @@ VOID Initialize() {
   // Without this, the 5-site PSN→DSC + ???→DSC string-table rewrite
   // never executes — game sends PSN-/???- instead of DSC- in provider
   // strings (RULINGS.md 2026-07-20 login-prefix).
+  BootLogTee::TeeFprintf("[NEVR.BOOT] patching DSC provider strings...\n");
   PatchDscProvider();
 
+  BootLogTee::TeeFprintf("[NEVR.BOOT] installing CSysDLL hooks...\n");
   {
       void* sym_target = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + (0x1400eaef0 - 0x140000000));
@@ -282,6 +287,7 @@ VOID Initialize() {
   }
 
   // --- Broadcaster dispatch guard ---
+  BootLogTee::TeeFprintf("[NEVR.BOOT] installing broadcaster guard...\n");
   BroadcasterGuard::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
   // Truthful outcome: Install() is an empty placeholder (broadcaster_guard.cpp).
   // The previous line here read "broadcaster guard installed" — a log line
@@ -291,11 +297,12 @@ VOID Initialize() {
 
   // --- Log filter (hooks CLog::PrintfImpl to capture/filter/file game output) ---
   // g_isServer not set yet (CLI not parsed); pass false — log filter works regardless
+  BootLogTee::TeeFprintf("[NEVR.BOOT] initializing log filter...\n");
   BuiltinLogFilter::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress), false);
   BootLogTee::TeeFprintf("[NEVR.PATCH] log filter installed\n");
 
   // --- Game function hooks ---
-  BootLogTee::TeeFprintf("[NEVR.PATCH] hooking name=BuildCmdLineSyntaxDefinitions target=%p\n", (void*)EchoVR::BuildCmdLineSyntaxDefinitions);
+  BootLogTee::TeeFprintf("[NEVR.BOOT] installing game function hooks...\n");
   BOOL r1 = Hooking::Attach(reinterpret_cast<PVOID*>(&EchoVR::BuildCmdLineSyntaxDefinitions),
                              reinterpret_cast<PVOID>(BuildCmdLineSyntaxDefinitionsHook));
   BootLogTee::TeeFprintf("[NEVR.PATCH] hook name=BuildCmdLineSyntaxDefinitions result=%s\n", r1 ? "OK" : "FAILED");
@@ -329,21 +336,25 @@ VOID Initialize() {
   // WebSocket bridge (InstallWebSocketBridge) is started in PreprocessCommandLineHook
   // after config is loaded — it needs the wss:// URI from config.json.
   BootLogTee::TeeFprintf("[NEVR.PATCH] tls deferred=ws_bridge stage=boot\n");
+  BootLogTee::TeeFprintf("[NEVR.BOOT] installing crash recovery hooks...\n");
   InstallCrashRecoveryHooks();
   BootLogTee::TeeFprintf("[NEVR.CRASH] crash recovery hooks installed\n");
   // CreateDirectory + WinHTTP hooks moved to platform_compat module (loaded in boot.cpp)
   BootLogTee::TeeFprintf("[NEVR.PATCH] platform hooks deferred=platform_compat_module\n");
 
   // --- Server crash recovery hooks ---
+  BootLogTee::TeeFprintf("[NEVR.BOOT] installing server crash-recovery hooks...\n");
   InstallGameMainHook();
   InstallEntityHooks();
   InstallBugSplatHook();
   InstallGameSpaceHook();
   BootLogTee::TeeFprintf("[NEVR.PATCH] server crash-recovery hooks installed\n");
   // --- Exception handling ---
+  BootLogTee::TeeFprintf("[NEVR.BOOT] installing exception handlers...\n");
   InstallVEH();
   InstallCrashFilterInstrumentation();
   BootLogTee::TeeFprintf("[NEVR.CRASH] veh installed\n");
+  BootLogTee::TeeFprintf("[NEVR.BOOT] installing console ctrl handler...\n");
   InstallConsoleCtrlHandler();
   BootLogTee::TeeFprintf("[NEVR.PATCH] console ctrl handler installed\n");
 
@@ -351,11 +362,13 @@ VOID Initialize() {
   // directory scanning deadlocks during DllMain loader lock.
 
   // --- Startup patches (applied before CLI parsing) ---
+  BootLogTee::TeeFprintf("[NEVR.BOOT] applying startup patches...\n");
   PatchNoOvrRequiresSpectatorStream();
   PatchDeadlockMonitor();
   BootLogTee::TeeFprintf("[NEVR.PATCH] startup patches applied\n");
 
   // --- Wave 0 instrumentation (observation-only + EndMultiplayer crash prevention) ---
+  BootLogTee::TeeFprintf("[NEVR.BOOT] initializing binary bug fix hooks...\n");
   BinaryBugFixes::Init(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
   BootLogTee::TeeFprintf("[NEVR.PATCH] binary bug fix hooks installed\n");
 
