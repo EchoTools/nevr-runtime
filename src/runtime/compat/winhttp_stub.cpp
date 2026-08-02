@@ -68,7 +68,7 @@ static HRESULT STDMETHODCALLTYPE Stub_QueryInterface(void* pThis, REFIID riid, v
   if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_IDispatch) || IsEqualIID(riid, IID_IWinHttpRequest)) {
     Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] QI accepted — returning stub (riid match)");
     *ppv = pThis;
-    SELF(pThis)->m_refCount++;
+    InterlockedIncrement(&SELF(pThis)->m_refCount);
     return S_OK;
   }
   Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] QI rejected {%08lX-%04hX-%04hX-%02X%02X-%02X%02X%02X%02X%02X%02X}",
@@ -81,14 +81,14 @@ static HRESULT STDMETHODCALLTYPE Stub_QueryInterface(void* pThis, REFIID riid, v
 
 static ULONG STDMETHODCALLTYPE Stub_AddRef(void* pThis) {
   auto* self = SELF(pThis);
-  ULONG n = ++self->m_refCount;
+  ULONG n = InterlockedIncrement(&self->m_refCount);
   Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] AddRef -> %lu", n);
   return n;
 }
 
 static ULONG STDMETHODCALLTYPE Stub_Release(void* pThis) {
   auto* self = SELF(pThis);
-  ULONG n = --self->m_refCount;
+  ULONG n = InterlockedDecrement(&self->m_refCount);
   Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Release -> %lu", n);
   if (n == 0) {
     self->~WinHttpRequestStub();
