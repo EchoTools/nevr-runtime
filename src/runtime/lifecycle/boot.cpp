@@ -8,6 +8,25 @@
 #include "runtime/patch/resource_override.h"
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/ext/plugin_loader.h"
+#include "extension/module_interface.h"
+
+// Statically-linked module entry points (2026-08-02: folded from separate
+// DLLs into BugSplat64.dll). Each module's symbols are prefixed to avoid
+// collisions — both used to export NvrModuleInit/NvrModuleApiVersion/etc.
+// as separate DLLs with their own symbol tables.
+extern "C" {
+// platform_compat
+int platform_compat_Init(const NvrModuleContext* ctx);
+uint32_t platform_compat_ApiVersion(void);
+void platform_compat_Shutdown(void);
+// token_auth
+int token_auth_Init(const NvrModuleContext* ctx);
+uint32_t token_auth_ApiVersion(void);
+void token_auth_Shutdown(void);
+const char* TokenAuth_GetToken(void);
+uint64_t TokenAuth_GetDiscordId(void);
+const char* TokenAuth_GetUsername(void);
+}
 #include "runtime/ext/module_loader.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/patch/pnsrad_enabler.h"
@@ -26,6 +45,11 @@
 /// </summary>
 /// <param name="pGame">A pointer to the game instance.</param>
 UINT64 PreprocessCommandLineHook(PVOID pGame) {
+  // The game calls PreprocessCommandLine MULTIPLE times during startup
+  // (LoadLocalConfig also runs twice — see BUGS.md tail). Module init must
+  // be idempotent: hooks are installed once and MinHook rejects re-creation.
+  static bool s_modulesInitialized = false;
+
   // Deferred from Initialize() — file I/O deadlocks during DllMain loader lock.
   LoadEarlyConfig();
   InstallResourceOverride();
@@ -67,6 +91,9 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   }
 
   // Load modules. Order matters — dependencies must load first.
+  // Guarded: the game calls PreprocessCommandLine multiple times.
+  if (!s_modulesInitialized) {
+    s_modulesInitialized = true;
   {
     static NvrModuleContext moduleCtx = {};
     moduleCtx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
@@ -86,20 +113,42 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     SetModuleContext(&moduleCtx);
 
     // Platform compat — Schannel TLS hooks, CreateDirectory fixes, WinHTTP bridge.
-    // Must load before any network-using code.
-    LoadModule("platform_compat", &moduleCtx);
+    // Must load before any network-using code. Statically linked (2026-08-02).
+    {
+      uint32_t apiVer = platform_compat_ApiVersion();
+      if (!NvrModuleApiVersionSupported(apiVer)) {
+        Log(EchoVR::LogLevel::Error,
+            "[NEVR.MODULE] platform_compat: API v%u exceeds host v%u — refusing",
+            apiVer, static_cast<uint32_t>(NEVR_MODULE_API_VERSION));
+        FatalError("Module API version unsupported", "platform_compat");
+      }
+      if (platform_compat_Init(&moduleCtx) != 0) {
+        FatalError("Module init failed", "platform_compat");
+      }
+      RegisterStaticModule("platform_compat", apiVer, nullptr, nullptr, platform_compat_Shutdown);
+    }
 
     // Token auth — device code authentication, JWT refresh.
     // Must load before ws_bridge (ws_bridge reads the JWT via get_proc).
-    LoadModule("token_auth", &moduleCtx);
+    // Statically linked (2026-08-02).
+    {
+      uint32_t apiVer = token_auth_ApiVersion();
+      if (!NvrModuleApiVersionSupported(apiVer)) {
+        Log(EchoVR::LogLevel::Error,
+            "[NEVR.MODULE] token_auth: API v%u exceeds host v%u — refusing",
+            apiVer, static_cast<uint32_t>(NEVR_MODULE_API_VERSION));
+        FatalError("Module API version unsupported", "token_auth");
+      }
+      if (token_auth_Init(&moduleCtx) != 0) {
+        FatalError("Module init failed", "token_auth");
+      }
+      RegisterStaticModule("token_auth", apiVer, nullptr, nullptr, token_auth_Shutdown);
 
-    // Register token_auth exports for cross-module access (ws_bridge uses these).
-    HMODULE hTokenAuth = GetModuleHandleA("token_auth.dll");
-    if (hTokenAuth) {
-      void* getToken = (void*)GetProcAddress(hTokenAuth, "TokenAuth_GetToken");
-      void* getDiscordId = (void*)GetProcAddress(hTokenAuth, "TokenAuth_GetDiscordId");
-      if (getToken) RegisterModuleProc("TokenAuth_GetToken", getToken);
-      if (getDiscordId) RegisterModuleProc("TokenAuth_GetDiscordId", getDiscordId);
+      // Register token_auth exports for cross-module access (ws_bridge reads these
+      // via ResolveModuleProc). Static link means no GetProcAddress — call directly.
+      RegisterModuleProc("TokenAuth_GetToken", (void*)TokenAuth_GetToken);
+      RegisterModuleProc("TokenAuth_GetDiscordId", (void*)TokenAuth_GetDiscordId);
+      RegisterModuleProc("TokenAuth_GetUsername", (void*)TokenAuth_GetUsername);
     }
 
     // N92: ws_bridge is no longer a module. It is compiled into this DLL and
@@ -112,6 +161,7 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     // fail-fasts with "[FATAL] ws_bridge: Required module missing" and exit 1.
     // Measured, 2026-07-27.
   }
+  }  // s_modulesInitialized guard
 
   // Parse command line arguments.
   int argc = 0;

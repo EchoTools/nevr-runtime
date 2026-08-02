@@ -4,7 +4,7 @@ set -euo pipefail
 # Deploy the current build (not dist/ — dist/ goes stale; build/ is always fresh).
 echo "=== Deploying from build/mingw-release/bin/ ==="
 cp -v build/mingw-release/bin/BugSplat64.dll echovr/bin/win10/
-cp -rv build/mingw-release/bin/modules/* echovr/bin/win10/modules/
+# platform_compat and token_auth are statically linked into BugSplat64.dll (2026-08-02).
 if ls build/mingw-release/bin/plugins/*.dll >/dev/null 2>&1; then
   cp -rv build/mingw-release/bin/plugins/* echovr/bin/win10/plugins/
 fi

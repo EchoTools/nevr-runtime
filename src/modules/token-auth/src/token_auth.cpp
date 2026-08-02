@@ -514,11 +514,11 @@ void TokenAuth::Shutdown() {
 static thread_local std::string s_tokenBuf;
 static thread_local std::string s_usernameBuf;  // N123, same lifetime contract as s_tokenBuf
 
-NEVR_MODULE_API uint32_t NvrModuleApiVersion(void) {
+NEVR_MODULE_API uint32_t token_auth_ApiVersion(void) {
     return NEVR_MODULE_API_VERSION;
 }
 
-NEVR_MODULE_API int NvrModuleInit(const NvrModuleContext* ctx) {
+NEVR_MODULE_API int token_auth_Init(const NvrModuleContext* ctx) {
     EchoVR::g_GameBaseAddress = (CHAR*)ctx->base_addr;
     EchoVR::InitializeFunctionPointers();
     s_configGet = ctx->config_get;  // N133 S5: read config.yaml, not early_config JSON
@@ -530,7 +530,7 @@ NEVR_MODULE_API int NvrModuleInit(const NvrModuleContext* ctx) {
     return 0;
 }
 
-NEVR_MODULE_API void NvrModuleShutdown(void) {
+NEVR_MODULE_API void token_auth_Shutdown(void) {
     TokenAuth::Shutdown();
 }
 

@@ -265,11 +265,11 @@ static bool InstallWinHTTPHook() {
 // against a newer host ABI. platform_compat reads no config keys, so the config_get
 // addition is transparent to it — but it must still recompile against the new
 // NvrModuleContext and report the current version.
-NEVR_MODULE_API uint32_t NvrModuleApiVersion(void) {
+NEVR_MODULE_API uint32_t platform_compat_ApiVersion(void) {
   return NEVR_MODULE_API_VERSION;
 }
 
-NEVR_MODULE_API int NvrModuleInit(const NvrModuleContext* ctx) {
+NEVR_MODULE_API int platform_compat_Init(const NvrModuleContext* ctx) {
   EchoVR::g_GameBaseAddress = (CHAR*)ctx->base_addr;
   EchoVR::InitializeFunctionPointers();
 
@@ -331,6 +331,6 @@ NEVR_MODULE_API int NvrModuleInit(const NvrModuleContext* ctx) {
   return 0;
 }
 
-NEVR_MODULE_API void NvrModuleShutdown(void) {
+NEVR_MODULE_API void platform_compat_Shutdown(void) {
   Hooking::Shutdown();
 }

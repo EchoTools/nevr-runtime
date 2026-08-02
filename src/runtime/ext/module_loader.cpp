@@ -123,12 +123,29 @@ void LoadModule(const char* name, const NvrModuleContext* ctx) {
   Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] Loaded: %s (API v%u)", name, moduleApiVersion);
 }
 
+void RegisterStaticModule(const char* name, uint32_t api_version,
+                          NvrModuleOnFrame_fn on_frame,
+                          NvrModuleOnGameStateChange_fn on_state,
+                          NvrModuleShutdown_fn shutdown) {
+  LoadedModule m = {};
+  m.hModule = nullptr;  // static — no DLL to free
+  m.name = name;
+  m.init = nullptr;      // already called
+  m.shutdown = shutdown;
+  m.on_frame = on_frame;
+  m.on_state = on_state;
+  g_modules.push_back(m);
+  Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] Loaded: %s (API v%u, static)", name, api_version);
+}
+
 void UnloadModules() {
   for (auto it = g_modules.rbegin(); it != g_modules.rend(); ++it) {
     if (it->shutdown) {
       it->shutdown();
     }
-    FreeLibrary(it->hModule);
+    if (it->hModule) {
+      FreeLibrary(it->hModule);
+    }
   }
   g_modules.clear();
   g_moduleProcs.clear();

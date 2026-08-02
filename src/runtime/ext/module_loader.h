@@ -4,7 +4,17 @@
 
 /// Load a module DLL from the modules/ subdirectory next to echovr.exe.
 /// Calls NvrModuleInit — on failure, calls FatalError (game exits).
+/// Prefer RegisterStaticModule for modules compiled directly into BugSplat64.dll.
 void LoadModule(const char* name, const NvrModuleContext* ctx);
+
+/// Register a statically-linked module that was initialized directly (no DLL).
+/// The module's init was already called; this records it so TickModules,
+/// NotifyModulesStateChange, and UnloadModules find it. hModule must be nullptr
+/// for static modules — UnloadModules skips FreeLibrary on them.
+void RegisterStaticModule(const char* name, uint32_t api_version,
+                          NvrModuleOnFrame_fn on_frame,
+                          NvrModuleOnGameStateChange_fn on_state,
+                          NvrModuleShutdown_fn shutdown);
 
 /// Unload all modules in reverse order, calling NvrModuleShutdown on each.
 void UnloadModules();

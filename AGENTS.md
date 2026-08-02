@@ -111,14 +111,12 @@ Plugins have their own shared headers in `plugins/common/include/` (`nevr_common
 
 ### Runtime-loaded modules
 
-Built from `src/modules/`, loaded by `module_loader` from `modules/` next to the
-game binary, before plugins. These are **not** plugins — they use
-`NvrModuleContext` and are required, not optional.
+`platform_compat` and `token_auth` are **statically linked** into `BugSplat64.dll` (2026-08-02). There are no separate module DLLs — everything ships in one file. The `module_loader` infrastructure (`RegisterStaticModule`, `TickModules`, `NotifyModulesStateChange`) remains for any future modules.
 
 | Module | Output | Purpose |
 | ------ | ------ | ------- |
-| `src/modules/platform-compat/` | `platform_compat.dll` | Schannel TLS modernisation, WinHTTP→curl bridge, Wine `_temp` fix |
-| `src/modules/token-auth/` | `token_auth.dll` | Device-code auth, token cache, `TokenAuth_GetToken`/`GetDiscordId` |
+| `src/modules/platform-compat/` | *(in `BugSplat64.dll`)* | Schannel TLS modernisation, WinHTTP→curl bridge, Wine `_temp` fix |
+| `src/modules/token-auth/` | *(in `BugSplat64.dll`)* | Device-code auth, token cache, `TokenAuth_GetToken`/`GetDiscordId` |
 
 ### Shared Libraries (static)
 
