@@ -42,10 +42,13 @@ dist-lite: build
 dist-legacy: build
     cmake --build --preset {{ preset }} --target dist-legacy
 
-# Regenerate C++ protobuf from BSR (buf.build/echotools/nevr-api)
+# Regenerate C++ protobuf from BSR (buf.build/echotools/nevr-api).
 # Uses vcpkg protoc to match the runtime version. Run `just configure` first.
+# PINNED to a specific BSR commit so the generated code is reproducible and
+# matches nevr-stream's Go module revision (N132). Bump this when the BSR schema
+# changes: `buf registry commit list buf.build/echotools/nevr-api --page-size 1`.
 proto:
-    PATH="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed/x64-linux/tools/protobuf:$PATH" buf generate buf.build/echotools/nevr-api
+    PATH="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed/x64-linux/tools/protobuf:$PATH" buf generate buf.build/echotools/nevr-api:04fc66c864ef47d2b792c4199e4c0ad3
 
 # Remove build and dist directories
 clean:
