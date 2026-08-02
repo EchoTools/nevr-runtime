@@ -28,6 +28,7 @@
 #include "runtime/hook/hook_guard.h"
 #include "runtime/ext/plugin_load_plan.h"  // PluginLoadItem / NevrCfgPluginLoadPlan (N134 S6)
 #include "core/system_info.h"
+#include "core/build_identity.h"
 
 // ============================================================================
 // Stubs for extern symbols declared by project headers but not provided by
@@ -635,6 +636,48 @@ TEST(SystemInfo, IsCachedNotRemeasured) {
 //   can reach). ReportsRealCpuAndMemory catches the case where SystemInfo
 //   itself starts returning the old tuple; the `just verify` sensor catches
 //   the format string.
+
+// ============================================================================
+// N112 — BuildIdentity. Compile-time constants, never measured. These values
+// are baked into the binary by CMake; the test verifies they made it through
+// the preprocessor and are not the fallback defaults (unknown/0.0.0).
+// ============================================================================
+
+TEST(BuildIdentity, ProjectVersionIsNotFallback) {
+    const BuildIdentity::Info& id = BuildIdentity::Get();
+    // The CMake-built binary always has a real version. The "0.0.0" fallback
+    // only triggers for a manual compiler invocation without -DPROJECT_VERSION.
+    EXPECT_NE(id.project_version, "0.0.0");
+    EXPECT_FALSE(id.project_version.empty());
+}
+
+TEST(BuildIdentity, GitCommitIsNotEmpty) {
+    const BuildIdentity::Info& id = BuildIdentity::Get();
+    EXPECT_FALSE(id.git_commit.empty());
+}
+
+TEST(BuildIdentity, GitDescribeIsNotEmpty) {
+    const BuildIdentity::Info& id = BuildIdentity::Get();
+    EXPECT_FALSE(id.git_describe.empty());
+}
+
+TEST(BuildIdentity, BuildTypeIsSet) {
+    const BuildIdentity::Info& id = BuildIdentity::Get();
+    // "unknown-build-type" would mean CMAKE_BUILD_TYPE was not propagated
+    // as a compile definition. Our CMake always sets it.
+    EXPECT_NE(id.build_type, "unknown-build-type");
+    EXPECT_FALSE(id.build_type.empty());
+}
+
+TEST(BuildIdentity, DirtyFlagMatchesDescribe) {
+    const BuildIdentity::Info& id = BuildIdentity::Get();
+    // The dirty flag is derived from git_describe, not a separate source.
+    EXPECT_EQ(id.is_dirty, id.git_describe.find("-dirty") != std::string::npos);
+}
+
+TEST(BuildIdentity, IsCachedNotRemeasured) {
+    EXPECT_EQ(&BuildIdentity::Get(), &BuildIdentity::Get());
+}
 
 // ============================================================================
 // N134 S8: ctx_size and plugin-query API tests.

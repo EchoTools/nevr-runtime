@@ -270,6 +270,10 @@ if(BUILD_TESTING)
       # would collide. system_info.cpp depends on nothing but Win32, so it
       # drops in cleanly and the test drives the REAL measurement code.
       "${CMAKE_SOURCE_DIR}/src/core/system_info.cpp"
+      # N112: build_identity.cpp depends on nothing but preprocessor stringify
+      # macros — no Win32, no PCH, no external deps. Drops in cleanly alongside
+      # system_info.cpp so the test drives the REAL compile-time constants.
+      "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp"
       ext/plugin_loader.cpp
       ext/module_loader.cpp
       compat/ws_bridge.cpp
@@ -284,6 +288,7 @@ if(BUILD_TESTING)
     # the nevr_runtime precompiled header (which pulls in MinHook, etc.).
     set_source_files_properties(
       "${CMAKE_SOURCE_DIR}/src/core/system_info.cpp"
+      "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp"
       tests/test_behavioral.cpp
       ext/plugin_loader.cpp
       ext/module_loader.cpp
