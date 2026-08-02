@@ -53,6 +53,7 @@ set(PATCHES_HEADERS
     "patch/mode_patches.h"
     "lifecycle/crash_recovery.h"
     "patch/resource_override.h"
+    "patch/splash_texture.h"
     "lifecycle/state_machine.h"
     "ext/plugin_loader.h"
     "ext/plugin_load_plan.h"

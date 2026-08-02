@@ -7,7 +7,6 @@
     "miniupnpc",
     "minhook",
     "opus",
-    "nlohmann-json",
     "protobuf",
     "yaml-cpp"
   ]

@@ -1603,9 +1603,9 @@ verify:
     #   (No sensor — the presence of nevr_identity is already checked in N112b.)
     echo "verify: OK ({{ preset }})"
 
-# ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)
-test-token-auth config="echovr/_local/config.json":
-    bash tests/token-auth-smoke.sh {{config}}
+# ServerDB token-auth BAC smoke test removed 2026-08-02: the test script
+# (tests/token-auth-smoke.sh) was deleted — superseded by just verify's
+# test-auth-unit and the auth ground-truth tests.
 
 # Generate combat override files from echomod build output
 generate-combat-overrides build_dir:

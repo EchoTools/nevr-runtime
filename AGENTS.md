@@ -47,7 +47,7 @@ just test-auth-unit           # C++ GTest under Wine (build with -DBUILD_TESTING
 just test-auth-integration    # Auth integration (needs game binary + MCP harness)
 ```
 
-Tests require: Echo VR game binary, evr-test-harness, Go toolchain. See `tests/system/README.md` for prerequisites and environment variables (`NEVR_BUILD_DIR`, `EVR_GAME_DIR`).
+Tests require: Echo VR game binary, Go toolchain. Environment variables: `NEVR_BUILD_DIR` (build output), `EVR_GAME_DIR` (game installation).
 
 ## Startup Timing (N76)
 
@@ -169,7 +169,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
   `echovr.exe -server -noconsole` (built; `CMakeLists.txt:200`, `just launcher`).
   The older PE-conversion launcher is gone — Wine could not load the game DLL at
   the required base address.
-- **`src/standalone/`** — Future Android/Quest standalone build (stub — awaiting echovr-reconstruction)
+- Android/Quest standalone target lives in `src/quest/` (separate CMake project). The former src/standalone/ stub was deleted 2026-08-02.
 - **`src/legacy/`** — Frozen v1 implementations (self-contained, do not modify)
 
 ## Conventions

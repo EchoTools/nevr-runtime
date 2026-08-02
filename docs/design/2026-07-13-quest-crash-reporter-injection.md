@@ -4,7 +4,8 @@
 > The `src/quest/` sub-project described in §5 has its own CMake toolchain
 > and NDK build (`just configure-android`, `just build-android`). The ELF-shape
 > BACs in §6 are verified offline; on-device verification (Part B of the sideload
-> runbook at docs/quest-sideload-runbook.md (deleted 2026-08-01)) requires a physical Quest 2 headset
+> runbook at docs/quest-sideload-runbook.md (deleted 2026-08-01;
+> `git show e30efee:docs/quest-sideload-runbook.md`)) requires a physical Quest 2 headset
 > and has not been executed. This doc is the canonical design reference for the
 > Quest hijack; it is load-bearing for anyone working on the Quest port.
 

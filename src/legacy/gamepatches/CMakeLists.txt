@@ -13,7 +13,7 @@ set(PATCHES_LEGACY_HEADERS
     "common/pch.h"
     "common/echovr.h"
     "common/echovr_internal.h"
-    "common/echovr_unexported.h"
+    "common/echovrunexported.h"
 )
 
 add_library(gamepatcheslegacy SHARED ${PATCHES_LEGACY_SOURCES} ${PATCHES_LEGACY_HEADERS} "exports.def")

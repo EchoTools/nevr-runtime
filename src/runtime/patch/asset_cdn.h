@@ -20,7 +20,7 @@
 /// change it there, and keep the two verified against each other.
 ///
 /// Wired into startup: AssetCDN::Initialize() is called from
-/// lifecycle/initialize.cpp:353. (This block said "Not wired into startup"
+/// lifecycle/boot.cpp:361. (This block said "Not wired into startup"
 /// until 2026-07-29, long after it was wired — corrected in N113.)
 
 #include <cstdint>

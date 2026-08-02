@@ -143,16 +143,16 @@ Keys in the `packages` object are the `symbol_id` from the `.evrp` header, encod
 
 ## 5. CDN URL Scheme
 
-**Base URL**: `https://cdn.echo.taxi/`
+**Base URL**: `https://r2.echo.taxi/`
 
 | Resource | URL                                                     |
 | -------- | ------------------------------------------------------- |
-| Manifest | `https://cdn.echo.taxi/v1/manifest.json`                |
-| Package  | `https://cdn.echo.taxi/v1/packages/{symbolid_hex}.evrp` |
+| Manifest | `https://r2.echo.taxi/v1/manifest.json`                |
+| Package  | `https://r2.echo.taxi/v1/packages/{symbolid_hex}.evrp` |
 
 - `v1` is the format version path segment. Future incompatible format changes use `v2`, etc.
 - `{symbolid_hex}` is the lowercase hex-encoded symbol ID (same format as manifest keys).
-- Package URLs in the manifest are relative to the version root (`https://cdn.echo.taxi/v1/`).
+- Package URLs in the manifest are relative to the version root (`https://r2.echo.taxi/v1/`).
 
 ---
 
