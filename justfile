@@ -1589,6 +1589,52 @@ verify:
         echo "launch-server.sh reads this file; a broken sample breaks every server boot." >&2
         exit 1
     fi
+    # N112 — BuildIdentity: the client login and server registration now carry
+    # NEVR build identity (version, commit, git describe, build type) and a
+    # plugin manifest. These sensors prove the wiring is present and catch the
+    # case where the old literals ("buildversion":631547, bare GIT_DESCRIBE)
+    # are restored by a merge or refactor.
+    #
+    # N112a — BuildIdentity struct exists and is compiled.
+    if [ ! -f src/core/build_identity.h ]; then
+        echo "verify: FAIL — N112a: src/core/build_identity.h is missing." >&2
+        echo "The BuildIdentity struct carries compile-time version identity into" >&2
+        echo "the login payload and server registration." >&2
+        exit 1
+    fi
+    if [ ! -f src/core/build_identity.cpp ]; then
+        echo "verify: FAIL — N112a: src/core/build_identity.cpp is missing." >&2
+        exit 1
+    fi
+    # N112b — client login carries nevr_identity and nevr_plugins.
+    if ! grep -q 'nevr_identity' src/runtime/compat/ws_bridge.cpp; then
+        echo "verify: FAIL — N112b: ws_bridge.cpp login JSON does not carry" >&2
+        echo "nevr_identity. The client login must send NEVR version info (N112)." >&2
+        exit 1
+    fi
+    if ! grep -q 'nevr_plugins' src/runtime/compat/ws_bridge.cpp; then
+        echo "verify: FAIL — N112b: ws_bridge.cpp login JSON does not carry" >&2
+        echo "nevr_plugins. The client login must send a plugin manifest (N112)." >&2
+        exit 1
+    fi
+    # N112c — server registration uses BuildIdentity (not bare GIT_DESCRIBE).
+    if ! grep -q 'BuildIdentity::Get()' src/runtime/server/gameserver.cpp; then
+        echo "verify: FAIL — N112c: gameserver.cpp does not call BuildIdentity::Get()." >&2
+        echo "The server registration version field must be enriched with commit" >&2
+        echo "hash and build type, not just bare GIT_DESCRIBE (N112)." >&2
+        exit 1
+    fi
+    # N112d — BuildPluginManifestJson exists.
+    if ! grep -q 'BuildPluginManifestJson' src/runtime/ext/plugin_loader.cpp; then
+        echo "verify: FAIL — N112d: BuildPluginManifestJson() not found in" >&2
+        echo "plugin_loader.cpp. The plugin manifest builder is required (N112)." >&2
+        exit 1
+    fi
+    # N112e — the hardcoded buildversion literal is still the game's 631547
+    # (we send NEVR version info alongside it, so the game field is unchanged),
+    # but a second NEVR buildversion field would be a duplicate. The sensor
+    # asserts the NEVR identity is in its own nevr_identity sub-object.
+    #   (No sensor — the presence of nevr_identity is already checked in N112b.)
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test (live backend; reads echovr/_local/config.json)

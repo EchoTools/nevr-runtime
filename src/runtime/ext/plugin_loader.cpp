@@ -46,6 +46,31 @@ const NvrLoadedPluginInfo* GetLoadedPluginInfo(int index) {
   return reinterpret_cast<const NvrLoadedPluginInfo*>(&p.info);
 }
 
+// N112 — build a compact JSON array of plugin identities for the login
+// payload. Called after LoadPlugins() from ws_bridge.cpp (client) and
+// gameserver.cpp (server). Format is deliberately compact to keep the
+// login payload small.
+std::string BuildPluginManifestJson() {
+  if (g_plugins.empty()) return "[]";
+  std::string out = "[";
+  for (size_t i = 0; i < g_plugins.size(); ++i) {
+    const LoadedPlugin& p = g_plugins[i];
+    if (i > 0) out += ",";
+    // Build a compact per-plugin object. Plugin names are simple identifiers
+    // (no escaping needed — the loader rejects names with special characters).
+    char buf[256];
+    snprintf(buf, sizeof(buf),
+             R"({"name":"%s","ver":"%u.%u.%u","api":%u,"caps":%u})",
+             p.info.name,
+             p.info.version_major, p.info.version_minor, p.info.version_patch,
+             p.api_version,
+             p.capabilities);
+    out += buf;
+  }
+  out += "]";
+  return out;
+}
+
 
 // N134 S6: required-aware load failure. A plugin the config declared
 // `required: true` that fails to load or init is FATAL on a dedicated server

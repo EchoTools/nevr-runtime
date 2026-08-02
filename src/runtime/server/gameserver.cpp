@@ -14,6 +14,7 @@
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
+#include "core/build_identity.h"  // N112: NEVR build identity
 #include "runtime/server/messages.h"
 
 #include "runtime/lifecycle/config.h"
@@ -1035,11 +1036,21 @@ void GameServerLib::RegisterTcpCallbacks() {
     registration->set_region(state.regionId);
     registration->set_version_lock(state.versionLock);
     registration->set_time_step_usecs(state.defaultTimeStepUsecs);
-#ifdef GIT_DESCRIBE
-    registration->set_version(GIT_DESCRIBE);
-#else
-    registration->set_version("unknown");
-#endif
+    // N112: enrich the version field with commit hash and build type.
+    // GIT_DESCRIBE already provides the richest single string (tag + commits
+    // since tag + short hash + dirty flag); appending the full commit hash
+    // and build type makes the field actionable for both human operators and
+    // automated deployment verification.
+    {
+      const BuildIdentity::Info& id = BuildIdentity::Get();
+      std::string ver = id.git_describe;
+      ver += " (";
+      ver += id.git_commit;
+      ver += " ";
+      ver += id.build_type;
+      ver += ")";
+      registration->set_version(ver);
+    }
 
     SendProtobufEnvelope(this, envelope);
   });
@@ -1454,11 +1465,17 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   registration->set_region(regionId);
   registration->set_version_lock(versionLock);
   registration->set_time_step_usecs(state.defaultTimeStepUsecs);
-#ifdef GIT_DESCRIBE
-  registration->set_version(GIT_DESCRIBE);
-#else
-  registration->set_version("unknown");
-#endif
+  // N112: enriched version string — same format as the re-registration path.
+  {
+    const BuildIdentity::Info& id = BuildIdentity::Get();
+    std::string ver = id.git_describe;
+    ver += " (";
+    ver += id.git_commit;
+    ver += " ";
+    ver += id.build_type;
+    ver += ")";
+    registration->set_version(ver);
+  }
 
   SendProtobufEnvelope(this, envelope);
 

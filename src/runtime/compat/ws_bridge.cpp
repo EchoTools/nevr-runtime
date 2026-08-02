@@ -21,6 +21,8 @@
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
 #include "core/system_info.h"
+#include "core/build_identity.h"   // N112: NEVR version identity
+#include "runtime/ext/plugin_loader.h"  // N112: plugin manifest
 #include "runtime/lifecycle/cli.h"  // g_isServer
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
 #include "core/logging.h"
@@ -195,7 +197,15 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   if (resolvedName.empty()) resolvedName = std::to_string(accountId);
 
   // LoginProfile JSON — matches the game's SNSLogInRequestv2 format
-  char json[2048];
+  //
+  // N112: nevr_identity carries the NEVR build identity (version, commit,
+  // git describe, build type). nevr_plugins is the loaded-plugin manifest.
+  // Both are sent so the login service can discriminate builds and verify
+  // that a client's plugin set matches what the server expects.
+  const BuildIdentity::Info& buildId = BuildIdentity::Get();
+  const std::string pluginManifest = BuildPluginManifestJson();
+
+  char json[4096];
   snprintf(json, sizeof(json),
     "{"
       "\"accountid\":%llu,"
@@ -209,6 +219,13 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
       "\"publisher_lock\":\"\","
       "\"hmdserialnumber\":\"nEVR-Wine\","
       "\"desiredclientprofileversion\":0,"
+      "\"nevr_identity\":{"
+        "\"version\":\"%s\","
+        "\"commit\":\"%s\","
+        "\"build\":\"%s\","
+        "\"build_type\":\"%s\""
+      "},"
+      "\"nevr_plugins\":__PLUGINS__,"
       "\"system_info\":{"
         "\"headset_type\":\"No VR\","
         "\"driver_version\":\"%s\","
@@ -224,6 +241,10 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
     "}",
     (unsigned long long)accountId,
     resolvedName.c_str(),
+    buildId.project_version.c_str(),
+    buildId.git_commit.c_str(),
+    buildId.git_describe.c_str(),
+    buildId.build_type.c_str(),
     driverVersion.c_str(),
     host.cpu_brand.c_str(),
     host.physical_cores,
@@ -231,7 +252,14 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
     (unsigned long long)host.memory_total_mb,
     (unsigned long long)host.memory_used_mb);
 
-  size_t jsonLen = strlen(json) + 1;  // include null terminator
+  // Splice in the plugin manifest (a raw JSON array, not a quoted string).
+  std::string jsonStr(json);
+  size_t plugPos = jsonStr.find("__PLUGINS__");
+  if (plugPos != std::string::npos) {
+    jsonStr.replace(plugPos, 12, pluginManifest);
+  }
+
+  size_t jsonLen = jsonStr.size() + 1;  // include null terminator
 
   // Build payload: UUID(16) + PlatformCode(8) + AccountId(8) + JSON+null
   std::string payload;
@@ -240,7 +268,7 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   for (int i = 0; i < 16; i++) payload.push_back('\0');
   AppendLE64(payload, platformCode);
   AppendLE64(payload, accountId);
-  payload.append(json, jsonLen);
+  payload.append(jsonStr.c_str(), jsonLen);
 
   // Build full message: marker + symbol + length + payload
   std::string msg;

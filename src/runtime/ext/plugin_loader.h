@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "extension/plugin_interface.h"
 
 // Discover and load all plugins from the plugins/ subdirectory.
@@ -45,6 +47,12 @@ inline constexpr int CapsLoadPriority(uint32_t caps) {
   if (caps & NEVR_PLUGIN_CAP_OBSERVES_ONLY)    return 1;
   return 0;
 }
+
+// N112 — build a compact JSON array describing every loaded plugin so the
+// client login and server registration can send a plugin manifest. Format:
+//   [{"name":"ex","ver":"1.0.0","api":5,"caps":1},...]
+// Returns "[]" when no plugins are loaded. Call after LoadPlugins().
+std::string BuildPluginManifestJson();
 
 // ============================================================================
 // Test hooks — enabled only when NEVR_TEST_HOOKS is defined.
