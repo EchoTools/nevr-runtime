@@ -64,8 +64,9 @@ how an agent triangulates a correct log line.
 
 - You **shall not** log a bare free-text message with no subsystem tag and no identifier.
   `Log(Info, "Connected")` is not a log line — it is a riddle.
-- You **shall not** log at INFO level inside a per-frame or per-tick hot path. Use DEBUG
-  or (better) a rate-limited counter summary.
+- You **shall not** log at INFO level inside a hot path (per-frame, per-tick,
+  per-connection). Use DEBUG for the narrative detail; emit one INFO
+  summary line instead (Rule 12).
 - You **shall not** log a state transition without also logging the state it transitioned
   FROM and TO. "State changed" without the old and new states is
   useless.
@@ -129,11 +130,14 @@ for review.
 |         | failure, module init failure, unrecoverable state.                          |            |
 | WARNING | Degraded but running. Hook install failure, config key missing, login       | Always on  |
 |         | failure (retryable), retry attempt, suppressed NoNetwork transition.        |            |
-| INFO    | Normal state transitions. Startup, shutdown, connected, disconnected,       | Always on  |
-|         | registered, session created, login success, config loaded, tick rate set.   |            |
-| DEBUG   | Per-request detail, on-disk state, pointer values, hex dumps,               | **Off**    |
-|         | per-frame counters, values that aid diagnosis but are not needed for        |            |
-|         | operational monitoring. Rate-limit anything in a hot path.                  |            |
+| INFO    | **Summary, not narrative.** One line per event that tells the operator       | Always on  |
+|         | WHAT happened and whether it succeeded. Startup complete, connection         |            |
+|         | established, login succeeded, config loaded, plugin set loaded (count).      |            |
+|         | The per-item detail lives at DEBUG; INFO gets the aggregate.                |            |
+| DEBUG   | **Narrative detail.** Per-item descriptions, per-request data, on-disk      | **Off**    |
+|         | state, pointer values, hex dumps, per-frame counters, per-connection         |            |
+|         | diagnostics. The individual boot-step lines (`[NEVR.BOOT] installing X`)    |            |
+|         | live here; INFO gets the summary (`boot complete: N hooks`).                |            |
 
 **Anti-patterns by level:**
 
@@ -141,9 +145,11 @@ for review.
   well-defined error code is WARNING, not ERROR. ERROR means "the
   process may not be able to continue." A retryable network timeout is
   WARNING, not ERROR.
-- **INFO used for per-frame data:** Telemetry diagnostics, per-frame
-  counters, hex dumps of game state — these are DEBUG. They drown
-  operational signal at INFO level.
+- **INFO used for per-item detail:** Individual hook installs,
+  per-connection TLS diagnostics, per-frame counters, hex dumps of
+  game state — these are DEBUG. INFO is the summary, not the
+  narrative. If an operator needs the per-item breakdown, they enable
+  DEBUG.
 - **WARNING used for expected conditions:** "No plugins directory
   found" on a fresh install is INFO, not WARNING. WARNING means
   "something is not right but the system can cope."
@@ -261,8 +267,9 @@ What constitutes noise:
   `echovr.exe` that pass through unmodified, without a NEVR subsystem
   tag or structured wrapper, are noise. The log_filter SHALL suppress
   these in production server builds.
-- **Per-frame or per-tick diagnostics at INFO level.** These are DEBUG.
-  If they appear at INFO level, that is a bug.
+- **Per-item detail at INFO level.** Per-frame, per-tick, or per-connection
+  diagnostics at INFO are DEBUG. INFO gets the summary; DEBUG gets the
+  narrative (Rule 12).
 - **Hex dumps, pointer values, and raw binary at INFO level.** These
   are DEBUG, gated by a verbosity flag.
 
@@ -442,6 +449,62 @@ The log is the only record of what configuration the process is running
 with. If a config value is not logged, the operator must guess whether
 it was applied.
 
+### Rule 11: Bootstrap log lines carry a level prefix
+
+Before the game logger is available, `BootLogTee::TeeFprintf` is the
+only output mechanism. These lines SHALL embed their level in the format
+string so they are distinguishable from timestamped `Log()` output:
+
+```cpp
+// BEFORE (no level — indistinguishable from any other bootstrap line)
+BootLogTee::TeeFprintf("[NEVR.BOOT] installing crash recovery hooks...\n");
+
+// AFTER
+BootLogTee::TeeFprintf("[NEVR.BOOT] info; installing crash recovery hooks...\n");
+```
+
+The level prefix (`info;`, `warn;`, `error;`) bridges the gap until
+`Log()` becomes available. Once the game logger is initialized, all
+subsequent output SHALL use `Log()` — `TeeFprintf` is a bootstrap
+mechanism only.
+
+### Rule 12: INFO is summary, DEBUG is narrative
+
+Every event that produces multiple log lines SHALL follow this pattern:
+
+- **INFO:** one line that says WHAT happened and the outcome. The
+  operator reads INFO to understand system state at a glance.
+- **DEBUG:** the per-item narrative that explains HOW it happened.
+  Individual steps, measurements, and decisions that the operator only
+  needs during deep diagnosis.
+
+```
+// INFO — one summary line
+[NEVR.PATCH] boot complete: 14 hooks installed, 1 deferred, 1 known-failed (N126/N128), 0 unexpected
+
+// DEBUG — per-item narrative (gated behind DEBUG level)
+[NEVR.BOOT] debug; installing crash recovery hooks
+[NEVR.PATCH] debug; CreateProcessA hook installed (crash reporter disabled)
+[NEVR.PATCH] debug; CreateProcessW hook installed (crash reporter disabled)
+[NEVR.PATCH] debug; ExitProcess hook installed (prevents crash reporter termination)
+...
+```
+
+This applies to boot sequences, plugin loading, connection setup, and
+any multi-step operation. If there are N items, INFO gets one summary
+line with the count; DEBUG gets the N individual lines.
+
+### Rule 13: Sensor-encoded level decisions are revisable
+
+Sensors that pin a log level (e.g. "this message SHALL be Debug") encode
+a past decision, not a permanent law. When the logging standard evolves,
+a sensor that contradicts the current standard is a sensor that needs
+updating — not a reason to violate the standard.
+
+If you change a log level and a sensor blocks it, update the sensor in
+the same commit. The sensor exists to prevent *drift*, not to prevent
+*deliberate revision*.
+
 ---
 
 ## BEFORE / AFTER Reference
@@ -503,8 +566,8 @@ failing any of these checks is rejected until the violation is fixed.
 | Hook failure at DEBUG or not logged          | Silent regression in coverage     | Log at WARNING with VA + expected + actual            |
 | State transition without FROM state          | Can't diagnose stuck state        | Log old_state -> new_state                            |
 | Error without error code                     | Not actionable                    | Add GetLastError(), HRESULT, or status code           |
-| INFO in per-frame hot path                   | Floods the log                    | Demote to DEBUG or rate-limit                         |
-| printf/fprintf/cerr instead of Log()         | Bypasses structured logging       | Use Log() from logging.h                              |
+| INFO in any hot path or per-item detail       | Floods the log                    | Demote to DEBUG; emit one INFO summary line instead.  |
+| printf/fprintf/cerr instead of Log()         | Bypasses structured logging       | Use Log() from logging.h.  Exception: `BootLogTee::TeeFprintf` before the game logger exists (Rule 11). |
 | Game-native line without NEVR annotation     | Noise (N18)                       | Suppress or wrap with structured fields               |
 | Free-text message with no key=value fields   | Not machine-parseable             | Use key=value format for identifiers and outcomes     |
 | Config value not logged at load              | Configuration is invisible        | Log at INFO with key + value                          |
