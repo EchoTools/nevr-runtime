@@ -8,8 +8,22 @@ preset := env("PRESET", default_preset)
 default:
     @just --list
 
+# Regenerate the EVR symbol cache C++ source from the nakama Go source.
+# Runs automatically as a dependency of configure; the generated file is committed
+# to git so a missing evrcat tree does not block the build on other machines.
+generate-symcache:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    repo_root="{{ justfile_directory() }}"
+    go_file="/home/andrew/src/evrcat/vendor/github.com/heroiclabs/nakama/v3/server/evr/core_hash_lookup.go"
+    if [[ -f "$go_file" ]]; then
+        bash "$repo_root/tools/generate-symcache.sh"
+    else
+        echo "generate-symcache: Go source not found at $go_file — skipping (using committed symcache_data.cpp)" >&2
+    fi
+
 # Configure CMake
-configure: _vcpkg-mingw
+configure: generate-symcache _vcpkg-mingw
     @unset VCPKG_ROOT && cmake --preset {{ preset }} > /dev/null 2>&1 || (unset VCPKG_ROOT && cmake --preset {{ preset }})
 
 # Build all components

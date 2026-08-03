@@ -13,6 +13,7 @@
  */
 
 #include "runtime/log/builtin_filter.h"
+#include "runtime/log/symcache.h"
 #include "core/logging.h"
 
 #include <MinHook.h>
@@ -1048,6 +1049,18 @@ static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
 
     if (!(len >= 6 && std::strncmp(buf, "[NEVR.", 6) == 0)) {
         g_game_line_count.fetch_add(1, std::memory_order_relaxed);
+
+        // Annotate game-native lines with [EVR] prefix and resolved symbol hashes.
+        // The annotated line replaces buf in-place; if the result is too large for
+        // the fixed buffer the original is preserved unchanged (extremely unlikely).
+        std::string annotated = evr::AnnotateGameLine(
+            std::string(buf, static_cast<size_t>(len)));
+        int newLen = static_cast<int>(annotated.size());
+        if (newLen < static_cast<int>(sizeof(buf))) {
+            std::memcpy(buf, annotated.data(), static_cast<size_t>(newLen));
+            buf[newLen] = '\0';
+            len = newLen;
+        }
     }
 
     MaybeEmitHealth();  /* N79 */
@@ -1192,6 +1205,8 @@ void BuiltinLogFilter::InstallPnsradHook() {
 }
 
 void BuiltinLogFilter::Init(uintptr_t base_addr, bool is_server) {
+    evr::InitSymbolCache();
+
     BlfLog("initializing (base=0x%llx, server=%s)",
            static_cast<unsigned long long>(base_addr),
            is_server ? "true" : "false");
