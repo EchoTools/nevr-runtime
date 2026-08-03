@@ -250,8 +250,11 @@ TEST(ServiceMap, ResolveRedirect_WsBridgeInactivePassesTarget) {
 
 TEST(ServiceMap, ResolveRedirect_WsBridgeActiveRewritesToLoopback) {
   // The behaviour the baseline run showed: a ws/wss URL with the bridge up is
-  // rewritten to ws://127.0.0.1:<port>, whatever the target host was.
+  // rewritten to ws://127.0.0.1:<port>, whatever the target host was.  These
+  // are the two stock client defaults read immediately after local config
+  // loads; N146 must have started the bridge before either lookup returns.
   for (const char* url : {"wss://login.readyatdawn.com/rad/rad15_live",
+                          "wss://config.readyatdawn.com/rad/rad15_live",
                           "ws://127.0.0.1:53748"}) {
     const auto r = ResolveRedirect(url, std::optional<std::string>("ws://g.echovrce.com:80/spr"),
                                    std::nullopt, /*bridgeActive=*/true, /*bridgePort=*/53748);

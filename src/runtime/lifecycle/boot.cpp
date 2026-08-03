@@ -38,37 +38,74 @@ const char* TokenAuth_GetUsername(void);
 #include "extension/module_interface.h"
 
 #include <cstdlib>
+#include <atomic>
 #include <shellapi.h>
+
+namespace {
+
+// N146: only this minimal state is needed before the original command-line
+// preprocessing.  In particular, do not start modules, plugins, file I/O, or
+// the bridge here: client D3D initialization is still in the original call.
+// -server is needed for the config loader's fail-loud policy; -config-path is
+// needed by LoadLocalConfigHook while the original is running.
+void PreflightRuntimeBootstrap() {
+  static bool s_done = false;
+  if (s_done) return;
+  s_done = true;
+
+  int argc = 0;
+  LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+  if (argv == nullptr) return;
+
+  for (int i = 0; i < argc; ++i) {
+    const LPWSTR arg = argv[i];
+    if (lstrcmpW(arg, L"-server") == 0) {
+      g_isServer = TRUE;
+      g_noOvr = TRUE;  // -server implies -noovr unconditionally
+    } else if ((lstrcmpW(arg, L"-config") == 0 || lstrcmpW(arg, L"-config-path") == 0) && i + 1 < argc) {
+      WideCharToMultiByte(CP_UTF8, 0, argv[++i], -1, g_customConfigPath, MAX_PATH, NULL, NULL);
+    }
+  }
+  LocalFree(argv);
+}
+
+}  // namespace
 
 /// <summary>
 /// A detour hook for the game's command line pre-processing method, used to parse command line arguments.
 /// </summary>
 /// <param name="pGame">A pointer to the game instance.</param>
 UINT64 PreprocessCommandLineHook(PVOID pGame) {
-  // The game calls PreprocessCommandLine MULTIPLE times during startup.
-  // In client mode it can hammer this hook thousands of times per second
-  // (engine retry loop for config.json). All work — even lightweight file
-  // reads — is guarded so we don't re-parse config 4200×/sec.
-  //
-  // N146: The original PreprocessCommandLine call initializes the game's
-  // D3D11/DXVK render pipeline.  Our module/plugin/WS-bridge startup
-  // MUST run AFTER the first original call returns, or graphics DLLs
-  // silently fail to load and the client window never appears.
-  // We pass through on the first call (letting D3D init) and do our
-  // work on the second call.
+  // N146: the first original call initializes the client D3D path.  It can also
+  // be the ONLY call, so waiting for a second invocation leaves the bridge and
+  // all deferred runtime setup permanently disabled.  Store the game instance
+  // before D3D starts so its device hook can complete setup immediately after
+  // creation. A dedicated server retains the established second-preprocess
+  // boundary because it has no graphics-device call to rendezvous on.
   static int s_callCount = 0;
   ++s_callCount;
-
-  // Always run the original method
+  g_pGame = pGame;
+  PreflightRuntimeBootstrap();
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
+  if (g_isServer && s_callCount >= 2) {
+    RunDeferredRuntimeBootstrap(pGame, "Preprocess second-call server fallback");
+  }
+  return result;
+}
 
-  // First call: just pass through — the game needs to initialize its
-  // engine (including D3D11/DXVK) before we touch anything.
-  if (s_callCount <= 1) return result;
-
-  static bool s_oneTimeSetupDone = false;
-  if (!s_oneTimeSetupDone) {
-    s_oneTimeSetupDone = true;
+void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
+  // The game can reach this through a post-device graphics hook and, for a
+  // dedicated server, through the second-preprocess fallback above. Mark
+  // initialization started before any work so a re-entrant engine call cannot
+  // initialise modules/listeners twice.
+  static std::atomic_bool s_oneTimeSetupStarted{false};
+  bool expected = false;
+  if (!s_oneTimeSetupStarted.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel, std::memory_order_acquire)) {
+    return;
+  }
+  Log(EchoVR::LogLevel::Info, "[NEVR.BOOT] runtime bootstrap trigger=%s",
+      trigger ? trigger : "(unknown)");
 
   // Deferred from Initialize() — file I/O deadlocks during DllMain loader lock.
   LoadEarlyConfig();
@@ -417,7 +454,9 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   RefreshModuleCache();
   ResolveShutdownDependencies();  // N62
 
-  }  // s_oneTimeSetupDone guard
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.BOOT] runtime bootstrap complete early_config=%d bridge=%d port=%u",
+      g_earlyConfigPtr != nullptr ? 1 : 0, IsWebSocketBridgeActive() ? 1 : 0,
+      static_cast<unsigned>(GetWebSocketBridgePort()));
 
-  return result;
 }

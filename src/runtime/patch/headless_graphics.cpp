@@ -29,6 +29,9 @@
  */
 
 #include "runtime/patch/headless_graphics.h"
+#include "runtime/lifecycle/boot.h"
+#include "runtime/lifecycle/cli.h"
+#include "runtime/lifecycle/config.h"
 #include "runtime/hook/dll_load_hook.h"
 #include "core/globals.h"
 #include "core/logging.h"
@@ -433,6 +436,18 @@ typedef HRESULT (WINAPI *D3D11CreateDevice_t)(
 );
 static D3D11CreateDevice_t g_origD3D11CreateDevice = nullptr;
 
+static void CompleteClientRuntimeBootstrap(const char* trigger, HRESULT result, void* device) {
+    // The game invokes this hook on its own thread after the real device-create
+    // call returns.  That is the earliest measured point after D3D is alive and
+    // before the client reads config/login WebSocket endpoints. Never run this
+    // path for a headless server; PreprocessCommandLineHook's second invocation
+    // provides that established non-graphics boundary.
+    if (!g_isServer && !g_isHeadless && SUCCEEDED(result) && device != nullptr &&
+        g_pGame != nullptr) {
+        RunDeferredRuntimeBootstrap(g_pGame, trigger);
+    }
+}
+
 static HRESULT WINAPI D3D11CreateDevice_Hook(
     void* pAdapter, UINT driverType, HMODULE software, UINT flags,
     const UINT* pFeatureLevels, UINT featureLevels, UINT sdkVersion,
@@ -448,9 +463,12 @@ static HRESULT WINAPI D3D11CreateDevice_Hook(
          * than a generic failure.  The HandleDXError hook will recover. */
         return DXGI_ERROR_NOT_FOUND_;
     }
-    return g_origD3D11CreateDevice(pAdapter, driverType, software, flags,
-                                    pFeatureLevels, featureLevels, sdkVersion,
-                                    ppDevice, pFeatureLevel, ppImmediateContext);
+    HRESULT result = g_origD3D11CreateDevice(pAdapter, driverType, software, flags,
+                                               pFeatureLevels, featureLevels, sdkVersion,
+                                               ppDevice, pFeatureLevel, ppImmediateContext);
+    CompleteClientRuntimeBootstrap("D3D11CreateDevice postcall", result,
+                                   ppDevice != nullptr ? *ppDevice : nullptr);
+    return result;
 }
 
 /* ========================================================================
@@ -544,7 +562,10 @@ static HRESULT WINAPI D3D12CreateDevice_Hook(
             "[NEVR.HEADLESS] D3D12CreateDevice intercepted — returning null device (no GPU)");
         return DXGI_ERROR_NOT_FOUND_;
     }
-    return g_origD3D12CreateDevice(pAdapter, minFeatureLevel, riid, ppDevice);
+    HRESULT result = g_origD3D12CreateDevice(pAdapter, minFeatureLevel, riid, ppDevice);
+    CompleteClientRuntimeBootstrap("D3D12CreateDevice postcall", result,
+                                   ppDevice != nullptr ? *ppDevice : nullptr);
+    return result;
 }
 
 static void OnD3d12Load(const char* dll_name, HMODULE module) {
