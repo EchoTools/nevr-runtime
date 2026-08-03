@@ -415,7 +415,8 @@ static void RefreshThreadFunc(std::string url, std::string httpKey) {
 
         if (cached.HasValidRefreshToken()) {
             if (RefreshAuthToken(cached, url, httpKey)) {
-                Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Token refreshed successfully");
+                Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Token refreshed successfully expires_in=%llus",
+                    (unsigned long long)(cached.token_expiry - now));
                 // Update the in-memory DeviceAuth instance so GetToken/GetDiscordId
                 // return the new token immediately (they no longer read from disk).
                 s_auth->UpdateFromRefresh(cached);

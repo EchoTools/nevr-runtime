@@ -1385,7 +1385,7 @@ verify:
         echo "verify: FAIL — token-auth does not consult the JWT exp claim." >&2
         exit 1
     fi
-    # N94: nine [NEVR.AUTH] per-step detail lines are pinned at Debug (N47
+    # N94: eight [NEVR.AUTH] per-step detail lines are pinned at Debug (N47
     # taxonomy, cfe96de). Merge 2f29312 reverted all nine to Info at once by
     # taking a stale branch copy of this file wholesale; a revert-by-merge shows
     # no diff against either parent, so only a content pin can catch a
@@ -1400,8 +1400,7 @@ verify:
         'token saved to .credentials.json' \
         'Still waiting for authorization' \
         'Token expires in %llus' \
-        'Token expired %llus ago' \
-        'Token refreshed successfully'; do
+        'Token expired %llus ago'; do
         N94_RC=0; N94_CTX=$(grep -B1 -F "$msg" "$N94_FILE") || N94_RC=$?
         sensor_stage1 "N94 auth log taxonomy" "$N94_FILE" "$N94_RC"
         sensor_nonempty "N94 auth log taxonomy" "message '$msg' in $N94_FILE" "$N94_CTX"

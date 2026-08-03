@@ -50,7 +50,7 @@ SECURITY_STATUS SEC_ENTRY AcquireCredentialsHandleWHook(
       schannelCred->dwFlags |= SCH_CRED_NO_DEFAULT_CREDS;
       schannelCred->dwFlags &= ~SCH_CRED_MANUAL_CRED_VALIDATION;
       schannelCred->dwFlags |= SCH_USE_STRONG_CRYPTO;
-      Log(EchoVR::LogLevel::Info,
+      Log(EchoVR::LogLevel::Debug,
           "[NEVR.PATCH] SSL/TLS modernized: Enabled TLS 1.2/1.3 with ECDSA/EdDSA/RSA support");
     }
   }

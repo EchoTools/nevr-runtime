@@ -90,7 +90,7 @@ struct LogFilterConfig {
 static void BlfLog(const char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    std::fprintf(stderr, "[builtin_log_filter] ");
+    std::fprintf(stderr, "[NEVR.LOGFILTER] ");
     std::vfprintf(stderr, fmt, args);
     std::fprintf(stderr, "\n");
     va_end(args);
