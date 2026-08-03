@@ -12,11 +12,11 @@ export DISPLAY=:101
 export WINEPREFIX="$HOME/src/nevr-runtime/echovr/.wineprefix"
 LOGFILE=/var/tmp/nevr-client-test.log
 
-echo "=== Starting echovr.exe -mp (DISPLAY=$DISPLAY) ==="
+echo "=== Starting echovr.exe -noovr -windowed -mp (DISPLAY=$DISPLAY) ==="
 echo "=== Log: $LOGFILE ==="
 
 set +e
-cd echovr/bin/win10 && wine ./echovr.exe -mp 2>&1 | tee "$LOGFILE"
+cd echovr/bin/win10 && wine ./echovr.exe -noovr -windowed -mp 2>&1 | tee "$LOGFILE"
 exit_code=$?
 set -e
 
