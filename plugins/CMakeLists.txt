@@ -25,3 +25,4 @@ endif()
 # against src/runtime/log/builtin_filter.cpp, and deleting first is what
 # stranded a fix twice here (N93, N94).
 add_subdirectory(example)
+add_subdirectory(debug-lockout)
