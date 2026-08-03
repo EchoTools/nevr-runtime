@@ -591,19 +591,6 @@ LONG WINAPI BreakpointVEH(PEXCEPTION_POINTERS pExceptionInfo) {
   }
 
   // Report any unhandled fatal exception before passing to the default handler.
-  //
-  // N146: WriteCrashDump is NOT safe to call on exceptions originating from
-  // external/system DLLs (DXVK, Wine, GPU driver components). Those libraries
-  // use SEH/VEH internally — deliberate probes (access-violation at
-  // 0xFFFFFFFFFFFFFFFF, stack-overflow for guard-page probing) are caught by
-  // their own handlers. Our VEH runs first (priority 1) and the WriteCrashDump
-  // work (stack scan, module enumeration, WriteFile to stderr) interferes with
-  // the state those handlers expect. The symptom is a silently-missing D3D11
-  // render window in client mode.
-  //
-  // Only log exceptions whose RIP is in game code (echovr.exe) or in one of
-  // our modules (BugSplat64.dll etc.). Exceptions from Wine's D3D
-  // implementation, DXVK, or driver DLLs pass through immediately.
   DWORD code = pExceptionInfo->ExceptionRecord->ExceptionCode;
   if (code == EXCEPTION_ACCESS_VIOLATION ||
       code == EXCEPTION_ILLEGAL_INSTRUCTION ||
@@ -611,29 +598,9 @@ LONG WINAPI BreakpointVEH(PEXCEPTION_POINTERS pExceptionInfo) {
       code == EXCEPTION_INT_DIVIDE_BY_ZERO ||
       code == STATUS_STACK_BUFFER_OVERRUN ||
       code == 0x20474343) {  // C++ throw from a NEVR DLL — see WriteCrashDump
-    const DWORD64 rip = pExceptionInfo->ContextRecord->Rip;
-    const DWORD64 base = reinterpret_cast<DWORD64>(EchoVR::g_GameBaseAddress);
-
-    // In game code? (echovr.exe +0x0 to +0x2000000)
-    bool inGame = (rip >= base && rip < base + 0x2000000);
-
-    // In a cached NEVR module? (BugSplat64.dll, plugin DLLs, etc.)
-    bool inNevrModule = false;
-    if (!inGame) {
-      const LONG mc = g_moduleCacheCount;
-      for (LONG m = 0; m < mc; m++) {
-        if (rip >= g_moduleCache[m].base && rip < g_moduleCache[m].end) {
-          inNevrModule = true;
-          break;
-        }
-      }
-    }
-
-    if (inGame || inNevrModule) {
-      static volatile LONG g_crashLogCount = 0;
-      if (InterlockedIncrement(&g_crashLogCount) <= 3) {
-        WriteCrashDump(pExceptionInfo);
-      }
+    static volatile LONG g_crashLogCount = 0;
+    if (InterlockedIncrement(&g_crashLogCount) <= 3) {
+      WriteCrashDump(pExceptionInfo);
     }
   }
 
