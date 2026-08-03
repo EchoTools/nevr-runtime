@@ -45,10 +45,12 @@ const char* TokenAuth_GetUsername(void);
 /// </summary>
 /// <param name="pGame">A pointer to the game instance.</param>
 UINT64 PreprocessCommandLineHook(PVOID pGame) {
-  // The game calls PreprocessCommandLine MULTIPLE times during startup
-  // (LoadLocalConfig also runs twice — see BUGS.md tail). Module init must
-  // be idempotent: hooks are installed once and MinHook rejects re-creation.
-  static bool s_modulesInitialized = false;
+  // The game calls PreprocessCommandLine MULTIPLE times during startup.
+  // All one-time setup — modules, patches, WS bridge, plugins — is guarded
+  // here. Non-idempotent operations on subsequent calls (new WS listener per
+  // invocation, plugin reload without dedup, module cache rebuild) compound
+  // into a feedback loop ending in stack overflow.
+  static bool s_oneTimeSetupDone = false;
 
   // Deferred from Initialize() — file I/O deadlocks during DllMain loader lock.
   LoadEarlyConfig();
@@ -92,8 +94,8 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 
   // Load modules. Order matters — dependencies must load first.
   // Guarded: the game calls PreprocessCommandLine multiple times.
-  if (!s_modulesInitialized) {
-    s_modulesInitialized = true;
+  if (!s_oneTimeSetupDone) {
+    s_oneTimeSetupDone = true;
   {
     static NvrModuleContext moduleCtx = {};
     moduleCtx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
@@ -161,7 +163,6 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
     // fail-fasts with "[FATAL] ws_bridge: Required module missing" and exit 1.
     // Measured, 2026-07-27.
   }
-  }  // s_modulesInitialized guard
 
   // Parse command line arguments.
   int argc = 0;
@@ -394,6 +395,8 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // Crash frames in modules/plugins are unattributable without this (N85).
   RefreshModuleCache();
   ResolveShutdownDependencies();  // N62
+
+  }  // s_oneTimeSetupDone guard
 
   // Run the original method
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
