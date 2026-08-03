@@ -181,7 +181,14 @@ if(MINGW)
 endif()
 
 if(MINGW)
-  target_link_options(nevr_runtime PRIVATE -Wl,--allow-multiple-definition)
+  # N146: the stock BugSplat64.dll is linked with /BASE:0x180000000.
+  # The game's D3D11/DXVK graphics DLLs fail to load when BugSplat64.dll
+  # occupies a different address range.  Setting the same ImageBase fixes
+  # the client-mode window-not-rendering bug.
+  target_link_options(nevr_runtime PRIVATE
+    -Wl,--image-base=0x180000000
+    -Wl,--allow-multiple-definition
+  )
 endif()
 
 # XPID patch unit tests — validates byte constants and address sanity.

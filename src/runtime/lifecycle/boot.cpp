@@ -49,11 +49,24 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // In client mode it can hammer this hook thousands of times per second
   // (engine retry loop for config.json). All work — even lightweight file
   // reads — is guarded so we don't re-parse config 4200×/sec.
-  // Non-idempotent operations on subsequent calls (new WS listener per
-  // invocation, plugin reload without dedup, module cache rebuild) compound
-  // into a feedback loop ending in stack overflow.
-  static bool s_oneTimeSetupDone = false;
+  //
+  // N146: The original PreprocessCommandLine call initializes the game's
+  // D3D11/DXVK render pipeline.  Our module/plugin/WS-bridge startup
+  // MUST run AFTER the first original call returns, or graphics DLLs
+  // silently fail to load and the client window never appears.
+  // We pass through on the first call (letting D3D init) and do our
+  // work on the second call.
+  static int s_callCount = 0;
+  ++s_callCount;
 
+  // Always run the original method
+  UINT64 result = EchoVR::PreprocessCommandLine(pGame);
+
+  // First call: just pass through — the game needs to initialize its
+  // engine (including D3D11/DXVK) before we touch anything.
+  if (s_callCount <= 1) return result;
+
+  static bool s_oneTimeSetupDone = false;
   if (!s_oneTimeSetupDone) {
     s_oneTimeSetupDone = true;
 
@@ -289,10 +302,16 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
         int written = snprintf(dbgcorePath, MAX_PATH, "%sdbgcore.dll", exePath);
         if (written > 0 && written < MAX_PATH) {
           if (GetFileAttributesA(dbgcorePath) != INVALID_FILE_ATTRIBUTES) {
-            if (g_allowDbgCore) {
+            // N146: dbgcore.dll is REQUIRED for client-mode D3D11/DXVK to
+            // initialise under Wine.  The stock BugSplat64.dll does not load
+            // graphics without it, and neither does ours.  Only reject it in
+            // server mode, where no rendering happens and the file IS a
+            // leftover injection artifact.
+            if (g_allowDbgCore || !g_isServer) {
               Log(EchoVR::LogLevel::Info,
-                  "[NEVR.PATCH] dbgcore.dll present in game directory — "
-                  "legacy injection permitted (-allow-dbgcore)");
+                  "[NEVR.PATCH] dbgcore.dll present in game directory — %s",
+                  g_allowDbgCore ? "legacy injection permitted (-allow-dbgcore)"
+                                 : "required for client-mode rendering, accepting");
             } else {
               FatalError(
                   "dbgcore.dll detected in the game directory.\n\n"
@@ -400,7 +419,5 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
 
   }  // s_oneTimeSetupDone guard
 
-  // Run the original method
-  UINT64 result = EchoVR::PreprocessCommandLine(pGame);
   return result;
 }
