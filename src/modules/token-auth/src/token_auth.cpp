@@ -83,7 +83,10 @@ bool DeviceAuth::IsAuthenticated() const {
 
 bool DeviceAuth::TryLoadCachedToken() {
     auto auth = LoadCachedAuthToken();
-    if (auth.token.empty()) return false;
+    // The access token is deliberately NOT persisted to disk — only the
+    // refresh token is saved.  Check for either token before bailing so
+    // the refresh path below is reachable when only the refresh token exists.
+    if (auth.token.empty() && auth.refresh_token.empty()) return false;
 
     if (auth.HasValidToken()) {
         m_token = auth.token;

@@ -46,11 +46,16 @@ const char* TokenAuth_GetUsername(void);
 /// <param name="pGame">A pointer to the game instance.</param>
 UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // The game calls PreprocessCommandLine MULTIPLE times during startup.
-  // All one-time setup — modules, patches, WS bridge, plugins — is guarded
-  // here. Non-idempotent operations on subsequent calls (new WS listener per
+  // In client mode it can hammer this hook thousands of times per second
+  // (engine retry loop for config.json). All work — even lightweight file
+  // reads — is guarded so we don't re-parse config 4200×/sec.
+  // Non-idempotent operations on subsequent calls (new WS listener per
   // invocation, plugin reload without dedup, module cache rebuild) compound
   // into a feedback loop ending in stack overflow.
   static bool s_oneTimeSetupDone = false;
+
+  if (!s_oneTimeSetupDone) {
+    s_oneTimeSetupDone = true;
 
   // Deferred from Initialize() — file I/O deadlocks during DllMain loader lock.
   LoadEarlyConfig();
@@ -93,9 +98,6 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   }
 
   // Load modules. Order matters — dependencies must load first.
-  // Guarded: the game calls PreprocessCommandLine multiple times.
-  if (!s_oneTimeSetupDone) {
-    s_oneTimeSetupDone = true;
   {
     static NvrModuleContext moduleCtx = {};
     moduleCtx.base_addr = (uintptr_t)EchoVR::g_GameBaseAddress;
