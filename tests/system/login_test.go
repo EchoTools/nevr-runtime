@@ -38,7 +38,8 @@ func requireLiveClient(t *testing.T) string {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "wine", "./echovr.exe", "-windowed", "-mp", "-allow-dbgcore")
+		cmd := exec.CommandContext(ctx, "wine", "./echovr.exe", "-windowed", "-mp",
+			"-gametype", "echo_arena_private")
 		cmd.Dir = binDir
 		cmd.Env = append(os.Environ(), "DISPLAY=:101", "WINEPREFIX="+prefix)
 		output, err := cmd.CombinedOutput()

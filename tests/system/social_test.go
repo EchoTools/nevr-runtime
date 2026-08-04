@@ -82,43 +82,35 @@ func TestSocialPayloadSizes(t *testing.T) {
 func TestSocialPayloadFieldOffsets(t *testing.T) {
 	// SNSFriendsActionPayload
 	{
-		var p SNSFriendsActionPayload
-		base := uintptr(unsafe.Pointer(&p))
-		assertOffset(t, "ActionPayload.RoutingID", uintptr(unsafe.Pointer(&p.RoutingID))-base, 0x00)
-		assertOffset(t, "ActionPayload.LocalUserUUID", uintptr(unsafe.Pointer(&p.LocalUserUUID))-base, 0x08)
-		assertOffset(t, "ActionPayload.SessionGUID", uintptr(unsafe.Pointer(&p.SessionGUID))-base, 0x18)
-		assertOffset(t, "ActionPayload.TargetUserID", uintptr(unsafe.Pointer(&p.TargetUserID))-base, 0x20)
+		assertOffset(t, "ActionPayload.RoutingID", unsafe.Offsetof(SNSFriendsActionPayload{}.RoutingID), 0x00)
+		assertOffset(t, "ActionPayload.LocalUserUUID", unsafe.Offsetof(SNSFriendsActionPayload{}.LocalUserUUID), 0x08)
+		assertOffset(t, "ActionPayload.SessionGUID", unsafe.Offsetof(SNSFriendsActionPayload{}.SessionGUID), 0x18)
+		assertOffset(t, "ActionPayload.TargetUserID", unsafe.Offsetof(SNSFriendsActionPayload{}.TargetUserID), 0x20)
 	}
 
 	// SNSFriendsListResponse
 	{
-		var p SNSFriendsListResponse
-		base := uintptr(unsafe.Pointer(&p))
-		assertOffset(t, "ListResponse.Header", uintptr(unsafe.Pointer(&p.Header))-base, 0x00)
-		assertOffset(t, "ListResponse.NOffline", uintptr(unsafe.Pointer(&p.NOffline))-base, 0x08)
-		assertOffset(t, "ListResponse.NBusy", uintptr(unsafe.Pointer(&p.NBusy))-base, 0x0C)
-		assertOffset(t, "ListResponse.NOnline", uintptr(unsafe.Pointer(&p.NOnline))-base, 0x10)
-		assertOffset(t, "ListResponse.NSent", uintptr(unsafe.Pointer(&p.NSent))-base, 0x14)
-		assertOffset(t, "ListResponse.NRecv", uintptr(unsafe.Pointer(&p.NRecv))-base, 0x18)
+		assertOffset(t, "ListResponse.Header", unsafe.Offsetof(SNSFriendsListResponse{}.Header), 0x00)
+		assertOffset(t, "ListResponse.NOffline", unsafe.Offsetof(SNSFriendsListResponse{}.NOffline), 0x08)
+		assertOffset(t, "ListResponse.NBusy", unsafe.Offsetof(SNSFriendsListResponse{}.NBusy), 0x0C)
+		assertOffset(t, "ListResponse.NOnline", unsafe.Offsetof(SNSFriendsListResponse{}.NOnline), 0x10)
+		assertOffset(t, "ListResponse.NSent", unsafe.Offsetof(SNSFriendsListResponse{}.NSent), 0x14)
+		assertOffset(t, "ListResponse.NRecv", unsafe.Offsetof(SNSFriendsListResponse{}.NRecv), 0x18)
 	}
 
 	// SNSFriendNotifyPayload
 	{
-		var p SNSFriendNotifyPayload
-		base := uintptr(unsafe.Pointer(&p))
-		assertOffset(t, "NotifyPayload.Header", uintptr(unsafe.Pointer(&p.Header))-base, 0x00)
-		assertOffset(t, "NotifyPayload.FriendID", uintptr(unsafe.Pointer(&p.FriendID))-base, 0x08)
-		assertOffset(t, "NotifyPayload.StatusCode", uintptr(unsafe.Pointer(&p.StatusCode))-base, 0x10)
+		assertOffset(t, "NotifyPayload.Header", unsafe.Offsetof(SNSFriendNotifyPayload{}.Header), 0x00)
+		assertOffset(t, "NotifyPayload.FriendID", unsafe.Offsetof(SNSFriendNotifyPayload{}.FriendID), 0x08)
+		assertOffset(t, "NotifyPayload.StatusCode", unsafe.Offsetof(SNSFriendNotifyPayload{}.StatusCode), 0x10)
 	}
 
 	// SNSPartyTargetPayload
 	{
-		var p SNSPartyTargetPayload
-		base := uintptr(unsafe.Pointer(&p))
-		assertOffset(t, "PartyTarget.LocalUserUUID", uintptr(unsafe.Pointer(&p.LocalUserUUID))-base, 0x00)
-		assertOffset(t, "PartyTarget.TargetUserUUID", uintptr(unsafe.Pointer(&p.TargetUserUUID))-base, 0x10)
-		assertOffset(t, "PartyTarget.SessionGUID", uintptr(unsafe.Pointer(&p.SessionGUID))-base, 0x20)
-		assertOffset(t, "PartyTarget.Param", uintptr(unsafe.Pointer(&p.Param))-base, 0x28)
+		assertOffset(t, "PartyTarget.LocalUserUUID", unsafe.Offsetof(SNSPartyTargetPayload{}.LocalUserUUID), 0x00)
+		assertOffset(t, "PartyTarget.TargetUserUUID", unsafe.Offsetof(SNSPartyTargetPayload{}.TargetUserUUID), 0x10)
+		assertOffset(t, "PartyTarget.SessionGUID", unsafe.Offsetof(SNSPartyTargetPayload{}.SessionGUID), 0x20)
+		assertOffset(t, "PartyTarget.Param", unsafe.Offsetof(SNSPartyTargetPayload{}.Param), 0x28)
 	}
 }
 
@@ -212,18 +204,18 @@ func TestSocialHashConstants(t *testing.T) {
 		"FriendActionRequest":     0x78908988b7fe6db4,
 
 		// Friends inbound
-		"FriendListResponse":   0xa78aeb2a4e89b10b,
-		"FriendStatusNotify":   0x26a19dc4d2d5579d,
-		"FriendInviteSuccess":  0x7f0c6a3ac83c6f77,
-		"FriendInviteFailure":  0x7f197e30c72c6e61,
-		"FriendInviteNotify":   0xca09b0b36bd981b7,
-		"FriendAcceptSuccess":  0x1bbda7fa06af4627,
-		"FriendAddFailure":     0x1ba8b3f009bf4731,
-		"FriendAcceptNotify":   0xc237c84c31d3ae05,
-		"FriendBlockSuccess":   0xc2bf83a08ea3a955,
-		"FriendRemoveNotify":   0xe06972f49cd72265,
+		"FriendListResponse":    0xa78aeb2a4e89b10b,
+		"FriendStatusNotify":    0x26a19dc4d2d5579d,
+		"FriendInviteSuccess":   0x7f0c6a3ac83c6f77,
+		"FriendInviteFailure":   0x7f197e30c72c6e61,
+		"FriendInviteNotify":    0xca09b0b36bd981b7,
+		"FriendAcceptSuccess":   0x1bbda7fa06af4627,
+		"FriendAddFailure":      0x1ba8b3f009bf4731,
+		"FriendAcceptNotify":    0xc237c84c31d3ae05,
+		"FriendBlockSuccess":    0xc2bf83a08ea3a955,
+		"FriendRemoveNotify":    0xe06972f49cd72265,
 		"FriendWithdrawnNotify": 0x191aa30801ec6d03,
-		"FriendRejectNotify":   0xb9b86c0ce8e8d0c1,
+		"FriendRejectNotify":    0xb9b86c0ce8e8d0c1,
 
 		// Party outgoing (party-only)
 		"PartyKickRequest":          0xff02bf488e77bcba,
