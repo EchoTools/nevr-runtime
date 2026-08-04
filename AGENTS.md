@@ -236,7 +236,7 @@ This applies regardless of context — even if the task seems to require it, eve
 ## System test after every commit
 
 - **Run `./launch-client.sh` against the production server** after every commit that touches runtime code. The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A build that doesn't log in is NOT done.
-- **Check production Nakama logs** when login fails — `ssh echovrce@fortytwo.echovrce.com tail /home/echovrce/deployment/logs/nakama.log`. The server logs the exact parse error. Guessing from the client side is waste.
+- **Check production Nakama logs** when login fails. The server logs the exact parse error. Guessing from the client side is waste.
 - **`just verify` is necessary but not sufficient.** It catches C++ compile/test/pattern errors. It does NOT catch wire-format bugs, login failures, or rendering regressions. The system test covers what `just verify` cannot.
 
 ## No hand-built serialization
