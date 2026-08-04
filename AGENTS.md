@@ -183,7 +183,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 
 ## ReVault — Reverse Engineering Data Warehouse
 
-ReVault (`~/src/revault/`) is the single source of truth for binary analysis. It indexes all EchoVR binaries (echovr.exe, pnsrad.dll, etc.) with disassembly, decompilation, xrefs, strings, and annotations. **Use it first, before Ghidra, before guessing.**
+ReVault is the single source of truth for binary analysis. It indexes all EchoVR binaries (echovr.exe, pnsrad.dll, etc.) with disassembly, decompilation, xrefs, strings, and annotations. **Use it first, before Ghidra, before guessing.**
 
 Available as an MCP server (`revault` in `.mcp.json`) and CLI:
 
@@ -203,7 +203,7 @@ When you encounter an unknown function address (`fcn_*`, `DAT_*`, `0x180XXXXXX`)
 
 You are not the first agent to work here, and you won't be the last. Act like it.
 
-- **Search before you build.** The answer probably already exists in revault, `~/src/echovr-reconstruction`, `~/src/nakama`, or git history. Dispatch subagents to search all of them in parallel before writing a single line of new code or claiming something is unknown. (`~/src/evr-reconstruction` and `~/src/evrFileTools` were listed here until 2026-07-29 and do not exist on this host — a unicode-support investigation lost time searching for them, and the font-atlas-format documentation it expected in `evrFileTools` was never there. If either is restored, add it back.)
+- **Search before you build.** The answer probably already exists in ReVault, the project's own git history, or the nakama server source. Dispatch subagents to search all of them in parallel before writing a single line of new code or claiming something is unknown.
 - **The reconstruction is the source of truth.** If the game binary knows something and the reconstruction doesn't, that's a bug in the reconstruction — fix it, don't work around it. Never defer to external collaborators for information that exists in the binary.
 - **Use subagents aggressively.** Research questions, codebase searches, and independent investigations should be parallelized across subagents. You are not the only one working. Stop doing sequential searches when you could dispatch five agents at once.
 - **Leave the codebase better than you found it.** Every finding gets committed. Every mapping gets documented. Every `unknown_0x*` you identify gets renamed. Future agents should never repeat your work.
@@ -264,9 +264,9 @@ This applies regardless of context — even if the task seems to require it, eve
   symlink is excised — see below.
 - **Toolchain** — CMake 3.20+, Ninja, MinGW (Linux) or MSVC (Windows)
 
-## Onboarding conventions (all-the-way-down)
+## Onboarding conventions
 
-This repo is onboarded to the `~/src/all-the-way-down` canon (authorized by
+This repo is onboarded to the project governance canon (authorized by
 RULINGS.md 2026-07-20 "nevr onboarding"). Process machinery is governed by
 the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), which subsumes the former `DRIVER-CHARTER.md` (five slots + fleet protocol inlined into the skill)
 (`.claude/skills/nevr-work/`, gitignored). The following process decisions bind:
@@ -285,9 +285,8 @@ the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), wh
   trailer was dropped — she was not involved in this work. Commits before
   `624f795` carry it and are left as they are.)
   (Basis: RULINGS.md 2026-07-20 "Commit identity (nevr)".)
-- **Mandatory pre-read gate.** Before any C++/build work, read
-  `~/src/metis-core/CPP-MINGW-ADDENDUM-GENERIC.md` in full — its Hard-Stops bind
-  every build/config change. (Basis: day-one-kit §Order 1.)
+- **Mandatory pre-read gate.** Before any C++/build work, read the project's
+  CPP-MINGW-ADDENDUM in full — its Hard-Stops bind every build/config change.
 - **Scratch dir.** All agent scratch/staging/evidence files live under
   `/var/tmp/work-nevr-runtime/`, never `/tmp` (RAM-backed on this host) and never
   in the repo. (Basis: RULINGS.md 2026-07-20 "Scratch dir (nevr)".)
