@@ -230,8 +230,9 @@ class N68_PluginTickTest : public ::testing::Test {
 //
 // The test executable acts as the host module, so plugin_loader.cpp derives the
 // deterministic build/bin/plugins directory without touching echovr.exe or its
-// installation. test_plugin_future_api.dll is a deliberately tiny test-only
-// DLL built into that directory; it declares host API + 1.
+// installation. The deliberately tiny test-only DLLs are built into that
+// directory; one declares host API + 1 and the other exposes a counter that
+// makes its real OnFrame callback observable.
 // ============================================================================
 
 class PluginLoaderDiagnosticTest : public ::testing::Test {
@@ -279,6 +280,32 @@ TEST_F(PluginLoaderDiagnosticTest, FutureApiDllLogsVersionMismatchAndLoads) {
   EXPECT_TRUE(TestLogContains(versionDiagnostic));
   EXPECT_TRUE(TestLogContains("loading anyway"));
   EXPECT_TRUE(TestLogContains("Loaded: test-plugin-future-api"));
+}
+
+TEST_F(PluginLoaderDiagnosticTest, RealLoadedPluginOnFrameHasObservableSideEffect) {
+  g_testPluginLoadPlan.push_back(
+      {"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  const HMODULE plugin = GetModuleHandleA("test_plugin_onframe.dll");
+  ASSERT_NE(plugin, nullptr);
+  const auto getFrameCount = reinterpret_cast<uint32_t (*)(void)>(
+      GetProcAddress(plugin, "NvrTestPluginGetFrameCount"));
+  ASSERT_NE(getFrameCount, nullptr);
+  EXPECT_EQ(getFrameCount(), 0u);
+
+  NvrGameContext ctx = {};
+  ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
+  ctx.flags = NEVR_HOST_IS_SERVER;
+  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.get_plugin_count = GetLoadedPluginCount;
+  ctx.get_plugin_info = GetLoadedPluginInfo;
+  TickPlugins(&ctx);
+  TickPlugins(&ctx);
+
+  EXPECT_EQ(getFrameCount(), 2u);
 }
 
 TEST_F(N68_PluginTickTest, OnFrame_Fires_When_Registered) {

@@ -356,8 +356,8 @@ if(BUILD_TESTING)
       ws2_32 psapi
     )
 
-    # A hermetic DLL fixture for the real LoadLibraryExA path in
-    # test_behavioral's plugin-loader diagnostics. It is placed beside the
+    # Hermetic DLL fixtures for the real LoadLibraryExA path in
+    # test_behavioral's plugin-loader diagnostics. They are placed beside the
     # test executable (under bin/plugins), which is exactly where LoadPlugins
     # resolves configured DLLs when the executable is the host module.
     add_library(test_plugin_future_api SHARED
@@ -368,7 +368,15 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_future_api"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
-    add_dependencies(test_behavioral test_plugin_future_api)
+    add_library(test_plugin_onframe SHARED
+      tests/plugin_onframe_test_dll.cpp)
+    target_compile_definitions(test_plugin_onframe PRIVATE NEVR_PLUGIN_EXPORTS)
+    target_include_directories(test_plugin_onframe PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    set_target_properties(test_plugin_onframe PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "test_plugin_onframe"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe)
 
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
 
