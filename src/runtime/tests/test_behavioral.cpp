@@ -108,6 +108,19 @@ std::string FormatJsonLogEntry(EchoVR::LogLevel, const char*, const char*) { ret
 std::mutex g_testLogMutex;
 std::vector<std::string> g_testLogMessages;
 
+bool TestLogContains(const std::string& needle) {
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  return std::any_of(g_testLogMessages.begin(), g_testLogMessages.end(),
+                     [&needle](const std::string& message) {
+                       return message.find(needle) != std::string::npos;
+                     });
+}
+
+void ClearTestLogs() {
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  g_testLogMessages.clear();
+}
+
 void Log(EchoVR::LogLevel level, const char* format, ...) {
   (void)level;
   char buffer[2048] = {};
@@ -157,10 +170,13 @@ const char* NevrCfgGetFlat(const char* /*flatKey*/) { return nullptr; }
 // --- plugin_load_plan.h (N134 S6, referenced by plugin_loader.cpp LoadPlugins) ---
 // service_config.cpp defines the real one (BuildLoadPlan over the config.yaml
 // singleton), which this target does not link. LoadPlugins is never CALLED by the
-// N68 tick-dispatch tests — they inject via TestHook_* — so an empty plan is a
-// sound stub: the symbol resolves and the pure selection logic lives in
-// test_plugin_load_plan, not here.
-std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return {}; }
+// N68 tick-dispatch tests inject via TestHook_* and leave this plan empty. The
+// loader-diagnostic fixtures below supply one item at a time, so their real
+// LoadLibrary/GetProcAddress path remains hermetic; pure plan construction is
+// still covered in test_plugin_load_plan.
+std::vector<PluginLoadItem> g_testPluginLoadPlan;
+
+std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPlan; }
 
 // symbol_corpus.cpp provides the real LookupSymbolName function (670-entry table)
 // and FormatSymbolId. It is compiled into this test target.
@@ -208,6 +224,62 @@ class N68_PluginTickTest : public ::testing::Test {
   void SetUp() override { s_pluginFrameCount = 0; s_stateChangeCount = 0; s_stateChangeOld = s_stateChangeNew = 0; }
   void TearDown() override { TestHook_ClearPlugins(); }
 };
+
+// ============================================================================
+// Plugin loader diagnostics — real LoadLibraryExA + real GetProcAddress path.
+//
+// The test executable acts as the host module, so plugin_loader.cpp derives the
+// deterministic build/bin/plugins directory without touching echovr.exe or its
+// installation. test_plugin_future_api.dll is a deliberately tiny test-only
+// DLL built into that directory; it declares host API + 1.
+// ============================================================================
+
+class PluginLoaderDiagnosticTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    UnloadPlugins();
+    g_testPluginLoadPlan.clear();
+    ClearTestLogs();
+    EchoVR::g_GameBaseAddress = reinterpret_cast<CHAR*>(GetModuleHandleA(nullptr));
+    ASSERT_NE(EchoVR::g_GameBaseAddress, nullptr);
+  }
+
+  void TearDown() override {
+    UnloadPlugins();
+    g_testPluginLoadPlan.clear();
+    ClearTestLogs();
+  }
+};
+
+TEST_F(PluginLoaderDiagnosticTest, MissingOptionalDllLogsLoadLibraryFailureAndContinues) {
+  g_testPluginLoadPlan.push_back(
+      {"missing", "plugin_that_does_not_exist.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+  EXPECT_TRUE(TestLogContains("plugin_that_does_not_exist.dll"));
+  EXPECT_TRUE(TestLogContains("LoadLibrary failed: error"));
+  EXPECT_TRUE(TestLogContains("optional, continuing"));
+}
+
+TEST_F(PluginLoaderDiagnosticTest, FutureApiDllLogsVersionMismatchAndLoads) {
+  g_testPluginLoadPlan.push_back(
+      {"future-api", "test_plugin_future_api.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  // Build from the published host version so this fixture remains exactly one
+  // API generation ahead after a future bump.
+  const std::string versionDiagnostic =
+      "test_plugin_future_api.dll requires API v" +
+      std::to_string(NEVR_PLUGIN_API_VERSION + 1u) + ", host supports v" +
+      std::to_string(NEVR_PLUGIN_API_VERSION);
+  EXPECT_TRUE(TestLogContains(versionDiagnostic));
+  EXPECT_TRUE(TestLogContains("loading anyway"));
+  EXPECT_TRUE(TestLogContains("Loaded: test-plugin-future-api"));
+}
 
 TEST_F(N68_PluginTickTest, OnFrame_Fires_When_Registered) {
   TestHook_RegisterPluginOnFrame(N68_PluginOnFrame);
