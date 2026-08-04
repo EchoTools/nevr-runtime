@@ -40,7 +40,7 @@ func requireLiveClient(t *testing.T) string {
 		// before this bound; it deliberately avoids waiting on matchmaking.
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "wine", "./echovr.exe", "-windowed", "-mp",
+		cmd := exec.CommandContext(ctx, "wine", "./echovr.exe", "-windowed", "-noaudio", "-mp",
 			"-gametype", "echo_arena_private")
 		cmd.Dir = binDir
 		cmd.Env = append(os.Environ(), "DISPLAY=:101", "WINEPREFIX="+prefix)
@@ -69,8 +69,8 @@ func TestLoginBuildIdentityInLog(t *testing.T) {
 
 func TestLoginPlatformCodeAndInjectionInLog(t *testing.T) {
 	output := requireLiveClient(t)
-	if !strings.Contains(output, "[NEVR.WS] login injected xpid=DSC-") {
-		t.Fatalf("Discord platform login injection marker missing\n%s", output)
+	if !strings.Contains(output, "[NEVR.WS] login injected xpid=OVR-ORG-") {
+		t.Fatalf("OVR-ORG platform login injection marker missing\n%s", output)
 	}
 }
 
