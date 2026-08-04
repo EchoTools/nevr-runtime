@@ -1094,6 +1094,7 @@ verify:
     # produced the whole broadcaster thread — an address given a name nobody
     # re-derived, then reasoned about by that name forever after.
     # Known bugs warn (and stay visible); anything NEW is a hard failure.
+    python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/verify_hook_invariants.py
     # N84 runtime counterpart. The static check above scans source, so it only
     # sees plugins in THIS tree — a third-party plugin is a DLL we never compile.
