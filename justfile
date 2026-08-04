@@ -1654,6 +1654,9 @@ verify:
         exit 1
     fi
     echo "verify: runtime GTest declarations=$TEST_COUNT (floor 167)"
+    # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
+    # patch addition/removal requires a reviewed update to its pinned list.
+    python3 tools/verify_patch_source_inventory.py
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test removed 2026-08-02: the test script
