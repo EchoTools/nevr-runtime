@@ -2,7 +2,10 @@
 
 #include <cstdint>
 #include <ctime>
+#include <fstream>
 #include <string>
+#include <stdexcept>
+#include <utility>
 
 #include "core/auth_token.h"
 #include "device_poll_response.h"
@@ -27,6 +30,95 @@ NvrModuleContext MakeModuleContext(uint32_t flags) {
   context.flags = flags;
   return context;
 }
+
+class ExecutableCredentialCacheFixture {
+ public:
+  explicit ExecutableCredentialCacheFixture(const nlohmann::json& credentials)
+      : mutex_(CreateMutexA(nullptr, FALSE, "Local\\nevr-runtime-test-token-auth-cache")) {
+    if (mutex_ == nullptr) {
+      throw std::runtime_error("CreateMutexA failed for credential cache fixture");
+    }
+    const DWORD wait = WaitForSingleObject(mutex_, INFINITE);
+    if (wait != WAIT_OBJECT_0) {
+      CloseHandle(mutex_);
+      mutex_ = nullptr;
+      throw std::runtime_error("credential cache fixture mutex was not acquired");
+    }
+    mutex_acquired_ = true;
+
+    cache_directory_ = GetExeDirectory() + "_local";
+    cache_path_ = cache_directory_ + "/.credentials.json";
+    const DWORD attributes = GetFileAttributesA(cache_directory_.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+      if (!CreateDirectoryA(cache_directory_.c_str(), nullptr)) {
+        ReleaseMutex(mutex_);
+        CloseHandle(mutex_);
+        mutex_ = nullptr;
+        mutex_acquired_ = false;
+        throw std::runtime_error("CreateDirectoryA failed for credential cache fixture");
+      }
+      created_directory_ = true;
+    } else if ((attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+      ReleaseMutex(mutex_);
+      CloseHandle(mutex_);
+      mutex_ = nullptr;
+      mutex_acquired_ = false;
+      throw std::runtime_error("credential cache fixture path is not a directory");
+    }
+
+    std::ifstream existing(cache_path_, std::ios::binary);
+    if (existing.is_open()) {
+      original_contents_.assign(std::istreambuf_iterator<char>(existing),
+                                std::istreambuf_iterator<char>());
+      had_original_file_ = true;
+    }
+
+    std::ofstream fixture(cache_path_, std::ios::binary | std::ios::trunc);
+    if (!fixture.is_open()) {
+      Restore();
+      throw std::runtime_error("failed to write credential cache fixture");
+    }
+    fixture << credentials.dump();
+    fixture.close();
+  }
+
+  ExecutableCredentialCacheFixture(const ExecutableCredentialCacheFixture&) = delete;
+  ExecutableCredentialCacheFixture& operator=(const ExecutableCredentialCacheFixture&) = delete;
+
+  ~ExecutableCredentialCacheFixture() { Restore(); }
+
+ private:
+  void Restore() noexcept {
+    if (mutex_ == nullptr) {
+      return;
+    }
+    if (had_original_file_) {
+      std::ofstream original(cache_path_, std::ios::binary | std::ios::trunc);
+      if (original.is_open()) {
+        original.write(original_contents_.data(), static_cast<std::streamsize>(original_contents_.size()));
+      }
+    } else {
+      DeleteFileA(cache_path_.c_str());
+    }
+    if (created_directory_) {
+      RemoveDirectoryA(cache_directory_.c_str());
+    }
+    if (mutex_acquired_) {
+      ReleaseMutex(mutex_);
+    }
+    CloseHandle(mutex_);
+    mutex_ = nullptr;
+    mutex_acquired_ = false;
+  }
+
+  HANDLE mutex_ = nullptr;
+  bool mutex_acquired_ = false;
+  bool created_directory_ = false;
+  bool had_original_file_ = false;
+  std::string cache_directory_;
+  std::string cache_path_;
+  std::string original_contents_;
+};
 
 }  // namespace
 
@@ -117,6 +209,32 @@ TEST(DeviceAuthState, ExpiredRefreshUpdateRemainsUnauthenticated) {
   EXPECT_EQ(state.token, refreshed.token);
   EXPECT_EQ(state.discord_id, 888U);
   EXPECT_EQ(state.username, "expired-player");
+}
+
+TEST(DeviceAuthState, SafelyRejectsLegacyAccessTokenFromExecutableLocalCache) {
+  const uint64_t before = static_cast<uint64_t>(std::time(nullptr));
+  nlohmann::json credentials;
+  credentials["token"] = MakeJwt("eyJ2cnMiOnsiZGlkIjoiNDI0MiJ9fQ");
+  credentials["token_expiry"] = before + 3600;
+  credentials["username"] = "cached-player";
+  const ExecutableCredentialCacheFixture cache(credentials);
+
+  const CachedAuthToken loaded = LoadCachedAuthToken();
+  const uint64_t after_load = static_cast<uint64_t>(std::time(nullptr));
+  EXPECT_EQ(loaded.token, credentials.at("token").get<std::string>());
+  EXPECT_GT(loaded.token_expiry, before);
+  EXPECT_LE(loaded.token_expiry, after_load + kMaxDiskAccessTokenLifetimeSec);
+  // The disk cap deliberately keeps a legacy bearer token below the normal
+  // 60-second safety window, so DeviceAuth cannot adopt it without a refresh.
+  EXPECT_FALSE(loaded.HasValidToken());
+
+  const TokenAuth::TestHook::DeviceAuthState state =
+      TokenAuth::TestHook::InspectDeviceAuthFromCache();
+
+  EXPECT_FALSE(state.authenticated);
+  EXPECT_TRUE(state.token.empty());
+  EXPECT_EQ(state.discord_id, 0U);
+  EXPECT_TRUE(state.username.empty());
 }
 
 TEST(DevicePollResponse, VerifiedResponseExtractsEveryTokenField) {

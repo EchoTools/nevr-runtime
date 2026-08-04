@@ -478,6 +478,15 @@ DeviceAuthState InspectDeviceAuthAfterRefresh(const CachedAuthToken& cached) {
     return SnapshotDeviceAuth(auth);
 }
 
+DeviceAuthState InspectDeviceAuthFromCache() {
+    DeviceAuth auth;
+    // This deliberately calls the same executable-relative LoadCachedAuthToken
+    // path as Init(). Do not Configure: an expired legacy access token must
+    // not attempt a refresh endpoint during this hermetic test.
+    auth.TryLoadCachedToken();
+    return SnapshotDeviceAuth(auth);
+}
+
 }  // namespace TokenAuth::TestHook
 #endif  // NEVR_TEST_HOOKS
 

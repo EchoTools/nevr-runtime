@@ -39,6 +39,10 @@ struct DeviceAuthState {
 
 DeviceAuthState InspectInitialDeviceAuth();
 DeviceAuthState InspectDeviceAuthAfterRefresh(const ::CachedAuthToken& auth);
+// Exercises the production executable-relative credential-cache lookup. The
+// caller owns fixture setup and must ensure _local/.credentials.json beside the
+// test executable is restored when this returns.
+DeviceAuthState InspectDeviceAuthFromCache();
 }  // namespace TestHook
 #endif  // NEVR_TEST_HOOKS
 }
