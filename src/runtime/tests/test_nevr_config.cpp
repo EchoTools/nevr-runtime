@@ -7,7 +7,18 @@
 // Wine by `just test-auth-unit` (which `just verify` invokes).
 
 #include <cstdlib>
+#include <cstdio>
+#include <fstream>
 #include <string>
+#include <utility>
+
+#ifndef WIN32_LEAN_AND_MEAN
+#  define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#  define NOMINMAX
+#endif
+#include <windows.h>
 
 #include <gtest/gtest.h>
 
@@ -18,6 +29,31 @@ namespace {
 void SetEnv(const char* name, const char* value) { _putenv_s(name, value); }
 // nevr_config treats an empty env value as unset, so "" is the unset case.
 void UnsetEnv(const char* name) { _putenv_s(name, ""); }
+
+// This Wine path maps only to the agent scratch hierarchy on the Linux host.
+// Never use the game directory for config-load unit-test fixtures.
+constexpr const char* kScratchConfigDirectory = R"(Z:\var\tmp\work-nevr-runtime\nevr-config-tests\)";
+
+bool EnsureScratchConfigDirectory() {
+  if (CreateDirectoryA(kScratchConfigDirectory, nullptr) != FALSE) return true;
+  return GetLastError() == ERROR_ALREADY_EXISTS;
+}
+
+std::string ScratchConfigPath(const char* name) {
+  return std::string(kScratchConfigDirectory) + name + "-" + std::to_string(GetCurrentProcessId()) +
+         ".yaml";
+}
+
+class ScopedScratchFile {
+ public:
+  explicit ScopedScratchFile(std::string path) : path_(std::move(path)) {}
+  ~ScopedScratchFile() { std::remove(path_.c_str()); }
+
+  const std::string& path() const { return path_; }
+
+ private:
+  std::string path_;
+};
 
 // A representative config touching every schema section the getters read.
 const char* kSampleYaml = R"YAML(
@@ -216,10 +252,37 @@ TEST(NevrConfig, EmptyDocumentIsEmpty) {
   EXPECT_TRUE(cfg.Plugins().empty());
 }
 
-TEST(NevrConfig, LoadFromFileOrFailClientReturnsEmpty) {
+TEST(NevrConfig, LoadFromFileOrFailReadsControlledScratchFile) {
+  ASSERT_TRUE(EnsureScratchConfigDirectory());
+  ScopedScratchFile file(ScratchConfigPath("controlled-config"));
+  {
+    std::ofstream output(file.path(), std::ios::binary);
+    ASSERT_TRUE(output.is_open()) << "could not create scratch fixture " << file.path();
+    output << "services:\n  serverdb: \"wss://controlled.example/nevr\"\n"
+              "network:\n  upnp_port: 47291\n"
+              "plugins:\n  - name: controlled_plugin\n    required: true\n";
+    ASSERT_TRUE(output.good()) << "could not write scratch fixture " << file.path();
+  }
+
+  // Exercise the production policy wrapper rather than only LoadFromFile:
+  // client mode must return the parsed config on success.
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFileOrFail(file.path(), /*is_server=*/false);
+  EXPECT_FALSE(cfg.Empty());
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "wss://controlled.example/nevr");
+  EXPECT_EQ(cfg.GetInt("network.upnp_port").value_or(0), 47291);
+  ASSERT_EQ(cfg.Plugins().size(), 1u);
+  EXPECT_EQ(cfg.Plugins()[0].file, "controlled_plugin.dll");
+  EXPECT_TRUE(cfg.Plugins()[0].required);
+}
+
+TEST(NevrConfig, LoadFromFileOrFailMissingScratchFileClientReturnsEmpty) {
+  ASSERT_TRUE(EnsureScratchConfigDirectory());
+  ScopedScratchFile file(ScratchConfigPath("missing-config"));
+  // Ensure the test drives the missing-file branch even after an interrupted run.
+  std::remove(file.path().c_str());
+
   // Client mode on a missing file: warns (not fatal) and returns an empty config.
-  const nevr::NevrConfig cfg =
-      nevr::NevrConfig::LoadFromFileOrFail("/definitely/not/a/real/config.yaml", /*is_server=*/false);
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromFileOrFail(file.path(), /*is_server=*/false);
   EXPECT_TRUE(cfg.Empty());
 }
 
