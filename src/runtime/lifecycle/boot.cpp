@@ -71,11 +71,18 @@ void PreflightRuntimeBootstrap() {
   }
   LocalFree(argv);
 
-  // N146: -windowed forces spectator-stream mode (windowed, no VR) by NOPping
-  // the game's command-line check.  This runs BEFORE the original
-  // PreprocessCommandLine so the game never attempts Oculus init.
-  if (g_isWindowed) {
-    PatchSpectatorStreamAlways();
+  // -windowed implies no VR (never spectator-stream).  The legacy code
+  // (src/legacy/gamepatches/patches.cpp:470-476) sets the windowed-mode
+  // flag directly on the game instance at offset 31456 (0x7AE0) with bit
+  // 0x0100000.  Spectator stream would set 0x2100000 (bit 0x0100000 +
+  // 0x2000000), which is what PatchSpectatorStreamAlways does by NOPping
+  // the CLI check — but that also forces the spectator flow.  Setting
+  // only 0x0100000 skips VR without forcing spectator mode; the game
+  // reaches the main menu normally, and -mp joins a social lobby.
+  if (g_isWindowed && g_pGame != nullptr) {
+    auto* windowedFlags = reinterpret_cast<UINT64*>(
+        reinterpret_cast<CHAR*>(g_pGame) + PatchAddresses::GAME_WINDOWED_FLAGS_OFFSET);
+    *windowedFlags |= 0x0100000;
   }
 }
 
