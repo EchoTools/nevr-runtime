@@ -160,6 +160,17 @@ static const char* PlatformPrefix(uint64_t platformCode) {
 // been exposed. Empty means "not known", and the caller below sends the account
 // id rather than substituting something that looks like a real name (N115: absent
 // data is visibly absent, invented data is indistinguishable from a reading).
+// Platform code selection: ordered precedence.
+//   1. URL credentials present (nevr_discord_id + nevr_password) → OVR_ORG (3)
+//   2. g_noOvr set (-windowed / -server / -spectatorstream) → DMO (6)
+//   3. Default → DSC (1)
+// Pure function — testable without config or globals.
+static uint64_t SelectPlatformCode(bool hasUrlCredentials, bool noOvr) {
+  if (hasUrlCredentials) return 3;   // OVR_ORG — legacy URL-credential auth
+  if (noOvr)             return 6;   // DMO — demo / no-VR client
+  return 1;                         // DSC — Discord / token auth
+}
+
 static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode = 2,
                                      const std::string& displayName = std::string(),
                                      const std::string& accessToken = std::string()) {
@@ -572,20 +583,12 @@ void InstallWebSocketBridge() {
                           }
                         }
 
-                        // Legacy auth (URL credentials) → OVR-ORG. Token auth → DSC.
-                        // No-Ovr (windowed/spectator) → DMO (Nakama demo client).
                         uint64_t platformCode;
                         {
                           const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
                           const char* cfgPassword = NevrCfgGetFlat("nevr_password");
                           bool hasUrlCreds = cfgDiscordId && cfgDiscordId[0] && cfgPassword && cfgPassword[0];
-                          if (hasUrlCreds) {
-                            platformCode = 3;   // OVR_ORG — legacy URL-credential auth
-                          } else if (g_noOvr) {
-                            platformCode = 6;   // DMO — demo / no-VR client
-                          } else {
-                            platformCode = 1;   // DSC — Discord / token auth
-                          }
+                          platformCode = SelectPlatformCode(hasUrlCreds, g_noOvr);
                         }
                         g_lastInjectedDiscordId = discordId;
                         std::string loginMsg = BuildLoginRequest(discordId, platformCode, accountName, bearerToken);
@@ -650,13 +653,7 @@ void InstallWebSocketBridge() {
                             const char* cfgDiscordId2 = NevrCfgGetFlat("nevr_discord_id");
                             const char* cfgPassword2 = NevrCfgGetFlat("nevr_password");
                             bool hasUrlCreds2 = cfgDiscordId2 && cfgDiscordId2[0] && cfgPassword2 && cfgPassword2[0];
-                            if (hasUrlCreds2) {
-                              serverPlatformCode = 3;   // OVR_ORG
-                            } else if (g_noOvr) {
-                              serverPlatformCode = 6;   // DMO
-                            } else {
-                              serverPlatformCode = 1;   // DSC
-                            }
+                            serverPlatformCode = SelectPlatformCode(hasUrlCreds2, g_noOvr);
                           }
                           memcpy(payload + 16, &serverPlatformCode, 8);
                           memcpy(payload + 24, &g_lastInjectedDiscordId, 8);
@@ -1020,6 +1017,10 @@ std::string TestHook_BuildLoginRequest(uint64_t discordId, uint64_t platformCode
                                        const std::string& displayName,
                                        const std::string& accessToken) {
   return BuildLoginRequest(discordId, platformCode, displayName, accessToken);
+}
+
+uint64_t TestHook_SelectPlatformCode(bool hasUrlCredentials, bool noOvr) {
+  return SelectPlatformCode(hasUrlCredentials, noOvr);
 }
 
 const char* TestHook_PlatformPrefix(uint64_t platformCode) {

@@ -522,6 +522,24 @@ TEST(WsBridgePlatformPrefix, EveryDefinedPlatformHasTheNakamaPrefix) {
   EXPECT_STREQ(TestHook_PlatformPrefix(999), "UNK");
 }
 
+// SelectPlatformCode returns the correct Nakama platform code based on
+// auth mode and VR state.  Ordered precedence:
+//   1. URL credentials → OVR_ORG (3) — legacy auth
+//   2. g_noOvr → DMO (6) — demo / no-VR client
+//   3. default → DSC (1) — Discord / token auth
+TEST(WsBridgeSelectPlatform, UrlCredentialsWinsOverNoOvr) {
+  EXPECT_EQ(TestHook_SelectPlatformCode(true, true), 3ULL);
+  EXPECT_EQ(TestHook_SelectPlatformCode(true, false), 3ULL);
+}
+
+TEST(WsBridgeSelectPlatform, NoOvrWhenNoUrlCredsIsDmo) {
+  EXPECT_EQ(TestHook_SelectPlatformCode(false, true), 6ULL);
+}
+
+TEST(WsBridgeSelectPlatform, DefaultIsDsc) {
+  EXPECT_EQ(TestHook_SelectPlatformCode(false, false), 1ULL);
+}
+
 TEST(WsBridgeCallbackGuard, ContainsStdExceptionsAtTheCallbackBoundary) {
   {
     std::lock_guard<std::mutex> lock(g_testLogMutex);

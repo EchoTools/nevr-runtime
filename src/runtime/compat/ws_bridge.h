@@ -40,6 +40,7 @@ std::string TestHook_BuildLoginRequest(uint64_t discordId, uint64_t platformCode
                                        const std::string& accessToken);
 const char* TestHook_PlatformPrefix(uint64_t platformCode);
 bool TestHook_GuardWsCallbackContainsStdException();
+uint64_t TestHook_SelectPlatformCode(bool hasUrlCredentials, bool noOvr);
 void* TestHook_N61_CreateMockWs();
 void  TestHook_N61_DestroyMockWs(void* handle);
 void* TestHook_N61_GetRawWsPtr(void* handle);
