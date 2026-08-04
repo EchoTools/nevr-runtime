@@ -1658,6 +1658,10 @@ verify:
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py
+    # Wave 5/10: every concrete mode_patches.cpp byte rewrite must have a
+    # PE-backed assertRVABytes row. Detours/import hooks are deliberately not
+    # included: they are not ordinary prologue rewrites.
+    python3 tools/verify_mode_patch_ground_truth.py
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test removed 2026-08-02: the test script
