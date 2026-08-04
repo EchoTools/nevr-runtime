@@ -1649,11 +1649,11 @@ verify:
     # suite; raising it is part of adding tests, while a drop is always a
     # regression that needs an explicit sensor update and review.
     TEST_COUNT=$(grep -hE '^TEST(_F)?\(' src/runtime/tests/*.cpp | wc -l)
-    if [ "$TEST_COUNT" -lt 167 ]; then
-        echo "verify: FAIL — runtime GTest count fell to $TEST_COUNT (floor 167)." >&2
+    if [ "$TEST_COUNT" -lt 169 ]; then
+        echo "verify: FAIL — runtime GTest count fell to $TEST_COUNT (floor 169)." >&2
         exit 1
     fi
-    echo "verify: runtime GTest declarations=$TEST_COUNT (floor 167)"
+    echo "verify: runtime GTest declarations=$TEST_COUNT (floor 169)"
     # Wave 10.2: PATCHES_SOURCES is the compiled runtime patch inventory. A
     # patch addition/removal requires a reviewed update to its pinned list.
     python3 tools/verify_patch_source_inventory.py
