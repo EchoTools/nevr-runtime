@@ -515,21 +515,21 @@ TEST(WsBridgePlatformPrefix, EveryDefinedPlatformHasTheNakamaPrefix) {
   EXPECT_STREQ(TestHook_PlatformPrefix(0), "STM");
   EXPECT_STREQ(TestHook_PlatformPrefix(1), "DSC");
   EXPECT_STREQ(TestHook_PlatformPrefix(2), "XBX");
-  EXPECT_STREQ(TestHook_PlatformPrefix(3), "OVR-ORG");
-  EXPECT_STREQ(TestHook_PlatformPrefix(4), "OVR");
+  EXPECT_STREQ(TestHook_PlatformPrefix(3), "OVR");
+  EXPECT_STREQ(TestHook_PlatformPrefix(4), "OVR-ORG");
   EXPECT_STREQ(TestHook_PlatformPrefix(5), "BOT");
   EXPECT_STREQ(TestHook_PlatformPrefix(6), "DSC-NOVR");
   EXPECT_STREQ(TestHook_PlatformPrefix(999), "UNK");
 }
 
-// SelectPlatformCode returns the correct Nakama platform code based on
+// SelectPlatformCode returns the correct wire platform code based on
 // auth mode and VR state.  Ordered precedence:
-//   1. URL credentials → OVR_ORG (3) — legacy auth
-//   2. g_noOvr → DMO (6) — demo / no-VR client
-//   3. default → DSC (1) — Discord / token auth
+//   1. URL credentials → 4 (OVR_ORG) — legacy auth
+//   2. g_noOvr → 6 (DMO) — demo / no-VR client
+//   3. default → 1 (DSC) — Discord / token auth
 TEST(WsBridgeSelectPlatform, UrlCredentialsWinsOverNoOvr) {
-  EXPECT_EQ(TestHook_SelectPlatformCode(true, true), 3ULL);
-  EXPECT_EQ(TestHook_SelectPlatformCode(true, false), 3ULL);
+  EXPECT_EQ(TestHook_SelectPlatformCode(true, true), 4ULL);
+  EXPECT_EQ(TestHook_SelectPlatformCode(true, false), 4ULL);
 }
 
 TEST(WsBridgeSelectPlatform, NoOvrWhenNoUrlCredsIsDmo) {

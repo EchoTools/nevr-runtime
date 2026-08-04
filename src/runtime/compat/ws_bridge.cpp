@@ -138,15 +138,15 @@ static void AppendLE64(std::string& buf, uint64_t val) {
   for (int i = 0; i < 8; i++) { buf.push_back((char)(val & 0xFF)); val >>= 8; }
 }
 
-// N146: platform codes match the Go server's iota enumeration.
-// Go: STM=0, DSC=1, XBX=2, OVR_ORG=3, OVR=4, BOT=5, DMO=6
+// Platform codes match the server's wire enum (empirically verified 2026-08-04).
+// Wire: STM=0, DSC=1, XBX=2, OVR=3, OVR_ORG=4, BOT=5, DMO=6
 static const char* PlatformPrefix(uint64_t platformCode) {
   switch (platformCode) {
     case 0: return "STM";
     case 1: return "DSC";
     case 2: return "XBX";
-    case 3: return "OVR-ORG";
-    case 4: return "OVR";
+    case 3: return "OVR";
+    case 4: return "OVR-ORG";
     case 5: return "BOT";
     case 6: return "DSC-NOVR";  // DMO = demo/no-VR client
     default: return "UNK";
@@ -166,7 +166,7 @@ static const char* PlatformPrefix(uint64_t platformCode) {
 //   3. Default → DSC (1)
 // Pure function — testable without config or globals.
 static uint64_t SelectPlatformCode(bool hasUrlCredentials, bool noOvr) {
-  if (hasUrlCredentials) return 3;   // OVR_ORG — legacy URL-credential auth
+  if (hasUrlCredentials) return 4;   // OVR_ORG — legacy URL-credential auth
   if (noOvr)             return 6;   // DMO — demo / no-VR client
   return 1;                         // DSC — Discord / token auth
 }
@@ -592,6 +592,17 @@ void InstallWebSocketBridge() {
                         }
                         g_lastInjectedDiscordId = discordId;
                         std::string loginMsg = BuildLoginRequest(discordId, platformCode, accountName, bearerToken);
+                        // Hex dump payload bytes (skip marker 0-7 + symbol 8-15 + length 16-23)
+                        {
+                          const unsigned char* p = reinterpret_cast<const unsigned char*>(loginMsg.data()) + 24;
+                          size_t payloadLen = loginMsg.size() - 24;
+                          char hex[256]; size_t off = 0;
+                          for (size_t i = 0; i < payloadLen && i < 48; i++, p++) {
+                            off += snprintf(hex + off, sizeof(hex) - off, "%02x", *p);
+                          }
+                          Log(EchoVR::LogLevel::Info,
+                              "[NEVR.WS] LoginRequest payload[%zu]: %s", payloadLen, hex);
+                        }
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
                         Log(EchoVR::LogLevel::Info,
