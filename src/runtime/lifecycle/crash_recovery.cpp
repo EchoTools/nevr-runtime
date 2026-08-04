@@ -591,6 +591,11 @@ LONG WINAPI BreakpointVEH(PEXCEPTION_POINTERS pExceptionInfo) {
   }
 
   // Report any unhandled fatal exception before passing to the default handler.
+  //
+  // Wine/DXVK use SEH internally for deliberate probes, including guard-page
+  // stack overflows.  This handler runs first, so crash-dump work on a foreign
+  // exception can consume the exception state its owner needs to recover.  Only
+  // observe faults that originate in the game or an NEVR module.
   DWORD code = pExceptionInfo->ExceptionRecord->ExceptionCode;
   if (code == EXCEPTION_ACCESS_VIOLATION ||
       code == EXCEPTION_ILLEGAL_INSTRUCTION ||
@@ -598,9 +603,31 @@ LONG WINAPI BreakpointVEH(PEXCEPTION_POINTERS pExceptionInfo) {
       code == EXCEPTION_INT_DIVIDE_BY_ZERO ||
       code == STATUS_STACK_BUFFER_OVERRUN ||
       code == 0x20474343) {  // C++ throw from a NEVR DLL — see WriteCrashDump
-    static volatile LONG g_crashLogCount = 0;
-    if (InterlockedIncrement(&g_crashLogCount) <= 3) {
-      WriteCrashDump(pExceptionInfo);
+    const DWORD64 rip = pExceptionInfo->ContextRecord->Rip;
+    const DWORD64 base = reinterpret_cast<DWORD64>(EchoVR::g_GameBaseAddress);
+    const bool inGame = rip >= base && rip < base + 0x2000000;
+
+    bool inNevrModule = false;
+    if (!inGame) {
+      const LONG mc = g_moduleCacheCount;
+      for (LONG m = 0; m < mc; m++) {
+        // The cache is deliberately comprehensive for crash attribution, so a
+        // range match alone means only "some loaded DLL" — including Wine and
+        // DXVK.  This client loads no plugins; BugSplat64.dll is the only NEVR
+        // image allowed to enter the dump path.
+        if (rip >= g_moduleCache[m].base && rip < g_moduleCache[m].end &&
+            _stricmp(g_moduleCache[m].name, "BugSplat64.dll") == 0) {
+          inNevrModule = true;
+          break;
+        }
+      }
+    }
+
+    if (inGame || inNevrModule) {
+      static volatile LONG g_crashLogCount = 0;
+      if (InterlockedIncrement(&g_crashLogCount) <= 3) {
+        WriteCrashDump(pExceptionInfo);
+      }
     }
   }
 
@@ -794,6 +821,17 @@ void InstallCrashFilterInstrumentation() {
 }
 
 void InstallVEH() {
+  // Wine's own first-chance stack-overflow handling is active during client
+  // startup. A first-priority foreign VEH changes that handler ordering even
+  // when it returns CONTINUE_SEARCH, so keep this server-only recovery hook
+  // out of Wine client processes.
+  HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+  if (!g_isServer && ntdll != nullptr && GetProcAddress(ntdll, "wine_get_version") != nullptr) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.CRASH] VEH disabled for Wine client; native exception handling retained");
+    return;
+  }
+
   // N70: snapshot the module table now, while the loader lock is safe to take.
   // The handler reads this snapshot instead of enumerating (which would deadlock
   // on any fault raised while the loader lock is held).

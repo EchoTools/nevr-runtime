@@ -524,7 +524,9 @@ NEVR_MODULE_API uint32_t token_auth_ApiVersion(void) {
 
 NEVR_MODULE_API int token_auth_Init(const NvrModuleContext* ctx) {
     EchoVR::g_GameBaseAddress = (CHAR*)ctx->base_addr;
-    EchoVR::InitializeFunctionPointers();
+    // Function pointers are host-owned and may already contain MinHook
+    // trampolines. Reinitializing them here would discard those trampolines and
+    // recurse through the corresponding game detours.
     s_configGet = ctx->config_get;  // N133 S5: read config.yaml, not early_config JSON
 
     bool is_server = (ctx->flags & NEVR_MODULE_HOST_IS_SERVER) != 0;

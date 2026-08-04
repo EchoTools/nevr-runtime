@@ -339,16 +339,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
         int written = snprintf(dbgcorePath, MAX_PATH, "%sdbgcore.dll", exePath);
         if (written > 0 && written < MAX_PATH) {
           if (GetFileAttributesA(dbgcorePath) != INVALID_FILE_ATTRIBUTES) {
-            // N146: dbgcore.dll is REQUIRED for client-mode D3D11/DXVK to
-            // initialise under Wine.  The stock BugSplat64.dll does not load
-            // graphics without it, and neither does ours.  Only reject it in
-            // server mode, where no rendering happens and the file IS a
-            // leftover injection artifact.
-            if (g_allowDbgCore || !g_isServer) {
+            if (g_allowDbgCore) {
               Log(EchoVR::LogLevel::Info,
-                  "[NEVR.PATCH] dbgcore.dll present in game directory — %s",
-                  g_allowDbgCore ? "legacy injection permitted (-allow-dbgcore)"
-                                 : "required for client-mode rendering, accepting");
+                  "[NEVR.PATCH] dbgcore.dll present in game directory — "
+                  "legacy injection permitted (-allow-dbgcore)");
             } else {
               FatalError(
                   "dbgcore.dll detected in the game directory.\n\n"
