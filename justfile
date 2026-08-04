@@ -1631,6 +1631,14 @@ verify:
         echo "plugin_loader.cpp. The plugin manifest builder is required (N112)." >&2
         exit 1
     fi
+    # Static token_auth exports are registered by the host, not token_auth_Init.
+    # Keep all three registrations pinned to boot so ws_bridge can resolve its ABI.
+    for export in TokenAuth_GetToken TokenAuth_GetDiscordId TokenAuth_GetUsername; do
+        if ! grep -q "RegisterModuleProc(\"$export\"" src/runtime/lifecycle/boot.cpp; then
+            echo "verify: FAIL — missing static token_auth export registration: $export" >&2
+            exit 1
+        fi
+    done
     # N112e — the hardcoded buildversion literal is still the game's 631547
     # (we send NEVR version info alongside it, so the game field is unchanged),
     # but a second NEVR buildversion field would be a duplicate. The sensor
@@ -1641,11 +1649,11 @@ verify:
     # suite; raising it is part of adding tests, while a drop is always a
     # regression that needs an explicit sensor update and review.
     TEST_COUNT=$(grep -hE '^TEST(_F)?\(' src/runtime/tests/*.cpp | wc -l)
-    if [ "$TEST_COUNT" -lt 157 ]; then
-        echo "verify: FAIL — runtime GTest count fell to $TEST_COUNT (floor 157)." >&2
+    if [ "$TEST_COUNT" -lt 158 ]; then
+        echo "verify: FAIL — runtime GTest count fell to $TEST_COUNT (floor 158)." >&2
         exit 1
     fi
-    echo "verify: runtime GTest declarations=$TEST_COUNT (floor 157)"
+    echo "verify: runtime GTest declarations=$TEST_COUNT (floor 158)"
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test removed 2026-08-02: the test script

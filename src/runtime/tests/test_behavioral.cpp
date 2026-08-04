@@ -533,6 +533,15 @@ TEST(WsBridgeCallbackGuard, ContainsStdExceptionsAtTheCallbackBoundary) {
   EXPECT_NE(g_testLogMessages.front().find("intentional callback exception"), std::string::npos);
 }
 
+TEST(ModuleProcRegistry, ResolvesRegisteredProcAndRejectsUnknownName) {
+  static const char kName[] = "test.module_proc_registry";
+  static int kProbe = 0;
+  RegisterModuleProc(kName, &kProbe);
+
+  EXPECT_EQ(ResolveModuleProc(kName), &kProbe);
+  EXPECT_EQ(ResolveModuleProc("test.module_proc_registry.absent"), nullptr);
+}
+
 TEST(BroadcasterHookStats, FormatsMockedLivenessCounters) {
   char line[192] = {};
   EXPECT_GT(BroadcasterHookStats::Format(line, sizeof(line), 17, 9), 0);
