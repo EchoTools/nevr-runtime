@@ -488,6 +488,24 @@ TEST(WsBridgeLoginRequest, HasExpectedHeaderAndPayloadLength) {
   }
 }
 
+// PlatformCode=4 (OVR_ORG in game numbering) at wire offset 40.
+// Regression test for 2026-08-04: PlatformCode was sent as 3 (Nakama enum
+// OVR_ORG), but the game interprets wire values through its own numbering
+// where OVR_ORG=4. The server echoes the value unchanged into LoginSuccess
+// (evr_pipeline_login.go:185), and the game resolves it through
+// GetProviderPrefix (echovr.exe fcn.14060d640, switch case 4→\"OVR-ORG\").
+TEST(WsBridgeLoginRequest, PlatformCode4AtWireOffset40) {
+  const std::string request = TestHook_BuildLoginRequest(999888777ULL, 4, "Test", "");
+  ASSERT_GE(request.size(), 56U);
+  // PlatformCode at offset 40 (24-byte header + 16-byte UUID), LE uint64
+  EXPECT_EQ(ReadLe64(request, 40), 4ULL)
+      << "PlatformCode at wire offset 40 must be 4 (OVR_ORG in game numbering)";
+  // AccountId follows at offset 48
+  EXPECT_EQ(ReadLe64(request, 48), 999888777ULL);
+  // UUID is all zeros (no previous session)
+  for (size_t i = 24; i < 40; ++i) EXPECT_EQ(request[i], '\0');
+}
+
 TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) {
   const std::string request = TestHook_BuildLoginRequest(77, 3, "A \"quoted\" name", "access-token");
   const size_t jsonOffset = 56;
