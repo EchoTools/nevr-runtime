@@ -29,14 +29,17 @@ constexpr std::array<uint8_t, 16> kEntrantGuidBytes = {0x78, 0x56, 0x34, 0x12,
                                                         0x12, 0x34, 0x56, 0x78,
                                                         0x9a, 0xbc, 0xde, 0xf0};
 
+constexpr uint64_t MakeEncoderFlags(bool encryptionEnabled, bool macEnabled, uint64_t macDigestSize,
+                                    uint64_t macPbkdf2IterationCount, uint64_t macKeySize,
+                                    uint64_t encryptionKeySize, uint64_t randomKeySize) {
+  return (encryptionEnabled ? 1U : 0U) | (macEnabled ? 2U : 0U) | (macDigestSize << 2) |
+         (macPbkdf2IterationCount << 14) | (macKeySize << 26) | (encryptionKeySize << 38) |
+         (randomKeySize << 50);
+}
+
 constexpr uint64_t MakeEncoderFlags(uint64_t macKeySize, uint64_t encryptionKeySize,
                                     uint64_t randomKeySize) {
-  constexpr uint64_t kEncryptionEnabled = 1;
-  constexpr uint64_t kMacEnabled = 2;
-  constexpr uint64_t kDigestSize = 32;
-  constexpr uint64_t kIterations = 100;
-  return kEncryptionEnabled | kMacEnabled | (kDigestSize << 2) | (kIterations << 14) |
-         (macKeySize << 26) | (encryptionKeySize << 38) | (randomKeySize << 50);
+  return MakeEncoderFlags(true, true, 32, 100, macKeySize, encryptionKeySize, randomKeySize);
 }
 
 constexpr uint64_t MakeEncoderFlags() {
@@ -109,15 +112,30 @@ TEST(MessagesUuid, InvalidUuidIsRejected) {
   EXPECT_FALSE(ParseUuidToGuid("00112233-4455-6677-8899-aabbccddeefg", guid));
 }
 
-TEST(MessagesEncoderSettings, FlagsRoundTripToAllPacketSettings) {
-  const PacketEncoderSettings settings = PacketEncoderSettings::FromFlags(MakeEncoderFlags());
+TEST(MessagesEncoderSettings, ServerFlagsDecodeAllPacketSettings) {
+  constexpr uint64_t kServerFlags = MakeEncoderFlags(true, true, 64, 2048, 64, 32, 160);
+
+  const PacketEncoderSettings settings = PacketEncoderSettings::FromFlags(kServerFlags);
   EXPECT_TRUE(settings.encryptionEnabled);
   EXPECT_TRUE(settings.macEnabled);
-  EXPECT_EQ(settings.macDigestSize, 32);
-  EXPECT_EQ(settings.macPBKDF2IterationCount, 100);
-  EXPECT_EQ(settings.macKeySize, 32);
+  EXPECT_EQ(settings.macDigestSize, 64);
+  EXPECT_EQ(settings.macPBKDF2IterationCount, 2048);
+  EXPECT_EQ(settings.macKeySize, 64);
   EXPECT_EQ(settings.encryptionKeySize, 32);
-  EXPECT_EQ(settings.randomKeySize, 32);
+  EXPECT_EQ(settings.randomKeySize, 160);
+}
+
+TEST(MessagesEncoderSettings, ClientFlagsDecodeAllPacketSettings) {
+  constexpr uint64_t kClientFlags = MakeEncoderFlags(false, true, 32, 1, 16, 24, 80);
+
+  const PacketEncoderSettings settings = PacketEncoderSettings::FromFlags(kClientFlags);
+  EXPECT_FALSE(settings.encryptionEnabled);
+  EXPECT_TRUE(settings.macEnabled);
+  EXPECT_EQ(settings.macDigestSize, 32);
+  EXPECT_EQ(settings.macPBKDF2IterationCount, 1);
+  EXPECT_EQ(settings.macKeySize, 16);
+  EXPECT_EQ(settings.encryptionKeySize, 24);
+  EXPECT_EQ(settings.randomKeySize, 80);
 }
 
 TEST(MessagesEncoding, RegistrationSuccessHasExpectedFixedLayout) {
