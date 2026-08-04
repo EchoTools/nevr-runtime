@@ -226,7 +226,7 @@ You are not the first agent to work here, and you won't be the last. Act like it
 Forbidden actions (without explicit approval):
 
 - Building or pushing Docker images to any registry (`docker build --push`, `docker push`, `make release`, etc.)
-- SSH to any production server (`fortytwo.echovrce.com` or others) to run `docker compose pull/up/restart/down`, or any container lifecycle command
+- SSH to any production server to run `docker compose pull/up/restart/down`, or any container lifecycle command
 - Creating GitHub releases or tags that trigger CI image builds or deployments
 - Any action that causes a running production container to restart, recreate, or update
 - Cross-repo deployment: operating on a different repository's build/deploy pipeline (e.g. building/pushing `ghcr.io/echotools/nakama` from this repo)
@@ -247,7 +247,7 @@ This applies regardless of context — even if the task seems to require it, eve
 ## Write down what you learn
 
 - **Facts about the game/protocol go in `.claude/memory/`.** When you learn how the game handles connections, login flow, or protocol details, write it to a memory file immediately. Future sessions (and future agents) should never re-derive what you already measured.
-- **ReVault is the source of truth for binary facts.** The Nakama server code (`~/src/nakama/server/evr/`) is the source of truth for protocol wire format and server-side behavior. Check both before guessing.
+- **ReVault is the source of truth for binary facts.** The Nakama server code is the source of truth for protocol wire format and server-side behavior. Check both before guessing.
 
 ## Guardrails
 
