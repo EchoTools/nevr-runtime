@@ -569,6 +569,25 @@ TEST(WsBridgeCallbackGuard, ContainsStdExceptionsAtTheCallbackBoundary) {
   EXPECT_NE(g_testLogMessages.front().find("intentional callback exception"), std::string::npos);
 }
 
+TEST(WsBridgeCallbackGuard, ForwardsCallbackArgumentsWithoutLogging) {
+  {
+    std::lock_guard<std::mutex> lock(g_testLogMutex);
+    g_testLogMessages.clear();
+  }
+
+  EXPECT_EQ(TestHook_GuardWsCallbackForwardsArguments(19, 23), 42);
+
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  EXPECT_TRUE(g_testLogMessages.empty());
+}
+
+TEST(WsBridgeCallbackGuard, PreservesNonStdExceptionPropagationByDesign) {
+  // GuardWsCallback deliberately names std::exception rather than using a
+  // catch-all at an ixwebsocket boundary. This verifies that documented
+  // contract without weakening the runtime's exception policy.
+  EXPECT_TRUE(TestHook_GuardWsCallbackPropagatesNonStdException());
+}
+
 TEST(ModuleProcRegistry, ResolvesRegisteredProcAndRejectsUnknownName) {
   static const char kName[] = "test.module_proc_registry";
   static int kProbe = 0;

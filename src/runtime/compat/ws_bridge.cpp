@@ -1028,12 +1028,34 @@ const char* TestHook_PlatformPrefix(uint64_t platformCode) {
   return PlatformPrefix(platformCode);
 }
 
+int TestHook_GuardWsCallbackForwardsArguments(int first, int second) {
+  int observed = 0;
+  const auto guarded = GuardWsCallback("ws_bridge_test_success",
+                                       [&observed](int lhs, int rhs) {
+                                         observed = lhs + rhs;
+                                       });
+  guarded(first, second);
+  return observed;
+}
+
 bool TestHook_GuardWsCallbackContainsStdException() {
   const auto guarded = GuardWsCallback("ws_bridge_test", []() {
     throw std::runtime_error("intentional callback exception");
   });
   guarded();
   return true;
+}
+
+bool TestHook_GuardWsCallbackPropagatesNonStdException() {
+  const auto guarded = GuardWsCallback("ws_bridge_test_nonstd", []() {
+    throw 7;
+  });
+  try {
+    guarded();
+  } catch (int value) {
+    return value == 7;
+  }
+  return false;
 }
 
 // Create a real ix::WebSocket for use as a test handle. The test owns the
