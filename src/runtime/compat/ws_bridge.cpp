@@ -572,7 +572,21 @@ void InstallWebSocketBridge() {
                           }
                         }
 
-                        uint64_t platformCode = g_noOvr ? static_cast<uint64_t>(6) : static_cast<uint64_t>(1);
+                        // Legacy auth (URL credentials) → OVR-ORG. Token auth → DSC.
+                        // No-Ovr (windowed/spectator) → DMO (Nakama demo client).
+                        uint64_t platformCode;
+                        {
+                          const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
+                          const char* cfgPassword = NevrCfgGetFlat("nevr_password");
+                          bool hasUrlCreds = cfgDiscordId && cfgDiscordId[0] && cfgPassword && cfgPassword[0];
+                          if (hasUrlCreds) {
+                            platformCode = 3;   // OVR_ORG — legacy URL-credential auth
+                          } else if (g_noOvr) {
+                            platformCode = 6;   // DMO — demo / no-VR client
+                          } else {
+                            platformCode = 1;   // DSC — Discord / token auth
+                          }
+                        }
                         g_lastInjectedDiscordId = discordId;
                         std::string loginMsg = BuildLoginRequest(discordId, platformCode, accountName, bearerToken);
                         pairPtr->remoteWs->sendBinary(loginMsg);
@@ -631,8 +645,20 @@ void InstallWebSocketBridge() {
                           uint8_t payload[32] = {};
                           payload[0] = 0x4E; payload[1] = 0x45; payload[2] = 0x56; payload[3] = 0x52; // "NEVR"
                           payload[4] = 0x53; payload[5] = 0x52; payload[6] = 0x56; payload[7] = 0x52; // "SRVR"
-                          uint64_t platformCode = g_noOvr ? static_cast<uint64_t>(6) : static_cast<uint64_t>(1);
-                          memcpy(payload + 16, &platformCode, 8);
+                          uint64_t serverPlatformCode;
+                          {
+                            const char* cfgDiscordId2 = NevrCfgGetFlat("nevr_discord_id");
+                            const char* cfgPassword2 = NevrCfgGetFlat("nevr_password");
+                            bool hasUrlCreds2 = cfgDiscordId2 && cfgDiscordId2[0] && cfgPassword2 && cfgPassword2[0];
+                            if (hasUrlCreds2) {
+                              serverPlatformCode = 3;   // OVR_ORG
+                            } else if (g_noOvr) {
+                              serverPlatformCode = 6;   // DMO
+                            } else {
+                              serverPlatformCode = 1;   // DSC
+                            }
+                          }
+                          memcpy(payload + 16, &serverPlatformCode, 8);
                           memcpy(payload + 24, &g_lastInjectedDiscordId, 8);
 
                           std::string fakeSuccess;
