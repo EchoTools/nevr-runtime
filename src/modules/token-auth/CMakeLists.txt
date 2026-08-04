@@ -9,6 +9,8 @@ find_package(nlohmann_json CONFIG REQUIRED)
 add_library(token_auth STATIC
     src/token_auth.cpp
     src/token_auth.h
+    src/device_poll_response.cpp
+    src/device_poll_response.h
 )
 
 target_compile_definitions(token_auth PRIVATE NEVR_MODULE_EXPORTS)

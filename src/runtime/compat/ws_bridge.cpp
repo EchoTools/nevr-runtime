@@ -28,6 +28,7 @@
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
 #include "core/logging.h"
 #include <exception>
+#include <stdexcept>
 #include <utility>
 
 // ============================================================================
@@ -146,6 +147,7 @@ static const char* PlatformPrefix(uint64_t platformCode) {
     case 2: return "XBX";
     case 3: return "OVR-ORG";
     case 4: return "OVR";
+    case 5: return "BOT";
     case 6: return "DSC-NOVR";  // DMO = demo/no-VR client
     default: return "UNK";
   }
@@ -987,6 +989,24 @@ void StopWebSocketBridgeListener() {
 // ============================================================================
 
 #ifdef NEVR_TEST_HOOKS
+
+std::string TestHook_BuildLoginRequest(uint64_t discordId, uint64_t platformCode,
+                                       const std::string& displayName,
+                                       const std::string& accessToken) {
+  return BuildLoginRequest(discordId, platformCode, displayName, accessToken);
+}
+
+const char* TestHook_PlatformPrefix(uint64_t platformCode) {
+  return PlatformPrefix(platformCode);
+}
+
+bool TestHook_GuardWsCallbackContainsStdException() {
+  const auto guarded = GuardWsCallback("ws_bridge_test", []() {
+    throw std::runtime_error("intentional callback exception");
+  });
+  guarded();
+  return true;
+}
 
 // Create a real ix::WebSocket for use as a test handle. The test owns the
 // returned shared_ptr and must keep it alive for the duration of the test.

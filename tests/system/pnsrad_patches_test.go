@@ -18,12 +18,18 @@ func getGameBinary(t *testing.T, name string) []byte {
 	if gameDir == "" {
 		t.Skip("EVR_GAME_DIR not set")
 	}
-	path := filepath.Join(gameDir, name)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Skipf("Cannot read %s: %v", name, err)
+	paths := []string{
+		filepath.Join(gameDir, name),
+		filepath.Join(gameDir, "bin", "win10", name),
 	}
-	return data
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return data
+		}
+	}
+	t.Skipf("Cannot read %s from %s or %s", name, paths[0], paths[1])
+	return nil
 }
 
 // rvaToFileOffset converts a relative virtual address to a file offset

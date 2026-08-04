@@ -1,6 +1,7 @@
 #pragma once
 #include <windows.h>
 #include <cstdint>
+#include <string>
 
 /// Set the remote wss:// URI that the proxy will connect to.
 void SetWebSocketBridgeTarget(const char* uri);
@@ -31,6 +32,14 @@ void StopWebSocketBridgeListener();
 // ============================================================================
 
 #ifdef NEVR_TEST_HOOKS
+// Production helpers exposed only to the Wine unit-test target. These keep the
+// login wire format and callback boundary covered without exporting them from
+// BugSplat64.dll.
+std::string TestHook_BuildLoginRequest(uint64_t discordId, uint64_t platformCode,
+                                       const std::string& displayName,
+                                       const std::string& accessToken);
+const char* TestHook_PlatformPrefix(uint64_t platformCode);
+bool TestHook_GuardWsCallbackContainsStdException();
 void* TestHook_N61_CreateMockWs();
 void  TestHook_N61_DestroyMockWs(void* handle);
 void* TestHook_N61_GetRawWsPtr(void* handle);

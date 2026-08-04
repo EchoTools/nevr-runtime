@@ -1,0 +1,99 @@
+#include <gtest/gtest.h>
+
+#include <cstdint>
+#include <ctime>
+#include <string>
+
+#include "core/auth_token.h"
+#include "device_poll_response.h"
+
+namespace {
+
+constexpr char kJwtHeader[] = "eyJhbGciOiJub25lIn0";
+constexpr char kJwtSignature[] = "signature";
+
+std::string MakeJwt(const std::string& payload) {
+  return std::string(kJwtHeader) + "." + payload + "." + kJwtSignature;
+}
+
+}  // namespace
+
+TEST(CachedAuthTokenClaims, ValidJwtDecodesTopLevelClaims) {
+  CachedAuthToken token;
+  token.token = MakeJwt("eyJkaWQiOiIxMjMiLCJleHAiOjQxMDI0NDQ4MDB9");
+
+  const nlohmann::json claims = token.DecodeClaims();
+  EXPECT_EQ(claims.at("did"), "123");
+  EXPECT_EQ(token.GetDiscordId(), 123U);
+  EXPECT_EQ(token.GetJwtExpiry(), 4102444800ULL);
+}
+
+TEST(CachedAuthTokenClaims, VarsDiscordIdTakesPrecedence) {
+  CachedAuthToken token;
+  token.token = MakeJwt("eyJ2cnMiOnsiZGlkIjoiNDIifSwiZXhwIjo0MTAyNDQ0ODAwfQ");
+
+  EXPECT_EQ(token.GetDiscordId(), 42U);
+}
+
+TEST(CachedAuthTokenClaims, InvalidPayloadReturnsEmptyClaims) {
+  CachedAuthToken token;
+  token.token = MakeJwt("%%%%");
+
+  EXPECT_TRUE(token.DecodeClaims().empty());
+  EXPECT_EQ(token.GetDiscordId(), 0U);
+  EXPECT_EQ(token.GetJwtExpiry(), 0U);
+}
+
+TEST(CachedAuthTokenClaims, MissingOptionalClaimsHaveSafeDefaults) {
+  CachedAuthToken token;
+  token.token = MakeJwt("e30");
+
+  EXPECT_EQ(token.GetDiscordId(), 0U);
+  EXPECT_EQ(token.GetJwtExpiry(), 0U);
+}
+
+TEST(CachedAuthTokenExpiry, ExpiredAndFutureTokensAreDistinguished) {
+  CachedAuthToken expired;
+  expired.token = "expired";
+  expired.token_expiry = static_cast<uint64_t>(std::time(nullptr)) - 1;
+  EXPECT_FALSE(expired.HasValidToken());
+
+  CachedAuthToken future;
+  future.token = "future";
+  future.token_expiry = static_cast<uint64_t>(std::time(nullptr)) + 120;
+  EXPECT_TRUE(future.HasValidToken());
+}
+
+TEST(DevicePollResponse, VerifiedResponseExtractsEveryTokenField) {
+  const TokenAuth::DevicePollResponse response = TokenAuth::ParseDevicePollResponse(
+      "{\"status\":\"verified\",\"token\":\"token\",\"refresh_token\":\"refresh\","
+      "\"user_id\":\"user\",\"username\":\"name\",\"expires_in\":3600}");
+
+  EXPECT_EQ(response.status, TokenAuth::DevicePollStatus::Verified);
+  EXPECT_EQ(response.access_token, "token");
+  EXPECT_EQ(response.refresh_token, "refresh");
+  EXPECT_EQ(response.user_id, "user");
+  EXPECT_EQ(response.username, "name");
+  ASSERT_TRUE(response.expires_in.has_value());
+  EXPECT_EQ(*response.expires_in, 3600U);
+}
+
+TEST(DevicePollResponse, PendingExpiredAndErrorResponsesRemainDistinct) {
+  EXPECT_EQ(TokenAuth::ParseDevicePollResponse("{\"status\":\"authorization_pending\"}").status,
+            TokenAuth::DevicePollStatus::Pending);
+  EXPECT_EQ(TokenAuth::ParseDevicePollResponse("{\"status\":\"expired\"}").status,
+            TokenAuth::DevicePollStatus::Expired);
+  EXPECT_EQ(TokenAuth::ParseDevicePollResponse("{\"error\":\"access_denied\"}").status,
+            TokenAuth::DevicePollStatus::Error);
+  EXPECT_EQ(TokenAuth::ParseDevicePollResponse("not json").status,
+            TokenAuth::DevicePollStatus::Error);
+}
+
+TEST(DevicePollResponse, JwtExpiryTakesPrecedenceThenFallsBack) {
+  constexpr uint64_t kNow = 1000;
+  const std::string jwt = MakeJwt("eyJleHAiOjUwMDB9");
+  EXPECT_EQ(TokenAuth::ResolveAccessTokenExpiry(kNow, jwt, 10), 5000U);
+  EXPECT_EQ(TokenAuth::ResolveAccessTokenExpiry(kNow, "not-a-jwt", 10), 1010U);
+  EXPECT_EQ(TokenAuth::ResolveAccessTokenExpiry(kNow, "not-a-jwt", std::nullopt),
+            kNow + kFallbackAccessTokenLifetimeSec);
+}

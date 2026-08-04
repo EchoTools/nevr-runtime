@@ -54,6 +54,8 @@ set(PATCHES_HEADERS
     "lifecycle/service_config.h"
     "patch/mode_patches.h"
     "lifecycle/crash_recovery.h"
+    "lifecycle/readable_memory.h"
+    "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
     "patch/splash_texture.h"
     "lifecycle/state_machine.h"
@@ -340,5 +342,35 @@ if(BUILD_TESTING)
       ws2_32
     )
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
+
+    # CachedAuthToken claim parsing is header-only production code. Keep it in
+    # a small independent executable so JWT regressions do not require the
+    # network-facing token-auth module or a live Nakama service.
+    add_executable(test_token_auth
+      tests/test_token_auth.cpp
+      "${CMAKE_SOURCE_DIR}/src/modules/token-auth/src/device_poll_response.cpp")
+    set_source_files_properties(tests/test_token_auth.cpp
+      "${CMAKE_SOURCE_DIR}/src/modules/token-auth/src/device_poll_response.cpp"
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_token_auth PRIVATE
+      ${CMAKE_SOURCE_DIR}/src
+      ${CMAKE_SOURCE_DIR}/src/modules/token-auth/src)
+    target_link_libraries(test_token_auth PRIVATE
+      GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_token_auth DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_messages tests/test_messages.cpp server/messages.cpp)
+    set_source_files_properties(tests/test_messages.cpp server/messages.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_messages PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_messages PRIVATE
+      GTest::gtest GTest::gtest_main nevr_abi nevr_api ws2_32)
+    gtest_discover_tests(test_messages DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_crash_recovery tests/test_crash_recovery.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_crash_recovery DISCOVERY_MODE PRE_TEST)
   endif()
 endif()

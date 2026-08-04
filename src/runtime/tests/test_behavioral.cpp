@@ -16,9 +16,13 @@
 
 #include <gtest/gtest.h>
 #include <cstdarg>
+#include <array>
 #include <cstdint>
 #include <cstdio>
+#include <nlohmann/json.hpp>
+#include <mutex>
 #include <signal.h>
+#include <vector>
 
 // Project headers for type info. winsock2/windows already included above,
 // so pch.h includes become no-ops via include guards.
@@ -101,8 +105,18 @@ std::string GetISO8601Timestamp() { return "2026-01-01T00:00:00.000Z"; }
 const char* GetLogLevelString(EchoVR::LogLevel) { return "info"; }
 std::string FormatJsonLogEntry(EchoVR::LogLevel, const char*, const char*) { return "{}"; }
 
+std::mutex g_testLogMutex;
+std::vector<std::string> g_testLogMessages;
+
 void Log(EchoVR::LogLevel level, const char* format, ...) {
-  (void)level; (void)format;
+  (void)level;
+  char buffer[2048] = {};
+  va_list args;
+  va_start(args, format);
+  vsnprintf(buffer, sizeof(buffer), format, args);
+  va_end(args);
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  g_testLogMessages.emplace_back(buffer);
 }
 
 FatalErrorHandlerFunc g_fatalErrorHandler = nullptr;
@@ -361,6 +375,44 @@ TEST_F(N61_WsBridgeTest, CallbackSurvivesLoginClose) {
       << "when a matchmaker connection is still active";
 }
 
+TEST_F(N61_WsBridgeTest, MultipleMatchmakerConnectionsKeepTheLatestActiveCallback) {
+  // Each conn>=2 registration shares the login remote.  The most recently
+  // accepted matchmaker owns the callback, and closing login must preserve it.
+  auto remote = MockWsHandle::Create();
+  auto loginWs = MockWsHandle::Create();
+  auto firstMatchWs = MockWsHandle::Create();
+  auto secondMatchWs = MockWsHandle::Create();
+
+  void* loginRaw = TestHook_N61_RegisterLogin(remote.handle, loginWs.handle);
+  ASSERT_NE(loginRaw, nullptr);
+
+  bool firstFired = false;
+  bool secondFired = false;
+  ASSERT_NE(TestHook_N61_RegisterMatchmaker(firstMatchWs.handle, &firstFired), nullptr);
+  ASSERT_NE(TestHook_N61_RegisterMatchmaker(secondMatchWs.handle, &secondFired), nullptr);
+
+  EXPECT_TRUE(TestHook_N61_HasActiveCallback());
+  EXPECT_FALSE(TestHook_N61_SimulateCloseAndCheckCleared(loginRaw));
+  EXPECT_TRUE(TestHook_N61_HasActiveCallback());
+}
+
+TEST_F(N61_WsBridgeTest, LoginCloseDuringActiveMatchmakerIsSafe) {
+  auto remote = MockWsHandle::Create();
+  auto loginWs = MockWsHandle::Create();
+  auto matchWs = MockWsHandle::Create();
+
+  void* loginRaw = TestHook_N61_RegisterLogin(remote.handle, loginWs.handle);
+  ASSERT_NE(loginRaw, nullptr);
+  bool matchFired = false;
+  ASSERT_NE(TestHook_N61_RegisterMatchmaker(matchWs.handle, &matchFired), nullptr);
+
+  // Repeating the close is deliberately harmless: the close path must not
+  // dereference the already-removed login pair or clear the matchmaker route.
+  EXPECT_FALSE(TestHook_N61_SimulateCloseAndCheckCleared(loginRaw));
+  EXPECT_FALSE(TestHook_N61_SimulateCloseAndCheckCleared(loginRaw));
+  EXPECT_TRUE(TestHook_N61_HasActiveCallback());
+}
+
 TEST_F(N61_WsBridgeTest, CallbackClearedWhenNoMatchmaker) {
   // When login closes and NO matchmaker is sharing, the callback SHOULD be
   // cleared (prevents UAF on freed ProxyPair — the N54 fix).
@@ -396,6 +448,88 @@ TEST_F(N61_WsBridgeTest, N60_StopCalledOutsideMutex) {
   // Post-condition: mutex is free. If stop() were inside the lock, this fails.
   EXPECT_TRUE(TestHook_N60_IsMutexFree())
       << "N60: mutex must be free after Close — stop() was called inside the lock";
+}
+
+// ============================================================================
+// Login request wire format and WebSocket callback containment.  These exercise
+// production helpers through NEVR_TEST_HOOKS; the executable never exports the
+// hooks and the shipped DLL keeps its private implementation details private.
+// ============================================================================
+
+namespace {
+
+uint64_t ReadLe64(const std::string& bytes, size_t offset) {
+  uint64_t result = 0;
+  for (size_t index = 0; index < sizeof(result); ++index) {
+    result |= static_cast<uint64_t>(static_cast<unsigned char>(bytes[offset + index])) <<
+              static_cast<unsigned int>(index * 8);
+  }
+  return result;
+}
+
+}  // namespace
+
+TEST(WsBridgeLoginRequest, HasExpectedHeaderAndPayloadLength) {
+  const std::string request = TestHook_BuildLoginRequest(123456789ULL, 1, "Player", "token");
+  const std::array<unsigned char, 8> expectedMarker = {0xf6, 0x40, 0xbb, 0x78,
+                                                        0xa2, 0xe7, 0x8c, 0xbb};
+
+  ASSERT_GE(request.size(), 56U);
+  for (size_t index = 0; index < expectedMarker.size(); ++index) {
+    EXPECT_EQ(static_cast<unsigned char>(request[index]), expectedMarker[index]);
+  }
+  EXPECT_EQ(ReadLe64(request, 8), 0xbdb41ea9e67b200aULL);
+  EXPECT_EQ(ReadLe64(request, 16), request.size() - 24U);
+  EXPECT_EQ(ReadLe64(request, 40), 1ULL);
+  EXPECT_EQ(ReadLe64(request, 48), 123456789ULL);
+  for (size_t index = 24; index < 40; ++index) {
+    EXPECT_EQ(request[index], '\0');
+  }
+}
+
+TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) {
+  const std::string request = TestHook_BuildLoginRequest(77, 3, "A \"quoted\" name", "access-token");
+  const size_t jsonOffset = 56;
+  ASSERT_GT(request.size(), jsonOffset);
+  ASSERT_EQ(request.back(), '\0');
+  const nlohmann::json json = nlohmann::json::parse(
+      request.substr(jsonOffset, request.size() - jsonOffset - 1));
+
+  EXPECT_EQ(json.at("accountid"), 77);
+  EXPECT_EQ(json.at("displayname"), "A \"quoted\" name");
+  EXPECT_EQ(json.at("access_token"), "access-token");
+  EXPECT_TRUE(json.contains("buildversion"));
+  ASSERT_TRUE(json.contains("nevr_identity"));
+  const BuildIdentity::Info& identity = BuildIdentity::Get();
+  EXPECT_EQ(json["nevr_identity"]["version"], identity.project_version);
+  EXPECT_EQ(json["nevr_identity"]["commit"], identity.git_commit);
+  EXPECT_EQ(json["nevr_identity"]["build"], identity.git_describe);
+  EXPECT_EQ(json["nevr_identity"]["build_type"], identity.build_type);
+  ASSERT_TRUE(json.contains("system_info"));
+  EXPECT_TRUE(json["system_info"]["num_physical_cores"].is_number_unsigned());
+  EXPECT_TRUE(json["system_info"]["memory_total"].is_number_unsigned());
+}
+
+TEST(WsBridgePlatformPrefix, EveryDefinedPlatformHasTheNakamaPrefix) {
+  EXPECT_STREQ(TestHook_PlatformPrefix(0), "STM");
+  EXPECT_STREQ(TestHook_PlatformPrefix(1), "DSC");
+  EXPECT_STREQ(TestHook_PlatformPrefix(2), "XBX");
+  EXPECT_STREQ(TestHook_PlatformPrefix(3), "OVR-ORG");
+  EXPECT_STREQ(TestHook_PlatformPrefix(4), "OVR");
+  EXPECT_STREQ(TestHook_PlatformPrefix(5), "BOT");
+  EXPECT_STREQ(TestHook_PlatformPrefix(6), "DSC-NOVR");
+  EXPECT_STREQ(TestHook_PlatformPrefix(999), "UNK");
+}
+
+TEST(WsBridgeCallbackGuard, ContainsStdExceptionsAtTheCallbackBoundary) {
+  {
+    std::lock_guard<std::mutex> lock(g_testLogMutex);
+    g_testLogMessages.clear();
+  }
+  EXPECT_TRUE(TestHook_GuardWsCallbackContainsStdException());
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  ASSERT_EQ(g_testLogMessages.size(), 1U);
+  EXPECT_NE(g_testLogMessages.front().find("intentional callback exception"), std::string::npos);
 }
 
 // ============================================================================

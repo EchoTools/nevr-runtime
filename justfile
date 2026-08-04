@@ -210,11 +210,29 @@ test-auth-unit:
     unset VCPKG_ROOT
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_nevr_config --target test_service_map --target test_plugin_load_plan
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_plugin_load_plan
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         echo "       (is 'gtest' available in vcpkg for triplet x64-mingw-static?)" >&2
+        exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_token_auth.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_messages.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_crash_recovery.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
     wine "$bin"
@@ -1115,7 +1133,7 @@ verify:
         exit 1
     fi
     # Count ENTRIES, not lines — the table packs two per line.
-    N71_SITES=$(grep -oE '\{0x[0-9A-F]+, "' src/runtime/lifecycle/crash_recovery.cpp | wc -l)
+    N71_SITES=$(grep -oE '\{0x[0-9A-F]+, "' src/runtime/lifecycle/crash_recovery_sites.h | wc -l)
     if [ "$N71_SITES" -lt 25 ]; then
         echo "verify: FAIL — N71 known-site table has $N71_SITES entries (expected >= 25);" >&2
         echo "a crash at these RVAs would report a bare address with no class attribution." >&2
@@ -1618,6 +1636,16 @@ verify:
     # but a second NEVR buildversion field would be a duplicate. The sensor
     # asserts the NEVR identity is in its own nevr_identity sub-object.
     #   (No sensor — the presence of nevr_identity is already checked in N112b.)
+    # Wave 10: a deleted unit test must be visible to the closed-loop gate.
+    # The floor is deliberately derived from the current, production-linked
+    # suite; raising it is part of adding tests, while a drop is always a
+    # regression that needs an explicit sensor update and review.
+    TEST_COUNT=$(grep -hE '^TEST(_F)?\(' src/runtime/tests/*.cpp | wc -l)
+    if [ "$TEST_COUNT" -lt 143 ]; then
+        echo "verify: FAIL — runtime GTest count fell to $TEST_COUNT (floor 143)." >&2
+        exit 1
+    fi
+    echo "verify: runtime GTest declarations=$TEST_COUNT (floor 143)"
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test removed 2026-08-02: the test script

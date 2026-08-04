@@ -6,6 +6,7 @@
  * parents, so the N94 verify sensor pins those nine lines at Debug instead. */
 
 #include "token_auth.h"
+#include "device_poll_response.h"
 #include "extension/module_interface.h"
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
@@ -204,7 +205,7 @@ std::string DeviceAuth::RequestDeviceCode() {
     try {
         auto j = nlohmann::json::parse(response);
         return j.value("code", "");
-    } catch (...) {
+    } catch (const nlohmann::json::exception&) {
         return "";
     }
 }
@@ -216,14 +217,10 @@ std::string DeviceAuth::PollDeviceCode(const std::string& code) {
     std::string response = HttpPostPublic(url, reqBody.dump());
     if (response.empty()) return "error";
 
-    try {
-        auto j = nlohmann::json::parse(response);
-        std::string status = j.value("status", "");
-
-        if (status == "verified") {
-            std::string token = j.value("token", "");
-            if (!token.empty()) {
-                m_token = token;
+    const TokenAuth::DevicePollResponse poll = TokenAuth::ParseDevicePollResponse(response);
+    switch (poll.status) {
+        case TokenAuth::DevicePollStatus::Verified:
+                m_token = poll.access_token;
                 // Respect the token's OWN expiry (owner decision 2026-07-27).
                 // This was `time(nullptr) + 60` — the client refreshed on its own
                 // hardcoded schedule instead of the server's, discarding a token
@@ -232,33 +229,33 @@ std::string DeviceAuth::PollDeviceCode(const std::string& code) {
                 // first fallback; a conservative constant only if neither is
                 // present.
                 {
+                    const uint64_t now = static_cast<uint64_t>(time(nullptr));
                     CachedAuthToken probe;
                     probe.token = m_token;
                     const uint64_t jwtExp = probe.GetJwtExpiry();
-                    const uint64_t now = static_cast<uint64_t>(time(nullptr));
                     if (jwtExp > now) {
-                        m_tokenExpiry = jwtExp;
+                        m_tokenExpiry = TokenAuth::ResolveAccessTokenExpiry(now, m_token, poll.expires_in);
                         Log(EchoVR::LogLevel::Info,
                             "[NEVR.AUTH] token expiry from JWT exp: %llu (%llus from now)",
                             static_cast<unsigned long long>(jwtExp),
                             static_cast<unsigned long long>(jwtExp - now));
-                    } else if (j.contains("expires_in") && j["expires_in"].is_number_unsigned()) {
-                        m_tokenExpiry = now + j["expires_in"].get<uint64_t>();
+                    } else if (poll.expires_in.has_value()) {
+                        m_tokenExpiry = TokenAuth::ResolveAccessTokenExpiry(now, m_token, poll.expires_in);
                         Log(EchoVR::LogLevel::Info,
                             "[NEVR.AUTH] token expiry from expires_in: %llus",
-                            static_cast<unsigned long long>(j["expires_in"].get<uint64_t>()));
+                            static_cast<unsigned long long>(*poll.expires_in));
                     } else {
-                        m_tokenExpiry = now + kFallbackAccessTokenLifetimeSec;
+                        m_tokenExpiry = TokenAuth::ResolveAccessTokenExpiry(now, m_token, poll.expires_in);
                         Log(EchoVR::LogLevel::Warning,
                             "[NEVR.AUTH] token carries no exp and no expires_in — "
                             "falling back to %llus",
                             static_cast<unsigned long long>(kFallbackAccessTokenLifetimeSec));
                     }
                 }
-                m_refreshToken = j.value("refresh_token", "");
+                m_refreshToken = poll.refresh_token;
                 m_refreshTokenExpiry = static_cast<uint64_t>(time(nullptr)) + (30 * 24 * 3600);
-                m_userId = j.value("user_id", "");
-                m_username = j.value("username", "");
+                m_userId = poll.user_id;
+                m_username = poll.username;
                 // Parse discord ID from the JWT access token
                 {
                     CachedAuthToken tmp;
@@ -266,13 +263,14 @@ std::string DeviceAuth::PollDeviceCode(const std::string& code) {
                     m_discordId = tmp.GetDiscordId();
                 }
                 return "verified";
-            }
-        }
-        if (status == "expired") return "expired";
-        return "pending";
-    } catch (...) {
-        return "error";
+        case TokenAuth::DevicePollStatus::Expired:
+            return "expired";
+        case TokenAuth::DevicePollStatus::Pending:
+            return "pending";
+        case TokenAuth::DevicePollStatus::Error:
+            return "error";
     }
+    return "error";
 }
 
 void DeviceAuth::DisplayLinkingCode(const std::string& code) {

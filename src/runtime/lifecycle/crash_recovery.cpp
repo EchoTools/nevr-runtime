@@ -1,5 +1,7 @@
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/lifecycle/readable_memory.h"
+#include "runtime/lifecycle/crash_recovery_sites.h"
 
 #include <processthreadsapi.h>
 #include <psapi.h>
@@ -212,17 +214,6 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
   OriginalExitProcess(uExitCode);
 }
 
-/// Check whether a memory region is committed and readable without using
-/// the deprecated (and unreliable under Wine) IsBadReadPtr.
-static bool IsReadableMemory(const void* addr, size_t len) {
-  (void)len;
-  MEMORY_BASIC_INFORMATION mbi;
-  if (VirtualQuery(addr, &mbi, sizeof(mbi)) == 0) return false;
-  if (mbi.State != MEM_COMMIT) return false;
-  if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
-  return true;
-}
-
 // ============================================================================
 // N70 — crash-safe output primitive
 // ============================================================================
@@ -382,55 +373,6 @@ void EnsureStackReserve() {
 // What was actually missing is attribution: when the VEH fires, an operator got a
 // bare RVA and had to resolve it by hand. This table closes that gap — it costs
 // one linear scan on a path that is already crashing, and adds no runtime hook.
-struct KnownNullDerefSite {
-  DWORD64 rva;
-  const char* name;
-};
-
-static const KnownNullDerefSite kN71Sites[] = {
-    // DispatchEvent family — bit-test on game_flags
-    {0xC540A0, "DispatchEvent[0]"},  {0xC54470, "DispatchEvent[1]"},
-    {0xC54840, "DispatchEvent[2]"},  {0xC553B0, "DispatchEvent[3]"},
-    {0xC55780, "DispatchEvent[4]"},  {0xC55B50, "DispatchEvent[5]"},
-    {0xC55F20, "DispatchEvent[6]"},  {0xC562F0, "DispatchEvent[7]"},
-    {0xC566C0, "DispatchEvent[8]"},  {0xC56A90, "DispatchEvent[9]"},
-    // Combat-mode queries
-    {0xD09D60, "IsCompactPoolHandleValid_B"},
-    {0xD098C0, "IsPunchableInCombatMode"},
-    {0xD09E80, "GetPlayerBlockingState"},
-    {0xD09CD0, "LookupPlayerWeaponHandle"},
-    {0xD09DB0, "IsPlayerInUnassignedWeaponState"},
-    {0xD09EB0, "IsPlayerInPunchState"},
-    // Loadout broadcast
-    {0x12C2D0, "LoadoutBroadcast[0]"}, {0x130B00, "LoadoutBroadcast[1]"},
-    {0x130E00, "LoadoutBroadcast[2]"}, {0x1A9B20, "LoadoutBroadcast[3]"},
-    {0x1A9D60, "LoadoutBroadcast[4]"},
-    // Miscellaneous
-    {0x14E540, "~CR15NetLobby"},      {0x1B1910, "FindSpawnPoint"},
-    {0x15F530, "OnMsgCurrentLoadoutRequest"},
-    {0x1A79D0, "OnMsgSaveLoadoutRequest"},
-    {0x1C98C0, "GetUserName"},        {0x113A90, "GetNetGameFromContext"},
-    {0x170770, "GetHeadsetTypeName"}, {0x170730, "GetHeadsetTypeName_B"},
-    {0x170750, "GetHeadsetTypeName_C"},
-};
-
-/// Returns the enclosing known site for a game RVA, or nullptr. Sites are
-/// function entries; a fault lands a little past one, so match the nearest entry
-/// at or below the RVA within a plausible function span.
-static const char* LookupKnownNullDerefSite(INT64 rva) {
-  if (rva < 0) return nullptr;
-  const DWORD64 r = static_cast<DWORD64>(rva);
-  const char* best = nullptr;
-  DWORD64 bestBase = 0;
-  for (const auto& site : kN71Sites) {
-    if (r >= site.rva && r - site.rva < 0x800 && site.rva >= bestBase) {
-      best = site.name;
-      bestBase = site.rva;
-    }
-  }
-  return best;
-}
-
 /// Write a full crash dump: exception info, registers, stack trace with RVAs.
 /// All addresses are emitted as RVAs relative to the game base so they match
 /// revault / Ghidra / IDA directly.
@@ -466,7 +408,7 @@ static void WriteCrashDump(PEXCEPTION_POINTERS ex) {
 
   const INT64 ripRva = rva(ctx->Rip);
   VehPrintf("[NEVR.CRASH] === CRASH DUMP ===");
-  if (const char* site = LookupKnownNullDerefSite(ripRva)) {
+  if (const char* site = CrashRecovery::LookupKnownNullDerefSite(ripRva)) {
     VehPrintf("[NEVR.CRASH] known_site=%s class=session_flags_null_deref ledger=N71 "
               "note=*(this+0x2DA0) dereferenced without a null check",
               site);
@@ -511,7 +453,7 @@ static void WriteCrashDump(PEXCEPTION_POINTERS ex) {
   DWORD64* sp = reinterpret_cast<DWORD64*>(ctx->Rsp);
   int found = 0;
   for (int i = 0; i < 512 && found < 24; i++) {
-    if (!IsReadableMemory(sp + i, 8)) break;
+    if (!CrashRecovery::IsReadableMemory(sp + i, 8)) break;
     const DWORD64 v = sp[i];
     const INT64 r = rva(v);
     if (r >= 0 && r < 0x1800000) {
@@ -736,11 +678,11 @@ static INT64 HandleCrashDumpHook(void* a1, void* a2, void* a3, void* a4) {
   // a3 is EXCEPTION_POINTERS** (the caller at 0x1401CEE70 is the
   // SetUnhandledExceptionFilter callback: it spills RCX to the stack and passes
   // its address). Decode it to name the actual fault.
-  if (a3 != nullptr && IsReadableMemory(a3, sizeof(void*))) {
+  if (a3 != nullptr && CrashRecovery::IsReadableMemory(a3, sizeof(void*))) {
     PEXCEPTION_POINTERS ep = *static_cast<PEXCEPTION_POINTERS*>(a3);
-    if (ep != nullptr && IsReadableMemory(ep, sizeof(EXCEPTION_POINTERS)) &&
+    if (ep != nullptr && CrashRecovery::IsReadableMemory(ep, sizeof(EXCEPTION_POINTERS)) &&
         ep->ExceptionRecord != nullptr &&
-        IsReadableMemory(ep->ExceptionRecord, sizeof(EXCEPTION_RECORD))) {
+        CrashRecovery::IsReadableMemory(ep->ExceptionRecord, sizeof(EXCEPTION_RECORD))) {
       const DWORD64 ea = reinterpret_cast<DWORD64>(ep->ExceptionRecord->ExceptionAddress);
       VehPrintf("[NEVR.CRASH] >>> EXCEPTION code=0x%08lX flags=0x%lX addr=0x%llX rva=%s0x%llX "
                 "nparams=%lu p0=0x%llX p1=0x%llX",
@@ -753,7 +695,7 @@ static INT64 HandleCrashDumpHook(void* a1, void* a2, void* a3, void* a4) {
                                                     ? ep->ExceptionRecord->ExceptionInformation[0] : 0),
                 static_cast<unsigned long long>(ep->ExceptionRecord->NumberParameters > 1
                                                     ? ep->ExceptionRecord->ExceptionInformation[1] : 0));
-      if (ep->ContextRecord != nullptr && IsReadableMemory(ep->ContextRecord, sizeof(CONTEXT))) {
+      if (ep->ContextRecord != nullptr && CrashRecovery::IsReadableMemory(ep->ContextRecord, sizeof(CONTEXT))) {
         const DWORD64 rip = ep->ContextRecord->Rip;
         VehPrintf("[NEVR.CRASH] >>> rip=0x%llX rva=%s0x%llX rsp=0x%llX rcx=0x%llX rdx=0x%llX",
                   static_cast<unsigned long long>(rip),
@@ -771,7 +713,7 @@ static INT64 HandleCrashDumpHook(void* a1, void* a2, void* a3, void* a4) {
   DWORD64* sp = reinterpret_cast<DWORD64*>(&a1);
   int found = 0;
   for (int i = 0; i < 96 && found < 10; i++) {
-    if (!IsReadableMemory(sp + i, 8)) break;
+    if (!CrashRecovery::IsReadableMemory(sp + i, 8)) break;
     const DWORD64 v = sp[i];
     if (v >= base && v < base + 0x1800000) {
       VehPrintf("[NEVR.CRASH]   caller#%d game+0x%llX", found,
