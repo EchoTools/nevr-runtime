@@ -62,6 +62,9 @@ void PreflightRuntimeBootstrap() {
     if (lstrcmpW(arg, L"-server") == 0) {
       g_isServer = TRUE;
       g_noOvr = TRUE;  // -server implies -noovr unconditionally
+    } else if (lstrcmpW(arg, L"-windowed") == 0) {
+      g_isWindowed = TRUE;
+      g_noOvr = TRUE;  // -windowed implies -noovr (no VR headset)
     } else if ((lstrcmpW(arg, L"-config") == 0 || lstrcmpW(arg, L"-config-path") == 0) && i + 1 < argc) {
       WideCharToMultiByte(CP_UTF8, 0, argv[++i], -1, g_customConfigPath, MAX_PATH, NULL, NULL);
     }
@@ -232,7 +235,6 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       g_noConsole = TRUE;
     } else if (lstrcmpW(arg, L"-windowed") == 0) {
       g_isWindowed = TRUE;
-      g_noOvr = TRUE;  // -windowed implies -noovr (no VR headset under Wine)
     } else if (lstrcmpW(arg, L"-noexitonerror") == 0) {
       g_exitOnError = FALSE;
     } else if (lstrcmpW(arg, L"-exitonerror") == 0) {
@@ -383,8 +385,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // Must run before the game's module loader starts.
   PnsradEnabler::Init((uintptr_t)EchoVR::g_GameBaseAddress);
 
-  // Block Oculus Platform SDK on server/headless — client needs Oculus Platform services
-  if (g_isServer || g_isHeadless) {
+  // Block Oculus Platform SDK on server/headless/windowed — client needs Oculus
+  // Platform services only when running with actual VR hardware.
+  if (g_isServer || g_isHeadless || g_isWindowed) {
     PatchBypassOvrPlatform();
     PatchBlockOculusSDK();
   }
@@ -450,9 +453,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   ResolveShutdownDependencies();  // N62
 
   // N87: re-arm the console ctrl handler so CTRL+C works in client mode.
-  // Our handler is installed early (behind the game's) during Initialize().
-  // RearmConsoleCtrlHandler re-registers it at the front so it fires first.
-  // Previously this was only called from the server path (GameServerLib::Terminate).
+  // Our handler is installed behind the game's during Initialize(); this
+  // re-registers it at the front so it fires before the game's handler.
+  // Previously only called from the server path (GameServerLib::Terminate).
   RearmConsoleCtrlHandler();
 
   Log(EchoVR::LogLevel::Info,
