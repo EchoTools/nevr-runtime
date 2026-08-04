@@ -449,6 +449,38 @@ std::string TokenAuth::GetUsername() {
     return s_auth->GetUsernameValue();
 }
 
+#ifdef NEVR_TEST_HOOKS
+namespace TokenAuth::TestHook {
+namespace {
+
+DeviceAuthState SnapshotDeviceAuth(const DeviceAuth& auth) {
+    DeviceAuthState state;
+    state.authenticated = auth.IsAuthenticated();
+    state.token = auth.GetTokenValue();
+    state.discord_id = auth.GetDiscordIdValue();
+    state.username = auth.GetUsernameValue();
+    return state;
+}
+
+}  // namespace
+
+DeviceAuthState InspectInitialDeviceAuth() {
+    DeviceAuth auth;
+    return SnapshotDeviceAuth(auth);
+}
+
+DeviceAuthState InspectDeviceAuthAfterRefresh(const CachedAuthToken& cached) {
+    DeviceAuth auth;
+    // Configure exercises the production setup path without starting a device
+    // flow.  The test-only endpoint is never contacted by UpdateFromRefresh.
+    auth.Configure("https://test.invalid", "test-http-key", "test-server-key");
+    auth.UpdateFromRefresh(cached);
+    return SnapshotDeviceAuth(auth);
+}
+
+}  // namespace TokenAuth::TestHook
+#endif  // NEVR_TEST_HOOKS
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------

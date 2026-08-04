@@ -364,11 +364,12 @@ if(BUILD_TESTING)
       tests/test_token_auth.cpp)
     set_source_files_properties(tests/test_token_auth.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_token_auth PRIVATE NEVR_TEST_HOOKS)
     target_include_directories(test_token_auth PRIVATE
       ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/src/modules/token-auth/src)
     target_link_libraries(test_token_auth PRIVATE
-      GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json token_auth)
+      GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json token_auth_test_hooks)
     gtest_discover_tests(test_token_auth DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_messages tests/test_messages.cpp server/messages.cpp)

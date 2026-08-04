@@ -76,6 +76,49 @@ TEST(CachedAuthTokenExpiry, ExpiredAndFutureTokensAreDistinguished) {
   EXPECT_TRUE(future.HasValidToken());
 }
 
+TEST(DeviceAuthState, InitialStateIsUnauthenticated) {
+  const TokenAuth::TestHook::DeviceAuthState state =
+      TokenAuth::TestHook::InspectInitialDeviceAuth();
+
+  EXPECT_FALSE(state.authenticated);
+  EXPECT_TRUE(state.token.empty());
+  EXPECT_EQ(state.discord_id, 0U);
+  EXPECT_TRUE(state.username.empty());
+}
+
+TEST(DeviceAuthState, RefreshUpdateMakesValidTokenObservable) {
+  CachedAuthToken refreshed;
+  refreshed.token = MakeJwt("eyJ2cnMiOnsiZGlkIjoiNzc3In19");
+  refreshed.token_expiry = static_cast<uint64_t>(std::time(nullptr)) + 3600;
+  refreshed.refresh_token = "refresh-token";
+  refreshed.refresh_token_expiry = static_cast<uint64_t>(std::time(nullptr)) + 7200;
+  refreshed.user_id = "user-id";
+  refreshed.username = "refreshed-player";
+
+  const TokenAuth::TestHook::DeviceAuthState state =
+      TokenAuth::TestHook::InspectDeviceAuthAfterRefresh(refreshed);
+
+  EXPECT_TRUE(state.authenticated);
+  EXPECT_EQ(state.token, refreshed.token);
+  EXPECT_EQ(state.discord_id, 777U);
+  EXPECT_EQ(state.username, "refreshed-player");
+}
+
+TEST(DeviceAuthState, ExpiredRefreshUpdateRemainsUnauthenticated) {
+  CachedAuthToken refreshed;
+  refreshed.token = MakeJwt("eyJkaWQiOiI4ODgifQ");
+  refreshed.token_expiry = static_cast<uint64_t>(std::time(nullptr)) - 1;
+  refreshed.username = "expired-player";
+
+  const TokenAuth::TestHook::DeviceAuthState state =
+      TokenAuth::TestHook::InspectDeviceAuthAfterRefresh(refreshed);
+
+  EXPECT_FALSE(state.authenticated);
+  EXPECT_EQ(state.token, refreshed.token);
+  EXPECT_EQ(state.discord_id, 888U);
+  EXPECT_EQ(state.username, "expired-player");
+}
+
 TEST(DevicePollResponse, VerifiedResponseExtractsEveryTokenField) {
   const TokenAuth::DevicePollResponse response = TokenAuth::ParseDevicePollResponse(
       "{\"status\":\"verified\",\"token\":\"token\",\"refresh_token\":\"refresh\","

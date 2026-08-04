@@ -22,3 +22,28 @@ target_include_directories(token_auth PRIVATE
 )
 
 target_link_libraries(token_auth PRIVATE nevr_core CURL::libcurl nlohmann_json::nlohmann_json)
+
+# The production target deliberately has no NEVR_TEST_HOOKS.  Build a separate
+# copy only for test_token_auth so its in-memory DeviceAuth state can be driven
+# without cache, refresh-thread, or HTTP side effects.
+if(BUILD_TESTING)
+    add_library(token_auth_test_hooks STATIC
+        src/token_auth.cpp
+        src/device_poll_response.cpp
+    )
+
+    target_compile_definitions(token_auth_test_hooks PRIVATE
+        NEVR_MODULE_EXPORTS
+        NEVR_TEST_HOOKS
+    )
+
+    target_include_directories(token_auth_test_hooks PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/runtime
+        ${CMAKE_SOURCE_DIR}/plugins/common/include
+    )
+
+    target_link_libraries(token_auth_test_hooks PRIVATE
+        nevr_core CURL::libcurl nlohmann_json::nlohmann_json
+    )
+endif()
