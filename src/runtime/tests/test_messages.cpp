@@ -322,3 +322,27 @@ TEST(MessagesEncoding, SessionSuccessUsesEncoderKeySizesForVariableOffsets) {
   ExpectRepeatedBytesAt(encoded.data, kClientKeyOffset + 12, 16, static_cast<uint8_t>('e'));
   ExpectRepeatedBytesAt(encoded.data, kClientKeyOffset + 12 + 16, 7, static_cast<uint8_t>('r'));
 }
+
+TEST(MessagesEncoding, SessionSuccessRejectsInvalidServerPacketKeySizes) {
+  gameservice::v1::SNSLobbySessionSuccessV5Message message;
+  message.set_lobby_id(kLobbyId);
+  message.set_group_id(kGroupId);
+  message.set_endpoint("10.0.0.1:203.0.113.9:6721");
+  message.set_server_encoder_flags(MakeEncoderFlags(32, 15, 32));
+  message.set_client_encoder_flags(MakeEncoderFlags());
+
+  ScopedGameLogger logger;
+  EXPECT_TRUE(EncodeLobbySessionSuccessV5(message).data.empty());
+}
+
+TEST(MessagesEncoding, SessionSuccessRejectsInvalidClientPacketKeySizes) {
+  gameservice::v1::SNSLobbySessionSuccessV5Message message;
+  message.set_lobby_id(kLobbyId);
+  message.set_group_id(kGroupId);
+  message.set_endpoint("10.0.0.1:203.0.113.9:6721");
+  message.set_server_encoder_flags(MakeEncoderFlags());
+  message.set_client_encoder_flags(MakeEncoderFlags(32, 32, 257));
+
+  ScopedGameLogger logger;
+  EXPECT_TRUE(EncodeLobbySessionSuccessV5(message).data.empty());
+}
