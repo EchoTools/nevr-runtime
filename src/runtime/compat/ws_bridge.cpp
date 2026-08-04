@@ -136,13 +136,16 @@ static void AppendLE64(std::string& buf, uint64_t val) {
   for (int i = 0; i < 8; i++) { buf.push_back((char)(val & 0xFF)); val >>= 8; }
 }
 
+// N146: platform codes match the Go server's iota enumeration.
+// Go: STM=0, DSC=1, XBX=2, OVR_ORG=3, OVR=4, BOT=5, DMO=6
 static const char* PlatformPrefix(uint64_t platformCode) {
   switch (platformCode) {
-    case 1: return "STM";
-    case 2: return "DSC";
-    case 3: return "XBX";
-    case 4: return "OVR-ORG";
-    case 5: return "DSC-NOVR";
+    case 0: return "STM";
+    case 1: return "DSC";
+    case 2: return "XBX";
+    case 3: return "OVR-ORG";
+    case 4: return "OVR";
+    case 6: return "DSC-NOVR";  // DMO = demo/no-VR client
     default: return "UNK";
   }
 }
@@ -155,8 +158,9 @@ static const char* PlatformPrefix(uint64_t platformCode) {
 // id rather than substituting something that looks like a real name (N115: absent
 // data is visibly absent, invented data is indistinguishable from a reading).
 static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode = 2,
-                                     const std::string& displayName = std::string()) {
-  // Platform: DSC = 2 (Go iota: XPlatformIdSize=0, STM=1, PSN/DSC=2, XBX=3, OVR_ORG=4)
+                                     const std::string& displayName = std::string(),
+                                     const std::string& accessToken = std::string()) {
+  // Platform codes match Go server iota: STM=0, DSC=1, XBX=2, OVR_ORG=3, OVR=4, BOT=5, DMO=6
   uint64_t accountId = discordId;
 
   // Host facts, MEASURED. Every value in this block used to be a literal —
@@ -211,7 +215,7 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
       "\"accountid\":%llu,"
       "\"displayname\":\"%s\","
       "\"bypassauth\":false,"
-      "\"access_token\":\"\","
+      "\"access_token\":\"%s\","
       "\"nonce\":\"\","
       "\"buildversion\":631547,"
       "\"lobbyversion\":0,"
@@ -241,6 +245,7 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
     "}",
     (unsigned long long)accountId,
     resolvedName.c_str(),
+    accessToken.c_str(),
     buildId.project_version.c_str(),
     buildId.git_commit.c_str(),
     buildId.git_describe.c_str(),
@@ -527,7 +532,7 @@ void InstallWebSocketBridge() {
             remote->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback", 
                 // accountName captured BY VALUE alongside discordId — this callback
                 // outlives the enclosing scope, so a reference would dangle (N123).
-                [pairPtr, gameWsPtr, connIdx, discordId, accountName](const ix::WebSocketMessagePtr& rmsg) {
+                [pairPtr, gameWsPtr, connIdx, discordId, accountName, bearerToken](const ix::WebSocketMessagePtr& rmsg) {
                   switch (rmsg->type) {
                     case ix::WebSocketMessageType::Open: {
                       std::lock_guard<std::mutex> lk(g_pairsMutex);
@@ -585,9 +590,9 @@ void InstallWebSocketBridge() {
                           }
                         }
 
-                        uint64_t platformCode = g_noOvr ? static_cast<uint64_t>(5) : static_cast<uint64_t>(2);
+                        uint64_t platformCode = g_noOvr ? static_cast<uint64_t>(6) : static_cast<uint64_t>(1);
                         g_lastInjectedDiscordId = discordId;
-                        std::string loginMsg = BuildLoginRequest(discordId, platformCode, accountName);
+                        std::string loginMsg = BuildLoginRequest(discordId, platformCode, accountName, bearerToken);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
                         Log(EchoVR::LogLevel::Info,
@@ -644,7 +649,7 @@ void InstallWebSocketBridge() {
                           uint8_t payload[32] = {};
                           payload[0] = 0x4E; payload[1] = 0x45; payload[2] = 0x56; payload[3] = 0x52; // "NEVR"
                           payload[4] = 0x53; payload[5] = 0x52; payload[6] = 0x56; payload[7] = 0x52; // "SRVR"
-                          uint64_t platformCode = g_noOvr ? static_cast<uint64_t>(5) : static_cast<uint64_t>(2);
+                          uint64_t platformCode = g_noOvr ? static_cast<uint64_t>(6) : static_cast<uint64_t>(1);
                           memcpy(payload + 16, &platformCode, 8);
                           memcpy(payload + 24, &g_lastInjectedDiscordId, 8);
 
