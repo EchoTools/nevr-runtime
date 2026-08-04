@@ -175,6 +175,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return {}; }
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/patch/broadcaster_hook_stats.h"
+#include "runtime/patch/mode_patches.h"
 
 // WOULD-FAIL-IF (N68): delete TickPlugins iteration loop in plugin_loader.cpp.
 // WOULD-FAIL-IF (N68-module): delete TickModules loop in module_loader.cpp.
@@ -602,6 +603,25 @@ TEST(BroadcasterHookStats, FormatsMockedLivenessCounters) {
   EXPECT_GT(BroadcasterHookStats::Format(line, sizeof(line), 17, 9), 0);
   EXPECT_STREQ(line,
       "[NEVR.PATCH] broadcaster hook stats listen_entries=17 dispatch_entries=9 "
+      "(N83/N84 evidence — zero entries means idle runs prove nothing)");
+}
+
+// The live counters are translation-unit state in mode_patches.cpp.  They are
+// zero before any hook entry, which is the only state this test needs: call the
+// REAL reporting entry point and capture the structured line through the test
+// logger.  It does not read game memory, patch code, or install a hook.
+TEST(BroadcasterHookStats, LogsActualZeroInitializedCounters) {
+  {
+    std::lock_guard<std::mutex> lock(g_testLogMutex);
+    g_testLogMessages.clear();
+  }
+
+  LogBroadcasterHookStats();
+
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  ASSERT_EQ(g_testLogMessages.size(), 1U);
+  EXPECT_EQ(g_testLogMessages.front(),
+      "[NEVR.PATCH] broadcaster hook stats listen_entries=0 dispatch_entries=0 "
       "(N83/N84 evidence — zero entries means idle runs prove nothing)");
 }
 
