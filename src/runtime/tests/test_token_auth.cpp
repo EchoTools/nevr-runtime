@@ -90,6 +90,20 @@ TEST(DevicePollResponse, VerifiedResponseExtractsEveryTokenField) {
   EXPECT_EQ(*response.expires_in, 3600U);
 }
 
+TEST(DevicePollResponse, ZeroExpiresInUsesFutureJwtExpiry) {
+  constexpr uint64_t kNow = 1000;
+  constexpr uint64_t kJwtExpiry = 5000;
+  const std::string accessToken = MakeJwt("eyJleHAiOjUwMDB9");
+  const TokenAuth::DevicePollResponse response = TokenAuth::ParseDevicePollResponse(
+      "{\"status\":\"verified\",\"token\":\"" + accessToken + "\",\"expires_in\":0}");
+
+  ASSERT_EQ(response.status, TokenAuth::DevicePollStatus::Verified);
+  ASSERT_TRUE(response.expires_in.has_value());
+  EXPECT_EQ(*response.expires_in, 0U);
+  EXPECT_EQ(TokenAuth::ResolveAccessTokenExpiry(kNow, response.access_token, response.expires_in),
+            kJwtExpiry);
+}
+
 TEST(DevicePollResponse, PendingExpiredAndErrorResponsesRemainDistinct) {
   EXPECT_EQ(TokenAuth::ParseDevicePollResponse("{\"status\":\"authorization_pending\"}").status,
             TokenAuth::DevicePollStatus::Pending);
