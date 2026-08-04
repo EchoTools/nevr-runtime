@@ -2,12 +2,17 @@
  * plugin.cpp — debug_lockout: verify whether the early-quit lockout state
  * is correctly received by the game client.
  *
- * Hooks CR14LocalPlayerCS::ApplyEarlyQuitState @ 0x1401ae2e0 and dumps the
- * three values needed to verify the lockout: the incoming penalty timestamp
- * (RDX), the field where the server's timestamp is stored (+0x64820), and the
- * field the countdown reader and per-frame expiry check consume (+0x64828).
+ * Hooks CR14LocalPlayerCS::ApplyEarlyQuitState @ 0x1401ae2e0. Before the
+ * original runs it force-injects an active level-3 lockout (penalty_level=3,
+ * penalty_ts = now + 3600 at BOTH +0x64820 and +0x64828, num_early_quits=16)
+ * so the client behaves as if nakama had sent one — no server needed. Then it
+ * calls the original and dumps the values left behind, to verify the state
+ * survives.
  *
  * ReVault disassembly:
+ *   0x1401ae2f0: CMP [RCX + 0x64820], -1 ... JGE 0x1401ae41d — early-exit:
+ *                if +0x64820 already holds a timestamp >= the incoming one,
+ *                the function writes NOTHING, so injected state survives.
  *   0x1401ae339: MOV [RCX + 0x64820], RDX   — stores the incoming penalty_ts
  *   0x1401ae372: MOV qword ptr [RCX + 0x64828], -0x1  — stores -1 sentinel
  *
@@ -22,6 +27,7 @@
 #include "nevr_common.h"
 
 #include <cstdint>
+#include <ctime>
 
 NEVR_DEFINE_PLUGIN_LOG("[debug_lockout]")
 
@@ -42,11 +48,24 @@ static ApplyEarlyQuitStateFn g_original = nullptr;
 static nevr::HookManager     g_hooks;
 
 /*
- * Detour — call the original, then read both fields from the playerCS and
- * log all three values. This is a diagnostic hook: it observes, never alters.
+ * Detour — force-inject an active lockout BEFORE the original runs, then call
+ * the original and dump whatever survives. The original early-exits without
+ * writing when +0x64820 already holds a timestamp >= the incoming penalty_ts
+ * (see the header comment), so in the normal case — server sends no lockout,
+ * i.e. -1 — the injected state survives untouched.
  */
 static void __fastcall Detour_ApplyEarlyQuitState(void* playerCS, uint64_t penalty_ts)
 {
+    uint64_t forced_ts = static_cast<uint64_t>(time(nullptr)) + 3600;
+
+    *(uint8_t*)((uint8_t*)playerCS + 0x64844)  = 3;         /* penalty_level    */
+    *(uint64_t*)((uint8_t*)playerCS + 0x64820) = forced_ts; /* stored penalty_ts */
+    *(uint64_t*)((uint8_t*)playerCS + 0x64828) = forced_ts; /* consumed penalty_ts */
+    *(int32_t*)((uint8_t*)playerCS + 0x64830)  = 16;        /* num_early_quits  */
+
+    PluginLog("FORCE-LOCKOUT: injected penalty_level=3 penalty_ts=%llu (+3600s) at +0x64820 and +0x64828",
+              static_cast<unsigned long long>(forced_ts));
+
     g_original(playerCS, penalty_ts);
 
     uint64_t field_64820 = *(uint64_t*)((uint8_t*)playerCS + 0x64820);
@@ -75,7 +94,7 @@ NEVR_PLUGIN_API NvrPluginInfo NvrPluginGetInfo(void)
 {
     NvrPluginInfo info = {};
     info.name          = "nevr_debug_lockout";
-    info.description   = "Debug: dumps early-quit lockout state on ApplyEarlyQuitState";
+    info.description   = "Debug: force-injects an active level-3 lockout and dumps the resulting state";
     info.version_major = 1;
     info.version_minor = 0;
     info.version_patch = 0;
@@ -88,13 +107,14 @@ NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void)
 }
 
 /*
- * Observes and logs lockout state; never writes game state. The detour is a
+ * Force-injects penalty state into the client, so it must declare ALTERS_RULES
+ * (loads in the highest-risk band) rather than OBSERVES_ONLY. The detour is a
  * plain pass-through through the host's shared MinHook, so HOOKS_ENGINE does
  * not apply (see the example plugin's documentation of that bit).
  */
 NEVR_PLUGIN_API uint32_t NvrPluginGetCapabilities(void)
 {
-    return NEVR_PLUGIN_CAP_OBSERVES_ONLY;
+    return NEVR_PLUGIN_CAP_ALTERS_RULES;
 }
 
 NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
