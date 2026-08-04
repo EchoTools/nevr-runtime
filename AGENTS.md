@@ -296,3 +296,474 @@ the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), wh
   source-invariant sensors, then `tools/verify_hook_invariants.py`. Fail-close. The Go integration suites
   are excised (RULINGS.md 2026-07-20 "Test harness excised") and are not part of
   `just verify`.
+
+---
+
+The content after this separator is `CPP-MINGW-ADDENDUM` — binding rules
+for cross-compiling C++ Windows DLLs with mingw-w64.  It was previously a
+separate document in a private repository; inlining it here ensures every
+agent reads it (it is required reading per the pre-read gate above).
+
+---
+
+# C++ Mingw Addendum — Cross-Compilation to Windows DLLs
+
+
+**Required reading** for ANY agent writing, building, or reviewing C++
+code in a project that uses mingw-w64 cross-compilation to produce
+Windows DLLs. Read this BEFORE writing any C++ code, BEFORE touching the
+build system, and BEFORE making any PR in an adopting repo.
+
+---
+
+## The Missile Knows Where It Is
+
+> _The missile knows where it is, because it knows where it isn't._
+
+This document is structured by negation as much as assertion. The "Never
+Use", "Never", and "What Not to Do" clauses are load-bearing — they are
+how an agent triangulates the correct path.
+
+### This IS
+
+- A binding ruleset for cross-compiling C++ Windows DLLs from Linux using
+  mingw-w64, CMake, and Ninja.
+- A guide to the toolchain decisions that make builds reproducible:
+  vcpkg for dependencies, CMakePresets for configuration, justfile for
+  orchestration, osslsigncode for Authenticode signing.
+- A code-review gate: the "Code Review Hard Stops" table is enforced.
+- Required context for every agent working on Windows-DLL compatibility or
+  interception layers cross-compiled from Linux (game-compatibility shims,
+  API-hooking layers, injected runtime patches).
+
+### This is NOT
+
+- A C++ tutorial. Reading this does not teach you C++ — it disciplines an
+  agent that already knows C++17/20.
+- A style preference for Linux-native C++ development. The mingw
+  cross-compilation target has different constraints (Windows CRT, DLL
+  export semantics, PE format).
+- A superset of project rules. Project-level AGENTS.md or CLAUDE.md
+  overrides this on conflict.
+- Optional for "scripts" or "small tools." Every `.cpp` and `.h` file in
+  an adopting repo is in scope.
+
+### You MUST
+
+- Use mingw-w64 GCC as the cross-compiler (`x86_64-w64-mingw32-g++`).
+  Verify the toolchain exists before writing any build commands.
+- Use CMakePresets.json with the standard preset matrix (see below).
+- Use Ninja as the CMake generator. Never Makefiles.
+- Manage all dependencies via vcpkg manifest (`vcpkg.json`). Never
+  system-installed libraries.
+- Run `just configure && just build` before declaring work done.
+- Sign all release DLLs with osslsigncode. Test signing via `just sign`.
+- Test cross-compiled DLLs under Wine before merging.
+- Embed a PE VERSIONINFO resource in every DLL.
+- Derive version from git at build time (no manual version bumps).
+- Ship ring-buffer flight recorder telemetry in every DLL by default.
+- Use structured logging with level control. No printf, no ad-hoc logging.
+
+### You must NEVER
+
+- Hardcode Windows SDK paths, mingw binaries, or vcpkg roots in CMake.
+  Use presets and toolchain files.
+- Mix mingw-w64 and MSVC object files in the same link step.
+- Ship unsigned DLLs in a release artifact.
+- Use system include paths for cross-compiled dependencies.
+- Assume Windows API calls will behave identically under Wine — test it.
+- Call `dlopen` / `dlsym` in cross-compiled code — use `LoadLibrary` /
+  `GetProcAddress`.
+- Use raw `printf` for debug output. Use the project's structured logger.
+- Suppress compiler warnings. Treat warnings as errors (`-Werror`).
+- Write ad-hoc platform abstraction layers. Use existing patterns from
+  the project's `common/` module.
+- Leave a TODO, FIXME, or `// NOLINT` without an inline justification.
+- Work around broken tooling. Fix the tool or stop.
+- Use C-style casts anywhere. Use `static_cast`, `reinterpret_cast`,
+  `std::bit_cast` as appropriate.
+- Catch `...` (ellipsis catch). Every catch block must name the type.
+- Write a function longer than 200 lines without a documented reason.
+
+---
+
+## Observability (Not Optional)
+
+Every DLL in an adopting project ships with built-in telemetry. This is
+not a debug feature you add later — it is part of the architecture.
+
+### Flight Recorder (Ring Buffer)
+
+A lock-free ring buffer of the last N operations (default 1024). Each
+entry captures:
+
+- Function name (string or enum)
+- Entry timestamp (monotonic clock, nanoseconds)
+- Duration (nanoseconds)
+- Key argument hashes (not full arguments — hashes are enough to identify
+  call sites)
+- Return value / error code
+
+```cpp
+struct TraceEvent {
+    uint64_t timestamp_ns;
+    uint32_t duration_ns;
+    uint16_t function_id;
+    uint16_t result_code;
+    uint64_t arg_hash;
+};
+```
+
+The ring buffer is always-on, zero-heap-alloc, fixed-size. When a crash
+occurs, a dump handler writes the buffer to disk via
+`WriteFile`/`MapViewOfFile`. The dump is available in the
+`%TEMP%/dxgi_dump/` directory or alongside the DLL.
+
+### Fidelity Monitors
+
+For every translation layer (Oculus→OpenXR, Winsock→epoll, etc.), log
+both input parameters and output results side-by-side. If the translation
+returns wrong data (bad poses, wrong swap chain format, misaligned
+struct), the trace captures the divergence before it causes visible
+breakage.
+
+### Session State Journal
+
+Log every state transition on both sides:
+
+- Oculus: Initialize → Create → Destroy → SessionStatus changes
+- OpenXR: InstanceCreate → Session lifecycle → SessionState changes →
+  Event polling
+- If `ovr_GetSessionStatus` returns `IsVisible=false` and the game enters
+  a headless render loop, the trace shows exactly when and why the states
+  diverged.
+
+### Frame Pacing Telemetry
+
+Log the `WaitFrame`/`BeginFrame`/`EndFrame` cycle with timestamps and
+`predictedDisplayTime`. Frame timing drift is insidious — it accumulates
+over frames and causes judder long before a crash. Catch it early by
+emitting a warning when drift exceeds 2ms.
+
+### Runtime Toggle
+
+- **Flight recorder mode**: always-on, last N events, no I/O during
+  capture. Zero allocation after initialization.
+- **Verbose mode**: full logging to a named pipe or file, toggled via
+  environment variable at startup or a control pipe at runtime.
+- Post-mortem dump triggers on DLL unload, process exit, or abnormal
+  termination (captured by the crash handler plugin).
+
+---
+
+## Logging (Structured, Always)
+
+No printf. No `OutputDebugString`. No cerr. Every project uses a
+structured logger with:
+
+- **Levels**: TRACE < DEBUG < INFO < WARN < ERROR < FATAL
+- **Categories**: per-module or per-system enable/disable
+- **Format**: machine-parseable (JSON or key=value pairs)
+- **Output**: configurable — file, debugger, named pipe, ring buffer
+
+```cpp
+// Good
+LOG_INFO("session", "Session created: id={}", session_id);
+LOG_WARN("network", "Reconnect attempt {}/{}", attempt, max_attempts);
+
+// Bad — never do this
+printf("session created %d\n", session_id);
+fprintf(stderr, "reconnect %d\n", attempt);
+```
+
+The logger itself must be:
+
+- Zero allocation after initialization (preallocated buffers).
+- Lock-free for the hot path (per-thread buffers).
+- Safe to call from DllMain (no heap, no synchronization primitives).
+
+---
+
+## Standard Preset Matrix
+
+Every mingw-w64 cross-compilation project MUST define these CMake presets:
+
+### Linux presets (mingw cross-compilation)
+
+| Preset          | Generator | Toolchain                | Build Type | Use Case            |
+| --------------- | --------- | ------------------------ | ---------- | ------------------- |
+| `mingw-debug`   | Ninja     | vcpkg `x64-mingw-static` | Debug      | Development builds  |
+| `mingw-release` | Ninja     | vcpkg `x64-mingw-static` | Release    | Distribution builds |
+
+### Linux presets (Wine testing)
+
+| Preset               | Generator | Toolchain                       | Build Type | Use Case                    |
+| -------------------- | --------- | ------------------------------- | ---------- | --------------------------- |
+| `linux-wine-debug`   | Ninja     | cmake/toolchain-msvc-wine.cmake | Debug      | Test DLLs under Wine        |
+| `linux-wine-release` | Ninja     | cmake/toolchain-msvc-wine.cmake | Release    | Pre-release Wine validation |
+
+### Windows presets (native)
+
+| Preset    | Generator | Toolchain             | Build Type | Use Case       |
+| --------- | --------- | --------------------- | ---------- | -------------- |
+| `debug`   | Ninja     | vcpkg default triplet | Debug      | Native Windows |
+| `release` | Ninja     | vcpkg default triplet | Release    | Native Windows |
+
+**Build output** lands in `build/<preset>/bin/`.
+
+The presets file MUST define a `base` hidden preset:
+
+```json
+{
+  "name": "base",
+  "hidden": true,
+  "generator": "Ninja",
+  "binaryDir": "${sourceDir}/build/${presetName}",
+  "toolchainFile": "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+}
+```
+
+---
+
+## Dependency Management
+
+### vcpkg manifest (`vcpkg.json`)
+
+All dependencies declared in one file at the project root:
+
+```json
+{
+  "dependencies": ["gtest", "nlohmann-json", "minhook", "protobuf"]
+}
+```
+
+| Package         | Purpose                        |
+| --------------- | ------------------------------ |
+| `gtest`         | Unit tests under Wine          |
+| `nlohmann-json` | JSON config parsing            |
+| `minhook`       | Function hooking (Detours alt) |
+| `ixwebsocket`   | WebSocket client               |
+| `protobuf`      | Message serialization          |
+| `curl`          | HTTP client                    |
+| `opus`          | Audio codec (VoIP)             |
+| `miniupnpc`     | UPnP port mapping              |
+
+### What NOT to use vcpkg for
+
+- The OpenXR loader is a system dependency or vendored, not from vcpkg.
+- Oculus SDK headers are replicated from the target binary — not a
+  vcpkg dependency.
+
+---
+
+## Project Layout
+
+```
+project/
+├── src/
+│   ├── gamepatches/       # Main patch DLL
+│   ├── gameserver/        # Network services DLL
+│   ├── common/            # Shared utilities (logging, trace ring buffer, globals)
+│   └── launcher/          # Entry point / bootstrapper
+├── plugins/
+│   ├── common/            # Plugin interface headers
+│   ├── log-filter/        # Example plugin
+│   └── crash-handler/     # Ring buffer dump on crash
+├── cmake/
+│   ├── toolchain-msvc-wine.cmake
+│   └── set_project_version_from_git.cmake
+├── tests/
+│   ├── system/            # Go integration tests
+│   └── plugins/           # Plugin ground truth tests
+├── extern/                # Git submodules
+├── certs/                 # Code signing certificates
+├── CMakeLists.txt
+├── CMakePresets.json
+├── vcpkg.json
+├── justfile
+└── CLAUDE.md
+```
+
+---
+
+## Justfile
+
+Every project MUST have a `justfile` with at minimum:
+
+```makefile
+default_preset := if os() == "linux" { "mingw-release" } else { "release" }
+preset := env("PRESET", default_preset)
+
+default:
+    @just --list
+
+configure: _vcpkg-mingw
+    @cmake --preset {{ preset }}
+
+build: configure
+    @cmake --build --preset {{ preset }}
+
+verbose-build: configure
+    cmake --build --preset {{ preset }}
+
+dist: build
+    @cmake --build --preset {{ preset }} --target dist
+
+clean:
+    rm -rf build/ dist/
+
+_vcpkg-mingw:
+    #!/usr/bin/env bash
+    if [[ "{{ preset }}" == mingw-* ]]; then
+        cd "$VCPKG_ROOT"
+        ./vcpkg install --triplet=x64-mingw-static \
+            --x-manifest-root="{{ justfile_directory() }}" \
+            --x-install-root="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed"
+    fi
+```
+
+---
+
+## Code Signing
+
+All release DLLs MUST be Authenticode-signed.
+
+```
+certs/
+├── root-ca.crt              # Self-signed root CA
+├── intermediate-ca.crt      # Intermediate CA
+├── code-signing.key         # Private key
+├── chain.pem                # Full cert chain
+└── generate-ca.sh           # CA generation script
+```
+
+```sh
+osslsigncode sign \
+    -certs certs/chain.pem \
+    -key certs/code-signing.key \
+    -n "Product Name" \
+    -t http://timestamp.digicert.com \
+    -in unsigned.dll \
+    -out signed.dll
+```
+
+In CI, signing material comes from GitHub secrets
+(`CODESIGN_PFX_BASE64`, `CODESIGN_PFX_PASSWORD`).
+
+---
+
+## Testing
+
+### Unit Tests (GTest under Wine)
+
+```sh
+cmake --preset mingw-debug -DBUILD_TESTING=ON
+cmake --build --preset mingw-debug
+wine build/mingw-debug/bin/test_token_auth.exe
+```
+
+### System Tests (Go)
+
+```sh
+cd tests/system && go test -v ./...
+cd tests/system && go test -v -short -run ".*DLL.*" ./...
+cd tests/plugins && go test -v -run "TestGroundTruth" ./...
+```
+
+### Auth Tests (three layers)
+
+1. **Ground truth** — no game binary, no network. Pure logic validation.
+2. **Unit** — cross-compiled GTest under Wine.
+3. **Integration** — needs game binary + MCP harness.
+
+---
+
+## Modern C++ Patterns
+
+### Use the language, not macros
+
+```cpp
+// Good
+constexpr auto kMaxRetries = 3uz;
+using Result = std::variant<Success, Error>;
+
+// Bad
+#define MAX_RETRIES 3
+typedef struct _Result Result;
+```
+
+### Ownership is explicit
+
+- `std::unique_ptr` for sole ownership. Never raw `new`/`delete`.
+- `std::shared_ptr` only when ownership is genuinely shared — not as a
+  default.
+- `std::span` for non-owning array views. Never pointer + size pairs.
+- `std::string_view` for non-owning string references. Never
+  `const char*` + strlen.
+
+### Error handling
+
+- Return `std::expected<T, E>` or `std::optional` instead of out-params.
+- Use `HRESULT` at API boundaries (DLL exports), convert to internal
+  types internally.
+- Never throw exceptions across DLL boundaries. Catch at the export
+  boundary and convert to HRESULT.
+
+### No jank
+
+- No `Sleep()` for timing. Use waits on events or fences.
+- No busy loops. Use condition variables, `WaitForSingleObject`, or
+  epoll/kqueue/IOCP.
+- No spinlocks in user code. Use `std::mutex`, SRWLOCK, or slim
+  read/writer locks.
+- No thread pools implemented from scratch. Use the Windows thread pool
+  API or `std::thread_pool` (C++23) when available.
+- No manual memory management. Use `std::vector`, `std::array`,
+  `std::string`. If you need a custom allocator, prove it with a
+  benchmark.
+
+---
+
+## Code Review Hard Stops
+
+| Problem                                    | Why It's a Stop                   | Fix                                |
+| ------------------------------------------ | --------------------------------- | ---------------------------------- |
+| DLL uses system include path for mingw dep | Breaks on other machines          | Add to vcpkg.json                  |
+| No CMakePresets.json                       | Every dev configures differently  | Add the standard preset matrix     |
+| Hardcoded toolchain path in CMakeLists.txt | Not portable                      | Use toolchain file from preset     |
+| DLL is not signed in dist/                 | Release can't be used             | Add `just sign` to release process |
+| Missing `.rc` version resource             | No PE version info                | Add VERSIONINFO resource           |
+| Plugin doesn't implement interface         | Won't load at runtime             | Follow plugin lifecycle            |
+| No Wine test step in CI                    | Cross-compiled DLL may not run    | Add Wine test job                  |
+| No ring-buffer trace in DLL                | First crash is blind              | Add flight recorder                |
+| Using printf for debug output              | Not structured, can't filter      | Use project logger                 |
+| C-style cast                               | Wrong in C++ world                | Use static_cast/reinterpret_cast   |
+| Suppressed warning without justification   | Hides real bugs                   | Fix the warning or justify inline  |
+| TODO/FIXME without owner or ticket         | Deferred tech debt                | File a ticket or remove            |
+| catch(...)                                 | Catches everything, knows nothing | Name the exception type            |
+| Thread created without a teardown path     | Resource leak on shutdown         | Async scope or RAII wrapper        |
+
+---
+
+## What Not to Do
+
+- Do NOT write shell scripts for cross-compilation. Use CMakePresets + just.
+- Do NOT mix MSVC and mingw object files. Pick one toolchain per build.
+- Do NOT use vcpkg ports that haven't been validated with
+  `x64-mingw-static`. Test before adding.
+- Do NOT ship a DLL that crashes under Wine without a trace dump.
+  The crash handler plugin exists for this reason.
+- Do NOT write new platform abstraction layers. Use existing `common/`
+  patterns. If none exist yet, surface it — don't write ad-hoc `#ifdef`
+  blocks.
+- Do NOT suppress warnings and move on. Treat warnings as errors.
+  `-Werror` is mandatory.
+- Do NOT commit commented-out code. Delete it. Git has history.
+- Do NOT leave a TODO that isn't attached to a ticket. A TODO without a
+  ticket number is a wish, not a task.
+- Do NOT use `#pragma pack` without documenting why. If you need
+  non-default alignment, name the struct layout requirement.
+- Do NOT call `malloc`/`free` in a DLL. Use the project's allocator or
+  `new`/`delete` with the correct CRT.
+- Do NOT open a raw file handle from DllMain. The loader lock will
+  deadlock you. Defer all I/O to the first API call.
