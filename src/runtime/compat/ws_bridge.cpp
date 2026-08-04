@@ -572,7 +572,7 @@ void InstallWebSocketBridge() {
                                   //   patched to DSC by PatchDscProvider string table rewrite)
                                   // +0x9c = state flags (0x04 = connected/logged in)
                                   *accountId  = (int64_t)discordId;
-                                  *loginState = (*loginState & ~0xFULL) | 2;  // PSN (patched to DSC)
+                                  *loginState = (*loginState & ~0xFULL) | 4;  // OVR_ORG (game numbering)
                                   *stateFlags = 0x04;
                                   Log(EchoVR::LogLevel::Debug,
                                       "[NEVR.WS] CNSUser AFTER:  acct=%lld state=0x%llx flags=0x%x",

@@ -255,6 +255,8 @@ VOID Initialize() {
   // strings (RULINGS.md 2026-07-20 login-prefix).
   BootLogTee::TeeFprintf("[NEVR.BOOT] patching DSC provider strings...\n");
   PatchDscProvider();
+  BootLogTee::TeeFprintf("[NEVR.BOOT] detouring GetProviderPrefix → OVR-ORG...\n");
+  PatchProviderPrefixOvrOrg();
 
   BootLogTee::TeeFprintf("[NEVR.BOOT] installing CSysDLL hooks...\n");
   {

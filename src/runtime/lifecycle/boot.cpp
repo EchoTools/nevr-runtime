@@ -5,6 +5,7 @@
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/lifecycle/initialize.h"
 #include "runtime/patch/mode_patches.h"
+#include "runtime/patch/xpid_patch.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/patch/asset_cdn.h"
 #include "runtime/ext/plugin_loader.h"

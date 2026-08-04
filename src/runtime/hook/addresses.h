@@ -567,6 +567,20 @@ constexpr size_t XPID_PLATFORM_COMPACT_FALLBACK_NAME_SIZE = 4;
 /// When CNSUser state isn't set yet during early init (login_state=0), the game's
 /// platform-name lookup hits this fallback and formats "[NSUSER] Creating user ???-1".
 /// Patched to "DSC-" so the early-init fallback matches the EULA-cache directory prefix
+
+/// CNSUser::GetProviderPrefix (fcn.14060d640) — the single choke-point for every
+/// xpid string the game constructs.  Reads user+0x90 & 0xf, returns a pointer
+/// to the corresponding string-table entry via a switch.  14 callers, including
+/// CNSIUsers::CreateUser, SaveLocalData, and three Send() paths.  Detour this to
+/// return the OVR-ORG entry unconditionally, and every xpid the game produces
+/// (CreateUser log, profile save, LobbyFindSession, LobbyPlayerSessions) uses
+/// the same prefix without any string-table patching.
+constexpr uintptr_t GET_PROVIDER_PREFIX = 0x60D640;
+
+/// RVA of the OVR-ORG compact-name string-table entry (case 4 in the game's
+/// internal provider switch).  "OVR-ORG" at VA 0x1416D7140.  Game numbering:
+/// 1=STM 2=PSN 3=XBX 4=OVR-ORG 5=OVR 6=BOT 7=DMO — differs from Nakama wire.
+constexpr uintptr_t PROVIDER_STRING_OVR_ORG = 0x16D7140;
 /// (N14: EULA acceptance cached per-platform-prefix, so a ???- prefix breaks cache lookup).
 constexpr uintptr_t XPID_PLATFORM_FALLBACK_PREFIX = 0x16D0F9C;
 constexpr size_t XPID_PLATFORM_FALLBACK_PREFIX_SIZE = 4;

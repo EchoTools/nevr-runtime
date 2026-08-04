@@ -2,7 +2,9 @@
 
 #include "runtime/hook/patching.h"
 #include "core/logging.h"
+#include "core/globals.h"
 #include "runtime/hook/addresses.h"
+#include <MinHook.h>
 // N120. This runs from initialize.cpp BEFORE the built-in log filter is up, and
 // its Log() output reached neither the console log nor nevr-boot.jsonl — so
 // across every captured run the patch reported NOTHING, success or failure, and
@@ -89,4 +91,37 @@ VOID PatchDscProvider() {
 
   Log(EchoVR::LogLevel::Info, "[NEVR.XPID] DSC provider patch applied (PSN-/?\?- → DSC- at 5 sites)");
   BootLogTee::TeeFprintf("[NEVR.XPID] DSC provider patch applied at 5 sites\n");
+}
+
+// ============================================================================
+// GetProviderPrefix detour — single choke-point for all game-constructed xpids
+// ============================================================================
+
+typedef void* (*GetProviderPrefixFn)(uint32_t* providerBits);
+static GetProviderPrefixFn g_RealGetProviderPrefix = nullptr;
+
+static void* GetProviderPrefixHook(uint32_t* /*providerBits*/) {
+  // Always return the OVR-ORG string-table pointer.  Every xpid the game
+  // constructs — CreateUser, SaveLocalData, LobbyFindSession,
+  // LobbyPlayerSessions, three Send() paths, and 7 more callers — flows
+  // through this one function.  Forcing OVR-ORG here makes every prefix
+  // consistent without touching any string table or CNSUser nibble.
+  return EchoVR::g_GameBaseAddress + PatchAddresses::PROVIDER_STRING_OVR_ORG;
+}
+
+VOID PatchProviderPrefixOvrOrg() {
+  using namespace PatchAddresses;
+  void* target = EchoVR::g_GameBaseAddress + GET_PROVIDER_PREFIX;
+  MH_STATUS st = MH_CreateHook(target, (void*)GetProviderPrefixHook,
+                                (void**)&g_RealGetProviderPrefix);
+  if (st == MH_OK) st = MH_EnableHook(target);
+  if (st == MH_OK) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.XPID] GetProviderPrefix detoured → OVR-ORG (14 callers)");
+    BootLogTee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour OK\n");
+  } else {
+    Log(EchoVR::LogLevel::Error, "[NEVR.XPID] GetProviderPrefix detour FAILED: %s",
+        MH_StatusToString(st));
+    BootLogTee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour FAILED: %s\n",
+                           MH_StatusToString(st));
+  }
 }
