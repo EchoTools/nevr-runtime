@@ -84,6 +84,23 @@ static void __fastcall Detour_ApplyEarlyQuitState(void* playerCS, uint64_t penal
     if (field_64828 == (uint64_t)-1) {
         PluginLog("  *** BUG CONFIRMED: +0x64828 is -1, lockout will never activate ***");
     }
+
+    // Force bit 46: ApplyEarlyQuitState clears it unconditionally when state
+    // changes, but the lockoutcountdownactive expression reads only this bit.
+    // We must set it after the original runs.
+    uint64_t* flags = *(uint64_t**)((uint8_t*)playerCS + 0x2da0);
+    if (flags) {
+        *flags |= (1ULL << 46);
+        PluginLog("FORCE-LOCKOUT: flags bit 46 set (flags[0] = 0x%llx)", *flags);
+    } else {
+        PluginLog("FORCE-LOCKOUT: flags pointer at +0x2da0 is null, cannot set bit 46");
+    }
+
+    // Force feature flags byte: the SNSEarlyQuitFeatureFlags handler would
+    // normally write this, but silent mode blocks it. Set all 4 bits.
+    *(uint8_t*)((uint8_t*)playerCS + 0x64847) = 0x0f;
+    PluginLog("FORCE-LOCKOUT: feature flags byte +0x64847 = 0x%02x",
+              *(uint8_t*)((uint8_t*)playerCS + 0x64847));
 }
 
 /*
