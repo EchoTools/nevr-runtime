@@ -563,9 +563,10 @@ void InstallWebSocketBridge() {
                                   int64_t*  accountId  = (int64_t*)(user + 0x88);
                                   uint64_t* loginState = (uint64_t*)(user + 0x90);
                                   uint32_t* stateFlags = (uint32_t*)(user + 0x9c);
-                                  Log(EchoVR::LogLevel::Debug,
-                                      "[NEVR.WS] CNSUser BEFORE: acct=%lld state=0x%llx flags=0x%x",
-                                      (long long)*accountId, (unsigned long long)*loginState, *stateFlags);
+                                  Log(EchoVR::LogLevel::Info,
+                                      "[NEVR.WS] CNSUser BEFORE: acct=%lld state=0x%llx provider=%d flags=0x%x",
+                                      (long long)*accountId, (unsigned long long)*loginState,
+                                      (int)(*loginState & 0xf), *stateFlags);
                                   // Set the user's XPID: account_id and provider enum.
                                   // +0x88 = account_id (discord ID from JWT)
                                   // +0x90 low nibble = provider enum (2 = PSN in binary,
@@ -592,17 +593,6 @@ void InstallWebSocketBridge() {
                         }
                         g_lastInjectedDiscordId = discordId;
                         std::string loginMsg = BuildLoginRequest(discordId, platformCode, accountName, bearerToken);
-                        // Hex dump payload bytes (skip marker 0-7 + symbol 8-15 + length 16-23)
-                        {
-                          const unsigned char* p = reinterpret_cast<const unsigned char*>(loginMsg.data()) + 24;
-                          size_t payloadLen = loginMsg.size() - 24;
-                          char hex[256]; size_t off = 0;
-                          for (size_t i = 0; i < payloadLen && i < 48; i++, p++) {
-                            off += snprintf(hex + off, sizeof(hex) - off, "%02x", *p);
-                          }
-                          Log(EchoVR::LogLevel::Info,
-                              "[NEVR.WS] LoginRequest payload[%zu]: %s", payloadLen, hex);
-                        }
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
                         Log(EchoVR::LogLevel::Info,
