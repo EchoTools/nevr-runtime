@@ -629,6 +629,23 @@ TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) 
   EXPECT_TRUE(json["system_info"]["memory_total"].is_number_unsigned());
 }
 
+// The login wire payload, rather than SystemInfo in isolation, must carry
+// usable host-capacity measurements.  A positive value proves that the JSON
+// serialization path preserves the real measurements instead of emitting the
+// old placeholder zeroes.
+TEST(WsBridgeLoginRequest, JsonEmitsPositiveCpuAndRamMeasurements) {
+  const std::string request = TestHook_BuildLoginRequest(78, 3, "Player", "token");
+  constexpr size_t kJsonOffset = 56;
+  ASSERT_GT(request.size(), kJsonOffset);
+  ASSERT_EQ(request.back(), '\0');
+  const nlohmann::json json = nlohmann::json::parse(
+      request.substr(kJsonOffset, request.size() - kJsonOffset - 1));
+
+  const auto& systemInfo = json.at("system_info");
+  EXPECT_GT(systemInfo.at("num_physical_cores").get<uint64_t>(), 0U);
+  EXPECT_GT(systemInfo.at("memory_total").get<uint64_t>(), 0U);
+}
+
 TEST(WsBridgePlatformPrefix, EveryDefinedPlatformHasTheNakamaPrefix) {
   EXPECT_STREQ(TestHook_PlatformPrefix(0), "STM");
   EXPECT_STREQ(TestHook_PlatformPrefix(1), "DSC");
