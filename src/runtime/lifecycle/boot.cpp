@@ -232,6 +232,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       g_noConsole = TRUE;
     } else if (lstrcmpW(arg, L"-windowed") == 0) {
       g_isWindowed = TRUE;
+      g_noOvr = TRUE;  // -windowed implies -noovr (no VR headset under Wine)
     } else if (lstrcmpW(arg, L"-noexitonerror") == 0) {
       g_exitOnError = FALSE;
     } else if (lstrcmpW(arg, L"-exitonerror") == 0) {
@@ -447,6 +448,12 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // Crash frames in modules/plugins are unattributable without this (N85).
   RefreshModuleCache();
   ResolveShutdownDependencies();  // N62
+
+  // N87: re-arm the console ctrl handler so CTRL+C works in client mode.
+  // Our handler is installed early (behind the game's) during Initialize().
+  // RearmConsoleCtrlHandler re-registers it at the front so it fires first.
+  // Previously this was only called from the server path (GameServerLib::Terminate).
+  RearmConsoleCtrlHandler();
 
   Log(EchoVR::LogLevel::Info,
       "[NEVR.BOOT] runtime bootstrap complete early_config=%d bridge=%d port=%u",

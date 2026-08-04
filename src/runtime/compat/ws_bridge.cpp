@@ -329,7 +329,7 @@ void InstallWebSocketBridge() {
   }
 
   // Callbacks set after successful listen(), before start().
-  g_server->setOnClientMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnClientMessageCallback", 
+  auto onClientMessage = GuardWsCallback("ws_bridge.cpp:setOnClientMessageCallback",
       [](std::shared_ptr<ix::ConnectionState> connState,
          ix::WebSocket& gameWs,
          const ix::WebSocketMessagePtr& msg) {
@@ -343,7 +343,7 @@ void InstallWebSocketBridge() {
             // won't have the server-side state needed for PlayerSessionRequest.
             // Don't inject LoginRequest — the session is already logged in.
             if (connIdx >= 2 && g_loginRemoteWs) {
-              Log(EchoVR::LogLevel::Debug,
+              Log(EchoVR::LogLevel::Info,
                   "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), sharing login session (no LoginRequest)",
                   connIdx, (void*)&gameWs);
               auto pair = std::make_unique<ProxyPair>();
@@ -898,14 +898,35 @@ void InstallWebSocketBridge() {
           default:
             break;
         }
-      }));
+      });
 
+  g_server->setOnClientMessageCallback(onClientMessage);
   g_server->start();
   g_bridgeEnabled = true;
 
   Log(EchoVR::LogLevel::Info,
       "[NEVR.WS] Proxy listening on ws://127.0.0.1:%u -> %s",
       g_proxyPort, g_remoteUri.c_str());
+
+  // N146: pnsradmatchmaking uses Rad's R14NETCLIENT with a hardcoded
+  // fallback port (42148) when matchingservice_host has no explicit port.
+  // This connection bypasses our JsonValueAsStringHook.  Bind a second
+  // listener on that port so the matchmaker reaches the bridge.
+  {
+    static auto s_matchServer = std::make_unique<ix::WebSocketServer>(42148, "127.0.0.1");
+    s_matchServer->disablePerMessageDeflate();
+    s_matchServer->setOnClientMessageCallback(onClientMessage);
+    auto [ok, err] = s_matchServer->listen();
+    if (ok) {
+      s_matchServer->start();
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.WS] Matchmaker listener on ws://127.0.0.1:42148");
+    } else {
+      s_matchServer.reset();  // port taken — matchmaker will fail, same as before
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.WS] Matchmaker port 42148 unavailable: %s", err.c_str());
+    }
+  }
 }
 
 void ShutdownWebSocketBridge() {
