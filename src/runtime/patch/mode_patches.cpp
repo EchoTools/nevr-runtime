@@ -788,6 +788,23 @@ VOID PatchDisableWwise() {
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] VOIP components preserved for multiplayer");
 }
 
+// N146: Patch the PreprocessCommandLine spectator-stream check so the game
+// always acts as if -spectatorstream was provided.  The original bytes at
+// 0x140116F3D are a 6-byte JE (0f 84 df 00 00 00) that branches around
+// the spectator-stream setup.  NOPping it forces the game into windowed
+// no-VR mode just like the native -spectatorstream flag does.
+VOID PatchSpectatorStreamAlways() {
+  uintptr_t addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + PatchAddresses::SPECTATORSTREAM_CHECK;
+  static const unsigned char kExpected[6] = {0x0f, 0x84, 0xdf, 0x00, 0x00, 0x00};
+  if (memcmp(reinterpret_cast<void*>(addr), kExpected, 6) != 0) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Spectator-stream check prologue mismatch at 0x%llx", addr);
+    return;
+  }
+  static const BYTE nops[6] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+  ProcessMemcpy(reinterpret_cast<VOID*>(addr), const_cast<BYTE*>(nops), 6);
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Spectator-stream check NOP'd — forced windowed/no-VR mode");
+}
+
 // ===================================================================================================
 // Server Frame Pacing Optimization
 // ===================================================================================================

@@ -70,6 +70,13 @@ void PreflightRuntimeBootstrap() {
     }
   }
   LocalFree(argv);
+
+  // N146: -windowed forces spectator-stream mode (windowed, no VR) by NOPping
+  // the game's command-line check.  This runs BEFORE the original
+  // PreprocessCommandLine so the game never attempts Oculus init.
+  if (g_isWindowed) {
+    PatchSpectatorStreamAlways();
+  }
 }
 
 }  // namespace

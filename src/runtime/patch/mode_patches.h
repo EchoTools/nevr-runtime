@@ -16,6 +16,7 @@ VOID PatchDeadlockMonitor();
 VOID PatchBlockOculusSDK();
 VOID PatchDisableWwise();
 VOID PatchLogServerProfile();
+VOID PatchSpectatorStreamAlways();
 
 // Hook installation wrappers (called from Initialize)
 VOID InstallEntityHooks();
