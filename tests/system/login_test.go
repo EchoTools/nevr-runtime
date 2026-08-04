@@ -36,7 +36,9 @@ func requireLiveClient(t *testing.T) string {
 			prefix = filepath.Join(gameDir, ".wineprefix")
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
+		// Private arena reaches the required login/session-reuse evidence well
+		// before this bound; it deliberately avoids waiting on matchmaking.
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "wine", "./echovr.exe", "-windowed", "-mp",
 			"-gametype", "echo_arena_private")
