@@ -7,6 +7,7 @@
 #include <setjmp.h>
 
 #include "runtime/lifecycle/cli.h"
+#include "runtime/patch/broadcaster_hook_stats.h"
 #include "runtime/hook/patching.h"
 #include "core/globals.h"
 #include "core/logging.h"
@@ -399,10 +400,9 @@ static volatile LONG g_dispatchHookEntries = 0;
 // never trips because its function is never called is not evidence of anything.
 // These counters make the two states distinguishable.
 void LogBroadcasterHookStats() {
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.PATCH] broadcaster hook stats listen_entries=%ld dispatch_entries=%ld "
-      "(N83/N84 evidence — zero entries means idle runs prove nothing)",
-      g_listenHookEntries, g_dispatchHookEntries);
+  char line[192] = {};
+  BroadcasterHookStats::Format(line, sizeof(line), g_listenHookEntries, g_dispatchHookEntries);
+  Log(EchoVR::LogLevel::Info, "%s", line);
 }
 
 static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 arg4, INT64 arg5) {
@@ -883,4 +883,3 @@ VOID InstallGameSpaceHook() {
   PatchDetour(&OriginalInitializeGlobalGameSpace, reinterpret_cast<PVOID>(InitializeGlobalGameSpaceHook), "InitializeGlobalGameSpace");
   Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] InitializeGlobalGameSpace hook installed (server crash fix)");
 }
-

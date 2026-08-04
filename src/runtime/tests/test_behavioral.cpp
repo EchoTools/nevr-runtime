@@ -174,6 +174,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return {}; }
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/hook/addresses.h"
+#include "runtime/patch/broadcaster_hook_stats.h"
 
 // WOULD-FAIL-IF (N68): delete TickPlugins iteration loop in plugin_loader.cpp.
 // WOULD-FAIL-IF (N68-module): delete TickModules loop in module_loader.cpp.
@@ -530,6 +531,14 @@ TEST(WsBridgeCallbackGuard, ContainsStdExceptionsAtTheCallbackBoundary) {
   std::lock_guard<std::mutex> lock(g_testLogMutex);
   ASSERT_EQ(g_testLogMessages.size(), 1U);
   EXPECT_NE(g_testLogMessages.front().find("intentional callback exception"), std::string::npos);
+}
+
+TEST(BroadcasterHookStats, FormatsMockedLivenessCounters) {
+  char line[192] = {};
+  EXPECT_GT(BroadcasterHookStats::Format(line, sizeof(line), 17, 9), 0);
+  EXPECT_STREQ(line,
+      "[NEVR.PATCH] broadcaster hook stats listen_entries=17 dispatch_entries=9 "
+      "(N83/N84 evidence — zero entries means idle runs prove nothing)");
 }
 
 // ============================================================================

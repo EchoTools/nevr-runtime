@@ -13,6 +13,7 @@ set(PATCHES_SOURCES
     "lifecycle/service_map.cpp"
     "lifecycle/service_config.cpp"
     "patch/mode_patches.cpp"
+    "patch/broadcaster_hook_stats.cpp"
     "lifecycle/crash_recovery.cpp"
     "lifecycle/crash_dump_format.cpp"
     "hook/hook_guard.cpp"
@@ -54,6 +55,7 @@ set(PATCHES_HEADERS
     "lifecycle/service_map.h"
     "lifecycle/service_config.h"
     "patch/mode_patches.h"
+    "patch/broadcaster_hook_stats.h"
     "lifecycle/crash_recovery.h"
     "lifecycle/crash_dump_format.h"
     "lifecycle/readable_memory.h"
@@ -297,6 +299,7 @@ if(BUILD_TESTING)
       # Linked as production source (not a stub) so the test drives the real
       # guard — a stub here would make the N84 tests tautological.
       hook/hook_guard.cpp
+      patch/broadcaster_hook_stats.cpp
     )
     target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS
       PROJECT_VERSION="${PROJECT_VERSION}"
@@ -313,6 +316,7 @@ if(BUILD_TESTING)
       ext/module_loader.cpp
       compat/ws_bridge.cpp
       hook/symbol_corpus.cpp
+      patch/broadcaster_hook_stats.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON
     )
     target_include_directories(test_behavioral PRIVATE
