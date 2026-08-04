@@ -103,7 +103,7 @@ function(set_project_version_from_git)
         PARENT_SCOPE)
   endif()
 
-  set(GIT_COMMIT_HASH,
+  set(GIT_COMMIT_HASH
       "${GIT_COMMIT_HASH}"
       PARENT_SCOPE)
 

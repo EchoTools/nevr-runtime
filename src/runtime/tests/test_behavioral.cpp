@@ -806,11 +806,13 @@ TEST(BuildIdentity, ProjectVersionIsNotFallback) {
 TEST(BuildIdentity, GitCommitIsNotEmpty) {
     const BuildIdentity::Info& id = BuildIdentity::Get();
     EXPECT_FALSE(id.git_commit.empty());
+    EXPECT_NE(id.git_commit, "unknown");
 }
 
 TEST(BuildIdentity, GitDescribeIsNotEmpty) {
     const BuildIdentity::Info& id = BuildIdentity::Get();
     EXPECT_FALSE(id.git_describe.empty());
+    EXPECT_NE(id.git_describe, "unknown");
 }
 
 TEST(BuildIdentity, BuildTypeIsSet) {
