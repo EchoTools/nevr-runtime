@@ -2,6 +2,7 @@
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/lifecycle/crash_recovery_sites.h"
+#include "runtime/lifecycle/crash_dump_format.h"
 
 #include <processthreadsapi.h>
 #include <psapi.h>
@@ -391,21 +392,6 @@ static void WriteCrashDump(PEXCEPTION_POINTERS ex) {
     return -1;
   };
 
-  const char* excName = "Unknown";
-  switch (rec->ExceptionCode) {
-    case EXCEPTION_ACCESS_VIOLATION: excName = "ACCESS_VIOLATION"; break;
-    case EXCEPTION_BREAKPOINT: excName = "BREAKPOINT"; break;
-    case EXCEPTION_ILLEGAL_INSTRUCTION: excName = "ILLEGAL_INSTRUCTION"; break;
-    case EXCEPTION_STACK_OVERFLOW: excName = "STACK_OVERFLOW"; break;
-    case EXCEPTION_INT_DIVIDE_BY_ZERO: excName = "INT_DIVIDE_BY_ZERO"; break;
-    // 0x20474343 == 'GCC ' — the GNU C++ throw magic used by MinGW's __cxa_throw.
-    // The game is MSVC-built and cannot raise this; it can only come from a NEVR
-    // DLL. An unhandled one reaches the game's top-level filter and kills the
-    // server (CPP addendum: never throw across a DLL boundary).
-    case 0x20474343: excName = "CXX_THROW_FROM_NEVR_DLL"; break;
-    default: break;
-  }
-
   const INT64 ripRva = rva(ctx->Rip);
   VehPrintf("[NEVR.CRASH] === CRASH DUMP ===");
   if (const char* site = CrashRecovery::LookupKnownNullDerefSite(ripRva)) {
@@ -413,11 +399,11 @@ static void WriteCrashDump(PEXCEPTION_POINTERS ex) {
               "note=*(this+0x2DA0) dereferenced without a null check",
               site);
   }
-  VehPrintf("[NEVR.CRASH] exception name=%s code=0x%08lX rip=0x%llX rip_rva=%s0x%llX tid=%lu",
-            excName, rec->ExceptionCode, static_cast<unsigned long long>(ctx->Rip),
-            ripRva >= 0 ? "game+" : "external:",
-            static_cast<unsigned long long>(ripRva >= 0 ? ripRva : ctx->Rip),
-            GetCurrentThreadId());
+  char exception_summary[256] = {};
+  CrashRecovery::FormatCrashExceptionSummary(
+      exception_summary, sizeof(exception_summary), rec->ExceptionCode, ctx->Rip,
+      base, GetCurrentThreadId());
+  VehPrintf("%s", exception_summary);
 
   if (rec->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && rec->NumberParameters >= 2) {
     const char* op = rec->ExceptionInformation[0] == 0   ? "READ"

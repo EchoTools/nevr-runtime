@@ -14,6 +14,7 @@ set(PATCHES_SOURCES
     "lifecycle/service_config.cpp"
     "patch/mode_patches.cpp"
     "lifecycle/crash_recovery.cpp"
+    "lifecycle/crash_dump_format.cpp"
     "hook/hook_guard.cpp"
     "hook/hook_liveness.cpp"
     "lifecycle/state_machine.cpp"
@@ -54,6 +55,7 @@ set(PATCHES_HEADERS
     "lifecycle/service_config.h"
     "patch/mode_patches.h"
     "lifecycle/crash_recovery.h"
+    "lifecycle/crash_dump_format.h"
     "lifecycle/readable_memory.h"
     "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
@@ -367,8 +369,10 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_abi nevr_api ws2_32)
     gtest_discover_tests(test_messages DISCOVERY_MODE PRE_TEST)
 
-    add_executable(test_crash_recovery tests/test_crash_recovery.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    add_executable(test_crash_recovery
+      tests/test_crash_recovery.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp lifecycle/crash_dump_format.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_crash_recovery DISCOVERY_MODE PRE_TEST)
