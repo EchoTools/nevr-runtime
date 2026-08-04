@@ -523,34 +523,28 @@ static bool IsValidSymbolId(uint64_t value) {
 
 // Helper to serialize a loadout instance to JSON
 static std::string SerializeLoadoutInstanceToJson(const LoadoutInstance* instance) {
-  std::string json = "{";
+  nlohmann::json j;
 
-  // Instance name as hex (can be converted via hashes.txt)
-  char buf[128];
-  snprintf(buf, sizeof(buf), "\"instance_name\":\"0x%016llX\"", (unsigned long long)instance->instanceName);
-  json += buf;
+  char buf[32];
+  snprintf(buf, sizeof(buf), "0x%016llX", (unsigned long long)instance->instanceName);
+  j["instance_name"] = buf;
 
-  // Serialize items - filter out invalid/garbage entries
-  json += ",\"items\":{";
-  bool first = true;
+  auto& items = j["items"];
+  items = nlohmann::json::object();
 
   if (instance->itemsArrayPtr && instance->itemCount > 0) {
-    LoadoutItem* items = reinterpret_cast<LoadoutItem*>(instance->itemsArrayPtr);
+    LoadoutItem* rawItems = reinterpret_cast<LoadoutItem*>(instance->itemsArrayPtr);
     for (uint64_t i = 0; i < instance->itemCount && i < 32; i++) {
-      // Skip invalid items (garbage data at end of array)
-      if (!IsValidSymbolId(items[i].slotType)) continue;
+      if (!IsValidSymbolId(rawItems[i].slotType)) continue;
 
-      if (!first) json += ",";
-      first = false;
-
-      snprintf(buf, sizeof(buf), "\"0x%016llX\":\"0x%016llX\"", (unsigned long long)items[i].slotType,
-               (unsigned long long)items[i].equippedItem);
-      json += buf;
+      char keyBuf[32], valBuf[32];
+      snprintf(keyBuf, sizeof(keyBuf), "0x%016llX", (unsigned long long)rawItems[i].slotType);
+      snprintf(valBuf, sizeof(valBuf), "0x%016llX", (unsigned long long)rawItems[i].equippedItem);
+      items[keyBuf] = valBuf;
     }
   }
 
-  json += "}}";
-  return json;
+  return j.dump();
 }
 
 void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {

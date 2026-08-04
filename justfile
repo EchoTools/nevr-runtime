@@ -816,8 +816,12 @@ verify:
     sensor_stage1 "N123 login display name sourced" "src/runtime/compat/ws_bridge.cpp" "$N123_RC"
     sensor_nonempty "N123 login display name sourced" "non-comment lines of compat/ws_bridge.cpp" "$N123_WS"
     N123_FLAT=$(tr -d '\\' <<<"$N123_WS")
-    if ! grep -qF '"displayname":"%s"' <<<"$N123_FLAT"; then
-        echo "verify: FAIL — N123 the login displayname is no longer a substituted field." >&2
+    # N146: displayname is now set via nlohmann_json, not a hand-built snprintf
+    # format string.  The old pattern was "\"displayname\":\"%s\""; the new one
+    # is j["displayname"] = resolvedName (where resolvedName traces back to
+    # TokenAuth_GetUsername, verified by the second check below).
+    if ! grep -qE 'displayname.*=.*resolvedName|displayname.*=.*displayName' <<<"$N123_FLAT"; then
+        echo "verify: FAIL — N123 the login displayname is no longer sourced from a variable." >&2
         echo "A literal here makes every client announce the same name; eight players render eight identical nameplates and the service cannot tell them apart." >&2
         exit 1
     fi

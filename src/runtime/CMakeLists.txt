@@ -294,7 +294,11 @@ if(BUILD_TESTING)
       # guard — a stub here would make the N84 tests tautological.
       hook/hook_guard.cpp
     )
-    target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS)
+    target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS
+      PROJECT_VERSION="${PROJECT_VERSION}"
+      GIT_COMMIT_HASH="${GIT_COMMIT_HASH}"
+      GIT_DESCRIBE="${GIT_DESCRIBE}"
+      CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
     # Disable PCH — the test has its own stub headers and must not depend on
     # the nevr_runtime precompiled header (which pulls in MinHook, etc.).
     set_source_files_properties(

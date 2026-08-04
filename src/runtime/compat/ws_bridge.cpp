@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <nlohmann/json.hpp>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -180,88 +181,67 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
                        (host.wine_host_os.empty() ? "" : " on " + host.wine_host_os))
                     : std::string();
 
-  // N123. The name goes inside a hand-built JSON string, so a username carrying a
-  // quote or a backslash would produce a malformed payload. Escape the two
-  // characters that can break the document, and drop control characters rather
-  // than emit a raw byte the parser will reject.
-  auto jsonEscape = [](const std::string& in) {
-    std::string out;
-    out.reserve(in.size() + 8);
-    for (char c : in) {
-      if (c == '"' || c == '\\') { out.push_back('\\'); out.push_back(c); }
-      else if (static_cast<unsigned char>(c) >= 0x20) { out.push_back(c); }
-    }
-    return out;
-  };
-
   // Empty means the account's name is genuinely not known yet. Fall back to the
   // account id — a true, unique identifier — rather than a constant. A shared
   // placeholder is what made every NEVR client announce the same name.
-  std::string resolvedName = jsonEscape(displayName);
+  std::string resolvedName = displayName;
   if (resolvedName.empty()) resolvedName = std::to_string(accountId);
 
-  // LoginProfile JSON — matches the game's SNSLogInRequestv2 format
+  // LoginProfile JSON — matches the game's SNSLogInRequestv2 format.
   //
-  // N112: nevr_identity carries the NEVR build identity (version, commit,
-  // git describe, build type). nevr_plugins is the loaded-plugin manifest.
-  // Both are sent so the login service can discriminate builds and verify
-  // that a client's plugin set matches what the server expects.
+  // N146: nlohmann_json instead of hand-built snprintf.  A hand-built format
+  // string cannot escape its own values, so a version string or display name
+  // containing a double-quote produces malformed JSON the server rejects.
+  // nlohmann::json guarantees valid output regardless of input.
   const BuildIdentity::Info& buildId = BuildIdentity::Get();
   const std::string pluginManifest = BuildPluginManifestJson();
 
-  char json[4096];
-  snprintf(json, sizeof(json),
-    "{"
-      "\"accountid\":%llu,"
-      "\"displayname\":\"%s\","
-      "\"bypassauth\":false,"
-      "\"access_token\":\"%s\","
-      "\"nonce\":\"\","
-      "\"buildversion\":631547,"
-      "\"lobbyversion\":0,"
-      "\"appid\":0,"
-      "\"publisher_lock\":\"\","
-      "\"hmdserialnumber\":\"nEVR-Wine\","
-      "\"desiredclientprofileversion\":0,"
-      "\"nevr_identity\":{"
-        "\"version\":\"%s\","
-        "\"commit\":\"%s\","
-        "\"build\":\"%s\","
-        "\"build_type\":\"%s\""
-      "},"
-      "\"nevr_plugins\":__PLUGINS__,"
-      "\"system_info\":{"
-        "\"headset_type\":\"No VR\","
-        "\"driver_version\":\"%s\","
-        "\"network_type\":\"\","
-        "\"video_card\":\"\","
-        "\"cpu\":\"%s\","
-        "\"num_physical_cores\":%u,"
-        "\"num_logical_cores\":%u,"
-        "\"memory_total\":%llu,"
-        "\"memory_used\":%llu,"
-        "\"dedicated_gpu_memory\":0"
-      "}"
-    "}",
-    (unsigned long long)accountId,
-    resolvedName.c_str(),
-    accessToken.c_str(),
-    buildId.project_version.c_str(),
-    buildId.git_commit.c_str(),
-    buildId.git_describe.c_str(),
-    buildId.build_type.c_str(),
-    driverVersion.c_str(),
-    host.cpu_brand.c_str(),
-    host.physical_cores,
-    host.logical_cores,
-    (unsigned long long)host.memory_total_mb,
-    (unsigned long long)host.memory_used_mb);
+  std::string jsonStr;
+  {
+    nlohmann::json j;
+    j["accountid"] = accountId;
+    j["displayname"] = resolvedName;
+    j["bypassauth"] = false;
+    j["access_token"] = accessToken;
+    j["nonce"] = "";
+    j["buildversion"] = 631547;
+    j["lobbyversion"] = 0;
+    j["appid"] = 0;
+    j["publisher_lock"] = "";
+    j["hmdserialnumber"] = "nEVR-Wine";
+    j["desiredclientprofileversion"] = 0;
 
-  // Splice in the plugin manifest (a raw JSON array, not a quoted string).
-  std::string jsonStr(json);
-  size_t plugPos = jsonStr.find("__PLUGINS__");
-  if (plugPos != std::string::npos) {
-    jsonStr.replace(plugPos, 12, pluginManifest);
+    auto& ident = j["nevr_identity"];
+    ident["version"] = buildId.project_version;
+    ident["commit"] = buildId.git_commit;
+    ident["build"] = buildId.git_describe;
+    ident["build_type"] = buildId.build_type;
+
+    // nevr_plugins: parse the pre-built manifest so the field is a JSON array,
+    // not a string-escaped copy of one.
+    if (!pluginManifest.empty()) {
+      try {
+        j["nevr_plugins"] = nlohmann::json::parse(pluginManifest);
+      } catch (...) {
+        j["nevr_plugins"] = nlohmann::json::array();
+      }
+    } else {
+      j["nevr_plugins"] = nlohmann::json::array();
+    }
+
+    auto& sys = j["system_info"];
+    sys["headset_type"] = "No VR";
+    sys["driver_version"] = driverVersion;
+    sys["network_type"] = "";
+    sys["video_card"] = "";
+    sys["cpu"] = host.cpu_brand;
+    sys["num_physical_cores"] = host.physical_cores;
+    sys["num_logical_cores"] = host.logical_cores;
+    sys["memory_total"] = host.memory_total_mb;
+    sys["memory_used"] = host.memory_used_mb;
+    sys["dedicated_gpu_memory"] = 0;
+
+    jsonStr = j.dump();
   }
 
   size_t jsonLen = jsonStr.size() + 1;  // include null terminator

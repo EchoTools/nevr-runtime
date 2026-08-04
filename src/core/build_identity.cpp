@@ -32,10 +32,15 @@ namespace BuildIdentity {
 const Info& Get() {
   static const Info info = []() {
     Info i;
-    i.project_version = NEVR_STR(PROJECT_VERSION);
-    i.git_commit      = NEVR_STR(GIT_COMMIT_HASH);
-    i.git_describe    = NEVR_STR(GIT_DESCRIBE);
-    i.build_type      = NEVR_STR(CMAKE_BUILD_TYPE);
+    // PROJECT_VERSION et al. are already string literals (defined by CMake's
+    // add_compile_definitions with quoted values).  Assigning them directly
+    // avoids NEVR_STR() double-stringification, which produced strings
+    // containing literal double-quote characters that broke JSON encoding
+    // in BuildLoginRequest (N146).
+    i.project_version = PROJECT_VERSION;
+    i.git_commit      = GIT_COMMIT_HASH;
+    i.git_describe    = GIT_DESCRIBE;
+    i.build_type      = CMAKE_BUILD_TYPE;
     // git describe --dirty appends "-dirty" when the working tree has
     // uncommitted changes. Derive the flag from the string the build
     // system already computed rather than adding a second source of truth.
