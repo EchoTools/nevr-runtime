@@ -1641,11 +1641,11 @@ verify:
     # suite; raising it is part of adding tests, while a drop is always a
     # regression that needs an explicit sensor update and review.
     TEST_COUNT=$(grep -hE '^TEST(_F)?\(' src/runtime/tests/*.cpp | wc -l)
-    if [ "$TEST_COUNT" -lt 154 ]; then
-        echo "verify: FAIL — runtime GTest count fell to $TEST_COUNT (floor 154)." >&2
+    if [ "$TEST_COUNT" -lt 157 ]; then
+        echo "verify: FAIL — runtime GTest count fell to $TEST_COUNT (floor 157)." >&2
         exit 1
     fi
-    echo "verify: runtime GTest declarations=$TEST_COUNT (floor 154)"
+    echo "verify: runtime GTest declarations=$TEST_COUNT (floor 157)"
     echo "verify: OK ({{ preset }})"
 
 # ServerDB token-auth BAC smoke test removed 2026-08-02: the test script

@@ -353,16 +353,14 @@ if(BUILD_TESTING)
     # a small independent executable so JWT regressions do not require the
     # network-facing token-auth module or a live Nakama service.
     add_executable(test_token_auth
-      tests/test_token_auth.cpp
-      "${CMAKE_SOURCE_DIR}/src/modules/token-auth/src/device_poll_response.cpp")
+      tests/test_token_auth.cpp)
     set_source_files_properties(tests/test_token_auth.cpp
-      "${CMAKE_SOURCE_DIR}/src/modules/token-auth/src/device_poll_response.cpp"
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_token_auth PRIVATE
       ${CMAKE_SOURCE_DIR}/src
       ${CMAKE_SOURCE_DIR}/src/modules/token-auth/src)
     target_link_libraries(test_token_auth PRIVATE
-      GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json)
+      GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json token_auth)
     gtest_discover_tests(test_token_auth DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_messages tests/test_messages.cpp server/messages.cpp)

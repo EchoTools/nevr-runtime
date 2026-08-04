@@ -6,6 +6,12 @@
 
 #include "core/auth_token.h"
 #include "device_poll_response.h"
+#include "extension/module_interface.h"
+#include "token_auth.h"
+
+extern "C" int token_auth_Init(const NvrModuleContext* ctx);
+extern "C" void token_auth_Shutdown(void);
+extern "C" uint32_t token_auth_ApiVersion(void);
 
 namespace {
 
@@ -14,6 +20,12 @@ constexpr char kJwtSignature[] = "signature";
 
 std::string MakeJwt(const std::string& payload) {
   return std::string(kJwtHeader) + "." + payload + "." + kJwtSignature;
+}
+
+NvrModuleContext MakeModuleContext(uint32_t flags) {
+  NvrModuleContext context{};
+  context.flags = flags;
+  return context;
 }
 
 }  // namespace
@@ -96,4 +108,28 @@ TEST(DevicePollResponse, JwtExpiryTakesPrecedenceThenFallsBack) {
   EXPECT_EQ(TokenAuth::ResolveAccessTokenExpiry(kNow, "not-a-jwt", 10), 1010U);
   EXPECT_EQ(TokenAuth::ResolveAccessTokenExpiry(kNow, "not-a-jwt", std::nullopt),
             kNow + kFallbackAccessTokenLifetimeSec);
+}
+
+TEST(TokenAuthModule, ServerHostSkipsDeviceAuthentication) {
+  const NvrModuleContext context = MakeModuleContext(NEVR_MODULE_HOST_IS_SERVER);
+
+  EXPECT_EQ(token_auth_Init(&context), 0);
+  EXPECT_TRUE(TokenAuth::GetToken().empty());
+  EXPECT_EQ(TokenAuth::GetDiscordId(), 0U);
+  EXPECT_TRUE(TokenAuth::GetUsername().empty());
+  token_auth_Shutdown();
+}
+
+TEST(TokenAuthModule, ClientWithoutRequiredConfigDisablesCleanly) {
+  const NvrModuleContext context = MakeModuleContext(NEVR_MODULE_HOST_IS_CLIENT);
+
+  EXPECT_EQ(token_auth_Init(&context), 0);
+  EXPECT_TRUE(TokenAuth::GetToken().empty());
+  EXPECT_EQ(TokenAuth::GetDiscordId(), 0U);
+  EXPECT_TRUE(TokenAuth::GetUsername().empty());
+  token_auth_Shutdown();
+}
+
+TEST(TokenAuthModule, ReportsThePublishedModuleApiVersion) {
+  EXPECT_EQ(token_auth_ApiVersion(), NEVR_MODULE_API_VERSION);
 }
