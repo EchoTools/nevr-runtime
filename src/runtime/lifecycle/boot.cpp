@@ -47,8 +47,11 @@ namespace {
 // N146: only this minimal state is needed before the original command-line
 // preprocessing.  In particular, do not start modules, plugins, file I/O, or
 // the bridge here: client D3D initialization is still in the original call.
-// -server is needed for the config loader's fail-loud policy; -config-path is
-// needed by LoadLocalConfigHook while the original is running.
+// -server is needed for the config loader's fail-loud policy and must also
+// establish the native non-VR/windowed bit before the original command-line
+// pass. This build enters Oculus initialization during that first pass and
+// does not make the formerly-assumed second server preprocessing call.
+// -config-path is needed by LoadLocalConfigHook while the original is running.
 void PreflightRuntimeBootstrap() {
   static bool s_done = false;
   if (s_done) return;
@@ -62,6 +65,7 @@ void PreflightRuntimeBootstrap() {
     const LPWSTR arg = argv[i];
     if (lstrcmpW(arg, L"-server") == 0) {
       g_isServer = TRUE;
+      g_isHeadless = TRUE;
       g_noOvr = TRUE;  // -server implies -noovr unconditionally
     } else if (lstrcmpW(arg, L"-windowed") == 0) {
       g_isWindowed = TRUE;
@@ -80,7 +84,7 @@ void PreflightRuntimeBootstrap() {
   // the CLI check — but that also forces the spectator flow.  Setting
   // only 0x0100000 skips VR without forcing spectator mode; the game
   // reaches the main menu normally, and -mp joins a social lobby.
-  if (g_isWindowed && g_pGame != nullptr) {
+  if ((g_isWindowed || g_isServer) && g_pGame != nullptr) {
     auto* windowedFlags = reinterpret_cast<UINT64*>(
         reinterpret_cast<CHAR*>(g_pGame) + PatchAddresses::GAME_WINDOWED_FLAGS_OFFSET);
     *windowedFlags |= 0x0100000;
@@ -98,15 +102,13 @@ UINT64 PreprocessCommandLineHook(PVOID pGame) {
   // be the ONLY call, so waiting for a second invocation leaves the bridge and
   // all deferred runtime setup permanently disabled.  Store the game instance
   // before D3D starts so its device hook can complete setup immediately after
-  // creation. A dedicated server retains the established second-preprocess
-  // boundary because it has no graphics-device call to rendezvous on.
-  static int s_callCount = 0;
-  ++s_callCount;
+  // creation. A dedicated server has no graphics-device rendezvous, so it
+  // bootstraps immediately after its first original call returns.
   g_pGame = pGame;
   PreflightRuntimeBootstrap();
   UINT64 result = EchoVR::PreprocessCommandLine(pGame);
-  if (g_isServer && s_callCount >= 2) {
-    RunDeferredRuntimeBootstrap(pGame, "Preprocess second-call server fallback");
+  if (g_isServer) {
+    RunDeferredRuntimeBootstrap(pGame, "Preprocess first-call server bootstrap");
   }
   return result;
 }

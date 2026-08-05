@@ -139,14 +139,16 @@ identity:
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 
-	// These lines are emitted by runtime code, not inferred from a port scan:
-	// ws_bridge.cpp emits the proxy marker and gameserver.cpp emits the IServerLib
-	// initialization marker.  Requiring both prevents a splash-only process from
-	// being mistaken for a running dedicated server.
+	// These lines are emitted by runtime code, not inferred from a port scan.
+	// The loopback-only config intentionally prevents login and ServerDB
+	// registration, so IServerLib initialization is not a readiness prerequisite
+	// here. Requiring the completed bootstrap, explicit config load, and bridge
+	// bind prevents a splash-only process from being mistaken for a running
+	// dedicated server while keeping this smoke isolated from external services.
 	readyMarkers := []string{
 		"[NEVR.PATCH] Successfully loaded custom config from:",
+		"[NEVR.BOOT] runtime bootstrap complete",
 		"[NEVR.WS] Proxy listening on ws://127.0.0.1:",
-		"[NEVR.GAMESERVER] Initialized game server",
 	}
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
@@ -198,6 +200,10 @@ func TestServerStartsWithoutFatalError(t *testing.T) {
 	output := requireLiveServer(t)
 	if strings.Contains(output, "[NEVR.FATAL]") {
 		t.Fatalf("server emitted the ServerFatal marker\n%s", output)
+	}
+	if strings.Contains(output, "Failed to initialize OVR library") ||
+		strings.Contains(output, "Unable to load LibOVRRT") {
+		t.Fatalf("server entered the Oculus initialization path\n%s", output)
 	}
 }
 
