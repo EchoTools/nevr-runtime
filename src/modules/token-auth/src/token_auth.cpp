@@ -253,7 +253,26 @@ std::string DeviceAuth::PollDeviceCode(const std::string& code) {
                     }
                 }
                 m_refreshToken = poll.refresh_token;
-                m_refreshTokenExpiry = static_cast<uint64_t>(time(nullptr)) + (30 * 24 * 3600);
+                // Was `now + 30 days`, unconditionally — a client hardcoding a
+                // SERVER policy it had never been told. The server states
+                // `refresh_token_expires_in` (EchoTools/nakama f945f631d); the
+                // constant survives only for a server that predates it, and is
+                // marked a fallback rather than a fact.
+                {
+                    const uint64_t now = static_cast<uint64_t>(time(nullptr));
+                    m_refreshTokenExpiry =
+                        ResolveRefreshTokenExpirySec(now, poll.refresh_token_expires_in);
+                    if (poll.refresh_token_expires_in.has_value()) {
+                        Log(EchoVR::LogLevel::Info,
+                            "[NEVR.AUTH] refresh token expiry from refresh_token_expires_in: %llus",
+                            static_cast<unsigned long long>(*poll.refresh_token_expires_in));
+                    } else {
+                        Log(EchoVR::LogLevel::Warning,
+                            "[NEVR.AUTH] server sent no refresh_token_expires_in — "
+                            "assuming %llus, which is a guess at its policy, not a measurement",
+                            static_cast<unsigned long long>(kFallbackRefreshTokenLifetimeSec));
+                    }
+                }
                 m_userId = poll.user_id;
                 m_username = poll.username;
                 // Parse discord ID from the JWT access token

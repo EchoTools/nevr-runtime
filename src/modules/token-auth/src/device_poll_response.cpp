@@ -22,15 +22,23 @@ DevicePollResponse ParseDevicePollResponse(std::string_view response) {
       return result;
     }
 
-    result.access_token = json.value("token", "");
+    // RFC 6749 §5.1 names this `access_token`; the RPC originally called it
+    // `token` and still returns that, deprecated (EchoTools/nakama f945f631d).
+    // The fallback is load-bearing, not politeness: a nakama older than that
+    // commit sends ONLY `token`, so an access_token-only reader authenticates
+    // against nothing on every currently-deployed server.
+    result.access_token = json.value("access_token", "");
+    if (result.access_token.empty()) result.access_token = json.value("token", "");
     if (result.access_token.empty()) return result;
     result.status = DevicePollStatus::Verified;
     result.refresh_token = json.value("refresh_token", "");
     result.user_id = json.value("user_id", "");
     result.username = json.value("username", "");
-    if (json.contains("expires_in") && json["expires_in"].is_number_unsigned()) {
-      result.expires_in = json["expires_in"].get<uint64_t>();
-    }
+    // Both fields are RFC 6749 seconds-from-now. ReadExpiresInSeconds carries the
+    // guard against the server's negative "already expired" values and keeps
+    // absence absent; see core/auth_token.h.
+    result.expires_in = ReadExpiresInSeconds(json, "expires_in");
+    result.refresh_token_expires_in = ReadExpiresInSeconds(json, "refresh_token_expires_in");
     return result;
   } catch (const nlohmann::json::exception&) {
     return result;
@@ -39,12 +47,7 @@ DevicePollResponse ParseDevicePollResponse(std::string_view response) {
 
 uint64_t ResolveAccessTokenExpiry(uint64_t now, const std::string& access_token,
                                   std::optional<uint64_t> expires_in) {
-  CachedAuthToken token;
-  token.token = access_token;
-  const uint64_t jwtExpiry = token.GetJwtExpiry();
-  if (jwtExpiry > now) return jwtExpiry;
-  if (expires_in.has_value()) return now + *expires_in;
-  return now + kFallbackAccessTokenLifetimeSec;
+  return ResolveAccessTokenExpirySec(now, access_token, expires_in);
 }
 
 }  // namespace TokenAuth

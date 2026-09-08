@@ -24,7 +24,18 @@ inline bool RefreshAuthToken(CachedAuthToken& auth,
 
     std::string url = nakama_url + "/v2/rpc/device/auth/refresh?http_key=" + http_key + "&unwrap";
     nlohmann::json body;
-    body["token"] = auth.refresh_token;
+    // RFC 6749 §6 names this field `refresh_token`, and the RPC prefers it
+    // (EchoTools/nakama f945f631d). Both are sent with the SAME value because the
+    // two ends deploy on different days: a nakama older than that commit reads
+    // only `token` and would reject a refresh_token-only body with
+    // "invalid payload: token required".
+    //
+    // TEMPORARY. Delete the `token` line once no nakama older than f945f631d is
+    // deployed — the new server ignores it whenever refresh_token is present, so
+    // removing it is a no-op against current production and the only thing it can
+    // still break is a rollback.
+    body["refresh_token"] = auth.refresh_token;
+    body["token"] = auth.refresh_token;  // deprecated: pre-RFC field name
 
     std::string post_data = body.dump();
     std::string response;
@@ -70,7 +81,13 @@ inline bool RefreshAuthToken(CachedAuthToken& auth,
     try {
         auto j = nlohmann::json::parse(response);
 
-        std::string new_token = j.value("token", "");
+        // RFC 6749 §5.1 `access_token`, falling back to the deprecated `token`.
+        // The fallback is required, not defensive: a nakama older than
+        // EchoTools/nakama f945f631d returns only `token`, so reading
+        // access_token alone yields an empty token and fails every refresh
+        // against a server that has not been redeployed yet.
+        std::string new_token = j.value("access_token", "");
+        if (new_token.empty()) new_token = j.value("token", "");
         std::string new_refresh = j.value("refresh_token", "");
 
         if (new_token.empty()) {
@@ -78,14 +95,25 @@ inline bool RefreshAuthToken(CachedAuthToken& auth,
             return false;
         }
 
+        const uint64_t now = static_cast<uint64_t>(time(nullptr));
+
+        // Was `now + 60` unconditionally. That discarded what the issuer said:
+        // the JWT carries its own `exp`, and the server now also states
+        // `expires_in`, so a fixed 60s forced a refresh every minute for a token
+        // that was valid for an hour. Same authority order as the device-poll
+        // path (core/auth_token.h ResolveAccessTokenExpirySec) so the two ways of
+        // obtaining an access token cannot disagree about when it dies.
         auth.token = new_token;
-        // Client-side cap: 60s access token lifetime.
-        auth.token_expiry = static_cast<uint64_t>(time(nullptr)) + 60;
+        auth.token_expiry = ResolveAccessTokenExpirySec(now, new_token, ReadExpiresInSeconds(j, "expires_in"));
 
         if (!new_refresh.empty()) {
             auth.refresh_token = new_refresh;
-            // Default 30-day refresh token; TODO: parse exp from JWT claims
-            auth.refresh_token_expiry = static_cast<uint64_t>(time(nullptr)) + (30 * 24 * 3600);
+            // The server states `refresh_token_expires_in` as of f945f631d. When
+            // it is absent — older server — this falls back to a constant that is
+            // a GUESS at the server's policy, not a measurement of it; see
+            // kFallbackRefreshTokenLifetimeSec.
+            auth.refresh_token_expiry =
+                ResolveRefreshTokenExpirySec(now, ReadExpiresInSeconds(j, "refresh_token_expires_in"));
         }
 
         SaveAuthToken(auth);

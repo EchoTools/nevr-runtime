@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <ctime>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <stdexcept>
 #include <utility>
@@ -274,6 +275,116 @@ TEST(DevicePollResponse, PendingExpiredAndErrorResponsesRemainDistinct) {
             TokenAuth::DevicePollStatus::Error);
   EXPECT_EQ(TokenAuth::ParseDevicePollResponse("not json").status,
             TokenAuth::DevicePollStatus::Error);
+}
+
+// RFC 6749 §5.1 renamed the poll response fields (EchoTools/nakama f945f631d).
+// The server sends access_token and token with the same value, so a test where
+// they are EQUAL cannot tell "read the new name" from "read the old one". They
+// differ here specifically so preference is observable.
+TEST(DevicePollResponse, PrefersRfcAccessTokenOverDeprecatedToken) {
+  const TokenAuth::DevicePollResponse response = TokenAuth::ParseDevicePollResponse(
+      "{\"status\":\"verified\",\"access_token\":\"rfc\",\"token\":\"deprecated\","
+      "\"token_type\":\"Bearer\",\"expires_in\":3600,\"refresh_token\":\"refresh\","
+      "\"refresh_token_expires_in\":2592000,\"user_id\":\"user\",\"username\":\"name\"}");
+
+  EXPECT_EQ(response.status, TokenAuth::DevicePollStatus::Verified);
+  EXPECT_EQ(response.access_token, "rfc");
+  ASSERT_TRUE(response.expires_in.has_value());
+  EXPECT_EQ(*response.expires_in, 3600U);
+  ASSERT_TRUE(response.refresh_token_expires_in.has_value());
+  EXPECT_EQ(*response.refresh_token_expires_in, 2592000U);
+}
+
+// Production nakama is the pre-f945f631d build until it is redeployed, and it
+// sends neither access_token nor refresh_token_expires_in. A client that reads
+// only the RFC names authenticates against nothing there.
+TEST(DevicePollResponse, LegacyServerWithoutRfcFieldsStillAuthenticates) {
+  const TokenAuth::DevicePollResponse response = TokenAuth::ParseDevicePollResponse(
+      "{\"status\":\"verified\",\"token\":\"legacy\",\"refresh_token\":\"refresh\","
+      "\"user_id\":\"user\",\"username\":\"name\"}");
+
+  EXPECT_EQ(response.status, TokenAuth::DevicePollStatus::Verified);
+  EXPECT_EQ(response.access_token, "legacy");
+  EXPECT_EQ(response.refresh_token, "refresh");
+  EXPECT_FALSE(response.expires_in.has_value());
+  EXPECT_FALSE(response.refresh_token_expires_in.has_value());
+}
+
+// The server computes both fields as time.Until(deadline).Seconds(), which is
+// negative once the deadline has passed — a verified entry stored by a nakama
+// that predates the change carries expiry 0, so time.Until(1970) is a large
+// negative. Adding that to `now` would place the expiry decades in the past and
+// look like a measured value. Absent is the honest answer.
+TEST(DevicePollResponse, NegativeExpiresInIsAbsentNotBackwards) {
+  const TokenAuth::DevicePollResponse response = TokenAuth::ParseDevicePollResponse(
+      "{\"status\":\"verified\",\"access_token\":\"tok\",\"expires_in\":-1757300000,"
+      "\"refresh_token\":\"refresh\",\"refresh_token_expires_in\":-1757300000}");
+
+  ASSERT_EQ(response.status, TokenAuth::DevicePollStatus::Verified);
+  EXPECT_FALSE(response.expires_in.has_value());
+  EXPECT_FALSE(response.refresh_token_expires_in.has_value());
+
+  constexpr uint64_t kNow = 1000;
+  EXPECT_EQ(TokenAuth::ResolveAccessTokenExpiry(kNow, response.access_token, response.expires_in),
+            kNow + kFallbackAccessTokenLifetimeSec);
+  EXPECT_GT(ResolveRefreshTokenExpirySec(kNow, response.refresh_token_expires_in), kNow);
+}
+
+// ReadExpiresInSeconds is reached from RefreshAuthToken, whose catch covers only
+// json::parse_error — a type_error thrown here would escape the refresh entirely.
+// Asserting the non-object cases rather than trusting that contains() is total.
+TEST(ReadExpiresInSeconds, NonObjectAndWrongTypedFieldsYieldAbsenceNotAThrow) {
+  EXPECT_FALSE(ReadExpiresInSeconds(nlohmann::json::array({1, 2}), "expires_in").has_value());
+  EXPECT_FALSE(ReadExpiresInSeconds(nlohmann::json("a string"), "expires_in").has_value());
+  EXPECT_FALSE(ReadExpiresInSeconds(nlohmann::json(nullptr), "expires_in").has_value());
+  EXPECT_FALSE(ReadExpiresInSeconds(nlohmann::json::parse("{\"expires_in\":\"3600\"}"),
+                                    "expires_in")
+                   .has_value());
+  EXPECT_FALSE(ReadExpiresInSeconds(nlohmann::json::parse("{\"expires_in\":36.5}"), "expires_in")
+                   .has_value());
+  EXPECT_EQ(ReadExpiresInSeconds(nlohmann::json::parse("{\"expires_in\":3600}"), "expires_in"),
+            std::optional<uint64_t>(3600));
+}
+
+// The 30-day constant is a guess at a server policy. It must apply only where the
+// server said nothing, and never override a server that did speak.
+TEST(RefreshTokenExpiry, ServerValueWinsAndFallbackOnlyFillsSilence) {
+  constexpr uint64_t kNow = 1000;
+  EXPECT_EQ(ResolveRefreshTokenExpirySec(kNow, 7200), kNow + 7200U);
+  EXPECT_EQ(ResolveRefreshTokenExpirySec(kNow, std::nullopt),
+            kNow + kFallbackRefreshTokenLifetimeSec);
+  // A server-stated lifetime SHORTER than the old hardcoded 30 days must shorten
+  // the client's belief — that is the whole failure the constant was hiding.
+  EXPECT_LT(ResolveRefreshTokenExpirySec(kNow, 86400),
+            ResolveRefreshTokenExpirySec(kNow, std::nullopt));
+}
+
+// The refresh path builds its request body inline in RefreshAuthToken, so the
+// body shape is asserted here as the contract it has to satisfy: both names, one
+// value. A refresh_token-only body is rejected by a pre-f945f631d nakama with
+// "invalid payload: token required".
+TEST(RefreshRequestBody, CarriesBothFieldNamesWithTheSameValue) {
+  nlohmann::json body;
+  body["refresh_token"] = "rt";
+  body["token"] = "rt";
+
+  EXPECT_EQ(body.value("refresh_token", ""), "rt");
+  EXPECT_EQ(body.value("token", ""), "rt");
+}
+
+// Both ways of obtaining an access token must agree about when it dies. The
+// refresh path used to hardcode now+60 while the poll path honoured the JWT.
+TEST(AccessTokenExpiry, RefreshAndPollPathsShareOneAuthorityOrder) {
+  constexpr uint64_t kNow = 1000;
+  const std::string jwt = MakeJwt("eyJleHAiOjUwMDB9");
+
+  EXPECT_EQ(ResolveAccessTokenExpirySec(kNow, jwt, 10),
+            TokenAuth::ResolveAccessTokenExpiry(kNow, jwt, 10));
+  EXPECT_EQ(ResolveAccessTokenExpirySec(kNow, jwt, 10), 5000U);
+  // No decodable exp: the server's expires_in is next, not a fixed 60 seconds.
+  EXPECT_EQ(ResolveAccessTokenExpirySec(kNow, "opaque", 3600), kNow + 3600U);
+  EXPECT_EQ(ResolveAccessTokenExpirySec(kNow, "opaque", std::nullopt),
+            kNow + kFallbackAccessTokenLifetimeSec);
 }
 
 TEST(DevicePollResponse, JwtExpiryTakesPrecedenceThenFallsBack) {

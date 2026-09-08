@@ -8,6 +8,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <vector>
 
@@ -123,6 +124,59 @@ static constexpr uint64_t kFallbackAccessTokenLifetimeSec = 300;
 // applies to the load path only — never to a freshly issued token, whose own
 // `exp` governs.
 static constexpr uint64_t kMaxDiskAccessTokenLifetimeSec = 60;
+
+// Fallback refresh-token lifetime, seconds — used ONLY when the server does not
+// state one. This 30-day number is a client GUESS at a SERVER policy: nothing on
+// this side measured it, and if the server shortens its refresh lifetime a client
+// holding this constant keeps presenting a credential that died days ago, and
+// skips the device flow it should have run.
+//
+// RFC 6749 §5.1 `refresh_token_expires_in` is the authority and the server now
+// sends it (EchoTools/nakama f945f631d, device/auth/poll + device/auth/refresh).
+// This exists solely for a nakama older than that commit, which omits the field.
+// It is a fallback, not a fact. Delete it once no such server is deployed.
+static constexpr uint64_t kFallbackRefreshTokenLifetimeSec = 30 * 24 * 3600;
+
+/// Reads an RFC 6749 seconds-from-now field, or nullopt when the server did not
+/// state one. Absence stays absent — the caller must reach for a documented
+/// fallback rather than receive a number this side made up.
+///
+/// is_number_unsigned() is the guard, not is_number(): the server computes both
+/// expiry fields as time.Until(deadline).Seconds() and they go NEGATIVE once the
+/// deadline has passed (EchoTools/nakama f945f631d). nlohmann parses a negative
+/// literal as signed, so this rejects it — adding it to `now` would move the
+/// expiry backwards into the past.
+inline std::optional<uint64_t> ReadExpiresInSeconds(const nlohmann::json& j, const char* field) {
+    if (!j.contains(field)) return std::nullopt;
+    const auto& value = j.at(field);
+    if (!value.is_number_unsigned()) return std::nullopt;
+    return value.get<uint64_t>();
+}
+
+/// Absolute unix expiry for a FRESHLY ISSUED access token, in priority order:
+///   1. the JWT's own `exp` claim (RFC 7519) — the issuer's own statement;
+///   2. RFC 6749 §5.1 `expires_in`, seconds from now, as sent by the server;
+///   3. kFallbackAccessTokenLifetimeSec, only when neither is available.
+/// Never applies kMaxDiskAccessTokenLifetimeSec — that bound is for a token read
+/// from disk, which is a different threat (see the constant's comment).
+inline uint64_t ResolveAccessTokenExpirySec(uint64_t now, const std::string& access_token,
+                                            std::optional<uint64_t> expires_in) {
+    CachedAuthToken probe;
+    probe.token = access_token;
+    const uint64_t jwtExpiry = probe.GetJwtExpiry();
+    if (jwtExpiry > now) return jwtExpiry;
+    if (expires_in.has_value()) return now + *expires_in;
+    return now + kFallbackAccessTokenLifetimeSec;
+}
+
+/// Absolute unix expiry for a refresh token. The server's
+/// `refresh_token_expires_in` when it sent one; otherwise the fallback constant,
+/// which is a guess and is documented as one.
+inline uint64_t ResolveRefreshTokenExpirySec(uint64_t now,
+                                             std::optional<uint64_t> refresh_token_expires_in) {
+    if (refresh_token_expires_in.has_value()) return now + *refresh_token_expires_in;
+    return now + kFallbackRefreshTokenLifetimeSec;
+}
 
 // Get the directory containing the main executable.
 // All _local/ paths are resolved relative to this.
