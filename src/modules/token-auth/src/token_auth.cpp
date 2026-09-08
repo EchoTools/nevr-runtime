@@ -48,6 +48,11 @@ public:
     bool IsAuthenticated() const;
     std::string GetTokenValue() const { return m_token; }
     uint64_t GetDiscordIdValue() const { return m_discordId; }
+    // Absolute unix expiry of the access token this instance is holding, or 0
+    // when it holds none. This is the ONLY authority for when the live token
+    // dies: the access token is never persisted (core/auth_token.h
+    // SaveAuthToken), so no on-disk field tracks it.
+    uint64_t GetTokenExpiryValue() const { return m_tokenExpiry; }
     std::string GetUsernameValue() const { return m_username; }
     void UpdateFromRefresh(const CachedAuthToken& auth);
 
@@ -401,6 +406,34 @@ static AuthConfig LoadAuthConfig() {
 
 } // anonymous namespace
 
+// How long before expiry the background thread refreshes. Nakama issues a
+// one-hour access token (EchoTools/nakama server/evr_device_auth.go:289, :386)
+// and this thread wakes every 60s, so 300s is about five refresh attempts
+// before the token actually dies — each failed attempt logs and retries on the
+// next wake.
+//
+// CAUTION: this must stay BELOW kFallbackAccessTokenLifetimeSec (also 300,
+// core/auth_token.h), which is the lifetime assumed for a token carrying
+// neither a decodable `exp` nor a server `expires_in`. At equal values such a
+// token satisfies this guard the instant it is issued and the every-60s refresh
+// loop returns for that case. Production nakama always signs a JWT with `exp`,
+// so nothing hits it today; raising either constant without the other would.
+static constexpr uint64_t kRefreshLeadSec = 300;
+
+// The refresh thread's guard, split out of RefreshThreadFunc so it can be
+// asserted in-process without the 60-second sleep.
+//
+// Reads the LIVE expiry off the running DeviceAuth. It previously read
+// token_expiry out of LoadCachedAuthToken(), and that field is structurally
+// always 0: SaveAuthToken (core/auth_token.h) writes only the refresh token and
+// identity — the access token is deliberately never persisted. So the guard
+// compared 0 against now+300, never held, and the thread issued an HTTP refresh
+// every 60 seconds for the entire hour a perfectly valid token was alive. The
+// disk behaviour is correct; consulting disk for a memory-only value was not.
+static bool ShouldRefreshAccessToken(const DeviceAuth& auth, uint64_t now) {
+    return auth.GetTokenExpiryValue() <= now + kRefreshLeadSec;
+}
+
 static void RefreshThreadFunc(std::string url, std::string httpKey) {
     while (s_refreshRunning) {
         // Sleep 60 seconds between checks
@@ -417,17 +450,25 @@ static void RefreshThreadFunc(std::string url, std::string httpKey) {
         std::lock_guard<std::mutex> lk(s_tokenMutex);
         if (!s_auth) continue;
 
-        // Check if token expires within 5 minutes (or already expired)
-        auto cached = LoadCachedAuthToken();
         uint64_t now = static_cast<uint64_t>(time(nullptr));
-        if (cached.token_expiry > now + 300) continue;  // Still valid for >5 min
+        if (!ShouldRefreshAccessToken(*s_auth, now)) continue;  // Still valid for >5 min
 
-        if (cached.token_expiry > now) {
+        // The refresh TOKEN is read from disk on purpose: it is the one
+        // credential SaveAuthToken persists, and RefreshAuthToken updates this
+        // struct in place and writes it back.
+        auto cached = LoadCachedAuthToken();
+
+        // Both branches report the LIVE expiry. Reading cached.token_expiry
+        // here printed "Token expired <unix-time-now>s ago" on every wake,
+        // because the field is always 0 — a log line that looked like a
+        // measurement and was an artefact of the same defect as the guard.
+        const uint64_t liveExpiry = s_auth->GetTokenExpiryValue();
+        if (liveExpiry > now) {
             Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Token expires in %llus — refreshing",
-                (unsigned long long)(cached.token_expiry - now));
+                (unsigned long long)(liveExpiry - now));
         } else {
             Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Token expired %llus ago — refreshing",
-                (unsigned long long)(now - cached.token_expiry));
+                (unsigned long long)(now - liveExpiry));
         }
 
         if (cached.HasValidRefreshToken()) {
@@ -504,6 +545,17 @@ DeviceAuthState InspectDeviceAuthFromCache() {
     // not attempt a refresh endpoint during this hermetic test.
     auth.TryLoadCachedToken();
     return SnapshotDeviceAuth(auth);
+}
+
+bool InspectRefreshDecision(const CachedAuthToken& live, uint64_t now) {
+    DeviceAuth auth;
+    // Configure exercises the production setup path without starting a device
+    // flow. UpdateFromRefresh is how RefreshThreadFunc itself installs a new
+    // token into the live instance, so this leaves DeviceAuth in exactly the
+    // state the running thread would observe.
+    auth.Configure("https://test.invalid", "test-http-key", "test-server-key");
+    auth.UpdateFromRefresh(live);
+    return ShouldRefreshAccessToken(auth, now);
 }
 
 }  // namespace TokenAuth::TestHook

@@ -238,6 +238,79 @@ TEST(DeviceAuthState, SafelyRejectsLegacyAccessTokenFromExecutableLocalCache) {
   EXPECT_TRUE(state.username.empty());
 }
 
+// The background refresh thread's guard must consult the LIVE access-token
+// expiry, not the credential cache.
+//
+// SaveAuthToken (core/auth_token.h) deliberately writes only refresh_token,
+// refresh_token_expiry, user_id and username — the access token and its expiry
+// are never persisted. So a guard reading token_expiry out of the cache reads 0
+// in every fresh process, concludes "already expired", and issues an HTTP
+// refresh on every 60-second wake for the whole life of a token nakama issued
+// with a one-hour lifetime (evr_device_auth.go:289).
+//
+// The two sources are put in deliberate disagreement: disk is in the exact
+// shape SaveAuthToken produces, memory holds a token good for another hour.
+// Only a guard that reads memory can answer "not yet" — a test where both
+// agree could not tell the two implementations apart.
+TEST(RefreshThreadGuard, LiveTokenExpiryDecidesNotTheCredentialCache) {
+  const uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+  nlohmann::json credentials;
+  credentials["refresh_token"] = "refresh-token";
+  credentials["refresh_token_expiry"] = now + 30 * 24 * 3600;
+  credentials["user_id"] = "user-id";
+  credentials["username"] = "cached-player";
+  const ExecutableCredentialCacheFixture cache(credentials);
+
+  // Precondition, asserted rather than assumed: nothing on disk states an
+  // access-token expiry, so the cache cannot answer this question at all.
+  const CachedAuthToken loaded = LoadCachedAuthToken();
+  ASSERT_TRUE(loaded.token.empty());
+  ASSERT_EQ(loaded.token_expiry, 0U);
+  ASSERT_TRUE(loaded.HasValidRefreshToken());
+
+  CachedAuthToken live;
+  live.token = MakeJwt("eyJ2cnMiOnsiZGlkIjoiNzc3In19");
+  live.token_expiry = now + 3600;
+  live.refresh_token = "refresh-token";
+  live.refresh_token_expiry = now + 30 * 24 * 3600;
+
+  EXPECT_FALSE(TokenAuth::TestHook::InspectRefreshDecision(live, now));
+}
+
+// Pins the lead time itself. 300s against a 3600s token and a 60s wake interval
+// is roughly five refresh attempts before the token dies; the boundary is
+// asserted so a change to the constant cannot pass silently.
+TEST(RefreshThreadGuard, RefreshesInsideTheLeadWindowAndNotOutsideIt) {
+  const uint64_t now = static_cast<uint64_t>(std::time(nullptr));
+
+  nlohmann::json credentials;
+  credentials["refresh_token"] = "refresh-token";
+  credentials["refresh_token_expiry"] = now + 30 * 24 * 3600;
+  const ExecutableCredentialCacheFixture cache(credentials);
+
+  CachedAuthToken live;
+  live.token = MakeJwt("eyJ2cnMiOnsiZGlkIjoiNzc3In19");
+  live.refresh_token = "refresh-token";
+  live.refresh_token_expiry = now + 30 * 24 * 3600;
+
+  live.token_expiry = now + 301;
+  EXPECT_FALSE(TokenAuth::TestHook::InspectRefreshDecision(live, now));
+
+  live.token_expiry = now + 300;
+  EXPECT_TRUE(TokenAuth::TestHook::InspectRefreshDecision(live, now));
+
+  live.token_expiry = now + 60;
+  EXPECT_TRUE(TokenAuth::TestHook::InspectRefreshDecision(live, now));
+
+  live.token_expiry = now - 1;
+  EXPECT_TRUE(TokenAuth::TestHook::InspectRefreshDecision(live, now));
+
+  // No live token at all: refresh, do not sit on an empty session.
+  live.token_expiry = 0;
+  EXPECT_TRUE(TokenAuth::TestHook::InspectRefreshDecision(live, now));
+}
+
 TEST(DevicePollResponse, VerifiedResponseExtractsEveryTokenField) {
   const TokenAuth::DevicePollResponse response = TokenAuth::ParseDevicePollResponse(
       "{\"status\":\"verified\",\"token\":\"token\",\"refresh_token\":\"refresh\","

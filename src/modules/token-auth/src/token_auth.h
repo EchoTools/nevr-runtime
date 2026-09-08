@@ -43,6 +43,13 @@ DeviceAuthState InspectDeviceAuthAfterRefresh(const ::CachedAuthToken& auth);
 // caller owns fixture setup and must ensure _local/.credentials.json beside the
 // test executable is restored when this returns.
 DeviceAuthState InspectDeviceAuthFromCache();
+
+// Drives the background refresh thread's expiry guard, in-process and without
+// the 60-second sleep, against a DeviceAuth holding `live` in memory. The
+// credential cache is left in whatever state the caller's fixture put on disk,
+// so the two sources can be made to disagree and it is observable which one the
+// guard consults. Returns the guard's decision: true = refresh now.
+bool InspectRefreshDecision(const ::CachedAuthToken& live, uint64_t now);
 }  // namespace TestHook
 #endif  // NEVR_TEST_HOOKS
 }
