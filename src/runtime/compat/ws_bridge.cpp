@@ -849,6 +849,21 @@ void InstallWebSocketBridge() {
                       (unsigned long long)routingId, (unsigned long long)targetUserId,
                       (unsigned long long)sessionGuid);
                 }
+                // 2026-09-13 DIAG (Andrew): does the client ever send this at all,
+                // regardless of which internal path constructs it? Logged at Info
+                // (not Debug) on purpose — no global log-level change needed to see
+                // it. Same wire shape as FriendInviteRequest above.
+                // SNSPartyInviteRequest (0xcf13f934540b5f5e): RoutingID(8)+UUID(16)+SessionGUID(8)+TargetUserID(8)
+                if (sym == 0xcf13f934540b5f5e && len >= 0x28) {
+                  uint64_t routingId, sessionGuid, targetUserId;
+                  memcpy(&routingId, p + 24, 8);
+                  memcpy(&sessionGuid, p + 24 + 24, 8);
+                  memcpy(&targetUserId, p + 24 + 32, 8);
+                  Log(EchoVR::LogLevel::Info,
+                      "[NEVR.WS] DIAG PartyInviteRequest SENT: routing=%llu target=%llu session=%llu",
+                      (unsigned long long)routingId, (unsigned long long)targetUserId,
+                      (unsigned long long)sessionGuid);
+                }
                 // FriendListSubscribe (0xdcfa94680e8d19fc)
                 if (sym == 0xdcfa94680e8d19fc) {
                   Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   FriendListSubscribeRequest sent");
