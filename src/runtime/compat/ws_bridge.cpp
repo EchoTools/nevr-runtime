@@ -173,7 +173,8 @@ static uint64_t SelectPlatformCode(bool hasUrlCredentials, bool noOvr) {
 
 static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode = 2,
                                      const std::string& displayName = std::string(),
-                                     const std::string& accessToken = std::string()) {
+                                     const std::string& accessToken = std::string(),
+                                     const std::string& password = std::string()) {
   // Platform codes match Go server iota: STM=0, DSC=1, XBX=2, OVR_ORG=3, OVR=4, BOT=5, DMO=6
   uint64_t accountId = discordId;
 
@@ -216,6 +217,13 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
     j["displayname"] = resolvedName;
     j["bypassauth"] = false;
     j["access_token"] = accessToken;
+    // 2026-09-13: the account requires password authentication — measured
+    // via Nakama's own rejection before this fix, "LOGIN FAILURE: status=400
+    // ... account requires password authentication". The injected
+    // LoginRequest never sent one. Confirmed live: adding this field (and
+    // fixing config.yaml's truncated auth.password, "spritz-srv-7f3a9c" ->
+    // "spritz-srv-7f3a9c8") produced a real LoginSuccess from Nakama.
+    j["password"] = password;
     j["nonce"] = "";
     j["buildversion"] = 631547;
     j["lobbyversion"] = 0;
@@ -585,14 +593,16 @@ void InstallWebSocketBridge() {
                         }
 
                         uint64_t platformCode;
+                        std::string cfgPasswordStr;
                         {
                           const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
                           const char* cfgPassword = NevrCfgGetFlat("nevr_password");
                           bool hasUrlCreds = cfgDiscordId && cfgDiscordId[0] && cfgPassword && cfgPassword[0];
                           platformCode = SelectPlatformCode(hasUrlCreds, g_noOvr);
+                          if (cfgPassword) cfgPasswordStr = cfgPassword;
                         }
                         g_lastInjectedDiscordId = discordId;
-                        std::string loginMsg = BuildLoginRequest(discordId, platformCode, accountName, bearerToken);
+                        std::string loginMsg = BuildLoginRequest(discordId, platformCode, accountName, bearerToken, cfgPasswordStr);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
                         Log(EchoVR::LogLevel::Info,

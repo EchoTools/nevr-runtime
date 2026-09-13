@@ -61,6 +61,52 @@ static constexpr uint8_t   PNSRAD_STATE_JE_EXPECTED[] = {0x0F, 0x84, 0x78, 0x01,
 static constexpr uintptr_t PNSRAD_LOGIN_IDENTITY_CHECK = 0x8ef25;
 static constexpr uint8_t   PNSRAD_IDENTITY_JNE_EXPECTED[] = {0x0F, 0x85, 0x9C, 0x00, 0x00, 0x00};
 
+// 2026-09-13 (Andrew): pnsradmatchmaking.dll's CNSRadMatchmaking::
+// initialize_matchmakers reads "matchmaker_host" (default: the readyatdawn.com
+// literal below) then "matchingservice_host" (defaults to whatever the first
+// lookup returned) via its own statically-linked CJson::TString — a config
+// read entirely separate from echovr.exe's JsonValueAsString, so our
+// RedirectServiceUrl/config-override hook in config.cpp can never see or
+// correct it. Measured live: even with config.json's "matchingservice_host"
+// set correctly (ws://g.echovrce.com:80/spr), the matchmaker connection still
+// went to the compiled default and got reset immediately (readyatdawn.com is
+// dead) — confirms this DLL never found either key in whatever it reads.
+// ws_bridge.cpp already binds a second listener on port 42148 for exactly
+// this (N146 comment there), but nothing connected to it because the game
+// never tried — it was stuck on the compiled default.
+//
+// Load timing, confirmed live via a strace-style empirical test (renamed
+// pnsradmatchmaking.dll aside, launched, watched the client log): it loads
+// on demand at the lobby stage, well after login —
+// "[EVR] [NSLOBBY] loading matchmaking library 'pnsradmatchmaking'" — via a
+// native LoadLibrary-style path in cnslobby.cpp (confirmed by the clean
+// "failed to load module ... Unable to load matchmaking library" error when
+// the file was absent). LdrRegisterDllNotification catches this regardless
+// of when it fires, so no ordering change was needed against the existing
+// pnsrad.dll callback below.
+//
+// pnsradmatchmaking.dll, ImageBase 0x180000000 (confirmed via
+// `objdump -p pnsradmatchmaking.dll | grep -i imagebase`):
+//   RVA 0x1c84d8 (.rdata section, VMA 0x1801c6000, file offset 0x1c5200 per
+//   `objdump -h`; string file offset = 0x1c76d8, verified byte-for-byte via
+//   `dd if=pnsradmatchmaking.dll bs=1 skip=$((0x1c76d8)) count=64 | xxd`) —
+//   a 49-byte slot (the 48-char string + NUL, then unrelated data
+//   immediately follows with no padding) holding
+//   "wss://matchmaker.readyatdawn.com/rad/rad15_live\0".
+// Replacing with "ws://127.0.0.1:42148\0" (21 bytes) leaves the tail of the
+// original slot as inert bytes after our new NUL terminator — same pattern
+// xpid_patch.cpp already uses for a shorter replacement in a fixed slot.
+//
+// CONFIRMED LIVE 2026-09-13: patch applied ("[pnsradmatchmaking] patched
+// matchmaker host default at +0x1c84d8"), matchmaker connected through our
+// own listener, "[NSLOBBY] received lobby session success", joined a real
+// server (108.218.163.196:6792), loaded into a live social lobby.
+static constexpr uintptr_t PNSRADMATCHMAKING_HOST_RVA = 0x1c84d8;
+static constexpr size_t    PNSRADMATCHMAKING_HOST_SLOT_SIZE = 49;
+static constexpr char      PNSRADMATCHMAKING_HOST_EXPECTED[] =
+    "wss://matchmaker.readyatdawn.com/rad/rad15_live";
+static constexpr char      PNSRADMATCHMAKING_HOST_REPLACEMENT[] = "ws://127.0.0.1:42148";
+
 /* --------------------------------------------------------------------
  * Memory patching
  * -------------------------------------------------------------------- */
@@ -93,6 +139,52 @@ typedef NTSTATUS (NTAPI *LdrUnregisterDllNotification_fn)(void* cookie);
 
 static void* s_dllNotifCookie = nullptr;
 static bool  s_pnsradPatched  = false;
+static bool  s_matchmakingPatched = false;
+
+/* Case-insensitive ASCII wide-string compare, same folding convention as
+ * initialize.cpp's LoadNameContains. UNICODE_STRING::Length is bytes, not
+ * chars, hence the /sizeof(WCHAR) below at each call site. */
+static bool WideNameEqualsAscii(const WCHAR* name, size_t nameLen, const char* ascii) {
+    size_t asciiLen = std::strlen(ascii);
+    if (nameLen != asciiLen) return false;
+    for (size_t i = 0; i < asciiLen; i++) {
+        WCHAR c = name[i];
+        if (c >= L'A' && c <= L'Z') c = static_cast<WCHAR>(c - L'A' + L'a');
+        char e = ascii[i];
+        if (e >= 'A' && e <= 'Z') e = static_cast<char>(e - 'A' + 'a');
+        if (c != static_cast<WCHAR>(e)) return false;
+    }
+    return true;
+}
+
+/* Patch pnsradmatchmaking.dll's compiled matchmaker-host default so the
+ * matchmaker connection reaches our own listener instead of the dead
+ * readyatdawn.com host. See PNSRADMATCHMAKING_HOST_RVA's comment above for
+ * the full measurement (RVA, file offset, slot size, exact original bytes). */
+static void PatchMatchmakingHost(uintptr_t base) {
+    auto* site = reinterpret_cast<uint8_t*>(base + PNSRADMATCHMAKING_HOST_RVA);
+    if (std::memcmp(site, PNSRADMATCHMAKING_HOST_EXPECTED,
+                     sizeof(PNSRADMATCHMAKING_HOST_EXPECTED) - 1) != 0) {
+        Log(EchoVR::LogLevel::Warning,
+            "[pnsradmatchmaking] unexpected bytes at +0x%x — NOT patched (measured "
+            "against a different build?)", (unsigned)PNSRADMATCHMAKING_HOST_RVA);
+        return;
+    }
+    // Replacement is shorter than the original slot (21 of 49 bytes); the
+    // trailing original bytes become inert garbage after our new NUL, same
+    // as xpid_patch.cpp's shorter-replacement-in-a-fixed-slot pattern.
+    if (PatchMemory(site, PNSRADMATCHMAKING_HOST_REPLACEMENT,
+                     sizeof(PNSRADMATCHMAKING_HOST_REPLACEMENT))) {
+        Log(EchoVR::LogLevel::Info,
+            "[pnsradmatchmaking] patched matchmaker host default at +0x%x: "
+            "\"%s\" -> \"%s\"", (unsigned)PNSRADMATCHMAKING_HOST_RVA,
+            PNSRADMATCHMAKING_HOST_EXPECTED, PNSRADMATCHMAKING_HOST_REPLACEMENT);
+    } else {
+        Log(EchoVR::LogLevel::Warning,
+            "[pnsradmatchmaking] PatchMemory FAILED at +0x%x — prologue matched "
+            "but the write did not land", (unsigned)PNSRADMATCHMAKING_HOST_RVA);
+    }
+}
 
 /* Patch accounting (2026-07-26).
  *
@@ -130,9 +222,21 @@ static void PnsradNopPatch(uint8_t* site, const uint8_t* expected, size_t expLen
 }
 
 static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* data, void*) {
-    if (reason != 1 || s_pnsradPatched || !data || !data->BaseDllName) return;
-
+    if (reason != 1 || !data || !data->BaseDllName) return;
     const UNICODE_STRING* name = data->BaseDllName;
+
+    // pnsradmatchmaking.dll: independent of the pnsrad.dll check below — it
+    // loads much later (native CNSLobby module load, well after login, per
+    // the r14 log's "loading matchmaking library 'pnsradmatchmaking'") and
+    // must not be gated on s_pnsradPatched.
+    if (!s_matchmakingPatched &&
+        WideNameEqualsAscii(name->Buffer, name->Length / sizeof(WCHAR),
+                             "pnsradmatchmaking.dll")) {
+        s_matchmakingPatched = true;
+        PatchMatchmakingHost(reinterpret_cast<uintptr_t>(data->DllBase));
+    }
+
+    if (s_pnsradPatched) return;
     if (name->Length < 10 * sizeof(WCHAR)) return;
 
     const WCHAR* p = name->Buffer;
