@@ -12,6 +12,13 @@ void InstallWebSocketBridge();
 /// Returns the local port the proxy is listening on (0 if not active).
 uint16_t GetWebSocketBridgePort();
 
+/// Returns the local port the matchmaker listener is bound to (0 if it
+/// failed to bind or hasn't started yet — see N146 in ws_bridge.cpp).
+/// pnsradmatchmaking.dll's compiled-in default host is patched in-memory
+/// (pnsrad_enabler.cpp) to point at whatever port this returns, so the two
+/// sides always agree even though the port is chosen at runtime.
+uint16_t GetMatchmakerBridgePort();
+
 /// Returns true if the proxy is active and listening.
 bool IsWebSocketBridgeActive();
 

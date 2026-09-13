@@ -81,6 +81,7 @@ static std::unique_ptr<ix::WebSocketServer> g_server;
 static std::string g_remoteUri;
 static uint16_t g_proxyPort = 0;
 static bool g_bridgeEnabled = false;
+static uint16_t g_matchPort = 0;
 
 // Per-connection state: maps game-side server WebSocket → remote ix::WebSocket
 struct ProxyPair {
@@ -297,6 +298,10 @@ void SetWebSocketBridgeTarget(const char* uri) {
 
 uint16_t GetWebSocketBridgePort() {
   return g_proxyPort;
+}
+
+uint16_t GetMatchmakerBridgePort() {
+  return g_matchPort;
 }
 
 bool IsWebSocketBridgeActive() {
@@ -945,22 +950,58 @@ void InstallWebSocketBridge() {
       g_proxyPort, g_remoteUri.c_str());
 
   // N146: pnsradmatchmaking uses Rad's R14NETCLIENT with a hardcoded
-  // fallback port (42148) when matchingservice_host has no explicit port.
-  // This connection bypasses our JsonValueAsStringHook.  Bind a second
-  // listener on that port so the matchmaker reaches the bridge.
+  // fallback host/port (matchmaker.readyatdawn.com) when matchingservice_host
+  // has no explicit port. This connection bypasses our JsonValueAsStringHook,
+  // so we patch pnsradmatchmaking.dll's compiled-in string directly instead
+  // (PatchMatchmakingHost, pnsrad_enabler.cpp) to point at whatever port we
+  // bind here — GetMatchmakerBridgePort() is how that patch learns the port.
+  //
+  // 2026-09-13 (Andrew): was a hardcoded port 42148. Static ports collide
+  // with a still-releasing socket from a just-killed prior instance (the
+  // OS hasn't finished TIME_WAIT teardown yet) — hit this live. Same
+  // random-ephemeral-with-retry pattern as the main bridge port above,
+  // instead of a fixed number.
+  //
+  // CONFESSION: this doesn't reuse `gen`/`dist` from above (each are
+  // function-scoped to the block above) and doesn't exclude g_proxyPort
+  // from the draw — a same-port draw just fails to bind and the loop
+  // retries, so it's harmless, but it means two independent RNG streams
+  // rather than one shared one. Not worth a shared-state refactor for two
+  // call sites; flagging instead of silently living with it unremarked.
   {
-    static auto s_matchServer = std::make_unique<ix::WebSocketServer>(42148, "127.0.0.1");
-    s_matchServer->disablePerMessageDeflate();
-    s_matchServer->setOnClientMessageCallback(onClientMessage);
-    auto [ok, err] = s_matchServer->listen();
-    if (ok) {
+    constexpr int kMaxMatchBindAttempts = 10;
+    std::random_device matchRd;
+    std::mt19937 matchGen(matchRd());
+    std::uniform_int_distribution<uint16_t> matchDist(49152, 65535);
+
+    static std::unique_ptr<ix::WebSocketServer> s_matchServer;
+    bool matchBound = false;
+    for (int attempt = 0; attempt < kMaxMatchBindAttempts; ++attempt) {
+      uint16_t tryPort = matchDist(matchGen);
+      s_matchServer = std::make_unique<ix::WebSocketServer>(tryPort, "127.0.0.1");
+      s_matchServer->disablePerMessageDeflate();
+      auto [ok, err] = s_matchServer->listen();
+      if (ok) {
+        g_matchPort = tryPort;
+        matchBound = true;
+        break;
+      }
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.WS] Matchmaker port %u bind failed: %s — retrying (%d/%d)",
+          tryPort, err.c_str(), attempt + 1, kMaxMatchBindAttempts);
+      s_matchServer.reset();
+    }
+
+    if (matchBound) {
+      s_matchServer->setOnClientMessageCallback(onClientMessage);
       s_matchServer->start();
       Log(EchoVR::LogLevel::Info,
-          "[NEVR.WS] Matchmaker listener on ws://127.0.0.1:42148");
+          "[NEVR.WS] Matchmaker listener on ws://127.0.0.1:%u", g_matchPort);
     } else {
-      s_matchServer.reset();  // port taken — matchmaker will fail, same as before
+      s_matchServer.reset();
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.WS] Matchmaker port 42148 unavailable: %s", err.c_str());
+          "[NEVR.WS] Matchmaker listener FAILED after %d attempts — matchmaking will fail",
+          kMaxMatchBindAttempts);
     }
   }
 }

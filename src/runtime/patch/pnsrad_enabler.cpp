@@ -24,9 +24,11 @@
  * ====================================================================== */
 
 #include "runtime/patch/pnsrad_enabler.h"
+#include "runtime/compat/ws_bridge.h"  // GetMatchmakerBridgePort()
 #include "core/logging.h"
 #include "nevr_common.h"      // N97: the one ValidatePrologue
 
+#include <cstdio>
 #include <cstring>
 
 #ifdef _WIN32
@@ -72,9 +74,9 @@ static constexpr uint8_t   PNSRAD_IDENTITY_JNE_EXPECTED[] = {0x0F, 0x85, 0x9C, 0
 // set correctly (ws://g.echovrce.com:80/spr), the matchmaker connection still
 // went to the compiled default and got reset immediately (readyatdawn.com is
 // dead) — confirms this DLL never found either key in whatever it reads.
-// ws_bridge.cpp already binds a second listener on port 42148 for exactly
-// this (N146 comment there), but nothing connected to it because the game
-// never tried — it was stuck on the compiled default.
+// ws_bridge.cpp already binds a second listener for exactly this (N146
+// comment there), but nothing connected to it because the game never
+// tried — it was stuck on the compiled default.
 //
 // Load timing, confirmed live via a strace-style empirical test (renamed
 // pnsradmatchmaking.dll aside, launched, watched the client log): it loads
@@ -94,19 +96,31 @@ static constexpr uint8_t   PNSRAD_IDENTITY_JNE_EXPECTED[] = {0x0F, 0x85, 0x9C, 0
 //   a 49-byte slot (the 48-char string + NUL, then unrelated data
 //   immediately follows with no padding) holding
 //   "wss://matchmaker.readyatdawn.com/rad/rad15_live\0".
-// Replacing with "ws://127.0.0.1:42148\0" (21 bytes) leaves the tail of the
-// original slot as inert bytes after our new NUL terminator — same pattern
-// xpid_patch.cpp already uses for a shorter replacement in a fixed slot.
+// Replacing with "ws://127.0.0.1:PPPPP\0" (21 bytes, port always 5 digits —
+// ws_bridge.cpp draws from the 49152-65535 ephemeral range) leaves the tail
+// of the original slot as inert bytes after our new NUL terminator — same
+// pattern xpid_patch.cpp already uses for a shorter replacement in a fixed
+// slot.
 //
-// CONFIRMED LIVE 2026-09-13: patch applied ("[pnsradmatchmaking] patched
-// matchmaker host default at +0x1c84d8"), matchmaker connected through our
-// own listener, "[NSLOBBY] received lobby session success", joined a real
-// server (108.218.163.196:6792), loaded into a live social lobby.
+// 2026-09-13 (Andrew): the replacement was originally the literal port
+// 42148. Static ports collide with a still-releasing socket from a
+// just-killed prior process (TIME_WAIT), so ws_bridge.cpp now binds an
+// ephemeral port with retry instead of a fixed one — this patch reads
+// GetMatchmakerBridgePort() at call time and builds the replacement string
+// to match, rather than a compile-time constant.
+//
+// CONFIRMED LIVE 2026-09-13 (against the original hardcoded-42148 version):
+// patch applied ("[pnsradmatchmaking] patched matchmaker host default at
+// +0x1c84d8"), matchmaker connected through our own listener, "[NSLOBBY]
+// received lobby session success", joined a real server
+// (108.218.163.196:6792), loaded into a live social lobby. Not yet
+// re-confirmed live against the ephemeral-port version below — the string
+// length and patch mechanics are identical either way, but flagging that
+// the "CONFIRMED LIVE" evidence predates this specific change.
 static constexpr uintptr_t PNSRADMATCHMAKING_HOST_RVA = 0x1c84d8;
 static constexpr size_t    PNSRADMATCHMAKING_HOST_SLOT_SIZE = 49;
 static constexpr char      PNSRADMATCHMAKING_HOST_EXPECTED[] =
     "wss://matchmaker.readyatdawn.com/rad/rad15_live";
-static constexpr char      PNSRADMATCHMAKING_HOST_REPLACEMENT[] = "ws://127.0.0.1:42148";
 
 // 2026-09-13 (Andrew/ReVault audit): CNSRADParty (and, per the same audit,
 // CNSRADFriends/CNSRADUsers/CNSRADActivities) register every inbound SNS
@@ -195,6 +209,32 @@ static bool WideNameEqualsAscii(const WCHAR* name, size_t nameLen, const char* a
  * readyatdawn.com host. See PNSRADMATCHMAKING_HOST_RVA's comment above for
  * the full measurement (RVA, file offset, slot size, exact original bytes). */
 static void PatchMatchmakingHost(uintptr_t base) {
+    // The matchmaker listener binds before login (InstallWebSocketBridge, at
+    // early boot) while pnsradmatchmaking.dll loads lazily at the lobby stage
+    // (well after login — see the load-timing note above), so by the time
+    // this runs the port is already chosen. CONFESSION: that ordering isn't
+    // enforced by anything here, just observed live — if the listener bind
+    // ever moved to run later than this DLL's load, this would silently
+    // patch in port 0 with no error. Worth an assert/guard if that ordering
+    // ever becomes less obviously true.
+    uint16_t port = GetMatchmakerBridgePort();
+    if (port == 0) {
+        Log(EchoVR::LogLevel::Warning,
+            "[pnsradmatchmaking] matchmaker listener never bound a port — NOT "
+            "patching (matchmaking will fail regardless)");
+        return;
+    }
+
+    char replacement[32];
+    int replacementLen = std::snprintf(replacement, sizeof(replacement),
+                                        "ws://127.0.0.1:%u", (unsigned)port);
+    if (replacementLen <= 0 || static_cast<size_t>(replacementLen) + 1 > PNSRADMATCHMAKING_HOST_SLOT_SIZE) {
+        Log(EchoVR::LogLevel::Warning,
+            "[pnsradmatchmaking] formatted replacement (%d bytes) doesn't fit the "
+            "%zu-byte slot — NOT patched", replacementLen, PNSRADMATCHMAKING_HOST_SLOT_SIZE);
+        return;
+    }
+
     auto* site = reinterpret_cast<uint8_t*>(base + PNSRADMATCHMAKING_HOST_RVA);
     if (std::memcmp(site, PNSRADMATCHMAKING_HOST_EXPECTED,
                      sizeof(PNSRADMATCHMAKING_HOST_EXPECTED) - 1) != 0) {
@@ -206,12 +246,11 @@ static void PatchMatchmakingHost(uintptr_t base) {
     // Replacement is shorter than the original slot (21 of 49 bytes); the
     // trailing original bytes become inert garbage after our new NUL, same
     // as xpid_patch.cpp's shorter-replacement-in-a-fixed-slot pattern.
-    if (PatchMemory(site, PNSRADMATCHMAKING_HOST_REPLACEMENT,
-                     sizeof(PNSRADMATCHMAKING_HOST_REPLACEMENT))) {
+    if (PatchMemory(site, replacement, static_cast<size_t>(replacementLen) + 1)) {
         Log(EchoVR::LogLevel::Info,
             "[pnsradmatchmaking] patched matchmaker host default at +0x%x: "
             "\"%s\" -> \"%s\"", (unsigned)PNSRADMATCHMAKING_HOST_RVA,
-            PNSRADMATCHMAKING_HOST_EXPECTED, PNSRADMATCHMAKING_HOST_REPLACEMENT);
+            PNSRADMATCHMAKING_HOST_EXPECTED, replacement);
     } else {
         Log(EchoVR::LogLevel::Warning,
             "[pnsradmatchmaking] PatchMemory FAILED at +0x%x — prologue matched "
