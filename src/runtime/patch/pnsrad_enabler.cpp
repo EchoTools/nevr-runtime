@@ -32,6 +32,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <winternl.h>
+#include <MinHook.h>
 #endif
 
 #ifdef _WIN32
@@ -106,6 +107,25 @@ static constexpr size_t    PNSRADMATCHMAKING_HOST_SLOT_SIZE = 49;
 static constexpr char      PNSRADMATCHMAKING_HOST_EXPECTED[] =
     "wss://matchmaker.readyatdawn.com/rad/rad15_live";
 static constexpr char      PNSRADMATCHMAKING_HOST_REPLACEMENT[] = "ws://127.0.0.1:42148";
+
+// 2026-09-13 (Andrew/ReVault audit): CNSRADParty (and, per the same audit,
+// CNSRADFriends/CNSRADUsers/CNSRADActivities) register every inbound SNS
+// listener via CTcpBroadcaster::Listen using a broadcaster HANDLE stored in
+// the object itself — *(this+0x2b0) for CNSRADParty. If that handle is null
+// at the moment this runs, every Listen() call it makes (InviteNotifyCB
+// included) silently registers nothing — no error, no log — which would
+// fully explain why a live party-invite test produced zero evidence
+// anywhere (see ReVault comments on 0x3039c4/libpnsrad.so and
+// 0x180082d20/pnsrad.dll). This diagnostic-only hook confirms or falsifies
+// that live, rather than continuing to infer from static analysis.
+//
+// Target: the vslot[8] function that does the Listen() registration loop
+// (pnsrad.dll FUN_180082d20, confirmed via ReVault to read the handle at
+// param_1[0x56] == *(this+0x2b0) before every Listen call). RVA computed
+// against pnsrad.dll's 0x180000000 image base (same convention used
+// throughout this file for pnsradmatchmaking.dll's RVA above).
+static constexpr uintptr_t PNSRAD_PARTY_INITIALIZE_RVA = 0x82d20;
+static constexpr uintptr_t PNSRAD_PARTY_BROADCASTER_HANDLE_OFFSET = 0x2b0;
 
 /* --------------------------------------------------------------------
  * Memory patching
@@ -182,6 +202,42 @@ static void PatchMatchmakingHost(uintptr_t base) {
         Log(EchoVR::LogLevel::Warning,
             "[pnsradmatchmaking] PatchMemory FAILED at +0x%x — prologue matched "
             "but the write did not land", (unsigned)PNSRADMATCHMAKING_HOST_RVA);
+    }
+}
+
+/* --------------------------------------------------------------------
+ * Diagnostic: is CNSRADParty's broadcaster handle null when it registers
+ * its SNS listeners? See PNSRAD_PARTY_INITIALIZE_RVA's comment above.
+ * -------------------------------------------------------------------- */
+
+typedef uint64_t (*PartyListenerRegisterFn)(void* thisPtr, uint64_t param2);
+static PartyListenerRegisterFn g_RealPartyListenerRegister = nullptr;
+
+static uint64_t PartyListenerRegisterHook(void* thisPtr, uint64_t param2) {
+    uintptr_t handle = 0;
+    if (thisPtr) {
+        handle = *reinterpret_cast<uintptr_t*>(
+            reinterpret_cast<uint8_t*>(thisPtr) + PNSRAD_PARTY_BROADCASTER_HANDLE_OFFSET);
+    }
+    Log(EchoVR::LogLevel::Info,
+        "[pnsrad] DIAG CNSRADParty listener-register: this=%p broadcaster_handle=%p (%s)",
+        thisPtr, reinterpret_cast<void*>(handle), handle == 0 ? "NULL" : "non-null");
+    return g_RealPartyListenerRegister(thisPtr, param2);
+}
+
+static void InstallPartyBroadcasterDiag(uintptr_t base) {
+    void* target = reinterpret_cast<void*>(base + PNSRAD_PARTY_INITIALIZE_RVA);
+    MH_STATUS st = MH_CreateHook(target, reinterpret_cast<void*>(PartyListenerRegisterHook),
+                                  reinterpret_cast<void**>(&g_RealPartyListenerRegister));
+    if (st == MH_OK) st = MH_EnableHook(target);
+    if (st == MH_OK) {
+        Log(EchoVR::LogLevel::Info,
+            "[pnsrad] DIAG party-broadcaster hook installed at +0x%x",
+            (unsigned)PNSRAD_PARTY_INITIALIZE_RVA);
+    } else {
+        Log(EchoVR::LogLevel::Warning,
+            "[pnsrad] DIAG party-broadcaster hook FAILED at +0x%x: %s",
+            (unsigned)PNSRAD_PARTY_INITIALIZE_RVA, MH_StatusToString(st));
     }
 }
 
@@ -270,6 +326,7 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
         PnsradNopPatch(reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_STATE_CHECK),
                        PNSRAD_STATE_JE_EXPECTED, sizeof(PNSRAD_STATE_JE_EXPECTED), 6,
                        "state check", (unsigned)PNSRAD_LOGIN_STATE_CHECK);
+        InstallPartyBroadcasterDiag(base);
 
         Log(EchoVR::LogLevel::Info,
             "[pnsrad] module patches: %d succeeded, %d failed — social layer "
