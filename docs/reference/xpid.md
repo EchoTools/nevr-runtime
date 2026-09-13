@@ -263,6 +263,22 @@ login connection, despite `g_connectionCount++`-based numbering
 connection first = 0, login connection second = 1, matching the two
 connections actually observed in the client log).
 
+**Confirmed not build- or token-fix-dependent.** Built HEAD (`e0662fd`,
+includes the Sep 7 token-auth fixes `3c4703f`/`e0662fd` absent from the
+previously-deployed `3.2.0+654.a692a30`) in a separate worktree
+(`/home/andrew/src/nevr-runtime-wt-head`), deployed it, and re-ran the same
+test against the same (further-updated) Nakama. Identical result: client log
+`nevr-2026-09-13T11-15-12.240.jsonl` shows the login socket established
+(`ts=15.520`) and no `"login injected"` line anywhere in the run; server log
+shows session `sid=6536fbb9-af64-11f1-b589-383ec87527a1` connecting with the
+same `discord_id`/`password` query at `ts=15.488`, then only one
+`*evr.RemoteLogSet{evr_id=UNK-1,...}` at `ts=29.033` — no `*evr.LoginRequest`
+ever received, same as every prior run. Four runs total (2 pre-update Nakama
+on the Aug 6 build, 1 post-update on the Aug 6 build, 1 post-update on HEAD)
+all show the identical non-firing pattern. **This rules out both the Nakama
+update and the Sep 7 token-auth fixes as the cause** — whatever's blocking
+the injection is present in both builds and unaffected by the server change.
+
 ## Summary table — who can set what, and whether it's verified
 
 | Layer | Writes | Numbering used | Verified this session? |
