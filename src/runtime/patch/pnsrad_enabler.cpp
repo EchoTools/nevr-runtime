@@ -127,6 +127,20 @@ static constexpr char      PNSRADMATCHMAKING_HOST_REPLACEMENT[] = "ws://127.0.0.
 static constexpr uintptr_t PNSRAD_PARTY_INITIALIZE_RVA = 0x82d20;
 static constexpr uintptr_t PNSRAD_PARTY_BROADCASTER_HANDLE_OFFSET = 0x2b0;
 
+// 2026-09-13: the Initialize hook above never fired across multiple live
+// in-game invite attempts (confirmed — the listener-registration function
+// simply never runs at that point in the session). Most likely explanation:
+// it runs once, during pnsrad.dll's own load-time construction of the
+// CNSRADParty singleton, which completes BEFORE our LdrDllNotification
+// callback (fires post-DllMain, per documented Windows loader semantics) —
+// we install the hook too late to ever see that one call. SendInvite, by
+// contrast, is the actual per-click function (renamed in ReVault from
+// FUN_180086df0 after cross-referencing libpnsrad.so's real symbol name) —
+// it fires fresh on every invite attempt, sidestepping the load-order race
+// entirely. Same broadcaster-handle offset, read at the very top of the
+// function before it does anything else.
+static constexpr uintptr_t PNSRAD_PARTY_SEND_INVITE_RVA = 0x86df0;
+
 /* --------------------------------------------------------------------
  * Memory patching
  * -------------------------------------------------------------------- */
@@ -241,6 +255,38 @@ static void InstallPartyBroadcasterDiag(uintptr_t base) {
     }
 }
 
+typedef void (*PartySendInviteFn)(void* thisPtr, uint64_t targetAccountId);
+static PartySendInviteFn g_RealPartySendInvite = nullptr;
+
+static void PartySendInviteHook(void* thisPtr, uint64_t targetAccountId) {
+    uintptr_t handle = 0;
+    if (thisPtr) {
+        handle = *reinterpret_cast<uintptr_t*>(
+            reinterpret_cast<uint8_t*>(thisPtr) + PNSRAD_PARTY_BROADCASTER_HANDLE_OFFSET);
+    }
+    Log(EchoVR::LogLevel::Info,
+        "[pnsrad] DIAG CNSRADParty::SendInvite: this=%p target=%llu broadcaster_handle=%p (%s)",
+        thisPtr, (unsigned long long)targetAccountId, reinterpret_cast<void*>(handle),
+        handle == 0 ? "NULL" : "non-null");
+    g_RealPartySendInvite(thisPtr, targetAccountId);
+}
+
+static void InstallPartySendInviteDiag(uintptr_t base) {
+    void* target = reinterpret_cast<void*>(base + PNSRAD_PARTY_SEND_INVITE_RVA);
+    MH_STATUS st = MH_CreateHook(target, reinterpret_cast<void*>(PartySendInviteHook),
+                                  reinterpret_cast<void**>(&g_RealPartySendInvite));
+    if (st == MH_OK) st = MH_EnableHook(target);
+    if (st == MH_OK) {
+        Log(EchoVR::LogLevel::Info,
+            "[pnsrad] DIAG party-send-invite hook installed at +0x%x",
+            (unsigned)PNSRAD_PARTY_SEND_INVITE_RVA);
+    } else {
+        Log(EchoVR::LogLevel::Warning,
+            "[pnsrad] DIAG party-send-invite hook FAILED at +0x%x: %s",
+            (unsigned)PNSRAD_PARTY_SEND_INVITE_RVA, MH_StatusToString(st));
+    }
+}
+
 /* Patch accounting (2026-07-26).
  *
  * These three patches logged success at Debug and prologue-mismatch at Warning,
@@ -327,6 +373,7 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
                        PNSRAD_STATE_JE_EXPECTED, sizeof(PNSRAD_STATE_JE_EXPECTED), 6,
                        "state check", (unsigned)PNSRAD_LOGIN_STATE_CHECK);
         InstallPartyBroadcasterDiag(base);
+        InstallPartySendInviteDiag(base);
 
         Log(EchoVR::LogLevel::Info,
             "[pnsrad] module patches: %d succeeded, %d failed — social layer "
