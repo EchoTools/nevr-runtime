@@ -139,7 +139,6 @@ typedef NTSTATUS (NTAPI *LdrUnregisterDllNotification_fn)(void* cookie);
 
 static void* s_dllNotifCookie = nullptr;
 static bool  s_pnsradPatched  = false;
-static bool  s_matchmakingPatched = false;
 
 /* Case-insensitive ASCII wide-string compare, same folding convention as
  * initialize.cpp's LoadNameContains. UNICODE_STRING::Length is bytes, not
@@ -229,10 +228,18 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
     // loads much later (native CNSLobby module load, well after login, per
     // the r14 log's "loading matchmaking library 'pnsradmatchmaking'") and
     // must not be gated on s_pnsradPatched.
-    if (!s_matchmakingPatched &&
-        WideNameEqualsAscii(name->Buffer, name->Length / sizeof(WCHAR),
+    //
+    // 2026-09-13 (BUGS.md 81c7e6b): this DLL unloads/reloads mid-session — a
+    // reload gets a fresh DllBase with the original (unpatched) bytes, so a
+    // one-shot guard here (as pnsrad.dll's s_pnsradPatched below correctly
+    // uses, since that DLL doesn't reload) left the reloaded copy unpatched
+    // and the matchmaker fell back to the dead readyatdawn.com default —
+    // blank terminal, no queue. No guard: patch unconditionally on every
+    // load. Idempotent by construction — PatchMatchmakingHost's own memcmp
+    // against PNSRADMATCHMAKING_HOST_EXPECTED no-ops (with a Warning log)
+    // if this exact base was somehow already patched.
+    if (WideNameEqualsAscii(name->Buffer, name->Length / sizeof(WCHAR),
                              "pnsradmatchmaking.dll")) {
-        s_matchmakingPatched = true;
         PatchMatchmakingHost(reinterpret_cast<uintptr_t>(data->DllBase));
     }
 
