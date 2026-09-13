@@ -291,17 +291,63 @@ the injection is present in both builds and unaffected by the server change.
 | `ws_bridge.cpp` wire LoginRequest (`:267`, `AppendLE64(payload, platformCode)`) | the actual bytes Nakama receives | **Nakama iota, but currently sent with the game-internal value (4) for OVR_ORG** — the confirmed bug | Code read, confirmed by decompiling the Go source; **not confirmed to actually be sent** in the 3 captured runs |
 | Nakama `GetUserIDByDeviceID` (`evr_runtime.go:652`) | which account (if any) resolves | Nakama iota, via `EvrId.String()` | Code read in `~/src/nakama`; **deployed-server match unverified** |
 
-## Next steps (not taken — Andrew's call)
+## Resolved 2026-09-13 — the injection wasn't firing because of a config bug, not an XPID bug
+
+Item 2 below turned out to be the real blocker, and it had nothing to do
+with XPID encoding: `_local/config.json` had stale `loginservice_host`/
+`configservice_host`/etc. keys carrying direct (non-bridge) URLs, and
+`config.cpp`'s override check (`:411-417`) was re-applying them *after*
+`RedirectServiceUrl` had already redirected to our bridge — so the game's
+login connection never routed through `ws_bridge.cpp` at all, and the
+Open-handler injection code was simply never reached. Removing those stale
+keys fixed it immediately: `login injected xpid=OVR-ORG-695081603180789771`
+now logs on every run, and Nakama responds instead of the connection just
+sitting there.
+
+That surfaced the next real blocker: Nakama rejected the login with
+`LOGIN FAILURE: status=400 ... account requires password authentication`,
+because `BuildLoginRequest`'s JSON never included a `password` field — only
+`access_token`. Fixed in commit `1bea703` (cherry-picked from
+`fix/matchmaker-host-and-login-password` on `nevr-runtime-wt-head`): added
+the field, sourced from the same `NevrCfgGetFlat("nevr_password")` already
+resolved locally. `config.yaml`'s own password value was independently
+truncated (`"spritz-srv-7f3a9c"`, missing the trailing `8` every other use
+of it carries) — fixed in the local, non-version-controlled config.
+
+With login actually succeeding, a second, unrelated bug surfaced at the
+matchmaking stage: `pnsradmatchmaking.dll` reads `matchmaker_host`/
+`matchingservice_host` via its own statically-linked `CJson::TString` —
+entirely separate from `echovr.exe`'s `JsonValueAsString`, so the
+`config.cpp` redirect/override machinery documented above can never see or
+correct it, no matter what `config.json` says. It was silently falling
+through to its compiled default (`wss://matchmaker.readyatdawn.com/rad/rad15_live`,
+dead) every time, resetting immediately with no visible error. Also fixed in
+`1bea703`: patches that compiled string in-memory via
+`LdrRegisterDllNotification` (the same mechanism already used for
+`pnsrad.dll`) to `ws://127.0.0.1:42148` — `ws_bridge.cpp`'s own matchmaker
+listener, bound for exactly this since N146 but never reached until now.
+RVA `0x1c84d8`, `ImageBase 0x180000000`, confirmed via `objdump -p`/`-h` and
+a raw `dd`+`xxd` byte read; load timing (on-demand, at the lobby stage, well
+after login) confirmed empirically by renaming the DLL aside and watching
+for the native "failed to load module" error.
+
+**End-to-end confirmed live 2026-09-13:** login succeeds
+(`uid=580230ee-3866-446f-8f3f-6cc68e3c8621`, `username=sprockee`), matchmaker
+connects through the patched listener, `[NSLOBBY] received lobby session
+success`, joined a real server (`108.218.163.196:6792`), loaded into a live
+social lobby.
+
+## Still open / not yet done
 
 1. Confirm whether `~/src/nakama` HEAD (`d725451f7`) matches what's deployed
-   on `fortytwo.echovrce.com`.
-2. Instrument (temporarily) why the `connIdx==1` login-injection Open handler
-   isn't logging — is it not firing, is `connIdx` not 1, or is
-   `pairPtr->loginInjected` somehow already true?
-3. Once injection is confirmed firing, decide whether to fix the
-   `SelectPlatformCode`/`PlatformPrefix` 3/4 swap back to match Nakama's
-   actual enum (undoing `9264ea0`), and re-verify against
-   `evr_pipeline_login.go:154`'s device-ID lookup specifically, not just the
-   LoginSuccess echo `9264ea0` checked against.
-4. Find which of `GetUserIDString`'s 40 callers actually constructs the
-   `RemoteLogSet` evr_id — not yet identified (see "red herring" section).
+   on `fortytwo.echovrce.com` — unverified, didn't end up mattering for this
+   fix.
+2. The `SelectPlatformCode`/`PlatformPrefix` 3/4 swap (`9264ea0`, wire value 4
+   for OVR_ORG vs. Nakama's actual enum) is still in place and still a real
+   mismatch against Nakama's enum — it didn't block this login (Nakama
+   resolved the account fine via the discord_id despite it), but the
+   `GetUserIDByDeviceID` mechanism described above is still worth fixing on
+   its own terms, independent of this session's stall.
+3. Find which of `GetUserIDString`'s 40 callers actually constructs the
+   `RemoteLogSet` evr_id — never identified (see "red herring" section
+   above); cosmetic only, not blocking anything now.
