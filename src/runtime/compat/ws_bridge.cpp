@@ -707,6 +707,35 @@ void InstallWebSocketBridge() {
                               subscribeMsg.size());
                         }
                       }
+                      // 2026-09-14 (Andrew + Claude, launch-server.sh hang investigation —
+                      // see docs/reference/server-mode-multiplayer-hang.md): Nakama sends
+                      // STcpConnectionUnrequireEvent (sym 0x43e6963ac76beee4) right after
+                      // every LoginSuccess, server mode or client. Confirmed via ReVault:
+                      // neither echovr.exe nor libpnsrad.so has ANY decompiled code
+                      // referencing this symbol — nothing native reacts to it. In the one
+                      // last-known-good server capture we have
+                      // (echovr-server-32-2026-07-26T11-16-07.550.jsonl), the login
+                      // connection was lost ~5s after this point and "Beginning
+                      // multiplayer" followed ~6s after THAT; in every current run the
+                      // connection just stays open forever and multiplayer bring-up never
+                      // starts. Correlation, not proven causation — but the event's own
+                      // name ("you don't need this connection anymore") and the absence of
+                      // any native handler both point the same direction: something was
+                      // supposed to close this connection here and doesn't anymore.
+                      //
+                      // CONFESSION: this is a live experiment, not a confirmed fix. Closes
+                      // remoteWs only (not gameWsPtr, which the Close handler below
+                      // documents as deadlock-prone under the loader lock) — the game
+                      // discovers the closed remote on its next send attempt, same
+                      // documented-safe path already used for a real remote-initiated
+                      // close. Server mode only; client mode is already confirmed working
+                      // end-to-end and this must not touch it.
+                      if (rsym == 0x43e6963ac76beee4 && g_isServer) {
+                        Log(EchoVR::LogLevel::Info,
+                            "[NEVR.WS] DIAG STcpConnectionUnrequireEvent seen (server mode) — "
+                            "closing remoteWs to test the disconnect-then-BeginMultiplayer hypothesis");
+                        pairPtr->remoteWs->close();
+                      }
                       // Decode SNS friend messages
                       // InviteFailure (0x7f197e30c72c6e61): Header(8)+FriendID(8)+StatusCode(1)
                       if (rsym == 0x7f197e30c72c6e61 && rmsg->str.size() >= 24 + 17) {

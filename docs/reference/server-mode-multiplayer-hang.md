@@ -141,6 +141,24 @@ object/offset than the `CR15NetGame+0xb68` bit1/bit2/bit6 we actually need.
 `CR15Game`'s flags at netgame-construction time** — that translation site,
 if it exists, was not located. This is the most promising unexplored lead.
 
+## Update 2026-09-14, later same day: live diagnostic confirms the block is upstream of both functions
+
+Implemented the diagnostic from step 1 below (`NetGameHostCheckHook` on
+`fcn.140157fb0`, commits `b2790d3`/`837efb3` — the second commit fixes a bug
+in the first: I initially gated the hook *install* on `g_isServer`, which
+isn't set yet at that point in boot, so it never fired at all on the first
+attempt — same ordering-bug shape as the rest of this investigation, caught
+and fixed the same day).
+
+**Result: the hook installs successfully every time, but never fires** —
+confirmed after 90+ seconds sitting at "Social lobby group info received"
+with no further progress. This is a second, independent confirmation (on a
+*different* function than `BeginMultiplayer` itself) that the block is
+genuinely upstream of this whole call chain — not "reached with bit1
+wrong," but never reached at all. Whatever enqueues the
+`CTaskTarget<SPhUpdateTriTask>`-wrapped call to `BeginMultiplayer` never
+does so for this run.
+
 ## Concrete next steps, in priority order
 
 1. **Live diagnostic over more static tracing — do this first.** Static
