@@ -677,8 +677,21 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
         }
     }
 
-    // DIAG (server mode only — see docs/reference/server-mode-multiplayer-hang.md)
-    if (g_isServer) {
+    // DIAG — see docs/reference/server-mode-multiplayer-hang.md
+    //
+    // 2026-09-14: originally gated this install on `if (g_isServer)`, same
+    // as this file's other hooks appear to assume is safe. It is NOT: this
+    // Init() runs during early DLL load, BEFORE PreprocessCommandLineHook
+    // (boot.cpp) has ever run PreflightRuntimeBootstrap — the ONLY place
+    // g_isServer is set, from argv. Confirmed live: "binary bug fix hooks
+    // installed" logs before "runtime bootstrap trigger=Preprocess
+    // first-call server bootstrap" every time. Gating the INSTALL on
+    // g_isServer here means it is always false, hook never installs, no
+    // diagnostic ever fires — a second instance of the exact ordering bug
+    // this whole investigation is about. Fix: always install; the hook BODY
+    // (NetGameHostCheckHook) already correctly re-checks g_isServer at
+    // CALL time, by which point PreprocessCommandLineHook has long since run.
+    {
         void* target = nevr::ResolveVA_Checked(g_base, VA_NETGAME_HOST_CHECK);
         if (!target) {
             Log(EchoVR::LogLevel::Warning,
