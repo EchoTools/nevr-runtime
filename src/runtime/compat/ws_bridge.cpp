@@ -730,11 +730,36 @@ void InstallWebSocketBridge() {
                       // documented-safe path already used for a real remote-initiated
                       // close. Server mode only; client mode is already confirmed working
                       // end-to-end and this must not touch it.
-                      if (rsym == 0x43e6963ac76beee4 && g_isServer) {
-                        Log(EchoVR::LogLevel::Info,
-                            "[NEVR.WS] DIAG STcpConnectionUnrequireEvent seen (server mode) — "
-                            "closing remoteWs to test the disconnect-then-BeginMultiplayer hypothesis");
-                        pairPtr->remoteWs->close();
+                      //
+                      // BUG FOUND AND FIXED, same day: `rsym` above only ever reflects the
+                      // FIRST message in this frame. Nakama sends LoginSuccess and
+                      // STcpConnectionUnrequireEvent back-to-back (identical millisecond
+                      // timestamp in nakama.log), almost certainly batched into one WS
+                      // frame — so `rsym == 0x43e6963...` was silently dead code on the
+                      // very first live test (confirmed: nakama.log shows the event sent,
+                      // this DIAG line never printed). Scan every message in the frame
+                      // instead of trusting the single `rsym`, same 24-byte-header walk the
+                      // outgoing (game->server) direction already uses below.
+                      if (g_isServer) {
+                        const uint8_t* fp = (const uint8_t*)rmsg->str.data();
+                        size_t fremaining = rmsg->str.size();
+                        while (fremaining >= 24) {
+                          if (memcmp(fp, MSG_MARKER, 8) != 0) break;
+                          uint64_t fsym = 0, flen = 0;
+                          memcpy(&fsym, fp + 8, 8);
+                          memcpy(&flen, fp + 16, 8);
+                          size_t ftotal = 24 + (size_t)flen;
+                          if (ftotal > fremaining) break;  // truncated — stop, don't misread
+                          if (fsym == 0x43e6963ac76beee4) {
+                            Log(EchoVR::LogLevel::Info,
+                                "[NEVR.WS] DIAG STcpConnectionUnrequireEvent seen in-frame (server mode) — "
+                                "closing remoteWs to test the disconnect-then-BeginMultiplayer hypothesis");
+                            pairPtr->remoteWs->close();
+                            break;
+                          }
+                          fp += ftotal;
+                          fremaining -= ftotal;
+                        }
                       }
                       // Decode SNS friend messages
                       // InviteFailure (0x7f197e30c72c6e61): Header(8)+FriendID(8)+StatusCode(1)
