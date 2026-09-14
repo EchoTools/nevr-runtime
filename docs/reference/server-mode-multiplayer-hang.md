@@ -159,43 +159,86 @@ wrong," but never reached at all. Whatever enqueues the
 `CTaskTarget<SPhUpdateTriTask>`-wrapped call to `BeginMultiplayer` never
 does so for this run.
 
+## Update 2026-09-14, later still: STcpConnectionUnrequireEvent experiment — REFUTED
+
+Implemented and tested the disconnect-causation hypothesis directly
+(commits `d0190c4`, `dd1e9e7` — the second fixes a real bug in the first:
+`rsym` only reflects the first message in a WS frame, and Nakama batches
+`LoginSuccess`+`STcpConnectionUnrequireEvent` into one frame, so the first
+version of this check was silently dead code — confirmed nakama.log showed
+the event sent while our DIAG line never printed. Fixed by scanning every
+message in the frame).
+
+**Result: the DIAG line fires correctly (confirmed live, 3 times — once per
+batched frame instance across the two bridge connections), `remoteWs->close()`
+executes, but nothing downstream changes.** No `"connection ... lost"`, no
+`"game disconnected"` — the game never appears to notice the remote closed
+at all, and the hang is identical to every other run (`HTTPListenerBringup
+entries=0` after 3+ minutes).
+
+**This refutes the disconnect-causation hypothesis as tested** — or at
+least, this specific way of forcing a disconnect does not reproduce whatever
+happened organically in the July 26 capture. Two live possibilities, not
+distinguished yet:
+1. The July 26 disconnect was a red herring — an unrelated network blip
+   that happened to precede `BeginMultiplayer` by coincidence, not a trigger
+   for it.
+2. Our `remoteWs->close()` isn't actually producing the same observable
+   effect the original disconnect did — e.g. the game's own WS client
+   might only "detect" a closed remote when *it* tries to write and the
+   OS-level socket write fails, and if this server-mode session never
+   sends anything else on this connection at all (unlike a client, which
+   keeps chattering), that passive detection may simply never get a chance
+   to fire. Untested: forcibly closing `gameWsPtr` instead (the
+   game-facing side) — flagged as deadlock-risky elsewhere in this file
+   under the loader lock, but the earlier failure mode is different
+   (SIGTERM/graceful-shutdown paths), not necessarily this one; would need
+   its own careful safety review before trying.
+
 ## Concrete next steps, in priority order
 
-1. **Live diagnostic over more static tracing — do this first.** Static
-   analysis of the *setter* has hit real, repeated walls: indirect dispatch
-   (`BeginMultiplayer`'s callers are a task-scheduler family with no
-   resolvable static callers) and `revault_search_code`'s reconstruction-
-   noise problem (confirmed above — a search for the flags-pointer's
-   constructor-time assignment returned ~18/20 irrelevant hits). The
-   pragmatic unblock: add a `MinHook` diagnostic (same pattern already used
-   successfully today for the `CNSRADParty` broadcaster-handle checks in
-   `pnsrad_enabler.cpp`) on a safe, well-understood entry point —
-   `fcn.140157fb0 @ 0x140157fb0` itself is huge and risky to hook blind, but
-   its **prologue is simple** (standard `push`/`sub rsp` frame per the
-   disassembly already pulled) and it takes `(longlong* netgame_this,
-   undefined8 param_2)`. Log `**(ulonglong*)(thisPtr+0x2da0) & 0x46` (bits
-   1/2/6 mask) at entry, call through unmodified. Settles definitively
-   whether bit1 is 0 or 1 for a live `-server` run, without needing to find
-   the setter first.
-   - NOTE (offset correction, see above): earlier revisions of this doc and
-     any earlier diagnostic-hook attempt referencing `+0xb68` used the
-     WRONG offset — use `+0x2da0`, disassembly-verified.
-2. **Find the `CR15Game` → `CR15NetGame` flag translation site** (if one
-   exists) — where `CR15NetGame`'s own flags qword gets its initial bit1
-   value from whatever `CR15Game`'s engine-mode flags (`+0x828`, `+0x1d4`,
-   or `+0x7ae0` — three different offsets have shown up across this
-   investigation and their relationship to each other isn't settled either)
-   say about server/headless mode. Lower priority than (1) — this is the
-   "why" once (1) tells you "bit1 is 0".
-3. If bit1 turns out to be set correctly and this isn't the blocker after
-   all, the next candidate is the task-scheduler enqueue path itself — worth
-   checking whether something (a menu-navigation event, a specific native
-   flag we're not passing, an -mp-equivalent) is what actually queues the
-   `BeginMultiplayer` task, since nothing in nevr-runtime's own source
-   references `-mp` at all despite `launch-client.sh` passing it — worth
-   checking whether that flag is genuinely consumed natively or effectively
-   a no-op token (searched for a standalone `-mp` string in `echovr.exe`,
-   not found either, consistent with either explanation).
+*(Superseded — kept for the record.)* Steps 1 and the disconnect-causation
+idea below were both executed live today, not just planned. Status:
+
+- ~~Live diagnostic hook on `fcn.140157fb0`~~ — **done** (`b2790d3`,
+  `837efb3`). Installs correctly (fixed a real g_isServer-timing bug in the
+  same session), but **never fires** — confirms the block is upstream of
+  this function entirely, so the bit1/bit2/bit6 question never got answered
+  because the code path that would read it is never reached at all.
+- ~~STcpConnectionUnrequireEvent disconnect experiment~~ — **done and
+  refuted** (`d0190c4`, `dd1e9e7`). Fires correctly, calls `remoteWs->close()`,
+  the game never visibly reacts, hang is unchanged. See the write-up above.
+
+**What's actually still open, in priority order:**
+
+1. **Find what's supposed to enqueue the `BeginMultiplayer` task.** This is
+   now the single most direct open question — not "is a flag wrong" (ruled
+   out, the whole call chain is unreached) but "what native trigger is
+   missing." `BeginMultiplayer`'s callers are a `CTaskTarget<SPhUpdateTriTask>`
+   family with zero resolvable static callers (indirect task-scheduler
+   dispatch — `revault_callers` returns nothing). Two angles, neither tried:
+   (a) find the task scheduler's own enqueue/dispatch function and see what
+   conditions gate a `SPhUpdateTriTask`-shaped task being queued at all;
+   (b) live-hook something in that scheduler's dispatch loop and log every
+   task type that DOES get enqueued during a hung `-server` run, to see by
+   omission what's missing compared to a working client run.
+2. **Try closing `gameWsPtr` instead of `remoteWs`** in the
+   `STcpConnectionUnrequireEvent` handler — the *game-facing* side, not the
+   Nakama-facing side. `remoteWs->close()` produced zero observable game
+   reaction; it's possible the game's own detection genuinely requires a
+   failed *local* read/write, which only happens if `gameWsPtr` itself goes
+   away. This is flagged elsewhere in `ws_bridge.cpp` as deadlock-prone
+   under the loader lock in a *different* context (`DLL_PROCESS_DETACH`) —
+   needs its own safety review before trying, this is not a drop-in change.
+3. **Find the `CR15Game` → `CR15NetGame` flag translation site** (if one
+   exists) — lower priority now that (1) shows the flag question is moot
+   until the task actually gets enqueued at all.
+4. **`-mp`**: nothing in nevr-runtime's own source references it despite
+   `launch-client.sh` passing it, and no standalone `-mp` string exists in
+   `echovr.exe` either — consistent with it being a harmless no-op token,
+   but not confirmed. Low priority given (1) is a more direct line of
+   attack, but cheap to rule out by just running `launch-client.sh` without
+   it and confirming client mode is unaffected.
 
 ## Environment note, unrelated to the root cause
 
