@@ -90,6 +90,11 @@ verbose-build-android: configure-android
 test-android: build-android
     cd tests/quest && go test -v ./...
 
+# Black-box crash-ingest contract gate. Requires a non-production staging sink;
+# see docs/design/2026-09-15-crash-report-ingest-implementation-contract.md.
+test-crash-ingest-contract:
+    cd tests/crash-ingest && go test -v ./...
+
 # Repack: rename the real libovrplatformloader.so -> _orig.so (fixes soname).
 # Operates on a COPY under build/; never mutates the source-of-truth extract.
 # On-device install (repack APK + sideload) is out of scope here — no prod deploy.
