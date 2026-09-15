@@ -5,7 +5,8 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/breakpad.cmake)
 
 add_library(ovrplatformloader SHARED
   entry.cpp
-  sentinel.cpp)
+  sentinel.cpp
+  got_hook.cpp)
 
 # Emit libovrplatformloader.so (CMake adds the lib prefix + .so suffix).
 set_target_properties(ovrplatformloader PROPERTIES OUTPUT_NAME ovrplatformloader)
