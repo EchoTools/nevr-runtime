@@ -28,9 +28,11 @@ EXPECTED_PATCH_SOURCES = (
     "patch/mode_patches.cpp",
     "patch/pnsrad_enabler.cpp",
     "patch/resource_override.cpp",
+    "patch/social_facade.cpp",
+    "patch/social_facade_object.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 9
+EXPECTED_PATCH_SOURCE_COUNT = 11
 
 
 class InventoryError(Exception):

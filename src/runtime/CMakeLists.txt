@@ -29,6 +29,8 @@ set(PATCHES_SOURCES
     "frame/tick.cpp"
     "patch/binary_bug_fixes.cpp"
     "patch/pnsrad_enabler.cpp"
+    "patch/social_facade.cpp"
+    "patch/social_facade_object.cpp"
     "log/builtin_filter.cpp"
     "log/symcache.cpp"
     "log/symcache_data.cpp"
@@ -76,6 +78,7 @@ set(PATCHES_HEADERS
     "frame/tick.h"
     "patch/binary_bug_fixes.h"
     "patch/pnsrad_enabler.h"
+    "patch/social_facade.h"
     "log/builtin_filter.h"
     "log/symcache.h"
     "patch/broadcaster_guard.h"
@@ -250,6 +253,17 @@ if(BUILD_TESTING)
     target_link_libraries(test_service_map PRIVATE
       GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp)
     gtest_discover_tests(test_service_map DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_social_facade
+      tests/test_social_facade.cpp
+      patch/social_facade_object.cpp)
+    target_compile_definitions(test_social_facade PRIVATE NEVR_TEST_HOOKS)
+    set_source_files_properties(tests/test_social_facade.cpp patch/social_facade_object.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_social_facade PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_social_facade PRIVATE
+      GTest::gtest GTest::gtest_main nevr_core)
+    gtest_discover_tests(test_social_facade DISCOVERY_MODE PRE_TEST)
 
     # plugin_load_plan tests (N134 S6) — the PURE core of the config-driven plugin
     # loader: BuildLoadPlan (ordered/enabled-only selection, file defaulting,
