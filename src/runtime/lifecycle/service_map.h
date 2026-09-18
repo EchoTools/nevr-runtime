@@ -75,4 +75,8 @@ std::optional<std::string> ResolveRedirect(const std::string& result,
                                            const std::optional<std::string>& httpTarget,
                                            bool bridgeActive, unsigned bridgePort);
 
+/// Opt-in gate for the empty social-provider façade. Missing, false, or an
+/// invalid scalar all fail closed to disabled.
+bool SocialFacadeEnabled(const nevr::NevrConfig& cfg);
+
 }  // namespace nevr_cfg

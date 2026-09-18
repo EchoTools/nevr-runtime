@@ -38,3 +38,6 @@ const char* NevrCfgRedirect(const char* result, const char* httpTargetJson, int 
 /// Auto-relay target (AutoRelayThroughBridge): ws://127.0.0.1:<bridgePort> when
 /// nevr_socket_uri is configured, else null.
 const char* NevrCfgAutoRelay(unsigned bridgePort);
+
+/// True only when config.yaml explicitly contains `social.facade: true`.
+bool NevrCfgSocialFacadeEnabled();

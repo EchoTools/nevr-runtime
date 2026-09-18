@@ -144,4 +144,8 @@ std::optional<std::string> ResolveRedirect(const std::string& result,
   return *target;
 }
 
+bool SocialFacadeEnabled(const nevr::NevrConfig& cfg) {
+  return cfg.GetBool("social.facade").value_or(false);
+}
+
 }  // namespace nevr_cfg
