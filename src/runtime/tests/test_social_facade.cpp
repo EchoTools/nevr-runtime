@@ -47,6 +47,27 @@ TEST(SocialFacade, EmptyQueriesReturnSafeDefaults) {
   EXPECT_EQ(id, 0u);
 }
 
+TEST(SocialFacade, EmptyPartyQueriesUseTheRealSlotContracts) {
+  void* object = SocialFacade::Object();
+  using UpdateFn = void (*)(void*, const void*);
+  using SetLocalUserFn = void (*)(void*, std::uint32_t);
+  using QueryFn = std::uint32_t (*)(void*);
+  using HostFn = std::uint64_t* (*)(void*, std::uint64_t*);
+  using IdFn = std::uint64_t (*)(void*);
+
+  reinterpret_cast<UpdateFn>(Vtable(object)[13])(object, nullptr);
+  reinterpret_cast<SetLocalUserFn>(Vtable(object)[14])(object, 0);
+  EXPECT_EQ(reinterpret_cast<QueryFn>(Vtable(object)[20])(object), 0u);
+  EXPECT_EQ(reinterpret_cast<QueryFn>(Vtable(object)[21])(object), 0u);
+  EXPECT_EQ(reinterpret_cast<QueryFn>(Vtable(object)[22])(object), 0u);
+
+  std::uint64_t host = UINT64_MAX;
+  EXPECT_EQ(reinterpret_cast<HostFn>(Vtable(object)[23])(object, &host), &host);
+  EXPECT_EQ(host, 0u);
+  EXPECT_EQ(reinterpret_cast<QueryFn>(Vtable(object)[24])(object), 1u);
+  EXPECT_EQ(reinterpret_cast<IdFn>(Vtable(object)[25])(object), 0u);
+}
+
 TEST(SocialFacade, ShutdownKeepsObjectAndVtableAlive) {
   void* object = SocialFacade::Object();
   const Slot* before = Vtable(object);

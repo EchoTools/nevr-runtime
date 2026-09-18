@@ -1,4 +1,5 @@
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 
@@ -26,7 +27,40 @@ std::uint32_t g_initializeCalls = 0;
 std::uint32_t g_shutdownCalls = 0;
 const void* g_callbacksSource = nullptr;
 
+struct FacadeCallCounts {
+  std::atomic<std::uint32_t> update{0};
+  std::atomic<std::uint32_t> setLocalUser{0};
+  std::atomic<std::uint32_t> ready{0};
+  std::atomic<std::uint32_t> joinPolicy{0};
+  std::atomic<std::uint32_t> joinable{0};
+  std::atomic<std::uint32_t> host{0};
+  std::atomic<std::uint32_t> isHost{0};
+  std::atomic<std::uint32_t> id{0};
+};
+
+FacadeCallCounts g_calls;
+
+constexpr std::uint32_t kInitialQueryLogCalls = 3;
+constexpr std::uint32_t kUpdateSummaryInterval = 300;
+
 std::uint8_t* Bytes(void* self) { return static_cast<std::uint8_t*>(self); }
+
+std::uint32_t CountCall(std::atomic<std::uint32_t>& counter) {
+  return counter.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
+std::uint64_t RoomId(const void* self) {
+  std::uint64_t result = 0;
+  std::memcpy(&result, static_cast<const std::uint8_t*>(self) + 0x2A8, sizeof(result));
+  return result;
+}
+
+void LogQuery(const char* name, std::uintptr_t slot, std::uint32_t callCount, std::uint64_t result) {
+  if (callCount > kInitialQueryLogCalls) return;
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.SOCIAL] facade query slot=0x%llx name=%s call_count=%u result=%llu",
+      static_cast<unsigned long long>(slot), name, callCount, static_cast<unsigned long long>(result));
+}
 
 void Void0(void*) {}
 void VoidU32(void*, std::uint32_t) {}
@@ -39,6 +73,68 @@ const char* EmptyU32(void*, std::uint32_t) { return ""; }
 std::uint64_t* ZeroId(void*, std::uint64_t* out, std::uint32_t) {
   if (out != nullptr) *out = 0;
   return out;
+}
+
+void Update(void*, const void*) {
+  const std::uint32_t callCount = CountCall(g_calls.update);
+  if (callCount == 1) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade update call_count=1");
+  }
+  if (callCount % kUpdateSummaryInterval == 0) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.SOCIAL] facade calls update=%u set_local_user=%u ready=%u join_policy=%u "
+        "joinable=%u host=%u is_host=%u id=%u period=%u",
+        callCount, g_calls.setLocalUser.load(std::memory_order_relaxed),
+        g_calls.ready.load(std::memory_order_relaxed), g_calls.joinPolicy.load(std::memory_order_relaxed),
+        g_calls.joinable.load(std::memory_order_relaxed), g_calls.host.load(std::memory_order_relaxed),
+        g_calls.isHost.load(std::memory_order_relaxed), g_calls.id.load(std::memory_order_relaxed),
+        kUpdateSummaryInterval);
+  }
+}
+
+void SetLocalUser(void*, std::uint32_t userIndex) {
+  const std::uint32_t callCount = CountCall(g_calls.setLocalUser);
+  if (callCount == 1) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade set_local_user user_index=%u call_count=1", userIndex);
+  }
+}
+
+std::uint32_t Ready(void*) {
+  constexpr std::uint32_t result = 0;
+  LogQuery("Ready", 0xA0, CountCall(g_calls.ready), result);
+  return result;
+}
+
+std::uint32_t JoinPolicy(void* self) {
+  std::uint32_t result = 0;
+  std::memcpy(&result, Bytes(self) + 0x2B4, sizeof(result));
+  LogQuery("JoinPolicy", 0xA8, CountCall(g_calls.joinPolicy), result);
+  return result;
+}
+
+std::uint32_t Joinable(void*) {
+  constexpr std::uint32_t result = 0;
+  LogQuery("Joinable", 0xB0, CountCall(g_calls.joinable), result);
+  return result;
+}
+
+std::uint64_t* Host(void*, std::uint64_t* out) {
+  constexpr std::uint64_t result = 0;
+  if (out != nullptr) *out = result;
+  LogQuery("Host", 0xB8, CountCall(g_calls.host), result);
+  return out;
+}
+
+std::uint32_t IsHost(void* self) {
+  const std::uint32_t result = RoomId(self) == 0 ? 1U : 0U;
+  LogQuery("IsHost", 0xC0, CountCall(g_calls.isHost), result);
+  return result;
+}
+
+std::uint64_t Id(void* self) {
+  const std::uint64_t result = RoomId(self);
+  LogQuery("Id", 0xC8, CountCall(g_calls.id), result);
+  return result;
 }
 
 std::uint64_t Initialize(void* self, std::uint32_t maxUsers, const void* callbacks) {
@@ -103,19 +199,19 @@ const std::array<Slot, kVtableSlotCount> kVtable = {
     reinterpret_cast<Slot>(&Shutdown),    // 10 Shutdown
     reinterpret_cast<Slot>(&Void0),       // 11 destructor/release
     reinterpret_cast<Slot>(&Reset),       // 12 Reset
-    reinterpret_cast<Slot>(&Void0),       // 13 Update
-    reinterpret_cast<Slot>(&Void0),       // 14 CacheData
-    reinterpret_cast<Slot>(&Void0),       // 15 ReceiveData
-    reinterpret_cast<Slot>(&VoidU32),     // 16 RemoveRemoteMember
+    reinterpret_cast<Slot>(&Update),      // 13 Update
+    reinterpret_cast<Slot>(&SetLocalUser),  // 14 SetLocalUser
+    reinterpret_cast<Slot>(&VoidU32),     // 15 RemoveLocalMember
+    reinterpret_cast<Slot>(&VoidU32),     // 16 SetJoinPolicy
     reinterpret_cast<Slot>(&Void0),       // 17 Create
-    reinterpret_cast<Slot>(&VoidU32),     // 18 SetJoinPolicy
-    reinterpret_cast<Slot>(&VoidU32),     // 19 PassOwnership
-    reinterpret_cast<Slot>(&VoidU32),     // 20 Kick
-    reinterpret_cast<Slot>(&Zero0),       // 21 Ready
-    reinterpret_cast<Slot>(&Zero0),       // 22 Host
-    reinterpret_cast<Slot>(&Zero0),       // 23 IsHost
-    reinterpret_cast<Slot>(&Zero0),       // 24 Id
-    reinterpret_cast<Slot>(&Zero0),       // 25 JoinPolicy
+    reinterpret_cast<Slot>(&VoidU32),     // 18 PassOwnership
+    reinterpret_cast<Slot>(&VoidU32),     // 19 Kick
+    reinterpret_cast<Slot>(&Ready),       // 20 Ready
+    reinterpret_cast<Slot>(&JoinPolicy),  // 21 JoinPolicy
+    reinterpret_cast<Slot>(&Joinable),    // 22 Joinable
+    reinterpret_cast<Slot>(&Host),        // 23 Host
+    reinterpret_cast<Slot>(&IsHost),      // 24 IsHost
+    reinterpret_cast<Slot>(&Id),          // 25 Id
     reinterpret_cast<Slot>(&Zero0),       // 26 MemberCount
     reinterpret_cast<Slot>(&ZeroId),      // 27 MemberId
     reinterpret_cast<Slot>(&EmptyU32),    // 28 MemberName
