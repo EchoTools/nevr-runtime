@@ -3,7 +3,9 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include "runtime/patch/social_facade.h"
 
@@ -14,15 +16,84 @@ using Slot = std::uintptr_t;
 const Slot* Vtable(void* object) { return *static_cast<const Slot**>(object); }
 
 TEST(SocialFacade, FlagOffRequestsOnlyTheAccessorHook) {
-  static_assert(SocialFacade::RequiredInstallScope(false, true) == SocialFacade::InstallScope::kAccessorOnly);
-  EXPECT_EQ(SocialFacade::RequiredInstallScope(false, false), SocialFacade::InstallScope::kAccessorOnly);
-  EXPECT_EQ(SocialFacade::RequiredInstallScope(false, true), SocialFacade::InstallScope::kAccessorOnly);
+  std::vector<SocialFacade::Probe> requests;
+  const auto fakeInstall = [&requests](SocialFacade::Probe probe) { requests.push_back(probe); };
+  SocialFacade::InstallHookPlan(SocialFacade::InstallStage::kBoot, false, fakeInstall);
+  SocialFacade::InstallHookPlan(SocialFacade::InstallStage::kFacadeSelected, false, fakeInstall);
+  ASSERT_EQ(requests.size(), 1u);
+  EXPECT_EQ(requests[0], SocialFacade::Probe::kAccessor);
   EXPECT_EQ(SocialFacade::Select(false, nullptr), nullptr);
 
   int providerObject = 0;
   EXPECT_EQ(SocialFacade::Select(false, &providerObject), &providerObject);
   EXPECT_EQ(SocialFacade::Select(true, &providerObject), &providerObject);
-  EXPECT_EQ(SocialFacade::RequiredInstallScope(true, true), SocialFacade::InstallScope::kAccessorAndJson);
+}
+
+TEST(SocialFacade, EnabledInstallPublishesEachTrampolineBeforeEnable) {
+  std::vector<SocialFacade::Probe> requests;
+  const auto fakeInstall = [&requests](SocialFacade::Probe probe) { requests.push_back(probe); };
+  SocialFacade::InstallHookPlan(SocialFacade::InstallStage::kBoot, true, fakeInstall);
+  SocialFacade::InstallHookPlan(SocialFacade::InstallStage::kFacadeSelected, true, fakeInstall);
+  ASSERT_EQ(requests.size(), 4u);
+  EXPECT_EQ(requests[0], SocialFacade::Probe::kAccessor);
+  EXPECT_EQ(requests[1], SocialFacade::Probe::kSocialJson);
+  EXPECT_EQ(requests[2], SocialFacade::Probe::kJsonSet);
+  EXPECT_EQ(requests[3], SocialFacade::Probe::kJsonNavigateForWrite);
+
+  for (std::size_t i = 1; i < requests.size(); ++i) {
+    std::vector<std::string> calls;
+    void* published = nullptr;
+    const auto create = [&](void** trampoline) {
+      calls.emplace_back("create");
+      *trampoline = reinterpret_cast<void*>(static_cast<std::uintptr_t>(i + 1));
+      return true;
+    };
+    const auto publish = [&](void* trampoline) {
+      calls.emplace_back("publish");
+      published = trampoline;
+    };
+    const auto enable = [&] {
+      calls.emplace_back("enable");
+      return published != nullptr;
+    };
+    EXPECT_TRUE(SocialFacade::CreatePublishEnable(create, publish, enable));
+    EXPECT_EQ(calls, (std::vector<std::string>{"create", "publish", "enable"}));
+  }
+
+  int publishCalls = 0;
+  int enableCalls = 0;
+  EXPECT_FALSE(SocialFacade::CreatePublishEnable(
+      [](void**) { return false; },
+      [&](void*) { ++publishCalls; },
+      [&] { ++enableCalls; return true; }));
+  EXPECT_EQ(publishCalls, 0);
+  EXPECT_EQ(enableCalls, 0);
+}
+
+TEST(SocialFacade, JsonTraceRoundTripDrainsOnlyOnce) {
+  std::vector<SocialFacade::JsonTraceRecord> records;
+  const auto collect = [](const SocialFacade::JsonTraceRecord& record, void* context) {
+    static_cast<std::vector<SocialFacade::JsonTraceRecord>*>(context)->push_back(record);
+  };
+  SocialFacade::QueueJsonTrace(SocialFacade::JsonTraceKind::kSet, 19, "mm|status", 1, 2, 3, 4);
+  SocialFacade::DrainJsonTraces(collect, &records);
+  ASSERT_EQ(records.size(), 1u);
+  EXPECT_EQ(records[0].kind, SocialFacade::JsonTraceKind::kSet);
+  EXPECT_EQ(records[0].callCount, 19u);
+  EXPECT_STREQ(records[0].path, "mm|status");
+  EXPECT_EQ(records[0].argument, 1u);
+  EXPECT_EQ(records[0].result, 2u);
+  EXPECT_EQ(records[0].root, 3u);
+  EXPECT_EQ(records[0].cache, 4u);
+  SocialFacade::DrainJsonTraces(collect, &records);
+  EXPECT_EQ(records.size(), 1u);
+
+  const char* longPath = "01234567890123456789012345678901234567890123456789";
+  SocialFacade::QueueJsonTrace(SocialFacade::JsonTraceKind::kNavigateForWrite, 20, longPath, 5, 6, 7, 8);
+  SocialFacade::DrainJsonTraces(collect, &records);
+  ASSERT_EQ(records.size(), 2u);
+  EXPECT_EQ(std::strlen(records[1].path), 47u);
+  EXPECT_EQ(records[1].path[47], '\0');
 }
 
 TEST(SocialFacade, HasCompleteProcessLifetimeVtable) {

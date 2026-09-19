@@ -79,6 +79,7 @@ set(PATCHES_HEADERS
     "patch/binary_bug_fixes.h"
     "patch/pnsrad_enabler.h"
     "patch/social_facade.h"
+    "patch/social_facade_install.h"
     "log/builtin_filter.h"
     "log/symcache.h"
     "patch/broadcaster_guard.h"

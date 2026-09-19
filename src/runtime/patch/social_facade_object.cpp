@@ -47,6 +47,7 @@ FacadeCallCounts g_calls;
 constexpr std::size_t kJsonTraceCapacity = 32;
 constexpr std::size_t kJsonTracePathBytes = 48;
 constexpr std::size_t kJsonTracePathWords = kJsonTracePathBytes / sizeof(std::uint64_t);
+static_assert(sizeof(JsonTraceRecord::path) == kJsonTracePathBytes);
 
 struct JsonTraceSlot {
   std::atomic<std::uint64_t> stamp{0};
@@ -357,7 +358,8 @@ void QueueJsonTrace(JsonTraceKind kind, std::uint32_t callCount, const char* pat
   slot.stamp.store(sequence * 2, std::memory_order_release);
 }
 
-void FlushJsonTraces() {
+void DrainJsonTraces(JsonTraceSink sink, void* context) {
+  if (sink == nullptr) return;
   for (std::size_t slotIndex = 0; slotIndex < g_jsonTraceRing.size(); ++slotIndex) {
     JsonTraceSlot& slot = g_jsonTraceRing[slotIndex];
     const std::uint64_t stampBefore = slot.stamp.load(std::memory_order_acquire);
@@ -366,30 +368,37 @@ void FlushJsonTraces() {
     std::uint64_t flushed = g_jsonTraceFlushed[slotIndex].load(std::memory_order_relaxed);
     if (sequence <= flushed) continue;
 
-    const auto kind = static_cast<JsonTraceKind>(slot.kind.load(std::memory_order_relaxed));
-    const std::uint32_t callCount = slot.callCount.load(std::memory_order_relaxed);
-    const std::uint32_t argument = slot.argument.load(std::memory_order_relaxed);
-    const std::uint64_t result = slot.result.load(std::memory_order_relaxed);
-    const std::uintptr_t root = slot.root.load(std::memory_order_relaxed);
-    const std::uintptr_t cache = slot.cache.load(std::memory_order_relaxed);
-    char path[kJsonTracePathBytes] = {};
+    JsonTraceRecord record{};
+    record.kind = static_cast<JsonTraceKind>(slot.kind.load(std::memory_order_relaxed));
+    record.callCount = slot.callCount.load(std::memory_order_relaxed);
+    record.argument = slot.argument.load(std::memory_order_relaxed);
+    record.result = slot.result.load(std::memory_order_relaxed);
+    record.root = slot.root.load(std::memory_order_relaxed);
+    record.cache = slot.cache.load(std::memory_order_relaxed);
     for (std::size_t i = 0; i < slot.path.size(); ++i) {
       const std::uint64_t word = slot.path[i].load(std::memory_order_relaxed);
-      std::memcpy(path + i * sizeof(word), &word, sizeof(word));
+      std::memcpy(record.path + i * sizeof(word), &word, sizeof(word));
     }
     if (slot.stamp.load(std::memory_order_acquire) != stampBefore ||
         !g_jsonTraceFlushed[slotIndex].compare_exchange_strong(flushed, sequence, std::memory_order_relaxed)) {
       continue;
     }
 
+    sink(record, context);
+  }
+}
+
+void FlushJsonTraces() {
+  DrainJsonTraces([](const JsonTraceRecord& record, void*) {
     const char* traceName = "social_json";
-    if (kind == JsonTraceKind::kSet) traceName = "json_set";
-    if (kind == JsonTraceKind::kNavigateForWrite) traceName = "json_navigate_write";
+    if (record.kind == JsonTraceKind::kSet) traceName = "json_set";
+    if (record.kind == JsonTraceKind::kNavigateForWrite) traceName = "json_navigate_write";
     Log(EchoVR::LogLevel::Info,
         "[NEVR.SOCIAL] %s call_count=%u path=%s argument=%u result=0x%llx root=%p cache=%p",
-        traceName, callCount, path[0] != '\0' ? path : "<none>", argument,
-        static_cast<unsigned long long>(result), reinterpret_cast<void*>(root), reinterpret_cast<void*>(cache));
-  }
+        traceName, record.callCount, record.path[0] != '\0' ? record.path : "<none>", record.argument,
+        static_cast<unsigned long long>(record.result), reinterpret_cast<void*>(record.root),
+        reinterpret_cast<void*>(record.cache));
+  }, nullptr);
 }
 
 void* Object() {

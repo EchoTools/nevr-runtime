@@ -3,18 +3,27 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace SocialFacade {
+#include "runtime/patch/social_facade_install.h"
 
-enum class InstallScope {
-  kAccessorOnly,
-  kAccessorAndJson,
-};
+namespace SocialFacade {
 
 enum class JsonTraceKind : std::uint32_t {
   kSocialJson,
   kSet,
   kNavigateForWrite,
 };
+
+struct JsonTraceRecord {
+  JsonTraceKind kind;
+  std::uint32_t callCount;
+  std::uint32_t argument;
+  std::uint64_t result;
+  std::uintptr_t root;
+  std::uintptr_t cache;
+  char path[48];
+};
+
+using JsonTraceSink = void (*)(const JsonTraceRecord&, void* context);
 
 constexpr std::size_t kRealVtableSlotCount = 75;
 constexpr std::size_t kMaxObservedGameVtableSlot = 76;
@@ -33,16 +42,12 @@ void* Object();
 /// Select the façade only for the opt-in/null-provider case.
 void* Select(bool enabled, void* original);
 
-/// Pure install decision used by the accessor and unit tests.
-constexpr InstallScope RequiredInstallScope(bool enabled, bool facadeSelected) {
-  return enabled && facadeSelected ? InstallScope::kAccessorAndJson : InstallScope::kAccessorOnly;
-}
-
 /// Best-effort lock-free producer handoff from hooks running inside game JSON
 /// code to Facade::Update. A busy/overwritten slot may drop a diagnostic record.
 void QueueJsonTrace(JsonTraceKind kind, std::uint32_t callCount, const char* path,
                     std::uint32_t argument, std::uint64_t result, std::uintptr_t root,
                     std::uintptr_t cache);
+void DrainJsonTraces(JsonTraceSink sink, void* context);
 void FlushJsonTraces();
 
 #ifdef NEVR_TEST_HOOKS
