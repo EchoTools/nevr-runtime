@@ -25,7 +25,9 @@ static_assert(offsetof(FacadeObject, state) == 0x1E8, "CNSISocial state offset d
 FacadeObject g_object{};
 std::uint32_t g_initializeCalls = 0;
 std::uint32_t g_shutdownCalls = 0;
+std::uint32_t g_maxUsers = 0;
 const void* g_callbacksSource = nullptr;
+std::array<std::atomic<bool>, kVtableSlotCount - kRealVtableSlotCount> g_paddedSlotLogged{};
 
 struct FacadeCallCounts {
   std::atomic<std::uint32_t> update{0};
@@ -69,6 +71,18 @@ void VoidU32U32(void*, std::uint32_t, std::uint32_t) {}
 std::uint64_t Zero0(void*) { return 0; }
 std::uint64_t ZeroU32(void*, std::uint32_t) { return 0; }
 const char* EmptyU32(void*, std::uint32_t) { return ""; }
+
+template <std::size_t SlotIndex>
+std::uint64_t PaddedSlot(void*) {
+  static_assert(SlotIndex >= kRealVtableSlotCount && SlotIndex < kVtableSlotCount);
+  bool expected = false;
+  if (g_paddedSlotLogged[SlotIndex - kRealVtableSlotCount].compare_exchange_strong(
+          expected, true, std::memory_order_relaxed)) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade padded_vtable_slot slot=%llu offset=0x%llx call_count=1",
+        static_cast<unsigned long long>(SlotIndex), static_cast<unsigned long long>(SlotIndex * sizeof(Slot)));
+  }
+  return 0;
+}
 
 std::uint64_t* ZeroId(void*, std::uint64_t* out, std::uint32_t) {
   if (out != nullptr) *out = 0;
@@ -144,7 +158,7 @@ std::uint64_t Initialize(void* self, std::uint32_t maxUsers, const void* callbac
   } else {
     object->callbacks.fill(0);
   }
-  std::memcpy(Bytes(self) + 0x250, &maxUsers, sizeof(maxUsers));
+  g_maxUsers = maxUsers;
   g_callbacksSource = callbacks;
   ++g_initializeCalls;
   Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade initialize max_users=%u callbacks=%p call_count=%u", maxUsers,
@@ -166,10 +180,12 @@ void Reset(void* self) {
   const std::uint16_t invalidTeam = UINT16_MAX;
   const std::uint8_t privateLobby = 2;
   const std::uint32_t flags = 2;
+  const std::uint32_t joinPolicy = 3;
   std::memcpy(Bytes(self) + 0x270, &invalidMatchType, sizeof(invalidMatchType));
   std::memcpy(Bytes(self) + 0x278, &invalidTeam, sizeof(invalidTeam));
   std::memcpy(Bytes(self) + 0x27A, &privateLobby, sizeof(privateLobby));
   std::memcpy(Bytes(self) + 0x27C, &flags, sizeof(flags));
+  std::memcpy(Bytes(self) + 0x2B4, &joinPolicy, sizeof(joinPolicy));
 }
 
 void EnterLobby(void* self, const void* uuid, std::uint64_t matchType, std::uint16_t team, std::uint8_t lobbyType,
@@ -182,7 +198,7 @@ void EnterLobby(void* self, const void* uuid, std::uint64_t matchType, std::uint
   std::memcpy(Bytes(self) + 0x27C, &flags, sizeof(flags));
 }
 
-// Slot order is the 75-entry CNSISocial table at pnsovr.dll 0x1801FBFC0.
+// Slot order is the 75-entry CNSOVRSocial table at pnsovr.dll 0x1801FC2E0.
 // Each entry has a signature-compatible empty implementation for its return
 // shape; ID wrappers use the Win64 hidden-result-pointer convention.
 const std::array<Slot, kVtableSlotCount> kVtable = {
@@ -261,7 +277,20 @@ const std::array<Slot, kVtableSlotCount> kVtable = {
     reinterpret_cast<Slot>(&ZeroU32),     // 72 InviteSentTime
     reinterpret_cast<Slot>(&VoidU32),     // 73 AcceptInvite
     reinterpret_cast<Slot>(&VoidU32),     // 74 DismissInvite
+    reinterpret_cast<Slot>(&PaddedSlot<75>),  // 75 guard
+    reinterpret_cast<Slot>(&PaddedSlot<76>),  // 76 observed DMO-only dispatch at +0x260
+    reinterpret_cast<Slot>(&PaddedSlot<77>),  // 77 guard
+    reinterpret_cast<Slot>(&PaddedSlot<78>),  // 78 guard
+    reinterpret_cast<Slot>(&PaddedSlot<79>),  // 79 guard
+    reinterpret_cast<Slot>(&PaddedSlot<80>),  // 80 guard
+    reinterpret_cast<Slot>(&PaddedSlot<81>),  // 81 guard
+    reinterpret_cast<Slot>(&PaddedSlot<82>),  // 82 guard
+    reinterpret_cast<Slot>(&PaddedSlot<83>),  // 83 guard
+    reinterpret_cast<Slot>(&PaddedSlot<84>),  // 84 guard
 };
+
+static_assert(kVtable.size() >= kRealVtableSlotCount);
+static_assert(kVtable.size() >= kMaxObservedGameVtableSlot + 1 + kVtableGuardSlotCount);
 
 }  // namespace
 
@@ -276,11 +305,7 @@ void* Object() {
 #ifdef NEVR_TEST_HOOKS
 std::uint32_t TestInitializeCallCount() { return g_initializeCalls; }
 std::uint32_t TestShutdownCallCount() { return g_shutdownCalls; }
-std::uint32_t TestMaxUsers() {
-  std::uint32_t result = 0;
-  std::memcpy(&result, Bytes(&g_object) + 0x250, sizeof(result));
-  return result;
-}
+std::uint32_t TestMaxUsers() { return g_maxUsers; }
 const void* TestCallbacksSource() { return g_callbacksSource; }
 #endif
 

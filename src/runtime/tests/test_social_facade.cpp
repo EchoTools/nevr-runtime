@@ -13,6 +13,9 @@ using Slot = std::uintptr_t;
 const Slot* Vtable(void* object) { return *static_cast<const Slot**>(object); }
 
 TEST(SocialFacade, HasCompleteProcessLifetimeVtable) {
+  static_assert(SocialFacade::kRealVtableSlotCount == 75);
+  static_assert(SocialFacade::kMaxObservedGameVtableSlot == 76);
+  static_assert(SocialFacade::kVtableSlotCount == 85);
   void* first = SocialFacade::Object();
   void* second = SocialFacade::Object();
   ASSERT_EQ(first, second);
@@ -31,6 +34,16 @@ TEST(SocialFacade, InitializeCopiesCallbacksAndRecordsArguments) {
   EXPECT_EQ(initialize(object, 16, callbacks.data()), 0u);
   EXPECT_EQ(std::memcmp(static_cast<std::uint8_t*>(object) + 8, callbacks.data(), callbacks.size()), 0);
   EXPECT_EQ(SocialFacade::TestMaxUsers(), 16u);
+  const auto* bytes = static_cast<const std::uint8_t*>(object);
+  std::uint64_t arrayPointer = UINT64_MAX;
+  std::uint64_t arrayCount = UINT64_MAX;
+  std::uint64_t arrayAllocator = UINT64_MAX;
+  std::memcpy(&arrayPointer, bytes + 0x248, sizeof(arrayPointer));
+  std::memcpy(&arrayCount, bytes + 0x250, sizeof(arrayCount));
+  std::memcpy(&arrayAllocator, bytes + 0x258, sizeof(arrayAllocator));
+  EXPECT_EQ(arrayPointer, 0u);
+  EXPECT_EQ(arrayCount, 0u);
+  EXPECT_EQ(arrayAllocator, 0u);
   EXPECT_EQ(SocialFacade::TestCallbacksSource(), callbacks.data());
   EXPECT_GE(SocialFacade::TestInitializeCallCount(), 1u);
 }
@@ -58,7 +71,7 @@ TEST(SocialFacade, EmptyPartyQueriesUseTheRealSlotContracts) {
   reinterpret_cast<UpdateFn>(Vtable(object)[13])(object, nullptr);
   reinterpret_cast<SetLocalUserFn>(Vtable(object)[14])(object, 0);
   EXPECT_EQ(reinterpret_cast<QueryFn>(Vtable(object)[20])(object), 0u);
-  EXPECT_EQ(reinterpret_cast<QueryFn>(Vtable(object)[21])(object), 0u);
+  EXPECT_EQ(reinterpret_cast<QueryFn>(Vtable(object)[21])(object), 3u);
   EXPECT_EQ(reinterpret_cast<QueryFn>(Vtable(object)[22])(object), 0u);
 
   std::uint64_t host = UINT64_MAX;
@@ -66,6 +79,26 @@ TEST(SocialFacade, EmptyPartyQueriesUseTheRealSlotContracts) {
   EXPECT_EQ(host, 0u);
   EXPECT_EQ(reinterpret_cast<QueryFn>(Vtable(object)[24])(object), 1u);
   EXPECT_EQ(reinterpret_cast<IdFn>(Vtable(object)[25])(object), 0u);
+}
+
+TEST(SocialFacade, ConstructorDefaultsAndPaddedSlotAreSafe) {
+  void* object = SocialFacade::Object();
+  const auto* bytes = static_cast<const std::uint8_t*>(object);
+  std::uint64_t jsonRoot = UINT64_MAX;
+  std::uint64_t jsonCache = UINT64_MAX;
+  std::uint32_t flags = 0;
+  std::uint32_t joinPolicy = 0;
+  std::memcpy(&jsonRoot, bytes + 0x1F0, sizeof(jsonRoot));
+  std::memcpy(&jsonCache, bytes + 0x1F8, sizeof(jsonCache));
+  std::memcpy(&flags, bytes + 0x27C, sizeof(flags));
+  std::memcpy(&joinPolicy, bytes + 0x2B4, sizeof(joinPolicy));
+  EXPECT_EQ(jsonRoot, 0u);
+  EXPECT_EQ(jsonCache, 0u);
+  EXPECT_EQ(flags, 2u);
+  EXPECT_EQ(joinPolicy, 3u);
+
+  using PaddedFn = std::uint64_t (*)(void*);
+  EXPECT_EQ(reinterpret_cast<PaddedFn>(Vtable(object)[76])(object), 0u);
 }
 
 TEST(SocialFacade, ShutdownKeepsObjectAndVtableAlive) {

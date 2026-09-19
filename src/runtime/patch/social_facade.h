@@ -5,7 +5,10 @@
 
 namespace SocialFacade {
 
-constexpr std::size_t kVtableSlotCount = 75;
+constexpr std::size_t kRealVtableSlotCount = 75;
+constexpr std::size_t kMaxObservedGameVtableSlot = 76;
+constexpr std::size_t kVtableGuardSlotCount = 8;
+constexpr std::size_t kVtableSlotCount = kMaxObservedGameVtableSlot + 1 + kVtableGuardSlotCount;
 constexpr std::size_t kObjectSize = 0xBA0;
 
 /// Install the observation detour. Substitution is evaluated from
