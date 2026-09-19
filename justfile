@@ -215,7 +215,7 @@ test-auth-unit:
     unset VCPKG_ROOT
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_social_facade --target test_plugin_load_plan
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_social_facade --target test_hooking --target test_plugin_load_plan
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -270,6 +270,12 @@ test-auth-unit:
     fi
     wine "$bin"
     bin="build/{{ preset }}/bin/test_social_facade.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_hooking.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
