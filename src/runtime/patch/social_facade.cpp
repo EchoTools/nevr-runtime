@@ -194,7 +194,7 @@ void InstallJsonProbe(std::uint64_t virtualAddress, const std::array<std::uint8_
   MH_STATUS enableStatus = MH_OK;
   MH_STATUS removeStatus = MH_OK;
   bool created = false;
-  const bool enabled = CreatePublishEnable(
+  const bool enabled = Hooking::CreatePublishEnable(
       [&](void** trampoline) {
         createStatus = MH_CreateHook(target, detour, trampoline);
         created = createStatus == MH_OK;

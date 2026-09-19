@@ -19,14 +19,4 @@ void InstallHookPlan(InstallStage stage, bool enabled, InstallOne&& installOne) 
   installOne(Probe::kJsonNavigateForWrite);
 }
 
-// The trampoline must be visible to the detour before enabling the hook.
-// Create returns false on failure; publish and enable are never called then.
-template <typename Create, typename Publish, typename Enable>
-bool CreatePublishEnable(Create&& create, Publish&& publish, Enable&& enable) {
-  void* trampoline = nullptr;
-  if (!create(&trampoline) || trampoline == nullptr) return false;
-  publish(trampoline);
-  return enable();
-}
-
 }  // namespace SocialFacade

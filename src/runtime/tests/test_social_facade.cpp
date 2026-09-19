@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "runtime/patch/social_facade.h"
+#include "core/hooking.h"
 
 namespace {
 
@@ -56,13 +57,13 @@ TEST(SocialFacade, EnabledInstallPublishesEachTrampolineBeforeEnable) {
       calls.emplace_back("enable");
       return published != nullptr;
     };
-    EXPECT_TRUE(SocialFacade::CreatePublishEnable(create, publish, enable));
+    EXPECT_TRUE(Hooking::CreatePublishEnable(create, publish, enable));
     EXPECT_EQ(calls, (std::vector<std::string>{"create", "publish", "enable"}));
   }
 
   int publishCalls = 0;
   int enableCalls = 0;
-  EXPECT_FALSE(SocialFacade::CreatePublishEnable(
+  EXPECT_FALSE(Hooking::CreatePublishEnable(
       [](void**) { return false; },
       [&](void*) { ++publishCalls; },
       [&] { ++enableCalls; return true; }));
