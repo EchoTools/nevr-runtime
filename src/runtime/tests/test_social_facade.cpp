@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <thread>
 
 #include "runtime/patch/social_facade.h"
 
@@ -11,6 +12,18 @@ namespace {
 using Slot = std::uintptr_t;
 
 const Slot* Vtable(void* object) { return *static_cast<const Slot**>(object); }
+
+TEST(SocialFacade, FlagOffRequestsOnlyTheAccessorHook) {
+  static_assert(SocialFacade::RequiredInstallScope(false, true) == SocialFacade::InstallScope::kAccessorOnly);
+  EXPECT_EQ(SocialFacade::RequiredInstallScope(false, false), SocialFacade::InstallScope::kAccessorOnly);
+  EXPECT_EQ(SocialFacade::RequiredInstallScope(false, true), SocialFacade::InstallScope::kAccessorOnly);
+  EXPECT_EQ(SocialFacade::Select(false, nullptr), nullptr);
+
+  int providerObject = 0;
+  EXPECT_EQ(SocialFacade::Select(false, &providerObject), &providerObject);
+  EXPECT_EQ(SocialFacade::Select(true, &providerObject), &providerObject);
+  EXPECT_EQ(SocialFacade::RequiredInstallScope(true, true), SocialFacade::InstallScope::kAccessorAndJson);
+}
 
 TEST(SocialFacade, HasCompleteProcessLifetimeVtable) {
   static_assert(SocialFacade::kRealVtableSlotCount == 75);
@@ -23,6 +36,16 @@ TEST(SocialFacade, HasCompleteProcessLifetimeVtable) {
   for (std::size_t i = 0; i < SocialFacade::kVtableSlotCount; ++i) {
     EXPECT_NE(Vtable(first)[i], 0u) << "slot " << i;
   }
+}
+
+TEST(SocialFacade, ProcessLifetimeObjectIsSafeToConstructConcurrently) {
+  std::array<void*, 8> objects{};
+  std::array<std::thread, 8> threads;
+  for (std::size_t i = 0; i < threads.size(); ++i) {
+    threads[i] = std::thread([&objects, i] { objects[i] = SocialFacade::Object(); });
+  }
+  for (auto& thread : threads) thread.join();
+  for (void* object : objects) EXPECT_EQ(object, objects[0]);
 }
 
 TEST(SocialFacade, InitializeCopiesCallbacksAndRecordsArguments) {

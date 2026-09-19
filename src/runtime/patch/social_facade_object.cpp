@@ -2,6 +2,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 
 #include "abi/echovr.h"
 #include "core/logging.h"
@@ -23,8 +24,9 @@ static_assert(offsetof(FacadeObject, callbacks) == 0x08, "callback table offset 
 static_assert(offsetof(FacadeObject, state) == 0x1E8, "CNSISocial state offset drift");
 
 FacadeObject g_object{};
-std::uint32_t g_initializeCalls = 0;
-std::uint32_t g_shutdownCalls = 0;
+std::once_flag g_objectOnce;
+std::atomic<std::uint32_t> g_initializeCalls{0};
+std::atomic<std::uint32_t> g_shutdownCalls{0};
 std::uint32_t g_maxUsers = 0;
 const void* g_callbacksSource = nullptr;
 std::array<std::atomic<bool>, kVtableSlotCount - kRealVtableSlotCount> g_paddedSlotLogged{};
@@ -41,6 +43,29 @@ struct FacadeCallCounts {
 };
 
 FacadeCallCounts g_calls;
+
+constexpr std::size_t kJsonTraceCapacity = 32;
+constexpr std::size_t kJsonTracePathBytes = 48;
+constexpr std::size_t kJsonTracePathWords = kJsonTracePathBytes / sizeof(std::uint64_t);
+
+struct JsonTraceSlot {
+  std::atomic<std::uint64_t> stamp{0};
+  std::atomic<std::uint32_t> kind{0};
+  std::atomic<std::uint32_t> callCount{0};
+  std::atomic<std::uint32_t> argument{0};
+  std::atomic<std::uint64_t> result{0};
+  std::atomic<std::uintptr_t> root{0};
+  std::atomic<std::uintptr_t> cache{0};
+  std::array<std::atomic<std::uint64_t>, kJsonTracePathWords> path{};
+};
+
+static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
+static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
+static_assert(std::atomic<std::uintptr_t>::is_always_lock_free);
+
+std::array<JsonTraceSlot, kJsonTraceCapacity> g_jsonTraceRing{};
+std::array<std::atomic<std::uint64_t>, kJsonTraceCapacity> g_jsonTraceFlushed{};
+std::atomic<std::uint64_t> g_jsonTraceSequence{0};
 
 constexpr std::uint32_t kInitialQueryLogCalls = 3;
 constexpr std::uint32_t kUpdateSummaryInterval = 300;
@@ -90,6 +115,7 @@ std::uint64_t* ZeroId(void*, std::uint64_t* out, std::uint32_t) {
 }
 
 void Update(void*, const void*) {
+  FlushJsonTraces();
   const std::uint32_t callCount = CountCall(g_calls.update);
   if (callCount == 1) {
     Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade update call_count=1");
@@ -141,7 +167,7 @@ std::uint64_t* Host(void*, std::uint64_t* out) {
 
 std::uint32_t IsHost(void* self) {
   const std::uint32_t result = RoomId(self) == 0 ? 1U : 0U;
-  LogQuery("IsHost", 0xC0, CountCall(g_calls.isHost), result);
+  CountCall(g_calls.isHost);
   return result;
 }
 
@@ -160,18 +186,18 @@ std::uint64_t Initialize(void* self, std::uint32_t maxUsers, const void* callbac
   }
   g_maxUsers = maxUsers;
   g_callbacksSource = callbacks;
-  ++g_initializeCalls;
+  const std::uint32_t callCount = g_initializeCalls.fetch_add(1, std::memory_order_relaxed) + 1;
   Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade initialize max_users=%u callbacks=%p call_count=%u", maxUsers,
-      callbacks, g_initializeCalls);
+      callbacks, callCount);
   return 0;
 }
 
 void Shutdown(void* self) {
   auto* object = static_cast<FacadeObject*>(self);
   object->callbacks.fill(0);
-  ++g_shutdownCalls;
+  const std::uint32_t callCount = g_shutdownCalls.fetch_add(1, std::memory_order_relaxed) + 1;
   Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade shutdown object=%p call_count=%u lifetime=process", self,
-      g_shutdownCalls);
+      callCount);
 }
 
 void Reset(void* self) {
@@ -294,17 +320,89 @@ static_assert(kVtable.size() >= kMaxObservedGameVtableSlot + 1 + kVtableGuardSlo
 
 }  // namespace
 
+void* Select(bool enabled, void* original) {
+  return enabled && original == nullptr ? Object() : original;
+}
+
+void QueueJsonTrace(JsonTraceKind kind, std::uint32_t callCount, const char* path,
+                    std::uint32_t argument, std::uint64_t result, std::uintptr_t root,
+                    std::uintptr_t cache) {
+  // The game logger reaches mutexes, heap-backed formatting, and synchronous I/O.
+  // JSON hooks publish only atomic fixed-size fields; Update flushes them later.
+  const std::uint64_t sequence = g_jsonTraceSequence.fetch_add(1, std::memory_order_relaxed) + 1;
+  JsonTraceSlot& slot = g_jsonTraceRing[(sequence - 1) % g_jsonTraceRing.size()];
+  std::uint64_t previous = slot.stamp.load(std::memory_order_relaxed);
+  if ((previous & 1U) != 0 ||
+      !slot.stamp.compare_exchange_strong(previous, sequence * 2 - 1, std::memory_order_acq_rel)) {
+    return;
+  }
+
+  char pathCopy[kJsonTracePathBytes] = {};
+  if (path != nullptr) {
+    std::size_t i = 0;
+    for (; i + 1 < sizeof(pathCopy) && path[i] != '\0'; ++i) pathCopy[i] = path[i];
+    pathCopy[i] = '\0';
+  }
+  slot.kind.store(static_cast<std::uint32_t>(kind), std::memory_order_relaxed);
+  slot.callCount.store(callCount, std::memory_order_relaxed);
+  slot.argument.store(argument, std::memory_order_relaxed);
+  slot.result.store(result, std::memory_order_relaxed);
+  slot.root.store(root, std::memory_order_relaxed);
+  slot.cache.store(cache, std::memory_order_relaxed);
+  for (std::size_t i = 0; i < slot.path.size(); ++i) {
+    std::uint64_t word = 0;
+    std::memcpy(&word, pathCopy + i * sizeof(word), sizeof(word));
+    slot.path[i].store(word, std::memory_order_relaxed);
+  }
+  slot.stamp.store(sequence * 2, std::memory_order_release);
+}
+
+void FlushJsonTraces() {
+  for (std::size_t slotIndex = 0; slotIndex < g_jsonTraceRing.size(); ++slotIndex) {
+    JsonTraceSlot& slot = g_jsonTraceRing[slotIndex];
+    const std::uint64_t stampBefore = slot.stamp.load(std::memory_order_acquire);
+    if (stampBefore == 0 || (stampBefore & 1U) != 0) continue;
+    const std::uint64_t sequence = stampBefore / 2;
+    std::uint64_t flushed = g_jsonTraceFlushed[slotIndex].load(std::memory_order_relaxed);
+    if (sequence <= flushed) continue;
+
+    const auto kind = static_cast<JsonTraceKind>(slot.kind.load(std::memory_order_relaxed));
+    const std::uint32_t callCount = slot.callCount.load(std::memory_order_relaxed);
+    const std::uint32_t argument = slot.argument.load(std::memory_order_relaxed);
+    const std::uint64_t result = slot.result.load(std::memory_order_relaxed);
+    const std::uintptr_t root = slot.root.load(std::memory_order_relaxed);
+    const std::uintptr_t cache = slot.cache.load(std::memory_order_relaxed);
+    char path[kJsonTracePathBytes] = {};
+    for (std::size_t i = 0; i < slot.path.size(); ++i) {
+      const std::uint64_t word = slot.path[i].load(std::memory_order_relaxed);
+      std::memcpy(path + i * sizeof(word), &word, sizeof(word));
+    }
+    if (slot.stamp.load(std::memory_order_acquire) != stampBefore ||
+        !g_jsonTraceFlushed[slotIndex].compare_exchange_strong(flushed, sequence, std::memory_order_relaxed)) {
+      continue;
+    }
+
+    const char* traceName = "social_json";
+    if (kind == JsonTraceKind::kSet) traceName = "json_set";
+    if (kind == JsonTraceKind::kNavigateForWrite) traceName = "json_navigate_write";
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.SOCIAL] %s call_count=%u path=%s argument=%u result=0x%llx root=%p cache=%p",
+        traceName, callCount, path[0] != '\0' ? path : "<none>", argument,
+        static_cast<unsigned long long>(result), reinterpret_cast<void*>(root), reinterpret_cast<void*>(cache));
+  }
+}
+
 void* Object() {
-  if (g_object.vtable == nullptr) {
+  std::call_once(g_objectOnce, [] {
     g_object.vtable = kVtable.data();
     Reset(&g_object);
-  }
+  });
   return &g_object;
 }
 
 #ifdef NEVR_TEST_HOOKS
-std::uint32_t TestInitializeCallCount() { return g_initializeCalls; }
-std::uint32_t TestShutdownCallCount() { return g_shutdownCalls; }
+std::uint32_t TestInitializeCallCount() { return g_initializeCalls.load(std::memory_order_relaxed); }
+std::uint32_t TestShutdownCallCount() { return g_shutdownCalls.load(std::memory_order_relaxed); }
 std::uint32_t TestMaxUsers() { return g_maxUsers; }
 const void* TestCallbacksSource() { return g_callbacksSource; }
 #endif

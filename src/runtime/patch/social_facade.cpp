@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
@@ -52,7 +53,9 @@ JsonSetFn g_originalJsonSet = nullptr;
 JsonNavigateForWriteFn g_originalJsonNavigateForWrite = nullptr;
 void* g_facadeObject = nullptr;
 void* g_facadeJson = nullptr;
-std::uint32_t g_accessorCalls = 0;
+std::uintptr_t g_gameBase = 0;
+std::once_flag g_jsonHooksOnce;
+std::atomic<std::uint32_t> g_accessorCalls{0};
 std::atomic<std::uint32_t> g_socialJsonCalls{0};
 std::atomic<std::uint32_t> g_jsonSetCalls{0};
 std::atomic<std::uint32_t> g_jsonNavigateForWriteCalls{0};
@@ -90,18 +93,24 @@ int SocialDisabledByte() {
   return Readable(disabled, 1) ? static_cast<int>(*disabled) : -1;
 }
 
+void EnsureJsonHooksInstalled(void* facadeObject);
+
 void* AccessorHook(void* provider) {
   void* result = g_originalAccessor(provider);
   char providerName[512] = "<unresolved>";
   if (provider != nullptr && g_providerName != nullptr) g_providerName(provider, providerName);
   providerName[sizeof(providerName) - 1] = '\0';
   const bool enabled = NevrCfgSocialFacadeEnabled();
-  void* returned = (enabled && result == nullptr) ? Object() : result;
-  ++g_accessorCalls;
+  void* returned = Select(enabled, result);
+  if (RequiredInstallScope(enabled, returned != result) == InstallScope::kAccessorAndJson) {
+    EnsureJsonHooksInstalled(returned);
+  }
+  FlushJsonTraces();
+  const std::uint32_t callCount = g_accessorCalls.fetch_add(1, std::memory_order_relaxed) + 1;
   Log(EchoVR::LogLevel::Info,
       "[NEVR.SOCIAL] accessor provider=%s provider_ptr=%p original=%p returned=%p "
       "disabled_byte=%d facade_enabled=%d call_count=%u",
-      providerName, provider, result, returned, SocialDisabledByte(), enabled ? 1 : 0, g_accessorCalls);
+      providerName, provider, result, returned, SocialDisabledByte(), enabled ? 1 : 0, callCount);
   return returned;
 }
 
@@ -112,10 +121,9 @@ void* SocialJsonHook(void* social) {
   if (!ShouldLog(callCount)) return result;
   std::uint32_t flags = 0;
   std::memcpy(&flags, static_cast<const std::uint8_t*>(social) + kFacadeFlagsOffset, sizeof(flags));
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.SOCIAL] social_json call_count=%u returned=%p embedded=%d flags=0x%x root=%p cache=%p",
-      callCount, result, result == g_facadeJson ? 1 : 0, flags,
-      reinterpret_cast<void*>(JsonWord(g_facadeJson, 0)), reinterpret_cast<void*>(JsonWord(g_facadeJson, 8)));
+  QueueJsonTrace(JsonTraceKind::kSocialJson, callCount, nullptr, flags,
+                 reinterpret_cast<std::uintptr_t>(result), JsonWord(g_facadeJson, 0),
+                 JsonWord(g_facadeJson, 8));
   return result;
 }
 
@@ -124,10 +132,8 @@ std::uint32_t JsonSetHook(void* json, const char* path, std::uint32_t required) 
   if (json != g_facadeJson) return result;
   const std::uint32_t callCount = CountTrace(g_jsonSetCalls);
   if (ShouldLog(callCount)) {
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.SOCIAL] json_set call_count=%u path=%s required=%u result=%u root=%p cache=%p",
-        callCount, path != nullptr ? path : "<null>", required, result,
-        reinterpret_cast<void*>(JsonWord(json, 0)), reinterpret_cast<void*>(JsonWord(json, 8)));
+    QueueJsonTrace(JsonTraceKind::kSet, callCount, path != nullptr ? path : "<null>", required, result,
+                   JsonWord(json, 0), JsonWord(json, 8));
   }
   return result;
 }
@@ -137,10 +143,8 @@ void* JsonNavigateForWriteHook(const char* path, void* json, void* outA, void* o
   if (json != g_facadeJson) return result;
   const std::uint32_t callCount = CountTrace(g_jsonNavigateForWriteCalls);
   if (ShouldLog(callCount)) {
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.SOCIAL] json_navigate_write call_count=%u path=%s result=%p root=%p cache=%p",
-        callCount, path != nullptr ? path : "<null>", result,
-        reinterpret_cast<void*>(JsonWord(json, 0)), reinterpret_cast<void*>(JsonWord(json, 8)));
+    QueueJsonTrace(JsonTraceKind::kNavigateForWrite, callCount, path != nullptr ? path : "<null>", 0,
+                   reinterpret_cast<std::uintptr_t>(result), JsonWord(json, 0), JsonWord(json, 8));
   }
   return result;
 }
@@ -159,21 +163,29 @@ void InstallChecked(std::uintptr_t gameBase, std::uint64_t virtualAddress,
   PatchDetour(&original, detour, detourName);
 }
 
+void EnsureJsonHooksInstalled(void* facadeObject) {
+  std::call_once(g_jsonHooksOnce, [facadeObject] {
+    g_facadeObject = facadeObject;
+    g_facadeJson = static_cast<std::uint8_t*>(facadeObject) + kFacadeJsonOffset;
+    InstallChecked(g_gameBase, kSocialJsonVA, kSocialJsonPrologue, g_originalSocialJson,
+                   reinterpret_cast<PVOID>(&SocialJsonHook), "SocialJson", "social_json");
+    InstallChecked(g_gameBase, kJsonSetVA, kJsonSetPrologue, g_originalJsonSet,
+                   reinterpret_cast<PVOID>(&JsonSetHook), "SocialJsonSet", "json_set");
+    InstallChecked(g_gameBase, kJsonNavigateForWriteVA, kJsonNavigateForWritePrologue,
+                   g_originalJsonNavigateForWrite, reinterpret_cast<PVOID>(&JsonNavigateForWriteHook),
+                   "SocialJsonNavigateForWrite", "json_navigate_write");
+    // Probe installation is intentionally one-shot. Each mismatch/attach failure
+    // is logged independently; any successfully installed probes remain active.
+  });
+}
+
 }  // namespace
 
 void Install(std::uintptr_t gameBase) {
-  g_facadeObject = Object();
-  g_facadeJson = static_cast<std::uint8_t*>(g_facadeObject) + kFacadeJsonOffset;
+  g_gameBase = gameBase;
   g_providerName = reinterpret_cast<ProviderNameFn>(nevr::ResolveVA_Checked(gameBase, kProviderNameVA));
   InstallChecked(gameBase, kAccessorVA, kAccessorPrologue, g_originalAccessor,
                  reinterpret_cast<PVOID>(&AccessorHook), "SocialAccessor", "accessor");
-  InstallChecked(gameBase, kSocialJsonVA, kSocialJsonPrologue, g_originalSocialJson,
-                 reinterpret_cast<PVOID>(&SocialJsonHook), "SocialJson", "social_json");
-  InstallChecked(gameBase, kJsonSetVA, kJsonSetPrologue, g_originalJsonSet,
-                 reinterpret_cast<PVOID>(&JsonSetHook), "SocialJsonSet", "json_set");
-  InstallChecked(gameBase, kJsonNavigateForWriteVA, kJsonNavigateForWritePrologue,
-                 g_originalJsonNavigateForWrite, reinterpret_cast<PVOID>(&JsonNavigateForWriteHook),
-                 "SocialJsonNavigateForWrite", "json_navigate_write");
 }
 
 }  // namespace SocialFacade
