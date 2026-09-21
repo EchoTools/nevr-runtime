@@ -208,6 +208,10 @@ nakama-reset:
 nakama-logs:
     docker compose -f tools/nakama-local/docker-compose.yml logs -f nakama
 
+# Insert the test account (fake Discord ID + password) a runtime can log in as.
+nakama-seed:
+    tools/nakama-local/seed.py
+
 # Run plugin ground truth tests (no game binary needed)
 test-plugins-groundtruth:
     cd tests/plugins && go test -v -run "TestGroundTruth" ./...

@@ -40,8 +40,19 @@ That variable replaces the system roots on purpose: nothing else should be reach
   `api.ipify.org` and dies without an answer.
 - Optional services (VRML OAuth, ASN data download) log warnings and are otherwise skipped.
 
+## Seeding a login
+
+`just nakama-seed` inserts a test account (`tools/nakama-local/seed.py`: fake Discord ID
+`900000000000000001`, throwaway password; `--print` shows the runtime `identity:` block).
+It uses SQL because the fork disables the email and device authenticate APIs.
+Verified: the row exists with `custom_id` set and a bcrypt password.
+
 ## Not covered yet
 
-A running server is not a working login. To log a runtime in, the instance still needs a
-seeded account (Discord ID + password), a guild group it belongs to, and a matching
-runtime config (`services.socket_uri`, `_local/config.json`). None of that is seeded yet.
+- The end-to-end login is unproven. An EVR `/ws` connection must carry `token=` equal to
+  the socket `server_key` in `.state/nakama.yml` (`server/socket_ws.go`: without it the
+  upgrade is a 401), then the server maps `discordid` to the user and checks the password
+  in-band (`server/session_ws.go`).
+- A guild group the account belongs to (server registration reads the guild groups), and
+  the matching runtime config (`auth.socket_uri` pointing at `ws://192.168.122.1:7350/ws`,
+  `identity.*`, `auth.server_key`), are not seeded or wired into `tools/winvm/systest.py`.
