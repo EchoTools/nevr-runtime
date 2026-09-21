@@ -1,0 +1,5 @@
+[NEVR.PATCH] Server mode - headless + noovr applied
+2026-09-21T16:30:27.500Z error [EVR] [FATAL] dbgcore.dll hijack detected: dbgcore.dll detected in the game directory.
+
+This file is a legacy DLL hijack artifact. If you are intentionally using the legacy injection path, add -allow-dbgcore to your command line.
+2026-09-21T16:30:27.500Z error [NEVR.PATCH] ForceFatalExit(1) - terminating process

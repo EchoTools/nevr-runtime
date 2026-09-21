@@ -1,0 +1,7 @@
+echovr pids: 5572  session: 1
+== pid 5572 ==
+TOP hwnd=262766 class=#32770 visible=True title=[Echo Relay: Error]
+   child class=Button text=[OK]
+   child class=Static text=[-noconsole can only be used with the -headless argument.]
+TOP hwnd=131648 class=MSCTFIME UI visible=False title=[MSCTFIME UI]
+TOP hwnd=197284 class=IME visible=False title=[Default IME]

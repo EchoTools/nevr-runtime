@@ -185,6 +185,13 @@ test-system-dll:
 test-system-verbose:
     cd tests/system && go test -v -count=1 ./...
 
+# Run the built runtime on a native Windows VM (libvirt) and judge the boot.
+# Needs WINVM_USER/WINVM_PASS and `just build` first; see
+# docs/reference/windows-vm-system-test.md. Exit 1 = runtime failed a check,
+# exit 2 = the VM/environment is unusable.
+test-winvm *ARGS:
+    tools/winvm/systest.py {{ARGS}}
+
 # Run plugin ground truth tests (no game binary needed)
 test-plugins-groundtruth:
     cd tests/plugins && go test -v -run "TestGroundTruth" ./...

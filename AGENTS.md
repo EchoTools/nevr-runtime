@@ -45,6 +45,8 @@ just test-auth                # All auth tests (ground truth + unit)
 just test-auth-groundtruth    # Auth ground truth (no game binary, no network)
 just test-auth-unit           # C++ GTest under Wine (build with -DBUILD_TESTING=ON)
 just test-auth-integration    # Auth integration (needs game binary + MCP harness)
+
+just test-winvm               # Built runtime on a native Windows VM (needs WINVM_USER/WINVM_PASS; docs/reference/windows-vm-system-test.md)
 ```
 
 Tests require: Echo VR game binary, Go toolchain. Environment variables: `NEVR_BUILD_DIR` (build output), `EVR_GAME_DIR` (game installation).
