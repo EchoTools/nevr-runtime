@@ -49,10 +49,12 @@ Verified: the row exists with `custom_id` set and a bcrypt password.
 
 ## Not covered yet
 
-- The end-to-end login is unproven. An EVR `/ws` connection must carry `token=` equal to
-  the socket `server_key` in `.state/nakama.yml` (`server/socket_ws.go`: without it the
-  upgrade is a 401), then the server maps `discordid` to the user and checks the password
-  in-band (`server/session_ws.go`).
+- Verified 2026-09-21: `/ws?format=evr&discordid=…&password=…&token=<server_key>` upgrades
+  (`session_ws.go:133` "New WebSocket session connected"); the server then waits for a
+  LoginRequest and closes idle sockets after ~3 s with no auth error logged. Without
+  `token=` the upgrade is a 401 (`server/socket_ws.go`). Not yet proven: a LoginRequest
+  is accepted and LoginSuccess returned (needs the runtime, or a hand-built frame).
+  nakama logs the full query string, password included: fine here, never copy prod logs.
 - A guild group the account belongs to (server registration reads the guild groups), and
   the matching runtime config (`auth.socket_uri` pointing at `ws://192.168.122.1:7350/ws`,
   `identity.*`, `auth.server_key`), are not seeded or wired into `tools/winvm/systest.py`.
