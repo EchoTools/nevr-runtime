@@ -49,6 +49,52 @@ OFFLINE_CONFIG = """{
 """
 
 
+NAKAMA_DIR = REPO / "tools/nakama-local"
+NAKAMA_HOST = "192.168.122.1"  # where the guest reaches the local nakama (tools/nakama-local/setup.py)
+
+
+def nakama_runtime_config() -> str:
+    """config.yaml pointing a guest runtime at the local nakama, as the seeded test account.
+
+    The server_key rides in socket_uri: the EVR /ws upgrade is a 401 without token=<server_key>
+    (server/socket_ws.go), and production's proxy adds it, so the bridge does not.
+    """
+    state = NAKAMA_DIR / ".state/nakama.yml"
+    if not state.exists():
+        raise EnvError("no local nakama state; run `just nakama-up && just nakama-seed`")
+    m = re.search(r"server_key:\s*(\S+)", state.read_text())
+    if not m:
+        raise EnvError(f"no server_key in {state}")
+    sys.path.insert(0, str(NAKAMA_DIR))
+    import seed  # noqa: E402  (constants only)
+    return f"""services:
+  socket_uri: "ws://{NAKAMA_HOST}:7350/ws?format=evr&token={m.group(1)}"
+identity:
+  discord_id: "{seed.DISCORD_ID}"
+auth:
+  password: "{seed.PASSWORD}"
+  server_key: "{m.group(1)}"
+"""
+
+
+def nakama_log_since(since: str) -> str:
+    p = subprocess.run(["docker", "compose", "-f", str(NAKAMA_DIR / "docker-compose.yml"),
+                        "logs", "nakama", "--no-log-prefix", "--since", since],
+                       capture_output=True, text=True)
+    if p.returncode != 0:
+        raise EnvError(f"cannot read local nakama logs: {p.stderr.strip()}")
+    return p.stdout
+
+
+# Login scenario: no *_host keys, so the game's readyatdawn.com defaults are what the
+# runtime redirects to the bridge. (The offline config's 127.0.0.1:1 hosts override the
+# redirect and the login service is then unreachable.)
+LOGIN_CONFIG = """{
+  "publisher_lock": "echovrce"
+}
+"""
+
+
 class EnvError(Exception):
     """The environment cannot run the test. Exit code 2."""
 
@@ -127,7 +173,7 @@ $ok = Get-ChildItem '@GAME@\_data' -Directory -ErrorAction SilentlyContinue |
                        "Log in once at the VM console (or leave RDP/SPICE logged in).")
 
 
-def setup_rig(g: Guest, tmp: pathlib.Path, with_legacy_dbgcore: bool = False) -> None:
+def setup_rig(g: Guest, tmp: pathlib.Path, with_legacy_dbgcore: bool = False, runtime_yaml: str | None = None) -> None:
     """Isolated copy of the game binaries, junctions to shared data, own _local.
 
     The user's install is left untouched: it may hold a legacy dbgcore.dll (NEVR
@@ -150,9 +196,15 @@ foreach ($d in '_data','content','sourcedb') {
 }
 """.replace("@GAME@", GAME).replace("@ROOT@", ROOT).replace("@LEGACY@", "yes" if with_legacy_dbgcore else "no"))
     cfg = tmp / "config.json"
-    cfg.write_text(OFFLINE_CONFIG)
+    cfg.write_text(OFFLINE_CONFIG if runtime_yaml is None else LOGIN_CONFIG)
     g.put(cfg, f"{SMB_ROOT}/echovr/_local", "config.json")
     g.put(HERE / "enum_windows.ps1", f"{SMB_ROOT}/run", "enum_windows.ps1")
+    if runtime_yaml is not None:
+        y = tmp / "config.yaml"
+        y.write_text(runtime_yaml)
+        g.put(y, f"{SMB_ROOT}/echovr/_local", "config.yaml")
+    else:
+        g.ps(rf"Remove-Item '{ROOT}\echovr\_local\config.yaml' -Force -ErrorAction SilentlyContinue")
 
 
 def deploy(g: Guest, dll: pathlib.Path) -> None:
@@ -240,10 +292,11 @@ if ($p) {{ Remove-Item '{ROOT}\run\hang.dmp' -ErrorAction SilentlyContinue
 
 # --- scenarios --------------------------------------------------------------------
 
-def scenario_boot(g: Guest, dll: pathlib.Path, out: pathlib.Path, args) -> list[checks.Result]:
+def scenario_boot(g: Guest, dll: pathlib.Path, out: pathlib.Path, args, login: bool = False) -> list[checks.Result]:
     with tempfile.TemporaryDirectory() as t:
-        setup_rig(g, pathlib.Path(t), args.with_legacy_dbgcore)
+        setup_rig(g, pathlib.Path(t), args.with_legacy_dbgcore, nakama_runtime_config() if login else None)
     deploy(g, dll)
+    started = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     launch(g, args.game_args)
     deadline = time.monotonic() + args.wait
     state: dict = {"alive": False, "exit_code": None, "started": False}
@@ -264,10 +317,20 @@ def scenario_boot(g: Guest, dll: pathlib.Path, out: pathlib.Path, args) -> list[
         *checks.check_hooks(log),
         checks.check_engine_progress(log, args.require_stage),
     ]
+    if login:
+        nlog = nakama_log_since(started)
+        (out / "nakama.log").write_text(nlog)
+        results.append(checks.check_nakama_login(nlog, seed_discord_id()))
     if args.dump_on_fail and state["alive"] and not checks.overall(results):
         path = minidump(g, out)
         print(f"minidump: {path or 'FAILED to fetch'}  (analyse with tools/winvm/dump_stacks.py)")
     return results
+
+
+def seed_discord_id() -> str:
+    sys.path.insert(0, str(NAKAMA_DIR))
+    import seed  # noqa: E402
+    return seed.DISCORD_ID
 
 
 def scenario_gai(g: Guest, out: pathlib.Path) -> list[checks.Result]:
@@ -286,7 +349,7 @@ def scenario_gai(g: Guest, out: pathlib.Path) -> list[checks.Result]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--scenario", choices=["boot", "gai", "all"], default="all")
+    ap.add_argument("--scenario", choices=["boot", "gai", "login", "all"], default="all")
     ap.add_argument("--domain", default=os.environ.get("WINVM_DOMAIN", "win11-dev"),
                     help="libvirt domain, used to find the IP when WINVM_HOST is unset")
     ap.add_argument("--dll", type=pathlib.Path, default=REPO / "build/mingw-release/bin/BugSplat64.dll")
@@ -314,7 +377,7 @@ def main() -> int:
         user, password = os.environ.get("WINVM_USER"), os.environ.get("WINVM_PASS")
         if not user or not password:
             raise EnvError("set WINVM_USER and WINVM_PASS (never commit them)")
-        if args.scenario in ("boot", "all") and not args.dll.exists():
+        if args.scenario in ("boot", "login", "all") and not args.dll.exists():
             raise EnvError(f"{args.dll} not found; run `just build` first")
         host = os.environ.get("WINVM_HOST") or resolve_host(args.domain)
         print(f"guest {host} as {user}; artifacts in {out}")
@@ -325,6 +388,9 @@ def main() -> int:
         if args.scenario in ("boot", "all"):
             print(f"runtime under test: {args.dll} ({args.dll.stat().st_size} bytes)")
             results += scenario_boot(guest, args.dll, out, args)
+        if args.scenario == "login":
+            print(f"runtime under test: {args.dll} ({args.dll.stat().st_size} bytes); nakama at {NAKAMA_HOST}:7350")
+            results += scenario_boot(guest, args.dll, out, args, login=True)
     except (EnvError, RuntimeError) as e:
         # RuntimeError is a failed guest/SMB command: the rig broke, not the runtime.
         print(f"ENV: {e}", file=sys.stderr)

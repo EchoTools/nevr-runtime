@@ -8,6 +8,7 @@ built `BugSplat64.dll` on a real Windows guest (libvirt) and judges the boot.
 just build
 WINVM_USER=... WINVM_PASS=... just test-winvm                    # both scenarios
 WINVM_USER=... WINVM_PASS=... just test-winvm --scenario gai     # getaddrinfo timing only
+WINVM_USER=... WINVM_PASS=... just test-winvm --scenario login   # boot + log in to the local nakama (docs/reference/local-nakama.md)
 ```
 
 Exit codes: `0` pass, `1` the runtime failed a check, `2` the environment is

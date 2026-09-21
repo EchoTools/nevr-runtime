@@ -26,6 +26,8 @@ COMPOSE = HERE / "docker-compose.yml"
 DISCORD_ID = "900000000000000001"   # fake; 18 digits like a real snowflake
 USERNAME = "localtest"
 PASSWORD = "localtestpassword"      # 32 chars max: the query parser truncates at 32
+GUILD_ID = "900000000000000002"     # fake Discord guild the account belongs to
+GUILD_NAME = "nevr-local-guild"
 
 
 def seed() -> None:
@@ -36,13 +38,27 @@ VALUES (gen_random_uuid(), '{USERNAME}', '{DISCORD_ID}', convert_to(crypt('{PASS
 ON CONFLICT (username) DO UPDATE
   SET custom_id = EXCLUDED.custom_id, password = EXCLUDED.password, disable_time = '1970-01-01 00:00:00+00'
 RETURNING id, username, custom_id;
+
+-- Login needs the user in a guild group (lang_tag 'guild', server/evr_guild_group.go
+-- GuildUserGroupsList); state 0 is superadmin, and group_edge holds both directions.
+INSERT INTO groups (id, creator_id, name, description, lang_tag, metadata, state, edge_count, max_count)
+SELECT gen_random_uuid(), u.id, '{GUILD_NAME}', 'local test guild', 'guild',
+       jsonb_build_object('guild_id', '{GUILD_ID}', 'owner_id', u.id::text), 1, 1, 100
+FROM users u WHERE u.username = '{USERNAME}'
+ON CONFLICT (name) DO NOTHING;
+INSERT INTO group_edge (position, state, source_id, destination_id)
+SELECT 1, 0, g.id, u.id FROM groups g, users u WHERE g.name = '{GUILD_NAME}' AND u.username = '{USERNAME}'
+ON CONFLICT DO NOTHING;
+INSERT INTO group_edge (position, state, source_id, destination_id)
+SELECT 1, 0, u.id, g.id FROM groups g, users u WHERE g.name = '{GUILD_NAME}' AND u.username = '{USERNAME}'
+ON CONFLICT DO NOTHING;
 """
     p = subprocess.run(["docker", "compose", "-f", str(COMPOSE), "exec", "-T", "postgres",
                         "psql", "-U", "postgres", "-d", "nakama", "-v", "ON_ERROR_STOP=1", "-tA", "-c", sql],
                        capture_output=True, text=True)
     if p.returncode != 0:
         raise SystemExit(f"seed failed: {p.stderr.strip() or p.stdout.strip()}")
-    print(f"seeded: {p.stdout.strip().splitlines()[-1]}")
+    print(f"seeded: {p.stdout.strip().splitlines()[0]} (+ guild group {GUILD_NAME})")
 
 
 def main() -> int:

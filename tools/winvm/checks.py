@@ -177,6 +177,50 @@ _PROBE = re.compile(
 )
 
 
+# --- Login against the local nakama (tools/nakama-local) -----------------------------
+#
+# Two layers, both judged from nakama's own debug log. The websocket upgrade
+# authenticates the query's discordid/password (session_ws.go:133 on connect, a WARN at
+# :266-281 when that fails); the LoginRequest that follows is then answered with
+# LoginSuccess or LoginFailure (session_ws.go:722 "Sending ..."). A connect alone is not
+# a login: the first version of this check passed while nakama answered "user is not in
+# any groups".
+
+_AUTH_WARNINGS = ("Failed to get user ID by Discord ID", "Failed to get account by Discord ID",
+                  "Account not found by Discord ID", "Failed to authenticate user by Discord ID")
+
+
+def check_nakama_login(nakama_log: str, discord_id: str) -> Result:
+    import json
+    sessions, warnings, failures, successes = set(), [], [], 0
+    for line in nakama_log.splitlines():
+        i = line.find("{")
+        if i < 0:
+            continue
+        try:
+            rec = json.loads(line[i:])
+        except json.JSONDecodeError:
+            continue
+        msg = rec.get("msg", "")
+        if msg == "New WebSocket session connected" and f"discordid={discord_id}" in rec.get("query", ""):
+            sessions.add(rec["sid"])
+        elif msg in _AUTH_WARNINGS:
+            warnings.append(msg)
+        elif msg == "Sending *evr.LoginFailure message" and rec.get("sid") in sessions:
+            failures.append(" ".join(rec.get("message", "").split()))
+        elif msg == "Sending *evr.LoginSuccess message" and rec.get("sid") in sessions:
+            successes += 1
+    if not sessions:
+        return Result("nakama_login", FAIL, f"no websocket session with discordid={discord_id} reached nakama")
+    if warnings:
+        return Result("nakama_login", FAIL, f"websocket auth failed: {warnings[0]}")
+    if failures:
+        return Result("nakama_login", FAIL, f"LoginFailure: {failures[0]}")
+    if not successes:
+        return Result("nakama_login", FAIL, "connected and authenticated, but nakama never answered LoginSuccess")
+    return Result("nakama_login", PASS, f"LoginSuccess for {discord_id}")
+
+
 def check_getaddrinfo(probe_output: str, max_ms: float = 2000.0) -> Result:
     """The exact call CBroadcaster::Initialize makes (issue #13), timed natively."""
     rows = [m for m in (_PROBE.match(ln.strip()) for ln in probe_output.splitlines()) if m]

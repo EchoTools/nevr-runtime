@@ -42,19 +42,30 @@ That variable replaces the system roots on purpose: nothing else should be reach
 
 ## Seeding a login
 
-`just nakama-seed` inserts a test account (`tools/nakama-local/seed.py`: fake Discord ID
-`900000000000000001`, throwaway password; `--print` shows the runtime `identity:` block).
-It uses SQL because the fork disables the email and device authenticate APIs.
-Verified: the row exists with `custom_id` set and a bcrypt password.
+`just nakama-seed` inserts a test account and a guild group it belongs to
+(`tools/nakama-local/seed.py`: fake Discord ID `900000000000000001`, throwaway password,
+guild `900000000000000002`; `--print` shows the runtime `identity:` block). It uses SQL
+because the fork disables the email and device authenticate APIs. Login refuses a user
+in no guild group ("user is not in any groups", `server/evr_pipeline_login.go`), and the
+guild registry re-reads groups once a minute, so allow up to 60 s after the first seed.
+
+## Logging in from the Windows VM
+
+`WINVM_USER=… WINVM_PASS=… tools/winvm/systest.py --scenario login` writes a runtime
+`config.yaml` for the rig (`services.socket_uri` = `ws://192.168.122.1:7350/ws?format=evr&token=<server_key>`,
+the seeded identity), boots the server headless, and judges nakama's own log
+(`checks.check_nakama_login`): websocket auth, then `LoginSuccess` vs `LoginFailure`.
+
+Verified 2026-09-21: nakama sent `LoginSuccess`, the runtime logged `[NEVR.WS] LOGIN SUCCESS`
+and fetched the profile. Falsified: the same run before the guild group existed failed with
+`LoginFailure: user is not in any groups`; with nakama unreachable it failed with no session.
+
+Gotchas: the token must be in `socket_uri` (the bridge does not add it; production's proxy
+does); the rig's offline `config.json` hosts (`127.0.0.1:1`) override the bridge redirect,
+so this scenario writes a `config.json` without `*_host` keys; docker's port proxy shows
+every client as the bridge gateway, so nakama's `client_ip` cannot identify the VM.
 
 ## Not covered yet
 
-- Verified 2026-09-21: `/ws?format=evr&discordid=…&password=…&token=<server_key>` upgrades
-  (`session_ws.go:133` "New WebSocket session connected"); the server then waits for a
-  LoginRequest and closes idle sockets after ~3 s with no auth error logged. Without
-  `token=` the upgrade is a 401 (`server/socket_ws.go`). Not yet proven: a LoginRequest
-  is accepted and LoginSuccess returned (needs the runtime, or a hand-built frame).
-  nakama logs the full query string, password included: fine here, never copy prod logs.
-- A guild group the account belongs to (server registration reads the guild groups), and
-  the matching runtime config (`auth.socket_uri` pointing at `ws://192.168.122.1:7350/ws`,
-  `identity.*`, `auth.server_key`), are not seeded or wired into `tools/winvm/systest.py`.
+- Server registration (`regions=` / guild registration) and the matchmaker path.
+- Which User-Agent each client sends (nakama #629).

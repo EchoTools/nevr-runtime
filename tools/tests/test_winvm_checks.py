@@ -153,5 +153,33 @@ class GetAddrInfoTest(unittest.TestCase):
         self.assertEqual(checks.check_getaddrinfo("").status, checks.FAIL)
 
 
+class NakamaLoginTest(unittest.TestCase):
+    OK = '{"level":"info","msg":"New WebSocket session connected","sid":"a","query":"format=evr&discordid=42&password=x","client_ip":"172.24.0.1"}'
+    BAD = '{"level":"warn","msg":"Failed to authenticate user by Discord ID","discord_id":"42"}'
+
+    SUCCESS = '{"level":"debug","msg":"Sending *evr.LoginSuccess message","sid":"a","message":"x"}'
+    FAILURE = '{"level":"debug","msg":"Sending *evr.LoginFailure message","sid":"a","message":"SNSLoginFailure(error_message=user is not in any groups)"}'
+
+    def test_login_success_passes(self):
+        self.assertEqual(checks.check_nakama_login(self.OK + "\n" + self.SUCCESS, "42").status, checks.PASS)
+
+    def test_connect_alone_is_not_a_login(self):
+        self.assertEqual(checks.check_nakama_login(self.OK, "42").status, checks.FAIL)
+
+    def test_login_failure_fails_with_reason(self):
+        r = checks.check_nakama_login(self.OK + "\n" + self.FAILURE, "42")
+        self.assertEqual(r.status, checks.FAIL)
+        self.assertIn("not in any groups", r.detail)
+
+    def test_no_session_fails(self):
+        self.assertEqual(checks.check_nakama_login("", "42").status, checks.FAIL)
+
+    def test_other_account_does_not_count(self):
+        self.assertEqual(checks.check_nakama_login(self.OK, "43").status, checks.FAIL)
+
+    def test_auth_warning_fails(self):
+        self.assertEqual(checks.check_nakama_login(self.OK + "\n" + self.BAD, "42").status, checks.FAIL)
+
+
 if __name__ == "__main__":
     unittest.main()
