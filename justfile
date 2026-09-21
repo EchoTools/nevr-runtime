@@ -192,6 +192,22 @@ test-system-verbose:
 test-winvm *ARGS:
     tools/winvm/systest.py {{ARGS}}
 
+# Local, isolated nakama (fake Discord, own Postgres) for testing the runtime's
+# login/registration path. See docs/reference/local-nakama.md.
+nakama-up:
+    python3 tools/nakama-local/setup.py
+    docker compose -f tools/nakama-local/docker-compose.yml up -d
+
+nakama-down:
+    docker compose -f tools/nakama-local/docker-compose.yml down
+
+# Also drops the database volume.
+nakama-reset:
+    docker compose -f tools/nakama-local/docker-compose.yml down -v
+
+nakama-logs:
+    docker compose -f tools/nakama-local/docker-compose.yml logs -f nakama
+
 # Run plugin ground truth tests (no game binary needed)
 test-plugins-groundtruth:
     cd tests/plugins && go test -v -run "TestGroundTruth" ./...
