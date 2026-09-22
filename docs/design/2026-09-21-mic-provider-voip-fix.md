@@ -119,7 +119,7 @@ maintain.
 
 ## The fix
 
-Implement `pnsrad.dll`'s six `Mic*` exports for real, on Windows, via
+Implement `pnsrad.dll`'s seven `Mic*` exports for real, on Windows, via
 WASAPI capture:
 
 1. **Capture module** (new, alongside `pnsrad_enabler.cpp` — same job
@@ -127,11 +127,46 @@ WASAPI capture:
    A WASAPI capture stream opened at 48kHz mono int16, feeding a ring buffer
    structured like `SMicBuffers` (free/ready queues) but sized to the
    Windows constants (`MicCaptureSize` = 2400, `MicBufferSize` = 24000).
-2. **Hook the six exports** in `pnsrad.dll`, same technique as
-   `pnsrad_enabler`'s existing patches (prologue-validated, `HookGuard`-
-   recorded).
+2. **Interception point corrected (2026-09-21, before any code was
+   written):** the four exports `MicAvailable`/`MicCreate`/`MicDetected`/
+   `MicRead` are identical-code-folded onto one physical address
+   (`0x180088d10` — the reconstruction's own comment confirms this:
+   "shared with MicCreate/MicDetected/MicRead"). `MicDestroy`/`MicStart`/
+   `MicStop` share a second folded address (`0x180085fb0`). **Hooking the
+   stub bodies directly cannot work** — MinHook detours an address, and
+   four distinct export names resolve to the same address, so a body-hook
+   cannot tell which name the game meant to call.
+
+   There is already a precedent for exactly this trap in the codebase,
+   documented and currently silently broken: `EchoVR::GetProcAddress`
+   (`src/runtime/lifecycle/initialize.cpp:331`) and `CSysDLL_GetSymbolHook`
+   (`initialize.cpp:83`) are two separate `PatchDetour`/`Hooking::Attach`
+   installs targeting the *same* address (`0x1400eaef0`, per the file's own
+   N128 comment) — the game's one symbol-resolution function, used both for
+   module DLL loading and for provider dispatch (the same function
+   `NRadEngine::CPlatformService::MicRead` calls to resolve `"MicRead"` on
+   a provider handle, per the ReVault trace above). MinHook allows one
+   detour per target; whichever installs first wins — `CSysDLL_GetSymbolHook`
+   does, so `GetProcAddressHook`'s RadPluginShutdown crash-avoidance has
+   never once run, on any boot. The N128 comment already names the correct
+   fix ("fold the RadPluginShutdown check into CSysDLL_GetSymbolHook") —
+   the mic provider needs the same shape of fix for the same reason.
+
+   **Correct design:** extend `CSysDLL_GetSymbolHook` itself (it already
+   wins the one-detour slot on `0x1400eaef0`). When `dll_handle` is
+   pnsrad.dll's module handle and `symbol_name` is one of the seven `Mic*`
+   names, return our own function pointer instead of calling through to
+   pnsrad's real (stubbed) export. `pnsrad_enabler` already receives
+   pnsrad.dll's `HMODULE` at load time via its `LdrDllNotification`
+   callback — it needs to expose that handle (a getter) so
+   `CSysDLL_GetSymbolHook` can compare against it.
 3. **No changes needed downstream** — `VoipEncode`, `BuildSyncPacket`, and
    the entire receive path are already correct.
+4. **Drive-by opportunity, not required for this fix:** since
+   `CSysDLL_GetSymbolHook` is being extended anyway, folding in N128's
+   already-documented RadPluginShutdown fix (currently dead code) costs
+   little — flagged, not committed to, kept separate unless it turns out
+   to be trivial alongside the mic change.
 
 ### Testing
 
