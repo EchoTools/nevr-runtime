@@ -47,11 +47,8 @@ namespace {
 // N146: only this minimal state is needed before the original command-line
 // preprocessing.  In particular, do not start modules, plugins, file I/O, or
 // the bridge here: client D3D initialization is still in the original call.
-// -server is needed for the config loader's fail-loud policy and must also
-// establish the native non-VR/windowed bit before the original command-line
-// pass. This build enters Oculus initialization during that first pass and
-// does not make the formerly-assumed second server preprocessing call.
-// -config-path is needed by LoadLocalConfigHook while the original is running.
+// -server is needed for the config loader's fail-loud policy. -config-path is
+// needed by LoadLocalConfigHook while the original is running.
 void PreflightRuntimeBootstrap() {
   static bool s_done = false;
   if (s_done) return;
@@ -84,7 +81,45 @@ void PreflightRuntimeBootstrap() {
   // the CLI check — but that also forces the spectator flow.  Setting
   // only 0x0100000 skips VR without forcing spectator mode; the game
   // reaches the main menu normally, and -mp joins a social lobby.
-  if ((g_isWindowed || g_isServer) && g_pGame != nullptr) {
+  //
+  // 2026-09-14 (Andrew + Claude, live debugging launch-server.sh hanging
+  // forever after login): g_isServer was added to this condition by
+  // a692a30 (2026-08-05, "bootstrap server on first preprocess call"),
+  // with the stated intent of also giving -server this same windowed/no-VR
+  // bit. That commit's own diff simultaneously relaxed
+  // tests/system/server_test.go to stop requiring
+  // "[NEVR.GAMESERVER] Initialized game server" as a readiness marker — the
+  // comment there says IServerLib init is "not a readiness prerequisite",
+  // which reads as the test being loosened to match behavior that had
+  // already stopped happening, not as a confirmed-still-working assertion.
+  //
+  // Live repro today: launch-server.sh logs in, joins the social lobby
+  // group, and then sits there — literally forever, GetTimeMicroseconds
+  // still ticking — never reaching "Beginning multiplayer" or
+  // GameServerLib::Initialize. Comparing against a last-known-good capture
+  // (echovr-server-32-2026-07-26T11-16-07.550.jsonl, predates a692a30 by
+  // ~10 days) that same "reaches the main menu normally, and -mp joins a
+  // social lobby" comment above describes CLIENT -windowed behavior — a
+  // dedicated server joining a social lobby via -mp at all looks like the
+  // wrong code path for a server, not a benign side effect.
+  //
+  // Testing the direct hypothesis: drop g_isServer from this condition
+  // (back to -windowed only, matching the code before a692a30) and see
+  // whether the server now reaches BeginMultiplayer. The rest of a692a30
+  // (moving RunDeferredRuntimeBootstrap from the second PreprocessCommandLine
+  // call to the first, see PreprocessCommandLineHook below) is NOT touched
+  // here — that part addresses a separately-real problem ("this build...
+  // does not make the formerly-assumed second server preprocessing call")
+  // and reverting it blind could just trade this hang for that one.
+  //
+  // Andrew's own caveat, stated plainly rather than buried: this fixes the
+  // one collision found by git-bisecting commit history against known-good
+  // logs, but the search was not exhaustive — there could be another
+  // client-only patch in this same family (windowed/no-VR/spectator-stream
+  // flag handling) still colliding with server mode even after this change.
+  // If the server still hangs after this, look at that family next before
+  // assuming the whole diagnosis was wrong.
+  if (g_isWindowed && g_pGame != nullptr) {
     auto* windowedFlags = reinterpret_cast<UINT64*>(
         reinterpret_cast<CHAR*>(g_pGame) + PatchAddresses::GAME_WINDOWED_FLAGS_OFFSET);
     *windowedFlags |= 0x0100000;

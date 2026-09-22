@@ -24,14 +24,17 @@
  * ====================================================================== */
 
 #include "runtime/patch/pnsrad_enabler.h"
+#include "runtime/compat/ws_bridge.h"  // GetMatchmakerBridgePort()
 #include "core/logging.h"
 #include "nevr_common.h"      // N97: the one ValidatePrologue
 
+#include <cstdio>
 #include <cstring>
 
 #ifdef _WIN32
 #include <windows.h>
 #include <winternl.h>
+#include <MinHook.h>
 #endif
 
 #ifdef _WIN32
@@ -60,6 +63,97 @@ static constexpr uint8_t   PNSRAD_STATE_JE_EXPECTED[] = {0x0F, 0x84, 0x78, 0x01,
 // pnsrad.dll LogInSuccessCB session/identity guard — JNE at FUN_18008eea0+0x85
 static constexpr uintptr_t PNSRAD_LOGIN_IDENTITY_CHECK = 0x8ef25;
 static constexpr uint8_t   PNSRAD_IDENTITY_JNE_EXPECTED[] = {0x0F, 0x85, 0x9C, 0x00, 0x00, 0x00};
+
+// 2026-09-13 (Andrew): pnsradmatchmaking.dll's CNSRadMatchmaking::
+// initialize_matchmakers reads "matchmaker_host" (default: the readyatdawn.com
+// literal below) then "matchingservice_host" (defaults to whatever the first
+// lookup returned) via its own statically-linked CJson::TString — a config
+// read entirely separate from echovr.exe's JsonValueAsString, so our
+// RedirectServiceUrl/config-override hook in config.cpp can never see or
+// correct it. Measured live: even with config.json's "matchingservice_host"
+// set correctly (ws://g.echovrce.com:80/spr), the matchmaker connection still
+// went to the compiled default and got reset immediately (readyatdawn.com is
+// dead) — confirms this DLL never found either key in whatever it reads.
+// ws_bridge.cpp already binds a second listener for exactly this (N146
+// comment there), but nothing connected to it because the game never
+// tried — it was stuck on the compiled default.
+//
+// Load timing, confirmed live via a strace-style empirical test (renamed
+// pnsradmatchmaking.dll aside, launched, watched the client log): it loads
+// on demand at the lobby stage, well after login —
+// "[EVR] [NSLOBBY] loading matchmaking library 'pnsradmatchmaking'" — via a
+// native LoadLibrary-style path in cnslobby.cpp (confirmed by the clean
+// "failed to load module ... Unable to load matchmaking library" error when
+// the file was absent). LdrRegisterDllNotification catches this regardless
+// of when it fires, so no ordering change was needed against the existing
+// pnsrad.dll callback below.
+//
+// pnsradmatchmaking.dll, ImageBase 0x180000000 (confirmed via
+// `objdump -p pnsradmatchmaking.dll | grep -i imagebase`):
+//   RVA 0x1c84d8 (.rdata section, VMA 0x1801c6000, file offset 0x1c5200 per
+//   `objdump -h`; string file offset = 0x1c76d8, verified byte-for-byte via
+//   `dd if=pnsradmatchmaking.dll bs=1 skip=$((0x1c76d8)) count=64 | xxd`) —
+//   a 49-byte slot (the 48-char string + NUL, then unrelated data
+//   immediately follows with no padding) holding
+//   "wss://matchmaker.readyatdawn.com/rad/rad15_live\0".
+// Replacing with "ws://127.0.0.1:PPPPP\0" (21 bytes, port always 5 digits —
+// ws_bridge.cpp draws from the 49152-65535 ephemeral range) leaves the tail
+// of the original slot as inert bytes after our new NUL terminator — same
+// pattern xpid_patch.cpp already uses for a shorter replacement in a fixed
+// slot.
+//
+// 2026-09-13 (Andrew): the replacement was originally the literal port
+// 42148. Static ports collide with a still-releasing socket from a
+// just-killed prior process (TIME_WAIT), so ws_bridge.cpp now binds an
+// ephemeral port with retry instead of a fixed one — this patch reads
+// GetMatchmakerBridgePort() at call time and builds the replacement string
+// to match, rather than a compile-time constant.
+//
+// CONFIRMED LIVE 2026-09-13 (against the original hardcoded-42148 version):
+// patch applied ("[pnsradmatchmaking] patched matchmaker host default at
+// +0x1c84d8"), matchmaker connected through our own listener, "[NSLOBBY]
+// received lobby session success", joined a real server
+// (108.218.163.196:6792), loaded into a live social lobby. Not yet
+// re-confirmed live against the ephemeral-port version below — the string
+// length and patch mechanics are identical either way, but flagging that
+// the "CONFIRMED LIVE" evidence predates this specific change.
+static constexpr uintptr_t PNSRADMATCHMAKING_HOST_RVA = 0x1c84d8;
+static constexpr size_t    PNSRADMATCHMAKING_HOST_SLOT_SIZE = 49;
+static constexpr char      PNSRADMATCHMAKING_HOST_EXPECTED[] =
+    "wss://matchmaker.readyatdawn.com/rad/rad15_live";
+
+// 2026-09-13 (Andrew/ReVault audit): CNSRADParty (and, per the same audit,
+// CNSRADFriends/CNSRADUsers/CNSRADActivities) register every inbound SNS
+// listener via CTcpBroadcaster::Listen using a broadcaster HANDLE stored in
+// the object itself — *(this+0x2b0) for CNSRADParty. If that handle is null
+// at the moment this runs, every Listen() call it makes (InviteNotifyCB
+// included) silently registers nothing — no error, no log — which would
+// fully explain why a live party-invite test produced zero evidence
+// anywhere (see ReVault comments on 0x3039c4/libpnsrad.so and
+// 0x180082d20/pnsrad.dll). This diagnostic-only hook confirms or falsifies
+// that live, rather than continuing to infer from static analysis.
+//
+// Target: the vslot[8] function that does the Listen() registration loop
+// (pnsrad.dll FUN_180082d20, confirmed via ReVault to read the handle at
+// param_1[0x56] == *(this+0x2b0) before every Listen call). RVA computed
+// against pnsrad.dll's 0x180000000 image base (same convention used
+// throughout this file for pnsradmatchmaking.dll's RVA above).
+static constexpr uintptr_t PNSRAD_PARTY_INITIALIZE_RVA = 0x82d20;
+static constexpr uintptr_t PNSRAD_PARTY_BROADCASTER_HANDLE_OFFSET = 0x2b0;
+
+// 2026-09-13: the Initialize hook above never fired across multiple live
+// in-game invite attempts (confirmed — the listener-registration function
+// simply never runs at that point in the session). Most likely explanation:
+// it runs once, during pnsrad.dll's own load-time construction of the
+// CNSRADParty singleton, which completes BEFORE our LdrDllNotification
+// callback (fires post-DllMain, per documented Windows loader semantics) —
+// we install the hook too late to ever see that one call. SendInvite, by
+// contrast, is the actual per-click function (renamed in ReVault from
+// FUN_180086df0 after cross-referencing libpnsrad.so's real symbol name) —
+// it fires fresh on every invite attempt, sidestepping the load-order race
+// entirely. Same broadcaster-handle offset, read at the very top of the
+// function before it does anything else.
+static constexpr uintptr_t PNSRAD_PARTY_SEND_INVITE_RVA = 0x86df0;
 
 /* --------------------------------------------------------------------
  * Memory patching
@@ -93,6 +187,144 @@ typedef NTSTATUS (NTAPI *LdrUnregisterDllNotification_fn)(void* cookie);
 
 static void* s_dllNotifCookie = nullptr;
 static bool  s_pnsradPatched  = false;
+
+/* Case-insensitive ASCII wide-string compare, same folding convention as
+ * initialize.cpp's LoadNameContains. UNICODE_STRING::Length is bytes, not
+ * chars, hence the /sizeof(WCHAR) below at each call site. */
+static bool WideNameEqualsAscii(const WCHAR* name, size_t nameLen, const char* ascii) {
+    size_t asciiLen = std::strlen(ascii);
+    if (nameLen != asciiLen) return false;
+    for (size_t i = 0; i < asciiLen; i++) {
+        WCHAR c = name[i];
+        if (c >= L'A' && c <= L'Z') c = static_cast<WCHAR>(c - L'A' + L'a');
+        char e = ascii[i];
+        if (e >= 'A' && e <= 'Z') e = static_cast<char>(e - 'A' + 'a');
+        if (c != static_cast<WCHAR>(e)) return false;
+    }
+    return true;
+}
+
+/* Patch pnsradmatchmaking.dll's compiled matchmaker-host default so the
+ * matchmaker connection reaches our own listener instead of the dead
+ * readyatdawn.com host. See PNSRADMATCHMAKING_HOST_RVA's comment above for
+ * the full measurement (RVA, file offset, slot size, exact original bytes). */
+static void PatchMatchmakingHost(uintptr_t base) {
+    // The matchmaker listener binds before login (InstallWebSocketBridge, at
+    // early boot) while pnsradmatchmaking.dll loads lazily at the lobby stage
+    // (well after login — see the load-timing note above), so by the time
+    // this runs the port is already chosen. CONFESSION: that ordering isn't
+    // enforced by anything here, just observed live — if the listener bind
+    // ever moved to run later than this DLL's load, this would silently
+    // patch in port 0 with no error. Worth an assert/guard if that ordering
+    // ever becomes less obviously true.
+    uint16_t port = GetMatchmakerBridgePort();
+    if (port == 0) {
+        Log(EchoVR::LogLevel::Warning,
+            "[pnsradmatchmaking] matchmaker listener never bound a port — NOT "
+            "patching (matchmaking will fail regardless)");
+        return;
+    }
+
+    char replacement[32];
+    int replacementLen = std::snprintf(replacement, sizeof(replacement),
+                                        "ws://127.0.0.1:%u", (unsigned)port);
+    if (replacementLen <= 0 || static_cast<size_t>(replacementLen) + 1 > PNSRADMATCHMAKING_HOST_SLOT_SIZE) {
+        Log(EchoVR::LogLevel::Warning,
+            "[pnsradmatchmaking] formatted replacement (%d bytes) doesn't fit the "
+            "%zu-byte slot — NOT patched", replacementLen, PNSRADMATCHMAKING_HOST_SLOT_SIZE);
+        return;
+    }
+
+    auto* site = reinterpret_cast<uint8_t*>(base + PNSRADMATCHMAKING_HOST_RVA);
+    if (std::memcmp(site, PNSRADMATCHMAKING_HOST_EXPECTED,
+                     sizeof(PNSRADMATCHMAKING_HOST_EXPECTED) - 1) != 0) {
+        Log(EchoVR::LogLevel::Warning,
+            "[pnsradmatchmaking] unexpected bytes at +0x%x — NOT patched (measured "
+            "against a different build?)", (unsigned)PNSRADMATCHMAKING_HOST_RVA);
+        return;
+    }
+    // Replacement is shorter than the original slot (21 of 49 bytes); the
+    // trailing original bytes become inert garbage after our new NUL, same
+    // as xpid_patch.cpp's shorter-replacement-in-a-fixed-slot pattern.
+    if (PatchMemory(site, replacement, static_cast<size_t>(replacementLen) + 1)) {
+        Log(EchoVR::LogLevel::Info,
+            "[pnsradmatchmaking] patched matchmaker host default at +0x%x: "
+            "\"%s\" -> \"%s\"", (unsigned)PNSRADMATCHMAKING_HOST_RVA,
+            PNSRADMATCHMAKING_HOST_EXPECTED, replacement);
+    } else {
+        Log(EchoVR::LogLevel::Warning,
+            "[pnsradmatchmaking] PatchMemory FAILED at +0x%x — prologue matched "
+            "but the write did not land", (unsigned)PNSRADMATCHMAKING_HOST_RVA);
+    }
+}
+
+/* --------------------------------------------------------------------
+ * Diagnostic: is CNSRADParty's broadcaster handle null when it registers
+ * its SNS listeners? See PNSRAD_PARTY_INITIALIZE_RVA's comment above.
+ * -------------------------------------------------------------------- */
+
+typedef uint64_t (*PartyListenerRegisterFn)(void* thisPtr, uint64_t param2);
+static PartyListenerRegisterFn g_RealPartyListenerRegister = nullptr;
+
+static uint64_t PartyListenerRegisterHook(void* thisPtr, uint64_t param2) {
+    uintptr_t handle = 0;
+    if (thisPtr) {
+        handle = *reinterpret_cast<uintptr_t*>(
+            reinterpret_cast<uint8_t*>(thisPtr) + PNSRAD_PARTY_BROADCASTER_HANDLE_OFFSET);
+    }
+    Log(EchoVR::LogLevel::Info,
+        "[pnsrad] DIAG CNSRADParty listener-register: this=%p broadcaster_handle=%p (%s)",
+        thisPtr, reinterpret_cast<void*>(handle), handle == 0 ? "NULL" : "non-null");
+    return g_RealPartyListenerRegister(thisPtr, param2);
+}
+
+static void InstallPartyBroadcasterDiag(uintptr_t base) {
+    void* target = reinterpret_cast<void*>(base + PNSRAD_PARTY_INITIALIZE_RVA);
+    MH_STATUS st = MH_CreateHook(target, reinterpret_cast<void*>(PartyListenerRegisterHook),
+                                  reinterpret_cast<void**>(&g_RealPartyListenerRegister));
+    if (st == MH_OK) st = MH_EnableHook(target);
+    if (st == MH_OK) {
+        Log(EchoVR::LogLevel::Info,
+            "[pnsrad] DIAG party-broadcaster hook installed at +0x%x",
+            (unsigned)PNSRAD_PARTY_INITIALIZE_RVA);
+    } else {
+        Log(EchoVR::LogLevel::Warning,
+            "[pnsrad] DIAG party-broadcaster hook FAILED at +0x%x: %s",
+            (unsigned)PNSRAD_PARTY_INITIALIZE_RVA, MH_StatusToString(st));
+    }
+}
+
+typedef void (*PartySendInviteFn)(void* thisPtr, uint64_t targetAccountId);
+static PartySendInviteFn g_RealPartySendInvite = nullptr;
+
+static void PartySendInviteHook(void* thisPtr, uint64_t targetAccountId) {
+    uintptr_t handle = 0;
+    if (thisPtr) {
+        handle = *reinterpret_cast<uintptr_t*>(
+            reinterpret_cast<uint8_t*>(thisPtr) + PNSRAD_PARTY_BROADCASTER_HANDLE_OFFSET);
+    }
+    Log(EchoVR::LogLevel::Info,
+        "[pnsrad] DIAG CNSRADParty::SendInvite: this=%p target=%llu broadcaster_handle=%p (%s)",
+        thisPtr, (unsigned long long)targetAccountId, reinterpret_cast<void*>(handle),
+        handle == 0 ? "NULL" : "non-null");
+    g_RealPartySendInvite(thisPtr, targetAccountId);
+}
+
+static void InstallPartySendInviteDiag(uintptr_t base) {
+    void* target = reinterpret_cast<void*>(base + PNSRAD_PARTY_SEND_INVITE_RVA);
+    MH_STATUS st = MH_CreateHook(target, reinterpret_cast<void*>(PartySendInviteHook),
+                                  reinterpret_cast<void**>(&g_RealPartySendInvite));
+    if (st == MH_OK) st = MH_EnableHook(target);
+    if (st == MH_OK) {
+        Log(EchoVR::LogLevel::Info,
+            "[pnsrad] DIAG party-send-invite hook installed at +0x%x",
+            (unsigned)PNSRAD_PARTY_SEND_INVITE_RVA);
+    } else {
+        Log(EchoVR::LogLevel::Warning,
+            "[pnsrad] DIAG party-send-invite hook FAILED at +0x%x: %s",
+            (unsigned)PNSRAD_PARTY_SEND_INVITE_RVA, MH_StatusToString(st));
+    }
+}
 
 /* Patch accounting (2026-07-26).
  *
@@ -130,9 +362,29 @@ static void PnsradNopPatch(uint8_t* site, const uint8_t* expected, size_t expLen
 }
 
 static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* data, void*) {
-    if (reason != 1 || s_pnsradPatched || !data || !data->BaseDllName) return;
-
+    if (reason != 1 || !data || !data->BaseDllName) return;
     const UNICODE_STRING* name = data->BaseDllName;
+
+    // pnsradmatchmaking.dll: independent of the pnsrad.dll check below — it
+    // loads much later (native CNSLobby module load, well after login, per
+    // the r14 log's "loading matchmaking library 'pnsradmatchmaking'") and
+    // must not be gated on s_pnsradPatched.
+    //
+    // 2026-09-13 (BUGS.md 81c7e6b): this DLL unloads/reloads mid-session — a
+    // reload gets a fresh DllBase with the original (unpatched) bytes, so a
+    // one-shot guard here (as pnsrad.dll's s_pnsradPatched below correctly
+    // uses, since that DLL doesn't reload) left the reloaded copy unpatched
+    // and the matchmaker fell back to the dead readyatdawn.com default —
+    // blank terminal, no queue. No guard: patch unconditionally on every
+    // load. Idempotent by construction — PatchMatchmakingHost's own memcmp
+    // against PNSRADMATCHMAKING_HOST_EXPECTED no-ops (with a Warning log)
+    // if this exact base was somehow already patched.
+    if (WideNameEqualsAscii(name->Buffer, name->Length / sizeof(WCHAR),
+                             "pnsradmatchmaking.dll")) {
+        PatchMatchmakingHost(reinterpret_cast<uintptr_t>(data->DllBase));
+    }
+
+    if (s_pnsradPatched) return;
     if (name->Length < 10 * sizeof(WCHAR)) return;
 
     const WCHAR* p = name->Buffer;
@@ -159,6 +411,8 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
         PnsradNopPatch(reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_STATE_CHECK),
                        PNSRAD_STATE_JE_EXPECTED, sizeof(PNSRAD_STATE_JE_EXPECTED), 6,
                        "state check", (unsigned)PNSRAD_LOGIN_STATE_CHECK);
+        InstallPartyBroadcasterDiag(base);
+        InstallPartySendInviteDiag(base);
 
         Log(EchoVR::LogLevel::Info,
             "[pnsrad] module patches: %d succeeded, %d failed — social layer "

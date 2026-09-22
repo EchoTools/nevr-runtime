@@ -1,0 +1,293 @@
+[NEVR.PATCH] boot log opened run=c4-1dd49e787338f75[NEVR.PATCH] Initializing v3.2.0+678.9af607a base=00007ff6ebd40000
+[NEVR.PATCH] function pointers resolved
+[NEVR.BOOT] initializing hooking engine...
+[NEVR.PATCH] minhook initialized
+[NEVR.BOOT] installing DLL load hooks...
+[NEVR.DLLHOOK] LoadLibrary hooks OK (4/4)
+[NEVR.PATCH] dll load hooks installed
+[NEVR.BOOT] registering headless graphics hooks...
+[NEVR.HEADLESS] graphics hooks registered
+[NEVR.BOOT] patching DSC provider strings...
+[NEVR.XPID] DSC provider patch applied at 5 sites
+[NEVR.BOOT] detouring GetProviderPrefix �+' OVR-ORG...
+[NEVR.XPID] GetProviderPrefix detour OK
+[NEVR.BOOT] installing CSysDLL hooks...
+[NEVR.PATCH] hooked name=CSysDLL_GetSymbol
+[NEVR.PATCH] hooked name=CSysDLL_Load effect=pnsradgameserver_to_inprocess_serverlib
+[NEVR.BOOT] installing broadcaster guard...
+[NEVR.PATCH] broadcaster guard: no-op placeholder, nothing installed
+[NEVR.BOOT] initializing log filter...
+[NEVR.LOGFILTER] initializing (base=0x7ff6ebd40000, server=false)
+[NEVR.LOGFILTER] no config file found, using built-in defaults (51 suppress patterns)
+[NEVR.LOGFILTER] logging to: C:\Users\User\AppData\Local\EchoVR\logs/nevr-2026-09-21T16-37-44.734.jsonl
+[NEVR.PATCH] log filter installed
+[NEVR.BOOT] installing game function hooks...
+[NEVR.PATCH] hook name=BuildCmdLineSyntaxDefinitions result=OK
+[NEVR.PATCH] hook name=PreprocessCommandLine result=OK
+[90m2026-09-21T16:37:44.806Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=EchoVR::GetProcAddress target=00007ff6ebe2aef0 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed (N126/N128)[0m
+[NEVR.PATCH] game hooks installed
+[NEVR.PATCH] tls deferred=ws_bridge stage=boot
+[NEVR.BOOT] installing crash recovery hooks...
+[90m2026-09-21T16:37:44.837Z[0m [0minfo[0m [NEVR.PATCH] CreateProcessA hook installed (crash reporter disabled)[0m
+[90m2026-09-21T16:37:44.847Z[0m [0minfo[0m [NEVR.PATCH] CreateProcessW hook installed (crash reporter disabled)[0m
+[90m2026-09-21T16:37:44.857Z[0m [0minfo[0m [NEVR.PATCH] ExitProcess hook installed (prevents crash reporter termination)[0m
+[90m2026-09-21T16:37:44.867Z[0m [0minfo[0m [NEVR.PATCH] TerminateProcess hook installed (prevents self-termination)[0m
+[NEVR.CRASH] crash recovery hooks installed
+[NEVR.PATCH] platform hooks deferred=platform_compat_module
+[NEVR.BOOT] installing server crash-recovery hooks...
+[NEVR.PATCH] server crash-recovery hooks installed
+[NEVR.BOOT] installing exception handlers...
+[90m2026-09-21T16:37:44.914Z[0m [0minfo[0m [NEVR.PATCH] veh installed handler=BreakpointVEH priority=1 modules_cached=32 stack_reserve_bytes=65536[0m
+[90m2026-09-21T16:37:44.936Z[0m [0minfo[0m [NEVR.CRASH] hooked name=HandleCrashDump va=0x1401CEFE0 prologue=e96e1be2ff (why-did-we-crash probe)[0m
+[NEVR.CRASH] veh installed
+[NEVR.BOOT] installing console ctrl handler...
+[90m2026-09-21T16:37:44.936Z[0m [0minfo[0m [NEVR.PATCH] Console ctrl handler installed (behind the game's until re-armed)[0m
+[90m2026-09-21T16:37:44.936Z[0m [0minfo[0m [NEVR.PATCH] POSIX signal handlers installed (SIGINT/SIGTERM -> direct shutdown)[0m
+[NEVR.PATCH] console ctrl handler installed
+[NEVR.BOOT] applying startup patches...
+[NEVR.PATCH] startup patches applied
+[NEVR.BOOT] initializing binary bug fix hooks...
+[90m2026-09-21T16:37:44.938Z[0m [0minfo[0m [NEVR.PATCH] installing binary bug fix hooks[0m
+[90m2026-09-21T16:37:44.946Z[0m [0minfo[0m [NEVR.PATCH] hooked name=GetTimeMicroseconds (BUG#1 fix) va=0x1400D00C0[0m
+[90m2026-09-21T16:37:44.956Z[0m [0minfo[0m [NEVR.PATCH] hooked name=CTimer_GetMilliSeconds va=0x1400D0110[0m
+[90m2026-09-21T16:37:44.967Z[0m [0minfo[0m [NEVR.PATCH] hooked name=EndMultiplayer (BUG#6 fix) va=0x140162450[0m
+[90m2026-09-21T16:37:44.980Z[0m [0minfo[0m [NEVR.PATCH] hooked name=CPrecisionSleep::Wait (BUG#11/#12 fix) va=0x1401CE0B0[0m
+[90m2026-09-21T16:37:44.991Z[0m [0minfo[0m [NEVR.PATCH] hooked name=CSpinWait::WaitForValue (BUG#14 fix) va=0x141500ED8[0m
+[90m2026-09-21T16:37:44.991Z[0m [0minfo[0m [NEVR.PATCH] patched name=CPrecisionSleep::BusyWait va=0x1401CE4C0 (BUG#13 fix, RET patch, saved orig=0x48)[0m
+[90m2026-09-21T16:37:45.001Z[0m [0minfo[0m [NEVR.PATCH] hooked name=HTTPListenerBringup va=0x1401F5B00 (BUG#62 fix)[0m
+[90m2026-09-21T16:37:45.011Z[0m [0minfo[0m [NEVR.PATCH] DIAG hooked name=NetGameHostCheck va=0x140157FB0[0m
+[90m2026-09-21T16:37:45.011Z[0m [0minfo[0m [NEVR.PATCH] hooks installed: 7 succeeded, 0 failed (failed: none)[0m
+[NEVR.PATCH] binary bug fix hooks installed
+[90m2026-09-21T16:37:45.011Z[0m [0minfo[0m [NEVR.PATCH] All hooks installed[0m
+[90m2026-09-21T16:37:45.018Z[0m [0minfo[0m [EVR] ==========================================================
+ Echo VR
+==========================================================[0m
+[90m2026-09-21T16:37:45.019Z[0m [0minfo[0m [NEVR.BOOT] runtime bootstrap trigger=Preprocess first-call server bootstrap[0m
+[90m2026-09-21T16:37:45.020Z[0m [31merror[0m [EVR] FS: Path not found:
+    While operating on file 'C:\nevr-systest\echovr\bin\win10\_local\config.json'
+    Windows Error (3): The system cannot find the path specified.
+    ...in d:\projects\rad\dev\src\engine\libs\os\csysfile_win_xb1.cpp at line 179[0m
+[90m2026-09-21T16:37:45.021Z[0m [31merror[0m [EVR] FS: Path not found:
+    While operating on file 'C:\nevr-systest\echovr\bin\win10\..\_local\config.json'
+    Windows Error (3): The system cannot find the path specified.
+    ...in d:\projects\rad\dev\src\engine\libs\os\csysfile_win_xb1.cpp at line 179[0m
+[90m2026-09-21T16:37:45.023Z[0m [0minfo[0m [NEVR.PATCH] Early config loaded from: C:\nevr-systest\echovr\bin\win10\..\..\_local\config.json[0m
+[90m2026-09-21T16:37:45.035Z[0m [0minfo[0m [NEVR.RESOURCE] Registered embedded override: splash_texture (type=0xbeac1969cb7b8861 name=0x1f72c5e0fc9fc8c0, 1050548 bytes)[0m
+[90m2026-09-21T16:37:45.036Z[0m [0minfo[0m [NEVR.RESOURCE] Init complete (1 overrides registered)[0m
+[90m2026-09-21T16:37:45.036Z[0m [0minfo[0m [NEVR.PATCH] Fatal error handler installed �?" server will exit on fatal errors[0m
+[90m2026-09-21T16:37:45.079Z[0m [0minfo[0m [NEVR.MODULE] platform_compat initialized: 3/3 hooks installed (tls=ok createdir=ok winhttp=ok)[0m
+[90m2026-09-21T16:37:45.079Z[0m [0minfo[0m [NEVR.MODULE] Loaded: platform_compat (API v2, static)[0m
+[90m2026-09-21T16:37:45.079Z[0m [0minfo[0m [NEVR.AUTH] Running in server mode -- token auth disabled[0m
+[90m2026-09-21T16:37:45.080Z[0m [0minfo[0m [NEVR.MODULE] token_auth initialized[0m
+[90m2026-09-21T16:37:45.080Z[0m [0minfo[0m [NEVR.MODULE] Loaded: token_auth (API v2, static)[0m
+[90m2026-09-21T16:37:45.080Z[0m [0minfo[0m [NEVR.PATCH] -headless: native echovr.exe flag; -server applies the same engine-flags mask, so this token is a harmless no-op here.[0m
+[90m2026-09-21T16:37:45.080Z[0m [0minfo[0m [NEVR.PATCH] Server mode �?" headless + noovr applied[0m
+[90m2026-09-21T16:37:45.089Z[0m [0minfo[0m [NEVR.HEADLESS] engine flags 0x00000036 -> 0x00000034 (bit0_render=CLEAR(HEADLESS))[0m
+[90m2026-09-21T16:37:45.099Z[0m [0minfo[0m [EVR] [pnsrad] patched "pnsovr" -> "pnsrad"[0m
+[90m2026-09-21T16:37:45.099Z[0m [0minfo[0m [EVR] [pnsrad] patched "pnsdemo" -> "pnsrad"[0m
+[90m2026-09-21T16:37:45.100Z[0m [0minfo[0m [EVR] [pnsrad] init complete (3 echovr.exe patches)[0m
+[90m2026-09-21T16:37:45.100Z[0m [0minfo[0m [NEVR.PATCH] OVR platform branch bypassed - allowing normal initialization[0m
+[90m2026-09-21T16:37:45.100Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=LoadLibraryW target=00007ffab1f5f710 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed (N126/N128)[0m
+[90m2026-09-21T16:37:45.101Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=LoadLibraryExW target=00007ffab1f5c550 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed (N126/N128)[0m
+[90m2026-09-21T16:37:45.101Z[0m [33mwarn[0m [NEVR.PATCH] Oculus Platform SDK blocking hooks: LoadLibraryW=FAILED LoadLibraryExW=FAILED (redundant on headless �?" OVR SDK is never loaded; N127)[0m
+[90m2026-09-21T16:37:45.102Z[0m [0minfo[0m [NEVR.PATCH] Disabled loading tips system for server mode[0m
+[90m2026-09-21T16:37:45.123Z[0m [33mwarn[0m [NEVR.CONFIG] no config.yaml found �?" NEVR config keys use built-in defaults[0m
+[90m2026-09-21T16:37:45.123Z[0m [33mwarn[0m [NEVR.WS] no services.socket_uri in config.yaml �?" bridge NOT started; the game will talk to services directly and login injection cannot fire[0m
+[90m2026-09-21T16:37:45.124Z[0m [0minfo[0m [NEVR.PLUGIN] no plugins configured in config.yaml �?" loading none[0m
+[90m2026-09-21T16:37:45.124Z[0m [0minfo[0m [NEVR.CRASH] module cache refreshed count=38 (post module/plugin load)[0m
+[90m2026-09-21T16:37:45.125Z[0m [0minfo[0m [NEVR.PATCH] shutdown deps resolved ws_bridge=in-process StopWebSocketBridgeListener=direct (no loader lock on the signal path, N62/N105)[0m
+[90m2026-09-21T16:37:45.125Z[0m [0minfo[0m [NEVR.PATCH] console ctrl handler re-armed to front of chain (CTRL+C reaches us first; the game's teardown runs behind us)[0m
+[90m2026-09-21T16:37:45.125Z[0m [0minfo[0m [NEVR.BOOT] runtime bootstrap complete early_config=1 bridge=0 port=0[0m
+[90m2026-09-21T16:37:45.146Z[0m [33mwarn[0m [NEVR.PATCH] pnsrad CLog hook disabled �?" retaining native pnsrad output to avoid Wine stack overflow[0m
+[90m2026-09-21T16:37:45.147Z[0m [0minfo[0m [NEVR.PATCH] per-frame tick ALIVE �?" plugin/module OnFrame now dispatched (host=server)[0m
+[90m2026-09-21T16:37:45.148Z[0m [0minfo[0m [EVR] CL Args: echovr.exe  -noovr -server -headless -noconsole [0m
+[90m2026-09-21T16:37:45.148Z[0m [0minfo[0m [EVR] ---> Starting 1 worker threads in the scheduler.[0m
+[NEVR.PATCH] xinput stub name=XInputGetState state=not_connected
+[90m2026-09-21T16:37:45.244Z[0m [0minfo[0m [EVR] Loading archive engine_assets[0m
+[90m2026-09-21T16:37:45.289Z[0m [0minfo[0m [EVR] Finished initializing engine[0m
+[90m2026-09-21T16:37:45.306Z[0m [0minfo[0m [EVR] Loading archive r14gamedata[0m
+[90m2026-09-21T16:37:45.330Z[0m [0minfo[0m [EVR] Creating DEMO provider[0m
+[90m2026-09-21T16:37:45.346Z[0m [0minfo[0m [EVR] [pnsrad] DIAG party-broadcaster hook installed at +0x82d20[0m
+[90m2026-09-21T16:37:45.359Z[0m [0minfo[0m [EVR] [pnsrad] DIAG party-send-invite hook installed at +0x86df0[0m
+[90m2026-09-21T16:37:45.359Z[0m [0minfo[0m [EVR] [pnsrad] module patches: 3 succeeded, 0 failed �?" social layer (friends/party/login) ENABLED[0m
+[90m2026-09-21T16:37:45.381Z[0m [0minfo[0m [EVR] [NETGAME] Resetting local connection stats[0m
+[90m2026-09-21T16:37:45.382Z[0m [0minfo[0m [NEVR.UPNP] config key upnp=<absent> -> enabled=0[0m
+[90m2026-09-21T16:37:45.382Z[0m [0minfo[0m [EVR] [NSUSER] Setting local user data storage directory to C:\Users\User\AppData\Local\RAD\EchoVR\users[0m
+[90m2026-09-21T16:37:45.383Z[0m [0minfo[0m [EVR] [NETGAME] NetGame switching state (from logged out, to loading root)[0m
+[90m2026-09-21T16:37:45.384Z[0m [0minfo[0m [NEVR.UPNP] config key upnp=<absent> -> enabled=0[0m
+[90m2026-09-21T16:37:45.385Z[0m [0minfo[0m [EVR] [LEVELLOAD] Loading level 'mnu_master'[0m
+[90m2026-09-21T16:37:45.683Z[0m [0minfo[0m [EVR] [LEVELLOAD] Loading level 'r14_glb_global_root'[0m
+[90m2026-09-21T16:37:45.696Z[0m [33mwarn[0m [EVR] There are less R15NetRewardItem assignments than components (Did you get or make a change to item_assignment.json without rebuilding?)[0m
+[90m2026-09-21T16:37:45.699Z[0m [0minfo[0m [EVR] [LEVELLOAD] Finished loading level 'r14_glb_global_root' in 15 ms[0m
+[90m2026-09-21T16:37:45.699Z[0m [0minfo[0m [EVR] [LEVELLOAD] Enabling level 'r14_glb_global_root'[0m
+[90m2026-09-21T16:37:45.700Z[0m [0minfo[0m [EVR] [LEVELLOAD] Level 'mnu_master' offset by (0.000, 0.000, 0.000)[0m
+[90m2026-09-21T16:37:45.718Z[0m [0minfo[0m [EVR] [CONFIGS] RequestConfig: type=main_menu, id=main_menu[0m
+[90m2026-09-21T16:37:45.719Z[0m [31merror[0m [EVR] ~ Scriptnode can't find actor in gamespace ~
+	Script Actor:     0x710CD6662636E6B8
+	Script:           0x26EBC7ED80EBA931
+	Node Type:        EnableComponentNode
+	Node UUID:        c9971725
+	Target Actor:     Player
+	Gamespace:        
+: raduri://0x26EBC7ED80EBA931?elementname=c9971725&elementtype=scriptnodeelementtype=scriptproperty[0m
+[90m2026-09-21T16:37:45.720Z[0m [0minfo[0m [EVR] [LEVELLOAD] Finished loading level 'mnu_master' in 335 ms[0m
+[90m2026-09-21T16:37:45.720Z[0m [0minfo[0m [EVR] [LEVELLOAD] Enabling level 'mnu_master'[0m
+[90m2026-09-21T16:37:45.725Z[0m [0minfo[0m [EVR] [NSUSER] Creating user OVR-ORG-1[0m
+[90m2026-09-21T16:37:45.725Z[0m [0minfo[0m [EVR] [NETGAME] Logging in...[0m
+[SYSNET] Found Internet connection (IPv4)
+[90m2026-09-21T16:37:45.727Z[0m [0minfo[0m [EVR] [NETGAME] NetGame switching state (from loading root, to logging in)[0m
+[90m2026-09-21T16:37:45.729Z[0m [31merror[0m [EVR] [SCRIPT] 0xEDC9026F9F7DA90C: Tried to call function Disable externally but concurrent calls were set too low. Increase on FunctionDef node.[0m
+[90m2026-09-21T16:37:47.762Z[0m [31merror[0m [EVR] Peer ws://127.0.0.1:1/spr update - CErrMsg
+  - message: Winsock Error 10061 (WSAECONNREFUSED):
+	'No connection could be made because the target machine actively refused it.'
+  - callstack: 
+  - file: d:\projects\rad\dev\src\engine\libs\os\network\csystcpip_win_xb1.cpp
+  - line: 164
+  - errorcode: 0x1ebefecce9d13c6
+[0m
+[90m2026-09-21T16:37:47.763Z[0m [33mwarn[0m [EVR] [TCP CLIENT] [R14NETCLIENT] Lost connection (okay) to peer ws://127.0.0.1:1/spr[0m
+[90m2026-09-21T16:37:47.764Z[0m [31merror[0m [EVR] Peer ws://127.0.0.1:1/spr update - CErrMsg
+  - message: Winsock Error 10061 (WSAECONNREFUSED):
+	'No connection could be made because the target machine actively refused it.'
+  - callstack: 
+  - file: d:\projects\rad\dev\src\engine\libs\os\network\csystcpip_win_xb1.cpp
+  - line: 164
+  - errorcode: 0x1ebefecce9d13c6
+[0m
+[90m2026-09-21T16:37:47.765Z[0m [33mwarn[0m [EVR] [TCP CLIENT] [R14NETCLIENT] Lost connection (okay) to peer ws://127.0.0.1:1/spr[0m
+[90m2026-09-21T16:37:47.765Z[0m [0minfo[0m [EVR] [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:1/spr failed[0m
+[90m2026-09-21T16:37:47.765Z[0m [0minfo[0m [EVR] [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:1/spr failed[0m
+[90m2026-09-21T16:37:47.765Z[0m [31merror[0m [EVR] [NETGAME] Failed to connect to the login service[0m
+[90m2026-09-21T16:37:47.766Z[0m [0minfo[0m [EVR] [NETGAME] NetGame switching state (from logging in, to service unavailable)[0m
+[90m2026-09-21T16:37:47.766Z[0m [31merror[0m [EVR] [NETGAME] Service is unavailable[0m
+[90m2026-09-21T16:37:47.767Z[0m [0minfo[0m [EVR] Ending multiplayer[0m
+[90m2026-09-21T16:37:56.461Z[0m [31merror[0m [EVR] Peer ws://127.0.0.1:1/spr update - CErrMsg
+  - message: Winsock Error 10061 (WSAECONNREFUSED):
+	'No connection could be made because the target machine actively refused it.'
+  - callstack: 
+  - file: d:\projects\rad\dev\src\engine\libs\os\network\csystcpip_win_xb1.cpp
+  - line: 164
+  - errorcode: 0x1ebefecce9d13c6
+[0m
+[90m2026-09-21T16:37:56.485Z[0m [33mwarn[0m [EVR] [TCP CLIENT] [R14NETCLIENT] Lost connection (okay) to peer ws://127.0.0.1:1/spr[0m
+[90m2026-09-21T16:37:56.488Z[0m [0minfo[0m [EVR] [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:1/spr failed[0m
+[90m2026-09-21T16:38:03.496Z[0m [31merror[0m [EVR] Peer ws://127.0.0.1:1/spr update - CErrMsg
+  - message: Winsock Error 10061 (WSAECONNREFUSED):
+	'No connection could be made because the target machine actively refused it.'
+  - callstack: 
+  - file: d:\projects\rad\dev\src\engine\libs\os\network\csystcpip_win_xb1.cpp
+  - line: 164
+  - errorcode: 0x1ebefecce9d13c6
+[0m
+[90m2026-09-21T16:38:03.497Z[0m [33mwarn[0m [EVR] [TCP CLIENT] [R14NETCLIENT] Lost connection (okay) to peer ws://127.0.0.1:1/spr[0m
+[90m2026-09-21T16:38:03.499Z[0m [0minfo[0m [EVR] [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:1/spr failed[0m
+[90m2026-09-21T16:38:11.263Z[0m [31merror[0m [EVR] Peer ws://127.0.0.1:1/spr update - CErrMsg
+  - message: Winsock Error 10061 (WSAECONNREFUSED):
+	'No connection could be made because the target machine actively refused it.'
+  - callstack: 
+  - file: d:\projects\rad\dev\src\engine\libs\os\network\csystcpip_win_xb1.cpp
+  - line: 164
+  - errorcode: 0x1ebefecce9d13c6
+[0m
+[90m2026-09-21T16:38:11.264Z[0m [33mwarn[0m [EVR] [TCP CLIENT] [R14NETCLIENT] Lost connection (okay) to peer ws://127.0.0.1:1/spr[0m
+[90m2026-09-21T16:38:11.264Z[0m [0minfo[0m [EVR] [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:1/spr failed[0m
+[90m2026-09-21T16:38:19.019Z[0m [31merror[0m [EVR] Peer ws://127.0.0.1:1/spr update - CErrMsg
+  - message: Winsock Error 10061 (WSAECONNREFUSED):
+	'No connection could be made because the target machine actively refused it.'
+  - callstack: 
+  - file: d:\projects\rad\dev\src\engine\libs\os\network\csystcpip_win_xb1.cpp
+  - line: 164
+  - errorcode: 0x1ebefecce9d13c6
+[0m
+[90m2026-09-21T16:38:19.020Z[0m [33mwarn[0m [EVR] [TCP CLIENT] [R14NETCLIENT] Lost connection (okay) to peer ws://127.0.0.1:1/spr[0m
+[90m2026-09-21T16:38:19.020Z[0m [0minfo[0m [EVR] [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:1/spr failed[0m
+[90m2026-09-21T16:38:24.131Z[0m [0minfo[0m [NEVR.PATCH] broadcaster hook stats listen_entries=13 dispatch_entries=0 (N83/N84 evidence �?" zero entries means idle runs prove nothing)[0m
+[90m2026-09-21T16:38:24.131Z[0m [0minfo[0m [NEVR.PATCH] hook_liveness name=GetTimeMicroseconds entries=218944 entered=yes expected=all modes at=periodic[0m
+[90m2026-09-21T16:38:24.134Z[0m [33mwarn[0m [NEVR.PATCH] hook_liveness name=CTimer_GetMilliSeconds entries=0 entered=NO expected=all modes at=periodic[0m
+[90m2026-09-21T16:38:24.134Z[0m [33mwarn[0m [NEVR.PATCH] hook_liveness name=CPrecisionSleep::Wait entries=0 entered=NO expected=CLIENT ONLY �?" never runs on a server (N86) at=periodic[0m
+[90m2026-09-21T16:38:24.135Z[0m [33mwarn[0m [NEVR.PATCH] hook_liveness name=EndMultiplayer entries=0 entered=NO expected=session teardown at=periodic[0m
+[90m2026-09-21T16:38:24.136Z[0m [33mwarn[0m [NEVR.PATCH] hook_liveness name=CSpinWait::WaitForValue entries=0 entered=NO expected=under contention at=periodic[0m
+[90m2026-09-21T16:38:24.136Z[0m [33mwarn[0m [NEVR.PATCH] hook_liveness name=HTTPListenerBringup entries=0 entered=NO expected=server bringup at=periodic[0m
+[90m2026-09-21T16:38:24.136Z[0m [0minfo[0m [NEVR.PATCH] hook_liveness name=CBroadcaster::Listen entries=13 entered=yes expected=registration + gameplay at=periodic[0m
+[90m2026-09-21T16:38:24.137Z[0m [33mwarn[0m [NEVR.PATCH] hook_liveness name=CBroadcaster::ReceiveLocalEvent entries=0 entered=NO expected=message dispatch at=periodic[0m
+[90m2026-09-21T16:38:27.029Z[0m [31merror[0m [EVR] Peer ws://127.0.0.1:1/spr update - CErrMsg
+  - message: Winsock Error 10061 (WSAECONNREFUSED):
+	'No connection could be made because the target machine actively refused it.'
+  - callstack: 
+  - file: d:\projects\rad\dev\src\engine\libs\os\network\csystcpip_win_xb1.cpp
+  - line: 164
+  - errorcode: 0x1ebefecce9d13c6
+[0m
+[90m2026-09-21T16:38:27.064Z[0m [33mwarn[0m [EVR] [TCP CLIENT] [R14NETCLIENT] Lost connection (okay) to peer ws://127.0.0.1:1/spr[0m
+[90m2026-09-21T16:38:27.113Z[0m [0minfo[0m [EVR] [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:1/spr failed[0m
+[90m2026-09-21T16:38:34.139Z[0m [31merror[0m [EVR] Peer ws://127.0.0.1:1/spr update - CErrMsg
+  - message: Winsock Error 10061 (WSAECONNREFUSED):
+	'No connection could be made because the target machine actively refused it.'
+  - callstack: 
+  - file: d:\projects\rad\dev\src\engine\libs\os\network\csystcpip_win_xb1.cpp
+  - line: 164
+  - errorcode: 0x1ebefecce9d13c6
+[0m
+[90m2026-09-21T16:38:34.141Z[0m [33mwarn[0m [EVR] [TCP CLIENT] [R14NETCLIENT] Lost connection (okay) to peer ws://127.0.0.1:1/spr[0m
+[90m2026-09-21T16:38:34.144Z[0m [0minfo[0m [EVR] [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:1/spr failed[0m
+[90m2026-09-21T16:38:41.914Z[0m [31merror[0m [EVR] Peer ws://127.0.0.1:1/spr update - CErrMsg
+  - message: Winsock Error 10061 (WSAECONNREFUSED):
+	'No connection could be made because the target machine actively refused it.'
+  - callstack: 
+  - file: d:\projects\rad\dev\src\engine\libs\os\network\csystcpip_win_xb1.cpp
+  - line: 164
+  - errorcode: 0x1ebefecce9d13c6
+[0m
+[90m2026-09-21T16:38:41.915Z[0m [33mwarn[0m [EVR] [TCP CLIENT] [R14NETCLIENT] Lost connection (okay) to peer ws://127.0.0.1:1/spr[0m
+[90m2026-09-21T16:38:41.915Z[0m [0minfo[0m [EVR] [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:1/spr failed[0m
+[90m2026-09-21T16:38:44.008Z[0m [0minfo[0m [NEVR.LOGFILTER] health emitted=121 suppressed=731 suppression_pct=85 game_lines=126 interval_s=120[0m
+[90m2026-09-21T16:38:49.527Z[0m [31merror[0m [EVR] Peer ws://127.0.0.1:1/spr update - CErrMsg
+  - message: Winsock Error 10061 (WSAECONNREFUSED):
+	'No connection could be made because the target machine actively refused it.'
+  - callstack: 
+  - file: d:\projects\rad\dev\src\engine\libs\os\network\csystcpip_win_xb1.cpp
+  - line: 164
+  - errorcode: 0x1ebefecce9d13c6
+[0m
+[90m2026-09-21T16:38:49.528Z[0m [33mwarn[0m [EVR] [TCP CLIENT] [R14NETCLIENT] Lost connection (okay) to peer ws://127.0.0.1:1/spr[0m
+[90m2026-09-21T16:38:49.528Z[0m [0minfo[0m [EVR] [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:1/spr failed[0m
+[90m2026-09-21T16:38:57.646Z[0m [31merror[0m [EVR] Peer ws://127.0.0.1:1/spr update - CErrMsg
+  - message: Winsock Error 10061 (WSAECONNREFUSED):
+	'No connection could be made because the target machine actively refused it.'
+  - callstack: 
+  - file: d:\projects\rad\dev\src\engine\libs\os\network\csystcpip_win_xb1.cpp
+  - line: 164
+  - errorcode: 0x1ebefecce9d13c6
+[0m
+[90m2026-09-21T16:38:57.726Z[0m [33mwarn[0m [EVR] [TCP CLIENT] [R14NETCLIENT] Lost connection (okay) to peer ws://127.0.0.1:1/spr[0m
+[90m2026-09-21T16:38:57.733Z[0m [0minfo[0m [EVR] [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:1/spr failed[0m
+[90m2026-09-21T16:39:02.445Z[0m [0minfo[0m [NEVR.PATCH] broadcaster hook stats listen_entries=13 dispatch_entries=0 (N83/N84 evidence �?" zero entries means idle runs prove nothing)[0m
+[90m2026-09-21T16:39:02.448Z[0m [0minfo[0m [NEVR.PATCH] hook_liveness name=GetTimeMicroseconds entries=413099 entered=yes expected=all modes at=periodic[0m
+[90m2026-09-21T16:39:02.449Z[0m [33mwarn[0m [NEVR.PATCH] hook_liveness name=CTimer_GetMilliSeconds entries=0 entered=NO expected=all modes at=periodic[0m
+[90m2026-09-21T16:39:02.449Z[0m [33mwarn[0m [NEVR.PATCH] hook_liveness name=CPrecisionSleep::Wait entries=0 entered=NO expected=CLIENT ONLY �?" never runs on a server (N86) at=periodic[0m
+[90m2026-09-21T16:39:02.450Z[0m [33mwarn[0m [NEVR.PATCH] hook_liveness name=EndMultiplayer entries=0 entered=NO expected=session teardown at=periodic[0m
+[90m2026-09-21T16:39:02.450Z[0m [33mwarn[0m [NEVR.PATCH] hook_liveness name=CSpinWait::WaitForValue entries=0 entered=NO expected=under contention at=periodic[0m
+[90m2026-09-21T16:39:02.451Z[0m [33mwarn[0m [NEVR.PATCH] hook_liveness name=HTTPListenerBringup entries=0 entered=NO expected=server bringup at=periodic[0m
+[90m2026-09-21T16:39:02.451Z[0m [0minfo[0m [NEVR.PATCH] hook_liveness name=CBroadcaster::Listen entries=13 entered=yes expected=registration + gameplay at=periodic[0m
+[90m2026-09-21T16:39:02.451Z[0m [33mwarn[0m [NEVR.PATCH] hook_liveness name=CBroadcaster::ReceiveLocalEvent entries=0 entered=NO expected=message dispatch at=periodic[0m
+[90m2026-09-21T16:39:04.767Z[0m [31merror[0m [EVR] Peer ws://127.0.0.1:1/spr update - CErrMsg
+  - message: Winsock Error 10061 (WSAECONNREFUSED):
+	'No connection could be made because the target machine actively refused it.'
+  - callstack: 
+  - file: d:\projects\rad\dev\src\engine\libs\os\network\csystcpip_win_xb1.cpp
+  - line: 164
+  - errorcode: 0x1ebefecce9d13c6
+[0m
+[90m2026-09-21T16:39:04.768Z[0m [33mwarn[0m [EVR] [TCP CLIENT] [R14NETCLIENT] Lost connection (okay) to peer ws://127.0.0.1:1/spr[0m
+[90m2026-09-21T16:39:04.768Z[0m [0minfo[0m [EVR] [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:1/spr failed[0m
+[90m2026-09-21T16:39:12.435Z[0m [31merror[0m [EVR] Peer ws://127.0.0.1:1/spr update - CErrMsg
+  - message: Winsock Error 10061 (WSAECONNREFUSED):
+	'No connection could be made because the target machine actively refused it.'
+  - callstack: 
+  - file: d:\projects\rad\dev\src\engine\libs\os\network\csystcpip_win_xb1.cpp
+  - line: 164
+  - errorcode: 0x1ebefecce9d13c6
+[0m
+[90m2026-09-21T16:39:12.436Z[0m [33mwarn[0m [EVR] [TCP CLIENT] [R14NETCLIENT] Lost connection (okay) to peer ws://127.0.0.1:1/spr[0m
+[90m2026-09-21T16:39:12.436Z[0m [0minfo[0m [EVR] [TCP CLIENT] [R14NETCLIENT] connection to ws://127.0.0.1:1/spr failed[0m
+

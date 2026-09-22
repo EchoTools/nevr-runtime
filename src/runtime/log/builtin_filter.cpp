@@ -15,6 +15,7 @@
 #include "runtime/log/builtin_filter.h"
 #include "runtime/log/symcache.h"
 #include "core/logging.h"
+#include "runtime/hook/hook_guard.h"
 
 #include <MinHook.h>
 #include <nlohmann/json.hpp>
@@ -1211,6 +1212,14 @@ void BuiltinLogFilter::Init(uintptr_t base_addr, bool is_server) {
     Log(EchoVR::LogLevel::Debug,
         "[NEVR.PATCH] hooked name=CLog::PrintfImpl va=0x%llX",
         static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL));
+
+    // This hook is installed with raw MinHook calls above, not PatchDetour, so
+    // it was previously invisible to HookGuard — a second module taking this
+    // exact address (the N89 failure mode: "CAPTURED ZERO GAME LINES ...
+    // another module has almost certainly taken the target") could never be
+    // named, only guessed at. Recording it here puts it under the same
+    // detection PatchDetour gives every other hook for free.
+    HookGuard::Record(g_hook_target, "CLog::PrintfImpl");
 }
 
 void BuiltinLogFilter::Shutdown() {

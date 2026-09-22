@@ -90,6 +90,11 @@ verbose-build-android: configure-android
 test-android: build-android
     cd tests/quest && go test -v ./...
 
+# Black-box crash-ingest contract gate. Requires a non-production staging sink;
+# see docs/design/2026-09-15-crash-report-ingest-implementation-contract.md.
+test-crash-ingest-contract:
+    cd tests/crash-ingest && go test -v ./...
+
 # Repack: rename the real libovrplatformloader.so -> _orig.so (fixes soname).
 # Operates on a COPY under build/; never mutates the source-of-truth extract.
 # On-device install (repack APK + sideload) is out of scope here — no prod deploy.
@@ -179,6 +184,33 @@ test-system-dll:
 # Run system tests with verbose output, no cache
 test-system-verbose:
     cd tests/system && go test -v -count=1 ./...
+
+# Run the built runtime on a native Windows VM (libvirt) and judge the boot.
+# Needs WINVM_USER/WINVM_PASS and `just build` first; see
+# docs/reference/windows-vm-system-test.md. Exit 1 = runtime failed a check,
+# exit 2 = the VM/environment is unusable.
+test-winvm *ARGS:
+    tools/winvm/systest.py {{ARGS}}
+
+# Local, isolated nakama (fake Discord, own Postgres) for testing the runtime's
+# login/registration path. See docs/reference/local-nakama.md.
+nakama-up:
+    python3 tools/nakama-local/setup.py
+    docker compose -f tools/nakama-local/docker-compose.yml up -d
+
+nakama-down:
+    docker compose -f tools/nakama-local/docker-compose.yml down
+
+# Also drops the database volume.
+nakama-reset:
+    docker compose -f tools/nakama-local/docker-compose.yml down -v
+
+nakama-logs:
+    docker compose -f tools/nakama-local/docker-compose.yml logs -f nakama
+
+# Insert the test account (fake Discord ID + password) a runtime can log in as.
+nakama-seed:
+    tools/nakama-local/seed.py
 
 # Run plugin ground truth tests (no game binary needed)
 test-plugins-groundtruth:

@@ -1,0 +1,9 @@
+gethostname=WIN11-DEV
+--- iteration 1 ---
+game call: node="" flags=0         rc=0 wsaerr=0 elapsed=5.9 ms -> 192.168.122.50
+node=NULL flags=0                  rc=0 wsaerr=0 elapsed=0.0 ms -> 127.0.0.1
+node=NULL flags=AI_PASSIVE         rc=0 wsaerr=0 elapsed=0.0 ms -> 0.0.0.0
+node=hostname flags=0              rc=0 wsaerr=0 elapsed=0.2 ms -> 192.168.122.50
+--- iteration 2 ---
+game call: node="" flags=0         rc=0 wsaerr=0 elapsed=0.2 ms -> 192.168.122.50
+node=NULL flags=0                  rc=0 wsaerr=0 elapsed=0.0 ms -> 127.0.0.1

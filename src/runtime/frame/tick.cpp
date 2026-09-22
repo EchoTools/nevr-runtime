@@ -32,6 +32,7 @@
 #include "core/logging.h"
 #include "runtime/ext/module_loader.h"    // TickModules
 #include "runtime/ext/plugin_loader.h"    // TickPlugins
+#include "runtime/hook/hook_guard.h"
 #include "runtime/hook/hook_liveness.h"
 #include "runtime/lifecycle/cli.h"             // g_isServer
 #include "runtime/lifecycle/crash_recovery.h"  // EnsureStackReserve
@@ -79,6 +80,20 @@ void DispatchPerFrameWork(uint64_t nowUs) {
             // never been entered. This is the measurement whose absence let a
             // dead per-frame tick ship for a day.
             HookLiveness::Report("periodic");
+
+            // N84's only production call site was plugin_loader.cpp, gated on a
+            // plugin finishing its init — a server that loads zero plugins (a
+            // plain broadcaster host, no plugins/ deployed) never re-verified a
+            // single guarded address for its entire run. Any hook clobbered by
+            // something other than a plugin double-detour was structurally
+            // undetectable. VerifyAll's own ERROR log fires on mismatch; a clean
+            // pass gets one quiet heartbeat line instead of nothing.
+            const int hookCollisions = HookGuard::VerifyAll("periodic");
+            if (hookCollisions == 0) {
+                Log(EchoVR::LogLevel::Debug,
+                    "[NEVR.PATCH] hook guard: %d guarded address(es) verified clean (periodic)",
+                    HookGuard::RecordedCount());
+            }
         }
     }
 

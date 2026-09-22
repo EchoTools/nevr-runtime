@@ -1,0 +1,64 @@
+# Local, isolated EchoTools nakama for testing the NEVR runtime. No production
+# data, no real Discord, no secrets in this file (keys live in .state/, generated
+# by setup.py). Start with `just nakama-up`.
+#
+# Image: the same one production runs (ghcr.io/echotools/nakama:latest at
+# 2026-09-21 == v3.27.2-evr.325). Pin it here so a local run is reproducible.
+name: nevr-nakama-local
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: nakama
+      POSTGRES_PASSWORD: localdb
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "nakama"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  # The fork will not start without a live Discord gateway. This stands in for
+  # Discord under its real hostnames; see discord_mock.py.
+  discord-mock:
+    image: python:3.13-alpine
+    command: ["python", "/mock/discord_mock.py", "/certs/server.pem", "/certs/server.key"]
+    volumes:
+      - ./discord_mock.py:/mock/discord_mock.py:ro
+      - ./.state/certs:/certs:ro
+    networks:
+      default:
+        aliases: [discord.com, gateway.discord.gg, discordapp.com, cdn.discordapp.com]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 443), 2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  nakama:
+    image: ghcr.io/echotools/nakama:v3.27.2-evr.325
+    entrypoint:
+      - "/bin/sh"
+      - "-ecx"
+      - >
+          /nakama/nakama migrate up --database.address postgres:localdb@postgres:5432/nakama &&
+          exec /nakama/nakama --name nevr-local --config /data/nakama.yml
+    environment:
+      SSL_CERT_FILE: /certs/ca.pem   # trust the mock's CA (replaces the system roots: intentional, nothing else should be reachable)
+    depends_on:
+      postgres:
+        condition: service_healthy
+      discord-mock:
+        condition: service_healthy
+    volumes:
+      - ./.state/nakama.yml:/data/nakama.yml:ro
+      - ./.state/certs:/certs:ro
+    ports:
+      # virbr0 (the Windows VM reaches the host at 192.168.122.1) and loopback only; never the LAN.
+      - "${NAKAMA_LOCAL_VM_BIND:-192.168.122.1}:7350:7350"
+      - "127.0.0.1:7350:7350"
+      - "127.0.0.1:7351:7351"
+
+volumes:
+  pgdata:

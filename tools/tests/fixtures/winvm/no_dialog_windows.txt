@@ -1,0 +1,4 @@
+echovr pids: 6120  session: 1
+== pid 6120 ==
+TOP hwnd=131648 class=MSCTFIME UI visible=False title=[MSCTFIME UI]
+TOP hwnd=197284 class=IME visible=False title=[Default IME]

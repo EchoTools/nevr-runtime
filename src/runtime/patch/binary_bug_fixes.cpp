@@ -49,6 +49,8 @@
 #include "runtime/ext/module_loader.h"    // N68: TickModules
 #include "nevr_common.h"      // N96: ResolveVA_Checked / ResolveVA_Unchecked
 
+#include <atomic>
+
 #ifdef _WIN32
 #include <windows.h>
 #include <cstring>
@@ -70,6 +72,7 @@ static constexpr uint64_t VA_PRECISION_SLEEP_WAIT    = 0x1401CE0B0;
 static constexpr uint64_t VA_PRECISION_SLEEP_BUSYWAIT = 0x1401CE4C0;
 static constexpr uint64_t VA_SPINWAIT_WAIT_FOR_VALUE = 0x141500ED8;
 static constexpr uint64_t VA_HTTP_LISTENER_BRINGUP   = 0x1401F5B00;  // BUG #62
+static constexpr uint64_t VA_NETGAME_HOST_CHECK      = 0x140157FB0;  // DIAG, see docs/reference/server-mode-multiplayer-hang.md
 
 // N33: save original byte at BusyWait before RET patch, restore on Shutdown.
 static uint8_t  s_busywait_original_byte = 0;
@@ -79,6 +82,10 @@ static bool     s_busywait_patched       = false;
  * clean 5-byte hook boundary). Validated before hooking to guard against the
  * loaded binary diverging from the ReVault-indexed echovr.exe. */
 static constexpr uint8_t HTTP_LISTENER_PROLOGUE[5] = {0x48, 0x89, 0x5C, 0x24, 0x08};
+
+/* Expected prologue at VA_NETGAME_HOST_CHECK (0x140157FB0): MOV [RSP+0x10],RDX
+ * ReVault-verified via revault_disassemble: 0x140157fb0: 48 89 54 24 10. */
+static constexpr uint8_t NETGAME_HOST_CHECK_PROLOGUE[5] = {0x48, 0x89, 0x54, 0x24, 0x10};
 
 /* Expected prologue at VA_GET_TIME_MICROSECONDS (0x1400D00C0): SUB RSP,0x28
  * Same prologue at VA_GET_TIME_MILLISECONDS (0x1400D0110). Both ReVault-verified. */
@@ -425,6 +432,45 @@ static uint64_t __fastcall HttpListenerBringupHook(int64_t* state, const char* a
     return result;  // success, or client mode — preserve original behavior
 }
 
+/* --------------------------------------------------------------------
+ * Diagnostic (2026-09-14, Andrew + Claude): does -server ever get the
+ * "host authority" flag bit1 set? See
+ * docs/reference/server-mode-multiplayer-hang.md for the full trail.
+ *
+ * fcn.140157fb0 (this hook's target) is the function that, among other
+ * things, gates loading pnsradgameserver on
+ * `**(uintptr_t*)(netgame_this+0x2da0) & 0x46` (bits 1/2/6) — confirmed via
+ * direct revault_disassemble at 0x1401599b6-0x1401599e5, and the identical
+ * predicate is confirmed (also via disassembly, three separate sites) in
+ * CR15NetGame::Update. launch-server.sh hangs forever after login without
+ * ever reaching that load (or BeginMultiplayer, or GameServerLib::Init) —
+ * this logs the flags byte at entry to settle, live, whether bit1 is
+ * actually 0 or 1 for a real -server run, since static analysis could not
+ * find the setter (indirect dispatch + revault_search_code's documented
+ * reconstruction-node noise problem both dead-ended).
+ *
+ * DIAGNOSTIC ONLY — no behavior change, logs once per call and passes
+ * through unmodified. Server mode only (client mode calls this constantly
+ * during normal play and would flood the log for no reason here).
+ * -------------------------------------------------------------------- */
+
+using NetGameHostCheck_t = uint64_t(__fastcall*)(int64_t* netgameThis, int64_t param2);
+static NetGameHostCheck_t s_origNetGameHostCheck = nullptr;
+static std::atomic_bool s_netGameHostCheckLogged{false};
+
+static uint64_t __fastcall NetGameHostCheckHook(int64_t* netgameThis, int64_t param2) {
+    if (g_isServer && netgameThis && !s_netGameHostCheckLogged.exchange(true)) {
+        uintptr_t flagsPtr = *reinterpret_cast<uintptr_t*>(
+            reinterpret_cast<uint8_t*>(netgameThis) + 0x2da0);
+        uint8_t flagsByte = flagsPtr ? *reinterpret_cast<uint8_t*>(flagsPtr) : 0;
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.PATCH] DIAG netgame host-authority flags: byte=0x%02x bit1=%d bit2=%d bit6=%d "
+            "(host-authority = bit1 OR (bit2==0 AND bit6==1))",
+            flagsByte, (flagsByte >> 1) & 1, (flagsByte >> 2) & 1, (flagsByte >> 6) & 1);
+    }
+    return s_origNetGameHostCheck(netgameThis, param2);
+}
+
 #endif  // _WIN32
 
 /* ====================================================================
@@ -631,6 +677,43 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
         }
     }
 
+    // DIAG — see docs/reference/server-mode-multiplayer-hang.md
+    //
+    // 2026-09-14: originally gated this install on `if (g_isServer)`, same
+    // as this file's other hooks appear to assume is safe. It is NOT: this
+    // Init() runs during early DLL load, BEFORE PreprocessCommandLineHook
+    // (boot.cpp) has ever run PreflightRuntimeBootstrap — the ONLY place
+    // g_isServer is set, from argv. Confirmed live: "binary bug fix hooks
+    // installed" logs before "runtime bootstrap trigger=Preprocess
+    // first-call server bootstrap" every time. Gating the INSTALL on
+    // g_isServer here means it is always false, hook never installs, no
+    // diagnostic ever fires — a second instance of the exact ordering bug
+    // this whole investigation is about. Fix: always install; the hook BODY
+    // (NetGameHostCheckHook) already correctly re-checks g_isServer at
+    // CALL time, by which point PreprocessCommandLineHook has long since run.
+    {
+        void* target = nevr::ResolveVA_Checked(g_base, VA_NETGAME_HOST_CHECK);
+        if (!target) {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] DIAG hook skipped name=NetGameHostCheck va=0x%llX reason=address_unmapped",
+                static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK));
+        } else if (memcmp(target, NETGAME_HOST_CHECK_PROLOGUE, sizeof(NETGAME_HOST_CHECK_PROLOGUE)) != 0) {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] DIAG hook failed name=NetGameHostCheck va=0x%llX reason=prologue_mismatch",
+                static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK));
+        } else if (MH_CreateHook(target, (void*)&NetGameHostCheckHook,
+                                  (void**)&s_origNetGameHostCheck) == MH_OK &&
+                   MH_EnableHook(target) == MH_OK) {
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.PATCH] DIAG hooked name=NetGameHostCheck va=0x%llX",
+                static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK));
+        } else {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] DIAG hook failed name=NetGameHostCheck va=0x%llX (MH_CreateHook/EnableHook)",
+                static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK));
+        }
+    }
+
     // Aggregate summary per docs/standards/logging.md Rule 5
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] hooks installed: %d succeeded, %d failed (failed: %s)",
@@ -654,6 +737,7 @@ void BinaryBugFixes::Shutdown() {
         { (void**)&s_origPrecisionSleepWait, VA_PRECISION_SLEEP_WAIT },
         { (void**)&s_origWaitForValue, VA_SPINWAIT_WAIT_FOR_VALUE },
         { (void**)&s_origHttpListenerBringup, VA_HTTP_LISTENER_BRINGUP },
+        { (void**)&s_origNetGameHostCheck, VA_NETGAME_HOST_CHECK },
     };
     // Unchecked deliberately (N96). Two reasons, both measured:
     //   1. The `*e.orig != nullptr` guard IS the record that the install-time
