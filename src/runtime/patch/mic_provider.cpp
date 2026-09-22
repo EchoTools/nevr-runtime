@@ -27,6 +27,7 @@
 #include "runtime/patch/mic_provider.h"
 
 #include "core/logging.h"
+#include "core/mic_dsp.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -35,8 +36,6 @@
 #include <objbase.h>
 
 #include <atomic>
-#include <cstring>
-#include <mutex>
 
 // The precompiled header already pulled in <mmdeviceapi.h>/<audioclient.h>
 // (via core/pch.h -> windows.h) without INITGUID, so their DEFINE_GUID
@@ -64,55 +63,21 @@ constexpr uint32_t kTargetSampleRate = 48000;
 constexpr uint32_t kRingCapacitySamples = 24000;  // ~500ms at 48kHz mono
 
 // --- Ring buffer -----------------------------------------------------------
-// One writer (the capture thread), one reader (MicRead, called from the
-// game's own thread). A mutex is enough: MicRead runs a handful of times per
-// game tick, nowhere near a hot path that would need lock-free structures.
-std::mutex g_ringMutex;
-int16_t g_ring[kRingCapacitySamples];
-uint32_t g_ringHead = 0;   // next write position
-uint32_t g_ringCount = 0;  // samples currently buffered
+// The pure ring/resample logic lives in core/mic_dsp.{h,cpp} (no windows.h),
+// unit-tested directly in tests/test_mic_dsp.cpp. This file only adapts real
+// WASAPI packets into it.
+MicRingBuffer g_ring(kRingCapacitySamples);
 bool g_ringOverflowLogged = false;
 
-void RingReset() {
-  std::lock_guard<std::mutex> lock(g_ringMutex);
-  g_ringHead = 0;
-  g_ringCount = 0;
-  g_ringOverflowLogged = false;
-}
-
-void RingPush(const int16_t* samples, uint32_t count) {
-  std::lock_guard<std::mutex> lock(g_ringMutex);
-  for (uint32_t i = 0; i < count; i++) {
-    g_ring[g_ringHead] = samples[i];
-    g_ringHead = (g_ringHead + 1) % kRingCapacitySamples;
-    if (g_ringCount < kRingCapacitySamples) {
-      g_ringCount++;
-    } else if (!g_ringOverflowLogged) {
-      // The game isn't draining fast enough (or never started). Log once,
-      // not every overflowing sample — this runs on the capture thread
-      // every ~10ms.
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.MIC] ring buffer full — game is not draining MicRead; oldest "
-          "audio is being dropped");
-      g_ringOverflowLogged = true;
-    }
+void RingPushWithOverflowLog(const int16_t* samples, uint32_t count) {
+  if (g_ring.Push(samples, count) && !g_ringOverflowLogged) {
+    // The game isn't draining fast enough (or never started). Log once, not
+    // every overflowing sample — this runs on the capture thread every ~10ms.
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MIC] ring buffer full — game is not draining MicRead; oldest "
+        "audio is being dropped");
+    g_ringOverflowLogged = true;
   }
-}
-
-uint32_t RingAvailable() {
-  std::lock_guard<std::mutex> lock(g_ringMutex);
-  return g_ringCount;
-}
-
-uint32_t RingPop(int16_t* out, uint32_t maxCount) {
-  std::lock_guard<std::mutex> lock(g_ringMutex);
-  uint32_t n = (maxCount < g_ringCount) ? maxCount : g_ringCount;
-  uint32_t tail = (g_ringHead + kRingCapacitySamples - g_ringCount) % kRingCapacitySamples;
-  for (uint32_t i = 0; i < n; i++) {
-    out[i] = g_ring[(tail + i) % kRingCapacitySamples];
-  }
-  g_ringCount -= n;
-  return n;
 }
 
 // --- WASAPI state ------------------------------------------------------
@@ -149,70 +114,26 @@ constexpr unsigned long kSubtypeIeeeFloatData1 = 0x00000003ul;
 // Converts one WASAPI capture packet (native rate/channels/format) to mono
 // int16 at kTargetSampleRate and appends it to the ring buffer. WASAPI's own
 // contract is that shared-mode mix format is always PCM16 or IEEE float
-// (optionally wrapped in WAVEFORMATEXTENSIBLE) — both are handled; anything
-// else is treated as silence rather than misinterpreted as audio.
+// (optionally wrapped in WAVEFORMATEXTENSIBLE) — DownmixResampleToMonoInt16
+// (core/mic_dsp.cpp) handles both; anything else is treated as silence
+// rather than misinterpreted as audio.
 void ConvertAndPush(const BYTE* data, UINT32 frameCount, const WAVEFORMATEX* fmt) {
-  if (frameCount == 0) return;
+  if (frameCount == 0 || fmt->nChannels == 0) return;
 
-  uint16_t channels = fmt->nChannels;
-  uint32_t srcRate = fmt->nSamplesPerSec;
-  uint16_t bitsPerSample = fmt->wBitsPerSample;
   bool isFloat = (fmt->wFormatTag == WAVE_FORMAT_IEEE_FLOAT);
   if (fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
     const auto* ext = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(fmt);
     isFloat = (ext->SubFormat.Data1 == kSubtypeIeeeFloatData1);
   }
-  if (channels == 0) return;
 
-  // WASAPI shared-mode packets are typically a few hundred to a few
-  // thousand frames; bounding here avoids a heap allocation on the capture
-  // hot path. Frames beyond this are dropped (never observed in practice on
-  // a 10ms buffer at any common device rate).
-  constexpr uint32_t kMaxFrames = 8192;
-  if (frameCount > kMaxFrames) frameCount = kMaxFrames;
-
-  float monoFloat[kMaxFrames];
-  for (UINT32 f = 0; f < frameCount; f++) {
-    float sum = 0.0f;
-    for (uint16_t c = 0; c < channels; c++) {
-      size_t byteOffset = (static_cast<size_t>(f) * channels + c);
-      if (isFloat) {
-        const float* sample = reinterpret_cast<const float*>(data + byteOffset * sizeof(float));
-        sum += *sample;
-      } else if (bitsPerSample == 16) {
-        const int16_t* sample = reinterpret_cast<const int16_t*>(data + byteOffset * sizeof(int16_t));
-        sum += static_cast<float>(*sample) / 32768.0f;
-      }
-      // Other bit depths (24/32-bit int) are not expected in shared-mode
-      // WASAPI mix format and are treated as silence rather than guessed.
-    }
-    monoFloat[f] = sum / static_cast<float>(channels);
-  }
-
-  // Linear-interpolation resample to kTargetSampleRate, carrying fractional
-  // phase across packets so boundaries don't click. Sufficient for voice —
-  // Opus at 24kbps is the actual fidelity ceiling downstream — not intended
-  // as a general-purpose resampler.
-  constexpr uint32_t kMaxOut = kMaxFrames * 2 + 4;  // covers up to ~2x upsampling
+  // Matches core/mic_dsp.cpp's own frame/output bounds.
+  constexpr uint32_t kMaxOut = 8192 * 2 + 4;
   int16_t out[kMaxOut];
-  uint32_t outCount = 0;
-  double ratio = static_cast<double>(srcRate) / static_cast<double>(kTargetSampleRate);
-  double pos = g_resamplePhase;
-  while (pos < static_cast<double>(frameCount) - 1.0 && outCount < kMaxOut) {
-    uint32_t i0 = static_cast<uint32_t>(pos);
-    double frac = pos - static_cast<double>(i0);
-    float s0 = monoFloat[i0];
-    float s1 = monoFloat[i0 + 1];
-    float s = static_cast<float>(s0 + (s1 - s0) * frac);
-    if (s > 1.0f) s = 1.0f;
-    if (s < -1.0f) s = -1.0f;
-    out[outCount++] = static_cast<int16_t>(s * 32767.0f);
-    pos += ratio;
-  }
-  g_resamplePhase = pos - static_cast<double>(frameCount);
-  if (g_resamplePhase < 0.0) g_resamplePhase = 0.0;
+  uint32_t outCount = DownmixResampleToMonoInt16(
+      data, frameCount, fmt->nChannels, fmt->nSamplesPerSec, isFloat, fmt->wBitsPerSample,
+      kTargetSampleRate, &g_resamplePhase, out, kMaxOut);
 
-  RingPush(out, outCount);
+  RingPushWithOverflowLog(out, outCount);
 }
 
 DWORD WINAPI CaptureThreadProc(LPVOID) {
@@ -250,7 +171,7 @@ DWORD WINAPI CaptureThreadProc(LPVOID) {
 }  // namespace
 
 uint64_t MicProvider::MicAvailable() {
-  return static_cast<uint64_t>(RingAvailable());
+  return static_cast<uint64_t>(g_ring.Available());
 }
 
 uint64_t MicProvider::MicCreate() {
@@ -363,7 +284,7 @@ uint64_t MicProvider::MicDetected() {
 uint64_t MicProvider::MicRead(void* buffer, uint64_t sampleCount) {
   if (!buffer || sampleCount == 0) return 0;
   uint32_t n = (sampleCount > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(sampleCount);
-  return RingPop(reinterpret_cast<int16_t*>(buffer), n);
+  return g_ring.Pop(reinterpret_cast<int16_t*>(buffer), n);
 }
 
 void MicProvider::MicStart() {
@@ -393,7 +314,8 @@ void MicProvider::MicStop() {
 void MicProvider::MicDestroy() {
   MicProvider::MicStop();
   ReleaseWasapi();
-  RingReset();
+  g_ring.Reset();
+  g_ringOverflowLogged = false;
   if (g_weInitializedCom) {
     CoUninitialize();
     g_weInitializedCom = false;
