@@ -135,7 +135,7 @@ class Guest:
             p = subprocess.run(
                 ["ssh", "-o", "BatchMode=yes", self.ssh_target,
                  "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
-                capture_output=True, text=True)
+                capture_output=True, text=True, errors="replace")
             if p.returncode != 0:
                 raise RuntimeError(f"guest powershell rc={p.returncode}: {p.stderr.strip() or p.stdout.strip()}")
             return p.stdout
