@@ -9,14 +9,7 @@ just build
 WINVM_USER=... WINVM_PASS=... just test-winvm                    # both scenarios
 WINVM_USER=... WINVM_PASS=... just test-winvm --scenario gai     # getaddrinfo timing only
 WINVM_USER=... WINVM_PASS=... just test-winvm --scenario login   # boot + log in to the local nakama (docs/reference/local-nakama.md)
-just test-winvm-ssh --scenario boot --launcher build/mingw-release/bin/echovr_server.exe
 ```
-
-`test-winvm-ssh` uses the configured `win11-dev` OpenSSH alias and SCP instead
-of WinRM/SMB. Override the alias with `WINVM_SSH_TARGET`. With `--launcher`, the
-isolated rig runs `echovr_server.exe` and checks that it emits the expected
-`-server -headless -noconsole` command before judging the boot. The user's
-`C:\echovr` installation remains read-only; the test runs from `C:\nevr-systest`.
 
 Exit codes: `0` pass, `1` the runtime failed a check, `2` the environment is
 unusable (no VM, no login, no game data, no build). They are kept apart on

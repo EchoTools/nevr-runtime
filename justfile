@@ -192,12 +192,6 @@ test-system-verbose:
 test-winvm *ARGS:
     tools/winvm/systest.py {{ARGS}}
 
-# Native Windows VM path using the configured OpenSSH alias (no WinRM password).
-# Pass --launcher build/mingw-release/bin/echovr_server.exe to test the server wrapper.
-winvm_ssh_target := env("WINVM_SSH_TARGET", "win11-dev")
-test-winvm-ssh *ARGS:
-    tools/winvm/systest.py --ssh-target {{winvm_ssh_target}} {{ARGS}}
-
 # Local, isolated nakama (fake Discord, own Postgres) for testing the runtime's
 # login/registration path. See docs/reference/local-nakama.md.
 nakama-up:
