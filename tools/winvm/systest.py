@@ -3,12 +3,14 @@
 
 Everything else in this repo is tested under Wine, which cannot reproduce
 Windows-only failures (issue #13 was "works fine under Wine"). This drives a
-libvirt Windows VM over WinRM + SMB and judges the result with checks.py.
+libvirt Windows VM over WinRM + SMB or configured OpenSSH + SCP and judges the
+result with checks.py.
 
 Setup, scenarios and pitfalls: docs/reference/windows-vm-system-test.md
 
     WINVM_USER=... WINVM_PASS=... just test-winvm
     WINVM_USER=... WINVM_PASS=... tools/winvm/systest.py --scenario gai
+    just test-winvm-ssh --scenario boot --launcher build/mingw-release/bin/echovr_server.exe
 
 Exit codes: 0 pass, 1 the runtime failed a check, 2 the environment is not
 usable (no VM, no login, no game data, no build). Keeping 1 and 2 apart is the
@@ -18,7 +20,9 @@ point: "the VM is misconfigured" must never read as "the runtime regressed".
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime
+import hashlib
 import os
 import pathlib
 import re
@@ -100,8 +104,15 @@ class EnvError(Exception):
 
 
 class Guest:
-    def __init__(self, host: str, user: str, password: str):
+    def __init__(self, host: str, user: str = "", password: str = "", ssh_target: str | None = None):
         self.host, self.user, self.password = host, user, password
+        self.ssh_target = ssh_target
+        if ssh_target is not None:
+            if not shutil.which("ssh") or not shutil.which("scp"):
+                raise EnvError("ssh and scp are required for --ssh-target")
+            self._session = None
+            self.ps("$null = Get-Location")
+            return
         try:
             import winrm  # pywinrm
         except ImportError as e:
@@ -114,6 +125,16 @@ class Guest:
 
     def ps(self, script: str) -> str:
         """Run PowerShell on the guest; raise on a non-zero exit."""
+        if self.ssh_target is not None:
+            wrapped = "$ProgressPreference='SilentlyContinue'\n$ErrorActionPreference='Stop'\n" + script
+            encoded = base64.b64encode(wrapped.encode("utf-16le")).decode("ascii")
+            p = subprocess.run(
+                ["ssh", "-o", "BatchMode=yes", self.ssh_target,
+                 "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+                capture_output=True, text=True)
+            if p.returncode != 0:
+                raise RuntimeError(f"guest powershell rc={p.returncode}: {p.stderr.strip() or p.stdout.strip()}")
+            return p.stdout
         r = self._session.run_ps("$ProgressPreference='SilentlyContinue'\n" + script)
         out = r.std_out.decode("utf-8", "replace")
         if r.status_code != 0:
@@ -129,10 +150,60 @@ class Guest:
             raise RuntimeError(f"smbclient failed: {(p.stdout + p.stderr).strip()}")
 
     def put(self, local: pathlib.Path, remote_dir: str, name: str) -> None:
+        if self.ssh_target is not None:
+            remote_path = self._scp_path(remote_dir, name)
+            p = subprocess.run(["scp", "-q", str(local), f"{self.ssh_target}:{remote_path}"],
+                               capture_output=True, text=True)
+            if p.returncode != 0:
+                raise RuntimeError(f"scp to guest failed: {p.stderr.strip()}")
+            return
         self._smb(f'cd "{remote_dir}"; put "{local}" "{name}"')
 
+    def put_verified(self, local: pathlib.Path, remote_dir: str, name: str) -> str:
+        parts = [part for part in remote_dir.replace("\\", "/").split("/") if part]
+        if not parts or parts[0] != SMB_ROOT or any(part in (".", "..") for part in parts):
+            raise RuntimeError(f"refusing verified copy outside {SMB_ROOT}: {remote_dir}")
+        target = str(pathlib.PureWindowsPath("C:/", *parts, name))
+        backup = self.ps(rf"""
+$target = '{target}'
+if (Test-Path -LiteralPath $target) {{
+  $backup = "$target.bak-$(Get-Date -Format 'yyyyMMdd-HHmmssfff')"
+  Copy-Item -LiteralPath $target -Destination $backup
+  if (-not (Test-Path -LiteralPath $backup)) {{ throw "backup missing: $backup" }}
+  $backup
+}} else {{
+  'no previous file'
+}}
+""")
+        if backup.strip():
+            print(f"preserved {target}: {backup.strip()}")
+        self.put(local, remote_dir, name)
+        expected = hashlib.sha256(local.read_bytes()).hexdigest().upper()
+        actual = self.ps(rf"(Get-FileHash -LiteralPath '{target}' -Algorithm SHA256).Hash").strip().upper()
+        if actual != expected:
+            raise RuntimeError(f"SHA-256 mismatch after copying {local} to {target}: {expected} != {actual}")
+        print(f"copied {local} -> {target} sha256={actual}")
+        return actual
+
     def get(self, remote_dir: str, name: str, local: pathlib.Path) -> None:
+        if self.ssh_target is not None:
+            remote_path = self._scp_path(remote_dir, name)
+            p = subprocess.run(["scp", "-q", f"{self.ssh_target}:{remote_path}", str(local)],
+                               capture_output=True, text=True)
+            if p.returncode != 0:
+                raise RuntimeError(f"scp from guest failed: {p.stderr.strip()}")
+            return
         self._smb(f'cd "{remote_dir}"; get "{name}" "{local}"')
+
+    @staticmethod
+    def _scp_path(remote_dir: str, name: str) -> str:
+        # Existing harness transfers are rooted at the isolated C:\nevr-systest rig.
+        parts = [part for part in remote_dir.replace("\\", "/").split("/") if part]
+        if (not parts or parts[0] != SMB_ROOT or
+                any(part in (".", "..") for part in parts) or
+                "/" in name or "\\" in name or name in (".", "..")):
+            raise RuntimeError(f"refusing SSH transfer outside {SMB_ROOT}: {remote_dir}")
+        return "C:/" + "/".join([*parts, name])
 
 
 def resolve_host(domain: str) -> str:
@@ -209,7 +280,7 @@ foreach ($d in '_data','content','sourcedb') {
 
 def deploy(g: Guest, dll: pathlib.Path) -> None:
     kill_game(g)
-    g.put(dll, f"{SMB_ROOT}/echovr/bin/win10", "BugSplat64.dll")
+    g.put_verified(dll, f"{SMB_ROOT}/echovr/bin/win10", "BugSplat64.dll")
 
 
 def kill_game(g: Guest) -> None:
@@ -230,14 +301,15 @@ Start-ScheduledTask -TaskName {name}
 """
 
 
-def launch(g: Guest, game_args: str) -> None:
+def launch(g: Guest, game_args: str, use_launcher: bool = False) -> None:
+    command = "echovr_server.exe" if use_launcher else f"echovr.exe {game_args}"
     g.ps(rf"""
 Remove-Item '{ROOT}\run\marker.txt','{ROOT}\run\stdout.txt','{ROOT}\run\windows.txt' -ErrorAction SilentlyContinue
 Set-Content -Path '{ROOT}\run\run.cmd' -Encoding ASCII -Value @(
   '@echo off',
   'cd /d {ROOT}\echovr\bin\win10',
   'echo started %date% %time% > {ROOT}\run\marker.txt',
-  'echovr.exe {game_args} > {ROOT}\run\stdout.txt 2>&1',
+  '{command} > {ROOT}\run\stdout.txt 2>&1',
   'echo exited rc=%errorlevel% >> {ROOT}\run\marker.txt'
 )
 """ + _interactive_task("nevrsystest", "cmd.exe", rf"/c {ROOT}\run\run.cmd"))
@@ -296,8 +368,10 @@ def scenario_boot(g: Guest, dll: pathlib.Path, out: pathlib.Path, args, login: b
     with tempfile.TemporaryDirectory() as t:
         setup_rig(g, pathlib.Path(t), args.with_legacy_dbgcore, nakama_runtime_config() if login else None)
     deploy(g, dll)
+    if args.launcher is not None:
+        g.put_verified(args.launcher, f"{SMB_ROOT}/echovr/bin/win10", "echovr_server.exe")
     started = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    launch(g, args.game_args)
+    launch(g, args.game_args, use_launcher=args.launcher is not None)
     deadline = time.monotonic() + args.wait
     state: dict = {"alive": False, "exit_code": None, "started": False}
     print(f"launched; waiting up to {args.wait}s (game splash alone takes 15-20s)")
@@ -307,6 +381,19 @@ def scenario_boot(g: Guest, dll: pathlib.Path, out: pathlib.Path, args, login: b
         if state["exit_code"] is not None:
             break
     log = read_text(g, rf"{ROOT}\run\stdout.txt")
+    persisted = g.ps(rf"""
+$since = [DateTime]::Parse('{started}').ToLocalTime()
+$paths = @('{ROOT}\echovr\bin\win10\logs\nevr-boot.jsonl')
+$logDir = Join-Path $env:LOCALAPPDATA 'EchoVR\logs'
+if (Test-Path $logDir) {{
+  $paths += Get-ChildItem $logDir -Filter 'nevr-*.jsonl' -File |
+    Where-Object {{ $_.LastWriteTime -ge $since }} | ForEach-Object FullName
+}}
+foreach ($path in $paths) {{
+  if (Test-Path $path) {{ "=== $path ==="; Get-Content -LiteralPath $path -Raw }}
+}}
+""")
+    log += "\n" + persisted
     dump = window_dump(g) if state["alive"] else ""
     (out / "stdout.txt").write_text(log)
     (out / "windows.txt").write_text(dump)
@@ -317,6 +404,12 @@ def scenario_boot(g: Guest, dll: pathlib.Path, out: pathlib.Path, args, login: b
         *checks.check_hooks(log),
         checks.check_engine_progress(log, args.require_stage),
     ]
+    if args.launcher is not None:
+        expected = "[echovr_server] Launching: echovr.exe -server -headless -noconsole"
+        results.append(checks.Result(
+            "launcher_headless_args", checks.PASS if expected in log else checks.FAIL,
+            "launcher command includes native -headless" if expected in log else
+            "launcher output did not include the expected -server -headless -noconsole command"))
     if login:
         nlog = nakama_log_since(started)
         (out / "nakama.log").write_text(nlog)
@@ -353,6 +446,9 @@ def main() -> int:
     ap.add_argument("--domain", default=os.environ.get("WINVM_DOMAIN", "win11-dev"),
                     help="libvirt domain, used to find the IP when WINVM_HOST is unset")
     ap.add_argument("--dll", type=pathlib.Path, default=REPO / "build/mingw-release/bin/BugSplat64.dll")
+    ap.add_argument("--launcher", type=pathlib.Path,
+                    help="run this echovr_server.exe from the isolated rig instead of launching echovr.exe directly")
+    ap.add_argument("--ssh-target", help="OpenSSH config alias; uses SSH/SCP instead of WinRM/SMB")
     ap.add_argument("--game-args", default="-noovr -server -headless -noconsole",
                     help="note: -noconsole is rejected by the game unless -headless is also given")
     ap.add_argument("--wait", type=int, default=90, help="seconds to observe the boot (minimum 45)")
@@ -375,13 +471,15 @@ def main() -> int:
     guest = None
     try:
         user, password = os.environ.get("WINVM_USER"), os.environ.get("WINVM_PASS")
-        if not user or not password:
+        if not args.ssh_target and (not user or not password):
             raise EnvError("set WINVM_USER and WINVM_PASS (never commit them)")
         if args.scenario in ("boot", "login", "all") and not args.dll.exists():
             raise EnvError(f"{args.dll} not found; run `just build` first")
-        host = os.environ.get("WINVM_HOST") or resolve_host(args.domain)
-        print(f"guest {host} as {user}; artifacts in {out}")
-        guest = Guest(host, user, password)
+        if args.launcher is not None and not args.launcher.exists():
+            raise EnvError(f"launcher not found: {args.launcher}; build it with `just build`")
+        host = args.ssh_target or os.environ.get("WINVM_HOST") or resolve_host(args.domain)
+        print(f"guest {host}" + (f" as {user}" if user else "") + f"; artifacts in {out}")
+        guest = Guest(host, user or "", password or "", ssh_target=args.ssh_target)
         preflight(guest)
         if args.scenario in ("gai", "all"):
             results += scenario_gai(guest, out)
