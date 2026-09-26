@@ -387,15 +387,19 @@ def scenario_boot(g: Guest, dll: pathlib.Path, out: pathlib.Path, args, login: b
     log = read_text(g, rf"{ROOT}\run\stdout.txt")
     persisted = g.ps(rf"""
 $since = [DateTime]::Parse('{started}').ToLocalTime()
-$paths = @('{ROOT}\echovr\bin\win10\logs\nevr-boot.jsonl')
+$boot = '{ROOT}\echovr\bin\win10\logs\nevr-boot.jsonl'
+$paths = @($boot)
+$runId = (Get-Content -LiteralPath $boot -Tail 1 | ConvertFrom-Json).run
 $logDir = Join-Path $env:LOCALAPPDATA 'EchoVR\logs'
 if (Test-Path $logDir) {{
-  $paths += Get-ChildItem $logDir -Filter 'nevr-*.jsonl' -File |
-    Where-Object {{ $_.LastWriteTime -ge $since }} | ForEach-Object FullName
+  Get-ChildItem $logDir -Filter 'nevr-*.jsonl' -File |
+    Where-Object {{ $_.LastWriteTime -ge $since }} | ForEach-Object {{
+      $matches = Select-String -LiteralPath $_.FullName -SimpleMatch $runId
+      if ($matches) {{ "=== $($_.FullName) ==="; $matches | ForEach-Object Line }}
+    }}
 }}
-foreach ($path in $paths) {{
-  if (Test-Path $path) {{ "=== $path ==="; Get-Content -LiteralPath $path -Raw }}
-}}
+"=== $boot ==="
+Get-Content -LiteralPath $boot -Raw
 """)
     log += "\n" + persisted
     dump = window_dump(g) if state["alive"] else ""
