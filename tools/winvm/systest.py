@@ -126,7 +126,11 @@ class Guest:
     def ps(self, script: str) -> str:
         """Run PowerShell on the guest; raise on a non-zero exit."""
         if self.ssh_target is not None:
-            wrapped = "$ProgressPreference='SilentlyContinue'\n$ErrorActionPreference='Stop'\n" + script
+            wrapped = (
+                "$ProgressPreference='SilentlyContinue'\n$ErrorActionPreference='Stop'\n"
+                "try {\n" + script + "\n} catch {\n"
+                "  [Console]::Error.WriteLine($_.ToString())\n  exit 1\n}\nexit 0\n"
+            )
             encoded = base64.b64encode(wrapped.encode("utf-16le")).decode("ascii")
             p = subprocess.run(
                 ["ssh", "-o", "BatchMode=yes", self.ssh_target,
