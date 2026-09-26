@@ -388,15 +388,12 @@ def scenario_boot(g: Guest, dll: pathlib.Path, out: pathlib.Path, args, login: b
     persisted = g.ps(rf"""
 $since = [DateTime]::Parse('{started}').ToLocalTime()
 $boot = '{ROOT}\echovr\bin\win10\logs\nevr-boot.jsonl'
-$paths = @($boot)
-$runId = (Get-Content -LiteralPath $boot -Tail 1 | ConvertFrom-Json).run
 $logDir = Join-Path $env:LOCALAPPDATA 'EchoVR\logs'
 if (Test-Path $logDir) {{
-  Get-ChildItem $logDir -Filter 'nevr-*.jsonl' -File |
-    Where-Object {{ $_.LastWriteTime -ge $since }} | ForEach-Object {{
-      $matches = Select-String -LiteralPath $_.FullName -SimpleMatch $runId
-      if ($matches) {{ "=== $($_.FullName) ==="; $matches | ForEach-Object Line }}
-    }}
+  $runtime = Get-ChildItem $logDir -Filter 'nevr-*.jsonl' -File |
+    Where-Object {{ $_.LastWriteTime -ge $since }} |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  if ($runtime) {{ "=== $($runtime.FullName) ==="; Get-Content -LiteralPath $runtime.FullName -Raw }}
 }}
 "=== $boot ==="
 Get-Content -LiteralPath $boot -Raw
