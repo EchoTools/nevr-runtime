@@ -422,6 +422,8 @@ VOID Initialize() {
   // Boot phase complete — close the boot log file.  From here on, Log() and
   // the builtin_log_filter own the rotating JSONL file.  Any remaining
   // TeeFprintf calls after this write to stderr only.
+  BootLogTee::TeeFprintf(
+      "[NEVR.BOOT] initialization complete; continuing in %%LOCALAPPDATA%%\\EchoVR\\logs\\nevr-<timestamp>.jsonl\n");
   BootLogTee::Close();
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] All hooks installed");
