@@ -778,15 +778,14 @@ VOID PatchBlockOculusSDK() {
   // so there is nothing for these hooks to block. NOT made fatal deliberately —
   // "all server errors are fatal" is for degradations that matter; bricking every
   // Wine server over a redundant optimization that can't install is not that.
-  // No summary log here (N126/N128): PatchDetour already logs its own Warning
-  // with the real MH_STATUS reason on each failure — the known, permanent
-  // MH_ERROR_ALREADY_CREATED case this whole comment block documents included.
-  // A third restating "FAILED" with no reason on top of PatchDetour's two
-  // per-call Warnings was pure duplication (Category J); initialize.cpp's
-  // GetProcAddress hook — the identical always-fails-benignly case — is the
-  // precedent that does not add one either.
-  PatchDetour(&Original_LoadLibraryW, reinterpret_cast<PVOID>(LoadLibraryW_Hook), "LoadLibraryW");
-  PatchDetour(&Original_LoadLibraryExW, reinterpret_cast<PVOID>(LoadLibraryExW_Hook), "LoadLibraryExW");
+  // PatchDetour logs the concrete failure reason. Report the feature as
+  // installed only when both entry points actually accepted their detours.
+  const BOOL loadLibraryWAttached = PatchDetour(&Original_LoadLibraryW, reinterpret_cast<PVOID>(LoadLibraryW_Hook), "LoadLibraryW");
+  const BOOL loadLibraryExWAttached =
+      PatchDetour(&Original_LoadLibraryExW, reinterpret_cast<PVOID>(LoadLibraryExW_Hook), "LoadLibraryExW");
+  if (loadLibraryWAttached && loadLibraryExWAttached) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Oculus Platform SDK blocking hooks installed");
+  }
 }
 
 // ===================================================================================================

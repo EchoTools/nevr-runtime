@@ -798,6 +798,14 @@ verify:
         echo "Without checking the return it cannot report FAILED, and the silent-success regression returns." >&2
         exit 1
     fi
+    if ! grep -qE 'if *\( *loadLibraryWAttached *&& *loadLibraryExWAttached *\)' <<<"$N127_MP"; then
+        echo "verify: FAIL — N127 Oculus SDK success is not gated on both detour results." >&2
+        exit 1
+    fi
+    if ! grep -q 'Oculus Platform SDK blocking hooks installed' <<<"$N127_MP"; then
+        echo "verify: FAIL — N127 success is no longer reported after both hooks attach." >&2
+        exit 1
+    fi
 
     # --- N126: a failed hook must not be silent --------------------------------
     # PatchDetour is the one choke point every detour passes through. A failed
