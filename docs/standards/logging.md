@@ -480,7 +480,8 @@ Every event that produces multiple log lines SHALL follow this pattern:
 
 ```
 // INFO — one summary line
-[NEVR.PATCH] boot complete: 14 hooks installed, 1 deferred, 1 known-failed (N126/N128), 0 unexpected
+[NEVR.PATCH] boot complete: 14 hooks installed, 1 deferred, 1 known-failed
+  (target address changed in a prior game update — see N126/N128 for history), 0 unexpected
 
 // DEBUG — per-item narrative (gated behind DEBUG level)
 [NEVR.BOOT] debug; installing crash recovery hooks
@@ -571,6 +572,185 @@ failing any of these checks is rejected until the violation is fixed.
 | Game-native line without NEVR annotation     | Noise (N18)                       | Suppress or wrap with structured fields               |
 | Free-text message with no key=value fields   | Not machine-parseable             | Use key=value format for identifiers and outcomes     |
 | Config value not logged at load              | Configuration is invisible        | Log at INFO with key + value                          |
+| Event with no consequence stated (G)         | Reader can't tell why it matters  | State the "so what," not just the "what"               |
+| Field name doesn't match its type (H)        | Misleads at a glance, invites bugs | Rename the field or fix the representation             |
+| Raw hex/pointer/hash at INFO+ unresolved (I) | No human meaning at that level    | Resolve to a name, or demote to DEBUG                  |
+| Same fact stated twice (J)                   | Wastes the reader's attention     | Merge into one line, or delete the redundant one        |
+| Ticket ref standing in for an explanation (K)| Reader must leave the log to understand | Put the explanation in the line; ticket is a footnote |
+| Message doesn't parse as English (L)         | Actively confusing                | Reread it as a sentence before shipping                |
+| Same failure code explained inconsistently across sites (M) | Reader can't tell benign from urgent | Bring every site up to the best existing explanation |
+
+---
+
+## Message Content Quality (Categories G-M)
+
+Everything above this section governs LEVEL (is this INFO or WARNING?) and
+structure (does it have a tag, an identifier, an outcome?). A log line can
+satisfy every rule above and still be useless: it can state that an event
+happened without saying why an operator should care, or dump a raw hex value
+a reader can't act on. This section is a second, orthogonal pass — assume
+the level is already right and Rule 1's four fields are already present, and
+ask instead: **does the line's CONTENT actually tell the reader what they
+need?**
+
+This section was added after a 2026-09 repo-wide audit of every `Log()` /
+`FatalError()` / `ServerFatal()` call site (706 sites across `src/`,
+`src/modules/`, and `plugins/`) found that ~55% of flagged sites failed
+Category G alone — the single most common defect in this codebase's logging
+is not a missing tag or a wrong level, it's a line that reports an event
+without reporting its consequence. Apply these checks to every new `Log()`
+call, the same way Rule 1-13 already apply.
+
+### Category G: State the consequence, not just the event
+
+"X happened" is not the same claim as "X happened, and here is why it
+matters." A log line SHALL answer "so what?" in the line itself — a reader
+should never need to already know why a hook/patch/handler exists to
+understand why its line is there.
+
+```cpp
+// BEFORE — an event with no consequence
+Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateProcessW hook installed");
+
+// AFTER — the same event, with the reason it exists
+Log(EchoVR::LogLevel::Info,
+    "[NEVR.PATCH] CreateProcessW hook installed (crash reporter launch blocked)");
+```
+
+This is distinct from Rule 1's OUTCOME field (success/fail/count/bytes) —
+OUTCOME says whether the event succeeded; Category G says why the event was
+worth doing at all. A line can have a perfect OUTCOME and still fail G:
+`"hook installed: 1/1 succeeded"` has an outcome, but not a consequence.
+
+### Category H: Match the field's name to what it actually holds
+
+A field name is a promise about type. `_id` implies an opaque identifier, not
+a display string. A bare `=1`/`=0` reads as a count or a flag with no way to
+tell which. A "count" field that's secretly a bitmask will eventually get
+compared with `==` by someone who trusted the name.
+
+```cpp
+// BEFORE — success is a bool, printed as if it were a count
+Log(EchoVR::LogLevel::Debug, "[NEVR.WS] frame forwarded success=%d", ok);
+
+// AFTER — the name and the representation agree
+Log(EchoVR::LogLevel::Debug, "[NEVR.WS] frame forwarded success=%s", ok ? "true" : "false");
+```
+
+Watch especially for the same field NAME used for two different semantic
+TYPES across nearby lines in the same file (e.g. `conn=%d` meaning a
+login-order index in most of a file, then `conn=%s` meaning a third-party
+library's internal connection-id string a few hundred lines later) — that's
+Category H even when each individual line is internally consistent.
+
+### Category I: Resolve mechanism dumps to human meaning
+
+Raw hex, pointer values, symbol hashes, or virtual addresses at INFO or
+above, with nothing resolved for a reader who isn't the hook's original
+author, are noise wearing the clothes of data.
+
+```cpp
+// BEFORE — a real finding: hardcoded placeholder bytes presented as real data
+Log(EchoVR::LogLevel::Warning,
+    "[NEVR.LOGFILTER] hook verify mismatch expected=00000000 actual=%02x%02x%02x%02x status=%d",
+    actual[0], actual[1], actual[2], actual[3], status);
+
+// AFTER — the real expected bytes, and a resolved status name
+Log(EchoVR::LogLevel::Warning,
+    "[NEVR.LOGFILTER] hook verify mismatch expected=%02x%02x%02x%02x actual=%02x%02x%02x%02x status=%s",
+    expected[0], expected[1], expected[2], expected[3],
+    actual[0], actual[1], actual[2], actual[3], MH_StatusToString((MH_STATUS)status));
+```
+
+If a value genuinely can't be resolved to a name (a truly novel symbol hash
+with no corpus entry) and has no operational meaning to anyone but the hook
+author, that's a real signal too — but the signal is "this belongs at
+DEBUG," not "log it at INFO anyway because it's technically data."
+
+### Category J: One fact, one line
+
+Two or more lines stating the same fact twice — a per-item line immediately
+followed by a summary repeating the identical count with nothing new, or a
+capstone line that adds nothing after the line before it already said it —
+SHALL be merged or deleted.
+
+```cpp
+// BEFORE — a real finding: the capstone line is unconditional, even when the
+// four failure paths above it set g_bootHookFailed and never early-return
+Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] All hooks installed");
+
+// AFTER — the capstone reflects what the failure paths above it actually recorded
+Log(EchoVR::LogLevel::Info,
+    "[NEVR.PATCH] boot hooks: %d installed, %d failed%s", installedCount, failedCount,
+    failedCount > 0 ? " — see WARNING lines above for which" : "");
+```
+
+Note the AFTER example is *also* an instance of the general fix for
+unconditional summary lines: a summary line's truth value must be computed
+from the same state the detail lines above it observed, not asserted
+independently.
+
+### Category K: Explain in the line; cite the ticket as a footnote
+
+A ticket reference standing in for an explanation forces the reader to go
+find and read the ticket to understand a line in front of them right now.
+The explanation belongs in the line. The ticket ref, if kept at all, is a
+footnote.
+
+```cpp
+// BEFORE — this exact line already exists in this document, in Rule 12's own
+// example above; it violates the category the rule it illustrates is not about
+[NEVR.PATCH] boot complete: 14 hooks installed, 1 deferred, 1 known-failed (N126/N128), 0 unexpected
+
+// AFTER
+[NEVR.PATCH] boot complete: 14 hooks installed, 1 deferred, 1 known-failed
+  (target address changed in a prior game update — see N126/N128 for history), 0 unexpected
+```
+
+(Rule 12's example above this section should be updated to match the AFTER
+form in the same commit that adds this section — it is the one place in this
+document that models the anti-pattern it's supposed to prevent.)
+
+### Category L: The sentence has to parse
+
+Read the line as an English sentence, not as a template with blanks filled
+in. If a word is missing, it doesn't matter how correct the data is.
+
+```cpp
+// BEFORE — a real finding; "behind the game's" has no object
+Log(EchoVR::LogLevel::Info,
+    "[NEVR.PATCH] Console ctrl handler installed (behind the game's until re-armed)");
+
+// AFTER
+Log(EchoVR::LogLevel::Info,
+    "[NEVR.PATCH] console ctrl handler installed (behind the game's handler in the chain until re-armed)");
+```
+
+### Category M: One failure class, one standard of explanation
+
+The same underlying failure code or condition — `MH_ERROR_ALREADY_CREATED`,
+a specific `GetLastError()` value, a parse-error path — hit at more than one
+call site SHALL be explained to the same standard everywhere it's caught.
+When one site says "benign — a sibling patch already owns this address" and
+another site hits the identical code with a bare "hook failed," that's not
+two findings, it's one finding with an uneven fix. Search for the failure
+constant repo-wide before writing the fix; bring every site up to the best
+existing explanation, don't write a new one from scratch at each site.
+
+```cpp
+// BEFORE — two sites, same MH_STATUS, two different amounts of information
+// site A (mode_patches.cpp): explains it
+Log(EchoVR::LogLevel::Warning,
+    "[NEVR.PATCH] hook already created at 0x%llX — a sibling patch owns this address, one hook wins, benign",
+    va);
+// site B (binary_bug_fixes.cpp): doesn't
+Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] MH_CreateHook failed");
+
+// AFTER — site B brought up to site A's standard
+Log(EchoVR::LogLevel::Warning,
+    "[NEVR.PATCH] hook create failed va=0x%llX status=%s%s", va, MH_StatusToString(status),
+    status == MH_ERROR_ALREADY_CREATED ? " (a sibling patch owns this address, one hook wins, benign)" : "");
+```
 
 ---
 
@@ -582,6 +762,11 @@ failing any of these checks is rejected until the violation is fixed.
   filter and is refused by the loader. `src/runtime/log/builtin_filter.cpp`
   is the shipping path; do not reintroduce the plugin.
 - **N19** — No logging standards exist (this document).
+- **2026-09 message-content audit** — repo-wide review of all 706 `Log()`/
+  `FatalError()`/`ServerFatal()` call sites in `src/`, `src/modules/`, and
+  `plugins/` against Categories G-M above (N-ledger closed; findings tracked
+  as GitHub issues, not N-entries). Basis for the "Message Content Quality"
+  section.
 - **N17** — Startup hook errors not systematically tracked.
 - **N14** — Platform prefix hardcoded as OVR_ORG (affects XPID correctness).
 - **AGENTS.md** — Project conventions, `Log()` usage, subsystem architecture.
