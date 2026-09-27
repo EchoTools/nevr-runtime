@@ -7,6 +7,7 @@
 #include <new>
 
 #include "core/logging.h"
+#include "runtime/server/url_diagnostics.h"
 
 // IWinHttpRequest IID — {A1C9FEEE-0617-4F23-9D58-8961EA43567C}
 static const IID IID_IWinHttpRequest = {0xA1C9FEEE, 0x0617, 0x4F23, {0x9D, 0x58, 0x89, 0x61, 0xEA, 0x43, 0x56, 0x7C}};
@@ -19,8 +20,9 @@ static std::string WideToUtf8(const wchar_t* ws) {
   if (!ws) return {};
   int len = WideCharToMultiByte(CP_UTF8, 0, ws, -1, nullptr, 0, nullptr, nullptr);
   if (len <= 0) return {};
-  std::string s(len - 1, '\0');
+  std::string s(len, '\0');
   WideCharToMultiByte(CP_UTF8, 0, ws, -1, &s[0], len, nullptr, nullptr);
+  s.resize(static_cast<size_t>(len - 1));
   return s;
 }
 
@@ -283,8 +285,8 @@ static HRESULT STDMETHODCALLTYPE Stub_Invoke(void* pThis, DISPID dispIdMember, R
       // Send([Body]) — no-op: succeed without real HTTP.
       // The game calls this for Oculus telemetry/health checks which no longer
       // exist. The ws_bridge handles actual service traffic independently.
-      Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Send DISPID=5 (no-op) url=%ls",
-          self->m_url.empty() ? L"(none)" : self->m_url.c_str());
+      const std::string diagnosticUrl = GameServer::RedactUrlForDiagnostics(WideToUtf8(self->m_url.c_str()));
+      Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Send DISPID=5 (no-op) url=%s", diagnosticUrl.c_str());
       self->m_sent = true;
       self->m_statusCode = 200;
       return S_OK;
@@ -375,7 +377,6 @@ static HRESULT STDMETHODCALLTYPE Stub_GetAllResponseHeaders(void* pThis, BSTR* H
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Send (vtbl, url=%ls)", SELF(pThis)->m_url.empty() ? L"(none)" : SELF(pThis)->m_url.c_str());
   auto* self = SELF(pThis);
   CURL* curl = curl_easy_init();
   if (!curl) return E_FAIL;
@@ -383,7 +384,8 @@ static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
   std::string url = WideToUtf8(self->m_url.c_str());
   std::string method = WideToUtf8(self->m_method.c_str());
 
-  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Send %s %s", method.c_str(), url.c_str());
+  const std::string diagnosticUrl = GameServer::RedactUrlForDiagnostics(url);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Send %s %s", method.c_str(), diagnosticUrl.c_str());
 
   curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
   if (_stricmp(method.c_str(), "POST") == 0)

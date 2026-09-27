@@ -1,0 +1,2 @@
+echovr pid: 6120
+TOP hwnd=131648 class=IME visible=False title=[Default IME]

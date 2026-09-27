@@ -12,6 +12,7 @@
 #include "abi/echovr_functions.h"
 #include "telemetry/v2/capture.pb.h"
 #include "telemetry/v2/echo_arena.pb.h"
+#include "runtime/server/url_diagnostics.h"
 
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
@@ -71,7 +72,8 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
         m_wsConnected.store(false, std::memory_order_release);
         break;
       case ix::WebSocketMessageType::Error:
-        Log(EchoVR::LogLevel::Error, "[NEVR.TELEMETRY] Connection error: %s", msg->errorInfo.reason.c_str());
+        Log(EchoVR::LogLevel::Error, "[NEVR.TELEMETRY] Connection error (reason redacted: %zu bytes)",
+            msg->errorInfo.reason.size());
         m_wsConnected.store(false, std::memory_order_release);
         break;
       case ix::WebSocketMessageType::Message:
@@ -83,7 +85,8 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
     }
   });
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Connecting to %s", uri.c_str());
+  const std::string diagnosticUri = GameServer::RedactUrlForDiagnostics(uri);
+  Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Connecting to %s", diagnosticUri.c_str());
   m_ws->start();
   return true;
 }

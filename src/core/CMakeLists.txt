@@ -6,10 +6,10 @@
 # Depends on nevr_abi (PUBLIC): EchoVR::LogLevel is the game's enum, so logging
 # genuinely sits on top of the ABI layer. The reverse dependency is forbidden.
 
-set(CORE_SOURCES "logging.cpp" "globals.cpp" "base64.cpp" "system_info.cpp" "nevr_config.cpp" "build_identity.cpp" "mic_dsp.cpp")
+set(CORE_SOURCES "logging.cpp" "globals.cpp" "base64.cpp" "system_info.cpp" "nevr_config.cpp" "build_identity.cpp" "mic_dsp.cpp" "mic_lifecycle.cpp" "mic_capture_drain.cpp")
 set(CORE_HEADERS
   "logging.h" "globals.h" "base64.h" "system_info.h" "build_identity.h"
-  "hooking.h" "auth_token.h" "pch.h" "nevr_config.h" "mic_dsp.h"
+  "hooking.h" "auth_token.h" "pch.h" "nevr_config.h" "mic_dsp.h" "mic_lifecycle.h" "mic_capture_drain.h"
   # Header-only published C ABI for third-party DLLs. Listed here so it appears
   # in IDE/target views; it has no compiled sources of its own.
   "${CMAKE_SOURCE_DIR}/src/extension/plugin_interface.h"
@@ -40,6 +40,8 @@ set_source_files_properties(nevr_config.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS O
 # target can compile it directly without the Windows PCH — see
 # tests/test_mic_dsp.cpp.
 set_source_files_properties(mic_dsp.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(mic_lifecycle.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(mic_capture_drain.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 if(MSVC)
   target_compile_options(nevr_core PRIVATE /wd4251)

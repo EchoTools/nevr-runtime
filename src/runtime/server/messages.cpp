@@ -276,15 +276,14 @@ EncodedMessage EncodeLobbySessionSuccessV5(const gameservice::v1::SNSLobbySessio
   // 2. LobbyID (GUID)
   GUID lobbyId = {};
   if (!ParseUuidToGuid(msg.lobby_id(), lobbyId)) {
-    // Return empty result on parse failure
-    return result;
+    return {};
   }
   WriteGuid(result.data, lobbyId);
 
   // 3. GroupID (GUID) - V5 includes this
   GUID groupId = {};
   if (!ParseUuidToGuid(msg.group_id(), groupId)) {
-    return result;
+    return {};
   }
   WriteGuid(result.data, groupId);
 
@@ -292,7 +291,7 @@ EncodedMessage EncodeLobbySessionSuccessV5(const gameservice::v1::SNSLobbySessio
   uint32_t internalIP = 0, externalIP = 0;
   uint16_t port = 0;
   if (!ParseEndpoint(msg.endpoint(), internalIP, externalIP, port)) {
-    return result;
+    return {};
   }
   // IPs stored as raw bytes (inet_pton gives network order, we write raw)
   result.data.push_back(static_cast<uint8_t>(internalIP & 0xFF));
@@ -327,7 +326,7 @@ EncodedMessage EncodeLobbySessionSuccessV5(const gameservice::v1::SNSLobbySessio
   // Validate encoder settings before forwarding to game (N2)
   if (!ValidatePacketEncoderSettings(serverSettings, "server") ||
       !ValidatePacketEncoderSettings(clientSettings, "client")) {
-    return {};  // empty EncodedMessage — caller skips silently
+    return {};
   }
 
   // 11. ServerSequenceId (uint64_t LE)

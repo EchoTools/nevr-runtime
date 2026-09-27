@@ -86,9 +86,12 @@ enum NvrHostFlags : uint32_t {
  *      NvrPluginInit(ctx) if exported (v3); else skips init (init is optional).
  *   5. Host calls NvrPluginOnFrame(ctx) each server/client tick (optional)
  *   6. Host calls NvrPluginOnGameStateChange(ctx, old, new) on state transitions
- *   7. Host calls NvrPluginShutdown() in REVERSE load order before unload
- *      (last loaded shuts down first, so hooks installed on top of earlier
- *      plugins' hooks are torn down before what they depend on).
+ *   7. During explicit normal-thread teardown, the host may call
+ *      NvrPluginShutdown() in REVERSE load order before releasing its module
+ *      references (last loaded shuts down first, so hooks installed on top of
+ *      earlier plugins' hooks are torn down before what they depend on).
+ *      Shutdown is not guaranteed on process exit. Runtime dynamic unloading
+ *      is not a supported lifecycle path.
  *
  * All functions are optional except NvrPluginGetInfo.
  * The host checks GetProcAddress for each and skips if not exported.
@@ -134,7 +137,8 @@ typedef void (*NvrPluginOnGameStateChange_fn)(const NvrGameContext* ctx,
                                               uint32_t old_state,
                                               uint32_t new_state);
 
-/* Optional: cleanup before DLL unload */
+/* Optional: cleanup during explicit normal-thread host teardown. Process exit
+ * does not guarantee this callback. */
 typedef void (*NvrPluginShutdown_fn)(void);
 
 /*

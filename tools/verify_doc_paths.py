@@ -51,6 +51,13 @@ ALLOWED_ABSENT = {
     "src/gamepatches",
     "src/common",
     "src/modules/ws-bridge",
+    # The local Nakama rig creates these machine-local files on first setup. The
+    # docs correctly tell a fresh clone where credentials/config will appear, but
+    # `setup.py` is the only producer and `.gitignore` deliberately excludes the
+    # state directory. Requiring it on disk makes doc verification depend on
+    # someone having started the optional local test service.
+    "tools/nakama-local/.state",
+    "tools/nakama-local/.state/nakama.yml",
 }
 
 

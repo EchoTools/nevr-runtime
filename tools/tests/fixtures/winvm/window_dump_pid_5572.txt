@@ -1,0 +1,3 @@
+echovr pid: 5572
+TOP hwnd=262766 class=#32770 visible=True title=[Echo Relay: Error]
+   child class=Static text=[-noconsole can only be used with the -headless argument.]

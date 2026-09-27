@@ -16,27 +16,48 @@ jobs:
         submodules: recursive
         fetch-depth: 0
 
+    - name: Setup pinned just
+      uses: extractions/setup-just@v4
+      with:
+        just-version: '1.46.0'
+
+    - name: Setup pinned CMake
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - run: python -m pip install cmake==4.0.0
+    - run: cmake --version
+
     - name: Install MinGW toolchain
       run: |
         sudo apt-get update
-        sudo apt-get install -y g++-mingw-w64-x86-64 ninja-build
+        sudo apt-get install -y g++-mingw-w64-x86-64 ninja-build wine zstd osslsigncode openssl
+
+    - name: Setup pinned Buf
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23.6'
+    - run: |
+        go install github.com/bufbuild/buf/cmd/buf@v1.47.2
+        echo "$HOME/go/bin" >> "$GITHUB_PATH"
 
     - name: Setup vcpkg
       run: |
         git clone https://github.com/Microsoft/vcpkg.git "$HOME/.vcpkg"
         "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
-        "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static \
-          curl \
-          gtest \
-          ixwebsocket \
-          nlohmann-json \
-          miniupnpc \
-          minhook \
-          opus \
-          protobuf
+        "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
+          --x-manifest-root="$GITHUB_WORKSPACE" \
+          --x-install-root="$GITHUB_WORKSPACE/build/mingw-release/vcpkg_installed"
+
+    - name: Generate pinned protobuf sources
+      run: |
+        set -euo pipefail
+        protoc="$GITHUB_WORKSPACE/build/mingw-release/vcpkg_installed/x64-linux/tools/protobuf/protoc"
+        test -x "$protoc"
+        just proto
 
     - name: Configure CMake
-      run: cmake --preset mingw-release
+      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=${{ github.event_name == 'release' && 'ON' || 'OFF' }}
 
     - name: Build
       run: cmake --build --preset mingw-release
@@ -54,14 +75,60 @@ jobs:
 
     - name: Create distribution packages
       if: github.event_name == 'release'
-      run: cmake --build --preset mingw-release --target dist
+      env:
+        CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
+        CODESIGN_PASS: ${{ secrets.CODESIGN_PASS }}
+        CODESIGN_CA_BASE64: ${{ secrets.CODESIGN_CA_BASE64 }}
+        CODESIGN_SIGNER_SHA256: ${{ secrets.CODESIGN_SIGNER_SHA256 }}
+        CODESIGN_ROOT_SHA256: ${{ secrets.CODESIGN_ROOT_SHA256 }}
+      run: |
+        set -euo pipefail
+        test -n "$CODESIGN_PFX_BASE64"
+        test -n "$CODESIGN_PASS"
+        test -n "$CODESIGN_CA_BASE64"
+        test -n "$CODESIGN_SIGNER_SHA256"
+        test -n "$CODESIGN_ROOT_SHA256"
+        signing_dir="$RUNNER_TEMP/nevr-codesign"
+        mkdir -p "$signing_dir"
+        printf '%s' "$CODESIGN_PFX_BASE64" | base64 --decode > "$signing_dir/signing.pfx"
+        printf '%s' "$CODESIGN_CA_BASE64" | base64 --decode > "$signing_dir/root-ca.pem"
+        chmod 600 "$signing_dir/signing.pfx" "$signing_dir/root-ca.pem"
+        {
+          echo "CODESIGN_PFX=$signing_dir/signing.pfx"
+          echo "CODESIGN_CA_FILE=$signing_dir/root-ca.pem"
+          echo "CODESIGN_ROOT_SHA256=$CODESIGN_ROOT_SHA256"
+        } >> "$GITHUB_ENV"
+        cmake --build --preset mingw-release --target dist dist-lite
+
+    - name: Verify distribution archives
+      if: github.event_name == 'release'
+      shell: bash
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        zips=(dist/*.zip)
+        tars=(dist/*.tar.zst)
+        test "${#zips[@]}" -eq 2
+        test "${#tars[@]}" -eq 2
+        for archive in "${zips[@]}"; do
+          test -s "$archive"
+          zip_entries=$(cmake -E tar tf "$archive")
+          [[ "$zip_entries" == *BugSplat64.dll* ]]
+          [[ "$zip_entries" == *echovr_server.exe* ]]
+        done
+        for archive in "${tars[@]}"; do
+          test -s "$archive"
+          tar_entries=$(tar --zstd -tf "$archive")
+          [[ "$tar_entries" == *BugSplat64.dll* ]]
+          [[ "$tar_entries" == *echovr_server.exe* ]]
+        done
 
     - name: Upload dist artifacts
       if: github.event_name == 'release'
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          build/mingw-release/dist/*.zip
-          build/mingw-release/dist/*.tar.zst
+          dist/*.zip
+          dist/*.tar.zst
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

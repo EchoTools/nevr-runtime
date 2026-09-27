@@ -1,0 +1,362 @@
+#include "core/mic_lifecycle.h"
+#include "core/mic_capture_drain.h"
+
+#include <gtest/gtest.h>
+
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <stdexcept>
+#include <thread>
+#include <vector>
+
+namespace {
+
+struct FakeAudio {
+  bool createOk = true;
+  bool startOk = true;
+  bool workerCreateOk = true;
+  bool failedWorkerExists = false;
+  bool signalOk = true;
+  bool stopOk = true;
+  MicWorkerWaitResult waitResult = MicWorkerWaitResult::Signaled;
+  uint32_t createCalls = 0;
+  uint32_t startCalls = 0;
+  uint32_t workerCreateCalls = 0;
+  uint32_t signalCalls = 0;
+  uint32_t waitCalls = 0;
+  uint32_t closeCalls = 0;
+  uint32_t stopCalls = 0;
+  uint32_t releaseCalls = 0;
+  uint32_t resetCalls = 0;
+  bool blockWait = false;
+  bool waitEntered = false;
+  bool allowWaitToFinish = false;
+  bool reenterStart = false;
+  bool reentrantStartResult = true;
+  uint32_t ownerThread = 41;
+  MicCaptureLifecycle* lifecycle = nullptr;
+  std::mutex waitMutex;
+  std::condition_variable waitCondition;
+};
+
+MicLifecycleOperations Ops(FakeAudio& fake);
+
+bool CreateResources(void* context) {
+  auto& fake = *static_cast<FakeAudio*>(context);
+  ++fake.createCalls;
+  return fake.createOk;
+}
+
+bool StartAudio(void* context) {
+  auto& fake = *static_cast<FakeAudio*>(context);
+  ++fake.startCalls;
+  if (fake.reenterStart && fake.lifecycle != nullptr) {
+    fake.reentrantStartResult = fake.lifecycle->Start(fake.ownerThread, Ops(fake));
+  }
+  return fake.startOk;
+}
+
+MicWorkerCreateResult CreateWorker(void* context) {
+  auto& fake = *static_cast<FakeAudio*>(context);
+  ++fake.workerCreateCalls;
+  if (fake.workerCreateOk) return MicWorkerCreateResult::Started;
+  return fake.failedWorkerExists ? MicWorkerCreateResult::FailedWithWorker
+                                 : MicWorkerCreateResult::FailedWithoutWorker;
+}
+
+bool RequestStop(void* context) {
+  auto& fake = *static_cast<FakeAudio*>(context);
+  ++fake.signalCalls;
+  return fake.signalOk;
+}
+
+MicWorkerWaitResult WaitWorker(void* context, uint32_t timeoutMs) {
+  auto& fake = *static_cast<FakeAudio*>(context);
+  ++fake.waitCalls;
+  EXPECT_EQ(timeoutMs, 2000u);
+  if (fake.blockWait) {
+    std::unique_lock<std::mutex> lock(fake.waitMutex);
+    fake.waitEntered = true;
+    fake.waitCondition.notify_all();
+    fake.waitCondition.wait(lock, [&fake]() { return fake.allowWaitToFinish; });
+  }
+  return fake.waitResult;
+}
+
+void CloseWorker(void* context) { ++static_cast<FakeAudio*>(context)->closeCalls; }
+
+bool StopAudio(void* context) {
+  auto& fake = *static_cast<FakeAudio*>(context);
+  ++fake.stopCalls;
+  return fake.stopOk;
+}
+
+void ReleaseResources(void* context) { ++static_cast<FakeAudio*>(context)->releaseCalls; }
+
+void ResetStream(void* context) { ++static_cast<FakeAudio*>(context)->resetCalls; }
+
+MicLifecycleOperations Ops(FakeAudio& fake) {
+  return {&fake, CreateResources, StartAudio, CreateWorker, RequestStop, WaitWorker,
+          CloseWorker, StopAudio, ReleaseResources, ResetStream};
+}
+
+struct FakeDrain {
+  bool isCancelled = false;
+  bool queryOk = true;
+  bool acquireOk = true;
+  bool releaseOk = true;
+  bool throwDuringProcess = false;
+  uint32_t cancelAfterProcess = 0;
+  uint32_t queries = 0;
+  uint32_t acquired = 0;
+  uint32_t processed = 0;
+  uint32_t released = 0;
+};
+
+bool DrainCancelled(void* context) { return static_cast<FakeDrain*>(context)->isCancelled; }
+
+bool DrainNext(void* context, uint32_t* frames) {
+  auto& fake = *static_cast<FakeDrain*>(context);
+  ++fake.queries;
+  if (!fake.queryOk) return false;
+  *frames = 16;
+  return true;
+}
+
+bool DrainAcquire(void* context, const void** data, uint32_t* frames, uint32_t* flags) {
+  auto& fake = *static_cast<FakeDrain*>(context);
+  if (!fake.acquireOk) return false;
+  ++fake.acquired;
+  *data = &fake;
+  *frames = 16;
+  *flags = 0;
+  return true;
+}
+
+void DrainProcess(void* context, const void*, uint32_t, uint32_t) {
+  auto& fake = *static_cast<FakeDrain*>(context);
+  ++fake.processed;
+  if (fake.throwDuringProcess) throw std::runtime_error("injected packet processing failure");
+  if (fake.cancelAfterProcess != 0 && fake.processed == fake.cancelAfterProcess) fake.isCancelled = true;
+}
+
+bool DrainRelease(void* context, uint32_t frames) {
+  auto& fake = *static_cast<FakeDrain*>(context);
+  EXPECT_EQ(frames, 16u);
+  ++fake.released;
+  return fake.releaseOk;
+}
+
+MicCaptureDrainOperations DrainOps(FakeDrain& fake) {
+  return {&fake, DrainCancelled, DrainNext, DrainAcquire, DrainProcess, DrainRelease};
+}
+
+class MicCaptureLifecycleTest : public ::testing::Test {
+ protected:
+  bool Create() { return lifecycle_.Create(kOwnerThread, Ops(fake_)); }
+  bool Start() { return lifecycle_.Start(kOwnerThread, Ops(fake_)); }
+  bool Stop() { return lifecycle_.Stop(kOwnerThread, Ops(fake_), 2000); }
+  bool Destroy() { return lifecycle_.Destroy(kOwnerThread, Ops(fake_), 2000); }
+
+  static constexpr uint32_t kOwnerThread = 41;
+  FakeAudio fake_;
+  MicCaptureLifecycle lifecycle_;
+};
+
+TEST_F(MicCaptureLifecycleTest, CreateThreadFailureRollsAudioBackAndAllowsRetry) {
+  ASSERT_TRUE(Create());
+  const uint32_t resetsAfterCreate = fake_.resetCalls;
+  fake_.workerCreateOk = false;
+  EXPECT_FALSE(Start());
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Ready);
+  EXPECT_FALSE(lifecycle_.HasWorker());
+  EXPECT_EQ(fake_.stopCalls, 1u);
+  EXPECT_EQ(fake_.resetCalls, resetsAfterCreate + 1u);
+
+  fake_.workerCreateOk = true;
+  EXPECT_TRUE(Start());
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Running);
+  EXPECT_TRUE(Stop());
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Ready);
+  EXPECT_TRUE(Destroy());
+}
+
+TEST_F(MicCaptureLifecycleTest, FailedRollbackStopFaultsWithoutWorkerUntilDestroyRetry) {
+  ASSERT_TRUE(Create());
+  fake_.workerCreateOk = false;
+  fake_.stopOk = false;
+  EXPECT_FALSE(Start());
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::FaultedNoWorker);
+  EXPECT_FALSE(lifecycle_.HasWorker());
+  EXPECT_FALSE(Start());
+
+  fake_.stopOk = true;
+  EXPECT_TRUE(Destroy());
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Closed);
+  EXPECT_EQ(fake_.releaseCalls, 1u);
+}
+
+TEST_F(MicCaptureLifecycleTest, WorkerSetupFailureJoinsCreatedThreadBeforeRollback) {
+  ASSERT_TRUE(Create());
+  fake_.workerCreateOk = false;
+  fake_.failedWorkerExists = true;
+  EXPECT_FALSE(Start());
+  EXPECT_EQ(fake_.signalCalls, 1u);
+  EXPECT_EQ(fake_.waitCalls, 1u);
+  EXPECT_EQ(fake_.closeCalls, 1u);
+  EXPECT_EQ(fake_.stopCalls, 1u);
+  EXPECT_FALSE(lifecycle_.HasWorker());
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Ready);
+  EXPECT_TRUE(Destroy());
+}
+
+TEST_F(MicCaptureLifecycleTest, TimeoutAndWaitFailureRetainWorkerResourcesUntilRetryJoins) {
+  ASSERT_TRUE(Create());
+  ASSERT_TRUE(Start());
+  fake_.waitResult = MicWorkerWaitResult::Timeout;
+  EXPECT_FALSE(Stop());
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::FaultedWorker);
+  EXPECT_TRUE(lifecycle_.HasWorker());
+  EXPECT_EQ(fake_.closeCalls, 0u);
+  EXPECT_EQ(fake_.stopCalls, 0u);
+  EXPECT_EQ(fake_.releaseCalls, 0u);
+  EXPECT_FALSE(Start());
+
+  fake_.waitResult = MicWorkerWaitResult::Failed;
+  EXPECT_FALSE(Destroy());
+  EXPECT_TRUE(lifecycle_.HasWorker());
+  EXPECT_EQ(fake_.closeCalls, 0u);
+  EXPECT_EQ(fake_.releaseCalls, 0u);
+
+  fake_.waitResult = MicWorkerWaitResult::Signaled;
+  EXPECT_TRUE(Destroy());
+  EXPECT_FALSE(lifecycle_.HasWorker());
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Closed);
+  EXPECT_EQ(fake_.closeCalls, 1u);
+  EXPECT_EQ(fake_.releaseCalls, 1u);
+}
+
+TEST_F(MicCaptureLifecycleTest, FailedWakeStillAttemptsBoundedJoin) {
+  ASSERT_TRUE(Create());
+  ASSERT_TRUE(Start());
+  fake_.signalOk = false;
+  EXPECT_TRUE(Stop());
+  EXPECT_EQ(fake_.signalCalls, 1u);
+  EXPECT_EQ(fake_.waitCalls, 1u);
+  EXPECT_EQ(fake_.closeCalls, 1u);
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::Ready);
+  EXPECT_TRUE(Destroy());
+}
+
+TEST_F(MicCaptureLifecycleTest, StopFailureAfterConfirmedJoinBlocksRestartButAllowsDestroyRetry) {
+  ASSERT_TRUE(Create());
+  ASSERT_TRUE(Start());
+  fake_.stopOk = false;
+  EXPECT_FALSE(Stop());
+  EXPECT_EQ(lifecycle_.State(), MicLifecycleState::FaultedNoWorker);
+  EXPECT_FALSE(lifecycle_.HasWorker());
+  EXPECT_FALSE(Start());
+
+  fake_.stopOk = true;
+  EXPECT_TRUE(Destroy());
+  EXPECT_EQ(fake_.releaseCalls, 1u);
+}
+
+TEST_F(MicCaptureLifecycleTest, RejectsWrongThreadWithoutReleasingOwnerResources) {
+  ASSERT_TRUE(Create());
+  EXPECT_FALSE(lifecycle_.Start(kOwnerThread + 1, Ops(fake_)));
+  EXPECT_FALSE(lifecycle_.Stop(kOwnerThread + 1, Ops(fake_), 2000));
+  EXPECT_FALSE(lifecycle_.Destroy(kOwnerThread + 1, Ops(fake_), 2000));
+  EXPECT_EQ(fake_.startCalls, 0u);
+  EXPECT_EQ(fake_.releaseCalls, 0u);
+  EXPECT_TRUE(Destroy());
+}
+
+TEST_F(MicCaptureLifecycleTest, ConcurrentStartWaitsForStopTransitionToFinish) {
+  ASSERT_TRUE(Create());
+  ASSERT_TRUE(Start());
+  fake_.blockWait = true;
+  std::atomic<bool> stopResult{false};
+  std::atomic<bool> startFinished{false};
+  std::thread stopper([this, &stopResult]() { stopResult.store(Stop()); });
+  {
+    std::unique_lock<std::mutex> lock(fake_.waitMutex);
+    fake_.waitCondition.wait(lock, [this]() { return fake_.waitEntered; });
+  }
+  std::thread starter([this, &startFinished]() {
+    (void)Start();
+    startFinished.store(true);
+  });
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  EXPECT_FALSE(startFinished.load());
+  {
+    std::lock_guard<std::mutex> lock(fake_.waitMutex);
+    fake_.allowWaitToFinish = true;
+  }
+  fake_.waitCondition.notify_all();
+  stopper.join();
+  starter.join();
+  EXPECT_TRUE(stopResult.load());
+  EXPECT_TRUE(startFinished.load());
+  EXPECT_EQ(fake_.startCalls, 2u);
+  EXPECT_TRUE(Stop());
+  EXPECT_TRUE(Destroy());
+}
+
+TEST_F(MicCaptureLifecycleTest, ReentrantLifecycleCallIsRejectedWithoutDeadlock) {
+  fake_.lifecycle = &lifecycle_;
+  fake_.reenterStart = true;
+  ASSERT_TRUE(Create());
+  EXPECT_TRUE(Start());
+  EXPECT_FALSE(fake_.reentrantStartResult);
+  EXPECT_EQ(fake_.workerCreateCalls, 1u);
+  EXPECT_TRUE(Stop());
+  EXPECT_TRUE(Destroy());
+}
+
+TEST(MicCaptureDrain, CancellationDuringContinuousPacketDrainReleasesEveryAcquiredPacket) {
+  FakeDrain fake;
+  fake.cancelAfterProcess = 2;
+  const MicCaptureDrainStatus status = DrainMicCapturePackets(DrainOps(fake));
+  EXPECT_EQ(status, MicCaptureDrainStatus::Cancelled);
+  EXPECT_EQ(fake.acquired, 2u);
+  EXPECT_EQ(fake.processed, 2u);
+  EXPECT_EQ(fake.released, 2u);
+  EXPECT_EQ(fake.queries, 2u);
+}
+
+TEST(MicCaptureDrain, AcquisitionFailureDoesNotReleaseUnacquiredPacket) {
+  FakeDrain fake;
+  fake.acquireOk = false;
+  EXPECT_EQ(DrainMicCapturePackets(DrainOps(fake)), MicCaptureDrainStatus::BufferAcquireFailed);
+  EXPECT_EQ(fake.acquired, 0u);
+  EXPECT_EQ(fake.released, 0u);
+}
+
+TEST(MicCaptureDrain, ReleaseIsAttemptedOnceEvenWhenItFails) {
+  FakeDrain fake;
+  fake.releaseOk = false;
+  EXPECT_EQ(DrainMicCapturePackets(DrainOps(fake)), MicCaptureDrainStatus::BufferReleaseFailed);
+  EXPECT_EQ(fake.acquired, 1u);
+  EXPECT_EQ(fake.processed, 1u);
+  EXPECT_EQ(fake.released, 1u);
+}
+
+TEST(MicCaptureDrain, ProcessingExceptionStillReleasesBufferOnce) {
+  FakeDrain fake;
+  fake.throwDuringProcess = true;
+  EXPECT_EQ(DrainMicCapturePackets(DrainOps(fake)), MicCaptureDrainStatus::BufferProcessFailed);
+  EXPECT_EQ(fake.acquired, 1u);
+  EXPECT_EQ(fake.processed, 1u);
+  EXPECT_EQ(fake.released, 1u);
+}
+
+TEST(MicComBalance, SuccessfulSOkAndSFalseRequireUninitializeButChangedModeDoesNot) {
+  EXPECT_TRUE(MicComInitializationRequiresUninitialize(0));
+  EXPECT_TRUE(MicComInitializationRequiresUninitialize(1));
+  EXPECT_FALSE(MicComInitializationRequiresUninitialize(static_cast<int32_t>(0x80010106u)));
+}
+
+}  // namespace

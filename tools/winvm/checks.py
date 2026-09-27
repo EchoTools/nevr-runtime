@@ -41,8 +41,46 @@ def check_process_alive(alive: bool, exit_code: int | None, expect: str = "alive
     if expect == "exit":
         if alive:
             return Result("process_alive", FAIL, "game was expected to exit but is still running")
+        if exit_code is None:
+            return Result("process_alive", FAIL, "game exited without a valid current-run exit marker")
         return Result("process_alive", PASS, f"game exited (exit code {exit_code})")
     raise ValueError(f"expect must be 'alive' or 'exit', got {expect!r}")
+
+
+def check_process_markers(marker: str, run_id: str, alive: bool) -> tuple[Result, int | None]:
+    """Accept only markers belonging to the launch being observed."""
+    lines = marker.splitlines()
+    if lines.count(f"{run_id} started") != 1:
+        return Result("run_marker", FAIL, "current run start marker is missing or duplicated"), None
+    exits = [line for line in lines if line.startswith(f"{run_id} exited rc=")]
+    if alive:
+        if exits:
+            return Result("run_marker", FAIL, "current run has an exit marker while its process is alive"), None
+        return Result("run_marker", PASS, "current run start marker confirmed"), None
+    if len(exits) != 1:
+        return Result("run_marker", FAIL, "current run exit marker is missing or duplicated"), None
+    match = re.fullmatch(re.escape(run_id) + r" exited rc=(-?\d+)", exits[0])
+    if match is None:
+        return Result("run_marker", FAIL, "current run exit marker is malformed"), None
+    return Result("run_marker", PASS, f"current run exit marker confirmed (rc={match[1]})"), int(match[1])
+
+
+def check_window_enumeration(marker: str | None, run_id: str, dump: str, required: bool = True) -> Result:
+    """Require this invocation's explicit completion marker; an empty dump is valid."""
+    if not required:
+        return Result("window_enumeration", WARN, "not applicable: game process exited before window inspection")
+    if marker != f"{run_id} completed":
+        return Result("window_enumeration", FAIL,
+                      "window enumeration marker missing, stale, malformed, or failed")
+    return Result("window_enumeration", PASS, f"window enumeration completed ({len(dump.splitlines())} lines)")
+
+
+def check_window_dump_pid(dump: str, process_id: int) -> Result:
+    observed = next((int(match[1]) for line in dump.splitlines()
+                     if (match := re.match(r"^echovr pid:\s*(\d+)(?:\s|$)", line))), None)
+    if observed != process_id:
+        return Result("window_pid", FAIL, f"window dump is not associated with target PID {process_id}")
+    return Result("window_pid", PASS, f"window dump is associated with target PID {process_id}")
 
 
 # --- Blocking dialogs ---------------------------------------------------------
@@ -102,16 +140,47 @@ def check_no_fatal(log: str, exit_code: int | None) -> Result:
 
 # Defects that are already tracked and must not fail the run, but must keep
 # printing. Add an entry only with the reason and where it is tracked.
-KNOWN_HOOK_FAILURES = {
-    # Native Windows and Wine both hit this; the DLL-load hook and the
-    # GetProcAddress hook both create the same MinHook target.
-    "EchoVR::GetProcAddress": "MH_ERROR_ALREADY_CREATED (N126/N128 diagnostic; hook is redundant)",
-    # The runtime itself logs these as "redundant on headless - OVR SDK is never loaded; N127".
-    "LoadLibraryW": "MH_ERROR_ALREADY_CREATED (N127; redundant on headless)",
-    "LoadLibraryExW": "MH_ERROR_ALREADY_CREATED (N127; redundant on headless)",
+_KNOWN_HOOK_FAILURES = {
+    ("EchoVR::GetProcAddress", "MH_ERROR_ALREADY_CREATED"):
+        "N126/N128 records the duplicate MinHook target; the competing detour is explicitly diagnosed",
+    ("LoadLibraryW", "MH_ERROR_ALREADY_CREATED"):
+        "N127 marks the Oculus filter redundant on headless servers",
+    ("LoadLibraryExW", "MH_ERROR_ALREADY_CREATED"):
+        "N127 marks the Oculus filter redundant on headless servers",
 }
 
-_HOOK_FAILED = re.compile(r"hook FAILED name=(?P<name>\S+)")
+_HOOK_FAILED = re.compile(
+    r"\bhook\s+FAILED\s+name=(?P<name>\S+)(?P<tail>.*)", re.IGNORECASE)
+_HOOK_SKIPPED = re.compile(
+    r"\bhook\s+skipped\s+name=(?P<name>\S+)(?P<tail>.*)", re.IGNORECASE)
+_HOOK_RESULT_FAILED = re.compile(
+    r"\bhook\s+name=(?P<name>\S+)\s+result=FAILED\b", re.IGNORECASE)
+_HOOK_REASON = re.compile(r"\breason=(?P<reason>\S+)")
+_HOOK_SUMMARY = re.compile(r"hooks installed: (?P<ok>\d+) succeeded, (?P<failed>\d+) failed")
+_OCULUS_STATUS = re.compile(
+    r"Oculus Platform SDK blocking hooks: LoadLibraryW=(?P<w>ok|FAILED) "
+    r"LoadLibraryExW=(?P<ex>ok|FAILED)\s+\((?P<detail>.*)\)", re.IGNORECASE)
+
+
+def _known_hook_failure(name: str, tail: str, full_log: str) -> str | None:
+    reason_match = _HOOK_REASON.search(tail)
+    if reason_match is None:
+        return None
+    reason = reason_match["reason"]
+    explanation = _KNOWN_HOOK_FAILURES.get((name, reason))
+    if explanation is None:
+        return None
+    if "N126/N128" not in tail:
+        return None
+    if name in {"LoadLibraryW", "LoadLibraryExW"}:
+        status = next((m for m in _OCULUS_STATUS.finditer(full_log)
+                       if m["w"].upper() == "FAILED" and m["ex"].upper() == "FAILED"
+                       and "redundant on headless" in m["detail"]
+                       and "OVR SDK is never loaded" in m["detail"]
+                       and "N127" in m["detail"]), None)
+        if status is None or not re.search(r"Server mode.*headless", full_log, re.IGNORECASE):
+            return None
+    return explanation
 
 
 def check_hooks(log: str) -> list[Result]:
@@ -121,16 +190,70 @@ def check_hooks(log: str) -> list[Result]:
         results.append(Result("hooks_installed", FAIL, "never logged 'All hooks installed'"))
     else:
         results.append(Result("hooks_installed", PASS, "All hooks installed"))
-    unexpected, known = [], []
-    for m in _HOOK_FAILED.finditer(text):
-        (known if m["name"] in KNOWN_HOOK_FAILURES else unexpected).append(m["name"])
-    if unexpected:
+    known, diagnostic, required = [], [], []
+    classified_lines: set[str] = set()
+    for line in text.splitlines():
+        diag = re.search(r"\bDIAG\b.*\bhook\b.*\b(?:failed|skipped)\b", line, re.IGNORECASE)
+        if diag:
+            diagnostic.append(line.strip())
+            classified_lines.add(line)
+            continue
+        failure = _HOOK_FAILED.search(line)
+        if failure:
+            name = failure["name"]
+            explanation = _known_hook_failure(name, failure["tail"], text)
+            if explanation:
+                known.append((name, explanation))
+            else:
+                required.append(name)
+            classified_lines.add(line)
+        skipped = _HOOK_SKIPPED.search(line)
+        if skipped:
+            required.append(skipped["name"])
+            classified_lines.add(line)
+        result_failure = _HOOK_RESULT_FAILED.search(line)
+        if result_failure:
+            required.append(result_failure["name"])
+            classified_lines.add(line)
+        oculus = _OCULUS_STATUS.search(line)
+        if oculus:
+            failed_names = [name for name, value in (("LoadLibraryW", oculus["w"]),
+                                                       ("LoadLibraryExW", oculus["ex"]))
+                            if value.upper() == "FAILED"]
+            if failed_names:
+                is_scoped = ("redundant on headless" in oculus["detail"]
+                             and "OVR SDK is never loaded" in oculus["detail"]
+                             and "N127" in oculus["detail"]
+                             and bool(re.search(r"Server mode.*headless", text, re.IGNORECASE)))
+                if is_scoped:
+                    known.extend((name, _KNOWN_HOOK_FAILURES[(name, "MH_ERROR_ALREADY_CREATED")])
+                                 for name in failed_names)
+                else:
+                    required.extend(failed_names)
+            classified_lines.add(line)
+    summaries = list(_HOOK_SUMMARY.finditer(text))
+    for m in summaries:
+        classified_lines.add(m[0])
+        if int(m["failed"]) > 0:
+            required.append(f"summary:{m['failed']}")
+    if "[NEVR.PATCH] FATAL hooking init failed" in text:
+        required.append("initialization")
+    for line in text.splitlines():
+        if (line in classified_lines or _HOOK_SUMMARY.search(line)
+                or re.search(r"All hooks installed", line, re.IGNORECASE)):
+            continue
+        if (re.search(r"\bhooks?\b", line, re.IGNORECASE)
+                and re.search(r"\b(?:failed|failure|skipped)\b|result=FAILED", line, re.IGNORECASE)):
+            required.append("unrecognized:" + line.strip())
+    if required:
         results.append(Result("no_unexpected_hook_failure", FAIL,
-                              "hook FAILED: " + ", ".join(sorted(set(unexpected)))))
+                              "required hook failure: " + ", ".join(sorted(set(required)))))
     else:
         results.append(Result("no_unexpected_hook_failure", PASS, "no unexpected hook failures"))
-    for name in sorted(set(known)):
-        results.append(Result("known_hook_failure", WARN, f"{name}: {KNOWN_HOOK_FAILURES[name]}"))
+    for name, explanation in sorted(set(known)):
+        results.append(Result("known_hook_failure", WARN, f"{name}: {explanation}"))
+    for line in sorted(set(diagnostic)):
+        results.append(Result("diagnostic_hook_failure", WARN, line))
     return results
 
 

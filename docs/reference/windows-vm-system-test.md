@@ -6,7 +6,7 @@ built `BugSplat64.dll` on a real Windows guest (libvirt) and judges the boot.
 
 ```sh
 just build
-WINVM_USER=... WINVM_PASS=... just test-winvm                    # both scenarios
+WINVM_USER=... WINVM_PASS=... just test-winvm                    # GAI, boot, and local Nakama login
 WINVM_USER=... WINVM_PASS=... just test-winvm --scenario gai     # getaddrinfo timing only
 WINVM_USER=... WINVM_PASS=... just test-winvm --scenario login   # boot + log in to the local nakama (docs/reference/local-nakama.md)
 ```
@@ -51,12 +51,18 @@ observes for `--wait` seconds (default 90, minimum 45), then judges:
 | `process_alive` | the game is not running at the end of the window |
 | `no_modal_dialog` | the game owns a dialog window (its text is reported) |
 | `no_fatal` | a `[FATAL]` / `ForceFatalExit` line was logged, or the exit code is non-zero |
-| `hooks_installed` / `no_unexpected_hook_failure` | a hook failed that is not in `KNOWN_HOOK_FAILURES` |
+| `hooks_installed` / `no_unexpected_hook_failure` | a required hook failed or was skipped; only explicit DIAG hooks and failures with the documented N126/N128/N127 statuses are warnings |
+| `window_enumeration` / `window_pid` | live-process window enumeration lacks a fresh completion marker or is associated with another PID |
 | `engine_progress` | the boot did not reach `--require-stage` (default `broadcaster`) |
 
-`known_hook_failure` is a WARN, never a FAIL: tracked defects stay visible without
-turning the run red. Add to `KNOWN_HOOK_FAILURES` in `tools/winvm/checks.py` only
-with the reason and where it is tracked.
+`login` repeats the boot against the local Nakama using the seeded test account
+and checks Nakama's session and `LoginSuccess` records. The default `all` scenario
+runs `gai`, `boot`, and `login`; it requires the local Nakama state created by
+`just nakama-up && just nakama-seed`.
+
+Hook warnings require an explicit diagnostic tag or a matching failure reason,
+status, and tracked exception context. A successful `All hooks installed` line
+does not override a separate failure record.
 
 `broadcaster` means `CBroadcaster::Listen` has been entered, which requires
 `CBroadcaster::Initialize` (and the `getaddrinfo` inside it) to have returned. It

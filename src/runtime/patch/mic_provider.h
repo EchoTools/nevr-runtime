@@ -39,14 +39,19 @@ uint64_t MicDetected();
 /// required here.
 uint64_t MicRead(void* buffer, uint64_t sampleCount);
 
-/// Starts the capture thread. No-op if already running or MicCreate has
-/// not succeeded.
+/// Starts capture after successful MicCreate. A retained worker or pending
+/// stop recovery blocks restart and is logged; Closed is a no-op.
 void MicStart();
 
-/// Stops the capture thread and the audio client. No-op if not running.
+/// Requests capture cancellation and waits for the worker to exit. Retries
+/// joining a retained worker even if capture is already marked not running;
+/// a timeout or failed wait keeps worker and WASAPI resources retained for a
+/// later Stop/Destroy retry.
 void MicStop();
 
-/// Stops capture (if running) and releases all WASAPI resources.
+/// Stops capture and releases WASAPI resources after the worker has exited.
+/// A timeout, failed wait, or non-owner-thread call fails closed and retains
+/// resources so a later owner-thread Destroy can retry safely.
 void MicDestroy();
 
 } // namespace MicProvider

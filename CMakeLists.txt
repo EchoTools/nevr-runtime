@@ -265,6 +265,7 @@ endif()
 
 set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}")
 set(DIST_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}")
+set(DIST_STAGE_DIR "${CMAKE_SOURCE_DIR}/dist/.staging/${DIST_NAME}")
 
 # List of DLL artifacts to include
 set(DIST_DLLS
@@ -280,73 +281,57 @@ set(DIST_DBG_FILES
 
 # Custom target to prepare distribution directory
 add_custom_target(dist-prepare
-  COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_SOURCE_DIR}/dist"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${DIST_STAGE_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_STAGE_DIR}"
   # BugSplat64.dll — NEVR runtime (replaces the original crash reporter DLL).
   # The game statically imports it, so it loads at process startup before WinMain.
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_DIR}/BugSplat64.dll" || true
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_STAGE_DIR}/BugSplat64.dll"
+  COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:echovr_server>" "${DIST_STAGE_DIR}/echovr_server.exe"
   # gameserver.dll merged into nevr_runtime — no separate DLL to copy
   # COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_DIR}/pnsradgameserver.dll" || true
-  # Launcher executables — not built yet (module-extraction infrastructure present but launchers not wired)
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_DIR}/echovr.exe" || true
-  COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" "${DIST_DIR}/echovr_server.exe" || true
-   COMMAND test -f "${CMAKE_SOURCE_DIR}/README.md" && ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_DIR}/" || true
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_STAGE_DIR}/"
   # plugins/ ships EMPTY on purpose — it is the drop-point for optional operator
   # plugins. log_filter.dll is deliberately not packaged (N95): the loader
   # refuses it by name.
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_DIR}/plugins"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_STAGE_DIR}/plugins"
   VERBATIM
 )
+add_dependencies(dist-prepare nevr_runtime)
+add_dependencies(dist-prepare echovr_server)
 
 # =============================================================================
 # Code Signing
 # =============================================================================
-# Signs DLLs/EXEs in the distribution directory using osslsigncode (Linux) or
-# signtool (Windows). Credentials are configured via environment variables:
-#   CODESIGN_PFX / CODESIGN_CERT+CODESIGN_KEY / CODESIGN_THUMBPRINT
-# Skips gracefully when no credentials are available (default for local builds).
-# Set CODESIGN_SKIP=1 to skip explicitly, or provide credentials to enable.
+# Release jobs configure NEVR_CODESIGN_REQUIRED=ON. Local development defaults
+# to optional unsigned output when no credentials are configured.
 # =============================================================================
 
 find_program(OSSLSIGNCODE osslsigncode)
 set(CODESIGN_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/codesign/sign.sh")
-
-# Collect signable artifacts in dist dir (DLLs and EXEs)
-set(DIST_SIGN_GLOB "${DIST_DIR}/*.dll" "${DIST_DIR}/*.exe")
-
-if(OSSLSIGNCODE)
-  add_custom_target(dist-sign
-    COMMAND bash -c "\"${CODESIGN_SCRIPT}\" \"${DIST_DIR}/\"*.dll \"${DIST_DIR}/\"*.exe \"${DIST_DIR}/plugins/\"*.dll"
-    DEPENDS dist-prepare
-    COMMENT "Code signing distribution artifacts"
-  )
-else()
-  add_custom_target(dist-sign
-    COMMAND ${CMAKE_COMMAND} -E echo "WARNING: osslsigncode not found, skipping code signing"
-    DEPENDS dist-prepare
-    VERBATIM
-  )
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+option(NEVR_CODESIGN_REQUIRED "Require trusted Authenticode signing for distributions" OFF)
+set(DIST_SIGNING_ARGS)
+if(NEVR_CODESIGN_REQUIRED)
+  list(APPEND DIST_SIGNING_ARGS --required-signing)
 endif()
 
-# Create tar.zst archive
-add_custom_target(dist-tar
-  COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_SOURCE_DIR}/dist"
-    tar --zstd -cf "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.tar.zst" "${DIST_NAME}"
-  DEPENDS dist-sign
+add_custom_target(dist-sign
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/build_distribution.py"
+    --package "${DIST_STAGE_DIR}" --destination "${DIST_DIR}"
+    --tar "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.tar.zst"
+    --zip "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.zip" ${DIST_SIGNING_ARGS}
+  DEPENDS dist-prepare
+  COMMENT "Signing, verifying, and atomically publishing runtime distribution"
   VERBATIM
 )
-
-# Create zip archive
-add_custom_target(dist-zip
-  COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_SOURCE_DIR}/dist"
-    ${CMAKE_COMMAND} -E tar cf "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.zip" --format=zip "${DIST_NAME}"
-  DEPENDS dist-sign
+add_custom_target(dist DEPENDS dist-sign)
+add_custom_command(TARGET dist POST_BUILD
+  COMMAND ${CMAKE_COMMAND}
+    -DARCHIVE_TAR=${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.tar.zst
+    -DARCHIVE_ZIP=${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}.zip
+    -P ${CMAKE_SOURCE_DIR}/cmake/VerifyDistribution.cmake
+  COMMENT "Checking required runtime in distribution archives"
   VERBATIM
-)
-
-# Main distribution target that creates both archives
-add_custom_target(dist
-  DEPENDS dist-tar dist-zip
 )
 
 # =============================================================================
@@ -358,75 +343,56 @@ add_custom_target(dist
 
 set(DIST_LITE_NAME "nevr-runtime-v${PROJECT_VERSION}-lite")
 set(DIST_LITE_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}")
+set(DIST_LITE_STAGE_DIR "${CMAKE_SOURCE_DIR}/dist/.staging/${DIST_LITE_NAME}")
 
 # Find strip tool (use llvm-strip or strip)
-find_program(STRIP_TOOL NAMES llvm-strip strip)
+find_program(MINGW_STRIP_TOOL NAMES x86_64-w64-mingw32-strip llvm-strip strip)
 
 # Custom target to prepare lite distribution directory with stripped DLLs
 add_custom_target(dist-lite-prepare
-  COMMAND ${CMAKE_COMMAND} -E rm -rf "${DIST_LITE_DIR}"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${DIST_LITE_STAGE_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_STAGE_DIR}"
   # Copy the runtime DLL + legacy dbgcore.dll alias, then strip
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_LITE_DIR}/BugSplat64.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/BugSplat64.dll" || ${CMAKE_COMMAND} -E true
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_LITE_STAGE_DIR}/BugSplat64.dll"
+  COMMAND ${MINGW_STRIP_TOOL} --strip-all "${DIST_LITE_STAGE_DIR}/BugSplat64.dll"
+  COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:echovr_server>" "${DIST_LITE_STAGE_DIR}/echovr_server.exe"
+  COMMAND ${MINGW_STRIP_TOOL} --strip-all "${DIST_LITE_STAGE_DIR}/echovr_server.exe"
   # gameserver.dll merged into nevr_runtime — no separate DLL to copy
   # COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_LITE_DIR}/pnsradgameserver.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/pnsradgameserver.dll" || ${CMAKE_COMMAND} -E true
-  # Launcher executables — not built yet (module-extraction infrastructure present but launchers not wired)
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_launcher.exe" "${DIST_LITE_DIR}/echovr.exe" || ${CMAKE_COMMAND} -E true
-  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/echovr_server.exe" "${DIST_LITE_DIR}/echovr_server.exe" || ${CMAKE_COMMAND} -E true
-   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_LITE_DIR}/" || ${CMAKE_COMMAND} -E true
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_LITE_STAGE_DIR}/"
   # plugins/ ships EMPTY on purpose — see the dist-prepare note above (N95).
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_DIR}/plugins"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_STAGE_DIR}/plugins"
   COMMENT "Preparing lite distribution directory (stripped): ${DIST_LITE_DIR}"
   VERBATIM
 )
+add_dependencies(dist-lite-prepare nevr_runtime)
+add_dependencies(dist-lite-prepare echovr_server)
 
-# Sign lite distribution artifacts
-if(OSSLSIGNCODE)
-  add_custom_target(dist-lite-sign
-    COMMAND bash -c "\"${CODESIGN_SCRIPT}\" \"${DIST_LITE_DIR}/\"*.dll \"${DIST_LITE_DIR}/\"*.exe \"${DIST_LITE_DIR}/plugins/\"*.dll"
-    DEPENDS dist-lite-prepare
-    COMMENT "Code signing lite distribution artifacts"
-  )
-else()
-  add_custom_target(dist-lite-sign
-    COMMAND ${CMAKE_COMMAND} -E echo "WARNING: osslsigncode not found, skipping code signing"
-    DEPENDS dist-lite-prepare
-    VERBATIM
-  )
-endif()
-
-# Create lite tar.zst archive
-add_custom_target(dist-lite-tar
-  COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_SOURCE_DIR}/dist"
-    tar --zstd -cvf "${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.tar.zst" "${DIST_LITE_NAME}"
-  DEPENDS dist-lite-sign
-  COMMENT "Creating ${DIST_LITE_NAME}.tar.zst"
+add_custom_target(dist-lite-sign
+  COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/build_distribution.py"
+    --package "${DIST_LITE_STAGE_DIR}" --destination "${DIST_LITE_DIR}"
+    --tar "${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.tar.zst"
+    --zip "${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.zip" ${DIST_SIGNING_ARGS}
+  DEPENDS dist-lite-prepare
+  COMMENT "Signing, verifying, and atomically publishing lite distribution"
   VERBATIM
 )
-
-# Create lite zip archive
-add_custom_target(dist-lite-zip
-  COMMAND ${CMAKE_COMMAND} -E chdir "${CMAKE_SOURCE_DIR}/dist"
-    ${CMAKE_COMMAND} -E tar cvf "${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.zip" --format=zip "${DIST_LITE_NAME}"
-  DEPENDS dist-lite-sign
-  COMMENT "Creating ${DIST_LITE_NAME}.zip"
-  VERBATIM
-)
-
-# Main lite distribution target that creates both archives
 add_custom_target(dist-lite
-  DEPENDS dist-lite-tar dist-lite-zip
+  DEPENDS dist-lite-sign
   COMMENT "Lite distribution packages created: ${DIST_LITE_NAME}.tar.zst and ${DIST_LITE_NAME}.zip"
 )
-
-# Print lite distribution info
 add_custom_command(TARGET dist-lite POST_BUILD
+  COMMAND ${CMAKE_COMMAND}
+    -DARCHIVE_TAR=${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.tar.zst
+    -DARCHIVE_ZIP=${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.zip
+    -P ${CMAKE_SOURCE_DIR}/cmake/VerifyDistribution.cmake
   COMMAND ${CMAKE_COMMAND} -E echo ""
   COMMAND ${CMAKE_COMMAND} -E echo "========================================"
   COMMAND ${CMAKE_COMMAND} -E echo "Lite distribution packages created (stripped, no debug symbols):"
   COMMAND ${CMAKE_COMMAND} -E echo "  ${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.tar.zst"
   COMMAND ${CMAKE_COMMAND} -E echo "  ${CMAKE_SOURCE_DIR}/dist/${DIST_LITE_NAME}.zip"
   COMMAND ${CMAKE_COMMAND} -E echo "========================================"
+  COMMENT "Checking required runtime in lite distribution archives"
   VERBATIM
 )
 

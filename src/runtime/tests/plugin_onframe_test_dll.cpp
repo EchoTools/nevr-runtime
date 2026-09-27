@@ -1,5 +1,7 @@
 #include "extension/plugin_interface.h"
 
+#include <windows.h>
+
 namespace {
 
 constexpr NvrPluginInfo kInfo = {
@@ -36,4 +38,13 @@ NEVR_PLUGIN_API void NvrPluginOnFrame(const NvrGameContext*) {
 // the callback running came from this DLL rather than an injected test hook.
 NEVR_PLUGIN_API uint32_t NvrTestPluginGetFrameCount(void) {
   return g_frameCount;
+}
+
+NEVR_PLUGIN_API void NvrPluginShutdown(void) {
+  HANDLE shutdownObserved = OpenEventA(EVENT_MODIFY_STATE, FALSE,
+                                      "Local\\NEVRTestPluginShutdownObserved");
+  if (shutdownObserved != nullptr) {
+    SetEvent(shutdownObserved);
+    CloseHandle(shutdownObserved);
+  }
 }
