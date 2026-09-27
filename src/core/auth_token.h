@@ -250,6 +250,20 @@ inline CachedAuthToken LoadCachedAuthToken() {
     }
 }
 
+// The _local/ directory SaveAuthToken writes into: the first kLocalSuffixes
+// entry under exeDir that holds config.yaml, so the credential lands beside the
+// operator's NEVR config. "" when none does (the caller creates exeDir/_local).
+// Issue #21: this probed config.json, which is optional now and may not exist
+// in a config.yaml-only install. A client with no config.yaml never gets here:
+// token_auth disables itself without its config.yaml keys.
+inline std::string FindCredentialsDir(const std::string& exeDir) {
+    for (const auto* suffix : kLocalSuffixes) {
+        const std::string dir = exeDir + suffix;
+        if (std::ifstream(dir + "/config.yaml").is_open()) return dir;
+    }
+    return {};
+}
+
 // Saves the REFRESH TOKEN (and identity) to _local/.credentials.json.
 // The access token is deliberately NOT persisted — it lives in memory only.
 // Searches for existing _local/ directory with parent-directory fallback
@@ -260,14 +274,7 @@ inline bool SaveAuthToken(const CachedAuthToken& auth) {
 
     // Find existing _local/ dir relative to executable
     std::string exeDir = GetExeDirectory();
-    std::string target_dir;
-    for (const auto* suffix : kLocalSuffixes) {
-        std::string probe = exeDir + suffix + "/config.json";
-        if (std::ifstream(probe).is_open()) {
-            target_dir = exeDir + suffix;
-            break;
-        }
-    }
+    std::string target_dir = FindCredentialsDir(exeDir);
     if (target_dir.empty()) {
         target_dir = exeDir + "_local";
 #ifdef _WIN32

@@ -75,4 +75,11 @@ std::optional<std::string> ResolveRedirect(const std::string& result,
                                            const std::optional<std::string>& httpTarget,
                                            bool bridgeActive, unsigned bridgePort);
 
+/// Issue #21 — the value NEVR supplies for a key the STOCK ENGINE reads from its
+/// own JSON config (never a NEVR setting), used only when no config anywhere
+/// provided one. _local/config.json is optional now, and before that it was the
+/// only source of these keys. Owner-chosen value: publisher_lock = "echotools".
+/// nullopt for every other key (the engine keeps its own default).
+std::optional<std::string> GameNativeDefault(const std::string& key);
+
 }  // namespace nevr_cfg

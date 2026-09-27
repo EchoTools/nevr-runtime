@@ -110,6 +110,14 @@ class EngineProgressTest(unittest.TestCase):
         self.assertEqual(r.status, checks.FAIL)
         self.assertIn("stopped at 'sysnet'", r.detail)
 
+    def test_absent_config_json_still_completes_the_config_stage(self):
+        # Issue #21: config.json is optional. The runtime's line for a search that
+        # found none (verbatim from a Wine server run) ends the stage just like a load.
+        log = ("Echo VR\n[NEVR.PATCH] no _local/config.json under "
+               "Z:\\rig\\echovr\\bin\\win10\\ (optional — NEVR settings come from config.yaml)\n")
+        self.assertEqual(checks.engine_stage_reached(log), "config_loaded")
+        self.assertEqual(checks.check_engine_progress(log, "config_loaded").status, checks.PASS)
+
     def test_listen_with_zero_entries_does_not_count(self):
         log = "hook_liveness name=CBroadcaster::Listen entries=0 entered=NO expected=registration\n"
         self.assertIsNone(checks.engine_stage_reached(log))

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <string>
@@ -491,4 +492,49 @@ TEST(TokenAuthModule, ClientWithoutRequiredConfigDisablesCleanly) {
 
 TEST(TokenAuthModule, ReportsThePublishedModuleApiVersion) {
   EXPECT_EQ(token_auth_ApiVersion(), NEVR_MODULE_API_VERSION);
+}
+
+// Issue #21: SaveAuthToken picks its _local/ directory by probing for the NEVR
+// config. It probed config.json, which is optional now; a config.yaml-only
+// install must still get the credential written beside its config.yaml.
+class CredentialsDirFixture : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    root_ = std::filesystem::temp_directory_path() /
+            ("nevr-i21-" + std::to_string(GetCurrentProcessId()) + "-" +
+             ::testing::UnitTest::GetInstance()->current_test_info()->name());
+    std::filesystem::remove_all(root_);
+    std::filesystem::create_directories(root_ / "bin" / "win10");
+    // GetExeDirectory's shape: absolute, trailing separator.
+    exe_dir_ = (root_ / "bin" / "win10").string() + "\\";
+  }
+  void TearDown() override { std::filesystem::remove_all(root_); }
+
+  void Touch(const std::filesystem::path& file) {
+    std::filesystem::create_directories(file.parent_path());
+    std::ofstream(file) << "x: 1\n";
+  }
+
+  std::filesystem::path root_;
+  std::string exe_dir_;
+};
+
+TEST_F(CredentialsDirFixture, FindsConfigYamlTwoLevelsUp) {
+  Touch(root_ / "_local" / "config.yaml");
+  const std::string dir = FindCredentialsDir(exe_dir_);
+  ASSERT_FALSE(dir.empty());
+  EXPECT_TRUE(std::filesystem::equivalent(dir, root_ / "_local")) << dir;
+}
+
+TEST_F(CredentialsDirFixture, ConfigJsonAloneNoLongerSelectsADirectory) {
+  Touch(root_ / "_local" / "config.json");
+  EXPECT_EQ(FindCredentialsDir(exe_dir_), "");
+}
+
+TEST_F(CredentialsDirFixture, NearestConfigYamlWins) {
+  Touch(root_ / "_local" / "config.yaml");
+  Touch(root_ / "bin" / "win10" / "_local" / "config.yaml");
+  const std::string dir = FindCredentialsDir(exe_dir_);
+  ASSERT_FALSE(dir.empty());
+  EXPECT_TRUE(std::filesystem::equivalent(dir, root_ / "bin" / "win10" / "_local")) << dir;
 }

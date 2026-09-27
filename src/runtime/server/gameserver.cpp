@@ -1298,6 +1298,15 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   state.versionLock = versionLock;
   m_context->UpdateSessionState(state);
 
+  // Issue #21: the engine derives these from its own config, and version_lock is
+  // what ServerDB groups servers by. Logged so a config change (e.g. an absent or
+  // different _local/config.json) can be checked for a changed registration
+  // identity from the log alone, instead of by inference.
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.GAMESERVER] RequestRegistration server_id=%lld region=0x%016llx version_lock=0x%016llx",
+      static_cast<long long>(serverId), static_cast<unsigned long long>(regionId),
+      static_cast<unsigned long long>(versionLock));
+
   // Get serverdb URI from config. If not explicitly set, construct from
   // nevr_socket_uri + nevr_discord_id + nevr_password (the common config pattern).
   const char* serverDbUri = NevrCfgGetFlat("serverdb_host");
