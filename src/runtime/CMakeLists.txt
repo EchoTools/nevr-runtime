@@ -342,6 +342,12 @@ if(BUILD_TESTING)
     target_link_libraries(test_mic_lifecycle PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_mic_lifecycle DISCOVERY_MODE PRE_TEST)
 
+    add_executable(test_telemetry_snapshot_store tests/test_telemetry_snapshot_store.cpp)
+    set_source_files_properties(tests/test_telemetry_snapshot_store.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_telemetry_snapshot_store PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_telemetry_snapshot_store PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_telemetry_snapshot_store DISCOVERY_MODE PRE_TEST)
+
     # ParseEndpoint unit tests — validates N1 fix (strtoul + errno vs std::stoul throw)
     add_executable(test_parse_endpoint tests/test_parse_endpoint.cpp)
     target_include_directories(test_parse_endpoint PRIVATE

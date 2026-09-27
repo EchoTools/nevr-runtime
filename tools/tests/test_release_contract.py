@@ -12,6 +12,23 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 
 
 class ReleaseContractTest(unittest.TestCase):
+    def test_telemetry_snapshot_lease_covers_header_frame_and_previous_copy(self):
+        header = (REPO / "src/runtime/server/telemetry_streamer.h").read_text()
+        store = (REPO / "src/runtime/server/telemetry_snapshot_store.h").read_text()
+        streamer = (REPO / "src/runtime/server/telemetry_streamer.cpp").read_text()
+        run = streamer.split("void TelemetryStreamer::Run()", 1)[1].split(
+            "// Frame assembly + sending", 1
+        )[0]
+
+        self.assertIn("three-slot snapshot store", header)
+        self.assertIn("kSlotCount = 3", store)
+        self.assertIn("TryAcquireRead(m_lastReadSnapshotSequence, headerRequired)", run)
+        self.assertLess(run.index("SendHeaderWithSnapshot(snapshot)"), run.index("BuildAndSendFrame(snapshot)"))
+        self.assertLess(run.index("BuildAndSendFrame(snapshot)"), run.index("m_prevSnapshot = snapshot"))
+        self.assertIn("m_lastReadSnapshotSequence = lease.sequence()", run)
+        self.assertNotIn("m_snapshotReady", streamer)
+        self.assertNotIn("m_writeIndex", streamer)
+
     def test_new_runtime_gtests_are_built_and_run_by_auth_unit_gate(self):
         justfile = (REPO / "justfile").read_text()
         recipe = justfile.split("test-auth-unit:\n", 1)[1].split("# Run auth integration", 1)[0]
@@ -22,6 +39,8 @@ class ReleaseContractTest(unittest.TestCase):
             "test_url_diagnostics",
             "test_callback_unregistration",
             "test_session_unregister",
+            "test_mic_lifecycle",
+            "test_telemetry_snapshot_store",
         )
         for target in targets:
             self.assertIn(f"--target {target}", recipe)

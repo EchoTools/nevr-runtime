@@ -21,8 +21,6 @@ extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 // ============================================================================
 
 TelemetryStreamer::TelemetryStreamer() {
-  m_snapshots[0].Clear();
-  m_snapshots[1].Clear();
   m_prevSnapshot.Clear();
 }
 
@@ -62,9 +60,7 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
         }
         m_hasConnectedOnce = true;
         m_wsConnected.store(true, std::memory_order_release);
-        if (m_active.load(std::memory_order_relaxed)) {
-          m_needsResendHeader.store(true, std::memory_order_release);
-        }
+        m_headerEpoch.Require();
         break;
       case ix::WebSocketMessageType::Close:
         Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Disconnected from telemetry server (code: %d)",
@@ -92,9 +88,10 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
 }
 
 void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz, bool isPrivateMatch) {
-  if (m_active.load(std::memory_order_relaxed)) {
+  std::lock_guard<std::mutex> lifecycleLock(m_lifecycleMutex);
+  if (m_active.load(std::memory_order_relaxed) || m_thread.joinable()) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.TELEMETRY] Already streaming, stopping previous session");
-    Stop();
+    StopLocked();
   }
 
   m_sessionId = sessionId;
@@ -104,26 +101,49 @@ void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz, boo
   m_sessionStartTime = std::chrono::steady_clock::now();
   m_lastSnapshotTime = m_sessionStartTime;
   m_prevSnapshot.Clear();
+  m_lastReadSnapshotSequence = 0;
   m_droppedFrames = 0;
   m_reconnectCount = 0;
   m_bytesSent = 0;
   m_hasConnectedOnce = false;
-  m_needsResendHeader.store(false, std::memory_order_relaxed);
-  m_snapshotReady.store(false, std::memory_order_relaxed);
   m_stopping.store(false, std::memory_order_relaxed);
 
+  if (!m_snapshotStore.Reset()) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.TELEMETRY] Cannot start while a snapshot lease is still active");
+    return;
+  }
+  m_headerEpoch.Require();
+  m_snapshotStore.Activate();
   m_active.store(true, std::memory_order_release);
-  m_thread = std::thread(&TelemetryStreamer::Run, this);
+  if (!StartTelemetryWorker(
+          [this]() {
+            m_thread = std::thread(&TelemetryStreamer::Run, this);
+            return true;
+          },
+          [this]() {
+            m_active.store(false, std::memory_order_release);
+            m_snapshotStore.DeactivateAndQuiesce();
+            (void)m_snapshotStore.Reset();
+            Log(EchoVR::LogLevel::Error, "[NEVR.TELEMETRY] Failed to create telemetry worker thread");
+          })) {
+    return;
+  }
 
   Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Started streaming session=%s at %uHz", sessionId.c_str(), m_rateHz);
 }
 
 void TelemetryStreamer::Stop() {
-  if (!m_active.load(std::memory_order_relaxed)) return;
+  std::lock_guard<std::mutex> lifecycleLock(m_lifecycleMutex);
+  StopLocked();
+}
+
+void TelemetryStreamer::StopLocked() {
+  if (!m_active.load(std::memory_order_relaxed) && !m_thread.joinable()) return;
 
   Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Stopping telemetry stream");
   m_stopping.store(true, std::memory_order_release);
   m_active.store(false, std::memory_order_release);
+  m_snapshotStore.DeactivateAndQuiesce();
 
   if (m_thread.joinable()) {
     m_thread.join();
@@ -134,9 +154,15 @@ void TelemetryStreamer::Stop() {
     m_ws->disableAutomaticReconnection();
   }
 
+  const uint64_t skippedSnapshots = m_snapshotStore.skippedGenerations();
+  if (!m_snapshotStore.Reset()) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.TELEMETRY] Snapshot store still leased after worker join");
+  }
+
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.TELEMETRY] Stream stopped (sent %u frames, dropped %u, reconnects %u, bytes %llu)",
-      m_frameIndex, m_droppedFrames, m_reconnectCount, (unsigned long long)m_bytesSent);
+      "[NEVR.TELEMETRY] Stream stopped (sent %u frames, network-dropped %u, snapshots-overwritten %llu, reconnects %u, bytes %llu)",
+      m_frameIndex, m_droppedFrames, static_cast<unsigned long long>(skippedSnapshots), m_reconnectCount,
+      (unsigned long long)m_bytesSent);
 }
 
 void TelemetryStreamer::Disconnect() {
@@ -155,26 +181,18 @@ bool TelemetryStreamer::IsConnected() const { return m_wsConnected.load(std::mem
 // ============================================================================
 
 void TelemetryStreamer::SnapshotIfDue() {
-  if (!m_active.load(std::memory_order_relaxed)) return;
+  m_snapshotStore.CaptureIfActive([this](TelemetrySnapshot& snapshot) {
+    if (!m_active.load(std::memory_order_acquire)) return false;
+    const auto now = std::chrono::steady_clock::now();
+    const auto interval = std::chrono::microseconds(1000000 / m_rateHz);
+    if (now - m_lastSnapshotTime < interval) return false;
 
-  auto now = std::chrono::steady_clock::now();
-  auto interval = std::chrono::microseconds(1000000 / m_rateHz);
-  if (now - m_lastSnapshotTime < interval) return;
-
-  m_lastSnapshotTime = now;
-
-  // Write to the current write buffer
-  int writeIdx = m_writeIndex.load(std::memory_order_relaxed);
-  TelemetrySnapshot* snap = &m_snapshots[writeIdx];
-  snap->Clear();
-
-  SnapshotGameState(snap);
-  SnapshotPlayerBones(snap);
-
-  // Swap: toggle write index so telemetry thread reads the one we just wrote
-  int newWriteIdx = 1 - writeIdx;
-  m_writeIndex.store(newWriteIdx, std::memory_order_relaxed);
-  m_snapshotReady.store(true, std::memory_order_release);
+    m_lastSnapshotTime = now;
+    snapshot.Clear();
+    SnapshotGameState(&snapshot);
+    SnapshotPlayerBones(&snapshot);
+    return true;
+  });
 }
 
 void TelemetryStreamer::PushEvent(const TelemetryEvent& event) { m_eventBuffer.Push(event); }
@@ -657,12 +675,12 @@ void TelemetryStreamer::SnapshotPlayerBones(TelemetrySnapshot* snap) {
 void TelemetryStreamer::Run() {
   Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Telemetry thread started");
 
-  // Wait for connection AND first snapshot before sending header with roster
+  // Preserve the startup wait window, but continue polling after timeout. A
+  // late connection must still get a header from a leased published snapshot.
   auto waitStart = std::chrono::steady_clock::now();
   while (m_active.load(std::memory_order_relaxed)) {
-    bool connected = m_wsConnected.load(std::memory_order_acquire);
-    bool hasSnap = m_snapshotReady.load(std::memory_order_acquire);
-    if (connected && hasSnap) break;
+    const bool connected = m_wsConnected.load(std::memory_order_acquire);
+    if (connected && m_snapshotStore.HasPublished()) break;
     if (std::chrono::steady_clock::now() - waitStart > std::chrono::seconds(30)) {
       Log(EchoVR::LogLevel::Warning, "[NEVR.TELEMETRY] Timeout waiting for connection + snapshot");
       break;
@@ -670,46 +688,51 @@ void TelemetryStreamer::Run() {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 
-  if (m_wsConnected.load(std::memory_order_acquire) && m_snapshotReady.load(std::memory_order_acquire)) {
-    m_snapshotReady.store(false, std::memory_order_release);
-    int readIdx = 1 - m_writeIndex.load(std::memory_order_relaxed);
-    const TelemetrySnapshot& firstSnap = m_snapshots[readIdx];
-    SendHeaderWithSnapshot(firstSnap);
-    BuildAndSendFrame(firstSnap);
-    m_prevSnapshot = firstSnap;
-  }
-
   auto frameInterval = std::chrono::microseconds(1000000 / m_rateHz);
 
   while (m_active.load(std::memory_order_acquire)) {
     auto frameStart = std::chrono::steady_clock::now();
+    if (m_wsConnected.load(std::memory_order_acquire) && m_ws != nullptr) {
+      const bool headerRequired = m_headerEpoch.Required();
+      auto lease = m_snapshotStore.TryAcquireRead(m_lastReadSnapshotSequence, headerRequired);
+      if (lease) {
+        const TelemetrySnapshot& snapshot = lease.snapshot();
+        bool maySendFrame = true;
 
-    // Check if a new snapshot is ready
-    if (m_snapshotReady.exchange(false, std::memory_order_acquire)) {
-      // Read from the buffer the game thread is NOT writing to
-      int readIdx = 1 - m_writeIndex.load(std::memory_order_relaxed);
-      const TelemetrySnapshot& snap = m_snapshots[readIdx];
-
-      if (m_wsConnected.load(std::memory_order_relaxed)) {
-        if (m_needsResendHeader.exchange(false, std::memory_order_acq_rel)) {
-          Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Re-sending header after reconnect");
-          SendHeader();
-        }
-
-        size_t buffered = m_ws->bufferedAmount();
-        if (buffered > kMaxWsBufferBytes) {
-          m_droppedFrames++;
-          if (m_droppedFrames % 100 == 1) {
-            Log(EchoVR::LogLevel::Warning,
-                "[NEVR.TELEMETRY] Backpressure: dropped %u frames (buffer=%zu bytes)",
-                m_droppedFrames, buffered);
+        if (headerRequired) {
+          const uint64_t headerEpoch = m_headerEpoch.Current();
+          if (!SendHeaderWithSnapshot(snapshot) || !m_headerEpoch.MarkSent(headerEpoch)) {
+            maySendFrame = false;
+          } else {
+            Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Sent required header for epoch %llu",
+                static_cast<unsigned long long>(headerEpoch));
           }
-        } else {
-          BuildAndSendFrame(snap);
         }
-      }
 
-      m_prevSnapshot = snap;
+        // A reconnect callback can require a new header while this snapshot
+        // is being serialized. Defer its frame so the new epoch gets a header
+        // first on the next pass.
+        if (maySendFrame && m_headerEpoch.Required()) maySendFrame = false;
+
+        if (maySendFrame) {
+          const size_t buffered = m_ws->bufferedAmount();
+          if (buffered > kMaxWsBufferBytes) {
+            ++m_droppedFrames;
+            if (m_droppedFrames % 100 == 1) {
+              Log(EchoVR::LogLevel::Warning,
+                  "[NEVR.TELEMETRY] Backpressure: network-dropped %u frames (buffer=%zu bytes)",
+                  m_droppedFrames, buffered);
+            }
+          } else {
+            BuildAndSendFrame(snapshot);
+          }
+        }
+
+        // Keep the reader lease alive through both serialization/send work and
+        // this copy; release occurs when `lease` leaves scope.
+        m_prevSnapshot = snapshot;
+        m_lastReadSnapshotSequence = lease.sequence();
+      }
     }
 
     // Sleep until next frame interval
@@ -1042,8 +1065,8 @@ void TelemetryStreamer::DetectEvents(const TelemetrySnapshot& curr, const Teleme
   }
 }
 
-void TelemetryStreamer::SendEnvelope(const std::string& serialized) {
-  if (!m_ws || !m_wsConnected.load(std::memory_order_relaxed)) return;
+bool TelemetryStreamer::SendEnvelope(const std::string& serialized) {
+  if (!m_ws || !m_wsConnected.load(std::memory_order_relaxed)) return false;
 
   // Wire format: [4-byte length LE][serialized protobuf]
   uint32_t len = static_cast<uint32_t>(serialized.size());
@@ -1054,37 +1077,14 @@ void TelemetryStreamer::SendEnvelope(const std::string& serialized) {
   auto info = m_ws->send(wire, true);  // binary=true
   if (info.success) {
     m_bytesSent += info.wireSize;
+    return true;
   } else {
     Log(EchoVR::LogLevel::Warning, "[NEVR.TELEMETRY] Send failed (payload=%zu)", info.payloadSize);
+    return false;
   }
 }
 
-void TelemetryStreamer::SendHeader() {
-  telemetry::v2::Envelope envelope;
-  auto* header = envelope.mutable_header();
-
-  header->set_capture_id(m_sessionId);
-  header->set_format_version(2);
-
-  auto* ts = header->mutable_created_at();
-  auto now = std::chrono::system_clock::now();
-  auto secs = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch());
-  auto nanos =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()) - std::chrono::duration_cast<std::chrono::nanoseconds>(secs);
-  ts->set_seconds(secs.count());
-  ts->set_nanos(static_cast<int32_t>(nanos.count()));
-
-  auto* arenaHeader = header->mutable_echo_arena();
-  arenaHeader->set_session_id(m_sessionId);
-
-  std::string serialized;
-  if (envelope.SerializeToString(&serialized)) {
-    SendEnvelope(serialized);
-    Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Sent CaptureHeader (%zu bytes)", serialized.size());
-  }
-}
-
-void TelemetryStreamer::SendHeaderWithSnapshot(const TelemetrySnapshot& snap) {
+bool TelemetryStreamer::SendHeaderWithSnapshot(const TelemetrySnapshot& snap) {
   telemetry::v2::Envelope envelope;
   auto* header = envelope.mutable_header();
 
@@ -1129,10 +1129,15 @@ void TelemetryStreamer::SendHeaderWithSnapshot(const TelemetrySnapshot& snap) {
 
   std::string serialized;
   if (envelope.SerializeToString(&serialized)) {
-    SendEnvelope(serialized);
-    Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Sent CaptureHeader with roster (%zu bytes, %u players)",
-        serialized.size(), snap.playerCount);
+    const bool sent = SendEnvelope(serialized);
+    if (sent) {
+      Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Sent CaptureHeader with roster (%zu bytes, %u players)",
+          serialized.size(), snap.playerCount);
+    }
+    return sent;
   }
+  Log(EchoVR::LogLevel::Error, "[NEVR.TELEMETRY] Failed to serialize CaptureHeader with roster");
+  return false;
 }
 
 void TelemetryStreamer::SendFooter() {
