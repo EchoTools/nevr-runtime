@@ -41,6 +41,7 @@ set(PATCHES_SOURCES
     "server/gameserver.cpp"
     "server/messages.cpp"
     "server/server_context.cpp"
+    "server/url_diagnostics.cpp"
     "server/websocket_client.cpp"
     "server/telemetry_streamer.cpp"
     "server/upnp.cpp"
@@ -87,6 +88,7 @@ set(PATCHES_HEADERS
     "server/gameserver.h"
     "server/server_context.h"
     "server/websocket_client.h"
+    "server/url_diagnostics.h"
     "server/telemetry_streamer.h"
     "server/messages.h"
     "server/upnp.h"
@@ -138,7 +140,7 @@ set_source_files_properties(lifecycle/service_map.cpp lifecycle/service_config.c
 # no windows.h. Same reason as service_map.cpp: it must stay PCH-agnostic (defines
 # NOMINMAX before nlohmann, which pulls <limits>) so the test links it standalone.
 set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-set_source_files_properties(server/websocket_client.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(server/websocket_client.cpp server/url_diagnostics.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 set_target_properties(nevr_runtime PROPERTIES
   OUTPUT_NAME "BugSplat64"
@@ -283,6 +285,17 @@ if(BUILD_TESTING)
     target_link_libraries(test_plugin_load_plan PRIVATE
       GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_plugin_load_plan DISCOVERY_MODE PRE_TEST)
+
+    # URL diagnostics redaction tests compile the production helper directly so
+    # malformed and credential-bearing inputs are checked without service calls.
+    add_executable(test_url_diagnostics
+      tests/test_url_diagnostics.cpp
+      server/url_diagnostics.cpp)
+    set_source_files_properties(tests/test_url_diagnostics.cpp server/url_diagnostics.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_url_diagnostics PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_url_diagnostics PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
+    gtest_discover_tests(test_url_diagnostics DISCOVERY_MODE PRE_TEST)
 
     # Behavioral tests — N68 (plugin/module tick dispatch) + N61 (callback
     # lifecycle). Links plugin_loader.cpp, module_loader.cpp, and ws_bridge.cpp
