@@ -41,7 +41,7 @@ there may be another client-only flag collision in the same family
 (windowed/no-VR/spectator-stream) not yet found.
 
 **Confirmed NOT the cause: our own bootstrap.** `"[NEVR.BOOT] runtime
-bootstrap complete early_config=1 bridge=1 port=..."` fires every time,
+bootstrap complete early_config=true bridge=true port=..."` fires every time,
 reliably. `ws_bridge`, config loading, plugin loading — all fine. The
 blocker is 100% inside the native engine's own progression, after our
 injected code has finished its job.

@@ -14,8 +14,9 @@
 #           "broken": it means this run did not test it. Most IDs are ABSENT in
 #           any single run, by design.
 #
-# EVERY pass-regex below was verified against real captured output, not copied
-# out of a source format string. Those two drift: the logs in
+# EVERY pass-regex below was verified against real captured output or a
+# synthetic test for a newly renamed current-format marker, not copied out of a
+# source format string. Those two drift: the logs in
 # /var/tmp/work-nevr-runtime/server-runs/ still say "wave0 installing bug fix
 # hooks" while current source says "installing binary bug fix hooks" (renamed in
 # N113). Signals taken from source alone score ABSENT against a real run and
@@ -37,7 +38,7 @@
 # LoadLibraryExW, all MH_ERROR_ALREADY_CREATED (NEVR-internal double-hooks, N128,
 # empirically harmless). Those are baseline. S44 fails only when a hook fails for a
 # REAL reason (prologue can't relocate, memory, target missing) — a genuine
-# regression the collisions must not mask. It keys on the reason= code from N128,
+# regression the collisions must not mask. It keys on the reason= or status= code from N128,
 # which is exactly why capturing MH_STATUS was worth doing.
 #
 # Never pipe the game's live output into this script. Capture to a file, then
@@ -75,7 +76,7 @@ fi
 read -r -d '' TABLE <<'EOF'
 B01@@boot@@MinHook initialised@@minhook initialized@@
 B02@@boot@@Game function pointers resolved@@function pointers resolved@@
-B03@@boot@@Hook install sequence completed@@\[NEVR\.PATCH\] All hooks installed@@\[NEVR\.FATAL\]
+B03@@boot@@Boot hook result reported@@\[NEVR\.PATCH\] boot hooks installed ok=[Tt][Rr][Uu][Ee]@@\[NEVR\.PATCH\] boot hooks installed ok=[Ff][Aa][Ll][Ss][Ee]
 B04@@boot@@Every hook installed, none failed@@hooks installed: [0-9]+ succeeded, 0 failed@@hooks installed: [0-9]+ succeeded, [1-9][0-9]* failed
 B05@@boot@@Boot log tee opened (nevr-boot.jsonl)@@boot log opened run=@@
 B06@@boot@@Built-in log filter installed@@log filter installed@@
@@ -114,13 +115,13 @@ S11@@server@@Per-frame tick dispatching (N111)@@per-frame tick ALIVE@@
 S12@@server@@Tick host identity correct: server (N110)@@per-frame tick ALIVE.*host=server@@per-frame tick ALIVE.*host=client
 S13@@server@@Hook liveness self-report emitted@@hook_liveness name=@@
 S14@@server@@pnsrad log output hooked and filtered@@hooked name=pnsrad!CLog::PrintfImpl@@hook failed name=pnsrad!CLog::PrintfImpl
-S15@@server@@Service endpoints redirected from config@@Service redirect \[@@
+S15@@server@@Service endpoints redirected from config@@\[NEVR\.PATCH\] service redirect key=@@
 S16@@server@@WebSocket bridge listening@@\[NEVR\.WS\] Proxy listening on@@no nevr_socket_uri in early config
 S17@@server@@Game connected through the bridge@@\[NEVR\.WS\] Proxy: game connected@@
 S18@@server@@Login request injected@@\[NEVR\.WS\] login injected xpid=@@
 S19@@server@@Our login prefix is DSC (NOT the game patch)@@login injected xpid=DSC@@login injected xpid=(PSN|UNK)
 S42@@server@@Game provider strings rewritten to DSC (XPID)@@\[NEVR\.XPID\] DSC provider patch applied at 5 sites@@\[NEVR\.XPID\] validation FAILED
-S20@@server@@Service accepted the login@@\[NEVR\.WS\] LOGIN SUCCESS@@\[NEVR\.WS\] LOGIN FAILURE
+S20@@server@@Service accepted the login@@\[NEVR\.WS\] LOGIN SUCCESS@@\[NEVR\.WS\] login failed status=
 S21@@server@@GameServer initialised@@\[NEVR\.GAMESERVER\] Initialized game server@@
 S22@@server@@IServerLib resolved in-process@@serverlib symbol resolved@@
 S23@@server@@ServerDB registration requested@@Requested game server registration@@Failed to initiate WebSocket connection
@@ -132,7 +133,7 @@ S28@@server@@CDN tints loaded into memory@@\[NEVR\.CDN\] Fetch complete: .*[1-9]
 S29@@server@@UPnP port mapping added@@\[NEVR\.UPNP\] Port mapping added:@@\[NEVR\.UPNP\] No UPnP devices found|AddPortMapping failed|No valid IGD
 S30@@server@@Telemetry stream connected@@\[NEVR\.TELEMETRY\] Connected to telemetry server@@\[NEVR\.TELEMETRY\] Connection error
 S43@@server@@Telemetry state is stated either way@@Connected to telemetry server|telemetry disabled@@
-S44@@server@@No hook failed for a real (non-collision) reason@@\[NEVR\.PATCH\] All hooks installed@@reason=MH_ERROR_(UNSUPPORTED_FUNCTION|NOT_EXECUTABLE|MEMORY_ALLOC|MODULE_NOT_FOUND|FUNCTION_NOT_FOUND|UNABLE_TO_UNINSTALL|UNKNOWN)
+S44@@server@@No hook failed for a real (non-collision) reason@@\[NEVR\.PATCH\] boot hooks installed ok=[Tt][Rr][Uu][Ee]@@(reason|status)=MH_ERROR_(UNSUPPORTED_FUNCTION|NOT_EXECUTABLE|MEMORY_ALLOC|MODULE_NOT_FOUND|FUNCTION_NOT_FOUND|UNABLE_TO_UNINSTALL|UNKNOWN)
 S31@@server@@Shutdown signal handlers installed@@POSIX signal handlers installed|console ctrl handler installed@@SetConsoleCtrlHandler FAILED|Failed to register SIG
 S32@@server@@Ctrl handler re-armed to front of chain@@console ctrl handler re-armed to front of chain@@
 S33@@server@@Shutdown deps pre-resolved (no loader lock)@@shutdown deps resolved@@
@@ -189,7 +190,7 @@ while IFS= read -r row; do
 
   # FAIL takes precedence over PASS: an explicit failure signal must override a
   # success signal in the same log, not be masked by it. This matters for negative
-  # guards like S44 whose pass-regex ("All hooks installed") is present on EVERY
+  # guards like S44 whose pass-regex (the boot-hook success marker) is present on EVERY
   # healthy boot — pass-first would let it hide a real hook failure. Safe for all
   # existing rows: on a healthy run no fail-regex matches (the 66-PASS baseline),
   # so the outcome is unchanged; it only flips genuinely-failed runs, where FAIL is

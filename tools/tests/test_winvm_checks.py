@@ -83,6 +83,67 @@ class HooksTest(unittest.TestCase):
         self.assertEqual(by_name(checks.check_hooks("nothing useful\n"), "hooks_installed")[0].status,
                          checks.FAIL)
 
+    def test_current_boot_hook_marker_accepts_boolean_case_variants(self):
+        results = checks.check_hooks("[NEVR.PATCH] boot hooks installed ok=TrUe\n")
+        self.assertEqual(by_name(results, "hooks_installed")[0].status, checks.PASS)
+
+    def test_boot_hook_false_missing_and_malformed_values_fail(self):
+        cases = (
+            "[NEVR.PATCH] boot hooks installed ok=false\n",
+            "[NEVR.PATCH] All other boot work completed\n",
+            "[NEVR.PATCH] boot hooks installed ok=maybe\n",
+            "[NEVR.PATCH] boot hooks installed\n",
+        )
+        for log in cases:
+            with self.subTest(log=log):
+                self.assertEqual(
+                    by_name(checks.check_hooks(log), "hooks_installed")[0].status,
+                    checks.FAIL,
+                )
+
+    def test_explicit_false_wins_over_true_boot_hook_marker(self):
+        log = ("[NEVR.PATCH] boot hooks installed ok=true\n"
+               "[NEVR.PATCH] boot hooks installed ok=FALSE\n")
+        self.assertEqual(
+            by_name(checks.check_hooks(log), "hooks_installed")[0].status,
+            checks.FAIL,
+        )
+
+    def test_exact_known_hook_reasons_accept_reason_and_status_forms_in_headless_mode(self):
+        log = ("[NEVR.HEADLESS] engine flags 0x1 -> 0x0 (bit0_render=CLEAR(HEADLESS))\n"
+               "[NEVR.PATCH] hook FAILED name=LoadLibraryW target=0x1 reason=MH_ERROR_ALREADY_CREATED\n"
+               "[NEVR.PATCH] hook failed name=LoadLibraryExW target=0x2 status=MH_ERROR_ALREADY_CREATED\n"
+               "[NEVR.PATCH] boot hooks installed ok=true\n")
+        results = checks.check_hooks(log)
+        self.assertEqual(by_name(results, "no_unexpected_hook_failure")[0].status, checks.PASS)
+        self.assertEqual(
+            {result.detail.split(": ", 1)[0] for result in by_name(results, "known_hook_failure")},
+            {"LoadLibraryW", "LoadLibraryExW"},
+        )
+
+    def test_unknown_or_mismatched_hook_failure_is_not_benign(self):
+        cases = (
+            "[NEVR.PATCH] hook FAILED name=NewHook reason=MH_ERROR_ALREADY_CREATED\n",
+            "[NEVR.PATCH] hook failed name=LoadLibraryW status=MH_ERROR_UNSUPPORTED_FUNCTION\n",
+            "[NEVR.PATCH] hook FAILED name=LoadLibraryW reason=MH_ERROR_ALREADY_CREATED\n",
+        )
+        for failure in cases:
+            log = "[NEVR.PATCH] boot hooks installed ok=true\n" + failure
+            with self.subTest(failure=failure):
+                results = checks.check_hooks(log)
+                self.assertEqual(
+                    by_name(results, "no_unexpected_hook_failure")[0].status,
+                    checks.FAIL,
+                )
+
+    def test_boot_success_does_not_mask_unexpected_hook_failure(self):
+        log = ("[NEVR.PATCH] boot hooks installed ok=true\n"
+               "[NEVR.PATCH] hook FAILED name=NewHook target=0x1 status=MH_ERROR_ALREADY_CREATED\n")
+        results = checks.check_hooks(log)
+        self.assertEqual(by_name(results, "hooks_installed")[0].status, checks.PASS)
+        self.assertEqual(by_name(results, "no_unexpected_hook_failure")[0].status, checks.FAIL)
+        self.assertFalse(checks.overall(results))
+
 
 class EngineProgressTest(unittest.TestCase):
     def test_healthy_boot_reaches_the_broadcaster(self):
@@ -184,6 +245,12 @@ class NakamaLoginTest(unittest.TestCase):
 
     def test_other_account_does_not_count(self):
         self.assertEqual(checks.check_nakama_login(self.OK, "43").status, checks.FAIL)
+
+    def test_unrelated_session_login_success_does_not_satisfy_gate(self):
+        other_session_success = self.SUCCESS.replace('"sid":"a"', '"sid":"unrelated"')
+        result = checks.check_nakama_login(self.OK + "\n" + other_session_success, "42")
+        self.assertEqual(result.status, checks.FAIL)
+        self.assertIn("never answered LoginSuccess", result.detail)
 
     def test_auth_warning_fails(self):
         self.assertEqual(checks.check_nakama_login(self.OK + "\n" + self.BAD, "42").status, checks.FAIL)
