@@ -119,9 +119,13 @@ bool DeviceAuth::TryLoadCachedToken() {
             m_userId = auth.user_id;
             m_username = auth.username;
             m_discordId = auth.GetDiscordId();
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.AUTH] token refresh succeeded during cache load, expires_in=%llus",
+                (unsigned long long)(auth.token_expiry - static_cast<uint64_t>(time(nullptr))));
             return true;
         }
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Token refresh failed -- will re-authenticate");
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.AUTH] token refresh failed during cache load, falling back to full device-code re-authentication");
     } else if (!auth.refresh_token.empty()) {
         Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Both tokens expired -- will re-authenticate");
     } else {
@@ -155,7 +159,8 @@ bool DeviceAuth::SaveToken() {
     auth.username = m_username;
 
     if (!SaveAuthToken(auth)) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Failed to write .credentials.json");
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.AUTH] failed to write .credentials.json — refresh token not persisted, next launch will require full re-authentication");
         return false;
     }
 
@@ -210,7 +215,8 @@ std::string DeviceAuth::RequestDeviceCode() {
     try {
         auto j = nlohmann::json::parse(response);
         return j.value("code", "");
-    } catch (const nlohmann::json::exception&) {
+    } catch (const nlohmann::json::exception& e) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] device code request: malformed JSON response: %s", e.what());
         return "";
     }
 }
@@ -309,6 +315,9 @@ void DeviceAuth::DisplayLinkingCode(const std::string& code) {
     Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] |   Code expires in 5 minutes.             |");
     Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] +------------------------------------------+");
     Log(EchoVR::LogLevel::Info, "[NEVR.AUTH]");
+    // MD1: structured line for log tooling — the box above is human-facing UX
+    // and stays exactly as it is (visual formatting untouched).
+    Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] device code issued code=%s expires_in=300s", code.c_str());
 }
 
 bool DeviceAuth::RunDeviceAuthFlow() {
@@ -319,7 +328,7 @@ bool DeviceAuth::RunDeviceAuthFlow() {
 
     std::string code = RequestDeviceCode();
     if (code.empty()) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Failed to request device auth code");
+        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] device code request failed, cannot start device-auth flow");
         return false;
     }
 
@@ -344,7 +353,8 @@ bool DeviceAuth::RunDeviceAuthFlow() {
 
         std::string status = PollDeviceCode(code);
         if (status == "verified") {
-            Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Device authorized! Signed in successfully.");
+            Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] device authorized user=%s discord_id=%llu",
+                m_username.c_str(), (unsigned long long)m_discordId);
             SaveToken();
             return true;
         }
@@ -353,7 +363,10 @@ bool DeviceAuth::RunDeviceAuthFlow() {
             return false;
         }
         if (status == "error") {
-            Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Error polling device code");
+            // MD2: this aborts the entire 5-minute attempt immediately on the
+            // very first error status — no retry happens. Message states that
+            // plainly instead of implying an ongoing/retried poll.
+            Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] polling aborted after single error (no retry)");
             return false;
         }
         if (i % 10 == 9) {
@@ -435,6 +448,12 @@ static bool ShouldRefreshAccessToken(const DeviceAuth& auth, uint64_t now) {
 }
 
 static void RefreshThreadFunc(std::string url, std::string httpKey) {
+    // Distinguishes a first refresh failure from a sustained one in the Warning
+    // below, without a full escalation framework — reset on every success. A
+    // plain local (not `static`) is correct here: this function IS the thread
+    // body, so a fresh call (fresh thread start) already starts the streak at 0.
+    int consecutiveFailures = 0;
+
     while (s_refreshRunning) {
         // Sleep 60 seconds between checks
         for (int i = 0; i < 60 && s_refreshRunning; i++) {
@@ -478,8 +497,12 @@ static void RefreshThreadFunc(std::string url, std::string httpKey) {
                 // Update the in-memory DeviceAuth instance so GetToken/GetDiscordId
                 // return the new token immediately (they no longer read from disk).
                 s_auth->UpdateFromRefresh(cached);
+                consecutiveFailures = 0;
             } else {
-                Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Token refresh failed");
+                consecutiveFailures++;
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.AUTH] token refresh failed (%d consecutive attempt%s) — will retry in 60s",
+                    consecutiveFailures, consecutiveFailures == 1 ? "" : "s");
             }
         }
     }
@@ -590,9 +613,11 @@ void TokenAuth::Init(uintptr_t /*base_addr*/, bool is_server) {
         // No cached credentials — run device auth now, before game connections start.
         s_authAttempted = true;
         Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] No cached credentials — starting device code auth...");
-        if (s_auth->RunDeviceAuthFlow()) {
-            Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Authenticated via Discord");
-        } else {
+        // No success log here — RunDeviceAuthFlow's own "device authorized"
+        // line (fired at the actual moment of verification) already covers it;
+        // nothing meaningful happens between that and here except SaveToken(),
+        // which has its own log lines.
+        if (!s_auth->RunDeviceAuthFlow()) {
             Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Authentication failed -- social features may be limited");
         }
     }
@@ -605,6 +630,11 @@ void TokenAuth::Init(uintptr_t /*base_addr*/, bool is_server) {
 }
 
 void TokenAuth::Shutdown() {
+    // On a server, s_auth is never created (early return in Init above), so
+    // this is a structurally-guaranteed no-op there — say so instead of
+    // logging the same "complete" line regardless of whether anything ran.
+    const bool wasActive = (s_auth != nullptr);
+
     s_refreshRunning = false;
     if (s_refreshThread) {
         s_refreshThread->join();
@@ -617,7 +647,12 @@ void TokenAuth::Shutdown() {
         s_auth = nullptr;
     }
     s_authAttempted = false;
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Shutdown complete");
+    if (wasActive) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] shutdown complete (was active: refresh thread stopped)");
+    } else {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.AUTH] shutdown complete (was inactive — token auth was disabled or never authenticated)");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -642,7 +677,13 @@ NEVR_MODULE_API int token_auth_Init(const NvrModuleContext* ctx) {
     bool is_server = (ctx->flags & NEVR_MODULE_HOST_IS_SERVER) != 0;
     TokenAuth::Init(ctx->base_addr, is_server);
 
-    Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] token_auth initialized");
+    // Carry the real outcome, matching the richer sibling pattern in
+    // platform_compat_Init (tls=%s createdir=%s winhttp=%s). Servers skip
+    // token auth entirely (early return in TokenAuth::Init), hence "n/a".
+    const bool authOk = !TokenAuth::GetToken().empty();
+    Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] token_auth initialized mode=%s auth=%s",
+        is_server ? "server" : "client",
+        is_server ? "n/a" : (authOk ? "ok" : "failed"));
     return 0;
 }
 
