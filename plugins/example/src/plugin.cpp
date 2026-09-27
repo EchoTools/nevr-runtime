@@ -238,6 +238,32 @@ static nevr::HookManager  g_hooks;
  *     registers across the detour call, but the detour signature must
  *     match or the compiler will read arguments from the wrong place.
  */
+/*
+ * Decode a NvrPluginCapabilities bitmask into a human-readable "|"-joined
+ * name list (e.g. "OBSERVES_ONLY|NETWORK"), for logging neighbour plugins'
+ * declared capabilities without making the reader cross-reference the
+ * bit values against plugin_interface.h by hand.
+ */
+static std::string DescribeCapabilities(uint32_t caps)
+{
+    if (caps == NEVR_PLUGIN_CAP_UNDECLARED) return "UNDECLARED";
+
+    std::string out;
+    auto add = [&](uint32_t bit, const char* name) {
+        if (caps & bit) {
+            if (!out.empty()) out += "|";
+            out += name;
+        }
+    };
+    add(NEVR_PLUGIN_CAP_OBSERVES_ONLY,   "OBSERVES_ONLY");
+    add(NEVR_PLUGIN_CAP_COSMETIC,        "COSMETIC");
+    add(NEVR_PLUGIN_CAP_ALTERS_GAMEPLAY, "ALTERS_GAMEPLAY");
+    add(NEVR_PLUGIN_CAP_ALTERS_RULES,    "ALTERS_RULES");
+    add(NEVR_PLUGIN_CAP_NETWORK,         "NETWORK");
+    add(NEVR_PLUGIN_CAP_HOOKS_ENGINE,    "HOOKS_ENGINE");
+    return out.empty() ? "UNDECLARED" : out;
+}
+
 static uint64_t __fastcall Detour_Hash(const char* str, uint64_t seed)
 {
     static int callCount = 0;
@@ -250,10 +276,15 @@ static uint64_t __fastcall Detour_Hash(const char* str, uint64_t seed)
      */
     if (callCount < kMaxHookLogLines) {
         ++callCount;
-        PluginLog("hook: CMatSym::Hash called (call #%d) str=%.40s seed=0x%llx",
+        PluginLog("hook: CMatSym::Hash called (call #%d/%d) str=%.40s seed=0x%llx",
                   callCount,
+                  kMaxHookLogLines,
                   (str != nullptr) ? str : "(null)",
                   static_cast<unsigned long long>(seed));
+        if (callCount == kMaxHookLogLines) {
+            PluginLog("hook: CMatSym::Hash logging cap reached (%d calls) — further calls silent",
+                      kMaxHookLogLines);
+        }
     }
 
     /*
@@ -492,11 +523,12 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
         for (int i = 0; i < count; i++) {
             const NvrLoadedPluginInfo* other = ctx->get_plugin_info(i);
             if (other) {
-                PluginLog("initex: neighbour[%d]: %s v%u.%u.%u caps=0x%02X",
+                PluginLog("initex: neighbour[%d]: %s v%u.%u.%u caps=0x%02X (%s)",
                           i, other->name,
                           other->version_major, other->version_minor,
                           other->version_patch,
-                          other->capabilities);
+                          other->capabilities,
+                          DescribeCapabilities(other->capabilities).c_str());
             }
         }
     } else {
@@ -539,8 +571,7 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
          * host or a pre-v4 host that exported InitEx via GetProcAddress
          * but passed null. Handle it gracefully.
          */
-        PluginLog("initex: no args_json (host passed null —"
-                  " pre-v4 host or bug)");
+        PluginLog("initex: host violated v4 contract — args_json is null, expected \"{}\"");
     }
 
     /*
@@ -607,13 +638,15 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
      * non-standard host (test harness, manual LoadLibrary).
      */
     if (ctx == nullptr) {
-        PluginLog("init: context is null");
+        PluginLog("init: *** context is null — violates host contract (ctx guaranteed non-null); plugin cannot initialize ***");
         return -1;
     }
 
-    PluginLog("init: base=0x%llx flags=0x%x game_state=%u",
+    PluginLog("init: base=0x%llx is_server=%s is_headless=%s has_netgame=%s game_state=%u",
               static_cast<unsigned long long>(ctx->base_addr),
-              static_cast<unsigned int>(ctx->flags),
+              (ctx->flags & NEVR_HOST_IS_SERVER)   ? "true" : "false",
+              (ctx->flags & NEVR_HOST_IS_HEADLESS) ? "true" : "false",
+              (ctx->flags & NEVR_HOST_HAS_NETGAME) ? "true" : "false",
               static_cast<unsigned int>(ctx->game_state));
 
     /*
@@ -677,8 +710,9 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
      */
     void* target = nevr::ResolveVA_Checked(ctx->base_addr, kHookTargetVA);
     if (target == nullptr) {
-        PluginLog("hook: VA 0x%llx not valid in this process —"
-                  " no game binary loaded, or VA out of range;"
+        PluginLog("hook: VA 0x%llx not valid in this process"
+                  " (cannot tell from here whether no game binary is loaded,"
+                  " or this VA is outside the loaded image);"
                   " plugin continues without this hook",
                   static_cast<unsigned long long>(kHookTargetVA));
         return 0; /* NOT an error: plugin works without the game */
@@ -690,10 +724,18 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
      * version or build — installing a hook at the wrong location would
      * corrupt the process. Skip the hook instead.
      */
+    const uint8_t* actualBytes = static_cast<const uint8_t*>(target);
     if (!nevr::ValidatePrologue(target, kPrologue, sizeof(kPrologue))) {
-        PluginLog("hook: prologue mismatch at 0x%llx —"
+        PluginLog("hook: prologue mismatch at 0x%llx expected=%02x%02x%02x%02x%02x%02x"
+                  " actual=%02x%02x%02x%02x%02x%02x —"
                   " wrong game version? skipping this hook",
-                  static_cast<unsigned long long>(kHookTargetVA));
+                  static_cast<unsigned long long>(kHookTargetVA),
+                  static_cast<unsigned int>(kPrologue[0]), static_cast<unsigned int>(kPrologue[1]),
+                  static_cast<unsigned int>(kPrologue[2]), static_cast<unsigned int>(kPrologue[3]),
+                  static_cast<unsigned int>(kPrologue[4]), static_cast<unsigned int>(kPrologue[5]),
+                  static_cast<unsigned int>(actualBytes[0]), static_cast<unsigned int>(actualBytes[1]),
+                  static_cast<unsigned int>(actualBytes[2]), static_cast<unsigned int>(actualBytes[3]),
+                  static_cast<unsigned int>(actualBytes[4]), static_cast<unsigned int>(actualBytes[5]));
         return 0;
     }
 
@@ -714,7 +756,8 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
         reinterpret_cast<void**>(&g_original_hash));
 
     if (s != MH_OK) {
-        PluginLog("hook: CreateAndEnable failed: %s",
+        PluginLog("hook: CreateAndEnable failed for CMatSym::Hash @ 0x%llx: %s",
+                  static_cast<unsigned long long>(kHookTargetVA),
                   MH_StatusToString(s));
         return -1;
     }
@@ -866,7 +909,7 @@ NEVR_PLUGIN_API void NvrPluginOnGameStateChange(const NvrGameContext* ctx,
  */
 NEVR_PLUGIN_API void NvrPluginShutdown(void)
 {
-    PluginLog("shutdown: removing %zu hooks", g_hooks.count());
+    size_t nHooks = g_hooks.count();
     g_hooks.RemoveAll();
-    PluginLog("shutdown: complete");
+    PluginLog("shutdown: removed %zu hooks", nHooks);
 }

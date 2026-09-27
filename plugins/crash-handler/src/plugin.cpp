@@ -61,11 +61,11 @@ static BOOL WINAPI HookCreateProcessA(LPCSTR lpApp, LPSTR lpCmd,
     BOOL bInherit, DWORD dwFlags, LPVOID lpEnv, LPCSTR lpDir,
     LPSTARTUPINFOA lpSI, LPPROCESS_INFORMATION lpPI) {
     if (lpApp && strstr(lpApp, "BsSndRpt")) {
-        PluginLog("blocked crash reporter (A): %s", lpApp);
+        PluginLog("blocked crash reporter (A): %s — reporter prevented, game will take clean-failure path", lpApp);
         return FALSE;
     }
     if (lpCmd && strstr(lpCmd, "BsSndRpt")) {
-        PluginLog("blocked crash reporter (cmdline A): %s", lpCmd);
+        PluginLog("blocked crash reporter (cmdline A): %s — reporter prevented, game will take clean-failure path", lpCmd);
         return FALSE;
     }
     return OrigCreateProcessA(lpApp, lpCmd, lpProcAttr, lpThreadAttr,
@@ -86,7 +86,7 @@ static BOOL WINAPI HookCreateProcessW(LPCWSTR lpApp, LPWSTR lpCmd,
     BOOL bInherit, DWORD dwFlags, LPVOID lpEnv, LPCWSTR lpDir,
     LPSTARTUPINFOW lpSI, LPPROCESS_INFORMATION lpPI) {
     if (lpApp && wcsstr(lpApp, L"BsSndRpt")) {
-        PluginLog("blocked crash reporter (W): reporter prevented, game will take clean-failure path");
+        PluginLog("blocked crash reporter (W): %ls — reporter prevented, game will take clean-failure path", lpApp);
         g_crashReporterSuppressed = true;
         // Return FALSE — the game's crash handler has a working "reporter failed
         // to launch" path that skips WaitForSingleObject/CloseHandle on pi.
@@ -96,7 +96,7 @@ static BOOL WINAPI HookCreateProcessW(LPCWSTR lpApp, LPWSTR lpCmd,
         return FALSE;
     }
     if (lpCmd && wcsstr(lpCmd, L"BsSndRpt")) {
-        PluginLog("blocked crash reporter (cmdline W): reporter prevented, game will take clean-failure path");
+        PluginLog("blocked crash reporter (cmdline W): %ls — reporter prevented, game will take clean-failure path", lpCmd);
         g_crashReporterSuppressed = true;
         return FALSE;
     }
@@ -116,8 +116,8 @@ static VOID WINAPI HookExitProcess(UINT uExitCode) {
         static volatile LONG exitSuppressCount = 0;
         LONG count = InterlockedIncrement(&exitSuppressCount);
         if (count <= 5) {
-            PluginLog("ExitProcess(%u) suppressed in server mode (call #%ld)",
-                uExitCode, count);
+            PluginLog("ExitProcess(%u) suppressed in server mode (call #%ld)%s",
+                uExitCode, count, count == 5 ? " — further suppressions will not be logged" : "");
         }
         g_justSuppressedCrash = true;
         return;
@@ -292,15 +292,15 @@ static LONG WINAPI CrashVEH(PEXCEPTION_POINTERS pEx) {
 static bool InstallKernelHook(HMODULE hK32, const char* name, void* hook, void** orig) {
     void* target = (void*)GetProcAddress(hK32, name);
     if (!target) {
-        PluginLog("WARN: %s not found in kernel32", name);
+        PluginLog("hook target not found: %s (kernel32.dll)", name);
         return false;
     }
     MH_STATUS s = g_hooks.CreateAndEnable(target, hook, orig);
     if (s != MH_OK) {
-        PluginLog("WARN: hook failed for %s: %d", name, s);
+        PluginLog("hook failed for %s: %s", name, MH_StatusToString(s));
         return false;
     }
-    PluginLog("hooked %s", name);
+    PluginLog("hooked %s @ %p", name, target);
     return true;
 }
 
@@ -329,33 +329,38 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
     g_gameBase = ctx->base_addr;
     g_isServer = (ctx->flags & NEVR_HOST_IS_SERVER) != 0;
 
-    if (MH_Initialize() != MH_OK) {
-        PluginLog("MH_Initialize failed");
+    MH_STATUS mhStatus = MH_Initialize();
+    if (mhStatus != MH_OK) {
+        PluginLog("MH_Initialize failed: %s", MH_StatusToString(mhStatus));
         return -1;
     }
 
     HMODULE hK32 = GetModuleHandleA("kernel32.dll");
     if (!hK32) {
-        PluginLog("kernel32.dll not found");
+        PluginLog("kernel32.dll not found (should be impossible in any live Windows process)");
         return -1;
     }
 
-    InstallKernelHook(hK32, "CreateProcessA",
-        (void*)HookCreateProcessA, (void**)&OrigCreateProcessA);
-    InstallKernelHook(hK32, "CreateProcessW",
-        (void*)HookCreateProcessW, (void**)&OrigCreateProcessW);
-    InstallKernelHook(hK32, "ExitProcess",
-        (void*)HookExitProcess, (void**)&OrigExitProcess);
-    InstallKernelHook(hK32, "TerminateProcess",
-        (void*)HookTerminateProcess, (void**)&OrigTerminateProcess);
+    int nHooked = 0;
+    nHooked += InstallKernelHook(hK32, "CreateProcessA",
+        (void*)HookCreateProcessA, (void**)&OrigCreateProcessA) ? 1 : 0;
+    nHooked += InstallKernelHook(hK32, "CreateProcessW",
+        (void*)HookCreateProcessW, (void**)&OrigCreateProcessW) ? 1 : 0;
+    nHooked += InstallKernelHook(hK32, "ExitProcess",
+        (void*)HookExitProcess, (void**)&OrigExitProcess) ? 1 : 0;
+    nHooked += InstallKernelHook(hK32, "TerminateProcess",
+        (void*)HookTerminateProcess, (void**)&OrigTerminateProcess) ? 1 : 0;
 
     // VEH with priority 1 (first handler)
     g_vehHandle = AddVectoredExceptionHandler(1, CrashVEH);
     if (g_vehHandle) {
         PluginLog("VEH installed");
+    } else {
+        PluginLog("VEH install FAILED — crash dumps will not be captured, error=%lu", GetLastError());
     }
 
-    PluginLog("initialized (server=%d)", g_isServer);
+    PluginLog("initialized: server=%s hooks=%d/4 veh=%s",
+        g_isServer ? "true" : "false", nHooked, g_vehHandle ? "installed" : "FAILED");
 #else
     (void)ctx;
 #endif
@@ -364,11 +369,16 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
 
 NEVR_PLUGIN_API void NvrPluginShutdown(void) {
 #ifdef _WIN32
+    size_t nHooks = g_hooks.count();
+    bool hadVeh = (g_vehHandle != nullptr);
     if (g_vehHandle) {
         RemoveVectoredExceptionHandler(g_vehHandle);
         g_vehHandle = nullptr;
     }
     g_hooks.RemoveAll();
-#endif
+    PluginLog("shutdown: removed %zu kernel32 hook(s), veh=%s",
+        nHooks, hadVeh ? "removed" : "was not installed");
+#else
     PluginLog("shutdown");
+#endif
 }
