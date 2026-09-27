@@ -4,6 +4,7 @@
 
 #include "core/auth_token.h"
 #include "nevr_curl.h"
+#include "runtime/log/security_diagnostics.h"
 
 #include <nlohmann/json.hpp>
 #include <cstdio>
@@ -68,21 +69,15 @@ inline bool RefreshAuthToken(CachedAuthToken& auth,
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.AUTH] token refresh request failed error=%s — falling back to cached/password auth",
-            curl_easy_strerror(res));
+        const std::string diagnostic = LogDiagnostics::FormatCurlFailureDiagnostic(
+            "[NEVR.AUTH] token refresh request failed ", static_cast<int>(res));
+        Log(EchoVR::LogLevel::Warning, "%s — falling back to cached/password auth", diagnostic.c_str());
         return false;
     }
 
     if (http_code != 200) {
-        // AR1: the response body is redacted from the default (Warning) line —
-        // an error response from this RPC is not documented as credential-free,
-        // and the same never-log-credentials policy ws_bridge.cpp applies to the
-        // password field applies here. The full body stays available at Debug
-        // for deep debugging.
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] token refresh rejected http_status=%ld", http_code);
-        Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] token refresh rejected body=%s",
-            response.empty() ? "(empty)" : response.substr(0, 200).c_str());
+        LogDiagnostics::LogHttpResponseSummary(EchoVR::LogLevel::Warning,
+                                               "[NEVR.AUTH] token refresh rejected ", http_code, response);
         return false;
     }
 
@@ -130,9 +125,9 @@ inline bool RefreshAuthToken(CachedAuthToken& auth,
         // logs the success at Info with more detail (expires_in) immediately
         // after this returns true; a line here would just duplicate it.
         return true;
-    } catch (const nlohmann::json::parse_error& e) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] token refresh response was not valid JSON: %s — treating as failed refresh",
-            e.what());
+    } catch (const nlohmann::json::parse_error&) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.AUTH] token refresh response was not valid JSON — treating as failed refresh");
         return false;
     }
 }

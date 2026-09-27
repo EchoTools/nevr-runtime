@@ -30,6 +30,7 @@ if(BUILD_TESTING)
     add_library(token_auth_test_hooks STATIC
         src/token_auth.cpp
         src/device_poll_response.cpp
+        "${CMAKE_SOURCE_DIR}/src/runtime/log/url_diagnostics.cpp"
     )
 
     target_compile_definitions(token_auth_test_hooks PRIVATE
@@ -42,6 +43,9 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src/runtime
         ${CMAKE_SOURCE_DIR}/plugins/common/include
     )
+
+    set_source_files_properties("${CMAKE_SOURCE_DIR}/src/runtime/log/url_diagnostics.cpp"
+        PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
     target_link_libraries(token_auth_test_hooks PRIVATE
         nevr_core CURL::libcurl nlohmann_json::nlohmann_json

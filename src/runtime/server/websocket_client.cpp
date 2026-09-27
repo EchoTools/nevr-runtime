@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include "abi/echovr.h"
+#include "runtime/log/security_diagnostics.h"
 #include "runtime/log/url_diagnostics.h"
 
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
@@ -152,14 +153,21 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
       break;
 
     case ix::WebSocketMessageType::Close:
-      Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Disconnected from ServerDB (code: %d, reason: %s) reconnect_count=%u",
-          msg->closeInfo.code, msg->closeInfo.reason.c_str(), s_wsReconnectCount);
+      {
+        const std::string diagnostic = LogDiagnostics::FormatWebSocketCloseDiagnostic(
+            "[WEBSOCKET] Disconnected from ServerDB (", msg->closeInfo.code, s_wsReconnectCount);
+        Log(EchoVR::LogLevel::Info, "%s)", diagnostic.c_str());
+      }
       connected_.store(false);
       break;
 
     case ix::WebSocketMessageType::Error:
-      Log(EchoVR::LogLevel::Error, "[WEBSOCKET] Connection error: %s reconnect_count=%u",
-          msg->errorInfo.reason.c_str(), s_wsReconnectCount);
+      {
+        const std::string diagnostic = LogDiagnostics::FormatWebSocketErrorDiagnostic(
+            "[WEBSOCKET] Connection error: ", msg->errorInfo.http_status, msg->errorInfo.retries,
+            s_wsReconnectCount);
+        Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
+      }
       connected_.store(false);
       break;
 
@@ -264,7 +272,7 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
               payload.size());
         }
       } else {
-        Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Received unexpected text message: %s", msg->str.c_str());
+        Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Received unexpected text message bytes=%zu", msg->str.size());
       }
       break;
 

@@ -34,7 +34,7 @@ class UrlDiagnosticLogInvariantTest(unittest.TestCase):
             "src/runtime/compat/winhttp_stub.cpp",
             'LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.HTTP] Open " + method + " ", url)',
             'LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.HTTP] Send " + method + " ", url)',
-            'LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.HTTP] curl failed url=", url,',
+            '"[NEVR.HTTP] curl failed: url=", url,',
         )
 
     def test_bridge_remote_url_logs_use_formatted_redaction(self):

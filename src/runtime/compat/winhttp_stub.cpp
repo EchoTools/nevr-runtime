@@ -444,8 +444,9 @@ static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
   curl_slist_free_all(hlist);
 
   if (res != CURLE_OK) {
-    const std::string failure = LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.HTTP] curl failed url=", url,
-                                                            std::string(" error=") + curl_easy_strerror(res));
+    const std::string failure = LogDiagnostics::FormatRedactedUrlDiagnostic(
+        "[NEVR.HTTP] curl failed: url=", url,
+        " curl_code=" + std::to_string(static_cast<int>(res)));
     Log(EchoVR::LogLevel::Warning, "%s", failure.c_str());
     curl_easy_cleanup(curl);
     return E_FAIL;

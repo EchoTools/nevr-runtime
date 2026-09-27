@@ -13,6 +13,7 @@
 #include "telemetry/v2/capture.pb.h"
 #include "telemetry/v2/echo_arena.pb.h"
 #include "runtime/log/url_diagnostics.h"
+#include "runtime/log/security_diagnostics.h"
 
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
@@ -77,13 +78,20 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
         }
         break;
       case ix::WebSocketMessageType::Close:
-        Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Disconnected from telemetry server code=%d reason=%s reconnect_count=%u",
-            msg->closeInfo.code, msg->closeInfo.reason.c_str(), m_reconnectCount);
+        {
+          const std::string diagnostic = LogDiagnostics::FormatWebSocketCloseDiagnostic(
+              "[NEVR.TELEMETRY] Disconnected from telemetry server ", msg->closeInfo.code, m_reconnectCount);
+          Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
+        }
         m_wsConnected.store(false, std::memory_order_release);
         break;
       case ix::WebSocketMessageType::Error:
-        Log(EchoVR::LogLevel::Error, "[NEVR.TELEMETRY] Connection error: %s reconnect_count=%u",
-            msg->errorInfo.reason.c_str(), m_reconnectCount);
+        {
+          const std::string diagnostic = LogDiagnostics::FormatWebSocketErrorDiagnostic(
+              "[NEVR.TELEMETRY] Connection error: ", msg->errorInfo.http_status, msg->errorInfo.retries,
+              m_reconnectCount);
+          Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
+        }
         m_wsConnected.store(false, std::memory_order_release);
         break;
       case ix::WebSocketMessageType::Message:

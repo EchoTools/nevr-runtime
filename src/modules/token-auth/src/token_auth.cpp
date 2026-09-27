@@ -14,6 +14,8 @@
 #include "core/auth_token.h"
 #include "auth_token_refresh.h"
 #include "nevr_curl.h"
+#include "runtime/log/url_diagnostics.h"
+#include "runtime/log/security_diagnostics.h"
 
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -80,7 +82,9 @@ void DeviceAuth::Configure(const std::string& url, const std::string& httpKey, c
     m_httpKey = httpKey;
     m_serverKey = serverKey;
     m_configured = true;
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Configured: url=%s", url.c_str());
+    const std::string diagnostic =
+        LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.AUTH] Configured: url=", url);
+    Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
 }
 
 bool DeviceAuth::IsAuthenticated() const {
@@ -191,8 +195,9 @@ std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] POST %s failed: %s",
-            url.c_str(), curl_easy_strerror(res));
+        const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+            "[NEVR.AUTH] POST ", url, " failed");
+        Log(EchoVR::LogLevel::Warning, "%s curl_code=%d", diagnostic.c_str(), static_cast<int>(res));
         return "";
     }
     return response;
@@ -215,8 +220,8 @@ std::string DeviceAuth::RequestDeviceCode() {
     try {
         auto j = nlohmann::json::parse(response);
         return j.value("code", "");
-    } catch (const nlohmann::json::exception& e) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] device code request: malformed JSON response: %s", e.what());
+    } catch (const nlohmann::json::exception&) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] device code request: malformed JSON response");
         return "";
     }
 }

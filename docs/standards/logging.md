@@ -232,14 +232,14 @@ The following transitions are **mandatory** INFO-level log points:
 - **Startup:** component initialized, hooks installed, config loaded,
   modules/plugins loaded (each with name and version).
 - **Connectivity:** WebSocket connected (with URI and connection index),
-  WebSocket disconnected (with code and reason), WebSocket error (with
-  error string).
+  WebSocket disconnected (with numeric close code), WebSocket error (with
+  numeric HTTP status/retry fields where available).
 - **Registration:** registration request sent (with message type and
   size), registration success received (with server_id),
-  registration failure received (with error code and message).
+  registration failure received (with error code and message byte count).
 - **Login:** login request injected (with XPID, connection index, and
   size), login success received, login failure received (with status
-  code and error message).
+  code and message byte count).
 - **Session:** session created, session started, session ended (each
   with session ID).
 - **Shutdown:** component shutting down, hooks removed, connections
@@ -249,7 +249,17 @@ A component that initializes silently is a component whose failure is
 undetectable. Every `Init()` function SHALL log at entry and exit, with
 the exit log including success/failure and any relevant state.
 
-### Rule 4: Noise is a defect
+### Rule 4: Remote text and response bodies are not log fields
+
+HTTP response bodies, JSON parser exception text, protobuf error messages,
+WebSocket close/error reasons, and callback exception text can echo secrets or
+user supplied content. Do not log these values, even at Debug. Keep the
+operational signal by logging numeric status/error codes, bounded byte counts,
+retry counts, and stable event markers. URL diagnostics must use the redacted
+formatters and omit query and fragment data. Preserve the original response
+and request bytes for protocol handling; this rule changes diagnostics only.
+
+### Rule 5: Noise is a defect
 
 echovr-native log lines are "objectively 97% worthless" (owner). The
 built-in log filter exists to suppress them (see N18). If noise is
@@ -285,7 +295,7 @@ What constitutes noise:
 5. After tuning, re-capture and verify that >80% of lines carry a NEVR
    subsystem tag and a traceable identifier.
 
-### Rule 5: Hook failures are WARNINGS, not silent drops
+### Rule 6: Hook failures are WARNINGS, not silent drops
 
 Hook installation failures (wave0, MinHook, prologue validation) SHALL
 be logged at WARNING level with:
@@ -325,7 +335,7 @@ just started failing" without a baseline.
 `src/runtime/log/builtin_filter.cpp:826`. Tracked as N17
 (startup hook errors not systematically tracked).
 
-### Rule 6: The Log() function is the single entry point
+### Rule 7: The Log() function is the single entry point
 
 `Log(EchoVR::LogLevel::level, "format %d", val)` from
 `src/core/logging.h:18` is the mechanism. This standard defines WHAT
@@ -376,7 +386,7 @@ section. Retrieve it with:
 
     git show 9bf274450e2ddbcbba5f61dc67f23f14f5c3e064:docs/reference/logging-format.md
 
-### Rule 7: State transitions log FROM -> TO
+### Rule 8: State transitions log FROM -> TO
 
 Every state machine transition SHALL log both the old state and the new
 state. The operator cannot diagnose a stuck state machine from a log
@@ -401,7 +411,7 @@ This applies to:
 - Game mode transitions (lobby -> pregame -> playing -> postgame ->
   lobby).
 
-### Rule 8: Connection-scoped events carry the connection index
+### Rule 9: Connection-scoped events carry the connection index
 
 Every log line that relates to a specific WebSocket connection SHALL
 include the connection index (`conn=%d`). Connections are identified by
@@ -418,7 +428,7 @@ Log(EchoVR::LogLevel::Info, "[NEVR.WS] remote opened conn=%d uri=%s",
     connIdx, uri.c_str());
 ```
 
-### Rule 9: Error paths log the error code
+### Rule 10: Error paths log the error code
 
 Every ERROR or WARNING log line that reports a failure SHALL include the
 error code that caused it. `"Failed to load module"` without the
@@ -435,21 +445,22 @@ Log(EchoVR::LogLevel::Error,
     name, GetLastError(), dllPath.c_str());
 ```
 
-### Rule 10: Config values logged at load time
+### Rule 11: Config decisions logged at load time
 
-Every config value that affects runtime behavior SHALL be logged at
-INFO level when it is loaded. This includes:
+Every config decision that affects runtime behavior SHALL be logged at
+INFO level when it is loaded. Log the key and a safe summary, not secret
+values or unredacted URLs. This includes:
 
 - CLI flags (`-server`, `-headless`, `-timestep`, `-telemetry`).
-- Config-file overrides (arena round time, mercy score, service URLs).
-- Service redirects (every URL that is redirected to the bridge).
+- Config-file overrides (arena round time, mercy score, and redacted service URLs).
+- Service redirects (each key and redacted source/destination URL).
 - Module/plugin load decisions (loaded, skipped, failed).
 
-The log is the only record of what configuration the process is running
-with. If a config value is not logged, the operator must guess whether
+The log is the only record of what configuration decisions the process is
+running with. If a decision is not logged, the operator must guess whether
 it was applied.
 
-### Rule 11: Bootstrap log lines carry a level prefix
+### Rule 12: Bootstrap log lines carry a level prefix
 
 Before the game logger is available, `BootLogTee::TeeFprintf` is the
 only output mechanism. These lines SHALL embed their level in the format
@@ -468,7 +479,7 @@ The level prefix (`info;`, `warn;`, `error;`) bridges the gap until
 subsequent output SHALL use `Log()` — `TeeFprintf` is a bootstrap
 mechanism only.
 
-### Rule 12: INFO is summary, DEBUG is narrative
+### Rule 13: INFO is summary, DEBUG is narrative
 
 Every event that produces multiple log lines SHALL follow this pattern:
 
@@ -495,7 +506,7 @@ This applies to boot sequences, plugin loading, connection setup, and
 any multi-step operation. If there are N items, INFO gets one summary
 line with the count; DEBUG gets the N individual lines.
 
-### Rule 13: Sensor-encoded level decisions are revisable
+### Rule 14: Sensor-encoded level decisions are revisable
 
 Sensors that pin a log level (e.g. "this message SHALL be Debug") encode
 a past decision, not a permanent law. When the logging standard evolves,
@@ -518,11 +529,11 @@ form.
 | ------- | ------ | ----- |
 | Login injection (N15) | `"[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)"` | `"[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu"` |
 | WebSocket connected | `"[WEBSOCKET] Connected to ServerDB"` | `"[NEVR.WS] websocket connected uri=%s conn=%d"` |
-| WebSocket disconnected | `"[WEBSOCKET] Disconnected from ServerDB (code: %d, reason: %s)"` | `"[NEVR.WS] websocket closed conn=%d code=%d reason=%s"` |
+| WebSocket disconnected | `"[WEBSOCKET] Disconnected from ServerDB (code: %d, reason: %s)"` | `"[WEBSOCKET] Disconnected from ServerDB (code: %u) reconnect_count=%u"` |
 | Login success | `"[NEVR.WS] LOGIN SUCCESS"` | `"[NEVR.WS] login success xpid=%s conn=%d session=%s"` |
-| Login failure | `"[NEVR.WS] LOGIN FAILURE: status=%llu msg=%.*s"` | `"[NEVR.WS] login failed xpid=%s conn=%d status=%llu reason=%s"` |
+| Login failure | `"[NEVR.WS] LOGIN FAILURE: status=%llu msg=%.*s"` | `"[NEVR.WS] login failed status=%llu message_bytes=%zu"` |
 | Hook failure | `"[wave0] FAILED to hook fcn.0x%llX"` | `"[NEVR.PATCH] hook failed name=%s va=0x%llX expected=%s actual=%s"` |
-| Config redirect | `"[NEVR.PATCH] Service redirect [%s]: %s -> %s"` | `"[NEVR.PATCH] service redirect key=%s from=%s to=%s"` |
+| Config redirect | `"[NEVR.PATCH] Service redirect [%s]: %s -> %s"` | `"[NEVR.PATCH] service redirect key=%s from=%s to=%s"` (URLs redacted) |
 | Module loaded | `"[NEVR.MODULE] Loaded: %s"` | `"[NEVR.MODULE] loaded name=%s path=%s"` |
 | Plugin loaded | `"[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u)"` | Already compliant — carries name, version, API version |
 | Registration | `"[NEVR.GAMESERVER] Received registration success via protobuf: server_id=%llu, ip=%s"` | Already compliant — carries server_id, ip |
@@ -537,8 +548,8 @@ form.
 | ------------------------ | ----- | ---------------- | ------------------------------------------- |
 | State transition         | INFO  | Per-transition   | Log FROM -> TO, once per change             |
 | WebSocket connect        | INFO  | Once             | Log URI + conn index                        |
-| WebSocket disconnect     | INFO  | Once             | Log code + reason + conn index              |
-| WebSocket error          | WARN  | Once per failure | Log error string + conn index               |
+| WebSocket disconnect     | INFO  | Once             | Log numeric close code + reconnect count     |
+| WebSocket error          | WARN  | Once per failure | Log numeric status/retries + reconnect count |
 | Message forward          | DEBUG | Rate-limited     | Summary every N seconds or N messages        |
 | Per-frame diagnostic     | DEBUG | Off in prod      | Gated by verbosity flag                     |
 | Login injected           | INFO  | Once per conn    | Log XPID + conn + size                      |

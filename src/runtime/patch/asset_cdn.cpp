@@ -20,6 +20,7 @@
 #include "abi/echovr_functions.h"
 #include "core/hooking.h"
 #include "core/logging.h"
+#include "runtime/log/security_diagnostics.h"
 #include "nevr_common.h"      // N97: the one ValidatePrologue
 #include "runtime/hook/addresses.h"
 
@@ -623,14 +624,14 @@ bool AssetCDN::FetchManifest() {
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] Manifest fetch failed: %s", curl_easy_strerror(res));
+        const std::string diagnostic =
+            LogDiagnostics::FormatCurlFailureDiagnostic("[NEVR.CDN] Manifest fetch failed ", static_cast<int>(res));
+        Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
         return false;
     }
 
     if (http_code != 200) {
-        Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] manifest fetch failed: http_status=%ld url=%s", http_code, MANIFEST_URL);
+        Log(EchoVR::LogLevel::Error, "[NEVR.CDN] manifest fetch failed: http_status=%ld", http_code);
         return false;
     }
 
@@ -638,9 +639,8 @@ bool AssetCDN::FetchManifest() {
     json manifest;
     try {
         manifest = json::parse(buffer.begin(), buffer.end());
-    } catch (const json::parse_error& e) {
-        Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] Manifest JSON parse error: %s", e.what());
+    } catch (const json::parse_error&) {
+        Log(EchoVR::LogLevel::Error, "[NEVR.CDN] Manifest JSON parse error response_bytes=%zu", buffer.size());
         return false;
     }
 
@@ -732,9 +732,9 @@ bool AssetCDN::DownloadPackage(const std::string& url, const std::string& dest_p
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] Package download failed (%s): %s",
-            url.c_str(), curl_easy_strerror(res));
+        const std::string diagnostic =
+            LogDiagnostics::FormatCurlFailureDiagnostic("[NEVR.CDN] Package download failed ", static_cast<int>(res));
+        Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
         return false;
     }
 

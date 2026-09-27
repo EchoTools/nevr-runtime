@@ -152,7 +152,7 @@ C04@@client@@Device-code prompt displayed@@Link your account at:@@Failed to requ
 C05@@client@@Device authorised by user@@Device authorized! Signed in successfully@@Device auth timed out|Device code expired|Error polling device code
 C06@@client@@Refresh token persisted to disk@@Refresh token saved to@@Failed to write .credentials.json
 C07@@client@@Cached token reused on restart@@Using cached credentials|Loaded cached token@@Cached token expired, no refresh token
-C08@@client@@Access token refreshed@@Token refreshed successfully@@Token refresh failed
+C08@@client@@Access token refreshed@@Token refreshed successfully@@[Tt]oken refresh failed
 C09@@client@@Bearer token attached to connection@@Attaching Bearer token to remote connection@@Using URL credentials \(no Bearer token\)
 C10@@client@@Friends list subscribed@@FriendListSubscribeRequest sent@@
 C11@@client@@HTTP served through the curl bridge@@\[NEVR\.HTTP\] Response: 2[0-9][0-9]@@\[NEVR\.HTTP\] curl failed:

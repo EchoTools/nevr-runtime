@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <thread>
 
@@ -11,6 +12,7 @@
 #include "core/auth_token.h"
 #include "auth_token_refresh.h"
 #include "runtime/server/constants.h"
+#include "runtime/log/security_diagnostics.h"
 #include "runtime/log/url_diagnostics.h"
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
@@ -428,13 +430,13 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
 
     case gameservice::v1::Envelope::kError: {
       const auto& error = envelope.error();
-      Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Received error via protobuf: code=%d, msg=%s", error.code(),
-          error.message().c_str());
+      Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Received error via protobuf: code=%d message_bytes=%zu",
+          error.code(), error.message().size());
       // If we receive an error before registration succeeds, treat it as a registration failure.
       if (g_exitOnError && !self->GetContext().IsRegistered()) {
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] error received before registration, code=%d msg=%s — shutting down", error.code(),
-            error.message().c_str());
+            "[NEVR.GAMESERVER] error received before registration, code=%d message_bytes=%zu — shutting down",
+            error.code(), error.message().size());
         self->BeginGracefulShutdown(true);
       }
       break;
@@ -1288,15 +1290,15 @@ static std::string AuthenticateServer() {
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] Server auth failed: %s", curl_easy_strerror(res));
+        const std::string diagnostic =
+            LogDiagnostics::FormatCurlFailureDiagnostic("[NEVR.GAMESERVER] Server auth failed ", static_cast<int>(res));
+        Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
         return "";
     }
 
     if (http_code != 200) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] Server auth HTTP %ld: %s", http_code,
-            response.empty() ? "(empty)" : response.substr(0, 200).c_str());
+        LogDiagnostics::LogHttpResponseSummary(EchoVR::LogLevel::Warning,
+                                               "[NEVR.GAMESERVER] Server auth rejected ", http_code, response);
         return "";
     }
 
@@ -1310,7 +1312,7 @@ static std::string AuthenticateServer() {
             Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Server authenticated (token acquired)");
         }
         return token;
-    } catch (...) {
+    } catch (const std::exception&) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.GAMESERVER] Server auth response parse error");
         return "";
