@@ -33,6 +33,7 @@
 #include "runtime/ext/plugin_load_plan.h"  // PluginLoadItem / NevrCfgPluginLoadPlan (N134 S6)
 #include "core/system_info.h"
 #include "core/build_identity.h"
+#include "runtime/log/security_diagnostics.h"
 
 // ============================================================================
 // Stubs for extern symbols declared by project headers but not provided by
@@ -568,7 +569,87 @@ uint64_t ReadLe64(const std::string& bytes, size_t offset) {
   return result;
 }
 
+void WriteLe64(std::string& bytes, size_t offset, uint64_t value) {
+  for (size_t index = 0; index < sizeof(value); ++index) {
+    bytes[offset + index] = static_cast<char>(value >> static_cast<unsigned int>(index * 8));
+  }
+}
+
+std::string BuildLoginFailureFrame(uint64_t declaredPayloadSize, uint64_t statusCode,
+                                  const std::string& message) {
+  constexpr uint64_t kLoginFailureSymbol = 0xa5b9d5a3021ccf51ULL;
+  std::string frame(24 + 24, '\0');
+  WriteLe64(frame, 8, kLoginFailureSymbol);
+  WriteLe64(frame, 16, declaredPayloadSize);
+  WriteLe64(frame, 24 + 16, statusCode);
+  frame.append(message);
+  return frame;
+}
+
 }  // namespace
+
+TEST(SecurityDiagnostics, CapturedResponseSummaryExcludesBodySentinel) {
+  ClearTestLogs();
+  constexpr char kSecret[] = "auth-response-secret-sentinel";
+  LogDiagnostics::LogHttpResponseSummary(EchoVR::LogLevel::Warning, "[NEVR.AUTH] rejected ", 403, kSecret);
+
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  ASSERT_EQ(g_testLogMessages.size(), 1U);
+  EXPECT_NE(g_testLogMessages[0].find("http_status=403 response_bytes="), std::string::npos);
+  EXPECT_EQ(g_testLogMessages[0].find(kSecret), std::string::npos);
+}
+
+TEST(SecurityDiagnostics, NumericTransportFormatterCarriesOnlyNumericFields) {
+  const std::string closed = LogDiagnostics::FormatWebSocketCloseDiagnostic("closed ", 1008, 3);
+  EXPECT_EQ(closed, "closed code=1008 reconnect_count=3");
+  const std::string failed = LogDiagnostics::FormatWebSocketErrorDiagnostic("failed ", 502, 2, 3);
+  EXPECT_EQ(failed, "failed http_status=502 retries=2 reconnect_count=3");
+  EXPECT_EQ(LogDiagnostics::FormatCurlFailureDiagnostic("curl ", 28), "curl curl_code=28");
+  EXPECT_EQ(LogDiagnostics::FormatBindFailureDiagnostic("Proxy", 5000, 1, 3),
+            "[NEVR.WS] Proxy port 5000 bind failed failure=1 — retrying (1/3)");
+  EXPECT_EQ(LogDiagnostics::FormatBindFailureDiagnostic("Matchmaker", 5001, 2, 3),
+            "[NEVR.WS] Matchmaker port 5001 bind failed failure=1 — retrying (2/3)");
+}
+
+TEST(SecurityDiagnostics, CapturedLoginFailureSummaryExcludesServerMessage) {
+  ClearTestLogs();
+  constexpr char kSecret[] = "login-failure-secret-sentinel";
+  const std::string frame = BuildLoginFailureFrame(24 + std::string(kSecret).size(), 502, kSecret);
+
+  EXPECT_TRUE(TestHook_LogLoginFailureDiagnostic(frame, false));
+  std::lock_guard<std::mutex> lock(g_testLogMutex);
+  ASSERT_EQ(g_testLogMessages.size(), 1U);
+  EXPECT_NE(g_testLogMessages[0].find("login failed status=502 message_bytes="), std::string::npos);
+  EXPECT_EQ(g_testLogMessages[0].find(kSecret), std::string::npos);
+}
+
+TEST(WsBridgeLoginFailure, DiagnosticUsesDeclaredLengthForConcatenatedFrames) {
+  const std::string first = BuildLoginFailureFrame(24 + 4, 502, "nope");
+  const std::string second = BuildLoginFailureFrame(24 + 5, 401, "later");
+  const std::string concatenated = first + second;
+  uint64_t statusCode = 0;
+  size_t messageBytes = 0;
+
+  ASSERT_TRUE(TestHook_ReadLoginFailureDiagnostic(concatenated, &statusCode, &messageBytes));
+  EXPECT_EQ(statusCode, 502U);
+  EXPECT_EQ(messageBytes, 4U);
+}
+
+TEST(WsBridgeLoginFailure, DiagnosticRejectsUndersizedTruncatedAndOversizedFrames) {
+  uint64_t statusCode = 0;
+  size_t messageBytes = 0;
+  EXPECT_FALSE(TestHook_ReadLoginFailureDiagnostic(std::string(47, '\0'), &statusCode, &messageBytes));
+
+  const std::string truncated = BuildLoginFailureFrame(24 + 6, 502, "x");
+  EXPECT_FALSE(TestHook_ReadLoginFailureDiagnostic(truncated, &statusCode, &messageBytes));
+
+  const std::string oversized = BuildLoginFailureFrame(UINT64_MAX, 502, "x");
+  EXPECT_FALSE(TestHook_ReadLoginFailureDiagnostic(oversized, &statusCode, &messageBytes));
+
+  const std::string fixedOnly = BuildLoginFailureFrame(24, 502, "");
+  const std::string concatenated = fixedOnly + BuildLoginFailureFrame(25, 401, "x");
+  EXPECT_FALSE(TestHook_ReadLoginFailureDiagnostic(concatenated, &statusCode, &messageBytes));
+}
 
 TEST(WsBridgeLoginRequest, HasExpectedHeaderAndPayloadLength) {
   const std::string request = TestHook_BuildLoginRequest(123456789ULL, 1, "Player", "token");
@@ -676,14 +757,13 @@ TEST(WsBridgeSelectPlatform, DefaultIsDsc) {
 }
 
 TEST(WsBridgeCallbackGuard, ContainsStdExceptionsAtTheCallbackBoundary) {
-  {
-    std::lock_guard<std::mutex> lock(g_testLogMutex);
-    g_testLogMessages.clear();
-  }
+  ClearTestLogs();
   EXPECT_TRUE(TestHook_GuardWsCallbackContainsStdException());
   std::lock_guard<std::mutex> lock(g_testLogMutex);
   ASSERT_EQ(g_testLogMessages.size(), 1U);
-  EXPECT_NE(g_testLogMessages.front().find("intentional callback exception"), std::string::npos);
+  EXPECT_NE(g_testLogMessages.front().find("callback threw and was CONTAINED"), std::string::npos);
+  EXPECT_NE(g_testLogMessages.front().find("failure=1"), std::string::npos);
+  EXPECT_EQ(g_testLogMessages.front().find("response-secret-sentinel"), std::string::npos);
 }
 
 TEST(WsBridgeCallbackGuard, ForwardsCallbackArgumentsWithoutLogging) {

@@ -1189,10 +1189,10 @@ void BuiltinLogFilter::Init(uintptr_t base_addr, bool is_server) {
         memcpy(actual, g_hook_target, 4);
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] hook failed name=CLog::PrintfImpl va=0x%llX "
-            "expected=00000000 actual=%02x%02x%02x%02x status=%d",
+            "current=%02x%02x%02x%02x status=%s",
             static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL),
             actual[0], actual[1], actual[2], actual[3],
-            static_cast<int>(status));
+            MH_StatusToString(status));
         return;
     }
 
@@ -1202,10 +1202,10 @@ void BuiltinLogFilter::Init(uintptr_t base_addr, bool is_server) {
         memcpy(actual, g_hook_target, 4);
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] hook failed name=CLog::PrintfImpl va=0x%llX "
-            "expected=00000000 actual=%02x%02x%02x%02x status=%d",
+            "current=%02x%02x%02x%02x status=%s",
             static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL),
             actual[0], actual[1], actual[2], actual[3],
-            static_cast<int>(status));
+            MH_StatusToString(status));
         return;
     }
 

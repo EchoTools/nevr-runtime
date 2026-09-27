@@ -242,7 +242,7 @@ test-auth-unit:
     unset VCPKG_ROOT
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_plugin_load_plan
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_plugin_load_plan --target test_url_diagnostics
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -300,6 +300,12 @@ test-auth-unit:
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         echo "       (is 'gtest'/'yaml-cpp' available in vcpkg for triplet x64-mingw-static?)" >&2
+        exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_url_diagnostics.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
     wine "$bin"
@@ -796,6 +802,14 @@ verify:
     if ! grep -qE '(BOOL|auto) +[a-zA-Z]+ *= *PatchDetour\(&Original_LoadLibraryW' <<<"$N127_MP"; then
         echo "verify: FAIL — N127 PatchBlockOculusSDK no longer captures the LoadLibraryW detour result." >&2
         echo "Without checking the return it cannot report FAILED, and the silent-success regression returns." >&2
+        exit 1
+    fi
+    if ! grep -qE 'if *\( *loadLibraryWAttached *&& *loadLibraryExWAttached *\)' <<<"$N127_MP"; then
+        echo "verify: FAIL — N127 Oculus SDK success is not gated on both detour results." >&2
+        exit 1
+    fi
+    if ! grep -q 'Oculus Platform SDK blocking hooks installed' <<<"$N127_MP"; then
+        echo "verify: FAIL — N127 success is no longer reported after both hooks attach." >&2
         exit 1
     fi
 
@@ -1610,17 +1624,18 @@ verify:
         echo "config.yaml. Without it token_auth reverts to game-JSON reads." >&2
         exit 1
     fi
-    # S7d — the sample config.yaml must remain valid YAML and contain the minimum
-    # keys a server needs to boot (auth, services, identity sections). A missing
-    # or corrupted sample breaks launch-server.sh with an inscrutable YAML error.
+    # S7d — the tracked sample config must remain present and contain the minimum
+    # keys a server needs to boot (auth, services, identity, version sections).
+    # Check the canonical fixture, not echovr/_local/config.yaml: that ignored
+    # machine-local destination is created by setup and absent in fresh worktrees.
     N133_S7D_RC=0
     N133_S7D=$(grep -cE '^\s*(auth:|services:|identity:|version:)' \
-        echovr/_local/config.yaml) || N133_S7D_RC=$?
-    sensor_stage1 "N133 S7d sample config" "echovr/_local/config.yaml" "$N133_S7D_RC"
+        docs/reference/example-config.yaml) || N133_S7D_RC=$?
+    sensor_stage1 "N133 S7d sample config" "docs/reference/example-config.yaml" "$N133_S7D_RC"
     if [ "$N133_S7D" -lt 4 ]; then
         echo "verify: FAIL — N133 S7d: sample config.yaml missing required sections" >&2
         echo "(found $N133_S7D of 4: auth, services, identity, version)." >&2
-        echo "launch-server.sh reads this file; a broken sample breaks every server boot." >&2
+        echo "The tracked example is the source copied into a server's local config." >&2
         exit 1
     fi
     # Issue #21 — _local/config.json is OPTIONAL. N48's ServerFatal on a missing

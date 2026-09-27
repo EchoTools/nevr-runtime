@@ -28,7 +28,8 @@ bool UPnPHelper::OpenPort(uint16_t internalPort, uint16_t externalPort,
                                   UPNP_LOCAL_PORT_ANY, 0, 2, &error);
   if (!devlist) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.UPNP] No UPnP devices found (error=%d)", error);
+        "[NEVR.UPNP] No UPnP devices found (error=%d) — continues without automatic port mapping;"
+        " forward the port manually if NAT requires it", error);
     return false;
   }
 
@@ -48,7 +49,8 @@ bool UPnPHelper::OpenPort(uint16_t internalPort, uint16_t externalPort,
 
   if (igd != 1 && igd != 2) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.UPNP] No valid IGD found (result=%d)", igd);
+        "[NEVR.UPNP] No valid IGD found (result=%d) — continues without automatic port mapping;"
+        " forward the port manually if NAT requires it", igd);
     FreeUPNPUrls(&urls);
     return false;
   }
@@ -82,8 +84,8 @@ bool UPnPHelper::OpenPort(uint16_t internalPort, uint16_t externalPort,
 
   if (r != UPNPCOMMAND_SUCCESS) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.UPNP] AddPortMapping failed: %s (code=%d)",
-        strupnperror(r), r);
+        "[NEVR.UPNP] AddPortMapping failed: %s (code=%d) ext_port=%u int_port=%u",
+        strupnperror(r), r, externalPort, internalPort);
     return false;
   }
 
@@ -132,8 +134,8 @@ void UPnPHelper::ClosePort() {
                                    portStr, "UDP", nullptr);
     if (r != UPNPCOMMAND_SUCCESS) {
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.UPNP] DeletePortMapping failed: %s (code=%d)",
-          strupnperror(r), r);
+          "[NEVR.UPNP] DeletePortMapping failed: %s (code=%d) port=%u",
+          strupnperror(r), r, s_mappedExternalPort);
     } else {
       Log(EchoVR::LogLevel::Debug,
           "[NEVR.UPNP] Port mapping removed: %u UDP",

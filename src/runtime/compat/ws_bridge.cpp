@@ -11,7 +11,9 @@
 #include <nlohmann/json.hpp>
 #include <cstring>
 #include <memory>
+#include <limits>
 #include <mutex>
+#include <optional>
 #include <random>
 #include <string>
 #include <unordered_map>
@@ -26,6 +28,8 @@
 #include "runtime/ext/plugin_loader.h"  // N112: plugin manifest
 #include "runtime/lifecycle/cli.h"  // g_isServer
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
+#include "runtime/log/url_diagnostics.h"
+#include "runtime/log/security_diagnostics.h"
 #include "core/logging.h"
 #include <exception>
 #include <stdexcept>
@@ -54,14 +58,44 @@ static auto GuardWsCallback(const char* what, Fn&& fn) {
   return [what, fn = std::forward<Fn>(fn)](auto&&... args) {
     try {
       fn(std::forward<decltype(args)>(args)...);
-    } catch (const std::exception& e) {
-      Log(EchoVR::LogLevel::Error,
-          "[NEVR.WS] callback threw and was CONTAINED at=%s what=%s — server continues "
-          "(an escape here reaches the game's unhandled-exception filter and kills it, N85)",
-          what, e.what());
+    } catch (const std::exception&) {
+      const std::string diagnostic = LogDiagnostics::FormatCallbackFailureDiagnostic(what);
+      Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
     }
   };
 }
+
+namespace {
+constexpr uint64_t kLoginFailureSymbol = 0xa5b9d5a3021ccf51ULL;
+constexpr size_t kEnvelopeHeaderSize = 24;
+constexpr size_t kLoginFailureFixedPayloadSize = 24;
+
+struct LoginFailureDiagnostic {
+  uint64_t statusCode;
+  size_t messageBytes;
+};
+
+std::optional<LoginFailureDiagnostic> ReadLoginFailureDiagnostic(const std::string& frame) {
+  if (frame.size() < kEnvelopeHeaderSize) return std::nullopt;
+
+  uint64_t symbol = 0;
+  uint64_t payloadLength = 0;
+  memcpy(&symbol, frame.data() + 8, sizeof(symbol));
+  memcpy(&payloadLength, frame.data() + 16, sizeof(payloadLength));
+  if (symbol != kLoginFailureSymbol ||
+      payloadLength <= static_cast<uint64_t>(kLoginFailureFixedPayloadSize) ||
+      payloadLength > static_cast<uint64_t>(std::numeric_limits<size_t>::max() - kEnvelopeHeaderSize)) {
+    return std::nullopt;
+  }
+
+  const size_t payloadSize = static_cast<size_t>(payloadLength);
+  if (payloadSize > frame.size() - kEnvelopeHeaderSize) return std::nullopt;
+
+  uint64_t statusCode = 0;
+  memcpy(&statusCode, frame.data() + kEnvelopeHeaderSize + 16, sizeof(statusCode));
+  return LoginFailureDiagnostic{statusCode, payloadSize - kLoginFailureFixedPayloadSize};
+}
+}  // namespace
 
 // ============================================================================
 // In-process WebSocket TLS proxy
@@ -309,6 +343,11 @@ bool IsWebSocketBridgeActive() {
 }
 
 void InstallWebSocketBridge() {
+  // Currently unreachable: InstallWebSocketBridge() has exactly one caller
+  // (boot.cpp), and that caller already gates the call behind a non-empty
+  // socketUri, logging its own WARNING and returning before ever reaching
+  // here if it's empty. Left in place as defense-in-depth for any future
+  // caller (tests, a CLI reconfigure path) that calls this without that gate.
   if (g_remoteUri.empty()) {
     Log(EchoVR::LogLevel::Info, "[NEVR.WS] No wss:// target — bridge disabled");
     return;
@@ -331,16 +370,17 @@ void InstallWebSocketBridge() {
     g_server = std::make_unique<ix::WebSocketServer>(tryPort, "127.0.0.1");
     g_server->disablePerMessageDeflate();
 
-    auto [ok, errMsg] = g_server->listen();
+    auto [ok, errorText] = g_server->listen();
     if (ok) {
       g_proxyPort = tryPort;
       bound = true;
       break;
     }
 
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.WS] Port %u bind failed: %s — retrying (%d/%d)",
-        tryPort, errMsg.c_str(), attempt + 1, kMaxBindAttempts);
+    (void)errorText;
+    const std::string diagnostic = LogDiagnostics::FormatBindFailureDiagnostic(
+        "Proxy", tryPort, attempt + 1, kMaxBindAttempts);
+    Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
     g_server.reset();
   }
 
@@ -403,9 +443,8 @@ void InstallWebSocketBridge() {
                       }
                       case ix::WebSocketMessageType::Close:
                         Log(EchoVR::LogLevel::Debug,
-                            "[NEVR.WS] Remote closed (matchmaker ws=%p): %d %s",
-                            (void*)gameWsPtr, rmsg->closeInfo.code,
-                            rmsg->closeInfo.reason.c_str());
+                            "[NEVR.WS] Remote closed (matchmaker ws=%p): code=%u",
+                            static_cast<void*>(gameWsPtr), static_cast<unsigned int>(rmsg->closeInfo.code));
                         break;
                       default:
                         break;
@@ -461,8 +500,9 @@ void InstallWebSocketBridge() {
                 // If we left a trailing ? with nothing after, remove it
                 if (!remoteUrl.empty() && remoteUrl.back() == '?') remoteUrl.pop_back();
               }
-              Log(EchoVR::LogLevel::Debug,
-                  "[NEVR.WS] Matchmaker conn=%d using protobuf URL: %s", connIdx, remoteUrl.c_str());
+              const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+                  "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: ", remoteUrl);
+              Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
             }
             remote->setUrl(remoteUrl);
             remote->disableAutomaticReconnection();
@@ -543,8 +583,9 @@ void InstallWebSocketBridge() {
                     case ix::WebSocketMessageType::Open: {
                       std::lock_guard<std::mutex> lk(g_pairsMutex);
                       pairPtr->remoteOpen = true;
-                      Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Remote open (conn=%d): %s",
-                          connIdx, g_remoteUri.c_str());
+                      const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+                          "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + "): ", g_remoteUri);
+                      Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
 
                       // Inject LoginRequest on login connections (not config).
                       // pnsrad.dll won't send its own because it has no user identity
@@ -576,10 +617,10 @@ void InstallWebSocketBridge() {
                                   int64_t*  accountId  = (int64_t*)(user + 0x88);
                                   uint64_t* loginState = (uint64_t*)(user + 0x90);
                                   uint32_t* stateFlags = (uint32_t*)(user + 0x9c);
-                                  Log(EchoVR::LogLevel::Info,
-                                      "[NEVR.WS] CNSUser BEFORE: acct=%lld state=0x%llx provider=%d flags=0x%x",
-                                      (long long)*accountId, (unsigned long long)*loginState,
-                                      (int)(*loginState & 0xf), *stateFlags);
+                                  int64_t  beforeAcct    = *accountId;
+                                  uint64_t beforeState   = *loginState;
+                                  uint32_t beforeFlags   = *stateFlags;
+                                  int      beforeProvider = (int)(beforeState & 0xf);
                                   // Set the user's XPID: account_id and provider enum.
                                   // +0x88 = account_id (discord ID from JWT)
                                   // +0x90 low nibble = provider enum (2 = PSN in binary,
@@ -588,9 +629,13 @@ void InstallWebSocketBridge() {
                                   *accountId  = (int64_t)discordId;
                                   *loginState = (*loginState & ~0xFULL) | 4;  // OVR_ORG (game numbering)
                                   *stateFlags = 0x04;
-                                  Log(EchoVR::LogLevel::Debug,
-                                      "[NEVR.WS] CNSUser AFTER:  acct=%lld state=0x%llx flags=0x%x",
-                                      (long long)*accountId, (unsigned long long)*loginState, *stateFlags);
+                                  Log(EchoVR::LogLevel::Info,
+                                      "[NEVR.WS] CNSUser login state patched acct=%lld->%lld "
+                                      "state=0x%llx->0x%llx provider=%d->%d flags=0x%x->0x%x "
+                                      "(unblocks LogInSuccessCB)",
+                                      (long long)beforeAcct, (long long)*accountId,
+                                      (unsigned long long)beforeState, (unsigned long long)*loginState,
+                                      beforeProvider, (int)(*loginState & 0xf), beforeFlags, *stateFlags);
                                 }
                               }
                             }
@@ -640,15 +685,16 @@ void InstallWebSocketBridge() {
                       }
                       Log(EchoVR::LogLevel::Debug, "[NEVR.WS] server->game: %zu bytes sym=%s payloadLen=%llu",
                           rmsg->str.size(), symBuf, (unsigned long long)rlen);
-                      // Decode LoginFailure error message (sym 0xa5b9d5a3021ccf51)
-                      if (rsym == 0xa5b9d5a3021ccf51 && rmsg->str.size() > 48) {
-                        // payload: PlatformCode(8) + AccountId(8) + StatusCode(8) + ErrorMsg\0
-                        uint64_t statusCode = 0;
-                        memcpy(&statusCode, rmsg->str.data() + 24 + 16, 8);
-                        const char* errMsg = rmsg->str.data() + 24 + 24;
-                        size_t errMaxLen = rmsg->str.size() - 48;
-                        Log(EchoVR::LogLevel::Warning, "[NEVR.WS] LOGIN FAILURE: status=%llu msg=%.*s",
-                            (unsigned long long)statusCode, (int)errMaxLen, errMsg);
+                      // Decode only the numeric LoginFailure diagnostics. The
+                      // server-provided message can contain credentials or other
+                      // private response data and is never written to logs.
+                      if (rsym == kLoginFailureSymbol && rmsg->str.size() > 48) {
+                        const std::optional<LoginFailureDiagnostic> diagnostic =
+                            ReadLoginFailureDiagnostic(rmsg->str);
+                        const std::string message = LogDiagnostics::FormatLoginFailureDiagnostic(
+                            diagnostic.has_value(), diagnostic ? diagnostic->statusCode : 0,
+                            diagnostic ? diagnostic->messageBytes : 0, g_isServer != FALSE);
+                        Log(EchoVR::LogLevel::Warning, "%s", message.c_str());
 
                         // N92: ported from the ws-bridge module, which was the shipping
                         // copy until the monolithic fold. A dedicated server has no
@@ -723,13 +769,14 @@ void InstallWebSocketBridge() {
                       // any native handler both point the same direction: something was
                       // supposed to close this connection here and doesn't anymore.
                       //
-                      // CONFESSION: this is a live experiment, not a confirmed fix. Closes
-                      // remoteWs only (not gameWsPtr, which the Close handler below
-                      // documents as deadlock-prone under the loader lock) — the game
-                      // discovers the closed remote on its next send attempt, same
-                      // documented-safe path already used for a real remote-initiated
-                      // close. Server mode only; client mode is already confirmed working
-                      // end-to-end and this must not touch it.
+                      // This is production behavior, not an experiment: it runs
+                      // unconditionally in server mode, with no flag to disable it, and
+                      // has been live for weeks. Closes remoteWs only (not gameWsPtr,
+                      // which the Close handler below documents as deadlock-prone under
+                      // the loader lock) — the game discovers the closed remote on its
+                      // next send attempt, same documented-safe path already used for a
+                      // real remote-initiated close. Server mode only; client mode is
+                      // already confirmed working end-to-end and this must not touch it.
                       //
                       // BUG FOUND AND FIXED, same day: `rsym` above only ever reflects the
                       // FIRST message in this frame. Nakama sends LoginSuccess and
@@ -752,8 +799,9 @@ void InstallWebSocketBridge() {
                           if (ftotal > fremaining) break;  // truncated — stop, don't misread
                           if (fsym == 0x43e6963ac76beee4) {
                             Log(EchoVR::LogLevel::Info,
-                                "[NEVR.WS] DIAG STcpConnectionUnrequireEvent seen in-frame (server mode) — "
-                                "closing remoteWs to test the disconnect-then-BeginMultiplayer hypothesis");
+                                "[NEVR.WS] STcpConnectionUnrequireEvent seen in-frame (server mode) — "
+                                "closing remoteWs so the game detects the closed connection on its next "
+                                "send and proceeds to BeginMultiplayer");
                             pairPtr->remoteWs->close();
                             break;
                           }
@@ -820,15 +868,16 @@ void InstallWebSocketBridge() {
                       break;
                     }
                     case ix::WebSocketMessageType::Close:
-                      Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Remote closed (ws=%p): %d %s",
-                          (void*)gameWsPtr, rmsg->closeInfo.code, rmsg->closeInfo.reason.c_str());
+                      Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Remote closed (ws=%p): code=%u",
+                          static_cast<void*>(gameWsPtr), static_cast<unsigned int>(rmsg->closeInfo.code));
                       // Don't call gameWsPtr->close() — it deadlocks (blocks waiting
                       // for server thread which may be blocked on g_pairsMutex).
                       // The game will detect the closed remote on its next send attempt.
                       break;
                     case ix::WebSocketMessageType::Error:
-                      Log(EchoVR::LogLevel::Warning, "[NEVR.WS] Remote error: %s",
-                          rmsg->errorInfo.reason.c_str());
+                      Log(EchoVR::LogLevel::Warning,
+                          "[NEVR.WS] Remote error: http_status=%d retries=%u",
+                          rmsg->errorInfo.http_status, rmsg->errorInfo.retries);
                       break;
                     default:
                       break;
@@ -847,8 +896,11 @@ void InstallWebSocketBridge() {
             }
             // Start after insertion so the remote callback can find the pair in g_pairs
             remote->start();
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), bridging to %s",
-                connIdx, (void*)gameWsPtr, g_remoteUri.c_str());
+            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p)", connIdx,
+                static_cast<void*>(gameWsPtr));
+            const std::string remoteDiagnostic =
+                LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
+            Log(EchoVR::LogLevel::Info, "%s", remoteDiagnostic.c_str());
             break;
           }
 
@@ -862,7 +914,9 @@ void InstallWebSocketBridge() {
               int msgIdx = 0;
               while (remaining >= 24) {
                 if (memcmp(p, marker_bytes, 8) != 0) {
-                  Log(EchoVR::LogLevel::Warning, "[NEVR.WS] game->server: bad marker at offset %zu",
+                  Log(EchoVR::LogLevel::Warning,
+                      "[NEVR.WS] game->server: bad marker at offset %zu — per-message diagnostic "
+                      "decode aborted here, raw frame still forwarded to remote unparsed",
                       msg->str.size() - remaining);
                   break;
                 }
@@ -878,7 +932,7 @@ void InstallWebSocketBridge() {
                   snprintf(symBuf, sizeof(symBuf), "0x%016llx",
                            (unsigned long long)sym);
                 }
-                Log(EchoVR::LogLevel::Debug, "[NEVR.WS] game->server [%d]: sym=%s len=%llu (conn=%s)",
+                Log(EchoVR::LogLevel::Debug, "[NEVR.WS] game->server [%d]: sym=%s len=%llu ws_conn_id=%s",
                     msgIdx, symBuf, (unsigned long long)len,
                     connState->getId().c_str());
                 // Hex dump PlayerSessionRequest (0x9af2fab2a0c81a05) for debugging
@@ -903,18 +957,17 @@ void InstallWebSocketBridge() {
                       (unsigned long long)routingId, (unsigned long long)targetUserId,
                       (unsigned long long)sessionGuid);
                 }
-                // 2026-09-13 DIAG (Andrew): does the client ever send this at all,
-                // regardless of which internal path constructs it? Logged at Info
-                // (not Debug) on purpose — no global log-level change needed to see
-                // it. Same wire shape as FriendInviteRequest above.
                 // SNSPartyInviteRequest (0xcf13f934540b5f5e): RoutingID(8)+UUID(16)+SessionGUID(8)+TargetUserID(8)
+                // (was briefly logged at Info for a 2026-09-13 investigation into whether
+                // the client ever sends this; that investigation window has closed, back
+                // to Debug alongside the other per-message decodes in this loop.)
                 if (sym == 0xcf13f934540b5f5e && len >= 0x28) {
                   uint64_t routingId, sessionGuid, targetUserId;
                   memcpy(&routingId, p + 24, 8);
                   memcpy(&sessionGuid, p + 24 + 24, 8);
                   memcpy(&targetUserId, p + 24 + 32, 8);
-                  Log(EchoVR::LogLevel::Info,
-                      "[NEVR.WS] DIAG PartyInviteRequest SENT: routing=%llu target=%llu session=%llu",
+                  Log(EchoVR::LogLevel::Debug,
+                      "[NEVR.WS]   PartyInviteRequest: routing=%llu target=%llu session=%llu",
                       (unsigned long long)routingId, (unsigned long long)targetUserId,
                       (unsigned long long)sessionGuid);
                 }
@@ -924,7 +977,9 @@ void InstallWebSocketBridge() {
                 }
                 size_t total = 24 + (size_t)len;
                 if (total > remaining) {
-                  Log(EchoVR::LogLevel::Warning, "[NEVR.WS]   truncated: need %llu but only %zu remaining",
+                  Log(EchoVR::LogLevel::Warning,
+                      "[NEVR.WS]   truncated: need %llu but only %zu remaining — per-message "
+                      "diagnostic decode aborted here, raw frame still forwarded to remote unparsed",
                       (unsigned long long)total, remaining);
                   break;
                 }
@@ -943,7 +998,8 @@ void InstallWebSocketBridge() {
               if (pair->remoteOpen) {
                 if (msg->binary) {
                   auto info = pair->remoteWs->sendBinary(msg->str);
-                  Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> forwarded (success=%d)", info.success);
+                  Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> forwarded (success=%s)",
+                      info.success ? "true" : "false");
                 } else {
                   pair->remoteWs->sendText(msg->str);
                 }
@@ -953,7 +1009,17 @@ void InstallWebSocketBridge() {
                     pair->pendingToRemote.size());
               }
             } else {
-              Log(EchoVR::LogLevel::Warning, "[NEVR.WS]   -> DROPPED (no pair found)");
+              // N.B.: if g_pairs loses an entry (e.g. a Close/Message race) while the
+              // game keeps sending on that socket, every subsequent message would
+              // independently re-trigger this WARNING with zero new signal after the
+              // first — count instead of flooding.
+              static std::atomic<uint64_t> s_droppedCount{0};
+              uint64_t dropped = ++s_droppedCount;
+              if (dropped == 1 || dropped % 100 == 0) {
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.WS]   -> DROPPED (no pair found) — %llu total occurrences",
+                    (unsigned long long)dropped);
+              }
             }
             break;
           }
@@ -1014,9 +1080,10 @@ void InstallWebSocketBridge() {
   g_server->start();
   g_bridgeEnabled = true;
 
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.WS] Proxy listening on ws://127.0.0.1:%u -> %s",
-      g_proxyPort, g_remoteUri.c_str());
+  const std::string localUri = "ws://127.0.0.1:" + std::to_string(g_proxyPort);
+  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
+      "[NEVR.WS] Proxy listening on ", localUri, " -> ", g_remoteUri);
+  Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
 
   // N146: pnsradmatchmaking uses Rad's R14NETCLIENT with a hardcoded
   // fallback host/port (matchmaker.readyatdawn.com) when matchingservice_host
@@ -1049,15 +1116,17 @@ void InstallWebSocketBridge() {
       uint16_t tryPort = matchDist(matchGen);
       s_matchServer = std::make_unique<ix::WebSocketServer>(tryPort, "127.0.0.1");
       s_matchServer->disablePerMessageDeflate();
-      auto [ok, err] = s_matchServer->listen();
+      auto [ok, errorText] = s_matchServer->listen();
       if (ok) {
         g_matchPort = tryPort;
         matchBound = true;
         break;
       }
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.WS] Matchmaker port %u bind failed: %s — retrying (%d/%d)",
-          tryPort, err.c_str(), attempt + 1, kMaxMatchBindAttempts);
+      (void)errorText;
+      const std::string diagnostic =
+          LogDiagnostics::FormatBindFailureDiagnostic("Matchmaker", tryPort, attempt + 1,
+                                                      kMaxMatchBindAttempts);
+      Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
       s_matchServer.reset();
     }
 
@@ -1160,10 +1229,28 @@ int TestHook_GuardWsCallbackForwardsArguments(int first, int second) {
 
 bool TestHook_GuardWsCallbackContainsStdException() {
   const auto guarded = GuardWsCallback("ws_bridge_test", []() {
-    throw std::runtime_error("intentional callback exception");
+    throw std::runtime_error("response-secret-sentinel");
   });
   guarded();
   return true;
+}
+
+bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* statusCode, size_t* messageBytes) {
+  if (statusCode == nullptr || messageBytes == nullptr) return false;
+  const std::optional<LoginFailureDiagnostic> diagnostic = ReadLoginFailureDiagnostic(frame);
+  if (!diagnostic.has_value()) return false;
+  *statusCode = diagnostic->statusCode;
+  *messageBytes = diagnostic->messageBytes;
+  return true;
+}
+
+bool TestHook_LogLoginFailureDiagnostic(const std::string& frame, bool serverMode) {
+  const std::optional<LoginFailureDiagnostic> diagnostic = ReadLoginFailureDiagnostic(frame);
+  const std::string message = LogDiagnostics::FormatLoginFailureDiagnostic(
+      diagnostic.has_value(), diagnostic ? diagnostic->statusCode : 0, diagnostic ? diagnostic->messageBytes : 0,
+      serverMode);
+  Log(EchoVR::LogLevel::Warning, "%s", message.c_str());
+  return diagnostic.has_value();
 }
 
 bool TestHook_GuardWsCallbackPropagatesNonStdException() {

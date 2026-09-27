@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 #include <atomic>
 #include <algorithm>
+#include <cerrno>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -282,16 +283,18 @@ static std::string BuildLogFilePath() {
     return path;
 }
 
-static void OpenLogFile() {
+static void OpenLogFile(bool isRotate) {
     g_log_file_path = BuildLogFilePath();
     g_log_file = std::fopen(g_log_file_path.c_str(), "ab");
     if (!g_log_file) {
-        PluginLog("failed to open log file: %s", g_log_file_path.c_str());
+        PluginLog("failed to open log file: %s (errno=%d: %s)",
+                  g_log_file_path.c_str(), errno, std::strerror(errno));
         return;
     }
     g_file_bytes_written = 0;
     g_file_open_time = GetEpochSeconds();
-    PluginLog("logging to: %s", g_log_file_path.c_str());
+    PluginLog("logging to: %s (reason=%s)",
+              g_log_file_path.c_str(), isRotate ? "rotate" : "init");
 }
 
 static void CloseLogFile() {
@@ -372,7 +375,7 @@ static void RotateIfNeeded() {
     if (!ShouldRotate()) return;
     CloseLogFile();
     PruneOldLogs();
-    OpenLogFile();
+    OpenLogFile(/*isRotate=*/true);
 }
 
 void InitFileLogging() {
@@ -405,7 +408,7 @@ void InitFileLogging() {
 #endif
     }
 
-    OpenLogFile();
+    OpenLogFile(/*isRotate=*/false);
 }
 
 void ShutdownFileLogging() {

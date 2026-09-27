@@ -100,37 +100,94 @@ def check_no_fatal(log: str, exit_code: int | None) -> Result:
 
 # --- Hook installation ---------------------------------------------------------
 
-# Defects that are already tracked and must not fail the run, but must keep
-# printing. Add an entry only with the reason and where it is tracked.
+# Exact, mode-scoped hook collisions that are known and must remain visible.
+# A matching name alone is not enough: unknown reasons or modes fail the run.
 KNOWN_HOOK_FAILURES = {
-    # Native Windows and Wine both hit this; the DLL-load hook and the
-    # GetProcAddress hook both create the same MinHook target.
-    "EchoVR::GetProcAddress": "MH_ERROR_ALREADY_CREATED (N126/N128 diagnostic; hook is redundant)",
-    # The runtime itself logs these as "redundant on headless - OVR SDK is never loaded; N127".
-    "LoadLibraryW": "MH_ERROR_ALREADY_CREATED (N127; redundant on headless)",
-    "LoadLibraryExW": "MH_ERROR_ALREADY_CREATED (N127; redundant on headless)",
+    # The DLL-load and GetProcAddress hooks share a MinHook target in all modes.
+    "EchoVR::GetProcAddress": (
+        "MH_ERROR_ALREADY_CREATED", "any", "N126/N128 diagnostic; hook is redundant"
+    ),
+    # The Oculus load filters are redundant only for headless server runs.
+    "LoadLibraryW": ("MH_ERROR_ALREADY_CREATED", "headless", "N127; redundant on headless"),
+    "LoadLibraryExW": ("MH_ERROR_ALREADY_CREATED", "headless", "N127; redundant on headless"),
 }
 
-_HOOK_FAILED = re.compile(r"hook FAILED name=(?P<name>\S+)")
+_BOOT_HOOK_MARKER = re.compile(r"\bboot hooks installed\b(?P<tail>[^\r\n]*)", re.IGNORECASE)
+_BOOT_HOOK_OK = re.compile(r"\bok=(?P<value>[^\s]*)", re.IGNORECASE)
+_HOOK_FAILURE = re.compile(r"\bhook\s+failed\b(?P<tail>.*)", re.IGNORECASE)
+_HOOK_NAME = re.compile(r"\bname=(?P<value>\S+)", re.IGNORECASE)
+_HOOK_ERROR = re.compile(r"\b(?:reason|status)=(?P<value>\S+)", re.IGNORECASE)
+
+
+def _boot_hook_result(text: str) -> Result:
+    markers = list(_BOOT_HOOK_MARKER.finditer(text))
+    if not markers:
+        # Historical captures predate the boolean marker. Keep their original
+        # success signal readable without rewriting the evidence fixture.
+        if "All hooks installed" in text:
+            return Result("hooks_installed", PASS, "historical All hooks installed marker")
+        return Result("hooks_installed", FAIL, "missing 'boot hooks installed ok=' marker")
+
+    values: list[str] = []
+    malformed = False
+    for marker in markers:
+        value = _BOOT_HOOK_OK.search(marker["tail"])
+        if value is None or value["value"].lower() not in {"true", "false"}:
+            malformed = True
+        else:
+            values.append(value["value"].lower())
+
+    # Any explicit/malformed failure wins, even if another line says true.
+    if malformed:
+        return Result("hooks_installed", FAIL, "malformed boot-hook status marker")
+    if "false" in values:
+        return Result("hooks_installed", FAIL, "boot hooks installed ok=false")
+    if values:
+        return Result("hooks_installed", PASS, "boot hooks installed ok=true")
+    return Result("hooks_installed", FAIL, "missing boot-hook status value")
+
+
+def _is_headless_server(text: str) -> bool:
+    return bool(re.search(
+        r"Server mode[^\r\n]*headless[^\r\n]*noovr applied|bit0_render=CLEAR\(HEADLESS\)",
+        text,
+        re.IGNORECASE,
+    ))
 
 
 def check_hooks(log: str) -> list[Result]:
     text = strip_ansi(log)
-    results: list[Result] = []
-    if "All hooks installed" not in text:
-        results.append(Result("hooks_installed", FAIL, "never logged 'All hooks installed'"))
-    else:
-        results.append(Result("hooks_installed", PASS, "All hooks installed"))
+    results = [_boot_hook_result(text)]
     unexpected, known = [], []
-    for m in _HOOK_FAILED.finditer(text):
-        (known if m["name"] in KNOWN_HOOK_FAILURES else unexpected).append(m["name"])
+    headless_server = _is_headless_server(text)
+    for line in text.splitlines():
+        failure = _HOOK_FAILURE.search(line)
+        if failure is None:
+            continue
+        name_match = _HOOK_NAME.search(failure["tail"])
+        error_match = _HOOK_ERROR.search(failure["tail"])
+        if name_match is None or error_match is None:
+            unexpected.append("hook failure missing name or reason/status")
+            continue
+        name = name_match["value"]
+        error = error_match["value"]
+        expected = KNOWN_HOOK_FAILURES.get(name)
+        if expected is None:
+            unexpected.append(f"{name} ({error})")
+            continue
+        expected_error, expected_mode, explanation = expected
+        mode_matches = expected_mode == "any" or (expected_mode == "headless" and headless_server)
+        if error != expected_error or not mode_matches:
+            unexpected.append(f"{name} ({error})")
+            continue
+        known.append((name, explanation))
     if unexpected:
         results.append(Result("no_unexpected_hook_failure", FAIL,
-                              "hook FAILED: " + ", ".join(sorted(set(unexpected)))))
+                              "hook failed: " + ", ".join(sorted(set(unexpected)))))
     else:
         results.append(Result("no_unexpected_hook_failure", PASS, "no unexpected hook failures"))
-    for name in sorted(set(known)):
-        results.append(Result("known_hook_failure", WARN, f"{name}: {KNOWN_HOOK_FAILURES[name]}"))
+    for name, explanation in sorted(set(known)):
+        results.append(Result("known_hook_failure", WARN, f"{name}: {explanation}"))
     return results
 
 

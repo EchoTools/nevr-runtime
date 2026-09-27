@@ -232,14 +232,14 @@ The following transitions are **mandatory** INFO-level log points:
 - **Startup:** component initialized, hooks installed, config loaded,
   modules/plugins loaded (each with name and version).
 - **Connectivity:** WebSocket connected (with URI and connection index),
-  WebSocket disconnected (with code and reason), WebSocket error (with
-  error string).
+  WebSocket disconnected (with numeric close code), WebSocket error (with
+  numeric HTTP status/retry fields where available).
 - **Registration:** registration request sent (with message type and
   size), registration success received (with server_id),
-  registration failure received (with error code and message).
+  registration failure received (with error code and message byte count).
 - **Login:** login request injected (with XPID, connection index, and
   size), login success received, login failure received (with status
-  code and error message).
+  code and message byte count).
 - **Session:** session created, session started, session ended (each
   with session ID).
 - **Shutdown:** component shutting down, hooks removed, connections
@@ -249,7 +249,17 @@ A component that initializes silently is a component whose failure is
 undetectable. Every `Init()` function SHALL log at entry and exit, with
 the exit log including success/failure and any relevant state.
 
-### Rule 4: Noise is a defect
+### Rule 4: Remote text and response bodies are not log fields
+
+HTTP response bodies, JSON parser exception text, protobuf error messages,
+WebSocket close/error reasons, and callback exception text can echo secrets or
+user supplied content. Do not log these values, even at Debug. Keep the
+operational signal by logging numeric status/error codes, bounded byte counts,
+retry counts, and stable event markers. URL diagnostics must use the redacted
+formatters and omit query and fragment data. Preserve the original response
+and request bytes for protocol handling; this rule changes diagnostics only.
+
+### Rule 5: Noise is a defect
 
 echovr-native log lines are "objectively 97% worthless" (owner). The
 built-in log filter exists to suppress them (see N18). If noise is
@@ -285,7 +295,7 @@ What constitutes noise:
 5. After tuning, re-capture and verify that >80% of lines carry a NEVR
    subsystem tag and a traceable identifier.
 
-### Rule 5: Hook failures are WARNINGS, not silent drops
+### Rule 6: Hook failures are WARNINGS, not silent drops
 
 Hook installation failures (wave0, MinHook, prologue validation) SHALL
 be logged at WARNING level with:
@@ -325,7 +335,7 @@ just started failing" without a baseline.
 `src/runtime/log/builtin_filter.cpp:826`. Tracked as N17
 (startup hook errors not systematically tracked).
 
-### Rule 6: The Log() function is the single entry point
+### Rule 7: The Log() function is the single entry point
 
 `Log(EchoVR::LogLevel::level, "format %d", val)` from
 `src/core/logging.h:18` is the mechanism. This standard defines WHAT
@@ -376,7 +386,7 @@ section. Retrieve it with:
 
     git show 9bf274450e2ddbcbba5f61dc67f23f14f5c3e064:docs/reference/logging-format.md
 
-### Rule 7: State transitions log FROM -> TO
+### Rule 8: State transitions log FROM -> TO
 
 Every state machine transition SHALL log both the old state and the new
 state. The operator cannot diagnose a stuck state machine from a log
@@ -401,7 +411,7 @@ This applies to:
 - Game mode transitions (lobby -> pregame -> playing -> postgame ->
   lobby).
 
-### Rule 8: Connection-scoped events carry the connection index
+### Rule 9: Connection-scoped events carry the connection index
 
 Every log line that relates to a specific WebSocket connection SHALL
 include the connection index (`conn=%d`). Connections are identified by
@@ -418,7 +428,7 @@ Log(EchoVR::LogLevel::Info, "[NEVR.WS] remote opened conn=%d uri=%s",
     connIdx, uri.c_str());
 ```
 
-### Rule 9: Error paths log the error code
+### Rule 10: Error paths log the error code
 
 Every ERROR or WARNING log line that reports a failure SHALL include the
 error code that caused it. `"Failed to load module"` without the
@@ -435,21 +445,22 @@ Log(EchoVR::LogLevel::Error,
     name, GetLastError(), dllPath.c_str());
 ```
 
-### Rule 10: Config values logged at load time
+### Rule 11: Config decisions logged at load time
 
-Every config value that affects runtime behavior SHALL be logged at
-INFO level when it is loaded. This includes:
+Every config decision that affects runtime behavior SHALL be logged at
+INFO level when it is loaded. Log the key and a safe summary, not secret
+values or unredacted URLs. This includes:
 
 - CLI flags (`-server`, `-headless`, `-timestep`, `-telemetry`).
-- Config-file overrides (arena round time, mercy score, service URLs).
-- Service redirects (every URL that is redirected to the bridge).
+- Config-file overrides (arena round time, mercy score, and redacted service URLs).
+- Service redirects (each key and redacted source/destination URL).
 - Module/plugin load decisions (loaded, skipped, failed).
 
-The log is the only record of what configuration the process is running
-with. If a config value is not logged, the operator must guess whether
+The log is the only record of what configuration decisions the process is
+running with. If a decision is not logged, the operator must guess whether
 it was applied.
 
-### Rule 11: Bootstrap log lines carry a level prefix
+### Rule 12: Bootstrap log lines carry a level prefix
 
 Before the game logger is available, `BootLogTee::TeeFprintf` is the
 only output mechanism. These lines SHALL embed their level in the format
@@ -468,7 +479,7 @@ The level prefix (`info;`, `warn;`, `error;`) bridges the gap until
 subsequent output SHALL use `Log()` — `TeeFprintf` is a bootstrap
 mechanism only.
 
-### Rule 12: INFO is summary, DEBUG is narrative
+### Rule 13: INFO is summary, DEBUG is narrative
 
 Every event that produces multiple log lines SHALL follow this pattern:
 
@@ -480,7 +491,8 @@ Every event that produces multiple log lines SHALL follow this pattern:
 
 ```
 // INFO — one summary line
-[NEVR.PATCH] boot complete: 14 hooks installed, 1 deferred, 1 known-failed (N126/N128), 0 unexpected
+[NEVR.PATCH] boot complete: 14 hooks installed, 1 deferred, 1 known-failed
+  (target address changed in a prior game update — see N126/N128 for history), 0 unexpected
 
 // DEBUG — per-item narrative (gated behind DEBUG level)
 [NEVR.BOOT] debug; installing crash recovery hooks
@@ -494,7 +506,7 @@ This applies to boot sequences, plugin loading, connection setup, and
 any multi-step operation. If there are N items, INFO gets one summary
 line with the count; DEBUG gets the N individual lines.
 
-### Rule 13: Sensor-encoded level decisions are revisable
+### Rule 14: Sensor-encoded level decisions are revisable
 
 Sensors that pin a log level (e.g. "this message SHALL be Debug") encode
 a past decision, not a permanent law. When the logging standard evolves,
@@ -517,11 +529,11 @@ form.
 | ------- | ------ | ----- |
 | Login injection (N15) | `"[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)"` | `"[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu"` |
 | WebSocket connected | `"[WEBSOCKET] Connected to ServerDB"` | `"[NEVR.WS] websocket connected uri=%s conn=%d"` |
-| WebSocket disconnected | `"[WEBSOCKET] Disconnected from ServerDB (code: %d, reason: %s)"` | `"[NEVR.WS] websocket closed conn=%d code=%d reason=%s"` |
+| WebSocket disconnected | `"[WEBSOCKET] Disconnected from ServerDB (code: %d, reason: %s)"` | `"[WEBSOCKET] Disconnected from ServerDB (code: %u) reconnect_count=%u"` |
 | Login success | `"[NEVR.WS] LOGIN SUCCESS"` | `"[NEVR.WS] login success xpid=%s conn=%d session=%s"` |
-| Login failure | `"[NEVR.WS] LOGIN FAILURE: status=%llu msg=%.*s"` | `"[NEVR.WS] login failed xpid=%s conn=%d status=%llu reason=%s"` |
+| Login failure | `"[NEVR.WS] LOGIN FAILURE: status=%llu msg=%.*s"` | `"[NEVR.WS] login failed status=%llu message_bytes=%zu"` |
 | Hook failure | `"[wave0] FAILED to hook fcn.0x%llX"` | `"[NEVR.PATCH] hook failed name=%s va=0x%llX expected=%s actual=%s"` |
-| Config redirect | `"[NEVR.PATCH] Service redirect [%s]: %s -> %s"` | `"[NEVR.PATCH] service redirect key=%s from=%s to=%s"` |
+| Config redirect | `"[NEVR.PATCH] Service redirect [%s]: %s -> %s"` | `"[NEVR.PATCH] service redirect key=%s from=%s to=%s"` (URLs redacted) |
 | Module loaded | `"[NEVR.MODULE] Loaded: %s"` | `"[NEVR.MODULE] loaded name=%s path=%s"` |
 | Plugin loaded | `"[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u)"` | Already compliant — carries name, version, API version |
 | Registration | `"[NEVR.GAMESERVER] Received registration success via protobuf: server_id=%llu, ip=%s"` | Already compliant — carries server_id, ip |
@@ -536,8 +548,8 @@ form.
 | ------------------------ | ----- | ---------------- | ------------------------------------------- |
 | State transition         | INFO  | Per-transition   | Log FROM -> TO, once per change             |
 | WebSocket connect        | INFO  | Once             | Log URI + conn index                        |
-| WebSocket disconnect     | INFO  | Once             | Log code + reason + conn index              |
-| WebSocket error          | WARN  | Once per failure | Log error string + conn index               |
+| WebSocket disconnect     | INFO  | Once             | Log numeric close code + reconnect count     |
+| WebSocket error          | WARN  | Once per failure | Log numeric status/retries + reconnect count |
 | Message forward          | DEBUG | Rate-limited     | Summary every N seconds or N messages        |
 | Per-frame diagnostic     | DEBUG | Off in prod      | Gated by verbosity flag                     |
 | Login injected           | INFO  | Once per conn    | Log XPID + conn + size                      |
@@ -571,6 +583,185 @@ failing any of these checks is rejected until the violation is fixed.
 | Game-native line without NEVR annotation     | Noise (N18)                       | Suppress or wrap with structured fields               |
 | Free-text message with no key=value fields   | Not machine-parseable             | Use key=value format for identifiers and outcomes     |
 | Config value not logged at load              | Configuration is invisible        | Log at INFO with key + value                          |
+| Event with no consequence stated (G)         | Reader can't tell why it matters  | State the "so what," not just the "what"               |
+| Field name doesn't match its type (H)        | Misleads at a glance, invites bugs | Rename the field or fix the representation             |
+| Raw hex/pointer/hash at INFO+ unresolved (I) | No human meaning at that level    | Resolve to a name, or demote to DEBUG                  |
+| Same fact stated twice (J)                   | Wastes the reader's attention     | Merge into one line, or delete the redundant one        |
+| Ticket ref standing in for an explanation (K)| Reader must leave the log to understand | Put the explanation in the line; ticket is a footnote |
+| Message doesn't parse as English (L)         | Actively confusing                | Reread it as a sentence before shipping                |
+| Same failure code explained inconsistently across sites (M) | Reader can't tell benign from urgent | Bring every site up to the best existing explanation |
+
+---
+
+## Message Content Quality (Categories G-M)
+
+Everything above this section governs LEVEL (is this INFO or WARNING?) and
+structure (does it have a tag, an identifier, an outcome?). A log line can
+satisfy every rule above and still be useless: it can state that an event
+happened without saying why an operator should care, or dump a raw hex value
+a reader can't act on. This section is a second, orthogonal pass — assume
+the level is already right and Rule 1's four fields are already present, and
+ask instead: **does the line's CONTENT actually tell the reader what they
+need?**
+
+This section was added after a 2026-09 repo-wide audit of every `Log()` /
+`FatalError()` / `ServerFatal()` call site (706 sites across `src/`,
+`src/modules/`, and `plugins/`) found that ~55% of flagged sites failed
+Category G alone — the single most common defect in this codebase's logging
+is not a missing tag or a wrong level, it's a line that reports an event
+without reporting its consequence. Apply these checks to every new `Log()`
+call, the same way Rule 1-13 already apply.
+
+### Category G: State the consequence, not just the event
+
+"X happened" is not the same claim as "X happened, and here is why it
+matters." A log line SHALL answer "so what?" in the line itself — a reader
+should never need to already know why a hook/patch/handler exists to
+understand why its line is there.
+
+```cpp
+// BEFORE — an event with no consequence
+Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateProcessW hook installed");
+
+// AFTER — the same event, with the reason it exists
+Log(EchoVR::LogLevel::Info,
+    "[NEVR.PATCH] CreateProcessW hook installed (crash reporter launch blocked)");
+```
+
+This is distinct from Rule 1's OUTCOME field (success/fail/count/bytes) —
+OUTCOME says whether the event succeeded; Category G says why the event was
+worth doing at all. A line can have a perfect OUTCOME and still fail G:
+`"hook installed: 1/1 succeeded"` has an outcome, but not a consequence.
+
+### Category H: Match the field's name to what it actually holds
+
+A field name is a promise about type. `_id` implies an opaque identifier, not
+a display string. A bare `=1`/`=0` reads as a count or a flag with no way to
+tell which. A "count" field that's secretly a bitmask will eventually get
+compared with `==` by someone who trusted the name.
+
+```cpp
+// BEFORE — success is a bool, printed as if it were a count
+Log(EchoVR::LogLevel::Debug, "[NEVR.WS] frame forwarded success=%d", ok);
+
+// AFTER — the name and the representation agree
+Log(EchoVR::LogLevel::Debug, "[NEVR.WS] frame forwarded success=%s", ok ? "true" : "false");
+```
+
+Watch especially for the same field NAME used for two different semantic
+TYPES across nearby lines in the same file (e.g. `conn=%d` meaning a
+login-order index in most of a file, then `conn=%s` meaning a third-party
+library's internal connection-id string a few hundred lines later) — that's
+Category H even when each individual line is internally consistent.
+
+### Category I: Resolve mechanism dumps to human meaning
+
+Raw hex, pointer values, symbol hashes, or virtual addresses at INFO or
+above, with nothing resolved for a reader who isn't the hook's original
+author, are noise wearing the clothes of data.
+
+```cpp
+// BEFORE — a real finding: hardcoded placeholder bytes presented as real data
+Log(EchoVR::LogLevel::Warning,
+    "[NEVR.LOGFILTER] hook verify mismatch expected=00000000 actual=%02x%02x%02x%02x status=%d",
+    actual[0], actual[1], actual[2], actual[3], status);
+
+// AFTER — the real expected bytes, and a resolved status name
+Log(EchoVR::LogLevel::Warning,
+    "[NEVR.LOGFILTER] hook verify mismatch expected=%02x%02x%02x%02x actual=%02x%02x%02x%02x status=%s",
+    expected[0], expected[1], expected[2], expected[3],
+    actual[0], actual[1], actual[2], actual[3], MH_StatusToString((MH_STATUS)status));
+```
+
+If a value genuinely can't be resolved to a name (a truly novel symbol hash
+with no corpus entry) and has no operational meaning to anyone but the hook
+author, that's a real signal too — but the signal is "this belongs at
+DEBUG," not "log it at INFO anyway because it's technically data."
+
+### Category J: One fact, one line
+
+Two or more lines stating the same fact twice — a per-item line immediately
+followed by a summary repeating the identical count with nothing new, or a
+capstone line that adds nothing after the line before it already said it —
+SHALL be merged or deleted.
+
+```cpp
+// BEFORE — a real finding: the capstone line is unconditional, even when the
+// four failure paths above it set g_bootHookFailed and never early-return
+Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] All hooks installed");
+
+// AFTER — the capstone reflects what the failure paths above it actually recorded
+Log(EchoVR::LogLevel::Info,
+    "[NEVR.PATCH] boot hooks: %d installed, %d failed%s", installedCount, failedCount,
+    failedCount > 0 ? " — see WARNING lines above for which" : "");
+```
+
+Note the AFTER example is *also* an instance of the general fix for
+unconditional summary lines: a summary line's truth value must be computed
+from the same state the detail lines above it observed, not asserted
+independently.
+
+### Category K: Explain in the line; cite the ticket as a footnote
+
+A ticket reference standing in for an explanation forces the reader to go
+find and read the ticket to understand a line in front of them right now.
+The explanation belongs in the line. The ticket ref, if kept at all, is a
+footnote.
+
+```cpp
+// BEFORE — this exact line already exists in this document, in Rule 12's own
+// example above; it violates the category the rule it illustrates is not about
+[NEVR.PATCH] boot complete: 14 hooks installed, 1 deferred, 1 known-failed (N126/N128), 0 unexpected
+
+// AFTER
+[NEVR.PATCH] boot complete: 14 hooks installed, 1 deferred, 1 known-failed
+  (target address changed in a prior game update — see N126/N128 for history), 0 unexpected
+```
+
+(Rule 12's example above this section should be updated to match the AFTER
+form in the same commit that adds this section — it is the one place in this
+document that models the anti-pattern it's supposed to prevent.)
+
+### Category L: The sentence has to parse
+
+Read the line as an English sentence, not as a template with blanks filled
+in. If a word is missing, it doesn't matter how correct the data is.
+
+```cpp
+// BEFORE — a real finding; "behind the game's" has no object
+Log(EchoVR::LogLevel::Info,
+    "[NEVR.PATCH] Console ctrl handler installed (behind the game's until re-armed)");
+
+// AFTER
+Log(EchoVR::LogLevel::Info,
+    "[NEVR.PATCH] console ctrl handler installed (behind the game's handler in the chain until re-armed)");
+```
+
+### Category M: One failure class, one standard of explanation
+
+The same underlying failure code or condition — `MH_ERROR_ALREADY_CREATED`,
+a specific `GetLastError()` value, a parse-error path — hit at more than one
+call site SHALL be explained to the same standard everywhere it's caught.
+When one site says "benign — a sibling patch already owns this address" and
+another site hits the identical code with a bare "hook failed," that's not
+two findings, it's one finding with an uneven fix. Search for the failure
+constant repo-wide before writing the fix; bring every site up to the best
+existing explanation, don't write a new one from scratch at each site.
+
+```cpp
+// BEFORE — two sites, same MH_STATUS, two different amounts of information
+// site A (mode_patches.cpp): explains it
+Log(EchoVR::LogLevel::Warning,
+    "[NEVR.PATCH] hook already created at 0x%llX — a sibling patch owns this address, one hook wins, benign",
+    va);
+// site B (binary_bug_fixes.cpp): doesn't
+Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] MH_CreateHook failed");
+
+// AFTER — site B brought up to site A's standard
+Log(EchoVR::LogLevel::Warning,
+    "[NEVR.PATCH] hook create failed va=0x%llX status=%s%s", va, MH_StatusToString(status),
+    status == MH_ERROR_ALREADY_CREATED ? " (a sibling patch owns this address, one hook wins, benign)" : "");
+```
 
 ---
 
@@ -582,6 +773,11 @@ failing any of these checks is rejected until the violation is fixed.
   filter and is refused by the loader. `src/runtime/log/builtin_filter.cpp`
   is the shipping path; do not reintroduce the plugin.
 - **N19** — No logging standards exist (this document).
+- **2026-09 message-content audit** — repo-wide review of all 706 `Log()`/
+  `FatalError()`/`ServerFatal()` call sites in `src/`, `src/modules/`, and
+  `plugins/` against Categories G-M above (N-ledger closed; findings tracked
+  as GitHub issues, not N-entries). Basis for the "Message Content Quality"
+  section.
 - **N17** — Startup hook errors not systematically tracked.
 - **N14** — Platform prefix hardcoded as OVR_ORG (affects XPID correctness).
 - **AGENTS.md** — Project conventions, `Log()` usage, subsystem architecture.

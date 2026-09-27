@@ -259,9 +259,19 @@ static void __fastcall EndMultiplayerHook(int64_t arg1, int64_t arg2) {
         int64_t* session_ptr = reinterpret_cast<int64_t*>(arg1 + 0x2DA0);
         if (*session_ptr == 0) {
             LONG count = InterlockedIncrement(&s_null_deref_count);
-            Log(EchoVR::LogLevel::Warning,
-                "[NEVR.PATCH] EndMultiplayer: session ptr at +0x2DA0 is NULL (crash prevented, count=%ld)",
-                count);
+            // A once-off null deref is an absorbed engine bug; hundreds of them
+            // in one session mean the invariant this fix relies on is not
+            // holding, and the operator should be told the difference.
+            if (count < 10) {
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.PATCH] EndMultiplayer: session ptr at +0x2DA0 is NULL (crash prevented, count=%ld)",
+                    count);
+            } else {
+                Log(EchoVR::LogLevel::Error,
+                    "[NEVR.PATCH] EndMultiplayer: session ptr at +0x2DA0 is NULL %ld times this session — "
+                    "recurring, not one-off (crash prevented each time)",
+                    count);
+            }
             return;  // Skip the original — it would crash
         }
     }
@@ -378,11 +388,18 @@ static void __fastcall WaitForValueHook(volatile uint32_t* ptr, uint32_t expecte
     // Validated against bounds to catch version-drift silent misread (N31).
     uint32_t spin_limit = *reinterpret_cast<volatile uint32_t*>(g_base + OFF_SPINWAIT_SPIN_LIMIT);
     if (spin_limit < SPIN_LIMIT_MIN || spin_limit > SPIN_LIMIT_MAX) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] WaitForValue spin_limit=%u out of bounds [%u,%u] — "
-            "possible version drift at offset 0x%X, using default %u",
-            spin_limit, SPIN_LIMIT_MIN, SPIN_LIMIT_MAX,
-            static_cast<unsigned int>(OFF_SPINWAIT_SPIN_LIMIT), SPIN_LIMIT_DEFAULT);
+        // spin_limit is read from a fixed game-binary global that cannot change
+        // at runtime, so an out-of-bounds read here is out-of-bounds on every
+        // call for the rest of the process — this is a hot spin-wait path, so
+        // log the drift once (edge-triggered) rather than once per call.
+        static std::atomic_bool s_spinLimitWarned{false};
+        if (!s_spinLimitWarned.exchange(true)) {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] WaitForValue spin_limit=%u out of bounds [%u,%u] at offset 0x%X — "
+                "using default %u for remainder of session (version drift)",
+                spin_limit, SPIN_LIMIT_MIN, SPIN_LIMIT_MAX,
+                static_cast<unsigned int>(OFF_SPINWAIT_SPIN_LIMIT), SPIN_LIMIT_DEFAULT);
+        }
         spin_limit = SPIN_LIMIT_DEFAULT;
     }
 
@@ -423,10 +440,16 @@ static uint64_t __fastcall HttpListenerBringupHook(int64_t* state, const char* a
     HookLiveness::Mark(HookLiveness::kHttpListenerBringup);
     uint64_t result = s_origHttpListenerBringup(state, address, port);
     if (result == 0 && g_isServer) {
+        // PB1 (Rule 9): the RE finding that a 0 return means "bind failed, port
+        // in use" is believed definitive (this wrapper's only 0-return path per
+        // the file header), but capturing the real socket error costs nothing
+        // and is cheap insurance if that finding ever stops holding for a future
+        // build.
+        const int err = WSAGetLastError();
         Log(EchoVR::LogLevel::Error,
-            "[NEVR.PATCH] HTTP API listener failed to bind %s:%u (port in use). A server with "
+            "[NEVR.PATCH] HTTP API listener failed to bind %s:%u (port in use, err=%d). A server with "
             "no HTTP API records zero tape — silent data loss. Forcing fatal exit (BUG #62).",
-            address ? address : "(null)", static_cast<unsigned>(port));
+            address ? address : "(null)", static_cast<unsigned>(port), err);
         ForceFatalExit(62);  // bypasses server-mode ExitProcess suppression
     }
     return result;  // success, or client mode — preserve original behavior
@@ -463,10 +486,13 @@ static uint64_t __fastcall NetGameHostCheckHook(int64_t* netgameThis, int64_t pa
         uintptr_t flagsPtr = *reinterpret_cast<uintptr_t*>(
             reinterpret_cast<uint8_t*>(netgameThis) + 0x2da0);
         uint8_t flagsByte = flagsPtr ? *reinterpret_cast<uint8_t*>(flagsPtr) : 0;
+        const int bit1 = (flagsByte >> 1) & 1;
+        const int bit2 = (flagsByte >> 2) & 1;
+        const int bit6 = (flagsByte >> 6) & 1;
+        const bool granted = bit1 || (bit2 == 0 && bit6 == 1);
         Log(EchoVR::LogLevel::Info,
-            "[NEVR.PATCH] DIAG netgame host-authority flags: byte=0x%02x bit1=%d bit2=%d bit6=%d "
-            "(host-authority = bit1 OR (bit2==0 AND bit6==1))",
-            flagsByte, (flagsByte >> 1) & 1, (flagsByte >> 2) & 1, (flagsByte >> 6) & 1);
+            "[NEVR.PATCH] DIAG netgame host-authority: granted=%s flags=0x%02x (bit1=%d bit2=%d bit6=%d)",
+            granted ? "true" : "false", flagsByte, bit1, bit2, bit6);
     }
     return s_origNetGameHostCheck(netgameThis, param2);
 }
@@ -481,11 +507,22 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
     g_base = base_addr;
 
     if (g_initialized) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] binary bug fixes already initialized, skipping duplicate Init");
+        // BinaryBugFixes::Init has exactly one call site (initialize.cpp:374),
+        // itself gated by Initialize()'s own one-shot guard (initialize.cpp:212-
+        // 213). Under the current call graph this branch is unreachable; if it
+        // ever fires, that means the single-call invariant was violated
+        // elsewhere, which is worth a WARNING, not routine INFO.
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] BinaryBugFixes::Init called again after already initialized — ignoring "
+            "(unexpected: Initialize() at initialize.cpp:212 is supposed to guarantee a single call)");
         return;
     }
 
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] installing binary bug fix hooks");
+    // No "installing binary bug fix hooks" starting line here — BootLogTee
+    // already announces the "starting" half via the bootstrap channel
+    // (initialize.cpp:373), and the paired outcome line below (hooks
+    // installed: N succeeded, N failed) reports this exact event with full
+    // detail moments later in this same function.
 
 #ifdef _WIN32
     // Cache QPC frequency (constant per process, ~20ns on Windows, ~1-5us on Wine)
@@ -510,10 +547,14 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
         s_cached_timer = CreateWaitableTimerW(NULL, TRUE, NULL);
         if (s_cached_timer) {
             Log(EchoVR::LogLevel::Info,
-                "[NEVR.PATCH] timer=standard (high-res unavailable)");
+                "[NEVR.PATCH] timer=standard precision_ms=~15.6 (high-res unavailable, vs ~0.5ms "
+                "high-res) — frame pacing degraded");
         } else {
+            const DWORD err = GetLastError();
             Log(EchoVR::LogLevel::Warning,
-                "[NEVR.PATCH] timer=failed fallback=sleep");
+                "[NEVR.PATCH] timer=failed error=%lu fallback=sleep precision_ms=~15.6 (both high-res "
+                "and standard waitable timer creation failed)",
+                err);
         }
     }
 
@@ -531,7 +572,7 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
           (void**)&s_origGetTimeMicroseconds, "GetTimeMicroseconds (BUG#1 fix)",
           GET_TIME_MICROSECONDS_PROLOGUE, sizeof(GET_TIME_MICROSECONDS_PROLOGUE) },
         { VA_GET_TIME_MILLISECONDS, (void*)&GetTimeMillisecondsHook,
-          (void**)&s_origGetTimeMilliseconds, "CTimer_GetMilliSeconds",
+          (void**)&s_origGetTimeMilliseconds, "CTimer_GetMilliSeconds (BUG#2 fix)",
           GET_TIME_MILLISECONDS_PROLOGUE, sizeof(GET_TIME_MILLISECONDS_PROLOGUE) },
         { VA_END_MULTIPLAYER, (void*)&EndMultiplayerHook,
           (void**)&s_origEndMultiplayer, "EndMultiplayer (BUG#6 fix)",
@@ -578,22 +619,23 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
             continue;
         }
 
-        // Read actual prologue bytes before hooking for Rule 5 failure reporting
-        uint8_t actual[4] = {0};
-        memcpy(actual, target, sizeof(actual));
+        // MH_STATUS capture (was: boolean-only check, then a fabricated
+        // "expected=00000000" in the failure log below — this branch only runs
+        // after the prologue check above already passed, so there is no real
+        // "expected" bytes value to show here; MH_CreateHook/EnableHook's own
+        // status is the actual reason).
+        MH_STATUS cst = MH_CreateHook(target, h.detour, h.original);
+        MH_STATUS est = (cst == MH_OK) ? MH_EnableHook(target) : cst;
 
-        if (MH_CreateHook(target, h.detour, h.original) == MH_OK &&
-            MH_EnableHook(target) == MH_OK) {
+        if (est == MH_OK) {
             Log(EchoVR::LogLevel::Info,
                 "[NEVR.PATCH] hooked name=%s va=0x%llX",
                 h.name, static_cast<unsigned long long>(h.va));
             installed++;
         } else {
             Log(EchoVR::LogLevel::Warning,
-                "[NEVR.PATCH] hook failed name=%s va=0x%llX "
-                "expected=00000000 actual=%02x%02x%02x%02x",
-                h.name, static_cast<unsigned long long>(h.va),
-                actual[0], actual[1], actual[2], actual[3]);
+                "[NEVR.PATCH] hook failed name=%s va=0x%llX reason=%s",
+                h.name, static_cast<unsigned long long>(h.va), MH_StatusToString(est));
             if (!failedNames.empty()) failedNames += ", ";
             failedNames += h.name;
             failed++;
@@ -654,26 +696,27 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
             if (!failedNames.empty()) failedNames += ", ";
             failedNames += "HTTPListenerBringup";
             failed++;
-        } else if (MH_CreateHook(target, (void*)&HttpListenerBringupHook,
-                                 (void**)&s_origHttpListenerBringup) == MH_OK &&
-                   MH_EnableHook(target) == MH_OK) {
-            Log(EchoVR::LogLevel::Info,
-                "[NEVR.PATCH] hooked name=HTTPListenerBringup va=0x%llX (BUG#62 fix)",
-                static_cast<unsigned long long>(VA_HTTP_LISTENER_BRINGUP));
-            installed++;
         } else {
-            uint8_t actual[4];
-            memcpy(actual, target, 4);
-            Log(EchoVR::LogLevel::Warning,
-                "[NEVR.PATCH] hook failed name=HTTPListenerBringup va=0x%llX "
-                "expected=%02x%02x%02x%02x actual=%02x%02x%02x%02x",
-                static_cast<unsigned long long>(VA_HTTP_LISTENER_BRINGUP),
-                HTTP_LISTENER_PROLOGUE[0], HTTP_LISTENER_PROLOGUE[1],
-                HTTP_LISTENER_PROLOGUE[2], HTTP_LISTENER_PROLOGUE[3],
-                actual[0], actual[1], actual[2], actual[3]);
-            if (!failedNames.empty()) failedNames += ", ";
-            failedNames += "HTTPListenerBringup";
-            failed++;
+            // Prologue already validated above (matched, or this branch could
+            // not be reached) — a failure here is MH_CreateHook/EnableHook's
+            // own status, not a byte mismatch, so report that instead of
+            // re-printing prologue bytes that are known to match.
+            MH_STATUS cst = MH_CreateHook(target, (void*)&HttpListenerBringupHook,
+                                          (void**)&s_origHttpListenerBringup);
+            MH_STATUS est = (cst == MH_OK) ? MH_EnableHook(target) : cst;
+            if (est == MH_OK) {
+                Log(EchoVR::LogLevel::Info,
+                    "[NEVR.PATCH] hooked name=HTTPListenerBringup va=0x%llX (BUG#62 fix)",
+                    static_cast<unsigned long long>(VA_HTTP_LISTENER_BRINGUP));
+                installed++;
+            } else {
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.PATCH] hook failed name=HTTPListenerBringup va=0x%llX reason=%s",
+                    static_cast<unsigned long long>(VA_HTTP_LISTENER_BRINGUP), MH_StatusToString(est));
+                if (!failedNames.empty()) failedNames += ", ";
+                failedNames += "HTTPListenerBringup";
+                failed++;
+            }
         }
     }
 
@@ -691,34 +734,53 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
     // this whole investigation is about. Fix: always install; the hook BODY
     // (NetGameHostCheckHook) already correctly re-checks g_isServer at
     // CALL time, by which point PreprocessCommandLineHook has long since run.
+    // DIAG block's own status, folded into the aggregate summary below — it
+    // was previously invisible there (Category G): the loop's installed/failed
+    // counters never touched this block, so a DIAG-hook failure was only
+    // visible by separately scanning for its own Warning above.
+    const char* diagNetGameHostCheckStatus = "not_attempted";
     {
         void* target = nevr::ResolveVA_Checked(g_base, VA_NETGAME_HOST_CHECK);
         if (!target) {
+            diagNetGameHostCheckStatus = "address_unmapped";
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.PATCH] DIAG hook skipped name=NetGameHostCheck va=0x%llX reason=address_unmapped",
                 static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK));
         } else if (memcmp(target, NETGAME_HOST_CHECK_PROLOGUE, sizeof(NETGAME_HOST_CHECK_PROLOGUE)) != 0) {
+            diagNetGameHostCheckStatus = "prologue_mismatch";
+            uint8_t actual[4];
+            memcpy(actual, target, sizeof(actual));
             Log(EchoVR::LogLevel::Warning,
-                "[NEVR.PATCH] DIAG hook failed name=NetGameHostCheck va=0x%llX reason=prologue_mismatch",
-                static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK));
-        } else if (MH_CreateHook(target, (void*)&NetGameHostCheckHook,
-                                  (void**)&s_origNetGameHostCheck) == MH_OK &&
-                   MH_EnableHook(target) == MH_OK) {
-            Log(EchoVR::LogLevel::Info,
-                "[NEVR.PATCH] DIAG hooked name=NetGameHostCheck va=0x%llX",
-                static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK));
+                "[NEVR.PATCH] DIAG hook failed name=NetGameHostCheck va=0x%llX reason=prologue_mismatch "
+                "expected=%02x%02x%02x%02x actual=%02x%02x%02x%02x",
+                static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK),
+                NETGAME_HOST_CHECK_PROLOGUE[0], NETGAME_HOST_CHECK_PROLOGUE[1],
+                NETGAME_HOST_CHECK_PROLOGUE[2], NETGAME_HOST_CHECK_PROLOGUE[3],
+                actual[0], actual[1], actual[2], actual[3]);
         } else {
-            Log(EchoVR::LogLevel::Warning,
-                "[NEVR.PATCH] DIAG hook failed name=NetGameHostCheck va=0x%llX (MH_CreateHook/EnableHook)",
-                static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK));
+            MH_STATUS cst = MH_CreateHook(target, (void*)&NetGameHostCheckHook,
+                                          (void**)&s_origNetGameHostCheck);
+            MH_STATUS est = (cst == MH_OK) ? MH_EnableHook(target) : cst;
+            if (est == MH_OK) {
+                diagNetGameHostCheckStatus = "hooked";
+                Log(EchoVR::LogLevel::Info,
+                    "[NEVR.PATCH] DIAG hooked name=NetGameHostCheck va=0x%llX",
+                    static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK));
+            } else {
+                diagNetGameHostCheckStatus = MH_StatusToString(est);
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.PATCH] DIAG hook failed name=NetGameHostCheck va=0x%llX reason=%s",
+                    static_cast<unsigned long long>(VA_NETGAME_HOST_CHECK), MH_StatusToString(est));
+            }
         }
     }
 
     // Aggregate summary per docs/standards/logging.md Rule 5
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.PATCH] hooks installed: %d succeeded, %d failed (failed: %s)",
+        "[NEVR.PATCH] hooks installed: %d succeeded, %d failed (failed: %s); diag netgame-host-check: %s",
         installed, failed,
-        failedNames.empty() ? "none" : failedNames.c_str());
+        failedNames.empty() ? "none" : failedNames.c_str(),
+        diagNetGameHostCheckStatus);
 
     g_initialized = (installed > 0);
 #endif
@@ -726,6 +788,16 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
 
 void BinaryBugFixes::Shutdown() {
     if (!g_initialized) return;
+    // N86-class checkpoint: the DIAG hook's own payload line (NetGameHostCheckHook)
+    // is confirmed to never fire in the exact hang scenario it was built to
+    // diagnose (docs/reference/server-mode-multiplayer-hang.md) — without this,
+    // "installed but silent" and "installed and genuinely nothing to report"
+    // look identical (total silence) in the log.
+    if (s_origNetGameHostCheck != nullptr && !s_netGameHostCheckLogged.load()) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] DIAG NetGameHostCheck hook installed but never invoked this session "
+            "(confirms fcn.140157fb0 not reached in -server mode)");
+    }
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] binary bug fixes shutdown null_deref=%ld",
         s_null_deref_count);

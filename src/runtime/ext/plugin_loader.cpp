@@ -279,12 +279,25 @@ void LoadPlugins() {
   // a band), then init each plugin in that order.
   std::stable_sort(staged.begin(), staged.end(), capsOrder);
 
-  // Log the sorted order so an operator can see the load sequence.
+  // Log the sorted order so an operator can see the load sequence: one INFO
+  // summary naming the order, with the full per-item detail at DEBUG — the
+  // per-item line used to also be INFO, which was a near-duplicate of the
+  // per-plugin "Loaded: ..." INFO confirmation below once each plugin's init
+  // succeeds (Rule 12: INFO is summary, DEBUG is narrative).
+  {
+    std::string order;
+    for (size_t i = 0; i < staged.size(); i++) {
+      if (i > 0) order += ", ";
+      order += staged[i].item.name;
+    }
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PLUGIN] load order (priority-sorted): %s", order.c_str());
+  }
   for (size_t i = 0; i < staged.size(); i++) {
     const StagedPlugin& s = staged[i];
     const char* initVia = s.initKind == PluginInitKind::Ex ? "InitEx" :
                           s.initKind == PluginInitKind::Legacy ? "Init" : "no-init";
-    Log(EchoVR::LogLevel::Info,
+    Log(EchoVR::LogLevel::Debug,
         "[NEVR.PLUGIN] [%zu/%zu] %s v%u.%u.%u (API v%u) caps=0x%02X via %s (priority=%d)",
         i + 1, staged.size(),
         s.item.name.c_str(),
@@ -338,7 +351,11 @@ void LoadPlugins() {
     }
   }
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] %zu plugin(s) loaded", g_plugins.size());
+  // Denominator (plan.size()) lets an operator tell "5 configured, 5 loaded"
+  // (healthy) from "5 configured, 3 loaded" (2 silently missing) without
+  // scrolling back through Warning lines to count.
+  Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] plugin load complete: %zu/%zu loaded",
+      g_plugins.size(), plan.size());
 }
 
 void UnloadPlugins() {

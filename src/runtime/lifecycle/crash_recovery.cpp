@@ -51,7 +51,10 @@ static VOID GameMainWrapperHook(INT64 arg1) {
 
   if (crashCount > 0) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] Game loop recovered from crash #%d — entering server hold", crashCount);
+        "[NEVR.PATCH] game loop crash recovered count=%d recovery=exhausted outcome=server_hold "
+        "(game loop will not run again; broadcaster/HTTP API stay up for a supervisor to "
+        "observe/restart)",
+        crashCount);
     // The game loop crashed and can't be safely restarted (internal state is
     // corrupted). Keep the process alive — the broadcaster and game server
     // were already initialized, and the HTTP API may still be listening.
@@ -65,7 +68,9 @@ static VOID GameMainWrapperHook(INT64 arg1) {
 
   // If we get here, the game loop returned normally (shouldn't happen)
   g_gameLoopJmpBufValid = false;
-  Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Game loop exited normally — entering server hold");
+  Log(EchoVR::LogLevel::Warning,
+      "[NEVR.PATCH] game loop returned unexpectedly (should never return) — entering server "
+      "hold; game loop will not run again");
   while (true) {
     Sleep(1000);
   }
@@ -76,8 +81,15 @@ void InstallGameMainHook() {
   GameMain = (GameMainFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN);
   OriginalGameMainWrapper =
       (GameMainWrapperFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN_WRAPPER);
-  PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper");
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Game main wrapper hook installed (server crash recovery)");
+  if (PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper")) {
+    Log(EchoVR::LogLevel::Debug,
+        "[NEVR.PATCH] game main wrapper hooked — crash recovery armed (setjmp installed; a "
+        "null-deref AV in server mode will longjmp back here instead of terminating the process)");
+  } else {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] game main wrapper hook FAILED — server crash recovery via longjmp is NOT "
+        "armed; a null-deref AV in server mode will terminate the process instead of recovering");
+  }
 }
 
 // N62: set for the duration of a signal-context shutdown. `volatile sig_atomic_t`
@@ -108,11 +120,15 @@ BOOL WINAPI CreateProcessAHook(LPCSTR lpApplicationName, LPSTR lpCommandLine, LP
                                LPPROCESS_INFORMATION lpProcessInformation) {
   // Block crash reporter executable (BsSndRpt64.exe) to prevent Wine errors
   if (lpApplicationName && strstr(lpApplicationName, "BsSndRpt")) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked crash reporter launch (A): %s", lpApplicationName);
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] crash reporter launch blocked api=CreateProcessA match=application_name target=%s",
+        lpApplicationName);
     return FALSE;  // Pretend the process failed to start
   }
   if (lpCommandLine && strstr(lpCommandLine, "BsSndRpt")) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked crash reporter launch (cmdline A): %s", lpCommandLine);
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] crash reporter launch blocked api=CreateProcessA match=command_line target=%s",
+        lpCommandLine);
     return FALSE;
   }
 
@@ -146,12 +162,16 @@ BOOL WINAPI CreateProcessWHook(LPCWSTR lpApplicationName, LPWSTR lpCommandLine,
                                LPPROCESS_INFORMATION lpProcessInformation) {
   // Block crash reporter executable (BsSndRpt64.exe) to prevent Wine errors
   if (lpApplicationName && wcsstr(lpApplicationName, L"BsSndRpt")) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked crash reporter launch (W): %ls", lpApplicationName);
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] crash reporter launch blocked api=CreateProcessW match=application_name target=%ls",
+        lpApplicationName);
     g_crashReporterSuppressed = true;
     return FALSE;
   }
   if (lpCommandLine && wcsstr(lpCommandLine, L"BsSndRpt")) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Blocked crash reporter launch (cmdline W): %ls", lpCommandLine);
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] crash reporter launch blocked api=CreateProcessW match=command_line target=%ls",
+        lpCommandLine);
     g_crashReporterSuppressed = true;
     return FALSE;
   }
@@ -190,6 +210,11 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
     if (count <= 5) {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.PATCH] ExitProcess(%u) suppressed in server mode (call #%ld)", uExitCode, count);
+    } else if (count == 6) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] ExitProcess suppression cap reached (5 logged) — further server-mode "
+          "ExitProcess calls will be suppressed silently; repeated calls may indicate a "
+          "crash-reporter retry loop");
     }
     g_justSuppressedCrash = true;
     return;
@@ -197,13 +222,13 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
 
   if (g_crashReporterSuppressed) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] ExitProcess(%u) suppressed after crash reporter block - server continuing", uExitCode);
+        "[NEVR.PATCH] ExitProcess(%u) suppressed after crash reporter block - client continuing", uExitCode);
 
     void* stack[32];
     USHORT frames = CaptureStackBackTrace(0, 32, stack, NULL);
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Call stack (%u frames):", frames);
+    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] debug; exitprocess call stack frames=%u", frames);
     for (USHORT i = 0; i < frames && i < 10; i++) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH]   Frame %u: %p", i, stack[i]);
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] debug; exitprocess call stack frame=%u addr=0x%p", i, stack[i]);
     }
 
     g_crashReporterSuppressed = false;
@@ -211,7 +236,7 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
     return;
   }
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ExitProcess(%u) called", uExitCode);
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ExitProcess(%u) called — not suppressed, process exiting", uExitCode);
   OriginalExitProcess(uExitCode);
 }
 
@@ -570,12 +595,15 @@ BOOL WINAPI TerminateProcessHook(HANDLE hProcess, UINT uExitCode) {
   if (hProcess == currentProcess || hProcess == (HANDLE)-1) {
     if (g_crashReporterSuppressed) {
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] TerminateProcess(self, %u) suppressed after crash reporter block - server continuing",
-          uExitCode);
+          "[NEVR.PATCH] TerminateProcess(self, %u) suppressed after crash reporter block — "
+          "process continuing (mode=%s)",
+          uExitCode, g_isServer ? "server" : "client");
       g_crashReporterSuppressed = false;
       return TRUE;
     }
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] TerminateProcess(self, %u) called - allowing", uExitCode);
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] TerminateProcess(self, %u) called — allowing (bypasses normal exit-hook cleanup)",
+        uExitCode);
   }
 
   return OriginalTerminateProcess(hProcess, uExitCode);
@@ -590,7 +618,10 @@ void InstallCrashRecoveryHooks() {
       PatchDetour(&OriginalCreateProcessA, reinterpret_cast<PVOID>(CreateProcessAHook), "CreateProcessA");
       Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateProcessA hook installed (crash reporter disabled)");
     } else {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find CreateProcessA");
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] hook target not found name=CreateProcessA error=%lu — crash reporter for "
+          "this API will NOT be suppressed",
+          GetLastError());
     }
 
     OriginalCreateProcessW = (CreateProcessWFunc)GetProcAddress(hKernel32, "CreateProcessW");
@@ -598,7 +629,10 @@ void InstallCrashRecoveryHooks() {
       PatchDetour(&OriginalCreateProcessW, reinterpret_cast<PVOID>(CreateProcessWHook), "CreateProcessW");
       Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] CreateProcessW hook installed (crash reporter disabled)");
     } else {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find CreateProcessW");
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] hook target not found name=CreateProcessW error=%lu — crash reporter for "
+          "this API will NOT be suppressed",
+          GetLastError());
     }
 
     OriginalExitProcess = (ExitProcessFunc)GetProcAddress(hKernel32, "ExitProcess");
@@ -606,7 +640,10 @@ void InstallCrashRecoveryHooks() {
       PatchDetour(&OriginalExitProcess, reinterpret_cast<PVOID>(ExitProcessHook), "ExitProcess");
       Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] ExitProcess hook installed (prevents crash reporter termination)");
     } else {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find ExitProcess");
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] hook target not found name=ExitProcess error=%lu — crash-reporter-triggered "
+          "termination will NOT be suppressed",
+          GetLastError());
     }
 
     OriginalTerminateProcess = (TerminateProcessFunc)GetProcAddress(hKernel32, "TerminateProcess");
@@ -614,10 +651,16 @@ void InstallCrashRecoveryHooks() {
       PatchDetour(&OriginalTerminateProcess, reinterpret_cast<PVOID>(TerminateProcessHook), "TerminateProcess");
       Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] TerminateProcess hook installed (prevents self-termination)");
     } else {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find TerminateProcess");
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] hook target not found name=TerminateProcess error=%lu — self-terminate "
+          "calls will NOT be suppressed",
+          GetLastError());
     }
   } else {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load kernel32.dll for crash reporter hooks");
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] kernel32.dll handle not found error=%lu — CreateProcessA/W, ExitProcess and "
+        "TerminateProcess hooks ALL skipped; crash-reporter suppression is fully disabled",
+        GetLastError());
   }
 }
 
@@ -728,8 +771,15 @@ void InstallCrashFilterInstrumentation() {
   if (memcmp(filt, PatchAddresses::CRASH_EXCEPTION_FILTER_PROLOGUE,
              sizeof(PatchAddresses::CRASH_EXCEPTION_FILTER_PROLOGUE)) == 0) {
     OriginalCrashExceptionFilter = reinterpret_cast<CrashExceptionFilterFunc>(filt);
-    PatchDetour(&OriginalCrashExceptionFilter,
-                reinterpret_cast<PVOID>(CrashExceptionFilterHook), "CrashExceptionFilter");
+    if (PatchDetour(&OriginalCrashExceptionFilter,
+                    reinterpret_cast<PVOID>(CrashExceptionFilterHook), "CrashExceptionFilter")) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.CRASH] hooked name=CrashExceptionFilter (crash-entry probe)");
+    } else {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.CRASH] hook failed name=CrashExceptionFilter");
+    }
+  } else {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.CRASH] hook skipped name=CrashExceptionFilter reason=prologue_mismatch");
   }
 
   // HandleCrashDump @ 0x1401CEFE0 — prologue read from the live image and
@@ -739,12 +789,14 @@ void InstallCrashFilterInstrumentation() {
   const unsigned char* pb = static_cast<const unsigned char*>(hcd);
   if (PatchDetour(&OriginalHandleCrashDump,
                   reinterpret_cast<PVOID>(HandleCrashDumpHook), "HandleCrashDump")) {
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.CRASH] hooked name=HandleCrashDump va=0x1401CEFE0 prologue=%02x%02x%02x%02x%02x "
-        "(why-did-we-crash probe)",
-        pb[0], pb[1], pb[2], pb[3], pb[4]);
+    Log(EchoVR::LogLevel::Info, "[NEVR.CRASH] hooked name=HandleCrashDump (why-did-we-crash probe)");
+    Log(EchoVR::LogLevel::Debug,
+        "[NEVR.CRASH] debug; HandleCrashDump hook detail va=0x%llX prologue=%02x%02x%02x%02x%02x",
+        reinterpret_cast<unsigned long long>(hcd), pb[0], pb[1], pb[2], pb[3], pb[4]);
   } else {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.CRASH] hook failed name=HandleCrashDump");
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.CRASH] hook failed name=HandleCrashDump va=0x%llX prologue=%02x%02x%02x%02x%02x",
+        reinterpret_cast<unsigned long long>(hcd), pb[0], pb[1], pb[2], pb[3], pb[4]);
   }
 }
 
@@ -829,7 +881,7 @@ static void PosixSignalHandler(int sig) {
 // RearmConsoleCtrlHandler() and GameServerLib::Terminate().
 // ---------------------------------------------------------------------------
 
-static void ShutdownReport(const char* fmt, ...);
+static void ShutdownReport(EchoVR::LogLevel level, const char* fmt, ...);
 
 // Set by ConsoleCtrlHandler when a CTRL+C/close/break event arrives.
 //
@@ -857,7 +909,8 @@ static HANDLE s_shutdownWatchdogEvent = nullptr;
 
 static DWORD WINAPI ShutdownWatchdogThread(LPVOID) {
   if (WaitForSingleObject(s_shutdownWatchdogEvent, kGameTeardownWatchdogMs) == WAIT_TIMEOUT) {
-    ShutdownReport("[NEVR.PATCH] shutdown watchdog expired after %lu ms — the game teardown never "
+    ShutdownReport(EchoVR::LogLevel::Warning,
+                   "[NEVR.PATCH] shutdown watchdog expired after %lu ms — the game teardown never "
                    "reached GameServerLib::Terminate; forcing exit",
                    static_cast<unsigned long>(kGameTeardownWatchdogMs));
     PerformGracefulShutdown(1);
@@ -872,20 +925,22 @@ static DWORD WINAPI ShutdownWatchdogThread(LPVOID) {
 static void StartShutdownWatchdog() {
   s_shutdownWatchdogEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   if (s_shutdownWatchdogEvent == nullptr) {
-    ShutdownReport("[NEVR.PATCH] shutdown watchdog NOT armed (CreateEvent failed err=%lu) — a "
+    ShutdownReport(EchoVR::LogLevel::Warning,
+                   "[NEVR.PATCH] shutdown watchdog NOT armed (CreateEvent failed err=%lu) — a "
                    "stuck game teardown will not be force-exited",
                    GetLastError());
     return;
   }
   HANDLE thread = CreateThread(nullptr, 0, ShutdownWatchdogThread, nullptr, 0, nullptr);
   if (thread == nullptr) {
-    ShutdownReport("[NEVR.PATCH] shutdown watchdog NOT armed (CreateThread failed err=%lu) — a "
+    ShutdownReport(EchoVR::LogLevel::Warning,
+                   "[NEVR.PATCH] shutdown watchdog NOT armed (CreateThread failed err=%lu) — a "
                    "stuck game teardown will not be force-exited",
                    GetLastError());
     return;
   }
   CloseHandle(thread);
-  ShutdownReport("[NEVR.PATCH] shutdown watchdog armed timeout_ms=%lu",
+  ShutdownReport(EchoVR::LogLevel::Info, "[NEVR.PATCH] shutdown watchdog armed timeout_ms=%lu",
                  static_cast<unsigned long>(kGameTeardownWatchdogMs));
 }
 
@@ -900,16 +955,18 @@ static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
   if (InterlockedExchange(&s_consoleShutdownPending, 1) != 0) {
     // Second CTRL+C. The operator is telling us the first one is stuck; stop
     // waiting on the game and go.
-    ShutdownReport("[NEVR.PATCH] shutdown signal received again (ctrl_type=%lu) — teardown already "
+    ShutdownReport(EchoVR::LogLevel::Warning,
+                   "[NEVR.PATCH] shutdown signal received again (ctrl_type=%lu) — teardown already "
                    "in progress, forcing exit now",
                    dwCtrlType);
     PerformGracefulShutdown(1);
     return TRUE;
   }
 
-  ShutdownReport("[NEVR.PATCH] shutdown signal received — console ctrl event %lu "
-                 "(CTRL+C; a tty SIGINT arrives here under Wine) defer_to_game=%ld",
-                 dwCtrlType, static_cast<long>(s_deferToGameTeardown));
+  ShutdownReport(EchoVR::LogLevel::Info,
+                 "[NEVR.PATCH] shutdown signal received — console ctrl event %lu "
+                 "(CTRL+C; a tty SIGINT arrives here under Wine) defer_to_game=%s",
+                 dwCtrlType, s_deferToGameTeardown != 0 ? "true" : "false");
 
   if (s_deferToGameTeardown != 0) {
     // Return FALSE so the chain continues to the game's own handler, which is
@@ -917,7 +974,8 @@ static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
     // exit cleanly at the end of GameServerLib::Terminate(), once that work is
     // provably done.
     StartShutdownWatchdog();
-    ShutdownReport("[NEVR.PATCH] deferring to the game's console handler for lobby unregistration "
+    ShutdownReport(EchoVR::LogLevel::Info,
+                   "[NEVR.PATCH] deferring to the game's console handler for lobby unregistration "
                    "and ServerDB close; clean exit follows at GameServerLib::Terminate");
     return FALSE;
   }
@@ -953,11 +1011,14 @@ void InstallConsoleCtrlHandler() {
   // that arrives before the game has installed its own handler, where
   // s_deferToGameTeardown is 0 and we shut down directly.
   if (SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE) == FALSE) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] SetConsoleCtrlHandler FAILED err=%lu",
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] SetConsoleCtrlHandler install FAILED err=%lu — no CTRL+C/close handling "
+        "until re-armed; a close signal falls straight through to the game's handler (or OS "
+        "default if none)",
         GetLastError());
   } else {
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.PATCH] Console ctrl handler installed (behind the game's until re-armed)");
+        "[NEVR.PATCH] console ctrl handler installed (behind the game's handler until re-armed)");
   }
 
   // Register POSIX signal handlers too.
@@ -970,10 +1031,15 @@ void InstallConsoleCtrlHandler() {
   // approach (set g_shutdownRequested, check per-frame) lost the race to game
   // teardown; the per-frame check never ran after signal delivery (N13/N38 re-open).
   if (signal(SIGINT, PosixSignalHandler) == SIG_ERR) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to register SIGINT handler");
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] SIGINT handler registration failed (signal()) — no effect under Wine "
+        "(SIGINT is delivered via the console ctrl handler there, not the CRT signal table, per "
+        "N87); would block POSIX-path shutdown on native Windows");
   }
   if (signal(SIGTERM, PosixSignalHandler) == SIG_ERR) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to register SIGTERM handler");
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] SIGTERM handler registration failed — a container/orchestrator stop signal "
+        "(docker stop, systemd) will not trigger graceful shutdown; process will require SIGKILL");
   }
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] POSIX signal handlers installed (SIGINT/SIGTERM -> direct shutdown)");
 }
@@ -1026,7 +1092,7 @@ void ForceFatalExit(unsigned int code) {
 /// Replaces the default FatalError behavior (MessageBoxA + exit(1)) when the
 /// dedicated server must be absolutely non-interactive.
 static VOID ServerFatalErrorHandler(const CHAR* msg, const CHAR* title) {
-  Log(EchoVR::LogLevel::Error, "[FATAL] %s: %s", title ? title : "Echo Relay: Error",
+  Log(EchoVR::LogLevel::Error, "[NEVR.FATAL] %s: %s", title ? title : "Echo Relay: Error",
       msg ? msg : "An unknown error occurred.");
   // ForceFatalExit sets g_forceExitInProgress to lift the ExitProcess suppression,
   // then calls the real TerminateProcess directly. The server dies immediately
@@ -1060,16 +1126,18 @@ void ResolveShutdownDependencies() {
 // FILE lock — a signal delivered while the interrupted thread held that lock
 // deadlocks the handler on it. VehPrintf uses only a fixed stack buffer plus
 // WriteFile, so it is safe from a signal handler.
-static void ShutdownReport(const char* fmt, ...) {
+static void ShutdownReport(EchoVR::LogLevel level, const char* fmt, ...) {
   char buf[512];
   va_list args;
   va_start(args, fmt);
   vsnprintf(buf, sizeof(buf), fmt, args);
   va_end(args);
   if (g_inSignalContext) {
-    VehPrintf("%s", buf);
+    // Signal context has no level transport (VehPrintf is a raw WriteFile with no structured
+    // level field) — fold the level into the text so an anomaly stays visible on this path too.
+    VehPrintf("%s%s", level == EchoVR::LogLevel::Warning ? "WARN: " : "", buf);
   } else {
-    Log(EchoVR::LogLevel::Info, "%s", buf);
+    Log(level, "%s", buf);
   }
 }
 
@@ -1088,8 +1156,9 @@ void PerformGracefulShutdown(unsigned int exitCode) {
     ForceFatalExit(1);
   }
 
-  ShutdownReport("[NEVR.PATCH] Graceful shutdown initiated (code=%u signal_ctx=%d)",
-                 exitCode, static_cast<int>(g_inSignalContext));
+  ShutdownReport(EchoVR::LogLevel::Info,
+                 "[NEVR.PATCH] Graceful shutdown initiated (code=%u signal_ctx=%s)",
+                 exitCode, g_inSignalContext ? "true" : "false");
 
   // 1. Stop the ws_bridge listener — this is the critical step that releases
   //    the socket FD, preventing the wineserver from holding port 6821 as a
@@ -1104,9 +1173,11 @@ void PerformGracefulShutdown(unsigned int exitCode) {
     // has returned NULL on every run since the N92 fold, taking the else-branch
     // and leaking the listener. Measured on three live runs 2026-07-28:
     //   shutdown deps resolved ws_bridge=absent WsBridge_Shutdown=null
-    ShutdownReport("[NEVR.PATCH] Stopping ws_bridge listener...");
+    ShutdownReport(EchoVR::LogLevel::Info,
+                   "[NEVR.PATCH] ws_bridge listener stop starting (hang marker: if shutdown never "
+                   "logs the next line, StopWebSocketBridgeListener is stuck here)");
     StopWebSocketBridgeListener();
-    ShutdownReport("[NEVR.PATCH] ws_bridge listener stopped — socket released");
+    ShutdownReport(EchoVR::LogLevel::Info, "[NEVR.PATCH] ws_bridge listener stopped — socket released");
   }
 
   // 2. Unhook MinHook hooks installed by BinaryBugFixes.

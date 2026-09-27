@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <thread>
 
@@ -11,6 +12,8 @@
 #include "core/auth_token.h"
 #include "auth_token_refresh.h"
 #include "runtime/server/constants.h"
+#include "runtime/log/security_diagnostics.h"
+#include "runtime/log/url_diagnostics.h"
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
@@ -95,14 +98,8 @@ constexpr EchoVR::SymbolId SYM_LEGACY_PLAYERS_REJECTED = 0x7777777777770700ULL;
 bool SendProtobufEnvelope(GameServerLib* self, const gameservice::v1::Envelope& envelope) {
   auto* wsClient = &self->GetWsClient();
 
-  // Serialize envelope to binary
-  std::string binaryData;
-  if (!envelope.SerializeToString(&binaryData)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to serialize protobuf to binary");
-    return false;
-  }
-
-  // Log the message type being sent
+  // Determine the message type first so it's available whether or not
+  // serialization succeeds below.
   const char* msgType = "unknown";
   switch (envelope.message_case()) {
     case gameservice::v1::Envelope::kGameServerRegistration:
@@ -122,6 +119,13 @@ bool SendProtobufEnvelope(GameServerLib* self, const gameservice::v1::Envelope& 
       break;
     default:
       break;
+  }
+
+  // Serialize envelope to binary
+  std::string binaryData;
+  if (!envelope.SerializeToString(&binaryData)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] protobuf serialize failed type=%s", msgType);
+    return false;
   }
 
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Sending protobuf: %s (%zu bytes)", msgType, binaryData.size());
@@ -230,14 +234,16 @@ void OnTcpMsgSessionSuccessv5(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID*
 // Handle incoming protobuf messages from Nakama
 void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
   if (!msg || msgSize == 0) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Received empty protobuf message");
+    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] empty protobuf message msg=%p size=%llu", msg,
+        static_cast<unsigned long long>(msgSize));
     return;
   }
 
   // Parse the protobuf Envelope
   gameservice::v1::Envelope envelope;
   if (!envelope.ParseFromArray(msg, static_cast<int>(msgSize))) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to parse protobuf Envelope");
+    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] protobuf Envelope parse failed size=%llu",
+        static_cast<unsigned long long>(msgSize));
     return;
   }
 
@@ -259,7 +265,8 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
                                                "SNSLobbyRegistrationSuccess", const_cast<uint8_t*>(encoded.ptr()),
                                                encoded.size());
         } else {
-          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Failed to encode registration success");
+          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] failed to encode registration success server_id=%llu",
+              static_cast<unsigned long long>(regSuccess.server_id()));
           EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationSuccess,
                                                "SNSLobbyRegistrationSuccess", nullptr, 0);
         }
@@ -306,7 +313,8 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
       const auto& event = envelope.lobby_session_event();
       if (event.code() == gameservice::v1::LobbySessionEventMessage::CODE_ENDED) {
         Log(EchoVR::LogLevel::Info,
-            "[NEVR.GAMESERVER] Received CODE_ENDED from ServerDB — scheduling return to lobby");
+            "[NEVR.GAMESERVER] session ended by ServerDB session_id=%s — scheduling return to lobby",
+            event.lobby_session_id().c_str());
         CallScheduleReturnToLobby();
         self->GetContext().EndSession();
       }
@@ -333,7 +341,8 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
           EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbySessionSuccessV5, "SNSLobbySessionSuccessv5",
                                                const_cast<uint8_t*>(encoded.ptr()), encoded.size());
         } else {
-          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Failed to encode LobbySessionSuccessV5");
+          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] failed to encode LobbySessionSuccessV5 lobby=%s",
+              sessionSuccess.lobby_id().c_str());
         }
       }
       break;
@@ -352,7 +361,8 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
                                                "SNSLobbyAcceptPlayersSuccessv2", const_cast<uint8_t*>(encoded.ptr()),
                                                encoded.size());
         } else {
-          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Failed to encode entrants accept");
+          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] failed to encode entrants accept count=%d",
+              accept.entrant_ids_size());
         }
       }
       break;
@@ -371,7 +381,8 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
                                                "SNSLobbyAcceptPlayersFailurev2", const_cast<uint8_t*>(encoded.ptr()),
                                                encoded.size());
         } else {
-          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Failed to encode entrants reject");
+          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] failed to encode entrants reject count=%d code=%d",
+              reject.entrant_ids_size(), reject.code());
         }
       }
       break;
@@ -419,11 +430,13 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
 
     case gameservice::v1::Envelope::kError: {
       const auto& error = envelope.error();
-      Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Received error via protobuf: code=%d, msg=%s", error.code(),
-          error.message().c_str());
+      Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Received error via protobuf: code=%d message_bytes=%zu",
+          error.code(), error.message().size());
       // If we receive an error before registration succeeds, treat it as a registration failure.
       if (g_exitOnError && !self->GetContext().IsRegistered()) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Error received before registration — shutting down");
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.GAMESERVER] error received before registration, code=%d message_bytes=%zu — shutting down",
+            error.code(), error.message().size());
         self->BeginGracefulShutdown(true);
       }
       break;
@@ -438,12 +451,14 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
 
 // --- Internal Broadcaster Callbacks ---
 
-void OnMsgSessionStarting(GameServerLib*, VOID*, VOID*, UINT64, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Session starting");
+void OnMsgSessionStarting(GameServerLib* self, VOID*, VOID*, UINT64, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] session starting session_id=%s",
+      self->GetContext().GetSessionState().lobbySessionId.c_str());
 }
 
-void OnMsgSessionError(GameServerLib*, VOID*, VOID*, UINT64, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Session error encountered");
+void OnMsgSessionError(GameServerLib* self, VOID*, VOID*, UINT64, EchoVR::Peer, EchoVR::Peer) {
+  Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] session error session_id=%s",
+      self->GetContext().GetSessionState().lobbySessionId.c_str());
 }
 
 // Helper to serialize LoadoutSlot to JSON string
@@ -549,7 +564,8 @@ static std::string SerializeLoadoutInstanceToJson(const LoadoutInstance* instanc
 
 void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
   if (!msg || msgSize < MIN_LOADOUT_MSG_SIZE) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Invalid message size: %llu", msgSize);
+    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Invalid message size: %llu (min=%llu)", msgSize,
+        static_cast<unsigned long long>(MIN_LOADOUT_MSG_SIZE));
     return;
   }
 
@@ -559,7 +575,8 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
       slot.genId, msgSize);
 
   if (slot.slot >= MAX_PLAYER_SLOTS) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Invalid slot index: %u", slot.slot);
+    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Invalid slot index: %u (max=%u)", slot.slot,
+        MAX_PLAYER_SLOTS);
     return;
   }
 
@@ -686,10 +703,12 @@ void OnMsgSaveLoadoutRequest(GameServerLib* self, VOID*, VOID* msg, UINT64 msgSi
 
             // Send via protobuf
             if (SendProtobufEnvelope(self, envelope)) {
-              Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Sent protobuf to game service");
+              Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Sent protobuf to game service slot=%u",
+                  playerSlot);
             }
           } else {
-            Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] [SAVE_LOADOUT] Not in active session");
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.GAMESERVER] [SAVE_LOADOUT] Not in active session, slot=%u — loadout not sent", playerSlot);
           }
         } else {
           Log(EchoVR::LogLevel::Warning,
@@ -733,7 +752,12 @@ void OnMsgSaveLoadoutSuccess(GameServerLib*, VOID*, VOID* msg, UINT64 msgSize, E
 }
 
 void OnMsgSaveLoadoutPartial(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Save loadout partial (size: %llu)", msgSize);
+  // S1: only what's actually known here is that the game's own size threshold
+  // for a partial SaveLoadout message was triggered — the protocol semantics
+  // of what "partial" means (chunked transfer vs. truncated payload) aren't
+  // documented in this file, so don't assert truncation as established fact.
+  Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] SaveLoadoutPartial received (size threshold triggered) size=%llu",
+      msgSize);
 }
 
 void OnMsgCurrentLoadoutRequest(GameServerLib*, VOID*, VOID* msg, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
@@ -793,35 +817,35 @@ void OnMsgCurrentLoadoutResponse(GameServerLib* self, VOID*, VOID* msg, UINT64 m
 }
 
 void OnMsgRefreshProfileForUser(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Refresh profile for user (size: %llu)", msgSize);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] refresh profile for user (no server-side action — observability only) size=%llu", msgSize);
 }
 
 void OnMsgRefreshProfileFromServer(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Refresh profile from server (size: %llu)", msgSize);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] refresh profile from server (no server-side action — observability only) size=%llu", msgSize);
 }
 
 void OnMsgLobbySendClientLobbySettings(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Lobby client settings (size: %llu)", msgSize);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] lobby client settings received (no server-side action — observability only) size=%llu", msgSize);
 }
 
 void OnMsgTierRewardMsg(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Tier reward (size: %llu)", msgSize);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] tier reward received (no server-side action — observability only) size=%llu", msgSize);
 }
 
 void OnMsgTopAwardsMsg(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Top awards (size: %llu)", msgSize);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] top awards received (no server-side action — observability only) size=%llu", msgSize);
 }
 
 void OnMsgNewUnlocks(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] New unlocks (size: %llu)", msgSize);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] new unlocks received (no server-side action — observability only) size=%llu", msgSize);
 }
 
 void OnMsgReliableStatUpdate(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Stat update (size: %llu)", msgSize);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] stat update received (no server-side action — observability only) size=%llu", msgSize);
 }
 
 void OnMsgReliableTeamStatUpdate(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Team stat update (size: %llu)", msgSize);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] team stat update received (no server-side action — observability only) size=%llu", msgSize);
 }
 
 void OnTcpMsgGameClientMsg1(GameServerLib*, VOID*, EchoVR::TcpPeer, VOID*, VOID*, UINT64 msgSize) {
@@ -995,13 +1019,15 @@ void GameServerLib::RegisterTcpCallbacks() {
     // End any stale session state from before the disconnect
     m_context->EndSession();
 
-    Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] WebSocket reconnected, re-registering with ServerDB");
+    Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] websocket reconnected — re-registering server_id=%llu",
+        static_cast<unsigned long long>(m_context->GetSessionState().serverId));
 
     SessionState state = m_context->GetSessionState();
 
     auto* broadcaster = m_context->GetBroadcaster();
     if (!broadcaster || !broadcaster->data) {
-      Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Broadcaster unavailable for re-registration");
+      Log(EchoVR::LogLevel::Error,
+          "[NEVR.GAMESERVER] broadcaster unavailable — re-registration aborted, will retry on next reconnect");
       return;
     }
 
@@ -1047,7 +1073,7 @@ void GameServerLib::RegisterTcpCallbacks() {
     }
 
     if (!SendProtobufEnvelope(this, envelope)) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] SendProtobufEnvelope failed for re-registration");
+      Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] protobuf serialize failed for re-registration");
     }
   });
 }
@@ -1069,7 +1095,7 @@ void GameServerLib::UnregisterAllCallbacks() {
 }
 
 VOID GameServerLib::Terminate() {
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Terminated game server");
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] terminating game server");
   m_context->Terminate();
 
   // N87: on the CTRL+C path this is the last point at which the server-visible
@@ -1147,7 +1173,7 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
 
   if (registrationFailed) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.GAMESERVER] Registration rejected — shutting down");
+        "[NEVR.GAMESERVER] pre-registration error — shutting down");
   }
 
   auto* self = this;
@@ -1158,7 +1184,8 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
 
     if (!registrationFailed && self->GetContext().IsSessionActive()) {
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.GAMESERVER] Round active — calling ScheduleReturnToLobby, waiting up to 20 min for it to end");
+          "[NEVR.GAMESERVER] round active session_id=%s — scheduling return to lobby, waiting up to 20 min",
+          self->GetContext().GetSessionState().lobbySessionId.c_str());
       CallScheduleReturnToLobby();
 
       DWORD waited = 0;
@@ -1168,7 +1195,8 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
       }
 
       if (self->GetContext().IsSessionActive()) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Round did not end within 20 min — forcing shutdown");
+        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] round did not end within %lu ms — forcing shutdown session_id=%s",
+            kMaxWaitMs, self->GetContext().GetSessionState().lobbySessionId.c_str());
       } else {
         Log(EchoVR::LogLevel::Info,
             "[NEVR.GAMESERVER] Round ended — waiting %lu ms grace period", kGraceMs);
@@ -1220,8 +1248,14 @@ static std::string AuthenticateServer() {
 
     if (!httpUri || !httpKey || !discordId || !password ||
         httpUri[0] == '\0' || httpKey[0] == '\0' || discordId[0] == '\0' || password[0] == '\0') {
+        std::string missingKeysCsv;
+        if (!httpUri || httpUri[0] == '\0') missingKeysCsv += "nevr_http_uri,";
+        if (!httpKey || httpKey[0] == '\0') missingKeysCsv += "nevr_http_key,";
+        if (!discordId || discordId[0] == '\0') missingKeysCsv += "nevr_discord_id,";
+        if (!password || password[0] == '\0') missingKeysCsv += "nevr_password,";
+        if (!missingKeysCsv.empty()) missingKeysCsv.pop_back();  // drop trailing comma
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] Missing nevr_http_uri/nevr_http_key/nevr_discord_id/nevr_password — cannot authenticate");
+            "[NEVR.GAMESERVER] cannot authenticate — missing config keys: %s", missingKeysCsv.c_str());
         return "";
     }
 
@@ -1256,15 +1290,15 @@ static std::string AuthenticateServer() {
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] Server auth failed: %s", curl_easy_strerror(res));
+        const std::string diagnostic =
+            LogDiagnostics::FormatCurlFailureDiagnostic("[NEVR.GAMESERVER] Server auth failed ", static_cast<int>(res));
+        Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
         return "";
     }
 
     if (http_code != 200) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] Server auth HTTP %ld: %s", http_code,
-            response.empty() ? "(empty)" : response.substr(0, 200).c_str());
+        LogDiagnostics::LogHttpResponseSummary(EchoVR::LogLevel::Warning,
+                                               "[NEVR.GAMESERVER] Server auth rejected ", http_code, response);
         return "";
     }
 
@@ -1278,7 +1312,7 @@ static std::string AuthenticateServer() {
             Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Server authenticated (token acquired)");
         }
         return token;
-    } catch (...) {
+    } catch (const std::exception&) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.GAMESERVER] Server auth response parse error");
         return "";
@@ -1384,7 +1418,9 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
         snprintf(constructedUri + written, sizeof(constructedUri) - written, "%sregions=%s", sep, regions);
       }
       serverDbUri = constructedUri;
-      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Constructed serverdb URI for token auth");
+      const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+          "[NEVR.GAMESERVER] constructed serverdb URI for token auth: ", constructedUri);
+      Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
     } else {
       // Legacy url-param auth (no nevr_serverdb_uri configured): connect via
       // nevr_socket_uri with discord_id+password — the pre-token-auth behavior.
@@ -1405,11 +1441,16 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
           snprintf(constructedUri + written, sizeof(constructedUri) - written, "&regions=%s", regions);
         }
         serverDbUri = constructedUri;
-        Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Constructed serverdb URI from config fields (legacy url-param auth)");
+        // Do NOT log constructedUri here — this branch embeds the operator's
+        // password directly in the query string (see snprintf above).
+        Log(EchoVR::LogLevel::Debug,
+            "[NEVR.GAMESERVER] constructed serverdb URI (legacy url-param auth): discord_id=%s (password redacted)",
+            discordId);
       } else {
         serverDbUri = "ws://localhost:777/serverdb";
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] No nevr_serverdb_uri/nevr_socket_uri — using default serverdb URI");
+        const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+            "[NEVR.GAMESERVER] No nevr_serverdb_uri/nevr_socket_uri — using default serverdb URI: ", serverDbUri);
+        Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
       }
     }
   }
@@ -1417,14 +1458,18 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   // Connect with the JWT as Authorization: Bearer; the token route forwards it
   // to Nakama's acceptor, which sets the operator identity (BAC-2/3).
   if (!m_wsClient->Connect(serverDbUri, wsToken)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to initiate WebSocket connection");
+    // serverDbUri may be the password-bearing legacy-auth URI at this point
+    // (see the constructedUri branch above) — redact before logging.
+    const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+        "[NEVR.GAMESERVER] failed to initiate WebSocket connection uri=", serverDbUri ? serverDbUri : "");
+    Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
     return;
   }
 
   // Build registration request
   auto* broadcaster = m_context->GetBroadcaster();
   if (!broadcaster || !broadcaster->data) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Broadcaster unavailable");
+    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] broadcaster unavailable — initial registration aborted");
     return;
   }
 
@@ -1445,7 +1490,9 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       if (UPnPHelper::OpenPort(broadcasterPort, extPort, externalIp)) {
         broadcasterPort = extPort;
       } else {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] UPnP port mapping failed — using raw broadcaster port");
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.GAMESERVER] UPnP port mapping failed (internal=%u external=%u) — using raw broadcaster port %u",
+            broadcasterPort, extPort, broadcasterPort);
       }
     } else {
       // N122. The disabled branch was SILENT, so a server that never attempted a
@@ -1483,7 +1530,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   }
 
   if (!SendProtobufEnvelope(this, envelope)) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] SendProtobufEnvelope failed for initial registration");
+    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] protobuf serialize failed for initial registration");
   }
 
   // Connect telemetry streamer if enabled
@@ -1521,7 +1568,8 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
         g_telemetryEnabled ? 1 : 0, m_telemetry ? "present" : "null");
   }
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Requested game server registration via protobuf");
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] requested game server registration server_id=%lld region=0x%llX",
+      static_cast<long long>(serverId), static_cast<unsigned long long>(regionId));
 }
 
 VOID GameServerLib::Unregister() {
@@ -1551,18 +1599,23 @@ VOID GameServerLib::EndSession() {
     m_telemetry->Stop();
   }
 
+  // Capture before m_context->EndSession() below clears session state, so the
+  // trailing log line still has an identifier to report.
+  std::string sessionId = m_context->GetSessionState().lobbySessionId;
+
   if (m_context->IsSessionActive()) {
     gameservice::v1::Envelope envelope;
     auto* event = envelope.mutable_lobby_session_event();
-    event->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
+    event->set_lobby_session_id(sessionId);
     event->set_code(gameservice::v1::LobbySessionEventMessage::CODE_ENDED);
     if (!SendProtobufEnvelope(this, envelope)) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] SendProtobufEnvelope failed for EndSession");
+      Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] protobuf serialize failed for EndSession session_id=%s",
+          sessionId.c_str());
     }
   }
 
   m_context->EndSession();
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Signaling end of session");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] session ended session_id=%s", sessionId.c_str());
 }
 
 VOID GameServerLib::LockPlayerSessions() {
@@ -1572,11 +1625,13 @@ VOID GameServerLib::LockPlayerSessions() {
     event->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
     event->set_code(gameservice::v1::LobbySessionEventMessage::CODE_LOCKED);
     if (!SendProtobufEnvelope(this, envelope)) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] SendProtobufEnvelope failed for LockPlayerSessions");
+      Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] protobuf serialize failed for LockPlayerSessions session_id=%s",
+          m_context->GetSessionState().lobbySessionId.c_str());
     }
   }
 
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Signaling game server locked");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] game server locked session_id=%s",
+      m_context->GetSessionState().lobbySessionId.c_str());
 }
 
 VOID GameServerLib::UnlockPlayerSessions() {
@@ -1586,11 +1641,13 @@ VOID GameServerLib::UnlockPlayerSessions() {
     event->set_lobby_session_id(m_context->GetSessionState().lobbySessionId);
     event->set_code(gameservice::v1::LobbySessionEventMessage::CODE_UNLOCKED);
     if (!SendProtobufEnvelope(this, envelope)) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] SendProtobufEnvelope failed for UnlockPlayerSessions");
+      Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] protobuf serialize failed for UnlockPlayerSessions session_id=%s",
+          m_context->GetSessionState().lobbySessionId.c_str());
     }
   }
 
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Signaling game server unlocked");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] game server unlocked session_id=%s",
+      m_context->GetSessionState().lobbySessionId.c_str());
 }
 
 VOID GameServerLib::AcceptPlayerSessions(EchoVR::Array<GUID>* playerUuids) {
@@ -1602,11 +1659,14 @@ VOID GameServerLib::AcceptPlayerSessions(EchoVR::Array<GUID>* playerUuids) {
       connected->add_entrant_ids(GuidToUuidString(playerUuids->items[i]));
     }
     if (!SendProtobufEnvelope(this, envelope)) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] SendProtobufEnvelope failed for AcceptPlayerSessions");
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.GAMESERVER] protobuf serialize failed for AcceptPlayerSessions session_id=%s count=%llu",
+          m_context->GetSessionState().lobbySessionId.c_str(), static_cast<unsigned long long>(playerUuids->count));
     }
   }
 
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Accepted %d players", playerUuids->count);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] accepted %llu players session_id=%s",
+      static_cast<unsigned long long>(playerUuids->count), m_context->GetSessionState().lobbySessionId.c_str());
 }
 
 VOID GameServerLib::RemovePlayerSession(GUID* playerUuid) {
@@ -1617,9 +1677,12 @@ VOID GameServerLib::RemovePlayerSession(GUID* playerUuid) {
     removed->set_entrant_id(GuidToUuidString(*playerUuid));
     removed->set_code(gameservice::v1::LobbyEntrantRemovedMessage::CODE_DISCONNECTED);
     if (!SendProtobufEnvelope(this, envelope)) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] SendProtobufEnvelope failed for RemovePlayerSession");
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.GAMESERVER] protobuf serialize failed for RemovePlayerSession entrant_id=%s",
+          GuidToUuidString(*playerUuid).c_str());
     }
   }
 
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Removed player from game server");
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] removed player from game server entrant_id=%s",
+      GuidToUuidString(*playerUuid).c_str());
 }

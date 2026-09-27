@@ -7,6 +7,7 @@
 #include <new>
 
 #include "core/logging.h"
+#include "runtime/log/url_diagnostics.h"
 
 // IWinHttpRequest IID — {A1C9FEEE-0617-4F23-9D58-8961EA43567C}
 static const IID IID_IWinHttpRequest = {0xA1C9FEEE, 0x0617, 0x4F23, {0x9D, 0x58, 0x89, 0x61, 0xEA, 0x43, 0x56, 0x7C}};
@@ -283,8 +284,10 @@ static HRESULT STDMETHODCALLTYPE Stub_Invoke(void* pThis, DISPID dispIdMember, R
       // Send([Body]) — no-op: succeed without real HTTP.
       // The game calls this for Oculus telemetry/health checks which no longer
       // exist. The ws_bridge handles actual service traffic independently.
-      Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Send DISPID=5 (no-op) url=%ls",
-          self->m_url.empty() ? L"(none)" : self->m_url.c_str());
+      const std::string requestUrl = WideToUtf8(self->m_url.empty() ? L"" : self->m_url.c_str());
+      const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+          "[NEVR.HTTP] Send DISPID=5 (no-op) url=", requestUrl);
+      Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
       self->m_sent = true;
       self->m_statusCode = 200;
       return S_OK;
@@ -330,6 +333,8 @@ static HRESULT STDMETHODCALLTYPE Stub_SetProxy(void*, long, VARIANT, VARIANT) {
 // interface the game actually uses. Kept for reference; not in the vtable.
 __attribute__((unused))
 static HRESULT STDMETHODCALLTYPE Stub_SetCredentials(void*, BSTR, BSTR, long) {
+  // Unreachable in production: this function is marked unused and is not
+  // wired into s_vtbl below — the Log() call here never fires.
   Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetCredentials called");
   return S_OK;
 }
@@ -342,13 +347,36 @@ static HRESULT STDMETHODCALLTYPE Stub_Open(void* pThis, BSTR Method, BSTR Url, V
   self->m_responseBody.clear();
   self->m_responseHeaders.clear();
   self->m_statusCode = 0;
-  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Open %ls %ls", Method ? Method : L"(null)", Url ? Url : L"(null)");
+  const std::string method = Method ? WideToUtf8(Method) : "(null)";
+  const std::string url = Url ? WideToUtf8(Url) : "";
+  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.HTTP] Open " + method + " ", url);
+  Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
   return S_OK;
+}
+
+// Header names whose values may carry credentials. Matched case-insensitively.
+// The value is never logged for these — same never-log-credentials policy
+// ws_bridge.cpp documents for the password field (see its line ~436).
+static bool IsCredentialHeaderName(const wchar_t* header) {
+  if (!header) return false;
+  static const wchar_t* const kCredentialHeaders[] = {
+      L"Authorization", L"Proxy-Authorization", L"Cookie", L"Set-Cookie", L"X-Api-Key",
+  };
+  for (const wchar_t* name : kCredentialHeaders) {
+    if (_wcsicmp(header, name) == 0) return true;
+  }
+  return false;
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_SetRequestHeader(void* pThis, BSTR Header, BSTR Value) {
   if (Header && Value) SELF(pThis)->m_requestHeaders[Header] = Value;
-  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetRequestHeader %ls: %ls", Header ? Header : L"(null)", Value ? Value : L"(null)");
+  if (IsCredentialHeaderName(Header)) {
+    Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetRequestHeader %ls: ***redacted***",
+        Header ? Header : L"(null)");
+  } else {
+    Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetRequestHeader %ls: %ls", Header ? Header : L"(null)",
+        Value ? Value : L"(null)");
+  }
   return S_OK;
 }
 
@@ -375,7 +403,6 @@ static HRESULT STDMETHODCALLTYPE Stub_GetAllResponseHeaders(void* pThis, BSTR* H
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Send (vtbl, url=%ls)", SELF(pThis)->m_url.empty() ? L"(none)" : SELF(pThis)->m_url.c_str());
   auto* self = SELF(pThis);
   CURL* curl = curl_easy_init();
   if (!curl) return E_FAIL;
@@ -383,7 +410,8 @@ static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
   std::string url = WideToUtf8(self->m_url.c_str());
   std::string method = WideToUtf8(self->m_method.c_str());
 
-  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Send %s %s", method.c_str(), url.c_str());
+  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.HTTP] Send " + method + " ", url);
+  Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
 
   curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
   if (_stricmp(method.c_str(), "POST") == 0)
@@ -416,7 +444,10 @@ static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
   curl_slist_free_all(hlist);
 
   if (res != CURLE_OK) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.HTTP] curl failed: %s", curl_easy_strerror(res));
+    const std::string failure = LogDiagnostics::FormatRedactedUrlDiagnostic(
+        "[NEVR.HTTP] curl failed: url=", url,
+        " curl_code=" + std::to_string(static_cast<int>(res)));
+    Log(EchoVR::LogLevel::Warning, "%s", failure.c_str());
     curl_easy_cleanup(curl);
     return E_FAIL;
   }

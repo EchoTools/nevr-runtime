@@ -23,6 +23,7 @@
 #include "core/hooking.h"
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
+#include "core/system_info.h"
 
 // ---------------------------------------------------------------------------
 // Schannel TLS hook
@@ -80,7 +81,14 @@ BOOL WINAPI CreateDirectoryWHook(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSec
       GetCurrentDirectoryW(MAX_PATH, currentDir);
       _snwprintf(fixedPath, 512, L"%ls\\%ls", currentDir, lpPathName + 4);
       pathToUse = fixedPath;
-      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Fixed malformed NT path: '%ls' -> '%ls'", lpPathName, fixedPath);
+      // This bug has no counterpart on native Windows (see the CoCreateInstance
+      // hook comment below) — SystemInfo::Get().IsWine() makes that explicit
+      // instead of leaving the branch looking like an unexplained ad hoc fix,
+      // and flags the anomaly loudly if it's ever hit off Wine.
+      static const bool s_isWine = SystemInfo::Get().IsWine();
+      Log(s_isWine ? EchoVR::LogLevel::Debug : EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] %smalformed NT path fixed (Wine _temp bug): '%ls' -> '%ls'",
+          s_isWine ? "" : "UNEXPECTED on native Windows: ", lpPathName, fixedPath);
     }
 
     BOOL result = OriginalCreateDirectoryW(pathToUse, lpSecurityAttributes);
@@ -122,19 +130,24 @@ typedef BOOL(WINAPI* CreateDirectoryAFunc)(LPCSTR, LPSECURITY_ATTRIBUTES);
 static CreateDirectoryAFunc OriginalCreateDirectoryA = nullptr;
 
 BOOL WINAPI CreateDirectoryAHook(LPCSTR lpPathName, LPSECURITY_ATTRIBUTES lpSecurityAttributes) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CreateDirectoryA(.%s.) called", lpPathName ? lpPathName : "<null>");
+  // Match CreateDirectoryWHook's scope (only _temp paths) instead of logging
+  // every CreateDirectoryA call in the process for what's the same workaround.
+  if (!lpPathName || !strstr(lpPathName, "_temp")) {
+    return OriginalCreateDirectoryA(lpPathName, lpSecurityAttributes);
+  }
+
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CreateDirectoryA(_temp) called path=%s", lpPathName);
 
   BOOL result = OriginalCreateDirectoryA(lpPathName, lpSecurityAttributes);
   DWORD lastError = GetLastError();
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CreateDirectoryA result=%d, lastError=%lu", result, lastError);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CreateDirectoryA result=%s lastError=%lu",
+      result ? "true" : "false", lastError);
 
   if (!result && lastError == ERROR_ALREADY_EXISTS) {
-    if (lpPathName && strstr(lpPathName, "_temp")) {
-      Log(EchoVR::LogLevel::Info,
-          "[NEVR.PATCH] CreateDirectoryA('%s') failed with ERROR_ALREADY_EXISTS - returning success", lpPathName);
-      SetLastError(ERROR_SUCCESS);
-      return TRUE;
-    }
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] CreateDirectoryA('%s') failed with ERROR_ALREADY_EXISTS - returning success", lpPathName);
+    SetLastError(ERROR_SUCCESS);
+    return TRUE;
   }
 
   SetLastError(lastError);
@@ -192,15 +205,18 @@ static bool InstallTLSHook() {
     if (OriginalAcquireCredentialsHandleW != NULL) {
       if (!Hooking::Attach(reinterpret_cast<PVOID*>(&OriginalAcquireCredentialsHandleW),
                            reinterpret_cast<PVOID>(AcquireCredentialsHandleWHook))) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] Failed to install AcquireCredentialsHandleW hook");
+        Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] failed to install AcquireCredentialsHandleW hook: %s",
+            Hooking::LastAttachError());
         return false;
       }
       Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] SSL/TLS modernization hook installed (Schannel)");
       return true;
     }
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find AcquireCredentialsHandleW");
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] failed to find AcquireCredentialsHandleW export in Secur32.dll (error=%lu)", GetLastError());
   } else {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load Secur32.dll for SSL/TLS hook");
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] failed to load Secur32.dll for SSL/TLS hook (error=%lu)",
+        GetLastError());
   }
   return false;
 }
@@ -214,7 +230,8 @@ static bool InstallCreateDirectoryHooks() {
   if (OriginalCreateDirectoryW != NULL) {
     if (!Hooking::Attach(reinterpret_cast<PVOID*>(&OriginalCreateDirectoryW),
                          reinterpret_cast<PVOID>(CreateDirectoryWHook))) {
-      Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] Failed to install CreateDirectoryW hook");
+      Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] failed to install CreateDirectoryW hook: %s",
+          Hooking::LastAttachError());
       ok = false;
     } else {
       Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CreateDirectoryW hook installed");
@@ -225,7 +242,8 @@ static bool InstallCreateDirectoryHooks() {
   if (OriginalCreateDirectoryA != NULL) {
     if (!Hooking::Attach(reinterpret_cast<PVOID*>(&OriginalCreateDirectoryA),
                          reinterpret_cast<PVOID>(CreateDirectoryAHook))) {
-      Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] Failed to install CreateDirectoryA hook");
+      Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] failed to install CreateDirectoryA hook: %s",
+          Hooking::LastAttachError());
       ok = false;
     } else {
       Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] CreateDirectoryA hook installed");
@@ -244,15 +262,20 @@ static bool InstallWinHTTPHook() {
     if (OriginalCoCreateInstance != NULL) {
       if (!Hooking::Attach(reinterpret_cast<PVOID*>(&OriginalCoCreateInstance),
                            reinterpret_cast<PVOID>(CoCreateInstanceHook))) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.PATCH] Failed to install CoCreateInstance hook — WinHTTP bridge inactive");
+        Log(EchoVR::LogLevel::Error,
+            "[NEVR.PATCH] failed to install CoCreateInstance hook: %s — WinHTTP bridge inactive, game will use its "
+            "own (unpatched) HTTP stack",
+            Hooking::LastAttachError());
         return false;
       }
       Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] WinHTTP to libcurl hook installed (CoCreateInstance)");
       return true;
     }
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to find CoCreateInstance");
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] failed to find CoCreateInstance export in ole32.dll (error=%lu)",
+        GetLastError());
   } else {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load ole32.dll for WinHTTP hook");
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] failed to load ole32.dll for WinHTTP hook (error=%lu)",
+        GetLastError());
   }
   return false;
 }
@@ -274,6 +297,11 @@ NEVR_MODULE_API int platform_compat_Init(const NvrModuleContext* ctx) {
   // The host resolved and detoured these pointers before loading static modules.
   // Re-running InitializeFunctionPointers here replaces every MinHook trampoline
   // with its patched target; a hook calling its "original" then re-enters itself.
+
+  // Hoisted from below the hook-outcome logging (was computed only for the
+  // N120 fatal-gate check) so the WinHTTP-missing line right below can also
+  // condition its wording on it — see that line's comment.
+  const bool isServer = (ctx->flags & NEVR_MODULE_HOST_IS_SERVER) != 0;
 
   Hooking::Initialize();
 
@@ -297,8 +325,13 @@ NEVR_MODULE_API int platform_compat_Init(const NvrModuleContext* ctx) {
       httpOk ? "ok" : "FAILED");
 
   /* The WinHTTP bridge is the one whose absence is silent-but-fatal: without it
-   * the game falls back to its own HTTP stack and reports NoNetwork (N11). */
-  if (!httpOk) {
+   * the game falls back to its own HTTP stack and reports NoNetwork (N11).
+   * On a server this line used to fire AND understate what happens next: the
+   * isServer-gated block below (N120) logs its own Error and returns 1, which
+   * module_loader treats as fatal — the process exits. Say nothing here on a
+   * server so that Error is the sole, correct one; the client case is
+   * unaffected and still gets the NoNetwork warning. */
+  if (!httpOk && !isServer) {
     Log(EchoVR::LogLevel::Error,
         "[NEVR.MODULE] WinHTTP bridge NOT installed — the game will use its own "
         "HTTP stack and may report NoNetwork (N11)");
@@ -321,7 +354,6 @@ NEVR_MODULE_API int platform_compat_Init(const NvrModuleContext* ctx) {
    * BOTH modes, so returning non-zero unconditionally would newly hard-fail a
    * client that previously limped along with degraded HTTP — the opposite of the
    * rule, which is that a server dies and a client warns. */
-  const bool isServer = (ctx->flags & NEVR_MODULE_HOST_IS_SERVER) != 0;
   if (isServer && (!tlsOk || !httpOk)) {
     Log(EchoVR::LogLevel::Error,
         "[NEVR.MODULE] platform_compat FAILED on a server (tls=%s winhttp=%s) — "

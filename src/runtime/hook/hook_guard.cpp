@@ -21,6 +21,10 @@ struct GuardedSite {
   const void* target;
   const char* name;  // string literal from the call site; not owned
   unsigned char bytes[kSnapshotBytes];
+  bool reported;  // true once this site's overwrite ERROR has been logged —
+                  // a collision that stays overwritten (nothing un-overwrites
+                  // one) must not re-log the identical ERROR every ~30s
+                  // periodic check for the rest of the process lifetime.
 };
 
 GuardedSite g_sites[kMaxGuarded];
@@ -71,21 +75,31 @@ void Record(const void* target, const char* name) {
 
   g_sites[idx].target = target;
   g_sites[idx].name = name != nullptr ? name : "(unnamed)";
+  g_sites[idx].reported = false;
   memcpy(g_sites[idx].bytes, target, kSnapshotBytes);
 }
 
 int VerifyAll(const char* context) {
   const LONG n = g_count;
   int mismatches = 0;
+  int newlyReported = 0;
 
   for (LONG i = 0; i < n && i < kMaxGuarded; i++) {
-    const GuardedSite& s = g_sites[i];
+    GuardedSite& s = g_sites[i];
     if (s.target == nullptr) continue;
     if (!Readable(s.target, kSnapshotBytes)) continue;
 
     unsigned char now[kSnapshotBytes];
     memcpy(now, s.target, kSnapshotBytes);
     if (memcmp(now, s.bytes, kSnapshotBytes) == 0) continue;
+
+    mismatches++;
+    // Edge-triggered: log this site's ERROR once, the first check that finds
+    // it overwritten. Nothing un-overwrites a clobbered hook, so without this
+    // gate the identical line repeats every ~30s periodic check forever.
+    if (s.reported) continue;
+    s.reported = true;
+    newlyReported++;
 
     char expected[kSnapshotBytes * 2 + 1];
     char actual[kSnapshotBytes * 2 + 1];
@@ -101,13 +115,18 @@ int VerifyAll(const char* context) {
         "already owns (N84)",
         s.name, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(s.target)),
         context != nullptr ? context : "(unknown)", expected, actual);
-    mismatches++;
   }
 
-  if (mismatches > 0) {
+  // Aggregate line is edge-triggered too: only fires when THIS check found a
+  // new collision, not on every periodic tick for as long as an old one
+  // remains overwritten. `mismatches` (the return value) still reports the
+  // full current count — only the logging cadence changed.
+  if (newlyReported > 0) {
     Log(EchoVR::LogLevel::Error,
-        "[NEVR.PATCH] hook guard: %d of %ld guarded address(es) overwritten after=%s",
-        mismatches, static_cast<long>(n), context != nullptr ? context : "(unknown)");
+        "[NEVR.PATCH] hook guard: %d new overwrite(s) detected after=%s "
+        "(%d of %ld guarded address(es) now overwritten, cumulative)",
+        newlyReported, context != nullptr ? context : "(unknown)",
+        mismatches, static_cast<long>(n));
   }
   return mismatches;
 }

@@ -4,6 +4,7 @@
 
 #include "core/auth_token.h"
 #include "nevr_curl.h"
+#include "runtime/log/security_diagnostics.h"
 
 #include <nlohmann/json.hpp>
 #include <cstdio>
@@ -68,13 +69,15 @@ inline bool RefreshAuthToken(CachedAuthToken& auth,
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        fprintf(stderr, "[NEVR.AUTH] Token refresh failed: %s\n", curl_easy_strerror(res));
+        const std::string diagnostic = LogDiagnostics::FormatCurlFailureDiagnostic(
+            "[NEVR.AUTH] token refresh request failed ", static_cast<int>(res));
+        Log(EchoVR::LogLevel::Warning, "%s — falling back to cached/password auth", diagnostic.c_str());
         return false;
     }
 
     if (http_code != 200) {
-        fprintf(stderr, "[NEVR.AUTH] Token refresh HTTP %ld: %s\n", http_code,
-            response.empty() ? "(empty)" : response.substr(0, 200).c_str());
+        LogDiagnostics::LogHttpResponseSummary(EchoVR::LogLevel::Warning,
+                                               "[NEVR.AUTH] token refresh rejected ", http_code, response);
         return false;
     }
 
@@ -91,7 +94,8 @@ inline bool RefreshAuthToken(CachedAuthToken& auth,
         std::string new_refresh = j.value("refresh_token", "");
 
         if (new_token.empty()) {
-            fprintf(stderr, "[NEVR.AUTH] Token refresh returned empty token\n");
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.AUTH] token refresh response carried no access_token or token field — treating as failed refresh");
             return false;
         }
 
@@ -117,10 +121,13 @@ inline bool RefreshAuthToken(CachedAuthToken& auth,
         }
 
         SaveAuthToken(auth);
-        fprintf(stderr, "[NEVR.AUTH] Token refreshed successfully\n");
+        // No success log here — token_auth.cpp:476 (the only real caller) already
+        // logs the success at Info with more detail (expires_in) immediately
+        // after this returns true; a line here would just duplicate it.
         return true;
-    } catch (const nlohmann::json::parse_error& e) {
-        fprintf(stderr, "[NEVR.AUTH] Token refresh response parse error: %s\n", e.what());
+    } catch (const nlohmann::json::parse_error&) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.AUTH] token refresh response was not valid JSON — treating as failed refresh");
         return false;
     }
 }

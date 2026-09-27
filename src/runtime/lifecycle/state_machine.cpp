@@ -88,7 +88,13 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
     // Session ended: we were in-game and now returning to lobby. Exit cleanly
     // so the fleet manager can spawn a fresh instance.
     if (g_serverWasInGame && state == EchoVR::NetGameState::Lobby) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Session ended. Server exiting via graceful shutdown.");
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.PATCH] session ended session_id=%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X "
+          "— server exiting via graceful shutdown",
+          g_loginSessionId.Data1, g_loginSessionId.Data2, g_loginSessionId.Data3,
+          g_loginSessionId.Data4[0], g_loginSessionId.Data4[1], g_loginSessionId.Data4[2],
+          g_loginSessionId.Data4[3], g_loginSessionId.Data4[4], g_loginSessionId.Data4[5],
+          g_loginSessionId.Data4[6], g_loginSessionId.Data4[7]);
       PerformGracefulShutdown(0);
       // Unreachable
     }

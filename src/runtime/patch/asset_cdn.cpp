@@ -6,6 +6,7 @@
 #include <wincrypt.h>
 
 #include <atomic>
+#include <cerrno>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -19,6 +20,7 @@
 #include "abi/echovr_functions.h"
 #include "core/hooking.h"
 #include "core/logging.h"
+#include "runtime/log/security_diagnostics.h"
 #include "nevr_common.h"      // N97: the one ValidatePrologue
 #include "runtime/hook/addresses.h"
 
@@ -138,6 +140,20 @@ constexpr size_t PROLOGUE_LEN = sizeof(EXPECTED_PROLOGUE);
 // and a file-local ValidatePrologue taking a different argument list is exactly
 // the one-name-two-meanings defect N96 removed.
 
+/// Lowercase hex dump of len bytes — same conversion ComputeSHA256 already
+/// does locally for its digest; pulled out so prologue-mismatch logging can
+/// share it instead of hand-writing a byte[16] %02x arg list.
+static std::string BytesToHex(const uint8_t* bytes, size_t len) {
+    static const char hex[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(len * 2);
+    for (size_t i = 0; i < len; i++) {
+        result.push_back(hex[bytes[i] >> 4]);
+        result.push_back(hex[bytes[i] & 0x0F]);
+    }
+    return result;
+}
+
 // ============================================================================
 // curl write callback
 // ============================================================================
@@ -200,13 +216,16 @@ static std::string ComputeSHA256(const std::vector<uint8_t>& data) {
 // .evrp parsing
 // ============================================================================
 
-/// Parse a .evrp file buffer into symbol_id and tint data.
+/// Parse a .evrp file buffer into symbol_id and tint data. `context` is the
+/// filename the caller is parsing (BackgroundFetchThread already has it) so
+/// every skip Warning below can say WHICH package was rejected, not just why.
 /// Returns true if the file is a valid tint package.
-static bool ParseEvrpTint(const std::vector<uint8_t>& data, int64_t& out_symbol_id,
-                           TintData& out_tint) {
+static bool ParseEvrpTint(const std::vector<uint8_t>& data, const std::string& context,
+                           int64_t& out_symbol_id, TintData& out_tint) {
     if (data.size() < EVRP_HEADER_SIZE) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.CDN] .evrp file too small: %zu bytes",
-            data.size());
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.CDN] .evrp package skipped — file too small: file=%s size=%zu min=%zu",
+            context.c_str(), data.size(), EVRP_HEADER_SIZE);
         return false;
     }
 
@@ -215,21 +234,25 @@ static bool ParseEvrpTint(const std::vector<uint8_t>& data, int64_t& out_symbol_
 
     // Validate magic
     if (header.magic != EVRP_MAGIC) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.CDN] .evrp bad magic: 0x%08X", header.magic);
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.CDN] .evrp package skipped — bad magic: file=%s magic=0x%08X want=0x%08X('EVRP')",
+            context.c_str(), header.magic, EVRP_MAGIC);
         return false;
     }
 
     // Validate format version
     if (header.format_version != EVRP_FORMAT_VERSION) {
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.CDN] .evrp unsupported format version: %u", header.format_version);
+            "[NEVR.CDN] .evrp package skipped — unsupported format version: file=%s got=%u want=%u",
+            context.c_str(), header.format_version, EVRP_FORMAT_VERSION);
         return false;
     }
 
     // Validate slot type
     if (header.slot_type != SLOT_TYPE_TINT) {
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.CDN] .evrp unknown slot type: 0x%02X", header.slot_type);
+            "[NEVR.CDN] .evrp package skipped — unknown slot type: file=%s got=0x%02X want=0x%02X(tint)",
+            context.c_str(), header.slot_type, SLOT_TYPE_TINT);
         return false;
     }
 
@@ -237,7 +260,8 @@ static bool ParseEvrpTint(const std::vector<uint8_t>& data, int64_t& out_symbol_
     for (int i = 0; i < 7; i++) {
         if (header.reserved[i] != 0) {
             Log(EchoVR::LogLevel::Warning,
-                "[NEVR.CDN] .evrp reserved bytes not zero at index %d", i);
+                "[NEVR.CDN] .evrp package skipped — reserved byte nonzero: file=%s index=%d value=0x%02X",
+                context.c_str(), i, header.reserved[i]);
             return false;
         }
     }
@@ -245,16 +269,16 @@ static bool ParseEvrpTint(const std::vector<uint8_t>& data, int64_t& out_symbol_
     // Validate data length for tint
     if (header.data_length != TINT_DATA_LENGTH) {
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.CDN] .evrp tint data_length mismatch: %u (expected %u)",
-            header.data_length, TINT_DATA_LENGTH);
+            "[NEVR.CDN] .evrp package skipped — data_length mismatch: file=%s got=%u want=%u",
+            context.c_str(), header.data_length, TINT_DATA_LENGTH);
         return false;
     }
 
     // Validate total file size
     if (data.size() != EVRP_HEADER_SIZE + header.data_length) {
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.CDN] .evrp size mismatch: %zu (expected %zu)",
-            data.size(), static_cast<size_t>(EVRP_HEADER_SIZE + header.data_length));
+            "[NEVR.CDN] .evrp package skipped — size mismatch: file=%s got=%zu want=%zu",
+            context.c_str(), data.size(), static_cast<size_t>(EVRP_HEADER_SIZE + header.data_length));
         return false;
     }
 
@@ -291,7 +315,10 @@ static void BackgroundFetchThread() {
 
     std::string cacheDir = AssetCDN::GetCacheDir();
     if (cacheDir.empty()) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.CDN] Failed to resolve cache directory");
+        // GetCacheDir() already logged the specific cause (SHGetKnownFolderPath
+        // HRESULT or create_directories ec.message()) immediately before this
+        // returns — a second, generic ERROR here would only restate "failed"
+        // with strictly less detail than the line that just ran.
         g_fetchState.store(AssetCDN::FetchState::Error);
         return;
     }
@@ -356,7 +383,7 @@ static void BackgroundFetchThread() {
         // Parse .evrp and extract tint data
         int64_t parsed_symbol_id;
         TintData tint;
-        if (ParseEvrpTint(file_data, parsed_symbol_id, tint)) {
+        if (ParseEvrpTint(file_data, filename, parsed_symbol_id, tint)) {
             (*newTintMap)[parsed_symbol_id] = tint;
         }
     }
@@ -375,8 +402,8 @@ static void BackgroundFetchThread() {
         delete old;
     }
 
-    Log(EchoVR::LogLevel::Info,
-        "[NEVR.CDN] Fetch complete: %d downloaded, %d cached, %d failed, %zu tints loaded",
+    Log(failed > 0 ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+        "[NEVR.CDN] fetch complete: downloaded=%d cached=%d failed=%d tints_loaded=%zu",
         downloaded, cached, failed, newTintMap->size());
 
     g_fetchState.store(AssetCDN::FetchState::Complete);
@@ -454,8 +481,10 @@ void AssetCDN::Initialize() {
 
     if (!nevr::ValidatePrologue(target, EXPECTED_PROLOGUE, PROLOGUE_LEN)) {
         Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] Prologue validation failed for Loadout_ResolveDataFromId at %p — hook NOT installed",
-            target);
+            "[NEVR.CDN] prologue validation failed for Loadout_ResolveDataFromId — hook NOT installed: "
+            "target=%p expected=%s actual=%s",
+            target, BytesToHex(EXPECTED_PROLOGUE, PROLOGUE_LEN).c_str(),
+            BytesToHex(reinterpret_cast<const uint8_t*>(target), PROLOGUE_LEN).c_str());
         return;
     }
 
@@ -467,14 +496,15 @@ void AssetCDN::Initialize() {
 
     if (!success) {
         Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] Failed to install Loadout_ResolveDataFromId hook at %p", target);
+            "[NEVR.CDN] hook install failed name=Loadout_ResolveDataFromId target=%p reason=%s",
+            target, Hooking::LastAttachError());
         g_originalFunc = nullptr;
         return;
     }
 
     g_hookInstalled = true;
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.CDN] Loadout_ResolveDataFromId hook installed at %p", target);
+        "[NEVR.CDN] Loadout_ResolveDataFromId hook installed at %p — CDN tint override active", target);
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
     StartBackgroundFetch();
@@ -490,6 +520,7 @@ void AssetCDN::Shutdown() {
     }
 
     // Remove hook
+    const bool hookWasInstalled = g_hookInstalled;
     if (g_hookInstalled) {
         Hooking::Detach(
             reinterpret_cast<PVOID*>(&g_originalFunc),
@@ -511,7 +542,8 @@ void AssetCDN::Shutdown() {
     g_shutdownRequested.store(false);
 
     curl_global_cleanup();
-    Log(EchoVR::LogLevel::Info, "[NEVR.CDN] Shutdown complete");
+    Log(EchoVR::LogLevel::Info, "[NEVR.CDN] shutdown complete hook_removed=%s",
+        hookWasInstalled ? "true" : "false");
 }
 
 void AssetCDN::StartBackgroundFetch() {
@@ -534,9 +566,10 @@ AssetCDN::FetchState AssetCDN::GetFetchState() {
 
 std::string AssetCDN::GetCacheDir() {
     wchar_t* localAppDataPath = nullptr;
-    if (SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localAppDataPath) != S_OK) {
+    HRESULT hr = SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localAppDataPath);
+    if (hr != S_OK) {
         Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] SHGetKnownFolderPath failed for LOCALAPPDATA");
+            "[NEVR.CDN] SHGetKnownFolderPath failed for LOCALAPPDATA hr=0x%08lX", hr);
         return "";
     }
 
@@ -591,14 +624,14 @@ bool AssetCDN::FetchManifest() {
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] Manifest fetch failed: %s", curl_easy_strerror(res));
+        const std::string diagnostic =
+            LogDiagnostics::FormatCurlFailureDiagnostic("[NEVR.CDN] Manifest fetch failed ", static_cast<int>(res));
+        Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
         return false;
     }
 
     if (http_code != 200) {
-        Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] Manifest fetch HTTP %ld", http_code);
+        Log(EchoVR::LogLevel::Error, "[NEVR.CDN] manifest fetch failed: http_status=%ld", http_code);
         return false;
     }
 
@@ -606,22 +639,24 @@ bool AssetCDN::FetchManifest() {
     json manifest;
     try {
         manifest = json::parse(buffer.begin(), buffer.end());
-    } catch (const json::parse_error& e) {
-        Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] Manifest JSON parse error: %s", e.what());
+    } catch (const json::parse_error&) {
+        Log(EchoVR::LogLevel::Error, "[NEVR.CDN] Manifest JSON parse error response_bytes=%zu", buffer.size());
         return false;
     }
 
     // Validate version
     if (!manifest.contains("version") || manifest["version"].get<int>() != 1) {
+        int got = (manifest.contains("version") && manifest["version"].is_number())
+                      ? manifest["version"].get<int>() : -1;
         Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] Unsupported manifest version");
+            "[NEVR.CDN] unsupported manifest version: got=%d want=1", got);
         return false;
     }
 
     if (!manifest.contains("packages") || !manifest["packages"].is_object()) {
         Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] Manifest missing packages object");
+            "[NEVR.CDN] manifest packages field %s",
+            !manifest.contains("packages") ? "missing" : "present but not an object");
         return false;
     }
 
@@ -647,8 +682,13 @@ bool AssetCDN::FetchManifest() {
 
         if (!pkg.contains("url") || !pkg.contains("sha256") ||
             !pkg.contains("slot_type") || !pkg.contains("size")) {
+            std::string missing;
+            if (!pkg.contains("url")) missing += (missing.empty() ? "" : ",") + std::string("url");
+            if (!pkg.contains("sha256")) missing += (missing.empty() ? "" : ",") + std::string("sha256");
+            if (!pkg.contains("slot_type")) missing += (missing.empty() ? "" : ",") + std::string("slot_type");
+            if (!pkg.contains("size")) missing += (missing.empty() ? "" : ",") + std::string("size");
             Log(EchoVR::LogLevel::Warning,
-                "[NEVR.CDN] Skipping package %s: missing required fields", hex_key.c_str());
+                "[NEVR.CDN] skipping package %s: missing fields=%s", hex_key.c_str(), missing.c_str());
             continue;
         }
 
@@ -671,7 +711,8 @@ bool AssetCDN::DownloadPackage(const std::string& url, const std::string& dest_p
                                 const std::string& expected_sha256) {
     CURL* curl = curl_easy_init();
     if (!curl) {
-        Log(EchoVR::LogLevel::Error, "[NEVR.CDN] curl_easy_init failed for package download");
+        Log(EchoVR::LogLevel::Error, "[NEVR.CDN] curl_easy_init failed for package download url=%s",
+            url.c_str());
         return false;
     }
 
@@ -691,9 +732,9 @@ bool AssetCDN::DownloadPackage(const std::string& url, const std::string& dest_p
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] Package download failed (%s): %s",
-            url.c_str(), curl_easy_strerror(res));
+        const std::string diagnostic =
+            LogDiagnostics::FormatCurlFailureDiagnostic("[NEVR.CDN] Package download failed ", static_cast<int>(res));
+        Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
         return false;
     }
 
@@ -706,8 +747,13 @@ bool AssetCDN::DownloadPackage(const std::string& url, const std::string& dest_p
     // Verify SHA256
     std::string actual_sha256 = ComputeSHA256(buffer);
     if (actual_sha256.empty()) {
+        // Best-effort: ComputeSHA256 has 4 internal CryptoAPI failure points and
+        // none of them log or propagate a reason, so this is whatever the last
+        // Win32 call before its early return left behind — may be stale if a
+        // CryptDestroyHash/CryptReleaseContext ran between the failure and here,
+        // but it costs nothing and is sometimes the real answer.
         Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] SHA256 computation failed for %s", url.c_str());
+            "[NEVR.CDN] SHA256 computation failed for %s error=%lu", url.c_str(), GetLastError());
         return false;
     }
 
@@ -722,7 +768,8 @@ bool AssetCDN::DownloadPackage(const std::string& url, const std::string& dest_p
     std::ofstream ofs(dest_path, std::ios::binary);
     if (!ofs.good()) {
         Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] Failed to open cache file for writing: %s", dest_path.c_str());
+            "[NEVR.CDN] failed to open cache file for writing: path=%s errno=%d (%s)",
+            dest_path.c_str(), errno, strerror(errno));
         return false;
     }
 
@@ -732,7 +779,8 @@ bool AssetCDN::DownloadPackage(const std::string& url, const std::string& dest_p
 
     if (ofs.fail()) {
         Log(EchoVR::LogLevel::Error,
-            "[NEVR.CDN] Failed to write cache file: %s", dest_path.c_str());
+            "[NEVR.CDN] failed to write cache file: path=%s errno=%d (%s)",
+            dest_path.c_str(), errno, strerror(errno));
         return false;
     }
 

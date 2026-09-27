@@ -14,12 +14,18 @@
 #include "core/auth_token.h"
 #include "auth_token_refresh.h"
 #include "nevr_curl.h"
+#include "runtime/log/url_diagnostics.h"
+#include "runtime/log/security_diagnostics.h"
 
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <ctime>
+#include <exception>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -35,6 +41,22 @@
 
 namespace {
 
+struct InternalDeviceAuthFlowOps {
+    using Clock = std::chrono::steady_clock;
+    std::function<Clock::time_point()> now;
+    std::function<std::string()> requestDeviceCode;
+    std::function<intptr_t(const std::string&)> openBrowser;
+    std::function<int(const std::string&, const std::string&, intptr_t)> showOpenFailure;
+    std::function<TokenAuth::DevicePollResponse(const std::string&)> poll;
+    std::function<void(Clock::duration)> sleep;
+    std::function<bool()> save;
+    std::function<void(EchoVR::LogLevel, const std::string&)> log;
+};
+
+static constexpr InternalDeviceAuthFlowOps::Clock::duration kDeviceAuthLifetime = std::chrono::minutes(5);
+static constexpr InternalDeviceAuthFlowOps::Clock::duration kDeviceAuthPollInterval = std::chrono::seconds(3);
+static constexpr char kDeviceLoginUrl[] = "https://echovrce.com/login/device";
+
 // ---------------------------------------------------------------------------
 // DeviceAuth — adapted from plugins/token-auth/src/device_auth.{h,cpp}
 // ---------------------------------------------------------------------------
@@ -43,11 +65,15 @@ class DeviceAuth {
 public:
     void Configure(const std::string& url, const std::string& httpKey, const std::string& serverKey);
     bool TryLoadCachedToken();
-    bool RunDeviceAuthFlow();
+    bool RunDeviceAuthFlow(bool is_server);
+    bool RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowOps& ops);
     bool SaveToken();
     bool IsAuthenticated() const;
     std::string GetTokenValue() const { return m_token; }
     uint64_t GetDiscordIdValue() const { return m_discordId; }
+    const std::string& GetRefreshTokenValue() const { return m_refreshToken; }
+    uint64_t GetRefreshTokenExpiryValue() const { return m_refreshTokenExpiry; }
+    const std::string& GetUserIdValue() const { return m_userId; }
     // Absolute unix expiry of the access token this instance is holding, or 0
     // when it holds none. This is the ONLY authority for when the live token
     // dies: the access token is never persisted (core/auth_token.h
@@ -58,9 +84,18 @@ public:
 
 private:
     std::string RequestDeviceCode();
-    std::string PollDeviceCode(const std::string& code);
+    TokenAuth::DevicePollResponse PollDeviceCode(const std::string& code);
+    void ApplyVerifiedPollResponse(const TokenAuth::DevicePollResponse& response,
+                                   const InternalDeviceAuthFlowOps& ops);
     std::string HttpPostPublic(const std::string& url, const std::string& body);
-    void DisplayLinkingCode(const std::string& code);
+    void DisplayLinkingCode(const InternalDeviceAuthFlowOps& ops);
+
+#ifdef NEVR_TEST_HOOKS
+public:
+    void SetStateForTest(const TokenAuth::TestHook::DeviceAuthState& state);
+#endif
+
+private:
 
     std::string m_url;
     std::string m_httpKey;
@@ -80,7 +115,9 @@ void DeviceAuth::Configure(const std::string& url, const std::string& httpKey, c
     m_httpKey = httpKey;
     m_serverKey = serverKey;
     m_configured = true;
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Configured: url=%s", url.c_str());
+    const std::string diagnostic =
+        LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.AUTH] Configured: url=", url);
+    Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
 }
 
 bool DeviceAuth::IsAuthenticated() const {
@@ -119,9 +156,13 @@ bool DeviceAuth::TryLoadCachedToken() {
             m_userId = auth.user_id;
             m_username = auth.username;
             m_discordId = auth.GetDiscordId();
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.AUTH] token refresh succeeded during cache load, expires_in=%llus",
+                (unsigned long long)(auth.token_expiry - static_cast<uint64_t>(time(nullptr))));
             return true;
         }
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Token refresh failed -- will re-authenticate");
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.AUTH] token refresh failed during cache load, falling back to full device-code re-authentication");
     } else if (!auth.refresh_token.empty()) {
         Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Both tokens expired -- will re-authenticate");
     } else {
@@ -155,7 +196,8 @@ bool DeviceAuth::SaveToken() {
     auth.username = m_username;
 
     if (!SaveAuthToken(auth)) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Failed to write .credentials.json");
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.AUTH] failed to write .credentials.json — refresh token not persisted, next launch will require full re-authentication");
         return false;
     }
 
@@ -186,8 +228,9 @@ std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] POST %s failed: %s",
-            url.c_str(), curl_easy_strerror(res));
+        const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+            "[NEVR.AUTH] POST ", url, " failed");
+        Log(EchoVR::LogLevel::Warning, "%s curl_code=%d", diagnostic.c_str(), static_cast<int>(res));
         return "";
     }
     return response;
@@ -211,160 +254,213 @@ std::string DeviceAuth::RequestDeviceCode() {
         auto j = nlohmann::json::parse(response);
         return j.value("code", "");
     } catch (const nlohmann::json::exception&) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] device code request: malformed JSON response");
         return "";
     }
 }
 
-std::string DeviceAuth::PollDeviceCode(const std::string& code) {
+TokenAuth::DevicePollResponse DeviceAuth::PollDeviceCode(const std::string& code) {
     std::string url = m_url + "/v2/rpc/device/auth/poll?http_key=" + m_httpKey + "&unwrap";
     nlohmann::json reqBody;
     reqBody["code"] = code;
     std::string response = HttpPostPublic(url, reqBody.dump());
-    if (response.empty()) return "error";
-
-    const TokenAuth::DevicePollResponse poll = TokenAuth::ParseDevicePollResponse(response);
-    switch (poll.status) {
-        case TokenAuth::DevicePollStatus::Verified:
-                m_token = poll.access_token;
-                // Respect the token's OWN expiry (owner decision 2026-07-27).
-                // This was `time(nullptr) + 60` — the client refreshed on its own
-                // hardcoded schedule instead of the server's, discarding a token
-                // that might still have been valid for an hour. The JWT `exp`
-                // claim is the authority; `expires_in` from the response is the
-                // first fallback; a conservative constant only if neither is
-                // present.
-                {
-                    const uint64_t now = static_cast<uint64_t>(time(nullptr));
-                    CachedAuthToken probe;
-                    probe.token = m_token;
-                    const uint64_t jwtExp = probe.GetJwtExpiry();
-                    if (jwtExp > now) {
-                        m_tokenExpiry = TokenAuth::ResolveAccessTokenExpiry(now, m_token, poll.expires_in);
-                        Log(EchoVR::LogLevel::Info,
-                            "[NEVR.AUTH] token expiry from JWT exp: %llu (%llus from now)",
-                            static_cast<unsigned long long>(jwtExp),
-                            static_cast<unsigned long long>(jwtExp - now));
-                    } else if (poll.expires_in.has_value()) {
-                        m_tokenExpiry = TokenAuth::ResolveAccessTokenExpiry(now, m_token, poll.expires_in);
-                        Log(EchoVR::LogLevel::Info,
-                            "[NEVR.AUTH] token expiry from expires_in: %llus",
-                            static_cast<unsigned long long>(*poll.expires_in));
-                    } else {
-                        m_tokenExpiry = TokenAuth::ResolveAccessTokenExpiry(now, m_token, poll.expires_in);
-                        Log(EchoVR::LogLevel::Warning,
-                            "[NEVR.AUTH] token carries no exp and no expires_in — "
-                            "falling back to %llus",
-                            static_cast<unsigned long long>(kFallbackAccessTokenLifetimeSec));
-                    }
-                }
-                m_refreshToken = poll.refresh_token;
-                // Was `now + 30 days`, unconditionally — a client hardcoding a
-                // SERVER policy it had never been told. The server states
-                // `refresh_token_expires_in` (EchoTools/nakama f945f631d); the
-                // constant survives only for a server that predates it, and is
-                // marked a fallback rather than a fact.
-                {
-                    const uint64_t now = static_cast<uint64_t>(time(nullptr));
-                    m_refreshTokenExpiry =
-                        ResolveRefreshTokenExpirySec(now, poll.refresh_token_expires_in);
-                    if (poll.refresh_token_expires_in.has_value()) {
-                        Log(EchoVR::LogLevel::Info,
-                            "[NEVR.AUTH] refresh token expiry from refresh_token_expires_in: %llus",
-                            static_cast<unsigned long long>(*poll.refresh_token_expires_in));
-                    } else {
-                        Log(EchoVR::LogLevel::Warning,
-                            "[NEVR.AUTH] server sent no refresh_token_expires_in — "
-                            "assuming %llus, which is a guess at its policy, not a measurement",
-                            static_cast<unsigned long long>(kFallbackRefreshTokenLifetimeSec));
-                    }
-                }
-                m_userId = poll.user_id;
-                m_username = poll.username;
-                // Parse discord ID from the JWT access token
-                {
-                    CachedAuthToken tmp;
-                    tmp.token = m_token;
-                    m_discordId = tmp.GetDiscordId();
-                }
-                return "verified";
-        case TokenAuth::DevicePollStatus::Expired:
-            return "expired";
-        case TokenAuth::DevicePollStatus::Pending:
-            return "pending";
-        case TokenAuth::DevicePollStatus::Error:
-            return "error";
-    }
-    return "error";
+    if (response.empty()) return {};
+    return TokenAuth::ParseDevicePollResponse(response);
 }
 
-void DeviceAuth::DisplayLinkingCode(const std::string& code) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH]");
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] +------------------------------------------+");
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] |                                          |");
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] |   Link your account at:                  |");
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] |   https://echovrce.com/login/device      |");
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] |                                          |");
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] |   Your code:   %-8s                 |", code.c_str());
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] |                                          |");
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] |   Code expires in 5 minutes.             |");
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] +------------------------------------------+");
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH]");
+void DeviceAuth::DisplayLinkingCode(const InternalDeviceAuthFlowOps& ops) {
+    ops.log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Device authorization started; browser opening requested");
+    ops.log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Device code expires in 5 minutes");
 }
 
-bool DeviceAuth::RunDeviceAuthFlow() {
-    if (!m_configured) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Cannot run device auth -- not configured");
-        return false;
+void DeviceAuth::ApplyVerifiedPollResponse(const TokenAuth::DevicePollResponse& response,
+                                          const InternalDeviceAuthFlowOps& ops) {
+    const uint64_t now = static_cast<uint64_t>(time(nullptr));
+    std::string token = response.access_token;
+    const uint64_t tokenExpiry = TokenAuth::ResolveAccessTokenExpiry(now, token, response.expires_in);
+    CachedAuthToken tokenClaims;
+    tokenClaims.token = token;
+    const uint64_t jwtExpiry = tokenClaims.GetJwtExpiry();
+    const uint64_t refreshTokenExpiry =
+        ResolveRefreshTokenExpirySec(now, response.refresh_token_expires_in);
+    CachedAuthToken claims;
+    claims.token = token;
+    const uint64_t discordId = claims.GetDiscordId();
+    std::string refreshToken = response.refresh_token;
+    std::string userId = response.user_id;
+    std::string username = response.username;
+
+    m_token.swap(token);
+    m_tokenExpiry = tokenExpiry;
+    m_refreshToken.swap(refreshToken);
+    m_refreshTokenExpiry = refreshTokenExpiry;
+    m_userId.swap(userId);
+    m_username.swap(username);
+    m_discordId = discordId;
+
+    if (jwtExpiry > now) {
+        ops.log(EchoVR::LogLevel::Info,
+                "[NEVR.AUTH] token expiry from JWT exp: " + std::to_string(jwtExpiry) + " (" +
+                    std::to_string(jwtExpiry - now) + "s from now)");
+    } else if (response.expires_in.has_value()) {
+        ops.log(EchoVR::LogLevel::Info,
+                "[NEVR.AUTH] token expiry from expires_in: " + std::to_string(*response.expires_in) + "s");
+    } else {
+        ops.log(EchoVR::LogLevel::Warning,
+                "[NEVR.AUTH] token carries no exp and no expires_in — falling back to " +
+                    std::to_string(kFallbackAccessTokenLifetimeSec) + "s");
     }
-
-    std::string code = RequestDeviceCode();
-    if (code.empty()) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Failed to request device auth code");
-        return false;
+    if (response.refresh_token_expires_in.has_value()) {
+        ops.log(EchoVR::LogLevel::Info,
+                "[NEVR.AUTH] refresh token expiry from refresh_token_expires_in: " +
+                    std::to_string(*response.refresh_token_expires_in) + "s");
+    } else {
+        ops.log(EchoVR::LogLevel::Warning,
+                "[NEVR.AUTH] server sent no refresh_token_expires_in — assuming " +
+                    std::to_string(kFallbackRefreshTokenLifetimeSec) +
+                    "s, which is a guess at its policy, not a measurement");
     }
+}
 
-    DisplayLinkingCode(code);
-
+bool DeviceAuth::RunDeviceAuthFlow(bool is_server) {
+    InternalDeviceAuthFlowOps ops;
+    ops.now = []() { return InternalDeviceAuthFlowOps::Clock::now(); };
+    ops.requestDeviceCode = [this]() { return RequestDeviceCode(); };
 #ifdef _WIN32
-    std::string loginUrl = "https://echovrce.com/login/device?code=" + code;
-    ShellExecuteA(NULL, "open", loginUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
-#endif
-
-    // Poll every 3 seconds for up to 5 minutes.
-    // This runs on a background thread (see StartDeviceAuthBackground) so we
-    // won't block the game's main loop.
-    int maxPolls = 100;  // 100 * 3s = 300s = 5 minutes
-    for (int i = 0; i < maxPolls; i++) {
-#ifdef _WIN32
-        Sleep(3000);
+    ops.openBrowser = [](const std::string& url) {
+        return reinterpret_cast<intptr_t>(ShellExecuteA(nullptr, "open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+    };
+    ops.showOpenFailure = [](const std::string& code, const std::string& url, intptr_t result) {
+        const std::string message = "The browser could not be opened (code " + std::to_string(result) +
+                                   "). Visit " + url + " and enter device code: " + code;
+        return static_cast<int>(MessageBoxA(nullptr, message.c_str(), "Echo VR device authorization", MB_OK));
+    };
 #else
-        struct timespec ts = {3, 0};
-        nanosleep(&ts, nullptr);
+    ops.openBrowser = [](const std::string&) { return static_cast<intptr_t>(0); };
+    ops.showOpenFailure = [](const std::string&, const std::string&, intptr_t) { return 0; };
 #endif
+    ops.poll = [this](const std::string& code) { return PollDeviceCode(code); };
+    ops.sleep = [](InternalDeviceAuthFlowOps::Clock::duration duration) { std::this_thread::sleep_for(duration); };
+    ops.save = [this]() { return SaveToken(); };
+    ops.log = [](EchoVR::LogLevel level, const std::string& message) { Log(level, "%s", message.c_str()); };
+    return RunDeviceAuthFlow(is_server, ops);
+}
 
-        std::string status = PollDeviceCode(code);
-        if (status == "verified") {
-            Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Device authorized! Signed in successfully.");
-            SaveToken();
-            return true;
-        }
-        if (status == "expired") {
-            Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Device code expired. Please restart to try again.");
-            return false;
-        }
-        if (status == "error") {
-            Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Error polling device code");
-            return false;
-        }
-        if (i % 10 == 9) {
-            Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Still waiting for authorization... (%ds remaining)",
-                (maxPolls - i) * 3);
-        }
+// TokenAuth::Init calls this synchronously before module initialization
+// returns. HTTP, ShellExecuteA, and the fallback modal MessageBoxA can block
+// beyond the five-minute deadline; the deadline rejects any late result after
+// those calls return, but does not cancel or bound the calls themselves.
+bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowOps& ops) {
+    const auto log = [&ops](EchoVR::LogLevel level, const std::string& message) {
+        if (ops.log) ops.log(level, message);
+    };
+    if (is_server) {
+        log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Server mode disables device-code authentication");
+        return false;
+    }
+    if (!m_configured) {
+        log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Cannot run device auth -- not configured");
+        return false;
+    }
+    if (!ops.now || !ops.requestDeviceCode || !ops.openBrowser || !ops.showOpenFailure || !ops.poll ||
+        !ops.sleep || !ops.save || !ops.log) {
+        log(EchoVR::LogLevel::Error, "[NEVR.AUTH] Device authorization operations are unavailable");
+        return false;
     }
 
-    Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Device auth timed out after 5 minutes.");
-    return false;
+    std::string code = ops.requestDeviceCode();
+    if (code.empty()) {
+        log(EchoVR::LogLevel::Warning,
+            "[NEVR.AUTH] device code request failed, cannot start device-auth flow");
+        return false;
+    }
+
+    const InternalDeviceAuthFlowOps::Clock::time_point deadline = ops.now() + kDeviceAuthLifetime;
+    DisplayLinkingCode(ops);
+
+    const std::string loginUrl = std::string(kDeviceLoginUrl) + "?code=" + code;
+    const intptr_t browserResult = ops.openBrowser(loginUrl);
+    int uiResult = 1;
+    if (browserResult <= 32) {
+        uiResult = ops.showOpenFailure(code, kDeviceLoginUrl, browserResult);
+    }
+
+    const bool expiredAfterBrowserOrUi = ops.now() >= deadline;
+    if (browserResult <= 32 && uiResult == 0) {
+        log(EchoVR::LogLevel::Error,
+            "[NEVR.AUTH] device authorization stopped because the browser could not be opened");
+        return false;
+    }
+    if (expiredAfterBrowserOrUi) {
+        log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Device auth timed out after 5 minutes");
+        return false;
+    }
+
+    unsigned int pollCount = 0;
+    while (true) {
+        const InternalDeviceAuthFlowOps::Clock::time_point beforeSleep = ops.now();
+        if (beforeSleep >= deadline) {
+            log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Device auth timed out after 5 minutes");
+            return false;
+        }
+        const InternalDeviceAuthFlowOps::Clock::duration remaining = deadline - beforeSleep;
+        const InternalDeviceAuthFlowOps::Clock::duration wait =
+            remaining < kDeviceAuthPollInterval ? remaining : kDeviceAuthPollInterval;
+        if (wait > InternalDeviceAuthFlowOps::Clock::duration::zero()) ops.sleep(wait);
+        if (ops.now() >= deadline) {
+            log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Device auth timed out after 5 minutes");
+            return false;
+        }
+
+        const TokenAuth::DevicePollResponse response = ops.poll(code);
+        if (ops.now() >= deadline) {
+            log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Device auth timed out after 5 minutes");
+            return false;
+        }
+
+        switch (response.status) {
+            case TokenAuth::DevicePollStatus::Verified:
+                ApplyVerifiedPollResponse(response, ops);
+                log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Device authorization completed");
+                try {
+                    (void)ops.save();
+                } catch (const std::exception&) {
+                    log(EchoVR::LogLevel::Warning,
+                        "[NEVR.AUTH] credential cache save failed; in-memory authentication remains active");
+                }
+                return true;
+            case TokenAuth::DevicePollStatus::Expired:
+                log(EchoVR::LogLevel::Warning,
+                    "[NEVR.AUTH] Device code expired. Please restart to try again.");
+                return false;
+            case TokenAuth::DevicePollStatus::Pending:
+                ++pollCount;
+                if (pollCount % 10U == 0U) {
+                    const auto left = std::chrono::duration_cast<std::chrono::seconds>(deadline - ops.now());
+                    log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Still waiting for authorization (" +
+                                                       std::to_string(left.count()) + "s remaining)");
+                }
+                break;
+            case TokenAuth::DevicePollStatus::Error:
+                log(EchoVR::LogLevel::Warning,
+                    "[NEVR.AUTH] polling aborted after single error (no retry)");
+                return false;
+        }
+    }
 }
+
+#ifdef NEVR_TEST_HOOKS
+void DeviceAuth::SetStateForTest(const TokenAuth::TestHook::DeviceAuthState& state) {
+    m_token = state.token;
+    m_tokenExpiry = state.token_expiry;
+    m_refreshToken = state.refresh_token;
+    m_refreshTokenExpiry = state.refresh_token_expiry;
+    m_userId = state.user_id;
+    m_username = state.username;
+    m_discordId = state.discord_id;
+    m_configured = true;
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Module state
@@ -435,6 +531,12 @@ static bool ShouldRefreshAccessToken(const DeviceAuth& auth, uint64_t now) {
 }
 
 static void RefreshThreadFunc(std::string url, std::string httpKey) {
+    // Distinguishes a first refresh failure from a sustained one in the Warning
+    // below, without a full escalation framework — reset on every success. A
+    // plain local (not `static`) is correct here: this function IS the thread
+    // body, so a fresh call (fresh thread start) already starts the streak at 0.
+    int consecutiveFailures = 0;
+
     while (s_refreshRunning) {
         // Sleep 60 seconds between checks
         for (int i = 0; i < 60 && s_refreshRunning; i++) {
@@ -478,8 +580,12 @@ static void RefreshThreadFunc(std::string url, std::string httpKey) {
                 // Update the in-memory DeviceAuth instance so GetToken/GetDiscordId
                 // return the new token immediately (they no longer read from disk).
                 s_auth->UpdateFromRefresh(cached);
+                consecutiveFailures = 0;
             } else {
-                Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Token refresh failed");
+                consecutiveFailures++;
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.AUTH] token refresh failed (%d consecutive attempt%s) — will retry in 60s",
+                    consecutiveFailures, consecutiveFailures == 1 ? "" : "s");
             }
         }
     }
@@ -517,6 +623,10 @@ DeviceAuthState SnapshotDeviceAuth(const DeviceAuth& auth) {
     DeviceAuthState state;
     state.authenticated = auth.IsAuthenticated();
     state.token = auth.GetTokenValue();
+    state.token_expiry = auth.GetTokenExpiryValue();
+    state.refresh_token = auth.GetRefreshTokenValue();
+    state.refresh_token_expiry = auth.GetRefreshTokenExpiryValue();
+    state.user_id = auth.GetUserIdValue();
     state.discord_id = auth.GetDiscordIdValue();
     state.username = auth.GetUsernameValue();
     return state;
@@ -558,6 +668,26 @@ bool InspectRefreshDecision(const CachedAuthToken& live, uint64_t now) {
     return ShouldRefreshAccessToken(auth, now);
 }
 
+DeviceAuthFlowResult RunDeviceAuthFlow(bool is_server, const DeviceAuthState& initial,
+                                       const TokenAuth::TestHook::DeviceAuthFlowOps& injected) {
+    DeviceAuth auth;
+    auth.SetStateForTest(initial);
+    InternalDeviceAuthFlowOps ops;
+    ops.now = injected.now;
+    ops.requestDeviceCode = injected.request_device_code;
+    ops.openBrowser = injected.open_browser;
+    ops.showOpenFailure = injected.show_open_failure;
+    ops.poll = injected.poll;
+    ops.sleep = injected.sleep;
+    ops.save = injected.save;
+    ops.log = injected.log;
+
+    DeviceAuthFlowResult result;
+    result.success = auth.RunDeviceAuthFlow(is_server, ops);
+    result.state = SnapshotDeviceAuth(auth);
+    return result;
+}
+
 }  // namespace TokenAuth::TestHook
 #endif  // NEVR_TEST_HOOKS
 
@@ -566,9 +696,12 @@ bool InspectRefreshDecision(const CachedAuthToken& live, uint64_t now) {
 // ---------------------------------------------------------------------------
 
 void TokenAuth::Init(uintptr_t /*base_addr*/, bool is_server) {
-    // Servers use password auth, not device code
+    // Always enter the device flow with the module's actual mode. The flow's
+    // own first guard ensures server mode cannot issue HTTP, open a browser, or
+    // display UI even if a future caller reaches it directly.
     if (is_server) {
-        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Running in server mode -- token auth disabled");
+        DeviceAuth serverAuth;
+        (void)serverAuth.RunDeviceAuthFlow(is_server);
         return;
     }
 
@@ -590,9 +723,7 @@ void TokenAuth::Init(uintptr_t /*base_addr*/, bool is_server) {
         // No cached credentials — run device auth now, before game connections start.
         s_authAttempted = true;
         Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] No cached credentials — starting device code auth...");
-        if (s_auth->RunDeviceAuthFlow()) {
-            Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Authenticated via Discord");
-        } else {
+        if (!s_auth->RunDeviceAuthFlow(is_server)) {
             Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Authentication failed -- social features may be limited");
         }
     }
@@ -605,6 +736,11 @@ void TokenAuth::Init(uintptr_t /*base_addr*/, bool is_server) {
 }
 
 void TokenAuth::Shutdown() {
+    // On a server, s_auth is never created (early return in Init above), so
+    // this is a structurally-guaranteed no-op there — say so instead of
+    // logging the same "complete" line regardless of whether anything ran.
+    const bool wasActive = (s_auth != nullptr);
+
     s_refreshRunning = false;
     if (s_refreshThread) {
         s_refreshThread->join();
@@ -617,7 +753,12 @@ void TokenAuth::Shutdown() {
         s_auth = nullptr;
     }
     s_authAttempted = false;
-    Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Shutdown complete");
+    if (wasActive) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] shutdown complete (was active: refresh thread stopped)");
+    } else {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.AUTH] shutdown complete (was inactive — token auth was disabled or never authenticated)");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -642,7 +783,13 @@ NEVR_MODULE_API int token_auth_Init(const NvrModuleContext* ctx) {
     bool is_server = (ctx->flags & NEVR_MODULE_HOST_IS_SERVER) != 0;
     TokenAuth::Init(ctx->base_addr, is_server);
 
-    Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] token_auth initialized");
+    // Carry the real outcome, matching the richer sibling pattern in
+    // platform_compat_Init (tls=%s createdir=%s winhttp=%s). Servers skip
+    // token auth entirely (early return in TokenAuth::Init), hence "n/a".
+    const bool authOk = !TokenAuth::GetToken().empty();
+    Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] token_auth initialized mode=%s auth=%s",
+        is_server ? "server" : "client",
+        is_server ? "n/a" : (authOk ? "ok" : "failed"));
     return 0;
 }
 

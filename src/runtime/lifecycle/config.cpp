@@ -1,5 +1,6 @@
 #include "runtime/lifecycle/config.h"
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/log/url_diagnostics.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/service_config.h"  // N133 S3: NEVR keys now come from config.yaml
 #include "runtime/ext/module_loader.h"
@@ -99,7 +100,7 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
     DWORD len = GetFullPathNameA(g_customConfigPath, MAX_PATH, resolvedPath, NULL);
     const CHAR* configPath = (len > 0 && len < MAX_PATH) ? resolvedPath : g_customConfigPath;
 
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Loading custom config from: %s", configPath);
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] loading custom config from: %s", configPath);
 
     // Get the config destination pointer (pGame + 0x63240)
     using namespace PatchAddresses;
@@ -110,8 +111,9 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
     UINT32 loadResult = EchoVR::LoadJsonFromFile(configDest, configPath, 1);
 
     if (loadResult != 0) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to load custom config file: %s (error %u)", configPath,
-          loadResult);
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] custom config load failed path=%s error=%u — falling back to default config.json search",
+          configPath, loadResult);
       // Fall back to loading the default config
       result = EchoVR::LoadLocalConfig(pGame);
     } else {
@@ -143,6 +145,14 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
           break;
         }
       }
+
+      if (configDest->root == NULL) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] game config.json not found in %s_local\\, ..\\_local\\, or ..\\..\\_local\\",
+            moduleDir);
+      }
+    } else {
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] game config.json loaded from default location");
     }
   }
 
@@ -178,8 +188,8 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
     // the same output — none. Four captured runs had `"upnp":"true"` in the
     // config file and emitted no UPnP line of any kind, success or failure, so
     // there was no way to tell "disabled" from "never asked".
-    Log(EchoVR::LogLevel::Info, "[NEVR.UPNP] config key upnp=%s -> enabled=%d",
-        upnpVal ? upnpVal : "<absent>", g_upnpEnabled ? 1 : 0);
+    Log(EchoVR::LogLevel::Info, "[NEVR.UPNP] config key upnp=%s -> enabled=%s",
+        upnpVal ? upnpVal : "<absent>", g_upnpEnabled ? "true" : "false");
 
     // upnp_port (external port override)
     const CHAR* upnpPortVal = NevrCfgGetFlat("upnp_port");
@@ -204,17 +214,20 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
     const CHAR* arenaRoundTimeVal = NevrCfgGetFlat("arena_round_time");
     if (arenaRoundTimeVal != NULL && arenaRoundTimeVal[0] != '\0') {
       g_arenaRoundTime = (FLOAT)atof(arenaRoundTimeVal);
-      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Arena round time override: %.0f seconds", g_arenaRoundTime);
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] arena_round_time override=%.0fs source=config.yaml",
+          g_arenaRoundTime);
     }
     const CHAR* arenaCelebrationVal = NevrCfgGetFlat("arena_celebration_time");
     if (arenaCelebrationVal != NULL && arenaCelebrationVal[0] != '\0') {
       g_arenaCelebrationTime = (FLOAT)atof(arenaCelebrationVal);
-      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Arena celebration time override: %.1f seconds", g_arenaCelebrationTime);
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.PATCH] arena_celebration_time override=%.1fs source=config.yaml", g_arenaCelebrationTime);
     }
     const CHAR* arenaMercyVal = NevrCfgGetFlat("arena_mercy_score");
     if (arenaMercyVal != NULL && arenaMercyVal[0] != '\0') {
       g_arenaMercyScore = (FLOAT)atof(arenaMercyVal);
-      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Arena mercy score override: %.0f", g_arenaMercyScore);
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] arena_mercy_score override=%.0f source=config.yaml",
+          g_arenaMercyScore);
     }
   }
 
@@ -265,14 +278,20 @@ static CHAR* GetServiceHostWithFallback(const CHAR* serviceKey, const CHAR* defa
   int source = 2;  // 0 primary, 1 loginservice_host fallback, 2 none (use default)
   const char* host = NevrCfgServiceHost(serviceKey, &source);
   if (source == 0) {
-    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service override [%s]: %s", serviceKey, host);
+    const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+        "[NEVR.PATCH] Service override [" + std::string(serviceKey) + "]: ", host ? host : "");
+    Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
     return const_cast<CHAR*>(host);
   }
   if (source == 1) {
-    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service fallback [%s → loginservice_host]: %s", serviceKey, host);
+    const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+        "[NEVR.PATCH] Service fallback [" + std::string(serviceKey) + " → loginservice_host]: ", host ? host : "");
+    Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
     return const_cast<CHAR*>(host);
   }
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service default [%s]: %s", serviceKey, defaultUrl);
+  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+      "[NEVR.PATCH] Service default [" + std::string(serviceKey) + "]: ", defaultUrl ? defaultUrl : "");
+  Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
   return const_cast<CHAR*>(defaultUrl);
 }
 
@@ -295,7 +314,10 @@ static CHAR* AutoRelayThroughBridge(const CHAR* serviceKey, CHAR* url) {
   const char* relayUrl = NevrCfgAutoRelay(GetWebSocketBridgePort());
   if (relayUrl == NULL) return url;
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Auto-relay [%s] through bridge: %s → %s", serviceKey, url, relayUrl);
+  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
+      "[NEVR.PATCH] auto-relay [" + std::string(serviceKey) + "] through bridge: ",
+      url ? url : "", " -> ", relayUrl);
+  Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
   return const_cast<CHAR*>(relayUrl);
 }
 
@@ -361,7 +383,9 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
     }
 
     if (uri != originalUri) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] HTTP(S) connection redirected: %s → %s", originalUri, uri);
+      const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
+          "[NEVR.PATCH] HTTP(S) connection redirected: ", originalUri ? originalUri : "", " → ", uri ? uri : "");
+      Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
     }
   }
 
@@ -415,20 +439,15 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
       NevrCfgRedirect(result, httpTarget, IsWebSocketBridgeActive() ? 1 : 0, GetWebSocketBridgePort());
   if (redirected == NULL) return result;
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Service redirect [%s]: %s -> %s", keyName, result, redirected);
+  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
+      "[NEVR.PATCH] service redirect key=" + std::string(keyName) + " from=", result, " to=", redirected);
+  Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
   return const_cast<CHAR*>(redirected);
 }
 
 CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValue, BOOL reportFailure) {
   // Call the original first
   CHAR* result = EchoVR::JsonValueAsString(root, keyName, defaultValue, reportFailure);
-
-  // Diagnostic: log every config key lookup so we can trace service-host reads
-  // (Debug level — enable via log_filter config for investigations)
-  if (keyName != NULL) {
-    Log(EchoVR::LogLevel::Debug, "[NEVR.CONFIG] JsonValueAsString key='%s' result='%s' default='%s'",
-        keyName, result ? result : "(null)", defaultValue ? defaultValue : "(null)");
-  }
 
   // Redirect any readyatdawn.com service URLs to echovrce.com
   result = RedirectServiceUrl(keyName, result);
@@ -439,8 +458,12 @@ CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValu
   if (g_earlyConfigPtr != NULL && keyName != NULL && root != g_earlyConfigPtr && result == defaultValue) {
     CHAR* override = EchoVR::JsonValueAsString(g_earlyConfigPtr, keyName, NULL, false);
     if (override != NULL && override[0] != '\0') {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Config override [%s]: %s -> %s", keyName,
-          result ? result : "(null)", override);
+      if (s_serviceRedirectsArmed.load(std::memory_order_acquire)) {
+        const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
+            "[NEVR.PATCH] config override key=" + std::string(keyName) + " from=", result ? result : "", " to=",
+            override);
+        Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
+      }
       return override;
     }
   }

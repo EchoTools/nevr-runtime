@@ -185,8 +185,9 @@ VOID PatchEnableHeadless(PVOID pGame) {
           static_cast<unsigned long>(HEADLESS_DX12_INIT));
     } else {
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.HEADLESS] D3D12-skip prologue mismatch at +0x%lx (got 0x%02x, want 0x74) — NOT patched",
-          static_cast<unsigned long>(HEADLESS_DX12_INIT), static_cast<unsigned>(*gate));
+          "[NEVR.HEADLESS] D3D12-skip prologue mismatch at +0x%lx (got 0x%02x, want 0x%02x) — NOT patched",
+          static_cast<unsigned long>(HEADLESS_DX12_INIT), static_cast<unsigned>(*gate),
+          static_cast<unsigned>(HEADLESS_DX12_INIT_EXPECT));
     }
   }
 
@@ -215,8 +216,11 @@ VOID PatchEnableHeadless(PVOID pGame) {
   {
     typedef int64_t (*SysNetCheckFn)();
     static const auto kSysNetHook = +[]() -> int64_t {
-      Log(EchoVR::LogLevel::Debug,
-          "[NEVR.HEADLESS] SYSNET check — returning TRUE (internet-connected) for server mode");
+      // No per-call log: this hook has no condition (always returns 1), so a
+      // per-invocation line would just restate the standing fact the install
+      // log below already states once. If SYSNET_CHECK is polled/retried, a
+      // per-call line here would also be Category B (identical content on
+      // every call, no state change to observe).
       return 1;
     };
     SysNetCheckFn target =
@@ -306,8 +310,8 @@ VOID PatchBypassOvrPlatform() {
       ApplyPatch(LOGIN_CAP_CHECK, nop2, sizeof(nop2));
     } else if (site[0] != 0x90) {
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.PATCH] Unexpected bytes at LogInSuccess cap check +0x%x: %02x %02x",
-          (unsigned)LOGIN_CAP_CHECK, site[0], site[1]);
+          "[NEVR.PATCH] unexpected bytes at LogInSuccess cap check +0x%x: got=%02x%02x want=%02x%02x — NOT patched",
+          (unsigned)LOGIN_CAP_CHECK, site[0], site[1], 0x74, 0x1E);
     }
   }
 
@@ -422,6 +426,9 @@ static INT16 EngineEntityLookupHook(INT64 arg1, INT64 arg2, INT64 arg3, INT64 ar
       if (c <= 3) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] Entity lookup null-guard triggered (ptr+0x5e0=%p, count=%ld)", (void*)hashTablePtr, c);
+      } else if ((c % 100) == 0) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] entity lookup null-guard: %ld total trips (still occurring)", c);
       }
       return -1;
     }
@@ -479,9 +486,14 @@ static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT
       const LONG c = InterlockedIncrement(&guardCount);
       if (c <= 3) {
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] broadcaster dispatch guard tripped table=0x%llX count=%ld "
-            "va=0x140F87AA0 fn=CBroadcaster::ReceiveLocalEvent (N83)",
+            "[NEVR.PATCH] broadcaster dispatch guard tripped — event dropped (listener table not ready): "
+            "table=0x%llX count=%ld va=0x140F87AA0 fn=CBroadcaster::ReceiveLocalEvent",
             static_cast<unsigned long long>(table), c);
+      } else if ((c % 100) == 0) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] broadcaster dispatch guard: %ld total trips (still occurring) — "
+            "events still being dropped",
+            c);
       }
       return;  // the AV 7beccee was written to prevent
     }
@@ -551,8 +563,25 @@ static BugSplatCrashHandlerFunc* OriginalBugSplatCrashHandler = nullptr;
 
 static VOID BugSplatCrashHandlerHook(INT64 exitCode) {
   if (g_isServer) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.PATCH] BugSplat crash handler intercepted (exit code %lld) — suppressed in server mode", exitCode);
+    // This one hook is reached from 5 different game call sites (missing
+    // actors, dialogue scenes, etc.) — the caller return address distinguishes
+    // which, since exitCode alone does not. Rate-limited the same way as the
+    // other repeat-prone guards in this file (entity lookup / dispatch guard
+    // above): first 3 in full, then a periodic total so a retriggering
+    // condition doesn't flood identical WARNINGs forever.
+    static volatile LONG count = 0;
+    const LONG c = InterlockedIncrement(&count);
+    if (c <= 3) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] BugSplat crash handler intercepted — suppressed in server mode: "
+          "exit_code=%lld count=%ld caller=%p",
+          exitCode, c, __builtin_return_address(0));
+    } else if ((c % 100) == 0) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] BugSplat crash handler: %ld total intercepts this session "
+          "(still occurring, all suppressed)",
+          c);
+    }
     return;
   }
   OriginalBugSplatCrashHandler(exitCode);
@@ -749,12 +778,14 @@ VOID PatchBlockOculusSDK() {
   // so there is nothing for these hooks to block. NOT made fatal deliberately —
   // "all server errors are fatal" is for degradations that matter; bricking every
   // Wine server over a redundant optimization that can't install is not that.
-  const BOOL wOk  = PatchDetour(&Original_LoadLibraryW, reinterpret_cast<PVOID>(LoadLibraryW_Hook), "LoadLibraryW");
-  const BOOL exOk = PatchDetour(&Original_LoadLibraryExW, reinterpret_cast<PVOID>(LoadLibraryExW_Hook), "LoadLibraryExW");
-  Log((wOk && exOk) ? EchoVR::LogLevel::Debug : EchoVR::LogLevel::Warning,
-      "[NEVR.PATCH] Oculus Platform SDK blocking hooks: LoadLibraryW=%s LoadLibraryExW=%s "
-      "(redundant on headless — OVR SDK is never loaded; N127)",
-      wOk ? "ok" : "FAILED", exOk ? "ok" : "FAILED");
+  // PatchDetour logs the concrete failure reason. Report the feature as
+  // installed only when both entry points actually accepted their detours.
+  const BOOL loadLibraryWAttached = PatchDetour(&Original_LoadLibraryW, reinterpret_cast<PVOID>(LoadLibraryW_Hook), "LoadLibraryW");
+  const BOOL loadLibraryExWAttached =
+      PatchDetour(&Original_LoadLibraryExW, reinterpret_cast<PVOID>(LoadLibraryExW_Hook), "LoadLibraryExW");
+  if (loadLibraryWAttached && loadLibraryExWAttached) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Oculus Platform SDK blocking hooks installed");
+  }
 }
 
 // ===================================================================================================
@@ -783,9 +814,9 @@ VOID PatchDisableWwise() {
   Original_Wwise_RenderAudio = (Wwise_RenderAudio_t)((uintptr_t)base + PatchAddresses::WWISE_RENDERAUDIO);
   PatchDetour(&Original_Wwise_RenderAudio, (PVOID)Wwise_RenderAudio_Hook, "AK::SoundEngine::RenderAudio");
 
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Installed Wwise audio blocking hooks");
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Expected savings: 20-30MB RAM, 5-8%% CPU per instance");
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] VOIP components preserved for multiplayer");
+  Log(EchoVR::LogLevel::Debug,
+      "[NEVR.PATCH] Wwise audio blocking hooks installed — VOIP preserved "
+      "(est. savings 20-30MB RAM, 5-8%% CPU/instance)");
 }
 
 // N146: Patch the PreprocessCommandLine spectator-stream check so the game
@@ -797,7 +828,13 @@ VOID PatchSpectatorStreamAlways() {
   uintptr_t addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + PatchAddresses::SPECTATORSTREAM_CHECK;
   static const unsigned char kExpected[6] = {0x0f, 0x84, 0xdf, 0x00, 0x00, 0x00};
   if (memcmp(reinterpret_cast<void*>(addr), kExpected, 6) != 0) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Spectator-stream check prologue mismatch at 0x%llx", addr);
+    const unsigned char* actual = reinterpret_cast<const unsigned char*>(addr);
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] spectator-stream check prologue mismatch at 0x%llx: "
+        "got=%02x%02x%02x%02x%02x%02x want=%02x%02x%02x%02x%02x%02x — NOT patched",
+        addr,
+        actual[0], actual[1], actual[2], actual[3], actual[4], actual[5],
+        kExpected[0], kExpected[1], kExpected[2], kExpected[3], kExpected[4], kExpected[5]);
     return;
   }
   static const BYTE nops[6] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
@@ -838,7 +875,10 @@ VOID PatchLogServerProfile() {
   const char* checkDlls[] = {"d3d11", "dxgi", "LibOVRPlatform", "AkSoundEngine", NULL};
   for (int i = 0; checkDlls[i]; i++) {
     HMODULE h = GetModuleHandleA(checkDlls[i]);
-    Log(EchoVR::LogLevel::Debug, "[NEVR.PROFILE] Module %s: %s", checkDlls[i], h ? "LOADED" : "not loaded");
+    Log(h ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Debug,
+        "[NEVR.PROFILE] module %s: %s%s", checkDlls[i],
+        h ? "unexpectedly LOADED" : "not loaded",
+        h ? " — headless patches may not have taken effect" : "");
   }
 }
 

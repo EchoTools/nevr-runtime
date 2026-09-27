@@ -426,5 +426,6 @@ VOID Initialize() {
       "[NEVR.BOOT] initialization complete; continuing in %%LOCALAPPDATA%%\\EchoVR\\logs\\nevr-<timestamp>.jsonl\n");
   BootLogTee::Close();
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] All hooks installed");
+  Log(g_bootHookFailed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+      "[NEVR.PATCH] boot hooks installed ok=%s", g_bootHookFailed ? "false" : "true");
 }

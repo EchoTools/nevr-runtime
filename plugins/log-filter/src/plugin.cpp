@@ -21,6 +21,18 @@ static void Log(const char* fmt, ...) {
     va_end(args);
 }
 
+/* Local copy of log_filter.cpp's LevelStr() — that one has internal linkage
+ * in a different translation unit, so it isn't reusable from here. */
+static const char* LevelStr(uint32_t level) {
+    switch (level) {
+        case LOG_LEVEL_DEBUG:   return "debug";
+        case LOG_LEVEL_INFO:    return "info";
+        case LOG_LEVEL_WARNING: return "warn";
+        case LOG_LEVEL_ERROR:   return "error";
+        default:                return "info";
+    }
+}
+
 static std::string FindConfigFile() {
     /* Try YAML first, then JSONC fallback */
     const char* candidates[] = {
@@ -153,12 +165,13 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
     } else {
         LogFilterConfig cfg = LoadLogFilterConfig(config_path.c_str());
         if (!cfg.valid) {
-            Log("config parse failed, using built-in defaults");
+            Log("config parse failed (path=%s), using built-in defaults", config_path.c_str());
             SetLogFilterConfig(MakeDefaultConfig());
         } else {
             SetLogFilterConfig(cfg);
-            Log("config loaded: min_level=%u, %zu channels, %zu patterns, %zu truncate, file=%s(%s), color=%s, rotate=%s",
-                cfg.min_level,
+            Log("config loaded: path=%s min_level=%s channels=%zu patterns=%zu truncate=%zu file=%s(%s) color=%s rotate=%s",
+                config_path.c_str(),
+                LevelStr(cfg.min_level),
                 cfg.suppress_channels.size(),
                 cfg.suppress_patterns.size(),
                 cfg.truncate_rules.size(),
@@ -171,7 +184,9 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
 
     /* Install hook on CLog::PrintfImpl */
     if (!InstallLogFilterHook(ctx->base_addr)) {
-        Log("failed to install hook — logging will be unfiltered");
+        Log("hook install failed — plugin load aborted"
+            " (fatal if configured required:true in config.yaml;"
+            " game logs run unfiltered otherwise)");
         return -1;
     }
 

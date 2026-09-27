@@ -12,8 +12,17 @@
 #include "abi/echovr_functions.h"
 #include "telemetry/v2/capture.pb.h"
 #include "telemetry/v2/echo_arena.pb.h"
+#include "runtime/log/url_diagnostics.h"
+#include "runtime/log/security_diagnostics.h"
 
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
+
+// Edge-triggering for the per-tick teamRole bounds check in SnapshotGameState
+// (up to m_rateHz, default 30/s) — log only on transition into/out of the
+// out-of-bounds state per player slot, not on every tick it persists.
+// File-static (there is one TelemetryStreamer instance per process) rather
+// than a class member, to avoid touching the header for this fix.
+static bool s_teamRoleOobWarned[16] = {};
 
 // ============================================================================
 // Lifecycle
@@ -55,23 +64,34 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
   m_ws->setOnMessageCallback([this](const ix::WebSocketMessagePtr& msg) {
     switch (msg->type) {
       case ix::WebSocketMessageType::Open:
-        Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Connected to telemetry server");
+        // Count this connection as a reconnect before logging, so the field
+        // reported here matches what Stop()'s summary later reports.
         if (m_hasConnectedOnce) {
           m_reconnectCount++;
         }
         m_hasConnectedOnce = true;
+        Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Connected to telemetry server reconnect_count=%u",
+            m_reconnectCount);
         m_wsConnected.store(true, std::memory_order_release);
         if (m_active.load(std::memory_order_relaxed)) {
           m_needsResendHeader.store(true, std::memory_order_release);
         }
         break;
       case ix::WebSocketMessageType::Close:
-        Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Disconnected from telemetry server (code: %d)",
-            msg->closeInfo.code);
+        {
+          const std::string diagnostic = LogDiagnostics::FormatWebSocketCloseDiagnostic(
+              "[NEVR.TELEMETRY] Disconnected from telemetry server ", msg->closeInfo.code, m_reconnectCount);
+          Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
+        }
         m_wsConnected.store(false, std::memory_order_release);
         break;
       case ix::WebSocketMessageType::Error:
-        Log(EchoVR::LogLevel::Error, "[NEVR.TELEMETRY] Connection error: %s", msg->errorInfo.reason.c_str());
+        {
+          const std::string diagnostic = LogDiagnostics::FormatWebSocketErrorDiagnostic(
+              "[NEVR.TELEMETRY] Connection error: ", msg->errorInfo.http_status, msg->errorInfo.retries,
+              m_reconnectCount);
+          Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
+        }
         m_wsConnected.store(false, std::memory_order_release);
         break;
       case ix::WebSocketMessageType::Message:
@@ -83,7 +103,8 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
     }
   });
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Connecting to %s", uri.c_str());
+  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.TELEMETRY] Connecting to ", uri);
+  Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
   m_ws->start();
   return true;
 }
@@ -104,6 +125,7 @@ void TelemetryStreamer::Start(const std::string& sessionId, uint32_t rateHz, boo
   m_droppedFrames = 0;
   m_reconnectCount = 0;
   m_bytesSent = 0;
+  std::memset(s_teamRoleOobWarned, 0, sizeof(s_teamRoleOobWarned));
   m_hasConnectedOnce = false;
   m_needsResendHeader.store(false, std::memory_order_relaxed);
   m_snapshotReady.store(false, std::memory_order_relaxed);
@@ -131,9 +153,13 @@ void TelemetryStreamer::Stop() {
     m_ws->disableAutomaticReconnection();
   }
 
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.TELEMETRY] Stream stopped (sent %u frames, dropped %u, reconnects %u, bytes %llu)",
-      m_frameIndex, m_droppedFrames, m_reconnectCount, (unsigned long long)m_bytesSent);
+  {
+    auto elapsed = std::chrono::steady_clock::now() - m_sessionStartTime;
+    uint32_t durationMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.TELEMETRY] Stream stopped (sent %u frames, dropped %u, reconnects %u, bytes %llu, duration=%ums)",
+        m_frameIndex, m_droppedFrames, m_reconnectCount, (unsigned long long)m_bytesSent, durationMs);
+  }
 }
 
 void TelemetryStreamer::Disconnect() {
@@ -198,8 +224,7 @@ void TelemetryStreamer::RunDiagnostics() {
     return;
   }
 
-  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] ========== SNAPSHOT ==========");
-  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] Base=%p", base);
+  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] snapshot base=%p", base);
 
   // --- Pointer chain ---
   void** contextPtr = reinterpret_cast<void**>(base + GameOffsets::GAME_CONTEXT_OFFSET);
@@ -321,17 +346,13 @@ void TelemetryStreamer::RunDiagnostics() {
           Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   Bone[0] ptr=%p", bone0);
 
           if (bone0) {
-            // Try reading at offset 0x18 (our assumed bone data offset)
+            // Offset 0x18 is the confirmed bone data offset — SnapshotPlayerBones()
+            // (the production capture path, not this diag probe) reads the same
+            // +0x18 layout unconditionally. Bone 0 = root/body (see comment above).
             float* b = reinterpret_cast<float*>(reinterpret_cast<CHAR*>(bone0) + 0x18);
-            Log(EchoVR::LogLevel::Info,
-                "[TELEMETRY.DIAG]   Bone[0]+0x18: orient=(%.3f, %.3f, %.3f, %.3f) pos=(%.3f, %.3f, %.3f)",
+            Log(EchoVR::LogLevel::Debug,
+                "[TELEMETRY.DIAG]   Bone[0/root]+0x18: orient=(%.3f, %.3f, %.3f, %.3f) pos=(%.3f, %.3f, %.3f)",
                 b[0], b[1], b[2], b[3], b[4], b[5], b[6]);
-
-            // Also try at offset 0x00 in case data is there instead
-            float* b0 = reinterpret_cast<float*>(bone0);
-            Log(EchoVR::LogLevel::Info,
-                "[TELEMETRY.DIAG]   Bone[0]+0x00: (%.3f, %.3f, %.3f, %.3f, %.3f, %.3f, %.3f)",
-                b0[0], b0[1], b0[2], b0[3], b0[4], b0[5], b0[6]);
 
             // Hex dump first 64 bytes of bone data for manual inspection
             uint8_t* raw = reinterpret_cast<uint8_t*>(bone0);
@@ -366,8 +387,10 @@ void TelemetryStreamer::RunDiagnostics() {
         }
       }
     } else {
-      Log(EchoVR::LogLevel::Warning, "[TELEMETRY.DIAG]   Entity resolution unavailable: resolver=%p mgr=%p fn=%p/%p",
-          handleResolver, entityMgr, (void*)m_resolveEntityHandle, (void*)m_entityLookup);
+      Log(EchoVR::LogLevel::Warning,
+          "[TELEMETRY.DIAG]   Entity resolution unavailable slot=%u resolver=%s mgr=%s resolveHandleFn=%s entityLookupFn=%s",
+          i, handleResolver ? "present" : "missing", entityMgr ? "present" : "missing",
+          m_resolveEntityHandle ? "present" : "missing", m_entityLookup ? "present" : "missing");
     }
 
     // Stats
@@ -390,8 +413,6 @@ void TelemetryStreamer::RunDiagnostics() {
   if (playerCount > 4) {
     Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] ... and %u more players", playerCount - 4);
   }
-
-  Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG] ==============================");
 }
 
 // ============================================================================
@@ -500,10 +521,21 @@ void TelemetryStreamer::SnapshotGameState(TelemetrySnapshot* snap) {
   for (uint16_t i = 0; i < snap->playerCount; i++) {
     uint16_t teamRole = snap->playerInfo[i].flags & 0x1F;
     if (teamRole >= GameOffsets::STATS_TABLE_MAX_ENTRIES) {
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.TELEMETRY] Stats: teamRole=%u out of bounds (max=%u) for player %u, clamping to 0",
-          teamRole, GameOffsets::STATS_TABLE_MAX_ENTRIES, i);
+      // Edge-triggered: this runs on the per-tick production path (up to
+      // m_rateHz, default 30/s) for the rest of the match if left un-gated —
+      // log once on the transition into the out-of-bounds state per slot,
+      // not on every tick it persists.
+      if (i < 16 && !s_teamRoleOobWarned[i]) {
+        s_teamRoleOobWarned[i] = true;
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.TELEMETRY] player slot=%u teamRole=%u out of bounds (max=%u) — clamping to 0 for remainder of session",
+            i, teamRole, GameOffsets::STATS_TABLE_MAX_ENTRIES);
+      }
       teamRole = 0;
+    } else if (i < 16 && s_teamRoleOobWarned[i]) {
+      s_teamRoleOobWarned[i] = false;
+      Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] player slot=%u teamRole=%u back in bounds (max=%u)", i, teamRole,
+          GameOffsets::STATS_TABLE_MAX_ENTRIES);
     }
     CHAR* statsBase = netGameBase + GameOffsets::STATS_BASE_OFFSET + teamRole * GameOffsets::STATS_STRIDE;
     auto& s = snap->stats[i];
@@ -698,7 +730,7 @@ void TelemetryStreamer::Run() {
           m_droppedFrames++;
           if (m_droppedFrames % 100 == 1) {
             Log(EchoVR::LogLevel::Warning,
-                "[NEVR.TELEMETRY] Backpressure: dropped %u frames (buffer=%zu bytes)",
+                "[NEVR.TELEMETRY] Backpressure: dropped %u frames total this session (buffer=%zu bytes)",
                 m_droppedFrames, buffered);
           }
         } else {
@@ -1052,7 +1084,8 @@ void TelemetryStreamer::SendEnvelope(const std::string& serialized) {
   if (info.success) {
     m_bytesSent += info.wireSize;
   } else {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.TELEMETRY] Send failed (payload=%zu)", info.payloadSize);
+    Log(EchoVR::LogLevel::Warning, "[NEVR.TELEMETRY] send failed payload=%zu connected=%d", info.payloadSize,
+        m_wsConnected.load(std::memory_order_relaxed) ? 1 : 0);
   }
 }
 
@@ -1144,8 +1177,9 @@ void TelemetryStreamer::SendFooter() {
 
   std::string serialized;
   if (envelope.SerializeToString(&serialized)) {
+    // No separate log line here — Stop()'s own summary (right after this
+    // thread joins) restates the same frame count plus duration, so this
+    // would be a pure duplicate on every shutdown.
     SendEnvelope(serialized);
-    Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Sent CaptureFooter (frames=%u, duration=%ums)", m_frameIndex,
-        footer->duration_ms());
   }
 }

@@ -234,11 +234,14 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       uint32_t apiVer = platform_compat_ApiVersion();
       if (!NvrModuleApiVersionSupported(apiVer)) {
         Log(EchoVR::LogLevel::Error,
-            "[NEVR.MODULE] platform_compat: API v%u exceeds host v%u — refusing",
+            "[NEVR.MODULE] platform_compat: API v%u exceeds host v%u — refusing (rebuild the "
+            "module against this host)",
             apiVer, static_cast<uint32_t>(NEVR_MODULE_API_VERSION));
         FatalError("Module API version unsupported", "platform_compat");
       }
-      if (platform_compat_Init(&moduleCtx) != 0) {
+      int rc = platform_compat_Init(&moduleCtx);
+      if (rc != 0) {
+        Log(EchoVR::LogLevel::Error, "[NEVR.MODULE] platform_compat: init failed with code %d", rc);
         FatalError("Module init failed", "platform_compat");
       }
       RegisterStaticModule("platform_compat", apiVer, nullptr, nullptr, platform_compat_Shutdown);
@@ -251,11 +254,14 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       uint32_t apiVer = token_auth_ApiVersion();
       if (!NvrModuleApiVersionSupported(apiVer)) {
         Log(EchoVR::LogLevel::Error,
-            "[NEVR.MODULE] token_auth: API v%u exceeds host v%u — refusing",
+            "[NEVR.MODULE] token_auth: API v%u exceeds host v%u — refusing (rebuild the module "
+            "against this host)",
             apiVer, static_cast<uint32_t>(NEVR_MODULE_API_VERSION));
         FatalError("Module API version unsupported", "token_auth");
       }
-      if (token_auth_Init(&moduleCtx) != 0) {
+      int rc = token_auth_Init(&moduleCtx);
+      if (rc != 0) {
+        Log(EchoVR::LogLevel::Error, "[NEVR.MODULE] token_auth: init failed with code %d", rc);
         FatalError("Module init failed", "token_auth");
       }
       RegisterStaticModule("token_auth", apiVer, nullptr, nullptr, token_auth_Shutdown);
@@ -328,7 +334,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     } else if (lstrcmpW(arg, L"-timestep") == 0 || lstrcmpW(arg, L"-fixedtimestep") == 0) {
       // Deprecated — silently consume value arg if present
       if (lstrcmpW(arg, L"-timestep") == 0 && i + 1 < argc) ++i;
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] %ls is deprecated and ignored", arg);
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] %ls is deprecated and ignored (fixed timestep is determined internally; "
+          "no CLI override exists)",
+          arg);
     } else if (lstrcmpW(arg, L"-headless") == 0) {
       // N99: this branch used to call -headless "redundant" and tell the
       // operator to remove it. That was false and it cost a real regression —
@@ -380,7 +389,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   // Validate argument combinations
   if (g_isServer && g_isOffline) {
-    FatalError("Arguments -server and -offline are mutually exclusive.", NULL);
+    FatalError("Arguments -server and -offline are mutually exclusive.", "Invalid arguments");
   }
 
   // Detect dbgcore.dll in the game directory — prevents accidental hijack.
@@ -405,6 +414,11 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
               Log(EchoVR::LogLevel::Info,
                   "[NEVR.PATCH] dbgcore.dll present in game directory — "
                   "legacy injection permitted (-allow-dbgcore)");
+            } else if (g_isServer) {
+              FatalError(
+                  "dbgcore.dll detected in game directory — legacy DLL hijack artifact; remove "
+                  "it or pass -allow-dbgcore",
+                  "dbgcore.dll hijack detected");
             } else {
               FatalError(
                   "dbgcore.dll detected in the game directory.\n\n"
@@ -518,8 +532,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   RearmConsoleCtrlHandler();
 
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.BOOT] runtime bootstrap complete early_config=%d bridge=%d port=%u",
-      g_earlyConfigPtr != nullptr ? 1 : 0, IsWebSocketBridgeActive() ? 1 : 0,
+      "[NEVR.BOOT] runtime bootstrap complete early_config=%s bridge=%s port=%u",
+      g_earlyConfigPtr != nullptr ? "true" : "false", IsWebSocketBridgeActive() ? "true" : "false",
       static_cast<unsigned>(GetWebSocketBridgePort()));
 
 }

@@ -84,12 +84,30 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
                 ovr.applied = true;
                 g_total_hits++;
 
-                Log(EchoVR::LogLevel::Info,
-                    "[NEVR.RESOURCE] Override: %s (0x%016llx) %llu -> %llu bytes",
-                    ovr.label,
-                    static_cast<unsigned long long>(name_hash),
-                    static_cast<unsigned long long>(orig_size),
-                    static_cast<unsigned long long>(ovr.size));
+                {
+                    // Resolve both hashes to human names the same way
+                    // RegisterResourceOverride does at registration time —
+                    // this line is the one that proves the override actually
+                    // fired, so it's the more important of the two to be
+                    // readable.
+                    char typeBuf[128], nameBuf[128];
+                    const char* typeName = EchoVR::LookupSymbolName(type_hash);
+                    const char* resName = EchoVR::LookupSymbolName(name_hash);
+                    snprintf(typeBuf, sizeof(typeBuf), "0x%016llx%s%s",
+                             static_cast<unsigned long long>(type_hash),
+                             typeName ? " (" : "", typeName ? typeName : "");
+                    if (typeName) strncat(typeBuf, ")", sizeof(typeBuf) - strlen(typeBuf) - 1);
+                    snprintf(nameBuf, sizeof(nameBuf), "0x%016llx%s%s",
+                             static_cast<unsigned long long>(name_hash),
+                             resName ? " (" : "", resName ? resName : "");
+                    if (resName) strncat(nameBuf, ")", sizeof(nameBuf) - strlen(nameBuf) - 1);
+                    Log(EchoVR::LogLevel::Info,
+                        "[NEVR.RESOURCE] override applied label=%s type=%s name=%s orig_bytes=%llu "
+                        "new_bytes=%llu",
+                        ovr.label, typeBuf, nameBuf,
+                        static_cast<unsigned long long>(orig_size),
+                        static_cast<unsigned long long>(ovr.size));
+                }
                 break;
             }
         }
@@ -100,20 +118,32 @@ static void __cdecl Hook_AsyncIOCallback(void* callback_data) {
 
 /* ── File loading helper ──────────────────────────────────────────── */
 
-static void* LoadFileFromDisk(const char* path, uint64_t* out_size) {
+static void* LoadFileFromDisk(const char* path, uint64_t* out_size, DWORD* outError = nullptr) {
     HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) return nullptr;
+    if (hFile == INVALID_HANDLE_VALUE) {
+        if (outError) *outError = GetLastError();
+        return nullptr;
+    }
 
     LARGE_INTEGER li;
-    if (!GetFileSizeEx(hFile, &li)) { CloseHandle(hFile); return nullptr; }
+    if (!GetFileSizeEx(hFile, &li)) {
+        if (outError) *outError = GetLastError();
+        CloseHandle(hFile);
+        return nullptr;
+    }
 
     uint64_t sz = static_cast<uint64_t>(li.QuadPart);
     void* buf = VirtualAlloc(NULL, sz, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (!buf) { CloseHandle(hFile); return nullptr; }
+    if (!buf) {
+        if (outError) *outError = GetLastError();
+        CloseHandle(hFile);
+        return nullptr;
+    }
 
     DWORD bytesRead = 0;
     BOOL ok = ReadFile(hFile, buf, static_cast<DWORD>(sz), &bytesRead, NULL);
+    if (outError) *outError = GetLastError();
     CloseHandle(hFile);
 
     if (!ok || bytesRead != sz) { VirtualFree(buf, 0, MEM_RELEASE); return nullptr; }
@@ -125,25 +155,43 @@ static void* LoadFileFromDisk(const char* path, uint64_t* out_size) {
 /* ── Lazy hook installation ───────────────────────────────────────── */
 
 static void EnsureHookInstalled() {
+    // Memoizes SUCCESS (g_orig) only — without this latch, a persistent
+    // failure (bad hook target) re-attempts and re-logs an identical Warning
+    // on every RegisterResourceOverride call for the rest of the process
+    // (once for the built-in splash texture, once per _overrides/ file,
+    // again at the end of InstallResourceOverride, and again for every
+    // plugin that later calls the exported NEVR_RegisterResourceOverride).
+    static bool s_hookAttemptFailed = false;
     if (g_orig) return;  /* Already installed */
+    if (s_hookAttemptFailed) return;  /* Already tried and failed this session */
 
     g_hook_target = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + 0xFA16D0);
 
-    if (MH_CreateHook(g_hook_target, reinterpret_cast<void*>(Hook_AsyncIOCallback),
-                       reinterpret_cast<void**>(&g_orig)) != MH_OK) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.RESOURCE] MH_CreateHook failed");
+    MH_STATUS cst = MH_CreateHook(g_hook_target, reinterpret_cast<void*>(Hook_AsyncIOCallback),
+                                   reinterpret_cast<void**>(&g_orig));
+    if (cst != MH_OK) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.RESOURCE] hook create failed target=%p status=%s — resource overrides will not "
+            "be applied",
+            g_hook_target, MH_StatusToString(cst));
+        s_hookAttemptFailed = true;
         return;
     }
 
-    if (MH_EnableHook(g_hook_target) != MH_OK) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.RESOURCE] MH_EnableHook failed");
-        MH_RemoveHook(g_hook_target);
+    MH_STATUS est = MH_EnableHook(g_hook_target);
+    if (est != MH_OK) {
+        MH_STATUS rst = MH_RemoveHook(g_hook_target);
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.RESOURCE] hook enable failed target=%p status=%s cleanup=%s — resource overrides "
+            "will not be applied",
+            g_hook_target, MH_StatusToString(est), MH_StatusToString(rst));
         g_orig = nullptr;
+        s_hookAttemptFailed = true;
         return;
     }
 
-    Log(EchoVR::LogLevel::Debug, "[NEVR.RESOURCE] Hook installed");
+    Log(EchoVR::LogLevel::Debug, "[NEVR.RESOURCE] hook installed target=%p", g_hook_target);
 }
 
 } // anonymous namespace
@@ -190,10 +238,11 @@ void RegisterResourceOverrideFromFile(uint64_t type_hash, uint64_t name_hash,
                                       const char* label) {
     if (!g_overrides) return;
     uint64_t size = 0;
-    void* data = LoadFileFromDisk(file_path, &size);
+    DWORD err = 0;
+    void* data = LoadFileFromDisk(file_path, &size, &err);
     if (!data) {
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.RESOURCE] Failed to load override file: %s", file_path);
+            "[NEVR.RESOURCE] override file load failed path=%s error=%lu", file_path, err);
         return;
     }
     ResourceOverride ovr = {};
@@ -211,6 +260,7 @@ void RegisterResourceOverrideFromFile(uint64_t type_hash, uint64_t name_hash,
 
 void InstallResourceOverride() {
     g_overrides = new std::vector<ResourceOverride>();
+    size_t overridesFailed = 0;
 
     /* ── Register built-in overrides ──────────────────────────────── */
 
@@ -255,7 +305,13 @@ void InstallResourceOverride() {
 
             char filePath[MAX_PATH];
             snprintf(filePath, sizeof(filePath), "%s\\%s", overrideDir, name);
+            // RegisterResourceOverrideFromFile only push_backs on success and
+            // already logged the specific reason on failure above — comparing
+            // sizes before/after is enough to count failures for the summary
+            // below without changing that function's signature.
+            const size_t beforeCount = g_overrides->size();
             RegisterResourceOverrideFromFile(type_h, name_h, filePath, name);
+            if (g_overrides->size() == beforeCount) overridesFailed++;
         } while (FindNextFileA(hFind, &fd));
         FindClose(hFind);
     }
@@ -267,8 +323,8 @@ void InstallResourceOverride() {
     }
 
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.RESOURCE] Init complete (%zu overrides registered)",
-        g_overrides->size());
+        "[NEVR.RESOURCE] init complete overrides_registered=%zu overrides_failed=%zu",
+        g_overrides->size(), overridesFailed);
 }
 
 void ResetResourceOverrides() {
@@ -288,15 +344,29 @@ void ResetResourceOverrides() {
 }
 
 void ShutdownResourceOverride() {
-    if (g_hook_target && g_orig) {
+    const bool hookWasInstalled = (g_hook_target && g_orig);
+    if (hookWasInstalled) {
         MH_DisableHook(g_hook_target);
         MH_RemoveHook(g_hook_target);
         g_hook_target = nullptr;
         g_orig = nullptr;
     }
 
+    uint64_t freed = 0;
+    uint64_t neverApplied = 0;
     if (g_overrides) {
+        freed = g_overrides->size();
         for (auto& ovr : *g_overrides) {
+            if (!ovr.applied) {
+                // A registered-but-never-matched override (wrong hash, or the
+                // expected resource genuinely never loaded this session) used
+                // to get the same silent treatment as one that worked.
+                neverApplied++;
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.RESOURCE] override never applied label=%s name=0x%016llx — resource was "
+                    "never requested this session",
+                    ovr.label, static_cast<unsigned long long>(ovr.name_hash));
+            }
             if (ovr.owned && ovr.data) {
                 VirtualFree(const_cast<void*>(ovr.data), 0, MEM_RELEASE);
             }
@@ -305,7 +375,11 @@ void ShutdownResourceOverride() {
         g_overrides = nullptr;
     }
 
-    Log(EchoVR::LogLevel::Info, "[NEVR.RESOURCE] Shutdown complete");
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.RESOURCE] shutdown complete overrides_freed=%llu overrides_never_applied=%llu "
+        "hook_removed=%s",
+        static_cast<unsigned long long>(freed), static_cast<unsigned long long>(neverApplied),
+        hookWasInstalled ? "true" : "false");
 }
 
 void DeregisterResourceOverrides(const void* data_start, const void* data_end) {

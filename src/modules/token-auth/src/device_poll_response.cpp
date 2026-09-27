@@ -7,9 +7,9 @@
 namespace TokenAuth {
 
 DevicePollResponse ParseDevicePollResponse(std::string_view response) {
-  DevicePollResponse result;
   try {
     const nlohmann::json json = nlohmann::json::parse(response);
+    DevicePollResponse result;
     if (json.contains("error")) return result;
 
     const std::string status = json.value("status", "");
@@ -30,7 +30,6 @@ DevicePollResponse ParseDevicePollResponse(std::string_view response) {
     result.access_token = json.value("access_token", "");
     if (result.access_token.empty()) result.access_token = json.value("token", "");
     if (result.access_token.empty()) return result;
-    result.status = DevicePollStatus::Verified;
     result.refresh_token = json.value("refresh_token", "");
     result.user_id = json.value("user_id", "");
     result.username = json.value("username", "");
@@ -39,9 +38,10 @@ DevicePollResponse ParseDevicePollResponse(std::string_view response) {
     // absence absent; see core/auth_token.h.
     result.expires_in = ReadExpiresInSeconds(json, "expires_in");
     result.refresh_token_expires_in = ReadExpiresInSeconds(json, "refresh_token_expires_in");
+    result.status = DevicePollStatus::Verified;
     return result;
   } catch (const nlohmann::json::exception&) {
-    return result;
+    return DevicePollResponse{};
   }
 }
 

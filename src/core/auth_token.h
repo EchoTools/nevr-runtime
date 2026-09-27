@@ -315,7 +315,11 @@ inline bool SaveAuthToken(const CachedAuthToken& auth, const std::string& exeDir
 
     std::ofstream out(path, std::ios::trunc);
     if (!out.is_open()) {
-        fprintf(stderr, "[NEVR.AUTH] Failed to open %s for writing\n", path.c_str());
+        // Was a raw fprintf(stderr, ...) — Hard Stop violation (CPP-MINGW-ADDENDUM
+        // "No printf"; docs/standards/logging.md Rule 6, Log() is the single entry
+        // point). Log() is already in scope in this TU (see the includes above).
+        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Failed to open %s for writing",
+            path.c_str());
 #ifndef _WIN32
         umask(old_umask);
 #endif
@@ -343,7 +347,9 @@ inline bool SaveAuthToken(const CachedAuthToken& auth, const std::string& exeDir
 #ifdef _WIN32
     // Hide the file and restrict to current user only
     if (!SetFileAttributesA(path.c_str(), FILE_ATTRIBUTE_HIDDEN)) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] SetFileAttributesA failed for %s: %lu",
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.AUTH] SetFileAttributesA failed for %s: %lu — credentials file left "
+            "visible (not hidden); not a security issue on its own",
             path.c_str(), GetLastError());
     }
 
@@ -368,7 +374,10 @@ inline bool SaveAuthToken(const CachedAuthToken& auth, const std::string& exeDir
                         SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
                         nullptr, nullptr, pAcl, nullptr);
                     if (aclErr != ERROR_SUCCESS) {
-                        Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] SetNamedSecurityInfoA failed for %s: %lu",
+                        Log(EchoVR::LogLevel::Warning,
+                            "[NEVR.AUTH] SetNamedSecurityInfoA failed for %s: %lu — DACL "
+                            "restriction NOT applied; credentials file may be readable by "
+                            "other users on this machine",
                             path.c_str(), aclErr);
                     }
                     LocalFree(pAcl);
