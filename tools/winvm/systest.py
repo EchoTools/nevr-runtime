@@ -86,15 +86,6 @@ def nakama_log_since(since: str) -> str:
     return p.stdout
 
 
-# Login scenario: no *_host keys, so the game's readyatdawn.com defaults are what the
-# runtime redirects to the bridge. (The offline config's 127.0.0.1:1 hosts override the
-# redirect and the login service is then unreachable.)
-LOGIN_CONFIG = """{
-  "publisher_lock": "echovrce"
-}
-"""
-
-
 class EnvError(Exception):
     """The environment cannot run the test. Exit code 2."""
 
@@ -195,9 +186,16 @@ foreach ($d in '_data','content','sourcedb') {
   if (-not (Test-Path $l)) { New-Item -ItemType Junction -Path $l -Target "$src\$d" | Out-Null }
 }
 """.replace("@GAME@", GAME).replace("@ROOT@", ROOT).replace("@LEGACY@", "yes" if with_legacy_dbgcore else "no"))
-    cfg = tmp / "config.json"
-    cfg.write_text(OFFLINE_CONFIG if runtime_yaml is None else LOGIN_CONFIG)
-    g.put(cfg, f"{SMB_ROOT}/echovr/_local", "config.json")
+    if runtime_yaml is None:
+        cfg = tmp / "config.json"
+        cfg.write_text(OFFLINE_CONFIG)
+        g.put(cfg, f"{SMB_ROOT}/echovr/_local", "config.json")
+    else:
+        # Login scenario: NO config.json (issue #21 — it is optional). With no *_host
+        # keys the game's readyatdawn.com defaults are what the runtime redirects to
+        # the bridge (the offline config's 127.0.0.1:1 hosts would override that), and
+        # a server that still demanded config.json would fail this scenario at boot.
+        g.ps(rf"Remove-Item '{ROOT}\echovr\_local\config.json' -Force -ErrorAction SilentlyContinue")
     g.put(HERE / "enum_windows.ps1", f"{SMB_ROOT}/run", "enum_windows.ps1")
     if runtime_yaml is not None:
         y = tmp / "config.yaml"

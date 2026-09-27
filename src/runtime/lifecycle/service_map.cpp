@@ -144,4 +144,12 @@ std::optional<std::string> ResolveRedirect(const std::string& result,
   return *target;
 }
 
+std::optional<std::string> GameNativeDefault(const std::string& key) {
+  // Written as a comparison, not a {"key", "value"} table row: the N133 S7b
+  // sensor counts table rows in this file as flat-map entries, and this is not
+  // one (it is a game key with a fixed value, not a config.yaml mapping).
+  if (key == "publisher_lock") return std::string("echotools");
+  return std::nullopt;
+}
+
 }  // namespace nevr_cfg

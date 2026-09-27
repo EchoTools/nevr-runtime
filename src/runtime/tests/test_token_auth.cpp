@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <string>
@@ -491,4 +492,187 @@ TEST(TokenAuthModule, ClientWithoutRequiredConfigDisablesCleanly) {
 
 TEST(TokenAuthModule, ReportsThePublishedModuleApiVersion) {
   EXPECT_EQ(token_auth_ApiVersion(), NEVR_MODULE_API_VERSION);
+}
+
+// Issue #23: Load and Save must select the same credentials directory. Existing
+// credentials take precedence over configs so refreshes do not move a cache.
+class CredentialsDirFixture : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    root_ = std::filesystem::temp_directory_path() /
+            ("nevr-i21-" + std::to_string(GetCurrentProcessId()) + "-" +
+             ::testing::UnitTest::GetInstance()->current_test_info()->name());
+    std::filesystem::remove_all(root_);
+    std::filesystem::create_directories(root_ / "bin" / "win10");
+    // GetExeDirectory's shape: absolute, trailing separator.
+    exe_dir_ = (root_ / "bin" / "win10").string() + "\\";
+  }
+  void TearDown() override { std::filesystem::remove_all(root_); }
+
+  void Write(const std::filesystem::path& file, const std::string& contents) {
+    std::filesystem::create_directories(file.parent_path());
+    std::ofstream output(file, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(output.is_open()) << file.string();
+    output << contents;
+  }
+
+  std::string Read(const std::filesystem::path& file) const {
+    std::ifstream input(file, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+  }
+
+  nlohmann::json Credentials(const std::string& refreshToken) const {
+    return nlohmann::json{{"refresh_token", refreshToken}, {"refresh_token_expiry", 2000000000U}};
+  }
+
+  std::filesystem::path root_;
+  std::string exe_dir_;
+};
+
+TEST_F(CredentialsDirFixture, YamlOnlySaveRotatesAndReloadsRefreshTokenWithoutChangingConfig) {
+  const auto yamlPath = root_ / "bin" / "win10" / "_local" / "config.yaml";
+  const std::string yamlContents = "services:\n  telemetry: https://example.test\n";
+  Write(yamlPath, yamlContents);
+
+  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_);
+  EXPECT_TRUE(std::filesystem::equivalent(location.directory, yamlPath.parent_path()));
+  const std::string credentialSuffix = ".credentials.json";
+  ASSERT_GE(location.credentialsPath.size(), credentialSuffix.size());
+  EXPECT_EQ(location.credentialsPath.substr(location.credentialsPath.size() - credentialSuffix.size()),
+            credentialSuffix);
+
+  CachedAuthToken auth;
+  auth.token = "in-memory-access-token";
+  auth.token_expiry = 2000000000U;
+  auth.refresh_token = "refresh-token-v1";
+  auth.refresh_token_expiry = 2100000000U;
+  auth.user_id = "account-17";
+  auth.username = "cached-player";
+  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
+
+  nlohmann::json expected = {{"refresh_token", "refresh-token-v1"},
+                             {"refresh_token_expiry", 2100000000U},
+                             {"user_id", "account-17"},
+                             {"username", "cached-player"}};
+  std::ifstream saved(location.credentialsPath, std::ios::binary);
+  ASSERT_TRUE(saved.is_open());
+  const nlohmann::json actual = nlohmann::json::parse(saved);
+  EXPECT_EQ(actual, expected);
+  EXPECT_FALSE(actual.contains("token"));
+  EXPECT_FALSE(actual.contains("token_expiry"));
+  EXPECT_EQ(Read(yamlPath), yamlContents);
+
+  CachedAuthToken loaded = LoadCachedAuthToken(exe_dir_);
+  EXPECT_TRUE(loaded.token.empty());
+  EXPECT_EQ(loaded.refresh_token, "refresh-token-v1");
+  EXPECT_EQ(loaded.user_id, "account-17");
+
+  auth.refresh_token = "refresh-token-v2";
+  auth.refresh_token_expiry = 2200000000U;
+  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
+  loaded = LoadCachedAuthToken(exe_dir_);
+  EXPECT_EQ(loaded.refresh_token, "refresh-token-v2");
+  EXPECT_EQ(loaded.refresh_token_expiry, 2200000000U);
+  EXPECT_EQ(Read(yamlPath), yamlContents);
+}
+
+TEST_F(CredentialsDirFixture, NearExistingCredentialsBeatFartherYaml) {
+  const auto nearCredentials = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  const auto fartherYaml = root_ / "_local" / "config.yaml";
+  Write(nearCredentials, Credentials("near-existing").dump());
+  const std::string fartherContents = "services: farther\n";
+  Write(fartherYaml, fartherContents);
+
+  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_);
+  EXPECT_TRUE(std::filesystem::equivalent(location.credentialsPath, nearCredentials));
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "near-existing");
+
+  CachedAuthToken auth;
+  auth.refresh_token = "rotated-near";
+  auth.refresh_token_expiry = 2100000000U;
+  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "rotated-near");
+  EXPECT_EQ(Read(fartherYaml), fartherContents);
+}
+
+TEST_F(CredentialsDirFixture, FartherExistingCredentialsBeatNearYaml) {
+  const auto nearYaml = root_ / "bin" / "win10" / "_local" / "config.yaml";
+  const auto fartherCredentials = root_ / "bin" / "_local" / ".credentials.json";
+  const std::string nearContents = "services: near\n";
+  Write(nearYaml, nearContents);
+  Write(fartherCredentials, Credentials("farther-existing").dump());
+
+  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_);
+  EXPECT_TRUE(std::filesystem::equivalent(location.credentialsPath, fartherCredentials));
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "farther-existing");
+  EXPECT_EQ(Read(nearYaml), nearContents);
+}
+
+TEST_F(CredentialsDirFixture, FirstYamlDirectoryInSuffixOrderWinsWhenNoCredentialsExist) {
+  const auto nearYaml = root_ / "bin" / "win10" / "_local" / "config.yaml";
+  const auto fartherYaml = root_ / "bin" / "_local" / "config.yaml";
+  const std::string nearContents = "services: near\n";
+  Write(nearYaml, nearContents);
+  Write(fartherYaml, "services: farther\n");
+
+  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_);
+  EXPECT_TRUE(std::filesystem::equivalent(location.directory, nearYaml.parent_path()));
+  CachedAuthToken auth;
+  auth.refresh_token = "near-yaml-refresh";
+  auth.refresh_token_expiry = 2100000000U;
+  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
+  EXPECT_TRUE(std::filesystem::exists(nearYaml.parent_path() / ".credentials.json"));
+  EXPECT_FALSE(std::filesystem::exists(fartherYaml.parent_path() / ".credentials.json"));
+  EXPECT_EQ(Read(nearYaml), nearContents);
+}
+
+TEST_F(CredentialsDirFixture, FirstExistingCredentialsInSuffixOrderWins) {
+  const auto nearCredentials = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  const auto parentCredentials = root_ / "bin" / "_local" / ".credentials.json";
+  const auto rootCredentials = root_ / "_local" / ".credentials.json";
+  Write(nearCredentials, Credentials("near").dump());
+  Write(parentCredentials, Credentials("parent").dump());
+  Write(rootCredentials, Credentials("root").dump());
+
+  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_);
+  EXPECT_TRUE(std::filesystem::equivalent(location.credentialsPath, nearCredentials));
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "near");
+}
+
+TEST_F(CredentialsDirFixture, MalformedSelectedCredentialsDoNotFallThroughAndSaveRepairsThem) {
+  const auto selected = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  const auto farther = root_ / "bin" / "_local" / ".credentials.json";
+  Write(selected, "{ malformed");
+  const std::string fartherContents = Credentials("farther-valid").dump();
+  Write(farther, fartherContents);
+
+  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_);
+  EXPECT_TRUE(std::filesystem::equivalent(location.credentialsPath, selected));
+  EXPECT_TRUE(LoadCachedAuthToken(exe_dir_).refresh_token.empty());
+
+  CachedAuthToken auth;
+  auth.refresh_token = "repaired-selected";
+  auth.refresh_token_expiry = 2100000000U;
+  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "repaired-selected");
+  EXPECT_EQ(Read(farther), fartherContents);
+}
+
+TEST_F(CredentialsDirFixture, NoCredentialsOrYamlFallsBackBesideExecutable) {
+  const auto fallback = root_ / "bin" / "win10" / "_local" / ".credentials.json";
+  const CredentialCacheLocation location = SelectCredentialCacheLocation(exe_dir_);
+  EXPECT_EQ(std::filesystem::path(location.directory).lexically_normal(), fallback.parent_path().lexically_normal());
+
+  CachedAuthToken auth;
+  auth.refresh_token = "fallback-refresh";
+  auth.refresh_token_expiry = 2100000000U;
+  ASSERT_TRUE(SaveAuthToken(auth, exe_dir_));
+  EXPECT_EQ(LoadCachedAuthToken(exe_dir_).refresh_token, "fallback-refresh");
+  EXPECT_TRUE(std::filesystem::exists(fallback));
+}
+
+TEST(CredentialCachePath, JoinHandlesTrailingAndMissingSeparators) {
+  EXPECT_EQ(JoinCredentialPath("C:\\games\\bin\\", "_local"), "C:\\games\\bin\\_local");
+  EXPECT_EQ(JoinCredentialPath("C:/games/bin/", "_local"), "C:/games/bin/_local");
+  EXPECT_EQ(JoinCredentialPath("C:\\games\\bin", "_local"), "C:\\games\\bin\\_local");
 }

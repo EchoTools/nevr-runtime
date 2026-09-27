@@ -62,7 +62,7 @@ and fetched the profile. Falsified: the same run before the guild group existed 
 
 Gotchas: the token must be in `socket_uri` (the bridge does not add it; production's proxy
 does); the rig's offline `config.json` hosts (`127.0.0.1:1`) override the bridge redirect,
-so this scenario writes a `config.json` without `*_host` keys; docker's port proxy shows
+so this scenario writes no `config.json` at all (optional since issue #21); docker's port proxy shows
 every client as the bridge gateway, so nakama's `client_ip` cannot identify the VM.
 
 ## Not covered yet

@@ -1,11 +1,11 @@
-# echovr_server.exe — thin CreateProcess wrapper that spawns echovr.exe -server -noconsole.
-# Overrides the global -mwindows link flag with -mconsole to produce a console application,
-# so the user sees status messages before the game opens its own console window.
+# echovr_server.exe — console CreateProcess wrapper for echovr.exe -server
+# -headless -noconsole.
 add_executable(echovr_server echovr_server_launcher.cpp)
 
-# Override global -mwindows (set in root CMakeLists.txt for DLLs) with -mconsole.
-# The launcher is intentionally a console application.
-target_link_options(echovr_server PRIVATE -mconsole)
-
-# Ensure static linking (inherited from global options but explicit for clarity).
-target_link_options(echovr_server PRIVATE -static -static-libgcc -static-libstdc++)
+# The launcher is intentionally a console application. The root sets the
+# MSVC executable subsystem to WINDOWS, and its MinGW flags do not apply there.
+if(MSVC)
+    target_link_options(echovr_server PRIVATE /SUBSYSTEM:CONSOLE)
+elseif(MINGW)
+    target_link_options(echovr_server PRIVATE -mconsole -static -static-libgcc -static-libstdc++)
+endif()

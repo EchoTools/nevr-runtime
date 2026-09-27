@@ -205,6 +205,7 @@ typedef NTSTATUS (NTAPI *LdrUnregisterDllNotification_fn)(void* cookie);
 
 static void* s_dllNotifCookie = nullptr;
 static bool  s_pnsradPatched  = false;
+static uintptr_t s_pnsradModuleBase = 0;
 
 /* Case-insensitive ASCII wide-string compare, same folding convention as
  * initialize.cpp's LoadNameContains. UNICODE_STRING::Length is bytes, not
@@ -431,6 +432,7 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
 
         s_pnsradPatched = true;
         uintptr_t base = reinterpret_cast<uintptr_t>(data->DllBase);
+        s_pnsradModuleBase = base;
 
         PnsradNopPatch(reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_CHECK),
                        PNSRAD_JNE_EXPECTED, sizeof(PNSRAD_JNE_EXPECTED), 2,
@@ -584,4 +586,8 @@ void PnsradEnabler::Shutdown() {
         s_dllNotifCookie = nullptr;
     }
 #endif
+}
+
+uintptr_t PnsradEnabler::GetModuleBase() {
+    return s_pnsradModuleBase;
 }

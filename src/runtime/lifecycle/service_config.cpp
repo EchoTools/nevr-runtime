@@ -178,6 +178,13 @@ const char* NevrCfgRedirect(const char* result, const char* httpTargetJson, int 
   return InternCStr(*redir);
 }
 
+const char* NevrGameNativeDefault(const char* key) {
+  if (key == nullptr) return nullptr;
+  const std::optional<std::string> v = nevr_cfg::GameNativeDefault(key);
+  if (!v) return nullptr;
+  return InternCStr(*v);
+}
+
 const char* NevrCfgAutoRelay(unsigned bridgePort) {
   const std::optional<std::string> socketTarget = nevr_cfg::LookupFlat(NevrCfg(), "nevr_socket_uri");
   if (!socketTarget || socketTarget->empty()) return nullptr;

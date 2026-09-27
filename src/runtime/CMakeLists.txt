@@ -29,6 +29,7 @@ set(PATCHES_SOURCES
     "frame/tick.cpp"
     "patch/binary_bug_fixes.cpp"
     "patch/pnsrad_enabler.cpp"
+    "patch/mic_provider.cpp"
     "log/builtin_filter.cpp"
     "log/symcache.cpp"
     "log/symcache_data.cpp"
@@ -76,6 +77,7 @@ set(PATCHES_HEADERS
     "frame/tick.h"
     "patch/binary_bug_fixes.h"
     "patch/pnsrad_enabler.h"
+    "patch/mic_provider.h"
     "log/builtin_filter.h"
     "log/symcache.h"
     "patch/broadcaster_guard.h"
@@ -117,7 +119,7 @@ find_package(ixwebsocket CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(miniupnpc CONFIG REQUIRED)
 
-target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 platform_compat token_auth)
+target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 platform_compat token_auth ole32)
 
 # yaml-cpp backs src/core/nevr_config (compiled into nevr_core as an archive with
 # unresolved yaml symbols). The DLL is where those symbols get resolved — this is
@@ -213,6 +215,19 @@ if(BUILD_TESTING)
     # 5s timeout, which the Wine cold-start exceeds — failing the build even though the
     # tests themselves pass. PRE_TEST keeps `cmake --build` from launching Wine.
     gtest_discover_tests(test_xpid_patch DISCOVERY_MODE PRE_TEST)
+
+    # mic_dsp unit tests (GH#15) — the PURE ring-buffer and downmix/resample
+    # logic behind the WASAPI mic provider (runtime/patch/mic_provider.cpp).
+    # Compiles core/mic_dsp.cpp directly (the same TU nevr_core links): no
+    # windows.h, no capture device, no Wine needed to exercise this math.
+    add_executable(test_mic_dsp
+      tests/test_mic_dsp.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_dsp.cpp)
+    set_source_files_properties(tests/test_mic_dsp.cpp ${CMAKE_SOURCE_DIR}/src/core/mic_dsp.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_mic_dsp PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_mic_dsp PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_mic_dsp DISCOVERY_MODE PRE_TEST)
 
     # ParseEndpoint unit tests — validates N1 fix (strtoul + errno vs std::stoul throw)
     add_executable(test_parse_endpoint tests/test_parse_endpoint.cpp)
