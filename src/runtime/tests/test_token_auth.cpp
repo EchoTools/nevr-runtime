@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
@@ -8,6 +10,7 @@
 #include <string>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include "core/auth_token.h"
 #include "device_poll_response.h"
@@ -351,6 +354,34 @@ TEST(DevicePollResponse, PendingExpiredAndErrorResponsesRemainDistinct) {
             TokenAuth::DevicePollStatus::Error);
 }
 
+TEST(DevicePollResponse, WrongTypedVerifiedFieldsRemainErrorAndExpiryTypesStayAbsent) {
+  for (const std::string field : {"access_token", "refresh_token", "user_id", "username"}) {
+    const std::string body = "{\"status\":\"verified\",\"access_token\":\"access\","
+                             "\"refresh_token\":\"refresh\",\"user_id\":\"user\","
+                             "\"username\":\"name\",\"" + field + "\":7}";
+    const TokenAuth::DevicePollResponse response = TokenAuth::ParseDevicePollResponse(body);
+    EXPECT_EQ(response.status, TokenAuth::DevicePollStatus::Error) << field;
+    EXPECT_TRUE(response.access_token.empty()) << field;
+    EXPECT_TRUE(response.refresh_token.empty()) << field;
+    EXPECT_TRUE(response.user_id.empty()) << field;
+    EXPECT_TRUE(response.username.empty()) << field;
+  }
+
+  const TokenAuth::DevicePollResponse malformedLegacyToken = TokenAuth::ParseDevicePollResponse(
+      "{\"status\":\"verified\",\"token\":7,\"refresh_token\":\"refresh\","
+      "\"user_id\":\"user\",\"username\":\"name\"}");
+  EXPECT_EQ(malformedLegacyToken.status, TokenAuth::DevicePollStatus::Error);
+  EXPECT_TRUE(malformedLegacyToken.access_token.empty());
+  EXPECT_TRUE(malformedLegacyToken.refresh_token.empty());
+
+  const TokenAuth::DevicePollResponse wrongExpiry = TokenAuth::ParseDevicePollResponse(
+      "{\"status\":\"verified\",\"access_token\":\"access\",\"expires_in\":\"3600\","
+      "\"refresh_token_expires_in\":false}");
+  EXPECT_EQ(wrongExpiry.status, TokenAuth::DevicePollStatus::Verified);
+  EXPECT_FALSE(wrongExpiry.expires_in.has_value());
+  EXPECT_FALSE(wrongExpiry.refresh_token_expires_in.has_value());
+}
+
 // RFC 6749 §5.1 renamed the poll response fields (EchoTools/nakama f945f631d).
 // The server sends access_token and token with the same value, so a test where
 // they are EQUAL cannot tell "read the new name" from "read the old one". They
@@ -468,6 +499,332 @@ TEST(DevicePollResponse, JwtExpiryTakesPrecedenceThenFallsBack) {
   EXPECT_EQ(TokenAuth::ResolveAccessTokenExpiry(kNow, "not-a-jwt", 10), 1010U);
   EXPECT_EQ(TokenAuth::ResolveAccessTokenExpiry(kNow, "not-a-jwt", std::nullopt),
             kNow + kFallbackAccessTokenLifetimeSec);
+}
+
+namespace {
+
+using FlowClock = TokenAuth::TestHook::DeviceAuthFlowOps::Clock;
+
+struct FakeDeviceAuthFlow {
+  FlowClock::time_point current{};
+  std::string code = "device-code-secret-sentinel";
+  intptr_t browser_result = 33;
+  int ui_result = 1;
+  FlowClock::duration ui_elapsed{};
+  FlowClock::duration browser_elapsed{};
+  FlowClock::duration poll_elapsed{};
+  FlowClock::duration request_elapsed{};
+  int request_calls = 0;
+  int browser_calls = 0;
+  int ui_calls = 0;
+  int poll_calls = 0;
+  int save_calls = 0;
+  bool save_result = true;
+  std::string browser_url;
+  std::string ui_code;
+  std::string ui_url;
+  intptr_t ui_browser_result = -1;
+  TokenAuth::DevicePollResponse poll_response;
+  std::vector<TokenAuth::DevicePollResponse> poll_sequence;
+  size_t poll_sequence_index = 0;
+  std::vector<FlowClock::duration> sleep_durations;
+  std::vector<std::pair<EchoVR::LogLevel, std::string>> logs;
+
+  TokenAuth::TestHook::DeviceAuthFlowOps Ops() {
+    TokenAuth::TestHook::DeviceAuthFlowOps ops;
+    ops.now = [this]() { return current; };
+    ops.request_device_code = [this]() {
+      ++request_calls;
+      current += request_elapsed;
+      return code;
+    };
+    ops.open_browser = [this](const std::string& url) {
+      ++browser_calls;
+      browser_url = url;
+      current += browser_elapsed;
+      return browser_result;
+    };
+    ops.show_open_failure = [this](const std::string& shownCode, const std::string& url,
+                                   intptr_t result) {
+      ++ui_calls;
+      ui_code = shownCode;
+      ui_url = url;
+      ui_browser_result = result;
+      current += ui_elapsed;
+      return ui_result;
+    };
+    ops.poll = [this](const std::string&) {
+      ++poll_calls;
+      current += poll_elapsed;
+      if (poll_sequence_index < poll_sequence.size()) {
+        return poll_sequence[poll_sequence_index++];
+      }
+      return poll_response;
+    };
+    ops.sleep = [this](FlowClock::duration duration) {
+      sleep_durations.push_back(duration);
+      current += duration;
+    };
+    ops.save = [this]() {
+      ++save_calls;
+      return save_result;
+    };
+    ops.log = [this](EchoVR::LogLevel level, const std::string& message) {
+      logs.emplace_back(level, message);
+    };
+    return ops;
+  }
+};
+
+TokenAuth::TestHook::DeviceAuthState ExistingDeviceAuthState() {
+  TokenAuth::TestHook::DeviceAuthState state;
+  state.token = "existing-access-token";
+  state.token_expiry = static_cast<uint64_t>(std::time(nullptr)) + 3600U;
+  state.refresh_token = "existing-refresh-token";
+  state.refresh_token_expiry = 2100000000U;
+  state.user_id = "existing-user";
+  state.username = "existing-name";
+  state.discord_id = 77U;
+  state.authenticated = true;
+  return state;
+}
+
+void ExpectSameDeviceAuthState(const TokenAuth::TestHook::DeviceAuthState& actual,
+                               const TokenAuth::TestHook::DeviceAuthState& expected) {
+  EXPECT_EQ(actual.authenticated, expected.authenticated);
+  EXPECT_EQ(actual.token, expected.token);
+  EXPECT_EQ(actual.token_expiry, expected.token_expiry);
+  EXPECT_EQ(actual.refresh_token, expected.refresh_token);
+  EXPECT_EQ(actual.refresh_token_expiry, expected.refresh_token_expiry);
+  EXPECT_EQ(actual.user_id, expected.user_id);
+  EXPECT_EQ(actual.username, expected.username);
+  EXPECT_EQ(actual.discord_id, expected.discord_id);
+}
+
+TokenAuth::DevicePollResponse VerifiedPollResponse() {
+  return TokenAuth::ParseDevicePollResponse(
+      "{\"status\":\"verified\",\"access_token\":\"" +
+      MakeJwt("eyJ2cnMiOnsiZGlkIjoiNDIifSwiZXhwIjo0MTAyNDQ0ODAwfQ") +
+      "\",\"refresh_token\":\"new-refresh\",\"user_id\":\"new-user\","
+      "\"username\":\"new-name\",\"expires_in\":3600,\"refresh_token_expires_in\":7200}");
+}
+
+}  // namespace
+
+TEST(DeviceAuthFlow, ServerRefusesBeforeAnyHttpBrowserUiOrPollOperation) {
+  FakeDeviceAuthFlow fake;
+  const auto original = ExistingDeviceAuthState();
+  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(true, original, fake.Ops());
+
+  EXPECT_FALSE(result.success);
+  ExpectSameDeviceAuthState(result.state, original);
+  EXPECT_EQ(fake.request_calls, 0);
+  EXPECT_EQ(fake.browser_calls, 0);
+  EXPECT_EQ(fake.ui_calls, 0);
+  EXPECT_EQ(fake.poll_calls, 0);
+  EXPECT_EQ(fake.save_calls, 0);
+}
+
+TEST(DeviceAuthFlow, BrowserResultBoundaryUsesTransientUiOnlyForZeroAndThirtyTwo) {
+  for (const intptr_t resultCode : {0, 32, 33}) {
+    FakeDeviceAuthFlow fake;
+    fake.browser_result = resultCode;
+    fake.ui_result = 0;
+    const auto flow = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+
+    EXPECT_FALSE(flow.success) << resultCode;
+    EXPECT_EQ(fake.browser_calls, 1) << resultCode;
+    EXPECT_NE(fake.browser_url.find("device-code-secret-sentinel"), std::string::npos) << resultCode;
+    EXPECT_EQ(fake.ui_calls, resultCode > 32 ? 0 : 1) << resultCode;
+    if (resultCode <= 32) {
+      EXPECT_EQ(fake.ui_code, fake.code);
+      EXPECT_EQ(fake.ui_url, "https://echovrce.com/login/device");
+      EXPECT_EQ(fake.ui_browser_result, resultCode);
+      EXPECT_EQ(fake.poll_calls, 0);
+      EXPECT_TRUE(std::any_of(fake.logs.begin(), fake.logs.end(), [](const auto& entry) {
+        return entry.first == EchoVR::LogLevel::Error &&
+               entry.second.find("stopped because the browser could not be opened") != std::string::npos;
+      }));
+      for (const auto& [level, message] : fake.logs) {
+        (void)level;
+        EXPECT_EQ(message.find(fake.code), std::string::npos);
+      }
+    }
+    EXPECT_EQ(fake.save_calls, 0);
+  }
+}
+
+TEST(DeviceAuthFlow, DismissalContinuesButUiDeadlineUsesOriginalFiveMinuteBudget) {
+  for (const auto elapsedSeconds : {299, 301}) {
+    FakeDeviceAuthFlow fake;
+    fake.browser_result = 32;
+    fake.ui_elapsed = std::chrono::seconds(elapsedSeconds);
+    fake.poll_response.status = TokenAuth::DevicePollStatus::Pending;
+    const auto flow = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+
+    EXPECT_FALSE(flow.success) << elapsedSeconds;
+    EXPECT_EQ(fake.ui_calls, 1);
+    EXPECT_EQ(fake.poll_calls, 0);
+    EXPECT_EQ(fake.save_calls, 0);
+    if (elapsedSeconds == 299) {
+      ASSERT_EQ(fake.sleep_durations.size(), 1U);
+      EXPECT_EQ(fake.sleep_durations.front(), std::chrono::seconds(1));
+    } else {
+      EXPECT_TRUE(fake.sleep_durations.empty());
+    }
+  }
+}
+
+TEST(DeviceAuthFlow, BrowserThatReturnsAfterDeadlineDoesNotStartPolling) {
+  FakeDeviceAuthFlow fake;
+  fake.browser_result = 33;
+  fake.browser_elapsed = std::chrono::seconds(301);
+  fake.poll_response = VerifiedPollResponse();
+  const auto original = ExistingDeviceAuthState();
+
+  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, original, fake.Ops());
+
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ(fake.ui_calls, 0);
+  EXPECT_EQ(fake.poll_calls, 0);
+  EXPECT_EQ(fake.save_calls, 0);
+  ExpectSameDeviceAuthState(result.state, original);
+}
+
+TEST(DeviceAuthFlow, PollResultAtOrAfterDeadlineDoesNotMutateOrSaveAnyAuthField) {
+  for (const auto elapsedSeconds : {300, 301}) {
+    FakeDeviceAuthFlow fake;
+    fake.poll_response = VerifiedPollResponse();
+    fake.poll_elapsed = std::chrono::seconds(elapsedSeconds - 3);
+    const auto original = ExistingDeviceAuthState();
+    const auto flow = TokenAuth::TestHook::RunDeviceAuthFlow(false, original, fake.Ops());
+
+    EXPECT_FALSE(flow.success) << elapsedSeconds;
+    EXPECT_EQ(fake.poll_calls, 1);
+    EXPECT_EQ(fake.save_calls, 0);
+    ExpectSameDeviceAuthState(flow.state, original);
+  }
+}
+
+TEST(DeviceAuthFlow, SleepIsCappedAtDeadlineAndTimelyVerificationAppliesAndSaves) {
+  FakeDeviceAuthFlow fake;
+  fake.browser_result = 0;
+  fake.ui_elapsed = std::chrono::seconds(298);
+  fake.ui_result = 1;
+  fake.poll_response = VerifiedPollResponse();
+  fake.save_result = false;  // Save failure must not undo successful in-memory auth.
+  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+
+  EXPECT_FALSE(result.success);  // 298s + capped 2s reaches the deadline before polling.
+  EXPECT_EQ(fake.poll_calls, 0);
+  ASSERT_EQ(fake.sleep_durations.size(), 1U);
+  EXPECT_EQ(fake.sleep_durations.front(), std::chrono::seconds(2));
+  EXPECT_EQ(fake.save_calls, 0);
+
+  FakeDeviceAuthFlow timely;
+  timely.browser_result = 33;
+  timely.poll_response = VerifiedPollResponse();
+  timely.save_result = false;
+  const auto original = ExistingDeviceAuthState();
+  const uint64_t wallClockBefore = static_cast<uint64_t>(std::time(nullptr));
+  const auto success = TokenAuth::TestHook::RunDeviceAuthFlow(false, original, timely.Ops());
+  const uint64_t wallClockAfter = static_cast<uint64_t>(std::time(nullptr));
+  EXPECT_TRUE(success.success);
+  EXPECT_EQ(timely.save_calls, 1);
+  EXPECT_NE(success.state.token, original.token);
+  EXPECT_EQ(success.state.token_expiry, 4102444800ULL);
+  EXPECT_EQ(success.state.refresh_token, "new-refresh");
+  EXPECT_GE(success.state.refresh_token_expiry, wallClockBefore + 7200U);
+  EXPECT_LE(success.state.refresh_token_expiry, wallClockAfter + 7200U);
+  EXPECT_EQ(success.state.user_id, "new-user");
+  EXPECT_EQ(success.state.username, "new-name");
+  EXPECT_EQ(success.state.discord_id, 42U);
+  EXPECT_TRUE(success.state.authenticated);
+}
+
+TEST(DeviceAuthFlow, DeadlineStartsAfterTheNonemptyDeviceCodeResponse) {
+  FakeDeviceAuthFlow fake;
+  fake.request_elapsed = std::chrono::seconds(60);
+  fake.browser_result = 32;
+  fake.ui_elapsed = std::chrono::seconds(290);
+  fake.ui_result = 1;
+  fake.poll_response = VerifiedPollResponse();
+
+  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+
+  EXPECT_TRUE(result.success);
+  ASSERT_EQ(fake.sleep_durations.size(), 1U);
+  EXPECT_EQ(fake.sleep_durations.front(), std::chrono::seconds(3));
+  EXPECT_EQ(fake.poll_calls, 1);
+  EXPECT_EQ(fake.save_calls, 1);
+}
+
+TEST(DeviceAuthFlow, DeviceCodeIsNeverLoggedAtAnyLevelButReachesBrowserAndUi) {
+  FakeDeviceAuthFlow uiFailure;
+  uiFailure.browser_result = 32;
+  uiFailure.ui_result = 0;
+  (void)TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), uiFailure.Ops());
+
+  FakeDeviceAuthFlow polling;
+  polling.browser_result = 33;
+  for (unsigned int index = 0; index < 10; ++index) {
+    TokenAuth::DevicePollResponse pending;
+    pending.status = TokenAuth::DevicePollStatus::Pending;
+    polling.poll_sequence.push_back(pending);
+  }
+  TokenAuth::DevicePollResponse error;
+  error.status = TokenAuth::DevicePollStatus::Error;
+  polling.poll_sequence.push_back(error);
+  (void)TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), polling.Ops());
+
+  EXPECT_EQ(polling.browser_url, "https://echovrce.com/login/device?code=device-code-secret-sentinel");
+  EXPECT_EQ(uiFailure.ui_code, uiFailure.code);
+  EXPECT_EQ(uiFailure.ui_url, "https://echovrce.com/login/device");
+  bool sawInfo = false;
+  bool sawDebug = false;
+  bool sawWarning = false;
+  bool sawError = false;
+  for (const auto* fake : {&uiFailure, &polling}) {
+    ASSERT_FALSE(fake->logs.empty());
+    for (const auto& [level, message] : fake->logs) {
+      EXPECT_EQ(message.find(fake->code), std::string::npos) << "device code leaked to a persistent log";
+      sawInfo = sawInfo || level == EchoVR::LogLevel::Info;
+      sawDebug = sawDebug || level == EchoVR::LogLevel::Debug;
+      sawWarning = sawWarning || level == EchoVR::LogLevel::Warning;
+      sawError = sawError || level == EchoVR::LogLevel::Error;
+    }
+  }
+  EXPECT_TRUE(sawInfo);
+  EXPECT_TRUE(sawDebug);
+  EXPECT_TRUE(sawWarning);
+  EXPECT_TRUE(sawError);
+}
+
+TEST(DeviceAuthFlow, MalformedVerifiedCandidateDoesNotChangeStateOrSave) {
+  const auto original = ExistingDeviceAuthState();
+  const std::vector<std::string> malformedBodies = {
+      "{\"status\":\"verified\",\"access_token\":7,\"refresh_token\":\"refresh\","
+      "\"user_id\":\"user\",\"username\":\"name\"}",
+      "{\"status\":\"verified\",\"token\":7,\"refresh_token\":\"refresh\","
+      "\"user_id\":\"user\",\"username\":\"name\"}",
+      "{\"status\":\"verified\",\"access_token\":\"candidate\",\"refresh_token\":7,"
+      "\"user_id\":\"user\",\"username\":\"name\"}",
+      "{\"status\":\"verified\",\"access_token\":\"candidate\",\"refresh_token\":\"refresh\","
+      "\"user_id\":7,\"username\":\"name\"}",
+      "{\"status\":\"verified\",\"access_token\":\"candidate\",\"refresh_token\":\"refresh\","
+      "\"user_id\":\"user\",\"username\":7}",
+  };
+
+  for (const std::string& body : malformedBodies) {
+    FakeDeviceAuthFlow fake;
+    fake.poll_response = TokenAuth::ParseDevicePollResponse(body);
+    ASSERT_EQ(fake.poll_response.status, TokenAuth::DevicePollStatus::Error);
+    const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, original, fake.Ops());
+
+    EXPECT_FALSE(result.success) << body;
+    EXPECT_EQ(fake.save_calls, 0) << body;
+    ExpectSameDeviceAuthState(result.state, original);
+  }
 }
 
 TEST(TokenAuthModule, ServerHostSkipsDeviceAuthentication) {

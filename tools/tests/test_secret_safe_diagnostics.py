@@ -27,12 +27,13 @@ class SecretSafeDiagnosticSourceTest(unittest.TestCase):
         self.assertIn("catch (const nlohmann::json::parse_error&)", refresh)
 
         token_auth = source("src/modules/token-auth/src/token_auth.cpp")
-        request = section(token_auth, "std::string DeviceAuth::HttpPostPublic(", "std::string DeviceAuth::PollDeviceCode(")
+        request = section(token_auth, "std::string DeviceAuth::HttpPostPublic(",
+                          "TokenAuth::DevicePollResponse DeviceAuth::PollDeviceCode(")
         self.assertIn("FormatRedactedUrlDiagnostic", request)
         self.assertIn("curl_code=%d", request)
         self.assertNotIn("curl_easy_strerror", request)
         self.assertNotIn("e.what()", section(token_auth, "std::string DeviceAuth::RequestDeviceCode(",
-                                               "std::string DeviceAuth::PollDeviceCode("))
+                                               "TokenAuth::DevicePollResponse DeviceAuth::PollDeviceCode("))
         self.assertIn("FormatRedactedUrlDiagnostic(\"[NEVR.AUTH] Configured: url=\"", token_auth)
 
         gameserver = source("src/runtime/server/gameserver.cpp")

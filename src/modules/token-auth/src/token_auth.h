@@ -5,6 +5,10 @@
 #include <string>
 
 #ifdef NEVR_TEST_HOOKS
+#include <chrono>
+#include <functional>
+#include "abi/echovr.h"
+#include "device_poll_response.h"
 struct CachedAuthToken;
 #endif  // NEVR_TEST_HOOKS
 
@@ -33,9 +37,33 @@ namespace TestHook {
 struct DeviceAuthState {
     bool authenticated = false;
     std::string token;
+    uint64_t token_expiry = 0;
+    std::string refresh_token;
+    uint64_t refresh_token_expiry = 0;
+    std::string user_id;
     uint64_t discord_id = 0;
     std::string username;
 };
+
+struct DeviceAuthFlowOps {
+    using Clock = std::chrono::steady_clock;
+    std::function<Clock::time_point()> now;
+    std::function<std::string()> request_device_code;
+    std::function<intptr_t(const std::string&)> open_browser;
+    std::function<int(const std::string&, const std::string&, intptr_t)> show_open_failure;
+    std::function<DevicePollResponse(const std::string&)> poll;
+    std::function<void(Clock::duration)> sleep;
+    std::function<bool()> save;
+    std::function<void(EchoVR::LogLevel, const std::string&)> log;
+};
+
+struct DeviceAuthFlowResult {
+    bool success = false;
+    DeviceAuthState state;
+};
+
+DeviceAuthFlowResult RunDeviceAuthFlow(bool is_server, const DeviceAuthState& initial,
+                                       const DeviceAuthFlowOps& ops);
 
 DeviceAuthState InspectInitialDeviceAuth();
 DeviceAuthState InspectDeviceAuthAfterRefresh(const ::CachedAuthToken& auth);
