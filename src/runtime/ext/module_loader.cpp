@@ -77,7 +77,15 @@ void LoadModule(const char* name, const NvrModuleContext* ctx) {
   if (!hModule) {
     DWORD err = GetLastError();
     Log(EchoVR::LogLevel::Error, "[NEVR.MODULE] Failed to load %s: error %lu (path: %s)", name, err, dllPath.c_str());
-    FatalError("Required module missing", name);
+    // The Log() line above already carries the error code and path; without
+    // them here, a fatal-path consumer that only sees FatalError's own
+    // rendered line (crash reporting, an alert keyed off these args rather
+    // than the full log stream) has nothing but "Required module missing".
+    char msg[512];
+    snprintf(msg, sizeof(msg),
+             "Required module '%s' failed to load: LoadLibrary error %lu (path: %s)",
+             name, err, dllPath.c_str());
+    FatalError(msg, "NEVR Module Error");
     return;
   }
 
@@ -103,7 +111,14 @@ void LoadModule(const char* name, const NvrModuleContext* ctx) {
         "against this host)", name, moduleApiVersion,
         static_cast<uint32_t>(NEVR_MODULE_API_VERSION));
     FreeLibrary(hModule);
-    FatalError("Module API version unsupported", name);
+    // Carry both version numbers and the actionable instruction through to
+    // FatalError — the Log() above has them, but its rendered line alone was
+    // just "Module API version unsupported" with no versions or next step.
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+             "Module '%s' API v%u exceeds host v%u — rebuild the module against this host",
+             name, moduleApiVersion, static_cast<uint32_t>(NEVR_MODULE_API_VERSION));
+    FatalError(msg, "NEVR Module Error");
     return;
   }
 
@@ -111,7 +126,11 @@ void LoadModule(const char* name, const NvrModuleContext* ctx) {
   if (result != 0) {
     Log(EchoVR::LogLevel::Error, "[NEVR.MODULE] %s: init failed with code %d", name, result);
     FreeLibrary(hModule);
-    FatalError("Module init failed", name);
+    // Carry the init return code (already computed above) into FatalError's
+    // own message instead of dropping it.
+    char msg[256];
+    snprintf(msg, sizeof(msg), "Module '%s' init failed with code %d", name, result);
+    FatalError(msg, "NEVR Module Error");
     return;
   }
 

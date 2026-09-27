@@ -293,7 +293,10 @@ NevrConfig NevrConfig::LoadFromFileOrFail(const std::string& path, bool is_serve
       // reached by the unit test, which drives the client branch only.
       FatalError(e.what(), "NEVR Config Error");
     } else {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.CONFIG] %s", e.what());
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.CONFIG] %s — continuing with empty config (all config-driven "
+          "behavior uses defaults)",
+          e.what());
     }
     return NevrConfig();  // empty
   }

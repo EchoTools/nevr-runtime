@@ -93,6 +93,28 @@ void DispatchPerFrameWork(uint64_t nowUs) {
                 Log(EchoVR::LogLevel::Debug,
                     "[NEVR.PATCH] hook guard: %d guarded address(es) verified clean (periodic)",
                     HookGuard::RecordedCount());
+            } else {
+                // Deliberate severity asymmetry, not an inconsistency: this periodic
+                // check reports and keeps the process running (VerifyAll's own ERROR
+                // above names the site), while plugin_loader.cpp calls the same
+                // VerifyAll() right after a plugin's init and escalates to
+                // ServerFatal on the identical nonzero-collisions condition. At
+                // plugin-load time the process is still setting up and the collision
+                // is almost certainly that plugin's own doing, so failing loud is
+                // cheap and precise. Here the server is already live; killing it over
+                // a hook that may not even be load-bearing right now would cost more
+                // than degrading and reporting does. Logged once per process, not
+                // every periodic tick, to match the edge-triggered ERROR above it.
+                static bool s_explainedNonFatal = false;
+                if (!s_explainedNonFatal) {
+                    s_explainedNonFatal = true;
+                    Log(EchoVR::LogLevel::Debug,
+                        "[NEVR.PATCH] hook guard: periodic collision(s) are reported and "
+                        "the server keeps running here — not fatal, unlike "
+                        "plugin_loader.cpp's post-plugin-init check on the same "
+                        "condition (setup-time collisions fail loud; a live session is "
+                        "kept up and degraded instead)");
+                }
             }
         }
     }
