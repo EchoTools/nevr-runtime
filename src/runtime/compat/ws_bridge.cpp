@@ -309,6 +309,11 @@ bool IsWebSocketBridgeActive() {
 }
 
 void InstallWebSocketBridge() {
+  // Currently unreachable: InstallWebSocketBridge() has exactly one caller
+  // (boot.cpp), and that caller already gates the call behind a non-empty
+  // socketUri, logging its own WARNING and returning before ever reaching
+  // here if it's empty. Left in place as defense-in-depth for any future
+  // caller (tests, a CLI reconfigure path) that calls this without that gate.
   if (g_remoteUri.empty()) {
     Log(EchoVR::LogLevel::Info, "[NEVR.WS] No wss:// target — bridge disabled");
     return;
@@ -576,10 +581,10 @@ void InstallWebSocketBridge() {
                                   int64_t*  accountId  = (int64_t*)(user + 0x88);
                                   uint64_t* loginState = (uint64_t*)(user + 0x90);
                                   uint32_t* stateFlags = (uint32_t*)(user + 0x9c);
-                                  Log(EchoVR::LogLevel::Info,
-                                      "[NEVR.WS] CNSUser BEFORE: acct=%lld state=0x%llx provider=%d flags=0x%x",
-                                      (long long)*accountId, (unsigned long long)*loginState,
-                                      (int)(*loginState & 0xf), *stateFlags);
+                                  int64_t  beforeAcct    = *accountId;
+                                  uint64_t beforeState   = *loginState;
+                                  uint32_t beforeFlags   = *stateFlags;
+                                  int      beforeProvider = (int)(beforeState & 0xf);
                                   // Set the user's XPID: account_id and provider enum.
                                   // +0x88 = account_id (discord ID from JWT)
                                   // +0x90 low nibble = provider enum (2 = PSN in binary,
@@ -588,9 +593,13 @@ void InstallWebSocketBridge() {
                                   *accountId  = (int64_t)discordId;
                                   *loginState = (*loginState & ~0xFULL) | 4;  // OVR_ORG (game numbering)
                                   *stateFlags = 0x04;
-                                  Log(EchoVR::LogLevel::Debug,
-                                      "[NEVR.WS] CNSUser AFTER:  acct=%lld state=0x%llx flags=0x%x",
-                                      (long long)*accountId, (unsigned long long)*loginState, *stateFlags);
+                                  Log(EchoVR::LogLevel::Info,
+                                      "[NEVR.WS] CNSUser login state patched acct=%lld->%lld "
+                                      "state=0x%llx->0x%llx provider=%d->%d flags=0x%x->0x%x "
+                                      "(unblocks LogInSuccessCB)",
+                                      (long long)beforeAcct, (long long)*accountId,
+                                      (unsigned long long)beforeState, (unsigned long long)*loginState,
+                                      beforeProvider, (int)(*loginState & 0xf), beforeFlags, *stateFlags);
                                 }
                               }
                             }
@@ -647,7 +656,10 @@ void InstallWebSocketBridge() {
                         memcpy(&statusCode, rmsg->str.data() + 24 + 16, 8);
                         const char* errMsg = rmsg->str.data() + 24 + 24;
                         size_t errMaxLen = rmsg->str.size() - 48;
-                        Log(EchoVR::LogLevel::Warning, "[NEVR.WS] LOGIN FAILURE: status=%llu msg=%.*s",
+                        Log(EchoVR::LogLevel::Warning,
+                            "[NEVR.WS] login failed status=%llu msg=%.*s (server mode: expected "
+                            "every boot — ServerDB never issues a real LoginSuccess here; resolved "
+                            "below via a synthesized LoginSuccess. client mode: this is a real failure)",
                             (unsigned long long)statusCode, (int)errMaxLen, errMsg);
 
                         // N92: ported from the ws-bridge module, which was the shipping
@@ -723,13 +735,14 @@ void InstallWebSocketBridge() {
                       // any native handler both point the same direction: something was
                       // supposed to close this connection here and doesn't anymore.
                       //
-                      // CONFESSION: this is a live experiment, not a confirmed fix. Closes
-                      // remoteWs only (not gameWsPtr, which the Close handler below
-                      // documents as deadlock-prone under the loader lock) — the game
-                      // discovers the closed remote on its next send attempt, same
-                      // documented-safe path already used for a real remote-initiated
-                      // close. Server mode only; client mode is already confirmed working
-                      // end-to-end and this must not touch it.
+                      // This is production behavior, not an experiment: it runs
+                      // unconditionally in server mode, with no flag to disable it, and
+                      // has been live for weeks. Closes remoteWs only (not gameWsPtr,
+                      // which the Close handler below documents as deadlock-prone under
+                      // the loader lock) — the game discovers the closed remote on its
+                      // next send attempt, same documented-safe path already used for a
+                      // real remote-initiated close. Server mode only; client mode is
+                      // already confirmed working end-to-end and this must not touch it.
                       //
                       // BUG FOUND AND FIXED, same day: `rsym` above only ever reflects the
                       // FIRST message in this frame. Nakama sends LoginSuccess and
@@ -752,8 +765,9 @@ void InstallWebSocketBridge() {
                           if (ftotal > fremaining) break;  // truncated — stop, don't misread
                           if (fsym == 0x43e6963ac76beee4) {
                             Log(EchoVR::LogLevel::Info,
-                                "[NEVR.WS] DIAG STcpConnectionUnrequireEvent seen in-frame (server mode) — "
-                                "closing remoteWs to test the disconnect-then-BeginMultiplayer hypothesis");
+                                "[NEVR.WS] STcpConnectionUnrequireEvent seen in-frame (server mode) — "
+                                "closing remoteWs so the game detects the closed connection on its next "
+                                "send and proceeds to BeginMultiplayer");
                             pairPtr->remoteWs->close();
                             break;
                           }
@@ -862,7 +876,9 @@ void InstallWebSocketBridge() {
               int msgIdx = 0;
               while (remaining >= 24) {
                 if (memcmp(p, marker_bytes, 8) != 0) {
-                  Log(EchoVR::LogLevel::Warning, "[NEVR.WS] game->server: bad marker at offset %zu",
+                  Log(EchoVR::LogLevel::Warning,
+                      "[NEVR.WS] game->server: bad marker at offset %zu — per-message diagnostic "
+                      "decode aborted here, raw frame still forwarded to remote unparsed",
                       msg->str.size() - remaining);
                   break;
                 }
@@ -878,7 +894,7 @@ void InstallWebSocketBridge() {
                   snprintf(symBuf, sizeof(symBuf), "0x%016llx",
                            (unsigned long long)sym);
                 }
-                Log(EchoVR::LogLevel::Debug, "[NEVR.WS] game->server [%d]: sym=%s len=%llu (conn=%s)",
+                Log(EchoVR::LogLevel::Debug, "[NEVR.WS] game->server [%d]: sym=%s len=%llu ws_conn_id=%s",
                     msgIdx, symBuf, (unsigned long long)len,
                     connState->getId().c_str());
                 // Hex dump PlayerSessionRequest (0x9af2fab2a0c81a05) for debugging
@@ -903,18 +919,17 @@ void InstallWebSocketBridge() {
                       (unsigned long long)routingId, (unsigned long long)targetUserId,
                       (unsigned long long)sessionGuid);
                 }
-                // 2026-09-13 DIAG (Andrew): does the client ever send this at all,
-                // regardless of which internal path constructs it? Logged at Info
-                // (not Debug) on purpose — no global log-level change needed to see
-                // it. Same wire shape as FriendInviteRequest above.
                 // SNSPartyInviteRequest (0xcf13f934540b5f5e): RoutingID(8)+UUID(16)+SessionGUID(8)+TargetUserID(8)
+                // (was briefly logged at Info for a 2026-09-13 investigation into whether
+                // the client ever sends this; that investigation window has closed, back
+                // to Debug alongside the other per-message decodes in this loop.)
                 if (sym == 0xcf13f934540b5f5e && len >= 0x28) {
                   uint64_t routingId, sessionGuid, targetUserId;
                   memcpy(&routingId, p + 24, 8);
                   memcpy(&sessionGuid, p + 24 + 24, 8);
                   memcpy(&targetUserId, p + 24 + 32, 8);
-                  Log(EchoVR::LogLevel::Info,
-                      "[NEVR.WS] DIAG PartyInviteRequest SENT: routing=%llu target=%llu session=%llu",
+                  Log(EchoVR::LogLevel::Debug,
+                      "[NEVR.WS]   PartyInviteRequest: routing=%llu target=%llu session=%llu",
                       (unsigned long long)routingId, (unsigned long long)targetUserId,
                       (unsigned long long)sessionGuid);
                 }
@@ -924,7 +939,9 @@ void InstallWebSocketBridge() {
                 }
                 size_t total = 24 + (size_t)len;
                 if (total > remaining) {
-                  Log(EchoVR::LogLevel::Warning, "[NEVR.WS]   truncated: need %llu but only %zu remaining",
+                  Log(EchoVR::LogLevel::Warning,
+                      "[NEVR.WS]   truncated: need %llu but only %zu remaining — per-message "
+                      "diagnostic decode aborted here, raw frame still forwarded to remote unparsed",
                       (unsigned long long)total, remaining);
                   break;
                 }
@@ -943,7 +960,8 @@ void InstallWebSocketBridge() {
               if (pair->remoteOpen) {
                 if (msg->binary) {
                   auto info = pair->remoteWs->sendBinary(msg->str);
-                  Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> forwarded (success=%d)", info.success);
+                  Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> forwarded (success=%s)",
+                      info.success ? "true" : "false");
                 } else {
                   pair->remoteWs->sendText(msg->str);
                 }
@@ -953,7 +971,17 @@ void InstallWebSocketBridge() {
                     pair->pendingToRemote.size());
               }
             } else {
-              Log(EchoVR::LogLevel::Warning, "[NEVR.WS]   -> DROPPED (no pair found)");
+              // N.B.: if g_pairs loses an entry (e.g. a Close/Message race) while the
+              // game keeps sending on that socket, every subsequent message would
+              // independently re-trigger this WARNING with zero new signal after the
+              // first — count instead of flooding.
+              static std::atomic<uint64_t> s_droppedCount{0};
+              uint64_t dropped = ++s_droppedCount;
+              if (dropped == 1 || dropped % 100 == 0) {
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.WS]   -> DROPPED (no pair found) — %llu total occurrences",
+                    (unsigned long long)dropped);
+              }
             }
             break;
           }

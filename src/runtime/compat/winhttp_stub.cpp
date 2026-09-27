@@ -330,6 +330,8 @@ static HRESULT STDMETHODCALLTYPE Stub_SetProxy(void*, long, VARIANT, VARIANT) {
 // interface the game actually uses. Kept for reference; not in the vtable.
 __attribute__((unused))
 static HRESULT STDMETHODCALLTYPE Stub_SetCredentials(void*, BSTR, BSTR, long) {
+  // Unreachable in production: this function is marked unused and is not
+  // wired into s_vtbl below — the Log() call here never fires.
   Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetCredentials called");
   return S_OK;
 }
@@ -346,9 +348,29 @@ static HRESULT STDMETHODCALLTYPE Stub_Open(void* pThis, BSTR Method, BSTR Url, V
   return S_OK;
 }
 
+// Header names whose values may carry credentials. Matched case-insensitively.
+// The value is never logged for these — same never-log-credentials policy
+// ws_bridge.cpp documents for the password field (see its line ~436).
+static bool IsCredentialHeaderName(const wchar_t* header) {
+  if (!header) return false;
+  static const wchar_t* const kCredentialHeaders[] = {
+      L"Authorization", L"Proxy-Authorization", L"Cookie", L"Set-Cookie", L"X-Api-Key",
+  };
+  for (const wchar_t* name : kCredentialHeaders) {
+    if (_wcsicmp(header, name) == 0) return true;
+  }
+  return false;
+}
+
 static HRESULT STDMETHODCALLTYPE Stub_SetRequestHeader(void* pThis, BSTR Header, BSTR Value) {
   if (Header && Value) SELF(pThis)->m_requestHeaders[Header] = Value;
-  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetRequestHeader %ls: %ls", Header ? Header : L"(null)", Value ? Value : L"(null)");
+  if (IsCredentialHeaderName(Header)) {
+    Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetRequestHeader %ls: ***redacted***",
+        Header ? Header : L"(null)");
+  } else {
+    Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetRequestHeader %ls: %ls", Header ? Header : L"(null)",
+        Value ? Value : L"(null)");
+  }
   return S_OK;
 }
 
@@ -375,7 +397,6 @@ static HRESULT STDMETHODCALLTYPE Stub_GetAllResponseHeaders(void* pThis, BSTR* H
 }
 
 static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Send (vtbl, url=%ls)", SELF(pThis)->m_url.empty() ? L"(none)" : SELF(pThis)->m_url.c_str());
   auto* self = SELF(pThis);
   CURL* curl = curl_easy_init();
   if (!curl) return E_FAIL;
@@ -416,7 +437,8 @@ static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
   curl_slist_free_all(hlist);
 
   if (res != CURLE_OK) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.HTTP] curl failed: %s", curl_easy_strerror(res));
+    Log(EchoVR::LogLevel::Warning, "[NEVR.HTTP] curl failed url=%s error=%s", url.c_str(),
+        curl_easy_strerror(res));
     curl_easy_cleanup(curl);
     return E_FAIL;
   }
