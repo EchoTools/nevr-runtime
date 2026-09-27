@@ -1,5 +1,6 @@
 #include "runtime/lifecycle/config.h"
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/log/url_diagnostics.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/service_config.h"  // N133 S3: NEVR keys now come from config.yaml
 #include "runtime/ext/module_loader.h"
@@ -277,14 +278,20 @@ static CHAR* GetServiceHostWithFallback(const CHAR* serviceKey, const CHAR* defa
   int source = 2;  // 0 primary, 1 loginservice_host fallback, 2 none (use default)
   const char* host = NevrCfgServiceHost(serviceKey, &source);
   if (source == 0) {
-    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service override [%s]: %s", serviceKey, host);
+    const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+        "[NEVR.PATCH] Service override [" + std::string(serviceKey) + "]: ", host ? host : "");
+    Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
     return const_cast<CHAR*>(host);
   }
   if (source == 1) {
-    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service fallback [%s → loginservice_host]: %s", serviceKey, host);
+    const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+        "[NEVR.PATCH] Service fallback [" + std::string(serviceKey) + " → loginservice_host]: ", host ? host : "");
+    Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
     return const_cast<CHAR*>(host);
   }
-  Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Service default [%s]: %s", serviceKey, defaultUrl);
+  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+      "[NEVR.PATCH] Service default [" + std::string(serviceKey) + "]: ", defaultUrl ? defaultUrl : "");
+  Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
   return const_cast<CHAR*>(defaultUrl);
 }
 
@@ -307,7 +314,10 @@ static CHAR* AutoRelayThroughBridge(const CHAR* serviceKey, CHAR* url) {
   const char* relayUrl = NevrCfgAutoRelay(GetWebSocketBridgePort());
   if (relayUrl == NULL) return url;
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] auto-relay [%s] through bridge: %s -> %s", serviceKey, url, relayUrl);
+  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
+      "[NEVR.PATCH] auto-relay [" + std::string(serviceKey) + "] through bridge: ",
+      url ? url : "", " -> ", relayUrl);
+  Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
   return const_cast<CHAR*>(relayUrl);
 }
 
@@ -373,7 +383,9 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
     }
 
     if (uri != originalUri) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] HTTP(S) connection redirected: %s → %s", originalUri, uri);
+      const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
+          "[NEVR.PATCH] HTTP(S) connection redirected: ", originalUri ? originalUri : "", " → ", uri ? uri : "");
+      Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
     }
   }
 
@@ -427,20 +439,15 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
       NevrCfgRedirect(result, httpTarget, IsWebSocketBridgeActive() ? 1 : 0, GetWebSocketBridgePort());
   if (redirected == NULL) return result;
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] service redirect key=%s from=%s to=%s", keyName, result, redirected);
+  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
+      "[NEVR.PATCH] service redirect key=" + std::string(keyName) + " from=", result, " to=", redirected);
+  Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
   return const_cast<CHAR*>(redirected);
 }
 
 CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValue, BOOL reportFailure) {
   // Call the original first
   CHAR* result = EchoVR::JsonValueAsString(root, keyName, defaultValue, reportFailure);
-
-  // Diagnostic: log every config key lookup so we can trace service-host reads
-  // (Debug level — enable via log_filter config for investigations)
-  if (keyName != NULL) {
-    Log(EchoVR::LogLevel::Debug, "[NEVR.CONFIG] JsonValueAsString key='%s' result='%s' default='%s'",
-        keyName, result ? result : "(null)", defaultValue ? defaultValue : "(null)");
-  }
 
   // Redirect any readyatdawn.com service URLs to echovrce.com
   result = RedirectServiceUrl(keyName, result);
@@ -451,8 +458,12 @@ CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValu
   if (g_earlyConfigPtr != NULL && keyName != NULL && root != g_earlyConfigPtr && result == defaultValue) {
     CHAR* override = EchoVR::JsonValueAsString(g_earlyConfigPtr, keyName, NULL, false);
     if (override != NULL && override[0] != '\0') {
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] config override key=%s from=%s to=%s", keyName,
-          result ? result : "(null)", override);
+      if (s_serviceRedirectsArmed.load(std::memory_order_acquire)) {
+        const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
+            "[NEVR.PATCH] config override key=" + std::string(keyName) + " from=", result ? result : "", " to=",
+            override);
+        Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
+      }
       return override;
     }
   }

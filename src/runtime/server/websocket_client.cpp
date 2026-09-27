@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include "abi/echovr.h"
+#include "runtime/log/url_diagnostics.h"
 
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
@@ -51,7 +52,9 @@ BOOL WebSocketClient::Connect(const CHAR* uri, const std::string& bearerToken) {
     return FALSE;
   }
 
-  Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Connecting to ServerDB at %s", uri);
+  const std::string diagnostic =
+      LogDiagnostics::FormatRedactedUrlDiagnostic("[WEBSOCKET] Connecting to ServerDB at ", uri);
+  Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
 
   // Set the URL
   webSocket_->setUrl(std::string(uri));

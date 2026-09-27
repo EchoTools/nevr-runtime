@@ -1,10 +1,10 @@
-#include "runtime/server/url_diagnostics.h"
+#include "runtime/log/url_diagnostics.h"
 
 #include <curl/curl.h>
 
 #include <memory>
 
-namespace GameServer {
+namespace LogDiagnostics {
 namespace {
 constexpr size_t kMaximumDiagnosticUrlSize = 8192;
 constexpr char kMalformedUrl[] = "[redacted malformed URL]";
@@ -73,4 +73,26 @@ std::string RedactUrlForDiagnostics(std::string_view input) {
   return output;
 }
 
-}  // namespace GameServer
+std::string FormatRedactedUrlDiagnostic(std::string_view prefix, std::string_view url, std::string_view suffix) {
+  std::string message;
+  message.reserve(prefix.size() + url.size() + suffix.size());
+  message.append(prefix);
+  message.append(RedactUrlForDiagnostics(url));
+  message.append(suffix);
+  return message;
+}
+
+std::string FormatRedactedUrlPairDiagnostic(std::string_view prefix, std::string_view firstUrl,
+                                            std::string_view separator, std::string_view secondUrl,
+                                            std::string_view suffix) {
+  std::string message;
+  message.reserve(prefix.size() + firstUrl.size() + separator.size() + secondUrl.size() + suffix.size());
+  message.append(prefix);
+  message.append(RedactUrlForDiagnostics(firstUrl));
+  message.append(separator);
+  message.append(RedactUrlForDiagnostics(secondUrl));
+  message.append(suffix);
+  return message;
+}
+
+}  // namespace LogDiagnostics

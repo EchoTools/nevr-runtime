@@ -12,6 +12,7 @@
 #include "abi/echovr_functions.h"
 #include "telemetry/v2/capture.pb.h"
 #include "telemetry/v2/echo_arena.pb.h"
+#include "runtime/log/url_diagnostics.h"
 
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
@@ -94,7 +95,8 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
     }
   });
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.TELEMETRY] Connecting to %s", uri.c_str());
+  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.TELEMETRY] Connecting to ", uri);
+  Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
   m_ws->start();
   return true;
 }

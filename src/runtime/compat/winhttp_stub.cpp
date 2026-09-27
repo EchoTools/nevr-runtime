@@ -7,6 +7,7 @@
 #include <new>
 
 #include "core/logging.h"
+#include "runtime/log/url_diagnostics.h"
 
 // IWinHttpRequest IID — {A1C9FEEE-0617-4F23-9D58-8961EA43567C}
 static const IID IID_IWinHttpRequest = {0xA1C9FEEE, 0x0617, 0x4F23, {0x9D, 0x58, 0x89, 0x61, 0xEA, 0x43, 0x56, 0x7C}};
@@ -283,8 +284,10 @@ static HRESULT STDMETHODCALLTYPE Stub_Invoke(void* pThis, DISPID dispIdMember, R
       // Send([Body]) — no-op: succeed without real HTTP.
       // The game calls this for Oculus telemetry/health checks which no longer
       // exist. The ws_bridge handles actual service traffic independently.
-      Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Send DISPID=5 (no-op) url=%ls",
-          self->m_url.empty() ? L"(none)" : self->m_url.c_str());
+      const std::string requestUrl = WideToUtf8(self->m_url.empty() ? L"" : self->m_url.c_str());
+      const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+          "[NEVR.HTTP] Send DISPID=5 (no-op) url=", requestUrl);
+      Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
       self->m_sent = true;
       self->m_statusCode = 200;
       return S_OK;
@@ -344,7 +347,10 @@ static HRESULT STDMETHODCALLTYPE Stub_Open(void* pThis, BSTR Method, BSTR Url, V
   self->m_responseBody.clear();
   self->m_responseHeaders.clear();
   self->m_statusCode = 0;
-  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Open %ls %ls", Method ? Method : L"(null)", Url ? Url : L"(null)");
+  const std::string method = Method ? WideToUtf8(Method) : "(null)";
+  const std::string url = Url ? WideToUtf8(Url) : "";
+  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.HTTP] Open " + method + " ", url);
+  Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
   return S_OK;
 }
 
@@ -404,7 +410,8 @@ static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
   std::string url = WideToUtf8(self->m_url.c_str());
   std::string method = WideToUtf8(self->m_method.c_str());
 
-  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] Send %s %s", method.c_str(), url.c_str());
+  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.HTTP] Send " + method + " ", url);
+  Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
 
   curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
   if (_stricmp(method.c_str(), "POST") == 0)
@@ -437,8 +444,9 @@ static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
   curl_slist_free_all(hlist);
 
   if (res != CURLE_OK) {
-    Log(EchoVR::LogLevel::Warning, "[NEVR.HTTP] curl failed url=%s error=%s", url.c_str(),
-        curl_easy_strerror(res));
+    const std::string failure = LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.HTTP] curl failed url=", url,
+                                                            std::string(" error=") + curl_easy_strerror(res));
+    Log(EchoVR::LogLevel::Warning, "%s", failure.c_str());
     curl_easy_cleanup(curl);
     return E_FAIL;
   }

@@ -11,6 +11,7 @@
 #include "core/auth_token.h"
 #include "auth_token_refresh.h"
 #include "runtime/server/constants.h"
+#include "runtime/log/url_diagnostics.h"
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
@@ -147,24 +148,6 @@ static std::string Ipv4ToString(uint32_t ip) {
   char buf[16];
   snprintf(buf, sizeof(buf), "%u.%u.%u.%u", (ip >> 0) & 0xFF, (ip >> 8) & 0xFF, (ip >> 16) & 0xFF, (ip >> 24) & 0xFF);
   return buf;
-}
-
-// Redact a "password=" query parameter from a serverdb URI before logging.
-// The legacy url-param auth path embeds the operator's password directly in
-// the connection URI (see RequestRegistration) — that value must never reach
-// the log.
-static std::string RedactPasswordInUri(const char* uri) {
-  if (!uri) return "";
-  std::string s(uri);
-  size_t pos = s.find("password=");
-  if (pos == std::string::npos) return s;
-  size_t valueStart = pos + std::strlen("password=");
-  size_t valueEnd = s.find('&', valueStart);
-  std::string redacted = s.substr(0, valueStart) + "REDACTED";
-  if (valueEnd != std::string::npos) {
-    redacted += s.substr(valueEnd);
-  }
-  return redacted;
 }
 
 // Extract slot index from message payload
@@ -1433,7 +1416,9 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
         snprintf(constructedUri + written, sizeof(constructedUri) - written, "%sregions=%s", sep, regions);
       }
       serverDbUri = constructedUri;
-      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] constructed serverdb URI for token auth: %s", constructedUri);
+      const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+          "[NEVR.GAMESERVER] constructed serverdb URI for token auth: ", constructedUri);
+      Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
     } else {
       // Legacy url-param auth (no nevr_serverdb_uri configured): connect via
       // nevr_socket_uri with discord_id+password — the pre-token-auth behavior.
@@ -1461,8 +1446,9 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
             discordId);
       } else {
         serverDbUri = "ws://localhost:777/serverdb";
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] No nevr_serverdb_uri/nevr_socket_uri — using default serverdb URI: %s", serverDbUri);
+        const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+            "[NEVR.GAMESERVER] No nevr_serverdb_uri/nevr_socket_uri — using default serverdb URI: ", serverDbUri);
+        Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
       }
     }
   }
@@ -1472,8 +1458,9 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   if (!m_wsClient->Connect(serverDbUri, wsToken)) {
     // serverDbUri may be the password-bearing legacy-auth URI at this point
     // (see the constructedUri branch above) — redact before logging.
-    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] failed to initiate WebSocket connection uri=%s",
-        RedactPasswordInUri(serverDbUri).c_str());
+    const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+        "[NEVR.GAMESERVER] failed to initiate WebSocket connection uri=", serverDbUri ? serverDbUri : "");
+    Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
     return;
   }
 

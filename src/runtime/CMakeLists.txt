@@ -33,6 +33,7 @@ set(PATCHES_SOURCES
     "log/builtin_filter.cpp"
     "log/symcache.cpp"
     "log/symcache_data.cpp"
+    "log/url_diagnostics.cpp"
     "patch/broadcaster_guard.cpp"
     "hook/dll_load_hook.cpp"
     "patch/asset_cdn.cpp"
@@ -41,7 +42,6 @@ set(PATCHES_SOURCES
     "server/gameserver.cpp"
     "server/messages.cpp"
     "server/server_context.cpp"
-    "server/url_diagnostics.cpp"
     "server/websocket_client.cpp"
     "server/telemetry_streamer.cpp"
     "server/upnp.cpp"
@@ -81,6 +81,7 @@ set(PATCHES_HEADERS
     "patch/mic_provider.h"
     "log/builtin_filter.h"
     "log/symcache.h"
+    "log/url_diagnostics.h"
     "patch/broadcaster_guard.h"
     "hook/dll_load_hook.h"
     "patch/headless_graphics.h"
@@ -88,7 +89,6 @@ set(PATCHES_HEADERS
     "server/gameserver.h"
     "server/server_context.h"
     "server/websocket_client.h"
-    "server/url_diagnostics.h"
     "server/telemetry_streamer.h"
     "server/messages.h"
     "server/upnp.h"
@@ -140,7 +140,7 @@ set_source_files_properties(lifecycle/service_map.cpp lifecycle/service_config.c
 # no windows.h. Same reason as service_map.cpp: it must stay PCH-agnostic (defines
 # NOMINMAX before nlohmann, which pulls <limits>) so the test links it standalone.
 set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-set_source_files_properties(server/websocket_client.cpp server/url_diagnostics.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(log/url_diagnostics.cpp server/websocket_client.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 set_target_properties(nevr_runtime PROPERTIES
   OUTPUT_NAME "BugSplat64"
@@ -290,8 +290,8 @@ if(BUILD_TESTING)
     # malformed and credential-bearing inputs are checked without service calls.
     add_executable(test_url_diagnostics
       tests/test_url_diagnostics.cpp
-      server/url_diagnostics.cpp)
-    set_source_files_properties(tests/test_url_diagnostics.cpp server/url_diagnostics.cpp
+      log/url_diagnostics.cpp)
+    set_source_files_properties(tests/test_url_diagnostics.cpp log/url_diagnostics.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_url_diagnostics PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_url_diagnostics PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
@@ -321,6 +321,7 @@ if(BUILD_TESTING)
       "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp"
       ext/plugin_loader.cpp
       ext/module_loader.cpp
+      log/url_diagnostics.cpp
       compat/ws_bridge.cpp
       hook/symbol_corpus.cpp
       # N84: plugin_loader calls HookGuard::VerifyAll after each plugin init.
@@ -348,6 +349,7 @@ if(BUILD_TESTING)
       tests/test_behavioral.cpp
       ext/plugin_loader.cpp
       ext/module_loader.cpp
+      log/url_diagnostics.cpp
       compat/ws_bridge.cpp
       hook/symbol_corpus.cpp
       patch/broadcaster_hook_stats.cpp
@@ -380,7 +382,7 @@ if(BUILD_TESTING)
     endif()
     target_link_libraries(test_behavioral PRIVATE
       GTest::gtest GTest::gtest_main
-      ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json minhook
+      ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json minhook CURL::libcurl
       ws2_32 psapi
     )
 

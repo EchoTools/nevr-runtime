@@ -26,6 +26,7 @@
 #include "runtime/ext/plugin_loader.h"  // N112: plugin manifest
 #include "runtime/lifecycle/cli.h"  // g_isServer
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
+#include "runtime/log/url_diagnostics.h"
 #include "core/logging.h"
 #include <exception>
 #include <stdexcept>
@@ -466,8 +467,9 @@ void InstallWebSocketBridge() {
                 // If we left a trailing ? with nothing after, remove it
                 if (!remoteUrl.empty() && remoteUrl.back() == '?') remoteUrl.pop_back();
               }
-              Log(EchoVR::LogLevel::Debug,
-                  "[NEVR.WS] Matchmaker conn=%d using protobuf URL: %s", connIdx, remoteUrl.c_str());
+              const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+                  "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: ", remoteUrl);
+              Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
             }
             remote->setUrl(remoteUrl);
             remote->disableAutomaticReconnection();
@@ -548,8 +550,9 @@ void InstallWebSocketBridge() {
                     case ix::WebSocketMessageType::Open: {
                       std::lock_guard<std::mutex> lk(g_pairsMutex);
                       pairPtr->remoteOpen = true;
-                      Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Remote open (conn=%d): %s",
-                          connIdx, g_remoteUri.c_str());
+                      const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
+                          "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + "): ", g_remoteUri);
+                      Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
 
                       // Inject LoginRequest on login connections (not config).
                       // pnsrad.dll won't send its own because it has no user identity
@@ -861,8 +864,11 @@ void InstallWebSocketBridge() {
             }
             // Start after insertion so the remote callback can find the pair in g_pairs
             remote->start();
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), bridging to %s",
-                connIdx, (void*)gameWsPtr, g_remoteUri.c_str());
+            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p)", connIdx,
+                static_cast<void*>(gameWsPtr));
+            const std::string remoteDiagnostic =
+                LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
+            Log(EchoVR::LogLevel::Info, "%s", remoteDiagnostic.c_str());
             break;
           }
 
@@ -1042,9 +1048,10 @@ void InstallWebSocketBridge() {
   g_server->start();
   g_bridgeEnabled = true;
 
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.WS] Proxy listening on ws://127.0.0.1:%u -> %s",
-      g_proxyPort, g_remoteUri.c_str());
+  const std::string localUri = "ws://127.0.0.1:" + std::to_string(g_proxyPort);
+  const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
+      "[NEVR.WS] Proxy listening on ", localUri, " -> ", g_remoteUri);
+  Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
 
   // N146: pnsradmatchmaking uses Rad's R14NETCLIENT with a hardcoded
   // fallback host/port (matchmaker.readyatdawn.com) when matchingservice_host
