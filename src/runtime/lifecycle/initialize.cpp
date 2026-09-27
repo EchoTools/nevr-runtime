@@ -385,5 +385,6 @@ VOID Initialize() {
   // TeeFprintf calls after this write to stderr only.
   BootLogTee::Close();
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] All hooks installed");
+  Log(g_bootHookFailed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
+      "[NEVR.PATCH] boot hooks installed ok=%s", g_bootHookFailed ? "false" : "true");
 }

@@ -112,8 +112,7 @@ const nevr::NevrConfig& NevrCfg() {
                   "never silently degrade to no login)",
                   path.c_str(), e.what());
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.CONFIG] config.yaml parse error (%s) — NEVR config keys use built-in defaults",
-          e.what());
+          "[NEVR.CONFIG] continuing with built-in defaults after config.yaml rejection (client mode)");
       return nevr::NevrConfig();
     }
   }();
