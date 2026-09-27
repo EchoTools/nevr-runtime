@@ -38,9 +38,20 @@ CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValu
 FLOAT CJsonGetFloatHook(PVOID root, const CHAR* path, FLOAT defaultValue, INT32 required);
 
 /// <summary>
-/// Early-load _local/config.json so URI redirect hooks work before the game loads its config.
+/// Early-load _local/config.json, if one exists. OPTIONAL (issue #21): every NEVR
+/// setting lives in config.yaml; config.json only carries keys the stock engine
+/// reads natively. Absent -> Info, present-but-unparseable -> Warning, never fatal.
 /// </summary>
 VOID LoadEarlyConfig();
 
-/// Pointer to the early-loaded config JSON (set by LoadEarlyConfig).
+/// Pointer to the early-loaded config JSON (set by LoadEarlyConfig). NULL when no
+/// _local/config.json exists — a supported state, not an error.
 extern EchoVR::Json* g_earlyConfigPtr;
+
+/// <summary>
+/// Allow RedirectServiceUrl to act. Called once from RunDeferredRuntimeBootstrap
+/// at the point g_earlyConfigPtr used to become non-null, because redirect
+/// resolution is the FIRST access to the lazily loaded config.yaml singleton and
+/// must not happen before the bootstrap (see RedirectServiceUrl).
+/// </summary>
+VOID ArmServiceRedirects();

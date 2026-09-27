@@ -28,6 +28,8 @@
 #include "runtime/hook/addresses.h"
 #include "runtime/patch/binary_bug_fixes.h"
 #include "runtime/patch/xpid_patch.h"
+#include "runtime/patch/pnsrad_enabler.h"
+#include "runtime/patch/mic_provider.h"
 
 #include <windows.h>
 
@@ -86,6 +88,35 @@ static EchoVR::IServerLib* ServerLibFactory() {
 typedef void* (*CSysDLL_GetSymbol_fn)(void* dll_handle, const char* symbol_name);
 static CSysDLL_GetSymbol_fn g_original_GetSymbol = nullptr;
 
+// GH#15 / docs/design/2026-09-21-mic-provider-voip-fix.md: pnsrad.dll's
+// MicAvailable/MicCreate/MicDetected/MicRead are identical-code-folded onto
+// one address, and MicDestroy/MicStart/MicStop onto a second — a MinHook
+// detour on either address cannot distinguish which export name the game
+// meant to resolve. This is the SAME address-collision trap already
+// documented below for RadPluginShutdown (N128): 0x1400eaef0 is the game's
+// one symbol-resolution function, and it's what NRadEngine::CPlatformService::
+// MicRead (echovr.exe 0x14060cad0) calls to resolve "MicRead" etc. on a
+// provider handle. So the mic exports are intercepted HERE, by name, against
+// pnsrad.dll's module handle specifically — never by hooking pnsrad's own
+// stub bodies.
+static void* MicProviderSymbolOverride(void* dll_handle, const char* symbol_name) {
+  if (!symbol_name) return nullptr;
+  uintptr_t pnsradBase = PnsradEnabler::GetModuleBase();
+  if (pnsradBase == 0 || reinterpret_cast<uintptr_t>(dll_handle) != pnsradBase) return nullptr;
+
+  if (strcmp(symbol_name, "MicAvailable") == 0) return reinterpret_cast<void*>(&MicProvider::MicAvailable);
+  if (strcmp(symbol_name, "MicCreate") == 0) return reinterpret_cast<void*>(&MicProvider::MicCreate);
+  if (strcmp(symbol_name, "MicDetected") == 0) return reinterpret_cast<void*>(&MicProvider::MicDetected);
+  if (strcmp(symbol_name, "MicRead") == 0) return reinterpret_cast<void*>(&MicProvider::MicRead);
+  if (strcmp(symbol_name, "MicStart") == 0) return reinterpret_cast<void*>(&MicProvider::MicStart);
+  if (strcmp(symbol_name, "MicStop") == 0) return reinterpret_cast<void*>(&MicProvider::MicStop);
+  if (strcmp(symbol_name, "MicDestroy") == 0) return reinterpret_cast<void*>(&MicProvider::MicDestroy);
+  // MicBufferSize/MicCaptureSize/MicSampleRate are NOT overridden: pnsrad's
+  // own (unmodified) answers are already correct (24000/2400/48000) and
+  // nothing downstream needs them to change.
+  return nullptr;
+}
+
 static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
   if (symbol_name && strcmp(symbol_name, "ServerLib") == 0) {
     static bool logged = false;
@@ -94,6 +125,14 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
         logged = true;
     }
     return reinterpret_cast<void*>(&ServerLibFactory);
+  }
+  if (void* micFn = MicProviderSymbolOverride(dll_handle, symbol_name)) {
+    static bool logged = false;
+    if (!logged) {
+      BootLogTee::TeeFprintf("[NEVR.MIC] pnsrad mic export(s) resolved -> WASAPI provider\n");
+      logged = true;
+    }
+    return micFn;
   }
   void* result = g_original_GetSymbol(dll_handle, symbol_name);
 
@@ -383,6 +422,8 @@ VOID Initialize() {
   // Boot phase complete — close the boot log file.  From here on, Log() and
   // the builtin_log_filter own the rotating JSONL file.  Any remaining
   // TeeFprintf calls after this write to stderr only.
+  BootLogTee::TeeFprintf(
+      "[NEVR.BOOT] initialization complete; continuing in %%LOCALAPPDATA%%\\EchoVR\\logs\\nevr-<timestamp>.jsonl\n");
   BootLogTee::Close();
 
   Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] All hooks installed");

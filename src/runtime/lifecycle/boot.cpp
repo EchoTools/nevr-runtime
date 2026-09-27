@@ -163,7 +163,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       trigger ? trigger : "(unknown)");
 
   // Deferred from Initialize() — file I/O deadlocks during DllMain loader lock.
+  // config.json is optional (issue #21); redirects are armed here whether or not
+  // one was found — this is where g_earlyConfigPtr used to open that gate.
   LoadEarlyConfig();
+  ArmServiceRedirects();
   InstallResourceOverride();
 
   // Early-detect -server before auth — full CLI parse happens below.
@@ -190,13 +193,17 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     InstallFatalErrorHandler();
 
     // Deferred fatal-condition checks — these conditions are detected in
-    // Initialize()/LoadEarlyConfig() before g_isServer is known, so we check
-    // them now that the fatal-error handler is installed.  If any fail, the
-    // server dies immediately with the cause as the last log line rather than
-    // limping along in a degraded state for hours.
-    if (g_earlyConfigPtr == NULL) {
-      ServerFatal("_local/config.json not found or unparseable — server requires configuration");
-    }
+    // Initialize() before g_isServer is known, so we check them now that the
+    // fatal-error handler is installed.  If any fail, the server dies
+    // immediately with the cause as the last log line rather than limping along
+    // in a degraded state for hours.
+    //
+    // Issue #21: a missing/unparseable _local/config.json is deliberately NOT
+    // one of them any more. That check (N48) predates N133, which moved every
+    // NEVR setting to config.yaml; config.yaml has its own fail-loud policy
+    // (service_config.cpp NevrCfg()). config.json now only feeds keys the stock
+    // engine reads natively (publisher_lock is supplied by JsonValueAsStringHook
+    // when absent); a server with no config.json boots and logs in.
     if (g_bootHookFailed) {
       ServerFatal("One or more boot hooks failed to install — server would be degraded");
     }

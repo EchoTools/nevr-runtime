@@ -26,7 +26,12 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgHelpString(pArgSyntax, "-noconsole", "[NEVR] Disable console window creation");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-config", 1, 1, FALSE);
-  EchoVR::AddArgHelpString(pArgSyntax, "-config", "[NEVR] Specify a custom path to config.yaml");
+  // Issue #22: this said "custom path to config.yaml", but the path itself is
+  // loaded as the game's native JSON config (LoadLocalConfigHook), and only its
+  // DIRECTORY is searched for config.yaml (service_config.cpp FindNevrConfigYamlPath).
+  EchoVR::AddArgHelpString(pArgSyntax, "-config",
+      "[NEVR] Path to a JSON file the game loads instead of _local/config.json; "
+      "config.yaml is looked for in the same directory");
 
   EchoVR::AddArgSyntax(pArgSyntax, "-region", 1, 1, FALSE);
   EchoVR::AddArgHelpString(pArgSyntax, "-region", "[NEVR] Set the matchmaking region");
@@ -61,12 +66,15 @@ UINT64 BuildCmdLineSyntaxDefinitionsHook(PVOID pGame, PVOID pArgSyntax) {
   EchoVR::AddArgHelpString(pArgSyntax, "-allow-dbgcore",
       "[NEVR] Allow dbgcore.dll in the game directory (legacy injection)");
 
+  // -config-path is NOT ignored: boot.cpp handles it exactly like -config.
+  EchoVR::AddArgSyntax(pArgSyntax, "-config-path", 1, 1, FALSE);
+  EchoVR::AddArgHelpString(pArgSyntax, "-config-path", "[NEVR] Same as -config");
+
   // Backwards compat: accept deprecated flags without error (they're silently ignored)
   EchoVR::AddArgSyntax(pArgSyntax, "-timestep", 1, 1, FALSE);
   EchoVR::AddArgSyntax(pArgSyntax, "-fixedtimestep", 0, 0, FALSE);
   EchoVR::AddArgSyntax(pArgSyntax, "-noovr", 0, 0, FALSE);
   EchoVR::AddArgSyntax(pArgSyntax, "-headless", 0, 0, FALSE);
-  EchoVR::AddArgSyntax(pArgSyntax, "-config-path", 1, 1, FALSE);
 
   return result;
 }

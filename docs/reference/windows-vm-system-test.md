@@ -78,9 +78,13 @@ Artifacts (`stdout.txt`, `windows.txt`, `results.txt`, the probe output) go to
 - The stock install was extracted one level too deep
   (`_data\_data\<version>\...`); the game then cannot find its packages. Preflight
   reports this and how to fix it (a directory junction).
-- The server requires a parseable `_local\config.json`, searched at `bin\win10\_local`,
-  `bin\_local` and `<install root>\_local` (in that order). A `config.json` at the
-  install root itself is never read.
+- `_local\config.json` is optional (issue #21): every NEVR setting is in `config.yaml`,
+  and a missing or unparseable `config.json` no longer stops a server. When present it
+  is searched at `bin\win10\_local`, `bin\_local` and `<install root>\_local` (in that
+  order); a `config.json` at the install root itself is never read. The offline `boot`
+  rig still writes one, because its `*_host` keys are what point every service at
+  `127.0.0.1:1`. The `login` rig writes none, so it also exercises the no-`config.json`
+  boot.
 - `hook_liveness ... CBroadcaster::ReceiveLocalEvent entries=0` is the **normal**
   signature of a server that never got a service session (the offline config here
   produces it). It is a symptom of "no dispatch happened yet", not evidence of a

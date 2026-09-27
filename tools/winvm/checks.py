@@ -144,7 +144,8 @@ def check_hooks(log: str) -> list[Result]:
 # cover that.
 ENGINE_STAGES = (
     ("banner", r"Echo VR\n"),
-    ("config_loaded", r"Early config loaded from"),
+    # Either outcome of the (optional, issue #21) config.json search ends this stage.
+    ("config_loaded", r"Early config loaded from|no _local/config\.json under"),
     ("sysnet", r"\[SYSNET\] Found Internet connection"),
     ("broadcaster", r"hook_liveness name=CBroadcaster::Listen entries=[1-9]\d* entered=yes"),
 )

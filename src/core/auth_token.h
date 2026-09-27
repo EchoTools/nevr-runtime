@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <optional>
 #include <sstream>
@@ -203,73 +204,101 @@ static constexpr const char* kLocalSuffixes[] = {
     "../../_local",
 };
 
-// Reads _local/.credentials.json relative to the executable, with parent-directory fallback.
-// Returns empty token on missing file, parse failure, or malformed data.
-// Does NOT validate expiry — caller decides whether to use token or refresh.
-inline CachedAuthToken LoadCachedAuthToken() {
-    std::string contents;
-    std::string exeDir = GetExeDirectory();
+inline std::string JoinCredentialPath(const std::string& directory, const std::string& child) {
+    if (directory.empty()) return child;
+    const char last = directory.back();
+    if (last == '/' || last == '\\') return directory + child;
+#ifdef _WIN32
+    return directory + "\\" + child;
+#else
+    return directory + "/" + child;
+#endif
+}
+
+struct CredentialCacheLocation {
+    std::string directory;
+    std::string credentialsPath;
+};
+
+inline bool CredentialPathExists(const std::string& path) {
+    std::error_code error;
+    return std::filesystem::exists(std::filesystem::path(path), error) && !error;
+}
+
+// Select once for both cache reads and writes. Existing credentials take
+// precedence over YAML so a refresh cannot silently move an operator's cache;
+// absent credentials follow the first NEVR config, then exeDir/_local.
+inline CredentialCacheLocation SelectCredentialCacheLocation(const std::string& exeDir) {
     for (const auto* suffix : kLocalSuffixes) {
-        std::string path = exeDir + suffix + "/.credentials.json";
-        std::ifstream f(path, std::ios::binary);
-        if (f.is_open()) {
-            std::ostringstream ss;
-            ss << f.rdbuf();
-            contents = ss.str();
-            break;
+        const std::string directory = JoinCredentialPath(exeDir, suffix);
+        const std::string credentialsPath = JoinCredentialPath(directory, ".credentials.json");
+        if (CredentialPathExists(credentialsPath)) return {directory, credentialsPath};
+    }
+
+    for (const auto* suffix : kLocalSuffixes) {
+        const std::string directory = JoinCredentialPath(exeDir, suffix);
+        const std::string configPath = JoinCredentialPath(directory, "config.yaml");
+        std::ifstream config(configPath, std::ios::binary);
+        if (config.is_open()) {
+            return {directory, JoinCredentialPath(directory, ".credentials.json")};
         }
     }
-    if (contents.empty()) return {};
+
+    const std::string directory = JoinCredentialPath(exeDir, "_local");
+    return {directory, JoinCredentialPath(directory, ".credentials.json")};
+}
+
+// Reads a selected .credentials.json. Missing, unreadable, or malformed files
+// return an empty token; no farther cache is consulted after selection.
+inline CachedAuthToken LoadCachedAuthTokenFromPath(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) return {};
+
+    std::ostringstream contents;
+    contents << file.rdbuf();
+    if (file.bad()) return {};
 
     try {
-        auto j = nlohmann::json::parse(contents);
+        const auto json = nlohmann::json::parse(contents.str());
         CachedAuthToken result;
-        result.token = j.value("token", "");
-        result.token_expiry = j.value("token_expiry", uint64_t(0));
-        // Backwards compat: old format used "expiry" for token expiry
-        if (result.token_expiry == 0)
-            result.token_expiry = j.value("expiry", uint64_t(0));
-        result.refresh_token = j.value("refresh_token", "");
-        result.refresh_token_expiry = j.value("refresh_token_expiry", uint64_t(0));
-        result.user_id = j.value("user_id", "");
-        result.username = j.value("username", "");
+        result.token = json.value("token", "");
+        result.token_expiry = json.value("token_expiry", uint64_t(0));
+        // Backwards compat: old format used "expiry" for token expiry.
+        if (result.token_expiry == 0) result.token_expiry = json.value("expiry", uint64_t(0));
+        result.refresh_token = json.value("refresh_token", "");
+        result.refresh_token_expiry = json.value("refresh_token_expiry", uint64_t(0));
+        result.user_id = json.value("user_id", "");
+        result.username = json.value("username", "");
 
-        // Client-side cap for a token read FROM DISK. Current code never writes
-        // the access token, but a legacy file may carry one — and a token at rest
-        // is exactly the leak scenario this bounds. Fresh tokens are governed by
-        // their own JWT `exp` (GetJwtExpiry), not by this.
-        uint64_t now = static_cast<uint64_t>(time(nullptr));
-        uint64_t maxExpiry = now + kMaxDiskAccessTokenLifetimeSec;
-        if (result.token_expiry > maxExpiry) {
-            result.token_expiry = maxExpiry;
-        }
-
+        // Bound legacy access tokens at rest; fresh tokens use their JWT exp.
+        const uint64_t now = static_cast<uint64_t>(time(nullptr));
+        const uint64_t maxExpiry = now + kMaxDiskAccessTokenLifetimeSec;
+        if (result.token_expiry > maxExpiry) result.token_expiry = maxExpiry;
         return result;
-    } catch (...) {
+    } catch (const nlohmann::json::exception&) {
         return {};
     }
 }
+
+inline CachedAuthToken LoadCachedAuthToken(const std::string& exeDir) {
+    const CredentialCacheLocation location = SelectCredentialCacheLocation(exeDir);
+    return LoadCachedAuthTokenFromPath(location.credentialsPath);
+}
+
+// Does NOT validate expiry — caller decides whether to use token or refresh.
+inline CachedAuthToken LoadCachedAuthToken() { return LoadCachedAuthToken(GetExeDirectory()); }
 
 // Saves the REFRESH TOKEN (and identity) to _local/.credentials.json.
 // The access token is deliberately NOT persisted — it lives in memory only.
 // Searches for existing _local/ directory with parent-directory fallback
 // (same paths as LoadCachedAuthToken). Creates _local/ next to the executable
 // if none found.
-inline bool SaveAuthToken(const CachedAuthToken& auth) {
+inline bool SaveAuthToken(const CachedAuthToken& auth, const std::string& exeDir) {
     if (auth.refresh_token.empty()) return false;
 
-    // Find existing _local/ dir relative to executable
-    std::string exeDir = GetExeDirectory();
-    std::string target_dir;
-    for (const auto* suffix : kLocalSuffixes) {
-        std::string probe = exeDir + suffix + "/config.json";
-        if (std::ifstream(probe).is_open()) {
-            target_dir = exeDir + suffix;
-            break;
-        }
-    }
-    if (target_dir.empty()) {
-        target_dir = exeDir + "_local";
+    const CredentialCacheLocation location = SelectCredentialCacheLocation(exeDir);
+    const std::string& target_dir = location.directory;
+    if (!CredentialPathExists(target_dir)) {
 #ifdef _WIN32
         _mkdir(target_dir.c_str());
 #else
@@ -277,7 +306,7 @@ inline bool SaveAuthToken(const CachedAuthToken& auth) {
 #endif
     }
 
-    std::string path = target_dir + "/.credentials.json";
+    const std::string& path = location.credentialsPath;
 
 #ifndef _WIN32
     // Set restrictive umask before creating file so it's never world-readable
@@ -354,3 +383,5 @@ inline bool SaveAuthToken(const CachedAuthToken& auth) {
 
     return true;
 }
+
+inline bool SaveAuthToken(const CachedAuthToken& auth) { return SaveAuthToken(auth, GetExeDirectory()); }

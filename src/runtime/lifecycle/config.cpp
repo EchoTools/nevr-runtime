@@ -8,6 +8,8 @@
 #include "abi/echovr_functions.h"
 #include "runtime/hook/patching.h"
 
+#include <atomic>
+
 /// <summary>
 /// The game instance pointer -- stored globally for social message injection.
 /// Set during PreprocessCommandLineHook, used to navigate to the broadcaster.
@@ -28,13 +30,21 @@ static EchoVR::Json g_earlyConfig = {NULL, NULL};
 EchoVR::Json* g_earlyConfigPtr = NULL;
 
 /// <summary>
-/// Early-load _local/config.json so URI redirect hooks work before the game loads its config.
-/// The game's JSON loader is available at this point (it's a static function in the EXE).
+/// Early-load _local/config.json, if one exists, with the game's own JSON loader
+/// (a static function in the EXE, usable this early).
+///
+/// Issue #21: this file is OPTIONAL. N133 moved every NEVR-owned key to
+/// config.yaml; what is left in a config.json is only what the stock engine reads
+/// natively, and the engine loads its own copy regardless (LoadLocalConfigHook).
+/// A server used to ServerFatal when this found nothing (N48, from before N133),
+/// killing a correctly configured config.yaml-only deployment. Absent is now
+/// normal (Info); present but unparseable is a Warning naming the file, because
+/// the operator wrote something the engine is going to ignore.
 /// </summary>
 VOID LoadEarlyConfig() {
   CHAR configPath[MAX_PATH] = {0};
   CHAR moduleDir[MAX_PATH] = {0};
-  GetModuleFileNameA((HMODULE)EchoVR::g_GameBaseAddress, moduleDir, MAX_PATH);
+  GetModuleFileNameA(reinterpret_cast<HMODULE>(EchoVR::g_GameBaseAddress), moduleDir, MAX_PATH);
   // Strip the filename to get the directory
   CHAR* lastSlash = strrchr(moduleDir, '\\');
   if (lastSlash) *(lastSlash + 1) = '\0';
@@ -47,19 +57,30 @@ VOID LoadEarlyConfig() {
     "%s..\\..\\_local\\config.json",
   };
 
-  UINT32 loadResult = 0xFFFFFFFF;
-  for (int i = 0; i < 3; i++) {
-    snprintf(configPath, MAX_PATH, searchPaths[i], moduleDir);
-    loadResult = EchoVR::LoadJsonFromFile(&g_earlyConfig, configPath, 1);
+  BOOL anyPresent = FALSE;
+  for (const CHAR* searchPath : searchPaths) {
+    snprintf(configPath, MAX_PATH, searchPath, moduleDir);
+    // Only hand EXISTING files to the game's loader: a missing path is the
+    // supported case now, and the loader reports every miss as an error.
+    if (GetFileAttributesA(configPath) == INVALID_FILE_ATTRIBUTES) continue;
+    anyPresent = TRUE;
+    const UINT32 loadResult = EchoVR::LoadJsonFromFile(&g_earlyConfig, configPath, 1);
     if (loadResult == 0 && g_earlyConfig.root != NULL) {
       g_earlyConfigPtr = &g_earlyConfig;
       Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Early config loaded from: %s", configPath);
       return;
     }
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] %s exists but did not parse (error %u) — ignored; NEVR settings come "
+        "from config.yaml",
+        configPath, loadResult);
   }
 
-  Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] Failed to early-load config from: %s_local\\config.json (error %u)",
-      moduleDir, loadResult);
+  if (!anyPresent) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] no _local/config.json under %s (optional — NEVR settings come from config.yaml)",
+        moduleDir);
+  }
 }
 
 /// <summary>
@@ -364,24 +385,31 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
 // We pick the redirect target based on the URL scheme:
 //   wss:// URLs → nevr_socket_uri (WebSocket endpoint)
 //   https:// URLs → nevr_http_uri (HTTP API endpoint)
+static std::atomic<bool> s_serviceRedirectsArmed{false};
+
+VOID ArmServiceRedirects() { s_serviceRedirectsArmed.store(true, std::memory_order_release); }
+
 static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
   if (result == NULL || keyName == NULL) return result;
-  if (g_earlyConfigPtr == NULL) return result;
+  // Issue #21: this used to be `if (g_earlyConfigPtr == NULL) return result;`,
+  // which made every redirect depend on a config.json existing, although both
+  // targets come from config.yaml (N133 S3/S5b). That guard ALSO did a second,
+  // unstated job, kept here: g_earlyConfigPtr only became non-null at the start
+  // of RunDeferredRuntimeBootstrap, so no redirect — and therefore no
+  // NevrCfgGetFlat, which is the first access to the lazily loaded config.yaml
+  // singleton — ran on the engine's JsonValueAsString calls before the
+  // bootstrap. ArmServiceRedirects() is called at exactly that point, so a
+  // config.json-less run arms at the same moment a config.json run always did.
+  if (!s_serviceRedirectsArmed.load(std::memory_order_acquire)) return result;
 
   // N133 S3: the ws/wss redirect target (nevr_socket_uri) resolves from
   // config.yaml inside NevrCfgRedirect. N133 S5b: the https target
-  // (nevr_http_uri) now ALSO resolves from config.yaml — auth.http_uri, the same
-  // key gameserver reads (S4b) — via NevrCfgGetFlat, instead of the game's early
-  // JSON. This was the LAST nevr_* read off g_earlyConfigPtr; nothing NEVR now
-  // reads its keys from the game config.
-  //
-  // The `g_earlyConfigPtr == NULL` guard above STAYS: it is not a nevr_* read,
-  // it is the S3-era gate on whether ANY redirect fires at all (no config.json
-  // -> no redirect). Keeping it preserves today's client behaviour exactly; on a
-  // server g_earlyConfigPtr is always non-null (boot.cpp:61 fatals otherwise) so
-  // the guard is a no-op there. NevrCfgRedirect runs the identical scheme
-  // detection + bridge rewrite (ws/wss any-host or https readyatdawn.com only;
-  // bridge-active ws -> ws://127.0.0.1:<port>; https never hits the bridge).
+  // (nevr_http_uri) resolves from config.yaml too (auth.http_uri, the key
+  // gameserver reads). No target configured -> NevrCfgRedirect returns null and
+  // the engine's value passes through, so a run with neither file redirects
+  // nothing. NevrCfgRedirect runs the scheme detection + bridge rewrite
+  // (ws/wss any-host or https readyatdawn.com only; bridge-active ws ->
+  // ws://127.0.0.1:<port>; https never hits the bridge).
   const char* httpTarget = NevrCfgGetFlat("nevr_http_uri");
   const char* redirected =
       NevrCfgRedirect(result, httpTarget, IsWebSocketBridgeActive() ? 1 : 0, GetWebSocketBridgePort());
@@ -414,6 +442,26 @@ CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValu
       Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] Config override [%s]: %s -> %s", keyName,
           result ? result : "(null)", override);
       return override;
+    }
+  }
+
+  // Issue #21: _local/config.json is optional, and it used to be the only source
+  // of publisher_lock (read by the engine through THIS function: 10 of the 12
+  // code references to the "publisher_lock" string at 0x1416D2F08 are followed
+  // by a call to 0x1405FE290, incl. CNSLobby::RequestRegistration). When no
+  // config supplied the key — same "result is still the default" test as the
+  // override above — answer with NEVR's value, exactly as a config.json holding
+  // it would have. A config.json that does hold the key keeps winning.
+  if (keyName != NULL && result == defaultValue) {
+    const CHAR* supplied = NevrGameNativeDefault(keyName);
+    if (supplied != NULL) {
+      static std::atomic<bool> s_logged{false};
+      if (!s_logged.exchange(true)) {
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.PATCH] Game key [%s] not configured — supplying NEVR default '%s' (logged once)",
+            keyName, supplied);
+      }
+      return const_cast<CHAR*>(supplied);
     }
   }
 

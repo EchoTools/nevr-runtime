@@ -38,3 +38,8 @@ const char* NevrCfgRedirect(const char* result, const char* httpTargetJson, int 
 /// Auto-relay target (AutoRelayThroughBridge): ws://127.0.0.1:<bridgePort> when
 /// nevr_socket_uri is configured, else null.
 const char* NevrCfgAutoRelay(unsigned bridgePort);
+
+/// Issue #21: the interned value NEVR supplies for a stock-engine JSON key that
+/// no config provided (nevr_cfg::GameNativeDefault), or null to leave the
+/// engine's own default. Does not touch config.yaml.
+const char* NevrGameNativeDefault(const char* key);

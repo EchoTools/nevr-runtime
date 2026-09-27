@@ -22,6 +22,7 @@
 namespace {
 
 using nevr_cfg::FlatKeyToYamlPath;
+using nevr_cfg::GameNativeDefault;
 using nevr_cfg::HostSource;
 using nevr_cfg::LookupFlat;
 using nevr_cfg::LookupFlatCsv;
@@ -385,6 +386,16 @@ TEST(ServiceMap, S4b_TelemetryTokenOptionalNeverFailsLoud) {
   const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString("version: \"1\"\n");
   EXPECT_FALSE(LookupFlat(cfg, "telemetry_token").has_value());
   EXPECT_FALSE(LookupFlat(cfg, "telemetry_uri").has_value());
+}
+
+// Issue #21: _local/config.json is optional, so the stock-engine key it used to
+// supply comes from NEVR. Owner-chosen value; only publisher_lock is supplied —
+// every other key is left to the engine's own default.
+TEST(ServiceMap, I21_GameNativeDefaultSuppliesPublisherLockOnly) {
+  EXPECT_EQ(GameNativeDefault("publisher_lock").value_or(""), "echotools");
+  EXPECT_FALSE(GameNativeDefault("loginservice_host").has_value());
+  EXPECT_FALSE(GameNativeDefault("").has_value());
+  EXPECT_FALSE(GameNativeDefault("publisher_lock ").has_value());
 }
 
 }  // namespace

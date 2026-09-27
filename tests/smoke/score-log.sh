@@ -80,7 +80,7 @@ B04@@boot@@Every hook installed, none failed@@hooks installed: [0-9]+ succeeded,
 B05@@boot@@Boot log tee opened (nevr-boot.jsonl)@@boot log opened run=@@
 B06@@boot@@Built-in log filter installed@@log filter installed@@
 B07@@boot@@Log filter emitting health counters@@\[NEVR\.LOGFILTER\] health emitted=@@CAPTURED ZERO GAME LINES
-B08@@boot@@Early config loaded from _local@@Early config loaded from:@@Failed to early-load config
+B08@@boot@@Optional config.json searched (issue #21)@@Early config loaded from:|no _local/config\.json under@@exists but did not parse|Failed to early-load config
 B09@@boot@@DLL-load hooks installed@@dll load hooks installed|LoadLibrary hooks OK@@
 B10@@boot@@Vectored exception handler installed@@veh installed@@
 B11@@boot@@Crash-recovery hooks installed@@crash recovery hooks installed@@
