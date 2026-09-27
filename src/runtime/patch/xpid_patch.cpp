@@ -29,6 +29,22 @@ static bool ValidateBytes(const CHAR* base, uintptr_t offset, const BYTE* expect
   return memcmp(site, expected, len) == 0;
 }
 
+/// Report a mismatch with both expected and actual bytes — `ValidateBytes`
+/// only returns a bool, so this re-derives `site` to show what was actually
+/// found, not just what was expected. Warning, not Error: these are
+/// diagnostic detail feeding into the mode-aware ServerFatal() call below,
+/// which owns the terminal severity (fatal+Error on server, non-fatal+
+/// Warning on client) — five unconditional Error lines here would read as
+/// five separate decisions when it's really one.
+static void LogByteMismatch(const CHAR* base, uintptr_t offset, const BYTE* expected, const char* what) {
+  const BYTE* site = reinterpret_cast<const BYTE*>(base + offset);
+  Log(EchoVR::LogLevel::Warning,
+      "[NEVR.XPID] %s mismatch rva=0x%X expected=%02x%02x%02x%02x actual=%02x%02x%02x%02x",
+      what, static_cast<unsigned>(offset),
+      expected[0], expected[1], expected[2], expected[3],
+      site[0], site[1], site[2], site[3]);
+}
+
 VOID PatchDscProvider() {
   using namespace PatchAddresses;
   const CHAR* base = EchoVR::g_GameBaseAddress;
@@ -36,33 +52,32 @@ VOID PatchDscProvider() {
   // Validate all four sites before patching any.
   bool ok = true;
   if (!ValidateBytes(base, XPID_PLATFORM_SHORT_NAME, kPsnShort, sizeof(kPsnShort))) {
-    Log(EchoVR::LogLevel::Error,
-        "[NEVR.XPID] Short name mismatch at RVA 0x%X — expected \"PSN\\0\"", XPID_PLATFORM_SHORT_NAME);
+    LogByteMismatch(base, XPID_PLATFORM_SHORT_NAME, kPsnShort, "short name");
     ok = false;
   }
   if (!ValidateBytes(base, XPID_PLATFORM_DASH_PREFIX, kPsnDash, sizeof(kPsnDash))) {
-    Log(EchoVR::LogLevel::Error,
-        "[NEVR.XPID] Dash prefix mismatch at RVA 0x%X — expected \"PSN-\"", XPID_PLATFORM_DASH_PREFIX);
+    LogByteMismatch(base, XPID_PLATFORM_DASH_PREFIX, kPsnDash, "dash prefix");
     ok = false;
   }
   if (!ValidateBytes(base, XPID_PLATFORM_COMPACT_NAME, kPsnShort, sizeof(kPsnShort))) {
-    Log(EchoVR::LogLevel::Error,
-        "[NEVR.XPID] Compact name mismatch at RVA 0x%X — expected \"PSN\\0\"", XPID_PLATFORM_COMPACT_NAME);
+    LogByteMismatch(base, XPID_PLATFORM_COMPACT_NAME, kPsnShort, "compact name");
     ok = false;
   }
   if (!ValidateBytes(base, XPID_PLATFORM_FALLBACK_PREFIX, kQmarkDash, sizeof(kQmarkDash))) {
-    Log(EchoVR::LogLevel::Error,
-        "[NEVR.XPID] Fallback prefix mismatch at RVA 0x%X — expected \"?\?\?-\"", XPID_PLATFORM_FALLBACK_PREFIX);
+    LogByteMismatch(base, XPID_PLATFORM_FALLBACK_PREFIX, kQmarkDash, "fallback prefix");
     ok = false;
   }
   if (!ValidateBytes(base, XPID_PLATFORM_COMPACT_FALLBACK_NAME, kQmarkNull, sizeof(kQmarkNull))) {
-    Log(EchoVR::LogLevel::Error,
-        "[NEVR.XPID] Compact fallback name mismatch at RVA 0x%X — expected \"???\\0\"", XPID_PLATFORM_COMPACT_FALLBACK_NAME);
+    LogByteMismatch(base, XPID_PLATFORM_COMPACT_FALLBACK_NAME, kQmarkNull, "compact fallback name");
     ok = false;
   }
 
   if (!ok) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.XPID] Aborting DSC provider patch — prologue validation failed");
+    // No standalone "Aborting..." Log() line here (was Category J): ServerFatal
+    // below already logs the better, more detailed explanation at the
+    // mode-correct level (Error+exit on server, Warning+continue on client) —
+    // this also resolves severity being decided in one place instead of split
+    // across this line and ServerFatal.
     BootLogTee::TeeFprintf("[NEVR.XPID] validation FAILED — provider strings stay PSN-/?\?\?-\n");
     // N120. These five sites are validated against literal bytes in the loaded
     // image, so a mismatch means the binary is not the build this runtime targets.
@@ -119,8 +134,8 @@ VOID PatchProviderPrefixOvrOrg() {
     Log(EchoVR::LogLevel::Info, "[NEVR.XPID] GetProviderPrefix detoured → OVR-ORG (14 callers)");
     BootLogTee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour OK\n");
   } else {
-    Log(EchoVR::LogLevel::Error, "[NEVR.XPID] GetProviderPrefix detour FAILED: %s",
-        MH_StatusToString(st));
+    Log(EchoVR::LogLevel::Error, "[NEVR.XPID] GetProviderPrefix detour failed target=%p status=%s",
+        target, MH_StatusToString(st));
     BootLogTee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour FAILED: %s\n",
                            MH_StatusToString(st));
   }

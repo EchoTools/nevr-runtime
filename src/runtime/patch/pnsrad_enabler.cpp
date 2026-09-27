@@ -30,6 +30,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -159,12 +160,29 @@ static constexpr uintptr_t PNSRAD_PARTY_SEND_INVITE_RVA = 0x86df0;
  * Memory patching
  * -------------------------------------------------------------------- */
 
-static bool PatchMemory(void* addr, const void* data, size_t len) {
+static bool PatchMemory(void* addr, const void* data, size_t len, DWORD* outError = nullptr) {
     DWORD oldProtect;
-    if (!VirtualProtect(addr, len, PAGE_EXECUTE_READWRITE, &oldProtect)) return false;
+    if (!VirtualProtect(addr, len, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        if (outError) *outError = GetLastError();
+        return false;
+    }
     std::memcpy(addr, data, len);
     VirtualProtect(addr, len, oldProtect, &oldProtect);
     return true;
+}
+
+/// Lowercase hex dump — same shape as asset_cdn.cpp's BytesToHex, kept local
+/// since this is the only file in this pair that needs it for variable-length
+/// (2 or 6 byte) expected/actual prologue dumps.
+static std::string BytesToHex(const uint8_t* bytes, size_t len) {
+    static const char hex[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(len * 2);
+    for (size_t i = 0; i < len; i++) {
+        result.push_back(hex[bytes[i] >> 4]);
+        result.push_back(hex[bytes[i] & 0x0F]);
+    }
+    return result;
 }
 
 /* --------------------------------------------------------------------
@@ -220,7 +238,7 @@ static void PatchMatchmakingHost(uintptr_t base) {
     uint16_t port = GetMatchmakerBridgePort();
     if (port == 0) {
         Log(EchoVR::LogLevel::Warning,
-            "[pnsradmatchmaking] matchmaker listener never bound a port — NOT "
+            "[NEVR.PATCH] pnsradmatchmaking matchmaker listener never bound a port — NOT "
             "patching (matchmaking will fail regardless)");
         return;
     }
@@ -230,7 +248,7 @@ static void PatchMatchmakingHost(uintptr_t base) {
                                         "ws://127.0.0.1:%u", (unsigned)port);
     if (replacementLen <= 0 || static_cast<size_t>(replacementLen) + 1 > PNSRADMATCHMAKING_HOST_SLOT_SIZE) {
         Log(EchoVR::LogLevel::Warning,
-            "[pnsradmatchmaking] formatted replacement (%d bytes) doesn't fit the "
+            "[NEVR.PATCH] pnsradmatchmaking formatted replacement (%d bytes) doesn't fit the "
             "%zu-byte slot — NOT patched", replacementLen, PNSRADMATCHMAKING_HOST_SLOT_SIZE);
         return;
     }
@@ -239,22 +257,25 @@ static void PatchMatchmakingHost(uintptr_t base) {
     if (std::memcmp(site, PNSRADMATCHMAKING_HOST_EXPECTED,
                      sizeof(PNSRADMATCHMAKING_HOST_EXPECTED) - 1) != 0) {
         Log(EchoVR::LogLevel::Warning,
-            "[pnsradmatchmaking] unexpected bytes at +0x%x — NOT patched (measured "
-            "against a different build?)", (unsigned)PNSRADMATCHMAKING_HOST_RVA);
+            "[NEVR.PATCH] pnsradmatchmaking host patch skipped rva=0x%x reason=bytes_mismatch "
+            "expected=\"%s\" actual=\"%.49s\"",
+            (unsigned)PNSRADMATCHMAKING_HOST_RVA, PNSRADMATCHMAKING_HOST_EXPECTED,
+            reinterpret_cast<const char*>(site));
         return;
     }
     // Replacement is shorter than the original slot (21 of 49 bytes); the
     // trailing original bytes become inert garbage after our new NUL, same
     // as xpid_patch.cpp's shorter-replacement-in-a-fixed-slot pattern.
-    if (PatchMemory(site, replacement, static_cast<size_t>(replacementLen) + 1)) {
+    DWORD err = 0;
+    if (PatchMemory(site, replacement, static_cast<size_t>(replacementLen) + 1, &err)) {
         Log(EchoVR::LogLevel::Info,
-            "[pnsradmatchmaking] patched matchmaker host default at +0x%x: "
+            "[NEVR.PATCH] pnsradmatchmaking patched matchmaker host default at +0x%x: "
             "\"%s\" -> \"%s\"", (unsigned)PNSRADMATCHMAKING_HOST_RVA,
             PNSRADMATCHMAKING_HOST_EXPECTED, replacement);
     } else {
         Log(EchoVR::LogLevel::Warning,
-            "[pnsradmatchmaking] PatchMemory FAILED at +0x%x — prologue matched "
-            "but the write did not land", (unsigned)PNSRADMATCHMAKING_HOST_RVA);
+            "[NEVR.PATCH] pnsradmatchmaking PatchMemory FAILED rva=0x%x error=%lu — prologue matched "
+            "but the write did not land", (unsigned)PNSRADMATCHMAKING_HOST_RVA, err);
     }
 }
 
@@ -272,9 +293,14 @@ static uint64_t PartyListenerRegisterHook(void* thisPtr, uint64_t param2) {
         handle = *reinterpret_cast<uintptr_t*>(
             reinterpret_cast<uint8_t*>(thisPtr) + PNSRAD_PARTY_BROADCASTER_HANDLE_OFFSET);
     }
+    // Resolved summary at INFO (Rule/Hard-Stop: raw pointer values are DEBUG-
+    // only); the raw pointers themselves, for RE correlation, go out at DEBUG.
     Log(EchoVR::LogLevel::Info,
-        "[pnsrad] DIAG CNSRADParty listener-register: this=%p broadcaster_handle=%p (%s)",
-        thisPtr, reinterpret_cast<void*>(handle), handle == 0 ? "NULL" : "non-null");
+        "[NEVR.PATCH] pnsrad DIAG party listener-register: broadcaster_handle=%s",
+        handle == 0 ? "NULL" : "non-null");
+    Log(EchoVR::LogLevel::Debug,
+        "[NEVR.PATCH] pnsrad DIAG party listener-register this=%p broadcaster_handle=%p",
+        thisPtr, reinterpret_cast<void*>(handle));
     return g_RealPartyListenerRegister(thisPtr, param2);
 }
 
@@ -285,11 +311,11 @@ static void InstallPartyBroadcasterDiag(uintptr_t base) {
     if (st == MH_OK) st = MH_EnableHook(target);
     if (st == MH_OK) {
         Log(EchoVR::LogLevel::Info,
-            "[pnsrad] DIAG party-broadcaster hook installed at +0x%x",
+            "[NEVR.PATCH] pnsrad DIAG party-broadcaster hook installed at +0x%x",
             (unsigned)PNSRAD_PARTY_INITIALIZE_RVA);
     } else {
         Log(EchoVR::LogLevel::Warning,
-            "[pnsrad] DIAG party-broadcaster hook FAILED at +0x%x: %s",
+            "[NEVR.PATCH] pnsrad DIAG party-broadcaster hook FAILED at +0x%x: %s",
             (unsigned)PNSRAD_PARTY_INITIALIZE_RVA, MH_StatusToString(st));
     }
 }
@@ -304,9 +330,11 @@ static void PartySendInviteHook(void* thisPtr, uint64_t targetAccountId) {
             reinterpret_cast<uint8_t*>(thisPtr) + PNSRAD_PARTY_BROADCASTER_HANDLE_OFFSET);
     }
     Log(EchoVR::LogLevel::Info,
-        "[pnsrad] DIAG CNSRADParty::SendInvite: this=%p target=%llu broadcaster_handle=%p (%s)",
-        thisPtr, (unsigned long long)targetAccountId, reinterpret_cast<void*>(handle),
-        handle == 0 ? "NULL" : "non-null");
+        "[NEVR.PATCH] pnsrad DIAG party send-invite: target=%llu broadcaster_handle=%s",
+        (unsigned long long)targetAccountId, handle == 0 ? "NULL" : "non-null");
+    Log(EchoVR::LogLevel::Debug,
+        "[NEVR.PATCH] pnsrad DIAG party send-invite this=%p target=%llu broadcaster_handle=%p",
+        thisPtr, (unsigned long long)targetAccountId, reinterpret_cast<void*>(handle));
     g_RealPartySendInvite(thisPtr, targetAccountId);
 }
 
@@ -317,11 +345,11 @@ static void InstallPartySendInviteDiag(uintptr_t base) {
     if (st == MH_OK) st = MH_EnableHook(target);
     if (st == MH_OK) {
         Log(EchoVR::LogLevel::Info,
-            "[pnsrad] DIAG party-send-invite hook installed at +0x%x",
+            "[NEVR.PATCH] pnsrad DIAG party-send-invite hook installed at +0x%x",
             (unsigned)PNSRAD_PARTY_SEND_INVITE_RVA);
     } else {
         Log(EchoVR::LogLevel::Warning,
-            "[pnsrad] DIAG party-send-invite hook FAILED at +0x%x: %s",
+            "[NEVR.PATCH] pnsrad DIAG party-send-invite hook FAILED at +0x%x: %s",
             (unsigned)PNSRAD_PARTY_SEND_INVITE_RVA, MH_StatusToString(st));
     }
 }
@@ -344,19 +372,21 @@ static void PnsradNopPatch(uint8_t* site, const uint8_t* expected, size_t expLen
                            size_t nopLen, const char* what, unsigned rva) {
     if (!nevr::ValidatePrologue(site, expected, expLen)) {
         Log(EchoVR::LogLevel::Warning,
-            "[pnsrad] unexpected bytes at %s +0x%x — NOT patched", what, rva);
+            "[NEVR.PATCH] pnsrad %s patch skipped rva=0x%x reason=bytes_mismatch expected=%s actual=%s",
+            what, rva, BytesToHex(expected, expLen).c_str(), BytesToHex(site, expLen).c_str());
         s_pnsradFail++;
         return;
     }
     uint8_t nops[8];
     for (size_t i = 0; i < nopLen && i < sizeof(nops); i++) nops[i] = 0x90;
-    if (PatchMemory(site, nops, nopLen)) {
-        Log(EchoVR::LogLevel::Debug, "[pnsrad] patched %s at +0x%x", what, rva);
+    DWORD err = 0;
+    if (PatchMemory(site, nops, nopLen, &err)) {
+        Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] pnsrad patched %s at +0x%x", what, rva);
         s_pnsradOk++;
     } else {
         Log(EchoVR::LogLevel::Warning,
-            "[pnsrad] PatchMemory FAILED at %s +0x%x — prologue matched but the write "
-            "did not land", what, rva);
+            "[NEVR.PATCH] pnsrad PatchMemory FAILED %s rva=0x%x error=%lu — prologue matched but the "
+            "write did not land", what, rva, err);
         s_pnsradFail++;
     }
 }
@@ -415,7 +445,7 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
         InstallPartySendInviteDiag(base);
 
         Log(EchoVR::LogLevel::Info,
-            "[pnsrad] module patches: %d succeeded, %d failed — social layer "
+            "[NEVR.PATCH] pnsrad module patches: %d succeeded, %d failed — social layer "
             "(friends/party/login) %s",
             s_pnsradOk, s_pnsradFail,
             (s_pnsradFail == 0 && s_pnsradOk == 3) ? "ENABLED"
@@ -432,18 +462,31 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
 
 void PnsradEnabler::Init(uintptr_t base_addr) {
 #ifdef _WIN32
+    // Total echovr.exe patches Patch 1/2/3 below can apply — named so the
+    // "init complete" summary can show a baseline instead of a bare count.
+    constexpr int kEchovrPatchCount = 3;
     int patched = 0;
 
     /* Patch 1: "pnsovr" -> "pnsrad" */
     {
         auto* p = reinterpret_cast<uint8_t*>(base_addr + STR_PNSOVR);
         if (std::memcmp(p, "pnsovr", 6) == 0) {
-            if (PatchMemory(p, "pnsrad\0", STR_SIZE)) {
-                Log(EchoVR::LogLevel::Info, "[pnsrad] patched \"pnsovr\" -> \"pnsrad\"");
+            DWORD err = 0;
+            if (PatchMemory(p, "pnsrad\0", STR_SIZE, &err)) {
+                Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] pnsrad patched \"pnsovr\" -> \"pnsrad\" rva=0x%x",
+                    (unsigned)STR_PNSOVR);
                 patched++;
+            } else {
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.PATCH] pnsrad PatchMemory FAILED for pnsovr->pnsrad rva=0x%x error=%lu",
+                    (unsigned)STR_PNSOVR, err);
             }
         } else if (std::memcmp(p, "pnsrad", 6) == 0) {
-            Log(EchoVR::LogLevel::Debug, "[pnsrad] pnsovr already \"pnsrad\"");
+            Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] pnsrad pnsovr already \"pnsrad\"");
+        } else {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] pnsrad unexpected bytes at pnsovr string rva=0x%x — NOT patched "
+                "(version drift?)", (unsigned)STR_PNSOVR);
         }
     }
 
@@ -451,12 +494,22 @@ void PnsradEnabler::Init(uintptr_t base_addr) {
     {
         auto* p = reinterpret_cast<uint8_t*>(base_addr + STR_PNSDEMO);
         if (std::memcmp(p, "pnsdemo", 7) == 0) {
-            if (PatchMemory(p, "pnsrad\0", STR_SIZE)) {
-                Log(EchoVR::LogLevel::Info, "[pnsrad] patched \"pnsdemo\" -> \"pnsrad\"");
+            DWORD err = 0;
+            if (PatchMemory(p, "pnsrad\0", STR_SIZE, &err)) {
+                Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] pnsrad patched \"pnsdemo\" -> \"pnsrad\" rva=0x%x",
+                    (unsigned)STR_PNSDEMO);
                 patched++;
+            } else {
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.PATCH] pnsrad PatchMemory FAILED for pnsdemo->pnsrad rva=0x%x error=%lu",
+                    (unsigned)STR_PNSDEMO, err);
             }
         } else if (std::memcmp(p, "pnsrad", 6) == 0) {
-            Log(EchoVR::LogLevel::Debug, "[pnsrad] pnsdemo already \"pnsrad\"");
+            Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] pnsrad pnsdemo already \"pnsrad\"");
+        } else {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] pnsrad unexpected bytes at pnsdemo string rva=0x%x — NOT patched "
+                "(version drift?)", (unsigned)STR_PNSDEMO);
         }
     }
 
@@ -464,15 +517,27 @@ void PnsradEnabler::Init(uintptr_t base_addr) {
     {
         auto* p = reinterpret_cast<uint8_t*>(base_addr + OVR_BRANCH);
         if (p[0] == 0x90 && p[1] == 0x90) {
-            Log(EchoVR::LogLevel::Debug, "[pnsrad] OVR branch already NOPed");
+            Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] pnsrad OVR branch already NOPed");
         } else if (nevr::ValidatePrologue(p, OVR_JNE_EXPECTED, sizeof(OVR_JNE_EXPECTED))) {
             uint8_t nops[] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
-            if (PatchMemory(p, nops, sizeof(nops))) {
-                Log(EchoVR::LogLevel::Debug, "[pnsrad] patched OVR branch at +0x%x", (unsigned)OVR_BRANCH);
+            DWORD err = 0;
+            if (PatchMemory(p, nops, sizeof(nops), &err)) {
+                Log(EchoVR::LogLevel::Info,
+                    "[NEVR.PATCH] pnsrad patched OVR branch rva=0x%x (bypasses OVR platform branch)",
+                    (unsigned)OVR_BRANCH);
                 patched++;
+            } else {
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.PATCH] pnsrad PatchMemory FAILED for OVR branch rva=0x%x error=%lu",
+                    (unsigned)OVR_BRANCH, err);
             }
         } else {
-            Log(EchoVR::LogLevel::Warning, "[pnsrad] unexpected bytes at OVR branch +0x%x", (unsigned)OVR_BRANCH);
+            uint8_t actual[6];
+            std::memcpy(actual, p, sizeof(actual));
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] pnsrad unexpected bytes at OVR branch rva=0x%x expected=%s actual=%s",
+                (unsigned)OVR_BRANCH, BytesToHex(OVR_JNE_EXPECTED, sizeof(OVR_JNE_EXPECTED)).c_str(),
+                BytesToHex(actual, sizeof(actual)).c_str());
         }
     }
 
@@ -484,14 +549,26 @@ void PnsradEnabler::Init(uintptr_t base_addr) {
         if (regFn) {
             NTSTATUS status = regFn(0, OnDllLoaded, nullptr, &s_dllNotifCookie);
             if (status == 0) {
-                Log(EchoVR::LogLevel::Debug, "[pnsrad] registered DLL notification for pnsrad.dll patches");
+                Log(EchoVR::LogLevel::Debug,
+                    "[NEVR.PATCH] pnsrad registered DLL notification for pnsrad.dll patches");
             } else {
-                Log(EchoVR::LogLevel::Warning, "[pnsrad] LdrRegisterDllNotification failed: 0x%lx", (unsigned long)status);
+                // Same catastrophic failure mode as the missing-export case
+                // below: pnsrad.dll never gets patched, so the entire social/
+                // login layer (friends/party/login) stays broken for the whole
+                // session with no other signal.
+                Log(EchoVR::LogLevel::Error,
+                    "[NEVR.PATCH] pnsrad LdrRegisterDllNotification failed status=0x%lx — pnsrad.dll "
+                    "will never be patched (social/login layer broken)", (unsigned long)status);
             }
+        } else {
+            Log(EchoVR::LogLevel::Error,
+                "[NEVR.PATCH] pnsrad LdrRegisterDllNotification not found in ntdll — pnsrad.dll will "
+                "NEVER be patched (social/login layer broken)");
         }
     }
 
-    Log(EchoVR::LogLevel::Info, "[pnsrad] init complete (%d echovr.exe patches)", patched);
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] pnsrad init complete: %d/%d echovr.exe patches applied",
+        patched, kEchovrPatchCount);
 #else
     (void)base_addr;
 #endif

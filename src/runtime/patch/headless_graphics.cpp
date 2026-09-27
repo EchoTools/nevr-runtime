@@ -87,12 +87,23 @@ static ULONG   STDMETHODCALLTYPE Stub_Release(StubUnknown* self);
  * stub path (a handful of QueryInterface calls during renderer init), so it is
  * low-frequency, not per-frame. Kept in as leave-it-better instrumentation:
  * a future interface-refusal shows up in the JSONL log with the exact GUID. */
-static void LogStubIid(const char* ctx, const char* obj, const GUID* riid, const char* verdict) {
+static void LogStubIid(const char* ctx, const char* obj, const GUID* riid, const char* verdict,
+                        const char* resolvedName = nullptr) {
     if (!riid) {
         Log(EchoVR::LogLevel::Debug, "[NEVR.HEADLESS] %s obj=%s riid=NULL -> %s", ctx, obj, verdict);
         return;
     }
-    Log(EchoVR::LogLevel::Info,
+    if (resolvedName) {
+        // Caller already knows which known IID matched — a resolved name is
+        // human-meaningful at INFO; the raw GUID underneath it is not.
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.HEADLESS] %s obj=%s iid=%s -> %s", ctx, obj, resolvedName, verdict);
+        return;
+    }
+    // Unresolved (refused) IID: the GUID could be anything the game asked
+    // for, so there is no name to resolve it to. Raw hex has no human meaning
+    // at INFO+ (docs/standards/logging.md Hard Stops) — DEBUG only.
+    Log(EchoVR::LogLevel::Debug,
         "[NEVR.HEADLESS] %s obj=%s riid={%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X} -> %s",
         ctx, obj, static_cast<unsigned long>(riid->Data1),
         static_cast<unsigned>(riid->Data2), static_cast<unsigned>(riid->Data3),
@@ -226,14 +237,16 @@ static HRESULT STDMETHODCALLTYPE StubAdapter_QueryInterface(StubUnknown* self, c
     if (!ppv) return E_POINTER;
     static const GUID IID_IUnknown_ =
         {0x00000000, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
-    if (memcmp(riid, &IID_IUnknown_,    sizeof(GUID)) == 0 ||
-        memcmp(riid, &IID_IDXGIAdapter,  sizeof(GUID)) == 0 ||
-        memcmp(riid, &IID_IDXGIAdapter1, sizeof(GUID)) == 0 ||
-        memcmp(riid, &IID_IDXGIAdapter2, sizeof(GUID)) == 0 ||
-        memcmp(riid, &IID_IDXGIAdapter3, sizeof(GUID)) == 0) {
+    const char* matchedName = nullptr;
+    if (memcmp(riid, &IID_IUnknown_, sizeof(GUID)) == 0) matchedName = "IUnknown";
+    else if (memcmp(riid, &IID_IDXGIAdapter, sizeof(GUID)) == 0) matchedName = "IDXGIAdapter";
+    else if (memcmp(riid, &IID_IDXGIAdapter1, sizeof(GUID)) == 0) matchedName = "IDXGIAdapter1";
+    else if (memcmp(riid, &IID_IDXGIAdapter2, sizeof(GUID)) == 0) matchedName = "IDXGIAdapter2";
+    else if (memcmp(riid, &IID_IDXGIAdapter3, sizeof(GUID)) == 0) matchedName = "IDXGIAdapter3";
+    if (matchedName) {
         InterlockedIncrement(&self->refcount);
         *ppv = self;
-        LogStubIid("StubAdapter_QueryInterface", "adapter", riid, "S_OK");
+        LogStubIid("StubAdapter_QueryInterface", "adapter", riid, "S_OK", matchedName);
         return S_OK;
     }
     LogStubIid("StubAdapter_QueryInterface", "adapter", riid, "E_NOINTERFACE (REFUSED)");
@@ -320,11 +333,12 @@ static HRESULT STDMETHODCALLTYPE Stub_QueryInterface(StubUnknown* self, const GU
                     : "unknown";
     static const GUID IID_IUnknown =
         {0x00000000, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
-    if (memcmp(riid, &IID_IUnknown, sizeof(GUID)) == 0 ||
-        memcmp(riid, &IID_IDXGIFactory1, sizeof(GUID)) == 0) {
+    const bool isIUnknown = memcmp(riid, &IID_IUnknown, sizeof(GUID)) == 0;
+    const bool isFactory1 = memcmp(riid, &IID_IDXGIFactory1, sizeof(GUID)) == 0;
+    if (isIUnknown || isFactory1) {
         InterlockedIncrement(&self->refcount);
         *ppv = self;
-        LogStubIid("Stub_QueryInterface", obj, riid, "S_OK");
+        LogStubIid("Stub_QueryInterface", obj, riid, "S_OK", isIUnknown ? "IUnknown" : "IDXGIFactory1");
         return S_OK;
     }
     LogStubIid("Stub_QueryInterface", obj, riid, "E_NOINTERFACE (REFUSED)");
@@ -377,9 +391,23 @@ static HRESULT WINAPI CreateDXGIFactory1_Hook(const GUID* riid, void** ppFactory
     if (g_isHeadless) {
         InitFactoryVtable();
         if (ppFactory) *ppFactory = &g_stub_factory;
-        LogStubIid("CreateDXGIFactory1", "factory-create", riid, "stub");
+        // Was two lines (a LogStubIid call immediately followed by this one) —
+        // both fired on the same call and both said "CreateDXGIFactory1 ...
+        // stub" (Category J). Merged into one, with the requested riid inline.
+        char riidStr[40] = "NULL";
+        if (riid) {
+            snprintf(riidStr, sizeof(riidStr),
+                     "%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X",
+                     static_cast<unsigned long>(riid->Data1),
+                     static_cast<unsigned>(riid->Data2), static_cast<unsigned>(riid->Data3),
+                     static_cast<unsigned>(riid->Data4[0]), static_cast<unsigned>(riid->Data4[1]),
+                     static_cast<unsigned>(riid->Data4[2]), static_cast<unsigned>(riid->Data4[3]),
+                     static_cast<unsigned>(riid->Data4[4]), static_cast<unsigned>(riid->Data4[5]),
+                     static_cast<unsigned>(riid->Data4[6]), static_cast<unsigned>(riid->Data4[7]));
+        }
         Log(EchoVR::LogLevel::Info,
-            "[NEVR.HEADLESS] CreateDXGIFactory1 intercepted — returning stub factory (no GPU)");
+            "[NEVR.HEADLESS] CreateDXGIFactory1 intercepted riid=%s -> stub factory returned (no GPU)",
+            riidStr);
         return S_OK;
     }
     return g_origCreateDXGIFactory1(riid, ppFactory);
@@ -480,9 +508,10 @@ static void OnDxgiLoad(const char* dll_name, HMODULE module) {
     FARPROC fn1 = GetProcAddress(module, "CreateDXGIFactory1");
     if (fn1) {
         g_origCreateDXGIFactory1 = (CreateDXGIFactory1_t)fn1;
-        if (MH_CreateHook((void*)fn1, (void*)&CreateDXGIFactory1_Hook,
-                          (void**)&g_origCreateDXGIFactory1) == MH_OK &&
-            MH_EnableHook((void*)fn1) == MH_OK) {
+        MH_STATUS cst1 = MH_CreateHook((void*)fn1, (void*)&CreateDXGIFactory1_Hook,
+                                        (void**)&g_origCreateDXGIFactory1);
+        MH_STATUS est1 = (cst1 == MH_OK) ? MH_EnableHook((void*)fn1) : cst1;
+        if (est1 == MH_OK) {
             Log(EchoVR::LogLevel::Info,
                 "[NEVR.HEADLESS] hooked name=CreateDXGIFactory1 va=0x%llX",
                 reinterpret_cast<unsigned long long>(fn1));
@@ -491,8 +520,8 @@ static void OnDxgiLoad(const char* dll_name, HMODULE module) {
             memcpy(actual, (void*)fn1, 4);
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.HEADLESS] hook failed name=CreateDXGIFactory1 va=0x%llX "
-                "expected=00000000 actual=%02x%02x%02x%02x",
-                reinterpret_cast<unsigned long long>(fn1),
+                "status=%s actual=%02x%02x%02x%02x",
+                reinterpret_cast<unsigned long long>(fn1), MH_StatusToString(est1),
                 actual[0], actual[1], actual[2], actual[3]);
         }
     }
@@ -501,9 +530,17 @@ static void OnDxgiLoad(const char* dll_name, HMODULE module) {
     FARPROC fn0 = GetProcAddress(module, "CreateDXGIFactory");
     if (fn0) {
         g_origCreateDXGIFactory = (CreateDXGIFactory_t)fn0;
-        if (MH_CreateHook((void*)fn0, (void*)&CreateDXGIFactory_Hook,
-                          (void**)&g_origCreateDXGIFactory) == MH_OK &&
-            MH_EnableHook((void*)fn0) == MH_OK) {
+        // NOT RESOLVED (PC1, MASTER-SPEC review pass 2): whether this legacy
+        // entry point is ever actually called by echovr.exe is an open
+        // question pending ReVault confirmation — the install-success line
+        // below and CreateDXGIFactory_Hook's own invocation line are left
+        // exactly as they were, unchanged, pending that answer. Only the
+        // failure branch's missing MH_STATUS (a plain Category G/M gap,
+        // unrelated to the reachability question) is fixed here.
+        MH_STATUS cst0 = MH_CreateHook((void*)fn0, (void*)&CreateDXGIFactory_Hook,
+                                        (void**)&g_origCreateDXGIFactory);
+        MH_STATUS est0 = (cst0 == MH_OK) ? MH_EnableHook((void*)fn0) : cst0;
+        if (est0 == MH_OK) {
             Log(EchoVR::LogLevel::Info,
                 "[NEVR.HEADLESS] hooked name=CreateDXGIFactory va=0x%llX",
                 reinterpret_cast<unsigned long long>(fn0));
@@ -512,8 +549,8 @@ static void OnDxgiLoad(const char* dll_name, HMODULE module) {
             memcpy(actual, (void*)fn0, 4);
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.HEADLESS] hook failed name=CreateDXGIFactory va=0x%llX "
-                "expected=00000000 actual=%02x%02x%02x%02x",
-                reinterpret_cast<unsigned long long>(fn0),
+                "status=%s actual=%02x%02x%02x%02x",
+                reinterpret_cast<unsigned long long>(fn0), MH_StatusToString(est0),
                 actual[0], actual[1], actual[2], actual[3]);
         }
     }
@@ -523,9 +560,17 @@ static void OnD3d11Load(const char* dll_name, HMODULE module) {
     FARPROC fn = GetProcAddress(module, "D3D11CreateDevice");
     if (fn) {
         g_origD3D11CreateDevice = (D3D11CreateDevice_t)fn;
-        if (MH_CreateHook((void*)fn, (void*)&D3D11CreateDevice_Hook,
-                          (void**)&g_origD3D11CreateDevice) == MH_OK &&
-            MH_EnableHook((void*)fn) == MH_OK) {
+        // NOT RESOLVED (PC2, MASTER-SPEC review pass 2): whether this fallback
+        // path is ever actually reached in headless mode is an open question
+        // pending ReVault confirmation — the install-success line below and
+        // D3D11CreateDevice_Hook's own invocation line are left exactly as
+        // they were, unchanged, pending that answer. Only the failure
+        // branch's missing MH_STATUS (a plain Category G/M gap, unrelated to
+        // the reachability question) is fixed here.
+        MH_STATUS cst = MH_CreateHook((void*)fn, (void*)&D3D11CreateDevice_Hook,
+                                       (void**)&g_origD3D11CreateDevice);
+        MH_STATUS est = (cst == MH_OK) ? MH_EnableHook((void*)fn) : cst;
+        if (est == MH_OK) {
             Log(EchoVR::LogLevel::Info,
                 "[NEVR.HEADLESS] hooked name=D3D11CreateDevice va=0x%llX",
                 reinterpret_cast<unsigned long long>(fn));
@@ -534,8 +579,8 @@ static void OnD3d11Load(const char* dll_name, HMODULE module) {
             memcpy(actual, (void*)fn, 4);
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.HEADLESS] hook failed name=D3D11CreateDevice va=0x%llX "
-                "expected=00000000 actual=%02x%02x%02x%02x",
-                reinterpret_cast<unsigned long long>(fn),
+                "status=%s actual=%02x%02x%02x%02x",
+                reinterpret_cast<unsigned long long>(fn), MH_StatusToString(est),
                 actual[0], actual[1], actual[2], actual[3]);
         }
     }
@@ -572,19 +617,26 @@ static void OnD3d12Load(const char* dll_name, HMODULE module) {
     FARPROC fn = GetProcAddress(module, "D3D12CreateDevice");
     if (fn) {
         g_origD3D12CreateDevice = (D3D12CreateDevice_t)fn;
-        if (MH_CreateHook((void*)fn, (void*)&D3D12CreateDevice_Hook,
-                          (void**)&g_origD3D12CreateDevice) == MH_OK &&
-            MH_EnableHook((void*)fn) == MH_OK) {
+        MH_STATUS cst = MH_CreateHook((void*)fn, (void*)&D3D12CreateDevice_Hook,
+                                       (void**)&g_origD3D12CreateDevice);
+        MH_STATUS est = (cst == MH_OK) ? MH_EnableHook((void*)fn) : cst;
+        if (est == MH_OK) {
             Log(EchoVR::LogLevel::Info,
                 "[NEVR.HEADLESS] hooked name=D3D12CreateDevice va=0x%llX",
                 reinterpret_cast<unsigned long long>(fn));
         } else {
+            // Unlike the DXGI/D3D11 hooks above (defensive fallbacks whose
+            // failure is a shrug), D3D12CreateDevice is the confirmed real
+            // device-creation path for this DX12 game — if this one fails to
+            // install, the real function runs unintercepted on a headless
+            // server with no GPU present. Escalate accordingly.
             uint8_t actual[4] = {0};
             memcpy(actual, (void*)fn, 4);
-            Log(EchoVR::LogLevel::Warning,
-                "[NEVR.HEADLESS] hook failed name=D3D12CreateDevice va=0x%llX "
-                "expected=00000000 actual=%02x%02x%02x%02x",
-                reinterpret_cast<unsigned long long>(fn),
+            Log(g_isHeadless ? EchoVR::LogLevel::Error : EchoVR::LogLevel::Warning,
+                "[NEVR.HEADLESS] hook failed name=D3D12CreateDevice va=0x%llX status=%s "
+                "actual=%02x%02x%02x%02x — headless server will call the real D3D12CreateDevice "
+                "with no GPU present",
+                reinterpret_cast<unsigned long long>(fn), MH_StatusToString(est),
                 actual[0], actual[1], actual[2], actual[3]);
         }
     }
