@@ -12,6 +12,14 @@
 
 extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 
+// Connection-health flap counter for the open/close/error triad below. Unlike
+// TelemetryStreamer (which resets its own reconnect counter per streaming
+// session), a WebSocketClient's connection lifetime spans the whole process,
+// so this counts reconnects for the process's lifetime. File-static rather
+// than a class member, to avoid touching the header for this fix.
+static uint32_t s_wsReconnectCount = 0;
+static bool s_wsHasConnectedOnce = false;
+
 WebSocketClient::WebSocketClient()
     : webSocket_(std::make_unique<ix::WebSocket>()),
       lastMsgId_(0),
@@ -97,17 +105,19 @@ BOOL WebSocketClient::Send(EchoVR::SymbolId msgId, const VOID* data, UINT64 size
       return FALSE;
     }
     pendingMessages_.push_back(message);
+    size_t queueDepth = pendingMessages_.size();
     LeaveCriticalSection(&receivedMessagesMutex_);
     Log(EchoVR::LogLevel::Debug,
-        "[WEBSOCKET] Queued message (msgId: 0x%llX, size: %llu bytes, payload: %llu bytes) - will send when connected",
-        msgId, size, size);
+        "[WEBSOCKET] Queued message (msgId: 0x%llX, size: %llu bytes) - queue_depth=%zu - will send when connected",
+        msgId, size, queueDepth);
     return TRUE;
   }
 
   auto result = webSocket_->send(message, true);
 
   if (!result.success) {
-    Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Failed to send message (msgId: 0x%llX)", msgId);
+    Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Failed to send message (msgId: 0x%llX) connected=%d", msgId,
+        connected_.load(std::memory_order_relaxed) ? 1 : 0);
     return FALSE;
   }
 
@@ -126,7 +136,11 @@ BOOL WebSocketClient::IsConnected() const { return connected_.load(std::memory_o
 VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
   switch (msg->type) {
     case ix::WebSocketMessageType::Open:
-      Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Connected to ServerDB");
+      if (s_wsHasConnectedOnce) {
+        s_wsReconnectCount++;
+      }
+      s_wsHasConnectedOnce = true;
+      Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Connected to ServerDB reconnect_count=%u", s_wsReconnectCount);
       connected_.store(true);
       FlushPendingMessages();
       if (connectionCallback_) {
@@ -135,13 +149,14 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
       break;
 
     case ix::WebSocketMessageType::Close:
-      Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Disconnected from ServerDB (code: %d, reason: %s)", msg->closeInfo.code,
-          msg->closeInfo.reason.c_str());
+      Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Disconnected from ServerDB (code: %d, reason: %s) reconnect_count=%u",
+          msg->closeInfo.code, msg->closeInfo.reason.c_str(), s_wsReconnectCount);
       connected_.store(false);
       break;
 
     case ix::WebSocketMessageType::Error:
-      Log(EchoVR::LogLevel::Error, "[WEBSOCKET] Connection error: %s", msg->errorInfo.reason.c_str());
+      Log(EchoVR::LogLevel::Error, "[WEBSOCKET] Connection error: %s reconnect_count=%u",
+          msg->errorInfo.reason.c_str(), s_wsReconnectCount);
       connected_.store(false);
       break;
 
@@ -277,7 +292,7 @@ VOID WebSocketClient::FlushPendingMessages() {
     Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Sending pending message: size=%zu bytes", message.size());
     auto result = webSocket_->send(message, true);
     if (!result.success) {
-      Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Failed to send pending message");
+      Log(EchoVR::LogLevel::Warning, "[WEBSOCKET] Failed to send pending message size=%zu", message.size());
     } else {
       Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Successfully sent pending message");
     }

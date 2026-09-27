@@ -63,8 +63,8 @@ static bool ValidatePacketEncoderSettings(const PacketEncoderSettings& settings,
   }
   if (!encOk) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.GAMESERVER] Rejected %s encoder settings: encryptionKeySize=%d "
-        "(expected 16, 24, or 32)",
+        "[NEVR.GAMESERVER] rejected %s encoder settings: encryptionKeySize=%d "
+        "(expected 16, 24, or 32) — lobby session success message NOT sent, match will not proceed",
         which, settings.encryptionKeySize);
     return false;
   }
@@ -72,8 +72,8 @@ static bool ValidatePacketEncoderSettings(const PacketEncoderSettings& settings,
   // Validate MAC key size: must be <= 128
   if (settings.macKeySize < 0 || settings.macKeySize > kMaxMacKeySize) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.GAMESERVER] Rejected %s encoder settings: macKeySize=%d "
-        "(max %d)",
+        "[NEVR.GAMESERVER] rejected %s encoder settings: macKeySize=%d "
+        "(max %d) — lobby session success message NOT sent, match will not proceed",
         which, settings.macKeySize, kMaxMacKeySize);
     return false;
   }
@@ -81,8 +81,8 @@ static bool ValidatePacketEncoderSettings(const PacketEncoderSettings& settings,
   // Validate random key size: must be <= 256
   if (settings.randomKeySize < 0 || settings.randomKeySize > kMaxRandomKeySize) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.GAMESERVER] Rejected %s encoder settings: randomKeySize=%d "
-        "(max %d)",
+        "[NEVR.GAMESERVER] rejected %s encoder settings: randomKeySize=%d "
+        "(max %d) — lobby session success message NOT sent, match will not proceed",
         which, settings.randomKeySize, kMaxRandomKeySize);
     return false;
   }
@@ -97,8 +97,8 @@ static bool ValidatePacketEncoderSettings(const PacketEncoderSettings& settings,
   }
   if (!digestOk) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.GAMESERVER] Rejected %s encoder settings: macDigestSize=%d "
-        "(expected 32 or 64)",
+        "[NEVR.GAMESERVER] rejected %s encoder settings: macDigestSize=%d "
+        "(expected 32 or 64) — lobby session success message NOT sent, match will not proceed",
         which, settings.macDigestSize);
     return false;
   }
@@ -196,13 +196,15 @@ bool ParseEndpoint(const std::string& endpointStr, uint32_t& internalIP, uint32_
   unsigned long portVal = strtoul(portStr.c_str(), &endptr, 10);
   if (errno != 0 || endptr == portStr.c_str() || *endptr != '\0') {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.GAMESERVER] ParseEndpoint port parse failed port_str=%s endpoint=%s",
+        "[NEVR.GAMESERVER] ParseEndpoint port parse failed port_str=%s endpoint=%s"
+        " — lobby session success message NOT sent",
         portStr.c_str(), endpointStr.c_str());
     return false;
   }
   if (portVal > UINT16_MAX) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.GAMESERVER] ParseEndpoint port out of range port=%lu max=%u endpoint=%s",
+        "[NEVR.GAMESERVER] ParseEndpoint port out of range port=%lu max=%u endpoint=%s"
+        " — lobby session success message NOT sent",
         portVal, UINT16_MAX, endpointStr.c_str());
     return false;
   }
@@ -388,13 +390,20 @@ EncodedMessage EncodeLobbyEntrantsAccept(const gameservice::v1::LobbyEntrantsAcc
   // Binary format: 1 byte padding, then array of GUIDs
   result.data.push_back(0);  // Padding byte (Skip(1) in Go)
 
+  int skipped = 0;
+  int total = msg.entrant_ids_size();
   for (const auto& entrantIdStr : msg.entrant_ids()) {
     GUID guid = {};
     if (!ParseUuidToGuid(entrantIdStr, guid)) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Skipping invalid entrant GUID: %s", entrantIdStr.c_str());
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Skipping invalid entrant GUID: %s", entrantIdStr.c_str());
+      skipped++;
       continue;  // Skip invalid GUIDs
     }
     WriteGuid(result.data, guid);
+  }
+  if (skipped > 0) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] LobbyEntrantsAccept: skipped %d of %d entrant GUIDs (invalid format)",
+        skipped, total);
   }
 
   return result;
@@ -406,13 +415,20 @@ EncodedMessage EncodeLobbyEntrantsReject(const gameservice::v1::LobbyEntrantsRej
   // Binary format: 1 byte error code, then array of GUIDs
   result.data.push_back(static_cast<uint8_t>(msg.code()));
 
+  int skipped = 0;
+  int total = msg.entrant_ids_size();
   for (const auto& entrantIdStr : msg.entrant_ids()) {
     GUID guid = {};
     if (!ParseUuidToGuid(entrantIdStr, guid)) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Skipping invalid entrant GUID: %s", entrantIdStr.c_str());
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Skipping invalid entrant GUID: %s", entrantIdStr.c_str());
+      skipped++;
       continue;  // Skip invalid GUIDs
     }
     WriteGuid(result.data, guid);
+  }
+  if (skipped > 0) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] LobbyEntrantsReject: skipped %d of %d entrant GUIDs (invalid format)",
+        skipped, total);
   }
 
   return result;
