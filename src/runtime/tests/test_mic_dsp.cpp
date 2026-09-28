@@ -1,188 +1,372 @@
-// Ground-truth tests for core/mic_dsp.{h,cpp} — the pure logic behind the
-// WASAPI mic provider (GH nevr-runtime#15, docs/design/2026-09-21-mic-
-// provider-voip-fix.md). No windows.h, no capture device, no Wine: this
-// exercises exactly the ring-buffer and downmix/resample math on the build
-// host.
-
 #include "core/mic_dsp.h"
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
-// --- MicRingBuffer ---------------------------------------------------------
+namespace {
+
+constexpr uint16_t kMonoBlockAlign = sizeof(int16_t);
+
+std::vector<int16_t> Reference(const std::vector<int16_t>& input,
+                               uint32_t srcRate, uint32_t targetRate) {
+  std::vector<int16_t> expected;
+  if (input.empty()) return expected;
+  const uint64_t lastOutputIndex =
+      (static_cast<uint64_t>(input.size() - 1u) * targetRate) / srcRate;
+  expected.reserve(static_cast<size_t>(lastOutputIndex + 1u));
+  for (uint64_t outputIndex = 0; outputIndex <= lastOutputIndex; ++outputIndex) {
+    const uint64_t numerator = outputIndex * srcRate;
+    const uint64_t left = numerator / targetRate;
+    const uint64_t remainder = numerator % targetRate;
+    const double sample = static_cast<double>(input[static_cast<size_t>(left)]) +
+        (static_cast<double>(input[static_cast<size_t>(left + (remainder != 0))]) -
+         input[static_cast<size_t>(left)]) * static_cast<double>(remainder) / targetRate;
+    const double rounded = sample >= 0.0 ? std::floor(sample + 0.5) : std::ceil(sample - 0.5);
+    expected.push_back(static_cast<int16_t>(std::clamp(rounded, -32768.0, 32767.0)));
+  }
+  return expected;
+}
+
+void Append(std::vector<int16_t>& output, const int16_t* samples, uint32_t count) {
+  output.insert(output.end(), samples, samples + count);
+}
+
+std::vector<int16_t> ConvertPartitioned(const std::vector<int16_t>& input,
+                                        uint32_t srcRate, uint32_t targetRate,
+                                        uint32_t packetSize, uint32_t outputCapacity) {
+  MicDspResampler resampler;
+  std::vector<int16_t> result;
+  int16_t output[257];
+  if (outputCapacity == 0 || outputCapacity > 257) {
+    ADD_FAILURE() << "invalid test output capacity " << outputCapacity;
+    return result;
+  }
+  size_t packetStart = 0;
+  while (packetStart < input.size()) {
+    const size_t requestedPacket = packetSize == 0
+        ? 1u + ((packetStart * 1103515245u + 12345u) % 257u)
+        : packetSize;
+    const size_t packetFrames = std::min<size_t>(requestedPacket, input.size() - packetStart);
+    uint32_t consumed = 0;
+    for (;;) {
+      const size_t offset = packetStart + consumed;
+      const uint32_t remaining = static_cast<uint32_t>(packetFrames - consumed);
+      const MicDspResult converted = resampler.Process(
+          input.data() + offset, remaining, static_cast<size_t>(remaining) * sizeof(int16_t),
+          1, kMonoBlockAlign, srcRate, targetRate, false, 16, false,
+          output, outputCapacity);
+      Append(result, output, converted.producedSamples);
+      consumed += converted.consumedFrames;
+      if (converted.status == MicDspStatus::InvalidInput || converted.status == MicDspStatus::RateChanged) {
+        ADD_FAILURE() << "unexpected conversion error";
+        return result;
+      }
+      if (converted.status == MicDspStatus::OutputFull) continue;
+      if (consumed == packetFrames) break;
+      if (converted.consumedFrames == 0 && converted.producedSamples == 0) {
+        ADD_FAILURE() << "resampler stalled inside a packet";
+        return result;
+      }
+    }
+    packetStart += packetFrames;
+  }
+
+  for (;;) {
+    const MicDspResult drained = resampler.Process(
+        nullptr, 0, 0, 1, kMonoBlockAlign, srcRate, targetRate, false, 16, false,
+        output, outputCapacity);
+    Append(result, output, drained.producedSamples);
+    if (drained.status == MicDspStatus::InvalidInput || drained.status == MicDspStatus::RateChanged) {
+      ADD_FAILURE() << "unexpected drain error";
+      return result;
+    }
+    if (drained.status != MicDspStatus::OutputFull) break;
+  }
+  return result;
+}
+
+void ExpectNearSamples(const std::vector<int16_t>& actual,
+                       const std::vector<int16_t>& expected, int tolerance = 1) {
+  ASSERT_EQ(actual.size(), expected.size());
+  for (size_t i = 0; i < actual.size(); ++i) {
+    EXPECT_LE(std::abs(static_cast<int>(actual[i]) - static_cast<int>(expected[i])), tolerance)
+        << "sample " << i;
+  }
+}
+
+std::vector<int16_t> MakeSignal(size_t frames) {
+  std::vector<int16_t> signal(frames);
+  for (size_t i = 0; i < frames; ++i) {
+    const int32_t value = static_cast<int32_t>((i * 7919u) % 50001u) - 25000;
+    signal[i] = static_cast<int16_t>(value);
+  }
+  return signal;
+}
+
+}  // namespace
 
 TEST(MicRingBuffer, EmptyBufferHasNothingAvailable) {
   MicRingBuffer ring(8);
   EXPECT_EQ(ring.Available(), 0u);
-  int16_t out[8];
-  EXPECT_EQ(ring.Pop(out, 8), 0u);
+  int16_t output[8] = {};
+  EXPECT_EQ(ring.Pop(output, 8), 0u);
 }
 
-TEST(MicRingBuffer, PushThenPopReturnsSameSamplesInOrder) {
+TEST(MicRingBuffer, PushThenPopReturnsSamplesInOrder) {
   MicRingBuffer ring(8);
   const int16_t samples[] = {1, 2, 3, 4};
-  EXPECT_FALSE(ring.Push(samples, 4));  // fits; nothing dropped
-  ASSERT_EQ(ring.Available(), 4u);
-
-  int16_t out[4] = {0, 0, 0, 0};
-  EXPECT_EQ(ring.Pop(out, 4), 4u);
-  EXPECT_EQ(ring.Available(), 0u);
-  EXPECT_EQ(std::vector<int16_t>(out, out + 4), std::vector<int16_t>({1, 2, 3, 4}));
+  EXPECT_FALSE(ring.Push(samples, 4));
+  int16_t output[4] = {};
+  EXPECT_EQ(ring.Pop(output, 4), 4u);
+  EXPECT_EQ(std::vector<int16_t>(output, output + 4), (std::vector<int16_t>{1, 2, 3, 4}));
 }
 
-TEST(MicRingBuffer, PopReturnsFewerSamplesThanRequestedWhenNotFull) {
+TEST(MicRingBuffer, PopReturnsOnlyAvailableSamples) {
   MicRingBuffer ring(8);
   const int16_t samples[] = {10, 20, 30};
   ring.Push(samples, 3);
-
-  int16_t out[8] = {0};
-  EXPECT_EQ(ring.Pop(out, 8), 3u);  // asked for 8, only 3 were ever pushed
-  EXPECT_EQ(out[0], 10);
-  EXPECT_EQ(out[1], 20);
-  EXPECT_EQ(out[2], 30);
+  int16_t output[8] = {};
+  EXPECT_EQ(ring.Pop(output, 8), 3u);
+  EXPECT_EQ(std::vector<int16_t>(output, output + 3), (std::vector<int16_t>{10, 20, 30}));
 }
 
-TEST(MicRingBuffer, WrapsAroundCorrectly) {
+TEST(MicRingBuffer, WrapsAroundInOrder) {
   MicRingBuffer ring(4);
   const int16_t first[] = {1, 2, 3};
   ring.Push(first, 3);
-  int16_t drained[2];
-  ring.Pop(drained, 2);  // ring now holds just {3}, head/tail both mid-buffer
-
-  const int16_t second[] = {4, 5, 6};  // wraps past the buffer's physical end
+  int16_t drained[2] = {};
+  EXPECT_EQ(ring.Pop(drained, 2), 2u);
+  const int16_t second[] = {4, 5, 6};
   ring.Push(second, 3);
-  ASSERT_EQ(ring.Available(), 4u);  // capacity 4: {3,4,5,6}
-
-  int16_t out[4] = {0};
-  EXPECT_EQ(ring.Pop(out, 4), 4u);
-  EXPECT_EQ(std::vector<int16_t>(out, out + 4), std::vector<int16_t>({3, 4, 5, 6}));
+  int16_t output[4] = {};
+  EXPECT_EQ(ring.Pop(output, 4), 4u);
+  EXPECT_EQ(std::vector<int16_t>(output, output + 4), (std::vector<int16_t>{3, 4, 5, 6}));
 }
 
-TEST(MicRingBuffer, OverflowDropsOldestAndReportsTrue) {
+TEST(MicRingBuffer, PushPopOverflowAndResetPreserveOrder) {
   MicRingBuffer ring(4);
   const int16_t first[] = {1, 2, 3, 4};
-  EXPECT_FALSE(ring.Push(first, 4));  // exactly fills the ring
-
+  EXPECT_FALSE(ring.Push(first, 4));
   const int16_t second[] = {5, 6};
-  EXPECT_TRUE(ring.Push(second, 2));  // must drop the two oldest (1, 2) to fit
-
+  EXPECT_TRUE(ring.Push(second, 2));
   ASSERT_EQ(ring.Available(), 4u);
-  int16_t out[4] = {0};
-  ring.Pop(out, 4);
-  // Oldest surviving sample first: 1 and 2 were displaced, 3/4/5/6 remain.
-  EXPECT_EQ(std::vector<int16_t>(out, out + 4), std::vector<int16_t>({3, 4, 5, 6}));
-}
-
-TEST(MicRingBuffer, ResetDiscardsBufferedSamples) {
-  MicRingBuffer ring(4);
-  const int16_t samples[] = {1, 2, 3};
-  ring.Push(samples, 3);
+  int16_t output[4] = {};
+  EXPECT_EQ(ring.Pop(output, 4), 4u);
+  EXPECT_EQ(std::vector<int16_t>(output, output + 4), std::vector<int16_t>({3, 4, 5, 6}));
+  ring.Push(first, 4);
   ring.Reset();
   EXPECT_EQ(ring.Available(), 0u);
 }
 
-// --- DownmixResampleToMonoInt16 --------------------------------------------
-
-TEST(DownmixResampleToMonoInt16, MonoInt16AtTargetRatePassesThroughUnchanged) {
-  const int16_t in[] = {1000, -1000, 500, -500, 0};
-  double phase = 0.0;
-  int16_t out[16] = {0};
-  uint32_t n = DownmixResampleToMonoInt16(in, /*frameCount=*/5, /*channels=*/1,
-                                          /*srcRate=*/48000, /*isFloat=*/false, /*bitsPerSample=*/16,
-                                          /*targetRate=*/48000, &phase, out, 16);
-  // Same rate in and out: expect (frameCount - 1) samples (the resampler
-  // stops one short of the last frame — no next sample to interpolate
-  // toward — and carries the remainder via phase for the next packet).
-  ASSERT_EQ(n, 4u);
-  for (uint32_t i = 0; i < n; i++) {
-    EXPECT_NEAR(out[i], in[i], 1) << "sample " << i;
+TEST(MicDspResampler, MatchesIndependentRationalReferenceAcrossRatesAndPartitions) {
+  struct RatePair { uint32_t source; uint32_t target; size_t frames; };
+  const RatePair rates[] = {
+      {48000, 48000, 31}, {44100, 48000, 3073}, {48000, 44100, 4097},
+      {8000, 48000, 5003}, {96000, 48000, 2051}, {44100, 32003, 8197},
+  };
+  for (const RatePair& pair : rates) {
+    const std::vector<int16_t> input = MakeSignal(pair.frames);
+    const std::vector<int16_t> expected = Reference(input, pair.source, pair.target);
+    const uint32_t packetSizes[] = {1, 7, 113, 8192, 0};
+    const uint32_t capacities[] = {1, 2, 31, 257};
+    for (const uint32_t packet : packetSizes) {
+      for (const uint32_t capacity : capacities) {
+        SCOPED_TRACE(::testing::Message() << pair.source << "->" << pair.target
+                                         << " packet=" << packet
+                                         << " capacity=" << capacity);
+        ExpectNearSamples(ConvertPartitioned(input, pair.source, pair.target, packet, capacity), expected);
+      }
+    }
   }
 }
 
-TEST(DownmixResampleToMonoInt16, StereoDownmixAveragesChannels) {
-  // Interleaved stereo: L=32767 (max), R=-32768 (min) -> average ~0.
-  const int16_t in[] = {32767, -32768, 32767, -32768};
-  double phase = 0.0;
-  int16_t out[16] = {0};
-  uint32_t n = DownmixResampleToMonoInt16(in, /*frameCount=*/2, /*channels=*/2,
-                                          /*srcRate=*/48000, /*isFloat=*/false, /*bitsPerSample=*/16,
-                                          /*targetRate=*/48000, &phase, out, 16);
-  ASSERT_GE(n, 1u);
-  EXPECT_NEAR(out[0], 0, 200) << "L/R average of max and min should be near silence";
+TEST(MicDspResampler, LongCoprimeRateStreamMatchesReference) {
+  const std::vector<int16_t> input = MakeSignal(100003);
+  ExpectNearSamples(ConvertPartitioned(input, 44100, 48000, 0, 97), Reference(input, 44100, 48000));
 }
 
-TEST(DownmixResampleToMonoInt16, FloatInputIsScaledToInt16Range) {
-  const float in[] = {1.0f, -1.0f, 0.0f, 0.5f};
-  double phase = 0.0;
-  int16_t out[16] = {0};
-  uint32_t n = DownmixResampleToMonoInt16(in, /*frameCount=*/4, /*channels=*/1,
-                                          /*srcRate=*/48000, /*isFloat=*/true, /*bitsPerSample=*/32,
-                                          /*targetRate=*/48000, &phase, out, 16);
-  ASSERT_GE(n, 3u);
-  EXPECT_NEAR(out[0], 32767, 5);
-  EXPECT_NEAR(out[1], -32767, 5);
-  EXPECT_NEAR(out[2], 0, 5);
+TEST(MicDspResampler, SingleFramePacketsEmitEachAvailableExactSampleOnce) {
+  const std::vector<int16_t> input = {10, 20, 40, 80, 160, 320};
+  ExpectNearSamples(ConvertPartitioned(input, 48000, 48000, 1, 1), input);
+  ExpectNearSamples(ConvertPartitioned(input, 44100, 48000, 1, 1), Reference(input, 44100, 48000));
 }
 
-TEST(DownmixResampleToMonoInt16, ClipsOutOfRangeFloatSamples) {
-  const float in[] = {2.0f, -3.0f, 0.0f};  // deliberately out of [-1, 1]
-  double phase = 0.0;
-  int16_t out[16] = {0};
-  uint32_t n = DownmixResampleToMonoInt16(in, /*frameCount=*/3, /*channels=*/1,
-                                          /*srcRate=*/48000, /*isFloat=*/true, /*bitsPerSample=*/32,
-                                          /*targetRate=*/48000, &phase, out, 16);
-  ASSERT_GE(n, 2u);
-  EXPECT_EQ(out[0], 32767);   // clipped to max, not wrapped/overflowed
-  EXPECT_EQ(out[1], -32767);  // clipped to min
+TEST(MicDspResampler, ZeroCapacityConsumesNothingAndZeroInputDrainsPendingSegment) {
+  MicDspResampler resampler;
+  int16_t output[1] = {};
+  const int16_t input[] = {1000, 2000};
+  const MicDspResult noCapacity = resampler.Process(input, 2, sizeof(input), 1, 2,
+      8000, 48000, false, 16, false, output, 0);
+  EXPECT_EQ(noCapacity.status, MicDspStatus::OutputFull);
+  EXPECT_EQ(noCapacity.consumedFrames, 0u);
+  EXPECT_EQ(noCapacity.producedSamples, 0u);
+
+  const MicDspResult first = resampler.Process(input, 2, sizeof(input), 1, 2,
+      8000, 48000, false, 16, false, output, 1);
+  ASSERT_EQ(first.consumedFrames, 1u);
+  ASSERT_EQ(first.producedSamples, 1u);
+  EXPECT_EQ(output[0], 1000);
+
+  const MicDspResult segment = resampler.Process(input + 1, 1, sizeof(int16_t), 1, 2,
+      8000, 48000, false, 16, false, output, 1);
+  ASSERT_EQ(segment.consumedFrames, 1u);
+  ASSERT_EQ(segment.producedSamples, 1u);
+  EXPECT_EQ(segment.status, MicDspStatus::OutputFull);
+
+  const MicDspResult noCapacityWhilePending = resampler.Process(nullptr, 0, 0, 1, 2,
+      8000, 48000, false, 16, false, output, 0);
+  EXPECT_EQ(noCapacityWhilePending.status, MicDspStatus::OutputFull);
+  EXPECT_EQ(noCapacityWhilePending.consumedFrames, 0u);
+  EXPECT_EQ(noCapacityWhilePending.producedSamples, 0u);
+
+  uint32_t drained = 0;
+  for (;;) {
+    const MicDspResult next = resampler.Process(nullptr, 0, 0, 1, 2,
+        8000, 48000, false, 16, false, output, 1);
+    drained += next.producedSamples;
+    if (next.status != MicDspStatus::OutputFull) break;
+  }
+  EXPECT_EQ(drained, 5u);
 }
 
-TEST(DownmixResampleToMonoInt16, UpsamplingProducesMoreSamplesThanInput) {
-  // 8kHz -> 48000Hz is a 6x upsample.
-  const int16_t in[] = {0, 10000, 0, -10000, 0, 10000, 0, -10000};
-  double phase = 0.0;
-  int16_t out[64] = {0};
-  uint32_t n = DownmixResampleToMonoInt16(in, /*frameCount=*/8, /*channels=*/1,
-                                          /*srcRate=*/8000, /*isFloat=*/false, /*bitsPerSample=*/16,
-                                          /*targetRate=*/48000, &phase, out, 64);
-  EXPECT_GT(n, 8u * 3);  // meaningfully more output samples than input frames
+TEST(MicDspResampler, EmptyCallDoesNotConfigureOrChangeStreamRate) {
+  MicDspResampler resampler;
+  int16_t output[4] = {};
+  const MicDspResult empty = resampler.Process(nullptr, 0, 0, 1, 2,
+      44100, 48000, false, 16, false, output, 4);
+  EXPECT_EQ(empty.status, MicDspStatus::NeedInput);
+  const int16_t first = 10;
+  const MicDspResult configured = resampler.Process(&first, 1, sizeof(first), 1, 2,
+      48000, 48000, false, 16, false, output, 4);
+  EXPECT_EQ(configured.consumedFrames, 1u);
+  const MicDspResult changed = resampler.Process(&first, 1, sizeof(first), 1, 2,
+      44100, 48000, false, 16, false, output, 4);
+  EXPECT_EQ(changed.status, MicDspStatus::RateChanged);
 }
 
-TEST(DownmixResampleToMonoInt16, PhaseCarriesAcrossPacketsWithoutGapOrOverlap) {
-  // Two consecutive packets of the same ramp: total output samples across
-  // both calls should track total input frames at a 1:1 rate, not double-
-  // count or drop a sample at the boundary.
-  const int16_t packet1[] = {0, 1, 2, 3};
-  const int16_t packet2[] = {4, 5, 6, 7};
-  double phase = 0.0;
-  int16_t out1[16] = {0};
-  int16_t out2[16] = {0};
-  uint32_t n1 = DownmixResampleToMonoInt16(packet1, 4, 1, 48000, false, 16, 48000, &phase, out1, 16);
-  uint32_t n2 = DownmixResampleToMonoInt16(packet2, 4, 1, 48000, false, 16, 48000, &phase, out2, 16);
-  // At a 1:1 rate this should track close to 8 total samples across both
-  // packets (allowing for the boundary carry), not e.g. 6 (a dropped gap)
-  // or 10+ (a duplicated overlap).
-  EXPECT_NEAR(static_cast<int>(n1 + n2), 7, 1);
+TEST(MicDspResampler, RejectsTruncatedDataAndInvalidStrideWithoutConsuming) {
+  MicDspResampler resampler;
+  int16_t output[8] = {};
+  const int16_t samples[] = {1, 2};
+  const MicDspResult truncated = resampler.Process(samples, 2, sizeof(int16_t), 1, 2,
+      48000, 48000, false, 16, false, output, 8);
+  EXPECT_EQ(truncated.status, MicDspStatus::InvalidInput);
+  EXPECT_EQ(truncated.consumedFrames, 0u);
+  const MicDspResult badStride = resampler.Process(samples, 2, sizeof(samples), 2, 2,
+      48000, 48000, false, 16, false, output, 8);
+  EXPECT_EQ(badStride.status, MicDspStatus::InvalidInput);
+  EXPECT_EQ(badStride.consumedFrames, 0u);
 }
 
-TEST(DownmixResampleToMonoInt16, ZeroChannelsProducesNoOutput) {
-  const int16_t in[] = {1, 2, 3};
-  double phase = 0.0;
-  int16_t out[16] = {0};
-  uint32_t n = DownmixResampleToMonoInt16(in, 3, /*channels=*/0, 48000, false, 16, 48000, &phase, out, 16);
-  EXPECT_EQ(n, 0u);
+TEST(MicDspResampler, DefinesFloatScalingClippingAndHalfwayRounding) {
+  MicDspResampler resampler;
+  int16_t output[8] = {};
+  const float input[] = {1.0F, -1.0F, 0.5F, 2.0F};
+  const MicDspResult floats = resampler.Process(input, 4, sizeof(input), 1, sizeof(float),
+      48000, 48000, true, 32, false, output, 8);
+  ASSERT_EQ(floats.producedSamples, 4u);
+  EXPECT_EQ(output[0], 32767);
+  EXPECT_EQ(output[1], -32768);
+  EXPECT_EQ(output[2], 16384);
+  EXPECT_EQ(output[3], 32767);
+
+  resampler.Reset();
+  const int16_t stereo[] = {0, 1, 0, -1};
+  const MicDspResult rounded = resampler.Process(stereo, 2, sizeof(stereo), 2, 4,
+      48000, 48000, false, 16, false, output, 8);
+  ASSERT_EQ(rounded.producedSamples, 2u);
+  EXPECT_EQ(output[0], 1);
+  EXPECT_EQ(output[1], -1);
 }
 
-TEST(DownmixResampleToMonoInt16, UnsupportedBitDepthIsTreatedAsSilenceNotGarbage) {
-  // 24-bit int PCM (not float, bitsPerSample != 16) is documented as
-  // "treated as silence rather than guessed" — verify that contract holds
-  // rather than reinterpreting the bytes as some other width.
-  const uint8_t in[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};  // would be nonzero misread as int16
-  double phase = 0.0;
-  int16_t out[16] = {0};
-  uint32_t n = DownmixResampleToMonoInt16(in, /*frameCount=*/2, /*channels=*/1, 48000, /*isFloat=*/false,
-                                          /*bitsPerSample=*/24, 48000, &phase, out, 16);
-  ASSERT_GE(n, 1u);
-  EXPECT_EQ(out[0], 0);
+TEST(MicDspResampler, SilentFramesAdvanceTimeWithoutDereferencingInput) {
+  MicDspResampler resampler;
+  int16_t output[32] = {};
+  const int16_t initial[] = {1200, 2400};
+  const MicDspResult initialResult = resampler.Process(initial, 2, sizeof(initial), 1, 2,
+      48000, 48000, false, 16, false, output, 32);
+  ASSERT_EQ(initialResult.consumedFrames, 2u);
+  std::vector<int16_t> actual(output, output + initialResult.producedSamples);
+  const MicDspResult silent = resampler.Process(reinterpret_cast<const void*>(1), 3, 0, 1, 2,
+      48000, 48000, false, 16, true, output, 32);
+  ASSERT_EQ(silent.consumedFrames, 3u);
+  actual.insert(actual.end(), output, output + silent.producedSamples);
+  const int16_t afterSilence[] = {3000};
+  const MicDspResult resumed = resampler.Process(afterSilence, 1, sizeof(afterSilence), 1, 2,
+      48000, 48000, false, 16, false, output, 32);
+  ASSERT_EQ(resumed.consumedFrames, 1u);
+  actual.insert(actual.end(), output, output + resumed.producedSamples);
+  const std::vector<int16_t> expected = {1200, 2400, 0, 0, 0, 3000};
+  ExpectNearSamples(actual, expected);
+}
+
+TEST(MicCapturePacketAdapter, HandlesLargePacketsAndInterleavedStrideWithoutTruncation) {
+  constexpr uint32_t kFrames = 9001;
+  constexpr uint16_t kChannels = 2;
+  constexpr uint16_t kBlockAlign = kChannels * sizeof(int16_t);
+  std::vector<int16_t> interleaved(static_cast<size_t>(kFrames) * kChannels);
+  std::vector<int16_t> mono(kFrames);
+  for (uint32_t frame = 0; frame < kFrames; ++frame) {
+    mono[frame] = static_cast<int16_t>(static_cast<int32_t>(frame % 4096u) * 7 - 14000);
+    interleaved[frame * 2] = mono[frame];
+    interleaved[frame * 2 + 1] = mono[frame];
+  }
+  MicRingBuffer ring(65536);
+  MicCapturePacketAdapter adapter;
+  const auto converted = adapter.Process(interleaved.data(), kFrames, interleaved.size() * sizeof(int16_t),
+      kChannels, kBlockAlign, 44100, 48000, false, 16, false, ring);
+  ASSERT_EQ(converted.status, MicCapturePacketStatus::Complete);
+  EXPECT_EQ(converted.consumedFrames, kFrames);
+  const std::vector<int16_t> expected = Reference(mono, 44100, 48000);
+  EXPECT_EQ(converted.producedSamples, expected.size());
+  std::vector<int16_t> actual(expected.size());
+  ASSERT_EQ(ring.Pop(actual.data(), static_cast<uint32_t>(actual.size())), actual.size());
+  ExpectNearSamples(actual, expected);
+}
+
+TEST(MicCapturePacketAdapter, SilentPacketUsesNoInputPointerButAdvancesClock) {
+  MicRingBuffer ring(128);
+  MicCapturePacketAdapter adapter;
+  const auto result = adapter.Process(reinterpret_cast<const void*>(1), 20, 0, 1, 2,
+      8000, 48000, false, 16, true, ring);
+  EXPECT_EQ(result.status, MicCapturePacketStatus::Complete);
+  EXPECT_EQ(result.consumedFrames, 20u);
+  EXPECT_EQ(result.producedSamples, 115u);
+  std::vector<int16_t> actual(115);
+  EXPECT_EQ(ring.Pop(actual.data(), 115), 115u);
+  EXPECT_TRUE(std::all_of(actual.begin(), actual.end(), [](int16_t sample) { return sample == 0; }));
+}
+
+TEST(MicCapturePacketAdapter, RejectsMalformedPacketBoundsBeforeReading) {
+  MicRingBuffer ring(16);
+  MicCapturePacketAdapter adapter;
+  const int16_t sample = 5;
+  const auto result = adapter.Process(&sample, 2, sizeof(sample), 1, 2,
+      48000, 48000, false, 16, false, ring);
+  EXPECT_EQ(result.status, MicCapturePacketStatus::InvalidInput);
+  EXPECT_EQ(result.consumedFrames, 0u);
+}
+
+TEST(MicCapturePacketAdapter, ResetStartsANewStreamAtTimeZero) {
+  MicRingBuffer ring(32);
+  MicCapturePacketAdapter adapter;
+  const int16_t first[] = {100, 200, 300};
+  ASSERT_EQ(adapter.Process(first, 3, sizeof(first), 1, 2,
+      48000, 48000, false, 16, false, ring).status, MicCapturePacketStatus::Complete);
+  int16_t oldOutput[3] = {};
+  ring.Pop(oldOutput, 3);
+  adapter.Reset();
+  const int16_t second[] = {700, 800};
+  const auto result = adapter.Process(second, 2, sizeof(second), 1, 2,
+      48000, 48000, false, 16, false, ring);
+  EXPECT_EQ(result.producedSamples, 2u);
+  int16_t newOutput[2] = {};
+  EXPECT_EQ(ring.Pop(newOutput, 2), 2u);
+  EXPECT_EQ(newOutput[0], 700);
+  EXPECT_EQ(newOutput[1], 800);
 }

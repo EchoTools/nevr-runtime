@@ -8,6 +8,7 @@
 
 #include "core/logging.h"
 #include "runtime/log/url_diagnostics.h"
+#include "runtime/log/security_diagnostics.h"
 
 // IWinHttpRequest IID — {A1C9FEEE-0617-4F23-9D58-8961EA43567C}
 static const IID IID_IWinHttpRequest = {0xA1C9FEEE, 0x0617, 0x4F23, {0x9D, 0x58, 0x89, 0x61, 0xEA, 0x43, 0x56, 0x7C}};
@@ -20,8 +21,9 @@ static std::string WideToUtf8(const wchar_t* ws) {
   if (!ws) return {};
   int len = WideCharToMultiByte(CP_UTF8, 0, ws, -1, nullptr, 0, nullptr, nullptr);
   if (len <= 0) return {};
-  std::string s(len - 1, '\0');
+  std::string s(len, '\0');
   WideCharToMultiByte(CP_UTF8, 0, ws, -1, &s[0], len, nullptr, nullptr);
+  s.resize(static_cast<size_t>(len - 1));
   return s;
 }
 
@@ -284,9 +286,8 @@ static HRESULT STDMETHODCALLTYPE Stub_Invoke(void* pThis, DISPID dispIdMember, R
       // Send([Body]) — no-op: succeed without real HTTP.
       // The game calls this for Oculus telemetry/health checks which no longer
       // exist. The ws_bridge handles actual service traffic independently.
-      const std::string requestUrl = WideToUtf8(self->m_url.empty() ? L"" : self->m_url.c_str());
       const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
-          "[NEVR.HTTP] Send DISPID=5 (no-op) url=", requestUrl);
+          "[NEVR.HTTP] Send DISPID=5 (no-op) url=", WideToUtf8(self->m_url.c_str()));
       Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
       self->m_sent = true;
       self->m_statusCode = 200;
@@ -333,8 +334,6 @@ static HRESULT STDMETHODCALLTYPE Stub_SetProxy(void*, long, VARIANT, VARIANT) {
 // interface the game actually uses. Kept for reference; not in the vtable.
 __attribute__((unused))
 static HRESULT STDMETHODCALLTYPE Stub_SetCredentials(void*, BSTR, BSTR, long) {
-  // Unreachable in production: this function is marked unused and is not
-  // wired into s_vtbl below — the Log() call here never fires.
   Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetCredentials called");
   return S_OK;
 }
@@ -354,9 +353,6 @@ static HRESULT STDMETHODCALLTYPE Stub_Open(void* pThis, BSTR Method, BSTR Url, V
   return S_OK;
 }
 
-// Header names whose values may carry credentials. Matched case-insensitively.
-// The value is never logged for these — same never-log-credentials policy
-// ws_bridge.cpp documents for the password field (see its line ~436).
 static bool IsCredentialHeaderName(const wchar_t* header) {
   if (!header) return false;
   static const wchar_t* const kCredentialHeaders[] = {
@@ -371,11 +367,10 @@ static bool IsCredentialHeaderName(const wchar_t* header) {
 static HRESULT STDMETHODCALLTYPE Stub_SetRequestHeader(void* pThis, BSTR Header, BSTR Value) {
   if (Header && Value) SELF(pThis)->m_requestHeaders[Header] = Value;
   if (IsCredentialHeaderName(Header)) {
-    Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetRequestHeader %ls: ***redacted***",
-        Header ? Header : L"(null)");
+    Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetRequestHeader %ls: ***redacted***", Header);
   } else {
-    Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetRequestHeader %ls: %ls", Header ? Header : L"(null)",
-        Value ? Value : L"(null)");
+    Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] SetRequestHeader %ls: %ls",
+        Header ? Header : L"(null)", Value ? Value : L"(null)");
   }
   return S_OK;
 }

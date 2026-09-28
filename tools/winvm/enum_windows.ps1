@@ -2,7 +2,12 @@
 # WinRM process lives in a different session and cannot see the game's windows.
 # Writes one block per echovr.exe: its top-level windows and their child text,
 # which is where a blocking MessageBox's message lives.
-param([Parameter(Mandatory)][string]$OutFile)
+param(
+  [Parameter(Mandatory)][string]$OutFile,
+  [Parameter(Mandatory)][string]$StatusFile,
+  [Parameter(Mandatory)][string]$RunId,
+  [Parameter(Mandatory)][int]$ProcessId
+)
 
 Add-Type @"
 using System; using System.Text; using System.Runtime.InteropServices; using System.Collections.Generic;
@@ -33,7 +38,8 @@ public class W {
 }
 "@
 
-$pids = @(Get-Process echovr -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
-$out = @("echovr pids: $($pids -join ',')  session: $((Get-Process -Id $PID).SessionId)")
-foreach ($p in $pids) { $out += "== pid $p =="; $out += [W]::Dump([uint32]$p) }
+$target = Get-Process -Id $ProcessId -ErrorAction Stop
+$out = @("echovr pid: $ProcessId  session: $($target.SessionId)")
+$out += [W]::Dump([uint32]$ProcessId)
 $out | Set-Content -Path $OutFile -Encoding UTF8
+Set-Content -Path $StatusFile -Value "$RunId completed" -Encoding ASCII

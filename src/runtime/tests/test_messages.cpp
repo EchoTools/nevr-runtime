@@ -9,6 +9,7 @@
 #include "abi/echovr_functions.h"
 #include "gameservice/v1/gameservice.pb.h"
 #include "runtime/server/messages.h"
+#include "runtime/server/session_success_dispatch.h"
 
 namespace {
 
@@ -288,7 +289,7 @@ TEST(MessagesEncoding, SessionSuccessEncodesValidatedKeysAndSequences) {
   EXPECT_EQ(ReadLe64(encoded.data, 0xb0), 19U);
 }
 
-TEST(MessagesEncoding, SessionSuccessInvalidEndpointReturnsEncodedPrefix) {
+TEST(MessagesEncoding, SessionSuccessInvalidEndpointReturnsNoPartialMessage) {
   gameservice::v1::SNSLobbySessionSuccessV5Message message;
   message.set_game_mode(0x1122334455667788ULL);
   message.set_lobby_id(kLobbyId);
@@ -297,10 +298,113 @@ TEST(MessagesEncoding, SessionSuccessInvalidEndpointReturnsEncodedPrefix) {
 
   const EncodedMessage encoded = EncodeLobbySessionSuccessV5(message);
 
-  ASSERT_EQ(encoded.size(), 40U);
-  EXPECT_EQ(ReadLe64(encoded.data, 0), 0x1122334455667788ULL);
-  ExpectBytesAt(encoded.data, 8, kLobbyGuidBytes);
-  ExpectBytesAt(encoded.data, 24, kGroupGuidBytes);
+  EXPECT_EQ(encoded.size(), 0U);
+}
+
+TEST(MessagesEncoding, InvalidSessionSuccessDoesNotMutateStateOrDispatch) {
+  ScopedGameLogger logger;
+  gameservice::v1::SNSLobbySessionSuccessV5Message valid;
+  valid.set_game_mode(1);
+  valid.set_lobby_id(kLobbyId);
+  valid.set_group_id(kGroupId);
+  valid.set_endpoint("10.0.0.1:203.0.113.9:6721");
+  valid.set_server_encoder_flags(MakeEncoderFlags());
+  valid.set_client_encoder_flags(MakeEncoderFlags());
+
+  std::vector<gameservice::v1::SNSLobbySessionSuccessV5Message> invalid;
+  auto malformedLobby = valid;
+  malformedLobby.set_lobby_id("not-a-uuid");
+  invalid.push_back(malformedLobby);
+  auto malformedGroup = valid;
+  malformedGroup.set_group_id("not-a-uuid");
+  invalid.push_back(malformedGroup);
+  auto malformedEndpoint = valid;
+  malformedEndpoint.set_endpoint("not-an-endpoint");
+  invalid.push_back(malformedEndpoint);
+  auto invalidEncoderSettings = valid;
+  invalidEncoderSettings.set_server_encoder_flags(MakeEncoderFlags(32, 15, 32));
+  invalid.push_back(invalidEncoderSettings);
+
+  for (const auto& message : invalid) {
+    std::string state = "previous-session";
+    size_t dispatchCount = 0;
+    size_t commitCount = 0;
+    EXPECT_FALSE(GameServer::ApplyLobbySessionSuccess(
+        message, state, [&commitCount]() { ++commitCount; },
+        [&dispatchCount](const EncodedMessage&) { ++dispatchCount; }));
+    EXPECT_EQ(state, "previous-session");
+    EXPECT_EQ(commitCount, 0U);
+    EXPECT_EQ(dispatchCount, 0U);
+
+    std::string noBroadcasterState = "previous-session";
+    commitCount = 0;
+    EXPECT_FALSE(GameServer::ApplyLobbySessionSuccess(message, noBroadcasterState,
+                                                       [&commitCount]() { ++commitCount; }, {}));
+    EXPECT_EQ(noBroadcasterState, "previous-session");
+    EXPECT_EQ(commitCount, 0U);
+  }
+}
+
+TEST(MessagesEncoding, ValidSessionSuccessCommitsStateAndDispatchesDecodableBytes) {
+  gameservice::v1::SNSLobbySessionSuccessV5Message message;
+  message.set_game_mode(0x8877665544332211ULL);
+  message.set_lobby_id(kLobbyId);
+  message.set_group_id(kGroupId);
+  message.set_endpoint("10.0.0.1:203.0.113.9:6721");
+  message.set_team_index(-1);
+  message.set_session_flags(0xA5);
+  message.set_server_encoder_flags(MakeEncoderFlags());
+  message.set_client_encoder_flags(MakeEncoderFlags());
+  message.set_server_sequence_id(0x0102030405060708ULL);
+  message.set_client_sequence_id(0x1112131415161718ULL);
+  message.set_server_mac_key(std::string(32, 'M'));
+  message.set_server_enc_key(std::string(32, 'E'));
+  message.set_server_random_key(std::string(32, 'R'));
+  message.set_client_mac_key(std::string(32, 'm'));
+  message.set_client_enc_key(std::string(32, 'e'));
+  message.set_client_random_key(std::string(32, 'r'));
+
+  std::string state = "old-session";
+  bool committedBeforeDispatch = false;
+  size_t dispatchCount = 0;
+  std::vector<uint8_t> dispatched;
+  ASSERT_TRUE(GameServer::ApplyLobbySessionSuccess(
+      message, state, [&state, &committedBeforeDispatch]() {
+        EXPECT_EQ(state, kLobbyId);
+        committedBeforeDispatch = true;
+      },
+      [&dispatchCount, &dispatched, &committedBeforeDispatch](const EncodedMessage& encoded) {
+        EXPECT_TRUE(committedBeforeDispatch);
+        ++dispatchCount;
+        dispatched = encoded.data;
+      }));
+  EXPECT_EQ(state, kLobbyId);
+  EXPECT_TRUE(committedBeforeDispatch);
+  EXPECT_EQ(dispatchCount, 1U);
+  ASSERT_EQ(dispatched.size(), 0x48U + 8U + 32U * 6U + 8U);
+  EXPECT_EQ(ReadLe64(dispatched, 0), 0x8877665544332211ULL);
+  ExpectBytesAt(dispatched, 8, kLobbyGuidBytes);
+  ExpectBytesAt(dispatched, 24, kGroupGuidBytes);
+  ExpectBytesAt(dispatched, 40, std::array<uint8_t, 4>{10, 0, 0, 1});
+  ExpectBytesAt(dispatched, 44, std::array<uint8_t, 4>{203, 0, 113, 9});
+  EXPECT_EQ(dispatched[0x30], 0x1aU);
+  EXPECT_EQ(dispatched[0x31], 0x41U);
+  EXPECT_EQ(dispatched[0x32], 0xffU);
+  EXPECT_EQ(dispatched[0x33], 0xffU);
+  EXPECT_EQ(dispatched[0x34], 0xa5U);
+  EXPECT_EQ(dispatched[0x35], 0U);
+  EXPECT_EQ(dispatched[0x36], 0U);
+  EXPECT_EQ(dispatched[0x37], 0U);
+  EXPECT_EQ(ReadLe64(dispatched, 0x38), MakeEncoderFlags());
+  EXPECT_EQ(ReadLe64(dispatched, 0x40), MakeEncoderFlags());
+  EXPECT_EQ(ReadLe64(dispatched, 0x48), 0x0102030405060708ULL);
+  ExpectRepeatedBytesAt(dispatched, 0x50, 32, static_cast<uint8_t>('M'));
+  ExpectRepeatedBytesAt(dispatched, 0x70, 32, static_cast<uint8_t>('E'));
+  ExpectRepeatedBytesAt(dispatched, 0x90, 32, static_cast<uint8_t>('R'));
+  EXPECT_EQ(ReadLe64(dispatched, 0xb0), 0x1112131415161718ULL);
+  ExpectRepeatedBytesAt(dispatched, 0xb8, 32, static_cast<uint8_t>('m'));
+  ExpectRepeatedBytesAt(dispatched, 0xd8, 32, static_cast<uint8_t>('e'));
+  ExpectRepeatedBytesAt(dispatched, 0xf8, 32, static_cast<uint8_t>('r'));
 }
 
 TEST(MessagesEncoding, SessionSuccessUsesEncoderKeySizesForVariableOffsets) {

@@ -28,6 +28,8 @@
 
 #include "core/logging.h"
 #include "core/mic_dsp.h"
+#include "core/mic_capture_drain.h"
+#include "core/mic_lifecycle.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -69,23 +71,11 @@ constexpr uint32_t kRingCapacitySamples = 24000;  // ~500ms at 48kHz mono
 MicRingBuffer g_ring(kRingCapacitySamples);
 bool g_ringOverflowLogged = false;
 
-void RingPushWithOverflowLog(const int16_t* samples, uint32_t count) {
-  if (g_ring.Push(samples, count) && !g_ringOverflowLogged) {
-    // The game isn't draining fast enough (or never started). Log once, not
-    // every overflowing sample — this runs on the capture thread every ~10ms.
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.MIC] ring buffer full — game is not draining MicRead; oldest "
-        "audio is being dropped");
-    g_ringOverflowLogged = true;
-  }
-}
-
 // --- WASAPI state ------------------------------------------------------
-// Concurrency note: these are touched only by MicCreate/MicStart/MicStop/
-// MicDestroy, which the game calls sequentially from what is, by every
-// observed call site, one thread (the same thread that owns the provider).
-// No lock here — only the ring buffer above is genuinely cross-thread
-// (capture thread writes, game thread reads via MicRead).
+// The lifecycle controller serializes public create/start/stop/destroy calls,
+// releases this state only on its recorded owner thread, and retains it until
+// a worker join is confirmed. The capture worker owns packet reads while live;
+// only the ring buffer is shared with the game thread.
 IMMDeviceEnumerator* g_enumerator = nullptr;
 IMMDevice* g_device = nullptr;
 IAudioClient* g_audioClient = nullptr;
@@ -93,10 +83,12 @@ IAudioCaptureClient* g_captureClient = nullptr;
 WAVEFORMATEX* g_mixFormat = nullptr;
 HANDLE g_captureEvent = nullptr;
 HANDLE g_captureThread = nullptr;
+HANDLE g_workerStartupEvent = nullptr;
 std::atomic<bool> g_running{false};
-std::atomic<bool> g_created{false};
-bool g_weInitializedCom = false;  // only we CoUninitialize if true
-double g_resamplePhase = 0.0;     // carried across capture packets
+std::atomic<bool> g_workerSetupSucceeded{false};
+bool g_ownerMustUninitializeCom = false;
+MicCapturePacketAdapter g_captureAdapter;
+MicCaptureLifecycle g_lifecycle;
 
 void ReleaseWasapi() {
   if (g_captureClient) { g_captureClient->Release(); g_captureClient = nullptr; }
@@ -105,68 +97,322 @@ void ReleaseWasapi() {
   if (g_enumerator) { g_enumerator->Release(); g_enumerator = nullptr; }
   if (g_mixFormat) { CoTaskMemFree(g_mixFormat); g_mixFormat = nullptr; }
   if (g_captureEvent) { CloseHandle(g_captureEvent); g_captureEvent = nullptr; }
+  if (g_workerStartupEvent) { CloseHandle(g_workerStartupEvent); g_workerStartupEvent = nullptr; }
 }
 
 // KSDATAFORMAT_SUBTYPE_IEEE_FLOAT's Data1 (0x00000003...) — compared
 // directly rather than pulling in ksmedia.h for one well-known GUID.
 constexpr unsigned long kSubtypeIeeeFloatData1 = 0x00000003ul;
 
-// Converts one WASAPI capture packet (native rate/channels/format) to mono
-// int16 at kTargetSampleRate and appends it to the ring buffer. WASAPI's own
-// contract is that shared-mode mix format is always PCM16 or IEEE float
-// (optionally wrapped in WAVEFORMATEXTENSIBLE) — DownmixResampleToMonoInt16
-// (core/mic_dsp.cpp) handles both; anything else is treated as silence
-// rather than misinterpreted as audio.
-void ConvertAndPush(const BYTE* data, UINT32 frameCount, const WAVEFORMATEX* fmt) {
-  if (frameCount == 0 || fmt->nChannels == 0) return;
-
+// Converts a single WASAPI packet. The adapter retains only decoded sample
+// state, never WASAPI's packet pointer, so ReleaseBuffer can run exactly once
+// before this capture iteration proceeds.
+void ConvertAndPush(const BYTE* data, UINT32 frameCount, DWORD flags, const WAVEFORMATEX* fmt) {
+  if (fmt == nullptr || frameCount == 0) return;
   bool isFloat = (fmt->wFormatTag == WAVE_FORMAT_IEEE_FLOAT);
   if (fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+    if (fmt->cbSize < sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) {
+      Log(EchoVR::LogLevel::Error, "[NEVR.MIC] extensible mix format is truncated (cbSize=%u)",
+          static_cast<unsigned>(fmt->cbSize));
+      return;
+    }
     const auto* ext = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(fmt);
     isFloat = (ext->SubFormat.Data1 == kSubtypeIeeeFloatData1);
   }
-
-  // Matches core/mic_dsp.cpp's own frame/output bounds.
-  constexpr uint32_t kMaxOut = 8192 * 2 + 4;
-  int16_t out[kMaxOut];
-  uint32_t outCount = DownmixResampleToMonoInt16(
-      data, frameCount, fmt->nChannels, fmt->nSamplesPerSec, isFloat, fmt->wBitsPerSample,
-      kTargetSampleRate, &g_resamplePhase, out, kMaxOut);
-
-  RingPushWithOverflowLog(out, outCount);
+  const bool silent = (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+  const size_t bytes = silent ? 0 : static_cast<size_t>(frameCount) * fmt->nBlockAlign;
+  const MicCapturePacketResult result = g_captureAdapter.Process(
+      data, frameCount, bytes, fmt->nChannels, fmt->nBlockAlign,
+      fmt->nSamplesPerSec, kTargetSampleRate, isFloat, fmt->wBitsPerSample,
+      silent, g_ring);
+  if (result.status != MicCapturePacketStatus::Complete) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.MIC] capture packet rejected (status=%u consumed=%u/%u frames)",
+        static_cast<unsigned>(result.status), result.consumedFrames, frameCount);
+  }
+  if (result.ringOverflow && !g_ringOverflowLogged) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.MIC] ring buffer full — game is not draining MicRead; oldest audio is being dropped");
+    g_ringOverflowLogged = true;
+  }
 }
+
+bool CaptureCancelled(void*) { return !g_running.load(std::memory_order_acquire); }
+
+bool CaptureNextPacket(void*, uint32_t* frames) {
+  UINT32 packetFrames = 0;
+  const HRESULT hr = g_captureClient->GetNextPacketSize(&packetFrames);
+  if (FAILED(hr)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] GetNextPacketSize failed: 0x%lx", static_cast<unsigned long>(hr));
+    return false;
+  }
+  *frames = packetFrames;
+  return true;
+}
+
+bool CaptureAcquirePacket(void*, const void** data, uint32_t* frames, uint32_t* flags) {
+  BYTE* packet = nullptr;
+  UINT32 packetFrames = 0;
+  DWORD packetFlags = 0;
+  const HRESULT hr = g_captureClient->GetBuffer(&packet, &packetFrames, &packetFlags, nullptr, nullptr);
+  if (FAILED(hr)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] GetBuffer failed: 0x%lx", static_cast<unsigned long>(hr));
+    return false;
+  }
+  *data = packet;
+  *frames = packetFrames;
+  *flags = packetFlags;
+  return true;
+}
+
+void CaptureProcessPacket(void*, const void* data, uint32_t frames, uint32_t flags) {
+  if (frames > 0) ConvertAndPush(static_cast<const BYTE*>(data), frames, flags, g_mixFormat);
+}
+
+bool CaptureReleasePacket(void*, uint32_t frames) {
+  const HRESULT hr = g_captureClient->ReleaseBuffer(frames);
+  if (FAILED(hr)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] ReleaseBuffer failed: 0x%lx",
+        static_cast<unsigned long>(hr));
+    return false;
+  }
+  return true;
+}
+
+const MicCaptureDrainOperations kCaptureDrainOperations = {
+    nullptr, CaptureCancelled, CaptureNextPacket, CaptureAcquirePacket,
+    CaptureProcessPacket, CaptureReleasePacket};
 
 DWORD WINAPI CaptureThreadProc(LPVOID) {
   HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-  bool comInitializedHere = SUCCEEDED(hr) && hr != S_FALSE;
+  if (FAILED(hr)) {
+    g_running.store(false, std::memory_order_release);
+    g_workerSetupSucceeded.store(false, std::memory_order_release);
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] capture worker COM initialization failed: 0x%lx",
+        static_cast<unsigned long>(hr));
+    if (g_workerStartupEvent != nullptr && !SetEvent(g_workerStartupEvent)) {
+      Log(EchoVR::LogLevel::Error, "[NEVR.MIC] signaling worker setup failure failed: %lu",
+          static_cast<unsigned long>(GetLastError()));
+    }
+    return 1;
+  }
+  const bool comMustUninitialize = MicComInitializationRequiresUninitialize(static_cast<int32_t>(hr));
+  g_workerSetupSucceeded.store(true, std::memory_order_release);
+  if (g_workerStartupEvent == nullptr || !SetEvent(g_workerStartupEvent)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] signaling worker readiness failed: %lu",
+        static_cast<unsigned long>(GetLastError()));
+  }
 
   Log(EchoVR::LogLevel::Debug, "[NEVR.MIC] capture thread started");
 
   while (g_running.load(std::memory_order_relaxed)) {
     DWORD wait = WaitForSingleObject(g_captureEvent, 200);
-    if (wait != WAIT_OBJECT_0) continue;  // timeout: re-check g_running and loop
+    if (wait == WAIT_TIMEOUT) continue;
+    if (wait != WAIT_OBJECT_0) {
+      Log(EchoVR::LogLevel::Error, "[NEVR.MIC] capture event wait failed: %lu (error %lu)",
+          static_cast<unsigned long>(wait), static_cast<unsigned long>(GetLastError()));
+      g_running.store(false, std::memory_order_release);
+      break;
+    }
 
-    UINT32 packetLength = 0;
-    HRESULT hrNext = g_captureClient->GetNextPacketSize(&packetLength);
-    while (SUCCEEDED(hrNext) && packetLength != 0) {
-      BYTE* data = nullptr;
-      UINT32 frames = 0;
-      DWORD flags = 0;
-      HRESULT hrBuf = g_captureClient->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
-      if (FAILED(hrBuf)) break;
-
-      if (!(flags & AUDCLNT_BUFFERFLAGS_SILENT) && frames > 0) {
-        ConvertAndPush(data, frames, g_mixFormat);
+    const MicCaptureDrainStatus status = DrainMicCapturePackets(kCaptureDrainOperations);
+    if (status != MicCaptureDrainStatus::Complete && status != MicCaptureDrainStatus::Cancelled) {
+      if (status == MicCaptureDrainStatus::BufferProcessFailed) {
+        Log(EchoVR::LogLevel::Error, "[NEVR.MIC] processing capture packet raised std::exception");
       }
-      g_captureClient->ReleaseBuffer(frames);
-      hrNext = g_captureClient->GetNextPacketSize(&packetLength);
+      g_running.store(false, std::memory_order_release);
     }
   }
 
   Log(EchoVR::LogLevel::Debug, "[NEVR.MIC] capture thread exiting");
-  if (comInitializedHere) CoUninitialize();
+  if (comMustUninitialize) CoUninitialize();
   return 0;
 }
+
+}  // namespace
+
+namespace {
+
+bool CreateWasapiResources(void*) {
+  const HRESULT initResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  if (initResult == RPC_E_CHANGED_MODE) {
+    Log(EchoVR::LogLevel::Error,
+        "[NEVR.MIC] MicCreate rejected an existing non-MTA COM apartment; cross-apartment capture is unverified");
+    return false;
+  }
+  g_ownerMustUninitializeCom = MicComInitializationRequiresUninitialize(static_cast<int32_t>(initResult));
+  if (FAILED(initResult)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] CoInitializeEx failed: 0x%lx",
+        static_cast<unsigned long>(initResult));
+    return false;
+  }
+  const auto fail = [](const char* operation, HRESULT failure, EchoVR::LogLevel level) {
+    Log(level, "[NEVR.MIC] %s failed: 0x%lx", operation, static_cast<unsigned long>(failure));
+    ReleaseWasapi();
+    if (g_ownerMustUninitializeCom) {
+      CoUninitialize();
+      g_ownerMustUninitializeCom = false;
+    }
+    return false;
+  };
+
+  HRESULT hr = CoCreateInstance(CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, IID_IMMDeviceEnumerator,
+                                reinterpret_cast<void**>(&g_enumerator));
+  if (FAILED(hr)) return fail("CoCreateInstance(MMDeviceEnumerator)", hr, EchoVR::LogLevel::Error);
+  hr = g_enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &g_device);
+  if (FAILED(hr)) return fail("GetDefaultAudioEndpoint", hr, EchoVR::LogLevel::Warning);
+  hr = g_device->Activate(IID_IAudioClient, CLSCTX_ALL, nullptr,
+                          reinterpret_cast<void**>(&g_audioClient));
+  if (FAILED(hr)) return fail("IAudioClient activation", hr, EchoVR::LogLevel::Error);
+  hr = g_audioClient->GetMixFormat(&g_mixFormat);
+  if (FAILED(hr)) return fail("GetMixFormat", hr, EchoVR::LogLevel::Error);
+
+  constexpr REFERENCE_TIME kBufferDuration = 10 * 10000;
+  hr = g_audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                                 kBufferDuration, 0, g_mixFormat, nullptr);
+  if (FAILED(hr)) return fail("IAudioClient::Initialize", hr, EchoVR::LogLevel::Error);
+  g_captureEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+  if (g_captureEvent == nullptr) {
+    const DWORD error = GetLastError();
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] CreateEvent(capture) failed: %lu",
+        static_cast<unsigned long>(error));
+    ReleaseWasapi();
+    if (g_ownerMustUninitializeCom) {
+      CoUninitialize();
+      g_ownerMustUninitializeCom = false;
+    }
+    return false;
+  }
+  hr = g_audioClient->SetEventHandle(g_captureEvent);
+  if (FAILED(hr)) return fail("SetEventHandle", hr, EchoVR::LogLevel::Error);
+  g_workerStartupEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (g_workerStartupEvent == nullptr) {
+    const DWORD error = GetLastError();
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] CreateEvent(worker startup) failed: %lu",
+        static_cast<unsigned long>(error));
+    ReleaseWasapi();
+    if (g_ownerMustUninitializeCom) {
+      CoUninitialize();
+      g_ownerMustUninitializeCom = false;
+    }
+    return false;
+  }
+  hr = g_audioClient->GetService(IID_IAudioCaptureClient, reinterpret_cast<void**>(&g_captureClient));
+  if (FAILED(hr)) return fail("GetService(IAudioCaptureClient)", hr, EchoVR::LogLevel::Error);
+
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.MIC] capture device ready: %u Hz, %u ch, %u-bit, tag=%u -> resampling to %u Hz mono int16",
+      static_cast<unsigned>(g_mixFormat->nSamplesPerSec), static_cast<unsigned>(g_mixFormat->nChannels),
+      static_cast<unsigned>(g_mixFormat->wBitsPerSample), static_cast<unsigned>(g_mixFormat->wFormatTag),
+      static_cast<unsigned>(kTargetSampleRate));
+  return true;
+}
+
+bool StartAudio(void*) {
+  if (g_audioClient == nullptr) return false;
+  const HRESULT hr = g_audioClient->Start();
+  if (FAILED(hr)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] IAudioClient::Start failed: 0x%lx",
+        static_cast<unsigned long>(hr));
+    return false;
+  }
+  return true;
+}
+
+MicWorkerCreateResult CreateCaptureWorker(void*) {
+  if (g_workerStartupEvent == nullptr || !ResetEvent(g_workerStartupEvent)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] ResetEvent(worker startup) failed: %lu",
+        static_cast<unsigned long>(GetLastError()));
+    g_running.store(false, std::memory_order_release);
+    return MicWorkerCreateResult::FailedWithoutWorker;
+  }
+  g_workerSetupSucceeded.store(false, std::memory_order_release);
+  g_running.store(true, std::memory_order_release);
+  g_captureThread = CreateThread(nullptr, 0, CaptureThreadProc, nullptr, 0, nullptr);
+  if (g_captureThread == nullptr) {
+    const DWORD error = GetLastError();
+    g_running.store(false, std::memory_order_release);
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] CreateThread failed: %lu", static_cast<unsigned long>(error));
+    return MicWorkerCreateResult::FailedWithoutWorker;
+  }
+
+  const DWORD wait = WaitForSingleObject(g_workerStartupEvent, 2000);
+  if (wait == WAIT_OBJECT_0 && g_workerSetupSucceeded.load(std::memory_order_acquire)) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.MIC] capture started");
+    return MicWorkerCreateResult::Started;
+  }
+  if (wait == WAIT_TIMEOUT) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] capture worker setup timed out; cancelling and joining worker");
+  } else if (wait == WAIT_FAILED) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] capture worker readiness wait failed: %lu",
+        static_cast<unsigned long>(GetLastError()));
+  } else {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] capture worker reported setup failure");
+  }
+  return MicWorkerCreateResult::FailedWithWorker;
+}
+
+bool RequestCaptureStop(void*) {
+  g_running.store(false, std::memory_order_release);
+  if (g_captureEvent == nullptr || !SetEvent(g_captureEvent)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] capture cancellation wake failed: %lu",
+        static_cast<unsigned long>(GetLastError()));
+    return false;
+  }
+  return true;
+}
+
+MicWorkerWaitResult WaitCaptureWorker(void*, uint32_t timeoutMs) {
+  if (g_captureThread == nullptr) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] capture worker handle is missing during join");
+    return MicWorkerWaitResult::Failed;
+  }
+  const DWORD result = WaitForSingleObject(g_captureThread, timeoutMs);
+  if (result == WAIT_OBJECT_0) return MicWorkerWaitResult::Signaled;
+  if (result == WAIT_TIMEOUT) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] capture worker join timed out after %u ms", timeoutMs);
+    return MicWorkerWaitResult::Timeout;
+  }
+  Log(EchoVR::LogLevel::Error, "[NEVR.MIC] capture worker join failed: wait=%lu error=%lu",
+      static_cast<unsigned long>(result), static_cast<unsigned long>(GetLastError()));
+  return MicWorkerWaitResult::Failed;
+}
+
+void CloseCaptureWorker(void*) {
+  if (g_captureThread != nullptr) {
+    CloseHandle(g_captureThread);
+    g_captureThread = nullptr;
+  }
+}
+
+bool StopAudio(void*) {
+  if (g_audioClient == nullptr) return true;
+  const HRESULT hr = g_audioClient->Stop();
+  if (FAILED(hr)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] IAudioClient::Stop failed: 0x%lx",
+        static_cast<unsigned long>(hr));
+    return false;
+  }
+  return true;
+}
+
+void ReleaseWasapiResources(void*) {
+  ReleaseWasapi();
+  if (g_ownerMustUninitializeCom) {
+    CoUninitialize();
+    g_ownerMustUninitializeCom = false;
+  }
+}
+
+void ResetCaptureStream(void*) {
+  g_captureAdapter.Reset();
+  g_ring.Reset();
+  g_ringOverflowLogged = false;
+}
+
+const MicLifecycleOperations kMicLifecycleOperations = {
+    nullptr, CreateWasapiResources, StartAudio, CreateCaptureWorker, RequestCaptureStop,
+    WaitCaptureWorker, CloseCaptureWorker, StopAudio, ReleaseWasapiResources, ResetCaptureStream};
 
 }  // namespace
 
@@ -175,101 +421,32 @@ uint64_t MicProvider::MicAvailable() {
 }
 
 uint64_t MicProvider::MicCreate() {
-  if (g_created.load()) return 0;
-
-  HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-  g_weInitializedCom = SUCCEEDED(hr) && hr != S_FALSE;
-  if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] CoInitializeEx failed: 0x%lx", (unsigned long)hr);
+  const DWORD ownerThread = GetCurrentThreadId();
+  if (g_lifecycle.IsCreated() && ownerThread != g_lifecycle.OwnerThread()) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] MicCreate rejected on non-owner thread");
     return 1;
   }
-
-  hr = CoCreateInstance(CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, IID_IMMDeviceEnumerator,
-                         reinterpret_cast<void**>(&g_enumerator));
-  if (FAILED(hr)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] CoCreateInstance(MMDeviceEnumerator) failed: 0x%lx",
-        (unsigned long)hr);
+  if (!g_lifecycle.Create(ownerThread, kMicLifecycleOperations)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] capture provider creation failed or requires Destroy retry");
     return 1;
   }
-
-  hr = g_enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &g_device);
-  if (FAILED(hr)) {
-    Log(EchoVR::LogLevel::Warning,
-        "[NEVR.MIC] no default capture device (0x%lx) — mic will report unavailable",
-        (unsigned long)hr);
-    ReleaseWasapi();
-    return 1;
-  }
-
-  hr = g_device->Activate(IID_IAudioClient, CLSCTX_ALL, nullptr,
-                           reinterpret_cast<void**>(&g_audioClient));
-  if (FAILED(hr)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] IAudioClient activation failed: 0x%lx", (unsigned long)hr);
-    ReleaseWasapi();
-    return 1;
-  }
-
-  hr = g_audioClient->GetMixFormat(&g_mixFormat);
-  if (FAILED(hr)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] GetMixFormat failed: 0x%lx", (unsigned long)hr);
-    ReleaseWasapi();
-    return 1;
-  }
-
-  // 10ms shared-mode buffer — small relative to our 500ms ring; event-driven,
-  // not polled (CPP-MINGW-ADDENDUM: "No busy loops. Use waits on events").
-  REFERENCE_TIME bufferDuration = 10 * 10000;  // 100ns units == 10ms
-  hr = g_audioClient->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-                                  bufferDuration, 0, g_mixFormat, nullptr);
-  if (FAILED(hr)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] IAudioClient::Initialize failed: 0x%lx", (unsigned long)hr);
-    ReleaseWasapi();
-    return 1;
-  }
-
-  g_captureEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-  if (!g_captureEvent) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] CreateEvent failed: %lu", (unsigned long)GetLastError());
-    ReleaseWasapi();
-    return 1;
-  }
-  hr = g_audioClient->SetEventHandle(g_captureEvent);
-  if (FAILED(hr)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] SetEventHandle failed: 0x%lx", (unsigned long)hr);
-    ReleaseWasapi();
-    return 1;
-  }
-
-  hr = g_audioClient->GetService(IID_IAudioCaptureClient, reinterpret_cast<void**>(&g_captureClient));
-  if (FAILED(hr)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] GetService(IAudioCaptureClient) failed: 0x%lx",
-        (unsigned long)hr);
-    ReleaseWasapi();
-    return 1;
-  }
-
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.MIC] capture device ready: %u Hz, %u ch, %u-bit, tag=%u -> resampling to %u Hz mono int16",
-      (unsigned)g_mixFormat->nSamplesPerSec, (unsigned)g_mixFormat->nChannels,
-      (unsigned)g_mixFormat->wBitsPerSample, (unsigned)g_mixFormat->wFormatTag,
-      (unsigned)kTargetSampleRate);
-
-  g_created.store(true);
   return 0;
 }
 
 uint64_t MicProvider::MicDetected() {
-  // Cheap presence probe: does not require MicCreate to have run — the game
-  // may check MicDetected before deciding whether to create a provider.
-  if (g_created.load()) return 1;
-
+  if (g_lifecycle.IsCreated()) return 1;
   HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-  bool weInit = SUCCEEDED(hr) && hr != S_FALSE;
+  if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] presence probe COM initialization failed: 0x%lx",
+        static_cast<unsigned long>(hr));
+    return 0;
+  }
+  const bool mustUninitialize = MicComInitializationRequiresUninitialize(static_cast<int32_t>(hr));
 
   uint64_t detected = 0;
   IMMDeviceEnumerator* enumerator = nullptr;
   if (SUCCEEDED(CoCreateInstance(CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL,
-                                  IID_IMMDeviceEnumerator, reinterpret_cast<void**>(&enumerator)))) {
+                                 IID_IMMDeviceEnumerator, reinterpret_cast<void**>(&enumerator)))) {
     IMMDevice* device = nullptr;
     if (SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eCapture, eConsole, &device))) {
       detected = 1;
@@ -277,50 +454,59 @@ uint64_t MicProvider::MicDetected() {
     }
     enumerator->Release();
   }
-  if (weInit) CoUninitialize();
+  if (mustUninitialize) CoUninitialize();
   return detected;
 }
 
 uint64_t MicProvider::MicRead(void* buffer, uint64_t sampleCount) {
   if (!buffer || sampleCount == 0) return 0;
-  uint32_t n = (sampleCount > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(sampleCount);
-  return g_ring.Pop(reinterpret_cast<int16_t*>(buffer), n);
+  const uint32_t count = sampleCount > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<uint32_t>(sampleCount);
+  return g_ring.Pop(static_cast<int16_t*>(buffer), count);
 }
 
 void MicProvider::MicStart() {
-  if (!g_created.load() || g_running.load()) return;
-  HRESULT hr = g_audioClient->Start();
-  if (FAILED(hr)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] IAudioClient::Start failed: 0x%lx", (unsigned long)hr);
+  const DWORD callerThread = GetCurrentThreadId();
+  if (g_lifecycle.IsCreated() && callerThread != g_lifecycle.OwnerThread()) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] MicStart rejected on non-owner thread");
     return;
   }
-  g_running.store(true);
-  g_captureThread = CreateThread(nullptr, 0, CaptureThreadProc, nullptr, 0, nullptr);
-  Log(EchoVR::LogLevel::Info, "[NEVR.MIC] capture started");
+  if (!g_lifecycle.Start(callerThread, kMicLifecycleOperations)) {
+    const MicLifecycleState state = g_lifecycle.State();
+    if (state == MicLifecycleState::FaultedNoWorker) {
+      Log(EchoVR::LogLevel::Error, "[NEVR.MIC] start refused while audio stop recovery is pending; call Destroy");
+    } else if (state == MicLifecycleState::FaultedWorker || state == MicLifecycleState::Stopping) {
+      Log(EchoVR::LogLevel::Error, "[NEVR.MIC] start refused while previous capture worker is retained; retry Stop/Destroy");
+    } else if (g_lifecycle.IsCreated() && callerThread != g_lifecycle.OwnerThread()) {
+      Log(EchoVR::LogLevel::Error, "[NEVR.MIC] MicStart rejected on non-owner thread");
+    }
+  }
 }
 
 void MicProvider::MicStop() {
-  if (!g_running.load()) return;
-  g_running.store(false);
-  if (g_captureThread) {
-    WaitForSingleObject(g_captureThread, 2000);
-    CloseHandle(g_captureThread);
-    g_captureThread = nullptr;
+  const DWORD callerThread = GetCurrentThreadId();
+  if (g_lifecycle.IsCreated() && callerThread != g_lifecycle.OwnerThread()) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] MicStop rejected on non-owner thread; resources retained");
+    return;
   }
-  if (g_audioClient) g_audioClient->Stop();
+  if (!g_lifecycle.Stop(callerThread, kMicLifecycleOperations, 2000)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] stop incomplete (state=%u); resources retained for retry",
+        static_cast<unsigned>(g_lifecycle.State()));
+    return;
+  }
   Log(EchoVR::LogLevel::Info, "[NEVR.MIC] capture stopped");
 }
 
 void MicProvider::MicDestroy() {
-  MicProvider::MicStop();
-  ReleaseWasapi();
-  g_ring.Reset();
-  g_ringOverflowLogged = false;
-  if (g_weInitializedCom) {
-    CoUninitialize();
-    g_weInitializedCom = false;
+  const DWORD callerThread = GetCurrentThreadId();
+  if (g_lifecycle.IsCreated() && callerThread != g_lifecycle.OwnerThread()) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] MicDestroy rejected on non-owner thread; resources retained");
+    return;
   }
-  g_created.store(false);
+  if (!g_lifecycle.Destroy(callerThread, kMicLifecycleOperations, 2000)) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.MIC] destroy incomplete (state=%u); resources retained for retry",
+        static_cast<unsigned>(g_lifecycle.State()));
+    return;
+  }
   Log(EchoVR::LogLevel::Info, "[NEVR.MIC] destroyed");
 }
 

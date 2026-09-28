@@ -12,6 +12,10 @@
 #include "core/auth_token.h"
 #include "auth_token_refresh.h"
 #include "runtime/server/constants.h"
+#include "runtime/server/protobuf_transport.h"
+#include "runtime/server/session_success_dispatch.h"
+#include "runtime/server/session_unregister.h"
+#include "runtime/server/callback_unregistration.h"
 #include "runtime/log/security_diagnostics.h"
 #include "runtime/log/url_diagnostics.h"
 #include "abi/echovr.h"
@@ -98,8 +102,7 @@ constexpr EchoVR::SymbolId SYM_LEGACY_PLAYERS_REJECTED = 0x7777777777770700ULL;
 bool SendProtobufEnvelope(GameServerLib* self, const gameservice::v1::Envelope& envelope) {
   auto* wsClient = &self->GetWsClient();
 
-  // Determine the message type first so it's available whether or not
-  // serialization succeeds below.
+  // Log the message type being sent
   const char* msgType = "unknown";
   switch (envelope.message_case()) {
     case gameservice::v1::Envelope::kGameServerRegistration:
@@ -121,19 +124,23 @@ bool SendProtobufEnvelope(GameServerLib* self, const gameservice::v1::Envelope& 
       break;
   }
 
-  // Serialize envelope to binary
-  std::string binaryData;
-  if (!envelope.SerializeToString(&binaryData)) {
-    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] protobuf serialize failed type=%s", msgType);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Sending protobuf: %s (%zu bytes)", msgType,
+      envelope.ByteSizeLong());
+
+  const GameServer::ProtobufSendResult result = GameServer::SendProtobufEnvelope(*wsClient, envelope);
+  if (result == GameServer::ProtobufSendResult::SerializationFailed) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] Failed to serialize protobuf to binary");
     return false;
   }
-
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Sending protobuf: %s (%zu bytes)", msgType, binaryData.size());
-
-  // Send via WebSocketClient with protobuf binary symbol
-  wsClient->Send(SYM_PROTOBUF_MSG, binaryData.c_str(), binaryData.size());
-
-  return true;
+  if (result == GameServer::ProtobufSendResult::TransportRejected) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] WebSocket transport rejected protobuf envelope");
+    return false;
+  }
+  if (result == GameServer::ProtobufSendResult::AcceptedQueued) {
+    Log(EchoVR::LogLevel::Debug,
+        "[NEVR.GAMESERVER] Protobuf accepted into disconnected queue; ServerDB delivery is unconfirmed");
+  }
+  return GameServer::IsProtobufSendAccepted(result);
 }
 
 // Helper to convert GUID to UUID string format
@@ -324,26 +331,20 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
     case gameservice::v1::Envelope::kLobbySessionSuccessV5: {
       const auto& sessionSuccess = envelope.lobby_session_success_v5();
       Log(EchoVR::LogLevel::Info,
-          "[NEVR.GAMESERVER] Received session success via protobuf: lobby=%s, endpoint=%s, game_mode=0x%llX",
-          sessionSuccess.lobby_id().c_str(), sessionSuccess.endpoint().c_str(),
+          "[NEVR.GAMESERVER] Received session success via protobuf: lobby=%s, game_mode=0x%llX",
+          sessionSuccess.lobby_id().c_str(),
           static_cast<unsigned long long>(sessionSuccess.game_mode()));
 
       SessionState state = self->GetContext().GetSessionState();
-      if (!sessionSuccess.lobby_id().empty()) {
-        state.lobbySessionId = sessionSuccess.lobby_id();
-      }
-      self->GetContext().UpdateSessionState(state);
-
-      // Encode protobuf to binary format and forward to game
-      if (broadcaster) {
-        auto encoded = EncodeLobbySessionSuccessV5(sessionSuccess);
-        if (encoded.size() > 0) {
+      const auto dispatch = [broadcaster](const EncodedMessage& encoded) {
+        if (broadcaster) {
           EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbySessionSuccessV5, "SNSLobbySessionSuccessv5",
                                                const_cast<uint8_t*>(encoded.ptr()), encoded.size());
-        } else {
-          Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] failed to encode LobbySessionSuccessV5 lobby=%s",
-              sessionSuccess.lobby_id().c_str());
         }
+      };
+      const auto commitState = [self, &state]() { self->GetContext().UpdateSessionState(state); };
+      if (!GameServer::ApplyLobbySessionSuccess(sessionSuccess, state.lobbySessionId, commitState, dispatch)) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Failed to encode LobbySessionSuccessV5");
       }
       break;
     }
@@ -1080,18 +1081,15 @@ void GameServerLib::RegisterTcpCallbacks() {
 
 void GameServerLib::UnregisterAllCallbacks() {
   auto* lobby = m_context->GetLobby();
-  if (!lobby) return;
-
   auto& cb = m_context->GetCallbackRegistry();
-
-  // Unregister broadcaster callbacks
-  if (lobby->broadcaster) {
-    EchoVR::BroadcasterUnlisten(lobby->broadcaster, cb.sessionStart);
-    EchoVR::BroadcasterUnlisten(lobby->broadcaster, cb.sessionError);
-  }
-
-  // TCP callbacks are handled by WebSocketClient (not game vtable), nothing to unregister here.
-  cb.Clear();
+  EchoVR::Broadcaster* liveOwner = lobby != nullptr ? lobby->broadcaster : nullptr;
+  const GameServer::BroadcasterUnlisten unlisten = EchoVR::BroadcasterUnlisten == nullptr
+      ? GameServer::BroadcasterUnlisten{}
+      : GameServer::BroadcasterUnlisten([](EchoVR::Broadcaster* owner, uint16_t handle) {
+          EchoVR::BroadcasterUnlisten(owner, handle);
+        });
+  const size_t removed = GameServer::UnregisterBroadcasterCallbacks(liveOwner, cb, unlisten);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Unregistered %zu broadcaster callbacks", removed);
 }
 
 VOID GameServerLib::Terminate() {
@@ -1573,6 +1571,18 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 }
 
 VOID GameServerLib::Unregister() {
+  const auto sendEnvelope = [this](const gameservice::v1::Envelope& envelope) {
+    return GameServer::SendProtobufEnvelope(*m_wsClient, envelope);
+  };
+  const auto endResult = GameServer::UnregisterRegisteredServer(
+      *m_context, sendEnvelope, [this]() { m_wsClient->DiscardPendingMessages(); },
+      [this]() { UnregisterAllCallbacks(); }, [this]() { m_wsClient->Disconnect(); });
+  if (endResult.attempted && endResult.sendResult == GameServer::ProtobufSendResult::TransportRejected) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] CODE_ENDED transport rejected during unregister");
+  } else if (endResult.sendResult == GameServer::ProtobufSendResult::AcceptedQueued) {
+    Log(EchoVR::LogLevel::Debug, "[NEVR.SERVER] CODE_ENDED was queued; ServerDB delivery is unconfirmed");
+  }
+
   // Remove UPnP port mapping if we added one
   UPnPHelper::ClosePort();
 
@@ -1582,40 +1592,27 @@ VOID GameServerLib::Unregister() {
     m_telemetry->Disconnect();
   }
 
-  UnregisterAllCallbacks();
-
-  // Disconnect WebSocketClient from serverdb
-  if (m_wsClient) m_wsClient->Disconnect();
-
-  m_context->SetRegistered(false);
-  m_context->EndSession();
-
   Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Unregistered game server");
 }
 
 VOID GameServerLib::EndSession() {
-  // Stop telemetry before ending session
+  const auto sendEnvelope = [this](const gameservice::v1::Envelope& envelope) {
+    return GameServer::SendProtobufEnvelope(*m_wsClient, envelope);
+  };
+  const auto endResult = GameServer::EndActiveServerSession(
+      *m_context, sendEnvelope, [this]() { m_wsClient->DiscardPendingMessages(); });
+  if (endResult.attempted && endResult.sendResult == GameServer::ProtobufSendResult::TransportRejected) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] CODE_ENDED transport rejected for EndSession");
+  } else if (endResult.sendResult == GameServer::ProtobufSendResult::AcceptedQueued) {
+    Log(EchoVR::LogLevel::Debug, "[NEVR.SERVER] CODE_ENDED was queued; ServerDB delivery is unconfirmed");
+  }
+
+  // Stop telemetry only after CODE_ENDED has been attempted on the ServerDB socket.
   if (m_telemetry && m_telemetry->IsActive()) {
     m_telemetry->Stop();
   }
 
-  // Capture before m_context->EndSession() below clears session state, so the
-  // trailing log line still has an identifier to report.
-  std::string sessionId = m_context->GetSessionState().lobbySessionId;
-
-  if (m_context->IsSessionActive()) {
-    gameservice::v1::Envelope envelope;
-    auto* event = envelope.mutable_lobby_session_event();
-    event->set_lobby_session_id(sessionId);
-    event->set_code(gameservice::v1::LobbySessionEventMessage::CODE_ENDED);
-    if (!SendProtobufEnvelope(this, envelope)) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] protobuf serialize failed for EndSession session_id=%s",
-          sessionId.c_str());
-    }
-  }
-
-  m_context->EndSession();
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] session ended session_id=%s", sessionId.c_str());
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Signaling end of session");
 }
 
 VOID GameServerLib::LockPlayerSessions() {

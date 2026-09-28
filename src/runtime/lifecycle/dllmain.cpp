@@ -13,6 +13,7 @@
 #include "runtime/ext/module_loader.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/initialize.h"
+#include "runtime/lifecycle/system_module_loader.h"
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/patch/binary_bug_fixes.h"
 #include "runtime/log/builtin_filter.h"
@@ -33,10 +34,7 @@ static MiniDumpWriteDump_t g_realMiniDumpWriteDump = nullptr;
 static void LoadRealDbgCore() {
   if (g_realDbgCore) return;
 
-  WCHAR systemDir[MAX_PATH];
-  GetSystemDirectoryW(systemDir, MAX_PATH);
-  std::wstring path = std::wstring(systemDir) + L"\\dbgcore.dll";
-  g_realDbgCore = LoadLibraryW(path.c_str());
+  g_realDbgCore = Nevr::Lifecycle::LoadSystemDbgCore(GetSystemDirectoryW, LoadLibraryW);
   if (g_realDbgCore) {
     g_realMiniDumpWriteDump =
         (MiniDumpWriteDump_t)::GetProcAddress(g_realDbgCore, "MiniDumpWriteDump");
@@ -78,8 +76,7 @@ extern "C" {
 // --- Launcher entry point ---
 
 extern "C" __declspec(dllexport) void NEVR_SetGameModule(HMODULE hGame) {
-  EchoVR::g_GameBaseAddress = (CHAR*)hGame;
-  Initialize();
+  InitializeGameModule(hGame);
 }
 
 // --- DLL entry point ---
@@ -88,8 +85,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
   switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:
       if (GetModuleHandleA("echovr_game.dll") == NULL) {
-        EchoVR::g_GameBaseAddress = (CHAR*)GetModuleHandle(NULL);
-        Initialize();
+        InitializeGameModule(GetModuleHandle(NULL));
       }
       break;
     case DLL_PROCESS_DETACH:
@@ -105,7 +101,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         ShutdownResourceOverride();
         ShutdownWebSocketBridge();
       }
-      UnloadPlugins();
       if (g_realDbgCore) {
         FreeLibrary(g_realDbgCore);
         g_realDbgCore = nullptr;

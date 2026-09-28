@@ -21,6 +21,10 @@ enum class ServerState : int32_t {
 
 // Callback registration handles for broadcaster events
 struct CallbackRegistry {
+  // Broadcaster that owns the UDP callback handles below. This remains stable
+  // until UnregisterAllCallbacks has removed those handles.
+  EchoVR::Broadcaster* broadcasterOwner = nullptr;
+
   // Internal broadcaster (UDP) callbacks
   uint16_t sessionStart = 0;
   uint16_t sessionError = 0;

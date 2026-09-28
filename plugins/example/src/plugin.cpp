@@ -56,7 +56,9 @@
  *   │── Shutdown ──────────────────────────────────────────────────│
  *   │                                                               │
  *   │ 7. NvrPluginShutdown()              OPTIONAL — cleanup       │
- *   │      Called in REVERSE load order before FreeLibrary.        │
+ *   │      Called in REVERSE load order during explicit normal-    │
+ *   │      thread teardown. It is NOT guaranteed on process exit;  │
+ *   │      dynamic runtime unloading is not supported.             │
  *   │      Last loaded shuts down first, so hooks installed on     │
  *   │      top of earlier plugins are torn down before what they   │
  *   │      depend on. Remove your hooks, close your sockets,       │
@@ -879,8 +881,10 @@ NEVR_PLUGIN_API void NvrPluginOnGameStateChange(const NvrGameContext* ctx,
 /*
  * ── NvrPluginShutdown ───────────────────────────────────────────────
  *
- * OPTIONAL. Called before FreeLibrary, in REVERSE load order (last
- * loaded shuts down first).
+ * OPTIONAL. Called during explicit normal-thread host teardown before the
+ * host releases its module reference, in REVERSE load order (last loaded
+ * shuts down first). It is not guaranteed on process exit; runtime dynamic
+ * unloading is not a supported lifecycle path.
  *
  * WHY REVERSE ORDER: A plugin loaded later may depend on hooks or state
  * from an earlier plugin. Tearing down the later plugin first ensures
@@ -898,14 +902,15 @@ NEVR_PLUGIN_API void NvrPluginOnGameStateChange(const NvrGameContext* ctx,
  *     belonging to OTHER plugins and the host itself.
  *   - Do NOT call MH_Uninitialize() — the host owns the MinHook
  *     lifecycle and will uninitialize after the last plugin shuts down.
- *   - After this function returns, the host calls FreeLibrary. Your
- *     DLL's code is no longer mapped. Any thread still executing your
- *     code at that point will crash the process.
+ *   - After this function returns during explicit teardown, the host releases
+ *     its module reference. Your DLL's code may then be unmapped. Any thread
+ *     still executing your code at that point will crash the process.
  *
- * This function is called even if NvrPluginInit/NvrPluginInitEx
- * returned an error — the host calls shutdown unconditionally if it
- * was exported, so cleanup code must handle partially-initialized
- * state.
+ * When explicit normal-thread teardown runs, this function is called even if
+ * NvrPluginInit/NvrPluginInitEx returned an error — the host calls shutdown
+ * unconditionally if it was exported, so cleanup code must handle partially-
+ * initialized state. DllMain does not call plugin shutdown; process exit does
+ * not guarantee cleanup through this export.
  */
 NEVR_PLUGIN_API void NvrPluginShutdown(void)
 {

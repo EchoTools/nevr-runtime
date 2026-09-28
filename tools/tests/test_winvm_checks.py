@@ -79,6 +79,65 @@ class HooksTest(unittest.TestCase):
         self.assertIn("SomethingNew", bad.detail)
         self.assertFalse(checks.overall(results))
 
+    def test_actual_lowercase_required_emitter_fails_even_after_success_banner(self):
+        log = ("[NEVR.PATCH] All hooks installed\n"
+               "[NEVR.PATCH] hook failed name=CSysDLL_Load\n")
+        results = checks.check_hooks(log)
+        self.assertEqual(by_name(results, "hooks_installed")[0].status, checks.PASS)
+        self.assertEqual(by_name(results, "no_unexpected_hook_failure")[0].status, checks.FAIL)
+
+    def test_result_failed_emitter_fails(self):
+        results = checks.check_hooks("[NEVR.PATCH] hook name=PreprocessCommandLine result=FAILED\n")
+        self.assertEqual(by_name(results, "no_unexpected_hook_failure")[0].status, checks.FAIL)
+
+    def test_headless_hook_failure_is_required(self):
+        results = checks.check_hooks("[NEVR.HEADLESS] hook failed name=D3D12CreateDevice va=0x1 expected=0 actual=1\n")
+        self.assertEqual(by_name(results, "no_unexpected_hook_failure")[0].status, checks.FAIL)
+
+    def test_explicit_diag_failure_is_warning_but_same_name_without_diag_fails(self):
+        diag = checks.check_hooks("[NEVR.PATCH] DIAG hook failed name=NetGameHostCheck va=0x1 reason=prologue_mismatch\n")
+        self.assertEqual(by_name(diag, "diagnostic_hook_failure")[0].status, checks.WARN)
+        plain = checks.check_hooks("[NEVR.PATCH] hook failed name=NetGameHostCheck va=0x1 reason=prologue_mismatch\n")
+        self.assertEqual(by_name(plain, "no_unexpected_hook_failure")[0].status, checks.FAIL)
+
+    def test_known_exception_requires_expected_status_reason_and_provenance(self):
+        known = ("[NEVR.PATCH] hook FAILED name=EchoVR::GetProcAddress target=0x1 "
+                 "reason=MH_ERROR_ALREADY_CREATED detour not installed (N126/N128)\n")
+        self.assertEqual(by_name(checks.check_hooks(known), "known_hook_failure")[0].status, checks.WARN)
+        no_reason = "[NEVR.PATCH] hook FAILED name=EchoVR::GetProcAddress target=0x1 reason=MH_ERROR_ACCESS_DENIED\n"
+        self.assertEqual(by_name(checks.check_hooks(no_reason), "no_unexpected_hook_failure")[0].status, checks.FAIL)
+
+    def test_scoped_headless_known_exception_requires_redundancy_status(self):
+        scoped = ("[NEVR.PATCH] hook FAILED name=LoadLibraryW target=0x1 reason=MH_ERROR_ALREADY_CREATED "
+                  "detour not installed (N126/N128)\n"
+                  "[NEVR.PATCH] Server mode: headless\n"
+                  "[NEVR.PATCH] Oculus Platform SDK blocking hooks: LoadLibraryW=FAILED LoadLibraryExW=FAILED "
+                  "(redundant on headless - OVR SDK is never loaded; N127)\n")
+        self.assertEqual(by_name(checks.check_hooks(scoped), "known_hook_failure")[0].status, checks.WARN)
+        unscoped = scoped.replace("(redundant on headless - OVR SDK is never loaded; N127)", "(installation failed)")
+        self.assertEqual(by_name(checks.check_hooks(unscoped), "no_unexpected_hook_failure")[0].status,
+                         checks.FAIL)
+
+    def test_unrecognized_hook_failure_format_fails_closed(self):
+        results = checks.check_hooks("[NEVR.PATCH] unable to install hook target=0x1 status=FAILED\n")
+        self.assertEqual(by_name(results, "no_unexpected_hook_failure")[0].status, checks.FAIL)
+
+    def test_runtime_patch_emitter_formats_are_fail_closed(self):
+        log = ("[NEVR.PATCH] hook failed name=CSysDLL_Load\n"
+               "[NEVR.PATCH] hooks installed: 3 succeeded, 1 failed (failed: HTTPListenerBringup)\n")
+        results = checks.check_hooks(log)
+        self.assertEqual(by_name(results, "no_unexpected_hook_failure")[0].status, checks.FAIL)
+        self.assertIn("CSysDLL_Load", by_name(results, "no_unexpected_hook_failure")[0].detail)
+
+    def test_diag_hook_failure_is_a_scoped_warning(self):
+        results = checks.check_hooks("[NEVR.PATCH] DIAG hook failed name=NetGameHostCheck va=0x1 reason=prologue_mismatch\n")
+        self.assertEqual(by_name(results, "diagnostic_hook_failure")[0].status, checks.WARN)
+        self.assertEqual(by_name(results, "no_unexpected_hook_failure")[0].status, checks.PASS)
+
+    def test_required_hook_skip_is_failure(self):
+        results = checks.check_hooks("[NEVR.PATCH] hook skipped name=CSysDLL_Load va=0x1 reason=prologue_mismatch\n")
+        self.assertEqual(by_name(results, "no_unexpected_hook_failure")[0].status, checks.FAIL)
+
     def test_missing_all_hooks_installed_fails(self):
         self.assertEqual(by_name(checks.check_hooks("nothing useful\n"), "hooks_installed")[0].status,
                          checks.FAIL)
@@ -199,7 +258,48 @@ class ProcessAliveTest(unittest.TestCase):
 
     def test_expect_exit(self):
         self.assertEqual(checks.check_process_alive(False, 0, "exit").status, checks.PASS)
+        self.assertEqual(checks.check_process_alive(False, None, "exit").status, checks.FAIL)
         self.assertEqual(checks.check_process_alive(True, None, "exit").status, checks.FAIL)
+
+    def test_only_matching_run_id_can_supply_process_exit_state(self):
+        stale = "run-old started\nrun-old exited rc=0"
+        result, exit_code = checks.check_process_markers(stale, "run-new", False)
+        self.assertEqual(result.status, checks.FAIL)
+        self.assertIsNone(exit_code)
+        result, exit_code = checks.check_process_markers("run-new started\nrun-new exited rc=7", "run-new", False)
+        self.assertEqual(result.status, checks.PASS)
+        self.assertEqual(exit_code, 7)
+
+    def test_current_running_process_requires_its_own_start_marker(self):
+        result, exit_code = checks.check_process_markers("run-old started", "run-new", True)
+        self.assertEqual(result.status, checks.FAIL)
+        self.assertIsNone(exit_code)
+        result, exit_code = checks.check_process_markers("run-new started", "run-new", True)
+        self.assertEqual(result.status, checks.PASS)
+        self.assertIsNone(exit_code)
+
+    def test_stale_missing_or_failed_enumeration_marker_is_not_a_pass(self):
+        self.assertEqual(checks.check_window_enumeration("run-old completed", "run-new", "").status,
+                         checks.FAIL)
+        self.assertEqual(checks.check_window_enumeration(None, "run-new", "").status, checks.FAIL)
+        self.assertEqual(checks.check_window_enumeration("run-new failed", "run-new", "").status,
+                         checks.FAIL)
+
+    def test_completed_empty_window_enumeration_is_valid(self):
+        result = checks.check_window_enumeration("run-new completed", "run-new", "")
+        self.assertEqual(result.status, checks.PASS)
+
+    def test_window_enumeration_timeout_fails_only_while_game_is_live(self):
+        self.assertEqual(checks.check_window_enumeration(None, "run-new", "", required=True).status,
+                         checks.FAIL)
+        self.assertEqual(checks.check_window_enumeration(None, "run-new", "", required=False).status,
+                         checks.WARN)
+
+    def test_window_dump_pid_selector_fixtures(self):
+        selected = fixture("window_dump_pid_5572.txt")
+        unrelated = fixture("window_dump_pid_6120.txt")
+        self.assertEqual(checks.check_window_dump_pid(selected, 5572).status, checks.PASS)
+        self.assertEqual(checks.check_window_dump_pid(unrelated, 5572).status, checks.FAIL)
 
 
 class GetAddrInfoTest(unittest.TestCase):

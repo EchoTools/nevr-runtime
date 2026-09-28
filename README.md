@@ -26,14 +26,14 @@ Hooking is [MinHook](https://github.com/TsudaKageyu/minhook)-based.
 
 ### Runtime-loaded modules
 
-Built from `src/modules/`, loaded from `modules/` next to the game binary before
-plugins. Required, not optional — they use `NvrModuleContext`, not the plugin
-interface.
+The `platform_compat` and `token_auth` modules are statically linked into
+`BugSplat64.dll`; there are no separate module DLLs to deploy. They use
+`NvrModuleContext`, not the plugin interface.
 
-| Module | Output | Purpose |
-| ------ | ------ | ------- |
-| `platform-compat` | `platform_compat.dll` | Schannel TLS modernisation, WinHTTP→libcurl bridge, Wine `_temp` fix |
-| `token-auth` | `token_auth.dll` | Device-code auth, token cache |
+| Module | Linked into | Purpose |
+| ------ | ----------- | ------- |
+| `platform-compat` | `BugSplat64.dll` | Schannel TLS modernisation, WinHTTP→libcurl bridge, Wine `_temp` fix |
+| `token-auth` | `BugSplat64.dll` | Device-code auth, token cache |
 
 The bridge is why the game never negotiates TLS for its WebSocket traffic: it
 speaks plaintext to a local proxy, and the proxy terminates TLS outbound.
@@ -59,13 +59,14 @@ repository.
 - `src/core/` → `libnevr_core.a` — our own primitives: logging, globals, base64,
   hooking, auth-token model, `pch.h` (links `nevr_abi`)
 - `src/extension/` — header-only published C ABI for third-party plugins/modules
-- `src/launcher/` → thin `CreateProcess` wrapper spawning `echovr.exe -server -noconsole`
+- `src/launcher/` → `echovr_server.exe`, a `CreateProcess` wrapper spawning
+  `echovr.exe -server -headless -noconsole`
 - `src/libovr-stub/` → `LibOVRPlatform64_1.dll` — Oculus platform stub
 - `src/legacy/` — **frozen** v1 implementations, self-contained; do not modify
 
 ## Building
 
-Requires CMake 3.20+, Ninja, and MinGW (`x86_64-w64-mingw32-g++`) to
+Requires CMake 4.0+, Ninja, and MinGW (`x86_64-w64-mingw32-g++`) to
 cross-compile from Linux. Dependencies come from the vcpkg manifest.
 
 ```sh
@@ -79,8 +80,8 @@ just dist-lite      # stripped, no debug symbols
 Presets: `mingw-debug`, `mingw-release` (Linux default), `debug`, `release`
 (Windows). Output lands in `build/<preset>/bin/`.
 
-`just verify` is the only gate that means anything — `just build` filters its own
-output and always exits 0.
+`just verify` is the closed-loop gate: it runs the build, C++ tests under Wine,
+Python harness tests, and source-invariant sensors.
 
 ## Deployment
 
@@ -89,14 +90,14 @@ From `build/mingw-release/bin/`:
 | Artifact | Destination |
 | -------- | ----------- |
 | `BugSplat64.dll` | game directory (replaces the crash reporter) |
-| `modules/*.dll` | `modules/` next to the game binary |
+| `echovr_server.exe` | game directory, alongside `echovr.exe` |
 | `plugins/*.dll` | `plugins/` next to the game binary |
 
 ## Repository layout
 
 ```
 src/runtime/   BugSplat64.dll — hooks, modes, crash recovery, gameserver
-src/modules/       runtime-loaded modules (platform-compat, token-auth)
+src/modules/       statically linked module implementations (platform-compat, token-auth)
 src/abi/           libnevr_abi.a  — the echovr.exe ABI surface
 src/core/          libnevr_core.a — our own primitives (links nevr_abi)
 src/extension/     header-only C ABI published to third-party DLLs

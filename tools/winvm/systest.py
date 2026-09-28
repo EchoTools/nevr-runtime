@@ -27,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -228,33 +229,37 @@ Start-ScheduledTask -TaskName {name}
 """
 
 
-def launch(g: Guest, game_args: str) -> None:
+def launch(g: Guest, game_args: str) -> str:
+    run_id = uuid.uuid4().hex
     g.ps(rf"""
 Remove-Item '{ROOT}\run\marker.txt','{ROOT}\run\stdout.txt','{ROOT}\run\windows.txt' -ErrorAction SilentlyContinue
 Set-Content -Path '{ROOT}\run\run.cmd' -Encoding ASCII -Value @(
   '@echo off',
   'cd /d {ROOT}\echovr\bin\win10',
-  'echo started %date% %time% > {ROOT}\run\marker.txt',
+  'echo {run_id} started > {ROOT}\run\marker.txt',
   'echovr.exe {game_args} > {ROOT}\run\stdout.txt 2>&1',
-  'echo exited rc=%errorlevel% >> {ROOT}\run\marker.txt'
+  'echo {run_id} exited rc=%errorlevel% >> {ROOT}\run\marker.txt'
 )
 """ + _interactive_task("nevrsystest", "cmd.exe", rf"/c {ROOT}\run\run.cmd"))
+    return run_id
 
 
-def poll(g: Guest) -> dict:
+def poll(g: Guest, run_id: str) -> dict:
     out = g.ps(rf"""
 $m = Get-Content '{ROOT}\run\marker.txt' -ErrorAction SilentlyContinue
-$p = Get-Process echovr -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like '{ROOT}*' }}
+$p = Get-Process echovr -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like '{ROOT}*' }} | Select-Object -First 1
 "alive=$([bool]$p)"
-"marker=" + ($m -join ' / ')
+"pid=$($p.Id)"
+"marker=" + ($m -join '|')
 """)
     kv = dict(line.split("=", 1) for line in out.strip().splitlines() if "=" in line)
-    marker = kv.get("marker", "")
-    exit_code = None
-    m = re.search(r"exited rc=(-?\d+)", marker)
-    if m:
-        exit_code = int(m.group(1))
-    return {"alive": kv.get("alive") == "True", "exit_code": exit_code, "started": "started" in marker}
+    marker = kv.get("marker", "").replace("|", "\n")
+    alive = kv.get("alive") == "True"
+    marker_result, exit_code = checks.check_process_markers(marker, run_id, alive)
+    pid_text = kv.get("pid", "")
+    process_id = int(pid_text) if pid_text.isdigit() else None
+    return {"alive": alive, "exit_code": exit_code, "run_marker": marker_result,
+            "pid": process_id}
 
 
 def read_text(g: Guest, path: str) -> str:
@@ -262,18 +267,25 @@ def read_text(g: Guest, path: str) -> str:
     return g.ps(rf"if (Test-Path '{path}') {{ Get-Content -LiteralPath '{path}' -Raw }}")
 
 
-def window_dump(g: Guest) -> str:
+def window_dump(g: Guest, process_id: int) -> tuple[str, str | None, str]:
+    run_id = uuid.uuid4().hex
+    status_path = rf"{ROOT}\run\windows.status"
+    dump_path = rf"{ROOT}\run\windows.txt"
+    g.ps(rf"Remove-Item '{status_path}','{dump_path}' -ErrorAction SilentlyContinue")
     g.ps(_interactive_task("nevrwin", "powershell.exe",
-                           rf"-NoProfile -ExecutionPolicy Bypass -File {ROOT}\run\enum_windows.ps1 -OutFile {ROOT}\run\windows.txt"))
+                           rf"-NoProfile -ExecutionPolicy Bypass -File {ROOT}\run\enum_windows.ps1 -OutFile {dump_path} -StatusFile {status_path} -RunId {run_id} -ProcessId {process_id}"))
     for _ in range(20):
         time.sleep(1)
         try:
-            text = read_text(g, rf"{ROOT}\run\windows.txt")
+            output = g.ps(rf"if (Test-Path '{status_path}') {{ 'WINDOW_STATUS=' + (Get-Content -LiteralPath '{status_path}' -Raw).Trim() }}; 'WINDOW_DUMP_BEGIN'; if (Test-Path '{dump_path}') {{ Get-Content -LiteralPath '{dump_path}' -Raw }}")
         except RuntimeError:
             continue  # the guest script still has the file open; try again
-        if text.strip():
-            return text
-    return ""
+        status_match = re.search(r"^WINDOW_STATUS=(.*)$", output, re.MULTILINE)
+        status = status_match[1] if status_match else None
+        if status == f"{run_id} completed":
+            dump = output.split("WINDOW_DUMP_BEGIN\n", 1)[-1]
+            return run_id, status, dump
+    return run_id, None, ""
 
 
 def minidump(g: Guest, out: pathlib.Path) -> pathlib.Path | None:
@@ -290,32 +302,41 @@ if ($p) {{ Remove-Item '{ROOT}\run\hang.dmp' -ErrorAction SilentlyContinue
 
 # --- scenarios --------------------------------------------------------------------
 
-def scenario_boot(g: Guest, dll: pathlib.Path, out: pathlib.Path, args, login: bool = False) -> list[checks.Result]:
+def scenario_boot(g: Guest, dll: pathlib.Path, out: pathlib.Path, args,
+                  login_config: str | None = None) -> list[checks.Result]:
     with tempfile.TemporaryDirectory() as t:
-        setup_rig(g, pathlib.Path(t), args.with_legacy_dbgcore, nakama_runtime_config() if login else None)
+        setup_rig(g, pathlib.Path(t), args.with_legacy_dbgcore, login_config)
     deploy(g, dll)
     started = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    launch(g, args.game_args)
+    run_id = launch(g, args.game_args)
     deadline = time.monotonic() + args.wait
-    state: dict = {"alive": False, "exit_code": None, "started": False}
+    state: dict = {"alive": False, "exit_code": None,
+                   "run_marker": checks.Result("run_marker", checks.FAIL, "process not observed"),
+                   "pid": None}
     print(f"launched; waiting up to {args.wait}s (game splash alone takes 15-20s)")
     while time.monotonic() < deadline:
         time.sleep(5)
-        state = poll(g)
+        state = poll(g, run_id)
         if state["exit_code"] is not None:
             break
     log = read_text(g, rf"{ROOT}\run\stdout.txt")
-    dump = window_dump(g) if state["alive"] else ""
+    window_run_id, window_status, dump = (window_dump(g, state["pid"])
+                                          if state["alive"] and state["pid"] is not None
+                                          else ("not-run", None, ""))
     (out / "stdout.txt").write_text(log)
     (out / "windows.txt").write_text(dump)
     results = [
         checks.check_process_alive(state["alive"], state["exit_code"], args.expect),
+        state["run_marker"],
+        checks.check_window_enumeration(window_status, window_run_id, dump, required=state["alive"]),
+        *([checks.check_window_dump_pid(dump, state["pid"])]
+          if state["alive"] and state["pid"] is not None else []),
         checks.check_no_modal_dialog(dump),
         checks.check_no_fatal(log, state["exit_code"]),
         *checks.check_hooks(log),
         checks.check_engine_progress(log, args.require_stage),
     ]
-    if login:
+    if login_config is not None:
         nlog = nakama_log_since(started)
         (out / "nakama.log").write_text(nlog)
         results.append(checks.check_nakama_login(nlog, seed_discord_id()))
@@ -345,7 +366,45 @@ def scenario_gai(g: Guest, out: pathlib.Path) -> list[checks.Result]:
     return [checks.check_getaddrinfo(text)]
 
 
-def main() -> int:
+def scenario_plan(scenario: str) -> tuple[str, ...]:
+    """Return scenario execution order without touching the VM or local services."""
+    plans = {
+        "gai": ("gai",),
+        "boot": ("boot",),
+        "login": ("login",),
+        "all": ("gai", "boot", "login"),
+    }
+    try:
+        return plans[scenario]
+    except KeyError as exc:
+        raise ValueError(f"unknown scenario {scenario!r}") from exc
+
+
+def selected_login_config(scenario: str) -> str | None:
+    """Load local auth state only for scenarios that actually exercise login."""
+    if "login" not in scenario_plan(scenario):
+        return None
+    return nakama_runtime_config()
+
+
+def dispatch_scenarios(scenario: str, guest: Guest, out: pathlib.Path,
+                       dll: pathlib.Path, args, login_config: str | None,
+                       gai_runner=scenario_gai, boot_runner=scenario_boot) -> list[checks.Result]:
+    """Dispatch selected checks in their declared order; injectable for unit tests."""
+    results: list[checks.Result] = []
+    for step in scenario_plan(scenario):
+        if step == "gai":
+            results.extend(gai_runner(guest, out))
+        elif step == "boot":
+            results.extend(boot_runner(guest, dll, out, args))
+        elif step == "login":
+            if login_config is None:
+                raise EnvError("login scenario requires local Nakama configuration")
+            results.extend(boot_runner(guest, dll, out, args, login_config=login_config))
+    return results
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--scenario", choices=["boot", "gai", "login", "all"], default="all")
     ap.add_argument("--domain", default=os.environ.get("WINVM_DOMAIN", "win11-dev"),
@@ -362,7 +421,7 @@ def main() -> int:
                          "(NEVR refuses to run beside it unless -allow-dbgcore is in --game-args)")
     ap.add_argument("--dump-on-fail", action="store_true", help="fetch a minidump if the game is stuck")
     ap.add_argument("--out", type=pathlib.Path)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
     args.wait = max(args.wait, 45)
 
     out = args.out or pathlib.Path("/var/tmp/work-nevr-runtime") / (
@@ -377,18 +436,16 @@ def main() -> int:
             raise EnvError("set WINVM_USER and WINVM_PASS (never commit them)")
         if args.scenario in ("boot", "login", "all") and not args.dll.exists():
             raise EnvError(f"{args.dll} not found; run `just build` first")
+        login_config = selected_login_config(args.scenario)
         host = os.environ.get("WINVM_HOST") or resolve_host(args.domain)
         print(f"guest {host} as {user}; artifacts in {out}")
         guest = Guest(host, user, password)
         preflight(guest)
-        if args.scenario in ("gai", "all"):
-            results += scenario_gai(guest, out)
         if args.scenario in ("boot", "all"):
             print(f"runtime under test: {args.dll} ({args.dll.stat().st_size} bytes)")
-            results += scenario_boot(guest, args.dll, out, args)
-        if args.scenario == "login":
+        if args.scenario in ("login", "all"):
             print(f"runtime under test: {args.dll} ({args.dll.stat().st_size} bytes); nakama at {NAKAMA_HOST}:7350")
-            results += scenario_boot(guest, args.dll, out, args, login=True)
+        results += dispatch_scenarios(args.scenario, guest, out, args.dll, args, login_config)
     except (EnvError, RuntimeError) as e:
         # RuntimeError is a failed guest/SMB command: the rig broke, not the runtime.
         print(f"ENV: {e}", file=sys.stderr)

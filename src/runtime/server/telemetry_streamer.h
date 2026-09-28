@@ -3,11 +3,13 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
 #include "runtime/server/event_ring_buffer.h"
 #include "runtime/server/telemetry_snapshot.h"
+#include "runtime/server/telemetry_snapshot_store.h"
 
 namespace ix {
 class WebSocket;
@@ -41,7 +43,8 @@ struct TelemetryEvent {
 //
 // Game thread calls SnapshotIfDue() every Update() tick to capture state.
 // A background thread serializes snapshots into protobuf frames and sends them.
-// Uses double-buffered snapshots for lock-free game→telemetry transfer.
+// Uses a three-slot snapshot store with scoped reader leases so producer writes
+// cannot race protobuf serialization or previous-snapshot copying.
 class TelemetryStreamer {
  public:
   TelemetryStreamer();
@@ -78,6 +81,7 @@ class TelemetryStreamer {
 
  private:
   void Run();  // telemetry thread main loop
+  void StopLocked();  // lifecycle mutex is held by caller
 
   // Game thread: snapshot all game state into the write buffer
   void SnapshotGameState(TelemetrySnapshot* snap);
@@ -85,9 +89,8 @@ class TelemetryStreamer {
 
   // Telemetry thread: build protobuf frame from snapshot
   void BuildAndSendFrame(const TelemetrySnapshot& snap);
-  void SendEnvelope(const std::string& serialized);
-  void SendHeader();
-  void SendHeaderWithSnapshot(const TelemetrySnapshot& snap);
+  bool SendEnvelope(const std::string& serialized);
+  bool SendHeaderWithSnapshot(const TelemetrySnapshot& snap);
   void SendFooter();
 
   // Map raw game status hash to proto enum value
@@ -97,13 +100,15 @@ class TelemetryStreamer {
   std::unique_ptr<ix::WebSocket> m_ws;
   std::atomic<bool> m_wsConnected{false};
 
-  // Double-buffered snapshot
-  TelemetrySnapshot m_snapshots[2];
-  std::atomic<int> m_writeIndex{0};     // game thread writes to m_snapshots[writeIndex]
-  std::atomic<bool> m_snapshotReady{false};  // telemetry thread: new snapshot available
+  // Triple-slot snapshot handoff; each reader lease spans header/frame
+  // serialization and the m_prevSnapshot copy.
+  TelemetrySnapshotStore<TelemetrySnapshot> m_snapshotStore;
+  uint64_t m_lastReadSnapshotSequence{0};  // telemetry thread only
+  TelemetryHeaderEpoch m_headerEpoch;
 
   // Thread + lifecycle
   std::thread m_thread;
+  std::mutex m_lifecycleMutex;
   std::atomic<bool> m_active{false};
   std::atomic<bool> m_stopping{false};
   uint32_t m_rateHz{30};
@@ -117,11 +122,12 @@ class TelemetryStreamer {
   EventRingBuffer<TelemetryEvent, 256> m_eventBuffer;
 
   // Reconnection
-  std::atomic<bool> m_needsResendHeader{false};
+  // Existing callback bookkeeping; synchronization for these fields remains
+  // outside the snapshot ownership change.
   bool m_hasConnectedOnce{false};
 
   // Metrics
-  uint32_t m_droppedFrames{0};
+  uint32_t m_droppedFrames{0};  // Network/backpressure drops; snapshot overwrites are counted by the store.
   uint32_t m_reconnectCount{0};
   uint64_t m_bytesSent{0};
   static constexpr size_t kMaxWsBufferBytes = 1024 * 1024;  // 1MB ~ 2s at 30Hz

@@ -1,0 +1,102 @@
+#include "runtime/server/callback_unregistration.h"
+
+#include <gtest/gtest.h>
+
+#include <array>
+#include <cstdint>
+#include <vector>
+
+namespace {
+EchoVR::Broadcaster* FakeBroadcaster(uintptr_t address) {
+  return reinterpret_cast<EchoVR::Broadcaster*>(address);
+}
+
+void SetAllUdpHandles(GameServer::CallbackRegistry& callbacks) {
+  callbacks.sessionStart = 1;
+  callbacks.sessionError = 2;
+  callbacks.saveLoadout = 3;
+  callbacks.saveLoadoutSuccess = 4;
+  callbacks.saveLoadoutPartial = 5;
+  callbacks.currentLoadoutRequest = 6;
+  callbacks.currentLoadoutResponse = 7;
+  callbacks.refreshProfileForUser = 8;
+  callbacks.refreshProfileFromServer = 9;
+  callbacks.lobbySendClientSettings = 10;
+  callbacks.tierReward = 11;
+  callbacks.topAwards = 12;
+  callbacks.newUnlocks = 13;
+  callbacks.reliableStatUpdate = 14;
+  callbacks.reliableTeamStatUpdate = 15;
+  callbacks.tcpRegSuccess = 1;
+  callbacks.tcpRegFailure = 1;
+  callbacks.tcpSessionSuccess = 1;
+  callbacks.tcpProtobuf = 1;
+}
+}  // namespace
+
+TEST(CallbackUnregistration, RemovesAllFifteenHandlesFromTheirOwningBroadcaster) {
+  auto* owner = FakeBroadcaster(0x1000);
+  GameServer::CallbackRegistry callbacks;
+  callbacks.broadcasterOwner = owner;
+  SetAllUdpHandles(callbacks);
+  std::vector<uint16_t> removed;
+
+  const size_t count = GameServer::UnregisterBroadcasterCallbacks(
+      owner, callbacks, [&removed, owner](EchoVR::Broadcaster* suppliedOwner, uint16_t handle) {
+        EXPECT_EQ(suppliedOwner, owner);
+        removed.push_back(handle);
+      });
+
+  EXPECT_EQ(count, 15U);
+  ASSERT_EQ(removed.size(), 15U);
+  for (uint16_t index = 0; index < removed.size(); ++index) EXPECT_EQ(removed[index], index + 1);
+  EXPECT_EQ(callbacks.broadcasterOwner, nullptr);
+  EXPECT_EQ(callbacks.tcpRegSuccess, 0U);
+}
+
+TEST(CallbackUnregistration, SkipsZeroHandlesAndSupportsPartialRegistration) {
+  auto* owner = FakeBroadcaster(0x2000);
+  GameServer::CallbackRegistry callbacks;
+  callbacks.broadcasterOwner = owner;
+  callbacks.sessionError = 7;
+  callbacks.tierReward = 1;
+  std::vector<uint16_t> removed;
+
+  const size_t count = GameServer::UnregisterBroadcasterCallbacks(
+      owner, callbacks, [&removed](EchoVR::Broadcaster*, uint16_t handle) { removed.push_back(handle); });
+
+  EXPECT_EQ(count, 2U);
+  EXPECT_EQ(removed, (std::vector<uint16_t>{7, 1}));
+}
+
+TEST(CallbackUnregistration, NullOrDifferentLiveOwnerNeverCallsUnlisten) {
+  const std::array<EchoVR::Broadcaster*, 2> liveOwners = {nullptr, FakeBroadcaster(0x4000)};
+  for (EchoVR::Broadcaster* liveOwner : liveOwners) {
+    GameServer::CallbackRegistry callbacks;
+    callbacks.broadcasterOwner = FakeBroadcaster(0x3000);
+    callbacks.sessionStart = 4;
+    size_t calls = 0;
+    EXPECT_EQ(GameServer::UnregisterBroadcasterCallbacks(
+                  liveOwner, callbacks, [&calls](EchoVR::Broadcaster*, uint16_t) { ++calls; }),
+              0U);
+    EXPECT_EQ(calls, 0U);
+    EXPECT_EQ(callbacks.broadcasterOwner, nullptr);
+    EXPECT_EQ(callbacks.sessionStart, 0U);
+  }
+}
+
+TEST(CallbackUnregistration, RepeatedUnregisterIsIdempotentAndSameOwnerCanRegisterAgain) {
+  auto* owner = FakeBroadcaster(0x5000);
+  GameServer::CallbackRegistry callbacks;
+  callbacks.broadcasterOwner = owner;
+  callbacks.sessionStart = 9;
+  std::vector<uint16_t> removed;
+  const auto unlisten = [&removed](EchoVR::Broadcaster*, uint16_t handle) { removed.push_back(handle); };
+
+  EXPECT_EQ(GameServer::UnregisterBroadcasterCallbacks(owner, callbacks, unlisten), 1U);
+  EXPECT_EQ(GameServer::UnregisterBroadcasterCallbacks(owner, callbacks, unlisten), 0U);
+  callbacks.broadcasterOwner = owner;
+  callbacks.sessionStart = 12;
+  EXPECT_EQ(GameServer::UnregisterBroadcasterCallbacks(owner, callbacks, unlisten), 1U);
+  EXPECT_EQ(removed, (std::vector<uint16_t>{9, 12}));
+}

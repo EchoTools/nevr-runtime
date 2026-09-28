@@ -3,7 +3,9 @@
 #include "core/mic_dsp.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 MicRingBuffer::MicRingBuffer(uint32_t capacity)
     : capacity_(capacity), data_(capacity > 0 ? capacity : 1) {}
@@ -18,7 +20,7 @@ bool MicRingBuffer::Push(const int16_t* samples, uint32_t count) {
     if (count_ < capacity_) {
       count_++;
     } else {
-      dropped = true;  // ring already full: this write displaced the oldest sample
+      dropped = true;
     }
   }
   return dropped;
@@ -31,11 +33,10 @@ uint32_t MicRingBuffer::Available() const {
 
 uint32_t MicRingBuffer::Pop(int16_t* out, uint32_t maxCount) {
   std::lock_guard<std::mutex> lock(mutex_);
-  uint32_t n = std::min(maxCount, count_);
-  uint32_t tail = (head_ + capacity_ - count_) % capacity_;
-  for (uint32_t i = 0; i < n; i++) {
-    out[i] = data_[(tail + i) % capacity_];
-  }
+  if (capacity_ == 0) return 0;
+  const uint32_t n = std::min(maxCount, count_);
+  const uint32_t tail = (head_ + capacity_ - count_) % capacity_;
+  for (uint32_t i = 0; i < n; i++) out[i] = data_[(tail + i) % capacity_];
   count_ -= n;
   return n;
 }
@@ -46,63 +47,180 @@ void MicRingBuffer::Reset() {
   count_ = 0;
 }
 
-uint32_t DownmixResampleToMonoInt16(const void* interleaved, uint32_t frameCount, uint16_t channels,
-                                    uint32_t srcRate, bool isFloat, uint16_t bitsPerSample,
-                                    uint32_t targetRate, double* phase, int16_t* out,
-                                    uint32_t outCapacity) {
-  if (frameCount == 0 || channels == 0 || outCapacity == 0 || srcRate == 0 || targetRate == 0) {
-    return 0;
-  }
+namespace {
 
-  const uint8_t* data = static_cast<const uint8_t*>(interleaved);
-
-  // Downmix to mono float first (simple channel average). Bounded stack
-  // buffer avoids a heap allocation on the capture hot path; frames beyond
-  // this are dropped (never observed at any common device rate on a 10ms
-  // WASAPI shared-mode buffer).
-  constexpr uint32_t kMaxFrames = 8192;
-  if (frameCount > kMaxFrames) frameCount = kMaxFrames;
-
-  float monoFloat[kMaxFrames];
-  for (uint32_t f = 0; f < frameCount; f++) {
-    float sum = 0.0f;
-    for (uint16_t c = 0; c < channels; c++) {
-      size_t sampleIndex = static_cast<size_t>(f) * channels + c;
-      if (isFloat) {
-        float sample;
-        std::memcpy(&sample, data + sampleIndex * sizeof(float), sizeof(float));
-        sum += sample;
-      } else if (bitsPerSample == 16) {
-        int16_t sample;
-        std::memcpy(&sample, data + sampleIndex * sizeof(int16_t), sizeof(int16_t));
-        sum += static_cast<float>(sample) / 32768.0f;
-      }
-      // Other bit depths (24/32-bit int) are not expected in shared-mode
-      // WASAPI mix format; treated as silence rather than guessed.
+int16_t ReadMonoFrame(const uint8_t* frame, uint16_t channels, bool isFloat,
+                      uint16_t bitsPerSample, bool silent) {
+  if (silent) return 0;
+  double sum = 0.0;
+  if (isFloat && bitsPerSample == 32) {
+    for (uint16_t channel = 0; channel < channels; ++channel) {
+      float value = 0.0F;
+      std::memcpy(&value, frame + static_cast<size_t>(channel) * sizeof(value), sizeof(value));
+      if (std::isfinite(value)) sum += std::clamp(static_cast<double>(value), -1.0, 1.0);
     }
-    monoFloat[f] = sum / static_cast<float>(channels);
+    sum /= channels;
+    const double scaled = sum * 32768.0;
+    const double rounded = scaled >= 0.0 ? std::floor(scaled + 0.5) : std::ceil(scaled - 0.5);
+    return static_cast<int16_t>(std::clamp(rounded, -32768.0, 32767.0));
+  }
+  if (!isFloat && bitsPerSample == 16) {
+    for (uint16_t channel = 0; channel < channels; ++channel) {
+      int16_t value = 0;
+      std::memcpy(&value, frame + static_cast<size_t>(channel) * sizeof(value), sizeof(value));
+      sum += value;
+    }
+    sum /= channels;
+    const double rounded = sum >= 0.0 ? std::floor(sum + 0.5) : std::ceil(sum - 0.5);
+    return static_cast<int16_t>(std::clamp(rounded, -32768.0, 32767.0));
+  }
+  // Unknown but structurally valid formats preserve the source clock as
+  // silence; the adapter validates block alignment before reaching this path.
+  return 0;
+}
+
+MicDspResult MakeResult(uint32_t consumed, uint32_t produced, MicDspStatus status) {
+  return {consumed, produced, status};
+}
+
+}  // namespace
+
+void MicDspResampler::Reset() {
+  configured_ = false;
+  hasPrevious_ = false;
+  segmentPending_ = false;
+  srcRate_ = 0;
+  targetRate_ = 0;
+  nextNumerator_ = 0;
+  previousSample_ = 0;
+  pendingSample_ = 0;
+}
+
+MicDspResult MicDspResampler::Process(const void* interleaved, uint32_t frameCount,
+                                      size_t dataBytes, uint16_t channels,
+                                      uint16_t blockAlign, uint32_t srcRate,
+                                      uint32_t targetRate, bool isFloat,
+                                      uint16_t bitsPerSample, bool silent,
+                                      int16_t* output, uint32_t outputCapacity) {
+  if (frameCount == 0 && !segmentPending_) return MakeResult(0, 0, MicDspStatus::NeedInput);
+  if (channels == 0 || blockAlign == 0 || srcRate == 0 || targetRate == 0 ||
+      (outputCapacity > 0 && output == nullptr)) {
+    return MakeResult(0, 0, MicDspStatus::InvalidInput);
+  }
+  const uint32_t bytesPerSample = (static_cast<uint32_t>(bitsPerSample) + 7u) / 8u;
+  if (bytesPerSample == 0 || static_cast<uint32_t>(channels) * bytesPerSample > blockAlign) {
+    return MakeResult(0, 0, MicDspStatus::InvalidInput);
+  }
+  if (!silent && frameCount > 0) {
+    if (interleaved == nullptr || frameCount > std::numeric_limits<size_t>::max() / blockAlign ||
+        dataBytes < static_cast<size_t>(frameCount) * blockAlign) {
+      return MakeResult(0, 0, MicDspStatus::InvalidInput);
+    }
+  }
+  if (outputCapacity == 0) return MakeResult(0, 0, MicDspStatus::OutputFull);
+  if (configured_ && (srcRate != srcRate_ || targetRate != targetRate_)) {
+    return MakeResult(0, 0, MicDspStatus::RateChanged);
+  }
+  if (!configured_) {
+    configured_ = true;
+    srcRate_ = srcRate;
+    targetRate_ = targetRate;
   }
 
-  // Linear-interpolation resample to targetRate, carrying fractional phase
-  // across packets so boundaries don't click. Sufficient for voice — Opus
-  // at 24kbps is the actual fidelity ceiling downstream — not intended as a
-  // general-purpose resampler.
-  uint32_t outCount = 0;
-  double ratio = static_cast<double>(srcRate) / static_cast<double>(targetRate);
-  double pos = *phase;
-  while (pos < static_cast<double>(frameCount) - 1.0 && outCount < outCapacity) {
-    uint32_t i0 = static_cast<uint32_t>(pos);
-    double frac = pos - static_cast<double>(i0);
-    float s0 = monoFloat[i0];
-    float s1 = monoFloat[i0 + 1];
-    float s = static_cast<float>(s0 + (s1 - s0) * frac);
-    if (s > 1.0f) s = 1.0f;
-    if (s < -1.0f) s = -1.0f;
-    out[outCount++] = static_cast<int16_t>(s * 32767.0f);
-    pos += ratio;
-  }
-  *phase = pos - static_cast<double>(frameCount);
-  if (*phase < 0.0) *phase = 0.0;
+  uint32_t consumed = 0;
+  uint32_t produced = 0;
+  const auto* bytes = static_cast<const uint8_t*>(interleaved);
+  for (;;) {
+    if (segmentPending_) {
+      while (nextNumerator_ <= targetRate_) {
+        if (produced == outputCapacity) return MakeResult(consumed, produced, MicDspStatus::OutputFull);
+        const double fraction = static_cast<double>(nextNumerator_) / targetRate_;
+        const double sample = static_cast<double>(previousSample_) +
+            (static_cast<double>(pendingSample_) - previousSample_) * fraction;
+        const double rounded = sample >= 0.0 ? std::floor(sample + 0.5) : std::ceil(sample - 0.5);
+        output[produced++] = static_cast<int16_t>(std::clamp(rounded, -32768.0, 32767.0));
+        nextNumerator_ += srcRate_;
+      }
+      nextNumerator_ -= targetRate_;
+      previousSample_ = pendingSample_;
+      segmentPending_ = false;
+      if (produced == outputCapacity) return MakeResult(consumed, produced, MicDspStatus::OutputFull);
+      continue;
+    }
 
-  return outCount;
+    if (consumed == frameCount) {
+      const MicDspStatus status = (consumed != 0 || produced != 0)
+          ? MicDspStatus::Progress : MicDspStatus::NeedInput;
+      return MakeResult(consumed, produced, status);
+    }
+
+    const uint8_t* frame = nullptr;
+    if (!silent) frame = bytes + static_cast<size_t>(consumed) * blockAlign;
+    const int16_t current = ReadMonoFrame(frame, channels, isFloat, bitsPerSample, silent);
+    ++consumed;
+    if (!hasPrevious_) {
+      previousSample_ = current;
+      hasPrevious_ = true;
+      nextNumerator_ = srcRate_;
+      output[produced++] = current;
+      if (produced == outputCapacity) return MakeResult(consumed, produced, MicDspStatus::OutputFull);
+      continue;
+    }
+
+    pendingSample_ = current;
+    segmentPending_ = true;
+  }
+}
+
+MicCapturePacketResult MicCapturePacketAdapter::Process(
+    const void* data, uint32_t frameCount, size_t dataBytes, uint16_t channels,
+    uint16_t blockAlign, uint32_t srcRate, uint32_t targetRate, bool isFloat,
+    uint16_t bitsPerSample, bool silent, MicRingBuffer& ring) {
+    if (blockAlign == 0 || frameCount > std::numeric_limits<size_t>::max() / blockAlign ||
+      (!silent && dataBytes < static_cast<size_t>(frameCount) * blockAlign) ||
+      (!silent && frameCount > 0 && data == nullptr)) {
+    return {0, 0, MicCapturePacketStatus::InvalidInput, false};
+  }
+
+  constexpr uint32_t kOutputChunkSamples = 2048;
+  int16_t output[kOutputChunkSamples];
+  uint32_t consumed = 0;
+  uint64_t producedTotal = 0;
+  bool ringOverflow = false;
+  bool drainPending = false;
+  for (;;) {
+    const uint32_t remaining = frameCount - consumed;
+    const size_t byteOffset = static_cast<size_t>(consumed) * blockAlign;
+    const void* input = (!silent && remaining > 0)
+        ? static_cast<const uint8_t*>(data) + byteOffset : nullptr;
+    const size_t remainingBytes = silent ? 0 : dataBytes - byteOffset;
+    const MicDspResult result = resampler_.Process(
+        input, remaining, remainingBytes, channels, blockAlign, srcRate, targetRate,
+        isFloat, bitsPerSample, silent, output, kOutputChunkSamples);
+    if (result.producedSamples > 0) {
+      ringOverflow = ring.Push(output, result.producedSamples) || ringOverflow;
+      producedTotal += result.producedSamples;
+    }
+    consumed += result.consumedFrames;
+    if (result.status == MicDspStatus::InvalidInput) {
+      return {consumed, producedTotal, MicCapturePacketStatus::InvalidInput, ringOverflow};
+    }
+    if (result.status == MicDspStatus::RateChanged) {
+      return {consumed, producedTotal, MicCapturePacketStatus::RateChanged, ringOverflow};
+    }
+    if (result.status == MicDspStatus::OutputFull) {
+      drainPending = consumed == frameCount;
+      continue;
+    }
+    if (consumed == frameCount) {
+      if (drainPending) {
+        drainPending = false;
+        continue;
+      }
+      return {consumed, producedTotal, MicCapturePacketStatus::Complete, ringOverflow};
+    }
+    if (result.consumedFrames == 0 && result.producedSamples == 0) {
+      return {consumed, producedTotal, MicCapturePacketStatus::NoProgress, ringOverflow};
+    }
+  }
 }

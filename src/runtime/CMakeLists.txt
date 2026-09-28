@@ -6,6 +6,8 @@
 set(PATCHES_SOURCES
     "lifecycle/dllmain.cpp"
     "lifecycle/initialize.cpp"
+    "lifecycle/game_image_guard.cpp"
+    "lifecycle/system_module_loader.cpp"
     "log/boot_log_tee.cpp"
     "lifecycle/cli.cpp"
     "lifecycle/boot.cpp"
@@ -34,7 +36,6 @@ set(PATCHES_SOURCES
     "log/symcache.cpp"
     "log/symcache_data.cpp"
     "log/url_diagnostics.cpp"
-    "log/security_diagnostics.h"
     "patch/broadcaster_guard.cpp"
     "hook/dll_load_hook.cpp"
     "patch/asset_cdn.cpp"
@@ -44,6 +45,11 @@ set(PATCHES_SOURCES
     "server/messages.cpp"
     "server/server_context.cpp"
     "server/websocket_client.cpp"
+    "server/websocket_frame.cpp"
+    "server/protobuf_transport.cpp"
+    "server/session_success_dispatch.cpp"
+    "server/callback_unregistration.cpp"
+    "server/session_unregister.cpp"
     "server/telemetry_streamer.cpp"
     "server/upnp.cpp"
 )
@@ -51,6 +57,8 @@ set(PATCHES_SOURCES
 set(PATCHES_HEADERS
     "hook/patching.h"
     "lifecycle/initialize.h"
+    "lifecycle/game_image_guard.h"
+    "lifecycle/system_module_loader.h"
     "log/boot_log_tee.h"
     "lifecycle/cli.h"
     "lifecycle/boot.h"
@@ -91,6 +99,11 @@ set(PATCHES_HEADERS
     "server/gameserver.h"
     "server/server_context.h"
     "server/websocket_client.h"
+    "server/websocket_frame.h"
+    "server/protobuf_transport.h"
+    "server/session_success_dispatch.h"
+    "server/callback_unregistration.h"
+    "server/session_unregister.h"
     "server/telemetry_streamer.h"
     "server/messages.h"
     "server/upnp.h"
@@ -142,7 +155,7 @@ set_source_files_properties(lifecycle/service_map.cpp lifecycle/service_config.c
 # no windows.h. Same reason as service_map.cpp: it must stay PCH-agnostic (defines
 # NOMINMAX before nlohmann, which pulls <limits>) so the test links it standalone.
 set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-set_source_files_properties(log/url_diagnostics.cpp server/websocket_client.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(log/url_diagnostics.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 set_target_properties(nevr_runtime PROPERTIES
   OUTPUT_NAME "BugSplat64"
@@ -208,6 +221,92 @@ if(BUILD_TESTING)
   find_package(GTest QUIET)
   if(GTest_FOUND)
     include(GoogleTest)
+    add_executable(test_game_image_guard
+      tests/test_game_image_guard.cpp
+      lifecycle/game_image_guard.cpp)
+    set_source_files_properties(tests/test_game_image_guard.cpp lifecycle/game_image_guard.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_game_image_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_game_image_guard PRIVATE GTest::gtest)
+    gtest_discover_tests(test_game_image_guard DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_system_module_loader
+      tests/test_system_module_loader.cpp
+      lifecycle/system_module_loader.cpp)
+    set_source_files_properties(tests/test_system_module_loader.cpp lifecycle/system_module_loader.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_system_module_loader PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_system_module_loader PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_system_module_loader DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_websocket_frame
+      tests/test_websocket_frame.cpp
+      server/websocket_frame.cpp)
+    set_source_files_properties(tests/test_websocket_frame.cpp server/websocket_frame.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_websocket_frame PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_websocket_frame PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_websocket_frame DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_protobuf_transport
+      tests/test_protobuf_transport.cpp
+      server/protobuf_transport.cpp
+      server/websocket_frame.cpp
+      log/url_diagnostics.cpp
+      server/websocket_client.cpp)
+    set_source_files_properties(tests/test_protobuf_transport.cpp server/protobuf_transport.cpp log/url_diagnostics.cpp server/websocket_client.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_protobuf_transport PRIVATE NEVR_TEST_HOOKS)
+    target_include_directories(test_protobuf_transport PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_protobuf_transport PRIVATE GTest::gtest GTest::gtest_main nevr_api ixwebsocket::ixwebsocket CURL::libcurl ws2_32)
+    if(MINGW)
+      add_dependencies(test_protobuf_transport nevr_runtime_bcrypt_minimal)
+      target_link_libraries(test_protobuf_transport PRIVATE
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>)
+    endif()
+    gtest_discover_tests(test_protobuf_transport DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_url_diagnostics
+      tests/test_url_diagnostics.cpp
+      log/url_diagnostics.cpp)
+    set_source_files_properties(tests/test_url_diagnostics.cpp log/url_diagnostics.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_url_diagnostics PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_url_diagnostics PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
+    gtest_discover_tests(test_url_diagnostics DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_callback_unregistration
+      tests/test_callback_unregistration.cpp
+      server/callback_unregistration.cpp
+      server/server_context.cpp)
+    set_source_files_properties(tests/test_callback_unregistration.cpp server/callback_unregistration.cpp server/server_context.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_callback_unregistration PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_callback_unregistration PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_callback_unregistration DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_session_unregister
+      tests/test_session_unregister.cpp
+      server/session_unregister.cpp
+      server/server_context.cpp
+      server/protobuf_transport.cpp
+      server/websocket_client.cpp
+      server/websocket_frame.cpp
+      log/url_diagnostics.cpp)
+    set_source_files_properties(tests/test_session_unregister.cpp server/session_unregister.cpp server/server_context.cpp
+      server/protobuf_transport.cpp log/url_diagnostics.cpp server/websocket_client.cpp server/websocket_frame.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_compile_definitions(test_session_unregister PRIVATE NEVR_TEST_HOOKS)
+    target_include_directories(test_session_unregister PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_session_unregister PRIVATE
+      GTest::gtest GTest::gtest_main nevr_api ixwebsocket::ixwebsocket CURL::libcurl ws2_32)
+    if(MINGW)
+      add_dependencies(test_session_unregister nevr_runtime_bcrypt_minimal)
+      target_link_libraries(test_session_unregister PRIVATE
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>)
+    endif()
+    gtest_discover_tests(test_session_unregister DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_xpid_patch tests/test_xpid_patch.cpp)
     target_include_directories(test_xpid_patch PRIVATE
       ${CMAKE_SOURCE_DIR}/src
@@ -232,6 +331,23 @@ if(BUILD_TESTING)
     target_include_directories(test_mic_dsp PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_mic_dsp PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_mic_dsp DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_mic_lifecycle
+      tests/test_mic_lifecycle.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_lifecycle.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_capture_drain.cpp)
+    set_source_files_properties(tests/test_mic_lifecycle.cpp ${CMAKE_SOURCE_DIR}/src/core/mic_lifecycle.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_capture_drain.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_mic_lifecycle PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_mic_lifecycle PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_mic_lifecycle DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_telemetry_snapshot_store tests/test_telemetry_snapshot_store.cpp)
+    set_source_files_properties(tests/test_telemetry_snapshot_store.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_telemetry_snapshot_store PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_telemetry_snapshot_store PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_telemetry_snapshot_store DISCOVERY_MODE PRE_TEST)
 
     # ParseEndpoint unit tests — validates N1 fix (strtoul + errno vs std::stoul throw)
     add_executable(test_parse_endpoint tests/test_parse_endpoint.cpp)
@@ -287,17 +403,6 @@ if(BUILD_TESTING)
     target_link_libraries(test_plugin_load_plan PRIVATE
       GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_plugin_load_plan DISCOVERY_MODE PRE_TEST)
-
-    # URL diagnostics redaction tests compile the production helper directly so
-    # malformed and credential-bearing inputs are checked without service calls.
-    add_executable(test_url_diagnostics
-      tests/test_url_diagnostics.cpp
-      log/url_diagnostics.cpp)
-    set_source_files_properties(tests/test_url_diagnostics.cpp log/url_diagnostics.cpp
-      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_include_directories(test_url_diagnostics PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_url_diagnostics PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
-    gtest_discover_tests(test_url_diagnostics DISCOVERY_MODE PRE_TEST)
 
     # Behavioral tests — N68 (plugin/module tick dispatch) + N61 (callback
     # lifecycle). Links plugin_loader.cpp, module_loader.cpp, and ws_bridge.cpp
@@ -427,8 +532,8 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json token_auth_test_hooks)
     gtest_discover_tests(test_token_auth DISCOVERY_MODE PRE_TEST)
 
-    add_executable(test_messages tests/test_messages.cpp server/messages.cpp)
-    set_source_files_properties(tests/test_messages.cpp server/messages.cpp
+    add_executable(test_messages tests/test_messages.cpp server/messages.cpp server/session_success_dispatch.cpp)
+    set_source_files_properties(tests/test_messages.cpp server/messages.cpp server/session_success_dispatch.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_messages PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_messages PRIVATE

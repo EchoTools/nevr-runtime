@@ -1,4 +1,5 @@
 #include "runtime/lifecycle/initialize.h"
+#include "runtime/lifecycle/game_image_guard.h"
 
 #include <cstring>
 #include <vector>
@@ -215,18 +216,6 @@ static void* CSysDLL_LoadHook(void* name_buf, void* plugin_ctx) {
 // Game version verification
 // ============================================================================
 
-static BOOL VerifyGameVersion() {
-#define IMG_SIGNATURE_OFFSET 0x3C
-#define IMG_SIGNATURE_SIZE 0x04
-
-  DWORD* signatureOffset = (DWORD*)(EchoVR::g_GameBaseAddress + IMG_SIGNATURE_OFFSET);
-  IMAGE_FILE_HEADER* coffFileHeader =
-      (IMAGE_FILE_HEADER*)(EchoVR::g_GameBaseAddress + (*signatureOffset + IMG_SIGNATURE_SIZE));
-
-  // Echo VR version 34.4.631547.1 — Wednesday, May 3, 2023 10:28:06 PM
-  return coffFileHeader->TimeDateStamp == 0x6452dff6;
-}
-
 // ============================================================================
 // Cross-DLL exports (called by gameserver.dll via GetProcAddress)
 // ============================================================================
@@ -247,7 +236,7 @@ extern "C" __declspec(dllexport) void NEVR_GetUPnPConfig(NevRUPnPConfig* out) {
 // Main initialization
 // ============================================================================
 
-VOID Initialize() {
+static VOID InitializeAfterGameImageGuard() {
   if (g_initialized) return;
   g_initialized = true;
 
@@ -258,10 +247,6 @@ VOID Initialize() {
   BootLogTee::Init();
 
   BootLogTee::TeeFprintf("[NEVR.PATCH] Initializing v%s base=%p\n", PROJECT_VERSION, EchoVR::g_GameBaseAddress);
-  if (!VerifyGameVersion()) {
-    BootLogTee::TeeFprintf("[NEVR.PATCH] game binary version mismatch — hooks may crash\n");
-  }
-
   EchoVR::InitializeFunctionPointers();
   BootLogTee::TeeFprintf("[NEVR.PATCH] function pointers resolved\n");
 
@@ -428,4 +413,13 @@ VOID Initialize() {
 
   Log(g_bootHookFailed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
       "[NEVR.PATCH] boot hooks installed ok=%s", g_bootHookFailed ? "false" : "true");
+}
+
+static void InitializeValidatedGameModule(HMODULE module) {
+  EchoVR::g_GameBaseAddress = reinterpret_cast<CHAR*>(module);
+  InitializeAfterGameImageGuard();
+}
+
+void InitializeGameModule(HMODULE module) {
+  GameImageGuard::RunWithSupportedGameModule(module, &InitializeValidatedGameModule);
 }

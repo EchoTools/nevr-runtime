@@ -309,6 +309,26 @@ TEST_F(PluginLoaderDiagnosticTest, RealLoadedPluginOnFrameHasObservableSideEffec
   EXPECT_EQ(getFrameCount(), 2u);
 }
 
+TEST_F(PluginLoaderDiagnosticTest, ExplicitUnloadInvokesShutdownAndReleasesPluginReference) {
+  constexpr char kShutdownEventName[] = "Local\\NEVRTestPluginShutdownObserved";
+  HANDLE shutdownObserved = CreateEventA(nullptr, TRUE, FALSE, kShutdownEventName);
+  ASSERT_NE(shutdownObserved, nullptr);
+
+  g_testPluginLoadPlan.push_back(
+      {"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  LoadPlugins();
+
+  const int loadedCount = GetLoadedPluginCount();
+  EXPECT_EQ(loadedCount, 1);
+  EXPECT_NE(GetModuleHandleA("test_plugin_onframe.dll"), nullptr);
+  UnloadPlugins();
+
+  EXPECT_EQ(WaitForSingleObject(shutdownObserved, 0),
+            loadedCount == 1 ? WAIT_OBJECT_0 : WAIT_TIMEOUT);
+  EXPECT_EQ(GetModuleHandleA("test_plugin_onframe.dll"), nullptr);
+  CloseHandle(shutdownObserved);
+}
+
 TEST_F(N68_PluginTickTest, OnFrame_Fires_When_Registered) {
   TestHook_RegisterPluginOnFrame(N68_PluginOnFrame);
   NvrGameContext ctx = {};

@@ -4,17 +4,26 @@
 #include <windows.h>
 
 #include <atomic>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "abi/echovr.h"
+#include "runtime/server/websocket_frame.h"
 
 namespace ix {
 class WebSocket;
 struct WebSocketMessage;
 using WebSocketMessagePtr = std::unique_ptr<WebSocketMessage>;
 }  // namespace ix
+
+enum class WebSocketSendStatus {
+  Rejected,
+  Queued,
+  Sent,
+};
 
 /// <summary>
 /// WebSocket client for ServerDB communication.
@@ -56,6 +65,11 @@ class WebSocketClient {
   /// <param name="size">Size of the payload in bytes</param>
   /// <returns>TRUE if message queued successfully, FALSE on error</returns>
   BOOL Send(EchoVR::SymbolId msgId, const VOID* data, UINT64 size);
+  WebSocketSendStatus SendWithStatus(EchoVR::SymbolId msgId, const VOID* data, UINT64 size);
+
+  // Drop messages queued while disconnected. End-of-session calls this after
+  // attempting CODE_ENDED so that a queued event cannot leak into a later registration.
+  size_t DiscardPendingMessages();
 
   /// <summary>
   /// Sets the callback function to be invoked when a message is received.
@@ -101,18 +115,11 @@ class WebSocketClient {
   std::vector<UINT8> lastReceivedPayload_;
 
   // Message queue for processing on main thread (thread-safe)
-  struct ReceivedMessage {
-    EchoVR::SymbolId msgId;
-    std::vector<UINT8> payload;
-    UINT64 timestamp;  // For deduplication
-  };
-  std::vector<ReceivedMessage> receivedMessages_;
+  std::vector<GameServer::ReceivedWebSocketMessage> receivedMessages_;
   CRITICAL_SECTION receivedMessagesMutex_;
-
-  // Last processed message for deduplication (msgId + first 8 bytes of payload)
-  EchoVR::SymbolId lastMsgId_;
-  UINT64 lastPayloadHash_;
-  UINT64 lastMsgTimestamp_;
+#ifdef NEVR_TEST_HOOKS
+  std::function<bool(const std::string&)> testTransportHandler_;
+#endif
 
   // Internal message handler for ixwebsocket
   VOID OnMessage(const ix::WebSocketMessagePtr& msg);
@@ -126,4 +133,10 @@ class WebSocketClient {
 
   /// Disables automatic reconnection so the next disconnect is final.
   VOID DisableReconnection();
+
+#ifdef NEVR_TEST_HOOKS
+  void TestSetConnected(bool connected);
+  std::vector<std::string> TestCopyPendingMessages();
+  void TestSetTransportHandler(std::function<bool(const std::string&)> handler);
+#endif
 };

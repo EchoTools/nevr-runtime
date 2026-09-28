@@ -39,7 +39,7 @@
             "name": "linux-wine-base",
             "hidden": true,
             "generator": "Ninja",
-            "binaryDir": "${sourceDir}/build/linux-wine-${presetName}",
+            "binaryDir": "${sourceDir}/build/${presetName}",
             "toolchainFile": "${sourceDir}/cmake/toolchain-msvc-wine.cmake",
             "cacheVariables": {
                 "CMAKE_COLOR_DIAGNOSTICS": "ON"

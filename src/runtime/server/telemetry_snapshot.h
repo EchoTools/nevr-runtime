@@ -3,8 +3,9 @@
 #include <cstdint>
 #include <cstring>
 
-// Game state snapshot captured on game thread, read by telemetry thread.
-// Two instances form a double-buffer for lock-free producer/consumer.
+// Game state snapshot captured on game thread and serialized by telemetry
+// thread. TelemetrySnapshotStore owns three instances and leases writer,
+// published, and reader roles under its metadata mutex.
 struct TelemetrySnapshot {
   // --- Game function results (game thread only) ---
   float gameClock;

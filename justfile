@@ -28,7 +28,7 @@ configure: generate-symcache _vcpkg-mingw
 
 # Build all components
 build: configure
-    @cmake --build --preset {{ preset }} 2>&1 | grep -E '(error|Error|ERROR|fatal|FAILED)' || true
+    @cmake --build --preset {{ preset }}
 
 # Build only the echovr_server.exe launcher
 launcher: configure
@@ -40,9 +40,7 @@ verbose-build: configure
 
 # Create distribution packages
 dist: build
-    @cmake --build --preset {{ preset }} --target dist 2>&1 | \
-        grep -vE '(^\[|^ninja|Creating.*\.(tar\.zst|zip)|Preparing distribution|Running utility|^===)' | \
-        grep -E '(error|Error|ERROR|fatal|FAILED)' || true
+    @cmake --build --preset {{ preset }} --target dist
 
 # Create distribution with full output
 verbose-dist: build
@@ -57,7 +55,8 @@ dist-legacy: build
     cmake --build --preset {{ preset }} --target dist-legacy
 
 # Regenerate C++ protobuf from BSR (buf.build/echotools/nevr-api).
-# Uses vcpkg protoc to match the runtime version. Run `just configure` first.
+# Uses vcpkg's host protoc to match the runtime version. Dependencies must be
+# installed first; generate before CMake configure so a clean checkout works.
 # PINNED to a specific BSR commit so the generated code is reproducible and
 # matches nevr-stream's Go module revision (N132). Bump this when the BSR schema
 # changes: `buf registry commit list buf.build/echotools/nevr-api --page-size 1`.
@@ -242,11 +241,25 @@ test-auth-unit:
     unset VCPKG_ROOT
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_plugin_load_plan --target test_url_diagnostics
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_plugin_load_plan --target test_system_module_loader --target test_websocket_frame --target test_protobuf_transport --target test_url_diagnostics --target test_callback_unregistration --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store
+    cmake --build --preset {{ preset }} --target test_mic_dsp
+    cmake --build --preset {{ preset }} --target test_game_image_guard
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         echo "       (is 'gtest' available in vcpkg for triplet x64-mingw-static?)" >&2
+        exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_mic_dsp.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_game_image_guard.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
     wine "$bin"
@@ -303,12 +316,14 @@ test-auth-unit:
         exit 1
     fi
     wine "$bin"
-    bin="build/{{ preset }}/bin/test_url_diagnostics.exe"
-    if [[ ! -f "$bin" ]]; then
-        echo "ERROR: GTest binary not found: $bin" >&2
-        exit 1
-    fi
-    wine "$bin"
+    for test_name in test_system_module_loader test_websocket_frame test_protobuf_transport test_url_diagnostics test_callback_unregistration test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store; do
+        bin="build/{{ preset }}/bin/${test_name}.exe"
+        if [[ ! -f "$bin" ]]; then
+            echo "ERROR: GTest binary not found: $bin" >&2
+            exit 1
+        fi
+        wine "$bin"
+    done
     # test_broadcaster_bridge / test_broadcaster_guards moved to
     # ~/src/nevr-runtime-plugins with the broadcaster-bridge plugin (2026-07-26).
     # The N72/N73 guards they cover now live and are tested there.
@@ -337,6 +352,7 @@ verify:
     # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
     cmake --build --preset {{ preset }}
     just test-auth-unit
+    python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
@@ -591,19 +607,29 @@ verify:
         echo "verify: FAIL — N67 g_justSuppressedCrash is not std::atomic<bool> in the SHIPPING path." >&2
         exit 1
     fi
-    # N36: Log() is unsafe under the loader lock. Initialize() runs from DllMain, and
+    # N36: Log() is unsafe under the loader lock. InitializeAfterGameImageGuard() runs from DllMain, and
     # the Log() fallback to stderr stops applying the moment
     # InitializeFunctionPointers() makes EchoVR::WriteLog non-null. Everything after
-    # that point in Initialize() must use BootLogTee::TeeFprintf. Exactly one Log()
+    # that point in guarded initialization must use BootLogTee::TeeFprintf. Exactly one Log()
     # call is permitted — the final line, emitted after BootLogTee::Close().
-    N36_RC=0; N36_BODY=$(awk '/^VOID Initialize\(\)/,/^}/' src/runtime/lifecycle/initialize.cpp) || N36_RC=$?
+    N36_RC=0; N36_BODY=$(awk '/^static VOID InitializeAfterGameImageGuard\(\)/,/^}/' src/runtime/lifecycle/initialize.cpp) || N36_RC=$?
     sensor_stage1 "N36 Initialize Log census" "src/runtime/lifecycle/initialize.cpp" "$N36_RC"
-    sensor_nonempty "N36 Initialize Log census" "Initialize() body in src/runtime/lifecycle/initialize.cpp" "$N36_BODY"
+    sensor_nonempty "N36 Initialize Log census" "InitializeAfterGameImageGuard() body in src/runtime/lifecycle/initialize.cpp" "$N36_BODY"
     LOGS_IN_INIT=$(printf '%s\n' "$N36_BODY" | grep -cF 'Log(EchoVR::LogLevel' || true)
     if [ "$LOGS_IN_INIT" -gt 1 ]; then
-        echo "verify: FAIL — N36 Initialize() contains $LOGS_IN_INIT Log() calls (max 1, the final line)." >&2
-        echo "Initialize() runs under the DllMain loader lock; after InitializeFunctionPointers() the" >&2
+        echo "verify: FAIL — N36 guarded initialization contains $LOGS_IN_INIT Log() calls (max 1, the final line)." >&2
+        echo "InitializeAfterGameImageGuard() runs under the DllMain loader lock; after InitializeFunctionPointers() the" >&2
         echo "stderr fallback in logging.cpp no longer fires and Log() enters the game logger. Use BootLogTee::TeeFprintf." >&2
+        exit 1
+    fi
+    # Plugin shutdown can join threads and release module references. DllMain
+    # runs under the loader lock and must never enter plugin teardown; process
+    # exit also does not promise the optional plugin shutdown callback.
+    DLLMAIN_RC=0; DLLMAIN_BODY=$(awk '/^BOOL APIENTRY DllMain\(/,/^}/' src/runtime/lifecycle/dllmain.cpp) || DLLMAIN_RC=$?
+    sensor_stage1 "Plugin detach teardown boundary" "src/runtime/lifecycle/dllmain.cpp" "$DLLMAIN_RC"
+    sensor_nonempty "Plugin detach teardown boundary" "DllMain() body in src/runtime/lifecycle/dllmain.cpp" "$DLLMAIN_BODY"
+    if grep -Eq 'UnloadPlugins[[:space:]]*\(|NvrPluginShutdown' <<<"$DLLMAIN_BODY"; then
+        echo "verify: FAIL — DllMain calls plugin shutdown/unload under the loader lock." >&2
         exit 1
     fi
     # --- Observability invariants (N77/N78/N79/N80/N81) ----------------------
@@ -1754,33 +1780,26 @@ generate-certs:
 renew-certs:
     ./certs/generate-ca.sh --renew
 
-# Sign all DLLs in dist/ with Authenticode
-sign: dist
+# Build normal and lite archives with required local Authenticode signing.
+sign:
     #!/usr/bin/env bash
     set -euo pipefail
     cert_dir="{{ justfile_directory() }}/certs"
-    if [[ ! -f "$cert_dir/code-signing.key" || ! -f "$cert_dir/chain.pem" ]]; then
+    if [[ ! -f "$cert_dir/code-signing.key" || ! -f "$cert_dir/chain.pem" || ! -f "$cert_dir/root-ca.crt" ]]; then
         echo "ERROR: No signing certs found. Run: just generate-certs" >&2
         exit 1
     fi
-    shopt -s nullglob globstar
-    dlls=(dist/**/*.dll dist/**/*.exe)
-    if [[ ${#dlls[@]} -eq 0 ]]; then
-        echo "No DLLs/EXEs found in dist/" >&2
-        exit 1
-    fi
-    for f in "${dlls[@]}"; do
-        echo "Signing $f"
-        osslsigncode sign \
-            -certs "$cert_dir/chain.pem" \
-            -key "$cert_dir/code-signing.key" \
-            -n "nEVR Runtime" \
-            -t http://timestamp.digicert.com \
-            -in "$f" \
-            -out "$f.signed"
-        mv "$f.signed" "$f"
-    done
-    echo "Signed ${#dlls[@]} file(s)"
+    export CODESIGN_CERT="$cert_dir/chain.pem"
+    export CODESIGN_KEY="$cert_dir/code-signing.key"
+    export CODESIGN_CA_FILE="$cert_dir/root-ca.crt"
+    export CODESIGN_SIGNER_SHA256="$(openssl x509 -in "$cert_dir/chain.pem" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':')"
+    export CODESIGN_ROOT_SHA256="$(openssl x509 -in "$cert_dir/root-ca.crt" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':')"
+    export CODESIGN_TSURL="http://timestamp.digicert.com"
+    cmake --preset {{ preset }} -DNEVR_CODESIGN_REQUIRED=ON
+    build_status=0
+    cmake --build --preset {{ preset }} --target dist dist-lite || build_status=$?
+    cmake --preset {{ preset }} -DNEVR_CODESIGN_REQUIRED=OFF > /dev/null
+    exit "$build_status"
 
 # Verify Authenticode signature on a file
 verify-sign file:
@@ -1792,9 +1811,12 @@ verify-sign file:
 [private]
 _vcpkg-mingw:
     #!/usr/bin/env bash
+    set -euo pipefail
     if [[ "{{ preset }}" == mingw-* ]]; then
         mkdir -p build/{{ preset }}/vcpkg_installed
-        cd "$HOME/.vcpkg" && unset VCPKG_ROOT && ./vcpkg install --triplet=x64-mingw-static \
+        cd "$HOME/.vcpkg"
+        unset VCPKG_ROOT
+        ./vcpkg install --triplet=x64-mingw-static --host-triplet=x64-linux \
             --x-manifest-root="{{ justfile_directory() }}" \
-            --x-install-root="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed" > /dev/null 2>&1 || true
+            --x-install-root="{{ justfile_directory() }}/build/{{ preset }}/vcpkg_installed"
     fi

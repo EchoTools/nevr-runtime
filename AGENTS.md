@@ -167,8 +167,9 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 
 ### Other Components
 
-- **`src/launcher/`** — thin `CreateProcess` wrapper that spawns
-  `echovr.exe -server -noconsole` (built; `CMakeLists.txt:200`, `just launcher`).
+- **`src/launcher/`** — `echovr_server.exe`, a thin `CreateProcess` wrapper that
+  spawns `echovr.exe -server -headless -noconsole` (built; root
+  `CMakeLists.txt`, `just launcher`).
   The older PE-conversion launcher is gone — Wine could not load the game DLL at
   the required base address.
 - Android/Quest standalone target lives in `src/quest/` (separate CMake project). The former src/standalone/ stub was deleted 2026-08-02.
@@ -221,6 +222,15 @@ You are not the first agent to work here, and you won't be the last. Act like it
 - **Performance claims need load testing**: Idle measurements are not validation. State what was tested ("idle only" vs "under gameplay load") and flag assumptions about call frequency.
 - **Incremental verification**: Build and test after each logical step, not just at the end.
 
+## Working-tree hygiene and commit cadence
+
+- **One active tranche at a time.** In a shared checkout, finish, verify, and commit one logical change before starting the next finding or feature. Do not let completed fixes accumulate across findings, turns, or agent handoffs.
+- **Keep the pending diff bounded.** Before implementation, record `git status --short` and identify pre-existing user changes. Preserve those changes and never stage them unless explicitly asked. At any point, the agent-authored uncommitted diff should cover only the current logical tranche and its tests.
+- **Stage intentionally.** Prefer explicit file paths or reviewed hunks. Do not use blanket staging (`git add -A` / `git add .`) in a shared checkout with pre-existing changes. Inspect the staged diff before every commit.
+- **Commit before handing work off.** A verified tranche must be committed before another agent starts a different tranche or the active agent starts unrelated work. If implementation is in a separate worktree, commit there, integrate that commit, and remove the worktree only after confirming the changes are safely integrated. Do not leave abandoned dirty worktrees.
+- **Close each commit loop.** Follow the commit identity rules below, verify the commit identity immediately, and run the required post-commit checks before proceeding. If a required check cannot run or fails, stop the sequence, report the exact blocker, and do not start another tranche.
+- **End-of-turn status.** Report the commit hash for completed work and identify any uncommitted changes as belonging only to the active, unfinished tranche. Do not leave completed work uncommitted without an explicit blocker and a clear recovery step.
+
 ## Production Deployment — FORBIDDEN without explicit user approval
 
 **No deployment to production servers may be taken without Andrew's explicit, per-instance approval in the current conversation.** This applies to this project and any other project's infrastructure.
@@ -264,7 +274,7 @@ This applies regardless of context — even if the task seems to require it, eve
 - **Submodules** (`extern/`) — `minhook`, `breakpad`, `lss` (per `.gitmodules`).
   `extern/protobuf` is a plain directory, not a submodule. The `evr-test-harness`
   symlink is excised — see below.
-- **Toolchain** — CMake 3.20+, Ninja, MinGW (Linux) or MSVC (Windows)
+- **Toolchain** — CMake 4.0+, Ninja, MinGW (Linux) or MSVC (Windows)
 
 ## Onboarding conventions
 

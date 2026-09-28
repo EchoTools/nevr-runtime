@@ -8,7 +8,10 @@
 // Must be called after Hooking::Initialize() and after g_isServer/g_isHeadless are known.
 void LoadPlugins();
 
-// Unload all loaded plugins (called on process detach).
+// Explicit normal-thread teardown helper: calls each optional shutdown export
+// in reverse load order, then releases the host's module reference. DllMain
+// does not call this; shutdown is not guaranteed on process exit, and runtime
+// dynamic unloading is not a supported lifecycle path.
 void UnloadPlugins();
 
 // Call NvrPluginOnFrame on all loaded plugins that export it.

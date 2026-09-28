@@ -4,6 +4,7 @@ namespace GameServer {
 
 // CallbackRegistry implementation
 void CallbackRegistry::Clear() {
+  broadcasterOwner = nullptr;
   sessionStart = 0;
   sessionError = 0;
   saveLoadout = 0;
