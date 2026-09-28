@@ -2,7 +2,9 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
+#include "auth_snapshot.h"
 
 #ifdef NEVR_TEST_HOOKS
 #include <chrono>
@@ -28,6 +30,10 @@ uint64_t GetDiscordId();
 // treat empty as "no honest answer" and must not substitute a placeholder that
 // looks like a real name (N123).
 std::string GetUsername();
+
+// One immutable generation for callers that need token and identity fields to
+// agree. The returned snapshot remains valid across later publication.
+std::shared_ptr<const AuthSnapshot> GetAuthSnapshot();
 
 #ifdef NEVR_TEST_HOOKS
 // In-memory DeviceAuth observations for the token-auth unit test target.  These
