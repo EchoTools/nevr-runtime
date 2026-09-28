@@ -14,6 +14,7 @@ set(PATCHES_SOURCES
     "lifecycle/config.cpp"
     "lifecycle/service_map.cpp"
     "lifecycle/service_config.cpp"
+    "lifecycle/login_redirect_override.cpp"
     "patch/mode_patches.cpp"
     "patch/broadcaster_hook_stats.cpp"
     "lifecycle/crash_recovery.cpp"
@@ -65,6 +66,7 @@ set(PATCHES_HEADERS
     "lifecycle/config.h"
     "lifecycle/service_map.h"
     "lifecycle/service_config.h"
+    "lifecycle/login_redirect_override.h"
     "patch/mode_patches.h"
     "patch/broadcaster_hook_stats.h"
     "lifecycle/crash_recovery.h"
@@ -150,7 +152,7 @@ set_source_files_properties(ws_bridge.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # test can link it) and service_config.cpp (defines NOMINMAX before windows.h, as
 # the core PCH pulls windows.h WITHOUT NOMINMAX and its min/max macros break
 # <optional>/<set>). Same reason nevr_config.cpp skips the PCH.
-set_source_files_properties(lifecycle/service_map.cpp lifecycle/service_config.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(lifecycle/service_map.cpp lifecycle/service_config.cpp lifecycle/login_redirect_override.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N134 S6: plugin_load_plan.cpp is the pure builder — nevr_config + nlohmann-json,
 # no windows.h. Same reason as service_map.cpp: it must stay PCH-agnostic (defines
 # NOMINMAX before nlohmann, which pulls <limits>) so the test links it standalone.
@@ -238,6 +240,15 @@ if(BUILD_TESTING)
     target_include_directories(test_system_module_loader PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_system_module_loader PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_system_module_loader DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_login_redirect_override
+      tests/test_login_redirect_override.cpp
+      lifecycle/login_redirect_override.cpp)
+    set_source_files_properties(tests/test_login_redirect_override.cpp lifecycle/login_redirect_override.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_login_redirect_override PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_login_redirect_override PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_login_redirect_override DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_websocket_frame
       tests/test_websocket_frame.cpp
