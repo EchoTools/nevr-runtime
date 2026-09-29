@@ -9,6 +9,8 @@ find_package(nlohmann_json CONFIG REQUIRED)
 add_library(token_auth STATIC
     src/token_auth.cpp
     src/token_auth.h
+    src/auth_snapshot.cpp
+    src/auth_snapshot.h
     src/device_poll_response.cpp
     src/device_poll_response.h
 )
@@ -29,6 +31,7 @@ target_link_libraries(token_auth PRIVATE nevr_core CURL::libcurl nlohmann_json::
 if(BUILD_TESTING)
     add_library(token_auth_test_hooks STATIC
         src/token_auth.cpp
+        src/auth_snapshot.cpp
         src/device_poll_response.cpp
         "${CMAKE_SOURCE_DIR}/src/runtime/log/url_diagnostics.cpp"
     )

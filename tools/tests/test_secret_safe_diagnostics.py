@@ -93,8 +93,8 @@ class SecretSafeDiagnosticSourceTest(unittest.TestCase):
         self.assertNotIn("errMsg", bridge)
         self.assertNotIn("%.*s", bridge)
         self.assertIn("FormatLoginFailureDiagnostic", bridge)
-        self.assertIn("gameWsPtr->sendBinary(fakeSuccess);", bridge)
-        self.assertIn("target->sendBinary(rmsg->str);", bridge)
+        self.assertIn("targetConnection->gameWs->sendBinary(fakeSuccess);", bridge)
+        self.assertIn("? target->sendBinary(rmsg->str)", bridge)
         self.assertIn("server->game", bridge)
 
     def test_callback_exception_sentinel_is_removed_by_actual_guard(self):

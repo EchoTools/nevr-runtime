@@ -14,6 +14,7 @@ set(PATCHES_SOURCES
     "lifecycle/config.cpp"
     "lifecycle/service_map.cpp"
     "lifecycle/service_config.cpp"
+    "lifecycle/login_redirect_override.cpp"
     "patch/mode_patches.cpp"
     "patch/broadcaster_hook_stats.cpp"
     "lifecycle/crash_recovery.cpp"
@@ -27,6 +28,7 @@ set(PATCHES_SOURCES
     "patch/resource_override.cpp"
     "compat/winhttp_stub.cpp"
     "compat/ws_bridge.cpp"
+    "compat/bridge_control_owner.cpp"
     "patch/xpid_patch.cpp"
     "frame/tick.cpp"
     "patch/binary_bug_fixes.cpp"
@@ -65,6 +67,7 @@ set(PATCHES_HEADERS
     "lifecycle/config.h"
     "lifecycle/service_map.h"
     "lifecycle/service_config.h"
+    "lifecycle/login_redirect_override.h"
     "patch/mode_patches.h"
     "patch/broadcaster_hook_stats.h"
     "lifecycle/crash_recovery.h"
@@ -83,6 +86,7 @@ set(PATCHES_HEADERS
     "hook/process_memory.h"
     "hook/addresses.h"
     "compat/ws_bridge.h"
+    "compat/bridge_control_owner.h"
     "patch/xpid_patch.h"
     "frame/tick.h"
     "patch/binary_bug_fixes.h"
@@ -150,7 +154,7 @@ set_source_files_properties(ws_bridge.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # test can link it) and service_config.cpp (defines NOMINMAX before windows.h, as
 # the core PCH pulls windows.h WITHOUT NOMINMAX and its min/max macros break
 # <optional>/<set>). Same reason nevr_config.cpp skips the PCH.
-set_source_files_properties(lifecycle/service_map.cpp lifecycle/service_config.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(lifecycle/service_map.cpp lifecycle/service_config.cpp lifecycle/login_redirect_override.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N134 S6: plugin_load_plan.cpp is the pure builder — nevr_config + nlohmann-json,
 # no windows.h. Same reason as service_map.cpp: it must stay PCH-agnostic (defines
 # NOMINMAX before nlohmann, which pulls <limits>) so the test links it standalone.
@@ -238,6 +242,15 @@ if(BUILD_TESTING)
     target_include_directories(test_system_module_loader PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_system_module_loader PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_system_module_loader DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_login_redirect_override
+      tests/test_login_redirect_override.cpp
+      lifecycle/login_redirect_override.cpp)
+    set_source_files_properties(tests/test_login_redirect_override.cpp lifecycle/login_redirect_override.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_login_redirect_override PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_login_redirect_override PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_login_redirect_override DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_websocket_frame
       tests/test_websocket_frame.cpp
@@ -349,6 +362,15 @@ if(BUILD_TESTING)
     target_link_libraries(test_telemetry_snapshot_store PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_telemetry_snapshot_store DISCOVERY_MODE PRE_TEST)
 
+    add_executable(test_bridge_control_owner
+      tests/test_bridge_control_owner.cpp
+      compat/bridge_control_owner.cpp)
+    set_source_files_properties(tests/test_bridge_control_owner.cpp compat/bridge_control_owner.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_bridge_control_owner PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_bridge_control_owner PRIVATE GTest::gtest GTest::gtest_main nevr_core)
+    gtest_discover_tests(test_bridge_control_owner DISCOVERY_MODE PRE_TEST)
+
     # ParseEndpoint unit tests — validates N1 fix (strtoul + errno vs std::stoul throw)
     add_executable(test_parse_endpoint tests/test_parse_endpoint.cpp)
     target_include_directories(test_parse_endpoint PRIVATE
@@ -429,6 +451,7 @@ if(BUILD_TESTING)
       ext/plugin_loader.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
+      compat/bridge_control_owner.cpp
       compat/ws_bridge.cpp
       hook/symbol_corpus.cpp
       # N84: plugin_loader calls HookGuard::VerifyAll after each plugin init.
@@ -457,6 +480,7 @@ if(BUILD_TESTING)
       ext/plugin_loader.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
+      compat/bridge_control_owner.cpp
       compat/ws_bridge.cpp
       hook/symbol_corpus.cpp
       patch/broadcaster_hook_stats.cpp

@@ -46,6 +46,8 @@ void StopWebSocketBridgeListener();
 std::string TestHook_BuildLoginRequest(uint64_t discordId, uint64_t platformCode,
                                        const std::string& displayName,
                                        const std::string& accessToken);
+bool TestHook_ContainsLoginSuccess(const std::string& frame);
+bool TestHook_OpenThenRemoteResponseUsesPublishedRoute();
 const char* TestHook_PlatformPrefix(uint64_t platformCode);
 int TestHook_GuardWsCallbackForwardsArguments(int first, int second);
 bool TestHook_GuardWsCallbackContainsStdException();

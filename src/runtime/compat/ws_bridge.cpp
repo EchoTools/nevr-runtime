@@ -7,7 +7,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
+#include <future>
 #include <nlohmann/json.hpp>
 #include <cstring>
 #include <memory>
@@ -16,7 +19,9 @@
 #include <optional>
 #include <random>
 #include <string>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "runtime/lifecycle/config.h"
@@ -30,6 +35,7 @@
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
+#include "runtime/compat/bridge_control_owner.h"
 #include "core/logging.h"
 #include <exception>
 #include <stdexcept>
@@ -118,28 +124,343 @@ static bool g_bridgeEnabled = false;
 static uint16_t g_matchPort = 0;
 
 // Per-connection state: maps game-side server WebSocket → remote ix::WebSocket
+struct BridgeConnectionContext {
+  ix::WebSocket* gameWs = nullptr;
+  uint64_t generation = 0;
+  std::atomic<bool> closeSlotReserved{false};
+  std::shared_ptr<BridgeControl::ConnectionLifetime> lifetime =
+      std::make_shared<BridgeControl::ConnectionLifetime>();
+};
+
 struct ProxyPair {
   std::shared_ptr<ix::WebSocket> remoteWs;
+  std::shared_ptr<BridgeConnectionContext> connection;
   std::vector<std::string> pendingToRemote;
+  size_t pendingToRemoteBytes = 0;
   bool remoteOpen = false;
   bool loginInjected = false;  // true after we inject LoginRequest on this connection
 };
 
+static BridgeControl::OwnerQueue g_bridgeOwner;
 static std::mutex g_pairsMutex;
 static std::atomic<int> g_connectionCount{0};  // tracks connection order (0=config, 1+=login)
-static std::unordered_map<ix::WebSocket*, std::unique_ptr<ProxyPair>> g_pairs;
+static std::unordered_map<ix::WebSocket*, std::shared_ptr<ProxyPair>> g_pairs;
+static std::mutex g_connectionsMutex;
+static std::unordered_map<ix::WebSocket*, std::shared_ptr<BridgeConnectionContext>> g_connections;
+static std::mutex g_routeMutex;
+static std::mutex g_bridgeAdmissionMutex;
+static std::shared_ptr<BridgeConnectionContext> g_activeConnection;
+static std::unique_ptr<ix::WebSocketServer> g_matchServer;
+static std::shared_ptr<ix::WebSocket> g_loginRemoteWs;
+static ix::WebSocket* g_activeGameWs = nullptr;
+static ix::WebSocket* g_loginGameWs = nullptr;
+static std::atomic<uint64_t> g_bridgeTraceSequence{1};
+static std::atomic<uint64_t> g_connectionGeneration{1};
+
+static const char* QueueResultName(BridgeControl::OwnerQueue::PostResult result) {
+  switch (result) {
+    case BridgeControl::OwnerQueue::PostResult::Queued: return "queued";
+    case BridgeControl::OwnerQueue::PostResult::Stopped: return "stopped";
+    case BridgeControl::OwnerQueue::PostResult::DataCountLimit: return "data_count_limit";
+    case BridgeControl::OwnerQueue::PostResult::DataByteLimit: return "data_byte_limit";
+    case BridgeControl::OwnerQueue::PostResult::ControlCountLimit: return "control_limit";
+    case BridgeControl::OwnerQueue::PostResult::CloseCapacityLimit: return "close_capacity";
+    case BridgeControl::OwnerQueue::PostResult::AllocationFailure: return "allocation_failure";
+  }
+  return "unknown";
+}
+
+static const char* ReadyStateName(ix::ReadyState state) {
+  switch (state) {
+    case ix::ReadyState::Connecting: return "connecting";
+    case ix::ReadyState::Open: return "open";
+    case ix::ReadyState::Closing: return "closing";
+    case ix::ReadyState::Closed: return "closed";
+  }
+  return "unknown";
+}
+
+static uint64_t TraceBridgeEvent(const char* phase,
+                                 const std::shared_ptr<BridgeConnectionContext>& connection,
+                                 uint64_t queueSequence = 0,
+                                 const char* result = "none",
+                                 int sendSuccess = -1,
+                                 const char* socketState = "none",
+                                 uint64_t parentEvent = 0) {
+  const uint64_t eventSequence =
+      g_bridgeTraceSequence.fetch_add(1, std::memory_order_relaxed);
+  const uint64_t generation = connection ? connection->generation : 0;
+  const char* sendText = sendSuccess < 0 ? "na" : (sendSuccess == 0 ? "false" : "true");
+  Log(EchoVR::LogLevel::Debug,
+      "[NEVR.WS.TRACE] event_seq=%llu generation=%llu queue_seq=%llu parent_event=%llu "
+      "phase=%s result=%s send_success=%s socket_state=%s",
+      static_cast<unsigned long long>(eventSequence),
+      static_cast<unsigned long long>(generation),
+      static_cast<unsigned long long>(queueSequence),
+      static_cast<unsigned long long>(parentEvent), phase, result, sendText, socketState);
+  return eventSequence;
+}
+
+static std::shared_ptr<BridgeConnectionContext> GetActiveConnection() {
+  std::lock_guard<std::mutex> lock(g_routeMutex);
+  return g_activeConnection;
+}
+
+static void SetActiveConnection(const std::shared_ptr<BridgeConnectionContext>& connection) {
+  std::lock_guard<std::mutex> lock(g_routeMutex);
+  g_activeConnection = connection;
+}
+
+static void CleanupConnectionOnOwner(
+    const std::shared_ptr<BridgeConnectionContext>& connection);
+
+static void ScheduleConnectionClose(const std::shared_ptr<BridgeConnectionContext>& connection) {
+  if (!connection) return;
+  const bool ownerThread = g_bridgeOwner.IsOwnerThread();
+  TraceBridgeEvent("close_request", connection, 0, "queue_rejected");
+  std::unique_lock<std::mutex> admissionLock(g_bridgeAdmissionMutex);
+  const auto close = connection->lifetime->CloseAndPost(
+      ownerThread, [connection, ownerThread](const auto& completion) {
+        uint64_t queueSequence = 0;
+        const auto posted = g_bridgeOwner.PostTerminalCloseWithSequence(
+            [connection, completion, ownerThread](uint64_t sequence) {
+              TraceBridgeEvent("dequeue", connection, sequence, "terminal_close");
+              if (!ownerThread) connection->lifetime->WaitForLeases();
+              connection->lifetime->Retire();
+              const char* socketState = connection->gameWs
+                  ? ReadyStateName(connection->gameWs->getReadyState())
+                  : "missing";
+              if (connection->gameWs) {
+                connection->gameWs->close(1009, "bridge queue limit");
+              }
+              TraceBridgeEvent("close_socket", connection, sequence, "queue_limit", -1,
+                               socketState);
+              CleanupConnectionOnOwner(connection);
+              TraceBridgeEvent("close_cleanup", connection, sequence, "complete");
+              try {
+                completion->set_value(true);
+              } catch (const std::future_error&) {
+              }
+            }, &queueSequence);
+        TraceBridgeEvent("enqueue", connection, queueSequence, QueueResultName(posted));
+        return posted == BridgeControl::OwnerQueue::PostResult::Queued;
+      });
+  admissionLock.unlock();
+  if (close.first && close.queued) {
+    TraceBridgeEvent("close_admission", connection, 0, "closed_for_queue_limit");
+    Log(EchoVR::LogLevel::Warning, "[NEVR.WS] Bridge queue limit reached; closing connection");
+  } else if (close.first) {
+    connection->lifetime->Retire();
+    Log(EchoVR::LogLevel::Error, "[NEVR.WS] Bridge queue limit close could not be queued");
+    if (connection->gameWs) connection->gameWs->close(1009, "bridge queue limit");
+  }
+}
+
+static std::shared_ptr<BridgeConnectionContext> FindConnection(ix::WebSocket* gameWs) {
+  std::lock_guard<std::mutex> lock(g_connectionsMutex);
+  const auto found = g_connections.find(gameWs);
+  return found == g_connections.end() ? std::shared_ptr<BridgeConnectionContext>{} : found->second;
+}
+
+static std::shared_ptr<BridgeConnectionContext> RegisterConnection(
+    ix::WebSocket* gameWs) {
+  {
+    std::lock_guard<std::mutex> lock(g_connectionsMutex);
+    const auto found = g_connections.find(gameWs);
+    if (found != g_connections.end()) {
+      if (found->second->lifetime->IsOpen() && !found->second->lifetime->IsRetired()) {
+        return found->second;
+      }
+      return {};
+    }
+  }
+  if (!g_bridgeOwner.ReserveCloseSlot()) return {};
+  std::shared_ptr<BridgeConnectionContext> connection;
+  try {
+    connection = std::make_shared<BridgeConnectionContext>();
+  } catch (const std::exception&) {
+    g_bridgeOwner.ReleaseCloseSlot();
+    return {};
+  }
+  connection->gameWs = gameWs;
+  connection->generation = g_connectionGeneration.fetch_add(1, std::memory_order_relaxed);
+  connection->closeSlotReserved.store(true, std::memory_order_release);
+  std::shared_ptr<BridgeConnectionContext> existing;
+  bool rejectedByCapacity = false;
+  bool inserted = false;
+  try {
+    std::lock_guard<std::mutex> lock(g_connectionsMutex);
+    const auto found = g_connections.find(gameWs);
+    if (found != g_connections.end()) {
+      if (found->second->lifetime->IsOpen() && !found->second->lifetime->IsRetired()) {
+        existing = found->second;
+      } else {
+        rejectedByCapacity = true;
+      }
+    } else if (g_connections.size() >= BridgeControl::OwnerQueue::kMaxConnectionCloseSlots) {
+      rejectedByCapacity = true;
+    } else {
+      inserted = g_connections.emplace(gameWs, connection).second;
+    }
+  } catch (const std::exception&) {
+    rejectedByCapacity = true;
+  }
+  if (!inserted) {
+    connection->closeSlotReserved.store(false, std::memory_order_release);
+    g_bridgeOwner.ReleaseCloseSlot();
+    if (existing) return existing;
+    (void)rejectedByCapacity;
+    return {};
+  }
+  TraceBridgeEvent("connection_open_admission", connection, 0, "accepted");
+  return connection;
+}
+
+static void UnregisterConnection(const std::shared_ptr<BridgeConnectionContext>& connection) {
+  if (!connection) return;
+  bool removed = false;
+  {
+    std::lock_guard<std::mutex> lock(g_connectionsMutex);
+    const auto found = g_connections.find(connection->gameWs);
+    if (found != g_connections.end() && found->second == connection) {
+      g_connections.erase(found);
+      removed = true;
+    }
+  }
+  if (removed && connection->closeSlotReserved.exchange(false, std::memory_order_acq_rel)) {
+    g_bridgeOwner.ReleaseCloseSlot();
+  }
+}
+
+static void CleanupConnectionOnOwner(
+    const std::shared_ptr<BridgeConnectionContext>& connection) {
+  if (!connection) return;
+  connection->lifetime->Retire();
+  TraceBridgeEvent("close_cleanup_begin", connection, 0, "terminal_event");
+
+  std::shared_ptr<ix::WebSocket> remoteToStop;
+  {
+    std::lock_guard<std::mutex> lock(g_pairsMutex);
+    const auto it = g_pairs.find(connection->gameWs);
+    if (it != g_pairs.end() && it->second && it->second->connection == connection) {
+      const bool isShared = it->second->remoteWs == g_loginRemoteWs;
+      if (!isShared) {
+        remoteToStop = it->second->remoteWs;
+        it->second->remoteWs->setOnMessageCallback(
+            [](const ix::WebSocketMessagePtr&) {});
+      } else if (connection->gameWs == g_loginGameWs) {
+        if (g_activeGameWs == nullptr || g_activeGameWs == connection->gameWs) {
+          it->second->remoteWs->setOnMessageCallback(
+              [](const ix::WebSocketMessagePtr&) {});
+        }
+      }
+      g_pairs.erase(it);
+    }
+    if (g_activeGameWs == connection->gameWs) g_activeGameWs = nullptr;
+  }
+  {
+    std::lock_guard<std::mutex> admissionLock(g_bridgeAdmissionMutex);
+    std::lock_guard<std::mutex> lock(g_routeMutex);
+    if (g_activeConnection == connection) g_activeConnection.reset();
+  }
+  if (remoteToStop) remoteToStop->stop();
+  UnregisterConnection(connection);
+  TraceBridgeEvent("close_cleanup_end", connection, 0, "complete");
+}
+
+static const char* MessageTypeName(ix::WebSocketMessageType type) {
+  switch (type) {
+    case ix::WebSocketMessageType::Open: return "open";
+    case ix::WebSocketMessageType::Message: return "message";
+    case ix::WebSocketMessageType::Close: return "close";
+    case ix::WebSocketMessageType::Error: return "error";
+    case ix::WebSocketMessageType::Ping: return "ping";
+    case ix::WebSocketMessageType::Pong: return "pong";
+  }
+  return "unknown";
+}
+
+template <typename Handler>
+static void PostRemoteEvent(const std::shared_ptr<ProxyPair>& pair,
+                            const std::shared_ptr<BridgeConnectionContext>& source,
+                            const ix::WebSocketMessagePtr& message,
+                            Handler handler) {
+  const uint64_t receiveEvent = TraceBridgeEvent(
+      "remote_receive", source, 0, MessageTypeName(message->type));
+  std::unique_lock<std::mutex> admissionLock(g_bridgeAdmissionMutex);
+  const std::shared_ptr<BridgeConnectionContext> activeRoute =
+      message->type == ix::WebSocketMessageType::Message ? GetActiveConnection() : nullptr;
+  const std::shared_ptr<BridgeConnectionContext> target = activeRoute ? activeRoute : source;
+  if (!target) {
+    admissionLock.unlock();
+    TraceBridgeEvent("enqueue", source, 0, "missing_route", -1, "none", receiveEvent);
+    return;
+  }
+  auto targetLease = target->lifetime->TryAcquire();
+  if (!targetLease) {
+    admissionLock.unlock();
+    TraceBridgeEvent("enqueue", target, 0, "target_closed", -1, "none", receiveEvent);
+    return;
+  }
+  auto sourceLease = source == target ? targetLease : source->lifetime->TryAcquire();
+  if (!sourceLease) {
+    admissionLock.unlock();
+    TraceBridgeEvent("enqueue", source, 0, "source_closed", -1, "none", receiveEvent);
+    return;
+  }
+  if (message->type == ix::WebSocketMessageType::Message &&
+      message->str.size() > BridgeControl::OwnerQueue::kMaxDataBytes) {
+    admissionLock.unlock();
+    TraceBridgeEvent("enqueue", target, 0, "oversize", -1, "none", receiveEvent);
+    ScheduleConnectionClose(target);
+    return;
+  }
+
+  auto ownedMessage = std::make_shared<ix::WebSocketMessage>(*message);
+  uint64_t queueSequence = 0;
+  BridgeControl::OwnerQueue::PostResult result =
+      BridgeControl::OwnerQueue::PostResult::Stopped;
+  const bool admitted = BridgeControl::ConnectionLifetime::PostIfBothAccepting(
+      source->lifetime, target->lifetime, [&] {
+        auto task = [pair, source, target, sourceLease, targetLease, ownedMessage,
+                     receiveEvent, handler = std::move(handler)](uint64_t sequence) mutable {
+          TraceBridgeEvent("dequeue", target, sequence, MessageTypeName(ownedMessage->type),
+                           -1, "none", receiveEvent);
+          if (target->lifetime->IsRetired()) {
+            TraceBridgeEvent("drop", target, sequence, "retired_target", -1, "none", receiveEvent);
+            return;
+          }
+          if (source != target && source->lifetime->IsRetired()) {
+            TraceBridgeEvent("drop", source, sequence, "retired_source", -1, "none", receiveEvent);
+            return;
+          }
+          handler(pair, target, ownedMessage, sequence, receiveEvent);
+        };
+        result = ownedMessage->type == ix::WebSocketMessageType::Message
+            ? g_bridgeOwner.PostDataWithSequence(ownedMessage->str.size(), std::move(task),
+                                                 &queueSequence)
+            : g_bridgeOwner.PostControlWithSequence(std::move(task), &queueSequence);
+        return result == BridgeControl::OwnerQueue::PostResult::Queued;
+      });
+  admissionLock.unlock();
+  const char* outcome = admitted ? QueueResultName(result) : "admission_closed";
+  TraceBridgeEvent("enqueue", target, queueSequence, outcome, -1, "none", receiveEvent);
+  if (!admitted || result != BridgeControl::OwnerQueue::PostResult::Queued) {
+    ScheduleConnectionClose(target);
+  }
+}
 
 // The login connection's remote WS (conn=1). Connections after login (conn>=2,
 // e.g. matchmaker) reuse this so all traffic shares the same Nakama session.
 // The original game multiplexes config/login/matchmaker on one WS to one server;
 // Nakama correlates matchmaker allocations by session, so the matchmaker must
 // use the same authenticated session as login.
-static std::shared_ptr<ix::WebSocket> g_loginRemoteWs;
+// (g_loginRemoteWs is declared with the bridge globals above.)
 
 // The active game-side WS that should receive server→game messages from the
 // login remote. Initially conn=1 (login), swapped to conn=2 (matchmaker) when
 // it connects, so the game receives matchmaker responses on the right peer.
-static ix::WebSocket* g_activeGameWs = nullptr;
+// g_activeGameWs is declared with the bridge globals above.
 
 // N91: process-wide, not per-ProxyPair. `loginInjected` lives on the ProxyPair, so
 // the Open-handler test passed independently on every connection and a
@@ -158,7 +479,7 @@ static uint64_t g_lastInjectedDiscordId = 0;
 // (pairPtr, gameWsPtr) become dangling. Used in the Close handler to clear the
 // callback only when the owning pair is destroyed, not when a sharing pair
 // (conn>=2, matchmaker) closes.
-static ix::WebSocket* g_loginGameWs = nullptr;
+// g_loginGameWs is declared with the bridge globals above.
 
 // ============================================================================
 // LoginRequest builder
@@ -168,9 +489,28 @@ static ix::WebSocket* g_loginGameWs = nullptr;
 
 static const uint8_t MSG_MARKER[] = {0xf6,0x40,0xbb,0x78,0xa2,0xe7,0x8c,0xbb};
 static const uint64_t SYM_LOGIN_REQUEST = 0xbdb41ea9e67b200a;
+static const uint64_t SYM_LOGIN_SUCCESS = 0xa5acc1a90d0cce47ULL;
 
 static void AppendLE64(std::string& buf, uint64_t val) {
   for (int i = 0; i < 8; i++) { buf.push_back((char)(val & 0xFF)); val >>= 8; }
+}
+
+static bool ContainsEnvelopeSymbol(const std::string& frame, uint64_t targetSymbol) {
+  const uint8_t* cursor = reinterpret_cast<const uint8_t*>(frame.data());
+  size_t remaining = frame.size();
+  while (remaining >= kEnvelopeHeaderSize) {
+    if (memcmp(cursor, MSG_MARKER, sizeof(MSG_MARKER)) != 0) return false;
+    uint64_t symbol = 0;
+    uint64_t payloadLength = 0;
+    memcpy(&symbol, cursor + 8, sizeof(symbol));
+    memcpy(&payloadLength, cursor + 16, sizeof(payloadLength));
+    if (payloadLength > static_cast<uint64_t>(remaining - kEnvelopeHeaderSize)) return false;
+    if (symbol == targetSymbol) return true;
+    const size_t envelopeSize = kEnvelopeHeaderSize + static_cast<size_t>(payloadLength);
+    cursor += envelopeSize;
+    remaining -= envelopeSize;
+  }
+  return false;
 }
 
 // Platform codes match the server's wire enum (empirically verified 2026-08-04).
@@ -395,13 +735,16 @@ void InstallWebSocketBridge() {
   }
 
   // Callbacks set after successful listen(), before start().
-  auto onClientMessage = GuardWsCallback("ws_bridge.cpp:setOnClientMessageCallback",
+  auto processClientMessage = GuardWsCallback("ws_bridge.cpp:processClientMessage",
       [](std::shared_ptr<ix::ConnectionState> connState,
          ix::WebSocket& gameWs,
-         const ix::WebSocketMessagePtr& msg) {
+         const ix::WebSocketMessagePtr& msg,
+         uint64_t queueSequence) {
         switch (msg->type) {
           case ix::WebSocketMessageType::Open: {
-            int connIdx = g_connectionCount++;
+            auto connection = FindConnection(&gameWs);
+            if (!connection || connection->lifetime->IsRetired()) break;
+            const int connIdx = g_connectionCount.fetch_add(1, std::memory_order_relaxed);
 
             // conn>=2 (matchmaker): reuse the login connection's remote WS.
             // The matchmaker needs the fully-authenticated session (login + profile
@@ -412,12 +755,13 @@ void InstallWebSocketBridge() {
               Log(EchoVR::LogLevel::Info,
                   "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), sharing login session (no LoginRequest)",
                   connIdx, (void*)&gameWs);
-              auto pair = std::make_unique<ProxyPair>();
+              auto pair = std::make_shared<ProxyPair>();
               pair->remoteWs = g_loginRemoteWs;
+              pair->connection = connection;
               pair->remoteOpen = true;
               pair->loginInjected = true;  // skip LoginRequest — already authenticated
 
-              auto* pairPtr = pair.get();
+              std::weak_ptr<ProxyPair> weakPair = pair;
               ix::WebSocket* gameWsPtr = &gameWs;
 
               // N61: register an independent callback for each matchmaker
@@ -425,36 +769,45 @@ void InstallWebSocketBridge() {
               // entirely on the login connection's callback — when login
               // disconnected and B2/N54 nulled that callback, all matchmaker
               // server→game message routing silently died.
-              g_loginRemoteWs->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback", 
-                  [pairPtr, gameWsPtr](const ix::WebSocketMessagePtr& rmsg) {
-                    switch (rmsg->type) {
-                      case ix::WebSocketMessageType::Message: {
-                        ix::WebSocket* target = nullptr;
-                        {
-                          std::lock_guard<std::mutex> lk(g_pairsMutex);
-                          target = g_activeGameWs ? g_activeGameWs : gameWsPtr;
-                        }
-                        if (rmsg->binary) {
-                          target->sendBinary(rmsg->str);
-                        } else {
-                          target->sendText(rmsg->str);
-                        }
-                        break;
-                      }
-                      case ix::WebSocketMessageType::Close:
-                        Log(EchoVR::LogLevel::Debug,
-                            "[NEVR.WS] Remote closed (matchmaker ws=%p): code=%u",
-                            static_cast<void*>(gameWsPtr), static_cast<unsigned int>(rmsg->closeInfo.code));
-                        break;
-                      default:
-                        break;
-                    }
+              g_loginRemoteWs->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback",
+                  [weakPair, connection, gameWsPtr](const ix::WebSocketMessagePtr& rmsg) {
+                    auto pair = weakPair.lock();
+                    if (!pair) return;
+                    PostRemoteEvent(pair, connection, rmsg,
+                        [gameWsPtr](const std::shared_ptr<ProxyPair>& queuedPair,
+                                    const std::shared_ptr<BridgeConnectionContext>& targetConnection,
+                                    const std::shared_ptr<ix::WebSocketMessage>& ownedMessage,
+                                    uint64_t queueSequence, uint64_t receiveEvent) {
+                          (void)queuedPair;
+                          switch (ownedMessage->type) {
+                            case ix::WebSocketMessageType::Message: {
+                              ix::WebSocket* target = targetConnection->gameWs;
+                              const char* socketState = ReadyStateName(target->getReadyState());
+                              const auto info = ownedMessage->binary
+                                  ? target->sendBinary(ownedMessage->str)
+                                  : target->sendText(ownedMessage->str);
+                              TraceBridgeEvent("server_to_game_send", targetConnection, queueSequence,
+                                               info.success ? "accepted" : "failed",
+                                               info.success ? 1 : 0, socketState,
+                                               receiveEvent);
+                              break;
+                            }
+                            case ix::WebSocketMessageType::Close:
+                              Log(EchoVR::LogLevel::Debug,
+                                  "[NEVR.WS] Remote closed (matchmaker ws=%p): code=%u",
+                                  static_cast<void*>(gameWsPtr),
+                                  static_cast<unsigned int>(ownedMessage->closeInfo.code));
+                              break;
+                            default:
+                              break;
+                          }
+                        });
                   }));
 
               {
                 std::lock_guard<std::mutex> lk(g_pairsMutex);
                 g_activeGameWs = &gameWs;
-                g_pairs[&gameWs] = std::move(pair);
+                g_pairs[&gameWs] = pair;
               }
               break;
             }
@@ -568,21 +921,31 @@ void InstallWebSocketBridge() {
               Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Using URL credentials (no Bearer token)");
             }
 
-            auto pair = std::make_unique<ProxyPair>();
+            auto pair = std::make_shared<ProxyPair>();
             pair->remoteWs = remote;
+            pair->connection = connection;
 
-            auto* pairPtr = pair.get();
+            std::weak_ptr<ProxyPair> weakPair = pair;
             ix::WebSocket* gameWsPtr = &gameWs;
 
             // Remote → game forwarding
-            remote->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback", 
-                // accountName captured BY VALUE alongside discordId — this callback
-                // outlives the enclosing scope, so a reference would dangle (N123).
-                [pairPtr, gameWsPtr, connIdx, discordId, accountName, bearerToken](const ix::WebSocketMessagePtr& rmsg) {
+            remote->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback",
+                [weakPair, connection, gameWsPtr, connIdx, discordId, accountName, bearerToken](
+                    const ix::WebSocketMessagePtr& rmsg) {
+                  auto pair = weakPair.lock();
+                  if (!pair) return;
+                  PostRemoteEvent(pair, connection, rmsg,
+                      [connection, gameWsPtr, connIdx, discordId, accountName, bearerToken](
+                          const std::shared_ptr<ProxyPair>& queuedPair,
+                          const std::shared_ptr<BridgeConnectionContext>& targetConnection,
+                          const std::shared_ptr<ix::WebSocketMessage>& ownedMessage,
+                          uint64_t queueSequence, uint64_t receiveEvent) {
+                    auto pair = queuedPair;
+                    const ix::WebSocketMessagePtr rmsg =
+                        std::make_unique<ix::WebSocketMessage>(*ownedMessage);
                   switch (rmsg->type) {
                     case ix::WebSocketMessageType::Open: {
-                      std::lock_guard<std::mutex> lk(g_pairsMutex);
-                      pairPtr->remoteOpen = true;
+                      pair->remoteOpen = true;
                       const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
                           "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + "): ", g_remoteUri);
                       Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
@@ -595,9 +958,9 @@ void InstallWebSocketBridge() {
                       // so that CNSUser::LogInSuccessCB processes the server's LoginSuccess
                       // response. Without this, LogInSuccessCB silently discards the message
                       // because the user's login state at +0x90 is still 0 (logged out).
-                      if (connIdx == 1 && !pairPtr->loginInjected) {
+                      if (connIdx == 1 && !pair->loginInjected) {
                         g_loginInjectedAnywhere.store(true, std::memory_order_release);
-                        pairPtr->loginInjected = true;
+                        pair->loginInjected = true;
 
                         // Set CNSUser login state only on the actual login connection.
                         // Later connections (matchmaker, etc.) must not reset the state
@@ -653,17 +1016,22 @@ void InstallWebSocketBridge() {
                         }
                         g_lastInjectedDiscordId = discordId;
                         std::string loginMsg = BuildLoginRequest(discordId, platformCode, accountName, bearerToken, cfgPasswordStr);
-                        pairPtr->remoteWs->sendBinary(loginMsg);
+                        const auto loginSendInfo = pair->remoteWs->sendBinary(loginMsg);
+                        TraceBridgeEvent("login_request_send", connection, queueSequence,
+                                         loginSendInfo.success ? "accepted" : "failed",
+                                         loginSendInfo.success ? 1 : 0,
+                                         ReadyStateName(pair->remoteWs->getReadyState()), receiveEvent);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
                         Log(EchoVR::LogLevel::Info,
                             "[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu",
                             xpid.c_str(), static_cast<int>(platformCode), connIdx, loginMsg.size());
                       }
 
-                      for (auto& pending : pairPtr->pendingToRemote) {
-                        pairPtr->remoteWs->sendBinary(pending);
+                      for (auto& pending : pair->pendingToRemote) {
+                        pair->remoteWs->sendBinary(pending);
                       }
-                      pairPtr->pendingToRemote.clear();
+                      pair->pendingToRemote.clear();
+                      pair->pendingToRemoteBytes = 0;
                       break;
                     }
                     case ix::WebSocketMessageType::Message: {
@@ -705,7 +1073,6 @@ void InstallWebSocketBridge() {
                         if (g_isServer) {
                           Log(EchoVR::LogLevel::Debug,
                               "[NEVR.WS] Server mode — injecting fake LoginSuccess to bypass login gate");
-                          static const uint64_t SYM_LOGIN_SUCCESS = 0xa5acc1a90d0cce47;
                           // LoginSuccess payload: Session UUID(16) + PlatformCode(8) + AccountId(8)
                           uint8_t payload[32] = {};
                           payload[0] = 0x4E; payload[1] = 0x45; payload[2] = 0x56; payload[3] = 0x52; // "NEVR"
@@ -725,12 +1092,19 @@ void InstallWebSocketBridge() {
                           AppendLE64(fakeSuccess, SYM_LOGIN_SUCCESS);
                           AppendLE64(fakeSuccess, sizeof(payload));
                           fakeSuccess.append(reinterpret_cast<const char*>(payload), sizeof(payload));
-                          gameWsPtr->sendBinary(fakeSuccess);
+                          const char* socketState = ReadyStateName(
+                              targetConnection->gameWs->getReadyState());
+                          const auto sendInfo = targetConnection->gameWs->sendBinary(fakeSuccess);
+                          TraceBridgeEvent("server_to_game_send", targetConnection, queueSequence,
+                                           sendInfo.success ? "accepted" : "failed",
+                                           sendInfo.success ? 1 : 0,
+                                           socketState,
+                                           receiveEvent);
                           break;  // failure is not forwarded to the game
                         }
                       }
                       // Decode LoginSuccess (sym 0xa5acc1a90d0cce47)
-                      if (rsym == 0xa5acc1a90d0cce47) {
+                      if (ContainsEnvelopeSymbol(rmsg->str, SYM_LOGIN_SUCCESS)) {
                         Log(EchoVR::LogLevel::Info, "[NEVR.WS] LOGIN SUCCESS");
                         // Inject SNSFriendListSubscribeRequest directly to server.
                         // pnsrad's broadcaster handle (field_0x160) is null because
@@ -747,7 +1121,7 @@ void InstallWebSocketBridge() {
                           AppendLE64(subscribeMsg, SYM_FRIEND_SUBSCRIBE);
                           AppendLE64(subscribeMsg, sizeof(payload));
                           subscribeMsg.append((const char*)payload, sizeof(payload));
-                          pairPtr->remoteWs->sendBinary(subscribeMsg);
+                          pair->remoteWs->sendBinary(subscribeMsg);
                           Log(EchoVR::LogLevel::Debug,
                               "[NEVR.WS] Injected FriendListSubscribeRequest (%zu bytes)",
                               subscribeMsg.size());
@@ -802,7 +1176,7 @@ void InstallWebSocketBridge() {
                                 "[NEVR.WS] STcpConnectionUnrequireEvent seen in-frame (server mode) — "
                                 "closing remoteWs so the game detects the closed connection on its next "
                                 "send and proceeds to BeginMultiplayer");
-                            pairPtr->remoteWs->close();
+                            pair->remoteWs->close();
                             break;
                           }
                           fp += ftotal;
@@ -853,18 +1227,15 @@ void InstallWebSocketBridge() {
                       // Route to the active game WS. When matchmaker (conn>=2)
                       // shares the login remote, g_activeGameWs is swapped so
                       // responses reach the matchmaker's game WS peer.
-                      {
-                        ix::WebSocket* target = nullptr;
-                        {
-                          std::lock_guard<std::mutex> lk(g_pairsMutex);
-                          target = g_activeGameWs ? g_activeGameWs : gameWsPtr;
-                        }
-                        if (rmsg->binary) {
-                          target->sendBinary(rmsg->str);
-                        } else {
-                          target->sendText(rmsg->str);
-                        }
-                      }
+                      ix::WebSocket* target = targetConnection->gameWs;
+                      const char* socketState = ReadyStateName(target->getReadyState());
+                      const auto sendInfo = rmsg->binary
+                          ? target->sendBinary(rmsg->str)
+                          : target->sendText(rmsg->str);
+                      TraceBridgeEvent("server_to_game_send", targetConnection, queueSequence,
+                                       sendInfo.success ? "accepted" : "failed",
+                                       sendInfo.success ? 1 : 0,
+                                       socketState, receiveEvent);
                       break;
                     }
                     case ix::WebSocketMessageType::Close:
@@ -882,11 +1253,12 @@ void InstallWebSocketBridge() {
                     default:
                       break;
                   }
+                  });
                 }));
 
             {
               std::lock_guard<std::mutex> lk(g_pairsMutex);
-              g_pairs[gameWsPtr] = std::move(pair);
+              g_pairs[gameWsPtr] = pair;
               // Save login connection for reuse by matchmaker (conn>=2)
               if (connIdx == 1) {
                 g_loginRemoteWs = remote;
@@ -905,6 +1277,8 @@ void InstallWebSocketBridge() {
           }
 
           case ix::WebSocketMessageType::Message: {
+            auto connection = FindConnection(&gameWs);
+            if (!connection || connection->lifetime->IsRetired()) break;
             // Game→remote forwarding — dump all message symbols in the frame
             // EchoVR wire format: [marker(8)][symbol(8)][length(8)][payload(length)]...
             {
@@ -991,22 +1365,35 @@ void InstallWebSocketBridge() {
                 Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   %zu trailing bytes after %d messages", remaining, msgIdx);
               }
             }
-            std::lock_guard<std::mutex> lk(g_pairsMutex);
-            auto it = g_pairs.find(&gameWs);
-            if (it != g_pairs.end()) {
-              auto& pair = it->second;
+            std::shared_ptr<ProxyPair> pair;
+            {
+              std::lock_guard<std::mutex> lk(g_pairsMutex);
+              const auto it = g_pairs.find(&gameWs);
+              if (it != g_pairs.end()) pair = it->second;
+            }
+            if (pair) {
               if (pair->remoteOpen) {
-                if (msg->binary) {
-                  auto info = pair->remoteWs->sendBinary(msg->str);
-                  Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> forwarded (success=%s)",
-                      info.success ? "true" : "false");
-                } else {
-                  pair->remoteWs->sendText(msg->str);
-                }
+                const auto info = msg->binary
+                    ? pair->remoteWs->sendBinary(msg->str)
+                    : pair->remoteWs->sendText(msg->str);
+                Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> forwarded (success=%s)",
+                    info.success ? "true" : "false");
+                TraceBridgeEvent("game_to_server_send", connection, queueSequence,
+                                 info.success ? "accepted" : "failed",
+                                 info.success ? 1 : 0,
+                                 ReadyStateName(pair->remoteWs->getReadyState()));
               } else {
-                pair->pendingToRemote.push_back(msg->str);
-                Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> queued (remote not open yet, %zu pending)",
-                    pair->pendingToRemote.size());
+                constexpr size_t kMaxPendingMessages = 256;
+                constexpr size_t kMaxPendingBytes = 4 * 1024 * 1024;
+                if (pair->pendingToRemote.size() >= kMaxPendingMessages ||
+                    msg->str.size() > kMaxPendingBytes - pair->pendingToRemoteBytes) {
+                  ScheduleConnectionClose(pair->connection);
+                } else {
+                  pair->pendingToRemote.push_back(msg->str);
+                  pair->pendingToRemoteBytes += msg->str.size();
+                  Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> queued (remote not open yet, %zu pending)",
+                      pair->pendingToRemote.size());
+                }
               }
             } else {
               // N.B.: if g_pairs loses an entry (e.g. a Close/Message race) while the
@@ -1025,49 +1412,8 @@ void InstallWebSocketBridge() {
           }
 
           case ix::WebSocketMessageType::Close: {
-            // N60: snapshot the ProxyPair's remoteWs under the lock, then
-            // release the lock BEFORE calling stop(). stop() blocks until the
-            // remote thread exits, and the remote callback may be waiting on
-            // g_pairsMutex (Open handler line 328, Message handler line 497).
-            // Holding the mutex across stop() → ABBA deadlock.
-            std::shared_ptr<ix::WebSocket> remoteToStop;
-            {
-              std::lock_guard<std::mutex> lk(g_pairsMutex);
-              auto it = g_pairs.find(&gameWs);
-              if (it != g_pairs.end()) {
-                bool isShared = (it->second->remoteWs == g_loginRemoteWs);
-                if (!isShared) {
-                  // Snapshot the remote — we'll stop it OUTSIDE the lock.
-                  remoteToStop = it->second->remoteWs;
-                  // Clear callback under lock so no further invocations
-                  // reference the freed ProxyPair after erase.
-                  // N85: no-op, NOT nullptr. ixwebsocket invokes _onMessageCallback
-                  // unconditionally; an empty std::function throws std::bad_function_call,
-                  // which unwinds out of ixwebsocket's own thread, reaches the game's
-                  // unhandled-exception filter as GCC throw code 0x20474343, and kills the
-                  // dedicated server. Confirmed from a crash-dump stack:
-                  // __cxa_allocate_exception -> __cxa_throw -> std::bad_function_call.
-                  it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
-                } else if (&gameWs == g_loginGameWs) {
-                  // Login pair closing — shared remote. N61: only clear the
-                  // callback if NO matchmaker connection is sharing the remote.
-                  // conn>=2 registers its own callback (N61 fix) which captures
-                  // the matchmaker's pairPtr (still alive). Clearing here would
-                  // kill matchmaker routing — the regression N61 was supposed
-                  // to prevent.
-                  if (g_activeGameWs == nullptr || g_activeGameWs == &gameWs) {
-                    it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
-                  }
-                  // If a matchmaker is active, leave its callback intact.
-                }
-                g_pairs.erase(it);
-              }
-              if (g_activeGameWs == &gameWs) g_activeGameWs = nullptr;
-            } // g_pairsMutex RELEASED here — safe to call stop()
-            if (remoteToStop) {
-              remoteToStop->stop();
-            }
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game disconnected");
+            auto connection = FindConnection(&gameWs);
+            TraceBridgeEvent("close_callback", connection, 0, "already_terminalized");
             break;
           }
 
@@ -1075,6 +1421,126 @@ void InstallWebSocketBridge() {
             break;
         }
       });
+
+  auto onClientMessage = GuardWsCallback("ws_bridge.cpp:setOnClientMessageCallback",
+      [processClientMessage](std::shared_ptr<ix::ConnectionState> connState,
+                             ix::WebSocket& gameWs,
+                             const ix::WebSocketMessagePtr& msg) {
+        if (msg->type == ix::WebSocketMessageType::Message &&
+            msg->str.size() > BridgeControl::OwnerQueue::kMaxDataBytes) {
+          const auto connection = FindConnection(&gameWs);
+          TraceBridgeEvent("enqueue", connection, 0, "oversize");
+          ScheduleConnectionClose(connection);
+          return;
+        }
+        auto ownedMessage = std::make_shared<ix::WebSocketMessage>(*msg);
+        std::unique_lock<std::mutex> admissionLock(g_bridgeAdmissionMutex);
+        std::shared_ptr<BridgeConnectionContext> connection = msg->type == ix::WebSocketMessageType::Open
+            ? RegisterConnection(&gameWs)
+            : FindConnection(&gameWs);
+        if (!connection) {
+          admissionLock.unlock();
+          TraceBridgeEvent("connection_open_admission", {}, 0, "capacity_rejected");
+          if (msg->type == ix::WebSocketMessageType::Open) {
+            gameWs.close(1013, "bridge connection capacity");
+          }
+          return;
+        }
+
+        if (msg->type == ix::WebSocketMessageType::Close) {
+          const bool ownerThread = g_bridgeOwner.IsOwnerThread();
+          TraceBridgeEvent("close_request", connection, 0, "callback");
+          const auto close = connection->lifetime->CloseAndPost(
+              ownerThread, [connection, ownerThread](const auto& completion) {
+                uint64_t queueSequence = 0;
+                const auto posted = g_bridgeOwner.PostTerminalCloseWithSequence(
+                    [connection, completion, ownerThread](uint64_t sequence) {
+                      TraceBridgeEvent("dequeue", connection, sequence, "terminal_close");
+                      if (!ownerThread) connection->lifetime->WaitForLeases();
+                      connection->lifetime->Retire();
+                      CleanupConnectionOnOwner(connection);
+                      Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game disconnected");
+                      TraceBridgeEvent("close_cleanup", connection, sequence, "complete");
+                      try {
+                        completion->set_value(true);
+                      } catch (const std::future_error&) {
+                      }
+                    }, &queueSequence);
+                TraceBridgeEvent("close_enqueue", connection, queueSequence,
+                                 QueueResultName(posted));
+                return posted == BridgeControl::OwnerQueue::PostResult::Queued;
+              });
+          admissionLock.unlock();
+          if (close.first) {
+            TraceBridgeEvent("close_admission", connection, 0,
+                             close.queued ? "closed" : "terminal_post_failed");
+          }
+          if (!close.queued) {
+            connection->lifetime->Retire();
+            Log(EchoVR::LogLevel::Error, "[NEVR.WS] Bridge close cleanup could not be queued");
+          } else if (!ownerThread && close.completion.valid()) {
+            (void)close.completion.get();
+          }
+          return;
+        }
+
+        const auto previousRoute = msg->type == ix::WebSocketMessageType::Open
+            ? GetActiveConnection()
+            : std::shared_ptr<BridgeConnectionContext>{};
+        if (msg->type == ix::WebSocketMessageType::Open) {
+          // This publication is serialized with enqueue of the Open event. Remote
+          // callbacks use the same admission mutex, so an event after this insertion
+          // snapshots this route and is queued behind Open; an earlier event keeps its
+          // prior route and remains ahead of Open in the owner FIFO.
+          SetActiveConnection(connection);
+        }
+        auto lease = connection->lifetime->TryAcquire();
+        if (!lease) {
+          if (msg->type == ix::WebSocketMessageType::Open) SetActiveConnection(previousRoute);
+          admissionLock.unlock();
+          TraceBridgeEvent("enqueue", connection, 0, "admission_closed");
+          return;
+        }
+        uint64_t queueSequence = 0;
+        BridgeControl::OwnerQueue::PostResult posted =
+            BridgeControl::OwnerQueue::PostResult::Stopped;
+        const bool admitted = connection->lifetime->PostIfAccepting([&] {
+          auto task = [processClientMessage, connState, &gameWs, ownedMessage,
+                       lease, connection](uint64_t sequence) {
+            TraceBridgeEvent("dequeue", connection, sequence,
+                             MessageTypeName(ownedMessage->type));
+            if (connection->lifetime->IsRetired()) {
+              TraceBridgeEvent("drop", connection, sequence, "retired_target");
+              return;
+            }
+            const ix::WebSocketMessagePtr queuedMessage =
+                std::make_unique<ix::WebSocketMessage>(*ownedMessage);
+            processClientMessage(connState, gameWs, queuedMessage, sequence);
+          };
+          posted = msg->type == ix::WebSocketMessageType::Message
+              ? g_bridgeOwner.PostDataWithSequence(msg->str.size(), std::move(task),
+                                                   &queueSequence)
+              : g_bridgeOwner.PostControlWithSequence(std::move(task), &queueSequence);
+          return posted == BridgeControl::OwnerQueue::PostResult::Queued;
+        });
+        if ((!admitted || posted != BridgeControl::OwnerQueue::PostResult::Queued) &&
+            msg->type == ix::WebSocketMessageType::Open) {
+          SetActiveConnection(previousRoute);
+        }
+        admissionLock.unlock();
+        TraceBridgeEvent("enqueue", connection, queueSequence,
+                         admitted ? QueueResultName(posted) : "admission_closed");
+        if (!admitted || posted != BridgeControl::OwnerQueue::PostResult::Queued) {
+          ScheduleConnectionClose(connection);
+        }
+      });
+
+  if (!g_bridgeOwner.Start()) {
+    FatalError("WebSocket bridge owner thread could not start", "ws_bridge owner failure");
+    g_server->stop();
+    g_server.reset();
+    return;
+  }
 
   g_server->setOnClientMessageCallback(onClientMessage);
   g_server->start();
@@ -1110,13 +1576,12 @@ void InstallWebSocketBridge() {
     std::mt19937 matchGen(matchRd());
     std::uniform_int_distribution<uint16_t> matchDist(49152, 65535);
 
-    static std::unique_ptr<ix::WebSocketServer> s_matchServer;
     bool matchBound = false;
     for (int attempt = 0; attempt < kMaxMatchBindAttempts; ++attempt) {
       uint16_t tryPort = matchDist(matchGen);
-      s_matchServer = std::make_unique<ix::WebSocketServer>(tryPort, "127.0.0.1");
-      s_matchServer->disablePerMessageDeflate();
-      auto [ok, errorText] = s_matchServer->listen();
+      g_matchServer = std::make_unique<ix::WebSocketServer>(tryPort, "127.0.0.1");
+      g_matchServer->disablePerMessageDeflate();
+      auto [ok, errorText] = g_matchServer->listen();
       if (ok) {
         g_matchPort = tryPort;
         matchBound = true;
@@ -1127,16 +1592,16 @@ void InstallWebSocketBridge() {
           LogDiagnostics::FormatBindFailureDiagnostic("Matchmaker", tryPort, attempt + 1,
                                                       kMaxMatchBindAttempts);
       Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
-      s_matchServer.reset();
+      g_matchServer.reset();
     }
 
     if (matchBound) {
-      s_matchServer->setOnClientMessageCallback(onClientMessage);
-      s_matchServer->start();
+      g_matchServer->setOnClientMessageCallback(onClientMessage);
+      g_matchServer->start();
       Log(EchoVR::LogLevel::Info,
           "[NEVR.WS] Matchmaker listener on ws://127.0.0.1:%u", g_matchPort);
     } else {
-      s_matchServer.reset();
+      g_matchServer.reset();
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.WS] Matchmaker listener FAILED after %d attempts — matchmaking will fail",
           kMaxMatchBindAttempts);
@@ -1167,26 +1632,58 @@ void ShutdownWebSocketBridge() {
 void StopWebSocketBridgeListener() {
   g_bridgeEnabled = false;
 
-  // N60: collect under the lock, stop OUTSIDE it. stop() joins the callback
-  // thread, which may itself be waiting on g_pairsMutex — holding it here
-  // deadlocks shutdown.
-  std::vector<std::shared_ptr<ix::WebSocket>> remotes;
+  std::vector<std::shared_ptr<BridgeConnectionContext>> connections;
   {
-    std::lock_guard<std::mutex> lk(g_pairsMutex);
-    for (auto& pair : g_pairs) {
-      if (pair.second && pair.second->remoteWs) remotes.push_back(pair.second->remoteWs);
+    std::lock_guard<std::mutex> admissionLock(g_bridgeAdmissionMutex);
+    {
+      std::lock_guard<std::mutex> lock(g_connectionsMutex);
+      for (const auto& item : g_connections) connections.push_back(item.second);
     }
-    g_pairs.clear();
-    g_activeGameWs = nullptr;
-  }
-  for (auto& ws : remotes) {
-    ws->stop();
+    for (const auto& connection : connections) connection->lifetime->CloseAdmission();
   }
 
-  if (g_server) {
-    g_server->stop();
-    g_server.reset();
+  // Stop listeners while the owner is still alive. Their close callbacks append
+  // terminal cleanup to the same FIFO as already-admitted work.
+  if (g_server) g_server->stop();
+  if (g_matchServer) g_matchServer->stop();
+  for (const auto& connection : connections) connection->lifetime->WaitForLeases();
+
+  // Stop pairs on the owner only after listener callbacks have released their
+  // leases. Remote callbacks only enqueue owned events, so remote stop cannot
+  // wait on a callback that is synchronously waiting for this owner.
+  std::vector<std::shared_ptr<ix::WebSocket>> remotes;
+  const bool cleanedOnOwner = g_bridgeOwner.InvokeControlAndWait([&] {
+    std::unordered_set<ix::WebSocket*> seen;
+    {
+      std::lock_guard<std::mutex> lk(g_pairsMutex);
+      for (auto& pair : g_pairs) {
+        if (pair.second && pair.second->remoteWs && seen.insert(pair.second->remoteWs.get()).second) {
+          remotes.push_back(pair.second->remoteWs);
+        }
+      }
+      g_pairs.clear();
+      g_activeGameWs = nullptr;
+      g_loginGameWs = nullptr;
+      g_loginRemoteWs.reset();
+    }
+    for (auto& ws : remotes) ws->stop();
+  });
+  if (!cleanedOnOwner) {
+    Log(EchoVR::LogLevel::Error, "[NEVR.WS] Bridge owner unavailable during listener shutdown");
   }
+
+  if (g_server) g_server.reset();
+  if (g_matchServer) g_matchServer.reset();
+  (void)g_bridgeOwner.StopAndJoin();
+  {
+    std::lock_guard<std::mutex> lock(g_connectionsMutex);
+    g_connections.clear();
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_routeMutex);
+    g_activeConnection.reset();
+  }
+  g_connectionCount.store(0, std::memory_order_relaxed);
   Log(EchoVR::LogLevel::Info,
       "[NEVR.WS] listener stopped, %zu remote connection(s) closed — socket released (N105)",
       remotes.size());
@@ -1207,6 +1704,69 @@ std::string TestHook_BuildLoginRequest(uint64_t discordId, uint64_t platformCode
                                        const std::string& displayName,
                                        const std::string& accessToken) {
   return BuildLoginRequest(discordId, platformCode, displayName, accessToken);
+}
+
+bool TestHook_ContainsLoginSuccess(const std::string& frame) {
+  return ContainsEnvelopeSymbol(frame, SYM_LOGIN_SUCCESS);
+}
+
+bool TestHook_OpenThenRemoteResponseUsesPublishedRoute() {
+  if (!g_bridgeOwner.Start()) return false;
+  const auto previousRoute = GetActiveConnection();
+  auto loginRoute = std::make_shared<BridgeConnectionContext>();
+  loginRoute->generation = std::numeric_limits<uint64_t>::max();
+  SetActiveConnection(nullptr);
+
+  std::promise<void> blockerStarted;
+  std::promise<void> releaseBlocker;
+  std::shared_future<void> releaseSignal = releaseBlocker.get_future().share();
+  if (g_bridgeOwner.PostData(0, [&] {
+        blockerStarted.set_value();
+        releaseSignal.wait();
+      }) != BridgeControl::OwnerQueue::PostResult::Queued ||
+      blockerStarted.get_future().wait_for(std::chrono::seconds(1)) !=
+          std::future_status::ready) {
+    releaseBlocker.set_value();
+    (void)g_bridgeOwner.StopAndJoin();
+    SetActiveConnection(previousRoute);
+    return false;
+  }
+
+  std::mutex resultMutex;
+  std::vector<int> executionOrder;
+  uint64_t responseTargetGeneration = 0;
+  std::promise<void> responseCompleted;
+  bool queued = false;
+  {
+    std::lock_guard<std::mutex> admissionLock(g_bridgeAdmissionMutex);
+    SetActiveConnection(loginRoute);
+    queued = g_bridgeOwner.PostControl([&] {
+      std::lock_guard<std::mutex> lock(resultMutex);
+      executionOrder.push_back(1);  // Open event.
+    }) == BridgeControl::OwnerQueue::PostResult::Queued;
+  }
+  if (queued) {
+    std::lock_guard<std::mutex> admissionLock(g_bridgeAdmissionMutex);
+    const auto route = GetActiveConnection();
+    queued = route && g_bridgeOwner.PostData(0, [&, route] {
+      {
+        std::lock_guard<std::mutex> lock(resultMutex);
+        executionOrder.push_back(2);  // Shared-remote response.
+        responseTargetGeneration = route->generation;
+      }
+      responseCompleted.set_value();
+    }) == BridgeControl::OwnerQueue::PostResult::Queued;
+  }
+
+  releaseBlocker.set_value();
+  const bool completed = queued &&
+      responseCompleted.get_future().wait_for(std::chrono::seconds(1)) ==
+          std::future_status::ready;
+  const bool joined = g_bridgeOwner.StopAndJoin();
+  SetActiveConnection(previousRoute);
+  std::lock_guard<std::mutex> lock(resultMutex);
+  return completed && joined && executionOrder == std::vector<int>{1, 2} &&
+      responseTargetGeneration == loginRoute->generation;
 }
 
 uint64_t TestHook_SelectPlatformCode(bool hasUrlCredentials, bool noOvr) {
