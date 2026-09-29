@@ -248,7 +248,7 @@ This applies regardless of context — even if the task seems to require it, eve
 ## System test after every commit
 
 - **Run `./launch-client.sh` against the production server** after every commit that touches runtime code. The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A build that doesn't log in is NOT done.
-- **Client runs go on the nested display, never `:0`.** `:0` is the owner's main display. Run against `DISPLAY=:101` (`Xephyr :101 -screen 1920x1080`) and confirm `Xephyr :101` is in `ps` first; a run without an explicit `DISPLAY=:101` is a violation.
+- **Client runs go on the nested display, never `:0`.** `:0` is the owner's main display. Run plain `wine` (no `gamescope`) as `env -u WAYLAND_DISPLAY DISPLAY=:101 wine ./echovr.exe …` against `Xephyr :101 -screen 1920x1080`, and confirm `Xephyr :101` is in `ps` first. `DISPLAY` alone is not enough: under Wayland (`WAYLAND_DISPLAY=wayland-1`) gamescope ignores it and opens on the owner's desktop (`xdg_backend: Initted Wayland backend`, seat `Hyprland`). Any run without `WAYLAND_DISPLAY` unset and `DISPLAY=:101` is a violation.
 - **Check production Nakama logs** when login fails. The server logs the exact parse error. Guessing from the client side is waste.
 - **`just verify` is necessary but not sufficient.** It catches C++ compile/test/pattern errors. It does NOT catch wire-format bugs, login failures, or rendering regressions. The system test covers what `just verify` cannot.
 
