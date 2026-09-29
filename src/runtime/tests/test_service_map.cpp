@@ -398,4 +398,15 @@ TEST(ServiceMap, I21_GameNativeDefaultSuppliesPublisherLockOnly) {
   EXPECT_FALSE(GameNativeDefault("publisher_lock ").has_value());
 }
 
+TEST(ServiceMap, SocialFacadeDefaultsOffAndRequiresTrueBoolean) {
+  EXPECT_FALSE(nevr_cfg::SocialFacadeEnabled(
+      nevr::NevrConfig::LoadFromString("version: 1\n")));
+  EXPECT_FALSE(nevr_cfg::SocialFacadeEnabled(
+      nevr::NevrConfig::LoadFromString("social:\n  facade: false\n")));
+  EXPECT_FALSE(nevr_cfg::SocialFacadeEnabled(
+      nevr::NevrConfig::LoadFromString("social:\n  facade: maybe\n")));
+  EXPECT_TRUE(nevr_cfg::SocialFacadeEnabled(
+      nevr::NevrConfig::LoadFromString("social:\n  facade: true\n")));
+}
+
 }  // namespace

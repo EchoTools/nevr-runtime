@@ -19,6 +19,16 @@
 version: 1
 
 # ---------------------------------------------------------------------------
+# social — experimental platform social-provider compatibility
+#
+# The façade supplies an empty, non-networked social interface when the game
+# platform provider has no Social export. It is disabled unless explicitly set.
+# ---------------------------------------------------------------------------
+
+social:
+  # facade: true
+
+# ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints
 #
 # The game hardcodes *.readyatdawn.com URLs that no longer resolve. These keys

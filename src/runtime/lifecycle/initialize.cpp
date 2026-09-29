@@ -31,6 +31,7 @@
 #include "runtime/patch/xpid_patch.h"
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/mic_provider.h"
+#include "runtime/patch/social_facade.h"
 
 #include <windows.h>
 
@@ -257,6 +258,10 @@ static VOID InitializeAfterGameImageGuard() {
     return;
   }
   BootLogTee::TeeFprintf("[NEVR.PATCH] minhook initialized\n");
+
+  // Observe the platform Social factory result on every run. The hook preserves
+  // that result unless the separately loaded `social.facade` gate is true.
+  SocialFacade::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // --- DLL load interceptor (patch DLLs as they load) ---
   BootLogTee::TeeFprintf("[NEVR.BOOT] installing DLL load hooks...\n");

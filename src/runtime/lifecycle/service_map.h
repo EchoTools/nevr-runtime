@@ -82,4 +82,8 @@ std::optional<std::string> ResolveRedirect(const std::string& result,
 /// nullopt for every other key (the engine keeps its own default).
 std::optional<std::string> GameNativeDefault(const std::string& key);
 
+/// Opt-in gate for the empty social-provider façade. Missing, false, or an
+/// invalid scalar all fail closed to disabled.
+bool SocialFacadeEnabled(const nevr::NevrConfig& cfg);
+
 }  // namespace nevr_cfg

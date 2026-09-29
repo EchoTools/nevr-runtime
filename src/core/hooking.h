@@ -40,31 +40,56 @@ inline const char*& LastAttachErrorRef() {
 }
 inline const char* LastAttachError() { return LastAttachErrorRef(); }
 
+// A detour may run on another thread as soon as it is enabled. Publish its
+// trampoline first; the callbacks also let the ordering be tested without
+// patching executable memory.
+template <typename Create, typename Publish, typename Enable>
+inline bool CreatePublishEnable(Create&& create, Publish&& publish, Enable&& enable) {
+  PVOID trampoline = nullptr;
+  if (!create(&trampoline) || trampoline == nullptr) return false;
+  publish(trampoline);
+  return enable();
+}
+
+#ifdef USE_MINHOOK
+template <typename Create, typename Enable, typename Remove>
+inline BOOL AttachMinHookWith(PVOID* ppOriginal, PVOID pDetour,
+                              Create&& create, Enable&& enable, Remove&& remove) {
+  LastAttachErrorRef() = "";
+  const PVOID target = *ppOriginal;
+  MH_STATUS createStatus = MH_OK;
+  MH_STATUS enableStatus = MH_OK;
+  bool created = false;
+  const bool enabled = CreatePublishEnable(
+      [&](PVOID* trampoline) {
+        createStatus = create(target, pDetour, trampoline);
+        created = createStatus == MH_OK;
+        return created;
+      },
+      [&](PVOID trampoline) { *ppOriginal = trampoline; },
+      [&] {
+        enableStatus = enable(target);
+        return enableStatus == MH_OK;
+      });
+  if (enabled) return TRUE;
+  if (created) {
+    remove(target);
+    *ppOriginal = target;
+  }
+  LastAttachErrorRef() = createStatus != MH_OK ? MH_StatusToString(createStatus)
+      : enableStatus != MH_OK ? MH_StatusToString(enableStatus)
+      : "MH_CreateHook returned null trampoline";
+  return FALSE;
+}
+#endif
+
 // Attach a hook to a function
 // ppOriginal: Pointer to the original function pointer (will be updated to trampoline)
 // pDetour: The hook function
 inline BOOL Attach(PVOID* ppOriginal, PVOID pDetour) {
   LastAttachErrorRef() = "";
 #ifdef USE_MINHOOK
-  // MinHook needs the target address, then gives us the trampoline
-  PVOID pTarget = *ppOriginal;
-  PVOID pTrampoline = nullptr;
-
-  MH_STATUS st = MH_CreateHook(pTarget, pDetour, &pTrampoline);
-  if (st != MH_OK) {
-    LastAttachErrorRef() = MH_StatusToString(st);  // e.g. MH_ERROR_UNSUPPORTED_FUNCTION
-    return FALSE;
-  }
-
-  st = MH_EnableHook(pTarget);
-  if (st != MH_OK) {
-    LastAttachErrorRef() = MH_StatusToString(st);  // e.g. MH_ERROR_NOT_EXECUTABLE
-    return FALSE;
-  }
-
-  // Update the original pointer to point to the trampoline
-  *ppOriginal = pTrampoline;
-  return TRUE;
+  return AttachMinHookWith(ppOriginal, pDetour, MH_CreateHook, MH_EnableHook, MH_RemoveHook);
 #else
   DetourTransactionBegin();
   DetourUpdateThread(GetCurrentThread());

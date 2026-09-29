@@ -191,6 +191,10 @@ const char* NevrCfgAutoRelay(unsigned bridgePort) {
   return InternCStr(std::string("ws://127.0.0.1:") + std::to_string(bridgePort));
 }
 
+bool NevrCfgSocialFacadeEnabled() {
+  return nevr_cfg::SocialFacadeEnabled(NevrCfg());
+}
+
 // N134 S6 — the plugin loader's config source. The impure half: reads the same
 // config.yaml singleton (loaded + fail-loud-validated once, above) and hands the
 // loader the ordered, enabled-only plan built by the pure BuildLoadPlan. Kept

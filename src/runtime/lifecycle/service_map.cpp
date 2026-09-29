@@ -152,4 +152,8 @@ std::optional<std::string> GameNativeDefault(const std::string& key) {
   return std::nullopt;
 }
 
+bool SocialFacadeEnabled(const nevr::NevrConfig& cfg) {
+  return cfg.GetBool("social.facade").value_or(false);
+}
+
 }  // namespace nevr_cfg
