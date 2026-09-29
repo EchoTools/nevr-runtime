@@ -1687,6 +1687,29 @@ verify:
         echo "bootstrap. Without it RedirectServiceUrl never fires (no login redirect)." >&2
         exit 1
     fi
+    # Issue #21 — _local/config.json is OPTIONAL. N48's ServerFatal on a missing
+    # config.json outlived N133 (which moved every NEVR key to config.yaml) and
+    # killed config.yaml-only servers at boot; the `g_earlyConfigPtr == NULL`
+    # gate in RedirectServiceUrl silently disabled every service redirect without
+    # one. Neither may return, and the replacement arm call — which keeps the
+    # first config.yaml load from moving ahead of the bootstrap — must stay.
+    I21_RC=0; I21_CODE=$(grep -hvE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' \
+        src/runtime/lifecycle/boot.cpp src/runtime/lifecycle/config.cpp) || I21_RC=$?
+    sensor_stage1 "I21 config.json optional" "src/runtime/lifecycle/{boot,config}.cpp" "$I21_RC"
+    sensor_nonempty "I21 config.json optional" "non-comment lines of boot.cpp + config.cpp" "$I21_CODE"
+    if grep -qE 'g_earlyConfigPtr[[:space:]]*==[[:space:]]*(NULL|nullptr)' <<<"$I21_CODE"; then
+        echo "verify: FAIL — issue #21: boot.cpp/config.cpp branch on a MISSING config.json again:" >&2
+        grep -nE 'g_earlyConfigPtr[[:space:]]*==[[:space:]]*(NULL|nullptr)' \
+            src/runtime/lifecycle/boot.cpp src/runtime/lifecycle/config.cpp >&2
+        echo "config.json only carries keys the stock engine reads natively; NEVR's settings" >&2
+        echo "are config.yaml. Its absence must not fatal a server or disable redirects." >&2
+        exit 1
+    fi
+    if ! grep -qE '^[[:space:]]*ArmServiceRedirects\(\);' <<<"$I21_CODE"; then
+        echo "verify: FAIL — issue #21: ArmServiceRedirects() is no longer called from the" >&2
+        echo "bootstrap. Without it RedirectServiceUrl never fires (no login redirect)." >&2
+        exit 1
+    fi
     # N112 — BuildIdentity: the client login and server registration now carry
     # NEVR build identity (version, commit, git describe, build type) and a
     # plugin manifest. These sensors prove the wiring is present and catch the
