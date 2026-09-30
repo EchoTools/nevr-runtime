@@ -36,6 +36,7 @@ constexpr std::uint64_t kInviteRequest = 0xcf13f934540b5f5eULL;  // SNSPartySend
 constexpr std::uint64_t kLockRequest = 0xc2478aa479f3e16aULL;
 constexpr std::uint64_t kUnlockRequest = 0x5a4e99802fa3d704ULL;
 constexpr std::uint64_t kInviteListRefreshRequest = 0xd8cbc44959e25da8ULL;
+constexpr std::uint64_t kFriendListRefreshRequest = 0xdcfa94680e8d19fcULL;  // SNSFriendListRefreshRequest
 constexpr std::uint64_t kKickRequest = 0xfaf57beb59917d64ULL;
 constexpr std::uint64_t kPassRequest = 0x518543cd886a6946ULL;
 constexpr std::uint64_t kInviteResponse = 0xe3654a09203555a3ULL;  // SNSPartyRespondToInviteRequest
@@ -121,6 +122,16 @@ inline Message Standard(std::uint64_t symbol, const Uuid& self, std::uint64_t la
   m.payload.append(reinterpret_cast<const char*>(self.data()), self.size());
   AppendLe(m.payload, 0, 8);
   AppendLe(m.payload, last, 8);
+  return m;
+}
+
+/// 0x20-byte payload (friend list subscribe/refresh): RoutingID(8) LocalUserUUID(16) SessionGUID(8).
+inline Message Short(std::uint64_t symbol, const Uuid& self) {
+  Message m;
+  m.symbol = symbol;
+  AppendLe(m.payload, 0, 8);
+  m.payload.append(reinterpret_cast<const char*>(self.data()), self.size());
+  AppendLe(m.payload, 0, 8);
   return m;
 }
 
@@ -287,6 +298,15 @@ class State {
     std::vector<Message> out;
     if (partyId_ == 0) return out;
     out.push_back(Standard(locked ? kLockRequest : kUnlockRequest, SelfUuid(), 0));
+    return out;
+  }
+
+  /// The friends tab was opened: ask the server for a fresh friend list (it answers with a
+  /// FriendListResponse and one FriendStatusNotify per friend, which refill the roster).
+  std::vector<Message> RefreshFriends() {
+    std::lock_guard<std::mutex> guard(mutex_);
+    std::vector<Message> out;
+    out.push_back(Short(kFriendListRefreshRequest, SelfUuid()));
     return out;
   }
 

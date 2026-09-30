@@ -408,6 +408,17 @@ TEST(SocialParty, InvitingWithoutAPartyCreatesItFirstThenInvites) {
   EXPECT_EQ(out[0].symbol, SocialParty::kInviteRequest) << "with a party the invite goes straight out";
 }
 
+TEST(SocialParty, OpeningTheFriendsTabAsksTheServerForAFreshList) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  const auto out = state.RefreshFriends();
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].symbol, SocialParty::kFriendListRefreshRequest);
+  EXPECT_EQ(out[0].payload.size(), 32u) << "the 0x20-byte shape Nakama reads";
+  const auto self = SocialParty::MemberUuid(100);
+  EXPECT_EQ(std::memcmp(out[0].payload.data() + 8, self.data(), 16), 0);
+}
+
 TEST(SocialParty, TheGamesCreateRequestMakesOnePartyAndNoMore) {
   SocialParty::State state;
   state.SetSelf(100);

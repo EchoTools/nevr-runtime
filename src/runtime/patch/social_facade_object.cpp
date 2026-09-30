@@ -291,6 +291,10 @@ void AcceptInvite(void* self, std::int32_t index) {
   SendParty("accept", SocialParty::Global().Accept(static_cast<std::uint32_t>(index)));
 }
 
+// The game calls this when the friends tab opens. The roster is otherwise filled only once, at
+// login, so a friend added since (for example on the web site) never showed until a restart.
+void RefreshFriends(void*) { SendParty("refresh friends", SocialParty::Global().RefreshFriends()); }
+
 void SetJoinPolicy(void* self, std::uint32_t policy) { Put32(self, 0x2B4, policy); }
 
 std::uint32_t Ready(void*) {
@@ -580,7 +584,7 @@ const std::array<Slot, kVtableSlotCount> kVtable = {
     reinterpret_cast<Slot>(&LoggedStub<42>),     // 42 OpenPartyUI
     reinterpret_cast<Slot>(&LoggedStub<43>),     // 43 OpenPartyUI(target)
     reinterpret_cast<Slot>(&Zero0),       // 44 RefreshingFriends
-    reinterpret_cast<Slot>(&LoggedStub<45>),       // 45 RefreshFriends
+    reinterpret_cast<Slot>(&RefreshFriends),       // 45 RefreshFriends
     reinterpret_cast<Slot>(&FriendCount),  // 46 FriendCount
     reinterpret_cast<Slot>(&OnlineFriendCount),  // 47 OnlineFriendCount
     reinterpret_cast<Slot>(&OfflineFriendCount),  // 48 OfflineFriendCount
