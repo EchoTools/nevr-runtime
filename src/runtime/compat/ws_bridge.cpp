@@ -229,8 +229,18 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
     if (fromServer && sym == SocialNames::kProfileSuccess) {
       uint64_t accountId = 0;
       std::string displayName;
-      if (SocialNames::DecodeProfile(payload, static_cast<size_t>(len), &accountId, &displayName)) {
-        SocialRoster::Global().SetName(accountId, displayName);
+      const bool decoded = SocialNames::DecodeProfile(payload, static_cast<size_t>(len), &accountId, &displayName);
+      uint64_t replyFor = accountId;
+      if (!decoded && len >= 16) {
+        replyFor = 0;
+        for (int i = 7; i >= 0; --i) replyFor = (replyFor << 8) | payload[8 + i];
+      }
+      if (decoded) SocialRoster::Global().SetName(accountId, displayName);
+      if (SocialRoster::Global().Contains(replyFor)) {
+        Log(EchoVR::LogLevel::Info,
+            decoded ? "[NEVR.SOCIAL] friend name resolved account=%llu name_bytes=%zu"
+                    : "[NEVR.SOCIAL] friend profile reply could not be read account=%llu reply_bytes=%zu",
+            static_cast<unsigned long long>(replyFor), decoded ? displayName.size() : static_cast<size_t>(len));
       }
     }
     // Party symbols come from our own verified tables: the game's symbol table has no names for the
@@ -253,7 +263,10 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
         if (strcmp(gameName, "FriendStatusNotify") == 0 &&
             SocialRoster::ParseStatusNotify(payload, static_cast<size_t>(len), &friendId, &status)) {
           const std::vector<SocialParty::Message> asks = SocialNames::GlobalResolver().Want(friendId);
-          if (!asks.empty()) SocialParty::Send(asks);
+          if (!asks.empty()) {
+            Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend name lookup requested account=%llu sent=%d",
+                static_cast<unsigned long long>(friendId), SocialParty::Send(asks) ? 1 : 0);
+          }
         }
       }
       // Party messages update the facade's party; any requests that were waiting on the reply

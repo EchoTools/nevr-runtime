@@ -123,6 +123,14 @@ class Roster {
     return true;
   }
 
+  /// True when `id` is in the published roster (used to log only the profile replies that concern a friend).
+  bool Contains(std::uint64_t id) const {
+    const auto snap = Snap();
+    for (const Entry& entry : snap->entries)
+      if (entry.id == id) return true;
+    return false;
+  }
+
   bool OnlineAt(std::uint32_t index) const {
     const auto snap = Snap();
     return index < snap->entries.size() && snap->entries[index].online;
