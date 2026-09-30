@@ -449,13 +449,21 @@ std::uint64_t* FriendId(void*, std::uint64_t* out, std::uint32_t index) {
   std::uint64_t id = 0;
   SocialRoster::Global().IdAt(index, &id);
   if (out != nullptr) *out = id;
-  LogQuery("FriendId", 0x188, CountCall(g_calls.friendId), id);
+  const std::uint32_t callCount = CountCall(g_calls.friendId);
+  if (callCount <= 2 * kInitialQueryLogCalls) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade query slot=0x188 name=FriendId index=%u id=%llu call_count=%u",
+        index, static_cast<unsigned long long>(id), callCount);
+  }
   return out;
 }
 
 const char* FriendName(void*, std::uint32_t index) {
   const char* name = SocialRoster::Global().NameAt(index);
-  LogQuery("FriendName", 0x190, CountCall(g_calls.friendName), name[0] != '\0' ? 1U : 0U);
+  const std::uint32_t callCount = CountCall(g_calls.friendName);
+  if (callCount <= 2 * kInitialQueryLogCalls) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade query slot=0x190 name=FriendName index=%u text=%s call_count=%u",
+        index, name, callCount);
+  }
   return name;
 }
 

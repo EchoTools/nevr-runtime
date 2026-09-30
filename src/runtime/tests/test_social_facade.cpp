@@ -408,6 +408,30 @@ TEST(SocialParty, InvitingWithoutAPartyCreatesItFirstThenInvites) {
   EXPECT_EQ(out[0].symbol, SocialParty::kInviteRequest) << "with a party the invite goes straight out";
 }
 
+TEST(SocialFacade, FriendIdAndNameFollowTheirIndexArgument) {
+  SocialRoster::Global().Clear();
+  SocialRoster::Global().BeginList(3);
+  SocialRoster::Global().Notify(300, SocialRoster::kStatusOffline);
+  SocialRoster::Global().Notify(100, SocialRoster::kStatusOnline);
+  SocialRoster::Global().Notify(200, SocialRoster::kStatusOnline);
+  void* object = SocialFacade::Object();
+  const Slot* vtable = Vtable(object);
+  using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
+  using NameFn = const char* (*)(void*, std::uint32_t);
+  const std::uint64_t expected[3] = {100, 200, 300};  // online first, then by id
+  const char* names[3] = {"100", "200", "300"};
+  for (std::uint32_t i = 0; i < 3; ++i) {
+    std::uint64_t id = 0;
+    reinterpret_cast<IdFn>(vtable[49])(object, &id, i);
+    EXPECT_EQ(id, expected[i]) << "index " << i;
+    EXPECT_STREQ(reinterpret_cast<NameFn>(vtable[50])(object, i), names[i]) << "index " << i;
+  }
+  std::uint64_t past = 7;
+  reinterpret_cast<IdFn>(vtable[49])(object, &past, 3);
+  EXPECT_EQ(past, 0u) << "an index past the list answers 0";
+  SocialRoster::Global().Clear();
+}
+
 TEST(SocialParty, OpeningTheFriendsTabAsksTheServerForAFreshList) {
   SocialParty::State state;
   state.SetSelf(100);
