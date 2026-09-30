@@ -107,8 +107,10 @@ std::optional<std::string> GameNativeDefault(const std::string& key);
 std::optional<std::string> BuildGameNativeConfigJson(const std::string& httpUri,
                                                      const std::string& serverKey);
 
-/// Opt-in gate for the empty social-provider façade. Missing, false, or an
-/// invalid scalar all fail closed to disabled.
+/// Gate for the social façade that stands in when the platform provider has no
+/// Social object (pnsrad exports none). On by default; `social.facade: false`
+/// turns it off. A missing or invalid value leaves it on. It never replaces a
+/// provider's own Social object, only a null one.
 bool SocialFacadeEnabled(const nevr::NevrConfig& cfg);
 
 }  // namespace nevr_cfg

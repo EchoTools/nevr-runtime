@@ -260,7 +260,8 @@ static VOID InitializeAfterGameImageGuard() {
   BootLogTee::TeeFprintf("[NEVR.PATCH] minhook initialized\n");
 
   // Observe the platform Social factory result on every run. The hook preserves
-  // that result unless the separately loaded `social.facade` gate is true.
+  // a real provider object and substitutes the façade only for a null one, unless
+  // `social.facade: false` turns the substitution off.
   SocialFacade::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // --- DLL load interceptor (patch DLLs as they load) ---

@@ -44,7 +44,7 @@ const char* NevrCfgAutoRelay(unsigned bridgePort);
 /// engine's own default. Does not touch config.yaml.
 const char* NevrGameNativeDefault(const char* key);
 
-/// True only when config.yaml explicitly contains `social.facade: true`.
+/// True unless config.yaml explicitly sets `social.facade: false`.
 bool NevrCfgSocialFacadeEnabled();
 
 /// JSON text of the game-native config to hand the game when it found no `_local/config.json`
