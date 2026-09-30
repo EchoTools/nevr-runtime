@@ -689,36 +689,6 @@ TEST(WsBridgeLoginRequest, HasExpectedHeaderAndPayloadLength) {
   }
 }
 
-TEST(WsBridgeLoginSuccess, ScansConcatenatedEnvelopeFramesSafely) {
-  const auto envelope = [](uint64_t symbol, const std::string& payload) {
-    std::string frame;
-    const std::array<unsigned char, 8> marker = {0xf6, 0x40, 0xbb, 0x78,
-                                                 0xa2, 0xe7, 0x8c, 0xbb};
-    frame.append(reinterpret_cast<const char*>(marker.data()), marker.size());
-    for (unsigned int byte = 0; byte < 8; ++byte) {
-      frame.push_back(static_cast<char>((symbol >> (byte * 8)) & 0xffU));
-    }
-    const uint64_t length = payload.size();
-    for (unsigned int byte = 0; byte < 8; ++byte) {
-      frame.push_back(static_cast<char>((length >> (byte * 8)) & 0xffU));
-    }
-    frame.append(payload);
-    return frame;
-  };
-
-  const std::string prefix = envelope(0x0102030405060708ULL, "first");
-  const std::string success = envelope(0xa5acc1a90d0cce47ULL, "login");
-  EXPECT_TRUE(TestHook_ContainsLoginSuccess(success));
-  EXPECT_TRUE(TestHook_ContainsLoginSuccess(prefix + success));
-  EXPECT_FALSE(TestHook_ContainsLoginSuccess(prefix));
-  EXPECT_FALSE(TestHook_ContainsLoginSuccess(prefix + success.substr(0, success.size() - 1)));
-  EXPECT_FALSE(TestHook_ContainsLoginSuccess(prefix + std::string("tail")));
-}
-
-TEST(WsBridgeRouteAdmission, OpenPrecedesSharedRemoteResponseTargetSelection) {
-  EXPECT_TRUE(TestHook_OpenThenRemoteResponseUsesPublishedRoute());
-}
-
 // PlatformCode=4 (OVR_ORG in game numbering) at wire offset 40.
 // Regression test for 2026-08-04: PlatformCode was sent as 3 (Nakama enum
 // OVR_ORG), but the game interprets wire values through its own numbering

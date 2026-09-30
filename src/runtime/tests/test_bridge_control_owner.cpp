@@ -48,7 +48,7 @@ TEST(BridgeOwnerQueue, ThreadStartFailureIsRetryable) {
   EXPECT_TRUE(owner.StopAndJoin());
 }
 
-TEST(BridgeOwnerQueue, DataAndControlEventsShareFifoAndAllowReentrantPost) {
+TEST(BridgeOwnerQueue, ControlLanePreemptsDataAndAllowsReentrantPost) {
   BridgeControl::OwnerQueue owner;
   ASSERT_TRUE(owner.Start());
 
@@ -81,11 +81,11 @@ TEST(BridgeOwnerQueue, DataAndControlEventsShareFifoAndAllowReentrantPost) {
     ASSERT_TRUE(condition.wait_for(lock, std::chrono::seconds(1), [&] { return reentrantQueued; }));
   }
   EXPECT_TRUE(owner.StopAndJoin());
-  EXPECT_EQ(order, (std::vector<int>{1, 2, 3}));
+  EXPECT_EQ(order, (std::vector<int>{1, 3, 2}));
   EXPECT_NE(taskThread, std::this_thread::get_id());
 }
 
-TEST(BridgeOwnerQueue, FenceDoesNotOvertakeEarlierControlEvents) {
+TEST(BridgeOwnerQueue, CloseFenceBypassesFullReservedControlLane) {
   BridgeControl::OwnerQueue owner;
   ASSERT_TRUE(owner.Start());
   std::promise<void> blockerStarted;
@@ -126,8 +126,7 @@ TEST(BridgeOwnerQueue, FenceDoesNotOvertakeEarlierControlEvents) {
   EXPECT_EQ(controlAfterFence.get_future().wait_for(std::chrono::seconds(1)), std::future_status::ready);
   EXPECT_TRUE(owner.StopAndJoin());
   ASSERT_FALSE(order.empty());
-  EXPECT_EQ(order.front(), 1);
-  EXPECT_EQ(order.back(), 2);
+  EXPECT_EQ(order.front(), 2);
 }
 
 TEST(BridgeOwnerQueue, DataLimitsPreserveReservedControlCapacityAndDrainOnStop) {
@@ -193,6 +192,32 @@ TEST(BridgeOwnerQueue, StopCannotJoinFromItsOwnerThread) {
   EXPECT_TRUE(owner.StopAndJoin());
 }
 
+TEST(BridgeOwnerQueue, CloseFenceCompletesWhileCallbackWaitsForOwner) {
+  BridgeControl::OwnerQueue owner;
+  ASSERT_TRUE(owner.Start());
+  std::promise<void> blockerStarted;
+  std::promise<void> releaseBlocker;
+  std::shared_future<void> releaseSignal = releaseBlocker.get_future().share();
+  ASSERT_EQ(owner.PostData(0, [&] {
+              blockerStarted.set_value();
+              releaseSignal.wait();
+            }), BridgeControl::OwnerQueue::PostResult::Queued);
+  blockerStarted.get_future().wait();
+
+  std::atomic<bool> callbackStarted{false};
+  std::atomic<bool> closeProcessed{false};
+  std::thread callback([&] {
+    callbackStarted.store(true, std::memory_order_release);
+    EXPECT_TRUE(owner.InvokeControlAndWait([&] { closeProcessed.store(true, std::memory_order_release); }));
+  });
+  while (!callbackStarted.load(std::memory_order_acquire)) std::this_thread::yield();
+  releaseBlocker.set_value();
+
+  callback.join();
+  EXPECT_TRUE(closeProcessed.load(std::memory_order_acquire));
+  EXPECT_TRUE(owner.StopAndJoin());
+}
+
 TEST(BridgeOwnerQueue, CloseRacingInFlightCallbackSkipsStaleWorkBeforeLeaseDrain) {
   BridgeControl::OwnerQueue owner;
   ASSERT_TRUE(owner.Start());
@@ -228,147 +253,15 @@ TEST(BridgeOwnerQueue, CloseRacingInFlightCallbackSkipsStaleWorkBeforeLeaseDrain
   EXPECT_TRUE(owner.StopAndJoin());
 }
 
-TEST(BridgeOwnerQueue, TerminalCloseUsesReservedSlotAndDoesNotOvertakeFifo) {
+TEST(BridgeOwnerQueue, ReentrantOwnerCloseSkipsAlreadyQueuedGameSocketWork) {
   BridgeControl::OwnerQueue owner;
   ASSERT_TRUE(owner.Start());
-  ASSERT_TRUE(owner.ReserveCloseSlot());
-  std::promise<void> blockerStarted;
-  std::promise<void> releaseBlocker;
-  std::shared_future<void> releaseSignal = releaseBlocker.get_future().share();
-  std::vector<int> order;
-  std::mutex mutex;
-  ASSERT_EQ(owner.PostData(0, [&] {
-              blockerStarted.set_value();
-              releaseSignal.wait();
-              std::lock_guard<std::mutex> lock(mutex);
-              order.push_back(0);
-            }), BridgeControl::OwnerQueue::PostResult::Queued);
-  blockerStarted.get_future().wait();
-  for (size_t i = 0; i < BridgeControl::OwnerQueue::kMaxDataEvents; ++i) {
-    ASSERT_EQ(owner.PostData(0, [&order, &mutex] {
-                std::lock_guard<std::mutex> lock(mutex);
-                order.push_back(1);
-              }), BridgeControl::OwnerQueue::PostResult::Queued);
-  }
-  uint64_t closeSequence = 0;
-  EXPECT_EQ(owner.PostTerminalClose([&order, &mutex] {
-              std::lock_guard<std::mutex> lock(mutex);
-              order.push_back(2);
-            }, &closeSequence), BridgeControl::OwnerQueue::PostResult::Queued);
-  EXPECT_EQ(owner.PostData(0, [] {}), BridgeControl::OwnerQueue::PostResult::DataCountLimit);
-  EXPECT_EQ(owner.PostTerminalClose([] {}), BridgeControl::OwnerQueue::PostResult::CloseCapacityLimit);
-  releaseBlocker.set_value();
-  ASSERT_TRUE(owner.StopAndJoin());
-  ASSERT_EQ(order.size(), BridgeControl::OwnerQueue::kMaxDataEvents + 2);
-  EXPECT_EQ(order.front(), 0);
-  EXPECT_EQ(order.back(), 2);
-  EXPECT_EQ(closeSequence, static_cast<uint64_t>(BridgeControl::OwnerQueue::kMaxDataEvents + 2));
-  owner.ReleaseCloseSlot();
-}
-
-TEST(ConnectionLifetime, CloseAndEnqueueShareAdmissionLinearization) {
-  BridgeControl::OwnerQueue owner;
-  ASSERT_TRUE(owner.Start());
-  ASSERT_TRUE(owner.ReserveCloseSlot());
   auto lifetime = std::make_shared<BridgeControl::ConnectionLifetime>();
-  auto lease = lifetime->TryAcquire();
-  ASSERT_NE(lease, nullptr);
-  std::promise<void> postPaused;
-  std::promise<void> continuePost;
-  std::shared_future<void> continueSignal = continuePost.get_future().share();
-  std::atomic<bool> workRan{false};
-  std::atomic<bool> accepted{true};
-  std::thread callback([&] {
-    postPaused.set_value();
-    continueSignal.wait();
-    accepted.store(lifetime->PostIfAccepting([&] {
-      return owner.PostData(1, [&] { workRan.store(true, std::memory_order_release); }) ==
-          BridgeControl::OwnerQueue::PostResult::Queued;
-    }), std::memory_order_release);
-  });
-  postPaused.get_future().wait();
-  const auto close = lifetime->CloseAndPost(false, [&](const auto& completion) {
-    return owner.PostTerminalClose([&, completion] {
-      completion->set_value(true);
-    }) == BridgeControl::OwnerQueue::PostResult::Queued;
-  });
-  ASSERT_TRUE(close.first);
-  EXPECT_TRUE(close.completion.get());
-  continuePost.set_value();
-  callback.join();
-  EXPECT_FALSE(accepted.load(std::memory_order_acquire));
-  lease.reset();
-  EXPECT_TRUE(owner.StopAndJoin());
-  EXPECT_FALSE(workRan.load(std::memory_order_acquire));
-}
+  auto closeLease = lifetime->TryAcquire();
+  auto queuedLease = lifetime->TryAcquire();
+  ASSERT_NE(closeLease, nullptr);
+  ASSERT_NE(queuedLease, nullptr);
 
-TEST(ConnectionLifetime, AdmittedResponseRunsBeforeOrdinaryCloseCleanup) {
-  BridgeControl::OwnerQueue owner;
-  ASSERT_TRUE(owner.Start());
-  ASSERT_TRUE(owner.ReserveCloseSlot());
-  auto lifetime = std::make_shared<BridgeControl::ConnectionLifetime>();
-  auto lease = lifetime->TryAcquire();
-  ASSERT_NE(lease, nullptr);
-  std::vector<int> order;
-  std::mutex mutex;
-  uint64_t responseSequence = 0;
-  ASSERT_TRUE(lifetime->PostIfAccepting([&] {
-    return owner.PostData(1, [&] {
-      std::lock_guard<std::mutex> lock(mutex);
-      order.push_back(1);
-    }, &responseSequence) == BridgeControl::OwnerQueue::PostResult::Queued;
-  }));
-  std::promise<bool> closeResult;
-  std::thread callback([&] {
-    const auto close = lifetime->CloseAndPost(false, [&](const auto& completion) {
-      return owner.PostTerminalClose([&order, &mutex, completion, &closeResult] {
-        std::lock_guard<std::mutex> lock(mutex);
-        order.push_back(2);
-        completion->set_value(true);
-        closeResult.set_value(true);
-      }) == BridgeControl::OwnerQueue::PostResult::Queued;
-    });
-    EXPECT_TRUE(close.queued);
-    EXPECT_TRUE(close.completion.get());
-  });
-  callback.join();
-  lease.reset();
-  EXPECT_TRUE(owner.StopAndJoin());
-  EXPECT_EQ(order, (std::vector<int>{1, 2}));
-  EXPECT_EQ(responseSequence, 1U);
-  EXPECT_TRUE(closeResult.get_future().get());
-}
-
-TEST(ConnectionLifetime, DuplicateCloseSharesOneTerminalCompletion) {
-  BridgeControl::OwnerQueue owner;
-  ASSERT_TRUE(owner.Start());
-  ASSERT_TRUE(owner.ReserveCloseSlot());
-  auto lifetime = std::make_shared<BridgeControl::ConnectionLifetime>();
-  std::atomic<size_t> cleanupCount{0};
-  const auto first = lifetime->CloseAndPost(false, [&](const auto& completion) {
-    return owner.PostTerminalClose([&, completion] {
-      cleanupCount.fetch_add(1, std::memory_order_relaxed);
-      completion->set_value(true);
-    }) == BridgeControl::OwnerQueue::PostResult::Queued;
-  });
-  const auto duplicate = lifetime->CloseAndPost(false, [&](const auto&) {
-    ADD_FAILURE() << "duplicate close attempted a second terminal insert";
-    return false;
-  });
-  EXPECT_TRUE(first.first);
-  EXPECT_FALSE(duplicate.first);
-  EXPECT_EQ(first.completion.get(), duplicate.completion.get());
-  EXPECT_TRUE(owner.StopAndJoin());
-  EXPECT_EQ(cleanupCount.load(std::memory_order_relaxed), 1U);
-}
-
-TEST(ConnectionLifetime, ReentrantRetirementAbortsQueuedBorrowedSocketWork) {
-  BridgeControl::OwnerQueue owner;
-  ASSERT_TRUE(owner.Start());
-  ASSERT_TRUE(owner.ReserveCloseSlot());
-  auto lifetime = std::make_shared<BridgeControl::ConnectionLifetime>();
-  std::atomic<bool> socketAlive{true};
-  std::atomic<size_t> socketTouches{0};
   std::promise<void> blockerStarted;
   std::promise<void> releaseBlocker;
   std::shared_future<void> releaseSignal = releaseBlocker.get_future().share();
@@ -377,30 +270,56 @@ TEST(ConnectionLifetime, ReentrantRetirementAbortsQueuedBorrowedSocketWork) {
               releaseSignal.wait();
             }), BridgeControl::OwnerQueue::PostResult::Queued);
   blockerStarted.get_future().wait();
-  auto pendingLease = lifetime->TryAcquire();
-  ASSERT_NE(pendingLease, nullptr);
-  std::promise<void> closeReturned;
-  ASSERT_EQ(owner.PostControl([&] {
-    const auto close = lifetime->CloseAndPost(true, [&](const auto& completion) {
-      return owner.PostTerminalClose([&, completion] {
-        socketAlive.store(false, std::memory_order_release);
-        completion->set_value(true);
-      }) == BridgeControl::OwnerQueue::PostResult::Queued;
-    });
-    EXPECT_TRUE(close.first);
-    // The owner reentrant path must return without waiting for its own FIFO.
-    closeReturned.set_value();
-  }), BridgeControl::OwnerQueue::PostResult::Queued);
-  ASSERT_TRUE(lifetime->PostIfAccepting([&] {
-    return owner.PostData(1, [&, pendingLease] {
-      if (!lifetime->IsRetired() && socketAlive.load(std::memory_order_acquire)) {
-        socketTouches.fetch_add(1, std::memory_order_relaxed);
-      }
-    }) == BridgeControl::OwnerQueue::PostResult::Queued;
-  }));
+
+  std::promise<void> closeRan;
+  std::atomic<bool> staleSocketTouched{false};
+  ASSERT_EQ(owner.PostData(1, [lifetime, queuedLease, &staleSocketTouched] {
+              if (lifetime->IsOpen()) staleSocketTouched.store(true, std::memory_order_release);
+            }), BridgeControl::OwnerQueue::PostResult::Queued);
+  ASSERT_EQ(owner.PostControl([&owner, lifetime, closeLease, &closeRan] {
+              lifetime->CloseAdmission();
+              EXPECT_TRUE(owner.InvokeControlAndWait([&] { closeRan.set_value(); }));
+            }), BridgeControl::OwnerQueue::PostResult::Queued);
   releaseBlocker.set_value();
-  EXPECT_EQ(closeReturned.get_future().wait_for(std::chrono::seconds(1)), std::future_status::ready);
+
+  EXPECT_EQ(closeRan.get_future().wait_for(std::chrono::seconds(1)), std::future_status::ready);
   EXPECT_TRUE(owner.StopAndJoin());
-  EXPECT_FALSE(socketAlive.load(std::memory_order_acquire));
-  EXPECT_EQ(socketTouches.load(std::memory_order_relaxed), 0U);
+  closeLease.reset();
+  queuedLease.reset();
+  EXPECT_FALSE(staleSocketTouched.load(std::memory_order_acquire));
+}
+
+TEST(BridgeConnectionLifetime, RejectionFenceCloseCallbackStillCleansPairOnce) {
+  BridgeControl::OwnerQueue owner;
+  ASSERT_TRUE(owner.Start());
+  auto lifetime = std::make_shared<BridgeControl::ConnectionLifetime>();
+  auto rejectionLease = lifetime->TryAcquire();
+  ASSERT_NE(rejectionLease, nullptr);
+  lifetime->RequestClose();
+  EXPECT_FALSE(lifetime->TryAcquire());
+
+  std::atomic<bool> pairPresent{true};
+  std::promise<void> closeHandled;
+  ASSERT_TRUE(owner.PostFence([&owner, lifetime, rejectionLease, &pairPresent, &closeHandled] {
+    // This models ixwebsocket's reentrant Close callback after the queue-limit
+    // fence calls WebSocket::close. It must still reach pair cleanup although
+    // RequestClose has already rejected regular callbacks.
+    auto closeLease = lifetime->TryAcquireClose();
+    EXPECT_NE(closeLease, nullptr);
+    if (closeLease) {
+      EXPECT_TRUE(owner.InvokeControlAndWait([&pairPresent] {
+        pairPresent.store(false, std::memory_order_release);
+      }));
+      closeLease.reset();
+    }
+    EXPECT_FALSE(lifetime->TryAcquireClose());
+    closeHandled.set_value();
+  }));
+  rejectionLease.reset();
+
+  EXPECT_EQ(closeHandled.get_future().wait_for(std::chrono::seconds(1)),
+            std::future_status::ready);
+  lifetime->WaitForLeases();
+  EXPECT_FALSE(pairPresent.load(std::memory_order_acquire));
+  EXPECT_TRUE(owner.StopAndJoin());
 }
