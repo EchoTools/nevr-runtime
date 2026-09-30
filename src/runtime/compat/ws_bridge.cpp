@@ -138,6 +138,17 @@ static const char* ConnLabel(int connIdx) {
   }
 }
 
+// Name of a remote websocket's ready state, for log lines.
+static const char* RemoteStateName(ix::ReadyState state) {
+  switch (state) {
+    case ix::ReadyState::Connecting: return "connecting";
+    case ix::ReadyState::Open: return "open";
+    case ix::ReadyState::Closing: return "closing";
+    case ix::ReadyState::Closed: return "closed";
+  }
+  return "unknown";
+}
+
 static std::mutex g_pairsMutex;
 static std::atomic<int> g_connectionCount{0};  // tracks connection order (0=config, 1+=login)
 static std::unordered_map<ix::WebSocket*, std::unique_ptr<ProxyPair>> g_pairs;
@@ -474,7 +485,7 @@ void InstallWebSocketBridge() {
                         break;
                       }
                       case ix::WebSocketMessageType::Close:
-                        Log(EchoVR::LogLevel::Debug,
+                        Log(EchoVR::LogLevel::Info,
                             "[NEVR.WS] Remote closed (conn=%d, %s, ws=%p): code=%u",
                             connIdx, ConnLabel(connIdx), static_cast<void*>(gameWsPtr),
                             static_cast<unsigned int>(rmsg->closeInfo.code));
@@ -916,7 +927,7 @@ void InstallWebSocketBridge() {
                       break;
                     }
                     case ix::WebSocketMessageType::Close:
-                      Log(EchoVR::LogLevel::Debug,
+                      Log(EchoVR::LogLevel::Info,
                           "[NEVR.WS] Remote closed (conn=%d, %s, ws=%p): code=%u",
                           connIdx, ConnLabel(connIdx), static_cast<void*>(gameWsPtr),
                           static_cast<unsigned int>(rmsg->closeInfo.code));
@@ -1046,12 +1057,24 @@ void InstallWebSocketBridge() {
             if (it != g_pairs.end()) {
               auto& pair = it->second;
               if (pair->remoteOpen) {
+                // A shared login session can die while the game sits idle; the game then
+                // waits forever on its MATCHMAKING screen. Say so instead of dropping quietly.
+                const ix::ReadyState remoteState = pair->remoteWs->getReadyState();
+                bool sent = false;
                 if (msg->binary) {
-                  auto info = pair->remoteWs->sendBinary(msg->str);
+                  sent = pair->remoteWs->sendBinary(msg->str).success;
                   Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> forwarded (success=%s)",
-                      info.success ? "true" : "false");
+                      sent ? "true" : "false");
                 } else {
-                  pair->remoteWs->sendText(msg->str);
+                  sent = pair->remoteWs->sendText(msg->str).success;
+                }
+                if (!sent || remoteState != ix::ReadyState::Open) {
+                  Log(EchoVR::LogLevel::Warning,
+                      "[NEVR.WS] game->server message NOT delivered: conn=%d (%s) send_success=%s "
+                      "remote_state=%s bytes=%zu — the remote session is gone; the game will wait "
+                      "on this request indefinitely",
+                      pair->connIdx, ConnLabel(pair->connIdx), sent ? "true" : "false",
+                      RemoteStateName(remoteState), msg->str.size());
                 }
               } else {
                 pair->pendingToRemote.push_back(msg->str);
