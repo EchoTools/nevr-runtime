@@ -380,6 +380,12 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowO
 
     const std::string loginUrl = std::string(kDeviceLoginUrl) + "?code=" + code;
     const intptr_t browserResult = ops.openBrowser(loginUrl);
+    // The code is a credential for this session, so the log says where the browser was sent and
+    // what the open returned, with the code masked (ShellExecute reports success above 32).
+    log(EchoVR::LogLevel::Info,
+        std::string("[NEVR.AUTH] browser open requested url=") + kDeviceLoginUrl + "?code=<" +
+            std::to_string(code.size()) + " chars masked> shellexecute_result=" + std::to_string(browserResult) +
+            (browserResult <= 32 ? " (failed)" : " (accepted)"));
     int uiResult = 1;
     if (browserResult <= 32) {
         uiResult = ops.showOpenFailure(code, kDeviceLoginUrl, browserResult);
