@@ -115,7 +115,11 @@ std::optional<LoginFailureDiagnostic> ReadLoginFailureDiagnostic(const std::stri
 // RedirectServiceUrl rewrites this to "ws://localhost:PORT" when the proxy is active.
 // The game's CWebSocket connects to the local server — no TLS needed.
 
-static std::unique_ptr<ix::WebSocketServer> g_server;
+// The ix objects below are deliberately never destroyed: a static destructor runs at
+// DLL_PROCESS_DETACH under the loader lock, and ix::WebSocket/WebSocketServer destructors stop and
+// join their worker threads there. Each holder is a leaked heap object so process exit skips them
+// (the OS reclaims the sockets); StopWebSocketBridgeListener is the real stop.
+static std::unique_ptr<ix::WebSocketServer>& g_server = *new std::unique_ptr<ix::WebSocketServer>();
 static std::string g_remoteUri;
 static uint16_t g_proxyPort = 0;
 static bool g_bridgeEnabled = false;
@@ -155,7 +159,7 @@ static const char* RemoteStateName(ix::ReadyState state) {
 
 static std::mutex g_pairsMutex;
 static std::atomic<int> g_connectionCount{0};  // tracks connection order (0=config, 1+=login)
-static std::unordered_map<ix::WebSocket*, std::unique_ptr<ProxyPair>> g_pairs;
+static auto& g_pairs = *new std::unordered_map<ix::WebSocket*, std::unique_ptr<ProxyPair>>();
 
 // Connection index of a game-side websocket (-1 when unknown), for log lines.
 static int ConnIdxOfGameWs(ix::WebSocket* gameWs) {
@@ -169,7 +173,7 @@ static int ConnIdxOfGameWs(ix::WebSocket* gameWs) {
 // The original game multiplexes config/login/matchmaker on one WS to one server;
 // Nakama correlates matchmaker allocations by session, so the matchmaker must
 // use the same authenticated session as login.
-static std::shared_ptr<ix::WebSocket> g_loginRemoteWs;
+static std::shared_ptr<ix::WebSocket>& g_loginRemoteWs = *new std::shared_ptr<ix::WebSocket>();
 
 // The active game-side WS that should receive server→game messages from the
 // login remote. Initially conn=1 (login), swapped to conn=2 (matchmaker) when
@@ -1314,7 +1318,7 @@ void InstallWebSocketBridge() {
     std::mt19937 matchGen(matchRd());
     std::uniform_int_distribution<uint16_t> matchDist(49152, 65535);
 
-    static std::unique_ptr<ix::WebSocketServer> s_matchServer;
+    static std::unique_ptr<ix::WebSocketServer>& s_matchServer = *new std::unique_ptr<ix::WebSocketServer>();  // leaked, see g_server
     bool matchBound = false;
     for (int attempt = 0; attempt < kMaxMatchBindAttempts; ++attempt) {
       uint16_t tryPort = matchDist(matchGen);
