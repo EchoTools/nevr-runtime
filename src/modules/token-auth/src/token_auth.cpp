@@ -6,6 +6,7 @@
  * parents, so the N94 verify sensor pins those nine lines at Debug instead. */
 
 #include "token_auth.h"
+#include "core/curl_global.h"
 #include "device_poll_response.h"
 #include "extension/module_interface.h"
 #include "abi/echovr_functions.h"
@@ -206,6 +207,7 @@ bool DeviceAuth::SaveToken() {
 }
 
 std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string& body) {
+    nevr::EnsureCurlGlobalInit();
     CURL* curl = curl_easy_init();
     if (!curl) return "";
 

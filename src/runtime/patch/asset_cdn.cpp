@@ -1,4 +1,5 @@
 #include "runtime/patch/asset_cdn.h"
+#include "core/curl_global.h"
 
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
@@ -506,7 +507,7 @@ void AssetCDN::Initialize() {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.CDN] Loadout_ResolveDataFromId hook installed at %p — CDN tint override active", target);
 
-    curl_global_init(CURL_GLOBAL_DEFAULT);
+    nevr::EnsureCurlGlobalInit();
     StartBackgroundFetch();
 }
 
@@ -541,7 +542,6 @@ void AssetCDN::Shutdown() {
     g_fetchState.store(FetchState::Idle);
     g_shutdownRequested.store(false);
 
-    curl_global_cleanup();
     Log(EchoVR::LogLevel::Info, "[NEVR.CDN] shutdown complete hook_removed=%s",
         hookWasInstalled ? "true" : "false");
 }
@@ -602,6 +602,7 @@ bool AssetCDN::IsCached(const std::string& filename) {
 }
 
 bool AssetCDN::FetchManifest() {
+    nevr::EnsureCurlGlobalInit();
     CURL* curl = curl_easy_init();
     if (!curl) {
         Log(EchoVR::LogLevel::Error, "[NEVR.CDN] curl_easy_init failed");
@@ -709,6 +710,7 @@ bool AssetCDN::FetchManifest() {
 
 bool AssetCDN::DownloadPackage(const std::string& url, const std::string& dest_path,
                                 const std::string& expected_sha256) {
+    nevr::EnsureCurlGlobalInit();
     CURL* curl = curl_easy_init();
     if (!curl) {
         Log(EchoVR::LogLevel::Error, "[NEVR.CDN] curl_easy_init failed for package download url=%s",
