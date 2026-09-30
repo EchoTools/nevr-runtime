@@ -1,49 +1,30 @@
-# Audit Artifacts — durable findings from scratch/
+# Audit Artifacts — retired records
 
-These files were recovered from `/var/tmp/work-nevr-runtime/` (tmpfs) during
-the 2026-07-23 durable-audits sweep (C9). They represent load-bearing audit
-findings paid for in real debugging time. Moving them into repo history ensures
-they survive tmpfs sweeps and are discoverable by future agents.
+No audit record lives in the tree any more. Each was checked against the code it
+described; what was still open became a GitHub issue, and the record was removed.
+A deleted file is not a lost file: `git show <sha>:<path>` returns its exact bytes,
+so a citation is sufficient and keeping a stale copy is not required. Every command
+below was run and returned the document before it was written here.
 
-## Artifacts
+| File | Retrieve with | Open findings went to |
+|------|---------------|-----------------------|
+| `ctrlc-shutdown-audit.md` — CTRL+C to port-zombie causal chain (N13, N37-N39) | `git show 6ffc3bb74283f26d8d418633bc2cbe85e51f2a5b:docs/audits/ctrlc-shutdown-audit.md` | none (resolved) |
+| `bridge-port-audit.md` — every site referencing the ws_bridge listen port | `git show 6ffc3bb74283f26d8d418633bc2cbe85e51f2a5b:docs/audits/bridge-port-audit.md` | none (resolved) |
+| `recon-owner-bug-batch-RESULTS.md` — 19-item owner bug batch validation (2026-07-22) | `git show 94a24a16b67ca21e39cab2cd2b49f8914c1c93ab:docs/audits/recon-owner-bug-batch-RESULTS.md` | #48 (log-consistency leftovers) |
+| `2026-09-26-runtime-bug-hunt.md` — 35-finding static review at `1eb93be` | `git show f94be4168caf22fb79a3fee9e8c668b588618760:docs/audits/2026-09-26-runtime-bug-hunt.md` | #37, #38, #39, #40, #41, #45, #46 |
+| `fable-consistency-hunt-2026-07-23.md` — ranked consistency/quality ledger (its High findings became N54-N58) | `git show 2b99d0e21f3705561a6d43b7336ca03ac67afd5c:docs/audits/fable-consistency-hunt-2026-07-23.md` | #42, #43, #44, #47, #48, #49 |
 
-| File | Date | Description |
-|------|------|-------------|
-| `fable-consistency-hunt-2026-07-23.md` | 2026-07-23 | Ranked consistency/quality ledger; its High findings became N54-N58 |
+Retired findings that were not filed, and why:
 
-### Removed, and where to read them
+- Bug-hunt `loader-lock-bootstrap` — the deliberate N43 loader-lock exception.
+- Bug-hunt `unsigned-release-accepted` — release packages require signing; local unsigned development is an owner decision.
+- Bug-hunt `native-windows-gate-optional` — the native VM gate stays separate by owner decision.
+- Fable B5, B7, B8 — marked STALE by the ledger itself (mitigated or guarded).
 
-Deleted in `e30efee` ("release cleanup"). The table above claimed both for days
-after they were gone, because `tools/verify_doc_paths.py` deliberately does not
-scan this directory — so nothing checked the index against the disk.
+## Reading an old citation
 
-A deleted file is not a lost file. `git show <sha>:<path>` returns its exact
-bytes, which is why a citation is sufficient and keeping a stale copy is not
-required:
-
-| File | Retrieve with |
-|------|---------------|
-| `ctrlc-shutdown-audit.md` — CTRL+C to port-zombie causal chain (N13, N37-N39) | `git show 6ffc3bb74283f26d8d418633bc2cbe85e51f2a5b:docs/audits/ctrlc-shutdown-audit.md` |
-| `bridge-port-audit.md` — every site referencing the ws_bridge listen port | `git show 6ffc3bb74283f26d8d418633bc2cbe85e51f2a5b:docs/audits/bridge-port-audit.md` |
-| `recon-owner-bug-batch-RESULTS.md` — 19-item owner bug batch validation (2026-07-22); removed 2026-09-30 after every defect it recorded was checked against HEAD and found fixed or not a defect | `git show 94a24a16b67ca21e39cab2cd2b49f8914c1c93ab:docs/audits/recon-owner-bug-batch-RESULTS.md` |
-
-Both commands were run and verified to return the documents before this table
-was written. An unverified citation is worse than none — it looks like evidence.
-
-## These records are IMMUTABLE — including their paths
-
-An audit states what was measured on a date. Its `file:line` citations describe
-the tree **as it was then**, so updating them to today's layout does not modernise
-the record, it falsifies it: the reader gets a current path paired with a line
-number from months ago, and both halves look authoritative.
-
-This is not hypothetical. On 2026-07-29 the N108/N109 reorganisation's mechanical
-path rewriter processed this directory and changed 21 citations across two records
-(`src/gamepatches/...` -> `src/runtime/...`, `src/common/...` -> `src/core/...`).
-Reverted in the same session; `just verify` now fails if post-reorg paths reappear
-in a pre-reorg record.
-
-If you need to follow an old citation, use this mapping rather than editing the record:
+The records cite the tree as it was when measured. To follow a pre-2026-07-29
+citation, map the path rather than editing anything:
 
 | Cited as (pre-2026-07-29) | Now |
 |---|---|
@@ -60,24 +41,3 @@ If you need to follow an old citation, use this mapping rather than editing the 
 | `src/common/{logging,globals,base64,hooking,auth_token,pch}.*` | `src/core/*` |
 | `src/common/{echovr,echovr_functions,symbols,symbol_hash}.*` | `src/abi/*` |
 | `src/common/nevr_{plugin,module}_interface.h` | `src/extension/{plugin,module}_interface.h` |
-
-## Generation context
-
-All four artifacts were produced during the Waves A-C workstream (2026-07-20
-through 2026-07-23), which resolved the headless DXGI rejection blocker and
-established the server registration/CTRL+C teardown audit trails. They were
-originally written to the scratch directory per the onboarding conventions
-(RULINGS.md 2026-07-20 "Scratch dir (nevr)").
-
-## Exclusions
-
-The following were intentionally NOT copied — they are ephemeral queries/briefs
-whose value was consumed during the work:
-
-- `campaign-brief-*` — transient tasking briefs
-- `handoff-to-spritz-*` — session handoff notes
-- `verify-*` — per-run verification output, not findings
-- `worktree-check.md` — temporary check artifact
-- `q-*` files — one-shot query fragments
-- `*.patch` files — already applied or discarded
-- Configuration extracts (`cfg*.txt`, `*.txt` extracts)

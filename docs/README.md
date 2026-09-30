@@ -37,8 +37,6 @@ Coding and verification standards that bind all work in this repo.
 
 ## Audits
 
-Dated, immutable records of specific investigations. Do not modify -- these are historical evidence.
-
-| File | Description | Audience |
-| ---- | ----------- | -------- |
-| `fable-consistency-hunt-2026-07-23.md` | Fable model consistency audit across the codebase | Historical record |
+No audit records are kept in the tree. Findings that were still open when the
+records were retired are tracked as GitHub issues; `audits/README.md` lists each
+retired record with the `git show <sha>:<path>` command that returns it.
