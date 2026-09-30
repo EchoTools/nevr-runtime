@@ -28,6 +28,7 @@ set(PATCHES_SOURCES
     "patch/resource_override.cpp"
     "compat/winhttp_stub.cpp"
     "compat/ws_bridge.cpp"
+    "compat/social_names.cpp"
     "patch/xpid_patch.cpp"
     "frame/tick.cpp"
     "patch/binary_bug_fixes.cpp"
@@ -141,8 +142,9 @@ find_package(CURL REQUIRED)
 find_package(ixwebsocket CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(miniupnpc CONFIG REQUIRED)
+find_package(zstd CONFIG REQUIRED)  # the friend-name lookup decodes the profile reply (compat/social_names.cpp)
 
-target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 platform_compat token_auth ole32)
+target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 platform_compat token_auth ole32)
 
 # yaml-cpp backs src/core/nevr_config (compiled into nevr_core as an archive with
 # unresolved yaml symbols). The DLL is where those symbols get resolved — this is
@@ -151,7 +153,7 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version CURL::libcu
 target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(ws_bridge.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(ws_bridge.cpp compat/social_names.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
 # test can link it) and service_config.cpp (defines NOMINMAX before windows.h, as
 # the core PCH pulls windows.h WITHOUT NOMINMAX and its min/max macros break
@@ -403,13 +405,14 @@ if(BUILD_TESTING)
 
     add_executable(test_social_facade
       tests/test_social_facade.cpp
-      patch/social_facade_object.cpp)
+      patch/social_facade_object.cpp
+      compat/social_names.cpp)
     target_compile_definitions(test_social_facade PRIVATE NEVR_TEST_HOOKS USE_MINHOOK)
-    set_source_files_properties(tests/test_social_facade.cpp patch/social_facade_object.cpp
+    set_source_files_properties(tests/test_social_facade.cpp patch/social_facade_object.cpp compat/social_names.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_social_facade PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_social_facade PRIVATE
-      GTest::gtest GTest::gtest_main nevr_core minhook)
+      GTest::gtest GTest::gtest_main nevr_core minhook zstd::libzstd nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_social_facade DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp)

@@ -1,4 +1,5 @@
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
 #include "runtime/hook/symbol_corpus.h"
@@ -221,22 +222,48 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
     memcpy(&sym, p + 8, 8);
     memcpy(&len, p + 16, 8);
     if (len > remaining - 24) return;  // truncated or corrupt frame: stop, never read past it
-    const char* name = EchoVR::LookupSymbolName(sym);
+    const bool fromServer = strcmp(direction, "server->game") == 0;
+    const uint8_t* payload = p + 24;
+    // A display name arrives in a profile reply, whichever side asked for it (the game asks when a
+    // friend is opened; the runtime asks for each friend, below).
+    if (fromServer && sym == SocialNames::kProfileSuccess) {
+      uint64_t accountId = 0;
+      std::string displayName;
+      if (SocialNames::DecodeProfile(payload, static_cast<size_t>(len), &accountId, &displayName)) {
+        SocialRoster::Global().SetName(accountId, displayName);
+      }
+    }
+    // Party symbols come from our own verified tables: the game's symbol table has no names for the
+    // party replies and mislabels the create hash, so it is the fallback, not the first choice.
+    const char* gameName = EchoVR::LookupSymbolName(sym);
+    const char* name = SocialParty::RequestName(sym);
+    if (name == nullptr) name = SocialParty::ReplyName(sym);
+    if (name == nullptr) name = gameName;
     if (name != nullptr && (strstr(name, "Friend") != nullptr || strstr(name, "Party") != nullptr ||
                             strstr(name, "Social") != nullptr)) {
       Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s payload_bytes=%llu", direction, connIdx,
           name, static_cast<unsigned long long>(len));
-      if (strcmp(direction, "server->game") == 0) {
-        SocialRoster::Feed(SocialRoster::Global(), name, p + 24, static_cast<size_t>(len));
-        // Party messages update the facade's party; any requests that were waiting on the reply
-        // (invites queued behind the party's creation) go out now. This runs on the remote's
-        // callback thread outside g_pairsMutex, and SendFrameToServer takes it itself.
-        std::vector<SocialParty::Message> outgoing;
-        const uint64_t nowSeconds = static_cast<uint64_t>(std::time(nullptr));
-        if (SocialParty::Global().Feed(name, p + 24, static_cast<size_t>(len), nowSeconds, &outgoing) &&
-            !outgoing.empty()) {
-          SocialParty::Send(outgoing);
+    }
+    if (fromServer) {
+      if (gameName != nullptr) {
+        SocialRoster::Feed(SocialRoster::Global(), gameName, payload, static_cast<size_t>(len));
+        // The friends the server names get a name lookup, once each per session.
+        uint64_t friendId = 0;
+        uint8_t status = 0;
+        if (strcmp(gameName, "FriendStatusNotify") == 0 &&
+            SocialRoster::ParseStatusNotify(payload, static_cast<size_t>(len), &friendId, &status)) {
+          const std::vector<SocialParty::Message> asks = SocialNames::GlobalResolver().Want(friendId);
+          if (!asks.empty()) SocialParty::Send(asks);
         }
+      }
+      // Party messages update the facade's party; any requests that were waiting on the reply
+      // (invites queued behind the party's creation) go out now. This runs on the remote's
+      // callback thread outside g_pairsMutex, and SendFrameToServer takes it itself.
+      std::vector<SocialParty::Message> outgoing;
+      const uint64_t nowSeconds = static_cast<uint64_t>(std::time(nullptr));
+      if (SocialParty::Global().Feed(sym, payload, static_cast<size_t>(len), nowSeconds, &outgoing) &&
+          !outgoing.empty()) {
+        SocialParty::Send(outgoing);
       }
     }
     p += 24 + len;

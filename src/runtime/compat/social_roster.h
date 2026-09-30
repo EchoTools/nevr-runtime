@@ -82,7 +82,9 @@ class Roster {
     std::lock_guard<std::mutex> guard(mutex_);
     const bool online = status == kStatusOnline || status == kStatusBusy;
     if (pendingActive_) {
+      const bool known = Has(pending_, id);
       Upsert(pending_, id, online);
+      if (!known) KeepName(pending_, id);  // a refresh must not turn a known name back into an id
       PublishLocked(pending_);
       return;
     }
@@ -135,6 +137,23 @@ class Roster {
 
  private:
   static constexpr std::size_t kRetired = 8;
+
+  static bool Has(const std::vector<Entry>& list, std::uint64_t id) {
+    for (const Entry& entry : list)
+      if (entry.id == id) return true;
+    return false;
+  }
+
+  /// Carries the name the live roster already has for `id` into a list being rebuilt.
+  void KeepName(std::vector<Entry>& list, std::uint64_t id) const {
+    if (!current_) return;
+    for (const Entry& old : current_->entries) {
+      if (old.id != id) continue;
+      for (Entry& entry : list)
+        if (entry.id == id) entry.name = old.name;
+      return;
+    }
+  }
 
   static void Upsert(std::vector<Entry>& list, std::uint64_t id, bool online) {
     for (Entry& entry : list) {

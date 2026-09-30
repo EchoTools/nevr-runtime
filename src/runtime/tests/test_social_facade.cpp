@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 
+#include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
 #include "runtime/patch/social_facade.h"
@@ -346,13 +347,83 @@ std::string U64s(std::initializer_list<std::uint64_t> values) {
 
 bool FeedParty(SocialParty::State& state, const char* name, const std::string& payload,
                std::vector<SocialParty::Message>* out = nullptr) {
-  return state.Feed(name, reinterpret_cast<const std::uint8_t*>(payload.data()), payload.size(), 1000, out);
+  return state.Feed(SocialParty::ReplySymbol(name), reinterpret_cast<const std::uint8_t*>(payload.data()),
+                    payload.size(), 1000, out);
 }
 
 std::uint64_t LastU64(const std::string& payload) {
   std::uint64_t v = 0;
   for (int i = 7; i >= 0; --i) v = (v << 8) | static_cast<std::uint8_t>(payload[payload.size() - 8 + i]);
   return v;
+}
+
+TEST(SocialParty, TheReplyTableNamesEachHashTheServerSends) {
+  EXPECT_STREQ(SocialParty::ReplyName(0x0b7ac20124523993ULL), "PartyCreateSuccess");
+  EXPECT_STREQ(SocialParty::ReplyName(0x218f721f09026dabULL), "PartyInviteNotify");
+  EXPECT_EQ(SocialParty::ReplyName(0x0b7bd21332523994ULL), nullptr) << "that is our own create request";
+  EXPECT_STREQ(SocialParty::RequestName(SocialParty::kCreateRequest), "PartyCreateRequest");
+  EXPECT_EQ(SocialParty::ReplySymbol("PartyJoinSuccess"), 0xb57a32de4552e00bULL);
+  EXPECT_EQ(SocialParty::ReplySymbol("Nope"), 0u);
+  std::size_t count = 0;
+  SocialParty::ReplyTable(&count);
+  EXPECT_EQ(count, 28u);
+}
+
+// A real zstd frame (zstd CLI) of {"displayname":"Bob","x":1}, in a profile reply's shape.
+std::string ProfileReply(std::uint64_t accountId, const std::string& frame) {
+  std::string payload;
+  SocialParty::AppendLe(payload, SocialNames::kPlatformOvrOrg, 8);
+  SocialParty::AppendLe(payload, accountId, 8);
+  SocialParty::AppendLe(payload, 27, 4);  // the length word the server writes before the stream
+  return payload + frame;
+}
+
+const unsigned char kBobFrame[] = {0x28, 0xb5, 0x2f, 0xfd, 0x04, 0x58, 0xd9, 0x00, 0x00, 0x7b, 0x22, 0x64, 0x69, 0x73,
+                                   0x70, 0x6c, 0x61, 0x79, 0x6e, 0x61, 0x6d, 0x65, 0x22, 0x3a, 0x22, 0x42, 0x6f, 0x62,
+                                   0x22, 0x2c, 0x22, 0x78, 0x22, 0x3a, 0x31, 0x7d, 0xb4, 0xfb, 0x07, 0x17};
+
+TEST(SocialNames, ADisplayNameIsReadFromAProfileReply) {
+  ASSERT_NE(SocialNames::DecoderSlot().load(), nullptr) << "social_names.cpp registers the decoder";
+  const std::string reply =
+      ProfileReply(695081603180789771ULL, std::string(reinterpret_cast<const char*>(kBobFrame), sizeof(kBobFrame)));
+  std::uint64_t id = 0;
+  std::string name;
+  ASSERT_TRUE(SocialNames::DecodeProfile(reinterpret_cast<const std::uint8_t*>(reply.data()), reply.size(), &id, &name));
+  EXPECT_EQ(id, 695081603180789771ULL);
+  EXPECT_EQ(name, "Bob");
+
+  // A truncated frame, a frame that is not zstd, and a reply too short to hold the header all fail.
+  const std::string cut = ProfileReply(1, std::string(reinterpret_cast<const char*>(kBobFrame), 12));
+  EXPECT_FALSE(SocialNames::DecodeProfile(reinterpret_cast<const std::uint8_t*>(cut.data()), cut.size(), &id, &name));
+  const std::string junk = ProfileReply(1, "not a zstd frame at all");
+  EXPECT_FALSE(SocialNames::DecodeProfile(reinterpret_cast<const std::uint8_t*>(junk.data()), junk.size(), &id, &name));
+  EXPECT_FALSE(SocialNames::DecodeProfile(reinterpret_cast<const std::uint8_t*>(reply.data()), 10, &id, &name));
+}
+
+TEST(SocialNames, TheRequestIsTheGamesOwnProfileRequestAndIsSentOncePerFriend) {
+  const SocialParty::Message request = SocialNames::BuildProfileRequest(0x1122334455667788ULL);
+  EXPECT_EQ(request.symbol, 0x1231172031050cb2ULL);
+  ASSERT_EQ(request.payload.size(), 16u + 3u);
+  EXPECT_EQ(static_cast<std::uint8_t>(request.payload[0]), 4) << "the platform the game logs in as";
+  EXPECT_EQ(static_cast<std::uint8_t>(request.payload[8]), 0x88);
+  EXPECT_EQ(request.payload.substr(16), std::string("{}\0", 3));
+
+  SocialNames::Resolver resolver;
+  EXPECT_EQ(resolver.Want(5).size(), 1u);
+  EXPECT_TRUE(resolver.Want(5).empty()) << "already asked";
+  EXPECT_TRUE(resolver.Want(0).empty());
+  resolver.Reset();
+  EXPECT_EQ(resolver.Want(5).size(), 1u);
+}
+
+TEST(SocialRoster, ARefreshKeepsANameTheRosterAlreadyHas) {
+  SocialRoster::Roster roster;
+  roster.BeginList(1);
+  roster.Notify(9, SocialRoster::kStatusOnline);
+  roster.SetName(9, "Nine");
+  roster.BeginList(1);
+  roster.Notify(9, SocialRoster::kStatusOnline);
+  EXPECT_STREQ(roster.NameAt(0), "Nine") << "a refresh must not turn a known name back into an id";
 }
 
 TEST(SocialParty, HashesMatchTheReferenceVectors) {
@@ -592,7 +663,8 @@ TEST(SocialParty, LeavingSendsTheRequestAndClearsTheParty) {
 TEST(SocialParty, OnlyPartyMessagesAreHandled) {
   SocialParty::State state;
   EXPECT_FALSE(FeedParty(state, "FriendStatusNotify", U64s({1, 2})));
-  EXPECT_FALSE(state.Feed(nullptr, nullptr, 0, 0, nullptr));
+  EXPECT_FALSE(state.Feed(0, nullptr, 0, 0, nullptr));
+  EXPECT_FALSE(FeedParty(state, "NotARealMessage", U64s({1, 2}))) << "an unknown symbol is not a party message";
   EXPECT_TRUE(FeedParty(state, "PartyLeaveSuccess", std::string(1, '\0'))) << "a reply with nothing to show";
   EXPECT_TRUE(state.DrainEvents().empty());
 }

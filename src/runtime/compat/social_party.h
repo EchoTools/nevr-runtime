@@ -41,6 +41,68 @@ constexpr std::uint64_t kKickRequest = 0xfaf57beb59917d64ULL;
 constexpr std::uint64_t kPassRequest = 0x518543cd886a6946ULL;
 constexpr std::uint64_t kInviteResponse = 0xe3654a09203555a3ULL;  // SNSPartyRespondToInviteRequest
 
+// Server replies and notifies (evrcat -reverse of the SNS names; the game's own symbol table has no
+// names for these, so dispatch is by hash).
+struct SymbolName {
+  std::uint64_t symbol;
+  const char* name;  // without the SNS prefix
+};
+
+inline const SymbolName* ReplyTable(std::size_t* count) {
+  static const SymbolName kTable[] = {
+      {0x0b7ac20124523993ULL, "PartyCreateSuccess"},   {0x0b6fd60b2b423885ULL, "PartyCreateFailure"},
+      {0xb57a32de4552e00bULL, "PartyJoinSuccess"},     {0xb56f26d44a42e11dULL, "PartyJoinFailure"},
+      {0xcc38103e64879e53ULL, "PartyJoinNotify"},      {0xb77a1bf5bf4a9fb1ULL, "PartyLeaveSuccess"},
+      {0xb76f0fffb05a9ea7ULL, "PartyLeaveFailure"},    {0x05315abefc8f804bULL, "PartyLeaveNotify"},
+      {0xfaf46bf94f917d63ULL, "PartyKickSuccess"},     {0xfae17ff340817c75ULL, "PartyKickFailure"},
+      {0x28cb04891f93dc81ULL, "PartyKickNotify"},      {0x518453df9e6a6941ULL, "PartyPassSuccess"},
+      {0x519147d5917a6857ULL, "PartyPassFailure"},     {0x9d946c88d5a8aca5ULL, "PartyPassNotify"},
+      {0xc2469ab66ff3e16dULL, "PartyLockSuccess"},     {0xc2538ebc60e3e07bULL, "PartyLockFailure"},
+      {0x93a6b1a6cd4ef8ddULL, "PartyLockNotify"},      {0x5a4f899239a3d703ULL, "PartyUnlockSuccess"},
+      {0x5a5a9d9836b3d615ULL, "PartyUnlockFailure"},   {0xd8cfd3795010481fULL, "PartyUnlockNotify"},
+      {0x218f721f09026dabULL, "PartyInviteNotify"},    {0x685a5fb8447b1155ULL, "PartyInviteListResponse"},
+      {0xdee671b237a5278dULL, "PartyUpdateSuccess"},   {0xdef365b838b5269bULL, "PartyUpdateFailure"},
+      {0x23c834cb3bc6ecf5ULL, "PartyUpdateNotify"},    {0x4edffb9fc8cc8731ULL, "PartyUpdateMemberSuccess"},
+      {0x4ecaef95c7dc8627ULL, "PartyUpdateMemberFailure"}, {0x451eb6ca40dde289ULL, "PartyUpdateMemberNotify"},
+  };
+  *count = sizeof(kTable) / sizeof(kTable[0]);
+  return kTable;
+}
+
+inline const char* ReplyName(std::uint64_t symbol) {
+  std::size_t count = 0;
+  const SymbolName* table = ReplyTable(&count);
+  for (std::size_t i = 0; i < count; ++i)
+    if (table[i].symbol == symbol) return table[i].name;
+  return nullptr;
+}
+
+inline std::uint64_t ReplySymbol(const char* name) {
+  std::size_t count = 0;
+  const SymbolName* table = ReplyTable(&count);
+  for (std::size_t i = 0; i < count; ++i)
+    if (name != nullptr && std::strcmp(table[i].name, name) == 0) return table[i].symbol;
+  return 0;
+}
+
+/// The name of one of our own requests, for logs (the game's table mislabels the create hash).
+inline const char* RequestName(std::uint64_t symbol) {
+  switch (symbol) {
+    case kCreateRequest: return "PartyCreateRequest";
+    case kJoinRequest: return "PartyJoinRequest";
+    case kLeaveRequest: return "PartyLeaveRequest";
+    case kInviteRequest: return "PartyInviteRequest";
+    case kLockRequest: return "PartyLockRequest";
+    case kUnlockRequest: return "PartyUnlockRequest";
+    case kInviteListRefreshRequest: return "PartyInviteListRefreshRequest";
+    case kKickRequest: return "PartyKickRequest";
+    case kPassRequest: return "PartyPassRequest";
+    case kInviteResponse: return "PartyInviteResponse";
+    case kFriendListRefreshRequest: return "FriendListRefreshRequest";
+    default: return nullptr;
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Wire building
 // ---------------------------------------------------------------------------------------------
@@ -319,14 +381,13 @@ class State {
     return out;
   }
 
-  /// Feeds one server->game message. `name` is the symbol name as the game's symbol table returns
-  /// it (no "SNS" prefix). Returns true for a party message; requests to send in reply (the
+  /// Feeds one server->game message by its symbol hash. Returns true for a party message; requests to send in reply (the
   /// invites that waited for the party to exist) are appended to `outgoing`.
-  bool Feed(const char* name, const std::uint8_t* payload, std::size_t len, std::uint64_t now,
+  bool Feed(std::uint64_t symbol, const std::uint8_t* payload, std::size_t len, std::uint64_t now,
             std::vector<Message>* outgoing) {
+    const char* name = ReplyName(symbol);
     if (name == nullptr || payload == nullptr) return false;
     const std::string n(name);
-    if (n.rfind("Party", 0) != 0) return false;
     std::lock_guard<std::mutex> guard(mutex_);
     const auto u64 = [&](std::size_t off) -> std::uint64_t {
       std::uint64_t v = 0;
