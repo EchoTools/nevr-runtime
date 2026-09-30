@@ -5,6 +5,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <type_traits>
 #include <vector>
 
 #include "abi/echovr.h"
@@ -525,19 +526,10 @@ void EnterLobby(void* self, const void* uuid, std::uint64_t matchType, std::uint
   std::memcpy(Bytes(self) + 0x27C, &flags, sizeof(flags));
 }
 
-// Slots the facade does not implement still answer, and say so the first few times the game calls
-// one, with the three integer argument registers (the pointer is `this`; the rest may be unused).
-template <std::size_t SlotIndex>
-std::uint64_t LoggedStub(void*, std::uint64_t a, std::uint64_t b) {
-  static std::atomic<std::uint32_t> calls{0};
-  const std::uint32_t count = calls.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (count <= 3) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade stub slot=%zu offset=0x%zx call_count=%u args=%llx,%llx",
-        SlotIndex, SlotIndex * sizeof(Slot), count, static_cast<unsigned long long>(a),
-        static_cast<unsigned long long>(b));
-  }
-  return 0;
-}
+// Slots the facade does not implement still answer (zero). Their calls are logged by the Traced wrapper
+// every slot goes through, with the three integer argument registers (the first is `this`; the rest
+// may be unused).
+std::uint64_t UnimplementedSlot(void*, std::uint64_t, std::uint64_t) { return 0; }
 
 // Slots 32 and 33 are forwarders into EnterLobby in pnsovr (they pass their own registers through).
 // The game calls 32 from LobbySessionSuccessCB with (uuid, matchType, team, lobbyType) and 33 from
@@ -553,85 +545,210 @@ void EnterLobbyRegistration(void* self, const void* uuid, std::uint64_t matchTyp
   std::memcpy(Bytes(self) + 0x270, &matchType, sizeof(matchType));
 }
 
+// Every slot the game can call goes through Traced: it logs the slot, its name, the call number, the
+// argument registers and the result, for the first calls of each slot and then every
+// kTraceEvery-th one, so a run shows exactly which parts of the interface the game uses (the ones
+// polled every frame do not flood the log).
+constexpr std::uint32_t kTraceFirstCalls = 24;
+constexpr std::uint32_t kTraceEvery = 600;
+
+const char* const kSlotNames[kRealVtableSlotCount] = {
+    "SwapMembers",
+    "RemoveMember",
+    "JoinInternal",
+    "LeaveInternal",
+    "JoinableInternal",
+    "SetJoinableInternal",
+    "PushMemberData",
+    "ShareData",
+    "SendInvite",
+    "Initialize",
+    "Shutdown",
+    "destructor/release",
+    "Reset",
+    "Update",
+    "SetLocalUser",
+    "RemoveLocalMember",
+    "SetJoinPolicy",
+    "Leave",
+    "PassOwnership",
+    "Kick",
+    "Ready",
+    "JoinPolicy",
+    "Joinable",
+    "Host",
+    "IsHost",
+    "Id",
+    "MemberCount",
+    "MemberId",
+    "MemberName",
+    "MemberVisible",
+    "MemberDataWritable",
+    "EnterLobby",
+    "EnterLobby forwarder",
+    "EnterLobby forwarder",
+    "ExitLobby",
+    "EnterGame",
+    "ExitGame",
+    "OpenFriendRequestUI",
+    "OpenSendInviteUI",
+    "OpenNewSendInviteUI",
+    "OpenNewSendInviteUI(target)",
+    "OpenRecvInviteUI",
+    "OpenPartyUI",
+    "OpenPartyUI(target)",
+    "RefreshingFriends",
+    "RefreshFriends",
+    "FriendCount",
+    "OnlineFriendCount",
+    "OfflineFriendCount",
+    "FriendId",
+    "FriendName",
+    "FriendStatus",
+    "FriendStatusString",
+    "FriendIsInvitable",
+    "FriendIsJoinable",
+    "FriendPartyId",
+    "RefreshingRecentlyMetUsers",
+    "RefreshRecentlyMetUsers",
+    "RecentlyMetUserCount",
+    "OnlineRecentlyMetUserCount",
+    "OfflineRecentlyMetUserCount",
+    "RecentlyMetUserId",
+    "RecentlyMetUserName",
+    "RecentlyMetUserStatus",
+    "RecentlyMetUserStatusString",
+    "RecentlyMetUserIsInvitable",
+    "RecentlyMetUserIsJoinable",
+    "RecentlyMetUserPartyId",
+    "RefreshingInvites",
+    "RefreshInvites",
+    "InviteCount",
+    "InviteSender",
+    "InviteSentTime",
+    "AcceptInvite",
+    "DismissInvite"
+};
+
+template <typename T>
+std::uint64_t TraceValue(T value) {
+  if constexpr (std::is_pointer_v<T>) return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(value));
+  else return static_cast<std::uint64_t>(value);
+}
+
+template <std::size_t SlotIndex, auto Fn>
+struct Traced;
+
+template <std::size_t SlotIndex, typename R, typename... A, R (*Fn)(A...)>
+struct Traced<SlotIndex, Fn> {
+  static R Call(A... args) {
+    static std::atomic<std::uint32_t> calls{0};
+    const std::uint32_t count = calls.fetch_add(1, std::memory_order_relaxed) + 1;
+    const bool log = count <= kTraceFirstCalls || count % kTraceEvery == 0;
+    std::uint64_t values[sizeof...(A) + 1] = {TraceValue(args)..., 0};
+    if constexpr (std::is_void_v<R>) {
+      Fn(args...);
+      if (log) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] slot=%zu name=%s call=%u args=%llx,%llx,%llx", SlotIndex,
+            kSlotNames[SlotIndex], count, static_cast<unsigned long long>(values[0]),
+            static_cast<unsigned long long>(sizeof...(A) > 1 ? values[1] : 0),
+            static_cast<unsigned long long>(sizeof...(A) > 2 ? values[2] : 0));
+      }
+    } else {
+      const R result = Fn(args...);
+      if (log) {
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] slot=%zu name=%s call=%u args=%llx,%llx,%llx result=%llx", SlotIndex,
+            kSlotNames[SlotIndex], count, static_cast<unsigned long long>(values[0]),
+            static_cast<unsigned long long>(sizeof...(A) > 1 ? values[1] : 0),
+            static_cast<unsigned long long>(sizeof...(A) > 2 ? values[2] : 0),
+            static_cast<unsigned long long>(TraceValue(result)));
+      }
+      return result;
+    }
+  }
+};
+
+#define TRACED(slot, fn) reinterpret_cast<Slot>(&Traced<slot, &fn>::Call)
+
 // Slot order is the 75-entry CNSOVRSocial table at pnsovr.dll 0x1801FC2E0.
 // Each entry has a signature-compatible empty implementation for its return
 // shape; ID wrappers use the Win64 hidden-result-pointer convention.
 const std::array<Slot, kVtableSlotCount> kVtable = {
-    reinterpret_cast<Slot>(&VoidU32U32),  // 00 SwapMembers
-    reinterpret_cast<Slot>(&LoggedStub<1>),     // 01 RemoveMember
-    reinterpret_cast<Slot>(&LoggedStub<2>),       // 02 JoinInternal
-    reinterpret_cast<Slot>(&LoggedStub<3>),       // 03 LeaveInternal
-    reinterpret_cast<Slot>(&LoggedStub<4>),       // 04 JoinableInternal
-    reinterpret_cast<Slot>(&LoggedStub<5>),     // 05 SetJoinableInternal
-    reinterpret_cast<Slot>(&LoggedStub<6>),       // 06 PushMemberData
-    reinterpret_cast<Slot>(&LoggedStub<7>),     // 07 ShareData
-    reinterpret_cast<Slot>(&SendInvite),     // 08 SendInvite
-    reinterpret_cast<Slot>(&Initialize),  // 09 Initialize
-    reinterpret_cast<Slot>(&Shutdown),    // 10 Shutdown
-    reinterpret_cast<Slot>(&Void0),       // 11 destructor/release
-    reinterpret_cast<Slot>(&Reset),       // 12 Reset
-    reinterpret_cast<Slot>(&Update),      // 13 Update
-    reinterpret_cast<Slot>(&SetLocalUser),  // 14 SetLocalUser
-    reinterpret_cast<Slot>(&LoggedStub<15>),     // 15 RemoveLocalMember
-    reinterpret_cast<Slot>(&SetJoinPolicy),     // 16 SetJoinPolicy
-    reinterpret_cast<Slot>(&LeaveParty),       // 17 Leave
-    reinterpret_cast<Slot>(&PassOwnership),     // 18 PassOwnership
-    reinterpret_cast<Slot>(&KickMember),     // 19 Kick
-    reinterpret_cast<Slot>(&Ready),       // 20 Ready
-    reinterpret_cast<Slot>(&JoinPolicy),  // 21 JoinPolicy
-    reinterpret_cast<Slot>(&Joinable),    // 22 Joinable
-    reinterpret_cast<Slot>(&Host),        // 23 Host
-    reinterpret_cast<Slot>(&IsHost),      // 24 IsHost
-    reinterpret_cast<Slot>(&Id),          // 25 Id
-    reinterpret_cast<Slot>(&MemberCount),       // 26 MemberCount
-    reinterpret_cast<Slot>(&MemberId),      // 27 MemberId
-    reinterpret_cast<Slot>(&MemberName),    // 28 MemberName
-    reinterpret_cast<Slot>(&ZeroU32),     // 29 MemberVisible
-    reinterpret_cast<Slot>(&ZeroU32),     // 30 MemberDataWritable
-    reinterpret_cast<Slot>(&EnterLobby),  // 31 EnterLobby
-    reinterpret_cast<Slot>(&EnterLobbySession),     // 32 EnterLobby forwarder (session success)
-    reinterpret_cast<Slot>(&EnterLobbyRegistration),     // 33 EnterLobby forwarder (registration success)
-    reinterpret_cast<Slot>(&Reset),       // 34 ExitLobby
-    reinterpret_cast<Slot>(&LoggedStub<35>),       // 35 EnterGame
-    reinterpret_cast<Slot>(&LoggedStub<36>),       // 36 ExitGame
-    reinterpret_cast<Slot>(&LoggedStub<37>),       // 37 OpenFriendRequestUI
-    reinterpret_cast<Slot>(&LoggedStub<38>),       // 38 OpenSendInviteUI
-    reinterpret_cast<Slot>(&LoggedStub<39>),     // 39 OpenNewSendInviteUI
-    reinterpret_cast<Slot>(&LoggedStub<40>),     // 40 OpenNewSendInviteUI(target)
-    reinterpret_cast<Slot>(&LoggedStub<41>),       // 41 OpenRecvInviteUI
-    reinterpret_cast<Slot>(&LoggedStub<42>),     // 42 OpenPartyUI
-    reinterpret_cast<Slot>(&LoggedStub<43>),     // 43 OpenPartyUI(target)
-    reinterpret_cast<Slot>(&Zero0),       // 44 RefreshingFriends
-    reinterpret_cast<Slot>(&RefreshFriends),       // 45 RefreshFriends
-    reinterpret_cast<Slot>(&FriendCount),  // 46 FriendCount
-    reinterpret_cast<Slot>(&OnlineFriendCount),  // 47 OnlineFriendCount
-    reinterpret_cast<Slot>(&OfflineFriendCount),  // 48 OfflineFriendCount
-    reinterpret_cast<Slot>(&FriendId),     // 49 FriendId
-    reinterpret_cast<Slot>(&FriendName),   // 50 FriendName
-    reinterpret_cast<Slot>(&FriendStatus), // 51 FriendStatus
-    reinterpret_cast<Slot>(&EmptyU32),    // 52 FriendStatusString
-    reinterpret_cast<Slot>(&FriendIsInvitable),  // 53 FriendIsInvitable
-    reinterpret_cast<Slot>(&ZeroU32),     // 54 FriendIsJoinable
-    reinterpret_cast<Slot>(&ZeroU32),     // 55 FriendPartyId
-    reinterpret_cast<Slot>(&Zero0),       // 56 RefreshingRecentlyMetUsers
-    reinterpret_cast<Slot>(&LoggedStub<57>),       // 57 RefreshRecentlyMetUsers
-    reinterpret_cast<Slot>(&Zero0),       // 58 RecentlyMetUserCount
-    reinterpret_cast<Slot>(&Zero0),       // 59 OnlineRecentlyMetUserCount
-    reinterpret_cast<Slot>(&Zero0),       // 60 OfflineRecentlyMetUserCount
-    reinterpret_cast<Slot>(&ZeroId),      // 61 RecentlyMetUserId
-    reinterpret_cast<Slot>(&EmptyU32),    // 62 RecentlyMetUserName
-    reinterpret_cast<Slot>(&ZeroU32),     // 63 RecentlyMetUserStatus
-    reinterpret_cast<Slot>(&EmptyU32),    // 64 RecentlyMetUserStatusString
-    reinterpret_cast<Slot>(&ZeroU32),     // 65 RecentlyMetUserIsInvitable
-    reinterpret_cast<Slot>(&ZeroU32),     // 66 RecentlyMetUserIsJoinable
-    reinterpret_cast<Slot>(&ZeroU32),     // 67 RecentlyMetUserPartyId
-    reinterpret_cast<Slot>(&Zero0),       // 68 RefreshingInvites
-    reinterpret_cast<Slot>(&LoggedStub<69>),       // 69 RefreshInvites
-    reinterpret_cast<Slot>(&InviteCount),       // 70 InviteCount
-    reinterpret_cast<Slot>(&InviteSender),    // 71 InviteSender
-    reinterpret_cast<Slot>(&InviteSentTime),     // 72 InviteSentTime
-    reinterpret_cast<Slot>(&AcceptInvite),     // 73 AcceptInvite
-    reinterpret_cast<Slot>(&DismissInvite),     // 74 DismissInvite
+    TRACED(0, VoidU32U32),  // 00 SwapMembers
+    TRACED(1, UnimplementedSlot),  // 01 RemoveMember
+    TRACED(2, UnimplementedSlot),  // 02 JoinInternal
+    TRACED(3, UnimplementedSlot),  // 03 LeaveInternal
+    TRACED(4, UnimplementedSlot),  // 04 JoinableInternal
+    TRACED(5, UnimplementedSlot),  // 05 SetJoinableInternal
+    TRACED(6, UnimplementedSlot),  // 06 PushMemberData
+    TRACED(7, UnimplementedSlot),  // 07 ShareData
+    TRACED(8, SendInvite),  // 08 SendInvite
+    TRACED(9, Initialize),  // 09 Initialize
+    TRACED(10, Shutdown),  // 10 Shutdown
+    TRACED(11, Void0),  // 11 destructor/release
+    TRACED(12, Reset),  // 12 Reset
+    TRACED(13, Update),  // 13 Update
+    TRACED(14, SetLocalUser),  // 14 SetLocalUser
+    TRACED(15, UnimplementedSlot),  // 15 RemoveLocalMember
+    TRACED(16, SetJoinPolicy),  // 16 SetJoinPolicy
+    TRACED(17, LeaveParty),  // 17 Leave
+    TRACED(18, PassOwnership),  // 18 PassOwnership
+    TRACED(19, KickMember),  // 19 Kick
+    TRACED(20, Ready),  // 20 Ready
+    TRACED(21, JoinPolicy),  // 21 JoinPolicy
+    TRACED(22, Joinable),  // 22 Joinable
+    TRACED(23, Host),  // 23 Host
+    TRACED(24, IsHost),  // 24 IsHost
+    TRACED(25, Id),  // 25 Id
+    TRACED(26, MemberCount),  // 26 MemberCount
+    TRACED(27, MemberId),  // 27 MemberId
+    TRACED(28, MemberName),  // 28 MemberName
+    TRACED(29, ZeroU32),  // 29 MemberVisible
+    TRACED(30, ZeroU32),  // 30 MemberDataWritable
+    TRACED(31, EnterLobby),  // 31 EnterLobby
+    TRACED(32, EnterLobbySession),  // 32 EnterLobby forwarder (session success)
+    TRACED(33, EnterLobbyRegistration),  // 33 EnterLobby forwarder (registration success)
+    TRACED(34, Reset),  // 34 ExitLobby
+    TRACED(35, UnimplementedSlot),  // 35 EnterGame
+    TRACED(36, UnimplementedSlot),  // 36 ExitGame
+    TRACED(37, UnimplementedSlot),  // 37 OpenFriendRequestUI
+    TRACED(38, UnimplementedSlot),  // 38 OpenSendInviteUI
+    TRACED(39, UnimplementedSlot),  // 39 OpenNewSendInviteUI
+    TRACED(40, UnimplementedSlot),  // 40 OpenNewSendInviteUI(target)
+    TRACED(41, UnimplementedSlot),  // 41 OpenRecvInviteUI
+    TRACED(42, UnimplementedSlot),  // 42 OpenPartyUI
+    TRACED(43, UnimplementedSlot),  // 43 OpenPartyUI(target)
+    TRACED(44, Zero0),  // 44 RefreshingFriends
+    TRACED(45, RefreshFriends),  // 45 RefreshFriends
+    TRACED(46, FriendCount),  // 46 FriendCount
+    TRACED(47, OnlineFriendCount),  // 47 OnlineFriendCount
+    TRACED(48, OfflineFriendCount),  // 48 OfflineFriendCount
+    TRACED(49, FriendId),  // 49 FriendId
+    TRACED(50, FriendName),  // 50 FriendName
+    TRACED(51, FriendStatus),  // 51 FriendStatus
+    TRACED(52, EmptyU32),  // 52 FriendStatusString
+    TRACED(53, FriendIsInvitable),  // 53 FriendIsInvitable
+    TRACED(54, ZeroU32),  // 54 FriendIsJoinable
+    TRACED(55, ZeroU32),  // 55 FriendPartyId
+    TRACED(56, Zero0),  // 56 RefreshingRecentlyMetUsers
+    TRACED(57, UnimplementedSlot),  // 57 RefreshRecentlyMetUsers
+    TRACED(58, Zero0),  // 58 RecentlyMetUserCount
+    TRACED(59, Zero0),  // 59 OnlineRecentlyMetUserCount
+    TRACED(60, Zero0),  // 60 OfflineRecentlyMetUserCount
+    TRACED(61, ZeroId),  // 61 RecentlyMetUserId
+    TRACED(62, EmptyU32),  // 62 RecentlyMetUserName
+    TRACED(63, ZeroU32),  // 63 RecentlyMetUserStatus
+    TRACED(64, EmptyU32),  // 64 RecentlyMetUserStatusString
+    TRACED(65, ZeroU32),  // 65 RecentlyMetUserIsInvitable
+    TRACED(66, ZeroU32),  // 66 RecentlyMetUserIsJoinable
+    TRACED(67, ZeroU32),  // 67 RecentlyMetUserPartyId
+    TRACED(68, Zero0),  // 68 RefreshingInvites
+    TRACED(69, UnimplementedSlot),  // 69 RefreshInvites
+    TRACED(70, InviteCount),  // 70 InviteCount
+    TRACED(71, InviteSender),  // 71 InviteSender
+    TRACED(72, InviteSentTime),  // 72 InviteSentTime
+    TRACED(73, AcceptInvite),  // 73 AcceptInvite
+    TRACED(74, DismissInvite),  // 74 DismissInvite
     reinterpret_cast<Slot>(&PaddedSlot<75>),  // 75 guard
     reinterpret_cast<Slot>(&PaddedSlot<76>),  // 76 observed DMO-only dispatch at +0x260
     reinterpret_cast<Slot>(&PaddedSlot<77>),  // 77 guard
