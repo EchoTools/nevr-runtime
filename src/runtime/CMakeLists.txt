@@ -412,6 +412,11 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core minhook)
     gtest_discover_tests(test_social_facade DISCOVERY_MODE PRE_TEST)
 
+    add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp)
+    target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_schannel_cred_guard PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_schannel_cred_guard DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_hooking tests/test_hooking.cpp)
     target_compile_definitions(test_hooking PRIVATE USE_MINHOOK)
     target_include_directories(test_hooking PRIVATE ${CMAKE_SOURCE_DIR}/src)

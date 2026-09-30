@@ -23,6 +23,7 @@
 #include "core/hooking.h"
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
+#include "core/schannel_cred_guard.h"
 #include "core/system_info.h"
 
 // ---------------------------------------------------------------------------
@@ -45,7 +46,7 @@ SECURITY_STATUS SEC_ENTRY AcquireCredentialsHandleWHook(
 
   if (pszPackage != NULL && lstrcmpW(pszPackage, UNISP_NAME_W) == 0 &&
       (fCredentialUse & SECPKG_CRED_OUTBOUND) != 0) {
-    if (pAuthData != NULL) {
+    if (nevr::IsLegacySchannelCred(pAuthData)) {
       SCHANNEL_CRED* schannelCred = (SCHANNEL_CRED*)pAuthData;
       schannelCred->grbitEnabledProtocols = SP_PROT_TLS1_2_CLIENT | 0x00002000;
       schannelCred->dwFlags |= SCH_CRED_NO_DEFAULT_CREDS;
@@ -53,6 +54,13 @@ SECURITY_STATUS SEC_ENTRY AcquireCredentialsHandleWHook(
       schannelCred->dwFlags |= SCH_USE_STRONG_CRYPTO;
       Log(EchoVR::LogLevel::Debug,
           "[NEVR.PATCH] SSL/TLS modernized: Enabled TLS 1.2/1.3 with ECDSA/EdDSA/RSA support");
+    } else if (pAuthData != NULL) {
+      // A SCH_CREDENTIALS (dwVersion 5) is what libcurl's Schannel backend passes; it has a different
+      // layout after dwVersion, so editing it as a SCHANNEL_CRED corrupts the credentials and the
+      // handshake fails (curl_code=35 on native Windows). It already carries its own TLS settings.
+      Log(EchoVR::LogLevel::Debug,
+          "[NEVR.PATCH] Schannel credentials left as given: auth struct dwVersion=%lu is not a SCHANNEL_CRED",
+          static_cast<unsigned long>(nevr::SchannelAuthVersion(pAuthData)));
     }
   }
 
