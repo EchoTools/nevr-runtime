@@ -834,7 +834,7 @@ TEST(BroadcasterHookStats, FormatsMockedLivenessCounters) {
   EXPECT_GT(BroadcasterHookStats::Format(line, sizeof(line), 17, 9), 0);
   EXPECT_STREQ(line,
       "[NEVR.PATCH] broadcaster hook stats listen_entries=17 dispatch_entries=9 "
-      "(N83/N84 evidence — zero entries means idle runs prove nothing)");
+      "(zero entries means idle runs prove nothing)");
 }
 
 // The live counters are translation-unit state in mode_patches.cpp.  They are
@@ -853,7 +853,7 @@ TEST(BroadcasterHookStats, LogsActualZeroInitializedCounters) {
   ASSERT_EQ(g_testLogMessages.size(), 1U);
   EXPECT_EQ(g_testLogMessages.front(),
       "[NEVR.PATCH] broadcaster hook stats listen_entries=0 dispatch_entries=0 "
-      "(N83/N84 evidence — zero entries means idle runs prove nothing)");
+      "(zero entries means idle runs prove nothing)");
 }
 
 // ============================================================================

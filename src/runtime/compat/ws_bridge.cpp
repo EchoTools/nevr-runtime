@@ -1236,7 +1236,7 @@ void StopWebSocketBridgeListener() {
     g_server.reset();
   }
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.WS] listener stopped, %zu remote connection(s) closed — socket released (N105)",
+      "[NEVR.WS] listener stopped, %zu remote connection(s) closed — socket released",
       remotes.size());
 }
 

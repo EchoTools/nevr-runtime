@@ -420,7 +420,7 @@ static void WriteCrashDump(PEXCEPTION_POINTERS ex) {
   const INT64 ripRva = rva(ctx->Rip);
   VehPrintf("[NEVR.CRASH] === CRASH DUMP ===");
   if (const char* site = CrashRecovery::LookupKnownNullDerefSite(ripRva)) {
-    VehPrintf("[NEVR.CRASH] known_site=%s class=session_flags_null_deref ledger=N71 "
+    VehPrintf("[NEVR.CRASH] known_site=%s class=session_flags_null_deref "
               "note=*(this+0x2DA0) dereferenced without a null check",
               site);
   }
@@ -1033,8 +1033,8 @@ void InstallConsoleCtrlHandler() {
   if (signal(SIGINT, PosixSignalHandler) == SIG_ERR) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] SIGINT handler registration failed (signal()) — no effect under Wine "
-        "(SIGINT is delivered via the console ctrl handler there, not the CRT signal table, per "
-        "N87); would block POSIX-path shutdown on native Windows");
+        "(SIGINT is delivered via the console ctrl handler there, not the CRT signal table); "
+        "would block POSIX-path shutdown on native Windows");
   }
   if (signal(SIGTERM, PosixSignalHandler) == SIG_ERR) {
     Log(EchoVR::LogLevel::Warning,
@@ -1118,7 +1118,7 @@ void InstallFatalErrorHandler() {
 void ResolveShutdownDependencies() {
   Log(EchoVR::LogLevel::Info,
       "[NEVR.PATCH] shutdown deps resolved ws_bridge=in-process "
-      "StopWebSocketBridgeListener=direct (no loader lock on the signal path, N62/N105)");
+      "StopWebSocketBridgeListener=direct (no loader lock on the signal path)");
 }
 
 // N62: report from the shutdown path using a transport that is safe for the

@@ -334,7 +334,7 @@ NEVR_MODULE_API int platform_compat_Init(const NvrModuleContext* ctx) {
   if (!httpOk && !isServer) {
     Log(EchoVR::LogLevel::Error,
         "[NEVR.MODULE] WinHTTP bridge NOT installed — the game will use its own "
-        "HTTP stack and may report NoNetwork (N11)");
+        "HTTP stack and may report NoNetwork");
   }
 
   /* N120. This returned 0 — success — no matter how many hooks failed, including
@@ -358,7 +358,7 @@ NEVR_MODULE_API int platform_compat_Init(const NvrModuleContext* ctx) {
     Log(EchoVR::LogLevel::Error,
         "[NEVR.MODULE] platform_compat FAILED on a server (tls=%s winhttp=%s) — "
         "reporting init failure; a server must not run with a degraded network "
-        "stack (N120)",
+        "stack",
         tlsOk ? "ok" : "FAILED", httpOk ? "ok" : "FAILED");
     return 1;
   }
