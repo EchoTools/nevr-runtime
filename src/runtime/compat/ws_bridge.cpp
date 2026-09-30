@@ -208,15 +208,21 @@ static const char* PlatformPrefix(uint64_t platformCode) {
 // been exposed. Empty means "not known", and the caller below sends the account
 // id rather than substituting something that looks like a real name (N115: absent
 // data is visibly absent, invented data is indistinguishable from a reading).
-// Platform code selection: ordered precedence.
-//   1. URL credentials present (nevr_discord_id + nevr_password) → OVR_ORG (3)
-//   2. g_noOvr set (-windowed / -server / -spectatorstream) → DMO (6)
-//   3. Default → DSC (1)
-// Pure function — testable without config or globals.
-static uint64_t SelectPlatformCode(bool hasUrlCredentials, bool noOvr) {
-  if (hasUrlCredentials) return 4;   // OVR_ORG — legacy URL-credential auth
-  if (noOvr)             return 6;   // DMO — demo / no-VR client
-  return 1;                         // DSC — Discord / token auth
+// The platform the bridge logs in as. It MUST equal the provider the bridge forces into the
+// game's own CNSUser (the login-state patch below), because the game then names itself with
+// that platform in every later request (LobbyPlayerSessionsRequest, ...) and Nakama looks the
+// requester up in the match under the platform the LoginRequest carried. Measured 2026-09-30:
+// a token-auth client logged in as platform 6 (DMO) while the game asked for its player
+// sessions as OVR-ORG, and Nakama answered "requesting player not found in match:
+// OVR-ORG-<id>" (the host never accepted the player, the game ended at "Server connection
+// failed"). Platform 4 is what every URL-credential login already sent.
+static constexpr uint64_t kBridgeLoginPlatform = 4;  // OVR_ORG (game numbering)
+
+// Pure function — testable without config or globals. The arguments no longer influence the
+// result: -noovr (DMO, 6) and the token-auth default (DSC, 1) produced an identity the game
+// itself does not use.
+static uint64_t SelectPlatformCode(bool /*hasUrlCredentials*/, bool /*noOvr*/) {
+  return kBridgeLoginPlatform;
 }
 
 // Which Bearer goes on the remote websocket upgrade. The game front's /nevr ingress forwards
@@ -669,7 +675,7 @@ void InstallWebSocketBridge() {
                                   //   patched to DSC by PatchDscProvider string table rewrite)
                                   // +0x9c = state flags (0x04 = connected/logged in)
                                   *accountId  = (int64_t)discordId;
-                                  *loginState = (*loginState & ~0xFULL) | 4;  // OVR_ORG (game numbering)
+                                  *loginState = (*loginState & ~0xFULL) | kBridgeLoginPlatform;  // OVR_ORG (game numbering)
                                   *stateFlags = 0x04;
                                   Log(EchoVR::LogLevel::Info,
                                       "[NEVR.WS] CNSUser login state patched acct=%lld->%lld "

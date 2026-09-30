@@ -758,11 +758,6 @@ TEST(WsBridgePlatformPrefix, EveryDefinedPlatformHasTheNakamaPrefix) {
   EXPECT_STREQ(TestHook_PlatformPrefix(999), "UNK");
 }
 
-// SelectPlatformCode returns the correct wire platform code based on
-// auth mode and VR state.  Ordered precedence:
-//   1. URL credentials → 4 (OVR_ORG) — legacy auth
-//   2. g_noOvr → 6 (DMO) — demo / no-VR client
-//   3. default → 1 (DSC) — Discord / token auth
 // The remote Bearer: a token-auth client sends its JWT; a URL-credential client sends the
 // server key (Nakama treats it as the legacy session and authenticates from discordid/password),
 // both through the /nevr ingress that forwards Authorization unchanged (issue #52).
@@ -778,17 +773,15 @@ TEST(WsBridgeRemoteBearer, UrlCredentialClientSendsTheServerKeyNotTheJwt) {
   EXPECT_EQ(TestHook_SelectRemoteBearer(true, "jwt-value", ""), "");
 }
 
-TEST(WsBridgeSelectPlatform, UrlCredentialsWinsOverNoOvr) {
+// SelectPlatformCode: the bridge always logs in as platform 4 (OVR_ORG), the provider it forces
+// into the game's own CNSUser. A login as platform 6 (DMO, -noovr) made Nakama answer the game's
+// later LobbyPlayerSessionsRequest (sent as OVR-ORG) with "requesting player not found in
+// match", so the game never reached a lobby host.
+TEST(WsBridgeSelectPlatform, AlwaysOvrOrgToMatchTheGamesOwnIdentity) {
   EXPECT_EQ(TestHook_SelectPlatformCode(true, true), 4ULL);
   EXPECT_EQ(TestHook_SelectPlatformCode(true, false), 4ULL);
-}
-
-TEST(WsBridgeSelectPlatform, NoOvrWhenNoUrlCredsIsDmo) {
-  EXPECT_EQ(TestHook_SelectPlatformCode(false, true), 6ULL);
-}
-
-TEST(WsBridgeSelectPlatform, DefaultIsDsc) {
-  EXPECT_EQ(TestHook_SelectPlatformCode(false, false), 1ULL);
+  EXPECT_EQ(TestHook_SelectPlatformCode(false, true), 4ULL);
+  EXPECT_EQ(TestHook_SelectPlatformCode(false, false), 4ULL);
 }
 
 TEST(WsBridgeCallbackGuard, ContainsStdExceptionsAtTheCallbackBoundary) {
