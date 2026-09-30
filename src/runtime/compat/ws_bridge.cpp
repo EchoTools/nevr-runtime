@@ -225,17 +225,7 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
       Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s payload_bytes=%llu", direction, connIdx,
           name, static_cast<unsigned long long>(len));
       if (strcmp(direction, "server->game") == 0) {
-        const uint8_t* payload = p + 24;
-        uint64_t friendId = 0;
-        uint8_t status = 0;
-        uint32_t confirmed = 0;
-        if (strcmp(name, "SNSFriendStatusNotify") == 0 &&
-            SocialRoster::ParseStatusNotify(payload, static_cast<size_t>(len), &friendId, &status)) {
-          SocialRoster::Global().Notify(friendId, status);
-        } else if (strcmp(name, "SNSFriendListResponse") == 0 &&
-                   SocialRoster::ParseListResponse(payload, static_cast<size_t>(len), &confirmed)) {
-          SocialRoster::Global().BeginList(confirmed);
-        }
+        SocialRoster::Feed(SocialRoster::Global(), name, p + 24, static_cast<size_t>(len));
       }
     }
     p += 24 + len;

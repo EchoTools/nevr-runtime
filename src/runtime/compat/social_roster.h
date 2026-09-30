@@ -187,4 +187,24 @@ inline Roster& Global() {
   return roster;
 }
 
+/// Feeds one server->game message into `roster`. `name` is the symbol name exactly as the game's
+/// symbol table returns it, which has no "SNS" prefix ("FriendStatusNotify", not
+/// "SNSFriendStatusNotify"). Returns true when the message was a roster message.
+inline bool Feed(Roster& roster, const char* name, const std::uint8_t* payload, std::size_t len) {
+  if (name == nullptr) return false;
+  const std::string n(name);
+  std::uint64_t id = 0;
+  std::uint8_t status = 0;
+  std::uint32_t confirmed = 0;
+  if (n == "FriendStatusNotify" && ParseStatusNotify(payload, len, &id, &status)) {
+    roster.Notify(id, status);
+    return true;
+  }
+  if (n == "FriendListResponse" && ParseListResponse(payload, len, &confirmed)) {
+    roster.BeginList(confirmed);
+    return true;
+  }
+  return false;
+}
+
 }  // namespace SocialRoster

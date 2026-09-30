@@ -239,6 +239,19 @@ TEST(SocialRoster, ParsesTheTwoFriendMessages) {
   EXPECT_FALSE(SocialRoster::ParseListResponse(list.data(), 19, &confirmed));
 }
 
+TEST(SocialRoster, FeedMatchesTheSymbolNamesTheGameLogsWithoutTheSnsPrefix) {
+  SocialRoster::Roster roster;
+  const auto list = ListResponsePayload(0, 0, 1);
+  const auto notify = StatusNotifyPayload(5, SocialRoster::kStatusOnline);
+  EXPECT_TRUE(SocialRoster::Feed(roster, "FriendListResponse", list.data(), list.size()));
+  EXPECT_TRUE(SocialRoster::Feed(roster, "FriendStatusNotify", notify.data(), notify.size()));
+  EXPECT_EQ(roster.Count(), 1u);
+  EXPECT_EQ(roster.Online(), 1u);
+  EXPECT_FALSE(SocialRoster::Feed(roster, "SNSFriendStatusNotify", notify.data(), notify.size()));
+  EXPECT_FALSE(SocialRoster::Feed(roster, "PartyJoinSuccess", notify.data(), notify.size()));
+  EXPECT_FALSE(SocialRoster::Feed(roster, nullptr, notify.data(), notify.size()));
+}
+
 TEST(SocialRoster, ListFillsOnlineFirstAndLiveNotifiesUpdateIt) {
   SocialRoster::Roster roster;
   roster.BeginList(3);
