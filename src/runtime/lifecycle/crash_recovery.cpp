@@ -66,11 +66,20 @@ static VOID GameMainWrapperHook(INT64 arg1) {
   // Run the game main loop
   GameMain(arg1);
 
-  // If we get here, the game loop returned normally (shouldn't happen)
+  // The game loop returned on its own: the player quit (closed the window, chose Exit) or the game
+  // ended its session. A client has nothing left to run, so return and let the process exit; the
+  // hold below is only for a dedicated server, where a supervisor watches the broadcaster/HTTP API
+  // and is the one to restart it. (The hold used to apply to clients too, so a closed client kept
+  // running with no window on Windows and under Wine.)
   g_gameLoopJmpBufValid = false;
+  if (!g_isServer) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] game loop returned: the client is exiting (no server hold outside server mode)");
+    return;
+  }
   Log(EchoVR::LogLevel::Warning,
-      "[NEVR.PATCH] game loop returned unexpectedly (should never return) — entering server "
-      "hold; game loop will not run again");
+      "[NEVR.PATCH] game loop returned on a server (the loop should only end by crash or shutdown) — "
+      "entering server hold; game loop will not run again");
   while (true) {
     Sleep(1000);
   }
