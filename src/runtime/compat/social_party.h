@@ -220,6 +220,17 @@ class State {
     return out;
   }
 
+  /// The game asked for a party to exist (Update's "create" flag): create one unless there is one or a
+  /// create is already in flight.
+  std::vector<Message> CreateParty() {
+    std::lock_guard<std::mutex> guard(mutex_);
+    std::vector<Message> out;
+    if (partyId_ != 0 || creating_ || joining_) return out;
+    creating_ = true;
+    out.push_back(Standard(kCreateRequest, SelfUuid(), 0));
+    return out;
+  }
+
   /// Accept the invite the game lists at `index` (newest first).
   std::vector<Message> Accept(std::uint32_t index) {
     std::lock_guard<std::mutex> guard(mutex_);

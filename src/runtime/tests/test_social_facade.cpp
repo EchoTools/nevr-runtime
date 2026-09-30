@@ -408,6 +408,18 @@ TEST(SocialParty, InvitingWithoutAPartyCreatesItFirstThenInvites) {
   EXPECT_EQ(out[0].symbol, SocialParty::kInviteRequest) << "with a party the invite goes straight out";
 }
 
+TEST(SocialParty, TheGamesCreateRequestMakesOnePartyAndNoMore) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  const auto first = state.CreateParty();
+  ASSERT_EQ(first.size(), 1u);
+  EXPECT_EQ(first[0].symbol, SocialParty::kCreateRequest);
+  EXPECT_TRUE(state.CreateParty().empty()) << "a create is already in flight";
+  ASSERT_TRUE(FeedParty(state, "PartyCreateSuccess", U64s({7, 100})));
+  EXPECT_TRUE(state.CreateParty().empty()) << "the party exists";
+  EXPECT_EQ(state.SendInvite(200).size(), 1u) << "with the party made, an invite goes straight out";
+}
+
 TEST(SocialParty, AcceptingTheNewestInviteJoinsThatParty) {
   SocialParty::State state;
   state.SetSelf(100);

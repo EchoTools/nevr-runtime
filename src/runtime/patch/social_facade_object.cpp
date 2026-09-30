@@ -1,5 +1,6 @@
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -362,8 +363,33 @@ std::uint64_t InviteSentTime(void*, std::int32_t index) {
   return invite != nullptr ? invite->sentTime : 0;
 }
 
-void Update(void* self, const void*) {
+// Update's second argument points at a flags byte the game fills in: bit 0 asks for a party to exist
+// (pnsovr creates its room from Update on that bit, at most every four seconds), bit 1 asks for the
+// invite tokens to be refreshed. The game only invites people once a party exists, so without the
+// create there is nothing to invite into and no invite ever reaches SendInvite.
+constexpr std::uint8_t kUpdateWantsParty = 1;
+constexpr std::chrono::seconds kCreateRetryInterval{4};
+
+void MaybeCreateParty(const void* flagsPointer) {
+  static std::atomic<std::int32_t> lastFlags{-1};
+  static std::chrono::steady_clock::time_point lastCreate{};
+  if (flagsPointer == nullptr) return;
+  const std::uint8_t flags = *static_cast<const std::uint8_t*>(flagsPointer);
+  if (lastFlags.exchange(flags, std::memory_order_relaxed) != flags) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade update flags=0x%02x", flags);
+  }
+  if ((flags & kUpdateWantsParty) == 0) return;
+  const auto now = std::chrono::steady_clock::now();
+  if (lastCreate.time_since_epoch().count() != 0 && now - lastCreate < kCreateRetryInterval) return;
+  const std::vector<SocialParty::Message> request = SocialParty::Global().CreateParty();
+  if (request.empty()) return;
+  lastCreate = now;
+  SendParty("create (the game asked for a party)", request);
+}
+
+void Update(void* self, const void* flags) {
   FlushJsonTraces();
+  MaybeCreateParty(flags);
   PumpParty(self);
   const std::uint32_t callCount = CountCall(g_calls.update);
   if (callCount == 1) {
