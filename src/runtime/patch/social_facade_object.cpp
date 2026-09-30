@@ -78,6 +78,7 @@ std::array<std::atomic<std::uint64_t>, kJsonTraceCapacity> g_jsonTraceFlushed{};
 std::atomic<std::uint64_t> g_jsonTraceSequence{0};
 
 constexpr std::uint32_t kInitialQueryLogCalls = 3;
+constexpr std::uint32_t kFriendQueryLogCalls = 64;  // enough to see which rows the tablet reads
 constexpr std::uint32_t kUpdateSummaryInterval = 300;
 
 std::uint8_t* Bytes(void* self) { return static_cast<std::uint8_t*>(self); }
@@ -450,7 +451,7 @@ std::uint64_t* FriendId(void*, std::uint64_t* out, std::uint32_t index) {
   SocialRoster::Global().IdAt(index, &id);
   if (out != nullptr) *out = id;
   const std::uint32_t callCount = CountCall(g_calls.friendId);
-  if (callCount <= 2 * kInitialQueryLogCalls) {
+  if (callCount <= kFriendQueryLogCalls) {
     Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade query slot=0x188 name=FriendId index=%u id=%llu call_count=%u",
         index, static_cast<unsigned long long>(id), callCount);
   }
@@ -460,7 +461,7 @@ std::uint64_t* FriendId(void*, std::uint64_t* out, std::uint32_t index) {
 const char* FriendName(void*, std::uint32_t index) {
   const char* name = SocialRoster::Global().NameAt(index);
   const std::uint32_t callCount = CountCall(g_calls.friendName);
-  if (callCount <= 2 * kInitialQueryLogCalls) {
+  if (callCount <= kFriendQueryLogCalls) {
     Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade query slot=0x190 name=FriendName index=%u text=%s call_count=%u",
         index, name, callCount);
   }
