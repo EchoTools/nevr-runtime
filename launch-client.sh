@@ -8,6 +8,10 @@ if ls build/mingw-release/bin/plugins/*.dll >/dev/null 2>&1; then
   cp -rv build/mingw-release/bin/plugins/* echovr/bin/win10/plugins/
 fi
 
+# Nested display only (AGENTS.md "System test after every commit"): never the
+# owner's desktop. Unset WAYLAND_DISPLAY so nothing can fall back to it.
+pgrep -f 'Xephyr :101' >/dev/null || { echo "ERROR: Xephyr :101 is not running" >&2; exit 2; }
+unset WAYLAND_DISPLAY
 export DISPLAY=:101
 export WINEPREFIX="$HOME/src/nevr-runtime/echovr/.wineprefix"
 LOGFILE=/var/tmp/nevr-client-test.log
