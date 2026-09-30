@@ -1,4 +1,5 @@
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
 #include "runtime/hook/symbol_corpus.h"
 
@@ -11,6 +12,7 @@
 #include <cstdio>
 #include <nlohmann/json.hpp>
 #include <cstring>
+#include <ctime>
 #include <memory>
 #include <limits>
 #include <mutex>
@@ -226,12 +228,52 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
           name, static_cast<unsigned long long>(len));
       if (strcmp(direction, "server->game") == 0) {
         SocialRoster::Feed(SocialRoster::Global(), name, p + 24, static_cast<size_t>(len));
+        // Party messages update the facade's party; any requests that were waiting on the reply
+        // (invites queued behind the party's creation) go out now. This runs on the remote's
+        // callback thread outside g_pairsMutex, and SendFrameToServer takes it itself.
+        std::vector<SocialParty::Message> outgoing;
+        const uint64_t nowSeconds = static_cast<uint64_t>(std::time(nullptr));
+        if (SocialParty::Global().Feed(name, p + 24, static_cast<size_t>(len), nowSeconds, &outgoing) &&
+            !outgoing.empty()) {
+          SocialParty::Send(outgoing);
+        }
       }
     }
     p += 24 + len;
     remaining -= 24 + len;
   }
 }
+
+// Sends a frame from the runtime itself (the social facade's party requests) to the server on the
+// game's login connection, as if the game had. Queues it if the remote is still connecting, as the
+// game-side path does. Takes g_pairsMutex, so it must not be called with it held.
+static bool SendFrameToServer(const std::string& frame) {
+  bool sent = false;
+  {
+    std::lock_guard<std::mutex> lock(g_pairsMutex);
+    for (auto& entry : g_pairs) {
+      ProxyPair& pair = *entry.second;
+      if (pair.connIdx != 1 || !pair.remoteWs) continue;
+      if (!pair.remoteOpen) {
+        pair.pendingToRemote.push_back(frame);
+        sent = true;
+      } else {
+        sent = pair.remoteWs->sendBinary(frame).success;
+      }
+      break;
+    }
+  }
+  if (sent) {
+    ObserveSocialFrames("game->server", 1, frame);
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] game->server frame not sent: no login connection");
+  }
+  return sent;
+}
+
+// Registers SendFrameToServer as the party requests' sender when the bridge is loaded.
+static const bool g_partySenderRegistered = (SocialParty::SetSender(&SendFrameToServer), true);
+
 static const uint64_t SYM_LOGIN_REQUEST = 0xbdb41ea9e67b200a;
 
 static void AppendLE64(std::string& buf, uint64_t val) {
@@ -753,6 +795,7 @@ void InstallWebSocketBridge() {
                           if (cfgPassword) cfgPasswordStr = cfgPassword;
                         }
                         g_lastInjectedDiscordId = discordId;
+                        SocialParty::Global().SetSelf(discordId);
                         std::string loginMsg = BuildLoginRequest(discordId, platformCode, accountName, bearerToken, cfgPasswordStr);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);

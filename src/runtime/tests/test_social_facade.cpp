@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 
+#include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
 #include "runtime/patch/social_facade.h"
 #include "core/hooking.h"
@@ -324,6 +325,207 @@ TEST(SocialFacade, FriendSlotsAnswerFromTheRoster) {
   EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 1), 0u);
   EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[54])(object, 0), 0u);  // nobody is joinable yet
   SocialRoster::Global().Clear();
+}
+
+
+std::string Hex(const std::uint8_t* data, std::size_t len) {
+  static const char digits[] = "0123456789abcdef";
+  std::string out;
+  for (std::size_t i = 0; i < len; ++i) {
+    out.push_back(digits[data[i] >> 4]);
+    out.push_back(digits[data[i] & 15]);
+  }
+  return out;
+}
+
+std::string U64s(std::initializer_list<std::uint64_t> values) {
+  std::string out;
+  for (const std::uint64_t v : values) SocialParty::AppendLe(out, v, 8);
+  return out;
+}
+
+bool FeedParty(SocialParty::State& state, const char* name, const std::string& payload,
+               std::vector<SocialParty::Message>* out = nullptr) {
+  return state.Feed(name, reinterpret_cast<const std::uint8_t*>(payload.data()), payload.size(), 1000, out);
+}
+
+std::uint64_t LastU64(const std::string& payload) {
+  std::uint64_t v = 0;
+  for (int i = 7; i >= 0; --i) v = (v << 8) | static_cast<std::uint8_t>(payload[payload.size() - 8 + i]);
+  return v;
+}
+
+TEST(SocialParty, HashesMatchTheReferenceVectors) {
+  const auto sha = SocialParty::Sha1("abc");
+  EXPECT_EQ(Hex(sha.data(), sha.size()), "a9993e364706816aba3e25717850c26c9cd0d89d");
+  const auto a = SocialParty::UuidV5Nil("OVR-ORG-695081603180789771");
+  EXPECT_EQ(Hex(a.data(), a.size()), "819eb318e3865430b167151aae327cbb");
+  const auto b = SocialParty::MemberUuid(1);
+  EXPECT_EQ(Hex(b.data(), b.size()), "9b22f96a232a5571b27ff9e0f3824921");
+}
+
+TEST(SocialParty, RequestsHaveTheLengthsAndFieldsNakamaReads) {
+  const SocialParty::Uuid self = SocialParty::MemberUuid(1);
+  const auto invite = SocialParty::Standard(SocialParty::kInviteRequest, self, 0x1122334455667788ULL);
+  EXPECT_EQ(invite.payload.size(), 40u);
+  EXPECT_EQ(LastU64(invite.payload), 0x1122334455667788ULL);
+  EXPECT_EQ(std::memcmp(invite.payload.data() + 8, self.data(), 16), 0);
+  const auto respond = SocialParty::Targeted(SocialParty::kInviteResponse, self, SocialParty::MemberUuid(2), 1);
+  EXPECT_EQ(respond.payload.size(), 48u);
+  EXPECT_EQ(static_cast<std::uint8_t>(respond.payload[40]), 1);
+  const std::string frame = SocialParty::Frame(invite);
+  ASSERT_EQ(frame.size(), 24u + 40u);
+  EXPECT_EQ(static_cast<std::uint8_t>(frame[0]), 0xf6);
+  EXPECT_EQ(static_cast<std::uint8_t>(frame[16]), 40);
+}
+
+TEST(SocialParty, InvitingWithoutAPartyCreatesItFirstThenInvites) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  auto out = state.SendInvite(200);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].symbol, SocialParty::kCreateRequest);
+  EXPECT_EQ(state.SendInvite(300).size(), 0u) << "a second invite waits for the same create";
+  EXPECT_TRUE(state.Snapshot().creating);
+
+  std::vector<SocialParty::Message> outgoing;
+  ASSERT_TRUE(FeedParty(state, "PartyCreateSuccess", U64s({7, 100}), &outgoing));
+  ASSERT_EQ(outgoing.size(), 2u);
+  EXPECT_EQ(outgoing[0].symbol, SocialParty::kInviteRequest);
+  EXPECT_EQ(LastU64(outgoing[0].payload), 200u);
+  EXPECT_EQ(LastU64(outgoing[1].payload), 300u);
+  const auto view = state.Snapshot();
+  EXPECT_EQ(view.partyId, 7u);
+  EXPECT_FALSE(view.creating);
+  ASSERT_EQ(view.members.size(), 1u);
+  EXPECT_EQ(view.members[0].id, 100u);
+  const auto events = state.DrainEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].kind, SocialParty::EventKind::kCreated);
+
+  out = state.SendInvite(400);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].symbol, SocialParty::kInviteRequest) << "with a party the invite goes straight out";
+}
+
+TEST(SocialParty, AcceptingTheNewestInviteJoinsThatParty) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({5, 201})));
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({6, 202})));
+  EXPECT_EQ(state.Snapshot().invites.size(), 2u);
+  EXPECT_EQ(state.DrainEvents().size(), 2u);
+
+  const auto out = state.Accept(0);  // the game lists newest first
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].symbol, SocialParty::kInviteResponse);
+  const auto inviter = SocialParty::MemberUuid(202);
+  EXPECT_EQ(std::memcmp(out[0].payload.data() + 16, inviter.data(), 16), 0);
+  EXPECT_EQ(static_cast<std::uint8_t>(out[0].payload[40]), 1);
+  EXPECT_TRUE(state.Snapshot().joining);
+  EXPECT_EQ(state.Snapshot().invites.size(), 1u);
+
+  ASSERT_TRUE(FeedParty(state, "PartyJoinSuccess", U64s({6, 202})));
+  const auto view = state.Snapshot();
+  EXPECT_EQ(view.partyId, 6u);
+  EXPECT_EQ(view.ownerId, 202u);
+  ASSERT_EQ(view.members.size(), 2u);
+  EXPECT_EQ(view.members[0].id, 100u);
+  EXPECT_EQ(view.members[1].id, 202u);
+  const auto events = state.DrainEvents();
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0].kind, SocialParty::EventKind::kJoined);
+  EXPECT_EQ(events[1].kind, SocialParty::EventKind::kMemberJoined);
+  EXPECT_EQ(events[1].index, 1u);
+}
+
+TEST(SocialParty, DismissingAnInviteRejectsItWithoutJoining) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({5, 201})));
+  const auto out = state.Dismiss(0);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(static_cast<std::uint8_t>(out[0].payload[40]), 0);
+  EXPECT_FALSE(state.Snapshot().joining);
+  EXPECT_TRUE(state.Snapshot().invites.empty());
+  EXPECT_TRUE(state.Accept(0).empty()) << "an index past the list does nothing";
+}
+
+TEST(SocialParty, MembersComeAndGoAndTheHostFollowsTheLeader) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  FeedParty(state, "PartyJoinSuccess", U64s({9, 201}));
+  state.DrainEvents();
+  ASSERT_TRUE(FeedParty(state, "PartyJoinNotify", U64s({9, 202})));
+  ASSERT_TRUE(FeedParty(state, "PartyJoinNotify", U64s({9, 202}))) << "a repeat adds nothing";
+  ASSERT_TRUE(FeedParty(state, "PartyJoinNotify", U64s({99, 203}))) << "another party's notify is ignored";
+  EXPECT_EQ(state.Snapshot().members.size(), 3u);
+  state.DrainEvents();
+
+  ASSERT_TRUE(FeedParty(state, "PartyLeaveNotify", U64s({9, 201})));  // the leader leaves
+  const auto view = state.Snapshot();
+  ASSERT_EQ(view.members.size(), 2u);
+  EXPECT_EQ(view.ownerId, 202u) << "the oldest remaining member leads";
+  const auto events = state.DrainEvents();
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0].kind, SocialParty::EventKind::kMemberLeft);
+  EXPECT_EQ(events[0].id, 201u);
+  EXPECT_EQ(events[1].kind, SocialParty::EventKind::kHostChanged);
+}
+
+TEST(SocialParty, OnlyTheLeaderCanKickOrPassAndAKickOfTheLocalUserEndsTheParty) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  FeedParty(state, "PartyJoinSuccess", U64s({9, 201}));
+  FeedParty(state, "PartyJoinNotify", U64s({9, 202}));
+  EXPECT_TRUE(state.Kick(1).empty()) << "not the leader";
+  EXPECT_TRUE(state.Pass(2).empty());
+
+  ASSERT_TRUE(FeedParty(state, "PartyPassNotify", U64s({9, 100})));
+  EXPECT_EQ(state.Snapshot().ownerId, 100u);
+  state.DrainEvents();
+  const auto kick = state.Kick(2);
+  ASSERT_EQ(kick.size(), 1u);
+  EXPECT_EQ(kick[0].symbol, SocialParty::kKickRequest);
+  const auto target = SocialParty::MemberUuid(202);
+  EXPECT_EQ(std::memcmp(kick[0].payload.data() + 16, target.data(), 16), 0);
+  EXPECT_EQ(state.Snapshot().members.size(), 2u);
+  EXPECT_TRUE(state.Kick(0).empty()) << "the leader cannot kick themselves";
+
+  const auto pass = state.Pass(1);
+  ASSERT_EQ(pass.size(), 1u);
+  EXPECT_EQ(pass[0].symbol, SocialParty::kPassRequest);
+  EXPECT_EQ(state.Snapshot().ownerId, 201u);
+
+  ASSERT_TRUE(FeedParty(state, "PartyKickNotify", U64s({9, 100})));
+  EXPECT_EQ(state.Snapshot().partyId, 0u);
+  const auto events = state.DrainEvents();
+  ASSERT_FALSE(events.empty());
+  EXPECT_EQ(events.back().kind, SocialParty::EventKind::kKicked);
+}
+
+TEST(SocialParty, LeavingSendsTheRequestAndClearsTheParty) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  EXPECT_TRUE(state.Leave().empty()) << "nothing to leave";
+  FeedParty(state, "PartyJoinSuccess", U64s({9, 201}));
+  state.DrainEvents();
+  const auto out = state.Leave();
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].symbol, SocialParty::kLeaveRequest);
+  EXPECT_EQ(state.Snapshot().partyId, 0u);
+  EXPECT_TRUE(state.Snapshot().members.empty());
+  const auto events = state.DrainEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].kind, SocialParty::EventKind::kLeft);
+}
+
+TEST(SocialParty, OnlyPartyMessagesAreHandled) {
+  SocialParty::State state;
+  EXPECT_FALSE(FeedParty(state, "FriendStatusNotify", U64s({1, 2})));
+  EXPECT_FALSE(state.Feed(nullptr, nullptr, 0, 0, nullptr));
+  EXPECT_TRUE(FeedParty(state, "PartyLeaveSuccess", std::string(1, '\0'))) << "a reply with nothing to show";
+  EXPECT_TRUE(state.DrainEvents().empty());
 }
 
 }  // namespace
