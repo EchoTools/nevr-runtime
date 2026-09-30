@@ -416,6 +416,29 @@ TEST(SocialNames, TheRequestIsTheGamesOwnProfileRequestAndIsSentOncePerFriend) {
   EXPECT_EQ(resolver.Want(5).size(), 1u);
 }
 
+TEST(SocialRoster, OverlappingRefreshesAndEarlyRepliesNeverLoseAName) {
+  SocialRoster::Roster roster;
+  roster.SetName(2, "Two");  // a profile reply that beats its friend into the roster
+  roster.BeginList(3);
+  roster.Notify(1, SocialRoster::kStatusOnline);
+  roster.SetName(1, "One");
+  roster.Notify(2, SocialRoster::kStatusOnline);
+  roster.Notify(3, SocialRoster::kStatusOffline);
+  roster.SetName(3, "Three");
+
+  // One tab open starts several refreshes in a row; each begins with a partial roster.
+  roster.BeginList(3);
+  roster.Notify(3, SocialRoster::kStatusOffline);
+  roster.BeginList(3);
+  roster.Notify(1, SocialRoster::kStatusOnline);
+  roster.Notify(2, SocialRoster::kStatusOnline);
+  roster.Notify(3, SocialRoster::kStatusOffline);
+  ASSERT_EQ(roster.Count(), 3u);
+  EXPECT_STREQ(roster.NameAt(0), "One");
+  EXPECT_STREQ(roster.NameAt(1), "Two");
+  EXPECT_STREQ(roster.NameAt(2), "Three");
+}
+
 TEST(SocialRoster, ARefreshKeepsANameTheRosterAlreadyHas) {
   SocialRoster::Roster roster;
   roster.BeginList(1);

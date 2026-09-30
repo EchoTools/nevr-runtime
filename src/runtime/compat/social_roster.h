@@ -15,6 +15,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -82,9 +83,7 @@ class Roster {
     std::lock_guard<std::mutex> guard(mutex_);
     const bool online = status == kStatusOnline || status == kStatusBusy;
     if (pendingActive_) {
-      const bool known = Has(pending_, id);
       Upsert(pending_, id, online);
-      if (!known) KeepName(pending_, id);  // a refresh must not turn a known name back into an id
       PublishLocked(pending_);
       return;
     }
@@ -93,10 +92,13 @@ class Roster {
     PublishLocked(std::move(next));
   }
 
-  /// Replaces a friend's display name (empty names are ignored).
+  /// Remembers a friend's display name (empty names are ignored) and applies it to the roster. The
+  /// name is kept even when the friend is not in the roster yet or a refresh is rebuilding it: one
+  /// tab open fires several overlapping refreshes, and each restarts the roster from a partial list.
   void SetName(std::uint64_t id, const std::string& name) {
     if (name.empty()) return;
     std::lock_guard<std::mutex> guard(mutex_);
+    names_[id] = name;
     if (!current_) return;
     std::vector<Entry> next = current_->entries;
     for (Entry& entry : next) {
@@ -146,32 +148,16 @@ class Roster {
  private:
   static constexpr std::size_t kRetired = 8;
 
-  static bool Has(const std::vector<Entry>& list, std::uint64_t id) {
-    for (const Entry& entry : list)
-      if (entry.id == id) return true;
-    return false;
-  }
-
-  /// Carries the name the live roster already has for `id` into a list being rebuilt.
-  void KeepName(std::vector<Entry>& list, std::uint64_t id) const {
-    if (!current_) return;
-    for (const Entry& old : current_->entries) {
-      if (old.id != id) continue;
-      for (Entry& entry : list)
-        if (entry.id == id) entry.name = old.name;
-      return;
-    }
-  }
-
-  static void Upsert(std::vector<Entry>& list, std::uint64_t id, bool online) {
+  void Upsert(std::vector<Entry>& list, std::uint64_t id, bool online) const {
     for (Entry& entry : list) {
       if (entry.id == id) {
         entry.online = online;
         return;
       }
     }
-    // Nakama sends no display name, so the account id stands in until a name is known.
-    list.push_back(Entry{id, std::to_string(id), online});
+    // Nakama sends no display name; use the remembered one, else the account id stands in.
+    const auto known = names_.find(id);
+    list.push_back(Entry{id, known != names_.end() ? known->second : std::to_string(id), online});
   }
 
   std::shared_ptr<const Snapshot> Snap() const {
@@ -205,6 +191,7 @@ class Roster {
   std::array<std::shared_ptr<const Snapshot>, kRetired> retired_{};
   std::size_t retiredNext_ = 0;
   std::vector<Entry> pending_;
+  std::map<std::uint64_t, std::string> names_;
   bool pendingActive_ = false;
 };
 
