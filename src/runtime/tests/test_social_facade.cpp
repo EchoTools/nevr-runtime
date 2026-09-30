@@ -322,7 +322,7 @@ TEST(SocialFacade, FriendSlotsAnswerFromTheRoster) {
   EXPECT_STREQ(reinterpret_cast<NameFn>(vtable[50])(object, 0), "42");
   EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[51])(object, 0), 2u);  // online
   EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[51])(object, 1), 0u);  // offline
-  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 1u);  // an online friend can be invited
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 0u) << "no party: nobody is invitable";
   EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 1), 0u);
   EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[54])(object, 0), 0u);  // nobody is joinable yet
   SocialRoster::Global().Clear();
@@ -559,6 +559,72 @@ TEST(SocialFacade, TheLocalUserIsMemberZeroBeforeAnyPartyExists) {
   EXPECT_EQ(reinterpret_cast<CountFn>(vtable[20])(object), 0u) << "there is still no party";
 }
 
+TEST(SocialParty, JoinByIdSendsTheJoinRequestAndDropsInvitesToThatParty) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({5, 201})));
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({6, 202})));
+  const auto out = state.Join(5);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].symbol, SocialParty::kJoinRequest);
+  EXPECT_EQ(LastU64(out[0].payload), 5u);
+  EXPECT_TRUE(state.Snapshot().joining);
+  ASSERT_EQ(state.Snapshot().invites.size(), 1u);
+  EXPECT_EQ(state.Snapshot().invites[0].partyId, 6u) << "the invite to the joined party is gone";
+  EXPECT_TRUE(state.Join(5).empty()) << "a join is already in flight";
+  ASSERT_TRUE(FeedParty(state, "PartyJoinSuccess", U64s({5, 201})));
+  EXPECT_TRUE(state.Join(5).empty()) << "already in that party";
+  EXPECT_TRUE(state.Join(0).empty());
+}
+
+TEST(SocialParty, ResetLeavesTheServerPartyWithoutTellingTheGame) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  EXPECT_TRUE(state.ResetParty().empty()) << "no party, nothing to leave";
+  FeedParty(state, "PartyJoinSuccess", U64s({9, 201}));
+  state.DrainEvents();
+  const auto out = state.ResetParty();
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].symbol, SocialParty::kLeaveRequest);
+  EXPECT_EQ(state.Snapshot().partyId, 0u);
+  const auto events = state.DrainEvents();
+  for (const auto& event : events) EXPECT_NE(event.kind, SocialParty::EventKind::kLeft) << "Reset fires no Left callback";
+}
+
+TEST(SocialFacade, AFriendRowIsInvitableOnlyWhileThePartyIsJoinableAndTheFriendIsNotInIt) {
+  using CountFn = std::uint32_t (*)(void*);
+  using IndexFn = std::uint32_t (*)(void*, std::uint32_t);
+  using UpdateFn = void (*)(void*, const void*);
+  SocialRoster::Global().Clear();
+  SocialRoster::Global().BeginList(2);
+  SocialRoster::Global().Notify(300, SocialRoster::kStatusOnline);
+  SocialRoster::Global().Notify(400, SocialRoster::kStatusOffline);
+  SocialParty::Global().SetSelf(77, "Me");
+  SocialParty::Global().ResetParty();
+  void* object = SocialFacade::Object();
+  const Slot* vtable = Vtable(object);
+  std::uint8_t flags = 0;
+  const auto publish = [&] { reinterpret_cast<UpdateFn>(vtable[13])(object, &flags); };
+
+  publish();
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 0u) << "no party: no row shows the plus";
+
+  FeedParty(SocialParty::Global(), "PartyCreateSuccess", U64s({7, 77}));
+  publish();
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 1u) << "an online friend, joinable party";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 1), 0u) << "an offline friend";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 9), 0u) << "past the list";
+
+  FeedParty(SocialParty::Global(), "PartyJoinNotify", U64s({7, 300}));
+  publish();
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 0u) << "already in the party";
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[26])(object), 2u);
+
+  SocialParty::Global().ResetParty();
+  SocialRoster::Global().Clear();
+  publish();
+}
+
 TEST(SocialParty, TheGamesCreateRequestMakesOnePartyAndNoMore) {
   SocialParty::State state;
   state.SetSelf(100);
@@ -667,11 +733,17 @@ TEST(SocialParty, OnlyTheLeaderCanKickOrPassAndAKickOfTheLocalUserEndsTheParty) 
   EXPECT_EQ(events.back().kind, SocialParty::EventKind::kKicked);
 }
 
-TEST(SocialParty, LeavingSendsTheRequestAndClearsTheParty) {
+TEST(SocialParty, LeavingTellsTheServerFiresMemberLeftThenLeftAndALonePartyIsLeftAlone) {
   SocialParty::State state;
   state.SetSelf(100);
   EXPECT_TRUE(state.Leave().empty()) << "nothing to leave";
-  FeedParty(state, "PartyJoinSuccess", U64s({9, 201}));
+  FeedParty(state, "PartyCreateSuccess", U64s({3, 100}));
+  state.DrainEvents();
+  EXPECT_TRUE(state.Leave().empty()) << "pnsovr's Leave does nothing for a party of one";
+  EXPECT_EQ(state.Snapshot().partyId, 3u);
+
+  FeedParty(state, "PartyJoinNotify", U64s({3, 201}));
+  FeedParty(state, "PartyJoinNotify", U64s({3, 202}));
   state.DrainEvents();
   const auto out = state.Leave();
   ASSERT_EQ(out.size(), 1u);
@@ -679,8 +751,52 @@ TEST(SocialParty, LeavingSendsTheRequestAndClearsTheParty) {
   EXPECT_EQ(state.Snapshot().partyId, 0u);
   EXPECT_TRUE(state.Snapshot().members.empty());
   const auto events = state.DrainEvents();
+  ASSERT_EQ(events.size(), 3u);
+  EXPECT_EQ(events[0].kind, SocialParty::EventKind::kMemberLeft);
+  EXPECT_EQ(events[0].id, 202u) << "highest index first";
+  EXPECT_EQ(events[1].kind, SocialParty::EventKind::kMemberLeft);
+  EXPECT_EQ(events[1].id, 201u);
+  EXPECT_EQ(events[2].kind, SocialParty::EventKind::kLeft);
+}
+
+TEST(SocialParty, BeingKickedFiresMemberLeftForEveryoneThenKickedOnlyIfThereWereOthers) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  FeedParty(state, "PartyJoinSuccess", U64s({9, 201}));
+  FeedParty(state, "PartyJoinNotify", U64s({9, 202}));
+  state.DrainEvents();
+  ASSERT_TRUE(FeedParty(state, "PartyKickNotify", U64s({9, 100})));
+  const auto events = state.DrainEvents();
+  ASSERT_EQ(events.size(), 3u);
+  EXPECT_EQ(events[0].kind, SocialParty::EventKind::kMemberLeft);
+  EXPECT_EQ(events[0].id, 202u);
+  EXPECT_EQ(events[1].id, 201u);
+  EXPECT_EQ(events[2].kind, SocialParty::EventKind::kKicked);
+
+  SocialParty::State alone;
+  alone.SetSelf(100);
+  FeedParty(alone, "PartyCreateSuccess", U64s({4, 100}));
+  alone.DrainEvents();
+  ASSERT_TRUE(FeedParty(alone, "PartyKickNotify", U64s({4, 100})));
+  EXPECT_TRUE(alone.DrainEvents().empty()) << "no remote members: pnsovr fires nothing";
+}
+
+TEST(SocialParty, JoinFailureCodesAreTheGamesAndAnInviteFromTheSameSenderReplacesTheOlder) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  std::string refused = U64s({5});
+  refused.push_back(2);
+  ASSERT_TRUE(FeedParty(state, "PartyJoinFailure", refused));
+  auto events = state.DrainEvents();
   ASSERT_EQ(events.size(), 1u);
-  EXPECT_EQ(events[0].kind, SocialParty::EventKind::kLeft);
+  EXPECT_EQ(events[0].kind, SocialParty::EventKind::kJoinFailed);
+  EXPECT_EQ(events[0].code, 4u) << "refused maps to the game's 'not joinable'";
+
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({5, 201})));
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({8, 201})));
+  const auto view = state.Snapshot();
+  ASSERT_EQ(view.invites.size(), 1u) << "one invite per sender";
+  EXPECT_EQ(view.invites[0].partyId, 8u) << "the newer one wins";
 }
 
 TEST(SocialParty, OnlyPartyMessagesAreHandled) {

@@ -306,6 +306,35 @@ class State {
     return out;
   }
 
+  /// JoinInternal(roomId): join the party with this id (the game's join button). Any pending invites to
+  /// that party are dropped, as pnsovr does; Nakama leaves the old party itself.
+  std::vector<Message> Join(std::uint64_t partyId) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    std::vector<Message> out;
+    if (partyId == 0 || partyId == partyId_ || joining_ || creating_) return out;
+    if (partyId_ != 0) {  // slot 3 "for join", then PartyLeft, exactly as pnsovr's JoinInternal does
+      RemoteMembersLeaveLocked();
+      ClearParty();
+      events_.push_back(MakeEvent(EventKind::kLeft));
+    }
+    for (std::size_t i = invites_.size(); i > 0; --i)
+      if (invites_[i - 1].partyId == partyId) invites_.erase(invites_.begin() + static_cast<std::ptrdiff_t>(i - 1));
+    joining_ = true;
+    out.push_back(Standard(kJoinRequest, SelfUuid(), partyId));
+    return out;
+  }
+
+  /// Reset (slot 12): pnsovr leaves the room it is in without telling the game (no Left callback) and
+  /// clears its caches. Sends the leave request if there is a party and forgets it, silently.
+  std::vector<Message> ResetParty() {
+    std::lock_guard<std::mutex> guard(mutex_);
+    std::vector<Message> out;
+    if (partyId_ != 0) out.push_back(Standard(kLeaveRequest, SelfUuid(), 0));
+    RemoteMembersLeaveLocked();  // the base cleanup fires MemberLeft for each remote member, but no Left
+    ClearParty();
+    return out;
+  }
+
   /// Accept the invite the game lists at `index` (newest first).
   std::vector<Message> Accept(std::uint32_t index) {
     std::lock_guard<std::mutex> guard(mutex_);
@@ -326,11 +355,15 @@ class State {
     return out;
   }
 
+  /// Slot 17 Leave (0x1800a99d0): pnsovr leaves only when the party has someone besides the local user
+  /// ("id != 0 && localCount < memberCount"); a party of one is left alone. Leaving fires MemberLeft for
+  /// each remote member (highest index first) and then Left.
   std::vector<Message> Leave() {
     std::lock_guard<std::mutex> guard(mutex_);
     std::vector<Message> out;
-    if (partyId_ == 0 && !creating_ && !joining_) return out;
-    if (partyId_ != 0) out.push_back(Standard(kLeaveRequest, SelfUuid(), 0));
+    if (partyId_ == 0 || members_.size() <= 1) return out;
+    out.push_back(Standard(kLeaveRequest, SelfUuid(), 0));
+    RemoteMembersLeaveLocked();
     ClearParty();
     events_.push_back(MakeEvent(EventKind::kLeft));
     return out;
@@ -419,7 +452,11 @@ class State {
       if (members_.size() > 1) events_.push_back(MakeEvent(EventKind::kMemberJoined, 1));
     } else if (n == "PartyJoinFailure") {
       joining_ = false;
-      events_.push_back(MakeEvent(EventKind::kJoinFailed, 0, 0, std::string(), u8(8)));
+      // Nakama: 1 = unknown party or tracking failure, 2 = the join was refused. The game's codes: 1 is
+      // "not found" and 4 is "not joinable" (locked or full); anything else is generic.
+      const std::uint32_t nakamaCode = u8(8);
+      events_.push_back(MakeEvent(EventKind::kJoinFailed, 0, 0, std::string(),
+                                  nakamaCode == 1 ? 1U : (nakamaCode == 2 ? 4U : 0U)));
     } else if (n == "PartyJoinNotify" && len >= 16 && u64(0) == partyId_) {
       const std::uint64_t id = u64(8);
       if (id != self_ && Find(id) < 0) {
@@ -431,8 +468,12 @@ class State {
     } else if (n == "PartyKickNotify" && len >= 16 && u64(0) == partyId_) {
       const std::uint64_t id = u64(8);
       if (id == self_) {
+        // pnsovr's kicked path: leave (MemberLeft for each remote member, highest index first), then
+        // PartyKicked, and only if the party had anyone besides the local user.
+        const bool hadRemotes = members_.size() > 1;
+        RemoteMembersLeaveLocked();
         ClearParty();
-        events_.push_back(MakeEvent(EventKind::kKicked));
+        if (hadRemotes) events_.push_back(MakeEvent(EventKind::kKicked));
       } else {
         RemoveMember(id);
       }
@@ -454,6 +495,10 @@ class State {
       invite.senderId = u64(8);
       invite.senderName = std::to_string(invite.senderId);
       invite.sentTime = now;
+      // One invite per sender, the newer one wins (pnsovr's 0x18008be10 drops the older).
+      for (std::size_t i = invites_.size(); i > 0; --i)
+        if (invites_[i - 1].senderId == invite.senderId)
+          invites_.erase(invites_.begin() + static_cast<std::ptrdiff_t>(i - 1));
       invites_.push_back(invite);
       events_.push_back(MakeEvent(EventKind::kInviteReceived));
     } else {
@@ -516,6 +561,12 @@ class State {
     *out = invites_[at];
     invites_.erase(invites_.begin() + static_cast<std::ptrdiff_t>(at));
     return true;
+  }
+
+  /// MemberLeft for each remote member, highest index first (index 0 is the local user).
+  void RemoteMembersLeaveLocked() {
+    for (std::size_t i = members_.size(); i > 1; --i)
+      events_.push_back(MakeEvent(EventKind::kMemberLeft, 0, members_[i - 1].id, members_[i - 1].name));
   }
 
   void ClearParty() {

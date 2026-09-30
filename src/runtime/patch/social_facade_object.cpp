@@ -308,6 +308,22 @@ void AcceptInvite(void* self, std::int32_t index) {
 // login, so a friend added since (for example on the web site) never showed until a restart.
 void RefreshFriends(void*) { SendParty("refresh friends", SocialParty::Global().RefreshFriends()); }
 
+// Slot 2 JoinInternal (0x18008d1e0): the game's join by party id. The accept gate callback runs first.
+void JoinParty(void* self, std::uint64_t partyId) {
+  if (!CallGate(self, kCbInviteAccepted)) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party join: the game declined to join");
+    return;
+  }
+  SendParty("join", SocialParty::Global().Join(partyId));
+}
+
+// Slot 30 MemberDataWritable (0x18008fcf0): only for the local member (index 0, once a local user
+// exists), it marks the data dirty and returns the member's JSON root for the game to write into.
+std::uint64_t MemberDataWritable(void* self, std::int32_t index) {
+  if (index != 0 || Get32(self, 0x200) == 0) return 0;
+  return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(g_memberJson.data()));
+}
+
 void SetJoinPolicy(void* self, std::uint32_t policy) { Put32(self, 0x2B4, policy); }
 
 std::uint32_t Ready(void*) {
@@ -475,8 +491,20 @@ std::uint32_t FriendStatus(void*, std::uint32_t index) {
   return result;
 }
 
+// pnsovr (0x180084f80): a friend is invitable only while the local party is joinable, the friend is
+// not already a member, and the platform lists them as invitable (Oculus's invitable-users map, which
+// holds the people it can reach; here that is the friends who are online). It is not a function of
+// the friend alone: with no party, or a full or locked one, no row shows the "+" button.
 std::uint32_t FriendIsInvitable(void*, std::uint32_t index) {
-  return SocialRoster::Global().OnlineAt(index) ? 1U : 0U;
+  std::uint64_t id = 0;
+  if (!SocialRoster::Global().IdAt(index, &id) || !SocialRoster::Global().OnlineAt(index)) return 0;
+  const auto view = CurrentView();
+  const bool joinable =
+      view->partyId != 0 && !view->joining && !view->locked && view->members.size() < kPartyMaxMembers;
+  if (!joinable) return 0;
+  for (const SocialParty::Member& member : view->members)
+    if (member.id == id) return 0;
+  return 1;
 }
 
 std::uint64_t Initialize(void* self, std::uint32_t maxUsers, const void* callbacks) {
@@ -502,28 +530,50 @@ void Shutdown(void* self) {
       callCount);
 }
 
-void Reset(void* self) {
-  std::memset(Bytes(self) + 0x1E8, 0, kObjectSize - 0x1E8);
+// Base Reset (0x1800ab420): clears the room JSON, sets the state word to (state & ~1) | 2, zeroes both
+// member counts and the member JSON, and puts the lobby fields back to "no lobby".
+void ResetBase(void* self) {
+  std::memset(Bytes(self) + 0x1F0, 0, 16);  // room JSON root
+  Put32(self, 0x27C, (Get32(self, 0x27C) & ~1U) | 2U);
+  Put32(self, 0x200, 0);
+  Put32(self, 0x204, 0);
+  std::memset(g_memberJson.data(), 0, g_memberJson.size());
   const std::uint64_t invalidMatchType = UINT64_MAX;
   const std::uint16_t invalidTeam = UINT16_MAX;
   const std::uint8_t privateLobby = 2;
-  const std::uint32_t flags = 2;
-  const std::uint32_t joinPolicy = 3;
   std::memcpy(Bytes(self) + 0x270, &invalidMatchType, sizeof(invalidMatchType));
   std::memcpy(Bytes(self) + 0x278, &invalidTeam, sizeof(invalidTeam));
   std::memcpy(Bytes(self) + 0x27A, &privateLobby, sizeof(privateLobby));
-  std::memcpy(Bytes(self) + 0x27C, &flags, sizeof(flags));
-  std::memcpy(Bytes(self) + 0x2B4, &joinPolicy, sizeof(joinPolicy));
 }
 
+// Slot 12 Reset (0x180091660): pnsovr leaves the room it is in (no Left callback), clears its caches,
+// then runs the base reset. The game follows every call with SetLocalUser.
+void Reset(void* self) {
+  SendParty("reset (leave the party)", SocialParty::Global().ResetParty());
+  ResetBase(self);
+}
+
+// Slot 34 ExitLobby (0x180084a10): only the lobby fields go back to "no lobby" and the offline bit is
+// cleared; nothing about the party is touched.
+void ExitLobby(void* self) {
+  const std::uint64_t invalidMatchType = UINT64_MAX;
+  const std::uint16_t invalidTeam = UINT16_MAX;
+  const std::uint8_t privateLobby = 2;
+  std::memcpy(Bytes(self) + 0x270, &invalidMatchType, sizeof(invalidMatchType));
+  std::memcpy(Bytes(self) + 0x278, &invalidTeam, sizeof(invalidTeam));
+  std::memcpy(Bytes(self) + 0x27A, &privateLobby, sizeof(privateLobby));
+  Put32(self, 0x27C, Get32(self, 0x27C) & ~0x10U);
+}
+
+// Slot 31 EnterLobby (0x180084960): stores the lobby fields and sets or clears only the offline bit.
 void EnterLobby(void* self, const void* uuid, std::uint64_t matchType, std::uint16_t team, std::uint8_t lobbyType,
                 int offline) {
   if (uuid != nullptr) std::memcpy(Bytes(self) + 0x260, uuid, 16);
   std::memcpy(Bytes(self) + 0x270, &matchType, sizeof(matchType));
   std::memcpy(Bytes(self) + 0x278, &team, sizeof(team));
   std::memcpy(Bytes(self) + 0x27A, &lobbyType, sizeof(lobbyType));
-  std::uint32_t flags = 2 | (offline != 0 ? 0x10U : 0U);
-  std::memcpy(Bytes(self) + 0x27C, &flags, sizeof(flags));
+  const std::uint32_t flags = Get32(self, 0x27C);
+  Put32(self, 0x27C, offline != 0 ? (flags | 0x10U) : (flags & ~0x10U));
 }
 
 // Slots the facade does not implement still answer (zero). Their calls are logged by the Traced wrapper
@@ -531,18 +581,20 @@ void EnterLobby(void* self, const void* uuid, std::uint64_t matchType, std::uint
 // may be unused).
 std::uint64_t UnimplementedSlot(void*, std::uint64_t, std::uint64_t) { return 0; }
 
-// Slots 32 and 33 are forwarders into EnterLobby in pnsovr (they pass their own registers through).
-// The game calls 32 from LobbySessionSuccessCB with (uuid, matchType, team, lobbyType) and 33 from
-// LobbyRegistrationSuccessCB with (uuid, matchType, byte); the byte lands in the team field in
-// pnsovr and its meaning is undetermined, so 33 records only the lobby uuid and match type.
+// Slots 32 and 33 are forwarders into EnterLobby in pnsovr (0x1800849e0, 0x1800849b0: they pass their
+// registers straight through). The game calls 32 from LobbySessionSuccessCB with (uuid, matchType,
+// team, lobbyType) and 33 from LobbyRegistrationSuccessCB with only (uuid, matchType, byte); EnterLobby's
+// lobbyType and offline arguments are then whatever was left in the registers and on the stack, so
+// 33 stores the three values it was given and leaves lobbyType and the offline bit as they were.
 void EnterLobbySession(void* self, const void* uuid, std::uint64_t matchType, std::uint16_t team,
                        std::uint8_t lobbyType) {
   EnterLobby(self, uuid, matchType, team, lobbyType, 0);
 }
 
-void EnterLobbyRegistration(void* self, const void* uuid, std::uint64_t matchType) {
+void EnterLobbyRegistration(void* self, const void* uuid, std::uint64_t matchType, std::uint16_t team) {
   if (uuid != nullptr) std::memcpy(Bytes(self) + 0x260, uuid, 16);
   std::memcpy(Bytes(self) + 0x270, &matchType, sizeof(matchType));
+  std::memcpy(Bytes(self) + 0x278, &team, sizeof(team));
 }
 
 // Every slot the game can call goes through Traced: it logs the slot, its name, the call number, the
@@ -676,7 +728,7 @@ struct Traced<SlotIndex, Fn> {
 const std::array<Slot, kVtableSlotCount> kVtable = {
     TRACED(0, VoidU32U32),  // 00 SwapMembers
     TRACED(1, UnimplementedSlot),  // 01 RemoveMember
-    TRACED(2, UnimplementedSlot),  // 02 JoinInternal
+    TRACED(2, JoinParty),  // 02 JoinInternal
     TRACED(3, UnimplementedSlot),  // 03 LeaveInternal
     TRACED(4, UnimplementedSlot),  // 04 JoinableInternal
     TRACED(5, UnimplementedSlot),  // 05 SetJoinableInternal
@@ -704,11 +756,11 @@ const std::array<Slot, kVtableSlotCount> kVtable = {
     TRACED(27, MemberId),  // 27 MemberId
     TRACED(28, MemberName),  // 28 MemberName
     TRACED(29, ZeroU32),  // 29 MemberVisible
-    TRACED(30, ZeroU32),  // 30 MemberDataWritable
+    TRACED(30, MemberDataWritable),  // 30 MemberDataWritable
     TRACED(31, EnterLobby),  // 31 EnterLobby
     TRACED(32, EnterLobbySession),  // 32 EnterLobby forwarder (session success)
     TRACED(33, EnterLobbyRegistration),  // 33 EnterLobby forwarder (registration success)
-    TRACED(34, Reset),  // 34 ExitLobby
+    TRACED(34, ExitLobby),  // 34 ExitLobby
     TRACED(35, UnimplementedSlot),  // 35 EnterGame
     TRACED(36, UnimplementedSlot),  // 36 ExitGame
     TRACED(37, UnimplementedSlot),  // 37 OpenFriendRequestUI
@@ -849,7 +901,8 @@ void FlushJsonTraces() {
 void* Object() {
   std::call_once(g_objectOnce, [] {
     g_object.vtable = kVtable.data();
-    Reset(&g_object);
+    ResetBase(&g_object);
+    Put32(&g_object, 0x2B4, 3);  // join policy: the default before the game sets one
   });
   return &g_object;
 }
