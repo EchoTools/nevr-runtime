@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 
+#include "runtime/compat/social_roster.h"
 #include "runtime/patch/social_facade.h"
 #include "core/hooking.h"
 
@@ -204,6 +205,112 @@ TEST(SocialFacade, ShutdownKeepsObjectAndVtableAlive) {
   EXPECT_EQ(SocialFacade::Object(), object);
   EXPECT_EQ(Vtable(object), before);
   EXPECT_GE(SocialFacade::TestShutdownCallCount(), 1u);
+}
+
+
+std::array<std::uint8_t, 24> StatusNotifyPayload(std::uint64_t id, std::uint8_t status) {
+  std::array<std::uint8_t, 24> payload{};
+  for (int i = 0; i < 8; ++i) payload[8 + i] = static_cast<std::uint8_t>(id >> (8 * i));
+  payload[16] = status;
+  return payload;
+}
+
+std::array<std::uint8_t, 32> ListResponsePayload(std::uint32_t offline, std::uint32_t busy, std::uint32_t online) {
+  std::array<std::uint8_t, 32> payload{};
+  const std::uint32_t words[3] = {offline, busy, online};
+  for (int w = 0; w < 3; ++w)
+    for (int i = 0; i < 4; ++i) payload[8 + w * 4 + i] = static_cast<std::uint8_t>(words[w] >> (8 * i));
+  return payload;
+}
+
+TEST(SocialRoster, ParsesTheTwoFriendMessages) {
+  const auto notify = StatusNotifyPayload(0x1122334455667788ULL, SocialRoster::kStatusOffline);
+  std::uint64_t id = 0;
+  std::uint8_t status = 0;
+  ASSERT_TRUE(SocialRoster::ParseStatusNotify(notify.data(), notify.size(), &id, &status));
+  EXPECT_EQ(id, 0x1122334455667788ULL);
+  EXPECT_EQ(status, SocialRoster::kStatusOffline);
+  EXPECT_FALSE(SocialRoster::ParseStatusNotify(notify.data(), 16, &id, &status));
+
+  const auto list = ListResponsePayload(1, 2, 3);
+  std::uint32_t confirmed = 0;
+  ASSERT_TRUE(SocialRoster::ParseListResponse(list.data(), list.size(), &confirmed));
+  EXPECT_EQ(confirmed, 6u);
+  EXPECT_FALSE(SocialRoster::ParseListResponse(list.data(), 19, &confirmed));
+}
+
+TEST(SocialRoster, ListFillsOnlineFirstAndLiveNotifiesUpdateIt) {
+  SocialRoster::Roster roster;
+  roster.BeginList(3);
+  roster.Notify(30, SocialRoster::kStatusOffline);
+  roster.Notify(20, SocialRoster::kStatusOnline);
+  roster.Notify(10, SocialRoster::kStatusOffline);
+  EXPECT_EQ(roster.Count(), 3u);
+  EXPECT_EQ(roster.Online(), 1u);
+  EXPECT_EQ(roster.Offline(), 2u);
+  std::uint64_t id = 0;
+  ASSERT_TRUE(roster.IdAt(0, &id));
+  EXPECT_EQ(id, 20u);  // the online friend leads
+  ASSERT_TRUE(roster.IdAt(1, &id));
+  EXPECT_EQ(id, 10u);
+  EXPECT_TRUE(roster.OnlineAt(0));
+  EXPECT_FALSE(roster.OnlineAt(1));
+  EXPECT_STREQ(roster.NameAt(0), "20");  // no name from the server yet: the id stands in
+
+  roster.Notify(10, SocialRoster::kStatusOnline);  // a live change, outside a list
+  EXPECT_EQ(roster.Count(), 3u);
+  EXPECT_EQ(roster.Online(), 2u);
+  roster.SetName(10, "ten");
+  ASSERT_TRUE(roster.IdAt(0, &id));
+  EXPECT_EQ(id, 10u);
+  EXPECT_STREQ(roster.NameAt(0), "ten");
+}
+
+TEST(SocialRoster, ARefreshReplacesTheListAndAnEmptyOneClearsIt) {
+  SocialRoster::Roster roster;
+  roster.BeginList(2);
+  roster.Notify(1, SocialRoster::kStatusOnline);
+  roster.Notify(2, SocialRoster::kStatusOnline);
+  ASSERT_EQ(roster.Count(), 2u);
+
+  roster.BeginList(1);
+  EXPECT_EQ(roster.Count(), 2u) << "the old list stays until the first new entry arrives";
+  roster.Notify(2, SocialRoster::kStatusOffline);
+  EXPECT_EQ(roster.Count(), 1u);
+  EXPECT_EQ(roster.Online(), 0u);
+
+  roster.BeginList(0);
+  EXPECT_EQ(roster.Count(), 0u);
+  EXPECT_STREQ(roster.NameAt(0), "");
+  std::uint64_t id = 7;
+  EXPECT_FALSE(roster.IdAt(0, &id));
+}
+
+TEST(SocialFacade, FriendSlotsAnswerFromTheRoster) {
+  SocialRoster::Global().Clear();
+  SocialRoster::Global().BeginList(2);
+  SocialRoster::Global().Notify(99, SocialRoster::kStatusOffline);
+  SocialRoster::Global().Notify(42, SocialRoster::kStatusOnline);
+
+  void* object = SocialFacade::Object();
+  const Slot* vtable = Vtable(object);
+  using CountFn = std::uint32_t (*)(void*);
+  using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
+  using NameFn = const char* (*)(void*, std::uint32_t);
+  using IndexFn = std::uint32_t (*)(void*, std::uint32_t);
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[46])(object), 2u);
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[47])(object), 1u);
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[48])(object), 1u);
+  std::uint64_t id = 0;
+  EXPECT_EQ(reinterpret_cast<IdFn>(vtable[49])(object, &id, 0), &id);
+  EXPECT_EQ(id, 42u);
+  EXPECT_STREQ(reinterpret_cast<NameFn>(vtable[50])(object, 0), "42");
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[51])(object, 0), 2u);  // online
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[51])(object, 1), 0u);  // offline
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 0), 1u);  // an online friend can be invited
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[53])(object, 1), 0u);
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[54])(object, 0), 0u);  // nobody is joinable yet
+  SocialRoster::Global().Clear();
 }
 
 }  // namespace

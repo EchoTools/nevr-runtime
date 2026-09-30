@@ -6,6 +6,7 @@
 
 #include "abi/echovr.h"
 #include "core/logging.h"
+#include "runtime/compat/social_roster.h"
 #include "runtime/patch/social_facade.h"
 
 namespace SocialFacade {
@@ -40,6 +41,10 @@ struct FacadeCallCounts {
   std::atomic<std::uint32_t> host{0};
   std::atomic<std::uint32_t> isHost{0};
   std::atomic<std::uint32_t> id{0};
+  std::atomic<std::uint32_t> friendCount{0};
+  std::atomic<std::uint32_t> friendId{0};
+  std::atomic<std::uint32_t> friendName{0};
+  std::atomic<std::uint32_t> friendStatus{0};
 };
 
 FacadeCallCounts g_calls;
@@ -178,6 +183,44 @@ std::uint64_t Id(void* self) {
   return result;
 }
 
+// Friend roster slots (44-55). The semantics are the ones pnsovr's CNSOVRSocial implements:
+// the count and online count are plain reads, the offline count is count - online, friends are
+// ordered online-first, and FriendStatus(i) is 2 for an online friend and 0 for an offline one.
+// An online friend can be invited. No friend is joinable or in a party yet.
+std::uint32_t FriendCount(void*) {
+  const std::uint32_t result = SocialRoster::Global().Count();
+  LogQuery("FriendCount", 0x170, CountCall(g_calls.friendCount), result);
+  return result;
+}
+
+std::uint32_t OnlineFriendCount(void*) { return SocialRoster::Global().Online(); }
+
+std::uint32_t OfflineFriendCount(void*) { return SocialRoster::Global().Offline(); }
+
+std::uint64_t* FriendId(void*, std::uint64_t* out, std::uint32_t index) {
+  std::uint64_t id = 0;
+  SocialRoster::Global().IdAt(index, &id);
+  if (out != nullptr) *out = id;
+  LogQuery("FriendId", 0x188, CountCall(g_calls.friendId), id);
+  return out;
+}
+
+const char* FriendName(void*, std::uint32_t index) {
+  const char* name = SocialRoster::Global().NameAt(index);
+  LogQuery("FriendName", 0x190, CountCall(g_calls.friendName), name[0] != '\0' ? 1U : 0U);
+  return name;
+}
+
+std::uint32_t FriendStatus(void*, std::uint32_t index) {
+  const std::uint32_t result = SocialRoster::Global().OnlineAt(index) ? 2U : 0U;
+  LogQuery("FriendStatus", 0x198, CountCall(g_calls.friendStatus), result);
+  return result;
+}
+
+std::uint32_t FriendIsInvitable(void*, std::uint32_t index) {
+  return SocialRoster::Global().OnlineAt(index) ? 1U : 0U;
+}
+
 std::uint64_t Initialize(void* self, std::uint32_t maxUsers, const void* callbacks) {
   auto* object = static_cast<FacadeObject*>(self);
   if (callbacks != nullptr) {
@@ -275,14 +318,14 @@ const std::array<Slot, kVtableSlotCount> kVtable = {
     reinterpret_cast<Slot>(&VoidU32),     // 43 OpenPartyUI(target)
     reinterpret_cast<Slot>(&Zero0),       // 44 RefreshingFriends
     reinterpret_cast<Slot>(&Void0),       // 45 RefreshFriends
-    reinterpret_cast<Slot>(&Zero0),       // 46 FriendCount
-    reinterpret_cast<Slot>(&Zero0),       // 47 OnlineFriendCount
-    reinterpret_cast<Slot>(&Zero0),       // 48 OfflineFriendCount
-    reinterpret_cast<Slot>(&ZeroId),      // 49 FriendId
-    reinterpret_cast<Slot>(&EmptyU32),    // 50 FriendName
-    reinterpret_cast<Slot>(&ZeroU32),     // 51 FriendStatus
+    reinterpret_cast<Slot>(&FriendCount),  // 46 FriendCount
+    reinterpret_cast<Slot>(&OnlineFriendCount),  // 47 OnlineFriendCount
+    reinterpret_cast<Slot>(&OfflineFriendCount),  // 48 OfflineFriendCount
+    reinterpret_cast<Slot>(&FriendId),     // 49 FriendId
+    reinterpret_cast<Slot>(&FriendName),   // 50 FriendName
+    reinterpret_cast<Slot>(&FriendStatus), // 51 FriendStatus
     reinterpret_cast<Slot>(&EmptyU32),    // 52 FriendStatusString
-    reinterpret_cast<Slot>(&ZeroU32),     // 53 FriendIsInvitable
+    reinterpret_cast<Slot>(&FriendIsInvitable),  // 53 FriendIsInvitable
     reinterpret_cast<Slot>(&ZeroU32),     // 54 FriendIsJoinable
     reinterpret_cast<Slot>(&ZeroU32),     // 55 FriendPartyId
     reinterpret_cast<Slot>(&Zero0),       // 56 RefreshingRecentlyMetUsers

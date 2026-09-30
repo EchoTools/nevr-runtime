@@ -1,4 +1,5 @@
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/compat/social_roster.h"
 #include "runtime/hook/symbol_corpus.h"
 
 #include <ixwebsocket/IXNetSystem.h>
@@ -204,7 +205,11 @@ static const uint8_t MSG_MARKER[] = {0xf6,0x40,0xbb,0x78,0xa2,0xe7,0x8c,0xbb};
 // first. The per-message Debug lines are dropped at the default level, so without this a missing
 // roster or party is invisible: nothing says whether the server sent the notifies or whether the
 // client received them. Only the symbol name and payload length are logged, never the payload.
-static void LogSocialFrames(const char* direction, int connIdx, const std::string& frame) {
+//
+// Server->game friend messages also feed the facade's friend roster: the game's own friends code
+// is not present (pnsrad exports no Social object), so SNSFriendListResponse and
+// SNSFriendStatusNotify are the only place the friend list exists on the client.
+static void ObserveSocialFrames(const char* direction, int connIdx, const std::string& frame) {
   const uint8_t* p = reinterpret_cast<const uint8_t*>(frame.data());
   size_t remaining = frame.size();
   while (remaining >= 24) {
@@ -219,6 +224,19 @@ static void LogSocialFrames(const char* direction, int connIdx, const std::strin
                             strstr(name, "Social") != nullptr)) {
       Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s payload_bytes=%llu", direction, connIdx,
           name, static_cast<unsigned long long>(len));
+      if (strcmp(direction, "server->game") == 0) {
+        const uint8_t* payload = p + 24;
+        uint64_t friendId = 0;
+        uint8_t status = 0;
+        uint32_t confirmed = 0;
+        if (strcmp(name, "SNSFriendStatusNotify") == 0 &&
+            SocialRoster::ParseStatusNotify(payload, static_cast<size_t>(len), &friendId, &status)) {
+          SocialRoster::Global().Notify(friendId, status);
+        } else if (strcmp(name, "SNSFriendListResponse") == 0 &&
+                   SocialRoster::ParseListResponse(payload, static_cast<size_t>(len), &confirmed)) {
+          SocialRoster::Global().BeginList(confirmed);
+        }
+      }
     }
     p += 24 + len;
     remaining -= 24 + len;
@@ -505,7 +523,7 @@ void InstallWebSocketBridge() {
                   [pairPtr, gameWsPtr, connIdx](const ix::WebSocketMessagePtr& rmsg) {
                     switch (rmsg->type) {
                       case ix::WebSocketMessageType::Message: {
-                        LogSocialFrames("server->game", connIdx, rmsg->str);
+                        ObserveSocialFrames("server->game", connIdx, rmsg->str);
                         ix::WebSocket* target = nullptr;
                         {
                           std::lock_guard<std::mutex> lk(g_pairsMutex);
@@ -760,7 +778,7 @@ void InstallWebSocketBridge() {
                       break;
                     }
                     case ix::WebSocketMessageType::Message: {
-                      LogSocialFrames("server->game", connIdx, rmsg->str);
+                      ObserveSocialFrames("server->game", connIdx, rmsg->str);
                       // Forward server→game — log symbol ID (marker@0, symbol@8, length@16)
                       uint64_t rsym = 0;
                       uint64_t rlen = 0;
@@ -1001,7 +1019,7 @@ void InstallWebSocketBridge() {
           }
 
           case ix::WebSocketMessageType::Message: {
-            LogSocialFrames("game->server", ConnIdxOfGameWs(&gameWs), msg->str);
+            ObserveSocialFrames("game->server", ConnIdxOfGameWs(&gameWs), msg->str);
             // Game→remote forwarding — dump all message symbols in the frame
             // EchoVR wire format: [marker(8)][symbol(8)][length(8)][payload(length)]...
             {
