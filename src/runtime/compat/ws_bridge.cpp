@@ -153,6 +153,13 @@ static std::mutex g_pairsMutex;
 static std::atomic<int> g_connectionCount{0};  // tracks connection order (0=config, 1+=login)
 static std::unordered_map<ix::WebSocket*, std::unique_ptr<ProxyPair>> g_pairs;
 
+// Connection index of a game-side websocket (-1 when unknown), for log lines.
+static int ConnIdxOfGameWs(ix::WebSocket* gameWs) {
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  const auto it = g_pairs.find(gameWs);
+  return it == g_pairs.end() ? -1 : it->second->connIdx;
+}
+
 // The login connection's remote WS (conn=1). Connections after login (conn>=2,
 // e.g. matchmaker) reuse this so all traffic shares the same Nakama session.
 // The original game multiplexes config/login/matchmaker on one WS to one server;
@@ -191,6 +198,32 @@ static ix::WebSocket* g_loginGameWs = nullptr;
 // LoginRequest payload: [UUID(16)][PlatformCode(8)][AccountId(8)][JSON\0]
 
 static const uint8_t MSG_MARKER[] = {0xf6,0x40,0xbb,0x78,0xa2,0xe7,0x8c,0xbb};
+
+// Info-level trace of the social message families (friends, party, social) crossing the bridge,
+// walking EVERY message in a frame ([marker(8)][symbol(8)][length(8)][payload]...), not just the
+// first. The per-message Debug lines are dropped at the default level, so without this a missing
+// roster or party is invisible: nothing says whether the server sent the notifies or whether the
+// client received them. Only the symbol name and payload length are logged, never the payload.
+static void LogSocialFrames(const char* direction, int connIdx, const std::string& frame) {
+  const uint8_t* p = reinterpret_cast<const uint8_t*>(frame.data());
+  size_t remaining = frame.size();
+  while (remaining >= 24) {
+    if (memcmp(p, MSG_MARKER, sizeof(MSG_MARKER)) != 0) return;
+    uint64_t sym = 0;
+    uint64_t len = 0;
+    memcpy(&sym, p + 8, 8);
+    memcpy(&len, p + 16, 8);
+    if (len > remaining - 24) return;  // truncated or corrupt frame: stop, never read past it
+    const char* name = EchoVR::LookupSymbolName(sym);
+    if (name != nullptr && (strstr(name, "Friend") != nullptr || strstr(name, "Party") != nullptr ||
+                            strstr(name, "Social") != nullptr)) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s payload_bytes=%llu", direction, connIdx,
+          name, static_cast<unsigned long long>(len));
+    }
+    p += 24 + len;
+    remaining -= 24 + len;
+  }
+}
 static const uint64_t SYM_LOGIN_REQUEST = 0xbdb41ea9e67b200a;
 
 static void AppendLE64(std::string& buf, uint64_t val) {
@@ -472,6 +505,7 @@ void InstallWebSocketBridge() {
                   [pairPtr, gameWsPtr, connIdx](const ix::WebSocketMessagePtr& rmsg) {
                     switch (rmsg->type) {
                       case ix::WebSocketMessageType::Message: {
+                        LogSocialFrames("server->game", connIdx, rmsg->str);
                         ix::WebSocket* target = nullptr;
                         {
                           std::lock_guard<std::mutex> lk(g_pairsMutex);
@@ -726,6 +760,7 @@ void InstallWebSocketBridge() {
                       break;
                     }
                     case ix::WebSocketMessageType::Message: {
+                      LogSocialFrames("server->game", connIdx, rmsg->str);
                       // Forward server→game — log symbol ID (marker@0, symbol@8, length@16)
                       uint64_t rsym = 0;
                       uint64_t rlen = 0;
@@ -966,6 +1001,7 @@ void InstallWebSocketBridge() {
           }
 
           case ix::WebSocketMessageType::Message: {
+            LogSocialFrames("game->server", ConnIdxOfGameWs(&gameWs), msg->str);
             // Game→remote forwarding — dump all message symbols in the frame
             // EchoVR wire format: [marker(8)][symbol(8)][length(8)][payload(length)]...
             {
