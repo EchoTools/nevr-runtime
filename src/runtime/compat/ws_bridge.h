@@ -53,6 +53,8 @@ bool TestHook_GuardWsCallbackPropagatesNonStdException();
 bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* statusCode, size_t* messageBytes);
 bool TestHook_LogLoginFailureDiagnostic(const std::string& frame, bool serverMode);
 uint64_t TestHook_SelectPlatformCode(bool hasUrlCredentials, bool noOvr);
+std::string TestHook_SelectRemoteBearer(bool hasUrlCredentials, const std::string& jwt,
+                                        const std::string& serverKey);
 void* TestHook_N61_CreateMockWs();
 void  TestHook_N61_DestroyMockWs(void* handle);
 void* TestHook_N61_GetRawWsPtr(void* handle);

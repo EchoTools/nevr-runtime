@@ -219,6 +219,18 @@ static uint64_t SelectPlatformCode(bool hasUrlCredentials, bool noOvr) {
   return 1;                         // DSC — Discord / token auth
 }
 
+// Which Bearer goes on the remote websocket upgrade. The game front's /nevr ingress forwards
+// the caller's Authorization header unchanged (the /ws catch-all injects the server key over
+// it, issue #52). A token-auth client sends its JWT, which authenticates the session. A client
+// logging in with URL credentials (discordid/password) sends the SERVER KEY instead: Nakama
+// treats a token equal to the server key as the legacy unauthenticated session and then
+// authenticates it from the discordid/password query parameters, exactly as /ws does. An empty
+// result means "attach no Authorization header".
+static std::string SelectRemoteBearer(bool hasUrlCredentials, const std::string& jwt,
+                                      const std::string& serverKey) {
+  return hasUrlCredentials ? serverKey : jwt;
+}
+
 static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode = 2,
                                      const std::string& displayName = std::string(),
                                      const std::string& accessToken = std::string(),
@@ -574,13 +586,27 @@ void InstallWebSocketBridge() {
             // Sending Bearer on top may cause the server to use the JWT session instead
             // of the URL-credential session, breaking matchmaker state.
             bool hasUrlCredentials = remoteUrl.find("discordid=") != std::string::npos;
-            if (!bearerToken.empty() && !hasUrlCredentials) {
+            std::string serverKey;
+            if (hasUrlCredentials) {
+              const char* cfgServerKey = NevrCfgGetFlat("nevr_server_key");
+              if (cfgServerKey) serverKey = cfgServerKey;
+            }
+            const std::string remoteBearer = SelectRemoteBearer(hasUrlCredentials, bearerToken, serverKey);
+            if (!remoteBearer.empty()) {
               ix::WebSocketHttpHeaders headers;
-              headers["Authorization"] = "Bearer " + bearerToken;
+              headers["Authorization"] = "Bearer " + remoteBearer;
               remote->setExtraHeaders(headers);
-              Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Attaching Bearer token to remote connection");
+              Log(EchoVR::LogLevel::Info,
+                  "[NEVR.WS] remote auth: %s (value not logged)",
+                  hasUrlCredentials ? "server key + URL credentials" : "token-auth JWT");
             } else if (hasUrlCredentials) {
-              Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Using URL credentials (no Bearer token)");
+              Log(EchoVR::LogLevel::Warning,
+                  "[NEVR.WS] remote auth: URL credentials but no server key configured — the /nevr "
+                  "ingress will reject the upgrade (auth.server_key, or the embedded build default)");
+            } else {
+              Log(EchoVR::LogLevel::Warning,
+                  "[NEVR.WS] remote auth: no token and no URL credentials — the session will be "
+                  "unauthenticated");
             }
 
             auto pair = std::make_unique<ProxyPair>();
@@ -1229,6 +1255,11 @@ std::string TestHook_BuildLoginRequest(uint64_t discordId, uint64_t platformCode
                                        const std::string& displayName,
                                        const std::string& accessToken) {
   return BuildLoginRequest(discordId, platformCode, displayName, accessToken);
+}
+
+std::string TestHook_SelectRemoteBearer(bool hasUrlCredentials, const std::string& jwt,
+                                        const std::string& serverKey) {
+  return SelectRemoteBearer(hasUrlCredentials, jwt, serverKey);
 }
 
 uint64_t TestHook_SelectPlatformCode(bool hasUrlCredentials, bool noOvr) {

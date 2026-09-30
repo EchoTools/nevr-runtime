@@ -763,6 +763,21 @@ TEST(WsBridgePlatformPrefix, EveryDefinedPlatformHasTheNakamaPrefix) {
 //   1. URL credentials → 4 (OVR_ORG) — legacy auth
 //   2. g_noOvr → 6 (DMO) — demo / no-VR client
 //   3. default → 1 (DSC) — Discord / token auth
+// The remote Bearer: a token-auth client sends its JWT; a URL-credential client sends the
+// server key (Nakama treats it as the legacy session and authenticates from discordid/password),
+// both through the /nevr ingress that forwards Authorization unchanged (issue #52).
+TEST(WsBridgeRemoteBearer, TokenAuthClientSendsItsJwt) {
+  EXPECT_EQ(TestHook_SelectRemoteBearer(false, "jwt-value", "server-key"), "jwt-value");
+  EXPECT_EQ(TestHook_SelectRemoteBearer(false, "", "server-key"), "");
+}
+
+TEST(WsBridgeRemoteBearer, UrlCredentialClientSendsTheServerKeyNotTheJwt) {
+  EXPECT_EQ(TestHook_SelectRemoteBearer(true, "jwt-value", "server-key"), "server-key");
+  EXPECT_EQ(TestHook_SelectRemoteBearer(true, "", "server-key"), "server-key");
+  // No server key configured: attach nothing (the caller logs a warning), never the JWT.
+  EXPECT_EQ(TestHook_SelectRemoteBearer(true, "jwt-value", ""), "");
+}
+
 TEST(WsBridgeSelectPlatform, UrlCredentialsWinsOverNoOvr) {
   EXPECT_EQ(TestHook_SelectPlatformCode(true, true), 4ULL);
   EXPECT_EQ(TestHook_SelectPlatformCode(true, false), 4ULL);
