@@ -28,7 +28,6 @@ set(PATCHES_SOURCES
     "patch/resource_override.cpp"
     "compat/winhttp_stub.cpp"
     "compat/ws_bridge.cpp"
-    "compat/bridge_control_owner.cpp"
     "patch/xpid_patch.cpp"
     "frame/tick.cpp"
     "patch/binary_bug_fixes.cpp"
@@ -88,7 +87,6 @@ set(PATCHES_HEADERS
     "hook/process_memory.h"
     "hook/addresses.h"
     "compat/ws_bridge.h"
-    "compat/bridge_control_owner.h"
     "patch/xpid_patch.h"
     "frame/tick.h"
     "patch/binary_bug_fixes.h"
@@ -366,15 +364,6 @@ if(BUILD_TESTING)
     target_link_libraries(test_telemetry_snapshot_store PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_telemetry_snapshot_store DISCOVERY_MODE PRE_TEST)
 
-    add_executable(test_bridge_control_owner
-      tests/test_bridge_control_owner.cpp
-      compat/bridge_control_owner.cpp)
-    set_source_files_properties(tests/test_bridge_control_owner.cpp compat/bridge_control_owner.cpp
-      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_include_directories(test_bridge_control_owner PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_bridge_control_owner PRIVATE GTest::gtest GTest::gtest_main nevr_core)
-    gtest_discover_tests(test_bridge_control_owner DISCOVERY_MODE PRE_TEST)
-
     # ParseEndpoint unit tests — validates N1 fix (strtoul + errno vs std::stoul throw)
     add_executable(test_parse_endpoint tests/test_parse_endpoint.cpp)
     target_include_directories(test_parse_endpoint PRIVATE
@@ -472,7 +461,6 @@ if(BUILD_TESTING)
       ext/plugin_loader.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
-      compat/bridge_control_owner.cpp
       compat/ws_bridge.cpp
       hook/symbol_corpus.cpp
       # N84: plugin_loader calls HookGuard::VerifyAll after each plugin init.
@@ -501,7 +489,6 @@ if(BUILD_TESTING)
       ext/plugin_loader.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
-      compat/bridge_control_owner.cpp
       compat/ws_bridge.cpp
       hook/symbol_corpus.cpp
       patch/broadcaster_hook_stats.cpp

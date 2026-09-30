@@ -93,7 +93,7 @@ class SecretSafeDiagnosticSourceTest(unittest.TestCase):
         self.assertNotIn("errMsg", bridge)
         self.assertNotIn("%.*s", bridge)
         self.assertIn("FormatLoginFailureDiagnostic", bridge)
-        self.assertIn("targetConnection->gameWs->sendBinary(fakeSuccess);", bridge)
+        self.assertIn("gameWsPtr->sendBinary(fakeSuccess);", bridge)
         self.assertIn("target->sendBinary(rmsg->str);", bridge)
         self.assertIn("server->game", bridge)
 
