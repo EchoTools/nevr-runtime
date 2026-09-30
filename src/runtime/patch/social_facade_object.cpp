@@ -205,7 +205,18 @@ std::shared_ptr<const SocialParty::View> CurrentView() {
 }
 
 void PublishView() {
-  auto next = std::make_shared<const SocialParty::View>(SocialParty::Global().Snapshot());
+  SocialParty::View view = SocialParty::Global().Snapshot();
+  // The game's party UI reads member 0, the local user, whether or not a party exists (it logged
+  // "R15NetPartyMember index is out of range (0 >= 0)" and sent no invite when MemberCount was 0);
+  // pnsovr's MemberCount starts at the local-member count, so it is at least 1 once the local user
+  // is set. Show the local user as the only member until a party replaces the list.
+  if (view.members.empty() && view.selfId != 0) {
+    SocialParty::Member self;
+    self.id = view.selfId;
+    self.name = view.selfName.empty() ? std::to_string(view.selfId) : view.selfName;
+    view.members.push_back(self);
+  }
+  auto next = std::make_shared<const SocialParty::View>(std::move(view));
   std::lock_guard<std::mutex> guard(g_viewMutex);
   g_retiredViews[g_retiredNext] = g_view;
   g_retiredNext = (g_retiredNext + 1) % g_retiredViews.size();
@@ -313,7 +324,8 @@ std::uint32_t Joinable(void*) {
 }
 
 std::uint64_t* Host(void*, std::uint64_t* out) {
-  const std::uint64_t result = CurrentView()->ownerId;
+  const auto view = CurrentView();
+  const std::uint64_t result = view->partyId != 0 ? view->ownerId : view->selfId;  // member 0 leads an empty party
   if (out != nullptr) *out = result;
   LogQuery("Host", 0xB8, CountCall(g_calls.host), result);
   return out;
@@ -332,10 +344,7 @@ std::uint64_t Id(void*) {
   return result;
 }
 
-std::uint32_t MemberCount(void*) {
-  const auto view = CurrentView();
-  return view->partyId != 0 ? static_cast<std::uint32_t>(view->members.size()) : 0U;
-}
+std::uint32_t MemberCount(void*) { return static_cast<std::uint32_t>(CurrentView()->members.size()); }
 
 std::uint64_t* MemberId(void*, std::uint64_t* out, std::uint32_t index) {
   const auto view = CurrentView();

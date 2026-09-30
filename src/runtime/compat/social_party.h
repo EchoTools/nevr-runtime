@@ -201,6 +201,7 @@ struct View {
   std::uint64_t partyId = 0;
   std::uint64_t ownerId = 0;
   std::uint64_t selfId = 0;
+  std::string selfName;
   bool creating = false;
   bool joining = false;
   bool locked = false;
@@ -210,9 +211,10 @@ struct View {
 
 class State {
  public:
-  void SetSelf(std::uint64_t accountId) {
+  void SetSelf(std::uint64_t accountId, const std::string& name = std::string()) {
     std::lock_guard<std::mutex> guard(mutex_);
     self_ = accountId;
+    selfName_ = name;
   }
 
   /// A friend-list or UI action asked to invite `target`: create the party first if there is none.
@@ -412,6 +414,7 @@ class State {
     view.partyId = partyId_;
     view.ownerId = ownerId_;
     view.selfId = self_;
+    view.selfName = selfName_;
     view.creating = creating_;
     view.joining = joining_;
     view.locked = locked_;
@@ -466,6 +469,7 @@ class State {
 
   mutable std::mutex mutex_;
   std::uint64_t self_ = 0;
+  std::string selfName_;
   std::uint64_t partyId_ = 0;
   std::uint64_t ownerId_ = 0;
   bool creating_ = false;

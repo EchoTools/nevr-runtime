@@ -419,6 +419,28 @@ TEST(SocialParty, OpeningTheFriendsTabAsksTheServerForAFreshList) {
   EXPECT_EQ(std::memcmp(out[0].payload.data() + 8, self.data(), 16), 0);
 }
 
+TEST(SocialFacade, TheLocalUserIsMemberZeroBeforeAnyPartyExists) {
+  SocialParty::Global().SetSelf(77, "Me");
+  void* object = SocialFacade::Object();
+  const Slot* vtable = Vtable(object);
+  std::uint8_t flags = 0;
+  using UpdateFn = void (*)(void*, const void*);
+  using CountFn = std::uint32_t (*)(void*);
+  using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
+  using NameFn = const char* (*)(void*, std::uint32_t);
+  using HostFn = std::uint64_t* (*)(void*, std::uint64_t*);
+  reinterpret_cast<UpdateFn>(vtable[13])(object, &flags);  // the per-frame Update publishes the view
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[26])(object), 1u) << "the UI indexes member 0";
+  std::uint64_t id = 0;
+  reinterpret_cast<IdFn>(vtable[27])(object, &id, 0);
+  EXPECT_EQ(id, 77u);
+  EXPECT_STREQ(reinterpret_cast<NameFn>(vtable[28])(object, 0), "Me");
+  std::uint64_t host = 0;
+  reinterpret_cast<HostFn>(vtable[23])(object, &host);
+  EXPECT_EQ(host, 77u);
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[20])(object), 0u) << "there is still no party";
+}
+
 TEST(SocialParty, TheGamesCreateRequestMakesOnePartyAndNoMore) {
   SocialParty::State state;
   state.SetSelf(100);

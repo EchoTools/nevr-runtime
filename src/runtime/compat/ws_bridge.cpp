@@ -795,7 +795,7 @@ void InstallWebSocketBridge() {
                           if (cfgPassword) cfgPasswordStr = cfgPassword;
                         }
                         g_lastInjectedDiscordId = discordId;
-                        SocialParty::Global().SetSelf(discordId);
+                        SocialParty::Global().SetSelf(discordId, accountName);
                         std::string loginMsg = BuildLoginRequest(discordId, platformCode, accountName, bearerToken, cfgPasswordStr);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
