@@ -123,7 +123,20 @@ struct ProxyPair {
   std::vector<std::string> pendingToRemote;
   bool remoteOpen = false;
   bool loginInjected = false;  // true after we inject LoginRequest on this connection
+  int connIdx = -1;  // 0=config, 1=login, >=2=matchmaker (see g_connectionCount)
 };
+
+// Human-readable label for connIdx, for log lines — this is the ONLY place
+// that tells "connection ... closed" apart across config/login/matchmaker;
+// without it every closed-connection log line is ambiguous (all three
+// connections share one local bridge port per service, see RedirectServiceUrl).
+static const char* ConnLabel(int connIdx) {
+  switch (connIdx) {
+    case 0:  return "config";
+    case 1:  return "login";
+    default: return connIdx >= 2 ? "matchmaker" : "unknown";
+  }
+}
 
 static std::mutex g_pairsMutex;
 static std::atomic<int> g_connectionCount{0};  // tracks connection order (0=config, 1+=login)
@@ -416,6 +429,7 @@ void InstallWebSocketBridge() {
               pair->remoteWs = g_loginRemoteWs;
               pair->remoteOpen = true;
               pair->loginInjected = true;  // skip LoginRequest — already authenticated
+              pair->connIdx = connIdx;
 
               auto* pairPtr = pair.get();
               ix::WebSocket* gameWsPtr = &gameWs;
@@ -425,8 +439,8 @@ void InstallWebSocketBridge() {
               // entirely on the login connection's callback — when login
               // disconnected and B2/N54 nulled that callback, all matchmaker
               // server→game message routing silently died.
-              g_loginRemoteWs->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback", 
-                  [pairPtr, gameWsPtr](const ix::WebSocketMessagePtr& rmsg) {
+              g_loginRemoteWs->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback",
+                  [pairPtr, gameWsPtr, connIdx](const ix::WebSocketMessagePtr& rmsg) {
                     switch (rmsg->type) {
                       case ix::WebSocketMessageType::Message: {
                         ix::WebSocket* target = nullptr;
@@ -443,8 +457,9 @@ void InstallWebSocketBridge() {
                       }
                       case ix::WebSocketMessageType::Close:
                         Log(EchoVR::LogLevel::Debug,
-                            "[NEVR.WS] Remote closed (matchmaker ws=%p): code=%u",
-                            static_cast<void*>(gameWsPtr), static_cast<unsigned int>(rmsg->closeInfo.code));
+                            "[NEVR.WS] Remote closed (conn=%d, %s, ws=%p): code=%u",
+                            connIdx, ConnLabel(connIdx), static_cast<void*>(gameWsPtr),
+                            static_cast<unsigned int>(rmsg->closeInfo.code));
                         break;
                       default:
                         break;
@@ -570,6 +585,7 @@ void InstallWebSocketBridge() {
 
             auto pair = std::make_unique<ProxyPair>();
             pair->remoteWs = remote;
+            pair->connIdx = connIdx;
 
             auto* pairPtr = pair.get();
             ix::WebSocket* gameWsPtr = &gameWs;
@@ -868,8 +884,10 @@ void InstallWebSocketBridge() {
                       break;
                     }
                     case ix::WebSocketMessageType::Close:
-                      Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Remote closed (ws=%p): code=%u",
-                          static_cast<void*>(gameWsPtr), static_cast<unsigned int>(rmsg->closeInfo.code));
+                      Log(EchoVR::LogLevel::Debug,
+                          "[NEVR.WS] Remote closed (conn=%d, %s, ws=%p): code=%u",
+                          connIdx, ConnLabel(connIdx), static_cast<void*>(gameWsPtr),
+                          static_cast<unsigned int>(rmsg->closeInfo.code));
                       // Don't call gameWsPtr->close() — it deadlocks (blocks waiting
                       // for server thread which may be blocked on g_pairsMutex).
                       // The game will detect the closed remote on its next send attempt.
@@ -1031,10 +1049,12 @@ void InstallWebSocketBridge() {
             // g_pairsMutex (Open handler line 328, Message handler line 497).
             // Holding the mutex across stop() → ABBA deadlock.
             std::shared_ptr<ix::WebSocket> remoteToStop;
+            int closedConnIdx = -1;
             {
               std::lock_guard<std::mutex> lk(g_pairsMutex);
               auto it = g_pairs.find(&gameWs);
               if (it != g_pairs.end()) {
+                closedConnIdx = it->second->connIdx;
                 bool isShared = (it->second->remoteWs == g_loginRemoteWs);
                 if (!isShared) {
                   // Snapshot the remote — we'll stop it OUTSIDE the lock.
@@ -1067,7 +1087,9 @@ void InstallWebSocketBridge() {
             if (remoteToStop) {
               remoteToStop->stop();
             }
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game disconnected");
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.WS] Proxy: game disconnected (conn=%d, %s)",
+                closedConnIdx, ConnLabel(closedConnIdx));
             break;
           }
 
