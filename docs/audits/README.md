@@ -9,7 +9,6 @@ they survive tmpfs sweeps and are discoverable by future agents.
 
 | File | Date | Description |
 |------|------|-------------|
-| `recon-owner-bug-batch-RESULTS.md` | 2026-07-22 | 19-item validation report from the owner bug batch |
 | `fable-consistency-hunt-2026-07-23.md` | 2026-07-23 | Ranked consistency/quality ledger; its High findings became N54-N58 |
 
 ### Removed, and where to read them
@@ -26,6 +25,7 @@ required:
 |------|---------------|
 | `ctrlc-shutdown-audit.md` — CTRL+C to port-zombie causal chain (N13, N37-N39) | `git show 6ffc3bb74283f26d8d418633bc2cbe85e51f2a5b:docs/audits/ctrlc-shutdown-audit.md` |
 | `bridge-port-audit.md` — every site referencing the ws_bridge listen port | `git show 6ffc3bb74283f26d8d418633bc2cbe85e51f2a5b:docs/audits/bridge-port-audit.md` |
+| `recon-owner-bug-batch-RESULTS.md` — 19-item owner bug batch validation (2026-07-22); removed 2026-09-30 after every defect it recorded was checked against HEAD and found fixed or not a defect | `git show 94a24a16b67ca21e39cab2cd2b49f8914c1c93ab:docs/audits/recon-owner-bug-batch-RESULTS.md` |
 
 Both commands were run and verified to return the documents before this table
 was written. An unverified citation is worse than none — it looks like evidence.

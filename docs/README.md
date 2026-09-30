@@ -42,4 +42,3 @@ Dated, immutable records of specific investigations. Do not modify -- these are 
 | File | Description | Audience |
 | ---- | ----------- | -------- |
 | `fable-consistency-hunt-2026-07-23.md` | Fable model consistency audit across the codebase | Historical record |
-| `recon-owner-bug-batch-RESULTS.md` | Owner bug batch reconstruction results | Historical record |

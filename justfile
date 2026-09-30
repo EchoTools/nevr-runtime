@@ -711,7 +711,7 @@ verify:
     # Scoped by NAME to the records that predate the reorganisation. A future
     # audit written after 2026-07-29 will legitimately cite src/runtime/ and must
     # not be caught by this.
-    for _rec in docs/audits/fable-consistency-hunt-2026-07-23.md docs/audits/recon-owner-bug-batch-RESULTS.md; do
+    for _rec in docs/audits/fable-consistency-hunt-2026-07-23.md; do
         if [ ! -f "$_rec" ]; then
             echo "verify: FAIL — N116 audit record $_rec is missing. Records are immutable; if it was deliberately removed, cite <sha>:<path> in docs/audits/README.md and drop it from this list in the same commit." >&2
             exit 1
