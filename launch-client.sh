@@ -1,11 +1,13 @@
 #!/bin/bash
 # Client system test on the NESTED display only (AGENTS.md "System test after every
-# commit"). Deploys the current build, runs the client on Xephyr :101, then judges the
-# run from the game's own JSONL log and restores whatever it overwrote.
+# commit"). Verifies the game directory is pristine, deploys the current BugSplat64.dll,
+# runs the client on Xephyr :101, judges the run from the game's own JSONL log, and
+# restores the original DLL.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 GAME_DIR=echovr/bin/win10
+LOCAL_DIR=echovr/_local
 SCRATCH=/var/tmp/work-nevr-runtime/client-run-$(date +%Y%m%dT%H%M%S)
 LOGDIR="$HOME/src/nevr-runtime/echovr/.wineprefix/drive_c/users/andrew/AppData/Local/EchoVR/logs"
 
@@ -16,44 +18,48 @@ unset WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_SESSION_TYPE
 export DISPLAY=:101
 export WINEPREFIX="$HOME/src/nevr-runtime/echovr/.wineprefix"
 
-mkdir -p "$SCRATCH/backup-plugins"
+# Pristine state. A run is only meaningful against known files, so any drift aborts
+# before anything is deployed. The runtime reads config.yaml and ignores config.json;
+# with neither present it must start on its built-in defaults.
+drift=0
+for f in "$LOCAL_DIR/config.json" "$LOCAL_DIR/config.yaml"; do
+  if [[ -e "$f" || -L "$f" ]]; then echo "DRIFT: $f exists (expected absent)" >&2; drift=1; fi
+done
+shopt -s nullglob
+plugin_files=("$GAME_DIR"/plugins/*)
+shopt -u nullglob
+if [[ ${#plugin_files[@]} -ne 0 ]]; then
+  echo "DRIFT: $GAME_DIR/plugins is not empty: ${plugin_files[*]}" >&2; drift=1
+fi
+if [[ $drift -ne 0 ]]; then echo "ABORT: game directory is not pristine" >&2; exit 3; fi
+if [[ -f "$LOCAL_DIR/.credentials.json" ]]; then
+  echo "=== note: cached credentials present ($LOCAL_DIR/.credentials.json); this run uses the cached flow ==="
+else
+  echo "=== note: no cached credentials; this run exercises the full device-code flow ==="
+fi
+
+mkdir -p "$SCRATCH"
 CONSOLE_LOG="$SCRATCH/console.log"
 cp -p "$GAME_DIR/BugSplat64.dll" "$SCRATCH/BugSplat64.dll.orig"
 
-# Every plugin DLL we overwrite is backed up first and restored on exit. Test fixtures
-# (test_plugin_*.dll) are never deployed.
-PLUGINS=()
-for p in build/mingw-release/bin/plugins/nevr_*.dll; do
-  [[ -f "$p" ]] && PLUGINS+=("$(basename "$p")")
-done
-for name in "${PLUGINS[@]}"; do
-  if [[ -f "$GAME_DIR/plugins/$name" ]]; then
-    cp -p "$GAME_DIR/plugins/$name" "$SCRATCH/backup-plugins/$name"
-  fi
-done
-
 restore() {
+  trap - EXIT
   cp -p "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll"
-  cmp -s "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll" \
-    && echo "=== original BugSplat64.dll restored and verified ==="
-  for name in "${PLUGINS[@]}"; do
-    if [[ -f "$SCRATCH/backup-plugins/$name" ]]; then
-      cp -p "$SCRATCH/backup-plugins/$name" "$GAME_DIR/plugins/$name"
-    else
-      rm -f "$GAME_DIR/plugins/$name"
-    fi
-  done
+  if cmp -s "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll"; then
+    echo "=== original BugSplat64.dll restored and verified ==="
+  else
+    echo "ERROR: BugSplat64.dll restore failed; original is $SCRATCH/BugSplat64.dll.orig" >&2
+  fi
   wineserver -k
 }
+# INT/TERM become a normal exit so the EXIT trap (restore) always runs.
+trap 'exit 143' INT TERM
 trap restore EXIT
 
 echo "=== Deploying from build/mingw-release/bin/ ==="
 cp -v build/mingw-release/bin/BugSplat64.dll "$GAME_DIR/"
 cmp -s build/mingw-release/bin/BugSplat64.dll "$GAME_DIR/BugSplat64.dll"
 sha256sum "$GAME_DIR/BugSplat64.dll"
-for name in "${PLUGINS[@]}"; do
-  cp -v "build/mingw-release/bin/plugins/$name" "$GAME_DIR/plugins/"
-done
 
 echo "=== Starting echovr.exe -noovr -windowed -mp (DISPLAY=$DISPLAY, WAYLAND_DISPLAY unset) ==="
 echo "=== Console log: $CONSOLE_LOG ==="
