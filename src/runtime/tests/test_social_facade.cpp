@@ -10,6 +10,7 @@
 #include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
+#include "runtime/patch/party_invite_gate.h"
 #include "runtime/patch/social_facade.h"
 #include "core/hooking.h"
 
@@ -809,3 +810,12 @@ TEST(SocialParty, OnlyPartyMessagesAreHandled) {
 }
 
 }  // namespace
+
+TEST(PartyInviteGate, OnlyTheFirstMatchFlagIsForcedTrue) {
+  EXPECT_EQ(PartyInviteGate::BooleanResult("npe|firstmatch|completed", 0), 1u);
+  EXPECT_EQ(PartyInviteGate::BooleanResult("npe|firstmatch|completed", 1), 1u);
+  EXPECT_EQ(PartyInviteGate::BooleanResult("npe|firstmatch|other", 0), 0u);
+  EXPECT_EQ(PartyInviteGate::BooleanResult("npe|firstmatch|completed|x", 0), 0u);
+  EXPECT_EQ(PartyInviteGate::BooleanResult("other", 1), 1u);
+  EXPECT_EQ(PartyInviteGate::BooleanResult(nullptr, 0), 0u);
+}
