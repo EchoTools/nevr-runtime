@@ -477,6 +477,20 @@ void EnterLobby(void* self, const void* uuid, std::uint64_t matchType, std::uint
   std::memcpy(Bytes(self) + 0x27C, &flags, sizeof(flags));
 }
 
+// Slots the facade does not implement still answer, and say so the first few times the game calls
+// one, with the three integer argument registers (the pointer is `this`; the rest may be unused).
+template <std::size_t SlotIndex>
+std::uint64_t LoggedStub(void*, std::uint64_t a, std::uint64_t b) {
+  static std::atomic<std::uint32_t> calls{0};
+  const std::uint32_t count = calls.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (count <= 3) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade stub slot=%zu offset=0x%zx call_count=%u args=%llx,%llx",
+        SlotIndex, SlotIndex * sizeof(Slot), count, static_cast<unsigned long long>(a),
+        static_cast<unsigned long long>(b));
+  }
+  return 0;
+}
+
 // Slots 32 and 33 are forwarders into EnterLobby in pnsovr (they pass their own registers through).
 // The game calls 32 from LobbySessionSuccessCB with (uuid, matchType, team, lobbyType) and 33 from
 // LobbyRegistrationSuccessCB with (uuid, matchType, byte); the byte lands in the team field in
@@ -496,13 +510,13 @@ void EnterLobbyRegistration(void* self, const void* uuid, std::uint64_t matchTyp
 // shape; ID wrappers use the Win64 hidden-result-pointer convention.
 const std::array<Slot, kVtableSlotCount> kVtable = {
     reinterpret_cast<Slot>(&VoidU32U32),  // 00 SwapMembers
-    reinterpret_cast<Slot>(&VoidU64),     // 01 RemoveMember
-    reinterpret_cast<Slot>(&Void0),       // 02 JoinInternal
-    reinterpret_cast<Slot>(&Void0),       // 03 LeaveInternal
-    reinterpret_cast<Slot>(&Zero0),       // 04 JoinableInternal
-    reinterpret_cast<Slot>(&VoidU32),     // 05 SetJoinableInternal
-    reinterpret_cast<Slot>(&Void0),       // 06 PushMemberData
-    reinterpret_cast<Slot>(&VoidU32),     // 07 ShareData
+    reinterpret_cast<Slot>(&LoggedStub<1>),     // 01 RemoveMember
+    reinterpret_cast<Slot>(&LoggedStub<2>),       // 02 JoinInternal
+    reinterpret_cast<Slot>(&LoggedStub<3>),       // 03 LeaveInternal
+    reinterpret_cast<Slot>(&LoggedStub<4>),       // 04 JoinableInternal
+    reinterpret_cast<Slot>(&LoggedStub<5>),     // 05 SetJoinableInternal
+    reinterpret_cast<Slot>(&LoggedStub<6>),       // 06 PushMemberData
+    reinterpret_cast<Slot>(&LoggedStub<7>),     // 07 ShareData
     reinterpret_cast<Slot>(&SendInvite),     // 08 SendInvite
     reinterpret_cast<Slot>(&Initialize),  // 09 Initialize
     reinterpret_cast<Slot>(&Shutdown),    // 10 Shutdown
@@ -510,7 +524,7 @@ const std::array<Slot, kVtableSlotCount> kVtable = {
     reinterpret_cast<Slot>(&Reset),       // 12 Reset
     reinterpret_cast<Slot>(&Update),      // 13 Update
     reinterpret_cast<Slot>(&SetLocalUser),  // 14 SetLocalUser
-    reinterpret_cast<Slot>(&VoidU32),     // 15 RemoveLocalMember
+    reinterpret_cast<Slot>(&LoggedStub<15>),     // 15 RemoveLocalMember
     reinterpret_cast<Slot>(&SetJoinPolicy),     // 16 SetJoinPolicy
     reinterpret_cast<Slot>(&LeaveParty),       // 17 Leave
     reinterpret_cast<Slot>(&PassOwnership),     // 18 PassOwnership
@@ -530,17 +544,17 @@ const std::array<Slot, kVtableSlotCount> kVtable = {
     reinterpret_cast<Slot>(&EnterLobbySession),     // 32 EnterLobby forwarder (session success)
     reinterpret_cast<Slot>(&EnterLobbyRegistration),     // 33 EnterLobby forwarder (registration success)
     reinterpret_cast<Slot>(&Reset),       // 34 ExitLobby
-    reinterpret_cast<Slot>(&Void0),       // 35 EnterGame
-    reinterpret_cast<Slot>(&Void0),       // 36 ExitGame
-    reinterpret_cast<Slot>(&Void0),       // 37 OpenFriendRequestUI
-    reinterpret_cast<Slot>(&Void0),       // 38 OpenSendInviteUI
-    reinterpret_cast<Slot>(&VoidU32),     // 39 OpenNewSendInviteUI
-    reinterpret_cast<Slot>(&VoidU32),     // 40 OpenNewSendInviteUI(target)
-    reinterpret_cast<Slot>(&Void0),       // 41 OpenRecvInviteUI
-    reinterpret_cast<Slot>(&VoidU32),     // 42 OpenPartyUI
-    reinterpret_cast<Slot>(&VoidU32),     // 43 OpenPartyUI(target)
+    reinterpret_cast<Slot>(&LoggedStub<35>),       // 35 EnterGame
+    reinterpret_cast<Slot>(&LoggedStub<36>),       // 36 ExitGame
+    reinterpret_cast<Slot>(&LoggedStub<37>),       // 37 OpenFriendRequestUI
+    reinterpret_cast<Slot>(&LoggedStub<38>),       // 38 OpenSendInviteUI
+    reinterpret_cast<Slot>(&LoggedStub<39>),     // 39 OpenNewSendInviteUI
+    reinterpret_cast<Slot>(&LoggedStub<40>),     // 40 OpenNewSendInviteUI(target)
+    reinterpret_cast<Slot>(&LoggedStub<41>),       // 41 OpenRecvInviteUI
+    reinterpret_cast<Slot>(&LoggedStub<42>),     // 42 OpenPartyUI
+    reinterpret_cast<Slot>(&LoggedStub<43>),     // 43 OpenPartyUI(target)
     reinterpret_cast<Slot>(&Zero0),       // 44 RefreshingFriends
-    reinterpret_cast<Slot>(&Void0),       // 45 RefreshFriends
+    reinterpret_cast<Slot>(&LoggedStub<45>),       // 45 RefreshFriends
     reinterpret_cast<Slot>(&FriendCount),  // 46 FriendCount
     reinterpret_cast<Slot>(&OnlineFriendCount),  // 47 OnlineFriendCount
     reinterpret_cast<Slot>(&OfflineFriendCount),  // 48 OfflineFriendCount
@@ -552,7 +566,7 @@ const std::array<Slot, kVtableSlotCount> kVtable = {
     reinterpret_cast<Slot>(&ZeroU32),     // 54 FriendIsJoinable
     reinterpret_cast<Slot>(&ZeroU32),     // 55 FriendPartyId
     reinterpret_cast<Slot>(&Zero0),       // 56 RefreshingRecentlyMetUsers
-    reinterpret_cast<Slot>(&Void0),       // 57 RefreshRecentlyMetUsers
+    reinterpret_cast<Slot>(&LoggedStub<57>),       // 57 RefreshRecentlyMetUsers
     reinterpret_cast<Slot>(&Zero0),       // 58 RecentlyMetUserCount
     reinterpret_cast<Slot>(&Zero0),       // 59 OnlineRecentlyMetUserCount
     reinterpret_cast<Slot>(&Zero0),       // 60 OfflineRecentlyMetUserCount
@@ -564,7 +578,7 @@ const std::array<Slot, kVtableSlotCount> kVtable = {
     reinterpret_cast<Slot>(&ZeroU32),     // 66 RecentlyMetUserIsJoinable
     reinterpret_cast<Slot>(&ZeroU32),     // 67 RecentlyMetUserPartyId
     reinterpret_cast<Slot>(&Zero0),       // 68 RefreshingInvites
-    reinterpret_cast<Slot>(&Void0),       // 69 RefreshInvites
+    reinterpret_cast<Slot>(&LoggedStub<69>),       // 69 RefreshInvites
     reinterpret_cast<Slot>(&InviteCount),       // 70 InviteCount
     reinterpret_cast<Slot>(&InviteSender),    // 71 InviteSender
     reinterpret_cast<Slot>(&InviteSentTime),     // 72 InviteSentTime
