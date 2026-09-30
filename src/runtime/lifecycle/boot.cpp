@@ -513,8 +513,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       InstallWebSocketBridge();
     } else {
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.WS] no services.socket_uri in config.yaml — bridge NOT started; the game "
-          "will talk to services directly and login injection cannot fire");
+          "[NEVR.WS] no services.socket_uri (neither config.yaml nor an embedded build default) "
+          "— bridge NOT started; the game will talk to services directly and login injection "
+          "cannot fire");
     }
   }
 

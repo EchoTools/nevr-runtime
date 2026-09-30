@@ -87,6 +87,16 @@ std::optional<std::string> LookupFlat(const nevr::NevrConfig& cfg, const std::st
   return cfg.GetString(path);
 }
 
+std::optional<std::string> LookupFlatWithDefaults(const nevr::NevrConfig& cfg,
+                                                  const FlatDefaults& defaults,
+                                                  const std::string& flatKey) {
+  const std::optional<std::string> fromFile = LookupFlat(cfg, flatKey);
+  if (fromFile && !fromFile->empty()) return fromFile;
+  const auto it = defaults.find(flatKey);
+  if (it != defaults.end() && !it->second.empty()) return it->second;
+  return fromFile;
+}
+
 std::optional<std::string> LookupFlatCsv(const nevr::NevrConfig& cfg, const std::string& flatKey) {
   // For LIST-shaped keys (guilds, regions). GetStringList turns a sequence into
   // its elements and a lone scalar into a single element, so a config.yaml list

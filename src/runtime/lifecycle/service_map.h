@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 
@@ -36,6 +37,20 @@ std::string FlatKeyToYamlPath(const std::string& flatKey);
 /// path is absent; may return an empty string when the key is present-but-empty
 /// (the caller applies the same `[0] != '\0'` check the JSON readers did).
 std::optional<std::string> LookupFlat(const nevr::NevrConfig& cfg, const std::string& flatKey);
+
+/// Built-in defaults embedded at build time, keyed by flat key (non-empty values only).
+using FlatDefaults = std::map<std::string, std::string>;
+
+/// LookupFlat layered over the embedded defaults. The config.yaml value wins when it is
+/// present and non-empty after interpolation; otherwise the embedded default is used; with
+/// no default the file's own answer is returned unchanged (nullopt, or a present-but-empty
+/// string). A null section (`auth:` with every key commented out) and a value that
+/// interpolates to empty both count as "no override", so the default survives — the same
+/// "an empty secret is unset" rule the rest of the config layer follows. Lookup-time
+/// layering, not tree merging: the parsed file is never modified.
+std::optional<std::string> LookupFlatWithDefaults(const nevr::NevrConfig& cfg,
+                                                  const FlatDefaults& defaults,
+                                                  const std::string& flatKey);
 
 /// Read a LIST-shaped migrated flat key (guilds, regions) as a CSV string — the
 /// shape the game-JSON readers built into `guilds=%s` / `regions=%s`. A config.yaml

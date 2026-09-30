@@ -410,3 +410,105 @@ TEST(ServiceMap, SocialFacadeDefaultsOffAndRequiresTrueBoolean) {
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// Built-in defaults (lookup-time layering under config.yaml).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+nevr_cfg::FlatDefaults EmbeddedDefaults() {
+  return {{"nevr_socket_uri", "wss://default.example:443/ws"},
+          {"nevr_http_uri", "https://default.example:7350"},
+          {"nevr_http_key", "default-http-key"},
+          {"nevr_server_key", "default-server-key"}};
+}
+
+}  // namespace
+
+TEST(ServiceMapDefaults, NoFileYieldsTheEmbeddedDefaults) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("");
+  const auto d = EmbeddedDefaults();
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_socket_uri").value_or(""),
+            "wss://default.example:443/ws");
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_http_key").value_or(""), "default-http-key");
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_server_key").value_or(""), "default-server-key");
+}
+
+TEST(ServiceMapDefaults, ConfigYamlValueOverridesTheDefault) {
+  const auto cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  socket_uri: \"wss://file.example/ws\"\nauth:\n  http_key: file-key\n");
+  const auto d = EmbeddedDefaults();
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_socket_uri").value_or(""), "wss://file.example/ws");
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_http_key").value_or(""), "file-key");
+  // Keys the file does not set still fall back to the embedded default.
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_http_uri").value_or(""), "https://default.example:7350");
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_server_key").value_or(""), "default-server-key");
+}
+
+TEST(ServiceMapDefaults, NullSectionsFromTheExampleConfigKeepTheDefaults) {
+  // docs/reference/example-config.yaml ships `services:` and `auth:` with every key
+  // commented out, which YAML reads as null. That must not wipe the embedded defaults.
+  const auto cfg = nevr::NevrConfig::LoadFromString("services:\n  # socket_uri: x\nauth:\n  # http_key: y\n");
+  const auto d = EmbeddedDefaults();
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_socket_uri").value_or(""),
+            "wss://default.example:443/ws");
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_http_key").value_or(""), "default-http-key");
+}
+
+TEST(ServiceMapDefaults, EmptyFileValueFallsThroughToTheDefault) {
+  const auto cfg = nevr::NevrConfig::LoadFromString(
+      "auth:\n  http_key: \"\"\n  server_key: \"${NEVR_TEST_DEFINITELY_UNSET_VAR:-}\"\n");
+  const auto d = EmbeddedDefaults();
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_http_key").value_or("<nullopt>"), "default-http-key");
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_server_key").value_or("<nullopt>"), "default-server-key");
+}
+
+TEST(ServiceMapDefaults, WithoutADefaultTheFilesOwnAnswerIsUnchanged) {
+  const auto present_empty = nevr::NevrConfig::LoadFromString("auth:\n  http_key: \"\"\n");
+  const auto absent = nevr::NevrConfig::LoadFromString("");
+  const nevr_cfg::FlatDefaults none;
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(present_empty, none, "nevr_http_key"), std::optional<std::string>(""));
+  EXPECT_FALSE(nevr_cfg::LookupFlatWithDefaults(absent, none, "nevr_http_key").has_value());
+}
+
+TEST(ServiceMapDefaults, DefaultsAreReturnedLiterallyNeverInterpolated) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("");
+  nevr_cfg::FlatDefaults d{{"nevr_http_key", "a?b=c&d=${NOT_EXPANDED}"}};
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_http_key").value_or(""), "a?b=c&d=${NOT_EXPANDED}");
+}
+
+TEST(ServiceMapDefaults, LayeringLeavesEverySectionOfTheFileReadable) {
+  // Lookup-time layering must not disturb the parsed tree (the file's own siblings stay
+  // readable, in any order, repeatedly).
+  const auto cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  socket_uri: \"wss://file.example/ws\"\nnetwork:\n  upnp: true\n"
+      "auth:\n  http_uri: \"https://file.example\"\nguilds:\n  - \"1\"\n  - \"2\"\n");
+  const auto d = EmbeddedDefaults();
+  for (int i = 0; i < 2; ++i) {
+    EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_http_uri").value_or(""), "https://file.example");
+    EXPECT_EQ(LookupFlatCsv(cfg, "nevr_guilds").value_or(""), "1,2");
+    EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_socket_uri").value_or(""), "wss://file.example/ws");
+    EXPECT_EQ(cfg.GetBool("network.upnp").value_or(false), true);
+    EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_http_key").value_or(""), "default-http-key");
+  }
+}
+
+TEST(ServiceMapDefaults, UnsetRequiredSecretInTheFileStillFailsLoudDespiteDefaults) {
+  // The ${VAR:?} fail-loud belongs to the FILE and is checked at load; an embedded default
+  // must never mask it.
+  EXPECT_THROW(nevr::NevrConfig::LoadFromString(
+                   "auth:\n  http_key: \"${NEVR_TEST_DEFINITELY_UNSET_VAR:?must be set}\"\n"),
+               nevr::NevrConfigError);
+}
+
+TEST(ServiceMapDefaults, RedirectUsesTheDefaultSocketTargetOnceBridgeIsActive) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("");
+  const auto d = EmbeddedDefaults();
+  const auto socketTarget = nevr_cfg::LookupFlatWithDefaults(cfg, d, "nevr_socket_uri");
+  const auto redir = ResolveRedirect("wss://config.readyatdawn.com/rad/rad15_live", socketTarget,
+                                     std::nullopt, /*bridgeActive=*/true, 4242);
+  ASSERT_TRUE(redir.has_value());
+  EXPECT_EQ(*redir, "ws://127.0.0.1:4242");
+}
+
