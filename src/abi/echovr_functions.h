@@ -87,6 +87,13 @@ extern HttpConnectFunc* HttpConnect;
 typedef UINT32 LoadJsonFromFileFunc(EchoVR::Json* dest, const CHAR* filePath, UINT32 flags);
 extern LoadJsonFromFileFunc* LoadJsonFromFile;
 
+/// Parses a JSON document from memory into a Json structure (CJson_LoadFromBuffer,
+/// echovr.exe 0x1405f0bd0): clears `dest`, parses `length` bytes at `data` (trailing NULs and
+/// whitespace are trimmed), replaces dest's root on success. Returns 0 on success. This is the
+/// buffer path CJson_LoadFromPath ends in, so a config built in memory loads exactly as a file does.
+typedef UINT32 LoadJsonFromBufferFunc(EchoVR::Json* dest, const CHAR* data, INT64 length);
+extern LoadJsonFromBufferFunc* LoadJsonFromBuffer;
+
 /// Loads the local config (./_local/config.json) for the provided game instance.
 typedef UINT64 LoadLocalConfigFunc(PVOID pGame);
 extern LoadLocalConfigFunc* LoadLocalConfig;

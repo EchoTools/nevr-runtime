@@ -148,9 +148,31 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
       }
 
       if (configDest->root == NULL) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] game config.json not found in %s_local\\, ..\\_local\\, or ..\\..\\_local\\",
-            moduleDir);
+        // No config.json anywhere. The game reads its social layer settings (friends, parties,
+        // presence) from that file, so without it those features are off. Hand the game the same
+        // settings in memory through its own buffer parser (the path its file loader ends in),
+        // built from config.yaml / the build's embedded defaults. The content holds the server
+        // key and is never logged.
+        const CHAR* builtIn = NevrCfgGameNativeConfigJson();
+        if (builtIn != NULL) {
+          const UINT32 loadResult = EchoVR::LoadJsonFromBuffer(
+              configDest, builtIn, static_cast<INT64>(strlen(builtIn)));
+          if (loadResult == 0 && configDest->root != NULL) {
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.PATCH] no game config.json: supplied the built-in game config "
+                "(social_plugin: friends, parties, presence, matchmaking)");
+            result = 0;
+          } else {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] no game config.json and the built-in game config failed to load "
+                "(parser returned %u): friends and parties stay off", static_cast<unsigned>(loadResult));
+          }
+        } else {
+          Log(EchoVR::LogLevel::Warning,
+              "[NEVR.PATCH] game config.json not found in %s_local\\, ..\\_local\\, or ..\\..\\_local\\ "
+              "and no built-in game config is available (friends and parties stay off)",
+              moduleDir);
+        }
       }
     } else {
       Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] game config.json loaded from default location");

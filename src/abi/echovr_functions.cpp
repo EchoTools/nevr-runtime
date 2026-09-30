@@ -62,6 +62,7 @@ PreprocessCommandLineFunc* PreprocessCommandLine = nullptr;
 WriteLogFunc* WriteLog = nullptr;
 HttpConnectFunc* HttpConnect = nullptr;
 LoadJsonFromFileFunc* LoadJsonFromFile = nullptr;
+LoadJsonFromBufferFunc* LoadJsonFromBuffer = nullptr;
 LoadLocalConfigFunc* LoadLocalConfig = nullptr;
 NetGameSwitchStateFunc* NetGameSwitchState = nullptr;
 NetGameScheduleReturnToLobbyFunc* NetGameScheduleReturnToLobby = nullptr;
@@ -112,6 +113,7 @@ void InitializeFunctionPointers() {
   WriteLog = (WriteLogFunc*)(g_GameBaseAddress + 0xEBE70);
   HttpConnect = (HttpConnectFunc*)(g_GameBaseAddress + 0x1F60C0);
   LoadJsonFromFile = (LoadJsonFromFileFunc*)(g_GameBaseAddress + 0x5F0990);
+  LoadJsonFromBuffer = (LoadJsonFromBufferFunc*)(g_GameBaseAddress + 0x5F0BD0);
   LoadLocalConfig = (LoadLocalConfigFunc*)(g_GameBaseAddress + 0x179EB0);
   NetGameSwitchState = (NetGameSwitchStateFunc*)(g_GameBaseAddress + 0x1B8650);
   NetGameScheduleReturnToLobby = (NetGameScheduleReturnToLobbyFunc*)(g_GameBaseAddress + 0x1A89F0);

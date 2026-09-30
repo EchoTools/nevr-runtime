@@ -46,3 +46,10 @@ const char* NevrGameNativeDefault(const char* key);
 
 /// True only when config.yaml explicitly contains `social.facade: true`.
 bool NevrCfgSocialFacadeEnabled();
+
+/// JSON text of the game-native config to hand the game when it found no `_local/config.json`
+/// (the `social_plugin` block that turns on friends, parties and presence), built from the
+/// Nakama HTTP base and server key via config.yaml, else the build's embedded defaults. nullptr
+/// when there is nothing to supply (server mode, or those keys are not configured). The pointer
+/// is stable for the process lifetime. Contains the server key: never log it.
+const char* NevrCfgGameNativeConfigJson();

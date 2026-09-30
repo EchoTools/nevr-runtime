@@ -16,6 +16,8 @@
 
 #include <gtest/gtest.h>
 
+#include <nlohmann/json.hpp>
+
 #include "core/nevr_config.h"
 #include "runtime/lifecycle/service_map.h"
 
@@ -512,3 +514,46 @@ TEST(ServiceMapDefaults, RedirectUsesTheDefaultSocketTargetOnceBridgeIsActive) {
   EXPECT_EQ(*redir, "ws://127.0.0.1:4242");
 }
 
+// ---------------------------------------------------------------------------
+// Game-native config supplied when no _local/config.json exists.
+// ---------------------------------------------------------------------------
+
+TEST(GameNativeConfig, BuildsTheSocialPluginBlockTheGameReads) {
+  const auto json = nevr_cfg::BuildGameNativeConfigJson("https://game.example:7350", "the-server-key");
+  ASSERT_TRUE(json.has_value());
+  const auto doc = nlohmann::json::parse(*json);  // must be valid JSON
+  const auto& sp = doc.at("social_plugin");
+  EXPECT_EQ(sp.at("server_endpoint").get<std::string>(), "https://game.example");
+  EXPECT_EQ(sp.at("server_port").get<int>(), 7350);  // a number, as in a hand-written config.json
+  EXPECT_EQ(sp.at("server_key").get<std::string>(), "the-server-key");
+  EXPECT_EQ(sp.at("auth_method").get<std::string>(), "device");
+  EXPECT_TRUE(sp.at("auto_create_user").get<bool>());
+  for (const char* feature : {"friends", "parties", "matchmaking", "presence"}) {
+    EXPECT_TRUE(sp.at("features").at(feature).get<bool>()) << feature;
+  }
+}
+
+TEST(GameNativeConfig, DefaultsThePortFromTheScheme) {
+  const auto https = nlohmann::json::parse(*nevr_cfg::BuildGameNativeConfigJson("https://h.example", "k"));
+  const auto http = nlohmann::json::parse(*nevr_cfg::BuildGameNativeConfigJson("http://h.example/path?x=1", "k"));
+  EXPECT_EQ(https.at("social_plugin").at("server_port").get<int>(), 443);
+  EXPECT_EQ(http.at("social_plugin").at("server_port").get<int>(), 80);
+  EXPECT_EQ(http.at("social_plugin").at("server_endpoint").get<std::string>(), "http://h.example");
+}
+
+TEST(GameNativeConfig, SuppliesNothingWithoutBothInputsOrWithABadUrl) {
+  EXPECT_FALSE(nevr_cfg::BuildGameNativeConfigJson("", "k").has_value());
+  EXPECT_FALSE(nevr_cfg::BuildGameNativeConfigJson("https://h.example:7350", "").has_value());
+  EXPECT_FALSE(nevr_cfg::BuildGameNativeConfigJson("no-scheme.example", "k").has_value());
+  EXPECT_FALSE(nevr_cfg::BuildGameNativeConfigJson("https://", "k").has_value());
+  EXPECT_FALSE(nevr_cfg::BuildGameNativeConfigJson("https://h.example:99999", "k").has_value());
+  EXPECT_FALSE(nevr_cfg::BuildGameNativeConfigJson("https://h.example:abc", "k").has_value());
+}
+
+TEST(GameNativeConfig, EscapesValuesRatherThanConcatenatingThem) {
+  // A key containing JSON metacharacters must survive as data (never break the document).
+  const std::string key = "a\"b\\c";
+  const auto json = nevr_cfg::BuildGameNativeConfigJson("https://h.example:7350", key);
+  ASSERT_TRUE(json.has_value());
+  EXPECT_EQ(nlohmann::json::parse(*json).at("social_plugin").at("server_key").get<std::string>(), key);
+}

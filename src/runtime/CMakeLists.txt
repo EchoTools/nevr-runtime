@@ -398,7 +398,7 @@ if(BUILD_TESTING)
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_service_map PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_service_map PRIVATE
-      GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp)
+      GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_service_map DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_social_facade

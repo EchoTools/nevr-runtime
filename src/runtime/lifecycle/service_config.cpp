@@ -245,6 +245,16 @@ bool NevrCfgSocialFacadeEnabled() {
   return nevr_cfg::SocialFacadeEnabled(NevrCfg());
 }
 
+const char* NevrCfgGameNativeConfigJson() {
+  if (g_isServer) return nullptr;  // a dedicated server has no social layer to configure
+  const std::optional<std::string> httpUri = Flat("nevr_http_uri");
+  const std::optional<std::string> serverKey = Flat("nevr_server_key");
+  if (!httpUri || !serverKey) return nullptr;
+  const std::optional<std::string> json = nevr_cfg::BuildGameNativeConfigJson(*httpUri, *serverKey);
+  if (!json) return nullptr;
+  return InternCStr(*json);
+}
+
 // N134 S6 — the plugin loader's config source. The impure half: reads the same
 // config.yaml singleton (loaded + fail-loud-validated once, above) and hands the
 // loader the ordered, enabled-only plan built by the pure BuildLoadPlan. Kept

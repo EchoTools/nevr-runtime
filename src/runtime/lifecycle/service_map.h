@@ -97,6 +97,16 @@ std::optional<std::string> ResolveRedirect(const std::string& result,
 /// nullopt for every other key (the engine keeps its own default).
 std::optional<std::string> GameNativeDefault(const std::string& key);
 
+/// The game-native config the runtime supplies when no `_local/config.json` exists, as JSON text.
+/// Today that is the `social_plugin` block the game's social layer (friends, parties, presence,
+/// matchmaking UI) reads: endpoint and port come from the Nakama HTTP base (`httpUri`, e.g.
+/// https://host:7350), the key is the Nakama server key, device auth, auto-create, every feature on
+/// (the same shape a hand-written config.json carried). nullopt when either input is empty or the
+/// URL has no host, so a build with nothing embedded supplies nothing. Built with nlohmann::json,
+/// never by string concatenation.
+std::optional<std::string> BuildGameNativeConfigJson(const std::string& httpUri,
+                                                     const std::string& serverKey);
+
 /// Opt-in gate for the empty social-provider façade. Missing, false, or an
 /// invalid scalar all fail closed to disabled.
 bool SocialFacadeEnabled(const nevr::NevrConfig& cfg);
