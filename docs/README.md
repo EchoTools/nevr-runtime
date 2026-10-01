@@ -9,6 +9,7 @@ Design documents, architecture decisions, and porting analysis.
 | `2026-06-29-serverdb-token-auth.md` | ADR: game-server ServerDB auth migration from URL-param credentials to JWT tokens | Runtime and ops developers |
 | `2026-07-13-quest-crash-reporter-injection.md` | Quest arm64 crash-reporter injection design via libovrplatformloader.so hijack | Quest porting developers |
 | `2026-10-01-social-scenario-harness.md` | One-client scenario tests for friends and parties: why one client is enough, the owner's constraints, where a scenario may enter the game, and what to build once | Runtime developers and agents testing social features |
+| `2026-10-01-social-features-test-plan.md` | Every social feature the game exposes (from the facade slots, session events, SNS messages and UserProviderID callers), prioritized, with status and the scenario that tests each | Runtime developers and agents testing social features |
 
 ## Reference
 
