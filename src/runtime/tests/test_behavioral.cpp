@@ -655,6 +655,41 @@ TEST(WsBridgeLoginFailure, DiagnosticUsesDeclaredLengthForConcatenatedFrames) {
   EXPECT_EQ(messageBytes, 4U);
 }
 
+namespace {
+std::string BuildMarkedMessage(uint64_t symbol, const std::string& payload) {
+  static const char kMarker[] = {'\xf6', '\x40', '\xbb', '\x78', '\xa2', '\xe7', '\x8c', '\xbb'};
+  std::string msg(kMarker, sizeof(kMarker));
+  msg.append(16, '\0');
+  WriteLe64(msg, 8, symbol);
+  WriteLe64(msg, 16, payload.size());
+  msg.append(payload);
+  return msg;
+}
+}  // namespace
+
+// Nakama batches LoginSuccess, STcpConnectionUnrequireEvent and GameSettings into one frame. The
+// bridge used to log only the first symbol of a server->game frame, so the other two never
+// appeared in a server's log. Every message in the frame must be logged.
+TEST(WsBridgeFrameLog, LogsEveryMessageInABatchedFrame) {
+  ClearTestLogs();
+  const std::string frame = BuildMarkedMessage(0x1111111111111111ULL, std::string(40, 'a')) +
+                            BuildMarkedMessage(0x43e6963ac76beee4ULL, "") +
+                            BuildMarkedMessage(0x2222222222222222ULL, std::string(7, 'b'));
+  EXPECT_EQ(TestHook_LogFrameMessages("server->game", 1, frame), 3);
+  EXPECT_TRUE(TestLogContains("msg=0 sym=0x1111111111111111"));
+  EXPECT_TRUE(TestLogContains("msg=1 sym=0x43e6963ac76beee4"));
+  EXPECT_TRUE(TestLogContains("msg=2 sym=0x2222222222222222"));
+  EXPECT_TRUE(TestLogContains("len=7"));
+}
+
+TEST(WsBridgeFrameLog, StopsAtATruncatedMessageAndSaysSo) {
+  ClearTestLogs();
+  std::string truncated = BuildMarkedMessage(0x3333333333333333ULL, std::string(10, 'c'));
+  truncated.resize(truncated.size() - 4);
+  EXPECT_EQ(TestHook_LogFrameMessages("game->server", 0, truncated), 1);
+  EXPECT_TRUE(TestLogContains("declares 10 bytes but 6 remain"));
+}
+
 TEST(WsBridgeLoginFailure, DiagnosticRejectsUndersizedTruncatedAndOversizedFrames) {
   uint64_t statusCode = 0;
   size_t messageBytes = 0;

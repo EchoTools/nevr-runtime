@@ -207,6 +207,39 @@ static ix::WebSocket* g_loginGameWs = nullptr;
 
 static const uint8_t MSG_MARKER[] = {0xf6,0x40,0xbb,0x78,0xa2,0xe7,0x8c,0xbb};
 
+// Every message in a bridged frame, by name, in arrival order. Nakama batches messages into one
+// frame (LoginSuccess, STcpConnectionUnrequireEvent and GameSettings arrive together), so logging
+// only the first symbol hid the rest. A dedicated server's message traffic is sparse and is the
+// only record of what the service told the game, so it logs at Info there; clients stay at Debug.
+static int LogFrameMessages(const char* direction, int connIdx, const std::string& frame) {
+  const EchoVR::LogLevel level = g_isServer ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Debug;
+  const uint8_t* p = reinterpret_cast<const uint8_t*>(frame.data());
+  size_t remaining = frame.size();
+  int count = 0;
+  while (remaining >= 24 && memcmp(p, MSG_MARKER, sizeof(MSG_MARKER)) == 0) {
+    uint64_t sym = 0;
+    uint64_t len = 0;
+    memcpy(&sym, p + 8, 8);
+    memcpy(&len, p + 16, 8);
+    const char* name = EchoVR::LookupSymbolName(sym);
+    Log(level, "[NEVR.WS] %s conn=%d (%s) msg=%d sym=0x%016llx %s len=%llu", direction, connIdx,
+        ConnLabel(connIdx), count, static_cast<unsigned long long>(sym), name ? name : "<unnamed>",
+        static_cast<unsigned long long>(len));
+    ++count;
+    if (len > remaining - 24) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.WS] %s conn=%d msg=%d declares %llu bytes but %zu remain",
+          direction, connIdx, count - 1, static_cast<unsigned long long>(len), remaining - 24);
+      break;
+    }
+    p += 24 + len;
+    remaining -= 24 + static_cast<size_t>(len);
+  }
+  if (remaining > 0) {
+    Log(level, "[NEVR.WS] %s conn=%d %zu bytes not in message framing", direction, connIdx, remaining);
+  }
+  return count;
+}
+
 // Info-level trace of the social message families (friends, party, social) crossing the bridge,
 // walking EVERY message in a frame ([marker(8)][symbol(8)][length(8)][payload]...), not just the
 // first. The per-message Debug lines are dropped at the default level, so without this a missing
@@ -856,24 +889,12 @@ void InstallWebSocketBridge() {
                     }
                     case ix::WebSocketMessageType::Message: {
                       ObserveSocialFrames("server->game", connIdx, rmsg->str);
-                      // Forward server→game — log symbol ID (marker@0, symbol@8, length@16)
+                      // First message's symbol (marker@0, symbol@8, length@16), for the decodes below.
                       uint64_t rsym = 0;
-                      uint64_t rlen = 0;
                       if (rmsg->str.size() >= 24) {
                         memcpy(&rsym, rmsg->str.data() + 8, 8);
-                        memcpy(&rlen, rmsg->str.data() + 16, 8);
                       }
-                      char symBuf[192];
-                      const char* name = EchoVR::LookupSymbolName(rsym);
-                      if (name) {
-                        snprintf(symBuf, sizeof(symBuf), "0x%016llx (%s)",
-                                 (unsigned long long)rsym, name);
-                      } else {
-                        snprintf(symBuf, sizeof(symBuf), "0x%016llx",
-                                 (unsigned long long)rsym);
-                      }
-                      Log(EchoVR::LogLevel::Debug, "[NEVR.WS] server->game: %zu bytes sym=%s payloadLen=%llu",
-                          rmsg->str.size(), symBuf, (unsigned long long)rlen);
+                      LogFrameMessages("server->game", connIdx, rmsg->str);
                       // Decode only the numeric LoginFailure diagnostics. The
                       // server-provided message can contain credentials or other
                       // private response data and is never written to logs.
@@ -1046,6 +1067,7 @@ void InstallWebSocketBridge() {
 
           case ix::WebSocketMessageType::Message: {
             ObserveSocialFrames("game->server", ConnIdxOfGameWs(&gameWs), msg->str);
+            LogFrameMessages("game->server", ConnIdxOfGameWs(&gameWs), msg->str);
             // Game→remote forwarding — dump all message symbols in the frame
             // EchoVR wire format: [marker(8)][symbol(8)][length(8)][payload(length)]...
             {
@@ -1395,6 +1417,10 @@ bool TestHook_GuardWsCallbackContainsStdException() {
   });
   guarded();
   return true;
+}
+
+int TestHook_LogFrameMessages(const char* direction, int connIdx, const std::string& frame) {
+  return LogFrameMessages(direction, connIdx, frame);
 }
 
 bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* statusCode, size_t* messageBytes) {
