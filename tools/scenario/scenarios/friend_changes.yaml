@@ -1,0 +1,24 @@
+# Friend changes show up without a restart. docs/design/2026-10-01-social-features-test-plan.md #8.
+# A friend accepted (or added on the website) and a friend removed each arrive as one notify; the
+# bridge must ask the server for the friend list again so the roster is rebuilt from the truth.
+name: friend_changes
+description: inject FriendAcceptNotify and FriendRemoveNotify and see the friend list refreshed each time
+vars:
+  friend_id: 1000000000000000003
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: a friend accepted (FriendAcceptNotify)
+    inject: {msg: FriendAcceptNotify, id: '${friend_id}'}
+  - name: the accept triggered a friend list refresh
+    expect_log: {pattern: 'friend change \S+ account=${friend_id}: refreshing the friend list sent=1', timeout: 10}
+  - name: the refresh request left the game
+    expect_log: {pattern: 'game->server conn=1 FriendListRefreshRequest', timeout: 10}
+  - name: a friend removed (FriendRemoveNotify)
+    inject: {msg: FriendRemoveNotify, id: '${friend_id}'}
+  - name: the removal triggered a friend list refresh
+    expect_log: {pattern: 'friend change \S+ account=${friend_id}: refreshing the friend list sent=1', timeout: 10}
+  - name: the server answered the refresh with the friend list
+    expect_log: {pattern: 'server->game conn=\d+ \S*FriendListResponse ', timeout: 10}

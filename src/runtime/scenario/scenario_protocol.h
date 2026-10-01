@@ -13,17 +13,42 @@
 
 namespace ScenarioProtocol {
 
-enum class Op { kState, kInjectFriendStatus, kFireFriendInvite };
+enum class Op { kState, kInjectFriendStatus, kInjectFriendNotify, kFireFriendInvite, kFireAddFriend };
 
 struct Command {
   Op op = Op::kState;
   std::uint64_t friendId = 0;   // inject FriendStatusNotify
   std::uint8_t status = 0;      // inject FriendStatusNotify: 0 online, 1 busy, 2 offline
-  std::string user;             // fire friend_invite: the user id string the friend row passes
+  std::string user;             // fire friend_invite / add_friend: the user id string the node passes
+  std::uint64_t notifySymbol = 0;  // inject a friend change notify
+  std::string notifyName;
 };
 
 /// SNSFriendStatusNotify, as the game's symbol table names it ("FriendStatusNotify").
 constexpr std::uint64_t kFriendStatusNotifySymbol = 0x26a19dc4d2d5579dULL;
+
+/// Friend-change notifies (nakama server/evr/sns_friends.go): Header(8) FriendID(8), plus
+/// StatusCode(1) Reserved(7) for the accept ones. Symbols from the game's symbol table.
+struct FriendNotify {
+  const char* name;
+  std::uint64_t symbol;
+  bool hasStatus;
+};
+constexpr FriendNotify kFriendNotifies[] = {
+    {"FriendAcceptNotify", 0xc237c84c31d3ae05ULL, true},
+    {"FriendAcceptSuccess", 0x1bbda7fa06af4627ULL, true},
+    {"FriendInviteNotify", 0xca09b0b36bd981b7ULL, false},
+    {"FriendInviteSuccess", 0x7f0c6a3ac83c6f77ULL, false},
+    {"FriendRemoveNotify", 0xe06972f49cd72265ULL, false},
+    {"FriendWithdrawnNotify", 0x191aa30801ec6d03ULL, false},
+    {"FriendRejectNotify", 0xb9b86c0ce8e8d0c1ULL, false},
+};
+
+inline const FriendNotify* FindFriendNotify(const std::string& name) {
+  for (const FriendNotify& n : kFriendNotifies)
+    if (name == n.name) return &n;
+  return nullptr;
+}
 
 /// Parses one command line. On failure returns false and sets `error` to a message that names
 /// what was wrong, so a runner failure points at the line it sent.
@@ -43,13 +68,25 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
   if (op == "state") {
     cmd.op = Op::kState;
   } else if (op == "inject") {
-    if (!j.contains("msg") || !j["msg"].is_string() || j["msg"].get<std::string>() != "FriendStatusNotify") {
-      *error = "inject supports only msg \"FriendStatusNotify\"";
+    const std::string msg = j.contains("msg") && j["msg"].is_string() ? j["msg"].get<std::string>() : "";
+    const FriendNotify* notify = FindFriendNotify(msg);
+    if (msg != "FriendStatusNotify" && notify == nullptr) {
+      *error = "inject supports msg \"FriendStatusNotify\" and the friend notifies (FriendAcceptNotify, "
+               "FriendAcceptSuccess, FriendInviteNotify, FriendInviteSuccess, FriendRemoveNotify, "
+               "FriendWithdrawnNotify, FriendRejectNotify)";
       return false;
     }
     if (!j.contains("id") || !j["id"].is_number_unsigned() || j["id"].get<std::uint64_t>() == 0) {
-      *error = "inject FriendStatusNotify needs a nonzero unsigned \"id\"";
+      *error = "inject " + msg + " needs a nonzero unsigned \"id\"";
       return false;
+    }
+    if (notify != nullptr) {
+      cmd.op = Op::kInjectFriendNotify;
+      cmd.friendId = j["id"].get<std::uint64_t>();
+      cmd.notifySymbol = notify->symbol;
+      cmd.notifyName = notify->name;
+      *out = cmd;
+      return true;
     }
     if (!j.contains("status") || !j["status"].is_number_unsigned() || j["status"].get<std::uint64_t>() > 2) {
       *error = "inject FriendStatusNotify needs \"status\" 0 (online), 1 (busy) or 2 (offline)";
@@ -59,16 +96,17 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
     cmd.friendId = j["id"].get<std::uint64_t>();
     cmd.status = static_cast<std::uint8_t>(j["status"].get<std::uint64_t>());
   } else if (op == "fire") {
-    if (!j.contains("action") || !j["action"].is_string() || j["action"].get<std::string>() != "friend_invite") {
-      *error = "fire supports only action \"friend_invite\"";
+    const std::string action = j.contains("action") && j["action"].is_string() ? j["action"].get<std::string>() : "";
+    if (action != "friend_invite" && action != "add_friend") {
+      *error = "fire supports action \"friend_invite\" and \"add_friend\"";
       return false;
     }
     if (!j.contains("user") || !j["user"].is_string() || j["user"].get<std::string>().empty() ||
         j["user"].get<std::string>().size() >= 40) {
-      *error = "fire friend_invite needs a \"user\" id string shorter than 40 characters";
+      *error = "fire " + action + " needs a \"user\" id string shorter than 40 characters";
       return false;
     }
-    cmd.op = Op::kFireFriendInvite;
+    cmd.op = action == "add_friend" ? Op::kFireAddFriend : Op::kFireFriendInvite;
     cmd.user = j["user"].get<std::string>();
   } else {
     *error = "unknown op \"" + op + "\" (state, inject, fire)";
@@ -87,6 +125,17 @@ inline std::string BuildFriendStatusNotify(std::uint64_t friendId, std::uint8_t 
   SocialParty::AppendLe(m.payload, friendId, 8);
   SocialParty::AppendLe(m.payload, status, 1);
   SocialParty::AppendLe(m.payload, 0, 7);
+  return SocialParty::Frame(m);
+}
+
+/// A friend-change notify frame: Header(8) FriendID(8), and StatusCode(1) Reserved(7) when the
+/// message has a status (accept notify / success; 0 = success).
+inline std::string BuildFriendNotify(const FriendNotify& notify, std::uint64_t friendId) {
+  SocialParty::Message m;
+  m.symbol = notify.symbol;
+  SocialParty::AppendLe(m.payload, 0, 8);
+  SocialParty::AppendLe(m.payload, friendId, 8);
+  if (notify.hasStatus) SocialParty::AppendLe(m.payload, 0, 8);
   return SocialParty::Frame(m);
 }
 

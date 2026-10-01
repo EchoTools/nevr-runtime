@@ -853,7 +853,7 @@ TEST(ScenarioProtocol, RejectionsNameWhatWasWrong) {
   EXPECT_NE(error.find("unknown op \"kick\""), std::string::npos);
   EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyKickRequest","id":1,"status":0})",
                                               &cmd, &error));
-  EXPECT_NE(error.find("only msg \"FriendStatusNotify\""), std::string::npos);
+  EXPECT_NE(error.find("supports msg \"FriendStatusNotify\""), std::string::npos);
   EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"FriendStatusNotify","id":0,"status":0})",
                                               &cmd, &error));
   EXPECT_NE(error.find("nonzero"), std::string::npos);
@@ -937,4 +937,24 @@ TEST(SocialFriends, FriendChangesAreRecognisedAndTheRefreshRepliesAreNot) {
   EXPECT_TRUE(SocialRoster::IsFriendChangeSymbol(0xc237c84c31d3ae05ULL));   // FriendAcceptNotify
   EXPECT_FALSE(SocialRoster::IsFriendChangeSymbol(0x26a19dc4d2d5579dULL));  // FriendStatusNotify
   EXPECT_FALSE(SocialRoster::IsFriendChangeSymbol(0xa78aeb2a4e89b10bULL));  // FriendListResponse
+}
+
+TEST(ScenarioProtocol, InjectsFriendNotifiesAndFiresAddFriend) {
+  ScenarioProtocol::Command cmd;
+  std::string error;
+  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"FriendAcceptNotify","id":4242})", &cmd, &error))
+      << error;
+  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectFriendNotify);
+  EXPECT_EQ(cmd.notifySymbol, 0xc237c84c31d3ae05ULL);
+  const std::string frame =
+      ScenarioProtocol::BuildFriendNotify(*ScenarioProtocol::FindFriendNotify("FriendAcceptNotify"), 4242);
+  ASSERT_EQ(frame.size(), 24U + 24U);
+  std::uint64_t id = 0;
+  std::memcpy(&id, frame.data() + 24 + 8, sizeof(id));
+  EXPECT_EQ(id, 4242U);
+  EXPECT_EQ(ScenarioProtocol::BuildFriendNotify(*ScenarioProtocol::FindFriendNotify("FriendRemoveNotify"), 4242).size(),
+            24U + 16U);
+  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"add_friend","user":"OVR-ORG-4242"})", &cmd, &error))
+      << error;
+  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kFireAddFriend);
 }

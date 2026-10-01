@@ -39,6 +39,9 @@ namespace {
 constexpr std::uint64_t kSnsUserIdVA = 0x1400F6C10;
 constexpr std::uint64_t kInviteHandlerVA = 0x14018AA90;
 constexpr std::uint64_t kDeferredCallVA = 0x140F4B690;
+// R15NetAddFriendNode (run 0x140dd90f0) is the same node shape and posts 0x1401870f0 instead (provider
+// checks, then social slot 37 OpenFriendRequestUI(0, account)).
+constexpr std::uint64_t kAddFriendHandlerVA = 0x1401870F0;
 constexpr std::uintptr_t kDeferredQueueOffset = 0x2B20;
 constexpr std::uintptr_t kNetGameOffset = 0x8518;  // g_pGame -> CR15NetGame* (social_facade.cpp)
 
@@ -50,10 +53,14 @@ constexpr std::array<std::uint8_t, 16> kInviteHandlerPrologue = {0x48, 0x89, 0x5
 constexpr std::array<std::uint8_t, 16> kDeferredCallPrologue = {0x48, 0x89, 0x6C, 0x24, 0x20, 0x57, 0x41, 0x56,
                                                                 0x41, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x83, 0xB9};
 
+constexpr std::array<std::uint8_t, 16> kAddFriendHandlerPrologue = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83,
+                                                                    0xEC, 0x20, 0x48, 0x83, 0xB9, 0xC8, 0x47, 0x06};
+
 using SnsUserIdFn = std::uint64_t* (*)(std::uint64_t* out, const char* user);
 using DeferredCallFn = void (*)(void* queue, void* target, void* method, std::uint64_t* args);
 
 struct FireRequest {
+  bool addFriend = false;  // false: friend_invite (R15NetPartySendInviteNode); true: add_friend (R15NetAddFriendNode)
   std::string user;
   std::promise<std::string> result;  // empty string = posted; otherwise the reason it was not
 };
@@ -84,8 +91,9 @@ void* Checked(std::uint64_t va, const std::array<std::uint8_t, N>& prologue, con
   return target;
 }
 
-// Game thread. Returns "" when the handler was posted, else why not.
-std::string FireFriendInvite(const std::string& user) {
+// Game thread. Does what the node's run function does: SNSUserID on the user string, then post the
+// node's handler on the NetGame deferred queue. Returns "" when posted, else why not.
+std::string FireNode(bool addFriend, const std::string& user) {
   std::string error;
   void* netGame = NetGame();
   if (netGame == nullptr) return "no NetGame yet";
@@ -93,7 +101,8 @@ std::string FireFriendInvite(const std::string& user) {
   // PartyInviteGate detours this handler for tracing after validating these same bytes; then the
   // first bytes are its jump, and calling the address goes through the trace, as the script node's
   // call does.
-  void* handler = PartyInviteGate::InviteHandlerTraced()
+  void* handler = addFriend ? Checked(kAddFriendHandlerVA, kAddFriendHandlerPrologue, "add friend handler", &error)
+                  : PartyInviteGate::InviteHandlerTraced()
                       ? nevr::ResolveVA_Checked(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress), kInviteHandlerVA)
                       : Checked(kInviteHandlerVA, kInviteHandlerPrologue, "friend invite handler", &error);
   auto* defer = reinterpret_cast<DeferredCallFn>(Checked(kDeferredCallVA, kDeferredCallPrologue, "deferred call", &error));
@@ -102,9 +111,11 @@ std::string FireFriendInvite(const std::string& user) {
   snsUserId(xpid.data(), user.c_str());
   if ((xpid[0] & 0xF) == 0 || xpid[1] == 0) return "SNSUserID did not parse \"" + user + "\" into a provider and account";
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.SCENARIO] fire friend_invite user=%s provider=%llu account=%llu: posting the friend row's invite "
-      "handler (0x14018aa90) on the NetGame deferred queue, as script node 0x140dddf60 does",
-      user.c_str(), static_cast<unsigned long long>(xpid[0] & 0xF), static_cast<unsigned long long>(xpid[1]));
+      "[NEVR.SCENARIO] fire %s user=%s provider=%llu account=%llu: posting handler 0x%llx on the NetGame "
+      "deferred queue, as script node %s does",
+      addFriend ? "add_friend" : "friend_invite", user.c_str(), static_cast<unsigned long long>(xpid[0] & 0xF), static_cast<unsigned long long>(xpid[1]),
+      static_cast<unsigned long long>(addFriend ? kAddFriendHandlerVA : kInviteHandlerVA),
+      addFriend ? "R15NetAddFriendNode (0x140dd90f0)" : "R15NetPartySendInviteNode (0x140dddf60)");
   defer(static_cast<std::uint8_t*>(netGame) + kDeferredQueueOffset, netGame, handler, xpid.data());
   return std::string();
 }
@@ -142,8 +153,18 @@ nlohmann::json Handle(const std::string& line) {
       if (!InjectServerFrameForTest(frame, &error)) return Fail(error);
       return {{"ok", true}};
     }
-    case ScenarioProtocol::Op::kFireFriendInvite: {
+    case ScenarioProtocol::Op::kInjectFriendNotify: {
+      Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject %s id=%llu", cmd.notifyName.c_str(),
+          static_cast<unsigned long long>(cmd.friendId));
+      const ScenarioProtocol::FriendNotify* notify = ScenarioProtocol::FindFriendNotify(cmd.notifyName);
+      if (notify == nullptr) return Fail("unknown notify " + cmd.notifyName);
+      if (!InjectServerFrameForTest(ScenarioProtocol::BuildFriendNotify(*notify, cmd.friendId), &error)) return Fail(error);
+      return {{"ok", true}};
+    }
+    case ScenarioProtocol::Op::kFireFriendInvite:
+    case ScenarioProtocol::Op::kFireAddFriend: {
       auto request = std::make_shared<FireRequest>();
+      request->addFriend = cmd.op == ScenarioProtocol::Op::kFireAddFriend;
       request->user = cmd.user;
       std::future<std::string> done = request->result.get_future();
       {
@@ -237,7 +258,7 @@ void OnFrame() {
     std::lock_guard<std::mutex> lock(g_fireMutex);
     pending.swap(g_fireQueue);
   }
-  for (const auto& request : pending) request->result.set_value(FireFriendInvite(request->user));
+  for (const auto& request : pending) request->result.set_value(FireNode(request->addFriend, request->user));
 }
 
 void Stop() {
