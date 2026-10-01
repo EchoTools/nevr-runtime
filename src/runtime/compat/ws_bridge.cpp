@@ -290,7 +290,7 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
                             strstr(name, "Social") != nullptr)) {
       // An invite's target is the last u64 of the Standard party payload (social_party.h Standard):
       // logged so a test, or a person reading the log, can see who an invite went to.
-      if (strcmp(name, "PartyInviteRequest") == 0 && len >= 0x28) {
+      if ((strcmp(name, "PartyInviteRequest") == 0 || strcmp(name, "FriendInviteRequest") == 0) && len >= 0x28) {
         uint64_t target = 0;
         memcpy(&target, payload + 0x20, sizeof(target));
         Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s payload_bytes=%llu target=%llu", direction,
@@ -314,6 +314,16 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
                 static_cast<unsigned long long>(friendId), SocialParty::Send(asks) ? 1 : 0);
           }
         }
+      }
+      // A friend added, accepted, removed or withdrawn: none of these carries presence, so ask the
+      // server for the list again; the reply rebuilds the roster (a friend added on the website
+      // used to stay invisible until the next login).
+      if (SocialRoster::IsFriendChangeSymbol(sym) || SocialRoster::IsFriendChange(gameName)) {
+        uint64_t friendId = 0;
+        if (len >= 16) memcpy(&friendId, payload + 8, sizeof(friendId));
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend change %s account=%llu: refreshing the friend list sent=%d",
+            name != nullptr ? name : "<unnamed>", static_cast<unsigned long long>(friendId),
+            SocialParty::Send(SocialParty::Global().RefreshFriends()) ? 1 : 0);
       }
       // Party messages update the facade's party; any requests that were waiting on the reply
       // (invites queued behind the party's creation) go out now. This runs on the remote's

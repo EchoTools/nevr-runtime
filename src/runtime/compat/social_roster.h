@@ -201,6 +201,35 @@ inline Roster& Global() {
   return roster;
 }
 
+/// A server message that changes who is on the friends list (an add, an accept, a removal, a
+/// withdrawn or rejected request, a new incoming request). The roster is rebuilt from the server's
+/// list on these, because none of them carries presence. `name` is as the game's symbol table
+/// returns it; an "SNS" prefix is accepted too.
+inline bool IsFriendChangeSymbol(std::uint64_t symbol) {
+  switch (symbol) {
+    case 0xc237c84c31d3ae05ULL:  // SNSFriendAcceptNotify
+    case 0x1bbda7fa06af4627ULL:  // SNSFriendAcceptSuccess
+    case 0xe06972f49cd72265ULL:  // SNSFriendRemoveNotify
+    case 0xc2bf83a08ea3a955ULL:  // SNSFriendRemoveResponse
+    case 0x191aa30801ec6d03ULL:  // SNSFriendWithdrawnNotify
+    case 0xb9b86c0ce8e8d0c1ULL:  // SNSFriendRejectNotify
+    case 0xca09b0b36bd981b7ULL:  // SNSFriendInviteNotify
+    case 0x7f0c6a3ac83c6f77ULL:  // SNSFriendInviteSuccess
+      return true;
+    default:
+      return false;
+  }
+}
+
+inline bool IsFriendChange(const char* name) {
+  if (name == nullptr) return false;
+  std::string n(name);
+  if (n.rfind("SNS", 0) == 0) n.erase(0, 3);
+  return n == "FriendAcceptNotify" || n == "FriendAcceptSuccess" || n == "FriendRemoveNotify" ||
+         n == "FriendRemoveResponse" || n == "FriendWithdrawnNotify" || n == "FriendRejectNotify" ||
+         n == "FriendInviteNotify" || n == "FriendInviteSuccess";
+}
+
 /// Feeds one server->game message into `roster`. `name` is the symbol name exactly as the game's
 /// symbol table returns it, which has no "SNS" prefix ("FriendStatusNotify", not
 /// "SNSFriendStatusNotify"). Returns true when the message was a roster message.

@@ -281,32 +281,38 @@ void PumpParty(void* self) {
 
 void SendParty(const char* what, const std::vector<SocialParty::Message>& messages) {
   if (messages.empty()) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party %s: nothing to send in the current party state", what);
+    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s: nothing to send in the current party state", what);
     return;
   }
   const bool sent = SocialParty::Send(messages);
-  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party %s: %zu request(s) %s", what, messages.size(),
+  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s: %zu request(s) %s", what, messages.size(),
       sent ? "sent" : "NOT sent");
 }
 
-void SendInvite(void*, std::uint64_t target) { SendParty("invite", SocialParty::Global().SendInvite(target)); }
-void LeaveParty(void*) { SendParty("leave", SocialParty::Global().Leave()); }
-void PassOwnership(void*, std::uint32_t index) { SendParty("pass", SocialParty::Global().Pass(index)); }
-void KickMember(void*, std::uint32_t index) { SendParty("kick", SocialParty::Global().Kick(index)); }
+void SendInvite(void*, std::uint64_t target) { SendParty("party invite", SocialParty::Global().SendInvite(target)); }
+void LeaveParty(void*) { SendParty("party leave", SocialParty::Global().Leave()); }
+void PassOwnership(void*, std::uint32_t index) { SendParty("party pass", SocialParty::Global().Pass(index)); }
+void KickMember(void*, std::uint32_t index) { SendParty("party kick", SocialParty::Global().Kick(index)); }
 void DismissInvite(void*, std::int32_t index) {
-  SendParty("dismiss", SocialParty::Global().Dismiss(static_cast<std::uint32_t>(index)));
+  SendParty("party invite dismiss", SocialParty::Global().Dismiss(static_cast<std::uint32_t>(index)));
 }
 void AcceptInvite(void* self, std::int32_t index) {
   if (!CallGate(self, kCbInviteAccepted)) {
     Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party accept: the game declined to join");
     return;
   }
-  SendParty("accept", SocialParty::Global().Accept(static_cast<std::uint32_t>(index)));
+  SendParty("party invite accept", SocialParty::Global().Accept(static_cast<std::uint32_t>(index)));
 }
 
 // The game calls this when the friends tab opens. The roster is otherwise filled only once, at
 // login, so a friend added since (for example on the web site) never showed until a restart.
 void RefreshFriends(void*) { SendParty("refresh friends", SocialParty::Global().RefreshFriends()); }
+// Slot 37 OpenFriendRequestUI: the game's add-friend node (R15NetAddFriendNode, run 0x140dd90f0 ->
+// 0x1401870f0) calls it with (0, target account) after its provider checks. pnsovr opened the
+// Oculus friend-request overlay; here it is the friend request itself.
+void OpenFriendRequestUI(void*, std::uint64_t, std::uint64_t target) {
+  SendParty("friend request", SocialParty::Global().RequestFriend(target));
+}
 
 // Slot 2 JoinInternal (0x18008d1e0): the game's join by party id. The accept gate callback runs first.
 void JoinParty(void* self, std::uint64_t partyId) {
@@ -314,7 +320,7 @@ void JoinParty(void* self, std::uint64_t partyId) {
     Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party join: the game declined to join");
     return;
   }
-  SendParty("join", SocialParty::Global().Join(partyId));
+  SendParty("party join", SocialParty::Global().Join(partyId));
 }
 
 // Slot 30 MemberDataWritable (0x18008fcf0): only for the local member (index 0, once a local user
@@ -419,7 +425,7 @@ void MaybeCreateParty(const void* flagsPointer) {
   const std::vector<SocialParty::Message> request = SocialParty::Global().CreateParty();
   if (request.empty()) return;
   lastCreate = now;
-  SendParty("create (the game asked for a party)", request);
+  SendParty("party create (the game asked for a party)", request);
 }
 
 void Update(void* self, const void* flags) {
@@ -551,7 +557,7 @@ void ResetBase(void* self) {
 // Slot 12 Reset (0x180091660): pnsovr leaves the room it is in (no Left callback), clears its caches,
 // then runs the base reset. The game follows every call with SetLocalUser.
 void Reset(void* self) {
-  SendParty("reset (leave the party)", SocialParty::Global().ResetParty());
+  SendParty("party reset (leave the party)", SocialParty::Global().ResetParty());
   ResetBase(self);
 }
 
@@ -765,7 +771,7 @@ const std::array<Slot, kVtableSlotCount> kVtable = {
     TRACED(34, ExitLobby),  // 34 ExitLobby
     TRACED(35, UnimplementedSlot),  // 35 EnterGame
     TRACED(36, UnimplementedSlot),  // 36 ExitGame
-    TRACED(37, UnimplementedSlot),  // 37 OpenFriendRequestUI
+    TRACED(37, OpenFriendRequestUI),  // 37 OpenFriendRequestUI
     TRACED(38, UnimplementedSlot),  // 38 OpenSendInviteUI
     TRACED(39, UnimplementedSlot),  // 39 OpenNewSendInviteUI
     TRACED(40, UnimplementedSlot),  // 40 OpenNewSendInviteUI(target)

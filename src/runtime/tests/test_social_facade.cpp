@@ -904,3 +904,37 @@ TEST(ProviderIdentity, UserProviderIdPatchReturnsTheOvrSymbolAndFitsTheSite) {
   // "RAD", which pnsrad returned, is not "OVR".
   EXPECT_NE(kOvrProviderSymbol, 0xc8e8d0b1a882e3eeULL);
 }
+
+// Slot 37 OpenFriendRequestUI is where the game's add-friend node lands; it must put a friend request
+// for exactly that account on the wire, in the layout Nakama reads (sns_friends.go
+// SNSFriendInviteRequest: RoutingID, LocalUserUUID, SessionGUID, TargetUserID).
+TEST(SocialFriends, AddFriendSendsAFriendRequestForTheTarget) {
+  SocialParty::State party;
+  party.SetSelf(4242);
+  const std::vector<SocialParty::Message> out = party.RequestFriend(5151);
+  ASSERT_EQ(out.size(), 1U);
+  EXPECT_EQ(out[0].symbol, 0x7f0d7a28de3c6f70ULL);
+  ASSERT_EQ(out[0].payload.size(), 0x28U);
+  std::uint64_t target = 0;
+  std::memcpy(&target, out[0].payload.data() + 0x20, sizeof(target));
+  EXPECT_EQ(target, 5151U);
+  EXPECT_STREQ(SocialParty::RequestName(0x7f0d7a28de3c6f70ULL), "FriendInviteRequest");
+  EXPECT_TRUE(party.RequestFriend(0).empty());
+}
+
+// Every message that changes who is a friend triggers a list refresh; presence and the list itself
+// do not (they are what the refresh returns, so treating them as changes would loop).
+TEST(SocialFriends, FriendChangesAreRecognisedAndTheRefreshRepliesAreNot) {
+  for (const char* name : {"FriendAcceptNotify", "FriendAcceptSuccess", "FriendRemoveNotify", "FriendRemoveResponse",
+                           "FriendWithdrawnNotify", "FriendRejectNotify", "FriendInviteNotify", "FriendInviteSuccess",
+                           "SNSFriendAcceptNotify"}) {
+    EXPECT_TRUE(SocialRoster::IsFriendChange(name)) << name;
+  }
+  for (const char* name : {"FriendStatusNotify", "FriendListResponse", "PartyInviteNotify", "FriendInviteFailure"}) {
+    EXPECT_FALSE(SocialRoster::IsFriendChange(name)) << name;
+  }
+  EXPECT_FALSE(SocialRoster::IsFriendChange(nullptr));
+  EXPECT_TRUE(SocialRoster::IsFriendChangeSymbol(0xc237c84c31d3ae05ULL));   // FriendAcceptNotify
+  EXPECT_FALSE(SocialRoster::IsFriendChangeSymbol(0x26a19dc4d2d5579dULL));  // FriendStatusNotify
+  EXPECT_FALSE(SocialRoster::IsFriendChangeSymbol(0xa78aeb2a4e89b10bULL));  // FriendListResponse
+}

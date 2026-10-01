@@ -37,6 +37,7 @@ constexpr std::uint64_t kLockRequest = 0xc2478aa479f3e16aULL;
 constexpr std::uint64_t kUnlockRequest = 0x5a4e99802fa3d704ULL;
 constexpr std::uint64_t kInviteListRefreshRequest = 0xd8cbc44959e25da8ULL;
 constexpr std::uint64_t kFriendListRefreshRequest = 0xdcfa94680e8d19fcULL;  // SNSFriendListRefreshRequest
+constexpr std::uint64_t kFriendInviteRequest = 0x7f0d7a28de3c6f70ULL;  // SNSFriendInviteRequest (add a friend; accepts when the target already asked)
 constexpr std::uint64_t kKickRequest = 0xfaf57beb59917d64ULL;
 constexpr std::uint64_t kPassRequest = 0x518543cd886a6946ULL;
 constexpr std::uint64_t kInviteResponse = 0xe3654a09203555a3ULL;  // SNSPartyRespondToInviteRequest
@@ -99,6 +100,7 @@ inline const char* RequestName(std::uint64_t symbol) {
     case kPassRequest: return "PartyPassRequest";
     case kInviteResponse: return "PartyInviteResponse";
     case kFriendListRefreshRequest: return "FriendListRefreshRequest";
+    case kFriendInviteRequest: return "FriendInviteRequest";
     default: return nullptr;
   }
 }
@@ -404,6 +406,16 @@ class State {
     std::lock_guard<std::mutex> guard(mutex_);
     std::vector<Message> out;
     out.push_back(Short(kFriendListRefreshRequest, SelfUuid()));
+    return out;
+  }
+
+  /// Social slot 37 OpenFriendRequestUI(target), which the game's R15NetAddFriendNode reaches: a friend
+  /// request. Same 0x28-byte layout as the party requests (nakama server/evr/sns_friends.go
+  /// SNSFriendInviteRequest). Nakama turns a request to someone who already asked into an accept.
+  std::vector<Message> RequestFriend(std::uint64_t target) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    std::vector<Message> out;
+    if (target != 0) out.push_back(Standard(kFriendInviteRequest, SelfUuid(), target));
     return out;
   }
 
