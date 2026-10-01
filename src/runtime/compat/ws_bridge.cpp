@@ -942,62 +942,11 @@ void InstallWebSocketBridge() {
                               subscribeMsg.size());
                         }
                       }
-                      // 2026-09-14 (Andrew + Claude, launch-server.sh hang investigation —
-                      // see docs/reference/server-mode-multiplayer-hang.md): Nakama sends
-                      // STcpConnectionUnrequireEvent (sym 0x43e6963ac76beee4) right after
-                      // every LoginSuccess, server mode or client. Confirmed via ReVault:
-                      // neither echovr.exe nor libpnsrad.so has ANY decompiled code
-                      // referencing this symbol — nothing native reacts to it. In the one
-                      // last-known-good server capture we have
-                      // (echovr-server-32-2026-07-26T11-16-07.550.jsonl), the login
-                      // connection was lost ~5s after this point and "Beginning
-                      // multiplayer" followed ~6s after THAT; in every current run the
-                      // connection just stays open forever and multiplayer bring-up never
-                      // starts. Correlation, not proven causation — but the event's own
-                      // name ("you don't need this connection anymore") and the absence of
-                      // any native handler both point the same direction: something was
-                      // supposed to close this connection here and doesn't anymore.
-                      //
-                      // This is production behavior, not an experiment: it runs
-                      // unconditionally in server mode, with no flag to disable it, and
-                      // has been live for weeks. Closes remoteWs only (not gameWsPtr,
-                      // which the Close handler below documents as deadlock-prone under
-                      // the loader lock) — the game discovers the closed remote on its
-                      // next send attempt, same documented-safe path already used for a
-                      // real remote-initiated close. Server mode only; client mode is
-                      // already confirmed working end-to-end and this must not touch it.
-                      //
-                      // BUG FOUND AND FIXED, same day: `rsym` above only ever reflects the
-                      // FIRST message in this frame. Nakama sends LoginSuccess and
-                      // STcpConnectionUnrequireEvent back-to-back (identical millisecond
-                      // timestamp in nakama.log), almost certainly batched into one WS
-                      // frame — so `rsym == 0x43e6963...` was silently dead code on the
-                      // very first live test (confirmed: nakama.log shows the event sent,
-                      // this DIAG line never printed). Scan every message in the frame
-                      // instead of trusting the single `rsym`, same 24-byte-header walk the
-                      // outgoing (game->server) direction already uses below.
-                      if (g_isServer) {
-                        const uint8_t* fp = (const uint8_t*)rmsg->str.data();
-                        size_t fremaining = rmsg->str.size();
-                        while (fremaining >= 24) {
-                          if (memcmp(fp, MSG_MARKER, 8) != 0) break;
-                          uint64_t fsym = 0, flen = 0;
-                          memcpy(&fsym, fp + 8, 8);
-                          memcpy(&flen, fp + 16, 8);
-                          size_t ftotal = 24 + (size_t)flen;
-                          if (ftotal > fremaining) break;  // truncated — stop, don't misread
-                          if (fsym == 0x43e6963ac76beee4) {
-                            Log(EchoVR::LogLevel::Info,
-                                "[NEVR.WS] STcpConnectionUnrequireEvent seen in-frame (server mode) — "
-                                "closing remoteWs so the game detects the closed connection on its next "
-                                "send and proceeds to BeginMultiplayer");
-                            pairPtr->remoteWs->close();
-                            break;
-                          }
-                          fp += ftotal;
-                          fremaining -= ftotal;
-                        }
-                      }
+                      // STcpConnectionUnrequireEvent is deliberately NOT acted on.
+                      // d0190c4/dd1e9e7 closed the remote here in server mode; Nakama sends the event on
+                      // the config connection too, so the config socket died before the game's post-login
+                      // config requests and the server never left "logging in" (real Windows 2026-10-01
+                      // 02:17Z; test_bridge_never_closes_a_remote_on_unrequire).
                       // Decode SNS friend messages
                       // InviteFailure (0x7f197e30c72c6e61): Header(8)+FriendID(8)+StatusCode(1)
                       if (rsym == 0x7f197e30c72c6e61 && rmsg->str.size() >= 24 + 17) {

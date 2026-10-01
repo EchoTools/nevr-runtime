@@ -169,6 +169,13 @@ version of this check was silently dead code — confirmed nakama.log showed
 the event sent while our DIAG line never printed. Fixed by scanning every
 message in the frame).
 
+**Correction (2026-10-01):** the "hang is identical" statement below is wrong. A capture of
+that same experiment (`/var/tmp/nevr-server-test.log`, L164-166) shows the close firing
+before `LOGIN SUCCESS`, i.e. the close moved the failure earlier: it killed the config
+connection ahead of the game's post-login config requests. The close was removed in the
+commit that adds this note; real Windows 2026-10-01 02:17Z showed
+`game->server message NOT delivered: conn=0 (config)` and NetGame never left "logging in".
+
 **Result: the DIAG line fires correctly (confirmed live, 3 times — once per
 batched frame instance across the two bridge connections), `remoteWs->close()`
 executes, but nothing downstream changes.** No `"connection ... lost"`, no

@@ -38,6 +38,18 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertNotRegex(body, r"\bNevrCfg\w*\s*\(")
         self.assertNotRegex(body, r"\bNevrGame\w*\s*\(")
 
+    def test_bridge_never_closes_a_remote_on_unrequire(self):
+        # d0190c4/dd1e9e7 (2026-09-14) closed the remote websocket whenever STcpConnectionUnrequireEvent
+        # arrived in server mode, as an experiment (refuted in 79e27d5). Nakama sends that event on
+        # the config connection as well, so the config connection was closed before the game's
+        # post-login config requests (battle pass, store, eula); they were never delivered and
+        # NetGame never left "logging in" (real Windows 2026-10-01 02:17Z: "game->server message NOT
+        # delivered: conn=0 (config)"). The bridge must not react to this symbol at all, so the
+        # symbol must not appear in it; other remote closes are not covered here.
+        source = (ROOT / "src/runtime/compat/ws_bridge.cpp").read_text()
+
+        self.assertNotIn("0x43e6963ac76beee4", source)
+
 
 if __name__ == "__main__":
     unittest.main()
