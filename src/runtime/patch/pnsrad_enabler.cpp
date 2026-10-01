@@ -21,9 +21,14 @@
  *   5. NOPs LoginIdResponseCB's authenticated state flag check so GameSettings
  *      are processed even when the injected LoginRequest bypasses pnsrad's
  *      state machine.
+ *
+ *   6. Makes the exported UserProviderID return the "OVR" provider symbol so the
+ *      game's provider checks (friend invite handler, party member callbacks)
+ *      agree with the OVR-ORG identity (runtime/patch/provider_identity.h).
  * ====================================================================== */
 
 #include "runtime/patch/pnsrad_enabler.h"
+#include "runtime/patch/provider_identity.h"
 #include "runtime/compat/ws_bridge.h"  // GetMatchmakerBridgePort()
 #include "core/logging.h"
 #include "nevr_common.h"      // N97: the one ValidatePrologue
@@ -392,6 +397,35 @@ static void PnsradNopPatch(uint8_t* site, const uint8_t* expected, size_t expLen
     }
 }
 
+/* Replace pnsrad's UserProviderID body so it returns the OVR provider symbol
+ * (runtime/patch/provider_identity.h has the measurement). Same accounting as the
+ * NOP patches: validated first, every outcome counted and reported. */
+static void PnsradUserProviderIdPatch(uintptr_t base) {
+    using namespace ProviderIdentity;
+    uint8_t* site = reinterpret_cast<uint8_t*>(base + kPnsradUserProviderIdRva);
+    if (!nevr::ValidatePrologue(site, kPnsradUserProviderIdExpected.data(), kPnsradUserProviderIdExpected.size())) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] pnsrad UserProviderID patch skipped rva=0x%x reason=bytes_mismatch expected=%s actual=%s",
+            static_cast<unsigned>(kPnsradUserProviderIdRva),
+            BytesToHex(kPnsradUserProviderIdExpected.data(), kPnsradUserProviderIdExpected.size()).c_str(),
+            BytesToHex(site, kPnsradUserProviderIdExpected.size()).c_str());
+        s_pnsradFail++;
+        return;
+    }
+    const auto code = ReturnConstant(kOvrProviderSymbol);
+    DWORD err = 0;
+    if (PatchMemory(site, code.data(), code.size(), &err)) {
+        Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] pnsrad UserProviderID now returns OVR at +0x%x",
+            static_cast<unsigned>(kPnsradUserProviderIdRva));
+        s_pnsradOk++;
+    } else {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PATCH] pnsrad PatchMemory FAILED UserProviderID rva=0x%x error=%lu — bytes matched but the "
+            "write did not land", static_cast<unsigned>(kPnsradUserProviderIdRva), err);
+        s_pnsradFail++;
+    }
+}
+
 static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* data, void*) {
     if (reason != 1 || !data || !data->BaseDllName) return;
     const UNICODE_STRING* name = data->BaseDllName;
@@ -443,6 +477,7 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
         PnsradNopPatch(reinterpret_cast<uint8_t*>(base + PNSRAD_LOGIN_STATE_CHECK),
                        PNSRAD_STATE_JE_EXPECTED, sizeof(PNSRAD_STATE_JE_EXPECTED), 6,
                        "state check", (unsigned)PNSRAD_LOGIN_STATE_CHECK);
+        PnsradUserProviderIdPatch(base);
         InstallPartyBroadcasterDiag(base);
         InstallPartySendInviteDiag(base);
 
@@ -450,7 +485,7 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
             "[NEVR.PATCH] pnsrad module patches: %d succeeded, %d failed — social layer "
             "(friends/party/login) %s",
             s_pnsradOk, s_pnsradFail,
-            (s_pnsradFail == 0 && s_pnsradOk == 3) ? "ENABLED"
+            (s_pnsradFail == 0 && s_pnsradOk == 4) ? "ENABLED"
             : (s_pnsradOk == 0) ? "NOT PATCHED"
                                 : "PARTIALLY PATCHED");
     }

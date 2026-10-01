@@ -11,6 +11,7 @@
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
 #include "runtime/patch/party_invite_gate.h"
+#include "runtime/patch/provider_identity.h"
 #include "runtime/patch/social_facade.h"
 #include "core/hooking.h"
 
@@ -818,4 +819,19 @@ TEST(PartyInviteGate, OnlyTheFirstMatchFlagIsForcedTrue) {
   EXPECT_EQ(PartyInviteGate::BooleanResult("npe|firstmatch|completed|x", 0), 0u);
   EXPECT_EQ(PartyInviteGate::BooleanResult("other", 1), 1u);
   EXPECT_EQ(PartyInviteGate::BooleanResult(nullptr, 0), 0u);
+}
+
+// pnsrad's UserProviderID must report the provider whose CSymbol64 code is 4, the code SNSUserID
+// gives every "OVR-ORG-" id the game builds; otherwise the friend invite handler drops the click.
+TEST(ProviderIdentity, UserProviderIdPatchReturnsTheOvrSymbolAndFitsTheSite) {
+  using namespace ProviderIdentity;
+  const auto code = ReturnConstant(kOvrProviderSymbol);
+  const std::array<std::uint8_t, 11> expected = {0x48, 0xB8, 0xF8, 0xF4, 0x9F, 0xA8, 0xB1, 0xD0, 0xE8, 0xC8, 0xC3};
+  EXPECT_EQ(code, expected);
+  EXPECT_LE(code.size(), kPnsradUserProviderIdExpected.size());
+  // The original body ends at the ret; the rest of the site is padding the write may reuse.
+  EXPECT_EQ(kPnsradUserProviderIdExpected[7], 0xC3);
+  for (std::size_t i = 8; i < kPnsradUserProviderIdExpected.size(); ++i) EXPECT_EQ(kPnsradUserProviderIdExpected[i], 0xCC);
+  // "RAD", which pnsrad returned, is not "OVR".
+  EXPECT_NE(kOvrProviderSymbol, 0xc8e8d0b1a882e3eeULL);
 }
