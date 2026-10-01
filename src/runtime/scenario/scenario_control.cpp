@@ -42,6 +42,13 @@ constexpr std::uint64_t kDeferredCallVA = 0x140F4B690;
 // R15NetAddFriendNode (run 0x140dd90f0) is the same node shape and posts 0x1401870f0 instead (provider
 // checks, then social slot 37 OpenFriendRequestUI(0, account)).
 constexpr std::uint64_t kAddFriendHandlerVA = 0x1401870F0;
+// R15NetPartyRespondToInviteNode (run 0x140dddd30) posts, through the int-argument deferred call
+// 0x140198650(queue, netGame, handler, invite index), 0x140188bf0 to accept (bounds-checks the
+// index with social slot 70 InviteCount, then slot 73 AcceptInvite) or 0x140188f40 to dismiss
+// (slot 74 DismissInvite). Measured from raw disassembly.
+constexpr std::uint64_t kDeferredCallU32VA = 0x140198650;
+constexpr std::uint64_t kAcceptInviteHandlerVA = 0x140188BF0;
+constexpr std::uint64_t kDismissInviteHandlerVA = 0x140188F40;
 constexpr std::uintptr_t kDeferredQueueOffset = 0x2B20;
 constexpr std::uintptr_t kNetGameOffset = 0x8518;  // g_pGame -> CR15NetGame* (social_facade.cpp)
 
@@ -56,11 +63,20 @@ constexpr std::array<std::uint8_t, 16> kDeferredCallPrologue = {0x48, 0x89, 0x6C
 constexpr std::array<std::uint8_t, 16> kAddFriendHandlerPrologue = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83,
                                                                     0xEC, 0x20, 0x48, 0x83, 0xB9, 0xC8, 0x47, 0x06};
 
+constexpr std::array<std::uint8_t, 16> kDeferredCallU32Prologue = {0x48, 0x89, 0x6C, 0x24, 0x20, 0x56, 0x57, 0x41,
+                                                                   0x56, 0x48, 0x83, 0xEC, 0x20, 0x83, 0xB9, 0xF8};
+constexpr std::array<std::uint8_t, 16> kRespondInviteHandlerPrologue = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83,
+                                                                        0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x8B, 0xFA, 0x48};
+using DeferredCallU32Fn = void (*)(void* queue, void* target, void* method, std::uint32_t arg);
+
 using SnsUserIdFn = std::uint64_t* (*)(std::uint64_t* out, const char* user);
 using DeferredCallFn = void (*)(void* queue, void* target, void* method, std::uint64_t* args);
 
 struct FireRequest {
   bool addFriend = false;  // false: friend_invite (R15NetPartySendInviteNode); true: add_friend (R15NetAddFriendNode)
+  bool respond = false;    // respond_to_invite (R15NetPartyRespondToInviteNode)
+  std::uint32_t inviteIndex = 0;
+  bool accept = false;
   std::string user;
   std::promise<std::string> result;  // empty string = posted; otherwise the reason it was not
 };
@@ -120,6 +136,25 @@ std::string FireNode(bool addFriend, const std::string& user) {
   return std::string();
 }
 
+// Game thread. Does what R15NetPartyRespondToInviteNode's run function does for a resolved index.
+std::string FireRespondInvite(std::uint32_t index, bool accept) {
+  std::string error;
+  void* netGame = NetGame();
+  if (netGame == nullptr) return "no NetGame yet";
+  auto* defer = reinterpret_cast<DeferredCallU32Fn>(
+      Checked(kDeferredCallU32VA, kDeferredCallU32Prologue, "int deferred call", &error));
+  void* handler = Checked(accept ? kAcceptInviteHandlerVA : kDismissInviteHandlerVA, kRespondInviteHandlerPrologue,
+                          accept ? "accept invite handler" : "dismiss invite handler", &error);
+  if (defer == nullptr || handler == nullptr) return error;
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.SCENARIO] fire respond_to_invite index=%u accept=%d: posting handler 0x%llx on the NetGame deferred "
+      "queue, as R15NetPartyRespondToInviteNode (0x140dddd30) does",
+      index, accept ? 1 : 0,
+      static_cast<unsigned long long>(accept ? kAcceptInviteHandlerVA : kDismissInviteHandlerVA));
+  defer(static_cast<std::uint8_t*>(netGame) + kDeferredQueueOffset, netGame, handler, index);
+  return std::string();
+}
+
 nlohmann::json StateJson() {
   nlohmann::json out;
   out["ok"] = true;
@@ -134,6 +169,11 @@ nlohmann::json StateJson() {
                        {"invitable", SocialFacade::FriendInvitableForTest(id)}});
   }
   out["friends"] = friends;
+  nlohmann::json invites = nlohmann::json::array();
+  for (const SocialFacade::InviteForTest& invite : SocialFacade::InvitesForTest()) {
+    invites.push_back({{"party", invite.partyId}, {"sender", invite.senderId}});
+  }
+  out["invites"] = invites;
   return out;
 }
 
@@ -161,10 +201,22 @@ nlohmann::json Handle(const std::string& line) {
       if (!InjectServerFrameForTest(ScenarioProtocol::BuildFriendNotify(*notify, cmd.friendId), &error)) return Fail(error);
       return {{"ok", true}};
     }
+    case ScenarioProtocol::Op::kInjectPartyInvite: {
+      Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject PartyInviteNotify party=%llu inviter=%llu",
+          static_cast<unsigned long long>(cmd.partyId), static_cast<unsigned long long>(cmd.inviterId));
+      if (!InjectServerFrameForTest(ScenarioProtocol::BuildPartyInviteNotify(cmd.partyId, cmd.inviterId), &error)) {
+        return Fail(error);
+      }
+      return {{"ok", true}};
+    }
     case ScenarioProtocol::Op::kFireFriendInvite:
-    case ScenarioProtocol::Op::kFireAddFriend: {
+    case ScenarioProtocol::Op::kFireAddFriend:
+    case ScenarioProtocol::Op::kFireRespondInvite: {
       auto request = std::make_shared<FireRequest>();
       request->addFriend = cmd.op == ScenarioProtocol::Op::kFireAddFriend;
+      request->respond = cmd.op == ScenarioProtocol::Op::kFireRespondInvite;
+      request->inviteIndex = cmd.inviteIndex;
+      request->accept = cmd.accept;
       request->user = cmd.user;
       std::future<std::string> done = request->result.get_future();
       {
@@ -258,7 +310,8 @@ void OnFrame() {
     std::lock_guard<std::mutex> lock(g_fireMutex);
     pending.swap(g_fireQueue);
   }
-  for (const auto& request : pending) request->result.set_value(FireNode(request->addFriend, request->user));
+  for (const auto& request : pending) request->result.set_value(request->respond ? FireRespondInvite(request->inviteIndex, request->accept)
+                                               : FireNode(request->addFriend, request->user));
 }
 
 void Stop() {

@@ -13,7 +13,8 @@
 
 namespace ScenarioProtocol {
 
-enum class Op { kState, kInjectFriendStatus, kInjectFriendNotify, kFireFriendInvite, kFireAddFriend };
+enum class Op { kState, kInjectFriendStatus, kInjectFriendNotify, kInjectPartyInvite, kFireFriendInvite, kFireAddFriend,
+                kFireRespondInvite };
 
 struct Command {
   Op op = Op::kState;
@@ -22,7 +23,15 @@ struct Command {
   std::string user;             // fire friend_invite / add_friend: the user id string the node passes
   std::uint64_t notifySymbol = 0;  // inject a friend change notify
   std::string notifyName;
+  std::uint64_t partyId = 0;       // inject PartyInviteNotify
+  std::uint64_t inviterId = 0;
+  std::uint32_t inviteIndex = 0;   // fire respond_to_invite: the game's invite index (newest first)
+  bool accept = false;
 };
+
+/// SNSPartyInviteNotify: PartyID(8) InviterID(8) (nakama server/evr_pipeline_party.go sends it to
+/// the invitee).
+constexpr std::uint64_t kPartyInviteNotifySymbol = 0x218f721f09026dabULL;
 
 /// SNSFriendStatusNotify, as the game's symbol table names it ("FriendStatusNotify").
 constexpr std::uint64_t kFriendStatusNotifySymbol = 0x26a19dc4d2d5579dULL;
@@ -69,9 +78,21 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
     cmd.op = Op::kState;
   } else if (op == "inject") {
     const std::string msg = j.contains("msg") && j["msg"].is_string() ? j["msg"].get<std::string>() : "";
+    if (msg == "PartyInviteNotify") {
+      if (!j.contains("party") || !j["party"].is_number_unsigned() || j["party"].get<std::uint64_t>() == 0 ||
+          !j.contains("inviter") || !j["inviter"].is_number_unsigned() || j["inviter"].get<std::uint64_t>() == 0) {
+        *error = "inject PartyInviteNotify needs nonzero unsigned \"party\" and \"inviter\"";
+        return false;
+      }
+      cmd.op = Op::kInjectPartyInvite;
+      cmd.partyId = j["party"].get<std::uint64_t>();
+      cmd.inviterId = j["inviter"].get<std::uint64_t>();
+      *out = cmd;
+      return true;
+    }
     const FriendNotify* notify = FindFriendNotify(msg);
     if (msg != "FriendStatusNotify" && notify == nullptr) {
-      *error = "inject supports msg \"FriendStatusNotify\" and the friend notifies (FriendAcceptNotify, "
+      *error = "inject supports msg \"FriendStatusNotify\", \"PartyInviteNotify\" and the friend notifies (FriendAcceptNotify, "
                "FriendAcceptSuccess, FriendInviteNotify, FriendInviteSuccess, FriendRemoveNotify, "
                "FriendWithdrawnNotify, FriendRejectNotify)";
       return false;
@@ -97,8 +118,20 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
     cmd.status = static_cast<std::uint8_t>(j["status"].get<std::uint64_t>());
   } else if (op == "fire") {
     const std::string action = j.contains("action") && j["action"].is_string() ? j["action"].get<std::string>() : "";
+    if (action == "respond_to_invite") {
+      if (!j.contains("index") || !j["index"].is_number_unsigned() || j["index"].get<std::uint64_t>() > 0xFFFF ||
+          !j.contains("accept") || !j["accept"].is_boolean()) {
+        *error = "fire respond_to_invite needs an unsigned \"index\" and a boolean \"accept\"";
+        return false;
+      }
+      cmd.op = Op::kFireRespondInvite;
+      cmd.inviteIndex = static_cast<std::uint32_t>(j["index"].get<std::uint64_t>());
+      cmd.accept = j["accept"].get<bool>();
+      *out = cmd;
+      return true;
+    }
     if (action != "friend_invite" && action != "add_friend") {
-      *error = "fire supports action \"friend_invite\" and \"add_friend\"";
+      *error = "fire supports action \"friend_invite\", \"add_friend\" and \"respond_to_invite\"";
       return false;
     }
     if (!j.contains("user") || !j["user"].is_string() || j["user"].get<std::string>().empty() ||
@@ -136,6 +169,14 @@ inline std::string BuildFriendNotify(const FriendNotify& notify, std::uint64_t f
   SocialParty::AppendLe(m.payload, 0, 8);
   SocialParty::AppendLe(m.payload, friendId, 8);
   if (notify.hasStatus) SocialParty::AppendLe(m.payload, 0, 8);
+  return SocialParty::Frame(m);
+}
+
+inline std::string BuildPartyInviteNotify(std::uint64_t partyId, std::uint64_t inviterId) {
+  SocialParty::Message m;
+  m.symbol = kPartyInviteNotifySymbol;
+  SocialParty::AppendLe(m.payload, partyId, 8);
+  SocialParty::AppendLe(m.payload, inviterId, 8);
   return SocialParty::Frame(m);
 }
 

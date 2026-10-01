@@ -958,3 +958,35 @@ TEST(ScenarioProtocol, InjectsFriendNotifiesAndFiresAddFriend) {
       << error;
   EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kFireAddFriend);
 }
+
+// An injected party invite is the frame Nakama sends the invitee, and the facade lists it.
+TEST(ScenarioProtocol, InjectedPartyInviteReachesTheInviteListAndRespondParses) {
+  ScenarioProtocol::Command cmd;
+  std::string error;
+  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyInviteNotify","party":77,"inviter":4242})",
+                                             &cmd, &error))
+      << error;
+  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyInvite);
+  const std::string frame = ScenarioProtocol::BuildPartyInviteNotify(77, 4242);
+  std::uint64_t symbol = 0;
+  std::uint64_t length = 0;
+  std::memcpy(&symbol, frame.data() + 8, 8);
+  std::memcpy(&length, frame.data() + 16, 8);
+  ASSERT_EQ(length, 16U);
+  SocialParty::State party;
+  party.SetSelf(1);
+  std::vector<SocialParty::Message> outgoing;
+  ASSERT_TRUE(party.Feed(symbol, reinterpret_cast<const std::uint8_t*>(frame.data()) + 24, 16, 0, &outgoing));
+  const SocialParty::View view = party.Snapshot();
+  ASSERT_EQ(view.invites.size(), 1U);
+  EXPECT_EQ(view.invites[0].partyId, 77U);
+  EXPECT_EQ(view.invites[0].senderId, 4242U);
+
+  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"respond_to_invite","index":0,"accept":true})",
+                                             &cmd, &error))
+      << error;
+  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kFireRespondInvite);
+  EXPECT_TRUE(cmd.accept);
+  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"respond_to_invite","index":0})", &cmd, &error));
+  EXPECT_NE(error.find("\"accept\""), std::string::npos);
+}

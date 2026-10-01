@@ -41,6 +41,7 @@ STEP_KINDS = ("wait_log", "expect_log", "state_until", "inject", "fire")
 # 20261001T142307 waited 240 s on a client that had died at 0.2 s: "no driver could be loaded").
 FATAL_PATTERNS = [
     r"no driver could be loaded",
+    r"DirectX error: E_OUTOFMEMORY",
     r"Unknown error while loading the game",
     r"\[NEVR\.CRASH\] HandleCrashDump ENTERED",
     r"\[NEVR\.FATAL\]",
@@ -164,6 +165,12 @@ def state_matches(state: dict, step: dict) -> tuple[bool, str]:
         if row is None:
             return False, f"friend {target} is not in the roster ({len(state.get('friends', []))} friends)"
         return row["invitable"] == 1, f"friend {target} online={row['online']} invitable={row['invitable']}"
+    if "invite_count" in spec:
+        invites = state.get("invites", [])
+        want = int(spec["invite_count"])
+        sender = spec.get("invite_sender")
+        ok = len(invites) == want and (sender is None or (invites and int(invites[0]["sender"]) == int(sender)))
+        return ok, f"invites={invites}"
     raise StepFailed(f"state_until has no known check: {sorted(spec)}")
 
 

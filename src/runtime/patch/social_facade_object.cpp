@@ -933,6 +933,17 @@ std::int32_t FriendInvitableForTest(std::uint64_t friendId) {
   return -1;
 }
 
+std::vector<InviteForTest> InvitesForTest() {
+  const auto view = CurrentView();
+  std::vector<InviteForTest> out;
+  for (std::int32_t index = 0;; ++index) {
+    const SocialParty::Invite* invite = InviteAt(*view, index);
+    if (invite == nullptr) break;
+    out.push_back({invite->partyId, invite->senderId});
+  }
+  return out;
+}
+
 PartyStateForTest PartyForTest() {
   const auto view = CurrentView();
   PartyStateForTest out;

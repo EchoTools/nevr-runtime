@@ -45,6 +45,17 @@ class StateMatchesTest(unittest.TestCase):
         self.assertIn("joinable=False", detail)
 
 
+class InviteStateTest(unittest.TestCase):
+    def test_invite_count_and_sender(self):
+        state = {"invites": [{"party": 77, "sender": 4242}]}
+        ok, _ = run_scenario.state_matches(state, {"state_until": {"invite_count": 1, "invite_sender": 4242}})
+        self.assertTrue(ok)
+        ok, _ = run_scenario.state_matches(state, {"state_until": {"invite_count": 1, "invite_sender": 1}})
+        self.assertFalse(ok)
+        ok, _ = run_scenario.state_matches({"invites": []}, {"state_until": {"invite_count": 0}})
+        self.assertTrue(ok)
+
+
 class ConsoleLogTest(unittest.TestCase):
     def test_wait_strips_ansi_and_honours_the_start_offset(self):
         with tempfile.TemporaryDirectory() as tmp:

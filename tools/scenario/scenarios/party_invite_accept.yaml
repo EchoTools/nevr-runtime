@@ -1,0 +1,29 @@
+# Receive a party invite and accept it. docs/design/2026-10-01-social-features-test-plan.md #4/#5.
+# Inbound: the bridge delivers the PartyInviteNotify Nakama sends an invitee. Then the accept is
+# fired the way R15NetPartyRespondToInviteNode (run 0x140dddd30) does it: post 0x140188bf0 with the
+# invite index, which checks slot 70 InviteCount and calls slot 73 AcceptInvite. Pass = the invite
+# reached the game's invite list and an accepting PartyInviteResponse (param 1) left the game. The
+# inviter is synthetic; the server has no record of this invite, so it does not answer.
+name: party_invite_accept
+description: deliver a party invite, accept it through the respond-to-invite node's handler, see PartyInviteResponse(accept) leave
+vars:
+  party_id: 777000000000001
+  inviter_id: 1000000000000000004
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: an invite arrives (PartyInviteNotify)
+    inject: {msg: PartyInviteNotify, party: '${party_id}', inviter: '${inviter_id}'}
+  - name: the invite is in the game's invite list
+    state_until: {invite_count: 1, invite_sender: '${inviter_id}', timeout: 15}
+  - name: accept fired through the respond-to-invite node's handler
+    fire: {action: respond_to_invite, index: 0, accept: true}
+  - name: game called slot 73 AcceptInvite
+    expect_log: {pattern: 'slot=73 name=\S+ call=', timeout: 10}
+    diagnose: ['party invite accept', 'session event .*partyjoinerror']
+  - name: an accepting PartyInviteResponse left the game
+    expect_log: {pattern: 'game->server conn=1 PartyInviteResponse payload_bytes=\d+ param=1', timeout: 10}
+  - name: the invite left the list
+    state_until: {invite_count: 0, timeout: 15}

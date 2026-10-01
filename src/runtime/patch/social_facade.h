@@ -62,6 +62,13 @@ struct PartyStateForTest {
 };
 /// Scenario-control builds only: the party as the facade's slots report it.
 PartyStateForTest PartyForTest();
+
+struct InviteForTest {
+  std::uint64_t partyId = 0;
+  std::uint64_t senderId = 0;
+};
+/// Scenario-control builds only: the invites in the order the game's invite slots index them.
+std::vector<InviteForTest> InvitesForTest();
 #endif
 
 #ifdef NEVR_TEST_HOOKS
