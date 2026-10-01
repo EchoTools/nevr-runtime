@@ -43,6 +43,22 @@ constexpr std::array<std::uint8_t, 16> kUserProviderIdPrologue = {0x40, 0x53, 0x
                                                                   0xC2, 0x48, 0x8B, 0xD9, 0x48, 0x85, 0xD2, 0x75};
 constexpr std::array<std::uint8_t, 7> kSymbol64Prologue = {0x48, 0x8D, 0x05, 0x78, 0xA3, 0x5D, 0x01};
 
+// The social script nodes' run functions (registration table in echovr.exe: name, factory, run).
+// When a person presses the button, the game runs the node; in its state 1 the node reads its input
+// and posts its handler (raw disassembly of 0x140dddf60). These traces log that input once per
+// press, so a real click can be compared with a scenario's fire line (calibration).
+constexpr std::uint64_t kSendInviteNodeVA = 0x140DDDF60;    // R15NetPartySendInviteNode
+constexpr std::uint64_t kAddFriendNodeVA = 0x140DD90F0;     // R15NetAddFriendNode
+constexpr std::uint64_t kRespondInviteNodeVA = 0x140DDDD30; // R15NetPartyRespondToInviteNode
+constexpr std::array<std::uint8_t, 16> kUserIdNodePrologue = {0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x74,
+                                                              0x24, 0x20, 0x57, 0x48, 0x83, 0xEC, 0x70, 0x48};
+constexpr std::array<std::uint8_t, 16> kRespondNodePrologue = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74,
+                                                               0x24, 0x18, 0x57, 0x48, 0x81, 0xEC, 0x30, 0x04};
+constexpr std::size_t kNodeStateOffset = 0x18;  // 0 = bind, 1 = run (reads input, posts), 2 = wait
+constexpr std::size_t kNodeDataOffset = 0xB0;   // pointer to the node's input block
+
+using NodeRunFn = std::uint64_t (*)(void* node);
+
 using InviteHandlerFn = void (*)(void* netGame, std::uint64_t* xpid);
 using SocialInviteFn = void (*)(void* social, std::uint64_t accountId);
 using UserProviderIdFn = std::uint64_t* (*)(std::uint64_t* out, std::uint64_t user);
@@ -53,6 +69,9 @@ using DispatchEventFn = void (*)(void* netGame, std::uint64_t eventId);
 
 BooleanFn g_originalBoolean = nullptr;
 InviteHandlerFn g_originalInviteHandler = nullptr;
+NodeRunFn g_originalSendInviteNode = nullptr;
+NodeRunFn g_originalAddFriendNode = nullptr;
+NodeRunFn g_originalRespondInviteNode = nullptr;
 SocialInviteFn g_originalSocialInvite = nullptr;
 UserProviderIdFn g_userProviderId = nullptr;
 Symbol64Fn g_symbol64 = nullptr;
@@ -84,6 +103,44 @@ void DispatchEventHook(void* netGame, std::uint64_t eventId) {
         "[NEVR.PARTY] session event #%u id=0x%016llx %s", count, static_cast<unsigned long long>(eventId), label);
   }
   g_originalDispatch(netGame, eventId);
+}
+
+bool NodeAboutToRun(void* node, const std::uint8_t** data) {
+  std::uint64_t state = 0;
+  std::memcpy(&state, static_cast<const std::uint8_t*>(node) + kNodeStateOffset, sizeof(state));
+  std::memcpy(data, static_cast<const std::uint8_t*>(node) + kNodeDataOffset, sizeof(*data));
+  return state == 1 && *data != nullptr;
+}
+
+void LogUserIdNode(const char* name, void* node) {
+  const std::uint8_t* data = nullptr;
+  if (!NodeAboutToRun(node, &data)) return;
+  char user[0x41] = {};
+  std::memcpy(user, data, 0x40);  // the node copies at most 0x28 characters of this 0x40-byte field
+  Log(EchoVR::LogLevel::Info, "[NEVR.PARTY] node %s run input=\"%s\"", name, user);
+}
+
+std::uint64_t SendInviteNodeHook(void* node) {
+  LogUserIdNode("R15NetPartySendInviteNode", node);
+  return g_originalSendInviteNode(node);
+}
+
+std::uint64_t AddFriendNodeHook(void* node) {
+  LogUserIdNode("R15NetAddFriendNode", node);
+  return g_originalAddFriendNode(node);
+}
+
+std::uint64_t RespondInviteNodeHook(void* node) {
+  const std::uint8_t* data = nullptr;
+  if (NodeAboutToRun(node, &data)) {
+    std::int32_t index = 0;
+    std::uint32_t accept = 0;
+    std::memcpy(&index, data, sizeof(index));
+    std::memcpy(&accept, data + 4, sizeof(accept));
+    Log(EchoVR::LogLevel::Info, "[NEVR.PARTY] node R15NetPartyRespondToInviteNode run index=%d accept=%u", index,
+        accept != 0 ? 1U : 0U);
+  }
+  return g_originalRespondInviteNode(node);
 }
 
 void InviteHandlerHook(void* netGame, std::uint64_t* xpid) {
@@ -158,6 +215,12 @@ void Install(std::uintptr_t gameBase) {
                  reinterpret_cast<PVOID>(&InviteHandlerHook), "FriendInviteHandler");
   InstallChecked(gameBase, kSocialInviteVA, kSocialInvitePrologue, g_originalSocialInvite,
                  reinterpret_cast<PVOID>(&SocialInviteHook), "SocialInvite");
+  InstallChecked(gameBase, kSendInviteNodeVA, kUserIdNodePrologue, g_originalSendInviteNode,
+                 reinterpret_cast<PVOID>(&SendInviteNodeHook), "R15NetPartySendInviteNode");
+  InstallChecked(gameBase, kAddFriendNodeVA, kUserIdNodePrologue, g_originalAddFriendNode,
+                 reinterpret_cast<PVOID>(&AddFriendNodeHook), "R15NetAddFriendNode");
+  InstallChecked(gameBase, kRespondInviteNodeVA, kRespondNodePrologue, g_originalRespondInviteNode,
+                 reinterpret_cast<PVOID>(&RespondInviteNodeHook), "R15NetPartyRespondToInviteNode");
 }
 
 }  // namespace PartyInviteGate

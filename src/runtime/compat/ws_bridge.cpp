@@ -295,6 +295,13 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
         memcpy(&target, payload + 0x20, sizeof(target));
         Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s payload_bytes=%llu target=%llu", direction,
             connIdx, name, static_cast<unsigned long long>(len), static_cast<unsigned long long>(target));
+      } else if (strcmp(name, "PartyInviteResponse") == 0 && len >= 0x2C) {
+        // Targeted payload (social_party.h Targeted): self UUID, target UUID, session, then the
+        // param at +0x28: 1 = accept, 0 = dismiss.
+        uint32_t param = 0;
+        memcpy(&param, payload + 0x28, sizeof(param));
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s payload_bytes=%llu param=%u", direction, connIdx,
+            name, static_cast<unsigned long long>(len), param);
       } else {
         Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s payload_bytes=%llu", direction, connIdx,
             name, static_cast<unsigned long long>(len));
