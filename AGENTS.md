@@ -301,15 +301,22 @@ the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), wh
   acknowledged. New defects go to GitHub issues. The N-ID namespace is closed —
   no new N-entries should be created. (Basis: owner decision 2026-08-02 to retire
   the file-based ledger in favor of GitHub issues.)
-- **Commit identity.** Author `agents@sprock.io`, unsigned (`--no-gpg-sign`),
-  with a single `Co-authored-by: Andrew Bates <a@sprock.io>` trailer, a
-  conventional prefix, and one logical change per commit. You **shall** verify
-  after each commit: `git log --format='%h %G? %an %ae' -1`. You **shall not**
-  commit as the owner's name/email.
+- **Commit identity.** Author `Andrew Bates <a@sprock.io>`
+  (`--author="Andrew Bates <a@sprock.io>"`), unsigned (`--no-gpg-sign`), with a
+  single `Co-Authored-By: <agent name> <agents@sprock.io>` trailer, a
+  conventional prefix, and one logical change per commit. Exception: work by
+  Teth, Spritz or Glow Sprock is authored by that sister, with
+  `Co-Authored-By: Andrew Bates <a@sprock.io>`. You **shall** verify after each
+  commit: `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
+  (Owner ruling 2026-10-01, verbatim: "if not Teth/Spritz/Glow Sprock: Andrew
+  Bates as author, agents@sprock.io as the co-author; else: Teth/Spritz/Glow
+  Sprock as author, andrew bates as co-author". This supersedes RULINGS.md
+  2026-07-20 "Commit identity (nevr)", which had the agent as author and
+  forbade committing as the owner. Commits before 2026-10-01 carry the old
+  shape and are left as they are.)
   (Updated 2026-07-26 by owner instruction: the `Metis Sprock <m@sprock.io>`
   trailer was dropped — she was not involved in this work. Commits before
   `624f795` carry it and are left as they are.)
-  (Basis: RULINGS.md 2026-07-20 "Commit identity (nevr)".)
 - **Mandatory pre-read gate.** Before any C++/build work, read the project's
   CPP-MINGW-ADDENDUM in full — its Hard-Stops bind every build/config change.
 - **Scratch dir.** All agent scratch/staging/evidence files live under
