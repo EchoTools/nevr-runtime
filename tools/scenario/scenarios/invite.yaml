@@ -7,8 +7,8 @@ description: make a friend invitable through the bridge, fire the friend row's i
 vars:
   friend_id: 1000000000000000001
 steps:
-  - name: client reached the lobby
-    wait_log: {pattern: 'NetGame switching state \(from loading global, to lobby\)', timeout: 240}
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
   - name: control endpoint is up
     wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
   - name: party exists and is joinable

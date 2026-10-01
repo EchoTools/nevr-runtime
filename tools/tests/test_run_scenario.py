@@ -55,5 +55,37 @@ class ConsoleLogTest(unittest.TestCase):
             self.assertIsNone(log.wait("slot=8 name=SendInvite", 0, start=len(log.text())))
 
 
+class WaitStopsOnFailureTest(unittest.TestCase):
+    """A wait ends on the game's own failure, not on a clock."""
+
+    def test_a_fatal_line_ends_the_wait_and_is_quoted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "console.log"
+            path.write_text("0494:err:winediag:nodrv_CreateWindow Application tried to create a window, "
+                            "but no driver could be loaded.\n")
+            log = run_scenario.ConsoleLog(path)
+            with self.assertRaises(run_scenario.StepFailed) as caught:
+                log.wait("to in game", None)
+            self.assertIn("no driver could be loaded", str(caught.exception))
+
+    def test_a_game_that_exited_ends_the_wait(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "console.log"
+            path.write_text("2026-10-01T19:23:08.656Z info [EVR] [NETGAME] NetGame switching state "
+                            "(from logged out, to loading root)\n")
+            log = run_scenario.ConsoleLog(path)
+            with self.assertRaises(run_scenario.StepFailed) as caught:
+                log.wait("to in game", None, alive=lambda: False)
+            self.assertIn("exited", str(caught.exception))
+            self.assertIn("to loading root", str(caught.exception))
+
+    def test_a_fatal_line_before_the_start_offset_is_history_not_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "console.log"
+            path.write_text("[NEVR.FATAL] old\nslot=37 name=OpenFriendRequestUI call=1\n")
+            log = run_scenario.ConsoleLog(path)
+            self.assertIsNotNone(log.wait("slot=37", 0, start=len("[NEVR.FATAL] old\n")))
+
+
 if __name__ == "__main__":
     unittest.main()

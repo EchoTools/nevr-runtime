@@ -36,6 +36,20 @@ WINEPREFIX = REPO / "echovr/.wineprefix"
 MARKER = b"[NEVR.SCENARIO]"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 STEP_KINDS = ("wait_log", "expect_log", "state_until", "inject", "fire")
+# Lines in the game's own log that mean the run is over: a wait stops on the first one and reports
+# it, instead of sitting out its timeout on a game that already failed (2026-10-01 run
+# 20261001T142307 waited 240 s on a client that had died at 0.2 s: "no driver could be loaded").
+FATAL_PATTERNS = [
+    r"no driver could be loaded",
+    r"Unknown error while loading the game",
+    r"\[NEVR\.CRASH\] HandleCrashDump ENTERED",
+    r"\[NEVR\.FATAL\]",
+    r"NetGame switching state \(from [^)]*, to (login failed|service unavailable|logged out)\)",
+    r"Lost connection to the login service",
+]
+FATAL = re.compile("|".join(FATAL_PATTERNS))
+STATE = re.compile(r"NetGame switching state \(from [^)]*, to [^)]*\)")
+NOTABLE = re.compile(r"\b(warn|error)\b.*")
 
 
 class StepFailed(Exception):
@@ -85,14 +99,38 @@ class ConsoleLog:
         except FileNotFoundError:
             return ""
 
-    def wait(self, pattern: str, timeout: float, start: int = 0) -> re.Match | None:
+    def wait(self, pattern: str, timeout: float | None, start: int = 0, alive=None) -> re.Match | None:
+        """The first match of `pattern` after `start`. Raises StepFailed, quoting the log, as soon as
+        the game logs a fatal line after `start`, or the game is gone (`alive` returns False); a
+        timeout is reported with the game's last state and its last warnings and errors. With no
+        timeout it waits as long as the game runs: how long a game takes to load is not a failure."""
         regex = re.compile(pattern)
-        deadline = time.monotonic() + timeout
+        deadline = None if timeout is None else time.monotonic() + timeout
         while True:
-            match = regex.search(self.text(), start)
-            if match or time.monotonic() >= deadline:
+            text = self.text()
+            match = regex.search(text, start)
+            if match:
                 return match
+            fatal = FATAL.search(text, start)
+            if fatal:
+                line = text[text.rfind("\n", 0, fatal.start()) + 1:text.find("\n", fatal.end())].strip()
+                raise StepFailed(f"the game logged a fatal line before /{pattern}/: {line[:220]}")
+            if alive is not None and not alive():
+                raise StepFailed(f"the game exited before /{pattern}/; {self.summary(start)}")
+            if deadline is not None and time.monotonic() >= deadline:
+                return None
             time.sleep(0.5)
+
+    def check(self, start: int, alive) -> None:
+        """Raises StepFailed if the game logged a fatal line after `start` or is gone."""
+        self.wait(r"(?!)", 0, start, alive)
+
+    def summary(self, start: int = 0) -> str:
+        """The game's last NetGame state and last warnings/errors after `start`, for a failure report."""
+        text = self.text()
+        states = STATE.findall(text)
+        notable = [m.group(0).strip()[:160] for m in NOTABLE.finditer(text, start)][-3:]
+        return f"last state: {states[-1] if states else 'none logged'}; last warnings/errors: {notable or 'none'}"
 
 
 class Control:
@@ -191,6 +229,10 @@ class Run:
             self.xephyr.terminate()
             self.xephyr.wait(timeout=15)
 
+    def alive(self) -> bool:
+        """The game is still running: launch-client.sh returns only after echovr.exe exits."""
+        return self.launcher is not None and self.launcher.poll() is None
+
     # -- steps -------------------------------------------------------------------------------------
     def connect(self):
         if self.control:
@@ -204,13 +246,14 @@ class Run:
         kind = step["kind"]
         if kind == "wait_log":
             spec = step["wait_log"]
-            m = self.console.wait(spec["pattern"], float(spec.get("timeout", 30)))
+            timeout = spec.get("timeout")
+            m = self.console.wait(spec["pattern"], None if timeout is None else float(timeout), alive=self.alive)
             if not m:
-                raise StepFailed(f"no line matching /{spec['pattern']}/ within {spec.get('timeout', 30)} s")
+                raise StepFailed(f"no line matching /{spec['pattern']}/ within {timeout} s; {self.console.summary()}")
             return m.group(0)[:160]
         if kind == "expect_log":
             spec = step["expect_log"]
-            m = self.console.wait(spec["pattern"], float(spec.get("timeout", 10)), self.mark)
+            m = self.console.wait(spec["pattern"], float(spec.get("timeout", 10)), self.mark, alive=self.alive)
             if not m:
                 found = []
                 text = self.console.text()[self.mark:]
@@ -219,6 +262,7 @@ class Run:
                 why = f"no line matching /{spec['pattern']}/ within {spec.get('timeout', 10)} s after the last action"
                 if found:
                     why += "; instead: " + " | ".join(found[:4])
+                why += "; " + self.console.summary(self.mark)
                 raise StepFailed(why)
             return m.group(0)[:160]
         self.connect()
@@ -226,6 +270,7 @@ class Run:
             deadline = time.monotonic() + float(step["state_until"].get("timeout", 15))
             detail = ""
             while time.monotonic() < deadline:
+                self.console.check(self.mark, self.alive)
                 state = self.control.call({"op": "state"})
                 if not state.get("ok"):
                     raise StepFailed(f"state failed: {state.get('error')}")
@@ -233,7 +278,7 @@ class Run:
                 if ok:
                     return detail
                 time.sleep(1)
-            raise StepFailed(f"condition not met in time: {detail}")
+            raise StepFailed(f"condition not met: {detail}; {self.console.summary(self.mark)}")
         command = {"op": kind, **step[kind]}
         self.mark = len(self.console.text())
         reply = self.control.call(command)
