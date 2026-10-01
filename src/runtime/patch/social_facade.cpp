@@ -15,6 +15,7 @@
 #include "runtime/hook/patching.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/service_config.h"
+#include "runtime/patch/party_invite_gate.h"
 
 namespace SocialFacade {
 namespace {
@@ -59,6 +60,7 @@ std::atomic<void*> g_facadeObject{nullptr};
 std::atomic<void*> g_facadeJson{nullptr};
 std::uintptr_t g_gameBase = 0;
 std::once_flag g_jsonHooksOnce;
+std::once_flag g_inviteGateOnce;
 std::atomic<std::uint32_t> g_accessorCalls{0};
 std::atomic<std::uint32_t> g_socialJsonCalls{0};
 std::atomic<std::uint32_t> g_jsonSetCalls{0};
@@ -109,6 +111,9 @@ void* AccessorHook(void* provider) {
   if (enabled && returned != result) {
     EnsureJsonHooksInstalled(returned);
   }
+  // Config is only readable once the CLI is parsed (service_config.cpp NevrCfg), which is why this
+  // is installed from the first accessor call and not from boot.
+  if (enabled) std::call_once(g_inviteGateOnce, [] { PartyInviteGate::Install(g_gameBase); });
   FlushJsonTraces();
   const std::uint32_t callCount = g_accessorCalls.fetch_add(1, std::memory_order_relaxed) + 1;
   Log(EchoVR::LogLevel::Info,

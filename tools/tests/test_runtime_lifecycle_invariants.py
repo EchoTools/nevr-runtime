@@ -27,6 +27,17 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertNotRegex(body, r"\bUnloadPlugins\s*\(")
         self.assertNotIn("NvrPluginShutdown", body)
 
+    def test_early_boot_never_reads_config(self):
+        # service_config.cpp NevrCfg() loads config.yaml on first access and documents that first
+        # access is after the CLI is parsed (g_isServer, -config-path). 3d4a994 called
+        # NevrCfgSocialFacadeEnabled() from the boot sequence and a real server with a config.yaml
+        # died silently right after "minhook initialized".
+        source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
+        body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
+
+        self.assertNotRegex(body, r"\bNevrCfg\w*\s*\(")
+        self.assertNotRegex(body, r"\bNevrGame\w*\s*\(")
+
 
 if __name__ == "__main__":
     unittest.main()

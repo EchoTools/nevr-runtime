@@ -32,7 +32,6 @@
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/mic_provider.h"
 #include "runtime/lifecycle/service_config.h"
-#include "runtime/patch/party_invite_gate.h"
 #include "runtime/patch/social_facade.h"
 
 #include <windows.h>
@@ -265,7 +264,6 @@ static VOID InitializeAfterGameImageGuard() {
   // a real provider object and substitutes the façade only for a null one, unless
   // `social.facade: false` turns the substitution off.
   SocialFacade::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
-  if (NevrCfgSocialFacadeEnabled()) PartyInviteGate::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // --- DLL load interceptor (patch DLLs as they load) ---
   BootLogTee::TeeFprintf("[NEVR.BOOT] installing DLL load hooks...\n");
