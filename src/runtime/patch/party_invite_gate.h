@@ -28,4 +28,8 @@ inline std::uint32_t BooleanResult(const char* path, std::uint32_t original) {
 /// Installs the CJson::Boolean override and the event-dispatch trace.
 void Install(std::uintptr_t gameBase);
 
+/// True once the friend invite handler (0x14018aa90) was prologue-validated and detoured for tracing.
+/// Its first bytes are then our jump, so a caller that validates the prologue itself must accept this.
+bool InviteHandlerTraced();
+
 }  // namespace PartyInviteGate

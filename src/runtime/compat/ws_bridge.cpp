@@ -288,8 +288,17 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
     if (name == nullptr) name = gameName;
     if (name != nullptr && (strstr(name, "Friend") != nullptr || strstr(name, "Party") != nullptr ||
                             strstr(name, "Social") != nullptr)) {
-      Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s payload_bytes=%llu", direction, connIdx,
-          name, static_cast<unsigned long long>(len));
+      // An invite's target is the last u64 of the Standard party payload (social_party.h Standard):
+      // logged so a test, or a person reading the log, can see who an invite went to.
+      if (strcmp(name, "PartyInviteRequest") == 0 && len >= 0x28) {
+        uint64_t target = 0;
+        memcpy(&target, payload + 0x20, sizeof(target));
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s payload_bytes=%llu target=%llu", direction,
+            connIdx, name, static_cast<unsigned long long>(len), static_cast<unsigned long long>(target));
+      } else {
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s payload_bytes=%llu", direction, connIdx,
+            name, static_cast<unsigned long long>(len));
+      }
     }
     if (fromServer) {
       if (gameName != nullptr) {
