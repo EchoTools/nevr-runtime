@@ -193,6 +193,16 @@ test-winvm *ARGS:
 
 # Local, isolated nakama (fake Discord, own Postgres) for testing the runtime's
 # login/registration path. See docs/reference/local-nakama.md.
+# One social scenario, end to end, unattended (docs/design/2026-10-01-social-scenario-harness.md):
+# builds the mingw-scenario DLL (test-only control endpoint), launches the client the
+# launch-client.sh way, runs tools/scenario/scenarios/NAME.yaml and prints a PASS/FAIL table.
+scenario NAME:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just preset=mingw-scenario build
+    cmake --build --preset mingw-scenario
+    python3 tools/scenario/run_scenario.py "tools/scenario/scenarios/{{NAME}}.yaml"
+
 nakama-up:
     python3 tools/nakama-local/setup.py
     docker compose -f tools/nakama-local/docker-compose.yml up -d
@@ -1159,6 +1169,9 @@ verify:
     # Known bugs warn (and stay visible); anything NEW is a hard failure.
     python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/verify_hook_invariants.py
+    # The scenario-test control endpoint can inject messages into a live session; it exists only in
+    # the mingw-scenario preset. The DLL this gate just built must not carry it.
+    python3 tools/verify_scenario_control_absent.py "build/{{ preset }}/bin/BugSplat64.dll"
     # N84 runtime counterpart. The static check above scans source, so it only
     # sees plugins in THIS tree — a third-party plugin is a DLL we never compile.
     # HookGuard detects the effect (our bytes changed) instead of the source.

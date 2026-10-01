@@ -39,6 +39,12 @@ void StopWebSocketBridgeListener();
 // Expose the Close handler's callback-lifecycle decision to unit tests.
 // ============================================================================
 
+#ifdef NEVR_SCENARIO_CONTROL
+/// Scenario-control builds only: delivers `frame` to the game as a server->game frame on the login
+/// connection (roster/party feed, frame log, send). False with `error` set when it cannot.
+bool InjectServerFrameForTest(const std::string& frame, std::string* error);
+#endif
+
 #ifdef NEVR_TEST_HOOKS
 // Production helpers exposed only to the Wine unit-test target. These keep the
 // login wire format and callback boundary covered without exporting them from

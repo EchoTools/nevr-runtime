@@ -46,6 +46,7 @@ just test-auth-groundtruth    # Auth ground truth (no game binary, no network)
 just test-auth-unit           # C++ GTest under Wine (build with -DBUILD_TESTING=ON)
 just test-auth-integration    # Auth integration (needs game binary + MCP harness)
 
+just scenario invite          # One social scenario end to end, unattended (docs/design/2026-10-01-social-scenario-harness.md)
 just test-winvm               # Built runtime on a native Windows VM (needs WINVM_USER/WINVM_PASS; docs/reference/windows-vm-system-test.md)
 ```
 
@@ -83,6 +84,7 @@ The runtime replaces the original BugSplat64 crash reporter DLL — the game sta
 | `src/runtime/ext/` | plugin_loader, module_loader | loading other people's DLLs |
 | `src/runtime/log/` | boot_log_tee, builtin_filter | log capture and filtering |
 | `src/runtime/link/` | dbghelp_stubs.cpp, bcrypt_minimal.def | not code we run — code the *linker* needs |
+| `src/runtime/scenario/` | scenario_control (test builds only), scenario_protocol | lets a test drive the running game; compiled in only by the `mingw-scenario` preset, never shipped |
 
 **Includes are path-qualified from `src/`** (`#include "runtime/hook/addresses.h"`).
 `src/runtime/CMakeLists.txt` deliberately does NOT put its own directory on the

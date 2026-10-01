@@ -357,6 +357,31 @@ static bool SendFrameToServer(const std::string& frame) {
   return sent;
 }
 
+#ifdef NEVR_SCENARIO_CONTROL
+// Scenario-control builds only (docs/design/2026-10-01-social-scenario-harness.md). Delivers a frame
+// to the game as if the server had sent it on the login connection: the same roster/party feed,
+// frame log and send to the game's socket a real server->game frame goes through.
+bool InjectServerFrameForTest(const std::string& frame, std::string* error) {
+  ix::WebSocket* gameWs = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_pairsMutex);
+    gameWs = g_activeGameWs != nullptr ? g_activeGameWs : g_loginGameWs;
+  }
+  if (gameWs == nullptr) {
+    if (error != nullptr) *error = "no game login connection to inject into";
+    return false;
+  }
+  Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] injecting a server->game frame bytes=%zu", frame.size());
+  ObserveSocialFrames("server->game", 1, frame);
+  LogFrameMessages("server->game", 1, frame);
+  if (!gameWs->sendBinary(frame).success) {
+    if (error != nullptr) *error = "send to the game socket failed";
+    return false;
+  }
+  return true;
+}
+#endif
+
 // Registers SendFrameToServer as the party requests' sender when the bridge is loaded.
 static const bool g_partySenderRegistered = (SocialParty::SetSender(&SendFrameToServer), true);
 

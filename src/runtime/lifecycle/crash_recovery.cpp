@@ -1,4 +1,7 @@
 #include "runtime/lifecycle/crash_recovery.h"
+#ifdef NEVR_SCENARIO_CONTROL
+#include "runtime/scenario/scenario_control.h"
+#endif
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/lifecycle/crash_recovery_sites.h"
@@ -1188,6 +1191,9 @@ void PerformGracefulShutdown(unsigned int exitCode) {
     StopWebSocketBridgeListener();
     ShutdownReport(EchoVR::LogLevel::Info, "[NEVR.PATCH] ws_bridge listener stopped — socket released");
   }
+#ifdef NEVR_SCENARIO_CONTROL
+  ScenarioControl::Stop();  // test builds only
+#endif
 
   // 2. Unhook MinHook hooks installed by BinaryBugFixes.
   BinaryBugFixes::Shutdown();

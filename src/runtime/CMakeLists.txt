@@ -167,6 +167,17 @@ set_source_files_properties(lifecycle/service_map.cpp lifecycle/service_config.c
 set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(log/url_diagnostics.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
+# Scenario-test control endpoint (docs/design/2026-10-01-social-scenario-harness.md). It can inject
+# messages into a live session, so it is OFF by default and only the mingw-scenario preset turns it
+# on; `just verify` checks the release DLL carries none of its strings.
+option(NEVR_SCENARIO_CONTROL "Compile the scenario-test control endpoint into BugSplat64.dll (test builds only)" OFF)
+if(NEVR_SCENARIO_CONTROL)
+  target_sources(nevr_runtime PRIVATE scenario/scenario_control.cpp)
+  target_compile_definitions(nevr_runtime PRIVATE NEVR_SCENARIO_CONTROL=1)
+  set_source_files_properties(scenario/scenario_control.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  message(STATUS "NEVR_SCENARIO_CONTROL=ON: BugSplat64.dll carries the scenario control endpoint (test build)")
+endif()
+
 set_target_properties(nevr_runtime PROPERTIES
   OUTPUT_NAME "BugSplat64"
   PREFIX ""

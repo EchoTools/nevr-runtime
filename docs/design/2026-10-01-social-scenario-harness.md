@@ -165,3 +165,22 @@ Only the message names, fields, the entry point and the expected lines differ.
 - Facade: `src/runtime/patch/social_facade_object.cpp`. Party state machine and
   wire builders: `src/runtime/compat/social_party.h`. Roster:
   `src/runtime/compat/social_roster.h`.
+
+## First slice, landed 2026-10-01
+
+- Control endpoint: `src/runtime/scenario/scenario_control.cpp` (TCP on 127.0.0.1,
+  ephemeral port logged as "[NEVR.SCENARIO] control listening on ..."), protocol in
+  `src/runtime/scenario/scenario_protocol.h`. Ops: state, inject FriendStatusNotify,
+  fire friend_invite. CMake option NEVR_SCENARIO_CONTROL, preset mingw-scenario.
+  `tools/verify_scenario_control_absent.py` runs in `just verify` against the release DLL.
+- "fire friend_invite" does what the friend row's script node (echovr.exe 0x140dddf60)
+  does: SNSUserID on the row's id string, then posts the invite handler 0x14018aa90 on
+  the NetGame deferred queue. It enters below the widget and above everything else.
+- Runner: `tools/scenario/run_scenario.py`; scenario: `tools/scenario/scenarios/invite.yaml`;
+  `just scenario invite`. Run folders under /var/tmp/work-nevr-runtime/scenario-runs/.
+- What the first runs found: the handler dropped every invite silently on its provider
+  check. pnsrad's UserProviderID reported "RAD", which the game maps to code 0, while
+  every "OVR-ORG-" id maps to 4. Fixed by making that export return "OVR"
+  (`src/runtime/patch/provider_identity.h`). Before the fix the scenario failed at
+  "game called the facade's SendInvite slot"; after it, all eight steps pass.
+

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "runtime/patch/social_facade_install.h"
 
@@ -49,6 +50,19 @@ void QueueJsonTrace(JsonTraceKind kind, std::uint32_t callCount, const char* pat
                     std::uintptr_t cache);
 void DrainJsonTraces(JsonTraceSink sink, void* context);
 void FlushJsonTraces();
+
+#ifdef NEVR_SCENARIO_CONTROL
+/// Scenario-control builds only: FriendIsInvitable's result for this friend (-1 if not in the roster).
+std::int32_t FriendInvitableForTest(std::uint64_t friendId);
+
+struct PartyStateForTest {
+  std::uint64_t partyId = 0;
+  bool joinable = false;  // the Joinable slot's rule
+  std::vector<std::uint64_t> memberIds;
+};
+/// Scenario-control builds only: the party as the facade's slots report it.
+PartyStateForTest PartyForTest();
+#endif
 
 #ifdef NEVR_TEST_HOOKS
 std::uint32_t TestInitializeCallCount();

@@ -333,10 +333,14 @@ std::uint32_t Ready(void*) {
   return result;
 }
 
+// pnsovr's joinable rule, shared by the Joinable slot and FriendIsInvitable.
+bool PartyJoinable(const SocialParty::View& view) {
+  return view.partyId != 0 && !view.joining && !view.locked && view.members.size() < kPartyMaxMembers;
+}
+
 std::uint32_t Joinable(void*) {
   const auto view = CurrentView();
-  const std::uint32_t result =
-      view->partyId != 0 && !view->joining && !view->locked && view->members.size() < kPartyMaxMembers ? 1U : 0U;
+  const std::uint32_t result = PartyJoinable(*view) ? 1U : 0U;
   LogQuery("Joinable", 0xB0, CountCall(g_calls.joinable), result);
   return result;
 }
@@ -499,9 +503,7 @@ std::uint32_t FriendIsInvitable(void*, std::uint32_t index) {
   std::uint64_t id = 0;
   if (!SocialRoster::Global().IdAt(index, &id) || !SocialRoster::Global().OnlineAt(index)) return 0;
   const auto view = CurrentView();
-  const bool joinable =
-      view->partyId != 0 && !view->joining && !view->locked && view->members.size() < kPartyMaxMembers;
-  if (!joinable) return 0;
+  if (!PartyJoinable(*view)) return 0;
   for (const SocialParty::Member& member : view->members)
     if (member.id == id) return 0;
   return 1;
@@ -912,6 +914,27 @@ std::uint32_t TestInitializeCallCount() { return g_initializeCalls.load(std::mem
 std::uint32_t TestShutdownCallCount() { return g_shutdownCalls.load(std::memory_order_relaxed); }
 std::uint32_t TestMaxUsers() { return g_maxUsers; }
 const void* TestCallbacksSource() { return g_callbacksSource; }
+#endif
+
+#ifdef NEVR_SCENARIO_CONTROL
+// Scenario-control builds only (docs/design/2026-10-01-social-scenario-harness.md): the state the
+// game would read through the slots, computed by the slots' own functions.
+std::int32_t FriendInvitableForTest(std::uint64_t friendId) {
+  std::uint64_t id = 0;
+  for (std::uint32_t index = 0; SocialRoster::Global().IdAt(index, &id); ++index) {
+    if (id == friendId) return static_cast<std::int32_t>(FriendIsInvitable(nullptr, index));
+  }
+  return -1;
+}
+
+PartyStateForTest PartyForTest() {
+  const auto view = CurrentView();
+  PartyStateForTest out;
+  out.partyId = view->partyId;
+  out.joinable = PartyJoinable(*view);
+  for (const SocialParty::Member& member : view->members) out.memberIds.push_back(member.id);
+  return out;
+}
 #endif
 
 }  // namespace SocialFacade

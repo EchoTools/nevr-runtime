@@ -13,6 +13,7 @@
 #include "runtime/patch/party_invite_gate.h"
 #include "runtime/patch/provider_identity.h"
 #include "runtime/patch/social_facade.h"
+#include "runtime/scenario/scenario_protocol.h"
 #include "core/hooking.h"
 
 namespace {
@@ -819,6 +820,74 @@ TEST(PartyInviteGate, OnlyTheFirstMatchFlagIsForcedTrue) {
   EXPECT_EQ(PartyInviteGate::BooleanResult("npe|firstmatch|completed|x", 0), 0u);
   EXPECT_EQ(PartyInviteGate::BooleanResult("other", 1), 1u);
   EXPECT_EQ(PartyInviteGate::BooleanResult(nullptr, 0), 0u);
+}
+
+// Scenario control protocol (src/runtime/scenario/scenario_protocol.h). Pure, so it is covered in
+// every build even though the endpoint itself only exists in the mingw-scenario preset.
+TEST(ScenarioProtocol, ParsesTheThreeOps) {
+  ScenarioProtocol::Command cmd;
+  std::string error;
+  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"state"})", &cmd, &error)) << error;
+  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kState);
+
+  ASSERT_TRUE(ScenarioProtocol::ParseCommand(
+      R"({"op":"inject","msg":"FriendStatusNotify","id":4242,"status":0})", &cmd, &error))
+      << error;
+  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectFriendStatus);
+  EXPECT_EQ(cmd.friendId, 4242ULL);
+  EXPECT_EQ(cmd.status, 0);
+
+  ASSERT_TRUE(ScenarioProtocol::ParseCommand(
+      R"({"op":"fire","action":"friend_invite","user":"OVR-ORG-4242"})", &cmd, &error))
+      << error;
+  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kFireFriendInvite);
+  EXPECT_EQ(cmd.user, "OVR-ORG-4242");
+}
+
+TEST(ScenarioProtocol, RejectionsNameWhatWasWrong) {
+  ScenarioProtocol::Command cmd;
+  std::string error;
+  EXPECT_FALSE(ScenarioProtocol::ParseCommand("not json", &cmd, &error));
+  EXPECT_NE(error.find("not a JSON object"), std::string::npos);
+  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"kick"})", &cmd, &error));
+  EXPECT_NE(error.find("unknown op \"kick\""), std::string::npos);
+  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyKickRequest","id":1,"status":0})",
+                                              &cmd, &error));
+  EXPECT_NE(error.find("only msg \"FriendStatusNotify\""), std::string::npos);
+  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"FriendStatusNotify","id":0,"status":0})",
+                                              &cmd, &error));
+  EXPECT_NE(error.find("nonzero"), std::string::npos);
+  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"FriendStatusNotify","id":5,"status":7})",
+                                              &cmd, &error));
+  EXPECT_NE(error.find("status"), std::string::npos);
+  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"friend_invite"})", &cmd, &error));
+  EXPECT_NE(error.find("\"user\""), std::string::npos);
+}
+
+// The injected frame must be one the bridge's own roster feed reads back, so an injected friend is
+// the same thing as a friend the server announced.
+TEST(ScenarioProtocol, FriendStatusNotifyFrameRoundTripsThroughTheRosterParser) {
+  const std::string frame = ScenarioProtocol::BuildFriendStatusNotify(4242ULL, 0);
+  ASSERT_EQ(frame.size(), 24U + 24U);
+  std::uint64_t symbol = 0;
+  std::uint64_t length = 0;
+  std::memcpy(&symbol, frame.data() + 8, 8);
+  std::memcpy(&length, frame.data() + 16, 8);
+  EXPECT_EQ(symbol, 0x26a19dc4d2d5579dULL);
+  EXPECT_EQ(length, 24U);
+  std::uint64_t id = 0;
+  std::uint8_t status = 9;
+  ASSERT_TRUE(SocialRoster::ParseStatusNotify(reinterpret_cast<const std::uint8_t*>(frame.data()) + 24,
+                                              static_cast<std::size_t>(length), &id, &status));
+  EXPECT_EQ(id, 4242ULL);
+  EXPECT_EQ(status, 0);
+
+  SocialRoster::Roster roster;
+  ASSERT_TRUE(SocialRoster::Feed(roster, "FriendStatusNotify",
+                                 reinterpret_cast<const std::uint8_t*>(frame.data()) + 24,
+                                 static_cast<std::size_t>(length)));
+  EXPECT_TRUE(roster.Contains(4242ULL));
+  EXPECT_EQ(roster.Online(), 1U);
 }
 
 // pnsrad's UserProviderID must report the provider whose CSymbol64 code is 4, the code SNSUserID

@@ -6,6 +6,18 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+# --dll PATH deploys that BugSplat64.dll instead of the release build (the scenario runner passes
+# the mingw-scenario build; see tools/scenario/run_scenario.py). Everything else is unchanged.
+DLL=build/mingw-release/bin/BugSplat64.dll
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dll) DLL="${2:?--dll needs a path}"; shift 2 ;;
+    -h|--help) echo "usage: launch-client.sh [--dll PATH]  (default $DLL)"; exit 0 ;;
+    *) echo "unknown argument: $1 (usage: launch-client.sh [--dll PATH])" >&2; exit 2 ;;
+  esac
+done
+[[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist; build it first" >&2; exit 2; }
+
 GAME_DIR=echovr/bin/win10
 LOCAL_DIR=echovr/_local
 SCRATCH=/var/tmp/work-nevr-runtime/client-run-$(date +%Y%m%dT%H%M%S)
@@ -56,9 +68,9 @@ restore() {
 trap 'exit 143' INT TERM
 trap restore EXIT
 
-echo "=== Deploying from build/mingw-release/bin/ ==="
-cp -v build/mingw-release/bin/BugSplat64.dll "$GAME_DIR/"
-cmp -s build/mingw-release/bin/BugSplat64.dll "$GAME_DIR/BugSplat64.dll"
+echo "=== Deploying $DLL ==="
+cp -v "$DLL" "$GAME_DIR/BugSplat64.dll"
+cmp -s "$DLL" "$GAME_DIR/BugSplat64.dll"
 sha256sum "$GAME_DIR/BugSplat64.dll"
 
 echo "=== Starting echovr.exe -noovr -windowed -mp (DISPLAY=$DISPLAY, WAYLAND_DISPLAY unset) ==="
