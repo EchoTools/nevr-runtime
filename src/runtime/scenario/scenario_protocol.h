@@ -14,7 +14,7 @@
 namespace ScenarioProtocol {
 
 enum class Op { kState, kInjectFriendStatus, kInjectFriendNotify, kInjectPartyInvite, kInjectPartyJoinFailure,
-                kFireFriendInvite, kFireAddFriend, kFireRespondInvite };
+                kInjectPartyMember, kFireFriendInvite, kFireAddFriend, kFireRespondInvite };
 
 struct Command {
   Op op = Op::kState;
@@ -25,7 +25,8 @@ struct Command {
   std::string notifyName;
   std::uint64_t partyId = 0;       // inject PartyInviteNotify
   std::uint64_t inviterId = 0;
-  std::uint8_t failureCode = 0;    // inject PartyJoinFailure: Nakama's code (1 unknown party, 2 refused)
+  std::uint8_t failureCode = 0;
+  std::uint64_t memberId = 0;      // inject PartyJoinNotify / PartyLeaveNotify (partyId 0 = the current party)    // inject PartyJoinFailure: Nakama's code (1 unknown party, 2 refused)
   std::uint32_t inviteIndex = 0;   // fire respond_to_invite: the game's invite index (newest first)
   bool accept = false;
 };
@@ -94,6 +95,19 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
       *out = cmd;
       return true;
     }
+    if (msg == "PartyJoinNotify" || msg == "PartyLeaveNotify") {
+      if (!j.contains("member") || !j["member"].is_number_unsigned() || j["member"].get<std::uint64_t>() == 0 ||
+          (j.contains("party") && !j["party"].is_number_unsigned())) {
+        *error = "inject " + msg + " needs a nonzero unsigned \"member\" (and \"party\", default the current party)";
+        return false;
+      }
+      cmd.op = Op::kInjectPartyMember;
+      cmd.notifyName = msg;
+      cmd.memberId = j["member"].get<std::uint64_t>();
+      cmd.partyId = j.contains("party") ? j["party"].get<std::uint64_t>() : 0;
+      *out = cmd;
+      return true;
+    }
     if (msg == "PartyJoinFailure") {
       if (!j.contains("party") || !j["party"].is_number_unsigned() || !j.contains("code") ||
           !j["code"].is_number_unsigned() || j["code"].get<std::uint64_t>() > 0xFF) {
@@ -108,7 +122,7 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
     }
     const FriendNotify* notify = FindFriendNotify(msg);
     if (msg != "FriendStatusNotify" && notify == nullptr) {
-      *error = "inject supports msg \"FriendStatusNotify\", \"PartyInviteNotify\", \"PartyJoinFailure\" and the friend notifies (FriendAcceptNotify, "
+      *error = "inject supports msg \"FriendStatusNotify\", \"PartyInviteNotify\", \"PartyJoinFailure\", \"PartyJoinNotify\", \"PartyLeaveNotify\" and the friend notifies (FriendAcceptNotify, "
                "FriendAcceptSuccess, FriendInviteNotify, FriendInviteSuccess, FriendRemoveNotify, "
                "FriendWithdrawnNotify, FriendRejectNotify)";
       return false;
@@ -185,6 +199,15 @@ inline std::string BuildFriendNotify(const FriendNotify& notify, std::uint64_t f
   SocialParty::AppendLe(m.payload, 0, 8);
   SocialParty::AppendLe(m.payload, friendId, 8);
   if (notify.hasStatus) SocialParty::AppendLe(m.payload, 0, 8);
+  return SocialParty::Frame(m);
+}
+
+/// SNSPartyJoinNotify / SNSPartyLeaveNotify: PartyID(8) MemberID(8) (nakama server/evr/sns_party.go).
+inline std::string BuildPartyMemberNotify(const char* name, std::uint64_t partyId, std::uint64_t memberId) {
+  SocialParty::Message m;
+  m.symbol = SocialParty::ReplySymbol(name);
+  SocialParty::AppendLe(m.payload, partyId, 8);
+  SocialParty::AppendLe(m.payload, memberId, 8);
   return SocialParty::Frame(m);
 }
 

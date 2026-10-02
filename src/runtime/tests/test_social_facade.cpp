@@ -1099,6 +1099,35 @@ TEST(ScenarioProtocol, InjectedPartyInviteReachesTheInviteListAndRespondParses) 
   EXPECT_NE(error.find("\"accept\""), std::string::npos);
 }
 
+TEST(ScenarioProtocol, InjectedMemberJoinAndLeaveChangeTheCurrentParty) {
+  ScenarioProtocol::Command cmd;
+  std::string error;
+  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinNotify","member":4242})", &cmd, &error))
+      << error;
+  ASSERT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyMember);
+  EXPECT_EQ(cmd.partyId, 0U) << "no party given: the current one";
+  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyLeaveNotify"})", &cmd, &error));
+  SocialParty::State party;
+  party.SetSelf(1);
+  ASSERT_TRUE(FeedParty(party, "PartyCreateSuccess", U64s({7, 1})));
+  party.DrainEvents();
+  const auto feed = [&](const char* name) {
+    const std::string frame = ScenarioProtocol::BuildPartyMemberNotify(name, 7, 4242);
+    std::uint64_t symbol = 0;
+    std::memcpy(&symbol, frame.data() + 8, 8);
+    EXPECT_STREQ(SocialParty::ReplyName(symbol), name);
+    return party.Feed(symbol, reinterpret_cast<const std::uint8_t*>(frame.data()) + 24, frame.size() - 24, 0, nullptr);
+  };
+  ASSERT_TRUE(feed("PartyJoinNotify"));
+  EXPECT_EQ(party.Snapshot().members.size(), 2U);
+  ASSERT_TRUE(feed("PartyLeaveNotify"));
+  EXPECT_EQ(party.Snapshot().members.size(), 1U);
+  const auto events = party.DrainEvents();
+  ASSERT_EQ(events.size(), 2U);
+  EXPECT_EQ(events[0].kind, SocialParty::EventKind::kMemberJoined);
+  EXPECT_EQ(events[1].kind, SocialParty::EventKind::kMemberLeft);
+}
+
 TEST(ScenarioProtocol, InjectedPartyJoinFailureEndsTheJoinWithTheGamesCode) {
   ScenarioProtocol::Command cmd;
   std::string error;

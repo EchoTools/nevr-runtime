@@ -159,6 +159,10 @@ def state_matches(state: dict, step: dict) -> tuple[bool, str]:
         party = state.get("party", {})
         ok = bool(party.get("joinable")) == bool(spec["party_joinable"])
         return ok, f"party id={party.get('id')} joinable={party.get('joinable')} members={party.get('members')}"
+    if "party_members" in spec:
+        party = state.get("party", {})
+        members = party.get("members", [])
+        return len(members) == int(spec["party_members"]), f"party id={party.get('id')} members={members}"
     if "party_joining" in spec:
         party = state.get("party", {})
         ok = bool(party.get("joining")) == bool(spec["party_joining"])

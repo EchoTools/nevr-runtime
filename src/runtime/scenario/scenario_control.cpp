@@ -219,6 +219,17 @@ nlohmann::json Handle(const std::string& line) {
       }
       return {{"ok", true}};
     }
+    case ScenarioProtocol::Op::kInjectPartyMember: {
+      const std::uint64_t party = cmd.partyId != 0 ? cmd.partyId : SocialFacade::PartyForTest().partyId;
+      if (party == 0) return Fail("inject " + cmd.notifyName + ": no current party and no \"party\" given");
+      Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject %s party=%llu member=%llu", cmd.notifyName.c_str(),
+          static_cast<unsigned long long>(party), static_cast<unsigned long long>(cmd.memberId));
+      if (!InjectServerFrameForTest(ScenarioProtocol::BuildPartyMemberNotify(cmd.notifyName.c_str(), party, cmd.memberId),
+                                    &error)) {
+        return Fail(error);
+      }
+      return {{"ok", true}};
+    }
     case ScenarioProtocol::Op::kFireFriendInvite:
     case ScenarioProtocol::Op::kFireAddFriend:
     case ScenarioProtocol::Op::kFireRespondInvite: {
