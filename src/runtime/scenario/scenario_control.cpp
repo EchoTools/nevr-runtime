@@ -323,12 +323,14 @@ std::string FireEarlyQuit(void* netGame, const ScenarioProtocol::Command& cmd) {
         isOn ? 1 : 0, cmd.flag ? 1 : 0);
   } else if (cmd.action == "early_quit_feature_flags") {
     const std::uint8_t before = bytes[kEarlyQuitFeatureFlagsOffset];
-    const std::uint8_t stored = static_cast<std::uint8_t>(cmd.number) & kEarlyQuitFeatureFlagsMask;  // as the callback stores it
+    // As the callback stores it (& 0xdd), unless raw: the scripts' lockout paths from Find test bit 1, which
+    // the mask always clears, so only a raw store can show whether that bit is what hides the bar.
+    const std::uint8_t sent = static_cast<std::uint8_t>(cmd.number);
+    const std::uint8_t stored = cmd.flag ? sent : static_cast<std::uint8_t>(sent & kEarlyQuitFeatureFlagsMask);
     bytes[kEarlyQuitFeatureFlagsOffset] = stored;
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.SCENARIO] early quit: feature flags (netGame+0x64847) 0x%02x -> 0x%02x (sent 0x%02llx, & 0xdd as the "
-        "game's callback stores it)",
-        before, stored, static_cast<unsigned long long>(cmd.number));
+        "[NEVR.SCENARIO] early quit: feature flags (netGame+0x64847) 0x%02x -> 0x%02x (sent 0x%02x, %s)", before, stored,
+        sent, cmd.flag ? "raw, mask skipped" : "& 0xdd as the game's callback stores it");
     dispatch(netGame, kFeatureFlagsUpdateEvent);
     return std::string();
   } else if (cmd.action == "early_quit_warning") {

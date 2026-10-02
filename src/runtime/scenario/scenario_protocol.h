@@ -154,7 +154,8 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
   } else if (action == "early_quit_warning") {
     ok = boolean("show", &cmd.flag);
   } else if (action == "early_quit_feature_flags") {
-    ok = u64("flags", 0xFF, &cmd.number);
+    cmd.flag = false;  // raw: store the byte as sent, without the callback's & 0xdd
+    ok = u64("flags", 0xFF, &cmd.number) && (!j.contains("raw") || boolean("raw", &cmd.flag));
   } else {
     *error = "fire supports friend_invite, add_friend, respond_to_invite, invite_users, request_profile, party_join, "
              "party_lock, set_join_policy, voip_mute_self, voip_mute_user, social_groups_set_active, enable_social_feature, "
