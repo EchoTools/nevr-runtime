@@ -25,6 +25,7 @@
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/hook/hook_guard.h"
 #include "runtime/hook/process_memory.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/patch/party_invite_gate.h"
@@ -296,7 +297,12 @@ std::string FireEarlyQuit(void* netGame, const ScenarioProtocol::Command& cmd) {
   auto* bytes = static_cast<std::uint8_t*>(netGame);
   std::uint64_t* flags = NetGameFlags(netGame);
   if (flags == nullptr) return "no NetGame flags yet";
-  auto* dispatch = reinterpret_cast<DispatchEventFn>(Checked(kDispatchEventVA, kDispatchEventPrologue, "dispatch event", &error));
+  // The runtime detours DispatchEventToSession for its session-event trace (party_invite_gate.cpp), so its
+  // prologue is our jump: call through our detour, which runs the original. Anything else is refused.
+  void* dispatchTarget = nevr::ResolveVA_Checked(reinterpret_cast<uintptr_t>(Base()), kDispatchEventVA);
+  auto* dispatch = reinterpret_cast<DispatchEventFn>(
+      HookGuard::IsOurDetour(dispatchTarget) ? dispatchTarget
+                                              : Checked(kDispatchEventVA, kDispatchEventPrologue, "dispatch event", &error));
   if (dispatch == nullptr) return error;
   if (cmd.action == "early_quit_countdown_active") {
     void* store = nevr::ResolveVA_Checked(reinterpret_cast<uintptr_t>(Base()), kCountdownActiveStoreVA);
