@@ -71,3 +71,17 @@ TEST(ScenarioEarlyQuit, FeatureFlagsTakeAByte) {
   EXPECT_FALSE(Parses(R"({"op":"fire","action":"early_quit_feature_flags","flags":256})", &cmd, &error));
   EXPECT_FALSE(Parses(R"({"op":"fire","action":"early_quit_feature_flags"})", &cmd, &error));
 }
+
+// dispatch_event raises a session event by its 64-bit symbol, given as a hex string so no JSON number
+// precision is lost; anything else is refused.
+TEST(ScenarioEarlyQuit, DispatchEventTakesAHexSymbol) {
+  ScenarioProtocol::Command cmd;
+  std::string error;
+  ASSERT_TRUE(Parses(R"({"op":"fire","action":"dispatch_event","event":"0xd8a114aa7515d439"})", &cmd, &error)) << error;
+  EXPECT_EQ(cmd.number, 0xd8a114aa7515d439ULL);
+  EXPECT_FALSE(Parses(R"({"op":"fire","action":"dispatch_event","event":"d8a114aa7515d439"})", &cmd, &error));
+  EXPECT_FALSE(Parses(R"({"op":"fire","action":"dispatch_event","event":"0x"})", &cmd, &error));
+  EXPECT_FALSE(Parses(R"({"op":"fire","action":"dispatch_event","event":"0x1d8a114aa7515d439"})", &cmd, &error));
+  EXPECT_FALSE(Parses(R"({"op":"fire","action":"dispatch_event","event":"0xzz"})", &cmd, &error));
+  EXPECT_FALSE(Parses(R"({"op":"fire","action":"dispatch_event","event":12})", &cmd, &error));
+}

@@ -321,6 +321,13 @@ std::string FireEarlyQuit(void* netGame, const ScenarioProtocol::Command& cmd) {
     ProcessMemcpy(store, want.data(), want.size());
     Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] early quit: lockoutcountdownactive store 0x140d96319 was %d, now %d",
         isOn ? 1 : 0, cmd.flag ? 1 : 0);
+  } else if (cmd.action == "dispatch_event") {
+    // Raise any session event the way the game does (DispatchEventToSession), to see what a script does with
+    // it on its own -- e.g. the PARTY LOCKOUT chain in 17d77f27d465760b starts on 0xd8a114aa7515d439.
+    Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] dispatch event 0x%016llx to the session",
+        static_cast<unsigned long long>(cmd.number));
+    dispatch(netGame, cmd.number);
+    return std::string();
   } else if (cmd.action == "early_quit_feature_flags") {
     const std::uint8_t before = bytes[kEarlyQuitFeatureFlagsOffset];
     // As the callback stores it (& 0xdd), unless raw: the scripts' lockout paths from Find test bit 1, which
@@ -512,7 +519,7 @@ std::string FireAction(const ScenarioProtocol::Command& cmd) {
     return std::string();
   }
   if (cmd.action == "early_quit_lockout" || cmd.action == "early_quit_countdown_active" ||
-      cmd.action == "early_quit_warning" || cmd.action == "early_quit_feature_flags")
+      cmd.action == "early_quit_warning" || cmd.action == "early_quit_feature_flags" || cmd.action == "dispatch_event")
     return FireEarlyQuit(netGame, cmd);
   if (cmd.action == "refresh_friends")
     return PostNoArg(netGame, Checked(kRefreshFriendsHandlerVA, kRefreshFriendsPrologue, "refresh friends handler", &error),

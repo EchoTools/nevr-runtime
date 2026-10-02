@@ -153,6 +153,13 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
     ok = boolean("active", &cmd.flag);
   } else if (action == "early_quit_warning") {
     ok = boolean("show", &cmd.flag);
+  } else if (action == "dispatch_event") {
+    // A 64-bit event symbol as a "0x..." hex string (JSON numbers lose precision past 2^53 in many clients).
+    std::string hex;
+    ok = text("event", true, &hex) && hex.size() > 2 && hex.size() <= 18 && hex.rfind("0x", 0) == 0 &&
+         hex.find_first_not_of("0123456789abcdefABCDEF", 2) == std::string::npos;
+    if (ok) cmd.number = std::stoull(hex.substr(2), nullptr, 16);
+    if (!ok && error->empty()) *error = "fire dispatch_event needs \"event\": a \"0x...\" hex symbol of up to 16 digits";
   } else if (action == "early_quit_feature_flags") {
     cmd.flag = false;  // raw: store the byte as sent, without the callback's & 0xdd
     ok = u64("flags", 0xFF, &cmd.number) && (!j.contains("raw") || boolean("raw", &cmd.flag));
@@ -160,7 +167,7 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
     *error = "fire supports friend_invite, add_friend, respond_to_invite, invite_users, request_profile, party_join, "
              "party_lock, set_join_policy, voip_mute_self, voip_mute_user, social_groups_set_active, enable_social_feature, "
              "set_party_member_string, set_party_string, refresh_friends, refresh_recently_met, find_arena, "
-             "party_join_failed_callback, early_quit_lockout, early_quit_countdown_active, early_quit_warning and early_quit_feature_flags";
+             "party_join_failed_callback, early_quit_lockout, early_quit_countdown_active, early_quit_warning, early_quit_feature_flags and dispatch_event";
     return false;
   }
   if (!ok) return false;
