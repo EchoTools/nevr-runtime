@@ -34,6 +34,10 @@ constexpr std::uint64_t kCreateRequest = 0x0b7bd21332523994ULL;
 constexpr std::uint64_t kJoinRequest = 0xb57b22cc5352e00cULL;
 constexpr std::uint64_t kLeaveRequest = 0xb77b0be7a94a9fb6ULL;
 constexpr std::uint64_t kInviteRequest = 0xcf13f934540b5f5eULL;  // SNSPartySendInviteRequest
+/// The social message level the bridge declares at login ("nevr_social"): which of the server's newer
+/// social messages it parses. 1 = docs/design/2026-10-01-social-nakama-proposal.md.
+constexpr int kSocialLevel = 1;
+
 constexpr std::uint64_t kLockRequest = 0xc2478aa479f3e16aULL;
 constexpr std::uint64_t kUnlockRequest = 0x5a4e99802fa3d704ULL;
 constexpr std::uint64_t kInviteListRefreshRequest = 0xd8cbc44959e25da8ULL;

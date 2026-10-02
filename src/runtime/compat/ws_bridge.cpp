@@ -626,6 +626,9 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
     ident["commit"] = buildId.git_commit;
     ident["build"] = buildId.git_describe;
     ident["build_type"] = buildId.build_type;
+    // The social message level this runtime understands; the server sends a newer social message only
+    // to a session that declared its level (docs/design/2026-10-01-social-nakama-proposal.md §0).
+    j["nevr_social"] = SocialParty::kSocialLevel;
 
     // nevr_plugins: parse the pre-built manifest so the field is a JSON array,
     // not a string-escaped copy of one.

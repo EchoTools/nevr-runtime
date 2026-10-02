@@ -189,6 +189,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/module_loader.h"
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/compat/social_party.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/patch/broadcaster_hook_stats.h"
@@ -783,6 +784,7 @@ TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) 
   EXPECT_EQ(json["nevr_identity"]["version"], identity.project_version);
   EXPECT_EQ(json["nevr_identity"]["commit"], identity.git_commit);
   EXPECT_EQ(json["nevr_identity"]["build"], identity.git_describe);
+  EXPECT_EQ(json.at("nevr_social"), SocialParty::kSocialLevel) << "the social level the server gates new messages on";
   EXPECT_EQ(json["nevr_identity"]["build_type"], identity.build_type);
   ASSERT_TRUE(json.contains("system_info"));
   EXPECT_TRUE(json["system_info"]["num_physical_cores"].is_number_unsigned());
