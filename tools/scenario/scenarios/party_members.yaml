@@ -2,8 +2,9 @@
 # Inbound only: the bridge delivers the PartyJoinNotify and PartyLeaveNotify Nakama sends to the
 # members of a party, for the game's own party. Pass = the MemberJoined (index 9) and MemberLeft
 # (index 11) callbacks ran, the game logged "'<name>' joined party (...)" and "'<name>' left party"
-# (0x1416ddcd8, 0x1416dddd8), its member events fired, and the member count went 1 -> 2 -> 1.
-# The member is synthetic; nothing is sent to anyone.
+# (PartyMemberJoinedCB 0x14018a3c0 logs 0x1416ddcd8 and raises a component event, not a session
+# event), the bridge asked for the member's display name, and the member count went 1 -> 2 -> 1.
+# The member is synthetic; the only thing sent is the profile lookup for its id.
 name: party_members
 description: a member joins the game's party and leaves it again; see the callbacks, the game's own lines and the member count
 vars:
@@ -22,8 +23,8 @@ steps:
   - name: the game logged the join
     expect_log: {pattern: "\\[NETGAME\\] '[^']+' joined party", timeout: 10}
     diagnose: ['session event .*partymember', 'slot=26 ']
-  - name: the game raised onpartymemberjoined
-    expect_log: {pattern: 'session event #\d+ id=0x[0-9a-f]+ delegate_onpartymemberjoined\b', timeout: 10}
+  - name: the bridge asked for the member's display name
+    expect_log: {pattern: 'party name lookup requested account=${member_id} sent=1', timeout: 10}
   - name: two members
     state_until: {party_members: 2, timeout: 15}
   - name: the member leaves (PartyLeaveNotify)
@@ -32,7 +33,5 @@ steps:
     expect_log: {pattern: 'party callback index=11 id=${member_id} bound=1', timeout: 10}
   - name: the game logged the leave
     expect_log: {pattern: "\\[NETGAME\\] '[^']+' left party", timeout: 10}
-  - name: the game raised onpartymemberleft
-    expect_log: {pattern: 'session event #\d+ id=0x[0-9a-f]+ delegate_onpartymemberleft\b', timeout: 10}
   - name: one member again
     state_until: {party_members: 1, timeout: 15}
