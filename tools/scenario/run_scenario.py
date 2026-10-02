@@ -237,6 +237,19 @@ def wait_for_gpu_memory(needed: int = GPU_FREE_NEEDED_MIB) -> None:
         time.sleep(GPU_POLL_SECONDS)
 
 
+def wait_for_wineserver_exit() -> None:
+    """Block until the prefix's wineserver has exited (`wineserver -w`). `-k` only signals it; a
+    client launched while the old server is still going down started with a broken socket layer
+    (2026-10-01, suite 20261001T212821 party_join_errors: proxy bind failed, curl init failed and the
+    login connection was refused, 2.8 s after the previous game's last line)."""
+    env = dict(os.environ, WINEPREFIX=str(WINEPREFIX))
+    started = time.monotonic()
+    subprocess.run(["wineserver", "-w"], env=env, capture_output=True)
+    waited = time.monotonic() - started
+    if waited >= 1:
+        print(f"scenario: waited {waited:.1f} s for the previous wineserver to exit", flush=True)
+
+
 class Run:
     def __init__(self, scenario: dict, dll: pathlib.Path, out: pathlib.Path):
         self.scenario, self.dll, self.out = scenario, dll, out
@@ -290,6 +303,7 @@ class Run:
             self.control.close()
         env = dict(os.environ, WINEPREFIX=str(WINEPREFIX))
         subprocess.run(["wineserver", "-k"], env=env, capture_output=True)
+        wait_for_wineserver_exit()
         if self.launcher:
             try:
                 self.launcher.wait(timeout=90)
@@ -367,6 +381,7 @@ class Run:
         try:
             self.ensure_xephyr()
             wait_for_gpu_memory()
+            wait_for_wineserver_exit()
             self.launch()
         except StepFailed as exc:
             self.results.append({"step": "launch the client", "result": "FAIL", "seconds": 0, "detail": str(exc)})

@@ -731,10 +731,9 @@ void InstallWebSocketBridge() {
       break;
     }
 
-    (void)errorText;
     const std::string diagnostic = LogDiagnostics::FormatBindFailureDiagnostic(
         "Proxy", tryPort, attempt + 1, kMaxBindAttempts);
-    Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
+    Log(EchoVR::LogLevel::Warning, "%s error=\"%s\"", diagnostic.c_str(), errorText.c_str());
     g_server.reset();
   }
 
@@ -1439,11 +1438,10 @@ void InstallWebSocketBridge() {
         matchBound = true;
         break;
       }
-      (void)errorText;
       const std::string diagnostic =
           LogDiagnostics::FormatBindFailureDiagnostic("Matchmaker", tryPort, attempt + 1,
                                                       kMaxMatchBindAttempts);
-      Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
+      Log(EchoVR::LogLevel::Warning, "%s error=\"%s\"", diagnostic.c_str(), errorText.c_str());
       s_matchServer.reset();
     }
 
