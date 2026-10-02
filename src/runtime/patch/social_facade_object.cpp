@@ -554,6 +554,12 @@ std::uint32_t FriendStatus(void*, std::uint32_t index) {
 // not already a member, and the platform lists them as invitable (Oculus's invitable-users map, which
 // holds the people it can reach; here that is the friends who are online). It is not a function of
 // the friend alone: with no party, or a full or locked one, no row shows the "+" button.
+// Slots 52/54/55 (pnsovr 0x1800850e0, 0x180085030, 0x180085060): the friend's presence text, whether
+// their party can be joined, and its id, from the server's SNSFriendPresenceNotify.
+const char* FriendStatusString(void*, std::uint32_t index) { return SocialRoster::Global().StatusTextAt(index); }
+std::uint32_t FriendIsJoinable(void*, std::uint32_t index) { return SocialRoster::Global().PartyIdAt(index) != 0 ? 1U : 0U; }
+std::uint64_t FriendPartyId(void*, std::uint32_t index) { return SocialRoster::Global().PartyIdAt(index); }
+
 std::uint32_t FriendIsInvitable(void*, std::uint32_t index) {
   std::uint64_t id = 0;
   if (!SocialRoster::Global().IdAt(index, &id) || !SocialRoster::Global().OnlineAt(index)) return 0;
@@ -835,10 +841,10 @@ const std::array<Slot, kVtableSlotCount> kVtable = {
     TRACED(49, FriendId),  // 49 FriendId
     TRACED(50, FriendName),  // 50 FriendName
     TRACED(51, FriendStatus),  // 51 FriendStatus
-    TRACED(52, EmptyU32),  // 52 FriendStatusString
+    TRACED(52, FriendStatusString),  // 52 FriendStatusString
     TRACED(53, FriendIsInvitable),  // 53 FriendIsInvitable
-    TRACED(54, ZeroU32),  // 54 FriendIsJoinable
-    TRACED(55, ZeroU32),  // 55 FriendPartyId
+    TRACED(54, FriendIsJoinable),  // 54 FriendIsJoinable
+    TRACED(55, FriendPartyId),  // 55 FriendPartyId
     TRACED(56, Zero0),  // 56 RefreshingRecentlyMetUsers
     TRACED(57, UnimplementedSlot),  // 57 RefreshRecentlyMetUsers
     TRACED(58, Zero0),  // 58 RecentlyMetUserCount

@@ -399,6 +399,19 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
             name, static_cast<unsigned long long>(len));
       }
     }
+    if (fromServer && sym == SocialRoster::kFriendPresenceNotify) {
+      uint64_t friendId = 0;
+      SocialRoster::Presence presence;
+      if (SocialRoster::ParsePresenceNotify(payload, static_cast<size_t>(len), &friendId, &presence)) {
+        SocialRoster::Global().SetPresence(friendId, presence);
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend presence account=%llu party=%llu joinable=%d text=\"%s\"",
+            static_cast<unsigned long long>(friendId), static_cast<unsigned long long>(presence.partyId),
+            presence.joinable ? 1 : 0, presence.text.c_str());
+      } else {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] friend presence could not be read bytes=%llu",
+            static_cast<unsigned long long>(len));
+      }
+    }
     if (fromServer) {
       if (gameName != nullptr) {
         SocialRoster::Feed(SocialRoster::Global(), gameName, payload, static_cast<size_t>(len));

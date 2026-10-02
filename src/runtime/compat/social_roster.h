@@ -28,11 +28,41 @@ constexpr std::uint8_t kStatusOnline = 0;
 constexpr std::uint8_t kStatusBusy = 1;
 constexpr std::uint8_t kStatusOffline = 2;
 
+/// A friend's presence from SNSFriendPresenceNotify (nevr social level 1; nakama builds it from the
+/// friend's match and party): the party the game may join from the friends list (0 when none or not
+/// joinable for us) and the text shown under the name.
+struct Presence {
+  std::uint64_t partyId = 0;
+  bool joinable = false;
+  std::string text;
+};
+
 struct Entry {
   std::uint64_t id = 0;
   std::string name;
   bool online = false;
+  Presence presence;
 };
+
+/// SNSFriendPresenceNotify: Header(8) FriendID(8) PartyID(8) Joinable(1) StatusCode(1) Reserved(6)
+/// TextLen(2) Text (nakama server/evr/sns_friends.go).
+constexpr std::uint64_t kFriendPresenceNotify = 0xbdd8dd00c5e97a63ULL;
+
+inline bool ParsePresenceNotify(const std::uint8_t* payload, std::size_t len, std::uint64_t* id, Presence* out) {
+  if (payload == nullptr || len < 34 || id == nullptr || out == nullptr) return false;
+  const auto u64 = [&](std::size_t off) {
+    std::uint64_t v = 0;
+    for (int i = 7; i >= 0; --i) v = (v << 8) | payload[off + i];
+    return v;
+  };
+  const std::size_t textLen = static_cast<std::size_t>(payload[32]) | (static_cast<std::size_t>(payload[33]) << 8);
+  if (34 + textLen > len) return false;
+  *id = u64(8);
+  out->partyId = u64(16);
+  out->joinable = payload[24] != 0;
+  out->text.assign(reinterpret_cast<const char*>(payload + 34), textLen);
+  return true;
+}
 
 struct Snapshot {
   std::vector<Entry> entries;  // online friends first, then by id
@@ -107,6 +137,31 @@ class Roster {
     PublishLocked(std::move(next));
   }
 
+  /// Remembers a friend's presence and applies it to the roster, as SetName does for names.
+  void SetPresence(std::uint64_t id, const Presence& presence) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    presences_[id] = presence;
+    if (!current_) return;
+    std::vector<Entry> next = current_->entries;
+    for (Entry& entry : next) {
+      if (entry.id == id) entry.presence = presence;
+    }
+    PublishLocked(std::move(next));
+  }
+
+  /// The friend's presence text (slot 52); "" when none arrived. Lives as long as NameAt's strings.
+  const char* StatusTextAt(std::uint32_t index) const {
+    const auto snap = Snap();
+    return index < snap->entries.size() ? snap->entries[index].presence.text.c_str() : "";
+  }
+
+  /// The friend's party when the game may join it (slots 54/55); 0 otherwise.
+  std::uint64_t PartyIdAt(std::uint32_t index) const {
+    const auto snap = Snap();
+    if (index >= snap->entries.size() || !snap->entries[index].online || !snap->entries[index].presence.joinable) return 0;
+    return snap->entries[index].presence.partyId;
+  }
+
   void Clear() {
     std::lock_guard<std::mutex> guard(mutex_);
     pending_.clear();
@@ -157,7 +212,9 @@ class Roster {
     }
     // Nakama sends no display name; use the remembered one, else the account id stands in.
     const auto known = names_.find(id);
-    list.push_back(Entry{id, known != names_.end() ? known->second : std::to_string(id), online});
+    const auto presence = presences_.find(id);
+    list.push_back(Entry{id, known != names_.end() ? known->second : std::to_string(id), online,
+                         presence != presences_.end() ? presence->second : Presence{}});
   }
 
   std::shared_ptr<const Snapshot> Snap() const {
@@ -192,6 +249,7 @@ class Roster {
   std::size_t retiredNext_ = 0;
   std::vector<Entry> pending_;
   std::map<std::uint64_t, std::string> names_;
+  std::map<std::uint64_t, Presence> presences_;
   bool pendingActive_ = false;
 };
 
