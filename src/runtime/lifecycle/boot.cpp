@@ -8,6 +8,7 @@
 #include "runtime/patch/xpid_patch.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/patch/asset_cdn.h"
+#include "runtime/patch/coop_ai_trace.h"
 #include "runtime/ext/plugin_loader.h"
 #include "extension/module_interface.h"
 
@@ -471,6 +472,8 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     PatchDisableLoadingTips();
     PatchDisableWwise();
     PatchLogServerProfile();
+    // Issue #63: co-op AI bots stand still on community servers; log what gates them.
+    CoopAiTrace::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
 
     // (PatchServerFramePacing removed 2026-07-29 — N113. It blind-wrote 0xC3 to
     // CPrecisionSleep::BusyWait with no address validation and no original-byte

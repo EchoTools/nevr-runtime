@@ -24,6 +24,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/binary_bug_fixes.cpp",
     "patch/broadcaster_guard.cpp",
     "patch/broadcaster_hook_stats.cpp",
+    "patch/coop_ai_trace.cpp",
     "patch/headless_graphics.cpp",
     "patch/mic_provider.cpp",
     "patch/mode_patches.cpp",
@@ -31,7 +32,7 @@ EXPECTED_PATCH_SOURCES = (
     "patch/resource_override.cpp",
     "patch/xpid_patch.cpp",
 )
-EXPECTED_PATCH_SOURCE_COUNT = 10
+EXPECTED_PATCH_SOURCE_COUNT = 11
 
 
 class InventoryError(Exception):
