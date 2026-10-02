@@ -89,10 +89,11 @@ def load_scenario(path: pathlib.Path) -> dict:
     server = data.get("server", "production")
     peers = int(data.get("peers", 0))
     friends = [[str(x) for x in pair] for pair in (data.get("friends") or [])]
+    met = [[str(x) for x in pair] for pair in (data.get("met") or [])]
     if server not in ("production", "local"):
         raise ValueError(f"{path}: server must be 'production' or 'local', not {server!r}")
     return {"name": data["name"], "description": data.get("description", ""), "steps": steps, "server": server,
-            "peers": peers, "friends": friends}
+            "peers": peers, "friends": friends, "met": met}
 
 
 class ConsoleLog:
@@ -193,7 +194,10 @@ def state_matches(state: dict, step: dict) -> tuple[bool, str]:
     if "path" in spec:
         value = state
         for part in str(spec["path"]).split("."):
-            value = value.get(part) if isinstance(value, dict) else None
+            if isinstance(value, list) and part.isdigit():  # a list index, e.g. recently_met.users.0.name
+                value = value[int(part)] if int(part) < len(value) else None
+            else:
+                value = value.get(part) if isinstance(value, dict) else None
         if ("contains" in spec or "lacks" in spec) and isinstance(value, str):
             want_in, want_out = spec.get("contains"), spec.get("lacks")
             ok = (want_in is None or str(want_in) in value) and (want_out is None or str(want_out) not in value)
@@ -298,7 +302,7 @@ def client_discord_id() -> str | None:
     return None
 
 
-def write_local_server_config(peers: int = 0, friends: list | None = None) -> pathlib.Path:
+def write_local_server_config(peers: int = 0, friends: list | None = None, met: list | None = None) -> pathlib.Path:
     """The game config for a `server: local` scenario: an empty game JSON and, beside it, the
     runtime's config.yaml pointing at the local nakama as the seeded test account (the same template
     as tools/winvm/systest.py). Fails loudly when the local nakama is not up or not seeded."""
@@ -320,9 +324,11 @@ def write_local_server_config(peers: int = 0, friends: list | None = None) -> pa
     def account(who: str) -> str:
         return discord_id if who == "client" else str(seed.peer(int(who))[1])
     command = [sys.executable, str(NAKAMA_LOCAL / "seed.py"), "--discord-id", discord_id,
-               "--peers", str(peers), "--reset-friends"]
+               "--peers", str(peers), "--reset-friends", "--reset-met"]
     for a, b in friends or []:
         command += ["--friends", f"{account(a)},{account(b)}"]
+    for a, b in met or []:  # [owner, met]: who is on whose recently-met list
+        command += ["--met", f"{account(a)},{account(b)}"]
     done = subprocess.run(command, capture_output=True, text=True)
     if done.returncode != 0:
         raise StepFailed(f"seeding the local nakama failed: {done.stderr.strip() or done.stdout.strip()}")
@@ -392,7 +398,8 @@ class Run:
         command = [str(REPO / "launch-client.sh"), "--dll", str(self.dll)]
         if self.scenario.get("server") == "local":
             command += ["--config", str(write_local_server_config(self.scenario.get("peers", 0),
-                                                                  self.scenario.get("friends", [])))]
+                                                                  self.scenario.get("friends", []),
+                                                                  self.scenario.get("met", [])))]
         self.launcher = subprocess.Popen(
             command, cwd=REPO,
             stdout=launcher_out.open("w"), stderr=subprocess.STDOUT, start_new_session=True)

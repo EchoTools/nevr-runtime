@@ -148,6 +148,19 @@ N = 50, **UNVERIFIED** against what Oculus returned), skipping blocked users (fr
 **Runtime.** Slots 56-67 over a list fed by the response; slot 56 reports "refreshing" between the
 request and the response.
 
+**As built** (nakama `a2162c3bf`, runtime `74a19e3`).
+- Who counts as met: at a player's leave, everyone in the match's `participations` (everyone who ever
+  joined) whose time there overlapped theirs, so both sides of a meeting record it whoever leaves
+  first; moderators (invisible) are never met; private and social lobbies included. Written to
+  `RecentlyMet`/`list` (owner read, no client write) off the match loop, retried once on a version
+  conflict; logged "Recently met recorded".
+- Blocks either way are left out at write and again at read (a block made after the meeting).
+- Slot contracts from ReVault (pnsovr 0x180091200..0x180090b80): slot 56 is busy from slot 57 until
+  the answer; the facade also ends it after 5 s, because a server without the message never answers
+  and the refresh node (0x140ddfcc0) polls slot 56 until 0. Slot 63 is 2 for the online prefix, else
+  0. Slot 65 needs our party joinable (slot 22), the person online and not a member. The game keeps
+  slot 64's text up to its first `|` (0x140da5d80).
+
 **Proof.** Nakama: tests of the dedupe/cap/blocked rules on the storage model. Suite: a
 `recently_met` scenario fires the refresh node (the action exists: `refresh_recently_met`), asserts
 the request leaves, injects a response with two entries, and asserts count, ids, names and status

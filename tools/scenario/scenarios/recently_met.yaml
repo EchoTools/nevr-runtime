@@ -1,0 +1,45 @@
+# Recently met (proposal §2, docs/design/2026-10-01-social-nakama-proposal.md; test plan #22). The
+# game's R15NetRefreshRecentlyMetUsersNode (0x140ddfcc0) calls slot 57 and polls slot 56 until it reads
+# 0. The fire posts the node's slot-57 call (its deferred handler), not its polling state, so here the
+# state reads poll slot 56. The facade sends SNSRecentlyMetRefreshRequest; the production server does not know it yet and
+# never answers, so the refresh ends after 5 s with the list as it was (the node must not hang). An
+# injected SNSRecentlyMetListResponse then fills slots 58-67: online people first, status 2 for them
+# and 0 for the rest, their presence text, and an online person with a joinable party is invitable
+# while our own party is joinable.
+name: recently_met
+description: refresh the recently-met list through the game's node; see an unanswered refresh end, then an injected list in the slots
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: the game has its own party
+    state_until: {party_joinable: true, timeout: 60}
+  - name: refresh through the game's node
+    fire: {action: refresh_recently_met}
+  - name: the request left
+    expect_log: {pattern: '\[NEVR\.SOCIAL\] recently met refresh: request sent', timeout: 10}
+  - name: no answer from this server, so slot 56 stops reporting busy (read here as the node polls it)
+    state_until: {path: recently_met.refreshing, equals: false, timeout: 15}
+  - name: and says why
+    expect_log: {pattern: '\[NEVR\.SOCIAL\] recently met refresh: no answer within 5 s', timeout: 5}
+  - name: the server's list arrives
+    inject: {msg: RecentlyMetListResponse, users: [{id: 1000000000000000011, name: Offline Olly}, {id: 1000000000000000012, name: Online Ona, online: true, party: 777, text: 'Public Arena Match'}]}
+  - name: the bridge read it
+    expect_log: {pattern: '\[NEVR\.SOCIAL\] recently met list count=2 online=1', timeout: 10}
+  - name: two people
+    state_until: {path: recently_met.count, equals: 2, timeout: 10}
+  - name: the online person first
+    state_until: {path: recently_met.users.0.name, equals: Online Ona, timeout: 5}
+  - name: shown online (slot 63)
+    state_until: {path: recently_met.users.0.status, equals: 2, timeout: 5}
+  - name: with their presence text (slot 64)
+    state_until: {path: recently_met.users.0.text, equals: Public Arena Match, timeout: 5}
+  - name: their party can be joined (slots 66/67)
+    state_until: {path: recently_met.users.0.party, equals: 777, timeout: 5}
+  - name: and they can be invited to ours (slot 65)
+    state_until: {path: recently_met.users.0.invitable, equals: true, timeout: 5}
+  - name: the offline person after, shown offline
+    state_until: {path: recently_met.users.1.status, equals: 0, timeout: 5}
+  - name: and not invitable
+    state_until: {path: recently_met.users.1.invitable, equals: false, timeout: 5}

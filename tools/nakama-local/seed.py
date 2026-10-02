@@ -80,6 +80,24 @@ ON CONFLICT (source_id, destination_id) DO UPDATE SET state = {state};
 """
 
 
+def met_sql(owner: str, met: str) -> str:
+    """Puts the account with Discord id `met` at the front of `owner`'s recently-met list, the storage
+    object nakama writes when a player leaves a match (server/evr_recently_met.go RecentlyMet/list:
+    read by its owner, written by the server only)."""
+    return f"""
+INSERT INTO storage (collection, key, user_id, value, version, read, write)
+SELECT 'RecentlyMet', 'list', a.id,
+       jsonb_build_object('users', jsonb_build_array(jsonb_build_object(
+         'user_id', b.id::text, 'account_id', b.custom_id::numeric, 'display_name', b.username,
+         'last_met', to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')))),
+       md5(random()::text), 1, 0
+FROM users a, users b WHERE a.custom_id = '{owner}' AND b.custom_id = '{met}'
+ON CONFLICT (collection, key, user_id) DO UPDATE
+  SET value = jsonb_set(storage.value, '{{users}}', (EXCLUDED.value->'users') || (storage.value->'users')),
+      version = EXCLUDED.version, update_time = now();
+"""
+
+
 def seed(discord_id: str = DISCORD_ID) -> None:
     if not discord_id.isdigit():
         raise SystemExit(f"--discord-id must be digits, not {discord_id!r}")
@@ -121,6 +139,10 @@ def main() -> int:
     ap.add_argument("--friends", action="append", default=[], metavar="A,B",
                     help="make the accounts with Discord ids A and B mutual friends (repeatable)")
     ap.add_argument("--unfriend", action="append", default=[], metavar="A,B", help="remove that friendship")
+    ap.add_argument("--met", action="append", default=[], metavar="A,B",
+                    help="put the account with Discord id B on A's recently-met list (repeatable, newest last)")
+    ap.add_argument("--reset-met", action="store_true",
+                    help="first empty the recently-met lists of the account and peers 1..N")
     ap.add_argument("--reset-friends", action="store_true",
                     help="first remove every friendship among the account and peers 1..N")
     args = ap.parse_args()
@@ -138,6 +160,16 @@ def main() -> int:
         psql(f"DELETE FROM user_edge WHERE source_id IN (SELECT id FROM users WHERE custom_id IN ({listed})) "
              f"AND destination_id IN (SELECT id FROM users WHERE custom_id IN ({listed}));")
         print("friendships among the test accounts removed")
+    if args.reset_met:
+        ids = [args.discord_id] + [str(peer(n)[1]) for n in range(1, max(args.peers, 4) + 1)]
+        listed = ",".join(f"'{i}'" for i in ids)
+        psql(f"DELETE FROM storage WHERE collection = 'RecentlyMet' "
+             f"AND user_id IN (SELECT id FROM users WHERE custom_id IN ({listed}));")
+        print("recently-met lists of the test accounts emptied")
+    for pair in args.met:
+        a, b = pair.split(",")
+        psql(met_sql(a.strip(), b.strip()))
+        print(f"recently met: {b.strip()} on {a.strip()}'s list")
     for pair in args.friends:
         a, b = pair.split(",")
         psql(friends_sql(a.strip(), b.strip()))
