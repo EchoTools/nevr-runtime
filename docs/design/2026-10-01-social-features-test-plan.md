@@ -215,20 +215,40 @@ The runtime's log filter folds a repeated identical line into `[NEVR.LOGFILTER] 
 count=...`. If you send the same code twice in a row, the second callback line is folded; record the
 screen anyway.
 
-| Path | Code sent | Code the game saw | Log text | What the player sees |
-|---|---|---|---|---|
-| A | 1 | 1 | | |
-| A | 3 | 3 | | |
-| A | 4 | 4 | | |
-| A | 5 | 5 | | |
-| A | 6 | 6 | | |
-| A | 2 | 4 | | |
-| A | 9 | 0 | | |
-| B | 0–7 | same | | |
+**Results, 2026-10-02.** The owner watched while the harness sent the codes. The game was this
+build (`v4.0.0-151-g891b510`, mingw-scenario) on the nested display, logged in to production, in a
+social lobby, with the tablet's party page open. Client run `client-run-20261002T151652`; screenshots
+in `/var/tmp/work-nevr-runtime/ingame-shots/`. Every failure opens the same popup, titled
+**PARTY JOIN ERROR**, with one line of text and an OK button. A new failure replaces an open popup.
 
-**Decide afterwards.** What the game service sends for "refused, no reason given" (today 2, shown
-as locked). The candidates are: keep 2→4; send a code outside 1–6 and drop the rewrite, so the
-player sees the "unknown" event; or send 2 straight through, so the log says "timeout".
+| Path | Code sent | Code the game saw | Log text | Popup text |
+|---|---|---|---|---|
+| A | 1 | 1 | not found | PARTY NOT FOUND |
+| A | 3 | 3 | no permission | YOU DON'T HAVE PERMISSION TO JOIN |
+| A | 4 | 4 | locked | PARTY IS UNJOINABLE |
+| A | 5 | 5 | full | PARTY IS FULL |
+| A | 6 | 6 | version | PARTY VERSION MISMATCH |
+| A | 2 | 4 | locked | PARTY IS UNJOINABLE |
+| A | 9 | 0 | unknown | PARTY JOIN ERROR UNKNOWN |
+| B | 0 | 0 | unknown | PARTY JOIN ERROR UNKNOWN |
+| B | 1 | 1 | not found | PARTY NOT FOUND |
+| B | 2 | 2 | timeout | PARTY JOIN ERROR UNKNOWN |
+| B | 3 | 3 | no permission | YOU DON'T HAVE PERMISSION TO JOIN |
+| B | 4 | 4 | locked | PARTY IS UNJOINABLE |
+| B | 5 | 5 | full | PARTY IS FULL |
+| B | 6 | 6 | version | PARTY VERSION MISMATCH |
+| B | 7 | 7 | unknown | PARTY JOIN ERROR UNKNOWN |
+
+Code 2 has no popup of its own: the game logs "timeout" and shows the unknown popup, which matches
+its event (`delegate_onpartyjoinerrorunknown`). The game server idled the client out at 20:23:38,
+three seconds after the last code (`Kicked from server due to inactivity`); that was not caused by the test.
+
+**Decide afterwards.** What the game service sends for "refused, no reason given". Today it
+sends 2, the bridge rewrites it to 4, and the player sees PARTY IS UNJOINABLE. The candidates, by
+what the player would see:
+- keep 2→4: PARTY IS UNJOINABLE;
+- send a code outside 1–6 and drop the rewrite: PARTY JOIN ERROR UNKNOWN;
+- send 2 straight through: PARTY JOIN ERROR UNKNOWN on screen, "timeout" in the game log.
 
 ## Calibration (one human click, once)
 
