@@ -24,10 +24,12 @@ steps:
     fire: {action: respond_to_invite, index: 0, accept: true}
   - name: an accepting PartyInviteResponse left the game
     expect_log: {pattern: 'game->server conn=1 PartyInviteResponse payload_bytes=\d+ param=1', timeout: 10}
-  - name: the join is in flight to the invite's party
-    state_until: {party_joining: true, party_room: '${party_id}', timeout: 15}
+  - name: the join is in flight, the old party kept until the server answers
+    state_until: {party_joining: true, timeout: 15}
   - name: the server lets us in (PartyJoinSuccess, F owns it)
     inject: {msg: PartyJoinSuccess, party: '${party_id}', owner: '${inviter_id}'}
+  - name: admitted, the old party is left now (Left callback)
+    expect_log: {pattern: 'party callback index=5 bound=1', timeout: 10}
   - name: Joined callback ran
     expect_log: {pattern: 'party callback index=1 bound=1', timeout: 10}
     diagnose: ['session event .*partyjoin', 'Party join failed']

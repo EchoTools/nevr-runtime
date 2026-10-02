@@ -2,12 +2,12 @@
 # Inbound: the bridge delivers the PartyInviteNotify Nakama sends an invitee. Then the accept is
 # fired the way R15NetPartyRespondToInviteNode (run 0x140dddd30) does it: post 0x140188bf0 with the
 # invite index, which checks slot 70 InviteCount and calls slot 73 AcceptInvite. pnsovr's accept is
-# JoinInternal on the invite's party (0x1800821f0 -> 0x18008d1e0): the invite is dropped, the current
-# party is left (Left callback, index 5), and the join is in flight with the room id showing the new
-# party. The accept goes out as PartyInviteResponse(param 1) to the inviter. The inviter is synthetic
+# JoinInternal on the invite's party (0x1800821f0 -> 0x18008d1e0): the invite is dropped and the join
+# is in flight. The current party is kept until the server admits the player (owner, 2026-10-01: a
+# player whose join fails stays where they are), so a refusal leaves the game in the party it was in. The accept goes out as PartyInviteResponse(param 1) to the inviter. The inviter is synthetic
 # and the server has no record of this invite, so the server's answer is injected: PartyJoinFailure
 # code 1 (unknown party), which the game gets as its JoinFailed callback (index 2) with code 1 (not
-# found). Pass = the whole round trip, ending with the game back in a party of its own.
+# found). Pass = the whole round trip, ending in the same party the game started in.
 name: party_invite_accept
 description: deliver a party invite, accept it through the respond-to-invite node's handler, see the join go out and a join failure come back
 vars:
@@ -18,6 +18,8 @@ steps:
     wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
   - name: control endpoint is up
     wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: the game has its own party
+    state_until: {party_joinable: true, timeout: 60, save: {party_before: party.id}}
   - name: an invite arrives (PartyInviteNotify)
     inject: {msg: PartyInviteNotify, party: '${party_id}', inviter: '${inviter_id}'}
   - name: the invite is in the game's invite list
@@ -29,19 +31,19 @@ steps:
     diagnose: ['slot=73 ', 'party join party=', 'session event .*partyjoinerror']
   - name: the game's accept gate allowed the join
     expect_log: {pattern: 'party callback index=7 gate=1', timeout: 10}
-  - name: the current party was left first (Left callback)
-    expect_log: {pattern: 'party callback index=5 bound=\d', timeout: 10}
   - name: an accepting PartyInviteResponse left the game
     expect_log: {pattern: 'game->server conn=1 PartyInviteResponse payload_bytes=\d+ param=1', timeout: 10}
   - name: the invite left the list
     state_until: {invite_count: 0, timeout: 15}
-  - name: the join is in flight to the invite's party
-    state_until: {party_joining: true, party_room: '${party_id}', timeout: 15}
+  - name: the join is in flight, still in the party it was in
+    state_until: {party_joining: true, timeout: 15}
   - name: the server refuses (PartyJoinFailure, unknown party)
     inject: {msg: PartyJoinFailure, party: '${party_id}', code: 1}
   - name: the game got JoinFailed with not found
     expect_log: {pattern: 'party callback index=2 arg=1 bound=1', timeout: 10}
   - name: the join ended
     state_until: {party_joining: false, timeout: 15}
-  - name: the game is back in a party of its own
-    state_until: {party_joinable: true, timeout: 60}
+  - name: still in the same party
+    state_until: {path: party.id, equals: '${party_before}', timeout: 15}
+  - name: and it is joinable again
+    state_until: {party_joinable: true, timeout: 15}

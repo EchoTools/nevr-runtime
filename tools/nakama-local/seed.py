@@ -10,6 +10,12 @@ resource"). pgcrypto's bcrypt output is what Go's CompareHashAndPassword expects
 
     tools/nakama-local/seed.py            # seed (or refresh) the account
     tools/nakama-local/seed.py --print    # print the identity block for a runtime config.yaml
+    tools/nakama-local/seed.py --discord-id ID   # the account carries this Discord id instead
+
+A client with cached credentials logs in with the Discord id from its token (N20: token first,
+config second), and the server names party members by the account's Discord id (custom_id,
+sessionAccountID). For the two to agree the local account must carry the client's id, which the
+scenario runner passes from the client's own log ("login injected xpid=OVR-ORG-<id>").
 """
 
 from __future__ import annotations
@@ -30,11 +36,13 @@ GUILD_ID = "900000000000000002"     # fake Discord guild the account belongs to
 GUILD_NAME = "nevr-local-guild"
 
 
-def seed() -> None:
+def seed(discord_id: str = DISCORD_ID) -> None:
+    if not discord_id.isdigit():
+        raise SystemExit(f"--discord-id must be digits, not {discord_id!r}")
     sql = f"""
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 INSERT INTO users (id, username, custom_id, password)
-VALUES (gen_random_uuid(), '{USERNAME}', '{DISCORD_ID}', convert_to(crypt('{PASSWORD}', gen_salt('bf', 6)), 'UTF8'))
+VALUES (gen_random_uuid(), '{USERNAME}', '{discord_id}', convert_to(crypt('{PASSWORD}', gen_salt('bf', 6)), 'UTF8'))
 ON CONFLICT (username) DO UPDATE
   SET custom_id = EXCLUDED.custom_id, password = EXCLUDED.password, disable_time = '1970-01-01 00:00:00+00'
 RETURNING id, username, custom_id;
@@ -64,11 +72,12 @@ ON CONFLICT DO NOTHING;
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--print", action="store_true", help="print the runtime config.yaml identity block")
+    ap.add_argument("--discord-id", default=DISCORD_ID, help="the Discord id the account carries")
     args = ap.parse_args()
     if args.print:
         print(f'identity:\n  discord_id: "{DISCORD_ID}"\n  password: "{PASSWORD}"')
         return 0
-    seed()
+    seed(args.discord_id)
     return 0
 
 

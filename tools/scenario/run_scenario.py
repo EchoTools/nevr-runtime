@@ -35,7 +35,7 @@ SCRATCH = pathlib.Path("/var/tmp/work-nevr-runtime/scenario-runs")
 WINEPREFIX = REPO / "echovr/.wineprefix"
 MARKER = b"[NEVR.SCENARIO]"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-STEP_KINDS = ("wait_log", "expect_log", "state_until", "inject", "fire")
+STEP_KINDS = ("wait_log", "expect_log", "state_until", "inject", "fire", "nakama_log")
 # Lines in the game's own log that mean the run is over: a wait stops on the first one and reports
 # it, instead of sitting out its timeout on a game that already failed (2026-10-01 run
 # 20261001T142307 waited 240 s on a client that had died at 0.2 s: "no driver could be loaded").
@@ -157,6 +157,30 @@ class Control:
         self.sock.close()
 
 
+def state_value(state: dict, path: str):
+    value = state
+    for part in str(path).split("."):
+        value = value.get(part) if isinstance(value, dict) else None
+    return value
+
+
+def wait_nakama_log(pattern: str, since: datetime.datetime, timeout: float, alive) -> str | None:
+    """The first line of the local nakama's own log since `since` matching `pattern`, polling the
+    container log until it appears, the client dies, or `timeout` passes."""
+    regex = re.compile(pattern)
+    deadline = time.monotonic() + timeout
+    while True:
+        out = subprocess.run(["docker", "compose", "-f", str(NAKAMA_LOCAL / "docker-compose.yml"), "logs",
+                              "--no-color", "--no-log-prefix", "--since", since.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                              "nakama"], capture_output=True, text=True).stdout
+        for line in out.splitlines():
+            if regex.search(line):
+                return line
+        if time.monotonic() >= deadline or (alive is not None and not alive()):
+            return None
+        time.sleep(1)
+
+
 def state_matches(state: dict, step: dict) -> tuple[bool, str]:
     spec = step["state_until"]
     if "party_joinable" in spec:
@@ -249,6 +273,16 @@ NAKAMA_LOCAL = REPO / "tools/nakama-local"
 LOCAL_SERVER_CONFIG = SCRATCH.parent / "local-server"
 
 
+def client_discord_id() -> str | None:
+    """The Discord id this machine's client logs in with, from the newest run whose log has the
+    runtime's own "login injected xpid=OVR-ORG-<id>" line (the cached token decides it, N20)."""
+    for log in sorted(SCRATCH.glob("**/game.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)[:40]:
+        m = re.search(r"login injected xpid=OVR-ORG-(\d+)", log.read_text(errors="replace"))
+        if m:
+            return m.group(1)
+    return None
+
+
 def write_local_server_config() -> pathlib.Path:
     """The game config for a `server: local` scenario: an empty game JSON and, beside it, the
     runtime's config.yaml pointing at the local nakama as the seeded test account (the same template
@@ -265,13 +299,19 @@ def write_local_server_config() -> pathlib.Path:
         raise StepFailed(f"local nakama is not listening on 127.0.0.1:7350 ({exc}); run `just nakama-dev-up`")
     sys.path.insert(0, str(NAKAMA_LOCAL))
     import seed  # noqa: E402  (constants only)
+    discord_id = client_discord_id() or seed.DISCORD_ID
+    done = subprocess.run([sys.executable, str(NAKAMA_LOCAL / "seed.py"), "--discord-id", discord_id],
+                          capture_output=True, text=True)
+    if done.returncode != 0:
+        raise StepFailed(f"seeding the local nakama failed: {done.stderr.strip() or done.stdout.strip()}")
+    print(f"scenario: local nakama account carries discord id {discord_id}", flush=True)
     LOCAL_SERVER_CONFIG.mkdir(parents=True, exist_ok=True)
     (LOCAL_SERVER_CONFIG / "config.json").write_text("{}\n")
     (LOCAL_SERVER_CONFIG / "config.yaml").write_text(
         "services:\n"
         f'  socket_uri: "ws://127.0.0.1:7350/ws?format=evr&token={key.group(1)}"\n'
         "identity:\n"
-        f'  discord_id: "{seed.DISCORD_ID}"\n'
+        f'  discord_id: "{discord_id}"\n'
         "auth:\n"
         f'  password: "{seed.PASSWORD}"\n'
         f'  server_key: "{key.group(1)}"\n')
@@ -299,6 +339,7 @@ class Run:
         self.control: Control | None = None
         self.mark = 0  # console offset at the last action; expect_log looks after it
         self.saved: dict = {}  # fire reply fields saved by a step's `save`, for later ${name}
+        self.started_utc = datetime.datetime.now(datetime.timezone.utc)
         self.launcher: subprocess.Popen | None = None
         self.xephyr: subprocess.Popen | None = None
 
@@ -406,9 +447,20 @@ class Run:
                     raise StepFailed(f"state failed: {state.get('error')}")
                 ok, detail = state_matches(state, step)
                 if ok:
+                    for name, path in (step["state_until"].get("save") or {}).items():
+                        self.saved[name] = state_value(state, path)
                     return detail
                 time.sleep(1)
             raise StepFailed(f"condition not met: {detail}; {self.console.summary(self.mark)}")
+        if kind == "nakama_log":
+            spec = step["nakama_log"]
+            if self.scenario.get("server") != "local":
+                raise StepFailed("nakama_log reads the local nakama's log: the scenario needs `server: local`")
+            line = wait_nakama_log(spec["pattern"], self.started_utc, float(spec.get("timeout", 15)), self.alive)
+            if line is None:
+                raise StepFailed(f"the local nakama logged no line matching /{spec['pattern']}/ "
+                                 f"within {spec.get('timeout', 15)} s since this run started")
+            return line[:200]
         command = {"op": kind, **step[kind]}
         self.mark = len(self.console.text())
         reply = self.control.call(command)

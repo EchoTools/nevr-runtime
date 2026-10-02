@@ -22,7 +22,7 @@ steps:
   - name: "code 1: accept"
     fire: {action: respond_to_invite, index: 0, accept: true}
   - name: "code 1: the join is in flight"
-    state_until: {party_joining: true, party_room: 777000000000011, timeout: 15}
+    state_until: {party_joining: true, timeout: 15}
   - name: "code 1: the server refuses"
     inject: {msg: PartyJoinFailure, party: 777000000000011, code: 1}
   - name: "code 1: the game raised onpartyjoinerrornotfound"
@@ -37,7 +37,7 @@ steps:
   - name: "code 2: accept"
     fire: {action: respond_to_invite, index: 0, accept: true}
   - name: "code 2: the join is in flight"
-    state_until: {party_joining: true, party_room: 777000000000012, timeout: 15}
+    state_until: {party_joining: true, timeout: 15}
   - name: "code 2: the server refuses"
     inject: {msg: PartyJoinFailure, party: 777000000000012, code: 2}
   - name: "code 2: the game raised onpartyjoinerrorlocked"
@@ -52,7 +52,7 @@ steps:
   - name: "code 3: accept"
     fire: {action: respond_to_invite, index: 0, accept: true}
   - name: "code 3: the join is in flight"
-    state_until: {party_joining: true, party_room: 777000000000013, timeout: 15}
+    state_until: {party_joining: true, timeout: 15}
   - name: "code 3: the server refuses"
     inject: {msg: PartyJoinFailure, party: 777000000000013, code: 3}
   - name: "code 3: the game raised onpartyjoinerrornopermission"
@@ -67,7 +67,7 @@ steps:
   - name: "code 5: accept"
     fire: {action: respond_to_invite, index: 0, accept: true}
   - name: "code 5: the join is in flight"
-    state_until: {party_joining: true, party_room: 777000000000014, timeout: 15}
+    state_until: {party_joining: true, timeout: 15}
   - name: "code 5: the server refuses"
     inject: {msg: PartyJoinFailure, party: 777000000000014, code: 5}
   - name: "code 5: the game raised onpartyjoinerrorfull"
@@ -82,7 +82,7 @@ steps:
   - name: "code 6: accept"
     fire: {action: respond_to_invite, index: 0, accept: true}
   - name: "code 6: the join is in flight"
-    state_until: {party_joining: true, party_room: 777000000000015, timeout: 15}
+    state_until: {party_joining: true, timeout: 15}
   - name: "code 6: the server refuses"
     inject: {msg: PartyJoinFailure, party: 777000000000015, code: 6}
   - name: "code 6: the game raised onpartyjoinerrorversion"
@@ -97,7 +97,7 @@ steps:
   - name: "code 9: accept"
     fire: {action: respond_to_invite, index: 0, accept: true}
   - name: "code 9: the join is in flight"
-    state_until: {party_joining: true, party_room: 777000000000016, timeout: 15}
+    state_until: {party_joining: true, timeout: 15}
   - name: "code 9: the server refuses"
     inject: {msg: PartyJoinFailure, party: 777000000000016, code: 9}
   - name: "code 9: the game raised onpartyjoinerrorunknown"
