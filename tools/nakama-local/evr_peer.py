@@ -40,6 +40,10 @@ UNLOCK_REQUEST = 0x5A4E99802FA3D704
 SET_JOIN_POLICY_REQUEST = 0xE1D46B6FB78FD9E6
 INVITE_RESPONSE = 0xE3654A09203555A3
 DATA_UPDATE_REQUEST = 0x3448CA6E8D9DD0CE  # SNSPartyDataUpdateRequest (social_party.h kPartyDataUpdateRequest)
+FIND_REQUEST = 0x312C2A01819AA3F5  # LobbyFindSessionRequest (nakama server/evr/core_packet.go)
+PENDING_CANCEL = 0x8DA9EB83FFEE9FD6  # LobbyPendingSessionCancel
+MODE_ARENA_PUBLIC = 0xCB60A4DE7E1CAF73  # echo_arena (echovr.exe symbol; src/runtime/hook/symbol_corpus.cpp)
+LEVEL_UNSPECIFIED = 0xFFFFFFFFFFFFFFFF
 
 NAMES = {  # replies the peer waits on (social_party.h ReplyTable, nakama core_hash_lookup.go)
     0xA5ACC1A90D0CCE47: "LogInSuccess", 0xA5B9D5A3021CCF51: "LogInFailure",
@@ -53,13 +57,16 @@ NAMES = {  # replies the peer waits on (social_party.h ReplyTable, nakama core_h
     0x23C834CB3BC6ECF5: "PartyUpdateNotify",
     0x4EDFFB9FC8CC8731: "PartyUpdateMemberSuccess", 0x4ECAEF95C7DC8627: "PartyUpdateMemberFailure",
     0x832143CCBF160955: "PartyDataNotify",
+    0x6D4DE3650EE3110F: "LobbySessionSuccessv5", 0x4AE8365EBC45F96C: "LobbySessionFailurev4",
+    0x8F28CF33DABFBECB: "LobbyMatchmakerStatus",
 }
 for sym, name in list(NAMES.items()):
     NAMES[sym] = name
 REQUEST_NAMES = {LOGIN_REQUEST: "LogInRequest", CREATE_REQUEST: "PartyCreateRequest", JOIN_REQUEST: "PartyJoinRequest",
                  LEAVE_REQUEST: "PartyLeaveRequest", INVITE_REQUEST: "PartyInviteRequest", LOCK_REQUEST: "PartyLockRequest",
                  UNLOCK_REQUEST: "PartyUnlockRequest", SET_JOIN_POLICY_REQUEST: "PartySetJoinPolicyRequest",
-                 INVITE_RESPONSE: "PartyInviteResponse", DATA_UPDATE_REQUEST: "PartyDataUpdateRequest"}
+                 INVITE_RESPONSE: "PartyInviteResponse", DATA_UPDATE_REQUEST: "PartyDataUpdateRequest",
+                 FIND_REQUEST: "LobbyFindSessionRequest", PENDING_CANCEL: "LobbyPendingSessionCancel"}
 
 
 def member_uuid(account_id: int) -> bytes:
@@ -84,6 +91,7 @@ class Peer:
         self.name, self.account_id, self.password, self.server_key = name, account_id, password, server_key
         self.headset = headset  # the login profile's system_info.headset_type (nakama fills headsettype from it)
         self.data_seq = 0
+        self.login = b""  # LogInSuccess payload: Session GUID(16) PlatformCode(8) AccountId(8)
         self.log = log
         self.ws: websocket.WebSocket | None = None
         self.received: list[tuple[float, str, bytes]] = []
@@ -104,7 +112,7 @@ class Peer:
                    "nevr_social": 1, "system_info": {"headset_type": self.headset}}
         payload = bytes(16) + struct.pack("<QQ", PLATFORM_OVR_ORG, self.account_id) + json.dumps(profile).encode() + b"\0"
         self._send(LOGIN_REQUEST, payload)
-        self.wait_for("LogInSuccess", timeout)
+        self.login = self.wait_for("LogInSuccess", timeout)
 
     def close(self) -> None:
         if self.ws is not None:
@@ -199,6 +207,25 @@ class Peer:
 
     def share_party(self, text: str) -> str:
         return self.share(0, text)
+
+    def find_arena(self) -> str:
+        """LobbyFindSessionRequest for public arena, as the game's Find sends it (nakama
+        server/evr/match_session_find_request.go Stream): VersionLock(8) Mode(8) Level(8) Platform(8)
+        LoginSessionID(16, the GUID from LogInSuccess as it arrived) EntrantCount(1) Flags(4) 3 bytes the
+        decoder skips, CurrentLobbyID(16) GroupID(16) SessionSettings JSON(NUL-terminated) Entrants(EvrId 16 each).
+        Returns once sent; the server answers only when it finds or fails."""
+        if len(self.login) < 32:
+            raise RuntimeError(f"peer {self.name}: not logged in")
+        settings = json.dumps({"appid": "1369078409873402", "gametype": struct.unpack("<q", struct.pack("<Q", MODE_ARENA_PUBLIC))[0],
+                               "level": -1}).encode() + b"\0"
+        payload = (struct.pack("<QQQQ", 0, MODE_ARENA_PUBLIC, LEVEL_UNSPECIFIED, 0) + self.login[:16]
+                   + struct.pack("<BI", 1, 0) + bytes(3) + bytes(16) + bytes(16) + settings + self.login[16:32])
+        self._send(FIND_REQUEST, payload)
+        return "find sent"
+
+    def cancel_find(self) -> str:
+        self._send(PENDING_CANCEL, self.login[:16])  # Session GUID(16), the login session
+        return "cancel sent"
 
     def wait_data(self, needle: str, timeout: float = 15) -> str:
         """The JSON of the first PartyDataNotify received whose JSON contains `needle`."""

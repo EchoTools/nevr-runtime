@@ -1,0 +1,36 @@
+# A tablet party as the lobby party, server side, on the local nakama (owner's matchmaking go and rule,
+# 2026-10-02: a runtime client in a tablet party of 2+ matchmakes with it; nakama 25bffe006). Two
+# runtime-level peers (nevr_social 1) are one SNS party; its leader sends LobbyFindSessionRequest
+# for public arena as the game's Find does. The tablet party is the lobby party (size 2), the leader
+# files a party ticket carrying the member. A third peer alone (the party of one every tablet player
+# has from login) files a solo ticket, as before. The game client only logs in: a local client never
+# enters a lobby, so the game itself cannot start a find here (run 20261002T093544).
+name: local_tablet_find
+server: local
+peers: 3
+description: two peers in one tablet party - the leader's find uses the party and files a party ticket; a peer alone files solo
+steps:
+  - name: logged in to the local nakama
+    wait_log: {pattern: 'NetGame switching state \(from logging in, to logged in\)'}
+  - name: peer 1 makes a party
+    peer: {id: 1, do: create_party, save: {tablet_party: party}}
+  - name: peer 2 joins it (a tablet party of two)
+    peer: {id: 2, do: join, arg: '${tablet_party}', expect: PartyJoinSuccess}
+  - name: peer 1, the leader, finds public arena
+    peer: {id: 1, do: find_arena}
+  - name: the tablet party is the lobby party, size 2, led by peer 1
+    nakama_log: {pattern: '"msg":"Tablet party is the lobby party".*"party_size":2,"is_leader":true', timeout: 20}
+  - name: nakama finds for the party of two
+    nakama_log: {pattern: '"msg":"Finding match".*"mode":"echo_arena","party_size":2', timeout: 20}
+  - name: the members never search, so the formation wait runs out (15 s; the owner's call whether to skip it)
+    nakama_log: {pattern: '"msg":"Formation timeout -- submitting ticket with ready members".*"party_size":2', timeout: 30}
+  - name: the leader files a party ticket carrying the member
+    nakama_log: {pattern: '"msg":"Matchmaking ticket added".*"username":"localpeer1".*"presences":\[\{"Node":"[^"]*","SessionID":"[0-9a-f-]+"\}\]', timeout: 10}
+  - name: peer 3 makes a party of one
+    peer: {id: 3, do: create_party}
+  - name: peer 3 finds public arena
+    peer: {id: 3, do: find_arena}
+  - name: nakama finds for one
+    nakama_log: {pattern: '"msg":"Finding match".*"username":"localpeer3".*"party_size":1', timeout: 20}
+  - name: peer 3 files a solo ticket, with no formation wait
+    nakama_log: {pattern: '"msg":"Matchmaking ticket added".*"username":"localpeer3".*"presences":\[\]', timeout: 20}

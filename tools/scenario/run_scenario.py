@@ -550,6 +550,10 @@ class Run:
                 result = peer.share_party(str(arg))
             elif action == "wait_data":
                 result = peer.wait_data(str(arg))
+            elif action == "find_arena":
+                result = peer.find_arena()
+            elif action == "cancel_find":
+                result = peer.cancel_find()
             elif action == "login":
                 result = "logged in"
             else:
