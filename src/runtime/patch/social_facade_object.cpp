@@ -734,6 +734,74 @@ std::uint32_t FriendIsInvitable(void*, std::uint32_t index) {
   return 1;
 }
 
+// Recently met (slots 56-67, pnsovr 0x180091200.. over Oculus' list; here the server's, §2). The
+// refresh node (0x140ddfcc0) calls slot 57 and then polls slot 56 until it reads 0; the
+// R15NetRecentlyMetUser(s) expressions (0x140da0e80, 0x140da11f0) and the status node (0x140da5d80,
+// which keeps the text up to its first '|') read the rest. Online people come first.
+std::uint64_t NowSeconds() {
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+std::uint64_t RecentlyMetRefreshing(void*) {
+  bool timedOut = false;
+  const bool busy = SocialRoster::RecentlyMet().Refreshing(NowSeconds(), &timedOut);
+  if (timedOut) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.SOCIAL] recently met refresh: no answer within %llu s; the list stays as it was",
+        static_cast<unsigned long long>(SocialRoster::RecentList::kRefreshSeconds));
+  }
+  return busy ? 1U : 0U;
+}
+
+void RefreshRecentlyMet(void*) {
+  if (!SocialRoster::RecentlyMet().BeginRefresh(NowSeconds())) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] recently met refresh: one is already in flight");
+    return;
+  }
+  const std::vector<SocialParty::Message> request = SocialParty::Global().RefreshRecentlyMet();
+  const bool sent = !request.empty() && SocialParty::Send(request);
+  if (!sent) SocialRoster::RecentlyMet().EndRefresh();
+  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] recently met refresh: request %s", sent ? "sent" : "NOT sent");
+}
+
+std::uint32_t RecentlyMetCount(void*) { return SocialRoster::RecentlyMet().Count(); }
+std::uint32_t RecentlyMetOnlineCount(void*) { return SocialRoster::RecentlyMet().Online(); }
+std::uint32_t RecentlyMetOfflineCount(void*) {
+  return SocialRoster::RecentlyMet().Count() - SocialRoster::RecentlyMet().Online();
+}
+std::uint64_t* RecentlyMetUserId(void*, std::uint64_t* out, std::uint32_t index) {
+  std::uint64_t id = 0;
+  SocialRoster::RecentlyMet().IdAt(index, &id);
+  if (out != nullptr) *out = id;
+  return out;
+}
+const char* RecentlyMetUserName(void*, std::int32_t index) {
+  return index < 0 ? "" : SocialRoster::RecentlyMet().NameAt(static_cast<std::uint32_t>(index));
+}
+// pnsovr 0x180090b90: 2 for an index below the online count, else 0.
+std::uint32_t RecentlyMetUserStatus(void*, std::uint32_t index) {
+  return SocialRoster::RecentlyMet().OnlineAt(index) ? 2U : 0U;
+}
+const char* RecentlyMetUserStatusString(void*, std::int32_t index) {
+  return index < 0 ? "" : SocialRoster::RecentlyMet().TextAt(static_cast<std::uint32_t>(index));
+}
+// pnsovr 0x180090aa0: only while the local party is joinable (slot 22), someone it can reach (online
+// here, as for friends) who is not already a member.
+std::uint32_t RecentlyMetUserIsInvitable(void*, std::uint32_t index) {
+  std::uint64_t id = 0;
+  if (!SocialRoster::RecentlyMet().IdAt(index, &id) || !SocialRoster::RecentlyMet().OnlineAt(index)) return 0;
+  const auto view = CurrentView();
+  if (!PartyJoinable(*view)) return 0;
+  for (const SocialParty::Member& member : view->members)
+    if (member.id == id) return 0;
+  return 1;
+}
+std::uint32_t RecentlyMetUserIsJoinable(void*, std::uint32_t index) {
+  return SocialRoster::RecentlyMet().PartyIdAt(index) != 0 ? 1U : 0U;
+}
+std::uint64_t RecentlyMetUserPartyId(void*, std::uint32_t index) { return SocialRoster::RecentlyMet().PartyIdAt(index); }
+
 std::uint64_t Initialize(void* self, std::uint32_t maxUsers, const void* callbacks) {
   auto* object = static_cast<FacadeObject*>(self);
   if (callbacks != nullptr) {
@@ -1008,18 +1076,18 @@ const std::array<Slot, kVtableSlotCount> kVtable = {
     TRACED(53, FriendIsInvitable),  // 53 FriendIsInvitable
     TRACED(54, FriendIsJoinable),  // 54 FriendIsJoinable
     TRACED(55, FriendPartyId),  // 55 FriendPartyId
-    TRACED(56, Zero0),  // 56 RefreshingRecentlyMetUsers
-    TRACED(57, UnimplementedSlot),  // 57 RefreshRecentlyMetUsers
-    TRACED(58, Zero0),  // 58 RecentlyMetUserCount
-    TRACED(59, Zero0),  // 59 OnlineRecentlyMetUserCount
-    TRACED(60, Zero0),  // 60 OfflineRecentlyMetUserCount
-    TRACED(61, ZeroId),  // 61 RecentlyMetUserId
-    TRACED(62, EmptyU32),  // 62 RecentlyMetUserName
-    TRACED(63, ZeroU32),  // 63 RecentlyMetUserStatus
-    TRACED(64, EmptyU32),  // 64 RecentlyMetUserStatusString
-    TRACED(65, ZeroU32),  // 65 RecentlyMetUserIsInvitable
-    TRACED(66, ZeroU32),  // 66 RecentlyMetUserIsJoinable
-    TRACED(67, ZeroU32),  // 67 RecentlyMetUserPartyId
+    TRACED(56, RecentlyMetRefreshing),  // 56 RefreshingRecentlyMetUsers
+    TRACED(57, RefreshRecentlyMet),  // 57 RefreshRecentlyMetUsers
+    TRACED(58, RecentlyMetCount),  // 58 RecentlyMetUserCount
+    TRACED(59, RecentlyMetOnlineCount),  // 59 OnlineRecentlyMetUserCount
+    TRACED(60, RecentlyMetOfflineCount),  // 60 OfflineRecentlyMetUserCount
+    TRACED(61, RecentlyMetUserId),  // 61 RecentlyMetUserId
+    TRACED(62, RecentlyMetUserName),  // 62 RecentlyMetUserName
+    TRACED(63, RecentlyMetUserStatus),  // 63 RecentlyMetUserStatus
+    TRACED(64, RecentlyMetUserStatusString),  // 64 RecentlyMetUserStatusString
+    TRACED(65, RecentlyMetUserIsInvitable),  // 65 RecentlyMetUserIsInvitable
+    TRACED(66, RecentlyMetUserIsJoinable),  // 66 RecentlyMetUserIsJoinable
+    TRACED(67, RecentlyMetUserPartyId),  // 67 RecentlyMetUserPartyId
     TRACED(68, Zero0),  // 68 RefreshingInvites
     TRACED(69, UnimplementedSlot),  // 69 RefreshInvites
     TRACED(70, InviteCount),  // 70 InviteCount
@@ -1166,6 +1234,24 @@ std::vector<InviteForTest> InvitesForTest() {
   }
   return out;
 }
+
+std::vector<RecentlyMetForTest> RecentlyMetUsersForTest() {
+  std::vector<RecentlyMetForTest> out;
+  for (std::uint32_t index = 0; index < RecentlyMetCount(nullptr); ++index) {
+    RecentlyMetForTest user;
+    RecentlyMetUserId(nullptr, &user.id, index);
+    user.name = RecentlyMetUserName(nullptr, static_cast<std::int32_t>(index));
+    user.status = RecentlyMetUserStatus(nullptr, index);
+    user.text = RecentlyMetUserStatusString(nullptr, static_cast<std::int32_t>(index));
+    user.invitable = RecentlyMetUserIsInvitable(nullptr, index) != 0;
+    user.joinable = RecentlyMetUserIsJoinable(nullptr, index) != 0;
+    user.partyId = RecentlyMetUserPartyId(nullptr, index);
+    out.push_back(user);
+  }
+  return out;
+}
+
+bool RecentlyMetRefreshingForTest() { return RecentlyMetRefreshing(nullptr) != 0; }
 
 PartyStateForTest PartyForTest() {
   const auto view = CurrentView();

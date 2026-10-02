@@ -412,6 +412,20 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
             static_cast<unsigned long long>(len));
       }
     }
+    if (fromServer && sym == SocialRoster::kRecentlyMetListResponse) {
+      // Recently met (proposal §2): the whole list; the refresh the game is polling (slot 56) ends.
+      std::vector<SocialRoster::Entry> people;
+      if (SocialRoster::ParseRecentlyMetResponse(payload, static_cast<size_t>(len), &people)) {
+        const auto online = static_cast<unsigned>(std::count_if(people.begin(), people.end(),
+                                                                [](const SocialRoster::Entry& e) { return e.online; }));
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] recently met list count=%zu online=%u", people.size(), online);
+        SocialRoster::RecentlyMet().SetList(std::move(people));
+      } else {
+        SocialRoster::RecentlyMet().EndRefresh();
+        Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] recently met list could not be read bytes=%llu",
+            static_cast<unsigned long long>(len));
+      }
+    }
     if (fromServer && sym == SocialParty::kPartyDataNotify) {
       // Party or member data (proposal §3): only a JSON object goes on to the game's CJson loader.
       SocialParty::DataNotify notify;

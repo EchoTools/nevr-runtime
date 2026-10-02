@@ -253,6 +253,156 @@ class Roster {
   bool pendingActive_ = false;
 };
 
+// ---------------------------------------------------------------------------------------------
+// Recently met (social slots 56-67; docs/design/2026-10-01-social-nakama-proposal.md §2)
+// ---------------------------------------------------------------------------------------------
+
+/// SNSRecentlyMetListResponse (nevr social level 1): Count(4), then per person AccountID(8) PartyID(8)
+/// Joinable(1) Status(1, 0 online, 2 offline) Reserved(6) NameLen(2) Name TextLen(2) Text (nakama
+/// server/evr/sns_recently_met.go). The request, SNSRecentlyMetRefreshRequest, is in social_party.h.
+constexpr std::uint64_t kRecentlyMetListResponse = 0xbc3ee692bb03328fULL;
+
+/// The response's people in its order (online first, newest meeting first); false if it is cut short.
+inline bool ParseRecentlyMetResponse(const std::uint8_t* payload, std::size_t len, std::vector<Entry>* out) {
+  if (payload == nullptr || out == nullptr || len < 4) return false;
+  const auto le = [&](std::size_t off, int bytes) {
+    std::uint64_t v = 0;
+    for (int i = bytes - 1; i >= 0; --i) v = (v << 8) | payload[off + static_cast<std::size_t>(i)];
+    return v;
+  };
+  const std::uint64_t count = le(0, 4);
+  std::size_t at = 4;
+  std::vector<Entry> entries;
+  for (std::uint64_t i = 0; i < count; ++i) {
+    if (at + 32 > len) return false;
+    Entry entry;
+    entry.id = le(at, 8);
+    const std::uint64_t partyId = le(at + 8, 8);
+    const bool joinable = payload[at + 16] != 0;
+    const std::uint8_t status = payload[at + 17];
+    entry.online = status == kStatusOnline || status == kStatusBusy;
+    const std::size_t nameLen = static_cast<std::size_t>(le(at + 24, 2));
+    at += 26;
+    if (at + nameLen + 2 > len) return false;
+    entry.name.assign(reinterpret_cast<const char*>(payload + at), nameLen);
+    at += nameLen;
+    const std::size_t textLen = static_cast<std::size_t>(le(at, 2));
+    at += 2;
+    if (at + textLen > len) return false;
+    entry.presence.text.assign(reinterpret_cast<const char*>(payload + at), textLen);
+    at += textLen;
+    entry.presence.joinable = joinable && partyId != 0;
+    entry.presence.partyId = entry.presence.joinable ? partyId : 0;
+    if (entry.name.empty()) entry.name = std::to_string(entry.id);
+    entries.push_back(std::move(entry));
+  }
+  *out = std::move(entries);
+  return true;
+}
+
+/// The recently-met list the facade answers slots 56-67 with. pnsovr's slot 56 is "busy" from the
+/// refresh (slot 57) until its answer is in (0x180091200); the game's refresh node polls it until it
+/// is 0. A server that does not know the request never answers, so a refresh also ends after
+/// kRefreshSeconds with the list it had.
+class RecentList {
+ public:
+  static constexpr std::uint64_t kRefreshSeconds = 5;
+
+  /// Starts a refresh unless one is in flight; true when the caller should send the request.
+  bool BeginRefresh(std::uint64_t now) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (BusyLocked(now)) return false;
+    refreshing_ = true;
+    started_ = now;
+    return true;
+  }
+
+  /// The refresh could not be sent (or its answer could not be read): not busy any more.
+  void EndRefresh() {
+    std::lock_guard<std::mutex> guard(mutex_);
+    refreshing_ = false;
+  }
+
+  /// Slot 56. True while a refresh waits for its answer, for at most kRefreshSeconds. `timedOut` is
+  /// set once when a refresh ends that way.
+  bool Refreshing(std::uint64_t now, bool* timedOut = nullptr) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    const bool busy = BusyLocked(now);
+    if (refreshing_ && !busy) {
+      refreshing_ = false;
+      if (timedOut != nullptr) *timedOut = true;
+    }
+    return busy;
+  }
+
+  /// The server's answer: the list as sent (online first), and the refresh is over.
+  void SetList(std::vector<Entry> entries) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    refreshing_ = false;
+    auto next = std::make_shared<Snapshot>();
+    std::stable_partition(entries.begin(), entries.end(), [](const Entry& e) { return e.online; });
+    next->online = static_cast<std::uint32_t>(
+        std::count_if(entries.begin(), entries.end(), [](const Entry& e) { return e.online; }));
+    next->entries = std::move(entries);
+    if (current_) {
+      retired_[retiredNext_] = current_;
+      retiredNext_ = (retiredNext_ + 1) % retired_.size();
+    }
+    current_ = std::move(next);
+  }
+
+  std::uint32_t Count() const { return static_cast<std::uint32_t>(Snap()->entries.size()); }
+  std::uint32_t Online() const { return Snap()->online; }
+
+  bool IdAt(std::uint32_t index, std::uint64_t* out) const {
+    const auto snap = Snap();
+    if (index >= snap->entries.size()) return false;
+    if (out != nullptr) *out = snap->entries[index].id;
+    return true;
+  }
+  bool OnlineAt(std::uint32_t index) const {
+    const auto snap = Snap();
+    return index < snap->entries.size() && snap->entries[index].online;
+  }
+  /// Strings the game may keep reading: they live in a snapshot kept for the next 8 lists.
+  const char* NameAt(std::uint32_t index) const {
+    const auto snap = Snap();
+    return index < snap->entries.size() ? snap->entries[index].name.c_str() : "";
+  }
+  const char* TextAt(std::uint32_t index) const {
+    const auto snap = Snap();
+    return index < snap->entries.size() ? snap->entries[index].presence.text.c_str() : "";
+  }
+  /// Their party, when online and joinable for us (slots 66/67); 0 otherwise.
+  std::uint64_t PartyIdAt(std::uint32_t index) const {
+    const auto snap = Snap();
+    if (index >= snap->entries.size() || !snap->entries[index].online) return 0;
+    return snap->entries[index].presence.partyId;
+  }
+
+ private:
+  bool BusyLocked(std::uint64_t now) const { return refreshing_ && now - started_ < kRefreshSeconds; }
+
+  std::shared_ptr<const Snapshot> Snap() const {
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (current_) return current_;
+    static const std::shared_ptr<const Snapshot> empty = std::make_shared<const Snapshot>();
+    return empty;
+  }
+
+  mutable std::mutex mutex_;
+  bool refreshing_ = false;
+  std::uint64_t started_ = 0;
+  std::shared_ptr<const Snapshot> current_;
+  std::array<std::shared_ptr<const Snapshot>, 8> retired_{};
+  std::size_t retiredNext_ = 0;
+};
+
+inline RecentList& RecentlyMet() {
+  static RecentList list;
+  return list;
+}
+
 /// The process-wide roster the bridge fills and the facade reads.
 inline Roster& Global() {
   static Roster roster;

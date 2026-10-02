@@ -1640,3 +1640,143 @@ TEST(SocialFacadeData, TheLeadersWrittenPartyDataIsSharedAndTheWrittenBitCleared
 }
 
 }  // namespace partydata
+
+// ---------------------------------------------------------------------------------------------
+// Recently met (docs/design/2026-10-01-social-nakama-proposal.md §2)
+// ---------------------------------------------------------------------------------------------
+namespace recentlymet {
+
+std::vector<SocialRoster::Entry> TwoPeople() {
+  SocialRoster::Entry off;
+  off.id = 42;
+  off.name = "Off";
+  SocialRoster::Entry on;
+  on.id = 900000000000000101ULL;
+  on.name = "Peer";
+  on.online = true;
+  on.presence.partyId = 5;
+  on.presence.joinable = true;
+  on.presence.text = "Social Lobby";
+  return {off, on};  // offline first on purpose: the list shows online people first
+}
+
+TEST(SocialRecentlyMet, TheResponseRoundTripsAndATruncatedOneIsRefused) {
+  const std::string frame = ScenarioProtocol::BuildRecentlyMetListResponse(TwoPeople());
+  std::uint64_t symbol = 0;
+  std::memcpy(&symbol, frame.data() + 8, 8);
+  EXPECT_EQ(symbol, 0xbc3ee692bb03328fULL);
+  const auto* payload = reinterpret_cast<const std::uint8_t*>(frame.data()) + 24;
+  std::vector<SocialRoster::Entry> people;
+  ASSERT_TRUE(SocialRoster::ParseRecentlyMetResponse(payload, frame.size() - 24, &people));
+  ASSERT_EQ(people.size(), 2U);
+  EXPECT_EQ(people[0].id, 42U);
+  EXPECT_FALSE(people[0].online);
+  EXPECT_EQ(people[1].name, "Peer");
+  EXPECT_EQ(people[1].presence.text, "Social Lobby");
+  EXPECT_EQ(people[1].presence.partyId, 5U);
+  EXPECT_FALSE(SocialRoster::ParseRecentlyMetResponse(payload, frame.size() - 25, &people));
+  const std::uint8_t empty[4] = {0, 0, 0, 0};
+  ASSERT_TRUE(SocialRoster::ParseRecentlyMetResponse(empty, 4, &people));
+  EXPECT_TRUE(people.empty());
+}
+
+TEST(SocialRecentlyMet, ARefreshIsBusyUntilItsAnswerOrFiveSecondsAndShowsOnlinePeopleFirst) {
+  SocialRoster::RecentList list;
+  EXPECT_FALSE(list.Refreshing(100));
+  ASSERT_TRUE(list.BeginRefresh(100));
+  EXPECT_FALSE(list.BeginRefresh(101)) << "one in flight";
+  EXPECT_TRUE(list.Refreshing(104));
+  list.SetList(TwoPeople());
+  EXPECT_FALSE(list.Refreshing(104)) << "the answer ends it";
+  ASSERT_EQ(list.Count(), 2U);
+  EXPECT_EQ(list.Online(), 1U);
+  std::uint64_t id = 0;
+  ASSERT_TRUE(list.IdAt(0, &id));
+  EXPECT_EQ(id, 900000000000000101ULL);
+  EXPECT_STREQ(list.NameAt(1), "Off");
+  EXPECT_EQ(list.PartyIdAt(0), 5U);
+  EXPECT_EQ(list.PartyIdAt(1), 0U);
+
+  ASSERT_TRUE(list.BeginRefresh(200));
+  bool timedOut = false;
+  EXPECT_TRUE(list.Refreshing(204, &timedOut));
+  EXPECT_FALSE(timedOut);
+  EXPECT_FALSE(list.Refreshing(205, &timedOut)) << "a server that never answers does not hang the node";
+  EXPECT_TRUE(timedOut);
+  EXPECT_EQ(list.Count(), 2U) << "the list stays as it was";
+}
+
+std::vector<std::string> g_frames;
+bool Capture(const std::string& frame) {
+  g_frames.push_back(frame);
+  return true;
+}
+
+TEST(SocialFacadeRecentlyMet, SlotsAnswerFromTheServersList) {
+  using U32Fn = std::uint32_t (*)(void*);
+  using U64Fn = std::uint64_t (*)(void*);
+  using VoidFn = void (*)(void*);
+  using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
+  using TextFn = const char* (*)(void*, std::int32_t);
+  using IndexFn = std::uint32_t (*)(void*, std::uint32_t);
+  using PartyFn = std::uint64_t (*)(void*, std::uint32_t);
+  void* object = SocialFacade::Object();
+  const Slot* vtable = Vtable(object);
+  SocialParty::Global().SetSelf(100, "Me");
+  SocialParty::SetSender(&Capture);
+  g_frames.clear();
+
+  reinterpret_cast<VoidFn>(vtable[57])(object);
+  ASSERT_EQ(g_frames.size(), 1U);
+  std::uint64_t symbol = 0;
+  std::memcpy(&symbol, g_frames[0].data() + 8, 8);
+  EXPECT_EQ(symbol, 0xc5359d9ff7e1fefeULL);
+  EXPECT_EQ(g_frames[0].size(), 24U + 0x20) << "the 0x20 header";
+  EXPECT_EQ(reinterpret_cast<U64Fn>(vtable[56])(object), 1U) << "refreshing until the answer";
+  reinterpret_cast<VoidFn>(vtable[57])(object);
+  EXPECT_EQ(g_frames.size(), 1U) << "no second request while one is in flight";
+
+  // A party of one that is joinable, so an online person who is not a member can be invited.
+  ASSERT_TRUE(FeedParty(SocialParty::Global(), "PartyCreateSuccess", U64s({7, 100})));
+  SocialRoster::RecentlyMet().SetList(TwoPeople());
+  std::uint8_t flags = 0;
+  reinterpret_cast<void (*)(void*, const void*)>(vtable[13])(object, &flags);
+  EXPECT_EQ(reinterpret_cast<U64Fn>(vtable[56])(object), 0U);
+  EXPECT_EQ(reinterpret_cast<U32Fn>(vtable[58])(object), 2U);
+  EXPECT_EQ(reinterpret_cast<U32Fn>(vtable[59])(object), 1U);
+  EXPECT_EQ(reinterpret_cast<U32Fn>(vtable[60])(object), 1U);
+  std::uint64_t id = 0;
+  reinterpret_cast<IdFn>(vtable[61])(object, &id, 0);
+  EXPECT_EQ(id, 900000000000000101ULL);
+  EXPECT_STREQ(reinterpret_cast<TextFn>(vtable[62])(object, 0), "Peer");
+  EXPECT_STREQ(reinterpret_cast<TextFn>(vtable[62])(object, -1), "");
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[63])(object, 0), 2U);
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[63])(object, 1), 0U);
+  EXPECT_STREQ(reinterpret_cast<TextFn>(vtable[64])(object, 0), "Social Lobby");
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[65])(object, 0), 1U) << "online, not a member, party joinable";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[65])(object, 1), 0U) << "offline";
+  EXPECT_EQ(reinterpret_cast<IndexFn>(vtable[66])(object, 0), 1U);
+  EXPECT_EQ(reinterpret_cast<PartyFn>(vtable[67])(object, 0), 5U);
+  EXPECT_EQ(reinterpret_cast<PartyFn>(vtable[67])(object, 9), 0U);
+
+  SocialRoster::RecentlyMet().SetList({});
+  SocialParty::Global().ResetParty();
+  SocialParty::Global().DrainEvents();
+  SocialParty::SetSender(nullptr);
+}
+
+TEST(ScenarioProtocol, RecentlyMetInjectParses) {
+  ScenarioProtocol::Command cmd;
+  std::string error;
+  ASSERT_TRUE(ScenarioProtocol::ParseCommand(
+      R"({"op":"inject","msg":"RecentlyMetListResponse","users":[{"id":7,"name":"A","online":true,"party":3,"text":"In Main Menu"},{"id":8}]})",
+      &cmd, &error))
+      << error;
+  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectRecentlyMet);
+  ASSERT_EQ(cmd.people.size(), 2U);
+  EXPECT_TRUE(cmd.people[0].presence.joinable);
+  EXPECT_FALSE(cmd.people[1].online);
+  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"RecentlyMetListResponse"})", &cmd, &error));
+}
+
+}  // namespace recentlymet

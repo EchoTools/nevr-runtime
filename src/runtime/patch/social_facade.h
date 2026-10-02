@@ -96,6 +96,20 @@ struct InviteForTest {
 };
 /// Scenario-control builds only: the invites in the order the game's invite slots index them.
 std::vector<InviteForTest> InvitesForTest();
+
+struct RecentlyMetForTest {
+  std::uint64_t id = 0;
+  std::string name;
+  std::uint32_t status = 0;  // slot 63: 2 online, 0 offline
+  std::string text;          // slot 64
+  bool invitable = false;    // slot 65
+  bool joinable = false;     // slot 66
+  std::uint64_t partyId = 0;  // slot 67
+};
+/// Scenario-control builds only: the recently-met list as slots 58-67 report it, in their order.
+std::vector<RecentlyMetForTest> RecentlyMetUsersForTest();
+/// Scenario-control builds only: slot 56.
+bool RecentlyMetRefreshingForTest();
 #endif
 
 #ifdef NEVR_TEST_HOOKS

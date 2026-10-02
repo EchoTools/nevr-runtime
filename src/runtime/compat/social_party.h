@@ -57,6 +57,9 @@ constexpr std::uint64_t kPartyDataScopeMember = 1;
 constexpr std::uint64_t kPartyDataNotify = 0x832143ccbf160955ULL;
 constexpr std::uint64_t kInviteListRefreshRequest = 0xd8cbc44959e25da8ULL;
 constexpr std::uint64_t kFriendListRefreshRequest = 0xdcfa94680e8d19fcULL;  // SNSFriendListRefreshRequest
+/// SNSRecentlyMetRefreshRequest (nevr social level 1), the 0x20 header; answered by
+/// SNSRecentlyMetListResponse (social_roster.h). A server without it drops it, unanswered.
+constexpr std::uint64_t kRecentlyMetRefreshRequest = 0xc5359d9ff7e1fefeULL;
 constexpr std::uint64_t kFriendInviteRequest = 0x7f0d7a28de3c6f70ULL;  // SNSFriendInviteRequest (add a friend; accepts when the target already asked)
 constexpr std::uint64_t kKickRequest = 0xfaf57beb59917d64ULL;
 constexpr std::uint64_t kPassRequest = 0x518543cd886a6946ULL;
@@ -122,6 +125,7 @@ inline const char* RequestName(std::uint64_t symbol) {
     case kPassRequest: return "PartyPassRequest";
     case kInviteResponse: return "PartyInviteResponse";
     case kFriendListRefreshRequest: return "FriendListRefreshRequest";
+    case kRecentlyMetRefreshRequest: return "RecentlyMetRefreshRequest";
     case kFriendInviteRequest: return "FriendInviteRequest";
     default: return nullptr;
   }
@@ -569,6 +573,14 @@ class State {
     std::lock_guard<std::mutex> guard(mutex_);
     std::vector<Message> out;
     out.push_back(Short(kFriendListRefreshRequest, SelfUuid()));
+    return out;
+  }
+
+  /// Slot 57 RefreshRecentlyMetUsers: ask the server for the recently-met list.
+  std::vector<Message> RefreshRecentlyMet() {
+    std::lock_guard<std::mutex> guard(mutex_);
+    std::vector<Message> out;
+    if (self_ != 0) out.push_back(Short(kRecentlyMetRefreshRequest, SelfUuid()));
     return out;
   }
 

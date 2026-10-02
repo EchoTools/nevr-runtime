@@ -443,6 +443,14 @@ nlohmann::json StateJson() {
                        {"party", SocialRoster::Global().PartyIdAt(index)}});
   }
   out["friends"] = friends;
+  nlohmann::json recent = nlohmann::json::array();
+  for (const SocialFacade::RecentlyMetForTest& user : SocialFacade::RecentlyMetUsersForTest()) {
+    recent.push_back({{"id", user.id}, {"name", user.name}, {"status", user.status}, {"text", user.text},
+                      {"invitable", user.invitable}, {"joinable", user.joinable}, {"party", user.partyId}});
+  }
+  out["recently_met"] = {{"refreshing", SocialFacade::RecentlyMetRefreshingForTest()},
+                         {"count", recent.size()},
+                         {"users", recent}};
   nlohmann::json invites = nlohmann::json::array();
   for (const SocialFacade::InviteForTest& invite : SocialFacade::InvitesForTest()) {
     invites.push_back({{"party", invite.partyId}, {"sender", invite.senderId}});
@@ -511,6 +519,11 @@ nlohmann::json Handle(const std::string& line) {
                                     &error)) {
         return Fail(error);
       }
+      return {{"ok", true}};
+    }
+    case ScenarioProtocol::Op::kInjectRecentlyMet: {
+      Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject RecentlyMetListResponse users=%zu", cmd.people.size());
+      if (!InjectServerFrameForTest(ScenarioProtocol::BuildRecentlyMetListResponse(cmd.people), &error)) return Fail(error);
       return {{"ok", true}};
     }
     case ScenarioProtocol::Op::kInjectPartyData: {

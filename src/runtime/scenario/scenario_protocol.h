@@ -10,11 +10,12 @@
 #include <nlohmann/json.hpp>
 
 #include "runtime/compat/social_party.h"
+#include "runtime/compat/social_roster.h"
 
 namespace ScenarioProtocol {
 
 enum class Op { kState, kInjectFriendStatus, kInjectFriendNotify, kInjectPartyInvite, kInjectPartyJoinFailure,
-                kInjectPartyMember, kInjectFriendPresence, kInjectPartyData, kFireFriendInvite, kFireAddFriend, kFireRespondInvite,
+                kInjectPartyMember, kInjectFriendPresence, kInjectPartyData, kInjectRecentlyMet, kFireFriendInvite, kFireAddFriend, kFireRespondInvite,
                 kFireAction };
 
 struct Command {
@@ -35,6 +36,7 @@ struct Command {
   std::string value;               // fire set_party_*_string: the value; inject FriendPresenceNotify: the text    // inject PartyJoinFailure: Nakama's code (1 unknown party, 2 refused)
   std::uint32_t inviteIndex = 0;   // fire respond_to_invite: the game's invite index (newest first)
   bool accept = false;
+  std::vector<SocialRoster::Entry> people;  // inject RecentlyMetListResponse
 };
 
 /// SNSPartyInviteNotify: PartyID(8) InviterID(8) (nakama server/evr_pipeline_party.go sends it to
@@ -213,6 +215,30 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
       *out = cmd;
       return true;
     }
+    if (msg == "RecentlyMetListResponse") {
+      // "users": [{"id", "name", "online", "party", "text"}], in the server's order.
+      if (!j.contains("users") || !j["users"].is_array()) {
+        *error = "inject RecentlyMetListResponse needs \"users\": [{\"id\", \"name\", \"online\", \"party\", \"text\"}]";
+        return false;
+      }
+      cmd.op = Op::kInjectRecentlyMet;
+      for (const auto& u : j["users"]) {
+        if (!u.is_object() || !u.contains("id") || !u["id"].is_number_unsigned()) {
+          *error = "inject RecentlyMetListResponse: each user needs an unsigned \"id\"";
+          return false;
+        }
+        SocialRoster::Entry e;
+        e.id = u["id"].get<std::uint64_t>();
+        e.name = u.contains("name") && u["name"].is_string() ? u["name"].get<std::string>() : std::string();
+        e.online = u.contains("online") && u["online"].is_boolean() && u["online"].get<bool>();
+        e.presence.partyId = u.contains("party") && u["party"].is_number_unsigned() ? u["party"].get<std::uint64_t>() : 0;
+        e.presence.joinable = e.presence.partyId != 0;
+        e.presence.text = u.contains("text") && u["text"].is_string() ? u["text"].get<std::string>() : std::string();
+        cmd.people.push_back(std::move(e));
+      }
+      *out = cmd;
+      return true;
+    }
     if (msg == "PartyDataNotify") {
       // The server's party data (proposal §3): "member" 0 or absent is the party's, "json" an object
       // (or its text), "party" defaults to the current party.
@@ -256,7 +282,7 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
     }
     const FriendNotify* notify = FindFriendNotify(msg);
     if (msg != "FriendStatusNotify" && notify == nullptr) {
-      *error = "inject supports msg \"FriendStatusNotify\", \"PartyDataNotify\", \"PartyInviteNotify\", \"PartyJoinSuccess\", \"PartyJoinFailure\", \"PartyJoinNotify\", \"PartyLeaveNotify\" and the friend notifies (FriendAcceptNotify, "
+      *error = "inject supports msg \"FriendStatusNotify\", \"PartyDataNotify\", \"RecentlyMetListResponse\", \"PartyInviteNotify\", \"PartyJoinSuccess\", \"PartyJoinFailure\", \"PartyJoinNotify\", \"PartyLeaveNotify\" and the friend notifies (FriendAcceptNotify, "
                "FriendAcceptSuccess, FriendInviteNotify, FriendInviteSuccess, FriendRemoveNotify, "
                "FriendWithdrawnNotify, FriendRejectNotify)";
       return false;
@@ -357,6 +383,25 @@ inline std::string BuildFriendPresenceNotify(std::uint64_t friendId, std::uint64
   SocialParty::AppendLe(m.payload, 0, 6);
   SocialParty::AppendLe(m.payload, text.size(), 2);
   m.payload += text;
+  return SocialParty::Frame(m);
+}
+
+/// SNSRecentlyMetListResponse (social_roster.h kRecentlyMetListResponse).
+inline std::string BuildRecentlyMetListResponse(const std::vector<SocialRoster::Entry>& people) {
+  SocialParty::Message m;
+  m.symbol = SocialRoster::kRecentlyMetListResponse;
+  SocialParty::AppendLe(m.payload, people.size(), 4);
+  for (const SocialRoster::Entry& e : people) {
+    SocialParty::AppendLe(m.payload, e.id, 8);
+    SocialParty::AppendLe(m.payload, e.presence.partyId, 8);
+    SocialParty::AppendLe(m.payload, e.presence.joinable ? 1 : 0, 1);
+    SocialParty::AppendLe(m.payload, e.online ? SocialRoster::kStatusOnline : SocialRoster::kStatusOffline, 1);
+    SocialParty::AppendLe(m.payload, 0, 6);
+    SocialParty::AppendLe(m.payload, e.name.size(), 2);
+    m.payload += e.name;
+    SocialParty::AppendLe(m.payload, e.presence.text.size(), 2);
+    m.payload += e.presence.text;
+  }
   return SocialParty::Frame(m);
 }
 
