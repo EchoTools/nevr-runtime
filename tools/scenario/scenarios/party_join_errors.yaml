@@ -1,0 +1,107 @@
+# Party join errors are shown, not swallowed. docs/design/2026-10-01-social-features-test-plan.md #9.
+# Each round joins a party through an invite's accept (pnsovr's JoinInternal), then injects the
+# server's PartyJoinFailure with one code. The game's PartyJoinFailedCB (0x140189590) turns the code
+# into its own event: 1 not found, 3 no permission, 4 locked, 5 full, 6 version, anything else
+# unknown; Nakama's 2 (refused, no reason) is shown as locked. Pass = every code reaches its event
+# and the game is back in a party of its own before the next round. Inviter and parties are synthetic.
+name: party_join_errors
+description: accept an invite and refuse the join with each failure code; see the game's matching onpartyjoinerror event
+vars:
+  inviter_id: 1000000000000000006
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: the game has its own party
+    state_until: {party_joinable: true, timeout: 60}
+  - name: "code 1: an invite arrives"
+    inject: {msg: PartyInviteNotify, party: 777000000000011, inviter: '${inviter_id}'}
+  - name: "code 1: the invite is listed"
+    state_until: {invite_count: 1, invite_sender: '${inviter_id}', timeout: 15}
+  - name: "code 1: accept"
+    fire: {action: respond_to_invite, index: 0, accept: true}
+  - name: "code 1: the join is in flight"
+    state_until: {party_joining: true, party_room: 777000000000011, timeout: 15}
+  - name: "code 1: the server refuses"
+    inject: {msg: PartyJoinFailure, party: 777000000000011, code: 1}
+  - name: "code 1: the game raised onpartyjoinerrornotfound"
+    expect_log: {pattern: 'session event #\d+ id=0x[0-9a-f]+ delegate_onpartyjoinerrornotfound\b', timeout: 10}
+    diagnose: ['party callback index=2 ', 'Party join failed']
+  - name: "code 1: back in a party of its own"
+    state_until: {party_joinable: true, timeout: 60}
+  - name: "code 2: an invite arrives"
+    inject: {msg: PartyInviteNotify, party: 777000000000012, inviter: '${inviter_id}'}
+  - name: "code 2: the invite is listed"
+    state_until: {invite_count: 1, invite_sender: '${inviter_id}', timeout: 15}
+  - name: "code 2: accept"
+    fire: {action: respond_to_invite, index: 0, accept: true}
+  - name: "code 2: the join is in flight"
+    state_until: {party_joining: true, party_room: 777000000000012, timeout: 15}
+  - name: "code 2: the server refuses"
+    inject: {msg: PartyJoinFailure, party: 777000000000012, code: 2}
+  - name: "code 2: the game raised onpartyjoinerrorlocked"
+    expect_log: {pattern: 'session event #\d+ id=0x[0-9a-f]+ delegate_onpartyjoinerrorlocked\b', timeout: 10}
+    diagnose: ['party callback index=2 ', 'Party join failed']
+  - name: "code 2: back in a party of its own"
+    state_until: {party_joinable: true, timeout: 60}
+  - name: "code 3: an invite arrives"
+    inject: {msg: PartyInviteNotify, party: 777000000000013, inviter: '${inviter_id}'}
+  - name: "code 3: the invite is listed"
+    state_until: {invite_count: 1, invite_sender: '${inviter_id}', timeout: 15}
+  - name: "code 3: accept"
+    fire: {action: respond_to_invite, index: 0, accept: true}
+  - name: "code 3: the join is in flight"
+    state_until: {party_joining: true, party_room: 777000000000013, timeout: 15}
+  - name: "code 3: the server refuses"
+    inject: {msg: PartyJoinFailure, party: 777000000000013, code: 3}
+  - name: "code 3: the game raised onpartyjoinerrornopermission"
+    expect_log: {pattern: 'session event #\d+ id=0x[0-9a-f]+ delegate_onpartyjoinerrornopermission\b', timeout: 10}
+    diagnose: ['party callback index=2 ', 'Party join failed']
+  - name: "code 3: back in a party of its own"
+    state_until: {party_joinable: true, timeout: 60}
+  - name: "code 5: an invite arrives"
+    inject: {msg: PartyInviteNotify, party: 777000000000014, inviter: '${inviter_id}'}
+  - name: "code 5: the invite is listed"
+    state_until: {invite_count: 1, invite_sender: '${inviter_id}', timeout: 15}
+  - name: "code 5: accept"
+    fire: {action: respond_to_invite, index: 0, accept: true}
+  - name: "code 5: the join is in flight"
+    state_until: {party_joining: true, party_room: 777000000000014, timeout: 15}
+  - name: "code 5: the server refuses"
+    inject: {msg: PartyJoinFailure, party: 777000000000014, code: 5}
+  - name: "code 5: the game raised onpartyjoinerrorfull"
+    expect_log: {pattern: 'session event #\d+ id=0x[0-9a-f]+ delegate_onpartyjoinerrorfull\b', timeout: 10}
+    diagnose: ['party callback index=2 ', 'Party join failed']
+  - name: "code 5: back in a party of its own"
+    state_until: {party_joinable: true, timeout: 60}
+  - name: "code 6: an invite arrives"
+    inject: {msg: PartyInviteNotify, party: 777000000000015, inviter: '${inviter_id}'}
+  - name: "code 6: the invite is listed"
+    state_until: {invite_count: 1, invite_sender: '${inviter_id}', timeout: 15}
+  - name: "code 6: accept"
+    fire: {action: respond_to_invite, index: 0, accept: true}
+  - name: "code 6: the join is in flight"
+    state_until: {party_joining: true, party_room: 777000000000015, timeout: 15}
+  - name: "code 6: the server refuses"
+    inject: {msg: PartyJoinFailure, party: 777000000000015, code: 6}
+  - name: "code 6: the game raised onpartyjoinerrorversion"
+    expect_log: {pattern: 'session event #\d+ id=0x[0-9a-f]+ delegate_onpartyjoinerrorversion\b', timeout: 10}
+    diagnose: ['party callback index=2 ', 'Party join failed']
+  - name: "code 6: back in a party of its own"
+    state_until: {party_joinable: true, timeout: 60}
+  - name: "code 9: an invite arrives"
+    inject: {msg: PartyInviteNotify, party: 777000000000016, inviter: '${inviter_id}'}
+  - name: "code 9: the invite is listed"
+    state_until: {invite_count: 1, invite_sender: '${inviter_id}', timeout: 15}
+  - name: "code 9: accept"
+    fire: {action: respond_to_invite, index: 0, accept: true}
+  - name: "code 9: the join is in flight"
+    state_until: {party_joining: true, party_room: 777000000000016, timeout: 15}
+  - name: "code 9: the server refuses"
+    inject: {msg: PartyJoinFailure, party: 777000000000016, code: 9}
+  - name: "code 9: the game raised onpartyjoinerrorunknown"
+    expect_log: {pattern: 'session event #\d+ id=0x[0-9a-f]+ delegate_onpartyjoinerrorunknown\b', timeout: 10}
+    diagnose: ['party callback index=2 ', 'Party join failed']
+  - name: "code 9: back in a party of its own"
+    state_until: {party_joinable: true, timeout: 60}
