@@ -31,7 +31,7 @@ types, not in widened requests.
 
 **Capability, not build number.** `LoginProfile` (`server/evr/login_request.go:54`) carries the
 game's build (`buildversion`, one value for every client), not the runtime's. The bridge writes the
-login JSON itself (`src/runtime/compat/ws_bridge.cpp:563-620`), so it can add
+login JSON itself (`src/runtime/compat/ws_bridge.cpp:563-654`), so it can add
 `"nevr_social": <level>`; Nakama adds the field to `LoginProfile`, keeps it in the session
 parameters, and sends the new messages below only to sessions that declared the level that knows
 them. Level 1 = this proposal.
@@ -40,7 +40,7 @@ them. Level 1 = this proposal.
 `server/evr/core_packet_types.go` `NewMessageFromHash` ~:73, `server/evr/types.go` ~:135) plus a
 `case *evr.X:` in `server/evr_pipeline.go` (party cases :610-632, friend cases :636-644) for
 client-to-server types; the symbol is `ToSymbol(Token())`. The runtime adds the symbol to
-`social_party.h` (request constants :33-44, `ReplyTable` :53-88). Before implementing, check each new
+`social_party.h` (request constants :33-44, `ReplyTable` :53-72). Before implementing, check each new
 token's hash against `server/evr/core_hash_lookup.go` for a collision (the names below are not in it:
 checked by name, not by hash).
 
@@ -76,7 +76,7 @@ the rich-presence object's slot 14 at 0x140614f10) and writes the local member's
 (`server/evr_pipeline_login.go:1212`, :1233-1236); friends are polled per refresh
 (`sendFriendListResponse`, `server/evr_pipeline_friends.go:496`). A friend's party is
 `params.currentSNSPartyID` (`server/evr_session_parameters.go:61-62`) and its handler's `Open` and size
-(`server/party_handler.go:29-47`).
+(`server/party_handler.go:39-53`).
 
 **Messages.**
 - New client-to-server `SNSPresenceUpdateRequest`: RoutingID u64, LocalUserUUID [16], SessionGUID
@@ -85,8 +85,11 @@ the rich-presence object's slot 14 at 0x140614f10) and writes the local member's
   it when the game's rich presence changes (it needs a rich-presence facade at `netGame+0x647c0`, or a
   hook on FUN_140614e00 and the `status` write; client work, **UNVERIFIED** which is cleaner).
 - Server: `tracker.Update` the session's status presence with that JSON as `Status` (the existing
-  stream; the 2048 limit applies), and at login `Follow` (`server/status_registry.go:186`) the
-  user's friend ids, not only itself.
+  stream). The 2048-character cap is enforced only in the realtime `statusUpdate` handler
+  (`server/pipeline_status.go:269`), not by `tracker.Update`, so the EVR handler must cap the JSON
+  itself. At login `Follow` (`server/status_registry.go:186`) the
+  user's friend ids, not only itself. That `Follow` delivers status-text changes, and not only
+  presence joins and leaves, is **UNVERIFIED** (`server/status_registry.go` event path not traced).
 - New server-to-client `SNSFriendPresenceNotify`: Header u64, FriendID u64, PartyID u64, Joinable u8,
   Status u8 (online/busy/offline, as FriendStatusNotify), Reserved [6], `text_len u16`, text (the
   `status` string). Sent once per friend in the friend-list refresh after the existing
@@ -210,9 +213,13 @@ not searched). The facade stores it today (`party_lock` passes).
 
 **Nakama primitive: parties and friends.** `PartyHandler.Open` with join requests for a closed party
 (`server/party_handler.go:150-186`), already driven by Lock/Unlock
-(`server/evr_pipeline_party.go:407-453`); friends via `GetFriendIDs` (`server/core_friend.go:46`) and
-`ListFriendsOfFriends` (:328). SNS parties are always created open, size 4
-(`server/evr_pipeline_party.go:229-246`).
+(`server/evr_pipeline_party.go:407-453`). Friends: `GetFriendIDs` (`server/core_friend.go:46`) returns
+every `user_edge` state (invites sent and received and blocked too) and is marked "only used ... for the
+console" (:45), so the rule below needs a query for state 0 (mutual friends) and a mapping from the
+EVR account to the Nakama user id. `ListFriendsOfFriends` (:328) is paged and excludes direct friends,
+so it cannot back the rule: "friends of members" is "a mutual friend of any current member", one
+state-0 query per member (at most 4). SNS parties are always created open, size 4
+(`server/evr_pipeline_party.go:249`).
 
 **Messages.** New `SNSPartySetJoinPolicyRequest`: the standard 0x28 header with TargetParam = policy
 (0..3), leader only; reply `SNSPartyUpdateSuccess` (exists) and an `SNSPartyUpdateNotify` to members
@@ -220,11 +227,22 @@ not searched). The facade stores it today (`party_lock` passes).
 
 **Enforcement** in `snsPartyJoinRequest` (`server/evr_pipeline_party.go:271`) and the invite accept
 (`snsPartyRespondToInviteRequest`): a pending invite always admits (invited is the point of every
-policy); otherwise invite only refuses, friends needs the joiner in the leader's `GetFriendIDs`,
-friends of members needs the joiner in any member's, everyone admits. A refusal is
-`SNSPartyJoinFailure` code 3, the game's "no permission" (`PartyJoinFailedCB` 0x140189590; codes as
-nakama f808932a8 sends them). Lock stays separate: `Open = false` is "locked", code 4. The same rule
-feeds §1's per-viewer `Joinable`.
+policy); otherwise invite only refuses, friends needs the joiner to be a state-0 friend of the leader,
+friends of members a state-0 friend of any member, everyone admits. The same rule feeds §1's
+per-viewer `Joinable`.
+
+**New behaviour, not a mapping.** Today a closed (`Open = false`, locked) party does not refuse: the
+join is queued for the leader's approval and the joiner gets no reply
+(`server/evr_pipeline_party.go:304-307`), and `partyJoinFailureCode` returns only 5, 1 or 2 (nakama
+f808932a8). Refusing with `SNSPartyJoinFailure` code 3 (the game's "no permission",
+`PartyJoinFailedCB` 0x140189590) for a policy refusal, and code 4 ("locked") for a locked party, are
+both new; whether a locked party should refuse or keep queueing for approval is the owner's call.
+
+**Matchmaking-adjacent, for the owner.** The policy check sits in `snsPartyJoinRequest` next to
+`createReservationForNewPartyMember` (`server/evr_pipeline_party.go:334`), and a join that goes through
+calls `PartyHandler.JoinRequest`, which stops the party's matchmaking (`matchmaker.RemovePartyAll`,
+`server/party_handler.go:154`). The proposal only refuses joins earlier and does not change either
+call, but it is in the same function as matchmaking work.
 
 **Proof.** Nakama: a table test of the admit rule (policy x invited x friend x friend-of-member).
 Suite: `party_lock` gains the request (`SNSPartySetJoinPolicyRequest` leaves with the policy when the
