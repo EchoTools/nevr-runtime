@@ -3,8 +3,8 @@
 # it logs "[PROFILE] Getting other user %s's profile" and sends SNSOtherUserProfileRequest; the
 # reply raises the delegate that logs "[NETGAME] Profile received for '%s'" (0x14019f510). The user
 # is the first friend in the roster: a real player, and reading their profile is what the game does
-# when their page is opened. (The local account's own id gets no "Profile received" line: the game
-# handles its own profile on the logged-in-user path; run 20261001T202330-suite/request_profile.)
+# when their page is opened. Until cd62b75 every reply after the lobby join went to a closed game
+# connection and none arrived (runs 20261001T202330-suite/request_profile, 20261001T205315).
 # Pass = the request (or a cache hit) and the received line for that friend.
 name: request_profile
 description: fire the request-profile node for a friend; see the request go out and the profile come back
