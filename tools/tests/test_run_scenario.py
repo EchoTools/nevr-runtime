@@ -61,6 +61,8 @@ class InviteStateTest(unittest.TestCase):
         self.assertFalse(run_scenario.state_matches(state, {"state_until": {"path": "party.locked", "equals": True}})[0])
         self.assertTrue(run_scenario.state_matches(state, {"state_until": {"path": "game.social_features", "equals": "5"}})[0])
         self.assertFalse(run_scenario.state_matches(state, {"state_until": {"path": "game.missing", "equals": 0}})[0])
+        self.assertTrue(run_scenario.state_matches(state, {"state_until": {"path": "game.social_features", "bits_set": 4, "bits_clear": 2}})[0])
+        self.assertFalse(run_scenario.state_matches(state, {"state_until": {"path": "game.social_features", "bits_set": 2}})[0])
 
     def test_party_members(self):
         state = {"party": {"id": 7, "members": [1, 2]}}
@@ -131,3 +133,17 @@ class SuiteTableTest(unittest.TestCase):
                                   {"scenario": "b", "result": "FAIL", "seconds": 9.9, "folder": "/x/b"}])
         self.assertIn("| 1 | a | PASS | 3 | /x/a |", md)
         self.assertIn("| 2 | b | FAIL | 10 | /x/b |", md)
+
+
+class GpuWaitTest(unittest.TestCase):
+    def test_waits_until_enough_memory_is_free(self):
+        readings = iter([(1000, "pid 7, 6000 MiB"), (1000, "pid 7, 6000 MiB"), (5000, "none")])
+        calls = []
+        original_free, original_poll = run_scenario.gpu_free_mib, run_scenario.GPU_POLL_SECONDS
+        run_scenario.gpu_free_mib = lambda: (calls.append(1), next(readings))[1]
+        run_scenario.GPU_POLL_SECONDS = 0
+        try:
+            run_scenario.wait_for_gpu_memory(4096)
+        finally:
+            run_scenario.gpu_free_mib, run_scenario.GPU_POLL_SECONDS = original_free, original_poll
+        self.assertEqual(len(calls), 3)

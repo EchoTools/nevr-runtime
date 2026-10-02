@@ -1,0 +1,29 @@
+# Join a party by its id (R15NetPartyJoinNode, run 0x140ddd3a0). Test plan #18.
+# The node calls 0x140189570(netGame, party id), which calls slot 2 JoinInternal. The party id is
+# synthetic, so the production server answers PartyJoinFailure code 1 (lookupPartyUUID misses,
+# evr_pipeline_party.go), which the game shows as "not found" and then makes a party of its own.
+# Pass = the slot call, the request, the server's real refusal, the game's own line and a new party.
+# (Showing a friend's party in the friends list, slots 54/55, needs a server source for it: see #18.)
+name: party_join_by_id
+description: fire the party-join node with a party id; see the join request and the server's answer
+vars:
+  party_id: 777000000000031
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: the game has its own party
+    state_until: {party_joinable: true, timeout: 60}
+  - name: join party P
+    fire: {action: party_join, party: '${party_id}'}
+  - name: slot 2 JoinInternal reached
+    expect_log: {pattern: 'slot=2 name=JoinInternal call=', timeout: 10}
+  - name: PartyJoinRequest left the game
+    expect_log: {pattern: 'game->server conn=\d+ PartyJoinRequest payload_bytes=\d+', timeout: 10}
+  - name: the server refused (unknown party)
+    expect_log: {pattern: 'server->game conn=\d+ PartyJoinFailure payload_bytes=9', timeout: 30}
+  - name: the game showed not found
+    expect_log: {pattern: '\[NETGAME\] Party join failed: not found', timeout: 10}
+  - name: back in a party of its own
+    state_until: {party_joinable: true, timeout: 60}

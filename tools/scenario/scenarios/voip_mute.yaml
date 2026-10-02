@@ -1,0 +1,22 @@
+# Mute and unmute yourself (R15NetVoipMuteSelfNode, run 0x140de5fc0). Test plan #26.
+# The node posts 0x1401b24a0 with the flag: it sets bit 38 of the voice flags word
+# ([netGame+0x2da0]) and dispatches delegate_onvoipmuted / delegate_onvoipunmuted. Local only.
+name: voip_mute
+description: mute and unmute the local user through the mute-self node; see the flag and the game's events
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: mute
+    fire: {action: voip_mute_self, mute: true}
+  - name: the game raised onvoipmuted
+    expect_log: {pattern: 'session event #\d+ id=0x[0-9a-f]+ delegate_onvoipmuted\b', timeout: 10}
+  - name: the self-muted flag is set
+    state_until: {path: game.self_muted, equals: true, timeout: 10}
+  - name: unmute
+    fire: {action: voip_mute_self, mute: false}
+  - name: the game raised onvoipunmuted
+    expect_log: {pattern: 'session event #\d+ id=0x[0-9a-f]+ delegate_onvoipunmuted\b', timeout: 10}
+  - name: the self-muted flag is clear
+    state_until: {path: game.self_muted, equals: false, timeout: 10}

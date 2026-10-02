@@ -1,0 +1,20 @@
+# Request a player's profile (R15NetRequestProfileNode, run 0x140de01f0). Test plan #28.
+# The node parses the user id and posts 0x1401a1930, which asks the profile manager; on a cache miss
+# it logs "[PROFILE] Getting other user %s's profile" and sends SNSOtherUserProfileRequest; the
+# reply raises the delegate that logs "[NETGAME] Profile received for '%s'" (0x14019f510). The user
+# is the local account, so the request goes to the production server for a profile that exists and
+# nobody else is touched. Pass = the request and the received line.
+name: request_profile
+description: fire the request-profile node for the local user; see the request go out and the profile come back
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: request the local user's profile
+    fire: {action: request_profile, user: self}
+  - name: the game asked the server (or answered from its cache)
+    expect_log: {pattern: "\\[PROFILE\\] Getting other user \\S+'s profile|Profile received for", timeout: 15}
+  - name: the profile arrived
+    expect_log: {pattern: "\\[NETGAME\\] Profile received for '", timeout: 30}
+    diagnose: ['\[PROFILE\]', 'OtherUserProfile']

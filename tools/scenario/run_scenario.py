@@ -163,6 +163,10 @@ def state_matches(state: dict, step: dict) -> tuple[bool, str]:
         value = state
         for part in str(spec["path"]).split("."):
             value = value.get(part) if isinstance(value, dict) else None
+        if "bits_set" in spec or "bits_clear" in spec:
+            mask_set, mask_clear = int(spec.get("bits_set", 0)), int(spec.get("bits_clear", 0))
+            ok = isinstance(value, int) and (value & mask_set) == mask_set and (value & mask_clear) == 0
+            return ok, f"{spec['path']}={value!r} (want bits set {mask_set:#x}, clear {mask_clear:#x})"
         want = spec.get("equals")
         ok = value is not None and (value == want or (isinstance(want, str) and str(value) == want))
         return ok, f"{spec['path']}={value!r} (want {want!r})"
@@ -192,6 +196,43 @@ def state_matches(state: dict, step: dict) -> tuple[bool, str]:
         ok = len(invites) == want and (sender is None or (invites and int(invites[0]["sender"]) == int(sender)))
         return ok, f"invites={invites}"
     raise StepFailed(f"state_until has no known check: {sorted(spec)}")
+
+
+# The client needs this much free GPU memory to reach the lobby. Measured on this host (8 GiB card):
+# runs started with up to ~4 GiB already in use passed; runs started with 5.6-5.9 GiB in use died on
+# "DirectX error: E_OUTOFMEMORY" before the lobby (2026-10-01, another session's GPU jobs).
+GPU_FREE_NEEDED_MIB = 4096
+GPU_POLL_SECONDS = 10
+
+
+def gpu_free_mib() -> tuple[int | None, str]:
+    """Free GPU memory in MiB and who holds the rest, from nvidia-smi; (None, why) if it can't say."""
+    try:
+        free = subprocess.run(["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+                              capture_output=True, text=True, check=True).stdout.split()
+        apps = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,used_memory", "--format=csv,noheader"],
+                              capture_output=True, text=True, check=True).stdout.strip().replace("\n", "; ")
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return None, f"nvidia-smi failed: {exc}"
+    return int(free[0]), apps or "no compute processes"
+
+
+def wait_for_gpu_memory(needed: int = GPU_FREE_NEEDED_MIB) -> None:
+    """Wait, with no time limit, until the GPU has room for the client; log every change in holders."""
+    last = None
+    while True:
+        free, holders = gpu_free_mib()
+        if free is None:
+            print(f"scenario: cannot read GPU memory ({holders}); launching anyway", flush=True)
+            return
+        if free >= needed:
+            if last is not None:
+                print(f"scenario: GPU has {free} MiB free; launching", flush=True)
+            return
+        if holders != last:
+            print(f"scenario: waiting for GPU memory: {free} MiB free, need {needed}; held by {holders}", flush=True)
+            last = holders
+        time.sleep(GPU_POLL_SECONDS)
 
 
 class Run:
@@ -317,6 +358,7 @@ class Run:
         started = time.monotonic()
         try:
             self.ensure_xephyr()
+            wait_for_gpu_memory()
             self.launch()
         except StepFailed as exc:
             self.results.append({"step": "launch the client", "result": "FAIL", "seconds": 0, "detail": str(exc)})
