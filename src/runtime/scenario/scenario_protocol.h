@@ -69,6 +69,9 @@ inline const FriendNotify* FindFriendNotify(const std::string& name) {
   return nullptr;
 }
 
+/// social_groups_set_active's "current": the group that is already active.
+constexpr std::uint64_t kCurrentGroup = UINT64_MAX;
+
 /// The fire actions beyond the three above: each names a script node whose entry point the control
 /// endpoint drives the way the node does (scenario_control.cpp has the addresses).
 inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, Command* out, std::string* error) {
@@ -120,7 +123,12 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
   } else if (action == "voip_mute_self") {
     ok = boolean("mute", &cmd.flag);
   } else if (action == "social_groups_set_active") {
-    ok = u64("index", 0xFFFF, &cmd.number);
+    if (j.contains("index") && j["index"].is_string() && j["index"].get<std::string>() == "current") {
+      cmd.number = kCurrentGroup;  // re-select the active group: the path runs, the account's setting stays
+      ok = true;
+    } else {
+      ok = u64("index", 0xFFFF, &cmd.number);
+    }
   } else if (action == "enable_social_feature") {
     ok = u64("feature", 4, &cmd.number) && boolean("enable", &cmd.flag);
   } else if (action == "set_party_member_string" || action == "set_party_string") {

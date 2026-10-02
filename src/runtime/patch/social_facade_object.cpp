@@ -997,6 +997,7 @@ PartyStateForTest PartyForTest() {
   out.joinable = PartyJoinable(*view);
   out.locked = view->locked;
   out.joinPolicy = Get32(&g_object, 0x2B4);
+  out.shareDirty = (Get32(&g_object, 0x27C) & 1U) != 0;
   for (const SocialParty::Member& member : view->members) out.memberIds.push_back(member.id);
   return out;
 }

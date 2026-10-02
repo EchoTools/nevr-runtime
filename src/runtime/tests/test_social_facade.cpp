@@ -1204,6 +1204,7 @@ TEST(ScenarioProtocol, EveryFireActionParsesAndBadArgumentsAreNamed) {
       R"({"op":"fire","action":"set_join_policy","policy":3})",
       R"({"op":"fire","action":"voip_mute_self","mute":false})",
       R"({"op":"fire","action":"social_groups_set_active","index":0})",
+      R"({"op":"fire","action":"social_groups_set_active","index":"current"})",
       R"({"op":"fire","action":"enable_social_feature","feature":1,"enable":true})",
       R"({"op":"fire","action":"set_party_member_string","key":"k","value":"v"})",
       R"({"op":"fire","action":"refresh_recently_met"})",

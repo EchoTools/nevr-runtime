@@ -62,6 +62,7 @@ struct PartyStateForTest {
   bool joinable = false;  // the Joinable slot's rule
   bool locked = false;    // the party's server-side lock (slot 4 JoinableInternal is its inverse)
   std::uint32_t joinPolicy = 0;  // slot 21 JoinPolicy
+  bool shareDirty = false;  // flags bit 0: the game wrote party data that pnsovr would share (slot 7)
   std::vector<std::uint64_t> memberIds;
 };
 /// Scenario-control builds only: the party as the facade's slots report it.

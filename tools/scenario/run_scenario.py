@@ -229,9 +229,10 @@ def wait_for_gpu_memory(needed: int = GPU_FREE_NEEDED_MIB) -> None:
             if last is not None:
                 print(f"scenario: GPU has {free} MiB free; launching", flush=True)
             return
-        if holders != last:
+        pids = tuple(sorted(part.split(",")[0].strip() for part in holders.split(";")))
+        if pids != last:  # log when who holds it changes, not on every byte
             print(f"scenario: waiting for GPU memory: {free} MiB free, need {needed}; held by {holders}", flush=True)
-            last = holders
+            last = pids
         time.sleep(GPU_POLL_SECONDS)
 
 

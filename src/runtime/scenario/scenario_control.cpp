@@ -311,8 +311,16 @@ std::string FireAction(const ScenarioProtocol::Command& cmd) {
     if (groups == nullptr) return "no social groups object";
     std::uint64_t count = 0;
     std::memcpy(&count, static_cast<const std::uint8_t*>(groups) + 0x40, sizeof(count));
-    if (cmd.number >= count) return "group index " + std::to_string(cmd.number) + " >= " + std::to_string(count) + " groups";
-    setActive(groups, cmd.number);
+    std::uint64_t index = cmd.number;
+    if (index == ScenarioProtocol::kCurrentGroup) {
+      std::uint32_t active = 0;
+      std::memcpy(&active, static_cast<const std::uint8_t*>(groups) + 0xC, sizeof(active));
+      index = active;
+    }
+    if (index >= count) return "group index " + std::to_string(index) + " >= " + std::to_string(count) + " groups";
+    Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] social group set active index=%llu of %llu",
+        static_cast<unsigned long long>(index), static_cast<unsigned long long>(count));
+    setActive(groups, index);
     return std::string();
   }
   if (cmd.action == "enable_social_feature") {
@@ -375,6 +383,7 @@ nlohmann::json StateJson() {
   out["party"] = {{"id", party.partyId},           {"room", party.roomId},
                   {"joining", party.joining},      {"joinable", party.joinable},
                   {"locked", party.locked},        {"join_policy", party.joinPolicy},
+                  {"share_dirty", party.shareDirty},
                   {"members", party.memberIds}};
   nlohmann::json friends = nlohmann::json::array();
   std::uint64_t id = 0;
