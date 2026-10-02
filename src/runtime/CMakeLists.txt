@@ -35,6 +35,7 @@ set(PATCHES_SOURCES
     "patch/pnsrad_enabler.cpp"
     "patch/mic_provider.cpp"
     "patch/party_invite_gate.cpp"
+    "patch/early_quit_lockout.cpp"
     "patch/social_facade.cpp"
     "patch/social_facade_object.cpp"
     "log/builtin_filter.cpp"
@@ -427,6 +428,12 @@ if(BUILD_TESTING)
     target_link_libraries(test_social_facade PRIVATE
       GTest::gtest GTest::gtest_main nevr_core minhook zstd::libzstd nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_social_facade DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_early_quit_lockout tests/test_early_quit_lockout.cpp)
+    set_source_files_properties(tests/test_early_quit_lockout.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_early_quit_lockout PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_early_quit_lockout PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_early_quit_lockout DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_scenario_early_quit tests/test_scenario_early_quit.cpp)
     set_source_files_properties(tests/test_scenario_early_quit.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
