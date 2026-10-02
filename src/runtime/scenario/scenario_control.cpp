@@ -269,6 +269,13 @@ void* Base() { return EchoVR::g_GameBaseAddress; }
 constexpr std::uintptr_t kEarlyQuitPenaltyTsOffset = 0x64820;
 constexpr std::uintptr_t kEarlyQuitExpiryOffset = 0x64828;
 constexpr std::uintptr_t kEarlyQuitPenaltyLevelOffset = 0x64844;
+// The feature-flag byte CR15NetEarlyQuitFeatureFlagExpression reads (bit N). The SNSEarlyQuitFeatureFlags
+// callback (Quest CR15NetGame::EarlyQuitFeatureFlagsCB 0x126ac24, PC 0x1401618b0) stores message byte & 0xdd
+// and fires delegate_onearlyquitfeatureflagsupdate. The LOCKOUT bar's script (17d77f27d465760b
+// expression_c76e59d9_shouldexecute) needs bit 0 before the penalty event shows anything.
+constexpr std::uintptr_t kEarlyQuitFeatureFlagsOffset = 0x64847;
+constexpr std::uint8_t kEarlyQuitFeatureFlagsMask = 0xDD;
+constexpr std::uint64_t kFeatureFlagsUpdateEvent = 0xC690A8FF1CF8AF99ULL;  // delegate_onearlyquitfeatureflagsupdate
 constexpr std::uint64_t kLockoutCountdownBit = 1ULL << 45;
 constexpr std::uint64_t kEarlyQuitWarningBit = 1ULL << 46;
 constexpr std::uint64_t kPenaltyUpdateEvent = 0xA2E48B35C7CD078FULL;  // delegate_onearlyquitpenaltyupdate
@@ -314,6 +321,16 @@ std::string FireEarlyQuit(void* netGame, const ScenarioProtocol::Command& cmd) {
     ProcessMemcpy(store, want.data(), want.size());
     Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] early quit: lockoutcountdownactive store 0x140d96319 was %d, now %d",
         isOn ? 1 : 0, cmd.flag ? 1 : 0);
+  } else if (cmd.action == "early_quit_feature_flags") {
+    const std::uint8_t before = bytes[kEarlyQuitFeatureFlagsOffset];
+    const std::uint8_t stored = static_cast<std::uint8_t>(cmd.number) & kEarlyQuitFeatureFlagsMask;  // as the callback stores it
+    bytes[kEarlyQuitFeatureFlagsOffset] = stored;
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.SCENARIO] early quit: feature flags (netGame+0x64847) 0x%02x -> 0x%02x (sent 0x%02llx, & 0xdd as the "
+        "game's callback stores it)",
+        before, stored, static_cast<unsigned long long>(cmd.number));
+    dispatch(netGame, kFeatureFlagsUpdateEvent);
+    return std::string();
   } else if (cmd.action == "early_quit_warning") {
     *flags = cmd.flag ? (*flags | kEarlyQuitWarningBit) : (*flags & ~kEarlyQuitWarningBit);
     Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] early quit: showearlyquitwarning (flags bit 46) = %d", cmd.flag ? 1 : 0);
@@ -493,7 +510,7 @@ std::string FireAction(const ScenarioProtocol::Command& cmd) {
     return std::string();
   }
   if (cmd.action == "early_quit_lockout" || cmd.action == "early_quit_countdown_active" ||
-      cmd.action == "early_quit_warning")
+      cmd.action == "early_quit_warning" || cmd.action == "early_quit_feature_flags")
     return FireEarlyQuit(netGame, cmd);
   if (cmd.action == "refresh_friends")
     return PostNoArg(netGame, Checked(kRefreshFriendsHandlerVA, kRefreshFriendsPrologue, "refresh friends handler", &error),
@@ -540,7 +557,8 @@ nlohmann::json GameStateJson() {
   std::memcpy(&expiry, bytes + kEarlyQuitExpiryOffset, sizeof(expiry));
   nlohmann::json earlyQuit = {{"penalty_ts", penaltyTs},
                               {"lockout_expiry", expiry},
-                              {"penalty_level", bytes[kEarlyQuitPenaltyLevelOffset]}};
+                              {"penalty_level", bytes[kEarlyQuitPenaltyLevelOffset]},
+                              {"feature_flags", bytes[kEarlyQuitFeatureFlagsOffset]}};
   if (voipFlags != nullptr) {
     earlyQuit["countdown_flag"] = (*voipFlags & kLockoutCountdownBit) != 0;
     earlyQuit["warning_flag"] = (*voipFlags & kEarlyQuitWarningBit) != 0;

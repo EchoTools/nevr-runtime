@@ -55,3 +55,14 @@ TEST(ScenarioEarlyQuit, WarningTakesABoolean) {
   EXPECT_FALSE(Parses(R"({"op":"fire","action":"early_quit_warning","show":"yes"})", &cmd, &error));
   EXPECT_FALSE(Parses(R"({"op":"fire","action":"early_quit_warning"})", &cmd, &error));
 }
+
+// early_quit_feature_flags sets the early quit feature-flag byte (the game stores it & 0xdd); a byte at most.
+TEST(ScenarioEarlyQuit, FeatureFlagsTakeAByte) {
+  ScenarioProtocol::Command cmd;
+  std::string error;
+  ASSERT_TRUE(Parses(R"({"op":"fire","action":"early_quit_feature_flags","flags":1})", &cmd, &error)) << error;
+  EXPECT_EQ(cmd.number, 1u);
+  ASSERT_TRUE(Parses(R"({"op":"fire","action":"early_quit_feature_flags","flags":255})", &cmd, &error)) << error;
+  EXPECT_FALSE(Parses(R"({"op":"fire","action":"early_quit_feature_flags","flags":256})", &cmd, &error));
+  EXPECT_FALSE(Parses(R"({"op":"fire","action":"early_quit_feature_flags"})", &cmd, &error));
+}
