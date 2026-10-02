@@ -1131,6 +1131,12 @@ TEST(ScenarioProtocol, InjectedMemberJoinAndLeaveChangeTheCurrentParty) {
   ASSERT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyMember);
   EXPECT_EQ(cmd.partyId, 0U) << "no party given: the current one";
   EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyLeaveNotify"})", &cmd, &error));
+  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinSuccess","party":7,"owner":4242})", &cmd,
+                                             &error))
+      << error;
+  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyMember);
+  EXPECT_EQ(cmd.memberId, 4242U);
+  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinSuccess","party":7})", &cmd, &error));
   SocialParty::State party;
   party.SetSelf(1);
   ASSERT_TRUE(FeedParty(party, "PartyCreateSuccess", U64s({7, 1})));

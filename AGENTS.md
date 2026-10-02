@@ -47,6 +47,7 @@ just test-auth-unit           # C++ GTest under Wine (build with -DBUILD_TESTING
 just test-auth-integration    # Auth integration (needs game binary + MCP harness)
 
 just scenario invite          # One social scenario end to end, unattended (docs/design/2026-10-01-social-scenario-harness.md)
+just scenario-all             # Every social scenario in turn, one PASS/FAIL table (tools/scenario/run_all.py)
 just test-winvm               # Built runtime on a native Windows VM (needs WINVM_USER/WINVM_PASS; docs/reference/windows-vm-system-test.md)
 ```
 

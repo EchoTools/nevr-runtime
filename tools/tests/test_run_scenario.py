@@ -114,3 +114,13 @@ class WaitStopsOnFailureTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SuiteTableTest(unittest.TestCase):
+    def test_one_row_per_scenario(self):
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scenario"))
+        import run_all
+        md = run_all.suite_table([{"scenario": "a", "result": "PASS", "seconds": 3.2, "folder": "/x/a"},
+                                  {"scenario": "b", "result": "FAIL", "seconds": 9.9, "folder": "/x/b"}])
+        self.assertIn("| 1 | a | PASS | 3 | /x/a |", md)
+        self.assertIn("| 2 | b | FAIL | 10 | /x/b |", md)

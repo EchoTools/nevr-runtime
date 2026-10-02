@@ -1,0 +1,41 @@
+# Accept a party invite and join the party. docs/design/2026-10-01-social-features-test-plan.md #5.
+# As party_invite_accept up to the accept going out, then the server's answer is injected as
+# PartyJoinSuccess{party P, owner F} (what Nakama's snsPartyRespondToInviteRequest sends after
+# snsPartyTrackAndJoin). Pass = the Joined callback (index 1) and MemberJoined for the owner (index
+# 9, arg 1) ran, the game logged "'<name>' joined party", and the party is P with [self, F], F
+# leading. The inviter and party are synthetic; the server never heard of P.
+name: party_invite_join
+description: accept an invite, inject the server's PartyJoinSuccess, see the game in the inviter's party
+vars:
+  party_id: 777000000000021
+  inviter_id: 1000000000000000008
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: the game has its own party
+    state_until: {party_joinable: true, timeout: 60}
+  - name: an invite arrives (PartyInviteNotify)
+    inject: {msg: PartyInviteNotify, party: '${party_id}', inviter: '${inviter_id}'}
+  - name: the invite is listed
+    state_until: {invite_count: 1, invite_sender: '${inviter_id}', timeout: 15}
+  - name: accept fired through the respond-to-invite node's handler
+    fire: {action: respond_to_invite, index: 0, accept: true}
+  - name: an accepting PartyInviteResponse left the game
+    expect_log: {pattern: 'game->server conn=1 PartyInviteResponse payload_bytes=\d+ param=1', timeout: 10}
+  - name: the join is in flight to the invite's party
+    state_until: {party_joining: true, party_room: '${party_id}', timeout: 15}
+  - name: the server lets us in (PartyJoinSuccess, F owns it)
+    inject: {msg: PartyJoinSuccess, party: '${party_id}', owner: '${inviter_id}'}
+  - name: Joined callback ran
+    expect_log: {pattern: 'party callback index=1 bound=1', timeout: 10}
+    diagnose: ['session event .*partyjoin', 'Party join failed']
+  - name: MemberJoined ran for the owner (index 1)
+    expect_log: {pattern: 'party callback index=9 arg=1 bound=1', timeout: 10}
+  - name: the game logged the owner joining the party view
+    expect_log: {pattern: "\\[NETGAME\\] '[^']+' joined party", timeout: 10}
+  - name: the join ended
+    state_until: {party_joining: false, timeout: 15}
+  - name: in the inviter's party, two members
+    state_until: {party_members: 2, party_id: '${party_id}', timeout: 15}

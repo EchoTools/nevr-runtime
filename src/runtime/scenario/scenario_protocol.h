@@ -108,6 +108,19 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
       *out = cmd;
       return true;
     }
+    if (msg == "PartyJoinSuccess") {
+      if (!j.contains("party") || !j["party"].is_number_unsigned() || j["party"].get<std::uint64_t>() == 0 ||
+          !j.contains("owner") || !j["owner"].is_number_unsigned() || j["owner"].get<std::uint64_t>() == 0) {
+        *error = "inject PartyJoinSuccess needs nonzero unsigned \"party\" and \"owner\"";
+        return false;
+      }
+      cmd.op = Op::kInjectPartyMember;  // PartyID(8) OwnerID(8): the same two-id shape
+      cmd.notifyName = msg;
+      cmd.partyId = j["party"].get<std::uint64_t>();
+      cmd.memberId = j["owner"].get<std::uint64_t>();
+      *out = cmd;
+      return true;
+    }
     if (msg == "PartyJoinFailure") {
       if (!j.contains("party") || !j["party"].is_number_unsigned() || !j.contains("code") ||
           !j["code"].is_number_unsigned() || j["code"].get<std::uint64_t>() > 0xFF) {
@@ -122,7 +135,7 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
     }
     const FriendNotify* notify = FindFriendNotify(msg);
     if (msg != "FriendStatusNotify" && notify == nullptr) {
-      *error = "inject supports msg \"FriendStatusNotify\", \"PartyInviteNotify\", \"PartyJoinFailure\", \"PartyJoinNotify\", \"PartyLeaveNotify\" and the friend notifies (FriendAcceptNotify, "
+      *error = "inject supports msg \"FriendStatusNotify\", \"PartyInviteNotify\", \"PartyJoinSuccess\", \"PartyJoinFailure\", \"PartyJoinNotify\", \"PartyLeaveNotify\" and the friend notifies (FriendAcceptNotify, "
                "FriendAcceptSuccess, FriendInviteNotify, FriendInviteSuccess, FriendRemoveNotify, "
                "FriendWithdrawnNotify, FriendRejectNotify)";
       return false;
@@ -202,7 +215,8 @@ inline std::string BuildFriendNotify(const FriendNotify& notify, std::uint64_t f
   return SocialParty::Frame(m);
 }
 
-/// SNSPartyJoinNotify / SNSPartyLeaveNotify: PartyID(8) MemberID(8) (nakama server/evr/sns_party.go).
+/// SNSPartyJoinNotify / SNSPartyLeaveNotify: PartyID(8) MemberID(8); SNSPartyJoinSuccess: PartyID(8)
+/// OwnerID(8) (nakama server/evr/sns_party.go).
 inline std::string BuildPartyMemberNotify(const char* name, std::uint64_t partyId, std::uint64_t memberId) {
   SocialParty::Message m;
   m.symbol = SocialParty::ReplySymbol(name);

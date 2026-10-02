@@ -203,6 +203,13 @@ scenario NAME:
     cmake --build --preset mingw-scenario
     python3 tools/scenario/run_scenario.py "tools/scenario/scenarios/{{NAME}}.yaml"
 
+scenario-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just preset=mingw-scenario build
+    cmake --build --preset mingw-scenario
+    python3 tools/scenario/run_all.py
+
 nakama-up:
     python3 tools/nakama-local/setup.py
     docker compose -f tools/nakama-local/docker-compose.yml up -d
