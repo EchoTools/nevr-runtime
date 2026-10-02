@@ -185,6 +185,19 @@ def wait_nakama_log(pattern: str, since: datetime.datetime, timeout: float, aliv
         time.sleep(1)
 
 
+def save_nakama_log(out: pathlib.Path, since: datetime.datetime, until: datetime.datetime) -> str:
+    """The local nakama's own log for the run window, saved as nakama.log in the run folder: the nakama_log
+    steps read the live container, whose log a restart erases. Returns "" or why it was not saved."""
+    command = ["docker", "compose", "-f", str(NAKAMA_LOCAL / "docker-compose.yml"), "logs", "--no-color",
+               "--no-log-prefix", "--since", (since - datetime.timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+               "--until", (until + datetime.timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"), "nakama"]
+    done = subprocess.run(command, capture_output=True, text=True)
+    if done.returncode != 0:
+        return f"docker compose logs failed ({done.returncode}): {done.stderr.strip()}"
+    (out / "nakama.log").write_text(done.stdout)
+    return ""
+
+
 def state_matches(state: dict, step: dict) -> tuple[bool, str]:
     spec = step["state_until"]
     if "party_joinable" in spec:
@@ -623,6 +636,11 @@ def main(argv: list[str]) -> int:
         passed = run.execute()
     finally:
         run.teardown()
+    nakama_log_error = ""
+    if scenario["server"] == "local":
+        nakama_log_error = save_nakama_log(out, run.started_utc, datetime.datetime.now(datetime.timezone.utc))
+        if nakama_log_error:
+            print(f"WARNING: the local nakama's log was not saved: {nakama_log_error}", file=sys.stderr)
     if run.console and run.console.path.exists():
         shutil.copy(run.console.path, out / "console.log")
     launcher_text = (out / "launch-client.out").read_text() if (out / "launch-client.out").exists() else ""
@@ -633,9 +651,13 @@ def main(argv: list[str]) -> int:
 
     report = {"scenario": scenario["name"], "dll": str(args.dll), "passed": passed,
               "dll_restored": restored, "steps": run.results}
+    if scenario["server"] == "local":
+        report["nakama_log"] = "nakama.log" if not nakama_log_error else f"NOT SAVED: {nakama_log_error}"
     (out / "result.json").write_text(json.dumps(report, indent=2))
     md = f"# scenario {scenario['name']}: {'PASS' if passed else 'FAIL'}\n\n{table(run.results)}\n"
     md += f"\nDLL: {args.dll}\nOriginal BugSplat64.dll restored: {restored}\n"
+    if scenario["server"] == "local":
+        md += f"Local nakama log: {report['nakama_log']}\n"
     (out / "table.md").write_text(md)
     print(md)
     print(f"run folder: {out}")
