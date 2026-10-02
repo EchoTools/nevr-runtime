@@ -14,7 +14,8 @@
 namespace ScenarioProtocol {
 
 enum class Op { kState, kInjectFriendStatus, kInjectFriendNotify, kInjectPartyInvite, kInjectPartyJoinFailure,
-                kInjectPartyMember, kFireFriendInvite, kFireAddFriend, kFireRespondInvite, kFireAction };
+                kInjectPartyMember, kInjectFriendPresence, kFireFriendInvite, kFireAddFriend, kFireRespondInvite,
+                kFireAction };
 
 struct Command {
   Op op = Op::kState;
@@ -31,7 +32,7 @@ struct Command {
   std::uint64_t number = 0;        // fire: mode, mask, policy, index or feature, per action
   bool flag = false;               // fire: lock, mute or enable, per action
   std::string key;                 // fire set_party_*_string: the data key
-  std::string value;               // fire set_party_*_string: the value    // inject PartyJoinFailure: Nakama's code (1 unknown party, 2 refused)
+  std::string value;               // fire set_party_*_string: the value; inject FriendPresenceNotify: the text    // inject PartyJoinFailure: Nakama's code (1 unknown party, 2 refused)
   std::uint32_t inviteIndex = 0;   // fire respond_to_invite: the game's invite index (newest first)
   bool accept = false;
 };
@@ -138,12 +139,14 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
   } else if (action == "set_party_member_string" || action == "set_party_string") {
     ok = text("key", true, &cmd.key) && text("value", true, &cmd.value) && !cmd.key.empty();
     if (!ok && error->empty()) *error = "fire " + action + " needs a non-empty \"key\"";
+  } else if (action == "refresh_friends") {
+    ok = true;
   } else if (action == "refresh_recently_met") {
     ok = true;
   } else {
     *error = "fire supports friend_invite, add_friend, respond_to_invite, invite_users, request_profile, party_join, "
              "party_lock, set_join_policy, voip_mute_self, voip_mute_user, social_groups_set_active, enable_social_feature, "
-             "set_party_member_string, set_party_string and refresh_recently_met";
+             "set_party_member_string, set_party_string, refresh_friends and refresh_recently_met";
     return false;
   }
   if (!ok) return false;
@@ -192,6 +195,21 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
       cmd.notifyName = msg;
       cmd.memberId = j["member"].get<std::uint64_t>();
       cmd.partyId = j.contains("party") ? j["party"].get<std::uint64_t>() : 0;
+      *out = cmd;
+      return true;
+    }
+    if (msg == "FriendPresenceNotify") {
+      if (!j.contains("id") || !j["id"].is_number_unsigned() || j["id"].get<std::uint64_t>() == 0 ||
+          (j.contains("party") && !j["party"].is_number_unsigned()) ||
+          (j.contains("text") && (!j["text"].is_string() || j["text"].get<std::string>().size() > 200))) {
+        *error = "inject FriendPresenceNotify needs a nonzero \"id\", optional unsigned \"party\" and \"text\" (<= 200)";
+        return false;
+      }
+      cmd.op = Op::kInjectFriendPresence;
+      cmd.friendId = j["id"].get<std::uint64_t>();
+      cmd.partyId = j.value("party", std::uint64_t{0});
+      cmd.flag = j.contains("joinable") && j["joinable"].is_boolean() ? j["joinable"].get<bool>() : cmd.partyId != 0;
+      cmd.value = j.value("text", std::string());
       *out = cmd;
       return true;
     }
@@ -306,6 +324,23 @@ inline std::string BuildPartyMemberNotify(const char* name, std::uint64_t partyI
   m.symbol = SocialParty::ReplySymbol(name);
   SocialParty::AppendLe(m.payload, partyId, 8);
   SocialParty::AppendLe(m.payload, memberId, 8);
+  return SocialParty::Frame(m);
+}
+
+/// SNSFriendPresenceNotify (social_roster.h kFriendPresenceNotify): Header(8) FriendID(8) PartyID(8)
+/// Joinable(1) StatusCode(1, online) Reserved(6) TextLen(2) Text.
+inline std::string BuildFriendPresenceNotify(std::uint64_t friendId, std::uint64_t partyId, bool joinable,
+                                             const std::string& text) {
+  SocialParty::Message m;
+  m.symbol = 0xbdd8dd00c5e97a63ULL;
+  SocialParty::AppendLe(m.payload, 0, 8);
+  SocialParty::AppendLe(m.payload, friendId, 8);
+  SocialParty::AppendLe(m.payload, partyId, 8);
+  SocialParty::AppendLe(m.payload, joinable ? 1 : 0, 1);
+  SocialParty::AppendLe(m.payload, 0, 1);
+  SocialParty::AppendLe(m.payload, 0, 6);
+  SocialParty::AppendLe(m.payload, text.size(), 2);
+  m.payload += text;
   return SocialParty::Frame(m);
 }
 

@@ -224,6 +224,10 @@ constexpr std::uint64_t kSetPartyStringHandlerVA = 0x1401B0940;
 constexpr std::array<std::uint8_t, 16> kSetPartyStringPrologue = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74,
                                                                   0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48};
 using SetStringFn = void (*)(void* netGame, const char* key, const char* value);
+// R15NetRefreshFriendsNode (0x140ddf9a0) posts 0x14019ae10 (no argument) -> slot 45 RefreshFriends.
+constexpr std::uint64_t kRefreshFriendsHandlerVA = 0x14019AE10;
+constexpr std::array<std::uint8_t, 16> kRefreshFriendsPrologue = {0x48, 0x8B, 0x89, 0xC8, 0x47, 0x06, 0x00, 0x48,
+                                                                  0x85, 0xC9, 0x74, 0x0A, 0x48, 0x8B, 0x01, 0x48};
 // R15NetRefreshRecentlyMetUsersNode (0x140ddfcc0) posts 0x14019b870 (no argument) -> slot 57.
 constexpr std::uint64_t kRefreshRecentlyMetHandlerVA = 0x14019B870;
 constexpr std::array<std::uint8_t, 16> kRefreshRecentlyMetPrologue = {0x48, 0x8B, 0x89, 0xC8, 0x47, 0x06, 0x00, 0x48,
@@ -373,6 +377,9 @@ std::string FireAction(const ScenarioProtocol::Command& cmd) {
     set(netGame, key.data(), value.data());
     return std::string();
   }
+  if (cmd.action == "refresh_friends")
+    return PostNoArg(netGame, Checked(kRefreshFriendsHandlerVA, kRefreshFriendsPrologue, "refresh friends handler", &error),
+                     &error);
   if (cmd.action == "refresh_recently_met")
     return PostNoArg(netGame, Checked(kRefreshRecentlyMetHandlerVA, kRefreshRecentlyMetPrologue, "refresh recently met handler",
                                       &error), &error);
@@ -426,7 +433,9 @@ nlohmann::json StateJson() {
   for (std::uint32_t index = 0; SocialRoster::Global().IdAt(index, &id); ++index) {
     friends.push_back({{"id", id},
                        {"online", SocialRoster::Global().OnlineAt(index)},
-                       {"invitable", SocialFacade::FriendInvitableForTest(id)}});
+                       {"invitable", SocialFacade::FriendInvitableForTest(id)},
+                       {"text", SocialRoster::Global().StatusTextAt(index)},
+                       {"party", SocialRoster::Global().PartyIdAt(index)}});
   }
   out["friends"] = friends;
   nlohmann::json invites = nlohmann::json::array();
@@ -474,6 +483,16 @@ nlohmann::json Handle(const std::string& line) {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject PartyJoinFailure party=%llu code=%u",
           static_cast<unsigned long long>(cmd.partyId), static_cast<unsigned>(cmd.failureCode));
       if (!InjectServerFrameForTest(ScenarioProtocol::BuildPartyJoinFailure(cmd.partyId, cmd.failureCode), &error)) {
+        return Fail(error);
+      }
+      return {{"ok", true}};
+    }
+    case ScenarioProtocol::Op::kInjectFriendPresence: {
+      Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject FriendPresenceNotify id=%llu party=%llu joinable=%d text=%s",
+          static_cast<unsigned long long>(cmd.friendId), static_cast<unsigned long long>(cmd.partyId), cmd.flag ? 1 : 0,
+          cmd.value.c_str());
+      if (!InjectServerFrameForTest(ScenarioProtocol::BuildFriendPresenceNotify(cmd.friendId, cmd.partyId, cmd.flag, cmd.value),
+                                    &error)) {
         return Fail(error);
       }
       return {{"ok", true}};

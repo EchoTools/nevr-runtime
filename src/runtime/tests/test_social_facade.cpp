@@ -881,6 +881,44 @@ TEST(SocialFacade, TheHostsLockBitLocksThePartyOnTheServerAndJoinableFollowsIt) 
   SocialParty::Global().DrainEvents();
 }
 
+TEST(SocialFacade, AFriendsPresenceFillsTheStatusTextAndJoinablePartySlots) {
+  using TextFn = const char* (*)(void*, std::uint32_t);
+  using JoinableFn = std::uint32_t (*)(void*, std::uint32_t);
+  using PartyFn = std::uint64_t (*)(void*, std::uint32_t);
+  const std::string frame = ScenarioProtocol::BuildFriendPresenceNotify(4242, 77, true, "Public Arena Match");
+  std::uint64_t id = 0;
+  SocialRoster::Presence presence;
+  ASSERT_TRUE(SocialRoster::ParsePresenceNotify(reinterpret_cast<const std::uint8_t*>(frame.data()) + 24,
+                                                frame.size() - 24, &id, &presence));
+  EXPECT_EQ(id, 4242u);
+  EXPECT_EQ(presence.partyId, 77u);
+  EXPECT_TRUE(presence.joinable);
+  EXPECT_EQ(presence.text, "Public Arena Match");
+  EXPECT_FALSE(SocialRoster::ParsePresenceNotify(reinterpret_cast<const std::uint8_t*>(frame.data()) + 24, 40, &id,
+                                                 &presence)) << "a text running past the payload is refused";
+
+  SocialRoster::Global().Clear();
+  SocialRoster::Global().SetPresence(4242, presence);  // before the friend is listed: remembered
+  SocialRoster::Global().BeginList(1);
+  SocialRoster::Global().Notify(4242, SocialRoster::kStatusOnline);
+  void* object = SocialFacade::Object();
+  const Slot* vtable = Vtable(object);
+  EXPECT_STREQ(reinterpret_cast<TextFn>(vtable[52])(object, 0), "Public Arena Match");
+  EXPECT_EQ(reinterpret_cast<JoinableFn>(vtable[54])(object, 0), 1u);
+  EXPECT_EQ(reinterpret_cast<PartyFn>(vtable[55])(object, 0), 77u);
+  EXPECT_STREQ(reinterpret_cast<TextFn>(vtable[52])(object, 5), "") << "past the list";
+
+  SocialRoster::Presence notJoinable;
+  notJoinable.text = "In Main Menu";
+  SocialRoster::Global().SetPresence(4242, notJoinable);
+  EXPECT_EQ(reinterpret_cast<PartyFn>(vtable[55])(object, 0), 0u);
+  EXPECT_EQ(reinterpret_cast<JoinableFn>(vtable[54])(object, 0), 0u);
+  SocialRoster::Global().Notify(4242, SocialRoster::kStatusOffline);
+  SocialRoster::Global().SetPresence(4242, presence);
+  EXPECT_EQ(reinterpret_cast<PartyFn>(vtable[55])(object, 0), 0u) << "an offline friend's party is not joinable";
+  SocialRoster::Global().Clear();
+}
+
 TEST(SocialParty, MembersComeAndGoAndTheHostFollowsTheLeader) {
   SocialParty::State state;
   state.SetSelf(100);
@@ -1246,6 +1284,7 @@ TEST(ScenarioProtocol, EveryFireActionParsesAndBadArgumentsAreNamed) {
       R"({"op":"fire","action":"enable_social_feature","feature":1,"enable":true})",
       R"({"op":"fire","action":"set_party_member_string","key":"k","value":"v"})",
       R"({"op":"fire","action":"refresh_recently_met"})",
+      R"({"op":"fire","action":"refresh_friends"})",
   };
   for (const char* line : good) {
     error.clear();

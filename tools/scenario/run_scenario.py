@@ -219,6 +219,14 @@ def state_matches(state: dict, step: dict) -> tuple[bool, str]:
         if ok and "party_room" in spec:
             ok = int(party.get("room", 0)) == int(spec["party_room"])
         return ok, f"party id={party.get('id')} room={party.get('room')} joining={party.get('joining')}"
+    if "friend" in spec:
+        want = spec["friend"]
+        target = int(want["id"])
+        row = next((f for f in state.get("friends", []) if int(f["id"]) == target), None)
+        if row is None:
+            return False, f"friend {target} is not in the roster ({len(state.get('friends', []))} friends)"
+        ok = all(str(row.get(k)) == str(v) for k, v in want.items() if k != "id")
+        return ok, f"friend {target} " + " ".join(f"{k}={row.get(k)!r}" for k in ("online", "text", "party"))
     if "friend_invitable" in spec:
         target = int(spec["friend_invitable"])
         row = next((f for f in state.get("friends", []) if int(f["id"]) == target), None)

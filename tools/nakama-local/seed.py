@@ -68,13 +68,14 @@ ON CONFLICT DO NOTHING;
 
 
 def friends_sql(a: str, b: str, state: int = 0) -> str:
-    """user_edge both ways between the accounts with these Discord ids (state 0: mutual friends)."""
+    """user_edge both ways between the accounts with these Discord ids (state 0: mutual friends). The
+    primary key is (source_id, state, position), so each edge gets its own position (microseconds)."""
     return f"""
 INSERT INTO user_edge (source_id, position, update_time, destination_id, state)
-SELECT x.id, 0, now(), y.id, {state} FROM users x, users y WHERE x.custom_id = '{a}' AND y.custom_id = '{b}'
+SELECT x.id, (extract(epoch from clock_timestamp()) * 1000000)::bigint, now(), y.id, {state} FROM users x, users y WHERE x.custom_id = '{a}' AND y.custom_id = '{b}'
 ON CONFLICT (source_id, destination_id) DO UPDATE SET state = {state};
 INSERT INTO user_edge (source_id, position, update_time, destination_id, state)
-SELECT y.id, 0, now(), x.id, {state} FROM users x, users y WHERE x.custom_id = '{a}' AND y.custom_id = '{b}'
+SELECT y.id, (extract(epoch from clock_timestamp()) * 1000000)::bigint, now(), x.id, {state} FROM users x, users y WHERE x.custom_id = '{a}' AND y.custom_id = '{b}'
 ON CONFLICT (source_id, destination_id) DO UPDATE SET state = {state};
 """
 
