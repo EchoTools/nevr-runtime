@@ -1,12 +1,14 @@
-# Party and member shared data, the game's writes. docs/design/2026-10-01-social-features-test-plan.md #19.
+# Party and member shared data, the game's writes and the facade's share of them (proposal §3,
+# docs/design/2026-10-01-social-nakama-proposal.md; test plan #19).
 # R15NetSetPartyMemberStringNode posts 0x1401b07e0(netGame, key, value): it asks slot 30
 # MemberDataWritable for the local member's JSON root and writes the key. R15NetSetPartyStringNode
-# posts 0x1401b0940: for the host (slot 24 IsHost) it marks the party data dirty and writes the party
-# JSON. pnsovr then shared both with the room (slots 6/7 from its Update, 0x1800ac240); Nakama's
-# PartyUpdate*Request carries no data (evr/sns_party.go), so sharing is not tested here: see #19.
-# Pass = the member write reached slot 30 and the party write marked the party data written.
+# posts 0x1401b0940: for the host (slot 24 IsHost) it marks the party data written (flags bit 0) and
+# writes the party JSON. The facade's Update then serialises each with the game's own CJson writer and
+# sends SNSPartyDataUpdateRequest (scope 1 member, 0 party), as pnsovr's Update shared them (slots 6/7,
+# 0x1800ac240), and clears bit 0. A server without the message drops it ("Received unknown message").
+# Pass = each write left the game as the JSON the game holds, key included, and bit 0 was cleared.
 name: party_data
-description: write a member string and a party string through the game's own nodes; see them reach the facade
+description: write a member string and a party string through the game's own nodes; see each shared with the server
 steps:
   - name: client is in the social lobby (level loaded, in game)
     wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
@@ -15,12 +17,22 @@ steps:
   - name: the game has its own party
     state_until: {party_joinable: true, timeout: 60}
   - name: write a member string
-    fire: {action: set_party_member_string, key: scenariokey, value: scenariovalue}
+    fire: {action: set_party_member_string, key: scenariomember, value: membervalue}
   - name: slot 30 MemberDataWritable gave the local member's data
     expect_log: {pattern: 'slot=30 name=MemberDataWritable call=\d+ args=\S+,0,', timeout: 10}
+  - name: the member data was shared
+    expect_log: {pattern: '\[NEVR\.SOCIAL\] party data share scope=member party=\d+ bytes=\d+', timeout: 10}
+  - name: the request left for the server
+    expect_log: {pattern: 'party data \(member\): 1 request\(s\) sent', timeout: 10}
+  - name: what was shared is the game's own JSON with the key
+    state_until: {path: party.last_shared, contains: '"scenariomember"', timeout: 10}
   - name: write a party string
-    fire: {action: set_party_string, key: scenariokey, value: scenariovalue}
-  - name: the game marked the party data written (flags bit 0, set by 0x14015fdb0 for the host)
-    state_until: {path: party.share_dirty, equals: true, timeout: 10}
+    fire: {action: set_party_string, key: scenarioparty, value: partyvalue}
+  - name: the party data was shared
+    expect_log: {pattern: '\[NEVR\.SOCIAL\] party data share scope=party party=\d+ bytes=\d+', timeout: 10}
+  - name: what was shared is the game's party JSON with the key
+    state_until: {path: party.last_shared, contains: '"scenarioparty"', timeout: 10}
+  - name: shared, so the party data is no longer marked written
+    state_until: {path: party.share_dirty, equals: false, timeout: 10}
   - name: the game is still running its frames
     state_until: {party_joinable: true, timeout: 10}

@@ -39,6 +39,7 @@ LOCK_REQUEST = 0xC2478AA479F3E16A
 UNLOCK_REQUEST = 0x5A4E99802FA3D704
 SET_JOIN_POLICY_REQUEST = 0xE1D46B6FB78FD9E6
 INVITE_RESPONSE = 0xE3654A09203555A3
+DATA_UPDATE_REQUEST = 0x3448CA6E8D9DD0CE  # SNSPartyDataUpdateRequest (social_party.h kPartyDataUpdateRequest)
 
 NAMES = {  # replies the peer waits on (social_party.h ReplyTable, nakama core_hash_lookup.go)
     0xA5ACC1A90D0CCE47: "LogInSuccess", 0xA5B9D5A3021CCF51: "LogInFailure",
@@ -50,13 +51,15 @@ NAMES = {  # replies the peer waits on (social_party.h ReplyTable, nakama core_h
     0x218F721F09026DAB: "PartyInviteNotify",
     0xDEE671B237A5278D: "PartyUpdateSuccess", 0xDEF365B838B5269B: "PartyUpdateFailure",
     0x23C834CB3BC6ECF5: "PartyUpdateNotify",
+    0x4EDFFB9FC8CC8731: "PartyUpdateMemberSuccess", 0x4ECAEF95C7DC8627: "PartyUpdateMemberFailure",
+    0x832143CCBF160955: "PartyDataNotify",
 }
 for sym, name in list(NAMES.items()):
     NAMES[sym] = name
 REQUEST_NAMES = {LOGIN_REQUEST: "LogInRequest", CREATE_REQUEST: "PartyCreateRequest", JOIN_REQUEST: "PartyJoinRequest",
                  LEAVE_REQUEST: "PartyLeaveRequest", INVITE_REQUEST: "PartyInviteRequest", LOCK_REQUEST: "PartyLockRequest",
                  UNLOCK_REQUEST: "PartyUnlockRequest", SET_JOIN_POLICY_REQUEST: "PartySetJoinPolicyRequest",
-                 INVITE_RESPONSE: "PartyInviteResponse"}
+                 INVITE_RESPONSE: "PartyInviteResponse", DATA_UPDATE_REQUEST: "PartyDataUpdateRequest"}
 
 
 def member_uuid(account_id: int) -> bytes:
@@ -76,8 +79,11 @@ def split_frames(data: bytes):
 
 
 class Peer:
-    def __init__(self, name: str, account_id: int, password: str, server_key: str, log=print):
+    def __init__(self, name: str, account_id: int, password: str, server_key: str, log=print,
+                 headset: str = "No VR"):
         self.name, self.account_id, self.password, self.server_key = name, account_id, password, server_key
+        self.headset = headset  # the login profile's system_info.headset_type (nakama fills headsettype from it)
+        self.data_seq = 0
         self.log = log
         self.ws: websocket.WebSocket | None = None
         self.received: list[tuple[float, str, bytes]] = []
@@ -95,7 +101,7 @@ class Peer:
         profile = {"accountid": self.account_id, "displayname": self.name, "bypassauth": False, "access_token": "",
                    "password": self.password, "nonce": "", "buildversion": 631547, "lobbyversion": 0, "appid": 0,
                    "publisher_lock": "", "hmdserialnumber": "nEVR-peer", "desiredclientprofileversion": 0,
-                   "nevr_social": 1, "system_info": {"headset_type": "No VR"}}
+                   "nevr_social": 1, "system_info": {"headset_type": self.headset}}
         payload = bytes(16) + struct.pack("<QQ", PLATFORM_OVR_ORG, self.account_id) + json.dumps(profile).encode() + b"\0"
         self._send(LOGIN_REQUEST, payload)
         self.wait_for("LogInSuccess", timeout)
@@ -127,6 +133,9 @@ class Peer:
                 name = NAMES.get(sym, f"0x{sym:016x}")
                 if sym in NAMES:
                     self.log(f"peer {self.name}: <- {name} payload_bytes={len(payload)}")
+                if name == "PartyDataNotify":
+                    party, member, seq, _, text = parse_data_notify(payload)
+                    self.log(f"peer {self.name}: <- PartyDataNotify party={party} member={member} seq={seq} json={text}")
                 with self.lock:
                     self.received.append((time.monotonic(), name, payload))
                     self.lock.notify_all()
@@ -173,6 +182,39 @@ class Peer:
     def invite(self, account_id: int) -> None:
         self.standard(INVITE_REQUEST, account_id)
 
+    def share(self, scope: int, text: str) -> str:
+        """SNSPartyDataUpdateRequest: the 0x28 header with the scope, then seq, length and the JSON."""
+        start = time.monotonic()
+        self.data_seq += 1
+        body = text.encode()
+        payload = (struct.pack("<Q", 0) + member_uuid(self.account_id) + struct.pack("<QQ", 0, scope)
+                   + struct.pack("<II", self.data_seq, len(body)) + body)
+        self._send(DATA_UPDATE_REQUEST, payload)
+        if scope == 0:
+            return self._outcome(start, "PartyUpdateSuccess", "PartyUpdateFailure")
+        return self._outcome(start, "PartyUpdateMemberSuccess", "PartyUpdateMemberFailure")
+
+    def share_member(self, text: str) -> str:
+        return self.share(1, text)
+
+    def share_party(self, text: str) -> str:
+        return self.share(0, text)
+
+    def wait_data(self, needle: str, timeout: float = 15) -> str:
+        """The JSON of the first PartyDataNotify received whose JSON contains `needle`."""
+        deadline = time.monotonic() + timeout
+        with self.lock:
+            while True:
+                for _, n, payload in self.received:
+                    if n == "PartyDataNotify":
+                        _, member, _, _, text = parse_data_notify(payload)
+                        if needle in text:
+                            return f"member={member} {text}"
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"peer {self.name}: no PartyDataNotify containing {needle!r} within {timeout} s")
+                self.lock.wait(remaining)
+
     def _outcome(self, start: float, ok: str, fail: str, timeout: float = 15) -> str:
         deadline = time.monotonic() + timeout
         with self.lock:
@@ -186,6 +228,12 @@ class Peer:
                 if remaining <= 0:
                     return "no answer"
                 self.lock.wait(remaining)
+
+
+def parse_data_notify(payload: bytes) -> tuple[int, int, int, int, str]:
+    """SNSPartyDataNotify: PartyID(8) MemberID(8) Seq(4) JsonLen(4) Json."""
+    party, member, seq, length = struct.unpack_from("<QQII", payload, 0)
+    return party, member, seq, length, payload[24:24 + length].decode(errors="replace")
 
 
 def peer_account(index: int) -> tuple[str, int, str]:
@@ -205,10 +253,11 @@ def server_key() -> str:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--peer", type=int, default=1)
+    ap.add_argument("--headset", default="No VR", help="the login profile's headset_type")
     ap.add_argument("actions", nargs="*", help="create_party, set_policy:N, lock, invite:ID, join:PARTY")
     args = ap.parse_args(argv)
     name, account, password = peer_account(args.peer)
-    p = Peer(name, account, password, server_key())
+    p = Peer(name, account, password, server_key(), headset=args.headset)
     p.connect()
     for action in args.actions:
         op, _, arg = action.partition(":")

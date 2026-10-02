@@ -194,6 +194,10 @@ def state_matches(state: dict, step: dict) -> tuple[bool, str]:
         value = state
         for part in str(spec["path"]).split("."):
             value = value.get(part) if isinstance(value, dict) else None
+        if ("contains" in spec or "lacks" in spec) and isinstance(value, str):
+            want_in, want_out = spec.get("contains"), spec.get("lacks")
+            ok = (want_in is None or str(want_in) in value) and (want_out is None or str(want_out) not in value)
+            return ok, f"{spec['path']}={value!r} (want text containing {want_in!r}, lacking {want_out!r})"
         if "contains" in spec or "lacks" in spec:
             items = [str(v) for v in value] if isinstance(value, list) else None
             want_in, want_out = spec.get("contains"), spec.get("lacks")
@@ -497,8 +501,10 @@ class Run:
         return json.dumps(reply)[:160]
 
     def do_peer(self, spec: dict) -> str:
-        """A local peer account acts: login (implicit), create_party, join, set_policy, lock, invite,
-        leave. `arg` "client" is this machine's account id; `save` keeps the result as ${name}."""
+        """A local peer account acts: login (implicit, as `headset` if given), create_party, join,
+        set_policy, lock, invite, share_member/share_party (arg: JSON text), wait_data (arg: text the
+        received PartyDataNotify's JSON contains). `arg` "client" is this machine's account id; `save`
+        keeps the result as ${name}."""
         if self.scenario.get("server") != "local":
             raise StepFailed("peer steps need `server: local`")
         sys.path.insert(0, str(NAKAMA_LOCAL))
@@ -512,7 +518,8 @@ class Run:
         peer = self.peers.get(number)
         if peer is None:
             name, account, password = evr_peer.peer_account(number)
-            peer = evr_peer.Peer(name, account, password, evr_peer.server_key(), log=log)
+            peer = evr_peer.Peer(name, account, password, evr_peer.server_key(), log=log,
+                                 headset=spec.get("headset", "No VR"))
             peer.connect()
             self.peers[number] = peer
         action = spec["do"]
@@ -530,6 +537,12 @@ class Run:
                 result = peer.lock_party()
             elif action == "invite":
                 result = peer.invite(int(arg))
+            elif action == "share_member":
+                result = peer.share_member(str(arg))
+            elif action == "share_party":
+                result = peer.share_party(str(arg))
+            elif action == "wait_data":
+                result = peer.wait_data(str(arg))
             elif action == "login":
                 result = "logged in"
             else:

@@ -1,0 +1,61 @@
+# Party and member data end to end on the local nakama (proposal §3). Peer 1 logs in with a Rift S and
+# joins the client's party: nakama sends the peer's member data (headsettype filled from its login
+# profile) to the client before PartyJoinNotify, so the game names the headset when it fires
+# MemberJoined. The client's member and party writes reach nakama, which stores them and relays them
+# to the peer with the keys the server fills (lobbyid, matchtype, team, lobbytype, offline, and
+# headsettype for a member); the peer's own write reaches the client's game as MemberUpdated.
+name: local_party_data
+server: local
+peers: 1
+description: a peer with a Rift S joins; see its headset named; see the client's writes reach the peer with the server's keys, and the peer's reach the game
+steps:
+  - name: logged in to the local nakama
+    wait_log: {pattern: 'NetGame switching state \(from logging in, to logged in\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 30}
+  - name: the client's own party, led by the client
+    state_until: {party_joinable: true, timeout: 60, save: {client_party: party.id}}
+  - name: peer 1 logs in with a Rift S
+    peer: {id: 1, do: login, headset: Oculus Rift S}
+  - name: peer 1 joins the client's party
+    peer: {id: 1, do: join, arg: '${client_party}', expect: PartyJoinSuccess}
+  - name: nakama sent the join's data
+    nakama_log: {pattern: '"msg":"Party data for a join".*"joiner_reads":true.*"joiner_data_to":1', timeout: 15}
+  - name: the client got the peer's data before the join, with its headset
+    expect_log: {pattern: 'party data received party=${client_party} member=900000000000000101 seq=\d+ bytes=\d+ keys=\d+ headsettype=2 outcome=member_added', timeout: 15}
+  - name: the game named the peer's headset
+    expect_log: {pattern: "\\[NETGAME\\] '[^']+' joined party \\(Rift S\\)", timeout: 15}
+  - name: two members
+    state_until: {party_members: 2, timeout: 15}
+  - name: the client writes a member string
+    fire: {action: set_party_member_string, key: scenariomember, value: membervalue}
+  - name: nakama stored the client's member data and relayed it to the peer
+    nakama_log: {pattern: '"msg":"Party data update".*"scope":1.*"stored":true,"relayed_to":1', timeout: 15}
+  - name: the peer got it with the key
+    peer: {id: 1, do: wait_data, arg: '"scenariomember":"membervalue"'}
+  - name: the server filled lobbyid (no match)
+    peer: {id: 1, do: wait_data, arg: '"lobbyid":"00000000-0000-0000-0000-000000000000"'}
+  - name: the server filled matchtype
+    peer: {id: 1, do: wait_data, arg: '"matchtype":-1'}
+  - name: the server filled team
+    peer: {id: 1, do: wait_data, arg: '"team":65535'}
+  - name: the server filled lobbytype
+    peer: {id: 1, do: wait_data, arg: '"lobbytype":2'}
+  - name: the server filled offline
+    peer: {id: 1, do: wait_data, arg: '"offline":false'}
+  - name: the server filled the client's headsettype (No VR is none of the game's headsets)
+    peer: {id: 1, do: wait_data, arg: '"headsettype":0'}
+  - name: the client writes a party string
+    fire: {action: set_party_string, key: scenarioparty, value: partyvalue}
+  - name: nakama stored the party data from its leader and relayed it
+    nakama_log: {pattern: '"msg":"Party data update".*"scope":0.*"stored":true,"relayed_to":1', timeout: 15}
+  - name: the peer got the party's data with the key
+    peer: {id: 1, do: wait_data, arg: '"scenarioparty":"partyvalue"'}
+  - name: the peer writes its member data
+    peer: {id: 1, do: share_member, arg: '{"peerkey":"peervalue"}', expect: PartyUpdateMemberSuccess}
+  - name: the client's game got it
+    expect_log: {pattern: 'party data received party=${client_party} member=900000000000000101 seq=\d+ bytes=\d+ keys=7 headsettype=2 outcome=member', timeout: 15}
+  - name: MemberUpdated callback ran for the peer
+    expect_log: {pattern: 'party callback index=10 arg=1 bound=1', timeout: 15}
+  - name: the peer's party write is refused (not the leader)
+    peer: {id: 1, do: share_party, arg: '{"x":1}', expect: 'PartyUpdateFailure code=2'}
