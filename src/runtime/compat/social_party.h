@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -289,6 +290,25 @@ class State {
     std::lock_guard<std::mutex> guard(mutex_);
     self_ = accountId;
     selfName_ = name;
+    if (!name.empty()) RenameLocked(accountId, name);
+  }
+
+  /// A display name arrived (a profile reply): every party member and invite sender with this id
+  /// shows it from now on, and so does anyone with this id who arrives later.
+  void SetName(std::uint64_t accountId, const std::string& name) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (accountId == 0 || name.empty()) return;
+    names_[accountId] = name;
+    RenameLocked(accountId, name);
+  }
+
+  /// Ids that joined the party or sent an invite with no known name since the last call: the bridge
+  /// asks the server for their profiles, as it does for friends.
+  std::vector<std::uint64_t> TakeUnnamed() {
+    std::lock_guard<std::mutex> guard(mutex_);
+    std::vector<std::uint64_t> out;
+    out.swap(unnamed_);
+    return out;
   }
 
   /// A friend-list or UI action asked to invite `target`: create the party first if there is none.
@@ -501,7 +521,7 @@ class State {
       creating_ = false;
       partyId_ = u64(0);
       ownerId_ = u64(8);
-      members_.assign(1, Member{self_, std::to_string(self_)});
+      members_.assign(1, Member{self_, NameLocked(self_)});
       events_.push_back(MakeEvent(EventKind::kCreated));
       for (const std::uint64_t target : pendingInvites_) {
         if (outgoing != nullptr) outgoing->push_back(Standard(kInviteRequest, SelfUuid(), target));
@@ -515,8 +535,8 @@ class State {
       joiningPartyId_ = 0;
       partyId_ = u64(0);
       ownerId_ = u64(8);
-      members_.assign(1, Member{self_, std::to_string(self_)});
-      if (ownerId_ != self_) members_.push_back(Member{ownerId_, std::to_string(ownerId_)});
+      members_.assign(1, Member{self_, NameLocked(self_)});
+      if (ownerId_ != self_) members_.push_back(Member{ownerId_, NameLocked(ownerId_)});
       events_.push_back(MakeEvent(EventKind::kJoined));
       if (members_.size() > 1) events_.push_back(MakeEvent(EventKind::kMemberJoined, 1));
     } else if (n == "PartyJoinFailure") {
@@ -529,7 +549,7 @@ class State {
     } else if (n == "PartyJoinNotify" && len >= 16 && u64(0) == partyId_) {
       const std::uint64_t id = u64(8);
       if (id != self_ && Find(id) < 0) {
-        members_.push_back(Member{id, std::to_string(id)});
+        members_.push_back(Member{id, NameLocked(id)});
         events_.push_back(MakeEvent(EventKind::kMemberJoined, static_cast<std::uint32_t>(members_.size() - 1)));
       }
     } else if (n == "PartyLeaveNotify" && len >= 16 && u64(0) == partyId_) {
@@ -562,7 +582,7 @@ class State {
       Invite invite;
       invite.partyId = u64(0);
       invite.senderId = u64(8);
-      invite.senderName = std::to_string(invite.senderId);
+      invite.senderName = NameLocked(invite.senderId);
       invite.sentTime = now;
       // One invite per sender, the newer one wins (pnsovr's 0x18008be10 drops the older).
       for (std::size_t i = invites_.size(); i > 0; --i)
@@ -639,6 +659,23 @@ class State {
       events_.push_back(MakeEvent(EventKind::kMemberLeft, 0, members_[i - 1].id, members_[i - 1].name));
   }
 
+  /// The name to show for `id`: the local user's own, a resolved one, or the id until one arrives (and
+  /// then the id is queued for a lookup).
+  std::string NameLocked(std::uint64_t id) {
+    if (id == self_ && !selfName_.empty()) return selfName_;
+    const auto known = names_.find(id);
+    if (known != names_.end()) return known->second;
+    if (id != 0 && id != self_ && std::find(unnamed_.begin(), unnamed_.end(), id) == unnamed_.end()) unnamed_.push_back(id);
+    return std::to_string(id);
+  }
+
+  void RenameLocked(std::uint64_t id, const std::string& name) {
+    for (Member& m : members_)
+      if (m.id == id) m.name = name;
+    for (Invite& i : invites_)
+      if (i.senderId == id) i.senderName = name;
+  }
+
   void ForgetJoinLocked(std::uint64_t partyId) {
     if (deferredJoin_ == partyId) deferredJoin_ = 0;
     if (joinInviteParty_ == partyId) {
@@ -672,6 +709,8 @@ class State {
   bool locked_ = false;
   std::vector<Member> members_;
   std::vector<Invite> invites_;
+  std::map<std::uint64_t, std::string> names_;  // display names from profile replies
+  std::vector<std::uint64_t> unnamed_;          // ids shown without a name, waiting for a lookup
   std::vector<std::uint64_t> pendingInvites_;
   std::vector<Event> events_;
 };

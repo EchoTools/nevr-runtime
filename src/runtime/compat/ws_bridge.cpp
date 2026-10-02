@@ -272,7 +272,10 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
         replyFor = 0;
         for (int i = 7; i >= 0; --i) replyFor = (replyFor << 8) | payload[8 + i];
       }
-      if (decoded) SocialRoster::Global().SetName(accountId, displayName);
+      if (decoded) {
+        SocialRoster::Global().SetName(accountId, displayName);
+        SocialParty::Global().SetName(accountId, displayName);
+      }
       if (SocialRoster::Global().Contains(replyFor)) {
         Log(EchoVR::LogLevel::Info,
             decoded ? "[NEVR.SOCIAL] friend name resolved account=%llu name_bytes=%zu"
@@ -340,6 +343,15 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
       if (SocialParty::Global().Feed(sym, payload, static_cast<size_t>(len), nowSeconds, &outgoing) &&
           !outgoing.empty()) {
         SocialParty::Send(outgoing);
+      }
+      // A party member or an invite's sender the bridge has no name for: ask for the profile, as for
+      // friends, so the game shows a name instead of an account id.
+      for (const uint64_t accountId : SocialParty::Global().TakeUnnamed()) {
+        const std::vector<SocialParty::Message> asks = SocialNames::GlobalResolver().Want(accountId);
+        if (!asks.empty()) {
+          Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party name lookup requested account=%llu sent=%d",
+              static_cast<unsigned long long>(accountId), SocialParty::Send(asks) ? 1 : 0);
+        }
       }
     }
     p += 24 + len;

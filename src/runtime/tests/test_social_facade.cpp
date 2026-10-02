@@ -786,6 +786,30 @@ TEST(SocialFacade, AcceptInviteJoinsThatPartyAndIdShowsItWhileTheJoinIsInFlight)
   SocialParty::Global().DrainEvents();
 }
 
+TEST(SocialParty, MembersAndInviteSendersGetTheirDisplayNames) {
+  SocialParty::State state;
+  state.SetSelf(100, "Me");
+  ASSERT_TRUE(FeedParty(state, "PartyCreateSuccess", U64s({7, 100})));
+  EXPECT_EQ(state.Snapshot().members[0].name, "Me") << "the local user's own name, not its id";
+  EXPECT_TRUE(state.TakeUnnamed().empty());
+
+  ASSERT_TRUE(FeedParty(state, "PartyJoinNotify", U64s({7, 201})));
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({9, 202})));
+  EXPECT_EQ(state.Snapshot().members[1].name, "201") << "the id until a name arrives";
+  EXPECT_EQ(state.TakeUnnamed(), (std::vector<std::uint64_t>{201, 202}));
+  EXPECT_TRUE(state.TakeUnnamed().empty()) << "each id is handed out once";
+
+  state.SetName(201, "Alice");
+  state.SetName(202, "Bob");
+  EXPECT_EQ(state.Snapshot().members[1].name, "Alice");
+  EXPECT_EQ(state.Snapshot().invites[0].senderName, "Bob");
+
+  ASSERT_TRUE(FeedParty(state, "PartyLeaveNotify", U64s({7, 201})));
+  ASSERT_TRUE(FeedParty(state, "PartyJoinNotify", U64s({7, 201})));
+  EXPECT_EQ(state.Snapshot().members[1].name, "Alice") << "a known name is used at once";
+  EXPECT_TRUE(state.TakeUnnamed().empty());
+}
+
 TEST(SocialParty, MembersComeAndGoAndTheHostFollowsTheLeader) {
   SocialParty::State state;
   state.SetSelf(100);
