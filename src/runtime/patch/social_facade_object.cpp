@@ -343,7 +343,12 @@ std::uint64_t MemberDataWritable(void* self, std::int32_t index) {
   return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(g_memberJson.data()));
 }
 
-void SetJoinPolicy(void* self, std::uint32_t policy) { Put32(self, 0x2B4, policy); }
+// Slot 16 SetJoinPolicy: the policy the JoinPolicy slot (21) reports, and, for a party this client
+// leads, the server's (SocialParty::SetJoinPolicy).
+void SetJoinPolicy(void* self, std::uint32_t policy) {
+  Put32(self, 0x2B4, policy);
+  SendParty("party join policy", SocialParty::Global().SetJoinPolicy(policy));
+}
 
 std::uint32_t Ready(void*) {
   const auto view = CurrentView();

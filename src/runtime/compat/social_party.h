@@ -39,6 +39,11 @@ constexpr std::uint64_t kInviteRequest = 0xcf13f934540b5f5eULL;  // SNSPartySend
 constexpr int kSocialLevel = 1;
 
 constexpr std::uint64_t kLockRequest = 0xc2478aa479f3e16aULL;
+/// SNSPartySetJoinPolicyRequest (nevr social level 1): the leader's join policy in TargetParam. A server
+/// without it drops the frame as an unknown symbol (nakama session_ws.go, "Received unknown message").
+constexpr std::uint64_t kSetJoinPolicyRequest = 0xe1d46b6fb78fd9e6ULL;
+/// The game's join policies (slot 16): 0 invite only, 1 friends, 2 friends of members, 3 everyone.
+constexpr std::uint32_t kJoinPolicyEveryone = 3;
 constexpr std::uint64_t kUnlockRequest = 0x5a4e99802fa3d704ULL;
 constexpr std::uint64_t kInviteListRefreshRequest = 0xd8cbc44959e25da8ULL;
 constexpr std::uint64_t kFriendListRefreshRequest = 0xdcfa94680e8d19fcULL;  // SNSFriendListRefreshRequest
@@ -100,6 +105,7 @@ inline const char* RequestName(std::uint64_t symbol) {
     case kInviteRequest: return "PartyInviteRequest";
     case kLockRequest: return "PartyLockRequest";
     case kUnlockRequest: return "PartyUnlockRequest";
+    case kSetJoinPolicyRequest: return "PartySetJoinPolicyRequest";
     case kInviteListRefreshRequest: return "PartyInviteListRefreshRequest";
     case kKickRequest: return "PartyKickRequest";
     case kPassRequest: return "PartyPassRequest";
@@ -386,11 +392,9 @@ class State {
       ForgetJoinLocked(partyId);
       return out;
     }
-    if (partyId_ != 0) {
-      RemoteMembersLeaveLocked();
-      ClearParty();
-      events_.push_back(MakeEvent(EventKind::kLeft));
-    }
+    // The current party is kept until the server admits us to the new one (PartyJoinSuccess): a player
+    // whose join fails stays where they were (owner, 2026-10-01). pnsovr left first; the server now
+    // leaves the old party only on success too (nakama snsPartyLeaveForJoin).
     for (std::size_t i = invites_.size(); i > 0; --i)
       if (invites_[i - 1].partyId == partyId) invites_.erase(invites_.begin() + static_cast<std::ptrdiff_t>(i - 1));
     joining_ = true;
@@ -484,6 +488,18 @@ class State {
     return out;
   }
 
+  /// Slot 16 SetJoinPolicy (pnsovr 0x180092470): nothing if the policy is unchanged; else remember it
+  /// and, when this client leads a party, tell the server, which enforces it on joins. A party made
+  /// later gets the remembered policy when the server confirms it (PartyCreateSuccess).
+  std::vector<Message> SetJoinPolicy(std::uint32_t policy) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    std::vector<Message> out;
+    if (policy == joinPolicy_) return out;
+    joinPolicy_ = policy;
+    if (partyId_ != 0 && ownerId_ == self_) out.push_back(Standard(kSetJoinPolicyRequest, SelfUuid(), policy));
+    return out;
+  }
+
   /// The friends tab was opened: ask the server for a fresh friend list (it answers with a
   /// FriendListResponse and one FriendStatusNotify per friend, which refill the roster).
   std::vector<Message> RefreshFriends() {
@@ -531,6 +547,8 @@ class State {
       ownerId_ = u64(8);
       members_.assign(1, Member{self_, NameLocked(self_)});
       events_.push_back(MakeEvent(EventKind::kCreated));
+      if (joinPolicy_ != kJoinPolicyEveryone && outgoing != nullptr)  // a new party starts as everyone
+        outgoing->push_back(Standard(kSetJoinPolicyRequest, SelfUuid(), joinPolicy_));
       for (const std::uint64_t target : pendingInvites_) {
         if (outgoing != nullptr) outgoing->push_back(Standard(kInviteRequest, SelfUuid(), target));
       }
@@ -539,8 +557,14 @@ class State {
       creating_ = false;
       pendingInvites_.clear();
     } else if (n == "PartyJoinSuccess" && len >= 16) {
+      if (partyId_ != 0 && partyId_ != u64(0)) {  // admitted: now leave the party we were in
+        RemoteMembersLeaveLocked();
+        events_.push_back(MakeEvent(EventKind::kLeft));
+      }
       joining_ = false;
       joiningPartyId_ = 0;
+      locked_ = false;
+      lockRequested_ = -1;
       partyId_ = u64(0);
       ownerId_ = u64(8);
       members_.assign(1, Member{self_, NameLocked(self_)});
@@ -717,6 +741,7 @@ class State {
   std::uint64_t joinInviteParty_ = 0;  // a join that came from an invite, and who sent it
   std::uint64_t joinInviter_ = 0;
   bool locked_ = false;
+  std::uint32_t joinPolicy_ = kJoinPolicyEveryone;  // slot 16, kept across parties as pnsovr kept +0x2B4
   std::int8_t lockRequested_ = -1;  // the lock state last asked of the server, -1 none
   std::vector<Member> members_;
   std::vector<Invite> invites_;

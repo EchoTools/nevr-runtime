@@ -741,7 +741,7 @@ TEST(SocialParty, ARefusedJoinIsForgottenAndJoiningTheCurrentPartyDoesNothing) {
   EXPECT_TRUE(state.DrainEvents().empty());
 }
 
-TEST(SocialParty, AcceptingAnInviteLeavesTheCurrentPartyFirst) {
+TEST(SocialParty, AcceptingAnInviteKeepsTheCurrentPartyUntilTheNewOneAdmits) {
   SocialParty::State state;
   state.SetSelf(100);
   ASSERT_TRUE(FeedParty(state, "PartyJoinSuccess", U64s({7, 201})));
@@ -749,14 +749,51 @@ TEST(SocialParty, AcceptingAnInviteLeavesTheCurrentPartyFirst) {
   state.DrainEvents();
   ASSERT_TRUE(state.BeginJoin(9));
   ASSERT_EQ(state.Join(9).size(), 1u);
-  const auto events = state.DrainEvents();
-  ASSERT_EQ(events.size(), 2u);
+  EXPECT_TRUE(state.DrainEvents().empty()) << "nothing leaves before the server answers";
+  EXPECT_EQ(state.Snapshot().partyId, 7u) << "still in the party we were in";
+  EXPECT_TRUE(state.Snapshot().joining);
+
+  ASSERT_TRUE(FeedParty(state, "PartyJoinFailure", U64s({9, 5})));
+  EXPECT_EQ(state.Snapshot().partyId, 7u) << "a failed join stays where it was";
+  ASSERT_EQ(state.Snapshot().members.size(), 2u);
+  auto events = state.DrainEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].kind, SocialParty::EventKind::kJoinFailed);
+
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({9, 203})));
+  state.DrainEvents();
+  ASSERT_TRUE(state.BeginJoin(9));
+  ASSERT_EQ(state.Join(9).size(), 1u);
+  ASSERT_TRUE(FeedParty(state, "PartyJoinSuccess", U64s({9, 203})));
+  events = state.DrainEvents();
+  ASSERT_EQ(events.size(), 4u) << "the old party is left only now, then the new one joined";
   EXPECT_EQ(events[0].kind, SocialParty::EventKind::kMemberLeft);
   EXPECT_EQ(events[0].id, 201u);
   EXPECT_EQ(events[1].kind, SocialParty::EventKind::kLeft);
-  const auto view = state.Snapshot();
-  EXPECT_EQ(view.partyId, 0u);
-  EXPECT_EQ(view.joiningPartyId, 9u);
+  EXPECT_EQ(events[2].kind, SocialParty::EventKind::kJoined);
+  EXPECT_EQ(events[3].kind, SocialParty::EventKind::kMemberJoined);
+  EXPECT_EQ(state.Snapshot().partyId, 9u);
+}
+
+TEST(SocialParty, TheLeadersJoinPolicyGoesToTheServerAndFollowsANewParty) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  EXPECT_TRUE(state.SetJoinPolicy(0).empty()) << "no party: remembered, nothing sent";
+  std::vector<SocialParty::Message> outgoing;
+  ASSERT_TRUE(FeedParty(state, "PartyCreateSuccess", U64s({7, 100}), &outgoing));
+  ASSERT_EQ(outgoing.size(), 1u) << "a new party gets the remembered policy";
+  EXPECT_EQ(outgoing[0].symbol, SocialParty::kSetJoinPolicyRequest);
+  EXPECT_EQ(LastU64(outgoing[0].payload), 0u);
+  EXPECT_TRUE(state.SetJoinPolicy(0).empty()) << "unchanged";
+  const auto out = state.SetJoinPolicy(1);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(LastU64(out[0].payload), 1u);
+  EXPECT_STREQ(SocialParty::RequestName(SocialParty::kSetJoinPolicyRequest), "PartySetJoinPolicyRequest");
+
+  SocialParty::State member;
+  member.SetSelf(100);
+  ASSERT_TRUE(FeedParty(member, "PartyJoinSuccess", U64s({8, 201})));
+  EXPECT_TRUE(member.SetJoinPolicy(0).empty()) << "a member does not set the party's policy";
 }
 
 TEST(SocialFacade, AcceptInviteJoinsThatPartyAndIdShowsItWhileTheJoinIsInFlight) {
