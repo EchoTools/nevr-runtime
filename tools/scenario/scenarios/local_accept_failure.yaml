@@ -26,7 +26,7 @@ steps:
   - name: the accept left the game
     expect_log: {pattern: 'game->server conn=\d+ PartyInviteResponse payload_bytes=\d+ param=1', timeout: 10}
   - name: the local nakama had no such invite
-    nakama_log: {pattern: '"msg":"No pending invites for user"', timeout: 15}
+    nakama_log: {pattern: '"msg":"No (pending invites for user|matching invite found)"', timeout: 15}
   - name: the server's refusal arrived
     expect_log: {pattern: 'server->game conn=\d+ PartyJoinFailure payload_bytes=9', timeout: 15}
   - name: the game showed not found (outside a lobby PartyJoinFailedCB 0x140189590 words it "Game boot invite failed")

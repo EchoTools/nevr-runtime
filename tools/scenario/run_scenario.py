@@ -35,7 +35,7 @@ SCRATCH = pathlib.Path("/var/tmp/work-nevr-runtime/scenario-runs")
 WINEPREFIX = REPO / "echovr/.wineprefix"
 MARKER = b"[NEVR.SCENARIO]"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-STEP_KINDS = ("wait_log", "expect_log", "state_until", "inject", "fire", "nakama_log")
+STEP_KINDS = ("wait_log", "expect_log", "state_until", "inject", "fire", "nakama_log", "peer")
 # Lines in the game's own log that mean the run is over: a wait stops on the first one and reports
 # it, instead of sitting out its timeout on a game that already failed (2026-10-01 run
 # 20261001T142307 waited 240 s on a client that had died at 0.2 s: "no driver could be loaded").
@@ -87,9 +87,12 @@ def load_scenario(path: pathlib.Path) -> dict:
         step["kind"] = kinds[0]
         steps.append(step)
     server = data.get("server", "production")
+    peers = int(data.get("peers", 0))
+    friends = [[str(x) for x in pair] for pair in (data.get("friends") or [])]
     if server not in ("production", "local"):
         raise ValueError(f"{path}: server must be 'production' or 'local', not {server!r}")
-    return {"name": data["name"], "description": data.get("description", ""), "steps": steps, "server": server}
+    return {"name": data["name"], "description": data.get("description", ""), "steps": steps, "server": server,
+            "peers": peers, "friends": friends}
 
 
 class ConsoleLog:
@@ -283,7 +286,7 @@ def client_discord_id() -> str | None:
     return None
 
 
-def write_local_server_config() -> pathlib.Path:
+def write_local_server_config(peers: int = 0, friends: list | None = None) -> pathlib.Path:
     """The game config for a `server: local` scenario: an empty game JSON and, beside it, the
     runtime's config.yaml pointing at the local nakama as the seeded test account (the same template
     as tools/winvm/systest.py). Fails loudly when the local nakama is not up or not seeded."""
@@ -300,8 +303,15 @@ def write_local_server_config() -> pathlib.Path:
     sys.path.insert(0, str(NAKAMA_LOCAL))
     import seed  # noqa: E402  (constants only)
     discord_id = client_discord_id() or seed.DISCORD_ID
-    done = subprocess.run([sys.executable, str(NAKAMA_LOCAL / "seed.py"), "--discord-id", discord_id],
-                          capture_output=True, text=True)
+    # Peers and friendships as the scenario declares them ("client" = this machine's account, N = peer
+    # N), on top of none: every run starts from the same friend graph.
+    def account(who: str) -> str:
+        return discord_id if who == "client" else str(seed.peer(int(who))[1])
+    command = [sys.executable, str(NAKAMA_LOCAL / "seed.py"), "--discord-id", discord_id,
+               "--peers", str(peers), "--reset-friends"]
+    for a, b in friends or []:
+        command += ["--friends", f"{account(a)},{account(b)}"]
+    done = subprocess.run(command, capture_output=True, text=True)
     if done.returncode != 0:
         raise StepFailed(f"seeding the local nakama failed: {done.stderr.strip() or done.stdout.strip()}")
     print(f"scenario: local nakama account carries discord id {discord_id}", flush=True)
@@ -339,6 +349,7 @@ class Run:
         self.control: Control | None = None
         self.mark = 0  # console offset at the last action; expect_log looks after it
         self.saved: dict = {}  # fire reply fields saved by a step's `save`, for later ${name}
+        self.peers: dict = {}  # local peer accounts by number (tools/nakama-local/evr_peer.py)
         self.started_utc = datetime.datetime.now(datetime.timezone.utc)
         self.launcher: subprocess.Popen | None = None
         self.xephyr: subprocess.Popen | None = None
@@ -368,7 +379,8 @@ class Run:
         launcher_out = self.out / "launch-client.out"
         command = [str(REPO / "launch-client.sh"), "--dll", str(self.dll)]
         if self.scenario.get("server") == "local":
-            command += ["--config", str(write_local_server_config())]
+            command += ["--config", str(write_local_server_config(self.scenario.get("peers", 0),
+                                                                  self.scenario.get("friends", [])))]
         self.launcher = subprocess.Popen(
             command, cwd=REPO,
             stdout=launcher_out.open("w"), stderr=subprocess.STDOUT, start_new_session=True)
@@ -384,6 +396,8 @@ class Run:
         raise StepFailed("launch-client.sh never printed its console log path")
 
     def teardown(self):
+        for peer in self.peers.values():
+            peer.close()
         if self.control:
             self.control.close()
         env = dict(os.environ, WINEPREFIX=str(WINEPREFIX))
@@ -452,6 +466,8 @@ class Run:
                     return detail
                 time.sleep(1)
             raise StepFailed(f"condition not met: {detail}; {self.console.summary(self.mark)}")
+        if kind == "peer":
+            return self.do_peer(step["peer"])
         if kind == "nakama_log":
             spec = step["nakama_log"]
             if self.scenario.get("server") != "local":
@@ -471,6 +487,52 @@ class Run:
                 raise StepFailed(f"{kind} reply has no {field!r} to save as {name}: {json.dumps(reply)[:160]}")
             self.saved[name] = reply[field]
         return json.dumps(reply)[:160]
+
+    def do_peer(self, spec: dict) -> str:
+        """A local peer account acts: login (implicit), create_party, join, set_policy, lock, invite,
+        leave. `arg` "client" is this machine's account id; `save` keeps the result as ${name}."""
+        if self.scenario.get("server") != "local":
+            raise StepFailed("peer steps need `server: local`")
+        sys.path.insert(0, str(NAKAMA_LOCAL))
+        import evr_peer  # noqa: E402
+        number = int(spec["id"])
+        log_path = self.out / "peers.log"
+
+        def log(line: str) -> None:
+            with log_path.open("a") as f:
+                f.write(f"{datetime.datetime.now().isoformat(timespec='milliseconds')} {line}\n")
+        peer = self.peers.get(number)
+        if peer is None:
+            name, account, password = evr_peer.peer_account(number)
+            peer = evr_peer.Peer(name, account, password, evr_peer.server_key(), log=log)
+            peer.connect()
+            self.peers[number] = peer
+        action = spec["do"]
+        arg = spec.get("arg")
+        if arg == "client":
+            arg = client_discord_id()
+        try:
+            if action == "create_party":
+                result = peer.create_party()
+            elif action == "join":
+                result = peer.join(int(arg))
+            elif action == "set_policy":
+                result = peer.set_policy(int(arg))
+            elif action == "lock":
+                result = peer.lock_party()
+            elif action == "invite":
+                result = peer.invite(int(arg))
+            elif action == "login":
+                result = "logged in"
+            else:
+                raise StepFailed(f"unknown peer action {action!r}")
+        except TimeoutError as exc:
+            raise StepFailed(str(exc))
+        if spec.get("expect") is not None and str(result) != str(spec["expect"]):
+            raise StepFailed(f"peer {number} {action}: got {result!r}, want {spec['expect']!r}")
+        for name in (spec.get("save") or {}).keys():
+            self.saved[name] = result
+        return f"peer {number} {action}: {result}"
 
     def execute(self) -> bool:
         started = time.monotonic()
