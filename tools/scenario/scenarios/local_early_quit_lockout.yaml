@@ -1,0 +1,26 @@
+# The early quit lockout end to end on the local nakama (nevr-runtime patch/early_quit_lockout.cpp, nakama
+# fix/early-quit-update-layout). Before running: seed.py --early-quit-enabled on --early-quit-penalty 900
+# (and wait one 30 s settings reload). The game service sends the feature flags at login and the penalty in
+# the server profile (penaltyts = the lockout's end; nakama 1ceb1e5e8, the client reads it there, not the
+# client profile); the runtime's hook on SetEarlyQuitPenaltyLevel turns it into
+# the countdown the scripts read. A local client never reaches a social lobby, so the terminal's LOCKOUT bar
+# is not visible here; it was shown live on production on 2026-10-02 (echovr-reconstruction
+# docs/earlyquit_field_analysis.md). Passed 7/7 in run 20261002T171015. Afterwards: seed.py --early-quit-penalty 0 --early-quit-enabled off.
+name: local_early_quit_lockout
+server: local
+description: a penalty from the local game service becomes the client's lockout countdown, with the feature flags it needs
+steps:
+  - name: the runtime's early quit pieces installed
+    wait_log: {pattern: '\[NEVR\.EARLYQUIT\] feature-flag mask 0xdd -> 0xff', timeout: 60}
+  - name: logged in to the local nakama
+    wait_log: {pattern: 'NetGame switching state \(from logging in, to logged in\)'}
+  - name: the game service sent the early quit feature flags at login
+    nakama_log: {pattern: '"msg":"Sent SNSEarlyQuitFeatureFlags on login"', timeout: 20}
+  - name: the runtime turned the profile's penalty into a running lockout
+    wait_log: {pattern: '\[NEVR\.EARLYQUIT\] penalty set: incoming penaltyts=\d{10} .*expiry=\d{10} active=1', timeout: 30}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 30}
+  - name: the client kept every feature-flag bit the game service sent (0x0f, bits 0 and 1 included)
+    state_until: {path: game.early_quit.feature_flags, equals: 15, timeout: 20}
+  - name: the countdown flag is set
+    state_until: {path: game.early_quit.countdown_flag, equals: true, timeout: 20}
