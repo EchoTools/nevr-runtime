@@ -4,7 +4,8 @@
 # for public arena as the game's Find does. The tablet party is the lobby party (size 2), the leader
 # files a party ticket carrying the member. A third peer alone (the party of one every tablet player
 # has from login) files a solo ticket, as before. The game client only logs in: a local client never
-# enters a lobby, so the game itself cannot start a find here (run 20261002T093544).
+# enters a lobby, so the game itself cannot start a find here (run 20261002T093544). The tablet party
+# files with no formation wait (nakama f362649cb); before it, the wait ran its full 15 s (20261002T094748).
 name: local_tablet_find
 server: local
 peers: 3
@@ -22,8 +23,8 @@ steps:
     nakama_log: {pattern: '"msg":"Tablet party is the lobby party".*"party_size":2,"is_leader":true', timeout: 20}
   - name: nakama finds for the party of two
     nakama_log: {pattern: '"msg":"Finding match".*"mode":"echo_arena","party_size":2', timeout: 20}
-  - name: the members never search, so the formation wait runs out (15 s; the owner's call whether to skip it)
-    nakama_log: {pattern: '"msg":"Formation timeout -- submitting ticket with ready members".*"party_size":2', timeout: 30}
+  - name: the members never search, so the tablet party skips the formation wait (owner, 2026-10-02)
+    nakama_log: {pattern: '"msg":"Tablet party: submitting ticket without the formation wait".*"party_size":2', timeout: 5}
   - name: the leader files a party ticket carrying the member
     nakama_log: {pattern: '"msg":"Matchmaking ticket added".*"username":"localpeer1".*"presences":\[\{"Node":"[^"]*","SessionID":"[0-9a-f-]+"\}\]', timeout: 10}
   - name: peer 3 makes a party of one
