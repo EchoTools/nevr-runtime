@@ -518,6 +518,30 @@ TEST_F(N61_WsBridgeTest, MultipleMatchmakerConnectionsKeepTheLatestActiveCallbac
   EXPECT_TRUE(TestHook_N61_HasActiveCallback());
 }
 
+TEST_F(N61_WsBridgeTest, FramesFromTheLoginSessionGoToALiveConnectionAfterTheNewestCloses) {
+  // Measured 2026-10-01: conn=3 opens for the lobby join and closes ~15 s later; every profile
+  // reply after that went to the closed socket and the game never saw it. The route is the newest
+  // connection still open, then the login connection, then none.
+  auto remote = MockWsHandle::Create();
+  auto loginWs = MockWsHandle::Create();
+  auto conn2 = MockWsHandle::Create();
+  auto conn3 = MockWsHandle::Create();
+  void* loginRaw = TestHook_N61_RegisterLogin(remote.handle, loginWs.handle);
+  ASSERT_NE(loginRaw, nullptr);
+  EXPECT_EQ(TestHook_SharedRouteConn(), 1);
+  bool fired = false;
+  void* raw2 = TestHook_N61_RegisterMatchmaker(conn2.handle, &fired);
+  void* raw3 = TestHook_N61_RegisterMatchmaker(conn3.handle, &fired);
+  EXPECT_EQ(TestHook_SharedRouteConn(), 3) << "the newest connection takes the frames";
+
+  TestHook_N61_SimulateCloseAndCheckCleared(raw3);
+  EXPECT_EQ(TestHook_SharedRouteConn(), 2) << "not the closed conn=3";
+  TestHook_N61_SimulateCloseAndCheckCleared(raw2);
+  EXPECT_EQ(TestHook_SharedRouteConn(), 1) << "back to the login connection";
+  TestHook_N61_SimulateCloseAndCheckCleared(loginRaw);
+  EXPECT_EQ(TestHook_SharedRouteConn(), -1) << "nothing open: frames are dropped (and logged)";
+}
+
 TEST_F(N61_WsBridgeTest, LoginCloseDuringActiveMatchmakerIsSafe) {
   auto remote = MockWsHandle::Create();
   auto loginWs = MockWsHandle::Create();

@@ -147,3 +147,10 @@ class GpuWaitTest(unittest.TestCase):
         finally:
             run_scenario.gpu_free_mib, run_scenario.GPU_POLL_SECONDS = original_free, original_poll
         self.assertEqual(len(calls), 3)
+
+
+class LateVariableTest(unittest.TestCase):
+    def test_unknown_names_survive_load_and_expand_later(self):
+        step = run_scenario.substitute({"pattern": "for '${who}' in ${room}"}, {"room": 7})
+        self.assertEqual(step["pattern"], "for '${who}' in 7")
+        self.assertEqual(run_scenario.substitute(step, {"who": "OVR-ORG-5"})["pattern"], "for 'OVR-ORG-5' in 7")

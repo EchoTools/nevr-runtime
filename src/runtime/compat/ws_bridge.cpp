@@ -199,6 +199,80 @@ static uint64_t g_lastInjectedDiscordId = 0;
 // (conn>=2, matchmaker) closes.
 static ix::WebSocket* g_loginGameWs = nullptr;
 
+// Under g_pairsMutex. The game socket that frames from the shared login remote go to: the active one
+// (the newest connection sharing the remote), else the login connection; nullptr when neither is
+// still connected. The remote's message callback belongs to whichever connection opened last, and
+// that connection may have closed since (conn=3 closes after the lobby join), so the target is looked
+// up for every frame, never captured. Routing to the captured socket sent every reply after that
+// close to a dead connection: the game never saw its profile replies again (2026-10-01).
+static ProxyPair* SharedRouteLocked(ix::WebSocket** target) {
+  for (ix::WebSocket* ws : {g_activeGameWs, g_loginGameWs}) {
+    if (ws == nullptr) continue;
+    const auto it = g_pairs.find(ws);
+    if (it != g_pairs.end()) {
+      *target = ws;
+      return it->second.get();
+    }
+  }
+  *target = nullptr;
+  return nullptr;
+}
+
+// Under g_pairsMutex: the game closed `gameWs`. Clears the remote's callback where nothing else uses
+// that remote, forgets the pair, and moves server->game routing to the newest connection still
+// sharing the login remote. Returns the remote to stop OUTSIDE the lock (N60), for an unshared pair.
+static std::shared_ptr<ix::WebSocket> RetireGameWsLocked(ix::WebSocket* gameWs, int* closedConnIdx,
+                                                         bool* callbackCleared) {
+  std::shared_ptr<ix::WebSocket> remoteToStop;
+  auto it = g_pairs.find(gameWs);
+  if (it != g_pairs.end()) {
+    *closedConnIdx = it->second->connIdx;
+    const bool isShared = (it->second->remoteWs == g_loginRemoteWs);
+    if (!isShared) {
+      remoteToStop = it->second->remoteWs;
+      // N85: a no-op, NOT nullptr. ixwebsocket invokes _onMessageCallback unconditionally; an empty
+      // std::function throws std::bad_function_call out of ixwebsocket's thread and kills the
+      // dedicated server (confirmed from a crash-dump stack).
+      it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
+      *callbackCleared = true;
+    } else if (gameWs == g_loginGameWs) {
+      // N61: the login pair shares the remote with the matchmaker connections; clear the callback
+      // only if none of them is active, or matchmaker routing dies with it.
+      if (g_activeGameWs == nullptr || g_activeGameWs == gameWs) {
+        it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
+        *callbackCleared = true;
+      }
+    }
+    g_pairs.erase(it);
+  }
+  if (g_activeGameWs == gameWs) {
+    g_activeGameWs = nullptr;
+    int newest = -1;
+    for (const auto& entry : g_pairs) {
+      if (entry.first != g_loginGameWs && entry.second->remoteWs == g_loginRemoteWs && entry.second->connIdx > newest) {
+        newest = entry.second->connIdx;
+        g_activeGameWs = entry.first;
+      }
+    }
+    ix::WebSocket* target = nullptr;
+    const ProxyPair* route = SharedRouteLocked(&target);
+    Log(EchoVR::LogLevel::Info, "[NEVR.WS] server->game routing: conn=%d closed, frames from the login session now go to conn=%d",
+        *closedConnIdx, route != nullptr ? route->connIdx : -1);
+  }
+  return remoteToStop;
+}
+
+// A frame from the shared login remote with no live game connection to take it.
+static void LogSharedFrameDropped(std::size_t bytes) {
+  static std::atomic<std::uint64_t> s_dropped{0};
+  const std::uint64_t dropped = ++s_dropped;
+  if (dropped == 1 || dropped % 100 == 0) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.WS] server->game frame DROPPED: no game connection is still open on the login session bytes=%zu "
+        "(%llu total)", bytes, static_cast<unsigned long long>(dropped));
+  }
+}
+
 // ============================================================================
 // LoginRequest builder
 // ============================================================================
@@ -281,6 +355,21 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
             decoded ? "[NEVR.SOCIAL] friend name resolved account=%llu name_bytes=%zu"
                     : "[NEVR.SOCIAL] friend profile reply could not be read account=%llu reply_bytes=%zu",
             static_cast<unsigned long long>(replyFor), decoded ? displayName.size() : static_cast<size_t>(len));
+      }
+    }
+    // Profile requests and replies, both ways, with the EvrId they carry (platform u64, account u64):
+    // the game files a reply under "%s-%llu" of that id and drops one that matches no request it sent
+    // (FUN_14060cdb0 / FUN_140610e70), so a mismatch is only visible here.
+    {
+      const char* profileName = EchoVR::LookupSymbolName(sym);
+      if (profileName != nullptr && strstr(profileName, "OtherUserProfile") != nullptr && len >= 16) {
+        uint64_t platform = 0;
+        uint64_t account = 0;
+        memcpy(&platform, payload, sizeof(platform));
+        memcpy(&account, payload + 8, sizeof(account));
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s platform=%llu account=%llu payload_bytes=%llu", direction,
+            connIdx, profileName, static_cast<unsigned long long>(platform), static_cast<unsigned long long>(account),
+            static_cast<unsigned long long>(len));
       }
     }
     // Party symbols come from our own verified tables: the game's symbol table has no names for the
@@ -394,7 +483,7 @@ bool InjectServerFrameForTest(const std::string& frame, std::string* error) {
   ix::WebSocket* gameWs = nullptr;
   {
     std::lock_guard<std::mutex> lock(g_pairsMutex);
-    gameWs = g_activeGameWs != nullptr ? g_activeGameWs : g_loginGameWs;
+    SharedRouteLocked(&gameWs);
   }
   if (gameWs == nullptr) {
     if (error != nullptr) *error = "no game login connection to inject into";
@@ -695,11 +784,16 @@ void InstallWebSocketBridge() {
                   [pairPtr, gameWsPtr, connIdx](const ix::WebSocketMessagePtr& rmsg) {
                     switch (rmsg->type) {
                       case ix::WebSocketMessageType::Message: {
-                        ObserveSocialFrames("server->game", connIdx, rmsg->str);
                         ix::WebSocket* target = nullptr;
+                        int targetConn = -1;
                         {
                           std::lock_guard<std::mutex> lk(g_pairsMutex);
-                          target = g_activeGameWs ? g_activeGameWs : gameWsPtr;
+                          if (const ProxyPair* route = SharedRouteLocked(&target)) targetConn = route->connIdx;
+                        }
+                        ObserveSocialFrames("server->game", targetConn, rmsg->str);
+                        if (target == nullptr) {
+                          LogSharedFrameDropped(rmsg->str.size());
+                          break;
                         }
                         if (rmsg->binary) {
                           target->sendBinary(rmsg->str);
@@ -1076,10 +1170,20 @@ void InstallWebSocketBridge() {
                       // shares the login remote, g_activeGameWs is swapped so
                       // responses reach the matchmaker's game WS peer.
                       {
+                        // The login remote is shared with the matchmaker connections: its frames go
+                        // to the live connection SharedRouteLocked picks. Any other remote (config)
+                        // belongs to its own game socket.
                         ix::WebSocket* target = nullptr;
                         {
                           std::lock_guard<std::mutex> lk(g_pairsMutex);
-                          target = g_activeGameWs ? g_activeGameWs : gameWsPtr;
+                          if (pairPtr->remoteWs != nullptr && pairPtr->remoteWs == g_loginRemoteWs)
+                            SharedRouteLocked(&target);
+                          else
+                            target = gameWsPtr;
+                        }
+                        if (target == nullptr) {
+                          LogSharedFrameDropped(rmsg->str.size());
+                          break;
                         }
                         if (rmsg->binary) {
                           target->sendBinary(rmsg->str);
@@ -1272,37 +1376,8 @@ void InstallWebSocketBridge() {
             int closedConnIdx = -1;
             {
               std::lock_guard<std::mutex> lk(g_pairsMutex);
-              auto it = g_pairs.find(&gameWs);
-              if (it != g_pairs.end()) {
-                closedConnIdx = it->second->connIdx;
-                bool isShared = (it->second->remoteWs == g_loginRemoteWs);
-                if (!isShared) {
-                  // Snapshot the remote — we'll stop it OUTSIDE the lock.
-                  remoteToStop = it->second->remoteWs;
-                  // Clear callback under lock so no further invocations
-                  // reference the freed ProxyPair after erase.
-                  // N85: no-op, NOT nullptr. ixwebsocket invokes _onMessageCallback
-                  // unconditionally; an empty std::function throws std::bad_function_call,
-                  // which unwinds out of ixwebsocket's own thread, reaches the game's
-                  // unhandled-exception filter as GCC throw code 0x20474343, and kills the
-                  // dedicated server. Confirmed from a crash-dump stack:
-                  // __cxa_allocate_exception -> __cxa_throw -> std::bad_function_call.
-                  it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
-                } else if (&gameWs == g_loginGameWs) {
-                  // Login pair closing — shared remote. N61: only clear the
-                  // callback if NO matchmaker connection is sharing the remote.
-                  // conn>=2 registers its own callback (N61 fix) which captures
-                  // the matchmaker's pairPtr (still alive). Clearing here would
-                  // kill matchmaker routing — the regression N61 was supposed
-                  // to prevent.
-                  if (g_activeGameWs == nullptr || g_activeGameWs == &gameWs) {
-                    it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
-                  }
-                  // If a matchmaker is active, leave its callback intact.
-                }
-                g_pairs.erase(it);
-              }
-              if (g_activeGameWs == &gameWs) g_activeGameWs = nullptr;
+              bool callbackCleared = false;
+              remoteToStop = RetireGameWsLocked(&gameWs, &closedConnIdx, &callbackCleared);
             } // g_pairsMutex RELEASED here — safe to call stop()
             if (remoteToStop) {
               remoteToStop->stop();
@@ -1547,6 +1622,7 @@ void* TestHook_N61_RegisterLogin(void* remoteHandle, void* gameWsHandle) {
   auto pair = std::make_unique<ProxyPair>();
   pair->remoteWs = *remotePtr;
   pair->remoteOpen = true;
+  pair->connIdx = 1;
 
   // Login callback — captures a dummy that the test can later check.
   g_loginRemoteWs = *remotePtr;
@@ -1570,6 +1646,10 @@ void* TestHook_N61_RegisterMatchmaker(void* gameWsHandle, bool* callbackFired) {
   auto pair = std::make_unique<ProxyPair>();
   pair->remoteWs = g_loginRemoteWs;
   pair->remoteOpen = true;
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    pair->connIdx = 2 + static_cast<int>(g_pairs.size()) - 1;  // after the login pair: 2, 3, ...
+  }
 
   // N61: matchmaker registers its own callback on the shared remote.
   bool* fired = callbackFired;
@@ -1605,24 +1685,8 @@ bool TestHook_N61_SimulateCloseAndCheckCleared(void* rawGameWsPtr) {
     std::shared_ptr<ix::WebSocket> remoteToStop;
     {
       std::lock_guard<std::mutex> lk(g_pairsMutex);
-      auto it = g_pairs.find(gameWs);
-      if (it != g_pairs.end()) {
-        bool isShared = (it->second->remoteWs == g_loginRemoteWs);
-        if (!isShared) {
-          remoteToStop = it->second->remoteWs;
-          it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
-          callbackWasCleared = true;
-        } else if (gameWs == g_loginGameWs) {
-          // N61 guard: only clear if no matchmaker is sharing.
-          if (g_activeGameWs == nullptr || g_activeGameWs == gameWs) {
-            it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
-            callbackWasCleared = true;
-          }
-          // Else: matchmaker is active → callback SURVIVES (post-fix).
-        }
-        g_pairs.erase(it);
-      }
-      if (g_activeGameWs == gameWs) g_activeGameWs = nullptr;
+      int closedConnIdx = -1;
+      remoteToStop = RetireGameWsLocked(gameWs, &closedConnIdx, &callbackWasCleared);
     }
     if (remoteToStop) {
       remoteToStop->stop();
@@ -1635,6 +1699,13 @@ bool TestHook_N61_SimulateCloseAndCheckCleared(void* rawGameWsPtr) {
 // Check whether the shared remote has an active callback by setting a
 // temporary one and checking if it replaces successfully. Returns true
 // if a callback is active (the test callback replaced something).
+int TestHook_SharedRouteConn() {
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  ix::WebSocket* target = nullptr;
+  const ProxyPair* route = SharedRouteLocked(&target);
+  return route != nullptr ? route->connIdx : -1;
+}
+
 bool TestHook_N61_HasActiveCallback() {
   if (!g_loginRemoteWs) return false;
   // We can't directly query ix::WebSocket's internal callback state.

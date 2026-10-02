@@ -69,6 +69,7 @@ void* TestHook_N61_RegisterLogin(void* remoteHandle, void* gameWsHandle);
 void* TestHook_N61_RegisterMatchmaker(void* gameWsHandle, bool* callbackFired);
 bool  TestHook_N61_SimulateCloseAndCheckCleared(void* rawGameWsPtr);
 bool  TestHook_N61_HasActiveCallback();
+int   TestHook_SharedRouteConn();  // the conn frames from the shared login session go to, -1 none
 void  TestHook_N61_ResetState();
 bool  TestHook_N60_IsMutexFree();
 #endif

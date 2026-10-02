@@ -62,9 +62,10 @@ def substitute(value, variables: dict):
     variable's type, so `id: ${friend_id}` stays an integer."""
     if isinstance(value, str):
         whole = re.fullmatch(r"\$\{(\w+)\}", value)
-        if whole:
+        if whole and whole.group(1) in variables:
             return variables[whole.group(1)]
-        return string.Template(value).substitute(variables)
+        # A name not yet known is left for the run: a fire step can `save` a reply field into it.
+        return string.Template(value).safe_substitute(variables)
     if isinstance(value, dict):
         return {k: substitute(v, variables) for k, v in value.items()}
     if isinstance(value, list):
@@ -243,6 +244,7 @@ class Run:
         self.console: ConsoleLog | None = None
         self.control: Control | None = None
         self.mark = 0  # console offset at the last action; expect_log looks after it
+        self.saved: dict = {}  # fire reply fields saved by a step's `save`, for later ${name}
         self.launcher: subprocess.Popen | None = None
         self.xephyr: subprocess.Popen | None = None
 
@@ -312,6 +314,7 @@ class Run:
         self.control = Control(int(m.group(1)))
 
     def do(self, step: dict) -> str:
+        step = substitute(step, self.saved)
         kind = step["kind"]
         if kind == "wait_log":
             spec = step["wait_log"]
@@ -353,6 +356,10 @@ class Run:
         reply = self.control.call(command)
         if not reply.get("ok"):
             raise StepFailed(f"{kind} failed: {reply.get('error')}")
+        for name, field in (step.get("save") or {}).items():  # reply fields later steps can use as ${name}
+            if field not in reply:
+                raise StepFailed(f"{kind} reply has no {field!r} to save as {name}: {json.dumps(reply)[:160]}")
+            self.saved[name] = reply[field]
         return json.dumps(reply)[:160]
 
     def execute(self) -> bool:

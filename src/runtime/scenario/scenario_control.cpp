@@ -87,6 +87,7 @@ std::atomic<SOCKET> g_client{INVALID_SOCKET};
 // join at DLL detach runs under the loader lock. Stop() is the real teardown.
 std::thread* g_thread = nullptr;
 std::mutex g_fireMutex;
+std::string g_lastFireUser;  // the user id a fire resolved ("self", "friend"), under g_fireMutex
 std::deque<std::shared_ptr<FireRequest>> g_fireQueue;
 
 void* NetGame() {
@@ -261,6 +262,14 @@ std::string FireAction(const ScenarioProtocol::Command& cmd) {
     const std::uint64_t self = SocialParty::Global().Snapshot().selfId;
     if (self == 0) return "no local user yet";
     user = "OVR-ORG-" + std::to_string(self);
+  } else if (user == "friend") {  // the first friend in the roster: a real player, read-only use
+    std::uint64_t friendId = 0;
+    if (!SocialRoster::Global().IdAt(0, &friendId) || friendId == 0) return "the roster has no friend yet";
+    user = "OVR-ORG-" + std::to_string(friendId);
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_fireMutex);
+    g_lastFireUser = user;
   }
   Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] fire %s user=%s number=%llu flag=%d party=%llu key=%s",
       cmd.action.c_str(), user.c_str(), static_cast<unsigned long long>(cmd.number), cmd.flag ? 1 : 0,
@@ -474,7 +483,12 @@ nlohmann::json Handle(const std::string& line) {
       }
       const std::string why = done.get();
       if (!why.empty()) return Fail(why);
-      return {{"ok", true}, {"posted", true}};
+      nlohmann::json reply = {{"ok", true}, {"posted", true}};
+      if (cmd.op == ScenarioProtocol::Op::kFireAction) {
+        std::lock_guard<std::mutex> lock(g_fireMutex);
+        reply["user"] = g_lastFireUser;
+      }
+      return reply;
     }
   }
   return Fail("unhandled op");

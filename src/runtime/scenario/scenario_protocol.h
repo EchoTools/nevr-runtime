@@ -111,7 +111,8 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
     ok = u64("mode", 2, &cmd.number) && text("user", false, &cmd.user);
   } else if (action == "request_profile") {
     ok = text("user", true, &cmd.user) && !cmd.user.empty();
-    if (!ok && error->empty()) *error = "fire request_profile needs a non-empty \"user\" (an id string or \"self\")";
+    if (!ok && error->empty())
+      *error = "fire request_profile needs a non-empty \"user\" (an id string, \"self\" or \"friend\")";
   } else if (action == "party_join") {
     ok = u64("party", UINT64_MAX, &cmd.partyId) && cmd.partyId != 0;
     if (!ok && error->empty()) *error = "fire party_join needs a nonzero \"party\"";
