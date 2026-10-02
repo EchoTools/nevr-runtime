@@ -1285,6 +1285,8 @@ TEST(ScenarioProtocol, EveryFireActionParsesAndBadArgumentsAreNamed) {
       R"({"op":"fire","action":"set_party_member_string","key":"k","value":"v"})",
       R"({"op":"fire","action":"refresh_recently_met"})",
       R"({"op":"fire","action":"refresh_friends"})",
+      R"({"op":"fire","action":"find_arena"})",
+      R"({"op":"fire","action":"party_join_failed_callback","code":2})",
   };
   for (const char* line : good) {
     error.clear();
@@ -1301,6 +1303,7 @@ TEST(ScenarioProtocol, EveryFireActionParsesAndBadArgumentsAreNamed) {
       R"({"op":"fire","action":"voip_mute_self"})",
       R"({"op":"fire","action":"set_party_string","key":"","value":"v"})",
       R"({"op":"fire","action":"no_such_node"})",
+      R"({"op":"fire","action":"party_join_failed_callback"})",
   };
   for (const char* line : bad) {
     error.clear();

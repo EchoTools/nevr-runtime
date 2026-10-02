@@ -147,6 +147,89 @@ and what Nakama has; the recommendation is one option, not a decision.
 | 17 | Join policy (invite-only, friends, friends of members, everyone) | Slot 16 stores it (party_lock.yaml); pnsovr set the Oculus room policy (import 0x1801fa5d0). Nakama has lock/unlock (open/closed) and no policy | (a) a policy field on the party, enforced on join; (b) map invite-only to locked | **works in scenario** (lock): the lock node makes the party unjoinable at once, the server locks it (PartyLockRequest, LockSuccess) and unlock reverses it (`party_lock`, suites 20261001T220327-suite and 20261001T222547-suite); slots 4/5 and pnsovr's host sync were missing, so a lock never reached the server (fixed d2283ee). Join policy: slot 16 stores it (same run); a server-side policy needs the owner
 | 13 | What the "invitable users" button (slot 38) opens on PC | pnsovr opened the Oculus overlay (ovr_Room_LaunchInvitableUserFlow, 0x18008fe40); slots 39-43 were already bare `ret` in pnsovr | (a) open the game's own friends list; (b) nothing | **works in scenario** (routing): every mode of the node reaches its slot, 38, 40/39, 43/42 (`party_ui_buttons`, suites 20261001T220327-suite and 20261001T222547-suite); 39-43 do nothing, as pnsovr's bare `ret`. The slot labels 39/40 and 42/43 were swapped (fixed d2283ee). What slot 38 should open on PC: see "Needs the owner"
 
+## In-game: party join failure codes (the owner plays, the harness forges)
+
+**Why.** The game client knows six join-failure reasons. `PartyJoinFailedCB` (echovr.exe
+0x140189590) logs `[NETGAME] Party join failed: %s` with the text from `GetJoinErrorString`
+(0x1401b6530) and dispatches one script event per code:
+
+| Code | Log text | Script event |
+|---|---|---|
+| 1 | not found | `delegate_onpartyjoinerrornotfound` |
+| 2 | timeout | `delegate_onpartyjoinerrorunknown` (code 2 has no event of its own) |
+| 3 | no permission | `delegate_onpartyjoinerrornopermission` |
+| 4 | locked | `delegate_onpartyjoinerrorlocked` |
+| 5 | full | `delegate_onpartyjoinerrorfull` |
+| 6 | version | `delegate_onpartyjoinerrorversion` |
+| other | unknown | `delegate_onpartyjoinerrorunknown` |
+
+What each event shows the player is in the game's scripts, which have not been read. This test
+records it. It also settles what the game service should send for "refused, no reason given".
+Today it sends 2, and the bridge rewrites 2 to 4 (`GameJoinFailureCode`,
+src/runtime/compat/social_party.h), so that case shows as "locked".
+
+**Setup**
+1. Build the test DLL: `just preset=mingw-scenario build`. The control endpoint exists only in
+   this build.
+2. Put `build/mingw-scenario/bin/BugSplat64.dll` in the game install as `BugSplat64.dll`, and
+   start the game the way you normally play.
+3. Find the control port in the game log:
+   `[NEVR.SCENARIO] control listening on 127.0.0.1:<port> (test build only)`.
+4. Go into a social lobby and open the party page on the tablet.
+   - Measured earlier: outside a lobby the game logs `Game boot invite failed: %s` and dispatches
+     no event (the callback checks netgame+0x2b08). What that field means is not traced.
+
+**A. Through the bridge**
+
+This is what a real failure from the game service does: it goes through the bridge's Feed and its
+code mapping.
+
+```
+tools/scenario/control.py --port <port> '{"op":"inject","msg":"PartyJoinFailure","party":0,"code":N}'
+```
+
+Use N = 1, 3, 4, 5, 6 (these pass through unchanged), then 2 (shows as 4) and 9 (shows as 0).
+
+**B. Straight to the game's callback**
+
+This skips the bridge mapping, so you see the game's own handling of every code:
+
+```
+tools/scenario/control.py --port <port> '{"op":"fire","action":"party_join_failed_callback","code":N}'
+```
+
+Use N = 0, 1, 2, 3, 4, 5, 6, 7.
+
+**Record, per injection**
+- what the screen shows, with a screenshot;
+- the game log lines `[NETGAME] Party join failed: <text>` and
+  `[NEVR.SOCIAL] party callback index=2 arg=<N> bound=1`.
+
+Every command and reply is also appended to `/var/tmp/work-nevr-runtime/control-log.jsonl`.
+
+**Already measured.** The log text for path B matches the table above for codes 0–7: scenario
+`party_join_failed_codes`, run 20261002T132250, 19/19. The bridge mapping in path A is covered by
+`party_join_errors`. What is still open is what the player sees.
+
+The runtime's log filter folds a repeated identical line into `[NEVR.LOGFILTER] repeated
+count=...`. If you send the same code twice in a row, the second callback line is folded; record the
+screen anyway.
+
+| Path | Code sent | Code the game saw | Log text | What the player sees |
+|---|---|---|---|---|
+| A | 1 | 1 | | |
+| A | 3 | 3 | | |
+| A | 4 | 4 | | |
+| A | 5 | 5 | | |
+| A | 6 | 6 | | |
+| A | 2 | 4 | | |
+| A | 9 | 0 | | |
+| B | 0–7 | same | | |
+
+**Decide afterwards.** What the game service sends for "refused, no reason given" (today 2, shown
+as locked). The candidates are: keep 2→4; send a code outside 1–6 and drop the rewrite, so the
+player sees the "unknown" event; or send 2 straight through, so the log says "timeout".
+
 ## Calibration (one human click, once)
 
 The invite scenario enters at the friend row's script node action (0x140dddf60, verified from

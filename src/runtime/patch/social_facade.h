@@ -110,6 +110,9 @@ struct RecentlyMetForTest {
 std::vector<RecentlyMetForTest> RecentlyMetUsersForTest();
 /// Scenario-control builds only: slot 56.
 bool RecentlyMetRefreshingForTest();
+/// Scenario-control builds only, game thread: the game's PartyJoinFailed callback (index 2) with this
+/// code as given, past the bridge's mapping of the game service's codes (GameJoinFailureCode).
+void FireJoinFailedForTest(std::uint32_t code);
 #endif
 
 #ifdef NEVR_TEST_HOOKS

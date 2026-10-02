@@ -1253,6 +1253,8 @@ std::vector<RecentlyMetForTest> RecentlyMetUsersForTest() {
 
 bool RecentlyMetRefreshingForTest() { return RecentlyMetRefreshing(nullptr) != 0; }
 
+void FireJoinFailedForTest(std::uint32_t code) { CallU32(&g_object, kCbJoinFailed, code); }
+
 PartyStateForTest PartyForTest() {
   const auto view = CurrentView();
   PartyStateForTest out;

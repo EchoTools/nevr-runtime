@@ -1,0 +1,49 @@
+# The game's own handling of each party join-failure code (test plan: "In-game: party join failure
+# codes"). PartyJoinFailedCB (echovr.exe 0x140189590) logs the text from GetJoinErrorString
+# (0x1401b6530: 1 not found, 2 timeout, 3 no permission, 4 locked, 5 full, 6 version, else unknown)
+# and dispatches one script event per code. The fire calls the callback directly with each code, past
+# the bridge's GameJoinFailureCode (which passes 1/3/4/5/6, turns 2 into 4 and any other code into 0;
+# that path is proven by party_join_errors). In a social lobby (outside one the game logs "Game boot
+# invite failed" instead). What each event shows the player is the in-game part of the test plan. Each
+# code is fired once: the built-in log filter folds a repeated identical line into a repeat count.
+name: party_join_failed_codes
+description: every join-failure code through the game's callback and through the bridge; see the game's own log text for each
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: the game has its own party
+    state_until: {party_joinable: true, timeout: 60}
+  - name: the game's callback with code 0
+    fire: {action: party_join_failed_callback, code: 0}
+  - name: the game logs "unknown" for 0
+    expect_log: {pattern: '\[NETGAME\] Party join failed: unknown', timeout: 10}
+  - name: the game's callback with code 1
+    fire: {action: party_join_failed_callback, code: 1}
+  - name: the game logs "not found" for 1
+    expect_log: {pattern: '\[NETGAME\] Party join failed: not found', timeout: 10}
+  - name: the game's callback with code 2
+    fire: {action: party_join_failed_callback, code: 2}
+  - name: the game logs "timeout" for 2
+    expect_log: {pattern: '\[NETGAME\] Party join failed: timeout', timeout: 10}
+  - name: the game's callback with code 3
+    fire: {action: party_join_failed_callback, code: 3}
+  - name: the game logs "no permission" for 3
+    expect_log: {pattern: '\[NETGAME\] Party join failed: no permission', timeout: 10}
+  - name: the game's callback with code 4
+    fire: {action: party_join_failed_callback, code: 4}
+  - name: the game logs "locked" for 4
+    expect_log: {pattern: '\[NETGAME\] Party join failed: locked', timeout: 10}
+  - name: the game's callback with code 5
+    fire: {action: party_join_failed_callback, code: 5}
+  - name: the game logs "full" for 5
+    expect_log: {pattern: '\[NETGAME\] Party join failed: full', timeout: 10}
+  - name: the game's callback with code 6
+    fire: {action: party_join_failed_callback, code: 6}
+  - name: the game logs "version" for 6
+    expect_log: {pattern: '\[NETGAME\] Party join failed: version', timeout: 10}
+  - name: the game's callback with code 7
+    fire: {action: party_join_failed_callback, code: 7}
+  - name: the game logs "unknown" for 7
+    expect_log: {pattern: '\[NETGAME\] Party join failed: unknown', timeout: 10}

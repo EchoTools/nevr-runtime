@@ -143,12 +143,15 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
     if (!ok && error->empty()) *error = "fire " + action + " needs a non-empty \"key\"";
   } else if (action == "refresh_friends" || action == "find_arena") {
     ok = true;
+  } else if (action == "party_join_failed_callback") {
+    ok = u64("code", 0xFFFF, &cmd.number);
   } else if (action == "refresh_recently_met") {
     ok = true;
   } else {
     *error = "fire supports friend_invite, add_friend, respond_to_invite, invite_users, request_profile, party_join, "
              "party_lock, set_join_policy, voip_mute_self, voip_mute_user, social_groups_set_active, enable_social_feature, "
-             "set_party_member_string, set_party_string, refresh_friends, refresh_recently_met and find_arena";
+             "set_party_member_string, set_party_string, refresh_friends, refresh_recently_met, find_arena and "
+             "party_join_failed_callback";
     return false;
   }
   if (!ok) return false;

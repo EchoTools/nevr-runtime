@@ -309,6 +309,13 @@ std::string FireAction(const ScenarioProtocol::Command& cmd) {
   if (cmd.action == "request_profile")
     return PostUserId(netGame, Checked(kRequestProfileHandlerVA, kRequestProfilePrologue, "request profile handler", &error),
                       user, &error);
+  if (cmd.action == "party_join_failed_callback") {
+    // The game's own handling of a join-failure code (PartyJoinFailedCB 0x140189590: 1 not found,
+    // 2 timeout, 3 no permission, 4 locked, 5 full, 6 version, else unknown), without the bridge's
+    // mapping of the game service's codes in between.
+    SocialFacade::FireJoinFailedForTest(static_cast<std::uint32_t>(cmd.number));
+    return std::string();
+  }
   if (cmd.action == "find_arena") {
     auto* find = reinterpret_cast<FindIfPartyHostFn>(
         Checked(kFindIfPartyHostVA, kFindIfPartyHostPrologue, "find if party host", &error));
