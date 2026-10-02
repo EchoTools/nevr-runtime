@@ -810,6 +810,40 @@ TEST(SocialParty, MembersAndInviteSendersGetTheirDisplayNames) {
   EXPECT_TRUE(state.TakeUnnamed().empty());
 }
 
+TEST(SocialFacade, TheHostsLockBitLocksThePartyOnTheServerAndJoinableFollowsIt) {
+  using CountFn = std::uint32_t (*)(void*);
+  using UpdateFn = void (*)(void*, const void*);
+  SocialParty::Global().SetSelf(77, "Me");
+  SocialParty::Global().ResetParty();
+  void* object = SocialFacade::Object();
+  const Slot* vtable = Vtable(object);
+  std::uint8_t flags = 0;
+  ASSERT_TRUE(FeedParty(SocialParty::Global(), "PartyCreateSuccess", U64s({7, 77})));
+  reinterpret_cast<UpdateFn>(vtable[13])(object, &flags);
+  ASSERT_EQ(reinterpret_cast<CountFn>(vtable[22])(object), 1u) << "a fresh party is joinable";
+  ASSERT_EQ(reinterpret_cast<CountFn>(vtable[4])(object), 1u) << "and not locked on the server";
+
+  std::uint32_t word = 0;
+  std::memcpy(&word, static_cast<std::uint8_t*>(object) + 0x27C, 4);
+  word &= ~2u;  // what the game's PartyLock node does to the social object
+  std::memcpy(static_cast<std::uint8_t*>(object) + 0x27C, &word, 4);
+  reinterpret_cast<UpdateFn>(vtable[13])(object, &flags);
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[22])(object), 0u) << "the host's own bit decides at once";
+  EXPECT_TRUE(SocialParty::Global().SetLocked(true).empty()) << "Update already asked the server to lock";
+
+  ASSERT_TRUE(FeedParty(SocialParty::Global(), "PartyLockSuccess", U64s({7})));
+  reinterpret_cast<UpdateFn>(vtable[13])(object, &flags);
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[4])(object), 0u) << "the server locked it";
+
+  word |= 2u;
+  std::memcpy(static_cast<std::uint8_t*>(object) + 0x27C, &word, 4);
+  reinterpret_cast<UpdateFn>(vtable[13])(object, &flags);
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[22])(object), 1u);
+  EXPECT_TRUE(SocialParty::Global().SetLocked(false).empty()) << "Update asked to unlock";
+  SocialParty::Global().ResetParty();
+  SocialParty::Global().DrainEvents();
+}
+
 TEST(SocialParty, MembersComeAndGoAndTheHostFollowsTheLeader) {
   SocialParty::State state;
   state.SetSelf(100);
@@ -1156,6 +1190,45 @@ TEST(ScenarioProtocol, InjectedMemberJoinAndLeaveChangeTheCurrentParty) {
   ASSERT_EQ(events.size(), 2U);
   EXPECT_EQ(events[0].kind, SocialParty::EventKind::kMemberJoined);
   EXPECT_EQ(events[1].kind, SocialParty::EventKind::kMemberLeft);
+}
+
+TEST(ScenarioProtocol, EveryFireActionParsesAndBadArgumentsAreNamed) {
+  ScenarioProtocol::Command cmd;
+  std::string error;
+  const char* good[] = {
+      R"({"op":"fire","action":"invite_users","mode":1,"user":"OVR-ORG-4242"})",
+      R"({"op":"fire","action":"invite_users","mode":0})",
+      R"({"op":"fire","action":"request_profile","user":"self"})",
+      R"({"op":"fire","action":"party_join","party":77})",
+      R"({"op":"fire","action":"party_lock","lock":true})",
+      R"({"op":"fire","action":"set_join_policy","policy":3})",
+      R"({"op":"fire","action":"voip_mute_self","mute":false})",
+      R"({"op":"fire","action":"social_groups_set_active","index":0})",
+      R"({"op":"fire","action":"enable_social_feature","feature":1,"enable":true})",
+      R"({"op":"fire","action":"set_party_member_string","key":"k","value":"v"})",
+      R"({"op":"fire","action":"refresh_recently_met"})",
+  };
+  for (const char* line : good) {
+    error.clear();
+    EXPECT_TRUE(ScenarioProtocol::ParseCommand(line, &cmd, &error)) << line << ": " << error;
+    EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kFireAction) << line;
+  }
+  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"party_lock","lock":false,"mask":4})", &cmd, &error));
+  EXPECT_FALSE(cmd.flag);
+  EXPECT_EQ(cmd.number, 4u);
+  const char* bad[] = {
+      R"({"op":"fire","action":"invite_users","mode":3})",
+      R"({"op":"fire","action":"party_join","party":0})",
+      R"({"op":"fire","action":"set_join_policy","policy":4})",
+      R"({"op":"fire","action":"voip_mute_self"})",
+      R"({"op":"fire","action":"set_party_string","key":"","value":"v"})",
+      R"({"op":"fire","action":"no_such_node"})",
+  };
+  for (const char* line : bad) {
+    error.clear();
+    EXPECT_FALSE(ScenarioProtocol::ParseCommand(line, &cmd, &error)) << line;
+    EXPECT_FALSE(error.empty()) << line;
+  }
 }
 
 TEST(ScenarioProtocol, InjectedPartyJoinFailureEndsTheJoinWithTheGamesCode) {

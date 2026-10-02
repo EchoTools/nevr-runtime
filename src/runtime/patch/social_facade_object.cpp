@@ -352,9 +352,17 @@ std::uint32_t Ready(void*) {
   return result;
 }
 
-// pnsovr's joinable rule, shared by the Joinable slot and FriendIsInvitable.
+// The host's own wish to be joinable: bit 1 of the flags word, set by Reset and flipped by the game's
+// PartyLock node (0x140189f20 writes it on the social object).
+bool HostWantsJoinable(const void* self) { return ((Get32(self, 0x27C) >> 1) & 1U) != 0; }
+
+// pnsovr's joinable rule (slot 22, 0x18008d430), shared by the Joinable slot and FriendIsInvitable:
+// Ready, then for the host its own flag bit 1, for a member the party's server-side lock, and room
+// for one more.
 bool PartyJoinable(const SocialParty::View& view) {
-  return view.partyId != 0 && !view.joining && !view.locked && view.members.size() < kPartyMaxMembers;
+  if (view.partyId == 0 || view.joining || view.members.size() >= kPartyMaxMembers) return false;
+  const bool host = view.ownerId == view.selfId;
+  return host ? HostWantsJoinable(&g_object) : !view.locked;
 }
 
 std::uint32_t Joinable(void*) {
@@ -441,6 +449,23 @@ void MaybeCreateParty(const void* flagsPointer) {
   SendParty("party create (the game asked for a party)", request);
 }
 
+// Slot 4 JoinableInternal (pnsovr reads the room's joinable state): the party's server-side lock.
+std::uint32_t JoinableInternal(void*) { return CurrentView()->locked ? 0U : 1U; }
+
+// Slot 5 SetJoinableInternal (pnsovr 0x1800926f0, the room's lock/unlock): Lock or Unlock on the server.
+void SetJoinableInternal(void*, std::uint32_t joinable) {
+  SendParty(joinable != 0 ? "party unlock" : "party lock", SocialParty::Global().SetLocked(joinable == 0));
+}
+
+// The host half of pnsovr's per-frame sync (0x1800ac240, the tail of Update): when the host's own
+// joinable bit differs from the room's, set the room's (slot 5).
+void SyncHostJoinable(void* self) {
+  const auto view = CurrentView();
+  if (view->partyId == 0 || view->joining || view->ownerId != view->selfId) return;
+  const std::uint32_t wanted = HostWantsJoinable(self) ? 1U : 0U;
+  if (wanted != JoinableInternal(self)) SetJoinableInternal(self, wanted);
+}
+
 void Update(void* self, const void* flags) {
   FlushJsonTraces();
   // pnsovr's Update retries a deferred join in place of its create decision (0x180095ab4).
@@ -450,6 +475,7 @@ void Update(void* self, const void* flags) {
   else
     MaybeCreateParty(flags);
   PumpParty(self);
+  SyncHostJoinable(self);
   const std::uint32_t callCount = CountCall(g_calls.update);
   if (callCount == 1) {
     Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] facade update call_count=1");
@@ -670,11 +696,11 @@ const char* const kSlotNames[kRealVtableSlotCount] = {
     "ExitGame",
     "OpenFriendRequestUI",
     "OpenSendInviteUI",
-    "OpenNewSendInviteUI",
     "OpenNewSendInviteUI(target)",
+    "OpenNewSendInviteUI",
     "OpenRecvInviteUI",
-    "OpenPartyUI",
     "OpenPartyUI(target)",
+    "OpenPartyUI",
     "RefreshingFriends",
     "RefreshFriends",
     "FriendCount",
@@ -756,8 +782,8 @@ const std::array<Slot, kVtableSlotCount> kVtable = {
     TRACED(1, UnimplementedSlot),  // 01 RemoveMember
     TRACED(2, JoinParty),  // 02 JoinInternal
     TRACED(3, UnimplementedSlot),  // 03 LeaveInternal
-    TRACED(4, UnimplementedSlot),  // 04 JoinableInternal
-    TRACED(5, UnimplementedSlot),  // 05 SetJoinableInternal
+    TRACED(4, JoinableInternal),  // 04 JoinableInternal
+    TRACED(5, SetJoinableInternal),  // 05 SetJoinableInternal
     TRACED(6, UnimplementedSlot),  // 06 PushMemberData
     TRACED(7, UnimplementedSlot),  // 07 ShareData
     TRACED(8, SendInvite),  // 08 SendInvite
@@ -791,11 +817,11 @@ const std::array<Slot, kVtableSlotCount> kVtable = {
     TRACED(36, UnimplementedSlot),  // 36 ExitGame
     TRACED(37, OpenFriendRequestUI),  // 37 OpenFriendRequestUI
     TRACED(38, UnimplementedSlot),  // 38 OpenSendInviteUI
-    TRACED(39, UnimplementedSlot),  // 39 OpenNewSendInviteUI
-    TRACED(40, UnimplementedSlot),  // 40 OpenNewSendInviteUI(target)
+    TRACED(39, UnimplementedSlot),  // 39 OpenNewSendInviteUI(target): 0x140187230 passes (0, account)
+    TRACED(40, UnimplementedSlot),  // 40 OpenNewSendInviteUI: 0x140187330 passes (0)
     TRACED(41, UnimplementedSlot),  // 41 OpenRecvInviteUI
-    TRACED(42, UnimplementedSlot),  // 42 OpenPartyUI
-    TRACED(43, UnimplementedSlot),  // 43 OpenPartyUI(target)
+    TRACED(42, UnimplementedSlot),  // 42 OpenPartyUI(target): 0x1401873f0 passes (0, account)
+    TRACED(43, UnimplementedSlot),  // 43 OpenPartyUI: 0x1401874f0 passes (0)
     TRACED(44, Zero0),  // 44 RefreshingFriends
     TRACED(45, RefreshFriends),  // 45 RefreshFriends
     TRACED(46, FriendCount),  // 46 FriendCount
@@ -969,6 +995,8 @@ PartyStateForTest PartyForTest() {
   out.roomId = ViewRoomId(*view);
   out.joining = view->joining;
   out.joinable = PartyJoinable(*view);
+  out.locked = view->locked;
+  out.joinPolicy = Get32(&g_object, 0x2B4);
   for (const SocialParty::Member& member : view->members) out.memberIds.push_back(member.id);
   return out;
 }

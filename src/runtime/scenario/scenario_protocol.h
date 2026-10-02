@@ -14,7 +14,7 @@
 namespace ScenarioProtocol {
 
 enum class Op { kState, kInjectFriendStatus, kInjectFriendNotify, kInjectPartyInvite, kInjectPartyJoinFailure,
-                kInjectPartyMember, kFireFriendInvite, kFireAddFriend, kFireRespondInvite };
+                kInjectPartyMember, kFireFriendInvite, kFireAddFriend, kFireRespondInvite, kFireAction };
 
 struct Command {
   Op op = Op::kState;
@@ -26,7 +26,12 @@ struct Command {
   std::uint64_t partyId = 0;       // inject PartyInviteNotify
   std::uint64_t inviterId = 0;
   std::uint8_t failureCode = 0;
-  std::uint64_t memberId = 0;      // inject PartyJoinNotify / PartyLeaveNotify (partyId 0 = the current party)    // inject PartyJoinFailure: Nakama's code (1 unknown party, 2 refused)
+  std::uint64_t memberId = 0;      // inject PartyJoinNotify / PartyLeaveNotify (partyId 0 = the current party)
+  std::string action;              // fire <action> (kFireAction): which node's entry point
+  std::uint64_t number = 0;        // fire: mode, mask, policy, index or feature, per action
+  bool flag = false;               // fire: lock, mute or enable, per action
+  std::string key;                 // fire set_party_*_string: the data key
+  std::string value;               // fire set_party_*_string: the value    // inject PartyJoinFailure: Nakama's code (1 unknown party, 2 refused)
   std::uint32_t inviteIndex = 0;   // fire respond_to_invite: the game's invite index (newest first)
   bool accept = false;
 };
@@ -62,6 +67,76 @@ inline const FriendNotify* FindFriendNotify(const std::string& name) {
   for (const FriendNotify& n : kFriendNotifies)
     if (name == n.name) return &n;
   return nullptr;
+}
+
+/// The fire actions beyond the three above: each names a script node whose entry point the control
+/// endpoint drives the way the node does (scenario_control.cpp has the addresses).
+inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, Command* out, std::string* error) {
+  Command cmd;
+  cmd.op = Op::kFireAction;
+  cmd.action = action;
+  const auto u64 = [&](const char* field, std::uint64_t max, std::uint64_t* value) {
+    if (!j.contains(field) || !j[field].is_number_unsigned() || j[field].get<std::uint64_t>() > max) {
+      *error = "fire " + action + " needs an unsigned \"" + field + "\" up to " + std::to_string(max);
+      return false;
+    }
+    *value = j[field].get<std::uint64_t>();
+    return true;
+  };
+  const auto boolean = [&](const char* field, bool* value) {
+    if (!j.contains(field) || !j[field].is_boolean()) {
+      *error = "fire " + action + " needs a boolean \"" + field + "\"";
+      return false;
+    }
+    *value = j[field].get<bool>();
+    return true;
+  };
+  const auto text = [&](const char* field, bool required, std::string* value) {
+    if (!j.contains(field)) {
+      if (required) *error = "fire " + action + " needs a string \"" + field + "\"";
+      return !required;
+    }
+    if (!j[field].is_string() || j[field].get<std::string>().size() >= 0x40) {
+      *error = "fire " + action + ": \"" + field + "\" must be a string shorter than 64 characters";
+      return false;
+    }
+    *value = j[field].get<std::string>();
+    return true;
+  };
+  bool ok = false;
+  if (action == "invite_users") {
+    ok = u64("mode", 2, &cmd.number) && text("user", false, &cmd.user);
+  } else if (action == "request_profile") {
+    ok = text("user", true, &cmd.user) && !cmd.user.empty();
+    if (!ok && error->empty()) *error = "fire request_profile needs a non-empty \"user\" (an id string or \"self\")";
+  } else if (action == "party_join") {
+    ok = u64("party", UINT64_MAX, &cmd.partyId) && cmd.partyId != 0;
+    if (!ok && error->empty()) *error = "fire party_join needs a nonzero \"party\"";
+  } else if (action == "party_lock") {
+    cmd.number = 1;
+    ok = boolean("lock", &cmd.flag) && (!j.contains("mask") || u64("mask", 0xFF, &cmd.number));
+  } else if (action == "set_join_policy") {
+    ok = u64("policy", 3, &cmd.number);
+  } else if (action == "voip_mute_self") {
+    ok = boolean("mute", &cmd.flag);
+  } else if (action == "social_groups_set_active") {
+    ok = u64("index", 0xFFFF, &cmd.number);
+  } else if (action == "enable_social_feature") {
+    ok = u64("feature", 4, &cmd.number) && boolean("enable", &cmd.flag);
+  } else if (action == "set_party_member_string" || action == "set_party_string") {
+    ok = text("key", true, &cmd.key) && text("value", true, &cmd.value) && !cmd.key.empty();
+    if (!ok && error->empty()) *error = "fire " + action + " needs a non-empty \"key\"";
+  } else if (action == "refresh_recently_met") {
+    ok = true;
+  } else {
+    *error = "fire supports friend_invite, add_friend, respond_to_invite, invite_users, request_profile, party_join, "
+             "party_lock, set_join_policy, voip_mute_self, social_groups_set_active, enable_social_feature, "
+             "set_party_member_string, set_party_string and refresh_recently_met";
+    return false;
+  }
+  if (!ok) return false;
+  *out = cmd;
+  return true;
 }
 
 /// Parses one command line. On failure returns false and sets `error` to a message that names
@@ -173,10 +248,7 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
       *out = cmd;
       return true;
     }
-    if (action != "friend_invite" && action != "add_friend") {
-      *error = "fire supports action \"friend_invite\", \"add_friend\" and \"respond_to_invite\"";
-      return false;
-    }
+    if (action != "friend_invite" && action != "add_friend") return ParseFireAction(j, action, out, error);
     if (!j.contains("user") || !j["user"].is_string() || j["user"].get<std::string>().empty() ||
         j["user"].get<std::string>().size() >= 40) {
       *error = "fire " + action + " needs a \"user\" id string shorter than 40 characters";

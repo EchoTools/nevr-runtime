@@ -468,10 +468,14 @@ class State {
     return out;
   }
 
+  /// Slot 5 SetJoinableInternal (pnsovr 0x1800926f0): lock or unlock the party on the server. Asked
+  /// once per change; the server's Lock/Unlock success or notify then sets the party's locked state.
   std::vector<Message> SetLocked(bool locked) {
     std::lock_guard<std::mutex> guard(mutex_);
     std::vector<Message> out;
-    if (partyId_ == 0) return out;
+    const std::int8_t want = locked ? 1 : 0;
+    if (partyId_ == 0 || lockRequested_ == want) return out;
+    lockRequested_ = want;
     out.push_back(Standard(locked ? kLockRequest : kUnlockRequest, SelfUuid(), 0));
     return out;
   }
@@ -572,6 +576,7 @@ class State {
     } else if ((n == "PartyLockNotify" || n == "PartyUnlockNotify" || n == "PartyLockSuccess" ||
                 n == "PartyUnlockSuccess") && len >= 8 && u64(0) == partyId_) {
       locked_ = n.find("Unlock") == std::string::npos;
+      lockRequested_ = locked_ ? 1 : 0;
       events_.push_back(MakeEvent(EventKind::kUpdated));
     } else if ((n == "PartyUpdateNotify") && len >= 8 && u64(0) == partyId_) {
       events_.push_back(MakeEvent(EventKind::kUpdated));
@@ -691,6 +696,7 @@ class State {
     joining_ = false;
     joiningPartyId_ = 0;
     locked_ = false;
+    lockRequested_ = -1;
     members_.clear();
     pendingInvites_.clear();
   }
@@ -707,6 +713,7 @@ class State {
   std::uint64_t joinInviteParty_ = 0;  // a join that came from an invite, and who sent it
   std::uint64_t joinInviter_ = 0;
   bool locked_ = false;
+  std::int8_t lockRequested_ = -1;  // the lock state last asked of the server, -1 none
   std::vector<Member> members_;
   std::vector<Invite> invites_;
   std::map<std::uint64_t, std::string> names_;  // display names from profile replies

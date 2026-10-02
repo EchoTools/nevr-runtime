@@ -55,6 +55,13 @@ class InviteStateTest(unittest.TestCase):
         ok, _ = run_scenario.state_matches({"invites": []}, {"state_until": {"invite_count": 0}})
         self.assertTrue(ok)
 
+    def test_path_equals(self):
+        state = {"game": {"self_muted": True, "social_features": 5}, "party": {"locked": False}}
+        self.assertTrue(run_scenario.state_matches(state, {"state_until": {"path": "game.self_muted", "equals": True}})[0])
+        self.assertFalse(run_scenario.state_matches(state, {"state_until": {"path": "party.locked", "equals": True}})[0])
+        self.assertTrue(run_scenario.state_matches(state, {"state_until": {"path": "game.social_features", "equals": "5"}})[0])
+        self.assertFalse(run_scenario.state_matches(state, {"state_until": {"path": "game.missing", "equals": 0}})[0])
+
     def test_party_members(self):
         state = {"party": {"id": 7, "members": [1, 2]}}
         self.assertTrue(run_scenario.state_matches(state, {"state_until": {"party_members": 2}})[0])

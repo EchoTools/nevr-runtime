@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -21,6 +22,7 @@
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
 #include "nevr_common.h"
+#include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/config.h"
@@ -72,13 +74,10 @@ using DeferredCallU32Fn = void (*)(void* queue, void* target, void* method, std:
 using SnsUserIdFn = std::uint64_t* (*)(std::uint64_t* out, const char* user);
 using DeferredCallFn = void (*)(void* queue, void* target, void* method, std::uint64_t* args);
 
+// A fire runs on the game thread (OnFrame), where the script nodes run.
 struct FireRequest {
-  bool addFriend = false;  // false: friend_invite (R15NetPartySendInviteNode); true: add_friend (R15NetAddFriendNode)
-  bool respond = false;    // respond_to_invite (R15NetPartyRespondToInviteNode)
-  std::uint32_t inviteIndex = 0;
-  bool accept = false;
-  std::string user;
-  std::promise<std::string> result;  // empty string = posted; otherwise the reason it was not
+  std::function<std::string()> job;  // returns "" when done, else why not
+  std::promise<std::string> result;
 };
 
 std::atomic<bool> g_stop{false};
@@ -155,6 +154,219 @@ std::string FireRespondInvite(std::uint32_t index, bool accept) {
   return std::string();
 }
 
+// ---------------------------------------------------------------------------------------------
+// Script-node entry points beyond the three above, each measured in ReVault (echovr.exe) and done the
+// way the node's run function does it: post its handler on the NetGame deferred queue, or call it
+// where the node calls it directly (those nodes call directly whenever they run on the game thread
+// with the queue's direct flag set, so a call here from the game thread is the same path).
+// docs/design/2026-10-01-social-features-test-plan.md has the node catalog.
+// ---------------------------------------------------------------------------------------------
+constexpr std::uint64_t kDeferredCallNoArgVA = 0x140198460;
+constexpr std::array<std::uint8_t, 16> kDeferredCallNoArgPrologue = {0x40, 0x55, 0x56, 0x57, 0x48, 0x83, 0xEC, 0x20,
+                                                                     0x83, 0xB9, 0xF8, 0x01, 0x00, 0x00, 0x00, 0x49};
+using DeferredCallNoArgFn = void (*)(void* queue, void* target, void* method);
+
+// R15NetInviteUsersNode (0x140ddc700): mode 0 -> 0x140187170 (slot 38); mode 1 -> 0x140187330 (slot 40) or,
+// with a user, 0x140187230 (slot 39); mode 2 -> 0x1401874f0 (slot 43) or, with a user, 0x1401873f0 (slot 42).
+constexpr std::array<std::uint8_t, 16> kInviteUsersNoArgPrologue = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B,
+                                                                    0xD9, 0x48, 0x8B, 0x89, 0xD0, 0x28, 0x00, 0x00};
+constexpr std::array<std::uint8_t, 16> kInviteUsersUserPrologue = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83,
+                                                                   0xEC, 0x20, 0x48, 0x8B, 0xD9, 0x48, 0x8B, 0xFA};
+// R15NetRequestProfileNode (0x140de01f0) posts 0x1401a1930 with the 16-byte user id.
+constexpr std::uint64_t kRequestProfileHandlerVA = 0x1401A1930;
+constexpr std::array<std::uint8_t, 16> kRequestProfilePrologue = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74,
+                                                                  0x24, 0x18, 0x48, 0x89, 0x7C, 0x24, 0x20, 0x55};
+// R15NetPartyJoinNode (0x140ddd3a0) calls 0x140189570(netGame, party id) -> slot 2 JoinInternal.
+constexpr std::uint64_t kPartyJoinHandlerVA = 0x140189570;
+constexpr std::array<std::uint8_t, 16> kPartyJoinPrologue = {0x48, 0x8B, 0x89, 0xC8, 0x47, 0x06, 0x00, 0x48,
+                                                             0x85, 0xC9, 0x0F, 0x85, 0x90, 0x0D, 0x48, 0x00};
+using PartyJoinFn = void (*)(void* netGame, std::uint64_t partyId);
+// R15NetPartyLockNode (0x140ddd870) calls 0x140189f20(netGame, lock, mask): it sets or clears the mask
+// in the byte at netGame+0x647ea and, when that byte turns zero/nonzero, sets/clears bit 1 of the
+// social object's flags word (the host's joinable bit).
+constexpr std::uint64_t kPartyLockHandlerVA = 0x140189F20;
+constexpr std::array<std::uint8_t, 16> kPartyLockPrologue = {0x45, 0x33, 0xC9, 0x41, 0x0F, 0xB6, 0xC0, 0x44,
+                                                             0x38, 0x89, 0xEA, 0x47, 0x06, 0x00, 0x45, 0x8B};
+using PartyLockFn = void (*)(void* netGame, std::uint32_t lock, std::uint8_t mask);
+// R15NetPartySetJoinPolicyNode (0x140dde110) calls 0x14018ab90(netGame, policy) -> slot 16.
+constexpr std::uint64_t kSetJoinPolicyHandlerVA = 0x14018AB90;
+constexpr std::array<std::uint8_t, 16> kSetJoinPolicyPrologue = {0x40, 0x53, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x8B,
+                                                                 0xD9, 0x48, 0x8B, 0x89, 0xC8, 0x47, 0x06, 0x00};
+using SetJoinPolicyFn = void (*)(void* netGame, std::uint32_t policy);
+// R15NetVoipMuteSelfNode (0x140de5fc0) posts 0x1401b24a0 with the mute flag (u32 deferred call).
+constexpr std::uint64_t kMuteSelfHandlerVA = 0x1401B24A0;
+constexpr std::array<std::uint8_t, 16> kMuteSelfPrologue = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x56, 0x48, 0x83,
+                                                            0xEC, 0x20, 0x48, 0x83, 0x3D, 0x56, 0x97, 0x51};
+// R15NetSocialGroupsSetActiveNode (0x140d8eba0): groups = [netGame+0x2a00] (0x1401b64f0), range-checks
+// the index against groups+0x40, then posts 0x1401adf90(groups, index) on the groups' queue.
+constexpr std::uint64_t kSocialGroupsVA = 0x1401B64F0;
+constexpr std::array<std::uint8_t, 8> kSocialGroupsPrologue = {0x48, 0x8B, 0x81, 0x00, 0x2A, 0x00, 0x00, 0xC3};
+constexpr std::uint64_t kSetActiveGroupHandlerVA = 0x1401ADF90;
+constexpr std::array<std::uint8_t, 16> kSetActiveGroupPrologue = {0x48, 0x89, 0x5C, 0x24, 0x18, 0x57, 0x48, 0x83,
+                                                                  0xEC, 0x30, 0x8B, 0x41, 0x0C, 0x48, 0x8B, 0xD9};
+using GroupsFn = void* (*)(void* netGame);
+using SetActiveGroupFn = void (*)(void* groups, std::uint64_t index);
+// R15NetEnableSocialFeatureNode (0x140ddb650) maps feature 0..4 to mask 1,2,4,8,0xff and calls
+// 0x140cd3850(mask, enable), which sets or clears the mask in the u16 at 0x142025bf4.
+constexpr std::uint64_t kEnableFeatureVA = 0x140CD3850;
+constexpr std::array<std::uint8_t, 16> kEnableFeaturePrologue = {0x44, 0x0F, 0xB7, 0xC1, 0x85, 0xD2, 0x74, 0x09,
+                                                                 0x66, 0x44, 0x09, 0x05, 0x94, 0x23, 0x35, 0x01};
+constexpr std::uint64_t kSocialFeaturesVA = 0x142025BF4;
+using EnableFeatureFn = void (*)(std::uint32_t mask, std::uint32_t enable);
+// R15NetSetPartyMemberStringNode / R15NetSetPartyStringNode post 0x1401b07e0 / 0x1401b0940 with
+// (netGame, key, value): the member one writes into the JSON slot 30 MemberDataWritable returns, the
+// party one into the party JSON (host only).
+constexpr std::uint64_t kSetMemberStringHandlerVA = 0x1401B07E0;
+constexpr std::array<std::uint8_t, 16> kSetMemberStringPrologue = {0x48, 0x89, 0x6C, 0x24, 0x18, 0x48, 0x89, 0x74,
+                                                                   0x24, 0x20, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48};
+constexpr std::uint64_t kSetPartyStringHandlerVA = 0x1401B0940;
+constexpr std::array<std::uint8_t, 16> kSetPartyStringPrologue = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74,
+                                                                  0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x20, 0x48};
+using SetStringFn = void (*)(void* netGame, const char* key, const char* value);
+// R15NetRefreshRecentlyMetUsersNode (0x140ddfcc0) posts 0x14019b870 (no argument) -> slot 57.
+constexpr std::uint64_t kRefreshRecentlyMetHandlerVA = 0x14019B870;
+constexpr std::array<std::uint8_t, 16> kRefreshRecentlyMetPrologue = {0x48, 0x8B, 0x89, 0xC8, 0x47, 0x06, 0x00, 0x48,
+                                                                      0x85, 0xC9, 0x74, 0x0A, 0x48, 0x8B, 0x01, 0x48};
+constexpr std::uintptr_t kVoipFlagsOffset = 0x2DA0;  // netGame: pointer to the u64 whose bit 38 is "self muted"
+constexpr std::uint64_t kSelfMutedBit = 1ULL << 38;
+
+void* Base() { return EchoVR::g_GameBaseAddress; }
+
+std::string PostNoArg(void* netGame, void* handler, std::string* error) {
+  auto* defer = reinterpret_cast<DeferredCallNoArgFn>(
+      Checked(kDeferredCallNoArgVA, kDeferredCallNoArgPrologue, "no-argument deferred call", error));
+  if (defer == nullptr || handler == nullptr) return *error;
+  defer(static_cast<std::uint8_t*>(netGame) + kDeferredQueueOffset, netGame, handler);
+  return std::string();
+}
+
+std::string PostUserId(void* netGame, void* handler, const std::string& user, std::string* error) {
+  auto* snsUserId = reinterpret_cast<SnsUserIdFn>(Checked(kSnsUserIdVA, kSnsUserIdPrologue, "SNSUserID", error));
+  auto* defer = reinterpret_cast<DeferredCallFn>(Checked(kDeferredCallVA, kDeferredCallPrologue, "deferred call", error));
+  if (snsUserId == nullptr || defer == nullptr || handler == nullptr) return *error;
+  std::array<std::uint64_t, 2> xpid{};
+  snsUserId(xpid.data(), user.c_str());
+  if ((xpid[0] & 0xF) == 0 || xpid[1] == 0) return "SNSUserID did not parse \"" + user + "\" into a provider and account";
+  defer(static_cast<std::uint8_t*>(netGame) + kDeferredQueueOffset, netGame, handler, xpid.data());
+  return std::string();
+}
+
+// Game thread.
+std::string FireAction(const ScenarioProtocol::Command& cmd) {
+  std::string error;
+  void* netGame = NetGame();
+  if (netGame == nullptr) return "no NetGame yet";
+  std::string user = cmd.user;
+  if (user == "self") {
+    const std::uint64_t self = SocialParty::Global().Snapshot().selfId;
+    if (self == 0) return "no local user yet";
+    user = "OVR-ORG-" + std::to_string(self);
+  }
+  Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] fire %s user=%s number=%llu flag=%d party=%llu key=%s",
+      cmd.action.c_str(), user.c_str(), static_cast<unsigned long long>(cmd.number), cmd.flag ? 1 : 0,
+      static_cast<unsigned long long>(cmd.partyId), cmd.key.c_str());
+  if (cmd.action == "invite_users") {
+    static constexpr std::uint64_t kNoArg[3] = {0x140187170, 0x140187330, 0x1401874F0};
+    if (cmd.number == 0 || user.empty())
+      return PostNoArg(netGame, Checked(kNoArg[cmd.number], kInviteUsersNoArgPrologue, "invite users handler", &error), &error);
+    const std::uint64_t va = cmd.number == 1 ? 0x140187230 : 0x1401873F0;
+    return PostUserId(netGame, Checked(va, kInviteUsersUserPrologue, "invite users handler", &error), user, &error);
+  }
+  if (cmd.action == "request_profile")
+    return PostUserId(netGame, Checked(kRequestProfileHandlerVA, kRequestProfilePrologue, "request profile handler", &error),
+                      user, &error);
+  if (cmd.action == "party_join") {
+    auto* join = reinterpret_cast<PartyJoinFn>(Checked(kPartyJoinHandlerVA, kPartyJoinPrologue, "party join handler", &error));
+    if (join == nullptr) return error;
+    join(netGame, cmd.partyId);
+    return std::string();
+  }
+  if (cmd.action == "party_lock") {
+    auto* lock = reinterpret_cast<PartyLockFn>(Checked(kPartyLockHandlerVA, kPartyLockPrologue, "party lock handler", &error));
+    if (lock == nullptr) return error;
+    lock(netGame, cmd.flag ? 1U : 0U, static_cast<std::uint8_t>(cmd.number));
+    return std::string();
+  }
+  if (cmd.action == "set_join_policy") {
+    auto* policy = reinterpret_cast<SetJoinPolicyFn>(
+        Checked(kSetJoinPolicyHandlerVA, kSetJoinPolicyPrologue, "set join policy handler", &error));
+    if (policy == nullptr) return error;
+    policy(netGame, static_cast<std::uint32_t>(cmd.number));
+    return std::string();
+  }
+  if (cmd.action == "voip_mute_self") {
+    auto* defer = reinterpret_cast<DeferredCallU32Fn>(
+        Checked(kDeferredCallU32VA, kDeferredCallU32Prologue, "int deferred call", &error));
+    void* handler = Checked(kMuteSelfHandlerVA, kMuteSelfPrologue, "mute self handler", &error);
+    if (defer == nullptr || handler == nullptr) return error;
+    defer(static_cast<std::uint8_t*>(netGame) + kDeferredQueueOffset, netGame, handler, cmd.flag ? 1U : 0U);
+    return std::string();
+  }
+  if (cmd.action == "social_groups_set_active") {
+    auto* groupsOf = reinterpret_cast<GroupsFn>(Checked(kSocialGroupsVA, kSocialGroupsPrologue, "social groups getter", &error));
+    auto* setActive = reinterpret_cast<SetActiveGroupFn>(
+        Checked(kSetActiveGroupHandlerVA, kSetActiveGroupPrologue, "set active group handler", &error));
+    if (groupsOf == nullptr || setActive == nullptr) return error;
+    void* groups = groupsOf(netGame);
+    if (groups == nullptr) return "no social groups object";
+    std::uint64_t count = 0;
+    std::memcpy(&count, static_cast<const std::uint8_t*>(groups) + 0x40, sizeof(count));
+    if (cmd.number >= count) return "group index " + std::to_string(cmd.number) + " >= " + std::to_string(count) + " groups";
+    setActive(groups, cmd.number);
+    return std::string();
+  }
+  if (cmd.action == "enable_social_feature") {
+    static constexpr std::uint32_t kMasks[5] = {1, 2, 4, 8, 0xFF};
+    auto* enable = reinterpret_cast<EnableFeatureFn>(
+        Checked(kEnableFeatureVA, kEnableFeaturePrologue, "enable social feature", &error));
+    if (enable == nullptr) return error;
+    enable(kMasks[cmd.number], cmd.flag ? 1U : 0U);
+    return std::string();
+  }
+  if (cmd.action == "set_party_member_string" || cmd.action == "set_party_string") {
+    const bool member = cmd.action == "set_party_member_string";
+    auto* set = reinterpret_cast<SetStringFn>(
+        member ? Checked(kSetMemberStringHandlerVA, kSetMemberStringPrologue, "set member string handler", &error)
+               : Checked(kSetPartyStringHandlerVA, kSetPartyStringPrologue, "set party string handler", &error));
+    if (set == nullptr) return error;
+    std::array<char, 0x40> key{};
+    std::array<char, 0x40> value{};
+    std::memcpy(key.data(), cmd.key.data(), cmd.key.size());
+    std::memcpy(value.data(), cmd.value.data(), cmd.value.size());
+    set(netGame, key.data(), value.data());
+    return std::string();
+  }
+  if (cmd.action == "refresh_recently_met")
+    return PostNoArg(netGame, Checked(kRefreshRecentlyMetHandlerVA, kRefreshRecentlyMetPrologue, "refresh recently met handler",
+                                      &error), &error);
+  return "unknown action " + cmd.action;
+}
+
+// What the game itself holds for the actions above, for the runner to check against.
+nlohmann::json GameStateJson() {
+  nlohmann::json out = nlohmann::json::object();
+  void* netGame = NetGame();
+  std::uint16_t features = 0;
+  std::memcpy(&features, static_cast<const std::uint8_t*>(Base()) + (kSocialFeaturesVA - 0x140000000ULL), sizeof(features));
+  out["social_features"] = features;
+  if (netGame == nullptr) return out;
+  const auto* bytes = static_cast<const std::uint8_t*>(netGame);
+  const std::uint64_t* voipFlags = nullptr;
+  std::memcpy(&voipFlags, bytes + kVoipFlagsOffset, sizeof(voipFlags));
+  if (voipFlags != nullptr) out["self_muted"] = (*voipFlags & kSelfMutedBit) != 0;
+  const void* groups = nullptr;
+  std::memcpy(&groups, bytes + 0x2A00, sizeof(groups));
+  if (groups != nullptr) {
+    std::uint32_t active = 0;
+    std::uint64_t count = 0;
+    std::memcpy(&active, static_cast<const std::uint8_t*>(groups) + 0xC, sizeof(active));
+    std::memcpy(&count, static_cast<const std::uint8_t*>(groups) + 0x40, sizeof(count));
+    out["social_group_active"] = active;
+    out["social_group_count"] = count;
+  }
+  return out;
+}
+
 nlohmann::json StateJson() {
   nlohmann::json out;
   out["ok"] = true;
@@ -162,6 +374,7 @@ nlohmann::json StateJson() {
   const SocialFacade::PartyStateForTest party = SocialFacade::PartyForTest();
   out["party"] = {{"id", party.partyId},           {"room", party.roomId},
                   {"joining", party.joining},      {"joinable", party.joinable},
+                  {"locked", party.locked},        {"join_policy", party.joinPolicy},
                   {"members", party.memberIds}};
   nlohmann::json friends = nlohmann::json::array();
   std::uint64_t id = 0;
@@ -176,6 +389,7 @@ nlohmann::json StateJson() {
     invites.push_back({{"party", invite.partyId}, {"sender", invite.senderId}});
   }
   out["invites"] = invites;
+  out["game"] = GameStateJson();
   return out;
 }
 
@@ -232,13 +446,15 @@ nlohmann::json Handle(const std::string& line) {
     }
     case ScenarioProtocol::Op::kFireFriendInvite:
     case ScenarioProtocol::Op::kFireAddFriend:
-    case ScenarioProtocol::Op::kFireRespondInvite: {
+    case ScenarioProtocol::Op::kFireRespondInvite:
+    case ScenarioProtocol::Op::kFireAction: {
       auto request = std::make_shared<FireRequest>();
-      request->addFriend = cmd.op == ScenarioProtocol::Op::kFireAddFriend;
-      request->respond = cmd.op == ScenarioProtocol::Op::kFireRespondInvite;
-      request->inviteIndex = cmd.inviteIndex;
-      request->accept = cmd.accept;
-      request->user = cmd.user;
+      if (cmd.op == ScenarioProtocol::Op::kFireAction)
+        request->job = [cmd] { return FireAction(cmd); };
+      else if (cmd.op == ScenarioProtocol::Op::kFireRespondInvite)
+        request->job = [cmd] { return FireRespondInvite(cmd.inviteIndex, cmd.accept); };
+      else
+        request->job = [cmd] { return FireNode(cmd.op == ScenarioProtocol::Op::kFireAddFriend, cmd.user); };
       std::future<std::string> done = request->result.get_future();
       {
         std::lock_guard<std::mutex> lock(g_fireMutex);
@@ -331,8 +547,7 @@ void OnFrame() {
     std::lock_guard<std::mutex> lock(g_fireMutex);
     pending.swap(g_fireQueue);
   }
-  for (const auto& request : pending) request->result.set_value(request->respond ? FireRespondInvite(request->inviteIndex, request->accept)
-                                               : FireNode(request->addFriend, request->user));
+  for (const auto& request : pending) request->result.set_value(request->job());
 }
 
 void Stop() {
