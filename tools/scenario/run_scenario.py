@@ -521,8 +521,8 @@ class Run:
         return json.dumps(reply)[:160]
 
     def do_peer(self, spec: dict) -> str:
-        """A local peer account acts: login (implicit, as `headset` if given), create_party, join,
-        set_policy, lock, invite, share_member/share_party (arg: JSON text), wait_data (arg: text the
+        """A local peer account acts: login (implicit, as `headset` if given), create_party, join, leave,
+        disconnect (closes the socket, no leave), set_policy, lock, invite, share_member/share_party (arg: JSON text), wait_data (arg: text the
         received PartyDataNotify's JSON contains). `arg` "client" is this machine's account id; `save`
         keeps the result as ${name}."""
         if self.scenario.get("server") != "local":
@@ -551,6 +551,12 @@ class Run:
                 result = peer.create_party()
             elif action == "join":
                 result = peer.join(int(arg))
+            elif action == "leave":
+                result = peer.leave()
+            elif action == "disconnect":
+                peer.close()  # a game client that goes away sends no leave
+                del self.peers[number]
+                result = "disconnected"
             elif action == "set_policy":
                 result = peer.set_policy(int(arg))
             elif action == "lock":

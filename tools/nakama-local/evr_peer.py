@@ -177,6 +177,12 @@ class Peer:
         self.standard(JOIN_REQUEST, party_id)
         return self._outcome(start, "PartyJoinSuccess", "PartyJoinFailure")
 
+    def leave(self) -> str:
+        start = time.monotonic()
+        self.standard(LEAVE_REQUEST, self.party_id)
+        self.wait_for("PartyLeaveSuccess", since=start)
+        return "PartyLeaveSuccess"
+
     def set_policy(self, policy: int) -> None:
         start = time.monotonic()
         self.standard(SET_JOIN_POLICY_REQUEST, policy)
