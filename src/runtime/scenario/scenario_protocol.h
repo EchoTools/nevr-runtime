@@ -14,7 +14,7 @@
 namespace ScenarioProtocol {
 
 enum class Op { kState, kInjectFriendStatus, kInjectFriendNotify, kInjectPartyInvite, kInjectPartyJoinFailure,
-                kInjectPartyMember, kInjectFriendPresence, kFireFriendInvite, kFireAddFriend, kFireRespondInvite,
+                kInjectPartyMember, kInjectFriendPresence, kInjectPartyData, kFireFriendInvite, kFireAddFriend, kFireRespondInvite,
                 kFireAction };
 
 struct Command {
@@ -213,6 +213,22 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
       *out = cmd;
       return true;
     }
+    if (msg == "PartyDataNotify") {
+      // The server's party data (proposal §3): "member" 0 or absent is the party's, "json" an object
+      // (or its text), "party" defaults to the current party.
+      if ((j.contains("member") && !j["member"].is_number_unsigned()) ||
+          (j.contains("party") && !j["party"].is_number_unsigned()) || !j.contains("json") ||
+          !(j["json"].is_object() || j["json"].is_string())) {
+        *error = "inject PartyDataNotify needs \"json\" (an object or its text), optional unsigned \"member\" and \"party\"";
+        return false;
+      }
+      cmd.op = Op::kInjectPartyData;
+      cmd.memberId = j.value("member", std::uint64_t{0});
+      cmd.partyId = j.value("party", std::uint64_t{0});
+      cmd.value = j["json"].is_string() ? j["json"].get<std::string>() : j["json"].dump();
+      *out = cmd;
+      return true;
+    }
     if (msg == "PartyJoinSuccess") {
       if (!j.contains("party") || !j["party"].is_number_unsigned() || j["party"].get<std::uint64_t>() == 0 ||
           !j.contains("owner") || !j["owner"].is_number_unsigned() || j["owner"].get<std::uint64_t>() == 0) {
@@ -240,7 +256,7 @@ inline bool ParseCommand(const std::string& line, Command* out, std::string* err
     }
     const FriendNotify* notify = FindFriendNotify(msg);
     if (msg != "FriendStatusNotify" && notify == nullptr) {
-      *error = "inject supports msg \"FriendStatusNotify\", \"PartyInviteNotify\", \"PartyJoinSuccess\", \"PartyJoinFailure\", \"PartyJoinNotify\", \"PartyLeaveNotify\" and the friend notifies (FriendAcceptNotify, "
+      *error = "inject supports msg \"FriendStatusNotify\", \"PartyDataNotify\", \"PartyInviteNotify\", \"PartyJoinSuccess\", \"PartyJoinFailure\", \"PartyJoinNotify\", \"PartyLeaveNotify\" and the friend notifies (FriendAcceptNotify, "
                "FriendAcceptSuccess, FriendInviteNotify, FriendInviteSuccess, FriendRemoveNotify, "
                "FriendWithdrawnNotify, FriendRejectNotify)";
       return false;
@@ -341,6 +357,19 @@ inline std::string BuildFriendPresenceNotify(std::uint64_t friendId, std::uint64
   SocialParty::AppendLe(m.payload, 0, 6);
   SocialParty::AppendLe(m.payload, text.size(), 2);
   m.payload += text;
+  return SocialParty::Frame(m);
+}
+
+/// SNSPartyDataNotify (social_party.h kPartyDataNotify): PartyID(8) MemberID(8) Seq(4) JsonLen(4) Json.
+inline std::string BuildPartyDataNotify(std::uint64_t partyId, std::uint64_t memberId, std::uint32_t seq,
+                                        const std::string& json) {
+  SocialParty::Message m;
+  m.symbol = SocialParty::kPartyDataNotify;
+  SocialParty::AppendLe(m.payload, partyId, 8);
+  SocialParty::AppendLe(m.payload, memberId, 8);
+  SocialParty::AppendLe(m.payload, seq, 4);
+  SocialParty::AppendLe(m.payload, json.size(), 4);
+  m.payload += json;
   return SocialParty::Frame(m);
 }
 

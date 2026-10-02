@@ -1335,3 +1335,308 @@ TEST(ScenarioProtocol, InjectedPartyJoinFailureEndsTheJoinWithTheGamesCode) {
   EXPECT_EQ(events[0].kind, SocialParty::EventKind::kJoinFailed);
   EXPECT_EQ(events[0].code, 4U) << "Nakama's refused (2) is the game's not joinable (4)";
 }
+
+// ---------------------------------------------------------------------------------------------
+// Party data (docs/design/2026-10-01-social-nakama-proposal.md §3)
+// ---------------------------------------------------------------------------------------------
+namespace partydata {
+
+std::string Json(const SocialParty::JsonText& text) { return text != nullptr ? *text : std::string(); }
+
+TEST(SocialPartyData, DataForThePartyBeingJoinedIsHeldAndNamesEveryMemberOnSuccess) {
+  SocialParty::State party;
+  party.SetSelf(100);
+  ASSERT_FALSE(party.Join(9).empty());
+  EXPECT_EQ(party.ReceiveData(9, 0, R"({"lobbyid":"L"})"), SocialParty::DataOutcome::kHeld);
+  EXPECT_EQ(party.ReceiveData(9, 300, R"({"headsettype":3})"), SocialParty::DataOutcome::kHeld);
+  EXPECT_EQ(party.ReceiveData(9, 200, R"({"headsettype":2})"), SocialParty::DataOutcome::kHeld);
+  EXPECT_EQ(party.ReceiveData(9, 100, R"({"mine":1})"), SocialParty::DataOutcome::kOwnIgnored);
+  EXPECT_EQ(party.ReceiveData(5, 200, "{}"), SocialParty::DataOutcome::kOtherParty);
+  party.DrainEvents();
+  ASSERT_TRUE(FeedParty(party, "PartyJoinSuccess", U64s({9, 200})));
+  const SocialParty::View view = party.Snapshot();
+  ASSERT_EQ(view.members.size(), 3U) << "the leader and the member only the data named";
+  EXPECT_EQ(view.members[1].id, 200U);
+  EXPECT_EQ(Json(view.members[1].data), R"({"headsettype":2})");
+  EXPECT_EQ(view.members[2].id, 300U);
+  EXPECT_EQ(Json(view.members[2].data), R"({"headsettype":3})");
+  EXPECT_EQ(Json(view.partyData), R"({"lobbyid":"L"})");
+  const auto events = party.DrainEvents();
+  ASSERT_EQ(events.size(), 3U);
+  EXPECT_EQ(events[0].kind, SocialParty::EventKind::kJoined);
+  EXPECT_EQ(events[1].kind, SocialParty::EventKind::kMemberJoined);
+  EXPECT_EQ(events[1].index, 1U);
+  EXPECT_EQ(events[2].kind, SocialParty::EventKind::kMemberJoined);
+  EXPECT_EQ(events[2].index, 2U);
+
+  // In the party: an unknown member's data adds them (pnsovr's data packet did), a known one's
+  // replaces their data, and a JoinNotify for someone already added changes nothing.
+  EXPECT_EQ(party.ReceiveData(9, 400, R"({"headsettype":1})"), SocialParty::DataOutcome::kMemberAdded);
+  EXPECT_EQ(party.ReceiveData(9, 200, R"({"headsettype":4})"), SocialParty::DataOutcome::kMember);
+  ASSERT_TRUE(FeedParty(party, "PartyJoinNotify", U64s({9, 400})));
+  const SocialParty::View after = party.Snapshot();
+  ASSERT_EQ(after.members.size(), 4U);
+  EXPECT_EQ(Json(after.members[1].data), R"({"headsettype":4})");
+  const auto more = party.DrainEvents();
+  ASSERT_EQ(more.size(), 1U);
+  EXPECT_EQ(more[0].kind, SocialParty::EventKind::kMemberJoined);
+  EXPECT_EQ(more[0].index, 3U);
+  ASSERT_TRUE(FeedParty(party, "PartyLeaveNotify", U64s({9, 200})));
+  EXPECT_EQ(party.Snapshot().members[1].id, 300U) << "the list closes up; the data goes with its member";
+  EXPECT_EQ(Json(party.Snapshot().members[1].data), R"({"headsettype":3})");
+}
+
+TEST(SocialPartyData, AFailedJoinForgetsTheHeldDataAndTheLeaderIgnoresThePartysOwn) {
+  SocialParty::State party;
+  party.SetSelf(100);
+  ASSERT_FALSE(party.Join(11).empty());
+  EXPECT_EQ(party.ReceiveData(11, 200, "{}"), SocialParty::DataOutcome::kHeld);
+  ASSERT_TRUE(FeedParty(party, "PartyJoinFailure", U64s({11}) + std::string(1, '\x05')));
+  ASSERT_FALSE(party.Join(11).empty());
+  ASSERT_TRUE(FeedParty(party, "PartyJoinSuccess", U64s({11, 500})));
+  ASSERT_EQ(party.Snapshot().members.size(), 2U) << "only the leader: the failed join's data is gone";
+  EXPECT_EQ(party.Snapshot().members[1].data, nullptr);
+
+  SocialParty::State leader;
+  leader.SetSelf(100);
+  ASSERT_TRUE(FeedParty(leader, "PartyCreateSuccess", U64s({7, 100})));
+  EXPECT_EQ(leader.ReceiveData(7, 0, "{}"), SocialParty::DataOutcome::kOwnIgnored);
+  EXPECT_EQ(leader.Snapshot().partyData, nullptr);
+}
+
+TEST(SocialPartyData, ShareDataIsTheRequestNakamaReadsNumberedPerSend) {
+  SocialParty::State party;
+  party.SetSelf(100);
+  EXPECT_TRUE(party.ShareData(SocialParty::kPartyDataScopeMember, "{}").empty()) << "no party, nothing to share";
+  ASSERT_TRUE(FeedParty(party, "PartyJoinSuccess", U64s({9, 200})));
+  EXPECT_TRUE(party.ShareData(SocialParty::kPartyDataScopeParty, "{}").empty()) << "only the leader shares the party's";
+  const auto first = party.ShareData(SocialParty::kPartyDataScopeMember, R"({"k":"v"})");
+  const auto second = party.ShareData(SocialParty::kPartyDataScopeMember, R"({"k":"w"})");
+  ASSERT_EQ(first.size(), 1U);
+  ASSERT_EQ(second.size(), 1U);
+  EXPECT_EQ(first[0].symbol, 0x3448ca6e8d9dd0ceULL);
+  EXPECT_STREQ(SocialParty::RequestName(first[0].symbol), "PartyDataUpdateRequest");
+  const std::string& p = first[0].payload;
+  ASSERT_EQ(p.size(), 0x28U + 8 + 9);
+  std::uint64_t scope = 0;
+  std::uint32_t seq1 = 0, seq2 = 0, length = 0;
+  std::memcpy(&scope, p.data() + 0x20, 8);
+  std::memcpy(&seq1, p.data() + 0x28, 4);
+  std::memcpy(&length, p.data() + 0x2C, 4);
+  std::memcpy(&seq2, second[0].payload.data() + 0x28, 4);
+  EXPECT_EQ(scope, 1U);
+  EXPECT_EQ(length, 9U);
+  EXPECT_EQ(p.substr(0x30), R"({"k":"v"})");
+  EXPECT_EQ(seq2, seq1 + 1) << "the server keeps only a newer seq from the same session";
+}
+
+TEST(SocialPartyData, TheNotifyFrameRoundTripsAndATruncatedOneIsRefused) {
+  const std::string frame = ScenarioProtocol::BuildPartyDataNotify(9, 200, 4, R"({"headsettype":2})");
+  std::uint64_t symbol = 0;
+  std::memcpy(&symbol, frame.data() + 8, 8);
+  EXPECT_EQ(symbol, SocialParty::kPartyDataNotify);
+  const auto* payload = reinterpret_cast<const std::uint8_t*>(frame.data()) + 24;
+  SocialParty::DataNotify notify;
+  ASSERT_TRUE(SocialParty::ParseDataNotify(payload, frame.size() - 24, &notify));
+  EXPECT_EQ(notify.partyId, 9U);
+  EXPECT_EQ(notify.memberId, 200U);
+  EXPECT_EQ(notify.seq, 4U);
+  EXPECT_EQ(notify.json, R"({"headsettype":2})");
+  EXPECT_FALSE(SocialParty::ParseDataNotify(payload, frame.size() - 25, &notify)) << "JsonLen past the end";
+  EXPECT_FALSE(SocialParty::ParseDataNotify(payload, 23, &notify));
+  EXPECT_EQ(SocialParty::ReplyName(SocialParty::kPartyDataNotify), nullptr) << "the bridge routes it, not Feed";
+
+  ScenarioProtocol::Command cmd;
+  std::string error;
+  ASSERT_TRUE(ScenarioProtocol::ParseCommand(
+      R"({"op":"inject","msg":"PartyDataNotify","member":200,"json":{"headsettype":2}})", &cmd, &error))
+      << error;
+  EXPECT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyData);
+  EXPECT_EQ(cmd.memberId, 200U);
+  EXPECT_EQ(cmd.value, R"({"headsettype":2})");
+  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyDataNotify","member":200})", &cmd, &error));
+}
+
+// A fake CJson for the facade tests: [+0] holds a heap string with the document's text.
+std::string* FakeDoc(void* json) {
+  std::string* doc = nullptr;
+  std::memcpy(&doc, json, sizeof(doc));
+  return doc;
+}
+void FakeClear(void* json) {
+  delete FakeDoc(json);
+  std::memset(json, 0, 16);
+}
+std::uint32_t FakeLoad(void* json, const char* text, std::int64_t length) {
+  FakeClear(json);
+  auto* doc = new std::string(text, static_cast<std::size_t>(length));
+  std::memcpy(json, &doc, sizeof(doc));
+  return 0;
+}
+void* FakeSerialize(void* json, void* block, std::int32_t, const char*) {
+  const std::string* doc = FakeDoc(json);
+  auto* text = new std::string(doc != nullptr ? *doc : std::string());
+  const char* data = text->c_str();
+  const std::uint64_t length = text->size();
+  std::memcpy(block, &data, sizeof(data));
+  std::memcpy(static_cast<std::uint8_t*>(block) + 8, &text, sizeof(text));  // kept for the destroy
+  std::memcpy(static_cast<std::uint8_t*>(block) + 0x30, &length, sizeof(length));
+  return block;
+}
+void FakeBlockReset(void*) {}
+void FakeBlockDestroy(void* block) {
+  std::string* text = nullptr;
+  std::memcpy(&text, static_cast<std::uint8_t*>(block) + 8, sizeof(text));
+  delete text;
+}
+
+std::vector<std::string> g_calls;
+std::vector<std::string> g_sent;
+void* g_object = nullptr;
+
+std::string SlotText(std::size_t index) {
+  std::uint8_t* array = nullptr;
+  std::memcpy(&array, static_cast<std::uint8_t*>(g_object) + 0x248, sizeof(array));
+  const std::string* doc = FakeDoc(array + 16 * index);
+  return doc != nullptr ? *doc : std::string("<empty>");
+}
+std::string PartyText() {
+  const std::string* doc = FakeDoc(static_cast<std::uint8_t*>(g_object) + 0x1F0);
+  return doc != nullptr ? *doc : std::string("<empty>");
+}
+void OnVoid(void* context, void*) { g_calls.push_back(static_cast<const char*>(context) + std::string(" party=") + PartyText()); }
+void OnIndex(void* context, void*, std::uint32_t index) {
+  g_calls.push_back(static_cast<const char*>(context) + std::string(" ") + std::to_string(index) + " " + SlotText(index));
+}
+bool CaptureSend(const std::string& frame) {
+  g_sent.push_back(frame);
+  return true;
+}
+
+void Bind(std::array<std::uint8_t, 0x1E0>& table, std::size_t index, const char* name, void* function) {
+  std::memcpy(table.data() + 0x20 * index, &name, sizeof(name));
+  std::memcpy(table.data() + 0x20 * index + 0x18, &function, sizeof(function));
+}
+
+TEST(SocialFacadeData, ReceivedDataIsInTheGamesJsonBeforeMemberJoinedAndLocalWritesAreShared) {
+  using UpdateFn = void (*)(void*, const void*);
+  using InitializeFn = std::uint64_t (*)(void*, std::uint32_t, const void*);
+  using WritableFn = std::uint64_t (*)(void*, std::int32_t);
+  using ShutdownFn = void (*)(void*);
+  SocialFacade::JsonOps ops;
+  ops.load = &FakeLoad;
+  ops.clear = &FakeClear;
+  ops.serialize = &FakeSerialize;
+  ops.blockReset = &FakeBlockReset;
+  ops.blockDestroy = &FakeBlockDestroy;
+  SocialFacade::SetJsonOps(ops);
+  SocialParty::SetSender(&CaptureSend);
+  g_object = SocialFacade::Object();
+  const Slot* vtable = Vtable(g_object);
+  std::array<std::uint8_t, 0x1E0> table{};
+  Bind(table, 1, "Joined", reinterpret_cast<void*>(&OnVoid));
+  Bind(table, 3, "Updated", reinterpret_cast<void*>(&OnVoid));
+  Bind(table, 9, "MemberJoined", reinterpret_cast<void*>(&OnIndex));
+  Bind(table, 10, "MemberUpdated", reinterpret_cast<void*>(&OnIndex));
+  reinterpret_cast<InitializeFn>(vtable[9])(g_object, 1, table.data());
+  SocialParty::State& party = SocialParty::Global();
+  party.SetSelf(100, "Me");
+  party.ResetParty();
+  std::uint8_t flags = 0;
+  const auto update = [&] { reinterpret_cast<UpdateFn>(vtable[13])(g_object, &flags); };
+  update();
+  party.DrainEvents();
+  g_calls.clear();
+  g_sent.clear();
+
+  ASSERT_FALSE(party.Join(9).empty());
+  party.ReceiveData(9, 0, R"({"lobbyid":"L"})");
+  party.ReceiveData(9, 200, R"({"headsettype":2})");
+  ASSERT_TRUE(FeedParty(party, "PartyJoinSuccess", U64s({9, 200})));
+  update();
+  ASSERT_GE(g_calls.size(), 4U);
+  EXPECT_EQ(g_calls[0], R"(Joined party={"lobbyid":"L"})") << "the party's data was loaded before the events";
+  EXPECT_EQ(g_calls[1], R"(MemberJoined 1 {"headsettype":2})") << "PartyMemberJoinedCB finds the headset";
+  EXPECT_EQ(g_calls[2], R"(MemberUpdated 1 {"headsettype":2})");
+  EXPECT_EQ(g_calls[3], R"(Updated party={"lobbyid":"L"})");
+  ASSERT_EQ(g_sent.size(), 1U) << "entering the party shares the local member's data once";
+  EXPECT_EQ(g_sent[0].substr(24 + 0x30), "{}");
+
+  // A data update fires MemberUpdated for that member only.
+  g_calls.clear();
+  party.ReceiveData(9, 200, R"({"headsettype":4})");
+  update();
+  ASSERT_EQ(g_calls.size(), 1U);
+  EXPECT_EQ(g_calls[0], R"(MemberUpdated 1 {"headsettype":4})");
+
+  // The game writes its member data through slot 30; the next Update shares it.
+  g_sent.clear();
+  const std::uint64_t root = reinterpret_cast<WritableFn>(vtable[30])(g_object, 0);
+  ASSERT_NE(root, 0U);
+  FakeLoad(reinterpret_cast<void*>(static_cast<std::uintptr_t>(root)), R"({"k":"v"})", 9);
+  update();
+  ASSERT_EQ(g_sent.size(), 1U);
+  EXPECT_EQ(g_sent[0].substr(24 + 0x30), R"({"k":"v"})");
+  update();
+  EXPECT_EQ(g_sent.size(), 1U) << "nothing new written, nothing sent";
+
+  // The member leaves: their slot is cleared. Reset releases everything.
+  ASSERT_TRUE(FeedParty(party, "PartyLeaveNotify", U64s({9, 200})));
+  update();
+  EXPECT_EQ(SlotText(1), "<empty>");
+  using ResetFn = void (*)(void*);
+  reinterpret_cast<ResetFn>(vtable[12])(g_object);
+  EXPECT_EQ(SlotText(0), "<empty>");
+  EXPECT_EQ(PartyText(), "<empty>");
+
+  party.DrainEvents();
+  reinterpret_cast<ShutdownFn>(vtable[10])(g_object);
+  SocialParty::SetSender(nullptr);
+  SocialFacade::SetJsonOps(SocialFacade::JsonOps{});
+}
+
+TEST(SocialFacadeData, TheLeadersWrittenPartyDataIsSharedAndTheWrittenBitCleared) {
+  using UpdateFn = void (*)(void*, const void*);
+  SocialFacade::JsonOps ops;
+  ops.load = &FakeLoad;
+  ops.clear = &FakeClear;
+  ops.serialize = &FakeSerialize;
+  ops.blockReset = &FakeBlockReset;
+  ops.blockDestroy = &FakeBlockDestroy;
+  SocialFacade::SetJsonOps(ops);
+  SocialParty::SetSender(&CaptureSend);
+  g_object = SocialFacade::Object();
+  const Slot* vtable = Vtable(g_object);
+  SocialParty::State& party = SocialParty::Global();
+  party.SetSelf(100, "Me");
+  party.ResetParty();
+  std::uint8_t flags = 0;
+  const auto update = [&] { reinterpret_cast<UpdateFn>(vtable[13])(g_object, &flags); };
+  ASSERT_TRUE(FeedParty(party, "PartyCreateSuccess", U64s({7, 100})));
+  update();
+  g_sent.clear();
+  FakeLoad(static_cast<std::uint8_t*>(g_object) + 0x1F0, R"({"p":1})", 7);
+  std::uint32_t word = 0;
+  std::memcpy(&word, static_cast<std::uint8_t*>(g_object) + 0x27C, 4);
+  word |= 1U;  // what 0x14015fdb0 does when the host writes party data
+  std::memcpy(static_cast<std::uint8_t*>(g_object) + 0x27C, &word, 4);
+  update();
+  ASSERT_EQ(g_sent.size(), 1U);
+  std::uint64_t scope = 1;
+  std::memcpy(&scope, g_sent[0].data() + 24 + 0x20, 8);
+  EXPECT_EQ(scope, 0U);
+  EXPECT_EQ(g_sent[0].substr(24 + 0x30), R"({"p":1})");
+  std::memcpy(&word, static_cast<std::uint8_t*>(g_object) + 0x27C, 4);
+  EXPECT_EQ(word & 1U, 0U) << "shared, so no longer marked written";
+  update();
+  EXPECT_EQ(g_sent.size(), 1U);
+
+  party.ResetParty();
+  party.DrainEvents();
+  using ResetFn = void (*)(void*);
+  reinterpret_cast<ResetFn>(vtable[12])(g_object);
+  SocialParty::SetSender(nullptr);
+  SocialFacade::SetJsonOps(SocialFacade::JsonOps{});
+}
+
+}  // namespace partydata

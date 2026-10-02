@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -45,6 +46,15 @@ constexpr std::uint64_t kSetJoinPolicyRequest = 0xe1d46b6fb78fd9e6ULL;
 /// The game's join policies (slot 16): 0 invite only, 1 friends, 2 friends of members, 3 everyone.
 constexpr std::uint32_t kJoinPolicyEveryone = 3;
 constexpr std::uint64_t kUnlockRequest = 0x5a4e99802fa3d704ULL;
+/// SNSPartyDataUpdateRequest (nevr social level 1): the 0x28 header with TargetParam = scope (0 the
+/// party's data, leader only; 1 the sender's own member data), then Seq(4) JsonLen(4) Json.
+constexpr std::uint64_t kPartyDataUpdateRequest = 0x3448ca6e8d9dd0ceULL;
+constexpr std::uint64_t kPartyDataScopeParty = 0;
+constexpr std::uint64_t kPartyDataScopeMember = 1;
+/// SNSPartyDataNotify (nevr social level 1), server to client: PartyID(8) MemberID(8, 0 = the party's
+/// data) Seq(4) JsonLen(4) Json, a JSON object with the keys the server fills (nakama
+/// evr_pipeline_party_data.go). Not in ReplyTable: the bridge validates the JSON and calls ReceiveData.
+constexpr std::uint64_t kPartyDataNotify = 0x832143ccbf160955ULL;
 constexpr std::uint64_t kInviteListRefreshRequest = 0xd8cbc44959e25da8ULL;
 constexpr std::uint64_t kFriendListRefreshRequest = 0xdcfa94680e8d19fcULL;  // SNSFriendListRefreshRequest
 constexpr std::uint64_t kFriendInviteRequest = 0x7f0d7a28de3c6f70ULL;  // SNSFriendInviteRequest (add a friend; accepts when the target already asked)
@@ -106,6 +116,7 @@ inline const char* RequestName(std::uint64_t symbol) {
     case kLockRequest: return "PartyLockRequest";
     case kUnlockRequest: return "PartyUnlockRequest";
     case kSetJoinPolicyRequest: return "PartySetJoinPolicyRequest";
+    case kPartyDataUpdateRequest: return "PartyDataUpdateRequest";
     case kInviteListRefreshRequest: return "PartyInviteListRefreshRequest";
     case kKickRequest: return "PartyKickRequest";
     case kPassRequest: return "PartyPassRequest";
@@ -268,10 +279,61 @@ inline Event MakeEvent(EventKind kind, std::uint32_t index = 0, std::uint64_t id
   return event;
 }
 
+/// A JSON object's text, shared: the view and the facade compare these by pointer to see a change.
+using JsonText = std::shared_ptr<const std::string>;
+
 struct Member {
   std::uint64_t id = 0;
   std::string name;
+  JsonText data;  // the member's shared data from the server (nullptr until any arrives)
 };
+
+/// SNSPartyDataNotify's fields; false when the payload is shorter than its header or its JsonLen.
+struct DataNotify {
+  std::uint64_t partyId = 0;
+  std::uint64_t memberId = 0;
+  std::uint32_t seq = 0;
+  std::string json;
+};
+
+inline bool ParseDataNotify(const std::uint8_t* payload, std::size_t len, DataNotify* out) {
+  if (payload == nullptr || out == nullptr || len < 24) return false;
+  const auto le = [&](std::size_t off, int bytes) {
+    std::uint64_t v = 0;
+    for (int i = bytes - 1; i >= 0; --i) v = (v << 8) | payload[off + static_cast<std::size_t>(i)];
+    return v;
+  };
+  const std::uint64_t jsonLen = le(20, 4);
+  if (24 + jsonLen > len) return false;
+  out->partyId = le(0, 8);
+  out->memberId = le(8, 8);
+  out->seq = static_cast<std::uint32_t>(le(16, 4));
+  out->json.assign(reinterpret_cast<const char*>(payload) + 24, static_cast<std::size_t>(jsonLen));
+  while (!out->json.empty() && out->json.back() == '\0') out->json.pop_back();
+  return true;
+}
+
+/// What ReceiveData did with a data notify, for the bridge's log.
+enum class DataOutcome {
+  kParty,          // the party's data, for a member (the leader writes its own)
+  kMember,         // a member's data
+  kMemberAdded,    // a member not yet known: added with its data (MemberJoined), as pnsovr did
+  kHeld,           // for the party being joined: kept until PartyJoinSuccess
+  kOwnIgnored,     // the local user's own data, or the party's to its leader
+  kOtherParty,     // not the party we are in or joining
+};
+
+inline const char* DataOutcomeName(DataOutcome outcome) {
+  switch (outcome) {
+    case DataOutcome::kParty: return "party";
+    case DataOutcome::kMember: return "member";
+    case DataOutcome::kMemberAdded: return "member_added";
+    case DataOutcome::kHeld: return "held_for_join";
+    case DataOutcome::kOwnIgnored: return "own_ignored";
+    case DataOutcome::kOtherParty: return "other_party";
+  }
+  return "?";
+}
 
 struct Invite {
   std::uint64_t partyId = 0;
@@ -292,6 +354,7 @@ struct View {
   bool locked = false;
   std::vector<Member> members;  // [0] is the local user once the party exists
   std::vector<Invite> invites;  // arrival order; the game indexes them newest first
+  JsonText partyData;           // the party's shared data from the server, for a member (nullptr: none)
 };
 
 class State {
@@ -526,6 +589,65 @@ class State {
     return out;
   }
 
+  /// The game wrote shared data (scope 0 the party's, which only its leader shares; 1 the local
+  /// member's): send it, numbered, while in a party. pnsovr shared both from Update (0x1800ac240,
+  /// slots 7 and 6) with a seqid.
+  std::vector<Message> ShareData(std::uint64_t scope, const std::string& json) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    std::vector<Message> out;
+    if (partyId_ == 0 || joining_ || (scope == kPartyDataScopeParty && ownerId_ != self_)) return out;
+    Message m = Standard(kPartyDataUpdateRequest, SelfUuid(), scope);
+    AppendLe(m.payload, ++dataSeq_, 4);
+    AppendLe(m.payload, json.size(), 4);
+    m.payload += json;
+    out.push_back(std::move(m));
+    return out;
+  }
+
+  /// A data notify from the server (the bridge has checked it is a JSON object). Data for the party
+  /// being joined is held until PartyJoinSuccess, which then adds every member it names; data for an
+  /// unknown member of the current party adds that member, MemberJoined, as pnsovr's data packet did
+  /// (0x180090650 -> 0x180082cd0). The facade loads changed data into the game's JSON on its thread.
+  DataOutcome ReceiveData(std::uint64_t partyId, std::uint64_t memberId, const std::string& json) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    JsonText text = std::make_shared<const std::string>(json);
+    if (partyId != 0 && partyId == partyId_) {
+      if (memberId == 0) {
+        if (ownerId_ == self_) return DataOutcome::kOwnIgnored;
+        partyData_ = std::move(text);
+        return DataOutcome::kParty;
+      }
+      if (memberId == self_) return DataOutcome::kOwnIgnored;
+      const int at = Find(memberId);
+      if (at >= 0) {
+        members_[static_cast<std::size_t>(at)].data = std::move(text);
+        return DataOutcome::kMember;
+      }
+      members_.push_back(Member{memberId, NameLocked(memberId), std::move(text)});
+      events_.push_back(MakeEvent(EventKind::kMemberJoined, static_cast<std::uint32_t>(members_.size() - 1)));
+      return DataOutcome::kMemberAdded;
+    }
+    if (partyId != 0 && joining_ && partyId == joiningPartyId_) {
+      if (heldParty_ != partyId) {
+        heldParty_ = partyId;
+        heldPartyData_.reset();
+        heldMembers_.clear();
+      }
+      if (memberId == 0) {
+        heldPartyData_ = std::move(text);
+      } else if (memberId == self_) {
+        return DataOutcome::kOwnIgnored;
+      } else {
+        bool replaced = false;
+        for (Member& m : heldMembers_)
+          if (m.id == memberId) { m.data = text; replaced = true; }
+        if (!replaced) heldMembers_.push_back(Member{memberId, std::string(), std::move(text)});
+      }
+      return DataOutcome::kHeld;
+    }
+    return DataOutcome::kOtherParty;
+  }
+
   /// Feeds one server->game message by its symbol hash. Returns true for a party message; requests to send in reply (the
   /// invites that waited for the party to exist) are appended to `outgoing`.
   bool Feed(std::uint64_t symbol, const std::uint8_t* payload, std::size_t len, std::uint64_t now,
@@ -545,7 +667,8 @@ class State {
       creating_ = false;
       partyId_ = u64(0);
       ownerId_ = u64(8);
-      members_.assign(1, Member{self_, NameLocked(self_)});
+      members_.assign(1, Member{self_, NameLocked(self_), nullptr});
+      partyData_.reset();
       events_.push_back(MakeEvent(EventKind::kCreated));
       if (joinPolicy_ != kJoinPolicyEveryone && outgoing != nullptr)  // a new party starts as everyone
         outgoing->push_back(Standard(kSetJoinPolicyRequest, SelfUuid(), joinPolicy_));
@@ -567,13 +690,29 @@ class State {
       lockRequested_ = -1;
       partyId_ = u64(0);
       ownerId_ = u64(8);
-      members_.assign(1, Member{self_, NameLocked(self_)});
-      if (ownerId_ != self_) members_.push_back(Member{ownerId_, NameLocked(ownerId_)});
+      members_.assign(1, Member{self_, NameLocked(self_), nullptr});
+      if (ownerId_ != self_) members_.push_back(Member{ownerId_, NameLocked(ownerId_), nullptr});
+      partyData_.reset();
+      // The data the server sent ahead of this success names the party's other members (a level-1
+      // server sends each member's data first, nakama snsPartyDataJoining): add them with it.
+      if (heldParty_ == partyId_) {
+        partyData_ = heldPartyData_;
+        for (const Member& held : heldMembers_) {
+          const int at = Find(held.id);
+          if (at >= 0)
+            members_[static_cast<std::size_t>(at)].data = held.data;
+          else
+            members_.push_back(Member{held.id, NameLocked(held.id), held.data});
+        }
+      }
+      ForgetHeldData();
       events_.push_back(MakeEvent(EventKind::kJoined));
-      if (members_.size() > 1) events_.push_back(MakeEvent(EventKind::kMemberJoined, 1));
+      for (std::size_t i = 1; i < members_.size(); ++i)
+        events_.push_back(MakeEvent(EventKind::kMemberJoined, static_cast<std::uint32_t>(i)));
     } else if (n == "PartyJoinFailure") {
       joining_ = false;
       joiningPartyId_ = 0;
+      ForgetHeldData();
       // The game's codes (PartyJoinFailedCB 0x140189590): 1 not found, 3 no permission, 4 locked,
       // 5 full, 6 version, anything else unknown. Nakama sends those, plus 2 for a join it refused
       // without saying why, which the game shows as locked.
@@ -581,7 +720,7 @@ class State {
     } else if (n == "PartyJoinNotify" && len >= 16 && u64(0) == partyId_) {
       const std::uint64_t id = u64(8);
       if (id != self_ && Find(id) < 0) {
-        members_.push_back(Member{id, NameLocked(id)});
+        members_.push_back(Member{id, NameLocked(id), nullptr});
         events_.push_back(MakeEvent(EventKind::kMemberJoined, static_cast<std::uint32_t>(members_.size() - 1)));
       }
     } else if (n == "PartyLeaveNotify" && len >= 16 && u64(0) == partyId_) {
@@ -649,6 +788,7 @@ class State {
     view.locked = locked_;
     view.members = members_;
     view.invites = invites_;
+    view.partyData = partyData_;
     return view;
   }
 
@@ -717,7 +857,15 @@ class State {
     }
   }
 
+  void ForgetHeldData() {
+    heldParty_ = 0;
+    heldPartyData_.reset();
+    heldMembers_.clear();
+  }
+
   void ClearParty() {
+    partyData_.reset();
+    ForgetHeldData();
     partyId_ = 0;
     ownerId_ = 0;
     creating_ = false;
@@ -749,6 +897,11 @@ class State {
   std::vector<std::uint64_t> unnamed_;          // ids shown without a name, waiting for a lookup
   std::vector<std::uint64_t> pendingInvites_;
   std::vector<Event> events_;
+  JsonText partyData_;               // the party's data from the server (a member's view of it)
+  std::uint32_t dataSeq_ = 0;        // the last ShareData seq, counted per process as the server expects
+  std::uint64_t heldParty_ = 0;      // data that arrived for the party being joined, until it answers
+  JsonText heldPartyData_;
+  std::vector<Member> heldMembers_;
 };
 
 /// Where framed requests go. The ws bridge registers its upstream send at startup; until then (and

@@ -226,8 +226,11 @@ void InstallJsonProbe(std::uint64_t virtualAddress, const std::array<std::uint8_
       MH_StatusToString(enableStatus), MH_StatusToString(removeStatus));
 }
 
+void LogJsonOps();
+
 void EnsureJsonHooksInstalled(void* facadeObject) {
   std::call_once(g_jsonHooksOnce, [facadeObject] {
+    LogJsonOps();
     g_facadeObject.store(facadeObject, std::memory_order_release);
     g_facadeJson.store(static_cast<std::uint8_t*>(facadeObject) + kFacadeJsonOffset,
                        std::memory_order_release);
@@ -254,10 +257,60 @@ void EnsureJsonHooksInstalled(void* facadeObject) {
   });
 }
 
+// The CJson functions the party data sync calls (social_facade.h JsonOps), first 16 bytes each from
+// ReVault's disassembly of echovr.exe.
+constexpr std::uint64_t kJsonLoadVA = 0x1405F0BD0;
+constexpr std::uint64_t kJsonClearVA = 0x1405ECE60;
+constexpr std::uint64_t kJsonSerializeVA = 0x1405F1DC0;
+constexpr std::uint64_t kMemBlockResetVA = 0x1400D4E50;
+constexpr std::uint64_t kMemBlockDestroyVA = 0x1400D2760;
+constexpr std::array<std::uint8_t, 16> kJsonLoadPrologue = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c,
+                                                            0x24, 0x10, 0x56, 0x57, 0x41, 0x56, 0x48, 0x81};
+constexpr std::array<std::uint8_t, 16> kJsonClearPrologue = {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b,
+                                                             0xd9, 0xe8, 0x62, 0xff, 0x00, 0x00, 0x41, 0xb8};
+constexpr std::array<std::uint8_t, 16> kJsonSerializePrologue = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c,
+                                                                 0x24, 0x18, 0x48, 0x89, 0x54, 0x24, 0x10, 0x56};
+constexpr std::array<std::uint8_t, 16> kMemBlockResetPrologue = {0x83, 0x61, 0x1c, 0xfe, 0x33, 0xc0, 0x48, 0x89,
+                                                                 0x01, 0x48, 0x89, 0x41, 0x08, 0x89, 0x41, 0x18};
+constexpr std::array<std::uint8_t, 16> kMemBlockDestroyPrologue = {0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b,
+                                                                   0xd9, 0x48, 0x83, 0x79, 0x08, 0x00, 0x74, 0x39};
+
+template <typename Fn>
+Fn ResolveCall(std::uintptr_t gameBase, std::uint64_t va, const std::array<std::uint8_t, 16>& prologue) {
+  void* target = nevr::ResolveVA_Checked(gameBase, va);
+  if (!nevr::ValidatePrologue(target, prologue.data(), prologue.size())) return nullptr;
+  return reinterpret_cast<Fn>(target);
+}
+
+JsonOps g_resolvedJsonOps;  // what Install found, logged once the game's log exists (LogJsonOps)
+
+// Runs inside Install, during DLL initialisation, before the game's logger exists: no Log here.
+void InstallJsonOps(std::uintptr_t gameBase) {
+  JsonOps ops;
+  ops.load = ResolveCall<decltype(ops.load)>(gameBase, kJsonLoadVA, kJsonLoadPrologue);
+  ops.clear = ResolveCall<decltype(ops.clear)>(gameBase, kJsonClearVA, kJsonClearPrologue);
+  ops.serialize = ResolveCall<decltype(ops.serialize)>(gameBase, kJsonSerializeVA, kJsonSerializePrologue);
+  ops.blockReset = ResolveCall<decltype(ops.blockReset)>(gameBase, kMemBlockResetVA, kMemBlockResetPrologue);
+  ops.blockDestroy = ResolveCall<decltype(ops.blockDestroy)>(gameBase, kMemBlockDestroyVA, kMemBlockDestroyPrologue);
+  g_resolvedJsonOps = ops;
+  SetJsonOps(ops);
+}
+
+void LogJsonOps() {
+  const JsonOps& ops = g_resolvedJsonOps;
+  const bool all = ops.load != nullptr && ops.clear != nullptr && ops.serialize != nullptr && ops.blockReset != nullptr &&
+                   ops.blockDestroy != nullptr;
+  Log(all ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+      "[NEVR.SOCIAL] party data json functions load=%d clear=%d serialize=%d memblock=%d/%d (prologue checked)%s",
+      ops.load != nullptr, ops.clear != nullptr, ops.serialize != nullptr, ops.blockReset != nullptr,
+      ops.blockDestroy != nullptr, all ? "" : ": party data off");
+}
+
 }  // namespace
 
 void Install(std::uintptr_t gameBase) {
   g_gameBase = gameBase;
+  InstallJsonOps(gameBase);
   g_providerName = reinterpret_cast<ProviderNameFn>(nevr::ResolveVA_Checked(gameBase, kProviderNameVA));
   InstallHookPlan(InstallStage::kBoot, false, [gameBase](Probe probe) {
     if (probe == Probe::kAccessor) {

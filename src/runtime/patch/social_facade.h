@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "runtime/patch/social_facade_install.h"
@@ -51,6 +52,22 @@ void QueueJsonTrace(JsonTraceKind kind, std::uint32_t callCount, const char* pat
 void DrainJsonTraces(JsonTraceSink sink, void* context);
 void FlushJsonTraces();
 
+/// The game's CJson functions the party data sync calls (game thread only). Install resolves and
+/// prologue-checks them (echovr.exe: load 0x1405f0bd0, clear 0x1405ece60, serialise 0x1405f1dc0 into a
+/// CMemBlock released by 0x1400d4e50/0x1400d2760); while any is null, party data is neither loaded nor
+/// shared. Tests set fakes.
+struct JsonOps {
+  /// CJson_LoadFromBuffer: parses, then replaces the document (the old one is released); 0 = loaded.
+  std::uint32_t (*load)(void* json, const char* text, std::int64_t length) = nullptr;
+  /// Clears a CJson to the empty document, releasing what it held.
+  void (*clear)(void* json) = nullptr;
+  /// Writes the document's text into `block` (0x40 bytes): text at [+0], length at [+0x30].
+  void* (*serialize)(void* json, void* block, std::int32_t sortKeys, const char* path) = nullptr;
+  void (*blockReset)(void* block) = nullptr;    // when [block+0x1c] & 6
+  void (*blockDestroy)(void* block) = nullptr;
+};
+void SetJsonOps(const JsonOps& ops);
+
 #ifdef NEVR_SCENARIO_CONTROL
 /// Scenario-control builds only: FriendIsInvitable's result for this friend (-1 if not in the roster).
 std::int32_t FriendInvitableForTest(std::uint64_t friendId);
@@ -62,8 +79,13 @@ struct PartyStateForTest {
   bool joinable = false;  // the Joinable slot's rule
   bool locked = false;    // the party's server-side lock (slot 4 JoinableInternal is its inverse)
   std::uint32_t joinPolicy = 0;  // slot 21 JoinPolicy
-  bool shareDirty = false;  // flags bit 0: the game wrote party data that pnsovr would share (slot 7)
+  bool shareDirty = false;  // flags bit 0: the game wrote party data not yet shared
   std::vector<std::uint64_t> memberIds;
+  std::vector<std::string> memberData;  // each member's data from the server as loaded ("" none)
+  std::string partyData;                // the party's data from the server as loaded ("" none)
+  std::uint32_t partyDataShared = 0;    // ShareData sends of the party's data
+  std::uint32_t memberDataShared = 0;   // ShareData sends of the local member's data
+  std::string lastShared;               // the JSON of the last ShareData send
 };
 /// Scenario-control builds only: the party as the facade's slots report it.
 PartyStateForTest PartyForTest();

@@ -427,7 +427,12 @@ nlohmann::json StateJson() {
                   {"joining", party.joining},      {"joinable", party.joinable},
                   {"locked", party.locked},        {"join_policy", party.joinPolicy},
                   {"share_dirty", party.shareDirty},
-                  {"members", party.memberIds}};
+                  {"members", party.memberIds},
+                  {"member_data", party.memberData},
+                  {"data", party.partyData},
+                  {"party_data_shared", party.partyDataShared},
+                  {"member_data_shared", party.memberDataShared},
+                  {"last_shared", party.lastShared}};
   nlohmann::json friends = nlohmann::json::array();
   std::uint64_t id = 0;
   for (std::uint32_t index = 0; SocialRoster::Global().IdAt(index, &id); ++index) {
@@ -506,6 +511,15 @@ nlohmann::json Handle(const std::string& line) {
                                     &error)) {
         return Fail(error);
       }
+      return {{"ok", true}};
+    }
+    case ScenarioProtocol::Op::kInjectPartyData: {
+      const std::uint64_t party = cmd.partyId != 0 ? cmd.partyId : SocialFacade::PartyForTest().partyId;
+      if (party == 0) return Fail("inject PartyDataNotify: no current party and no \"party\" given");
+      Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject PartyDataNotify party=%llu member=%llu bytes=%zu",
+          static_cast<unsigned long long>(party), static_cast<unsigned long long>(cmd.memberId), cmd.value.size());
+      if (!InjectServerFrameForTest(ScenarioProtocol::BuildPartyDataNotify(party, cmd.memberId, 1, cmd.value), &error))
+        return Fail(error);
       return {{"ok", true}};
     }
     case ScenarioProtocol::Op::kFireFriendInvite:

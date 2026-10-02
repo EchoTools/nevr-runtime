@@ -412,6 +412,28 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
             static_cast<unsigned long long>(len));
       }
     }
+    if (fromServer && sym == SocialParty::kPartyDataNotify) {
+      // Party or member data (proposal §3): only a JSON object goes on to the game's CJson loader.
+      SocialParty::DataNotify notify;
+      if (!SocialParty::ParseDataNotify(payload, static_cast<size_t>(len), &notify)) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] party data could not be read bytes=%llu",
+            static_cast<unsigned long long>(len));
+      } else if (const nlohmann::json parsed = nlohmann::json::parse(notify.json, nullptr, false);
+                 parsed.is_discarded() || !parsed.is_object()) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] party data rejected: not a JSON object party=%llu member=%llu bytes=%zu",
+            static_cast<unsigned long long>(notify.partyId), static_cast<unsigned long long>(notify.memberId),
+            notify.json.size());
+      } else {
+        const SocialParty::DataOutcome outcome =
+            SocialParty::Global().ReceiveData(notify.partyId, notify.memberId, notify.json);
+        const auto headset = parsed.find("headsettype");
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.SOCIAL] party data received party=%llu member=%llu seq=%u bytes=%zu keys=%zu headsettype=%s outcome=%s",
+            static_cast<unsigned long long>(notify.partyId), static_cast<unsigned long long>(notify.memberId),
+            notify.seq, notify.json.size(), parsed.size(),
+            headset != parsed.end() ? headset->dump().c_str() : "-", SocialParty::DataOutcomeName(outcome));
+      }
+    }
     if (fromServer) {
       if (gameName != nullptr) {
         SocialRoster::Feed(SocialRoster::Global(), gameName, payload, static_cast<size_t>(len));

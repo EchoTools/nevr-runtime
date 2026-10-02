@@ -5,8 +5,11 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <type_traits>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 #include "abi/echovr.h"
 #include "core/logging.h"
@@ -199,7 +202,21 @@ std::mutex g_viewMutex;
 std::shared_ptr<const SocialParty::View> g_view = std::make_shared<const SocialParty::View>();
 std::array<std::shared_ptr<const SocialParty::View>, kViewRing> g_retiredViews{};
 std::size_t g_retiredNext = 0;
-alignas(16) std::array<std::uint8_t, 16 * 10> g_memberJson{};  // zeroed Json slots the game reads per member
+constexpr std::size_t kMemberJsonSlots = 10;
+alignas(16) std::array<std::uint8_t, 16 * kMemberJsonSlots> g_memberJson{};  // zeroed Json slots the game reads per member
+
+// Party data (proposal §3). The game's CJson functions (social_facade.h JsonOps), set once at Install;
+// everything below them runs on the game's thread (Update, slot 30, Reset).
+JsonOps g_jsonOps;
+std::atomic<bool> g_jsonOpsSet{false};
+std::array<std::uint64_t, kMemberJsonSlots> g_slotMember{};         // whose server data each slot holds
+std::array<SocialParty::JsonText, kMemberJsonSlots> g_slotData{};   // the text loaded there (nullptr: none)
+SocialParty::JsonText g_partyDataLoaded;                            // the party data loaded into +0x1F0
+bool g_memberDataWritten = false;  // slot 30 handed out the local member's JSON since it was last shared
+std::uint64_t g_sharedParty = 0;   // the party the local data was last shared into
+std::uint32_t g_partyDataShared = 0;
+std::uint32_t g_memberDataShared = 0;
+std::string g_lastShared;
 
 std::shared_ptr<const SocialParty::View> CurrentView() {
   std::lock_guard<std::mutex> guard(g_viewMutex);
@@ -258,6 +275,145 @@ void SyncObject(void* self, const SocialParty::View& view) {
   std::memcpy(Bytes(self) + 0x248, &json, sizeof(json));
 }
 
+const JsonOps* ReadyJsonOps() {
+  if (!g_jsonOpsSet.load(std::memory_order_acquire)) return nullptr;
+  const JsonOps& ops = g_jsonOps;
+  if (ops.load == nullptr || ops.clear == nullptr || ops.serialize == nullptr || ops.blockReset == nullptr ||
+      ops.blockDestroy == nullptr)
+    return nullptr;
+  return &ops;
+}
+
+void* MemberJson(std::size_t index) { return g_memberJson.data() + 16 * index; }
+
+/// Loads a JSON object's text into one of the game's CJson (replacing what it held).
+bool LoadJson(const JsonOps& ops, void* json, const std::string& text, const char* what, std::uint64_t id) {
+  const std::uint32_t result = ops.load(json, text.data(), static_cast<std::int64_t>(text.size()));
+  if (result != 0) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] party data load failed %s id=%llu bytes=%zu result=%u", what,
+        static_cast<unsigned long long>(id), text.size(), result);
+    return false;
+  }
+  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party data loaded %s id=%llu bytes=%zu", what,
+      static_cast<unsigned long long>(id), text.size());
+  return true;
+}
+
+/// The game's own text for one of its CJson, as the game's own callers produce it (Send 0x14060e380):
+/// serialise into a CMemBlock, copy the text at [+0] of length [+0x30], then release the block.
+bool SerializeJson(const JsonOps& ops, void* json, std::string* out) {
+  alignas(16) std::array<std::uint8_t, 0x40> block{};
+  ops.serialize(json, block.data(), 0, "");
+  const char* text = nullptr;
+  std::uint64_t length = 0;
+  std::uint32_t blockFlags = 0;
+  std::memcpy(&text, block.data(), sizeof(text));
+  std::memcpy(&length, block.data() + 0x30, sizeof(length));
+  std::memcpy(&blockFlags, block.data() + 0x1C, sizeof(blockFlags));
+  out->assign(text != nullptr ? text : "", text != nullptr ? static_cast<std::size_t>(length) : 0);
+  if ((blockFlags & 6U) != 0) ops.blockReset(block.data());
+  ops.blockDestroy(block.data());
+  while (!out->empty() && out->back() == '\0') out->pop_back();
+  if (out->find_first_not_of(" \t\r\n") == std::string::npos) *out = "{}";  // the empty document
+  const nlohmann::json parsed = nlohmann::json::parse(*out, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_object()) {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] party data not shared: the game's JSON is not an object (%zu bytes)",
+        out->size());
+    return false;
+  }
+  return true;
+}
+
+/// What LoadReceivedData changed, for the callbacks fired after the events.
+struct ReceivedData {
+  std::vector<std::uint32_t> members;  // member indexes whose data changed
+  bool party = false;
+};
+
+/// Loads the server's data that changed since the last frame into the game's JSON: each remote
+/// member's into its slot (+0x248, index 0 is the local member's own and is never loaded), and the
+/// party's into +0x1F0 for a member (the leader's is its own). A slot whose member changed (a join,
+/// a leave shifting the list) is reloaded or cleared, so slot i always holds member i's data.
+ReceivedData LoadReceivedData(void* self, const SocialParty::View& view) {
+  ReceivedData changed;
+  const JsonOps* ops = ReadyJsonOps();
+  if (ops == nullptr) return changed;
+  for (std::size_t i = 1; i < kMemberJsonSlots; ++i) {
+    const SocialParty::Member* member = i < view.members.size() ? &view.members[i] : nullptr;
+    const std::uint64_t id = member != nullptr ? member->id : 0;
+    const SocialParty::JsonText data = member != nullptr ? member->data : nullptr;
+    if (g_slotMember[i] == id && g_slotData[i] == data) continue;
+    if (data != nullptr) {
+      if (LoadJson(*ops, MemberJson(i), *data, "member", id)) changed.members.push_back(static_cast<std::uint32_t>(i));
+    } else if (g_slotData[i] != nullptr) {
+      ops->clear(MemberJson(i));
+    }
+    g_slotMember[i] = id;
+    g_slotData[i] = data;
+  }
+  const bool host = view.partyId != 0 && view.ownerId == view.selfId;
+  if (!host && view.partyData != g_partyDataLoaded) {
+    if (view.partyData != nullptr)
+      changed.party = LoadJson(*ops, Bytes(self) + 0x1F0, *view.partyData, "party", view.partyId);
+    else if (g_partyDataLoaded != nullptr)
+      ops->clear(Bytes(self) + 0x1F0);
+    g_partyDataLoaded = view.partyData;
+  }
+  return changed;
+}
+
+void SendParty(const char* what, const std::vector<SocialParty::Message>& messages);
+
+/// pnsovr's share half of Update (0x1800ac240, slots 7 and 6): the leader's party data when the game
+/// marked it written (flags bit 0, which is then cleared), the local member's after slot 30 handed it
+/// out; both once more on entering a party, so the server holds them from the start.
+void ShareLocalData(void* self, const SocialParty::View& view) {
+  const JsonOps* ops = ReadyJsonOps();
+  if (ops == nullptr || view.partyId == 0 || view.joining) return;
+  const bool newParty = view.partyId != g_sharedParty;
+  if (newParty) {
+    g_sharedParty = view.partyId;
+    g_memberDataWritten = true;
+  }
+  const std::uint32_t flags = Get32(self, 0x27C);
+  std::string text;
+  if (view.ownerId == view.selfId && ((flags & 1U) != 0 || newParty)) {
+    Put32(self, 0x27C, flags & ~1U);
+    if (SerializeJson(*ops, Bytes(self) + 0x1F0, &text)) {
+      ++g_partyDataShared;
+      g_lastShared = text;
+      Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party data share scope=party party=%llu bytes=%zu",
+          static_cast<unsigned long long>(view.partyId), text.size());
+      SendParty("party data (party)", SocialParty::Global().ShareData(SocialParty::kPartyDataScopeParty, text));
+    }
+  }
+  if (g_memberDataWritten) {
+    g_memberDataWritten = false;
+    if (SerializeJson(*ops, MemberJson(0), &text)) {
+      ++g_memberDataShared;
+      g_lastShared = text;
+      Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party data share scope=member party=%llu bytes=%zu",
+          static_cast<unsigned long long>(view.partyId), text.size());
+      SendParty("party data (member)", SocialParty::Global().ShareData(SocialParty::kPartyDataScopeMember, text));
+    }
+  }
+}
+
+/// Releases every JSON the facade or the game put in the party's and members' slots, and forgets what
+/// was loaded (Reset). Without the game's clear the bytes are zeroed, as before.
+void ClearPartyJson(void* self) {
+  const JsonOps* ops = ReadyJsonOps();
+  if (ops != nullptr) {
+    ops->clear(Bytes(self) + 0x1F0);
+    for (std::size_t i = 0; i < kMemberJsonSlots; ++i) ops->clear(MemberJson(i));
+  }
+  std::memset(Bytes(self) + 0x1F0, 0, 16);
+  std::memset(g_memberJson.data(), 0, g_memberJson.size());
+  g_slotMember.fill(0);
+  for (SocialParty::JsonText& data : g_slotData) data.reset();
+  g_partyDataLoaded.reset();
+}
+
 void DispatchEvent(void* self, const SocialParty::Event& event) {
   using Kind = SocialParty::EventKind;
   switch (event.kind) {
@@ -276,11 +432,17 @@ void DispatchEvent(void* self, const SocialParty::Event& event) {
   }
 }
 
-/// Once per Update, on the game's thread.
+/// Once per Update, on the game's thread. Received data is loaded before the events fire, so a
+/// MemberJoined callback already finds the member's data (PartyMemberJoinedCB reads its headsettype);
+/// pnsovr then fired MemberUpdated for it, and Updated for the party's data.
 void PumpParty(void* self) {
   PublishView();
-  SyncObject(self, *CurrentView());
+  const auto view = CurrentView();
+  SyncObject(self, *view);
+  const ReceivedData received = LoadReceivedData(self, *view);
   for (const SocialParty::Event& event : SocialParty::Global().DrainEvents()) DispatchEvent(self, event);
+  for (const std::uint32_t index : received.members) CallU32(self, kCbMemberUpdated, index);
+  if (received.party) CallVoid(self, kCbUpdated);
 }
 
 void SendParty(const char* what, const std::vector<SocialParty::Message>& messages) {
@@ -340,6 +502,7 @@ void OpenFriendRequestUI(void*, std::uint64_t, std::uint64_t target) {
 // exists), it marks the data dirty and returns the member's JSON root for the game to write into.
 std::uint64_t MemberDataWritable(void* self, std::int32_t index) {
   if (index != 0 || Get32(self, 0x200) == 0) return 0;
+  g_memberDataWritten = true;  // shared by the next Update (ShareLocalData)
   return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(g_memberJson.data()));
 }
 
@@ -480,6 +643,7 @@ void Update(void* self, const void* flags) {
   else
     MaybeCreateParty(flags);
   PumpParty(self);
+  ShareLocalData(self, *CurrentView());
   SyncHostJoinable(self);
   const std::uint32_t callCount = CountCall(g_calls.update);
   if (callCount == 1) {
@@ -596,11 +760,10 @@ void Shutdown(void* self) {
 // Base Reset (0x1800ab420): clears the room JSON, sets the state word to (state & ~1) | 2, zeroes both
 // member counts and the member JSON, and puts the lobby fields back to "no lobby".
 void ResetBase(void* self) {
-  std::memset(Bytes(self) + 0x1F0, 0, 16);  // room JSON root
+  ClearPartyJson(self);  // room JSON root and the member JSON
   Put32(self, 0x27C, (Get32(self, 0x27C) & ~1U) | 2U);
   Put32(self, 0x200, 0);
   Put32(self, 0x204, 0);
-  std::memset(g_memberJson.data(), 0, g_memberJson.size());
   const std::uint64_t invalidMatchType = UINT64_MAX;
   const std::uint16_t invalidTeam = UINT16_MAX;
   const std::uint8_t privateLobby = 2;
@@ -961,6 +1124,11 @@ void FlushJsonTraces() {
   }, nullptr);
 }
 
+void SetJsonOps(const JsonOps& ops) {
+  g_jsonOps = ops;
+  g_jsonOpsSet.store(true, std::memory_order_release);
+}
+
 void* Object() {
   std::call_once(g_objectOnce, [] {
     g_object.vtable = kVtable.data();
@@ -1009,7 +1177,14 @@ PartyStateForTest PartyForTest() {
   out.locked = view->locked;
   out.joinPolicy = Get32(&g_object, 0x2B4);
   out.shareDirty = (Get32(&g_object, 0x27C) & 1U) != 0;
-  for (const SocialParty::Member& member : view->members) out.memberIds.push_back(member.id);
+  for (const SocialParty::Member& member : view->members) {
+    out.memberIds.push_back(member.id);
+    out.memberData.push_back(member.data != nullptr ? *member.data : std::string());
+  }
+  out.partyData = view->partyData != nullptr ? *view->partyData : std::string();
+  out.partyDataShared = g_partyDataShared;
+  out.memberDataShared = g_memberDataShared;
+  out.lastShared = g_lastShared;
   return out;
 }
 #endif

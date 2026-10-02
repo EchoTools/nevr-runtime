@@ -179,22 +179,40 @@ them is the owner's matchmaking work.
 JSON per member, each with a `seqid`, on the party's state in `server/evr_pipeline_party.go` (next to
 `snsPartyInvites`) or on `PartyHandler` (`server/party_handler.go`, guarded by its lock).
 
-**Messages.**
-- New `SNSPartyDataUpdateRequest`: the standard 0x28 header with TargetParam = scope (0 party, 1
-  member), then `seqid u32`, `json_len u32`, JSON (capped, proposal 4 KiB per scope). Party scope from
-  the leader only (else `SNSPartyUpdateFailure`); member scope from the sender for itself.
-- Server-to-client: append a data block to the existing notifies, which old bridges read only up to
-  their known fields (`Feed` `len >= 8`/`>= 16`): `SNSPartyUpdateNotify` (PartyID) gains
-  `seqid u32, json_len u32, JSON`; `SNSPartyUpdateMemberNotify` (PartyID, MemberID) gains the same.
-  Gate the appended block on the capability level anyway, so no unproven trailing bytes reach a game
-  that might parse them (**UNVERIFIED** whether it does).
-- Join snapshot: `snsPartyTrackAndJoin` (`server/evr_pipeline_party.go:153`) sends the joiner one
-  UpdateNotify with the party JSON and one UpdateMemberNotify per member after `PartyJoinSuccess`.
+**Messages.** (As built: nakama `c510c7950`, `38bbe14da`; the runtime commit that follows this doc
+change. Two departures from the first draft, below.)
+- `SNSPartyDataUpdateRequest` (0x3448ca6e8d9dd0ce): the standard 0x28 header with TargetParam = scope
+  (0 party, 1 member), then `seqid u32`, `json_len u32`, a JSON object of at most 4 KiB. Party scope
+  from the leader only (else `SNSPartyUpdateFailure` code 2); member scope from the sender for itself.
+  The reply is `SNSPartyUpdateSuccess` / `SNSPartyUpdateMemberSuccess`. A write whose seqid is not newer
+  than the stored one from the same session is acknowledged and not kept.
+- Server to client: a new `SNSPartyDataNotify` (0x832143ccbf160955): PartyID(8), MemberID(8, 0 = the
+  party's data), seqid(4), json_len(4), JSON. *Departure:* not bytes appended to
+  `SNSPartyUpdateNotify`/`SNSPartyUpdateMemberNotify`; the relay picks recipients by capability level
+  anyway, so a message only level-1 clients get needs no trailing-bytes question answered.
+- The server fills `lobbyid` (upper-case match GUID, or the nil GUID), `matchtype` (the mode symbol, or
+  -1), `team` (or 65535), `lobbytype` (or 2) and `offline` (no status presence) for the writer, plus
+  `headsettype` (1 Rift, 2 Rift S, 3 Quest, 4 Quest on PC, else 0, from the login profile) for a
+  member, over whatever the client sent under those names (owner, 2026-10-01: filled by the server,
+  nothing blank). The party's keys are its leader's.
+- Join: *departure* from "after `PartyJoinSuccess`". The game reads `headsettype` inside
+  PartyMemberJoinedCB, so the data must arrive first: the joiner gets the party's and every other
+  member's data before its `PartyJoinSuccess`, and the others get the joiner's before
+  `PartyJoinNotify` (nakama `snsPartyDataJoining`). The runtime holds data for the party it is joining
+  and on success adds every member it names, as pnsovr added a member when its data packet arrived
+  (0x180090650 -> 0x180082cd0); this also gives a joiner the members besides the leader, which
+  `PartyJoinSuccess` alone never named. Match admission re-sends the entrant's data (and the party's,
+  for its leader), off the admission path.
 
-**Runtime.** The facade runs pnsovr's sync in Update (send party data when flags bit 0 is set and
-clear it; member data when the member's dirty bit is set), loads received JSON into `+0x1f0` / the
-member's slot with the game's own CJson loader (`CJson_LoadFromBuffer` 0x1405f0bd0), fires Updated /
-MemberUpdated, and seeds the local member's `headsettype` as pnsovr did (0x180084910).
+**Runtime.** The facade's Update loads changed data with the game's `CJson_LoadFromBuffer`
+(0x1405f0bd0, which releases the old document once the new one parses) into `+0x1F0` (a member's view
+of the party) and slot i of the member array (slot 0, the local member's own, is never loaded), before
+the frame's events fire, then fires MemberUpdated / Updated; a slot whose member changed is reloaded or
+cleared (0x1405ece60). It shares the leader's party JSON when flags bit 0 is set (then clears it) and
+the local member's after slot 30 handed it out, each serialised by the game's own writer (0x1405f1dc0,
+as `Send` 0x14060e380 does), and both once on entering a party. All five functions are
+prologue-checked at install; with any missing, party data is off and the rest of the party works as
+before.
 
 **Proof.** Nakama: tests that the store keeps the newest seqid, rejects a non-leader party write, and
 builds the join snapshot. Suite: `party_data` already proves the game's writes; it gains the send
