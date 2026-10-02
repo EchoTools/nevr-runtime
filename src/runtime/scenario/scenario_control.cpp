@@ -229,6 +229,17 @@ constexpr std::uint64_t kRefreshFriendsHandlerVA = 0x14019AE10;
 constexpr std::array<std::uint8_t, 16> kRefreshFriendsPrologue = {0x48, 0x8B, 0x89, 0xC8, 0x47, 0x06, 0x00, 0x48,
                                                                   0x85, 0xC9, 0x74, 0x0A, 0x48, 0x8B, 0x01, 0x48};
 // R15NetRefreshRecentlyMetUsersNode (0x140ddfcc0) posts 0x14019b870 (no argument) -> slot 57.
+// CR15NetGame::FindIfPartyHost (echovr.exe 0x14016afc0): what R15NetFindMatchNode (0x140ddb740) posts
+// for Find Arena. It runs Find (0x140168500) only when there is no social object or IsHost (slot 24)
+// is nonzero; a non-host party member's find is dropped. Takes a 0x48-byte request (ReVault decode,
+// 2026-10-02): +0x00 u8 type (0 public), +0x04 u32 (the node's default 3), +0x08 gametype symbol,
+// +0x10 level symbol (-1: the node's default), +0x18 group (-1), +0x20 u16[16] slots, +0x40 count.
+constexpr std::uint64_t kFindIfPartyHostVA = 0x14016AFC0;
+constexpr std::array<std::uint8_t, 16> kFindIfPartyHostPrologue = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83,
+                                                                   0xEC, 0x40, 0x48, 0x8B, 0xF9, 0x48, 0x8B, 0xDA};
+constexpr std::uint64_t kSymbolEchoArena = 0xCB60A4DE7E1CAF73ULL;  // "echo_arena" (symbol_corpus.cpp)
+using FindIfPartyHostFn = void (*)(void* netGame, void* request);
+
 constexpr std::uint64_t kRefreshRecentlyMetHandlerVA = 0x14019B870;
 constexpr std::array<std::uint8_t, 16> kRefreshRecentlyMetPrologue = {0x48, 0x8B, 0x89, 0xC8, 0x47, 0x06, 0x00, 0x48,
                                                                       0x85, 0xC9, 0x74, 0x0A, 0x48, 0x8B, 0x01, 0x48};
@@ -298,6 +309,27 @@ std::string FireAction(const ScenarioProtocol::Command& cmd) {
   if (cmd.action == "request_profile")
     return PostUserId(netGame, Checked(kRequestProfileHandlerVA, kRequestProfilePrologue, "request profile handler", &error),
                       user, &error);
+  if (cmd.action == "find_arena") {
+    auto* find = reinterpret_cast<FindIfPartyHostFn>(
+        Checked(kFindIfPartyHostVA, kFindIfPartyHostPrologue, "find if party host", &error));
+    if (find == nullptr) return error;
+    // FindIfPartyHost writes the request into the NetClientLobby at *(netGame+0x40), which the game only
+    // has once it has entered a lobby (measured: at "logged in" it is null, and the call faulted writing
+    // +0x698, run 20261002T093432).
+    void* lobby = nullptr;
+    std::memcpy(&lobby, static_cast<std::uint8_t*>(netGame) + 0x40, sizeof(lobby));
+    if (lobby == nullptr) return "no lobby object yet (the game creates it when it enters a lobby)";
+    alignas(8) std::array<std::uint8_t, 0x48> request{};
+    const std::uint32_t nodeDefault = 3;
+    const std::uint64_t gametype = kSymbolEchoArena;
+    const std::uint64_t unset = UINT64_MAX;
+    std::memcpy(request.data() + 0x04, &nodeDefault, sizeof(nodeDefault));
+    std::memcpy(request.data() + 0x08, &gametype, sizeof(gametype));
+    std::memcpy(request.data() + 0x10, &unset, sizeof(unset));
+    std::memcpy(request.data() + 0x18, &unset, sizeof(unset));
+    find(netGame, request.data());
+    return std::string();
+  }
   if (cmd.action == "party_join") {
     auto* join = reinterpret_cast<PartyJoinFn>(Checked(kPartyJoinHandlerVA, kPartyJoinPrologue, "party join handler", &error));
     if (join == nullptr) return error;
