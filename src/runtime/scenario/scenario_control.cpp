@@ -25,6 +25,7 @@
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/hook/process_memory.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/patch/party_invite_gate.h"
 #include "runtime/patch/social_facade.h"
@@ -258,6 +259,75 @@ constexpr std::uint64_t kSelfMutedBit = 1ULL << 38;
 
 void* Base() { return EchoVR::g_GameBaseAddress; }
 
+// Early quit lockout (echovr-reconstruction docs/earlyquit_field_analysis.md, 67008866, from ReVault: Quest
+// libr15.so and echovr.exe). CR15NetEarlyQuitPenaltyExpression (0x140d96190) gives the scripts
+// lockoutexpiretimestamp = netGame+0x64828 and lockoutcountdownsec = that minus now; every setter writes -1
+// there, so no message from the game service starts a countdown. Its lockoutcountdownactive output is the
+// constant store `MOV byte ptr [RBX], 0x0` at 0x140d96319. Bit 45 of the flags qword at *(netGame+0x2da0) is the
+// countdown flag CR15NetGame::Update (0x1401bbdb0) clears at expiry; bit 46 is showearlyquitwarning.
+constexpr std::uintptr_t kEarlyQuitPenaltyTsOffset = 0x64820;
+constexpr std::uintptr_t kEarlyQuitExpiryOffset = 0x64828;
+constexpr std::uintptr_t kEarlyQuitPenaltyLevelOffset = 0x64844;
+constexpr std::uint64_t kLockoutCountdownBit = 1ULL << 45;
+constexpr std::uint64_t kEarlyQuitWarningBit = 1ULL << 46;
+constexpr std::uint64_t kPenaltyUpdateEvent = 0xA2E48B35C7CD078FULL;  // delegate_onearlyquitpenaltyupdate
+// fcn 0x1400de820: XOR ECX,ECX; JMP 0x141315468 -- time(NULL), the clock Update and the expression compare to.
+constexpr std::uint64_t kGameTimeVA = 0x1400DE820;
+constexpr std::array<std::uint8_t, 7> kGameTimePrologue = {0x33, 0xC9, 0xE9, 0x41, 0x6C, 0x23, 0x01};
+using GameTimeFn = std::int64_t (*)();
+// CR15NetGame::DispatchEventToSession (0x1401a9fe0): (netGame, event hash).
+constexpr std::uint64_t kDispatchEventVA = 0x1401A9FE0;
+constexpr std::array<std::uint8_t, 16> kDispatchEventPrologue = {0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x74,
+                                                                 0x24, 0x18, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x48};
+using DispatchEventFn = void (*)(void* netGame, std::uint64_t event);
+constexpr std::uint64_t kCountdownActiveStoreVA = 0x140D96319;
+constexpr std::array<std::uint8_t, 3> kCountdownActiveOff = {0xC6, 0x03, 0x00};  // MOV byte ptr [RBX], 0x0
+constexpr std::array<std::uint8_t, 3> kCountdownActiveOn = {0xC6, 0x03, 0x01};   // MOV byte ptr [RBX], 0x1
+
+std::uint64_t* NetGameFlags(void* netGame) {
+  std::uint64_t* flags = nullptr;
+  std::memcpy(&flags, static_cast<const std::uint8_t*>(netGame) + kVoipFlagsOffset, sizeof(flags));
+  return flags;
+}
+
+// Game thread.
+std::string FireEarlyQuit(void* netGame, const ScenarioProtocol::Command& cmd) {
+  std::string error;
+  auto* bytes = static_cast<std::uint8_t*>(netGame);
+  std::uint64_t* flags = NetGameFlags(netGame);
+  if (flags == nullptr) return "no NetGame flags yet";
+  auto* dispatch = reinterpret_cast<DispatchEventFn>(Checked(kDispatchEventVA, kDispatchEventPrologue, "dispatch event", &error));
+  if (dispatch == nullptr) return error;
+  if (cmd.action == "early_quit_countdown_active") {
+    void* store = nevr::ResolveVA_Checked(reinterpret_cast<uintptr_t>(Base()), kCountdownActiveStoreVA);
+    if (store == nullptr) return "the countdown-active store address is not in this process";
+    const bool isOff = nevr::ValidatePrologue(store, kCountdownActiveOff.data(), kCountdownActiveOff.size());
+    const bool isOn = nevr::ValidatePrologue(store, kCountdownActiveOn.data(), kCountdownActiveOn.size());
+    if (!isOff && !isOn) return "the countdown-active store at 0x140d96319 is not MOV byte ptr [RBX], 0/1";
+    auto want = cmd.flag ? kCountdownActiveOn : kCountdownActiveOff;
+    ProcessMemcpy(store, want.data(), want.size());
+    Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] early quit: lockoutcountdownactive store 0x140d96319 was %d, now %d",
+        isOn ? 1 : 0, cmd.flag ? 1 : 0);
+  } else if (cmd.action == "early_quit_warning") {
+    *flags = cmd.flag ? (*flags | kEarlyQuitWarningBit) : (*flags & ~kEarlyQuitWarningBit);
+    Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] early quit: showearlyquitwarning (flags bit 46) = %d", cmd.flag ? 1 : 0);
+  } else {  // early_quit_lockout
+    auto* gameTime = reinterpret_cast<GameTimeFn>(Checked(kGameTimeVA, kGameTimePrologue, "game time", &error));
+    if (gameTime == nullptr) return error;
+    const std::int64_t now = gameTime();
+    const std::int64_t expiry = cmd.number == 0 ? -1 : now + static_cast<std::int64_t>(cmd.number);
+    std::memcpy(bytes + kEarlyQuitExpiryOffset, &expiry, sizeof(expiry));
+    *flags = cmd.number == 0 ? (*flags & ~kLockoutCountdownBit) : (*flags | kLockoutCountdownBit);
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.SCENARIO] early quit: lockout expiry (netGame+0x64828) = %lld (now %lld, %llu s), countdown flag "
+        "(bit 45) = %d",
+        static_cast<long long>(expiry), static_cast<long long>(now), static_cast<unsigned long long>(cmd.number),
+        cmd.number == 0 ? 0 : 1);
+  }
+  dispatch(netGame, kPenaltyUpdateEvent);
+  return std::string();
+}
+
 std::string PostNoArg(void* netGame, void* handler, std::string* error) {
   auto* defer = reinterpret_cast<DeferredCallNoArgFn>(
       Checked(kDeferredCallNoArgVA, kDeferredCallNoArgPrologue, "no-argument deferred call", error));
@@ -416,6 +486,9 @@ std::string FireAction(const ScenarioProtocol::Command& cmd) {
     set(netGame, key.data(), value.data());
     return std::string();
   }
+  if (cmd.action == "early_quit_lockout" || cmd.action == "early_quit_countdown_active" ||
+      cmd.action == "early_quit_warning")
+    return FireEarlyQuit(netGame, cmd);
   if (cmd.action == "refresh_friends")
     return PostNoArg(netGame, Checked(kRefreshFriendsHandlerVA, kRefreshFriendsPrologue, "refresh friends handler", &error),
                      &error);
@@ -454,6 +527,21 @@ nlohmann::json GameStateJson() {
     out["social_group_active"] = active;
     out["social_group_count"] = count;
   }
+  // Early quit state (FireEarlyQuit above): what the penalty expression reads, and the countdown store.
+  std::int64_t penaltyTs = 0;
+  std::int64_t expiry = 0;
+  std::memcpy(&penaltyTs, bytes + kEarlyQuitPenaltyTsOffset, sizeof(penaltyTs));
+  std::memcpy(&expiry, bytes + kEarlyQuitExpiryOffset, sizeof(expiry));
+  nlohmann::json earlyQuit = {{"penalty_ts", penaltyTs},
+                              {"lockout_expiry", expiry},
+                              {"penalty_level", bytes[kEarlyQuitPenaltyLevelOffset]}};
+  if (voipFlags != nullptr) {
+    earlyQuit["countdown_flag"] = (*voipFlags & kLockoutCountdownBit) != 0;
+    earlyQuit["warning_flag"] = (*voipFlags & kEarlyQuitWarningBit) != 0;
+  }
+  if (const void* store = nevr::ResolveVA_Checked(reinterpret_cast<uintptr_t>(Base()), kCountdownActiveStoreVA))
+    earlyQuit["countdown_active_store"] = static_cast<const std::uint8_t*>(store)[2];
+  out["early_quit"] = earlyQuit;
   return out;
 }
 

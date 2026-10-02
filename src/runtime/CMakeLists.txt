@@ -428,6 +428,13 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core minhook zstd::libzstd nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_social_facade DISCOVERY_MODE PRE_TEST)
 
+    add_executable(test_scenario_early_quit tests/test_scenario_early_quit.cpp)
+    set_source_files_properties(tests/test_scenario_early_quit.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_scenario_early_quit PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_scenario_early_quit PRIVATE
+      GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_scenario_early_quit DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp)
     target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_schannel_cred_guard PRIVATE GTest::gtest GTest::gtest_main)

@@ -147,11 +147,17 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
     ok = u64("code", 0xFFFF, &cmd.number);
   } else if (action == "refresh_recently_met") {
     ok = true;
+  } else if (action == "early_quit_lockout") {
+    ok = u64("seconds", 7ULL * 24 * 3600, &cmd.number);  // 0 clears the lockout
+  } else if (action == "early_quit_countdown_active") {
+    ok = boolean("active", &cmd.flag);
+  } else if (action == "early_quit_warning") {
+    ok = boolean("show", &cmd.flag);
   } else {
     *error = "fire supports friend_invite, add_friend, respond_to_invite, invite_users, request_profile, party_join, "
              "party_lock, set_join_policy, voip_mute_self, voip_mute_user, social_groups_set_active, enable_social_feature, "
-             "set_party_member_string, set_party_string, refresh_friends, refresh_recently_met, find_arena and "
-             "party_join_failed_callback";
+             "set_party_member_string, set_party_string, refresh_friends, refresh_recently_met, find_arena, "
+             "party_join_failed_callback, early_quit_lockout, early_quit_countdown_active and early_quit_warning";
     return false;
   }
   if (!ok) return false;
