@@ -179,7 +179,7 @@ them is the owner's matchmaking work.
 JSON per member, each with a `seqid`, on the party's state in `server/evr_pipeline_party.go` (next to
 `snsPartyInvites`) or on `PartyHandler` (`server/party_handler.go`, guarded by its lock).
 
-**Messages.** (As built: nakama `c510c7950`, `38bbe14da`; the runtime commit that follows this doc
+**Messages.** (As built: nakama `251535cee`, `f1658d1dc`, `d39d09914`; the runtime commit that follows this doc
 change. Two departures from the first draft, below.)
 - `SNSPartyDataUpdateRequest` (0x3448ca6e8d9dd0ce): the standard 0x28 header with TargetParam = scope
   (0 party, 1 member), then `seqid u32`, `json_len u32`, a JSON object of at most 4 KiB. Party scope
