@@ -233,10 +233,14 @@ std::uint32_t Get32(const void* self, std::size_t offset) {
 void Put32(void* self, std::size_t offset, std::uint32_t value) { std::memcpy(Bytes(self) + offset, &value, sizeof(value)); }
 void Put64(void* self, std::size_t offset, std::uint64_t value) { std::memcpy(Bytes(self) + offset, &value, sizeof(value)); }
 
+/// pnsovr's room id field (+0x2A8): the party, or while a join is in flight the party being joined
+/// (JoinInternal stores it before the join answers, 0x18008d3db).
+std::uint64_t ViewRoomId(const SocialParty::View& view) { return view.partyId != 0 ? view.partyId : view.joiningPartyId; }
+
 /// The object fields the game reads directly (not through a slot): room id, owner index, the local
 /// and total member counts, the creating/joining flag bits, max members and the member JSON array.
 void SyncObject(void* self, const SocialParty::View& view) {
-  Put64(self, 0x2A8, view.partyId);
+  Put64(self, 0x2A8, ViewRoomId(view));
   std::uint32_t owner = 0;
   for (std::size_t i = 0; i < view.members.size(); ++i)
     if (view.members[i].id == view.ownerId) owner = static_cast<std::uint32_t>(i);
@@ -296,12 +300,30 @@ void KickMember(void*, std::uint32_t index) { SendParty("party kick", SocialPart
 void DismissInvite(void*, std::int32_t index) {
   SendParty("party invite dismiss", SocialParty::Global().Dismiss(static_cast<std::uint32_t>(index)));
 }
-void AcceptInvite(void* self, std::int32_t index) {
-  if (!CallGate(self, kCbInviteAccepted)) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party accept: the game declined to join");
+// Slot 2 JoinInternal (pnsovr 0x18008d1e0), in pnsovr's order: drop the invites to that party,
+// defer if a create or join is in flight, run the accept gate, then leave and join.
+void JoinParty(void* self, std::uint64_t partyId) {
+  SocialParty::State& party = SocialParty::Global();
+  if (!party.BeginJoin(partyId)) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party join party=%llu: deferred=%llu (a create or join is in flight)",
+        static_cast<unsigned long long>(partyId), static_cast<unsigned long long>(party.DeferredJoin()));
     return;
   }
-  SendParty("party invite accept", SocialParty::Global().Accept(static_cast<std::uint32_t>(index)));
+  if (!CallGate(self, kCbInviteAccepted)) {
+    party.AbandonJoin(partyId);
+    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party join party=%llu: the game declined to join",
+        static_cast<unsigned long long>(partyId));
+    return;
+  }
+  SendParty("party join", party.Join(partyId));
+}
+
+// Slot 73 AcceptInvite (pnsovr 0x1800821f0): JoinInternal on the party of the invite at `index`.
+void AcceptInvite(void* self, std::int32_t index) {
+  const std::uint64_t partyId = index < 0 ? 0 : SocialParty::Global().InvitePartyAt(static_cast<std::uint32_t>(index));
+  Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party accept index=%d party=%llu", index,
+      static_cast<unsigned long long>(partyId));
+  if (partyId != 0) JoinParty(self, partyId);
 }
 
 // The game calls this when the friends tab opens. The roster is otherwise filled only once, at
@@ -312,15 +334,6 @@ void RefreshFriends(void*) { SendParty("refresh friends", SocialParty::Global().
 // Oculus friend-request overlay; here it is the friend request itself.
 void OpenFriendRequestUI(void*, std::uint64_t, std::uint64_t target) {
   SendParty("friend request", SocialParty::Global().RequestFriend(target));
-}
-
-// Slot 2 JoinInternal (0x18008d1e0): the game's join by party id. The accept gate callback runs first.
-void JoinParty(void* self, std::uint64_t partyId) {
-  if (!CallGate(self, kCbInviteAccepted)) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party join: the game declined to join");
-    return;
-  }
-  SendParty("party join", SocialParty::Global().Join(partyId));
 }
 
 // Slot 30 MemberDataWritable (0x18008fcf0): only for the local member (index 0, once a local user
@@ -367,7 +380,7 @@ std::uint32_t IsHost(void*) {
 }
 
 std::uint64_t Id(void*) {
-  const std::uint64_t result = CurrentView()->partyId;
+  const std::uint64_t result = ViewRoomId(*CurrentView());
   LogQuery("Id", 0xC8, CountCall(g_calls.id), result);
   return result;
 }
@@ -430,7 +443,12 @@ void MaybeCreateParty(const void* flagsPointer) {
 
 void Update(void* self, const void* flags) {
   FlushJsonTraces();
-  MaybeCreateParty(flags);
+  // pnsovr's Update retries a deferred join in place of its create decision (0x180095ab4).
+  const std::uint64_t deferredJoin = SocialParty::Global().DeferredJoin();
+  if (deferredJoin != 0)
+    JoinParty(self, deferredJoin);
+  else
+    MaybeCreateParty(flags);
   PumpParty(self);
   const std::uint32_t callCount = CountCall(g_calls.update);
   if (callCount == 1) {

@@ -268,6 +268,7 @@ struct View {
   std::string selfName;
   bool creating = false;
   bool joining = false;
+  std::uint64_t joiningPartyId = 0;  // the party a join is in flight to
   bool locked = false;
   std::vector<Member> members;  // [0] is the local user once the party exists
   std::vector<Invite> invites;  // arrival order; the game indexes them newest first
@@ -308,13 +309,51 @@ class State {
     return out;
   }
 
-  /// JoinInternal(roomId): join the party with this id (the game's join button). Any pending invites to
-  /// that party are dropped, as pnsovr does; Nakama leaves the old party itself.
+  /// JoinInternal (pnsovr 0x18008d1e0), first half: every pending invite to that party is dropped,
+  /// whatever happens next. Returns whether the join can go ahead now; while a create or join is in
+  /// flight, or before the local user is known, the join is kept as the deferred join instead (pnsovr
+  /// stores it at 0x180346838) and Update retries it.
+  bool BeginJoin(std::uint64_t partyId) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (partyId == 0) return false;
+    for (std::size_t i = invites_.size(); i > 0; --i) {
+      if (invites_[i - 1].partyId != partyId) continue;
+      if (joinInviteParty_ != partyId) {  // the newest invite to it answers the join
+        joinInviteParty_ = partyId;
+        joinInviter_ = invites_[i - 1].senderId;
+      }
+      invites_.erase(invites_.begin() + static_cast<std::ptrdiff_t>(i - 1));
+    }
+    if (creating_ || joining_ || self_ == 0) {
+      deferredJoin_ = partyId;
+      return false;
+    }
+    return true;
+  }
+
+  /// The game's accept gate refused the join: forget it.
+  void AbandonJoin(std::uint64_t partyId) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    ForgetJoinLocked(partyId);
+  }
+
+  /// JoinInternal, second half (after the accept gate): nothing if already in that party; otherwise
+  /// leave the current one (slot 3 "for join", then PartyLeft, as pnsovr does; Nakama leaves the old
+  /// party itself) and ask to join. A join that came from an invite is the invite's accept, sent to
+  /// the inviter, so Nakama joins through the invite it holds; any other join is a join request.
   std::vector<Message> Join(std::uint64_t partyId) {
     std::lock_guard<std::mutex> guard(mutex_);
     std::vector<Message> out;
-    if (partyId == 0 || partyId == partyId_ || joining_ || creating_) return out;
-    if (partyId_ != 0) {  // slot 3 "for join", then PartyLeft, exactly as pnsovr's JoinInternal does
+    if (partyId == 0) return out;
+    if (creating_ || joining_ || self_ == 0) {
+      deferredJoin_ = partyId;
+      return out;
+    }
+    if (partyId == partyId_) {
+      ForgetJoinLocked(partyId);
+      return out;
+    }
+    if (partyId_ != 0) {
       RemoteMembersLeaveLocked();
       ClearParty();
       events_.push_back(MakeEvent(EventKind::kLeft));
@@ -322,8 +361,27 @@ class State {
     for (std::size_t i = invites_.size(); i > 0; --i)
       if (invites_[i - 1].partyId == partyId) invites_.erase(invites_.begin() + static_cast<std::ptrdiff_t>(i - 1));
     joining_ = true;
-    out.push_back(Standard(kJoinRequest, SelfUuid(), partyId));
+    joiningPartyId_ = partyId;
+    if (joinInviteParty_ == partyId && joinInviter_ != 0)
+      out.push_back(Targeted(kInviteResponse, SelfUuid(), MemberUuid(joinInviter_), 1));
+    else
+      out.push_back(Standard(kJoinRequest, SelfUuid(), partyId));
+    ForgetJoinLocked(partyId);
     return out;
+  }
+
+  /// The join pnsovr's Update retries in place of its create decision, or 0.
+  std::uint64_t DeferredJoin() const {
+    std::lock_guard<std::mutex> guard(mutex_);
+    return deferredJoin_;
+  }
+
+  /// The party of the invite the game lists at `index` (newest first), or 0. pnsovr's AcceptInvite
+  /// (slot 73, 0x1800821f0) is JoinInternal on exactly this.
+  std::uint64_t InvitePartyAt(std::uint32_t index) const {
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (index >= invites_.size()) return 0;
+    return invites_[invites_.size() - 1 - index].partyId;
   }
 
   /// Reset (slot 12): pnsovr leaves the room it is in without telling the game (no Left callback) and
@@ -334,17 +392,6 @@ class State {
     if (partyId_ != 0) out.push_back(Standard(kLeaveRequest, SelfUuid(), 0));
     RemoteMembersLeaveLocked();  // the base cleanup fires MemberLeft for each remote member, but no Left
     ClearParty();
-    return out;
-  }
-
-  /// Accept the invite the game lists at `index` (newest first).
-  std::vector<Message> Accept(std::uint32_t index) {
-    std::lock_guard<std::mutex> guard(mutex_);
-    std::vector<Message> out;
-    Invite invite;
-    if (!TakeInvite(index, &invite)) return out;
-    joining_ = true;
-    out.push_back(Targeted(kInviteResponse, SelfUuid(), MemberUuid(invite.senderId), 1));
     return out;
   }
 
@@ -456,6 +503,7 @@ class State {
       pendingInvites_.clear();
     } else if (n == "PartyJoinSuccess" && len >= 16) {
       joining_ = false;
+      joiningPartyId_ = 0;
       partyId_ = u64(0);
       ownerId_ = u64(8);
       members_.assign(1, Member{self_, std::to_string(self_)});
@@ -464,6 +512,7 @@ class State {
       if (members_.size() > 1) events_.push_back(MakeEvent(EventKind::kMemberJoined, 1));
     } else if (n == "PartyJoinFailure") {
       joining_ = false;
+      joiningPartyId_ = 0;
       // Nakama: 1 = unknown party or tracking failure, 2 = the join was refused. The game's codes: 1 is
       // "not found" and 4 is "not joinable" (locked or full); anything else is generic.
       const std::uint32_t nakamaCode = u8(8);
@@ -535,6 +584,7 @@ class State {
     view.selfName = selfName_;
     view.creating = creating_;
     view.joining = joining_;
+    view.joiningPartyId = joining_ ? joiningPartyId_ : 0;
     view.locked = locked_;
     view.members = members_;
     view.invites = invites_;
@@ -581,11 +631,20 @@ class State {
       events_.push_back(MakeEvent(EventKind::kMemberLeft, 0, members_[i - 1].id, members_[i - 1].name));
   }
 
+  void ForgetJoinLocked(std::uint64_t partyId) {
+    if (deferredJoin_ == partyId) deferredJoin_ = 0;
+    if (joinInviteParty_ == partyId) {
+      joinInviteParty_ = 0;
+      joinInviter_ = 0;
+    }
+  }
+
   void ClearParty() {
     partyId_ = 0;
     ownerId_ = 0;
     creating_ = false;
     joining_ = false;
+    joiningPartyId_ = 0;
     locked_ = false;
     members_.clear();
     pendingInvites_.clear();
@@ -598,6 +657,10 @@ class State {
   std::uint64_t ownerId_ = 0;
   bool creating_ = false;
   bool joining_ = false;
+  std::uint64_t joiningPartyId_ = 0;
+  std::uint64_t deferredJoin_ = 0;
+  std::uint64_t joinInviteParty_ = 0;  // a join that came from an invite, and who sent it
+  std::uint64_t joinInviter_ = 0;
   bool locked_ = false;
   std::vector<Member> members_;
   std::vector<Invite> invites_;

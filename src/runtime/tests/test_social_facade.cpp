@@ -648,16 +648,20 @@ TEST(SocialParty, AcceptingTheNewestInviteJoinsThatParty) {
   EXPECT_EQ(state.Snapshot().invites.size(), 2u);
   EXPECT_EQ(state.DrainEvents().size(), 2u);
 
-  const auto out = state.Accept(0);  // the game lists newest first
+  ASSERT_EQ(state.InvitePartyAt(0), 6u) << "the game lists newest first";
+  ASSERT_TRUE(state.BeginJoin(6));
+  const auto out = state.Join(6);
   ASSERT_EQ(out.size(), 1u);
   EXPECT_EQ(out[0].symbol, SocialParty::kInviteResponse);
   const auto inviter = SocialParty::MemberUuid(202);
   EXPECT_EQ(std::memcmp(out[0].payload.data() + 16, inviter.data(), 16), 0);
   EXPECT_EQ(static_cast<std::uint8_t>(out[0].payload[40]), 1);
   EXPECT_TRUE(state.Snapshot().joining);
+  EXPECT_EQ(state.Snapshot().joiningPartyId, 6u);
   EXPECT_EQ(state.Snapshot().invites.size(), 1u);
 
   ASSERT_TRUE(FeedParty(state, "PartyJoinSuccess", U64s({6, 202})));
+  EXPECT_EQ(state.Snapshot().joiningPartyId, 0u);
   const auto view = state.Snapshot();
   EXPECT_EQ(view.partyId, 6u);
   EXPECT_EQ(view.ownerId, 202u);
@@ -680,7 +684,106 @@ TEST(SocialParty, DismissingAnInviteRejectsItWithoutJoining) {
   EXPECT_EQ(static_cast<std::uint8_t>(out[0].payload[40]), 0);
   EXPECT_FALSE(state.Snapshot().joining);
   EXPECT_TRUE(state.Snapshot().invites.empty());
-  EXPECT_TRUE(state.Accept(0).empty()) << "an index past the list does nothing";
+  EXPECT_EQ(state.InvitePartyAt(0), 0u) << "an index past the list names no party";
+}
+
+TEST(SocialParty, AJoinWithoutAnInviteIsAJoinRequestAndOneFromAnInviteIsItsAccept) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_TRUE(state.BeginJoin(8));
+  const auto plain = state.Join(8);
+  ASSERT_EQ(plain.size(), 1u);
+  EXPECT_EQ(plain[0].symbol, SocialParty::kJoinRequest);
+  ASSERT_TRUE(FeedParty(state, "PartyJoinFailure", U64s({8, 1})));
+
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({9, 203})));
+  ASSERT_TRUE(state.BeginJoin(9)) << "the join button on a party there is an invite to";
+  EXPECT_TRUE(state.Snapshot().invites.empty());
+  const auto accept = state.Join(9);
+  ASSERT_EQ(accept.size(), 1u);
+  EXPECT_EQ(accept[0].symbol, SocialParty::kInviteResponse);
+  const auto inviter = SocialParty::MemberUuid(203);
+  EXPECT_EQ(std::memcmp(accept[0].payload.data() + 16, inviter.data(), 16), 0);
+}
+
+TEST(SocialParty, AJoinWhileAnotherIsInFlightIsDeferredAndRetried) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({5, 201})));
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({6, 202})));
+  ASSERT_TRUE(state.BeginJoin(5));
+  ASSERT_EQ(state.Join(5).size(), 1u);
+  EXPECT_FALSE(state.BeginJoin(6)) << "a join is in flight";
+  EXPECT_EQ(state.DeferredJoin(), 6u);
+  EXPECT_TRUE(state.Snapshot().invites.empty()) << "the invite is dropped even when the join waits";
+
+  ASSERT_TRUE(FeedParty(state, "PartyJoinFailure", U64s({5, 1})));
+  ASSERT_TRUE(state.BeginJoin(state.DeferredJoin())) << "Update retries it once nothing is in flight";
+  const auto out = state.Join(6);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].symbol, SocialParty::kInviteResponse) << "still the accept of the dropped invite";
+  EXPECT_EQ(state.DeferredJoin(), 0u);
+}
+
+TEST(SocialParty, ARefusedJoinIsForgottenAndJoiningTheCurrentPartyDoesNothing) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({5, 201})));
+  ASSERT_TRUE(state.BeginJoin(5));
+  state.AbandonJoin(5);
+  EXPECT_TRUE(state.Snapshot().invites.empty()) << "pnsovr drops the invite before the gate";
+  EXPECT_EQ(state.DeferredJoin(), 0u);
+
+  ASSERT_TRUE(FeedParty(state, "PartyJoinSuccess", U64s({7, 201})));
+  state.DrainEvents();
+  ASSERT_TRUE(state.BeginJoin(7));
+  EXPECT_TRUE(state.Join(7).empty()) << "already in that party";
+  EXPECT_TRUE(state.DrainEvents().empty());
+}
+
+TEST(SocialParty, AcceptingAnInviteLeavesTheCurrentPartyFirst) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_TRUE(FeedParty(state, "PartyJoinSuccess", U64s({7, 201})));
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({9, 203})));
+  state.DrainEvents();
+  ASSERT_TRUE(state.BeginJoin(9));
+  ASSERT_EQ(state.Join(9).size(), 1u);
+  const auto events = state.DrainEvents();
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0].kind, SocialParty::EventKind::kMemberLeft);
+  EXPECT_EQ(events[0].id, 201u);
+  EXPECT_EQ(events[1].kind, SocialParty::EventKind::kLeft);
+  const auto view = state.Snapshot();
+  EXPECT_EQ(view.partyId, 0u);
+  EXPECT_EQ(view.joiningPartyId, 9u);
+}
+
+TEST(SocialFacade, AcceptInviteJoinsThatPartyAndIdShowsItWhileTheJoinIsInFlight) {
+  using AcceptFn = void (*)(void*, std::int32_t);
+  using CountFn = std::uint32_t (*)(void*);
+  using IdFn = std::uint64_t (*)(void*);
+  using UpdateFn = void (*)(void*, const void*);
+  SocialParty::Global().SetSelf(77, "Me");
+  SocialParty::Global().ResetParty();
+  void* object = SocialFacade::Object();
+  const Slot* vtable = Vtable(object);
+  std::uint8_t flags = 0;
+  ASSERT_TRUE(FeedParty(SocialParty::Global(), "PartyInviteNotify", U64s({51, 4242})));
+  reinterpret_cast<UpdateFn>(vtable[13])(object, &flags);
+  ASSERT_EQ(reinterpret_cast<CountFn>(vtable[70])(object), 1u);
+
+  reinterpret_cast<AcceptFn>(vtable[73])(object, 0);  // nothing sends in tests; the state is what counts
+  reinterpret_cast<UpdateFn>(vtable[13])(object, &flags);
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[70])(object), 0u);
+  EXPECT_EQ(reinterpret_cast<IdFn>(vtable[25])(object), 51u) << "pnsovr's Id is the room being joined";
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[20])(object), 0u) << "not Ready while joining";
+
+  ASSERT_TRUE(FeedParty(SocialParty::Global(), "PartyJoinFailure", U64s({51, 1})));
+  reinterpret_cast<UpdateFn>(vtable[13])(object, &flags);
+  EXPECT_EQ(reinterpret_cast<IdFn>(vtable[25])(object), 0u);
+  SocialParty::Global().ResetParty();
+  SocialParty::Global().DrainEvents();
 }
 
 TEST(SocialParty, MembersComeAndGoAndTheHostFollowsTheLeader) {
