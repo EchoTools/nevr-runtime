@@ -896,7 +896,12 @@ TEST(SocialParty, JoinFailureCodesAreTheGamesAndAnInviteFromTheSameSenderReplace
   auto events = state.DrainEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].kind, SocialParty::EventKind::kJoinFailed);
-  EXPECT_EQ(events[0].code, 4u) << "refused maps to the game's 'not joinable'";
+  EXPECT_EQ(events[0].code, 4u) << "refused maps to the game's 'locked'";
+  EXPECT_EQ(SocialParty::GameJoinFailureCode(1), 1u);
+  EXPECT_EQ(SocialParty::GameJoinFailureCode(3), 3u);
+  EXPECT_EQ(SocialParty::GameJoinFailureCode(5), 5u) << "full";
+  EXPECT_EQ(SocialParty::GameJoinFailureCode(6), 6u);
+  EXPECT_EQ(SocialParty::GameJoinFailureCode(9), 0u) << "unknown";
 
   ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({5, 201})));
   ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({8, 201})));

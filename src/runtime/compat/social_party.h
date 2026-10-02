@@ -229,6 +229,15 @@ enum class EventKind {
   kInviteFailed,     // id, name, code
 };
 
+/// Nakama's PartyJoinFailure code as the game's JoinFailed code (see Feed).
+constexpr std::uint32_t GameJoinFailureCode(std::uint32_t nakamaCode) {
+  switch (nakamaCode) {
+    case 1: case 3: case 4: case 5: case 6: return nakamaCode;
+    case 2: return 4;
+    default: return 0;
+  }
+}
+
 struct Event {
   EventKind kind = EventKind::kUpdated;
   std::uint32_t index = 0;
@@ -513,11 +522,10 @@ class State {
     } else if (n == "PartyJoinFailure") {
       joining_ = false;
       joiningPartyId_ = 0;
-      // Nakama: 1 = unknown party or tracking failure, 2 = the join was refused. The game's codes: 1 is
-      // "not found" and 4 is "not joinable" (locked or full); anything else is generic.
-      const std::uint32_t nakamaCode = u8(8);
-      events_.push_back(MakeEvent(EventKind::kJoinFailed, 0, 0, std::string(),
-                                  nakamaCode == 1 ? 1U : (nakamaCode == 2 ? 4U : 0U)));
+      // The game's codes (PartyJoinFailedCB 0x140189590): 1 not found, 3 no permission, 4 locked,
+      // 5 full, 6 version, anything else unknown. Nakama sends those, plus 2 for a join it refused
+      // without saying why, which the game shows as locked.
+      events_.push_back(MakeEvent(EventKind::kJoinFailed, 0, 0, std::string(), GameJoinFailureCode(u8(8))));
     } else if (n == "PartyJoinNotify" && len >= 16 && u64(0) == partyId_) {
       const std::uint64_t id = u64(8);
       if (id != self_ && Find(id) < 0) {
