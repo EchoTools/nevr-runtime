@@ -86,7 +86,10 @@ def load_scenario(path: pathlib.Path) -> dict:
         step = substitute(raw, variables)
         step["kind"] = kinds[0]
         steps.append(step)
-    return {"name": data["name"], "description": data.get("description", ""), "steps": steps}
+    server = data.get("server", "production")
+    if server not in ("production", "local"):
+        raise ValueError(f"{path}: server must be 'production' or 'local', not {server!r}")
+    return {"name": data["name"], "description": data.get("description", ""), "steps": steps, "server": server}
 
 
 class ConsoleLog:
@@ -242,6 +245,39 @@ def wait_for_gpu_memory(needed: int = GPU_FREE_NEEDED_MIB) -> None:
         time.sleep(GPU_POLL_SECONDS)
 
 
+NAKAMA_LOCAL = REPO / "tools/nakama-local"
+LOCAL_SERVER_CONFIG = SCRATCH.parent / "local-server"
+
+
+def write_local_server_config() -> pathlib.Path:
+    """The game config for a `server: local` scenario: an empty game JSON and, beside it, the
+    runtime's config.yaml pointing at the local nakama as the seeded test account (the same template
+    as tools/winvm/systest.py). Fails loudly when the local nakama is not up or not seeded."""
+    state = NAKAMA_LOCAL / ".state/nakama.yml"
+    if not state.exists():
+        raise StepFailed("no local nakama state; run `just nakama-dev-up && just nakama-seed`")
+    key = re.search(r"server_key:\s*(\S+)", state.read_text())
+    if not key:
+        raise StepFailed(f"no server_key in {state}")
+    try:
+        socket.create_connection(("127.0.0.1", 7350), timeout=5).close()
+    except OSError as exc:
+        raise StepFailed(f"local nakama is not listening on 127.0.0.1:7350 ({exc}); run `just nakama-dev-up`")
+    sys.path.insert(0, str(NAKAMA_LOCAL))
+    import seed  # noqa: E402  (constants only)
+    LOCAL_SERVER_CONFIG.mkdir(parents=True, exist_ok=True)
+    (LOCAL_SERVER_CONFIG / "config.json").write_text("{}\n")
+    (LOCAL_SERVER_CONFIG / "config.yaml").write_text(
+        "services:\n"
+        f'  socket_uri: "ws://127.0.0.1:7350/ws?format=evr&token={key.group(1)}"\n'
+        "identity:\n"
+        f'  discord_id: "{seed.DISCORD_ID}"\n'
+        "auth:\n"
+        f'  password: "{seed.PASSWORD}"\n'
+        f'  server_key: "{key.group(1)}"\n')
+    return LOCAL_SERVER_CONFIG / "config.json"
+
+
 def wait_for_wineserver_exit() -> None:
     """Block until the prefix's wineserver has exited (`wineserver -w`). `-k` only signals it; a
     client launched while the old server is still going down started with a broken socket layer
@@ -289,8 +325,11 @@ class Run:
 
     def launch(self):
         launcher_out = self.out / "launch-client.out"
+        command = [str(REPO / "launch-client.sh"), "--dll", str(self.dll)]
+        if self.scenario.get("server") == "local":
+            command += ["--config", str(write_local_server_config())]
         self.launcher = subprocess.Popen(
-            [str(REPO / "launch-client.sh"), "--dll", str(self.dll)], cwd=REPO,
+            command, cwd=REPO,
             stdout=launcher_out.open("w"), stderr=subprocess.STDOUT, start_new_session=True)
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:

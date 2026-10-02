@@ -208,11 +208,32 @@ scenario-all:
     set -euo pipefail
     just preset=mingw-scenario build
     cmake --build --preset mingw-scenario
+    # `server: local` scenarios run against the nakama built from the social feature branch.
+    just nakama-dev-up
+    just nakama-seed
     python3 tools/scenario/run_all.py
 
 nakama-up:
     python3 tools/nakama-local/setup.py
     docker compose -f tools/nakama-local/docker-compose.yml up -d
+
+# The local stack running a nakama built from source (NAKAMA_SRC, default the social feature worktree
+# ~/src/nakama-worktrees/nevr-social, branch feat/nevr-social): a static
+# binary in the scratch dir, mounted over the image's (tools/nakama-local/docker-compose.dev.yml).
+# Unreleased server changes are tested here; nothing is built into an image or pushed.
+nakama-dev-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src="${NAKAMA_SRC:-$HOME/src/nakama-worktrees/nevr-social}"
+    out=/var/tmp/work-nevr-runtime/nakama-dev/nakama
+    mkdir -p "$(dirname "$out")"
+    commit=$(git -C "$src" rev-parse --short HEAD)
+    dirty=$(git -C "$src" status --porcelain | wc -l)
+    echo "nakama-dev: building $src at $commit (uncommitted files: $dirty) -> $out"
+    (cd "$src" && CGO_ENABLED=0 go build -trimpath -mod=mod -ldflags "-s -w -X main.version=nevr-local-$commit" -o "$out" .)
+    python3 tools/nakama-local/setup.py
+    NAKAMA_DEV_BINARY="$out" docker compose -f tools/nakama-local/docker-compose.yml -f tools/nakama-local/docker-compose.dev.yml up -d --force-recreate nakama
+    echo "nakama-dev: started nevr-local-$commit"
 
 nakama-down:
     docker compose -f tools/nakama-local/docker-compose.yml down

@@ -7,13 +7,17 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 # --dll PATH deploys that BugSplat64.dll instead of the release build (the scenario runner passes
-# the mingw-scenario build; see tools/scenario/run_scenario.py). Everything else is unchanged.
+# the mingw-scenario build; see tools/scenario/run_scenario.py). --config PATH starts the game with
+# `-config PATH` (a JSON file; the runtime reads config.yaml from the same directory), so a run can
+# point at the local nakama without touching the game directory. Everything else is unchanged.
 DLL=build/mingw-release/bin/BugSplat64.dll
+CONFIG=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dll) DLL="${2:?--dll needs a path}"; shift 2 ;;
-    -h|--help) echo "usage: launch-client.sh [--dll PATH]  (default $DLL)"; exit 0 ;;
-    *) echo "unknown argument: $1 (usage: launch-client.sh [--dll PATH])" >&2; exit 2 ;;
+    --config) CONFIG="${2:?--config needs a path}"; shift 2 ;;
+    -h|--help) echo "usage: launch-client.sh [--dll PATH] [--config PATH]  (default $DLL)"; exit 0 ;;
+    *) echo "unknown argument: $1 (usage: launch-client.sh [--dll PATH] [--config PATH])" >&2; exit 2 ;;
   esac
 done
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist; build it first" >&2; exit 2; }
@@ -86,7 +90,13 @@ echo "=== Console log: $CONSOLE_LOG ==="
 
 start=$(date +%s)
 set +e
-(cd "$GAME_DIR" && wine ./echovr.exe -noovr -windowed -mp) > "$CONSOLE_LOG" 2>&1
+game_args=(-noovr -windowed -mp)
+if [[ -n "$CONFIG" ]]; then
+  [[ -f "$CONFIG" ]] || { echo "ERROR: --config $CONFIG does not exist" >&2; exit 2; }
+  game_args+=(-config "Z:${CONFIG//\//\\}")
+  echo "=== game config: $CONFIG (config.yaml from its directory) ==="
+fi
+(cd "$GAME_DIR" && wine ./echovr.exe "${game_args[@]}") > "$CONSOLE_LOG" 2>&1
 exit_code=$?
 set -e
 wait
