@@ -164,6 +164,11 @@ def state_matches(state: dict, step: dict) -> tuple[bool, str]:
         value = state
         for part in str(spec["path"]).split("."):
             value = value.get(part) if isinstance(value, dict) else None
+        if "contains" in spec or "lacks" in spec:
+            items = [str(v) for v in value] if isinstance(value, list) else None
+            want_in, want_out = spec.get("contains"), spec.get("lacks")
+            ok = items is not None and (want_in is None or str(want_in) in items) and (want_out is None or str(want_out) not in items)
+            return ok, f"{spec['path']}={value!r} (want contains {want_in!r}, lacks {want_out!r})"
         if "bits_set" in spec or "bits_clear" in spec:
             mask_set, mask_clear = int(spec.get("bits_set", 0)), int(spec.get("bits_clear", 0))
             ok = isinstance(value, int) and (value & mask_set) == mask_set and (value & mask_clear) == 0

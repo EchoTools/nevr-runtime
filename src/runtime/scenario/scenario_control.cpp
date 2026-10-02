@@ -228,6 +228,16 @@ using SetStringFn = void (*)(void* netGame, const char* key, const char* value);
 constexpr std::uint64_t kRefreshRecentlyMetHandlerVA = 0x14019B870;
 constexpr std::array<std::uint8_t, 16> kRefreshRecentlyMetPrologue = {0x48, 0x8B, 0x89, 0xC8, 0x47, 0x06, 0x00, 0x48,
                                                                       0x85, 0xC9, 0x74, 0x0A, 0x48, 0x8B, 0x01, 0x48};
+// R15NetVoipMuteUserNode (0x140de6110 -> 0x140f47cd0): for a user not in a lobby slot it posts
+// 0x1401cc930(netGame, &id16, mute) through 0x140d2ca10, which adds or removes the id in the mute list
+// (ids at [netGame+0x64780], count at netGame+0x64788) and stores it in the profile ("mute|users").
+// The node's binder only supplies the NetGame; this calls the handler with it directly.
+constexpr std::uint64_t kMuteUserHandlerVA = 0x1401CC930;
+constexpr std::array<std::uint8_t, 15> kMuteUserPrologue = {0x4C, 0x8B, 0xDC, 0x55, 0x41, 0x54, 0x41, 0x55,
+                                                            0x48, 0x83, 0xEC, 0x70, 0x0F, 0xB6, 0x02};
+using MuteUserFn = void (*)(void* netGame, const std::uint64_t* id, std::uint32_t mute);
+constexpr std::uintptr_t kMuteListOffset = 0x64780;
+constexpr std::uintptr_t kMuteCountOffset = 0x64788;
 constexpr std::uintptr_t kVoipFlagsOffset = 0x2DA0;  // netGame: pointer to the u64 whose bit 38 is "self muted"
 constexpr std::uint64_t kSelfMutedBit = 1ULL << 38;
 
@@ -311,6 +321,16 @@ std::string FireAction(const ScenarioProtocol::Command& cmd) {
     defer(static_cast<std::uint8_t*>(netGame) + kDeferredQueueOffset, netGame, handler, cmd.flag ? 1U : 0U);
     return std::string();
   }
+  if (cmd.action == "voip_mute_user") {
+    auto* snsUserId = reinterpret_cast<SnsUserIdFn>(Checked(kSnsUserIdVA, kSnsUserIdPrologue, "SNSUserID", &error));
+    auto* mute = reinterpret_cast<MuteUserFn>(Checked(kMuteUserHandlerVA, kMuteUserPrologue, "mute user handler", &error));
+    if (snsUserId == nullptr || mute == nullptr) return error;
+    std::array<std::uint64_t, 2> xpid{};
+    snsUserId(xpid.data(), user.c_str());
+    if ((xpid[0] & 0xF) == 0 || xpid[1] == 0) return "SNSUserID did not parse \"" + user + "\"";
+    mute(netGame, xpid.data(), cmd.flag ? 1U : 0U);
+    return std::string();
+  }
   if (cmd.action == "social_groups_set_active") {
     auto* groupsOf = reinterpret_cast<GroupsFn>(Checked(kSocialGroupsVA, kSocialGroupsPrologue, "social groups getter", &error));
     auto* setActive = reinterpret_cast<SetActiveGroupFn>(
@@ -371,6 +391,13 @@ nlohmann::json GameStateJson() {
   const std::uint64_t* voipFlags = nullptr;
   std::memcpy(&voipFlags, bytes + kVoipFlagsOffset, sizeof(voipFlags));
   if (voipFlags != nullptr) out["self_muted"] = (*voipFlags & kSelfMutedBit) != 0;
+  std::uint64_t muteCount = 0;
+  const std::uint64_t* muteList = nullptr;
+  std::memcpy(&muteCount, bytes + kMuteCountOffset, sizeof(muteCount));
+  std::memcpy(&muteList, bytes + kMuteListOffset, sizeof(muteList));
+  nlohmann::json muted = nlohmann::json::array();
+  for (std::uint64_t i = 0; muteList != nullptr && i < muteCount && i < 256; ++i) muted.push_back(muteList[i * 2 + 1]);
+  out["muted_users"] = muted;
   const void* groups = nullptr;
   std::memcpy(&groups, bytes + 0x2A00, sizeof(groups));
   if (groups != nullptr) {

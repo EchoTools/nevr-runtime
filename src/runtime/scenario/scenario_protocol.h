@@ -123,6 +123,9 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
     ok = u64("policy", 3, &cmd.number);
   } else if (action == "voip_mute_self") {
     ok = boolean("mute", &cmd.flag);
+  } else if (action == "voip_mute_user") {
+    ok = text("user", true, &cmd.user) && !cmd.user.empty() && boolean("mute", &cmd.flag);
+    if (!ok && error->empty()) *error = "fire voip_mute_user needs a non-empty \"user\" and a boolean \"mute\"";
   } else if (action == "social_groups_set_active") {
     if (j.contains("index") && j["index"].is_string() && j["index"].get<std::string>() == "current") {
       cmd.number = kCurrentGroup;  // re-select the active group: the path runs, the account's setting stays
@@ -139,7 +142,7 @@ inline bool ParseFireAction(const nlohmann::json& j, const std::string& action, 
     ok = true;
   } else {
     *error = "fire supports friend_invite, add_friend, respond_to_invite, invite_users, request_profile, party_join, "
-             "party_lock, set_join_policy, voip_mute_self, social_groups_set_active, enable_social_feature, "
+             "party_lock, set_join_policy, voip_mute_self, voip_mute_user, social_groups_set_active, enable_social_feature, "
              "set_party_member_string, set_party_string and refresh_recently_met";
     return false;
   }

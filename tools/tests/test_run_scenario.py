@@ -154,3 +154,11 @@ class LateVariableTest(unittest.TestCase):
         step = run_scenario.substitute({"pattern": "for '${who}' in ${room}"}, {"room": 7})
         self.assertEqual(step["pattern"], "for '${who}' in 7")
         self.assertEqual(run_scenario.substitute(step, {"who": "OVR-ORG-5"})["pattern"], "for 'OVR-ORG-5' in 7")
+
+
+class ListStateTest(unittest.TestCase):
+    def test_contains_and_lacks(self):
+        state = {"game": {"muted_users": [5, 77]}}
+        self.assertTrue(run_scenario.state_matches(state, {"state_until": {"path": "game.muted_users", "contains": "77"}})[0])
+        self.assertFalse(run_scenario.state_matches(state, {"state_until": {"path": "game.muted_users", "lacks": 77}})[0])
+        self.assertTrue(run_scenario.state_matches(state, {"state_until": {"path": "game.muted_users", "lacks": 9}})[0])
