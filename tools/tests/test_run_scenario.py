@@ -55,6 +55,15 @@ class InviteStateTest(unittest.TestCase):
         ok, _ = run_scenario.state_matches({"invites": []}, {"state_until": {"invite_count": 0}})
         self.assertTrue(ok)
 
+    def test_party_joining_and_room(self):
+        state = {"party": {"id": 0, "room": 77, "joining": True}}
+        ok, _ = run_scenario.state_matches(state, {"state_until": {"party_joining": True, "party_room": "77"}})
+        self.assertTrue(ok)
+        ok, _ = run_scenario.state_matches(state, {"state_until": {"party_joining": True, "party_room": 5}})
+        self.assertFalse(ok)
+        ok, _ = run_scenario.state_matches(state, {"state_until": {"party_joining": False}})
+        self.assertFalse(ok)
+
 
 class ConsoleLogTest(unittest.TestCase):
     def test_wait_strips_ansi_and_honours_the_start_offset(self):

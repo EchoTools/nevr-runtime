@@ -57,6 +57,8 @@ std::int32_t FriendInvitableForTest(std::uint64_t friendId);
 
 struct PartyStateForTest {
   std::uint64_t partyId = 0;
+  std::uint64_t roomId = 0;  // the Id slot: the party, or the one a join is in flight to
+  bool joining = false;
   bool joinable = false;  // the Joinable slot's rule
   std::vector<std::uint64_t> memberIds;
 };

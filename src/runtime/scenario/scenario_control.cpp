@@ -160,7 +160,9 @@ nlohmann::json StateJson() {
   out["ok"] = true;
   out["netgame"] = NetGame() != nullptr;
   const SocialFacade::PartyStateForTest party = SocialFacade::PartyForTest();
-  out["party"] = {{"id", party.partyId}, {"joinable", party.joinable}, {"members", party.memberIds}};
+  out["party"] = {{"id", party.partyId},           {"room", party.roomId},
+                  {"joining", party.joining},      {"joinable", party.joinable},
+                  {"members", party.memberIds}};
   nlohmann::json friends = nlohmann::json::array();
   std::uint64_t id = 0;
   for (std::uint32_t index = 0; SocialRoster::Global().IdAt(index, &id); ++index) {
@@ -205,6 +207,14 @@ nlohmann::json Handle(const std::string& line) {
       Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject PartyInviteNotify party=%llu inviter=%llu",
           static_cast<unsigned long long>(cmd.partyId), static_cast<unsigned long long>(cmd.inviterId));
       if (!InjectServerFrameForTest(ScenarioProtocol::BuildPartyInviteNotify(cmd.partyId, cmd.inviterId), &error)) {
+        return Fail(error);
+      }
+      return {{"ok", true}};
+    }
+    case ScenarioProtocol::Op::kInjectPartyJoinFailure: {
+      Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] inject PartyJoinFailure party=%llu code=%u",
+          static_cast<unsigned long long>(cmd.partyId), static_cast<unsigned>(cmd.failureCode));
+      if (!InjectServerFrameForTest(ScenarioProtocol::BuildPartyJoinFailure(cmd.partyId, cmd.failureCode), &error)) {
         return Fail(error);
       }
       return {{"ok", true}};

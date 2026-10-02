@@ -966,6 +966,8 @@ PartyStateForTest PartyForTest() {
   const auto view = CurrentView();
   PartyStateForTest out;
   out.partyId = view->partyId;
+  out.roomId = ViewRoomId(*view);
+  out.joining = view->joining;
   out.joinable = PartyJoinable(*view);
   for (const SocialParty::Member& member : view->members) out.memberIds.push_back(member.id);
   return out;

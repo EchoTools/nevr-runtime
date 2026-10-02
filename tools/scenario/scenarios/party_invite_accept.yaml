@@ -1,11 +1,15 @@
 # Receive a party invite and accept it. docs/design/2026-10-01-social-features-test-plan.md #4/#5.
 # Inbound: the bridge delivers the PartyInviteNotify Nakama sends an invitee. Then the accept is
 # fired the way R15NetPartyRespondToInviteNode (run 0x140dddd30) does it: post 0x140188bf0 with the
-# invite index, which checks slot 70 InviteCount and calls slot 73 AcceptInvite. Pass = the invite
-# reached the game's invite list and an accepting PartyInviteResponse (param 1) left the game. The
-# inviter is synthetic; the server has no record of this invite, so it does not answer.
+# invite index, which checks slot 70 InviteCount and calls slot 73 AcceptInvite. pnsovr's accept is
+# JoinInternal on the invite's party (0x1800821f0 -> 0x18008d1e0): the invite is dropped, the current
+# party is left (Left callback, index 5), and the join is in flight with the room id showing the new
+# party. The accept goes out as PartyInviteResponse(param 1) to the inviter. The inviter is synthetic
+# and the server has no record of this invite, so the server's answer is injected: PartyJoinFailure
+# code 1 (unknown party), which the game gets as its JoinFailed callback (index 2) with code 1 (not
+# found). Pass = the whole round trip, ending with the game back in a party of its own.
 name: party_invite_accept
-description: deliver a party invite, accept it through the respond-to-invite node's handler, see PartyInviteResponse(accept) leave
+description: deliver a party invite, accept it through the respond-to-invite node's handler, see the join go out and a join failure come back
 vars:
   party_id: 777000000000001
   inviter_id: 1000000000000000004
@@ -20,10 +24,24 @@ steps:
     state_until: {invite_count: 1, invite_sender: '${inviter_id}', timeout: 15}
   - name: accept fired through the respond-to-invite node's handler
     fire: {action: respond_to_invite, index: 0, accept: true}
-  - name: game called slot 73 AcceptInvite
-    expect_log: {pattern: 'slot=73 name=\S+ call=', timeout: 10}
-    diagnose: ['party invite accept', 'session event .*partyjoinerror']
+  - name: game called slot 73 AcceptInvite on the invite's party
+    expect_log: {pattern: 'party accept index=0 party=${party_id}', timeout: 10}
+    diagnose: ['slot=73 ', 'party join party=', 'session event .*partyjoinerror']
+  - name: the game's accept gate allowed the join
+    expect_log: {pattern: 'party callback index=7 gate=1', timeout: 10}
+  - name: the current party was left first (Left callback)
+    expect_log: {pattern: 'party callback index=5 bound=\d', timeout: 10}
   - name: an accepting PartyInviteResponse left the game
     expect_log: {pattern: 'game->server conn=1 PartyInviteResponse payload_bytes=\d+ param=1', timeout: 10}
   - name: the invite left the list
     state_until: {invite_count: 0, timeout: 15}
+  - name: the join is in flight to the invite's party
+    state_until: {party_joining: true, party_room: '${party_id}', timeout: 15}
+  - name: the server refuses (PartyJoinFailure, unknown party)
+    inject: {msg: PartyJoinFailure, party: '${party_id}', code: 1}
+  - name: the game got JoinFailed with not found
+    expect_log: {pattern: 'party callback index=2 arg=1 bound=1', timeout: 10}
+  - name: the join ended
+    state_until: {party_joining: false, timeout: 15}
+  - name: the game is back in a party of its own
+    state_until: {party_joinable: true, timeout: 60}

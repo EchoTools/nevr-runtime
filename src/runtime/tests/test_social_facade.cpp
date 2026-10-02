@@ -1093,3 +1093,30 @@ TEST(ScenarioProtocol, InjectedPartyInviteReachesTheInviteListAndRespondParses) 
   EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"fire","action":"respond_to_invite","index":0})", &cmd, &error));
   EXPECT_NE(error.find("\"accept\""), std::string::npos);
 }
+
+TEST(ScenarioProtocol, InjectedPartyJoinFailureEndsTheJoinWithTheGamesCode) {
+  ScenarioProtocol::Command cmd;
+  std::string error;
+  ASSERT_TRUE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinFailure","party":77,"code":2})", &cmd,
+                                             &error))
+      << error;
+  ASSERT_EQ(cmd.op, ScenarioProtocol::Op::kInjectPartyJoinFailure);
+  EXPECT_FALSE(ScenarioProtocol::ParseCommand(R"({"op":"inject","msg":"PartyJoinFailure","party":77})", &cmd, &error));
+  const std::string frame = ScenarioProtocol::BuildPartyJoinFailure(77, 2);
+  std::uint64_t symbol = 0;
+  std::uint64_t length = 0;
+  std::memcpy(&symbol, frame.data() + 8, 8);
+  std::memcpy(&length, frame.data() + 16, 8);
+  ASSERT_EQ(length, 9U);
+  EXPECT_STREQ(SocialParty::ReplyName(symbol), "PartyJoinFailure");
+  SocialParty::State party;
+  party.SetSelf(1);
+  ASSERT_TRUE(party.BeginJoin(77));
+  ASSERT_EQ(party.Join(77).size(), 1U);
+  ASSERT_TRUE(party.Feed(symbol, reinterpret_cast<const std::uint8_t*>(frame.data()) + 24, 9, 0, nullptr));
+  EXPECT_FALSE(party.Snapshot().joining);
+  const auto events = party.DrainEvents();
+  ASSERT_EQ(events.size(), 1U);
+  EXPECT_EQ(events[0].kind, SocialParty::EventKind::kJoinFailed);
+  EXPECT_EQ(events[0].code, 4U) << "Nakama's refused (2) is the game's not joinable (4)";
+}
