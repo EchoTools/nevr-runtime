@@ -1248,9 +1248,8 @@ verify:
     N62_RC=0; N62_BODY=$(awk '/^void PerformGracefulShutdown/,/^}/' src/runtime/lifecycle/crash_recovery.cpp) || N62_RC=$?
     sensor_stage1 "N62 shutdown loader-lock" "src/runtime/lifecycle/crash_recovery.cpp" "$N62_RC"
     sensor_nonempty "N62 shutdown loader-lock" "PerformGracefulShutdown() body in src/runtime/lifecycle/crash_recovery.cpp" "$N62_BODY"
-    if printf '%s\n' "$N62_BODY" \
-         | grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' \
-         | grep -qE 'GetModuleHandleA|GetProcAddress'; then
+    N62_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' <<<"$N62_BODY" || true)
+    if grep -qE 'GetModuleHandleA|GetProcAddress' <<<"$N62_CODE"; then
         echo "verify: FAIL — N62 PerformGracefulShutdown resolves symbols at shutdown time;" >&2
         echo "both take the loader lock, so a signal arriving while it is held deadlocks shutdown." >&2
         echo "Use the pointer cached by ResolveShutdownDependencies()." >&2
@@ -1271,19 +1270,20 @@ verify:
     # which left plugins, modules and N69's stack reserve silently dead there.
     # N68's original sensor only checked that TickPlugins appeared in the file —
     # which it did, in a hook that never executed. Check the LIVE site.
-    if ! awk '/^void DispatchPerFrameWork/,/^}/' src/runtime/frame/tick.cpp \
-         | grep -q 'TickPlugins'; then
+    # Herestrings, not pipelines: `awk ... | grep -q` races to a false FAIL under pipefail (N101).
+    N86_RC=0; N86_BODY=$(awk '/^void DispatchPerFrameWork/,/^}/' src/runtime/frame/tick.cpp) || N86_RC=$?
+    sensor_stage1 "N86 per-frame dispatch" "src/runtime/frame/tick.cpp" "$N86_RC"
+    sensor_nonempty "N86 per-frame dispatch" "DispatchPerFrameWork() body in src/runtime/frame/tick.cpp" "$N86_BODY"
+    if ! grep -q 'TickPlugins' <<<"$N86_BODY"; then
         echo "verify: FAIL — N86 TickPlugins missing from DispatchPerFrameWork; the server-mode" >&2
         echo "per-frame tick is dead again (PrecisionSleep::Wait never runs on a server)." >&2
         exit 1
     fi
-    if ! awk '/^void DispatchPerFrameWork/,/^}/' src/runtime/frame/tick.cpp \
-         | grep -q 'TickModules'; then
+    if ! grep -q 'TickModules' <<<"$N86_BODY"; then
         echo "verify: FAIL — N86 TickModules missing from DispatchPerFrameWork." >&2
         exit 1
     fi
-    if ! awk '/^void DispatchPerFrameWork/,/^}/' src/runtime/frame/tick.cpp \
-         | grep -q 'if (InterlockedExchange(&g_tickReentry, 1) != 0) return;'; then
+    if ! grep -q 'if (InterlockedExchange(&g_tickReentry, 1) != 0) return;' <<<"$N86_BODY"; then
         echo "verify: FAIL — N86 re-entrancy gate missing from DispatchPerFrameWork; a plugin" >&2
         echo "OnFrame that calls GetTimeMicroseconds would recurse without bound." >&2
         exit 1
@@ -1449,7 +1449,8 @@ verify:
     # rule was right; nothing checked it.
     if ! awk '/login injected/{found=1} found && /Log\(EchoVR::LogLevel::Info/{ok=1} END{exit !ok}' \
          src/runtime/compat/ws_bridge.cpp; then
-        if ! grep -B3 'login injected' src/runtime/compat/ws_bridge.cpp | grep -q 'LogLevel::Info'; then
+        N91_CONTEXT=$(grep -B3 'login injected' src/runtime/compat/ws_bridge.cpp || true)
+        if ! grep -q 'LogLevel::Info' <<<"$N91_CONTEXT"; then
             echo "verify: FAIL — logging.md Rule 2: the login-injection line is not at Info." >&2
             echo "Identity at login shall be visible in a production log (N91)." >&2
             exit 1
@@ -1610,8 +1611,7 @@ verify:
     fi
     C2_RC=0; C2_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/hook/patching.h) || C2_RC=$?
     sensor_stage1 "C2 PatchDetour default name" "src/runtime/hook/patching.h" "$C2_RC"
-    if printf '%s\n' "$C2_CODE" \
-         | grep -qE 'PatchDetour\(.*const char\* name\s*='; then
+    if grep -qE 'PatchDetour\(.*const char\* name\s*=' <<<"$C2_CODE"; then
         echo "verify: FAIL — C2 PatchDetour's name parameter has a default again." >&2
         echo "22 of 24 sites omitted it when it was defaultable, so HookGuard's overwrite" >&2
         echo "alarm printed name=(unnamed) for almost every address it guards." >&2
