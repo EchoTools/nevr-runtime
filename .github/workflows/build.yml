@@ -25,6 +25,12 @@ jobs:
       NEVR_HTTP_URI: ${{ github.event_name == 'release' && secrets.NEVR_HTTP_URI || '' }}
       NEVR_PUBLIC_API_KEY: ${{ github.event_name == 'release' && secrets.NEVR_PUBLIC_API_KEY || '' }}
       NEVR_PUBLIC_SOCKET_KEY: ${{ github.event_name == 'release' && secrets.NEVR_PUBLIC_SOCKET_KEY || '' }}
+      # just verify runs the C++ tests under Wine. The container runs as root but HOME (/github/home)
+      # belongs to the runner user, and Wine refuses a prefix there ("'/github/home' is not owned by
+      # you", run 37149598909); give it a root-owned prefix, and skip the Mono/Gecko install prompts.
+      WINEPREFIX: /root/.wine-ci
+      WINEDLLOVERRIDES: "mscoree,mshtml="
+      WINEDEBUG: "-all"
 
     steps:
     # git must exist before checkout, or actions/checkout falls back to the REST API (no submodules).
