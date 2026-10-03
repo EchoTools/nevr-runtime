@@ -8,8 +8,8 @@ below was run and returned the document before it was written here.
 
 | File | Retrieve with | Open findings went to |
 |------|---------------|-----------------------|
-| `ctrlc-shutdown-audit.md` — CTRL+C to port-zombie causal chain (N13, N37-N39) | `git show 6ffc3bb74283f26d8d418633bc2cbe85e51f2a5b:docs/audits/ctrlc-shutdown-audit.md` | none (resolved) |
-| `bridge-port-audit.md` — every site referencing the ws_bridge listen port | `git show 6ffc3bb74283f26d8d418633bc2cbe85e51f2a5b:docs/audits/bridge-port-audit.md` | none (resolved) |
+| `ctrlc-shutdown-audit.md` — CTRL+C to port-zombie causal chain (N13, N37-N39) | `git show 153329138694cf7a1867a97e02155d7b0e89d053:docs/audits/ctrlc-shutdown-audit.md` | none (resolved) |
+| `bridge-port-audit.md` — every site referencing the ws_bridge listen port | `git show 153329138694cf7a1867a97e02155d7b0e89d053:docs/audits/bridge-port-audit.md` | none (resolved) |
 | `recon-owner-bug-batch-RESULTS.md` — 19-item owner bug batch validation (2026-07-22) | `git show 94a24a16b67ca21e39cab2cd2b49f8914c1c93ab:docs/audits/recon-owner-bug-batch-RESULTS.md` | #48 (log-consistency leftovers) |
 | `2026-09-26-runtime-bug-hunt.md` — 35-finding static review at `1eb93be` | `git show f94be4168caf22fb79a3fee9e8c668b588618760:docs/audits/2026-09-26-runtime-bug-hunt.md` | #37, #38, #39, #40, #41, #45, #46 |
 | `fable-consistency-hunt-2026-07-23.md` — ranked consistency/quality ledger (its High findings became N54-N58) | `git show 2b99d0e21f3705561a6d43b7336ca03ac67afd5c:docs/audits/fable-consistency-hunt-2026-07-23.md` | #42, #43, #44, #47, #48, #49 |
