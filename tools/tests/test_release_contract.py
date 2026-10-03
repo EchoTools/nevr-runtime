@@ -101,11 +101,16 @@ class ReleaseContractTest(unittest.TestCase):
     def test_release_ci_installs_tools_and_uploads_the_actual_artifact_directory(self):
         workflow = (REPO / ".github/workflows/build.yml").read_text()
         self.assertIn("just-version:", workflow)
-        self.assertRegex(workflow, r"cmake==4\.[0-9.]+")
-        self.assertIn("wine", workflow)
-        self.assertRegex(workflow, r"apt-get install -y[^\n]*\bzstd\b")
-        self.assertRegex(workflow, r"apt-get install -y[^\n]*\bosslsigncode\b")
-        self.assertRegex(workflow, r"apt-get install -y[^\n]*\bopenssl\b")
+        # The build runs on the current toolchain, the one development uses (#81): Arch's MinGW-w64
+        # from pacman in an archlinux container, with every version logged per run.
+        self.assertIn("image: archlinux:base-devel", workflow)
+        pacman = re.search(r"pacman -Syu --noconfirm --needed \\\n(?P<pkgs>(?:[^\n]*\\\n)*[^\n]*)", workflow)
+        self.assertIsNotNone(pacman, "the toolchain comes from one pacman -Syu")
+        for pkg in ("mingw-w64-gcc", "cmake", "ninja", "wine", "zstd", "openssl", "python-yaml"):
+            self.assertRegex(pacman.group("pkgs"), rf"(?<![\w-]){re.escape(pkg)}(?![\w-])", pkg)
+        self.assertIn("mtrojnar/osslsigncode.git", workflow)  # not in Arch's official repos: pinned build
+        self.assertIn("- name: Toolchain versions", workflow)
+        self.assertNotIn("apt-get", workflow)
         self.assertIn("bufbuild/buf/cmd/buf@v1.47.2", workflow)
         self.assertIn("--host-triplet=x64-linux", workflow)
         self.assertIn("x64-linux/tools/protobuf/protoc", workflow)
