@@ -277,11 +277,58 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
 // the %s/%d/%u/%llX conversions used here MinGW's implementation performs no
 // allocation. No float conversions are used (those may allocate on some libcs).
 
+// The crash record (beta gate G17): a tester launching from the Meta app has no console, so the
+// [NEVR.CRASH] lines also go to %LOCALAPPDATA%\EchoVR\logs\nevr-crash-<run id>.txt, next to the run log,
+// once a crash path has been entered (ArmCrashRecord). The path is built at init; the handler only opens
+// and appends with raw syscalls and flushes every line, because the process may die at any point (N70).
+static char g_crashRecordPath[MAX_PATH] = {};
+static HANDLE g_crashRecordHandle = INVALID_HANDLE_VALUE;
+static volatile LONG g_crashRecordArmed = 0;
+
+static void PrepareCrashRecordPath() {
+  char dir[MAX_PATH] = {};
+  const DWORD len = GetEnvironmentVariableA("LOCALAPPDATA", dir, MAX_PATH);
+  int n = 0;
+  if (len > 0 && len < MAX_PATH) {
+    n = snprintf(g_crashRecordPath, sizeof(g_crashRecordPath), "%s\\EchoVR\\logs\\nevr-crash-%s.txt", dir,
+                 GetRunId());
+  } else {
+    char exe[MAX_PATH] = {};
+    const DWORD elen = GetModuleFileNameA(nullptr, exe, MAX_PATH);
+    if (elen == 0 || elen >= MAX_PATH) return;
+    char* slash = strrchr(exe, '\\');
+    if (slash != nullptr) *slash = '\0';
+    n = snprintf(g_crashRecordPath, sizeof(g_crashRecordPath), "%s\\logs\\nevr-crash-%s.txt", exe, GetRunId());
+  }
+  if (n <= 0 || n >= static_cast<int>(sizeof(g_crashRecordPath))) g_crashRecordPath[0] = '\0';
+}
+
+static void VehWrite(const char* buf, size_t len);
+
+// From here on every [NEVR.CRASH] line is also written to the crash record. The first call opens it and
+// writes a header (run id, UTC time) so the file stands on its own.
+static void ArmCrashRecord() {
+  if (InterlockedExchange(&g_crashRecordArmed, 1) != 0 || g_crashRecordPath[0] == '\0') return;
+  g_crashRecordHandle = CreateFileA(g_crashRecordPath, FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (g_crashRecordHandle == INVALID_HANDLE_VALUE) return;
+  SYSTEMTIME st{};
+  GetSystemTime(&st);
+  char header[160];
+  const int n = snprintf(header, sizeof(header),
+                         "[NEVR.CRASH] crash record run=%s utc=%04u-%02u-%02uT%02u:%02u:%02uZ\n", GetRunId(),
+                         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+  if (n > 0) VehWrite(header, static_cast<size_t>(n) < sizeof(header) ? static_cast<size_t>(n) : sizeof(header) - 1);
+}
+
 static void VehWrite(const char* buf, size_t len) {
   HANDLE hErr = GetStdHandle(STD_ERROR_HANDLE);
-  if (hErr == nullptr || hErr == INVALID_HANDLE_VALUE) return;
   DWORD written = 0;
-  WriteFile(hErr, buf, static_cast<DWORD>(len), &written, nullptr);
+  if (hErr != nullptr && hErr != INVALID_HANDLE_VALUE) WriteFile(hErr, buf, static_cast<DWORD>(len), &written, nullptr);
+  if (g_crashRecordArmed != 0 && g_crashRecordHandle != INVALID_HANDLE_VALUE) {
+    WriteFile(g_crashRecordHandle, buf, static_cast<DWORD>(len), &written, nullptr);
+    FlushFileBuffers(g_crashRecordHandle);
+  }
 }
 
 static void VehPrintf(const char* fmt, ...) {
@@ -430,6 +477,7 @@ static void WriteCrashDump(PEXCEPTION_POINTERS ex) {
   };
 
   const INT64 ripRva = rva(ctx->Rip);
+  ArmCrashRecord();
   VehPrintf("[NEVR.CRASH] === CRASH DUMP ===");
   if (const char* site = CrashRecovery::LookupKnownNullDerefSite(ripRva)) {
     VehPrintf("[NEVR.CRASH] known_site=%s class=session_flags_null_deref "
@@ -693,6 +741,7 @@ typedef INT64 (*CrashExceptionFilterFunc)(void*, void*, void**);
 static CrashExceptionFilterFunc OriginalCrashExceptionFilter = nullptr;
 
 static INT64 CrashExceptionFilterHook(void* a1, void* a2, void** ppExRecords) {
+  ArmCrashRecord();
   VehPrintf("[NEVR.CRASH] CrashExceptionFilter ENTERED ret=%p tid=%lu",
             __builtin_return_address(0), GetCurrentThreadId());
   return OriginalCrashExceptionFilter(a1, a2, ppExRecords);
@@ -710,6 +759,7 @@ static HandleCrashDumpFunc OriginalHandleCrashDump = nullptr;
 static INT64 HandleCrashDumpHook(void* a1, void* a2, void* a3, void* a4) {
   const DWORD64 base = reinterpret_cast<DWORD64>(EchoVR::g_GameBaseAddress);
   const DWORD64 ret = reinterpret_cast<DWORD64>(__builtin_return_address(0));
+  ArmCrashRecord();
   VehPrintf("[NEVR.CRASH] HandleCrashDump ENTERED ret=0x%llX rva=%s0x%llX tid=%lu "
             "a1=%p a2=%p a3=%p a4=%p",
             static_cast<unsigned long long>(ret),
@@ -750,10 +800,22 @@ static INT64 HandleCrashDumpHook(void* a1, void* a2, void* a3, void* a4) {
     }
   }
 
-  // Stack scan for game-code return addresses — names the call chain.
+  // Stack scan for game-code return addresses — names the call chain. From the faulting thread's rsp
+  // when the exception context is readable: scanning this handler's own frame named the exception
+  // dispatcher, not the caller (#68: __acrt_FlsGetValue, a hash lookup).
   DWORD64* sp = reinterpret_cast<DWORD64*>(&a1);
+  const char* scanFrom = "handler_frame";
+  if (a3 != nullptr && CrashRecovery::IsReadableMemory(a3, sizeof(void*))) {
+    PEXCEPTION_POINTERS ep = *static_cast<PEXCEPTION_POINTERS*>(a3);
+    if (ep != nullptr && CrashRecovery::IsReadableMemory(ep, sizeof(EXCEPTION_POINTERS)) && ep->ContextRecord != nullptr &&
+        CrashRecovery::IsReadableMemory(ep->ContextRecord, sizeof(CONTEXT))) {
+      sp = reinterpret_cast<DWORD64*>(ep->ContextRecord->Rsp);
+      scanFrom = "fault_rsp";
+    }
+  }
+  VehPrintf("[NEVR.CRASH]   callers from=%s (stack scan for return addresses into the game)", scanFrom);
   int found = 0;
-  for (int i = 0; i < 96 && found < 10; i++) {
+  for (int i = 0; i < 512 && found < 16; i++) {
     if (!CrashRecovery::IsReadableMemory(sp + i, 8)) break;
     const DWORD64 v = sp[i];
     if (v >= base && v < base + 0x1800000) {
@@ -778,6 +840,13 @@ void RefreshModuleCache() {
 }
 
 void InstallCrashFilterInstrumentation() {
+  PrepareCrashRecordPath();
+  if (g_crashRecordPath[0] != '\0') {
+    Log(EchoVR::LogLevel::Info, "[NEVR.CRASH] crash record path=%s (written only if the game crashes)",
+        g_crashRecordPath);
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.CRASH] crash record unavailable: no LOCALAPPDATA or module path");
+  }
   void* filt = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress +
                                        PatchAddresses::CRASH_EXCEPTION_FILTER);
   if (memcmp(filt, PatchAddresses::CRASH_EXCEPTION_FILTER_PROLOGUE,
