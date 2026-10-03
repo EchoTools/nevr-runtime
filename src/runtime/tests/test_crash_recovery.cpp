@@ -6,6 +6,7 @@
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/lifecycle/crash_recovery_sites.h"
 #include "runtime/lifecycle/crash_dump_format.h"
+#include "runtime/lifecycle/stack_alloc_check.h"
 
 TEST(CrashRecoveryN71Sites, TableIsCompleteAndWellFormed) {
   EXPECT_EQ(CrashRecovery::kKnownNullDerefSites.size(), 30U);
@@ -70,4 +71,29 @@ TEST(CrashDumpFormat, ExternalAddressAndKnownExceptionNamesAreFormattedWithoutFl
   EXPECT_NE(std::string(line).find("INT_DIVIDE_BY_ZERO"), std::string::npos);
   EXPECT_NE(std::string(line).find("rip_rva=external:0x7FFF1234"), std::string::npos);
   EXPECT_EQ(std::string(line).find("%f"), std::string::npos);
+}
+
+// The game's own capacity check in CStackAllocator::DirectAlloc (stack_alloc_check.h, #68): the probe must
+// agree with the game on exactly when it traps, and print the same number the game prints.
+TEST(StackAllocCheck, FitsExactlyAtCapacityAndFailsOneUnitPast) {
+  // field38 + field40 = 0x1000 end; top 0xF00; 0x100 fits exactly, 0x104 (next multiple of 4) does not.
+  EXPECT_TRUE(StackAllocCheck::Check(0x800, 0x800, 0xF00, 0x100, 0).fits);
+  const auto over = StackAllocCheck::Check(0x800, 0x800, 0xF00, 0x101, 0);
+  EXPECT_FALSE(over.fits);
+  EXPECT_EQ(over.request, 0x104U) << "rounded up to a multiple of 4, as NEG/AND 3/ADD does";
+  EXPECT_EQ(over.reported, (0x800ULL - 0x800ULL) + 0xF00ULL + 0x104ULL);
+}
+
+TEST(StackAllocCheck, AlignmentMovesTheStartUp) {
+  const auto r = StackAllocCheck::Check(0, 0x10000, 0x1003, 4, 0x10);
+  EXPECT_EQ(r.start, 0x1010U);
+  EXPECT_TRUE(r.fits);
+  EXPECT_EQ(StackAllocCheck::Check(0, 0x10000, 0x1003, 4, 0).start, 0x1003U) << "align 0 leaves the top as is";
+}
+
+TEST(StackAllocCheck, AHugeRequestIsReportedTheWayTheGameLogsIt) {
+  // A request far beyond the pool fails, and the printed number is (field38 - field40) + start + request.
+  const auto r = StackAllocCheck::Check(0x7000'0000ULL, 0x0100'0000ULL, 0x7000'1000ULL, 674'000'000ULL, 0);
+  EXPECT_FALSE(r.fits);
+  EXPECT_EQ(r.reported, (0x7000'0000ULL - 0x0100'0000ULL) + 0x7000'1000ULL + 674'000'000ULL);
 }

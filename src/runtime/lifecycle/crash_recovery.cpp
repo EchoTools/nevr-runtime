@@ -6,6 +6,7 @@
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/lifecycle/crash_recovery_sites.h"
 #include "runtime/lifecycle/crash_dump_format.h"
+#include "runtime/lifecycle/stack_alloc_check.h"
 
 #include <processthreadsapi.h>
 #include <psapi.h>
@@ -777,6 +778,50 @@ void RefreshModuleCache() {
       g_moduleCacheCount);
 }
 
+// CStackAllocator::DirectAlloc (this, request, align) @ 0x1400D4FB0 (#68, beta gate G11). The game logs
+// "Stack allocator ran out of memory: <n>" and traps when a request does not fit, and the crash dump's stack
+// walk cannot name the caller. Runs the game's own check first (stack_alloc_check.h) and, only when it is
+// about to fail, logs the real return address, the request and the pool fields; then lets the game trap as
+// before. Hot path (hundreds of callers, rendering per frame): a few loads and one compare when it fits.
+typedef long long (*StackDirectAllocFunc)(void*, long long, long long);
+static StackDirectAllocFunc OriginalStackDirectAlloc = nullptr;
+static constexpr unsigned char kStackDirectAllocPrologue[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74,
+                                                              0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x4C};
+
+static long long StackDirectAllocProbe(void* self, long long request, long long align) {
+  if (self != nullptr) {
+    const auto* allocator = static_cast<const unsigned char*>(self);
+    const unsigned char* table = nullptr;
+    memcpy(&table, allocator + 0x48, sizeof(table));
+    if (table != nullptr) {
+      const unsigned char* entries = nullptr;
+      long long count = 0;
+      memcpy(&entries, table + 0x08, sizeof(entries));
+      memcpy(&count, table + 0x10, sizeof(count));
+      if (entries != nullptr && count > 0) {
+        unsigned long long a = 0, b = 0, field38 = 0, field40 = 0;
+        memcpy(&a, entries + count * 16 - 16, sizeof(a));
+        memcpy(&b, entries + count * 16 - 8, sizeof(b));
+        memcpy(&field38, allocator + 0x38, sizeof(field38));
+        memcpy(&field40, allocator + 0x40, sizeof(field40));
+        const StackAllocCheck::Result r = StackAllocCheck::Check(
+            field38, field40, a + b, static_cast<unsigned long long>(request), static_cast<unsigned long long>(align));
+        if (!r.fits) {
+          const DWORD64 base = reinterpret_cast<DWORD64>(EchoVR::g_GameBaseAddress);
+          const DWORD64 ret = reinterpret_cast<DWORD64>(__builtin_return_address(0));
+          Log(EchoVR::LogLevel::Error,
+              "[NEVR.CRASH] stack allocator about to fail: caller=%s0x%llX request=%llu align=%lld "
+              "start=0x%llX field38=0x%llX field40=0x%llX allocations=%lld reported=%llu",
+              ret >= base ? "game+" : "", static_cast<unsigned long long>(ret >= base ? ret - base : ret),
+              static_cast<unsigned long long>(request), align, static_cast<unsigned long long>(r.start), field38,
+              field40, count, static_cast<unsigned long long>(r.reported));
+        }
+      }
+    }
+  }
+  return OriginalStackDirectAlloc(self, request, align);
+}
+
 void InstallCrashFilterInstrumentation() {
   void* filt = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress +
                                        PatchAddresses::CRASH_EXCEPTION_FILTER);
@@ -809,6 +854,19 @@ void InstallCrashFilterInstrumentation() {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.CRASH] hook failed name=HandleCrashDump va=0x%llX prologue=%02x%02x%02x%02x%02x",
         reinterpret_cast<unsigned long long>(hcd), pb[0], pb[1], pb[2], pb[3], pb[4]);
+  }
+
+  // CStackAllocator::DirectAlloc @ 0x1400D4FB0 (#68): see StackDirectAllocProbe.
+  void* sda = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress + 0xD4FB0);
+  if (memcmp(sda, kStackDirectAllocPrologue, sizeof(kStackDirectAllocPrologue)) == 0) {
+    OriginalStackDirectAlloc = reinterpret_cast<StackDirectAllocFunc>(sda);
+    if (PatchDetour(&OriginalStackDirectAlloc, reinterpret_cast<PVOID>(StackDirectAllocProbe),
+                    "CStackAllocator::DirectAlloc")) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.CRASH] hooked name=CStackAllocator::DirectAlloc (out-of-memory probe)");
+    }
+  } else {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.CRASH] hook skipped name=CStackAllocator::DirectAlloc reason=prologue_mismatch");
   }
 }
 
