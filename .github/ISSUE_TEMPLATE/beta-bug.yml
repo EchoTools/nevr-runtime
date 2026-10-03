@@ -1,0 +1,75 @@
+name: Beta bug report
+description: Something broke or looked wrong while playing the community beta.
+title: "[beta] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing. Known issues are listed in the install page (`INSTALL.md` in the zip,
+        `docs/beta/INSTALL.md` here); no need to report those.
+
+        **Files to attach** (drag them into the box at the end):
+        - the session's game log: `%LOCALAPPDATA%\EchoVR\logs\nevr-<date>T<time>.jsonl` (paste `%LOCALAPPDATA%\EchoVR\logs` into the Explorer address bar);
+        - the start-up log: `bin\win10\logs\nevr-boot.jsonl` in your Echo VR folder;
+        - if it crashed: the newest files in `_temp\crashes\` and `bin\win10\_temp\crashes\` in your Echo VR folder.
+
+        These files contain your Discord account id, and the crash files your Windows user name and computer name.
+        This issue is public: leave them out if you prefer, and say so.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did just before
+      description: The steps that led to it, as far as you remember. Did it happen more than once?
+    validations:
+      required: true
+  - type: input
+    id: when
+    attributes:
+      label: When
+      description: Date and time it happened, with your time zone (it lets us find the right lines in the logs).
+      placeholder: "2026-10-03 19:45 CEST"
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where you were
+      options:
+        - Starting the game / signing in
+        - Main menu
+        - Social lobby
+        - Finding a match
+        - Arena match
+        - Combat match
+        - Private match
+        - Party (tablet) menus
+        - Other (say in "What happened")
+    validations:
+      required: true
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Did the game crash or freeze?
+      options:
+        - "No, it kept running"
+        - "It froze (stopped responding)"
+        - "It closed / crashed"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Beta version
+      description: The name of the zip you installed (for example `nevr-runtime-v4.0.0+9.27dcaaa.zip`), if you still have it.
+  - type: textarea
+    id: files
+    attributes:
+      label: Files
+      description: Drag the log files (and crash files, if it crashed) here.
