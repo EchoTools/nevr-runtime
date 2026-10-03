@@ -22,6 +22,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <thread>
 
 #include "runtime/lifecycle/config.h"
 #include "runtime/ext/module_loader.h"
@@ -161,6 +162,54 @@ static std::mutex g_pairsMutex;
 static std::atomic<int> g_connectionCount{0};  // tracks connection order (0=config, 1+=login)
 static auto& g_pairs = *new std::unordered_map<ix::WebSocket*, std::unique_ptr<ProxyPair>>();
 
+// Defined after the login-session globals below.
+static bool ForgetLoginSessionLocked(const ix::WebSocket* remote);
+
+// The game sockets whose pair forwards to `remote` (the login socket and any matchmaker sockets sharing
+// its session). Caller holds g_pairsMutex.
+static std::vector<const ix::WebSocket*> GameSocketsBoundToLocked(const ix::WebSocket* remote) {
+  std::vector<const ix::WebSocket*> games;
+  for (const auto& entry : g_pairs) {
+    if (entry.second && entry.second->remoteWs.get() == remote) games.push_back(entry.first);
+  }
+  return games;
+}
+
+// A remote session that ends must end the game's sockets on it too, or the game sits "logged in" with no
+// server and never reconnects (#70: forced cut, run 20-1dd53339e6a29b8). Called from a remote callback.
+// Closing a game socket inline deadlocks (close() waits on the server thread, which may wait on
+// g_pairsMutex), so the close runs on a thread that holds no lock, and each socket is kept alive by the
+// server's own shared_ptr (WebSocketServer::getClients) rather than a raw pointer.
+static void CloseGameSocketsForRemote(const ix::WebSocket* remote, int connIdx, unsigned int code) {
+  std::vector<const ix::WebSocket*> games;
+  bool wasLoginSession = false;
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    games = GameSocketsBoundToLocked(remote);
+    wasLoginSession = ForgetLoginSessionLocked(remote);
+  }
+  if (wasLoginSession) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.WS] login session ended: the game's next connection is a new login (connections renumbered from 1)");
+  }
+  if (games.empty() || !g_server) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.WS] remote session ended (conn=%d, %s, code=%u): no game socket on it",
+        connIdx, ConnLabel(connIdx), code);
+    return;
+  }
+  std::vector<std::shared_ptr<ix::WebSocket>> toClose;
+  for (const auto& client : g_server->getClients()) {
+    if (std::find(games.begin(), games.end(), client.get()) != games.end()) toClose.push_back(client);
+  }
+  Log(EchoVR::LogLevel::Warning,
+      "[NEVR.WS] remote session ended (conn=%d, %s, code=%u): closing %zu game socket(s) so the game "
+      "reconnects",
+      connIdx, ConnLabel(connIdx), code, toClose.size());
+  std::thread([toClose]() {
+    for (const auto& game : toClose) game->close();
+  }).detach();
+}
+
 // Connection index of a game-side websocket (-1 when unknown), for log lines.
 static int ConnIdxOfGameWs(ix::WebSocket* gameWs) {
   std::lock_guard<std::mutex> lk(g_pairsMutex);
@@ -198,6 +247,18 @@ static uint64_t g_lastInjectedDiscordId = 0;
 // callback only when the owning pair is destroyed, not when a sharing pair
 // (conn>=2, matchmaker) closes.
 static ix::WebSocket* g_loginGameWs = nullptr;
+
+// The game numbers its connections to the bridge (0 config, 1 login, 2+ matchmaker on the login session).
+// When the login session itself ends, the game reconnects to log in again; without forgetting the dead
+// session, that connection is counted as a matchmaker and attached to it (#70, run 20-1dd5334c6f870d2 is
+// the measurement that showed it). Caller holds g_pairsMutex. True when `remote` was the login session.
+static bool ForgetLoginSessionLocked(const ix::WebSocket* remote) {
+  if (remote == nullptr || remote != g_loginRemoteWs.get()) return false;
+  g_loginRemoteWs.reset();
+  g_loginGameWs = nullptr;
+  g_connectionCount.store(1);
+  return true;
+}
 
 // Under g_pairsMutex. The game socket that frames from the shared login remote go to: the active one
 // (the newest connection sharing the remote), else the login connection; nullptr when neither is
@@ -843,7 +904,8 @@ void InstallWebSocketBridge() {
               // disconnected and B2/N54 nulled that callback, all matchmaker
               // server→game message routing silently died.
               g_loginRemoteWs->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback",
-                  [pairPtr, gameWsPtr, connIdx](const ix::WebSocketMessagePtr& rmsg) {
+                  [pairPtr, gameWsPtr, connIdx,
+                   remoteAddress = static_cast<const ix::WebSocket*>(g_loginRemoteWs.get())](const ix::WebSocketMessagePtr& rmsg) {
                     switch (rmsg->type) {
                       case ix::WebSocketMessageType::Message: {
                         ix::WebSocket* target = nullptr;
@@ -869,6 +931,8 @@ void InstallWebSocketBridge() {
                             "[NEVR.WS] Remote closed (conn=%d, %s, ws=%p): code=%u",
                             connIdx, ConnLabel(connIdx), static_cast<void*>(gameWsPtr),
                             static_cast<unsigned int>(rmsg->closeInfo.code));
+                        CloseGameSocketsForRemote(remoteAddress, connIdx,
+                                                  static_cast<unsigned int>(rmsg->closeInfo.code));
                         break;
                       default:
                         break;
@@ -1023,7 +1087,9 @@ void InstallWebSocketBridge() {
             remote->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback", 
                 // accountName captured BY VALUE alongside discordId — this callback
                 // outlives the enclosing scope, so a reference would dangle (N123).
-                [pairPtr, gameWsPtr, connIdx, discordId, accountName, bearerToken](const ix::WebSocketMessagePtr& rmsg) {
+                // remoteAddress: only compared, never dereferenced (capturing the shared_ptr would be a cycle).
+                [pairPtr, gameWsPtr, connIdx, discordId, accountName, bearerToken,
+                 remoteAddress = static_cast<const ix::WebSocket*>(remote.get())](const ix::WebSocketMessagePtr& rmsg) {
                   switch (rmsg->type) {
                     case ix::WebSocketMessageType::Open: {
                       std::lock_guard<std::mutex> lk(g_pairsMutex);
@@ -1266,14 +1332,20 @@ void InstallWebSocketBridge() {
                           "[NEVR.WS] Remote closed (conn=%d, %s, ws=%p): code=%u",
                           connIdx, ConnLabel(connIdx), static_cast<void*>(gameWsPtr),
                           static_cast<unsigned int>(rmsg->closeInfo.code));
-                      // Don't call gameWsPtr->close() — it deadlocks (blocks waiting
-                      // for server thread which may be blocked on g_pairsMutex).
-                      // The game will detect the closed remote on its next send attempt.
+                      // Not gameWsPtr->close() here: it deadlocks (blocks waiting for the server
+                      // thread, which may be blocked on g_pairsMutex). The game sockets on this
+                      // session are closed off this thread instead (#70).
+                      CloseGameSocketsForRemote(remoteAddress, connIdx,
+                                                static_cast<unsigned int>(rmsg->closeInfo.code));
                       break;
                     case ix::WebSocketMessageType::Error:
                       Log(EchoVR::LogLevel::Warning,
                           "[NEVR.WS] Remote error: http_status=%d retries=%u",
                           rmsg->errorInfo.http_status, rmsg->errorInfo.retries);
+                      // Automatic reconnection is off, so a remote that fails (often its first connect,
+                      // with no Close to follow) is dead; end the game's sockets on it so the game
+                      // retries rather than waiting on a session that will never open (#70).
+                      CloseGameSocketsForRemote(remoteAddress, connIdx, 0);
                       break;
                     default:
                       break;
@@ -1744,6 +1816,20 @@ void* TestHook_N61_RegisterMatchmaker(void* gameWsHandle, bool* callbackFired) {
 // This is NOT a reimplementation — it runs the SAME code as the production
 // Close handler (same file, same static globals, same guard conditions).
 // The test hook is the observer; the logic under test is production.
+bool TestHook_ForgetLoginSession(void* remoteHandle, int* nextConnIdx) {
+  auto* remotePtr = static_cast<std::shared_ptr<ix::WebSocket>*>(remoteHandle);
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  const bool forgot = ForgetLoginSessionLocked(remotePtr->get());
+  if (nextConnIdx != nullptr) *nextConnIdx = g_connectionCount.load();
+  return forgot;
+}
+
+size_t TestHook_GameSocketsBoundTo(void* remoteHandle) {
+  auto* remotePtr = static_cast<std::shared_ptr<ix::WebSocket>*>(remoteHandle);
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  return GameSocketsBoundToLocked(remotePtr->get()).size();
+}
+
 bool TestHook_N61_SimulateCloseAndCheckCleared(void* rawGameWsPtr) {
   ix::WebSocket* gameWs = static_cast<ix::WebSocket*>(rawGameWsPtr);
 

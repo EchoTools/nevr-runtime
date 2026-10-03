@@ -469,6 +469,39 @@ class N61_WsBridgeTest : public ::testing::Test {
   }
 };
 
+// #70: when the shared remote session ends, every game socket on it (login and matchmaker) is closed so
+// the game reconnects; a socket on another remote, or one the game already closed, is left alone.
+TEST_F(N61_WsBridgeTest, RemoteEndSelectsEveryGameSocketOnThatSessionOnly) {
+  auto remote = MockWsHandle::Create();
+  auto other = MockWsHandle::Create();
+  auto loginWs = MockWsHandle::Create();
+  auto matchWs = MockWsHandle::Create();
+  void* loginRaw = TestHook_N61_RegisterLogin(remote.handle, loginWs.handle);
+  ASSERT_NE(loginRaw, nullptr);
+  bool fired = false;
+  void* matchRaw = TestHook_N61_RegisterMatchmaker(matchWs.handle, &fired);
+  ASSERT_NE(matchRaw, nullptr);
+
+  EXPECT_EQ(TestHook_GameSocketsBoundTo(remote.handle), 2U) << "login and matchmaker share the session";
+  EXPECT_EQ(TestHook_GameSocketsBoundTo(other.handle), 0U);
+  (void)TestHook_N61_SimulateCloseAndCheckCleared(matchRaw);
+  EXPECT_EQ(TestHook_GameSocketsBoundTo(remote.handle), 1U) << "a socket the game closed is not closed again";
+}
+
+// #70: the login session ending makes the game's next connection a new login (numbered 1), not a
+// matchmaker attached to the dead session; any other session ending changes nothing.
+TEST_F(N61_WsBridgeTest, LoginSessionEndRenumbersTheNextConnectionAsLogin) {
+  auto remote = MockWsHandle::Create();
+  auto other = MockWsHandle::Create();
+  auto loginWs = MockWsHandle::Create();
+  ASSERT_NE(TestHook_N61_RegisterLogin(remote.handle, loginWs.handle), nullptr);
+  int next = -1;
+  EXPECT_FALSE(TestHook_ForgetLoginSession(other.handle, &next)) << "not the login session";
+  EXPECT_TRUE(TestHook_ForgetLoginSession(remote.handle, &next));
+  EXPECT_EQ(next, 1);
+  EXPECT_FALSE(TestHook_ForgetLoginSession(remote.handle, &next)) << "already forgotten";
+}
+
 TEST_F(N61_WsBridgeTest, CallbackSurvivesLoginClose) {
   // Scenario:
   //   1. Login connects → callback_A on shared remote.
