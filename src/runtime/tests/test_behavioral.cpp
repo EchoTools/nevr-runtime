@@ -1062,6 +1062,26 @@ TEST(N84_HookGuard, OverwrittenBytes_Detected) {
         << "guard did NOT detect a foreign detour overwriting a recorded address";
 }
 
+// IsOurDetour: code that calls a game function the runtime may have detoured asks whether the bytes there
+// are still our own jump. Recorded and unchanged: yes. Never recorded, or overwritten since: no.
+TEST(N84_HookGuard, IsOurDetour_OnlyForRecordedUnchangedSites) {
+    HookGuard::ResetForTest();
+    GuardScratch ours;
+    GuardScratch other;
+    ASSERT_NE(ours.page, nullptr);
+    ASSERT_NE(other.page, nullptr);
+    memset(ours.page, 0x90, 32);
+    memset(other.page, 0x90, 32);
+
+    HookGuard::Record(ours.page, "IsOurDetour_ours");
+    EXPECT_TRUE(HookGuard::IsOurDetour(ours.page));
+    EXPECT_FALSE(HookGuard::IsOurDetour(other.page)) << "an address the runtime never detoured";
+    EXPECT_FALSE(HookGuard::IsOurDetour(nullptr));
+
+    static_cast<unsigned char*>(ours.page)[0] = 0xE9;  // someone else's JMP over ours
+    EXPECT_FALSE(HookGuard::IsOurDetour(ours.page)) << "a recorded site whose bytes changed is no longer ours";
+}
+
 TEST(N84_HookGuard, NullTarget_Ignored) {
     HookGuard::ResetForTest();
     const int before = HookGuard::RecordedCount();

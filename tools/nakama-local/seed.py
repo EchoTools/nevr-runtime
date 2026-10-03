@@ -145,6 +145,12 @@ def main() -> int:
                     help="first empty the recently-met lists of the account and peers 1..N")
     ap.add_argument("--reset-friends", action="store_true",
                     help="first remove every friendship among the account and peers 1..N")
+    ap.add_argument("--early-quit-enabled", choices=("on", "off"),
+                    help="turn the game service's early quit penalties on (not silent, so login sends the feature "
+                         "flags) or off; the game service reloads its settings every 30 s (evr_pipeline.go)")
+    ap.add_argument("--early-quit-penalty", type=int, metavar="SECONDS",
+                    help="give the account an early quit penalty ending SECONDS from now (level 2, 5 quits); "
+                         "0 clears it")
     args = ap.parse_args()
     if args.print:
         print(f'identity:\n  discord_id: "{DISCORD_ID}"\n  password: "{PASSWORD}"')
@@ -174,6 +180,29 @@ def main() -> int:
         a, b = pair.split(",")
         psql(friends_sql(a.strip(), b.strip()))
         print(f"friends: {a.strip()} <-> {b.strip()}")
+    if args.early_quit_enabled:
+        on = "true" if args.early_quit_enabled == "on" else "false"
+        out = psql("UPDATE storage SET value = jsonb_set(jsonb_set(value, '{matchmaking,enable_early_quit_penalty}', "
+                   f"'{on}', true), '{{matchmaking,silent_early_quit_system}}', 'false', true) "
+                   "WHERE collection = 'Global' AND key = 'settings' RETURNING key;")
+        if "settings" not in out:
+            raise SystemExit("--early-quit-enabled: no Global/settings row yet (start the game service first)")
+        print(f"early quit penalties {args.early_quit_enabled} (not silent); live within 30 s")
+    if args.early_quit_penalty is not None:
+        ts = f"extract(epoch from now())::bigint + {args.early_quit_penalty}" if args.early_quit_penalty > 0 else "-1"
+        level, quits = (2, 5) if args.early_quit_penalty > 0 else (0, 0)
+        out = psql(f"""
+INSERT INTO storage (collection, key, user_id, value, version, read, write)
+SELECT 'EarlyQuit', 'statistics', u.id,
+       jsonb_build_object('penalty_ts', {ts}, 'num_early_quits', {quits}, 'penalty_level', {level},
+                          'num_steady_matches', 0, 'num_steady_early_quits', 0, 'steady_player_level', 0),
+       md5(random()::text), 0, 0
+FROM users u WHERE u.custom_id = '{args.discord_id}'
+ON CONFLICT (collection, key, user_id) DO UPDATE SET value = EXCLUDED.value, version = EXCLUDED.version
+RETURNING value->>'penalty_ts';""")
+        if not out.strip():
+            raise SystemExit(f"--early-quit-penalty: no account with Discord id {args.discord_id}")
+        print(f"early quit penalty for {args.discord_id}: penalty_ts={out.strip()}")
     for pair in args.unfriend:
         a, b = pair.split(",")
         psql(f"DELETE FROM user_edge WHERE source_id IN (SELECT id FROM users WHERE custom_id IN ('{a}','{b}')) "
