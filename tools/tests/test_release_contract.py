@@ -111,7 +111,14 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("x64-linux/tools/protobuf/protoc", workflow)
         self.assertLess(workflow.index("just proto"), workflow.index("- name: Configure CMake"))
         self.assertIn("NEVR_CODESIGN_REQUIRED", workflow)
-        self.assertIn("CODESIGN_PFX_BASE64", workflow)
+        # Release signing is Microsoft Artifact Signing in the `codesign` environment (#78): the only
+        # environment Azure's federated credential trusts. The private-CA secrets are gone from CI.
+        self.assertIn("azure/artifact-signing-action@v2", workflow)
+        self.assertIn("environment: codesign", workflow)
+        self.assertIn("id-token: write", workflow)
+        self.assertIn("Get-AuthenticodeSignature", workflow)
+        self.assertNotIn("CODESIGN_PASS", workflow)
+        self.assertNotIn("CODESIGN_PFX_BASE64", workflow)
         self.assertIn("          dist/*.zip", workflow)
         self.assertIn("          dist/*.tar.zst", workflow)
         self.assertIn("Verify distribution archives", workflow)
