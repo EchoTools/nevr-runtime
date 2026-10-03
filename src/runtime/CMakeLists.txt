@@ -17,6 +17,7 @@ set(PATCHES_SOURCES
     "lifecycle/login_redirect_override.cpp"
     "patch/mode_patches.cpp"
     "patch/broadcaster_hook_stats.cpp"
+    "patch/coop_ai_trace.cpp"
     "lifecycle/crash_recovery.cpp"
     "lifecycle/crash_dump_format.cpp"
     "hook/hook_guard.cpp"
@@ -74,6 +75,8 @@ set(PATCHES_HEADERS
     "lifecycle/login_redirect_override.h"
     "patch/mode_patches.h"
     "patch/broadcaster_hook_stats.h"
+    "patch/coop_ai_trace.h"
+    "patch/coop_ai_trace_rules.h"
     "lifecycle/crash_recovery.h"
     "lifecycle/crash_dump_format.h"
     "lifecycle/readable_memory.h"
@@ -337,6 +340,12 @@ if(BUILD_TESTING)
         $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>)
     endif()
     gtest_discover_tests(test_session_unregister DISCOVERY_MODE PRE_TEST)
+
+    # co-op AI diagnostic (issue #63): the pure decisions behind patch/coop_ai_trace.cpp.
+    add_executable(test_coop_ai_trace tests/test_coop_ai_trace.cpp)
+    target_include_directories(test_coop_ai_trace PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_coop_ai_trace PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_coop_ai_trace DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_xpid_patch tests/test_xpid_patch.cpp)
     target_include_directories(test_xpid_patch PRIVATE
