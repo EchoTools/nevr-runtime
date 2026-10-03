@@ -1,0 +1,115 @@
+name: Defender scan
+
+# What Microsoft Defender says about the release zip on real Windows, before testers install it (#75).
+# Manual and off main: it runs on a push to this branch (GitHub only dispatches workflow_dispatch
+# workflows that are on the default branch). Not part of the release; nothing is signed. The zip is
+# built as build.yml builds it with no secrets, so it embeds no keys.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/defender-scan]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+
+    - name: Setup pinned just
+      uses: extractions/setup-just@v4
+      with:
+        just-version: '1.46.0'
+
+    - name: Setup pinned CMake
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - run: python -m pip install cmake==4.0.0
+
+    - name: Install MinGW toolchain
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y g++-mingw-w64-x86-64 ninja-build zstd
+
+    - name: Setup pinned Buf
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23.6'
+    - run: |
+        go install github.com/bufbuild/buf/cmd/buf@v1.47.2
+        echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+    - name: Setup vcpkg
+      run: |
+        git clone https://github.com/Microsoft/vcpkg.git "$HOME/.vcpkg"
+        "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+        "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
+          --x-manifest-root="$GITHUB_WORKSPACE" \
+          --x-install-root="$GITHUB_WORKSPACE/build/mingw-release/vcpkg_installed"
+
+    - name: Generate pinned protobuf sources
+      run: |
+        set -euo pipefail
+        test -x "$GITHUB_WORKSPACE/build/mingw-release/vcpkg_installed/x64-linux/tools/protobuf/protoc"
+        just proto
+
+    - name: Configure CMake (unsigned, no embedded defaults)
+      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF -DNEVR_REQUIRE_BUILTIN_DEFAULTS=OFF
+
+    - name: Build the dist zip
+      run: |
+        set -euo pipefail
+        cmake --build --preset mingw-release --target dist
+        ls -la dist
+        sha256sum dist/*.zip build/mingw-release/bin/BugSplat64.dll
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: release-zip
+        path: dist/*.zip
+        if-no-files-found: error
+        retention-days: 7
+
+  scan:
+    needs: build
+    runs-on: windows-latest
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: release-zip
+        path: zip
+
+    - name: Unzip
+      shell: pwsh
+      run: |
+        $zip = Get-ChildItem zip -Filter *.zip | Select-Object -First 1
+        Expand-Archive -Path $zip.FullName -DestinationPath unzipped -Force
+        Get-ChildItem -Recurse unzipped | ForEach-Object { "{0}  {1}  {2}" -f (Get-FileHash $_.FullName -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash, $_.Length, $_.FullName }
+
+    - name: 1. Is Defender active on this runner?
+      shell: pwsh
+      run: |
+        Get-MpComputerStatus | Select-Object AMServiceEnabled, AntivirusEnabled, RealTimeProtectionEnabled, BehaviorMonitorEnabled, AntivirusSignatureVersion, AntivirusSignatureLastUpdated, AMEngineVersion, AMProductVersion | Format-List
+
+    - name: 2. Scan the unzipped release
+      id: mpscan
+      shell: pwsh
+      run: |
+        $dir = (Resolve-Path unzipped).Path
+        & "$env:ProgramFiles\Windows Defender\MpCmdRun.exe" -Scan -ScanType 3 -File $dir -DisableRemediation
+        $code = $LASTEXITCODE
+        "MpCmdRun exit code: $code (0 = no threats, 2 = threats found)"
+        "exit_code=$code" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        exit 0
+
+    - name: 3. Detections
+      shell: pwsh
+      run: |
+        "MpCmdRun exit code was ${{ steps.mpscan.outputs.exit_code }}"
+        $d = Get-MpThreatDetection
+        if ($d) { $d | Format-List * } else { "Get-MpThreatDetection: none" }
+        if ("${{ steps.mpscan.outputs.exit_code }}" -ne "0") { exit 1 }
