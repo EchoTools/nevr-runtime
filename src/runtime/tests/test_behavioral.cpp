@@ -834,6 +834,18 @@ TEST(WsBridgeRemoteBearer, UrlCredentialClientSendsTheServerKeyNotTheJwt) {
   EXPECT_EQ(TestHook_SelectRemoteBearer(true, "jwt-value", ""), "");
 }
 
+// The /ws catch-all replaces a token-auth client's Bearer (#52, #65); the bridge warns when a
+// token-auth login is about to go there. Only the exact /ws path counts.
+TEST(WsBridgeRemoteBearer, OnlyTheWsPathReplacesTheBearer) {
+  EXPECT_TRUE(TestHook_IsBearerReplacingPath("wss://g.echovrce.com:443/ws"));
+  EXPECT_TRUE(TestHook_IsBearerReplacingPath("wss://g.echovrce.com/ws?format=evr"));
+  EXPECT_FALSE(TestHook_IsBearerReplacingPath("wss://g.echovrce.com:443/nevr"));
+  EXPECT_FALSE(TestHook_IsBearerReplacingPath("wss://g.echovrce.com:443/nevr?format=evr"));
+  EXPECT_FALSE(TestHook_IsBearerReplacingPath("wss://g.echovrce.com/wss"));
+  EXPECT_FALSE(TestHook_IsBearerReplacingPath("wss://g.echovrce.com/ws/x"));
+  EXPECT_FALSE(TestHook_IsBearerReplacingPath("wss://g.echovrce.com"));
+}
+
 // SelectPlatformCode: the bridge always logs in as platform 4 (OVR_ORG), the provider it forces
 // into the game's own CNSUser. A login as platform 6 (DMO, -noovr) made Nakama answer the game's
 // later LobbyPlayerSessionsRequest (sent as OVR-ORG) with "requesting player not found in
