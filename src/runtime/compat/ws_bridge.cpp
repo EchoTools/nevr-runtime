@@ -739,7 +739,10 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
     j["lobbyversion"] = 0;
     j["appid"] = 0;
     j["publisher_lock"] = "";
-    j["hmdserialnumber"] = "nEVR-Wine";
+    // No headset serial is known here (no OVR). Send a value the game service's alt detection
+    // ignores (nakama IgnoredLoginValues): a shared constant made every nevr-runtime player a
+    // strong alt of every other one, so one player's suspension or disable reached them all.
+    j["hmdserialnumber"] = "unknown";
     j["desiredclientprofileversion"] = 0;
 
     auto& ident = j["nevr_identity"];

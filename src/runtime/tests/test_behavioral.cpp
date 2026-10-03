@@ -818,6 +818,9 @@ TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) 
   EXPECT_EQ(json["nevr_identity"]["commit"], identity.git_commit);
   EXPECT_EQ(json["nevr_identity"]["build"], identity.git_describe);
   EXPECT_EQ(json.at("nevr_social"), SocialParty::kSocialLevel) << "the social level the server gates new messages on";
+  // Alt detection keys on the headset serial; "unknown" is one of the values it ignores. A shared
+  // constant here links every nevr-runtime player as alts of each other.
+  EXPECT_EQ(json.at("hmdserialnumber"), "unknown");
   EXPECT_EQ(json["nevr_identity"]["build_type"], identity.build_type);
   ASSERT_TRUE(json.contains("system_info"));
   EXPECT_TRUE(json["system_info"]["num_physical_cores"].is_number_unsigned());
