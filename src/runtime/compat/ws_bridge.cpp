@@ -1,4 +1,5 @@
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
@@ -681,6 +682,16 @@ static bool IsBearerReplacingPath(const std::string& url) {
   return url.compare(pathStart, pathEnd == std::string::npos ? std::string::npos : pathEnd - pathStart, "/ws") == 0;
 }
 
+// The HMD serial field the stock client sends (#83): relay the game's serial buffer, or its stock "N/A"
+// value in No-VR mode. Outside the game (unit tests) there is nothing to read.
+static HmdSerial::Choice GameHmdSerial() {
+  if (EchoVR::g_GameBaseAddress == nullptr || g_pGame == nullptr) return HmdSerial::Select(false, nullptr);
+  uint32_t flags = 0;
+  memcpy(&flags, static_cast<const char*>(g_pGame) + 0x7AE0, sizeof(flags));
+  const char* serial = reinterpret_cast<const char*>(EchoVR::g_GameBaseAddress) + 0x20C7834;
+  return HmdSerial::Select((flags & HmdSerial::kNoVrFlag) != 0, serial);
+}
+
 static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode = 2,
                                      const std::string& displayName = std::string(),
                                      const std::string& accessToken = std::string(),
@@ -739,10 +750,15 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
     j["lobbyversion"] = 0;
     j["appid"] = 0;
     j["publisher_lock"] = "";
-    // No headset serial is known here (no OVR). Send a value the game service's alt detection
-    // ignores (nakama IgnoredLoginValues): a shared constant made every nevr-runtime player a
-    // strong alt of every other one, so one player's suspension or disable reached them all.
-    j["hmdserialnumber"] = "unknown";
+    // The serial the stock client sends (#83): the game's serial buffer in VR, "N/A" with no VR, and
+    // "unknown" only when the game has none. A shared constant here ("nEVR-Wine") made every
+    // nevr-runtime player a strong alt of every other one. The value is never logged.
+    {
+      const HmdSerial::Choice hmd = GameHmdSerial();
+      j["hmdserialnumber"] = hmd.value;
+      Log(EchoVR::LogLevel::Info, "[NEVR.WS] login hmd serial source=%s length=%zu", HmdSerial::SourceName(hmd.source),
+          hmd.value.size());
+    }
     j["desiredclientprofileversion"] = 0;
 
     auto& ident = j["nevr_identity"];
