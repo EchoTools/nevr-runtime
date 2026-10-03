@@ -4,6 +4,8 @@
 
 #include "runtime/lifecycle/service_map.h"
 
+#include <nlohmann/json.hpp>
+
 #include <unordered_map>
 
 namespace nevr_cfg {
@@ -87,6 +89,16 @@ std::optional<std::string> LookupFlat(const nevr::NevrConfig& cfg, const std::st
   return cfg.GetString(path);
 }
 
+std::optional<std::string> LookupFlatWithDefaults(const nevr::NevrConfig& cfg,
+                                                  const FlatDefaults& defaults,
+                                                  const std::string& flatKey) {
+  const std::optional<std::string> fromFile = LookupFlat(cfg, flatKey);
+  if (fromFile && !fromFile->empty()) return fromFile;
+  const auto it = defaults.find(flatKey);
+  if (it != defaults.end() && !it->second.empty()) return it->second;
+  return fromFile;
+}
+
 std::optional<std::string> LookupFlatCsv(const nevr::NevrConfig& cfg, const std::string& flatKey) {
   // For LIST-shaped keys (guilds, regions). GetStringList turns a sequence into
   // its elements and a lone scalar into a single element, so a config.yaml list
@@ -150,6 +162,52 @@ std::optional<std::string> GameNativeDefault(const std::string& key) {
   // one (it is a game key with a fixed value, not a config.yaml mapping).
   if (key == "publisher_lock") return std::string("echotools");
   return std::nullopt;
+}
+
+bool SocialFacadeEnabled(const nevr::NevrConfig& cfg) {
+  return cfg.GetBool("social.facade").value_or(true);
+}
+
+std::optional<std::string> BuildGameNativeConfigJson(const std::string& httpUri,
+                                                     const std::string& serverKey) {
+  if (httpUri.empty() || serverKey.empty()) return std::nullopt;
+  const std::size_t schemeEnd = httpUri.find("://");
+  if (schemeEnd == std::string::npos || schemeEnd == 0) return std::nullopt;
+  const std::string scheme = httpUri.substr(0, schemeEnd);
+  const std::size_t hostStart = schemeEnd + 3;
+  const std::size_t hostEnd = httpUri.find_first_of(":/?#", hostStart);
+  const std::string host = httpUri.substr(hostStart, hostEnd == std::string::npos ? std::string::npos
+                                                                                   : hostEnd - hostStart);
+  if (host.empty()) return std::nullopt;
+  int port = (scheme == "https") ? 443 : 80;
+  if (hostEnd != std::string::npos && httpUri[hostEnd] == ':') {
+    const std::size_t portEnd = httpUri.find_first_of("/?#", hostEnd + 1);
+    const std::string portText = httpUri.substr(
+        hostEnd + 1, portEnd == std::string::npos ? std::string::npos : portEnd - hostEnd - 1);
+    if (portText.empty() || portText.size() > 5 ||
+        portText.find_first_not_of("0123456789") != std::string::npos) {
+      return std::nullopt;
+    }
+    port = std::stoi(portText);
+    if (port < 1 || port > 65535) return std::nullopt;
+  }
+  // Assignments, not a braced initializer: the N133 S7b sensor counts source lines that open with
+  // a braced string pair in this file as flat-map rows, and these are not map rows.
+  nlohmann::json features = nlohmann::json::object();
+  features["friends"] = true;
+  features["parties"] = true;
+  features["matchmaking"] = true;
+  features["presence"] = true;
+  nlohmann::json social = nlohmann::json::object();
+  social["server_endpoint"] = scheme + "://" + host;
+  social["server_port"] = port;
+  social["server_key"] = serverKey;
+  social["auth_method"] = "device";
+  social["auto_create_user"] = true;
+  social["features"] = std::move(features);
+  nlohmann::json root = nlohmann::json::object();
+  root["social_plugin"] = std::move(social);
+  return root.dump();
 }
 
 }  // namespace nevr_cfg

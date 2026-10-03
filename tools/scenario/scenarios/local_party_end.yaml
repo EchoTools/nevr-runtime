@@ -1,0 +1,38 @@
+# A party's join policy and data go when the party ends (nakama: snsPartyEnded, evr_pipeline_party.go).
+# The policy used to be kept per party for the life of the process. A party ends two ways: its last
+# member leaves (SNSPartyLeaveRequest), or its last member's game client goes away without a leave
+# (the session closes; snsPartyLeaveOnClose). Peers only: the game client just logs in. Nakama 090792393 +
+# 5d391aa7b; run 20261002T135827.
+name: local_party_end
+server: local
+peers: 3
+description: a party's policy is dropped when its last member leaves, and when its last member disconnects
+steps:
+  - name: logged in to the local nakama
+    wait_log: {pattern: 'NetGame switching state \(from logging in, to logged in\)'}
+  - name: peer 1 makes a party
+    peer: {id: 1, do: create_party, save: {left_party: party}}
+  - name: peer 1 sets its join policy (everyone, so peer 2 may join)
+    peer: {id: 1, do: set_policy, arg: 3}
+  - name: the local nakama stored it
+    nakama_log: {pattern: '"msg":"Party join policy set".*"policy":3', timeout: 15}
+  - name: peer 2 joins
+    peer: {id: 2, do: join, arg: '${left_party}', expect: PartyJoinSuccess}
+  - name: peer 1 leaves; peer 2 is still in the party
+    peer: {id: 1, do: leave, expect: PartyLeaveSuccess}
+  - name: peer 2, the last member, leaves
+    peer: {id: 2, do: leave, expect: PartyLeaveSuccess}
+  - name: the party ended at the last leave, and its policy went with it
+    nakama_log: {pattern: '"msg":"SNS party ended: dropped its data and join policy".*"username":"localpeer2".*"had_policy":true', timeout: 10}
+  - name: peer 3 makes a party
+    peer: {id: 3, do: create_party}
+  - name: peer 3 sets invite only
+    peer: {id: 3, do: set_policy, arg: 0}
+  - name: the local nakama stored invite only
+    nakama_log: {pattern: '"msg":"Party join policy set".*"username":"localpeer3".*"policy":0', timeout: 15}
+  - name: peer 3's game client goes away without a leave
+    peer: {id: 3, do: disconnect}
+  - name: nakama leaves the party for the closed session
+    nakama_log: {pattern: '"msg":"Session closed in an SNS party: leaving it".*"username":"localpeer3"', timeout: 15}
+  - name: the party ended, and its policy went with it
+    nakama_log: {pattern: '"msg":"SNS party ended: dropped its data and join policy".*"username":"localpeer3".*"had_policy":true', timeout: 15}

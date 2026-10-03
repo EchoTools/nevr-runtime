@@ -21,7 +21,7 @@ struct Entry {
 const Entry kEntries[] = {
     {"GetTimeMicroseconds", "all modes", false},
     {"CTimer_GetMilliSeconds", "all modes", false},
-    {"CPrecisionSleep::Wait", "CLIENT ONLY — never runs on a server (N86)", true},
+    {"CPrecisionSleep::Wait", "CLIENT ONLY — never runs on a server", true},
     {"EndMultiplayer", "session teardown", false},
     {"CSpinWait::WaitForValue", "under contention", false},
     {"HTTPListenerBringup", "server bringup", false},
@@ -85,7 +85,7 @@ void Report(const char* context) {
         g_serverAbsenceNoticeLogged = true;
         Log(EchoVR::LogLevel::Info,
             "[NEVR.PATCH] hook_liveness name=%s skipped=server_mode_guaranteed_absent "
-            "(client-only hook, N86) — not tracked further this run",
+            "(client-only hook) — not tracked further this run",
             kEntries[i].name);
       }
       continue;

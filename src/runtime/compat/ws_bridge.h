@@ -39,6 +39,12 @@ void StopWebSocketBridgeListener();
 // Expose the Close handler's callback-lifecycle decision to unit tests.
 // ============================================================================
 
+#ifdef NEVR_SCENARIO_CONTROL
+/// Scenario-control builds only: delivers `frame` to the game as a server->game frame on the login
+/// connection (roster/party feed, frame log, send). False with `error` set when it cannot.
+bool InjectServerFrameForTest(const std::string& frame, std::string* error);
+#endif
+
 #ifdef NEVR_TEST_HOOKS
 // Production helpers exposed only to the Wine unit-test target. These keep the
 // login wire format and callback boundary covered without exporting them from
@@ -50,16 +56,23 @@ const char* TestHook_PlatformPrefix(uint64_t platformCode);
 int TestHook_GuardWsCallbackForwardsArguments(int first, int second);
 bool TestHook_GuardWsCallbackContainsStdException();
 bool TestHook_GuardWsCallbackPropagatesNonStdException();
+int TestHook_LogFrameMessages(const char* direction, int connIdx, const std::string& frame);
 bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* statusCode, size_t* messageBytes);
 bool TestHook_LogLoginFailureDiagnostic(const std::string& frame, bool serverMode);
 uint64_t TestHook_SelectPlatformCode(bool hasUrlCredentials, bool noOvr);
+std::string TestHook_SelectRemoteBearer(bool hasUrlCredentials, const std::string& jwt,
+                                        const std::string& serverKey);
+bool TestHook_IsBearerReplacingPath(const std::string& url);
 void* TestHook_N61_CreateMockWs();
 void  TestHook_N61_DestroyMockWs(void* handle);
 void* TestHook_N61_GetRawWsPtr(void* handle);
 void* TestHook_N61_RegisterLogin(void* remoteHandle, void* gameWsHandle);
 void* TestHook_N61_RegisterMatchmaker(void* gameWsHandle, bool* callbackFired);
 bool  TestHook_N61_SimulateCloseAndCheckCleared(void* rawGameWsPtr);
+size_t TestHook_GameSocketsBoundTo(void* remoteHandle);
+bool TestHook_ForgetLoginSession(void* remoteHandle, int* nextConnIdx);
 bool  TestHook_N61_HasActiveCallback();
+int   TestHook_SharedRouteConn();  // the conn frames from the shared login session go to, -1 none
 void  TestHook_N61_ResetState();
 bool  TestHook_N60_IsMutexFree();
 #endif

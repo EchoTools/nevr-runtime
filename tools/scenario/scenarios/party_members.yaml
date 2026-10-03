@@ -1,0 +1,37 @@
+# A party member joins and leaves. docs/design/2026-10-01-social-features-test-plan.md #11.
+# Inbound only: the bridge delivers the PartyJoinNotify and PartyLeaveNotify Nakama sends to the
+# members of a party, for the game's own party. Pass = the MemberJoined (index 9) and MemberLeft
+# (index 11) callbacks ran, the game logged "'<name>' joined party (...)" and "'<name>' left party"
+# (PartyMemberJoinedCB 0x14018a3c0 logs 0x1416ddcd8 and raises a component event, not a session
+# event), the bridge asked for the member's display name, and the member count went 1 -> 2 -> 1.
+# The member is synthetic; the only thing sent is the profile lookup for its id.
+name: party_members
+description: a member joins the game's party and leaves it again; see the callbacks, the game's own lines and the member count
+vars:
+  member_id: 1000000000000000007
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: the game has its own party
+    state_until: {party_joinable: true, timeout: 60}
+  - name: a member joins (PartyJoinNotify)
+    inject: {msg: PartyJoinNotify, member: '${member_id}'}
+  - name: MemberJoined callback ran for index 1
+    expect_log: {pattern: 'party callback index=9 arg=1 bound=1', timeout: 10}
+  - name: the game logged the join
+    expect_log: {pattern: "\\[NETGAME\\] '[^']+' joined party", timeout: 10}
+    diagnose: ['session event .*partymember', 'slot=26 ']
+  - name: the bridge asked for the member's display name
+    expect_log: {pattern: 'party name lookup requested account=${member_id} sent=1', timeout: 10}
+  - name: two members
+    state_until: {party_members: 2, timeout: 15}
+  - name: the member leaves (PartyLeaveNotify)
+    inject: {msg: PartyLeaveNotify, member: '${member_id}'}
+  - name: MemberLeft callback ran for the member
+    expect_log: {pattern: 'party callback index=11 id=${member_id} bound=1', timeout: 10}
+  - name: the game logged the leave
+    expect_log: {pattern: "\\[NETGAME\\] '[^']+' left party", timeout: 10}
+  - name: one member again
+    state_until: {party_members: 1, timeout: 15}

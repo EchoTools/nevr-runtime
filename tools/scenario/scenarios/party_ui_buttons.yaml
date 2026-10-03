@@ -1,0 +1,41 @@
+# The party UI buttons (R15NetInviteUsersNode, run 0x140ddc700). docs/design/2026-10-01-social-features-test-plan.md #13.
+# The node's mode and user pick one of five handlers, each gated on the first match being done and
+# the user being online, and, with a user, on the user's provider matching the local one:
+#   mode 0 -> 0x140187170 -> slot 38 (pnsovr: "invitable user ui opened", ovr_Room_LaunchInvitableUserFlow)
+#   mode 1 -> 0x140187330 -> slot 40; with a user -> 0x140187230 -> slot 39 (0, account)
+#   mode 2 -> 0x1401874f0 -> slot 43; with a user -> 0x1401873f0 -> slot 42 (0, account)
+# pnsovr's 39-43 are a bare `ret` (0x1800821e0); the facade matches. Pass = each button reached its
+# slot and no invite error event fired. What slot 38 should open on PC (pnsovr opened an Oculus
+# overlay) is the owner's design call; this checks the routing.
+name: party_ui_buttons
+description: fire each mode of the invite-users node; see each reach its social slot
+vars:
+  user: OVR-ORG-1000000000000000009
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: the game has its own party
+    state_until: {party_joinable: true, timeout: 60}
+  - name: mode 0 (invitable users)
+    fire: {action: invite_users, mode: 0}
+  - name: slot 38 reached
+    expect_log: {pattern: 'slot=38 name=OpenSendInviteUI call=', timeout: 10}
+    diagnose: ['session event .*partyinviteerror']
+  - name: mode 1 without a user
+    fire: {action: invite_users, mode: 1}
+  - name: slot 40 reached
+    expect_log: {pattern: 'slot=40 name=OpenNewSendInviteUI call=', timeout: 10}
+  - name: mode 1 with a user
+    fire: {action: invite_users, mode: 1, user: '${user}'}
+  - name: slot 39 reached with the user
+    expect_log: {pattern: 'slot=39 name=OpenNewSendInviteUI\(target\) call=', timeout: 10}
+  - name: mode 2 without a user
+    fire: {action: invite_users, mode: 2}
+  - name: slot 43 reached
+    expect_log: {pattern: 'slot=43 name=OpenPartyUI call=', timeout: 10}
+  - name: mode 2 with a user
+    fire: {action: invite_users, mode: 2, user: '${user}'}
+  - name: slot 42 reached with the user
+    expect_log: {pattern: 'slot=42 name=OpenPartyUI\(target\) call=', timeout: 10}

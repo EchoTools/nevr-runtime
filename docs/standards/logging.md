@@ -114,6 +114,7 @@ subsystems that NEVR annotates.
 | `[NEVR.DLLHOOK]`      | LoadLibrary interception                     |
 | `[NEVR.PROFILE]`      | Server profile / memory snapshot             |
 | `[NEVR.FATAL]`        | Fatal-error path (ServerFatal)               |
+| `[NEVR.SCENARIO]`     | Scenario-test control endpoint (test builds only; never in a release DLL) |
 | `[server_timing]`     | Server tick-rate / timing patches             |
 
 **Rule:** If you add a new component, add its tag to this table. If you

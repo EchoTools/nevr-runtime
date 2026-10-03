@@ -38,7 +38,7 @@ inline std::string FormatWebSocketErrorDiagnostic(std::string_view prefix, int h
 
 inline std::string FormatCallbackFailureDiagnostic(std::string_view callback) {
   return "[NEVR.WS] callback threw and was CONTAINED at=" + std::string(callback) +
-         " failure=1 — server continues (an escape here reaches the game's unhandled-exception filter and kills it, N85)";
+         " failure=1 — server continues (an escape here reaches the game's unhandled-exception filter and kills it)";
 }
 
 inline std::string FormatLoginFailureDiagnostic(bool valid, uint64_t statusCode, size_t messageBytes,

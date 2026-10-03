@@ -330,7 +330,7 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
     // This block used to be a second, divergent copy of the dispatch, and it
     // hard-coded `gctx.flags = NEVR_HOST_IS_SERVER` with the comment "always
     // server at this point". That was exactly inverted: hook_liveness.cpp:18
-    // records this hook as "CLIENT ONLY — never runs on a server (N86)". So the
+    // records this hook as "CLIENT ONLY — never runs on a server". So the
     // one path that runs ONLY on a client told every plugin and module that it
     // was running on a server. N86 measured the truth and added the dispatcher
     // below, but left this copy asserting the opposite.
@@ -565,24 +565,30 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
         const char* name;
         const uint8_t* prologue;  // nullptr = skip prologue validation
         uint8_t prologue_len;     // byte count for prologue comparison (0 if no prologue)
+        const char* why;          // what the hook changes and why; logged when it installs
     };
 
     HookEntry hooks[] = {
         { VA_GET_TIME_MICROSECONDS, (void*)&GetTimeMicrosecondsHook,
-          (void**)&s_origGetTimeMicroseconds, "GetTimeMicroseconds (BUG#1 fix)",
-          GET_TIME_MICROSECONDS_PROLOGUE, sizeof(GET_TIME_MICROSECONDS_PROLOGUE) },
+          (void**)&s_origGetTimeMicroseconds, "GetTimeMicroseconds",
+          GET_TIME_MICROSECONDS_PROLOGUE, sizeof(GET_TIME_MICROSECONDS_PROLOGUE),
+          "the microsecond timer overflows INT64 after about 10.7 days of uptime; replaced with an overflow-safe computation" },
         { VA_GET_TIME_MILLISECONDS, (void*)&GetTimeMillisecondsHook,
-          (void**)&s_origGetTimeMilliseconds, "CTimer_GetMilliSeconds (BUG#2 fix)",
-          GET_TIME_MILLISECONDS_PROLOGUE, sizeof(GET_TIME_MILLISECONDS_PROLOGUE) },
+          (void**)&s_origGetTimeMilliseconds, "CTimer_GetMilliSeconds",
+          GET_TIME_MILLISECONDS_PROLOGUE, sizeof(GET_TIME_MILLISECONDS_PROLOGUE),
+          "the millisecond timer overflows the same way (CleanupPeers mass-disconnects on bad timestamps); replaced with an overflow-safe computation" },
         { VA_END_MULTIPLAYER, (void*)&EndMultiplayerHook,
-          (void**)&s_origEndMultiplayer, "EndMultiplayer (BUG#6 fix)",
-          END_MULTIPLAYER_PROLOGUE, sizeof(END_MULTIPLAYER_PROLOGUE) },
+          (void**)&s_origEndMultiplayer, "EndMultiplayer",
+          END_MULTIPLAYER_PROLOGUE, sizeof(END_MULTIPLAYER_PROLOGUE),
+          "a null pointer at arg1+0x2DA0 is dereferenced when multiplayer ends; checked before use" },
         { VA_PRECISION_SLEEP_WAIT, (void*)&PrecisionSleepWaitHook,
-          (void**)&s_origPrecisionSleepWait, "CPrecisionSleep::Wait (BUG#11/#12 fix)",
-          nullptr, 0 },
+          (void**)&s_origPrecisionSleepWait, "CPrecisionSleep::Wait",
+          nullptr, 0,
+          "it creates and destroys a kernel timer every frame (about 180 kernel transitions a second at 90 fps); uses one persistent high-resolution timer" },
         { VA_SPINWAIT_WAIT_FOR_VALUE, (void*)&WaitForValueHook,
-          (void**)&s_origWaitForValue, "CSpinWait::WaitForValue (BUG#14 fix)",
-          nullptr, 0 },
+          (void**)&s_origWaitForValue, "CSpinWait::WaitForValue",
+          nullptr, 0,
+          "its backoff decreased (10 to 0 ms) under contention; it now increases (0 to 10 ms) and yields the hyper-thread" },
     };
 
     int installed = 0;
@@ -629,8 +635,8 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
 
         if (est == MH_OK) {
             Log(EchoVR::LogLevel::Info,
-                "[NEVR.PATCH] hooked name=%s va=0x%llX",
-                h.name, static_cast<unsigned long long>(h.va));
+                "[NEVR.PATCH] hooked name=%s va=0x%llX why=\"%s\"",
+                h.name, static_cast<unsigned long long>(h.va), h.why);
             installed++;
         } else {
             Log(EchoVR::LogLevel::Warning,
@@ -665,7 +671,7 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
         uint8_t ret_byte = 0xC3;
         ProcessMemcpy(busywait, &ret_byte, 1);
         Log(EchoVR::LogLevel::Info,
-            "[NEVR.PATCH] patched name=CPrecisionSleep::BusyWait va=0x%llX (BUG#13 fix, RET patch, saved orig=0x%02X)",
+            "[NEVR.PATCH] patched name=CPrecisionSleep::BusyWait va=0x%llX why=\"its QPC + Sleep(0) spin loop starves the hyper-thread sibling; now returns immediately (costs about 250 us of frame-pacing precision)\" saved_orig_byte=0x%02X",
             static_cast<unsigned long long>(VA_PRECISION_SLEEP_BUSYWAIT),
             static_cast<unsigned int>(s_busywait_original_byte));
         installed++;
@@ -706,7 +712,7 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
             MH_STATUS est = (cst == MH_OK) ? MH_EnableHook(target) : cst;
             if (est == MH_OK) {
                 Log(EchoVR::LogLevel::Info,
-                    "[NEVR.PATCH] hooked name=HTTPListenerBringup va=0x%llX (BUG#62 fix)",
+                    "[NEVR.PATCH] hooked name=HTTPListenerBringup va=0x%llX why=\"the engine only logs a failed HTTP API listener bind and keeps running, leaving a server with a dead session API; a bind failure is now fatal in server mode\"",
                     static_cast<unsigned long long>(VA_HTTP_LISTENER_BRINGUP));
                 installed++;
             } else {

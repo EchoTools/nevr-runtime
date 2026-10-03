@@ -33,6 +33,12 @@ void Record(const void* target, const char* name);
 /// Cheap: a handful of 16-byte memcmps.
 int VerifyAll(const char* context);
 
+/// Whether `target` is an address this runtime detoured and still holds: recorded, and its first bytes
+/// equal the snapshot taken after install. Code that calls a game function the runtime may have
+/// detoured (whose original prologue is then gone) uses this to call through our own detour, and to
+/// refuse anything else.
+bool IsOurDetour(const void* target);
+
 /// How many addresses are currently recorded.
 int RecordedCount();
 

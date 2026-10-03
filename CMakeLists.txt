@@ -174,6 +174,11 @@ include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_BINARY_DIR}
   "${CMAKE_SOURCE_DIR}/src")
 
+# Build-time defaults embedded into the runtime (environment or .env; see
+# cmake/nevr_builtin_defaults.cmake). The header lands in ${CMAKE_BINARY_DIR}/generated/.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/nevr_builtin_defaults.cmake")
+nevr_generate_builtin_defaults("${CMAKE_CURRENT_SOURCE_DIR}")
+
 # Define preprocessor macros
 add_compile_definitions("$<$<CONFIG:Debug>:_DEBUG;_WINDOWS;_USRDLL>"
   "$<$<CONFIG:Release>:NDEBUG;_WINDOWS;_USRDLL>")
@@ -290,6 +295,8 @@ add_custom_target(dist-prepare
   # gameserver.dll merged into nevr_runtime — no separate DLL to copy
   # COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_DIR}/pnsradgameserver.dll" || true
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_STAGE_DIR}/"
+  # The tester-facing install page (#72, beta gate G5): what to install, sign-in, uninstall, logs.
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/docs/beta/INSTALL.md" "${DIST_STAGE_DIR}/INSTALL.md"
   # plugins/ ships EMPTY on purpose — it is the drop-point for optional operator
   # plugins. log_filter.dll is deliberately not packaged (N95): the loader
   # refuses it by name.
@@ -360,6 +367,8 @@ add_custom_target(dist-lite-prepare
   # gameserver.dll merged into nevr_runtime — no separate DLL to copy
   # COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_LITE_DIR}/pnsradgameserver.dll" && ${STRIP_TOOL} --strip-all "${DIST_LITE_DIR}/pnsradgameserver.dll" || ${CMAKE_COMMAND} -E true
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/README.md" "${DIST_LITE_STAGE_DIR}/"
+  # The tester-facing install page (#72, beta gate G5): what to install, sign-in, uninstall, logs.
+  COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_SOURCE_DIR}/docs/beta/INSTALL.md" "${DIST_LITE_STAGE_DIR}/INSTALL.md"
   # plugins/ ships EMPTY on purpose — see the dist-prepare note above (N95).
   COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_LITE_STAGE_DIR}/plugins"
   COMMENT "Preparing lite distribution directory (stripped): ${DIST_LITE_DIR}"

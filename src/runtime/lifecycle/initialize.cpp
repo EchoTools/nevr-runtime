@@ -31,6 +31,9 @@
 #include "runtime/patch/xpid_patch.h"
 #include "runtime/patch/pnsrad_enabler.h"
 #include "runtime/patch/mic_provider.h"
+#include "runtime/lifecycle/service_config.h"
+#include "runtime/patch/early_quit_lockout.h"
+#include "runtime/patch/social_facade.h"
 
 #include <windows.h>
 
@@ -257,6 +260,15 @@ static VOID InitializeAfterGameImageGuard() {
     return;
   }
   BootLogTee::TeeFprintf("[NEVR.PATCH] minhook initialized\n");
+
+  // Observe the platform Social factory result on every run. The hook preserves
+  // a real provider object and substitutes the façade only for a null one, unless
+  // `social.facade: false` turns the substitution off.
+  SocialFacade::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
+
+  // The early quit lockout: the shipped client cannot show it from any game service message
+  // (early_quit_lockout.h).
+  EarlyQuitLockout::Install(reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress));
 
   // --- DLL load interceptor (patch DLLs as they load) ---
   BootLogTee::TeeFprintf("[NEVR.BOOT] installing DLL load hooks...\n");

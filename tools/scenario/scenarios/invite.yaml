@@ -1,0 +1,26 @@
+# Party invite, sending side. docs/design/2026-10-01-social-scenario-harness.md
+# Pass = the friend row's own invite handler ran and PartyInviteRequest left the game with the
+# right target. The friend is synthetic: no real person is notified, and the pass condition only
+# needs the request to leave the game.
+name: invite
+description: make a friend invitable through the bridge, fire the friend row's invite handler, see PartyInviteRequest leave
+vars:
+  friend_id: 1000000000000000001
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: party exists and is joinable
+    state_until: {party_joinable: true, timeout: 60}
+  - name: friend made online through the bridge (FriendStatusNotify)
+    inject: {msg: FriendStatusNotify, id: '${friend_id}', status: 0}
+  - name: friend is invitable (the + on the row)
+    state_until: {friend_invitable: '${friend_id}', timeout: 15}
+  - name: invite fired through the friend row's own handler
+    fire: {action: friend_invite, user: 'OVR-ORG-${friend_id}'}
+  - name: game called the facade's SendInvite slot
+    expect_log: {pattern: 'slot=8 name=SendInvite', timeout: 10}
+    diagnose: ['session event .*partyinvite', 'session event .*0x267b06d41014c304', 'session event .*0xf8856ed68e71cdbf']
+  - name: PartyInviteRequest left the game with the right target
+    expect_log: {pattern: 'game->server conn=1 PartyInviteRequest payload_bytes=40 target=${friend_id}', timeout: 10}

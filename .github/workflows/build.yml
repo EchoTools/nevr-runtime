@@ -9,6 +9,15 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Release builds embed the production endpoints and keys (cmake/nevr_builtin_defaults.cmake) so
+    # a tester's DLL logs in with no config file (#65). They come from repository secrets, only on a
+    # release; with NEVR_REQUIRE_BUILTIN_DEFAULTS=ON an unset one fails the configure. Embedding the
+    # keys makes them extractable from the published DLL: setting those secrets is the owner's call.
+    env:
+      NEVR_SOCKET_URI: ${{ github.event_name == 'release' && secrets.NEVR_SOCKET_URI || '' }}
+      NEVR_HTTP_URI: ${{ github.event_name == 'release' && secrets.NEVR_HTTP_URI || '' }}
+      NEVR_HTTP_KEY: ${{ github.event_name == 'release' && secrets.NEVR_HTTP_KEY || '' }}
+      NEVR_SERVER_KEY: ${{ github.event_name == 'release' && secrets.NEVR_SERVER_KEY || '' }}
 
     steps:
     - uses: actions/checkout@v4
@@ -57,7 +66,7 @@ jobs:
         just proto
 
     - name: Configure CMake
-      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=${{ github.event_name == 'release' && 'ON' || 'OFF' }}
+      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=${{ github.event_name == 'release' && 'ON' || 'OFF' }} -DNEVR_REQUIRE_BUILTIN_DEFAULTS=${{ github.event_name == 'release' && 'ON' || 'OFF' }}
 
     - name: Build
       run: cmake --build --preset mingw-release

@@ -1,0 +1,23 @@
+# Request another player's profile (R15NetRequestProfileNode, run 0x140de01f0). Test plan #28.
+# The node parses the user id and posts 0x1401a1930, which asks the profile manager; on a cache miss
+# it logs "[PROFILE] Getting other user %s's profile" and sends SNSOtherUserProfileRequest; the
+# reply raises the delegate that logs "[NETGAME] Profile received for '%s'" (0x14019f510). The user
+# is the first friend in the roster: a real player, and reading their profile is what the game does
+# when their page is opened. Until cd62b75 every reply after the lobby join went to a closed game
+# connection and none arrived (runs 20261001T202330-suite/request_profile, 20261001T205315).
+# Pass = the request (or a cache hit) and the received line for that friend.
+name: request_profile
+description: fire the request-profile node for a friend; see the request go out and the profile come back
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: request the friend's profile
+    fire: {action: request_profile, user: friend}
+    save: {friend_user: user}
+  - name: the game asked for that friend's profile (or had it cached)
+    expect_log: {pattern: "\\[PROFILE\\] Getting other user ${friend_user}'s profile|Profile received for '${friend_user}'", timeout: 10}
+  - name: that friend's profile arrived
+    expect_log: {pattern: "\\[NETGAME\\] Profile received for '${friend_user}'", timeout: 30}
+    diagnose: ['\\[PROFILE\\]', 'OtherUserProfile']

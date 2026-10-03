@@ -286,4 +286,10 @@ TEST(NevrConfig, LoadFromFileOrFailMissingScratchFileClientReturnsEmpty) {
   EXPECT_TRUE(cfg.Empty());
 }
 
+TEST(NevrConfig, AcceptsSocialFacadeSection) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("social:\n  facade: true\n");
+  ASSERT_TRUE(cfg.GetBool("social.facade").has_value());
+  EXPECT_TRUE(*cfg.GetBool("social.facade"));
+}
+
 }  // namespace

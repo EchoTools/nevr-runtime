@@ -22,6 +22,7 @@
 #include "abi/echovr_functions.h"         // EchoVR::g_GameBaseAddress
 #include "core/logging.h"                 // Log()
 #include "core/nevr_config.h"
+#include "generated/nevr_builtin_defaults.h"  // build-tree only; values from env/.env at configure
 
 #include <fstream>
 #include <mutex>
@@ -119,6 +120,55 @@ const nevr::NevrConfig& NevrCfg() {
   return cfg;
 }
 
+// --- build-time defaults ---------------------------------------------------
+// The four keys a player needs to reach the service without any config file, embedded at
+// configure time from the environment / .env (cmake/nevr_builtin_defaults.cmake). Applied
+// at LOOKUP time under the config.yaml value (nevr_cfg::LookupFlatWithDefaults), so a
+// config.yaml can override any of them and a rejected or absent file still leaves them in
+// place. Client mode only: a dedicated server has always been configured explicitly, and
+// must not silently start a bridge or authenticate with an embedded key. Only key NAMES are
+// logged, never values (two of these are secrets, socket_uri may carry a token).
+const nevr_cfg::FlatDefaults& BuiltinDefaults() {
+  static const nevr_cfg::FlatDefaults defaults = []() {
+    nevr_cfg::FlatDefaults d;
+    if (g_isServer) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.CONFIG] built-in defaults are not applied in server mode (config.yaml is required)");
+      return d;
+    }
+    const struct {
+      const char* flatKey;
+      const char* value;
+    } kEmbedded[] = {
+        {"nevr_socket_uri", nevr_builtin::kSocketUri},
+        {"nevr_http_uri", nevr_builtin::kHttpUri},
+        {"nevr_http_key", nevr_builtin::kHttpKey},
+        {"nevr_server_key", nevr_builtin::kServerKey},
+    };
+    std::string embedded;
+    std::string missing;
+    for (const auto& e : kEmbedded) {
+      std::string& list = (e.value[0] != '\0') ? embedded : missing;
+      if (e.value[0] != '\0') d[e.flatKey] = e.value;
+      if (!list.empty()) list += ", ";
+      list += e.flatKey;
+    }
+    Log(EchoVR::LogLevel::Info, "[NEVR.CONFIG] built-in defaults embedded in this build: %s",
+        embedded.empty() ? "(none)" : embedded.c_str());
+    if (!missing.empty()) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.CONFIG] not embedded (config.yaml must supply them): %s", missing.c_str());
+    }
+    return d;
+  }();
+  return defaults;
+}
+
+// One lookup for every flat key: config.yaml value, else the embedded default.
+std::optional<std::string> Flat(const std::string& flatKey) {
+  return nevr_cfg::LookupFlatWithDefaults(NevrCfg(), BuiltinDefaults(), flatKey);
+}
+
 // --- interning -------------------------------------------------------------
 // The game keeps the CHAR* we return for the process lifetime (JsonValueAsString
 // handed back tree-stable pointers). std::set nodes are address-stable across
@@ -137,7 +187,7 @@ const char* InternCStr(const std::string& s) {
 
 const char* NevrCfgGetFlat(const char* flatKey) {
   if (flatKey == nullptr) return nullptr;
-  const std::optional<std::string> v = nevr_cfg::LookupFlat(NevrCfg(), flatKey);
+  const std::optional<std::string> v = Flat(flatKey);
   if (!v) return nullptr;  // unmapped or absent
   return InternCStr(*v);   // present (possibly ""): caller applies its own [0] check
 }
@@ -168,7 +218,7 @@ const char* NevrCfgServiceHost(const char* flatServiceKey, int* outSource) {
 const char* NevrCfgRedirect(const char* result, const char* httpTargetJson, int bridgeActive,
                             unsigned bridgePort) {
   if (result == nullptr) return nullptr;
-  const std::optional<std::string> socketTarget = nevr_cfg::LookupFlat(NevrCfg(), "nevr_socket_uri");
+  const std::optional<std::string> socketTarget = Flat("nevr_socket_uri");
   std::optional<std::string> httpTarget;
   if (httpTargetJson != nullptr && httpTargetJson[0] != '\0') httpTarget = std::string(httpTargetJson);
 
@@ -186,9 +236,23 @@ const char* NevrGameNativeDefault(const char* key) {
 }
 
 const char* NevrCfgAutoRelay(unsigned bridgePort) {
-  const std::optional<std::string> socketTarget = nevr_cfg::LookupFlat(NevrCfg(), "nevr_socket_uri");
+  const std::optional<std::string> socketTarget = Flat("nevr_socket_uri");
   if (!socketTarget || socketTarget->empty()) return nullptr;
   return InternCStr(std::string("ws://127.0.0.1:") + std::to_string(bridgePort));
+}
+
+bool NevrCfgSocialFacadeEnabled() {
+  return nevr_cfg::SocialFacadeEnabled(NevrCfg());
+}
+
+const char* NevrCfgGameNativeConfigJson() {
+  if (g_isServer) return nullptr;  // a dedicated server has no social layer to configure
+  const std::optional<std::string> httpUri = Flat("nevr_http_uri");
+  const std::optional<std::string> serverKey = Flat("nevr_server_key");
+  if (!httpUri || !serverKey) return nullptr;
+  const std::optional<std::string> json = nevr_cfg::BuildGameNativeConfigJson(*httpUri, *serverKey);
+  if (!json) return nullptr;
+  return InternCStr(*json);
 }
 
 // N134 S6 — the plugin loader's config source. The impure half: reads the same

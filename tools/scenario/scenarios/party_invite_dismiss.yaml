@@ -1,0 +1,30 @@
+# Receive a party invite and dismiss it. docs/design/2026-10-01-social-features-test-plan.md #4/#12.
+# Dismiss is the respond-to-invite node with accept off: post 0x140188f40 with the index, slot 74
+# DismissInvite. Pass = a declining PartyInviteResponse (param 0) left the game, the invite is gone and
+# the party the game is in is untouched.
+name: party_invite_dismiss
+description: deliver a party invite, dismiss it through the respond-to-invite node's handler, see PartyInviteResponse(dismiss) leave
+vars:
+  party_id: 777000000000002
+  inviter_id: 1000000000000000005
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: an invite arrives (PartyInviteNotify)
+    inject: {msg: PartyInviteNotify, party: '${party_id}', inviter: '${inviter_id}'}
+  - name: the invite is in the game's invite list
+    state_until: {invite_count: 1, invite_sender: '${inviter_id}', timeout: 15}
+  - name: dismiss fired through the respond-to-invite node's handler
+    fire: {action: respond_to_invite, index: 0, accept: false}
+  - name: game called slot 74 DismissInvite
+    expect_log: {pattern: 'slot=74 name=\S+ call=', timeout: 10}
+  - name: a declining PartyInviteResponse left the game
+    expect_log: {pattern: 'game->server conn=1 PartyInviteResponse payload_bytes=\d+ param=0', timeout: 10}
+  - name: the invite left the list
+    state_until: {invite_count: 0, timeout: 15}
+  - name: no join started (pnsovr's dismiss only removes the invite, 0x180084460)
+    state_until: {party_joining: false, timeout: 5}
+  - name: the game's own party is untouched
+    state_until: {party_joinable: true, timeout: 5}

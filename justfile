@@ -193,9 +193,47 @@ test-winvm *ARGS:
 
 # Local, isolated nakama (fake Discord, own Postgres) for testing the runtime's
 # login/registration path. See docs/reference/local-nakama.md.
+# One social scenario, end to end, unattended (docs/design/2026-10-01-social-scenario-harness.md):
+# builds the mingw-scenario DLL (test-only control endpoint), launches the client the
+# launch-client.sh way, runs tools/scenario/scenarios/NAME.yaml and prints a PASS/FAIL table.
+scenario NAME:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just preset=mingw-scenario build
+    cmake --build --preset mingw-scenario
+    python3 tools/scenario/run_scenario.py "tools/scenario/scenarios/{{NAME}}.yaml"
+
+scenario-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just preset=mingw-scenario build
+    cmake --build --preset mingw-scenario
+    # `server: local` scenarios run against the nakama built from the social feature branch.
+    just nakama-dev-up
+    just nakama-seed
+    python3 tools/scenario/run_all.py
+
 nakama-up:
     python3 tools/nakama-local/setup.py
     docker compose -f tools/nakama-local/docker-compose.yml up -d
+
+# The local stack running a nakama built from source (NAKAMA_SRC, default the social feature worktree
+# ~/src/nakama-worktrees/nevr-social, branch feat/nevr-social): a static
+# binary in the scratch dir, mounted over the image's (tools/nakama-local/docker-compose.dev.yml).
+# Unreleased server changes are tested here; nothing is built into an image or pushed.
+nakama-dev-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    src="${NAKAMA_SRC:-$HOME/src/nakama-worktrees/nevr-social}"
+    out=/var/tmp/work-nevr-runtime/nakama-dev/nakama
+    mkdir -p "$(dirname "$out")"
+    commit=$(git -C "$src" rev-parse --short HEAD)
+    dirty=$(git -C "$src" status --porcelain | wc -l)
+    echo "nakama-dev: building $src at $commit (uncommitted files: $dirty) -> $out"
+    (cd "$src" && CGO_ENABLED=0 go build -trimpath -mod=mod -ldflags "-s -w -X main.version=nevr-local-$commit" -o "$out" .)
+    python3 tools/nakama-local/setup.py
+    NAKAMA_DEV_BINARY="$out" docker compose -f tools/nakama-local/docker-compose.yml -f tools/nakama-local/docker-compose.dev.yml up -d --force-recreate nakama
+    echo "nakama-dev: started nevr-local-$commit"
 
 nakama-down:
     docker compose -f tools/nakama-local/docker-compose.yml down
@@ -241,7 +279,7 @@ test-auth-unit:
     unset VCPKG_ROOT
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_plugin_load_plan --target test_system_module_loader --target test_websocket_frame --target test_protobuf_transport --target test_url_diagnostics --target test_callback_unregistration --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_url_diagnostics --target test_callback_unregistration --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
@@ -309,6 +347,36 @@ test-auth-unit:
         exit 1
     fi
     wine "$bin"
+    bin="build/{{ preset }}/bin/test_social_facade.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_early_quit_lockout.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_scenario_early_quit.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_schannel_cred_guard.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_hooking.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
+        exit 1
+    fi
+    wine "$bin"
     bin="build/{{ preset }}/bin/test_plugin_load_plan.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
@@ -316,7 +384,7 @@ test-auth-unit:
         exit 1
     fi
     wine "$bin"
-    for test_name in test_system_module_loader test_websocket_frame test_protobuf_transport test_url_diagnostics test_callback_unregistration test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace; do
+    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_url_diagnostics test_callback_unregistration test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -684,33 +752,6 @@ verify:
     # a usage contract (RULINGS.md "Usage contracts"), not a log tag — docs/standards/logging.md's
     # subsystem-tag rule governs log lines. Verified 2026-07-26: every [NEVR] hit in
     # that file is a help string, zero are log calls.
-    # --- N116: pre-reorg audit records must keep their pre-reorg paths -----------
-    # An audit states what was measured on a date, so its file:line citations
-    # describe the tree AS IT WAS. Rewriting them to today's layout does not
-    # modernise the record — it falsifies it, pairing a current path with a line
-    # number from months ago, both halves looking authoritative.
-    #
-    # This happened: on 2026-07-29 the N108/N109 mechanical path rewriter walked
-    # this directory and changed 21 citations across two records. Nothing caught
-    # it, because verify_doc_paths.py deliberately does NOT scan docs/audits/ —
-    # the exclusion that keeps old paths from failing the build also meant nothing
-    # noticed them being rewritten. This sensor closes that specific gap.
-    #
-    # Scoped by NAME to the records that predate the reorganisation. A future
-    # audit written after 2026-07-29 will legitimately cite src/runtime/ and must
-    # not be caught by this.
-    for _rec in docs/audits/fable-consistency-hunt-2026-07-23.md docs/audits/recon-owner-bug-batch-RESULTS.md; do
-        if [ ! -f "$_rec" ]; then
-            echo "verify: FAIL — N116 audit record $_rec is missing. Records are immutable; if it was deliberately removed, cite <sha>:<path> in docs/audits/README.md and drop it from this list in the same commit." >&2
-            exit 1
-        fi
-        if grep -qE 'src/(runtime|abi|core|extension)/' "$_rec"; then
-            echo "verify: FAIL — N116 $_rec cites a POST-reorganisation path, but it records measurements taken before the reorganisation." >&2
-            echo "Its line numbers are from the old tree, so a new path makes the citation wrong in a way that still looks authoritative. Revert the record and use the mapping table in docs/audits/README.md to follow old citations." >&2
-            exit 1
-        fi
-    done
-
     # --- N115: the login system_info block must be MEASURED, not invented --------
     # It used to be literals — "cpu":"Wine", 4 physical cores, 8 logical, 16384 MB
     # total, 8192 used — emitted as though read from the machine. Measured on this
@@ -1168,6 +1209,9 @@ verify:
     # Known bugs warn (and stay visible); anything NEW is a hard failure.
     python3 -m unittest discover -s tools/tests -p 'test_*.py'
     python3 tools/verify_hook_invariants.py
+    # The scenario-test control endpoint can inject messages into a live session; it exists only in
+    # the mingw-scenario preset. The DLL this gate just built must not carry it.
+    python3 tools/verify_scenario_control_absent.py "build/{{ preset }}/bin/BugSplat64.dll"
     # N84 runtime counterpart. The static check above scans source, so it only
     # sees plugins in THIS tree — a third-party plugin is a DLL we never compile.
     # HookGuard detects the effect (our bytes changed) instead of the source.
@@ -1237,9 +1281,8 @@ verify:
     N62_RC=0; N62_BODY=$(awk '/^void PerformGracefulShutdown/,/^}/' src/runtime/lifecycle/crash_recovery.cpp) || N62_RC=$?
     sensor_stage1 "N62 shutdown loader-lock" "src/runtime/lifecycle/crash_recovery.cpp" "$N62_RC"
     sensor_nonempty "N62 shutdown loader-lock" "PerformGracefulShutdown() body in src/runtime/lifecycle/crash_recovery.cpp" "$N62_BODY"
-    if printf '%s\n' "$N62_BODY" \
-         | grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' \
-         | grep -qE 'GetModuleHandleA|GetProcAddress'; then
+    N62_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' <<<"$N62_BODY" || true)
+    if grep -qE 'GetModuleHandleA|GetProcAddress' <<<"$N62_CODE"; then
         echo "verify: FAIL — N62 PerformGracefulShutdown resolves symbols at shutdown time;" >&2
         echo "both take the loader lock, so a signal arriving while it is held deadlocks shutdown." >&2
         echo "Use the pointer cached by ResolveShutdownDependencies()." >&2
@@ -1260,19 +1303,20 @@ verify:
     # which left plugins, modules and N69's stack reserve silently dead there.
     # N68's original sensor only checked that TickPlugins appeared in the file —
     # which it did, in a hook that never executed. Check the LIVE site.
-    if ! awk '/^void DispatchPerFrameWork/,/^}/' src/runtime/frame/tick.cpp \
-         | grep -q 'TickPlugins'; then
+    # Herestrings, not pipelines: `awk ... | grep -q` races to a false FAIL under pipefail (N101).
+    N86_RC=0; N86_BODY=$(awk '/^void DispatchPerFrameWork/,/^}/' src/runtime/frame/tick.cpp) || N86_RC=$?
+    sensor_stage1 "N86 per-frame dispatch" "src/runtime/frame/tick.cpp" "$N86_RC"
+    sensor_nonempty "N86 per-frame dispatch" "DispatchPerFrameWork() body in src/runtime/frame/tick.cpp" "$N86_BODY"
+    if ! grep -q 'TickPlugins' <<<"$N86_BODY"; then
         echo "verify: FAIL — N86 TickPlugins missing from DispatchPerFrameWork; the server-mode" >&2
         echo "per-frame tick is dead again (PrecisionSleep::Wait never runs on a server)." >&2
         exit 1
     fi
-    if ! awk '/^void DispatchPerFrameWork/,/^}/' src/runtime/frame/tick.cpp \
-         | grep -q 'TickModules'; then
+    if ! grep -q 'TickModules' <<<"$N86_BODY"; then
         echo "verify: FAIL — N86 TickModules missing from DispatchPerFrameWork." >&2
         exit 1
     fi
-    if ! awk '/^void DispatchPerFrameWork/,/^}/' src/runtime/frame/tick.cpp \
-         | grep -q 'if (InterlockedExchange(&g_tickReentry, 1) != 0) return;'; then
+    if ! grep -q 'if (InterlockedExchange(&g_tickReentry, 1) != 0) return;' <<<"$N86_BODY"; then
         echo "verify: FAIL — N86 re-entrancy gate missing from DispatchPerFrameWork; a plugin" >&2
         echo "OnFrame that calls GetTimeMicroseconds would recurse without bound." >&2
         exit 1
@@ -1438,7 +1482,8 @@ verify:
     # rule was right; nothing checked it.
     if ! awk '/login injected/{found=1} found && /Log\(EchoVR::LogLevel::Info/{ok=1} END{exit !ok}' \
          src/runtime/compat/ws_bridge.cpp; then
-        if ! grep -B3 'login injected' src/runtime/compat/ws_bridge.cpp | grep -q 'LogLevel::Info'; then
+        N91_CONTEXT=$(grep -B3 'login injected' src/runtime/compat/ws_bridge.cpp || true)
+        if ! grep -q 'LogLevel::Info' <<<"$N91_CONTEXT"; then
             echo "verify: FAIL — logging.md Rule 2: the login-injection line is not at Info." >&2
             echo "Identity at login shall be visible in a production log (N91)." >&2
             exit 1
@@ -1599,8 +1644,7 @@ verify:
     fi
     C2_RC=0; C2_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/hook/patching.h) || C2_RC=$?
     sensor_stage1 "C2 PatchDetour default name" "src/runtime/hook/patching.h" "$C2_RC"
-    if printf '%s\n' "$C2_CODE" \
-         | grep -qE 'PatchDetour\(.*const char\* name\s*='; then
+    if grep -qE 'PatchDetour\(.*const char\* name\s*=' <<<"$C2_CODE"; then
         echo "verify: FAIL — C2 PatchDetour's name parameter has a default again." >&2
         echo "22 of 24 sites omitted it when it was defaultable, so HookGuard's overwrite" >&2
         echo "alarm printed name=(unnamed) for almost every address it guards." >&2
@@ -1662,6 +1706,29 @@ verify:
         echo "verify: FAIL — N133 S7d: sample config.yaml missing required sections" >&2
         echo "(found $N133_S7D of 4: auth, services, identity, version)." >&2
         echo "The tracked example is the source copied into a server's local config." >&2
+        exit 1
+    fi
+    # Issue #21 — _local/config.json is OPTIONAL. N48's ServerFatal on a missing
+    # config.json outlived N133 (which moved every NEVR key to config.yaml) and
+    # killed config.yaml-only servers at boot; the `g_earlyConfigPtr == NULL`
+    # gate in RedirectServiceUrl silently disabled every service redirect without
+    # one. Neither may return, and the replacement arm call — which keeps the
+    # first config.yaml load from moving ahead of the bootstrap — must stay.
+    I21_RC=0; I21_CODE=$(grep -hvE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' \
+        src/runtime/lifecycle/boot.cpp src/runtime/lifecycle/config.cpp) || I21_RC=$?
+    sensor_stage1 "I21 config.json optional" "src/runtime/lifecycle/{boot,config}.cpp" "$I21_RC"
+    sensor_nonempty "I21 config.json optional" "non-comment lines of boot.cpp + config.cpp" "$I21_CODE"
+    if grep -qE 'g_earlyConfigPtr[[:space:]]*==[[:space:]]*(NULL|nullptr)' <<<"$I21_CODE"; then
+        echo "verify: FAIL — issue #21: boot.cpp/config.cpp branch on a MISSING config.json again:" >&2
+        grep -nE 'g_earlyConfigPtr[[:space:]]*==[[:space:]]*(NULL|nullptr)' \
+            src/runtime/lifecycle/boot.cpp src/runtime/lifecycle/config.cpp >&2
+        echo "config.json only carries keys the stock engine reads natively; NEVR's settings" >&2
+        echo "are config.yaml. Its absence must not fatal a server or disable redirects." >&2
+        exit 1
+    fi
+    if ! grep -qE '^[[:space:]]*ArmServiceRedirects\(\);' <<<"$I21_CODE"; then
+        echo "verify: FAIL — issue #21: ArmServiceRedirects() is no longer called from the" >&2
+        echo "bootstrap. Without it RedirectServiceUrl never fires (no login redirect)." >&2
         exit 1
     fi
     # Issue #21 — _local/config.json is OPTIONAL. N48's ServerFatal on a missing

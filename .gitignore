@@ -109,8 +109,10 @@ echovr
 # Temporary working files
 _temp/
 
-# Environment files
+# Environment files. The root .env holds the build-time defaults embedded into the
+# runtime (NEVR_HTTP_KEY, NEVR_SERVER_KEY, ...): secrets, never committed.
 extras/.env
+/.env
 
 # Claude Code session files
 2026-*.txt

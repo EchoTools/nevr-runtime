@@ -79,6 +79,15 @@ void Record(const void* target, const char* name) {
   memcpy(g_sites[idx].bytes, target, kSnapshotBytes);
 }
 
+bool IsOurDetour(const void* target) {
+  if (target == nullptr || !Readable(target, kSnapshotBytes)) return false;
+  const LONG n = g_count;
+  for (LONG i = 0; i < n && i < kMaxGuarded; i++) {
+    if (g_sites[i].target == target) return memcmp(target, g_sites[i].bytes, kSnapshotBytes) == 0;
+  }
+  return false;
+}
+
 int VerifyAll(const char* context) {
   const LONG n = g_count;
   int mismatches = 0;
@@ -112,7 +121,7 @@ int VerifyAll(const char* context) {
     Log(EchoVR::LogLevel::Error,
         "[NEVR.PATCH] hook overwritten name=%s va=0x%llX after=%s "
         "expected=%s actual=%s — another module detoured an address gamepatches "
-        "already owns (N84)",
+        "already owns",
         s.name, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(s.target)),
         context != nullptr ? context : "(unknown)", expected, actual);
   }

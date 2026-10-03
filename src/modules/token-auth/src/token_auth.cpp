@@ -6,7 +6,9 @@
  * parents, so the N94 verify sensor pins those nine lines at Debug instead. */
 
 #include "token_auth.h"
+#include "core/curl_global.h"
 #include "device_poll_response.h"
+#include "off_thread_wait.h"
 #include "extension/module_interface.h"
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
@@ -35,7 +37,9 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <objbase.h>
 #include <shellapi.h>
+#include <vector>
 #endif
 
 
@@ -51,6 +55,8 @@ struct InternalDeviceAuthFlowOps {
     std::function<void(Clock::duration)> sleep;
     std::function<bool()> save;
     std::function<void(EchoVR::LogLevel, const std::string&)> log;
+    // Optional: true once the flow should stop (the game is closing while it waits, #37).
+    std::function<bool()> cancelled;
 };
 
 static constexpr InternalDeviceAuthFlowOps::Clock::duration kDeviceAuthLifetime = std::chrono::minutes(5);
@@ -66,6 +72,8 @@ public:
     void Configure(const std::string& url, const std::string& httpKey, const std::string& serverKey);
     bool TryLoadCachedToken();
     bool RunDeviceAuthFlow(bool is_server);
+    // Sleeps wait on `cancel` and the flow stops once it is requested (nullptr: plain sleeps).
+    bool RunDeviceAuthFlow(bool is_server, TokenAuth::AuthCancellation* cancel);
     bool RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowOps& ops);
     bool SaveToken();
     bool IsAuthenticated() const;
@@ -206,6 +214,7 @@ bool DeviceAuth::SaveToken() {
 }
 
 std::string DeviceAuth::HttpPostPublic(const std::string& url, const std::string& body) {
+    nevr::EnsureCurlGlobalInit();
     CURL* curl = curl_easy_init();
     if (!curl) return "";
 
@@ -322,7 +331,9 @@ void DeviceAuth::ApplyVerifiedPollResponse(const TokenAuth::DevicePollResponse& 
     }
 }
 
-bool DeviceAuth::RunDeviceAuthFlow(bool is_server) {
+bool DeviceAuth::RunDeviceAuthFlow(bool is_server) { return RunDeviceAuthFlow(is_server, nullptr); }
+
+bool DeviceAuth::RunDeviceAuthFlow(bool is_server, TokenAuth::AuthCancellation* cancel) {
     InternalDeviceAuthFlowOps ops;
     ops.now = []() { return InternalDeviceAuthFlowOps::Clock::now(); };
     ops.requestDeviceCode = [this]() { return RequestDeviceCode(); };
@@ -340,14 +351,20 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server) {
     ops.showOpenFailure = [](const std::string&, const std::string&, intptr_t) { return 0; };
 #endif
     ops.poll = [this](const std::string& code) { return PollDeviceCode(code); };
-    ops.sleep = [](InternalDeviceAuthFlowOps::Clock::duration duration) { std::this_thread::sleep_for(duration); };
+    if (cancel != nullptr) {
+        ops.sleep = [cancel](InternalDeviceAuthFlowOps::Clock::duration duration) { (void)cancel->WaitFor(duration); };
+        ops.cancelled = [cancel]() { return cancel->IsStopRequested(); };
+    } else {
+        ops.sleep = [](InternalDeviceAuthFlowOps::Clock::duration duration) { std::this_thread::sleep_for(duration); };
+    }
     ops.save = [this]() { return SaveToken(); };
     ops.log = [](EchoVR::LogLevel level, const std::string& message) { Log(level, "%s", message.c_str()); };
     return RunDeviceAuthFlow(is_server, ops);
 }
 
-// TokenAuth::Init calls this synchronously before module initialization
-// returns. HTTP, ShellExecuteA, and the fallback modal MessageBoxA can block
+// TokenAuth::Init runs this on a worker thread and waits for it before module
+// initialization returns, pumping the bootstrap thread's messages meanwhile
+// (#37). HTTP, ShellExecuteA, and the fallback modal MessageBoxA can block
 // beyond the five-minute deadline; the deadline rejects any late result after
 // those calls return, but does not cancel or bound the calls themselves.
 bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowOps& ops) {
@@ -380,6 +397,12 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowO
 
     const std::string loginUrl = std::string(kDeviceLoginUrl) + "?code=" + code;
     const intptr_t browserResult = ops.openBrowser(loginUrl);
+    // The code is a credential for this session, so the log says where the browser was sent and
+    // what the open returned, with the code masked (ShellExecute reports success above 32).
+    log(EchoVR::LogLevel::Info,
+        std::string("[NEVR.AUTH] browser open requested url=") + kDeviceLoginUrl + "?code=<" +
+            std::to_string(code.size()) + " chars masked> shellexecute_result=" + std::to_string(browserResult) +
+            (browserResult <= 32 ? " (failed)" : " (accepted)"));
     int uiResult = 1;
     if (browserResult <= 32) {
         uiResult = ops.showOpenFailure(code, kDeviceLoginUrl, browserResult);
@@ -407,6 +430,10 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowO
         const InternalDeviceAuthFlowOps::Clock::duration wait =
             remaining < kDeviceAuthPollInterval ? remaining : kDeviceAuthPollInterval;
         if (wait > InternalDeviceAuthFlowOps::Clock::duration::zero()) ops.sleep(wait);
+        if (ops.cancelled && ops.cancelled()) {
+            log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Device auth cancelled: the game is closing");
+            return false;
+        }
         if (ops.now() >= deadline) {
             log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Device auth timed out after 5 minutes");
             return false;
@@ -466,6 +493,7 @@ void DeviceAuth::SetStateForTest(const TokenAuth::TestHook::DeviceAuthState& sta
 // Module state
 // ---------------------------------------------------------------------------
 
+static TokenAuth::AuthSnapshotStore s_snapshotStore;
 static DeviceAuth* s_auth = nullptr;
 static bool s_authAttempted = false;
 static std::thread* s_refreshThread = nullptr;
@@ -475,6 +503,28 @@ static std::mutex s_tokenMutex;
 // config.yaml through the same path the runtime uses instead of the game JSON
 // (early_config). May be NULL if loaded by a pre-v2 host.
 static const char* (*s_configGet)(const char*) = nullptr;
+
+static std::shared_ptr<const TokenAuth::AuthSnapshot> PublishAuthSnapshot(
+    const DeviceAuth* auth, TokenAuth::AuthReadiness emptyState = TokenAuth::AuthReadiness::Failed) {
+    TokenAuth::AuthSnapshot snapshot;
+    if (auth != nullptr) {
+        snapshot.access_token = auth->GetTokenValue();
+        snapshot.access_expiry = auth->GetTokenExpiryValue();
+        snapshot.discord_id = auth->GetDiscordIdValue();
+        snapshot.user_id = auth->GetUserIdValue();
+        snapshot.username = auth->GetUsernameValue();
+        if (auth->IsAuthenticated()) {
+            snapshot.readiness = TokenAuth::AuthReadiness::Ready;
+        } else if (!snapshot.access_token.empty()) {
+            snapshot.readiness = TokenAuth::AuthReadiness::Expired;
+        } else {
+            snapshot.readiness = emptyState;
+        }
+    } else {
+        snapshot.readiness = emptyState;
+    }
+    return s_snapshotStore.Publish(std::move(snapshot));
+}
 
 struct AuthConfig {
     std::string url;
@@ -549,22 +599,29 @@ static void RefreshThreadFunc(std::string url, std::string httpKey) {
         }
         if (!s_refreshRunning) break;
 
-        std::lock_guard<std::mutex> lk(s_tokenMutex);
-        if (!s_auth) continue;
-
         uint64_t now = static_cast<uint64_t>(time(nullptr));
-        if (!ShouldRefreshAccessToken(*s_auth, now)) continue;  // Still valid for >5 min
+        DeviceAuth* auth = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(s_tokenMutex);
+            auth = s_auth;
+            if (!auth) continue;
+            if (auth->GetTokenExpiryValue() <= now) {
+                (void)PublishAuthSnapshot(auth, TokenAuth::AuthReadiness::Expired);
+            }
+            if (!ShouldRefreshAccessToken(*auth, now)) continue;  // Still valid for >5 min
+        }
 
         // The refresh TOKEN is read from disk on purpose: it is the one
         // credential SaveAuthToken persists, and RefreshAuthToken updates this
-        // struct in place and writes it back.
+        // local copy in place and writes it back. Disk IO and HTTP happen with
+        // no token-state lock held.
         auto cached = LoadCachedAuthToken();
 
         // Both branches report the LIVE expiry. Reading cached.token_expiry
         // here printed "Token expired <unix-time-now>s ago" on every wake,
         // because the field is always 0 — a log line that looked like a
         // measurement and was an artefact of the same defect as the guard.
-        const uint64_t liveExpiry = s_auth->GetTokenExpiryValue();
+        const uint64_t liveExpiry = auth->GetTokenExpiryValue();
         if (liveExpiry > now) {
             Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Token expires in %llus — refreshing",
                 (unsigned long long)(liveExpiry - now));
@@ -577,9 +634,14 @@ static void RefreshThreadFunc(std::string url, std::string httpKey) {
             if (RefreshAuthToken(cached, url, httpKey)) {
                 Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] Token refreshed successfully expires_in=%llus",
                     (unsigned long long)(cached.token_expiry - now));
-                // Update the in-memory DeviceAuth instance so GetToken/GetDiscordId
-                // return the new token immediately (they no longer read from disk).
-                s_auth->UpdateFromRefresh(cached);
+                // The auth object remains alive until this thread is joined.
+                // Publish the complete updated identity as one generation.
+                {
+                    std::lock_guard<std::mutex> lk(s_tokenMutex);
+                    if (s_auth != auth) continue;
+                    auth->UpdateFromRefresh(cached);
+                    (void)PublishAuthSnapshot(auth);
+                }
                 consecutiveFailures = 0;
             } else {
                 consecutiveFailures++;
@@ -592,16 +654,17 @@ static void RefreshThreadFunc(std::string url, std::string httpKey) {
 }
 
 std::string TokenAuth::GetToken() {
-    std::lock_guard<std::mutex> lk(s_tokenMutex);
-    if (!s_auth) return "";
-    if (!s_auth->IsAuthenticated()) return "";
-    return s_auth->GetTokenValue();
+    const std::shared_ptr<const AuthSnapshot> snapshot = GetAuthSnapshot();
+    if (!snapshot || snapshot->readiness != AuthReadiness::Ready ||
+        snapshot->access_expiry <= static_cast<uint64_t>(time(nullptr))) {
+        return "";
+    }
+    return snapshot->access_token;
 }
 
 uint64_t TokenAuth::GetDiscordId() {
-    std::lock_guard<std::mutex> lk(s_tokenMutex);
-    if (!s_auth) return 0;
-    return s_auth->GetDiscordIdValue();
+    const std::shared_ptr<const AuthSnapshot> snapshot = GetAuthSnapshot();
+    return snapshot ? snapshot->discord_id : 0;
 }
 
 // N123. The username was already parsed from the auth response and already
@@ -610,9 +673,12 @@ uint64_t TokenAuth::GetDiscordId() {
 // IsAuthenticated(): a cached username from a previous session is still a truer
 // answer than a constant, and the caller falls back on empty.
 std::string TokenAuth::GetUsername() {
-    std::lock_guard<std::mutex> lk(s_tokenMutex);
-    if (!s_auth) return "";
-    return s_auth->GetUsernameValue();
+    const std::shared_ptr<const AuthSnapshot> snapshot = GetAuthSnapshot();
+    return snapshot ? snapshot->username : "";
+}
+
+std::shared_ptr<const TokenAuth::AuthSnapshot> TokenAuth::GetAuthSnapshot() {
+    return s_snapshotStore.Read();
 }
 
 #ifdef NEVR_TEST_HOOKS
@@ -681,6 +747,7 @@ DeviceAuthFlowResult RunDeviceAuthFlow(bool is_server, const DeviceAuthState& in
     ops.sleep = injected.sleep;
     ops.save = injected.save;
     ops.log = injected.log;
+    ops.cancelled = injected.cancelled;
 
     DeviceAuthFlowResult result;
     result.success = auth.RunDeviceAuthFlow(is_server, ops);
@@ -692,22 +759,163 @@ DeviceAuthFlowResult RunDeviceAuthFlow(bool is_server, const DeviceAuthState& in
 #endif  // NEVR_TEST_HOOKS
 
 // ---------------------------------------------------------------------------
+// The sign-in wait (#37, beta gate G7)
+// ---------------------------------------------------------------------------
+
+#ifdef _WIN32
+namespace {
+
+constexpr wchar_t kSignInWindowTitle[] = L"Echo VR - sign in with Discord in your browser to continue";
+constexpr std::chrono::milliseconds kSignInPumpInterval{50};
+
+// While the device flow runs on a worker, keeps the bootstrap thread's message queue drained so Windows
+// does not mark the game window "Not Responding", and titles that thread's windows with what the player
+// has to do. Posted messages go to DefWindowProcW, not the game's window procedure (the game has not
+// initialised past its command line yet); sent messages reach the window procedure inside PeekMessage,
+// as in any pumping thread. Thread messages are re-posted and a WM_QUIT re-issued when the wait ends.
+class SignInWindowWait {
+public:
+    explicit SignInWindowWait(TokenAuth::AuthCancellation& cancel) : m_cancel(cancel) {
+        EnumThreadWindows(GetCurrentThreadId(), &SignInWindowWait::CollectThreadWindow,
+                          reinterpret_cast<LPARAM>(this));
+        EnumWindows(&SignInWindowWait::CountProcessWindow, reinterpret_cast<LPARAM>(this));
+        for (Retitled& w : m_windows) SetWindowTextW(w.hwnd, kSignInWindowTitle);
+    }
+
+    ~SignInWindowWait() {
+        for (const Retitled& w : m_windows) {
+            if (IsWindow(w.hwnd)) SetWindowTextW(w.hwnd, w.title.c_str());
+        }
+        for (const MSG& m : m_threadMessages) PostThreadMessageW(GetCurrentThreadId(), m.message, m.wParam, m.lParam);
+        if (m_quit) PostQuitMessage(m_quitCode);
+    }
+
+    SignInWindowWait(const SignInWindowWait&) = delete;
+    SignInWindowWait& operator=(const SignInWindowWait&) = delete;
+
+    void Pump() {
+        MSG msg;
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            ++m_messages;
+            if (msg.message == WM_QUIT) {
+                m_quit = true;
+                m_quitCode = static_cast<int>(msg.wParam);
+                m_cancel.RequestStop();
+            } else if (msg.hwnd == nullptr) {
+                m_threadMessages.push_back(msg);
+            } else {
+                DefWindowProcW(msg.hwnd, msg.message, msg.wParam, msg.lParam);
+            }
+        }
+    }
+
+    size_t ThreadWindows() const { return m_windows.size(); }
+    size_t ProcessWindows() const { return m_processWindows; }
+    unsigned Messages() const { return m_messages; }
+    bool QuitSeen() const { return m_quit; }
+
+private:
+    struct Retitled {
+        HWND hwnd;
+        std::wstring title;
+    };
+
+    static BOOL CALLBACK CollectThreadWindow(HWND hwnd, LPARAM self) {
+        if (!IsWindowVisible(hwnd) || GetParent(hwnd) != nullptr) return TRUE;
+        wchar_t title[256] = {};
+        GetWindowTextW(hwnd, title, 256);
+        reinterpret_cast<SignInWindowWait*>(self)->m_windows.push_back({hwnd, title});
+        return TRUE;
+    }
+
+    static BOOL CALLBACK CountProcessWindow(HWND hwnd, LPARAM self) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+        if (pid == GetCurrentProcessId() && IsWindowVisible(hwnd)) ++reinterpret_cast<SignInWindowWait*>(self)->m_processWindows;
+        return TRUE;
+    }
+
+    TokenAuth::AuthCancellation& m_cancel;
+    std::vector<Retitled> m_windows;
+    std::vector<MSG> m_threadMessages;
+    size_t m_processWindows = 0;
+    unsigned m_messages = 0;
+    bool m_quit = false;
+    int m_quitCode = 0;
+};
+
+// COM for the worker thread: ShellExecute is documented to need it on the calling thread.
+class ComApartment {
+public:
+    ComApartment() : m_hr(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE)) {}
+    ~ComApartment() {
+        if (SUCCEEDED(m_hr)) CoUninitialize();
+    }
+    ComApartment(const ComApartment&) = delete;
+    ComApartment& operator=(const ComApartment&) = delete;
+
+private:
+    HRESULT m_hr;
+};
+
+}  // namespace
+#endif  // _WIN32
+
+// Runs the device flow without freezing the game window: on a worker thread, while the bootstrap
+// thread pumps its messages (Windows), and returns once the flow has finished.
+static bool RunDeviceAuthFlowOffBootstrapThread(DeviceAuth& auth) {
+    TokenAuth::AuthCancellation cancel;
+#ifdef _WIN32
+    SignInWindowWait wait(cancel);
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.AUTH] sign-in wait started off the bootstrap thread: windows on this thread=%zu in process=%zu "
+        "(retitled while waiting)",
+        wait.ThreadWindows(), wait.ProcessWindows());
+    const auto start = std::chrono::steady_clock::now();
+    const TokenAuth::OffThreadWaitResult r = TokenAuth::RunWhilePumping(
+        [&auth, &cancel]() {
+            ComApartment com;
+            return auth.RunDeviceAuthFlow(false, &cancel);
+        },
+        [&wait]() { wait.Pump(); }, kSignInPumpInterval);
+    const long long seconds =
+        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - start).count();
+    Log(r.flowResult ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+        "[NEVR.AUTH] sign-in wait ended: result=%s seconds=%lld messages_pumped=%u pump_calls=%u worker=%s quit_seen=%d",
+        r.flowResult ? "ok" : (r.flowThrew ? "threw" : "failed"), seconds, wait.Messages(), r.pumpCalls,
+        r.ranInline ? "inline (thread start failed)" : (r.ranOnOtherThread ? "separate" : "same"),
+        wait.QuitSeen() ? 1 : 0);
+    return r.flowResult;
+#else
+    return auth.RunDeviceAuthFlow(false, &cancel);
+#endif
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 void TokenAuth::Init(uintptr_t /*base_addr*/, bool is_server) {
+    if (s_authAttempted) return;
+    AuthSnapshot initialSnapshot;
+    initialSnapshot.readiness = AuthReadiness::Starting;
+    (void)s_snapshotStore.Publish(std::move(initialSnapshot));
     // Always enter the device flow with the module's actual mode. The flow's
     // own first guard ensures server mode cannot issue HTTP, open a browser, or
     // display UI even if a future caller reaches it directly.
     if (is_server) {
         DeviceAuth serverAuth;
         (void)serverAuth.RunDeviceAuthFlow(is_server);
+        (void)PublishAuthSnapshot(nullptr, AuthReadiness::Disabled);
+        s_authAttempted = true;
         return;
     }
 
     AuthConfig cfg = LoadAuthConfig();
     if (cfg.url.empty() || cfg.httpKey.empty()) {
         Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Missing nevr_http_uri or nevr_http_key -- token auth disabled");
+        (void)PublishAuthSnapshot(nullptr, AuthReadiness::Disabled);
+        s_authAttempted = true;
         return;
     }
 
@@ -723,10 +931,13 @@ void TokenAuth::Init(uintptr_t /*base_addr*/, bool is_server) {
         // No cached credentials — run device auth now, before game connections start.
         s_authAttempted = true;
         Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] No cached credentials — starting device code auth...");
-        if (!s_auth->RunDeviceAuthFlow(is_server)) {
+        (void)PublishAuthSnapshot(nullptr, AuthReadiness::AwaitingUser);
+        if (!RunDeviceAuthFlowOffBootstrapThread(*s_auth)) {
             Log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] Authentication failed -- social features may be limited");
         }
     }
+
+    (void)PublishAuthSnapshot(s_auth);
 
     // Start background refresh thread (both cached and fresh auth paths)
     if (s_auth->IsAuthenticated() && !cfg.httpKey.empty()) {
@@ -740,6 +951,9 @@ void TokenAuth::Shutdown() {
     // this is a structurally-guaranteed no-op there — say so instead of
     // logging the same "complete" line regardless of whether anything ran.
     const bool wasActive = (s_auth != nullptr);
+    AuthSnapshot stoppingSnapshot;
+    stoppingSnapshot.readiness = AuthReadiness::Stopping;
+    (void)s_snapshotStore.Publish(std::move(stoppingSnapshot));
 
     s_refreshRunning = false;
     if (s_refreshThread) {
@@ -753,6 +967,7 @@ void TokenAuth::Shutdown() {
         s_auth = nullptr;
     }
     s_authAttempted = false;
+    (void)PublishAuthSnapshot(nullptr, AuthReadiness::Disabled);
     if (wasActive) {
         Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] shutdown complete (was active: refresh thread stopped)");
     } else {

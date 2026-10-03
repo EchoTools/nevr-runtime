@@ -1,4 +1,5 @@
 #include "runtime/compat/winhttp_stub.h"
+#include "core/curl_global.h"
 
 #include <curl/curl.h>
 
@@ -399,6 +400,7 @@ static HRESULT STDMETHODCALLTYPE Stub_GetAllResponseHeaders(void* pThis, BSTR* H
 
 static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
   auto* self = SELF(pThis);
+  nevr::EnsureCurlGlobalInit();
   CURL* curl = curl_easy_init();
   if (!curl) return E_FAIL;
 

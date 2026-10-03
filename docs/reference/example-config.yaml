@@ -19,6 +19,18 @@
 version: 1
 
 # ---------------------------------------------------------------------------
+# social — platform social-provider compatibility
+#
+# pnsrad exports no Social object, so the game's friends and parties would be
+# disabled. The façade stands in for it (friends from the server's friend list,
+# parties over the server's party messages). It is on by default and only ever
+# replaces a missing Social object; set `facade: false` to turn it off.
+# ---------------------------------------------------------------------------
+
+social:
+  # facade: false
+
+# ---------------------------------------------------------------------------
 # services — URL overrides for game service endpoints
 #
 # The game hardcodes *.readyatdawn.com URLs that no longer resolve. These keys

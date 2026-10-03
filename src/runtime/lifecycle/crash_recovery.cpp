@@ -1,8 +1,12 @@
 #include "runtime/lifecycle/crash_recovery.h"
+#ifdef NEVR_SCENARIO_CONTROL
+#include "runtime/scenario/scenario_control.h"
+#endif
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/lifecycle/crash_recovery_sites.h"
 #include "runtime/lifecycle/crash_dump_format.h"
+#include "runtime/lifecycle/stack_alloc_check.h"
 
 #include <processthreadsapi.h>
 #include <psapi.h>
@@ -66,11 +70,20 @@ static VOID GameMainWrapperHook(INT64 arg1) {
   // Run the game main loop
   GameMain(arg1);
 
-  // If we get here, the game loop returned normally (shouldn't happen)
+  // The game loop returned on its own: the player quit (closed the window, chose Exit) or the game
+  // ended its session. A client has nothing left to run, so return and let the process exit; the
+  // hold below is only for a dedicated server, where a supervisor watches the broadcaster/HTTP API
+  // and is the one to restart it. (The hold used to apply to clients too, so a closed client kept
+  // running with no window on Windows and under Wine.)
   g_gameLoopJmpBufValid = false;
+  if (!g_isServer) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] game loop returned: the client is exiting (no server hold outside server mode)");
+    return;
+  }
   Log(EchoVR::LogLevel::Warning,
-      "[NEVR.PATCH] game loop returned unexpectedly (should never return) — entering server "
-      "hold; game loop will not run again");
+      "[NEVR.PATCH] game loop returned on a server (the loop should only end by crash or shutdown) — "
+      "entering server hold; game loop will not run again");
   while (true) {
     Sleep(1000);
   }
@@ -265,11 +278,58 @@ VOID WINAPI ExitProcessHook(UINT uExitCode) {
 // the %s/%d/%u/%llX conversions used here MinGW's implementation performs no
 // allocation. No float conversions are used (those may allocate on some libcs).
 
+// The crash record (beta gate G17): a tester launching from the Meta app has no console, so the
+// [NEVR.CRASH] lines also go to %LOCALAPPDATA%\EchoVR\logs\nevr-crash-<run id>.txt, next to the run log,
+// once a crash path has been entered (ArmCrashRecord). The path is built at init; the handler only opens
+// and appends with raw syscalls and flushes every line, because the process may die at any point (N70).
+static char g_crashRecordPath[MAX_PATH] = {};
+static HANDLE g_crashRecordHandle = INVALID_HANDLE_VALUE;
+static volatile LONG g_crashRecordArmed = 0;
+
+static void PrepareCrashRecordPath() {
+  char dir[MAX_PATH] = {};
+  const DWORD len = GetEnvironmentVariableA("LOCALAPPDATA", dir, MAX_PATH);
+  int n = 0;
+  if (len > 0 && len < MAX_PATH) {
+    n = snprintf(g_crashRecordPath, sizeof(g_crashRecordPath), "%s\\EchoVR\\logs\\nevr-crash-%s.txt", dir,
+                 GetRunId());
+  } else {
+    char exe[MAX_PATH] = {};
+    const DWORD elen = GetModuleFileNameA(nullptr, exe, MAX_PATH);
+    if (elen == 0 || elen >= MAX_PATH) return;
+    char* slash = strrchr(exe, '\\');
+    if (slash != nullptr) *slash = '\0';
+    n = snprintf(g_crashRecordPath, sizeof(g_crashRecordPath), "%s\\logs\\nevr-crash-%s.txt", exe, GetRunId());
+  }
+  if (n <= 0 || n >= static_cast<int>(sizeof(g_crashRecordPath))) g_crashRecordPath[0] = '\0';
+}
+
+static void VehWrite(const char* buf, size_t len);
+
+// From here on every [NEVR.CRASH] line is also written to the crash record. The first call opens it and
+// writes a header (run id, UTC time) so the file stands on its own.
+static void ArmCrashRecord() {
+  if (InterlockedExchange(&g_crashRecordArmed, 1) != 0 || g_crashRecordPath[0] == '\0') return;
+  g_crashRecordHandle = CreateFileA(g_crashRecordPath, FILE_APPEND_DATA, FILE_SHARE_READ, nullptr, OPEN_ALWAYS,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (g_crashRecordHandle == INVALID_HANDLE_VALUE) return;
+  SYSTEMTIME st{};
+  GetSystemTime(&st);
+  char header[160];
+  const int n = snprintf(header, sizeof(header),
+                         "[NEVR.CRASH] crash record run=%s utc=%04u-%02u-%02uT%02u:%02u:%02uZ\n", GetRunId(),
+                         st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+  if (n > 0) VehWrite(header, static_cast<size_t>(n) < sizeof(header) ? static_cast<size_t>(n) : sizeof(header) - 1);
+}
+
 static void VehWrite(const char* buf, size_t len) {
   HANDLE hErr = GetStdHandle(STD_ERROR_HANDLE);
-  if (hErr == nullptr || hErr == INVALID_HANDLE_VALUE) return;
   DWORD written = 0;
-  WriteFile(hErr, buf, static_cast<DWORD>(len), &written, nullptr);
+  if (hErr != nullptr && hErr != INVALID_HANDLE_VALUE) WriteFile(hErr, buf, static_cast<DWORD>(len), &written, nullptr);
+  if (g_crashRecordArmed != 0 && g_crashRecordHandle != INVALID_HANDLE_VALUE) {
+    WriteFile(g_crashRecordHandle, buf, static_cast<DWORD>(len), &written, nullptr);
+    FlushFileBuffers(g_crashRecordHandle);
+  }
 }
 
 static void VehPrintf(const char* fmt, ...) {
@@ -418,9 +478,10 @@ static void WriteCrashDump(PEXCEPTION_POINTERS ex) {
   };
 
   const INT64 ripRva = rva(ctx->Rip);
+  ArmCrashRecord();
   VehPrintf("[NEVR.CRASH] === CRASH DUMP ===");
   if (const char* site = CrashRecovery::LookupKnownNullDerefSite(ripRva)) {
-    VehPrintf("[NEVR.CRASH] known_site=%s class=session_flags_null_deref ledger=N71 "
+    VehPrintf("[NEVR.CRASH] known_site=%s class=session_flags_null_deref "
               "note=*(this+0x2DA0) dereferenced without a null check",
               site);
   }
@@ -681,6 +742,7 @@ typedef INT64 (*CrashExceptionFilterFunc)(void*, void*, void**);
 static CrashExceptionFilterFunc OriginalCrashExceptionFilter = nullptr;
 
 static INT64 CrashExceptionFilterHook(void* a1, void* a2, void** ppExRecords) {
+  ArmCrashRecord();
   VehPrintf("[NEVR.CRASH] CrashExceptionFilter ENTERED ret=%p tid=%lu",
             __builtin_return_address(0), GetCurrentThreadId());
   return OriginalCrashExceptionFilter(a1, a2, ppExRecords);
@@ -698,6 +760,7 @@ static HandleCrashDumpFunc OriginalHandleCrashDump = nullptr;
 static INT64 HandleCrashDumpHook(void* a1, void* a2, void* a3, void* a4) {
   const DWORD64 base = reinterpret_cast<DWORD64>(EchoVR::g_GameBaseAddress);
   const DWORD64 ret = reinterpret_cast<DWORD64>(__builtin_return_address(0));
+  ArmCrashRecord();
   VehPrintf("[NEVR.CRASH] HandleCrashDump ENTERED ret=0x%llX rva=%s0x%llX tid=%lu "
             "a1=%p a2=%p a3=%p a4=%p",
             static_cast<unsigned long long>(ret),
@@ -738,10 +801,22 @@ static INT64 HandleCrashDumpHook(void* a1, void* a2, void* a3, void* a4) {
     }
   }
 
-  // Stack scan for game-code return addresses — names the call chain.
+  // Stack scan for game-code return addresses — names the call chain. From the faulting thread's rsp
+  // when the exception context is readable: scanning this handler's own frame named the exception
+  // dispatcher, not the caller (#68: __acrt_FlsGetValue, a hash lookup).
   DWORD64* sp = reinterpret_cast<DWORD64*>(&a1);
+  const char* scanFrom = "handler_frame";
+  if (a3 != nullptr && CrashRecovery::IsReadableMemory(a3, sizeof(void*))) {
+    PEXCEPTION_POINTERS ep = *static_cast<PEXCEPTION_POINTERS*>(a3);
+    if (ep != nullptr && CrashRecovery::IsReadableMemory(ep, sizeof(EXCEPTION_POINTERS)) && ep->ContextRecord != nullptr &&
+        CrashRecovery::IsReadableMemory(ep->ContextRecord, sizeof(CONTEXT))) {
+      sp = reinterpret_cast<DWORD64*>(ep->ContextRecord->Rsp);
+      scanFrom = "fault_rsp";
+    }
+  }
+  VehPrintf("[NEVR.CRASH]   callers from=%s (stack scan for return addresses into the game)", scanFrom);
   int found = 0;
-  for (int i = 0; i < 96 && found < 10; i++) {
+  for (int i = 0; i < 512 && found < 16; i++) {
     if (!CrashRecovery::IsReadableMemory(sp + i, 8)) break;
     const DWORD64 v = sp[i];
     if (v >= base && v < base + 0x1800000) {
@@ -765,7 +840,58 @@ void RefreshModuleCache() {
       g_moduleCacheCount);
 }
 
+// CStackAllocator::DirectAlloc (this, request, align) @ 0x1400D4FB0 (#68, beta gate G11). The game logs
+// "Stack allocator ran out of memory: <n>" and traps when a request does not fit, and the crash dump's stack
+// walk cannot name the caller. Runs the game's own check first (stack_alloc_check.h) and, only when it is
+// about to fail, logs the real return address, the request and the pool fields; then lets the game trap as
+// before. Hot path (hundreds of callers, rendering per frame): a few loads and one compare when it fits.
+typedef long long (*StackDirectAllocFunc)(void*, long long, long long);
+static StackDirectAllocFunc OriginalStackDirectAlloc = nullptr;
+static constexpr unsigned char kStackDirectAllocPrologue[] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74,
+                                                              0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x30, 0x4C};
+
+static long long StackDirectAllocProbe(void* self, long long request, long long align) {
+  if (self != nullptr) {
+    const auto* allocator = static_cast<const unsigned char*>(self);
+    const unsigned char* table = nullptr;
+    memcpy(&table, allocator + 0x48, sizeof(table));
+    if (table != nullptr) {
+      const unsigned char* entries = nullptr;
+      long long count = 0;
+      memcpy(&entries, table + 0x08, sizeof(entries));
+      memcpy(&count, table + 0x10, sizeof(count));
+      if (entries != nullptr && count > 0) {
+        unsigned long long a = 0, b = 0, field38 = 0, field40 = 0;
+        memcpy(&a, entries + count * 16 - 16, sizeof(a));
+        memcpy(&b, entries + count * 16 - 8, sizeof(b));
+        memcpy(&field38, allocator + 0x38, sizeof(field38));
+        memcpy(&field40, allocator + 0x40, sizeof(field40));
+        const StackAllocCheck::Result r = StackAllocCheck::Check(
+            field38, field40, a + b, static_cast<unsigned long long>(request), static_cast<unsigned long long>(align));
+        if (!r.fits) {
+          const DWORD64 base = reinterpret_cast<DWORD64>(EchoVR::g_GameBaseAddress);
+          const DWORD64 ret = reinterpret_cast<DWORD64>(__builtin_return_address(0));
+          Log(EchoVR::LogLevel::Error,
+              "[NEVR.CRASH] stack allocator about to fail: caller=%s0x%llX request=%llu align=%lld "
+              "start=0x%llX field38=0x%llX field40=0x%llX allocations=%lld reported=%llu",
+              ret >= base ? "game+" : "", static_cast<unsigned long long>(ret >= base ? ret - base : ret),
+              static_cast<unsigned long long>(request), align, static_cast<unsigned long long>(r.start), field38,
+              field40, count, static_cast<unsigned long long>(r.reported));
+        }
+      }
+    }
+  }
+  return OriginalStackDirectAlloc(self, request, align);
+}
+
 void InstallCrashFilterInstrumentation() {
+  PrepareCrashRecordPath();
+  if (g_crashRecordPath[0] != '\0') {
+    Log(EchoVR::LogLevel::Info, "[NEVR.CRASH] crash record path=%s (written only if the game crashes)",
+        g_crashRecordPath);
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.CRASH] crash record unavailable: no LOCALAPPDATA or module path");
+  }
   void* filt = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress +
                                        PatchAddresses::CRASH_EXCEPTION_FILTER);
   if (memcmp(filt, PatchAddresses::CRASH_EXCEPTION_FILTER_PROLOGUE,
@@ -797,6 +923,19 @@ void InstallCrashFilterInstrumentation() {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.CRASH] hook failed name=HandleCrashDump va=0x%llX prologue=%02x%02x%02x%02x%02x",
         reinterpret_cast<unsigned long long>(hcd), pb[0], pb[1], pb[2], pb[3], pb[4]);
+  }
+
+  // CStackAllocator::DirectAlloc @ 0x1400D4FB0 (#68): see StackDirectAllocProbe.
+  void* sda = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress + 0xD4FB0);
+  if (memcmp(sda, kStackDirectAllocPrologue, sizeof(kStackDirectAllocPrologue)) == 0) {
+    OriginalStackDirectAlloc = reinterpret_cast<StackDirectAllocFunc>(sda);
+    if (PatchDetour(&OriginalStackDirectAlloc, reinterpret_cast<PVOID>(StackDirectAllocProbe),
+                    "CStackAllocator::DirectAlloc")) {
+      Log(EchoVR::LogLevel::Info, "[NEVR.CRASH] hooked name=CStackAllocator::DirectAlloc (out-of-memory probe)");
+    }
+  } else {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.CRASH] hook skipped name=CStackAllocator::DirectAlloc reason=prologue_mismatch");
   }
 }
 
@@ -1033,8 +1172,8 @@ void InstallConsoleCtrlHandler() {
   if (signal(SIGINT, PosixSignalHandler) == SIG_ERR) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] SIGINT handler registration failed (signal()) — no effect under Wine "
-        "(SIGINT is delivered via the console ctrl handler there, not the CRT signal table, per "
-        "N87); would block POSIX-path shutdown on native Windows");
+        "(SIGINT is delivered via the console ctrl handler there, not the CRT signal table); "
+        "would block POSIX-path shutdown on native Windows");
   }
   if (signal(SIGTERM, PosixSignalHandler) == SIG_ERR) {
     Log(EchoVR::LogLevel::Warning,
@@ -1118,7 +1257,7 @@ void InstallFatalErrorHandler() {
 void ResolveShutdownDependencies() {
   Log(EchoVR::LogLevel::Info,
       "[NEVR.PATCH] shutdown deps resolved ws_bridge=in-process "
-      "StopWebSocketBridgeListener=direct (no loader lock on the signal path, N62/N105)");
+      "StopWebSocketBridgeListener=direct (no loader lock on the signal path)");
 }
 
 // N62: report from the shutdown path using a transport that is safe for the
@@ -1179,6 +1318,9 @@ void PerformGracefulShutdown(unsigned int exitCode) {
     StopWebSocketBridgeListener();
     ShutdownReport(EchoVR::LogLevel::Info, "[NEVR.PATCH] ws_bridge listener stopped — socket released");
   }
+#ifdef NEVR_SCENARIO_CONTROL
+  ScenarioControl::Stop();  // test builds only
+#endif
 
   // 2. Unhook MinHook hooks installed by BinaryBugFixes.
   BinaryBugFixes::Shutdown();

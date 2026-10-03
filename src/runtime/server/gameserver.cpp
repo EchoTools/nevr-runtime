@@ -1,4 +1,5 @@
 #include "runtime/server/gameserver.h"
+#include "core/curl_global.h"
 
 #include <cstdio>
 #include <cstring>
@@ -1263,6 +1264,7 @@ static std::string AuthenticateServer() {
     body["discord_id"] = discordId;
     body["password"] = password;
 
+    nevr::EnsureCurlGlobalInit();
     CURL* curl = curl_easy_init();
     if (!curl) return "";
 

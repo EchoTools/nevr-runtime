@@ -1,0 +1,19 @@
+# Enable and disable a social feature (R15NetEnableSocialFeatureNode, run 0x140ddb650). Test plan #27.
+# The node maps feature 0..4 to mask 1,2,4,8,0xff and sets or clears it in the u16 at 0x142025bf4
+# (0x140cd3850), which gameplay code reads (UpdatePersonalBubble 0x140d82ea0 tests bit 2, mask 2).
+# Local only; the scenario disables feature 1 and enables it again.
+name: social_features
+description: disable and re-enable a social feature through its node; see the game's feature mask follow
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: disable feature 1 (mask 2)
+    fire: {action: enable_social_feature, feature: 1, enable: false}
+  - name: mask bit 2 is clear
+    state_until: {path: game.social_features, bits_clear: 2, timeout: 10}
+  - name: enable feature 1
+    fire: {action: enable_social_feature, feature: 1, enable: true}
+  - name: mask bit 2 is set
+    state_until: {path: game.social_features, bits_set: 2, timeout: 10}

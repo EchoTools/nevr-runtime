@@ -9,7 +9,7 @@ int Format(char* buffer, size_t buffer_size, long listen_entries, long dispatch_
   const int result = std::snprintf(
       buffer, buffer_size,
       "[NEVR.PATCH] broadcaster hook stats listen_entries=%ld dispatch_entries=%ld "
-      "(N83/N84 evidence — zero entries means idle runs prove nothing)",
+      "(zero entries means idle runs prove nothing)",
       listen_entries, dispatch_entries);
   return result < 0 ? 0 : result;
 }
