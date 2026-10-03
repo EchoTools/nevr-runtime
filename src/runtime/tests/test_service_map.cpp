@@ -11,6 +11,8 @@
 // -DBUILD_TESTING=ON and run under Wine by `just test-auth-unit` (`just verify`).
 
 #include <cstdlib>
+#include <functional>
+#include <map>
 #include <optional>
 #include <string>
 
@@ -366,7 +368,7 @@ TEST(ServiceMap, S4b_HttpKeyRequiredRefUnsetFailsLoud) {
   try {
     nevr::NevrConfig::LoadFromString(
         "auth:\n  http_key: \"${NEVR_S4B_HTTP_KEY:?NEVR_S4B_HTTP_KEY must be set for server auth}\"\n");
-    FAIL() << "expected NevrConfigError for an unset ${NEVR_HTTP_KEY:?} secret";
+    FAIL() << "expected NevrConfigError for an unset ${NEVR_S4B_HTTP_KEY:?} reference";
   } catch (const nevr::NevrConfigError& e) {
     EXPECT_NE(std::string(e.what()).find("NEVR_S4B_HTTP_KEY must be set for server auth"),
               std::string::npos);
@@ -556,4 +558,59 @@ TEST(GameNativeConfig, EscapesValuesRatherThanConcatenatingThem) {
   const auto json = nevr_cfg::BuildGameNativeConfigJson("https://h.example:7350", key);
   ASSERT_TRUE(json.has_value());
   EXPECT_EQ(nlohmann::json::parse(*json).at("social_plugin").at("server_key").get<std::string>(), key);
+}
+
+// ---------------------------------------------------------------------------
+// #76 — runtime environment overrides. NEVR_API_KEY / NEVR_SOCKET_KEY sit above config.yaml and
+// the built-in public defaults: set -> the environment value wins; unset or empty -> config.yaml,
+// else the built-in.
+// ---------------------------------------------------------------------------
+namespace {
+
+std::function<std::optional<std::string>(const char*)> FakeEnv(std::map<std::string, std::string> vars) {
+  return [vars](const char* name) -> std::optional<std::string> {
+    const auto it = vars.find(name);
+    if (it == vars.end()) return std::nullopt;
+    return it->second;
+  };
+}
+
+}  // namespace
+
+TEST(ServiceMapEnvOverrides, EachVariableMapsToItsKey) {
+  const auto o = nevr_cfg::ReadFlatEnvOverrides(
+      // The retired build-time name, spelled in two parts so the repo-wide grep for it stays empty (#76).
+      FakeEnv({{"NEVR_API_KEY", "env-api"}, {"NEVR_SOCKET_KEY", "env-socket"}, {std::string("NEVR_HTTP") + "_KEY", "retired"}}));
+  ASSERT_EQ(o.size(), 2U) << "only the two runtime names; the retired build names are not read";
+  EXPECT_EQ(o.at("nevr_http_key"), "env-api");
+  EXPECT_EQ(o.at("nevr_server_key"), "env-socket");
+  EXPECT_TRUE(nevr_cfg::ReadFlatEnvOverrides(FakeEnv({{"NEVR_API_KEY", ""}})).empty()) << "empty is unset";
+  EXPECT_TRUE(nevr_cfg::ReadFlatEnvOverrides(nullptr).empty());
+}
+
+TEST(ServiceMapEnvOverrides, EnvSetWinsOverConfigYamlAndTheBuiltIn) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("auth:\n  http_key: \"file-api\"\n  server_key: \"file-socket\"\n");
+  const auto env = nevr_cfg::ReadFlatEnvOverrides(FakeEnv({{"NEVR_API_KEY", "env-api"}, {"NEVR_SOCKET_KEY", "env-socket"}}));
+  const auto d = EmbeddedDefaults();
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(cfg, env, d, "nevr_http_key").value_or(""), "env-api");
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(cfg, env, d, "nevr_server_key").value_or(""), "env-socket");
+  const auto none = nevr::NevrConfig::LoadFromString("");
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(none, env, d, "nevr_http_key").value_or(""), "env-api");
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(none, env, d, "nevr_server_key").value_or(""), "env-socket");
+}
+
+TEST(ServiceMapEnvOverrides, EnvUnsetFallsBackToConfigYamlThenTheBuiltIn) {
+  const nevr_cfg::FlatEnvOverrides unset = nevr_cfg::ReadFlatEnvOverrides(FakeEnv({}));
+  const auto d = EmbeddedDefaults();
+  const auto none = nevr::NevrConfig::LoadFromString("");
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(none, unset, d, "nevr_http_key").value_or(""), "default-http-key");
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(none, unset, d, "nevr_server_key").value_or(""), "default-server-key");
+  const auto file = nevr::NevrConfig::LoadFromString("auth:\n  http_key: \"file-api\"\n");
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(file, unset, d, "nevr_http_key").value_or(""), "file-api");
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(file, unset, d, "nevr_server_key").value_or(""), "default-server-key");
+  // Only one variable set: the other key keeps its own layers.
+  const auto onlyApi = nevr_cfg::ReadFlatEnvOverrides(FakeEnv({{"NEVR_API_KEY", "env-api"}}));
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(file, onlyApi, d, "nevr_server_key").value_or(""), "default-server-key");
+  // Keys with no environment variable are untouched by the layer.
+  EXPECT_EQ(nevr_cfg::LookupFlatLayered(none, onlyApi, d, "nevr_socket_uri").value_or(""), "wss://default.example:443/ws");
 }

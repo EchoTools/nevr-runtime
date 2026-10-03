@@ -61,7 +61,7 @@ class BuiltinDefaultsContractTest(unittest.TestCase):
         start = text.index("const nevr_cfg::FlatDefaults& BuiltinDefaults()")
         end = text.index("// One lookup for every flat key", start)
         body = text[start:end]
-        for value_name in ("kSocketUri", "kHttpUri", "kHttpKey", "kServerKey"):
+        for value_name in ("kSocketUri", "kHttpUri", "kPublicApiKey", "kPublicSocketKey"):
             self.assertEqual(body.count(f"nevr_builtin::{value_name}"), 1, value_name)
         # The only Log arguments are the joined key-name lists.
         for call in re.findall(r"Log\(.*?\);", body, re.S):

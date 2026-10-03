@@ -99,6 +99,23 @@ std::optional<std::string> LookupFlatWithDefaults(const nevr::NevrConfig& cfg,
   return fromFile;
 }
 
+FlatEnvOverrides ReadFlatEnvOverrides(const std::function<std::optional<std::string>(const char*)>& getEnv) {
+  FlatEnvOverrides overrides;
+  if (!getEnv) return overrides;
+  for (const FlatEnvVar& var : kFlatEnvVars) {
+    const std::optional<std::string> value = getEnv(var.envName);
+    if (value && !value->empty()) overrides[var.flatKey] = *value;
+  }
+  return overrides;
+}
+
+std::optional<std::string> LookupFlatLayered(const nevr::NevrConfig& cfg, const FlatEnvOverrides& env,
+                                             const FlatDefaults& defaults, const std::string& flatKey) {
+  const auto it = env.find(flatKey);
+  if (it != env.end() && !it->second.empty()) return it->second;
+  return LookupFlatWithDefaults(cfg, defaults, flatKey);
+}
+
 std::optional<std::string> LookupFlatCsv(const nevr::NevrConfig& cfg, const std::string& flatKey) {
   // For LIST-shaped keys (guilds, regions). GetStringList turns a sequence into
   // its elements and a lone scalar into a single element, so a config.yaml list

@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -51,6 +52,31 @@ using FlatDefaults = std::map<std::string, std::string>;
 std::optional<std::string> LookupFlatWithDefaults(const nevr::NevrConfig& cfg,
                                                   const FlatDefaults& defaults,
                                                   const std::string& flatKey);
+
+/// Runtime environment overrides (#76), keyed by flat key: the value of an environment variable
+/// read at start-up. They sit above config.yaml and the built-in defaults.
+using FlatEnvOverrides = std::map<std::string, std::string>;
+
+/// The environment variables that override flat keys: NEVR_API_KEY -> nevr_http_key
+/// (auth.http_key), NEVR_SOCKET_KEY -> nevr_server_key (auth.server_key). The build never reads
+/// them (cmake/nevr_builtin_defaults.cmake embeds NEVR_PUBLIC_API_KEY / NEVR_PUBLIC_SOCKET_KEY).
+struct FlatEnvVar {
+  const char* envName;
+  const char* flatKey;
+};
+inline constexpr FlatEnvVar kFlatEnvVars[] = {
+    {"NEVR_API_KEY", "nevr_http_key"},
+    {"NEVR_SOCKET_KEY", "nevr_server_key"},
+};
+
+/// Reads kFlatEnvVars through `getEnv` (nullopt = unset). A set but empty variable is no override,
+/// the same "empty is unset" rule as the rest of the config layer.
+FlatEnvOverrides ReadFlatEnvOverrides(const std::function<std::optional<std::string>(const char*)>& getEnv);
+
+/// The flat lookup with every layer, highest first: environment override, config.yaml value,
+/// built-in default (LookupFlatWithDefaults for the last two).
+std::optional<std::string> LookupFlatLayered(const nevr::NevrConfig& cfg, const FlatEnvOverrides& env,
+                                             const FlatDefaults& defaults, const std::string& flatKey);
 
 /// Read a LIST-shaped migrated flat key (guilds, regions) as a CSV string — the
 /// shape the game-JSON readers built into `guilds=%s` / `regions=%s`. A config.yaml

@@ -184,13 +184,13 @@ auth:
   # HTTP API key. Sent as Bearer auth on REST calls when the game's internal
   # token cache is empty. Read by token_auth.cpp during device-auth flow.
   # SECRET — use env-var substitution in production.
-  # http_key: "${NEVR_HTTP_KEY:?http_key is required}"
+  # http_key: "${NEVR_API_KEY:?http_key is required}"
 
   # Server authentication key. Used as the Basic-auth username when
   # authenticating a server with Nakama (POST /v2/account/authenticate/device).
   # Required for dedicated server operation.
   # SECRET — use env-var substitution in production.
-  # server_key: "${NEVR_SERVER_KEY:?server_key is required for servers}"
+  # server_key: "${NEVR_SOCKET_KEY:?server_key is required for servers}"
 
 # ---------------------------------------------------------------------------
 # guilds — guild filter for server registration
