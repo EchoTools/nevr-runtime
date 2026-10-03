@@ -34,9 +34,15 @@ void UnsetEnv(const char* name) { _putenv_s(name, ""); }
 // Never use the game directory for config-load unit-test fixtures.
 constexpr const char* kScratchConfigDirectory = R"(Z:\var\tmp\work-nevr-runtime\nevr-config-tests\)";
 
+// Creates each missing level ("Z:\var", "Z:\var\tmp", ...): on a fresh machine (the CI container,
+// run 37151801289) only Z:\var\tmp exists, and CreateDirectoryA makes one level at a time.
 bool EnsureScratchConfigDirectory() {
-  if (CreateDirectoryA(kScratchConfigDirectory, nullptr) != FALSE) return true;
-  return GetLastError() == ERROR_ALREADY_EXISTS;
+  const std::string full(kScratchConfigDirectory);
+  for (size_t sep = full.find('\\', 3); sep != std::string::npos; sep = full.find('\\', sep + 1)) {
+    const std::string level = full.substr(0, sep);
+    if (CreateDirectoryA(level.c_str(), nullptr) == FALSE && GetLastError() != ERROR_ALREADY_EXISTS) return false;
+  }
+  return true;
 }
 
 std::string ScratchConfigPath(const char* name) {
