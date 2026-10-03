@@ -81,6 +81,14 @@ function(nevr_generate_builtin_defaults root)
       "NEVR_REQUIRE_BUILTIN_DEFAULTS=ON but these are empty: ${missing}. "
       "Set them in the environment or in ${root}/.env (see .env.example).")
   endif()
+  # A build that requires its defaults is a token-auth build (no identity in config.yaml), and
+  # token auth works only through the /nevr ingress: the production /ws front replaces the
+  # client's Bearer token with the server key, so the login arrives unauthenticated (#52, #65).
+  if(NEVR_REQUIRE_BUILTIN_DEFAULTS AND NOT NEVR_DEFAULT_SOCKET_URI MATCHES "^wss://[^/?#]+/nevr([?].*)?$")
+    message(FATAL_ERROR
+      "NEVR_REQUIRE_BUILTIN_DEFAULTS=ON but NEVR_SOCKET_URI is not a wss://<host>/nevr URL. "
+      "Token-auth builds must use the /nevr ingress; /ws drops the client's Bearer token (#52).")
+  endif()
   configure_file("${root}/cmake/nevr_builtin_defaults.h.in"
                  "${CMAKE_BINARY_DIR}/generated/nevr_builtin_defaults.h" @ONLY
                  FILE_PERMISSIONS OWNER_READ OWNER_WRITE)

@@ -609,6 +609,17 @@ static std::string SelectRemoteBearer(bool hasUrlCredentials, const std::string&
   return hasUrlCredentials ? serverKey : jwt;
 }
 
+// True when the URL's path is the /ws catch-all, whose front replaces the client's Bearer with the
+// server key (#52): a token-auth login sent there arrives unauthenticated.
+static bool IsBearerReplacingPath(const std::string& url) {
+  const size_t scheme = url.find("://");
+  const size_t hostStart = scheme == std::string::npos ? 0 : scheme + 3;
+  const size_t pathStart = url.find('/', hostStart);
+  if (pathStart == std::string::npos) return false;
+  const size_t pathEnd = url.find_first_of("?#", pathStart);
+  return url.compare(pathStart, pathEnd == std::string::npos ? std::string::npos : pathEnd - pathStart, "/ws") == 0;
+}
+
 static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode = 2,
                                      const std::string& displayName = std::string(),
                                      const std::string& accessToken = std::string(),
@@ -985,6 +996,12 @@ void InstallWebSocketBridge() {
               Log(EchoVR::LogLevel::Info,
                   "[NEVR.WS] remote auth: %s (value not logged)",
                   hasUrlCredentials ? "server key + URL credentials" : "token-auth JWT");
+              if (!hasUrlCredentials && IsBearerReplacingPath(remoteUrl)) {
+                Log(EchoVR::LogLevel::Warning,
+                    "[NEVR.WS] remote auth: token-auth JWT sent to the /ws path, whose front replaces "
+                    "the Bearer with the server key; the login will arrive unauthenticated. Use the "
+                    "/nevr ingress (services.socket_uri or the build default, #52)");
+              }
             } else if (hasUrlCredentials) {
               Log(EchoVR::LogLevel::Warning,
                   "[NEVR.WS] remote auth: URL credentials but no server key configured — the /nevr "
@@ -1580,6 +1597,8 @@ std::string TestHook_SelectRemoteBearer(bool hasUrlCredentials, const std::strin
                                         const std::string& serverKey) {
   return SelectRemoteBearer(hasUrlCredentials, jwt, serverKey);
 }
+
+bool TestHook_IsBearerReplacingPath(const std::string& url) { return IsBearerReplacingPath(url); }
 
 uint64_t TestHook_SelectPlatformCode(bool hasUrlCredentials, bool noOvr) {
   return SelectPlatformCode(hasUrlCredentials, noOvr);
