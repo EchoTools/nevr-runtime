@@ -1,0 +1,25 @@
+# A friend's presence, client half (proposal §1). The server's SNSFriendPresenceNotify (built by nakama
+# from the friend's match and party, social level 1) is injected for a friend made online through the
+# bridge; the friends slots then report it: 52 FriendStatusString, 54 FriendIsJoinable, 55
+# FriendPartyId (pnsovr 0x1800850e0, 0x180085030, 0x180085060). The server half is local_friend_presence.
+name: friend_presence
+description: inject a friend's presence; see the status text and joinable party in the friends slots
+vars:
+  friend_id: 1000000000000000012
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: a friend comes online (FriendStatusNotify)
+    inject: {msg: FriendStatusNotify, id: '${friend_id}', status: 0}
+  - name: the friend's presence arrives (in a public arena match, in a joinable party)
+    inject: {msg: FriendPresenceNotify, id: '${friend_id}', party: 777000000000051, text: Public Arena Match}
+  - name: the bridge read it
+    expect_log: {pattern: 'friend presence account=${friend_id} party=777000000000051 joinable=1 text="Public Arena Match"', timeout: 10}
+  - name: the friends slots report it
+    state_until: {friend: {id: '${friend_id}', text: Public Arena Match, party: 777000000000051}, timeout: 10}
+  - name: the friend moves to the main menu, no joinable party
+    inject: {msg: FriendPresenceNotify, id: '${friend_id}', text: In Main Menu}
+  - name: the slots follow
+    state_until: {friend: {id: '${friend_id}', text: In Main Menu, party: 0}, timeout: 10}

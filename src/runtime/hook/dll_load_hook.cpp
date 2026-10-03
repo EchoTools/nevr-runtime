@@ -162,7 +162,7 @@ void Install() {
         } else {
             fprintf(stderr,
                     "[NEVR.DLLHOOK] hook FAILED name=%s reason=%s — search-path "
-                    "hardening inactive for this variant (N129)\n",
+                    "hardening inactive for this variant\n",
                     s.name, MH_StatusToString(st));
         }
     }

@@ -1,0 +1,36 @@
+# Accepting an invite into a party that filled up first, end to end on the local nakama (§4; owner:
+# "a player can accept party invite and it fail because they didn't join before other players did",
+# and "they stay where they are"). Peer 1 leads a party that peers 2-4 fill to its size of 4, then
+# invites this client; the client accepts; nakama refuses with code 5 ("full", ErrPartyFull) and the
+# client stays in its own party.
+name: local_full_party
+server: local
+peers: 4
+description: accept a real invite into a full party; see code 5 and the client stay in its party
+steps:
+  - name: logged in to the local nakama
+    wait_log: {pattern: 'NetGame switching state \(from logging in, to logged in\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 30}
+  - name: the client's own party
+    state_until: {party_joinable: true, timeout: 60, save: {party_before: party.id}}
+  - name: peer 1 makes a party
+    peer: {id: 1, do: create_party, save: {peer_party: party}}
+  - name: peer 1 invites the client while there is room
+    peer: {id: 1, do: invite, arg: client}
+  - name: the server's invite reached the game
+    state_until: {invite_count: 1, timeout: 15}
+  - name: peer 2 joins
+    peer: {id: 2, do: join, arg: '${peer_party}', expect: PartyJoinSuccess}
+  - name: peer 3 joins
+    peer: {id: 3, do: join, arg: '${peer_party}', expect: PartyJoinSuccess}
+  - name: peer 4 joins (the party is full)
+    peer: {id: 4, do: join, arg: '${peer_party}', expect: PartyJoinSuccess}
+  - name: the client accepts the invite
+    fire: {action: respond_to_invite, index: 0, accept: true}
+  - name: nakama refused the accept, the party being full
+    nakama_log: {pattern: '"msg":"Party join via invite failed".*full', timeout: 15}
+  - name: the game got JoinFailed with full (code 5)
+    expect_log: {pattern: 'party callback index=2 arg=5 bound=1', timeout: 15}
+  - name: still in the same party
+    state_until: {path: party.id, equals: '${party_before}', timeout: 15}

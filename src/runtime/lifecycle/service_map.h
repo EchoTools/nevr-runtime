@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 
@@ -36,6 +37,20 @@ std::string FlatKeyToYamlPath(const std::string& flatKey);
 /// path is absent; may return an empty string when the key is present-but-empty
 /// (the caller applies the same `[0] != '\0'` check the JSON readers did).
 std::optional<std::string> LookupFlat(const nevr::NevrConfig& cfg, const std::string& flatKey);
+
+/// Built-in defaults embedded at build time, keyed by flat key (non-empty values only).
+using FlatDefaults = std::map<std::string, std::string>;
+
+/// LookupFlat layered over the embedded defaults. The config.yaml value wins when it is
+/// present and non-empty after interpolation; otherwise the embedded default is used; with
+/// no default the file's own answer is returned unchanged (nullopt, or a present-but-empty
+/// string). A null section (`auth:` with every key commented out) and a value that
+/// interpolates to empty both count as "no override", so the default survives — the same
+/// "an empty secret is unset" rule the rest of the config layer follows. Lookup-time
+/// layering, not tree merging: the parsed file is never modified.
+std::optional<std::string> LookupFlatWithDefaults(const nevr::NevrConfig& cfg,
+                                                  const FlatDefaults& defaults,
+                                                  const std::string& flatKey);
 
 /// Read a LIST-shaped migrated flat key (guilds, regions) as a CSV string — the
 /// shape the game-JSON readers built into `guilds=%s` / `regions=%s`. A config.yaml
@@ -81,5 +96,21 @@ std::optional<std::string> ResolveRedirect(const std::string& result,
 /// only source of these keys. Owner-chosen value: publisher_lock = "echotools".
 /// nullopt for every other key (the engine keeps its own default).
 std::optional<std::string> GameNativeDefault(const std::string& key);
+
+/// The game-native config the runtime supplies when no `_local/config.json` exists, as JSON text.
+/// Today that is the `social_plugin` block the game's social layer (friends, parties, presence,
+/// matchmaking UI) reads: endpoint and port come from the Nakama HTTP base (`httpUri`, e.g.
+/// https://host:7350), the key is the Nakama server key, device auth, auto-create, every feature on
+/// (the same shape a hand-written config.json carried). nullopt when either input is empty or the
+/// URL has no host, so a build with nothing embedded supplies nothing. Built with nlohmann::json,
+/// never by string concatenation.
+std::optional<std::string> BuildGameNativeConfigJson(const std::string& httpUri,
+                                                     const std::string& serverKey);
+
+/// Gate for the social façade that stands in when the platform provider has no
+/// Social object (pnsrad exports none). On by default; `social.facade: false`
+/// turns it off. A missing or invalid value leaves it on. It never replaces a
+/// provider's own Social object, only a null one.
+bool SocialFacadeEnabled(const nevr::NevrConfig& cfg);
 
 }  // namespace nevr_cfg

@@ -1,0 +1,42 @@
+# Party data received (proposal §3): the server's SNSPartyDataNotify for a member the client does not
+# know yet adds that member with its data, as pnsovr's data packet did (0x180090650 -> 0x180082cd0), and
+# the data is in the member's JSON slot before MemberJoined fires, so the game's PartyMemberJoinedCB
+# (0x14018a3c0) names the member's headset ("'%s' joined party (%s)", GetHeadsetTypeName 0x140170770:
+# 2 = Rift S) where every remote member used to show "(Unknown)". The party's own data, sent to the
+# leader, is ignored (the leader writes it). The member is synthetic; nothing is sent but its name
+# lookup.
+name: party_data_receive
+description: inject a member's party data; see the member join with its headset named, then leave
+vars:
+  member_id: 1000000000000000009
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: the game has its own party
+    state_until: {party_joinable: true, timeout: 60}
+  - name: a member's data arrives (SNSPartyDataNotify)
+    inject: {msg: PartyDataNotify, member: '${member_id}', json: {headsettype: 2, lobbyid: '00000000-0000-0000-0000-000000000000', matchtype: -1, team: 65535, lobbytype: 2, offline: false}}
+  - name: the bridge read it and added the member
+    expect_log: {pattern: 'party data received party=\d+ member=${member_id} seq=1 bytes=\d+ keys=6 headsettype=2 outcome=member_added', timeout: 10}
+  - name: the data was loaded into the member's JSON
+    expect_log: {pattern: 'party data loaded member id=${member_id} bytes=\d+', timeout: 10}
+  - name: MemberJoined callback ran for index 1
+    expect_log: {pattern: 'party callback index=9 arg=1 bound=1', timeout: 10}
+  - name: the game named the member's headset
+    expect_log: {pattern: "\\[NETGAME\\] '[^']+' joined party \\(Rift S\\)", timeout: 10}
+  - name: MemberUpdated callback ran for index 1
+    expect_log: {pattern: 'party callback index=10 arg=1 bound=1', timeout: 10}
+  - name: two members
+    state_until: {party_members: 2, timeout: 15}
+  - name: the party's data, to its leader
+    inject: {msg: PartyDataNotify, member: 0, json: {lobbyid: '00000000-0000-0000-0000-000000000000'}}
+  - name: the leader keeps its own
+    expect_log: {pattern: 'party data received party=\d+ member=0 .*outcome=own_ignored', timeout: 10}
+  - name: the member leaves (PartyLeaveNotify)
+    inject: {msg: PartyLeaveNotify, member: '${member_id}'}
+  - name: MemberLeft callback ran for the member
+    expect_log: {pattern: 'party callback index=11 id=${member_id} bound=1', timeout: 10}
+  - name: one member again
+    state_until: {party_members: 1, timeout: 15}

@@ -14,6 +14,7 @@ set(PATCHES_SOURCES
     "lifecycle/config.cpp"
     "lifecycle/service_map.cpp"
     "lifecycle/service_config.cpp"
+    "lifecycle/login_redirect_override.cpp"
     "patch/mode_patches.cpp"
     "patch/broadcaster_hook_stats.cpp"
     "lifecycle/crash_recovery.cpp"
@@ -27,11 +28,15 @@ set(PATCHES_SOURCES
     "patch/resource_override.cpp"
     "compat/winhttp_stub.cpp"
     "compat/ws_bridge.cpp"
+    "compat/social_names.cpp"
     "patch/xpid_patch.cpp"
     "frame/tick.cpp"
     "patch/binary_bug_fixes.cpp"
     "patch/pnsrad_enabler.cpp"
     "patch/mic_provider.cpp"
+    "patch/party_invite_gate.cpp"
+    "patch/social_facade.cpp"
+    "patch/social_facade_object.cpp"
     "log/builtin_filter.cpp"
     "log/symcache.cpp"
     "log/symcache_data.cpp"
@@ -65,6 +70,7 @@ set(PATCHES_HEADERS
     "lifecycle/config.h"
     "lifecycle/service_map.h"
     "lifecycle/service_config.h"
+    "lifecycle/login_redirect_override.h"
     "patch/mode_patches.h"
     "patch/broadcaster_hook_stats.h"
     "lifecycle/crash_recovery.h"
@@ -88,6 +94,9 @@ set(PATCHES_HEADERS
     "patch/binary_bug_fixes.h"
     "patch/pnsrad_enabler.h"
     "patch/mic_provider.h"
+    "patch/party_invite_gate.h"
+    "patch/social_facade.h"
+    "patch/social_facade_install.h"
     "log/builtin_filter.h"
     "log/symcache.h"
     "log/url_diagnostics.h"
@@ -135,8 +144,9 @@ find_package(CURL REQUIRED)
 find_package(ixwebsocket CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(miniupnpc CONFIG REQUIRED)
+find_package(zstd CONFIG REQUIRED)  # the friend-name lookup decodes the profile reply (compat/social_names.cpp)
 
-target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 platform_compat token_auth ole32)
+target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version zstd::libzstd CURL::libcurl ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json miniupnpc::miniupnpc nevr_api ws2_32 platform_compat token_auth ole32)
 
 # yaml-cpp backs src/core/nevr_config (compiled into nevr_core as an archive with
 # unresolved yaml symbols). The DLL is where those symbols get resolved — this is
@@ -145,17 +155,28 @@ target_link_libraries(nevr_runtime PRIVATE minhook nevr_core version CURL::libcu
 target_link_libraries(nevr_runtime PRIVATE yaml-cpp::yaml-cpp)
 
 # Disable PCH for files using ixwebsocket/nlohmann-json — headers conflict with Windows.h macros
-set_source_files_properties(ws_bridge.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(ws_bridge.cpp compat/social_names.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N133 S3: service_map.cpp (pure, yaml-cpp-free but must stay PCH-agnostic so the
 # test can link it) and service_config.cpp (defines NOMINMAX before windows.h, as
 # the core PCH pulls windows.h WITHOUT NOMINMAX and its min/max macros break
 # <optional>/<set>). Same reason nevr_config.cpp skips the PCH.
-set_source_files_properties(lifecycle/service_map.cpp lifecycle/service_config.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(lifecycle/service_map.cpp lifecycle/service_config.cpp lifecycle/login_redirect_override.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N134 S6: plugin_load_plan.cpp is the pure builder — nevr_config + nlohmann-json,
 # no windows.h. Same reason as service_map.cpp: it must stay PCH-agnostic (defines
 # NOMINMAX before nlohmann, which pulls <limits>) so the test links it standalone.
 set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(log/url_diagnostics.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+
+# Scenario-test control endpoint (docs/design/2026-10-01-social-scenario-harness.md). It can inject
+# messages into a live session, so it is OFF by default and only the mingw-scenario preset turns it
+# on; `just verify` checks the release DLL carries none of its strings.
+option(NEVR_SCENARIO_CONTROL "Compile the scenario-test control endpoint into BugSplat64.dll (test builds only)" OFF)
+if(NEVR_SCENARIO_CONTROL)
+  target_sources(nevr_runtime PRIVATE scenario/scenario_control.cpp)
+  target_compile_definitions(nevr_runtime PRIVATE NEVR_SCENARIO_CONTROL=1)
+  set_source_files_properties(scenario/scenario_control.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  message(STATUS "NEVR_SCENARIO_CONTROL=ON: BugSplat64.dll carries the scenario control endpoint (test build)")
+endif()
 
 set_target_properties(nevr_runtime PROPERTIES
   OUTPUT_NAME "BugSplat64"
@@ -238,6 +259,15 @@ if(BUILD_TESTING)
     target_include_directories(test_system_module_loader PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_system_module_loader PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_system_module_loader DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_login_redirect_override
+      tests/test_login_redirect_override.cpp
+      lifecycle/login_redirect_override.cpp)
+    set_source_files_properties(tests/test_login_redirect_override.cpp lifecycle/login_redirect_override.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_login_redirect_override PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_login_redirect_override PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_login_redirect_override DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_websocket_frame
       tests/test_websocket_frame.cpp
@@ -383,8 +413,31 @@ if(BUILD_TESTING)
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_service_map PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_service_map PRIVATE
-      GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp)
+      GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_service_map DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_social_facade
+      tests/test_social_facade.cpp
+      patch/social_facade_object.cpp
+      compat/social_names.cpp)
+    target_compile_definitions(test_social_facade PRIVATE NEVR_TEST_HOOKS USE_MINHOOK)
+    set_source_files_properties(tests/test_social_facade.cpp patch/social_facade_object.cpp compat/social_names.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_social_facade PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_social_facade PRIVATE
+      GTest::gtest GTest::gtest_main nevr_core minhook zstd::libzstd nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_social_facade DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp)
+    target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_schannel_cred_guard PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_schannel_cred_guard DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_hooking tests/test_hooking.cpp)
+    target_compile_definitions(test_hooking PRIVATE USE_MINHOOK)
+    target_include_directories(test_hooking PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_hooking PRIVATE GTest::gtest GTest::gtest_main minhook)
+    gtest_discover_tests(test_hooking DISCOVERY_MODE PRE_TEST)
 
     # plugin_load_plan tests (N134 S6) — the PURE core of the config-driven plugin
     # loader: BuildLoadPlan (ordered/enabled-only selection, file defaulting,

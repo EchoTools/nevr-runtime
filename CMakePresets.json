@@ -90,6 +90,14 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release"
             }
+        },
+        {
+            "name": "mingw-scenario",
+            "displayName": "MinGW Release + scenario control endpoint (test only, never ship)",
+            "inherits": "mingw-release",
+            "cacheVariables": {
+                "NEVR_SCENARIO_CONTROL": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -122,6 +130,11 @@
             "name": "mingw-release",
             "displayName": "Build MinGW (Release)",
             "configurePreset": "mingw-release"
+        },
+        {
+            "name": "mingw-scenario",
+            "displayName": "Build MinGW (Release + scenario control, test only)",
+            "configurePreset": "mingw-scenario"
         }
     ]
 }

@@ -5,6 +5,9 @@
 #include "runtime/lifecycle/crash_recovery.h"
 #include "runtime/lifecycle/initialize.h"
 #include "runtime/patch/mode_patches.h"
+#ifdef NEVR_SCENARIO_CONTROL
+#include "runtime/scenario/scenario_control.h"
+#endif
 #include "runtime/patch/xpid_patch.h"
 #include "runtime/patch/resource_override.h"
 #include "runtime/patch/asset_cdn.h"
@@ -513,8 +516,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       InstallWebSocketBridge();
     } else {
       Log(EchoVR::LogLevel::Warning,
-          "[NEVR.WS] no services.socket_uri in config.yaml — bridge NOT started; the game "
-          "will talk to services directly and login injection cannot fire");
+          "[NEVR.WS] no services.socket_uri (neither config.yaml nor an embedded build default) "
+          "— bridge NOT started; the game will talk to services directly and login injection "
+          "cannot fire");
     }
   }
 
@@ -536,4 +540,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       g_earlyConfigPtr != nullptr ? "true" : "false", IsWebSocketBridgeActive() ? "true" : "false",
       static_cast<unsigned>(GetWebSocketBridgePort()));
 
+#ifdef NEVR_SCENARIO_CONTROL
+  ScenarioControl::Start();  // test builds only (mingw-scenario preset)
+#endif
 }

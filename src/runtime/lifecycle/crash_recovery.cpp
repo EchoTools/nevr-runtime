@@ -1,4 +1,7 @@
 #include "runtime/lifecycle/crash_recovery.h"
+#ifdef NEVR_SCENARIO_CONTROL
+#include "runtime/scenario/scenario_control.h"
+#endif
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/lifecycle/crash_recovery_sites.h"
@@ -66,11 +69,20 @@ static VOID GameMainWrapperHook(INT64 arg1) {
   // Run the game main loop
   GameMain(arg1);
 
-  // If we get here, the game loop returned normally (shouldn't happen)
+  // The game loop returned on its own: the player quit (closed the window, chose Exit) or the game
+  // ended its session. A client has nothing left to run, so return and let the process exit; the
+  // hold below is only for a dedicated server, where a supervisor watches the broadcaster/HTTP API
+  // and is the one to restart it. (The hold used to apply to clients too, so a closed client kept
+  // running with no window on Windows and under Wine.)
   g_gameLoopJmpBufValid = false;
+  if (!g_isServer) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] game loop returned: the client is exiting (no server hold outside server mode)");
+    return;
+  }
   Log(EchoVR::LogLevel::Warning,
-      "[NEVR.PATCH] game loop returned unexpectedly (should never return) — entering server "
-      "hold; game loop will not run again");
+      "[NEVR.PATCH] game loop returned on a server (the loop should only end by crash or shutdown) — "
+      "entering server hold; game loop will not run again");
   while (true) {
     Sleep(1000);
   }
@@ -420,7 +432,7 @@ static void WriteCrashDump(PEXCEPTION_POINTERS ex) {
   const INT64 ripRva = rva(ctx->Rip);
   VehPrintf("[NEVR.CRASH] === CRASH DUMP ===");
   if (const char* site = CrashRecovery::LookupKnownNullDerefSite(ripRva)) {
-    VehPrintf("[NEVR.CRASH] known_site=%s class=session_flags_null_deref ledger=N71 "
+    VehPrintf("[NEVR.CRASH] known_site=%s class=session_flags_null_deref "
               "note=*(this+0x2DA0) dereferenced without a null check",
               site);
   }
@@ -1033,8 +1045,8 @@ void InstallConsoleCtrlHandler() {
   if (signal(SIGINT, PosixSignalHandler) == SIG_ERR) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] SIGINT handler registration failed (signal()) — no effect under Wine "
-        "(SIGINT is delivered via the console ctrl handler there, not the CRT signal table, per "
-        "N87); would block POSIX-path shutdown on native Windows");
+        "(SIGINT is delivered via the console ctrl handler there, not the CRT signal table); "
+        "would block POSIX-path shutdown on native Windows");
   }
   if (signal(SIGTERM, PosixSignalHandler) == SIG_ERR) {
     Log(EchoVR::LogLevel::Warning,
@@ -1118,7 +1130,7 @@ void InstallFatalErrorHandler() {
 void ResolveShutdownDependencies() {
   Log(EchoVR::LogLevel::Info,
       "[NEVR.PATCH] shutdown deps resolved ws_bridge=in-process "
-      "StopWebSocketBridgeListener=direct (no loader lock on the signal path, N62/N105)");
+      "StopWebSocketBridgeListener=direct (no loader lock on the signal path)");
 }
 
 // N62: report from the shutdown path using a transport that is safe for the
@@ -1179,6 +1191,9 @@ void PerformGracefulShutdown(unsigned int exitCode) {
     StopWebSocketBridgeListener();
     ShutdownReport(EchoVR::LogLevel::Info, "[NEVR.PATCH] ws_bridge listener stopped — socket released");
   }
+#ifdef NEVR_SCENARIO_CONTROL
+  ScenarioControl::Stop();  // test builds only
+#endif
 
   // 2. Unhook MinHook hooks installed by BinaryBugFixes.
   BinaryBugFixes::Shutdown();

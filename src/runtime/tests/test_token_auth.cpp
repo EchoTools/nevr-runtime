@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
@@ -9,10 +10,12 @@
 #include <optional>
 #include <string>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include "core/auth_token.h"
+#include "auth_snapshot.h"
 #include "device_poll_response.h"
 #include "extension/module_interface.h"
 #include "token_auth.h"
@@ -831,16 +834,23 @@ TEST(TokenAuthModule, ServerHostSkipsDeviceAuthentication) {
   const NvrModuleContext context = MakeModuleContext(NEVR_MODULE_HOST_IS_SERVER);
 
   EXPECT_EQ(token_auth_Init(&context), 0);
+  const auto snapshot = TokenAuth::GetAuthSnapshot();
+  ASSERT_NE(snapshot, nullptr);
+  EXPECT_EQ(snapshot->readiness, TokenAuth::AuthReadiness::Disabled);
   EXPECT_TRUE(TokenAuth::GetToken().empty());
   EXPECT_EQ(TokenAuth::GetDiscordId(), 0U);
   EXPECT_TRUE(TokenAuth::GetUsername().empty());
   token_auth_Shutdown();
+  EXPECT_EQ(TokenAuth::GetAuthSnapshot()->readiness, TokenAuth::AuthReadiness::Disabled);
 }
 
 TEST(TokenAuthModule, ClientWithoutRequiredConfigDisablesCleanly) {
   const NvrModuleContext context = MakeModuleContext(NEVR_MODULE_HOST_IS_CLIENT);
 
   EXPECT_EQ(token_auth_Init(&context), 0);
+  const auto snapshot = TokenAuth::GetAuthSnapshot();
+  ASSERT_NE(snapshot, nullptr);
+  EXPECT_EQ(snapshot->readiness, TokenAuth::AuthReadiness::Disabled);
   EXPECT_TRUE(TokenAuth::GetToken().empty());
   EXPECT_EQ(TokenAuth::GetDiscordId(), 0U);
   EXPECT_TRUE(TokenAuth::GetUsername().empty());
@@ -849,6 +859,98 @@ TEST(TokenAuthModule, ClientWithoutRequiredConfigDisablesCleanly) {
 
 TEST(TokenAuthModule, ReportsThePublishedModuleApiVersion) {
   EXPECT_EQ(token_auth_ApiVersion(), NEVR_MODULE_API_VERSION);
+}
+
+TEST(AuthSnapshotStore, PublishedSnapshotIsImmutableAndGetsANewGeneration) {
+  TokenAuth::AuthSnapshotStore store;
+  const auto initial = store.Read();
+  ASSERT_NE(initial, nullptr);
+  EXPECT_EQ(initial->generation, 0U);
+
+  TokenAuth::AuthSnapshot first;
+  first.readiness = TokenAuth::AuthReadiness::Ready;
+  first.access_token = "token-first";
+  first.access_expiry = 1000;
+  first.discord_id = 11;
+  first.user_id = "user-first";
+  first.username = "name-first";
+  const auto publishedFirst = store.Publish(std::move(first));
+
+  TokenAuth::AuthSnapshot second;
+  second.readiness = TokenAuth::AuthReadiness::Ready;
+  second.access_token = "token-second";
+  second.access_expiry = 2000;
+  second.discord_id = 22;
+  second.user_id = "user-second";
+  second.username = "name-second";
+  const auto publishedSecond = store.Publish(std::move(second));
+
+  ASSERT_NE(publishedFirst, nullptr);
+  ASSERT_NE(publishedSecond, nullptr);
+  EXPECT_LT(publishedFirst->generation, publishedSecond->generation);
+  EXPECT_EQ(store.Read(), publishedSecond);
+  EXPECT_EQ(publishedFirst->access_token, "token-first");
+  EXPECT_EQ(publishedFirst->access_expiry, 1000U);
+  EXPECT_EQ(publishedFirst->discord_id, 11U);
+  EXPECT_EQ(publishedFirst->user_id, "user-first");
+  EXPECT_EQ(publishedFirst->username, "name-first");
+}
+
+TEST(AuthSnapshotStore, ConcurrentReadersNeverObserveMixedGenerations) {
+  TokenAuth::AuthSnapshotStore store;
+  std::atomic<bool> done{false};
+  std::atomic<bool> mismatch{false};
+  constexpr uint64_t kPublishCount = 20000;
+
+  auto reader = [&store, &done, &mismatch] {
+    while (!done.load(std::memory_order_acquire)) {
+      const auto snapshot = store.Read();
+      if (snapshot->generation == 0) continue;
+      const std::string expectedToken = "token-" + std::to_string(snapshot->discord_id);
+      const std::string expectedUser = "user-" + std::to_string(snapshot->discord_id);
+      const std::string expectedName = "name-" + std::to_string(snapshot->discord_id);
+      if (snapshot->access_token != expectedToken ||
+          snapshot->access_expiry != snapshot->discord_id + 1000U ||
+          snapshot->user_id != expectedUser || snapshot->username != expectedName) {
+        mismatch.store(true, std::memory_order_release);
+        return;
+      }
+    }
+  };
+
+  std::thread readerOne(reader);
+  std::thread readerTwo(reader);
+  for (uint64_t id = 1; id <= kPublishCount; ++id) {
+    TokenAuth::AuthSnapshot snapshot;
+    snapshot.readiness = TokenAuth::AuthReadiness::Ready;
+    snapshot.access_token = "token-" + std::to_string(id);
+    snapshot.access_expiry = id + 1000U;
+    snapshot.discord_id = id;
+    snapshot.user_id = "user-" + std::to_string(id);
+    snapshot.username = "name-" + std::to_string(id);
+    (void)store.Publish(std::move(snapshot));
+  }
+  done.store(true, std::memory_order_release);
+  readerOne.join();
+  readerTwo.join();
+  EXPECT_FALSE(mismatch.load(std::memory_order_acquire));
+}
+
+TEST(AuthCancellation, StopRequestWakesWaitersAndRemainsObservable) {
+  TokenAuth::AuthCancellation cancellation;
+  std::atomic<bool> enteredWait{false};
+  std::atomic<bool> wokeForStop{false};
+  std::thread waiter([&] {
+    enteredWait.store(true, std::memory_order_release);
+    wokeForStop.store(cancellation.WaitFor(std::chrono::hours(1)), std::memory_order_release);
+  });
+  while (!enteredWait.load(std::memory_order_acquire)) std::this_thread::yield();
+  cancellation.RequestStop();
+  waiter.join();
+
+  EXPECT_TRUE(wokeForStop.load(std::memory_order_acquire));
+  EXPECT_TRUE(cancellation.IsStopRequested());
+  EXPECT_TRUE(cancellation.WaitFor(std::chrono::milliseconds(0)));
 }
 
 // Issue #23: Load and Save must select the same credentials directory. Existing

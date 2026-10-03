@@ -69,3 +69,20 @@ every client as the bridge gateway, so nakama's `client_ip` cannot identify the 
 
 - Server registration (`regions=` / guild registration) and the matchmaker path.
 - Which User-Agent each client sends (nakama #629).
+
+## Running unreleased server code
+
+`just nakama-dev-up` builds nakama from source (`NAKAMA_SRC`, default the social feature worktree
+`~/src/nakama-worktrees/nevr-social` on branch `feat/nevr-social`) as a static binary in
+`/var/tmp/work-nevr-runtime/nakama-dev/`, and restarts the same container with that binary mounted over
+the image's (`tools/nakama-local/docker-compose.dev.yml`): same config, same database, nothing built
+into an image, nothing pushed. Its log names the build (`"version":"nevr-local-<commit>+dev"`).
+
+A scenario with `server: local` (`tools/scenario/run_scenario.py`) runs the Wine client against it:
+the runner writes an empty game JSON and a runtime `config.yaml` (the seeded identity, the server key
+in `socket_uri`) to `/var/tmp/work-nevr-runtime/local-server/` and starts the game with
+`-config` on it (`launch-client.sh --config`); the game directory stays pristine. There are no game
+servers locally, so such scenarios start from "logged in", not from a social lobby.
+`just scenario-all` starts and seeds the local stack before the suite. Verified 2026-10-01: the local
+nakama logged `"Login client" nevr_runtime=v4.0.0-134-g0860a6e-dirty nevr_social=1` and made the
+game's party (`local_login`, run 20261001T233212).

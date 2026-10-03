@@ -46,6 +46,8 @@ just test-auth-groundtruth    # Auth ground truth (no game binary, no network)
 just test-auth-unit           # C++ GTest under Wine (build with -DBUILD_TESTING=ON)
 just test-auth-integration    # Auth integration (needs game binary + MCP harness)
 
+just scenario invite          # One social scenario end to end, unattended (docs/design/2026-10-01-social-scenario-harness.md)
+just scenario-all             # Every social scenario in turn, one PASS/FAIL table (tools/scenario/run_all.py)
 just test-winvm               # Built runtime on a native Windows VM (needs WINVM_USER/WINVM_PASS; docs/reference/windows-vm-system-test.md)
 ```
 
@@ -83,6 +85,7 @@ The runtime replaces the original BugSplat64 crash reporter DLL — the game sta
 | `src/runtime/ext/` | plugin_loader, module_loader | loading other people's DLLs |
 | `src/runtime/log/` | boot_log_tee, builtin_filter | log capture and filtering |
 | `src/runtime/link/` | dbghelp_stubs.cpp, bcrypt_minimal.def | not code we run — code the *linker* needs |
+| `src/runtime/scenario/` | scenario_control (test builds only), scenario_protocol | lets a test drive the running game; compiled in only by the `mingw-scenario` preset, never shipped |
 
 **Includes are path-qualified from `src/`** (`#include "runtime/hook/addresses.h"`).
 `src/runtime/CMakeLists.txt` deliberately does NOT put its own directory on the
@@ -248,8 +251,21 @@ This applies regardless of context — even if the task seems to require it, eve
 ## System test after every commit
 
 - **Run `./launch-client.sh` against the production server** after every commit that touches runtime code. The game must render a window AND complete login (`LOGGED IN` or `NetGame switching state (from logging in, to logged in)` or Nakama-side `login_success` metric). A build that doesn't log in is NOT done.
+- **Client runs go on the nested display, never `:0`.** `:0` is the owner's main display. Run plain `wine` (no `gamescope`) as `env -u WAYLAND_DISPLAY DISPLAY=:101 wine ./echovr.exe …` against `Xephyr :101 -screen 1920x1080`, and confirm `Xephyr :101` is in `ps` first. `DISPLAY` alone is not enough: under Wayland (`WAYLAND_DISPLAY=wayland-1`) gamescope ignores it and opens on the owner's desktop (`xdg_backend: Initted Wayland backend`, seat `Hyprland`). Any run without `WAYLAND_DISPLAY` unset and `DISPLAY=:101` is a violation.
+- **Hand/mouse input does not reach menu buttons under Xephyr.** Measured 2026-09-30 with one build: Find Arena, Find Combat and Private were inert under `Xephyr :101` (no request reached Nakama), and worked on the main display (`Requesting search for a public session of gametype echo_arena`, `finding -> lobby join queued`). Boot, login and lobby joins need no input and run fine nested. A check that needs input needs the owner's explicit go for a main-display run, stated for that run; it never becomes the default.
 - **Check production Nakama logs** when login fails. The server logs the exact parse error. Guessing from the client side is waste.
 - **`just verify` is necessary but not sufficient.** It catches C++ compile/test/pattern errors. It does NOT catch wire-format bugs, login failures, or rendering regressions. The system test covers what `just verify` cannot.
+
+## Analysis: read what the program wrote, before anything else
+
+When something fails, the first act is reading the failing program's **own** logs. Console captures, your own summaries, and reading code come after, and never instead.
+
+- **Every component writes its own log. Find where from the component itself:** the logger's configured path, its config files, the environment it runs in (a Wine prefix, a container, a service unit), and its command-line flags. Don't guess, and don't `find` across a home directory. If this file or a runbook already names the path, use that.
+- **Read every log the run produced, on each side of each boundary the failure crosses:** the game or engine, this runtime, any local bridge or helper, and the server. A login failure has at least a client side and a server side.
+- **Match the log to the run.** Newest first, and confirm by timestamp, PID or session id that it belongs to the run you're analyzing before you quote it.
+- **Quote exact lines with `path:line`** in every finding. Captured stdout is a secondary source; say so when it's all you have.
+- **A fix is verified only when the program's own log for a run after the change shows the expected state.** A clean build, a passing unit test, or a quiet console isn't that evidence.
+- **If you can't find where a component logs after reading its code and config, stop and ask sprockee.** Don't fill the gap with console output or inference.
 
 ## No hand-built serialization
 
@@ -288,15 +304,22 @@ the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), wh
   acknowledged. New defects go to GitHub issues. The N-ID namespace is closed —
   no new N-entries should be created. (Basis: owner decision 2026-08-02 to retire
   the file-based ledger in favor of GitHub issues.)
-- **Commit identity.** Author `agents@sprock.io`, unsigned (`--no-gpg-sign`),
-  with a single `Co-authored-by: Andrew Bates <a@sprock.io>` trailer, a
-  conventional prefix, and one logical change per commit. You **shall** verify
-  after each commit: `git log --format='%h %G? %an %ae' -1`. You **shall not**
-  commit as the owner's name/email.
+- **Commit identity.** Author `Andrew Bates <a@sprock.io>`
+  (`--author="Andrew Bates <a@sprock.io>"`), unsigned (`--no-gpg-sign`), with a
+  single `Co-Authored-By: <agent name> <agents@sprock.io>` trailer, a
+  conventional prefix, and one logical change per commit. Exception: work by
+  Teth, Spritz or Glow Sprock is authored by that sister, with
+  `Co-Authored-By: Andrew Bates <a@sprock.io>`. You **shall** verify after each
+  commit: `git log --format='%h %G? %an %ae %(trailers:key=Co-Authored-By,valueonly)' -1`.
+  (Owner ruling 2026-10-01, verbatim: "if not Teth/Spritz/Glow Sprock: Andrew
+  Bates as author, agents@sprock.io as the co-author; else: Teth/Spritz/Glow
+  Sprock as author, andrew bates as co-author". This supersedes RULINGS.md
+  2026-07-20 "Commit identity (nevr)", which had the agent as author and
+  forbade committing as the owner. Commits before 2026-10-01 carry the old
+  shape and are left as they are.)
   (Updated 2026-07-26 by owner instruction: the `Metis Sprock <m@sprock.io>`
   trailer was dropped — she was not involved in this work. Commits before
   `624f795` carry it and are left as they are.)
-  (Basis: RULINGS.md 2026-07-20 "Commit identity (nevr)".)
 - **Mandatory pre-read gate.** Before any C++/build work, read the project's
   CPP-MINGW-ADDENDUM in full — its Hard-Stops bind every build/config change.
 - **Scratch dir.** All agent scratch/staging/evidence files live under

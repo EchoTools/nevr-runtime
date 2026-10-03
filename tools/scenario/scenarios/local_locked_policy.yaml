@@ -1,0 +1,29 @@
+# A locked party whose leader also set a restrictive policy queues a join silently (owner, 2026-10-01:
+# a locked party keeps today's queue with no reply, whatever the policy; the lock is checked before
+# the policy). Peer 1 leads a party set to invite only and locked; this client joins it by id; nakama
+# queues the request for the leader's approval and sends nothing; the client stays in its own party.
+name: local_locked_policy
+server: local
+peers: 1
+description: join a peer's locked invite-only party; see it queued silently, not refused
+steps:
+  - name: logged in to the local nakama
+    wait_log: {pattern: 'NetGame switching state \(from logging in, to logged in\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 30}
+  - name: the client's own party
+    state_until: {party_joinable: true, timeout: 60, save: {party_before: party.id}}
+  - name: peer 1 makes a party
+    peer: {id: 1, do: create_party, save: {peer_party: party}}
+  - name: peer 1 sets it to invite only
+    peer: {id: 1, do: set_policy, arg: 0}
+  - name: peer 1 locks it
+    peer: {id: 1, do: lock}
+  - name: the client joins it by id
+    fire: {action: party_join, party: '${peer_party}'}
+  - name: nakama queued the join for approval, not refused
+    nakama_log: {pattern: '"msg":"Party join request pending approval"', timeout: 15}
+  - name: the client is still waiting, in the same party
+    state_until: {path: party.id, equals: '${party_before}', timeout: 15}
+  - name: and still joining (no refusal arrived)
+    state_until: {party_joining: true, timeout: 5}

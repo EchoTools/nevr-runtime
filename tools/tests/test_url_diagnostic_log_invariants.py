@@ -53,7 +53,7 @@ class UrlDiagnosticLogInvariantTest(unittest.TestCase):
             'LogDiagnostics::FormatRedactedUrlPairDiagnostic(\n      "[NEVR.PATCH] auto-relay ["',
             'LogDiagnostics::FormatRedactedUrlPairDiagnostic(\n          "[NEVR.PATCH] HTTP(S) connection redirected: "',
             'LogDiagnostics::FormatRedactedUrlPairDiagnostic(\n      "[NEVR.PATCH] service redirect key="',
-            'LogDiagnostics::FormatRedactedUrlPairDiagnostic(\n            "[NEVR.PATCH] config override key="',
+            'LogDiagnostics::FormatRedactedUrlPairDiagnostic(\n          "[NEVR.PATCH] config override key="',
         )
 
     def test_json_lookup_pre_redirect_path_does_not_log_or_parse_urls(self):
@@ -63,12 +63,22 @@ class UrlDiagnosticLogInvariantTest(unittest.TestCase):
         pre_redirect = source[start:redirect_call]
         self.assertNotIn("Log(", pre_redirect)
         self.assertNotIn("UrlDiagnostic", pre_redirect)
-        override_start = source.index("if (override != NULL && override[0] != '\\0')", redirect_call)
-        override_return = source.index("return override;", override_start)
-        override_block = source[override_start:override_return]
-        self.assertIn("if (s_serviceRedirectsArmed.load(std::memory_order_acquire))", override_block)
-        self.assertIn("LogDiagnostics::FormatRedactedUrlPairDiagnostic(", override_block)
-        self.assertIn("Log(EchoVR::LogLevel::Info, \"%s\", diagnostic.c_str());", override_block)
+        hook = source[start:]
+        self.assertIn(
+            "const BOOL mayReadOverride = g_earlyConfigPtr != NULL && keyName != NULL &&\n"
+            "                               root != g_earlyConfigPtr && result == defaultValue;",
+            hook,
+        )
+        self.assertIn("if (mayReadOverride) override = EchoVR::JsonValueAsString", hook)
+        self.assertIn("nevr::lifecycle::ApplyLoginRedirectOverride(overrideInput", hook)
+        self.assertIn(
+            "if (overrideOutcome.action == nevr::lifecycle::LoginRedirectOverrideAction::UseOverride)",
+            hook,
+        )
+        self.assertIn("LogDiagnostics::FormatRedactedUrlPairDiagnostic(", hook)
+        self.assertIn("overrideOutcome.value ? overrideOutcome.value : \"\"", hook)
+        self.assertIn("return const_cast<CHAR*>(overrideOutcome.value);", hook)
+        self.assertIn("Log(EchoVR::LogLevel::Info, \"%s\", diagnostic.c_str());", hook)
 
 
 if __name__ == "__main__":

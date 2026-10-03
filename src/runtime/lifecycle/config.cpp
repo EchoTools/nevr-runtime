@@ -1,4 +1,5 @@
 #include "runtime/lifecycle/config.h"
+#include "runtime/lifecycle/login_redirect_override.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/lifecycle/cli.h"
@@ -147,9 +148,31 @@ UINT64 LoadLocalConfigHook(PVOID pGame) {
       }
 
       if (configDest->root == NULL) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] game config.json not found in %s_local\\, ..\\_local\\, or ..\\..\\_local\\",
-            moduleDir);
+        // No config.json anywhere. The game reads its social layer settings (friends, parties,
+        // presence) from that file, so without it those features are off. Hand the game the same
+        // settings in memory through its own buffer parser (the path its file loader ends in),
+        // built from config.yaml / the build's embedded defaults. The content holds the server
+        // key and is never logged.
+        const CHAR* builtIn = NevrCfgGameNativeConfigJson();
+        if (builtIn != NULL) {
+          const UINT32 loadResult = EchoVR::LoadJsonFromBuffer(
+              configDest, builtIn, static_cast<INT64>(strlen(builtIn)));
+          if (loadResult == 0 && configDest->root != NULL) {
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.PATCH] no game config.json: supplied the built-in game config "
+                "(social_plugin: friends, parties, presence, matchmaking)");
+            result = 0;
+          } else {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.PATCH] no game config.json and the built-in game config failed to load "
+                "(parser returned %u): friends and parties stay off", static_cast<unsigned>(loadResult));
+          }
+        } else {
+          Log(EchoVR::LogLevel::Warning,
+              "[NEVR.PATCH] game config.json not found in %s_local\\, ..\\_local\\, or ..\\..\\_local\\ "
+              "and no built-in game config is available (friends and parties stay off)",
+              moduleDir);
+        }
       }
     } else {
       Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] game config.json loaded from default location");
@@ -411,6 +434,10 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
 //   https:// URLs → nevr_http_uri (HTTP API endpoint)
 static std::atomic<bool> s_serviceRedirectsArmed{false};
 
+static const char* ResolveLoginOverrideBridgeUrl(void*, uint16_t bridgePort) {
+  return NevrCfgAutoRelay(bridgePort);
+}
+
 VOID ArmServiceRedirects() { s_serviceRedirectsArmed.store(true, std::memory_order_release); }
 
 static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
@@ -452,20 +479,38 @@ CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValu
   // Redirect any readyatdawn.com service URLs to echovrce.com
   result = RedirectServiceUrl(keyName, result);
 
-  // If we have an early config, check if it has an override for this key.
-  // Only override when the result equals the default (meaning the game's config didn't have it).
-  // Don't override lookups against our own early config (avoid infinite loop).
-  if (g_earlyConfigPtr != NULL && keyName != NULL && root != g_earlyConfigPtr && result == defaultValue) {
-    CHAR* override = EchoVR::JsonValueAsString(g_earlyConfigPtr, keyName, NULL, false);
-    if (override != NULL && override[0] != '\0') {
-      if (s_serviceRedirectsArmed.load(std::memory_order_acquire)) {
-        const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
-            "[NEVR.PATCH] config override key=" + std::string(keyName) + " from=", result ? result : "", " to=",
-            override);
-        Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
-      }
-      return override;
+  // Preserve the original pointer-based config gates: content equality is not
+  // equivalent here because the game uses the exact default pointer as its
+  // missing-key signal. JSON is read only after all three guards pass.
+  CHAR* override = NULL;
+  const BOOL mayReadOverride = g_earlyConfigPtr != NULL && keyName != NULL &&
+                               root != g_earlyConfigPtr && result == defaultValue;
+  if (mayReadOverride) override = EchoVR::JsonValueAsString(g_earlyConfigPtr, keyName, NULL, false);
+
+  nevr::lifecycle::LoginRedirectOverrideInput overrideInput;
+  overrideInput.result = result;
+  overrideInput.defaultValue = defaultValue;
+  overrideInput.overrideValue = override;
+  overrideInput.keyName = keyName;
+  overrideInput.earlyConfigPresent = g_earlyConfigPtr != NULL;
+  overrideInput.rootIsEarlyConfig = root == g_earlyConfigPtr;
+  overrideInput.redirectsArmed = s_serviceRedirectsArmed.load(std::memory_order_acquire);
+  overrideInput.bridgeActive = IsWebSocketBridgeActive();
+  overrideInput.bridgePort = GetWebSocketBridgePort();
+  if (nevr::lifecycle::ShouldResolveLoginRedirectOverride(overrideInput)) {
+    overrideInput.socketUri = NevrCfgGetFlat("nevr_socket_uri");
+  }
+
+  const nevr::lifecycle::LoginRedirectOverrideOutcome overrideOutcome =
+      nevr::lifecycle::ApplyLoginRedirectOverride(overrideInput, ResolveLoginOverrideBridgeUrl, nullptr);
+  if (overrideOutcome.action == nevr::lifecycle::LoginRedirectOverrideAction::UseOverride) {
+    if (overrideInput.redirectsArmed) {
+      const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(
+          "[NEVR.PATCH] config override key=" + std::string(keyName) + " from=", result ? result : "", " to=",
+          overrideOutcome.value ? overrideOutcome.value : "");
+      Log(EchoVR::LogLevel::Info, "%s", diagnostic.c_str());
     }
+    return const_cast<CHAR*>(overrideOutcome.value);
   }
 
   // Issue #21: _local/config.json is optional, and it used to be the only source

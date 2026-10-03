@@ -1004,7 +1004,7 @@ static void MaybeEmitHealth() {
                                 "[NEVR.LOGFILTER] CAPTURED ZERO GAME LINES this interval "
                                 "(total=%llu) — the CLog hook is installed but receiving "
                                 "nothing. Another module has almost certainly taken the target "
-                                "(N89). Filtering, truncation and file logging are all inert.",
+                                "Filtering, truncation and file logging are all inert.",
                                 static_cast<unsigned long long>(gameLines));
         if (wn > 0) EmitLine(LOG_LEVEL_WARNING, warn, wn);
     }

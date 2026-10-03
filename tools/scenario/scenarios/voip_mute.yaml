@@ -1,0 +1,33 @@
+# Voice mute. Test plan #26.
+# Self: R15NetVoipMuteSelfNode (0x140de5fc0) posts 0x1401b24a0 with the flag: bit 38 of the voice flags
+# word ([netGame+0x2da0]) and delegate_onvoipmuted / delegate_onvoipunmuted. Local only.
+# User: R15NetVoipMuteUserNode (0x140de6110 -> 0x140f47cd0), for a user not in a lobby slot, ends in
+# 0x1401cc930(netGame, id, mute): the mute list ([netGame+0x64780], count +0x64788) and the profile key
+# "mute|users". The user is synthetic and is unmuted again, so the list ends as it began.
+name: voip_mute
+description: mute and unmute the local user, then another user; see the flag, the events and the mute list
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: mute
+    fire: {action: voip_mute_self, mute: true}
+  - name: the game raised onvoipmuted
+    expect_log: {pattern: 'session event #\d+ id=0x[0-9a-f]+ delegate_onvoipmuted\b', timeout: 10}
+  - name: the self-muted flag is set
+    state_until: {path: game.self_muted, equals: true, timeout: 10}
+  - name: unmute
+    fire: {action: voip_mute_self, mute: false}
+  - name: the game raised onvoipunmuted
+    expect_log: {pattern: 'session event #\d+ id=0x[0-9a-f]+ delegate_onvoipunmuted\b', timeout: 10}
+  - name: the self-muted flag is clear
+    state_until: {path: game.self_muted, equals: false, timeout: 10}
+  - name: mute a user (synthetic)
+    fire: {action: voip_mute_user, user: 'OVR-ORG-1000000000000000010', mute: true}
+  - name: the user is in the game's mute list
+    state_until: {path: game.muted_users, contains: 1000000000000000010, timeout: 10}
+  - name: unmute the user
+    fire: {action: voip_mute_user, user: 'OVR-ORG-1000000000000000010', mute: false}
+  - name: the user left the mute list
+    state_until: {path: game.muted_users, lacks: 1000000000000000010, timeout: 10}

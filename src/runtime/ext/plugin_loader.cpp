@@ -177,7 +177,7 @@ void LoadPlugins() {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PLUGIN] SKIPPED %s — superseded by the built-in log filter. Loading it "
             "would install a second MinHook on CLog::PrintfImpl and silently disable both "
-            "file logging and max_line_length truncation (N89). Remove it from config.yaml.",
+            "file logging and max_line_length truncation. Remove it from config.yaml.",
             filename);
         continue;
       }
@@ -204,7 +204,7 @@ void LoadPlugins() {
     if (!hPlugin && GetLastError() == ERROR_INVALID_PARAMETER) {
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.PLUGIN] %s: restricted search flags unsupported — falling back to "
-          "default search order (N75 hardening inactive for this load)", filename);
+          "default search order (hardening inactive for this load)", filename);
       hPlugin = LoadLibraryA(path.c_str());
     }
     if (!hPlugin) {

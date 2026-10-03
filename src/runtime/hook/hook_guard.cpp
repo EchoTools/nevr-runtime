@@ -112,7 +112,7 @@ int VerifyAll(const char* context) {
     Log(EchoVR::LogLevel::Error,
         "[NEVR.PATCH] hook overwritten name=%s va=0x%llX after=%s "
         "expected=%s actual=%s — another module detoured an address gamepatches "
-        "already owns (N84)",
+        "already owns",
         s.name, static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(s.target)),
         context != nullptr ? context : "(unknown)", expected, actual);
   }

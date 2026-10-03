@@ -1,4 +1,7 @@
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/compat/social_names.h"
+#include "runtime/compat/social_party.h"
+#include "runtime/compat/social_roster.h"
 #include "runtime/hook/symbol_corpus.h"
 
 #include <ixwebsocket/IXNetSystem.h>
@@ -10,6 +13,7 @@
 #include <cstdio>
 #include <nlohmann/json.hpp>
 #include <cstring>
+#include <ctime>
 #include <memory>
 #include <limits>
 #include <mutex>
@@ -111,7 +115,11 @@ std::optional<LoginFailureDiagnostic> ReadLoginFailureDiagnostic(const std::stri
 // RedirectServiceUrl rewrites this to "ws://localhost:PORT" when the proxy is active.
 // The game's CWebSocket connects to the local server — no TLS needed.
 
-static std::unique_ptr<ix::WebSocketServer> g_server;
+// The ix objects below are deliberately never destroyed: a static destructor runs at
+// DLL_PROCESS_DETACH under the loader lock, and ix::WebSocket/WebSocketServer destructors stop and
+// join their worker threads there. Each holder is a leaked heap object so process exit skips them
+// (the OS reclaims the sockets); StopWebSocketBridgeListener is the real stop.
+static std::unique_ptr<ix::WebSocketServer>& g_server = *new std::unique_ptr<ix::WebSocketServer>();
 static std::string g_remoteUri;
 static uint16_t g_proxyPort = 0;
 static bool g_bridgeEnabled = false;
@@ -123,18 +131,49 @@ struct ProxyPair {
   std::vector<std::string> pendingToRemote;
   bool remoteOpen = false;
   bool loginInjected = false;  // true after we inject LoginRequest on this connection
+  int connIdx = -1;  // 0=config, 1=login, >=2=matchmaker (see g_connectionCount)
 };
+
+// Human-readable label for connIdx, for log lines — this is the ONLY place
+// that tells "connection ... closed" apart across config/login/matchmaker;
+// without it every closed-connection log line is ambiguous (all three
+// connections share one local bridge port per service, see RedirectServiceUrl).
+static const char* ConnLabel(int connIdx) {
+  switch (connIdx) {
+    case 0:  return "config";
+    case 1:  return "login";
+    default: return connIdx >= 2 ? "matchmaker" : "unknown";
+  }
+}
+
+// Name of a remote websocket's ready state, for log lines.
+static const char* RemoteStateName(ix::ReadyState state) {
+  switch (state) {
+    case ix::ReadyState::Connecting: return "connecting";
+    case ix::ReadyState::Open: return "open";
+    case ix::ReadyState::Closing: return "closing";
+    case ix::ReadyState::Closed: return "closed";
+  }
+  return "unknown";
+}
 
 static std::mutex g_pairsMutex;
 static std::atomic<int> g_connectionCount{0};  // tracks connection order (0=config, 1+=login)
-static std::unordered_map<ix::WebSocket*, std::unique_ptr<ProxyPair>> g_pairs;
+static auto& g_pairs = *new std::unordered_map<ix::WebSocket*, std::unique_ptr<ProxyPair>>();
+
+// Connection index of a game-side websocket (-1 when unknown), for log lines.
+static int ConnIdxOfGameWs(ix::WebSocket* gameWs) {
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  const auto it = g_pairs.find(gameWs);
+  return it == g_pairs.end() ? -1 : it->second->connIdx;
+}
 
 // The login connection's remote WS (conn=1). Connections after login (conn>=2,
 // e.g. matchmaker) reuse this so all traffic shares the same Nakama session.
 // The original game multiplexes config/login/matchmaker on one WS to one server;
 // Nakama correlates matchmaker allocations by session, so the matchmaker must
 // use the same authenticated session as login.
-static std::shared_ptr<ix::WebSocket> g_loginRemoteWs;
+static std::shared_ptr<ix::WebSocket>& g_loginRemoteWs = *new std::shared_ptr<ix::WebSocket>();
 
 // The active game-side WS that should receive server→game messages from the
 // login remote. Initially conn=1 (login), swapped to conn=2 (matchmaker) when
@@ -160,6 +199,80 @@ static uint64_t g_lastInjectedDiscordId = 0;
 // (conn>=2, matchmaker) closes.
 static ix::WebSocket* g_loginGameWs = nullptr;
 
+// Under g_pairsMutex. The game socket that frames from the shared login remote go to: the active one
+// (the newest connection sharing the remote), else the login connection; nullptr when neither is
+// still connected. The remote's message callback belongs to whichever connection opened last, and
+// that connection may have closed since (conn=3 closes after the lobby join), so the target is looked
+// up for every frame, never captured. Routing to the captured socket sent every reply after that
+// close to a dead connection: the game never saw its profile replies again (2026-10-01).
+static ProxyPair* SharedRouteLocked(ix::WebSocket** target) {
+  for (ix::WebSocket* ws : {g_activeGameWs, g_loginGameWs}) {
+    if (ws == nullptr) continue;
+    const auto it = g_pairs.find(ws);
+    if (it != g_pairs.end()) {
+      *target = ws;
+      return it->second.get();
+    }
+  }
+  *target = nullptr;
+  return nullptr;
+}
+
+// Under g_pairsMutex: the game closed `gameWs`. Clears the remote's callback where nothing else uses
+// that remote, forgets the pair, and moves server->game routing to the newest connection still
+// sharing the login remote. Returns the remote to stop OUTSIDE the lock (N60), for an unshared pair.
+static std::shared_ptr<ix::WebSocket> RetireGameWsLocked(ix::WebSocket* gameWs, int* closedConnIdx,
+                                                         bool* callbackCleared) {
+  std::shared_ptr<ix::WebSocket> remoteToStop;
+  auto it = g_pairs.find(gameWs);
+  if (it != g_pairs.end()) {
+    *closedConnIdx = it->second->connIdx;
+    const bool isShared = (it->second->remoteWs == g_loginRemoteWs);
+    if (!isShared) {
+      remoteToStop = it->second->remoteWs;
+      // N85: a no-op, NOT nullptr. ixwebsocket invokes _onMessageCallback unconditionally; an empty
+      // std::function throws std::bad_function_call out of ixwebsocket's thread and kills the
+      // dedicated server (confirmed from a crash-dump stack).
+      it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
+      *callbackCleared = true;
+    } else if (gameWs == g_loginGameWs) {
+      // N61: the login pair shares the remote with the matchmaker connections; clear the callback
+      // only if none of them is active, or matchmaker routing dies with it.
+      if (g_activeGameWs == nullptr || g_activeGameWs == gameWs) {
+        it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
+        *callbackCleared = true;
+      }
+    }
+    g_pairs.erase(it);
+  }
+  if (g_activeGameWs == gameWs) {
+    g_activeGameWs = nullptr;
+    int newest = -1;
+    for (const auto& entry : g_pairs) {
+      if (entry.first != g_loginGameWs && entry.second->remoteWs == g_loginRemoteWs && entry.second->connIdx > newest) {
+        newest = entry.second->connIdx;
+        g_activeGameWs = entry.first;
+      }
+    }
+    ix::WebSocket* target = nullptr;
+    const ProxyPair* route = SharedRouteLocked(&target);
+    Log(EchoVR::LogLevel::Info, "[NEVR.WS] server->game routing: conn=%d closed, frames from the login session now go to conn=%d",
+        *closedConnIdx, route != nullptr ? route->connIdx : -1);
+  }
+  return remoteToStop;
+}
+
+// A frame from the shared login remote with no live game connection to take it.
+static void LogSharedFrameDropped(std::size_t bytes) {
+  static std::atomic<std::uint64_t> s_dropped{0};
+  const std::uint64_t dropped = ++s_dropped;
+  if (dropped == 1 || dropped % 100 == 0) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.WS] server->game frame DROPPED: no game connection is still open on the login session bytes=%zu "
+        "(%llu total)", bytes, static_cast<unsigned long long>(dropped));
+  }
+}
+
 // ============================================================================
 // LoginRequest builder
 // ============================================================================
@@ -167,6 +280,278 @@ static ix::WebSocket* g_loginGameWs = nullptr;
 // LoginRequest payload: [UUID(16)][PlatformCode(8)][AccountId(8)][JSON\0]
 
 static const uint8_t MSG_MARKER[] = {0xf6,0x40,0xbb,0x78,0xa2,0xe7,0x8c,0xbb};
+
+// Every message in a bridged frame, by name, in arrival order. Nakama batches messages into one
+// frame (LoginSuccess, STcpConnectionUnrequireEvent and GameSettings arrive together), so logging
+// only the first symbol hid the rest. A dedicated server's message traffic is sparse and is the
+// only record of what the service told the game, so it logs at Info there; clients stay at Debug.
+static int LogFrameMessages(const char* direction, int connIdx, const std::string& frame) {
+  const EchoVR::LogLevel level = g_isServer ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Debug;
+  const uint8_t* p = reinterpret_cast<const uint8_t*>(frame.data());
+  size_t remaining = frame.size();
+  int count = 0;
+  while (remaining >= 24 && memcmp(p, MSG_MARKER, sizeof(MSG_MARKER)) == 0) {
+    uint64_t sym = 0;
+    uint64_t len = 0;
+    memcpy(&sym, p + 8, 8);
+    memcpy(&len, p + 16, 8);
+    const char* name = EchoVR::LookupSymbolName(sym);
+    Log(level, "[NEVR.WS] %s conn=%d (%s) msg=%d sym=0x%016llx %s len=%llu", direction, connIdx,
+        ConnLabel(connIdx), count, static_cast<unsigned long long>(sym), name ? name : "<unnamed>",
+        static_cast<unsigned long long>(len));
+    ++count;
+    if (len > remaining - 24) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.WS] %s conn=%d msg=%d declares %llu bytes but %zu remain",
+          direction, connIdx, count - 1, static_cast<unsigned long long>(len), remaining - 24);
+      break;
+    }
+    p += 24 + len;
+    remaining -= 24 + static_cast<size_t>(len);
+  }
+  if (remaining > 0) {
+    Log(level, "[NEVR.WS] %s conn=%d %zu bytes not in message framing", direction, connIdx, remaining);
+  }
+  return count;
+}
+
+// Info-level trace of the social message families (friends, party, social) crossing the bridge,
+// walking EVERY message in a frame ([marker(8)][symbol(8)][length(8)][payload]...), not just the
+// first. The per-message Debug lines are dropped at the default level, so without this a missing
+// roster or party is invisible: nothing says whether the server sent the notifies or whether the
+// client received them. Only the symbol name and payload length are logged, never the payload.
+//
+// Server->game friend messages also feed the facade's friend roster: the game's own friends code
+// is not present (pnsrad exports no Social object), so SNSFriendListResponse and
+// SNSFriendStatusNotify are the only place the friend list exists on the client.
+static void ObserveSocialFrames(const char* direction, int connIdx, const std::string& frame) {
+  const uint8_t* p = reinterpret_cast<const uint8_t*>(frame.data());
+  size_t remaining = frame.size();
+  while (remaining >= 24) {
+    if (memcmp(p, MSG_MARKER, sizeof(MSG_MARKER)) != 0) return;
+    uint64_t sym = 0;
+    uint64_t len = 0;
+    memcpy(&sym, p + 8, 8);
+    memcpy(&len, p + 16, 8);
+    if (len > remaining - 24) return;  // truncated or corrupt frame: stop, never read past it
+    const bool fromServer = strcmp(direction, "server->game") == 0;
+    const uint8_t* payload = p + 24;
+    // A display name arrives in a profile reply, whichever side asked for it (the game asks when a
+    // friend is opened; the runtime asks for each friend, below).
+    if (fromServer && sym == SocialNames::kProfileSuccess) {
+      uint64_t accountId = 0;
+      std::string displayName;
+      const bool decoded = SocialNames::DecodeProfile(payload, static_cast<size_t>(len), &accountId, &displayName);
+      uint64_t replyFor = accountId;
+      if (!decoded && len >= 16) {
+        replyFor = 0;
+        for (int i = 7; i >= 0; --i) replyFor = (replyFor << 8) | payload[8 + i];
+      }
+      if (decoded) {
+        SocialRoster::Global().SetName(accountId, displayName);
+        SocialParty::Global().SetName(accountId, displayName);
+      }
+      if (SocialRoster::Global().Contains(replyFor)) {
+        Log(EchoVR::LogLevel::Info,
+            decoded ? "[NEVR.SOCIAL] friend name resolved account=%llu name_bytes=%zu"
+                    : "[NEVR.SOCIAL] friend profile reply could not be read account=%llu reply_bytes=%zu",
+            static_cast<unsigned long long>(replyFor), decoded ? displayName.size() : static_cast<size_t>(len));
+      }
+    }
+    // Profile requests and replies, both ways, with the EvrId they carry (platform u64, account u64):
+    // the game files a reply under "%s-%llu" of that id and drops one that matches no request it sent
+    // (FUN_14060cdb0 / FUN_140610e70), so a mismatch is only visible here.
+    {
+      const char* profileName = EchoVR::LookupSymbolName(sym);
+      if (profileName != nullptr && strstr(profileName, "OtherUserProfile") != nullptr && len >= 16) {
+        uint64_t platform = 0;
+        uint64_t account = 0;
+        memcpy(&platform, payload, sizeof(platform));
+        memcpy(&account, payload + 8, sizeof(account));
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s platform=%llu account=%llu payload_bytes=%llu", direction,
+            connIdx, profileName, static_cast<unsigned long long>(platform), static_cast<unsigned long long>(account),
+            static_cast<unsigned long long>(len));
+      }
+    }
+    // Party symbols come from our own verified tables: the game's symbol table has no names for the
+    // party replies and mislabels the create hash, so it is the fallback, not the first choice.
+    const char* gameName = EchoVR::LookupSymbolName(sym);
+    const char* name = SocialParty::RequestName(sym);
+    if (name == nullptr) name = SocialParty::ReplyName(sym);
+    if (name == nullptr) name = gameName;
+    if (name != nullptr && (strstr(name, "Friend") != nullptr || strstr(name, "Party") != nullptr ||
+                            strstr(name, "Social") != nullptr)) {
+      // An invite's target is the last u64 of the Standard party payload (social_party.h Standard):
+      // logged so a test, or a person reading the log, can see who an invite went to.
+      if ((strcmp(name, "PartyInviteRequest") == 0 || strcmp(name, "FriendInviteRequest") == 0) && len >= 0x28) {
+        uint64_t target = 0;
+        memcpy(&target, payload + 0x20, sizeof(target));
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s payload_bytes=%llu target=%llu", direction,
+            connIdx, name, static_cast<unsigned long long>(len), static_cast<unsigned long long>(target));
+      } else if (strcmp(name, "PartyInviteResponse") == 0 && len >= 0x2C) {
+        // Targeted payload (social_party.h Targeted): self UUID, target UUID, session, then the
+        // param at +0x28: 1 = accept, 0 = dismiss.
+        uint32_t param = 0;
+        memcpy(&param, payload + 0x28, sizeof(param));
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s payload_bytes=%llu param=%u", direction, connIdx,
+            name, static_cast<unsigned long long>(len), param);
+      } else {
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] %s conn=%d %s payload_bytes=%llu", direction, connIdx,
+            name, static_cast<unsigned long long>(len));
+      }
+    }
+    if (fromServer && sym == SocialRoster::kFriendPresenceNotify) {
+      uint64_t friendId = 0;
+      SocialRoster::Presence presence;
+      if (SocialRoster::ParsePresenceNotify(payload, static_cast<size_t>(len), &friendId, &presence)) {
+        SocialRoster::Global().SetPresence(friendId, presence);
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend presence account=%llu party=%llu joinable=%d text=\"%s\"",
+            static_cast<unsigned long long>(friendId), static_cast<unsigned long long>(presence.partyId),
+            presence.joinable ? 1 : 0, presence.text.c_str());
+      } else {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] friend presence could not be read bytes=%llu",
+            static_cast<unsigned long long>(len));
+      }
+    }
+    if (fromServer && sym == SocialRoster::kRecentlyMetListResponse) {
+      // Recently met (proposal §2): the whole list; the refresh the game is polling (slot 56) ends.
+      std::vector<SocialRoster::Entry> people;
+      if (SocialRoster::ParseRecentlyMetResponse(payload, static_cast<size_t>(len), &people)) {
+        const auto online = static_cast<unsigned>(std::count_if(people.begin(), people.end(),
+                                                                [](const SocialRoster::Entry& e) { return e.online; }));
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] recently met list count=%zu online=%u", people.size(), online);
+        SocialRoster::RecentlyMet().SetList(std::move(people));
+      } else {
+        SocialRoster::RecentlyMet().EndRefresh();
+        Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] recently met list could not be read bytes=%llu",
+            static_cast<unsigned long long>(len));
+      }
+    }
+    if (fromServer && sym == SocialParty::kPartyDataNotify) {
+      // Party or member data (proposal §3): only a JSON object goes on to the game's CJson loader.
+      SocialParty::DataNotify notify;
+      if (!SocialParty::ParseDataNotify(payload, static_cast<size_t>(len), &notify)) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] party data could not be read bytes=%llu",
+            static_cast<unsigned long long>(len));
+      } else if (const nlohmann::json parsed = nlohmann::json::parse(notify.json, nullptr, false);
+                 parsed.is_discarded() || !parsed.is_object()) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] party data rejected: not a JSON object party=%llu member=%llu bytes=%zu",
+            static_cast<unsigned long long>(notify.partyId), static_cast<unsigned long long>(notify.memberId),
+            notify.json.size());
+      } else {
+        const SocialParty::DataOutcome outcome =
+            SocialParty::Global().ReceiveData(notify.partyId, notify.memberId, notify.json);
+        const auto headset = parsed.find("headsettype");
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.SOCIAL] party data received party=%llu member=%llu seq=%u bytes=%zu keys=%zu headsettype=%s outcome=%s",
+            static_cast<unsigned long long>(notify.partyId), static_cast<unsigned long long>(notify.memberId),
+            notify.seq, notify.json.size(), parsed.size(),
+            headset != parsed.end() ? headset->dump().c_str() : "-", SocialParty::DataOutcomeName(outcome));
+      }
+    }
+    if (fromServer) {
+      if (gameName != nullptr) {
+        SocialRoster::Feed(SocialRoster::Global(), gameName, payload, static_cast<size_t>(len));
+        // The friends the server names get a name lookup, once each per session.
+        uint64_t friendId = 0;
+        uint8_t status = 0;
+        if (strcmp(gameName, "FriendStatusNotify") == 0 &&
+            SocialRoster::ParseStatusNotify(payload, static_cast<size_t>(len), &friendId, &status)) {
+          const std::vector<SocialParty::Message> asks = SocialNames::GlobalResolver().Want(friendId);
+          if (!asks.empty()) {
+            Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend name lookup requested account=%llu sent=%d",
+                static_cast<unsigned long long>(friendId), SocialParty::Send(asks) ? 1 : 0);
+          }
+        }
+      }
+      // A friend added, accepted, removed or withdrawn: none of these carries presence, so ask the
+      // server for the list again; the reply rebuilds the roster (a friend added on the website
+      // used to stay invisible until the next login).
+      if (SocialRoster::IsFriendChangeSymbol(sym) || SocialRoster::IsFriendChange(gameName)) {
+        uint64_t friendId = 0;
+        if (len >= 16) memcpy(&friendId, payload + 8, sizeof(friendId));
+        Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] friend change %s account=%llu: refreshing the friend list sent=%d",
+            name != nullptr ? name : "<unnamed>", static_cast<unsigned long long>(friendId),
+            SocialParty::Send(SocialParty::Global().RefreshFriends()) ? 1 : 0);
+      }
+      // Party messages update the facade's party; any requests that were waiting on the reply
+      // (invites queued behind the party's creation) go out now. This runs on the remote's
+      // callback thread outside g_pairsMutex, and SendFrameToServer takes it itself.
+      std::vector<SocialParty::Message> outgoing;
+      const uint64_t nowSeconds = static_cast<uint64_t>(std::time(nullptr));
+      if (SocialParty::Global().Feed(sym, payload, static_cast<size_t>(len), nowSeconds, &outgoing) &&
+          !outgoing.empty()) {
+        SocialParty::Send(outgoing);
+      }
+      // A party member or an invite's sender the bridge has no name for: ask for the profile, as for
+      // friends, so the game shows a name instead of an account id.
+      for (const uint64_t accountId : SocialParty::Global().TakeUnnamed()) {
+        const std::vector<SocialParty::Message> asks = SocialNames::GlobalResolver().Want(accountId);
+        if (!asks.empty()) {
+          Log(EchoVR::LogLevel::Info, "[NEVR.SOCIAL] party name lookup requested account=%llu sent=%d",
+              static_cast<unsigned long long>(accountId), SocialParty::Send(asks) ? 1 : 0);
+        }
+      }
+    }
+    p += 24 + len;
+    remaining -= 24 + len;
+  }
+}
+
+// Sends a frame from the runtime itself (the social facade's party requests) to the server on the
+// game's login connection, as if the game had. Queues it if the remote is still connecting, as the
+// game-side path does. Takes g_pairsMutex, so it must not be called with it held.
+static bool SendFrameToServer(const std::string& frame) {
+  bool sent = false;
+  {
+    std::lock_guard<std::mutex> lock(g_pairsMutex);
+    for (auto& entry : g_pairs) {
+      ProxyPair& pair = *entry.second;
+      if (pair.connIdx != 1 || !pair.remoteWs) continue;
+      if (!pair.remoteOpen) {
+        pair.pendingToRemote.push_back(frame);
+        sent = true;
+      } else {
+        sent = pair.remoteWs->sendBinary(frame).success;
+      }
+      break;
+    }
+  }
+  if (sent) {
+    ObserveSocialFrames("game->server", 1, frame);
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.SOCIAL] game->server frame not sent: no login connection");
+  }
+  return sent;
+}
+
+#ifdef NEVR_SCENARIO_CONTROL
+// Scenario-control builds only (docs/design/2026-10-01-social-scenario-harness.md). Delivers a frame
+// to the game as if the server had sent it on the login connection: the same roster/party feed,
+// frame log and send to the game's socket a real server->game frame goes through.
+bool InjectServerFrameForTest(const std::string& frame, std::string* error) {
+  ix::WebSocket* gameWs = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(g_pairsMutex);
+    SharedRouteLocked(&gameWs);
+  }
+  if (gameWs == nullptr) {
+    if (error != nullptr) *error = "no game login connection to inject into";
+    return false;
+  }
+  Log(EchoVR::LogLevel::Info, "[NEVR.SCENARIO] injecting a server->game frame bytes=%zu", frame.size());
+  ObserveSocialFrames("server->game", 1, frame);
+  LogFrameMessages("server->game", 1, frame);
+  if (!gameWs->sendBinary(frame).success) {
+    if (error != nullptr) *error = "send to the game socket failed";
+    return false;
+  }
+  return true;
+}
+#endif
+
+// Registers SendFrameToServer as the party requests' sender when the bridge is loaded.
+static const bool g_partySenderRegistered = (SocialParty::SetSender(&SendFrameToServer), true);
+
 static const uint64_t SYM_LOGIN_REQUEST = 0xbdb41ea9e67b200a;
 
 static void AppendLE64(std::string& buf, uint64_t val) {
@@ -195,15 +580,33 @@ static const char* PlatformPrefix(uint64_t platformCode) {
 // been exposed. Empty means "not known", and the caller below sends the account
 // id rather than substituting something that looks like a real name (N115: absent
 // data is visibly absent, invented data is indistinguishable from a reading).
-// Platform code selection: ordered precedence.
-//   1. URL credentials present (nevr_discord_id + nevr_password) → OVR_ORG (3)
-//   2. g_noOvr set (-windowed / -server / -spectatorstream) → DMO (6)
-//   3. Default → DSC (1)
-// Pure function — testable without config or globals.
-static uint64_t SelectPlatformCode(bool hasUrlCredentials, bool noOvr) {
-  if (hasUrlCredentials) return 4;   // OVR_ORG — legacy URL-credential auth
-  if (noOvr)             return 6;   // DMO — demo / no-VR client
-  return 1;                         // DSC — Discord / token auth
+// The platform the bridge logs in as. It MUST equal the provider the bridge forces into the
+// game's own CNSUser (the login-state patch below), because the game then names itself with
+// that platform in every later request (LobbyPlayerSessionsRequest, ...) and Nakama looks the
+// requester up in the match under the platform the LoginRequest carried. Measured 2026-09-30:
+// a token-auth client logged in as platform 6 (DMO) while the game asked for its player
+// sessions as OVR-ORG, and Nakama answered "requesting player not found in match:
+// OVR-ORG-<id>" (the host never accepted the player, the game ended at "Server connection
+// failed"). Platform 4 is what every URL-credential login already sent.
+static constexpr uint64_t kBridgeLoginPlatform = 4;  // OVR_ORG (game numbering)
+
+// Pure function — testable without config or globals. The arguments no longer influence the
+// result: -noovr (DMO, 6) and the token-auth default (DSC, 1) produced an identity the game
+// itself does not use.
+static uint64_t SelectPlatformCode(bool /*hasUrlCredentials*/, bool /*noOvr*/) {
+  return kBridgeLoginPlatform;
+}
+
+// Which Bearer goes on the remote websocket upgrade. The game front's /nevr ingress forwards
+// the caller's Authorization header unchanged (the /ws catch-all injects the server key over
+// it, issue #52). A token-auth client sends its JWT, which authenticates the session. A client
+// logging in with URL credentials (discordid/password) sends the SERVER KEY instead: Nakama
+// treats a token equal to the server key as the legacy unauthenticated session and then
+// authenticates it from the discordid/password query parameters, exactly as /ws does. An empty
+// result means "attach no Authorization header".
+static std::string SelectRemoteBearer(bool hasUrlCredentials, const std::string& jwt,
+                                      const std::string& serverKey) {
+  return hasUrlCredentials ? serverKey : jwt;
 }
 
 static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode = 2,
@@ -272,6 +675,9 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
     ident["commit"] = buildId.git_commit;
     ident["build"] = buildId.git_describe;
     ident["build_type"] = buildId.build_type;
+    // The social message level this runtime understands; the server sends a newer social message only
+    // to a session that declared its level (docs/design/2026-10-01-social-nakama-proposal.md §0).
+    j["nevr_social"] = SocialParty::kSocialLevel;
 
     // nevr_plugins: parse the pre-built manifest so the field is a JSON array,
     // not a string-escaped copy of one.
@@ -377,10 +783,9 @@ void InstallWebSocketBridge() {
       break;
     }
 
-    (void)errorText;
     const std::string diagnostic = LogDiagnostics::FormatBindFailureDiagnostic(
         "Proxy", tryPort, attempt + 1, kMaxBindAttempts);
-    Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
+    Log(EchoVR::LogLevel::Warning, "%s error=\"%s\"", diagnostic.c_str(), errorText.c_str());
     g_server.reset();
   }
 
@@ -416,6 +821,7 @@ void InstallWebSocketBridge() {
               pair->remoteWs = g_loginRemoteWs;
               pair->remoteOpen = true;
               pair->loginInjected = true;  // skip LoginRequest — already authenticated
+              pair->connIdx = connIdx;
 
               auto* pairPtr = pair.get();
               ix::WebSocket* gameWsPtr = &gameWs;
@@ -425,14 +831,20 @@ void InstallWebSocketBridge() {
               // entirely on the login connection's callback — when login
               // disconnected and B2/N54 nulled that callback, all matchmaker
               // server→game message routing silently died.
-              g_loginRemoteWs->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback", 
-                  [pairPtr, gameWsPtr](const ix::WebSocketMessagePtr& rmsg) {
+              g_loginRemoteWs->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback",
+                  [pairPtr, gameWsPtr, connIdx](const ix::WebSocketMessagePtr& rmsg) {
                     switch (rmsg->type) {
                       case ix::WebSocketMessageType::Message: {
                         ix::WebSocket* target = nullptr;
+                        int targetConn = -1;
                         {
                           std::lock_guard<std::mutex> lk(g_pairsMutex);
-                          target = g_activeGameWs ? g_activeGameWs : gameWsPtr;
+                          if (const ProxyPair* route = SharedRouteLocked(&target)) targetConn = route->connIdx;
+                        }
+                        ObserveSocialFrames("server->game", targetConn, rmsg->str);
+                        if (target == nullptr) {
+                          LogSharedFrameDropped(rmsg->str.size());
+                          break;
                         }
                         if (rmsg->binary) {
                           target->sendBinary(rmsg->str);
@@ -442,9 +854,10 @@ void InstallWebSocketBridge() {
                         break;
                       }
                       case ix::WebSocketMessageType::Close:
-                        Log(EchoVR::LogLevel::Debug,
-                            "[NEVR.WS] Remote closed (matchmaker ws=%p): code=%u",
-                            static_cast<void*>(gameWsPtr), static_cast<unsigned int>(rmsg->closeInfo.code));
+                        Log(EchoVR::LogLevel::Info,
+                            "[NEVR.WS] Remote closed (conn=%d, %s, ws=%p): code=%u",
+                            connIdx, ConnLabel(connIdx), static_cast<void*>(gameWsPtr),
+                            static_cast<unsigned int>(rmsg->closeInfo.code));
                         break;
                       default:
                         break;
@@ -559,17 +972,32 @@ void InstallWebSocketBridge() {
             // Sending Bearer on top may cause the server to use the JWT session instead
             // of the URL-credential session, breaking matchmaker state.
             bool hasUrlCredentials = remoteUrl.find("discordid=") != std::string::npos;
-            if (!bearerToken.empty() && !hasUrlCredentials) {
+            std::string serverKey;
+            if (hasUrlCredentials) {
+              const char* cfgServerKey = NevrCfgGetFlat("nevr_server_key");
+              if (cfgServerKey) serverKey = cfgServerKey;
+            }
+            const std::string remoteBearer = SelectRemoteBearer(hasUrlCredentials, bearerToken, serverKey);
+            if (!remoteBearer.empty()) {
               ix::WebSocketHttpHeaders headers;
-              headers["Authorization"] = "Bearer " + bearerToken;
+              headers["Authorization"] = "Bearer " + remoteBearer;
               remote->setExtraHeaders(headers);
-              Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Attaching Bearer token to remote connection");
+              Log(EchoVR::LogLevel::Info,
+                  "[NEVR.WS] remote auth: %s (value not logged)",
+                  hasUrlCredentials ? "server key + URL credentials" : "token-auth JWT");
             } else if (hasUrlCredentials) {
-              Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Using URL credentials (no Bearer token)");
+              Log(EchoVR::LogLevel::Warning,
+                  "[NEVR.WS] remote auth: URL credentials but no server key configured — the /nevr "
+                  "ingress will reject the upgrade (auth.server_key, or the embedded build default)");
+            } else {
+              Log(EchoVR::LogLevel::Warning,
+                  "[NEVR.WS] remote auth: no token and no URL credentials — the session will be "
+                  "unauthenticated");
             }
 
             auto pair = std::make_unique<ProxyPair>();
             pair->remoteWs = remote;
+            pair->connIdx = connIdx;
 
             auto* pairPtr = pair.get();
             ix::WebSocket* gameWsPtr = &gameWs;
@@ -627,7 +1055,7 @@ void InstallWebSocketBridge() {
                                   //   patched to DSC by PatchDscProvider string table rewrite)
                                   // +0x9c = state flags (0x04 = connected/logged in)
                                   *accountId  = (int64_t)discordId;
-                                  *loginState = (*loginState & ~0xFULL) | 4;  // OVR_ORG (game numbering)
+                                  *loginState = (*loginState & ~0xFULL) | kBridgeLoginPlatform;  // OVR_ORG (game numbering)
                                   *stateFlags = 0x04;
                                   Log(EchoVR::LogLevel::Info,
                                       "[NEVR.WS] CNSUser login state patched acct=%lld->%lld "
@@ -652,6 +1080,7 @@ void InstallWebSocketBridge() {
                           if (cfgPassword) cfgPasswordStr = cfgPassword;
                         }
                         g_lastInjectedDiscordId = discordId;
+                        SocialParty::Global().SetSelf(discordId, accountName);
                         std::string loginMsg = BuildLoginRequest(discordId, platformCode, accountName, bearerToken, cfgPasswordStr);
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
@@ -667,24 +1096,13 @@ void InstallWebSocketBridge() {
                       break;
                     }
                     case ix::WebSocketMessageType::Message: {
-                      // Forward server→game — log symbol ID (marker@0, symbol@8, length@16)
+                      ObserveSocialFrames("server->game", connIdx, rmsg->str);
+                      // First message's symbol (marker@0, symbol@8, length@16), for the decodes below.
                       uint64_t rsym = 0;
-                      uint64_t rlen = 0;
                       if (rmsg->str.size() >= 24) {
                         memcpy(&rsym, rmsg->str.data() + 8, 8);
-                        memcpy(&rlen, rmsg->str.data() + 16, 8);
                       }
-                      char symBuf[192];
-                      const char* name = EchoVR::LookupSymbolName(rsym);
-                      if (name) {
-                        snprintf(symBuf, sizeof(symBuf), "0x%016llx (%s)",
-                                 (unsigned long long)rsym, name);
-                      } else {
-                        snprintf(symBuf, sizeof(symBuf), "0x%016llx",
-                                 (unsigned long long)rsym);
-                      }
-                      Log(EchoVR::LogLevel::Debug, "[NEVR.WS] server->game: %zu bytes sym=%s payloadLen=%llu",
-                          rmsg->str.size(), symBuf, (unsigned long long)rlen);
+                      LogFrameMessages("server->game", connIdx, rmsg->str);
                       // Decode only the numeric LoginFailure diagnostics. The
                       // server-provided message can contain credentials or other
                       // private response data and is never written to logs.
@@ -753,62 +1171,11 @@ void InstallWebSocketBridge() {
                               subscribeMsg.size());
                         }
                       }
-                      // 2026-09-14 (Andrew + Claude, launch-server.sh hang investigation —
-                      // see docs/reference/server-mode-multiplayer-hang.md): Nakama sends
-                      // STcpConnectionUnrequireEvent (sym 0x43e6963ac76beee4) right after
-                      // every LoginSuccess, server mode or client. Confirmed via ReVault:
-                      // neither echovr.exe nor libpnsrad.so has ANY decompiled code
-                      // referencing this symbol — nothing native reacts to it. In the one
-                      // last-known-good server capture we have
-                      // (echovr-server-32-2026-07-26T11-16-07.550.jsonl), the login
-                      // connection was lost ~5s after this point and "Beginning
-                      // multiplayer" followed ~6s after THAT; in every current run the
-                      // connection just stays open forever and multiplayer bring-up never
-                      // starts. Correlation, not proven causation — but the event's own
-                      // name ("you don't need this connection anymore") and the absence of
-                      // any native handler both point the same direction: something was
-                      // supposed to close this connection here and doesn't anymore.
-                      //
-                      // This is production behavior, not an experiment: it runs
-                      // unconditionally in server mode, with no flag to disable it, and
-                      // has been live for weeks. Closes remoteWs only (not gameWsPtr,
-                      // which the Close handler below documents as deadlock-prone under
-                      // the loader lock) — the game discovers the closed remote on its
-                      // next send attempt, same documented-safe path already used for a
-                      // real remote-initiated close. Server mode only; client mode is
-                      // already confirmed working end-to-end and this must not touch it.
-                      //
-                      // BUG FOUND AND FIXED, same day: `rsym` above only ever reflects the
-                      // FIRST message in this frame. Nakama sends LoginSuccess and
-                      // STcpConnectionUnrequireEvent back-to-back (identical millisecond
-                      // timestamp in nakama.log), almost certainly batched into one WS
-                      // frame — so `rsym == 0x43e6963...` was silently dead code on the
-                      // very first live test (confirmed: nakama.log shows the event sent,
-                      // this DIAG line never printed). Scan every message in the frame
-                      // instead of trusting the single `rsym`, same 24-byte-header walk the
-                      // outgoing (game->server) direction already uses below.
-                      if (g_isServer) {
-                        const uint8_t* fp = (const uint8_t*)rmsg->str.data();
-                        size_t fremaining = rmsg->str.size();
-                        while (fremaining >= 24) {
-                          if (memcmp(fp, MSG_MARKER, 8) != 0) break;
-                          uint64_t fsym = 0, flen = 0;
-                          memcpy(&fsym, fp + 8, 8);
-                          memcpy(&flen, fp + 16, 8);
-                          size_t ftotal = 24 + (size_t)flen;
-                          if (ftotal > fremaining) break;  // truncated — stop, don't misread
-                          if (fsym == 0x43e6963ac76beee4) {
-                            Log(EchoVR::LogLevel::Info,
-                                "[NEVR.WS] STcpConnectionUnrequireEvent seen in-frame (server mode) — "
-                                "closing remoteWs so the game detects the closed connection on its next "
-                                "send and proceeds to BeginMultiplayer");
-                            pairPtr->remoteWs->close();
-                            break;
-                          }
-                          fp += ftotal;
-                          fremaining -= ftotal;
-                        }
-                      }
+                      // STcpConnectionUnrequireEvent is deliberately NOT acted on.
+                      // d0190c4/dd1e9e7 closed the remote here in server mode; Nakama sends the event on
+                      // the config connection too, so the config socket died before the game's post-login
+                      // config requests and the server never left "logging in" (real Windows 2026-10-01
+                      // 02:17Z; test_bridge_never_closes_a_remote_on_unrequire).
                       // Decode SNS friend messages
                       // InviteFailure (0x7f197e30c72c6e61): Header(8)+FriendID(8)+StatusCode(1)
                       if (rsym == 0x7f197e30c72c6e61 && rmsg->str.size() >= 24 + 17) {
@@ -854,10 +1221,20 @@ void InstallWebSocketBridge() {
                       // shares the login remote, g_activeGameWs is swapped so
                       // responses reach the matchmaker's game WS peer.
                       {
+                        // The login remote is shared with the matchmaker connections: its frames go
+                        // to the live connection SharedRouteLocked picks. Any other remote (config)
+                        // belongs to its own game socket.
                         ix::WebSocket* target = nullptr;
                         {
                           std::lock_guard<std::mutex> lk(g_pairsMutex);
-                          target = g_activeGameWs ? g_activeGameWs : gameWsPtr;
+                          if (pairPtr->remoteWs != nullptr && pairPtr->remoteWs == g_loginRemoteWs)
+                            SharedRouteLocked(&target);
+                          else
+                            target = gameWsPtr;
+                        }
+                        if (target == nullptr) {
+                          LogSharedFrameDropped(rmsg->str.size());
+                          break;
                         }
                         if (rmsg->binary) {
                           target->sendBinary(rmsg->str);
@@ -868,8 +1245,10 @@ void InstallWebSocketBridge() {
                       break;
                     }
                     case ix::WebSocketMessageType::Close:
-                      Log(EchoVR::LogLevel::Debug, "[NEVR.WS] Remote closed (ws=%p): code=%u",
-                          static_cast<void*>(gameWsPtr), static_cast<unsigned int>(rmsg->closeInfo.code));
+                      Log(EchoVR::LogLevel::Info,
+                          "[NEVR.WS] Remote closed (conn=%d, %s, ws=%p): code=%u",
+                          connIdx, ConnLabel(connIdx), static_cast<void*>(gameWsPtr),
+                          static_cast<unsigned int>(rmsg->closeInfo.code));
                       // Don't call gameWsPtr->close() — it deadlocks (blocks waiting
                       // for server thread which may be blocked on g_pairsMutex).
                       // The game will detect the closed remote on its next send attempt.
@@ -905,6 +1284,8 @@ void InstallWebSocketBridge() {
           }
 
           case ix::WebSocketMessageType::Message: {
+            ObserveSocialFrames("game->server", ConnIdxOfGameWs(&gameWs), msg->str);
+            LogFrameMessages("game->server", ConnIdxOfGameWs(&gameWs), msg->str);
             // Game→remote forwarding — dump all message symbols in the frame
             // EchoVR wire format: [marker(8)][symbol(8)][length(8)][payload(length)]...
             {
@@ -996,12 +1377,24 @@ void InstallWebSocketBridge() {
             if (it != g_pairs.end()) {
               auto& pair = it->second;
               if (pair->remoteOpen) {
+                // A shared login session can die while the game sits idle; the game then
+                // waits forever on its MATCHMAKING screen. Say so instead of dropping quietly.
+                const ix::ReadyState remoteState = pair->remoteWs->getReadyState();
+                bool sent = false;
                 if (msg->binary) {
-                  auto info = pair->remoteWs->sendBinary(msg->str);
+                  sent = pair->remoteWs->sendBinary(msg->str).success;
                   Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   -> forwarded (success=%s)",
-                      info.success ? "true" : "false");
+                      sent ? "true" : "false");
                 } else {
-                  pair->remoteWs->sendText(msg->str);
+                  sent = pair->remoteWs->sendText(msg->str).success;
+                }
+                if (!sent || remoteState != ix::ReadyState::Open) {
+                  Log(EchoVR::LogLevel::Warning,
+                      "[NEVR.WS] game->server message NOT delivered: conn=%d (%s) send_success=%s "
+                      "remote_state=%s bytes=%zu — the remote session is gone; the game will wait "
+                      "on this request indefinitely",
+                      pair->connIdx, ConnLabel(pair->connIdx), sent ? "true" : "false",
+                      RemoteStateName(remoteState), msg->str.size());
                 }
               } else {
                 pair->pendingToRemote.push_back(msg->str);
@@ -1031,43 +1424,18 @@ void InstallWebSocketBridge() {
             // g_pairsMutex (Open handler line 328, Message handler line 497).
             // Holding the mutex across stop() → ABBA deadlock.
             std::shared_ptr<ix::WebSocket> remoteToStop;
+            int closedConnIdx = -1;
             {
               std::lock_guard<std::mutex> lk(g_pairsMutex);
-              auto it = g_pairs.find(&gameWs);
-              if (it != g_pairs.end()) {
-                bool isShared = (it->second->remoteWs == g_loginRemoteWs);
-                if (!isShared) {
-                  // Snapshot the remote — we'll stop it OUTSIDE the lock.
-                  remoteToStop = it->second->remoteWs;
-                  // Clear callback under lock so no further invocations
-                  // reference the freed ProxyPair after erase.
-                  // N85: no-op, NOT nullptr. ixwebsocket invokes _onMessageCallback
-                  // unconditionally; an empty std::function throws std::bad_function_call,
-                  // which unwinds out of ixwebsocket's own thread, reaches the game's
-                  // unhandled-exception filter as GCC throw code 0x20474343, and kills the
-                  // dedicated server. Confirmed from a crash-dump stack:
-                  // __cxa_allocate_exception -> __cxa_throw -> std::bad_function_call.
-                  it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
-                } else if (&gameWs == g_loginGameWs) {
-                  // Login pair closing — shared remote. N61: only clear the
-                  // callback if NO matchmaker connection is sharing the remote.
-                  // conn>=2 registers its own callback (N61 fix) which captures
-                  // the matchmaker's pairPtr (still alive). Clearing here would
-                  // kill matchmaker routing — the regression N61 was supposed
-                  // to prevent.
-                  if (g_activeGameWs == nullptr || g_activeGameWs == &gameWs) {
-                    it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
-                  }
-                  // If a matchmaker is active, leave its callback intact.
-                }
-                g_pairs.erase(it);
-              }
-              if (g_activeGameWs == &gameWs) g_activeGameWs = nullptr;
+              bool callbackCleared = false;
+              remoteToStop = RetireGameWsLocked(&gameWs, &closedConnIdx, &callbackCleared);
             } // g_pairsMutex RELEASED here — safe to call stop()
             if (remoteToStop) {
               remoteToStop->stop();
             }
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game disconnected");
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.WS] Proxy: game disconnected (conn=%d, %s)",
+                closedConnIdx, ConnLabel(closedConnIdx));
             break;
           }
 
@@ -1110,7 +1478,7 @@ void InstallWebSocketBridge() {
     std::mt19937 matchGen(matchRd());
     std::uniform_int_distribution<uint16_t> matchDist(49152, 65535);
 
-    static std::unique_ptr<ix::WebSocketServer> s_matchServer;
+    static std::unique_ptr<ix::WebSocketServer>& s_matchServer = *new std::unique_ptr<ix::WebSocketServer>();  // leaked, see g_server
     bool matchBound = false;
     for (int attempt = 0; attempt < kMaxMatchBindAttempts; ++attempt) {
       uint16_t tryPort = matchDist(matchGen);
@@ -1122,11 +1490,10 @@ void InstallWebSocketBridge() {
         matchBound = true;
         break;
       }
-      (void)errorText;
       const std::string diagnostic =
           LogDiagnostics::FormatBindFailureDiagnostic("Matchmaker", tryPort, attempt + 1,
                                                       kMaxMatchBindAttempts);
-      Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
+      Log(EchoVR::LogLevel::Warning, "%s error=\"%s\"", diagnostic.c_str(), errorText.c_str());
       s_matchServer.reset();
     }
 
@@ -1188,7 +1555,7 @@ void StopWebSocketBridgeListener() {
     g_server.reset();
   }
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.WS] listener stopped, %zu remote connection(s) closed — socket released (N105)",
+      "[NEVR.WS] listener stopped, %zu remote connection(s) closed — socket released",
       remotes.size());
 }
 
@@ -1207,6 +1574,11 @@ std::string TestHook_BuildLoginRequest(uint64_t discordId, uint64_t platformCode
                                        const std::string& displayName,
                                        const std::string& accessToken) {
   return BuildLoginRequest(discordId, platformCode, displayName, accessToken);
+}
+
+std::string TestHook_SelectRemoteBearer(bool hasUrlCredentials, const std::string& jwt,
+                                        const std::string& serverKey) {
+  return SelectRemoteBearer(hasUrlCredentials, jwt, serverKey);
 }
 
 uint64_t TestHook_SelectPlatformCode(bool hasUrlCredentials, bool noOvr) {
@@ -1233,6 +1605,10 @@ bool TestHook_GuardWsCallbackContainsStdException() {
   });
   guarded();
   return true;
+}
+
+int TestHook_LogFrameMessages(const char* direction, int connIdx, const std::string& frame) {
+  return LogFrameMessages(direction, connIdx, frame);
 }
 
 bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* statusCode, size_t* messageBytes) {
@@ -1296,6 +1672,7 @@ void* TestHook_N61_RegisterLogin(void* remoteHandle, void* gameWsHandle) {
   auto pair = std::make_unique<ProxyPair>();
   pair->remoteWs = *remotePtr;
   pair->remoteOpen = true;
+  pair->connIdx = 1;
 
   // Login callback — captures a dummy that the test can later check.
   g_loginRemoteWs = *remotePtr;
@@ -1319,6 +1696,10 @@ void* TestHook_N61_RegisterMatchmaker(void* gameWsHandle, bool* callbackFired) {
   auto pair = std::make_unique<ProxyPair>();
   pair->remoteWs = g_loginRemoteWs;
   pair->remoteOpen = true;
+  {
+    std::lock_guard<std::mutex> lk(g_pairsMutex);
+    pair->connIdx = 2 + static_cast<int>(g_pairs.size()) - 1;  // after the login pair: 2, 3, ...
+  }
 
   // N61: matchmaker registers its own callback on the shared remote.
   bool* fired = callbackFired;
@@ -1354,24 +1735,8 @@ bool TestHook_N61_SimulateCloseAndCheckCleared(void* rawGameWsPtr) {
     std::shared_ptr<ix::WebSocket> remoteToStop;
     {
       std::lock_guard<std::mutex> lk(g_pairsMutex);
-      auto it = g_pairs.find(gameWs);
-      if (it != g_pairs.end()) {
-        bool isShared = (it->second->remoteWs == g_loginRemoteWs);
-        if (!isShared) {
-          remoteToStop = it->second->remoteWs;
-          it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
-          callbackWasCleared = true;
-        } else if (gameWs == g_loginGameWs) {
-          // N61 guard: only clear if no matchmaker is sharing.
-          if (g_activeGameWs == nullptr || g_activeGameWs == gameWs) {
-            it->second->remoteWs->setOnMessageCallback([](const ix::WebSocketMessagePtr&) {});
-            callbackWasCleared = true;
-          }
-          // Else: matchmaker is active → callback SURVIVES (post-fix).
-        }
-        g_pairs.erase(it);
-      }
-      if (g_activeGameWs == gameWs) g_activeGameWs = nullptr;
+      int closedConnIdx = -1;
+      remoteToStop = RetireGameWsLocked(gameWs, &closedConnIdx, &callbackWasCleared);
     }
     if (remoteToStop) {
       remoteToStop->stop();
@@ -1384,6 +1749,13 @@ bool TestHook_N61_SimulateCloseAndCheckCleared(void* rawGameWsPtr) {
 // Check whether the shared remote has an active callback by setting a
 // temporary one and checking if it replaces successfully. Returns true
 // if a callback is active (the test callback replaced something).
+int TestHook_SharedRouteConn() {
+  std::lock_guard<std::mutex> lk(g_pairsMutex);
+  ix::WebSocket* target = nullptr;
+  const ProxyPair* route = SharedRouteLocked(&target);
+  return route != nullptr ? route->connIdx : -1;
+}
+
 bool TestHook_N61_HasActiveCallback() {
   if (!g_loginRemoteWs) return false;
   // We can't directly query ix::WebSocket's internal callback state.

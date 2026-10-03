@@ -1,0 +1,25 @@
+# Social (guild lobby) groups. docs/design/2026-10-01-social-features-test-plan.md #20.
+# Inbound: Nakama's SNSChannelInfoResponse fills the game's groups ("[SOCIALGROUPS] Social lobby
+# group info received", "[SOCIALGROUPS] active group = %s"). Then R15NetSocialGroupsSetActiveNode
+# (0x140d8eba0) is fired for the group that is already active: groups = [netGame+0x2a00], index
+# range-checked against groups+0x40, handler 0x1401adf90(groups, index). For a new index the handler
+# raises onsocialgroupschangedactive and writes the profile key "social|group"; re-selecting the
+# active one runs the same path without changing the account's guild group. Pass = the groups
+# arrived, an active group is named, the node's path ran, and the active group is unchanged.
+name: social_groups
+description: see the social groups arrive and re-select the active one through the set-active node
+steps:
+  - name: the server's groups arrived
+    wait_log: {pattern: '\[SOCIALGROUPS\] Social lobby group info received'}
+  - name: an active group is named
+    wait_log: {pattern: '\[SOCIALGROUPS\] active group = \S+', timeout: 30}
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: the game holds its groups
+    state_until: {path: game.social_group_count, bits_clear: 0, timeout: 10}
+  - name: re-select the active group
+    fire: {action: social_groups_set_active, index: current}
+  - name: the node's path ran for the active index
+    expect_log: {pattern: '\[NEVR\.SCENARIO\] social group set active index=\d+ of [1-9]\d*', timeout: 10}

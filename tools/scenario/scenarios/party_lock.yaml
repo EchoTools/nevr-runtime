@@ -1,0 +1,43 @@
+# Lock and unlock the party, and set its join policy. Test plan #17.
+# R15NetPartyLockNode (0x140ddd870) calls 0x140189f20(netGame, lock, mask), which flips the host's
+# joinable bit on the social object; pnsovr's Update then locks the room (slot 5, 0x1800926f0). The
+# facade sends PartyLockRequest; Nakama sets the party closed and answers PartyLockSuccess. The party
+# is the client's own. R15NetPartySetJoinPolicyNode (0x140dde110) calls slot 16 with the policy;
+# Nakama has no join-policy message, so only the game-side value is checked. Pass = lock is seen by
+# the game at once (not joinable), the server confirms it, and unlock and the policy go back.
+name: party_lock
+description: lock the game's party through the lock node, see the server lock it, unlock it; set the join policy and back
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: the game has its own party
+    state_until: {party_joinable: true, timeout: 60}
+  - name: lock it
+    fire: {action: party_lock, lock: true}
+  - name: the host's party is no longer joinable
+    state_until: {party_joinable: false, timeout: 10}
+  - name: PartyLockRequest left the game
+    expect_log: {pattern: 'game->server conn=\d+ PartyLockRequest', timeout: 10}
+  - name: the server locked it
+    state_until: {path: party.locked, equals: true, timeout: 30}
+    diagnose: ['PartyLock', 'PartyUnlock']
+  - name: unlock it
+    fire: {action: party_lock, lock: false}
+  - name: PartyUnlockRequest left the game
+    expect_log: {pattern: 'game->server conn=\d+ PartyUnlockRequest', timeout: 10}
+  - name: the server unlocked it
+    state_until: {path: party.locked, equals: false, timeout: 30}
+  - name: joinable again
+    state_until: {party_joinable: true, timeout: 10}
+  - name: join policy invite-only
+    fire: {action: set_join_policy, policy: 0}
+  - name: slot 16 SetJoinPolicy reached
+    expect_log: {pattern: 'slot=16 name=SetJoinPolicy call=', timeout: 10}
+  - name: the policy is invite-only
+    state_until: {path: party.join_policy, equals: 0, timeout: 10}
+  - name: join policy back to everyone
+    fire: {action: set_join_policy, policy: 3}
+  - name: the policy is everyone
+    state_until: {path: party.join_policy, equals: 3, timeout: 10}

@@ -3,11 +3,12 @@
     "curl",
     "gtest",
     "ixwebsocket",
-    "nlohmann-json",
-    "miniupnpc",
     "minhook",
+    "miniupnpc",
+    "nlohmann-json",
     "opus",
     "protobuf",
-    "yaml-cpp"
+    "yaml-cpp",
+    "zstd"
   ]
 }

@@ -189,6 +189,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/module_loader.h"
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/compat/social_party.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/hook/addresses.h"
 #include "runtime/patch/broadcaster_hook_stats.h"
@@ -518,6 +519,30 @@ TEST_F(N61_WsBridgeTest, MultipleMatchmakerConnectionsKeepTheLatestActiveCallbac
   EXPECT_TRUE(TestHook_N61_HasActiveCallback());
 }
 
+TEST_F(N61_WsBridgeTest, FramesFromTheLoginSessionGoToALiveConnectionAfterTheNewestCloses) {
+  // Measured 2026-10-01: conn=3 opens for the lobby join and closes ~15 s later; every profile
+  // reply after that went to the closed socket and the game never saw it. The route is the newest
+  // connection still open, then the login connection, then none.
+  auto remote = MockWsHandle::Create();
+  auto loginWs = MockWsHandle::Create();
+  auto conn2 = MockWsHandle::Create();
+  auto conn3 = MockWsHandle::Create();
+  void* loginRaw = TestHook_N61_RegisterLogin(remote.handle, loginWs.handle);
+  ASSERT_NE(loginRaw, nullptr);
+  EXPECT_EQ(TestHook_SharedRouteConn(), 1);
+  bool fired = false;
+  void* raw2 = TestHook_N61_RegisterMatchmaker(conn2.handle, &fired);
+  void* raw3 = TestHook_N61_RegisterMatchmaker(conn3.handle, &fired);
+  EXPECT_EQ(TestHook_SharedRouteConn(), 3) << "the newest connection takes the frames";
+
+  TestHook_N61_SimulateCloseAndCheckCleared(raw3);
+  EXPECT_EQ(TestHook_SharedRouteConn(), 2) << "not the closed conn=3";
+  TestHook_N61_SimulateCloseAndCheckCleared(raw2);
+  EXPECT_EQ(TestHook_SharedRouteConn(), 1) << "back to the login connection";
+  TestHook_N61_SimulateCloseAndCheckCleared(loginRaw);
+  EXPECT_EQ(TestHook_SharedRouteConn(), -1) << "nothing open: frames are dropped (and logged)";
+}
+
 TEST_F(N61_WsBridgeTest, LoginCloseDuringActiveMatchmakerIsSafe) {
   auto remote = MockWsHandle::Create();
   auto loginWs = MockWsHandle::Create();
@@ -655,6 +680,41 @@ TEST(WsBridgeLoginFailure, DiagnosticUsesDeclaredLengthForConcatenatedFrames) {
   EXPECT_EQ(messageBytes, 4U);
 }
 
+namespace {
+std::string BuildMarkedMessage(uint64_t symbol, const std::string& payload) {
+  static const char kMarker[] = {'\xf6', '\x40', '\xbb', '\x78', '\xa2', '\xe7', '\x8c', '\xbb'};
+  std::string msg(kMarker, sizeof(kMarker));
+  msg.append(16, '\0');
+  WriteLe64(msg, 8, symbol);
+  WriteLe64(msg, 16, payload.size());
+  msg.append(payload);
+  return msg;
+}
+}  // namespace
+
+// Nakama batches LoginSuccess, STcpConnectionUnrequireEvent and GameSettings into one frame. The
+// bridge used to log only the first symbol of a server->game frame, so the other two never
+// appeared in a server's log. Every message in the frame must be logged.
+TEST(WsBridgeFrameLog, LogsEveryMessageInABatchedFrame) {
+  ClearTestLogs();
+  const std::string frame = BuildMarkedMessage(0x1111111111111111ULL, std::string(40, 'a')) +
+                            BuildMarkedMessage(0x43e6963ac76beee4ULL, "") +
+                            BuildMarkedMessage(0x2222222222222222ULL, std::string(7, 'b'));
+  EXPECT_EQ(TestHook_LogFrameMessages("server->game", 1, frame), 3);
+  EXPECT_TRUE(TestLogContains("msg=0 sym=0x1111111111111111"));
+  EXPECT_TRUE(TestLogContains("msg=1 sym=0x43e6963ac76beee4"));
+  EXPECT_TRUE(TestLogContains("msg=2 sym=0x2222222222222222"));
+  EXPECT_TRUE(TestLogContains("len=7"));
+}
+
+TEST(WsBridgeFrameLog, StopsAtATruncatedMessageAndSaysSo) {
+  ClearTestLogs();
+  std::string truncated = BuildMarkedMessage(0x3333333333333333ULL, std::string(10, 'c'));
+  truncated.resize(truncated.size() - 4);
+  EXPECT_EQ(TestHook_LogFrameMessages("game->server", 0, truncated), 1);
+  EXPECT_TRUE(TestLogContains("declares 10 bytes but 6 remain"));
+}
+
 TEST(WsBridgeLoginFailure, DiagnosticRejectsUndersizedTruncatedAndOversizedFrames) {
   uint64_t statusCode = 0;
   size_t messageBytes = 0;
@@ -724,6 +784,7 @@ TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) 
   EXPECT_EQ(json["nevr_identity"]["version"], identity.project_version);
   EXPECT_EQ(json["nevr_identity"]["commit"], identity.git_commit);
   EXPECT_EQ(json["nevr_identity"]["build"], identity.git_describe);
+  EXPECT_EQ(json.at("nevr_social"), SocialParty::kSocialLevel) << "the social level the server gates new messages on";
   EXPECT_EQ(json["nevr_identity"]["build_type"], identity.build_type);
   ASSERT_TRUE(json.contains("system_info"));
   EXPECT_TRUE(json["system_info"]["num_physical_cores"].is_number_unsigned());
@@ -758,22 +819,30 @@ TEST(WsBridgePlatformPrefix, EveryDefinedPlatformHasTheNakamaPrefix) {
   EXPECT_STREQ(TestHook_PlatformPrefix(999), "UNK");
 }
 
-// SelectPlatformCode returns the correct wire platform code based on
-// auth mode and VR state.  Ordered precedence:
-//   1. URL credentials → 4 (OVR_ORG) — legacy auth
-//   2. g_noOvr → 6 (DMO) — demo / no-VR client
-//   3. default → 1 (DSC) — Discord / token auth
-TEST(WsBridgeSelectPlatform, UrlCredentialsWinsOverNoOvr) {
+// The remote Bearer: a token-auth client sends its JWT; a URL-credential client sends the
+// server key (Nakama treats it as the legacy session and authenticates from discordid/password),
+// both through the /nevr ingress that forwards Authorization unchanged (issue #52).
+TEST(WsBridgeRemoteBearer, TokenAuthClientSendsItsJwt) {
+  EXPECT_EQ(TestHook_SelectRemoteBearer(false, "jwt-value", "server-key"), "jwt-value");
+  EXPECT_EQ(TestHook_SelectRemoteBearer(false, "", "server-key"), "");
+}
+
+TEST(WsBridgeRemoteBearer, UrlCredentialClientSendsTheServerKeyNotTheJwt) {
+  EXPECT_EQ(TestHook_SelectRemoteBearer(true, "jwt-value", "server-key"), "server-key");
+  EXPECT_EQ(TestHook_SelectRemoteBearer(true, "", "server-key"), "server-key");
+  // No server key configured: attach nothing (the caller logs a warning), never the JWT.
+  EXPECT_EQ(TestHook_SelectRemoteBearer(true, "jwt-value", ""), "");
+}
+
+// SelectPlatformCode: the bridge always logs in as platform 4 (OVR_ORG), the provider it forces
+// into the game's own CNSUser. A login as platform 6 (DMO, -noovr) made Nakama answer the game's
+// later LobbyPlayerSessionsRequest (sent as OVR-ORG) with "requesting player not found in
+// match", so the game never reached a lobby host.
+TEST(WsBridgeSelectPlatform, AlwaysOvrOrgToMatchTheGamesOwnIdentity) {
   EXPECT_EQ(TestHook_SelectPlatformCode(true, true), 4ULL);
   EXPECT_EQ(TestHook_SelectPlatformCode(true, false), 4ULL);
-}
-
-TEST(WsBridgeSelectPlatform, NoOvrWhenNoUrlCredsIsDmo) {
-  EXPECT_EQ(TestHook_SelectPlatformCode(false, true), 6ULL);
-}
-
-TEST(WsBridgeSelectPlatform, DefaultIsDsc) {
-  EXPECT_EQ(TestHook_SelectPlatformCode(false, false), 1ULL);
+  EXPECT_EQ(TestHook_SelectPlatformCode(false, true), 4ULL);
+  EXPECT_EQ(TestHook_SelectPlatformCode(false, false), 4ULL);
 }
 
 TEST(WsBridgeCallbackGuard, ContainsStdExceptionsAtTheCallbackBoundary) {
@@ -819,7 +888,7 @@ TEST(BroadcasterHookStats, FormatsMockedLivenessCounters) {
   EXPECT_GT(BroadcasterHookStats::Format(line, sizeof(line), 17, 9), 0);
   EXPECT_STREQ(line,
       "[NEVR.PATCH] broadcaster hook stats listen_entries=17 dispatch_entries=9 "
-      "(N83/N84 evidence — zero entries means idle runs prove nothing)");
+      "(zero entries means idle runs prove nothing)");
 }
 
 // The live counters are translation-unit state in mode_patches.cpp.  They are
@@ -838,7 +907,7 @@ TEST(BroadcasterHookStats, LogsActualZeroInitializedCounters) {
   ASSERT_EQ(g_testLogMessages.size(), 1U);
   EXPECT_EQ(g_testLogMessages.front(),
       "[NEVR.PATCH] broadcaster hook stats listen_entries=0 dispatch_entries=0 "
-      "(N83/N84 evidence — zero entries means idle runs prove nothing)");
+      "(zero entries means idle runs prove nothing)");
 }
 
 // ============================================================================

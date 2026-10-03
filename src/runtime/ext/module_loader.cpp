@@ -71,7 +71,7 @@ void LoadModule(const char* name, const NvrModuleContext* ctx) {
   if (!hModule && GetLastError() == ERROR_INVALID_PARAMETER) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.MODULE] %s: restricted search flags unsupported — falling back to "
-        "default search order (N75 hardening inactive for this load)", name);
+        "default search order (hardening inactive for this load)", name);
     hModule = LoadLibraryA(dllPath.c_str());
   }
   if (!hModule) {

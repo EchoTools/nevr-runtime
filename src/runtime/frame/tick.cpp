@@ -26,6 +26,9 @@
  */
 
 #include "runtime/frame/tick.h"
+#ifdef NEVR_SCENARIO_CONTROL
+#include "runtime/scenario/scenario_control.h"
+#endif
 
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
@@ -132,6 +135,10 @@ void DispatchPerFrameWork(uint64_t nowUs) {
     mctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
     mctx.flags = gctx.flags;
     TickModules(&mctx);
+
+#ifdef NEVR_SCENARIO_CONTROL
+    ScenarioControl::OnFrame();  // test builds only: queued scenario actions run on the loop's thread
+#endif
 
     InterlockedExchange(&g_tickReentry, 0);
 }

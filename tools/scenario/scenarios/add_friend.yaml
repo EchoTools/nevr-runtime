@@ -1,0 +1,23 @@
+# Add a friend from inside the game. docs/design/2026-10-01-social-features-test-plan.md #6/#7.
+# Fires what R15NetAddFriendNode (run 0x140dd90f0) does: SNSUserID on the user string, then post
+# 0x1401870f0, whose provider checks lead to social slot 37 OpenFriendRequestUI(0, account). Pass =
+# a friend request for exactly that account left the game. The target is synthetic: no real person
+# gets a request (Nakama answers FriendInviteFailure "not found").
+name: add_friend
+description: fire the game's add-friend node action and see SNSFriendInviteRequest leave for the target
+vars:
+  friend_id: 1000000000000000002
+steps:
+  - name: client is in the social lobby (level loaded, in game)
+    wait_log: {pattern: 'NetGame switching state \(from ready for game, to in game\)'}
+  - name: control endpoint is up
+    wait_log: {pattern: '\[NEVR\.SCENARIO\] control listening on 127\.0\.0\.1:\d+', timeout: 5}
+  - name: add friend fired through the add-friend node's own handler
+    fire: {action: add_friend, user: 'OVR-ORG-${friend_id}'}
+  - name: game reached social slot 37 (OpenFriendRequestUI)
+    expect_log: {pattern: 'slot=37 name=\S+ call=', timeout: 10}
+    diagnose: ['session event .*0x267b06d41014c304', 'session event .*0xf8856ed68e71cdbf']
+  - name: FriendInviteRequest left the game with the right target
+    expect_log: {pattern: 'game->server conn=1 FriendInviteRequest payload_bytes=40 target=${friend_id}', timeout: 10}
+  - name: the server answered the friend request (FriendInviteSuccess or FriendInviteFailure)
+    expect_log: {pattern: 'server->game conn=\d+ \S*FriendInvite(Success|Failure) ', timeout: 10}
