@@ -66,7 +66,7 @@ files. Attach them by dragging them into the form:
 |---|---|
 | The game's log for that session | `%LOCALAPPDATA%\EchoVR\logs\`: the `nevr-<date>T<time>.jsonl` file from that session (newest first if it just happened). Paste `%LOCALAPPDATA%\EchoVR\logs` into the Explorer address bar to get there. |
 | The start-up log | `bin\win10\logs\nevr-boot.jsonl` in your Echo VR folder. |
-| If the game crashed | The newest files in `_temp\crashes\` and in `bin\win10\_temp\crashes\` in your Echo VR folder (names like `RAD_CRASHDUMP_<you>_echovr_<day>_<time>.log` and `.json`). |
+| If the game crashed | **`nevr-crash-<id>.txt`** in the same `%LOCALAPPDATA%\EchoVR\logs\` folder: the crash record (what failed, where, and what called it). Also the newest files in `_temp\crashes\` and in `bin\win10\_temp\crashes\` in your Echo VR folder (names like `RAD_CRASHDUMP_<you>_echovr_<day>_<time>.log` and `.json`). |
 
 **What these files contain:** your Discord account id; the crash files also contain your Windows user
 name and computer name. They do not contain your saved sign-in or its tokens. A
