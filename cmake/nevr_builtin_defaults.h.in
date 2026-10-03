@@ -7,7 +7,7 @@ namespace nevr_builtin {
 
 inline constexpr const char* kSocketUri = "@NEVR_DEFAULT_SOCKET_URI@";
 inline constexpr const char* kHttpUri = "@NEVR_DEFAULT_HTTP_URI@";
-inline constexpr const char* kHttpKey = "@NEVR_DEFAULT_HTTP_KEY@";
-inline constexpr const char* kServerKey = "@NEVR_DEFAULT_SERVER_KEY@";
+inline constexpr const char* kPublicApiKey = "@NEVR_DEFAULT_PUBLIC_API_KEY@";
+inline constexpr const char* kPublicSocketKey = "@NEVR_DEFAULT_PUBLIC_SOCKET_KEY@";
 
 }  // namespace nevr_builtin

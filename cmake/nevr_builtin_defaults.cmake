@@ -6,13 +6,17 @@
 # compiler line, so they do not appear in compile_commands.json or build logs.
 # config.yaml on the game side overrides anything embedded here.
 #
-# Unset or empty values embed nothing, so CI and `just verify` build without secrets.
+# The two keys (NEVR_PUBLIC_API_KEY, NEVR_PUBLIC_SOCKET_KEY) are public by design (#76). The
+# runtime's own overrides, NEVR_API_KEY and NEVR_SOCKET_KEY, are environment variables read at
+# start-up and are never read here.
+#
+# Unset or empty values embed nothing, so CI and `just verify` build without them.
 # Configure with -DNEVR_REQUIRE_BUILTIN_DEFAULTS=ON to fail instead when any is missing
 # (live-test and release builds: a configure without the env or .env must not silently
 # produce a DLL that embeds nothing).
 
 option(NEVR_REQUIRE_BUILTIN_DEFAULTS
-       "Fail configure when any built-in default (NEVR_SOCKET_URI, NEVR_HTTP_URI, NEVR_HTTP_KEY, NEVR_SERVER_KEY) is empty" OFF)
+       "Fail configure when any built-in default (NEVR_SOCKET_URI, NEVR_HTTP_URI, NEVR_PUBLIC_API_KEY, NEVR_PUBLIC_SOCKET_KEY) is empty" OFF)
 
 # Parse <root>/.env (KEY=VALUE lines; # comments; optional single/double quotes) and set
 # ENV{KEY} for every key that is unset OR empty in the real environment.
@@ -60,8 +64,8 @@ function(nevr_generate_builtin_defaults root)
   foreach(pair
       "NEVR_SOCKET_URI;SOCKET_URI"
       "NEVR_HTTP_URI;HTTP_URI"
-      "NEVR_HTTP_KEY;HTTP_KEY"
-      "NEVR_SERVER_KEY;SERVER_KEY")
+      "NEVR_PUBLIC_API_KEY;PUBLIC_API_KEY"
+      "NEVR_PUBLIC_SOCKET_KEY;PUBLIC_SOCKET_KEY")
     list(GET pair 0 env_name)
     list(GET pair 1 var_name)
     set(raw "$ENV{${env_name}}")
@@ -72,8 +76,14 @@ function(nevr_generate_builtin_defaults root)
       message(STATUS "nevr builtin default ${env_name}: not set (nothing embedded)")
     else()
       string(LENGTH "${raw}" raw_len)
-      # Length only: never echo a value (two of these are secrets).
+      # Length only: the keys are public by design, but build logs are not where they belong.
       message(STATUS "nevr builtin default ${env_name}: embedded (${raw_len} chars)")
+    endif()
+  endforeach()
+  # The runtime-only overrides must not leak into the build: say so if they are set here.
+  foreach(runtime_only NEVR_API_KEY NEVR_SOCKET_KEY)
+    if(NOT "$ENV{${runtime_only}}" STREQUAL "")
+      message(STATUS "nevr builtin default: ${runtime_only} is set but is runtime-only; not embedded")
     endif()
   endforeach()
   if(NEVR_REQUIRE_BUILTIN_DEFAULTS AND missing)

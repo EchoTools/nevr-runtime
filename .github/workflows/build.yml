@@ -16,8 +16,8 @@ jobs:
     env:
       NEVR_SOCKET_URI: ${{ github.event_name == 'release' && secrets.NEVR_SOCKET_URI || '' }}
       NEVR_HTTP_URI: ${{ github.event_name == 'release' && secrets.NEVR_HTTP_URI || '' }}
-      NEVR_HTTP_KEY: ${{ github.event_name == 'release' && secrets.NEVR_HTTP_KEY || '' }}
-      NEVR_SERVER_KEY: ${{ github.event_name == 'release' && secrets.NEVR_SERVER_KEY || '' }}
+      NEVR_PUBLIC_API_KEY: ${{ github.event_name == 'release' && secrets.NEVR_PUBLIC_API_KEY || '' }}
+      NEVR_PUBLIC_SOCKET_KEY: ${{ github.event_name == 'release' && secrets.NEVR_PUBLIC_SOCKET_KEY || '' }}
 
     steps:
     - uses: actions/checkout@v4

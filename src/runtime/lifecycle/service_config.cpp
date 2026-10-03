@@ -127,7 +127,7 @@ const nevr::NevrConfig& NevrCfg() {
 // config.yaml can override any of them and a rejected or absent file still leaves them in
 // place. Client mode only: a dedicated server has always been configured explicitly, and
 // must not silently start a bridge or authenticate with an embedded key. Only key NAMES are
-// logged, never values (two of these are secrets, socket_uri may carry a token).
+// logged, never values (the two keys are public by design (#76), but socket_uri may carry a token).
 const nevr_cfg::FlatDefaults& BuiltinDefaults() {
   static const nevr_cfg::FlatDefaults defaults = []() {
     nevr_cfg::FlatDefaults d;
@@ -142,8 +142,8 @@ const nevr_cfg::FlatDefaults& BuiltinDefaults() {
     } kEmbedded[] = {
         {"nevr_socket_uri", nevr_builtin::kSocketUri},
         {"nevr_http_uri", nevr_builtin::kHttpUri},
-        {"nevr_http_key", nevr_builtin::kHttpKey},
-        {"nevr_server_key", nevr_builtin::kServerKey},
+        {"nevr_http_key", nevr_builtin::kPublicApiKey},
+        {"nevr_server_key", nevr_builtin::kPublicSocketKey},
     };
     std::string embedded;
     std::string missing;
@@ -164,9 +164,32 @@ const nevr_cfg::FlatDefaults& BuiltinDefaults() {
   return defaults;
 }
 
-// One lookup for every flat key: config.yaml value, else the embedded default.
+// The runtime's environment overrides (#76): NEVR_API_KEY and NEVR_SOCKET_KEY, read once at
+// start-up, above config.yaml and the built-in defaults. In both modes. Names logged, never values.
+const nevr_cfg::FlatEnvOverrides& EnvOverrides() {
+  static const nevr_cfg::FlatEnvOverrides overrides = []() {
+    nevr_cfg::FlatEnvOverrides o = nevr_cfg::ReadFlatEnvOverrides([](const char* name) -> std::optional<std::string> {
+      char buf[1024];
+      const DWORD len = GetEnvironmentVariableA(name, buf, sizeof(buf));
+      if (len == 0 || len >= sizeof(buf)) return std::nullopt;
+      return std::string(buf, len);
+    });
+    std::string names;
+    for (const nevr_cfg::FlatEnvVar& var : nevr_cfg::kFlatEnvVars) {
+      if (o.count(var.flatKey) == 0) continue;
+      if (!names.empty()) names += ", ";
+      names += std::string(var.envName) + " (" + nevr_cfg::FlatKeyToYamlPath(var.flatKey) + ")";
+    }
+    Log(EchoVR::LogLevel::Info, "[NEVR.CONFIG] environment overrides: %s", names.empty() ? "(none)" : names.c_str());
+    return o;
+  }();
+  return overrides;
+}
+
+// One lookup for every flat key: environment override, else config.yaml value, else the
+// embedded default.
 std::optional<std::string> Flat(const std::string& flatKey) {
-  return nevr_cfg::LookupFlatWithDefaults(NevrCfg(), BuiltinDefaults(), flatKey);
+  return nevr_cfg::LookupFlatLayered(NevrCfg(), EnvOverrides(), BuiltinDefaults(), flatKey);
 }
 
 // --- interning -------------------------------------------------------------
