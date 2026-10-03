@@ -61,6 +61,7 @@ struct DeviceAuthFlowOps {
     std::function<void(Clock::duration)> sleep;
     std::function<bool()> save;
     std::function<void(EchoVR::LogLevel, const std::string&)> log;
+    std::function<bool()> cancelled;  // optional
 };
 
 struct DeviceAuthFlowResult {

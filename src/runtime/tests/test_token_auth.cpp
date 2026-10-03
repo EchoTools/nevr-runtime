@@ -18,6 +18,7 @@
 #include "auth_snapshot.h"
 #include "device_poll_response.h"
 #include "extension/module_interface.h"
+#include "off_thread_wait.h"
 #include "token_auth.h"
 
 extern "C" int token_auth_Init(const NvrModuleContext* ctx);
@@ -801,6 +802,77 @@ TEST(DeviceAuthFlow, DeviceCodeIsNeverLoggedAtAnyLevelButReachesBrowserAndUi) {
   EXPECT_TRUE(sawDebug);
   EXPECT_TRUE(sawWarning);
   EXPECT_TRUE(sawError);
+}
+
+// The game closing while the player has not signed in yet (#37): once cancelled, the flow stops at
+// its next wake-up without polling again or touching the stored credentials.
+TEST(DeviceAuthFlow, CancellationStopsTheWaitWithoutPollingOrSaving) {
+  FakeDeviceAuthFlow fake;
+  fake.browser_result = 33;
+  fake.poll_response = TokenAuth::ParseDevicePollResponse("{\"status\":\"authorization_pending\"}");
+  int wakeups = 0;
+  auto ops = fake.Ops();
+  ops.cancelled = [&wakeups]() { return ++wakeups >= 3; };  // cancelled at the third wake-up
+  const auto original = ExistingDeviceAuthState();
+  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, original, ops);
+
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ(fake.poll_calls, 2) << "polled after the first two wake-ups, not after the cancelled one";
+  EXPECT_EQ(fake.save_calls, 0);
+  ExpectSameDeviceAuthState(result.state, original);
+  const bool logged = std::any_of(fake.logs.begin(), fake.logs.end(), [](const auto& entry) {
+    return entry.second.find("cancelled") != std::string::npos;
+  });
+  EXPECT_TRUE(logged);
+}
+
+// No cancellation hook (the existing callers) behaves as before: the wait runs to verification.
+TEST(DeviceAuthFlow, WithoutACancellationHookTheFlowIsUnchanged) {
+  FakeDeviceAuthFlow fake;
+  fake.browser_result = 33;
+  fake.poll_response = VerifiedPollResponse();
+  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+  EXPECT_TRUE(result.success);
+  EXPECT_EQ(fake.save_calls, 1);
+}
+
+// The sign-in wait (#37, G7): the flow runs on a worker while the caller keeps pumping, so the
+// caller's window stays responsive; the caller still gets the flow's result before it continues.
+TEST(OffThreadWait, FlowRunsOnAWorkerWhileTheCallerPumps) {
+  std::atomic<int> pumps{0};
+  const auto r = TokenAuth::RunWhilePumping(
+      [&pumps]() {
+        // Block until the caller has pumped a few times: proves the caller is not blocked on us.
+        while (pumps.load() < 3) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        return true;
+      },
+      [&pumps]() { ++pumps; }, std::chrono::milliseconds(1));
+  EXPECT_TRUE(r.flowResult);
+  EXPECT_TRUE(r.ranOnOtherThread);
+  EXPECT_FALSE(r.ranInline);
+  EXPECT_FALSE(r.flowThrew);
+  EXPECT_GE(r.pumpCalls, 3U);
+  EXPECT_EQ(r.pumpCalls, static_cast<unsigned>(pumps.load()));
+}
+
+TEST(OffThreadWait, FlowResultAndThrowAreReported) {
+  const auto failed = TokenAuth::RunWhilePumping([]() { return false; }, []() {}, std::chrono::milliseconds(1));
+  EXPECT_FALSE(failed.flowResult);
+  EXPECT_FALSE(failed.flowThrew);
+  const auto threw = TokenAuth::RunWhilePumping(
+      []() -> bool { throw std::runtime_error("flow failed"); }, []() {}, std::chrono::milliseconds(1));
+  EXPECT_FALSE(threw.flowResult);
+  EXPECT_TRUE(threw.flowThrew);
+}
+
+// A flow that finishes before the first interval elapses needs no pumping at all.
+TEST(OffThreadWait, QuickFlowNeedsNoPump) {
+  int pumps = 0;
+  const auto r = TokenAuth::RunWhilePumping([]() { return true; }, [&pumps]() { ++pumps; },
+                                            std::chrono::milliseconds(10'000));
+  EXPECT_TRUE(r.flowResult);
+  EXPECT_EQ(pumps, 0);
+  EXPECT_EQ(r.pumpCalls, 0U);
 }
 
 TEST(DeviceAuthFlow, MalformedVerifiedCandidateDoesNotChangeStateOrSave) {

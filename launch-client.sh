@@ -48,8 +48,15 @@ if [[ ${#plugin_files[@]} -ne 0 ]]; then
   echo "DRIFT: $GAME_DIR/plugins is not empty: ${plugin_files[*]}" >&2; drift=1
 fi
 if [[ $drift -ne 0 ]]; then echo "ABORT: game directory is not pristine" >&2; exit 3; fi
-if [[ -f "$LOCAL_DIR/.credentials.json" ]]; then
-  echo "=== note: cached credentials present ($LOCAL_DIR/.credentials.json); this run uses the cached flow ==="
+# The runtime takes the first cache in exe-relative order: _local, ../_local, ../../_local
+# (src/core/auth_token.h SelectCredentialCacheLocation); a device-code login with none saves to
+# $GAME_DIR/_local.
+cached=""
+for c in "$GAME_DIR/_local" "$GAME_DIR/../_local" "$LOCAL_DIR"; do
+  if [[ -f "$c/.credentials.json" ]]; then cached="$c/.credentials.json"; break; fi
+done
+if [[ -n "$cached" ]]; then
+  echo "=== note: cached credentials present ($cached); this run uses the cached flow ==="
 else
   echo "=== note: no cached credentials; this run exercises the full device-code flow ==="
 fi
@@ -77,7 +84,7 @@ cp -v "$DLL" "$GAME_DIR/BugSplat64.dll"
 cmp -s "$DLL" "$GAME_DIR/BugSplat64.dll"
 sha256sum "$GAME_DIR/BugSplat64.dll"
 
-echo "=== Starting echovr.exe -noovr -windowed -mp (DISPLAY=$DISPLAY, WAYLAND_DISPLAY unset) ==="
+echo "=== Starting echovr.exe -windowed (DISPLAY=$DISPLAY, WAYLAND_DISPLAY unset) ==="
 echo "=== Console log: $CONSOLE_LOG ==="
 
 # Evidence that the game really is on the nested display, read from /proc.
@@ -90,7 +97,11 @@ echo "=== Console log: $CONSOLE_LOG ==="
 
 start=$(date +%s)
 set +e
-game_args=(-noovr -windowed -mp)
+# -windowed alone (owner, 2026-10-03: "just -windowed"; "-windowed is basically -novr (not -noovr)"):
+# it is the game's no-headset mode. A client is not meant to run with -noovr (added in e449958 as a
+# "VR bypass"); -mp has no reader in the runtime and no string in echovr.exe
+# (docs/reference/server-mode-multiplayer-hang.md).
+game_args=(-windowed)
 if [[ -n "$CONFIG" ]]; then
   [[ -f "$CONFIG" ]] || { echo "ERROR: --config $CONFIG does not exist" >&2; exit 2; }
   game_args+=(-config "Z:${CONFIG//\//\\}")
