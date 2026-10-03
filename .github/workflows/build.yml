@@ -3,12 +3,19 @@ name: Build
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   release:
     types: [created]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # The current toolchain, the same one development uses (#81): Arch's MinGW-w64 GCC and headers
+    # from pacman, not Ubuntu's (ubuntu-24.04 ships GCC 13.2 / mingw-w64 11 with the win32 thread
+    # model). Rolling by design; the "Toolchain versions" step records what built each run.
+    container:
+      image: archlinux:base-devel
     # Release builds embed the production endpoints and keys (cmake/nevr_builtin_defaults.cmake) so
     # a tester's DLL logs in with no config file (#65). They come from repository secrets, only on a
     # release; with NEVR_REQUIRE_BUILTIN_DEFAULTS=ON an unset one fails the configure. Embedding the
@@ -20,35 +27,53 @@ jobs:
       NEVR_PUBLIC_SOCKET_KEY: ${{ github.event_name == 'release' && secrets.NEVR_PUBLIC_SOCKET_KEY || '' }}
 
     steps:
+    # git must exist before checkout, or actions/checkout falls back to the REST API (no submodules).
+    - name: Install the toolchain (pacman)
+      run: |
+        set -euo pipefail
+        pacman -Syu --noconfirm --needed \
+          git mingw-w64-gcc ninja cmake python python-yaml go just zstd openssl wine \
+          curl zip unzip tar pkgconf zlib
+
     - uses: actions/checkout@v4
       with:
         submodules: recursive
         fetch-depth: 0
+
+    - name: Trust the workspace for git
+      run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
     - name: Setup pinned just
       uses: extractions/setup-just@v4
       with:
         just-version: '1.46.0'
 
-    - name: Setup pinned CMake
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-    - run: python -m pip install cmake==4.0.0
-    - run: cmake --version
-
-    - name: Install MinGW toolchain
+    # osslsigncode is not in Arch's official repositories; build a pinned upstream release so the
+    # throwaway-certificate signing test in tools/tests runs instead of skipping.
+    - name: Build osslsigncode (pinned)
       run: |
-        sudo apt-get update
-        sudo apt-get install -y g++-mingw-w64-x86-64 ninja-build wine zstd osslsigncode openssl
+        set -euo pipefail
+        git clone --depth 1 --branch 2.14 https://github.com/mtrojnar/osslsigncode.git /tmp/osslsigncode
+        cmake -S /tmp/osslsigncode -B /tmp/osslsigncode/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        cmake --build /tmp/osslsigncode/build
+        cmake --install /tmp/osslsigncode/build
 
     - name: Setup pinned Buf
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.23.6'
-    - run: |
+      run: |
+        set -euo pipefail
         go install github.com/bufbuild/buf/cmd/buf@v1.47.2
-        echo "$HOME/go/bin" >> "$GITHUB_PATH"
+        echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+    - name: Toolchain versions
+      run: |
+        set -euo pipefail
+        pacman -Q mingw-w64-gcc mingw-w64-headers mingw-w64-crt mingw-w64-winpthreads cmake ninja wine go python
+        x86_64-w64-mingw32-g++ --version
+        x86_64-w64-mingw32-g++ -v 2>&1 | grep "Thread model"
+        cmake --version
+        just --version
+        osslsigncode --version
+        buf --version
 
     - name: Setup vcpkg
       run: |
