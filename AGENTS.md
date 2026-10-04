@@ -219,6 +219,7 @@ You are not the first agent to work here, and you won't be the last. Act like it
 
 ## Methodology
 
+- **Planning on GitHub**: releases, points, sprints, story states and hygiene follow `docs/standards/planning.md`. File new work against a release milestone or the `backlog` label.
 - **Plan before code**: Non-trivial changes require a written plan before implementation.
 - **Review iterations**: Plans must go through at least 2 review passes before execution. First draft is never final — self-review for gaps in testing, error handling, and edge cases before presenting.
 - **Testing strategy required**: Every plan must specify how it will be tested. Automated tests first (unit + integration). Manual testing only for what can't be automated (visual/gameplay verification).

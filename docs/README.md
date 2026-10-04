@@ -36,6 +36,7 @@ Coding and verification standards that bind all work in this repo.
 | ---- | ----------- | -------- |
 | `logging.md` | Structured logging format, noise suppression rules, and identity-on-login requirements | All developers |
 | `verification.md` | Evidence ladder (rank 1–5), falsification discipline, and gate contract | All developers and agents |
+| `planning.md` | Release milestones by outcome, Fibonacci points, sprints by work, story states, and the hygiene rules for issues, PRs, branches and milestones | All developers and agents |
 
 ## Audits
 
