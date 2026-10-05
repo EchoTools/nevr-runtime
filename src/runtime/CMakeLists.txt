@@ -462,6 +462,76 @@ if(BUILD_TESTING)
     target_link_libraries(test_hooking PRIVATE GTest::gtest GTest::gtest_main minhook)
     gtest_discover_tests(test_hooking DISCOVERY_MODE PRE_TEST)
 
+    # Isolated loader-lock proof harness for the planned BugSplat64.dll bootstrap.
+    # The host DLL installs only a MinHook rendezvous in DllMain, then loads a
+    # versioned runtime on its first target call. The child scenarios exercise
+    # runtime absence, ABI mismatch, missing entry, init failure and bad PE data.
+    set(BOOTSTRAP_ATTACH_DIR "${CMAKE_BINARY_DIR}/bin/bootstrap-attach")
+    set(BOOTSTRAP_ATTACH_FIXTURE_DIR "${BOOTSTRAP_ATTACH_DIR}/fixtures")
+
+    add_library(test_bootstrap_attach_host SHARED
+      tests/bootstrap_attach/host_probe.cpp)
+    target_include_directories(test_bootstrap_attach_host PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/bootstrap_attach)
+    target_link_libraries(test_bootstrap_attach_host PRIVATE minhook)
+    set_target_properties(test_bootstrap_attach_host PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "BugSplat64"
+      ARCHIVE_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_DIR}"
+      RUNTIME_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_DIR}"
+      LIBRARY_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_DIR}")
+
+    function(add_bootstrap_attach_fixture target fixture_dir)
+      add_library(${target} SHARED tests/bootstrap_attach/runtime_probe.cpp)
+      target_include_directories(${target} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/bootstrap_attach)
+      set_target_properties(${target} PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "nevr"
+        ARCHIVE_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/${fixture_dir}"
+        RUNTIME_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/${fixture_dir}"
+        LIBRARY_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/${fixture_dir}")
+    endfunction()
+
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_good good)
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_bad_version bad-version)
+    target_compile_definitions(test_bootstrap_attach_runtime_bad_version PRIVATE
+      BOOTSTRAP_PROBE_BAD_VERSION)
+
+    add_library(test_bootstrap_attach_runtime_missing_entry SHARED
+      tests/bootstrap_attach/runtime_missing_entry.cpp)
+    set_target_properties(test_bootstrap_attach_runtime_missing_entry PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "nevr"
+      ARCHIVE_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/missing-entry"
+      RUNTIME_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/missing-entry"
+      LIBRARY_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/missing-entry")
+
+    set(BOOTSTRAP_BAD_IMAGE
+      "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/bad-image/nevr.dll")
+    add_custom_command(OUTPUT "${BOOTSTRAP_BAD_IMAGE}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/bad-image"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/bootstrap_attach/runtime_bad_image.txt"
+        "${BOOTSTRAP_BAD_IMAGE}"
+      DEPENDS tests/bootstrap_attach/runtime_bad_image.txt
+      VERBATIM)
+    add_custom_target(test_bootstrap_attach_bad_image ALL
+      DEPENDS "${BOOTSTRAP_BAD_IMAGE}")
+
+    add_executable(test_bootstrap_attach tests/bootstrap_attach/attach_test.cpp)
+    target_include_directories(test_bootstrap_attach PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/bootstrap_attach)
+    set_target_properties(test_bootstrap_attach PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_DIR}")
+    add_dependencies(test_bootstrap_attach
+      test_bootstrap_attach_host
+      test_bootstrap_attach_runtime_good
+      test_bootstrap_attach_runtime_bad_version
+      test_bootstrap_attach_runtime_missing_entry
+      test_bootstrap_attach_bad_image)
+
     # plugin_load_plan tests (N134 S6) — the PURE core of the config-driven plugin
     # loader: BuildLoadPlan (ordered/enabled-only selection, file defaulting,
     # required/target carry), ArgsToJson (the v4 args_json contract), and

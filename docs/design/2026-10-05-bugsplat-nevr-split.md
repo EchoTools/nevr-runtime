@@ -1,7 +1,7 @@
 # Design and Test Plan: Stable BugSplat Bootstrap + `nevr.dll`
 
 Date: 2026-10-05
-Status: reviewed design; implementation has not started
+Status: implementation in progress; design reviewed; only the isolated attach-proof harness has been added so far
 
 ## Goal
 
@@ -54,6 +54,11 @@ Keep `BugSplat64.dll` as the stable filename and compatibility/bootstrap layer E
 7. Move detailed crash-recovery tests with the runtime. Add a child-process fault test proving the shim writes a structurally valid minidump through `BugSplat_createReport` with `nevr.dll` absent and after runtime load/API/init failure; prove normal runtime crash instrumentation remains active with a compatible `nevr.dll`. Exercise diagnostic path fallback, unwritable destination, full disk/write failure, and a second crash while reporting, ensuring the process does not recurse or deadlock.
 8. Run `just configure && just build`, then `just verify`. Run focused PE contract and loader-state tests under Wine. Run `./launch-client.sh` on `Xephyr :101` with `WAYLAND_DISPLAY` unset; verify a rendered window and successful login using the game's own log. Separately exercise missing and incompatible runtime with a non-production harness, and exercise the external launcher ABI path. Run dedicated-server smoke coverage if its configured local test environment is available.
 9. After any commit touching runtime code, run the required nested client login test and report exact commit/test evidence. No release, tag, deployment, or Nakama operation is part of this goal.
+
+## Current verification state
+
+- The isolated `bootstrap-attach` probe DLL and child-process harness exercise MinHook setup from `DLL_PROCESS_ATTACH`, concurrent thread progress during hook installation, lazy runtime loading after host `LoadLibrary` returns, reentrant/concurrent dispatch, and absent/incompatible/missing-entry/init-failure/invalid-image runtime cases. `just preset=mingw-debug test-auth-unit` passes under Wine, including all six harness scenarios.
+- This is preliminary mechanism evidence, not completion of the proof gate: the probe has not yet been proven on native Windows, and the eventual production host's DllMain, supported Echo image timestamp, `PreprocessCommandLine` prologue, and real startup ordering have not yet been exercised together. `WINVM_USER` and `WINVM_PASS` are unset in the current environment, so native Windows verification cannot run now. Do not migrate runtime sources until the full gate passes.
 
 ## Acceptance criteria
 

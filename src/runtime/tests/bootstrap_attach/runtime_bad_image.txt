@@ -1,0 +1,1 @@
+This is deliberately not a valid PE DLL. It exercises LoadLibraryEx failure.
