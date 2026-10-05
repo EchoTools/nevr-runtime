@@ -198,7 +198,7 @@ in the log.
 // BEFORE (N15 — numeric account ID only, no platform prefix, no full XPID)
 // was: src/modules/ws-bridge/src/ws_bridge.cpp:281-283 — directory deleted in
 // 2e5b4ec; retrieve with
-// git show d654cd192e95767227fda0313d713e9d5effe4c9:src/modules/ws-bridge/src/ws_bridge.cpp
+// git show 46903229b0a7bfff82324e3c2b163ebc653173c9:src/modules/ws-bridge/src/ws_bridge.cpp
 Log(EchoVR::LogLevel::Info,
     "[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)",
     (unsigned long long)discordId, loginMsg.size());
@@ -218,7 +218,7 @@ prefix hardcoded as OVR_ORG in module ws_bridge).
 **Where:** the module copy is GONE — `src/modules/ws-bridge/` was deleted in
 `2e5b4ec` (N105) after N92 folded the bridge into `BugSplat64.dll`. Its content
 is still retrievable:
-`git show d654cd192e95767227fda0313d713e9d5effe4c9:src/modules/ws-bridge/src/ws_bridge.cpp`
+`git show 46903229b0a7bfff82324e3c2b163ebc653173c9:src/modules/ws-bridge/src/ws_bridge.cpp`
 (conn>0 injection at :281-283, conn=0 at :441-444). The surviving injection site
 is `src/runtime/compat/ws_bridge.cpp:515`. Tracked as N15.
 
@@ -385,7 +385,7 @@ though it were the live output. It was removed 2026-07-29 rather than corrected,
 since it described a format that has not shipped since March and contradicted this
 section. Retrieve it with:
 
-    git show 9bf274450e2ddbcbba5f61dc67f23f14f5c3e064:docs/reference/logging-format.md
+    git show 94a24a16b67ca21e39cab2cd2b49f8914c1c93ab:docs/reference/logging-format.md
 
 ### Rule 8: State transitions log FROM -> TO
 
