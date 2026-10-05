@@ -110,7 +110,10 @@ class ReleaseContractTest(unittest.TestCase):
             self.assertRegex(pacman.group("pkgs"), rf"(?<![\w-]){re.escape(pkg)}(?![\w-])", pkg)
         self.assertIn("mtrojnar/osslsigncode.git", workflow)  # not in Arch's official repos: pinned build
         self.assertIn("- name: Toolchain versions", workflow)
-        self.assertNotIn("apt-get", workflow)
+        # Only the build job's toolchain has to come from one pacman -Syu (#81/#82); the publish job
+        # runs on ubuntu-latest (not the Arch container) and installs zstd with apt-get there (#79).
+        build_job = workflow.split("\n  sign:", 1)[0]
+        self.assertNotIn("apt-get", build_job)
         self.assertIn("bufbuild/buf/cmd/buf@v1.47.2", workflow)
         self.assertIn("--host-triplet=x64-linux", workflow)
         self.assertIn("x64-linux/tools/protobuf/protoc", workflow)
