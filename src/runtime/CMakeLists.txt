@@ -372,12 +372,18 @@ if(BUILD_TESTING)
     target_link_libraries(test_mic_dsp PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_mic_dsp DISCOVERY_MODE PRE_TEST)
 
+    # test_mic_owner_thread.cpp (GH #51) rides in the same executable, so the
+    # existing `just test-auth-unit` loop runs it with no recipe change.
     add_executable(test_mic_lifecycle
       tests/test_mic_lifecycle.cpp
+      tests/test_mic_owner_thread.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_lifecycle.cpp
-      ${CMAKE_SOURCE_DIR}/src/core/mic_capture_drain.cpp)
-    set_source_files_properties(tests/test_mic_lifecycle.cpp ${CMAKE_SOURCE_DIR}/src/core/mic_lifecycle.cpp
       ${CMAKE_SOURCE_DIR}/src/core/mic_capture_drain.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_owner_thread.cpp)
+    set_source_files_properties(tests/test_mic_lifecycle.cpp tests/test_mic_owner_thread.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_lifecycle.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_capture_drain.cpp
+      ${CMAKE_SOURCE_DIR}/src/core/mic_owner_thread.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_mic_lifecycle PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_mic_lifecycle PRIVATE GTest::gtest GTest::gtest_main)
