@@ -189,7 +189,7 @@ test-system-verbose:
 # docs/reference/windows-vm-system-test.md. Exit 1 = runtime failed a check,
 # exit 2 = the VM/environment is unusable.
 test-winvm *ARGS:
-    tools/winvm/systest.py {{ARGS}}
+    python3 tools/winvm/systest.py {{ARGS}}
 
 # Local, isolated nakama (fake Discord, own Postgres) for testing the runtime's
 # login/registration path. See docs/reference/local-nakama.md.
