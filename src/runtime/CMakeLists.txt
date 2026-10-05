@@ -25,6 +25,7 @@ set(PATCHES_SOURCES
     "lifecycle/state_machine.cpp"
     "ext/plugin_loader.cpp"
     "ext/plugin_load_plan.cpp"
+    "ext/plugin_manifest.cpp"
     "ext/module_loader.cpp"
     "patch/resource_override.cpp"
     "compat/winhttp_stub.cpp"
@@ -87,6 +88,7 @@ set(PATCHES_HEADERS
     "ext/plugin_loader.h"
     "ext/plugin_load_plan.h"
     "ext/plugin_load_plan_build.h"
+    "ext/plugin_manifest.h"
     "ext/module_loader.h"
     "compat/winhttp_stub.h"
     "patch/asset_cdn.h"
@@ -169,6 +171,9 @@ set_source_files_properties(lifecycle/service_map.cpp lifecycle/service_config.c
 # no windows.h. Same reason as service_map.cpp: it must stay PCH-agnostic (defines
 # NOMINMAX before nlohmann, which pulls <limits>) so the test links it standalone.
 set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# #60: plugin_manifest.cpp builds the login's nevr_plugins array with nlohmann-json;
+# pure and PCH-free for the same reason as plugin_load_plan.cpp.
+set_source_files_properties(ext/plugin_manifest.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 set_source_files_properties(log/url_diagnostics.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # Scenario-test control endpoint (docs/design/2026-10-01-social-scenario-harness.md). It can inject
@@ -463,7 +468,7 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_hooking DISCOVERY_MODE PRE_TEST)
 
     # plugin_load_plan tests (N134 S6) — the PURE core of the config-driven plugin
-    # loader: BuildLoadPlan (ordered/enabled-only selection, file defaulting,
+    # loader: BuildLoadPlan (ordered selection with enabled flag, file defaulting,
     # required/target carry), ArgsToJson (the v4 args_json contract), and
     # ChoosePluginInit (v4-preferred/v3-fallback). Compiles plugin_load_plan.cpp
     # directly (the same TU nevr_runtime links) + nevr_core (nevr_config) + yaml-cpp
@@ -472,8 +477,10 @@ if(BUILD_TESTING)
     # is exercised by the differential server run.
     add_executable(test_plugin_load_plan
       tests/test_plugin_load_plan.cpp
-      ext/plugin_load_plan.cpp)
+      ext/plugin_load_plan.cpp
+      ext/plugin_manifest.cpp)
     set_source_files_properties(tests/test_plugin_load_plan.cpp ext/plugin_load_plan.cpp
+      ext/plugin_manifest.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_plugin_load_plan PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_plugin_load_plan PRIVATE
@@ -503,6 +510,8 @@ if(BUILD_TESTING)
       # system_info.cpp so the test drives the REAL compile-time constants.
       "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp"
       ext/plugin_loader.cpp
+      # #60: plugin_loader.cpp builds the login's plugin report through this.
+      ext/plugin_manifest.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
@@ -531,6 +540,7 @@ if(BUILD_TESTING)
       "${CMAKE_SOURCE_DIR}/src/core/build_identity.cpp"
       tests/test_behavioral.cpp
       ext/plugin_loader.cpp
+      ext/plugin_manifest.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp

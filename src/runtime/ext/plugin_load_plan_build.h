@@ -22,10 +22,11 @@ namespace nevr_plugincfg {
 // an empty map yields "{}". This IS the v4 args_json contract.
 std::string ArgsToJson(const std::map<std::string, std::string>& args);
 
-// The ordered, enabled-only load plan built from a parsed config. Pure: a pure
+// The ordered load plan built from a parsed config. Pure: a pure
 // function of `cfg` (reads cfg.Plugins()), so the test drives it from a
 // NevrConfig::LoadFromString(...) with no singleton/Windows/I-O. List order is
-// load order; entries with enabled=false are dropped; `file` defaults to
+// load order; entries with enabled=false are kept with item.enabled=false (the
+// loader skips them, the login reports them — #60); `file` defaults to
 // name+".dll" (already applied by the parser); `args` is serialized via ArgsToJson.
 std::vector<PluginLoadItem> BuildLoadPlan(const nevr::NevrConfig& cfg);
 

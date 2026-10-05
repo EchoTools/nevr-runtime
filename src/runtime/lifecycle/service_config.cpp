@@ -280,7 +280,7 @@ const char* NevrCfgGameNativeConfigJson() {
 
 // N134 S6 — the plugin loader's config source. The impure half: reads the same
 // config.yaml singleton (loaded + fail-loud-validated once, above) and hands the
-// loader the ordered, enabled-only plan built by the pure BuildLoadPlan. Kept
+// loader the ordered plan (disabled entries flagged) built by the pure BuildLoadPlan. Kept
 // here (not in plugin_load_plan.cpp) so the pure builder stays singleton-free and
 // the test links it without dragging the singleton/Windows/Log surface.
 std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() {

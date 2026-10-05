@@ -51,10 +51,16 @@ inline constexpr int CapsLoadPriority(uint32_t caps) {
   return 0;
 }
 
-// N112 — build a compact JSON array describing every loaded plugin so the
-// client login and server registration can send a plugin manifest. Format:
-//   [{"name":"ex","ver":"1.0.0","api":5,"caps":1},...]
-// Returns "[]" when no plugins are loaded. Call after LoadPlugins().
+// N112 / #60 — the JSON array the client login sends as `nevr_plugins`: one
+// entry per entry of config.yaml's `plugins:` list, in list order, recording
+// what the last LoadPlugins() did with it. Shape (see plugin_manifest.h):
+//   [{"name":"ex","file":"ex.dll","enabled":true,"required":false,"loaded":true,
+//     "ver":"1.0.0","api":5,"caps":1},
+//    {"name":"gate","file":"gate.dll","enabled":true,"required":true,"loaded":false,
+//     "error":"LoadLibrary failed: error 126"},
+//    {"name":"off","file":"off.dll","enabled":false,"required":false,"loaded":false}]
+// Returns "[]" before LoadPlugins(), after UnloadPlugins(), or when no plugins
+// are configured. Only the client login sends it; server registration does not.
 std::string BuildPluginManifestJson();
 
 // ============================================================================

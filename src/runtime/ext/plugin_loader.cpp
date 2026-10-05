@@ -1,6 +1,7 @@
 #include "runtime/ext/plugin_loader.h"
 
 #include <algorithm>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -11,6 +12,7 @@
 #include "runtime/lifecycle/crash_recovery.h"  // ServerFatal
 #include "runtime/hook/hook_guard.h"
 #include "runtime/ext/plugin_load_plan.h"       // N134 S6: config-driven load plan
+#include "runtime/ext/plugin_manifest.h"        // #60: the login's plugin report
 
 struct LoadedPlugin {
   HMODULE                     hModule;
@@ -25,6 +27,17 @@ struct LoadedPlugin {
 };
 
 static std::vector<LoadedPlugin> g_plugins;
+
+// #60: what happened to each configured plugin at the last LoadPlugins(), in
+// config.yaml order. Written once at the end of LoadPlugins (boot thread), read
+// by the login builder on the bridge's websocket thread, hence the mutex.
+static std::mutex g_pluginReportMutex;
+static std::vector<PluginManifestEntry> g_pluginReport;
+
+static void PublishPluginReport(std::vector<PluginManifestEntry> report) {
+  std::lock_guard<std::mutex> lock(g_pluginReportMutex);
+  g_pluginReport = std::move(report);
+}
 
 // N134 S8: query API — lets a plugin discover its neighbours at runtime.
 // Called through ctx->get_plugin_count / ctx->get_plugin_info (function
@@ -46,29 +59,12 @@ const NvrLoadedPluginInfo* GetLoadedPluginInfo(int index) {
   return reinterpret_cast<const NvrLoadedPluginInfo*>(&p.info);
 }
 
-// N112 — build a compact JSON array of plugin identities for the login
-// payload. Called after LoadPlugins() from ws_bridge.cpp (client) and
-// gameserver.cpp (server). Format is deliberately compact to keep the
-// login payload small.
+// N112 / #60 — the login's `nevr_plugins` array: one entry per configured
+// plugin (loaded, failed, or disabled). Called from ws_bridge.cpp's login
+// builder. The JSON is built by the pure BuildPluginManifest (nlohmann-json).
 std::string BuildPluginManifestJson() {
-  if (g_plugins.empty()) return "[]";
-  std::string out = "[";
-  for (size_t i = 0; i < g_plugins.size(); ++i) {
-    const LoadedPlugin& p = g_plugins[i];
-    if (i > 0) out += ",";
-    // Build a compact per-plugin object. Plugin names are simple identifiers
-    // (no escaping needed — the loader rejects names with special characters).
-    char buf[256];
-    snprintf(buf, sizeof(buf),
-             R"({"name":"%s","ver":"%u.%u.%u","api":%u,"caps":%u})",
-             p.info.name,
-             p.info.version_major, p.info.version_minor, p.info.version_patch,
-             p.api_version,
-             p.capabilities);
-    out += buf;
-  }
-  out += "]";
-  return out;
+  std::lock_guard<std::mutex> lock(g_pluginReportMutex);
+  return BuildPluginManifest(g_pluginReport);
 }
 
 
@@ -78,8 +74,12 @@ std::string BuildPluginManifestJson() {
 // warning on a client (ServerFatal warns and returns in client mode). An optional
 // plugin (`required: false`, the default) warns and the loader continues. Caller
 // `continue`s after this returns. `reason` is a fully-formed clause (no values
-// that could be secrets — plugin args are NOT interpolated into it).
-static void FailPluginLoad(const PluginLoadItem& item, const std::string& reason) {
+// that could be secrets — plugin args are NOT interpolated into it). The same
+// clause goes into the login's plugin report (#60) as that entry's `error`.
+static void FailPluginLoad(const PluginLoadItem& item, const std::string& reason,
+                           PluginManifestEntry& report) {
+  report.loaded = false;
+  report.error = reason;
   if (item.required) {
     ServerFatal("Required plugin %s (%s) failed: %s — a server must not run without a "
                 "plugin it declared required",
@@ -107,14 +107,27 @@ void LoadPlugins() {
   // taking over for an entire run because it happened to sit in the directory.
   const std::vector<PluginLoadItem> plan = NevrCfgPluginLoadPlan();
   if (plan.empty()) {
+    PublishPluginReport({});
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PLUGIN] no plugins configured in config.yaml — loading none");
     return;
   }
 
+  // #60: one report entry per configured plugin, in config order. Each starts
+  // "not loaded, no error" and is filled in as the loader decides its fate.
+  std::vector<PluginManifestEntry> report(plan.size());
+  size_t enabledCount = 0;
+  for (size_t i = 0; i < plan.size(); ++i) {
+    report[i].name = plan[i].name;
+    report[i].file = plan[i].file;
+    report[i].enabled = plan[i].enabled;
+    report[i].required = plan[i].required;
+    if (plan[i].enabled) ++enabledCount;
+  }
+
   Log(EchoVR::LogLevel::Info,
-      "[NEVR.PLUGIN] %zu plugin(s) configured; loading in list order from %s",
-      plan.size(), pluginDir.c_str());
+      "[NEVR.PLUGIN] %zu plugin(s) configured, %zu enabled; loading in list order from %s",
+      plan.size(), enabledCount, pluginDir.c_str());
 
   // Build init context (shared; the per-plugin channel is args_json via InitEx).
   NvrGameContext ctx = {};
@@ -146,6 +159,7 @@ void LoadPlugins() {
     NvrPluginShutdown_fn      shutdownFn;
     PluginInitKind            initKind;
     std::string               path;       // full path to DLL on disk
+    size_t                    planIndex;  // #60: this plugin's entry in `report`
   };
   std::vector<StagedPlugin> staged;
 
@@ -155,9 +169,18 @@ void LoadPlugins() {
     return CapsLoadPriority(a.caps) < CapsLoadPriority(b.caps);
   };
 
-  for (const auto& item : plan) {
+  for (size_t planIndex = 0; planIndex < plan.size(); ++planIndex) {
+    const PluginLoadItem& item = plan[planIndex];
+    PluginManifestEntry& itemReport = report[planIndex];
     const std::string path = pluginDir + item.file;
     const char* filename = item.file.c_str();
+
+    if (!item.enabled) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.PLUGIN] %s (%s): disabled in config.yaml — not loading",
+          item.name.c_str(), filename);
+      continue;
+    }
 
     // N89: refuse plugins whose function is now BUILT IN to gamepatches. Loading
     // one makes two MinHook instances (gamepatches links extern/minhook, plugins
@@ -179,6 +202,7 @@ void LoadPlugins() {
             "would install a second MinHook on CLog::PrintfImpl and silently disable both "
             "file logging and max_line_length truncation. Remove it from config.yaml.",
             filename);
+        itemReport.error = "superseded by the built-in log filter";
         continue;
       }
     }
@@ -208,21 +232,21 @@ void LoadPlugins() {
       hPlugin = LoadLibraryA(path.c_str());
     }
     if (!hPlugin) {
-      FailPluginLoad(item, "LoadLibrary failed: error " + std::to_string(GetLastError()));
+      FailPluginLoad(item, "LoadLibrary failed: error " + std::to_string(GetLastError()), itemReport);
       continue;
     }
 
     auto getInfoFn = reinterpret_cast<NvrPluginGetInfo_fn>(GetProcAddress(hPlugin, "NvrPluginGetInfo"));
     if (!getInfoFn) {
       FreeLibrary(hPlugin);
-      FailPluginLoad(item, "missing NvrPluginGetInfo export");
+      FailPluginLoad(item, "missing NvrPluginGetInfo export", itemReport);
       continue;
     }
 
     NvrPluginInfo info = getInfoFn();
     if (!info.name) {
       FreeLibrary(hPlugin);
-      FailPluginLoad(item, "NvrPluginGetInfo returned NULL name");
+      FailPluginLoad(item, "NvrPluginGetInfo returned NULL name", itemReport);
       continue;
     }
 
@@ -271,9 +295,9 @@ void LoadPlugins() {
     // Stage for pass-2 caps-ordered init (N134 S8).
     staged.push_back({hPlugin, item, info, apiVersion, caps,
                       initExFn, initFn, onFrameFn, onStateChangeFn, shutdownFn,
-                      initKind, path});
+                      initKind, path, planIndex});
 
-  } // for (const auto& item : plan)
+  } // for (planIndex over plan)
 
   // Pass 2: stable-sort by capability priority (config order preserved within
   // a band), then init each plugin in that order.
@@ -316,7 +340,8 @@ void LoadPlugins() {
     }
     if (result != 0) {
       FreeLibrary(s.hModule);
-      FailPluginLoad(s.item, std::string(initVia) + " returned code " + std::to_string(result));
+      FailPluginLoad(s.item, std::string(initVia) + " returned code " + std::to_string(result),
+                     report[s.planIndex]);
       continue;
     }
 
@@ -336,6 +361,16 @@ void LoadPlugins() {
     g_plugins.push_back({s.hModule, s.info, s.apiVersion, s.caps,
                          s.initFn, s.onFrameFn,
                          s.onStateChangeFn, s.shutdownFn, s.path});
+    {
+      PluginManifestEntry& r = report[s.planIndex];
+      r.loaded = true;
+      r.error.clear();
+      r.version_major = s.info.version_major;
+      r.version_minor = s.info.version_minor;
+      r.version_patch = s.info.version_patch;
+      r.api_version = s.apiVersion;
+      r.capabilities = s.caps;
+    }
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PLUGIN] Loaded: %s v%u.%u.%u (API v%u) caps=0x%02X%s via %s",
         s.info.name,
@@ -351,11 +386,14 @@ void LoadPlugins() {
     }
   }
 
-  // Denominator (plan.size()) lets an operator tell "5 configured, 5 loaded"
-  // (healthy) from "5 configured, 3 loaded" (2 silently missing) without
-  // scrolling back through Warning lines to count.
+  // Denominator (enabled entries) lets an operator tell "5 enabled, 5 loaded"
+  // (healthy) from "5 enabled, 3 loaded" (2 silently missing) without
+  // scrolling back through Warning lines to count. Disabled entries are not
+  // missing, so they are not in the denominator.
   Log(EchoVR::LogLevel::Info, "[NEVR.PLUGIN] plugin load complete: %zu/%zu loaded",
-      g_plugins.size(), plan.size());
+      g_plugins.size(), enabledCount);
+
+  PublishPluginReport(std::move(report));
 }
 
 void UnloadPlugins() {
@@ -366,6 +404,7 @@ void UnloadPlugins() {
     FreeLibrary(it->hModule);
   }
   g_plugins.clear();
+  PublishPluginReport({});  // nothing is loaded any more; do not report stale state
 }
 
 void TickPlugins(const NvrGameContext* ctx) {
@@ -413,6 +452,7 @@ void TestHook_RegisterPluginOnStateChange(NvrPluginOnGameStateChange_fn fn) {
 
 void TestHook_ClearPlugins() {
   g_plugins.clear();
+  PublishPluginReport({});
 }
 
 #endif  // NEVR_TEST_HOOKS

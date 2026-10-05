@@ -29,8 +29,10 @@ std::string ArgsToJson(const std::map<std::string, std::string>& args) {
 std::vector<PluginLoadItem> BuildLoadPlan(const nevr::NevrConfig& cfg) {
   std::vector<PluginLoadItem> plan;
   for (const nevr::PluginSpec& spec : cfg.Plugins()) {
-    if (!spec.enabled) continue;  // enabled:false -> skip (still counts as configured)
+    // enabled:false is carried, not dropped: the loader skips it, and the login
+    // reports it as configured-but-disabled (#60).
     PluginLoadItem item;
+    item.enabled = spec.enabled;
     item.name = spec.name;
     // The parser already defaulted file to name+".dll" when the entry omitted it
     // (nevr_config.cpp ParsePlugins), so spec.file is always non-empty here.

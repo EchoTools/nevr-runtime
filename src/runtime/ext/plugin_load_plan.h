@@ -15,22 +15,27 @@
 #include <string>
 #include <vector>
 
-// One resolved, ENABLED plugin to load, in config.yaml list order. `file` is the
-// dll filename to load from the plugins/ dir; `required` drives fatal-on-failure;
+// One configured plugin entry, in config.yaml list order. `file` is the dll
+// filename to load from the plugins/ dir; `required` drives fatal-on-failure;
 // `target` is a deployment-target hint (carried, unused by the loader in S6);
-// `args_json` is the entry's args as a flat JSON object string ("{}" when none).
+// `args_json` is the entry's args as a flat JSON object string ("{}" when none);
+// `enabled` false means the loader skips it. Disabled entries are carried (not
+// dropped) so the login can report them (#60). `enabled` is last so existing
+// five-value brace initializers keep meaning what they meant.
 struct PluginLoadItem {
   std::string name;
   std::string file;
   bool        required = false;
   std::string target;
   std::string args_json;
+  bool        enabled = true;
 };
 
-// The ordered, enabled-only plugin load plan from config.yaml's `plugins:` list.
-// Reads the same config.yaml singleton the rest of the runtime uses. EMPTY when
-// no plugins are configured: config is authoritative and there is NO directory
-// glob fallback (an absent/empty `plugins:` list loads nothing). Defined in
+// The ordered plugin load plan from config.yaml's `plugins:` list: every entry,
+// disabled ones included with enabled=false. Reads the same config.yaml singleton
+// the rest of the runtime uses. EMPTY when no plugins are configured: config is
+// authoritative and there is NO directory glob fallback (an absent/empty
+// `plugins:` list loads nothing). Defined in
 // service_config.cpp (which owns the singleton); the pure builder it delegates to
 // is BuildLoadPlan (plugin_load_plan_build.h / .cpp).
 std::vector<PluginLoadItem> NevrCfgPluginLoadPlan();
