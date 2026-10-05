@@ -66,7 +66,9 @@ jobs:
         just proto
 
     - name: Configure CMake
-      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=${{ github.event_name == 'release' && 'ON' || 'OFF' }} -DNEVR_REQUIRE_BUILTIN_DEFAULTS=${{ github.event_name == 'release' && 'ON' || 'OFF' }}
+      # Never signs here: release binaries are signed by the `sign` job with Microsoft Artifact Signing.
+      # The private-CA path (NEVR_CODESIGN_REQUIRED, `just sign`) is for local development builds only.
+      run: cmake --preset mingw-release -DNEVR_CODESIGN_REQUIRED=OFF -DNEVR_REQUIRE_BUILTIN_DEFAULTS=${{ github.event_name == 'release' && 'ON' || 'OFF' }}
 
     - name: Build
       run: cmake --build --preset mingw-release
@@ -82,32 +84,9 @@ jobs:
         echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
         echo "Version: ${VERSION#v}"
 
-    - name: Create distribution packages
+    - name: Create distribution packages (unsigned)
       if: github.event_name == 'release'
-      env:
-        CODESIGN_PFX_BASE64: ${{ secrets.CODESIGN_PFX_BASE64 }}
-        CODESIGN_PASS: ${{ secrets.CODESIGN_PASS }}
-        CODESIGN_CA_BASE64: ${{ secrets.CODESIGN_CA_BASE64 }}
-        CODESIGN_SIGNER_SHA256: ${{ secrets.CODESIGN_SIGNER_SHA256 }}
-        CODESIGN_ROOT_SHA256: ${{ secrets.CODESIGN_ROOT_SHA256 }}
-      run: |
-        set -euo pipefail
-        test -n "$CODESIGN_PFX_BASE64"
-        test -n "$CODESIGN_PASS"
-        test -n "$CODESIGN_CA_BASE64"
-        test -n "$CODESIGN_SIGNER_SHA256"
-        test -n "$CODESIGN_ROOT_SHA256"
-        signing_dir="$RUNNER_TEMP/nevr-codesign"
-        mkdir -p "$signing_dir"
-        printf '%s' "$CODESIGN_PFX_BASE64" | base64 --decode > "$signing_dir/signing.pfx"
-        printf '%s' "$CODESIGN_CA_BASE64" | base64 --decode > "$signing_dir/root-ca.pem"
-        chmod 600 "$signing_dir/signing.pfx" "$signing_dir/root-ca.pem"
-        {
-          echo "CODESIGN_PFX=$signing_dir/signing.pfx"
-          echo "CODESIGN_CA_FILE=$signing_dir/root-ca.pem"
-          echo "CODESIGN_ROOT_SHA256=$CODESIGN_ROOT_SHA256"
-        } >> "$GITHUB_ENV"
-        cmake --build --preset mingw-release --target dist dist-lite
+      run: cmake --build --preset mingw-release --target dist dist-lite
 
     - name: Verify distribution archives
       if: github.event_name == 'release'
@@ -132,8 +111,124 @@ jobs:
           [[ "$tar_entries" == *echovr_server.exe* ]]
         done
 
-    - name: Upload dist artifacts
+    # The unpacked package trees (dist/<name>/, normal and lite) go to the sign job; the unsigned
+    # archives are never published.
+    - name: Upload the unsigned packages for signing
       if: github.event_name == 'release'
+      uses: actions/upload-artifact@v4
+      with:
+        name: unsigned-packages
+        path: |
+          dist/nevr-runtime-v*/
+          !dist/.staging/
+        if-no-files-found: error
+        retention-days: 7
+
+  # Microsoft Artifact Signing (#78). Azure trusts exactly the OIDC subject
+  # repo:EchoTools/nevr-runtime:environment:codesign, so this job must run in the `codesign`
+  # environment. The values below are identifiers, not secrets.
+  sign:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: windows-latest
+    environment: codesign
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: unsigned-packages
+        path: packages
+
+    - name: Azure login (OIDC)
+      uses: azure/login@v3
+      with:
+        client-id: e01842c0-2630-49dd-b305-d2b2e866a747
+        tenant-id: d3ce3222-f299-41bb-8231-dbde3b35abc9
+        allow-no-subscriptions: true
+
+    - name: Sign BugSplat64.dll and echovr_server.exe (normal and lite)
+      uses: azure/artifact-signing-action@v2
+      with:
+        endpoint: https://eus.codesigning.azure.net/
+        signing-account-name: sprockeesigning
+        certificate-profile-name: andrew-bates-public
+        files-folder: ${{ github.workspace }}\packages
+        files-folder-filter: dll,exe
+        files-folder-recurse: true
+        file-digest: SHA256
+        timestamp-rfc3161: http://timestamp.acs.microsoft.com
+        timestamp-digest: SHA256
+
+    - name: Verify every signature (fail if any file is unsigned)
+      shell: pwsh
+      run: |
+        $files = Get-ChildItem -Path packages -Recurse -Include *.dll,*.exe
+        if ($files.Count -lt 4) { throw "expected BugSplat64.dll and echovr_server.exe in both packages, found $($files.Count) files" }
+        $bad = 0
+        foreach ($f in $files) {
+          $s = Get-AuthenticodeSignature -FilePath $f.FullName
+          "{0}  status={1}  signer={2}  timestamp={3}" -f $f.FullName, $s.Status, $s.SignerCertificate.Subject, $s.TimeStamperCertificate.Subject
+          if ($s.Status -ne 'Valid') { $bad++ }
+        }
+        if ($bad -ne 0) { throw "$bad file(s) not validly signed" }
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: signed-packages
+        path: packages
+        if-no-files-found: error
+        retention-days: 7
+
+  # Repack the signed trees into the same archives the build job made, check them, publish.
+  publish:
+    needs: sign
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install archive tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y zstd
+        python -m pip install cmake==4.0.0
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: signed-packages
+        path: signed
+
+    - name: Repack the signed packages
+      shell: bash
+      env:
+        CODESIGN_SKIP: "1"  # the files are already signed; the packager must not touch them
+      run: |
+        set -euo pipefail
+        mkdir -p dist
+        for pkg in signed/nevr-runtime-v*/; do
+          name=$(basename "$pkg")
+          python3 tools/build_distribution.py --package "$pkg" --destination "dist/$name" \
+            --tar "dist/$name.tar.zst" --zip "dist/$name.zip"
+          cmake -DARCHIVE_TAR="dist/$name.tar.zst" -DARCHIVE_ZIP="dist/$name.zip" \
+            -P cmake/VerifyDistribution.cmake
+        done
+        ls -la dist
+
+    - name: Verify distribution archives
+      shell: bash
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        zips=(dist/*.zip)
+        tars=(dist/*.tar.zst)
+        test "${#zips[@]}" -eq 2
+        test "${#tars[@]}" -eq 2
+
+    - name: Upload dist artifacts
       uses: softprops/action-gh-release@v2
       with:
         files: |
