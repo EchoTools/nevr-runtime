@@ -53,9 +53,14 @@ struct EventRecord {
 
 // Plain zero-initialised storage only: the static-import build records from the
 // host's DllMain, before this image's CRT has run.
-// 2^20 x 32 B = 32 MiB of .bss: the hammer scenario records every call it
-// makes across the whole attach window.
-constexpr LONG kEventCapacity = 1 << 20;
+// 2^23 x 32 B = 256 MiB of .bss: the hammer scenario records every call it
+// makes across the whole attach window. Bumped from 2^20 (2026-10-05): native
+// Windows thread scheduling let the hammering thread issue far more calls in
+// the same wall-clock attach window than Wine's scheduler ever produced,
+// overflowing the old capacity on a real win11-dev run while Wine passed
+// cleanly at 40/40. An overflow after this bump is a real throughput finding,
+// not a capacity artifact.
+constexpr LONG kEventCapacity = 1 << 23;
 EventRecord g_events[kEventCapacity];
 volatile LONG g_event_count = 0;
 volatile LONG g_event_overflow = 0;
