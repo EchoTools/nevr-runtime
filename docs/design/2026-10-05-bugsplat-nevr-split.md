@@ -1,7 +1,7 @@
 # Design and Test Plan: Stable BugSplat Bootstrap + `nevr.dll`
 
 Date: 2026-10-05
-Status: implementation in progress; design reviewed; only the isolated attach-proof harness has been added so far
+Status: implementation in progress; steps 1-2 landed (PE contract, ABI descriptor, attach proof-gate harness); proof gate passes under Wine, native Windows not yet run — no runtime source has moved
 
 ## Goal
 
@@ -57,8 +57,19 @@ Keep `BugSplat64.dll` as the stable filename and compatibility/bootstrap layer E
 
 ## Current verification state
 
-- The isolated `bootstrap-attach` probe DLL and child-process harness exercise MinHook setup from `DLL_PROCESS_ATTACH`, concurrent thread progress during hook installation, lazy runtime loading after host `LoadLibrary` returns, reentrant/concurrent dispatch, and absent/incompatible/missing-entry/init-failure/invalid-image runtime cases. `just preset=mingw-debug test-auth-unit` passes under Wine, including all six harness scenarios.
-- This is preliminary mechanism evidence, not completion of the proof gate: the probe has not yet been proven on native Windows, and the eventual production host's DllMain, supported Echo image timestamp, `PreprocessCommandLine` prologue, and real startup ordering have not yet been exercised together. `WINVM_USER` and `WINVM_PASS` are unset in the current environment, so native Windows verification cannot run now. Do not migrate runtime sources until the full gate passes.
+Step 1 (PE contract and ABI descriptor):
+
+- `tools/verify_pe_contract.py` runs in `just verify` against the built `BugSplat64.dll`: the export name set must equal the 26 names above, `DetoursExportPlaceholder` must be ordinal 1, and the host must not import `nevr.dll`. With the game binary present it also requires echovr.exe's nine `BugSplat64.dll` imports to be by name, equal to the pinned set, and exported. PE export tables carry no types for the undecorated C exports, so signatures and calling conventions are not covered by this check.
+- `src/core/runtime_abi.h` defines the v1 descriptor (16-byte header `struct_size`/`abi_major`/`abi_minor`/`reserved`; `NevrHostContext` carrying the game module and the host-owned `PreprocessCommandLine` trampoline; `NevrRuntimeApi` with `initialize`, `preprocess_before`, `preprocess_after`) and header-only validators. `test_runtime_abi` (11 GTests, Wine) covers rejecting a major mismatch in either direction, a short struct, or a missing entry, and accepting a newer minor or a larger struct. It also covers never reading past a short descriptor, using a guard-page case. An over-reading validator faults that test.
+
+Step 2 (attach-time MinHook proof gate), under Wine only:
+
+- The probe host (`src/runtime/tests/bootstrap_attach/host_probe.cpp`, built as `BugSplat64.dll`) does what the proposed attach path does: it runs the production `GameImageGuard` (timestamp `0x6452dff6`), validates the 18-byte prologue at RVA `0x116720`, computes the sibling `nevr.dll` path into a fixed buffer, and installs one MinHook detour, all from `DLL_PROCESS_ATTACH`. Nothing else happens in attach. The test executable supplies an image whose `PreprocessCommandLine` begins with the real 18 echovr.exe bytes, so MinHook relocates and executes the real prologue.
+- Scenarios, each in its own child process: valid; missing runtime; ABI major mismatch; missing entry point; init failure after the runtime patched something; invalid PE; 8 threads making the first call while init is slow; a thread calling the target across the whole attach; the same with DllMain held open for 100 ms after the hook is live; same-thread re-entry during runtime init; wrong timestamp; wrong prologue. A second executable imports the host statically, as echovr.exe does. It proves attach completes before `main` and that `nevr.dll` is not loaded at `main` entry.
+- Each child checks the following from a timestamped event log. Attach steps run in order. No runtime load, `DllMain`, API, init or dispatch happens before attach exit. Every issued call runs the original exactly once, with the exact argument and result. Per-thread before -> original -> after nesting is balanced. Failures degrade to original-only calls. The runtime's own MinHook copy hooks a disjoint target alongside the host's.
+- Mutation checks, each of which fails the suite: loading `nevr.dll` inside DllMain; calling the original twice; removing the same-thread re-entry bypass (the child deadlocks and times out).
+- Findings that bind the real host: (1) a same-thread re-entry during runtime load must bypass to the original, because `InitOnceExecuteOnce` recursion on the loading thread deadlocks (measured); (2) the trampoline and host context must be published before `MH_EnableHook`, because a racing thread entered the detour before `MH_EnableHook` returned (observed); (3) attach failures must return TRUE and leave the game unhooked, because the game imports the host statically.
+- Not yet proven: native Windows (the doc requires both). `tools/winvm/systest.py` has no scenario that runs this harness, and `WINVM_USER`/`WINVM_PASS` were unset when this ran. The Windows parallel loader's worker threads, which MinHook freezes during attach, are not exercised under Wine. The nested client run that confirms ordering in the real game is also outstanding. Do not move runtime sources until the native Windows run passes.
 
 ## Acceptance criteria
 

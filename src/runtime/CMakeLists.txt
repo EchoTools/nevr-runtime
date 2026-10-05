@@ -470,50 +470,61 @@ if(BUILD_TESTING)
     target_link_libraries(test_runtime_abi PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_runtime_abi DISCOVERY_MODE PRE_TEST)
 
-    # Isolated loader-lock proof harness for the planned BugSplat64.dll bootstrap.
-    # The host DLL installs only a MinHook rendezvous in DllMain, then loads a
-    # versioned runtime on its first target call. The child scenarios exercise
-    # runtime absence, ABI mismatch, missing entry, init failure and bad PE data.
+    # Attach-time MinHook proof gate for the BugSplat64.dll / nevr.dll split
+    # (docs/design/2026-10-05-bugsplat-nevr-split.md, Implementation step 2).
+    # The probe host (built as BugSplat64.dll) validates the game image and the
+    # real PreprocessCommandLine prologue and installs ONE MinHook detour from
+    # DLL_PROCESS_ATTACH; it loads the versioned runtime (core/runtime_abi.h) on
+    # the first rendezvous call. test_bootstrap_attach.exe drives twelve
+    # dynamic-load child scenarios; test_bootstrap_attach_static.exe imports the
+    # host statically, as echovr.exe does, so attach runs before main.
     set(BOOTSTRAP_ATTACH_DIR "${CMAKE_BINARY_DIR}/bin/bootstrap-attach")
     set(BOOTSTRAP_ATTACH_FIXTURE_DIR "${BOOTSTRAP_ATTACH_DIR}/fixtures")
 
+    function(bootstrap_attach_output target directory)
+      set_target_properties(${target} PROPERTIES
+        ARCHIVE_OUTPUT_DIRECTORY "${directory}"
+        RUNTIME_OUTPUT_DIRECTORY "${directory}"
+        LIBRARY_OUTPUT_DIRECTORY "${directory}")
+      target_compile_options(${target} PRIVATE -Werror)
+      target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    endfunction()
+
     add_library(test_bootstrap_attach_host SHARED
-      tests/bootstrap_attach/host_probe.cpp)
-    target_include_directories(test_bootstrap_attach_host PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/tests/bootstrap_attach)
+      tests/bootstrap_attach/host_probe.cpp
+      lifecycle/game_image_guard.cpp)
     target_link_libraries(test_bootstrap_attach_host PRIVATE minhook)
     set_target_properties(test_bootstrap_attach_host PROPERTIES
-      PREFIX ""
-      OUTPUT_NAME "BugSplat64"
-      ARCHIVE_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_DIR}"
-      RUNTIME_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_DIR}"
-      LIBRARY_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_DIR}")
+      PREFIX "" OUTPUT_NAME "BugSplat64")
+    bootstrap_attach_output(test_bootstrap_attach_host "${BOOTSTRAP_ATTACH_DIR}")
 
+    # One nevr.dll per fixture directory; the variant is a compile definition.
     function(add_bootstrap_attach_fixture target fixture_dir)
       add_library(${target} SHARED tests/bootstrap_attach/runtime_probe.cpp)
-      target_include_directories(${target} PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/bootstrap_attach)
-      set_target_properties(${target} PROPERTIES
-        PREFIX ""
-        OUTPUT_NAME "nevr"
-        ARCHIVE_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/${fixture_dir}"
-        RUNTIME_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/${fixture_dir}"
-        LIBRARY_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/${fixture_dir}")
+      target_link_libraries(${target} PRIVATE minhook)
+      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr")
+      bootstrap_attach_output(${target} "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/${fixture_dir}")
+      if(ARGN)
+        target_compile_definitions(${target} PRIVATE ${ARGN})
+      endif()
     endfunction()
 
     add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_good good)
-    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_bad_version bad-version)
-    target_compile_definitions(test_bootstrap_attach_runtime_bad_version PRIVATE
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_bad_version bad-version
       BOOTSTRAP_PROBE_BAD_VERSION)
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_init_failure init-failure
+      BOOTSTRAP_PROBE_INIT_FAILURE)
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_reenter_init reenter-init
+      BOOTSTRAP_PROBE_REENTER_INIT)
+    add_bootstrap_attach_fixture(test_bootstrap_attach_runtime_slow_init slow-init
+      BOOTSTRAP_PROBE_SLOW_INIT)
 
     add_library(test_bootstrap_attach_runtime_missing_entry SHARED
       tests/bootstrap_attach/runtime_missing_entry.cpp)
     set_target_properties(test_bootstrap_attach_runtime_missing_entry PROPERTIES
-      PREFIX ""
-      OUTPUT_NAME "nevr"
-      ARCHIVE_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/missing-entry"
-      RUNTIME_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/missing-entry"
-      LIBRARY_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/missing-entry")
+      PREFIX "" OUTPUT_NAME "nevr")
+    bootstrap_attach_output(test_bootstrap_attach_runtime_missing_entry
+      "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/missing-entry")
 
     set(BOOTSTRAP_BAD_IMAGE
       "${BOOTSTRAP_ATTACH_FIXTURE_DIR}/bad-image/nevr.dll")
@@ -528,15 +539,21 @@ if(BUILD_TESTING)
     add_custom_target(test_bootstrap_attach_bad_image ALL
       DEPENDS "${BOOTSTRAP_BAD_IMAGE}")
 
+    add_executable(test_bootstrap_attach_static tests/bootstrap_attach/attach_test.cpp)
+    target_compile_definitions(test_bootstrap_attach_static PRIVATE BOOTSTRAP_PROBE_STATIC_IMPORT)
+    target_link_libraries(test_bootstrap_attach_static PRIVATE test_bootstrap_attach_host)
+    bootstrap_attach_output(test_bootstrap_attach_static "${BOOTSTRAP_ATTACH_DIR}")
+
     add_executable(test_bootstrap_attach tests/bootstrap_attach/attach_test.cpp)
-    target_include_directories(test_bootstrap_attach PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/tests/bootstrap_attach)
-    set_target_properties(test_bootstrap_attach PROPERTIES
-      RUNTIME_OUTPUT_DIRECTORY "${BOOTSTRAP_ATTACH_DIR}")
+    bootstrap_attach_output(test_bootstrap_attach "${BOOTSTRAP_ATTACH_DIR}")
     add_dependencies(test_bootstrap_attach
       test_bootstrap_attach_host
+      test_bootstrap_attach_static
       test_bootstrap_attach_runtime_good
       test_bootstrap_attach_runtime_bad_version
+      test_bootstrap_attach_runtime_init_failure
+      test_bootstrap_attach_runtime_reenter_init
+      test_bootstrap_attach_runtime_slow_init
       test_bootstrap_attach_runtime_missing_entry
       test_bootstrap_attach_bad_image)
 
