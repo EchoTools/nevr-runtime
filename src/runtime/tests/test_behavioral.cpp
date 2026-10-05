@@ -159,6 +159,7 @@ void ServerFatal(const CHAR* format, ...) {
 }
 
 // --- config.h extern (used by ws_bridge.cpp) ---
+PVOID g_pGame = nullptr;
 void* g_earlyConfigPtr = nullptr;
 
 // --- service_config.h accessor (N133 S4a, used by ws_bridge.cpp login injection) ---
@@ -189,6 +190,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/module_loader.h"
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/hook/addresses.h"
@@ -818,6 +820,8 @@ TEST(WsBridgeLoginRequest, JsonCarriesIdentityCredentialsAndMeasuredSystemInfo) 
   EXPECT_EQ(json["nevr_identity"]["commit"], identity.git_commit);
   EXPECT_EQ(json["nevr_identity"]["build"], identity.git_describe);
   EXPECT_EQ(json.at("nevr_social"), SocialParty::kSocialLevel) << "the social level the server gates new messages on";
+  // Outside the game there is no headset serial to read: "unknown", which alt detection ignores (#83).
+  EXPECT_EQ(json.at("hmdserialnumber"), "unknown");
   EXPECT_EQ(json["nevr_identity"]["build_type"], identity.build_type);
   ASSERT_TRUE(json.contains("system_info"));
   EXPECT_TRUE(json["system_info"]["num_physical_cores"].is_number_unsigned());
@@ -1358,4 +1362,23 @@ TEST(S8_CapsPriority, CombinedCapsTakeHighestBand) {
               CapsLoadPriority(NEVR_PLUGIN_CAP_COSMETIC));
     EXPECT_EQ(CapsLoadPriority(cosmeticAndRules),
               CapsLoadPriority(NEVR_PLUGIN_CAP_ALTERS_RULES));
+}
+
+// #83: the stock HMD serial field choice (hmd_serial.h): the game's 24-byte buffer in VR, "N/A" with
+// the No-VR flag, and "unknown" only when the serial buffer is absent or invalid.
+TEST(HmdSerial, StockChoice) {
+  char serial[HmdSerial::kSerialBytes] = {};
+  std::memcpy(serial, "1WMHHA1234567", 13);
+  const auto vr = HmdSerial::Select(false, serial);
+  EXPECT_EQ(vr.value, "1WMHHA1234567");
+  EXPECT_EQ(vr.source, HmdSerial::Source::GameBuffer);
+  EXPECT_EQ(HmdSerial::Select(true, serial).value, "N/A") << "No-VR mode sends what the stock client sends";
+  char empty[HmdSerial::kSerialBytes] = {};
+  EXPECT_EQ(HmdSerial::Select(false, empty).value, "unknown");
+  EXPECT_EQ(HmdSerial::Select(false, nullptr).value, "unknown");
+  char garbage[HmdSerial::kSerialBytes] = {'A', 'B', '\x01', 'C'};
+  EXPECT_EQ(HmdSerial::Select(false, garbage).value, "unknown") << "control bytes are not a serial";
+  char full[HmdSerial::kSerialBytes];
+  std::memset(full, 'Z', sizeof(full));  // no terminator within 24 bytes: take exactly 24
+  EXPECT_EQ(HmdSerial::Select(false, full).value, std::string(24, 'Z'));
 }
