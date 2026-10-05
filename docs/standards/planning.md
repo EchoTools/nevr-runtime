@@ -78,12 +78,12 @@ mechanical and reversible) or listed for a decision. Branches and issues are nev
 **PRs**
 - A PR links the issue it resolves (`Closes #N`), or says in its body why there is none.
 - A PR carries the same milestone as the issue it resolves.
-- A PR with no activity for 14 days is either picked up, rebased, or closed with the reason. A PR that is far behind
+- A PR with no activity across a sprint is either picked up, rebased, or closed with the reason. A PR that is far behind
   `main` or conflicting is replaced by a focused PR rather than rebased wholesale.
 
 **Branches**
 - A branch whose PR merged is deleted (GitHub keeps it restorable from the PR).
-- A branch with no PR and no commit for 30 days is listed for its author to keep or drop.
+- A branch with no PR and no commit across two sprints is listed for its author to keep or drop.
 
 **Milestones**
 - The title is `vX.Y.Z — theme`, or `Future`.

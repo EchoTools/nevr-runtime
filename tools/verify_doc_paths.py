@@ -149,7 +149,7 @@ def all_doc_files():
                              capture_output=True, text=True).stdout.split()
     seen = set()
     for f in list(tracked) + list(local_docs()):
-        if f == "BUGS.md" or f.startswith("docs/audits/"):
+        if f.startswith("docs/audits/"):
             continue                          # immutable records or pending removal
         if f not in seen:
             seen.add(f)
