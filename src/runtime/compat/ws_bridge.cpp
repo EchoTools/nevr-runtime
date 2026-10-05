@@ -770,16 +770,27 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
     // to a session that declared its level (docs/design/2026-10-01-social-nakama-proposal.md §0).
     j["nevr_social"] = SocialParty::kSocialLevel;
 
-    // nevr_plugins: parse the pre-built manifest so the field is a JSON array,
-    // not a string-escaped copy of one.
-    if (!pluginManifest.empty()) {
-      try {
-        j["nevr_plugins"] = nlohmann::json::parse(pluginManifest);
-      } catch (...) {
-        j["nevr_plugins"] = nlohmann::json::array();
+    // nevr_plugins (#60): every configured plugin with what the loader did with
+    // it — loaded (ver/api/caps), failed (error), or disabled. Top-level key,
+    // beside nevr_identity and nevr_social. Parsed so the field is a JSON array,
+    // not a string-escaped copy of one. The non-throwing parse never fails on the
+    // builder's own nlohmann output; if it ever did, the login still goes out,
+    // with an empty list and a Warning that says so.
+    {
+      nlohmann::json plugins = nlohmann::json::parse(pluginManifest, nullptr, false);
+      if (plugins.is_discarded() || !plugins.is_array()) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.WS] login nevr_plugins: plugin report is not a JSON array (%zu bytes) — sending []",
+            pluginManifest.size());
+        plugins = nlohmann::json::array();
       }
-    } else {
-      j["nevr_plugins"] = nlohmann::json::array();
+      size_t loaded = 0;
+      for (const nlohmann::json& p : plugins) {
+        if (p.is_object() && p.value("loaded", false)) ++loaded;
+      }
+      Log(EchoVR::LogLevel::Info, "[NEVR.WS] login nevr_plugins configured=%zu loaded=%zu", plugins.size(),
+          loaded);
+      j["nevr_plugins"] = std::move(plugins);
     }
 
     auto& sys = j["system_info"];
@@ -811,7 +822,7 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   // Build full message: marker + symbol + length + payload
   std::string msg;
   msg.reserve(8 + 8 + 8 + payload.size());
-  msg.append((const char*)MSG_MARKER, 8);
+  msg.append(reinterpret_cast<const char*>(MSG_MARKER), 8);
   AppendLE64(msg, SYM_LOGIN_REQUEST);
   AppendLE64(msg, payload.size());
   msg.append(payload);

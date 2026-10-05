@@ -324,6 +324,14 @@ arena:
 # Absent args means the plugin gets an empty JSON object.
 # Absent target means the plugin loads on both servers and clients.
 #
+# Reported at login (#60): the client login JSON carries a top-level
+# "nevr_plugins" array with one object per entry of this list, in list order:
+#   name, file, enabled, required, loaded   always
+#   error                                   enabled but not loaded (the reason the
+#                                           loader logged; never the args)
+#   ver ("M.m.p"), api, caps                loaded
+# Args are never sent. Built by src/runtime/ext/plugin_manifest.cpp.
+#
 # Reader: gamepatches plugin_loader.cpp
 # ---------------------------------------------------------------------------
 

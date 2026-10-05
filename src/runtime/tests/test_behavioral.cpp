@@ -332,6 +332,70 @@ TEST_F(PluginLoaderDiagnosticTest, ExplicitUnloadInvokesShutdownAndReleasesPlugi
   CloseHandle(shutdownObserved);
 }
 
+// #60: the login reports every configured plugin — the one that loaded, the one
+// that is enabled but failed, and the one that is disabled — with the real loader
+// filling the record from a real LoadLibraryExA run. The disabled entry names a
+// DLL that exists in plugins/ and would load, so "not loaded" proves the loader
+// honours enabled:false now that the plan carries disabled entries.
+TEST_F(PluginLoaderDiagnosticTest, LoginCarriesLoadedFailedAndDisabledPlugins) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}", true});
+  g_testPluginLoadPlan.push_back({"missing", "plugin_that_does_not_exist.dll", true, "", "{}", true});
+  g_testPluginLoadPlan.push_back({"off", "test_plugin_future_api.dll", false, "", "{}", false});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_EQ(GetModuleHandleA("test_plugin_future_api.dll"), nullptr) << "a disabled plugin was loaded";
+  EXPECT_TRUE(TestLogContains("off (test_plugin_future_api.dll): disabled in config.yaml"));
+  EXPECT_TRUE(TestLogContains("plugin load complete: 1/2 loaded"));
+
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_TRUE(manifest.is_array());
+  ASSERT_EQ(manifest.size(), 3u) << manifest.dump();
+
+  const nlohmann::json& loaded = manifest[0];
+  EXPECT_EQ(loaded.at("name"), "onframe");
+  EXPECT_EQ(loaded.at("file"), "test_plugin_onframe.dll");
+  EXPECT_EQ(loaded.at("enabled"), true);
+  EXPECT_EQ(loaded.at("required"), false);
+  EXPECT_EQ(loaded.at("loaded"), true);
+  EXPECT_EQ(loaded.at("ver"), "1.0.0");
+  EXPECT_EQ(loaded.at("api"), NEVR_PLUGIN_API_VERSION);
+  EXPECT_EQ(loaded.at("caps"), NEVR_PLUGIN_CAP_UNDECLARED);
+  EXPECT_FALSE(loaded.contains("error"));
+
+  const nlohmann::json& failed = manifest[1];
+  EXPECT_EQ(failed.at("name"), "missing");
+  EXPECT_EQ(failed.at("required"), true);
+  EXPECT_EQ(failed.at("loaded"), false);
+  EXPECT_EQ(failed.at("error").get<std::string>().rfind("LoadLibrary failed: error ", 0), 0u)
+      << failed.dump();
+  EXPECT_FALSE(failed.contains("ver"));
+
+  const nlohmann::json& disabled = manifest[2];
+  EXPECT_EQ(disabled.at("name"), "off");
+  EXPECT_EQ(disabled.at("enabled"), false);
+  EXPECT_EQ(disabled.at("loaded"), false);
+  EXPECT_FALSE(disabled.contains("error"));
+
+  // The wire payload: the same array, as a JSON array (not a string), under the
+  // top-level `nevr_plugins` key of the LoginProfile JSON.
+  const std::string request = TestHook_BuildLoginRequest(55, 4, "Player", "token");
+  constexpr size_t kJsonOffset = 56;
+  ASSERT_GT(request.size(), kJsonOffset);
+  ASSERT_EQ(request.back(), '\0');
+  const nlohmann::json login =
+      nlohmann::json::parse(request.substr(kJsonOffset, request.size() - kJsonOffset - 1));
+  ASSERT_TRUE(login.contains("nevr_plugins"));
+  ASSERT_TRUE(login.at("nevr_plugins").is_array());
+  EXPECT_EQ(login.at("nevr_plugins"), manifest);
+  EXPECT_TRUE(TestLogContains("login nevr_plugins configured=3 loaded=1"));
+
+  // After unload nothing is loaded, so the report is empty rather than stale.
+  UnloadPlugins();
+  EXPECT_EQ(nlohmann::json::parse(BuildPluginManifestJson()), nlohmann::json::array());
+}
+
 TEST_F(N68_PluginTickTest, OnFrame_Fires_When_Registered) {
   TestHook_RegisterPluginOnFrame(N68_PluginOnFrame);
   NvrGameContext ctx = {};
