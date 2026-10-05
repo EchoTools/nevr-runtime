@@ -236,6 +236,41 @@ extern "C" __declspec(dllexport) void NEVR_GetUPnPConfig(NevRUPnPConfig* out) {
 }
 
 // ============================================================================
+// Boot hook results
+// ============================================================================
+
+// Whether the process can do its job without a given boot hook. A required hook
+// that does not install sets g_bootHookFailed, and boot.cpp refuses to start a
+// server with that flag set rather than run it degraded; a client only reports
+// ok=false in the final boot line. An optional hook that does not install is
+// recorded and boot continues.
+enum class BootHookRequirement { kRequired, kOptional };
+
+// Issue #42: every boot hook's install result goes through here, so no call site
+// can drop it. PatchDetour has already logged the MinHook reason on failure; this
+// adds what the failure means for the boot. TeeFprintf, not Log(): this runs
+// under the DllMain loader lock (see the N36 note in `just verify`).
+static void NoteBootHookResult(BOOL installed, const char* name, BootHookRequirement requirement) {
+  if (installed) return;
+  if (requirement == BootHookRequirement::kRequired) {
+    g_bootHookFailed = true;
+    BootLogTee::TeeFprintf(
+        "[NEVR.PATCH] required boot hook not installed name=%s; a server will refuse to start, a client "
+        "continues without it\n",
+        name);
+  } else {
+    BootLogTee::TeeFprintf("[NEVR.PATCH] optional boot hook not installed name=%s; boot continues\n", name);
+  }
+}
+
+// The boot sequence's only way to detour a game function: the result cannot be
+// discarded, and each call site has to state whether the hook is required.
+template <typename T>
+static void InstallBootDetour(T* ppPointer, PVOID pDetour, const char* name, BootHookRequirement requirement) {
+  NoteBootHookResult(PatchDetour(ppPointer, pDetour, name), name, requirement);
+}
+
+// ============================================================================
 // Main initialization
 // ============================================================================
 
@@ -344,19 +379,33 @@ static VOID InitializeAfterGameImageGuard() {
   BOOL r1 = Hooking::Attach(reinterpret_cast<PVOID*>(&EchoVR::BuildCmdLineSyntaxDefinitions),
                              reinterpret_cast<PVOID>(BuildCmdLineSyntaxDefinitionsHook));
   BootLogTee::TeeFprintf("[NEVR.PATCH] hook name=BuildCmdLineSyntaxDefinitions result=%s\n", r1 ? "OK" : "FAILED");
-  if (!r1) g_bootHookFailed = true;
+  NoteBootHookResult(r1, "BuildCmdLineSyntaxDefinitions", BootHookRequirement::kRequired);
   BOOL r2 = Hooking::Attach(reinterpret_cast<PVOID*>(&EchoVR::PreprocessCommandLine),
                              reinterpret_cast<PVOID>(PreprocessCommandLineHook));
   BootLogTee::TeeFprintf("[NEVR.PATCH] hook name=PreprocessCommandLine result=%s\n", r2 ? "OK" : "FAILED");
-  if (!r2) g_bootHookFailed = true;
-  PatchDetour(&EchoVR::NetGameSwitchState, reinterpret_cast<PVOID>(NetGameSwitchStateHook), "EchoVR::NetGameSwitchState");
-  PatchDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook), "EchoVR::LoadLocalConfig");
-  PatchDetour(&EchoVR::CJsonGetFloat, reinterpret_cast<PVOID>(CJsonGetFloatHook), "EchoVR::CJsonGetFloat");
-  PatchDetour(&EchoVR::HttpConnect, reinterpret_cast<PVOID>(HttpConnectHook), "EchoVR::HttpConnect");
+  NoteBootHookResult(r2, "PreprocessCommandLine", BootHookRequirement::kRequired);
+  // Required: on a server it turns NoNetwork/LoadFailed back into a usable
+  // state, ends the process when a session ends, and is the shutdown-request
+  // check when the frame pacer is not running (state_machine.cpp).
+  InstallBootDetour(&EchoVR::NetGameSwitchState, reinterpret_cast<PVOID>(NetGameSwitchStateHook),
+                    "EchoVR::NetGameSwitchState", BootHookRequirement::kRequired);
+  // Required: sets g_localConfig, which HttpConnectHook needs before it
+  // redirects anything, and supplies the built-in game config when no
+  // config.json exists (config.cpp LoadLocalConfigHook).
+  InstallBootDetour(&EchoVR::LoadLocalConfig, reinterpret_cast<PVOID>(LoadLocalConfigHook), "EchoVR::LoadLocalConfig",
+                    BootHookRequirement::kRequired);
+  // Required: without it the configured arena rule overrides (round time,
+  // celebration time, mercy score) are silently not applied.
+  InstallBootDetour(&EchoVR::CJsonGetFloat, reinterpret_cast<PVOID>(CJsonGetFloatHook), "EchoVR::CJsonGetFloat",
+                    BootHookRequirement::kRequired);
+  // Required: redirects the game's HTTP(S) service endpoints.
+  InstallBootDetour(&EchoVR::HttpConnect, reinterpret_cast<PVOID>(HttpConnectHook), "EchoVR::HttpConnect",
+                    BootHookRequirement::kRequired);
+  // Optional, and it MUST stay optional: required would stop every server.
   // N128: this detour FAILS with MH_ERROR_ALREADY_CREATED on every boot, and the
   // reason is now KNOWN (N127 left it undetermined; the MH_STATUS capture added in
   // N128 resolved it). EchoVR::GetProcAddress is 0x1400eaef0 — the SAME address
-  // already hooked above as CSysDLL_GetSymbol (line ~258, the pnsradgameserver ->
+  // already hooked above as CSysDLL_GetSymbol (the CSysDLL hook block, the pnsradgameserver ->
   // in-process ServerLib redirect). CModule::GetProcAddress, CSysDLL_GetSymbol and
   // EchoVR::GetProcAddress are one function; MinHook allows one detour per target,
   // and CSysDLL_GetSymbol wins because it installs first. So this RadPluginShutdown
@@ -364,9 +413,17 @@ static VOID InitializeAfterGameImageGuard() {
   // across every captured run without it. Proper fix (flagged, not done): fold the
   // RadPluginShutdown check into CSysDLL_GetSymbolHook, since it already intercepts
   // symbol lookups on this exact function.
-  PatchDetour(&EchoVR::GetProcAddress, reinterpret_cast<PVOID>(GetProcAddressHook), "EchoVR::GetProcAddress");
-  PatchDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook), "EchoVR::SetWindowTextA_");
-  PatchDetour(&EchoVR::JsonValueAsString, reinterpret_cast<PVOID>(JsonValueAsStringHook), "EchoVR::JsonValueAsString");
+  InstallBootDetour(&EchoVR::GetProcAddress, reinterpret_cast<PVOID>(GetProcAddressHook), "EchoVR::GetProcAddress",
+                    BootHookRequirement::kOptional);
+  // Optional: the hook only records the window handle in g_hWindow, and nothing
+  // in the runtime reads g_hWindow.
+  InstallBootDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook), "EchoVR::SetWindowTextA_",
+                    BootHookRequirement::kOptional);
+  // Required: rewrites the game's service URLs (readyatdawn.com and ws/wss
+  // hosts) to the configured services and supplies early-config overrides
+  // (config.cpp JsonValueAsStringHook).
+  InstallBootDetour(&EchoVR::JsonValueAsString, reinterpret_cast<PVOID>(JsonValueAsStringHook),
+                    "EchoVR::JsonValueAsString", BootHookRequirement::kRequired);
   BootLogTee::TeeFprintf("[NEVR.PATCH] game hooks installed\n");
   // --- Platform compatibility hooks ---
   // InstallTLSHook() not needed — WebSocket bridge handles TLS via ixwebsocket.
