@@ -462,6 +462,14 @@ if(BUILD_TESTING)
     target_link_libraries(test_hooking PRIVATE GTest::gtest GTest::gtest_main minhook)
     gtest_discover_tests(test_hooking DISCOVERY_MODE PRE_TEST)
 
+    # Host <-> runtime descriptor validation for the BugSplat64.dll / nevr.dll
+    # split (docs/design/2026-10-05-bugsplat-nevr-split.md step 1).
+    add_executable(test_runtime_abi tests/test_runtime_abi.cpp)
+    target_compile_options(test_runtime_abi PRIVATE -Werror)
+    target_include_directories(test_runtime_abi PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_runtime_abi PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_runtime_abi DISCOVERY_MODE PRE_TEST)
+
     # Isolated loader-lock proof harness for the planned BugSplat64.dll bootstrap.
     # The host DLL installs only a MinHook rendezvous in DllMain, then loads a
     # versioned runtime on its first target call. The child scenarios exercise
