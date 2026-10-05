@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 
@@ -37,6 +38,68 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
 
         self.assertNotRegex(body, r"\bNevrCfg\w*\s*\(")
         self.assertNotRegex(body, r"\bNevrGame\w*\s*\(")
+
+    def test_every_boot_detour_result_is_consumed(self):
+        # Issue #42: seven PatchDetour calls in the boot sequence discarded their result, so a
+        # hook that never installed could not reach g_bootHookFailed and a server booted as if
+        # it had. The boot sequence detours only through InstallBootDetour, which hands the
+        # result and the per-hook required/optional decision to NoteBootHookResult.
+        source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
+        body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
+
+        self.assertNotRegex(body, r"\bPatchDetour\s*\(",
+                            "the boot sequence calls PatchDetour directly; use InstallBootDetour")
+        self.assertGreater(len(re.findall(r"\bInstallBootDetour\s*\(", body)), 0,
+                           "subject vanished: no InstallBootDetour calls found")
+        helper = extract_braced_function(source, "static void InstallBootDetour(")
+        self.assertRegex(helper, r"NoteBootHookResult\(\s*PatchDetour\(")
+        # The two Hooking::Attach results use the same pattern, not a hand-written flag write.
+        self.assertNotRegex(body, r"if\s*\(\s*!\s*r\d\s*\)\s*g_bootHookFailed")
+        self.assertRegex(body, r"NoteBootHookResult\(\s*r1\s*,[^;]*kRequired")
+        self.assertRegex(body, r"NoteBootHookResult\(\s*r2\s*,[^;]*kRequired")
+        # A required failure is what sets the flag boot.cpp checks before starting a server.
+        note = extract_braced_function(source, "static void NoteBootHookResult(")
+        self.assertRegex(note, r"kRequired\)\s*\{\s*g_bootHookFailed\s*=\s*true;")
+        # An installed hook (installed == true) must short-circuit before either branch runs;
+        # inverting or deleting this line would mark every successful hook as a failure, and
+        # every required hook succeeds in the logs this classification is based on, so
+        # `just verify` would still go green while every server refused to start.
+        self.assertIn("if (installed) return;", note)
+        # TeeFprintf, not Log(): this runs under the DllMain loader lock (N36). The N36 census
+        # only scans InitializeAfterGameImageGuard's own body and would not catch a Log() call
+        # added inside this helper.
+        self.assertNotRegex(note, r"\bLog\s*\(")
+        # The two Hooking::Attach results (r1, r2) must be captured in a variable, not dropped —
+        # a new bare `Hooking::Attach(...)` statement would silently discard its result the same
+        # way the original seven PatchDetour calls did.
+        attach_calls = re.findall(r"\bHooking::Attach\s*\(", body)
+        captured_calls = re.findall(r"\bBOOL\s+r\d+\s*=\s*Hooking::Attach\s*\(", body)
+        self.assertEqual(len(attach_calls), len(captured_calls),
+                         "a Hooking::Attach call's result is not captured in a variable")
+
+    def test_only_reviewed_boot_hooks_are_optional(self):
+        # A required hook that fails makes a server refuse to start (boot.cpp: g_bootHookFailed ->
+        # ServerFatal). EchoVR::GetProcAddress fails on every boot with MH_ERROR_ALREADY_CREATED
+        # (same target 0x1400EAEF0 as the CSysDLL_GetSymbol hook installed earlier), so making it
+        # required would stop every server. Moving a hook between the classes is a policy change
+        # and has to change this list.
+        source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
+        body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
+
+        calls = re.findall(
+            r'InstallBootDetour\([^;]*?"([^"]+)"\s*,\s*BootHookRequirement::(k\w+)\s*\)\s*;', body)
+        self.assertEqual(len(calls), len(re.findall(r"\bInstallBootDetour\s*\(", body)),
+                         "an InstallBootDetour call did not parse; the classification below would miss it")
+        optional = {name for name, kind in calls if kind == "kOptional"}
+        required = {name for name, kind in calls if kind == "kRequired"}
+        self.assertEqual(optional, {"EchoVR::GetProcAddress", "EchoVR::SetWindowTextA_"})
+        self.assertEqual(required, {
+            "EchoVR::NetGameSwitchState",
+            "EchoVR::LoadLocalConfig",
+            "EchoVR::CJsonGetFloat",
+            "EchoVR::HttpConnect",
+            "EchoVR::JsonValueAsString",
+        })
 
     def test_bridge_never_closes_a_remote_on_unrequire(self):
         # d0190c4/dd1e9e7 (2026-09-14) closed the remote websocket whenever STcpConnectionUnrequireEvent
