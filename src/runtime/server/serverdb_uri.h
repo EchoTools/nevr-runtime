@@ -42,4 +42,21 @@ std::optional<std::string> BuildTokenRouteUri(std::string_view tokenUri, std::st
 std::optional<std::string> BuildBridgeCredentialUri(std::string_view remoteUri, std::string_view discordId,
                                                     std::string_view password);
 
+// Removes one literal "key=value" query parameter from `uri`, wherever it sits
+// in the query string, and reinserts a correct separator (issue #116). The
+// previous ws_bridge.cpp inline version always treated the character before a
+// match as removable, which deleted the URI's own '?' whenever the parameter
+// was first in the query (e.g. "base?format=evr&discordid=1" ->
+// "basediscordid=1", concatenating path and query with no separator).
+// Handles, and only acts on, an exact boundary match (preceded by '?', '&', or
+// start-of-string; followed by '&' or end-of-string) — a substring hit inside
+// another key or value (e.g. "xformat=evr=1") is left alone:
+//   - sole param:      "base?format=evr"                 -> "base"
+//   - leading, more follow: "base?format=evr&a=1"        -> "base?a=1"
+//   - trailing:        "base?a=1&format=evr"              -> "base?a=1"
+//   - middle:          "base?a=1&format=evr&b=2"          -> "base?a=1&b=2"
+//   - absent:          "base?a=1"                         -> "base?a=1" (unchanged)
+// Removes only the first match; these query strings never repeat a key.
+std::string RemoveQueryParam(std::string_view uri, std::string_view param);
+
 }  // namespace ServerDbUri

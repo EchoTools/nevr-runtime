@@ -84,4 +84,35 @@ std::optional<std::string> BuildBridgeCredentialUri(std::string_view remoteUri, 
   return AppendQuery(remoteUri, {{"discordid", discordId, false}, {"password", password, false}});
 }
 
+std::string RemoveQueryParam(std::string_view uri, std::string_view param) {
+  std::string result(uri);
+  if (param.empty()) return result;
+  size_t searchFrom = 0;
+  while (true) {
+    const size_t pos = result.find(param, searchFrom);
+    if (pos == std::string::npos) break;
+    const bool precededByBoundary = (pos == 0) || result[pos - 1] == '?' || result[pos - 1] == '&';
+    const size_t end = pos + param.size();
+    const bool followedByBoundary = (end == result.size()) || result[end] == '&';
+    if (!precededByBoundary || !followedByBoundary) {
+      // Substring hit inside another key/value (e.g. "xformat=evr=1") — keep
+      // looking past this occurrence rather than mangling an unrelated param.
+      searchFrom = pos + 1;
+      continue;
+    }
+    size_t start = pos;
+    size_t stop = end;
+    if (pos > 0 && result[pos - 1] == '&') {
+      start = pos - 1;  // consume the preceding '&' (trailing or middle case)
+    } else if (end < result.size() && result[end] == '&') {
+      stop = end + 1;  // consume the following '&' (leading case) — the '?' stays
+    } else if (pos > 0 && result[pos - 1] == '?') {
+      start = pos - 1;  // sole query param — nothing left to need the '?'
+    }
+    result.erase(start, stop - start);
+    break;
+  }
+  return result;
+}
+
 }  // namespace ServerDbUri

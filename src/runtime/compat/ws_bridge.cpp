@@ -1013,19 +1013,17 @@ void InstallWebSocketBridge() {
             }
             // conn>=2 (matchmaker): pnsradmatchmaking uses protobuf, not EchoVR
             // binary. Strip format=evr so the server uses default protobuf handling.
+            // Issue #116: format=evr is routinely the FIRST query param here on
+            // local dev rigs, where the configured socket_uri already carries
+            // "?format=evr&token=..." before the credentials block above appends
+            // discordid/password (tools/scenario/run_scenario.py:353,
+            // tools/winvm/systest.py:72, docs/reference/local-nakama.md:55,
+            // tools/nakama-local/evr_peer.py:104) — a naive "delete the preceding
+            // ? or &" deleted the URI's only '?' and glued the path to the
+            // remaining query. ServerDbUri::RemoveQueryParam handles leading/
+            // middle/trailing/sole position correctly; see its own tests.
             if (connIdx >= 2) {
-              auto pos = remoteUrl.find("format=evr");
-              if (pos != std::string::npos) {
-                // Remove "format=evr" and the preceding ? or &
-                size_t start = (pos > 0 && (remoteUrl[pos-1] == '?' || remoteUrl[pos-1] == '&'))
-                               ? pos - 1 : pos;
-                size_t end = pos + 10;  // len("format=evr")
-                // If there's a trailing & after format=evr, remove it too
-                if (end < remoteUrl.size() && remoteUrl[end] == '&') end++;
-                remoteUrl.erase(start, end - start);
-                // If we left a trailing ? with nothing after, remove it
-                if (!remoteUrl.empty() && remoteUrl.back() == '?') remoteUrl.pop_back();
-              }
+              remoteUrl = ServerDbUri::RemoveQueryParam(remoteUrl, "format=evr");
               const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
                   "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: ", remoteUrl);
               Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
