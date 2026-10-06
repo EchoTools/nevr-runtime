@@ -784,13 +784,31 @@ if(BUILD_TESTING)
     host_crash_output(test_host_crash_runtime_missing_entry
       "${HOST_CRASH_FIXTURE_DIR}/missing-entry")
 
+    # A compatible runtime fixture for the crash harness (design step 7): it links
+    # the REAL runtime crash instrumentation (crash_recovery.cpp — BreakpointVEH /
+    # WriteCrashDump / VehPrintf — and crash_dump_format.cpp) and installs the VEH
+    # from initialize(), so a fault inside nevr.dll emits the runtime's [NEVR.CRASH]
+    # evidence, not just the host's BugSplat_createReport minidump. Links minhook
+    # (PatchDetour -> Hooking::Attach); runtime_fixture_crash.cpp stubs the
+    # game-facing seams (Log, SetFatalErrorHandler, GetRunId, HookGuard::Record,
+    # BinaryBugFixes::Shutdown, StopWebSocketBridgeListener, the globals).
+    add_library(test_host_crash_runtime_good SHARED
+      tests/host_crash/runtime_fixture_crash.cpp
+      lifecycle/crash_recovery.cpp
+      lifecycle/crash_dump_format.cpp)
+    target_compile_definitions(test_host_crash_runtime_good PRIVATE USE_MINHOOK)
+    target_link_libraries(test_host_crash_runtime_good PRIVATE minhook)
+    set_target_properties(test_host_crash_runtime_good PROPERTIES PREFIX "" OUTPUT_NAME "nevr")
+    host_crash_output(test_host_crash_runtime_good "${HOST_CRASH_FIXTURE_DIR}/good")
+
     add_executable(test_host_crash tests/host_crash/host_crash_test.cpp)
     host_crash_output(test_host_crash "${HOST_CRASH_DIR}")
     add_dependencies(test_host_crash
       test_host_crash_shim
       test_host_crash_runtime_bad_version
       test_host_crash_runtime_init_failure
-      test_host_crash_runtime_missing_entry)
+      test_host_crash_runtime_missing_entry
+      test_host_crash_runtime_good)
 
     # Early PreprocessCommandLine rendezvous harness for the BugSplat64.dll /
     # nevr.dll split (docs/design/2026-10-05-bugsplat-nevr-split.md, step 4).
@@ -1010,6 +1028,11 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_abi nevr_api ws2_32)
     gtest_discover_tests(test_messages DISCOVERY_MODE PRE_TEST)
 
+    # Crash-recovery unit tests (N71/N70/#68): the PURE formatting/attribution
+    # logic behind nevr.dll's crash instrumentation. Compiles lifecycle/crash_dump_format.cpp
+    # directly (the same TU nevr_runtime links) — post-split this code lives in
+    # nevr.dll, and the child-process crash harness (test_host_crash) exercises the
+    # runtime's VEH end to end via the "good" fixture.
     add_executable(test_crash_recovery
       tests/test_crash_recovery.cpp lifecycle/crash_dump_format.cpp)
     set_source_files_properties(tests/test_crash_recovery.cpp lifecycle/crash_dump_format.cpp

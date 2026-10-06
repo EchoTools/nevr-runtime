@@ -4,3 +4,5 @@ EXPORTS
    ?createReport@MiniDmpSender@@QEAAXPEAU_EXCEPTION_POINTERS@@@Z = BugSplat_createReport
    NevrHostTest_Prepare
    NevrHostTest_LoadRuntime
+   NevrHostTest_SetCaptureProbe
+   NevrHostTest_SetFailWrites

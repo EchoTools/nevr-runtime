@@ -627,10 +627,13 @@ LONG WINAPI BreakpointVEH(PEXCEPTION_POINTERS pExceptionInfo) {
       for (LONG m = 0; m < mc; m++) {
         // The cache is deliberately comprehensive for crash attribution, so a
         // range match alone means only "some loaded DLL" — including Wine and
-        // DXVK.  This client loads no plugins; BugSplat64.dll is the only NEVR
-        // image allowed to enter the dump path.
+        // DXVK. Only NEVR images may enter the dump path. Post-split (design step
+        // 5) the crash instrumentation itself lives in nevr.dll, so the runtime
+        // must be attributed here too; recognising only BugSplat64.dll would
+        // silently drop every fault raised inside the runtime.
         if (rip >= g_moduleCache[m].base && rip < g_moduleCache[m].end &&
-            _stricmp(g_moduleCache[m].name, "BugSplat64.dll") == 0) {
+            (_stricmp(g_moduleCache[m].name, "BugSplat64.dll") == 0 ||
+             _stricmp(g_moduleCache[m].name, "nevr.dll") == 0)) {
           inNevrModule = true;
           break;
         }

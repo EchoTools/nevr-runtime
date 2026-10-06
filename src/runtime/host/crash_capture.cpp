@@ -19,6 +19,12 @@ constexpr wchar_t kCrashesSuffix[] = L"EchoVR\\crashes";
 volatile LONG g_capturing = 0;
 volatile LONG g_dump_counter = 0;
 
+// Test seams (null / 0 in production): a probe run while the guard is held, and
+// a flag forcing WriteDumpTo to fail after opening the file (simulating a
+// full-disk / write failure for the crash harness).
+CaptureProbeFn g_capture_probe = nullptr;
+volatile LONG g_fail_writes = 0;
+
 // Bounded wide sprintf into a fixed buffer; returns false on truncation.
 bool FormatDumpName(wchar_t* out, std::size_t out_size, const wchar_t* dir, DWORD pid,
                     LONG sequence) {
@@ -37,6 +43,12 @@ void CrashCapture::Exit() {
   InterlockedExchange(&g_capturing, 0);
 }
 
+void CrashCapture::SetCaptureProbe(CaptureProbeFn probe) { g_capture_probe = probe; }
+
+void CrashCapture::SetFailWrites(bool fail) {
+  InterlockedExchange(&g_fail_writes, fail ? 1 : 0);
+}
+
 void CrashCapture::Prepare(HMODULE shim_module) {
   local_ready_ = false;
   temp_ready_ = false;
@@ -53,6 +65,10 @@ void CrashCapture::Prepare(HMODULE shim_module) {
 
 bool CrashCapture::Capture(PEXCEPTION_POINTERS exception_pointers) {
   if (!TryEnter()) return false;
+
+  // Test seam: while the reentrancy guard is held, let the harness raise a
+  // nested fault to prove the next Capture is suppressed (no recursion/deadlock).
+  if (g_capture_probe != nullptr) g_capture_probe();
 
   bool captured = false;
   const HMODULE dbghelp = GetModuleHandleW(kDbgHelpModule);
@@ -94,6 +110,15 @@ bool CrashCapture::WriteDumpTo(const wchar_t* dir, PEXCEPTION_POINTERS exception
   HANDLE file = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
                             FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file == INVALID_HANDLE_VALUE) return false;
+
+  // Test seam: simulate a full-disk / write failure by failing after the file is
+  // opened (the path that MiniDumpWriteDump returning FALSE also exercises), so
+  // Capture falls through to the text diagnostic.
+  if (g_fail_writes != 0) {
+    CloseHandle(file);
+    DeleteFileW(path);
+    return false;
+  }
 
   MINIDUMP_EXCEPTION_INFORMATION exception_info = {};
   exception_info.ThreadId = GetCurrentThreadId();

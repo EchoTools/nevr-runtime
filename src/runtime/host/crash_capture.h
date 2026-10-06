@@ -27,6 +27,11 @@ using MiniDumpWriteDumpFn = BOOL(WINAPI*)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE,
                                           PMINIDUMP_USER_STREAM_INFORMATION,
                                           PMINIDUMP_CALLBACK_INFORMATION);
 
+// Invoked once by Capture while the atomic reentrancy guard is held, before any
+// dump work. Null in production; the child-process crash harness installs it to
+// raise a nested fault and prove the guard suppresses recursion (no deadlock).
+using CaptureProbeFn = void (*)();
+
 class CrashCapture {
  public:
   // Precompute the three destination directories into fixed buffers from
@@ -40,6 +45,13 @@ class CrashCapture {
   // Atomic reentrancy guard, exposed for unit tests.
   bool TryEnter();
   void Exit();
+
+  // Test seams — no-ops in production (defaults null / false). The child-process
+  // crash harness uses them to inject a nested fault (SetCaptureProbe) and to
+  // simulate a full-disk/write failure (SetFailWrites) without touching the
+  // crash-safe capture body.
+  static void SetCaptureProbe(CaptureProbeFn probe);
+  static void SetFailWrites(bool fail);
 
   static constexpr const wchar_t* kDbgHelpModule = L"dbghelp.dll";
   static constexpr const char* kMiniDumpWriteDumpProc = "MiniDumpWriteDump";
