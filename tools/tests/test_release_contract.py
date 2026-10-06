@@ -37,6 +37,7 @@ class ReleaseContractTest(unittest.TestCase):
             "test_websocket_frame",
             "test_protobuf_transport",
             "test_url_diagnostics",
+            "test_winhttp_stub",
             "test_callback_unregistration",
             "test_session_unregister",
             "test_mic_lifecycle",
