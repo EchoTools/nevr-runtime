@@ -13,6 +13,7 @@ set(PATCHES_SOURCES
     "lifecycle/boot.cpp"
     "lifecycle/config.cpp"
     "lifecycle/service_map.cpp"
+    "lifecycle/service_redirect.cpp"
     "lifecycle/service_config.cpp"
     "lifecycle/login_redirect_override.cpp"
     "patch/mode_patches.cpp"
@@ -30,6 +31,7 @@ set(PATCHES_SOURCES
     "patch/resource_override.cpp"
     "compat/winhttp_stub.cpp"
     "compat/ws_bridge.cpp"
+    "compat/login_profile.cpp"
     "compat/social_names.cpp"
     "patch/xpid_patch.cpp"
     "frame/tick.cpp"
@@ -74,6 +76,7 @@ set(PATCHES_HEADERS
     "lifecycle/boot.h"
     "lifecycle/config.h"
     "lifecycle/service_map.h"
+    "lifecycle/service_redirect.h"
     "lifecycle/service_config.h"
     "lifecycle/login_redirect_override.h"
     "patch/mode_patches.h"
@@ -170,7 +173,12 @@ set_source_files_properties(ws_bridge.cpp compat/social_names.cpp PROPERTIES SKI
 # test can link it) and service_config.cpp (defines NOMINMAX before windows.h, as
 # the core PCH pulls windows.h WITHOUT NOMINMAX and its min/max macros break
 # <optional>/<set>). Same reason nevr_config.cpp skips the PCH.
-set_source_files_properties(lifecycle/service_map.cpp lifecycle/service_config.cpp lifecycle/login_redirect_override.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(
+  lifecycle/service_map.cpp
+  lifecycle/service_redirect.cpp
+  lifecycle/service_config.cpp
+  lifecycle/login_redirect_override.cpp
+  PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 # N134 S6: plugin_load_plan.cpp is the pure builder — nevr_config + nlohmann-json,
 # no windows.h. Same reason as service_map.cpp: it must stay PCH-agnostic (defines
 # NOMINMAX before nlohmann, which pulls <limits>) so the test links it standalone.
@@ -486,14 +494,19 @@ if(BUILD_TESTING)
 
     # service_map behaviour-equivalence tests (N133 S3) — the PURE resolution core
     # of the config.cpp cutover (flat->path map, service-host fallback, scheme
-    # redirect). Compiles service_map.cpp directly (the same TU nevr_runtime links)
+    # redirect). Compiles service_map.cpp and service_redirect.cpp directly (the
+    # same TUs nevr_runtime links)
     # + nevr_core (nevr_config) + yaml-cpp. No game stubs: service_map.cpp has no
     # windows/Log/extern dependencies. The impure half (service_config.cpp) is NOT
     # linked here — it is exercised by the differential server run.
     add_executable(test_service_map
       tests/test_service_map.cpp
-      lifecycle/service_map.cpp)
-    set_source_files_properties(tests/test_service_map.cpp lifecycle/service_map.cpp
+      lifecycle/service_map.cpp
+      lifecycle/service_redirect.cpp)
+    set_source_files_properties(
+      tests/test_service_map.cpp
+      lifecycle/service_map.cpp
+      lifecycle/service_redirect.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_service_map PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_service_map PRIVATE
@@ -584,6 +597,7 @@ if(BUILD_TESTING)
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
+      compat/login_profile.cpp
       # #41: ws_bridge.cpp builds its URL credentials through the ServerDbUri encoder.
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
@@ -615,6 +629,7 @@ if(BUILD_TESTING)
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
+      compat/login_profile.cpp
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
       patch/broadcaster_hook_stats.cpp

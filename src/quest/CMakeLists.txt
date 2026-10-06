@@ -27,6 +27,24 @@ message(STATUS "nevr_quest: ABI=${ANDROID_ABI} platform=${ANDROID_PLATFORM} STL=
 add_library(nevr_toolchain_probe SHARED probe.cpp)
 target_link_libraries(nevr_toolchain_probe PRIVATE log)
 
+# Compile the shared login profile source with the Quest Android toolchain.
+find_package(nlohmann_json CONFIG REQUIRED)
+add_library(nevr_quest_login_profile STATIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/login_profile.cpp")
+target_include_directories(nevr_quest_login_profile PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(nevr_quest_login_profile PRIVATE nlohmann_json::nlohmann_json)
+
+# Compile the exact redirect policy source used by the Windows runtime.
+add_library(nevr_quest_service_redirect STATIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/lifecycle/service_redirect.cpp")
+target_include_directories(nevr_quest_service_redirect PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_compile_options(nevr_quest_service_redirect PRIVATE -Wall -Wextra -Werror)
+
+# Android-linkable test executable using the same vectors as the host test.
+add_executable(service_redirect_test tests/service_redirect_test.cpp)
+target_link_libraries(service_redirect_test PRIVATE nevr_quest_service_redirect)
+target_compile_options(service_redirect_test PRIVATE -Wall -Wextra -Werror)
+
 # ── Crash-reporter sentinel (libovrplatformloader.so) ───────────────────
 # Added once breakpad is vendored; guarded so the toolchain probe builds
 # standalone.

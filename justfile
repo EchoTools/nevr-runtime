@@ -494,6 +494,23 @@ test-auth-integration:
 # Run all auth tests
 test-auth: test-auth-groundtruth test-auth-unit
 
+# Run the Quest redirect test on the host. src/quest/tests/service_redirect_test.cpp is
+# compiled for Android by src/quest/CMakeLists.txt but cannot execute there; this
+# compiles the same test, the same vectors (service_redirect_vectors.h) and the same
+# shared source (src/runtime/lifecycle/service_redirect.cpp) with the host g++ and runs
+# it. No NDK. Fail-close: a compile error or any vector mismatch exits nonzero.
+test-quest-shared:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-shared-host"
+    mkdir -p "$out"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
+        src/runtime/lifecycle/service_redirect.cpp \
+        src/quest/tests/service_redirect_test.cpp \
+        -o "$out/service_redirect_test"
+    "$out/service_redirect_test"
+    echo "test-quest-shared: all redirect vectors pass on the host"
+
 # --- Verify (closed-loop gate) ---
 
 # Aggregate verify gate for the all-the-way-down canon: build everything, then run
@@ -511,6 +528,7 @@ verify:
     # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
     cmake --build --preset {{ preset }}
     just test-auth-unit
+    just test-quest-shared
     python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
@@ -1030,21 +1048,26 @@ verify:
     # whole time — token_auth parsed it from the auth response and persisted it to
     # the credential cache — it had simply never been exposed.
     #
-    # Flattened before matching (tr -d '\\'): the JSON lives inside a C string
-    # literal, so every quote is backslash-escaped and matching it through a
-    # justfile recipe means three layers of escaping. N115's sensor silently
-    # matched NOTHING for exactly this reason and its falsification went green.
+    # The profile is assembled by key assignments (profile["displayname"] = ...), not
+    # inside a C string literal, so these patterns match the source text directly.
+    # A check that matches JSON text inside a string literal has to strip the
+    # backslash before every quote first (see N115): left escaped, such a pattern
+    # matches nothing and a broken tree still passes.
     N123_RC=0; N123_WS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/ws_bridge.cpp) || N123_RC=$?
     sensor_stage1 "N123 login display name sourced" "src/runtime/compat/ws_bridge.cpp" "$N123_RC"
     sensor_nonempty "N123 login display name sourced" "non-comment lines of compat/ws_bridge.cpp" "$N123_WS"
-    N123_FLAT=$(tr -d '\\' <<<"$N123_WS")
-    # N146: displayname is now set via nlohmann_json, not a hand-built snprintf
-    # format string.  The old pattern was "\"displayname\":\"%s\""; the new one
-    # is j["displayname"] = resolvedName (where resolvedName traces back to
-    # TokenAuth_GetUsername, verified by the second check below).
-    if ! grep -qE 'displayname.*=.*resolvedName|displayname.*=.*displayName' <<<"$N123_FLAT"; then
-        echo "verify: FAIL — N123 the login displayname is no longer sourced from a variable." >&2
+    if ! grep -qF 'profileInputs.display_name = displayName;' <<<"$N123_WS"; then
+        echo "verify: FAIL — N123 ws_bridge no longer forwards the resolved display name into the login profile." >&2
         echo "A literal here makes every client announce the same name; eight players render eight identical nameplates and the service cannot tell them apart." >&2
+        exit 1
+    fi
+    N123_PROFILE_RC=0; N123_PROFILE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/login_profile.cpp) || N123_PROFILE_RC=$?
+    sensor_stage1 "N123 login profile display name" "src/runtime/compat/login_profile.cpp" "$N123_PROFILE_RC"
+    sensor_nonempty "N123 login profile display name" "non-comment lines of compat/login_profile.cpp" "$N123_PROFILE"
+    if ! grep -qF 'profile["displayname"] = inputs.display_name.empty()' <<<"$N123_PROFILE" || \
+       ! grep -qF 'std::to_string(inputs.account_id)' <<<"$N123_PROFILE"; then
+        echo "verify: FAIL — N123 login profile no longer serializes the resolved display name with the account-id fallback." >&2
+        echo "Every NEVR client could announce the same literal name if this fallback is replaced with a placeholder." >&2
         exit 1
     fi
     # Anchored on the exact call form: a rename that APPENDS characters
@@ -1897,14 +1920,17 @@ verify:
         echo "verify: FAIL — N112a: src/core/build_identity.cpp is missing." >&2
         exit 1
     fi
-    # N112b — client login carries nevr_identity and nevr_plugins.
-    if ! grep -q 'nevr_identity' src/runtime/compat/ws_bridge.cpp; then
-        echo "verify: FAIL — N112b: ws_bridge.cpp login JSON does not carry" >&2
+    # N112b — the shared client login profile carries nevr_identity and nevr_plugins.
+    N112_PROFILE_RC=0; N112_PROFILE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/login_profile.cpp) || N112_PROFILE_RC=$?
+    sensor_stage1 "N112 client login identity and plugins" "src/runtime/compat/login_profile.cpp" "$N112_PROFILE_RC"
+    sensor_nonempty "N112 client login identity and plugins" "non-comment lines of compat/login_profile.cpp" "$N112_PROFILE"
+    if ! grep -qF 'profile["nevr_identity"]' <<<"$N112_PROFILE"; then
+        echo "verify: FAIL — N112b: shared login profile does not carry" >&2
         echo "nevr_identity. The client login must send NEVR version info (N112)." >&2
         exit 1
     fi
-    if ! grep -q 'nevr_plugins' src/runtime/compat/ws_bridge.cpp; then
-        echo "verify: FAIL — N112b: ws_bridge.cpp login JSON does not carry" >&2
+    if ! grep -qF 'profile["nevr_plugins"]' <<<"$N112_PROFILE"; then
+        echo "verify: FAIL — N112b: shared login profile does not carry" >&2
         echo "nevr_plugins. The client login must send a plugin manifest (N112)." >&2
         exit 1
     fi

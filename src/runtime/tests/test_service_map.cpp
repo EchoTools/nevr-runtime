@@ -2,13 +2,13 @@
 // (N133 S3). Locks the two things the migration had to preserve exactly:
 //
 //   1. the legacy-flat-key -> config.yaml dotted-path map (FlatKeyToYamlPath), and
-//   2. the service-endpoint resolution the config.cpp hooks used to run against
+//   2. the service-endpoint resolution the config.cpp hooks run against
 //      the game JSON — host fallback (ResolveServiceHost) and scheme redirect
 //      (ResolveRedirect) — including the "absent key -> unchanged default" case
 //      for each of the ~10 service keys, which is HARD RISK #2 (no default drift).
 //
-// Pure: links service_map.cpp + nevr_core + yaml-cpp, no game stubs. Built under
-// -DBUILD_TESTING=ON and run under Wine by `just test-auth-unit` (`just verify`).
+// Pure: links service_map.cpp + service_redirect.cpp + nevr_core + yaml-cpp, no
+// game stubs. Built under -DBUILD_TESTING=ON and run under Wine by `just test-auth-unit` (`just verify`).
 
 #include <cstdlib>
 #include <functional>
@@ -22,6 +22,7 @@
 
 #include "core/nevr_config.h"
 #include "runtime/lifecycle/service_map.h"
+#include "quest/tests/service_redirect_vectors.h"
 
 namespace {
 
@@ -293,6 +294,24 @@ TEST(ServiceMap, ResolveRedirect_NoTargetLeavesUnchanged) {
   EXPECT_FALSE(ResolveRedirect("wss://login.readyatdawn.com/x", std::optional<std::string>(""),
                                std::nullopt, false, 0)
                    .has_value());
+}
+
+TEST(ServiceMap, ResolveRedirect_SharedQuestVectors) {
+  for (const auto& vector : nevr_quest_test::kRedirectVectors) {
+    const auto actual = ResolveRedirect(
+        vector.input,
+        vector.socketTarget == nullptr ? std::nullopt
+                                       : std::optional<std::string>(vector.socketTarget),
+        vector.httpTarget == nullptr ? std::nullopt
+                                     : std::optional<std::string>(vector.httpTarget),
+        vector.bridgeActive, vector.bridgePort);
+    if (vector.expected == nullptr) {
+      EXPECT_FALSE(actual.has_value()) << vector.input;
+    } else {
+      ASSERT_TRUE(actual.has_value()) << vector.input;
+      EXPECT_EQ(*actual, vector.expected) << vector.input;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

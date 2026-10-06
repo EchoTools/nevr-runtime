@@ -1,5 +1,6 @@
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/compat/hmd_serial.h"
+#include "runtime/compat/login_profile.h"
 #include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
@@ -717,97 +718,56 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
                        (host.wine_host_os.empty() ? "" : " on " + host.wine_host_os))
                     : std::string();
 
-  // Empty means the account's name is genuinely not known yet. Fall back to the
-  // account id — a true, unique identifier — rather than a constant. A shared
-  // placeholder is what made every NEVR client announce the same name.
-  std::string resolvedName = displayName;
-  if (resolvedName.empty()) resolvedName = std::to_string(accountId);
-
   // LoginProfile JSON — matches the game's SNSLogInRequestv2 format.
-  //
-  // N146: nlohmann_json instead of hand-built snprintf.  A hand-built format
-  // string cannot escape its own values, so a version string or display name
-  // containing a double-quote produces malformed JSON the server rejects.
-  // nlohmann::json guarantees valid output regardless of input.
+  // Keep its construction portable so Quest and Windows use the same fields
+  // and JSON escaping rules.
   const BuildIdentity::Info& buildId = BuildIdentity::Get();
   const std::string pluginManifest = BuildPluginManifestJson();
+  // The serial is the one the stock client sends: the game's serial buffer in
+  // VR, "N/A" with no VR, "unknown" only when the game has none. Only its source
+  // and length are logged, never the value.
+  const HmdSerial::Choice hmd = GameHmdSerial();
+  Log(EchoVR::LogLevel::Info, "[NEVR.WS] login hmd serial source=%s length=%zu",
+      HmdSerial::SourceName(hmd.source), hmd.value.size());
 
-  std::string jsonStr;
-  {
-    nlohmann::json j;
-    j["accountid"] = accountId;
-    j["displayname"] = resolvedName;
-    j["bypassauth"] = false;
-    j["access_token"] = accessToken;
-    // 2026-09-13: the account requires password authentication — measured
-    // via Nakama's own rejection before this fix, "LOGIN FAILURE: status=400
-    // ... account requires password authentication". The injected
-    // LoginRequest never sent one. Confirmed live: adding this field (and
-    // fixing config.yaml's truncated auth.password, "spritz-srv-7f3a9c" ->
-    // "spritz-srv-7f3a9c8") produced a real LoginSuccess from Nakama.
-    j["password"] = password;
-    j["nonce"] = "";
-    j["buildversion"] = 631547;
-    j["lobbyversion"] = 0;
-    j["appid"] = 0;
-    j["publisher_lock"] = "";
-    // The serial the stock client sends (#83): the game's serial buffer in VR, "N/A" with no VR, and
-    // "unknown" only when the game has none. A shared constant here ("nEVR-Wine") made every
-    // nevr-runtime player a strong alt of every other one. The value is never logged.
-    {
-      const HmdSerial::Choice hmd = GameHmdSerial();
-      j["hmdserialnumber"] = hmd.value;
-      Log(EchoVR::LogLevel::Info, "[NEVR.WS] login hmd serial source=%s length=%zu", HmdSerial::SourceName(hmd.source),
-          hmd.value.size());
-    }
-    j["desiredclientprofileversion"] = 0;
-
-    auto& ident = j["nevr_identity"];
-    ident["version"] = buildId.project_version;
-    ident["commit"] = buildId.git_commit;
-    ident["build"] = buildId.git_describe;
-    ident["build_type"] = buildId.build_type;
-    // The social message level this runtime understands; the server sends a newer social message only
-    // to a session that declared its level (docs/design/2026-10-01-social-nakama-proposal.md §0).
-    j["nevr_social"] = SocialParty::kSocialLevel;
-
-    // nevr_plugins (#60): every configured plugin with what the loader did with
-    // it — loaded (ver/api/caps), failed (error), or disabled. Top-level key,
-    // beside nevr_identity and nevr_social. Parsed so the field is a JSON array,
-    // not a string-escaped copy of one. The non-throwing parse never fails on the
-    // builder's own nlohmann output; if it ever did, the login still goes out,
-    // with an empty list and a Warning that says so.
-    {
-      nlohmann::json plugins = nlohmann::json::parse(pluginManifest, nullptr, false);
-      if (plugins.is_discarded() || !plugins.is_array()) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.WS] login nevr_plugins: plugin report is not a JSON array (%zu bytes) — sending []",
-            pluginManifest.size());
-        plugins = nlohmann::json::array();
-      }
-      size_t loaded = 0;
-      for (const nlohmann::json& p : plugins) {
-        if (p.is_object() && p.value("loaded", false)) ++loaded;
-      }
-      Log(EchoVR::LogLevel::Info, "[NEVR.WS] login nevr_plugins configured=%zu loaded=%zu", plugins.size(),
-          loaded);
-      j["nevr_plugins"] = std::move(plugins);
-    }
-
-    auto& sys = j["system_info"];
-    sys["headset_type"] = "No VR";
-    sys["driver_version"] = driverVersion;
-    sys["network_type"] = "";
-    sys["video_card"] = "";
-    sys["cpu"] = host.cpu_brand;
-    sys["num_physical_cores"] = host.physical_cores;
-    sys["num_logical_cores"] = host.logical_cores;
-    sys["memory_total"] = host.memory_total_mb;
-    sys["memory_used"] = host.memory_used_mb;
-    sys["dedicated_gpu_memory"] = 0;
-
-    jsonStr = j.dump();
+  // nevr_plugins lists every configured plugin with what the loader did with it
+  // (loaded, failed, or disabled). The manifest is parsed so the login field is a
+  // JSON array, not a string-escaped copy of one. The non-throwing parse does not
+  // fail on the builder's own nlohmann output; if it ever did, the login still
+  // goes out with an empty list and a Warning that says so.
+  nlohmann::json plugins = nlohmann::json::parse(pluginManifest, nullptr, false);
+  if (plugins.is_discarded() || !plugins.is_array()) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.WS] login nevr_plugins: plugin report is not a JSON array (%zu bytes) — sending []",
+        pluginManifest.size());
+    plugins = nlohmann::json::array();
   }
+  size_t loaded = 0;
+  for (const nlohmann::json& plugin : plugins) {
+    if (plugin.is_object() && plugin.value("loaded", false)) ++loaded;
+  }
+  Log(EchoVR::LogLevel::Info, "[NEVR.WS] login nevr_plugins configured=%zu loaded=%zu", plugins.size(),
+      loaded);
+
+  LoginProfile::LoginProfileInputs profileInputs;
+  profileInputs.account_id = accountId;
+  profileInputs.display_name = displayName;
+  profileInputs.access_token = accessToken;
+  profileInputs.password = password;
+  profileInputs.hmd_serial_number = hmd.value;
+  profileInputs.driver_version = driverVersion;
+  profileInputs.cpu = host.cpu_brand;
+  profileInputs.physical_cores = host.physical_cores;
+  profileInputs.logical_cores = host.logical_cores;
+  profileInputs.memory_total_mb = host.memory_total_mb;
+  profileInputs.memory_used_mb = host.memory_used_mb;
+  profileInputs.project_version = buildId.project_version;
+  profileInputs.git_commit = buildId.git_commit;
+  profileInputs.git_describe = buildId.git_describe;
+  profileInputs.build_type = buildId.build_type;
+  profileInputs.social_level = SocialParty::kSocialLevel;
+  profileInputs.plugins = std::move(plugins);
+  const std::string jsonStr = LoginProfile::BuildLoginProfileJson(profileInputs);
 
   size_t jsonLen = jsonStr.size() + 1;  // include null terminator
 

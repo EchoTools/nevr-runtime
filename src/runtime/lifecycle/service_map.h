@@ -3,8 +3,9 @@
 // This is the single source of truth for two things the migration must get
 // exactly right:
 //   1. the legacy-flat-key -> config.yaml dotted-path map, and
-//   2. the service-endpoint resolution logic (host fallback + scheme redirect)
-//      that config.cpp's hooks used to run against the game JSON.
+//   2. the service-endpoint resolution logic (host fallback) that config.cpp's
+//      hooks run against the game JSON. The scheme redirect decision lives in
+//      service_redirect.h, shared with Quest; this header includes it.
 //
 // Everything here is a pure function of a `nevr::NevrConfig` (+ scalar bridge
 // state) — no game functions, no windows.h, no singleton, no I/O — so a gtest
@@ -24,6 +25,7 @@
 #include <string>
 
 #include "core/nevr_config.h"
+#include "runtime/lifecycle/service_redirect.h"
 
 namespace nevr_cfg {
 
@@ -102,19 +104,6 @@ struct ServiceHostResult {
 /// kNone means "no override": the caller returns its own default URL, which is
 /// the *unchanged* game default, preserving today's behaviour for an absent key.
 ServiceHostResult ResolveServiceHost(const nevr::NevrConfig& cfg, const std::string& flatServiceKey);
-
-/// Pure scheme-based redirect — the core of RedirectServiceUrl. Given the URL the
-/// game produced (`result`) and the two configured redirect targets, decide the
-/// replacement, or nullopt to leave `result` untouched.
-///   socketTarget : nevr_socket_uri, migrated to config.yaml (services.socket_uri)
-///   httpTarget   : nevr_http_uri, NOT migrated in S3 — the caller passes the raw
-///                  early-JSON value so the https branch is byte-for-byte unchanged
-/// A ws/wss `result` with the bridge active rewrites to ws://127.0.0.1:<port>;
-/// otherwise the raw target passes through. https redirects never hit the bridge.
-std::optional<std::string> ResolveRedirect(const std::string& result,
-                                           const std::optional<std::string>& socketTarget,
-                                           const std::optional<std::string>& httpTarget,
-                                           bool bridgeActive, unsigned bridgePort);
 
 /// Issue #21 — the value NEVR supplies for a key the STOCK ENGINE reads from its
 /// own JSON config (never a NEVR setting), used only when no config anywhere
