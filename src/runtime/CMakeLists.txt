@@ -59,6 +59,7 @@ set(PATCHES_SOURCES
     "server/callback_unregistration.cpp"
     "server/session_unregister.cpp"
     "server/main_thread_handoff.cpp"
+    "server/serverdb_uri.cpp"
     "server/telemetry_streamer.cpp"
     "server/upnp.cpp"
 )
@@ -121,6 +122,7 @@ set(PATCHES_HEADERS
     "server/callback_unregistration.h"
     "server/session_unregister.h"
     "server/main_thread_handoff.h"
+    "server/serverdb_uri.h"
     "server/telemetry_streamer.h"
     "server/messages.h"
     "server/upnp.h"
@@ -176,7 +178,7 @@ set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_
 # #60: plugin_manifest.cpp builds the login's nevr_plugins array with nlohmann-json;
 # pure and PCH-free for the same reason as plugin_load_plan.cpp.
 set_source_files_properties(ext/plugin_manifest.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-set_source_files_properties(log/url_diagnostics.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(log/url_diagnostics.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # Scenario-test control endpoint (docs/design/2026-10-01-social-scenario-harness.md). It can inject
 # messages into a live session, so it is OFF by default and only the mingw-scenario preset turns it
@@ -337,6 +339,16 @@ if(BUILD_TESTING)
 
     # test_main_thread_handoff.cpp (GH #44) rides in this executable, so the
     # existing `just test-auth-unit` loop runs it with no recipe change.
+
+    # Issue #41: the ServerDB URI builder (percent-encoded query) — pure, curl only.
+    add_executable(test_serverdb_uri
+      tests/test_serverdb_uri.cpp
+      server/serverdb_uri.cpp)
+    set_source_files_properties(tests/test_serverdb_uri.cpp server/serverdb_uri.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_serverdb_uri PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_serverdb_uri PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
+    gtest_discover_tests(test_serverdb_uri DISCOVERY_MODE PRE_TEST)
 
     # GH #27: drives the REAL libcurl-backed IWinHttpRequest stub through its COM
     # vtable and IDispatch::Invoke against a loopback HTTP/1.1 listener, so the
@@ -572,6 +584,8 @@ if(BUILD_TESTING)
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
+      # #41: ws_bridge.cpp builds its URL credentials through the ServerDbUri encoder.
+      server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
       # N84: plugin_loader calls HookGuard::VerifyAll after each plugin init.
       # Linked as production source (not a stub) so the test drives the real
@@ -601,6 +615,7 @@ if(BUILD_TESTING)
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
+      server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
       patch/broadcaster_hook_stats.cpp
       hook/hook_liveness.cpp

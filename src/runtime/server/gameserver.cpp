@@ -16,6 +16,7 @@
 #include "auth_token_refresh.h"
 #include "runtime/server/constants.h"
 #include "runtime/server/protobuf_transport.h"
+#include "runtime/server/serverdb_uri.h"
 #include "runtime/server/session_success_dispatch.h"
 #include "runtime/server/session_unregister.h"
 #include "runtime/server/callback_unregistration.h"
@@ -1475,8 +1476,11 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
     ServerFatal("Server authentication failed — no valid token for ServerDB connection");
   }
 
-  thread_local static CHAR constructedUri[1024];
+  // Owns the constructed URI for the rest of this call; Connect() copies it
+  // (websocket_client.cpp setUrl(std::string(uri))).
+  std::string constructedUri;
   if (!serverDbUri || serverDbUri[0] == '\0') {
+    const auto orEmpty = [](const char* value) { return value ? std::string_view(value) : std::string_view(); };
     // guilds/regions are list-shaped registration metadata; read CSV so a yaml
     // list `[a, b]` and a scalar CSV both build the same guilds=/regions= param.
     const char* guilds = NevrCfgGetFlatCsv("nevr_guilds");
@@ -1490,17 +1494,17 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       // Token auth (BAC-2): identity via the Bearer JWT (sent by Connect()); discord_id/
       // password dropped; guilds/regions stay as registration metadata. nevr_serverdb_uri
       // points at the token route that forwards the real Authorization header
-      // (docs/guides/token-auth-migration.md).
-      int written = snprintf(constructedUri, sizeof(constructedUri), "%s", tokenUri);
-      const char* sep = "?";
-      if (guilds && guilds[0] != '\0' && written > 0 && written < (int)sizeof(constructedUri)) {
-        written += snprintf(constructedUri + written, sizeof(constructedUri) - written, "%sguilds=%s", sep, guilds);
-        sep = "&";
+      // (29ce275710ad4c779d118eafc638fef613343e28:docs/guides/token-auth-migration.md).
+      // Issue #41: query values are percent-encoded by ServerDbUri, not snprintf.
+      std::optional<std::string> built =
+          ServerDbUri::BuildTokenRouteUri(tokenUri, orEmpty(guilds), orEmpty(regions));
+      if (!built) {
+        Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] could not percent-encode the token-route serverdb URI");
+        ServerFatal("Could not build the ServerDB URI (token route)");
+        return;
       }
-      if (regions && regions[0] != '\0' && written > 0 && written < (int)sizeof(constructedUri)) {
-        snprintf(constructedUri + written, sizeof(constructedUri) - written, "%sregions=%s", sep, regions);
-      }
-      serverDbUri = constructedUri;
+      constructedUri = std::move(*built);
+      serverDbUri = constructedUri.c_str();
       const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
           "[NEVR.GAMESERVER] constructed serverdb URI for token auth: ", constructedUri);
       Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
@@ -1511,24 +1515,23 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       const char* discordId = NevrCfgGetFlat("nevr_discord_id");
       const char* password = NevrCfgGetFlat("nevr_password");
       if (socketUri && socketUri[0] != '\0' && discordId && discordId[0] != '\0') {
-        int written = 0;
-        if (password && password[0] != '\0') {
-          written = snprintf(constructedUri, sizeof(constructedUri), "%s?discord_id=%s&password=%s", socketUri, discordId, password);
-        } else {
-          written = snprintf(constructedUri, sizeof(constructedUri), "%s?discord_id=%s", socketUri, discordId);
+        // Issue #41: every value is percent-encoded, so a password containing
+        // '&', '=', '#', '%', '+' or whitespace can no longer rewrite the query.
+        std::optional<std::string> built = ServerDbUri::BuildLegacyUri(
+            socketUri, discordId, orEmpty(password), orEmpty(guilds), orEmpty(regions));
+        if (!built) {
+          Log(EchoVR::LogLevel::Error, "[NEVR.GAMESERVER] could not percent-encode the legacy serverdb URI");
+          ServerFatal("Could not build the ServerDB URI (legacy url-param auth)");
+          return;
         }
-        if (guilds && guilds[0] != '\0' && written > 0 && written < (int)sizeof(constructedUri)) {
-          written += snprintf(constructedUri + written, sizeof(constructedUri) - written, "&guilds=%s", guilds);
-        }
-        if (regions && regions[0] != '\0' && written > 0 && written < (int)sizeof(constructedUri)) {
-          snprintf(constructedUri + written, sizeof(constructedUri) - written, "&regions=%s", regions);
-        }
-        serverDbUri = constructedUri;
+        constructedUri = std::move(*built);
+        serverDbUri = constructedUri.c_str();
         // Do NOT log constructedUri here — this branch embeds the operator's
-        // password directly in the query string (see snprintf above).
+        // password in the query string. Presence only, never the value.
         Log(EchoVR::LogLevel::Debug,
-            "[NEVR.GAMESERVER] constructed serverdb URI (legacy url-param auth): discord_id=%s (password redacted)",
-            discordId);
+            "[NEVR.GAMESERVER] constructed serverdb URI (legacy url-param auth, percent-encoded): "
+            "discord_id=%s password=%s",
+            discordId, (password && password[0] != '\0') ? "present (redacted)" : "absent");
       } else {
         serverDbUri = "ws://localhost:777/serverdb";
         const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(

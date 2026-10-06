@@ -36,6 +36,7 @@
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
+#include "runtime/server/serverdb_uri.h"
 #include "core/logging.h"
 #include <exception>
 #include <stdexcept>
@@ -991,16 +992,23 @@ void InstallWebSocketBridge() {
             // password just means "no URL credentials" — we fall through to the
             // Bearer/JWT path and never put an empty secret on the wire (N115).
             // The password value is never logged.
+            // Issue #41: both values are percent-encoded (ServerDbUri, the same
+            // encoder the ServerDB registration URI uses), so a password with
+            // '&', '=', '#', '%', '+' or whitespace reaches Nakama byte-for-byte.
             {
               const char* cfgDiscordId = NevrCfgGetFlat("nevr_discord_id");
               const char* cfgPassword = NevrCfgGetFlat("nevr_password");
-              if (cfgDiscordId && cfgDiscordId[0] != '\0' && cfgPassword && cfgPassword[0] != '\0') {
-                char sep = (remoteUrl.find('?') != std::string::npos) ? '&' : '?';
-                remoteUrl += sep;
-                remoteUrl += "discordid=";
-                remoteUrl += cfgDiscordId;
-                remoteUrl += "&password=";
-                remoteUrl += cfgPassword;
+              std::optional<std::string> withCredentials = ServerDbUri::BuildBridgeCredentialUri(
+                  remoteUrl, cfgDiscordId ? std::string_view(cfgDiscordId) : std::string_view(),
+                  cfgPassword ? std::string_view(cfgPassword) : std::string_view());
+              if (withCredentials) {
+                remoteUrl = std::move(*withCredentials);
+              } else {
+                // Allocation failure in the encoder: connect without URL credentials
+                // (Bearer path below) rather than put an unencoded secret on the wire.
+                Log(EchoVR::LogLevel::Error,
+                    "[NEVR.WS] conn=%d could not percent-encode URL credentials; connecting without them",
+                    connIdx);
               }
             }
             // conn>=2 (matchmaker): pnsradmatchmaking uses protobuf, not EchoVR
