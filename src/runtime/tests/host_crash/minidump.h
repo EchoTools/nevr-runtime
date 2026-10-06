@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace NevrHostTest {
 
@@ -103,6 +104,25 @@ class MinidumpView {
       if (threads[index].ThreadId == thread_id) return true;
     }
     return false;
+  }
+
+  // The process id the dump writer recorded in the MiscInfoStream (stream type
+  // 15), or nullopt when the stream is absent, too short, or does not mark the
+  // id present. MINIDUMP_MISC_INFO lays out SizeOfInfo (u32 @0), Flags1 (u32 @4)
+  // and ProcessId (u32 @8); ProcessId sits at the same offset in every MiscInfo
+  // variant, so only those first three u32 are read. SizeOfInfo must reach
+  // ProcessId and Flags1 must set MINIDUMP_MISC1_PROCESS_ID, otherwise the field
+  // is absent or uninitialized.
+  std::optional<std::uint32_t> ProcessId() const {
+    std::size_t stream_size = 0;
+    const std::uint8_t* data = StreamData(MiscInfoStream, &stream_size);
+    if (data == nullptr || stream_size < sizeof(MINIDUMP_MISC_INFO)) return std::nullopt;
+    const auto* misc = reinterpret_cast<const MINIDUMP_MISC_INFO*>(data);
+    if (misc->SizeOfInfo < offsetof(MINIDUMP_MISC_INFO, ProcessId) + sizeof(misc->ProcessId)) {
+      return std::nullopt;
+    }
+    if ((misc->Flags1 & MINIDUMP_MISC1_PROCESS_ID) == 0) return std::nullopt;
+    return misc->ProcessId;
   }
 
  private:

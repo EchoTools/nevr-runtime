@@ -42,6 +42,29 @@ std::string AbiVersion(std::uint32_t major, std::uint32_t minor) {
   return std::to_string(major) + "." + std::to_string(minor);
 }
 
+// True when the outcome reflects a descriptor that was actually read from the
+// runtime: NEVR_GetRuntimeApi was resolved and called, so abi_status and
+// actual_abi describe a real (possibly null or rejected) descriptor. Outcomes
+// where the file was absent, a dependency failed to load, the entry point was
+// missing, or the load failed otherwise never read a descriptor — emitting
+// abi_status/actual_abi for them would falsely read as "null descriptor / ABI 0.0".
+bool DescriptorRead(RuntimeLoadOutcome outcome) {
+  switch (outcome) {
+    case RuntimeLoadOutcome::kNullDescriptor:
+    case RuntimeLoadOutcome::kAbiRejected:
+    case RuntimeLoadOutcome::kInitFailed:
+    case RuntimeLoadOutcome::kLoaded:
+      return true;
+    case RuntimeLoadOutcome::kNoPath:
+    case RuntimeLoadOutcome::kRuntimeAbsent:
+    case RuntimeLoadOutcome::kDependencyLoadFailed:
+    case RuntimeLoadOutcome::kLoadFailed:
+    case RuntimeLoadOutcome::kMissingEntry:
+      return false;
+  }
+  return false;
+}
+
 }  // namespace
 
 const char* RuntimeLoadResult::OutcomeName() const {
@@ -126,11 +149,12 @@ void EmitLoadDiagnostic(BootstrapDiagnostics& diagnostics, const RuntimeLoadResu
   record["path_ok"] = result.path_ok;
   if (result.path_ok) record["path"] = ToUtf8(result.path);
   record["expected_abi"] = AbiVersion(result.expected_major, result.expected_minor);
-  if (result.outcome != RuntimeLoadOutcome::kLoaded) {
+  const bool descriptor_read = DescriptorRead(result.outcome);
+  if (descriptor_read) {
     record["actual_abi"] = AbiVersion(result.actual_major, result.actual_minor);
   }
   if (result.win32_error != 0) record["win32_error"] = result.win32_error;
-  if (result.abi_status != NevrAbi::Status::kOk) {
+  if (descriptor_read && result.abi_status != NevrAbi::Status::kOk) {
     record["abi_status"] = NevrAbi::StatusName(result.abi_status);
   }
   if (result.outcome == RuntimeLoadOutcome::kInitFailed) {

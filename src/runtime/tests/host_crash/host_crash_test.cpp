@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -206,7 +207,7 @@ void BlockEnvDir(const std::wstring& env_dir) {
   CloseHandle(file);
 }
 
-void ValidateDump(const std::wstring& dump_path, DWORD expected_thread) {
+void ValidateDump(const std::wstring& dump_path, DWORD expected_process, DWORD expected_thread) {
   const std::vector<std::uint8_t> bytes = ReadAllBytes(dump_path.c_str());
   Require(!bytes.empty(), "dump file is empty");
   MinidumpView view(bytes.data(), bytes.size());
@@ -220,9 +221,13 @@ void ValidateDump(const std::wstring& dump_path, DWORD expected_thread) {
   Require(thread_id == expected_thread, "dump names a different faulting thread");
   Require(code == kAccessViolation, "dump does not record the deliberate access violation");
   Require(view.ContainsThread(expected_thread), "dump thread list omits the faulting thread");
-  std::printf("  %-22s dump=%ls thread=%lu code=0x%08lX addr=0x%llX\n", "validated",
-              dump_path.c_str(), static_cast<unsigned long>(thread_id),
-              static_cast<unsigned long>(code), static_cast<unsigned long long>(address));
+  const std::optional<std::uint32_t> process_id = view.ProcessId();
+  Require(process_id.has_value(), "dump has no misc-info process id");
+  Require(*process_id == expected_process, "dump names a different process");
+  std::printf("  %-22s dump=%ls pid=%lu thread=%lu code=0x%08lX addr=0x%llX\n", "validated",
+              dump_path.c_str(), static_cast<unsigned long>(*process_id),
+              static_cast<unsigned long>(thread_id), static_cast<unsigned long>(code),
+              static_cast<unsigned long long>(address));
 }
 
 void RunScenario(const Scenario& scenario, const std::wstring& base,
@@ -300,7 +305,7 @@ void RunScenario(const Scenario& scenario, const std::wstring& base,
                                            : shim_dest);
   const std::wstring dump = FindNewestDump(expected.c_str(), pid);
   Require(!dump.empty(), "no minidump found in the expected destination");
-  ValidateDump(dump, main_thread);
+  ValidateDump(dump, pid, main_thread);
 }
 
 int RunSuite() {

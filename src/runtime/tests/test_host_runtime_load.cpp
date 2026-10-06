@@ -202,3 +202,44 @@ TEST(HostRuntimeLoad, EmitLoadDiagnosticWritesAParseableRecord) {
   EXPECT_EQ(record.at("actual_abi"), "2.0");
   EXPECT_EQ(record.at("abi_status"), "major_mismatch");
 }
+
+TEST(HostRuntimeLoad, EmitLoadDiagnosticOmitsAbiFieldsWhenNoDescriptorWasRead) {
+  const std::wstring local = MakeTempDir(L"local");
+  SetEnvironmentVariableW(L"LOCALAPPDATA", local.c_str());
+  SetEnvironmentVariableW(L"TEMP", MakeTempDir(L"temp").c_str());
+
+  BootstrapDiagnostics diagnostics;
+  diagnostics.Prepare();
+  ASSERT_TRUE(diagnostics.PrimaryReady());
+
+  // A runtime that never loaded: the descriptor was never read, so abi_status
+  // (which the loader initializes to kNullDescriptor before any read) and
+  // actual_abi (0.0) must not be emitted — they would falsely read as "the
+  // descriptor was null / ABI 0.0" when in fact the file was absent.
+  RuntimeLoadResult result;
+  result.outcome = RuntimeLoadOutcome::kRuntimeAbsent;
+  result.path_ok = true;
+  const wchar_t path[] = L"C:\\games\\nevr.dll";
+  std::size_t i = 0;
+  while (path[i] != L'\0' && i + 1 < MAX_PATH) {
+    result.path[i] = path[i];
+    ++i;
+  }
+  result.path[i] = L'\0';
+  result.win32_error = kFileNotFound;
+
+  EmitLoadDiagnostic(diagnostics, result);
+
+  const std::string line =
+      ReadAll((local + L"\\EchoVR\\logs\\nevr-bootstrap.jsonl").c_str());
+  ASSERT_FALSE(line.empty());
+  const nlohmann::json record = nlohmann::json::parse(line);
+  EXPECT_EQ(record.at("event"), "runtime_load");
+  EXPECT_EQ(record.at("outcome"), "runtime_absent");
+  EXPECT_EQ(record.at("degraded_action"), "run_original_only");
+  EXPECT_EQ(record.at("path"), "C:\\games\\nevr.dll");
+  EXPECT_EQ(record.at("expected_abi"), "1.0");
+  EXPECT_EQ(record.at("win32_error").get<int>(), static_cast<int>(kFileNotFound));
+  EXPECT_FALSE(record.contains("abi_status"));
+  EXPECT_FALSE(record.contains("actual_abi"));
+}
