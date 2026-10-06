@@ -72,7 +72,7 @@ static constexpr uint64_t VA_PRECISION_SLEEP_WAIT    = 0x1401CE0B0;
 static constexpr uint64_t VA_PRECISION_SLEEP_BUSYWAIT = 0x1401CE4C0;
 static constexpr uint64_t VA_SPINWAIT_WAIT_FOR_VALUE = 0x141500ED8;
 static constexpr uint64_t VA_HTTP_LISTENER_BRINGUP   = 0x1401F5B00;  // BUG #62
-static constexpr uint64_t VA_NETGAME_HOST_CHECK      = 0x140157FB0;  // DIAG, see docs/reference/server-mode-multiplayer-hang.md
+static constexpr uint64_t VA_NETGAME_HOST_CHECK      = 0x140157FB0;  // DIAG, see issue #45
 
 // N33: save original byte at BusyWait before RET patch, restore on Shutdown.
 static uint8_t  s_busywait_original_byte = 0;
@@ -456,21 +456,22 @@ static uint64_t __fastcall HttpListenerBringupHook(int64_t* state, const char* a
 }
 
 /* --------------------------------------------------------------------
- * Diagnostic (2026-09-14, Andrew + Claude): does -server ever get the
- * "host authority" flag bit1 set? See
- * docs/reference/server-mode-multiplayer-hang.md for the full trail.
+ * Diagnostic (issue #45): does -server ever get the "host authority" flag
+ * bit1 set?
  *
  * fcn.140157fb0 (this hook's target) is the function that, among other
- * things, gates loading pnsradgameserver on
- * `**(uintptr_t*)(netgame_this+0x2da0) & 0x46` (bits 1/2/6) — confirmed via
- * direct revault_disassemble at 0x1401599b6-0x1401599e5, and the identical
- * predicate is confirmed (also via disassembly, three separate sites) in
- * CR15NetGame::Update. launch-server.sh hangs forever after login without
- * ever reaching that load (or BeginMultiplayer, or GameServerLib::Init) —
- * this logs the flags byte at entry to settle, live, whether bit1 is
- * actually 0 or 1 for a real -server run, since static analysis could not
- * find the setter (indirect dispatch + revault_search_code's documented
- * reconstruction-node noise problem both dead-ended).
+ * things, gates loading pnsradgameserver.  At 0x1401599b6-0x1401599e5 it
+ * reads "server_plugin" (default "pnsradgameserver") and loads it iff
+ *   (bit1 == 1 || (bit2 == 0 && bit6 == 1)) && FUN_140614b00() == 0
+ * where the bits are in the flags qword at **(uintptr_t*)(netgame_this+0x2da0)
+ * (MOV RAX,[RSI+0x2da0]; MOV RDX,[RAX]; then SHR/TEST on bits 1, 2 and 6).
+ * The same host-authority predicate appears at three sites in
+ * CR15NetGame::Update (0x1401bf9ad, 0x1401bfb7d, 0x1401bfd09).  This hook logs
+ * the flags byte at entry, so a live -server run shows whether bit1 is set;
+ * static analysis could not find the setter (indirect dispatch, and
+ * revault_search_code returns reconstruction-node noise for generic offset
+ * patterns).  In a hung -server run the hook installs and is never invoked,
+ * so the block is upstream of this function.
  *
  * DIAGNOSTIC ONLY — no behavior change, logs once per call and passes
  * through unmodified. Server mode only (client mode calls this constantly
@@ -726,24 +727,16 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
         }
     }
 
-    // DIAG — see docs/reference/server-mode-multiplayer-hang.md
+    // DIAG — see issue #45.
     //
-    // 2026-09-14: originally gated this install on `if (g_isServer)`, same
-    // as this file's other hooks appear to assume is safe. It is NOT: this
-    // Init() runs during early DLL load, BEFORE PreprocessCommandLineHook
-    // (boot.cpp) has ever run PreflightRuntimeBootstrap — the ONLY place
-    // g_isServer is set, from argv. Confirmed live: "binary bug fix hooks
-    // installed" logs before "runtime bootstrap trigger=Preprocess
-    // first-call server bootstrap" every time. Gating the INSTALL on
-    // g_isServer here means it is always false, hook never installs, no
-    // diagnostic ever fires — a second instance of the exact ordering bug
-    // this whole investigation is about. Fix: always install; the hook BODY
-    // (NetGameHostCheckHook) already correctly re-checks g_isServer at
-    // CALL time, by which point PreprocessCommandLineHook has long since run.
-    // DIAG block's own status, folded into the aggregate summary below — it
-    // was previously invisible there (Category G): the loop's installed/failed
-    // counters never touched this block, so a DIAG-hook failure was only
-    // visible by separately scanning for its own Warning above.
+    // Installed unconditionally.  This Init() runs during early DLL load,
+    // before PreprocessCommandLineHook (boot.cpp) runs
+    // PreflightRuntimeBootstrap, the only place g_isServer is set (from argv),
+    // so gating the install on g_isServer would never install it.  The hook
+    // body (NetGameHostCheckHook) re-checks g_isServer at call time, when it is
+    // set.  This block's status is folded into the aggregate summary below: the
+    // loop's installed/failed counters do not cover it, so a DIAG-hook failure
+    // would otherwise be visible only by separately scanning for its own Warning.
     const char* diagNetGameHostCheckStatus = "not_attempted";
     {
         void* target = nevr::ResolveVA_Checked(g_base, VA_NETGAME_HOST_CHECK);
@@ -796,7 +789,7 @@ void BinaryBugFixes::Shutdown() {
     if (!g_initialized) return;
     // N86-class checkpoint: the DIAG hook's own payload line (NetGameHostCheckHook)
     // is confirmed to never fire in the exact hang scenario it was built to
-    // diagnose (docs/reference/server-mode-multiplayer-hang.md) — without this,
+    // diagnose (issue #45) — without this,
     // "installed but silent" and "installed and genuinely nothing to report"
     // look identical (total silence) in the log.
     if (s_origNetGameHostCheck != nullptr && !s_netGameHostCheckLogged.load()) {
