@@ -5,8 +5,10 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -89,6 +91,16 @@ class WebSocketClient {
   /// </summary>
   VOID SetConnectionHandler(ConnectionCallback callback);
 
+  /// Mints a fresh bearer token; returns "" when none could be acquired. It runs
+  /// on ixwebsocket's thread and may block on HTTP.
+  using BearerTokenRefresher = std::function<std::string()>;
+
+  /// Issue #39. The bearer token given to Connect is stored as an extra header,
+  /// and ixwebsocket's automatic reconnect re-presents that stored header. When
+  /// ServerDB rejects a reconnect with HTTP 401 (an expired or revoked JWT), the
+  /// client calls this refresher and the next attempt presents the new token.
+  VOID SetBearerTokenRefresher(BearerTokenRefresher refresher);
+
   /// <summary>
   /// Checks if the WebSocket is currently connected.
   /// </summary>
@@ -108,6 +120,13 @@ class WebSocketClient {
   // Connection state (written from ixwebsocket callback thread, read from main thread)
   std::atomic<bool> connected_{false};
 
+  // Bearer auth (#39). Connect writes on the game thread; the 401 path reads
+  // and writes on ixwebsocket's thread.
+  std::mutex bearerTokenMutex_;
+  std::string bearerToken_;
+  BearerTokenRefresher bearerTokenRefresher_;
+  std::atomic<uint32_t> bearerTokenRefreshCount_{0};
+
   // Message queue for messages sent before connection established
   std::vector<std::string> pendingMessages_;
 
@@ -126,6 +145,12 @@ class WebSocketClient {
 
   // Flush pending messages after connection is established
   VOID FlushPendingMessages();
+
+  // Stores the token and hands ixwebsocket the Authorization header.
+  VOID ApplyBearerToken(const std::string& token);
+
+  // ServerDB answered the upgrade with 401: mint a new token for the next attempt.
+  VOID RefreshBearerTokenAfterRejection();
 
  public:
   // Process queued received messages (call from main thread)

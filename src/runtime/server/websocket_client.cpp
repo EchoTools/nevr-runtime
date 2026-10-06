@@ -54,9 +54,7 @@ BOOL WebSocketClient::Connect(const CHAR* uri, const std::string& bearerToken) {
 
   // Attach Bearer token on WebSocket upgrade request
   if (!bearerToken.empty()) {
-    ix::WebSocketHttpHeaders headers;
-    headers["Authorization"] = "Bearer " + bearerToken;
-    webSocket_->setExtraHeaders(headers);
+    ApplyBearerToken(bearerToken);
     Log(EchoVR::LogLevel::Debug, "[WEBSOCKET] Using Bearer auth token");
   }
 
@@ -147,6 +145,71 @@ VOID WebSocketClient::SetMessageHandler(MessageCallback callback) { messageCallb
 
 VOID WebSocketClient::SetConnectionHandler(ConnectionCallback callback) { connectionCallback_ = callback; }
 
+VOID WebSocketClient::SetBearerTokenRefresher(BearerTokenRefresher refresher) {
+  std::lock_guard<std::mutex> lock(bearerTokenMutex_);
+  bearerTokenRefresher_ = std::move(refresher);
+}
+
+VOID WebSocketClient::ApplyBearerToken(const std::string& token) {
+  std::lock_guard<std::mutex> lock(bearerTokenMutex_);
+  bearerToken_ = token;
+  ix::WebSocketHttpHeaders headers;
+  headers["Authorization"] = "Bearer " + token;
+  webSocket_->setExtraHeaders(headers);
+}
+
+// Issue #39. ixwebsocket 11.4.6 reconnects by calling WebSocket::connect() again,
+// which copies the stored _extraHeaders (IXWebSocket.cpp:210) — the header set at
+// Connect. Nakama rejects an expired JWT at the upgrade with 401 (parseToken uses
+// jwt.WithExpirationRequired), so without this every reconnect after the token's
+// TTL fails the same way, forever.
+//
+// Only 401 triggers it. A network failure or a 5xx is not a token problem, and
+// minting on those would call the auth endpoint on every network blip.
+//
+// Thread: an Error message is emitted only by WebSocket::checkConnection
+// (IXWebSocket.cpp:362), on ixwebsocket's own thread — the thread whose next
+// connect() reads _extraHeaders without the config mutex. Writing the header
+// here orders the write before that read. A Close message can also arrive on the
+// game thread (a failed send closes the socket), so this must not move there.
+VOID WebSocketClient::RefreshBearerTokenAfterRejection() {
+  BearerTokenRefresher refresher;
+  bool usingBearer = false;
+  {
+    std::lock_guard<std::mutex> lock(bearerTokenMutex_);
+    refresher = bearerTokenRefresher_;
+    usingBearer = !bearerToken_.empty();
+  }
+  // No bearer header was sent, so the 401 is about other credentials (the
+  // legacy url-param route); the Error line above already records it.
+  if (!usingBearer) return;
+
+  if (!refresher) {
+    Log(EchoVR::LogLevel::Warning,
+        "[WEBSOCKET] ServerDB rejected the bearer token (HTTP 401) and no token refresher is set "
+        "— every reconnect presents the same token");
+    return;
+  }
+  if (!webSocket_->isAutomaticReconnectionEnabled()) {
+    Log(EchoVR::LogLevel::Info,
+        "[WEBSOCKET] ServerDB rejected the bearer token (HTTP 401) after reconnection was disabled "
+        "— not re-acquiring");
+    return;
+  }
+
+  Log(EchoVR::LogLevel::Warning,
+      "[WEBSOCKET] ServerDB rejected the bearer token (HTTP 401) — re-acquiring before the next reconnect attempt");
+  const std::string fresh = refresher();
+  if (fresh.empty()) {
+    Log(EchoVR::LogLevel::Error,
+        "[WEBSOCKET] Bearer token re-acquisition failed — the next reconnect attempt presents the rejected token");
+    return;
+  }
+  ApplyBearerToken(fresh);
+  const uint32_t count = ++bearerTokenRefreshCount_;
+  Log(EchoVR::LogLevel::Info, "[WEBSOCKET] Bearer token replaced after HTTP 401 refresh_count=%u", count);
+}
+
 BOOL WebSocketClient::IsConnected() const { return connected_.load(std::memory_order_relaxed); }
 
 VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
@@ -179,6 +242,7 @@ VOID WebSocketClient::OnMessage(const ix::WebSocketMessagePtr& msg) {
         Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
       }
       connected_.store(false);
+      if (msg->errorInfo.http_status == 401) RefreshBearerTokenAfterRejection();
       break;
 
     case ix::WebSocketMessageType::Message:
