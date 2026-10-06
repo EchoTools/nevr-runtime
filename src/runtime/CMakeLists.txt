@@ -58,6 +58,7 @@ set(PATCHES_SOURCES
     "server/session_success_dispatch.cpp"
     "server/callback_unregistration.cpp"
     "server/session_unregister.cpp"
+    "server/serverdb_uri.cpp"
     "server/telemetry_streamer.cpp"
     "server/upnp.cpp"
 )
@@ -119,6 +120,7 @@ set(PATCHES_HEADERS
     "server/session_success_dispatch.h"
     "server/callback_unregistration.h"
     "server/session_unregister.h"
+    "server/serverdb_uri.h"
     "server/telemetry_streamer.h"
     "server/messages.h"
     "server/upnp.h"
@@ -174,7 +176,7 @@ set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_
 # #60: plugin_manifest.cpp builds the login's nevr_plugins array with nlohmann-json;
 # pure and PCH-free for the same reason as plugin_load_plan.cpp.
 set_source_files_properties(ext/plugin_manifest.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-set_source_files_properties(log/url_diagnostics.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(log/url_diagnostics.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # Scenario-test control endpoint (docs/design/2026-10-01-social-scenario-harness.md). It can inject
 # messages into a live session, so it is OFF by default and only the mingw-scenario preset turns it
@@ -313,6 +315,16 @@ if(BUILD_TESTING)
     target_include_directories(test_url_diagnostics PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_url_diagnostics PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
     gtest_discover_tests(test_url_diagnostics DISCOVERY_MODE PRE_TEST)
+
+    # Issue #41: the ServerDB URI builder (percent-encoded query) — pure, curl only.
+    add_executable(test_serverdb_uri
+      tests/test_serverdb_uri.cpp
+      server/serverdb_uri.cpp)
+    set_source_files_properties(tests/test_serverdb_uri.cpp server/serverdb_uri.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_serverdb_uri PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_serverdb_uri PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
+    gtest_discover_tests(test_serverdb_uri DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_callback_unregistration
       tests/test_callback_unregistration.cpp
