@@ -231,6 +231,23 @@ TEST(NevrConfig, BareRequiredVarUnsetThrows) {
                nevr::NevrConfigError);
 }
 
+// $${ is a literal ${: no variable is looked up, so an unset one can't fail the load.
+TEST(NevrConfig, EscapedDollarBraceIsLiteral) {
+  UnsetEnv("NEVR_TEST_ESCAPED");
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"$${NEVR_TEST_ESCAPED}\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "${NEVR_TEST_ESCAPED}");
+}
+
+// An escaped ${ beside a real variable: only the real one is resolved.
+TEST(NevrConfig, EscapedDollarBraceBesideVariable) {
+  SetEnv("NEVR_TEST_REAL", "value");
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  serverdb: \"$${literal}-${NEVR_TEST_REAL}-$$plain\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "${literal}-value-$$plain");
+  UnsetEnv("NEVR_TEST_REAL");
+}
+
 TEST(NevrConfig, DefaultInterpolationWhenUnset) {
   UnsetEnv("NEVR_TEST_OPT");
   const nevr::NevrConfig cfg =
