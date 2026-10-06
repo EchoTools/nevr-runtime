@@ -1030,6 +1030,11 @@ verify:
     # whole time — token_auth parsed it from the auth response and persisted it to
     # the credential cache — it had simply never been exposed.
     #
+    # The profile is assembled by key assignments (profile["displayname"] = ...), not
+    # inside a C string literal, so these patterns match the source text directly.
+    # A check that matches JSON text inside a string literal has to strip the
+    # backslash before every quote first (see N115): left escaped, such a pattern
+    # matches nothing and a broken tree still passes.
     N123_RC=0; N123_WS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/ws_bridge.cpp) || N123_RC=$?
     sensor_stage1 "N123 login display name sourced" "src/runtime/compat/ws_bridge.cpp" "$N123_RC"
     sensor_nonempty "N123 login display name sourced" "non-comment lines of compat/ws_bridge.cpp" "$N123_WS"

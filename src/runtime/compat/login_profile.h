@@ -12,6 +12,7 @@ struct LoginProfileInputs {
   std::string display_name;
   std::string access_token;
   std::string password;
+  // Sent verbatim and never logged.
   std::string hmd_serial_number = "unknown";
   std::string headset_type = "No VR";
   std::string driver_version;
@@ -27,6 +28,7 @@ struct LoginProfileInputs {
   std::string git_describe;
   std::string build_type;
   uint64_t social_level = 0;
+  // A JSON array of per-plugin loader results; anything else is the caller's bug.
   nlohmann::json plugins = nlohmann::json::array();
 };
 
