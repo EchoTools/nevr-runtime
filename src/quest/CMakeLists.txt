@@ -27,6 +27,13 @@ message(STATUS "nevr_quest: ABI=${ANDROID_ABI} platform=${ANDROID_PLATFORM} STL=
 add_library(nevr_toolchain_probe SHARED probe.cpp)
 target_link_libraries(nevr_toolchain_probe PRIVATE log)
 
+# Compile the shared login profile source with the Quest Android toolchain.
+find_package(nlohmann_json CONFIG REQUIRED)
+add_library(nevr_quest_login_profile STATIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/login_profile.cpp")
+target_include_directories(nevr_quest_login_profile PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(nevr_quest_login_profile PRIVATE nlohmann_json::nlohmann_json)
+
 # ── Crash-reporter sentinel (libovrplatformloader.so) ───────────────────
 # Added once breakpad is vendored; guarded so the toolchain probe builds
 # standalone.
