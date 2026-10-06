@@ -3,8 +3,9 @@
 // This is the single source of truth for two things the migration must get
 // exactly right:
 //   1. the legacy-flat-key -> config.yaml dotted-path map, and
-//   2. the service-endpoint resolution logic (host fallback + scheme redirect)
-//      that config.cpp's hooks used to run against the game JSON.
+//   2. the service-endpoint resolution logic (host fallback) that config.cpp's
+//      hooks run against the game JSON. The scheme redirect decision lives in
+//      service_redirect.h, shared with Quest; this header includes it.
 //
 // Everything here is a pure function of a `nevr::NevrConfig` (+ scalar bridge
 // state) — no game functions, no windows.h, no singleton, no I/O — so a gtest
