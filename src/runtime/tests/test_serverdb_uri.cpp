@@ -224,10 +224,13 @@ TEST(ServerDbUri, BridgeCredentialsAreBothOrNeither) {
 // "wss://g.example/wsdiscordid=1&password=pw".
 
 // The exact shape BuildBridgeCredentialUri produces today for the matchmaker
-// path: format=evr first (nginx forces it onto the base URI per
-// ws_bridge.cpp:985), discordid/password appended after by AppendQuery. This
-// is the trigger case from the issue, reproduced via the real builder rather
-// than a hand-typed string.
+// path: format=evr first, discordid/password appended after by AppendQuery.
+// This is the shape on local dev rigs, where the configured socket_uri
+// already carries "?format=evr&token=..." before credentials are appended
+// (tools/scenario/run_scenario.py:353, tools/winvm/systest.py:72,
+// docs/reference/local-nakama.md:55, tools/nakama-local/evr_peer.py:104).
+// This is the trigger case from the issue, reproduced via the real builder
+// rather than a hand-typed string.
 TEST(ServerDbUri, RemoveQueryParamFixesTheActualBridgeCredentialShape) {
   const std::optional<std::string> withCredentials =
       ServerDbUri::BuildBridgeCredentialUri("wss://g.example/ws?format=evr", "123456789", "pw");
@@ -244,9 +247,10 @@ TEST(ServerDbUri, RemoveQueryParamFixesTheActualBridgeCredentialShape) {
   EXPECT_EQ(pairs, expected);
 }
 
-// The example config's shape (docs/reference/example-config.yaml), where
-// format=evr is NOT first — the case that stayed latent because the old
-// inline logic happened to get it right.
+// The example config's shape (docs/reference/example-config.yaml:175), where
+// the commented-out socket_uri has no format=evr param at all — the case
+// that stayed latent because the bug path is simply absent there, not
+// because of any favorable parameter ordering.
 TEST(ServerDbUri, RemoveQueryParamTrailing) {
   EXPECT_EQ(ServerDbUri::RemoveQueryParam("wss://g.example/ws?discordid=1&password=pw&format=evr", "format=evr"),
             "wss://g.example/ws?discordid=1&password=pw");
