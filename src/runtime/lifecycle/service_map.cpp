@@ -147,32 +147,6 @@ ServiceHostResult ResolveServiceHost(const nevr::NevrConfig& cfg, const std::str
   return {std::nullopt, HostSource::kNone};
 }
 
-namespace {
-bool StartsWith(const std::string& s, const char* prefix) { return s.rfind(prefix, 0) == 0; }
-}  // namespace
-
-std::optional<std::string> ResolveRedirect(const std::string& result,
-                                           const std::optional<std::string>& socketTarget,
-                                           const std::optional<std::string>& httpTarget,
-                                           bool bridgeActive, unsigned bridgePort) {
-  const bool isWebSocket = StartsWith(result, "wss://") || StartsWith(result, "ws://");
-  const bool isReadyAtDawn = result.find("readyatdawn.com") != std::string::npos;
-
-  // Only ws/wss URLs (any host) or https readyatdawn.com URLs are redirected;
-  // everything else passes through unchanged.
-  if (!isWebSocket && !isReadyAtDawn) return std::nullopt;
-
-  const std::optional<std::string>& target = isWebSocket ? socketTarget : httpTarget;
-  if (!target || target->empty()) return std::nullopt;
-
-  // ws/wss with the bridge up: route through the in-process relay. https never
-  // hits the bridge (the game's native TLS can reach the raw http target).
-  if (bridgeActive && isWebSocket) {
-    return std::string("ws://127.0.0.1:") + std::to_string(bridgePort);
-  }
-  return *target;
-}
-
 std::optional<std::string> GameNativeDefault(const std::string& key) {
   // Written as a comparison, not a {"key", "value"} table row: the N133 S7b
   // sensor counts table rows in this file as flat-map entries, and this is not
