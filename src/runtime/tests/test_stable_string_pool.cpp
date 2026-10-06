@@ -1,6 +1,7 @@
 #include "runtime/lifecycle/stable_string_pool.h"
 #include "quest/tests/stable_string_pool_vectors.h"
 #include "runtime/lifecycle/service_map.h"
+#include "runtime/tests/stable_string_pool_fixture_abi.h"
 
 #include <gtest/gtest.h>
 
@@ -23,13 +24,6 @@ using nevr_runtime::lifecycle::StableStringPoolLimits;
 
 void InjectBadAllocation(void* context) {
   if (*static_cast<bool*>(context)) throw std::bad_alloc();
-}
-
-bool IsReadableAddress(const void* address) {
-  MEMORY_BASIC_INFORMATION info{};
-  if (VirtualQuery(address, &info, sizeof(info)) != sizeof(info) || info.State != MEM_COMMIT) return false;
-  constexpr DWORD kUnreadable = PAGE_NOACCESS | PAGE_GUARD;
-  return (info.Protect & kUnreadable) == 0;
 }
 
 std::string AdjacentDllPath(const char* dllName) {
@@ -185,29 +179,35 @@ TEST(StableStringPool, ConcurrentSameValueReturnsOneStablePointer) {
   EXPECT_STREQ(results[0], "concurrent-value");
 }
 
-TEST(StableStringPool, PublishedPointerSurvivesActualFixtureDllUnload) {
+TEST(StableStringPool, NoPoolOwnedBlockIsFreedWhenFixtureDllUnloads) {
+  using nevr_runtime::lifecycle::test::FixtureObservation;
   constexpr const char* kDllName = "test_stable_string_pool_fixture.dll";
   const std::string path = AdjacentDllPath(kDllName);
   ASSERT_FALSE(path.empty());
   HMODULE module = LoadLibraryA(path.c_str());
   ASSERT_NE(module, nullptr);
-  const auto observeDetach =
-      LoadExport<void (*)(bool*)>(module, "StableStringPoolFixtureObserveDetach");
-  ASSERT_NE(observeDetach, nullptr);
-  bool detached = false;
-  observeDetach(&detached);
+  const auto observe = LoadExport<void (*)(FixtureObservation*)>(module, "StableStringPoolFixtureObserve");
+  ASSERT_NE(observe, nullptr);
+  FixtureObservation observation;
+  observe(&observation);
   const auto intern = LoadExport<const char* (*)(const char*)>(module, "StableStringPoolFixtureIntern");
   ASSERT_NE(intern, nullptr);
-  const std::string value = "stable-after-unload";
-  const char* pointer = intern(value.c_str());
+  const char* pointer = intern("stable-after-unload");
   ASSERT_NE(pointer, nullptr);
   ASSERT_EQ(GetModuleHandleA(kDllName), module);
 
+  // The fixture's replacement operator new tracks every heap block the
+  // production pool allocated. Without these two facts a zero free count
+  // would say nothing about the pool.
+  ASSERT_GT(observation.ownedBlocksAllocated, 0u);
+  ASSERT_TRUE(observation.publishedPointerInOwnedBlock);
+  ASSERT_EQ(observation.ownedBlocksFreed, 0u) << "a pool block was freed before unload";
+
   ASSERT_NE(FreeLibrary(module), 0);
-  EXPECT_TRUE(detached) << "FreeLibrary did not run the fixture's DLL_PROCESS_DETACH handler";
+  EXPECT_TRUE(observation.detached) << "FreeLibrary did not run the fixture's DLL_PROCESS_DETACH handler";
   EXPECT_EQ(GetModuleHandleA(kDllName), nullptr) << "fixture DLL still has a loaded reference";
-  ASSERT_TRUE(IsReadableAddress(pointer));
-  EXPECT_STREQ(pointer, value.c_str());
+  EXPECT_EQ(observation.publishedBlockFreed, 0u) << "the block holding the published pointer was freed";
+  EXPECT_EQ(observation.ownedBlocksFreed, 0u) << "a pool-owned block was freed during unload";
 }
 
 TEST(StableStringPool, DestructibleOwnerRedControlSignalsInvalidationOnDllUnload) {

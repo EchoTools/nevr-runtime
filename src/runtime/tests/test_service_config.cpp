@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <string>
 
 #include <windows.h>
@@ -10,6 +11,7 @@
 
 #include "extension/module_interface.h"
 #include "runtime/lifecycle/service_config.h"
+#include "runtime/lifecycle/stable_string_pool.h"
 #include "runtime/lifecycle/config_redirect_result.h"
 
 BOOL g_isServer = FALSE;
@@ -168,20 +170,6 @@ TEST(StableStringPoolAccessors, InjectedConfigAndDefaultsNeverDiscoverFilesOrRea
   EXPECT_EQ(context.config_get("nevr_socket_uri"), socket);
 }
 
-TEST(StableStringPoolAccessors, AdapterProviderDetachLeavesEscapedValueReadable) {
-  const char* escaped = nullptr;
-  {
-    const nevr::NevrConfig config = nevr::NevrConfig::LoadFromString(kConfig);
-    const nevr_cfg::FlatDefaults defaults;
-    ResetAccessorInputs();
-    SetAccessorInputs(&config, &defaults, false);
-    escaped = NevrCfgGetFlat("nevr_socket_uri");
-    ASSERT_NE(escaped, nullptr);
-    ResetAccessorInputs();  // Detach the test adapter from its borrowed config/default providers.
-  }
-  EXPECT_STREQ(escaped, "ws://service.example:80/spr");
-}
-
 TEST(StableStringPoolAccessors, AbsentServiceHostPublishesSourceTwoAndAllowsNullOutPointer) {
   SetEmptyInputs();
   int source = 0;
@@ -200,6 +188,20 @@ TEST(StableStringPoolAccessors, UnchangedRedirectPreservesExactGameDefaultPointe
   EXPECT_EQ(nevr::lifecycle::ChooseRedirectedOrOriginal(gameResult, nullptr), gameResult);
 }
 
+TEST(StableStringPoolAccessors, SelectedRedirectReplacesTheGameResultWithTheStablePointer) {
+  SetConfigInputs();
+  const char defaultValue[] = "wss://login.readyatdawn.com/rad15";
+  const char* gameResult = defaultValue;
+  const char* redirected = NevrCfgRedirect(gameResult, nullptr, 1, 53748);
+  ASSERT_NE(redirected, nullptr);
+
+  const char* chosen = nevr::lifecycle::ChooseRedirectedOrOriginal(gameResult, redirected);
+  EXPECT_EQ(chosen, redirected);
+  EXPECT_NE(chosen, gameResult);
+  EXPECT_STREQ(chosen, "ws://127.0.0.1:53748");
+  EXPECT_EQ(NevrCfgRedirect(gameResult, nullptr, 1, 53748), chosen);  // same stable pointer on a second lookup
+}
+
 TEST(StableStringPoolAccessors, EveryCAccessorTerminatesOnInternFailureWithRedactedDiagnostic) {
   for (const AccessorCase& item : kAccessors) {
     const std::string expected =
@@ -214,6 +216,31 @@ TEST(StableStringPoolAccessors, EveryCAccessorTerminatesOnInternFailureWithRedac
         },
         ::testing::ExitedWithCode(1), expected);
   }
+}
+
+// The injected-failure test above reports synthetic counts (strings=7
+// live_bytes=13) because it fails ahead of InternStableCStr. This test drives
+// the real pool to its count limit through an accessor and checks the counts the
+// pool itself reports.
+TEST(StableStringPoolAccessors, RealPoolCountLimitTerminatesThroughTheAccessorBoundary) {
+  constexpr unsigned kLimit = static_cast<unsigned>(nevr_runtime::lifecycle::kStableStringMaxCount);
+  std::size_t liveBytes = 0;
+  for (unsigned port = 1; port <= kLimit; ++port) {
+    liveBytes += std::string("ws://127.0.0.1:" + std::to_string(port)).size() + 1;  // payload plus NUL
+  }
+  const std::string expected =
+      "^\\[NEVR\\.CONFIG\\] C accessor failed accessor=NevrCfgAutoRelay status=count_limit strings=" +
+      std::to_string(kLimit) + " live_bytes=" + std::to_string(liveBytes) + "\\r?\\n$";
+  ASSERT_EXIT(
+      {
+        SetConfigInputs();
+        for (unsigned port = 1; port <= kLimit; ++port) {
+          if (NevrCfgAutoRelay(port) == nullptr) ExitProcess(2);
+        }
+        (void)NevrCfgAutoRelay(kLimit + 1);
+        ExitProcess(0);
+      },
+      ::testing::ExitedWithCode(1), expected);
 }
 
 TEST(StableStringPoolAccessors, EveryCAccessorContainsStdExceptionWithRedactedDiagnostic) {
