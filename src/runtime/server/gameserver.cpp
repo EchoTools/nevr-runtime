@@ -417,10 +417,14 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
       }
 
       if (!found) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Smite entrant not found in lobby: %s",
-            smite.entrant_id().c_str());
+        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Smite entrant not found in lobby: %s entrants=%llu",
+            smite.entrant_id().c_str(), static_cast<unsigned long long>(entrantCount));
         break;
       }
+
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Smite entrant resolved: entrant=%s slot=%llu entrants=%llu",
+          smite.entrant_id().c_str(), static_cast<unsigned long long>(slotIndex),
+          static_cast<unsigned long long>(entrantCount));
 
       if (broadcaster) {
         auto encoded = EncodeLobbySmiteEntrant(slotIndex);
