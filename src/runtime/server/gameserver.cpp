@@ -239,8 +239,9 @@ void OnTcpMsgSessionSuccessv5(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID*
   }
 }
 
-// Handle incoming protobuf messages from Nakama
-void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
+// Handle incoming protobuf messages from Nakama. Reads `msg` only (it is parsed,
+// never forwarded), so it takes a const pointer.
+void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* msg, VOID*, UINT64 msgSize) {
   if (!msg || msgSize == 0) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] empty protobuf message msg=%p size=%llu", msg,
         static_cast<unsigned long long>(msgSize));
@@ -978,12 +979,16 @@ void GameServerLib::RegisterTcpCallbacks() {
   // compatibility. We handle protobuf messages which properly encode to binary format.
   // Legacy duplicates (registration success, session success) are skipped to avoid
   // double-processing (the game would see the event twice and could misbehave).
-  m_wsClient->SetMessageHandler([this](EchoVR::SymbolId msgId, const VOID* data, UINT64 size) {
+  // `data` is a writable, dispatcher-owned copy (WebSocketClient::MessageCallback).
+  // It must be: two branches below hand it to CBroadcaster::ReceiveLocalEvent
+  // (echovr.exe 0x140F87AA0), which passes the msg pointer on, as mutable, to every
+  // listener registered for the symbol (issue #43).
+  m_wsClient->SetMessageHandler([this](EchoVR::SymbolId msgId, VOID* data, UINT64 size) {
     if (msgId == SYM_PROTOBUF_MSG) {
-      OnTcpMsgProtobuf(this, nullptr, {}, const_cast<VOID*>(data), nullptr, size);
+      OnTcpMsgProtobuf(this, nullptr, {}, data, nullptr, size);
     } else if (msgId == TcpSym::LobbyRegistrationFailure) {
       // Registration failure has no protobuf equivalent, handle legacy
-      OnTcpMsgRegistrationFailure(this, nullptr, {}, const_cast<VOID*>(data), nullptr, size);
+      OnTcpMsgRegistrationFailure(this, nullptr, {}, data, nullptr, size);
     } else if (msgId == TcpSym::LobbyRegistrationSuccess) {
       // Skip legacy - handled by protobuf kGameServerRegistrationSuccess
       Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Skipping legacy registration success (handled via protobuf)");
@@ -999,8 +1004,7 @@ void GameServerLib::RegisterTcpCallbacks() {
       auto* broadcaster = GetContext().GetBroadcaster();
       if (broadcaster) {
         EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4,
-                                             "SNSLobbyStartSessionv4",
-                                             const_cast<VOID*>(data), size);
+                                             "SNSLobbyStartSessionv4", data, size);
         Log(EchoVR::LogLevel::Info,
             "[NEVR.GAMESERVER] Forwarded legacy SessionStart to game (HACK — protobuf lacks entrants/level)");
       }

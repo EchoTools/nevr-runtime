@@ -314,6 +314,20 @@ if(BUILD_TESTING)
     target_link_libraries(test_url_diagnostics PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
     gtest_discover_tests(test_url_diagnostics DISCOVERY_MODE PRE_TEST)
 
+    # GH #27: drives the REAL libcurl-backed IWinHttpRequest stub through its COM
+    # vtable and IDispatch::Invoke against a loopback HTTP/1.1 listener, so the
+    # StatusText it reports is the reason phrase the server actually sent.
+    add_executable(test_winhttp_stub
+      tests/test_winhttp_stub.cpp
+      compat/winhttp_stub.cpp
+      log/url_diagnostics.cpp)
+    set_source_files_properties(tests/test_winhttp_stub.cpp compat/winhttp_stub.cpp log/url_diagnostics.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_winhttp_stub PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_winhttp_stub PRIVATE
+      GTest::gtest GTest::gtest_main CURL::libcurl ws2_32 ole32 oleaut32 uuid)
+    gtest_discover_tests(test_winhttp_stub DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_callback_unregistration
       tests/test_callback_unregistration.cpp
       server/callback_unregistration.cpp
