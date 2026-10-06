@@ -109,18 +109,19 @@ VOID PatchDscProvider() {
 }
 
 // ============================================================================
-// GetProviderPrefix detour — single choke-point for all game-constructed xpids
+// GetProviderPrefix detour — one of two xpid choke-points (GetUserIDString, which
+// has its own switch and 22 distinct callers, is not hooked; see addresses.h)
 // ============================================================================
 
 typedef void* (*GetProviderPrefixFn)(uint32_t* providerBits);
 static GetProviderPrefixFn g_RealGetProviderPrefix = nullptr;
 
 static void* GetProviderPrefixHook(uint32_t* /*providerBits*/) {
-  // Always return the OVR-ORG string-table pointer.  Every xpid the game
-  // constructs — CreateUser, SaveLocalData, LobbyFindSession,
-  // LobbyPlayerSessions, three Send() paths, and 7 more callers — flows
-  // through this one function.  Forcing OVR-ORG here makes every prefix
-  // consistent without touching any string table or CNSUser nibble.
+  // Always return the OVR-ORG string-table pointer.  The xpids built through
+  // this function — CreateUser, SaveLocalData, LobbyFindSession,
+  // LobbyPlayerSessions, three Send() paths, and 7 more callers — all carry
+  // the same prefix without touching any string table or CNSUser nibble.
+  // GetUserIDString's callers are not affected.
   return EchoVR::g_GameBaseAddress + PatchAddresses::PROVIDER_STRING_OVR_ORG;
 }
 
@@ -131,7 +132,7 @@ VOID PatchProviderPrefixOvrOrg() {
                                 (void**)&g_RealGetProviderPrefix);
   if (st == MH_OK) st = MH_EnableHook(target);
   if (st == MH_OK) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.XPID] GetProviderPrefix detoured → OVR-ORG (14 callers)");
+    Log(EchoVR::LogLevel::Info, "[NEVR.XPID] GetProviderPrefix detoured → OVR-ORG (17 distinct callers)");
     BootLogTee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour OK\n");
   } else {
     Log(EchoVR::LogLevel::Error, "[NEVR.XPID] GetProviderPrefix detour failed target=%p status=%s",

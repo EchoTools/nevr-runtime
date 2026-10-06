@@ -70,7 +70,7 @@ only appears in the ~30 s periodic `hook_liveness` report, hence the window.
 Artifacts (`stdout.txt`, `windows.txt`, `results.txt`, the probe output) go to
 `/var/tmp/work-nevr-runtime/winvm-<timestamp>/`, or `--out`.
 
-## Things this cost time to learn
+## Pitfalls
 
 - **A modal dialog looks exactly like a hang** from outside: alive, `Responding`,
   near-zero CPU, no sockets, silent log. The first attempt mistook one for a

@@ -5,7 +5,7 @@ Everything else in this repo is tested under Wine, which cannot reproduce
 Windows-only failures (issue #13 was "works fine under Wine"). This drives a
 libvirt Windows VM over WinRM + SMB and judges the result with checks.py.
 
-Setup, scenarios and pitfalls: docs/reference/windows-vm-system-test.md
+Setup, scenarios and pitfalls: tools/winvm/README.md
 
     WINVM_USER=... WINVM_PASS=... just test-winvm
     WINVM_USER=... WINVM_PASS=... tools/winvm/systest.py --scenario gai

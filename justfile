@@ -318,7 +318,7 @@ test-system-verbose:
 
 # Run the built runtime on a native Windows VM (libvirt) and judge the boot.
 # Needs WINVM_USER/WINVM_PASS and `just build` first; see
-# docs/reference/windows-vm-system-test.md. Exit 1 = runtime failed a check,
+# tools/winvm/README.md. Exit 1 = runtime failed a check,
 # exit 2 = the VM/environment is unusable.
 test-winvm *ARGS:
     tools/winvm/systest.py {{ARGS}}

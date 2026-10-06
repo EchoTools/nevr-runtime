@@ -26,7 +26,6 @@ Format specifications, symbol maps, and procedural runbooks.
 | File | Description | Audience |
 | ---- | ----------- | -------- |
 | `cosmetics-cdn-format.md` | Normative `.evrp` binary format and CDN manifest schema for cosmetic assets | CDN tooling and game-hook developers |
-| `provider-prefix-slots.md` | Platform provider prefix code points and their slot assignments | Runtime developers |
 
 ## Process
 
