@@ -164,7 +164,34 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
     readelf -d "$work/verify/lib/arm64-v8a/libovrplatformloader_orig.so" | grep -i soname
     echo ""
     echo "Signed sideload APK ready -> $signed"
-    echo "Install with: adb install -r \"$signed\""
+    echo "Install with: just quest-install"
+
+# Install the repacked Quest APK + game data onto the connected headset (sideload).
+# Uninstalls the store build first (debug signature differs), installs our
+# debug-signed APK, then downloads the pre-decrypted game data and extracts it to
+# the legacy path the unpatched APK reads (/sdcard/readyatdawn/_data). The store
+# OBB is DRM-encrypted and cannot be mounted by a debug-signed sideload, so it is
+# never used. Requires an adb-authorized headset and ~937 MB host disk for the
+# cached data download.
+quest-install apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" data_url="https://mia.cdn.echo.taxi/_data.zip":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    adb wait-for-device
+    if adb shell pm path com.readyatdawn.r15 >/dev/null 2>&1; then
+        echo "Uninstalling existing com.readyatdawn.r15 ..."
+        adb uninstall com.readyatdawn.r15
+    fi
+    echo "Installing {{ apk }} ..."
+    adb install -g "{{ apk }}"
+    data="build/android-arm64/quest-data/_data.zip"
+    mkdir -p "$(dirname "$data")"
+    if [ ! -f "$data" ]; then
+        echo "Downloading game data (~937 MB, cached at $data) ..."
+        curl -fL --retry 2 -o "$data" "{{ data_url }}"
+    fi
+    echo "Pushing + extracting game data to /sdcard/readyatdawn ..."
+    adb push "$data" /data/local/tmp/_data.zip
+    adb shell "mkdir -p /sdcard/readyatdawn && cd /sdcard/readyatdawn && unzip -o /data/local/tmp/_data.zip && rm -f /data/local/tmp/_data.zip"
 
 # --- Tests ---
 
