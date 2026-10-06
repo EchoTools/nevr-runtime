@@ -45,6 +45,30 @@ struct PluginLoadItem {
 // is BuildLoadPlan (plugin_load_plan_build.h / .cpp).
 std::vector<PluginLoadItem> NevrCfgPluginLoadPlan();
 
+// The index of an earlier ENABLED entry of `plan` that names the same file as
+// plan[i] (compared without case, as Windows compares file names), or -1 when
+// there is none. LoadLibrary hands back the already-loaded module for such a
+// repeat, so loading it would run the plugin's init twice and deliver every
+// OnFrame / state change to it twice; the loader skips it instead. A disabled
+// earlier entry doesn't count: it was never loaded.
+inline long DuplicatePluginEntry(const std::vector<PluginLoadItem>& plan, size_t i) {
+  auto same = [](const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t k = 0; k < a.size(); ++k) {
+      char x = a[k], y = b[k];
+      if (x >= 'A' && x <= 'Z') x = static_cast<char>(x - 'A' + 'a');
+      if (y >= 'A' && y <= 'Z') y = static_cast<char>(y - 'A' + 'a');
+      if (x != y) return false;
+    }
+    return true;
+  };
+  if (i >= plan.size()) return -1;
+  for (size_t j = 0; j < i; ++j) {
+    if (plan[j].enabled && same(plan[j].file, plan[i].file)) return static_cast<long>(j);
+  }
+  return -1;
+}
+
 // Which init export the loader should call for a plugin, given which exports it
 // resolved. Prefers the v4 args-aware NvrPluginInitEx; falls back to the v3
 // NvrPluginInit (so a v3 plugin still loads, without args); None when the plugin

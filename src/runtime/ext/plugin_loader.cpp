@@ -109,7 +109,7 @@ void LoadPlugins() {
   // config names it. This is a deliberate hardening over the old "load every
   // *.dll found" discovery, whose failure mode was N89: a stale DLL silently
   // taking over for an entire run because it happened to sit in the directory.
-  const std::vector<PluginLoadItem> plan = NevrCfgPluginLoadPlan();
+  std::vector<PluginLoadItem> plan = NevrCfgPluginLoadPlan();
   if (plan.empty()) {
     PublishPluginReport({});
     Log(EchoVR::LogLevel::Info,
@@ -167,6 +167,37 @@ void LoadPlugins() {
   };
   std::vector<StagedPlugin> staged;
 
+  // A repeat of an entry is skipped (see below), but if the repeat is `required`
+  // the plugin it names must still be fatal to lose: the requirement moves onto the
+  // entry that is actually loaded. When that entry already failed non-fatally
+  // (it was optional then), the failure is raised now, as fatal. Returns true when
+  // the requirement was carried over.
+  //
+  // A skipped entry is recorded in `heldBy` against the entry that actually holds its
+  // module, and `carryRequired` follows that chain, so a repeat of a skipped entry
+  // reaches the entry that holds the module rather than the skipped one.
+  std::vector<size_t> heldBy(plan.size());
+  for (size_t i = 0; i < heldBy.size(); ++i) heldBy[i] = i;
+  auto resolveHolder = [&heldBy](size_t index) -> size_t {
+    while (heldBy[index] != index) index = heldBy[index];
+    return index;
+  };
+  auto carryRequired = [&](size_t namedIndex, const PluginLoadItem& repeat) -> bool {
+    const size_t firstIndex = resolveHolder(namedIndex);
+    if (!repeat.required || plan[firstIndex].required) return false;
+    plan[firstIndex].required = true;
+    report[firstIndex].required = true;
+    for (StagedPlugin& s : staged) {
+      if (s.planIndex == firstIndex) s.item.required = true;
+    }
+    const PluginManifestEntry& first = report[firstIndex];
+    if (!first.loaded && !first.error.empty()) {
+      const std::string reason = first.error;
+      FailPluginLoad(plan[firstIndex], reason, report[firstIndex]);
+    }
+    return true;
+  };
+
   // Caps-priority sort predicate: lower `priority` loads first. Within a
   // single priority band the stable_sort preserves the config.yaml order.
   auto capsOrder = [](const StagedPlugin& a, const StagedPlugin& b) -> bool {
@@ -211,6 +242,31 @@ void LoadPlugins() {
       }
     }
 
+    // The same file listed twice: LoadLibrary would return the module already
+    // loaded, and its init would run again with every callback doubled. Refused
+    // even if this entry is marked required: the plugin itself is loaded, and the
+    // requirement is carried onto the earlier entry.
+    {
+      const long first = DuplicatePluginEntry(plan, planIndex);
+      if (first >= 0) {
+        const bool carried = carryRequired(static_cast<size_t>(first), item);
+        heldBy[planIndex] = resolveHolder(static_cast<size_t>(first));
+        const std::string carriedNote = carried
+            ? " This entry is required, so entry " + std::to_string(first + 1) +
+                  " is now required too."
+            : std::string();
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PLUGIN] SKIPPED %s (%s) — the same file as entry %ld (%s), listed earlier "
+            "in config.yaml. Loading it again would run its init twice and double every "
+            "callback. This entry's args were ignored; entry %ld's args apply.%s "
+            "Remove one of the entries.",
+            item.name.c_str(), filename, first + 1, plan[first].name.c_str(), first + 1,
+            carriedNote.c_str());
+        itemReport.error = "listed twice in config.yaml";
+        continue;
+      }
+    }
+
     /* N75: LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32.
      *
      * The risk was never loading OUR dll — we pass a full path. It is how ITS
@@ -238,6 +294,30 @@ void LoadPlugins() {
     if (!hPlugin) {
       FailPluginLoad(item, "LoadLibrary failed: error " + std::to_string(GetLastError()), itemReport);
       continue;
+    }
+    // The backstop for what the file-name check can't see: another spelling of the
+    // same path. LoadLibrary counted a reference for this call; give it back.
+    {
+      StagedPlugin* already = nullptr;
+      for (StagedPlugin& s : staged) {
+        if (s.hModule == hPlugin) { already = &s; break; }
+      }
+      if (already) {
+        FreeLibrary(hPlugin);
+        const bool carried = carryRequired(already->planIndex, item);
+        heldBy[planIndex] = resolveHolder(already->planIndex);
+        const std::string carriedNote = carried
+            ? " This entry is required, so " + already->item.name + " is now required too."
+            : std::string();
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PLUGIN] SKIPPED %s (%s) — the same module as %s (%s), already loaded. "
+            "This entry's args were ignored; %s's args apply.%s "
+            "Remove one of the entries from config.yaml.",
+            item.name.c_str(), filename, already->item.name.c_str(), already->item.file.c_str(),
+            already->item.name.c_str(), carriedNote.c_str());
+        itemReport.error = "the same module as " + already->item.name;
+        continue;
+      }
     }
 
     auto getInfoFn = reinterpret_cast<NvrPluginGetInfo_fn>(GetProcAddress(hPlugin, "NvrPluginGetInfo"));
