@@ -1,4 +1,8 @@
 #pragma once
+// winsock2.h must precede windows.h: winhttp_stub.cpp later includes core/pch.h
+// (via core/logging.h), which includes winsock2.h. The runtime target force-includes
+// the PCH so the order is masked there; test_winhttp_stub compiles without it.
+#include <winsock2.h>
 #include <oaidl.h>
 #include <unknwn.h>
 #include <windows.h>
@@ -37,6 +41,9 @@ class WinHttpRequestStub {
   std::vector<char> m_responseBody;
   std::map<std::wstring, std::wstring> m_responseHeaders;
   long m_statusCode;
+  // Reason phrase from the final status line curl received (GH #27); empty when
+  // nothing was received or the server sent none.
+  std::wstring m_statusText;
   bool m_sent;
 };
 
