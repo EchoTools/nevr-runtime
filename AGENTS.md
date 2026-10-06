@@ -68,10 +68,10 @@ The game has a ~15-20 second splash-screen delay at startup before any NEVR code
 
 | Component          | Output DLL       | Deploy As              | Purpose                                                                  |
 | ------------------ | ---------------- | ---------------------- | ------------------------------------------------------------------------ |
-| `src/runtime/` | `BugSplat64.dll` | `BugSplat64.dll`       | Runtime hooks, CLI flags, game modifications                             |
-| `src/runtime/server/` | *(in `BugSplat64.dll`)* | *(in-process)* | Multiplayer networking, session management |
+| `src/runtime/` host (`nevr_host` target) | `BugSplat64.dll` | `BugSplat64.dll`       | Stable bootstrap host: image validation, the one `PreprocessCommandLine` detour, crash-reporter minidump, bounded diagnostics, the 26-symbol game-facing export surface |
+| `src/runtime/` runtime (`nevr_runtime` target) | `nevr.dll` | `nevr.dll`             | Changing feature runtime: hooks, patches, server, plugins, auth, telemetry, crash-recovery instrumentation |
 
-The runtime replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. Several features previously implemented as plugins are now built in: server-timing, token-auth, pnsrad-enabler.
+The host (`BugSplat64.dll`) replaces the original BugSplat64 crash reporter DLL — the game statically imports it, so it loads at process startup before WinMain. The feature runtime lives in the sibling `nevr.dll`, loaded lazily on the first `PreprocessCommandLine` rendezvous and validated against a versioned C ABI (`docs/design/2026-10-05-bugsplat-nevr-split.md`). Several features previously implemented as plugins are now built into `nevr.dll`: server-timing, token-auth, pnsrad-enabler.
 
 `src/runtime/` is split by responsibility. Each subdirectory has a membership test:
 
@@ -116,12 +116,12 @@ Plugins have their own shared headers in `plugins/common/include/` (`nevr_common
 
 ### Runtime-loaded modules
 
-`platform_compat` and `token_auth` are **statically linked** into `BugSplat64.dll` (2026-08-02). There are no separate module DLLs — everything ships in one file. The `module_loader` infrastructure (`RegisterStaticModule`, `TickModules`, `NotifyModulesStateChange`) remains for any future modules.
+`platform_compat` and `token_auth` are **statically linked** into `nevr.dll` (folded in 2026-08-02, moved there from the monolith by the 2026-10-06 BugSplat64/nevr split). There are no separate module DLLs — everything ships in the matched `BugSplat64.dll` + `nevr.dll` pair. The `module_loader` infrastructure (`RegisterStaticModule`, `TickModules`, `NotifyModulesStateChange`) remains for any future modules.
 
 | Module | Output | Purpose |
 | ------ | ------ | ------- |
-| `src/modules/platform-compat/` | *(in `BugSplat64.dll`)* | Schannel TLS modernisation, WinHTTP→curl bridge, Wine `_temp` fix |
-| `src/modules/token-auth/` | *(in `BugSplat64.dll`)* | Device-code auth, token cache, `TokenAuth_GetToken`/`GetDiscordId` |
+| `src/modules/platform-compat/` | *(in `nevr.dll`)* | Schannel TLS modernisation, WinHTTP→curl bridge, Wine `_temp` fix |
+| `src/modules/token-auth/` | *(in `nevr.dll`)* | Device-code auth, token cache, `TokenAuth_GetToken`/`GetDiscordId` |
 
 ### Shared Libraries (static)
 
