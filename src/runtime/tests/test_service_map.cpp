@@ -22,6 +22,7 @@
 
 #include "core/nevr_config.h"
 #include "runtime/lifecycle/service_map.h"
+#include "quest/tests/service_redirect_vectors.h"
 
 namespace {
 
@@ -293,6 +294,24 @@ TEST(ServiceMap, ResolveRedirect_NoTargetLeavesUnchanged) {
   EXPECT_FALSE(ResolveRedirect("wss://login.readyatdawn.com/x", std::optional<std::string>(""),
                                std::nullopt, false, 0)
                    .has_value());
+}
+
+TEST(ServiceMap, ResolveRedirect_SharedQuestVectors) {
+  for (const auto& vector : nevr_quest_test::kRedirectVectors) {
+    const auto actual = ResolveRedirect(
+        vector.input,
+        vector.socketTarget == nullptr ? std::nullopt
+                                       : std::optional<std::string>(vector.socketTarget),
+        vector.httpTarget == nullptr ? std::nullopt
+                                     : std::optional<std::string>(vector.httpTarget),
+        vector.bridgeActive, vector.bridgePort);
+    if (vector.expected == nullptr) {
+      EXPECT_FALSE(actual.has_value()) << vector.input;
+    } else {
+      ASSERT_TRUE(actual.has_value()) << vector.input;
+      EXPECT_EQ(*actual, vector.expected) << vector.input;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
