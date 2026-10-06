@@ -75,9 +75,12 @@ std::string ResolveVar(const std::string& inner) {
                         " is not set (referenced as ${" + var + "})");
 }
 
-// Replace every ${...} in `in`. An unterminated ${ is left literal, and $${ is a
-// literal ${ (as in docker-compose): the one way to write ${ that isn't a variable,
-// e.g. in a plugin's args, where an unset ${...} would otherwise fail the load.
+// Replace every ${...} in `in`. An unterminated ${ is left literal. The three-char
+// sequence $${ becomes a literal ${ and nothing after it is looked up, so it is the
+// way to write ${ that isn't a variable (e.g. in a plugin's args, where an unset
+// ${...} would otherwise fail the load). No other `$` is special: $$ not followed by
+// { stays $$, and $$${X} yields $${X}. A literal `$` immediately followed by a
+// variable's value is written with a default: ${NO_SUCH_VAR:-$}${X}.
 std::string InterpolateString(const std::string& in) {
   std::string out;
   std::size_t i = 0;
