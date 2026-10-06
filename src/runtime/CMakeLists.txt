@@ -30,6 +30,7 @@ set(PATCHES_SOURCES
     "patch/resource_override.cpp"
     "compat/winhttp_stub.cpp"
     "compat/ws_bridge.cpp"
+    "compat/login_profile.cpp"
     "compat/social_names.cpp"
     "patch/xpid_patch.cpp"
     "frame/tick.cpp"
@@ -584,6 +585,7 @@ if(BUILD_TESTING)
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
+      compat/login_profile.cpp
       # #41: ws_bridge.cpp builds its URL credentials through the ServerDbUri encoder.
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
@@ -615,6 +617,7 @@ if(BUILD_TESTING)
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
+      compat/login_profile.cpp
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
       patch/broadcaster_hook_stats.cpp

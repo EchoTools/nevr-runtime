@@ -30,6 +30,7 @@
 #include "abi/echovr_functions.h"
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
+#include "runtime/compat/login_profile.h"
 #include "runtime/ext/plugin_load_plan.h"  // PluginLoadItem / NevrCfgPluginLoadPlan (N134 S6)
 #include "core/system_info.h"
 #include "core/build_identity.h"
@@ -1123,6 +1124,39 @@ TEST(WsBridgeLoginRequest, JsonEmitsPositiveCpuAndRamMeasurements) {
   const auto& systemInfo = json.at("system_info");
   EXPECT_GT(systemInfo.at("num_physical_cores").get<uint64_t>(), 0U);
   EXPECT_GT(systemInfo.at("memory_total").get<uint64_t>(), 0U);
+}
+
+TEST(LoginProfile, BuildsJsonFromQuestMeasurementsAndEscapesStrings) {
+  LoginProfile::LoginProfileInputs inputs;
+  inputs.account_id = 90210;
+  inputs.display_name = "Quest \"player\"";
+  inputs.access_token = "jwt-\\-token";
+  inputs.password = "secret-\"value";
+  inputs.hmd_serial_number = "quest-serial";
+  inputs.headset_type = "Quest";
+  inputs.cpu = "Quest measured CPU";
+  inputs.physical_cores = 8;
+  inputs.logical_cores = 8;
+  inputs.memory_total_mb = 8192;
+  inputs.memory_used_mb = 3072;
+  inputs.project_version = "1.2.3";
+  inputs.git_commit = "abcdef0";
+  inputs.git_describe = "v1.2.3-4-gabcdef0";
+  inputs.build_type = "RelWithDebInfo";
+  inputs.social_level = 2;
+  inputs.plugins = nlohmann::json::array();
+
+  const nlohmann::json profile = nlohmann::json::parse(LoginProfile::BuildLoginProfileJson(inputs));
+  EXPECT_EQ(profile.at("accountid"), 90210);
+  EXPECT_EQ(profile.at("displayname"), inputs.display_name);
+  EXPECT_EQ(profile.at("access_token"), inputs.access_token);
+  EXPECT_EQ(profile.at("password"), inputs.password);
+  EXPECT_EQ(profile.at("hmdserialnumber"), "quest-serial");
+  EXPECT_EQ(profile.at("nevr_identity").at("commit"), "abcdef0");
+  EXPECT_EQ(profile.at("system_info").at("headset_type"), "Quest");
+  EXPECT_EQ(profile.at("system_info").at("cpu"), "Quest measured CPU");
+  EXPECT_EQ(profile.at("system_info").at("num_physical_cores"), 8);
+  EXPECT_EQ(profile.at("system_info").at("memory_total"), 8192);
 }
 
 TEST(WsBridgePlatformPrefix, EveryDefinedPlatformHasTheNakamaPrefix) {

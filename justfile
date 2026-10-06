@@ -1030,21 +1030,21 @@ verify:
     # whole time — token_auth parsed it from the auth response and persisted it to
     # the credential cache — it had simply never been exposed.
     #
-    # Flattened before matching (tr -d '\\'): the JSON lives inside a C string
-    # literal, so every quote is backslash-escaped and matching it through a
-    # justfile recipe means three layers of escaping. N115's sensor silently
-    # matched NOTHING for exactly this reason and its falsification went green.
     N123_RC=0; N123_WS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/ws_bridge.cpp) || N123_RC=$?
     sensor_stage1 "N123 login display name sourced" "src/runtime/compat/ws_bridge.cpp" "$N123_RC"
     sensor_nonempty "N123 login display name sourced" "non-comment lines of compat/ws_bridge.cpp" "$N123_WS"
-    N123_FLAT=$(tr -d '\\' <<<"$N123_WS")
-    # N146: displayname is now set via nlohmann_json, not a hand-built snprintf
-    # format string.  The old pattern was "\"displayname\":\"%s\""; the new one
-    # is j["displayname"] = resolvedName (where resolvedName traces back to
-    # TokenAuth_GetUsername, verified by the second check below).
-    if ! grep -qE 'displayname.*=.*resolvedName|displayname.*=.*displayName' <<<"$N123_FLAT"; then
-        echo "verify: FAIL — N123 the login displayname is no longer sourced from a variable." >&2
+    if ! grep -qF 'profileInputs.display_name = displayName;' <<<"$N123_WS"; then
+        echo "verify: FAIL — N123 ws_bridge no longer forwards the resolved display name into the login profile." >&2
         echo "A literal here makes every client announce the same name; eight players render eight identical nameplates and the service cannot tell them apart." >&2
+        exit 1
+    fi
+    N123_PROFILE_RC=0; N123_PROFILE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/login_profile.cpp) || N123_PROFILE_RC=$?
+    sensor_stage1 "N123 login profile display name" "src/runtime/compat/login_profile.cpp" "$N123_PROFILE_RC"
+    sensor_nonempty "N123 login profile display name" "non-comment lines of compat/login_profile.cpp" "$N123_PROFILE"
+    if ! grep -qF 'profile["displayname"] = inputs.display_name.empty()' <<<"$N123_PROFILE" || \
+       ! grep -qF 'std::to_string(inputs.account_id)' <<<"$N123_PROFILE"; then
+        echo "verify: FAIL — N123 login profile no longer serializes the resolved display name with the account-id fallback." >&2
+        echo "Every NEVR client could announce the same literal name if this fallback is replaced with a placeholder." >&2
         exit 1
     fi
     # Anchored on the exact call form: a rename that APPENDS characters
@@ -1897,14 +1897,17 @@ verify:
         echo "verify: FAIL — N112a: src/core/build_identity.cpp is missing." >&2
         exit 1
     fi
-    # N112b — client login carries nevr_identity and nevr_plugins.
-    if ! grep -q 'nevr_identity' src/runtime/compat/ws_bridge.cpp; then
-        echo "verify: FAIL — N112b: ws_bridge.cpp login JSON does not carry" >&2
+    # N112b — the shared client login profile carries nevr_identity and nevr_plugins.
+    N112_PROFILE_RC=0; N112_PROFILE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/login_profile.cpp) || N112_PROFILE_RC=$?
+    sensor_stage1 "N112 client login identity and plugins" "src/runtime/compat/login_profile.cpp" "$N112_PROFILE_RC"
+    sensor_nonempty "N112 client login identity and plugins" "non-comment lines of compat/login_profile.cpp" "$N112_PROFILE"
+    if ! grep -qF 'profile["nevr_identity"]' <<<"$N112_PROFILE"; then
+        echo "verify: FAIL — N112b: shared login profile does not carry" >&2
         echo "nevr_identity. The client login must send NEVR version info (N112)." >&2
         exit 1
     fi
-    if ! grep -q 'nevr_plugins' src/runtime/compat/ws_bridge.cpp; then
-        echo "verify: FAIL — N112b: ws_bridge.cpp login JSON does not carry" >&2
+    if ! grep -qF 'profile["nevr_plugins"]' <<<"$N112_PROFILE"; then
+        echo "verify: FAIL — N112b: shared login profile does not carry" >&2
         echo "nevr_plugins. The client login must send a plugin manifest (N112)." >&2
         exit 1
     fi

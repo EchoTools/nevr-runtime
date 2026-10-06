@@ -41,7 +41,7 @@ ReVault is the source of truth for binary facts. On 2026-10-06, `revault fn show
   WS transport + game ABI     WS transport + game ABI
 ```
 
-A shared translation unit must compile under MinGW and the NDK without `windows.h`, MinHook, `EchoVR::g_GameBaseAddress`, `GetModuleFileNameA`, `ResolveModuleProc` or a game object layout. Existing `src/runtime/lifecycle/service_map.cpp` and `src/core/nevr_config.cpp` are extraction candidates; the latter still includes `core/logging.h` and yaml-cpp (`src/core/nevr_config.cpp:18-36`), so cross compilation must be proven. Windows and Quest adapters can differ internally but call the same protocol and state functions.
+A shared translation unit must compile under MinGW and the NDK without platform-specific Windows headers, MinHook, `EchoVR::g_GameBaseAddress`, `GetModuleFileNameA`, `ResolveModuleProc` or a game object layout. Existing `src/runtime/lifecycle/service_map.cpp` and `src/core/nevr_config.cpp` are extraction candidates; the latter still includes `core/logging.h` and yaml-cpp (`src/core/nevr_config.cpp:18-36`), so cross compilation must be proven. Windows and Quest adapters can differ internally but call the same protocol and state functions.
 
 ### Contracts
 
