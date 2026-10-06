@@ -279,7 +279,7 @@ test-auth-unit:
     unset VCPKG_ROOT
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_callback_unregistration --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_winhttp_stub --target test_callback_unregistration --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
@@ -384,7 +384,7 @@ test-auth-unit:
         exit 1
     fi
     wine "$bin"
-    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_callback_unregistration test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace; do
+    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_winhttp_stub test_callback_unregistration test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -1238,6 +1238,20 @@ verify:
          | grep -v legacy | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
         echo "verify: FAIL — N85 setOnMessageCallback(nullptr) reintroduced; use a no-op lambda." >&2
         echo "An empty std::function invoked by ixwebsocket throws std::bad_function_call and kills the server." >&2
+        exit 1
+    fi
+    # Issue #43: received ServerDB payloads reach the game through
+    # CBroadcaster::ReceiveLocalEvent, which takes them as mutable. The receive
+    # callback therefore hands out a writable dispatcher-owned copy, and no server
+    # code casts const away from a payload pointer. test_protobuf_transport pins the
+    # callback type; this catches a handler that re-declares its parameter const
+    # and casts it back. :-anchored N99 comment stripper.
+    I43_RC=0; I43_HITS=$(grep -rnF -- 'const_cast<VOID*>' src/runtime/server) || I43_RC=$?
+    sensor_stage1 "issue #43 const_cast on received payload" "src/runtime/server" "$I43_RC"
+    if [ "$I43_RC" -eq 0 ] && printf '%s\n' "$I43_HITS" \
+         | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
+        echo "verify: FAIL — issue #43 const_cast<VOID*> is back in src/runtime/server." >&2
+        echo "Take the payload as VOID* from WebSocketClient::MessageCallback; it is writable by contract." >&2
         exit 1
     fi
     # N71: the session-flags null-deref class is covered by BreakpointVEH's
