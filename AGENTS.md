@@ -180,6 +180,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 
 ## Conventions
 
+- **Naming** (`docs/standards/naming.md`): one name, three cases, four letters — `NEVR` (macros / enumerators / export markers), `Nevr` (types / functions / C-ABI symbols / namespaces), `nevr` (files / dirs / libs / config keys / git refs). Required reading before writing or renaming any code.
 - **Logging**: Always use `Log(EchoVR::LogLevel::Info, "format %d", val)` from `common/logging.h`. Fatal errors via `FatalError(msg, title)`.
 - **Hooking**: MinHook-based (`USE_MINHOOK` compile flag). Functions use `__fastcall` convention. Use `ListenForBroadcasterMessage()` for game event callbacks.
 - **Protocol messages**: Symbol IDs in `src/runtime/server/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
@@ -322,7 +323,9 @@ the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), wh
   trailer was dropped — she was not involved in this work. Commits before
   `624f795` carry it and are left as they are.)
 - **Mandatory pre-read gate.** Before any C++/build work, read the project's
-  CPP-MINGW-ADDENDUM in full — its Hard-Stops bind every build/config change.
+  CPP-MINGW-ADDENDUM in full — its Hard-Stops bind every build/config change —
+  and read `docs/standards/naming.md` in full before writing or renaming any
+  code (its three-case rule and anti-patterns bind every name).
 - **Scratch dir.** All agent scratch/staging/evidence files live under
   `/var/tmp/work-nevr-runtime/`, never `/tmp` (RAM-backed on this host) and never
   in the repo. (Basis: RULINGS.md 2026-07-20 "Scratch dir (nevr)".)
