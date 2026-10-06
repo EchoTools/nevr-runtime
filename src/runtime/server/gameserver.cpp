@@ -241,8 +241,9 @@ void OnTcpMsgSessionSuccessv5(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID*
   }
 }
 
-// Handle incoming protobuf messages from Nakama
-void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
+// Handle incoming protobuf messages from Nakama. Reads `msg` only (it is parsed,
+// never forwarded), so it takes a const pointer.
+void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* msg, VOID*, UINT64 msgSize) {
   if (!msg || msgSize == 0) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] empty protobuf message msg=%p size=%llu", msg,
         static_cast<unsigned long long>(msgSize));
@@ -419,10 +420,14 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VO
       }
 
       if (!found) {
-        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Smite entrant not found in lobby: %s",
-            smite.entrant_id().c_str());
+        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Smite entrant not found in lobby: %s entrants=%llu",
+            smite.entrant_id().c_str(), static_cast<unsigned long long>(entrantCount));
         break;
       }
+
+      Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Smite entrant resolved: entrant=%s slot=%llu entrants=%llu",
+          smite.entrant_id().c_str(), static_cast<unsigned long long>(slotIndex),
+          static_cast<unsigned long long>(entrantCount));
 
       if (broadcaster) {
         auto encoded = EncodeLobbySmiteEntrant(slotIndex);
@@ -982,12 +987,16 @@ void GameServerLib::RegisterTcpCallbacks() {
   // compatibility. We handle protobuf messages which properly encode to binary format.
   // Legacy duplicates (registration success, session success) are skipped to avoid
   // double-processing (the game would see the event twice and could misbehave).
-  m_wsClient->SetMessageHandler([this](EchoVR::SymbolId msgId, const VOID* data, UINT64 size) {
+  // `data` is a writable, dispatcher-owned copy (WebSocketClient::MessageCallback).
+  // It must be: two branches below hand it to CBroadcaster::ReceiveLocalEvent
+  // (echovr.exe 0x140F87AA0), which passes the msg pointer on, as mutable, to every
+  // listener registered for the symbol (issue #43).
+  m_wsClient->SetMessageHandler([this](EchoVR::SymbolId msgId, VOID* data, UINT64 size) {
     if (msgId == SYM_PROTOBUF_MSG) {
-      OnTcpMsgProtobuf(this, nullptr, {}, const_cast<VOID*>(data), nullptr, size);
+      OnTcpMsgProtobuf(this, nullptr, {}, data, nullptr, size);
     } else if (msgId == TcpSym::LobbyRegistrationFailure) {
       // Registration failure has no protobuf equivalent, handle legacy
-      OnTcpMsgRegistrationFailure(this, nullptr, {}, const_cast<VOID*>(data), nullptr, size);
+      OnTcpMsgRegistrationFailure(this, nullptr, {}, data, nullptr, size);
     } else if (msgId == TcpSym::LobbyRegistrationSuccess) {
       // Skip legacy - handled by protobuf kGameServerRegistrationSuccess
       Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Skipping legacy registration success (handled via protobuf)");
@@ -1003,8 +1012,7 @@ void GameServerLib::RegisterTcpCallbacks() {
       auto* broadcaster = GetContext().GetBroadcaster();
       if (broadcaster) {
         EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4,
-                                             "SNSLobbyStartSessionv4",
-                                             const_cast<VOID*>(data), size);
+                                             "SNSLobbyStartSessionv4", data, size);
         Log(EchoVR::LogLevel::Info,
             "[NEVR.GAMESERVER] Forwarded legacy SessionStart to game (HACK — protobuf lacks entrants/level)");
       }
@@ -1384,6 +1392,53 @@ static std::string AuthenticateServer() {
     }
 }
 
+// Mints a ServerDB access token: refresh-token exchange first, password auth as
+// the fallback. Returns "" when neither produced one. Called from
+// RequestRegistration (game thread) and, since #39, from the WebSocketClient's
+// token refresher on ixwebsocket's thread after ServerDB answers 401. Config
+// reads go through NevrCfgGetFlat's mutex-guarded intern pool. RefreshAuthToken
+// also rewrites the on-disk credential cache (auth_token_refresh.h SaveAuthToken);
+// the refresher is installed just before Connect, after RequestRegistration's own
+// acquisition has returned, so only a second RequestRegistration racing a 401
+// could overlap the two.
+static std::string AcquireServerDbToken() {
+    std::string token;
+    auto auth = LoadCachedAuthToken();
+    if (auth.HasValidToken()) {
+        token = auth.token;
+        Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Using cached auth token for ServerDB");
+    } else if (auth.HasValidRefreshToken()) {
+        // N106: exchange the refresh token for an access token.
+        //
+        // This branch was MISSING, which made the OAuth2 device-flow path
+        // unreachable on a dedicated server. 571a41b ("access token in-memory
+        // only, 60s lifetime, refresh token on disk") stopped persisting the
+        // access token — SaveAuthToken writes only refresh_token — so
+        // LoadCachedAuthToken().token is ALWAYS empty and HasValidToken() is
+        // ALWAYS false in a fresh process. The consumer here was never updated to
+        // match, so every server fell through to password auth while a perfectly
+        // valid refresh token sat unused on disk.
+        //
+        // Nothing else refreshes in server mode either: TokenAuth::Init returns
+        // early on is_server, before the background refresh thread starts. This
+        // function is the only place a server can mint an access token.
+        const char* httpUri = NevrCfgGetFlat("nevr_http_uri");
+        const char* httpKey = NevrCfgGetFlat("nevr_http_key");
+        if (httpUri && httpKey && httpUri[0] != '\0' && httpKey[0] != '\0' &&
+            RefreshAuthToken(auth, httpUri, httpKey)) {
+            token = auth.token;
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.GAMESERVER] ServerDB auth via refreshed OAuth2 token (device-flow credential)");
+        } else {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.GAMESERVER] Refresh token present but exchange failed — falling back to password auth");
+        }
+    }
+
+    if (token.empty()) token = AuthenticateServer();
+    return token;
+}
+
 // N133 S4b: all NEVR-key reads moved from the game-passed config JSON to
 // config.yaml (nevr_config). The IServerLib vtable slot still passes the game's
 // localConfig pointer, but the runtime no longer reads NEVR keys from it, so the
@@ -1412,49 +1467,12 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 
   // Acquire a session JWT for the operator's server-host account (token auth, BAC-1).
   // Re-auth each registration: the access token TTL is ~1h (BAC-5).
-  std::string wsToken;
-  {
-    auto auth = LoadCachedAuthToken();
-    if (auth.HasValidToken()) {
-      wsToken = auth.token;
-      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Using cached auth token for ServerDB");
-    } else if (auth.HasValidRefreshToken()) {
-      // N106: exchange the refresh token for an access token.
-      //
-      // This branch was MISSING, which made the OAuth2 device-flow path
-      // unreachable on a dedicated server. 571a41b ("access token in-memory
-      // only, 60s lifetime, refresh token on disk") stopped persisting the
-      // access token — SaveAuthToken writes only refresh_token — so
-      // LoadCachedAuthToken().token is ALWAYS empty and HasValidToken() is
-      // ALWAYS false in a fresh process. The consumer here was never updated to
-      // match, so every server fell through to password auth while a perfectly
-      // valid refresh token sat unused on disk.
-      //
-      // Nothing else refreshes in server mode either: TokenAuth::Init returns
-      // early on is_server, before the background refresh thread starts. This is
-      // the only place a server can mint an access token.
-      const char* httpUri = NevrCfgGetFlat("nevr_http_uri");
-      const char* httpKey = NevrCfgGetFlat("nevr_http_key");
-      if (httpUri && httpKey && httpUri[0] != '\0' && httpKey[0] != '\0' &&
-          RefreshAuthToken(auth, httpUri, httpKey)) {
-        wsToken = auth.token;
-        Log(EchoVR::LogLevel::Info,
-            "[NEVR.GAMESERVER] ServerDB auth via refreshed OAuth2 token (device-flow credential)");
-      } else {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] Refresh token present but exchange failed — falling back to password auth");
-      }
-    }
-
-    if (wsToken.empty()) {
-      wsToken = AuthenticateServer();
-      // N102: no token means every ServerDB connection below will be rejected.
-      // Continuing produces a server that logs connection failures forever
-      // instead of exiting with a cause.
-      if (wsToken.empty()) {
-        ServerFatal("Server authentication failed — no valid token for ServerDB connection");
-      }
-    }
+  std::string wsToken = AcquireServerDbToken();
+  // N102: no token means every ServerDB connection below will be rejected.
+  // Continuing produces a server that logs connection failures forever
+  // instead of exiting with a cause.
+  if (wsToken.empty()) {
+    ServerFatal("Server authentication failed — no valid token for ServerDB connection");
   }
 
   thread_local static CHAR constructedUri[1024];
@@ -1519,6 +1537,11 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       }
     }
   }
+
+  // #39: the header is stored once, and ixwebsocket's automatic reconnect
+  // re-presents it. Once the ~1h token has expired, ServerDB answers every
+  // reconnect with 401; this lets the client mint a fresh token instead.
+  m_wsClient->SetBearerTokenRefresher([]() { return AcquireServerDbToken(); });
 
   // Connect with the JWT as Authorization: Bearer; the token route forwards it
   // to Nakama's acceptor, which sets the operator identity (BAC-2/3).

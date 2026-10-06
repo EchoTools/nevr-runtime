@@ -307,6 +307,25 @@ if(BUILD_TESTING)
     endif()
     gtest_discover_tests(test_protobuf_transport DISCOVERY_MODE PRE_TEST)
 
+    # Issue #39: the bearer header presented on ixwebsocket's automatic reconnect,
+    # driven against a scripted loopback upgrade server.
+    add_executable(test_websocket_client_auth
+      tests/test_websocket_client_auth.cpp
+      server/websocket_client.cpp
+      server/websocket_frame.cpp
+      log/url_diagnostics.cpp)
+    set_source_files_properties(tests/test_websocket_client_auth.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_websocket_client_auth PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_websocket_client_auth PRIVATE
+      GTest::gtest GTest::gtest_main ixwebsocket::ixwebsocket CURL::libcurl ws2_32)
+    if(MINGW)
+      add_dependencies(test_websocket_client_auth nevr_runtime_bcrypt_minimal)
+      target_link_libraries(test_websocket_client_auth PRIVATE
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>)
+    endif()
+    gtest_discover_tests(test_websocket_client_auth DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_url_diagnostics
       tests/test_url_diagnostics.cpp
       log/url_diagnostics.cpp)
@@ -318,6 +337,21 @@ if(BUILD_TESTING)
 
     # test_main_thread_handoff.cpp (GH #44) rides in this executable, so the
     # existing `just test-auth-unit` loop runs it with no recipe change.
+
+    # GH #27: drives the REAL libcurl-backed IWinHttpRequest stub through its COM
+    # vtable and IDispatch::Invoke against a loopback HTTP/1.1 listener, so the
+    # StatusText it reports is the reason phrase the server actually sent.
+    add_executable(test_winhttp_stub
+      tests/test_winhttp_stub.cpp
+      compat/winhttp_stub.cpp
+      log/url_diagnostics.cpp)
+    set_source_files_properties(tests/test_winhttp_stub.cpp compat/winhttp_stub.cpp log/url_diagnostics.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_winhttp_stub PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_winhttp_stub PRIVATE
+      GTest::gtest GTest::gtest_main CURL::libcurl ws2_32 ole32 oleaut32 uuid)
+    gtest_discover_tests(test_winhttp_stub DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_callback_unregistration
       tests/test_callback_unregistration.cpp
       tests/test_main_thread_handoff.cpp
@@ -330,6 +364,16 @@ if(BUILD_TESTING)
     target_include_directories(test_callback_unregistration PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_callback_unregistration PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_callback_unregistration DISCOVERY_MODE PRE_TEST)
+
+    # Issue #38: entrant accessors read the lobby's live entrant array.
+    add_executable(test_server_context
+      tests/test_server_context.cpp
+      server/server_context.cpp)
+    set_source_files_properties(tests/test_server_context.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_server_context PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_context PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_server_context DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_session_unregister
       tests/test_session_unregister.cpp

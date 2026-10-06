@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <mutex>
 #include <shared_mutex>
-#include <vector>
 
 #include "abi/echovr.h"
 #include "core/pch.h"
@@ -100,8 +99,11 @@ class ServerContext {
   EchoVR::Broadcaster* GetBroadcaster() const;
   EchoVR::TcpBroadcasterData* GetTcpBroadcaster() const;
 
-  // Safe entrant access with bounds checking (shared lock)
-  // Returns nullptr if index out of bounds or not initialized
+  // Entrant access, read live from the lobby's entrant array on every call
+  // (issue #38). Returns nullptr if index is out of bounds or not initialized.
+  // The pointer is into game memory: use it within the current game-thread
+  // callback and never store it — the game may free or rewrite the array on
+  // its next tick.
   EchoVR::Lobby::EntrantData* GetEntrant(uint32_t index) const;
   uint64_t GetEntrantCount() const;
 
@@ -131,9 +133,6 @@ class ServerContext {
   // Game object pointers (not owned, provided by game engine)
   EchoVR::Lobby* m_lobby = nullptr;
   EchoVR::Broadcaster* m_broadcaster = nullptr;
-
-  // Cached entrant data (owns the data, not pointers from game)
-  std::vector<EchoVR::Lobby::EntrantData> m_cachedEntrants;
 
   // ServerDB connection
   EchoVR::TcpPeer m_serverDbPeer = EchoVR::TcpPeer_InvalidPeer;
