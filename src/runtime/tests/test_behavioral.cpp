@@ -332,6 +332,37 @@ TEST_F(PluginLoaderDiagnosticTest, ExplicitUnloadInvokesShutdownAndReleasesPlugi
   CloseHandle(shutdownObserved);
 }
 
+// The same DLL listed twice is loaded once: one init, and each OnFrame reaches it
+// once. Before, LoadLibrary handed back the loaded module for the repeat, its init
+// ran again, and it was staged twice, so every tick called it twice.
+TEST_F(PluginLoaderDiagnosticTest, PluginListedTwiceLoadsOnce) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"onframe-again", "TEST_PLUGIN_ONFRAME.DLL", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("SKIPPED onframe-again (TEST_PLUGIN_ONFRAME.DLL)"));
+  const HMODULE plugin = GetModuleHandleA("test_plugin_onframe.dll");
+  ASSERT_NE(plugin, nullptr);
+  const auto getFrameCount = reinterpret_cast<uint32_t (*)(void)>(
+      GetProcAddress(plugin, "NvrTestPluginGetFrameCount"));
+  ASSERT_NE(getFrameCount, nullptr);
+  NvrGameContext ctx = {};
+  ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
+  ctx.flags = NEVR_HOST_IS_SERVER;
+  ctx.ctx_size = sizeof(NvrGameContext);
+  ctx.get_plugin_count = GetLoadedPluginCount;
+  ctx.get_plugin_info = GetLoadedPluginInfo;
+  TickPlugins(&ctx);
+  EXPECT_EQ(getFrameCount(), 1u);
+
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+  EXPECT_EQ(manifest[1].at("loaded"), false);
+  EXPECT_EQ(manifest[1].at("error"), "listed twice in config.yaml");
+}
+
 // #60: the login reports every configured plugin — the one that loaded, the one
 // that is enabled but failed, and the one that is disabled — with the real loader
 // filling the record from a real LoadLibraryExA run. The disabled entry names a

@@ -207,6 +207,22 @@ void LoadPlugins() {
       }
     }
 
+    // The same file listed twice: LoadLibrary would return the module already
+    // loaded, and its init would run again with every callback doubled. Refused
+    // even if this entry is marked required: the plugin itself is loaded.
+    {
+      const long first = DuplicatePluginEntry(plan, planIndex);
+      if (first >= 0) {
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PLUGIN] SKIPPED %s (%s) — the same file as entry %ld (%s), listed earlier "
+            "in config.yaml. Loading it again would run its init twice and double every "
+            "callback. Remove one of the entries.",
+            item.name.c_str(), filename, first + 1, plan[first].name.c_str());
+        itemReport.error = "listed twice in config.yaml";
+        continue;
+      }
+    }
+
     /* N75: LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32.
      *
      * The risk was never loading OUR dll — we pass a full path. It is how ITS
@@ -234,6 +250,23 @@ void LoadPlugins() {
     if (!hPlugin) {
       FailPluginLoad(item, "LoadLibrary failed: error " + std::to_string(GetLastError()), itemReport);
       continue;
+    }
+    // The backstop for what the file-name check can't see: another spelling of the
+    // same path. LoadLibrary counted a reference for this call; give it back.
+    {
+      const StagedPlugin* already = nullptr;
+      for (const StagedPlugin& s : staged) {
+        if (s.hModule == hPlugin) { already = &s; break; }
+      }
+      if (already) {
+        FreeLibrary(hPlugin);
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.PLUGIN] SKIPPED %s (%s) — the same module as %s (%s), already loaded. "
+            "Remove one of the entries from config.yaml.",
+            item.name.c_str(), filename, already->item.name.c_str(), already->item.file.c_str());
+        itemReport.error = "the same module as " + already->item.name;
+        continue;
+      }
     }
 
     auto getInfoFn = reinterpret_cast<NvrPluginGetInfo_fn>(GetProcAddress(hPlugin, "NvrPluginGetInfo"));

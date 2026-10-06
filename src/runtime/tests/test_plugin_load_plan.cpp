@@ -144,6 +144,39 @@ plugins:
   EXPECT_EQ(plan[0].args_json, R"({"token":"fallback"})");
 }
 
+// A file listed twice is found (without case, as Windows compares names); a
+// disabled earlier entry doesn't count, it was never loaded.
+TEST(PluginLoadPlan, DuplicateFileIsFoundIgnoringCase) {
+  const NevrConfig cfg = NevrConfig::LoadFromString(R"YAML(
+plugins:
+  - name: a
+    file: Stats.dll
+  - name: b
+    file: other.dll
+  - name: a-again
+    file: STATS.DLL
+)YAML");
+  const std::vector<PluginLoadItem> plan = BuildLoadPlan(cfg);
+  ASSERT_EQ(plan.size(), 3u);
+  EXPECT_EQ(DuplicatePluginEntry(plan, 0), -1);
+  EXPECT_EQ(DuplicatePluginEntry(plan, 1), -1);
+  EXPECT_EQ(DuplicatePluginEntry(plan, 2), 0);
+}
+
+TEST(PluginLoadPlan, DisabledEarlierEntryIsNotADuplicate) {
+  const NevrConfig cfg = NevrConfig::LoadFromString(R"YAML(
+plugins:
+  - name: off
+    file: stats.dll
+    enabled: false
+  - name: on
+    file: stats.dll
+)YAML");
+  const std::vector<PluginLoadItem> plan = BuildLoadPlan(cfg);
+  ASSERT_EQ(plan.size(), 2u);
+  EXPECT_EQ(DuplicatePluginEntry(plan, 1), -1);
+}
+
 TEST(PluginLoadPlan, ArgsToJsonEmptyMapIsEmptyObject) {
   EXPECT_EQ(ArgsToJson({}), "{}");
 }
