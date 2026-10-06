@@ -23,7 +23,11 @@ std::string ArgsToJson(const std::map<std::string, std::string>& args) {
   for (const auto& kv : args) {
     obj[kv.first] = kv.second;
   }
-  return obj.dump();  // "{}" for an empty map
+  // `replace`, as BuildPluginManifest does: a value can hold bytes that are not
+  // UTF-8 (a ${VAR} resolved from the ANSI environment, a mistyped config.yaml),
+  // and the default dump() throws type_error 316 on them -- at boot, where nothing
+  // catches it, so the client dies before any plugin loads. "{}" for an empty map.
+  return obj.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
 
 std::vector<PluginLoadItem> BuildLoadPlan(const nevr::NevrConfig& cfg) {

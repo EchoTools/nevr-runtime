@@ -153,6 +153,19 @@ TEST(PluginLoadPlan, ArgsToJsonSortedStringValues) {
   EXPECT_EQ(ArgsToJson(args), R"({"a":"1","b":"2"})");
 }
 
+// A value that is not UTF-8 (an ANSI-code-page ${VAR}, e.g. a path with "\xe9")
+// must not throw out of the boot path: the args still serialize, the bad byte
+// replaced, and the result parses.
+TEST(PluginLoadPlan, ArgsToJsonInvalidUtf8DoesNotThrow) {
+  const std::map<std::string, std::string> args = {
+      {"path", std::string("C:\\Users\\Ren") + "\xe9" + "\\x.txt"}, {"ok", "1"}};
+  std::string out;
+  ASSERT_NO_THROW(out = ArgsToJson(args));
+  const nlohmann::json parsed = nlohmann::json::parse(out);
+  EXPECT_EQ(parsed.at("ok"), "1");
+  EXPECT_TRUE(parsed.at("path").is_string());
+}
+
 // ---------------------------------------------------------------------------
 // 3. ChoosePluginInit — v4 preferred, v3 fallback, None when neither. This is the
 //    backward-compat guarantee in pure form: (hasInitEx=false, hasInit=true) MUST
