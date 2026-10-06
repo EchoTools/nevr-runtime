@@ -43,7 +43,7 @@ func rvaToFile(t *testing.T, f *pe.File, rva uint32) uint32 {
 // The Nakama server echoes PlatformCode from LoginRequest into LoginSuccess
 // without remapping (evr_pipeline_login.go:185). The game interprets the
 // echoed value through its own GetProviderPrefix switch (echovr.exe fcn.14060d640,
-// 14 callers), so the WIRE value must match the GAME's numbering.
+// 17 distinct callers), so the WIRE value must match the GAME's numbering.
 //
 // Regression test for 2026-08-04: OVR_ORG was sent as wire value 3 (Nakama
 // enum), which the game interpreted as XBX (game provider 3).
