@@ -721,6 +721,61 @@ if(BUILD_TESTING)
       test_host_crash_runtime_init_failure
       test_host_crash_runtime_missing_entry)
 
+    # Early PreprocessCommandLine rendezvous harness for the BugSplat64.dll /
+    # nevr.dll split (docs/design/2026-10-05-bugsplat-nevr-split.md, step 4).
+    # The host shim (BugSplat64.dll) drives the production RuntimeRendezvous: one
+    # detour from DLL_PROCESS_ATTACH, then loads the sibling nevr.dll on the first
+    # call. test_rendezvous.exe drives server / server-twice / client / missing /
+    # reenter / bad-prologue child scenarios plus the NEVR_SetGameModule external
+    # contract.
+    set(RENDEZVOUS_DIR "${CMAKE_BINARY_DIR}/bin/rendezvous")
+    set(RENDEZVOUS_FIXTURE_DIR "${RENDEZVOUS_DIR}/fixtures")
+
+    function(rendezvous_output target directory)
+      set_target_properties(${target} PROPERTIES
+        ARCHIVE_OUTPUT_DIRECTORY "${directory}"
+        RUNTIME_OUTPUT_DIRECTORY "${directory}"
+        LIBRARY_OUTPUT_DIRECTORY "${directory}")
+      target_compile_options(${target} PRIVATE -Werror)
+      target_include_directories(${target} PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    endfunction()
+
+    add_library(test_rendezvous_host SHARED
+      tests/rendezvous/host_shim.cpp
+      host/runtime_rendezvous.cpp
+      host/runtime_load.cpp
+      host/bootstrap_diagnostics.cpp
+      lifecycle/game_image_guard.cpp)
+    target_link_libraries(test_rendezvous_host PRIVATE minhook nlohmann_json::nlohmann_json)
+    set_target_properties(test_rendezvous_host PROPERTIES PREFIX "" OUTPUT_NAME "BugSplat64")
+    rendezvous_output(test_rendezvous_host "${RENDEZVOUS_DIR}")
+
+    # One nevr.dll per fixture directory; the variant is a compile definition.
+    # The fixture includes runtime_rendezvous.h (for the shared constants), which
+    # transitively includes bootstrap_diagnostics.h -> nlohmann/json_fwd.hpp, so
+    # the fixture needs the nlohmann_json include path (header-only, no link).
+    function(add_rendezvous_fixture target fixture_dir)
+      add_library(${target} SHARED tests/rendezvous/runtime_fixture.cpp)
+      target_link_libraries(${target} PRIVATE nlohmann_json::nlohmann_json)
+      set_target_properties(${target} PROPERTIES PREFIX "" OUTPUT_NAME "nevr")
+      rendezvous_output(${target} "${RENDEZVOUS_FIXTURE_DIR}/${fixture_dir}")
+      if(ARGN)
+        target_compile_definitions(${target} PRIVATE ${ARGN})
+      endif()
+    endfunction()
+
+    add_rendezvous_fixture(test_rendezvous_runtime_good good)
+    add_rendezvous_fixture(test_rendezvous_runtime_reenter reenter-init
+      RENDEZVOUS_PROBE_REENTER_INIT)
+
+    add_executable(test_rendezvous tests/rendezvous/rendezvous_test.cpp)
+    target_link_libraries(test_rendezvous PRIVATE nlohmann_json::nlohmann_json)
+    rendezvous_output(test_rendezvous "${RENDEZVOUS_DIR}")
+    add_dependencies(test_rendezvous
+      test_rendezvous_host
+      test_rendezvous_runtime_good
+      test_rendezvous_runtime_reenter)
+
     # plugin_load_plan tests (N134 S6) — the PURE core of the config-driven plugin
     # loader: BuildLoadPlan (ordered selection with enabled flag, file defaulting,
     # required/target carry), ArgsToJson (the v4 args_json contract), and
