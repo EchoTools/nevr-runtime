@@ -1,6 +1,8 @@
 #include "runtime/server/gameserver.h"
 #include "core/curl_global.h"
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <exception>
@@ -882,6 +884,10 @@ GameServerLib::~GameServerLib() {
   // this destructor never finishes — which is correct.  When the destructor runs
   // without a prior BeginGracefulShutdown call the thread is not joinable and
   // the join is a no-op.
+  // GH #44: a shutdown thread still waiting for Update() to service its
+  // unregister would hold this join for the whole hand-off timeout; withdraw
+  // the request so it takes its off-game-thread path now.
+  m_gameThreadHandoff.Cancel();
   if (m_shutdownThread.joinable()) {
     m_shutdownThread.join();
   }
@@ -911,7 +917,8 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   RegisterBroadcasterCallbacks();
   RegisterTcpCallbacks();
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Initialized game server");
+  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Initialized game server (game thread %lu)",
+      static_cast<unsigned long>(GetCurrentThreadId()));
 
   // N87: the game has installed its own console ctrl handler by now, which sits
   // in front of the one InstallConsoleCtrlHandler() registered during
@@ -929,6 +936,7 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
 }
 
 void GameServerLib::RegisterBroadcasterCallbacks() {
+  m_registryThreadId.store(GetCurrentThreadId());
   auto& cb = m_context->GetCallbackRegistry();
 
   cb.sessionStart =
@@ -1090,6 +1098,17 @@ void GameServerLib::RegisterTcpCallbacks() {
 }
 
 void GameServerLib::UnregisterAllCallbacks() {
+  // GH #44: the registry and EchoVR::BroadcasterUnlisten are game-thread-only
+  // (server_context.h). Make any future off-thread caller visible in the log.
+  const DWORD registryThread = m_registryThreadId.load();
+  const DWORD thisThread = GetCurrentThreadId();
+  if (registryThread != 0 && thisThread != registryThread) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.GAMESERVER] callback registry reached from thread %lu; callbacks were registered on game thread %lu "
+        "(registry is game-thread-only, GH #44)",
+        static_cast<unsigned long>(thisThread), static_cast<unsigned long>(registryThread));
+  }
+
   auto* lobby = m_context->GetLobby();
   auto& cb = m_context->GetCallbackRegistry();
   EchoVR::Broadcaster* liveOwner = lobby != nullptr ? lobby->broadcaster : nullptr;
@@ -1130,6 +1149,12 @@ static bool s_wasConnectedToServerDb = false;
 static bool s_exitPending = false;
 
 VOID GameServerLib::Update() {
+  // GH #44: run the graceful-shutdown thread's EndSession + Unregister here, on
+  // the game thread that owns the callback registry. Once it has run the server
+  // is unregistered and about to exit; skip the rest of the frame rather than
+  // process ServerDB traffic for a server that no longer exists.
+  if (m_gameThreadHandoff.Service()) return;
+
   // Dispatch incoming ServerDB messages on the main thread
   if (m_wsClient) m_wsClient->ProcessReceivedMessages();
 
@@ -1212,8 +1237,48 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
       }
     }
 
-    self->EndSession();
-    self->Unregister();
+    // GH #44: EndSession + Unregister reach UnregisterAllCallbacks, i.e. the
+    // game-thread-only callback registry and EchoVR::BroadcasterUnlisten, which
+    // takes no lock (echovr.exe 0x140f8df20). Hand the work to Update() on the
+    // game thread and wait. The game can stop calling Update() (level
+    // transitions, teardown), so the wait is bounded; past it, do the
+    // ServerDB-facing half here and leave the registry alone — this process
+    // ends in ForceFatalExit below, which takes the listeners with it.
+    // 30 s is a chosen bound, not a measured one: the round-end wait above
+    // already allowed the post-round level transition 10 s of grace.
+    constexpr std::chrono::milliseconds kGameThreadHandoffTimeout{30 * 1000};
+    const unsigned long shutdownThreadId = static_cast<unsigned long>(GetCurrentThreadId());
+    std::atomic<unsigned long> gameThreadId{0};
+    const auto outcome = self->m_gameThreadHandoff.RunOnServicingThread(
+        [self, &gameThreadId]() {
+          gameThreadId.store(static_cast<unsigned long>(GetCurrentThreadId()));
+          self->ShutdownUnregisterOnGameThread();
+        },
+        kGameThreadHandoffTimeout);
+    const char* outcomeName = GameServer::MainThreadHandoffOutcomeName(outcome);
+    switch (outcome) {
+      case GameServer::MainThreadHandoff::Outcome::kRan:
+        Log(EchoVR::LogLevel::Info,
+            "[NEVR.GAMESERVER] shutdown unregister handoff=%s game_thread=%lu shutdown_thread=%lu", outcomeName,
+            gameThreadId.load(), shutdownThreadId);
+        break;
+      case GameServer::MainThreadHandoff::Outcome::kTaskThrew:
+        Log(EchoVR::LogLevel::Error,
+            "[NEVR.GAMESERVER] shutdown unregister handoff=%s game_thread=%lu shutdown_thread=%lu — "
+            "unregister threw on the game thread; exiting anyway",
+            outcomeName, gameThreadId.load(), shutdownThreadId);
+        break;
+      case GameServer::MainThreadHandoff::Outcome::kTimedOut:
+      case GameServer::MainThreadHandoff::Outcome::kCancelled:
+      case GameServer::MainThreadHandoff::Outcome::kBusy:
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.GAMESERVER] shutdown unregister handoff=%s timeout_ms=%lld shutdown_thread=%lu — game thread did "
+            "not run it; ending session and unregistering from ServerDB on the shutdown thread, broadcaster "
+            "callbacks left registered (process is exiting)",
+            outcomeName, static_cast<long long>(kGameThreadHandoffTimeout.count()), shutdownThreadId);
+        self->ShutdownUnregisterOffGameThread();
+        break;
+    }
 
     self->m_shutdownComplete.store(true);
 
@@ -1599,12 +1664,32 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 }
 
 VOID GameServerLib::Unregister() {
+  // IServerLib entry point: the game calls this on its own thread.
+  UnregisterFromServerDb(true);
+}
+
+void GameServerLib::ShutdownUnregisterOnGameThread() {
+  EndSession();
+  UnregisterFromServerDb(true);
+}
+
+void GameServerLib::ShutdownUnregisterOffGameThread() {
+  // Everything here is safe off the game thread: ServerContext state is
+  // mutex-guarded and WebSocketClient is documented thread-safe. The callback
+  // registry is not, so it is skipped (GH #44).
+  EndSession();
+  UnregisterFromServerDb(false);
+}
+
+void GameServerLib::UnregisterFromServerDb(bool touchCallbackRegistry) {
   const auto sendEnvelope = [this](const gameservice::v1::Envelope& envelope) {
     return GameServer::SendProtobufEnvelope(*m_wsClient, envelope);
   };
+  GameServer::ServerLifecycleAction unregisterCallbacks;
+  if (touchCallbackRegistry) unregisterCallbacks = [this]() { UnregisterAllCallbacks(); };
   const auto endResult = GameServer::UnregisterRegisteredServer(
-      *m_context, sendEnvelope, [this]() { m_wsClient->DiscardPendingMessages(); },
-      [this]() { UnregisterAllCallbacks(); }, [this]() { m_wsClient->Disconnect(); });
+      *m_context, sendEnvelope, [this]() { m_wsClient->DiscardPendingMessages(); }, unregisterCallbacks,
+      [this]() { m_wsClient->Disconnect(); });
   if (endResult.attempted && endResult.sendResult == GameServer::ProtobufSendResult::TransportRejected) {
     Log(EchoVR::LogLevel::Warning, "[NEVR.SERVER] CODE_ENDED transport rejected during unregister");
   } else if (endResult.sendResult == GameServer::ProtobufSendResult::AcceptedQueued) {

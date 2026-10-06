@@ -228,7 +228,9 @@ void ServerContext::UpdateSessionState(const SessionState& state) {
 CallbackRegistry& ServerContext::GetCallbackRegistry() {
   // Not synchronized — only safe from the game's main thread.
   // All current call sites (RegisterBroadcasterCallbacks, UnregisterAllCallbacks,
-  // Initialize, Terminate) run on the main thread.
+  // Initialize, Terminate) run on the main thread. The graceful-shutdown thread
+  // reaches UnregisterAllCallbacks only through GameServerLib::Update() via
+  // MainThreadHandoff (GH #44).
   return m_callbacks;
 }
 

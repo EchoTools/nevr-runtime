@@ -118,7 +118,9 @@ class ServerContext {
   // Callback registry — NOT internally synchronized.
   // Safe to call without locking when all access is from the game's main thread
   // (RegisterBroadcasterCallbacks, UnregisterAllCallbacks, Initialize, Terminate).
-  // Must not be called from ixwebsocket or other background threads.
+  // Must not be called from ixwebsocket or other background threads. A background
+  // thread that needs registry work hands it to the game thread instead
+  // (GameServerLib::m_gameThreadHandoff, serviced in Update(); GH #44).
   CallbackRegistry& GetCallbackRegistry();
   const CallbackRegistry& GetCallbackRegistry() const;
 
