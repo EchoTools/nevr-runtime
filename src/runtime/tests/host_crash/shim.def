@@ -1,0 +1,6 @@
+LIBRARY BugSplat64
+EXPORTS
+   DetoursExportPlaceholder @1
+   ?createReport@MiniDmpSender@@QEAAXPEAU_EXCEPTION_POINTERS@@@Z = BugSplat_createReport
+   NevrHostTest_Prepare
+   NevrHostTest_LoadRuntime
