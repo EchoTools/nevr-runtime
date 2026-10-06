@@ -132,6 +132,32 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         update = extract_braced_function(source, "VOID GameServerLib::Update(")
         self.assertRegex(update, r"m_gameThreadHandoff\.Service\(\)")
 
+    def test_broadcaster_callbacks_record_their_owner_before_listening(self):
+        # Issue #117: ba6b5f0 set CallbackRegistry::broadcasterOwner in RegisterBroadcasterCallbacks;
+        # merge 033b303 took the other parent's body and dropped it. UnregisterBroadcasterCallbacks
+        # only calls EchoVR::BroadcasterUnlisten when the live owner equals the recorded one, so with
+        # the owner null every unregister silently skipped the game and only cleared the struct. No
+        # C++ test links gameserver.cpp, so the wiring is pinned here.
+        source = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
+        register = extract_braced_function(source, "void GameServerLib::RegisterBroadcasterCallbacks(")
+        record = re.search(r"\bGameServer::RecordBroadcasterOwner\s*\(\s*\*m_context\s*\)", register)
+        self.assertIsNotNone(record, "RegisterBroadcasterCallbacks no longer records the callback owner")
+        first_listen = re.search(r"\bListenForBroadcasterMessage\s*\(", register)
+        self.assertIsNotNone(first_listen, "subject vanished: no ListenForBroadcasterMessage calls")
+        self.assertLess(record.start(), first_listen.start(),
+                        "the owner must be recorded before the first handle is registered")
+
+        # Registration, the recorded owner and the unregister guard must all name the same
+        # broadcaster (the lobby's), or the guard rejects every handle again.
+        listen = extract_braced_function(source, "uint16_t ListenForBroadcasterMessage(")
+        self.assertRegex(listen, r"BroadcasterListen\(\s*lobby->broadcaster\s*,")
+        unregister = extract_braced_function(source, "void GameServerLib::UnregisterAllCallbacks(")
+        self.assertRegex(unregister, r"liveOwner\s*=\s*lobby\s*!=\s*nullptr\s*\?\s*lobby->broadcaster\s*:")
+        helper_source = (ROOT / "src/runtime/server/callback_unregistration.cpp").read_text()
+        helper = extract_braced_function(helper_source, "EchoVR::Broadcaster* RecordBroadcasterOwner(")
+        self.assertRegex(helper, r"lobby\s*!=\s*nullptr\s*\?\s*lobby->broadcaster\s*:")
+        self.assertRegex(helper, r"\.broadcasterOwner\s*=")
+
     def test_bridge_never_closes_a_remote_on_unrequire(self):
         # d0190c4/dd1e9e7 (2026-09-14) closed the remote websocket whenever STcpConnectionUnrequireEvent
         # arrived in server mode, as an experiment (refuted in 79e27d5). Nakama sends that event on

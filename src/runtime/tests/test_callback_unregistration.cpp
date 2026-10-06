@@ -85,6 +85,72 @@ TEST(CallbackUnregistration, NullOrDifferentLiveOwnerNeverCallsUnlisten) {
   }
 }
 
+// Issue #117: merge 033b303 dropped the owner assignment from
+// GameServerLib::RegisterBroadcasterCallbacks, so broadcasterOwner stayed null
+// and every unregister skipped EchoVR::BroadcasterUnlisten. These tests drive
+// the owner through the helper production registration calls, then unregister
+// with the live owner exactly as GameServerLib::UnregisterAllCallbacks derives
+// it (the context's lobby->broadcaster).
+TEST(CallbackRegistrationOwner, RegisterThenUnregisterReachesUnlistenOnTheLobbysBroadcaster) {
+  auto* broadcaster = FakeBroadcaster(0x6000);
+  EchoVR::Lobby lobby{};
+  lobby.broadcaster = broadcaster;
+  GameServer::ServerContext context;
+  context.Initialize(&lobby, broadcaster);
+  context.FinalizeInitialization();
+
+  EXPECT_EQ(GameServer::RecordBroadcasterOwner(context), broadcaster);
+  auto& callbacks = context.GetCallbackRegistry();
+  EXPECT_EQ(callbacks.broadcasterOwner, broadcaster);
+  SetAllUdpHandles(callbacks);
+
+  EchoVR::Lobby* liveLobby = context.GetLobby();
+  ASSERT_NE(liveLobby, nullptr);
+  std::vector<uint16_t> removed;
+  const size_t count = GameServer::UnregisterBroadcasterCallbacks(
+      liveLobby->broadcaster, callbacks,
+      [&removed, broadcaster](EchoVR::Broadcaster* suppliedOwner, uint16_t handle) {
+        EXPECT_EQ(suppliedOwner, broadcaster);
+        removed.push_back(handle);
+      });
+
+  EXPECT_EQ(count, 15U);
+  EXPECT_EQ(removed.size(), 15U);
+  EXPECT_EQ(callbacks.broadcasterOwner, nullptr);
+}
+
+TEST(CallbackRegistrationOwner, SessionWithoutBroadcasterRecordsNullOwnerAndNeverUnlistens) {
+  EchoVR::Lobby lobby{};
+  lobby.broadcaster = nullptr;
+  GameServer::ServerContext context;
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+
+  EXPECT_EQ(GameServer::RecordBroadcasterOwner(context), nullptr);
+  auto& callbacks = context.GetCallbackRegistry();
+  EXPECT_EQ(callbacks.broadcasterOwner, nullptr);
+  // Production registers nothing without a broadcaster (ListenForBroadcasterMessage
+  // returns 0); non-zero handles here prove the guard, not the empty registry,
+  // keeps unlisten from running.
+  SetAllUdpHandles(callbacks);
+
+  size_t calls = 0;
+  EXPECT_EQ(GameServer::UnregisterBroadcasterCallbacks(
+                context.GetLobby()->broadcaster, callbacks,
+                [&calls](EchoVR::Broadcaster*, uint16_t) { ++calls; }),
+            0U);
+  EXPECT_EQ(calls, 0U);
+  EXPECT_EQ(callbacks.sessionStart, 0U);
+}
+
+TEST(CallbackRegistrationOwner, UninitializedContextHasNoLobbyAndRecordsNullOwner) {
+  GameServer::ServerContext context;
+  ASSERT_EQ(context.GetLobby(), nullptr);
+
+  EXPECT_EQ(GameServer::RecordBroadcasterOwner(context), nullptr);
+  EXPECT_EQ(context.GetCallbackRegistry().broadcasterOwner, nullptr);
+}
+
 TEST(CallbackUnregistration, RepeatedUnregisterIsIdempotentAndSameOwnerCanRegisterAgain) {
   auto* owner = FakeBroadcaster(0x5000);
   GameServer::CallbackRegistry callbacks;

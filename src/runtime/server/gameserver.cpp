@@ -938,6 +938,10 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
 void GameServerLib::RegisterBroadcasterCallbacks() {
   m_registryThreadId.store(GetCurrentThreadId());
   auto& cb = m_context->GetCallbackRegistry();
+  // Issue #117: without the owner, UnregisterAllCallbacks never reaches
+  // EchoVR::BroadcasterUnlisten (merge 033b303 dropped this from ba6b5f0).
+  EchoVR::Broadcaster* owner = GameServer::RecordBroadcasterOwner(*m_context);
+  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Broadcaster callback owner=%p", static_cast<void*>(owner));
 
   cb.sessionStart =
       ListenForBroadcasterMessage(this, Sym::LobbySessionStarting, TRUE, reinterpret_cast<VOID*>(OnMsgSessionStarting));

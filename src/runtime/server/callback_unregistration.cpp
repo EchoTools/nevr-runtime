@@ -4,6 +4,13 @@
 
 namespace GameServer {
 
+EchoVR::Broadcaster* RecordBroadcasterOwner(ServerContext& context) {
+  EchoVR::Lobby* lobby = context.GetLobby();
+  EchoVR::Broadcaster* owner = lobby != nullptr ? lobby->broadcaster : nullptr;
+  context.GetCallbackRegistry().broadcasterOwner = owner;
+  return owner;
+}
+
 size_t UnregisterBroadcasterCallbacks(EchoVR::Broadcaster* liveOwner,
                                       CallbackRegistry& callbacks,
                                       const BroadcasterUnlisten& unlisten) {
