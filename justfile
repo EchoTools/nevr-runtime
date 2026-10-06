@@ -370,7 +370,7 @@ test-auth-unit:
     unset VCPKG_ROOT
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_winhttp_stub --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_winhttp_stub --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
@@ -435,6 +435,12 @@ test-auth-unit:
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         echo "       (is 'gtest'/'yaml-cpp' available in vcpkg for triplet x64-mingw-static?)" >&2
+        exit 1
+    fi
+    wine "$bin"
+    bin="build/{{ preset }}/bin/test_service_config.exe"
+    if [[ ! -f "$bin" ]]; then
+        echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
     wine "$bin"

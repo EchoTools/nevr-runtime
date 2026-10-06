@@ -14,6 +14,7 @@ set(PATCHES_SOURCES
     "lifecycle/config.cpp"
     "lifecycle/service_map.cpp"
     "lifecycle/service_redirect.cpp"
+    "lifecycle/stable_string_pool.cpp"
     "lifecycle/service_config.cpp"
     "lifecycle/login_redirect_override.cpp"
     "patch/mode_patches.cpp"
@@ -75,8 +76,10 @@ set(PATCHES_HEADERS
     "lifecycle/cli.h"
     "lifecycle/boot.h"
     "lifecycle/config.h"
+    "lifecycle/config_redirect_result.h"
     "lifecycle/service_map.h"
     "lifecycle/service_redirect.h"
+    "lifecycle/stable_string_pool.h"
     "lifecycle/service_config.h"
     "lifecycle/login_redirect_override.h"
     "patch/mode_patches.h"
@@ -176,6 +179,7 @@ set_source_files_properties(ws_bridge.cpp compat/social_names.cpp PROPERTIES SKI
 set_source_files_properties(
   lifecycle/service_map.cpp
   lifecycle/service_redirect.cpp
+  lifecycle/stable_string_pool.cpp
   lifecycle/service_config.cpp
   lifecycle/login_redirect_override.cpp
   PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -512,6 +516,55 @@ if(BUILD_TESTING)
     target_link_libraries(test_service_map PRIVATE
       GTest::gtest GTest::gtest_main nevr_core yaml-cpp::yaml-cpp nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_service_map DISCOVERY_MODE PRE_TEST)
+
+    # Stable C-string storage and direct config-accessor failure-boundary tests.
+    add_executable(test_service_config
+      tests/test_service_config.cpp
+      tests/test_stable_string_pool.cpp
+      lifecycle/service_config.cpp
+      lifecycle/service_map.cpp
+      lifecycle/service_redirect.cpp
+      lifecycle/stable_string_pool.cpp
+      ext/plugin_load_plan.cpp)
+    target_compile_definitions(test_service_config PRIVATE NEVR_TEST_HOOKS)
+    set_source_files_properties(
+      tests/test_service_config.cpp
+      tests/test_stable_string_pool.cpp
+      lifecycle/service_config.cpp
+      lifecycle/service_map.cpp
+      lifecycle/service_redirect.cpp
+      lifecycle/stable_string_pool.cpp
+      ext/plugin_load_plan.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_service_config PRIVATE
+      ${CMAKE_SOURCE_DIR}/src
+      ${CMAKE_BINARY_DIR})
+    target_link_libraries(test_service_config PRIVATE
+      GTest::gtest GTest::gtest_main nevr_core nevr_abi yaml-cpp::yaml-cpp nlohmann_json::nlohmann_json)
+    gtest_discover_tests(test_service_config DISCOVERY_MODE PRE_TEST)
+
+    add_library(test_stable_string_pool_fixture SHARED
+      tests/stable_string_pool_fixture.cpp
+      lifecycle/stable_string_pool.cpp)
+    target_include_directories(test_stable_string_pool_fixture PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    set_source_files_properties(
+      tests/stable_string_pool_fixture.cpp
+      lifecycle/stable_string_pool.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    set_target_properties(test_stable_string_pool_fixture PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "test_stable_string_pool_fixture"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+
+    add_library(test_stable_string_pool_destructible_control SHARED
+      tests/stable_string_pool_destructible_control.cpp)
+    set_target_properties(test_stable_string_pool_destructible_control PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "test_stable_string_pool_destructible_control"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+    add_dependencies(test_service_config
+      test_stable_string_pool_fixture
+      test_stable_string_pool_destructible_control)
 
     add_executable(test_social_facade
       tests/test_social_facade.cpp
