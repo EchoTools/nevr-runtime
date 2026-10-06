@@ -6,6 +6,86 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def strip_comments(text: str) -> str:
+    """Remove // line comments and /* */ block comments from C++ source text.
+
+    A regex over raw source cannot distinguish "the call is here" from "the
+    call used to be here and is now commented out" — both contain the same
+    substring. Strip comments first so a commented-out call site (with or
+    without a decoy real statement nearby) is invisible to the regex, the
+    same way the compiler would see it. String/char literals are tracked so
+    a literal containing "//" or "/*" is not treated as a comment start.
+    Newlines are preserved so line numbers in any future diagnostics stay
+    roughly aligned; comment bodies are dropped, not blanked to the same width.
+    """
+    result = []
+    i = 0
+    n = len(text)
+    in_line_comment = False
+    in_block_comment = False
+    in_string = False
+    in_char = False
+    while i < n:
+        c = text[i]
+        two = text[i : i + 2]
+        if in_line_comment:
+            if c == "\n":
+                in_line_comment = False
+                result.append(c)
+            i += 1
+            continue
+        if in_block_comment:
+            if two == "*/":
+                in_block_comment = False
+                i += 2
+            else:
+                if c == "\n":
+                    result.append("\n")
+                i += 1
+            continue
+        if in_string:
+            result.append(c)
+            if c == "\\" and i + 1 < n:
+                result.append(text[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_string = False
+            i += 1
+            continue
+        if in_char:
+            result.append(c)
+            if c == "\\" and i + 1 < n:
+                result.append(text[i + 1])
+                i += 2
+                continue
+            if c == "'":
+                in_char = False
+            i += 1
+            continue
+        if two == "//":
+            in_line_comment = True
+            i += 2
+            continue
+        if two == "/*":
+            in_block_comment = True
+            i += 2
+            continue
+        if c == '"':
+            in_string = True
+            result.append(c)
+            i += 1
+            continue
+        if c == "'":
+            in_char = True
+            result.append(c)
+            i += 1
+            continue
+        result.append(c)
+        i += 1
+    return "".join(result)
+
+
 def extract_braced_function(source: str, signature: str) -> str:
     start = source.index(signature)
     opening = source.index("{", start)
@@ -108,7 +188,11 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # no lock (echovr.exe 0x140f8df20). The shutdown thread now hands that work to Update()
         # through MainThreadHandoff; its own fallback must skip the registry.
         source = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
-        shutdown = extract_braced_function(source, "void GameServerLib::BeginGracefulShutdown(")
+        # Comment-stripped (#123): a commented-out call site with a decoy real
+        # statement nearby would otherwise still satisfy these regexes — a raw
+        # substring match can't tell "the call is here" from "the call is
+        # described in a comment above the decoy".
+        shutdown = strip_comments(extract_braced_function(source, "void GameServerLib::BeginGracefulShutdown("))
 
         for forbidden in (r"\bUnregister\s*\(\s*\)", r"\bUnregisterAllCallbacks\s*\(",
                           r"\bGetCallbackRegistry\s*\(", r"\bUnregisterFromServerDb\s*\(\s*true"):
@@ -118,18 +202,19 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
                          "subject vanished: the shutdown thread no longer hands off to the game thread")
         self.assertRegex(shutdown, r"ShutdownUnregisterOnGameThread\s*\(")
 
-        off_thread = extract_braced_function(source, "void GameServerLib::ShutdownUnregisterOffGameThread(")
+        off_thread = strip_comments(
+            extract_braced_function(source, "void GameServerLib::ShutdownUnregisterOffGameThread("))
         self.assertRegex(off_thread, r"UnregisterFromServerDb\s*\(\s*false\s*\)")
         for forbidden in (r"\bUnregister\s*\(\s*\)", r"\bUnregisterAllCallbacks\s*\(",
                           r"\bGetCallbackRegistry\s*\(", r"\bUnregisterFromServerDb\s*\(\s*true"):
             self.assertNotRegex(off_thread, forbidden)
 
         # The skip must be real: the registry action is only built when asked for.
-        impl = extract_braced_function(source, "void GameServerLib::UnregisterFromServerDb(")
+        impl = strip_comments(extract_braced_function(source, "void GameServerLib::UnregisterFromServerDb("))
         self.assertRegex(impl, r"if\s*\(\s*touchCallbackRegistry\s*\)\s*unregisterCallbacks\s*=")
 
         # And the game thread must actually service the hand-off, or every shutdown times out.
-        update = extract_braced_function(source, "VOID GameServerLib::Update(")
+        update = strip_comments(extract_braced_function(source, "VOID GameServerLib::Update("))
         self.assertRegex(update, r"m_gameThreadHandoff\.Service\(\)")
 
     def test_broadcaster_callbacks_record_their_owner_before_listening(self):
@@ -139,7 +224,12 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # the owner null every unregister silently skipped the game and only cleared the struct. No
         # C++ test links gameserver.cpp, so the wiring is pinned here.
         source = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
-        register = extract_braced_function(source, "void GameServerLib::RegisterBroadcasterCallbacks(")
+        # Comment-stripped (#123): same reasoning as the #44 sensor above — a
+        # commented-out RecordBroadcasterOwner call with a `owner = nullptr;`
+        # decoy nearby still contains the substring these regexes look for
+        # unless comments are removed first.
+        register = strip_comments(
+            extract_braced_function(source, "void GameServerLib::RegisterBroadcasterCallbacks("))
         record = re.search(r"\bGameServer::RecordBroadcasterOwner\s*\(\s*\*m_context\s*\)", register)
         self.assertIsNotNone(record, "RegisterBroadcasterCallbacks no longer records the callback owner")
         first_listen = re.search(r"\bListenForBroadcasterMessage\s*\(", register)
@@ -149,12 +239,14 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
 
         # Registration, the recorded owner and the unregister guard must all name the same
         # broadcaster (the lobby's), or the guard rejects every handle again.
-        listen = extract_braced_function(source, "uint16_t ListenForBroadcasterMessage(")
+        listen = strip_comments(extract_braced_function(source, "uint16_t ListenForBroadcasterMessage("))
         self.assertRegex(listen, r"BroadcasterListen\(\s*lobby->broadcaster\s*,")
-        unregister = extract_braced_function(source, "void GameServerLib::UnregisterAllCallbacks(")
+        unregister = strip_comments(
+            extract_braced_function(source, "void GameServerLib::UnregisterAllCallbacks("))
         self.assertRegex(unregister, r"liveOwner\s*=\s*lobby\s*!=\s*nullptr\s*\?\s*lobby->broadcaster\s*:")
         helper_source = (ROOT / "src/runtime/server/callback_unregistration.cpp").read_text()
-        helper = extract_braced_function(helper_source, "EchoVR::Broadcaster* RecordBroadcasterOwner(")
+        helper = strip_comments(
+            extract_braced_function(helper_source, "EchoVR::Broadcaster* RecordBroadcasterOwner("))
         self.assertRegex(helper, r"lobby\s*!=\s*nullptr\s*\?\s*lobby->broadcaster\s*:")
         self.assertRegex(helper, r"\.broadcasterOwner\s*=")
 
