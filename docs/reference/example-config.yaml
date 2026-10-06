@@ -16,7 +16,7 @@
 # message), ${VAR:-default} (optional). Write $${ for a literal ${ that is not a
 # variable, e.g. in a plugin's args; nothing after it is looked up. $${ is the
 # only escape: $$ not followed by { stays $$. A literal $ immediately followed by
-# a variable's value is written ${UNSET:-$}${VAR}.
+# a variable's value is written ${NO_SUCH_VAR:-$}${VAR}.
 # ---------------------------------------------------------------------------
 
 # Schema version. Bump when adding new required sections or restructuring
