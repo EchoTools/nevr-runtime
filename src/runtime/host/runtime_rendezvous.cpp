@@ -42,7 +42,10 @@ NevrPreprocessCommandLineFn RuntimeRendezvous::Install(void* target) {
   void* trampoline = nullptr;
   status = MH_CreateHook(target, reinterpret_cast<void*>(&PreprocessCommandLineDetour),
                          &trampoline);
-  if (status != MH_OK || trampoline == nullptr) return nullptr;
+  if (status != MH_OK || trampoline == nullptr) {
+    MH_Uninitialize();
+    return nullptr;
+  }
 
   // Publish the trampoline and the host context BEFORE the jump goes live, so a
   // racing thread that enters the detour during MH_EnableHook can never read a
@@ -58,6 +61,7 @@ NevrPreprocessCommandLineFn RuntimeRendezvous::Install(void* target) {
   status = MH_EnableHook(target);
   if (status != MH_OK) {
     MH_RemoveHook(target);
+    MH_Uninitialize();
     original_ = nullptr;
     return nullptr;
   }
@@ -76,9 +80,11 @@ BOOL CALLBACK RuntimeRendezvous::LoadRuntimeOnce(PINIT_ONCE, PVOID parameter, PV
 
 std::uint64_t RuntimeRendezvous::PreprocessCommandLineDetour(void* game) {
   RuntimeRendezvous* self = g_active_rendezvous;
-  // The detour is only ever live with a published rendezvous and trampoline
-  // (Install publishes both before MH_EnableHook); guard anyway so a defect
-  // degrades to a call through the original rather than a null dereference.
+  // Defensive, unreachable in practice: Install publishes the trampoline before
+  // MH_EnableHook, so the detour is never live with a null original_. If a defect
+  // ever trips these guards there is no original to fall back to, so returning 0
+  // is the only non-dereferencing option. This is NOT the degrade-to-original
+  // path — that is the api == nullptr branch below, which still calls original_.
   if (self == nullptr) return 0;
   if (self->original_ == nullptr) return 0;
 
