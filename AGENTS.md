@@ -235,6 +235,89 @@ You are not the first agent to work here, and you won't be the last. Act like it
 - **Close each commit loop.** Follow the commit identity rules below, verify the commit identity immediately, and run the required post-commit checks before proceeding. If a required check cannot run or fails, stop the sequence, report the exact blocker, and do not start another tranche.
 - **End-of-turn status.** Report the commit hash for completed work and identify any uncommitted changes as belonging only to the active, unfinished tranche. Do not leave completed work uncommitted without an explicit blocker and a clear recovery step.
 
+## Working practices for every agent
+
+These bind every agent that works here, whatever its model or vendor. Another agent's
+worktrees, branches, scratch and PRs are theirs; do not touch them without being told to.
+
+### Ownership and cleanup
+
+- **Keep a ledger.** `~/.local/share/repo-hygiene/nevr-runtime-ledger.md` lists every worktree,
+  branch, scratch file, issue, PR and push to someone else's branch an agent has made, with
+  its owner (your seat name), purpose and removal condition. Add the line in the same turn
+  you create the thing. Read the ledger before deleting anything; an item not in it is not
+  yours.
+- **Worktrees say whose they are.** Create with `git worktree add --no-track -b <agent>-<purpose>
+  .claude/worktrees/<agent>-<purpose> <base>`, then `git worktree lock --reason "<agent> <purpose>,
+  remove when <condition>"` and `git config branch.<branch>.description "<same>"`.
+  `git worktree list` then shows the owner.
+- **Scratch is per agent.** Write only under `/var/tmp/work-nevr-runtime/<agent>/`. Delete what you
+  created when you are done, outright, not into the user's trash. Never delete by pattern across
+  the shared directory.
+- **Remove a worktree only after proving it is redundant.** Its branch tip is merged into
+  `origin/main` by ancestry or `git cherry`, or is on a remote; nothing is unpushed; no process has
+  its cwd inside; each "untracked" warning is real (`git check-ignore` it). Never `--force`.
+  `git worktree remove` refuses a worktree whose submodules are initialised: deinit them and
+  check their local branches have no commits beyond upstream before removing the metadata.
+- **Disk is a shared resource.** A worktree build is about 7.5 GB. Check `df -h /` before starting
+  one, keep one build tree per agent, and remove it when its PR merges. A full volume takes
+  every seat down.
+
+### Git
+
+- **Branches are cut with `--no-track` and pushed by explicit refspec:**
+  `git push origin <local>:refs/heads/<remote>`. A branch cut from `origin/main` tracks `main`, and with
+  `push.default tracking` a plain push lands on `main`. Read the `->` line of every push, and after
+  pushing a new branch confirm `git ls-remote origin main` did not move.
+- **Do not rewrite pushed history.** No rebase, amend, squash or force-push on a branch that has
+  been pushed or has a PR, and never on someone else's commits or signatures. Bring a branch up
+  to date with `git merge origin/main`.
+- **PRs target `main`.** Do not open a PR based on another feature branch. If the next unit needs
+  the previous one, wait for it to merge.
+- **Report a mistake the moment you see it,** with the command and its output.
+
+### Review, verification and merge
+
+- **Every PR gets a review by an agent that did not write it.** The reviewer reads the diff and the
+  surrounding code, reproduces what the PR claims, and reports findings with `file:line` and quoted
+  evidence. Merge only when the review is clean, or when each finding is fixed and re-verified on
+  the new tip.
+- **A test must fail without the change.** For every test you add or change, revert or mutate the
+  source, run it, paste the failing output, restore the source and show it passing. A test that
+  passes with the fix removed is not a test.
+- **There is no CI on PRs, so the author's evidence is the evidence.** The PR body states each command
+  run on the exact tip and its result, what was not run, and the tracking issue. Update it whenever
+  the base or the content changes; a stale claim is a defect. Run `just verify` green on the tip
+  before merging, and the client login test for any change to runtime code.
+- **Fresh worktrees need build inputs.** Copy `extern/{minhook,breakpad,lss}` (without their `.git`
+  files), `gen/` and `.env` from the main checkout, read-only; never print `.env`. Production
+  endpoints are embedded at configure time from `.env` or the environment, so a client build
+  without them cannot log in; configure with `-DNEVR_REQUIRE_BUILTIN_DEFAULTS=ON` to make a
+  missing value fail the configure.
+- **Client login test mechanics.** `launch-client.sh` keeps the game running until it is stopped.
+  Start it in the background, read the run's own JSONL log for `built-in defaults embedded`,
+  `LOGIN SUCCESS` and `to logged in`, then stop your own `echovr.exe` so the script restores the
+  original DLL, and confirm the restore.
+
+### Documentation, plans and findings
+
+- **Docs state the current tree.** No "removed", "previously", "approved by", commit shas or dated
+  narrative in markdown or comments. Design lives in `docs/adr/`, tests, code comments, or a
+  GitHub issue; a plan is a tracking issue plus ADRs. Unimplemented design stays only with the
+  owner's approval. Cite files and symbols, not line ranges. Before deleting a doc, move its
+  load-bearing facts to where they belong and say where.
+- **Fix it or file it, in the same turn.** A defect you find that you do not fix gets a GitHub issue
+  with evidence. Do not leave it in prose for the next reader to rediscover.
+
+### Dispatching agents
+
+- **Pick the model by the work.** Sonnet for specified implementation and verification; Opus for
+  reviews and open design questions; a small model for search and mechanical edits.
+- **Brief them with the rules above.** Name their worktree, scratch directory and push refspec,
+  forbid rebase, force-push, merging and pushing to `main`, require mutation proof for tests, and
+  ask for commands run with raw output and a list of what was not verified.
+- **Subagents report observations, not verdicts.** Check what they claim before relying on it.
+
 ## Production Deployment — FORBIDDEN without explicit user approval
 
 **No deployment to production servers may be taken without Andrew's explicit, per-instance approval in the current conversation.** This applies to this project and any other project's infrastructure.
@@ -324,8 +407,9 @@ the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), wh
 - **Mandatory pre-read gate.** Before any C++/build work, read the project's
   CPP-MINGW-ADDENDUM in full — its Hard-Stops bind every build/config change.
 - **Scratch dir.** All agent scratch/staging/evidence files live under
-  `/var/tmp/work-nevr-runtime/`, never `/tmp` (RAM-backed on this host) and never
-  in the repo. (Basis: RULINGS.md 2026-07-20 "Scratch dir (nevr)".)
+  `/var/tmp/work-nevr-runtime/<agent>/` (your own subdirectory; see "Working practices"),
+  never `/tmp` (RAM-backed on this host) and never in the repo. (Basis: RULINGS.md
+  2026-07-20 "Scratch dir (nevr)".)
 - **Verify entry point.** `just verify` is the single closed-loop gate:
   `just build`, then a second real `cmake --build` (because `just build` greps its
   own output and always exits 0), then `test-auth-unit` under Wine, then ~35
