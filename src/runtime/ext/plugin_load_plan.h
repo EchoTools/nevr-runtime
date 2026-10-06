@@ -57,7 +57,8 @@ inline long DuplicatePluginEntry(const std::vector<PluginLoadItem>& plan, size_t
     }
     return true;
   };
-  for (size_t j = 0; j < i && j < plan.size(); ++j) {
+  if (i >= plan.size()) return -1;
+  for (size_t j = 0; j < i; ++j) {
     if (plan[j].enabled && same(plan[j].file, plan[i].file)) return static_cast<long>(j);
   }
   return -1;

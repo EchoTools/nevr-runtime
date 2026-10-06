@@ -177,6 +177,16 @@ plugins:
   EXPECT_EQ(DuplicatePluginEntry(plan, 1), -1);
 }
 
+TEST(PluginLoadPlan, DuplicateLookupOutOfRangeIndexFindsNothing) {
+  const std::vector<PluginLoadItem> plan = {
+      {"a", "stats.dll", false, "", "{}"},
+      {"b", "stats.dll", false, "", "{}"},
+  };
+  EXPECT_EQ(DuplicatePluginEntry(plan, plan.size()), -1);
+  EXPECT_EQ(DuplicatePluginEntry(plan, plan.size() + 3), -1);
+  EXPECT_EQ(DuplicatePluginEntry({}, 0), -1);
+}
+
 TEST(PluginLoadPlan, ArgsToJsonEmptyMapIsEmptyObject) {
   EXPECT_EQ(ArgsToJson({}), "{}");
 }

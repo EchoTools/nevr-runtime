@@ -332,22 +332,18 @@ TEST_F(PluginLoaderDiagnosticTest, ExplicitUnloadInvokesShutdownAndReleasesPlugi
   CloseHandle(shutdownObserved);
 }
 
-// The same DLL listed twice is loaded once: one init, and each OnFrame reaches it
-// once. Before, LoadLibrary handed back the loaded module for the repeat, its init
-// ran again, and it was staged twice, so every tick called it twice.
-TEST_F(PluginLoaderDiagnosticTest, PluginListedTwiceLoadsOnce) {
-  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
-  g_testPluginLoadPlan.push_back({"onframe-again", "TEST_PLUGIN_ONFRAME.DLL", false, "", "{}"});
-
-  LoadPlugins();
-
-  ASSERT_EQ(GetLoadedPluginCount(), 1);
-  EXPECT_TRUE(TestLogContains("SKIPPED onframe-again (TEST_PLUGIN_ONFRAME.DLL)"));
+// The number of times the loaded fixture's init ran, read through its test-only
+// export. -1 when the fixture is not loaded.
+static long OnFrameFixtureInitCount() {
   const HMODULE plugin = GetModuleHandleA("test_plugin_onframe.dll");
-  ASSERT_NE(plugin, nullptr);
-  const auto getFrameCount = reinterpret_cast<uint32_t (*)(void)>(
-      GetProcAddress(plugin, "NvrTestPluginGetFrameCount"));
-  ASSERT_NE(getFrameCount, nullptr);
+  if (plugin == nullptr) return -1;
+  const auto getInitCount = reinterpret_cast<uint32_t (*)(void)>(
+      GetProcAddress(plugin, "NvrTestPluginGetInitCount"));
+  if (getInitCount == nullptr) return -1;
+  return static_cast<long>(getInitCount());
+}
+
+static void TickLoadedPluginsOnce() {
   NvrGameContext ctx = {};
   ctx.base_addr = reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress);
   ctx.flags = NEVR_HOST_IS_SERVER;
@@ -355,12 +351,113 @@ TEST_F(PluginLoaderDiagnosticTest, PluginListedTwiceLoadsOnce) {
   ctx.get_plugin_count = GetLoadedPluginCount;
   ctx.get_plugin_info = GetLoadedPluginInfo;
   TickPlugins(&ctx);
-  EXPECT_EQ(getFrameCount(), 1u);
+}
+
+static uint32_t OnFrameFixtureFrameCount() {
+  const HMODULE plugin = GetModuleHandleA("test_plugin_onframe.dll");
+  if (plugin == nullptr) return 0xFFFFFFFFu;
+  const auto getFrameCount = reinterpret_cast<uint32_t (*)(void)>(
+      GetProcAddress(plugin, "NvrTestPluginGetFrameCount"));
+  return getFrameCount != nullptr ? getFrameCount() : 0xFFFFFFFFu;
+}
+
+// The same DLL listed twice is loaded once: one init, and each OnFrame reaches it
+// once. Before, LoadLibrary handed back the loaded module for the repeat, its init
+// ran again, and it was staged twice, so every tick called it twice.
+TEST_F(PluginLoaderDiagnosticTest, PluginListedTwiceLoadsOnce) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"onframe-again", "TEST_PLUGIN_ONFRAME.DLL", false, "",
+                                  R"({"other":"args"})"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("SKIPPED onframe-again (TEST_PLUGIN_ONFRAME.DLL)"));
+  EXPECT_TRUE(TestLogContains("args were ignored"));
+  EXPECT_EQ(OnFrameFixtureInitCount(), 1);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(OnFrameFixtureFrameCount(), 1u);
 
   const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
   ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
   EXPECT_EQ(manifest[1].at("loaded"), false);
   EXPECT_EQ(manifest[1].at("error"), "listed twice in config.yaml");
+}
+
+// The same DLL under another spelling of its path passes the file-name check, so
+// the loader's same-module check is what stops it.
+TEST_F(PluginLoaderDiagnosticTest, PluginListedUnderAnotherPathSpellingLoadsOnce) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"onframe-dotted", ".\\test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("SKIPPED onframe-dotted"));
+  EXPECT_TRUE(TestLogContains("the same module as onframe"));
+  EXPECT_TRUE(TestLogContains("args were ignored"));
+  EXPECT_EQ(OnFrameFixtureInitCount(), 1);
+  TickLoadedPluginsOnce();
+  EXPECT_EQ(OnFrameFixtureFrameCount(), 1u);
+
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+  EXPECT_EQ(manifest[1].at("loaded"), false);
+  EXPECT_EQ(manifest[1].at("error"), "the same module as onframe");
+}
+
+// A required repeat of an optional entry that failed to load: the plugin the
+// config declared required is missing, so that is fatal, not a skipped duplicate.
+TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfFailedOptionalEntryIsFatal) {
+  g_serverFatalCalls = 0;
+  g_testPluginLoadPlan.push_back({"gone", "plugin_that_does_not_exist.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"gone-again", "plugin_that_does_not_exist.dll", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(g_serverFatalCalls, 1);
+  EXPECT_NE(g_lastServerFatal.find("gone"), std::string::npos) << g_lastServerFatal;
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+  EXPECT_EQ(manifest[0].at("required"), true);
+}
+
+// The same, for a plugin that loads but whose init fails: the failure surfaces
+// later (pass 2), and must still be fatal because a repeat required it.
+TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfInitFailingOptionalEntryIsFatal) {
+  g_serverFatalCalls = 0;
+  g_testPluginLoadPlan.push_back({"flaky", "test_plugin_init_fail.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"flaky-again", "TEST_PLUGIN_INIT_FAIL.DLL", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(g_serverFatalCalls, 1);
+  EXPECT_NE(g_lastServerFatal.find("flaky"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+}
+
+// Same, when the repeat is only caught by the same-module check.
+TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatUnderAnotherSpellingOfInitFailingEntryIsFatal) {
+  g_serverFatalCalls = 0;
+  g_testPluginLoadPlan.push_back({"flaky", "test_plugin_init_fail.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"flaky-dotted", ".\\test_plugin_init_fail.dll", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(g_serverFatalCalls, 1);
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+}
+
+// Control: an optional repeat of an optional entry stays non-fatal.
+TEST_F(PluginLoaderDiagnosticTest, OptionalRepeatOfInitFailingOptionalEntryIsNotFatal) {
+  g_serverFatalCalls = 0;
+  g_testPluginLoadPlan.push_back({"flaky", "test_plugin_init_fail.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"flaky-again", "test_plugin_init_fail.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(g_serverFatalCalls, 0);
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
 }
 
 // #60: the login reports every configured plugin — the one that loaded, the one

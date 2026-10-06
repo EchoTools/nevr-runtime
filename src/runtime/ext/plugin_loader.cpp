@@ -105,7 +105,7 @@ void LoadPlugins() {
   // config names it. This is a deliberate hardening over the old "load every
   // *.dll found" discovery, whose failure mode was N89: a stale DLL silently
   // taking over for an entire run because it happened to sit in the directory.
-  const std::vector<PluginLoadItem> plan = NevrCfgPluginLoadPlan();
+  std::vector<PluginLoadItem> plan = NevrCfgPluginLoadPlan();
   if (plan.empty()) {
     PublishPluginReport({});
     Log(EchoVR::LogLevel::Info,
@@ -163,6 +163,26 @@ void LoadPlugins() {
   };
   std::vector<StagedPlugin> staged;
 
+  // A repeat of an entry is skipped (see below), but if the repeat is `required`
+  // the plugin it names must still be fatal to lose: the requirement moves onto the
+  // entry that is actually loaded. When that entry already failed non-fatally
+  // (it was optional then), the failure is raised now, as fatal. Returns true when
+  // the requirement was carried over.
+  auto carryRequired = [&](size_t firstIndex, const PluginLoadItem& repeat) -> bool {
+    if (!repeat.required || plan[firstIndex].required) return false;
+    plan[firstIndex].required = true;
+    report[firstIndex].required = true;
+    for (StagedPlugin& s : staged) {
+      if (s.planIndex == firstIndex) s.item.required = true;
+    }
+    const PluginManifestEntry& first = report[firstIndex];
+    if (!first.loaded && !first.error.empty()) {
+      const std::string reason = first.error;
+      FailPluginLoad(plan[firstIndex], reason, report[firstIndex]);
+    }
+    return true;
+  };
+
   // Caps-priority sort predicate: lower `priority` loads first. Within a
   // single priority band the stable_sort preserves the config.yaml order.
   auto capsOrder = [](const StagedPlugin& a, const StagedPlugin& b) -> bool {
@@ -209,15 +229,23 @@ void LoadPlugins() {
 
     // The same file listed twice: LoadLibrary would return the module already
     // loaded, and its init would run again with every callback doubled. Refused
-    // even if this entry is marked required: the plugin itself is loaded.
+    // even if this entry is marked required: the plugin itself is loaded, and the
+    // requirement is carried onto the earlier entry.
     {
       const long first = DuplicatePluginEntry(plan, planIndex);
       if (first >= 0) {
+        const bool carried = carryRequired(static_cast<size_t>(first), item);
+        const std::string carriedNote = carried
+            ? " This entry is required, so entry " + std::to_string(first + 1) +
+                  " is now required too."
+            : std::string();
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PLUGIN] SKIPPED %s (%s) — the same file as entry %ld (%s), listed earlier "
             "in config.yaml. Loading it again would run its init twice and double every "
-            "callback. Remove one of the entries.",
-            item.name.c_str(), filename, first + 1, plan[first].name.c_str());
+            "callback. This entry's args were ignored; entry %ld's args apply.%s "
+            "Remove one of the entries.",
+            item.name.c_str(), filename, first + 1, plan[first].name.c_str(), first + 1,
+            carriedNote.c_str());
         itemReport.error = "listed twice in config.yaml";
         continue;
       }
@@ -254,16 +282,22 @@ void LoadPlugins() {
     // The backstop for what the file-name check can't see: another spelling of the
     // same path. LoadLibrary counted a reference for this call; give it back.
     {
-      const StagedPlugin* already = nullptr;
-      for (const StagedPlugin& s : staged) {
+      StagedPlugin* already = nullptr;
+      for (StagedPlugin& s : staged) {
         if (s.hModule == hPlugin) { already = &s; break; }
       }
       if (already) {
         FreeLibrary(hPlugin);
+        const bool carried = carryRequired(already->planIndex, item);
+        const std::string carriedNote = carried
+            ? " This entry is required, so " + already->item.name + " is now required too."
+            : std::string();
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PLUGIN] SKIPPED %s (%s) — the same module as %s (%s), already loaded. "
+            "This entry's args were ignored; %s's args apply.%s "
             "Remove one of the entries from config.yaml.",
-            item.name.c_str(), filename, already->item.name.c_str(), already->item.file.c_str());
+            item.name.c_str(), filename, already->item.name.c_str(), already->item.file.c_str(),
+            already->item.name.c_str(), carriedNote.c_str());
         itemReport.error = "the same module as " + already->item.name;
         continue;
       }
