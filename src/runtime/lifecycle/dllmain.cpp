@@ -126,6 +126,14 @@ extern "C" __declspec(dllexport) void NEVR_SetGameModule(HMODULE hGame) {
   // the stable game-image-guard code on an unsupported module), then drive the
   // same rendezvous install the direct-import DllMain uses.
   GameImageGuard::RequireSupportedGameModule(hGame);
+  // Idempotent: a second call (launcher retry, or a mixed direct-import +
+  // launcher setup) must not re-run the prologue check — once installed, the
+  // target holds MinHook's JMP, so PrologueMatches would falsely report a
+  // prologue_mismatch and a spurious attach-failure diagnostic.
+  if (g_rendezvous.Installed()) {
+    FlushDeferredAttachDiagnostic();
+    return;
+  }
   g_rendezvous.Prepare(g_shim_module, hGame, g_diagnostics);
   void* target = reinterpret_cast<unsigned char*>(hGame) + NevrHost::kPreprocessRva;
   if (!NevrHost::RuntimeRendezvous::PrologueMatches(target)) {

@@ -3,6 +3,7 @@
 #include "extension/module_interface.h"  // NvrModuleContext (module entry-point signature)
 
 #include <cstdint>
+#include <cstring>
 
 namespace NevrHost {
 namespace {
@@ -20,10 +21,16 @@ FARPROC ResolveRuntimeExport(const char* name) {
 
 }  // namespace NevrHost
 
-// Layout must match struct NevRUPnPConfig in src/runtime/hook/patching.h:57.
-// The host only passes the pointer through to the runtime; the forward
-// declaration keeps the host from pulling patching.h's heavier includes.
-struct NevRUPnPConfig;
+// Mirror of struct NevRUPnPConfig in src/runtime/hook/patching.h:57. The host
+// keeps only the layout here (to zero an absent runtime's result) rather than
+// pull patching.h's heavier hook/logging includes. Keep this layout in sync
+// with patching.h:57.
+struct NevRUPnPConfig {
+  BOOL   enabled;
+  UINT16 port;
+  CHAR   internalIp[46];
+  CHAR   externalIp[46];
+};
 
 // --- NEVR cross-DLL exports (in exports.def; runtime-owned) -------------------
 // Null-safe: each resolves the runtime's implementation and no-ops when nevr.dll
@@ -36,9 +43,14 @@ extern "C" void NEVR_ScheduleReturnToLobby() {
 }
 
 extern "C" void NEVR_GetUPnPConfig(NevRUPnPConfig* out) {
+  if (out == nullptr) return;
   const auto fn = reinterpret_cast<void (*)(NevRUPnPConfig*)>(
       NevrHost::ResolveRuntimeExport("NEVR_GetUPnPConfig"));
-  if (fn != nullptr) fn(out);
+  if (fn != nullptr) {
+    fn(out);
+  } else {
+    std::memset(out, 0, sizeof(*out));  // degraded run: deterministic zeroed config
+  }
 }
 
 extern "C" void NEVR_RegisterResourceOverride(std::uint64_t type_hash, std::uint64_t name_hash,

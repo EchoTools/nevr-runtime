@@ -30,7 +30,7 @@ Keep `BugSplat64.dll` as the stable filename and compatibility/bootstrap layer E
 
 - Move current `PATCHES_SOURCES` and runtime-specific dependencies, including networking, game/server hooks, auth, plugins, telemetry, and detailed crash-recovery instrumentation, into a DLL with a no-op `DllMain`.
 - Expose one versioned C entry point returning an API descriptor (`abi_major`, `abi_minor`, `struct_size`, and function pointers). The host validates the major version, minimum descriptor size and required entries before calling anything. Do not pass C++ classes, STL, exceptions, or allocator-owned objects across this boundary.
-- Keep the module loaded for process lifetime while its hooks/callbacks may execute. Do not `FreeLibrary` a live runtime or call thread-joining shutdown paths from process detach.
+- Keep the module loaded for process lifetime while its hooks/callbacks may execute. Do not `FreeLibrary` a live runtime or call thread-joining shutdown paths from process detach. In practice no teardown runs at all: the game exits via `TerminateProcess`, so no DLL detach fires and neither module is freed — the monolith's old shutdown paths (plugins, modules, asset/websocket/broadcaster/log-filter) become dead code, not a runtime-owned responsibility.
 - Load only the sibling file resolved from the recorded `BugSplat64.dll` module path, using `LoadLibraryExW` with DLL-load-directory and System32 search flags. Record the full path, Win32 error, expected/actual ABI version, and degraded action in a host-owned diagnostic record.
 
 ### Early bootstrap without doing the full runtime under the loader lock
