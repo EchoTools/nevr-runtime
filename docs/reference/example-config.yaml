@@ -14,7 +14,9 @@
 #
 # Every value is interpolated: ${VAR} (required), ${VAR:?msg} (required, with a
 # message), ${VAR:-default} (optional). Write $${ for a literal ${ that is not a
-# variable, e.g. in a plugin's args.
+# variable, e.g. in a plugin's args; nothing after it is looked up. Only the
+# three-character sequence $${ is special: $$ not followed by { stays $$, and a
+# literal $ immediately followed by a variable's value cannot be written.
 # ---------------------------------------------------------------------------
 
 # Schema version. Bump when adding new required sections or restructuring

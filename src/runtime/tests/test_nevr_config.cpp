@@ -248,6 +248,38 @@ TEST(NevrConfig, EscapedDollarBraceBesideVariable) {
   UnsetEnv("NEVR_TEST_REAL");
 }
 
+// Only the `$${` triple is special. In `$$${X}` the first `$` is plain and the
+// following `$${` yields `${`, so the output is `$${X}` and X is never looked up.
+TEST(NevrConfig, TripleDollarBraceYieldsDoubleDollarLiteral) {
+  UnsetEnv("NEVR_TEST_TRIPLE");
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"$$${NEVR_TEST_TRIPLE}\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "$${NEVR_TEST_TRIPLE}");
+}
+
+// An unterminated `$${X` is still an escape: `${X`, no throw.
+TEST(NevrConfig, EscapedUnterminatedDollarBraceIsLiteral) {
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"$${X\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "${X");
+}
+
+// The escape also covers the required-with-message syntax: no lookup, no throw.
+TEST(NevrConfig, EscapedRequiredSyntaxIsLiteralAndDoesNotThrow) {
+  UnsetEnv("NEVR_TEST_ESC_REQ");
+  nevr::NevrConfig cfg;
+  EXPECT_NO_THROW(cfg = nevr::NevrConfig::LoadFromString(
+                      "services:\n  serverdb: \"$${NEVR_TEST_ESC_REQ:?msg}\"\n"));
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "${NEVR_TEST_ESC_REQ:?msg}");
+}
+
+// `$$` not followed by `{` is two literal dollars (unlike docker-compose).
+TEST(NevrConfig, DoubleDollarWithoutBraceIsUnchanged) {
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"$$plain\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "$$plain");
+}
+
 TEST(NevrConfig, DefaultInterpolationWhenUnset) {
   UnsetEnv("NEVR_TEST_OPT");
   const nevr::NevrConfig cfg =
