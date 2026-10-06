@@ -101,6 +101,37 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
             "EchoVR::JsonValueAsString",
         })
 
+    def test_shutdown_thread_never_touches_the_callback_registry(self):
+        # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches
+        # UnregisterAllCallbacks -> GetCallbackRegistry() and EchoVR::BroadcasterUnlisten. The
+        # registry is documented game-thread-only (server_context.h) and BroadcasterUnlisten takes
+        # no lock (echovr.exe 0x140f8df20). The shutdown thread now hands that work to Update()
+        # through MainThreadHandoff; its own fallback must skip the registry.
+        source = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
+        shutdown = extract_braced_function(source, "void GameServerLib::BeginGracefulShutdown(")
+
+        for forbidden in (r"\bUnregister\s*\(\s*\)", r"\bUnregisterAllCallbacks\s*\(",
+                          r"\bGetCallbackRegistry\s*\(", r"\bUnregisterFromServerDb\s*\(\s*true"):
+            self.assertNotRegex(shutdown, forbidden,
+                                "the shutdown thread reaches the game-thread-only callback registry")
+        self.assertRegex(shutdown, r"m_gameThreadHandoff\.RunOnServicingThread\(",
+                         "subject vanished: the shutdown thread no longer hands off to the game thread")
+        self.assertRegex(shutdown, r"ShutdownUnregisterOnGameThread\s*\(")
+
+        off_thread = extract_braced_function(source, "void GameServerLib::ShutdownUnregisterOffGameThread(")
+        self.assertRegex(off_thread, r"UnregisterFromServerDb\s*\(\s*false\s*\)")
+        for forbidden in (r"\bUnregister\s*\(\s*\)", r"\bUnregisterAllCallbacks\s*\(",
+                          r"\bGetCallbackRegistry\s*\(", r"\bUnregisterFromServerDb\s*\(\s*true"):
+            self.assertNotRegex(off_thread, forbidden)
+
+        # The skip must be real: the registry action is only built when asked for.
+        impl = extract_braced_function(source, "void GameServerLib::UnregisterFromServerDb(")
+        self.assertRegex(impl, r"if\s*\(\s*touchCallbackRegistry\s*\)\s*unregisterCallbacks\s*=")
+
+        # And the game thread must actually service the hand-off, or every shutdown times out.
+        update = extract_braced_function(source, "VOID GameServerLib::Update(")
+        self.assertRegex(update, r"m_gameThreadHandoff\.Service\(\)")
+
     def test_bridge_never_closes_a_remote_on_unrequire(self):
         # d0190c4/dd1e9e7 (2026-09-14) closed the remote websocket whenever STcpConnectionUnrequireEvent
         # arrived in server mode, as an experiment (refuted in 79e27d5). Nakama sends that event on
