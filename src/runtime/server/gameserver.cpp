@@ -1307,7 +1307,11 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
 // Authenticate the server with Nakama using the operator's discord_id + password.
 // Returns a session access JWT, or empty string on failure.
 //
-// Uses the non-interactive password RPC (docs/guides/token-auth-migration.md F1):
+// Uses the non-interactive password RPC (F1 in
+// 29ce275710ad4c779d118eafc638fef613343e28:docs/guides/token-auth-migration.md,
+// deleted by 1d75593 — only its As-built section survives in
+// docs/design/2026-06-29-serverdb-token-auth.md; F1 itself only exists at
+// that historical sha):
 //   POST {nevr_http_uri}/v2/rpc/account/authenticate/password?http_key=<key>&unwrap
 //   body {"discord_id","password"} -> {"token","refresh_token"}
 // (nakama server/evr_runtime_rpc.go:1137 AuthenticatePasswordRPC, RequireAuth:false;
