@@ -35,10 +35,41 @@ static size_t CurlWriteCb(void* p, size_t sz, size_t n, void* ud) {
   return total;
 }
 
+static std::wstring Utf8ToWide(const std::string& s) {
+  if (s.empty()) return {};
+  int len = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+  if (len <= 0) return {};
+  std::wstring ws(static_cast<size_t>(len), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), &ws[0], len);
+  return ws;
+}
+
+// GH #27: libcurl has no CURLINFO for the reason phrase, but it hands every
+// status line to the header callback. RFC 9112 §4:
+//   status-line = HTTP-version SP status-code SP [ reason-phrase ]
+// Returns true and stores the reason phrase (possibly empty) when `line` is a
+// status line; returns false for header lines and the blank terminator.
+static bool ParseStatusLineReason(std::string line, std::string* reason) {
+  if (line.compare(0, 5, "HTTP/") != 0) return false;
+  while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' ')) line.pop_back();
+  size_t codeStart = line.find(' ');
+  size_t reasonSep = (codeStart == std::string::npos) ? std::string::npos : line.find(' ', codeStart + 1);
+  *reason = (reasonSep == std::string::npos) ? std::string() : line.substr(reasonSep + 1);
+  return true;
+}
+
 static size_t CurlHeaderCb(char* buf, size_t sz, size_t n, void* ud) {
   size_t total = sz * n;
-  auto* hdrs = static_cast<std::map<std::wstring, std::wstring>*>(ud);
+  auto* self = static_cast<WinHttpRequestStub*>(ud);
+  auto* hdrs = &self->m_responseHeaders;
   std::string line(buf, total);
+  // Redirect hops and 1xx interim responses each deliver a status line; the
+  // last one is the final response's, matching CURLINFO_RESPONSE_CODE.
+  std::string reason;
+  if (ParseStatusLineReason(line, &reason)) {
+    self->m_statusText = Utf8ToWide(reason);
+    return total;
+  }
   size_t colon = line.find(':');
   if (colon != std::string::npos) {
     std::string key = line.substr(0, colon);
@@ -214,9 +245,13 @@ static HRESULT STDMETHODCALLTYPE Stub_Invoke(void* pThis, DISPID dispIdMember, R
         if (pVarResult) { pVarResult->vt = VT_I4; pVarResult->lVal = status; }
         return S_OK;
       }
-      case kDispId_StatusText:
-        if (pVarResult) { pVarResult->vt = VT_BSTR; pVarResult->bstrVal = SysAllocString(L"OK"); }
+      case kDispId_StatusText: {
+        // Paired with kDispId_Status above, which reports a synthesized 200
+        // when no status exists: the text must agree with the code it reports.
+        const wchar_t* text = (self->m_statusCode == 0) ? L"OK" : self->m_statusText.c_str();
+        if (pVarResult) { pVarResult->vt = VT_BSTR; pVarResult->bstrVal = SysAllocString(text); }
         return S_OK;
+      }
       case kDispId_ResponseText: {
         BSTR body = nullptr;
         Stub_get_ResponseText(pThis, &body);
@@ -292,6 +327,7 @@ static HRESULT STDMETHODCALLTYPE Stub_Invoke(void* pThis, DISPID dispIdMember, R
       Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
       self->m_sent = true;
       self->m_statusCode = 200;
+      self->m_statusText = L"OK";  // synthesized response: no status line exists
       return S_OK;
     }
     break;
@@ -347,6 +383,7 @@ static HRESULT STDMETHODCALLTYPE Stub_Open(void* pThis, BSTR Method, BSTR Url, V
   self->m_responseBody.clear();
   self->m_responseHeaders.clear();
   self->m_statusCode = 0;
+  self->m_statusText.clear();
   const std::string method = Method ? WideToUtf8(Method) : "(null)";
   const std::string url = Url ? WideToUtf8(Url) : "";
   const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.HTTP] Open " + method + " ", url);
@@ -426,10 +463,12 @@ static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
 
   self->m_responseBody.clear();
   self->m_responseHeaders.clear();
+  self->m_statusCode = 0;
+  self->m_statusText.clear();
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCb);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &self->m_responseBody);
   curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, CurlHeaderCb);
-  curl_easy_setopt(curl, CURLOPT_HEADERDATA, &self->m_responseHeaders);
+  curl_easy_setopt(curl, CURLOPT_HEADERDATA, self);
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
 #ifdef NEVR_INSECURE_SKIP_TLS_VERIFY
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
@@ -445,6 +484,9 @@ static HRESULT STDMETHODCALLTYPE Stub_Send(void* pThis, VARIANT) {
         "[NEVR.HTTP] curl failed: url=", url,
         " curl_code=" + std::to_string(static_cast<int>(res)));
     Log(EchoVR::LogLevel::Warning, "%s", failure.c_str());
+    // A status line may have arrived before the transfer failed; with no
+    // status code to pair it with, report none.
+    self->m_statusText.clear();
     curl_easy_cleanup(curl);
     return E_FAIL;
   }
@@ -465,9 +507,13 @@ static HRESULT STDMETHODCALLTYPE Stub_get_Status(void* pThis, long* Status) {
   return S_OK;
 }
 
-static HRESULT STDMETHODCALLTYPE Stub_get_StatusText(void*, BSTR* S) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] get_StatusText called");
-  if (S) *S = SysAllocString(L"OK");
+static HRESULT STDMETHODCALLTYPE Stub_get_StatusText(void* pThis, BSTR* S) {
+  auto* self = SELF(pThis);
+  // Status code and length only: the reason phrase is server-supplied text,
+  // and server-supplied reasons stay out of the log (test_secret_safe_diagnostics).
+  Log(EchoVR::LogLevel::Debug, "[NEVR.HTTP] get_StatusText called (status=%ld text_chars=%zu)",
+      self->m_statusCode, self->m_statusText.size());
+  if (S) *S = SysAllocString(self->m_statusText.c_str());
   return S_OK;
 }
 

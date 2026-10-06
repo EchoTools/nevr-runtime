@@ -43,14 +43,6 @@ void SessionState::Reset() {
 void ServerContext::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broadcaster) {
   std::unique_lock lock(m_stateMutex);
 
-  if (lobby && lobby->entrantData.items) {
-    m_cachedEntrants.clear();
-    m_cachedEntrants.reserve(lobby->entrantData.count);
-    for (uint64_t i = 0; i < lobby->entrantData.count; ++i) {
-      m_cachedEntrants.push_back(lobby->entrantData.items[i]);
-    }
-  }
-
   m_lobby = lobby;
   m_broadcaster = broadcaster;
 
@@ -75,7 +67,6 @@ void ServerContext::Terminate() {
   m_state = ServerState::Terminated;
   m_lobby = nullptr;
   m_broadcaster = nullptr;
-  m_cachedEntrants.clear();
   m_serverDbPeer = EchoVR::TcpPeer_InvalidPeer;
 
   {
@@ -179,28 +170,39 @@ EchoVR::TcpBroadcasterData* ServerContext::GetTcpBroadcaster() const {
   return nullptr;
 }
 
+// Entrants are read from the lobby's live array on every call (issue #38). The
+// game hands us the lobby in IServerLib::Initialize, from CNSLobby
+// LoadServerSupport (0x14060bb70) during boot, before anyone has joined, so a
+// copy taken there stays empty. CNSLobby::Update (0x140617890) calls
+// IServerLib::Update first (0x1406178c3) and then mutates [lobby+0x360] itself,
+// on the same thread, so a read made inside one of our callbacks sees a
+// consistent array.
 EchoVR::Lobby::EntrantData* ServerContext::GetEntrant(uint32_t index) const {
   std::shared_lock lock(m_stateMutex);
 
-  if (m_state == ServerState::Uninitialized || m_state == ServerState::Terminated) {
+  if (m_state == ServerState::Uninitialized || m_state == ServerState::Terminated || !m_lobby) {
     return nullptr;
   }
 
-  if (index >= m_cachedEntrants.size()) {
+  const auto& entrants = m_lobby->entrantData;
+  if (!entrants.items || index >= entrants.count) {
     return nullptr;
   }
 
-  return const_cast<EchoVR::Lobby::EntrantData*>(&m_cachedEntrants[index]);
+  return &entrants.items[index];
 }
 
 uint64_t ServerContext::GetEntrantCount() const {
   std::shared_lock lock(m_stateMutex);
 
-  if (m_state == ServerState::Uninitialized || m_state == ServerState::Terminated) {
+  if (m_state == ServerState::Uninitialized || m_state == ServerState::Terminated || !m_lobby) {
     return 0;
   }
 
-  return m_cachedEntrants.size();
+  // Never report a count we could not index (echovr-reconstruction
+  // CNSLobby.cpp:473 frees the array and zeroes items and count together).
+  const auto& entrants = m_lobby->entrantData;
+  return entrants.items ? entrants.count : 0;
 }
 
 void ServerContext::SetServerDbPeer(const EchoVR::TcpPeer& peer) {
