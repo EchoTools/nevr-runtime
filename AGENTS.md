@@ -250,7 +250,6 @@ worktrees, branches, scratch and PRs are theirs; do not touch them without being
 - **Worktrees say whose they are.** Create with `git worktree add --no-track -b <agent>-<purpose>
   .claude/worktrees/<agent>-<purpose> <base>`, then `git worktree lock --reason "<agent> <purpose>,
   remove when <condition>"` and `git config branch.<branch>.description "<same>"`.
-  `git worktree list` then shows the owner.
 - **Scratch is per agent.** Write only under `/var/tmp/work-nevr-runtime/<agent>/`. Delete what you
   created when you are done, outright, not into the user's trash. Never delete by pattern across
   the shared directory.
@@ -259,15 +258,13 @@ worktrees, branches, scratch and PRs are theirs; do not touch them without being
   its cwd inside; each "untracked" warning is real (`git check-ignore` it). Never `--force`.
   `git worktree remove` refuses a worktree whose submodules are initialised: deinit them and
   check their local branches have no commits beyond upstream before removing the metadata.
-- **Disk is a shared resource.** A worktree build is about 7.5 GB. Check `df -h /` before starting
-  one, keep one build tree per agent, and remove it when its PR merges. A full volume takes
-  every seat down.
+- **Disk.** A worktree build is about 7.5 GB. Check `df -h /` before starting one, keep one build
+  tree per agent, and remove it when its PR merges.
 
 ### Git
 
 - **Branches are cut with `--no-track` and pushed by explicit refspec:**
-  `git push origin <local>:refs/heads/<remote>`. A branch cut from `origin/main` tracks `main`, and with
-  `push.default tracking` a plain push lands on `main`. Read the `->` line of every push, and after
+  `git push origin <local>:refs/heads/<remote>`. Read the `->` line of every push, and after
   pushing a new branch confirm `git ls-remote origin main` did not move.
 - **Do not rewrite pushed history.** No rebase, amend, squash or force-push on a branch that has
   been pushed or has a PR, and never on someone else's commits or signatures. Bring a branch up
@@ -285,19 +282,17 @@ worktrees, branches, scratch and PRs are theirs; do not touch them without being
 - **A test must fail without the change.** For every test you add or change, revert or mutate the
   source, run it, paste the failing output, restore the source and show it passing. A test that
   passes with the fix removed is not a test.
-- **There is no CI on PRs, so the author's evidence is the evidence.** The PR body states each command
-  run on the exact tip and its result, what was not run, and the tracking issue. Update it whenever
-  the base or the content changes; a stale claim is a defect. Run `just verify` green on the tip
-  before merging, and the client login test for any change to runtime code.
+- **The PR body is the evidence.** It states each command run on the exact tip and its result, what
+  was not run, and the tracking issue. Update it whenever the base or the content changes. Run
+  `just verify` green on the tip before merging, and the client login test for any change to
+  runtime code.
 - **Fresh worktrees need build inputs.** Copy `extern/{minhook,breakpad,lss}` (without their `.git`
-  files), `gen/` and `.env` from the main checkout, read-only; never print `.env`. Production
-  endpoints are embedded at configure time from `.env` or the environment, so a client build
-  without them cannot log in; configure with `-DNEVR_REQUIRE_BUILTIN_DEFAULTS=ON` to make a
-  missing value fail the configure.
-- **Client login test mechanics.** `launch-client.sh` keeps the game running until it is stopped.
-  Start it in the background, read the run's own JSONL log for `built-in defaults embedded`,
-  `LOGIN SUCCESS` and `to logged in`, then stop your own `echovr.exe` so the script restores the
-  original DLL, and confirm the restore.
+  files), `gen/` and `.env` from the main checkout, read-only; never print `.env`. Configure
+  client builds with `-DNEVR_REQUIRE_BUILTIN_DEFAULTS=ON` so the production endpoints are
+  embedded from `.env` or the environment.
+- **Client login test.** Start `launch-client.sh --dll <build>/bin/BugSplat64.dll` in the
+  background, read the run's own JSONL log for `built-in defaults embedded`, `LOGIN SUCCESS` and
+  `to logged in`, stop your own `echovr.exe`, and confirm the script restored the original DLL.
 
 ### Documentation, plans and findings
 
