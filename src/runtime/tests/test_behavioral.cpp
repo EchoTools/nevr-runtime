@@ -1144,7 +1144,7 @@ TEST(LoginProfile, BuildsJsonFromQuestMeasurementsAndEscapesStrings) {
   inputs.git_describe = "v1.2.3-4-gabcdef0";
   inputs.build_type = "RelWithDebInfo";
   inputs.social_level = 2;
-  inputs.plugins = nlohmann::json::array();
+  inputs.plugins = nlohmann::json::parse(R"([{"name":"example","loaded":true}])");
 
   const nlohmann::json profile = nlohmann::json::parse(LoginProfile::BuildLoginProfileJson(inputs));
   EXPECT_EQ(profile.at("accountid"), 90210);
@@ -1157,6 +1157,19 @@ TEST(LoginProfile, BuildsJsonFromQuestMeasurementsAndEscapesStrings) {
   EXPECT_EQ(profile.at("system_info").at("cpu"), "Quest measured CPU");
   EXPECT_EQ(profile.at("system_info").at("num_physical_cores"), 8);
   EXPECT_EQ(profile.at("system_info").at("memory_total"), 8192);
+  EXPECT_EQ(profile.at("nonce"), "");
+  EXPECT_EQ(profile.at("nevr_social"), 2);
+  EXPECT_EQ(profile.at("nevr_plugins"), inputs.plugins);
+  EXPECT_TRUE(profile.at("nevr_plugins").is_array());
+}
+
+TEST(LoginProfile, EmptyDisplayNameFallsBackToTheAccountId) {
+  LoginProfile::LoginProfileInputs inputs;
+  inputs.account_id = 90210;
+  inputs.display_name = "";
+
+  const nlohmann::json profile = nlohmann::json::parse(LoginProfile::BuildLoginProfileJson(inputs));
+  EXPECT_EQ(profile.at("displayname"), "90210");
 }
 
 TEST(WsBridgePlatformPrefix, EveryDefinedPlatformHasTheNakamaPrefix) {
