@@ -78,4 +78,10 @@ std::optional<std::string> BuildTokenRouteUri(std::string_view tokenUri, std::st
   return AppendQuery(tokenUri, {{"guilds", guilds, true}, {"regions", regions, true}});
 }
 
+std::optional<std::string> BuildBridgeCredentialUri(std::string_view remoteUri, std::string_view discordId,
+                                                    std::string_view password) {
+  if (discordId.empty() || password.empty()) return std::string(remoteUri);
+  return AppendQuery(remoteUri, {{"discordid", discordId, false}, {"password", password, false}});
+}
+
 }  // namespace ServerDbUri

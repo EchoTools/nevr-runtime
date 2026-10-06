@@ -1336,6 +1336,27 @@ verify:
         echo "identity must come from the presented credential or config, never the binary." >&2
         exit 1
     fi
+    # #41: config credentials reach Nakama in a URL query from two places — the
+    # ServerDB registration URI (server/gameserver.cpp) and the bridge's config/
+    # login connections (compat/ws_bridge.cpp). Both must go through the
+    # percent-encoder in server/serverdb_uri.cpp. A raw append lets a password
+    # with '&', '#', '%' or '+' rewrite the query, and if only one site encodes,
+    # the two paths send different passwords for the same account.
+    # Falsified 2026-10-05 against 323352b: the pattern hits gameserver.cpp:1433
+    # and ws_bridge.cpp:1002-1003; on the fixed tree it exits 1.
+    I41_RC=0; I41_HITS=$(grep -nE '[?&]password=%s|\+= *cfgPassword|"&password="' \
+        src/runtime/server/gameserver.cpp src/runtime/compat/ws_bridge.cpp) || I41_RC=$?
+    sensor_stage1 "#41 raw URL credential" "server/gameserver.cpp compat/ws_bridge.cpp" "$I41_RC"
+    if [ "$I41_RC" -eq 0 ]; then
+        printf '%s\n' "$I41_HITS" >&2
+        echo "verify: FAIL — #41 a credential is concatenated into a URL unencoded; use ServerDbUri (server/serverdb_uri.h)." >&2
+        exit 1
+    fi
+    if ! grep -q 'ServerDbUri::BuildLegacyUri(' src/runtime/server/gameserver.cpp \
+       || ! grep -q 'ServerDbUri::BuildBridgeCredentialUri(' src/runtime/compat/ws_bridge.cpp; then
+        echo "verify: FAIL — #41 a URL-credential site no longer calls the ServerDbUri encoder." >&2
+        exit 1
+    fi
     # N20 (owner decision, 2026-07-27): the nevr_discord_id config fallback applies
     # in CLIENT mode too, not only server mode. Two assertions, because either one
     # alone is satisfiable by the bug — the first fires if the fallback is deleted,

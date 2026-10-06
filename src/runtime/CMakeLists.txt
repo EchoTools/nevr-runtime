@@ -533,6 +533,8 @@ if(BUILD_TESTING)
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
+      # #41: ws_bridge.cpp builds its URL credentials through the ServerDbUri encoder.
+      server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
       # N84: plugin_loader calls HookGuard::VerifyAll after each plugin init.
       # Linked as production source (not a stub) so the test drives the real
@@ -562,6 +564,7 @@ if(BUILD_TESTING)
       ext/module_loader.cpp
       log/url_diagnostics.cpp
       compat/ws_bridge.cpp
+      server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
       patch/broadcaster_hook_stats.cpp
       hook/hook_liveness.cpp

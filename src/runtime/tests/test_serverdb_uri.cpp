@@ -170,3 +170,47 @@ TEST(ServerDbUri, LongValuesAreNotTruncated) {
   ASSERT_TRUE(uri.has_value());
   EXPECT_EQ(*uri, "ws://h/s?discord_id=1&password=pw&regions=" + longRegions);
 }
+
+// --- compat/ws_bridge.cpp URL credentials (config + login connections) --------
+// Same Nakama handler (session_ws.go reads "discordid" then "discord_id", and
+// "password"), so the same encoding contract applies.
+
+TEST(ServerDbUri, BridgeCredentialsPercentEncodePasswordExactly) {
+  const std::optional<std::string> uri =
+      ServerDbUri::BuildBridgeCredentialUri("wss://g.example/ws?format=evr", "123456789", kHostileValue);
+  ASSERT_TRUE(uri.has_value());
+  EXPECT_EQ(*uri,
+            "wss://g.example/ws?format=evr&discordid=123456789"
+            "&password=p%26ss%3Dw%23rd%2525%2B%20%3F%2F%40%26guilds%3D999");
+}
+
+TEST(ServerDbUri, BridgeCredentialsRoundTripHostileValuesWithoutFieldBleed) {
+  const std::optional<std::string> uri =
+      ServerDbUri::BuildBridgeCredentialUri("wss://g.example/ws?format=evr", "123456789", kHostileValue);
+  ASSERT_TRUE(uri.has_value());
+  const QueryMap expected = {
+      {"format", "evr"}, {"discordid", "123456789"}, {"password", std::string(kHostileValue)}};
+  EXPECT_EQ(ParseQuery(*uri), expected) << *uri;
+}
+
+// The binary must not disagree with itself: both connection paths deliver the
+// same decoded password for the same config value.
+TEST(ServerDbUri, BridgeAndServerDbPathsSendTheSamePasswordBytes) {
+  const std::string password = "a+b%41;c&d#e";
+  const std::optional<std::string> bridge = ServerDbUri::BuildBridgeCredentialUri("ws://h/ws", "1", password);
+  const std::optional<std::string> serverDb = ServerDbUri::BuildLegacyUri("ws://h/ws", "1", password, "", "");
+  ASSERT_TRUE(bridge.has_value());
+  ASSERT_TRUE(serverDb.has_value());
+  const QueryMap bridgePairs = ParseQuery(*bridge);
+  const QueryMap serverDbPairs = ParseQuery(*serverDb);
+  ASSERT_EQ(bridgePairs.count("password"), 1u) << *bridge;
+  ASSERT_EQ(serverDbPairs.count("password"), 1u) << *serverDb;
+  EXPECT_EQ(bridgePairs.find("password")->second, password);
+  EXPECT_EQ(serverDbPairs.find("password")->second, password);
+}
+
+TEST(ServerDbUri, BridgeCredentialsAreBothOrNeither) {
+  EXPECT_EQ(ServerDbUri::BuildBridgeCredentialUri("ws://h/ws?format=evr", "1", ""), "ws://h/ws?format=evr");
+  EXPECT_EQ(ServerDbUri::BuildBridgeCredentialUri("ws://h/ws", "", "pw"), "ws://h/ws");
+  EXPECT_EQ(ServerDbUri::BuildBridgeCredentialUri("ws://h/ws", "1", "pw"), "ws://h/ws?discordid=1&password=pw");
+}

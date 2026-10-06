@@ -33,4 +33,13 @@ std::optional<std::string> BuildLegacyUri(std::string_view socketUri, std::strin
 std::optional<std::string> BuildTokenRouteUri(std::string_view tokenUri, std::string_view guilds,
                                               std::string_view regions);
 
+// The WebSocket bridge's URL credentials (compat/ws_bridge.cpp, config and login
+// connections): remoteUri?discordid=..&password=.. against the same Nakama
+// handler (session_ws.go reads "discordid", then "discord_id", and "password").
+// Both credentials or neither: if either is empty, remoteUri is returned
+// unchanged — an empty secret never goes on the wire (N115). The key stays
+// "discordid" because ws_bridge.cpp detects URL credentials by that literal.
+std::optional<std::string> BuildBridgeCredentialUri(std::string_view remoteUri, std::string_view discordId,
+                                                    std::string_view password);
+
 }  // namespace ServerDbUri
