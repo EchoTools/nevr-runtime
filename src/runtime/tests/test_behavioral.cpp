@@ -332,6 +332,23 @@ TEST_F(PluginLoaderDiagnosticTest, ExplicitUnloadInvokesShutdownAndReleasesPlugi
   CloseHandle(shutdownObserved);
 }
 
+// AGENTS.md logging rule 6: the Warning the loader writes for an arg whose bytes
+// were replaced exists, names the plugin and the arg KEY, and never carries the value.
+TEST_F(PluginLoaderDiagnosticTest, ReplacedArgKeyIsLoggedByNameNeverByValue) {
+  PluginLoadItem item;
+  item.name = "onframe";
+  item.file = "test_plugin_onframe.dll";
+  item.args_json = "{\"path\":\"SECRETVALUE\"}";
+  item.args_replaced_keys = {"path"};
+  g_testPluginLoadPlan.push_back(item);
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("onframe: arg 'path' held invalid UTF-8"));
+  EXPECT_FALSE(TestLogContains("SECRETVALUE"));
+}
+
 // #60: the login reports every configured plugin — the one that loaded, the one
 // that is enabled but failed, and the one that is disabled — with the real loader
 // filling the record from a real LoadLibraryExA run. The disabled entry names a

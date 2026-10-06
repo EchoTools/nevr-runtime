@@ -180,6 +180,19 @@ TEST(PluginLoadPlan, ArgsToJsonReportsReplacedKeys) {
   EXPECT_TRUE(none.empty());
 }
 
+// An invalid byte in the KEY (a clean value) is the same failure: the key is
+// reported by name, the key reaches the plugin with U+FFFD, the value is untouched.
+TEST(PluginLoadPlan, ArgsToJsonInvalidUtf8KeyReportedAndReplaced) {
+  const std::map<std::string, std::string> args = {
+      {std::string("k") + "\xe9", "v"}, {"ok", "1"}};
+  std::vector<std::string> keys;
+  std::string out;
+  ASSERT_NO_THROW(out = ArgsToJson(args, &keys));
+  const std::vector<std::string> expected = {std::string("k") + "\xe9"};
+  EXPECT_EQ(keys, expected);
+  EXPECT_EQ(out, std::string("{\"k") + "\xef\xbf\xbd" + "\":\"v\",\"ok\":\"1\"}");
+}
+
 // The flag reaches the plan item BuildLoadPlan hands the loader.
 TEST(PluginLoadPlan, BuildLoadPlanCarriesReplacedKeys) {
   const NevrConfig cfg = NevrConfig::LoadFromString(
