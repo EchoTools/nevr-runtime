@@ -110,7 +110,7 @@ VOID PatchDscProvider() {
 
 // ============================================================================
 // GetProviderPrefix detour — one of two xpid choke-points (GetUserIDString, which
-// has its own switch and 40 callers, is not hooked; see addresses.h)
+// has its own switch and 22 distinct callers, is not hooked; see addresses.h)
 // ============================================================================
 
 typedef void* (*GetProviderPrefixFn)(uint32_t* providerBits);
@@ -132,7 +132,7 @@ VOID PatchProviderPrefixOvrOrg() {
                                 (void**)&g_RealGetProviderPrefix);
   if (st == MH_OK) st = MH_EnableHook(target);
   if (st == MH_OK) {
-    Log(EchoVR::LogLevel::Info, "[NEVR.XPID] GetProviderPrefix detoured → OVR-ORG (14 callers)");
+    Log(EchoVR::LogLevel::Info, "[NEVR.XPID] GetProviderPrefix detoured → OVR-ORG (17 distinct callers)");
     BootLogTee::TeeFprintf("[NEVR.XPID] GetProviderPrefix detour OK\n");
   } else {
     Log(EchoVR::LogLevel::Error, "[NEVR.XPID] GetProviderPrefix detour failed target=%p status=%s",

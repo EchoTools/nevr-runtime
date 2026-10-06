@@ -460,8 +460,9 @@ static uint64_t __fastcall HttpListenerBringupHook(int64_t* state, const char* a
  * bit1 set?
  *
  * fcn.140157fb0 (this hook's target) is the function that, among other
- * things, gates loading pnsradgameserver.  At 0x1401599b6-0x1401599e5 it
- * reads "server_plugin" (default "pnsradgameserver") and loads it iff
+ * things, gates loading pnsradgameserver.  The gate is at 0x1401599b6-0x1401599e5;
+ * the read of "server_plugin" (default "pnsradgameserver") follows at
+ * 0x1401599e7, and the plugin loads iff
  *   (bit1 == 1 || (bit2 == 0 && bit6 == 1)) && FUN_140614b00() == 0
  * where the bits are in the flags qword at **(uintptr_t*)(netgame_this+0x2da0)
  * (MOV RAX,[RSI+0x2da0]; MOV RDX,[RAX]; then SHR/TEST on bits 1, 2 and 6).

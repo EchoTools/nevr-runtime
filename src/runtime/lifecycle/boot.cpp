@@ -86,9 +86,11 @@ void PreflightRuntimeBootstrap() {
   // only 0x0100000 skips VR without forcing spectator mode; the game
   // reaches the main menu normally.
   //
-  // The bit is applied for -windowed only, never for -server: it is a client
-  // flag.  A -server run does not reach BeginMultiplayer (issue #45), and
-  // leaving the bit off does not change that.
+  // The bit is keyed on -windowed, not on -server: it is a client flag.  A
+  // -server run does not reach BeginMultiplayer (issue #45), and leaving the bit
+  // off does not change that.  Other client-only handling in the same family
+  // (windowed, no-VR, spectator-stream flags) has not been ruled out as a
+  // collision with server mode.
   if (g_isWindowed && g_pGame != nullptr) {
     auto* windowedFlags = reinterpret_cast<UINT64*>(
         reinterpret_cast<CHAR*>(g_pGame) + PatchAddresses::GAME_WINDOWED_FLAGS_OFFSET);

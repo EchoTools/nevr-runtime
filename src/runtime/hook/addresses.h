@@ -556,9 +556,10 @@ constexpr uintptr_t CJSON_GET_FLOAT = 0x5FCA60;
 ///   FALLBACK_PREFIX 11, COMPACT_FALLBACK_NAME 7
 /// PSN's ceiling is 3 characters, bound by the compact name at 0x16D7138; OVR-ORG's
 /// is 7.  "DSC-NOVR" (8) fits neither slot, "DSC-NVR" (7) fits OVR-ORG's.  The
-/// *_SIZE constants below are the lengths of the strings being replaced (each
-/// replacement is static_asserted against them in xpid_patch.cpp), not slot
-/// capacity: extending a prefix means updating them as well as the bytes.
+/// *_SIZE constants below are the byte counts validated and written at each site
+/// (each replacement is static_asserted against them in xpid_patch.cpp), not slot
+/// capacity.  The dash sites write "PSN-"-style strings with no NUL, so extending
+/// a dash prefix means updating the constant, the bytes and the terminator.
 /// The slack between strings is zero fill.  Writing into it is safe only if
 /// nothing references an interior address; that is inferred from the layout, not
 /// proven by exhaustive xref analysis.  The strings are referenced by direct
@@ -566,8 +567,14 @@ constexpr uintptr_t CJSON_GET_FLOAT = 0x5FCA60;
 /// site and relocating a string to gain room is not a small change.
 /// The identity format string is "%s-%llu" at 0x1416D7158: the id half has to stay
 /// a uint64, which rules out UUIDs without patching the formatter.  A native
-/// "BOT-" provider already exists (0x16D0F94 dash, 0x16D7130 compact) and the
-/// game carries "generating bot account id" at 0x1416D7160.
+/// "BOT-" provider already exists (RVA 0x16D0F94 dash, 0x16D7130 compact) and the
+/// game carries "generating bot account id" at RVA 0x16D7160, so a bot or
+/// spectator identity namespace need not be invented; it matches the
+/// BOT-<snowflake> device-id convention on the Nakama side and bears on the
+/// player-plus-own-spectator identity collision.  The `???` fallback (not "UNK")
+/// is what the game renders for an unmapped provider.
+/// Binary identity: echovr.exe goldmaster 631547, sha256
+/// b6d08277e5846900c81004b64b298df6acba834b69700a640b758bda94a52043.
 
 /// VA 0x1416D0EE0: "PSN\0" (4 bytes) — short platform name in OlPrEfIx struct
 constexpr uintptr_t XPID_PLATFORM_SHORT_NAME = 0x16D0EE0;
@@ -595,15 +602,16 @@ constexpr size_t XPID_PLATFORM_COMPACT_FALLBACK_NAME_SIZE = 4;
 
 /// CNSUser::GetProviderPrefix (fcn.14060d640) — one of two xpid choke-points.
 /// Reads user+0x90 & 0xf, returns a pointer to the corresponding string-table
-/// entry via a switch.  14 callers, including CNSIUsers::CreateUser,
-/// SaveLocalData, two Send() overloads and Inspect<CBindingsOffsetOfInspector
+/// entry via a switch.  ReVault lists 17 distinct callers (31 call edges),
+/// including CNSIUsers::CreateUser, SaveLocalData, the three Send() functions
+/// (0x14060e380, 0x140613900, 0x140618480) and Inspect<CBindingsOffsetOfInspector
 /// <float>>.  Detour this to return the OVR-ORG entry unconditionally, and the
 /// xpids built through it (CreateUser log, profile save, LobbyFindSession,
 /// LobbyPlayerSessions) use the same prefix without any string-table patching.
 constexpr uintptr_t GET_PROVIDER_PREFIX = 0x60D640;
 
-/// The other xpid choke-point, not hooked: echovr.exe VA 0x1401ba630 (unnamed in
-/// ReVault; GetUserIDString).  40 callers, entirely separate from
+/// The other xpid choke-point, not hooked: echovr.exe VA 0x1401ba630 (ReVault name
+/// GetUserIDString).  22 distinct callers (40 call edges), entirely separate from
 /// GetProviderPrefix's: AddBotUser, AddPlayerUser, AddRemoteUser,
 /// SendProfileUpdate, RoundOverCB, LogSocialAnalytic, ProcessPostMatchBattlePassXp,
 /// FindSocial and more.  It runs its own switch(*param & 0xf) over the same
