@@ -1,10 +1,10 @@
 name: Build
 
+# Build only when a release is created (drafted). The toolchain is reinstalled
+# from scratch every run (~29 billed minutes) and push/PR fired it on every
+# merge — a 21-second burst of 6 merges cost ~175 min. Local dev already gates
+# via `just`; GitHub only builds the release artifact.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   release:
     types: [created]
 
