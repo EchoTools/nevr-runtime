@@ -1328,6 +1328,53 @@ static std::string AuthenticateServer() {
     }
 }
 
+// Mints a ServerDB access token: refresh-token exchange first, password auth as
+// the fallback. Returns "" when neither produced one. Called from
+// RequestRegistration (game thread) and, since #39, from the WebSocketClient's
+// token refresher on ixwebsocket's thread after ServerDB answers 401. Config
+// reads go through NevrCfgGetFlat's mutex-guarded intern pool. RefreshAuthToken
+// also rewrites the on-disk credential cache (auth_token_refresh.h SaveAuthToken);
+// the refresher is installed just before Connect, after RequestRegistration's own
+// acquisition has returned, so only a second RequestRegistration racing a 401
+// could overlap the two.
+static std::string AcquireServerDbToken() {
+    std::string token;
+    auto auth = LoadCachedAuthToken();
+    if (auth.HasValidToken()) {
+        token = auth.token;
+        Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Using cached auth token for ServerDB");
+    } else if (auth.HasValidRefreshToken()) {
+        // N106: exchange the refresh token for an access token.
+        //
+        // This branch was MISSING, which made the OAuth2 device-flow path
+        // unreachable on a dedicated server. 571a41b ("access token in-memory
+        // only, 60s lifetime, refresh token on disk") stopped persisting the
+        // access token — SaveAuthToken writes only refresh_token — so
+        // LoadCachedAuthToken().token is ALWAYS empty and HasValidToken() is
+        // ALWAYS false in a fresh process. The consumer here was never updated to
+        // match, so every server fell through to password auth while a perfectly
+        // valid refresh token sat unused on disk.
+        //
+        // Nothing else refreshes in server mode either: TokenAuth::Init returns
+        // early on is_server, before the background refresh thread starts. This
+        // function is the only place a server can mint an access token.
+        const char* httpUri = NevrCfgGetFlat("nevr_http_uri");
+        const char* httpKey = NevrCfgGetFlat("nevr_http_key");
+        if (httpUri && httpKey && httpUri[0] != '\0' && httpKey[0] != '\0' &&
+            RefreshAuthToken(auth, httpUri, httpKey)) {
+            token = auth.token;
+            Log(EchoVR::LogLevel::Info,
+                "[NEVR.GAMESERVER] ServerDB auth via refreshed OAuth2 token (device-flow credential)");
+        } else {
+            Log(EchoVR::LogLevel::Warning,
+                "[NEVR.GAMESERVER] Refresh token present but exchange failed — falling back to password auth");
+        }
+    }
+
+    if (token.empty()) token = AuthenticateServer();
+    return token;
+}
+
 // N133 S4b: all NEVR-key reads moved from the game-passed config JSON to
 // config.yaml (nevr_config). The IServerLib vtable slot still passes the game's
 // localConfig pointer, but the runtime no longer reads NEVR keys from it, so the
@@ -1356,49 +1403,12 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 
   // Acquire a session JWT for the operator's server-host account (token auth, BAC-1).
   // Re-auth each registration: the access token TTL is ~1h (BAC-5).
-  std::string wsToken;
-  {
-    auto auth = LoadCachedAuthToken();
-    if (auth.HasValidToken()) {
-      wsToken = auth.token;
-      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Using cached auth token for ServerDB");
-    } else if (auth.HasValidRefreshToken()) {
-      // N106: exchange the refresh token for an access token.
-      //
-      // This branch was MISSING, which made the OAuth2 device-flow path
-      // unreachable on a dedicated server. 571a41b ("access token in-memory
-      // only, 60s lifetime, refresh token on disk") stopped persisting the
-      // access token — SaveAuthToken writes only refresh_token — so
-      // LoadCachedAuthToken().token is ALWAYS empty and HasValidToken() is
-      // ALWAYS false in a fresh process. The consumer here was never updated to
-      // match, so every server fell through to password auth while a perfectly
-      // valid refresh token sat unused on disk.
-      //
-      // Nothing else refreshes in server mode either: TokenAuth::Init returns
-      // early on is_server, before the background refresh thread starts. This is
-      // the only place a server can mint an access token.
-      const char* httpUri = NevrCfgGetFlat("nevr_http_uri");
-      const char* httpKey = NevrCfgGetFlat("nevr_http_key");
-      if (httpUri && httpKey && httpUri[0] != '\0' && httpKey[0] != '\0' &&
-          RefreshAuthToken(auth, httpUri, httpKey)) {
-        wsToken = auth.token;
-        Log(EchoVR::LogLevel::Info,
-            "[NEVR.GAMESERVER] ServerDB auth via refreshed OAuth2 token (device-flow credential)");
-      } else {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] Refresh token present but exchange failed — falling back to password auth");
-      }
-    }
-
-    if (wsToken.empty()) {
-      wsToken = AuthenticateServer();
-      // N102: no token means every ServerDB connection below will be rejected.
-      // Continuing produces a server that logs connection failures forever
-      // instead of exiting with a cause.
-      if (wsToken.empty()) {
-        ServerFatal("Server authentication failed — no valid token for ServerDB connection");
-      }
-    }
+  std::string wsToken = AcquireServerDbToken();
+  // N102: no token means every ServerDB connection below will be rejected.
+  // Continuing produces a server that logs connection failures forever
+  // instead of exiting with a cause.
+  if (wsToken.empty()) {
+    ServerFatal("Server authentication failed — no valid token for ServerDB connection");
   }
 
   // Owns the constructed URI for the rest of this call; Connect() copies it
@@ -1465,6 +1475,11 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       }
     }
   }
+
+  // #39: the header is stored once, and ixwebsocket's automatic reconnect
+  // re-presents it. Once the ~1h token has expired, ServerDB answers every
+  // reconnect with 401; this lets the client mint a fresh token instead.
+  m_wsClient->SetBearerTokenRefresher([]() { return AcquireServerDbToken(); });
 
   // Connect with the JWT as Authorization: Bearer; the token route forwards it
   // to Nakama's acceptor, which sets the operator identity (BAC-2/3).

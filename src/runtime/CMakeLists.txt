@@ -307,6 +307,25 @@ if(BUILD_TESTING)
     endif()
     gtest_discover_tests(test_protobuf_transport DISCOVERY_MODE PRE_TEST)
 
+    # Issue #39: the bearer header presented on ixwebsocket's automatic reconnect,
+    # driven against a scripted loopback upgrade server.
+    add_executable(test_websocket_client_auth
+      tests/test_websocket_client_auth.cpp
+      server/websocket_client.cpp
+      server/websocket_frame.cpp
+      log/url_diagnostics.cpp)
+    set_source_files_properties(tests/test_websocket_client_auth.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_websocket_client_auth PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_websocket_client_auth PRIVATE
+      GTest::gtest GTest::gtest_main ixwebsocket::ixwebsocket CURL::libcurl ws2_32)
+    if(MINGW)
+      add_dependencies(test_websocket_client_auth nevr_runtime_bcrypt_minimal)
+      target_link_libraries(test_websocket_client_auth PRIVATE
+        $<LINK_LIBRARY:WHOLE_ARCHIVE,${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a>)
+    endif()
+    gtest_discover_tests(test_websocket_client_auth DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_url_diagnostics
       tests/test_url_diagnostics.cpp
       log/url_diagnostics.cpp)
