@@ -19,6 +19,13 @@
 namespace {
 
 using nevr_runtime::lifecycle::InternStatus;
+
+static_assert(nevr_runtime::lifecycle::kStableStringMaxCount == 1024,
+              "the documented limit of 1024 distinct strings");
+static_assert(nevr_runtime::lifecycle::kStableStringMaxPayloadBytes == 1024 * 1024,
+              "the documented limit of 1 MiB per string");
+static_assert(nevr_runtime::lifecycle::kStablePoolMaxBytes == 16 * 1024 * 1024,
+              "the documented limit of 16 MiB for the whole pool");
 using nevr_runtime::lifecycle::StableStringPool;
 using nevr_runtime::lifecycle::StableStringPoolLimits;
 

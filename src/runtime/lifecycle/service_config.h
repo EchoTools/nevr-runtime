@@ -11,7 +11,8 @@
 // pool quota applies per loaded module generation, not across reloads. A null
 // return means genuine absence/unmapped/no redirect; an attempted intern failure
 // or std::exception is logged without values and terminates the process rather
-// than masquerading as absence. No C++ exception crosses these C accessors.
+// than masquerading as absence. An exception that does not derive from
+// std::exception is not caught here.
 
 #pragma once
 

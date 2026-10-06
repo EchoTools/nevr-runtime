@@ -1,4 +1,5 @@
-// Process-stable C-string storage shared by PCVR and Quest adapters.
+// Process-stable C-string storage for the config-string accessors. The PCVR runtime
+// links it; the Quest build compiles it into its test target only.
 //
 // Storage and lifetime:
 // - InternStableCStr stores each distinct value once and returns a NUL-terminated,
@@ -10,6 +11,9 @@
 // - Nothing clears or shrinks the pool, including on detach. Secret-bearing
 //   configured strings (the game-native config JSON carries the server key)
 //   therefore stay resident until process exit; their values are never logged.
+// - Reloading the owning module after a pointer has been published is not
+//   supported. The failure path terminates through ForceFatalExit and Log, which
+//   the Quest build does not provide yet (issue #158, tranche 1c).
 // - A value containing an embedded NUL is rejected rather than truncated.
 //
 // Limits (kStableStringMaxCount, kStableStringMaxPayloadBytes, kStablePoolMaxBytes):
