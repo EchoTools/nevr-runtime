@@ -48,7 +48,7 @@ checked by name, not by hash).
 existing `server/evr_pipeline_party_invite_test.go`; (b) a scenario in the runtime's suite
 (`just scenario-all`) that injects the new server message and asserts the game-visible slots, as
 `party_invite_join` does for PartyJoinSuccess; and (c) for the server half end to end, the same
-scenario against a test service (`tools/nakama-local`), which a one-client suite
+scenario against the service, which a one-client suite
 can only do for one side of a two-person feature (the other side is a second session, marked where it
 applies).
 
@@ -112,7 +112,7 @@ slot 53 FriendIsInvitable can then also exclude a friend already in my party.
 text, 55 party, 54 joinable) through state, then fires the party-join node for that party (already
 proven in `party_join_by_id`). The publish half: a scenario asserts `SNSPresenceUpdateRequest`
 leaves with the game's own `game_type` and `status`. Two people: one session sets presence, the other
-sees it; needs a second session (local Nakama, two clients), **not** in the one-client suite.
+sees it; needs a second session with two clients, **not** in the one-client suite.
 
 ## 2. Recently met (#22)
 
@@ -278,7 +278,7 @@ call, but it is in the same function as matchmaking work.
 **Proof.** Nakama: a table test of the admit rule (policy x invited x friend x friend-of-member).
 Suite: `party_lock` gains the request (`SNSPartySetJoinPolicyRequest` leaves with the policy when the
 node runs), and `party_join_errors` already proves code 3 shows "no permission". The refusal of a real
-second account needs two sessions (local Nakama), **not** in the one-client suite.
+second account needs two sessions, **not** in the one-client suite.
 
 ## 5. The invitable-users button (#13, slot 38)
 

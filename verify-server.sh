@@ -39,8 +39,7 @@ case "$FLAGSET" in
   noflag)  ARGS=(-server -noconsole) ;;
   # N122/R4: exercises the FLAG path to g_upnpEnabled (boot.cpp) rather than the
   # config-key path (config.cpp). Both set the same global, but only one of them
-  # is covered by a run that relies on config.yaml's network.upnp key (N133 moved
-  # it out of config.json; issue #21 made config.json optional) — and a flag that silently
+  # is covered by a run that relies on config.yaml's network.upnp key — and a flag that silently
   # stopped working would look identical to a config that silently kept working.
   upnp)    ARGS=(-server -headless -noconsole -upnp) ;;
   # R5: telemetry is gated on telemetry_uri in config, not on a flag. This flagset

@@ -7,17 +7,13 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 # --dll PATH deploys that BugSplat64.dll instead of the release build (the scenario runner passes
-# the mingw-scenario build; see tools/scenario/run_scenario.py). --config PATH starts the game with
-# `-config PATH` (a JSON file; the runtime reads config.yaml from the same directory). Everything
-# else is unchanged.
+# the mingw-scenario build; see tools/scenario/run_scenario.py).
 DLL=build/mingw-release/bin/BugSplat64.dll
-CONFIG=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dll) DLL="${2:?--dll needs a path}"; shift 2 ;;
-    --config) CONFIG="${2:?--config needs a path}"; shift 2 ;;
-    -h|--help) echo "usage: launch-client.sh [--dll PATH] [--config PATH]  (default $DLL)"; exit 0 ;;
-    *) echo "unknown argument: $1 (usage: launch-client.sh [--dll PATH] [--config PATH])" >&2; exit 2 ;;
+    -h|--help) echo "usage: launch-client.sh [--dll PATH]  (default $DLL)"; exit 0 ;;
+    *) echo "unknown argument: $1 (usage: launch-client.sh [--dll PATH])" >&2; exit 2 ;;
   esac
 done
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist; build it first" >&2; exit 2; }
@@ -34,11 +30,10 @@ unset WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_SESSION_TYPE
 export DISPLAY=:101
 export WINEPREFIX="$HOME/src/nevr-runtime/echovr/.wineprefix"
 
-# Pristine state. A run is only meaningful against known files, so any drift aborts
-# before anything is deployed. The runtime reads config.yaml and ignores config.json;
-# with neither present it must start on its built-in defaults.
+# Pristine state. config.json is ignored by NEVR; config.yaml must be absent for
+# this built-in-defaults run.
 drift=0
-for f in "$LOCAL_DIR/config.json" "$LOCAL_DIR/config.yaml"; do
+for f in "$LOCAL_DIR/config.yaml"; do
   if [[ -e "$f" || -L "$f" ]]; then echo "DRIFT: $f exists (expected absent)" >&2; drift=1; fi
 done
 shopt -s nullglob
@@ -102,11 +97,6 @@ set +e
 # "VR bypass"); -mp has no reader in the runtime and no string in echovr.exe
 # (docs/reference/server-mode-multiplayer-hang.md).
 game_args=(-windowed)
-if [[ -n "$CONFIG" ]]; then
-  [[ -f "$CONFIG" ]] || { echo "ERROR: --config $CONFIG does not exist" >&2; exit 2; }
-  game_args+=(-config "Z:${CONFIG//\//\\}")
-  echo "=== game config: $CONFIG (config.yaml from its directory) ==="
-fi
 (cd "$GAME_DIR" && wine ./echovr.exe "${game_args[@]}") > "$CONSOLE_LOG" 2>&1
 exit_code=$?
 set -e

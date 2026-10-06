@@ -35,7 +35,7 @@ SCRATCH = pathlib.Path("/var/tmp/work-nevr-runtime/scenario-runs")
 WINEPREFIX = REPO / "echovr/.wineprefix"
 MARKER = b"[NEVR.SCENARIO]"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-STEP_KINDS = ("wait_log", "expect_log", "state_until", "inject", "fire", "nakama_log", "peer")
+STEP_KINDS = ("wait_log", "expect_log", "state_until", "inject", "fire")
 # Lines in the game's own log that mean the run is over: a wait stops on the first one and reports
 # it, instead of sitting out its timeout on a game that already failed (2026-10-01 run
 # 20261001T142307 waited 240 s on a client that had died at 0.2 s: "no driver could be loaded").
@@ -86,14 +86,7 @@ def load_scenario(path: pathlib.Path) -> dict:
         step = substitute(raw, variables)
         step["kind"] = kinds[0]
         steps.append(step)
-    server = data.get("server", "production")
-    peers = int(data.get("peers", 0))
-    friends = [[str(x) for x in pair] for pair in (data.get("friends") or [])]
-    met = [[str(x) for x in pair] for pair in (data.get("met") or [])]
-    if server not in ("production", "local"):
-        raise ValueError(f"{path}: server must be 'production' or 'local', not {server!r}")
-    return {"name": data["name"], "description": data.get("description", ""), "steps": steps, "server": server,
-            "peers": peers, "friends": friends, "met": met}
+    return {"name": data["name"], "description": data.get("description", ""), "steps": steps}
 
 
 class ConsoleLog:
@@ -166,36 +159,6 @@ def state_value(state: dict, path: str):
     for part in str(path).split("."):
         value = value.get(part) if isinstance(value, dict) else None
     return value
-
-
-def wait_nakama_log(pattern: str, since: datetime.datetime, timeout: float, alive) -> str | None:
-    """The first line of the local nakama's own log since `since` matching `pattern`, polling the
-    container log until it appears, the client dies, or `timeout` passes."""
-    regex = re.compile(pattern)
-    deadline = time.monotonic() + timeout
-    while True:
-        out = subprocess.run(["docker", "compose", "-f", str(NAKAMA_LOCAL / "docker-compose.yml"), "logs",
-                              "--no-color", "--no-log-prefix", "--since", since.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                              "nakama"], capture_output=True, text=True).stdout
-        for line in out.splitlines():
-            if regex.search(line):
-                return line
-        if time.monotonic() >= deadline or (alive is not None and not alive()):
-            return None
-        time.sleep(1)
-
-
-def save_nakama_log(out: pathlib.Path, since: datetime.datetime, until: datetime.datetime) -> str:
-    """The local nakama's own log for the run window, saved as nakama.log in the run folder: the nakama_log
-    steps read the live container, whose log a restart erases. Returns "" or why it was not saved."""
-    command = ["docker", "compose", "-f", str(NAKAMA_LOCAL / "docker-compose.yml"), "logs", "--no-color",
-               "--no-log-prefix", "--since", (since - datetime.timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-               "--until", (until + datetime.timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ"), "nakama"]
-    done = subprocess.run(command, capture_output=True, text=True)
-    if done.returncode != 0:
-        return f"docker compose logs failed ({done.returncode}): {done.stderr.strip()}"
-    (out / "nakama.log").write_text(done.stdout)
-    return ""
 
 
 def state_matches(state: dict, step: dict) -> tuple[bool, str]:
@@ -301,64 +264,6 @@ def wait_for_gpu_memory(needed: int = GPU_FREE_NEEDED_MIB) -> None:
         time.sleep(GPU_POLL_SECONDS)
 
 
-NAKAMA_LOCAL = REPO / "tools/nakama-local"
-LOCAL_SERVER_CONFIG = SCRATCH.parent / "local-server"
-
-
-def client_discord_id() -> str | None:
-    """The Discord id this machine's client logs in with, from the newest run whose log has the
-    runtime's own "login injected xpid=OVR-ORG-<id>" line (the cached token decides it, N20)."""
-    for log in sorted(SCRATCH.glob("**/game.jsonl"), key=lambda f: f.stat().st_mtime, reverse=True)[:40]:
-        m = re.search(r"login injected xpid=OVR-ORG-(\d+)", log.read_text(errors="replace"))
-        if m:
-            return m.group(1)
-    return None
-
-
-def write_local_server_config(peers: int = 0, friends: list | None = None, met: list | None = None) -> pathlib.Path:
-    """The game config for a `server: local` scenario: an empty game JSON and, beside it, the
-    runtime's config.yaml pointing at the local nakama as the seeded test account (the same template
-    as tools/winvm/systest.py). Fails loudly when the local nakama is not up or not seeded."""
-    state = NAKAMA_LOCAL / ".state/nakama.yml"
-    if not state.exists():
-        raise StepFailed("required test-server state is missing")
-    key = re.search(r"server_key:\s*(\S+)", state.read_text())
-    if not key:
-        raise StepFailed(f"no server_key in {state}")
-    try:
-        socket.create_connection(("127.0.0.1", 7350), timeout=5).close()
-    except OSError as exc:
-        raise StepFailed(f"required test service is not listening on 127.0.0.1:7350 ({exc})")
-    sys.path.insert(0, str(NAKAMA_LOCAL))
-    import seed  # noqa: E402  (constants only)
-    discord_id = client_discord_id() or seed.DISCORD_ID
-    # Peers and friendships as the scenario declares them ("client" = this machine's account, N = peer
-    # N), on top of none: every run starts from the same friend graph.
-    def account(who: str) -> str:
-        return discord_id if who == "client" else str(seed.peer(int(who))[1])
-    command = [sys.executable, str(NAKAMA_LOCAL / "seed.py"), "--discord-id", discord_id,
-               "--peers", str(peers), "--reset-friends", "--reset-met"]
-    for a, b in friends or []:
-        command += ["--friends", f"{account(a)},{account(b)}"]
-    for a, b in met or []:  # [owner, met]: who is on whose recently-met list
-        command += ["--met", f"{account(a)},{account(b)}"]
-    done = subprocess.run(command, capture_output=True, text=True)
-    if done.returncode != 0:
-        raise StepFailed(f"seeding the local nakama failed: {done.stderr.strip() or done.stdout.strip()}")
-    print(f"scenario: local nakama account carries discord id {discord_id}", flush=True)
-    LOCAL_SERVER_CONFIG.mkdir(parents=True, exist_ok=True)
-    (LOCAL_SERVER_CONFIG / "config.json").write_text("{}\n")
-    (LOCAL_SERVER_CONFIG / "config.yaml").write_text(
-        "services:\n"
-        f'  socket_uri: "ws://127.0.0.1:7350/ws?format=evr&token={key.group(1)}"\n'
-        "identity:\n"
-        f'  discord_id: "{discord_id}"\n'
-        "auth:\n"
-        f'  password: "{seed.PASSWORD}"\n'
-        f'  server_key: "{key.group(1)}"\n')
-    return LOCAL_SERVER_CONFIG / "config.json"
-
-
 def wait_for_wineserver_exit() -> None:
     """Block until the prefix's wineserver has exited (`wineserver -w`). `-k` only signals it; a
     client launched while the old server is still going down started with a broken socket layer
@@ -380,8 +285,6 @@ class Run:
         self.control: Control | None = None
         self.mark = 0  # console offset at the last action; expect_log looks after it
         self.saved: dict = {}  # fire reply fields saved by a step's `save`, for later ${name}
-        self.peers: dict = {}  # local peer accounts by number (tools/nakama-local/evr_peer.py)
-        self.started_utc = datetime.datetime.now(datetime.timezone.utc)
         self.launcher: subprocess.Popen | None = None
         self.xephyr: subprocess.Popen | None = None
 
@@ -409,10 +312,6 @@ class Run:
     def launch(self):
         launcher_out = self.out / "launch-client.out"
         command = [str(REPO / "launch-client.sh"), "--dll", str(self.dll)]
-        if self.scenario.get("server") == "local":
-            command += ["--config", str(write_local_server_config(self.scenario.get("peers", 0),
-                                                                  self.scenario.get("friends", []),
-                                                                  self.scenario.get("met", [])))]
         self.launcher = subprocess.Popen(
             command, cwd=REPO,
             stdout=launcher_out.open("w"), stderr=subprocess.STDOUT, start_new_session=True)
@@ -428,8 +327,6 @@ class Run:
         raise StepFailed("launch-client.sh never printed its console log path")
 
     def teardown(self):
-        for peer in self.peers.values():
-            peer.close()
         if self.control:
             self.control.close()
         env = dict(os.environ, WINEPREFIX=str(WINEPREFIX))
@@ -498,17 +395,6 @@ class Run:
                     return detail
                 time.sleep(1)
             raise StepFailed(f"condition not met: {detail}; {self.console.summary(self.mark)}")
-        if kind == "peer":
-            return self.do_peer(step["peer"])
-        if kind == "nakama_log":
-            spec = step["nakama_log"]
-            if self.scenario.get("server") != "local":
-                raise StepFailed("nakama_log reads the local nakama's log: the scenario needs `server: local`")
-            line = wait_nakama_log(spec["pattern"], self.started_utc, float(spec.get("timeout", 15)), self.alive)
-            if line is None:
-                raise StepFailed(f"the local nakama logged no line matching /{spec['pattern']}/ "
-                                 f"within {spec.get('timeout', 15)} s since this run started")
-            return line[:200]
         command = {"op": kind, **step[kind]}
         self.mark = len(self.console.text())
         reply = self.control.call(command)
@@ -519,71 +405,6 @@ class Run:
                 raise StepFailed(f"{kind} reply has no {field!r} to save as {name}: {json.dumps(reply)[:160]}")
             self.saved[name] = reply[field]
         return json.dumps(reply)[:160]
-
-    def do_peer(self, spec: dict) -> str:
-        """A local peer account acts: login (implicit, as `headset` if given), create_party, join, leave,
-        disconnect (closes the socket, no leave), set_policy, lock, invite, share_member/share_party (arg: JSON text), wait_data (arg: text the
-        received PartyDataNotify's JSON contains). `arg` "client" is this machine's account id; `save`
-        keeps the result as ${name}."""
-        if self.scenario.get("server") != "local":
-            raise StepFailed("peer steps need `server: local`")
-        sys.path.insert(0, str(NAKAMA_LOCAL))
-        import evr_peer  # noqa: E402
-        number = int(spec["id"])
-        log_path = self.out / "peers.log"
-
-        def log(line: str) -> None:
-            with log_path.open("a") as f:
-                f.write(f"{datetime.datetime.now().isoformat(timespec='milliseconds')} {line}\n")
-        peer = self.peers.get(number)
-        if peer is None:
-            name, account, password = evr_peer.peer_account(number)
-            peer = evr_peer.Peer(name, account, password, evr_peer.server_key(), log=log,
-                                 headset=spec.get("headset", "No VR"))
-            peer.connect()
-            self.peers[number] = peer
-        action = spec["do"]
-        arg = spec.get("arg")
-        if arg == "client":
-            arg = client_discord_id()
-        try:
-            if action == "create_party":
-                result = peer.create_party()
-            elif action == "join":
-                result = peer.join(int(arg))
-            elif action == "leave":
-                result = peer.leave()
-            elif action == "disconnect":
-                peer.close()  # a game client that goes away sends no leave
-                del self.peers[number]
-                result = "disconnected"
-            elif action == "set_policy":
-                result = peer.set_policy(int(arg))
-            elif action == "lock":
-                result = peer.lock_party()
-            elif action == "invite":
-                result = peer.invite(int(arg))
-            elif action == "share_member":
-                result = peer.share_member(str(arg))
-            elif action == "share_party":
-                result = peer.share_party(str(arg))
-            elif action == "wait_data":
-                result = peer.wait_data(str(arg))
-            elif action == "find_arena":
-                result = peer.find_arena()
-            elif action == "cancel_find":
-                result = peer.cancel_find()
-            elif action == "login":
-                result = "logged in"
-            else:
-                raise StepFailed(f"unknown peer action {action!r}")
-        except TimeoutError as exc:
-            raise StepFailed(str(exc))
-        if spec.get("expect") is not None and str(result) != str(spec["expect"]):
-            raise StepFailed(f"peer {number} {action}: got {result!r}, want {spec['expect']!r}")
-        for name in (spec.get("save") or {}).keys():
-            self.saved[name] = result
-        return f"peer {number} {action}: {result}"
 
     def execute(self) -> bool:
         started = time.monotonic()
@@ -642,11 +463,6 @@ def main(argv: list[str]) -> int:
         passed = run.execute()
     finally:
         run.teardown()
-    nakama_log_error = ""
-    if scenario["server"] == "local":
-        nakama_log_error = save_nakama_log(out, run.started_utc, datetime.datetime.now(datetime.timezone.utc))
-        if nakama_log_error:
-            print(f"WARNING: the local nakama's log was not saved: {nakama_log_error}", file=sys.stderr)
     if run.console and run.console.path.exists():
         shutil.copy(run.console.path, out / "console.log")
     launcher_text = (out / "launch-client.out").read_text() if (out / "launch-client.out").exists() else ""
@@ -657,13 +473,9 @@ def main(argv: list[str]) -> int:
 
     report = {"scenario": scenario["name"], "dll": str(args.dll), "passed": passed,
               "dll_restored": restored, "steps": run.results}
-    if scenario["server"] == "local":
-        report["nakama_log"] = "nakama.log" if not nakama_log_error else f"NOT SAVED: {nakama_log_error}"
     (out / "result.json").write_text(json.dumps(report, indent=2))
     md = f"# scenario {scenario['name']}: {'PASS' if passed else 'FAIL'}\n\n{table(run.results)}\n"
     md += f"\nDLL: {args.dll}\nOriginal BugSplat64.dll restored: {restored}\n"
-    if scenario["server"] == "local":
-        md += f"Local nakama log: {report['nakama_log']}\n"
     (out / "table.md").write_text(md)
     print(md)
     print(f"run folder: {out}")

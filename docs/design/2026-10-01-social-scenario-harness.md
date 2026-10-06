@@ -49,7 +49,7 @@ What these commit to:
 
 - **Same launch path as `launch-client.sh`:** nested display :101, pristine
   install and restore, judged from the run's own log, real production login.
-  No local Nakama, no separate rig, no second launcher. The harness extends
+  No separate rig or second launcher. The harness extends
   `launch-client.sh`.
 - **Outbound pass condition:** the request left the game. It appears in the
   game->server frame log with the right fields, and the bridge's send
@@ -183,4 +183,3 @@ Only the message names, fields, the entry point and the expected lines differ.
   every "OVR-ORG-" id maps to 4. Fixed by making that export return "OVR"
   (`src/runtime/patch/provider_identity.h`). Before the fix the scenario failed at
   "game called the facade's SendInvite slot"; after it, all eight steps pass.
-
