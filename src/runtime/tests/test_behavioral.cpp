@@ -332,6 +332,23 @@ TEST_F(PluginLoaderDiagnosticTest, ExplicitUnloadInvokesShutdownAndReleasesPlugi
   CloseHandle(shutdownObserved);
 }
 
+// AGENTS.md logging rule 6: the Warning the loader writes for an arg whose bytes
+// were replaced exists, names the plugin and the arg KEY, and never carries the value.
+TEST_F(PluginLoaderDiagnosticTest, ReplacedArgKeyIsLoggedByNameNeverByValue) {
+  PluginLoadItem item;
+  item.name = "onframe";
+  item.file = "test_plugin_onframe.dll";
+  item.args_json = "{\"path\":\"SECRETVALUE\"}";
+  item.args_replaced_keys = {"path"};
+  g_testPluginLoadPlan.push_back(item);
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("onframe: arg 'path' held invalid UTF-8"));
+  EXPECT_FALSE(TestLogContains("SECRETVALUE"));
+}
+
 // get_plugin_info reports each plugin's own API version and capabilities. It
 // used to cast NvrPluginInfo (padded to 32 bytes) as NvrLoadedPluginInfo, so
 // api_version read the padding and capabilities read the API version: a v5

@@ -287,6 +287,15 @@ void LoadPlugins() {
     const PluginInitKind initKind =
         ChoosePluginInit(initExFn != nullptr, initFn != nullptr);
 
+    // Invalid UTF-8 in an arg (a ${VAR} from the ANSI environment, a mistyped
+    // config.yaml) was serialized as U+FFFD. Name the plugin and the arg KEYS,
+    // never the values (they may hold secrets).
+    for (const std::string& key : item.args_replaced_keys) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PLUGIN] %s: arg '%s' held invalid UTF-8; bytes replaced with "
+          "U+FFFD in args_json", item.name.c_str(), key.c_str());
+    }
+
     // A v3 plugin (only NvrPluginInit) has no args channel — if the operator
     // configured args for it, say so rather than dropping them silently. Do NOT
     // log the args_json itself (it may hold secrets); log only that args exist.
