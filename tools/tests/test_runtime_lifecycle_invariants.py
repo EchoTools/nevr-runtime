@@ -6,7 +6,101 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def strip_comments(text: str) -> str:
+    """Remove // line comments and /* */ block comments from C++ source text.
+
+    A regex over raw source cannot distinguish "the call is here" from "the
+    call used to be here and is now commented out" — both contain the same
+    substring. Strip comments first so a commented-out call site (with or
+    without a decoy real statement nearby) is invisible to the regex, the
+    same way the compiler would see it. String/char literals are tracked so
+    a literal containing "//" or "/*" is not treated as a comment start.
+    Newlines are preserved so line numbers in any future diagnostics stay
+    roughly aligned; comment bodies are dropped, not blanked to the same width.
+    """
+    result = []
+    i = 0
+    n = len(text)
+    in_line_comment = False
+    in_block_comment = False
+    in_string = False
+    in_char = False
+    while i < n:
+        c = text[i]
+        two = text[i : i + 2]
+        if in_line_comment:
+            if c == "\n":
+                in_line_comment = False
+                result.append(c)
+            i += 1
+            continue
+        if in_block_comment:
+            if two == "*/":
+                in_block_comment = False
+                i += 2
+                # The compiler treats a block comment as whitespace, so a
+                # closed block comment must leave a separator behind it —
+                # otherwise "return/**/Unregister();" collapses into
+                # "returnUnregister();" and \bUnregister can no longer match
+                # a real call that a comment merely interrupts.
+                result.append(" ")
+            else:
+                if c == "\n":
+                    result.append("\n")
+                i += 1
+            continue
+        if in_string:
+            result.append(c)
+            if c == "\\" and i + 1 < n:
+                result.append(text[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_string = False
+            i += 1
+            continue
+        if in_char:
+            result.append(c)
+            if c == "\\" and i + 1 < n:
+                result.append(text[i + 1])
+                i += 2
+                continue
+            if c == "'":
+                in_char = False
+            i += 1
+            continue
+        if two == "//":
+            in_line_comment = True
+            i += 2
+            continue
+        if two == "/*":
+            in_block_comment = True
+            i += 2
+            continue
+        if c == '"':
+            in_string = True
+            result.append(c)
+            i += 1
+            continue
+        if c == "'":
+            in_char = True
+            result.append(c)
+            i += 1
+            continue
+        result.append(c)
+        i += 1
+    return "".join(result)
+
+
 def extract_braced_function(source: str, signature: str) -> str:
+    """Extract a function body by brace-matching, with comments stripped.
+
+    Every sensor in this file matches against the returned text with regex
+    or substring checks, none of which can tell real code from a comment
+    describing it. Stripping here, once, means every sensor gets the same
+    comment-transparency the compiler has — not just the ones a reviewer
+    happened to wrap by hand (#123).
+    """
     start = source.index(signature)
     opening = source.index("{", start)
     depth = 0
@@ -16,7 +110,7 @@ def extract_braced_function(source: str, signature: str) -> str:
         elif source[index] == "}":
             depth -= 1
             if depth == 0:
-                return source[opening : index + 1]
+                return strip_comments(source[opening : index + 1])
     raise AssertionError(f"unterminated function body: {signature}")
 
 
@@ -108,6 +202,11 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # no lock (echovr.exe 0x140f8df20). The shutdown thread now hands that work to Update()
         # through MainThreadHandoff; its own fallback must skip the registry.
         source = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
+        # Comment-stripped (#123): extract_braced_function strips comments for
+        # every caller, so a commented-out call site with a decoy real
+        # statement nearby can't satisfy these regexes — a raw substring
+        # match can't tell "the call is here" from "the call is described in
+        # a comment above the decoy".
         shutdown = extract_braced_function(source, "void GameServerLib::BeginGracefulShutdown(")
 
         for forbidden in (r"\bUnregister\s*\(\s*\)", r"\bUnregisterAllCallbacks\s*\(",
@@ -139,6 +238,10 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # the owner null every unregister silently skipped the game and only cleared the struct. No
         # C++ test links gameserver.cpp, so the wiring is pinned here.
         source = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
+        # Comment-stripped (#123): same reasoning as the #44 sensor above — a
+        # commented-out RecordBroadcasterOwner call with a `owner = nullptr;`
+        # decoy nearby can't satisfy the substring these regexes look for,
+        # because extract_braced_function strips comments before returning.
         register = extract_braced_function(source, "void GameServerLib::RegisterBroadcasterCallbacks(")
         record = re.search(r"\bGameServer::RecordBroadcasterOwner\s*\(\s*\*m_context\s*\)", register)
         self.assertIsNotNone(record, "RegisterBroadcasterCallbacks no longer records the callback owner")
