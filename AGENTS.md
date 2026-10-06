@@ -239,38 +239,41 @@ You are not the first agent to work here, and you won't be the last. Act like it
 
 These bind every agent that works here, whatever its model or vendor. Another agent's
 worktrees, branches, scratch and PRs are theirs; do not touch them without being told to.
+The agent the owner has made responsible for the repo merges PRs; other agents hand off.
 
 ### Ownership and cleanup
 
-- **Keep a ledger.** `~/.local/share/repo-hygiene/nevr-runtime-ledger.md` lists every worktree,
-  branch, scratch file, issue, PR and push to someone else's branch an agent has made, with
-  its owner (your seat name), purpose and removal condition. Add the line in the same turn
-  you create the thing. Read the ledger before deleting anything; an item not in it is not
-  yours.
+- **Keep a ledger.** `~/.local/share/repo-hygiene/nevr-runtime-ledger.md` is a markdown table
+  (artifact, owner, purpose, remove-when) of every worktree, branch, scratch file, issue, PR and
+  push to another agent's branch an agent has made; the owner is your seat name. Add the row in
+  the same turn you create the thing. Read the ledger before deleting anything; an item not in it
+  is not yours.
 - **Worktrees say whose they are.** Create with `git worktree add --no-track -b <agent>-<purpose>
   .claude/worktrees/<agent>-<purpose> <base>`, then `git worktree lock --reason "<agent> <purpose>,
   remove when <condition>"` and `git config branch.<branch>.description "<same>"`.
-- **Scratch is per agent.** Write only under `/var/tmp/work-nevr-runtime/<agent>/`. Delete what you
-  created when you are done, outright, not into the user's trash. Never delete by pattern across
-  the shared directory.
+- **Scratch is per agent.** Files you create by hand go under `/var/tmp/work-nevr-runtime/<agent>/`;
+  files the repo's own tools write at the scratch root stay where they are. When you are done,
+  delete the scripts, copies and build output you created, outright, not into the user's trash.
+  Run logs and evidence are kept. Never delete by pattern across the shared directory.
 - **Remove a worktree only after proving it is redundant.** Its branch tip is merged into
-  `origin/main` by ancestry or `git cherry`, or is on a remote; nothing is unpushed; no process has
-  its cwd inside; each "untracked" warning is real (`git check-ignore` it). Never `--force`.
-  `git worktree remove` refuses a worktree whose submodules are initialised: deinit them and
-  check their local branches have no commits beyond upstream before removing the metadata.
-- **Disk.** A worktree build is about 7.5 GB. Check `df -h /` before starting one, keep one build
+  `origin/main` by ancestry or `git cherry`, or is on a remote; `git status --short` is empty
+  (ignored files are deleted with the worktree); no process has its cwd inside. Run
+  `git worktree unlock <path>` first. Never `--force`. For a worktree with initialised submodules,
+  run `git submodule deinit --all`, check each submodule's local branches have no commits beyond
+  upstream, delete `.git/worktrees/<name>/modules`, then remove the worktree.
+- **Disk.** A worktree build is 3 to 8 GB. Check `df -h /` before starting one, keep one build
   tree per agent, and remove it when its PR merges.
 
 ### Git
 
 - **Branches are cut with `--no-track` and pushed by explicit refspec:**
-  `git push origin <local>:refs/heads/<remote>`. Read the `->` line of every push, and after
-  pushing a new branch confirm `git ls-remote origin main` did not move.
-- **Do not rewrite pushed history.** No rebase, amend, squash or force-push on a branch that has
-  been pushed or has a PR, and never on someone else's commits or signatures. Bring a branch up
-  to date with `git merge origin/main`.
-- **PRs target `main`.** Do not open a PR based on another feature branch. If the next unit needs
-  the previous one, wait for it to merge.
+  `git push origin <local>:refs/heads/<remote>`. Record `git ls-remote origin main` before the push
+  and compare after it; read the `->` line of every push.
+- **Update with `git fetch` and `git merge origin/main`,** never `git pull`.
+- **Do not rewrite pushed history.** No rebase, amend, squash or force-push on a pushed branch or
+  on any signed commit. Fix a pushed mistake with a new commit.
+- **PRs target `main`.** A unit that needs an unmerged one starts after that one merges; work on
+  something independent meanwhile.
 - **Report a mistake the moment you see it,** with the command and its output.
 
 ### Review, verification and merge
@@ -280,37 +283,41 @@ worktrees, branches, scratch and PRs are theirs; do not touch them without being
   evidence. Merge only when the review is clean, or when each finding is fixed and re-verified on
   the new tip.
 - **A test must fail without the change.** For every test you add or change, revert or mutate the
-  source, run it, paste the failing output, restore the source and show it passing. A test that
-  passes with the fix removed is not a test.
+  source, run it, paste the failing output, restore the source and show it passing.
 - **The PR body is the evidence.** It states each command run on the exact tip and its result, what
-  was not run, and the tracking issue. Update it whenever the base or the content changes. Run
-  `just verify` green on the tip before merging, and the client login test for any change to
-  runtime code.
-- **Fresh worktrees need build inputs.** Copy `extern/{minhook,breakpad,lss}` (without their `.git`
-  files), `gen/` and `.env` from the main checkout, read-only; never print `.env`. Configure
-  client builds with `-DNEVR_REQUIRE_BUILTIN_DEFAULTS=ON` so the production endpoints are
-  embedded from `.env` or the environment.
-- **Client login test.** Start `launch-client.sh --dll <build>/bin/BugSplat64.dll` in the
-  background, read the run's own JSONL log for `built-in defaults embedded`, `LOGIN SUCCESS` and
-  `to logged in`, stop your own `echovr.exe`, and confirm the script restored the original DLL.
+  was not run, and the tracking issue. Update it whenever the base or the content changes.
+- **Verification before merge.** `just verify` green on the tip, and the client login test as
+  described under "System test after every commit". The run's log must show all four keys
+  (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
+  `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
+- **Fresh worktrees need build inputs.** From the main checkout, leaving it unchanged, copy
+  `extern/{minhook,breakpad,lss}` (without their `.git` files), `gen/` and `.env`; never print
+  `.env`. Configure client builds by hand with `cmake --preset <preset>
+  -DNEVR_REQUIRE_BUILTIN_DEFAULTS=ON`, then `cmake --build --preset <preset>`.
+- **Client login test mechanics.** Run the main checkout's `./launch-client.sh --dll <absolute path to
+  the build's BugSplat64.dll>` in the background, one client at a time. Read the run's JSONL log,
+  stop your own `echovr.exe`, and confirm the script restored the original DLL.
 
 ### Documentation, plans and findings
 
 - **Docs state the current tree.** No "removed", "previously", "approved by", commit shas or dated
-  narrative in markdown or comments. Design lives in `docs/adr/`, tests, code comments, or a
-  GitHub issue; a plan is a tracking issue plus ADRs. Unimplemented design stays only with the
-  owner's approval. Cite files and symbols, not line ranges. Before deleting a doc, move its
-  load-bearing facts to where they belong and say where.
+  narrative in markdown or comments, and no citation of a deleted file. Design lives in
+  `docs/adr/`, tests, code comments, or a GitHub issue; `docs/design/` holds only unimplemented
+  design the owner has approved. A plan is a tracking issue plus ADRs. In docs and comments cite
+  files and symbols, not line ranges; reports and findings use `file:line`. Deleting a doc needs
+  the owner's confirmation; move its load-bearing facts first and say where.
 - **Fix it or file it, in the same turn.** A defect you find that you do not fix gets a GitHub issue
-  with evidence. Do not leave it in prose for the next reader to rediscover.
+  with evidence. A security-sensitive finding is not filed on this public repo; report it to the
+  owner.
 
 ### Dispatching agents
 
 - **Pick the model by the work.** Sonnet for specified implementation and verification; Opus for
-  reviews and open design questions; a small model for search and mechanical edits.
-- **Brief them with the rules above.** Name their worktree, scratch directory and push refspec,
-  forbid rebase, force-push, merging and pushing to `main`, require mutation proof for tests, and
-  ask for commands run with raw output and a list of what was not verified.
+  adversarial reviews and open design questions; a small model for search and mechanical edits.
+- **Brief them with the rules above.** Name their worktree, their own scratch subdirectory (never
+  the dispatcher's) and push refspec; forbid rebase, force-push, merging and pushing to `main`;
+  require mutation proof for tests; ask for commands run with raw output and a list of what was
+  not verified.
 - **Subagents report observations, not verdicts.** Check what they claim before relying on it.
 
 ## Production Deployment — FORBIDDEN without explicit user approval
@@ -402,9 +409,8 @@ the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), wh
 - **Mandatory pre-read gate.** Before any C++/build work, read the project's
   CPP-MINGW-ADDENDUM in full — its Hard-Stops bind every build/config change.
 - **Scratch dir.** All agent scratch/staging/evidence files live under
-  `/var/tmp/work-nevr-runtime/<agent>/` (your own subdirectory; see "Working practices"),
-  never `/tmp` (RAM-backed on this host) and never in the repo. (Basis: RULINGS.md
-  2026-07-20 "Scratch dir (nevr)".)
+  `/var/tmp/work-nevr-runtime/` (see "Working practices"), never `/tmp` (RAM-backed on this
+  host) and never in the repo.
 - **Verify entry point.** `just verify` is the single closed-loop gate:
   `just build`, then a second real `cmake --build` (because `just build` greps its
   own output and always exits 0), then `test-auth-unit` under Wine, then ~35
