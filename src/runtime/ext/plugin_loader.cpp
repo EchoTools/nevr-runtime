@@ -19,6 +19,9 @@ struct LoadedPlugin {
   NvrPluginInfo               info;
   uint32_t                    api_version;
   uint32_t                    capabilities;  /* NvrPluginCapabilities bitmask; 0 = UNDECLARED */
+  /* What get_plugin_info hands out: its own struct, not a cast of `info` (whose
+   * padding sits where NvrLoadedPluginInfo has api_version). */
+  NvrLoadedPluginInfo         loaded_info;
   NvrPluginInit_fn            init;
   NvrPluginOnFrame_fn         on_frame;
   NvrPluginOnGameStateChange_fn on_state_change;
@@ -52,11 +55,12 @@ int GetLoadedPluginCount(void) {
 
 const NvrLoadedPluginInfo* GetLoadedPluginInfo(int index) {
   if (index < 0 || static_cast<size_t>(index) >= g_plugins.size()) return nullptr;
-  const LoadedPlugin& p = g_plugins[index];
-  // NvrLoadedPluginInfo is a SUBSET of LoadedPlugin's fields in the same
-  // layout — so a reinterpret_cast is sound and the returned pointer is
-  // process-lifetime stable (g_plugins never shrinks after load).
-  return reinterpret_cast<const NvrLoadedPluginInfo*>(&p.info);
+  // The plugin's own NvrLoadedPluginInfo. Not a cast of p.info: NvrPluginInfo is
+  // padded to 32 bytes, so through it api_version read the padding and
+  // capabilities read api_version. Stable for the process lifetime: LoadPlugins
+  // reserves g_plugins before any init, so it never reallocates under a plugin
+  // that kept the pointer (and it never shrinks after load).
+  return &g_plugins[index].loaded_info;
 }
 
 // N112 / #60 — the login's `nevr_plugins` array: one entry per configured
@@ -329,6 +333,9 @@ void LoadPlugins() {
         s.apiVersion, s.caps, initVia, CapsLoadPriority(s.caps));
   }
 
+  // A plugin may keep what get_plugin_info returned from inside its init: no
+  // push_back below may move the ones already loaded.
+  g_plugins.reserve(g_plugins.size() + staged.size());
   for (const StagedPlugin& s : staged) {
     const char* initVia = s.initKind == PluginInitKind::Ex ? "InitEx" :
                           s.initKind == PluginInitKind::Legacy ? "Init" : "no-init";
@@ -358,7 +365,11 @@ void LoadPlugins() {
       }
     }
 
-    g_plugins.push_back({s.hModule, s.info, s.apiVersion, s.caps,
+    const NvrLoadedPluginInfo loadedInfo = {
+        s.info.name, s.info.description,
+        s.info.version_major, s.info.version_minor, s.info.version_patch,
+        s.apiVersion, s.caps};
+    g_plugins.push_back({s.hModule, s.info, s.apiVersion, s.caps, loadedInfo,
                          s.initFn, s.onFrameFn,
                          s.onStateChangeFn, s.shutdownFn, s.path});
     {
