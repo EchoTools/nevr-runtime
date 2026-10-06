@@ -80,7 +80,7 @@ std::string ResolveVar(const std::string& inner) {
 // way to write ${ that isn't a variable (e.g. in a plugin's args, where an unset
 // ${...} would otherwise fail the load). No other `$` is special: $$ not followed by
 // { stays $$, and $$${X} yields $${X}. A literal `$` immediately followed by a
-// variable's value therefore cannot be written.
+// variable's value is written with a default: ${UNSET:-$}${X}.
 std::string InterpolateString(const std::string& in) {
   std::string out;
   std::size_t i = 0;

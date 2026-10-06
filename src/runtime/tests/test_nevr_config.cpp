@@ -273,7 +273,17 @@ TEST(NevrConfig, EscapedRequiredSyntaxIsLiteralAndDoesNotThrow) {
   EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "${NEVR_TEST_ESC_REQ:?msg}");
 }
 
-// `$$` not followed by `{` is two literal dollars (unlike docker-compose).
+// A literal `$` directly before a variable's value: the unset variable's default is `$`.
+TEST(NevrConfig, LiteralDollarBeforeValueViaDefault) {
+  UnsetEnv("NEVR_TEST_NOT_SET");
+  SetEnv("NEVR_TEST_REAL", "value");
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  serverdb: \"${NEVR_TEST_NOT_SET:-$}${NEVR_TEST_REAL}\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "$value");
+  UnsetEnv("NEVR_TEST_REAL");
+}
+
+// `$$` not followed by `{` is two literal dollars.
 TEST(NevrConfig, DoubleDollarWithoutBraceIsUnchanged) {
   const nevr::NevrConfig cfg =
       nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"$$plain\"\n");
