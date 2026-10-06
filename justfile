@@ -500,6 +500,23 @@ test-auth-integration:
 # Run all auth tests
 test-auth: test-auth-groundtruth test-auth-unit
 
+# Run the Quest redirect test on the host. src/quest/tests/service_redirect_test.cpp is
+# compiled for Android by src/quest/CMakeLists.txt but cannot execute there; this
+# compiles the same test, the same vectors (service_redirect_vectors.h) and the same
+# shared source (src/runtime/lifecycle/service_redirect.cpp) with the host g++ and runs
+# it. No NDK. Fail-close: a compile error or any vector mismatch exits nonzero.
+test-quest-shared:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-shared-host"
+    mkdir -p "$out"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
+        src/runtime/lifecycle/service_redirect.cpp \
+        src/quest/tests/service_redirect_test.cpp \
+        -o "$out/service_redirect_test"
+    "$out/service_redirect_test"
+    echo "test-quest-shared: all redirect vectors pass on the host"
+
 # --- Verify (closed-loop gate) ---
 
 # Aggregate verify gate for the all-the-way-down canon: build everything, then run
@@ -517,6 +534,7 @@ verify:
     # from the compiler/linker itself — a no-op when green, nonzero when truly broken.
     cmake --build --preset {{ preset }}
     just test-auth-unit
+    just test-quest-shared
     python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
@@ -1036,6 +1054,11 @@ verify:
     # whole time — token_auth parsed it from the auth response and persisted it to
     # the credential cache — it had simply never been exposed.
     #
+    # The profile is assembled by key assignments (profile["displayname"] = ...), not
+    # inside a C string literal, so these patterns match the source text directly.
+    # A check that matches JSON text inside a string literal has to strip the
+    # backslash before every quote first (see N115): left escaped, such a pattern
+    # matches nothing and a broken tree still passes.
     N123_RC=0; N123_WS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/compat/ws_bridge.cpp) || N123_RC=$?
     sensor_stage1 "N123 login display name sourced" "src/runtime/compat/ws_bridge.cpp" "$N123_RC"
     sensor_nonempty "N123 login display name sourced" "non-comment lines of compat/ws_bridge.cpp" "$N123_WS"

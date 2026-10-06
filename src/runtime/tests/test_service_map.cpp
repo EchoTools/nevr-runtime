@@ -2,13 +2,13 @@
 // (N133 S3). Locks the two things the migration had to preserve exactly:
 //
 //   1. the legacy-flat-key -> config.yaml dotted-path map (FlatKeyToYamlPath), and
-//   2. the service-endpoint resolution the config.cpp hooks used to run against
+//   2. the service-endpoint resolution the config.cpp hooks run against
 //      the game JSON — host fallback (ResolveServiceHost) and scheme redirect
 //      (ResolveRedirect) — including the "absent key -> unchanged default" case
 //      for each of the ~10 service keys, which is HARD RISK #2 (no default drift).
 //
-// Pure: links service_map.cpp + nevr_core + yaml-cpp, no game stubs. Built under
-// -DBUILD_TESTING=ON and run under Wine by `just test-auth-unit` (`just verify`).
+// Pure: links service_map.cpp + service_redirect.cpp + nevr_core + yaml-cpp, no
+// game stubs. Built under -DBUILD_TESTING=ON and run under Wine by `just test-auth-unit` (`just verify`).
 
 #include <cstdlib>
 #include <functional>

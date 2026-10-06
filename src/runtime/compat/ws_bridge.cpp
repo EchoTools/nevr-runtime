@@ -723,10 +723,18 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   // and JSON escaping rules.
   const BuildIdentity::Info& buildId = BuildIdentity::Get();
   const std::string pluginManifest = BuildPluginManifestJson();
+  // The serial is the one the stock client sends: the game's serial buffer in
+  // VR, "N/A" with no VR, "unknown" only when the game has none. Only its source
+  // and length are logged, never the value.
   const HmdSerial::Choice hmd = GameHmdSerial();
   Log(EchoVR::LogLevel::Info, "[NEVR.WS] login hmd serial source=%s length=%zu",
       HmdSerial::SourceName(hmd.source), hmd.value.size());
 
+  // nevr_plugins lists every configured plugin with what the loader did with it
+  // (loaded, failed, or disabled). The manifest is parsed so the login field is a
+  // JSON array, not a string-escaped copy of one. The non-throwing parse does not
+  // fail on the builder's own nlohmann output; if it ever did, the login still
+  // goes out with an empty list and a Warning that says so.
   nlohmann::json plugins = nlohmann::json::parse(pluginManifest, nullptr, false);
   if (plugins.is_discarded() || !plugins.is_array()) {
     Log(EchoVR::LogLevel::Warning,

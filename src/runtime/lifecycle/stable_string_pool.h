@@ -1,4 +1,30 @@
 // Process-stable C-string storage shared by PCVR and Quest adapters.
+//
+// Storage and lifetime:
+// - InternStableCStr stores each distinct value once and returns a NUL-terminated,
+//   immutable pointer. Equal values return the same pointer and consume no quota.
+// - The owner of the process-wide pool is heap-allocated and never destroyed. No
+//   DSO or static destructor reclaims it, so a returned pointer stays readable
+//   through module unload until process exit. Game code may hold these pointers
+//   for as long as it likes, so nothing in the pool is ever freed.
+// - Nothing clears or shrinks the pool, including on detach. Secret-bearing
+//   configured strings (the game-native config JSON carries the server key)
+//   therefore stay resident until process exit; their values are never logged.
+// - A value containing an embedded NUL is rejected rather than truncated.
+//
+// Limits (kStableStringMaxCount, kStableStringMaxPayloadBytes, kStablePoolMaxBytes):
+// - at most 1024 distinct strings;
+// - at most 1 MiB of payload per string, counted without its terminating NUL;
+// - at most 16 MiB of live string bytes in total, counting every terminating NUL;
+// - set-node and allocator overhead are not counted.
+// Each module that compiles this source owns its own pool and quota, and a module
+// reload creates a new pool: the limits are per loaded module, not per process.
+//
+// Failure: exceeding a limit or failing to allocate returns a non-success
+// InternStatus and publishes nothing; no escaped value is ever evicted. The
+// C accessors in service_config.cpp treat any such status as terminal (they log
+// the status name and the pool counts, then call ForceFatalExit) because a null
+// return already means "absent" to their callers.
 #pragma once
 
 #include <cstddef>
