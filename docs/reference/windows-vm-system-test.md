@@ -2,7 +2,7 @@
 
 Everything else in this repo is tested under Wine. Wine cannot reproduce
 Windows-only failures — issue #13 was "works fine under Wine". This test runs the
-built `BugSplat64.dll` on a real Windows guest (libvirt) and judges the boot.
+built `BugSplat64.dll` + `nevr.dll` pair on a real Windows guest (libvirt) and judges the boot.
 
 ```sh
 just build
@@ -33,17 +33,18 @@ purpose: a misconfigured VM must never read as a runtime regression.
 
 The test never touches the guest's own install. It builds `C:\nevr-systest\`: a copy
 of `bin\win10` **without** `dbgcore.dll` (a legacy Echo Relay hijack DLL that NEVR
-refuses to run beside) and without the stock `BugSplat64.dll`, junctions to the
-shared `_data`/`content`/`sourcedb`, and its own `_local\config.json`. That config
-points every service at `127.0.0.1:1` (connection refused), so the boot path runs
-with no production contact and no credentials.
+refuses to run beside) and without the stock `BugSplat64.dll` or any `nevr.dll`,
+junctions to the shared `_data`/`content`/`sourcedb`, and its own `_local\config.json`.
+That config points every service at `127.0.0.1:1` (connection refused), so the boot
+path runs with no production contact and no credentials. The matched pair
+(`BugSplat64.dll` + `nevr.dll`) is then copied in from the local build.
 
 ## Scenarios and checks
 
 `gai` builds `tools/winvm/gai_probe.c` and times the exact `getaddrinfo` call that
 `CBroadcaster::Initialize` makes (empty node string, flags 0, `AF_INET`/UDP).
 
-`boot` deploys the DLL, launches `echovr.exe -noovr -server -headless -noconsole`,
+`boot` deploys the DLL pair, launches `echovr.exe -noovr -server -headless -noconsole`,
 observes for `--wait` seconds (default 90, minimum 45), then judges:
 
 | Check | Fails when |

@@ -11,29 +11,36 @@ Part of the **nEVR** project — keeping Echo VR alive.
 
 ## What gets built
 
-### The main DLL
+### The two DLLs
 
-**`src/runtime/` → `BugSplat64.dll`**, deployed under that same name.
+**`src/runtime/` → `BugSplat64.dll` (the stable host) + `nevr.dll` (the changing
+runtime)**, deployed as a matched pair under those same names.
 
 The game statically imports `BugSplat64.dll` (the original crash reporter), so
 replacing it gives the earliest possible hook point — it loads before `WinMain`.
-It carries the boot hooks, CLI flags, headless/server mode patches, crash
-recovery, config and service redirection, the module and plugin loaders, the
-built-in log filter, and the in-process game server
+`BugSplat64.dll` stays small and stable: it validates the game image, installs the
+early boot hook, and lazily loads the sibling `nevr.dll` beside it. All the
+frequently-changing features live in `nevr.dll`: the boot hooks, CLI flags,
+headless/server mode patches, crash recovery, config and service redirection, the
+module and plugin loaders, the built-in log filter, and the in-process game server
 (`src/runtime/server/`).
+
+The two files are a **matched pair** and must ship together: `nevr.dll` without
+`BugSplat64.dll` is never loaded, and `BugSplat64.dll` without `nevr.dll` runs the
+original game with no community features.
 
 Hooking is [MinHook](https://github.com/TsudaKageyu/minhook)-based.
 
 ### Runtime-loaded modules
 
 The `platform_compat` and `token_auth` modules are statically linked into
-`BugSplat64.dll`; there are no separate module DLLs to deploy. They use
+`nevr.dll`; there are no separate module DLLs to deploy. They use
 `NvrModuleContext`, not the plugin interface.
 
 | Module | Linked into | Purpose |
 | ------ | ----------- | ------- |
-| `platform-compat` | `BugSplat64.dll` | Schannel TLS modernisation, WinHTTP→libcurl bridge, Wine `_temp` fix |
-| `token-auth` | `BugSplat64.dll` | Device-code auth, token cache |
+| `platform-compat` | `nevr.dll` | Schannel TLS modernisation, WinHTTP→libcurl bridge, Wine `_temp` fix |
+| `token-auth` | `nevr.dll` | Device-code auth, token cache |
 
 The bridge is why the game never negotiates TLS for its WebSocket traffic: it
 speaks plaintext to a local proxy, and the proxy terminates TLS outbound.
@@ -90,13 +97,14 @@ From `build/mingw-release/bin/`:
 | Artifact | Destination |
 | -------- | ----------- |
 | `BugSplat64.dll` | game directory (replaces the crash reporter) |
+| `nevr.dll` | game directory, beside `BugSplat64.dll` (a matched pair) |
 | `echovr_server.exe` | game directory, alongside `echovr.exe` |
 | `plugins/*.dll` | `plugins/` next to the game binary |
 
 ## Repository layout
 
 ```
-src/runtime/   BugSplat64.dll — hooks, modes, crash recovery, gameserver
+src/runtime/   BugSplat64.dll (host) + nevr.dll (runtime) — hooks, modes, crash recovery, gameserver
 src/modules/       statically linked module implementations (platform-compat, token-auth)
 src/abi/           libnevr_abi.a  — the echovr.exe ABI surface
 src/core/          libnevr_core.a — our own primitives (links nevr_abi)
@@ -143,6 +151,8 @@ commented out in the root `CMakeLists.txt`). Use it for local install rules:
 
 ```cmake
 set(GAME_DIR "/path/to/echovr/bin/win10")
+add_custom_command(TARGET nevr_host POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_host> "${GAME_DIR}/BugSplat64.dll")
 add_custom_command(TARGET nevr_runtime POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_runtime> "${GAME_DIR}/BugSplat64.dll")
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_runtime> "${GAME_DIR}/nevr.dll")
 ```

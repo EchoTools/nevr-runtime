@@ -4,7 +4,9 @@ set -euo pipefail
 # Deploy the current build (not dist/ — dist/ goes stale; build/ is always fresh).
 echo "=== Deploying from build/mingw-release/bin/ ==="
 cp -v build/mingw-release/bin/BugSplat64.dll echovr/bin/win10/
-# platform_compat and token_auth are statically linked into BugSplat64.dll (2026-08-02).
+# nevr.dll is the matched-pair runtime the host loads lazily; it must sit beside BugSplat64.dll.
+cp -v build/mingw-release/bin/nevr.dll echovr/bin/win10/
+# platform_compat and token_auth are statically linked into nevr.dll (2026-10-05 split).
 if ls build/mingw-release/bin/plugins/*.dll >/dev/null 2>&1; then
   cp -rv build/mingw-release/bin/plugins/* echovr/bin/win10/plugins/
 fi

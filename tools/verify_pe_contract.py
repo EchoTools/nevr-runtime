@@ -18,6 +18,9 @@ Checks (all fail-closed; an unreadable or empty table is a failure, never a pass
   4. GAME IMPORTS (only with --game-exe) — every symbol echovr.exe imports from
                  BugSplat64.dll is imported BY NAME, equals the pinned
                  GAME_IMPORTS set, and is exported by the DLL.
+  5. RUNTIME ENTRY — nevr.dll exports NEVR_GetRuntimeApi (the versioned entry
+                 point the host resolves lazily; a packaged nevr.dll without it
+                 boots degraded as missing_entry).
 
 The table parser reads `objdump -p` output. Signatures/calling conventions are
 NOT visible in a PE export table for the undecorated C exports; this checker
@@ -68,6 +71,12 @@ EXPECTED_EXPORTS = frozenset({
 ORDINAL_ONE = "DetoursExportPlaceholder"
 RUNTIME_DLL = "nevr.dll"
 HOST_DLL = "BugSplat64.dll"
+
+# The single versioned entry point nevr.dll exposes to the host
+# (src/core/runtime_abi.h kGetRuntimeApiExport). The host resolves it lazily and
+# validates the descriptor it returns, so a packaged nevr.dll without this export
+# would boot degraded (missing_entry) — the pair must be checked, not just the host.
+RUNTIME_ENTRY = "NEVR_GetRuntimeApi"
 
 # Measured 2026-10-05 from echovr.exe sha256
 # b6d08277e5846900c81004b64b298df6acba834b69700a640b758bda94a52043 (PE timestamp
@@ -195,6 +204,15 @@ def check_game(objdump_text, exports):
     return names
 
 
+def check_runtime(objdump_text):
+    """Check 5: nevr.dll exposes its versioned entry point for the host to resolve."""
+    exports = parse_exports(objdump_text)
+    if RUNTIME_ENTRY not in exports:
+        raise ContractError(f"{RUNTIME_DLL} does not export {RUNTIME_ENTRY}; "
+                            "the host resolves it lazily and would report missing_entry")
+    return exports
+
+
 def run_objdump(path):
     objdump = next((tool for tool in OBJDUMP_CANDIDATES if shutil.which(tool)), None)
     if objdump is None:
@@ -210,7 +228,9 @@ def run_objdump(path):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
     parser.add_argument("--dll", required=True, type=pathlib.Path,
-                        help="built BugSplat64.dll to check")
+                        help="built BugSplat64.dll (host) to check")
+    parser.add_argument("--runtime", required=True, type=pathlib.Path,
+                        help="built nevr.dll (runtime) to check")
     parser.add_argument("--game-exe", type=pathlib.Path,
                         help="echovr.exe; when given, its BugSplat64.dll imports are checked")
     args = parser.parse_args(argv)
@@ -218,6 +238,9 @@ def main(argv=None):
         if not args.dll.is_file():
             raise ContractError(f"DLL not found: {args.dll}")
         exports = check_host(run_objdump(args.dll))
+        if not args.runtime.is_file():
+            raise ContractError(f"runtime DLL not found: {args.runtime}")
+        runtime_exports = check_runtime(run_objdump(args.runtime))
         game_note = "game-imports=not-checked (no --game-exe)"
         if args.game_exe is not None:
             if not args.game_exe.is_file():
@@ -227,8 +250,9 @@ def main(argv=None):
     except ContractError as error:
         print(f"pe-contract: FAIL — {error}", file=sys.stderr)
         return 1
-    print(f"pe-contract: OK exports={len(exports)} {ORDINAL_ONE}=ordinal-1 "
-          f"no-{RUNTIME_DLL}-import {game_note}")
+    print(f"pe-contract: OK host-exports={len(exports)} {ORDINAL_ONE}=ordinal-1 "
+          f"no-{RUNTIME_DLL}-import runtime-{RUNTIME_ENTRY}={len(runtime_exports)} "
+          f"{game_note}")
     return 0
 
 

@@ -45,6 +45,15 @@ def game_dump(rows=None):
                       "\tvma:     Ordinal  Hint  Member-Name  Bound-To"] + rows + [""])
 
 
+def runtime_dump(exports=("NEVR_GetRuntimeApi", "TokenAuth_GetToken")):
+    rows = [f"\t[{hint:4d}] +base[{hint + 1:4d}]  {hint:04x} {name}"
+            for hint, name in enumerate(exports)]
+    return "\n".join(
+        ["The Export Tables (interpreted .edata section contents)", "",
+         "[Ordinal/Name Pointer] Table -- Ordinal Base 1",
+         "\t          Ordinal   Hint Name"] + rows + [""])
+
+
 class HostContractTest(unittest.TestCase):
     def test_current_surface_passes(self):
         exports = contract.check_host(host_dump())
@@ -116,6 +125,15 @@ class GameContractTest(unittest.TestCase):
         with self.assertRaisesRegex(contract.ContractError, "imports nothing"):
             contract.check_game("\tDLL Name: KERNEL32.dll\n\t1f5e000  <none>  0001  ExitProcess\n",
                                 self.exports)
+
+
+class RuntimeContractTest(unittest.TestCase):
+    def test_runtime_exports_entry_point(self):
+        self.assertIn(contract.RUNTIME_ENTRY, contract.check_runtime(runtime_dump()))
+
+    def test_runtime_missing_entry_point_fails(self):
+        with self.assertRaisesRegex(contract.ContractError, "does not export"):
+            contract.check_runtime(runtime_dump(exports=("TokenAuth_GetToken",)))
 
 
 if __name__ == "__main__":

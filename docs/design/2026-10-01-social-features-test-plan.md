@@ -172,7 +172,8 @@ src/runtime/compat/social_party.h), so that case shows as "locked".
 1. Build the test DLL: `just preset=mingw-scenario build`. The control endpoint exists only in
    this build.
 2. Put `build/mingw-scenario/bin/BugSplat64.dll` in the game install as `BugSplat64.dll`, and
-   start the game the way you normally play.
+   `build/mingw-scenario/bin/nevr.dll` beside it as `nevr.dll` (a matched pair), then start the
+   game the way you normally play.
 3. Find the control port in the game log:
    `[NEVR.SCENARIO] control listening on 127.0.0.1:<port> (test build only)`.
 4. Go into a social lobby and open the party page on the tablet.

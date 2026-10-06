@@ -1240,13 +1240,14 @@ verify:
     # BugSplat/nevr split, step 1 (docs/design/2026-10-05-bugsplat-nevr-split.md):
     # the game-facing PE surface is pinned before any target-ownership change —
     # exact 26-name export set, DetoursExportPlaceholder at ordinal 1, no eager
-    # nevr.dll import. The game's own BugSplat64.dll imports are cross-checked
+    # nevr.dll import, and nevr.dll's NEVR_GetRuntimeApi entry point (the pair,
+    # not just the host). The game's own BugSplat64.dll imports are cross-checked
     # when the game binary is present (it is not in CI or a fresh worktree).
     if [ -f echovr/bin/win10/echovr.exe ]; then
-        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --game-exe echovr/bin/win10/echovr.exe
+        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime "build/{{ preset }}/bin/nevr.dll" --game-exe echovr/bin/win10/echovr.exe
     else
-        echo "pe-contract: NOTE game binary absent (echovr/bin/win10/echovr.exe) — game-import cross-check skipped; host export checks still run"
-        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll"
+        echo "pe-contract: NOTE game binary absent (echovr/bin/win10/echovr.exe) — game-import cross-check skipped; host + runtime export checks still run"
+        python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll" --runtime "build/{{ preset }}/bin/nevr.dll"
     fi
     # BugSplat/nevr split, step 5 (docs/design/2026-10-05-bugsplat-nevr-split.md):
     # no duplicate static state across the pair. nevr_core/the runtime globals must

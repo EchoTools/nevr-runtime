@@ -88,6 +88,9 @@ class ReleaseContractTest(unittest.TestCase):
         self.assertIn("add_dependencies(dist-lite-prepare echovr_server)", cmake)
         self.assertIn("find_program(MINGW_STRIP_TOOL NAMES x86_64-w64-mingw32-strip llvm-strip strip)", cmake)
         self.assertGreaterEqual(cmake.count('$<TARGET_FILE:echovr_server>'), 2)
+        # The matched-pair runtime must be copied into both the normal and lite
+        # staging trees (split step 6).
+        self.assertGreaterEqual(cmake.count('$<TARGET_FILE:nevr_runtime>'), 2)
         self.assertIn("VerifyDistribution.cmake", cmake)
         lite_distribution = cmake.split("# Lite Distribution Package Target", 1)[1].split(
             "# Legacy Distribution Package Target", 1)[0]
@@ -97,6 +100,7 @@ class ReleaseContractTest(unittest.TestCase):
                         lite_post_build.index('COMMAND ${CMAKE_COMMAND} -E echo "Lite distribution packages'))
         validator = (REPO / "cmake/VerifyDistribution.cmake").read_text()
         self.assertIn("echovr_server.exe", validator)
+        self.assertIn("nevr.dll", validator)
         distribution = cmake.split("# Distribution Package Target", 1)[1].split("# Legacy Distribution Package Target", 1)[0]
         executable_lines = re.sub(r"(?m)^\s*#.*$", "", distribution)
         self.assertNotRegex(executable_lines, r"\|\|\s*(true|\$\{CMAKE_COMMAND\}\s+-E\s+true)")
@@ -175,7 +179,9 @@ class ReleaseContractTest(unittest.TestCase):
     def test_docs_describe_static_modules_and_cmake_minimum(self):
         readme = (REPO / "README.md").read_text()
         agents = (REPO / "AGENTS.md").read_text()
-        self.assertRegex(readme, r"statically linked into\s+`BugSplat64\.dll`")
+        # After the BugSplat64/nevr split (step 5) the modules are statically linked
+        # into nevr.dll (the runtime), not the host.
+        self.assertRegex(readme, r"statically linked into\s+`nevr\.dll`")
         self.assertNotIn("`platform_compat.dll`", readme)
         self.assertNotIn("`token_auth.dll`", readme)
         self.assertIn("CMake 4.0+", readme)
@@ -225,7 +231,7 @@ class DistributionArchiveTest(unittest.TestCase):
         self.temp.cleanup()
 
     def make_archives(self, directory: pathlib.Path, files: tuple[str, ...] =
-                      ("BugSplat64.dll", "echovr_server.exe"), corrupt_tar: bool = False):
+                      ("BugSplat64.dll", "nevr.dll", "echovr_server.exe"), corrupt_tar: bool = False):
         payload = directory / "payload"
         payload.mkdir(parents=True)
         for name in files:
@@ -282,16 +288,17 @@ class DistributionArchiveTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_missing_corrupt_and_incomplete_archives_fail_closed_without_upload(self):
-        variants = ("missing-archive", "corrupt-archive", "missing-bugsplat", "missing-launcher")
+        variants = ("missing-archive", "corrupt-archive", "missing-bugsplat", "missing-nevr", "missing-launcher")
         for variant in variants:
             with self.subTest(variant=variant):
                 case = self.root / variant
                 case.mkdir()
                 files = {
-                    "missing-archive": ("BugSplat64.dll", "echovr_server.exe"),
-                    "corrupt-archive": ("BugSplat64.dll", "echovr_server.exe"),
-                    "missing-bugsplat": ("echovr_server.exe",),
-                    "missing-launcher": ("BugSplat64.dll",),
+                    "missing-archive": ("BugSplat64.dll", "nevr.dll", "echovr_server.exe"),
+                    "corrupt-archive": ("BugSplat64.dll", "nevr.dll", "echovr_server.exe"),
+                    "missing-bugsplat": ("nevr.dll", "echovr_server.exe"),
+                    "missing-nevr": ("BugSplat64.dll", "echovr_server.exe"),
+                    "missing-launcher": ("BugSplat64.dll", "nevr.dll"),
                 }[variant]
                 tar_archive, zip_archive = self.make_archives(
                     case, files, corrupt_tar=variant == "corrupt-archive")

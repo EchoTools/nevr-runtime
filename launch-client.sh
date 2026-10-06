@@ -1,8 +1,8 @@
 #!/bin/bash
 # Client system test on the NESTED display only (AGENTS.md "System test after every
-# commit"). Verifies the game directory is pristine, deploys the current BugSplat64.dll,
-# runs the client on Xephyr :101, judges the run from the game's own JSONL log, and
-# restores the original DLL.
+# commit"). Verifies the game directory is pristine, deploys the current BugSplat64.dll
+# + nevr.dll pair, runs the client on Xephyr :101, judges the run from the game's own
+# JSONL log, and restores the original files.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
@@ -10,6 +10,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 # the mingw-scenario build; see tools/scenario/run_scenario.py). --config PATH starts the game with
 # `-config PATH` (a JSON file; the runtime reads config.yaml from the same directory), so a run can
 # point at the local nakama without touching the game directory. Everything else is unchanged.
+# nevr.dll (the matched-pair runtime the host loads lazily) is always taken from the same directory
+# as the BugSplat64.dll, so the two always come from one build and can never be mixed.
 DLL=build/mingw-release/bin/BugSplat64.dll
 CONFIG=""
 while [[ $# -gt 0 ]]; do
@@ -21,6 +23,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist; build it first" >&2; exit 2; }
+NEVR_DLL="$(dirname "$DLL")/nevr.dll"
+[[ -f "$NEVR_DLL" ]] || { echo "ERROR: $NEVR_DLL does not exist (the matched-pair runtime must sit beside BugSplat64.dll); build it first" >&2; exit 2; }
 
 GAME_DIR=echovr/bin/win10
 LOCAL_DIR=echovr/_local
@@ -64,14 +68,46 @@ fi
 mkdir -p "$SCRATCH"
 CONSOLE_LOG="$SCRATCH/console.log"
 cp -p "$GAME_DIR/BugSplat64.dll" "$SCRATCH/BugSplat64.dll.orig"
+# nevr.dll is not part of a stock install, so a pristine game directory has none.
+# If one is already present (a run that failed to clean up), preserve it so it is
+# restored rather than silently discarded; otherwise restore means removing it.
+nevr_had_original=0
+if [[ -f "$GAME_DIR/nevr.dll" ]]; then
+  nevr_had_original=1
+  cp -p "$GAME_DIR/nevr.dll" "$SCRATCH/nevr.dll.orig"
+fi
 
 restore() {
   trap - EXIT
+  local failed=0
   cp -p "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll"
   if cmp -s "$SCRATCH/BugSplat64.dll.orig" "$GAME_DIR/BugSplat64.dll"; then
     echo "=== original BugSplat64.dll restored and verified ==="
   else
     echo "ERROR: BugSplat64.dll restore failed; original is $SCRATCH/BugSplat64.dll.orig" >&2
+    failed=1
+  fi
+  if [[ $nevr_had_original -eq 1 ]]; then
+    cp -p "$SCRATCH/nevr.dll.orig" "$GAME_DIR/nevr.dll"
+    if cmp -s "$SCRATCH/nevr.dll.orig" "$GAME_DIR/nevr.dll"; then
+      echo "=== original nevr.dll restored and verified ==="
+    else
+      echo "ERROR: nevr.dll restore failed; original is $SCRATCH/nevr.dll.orig" >&2
+      failed=1
+    fi
+  else
+    rm -f "$GAME_DIR/nevr.dll"
+    if [[ ! -e "$GAME_DIR/nevr.dll" ]]; then
+      echo "=== deployed nevr.dll removed (pristine state restored) ==="
+    else
+      echo "ERROR: nevr.dll removal failed; it is still in $GAME_DIR" >&2
+      failed=1
+    fi
+  fi
+  if [[ $failed -eq 0 ]]; then
+    echo "=== game directory restored and verified (BugSplat64.dll + nevr.dll) ==="
+  else
+    echo "WARNING: one or more files failed to restore; see above" >&2
   fi
   wineserver -k
 }
@@ -79,10 +115,12 @@ restore() {
 trap 'exit 143' INT TERM
 trap restore EXIT
 
-echo "=== Deploying $DLL ==="
+echo "=== Deploying $DLL + $NEVR_DLL ==="
 cp -v "$DLL" "$GAME_DIR/BugSplat64.dll"
+cp -v "$NEVR_DLL" "$GAME_DIR/nevr.dll"
 cmp -s "$DLL" "$GAME_DIR/BugSplat64.dll"
-sha256sum "$GAME_DIR/BugSplat64.dll"
+cmp -s "$NEVR_DLL" "$GAME_DIR/nevr.dll"
+sha256sum "$GAME_DIR/BugSplat64.dll" "$GAME_DIR/nevr.dll"
 
 echo "=== Starting echovr.exe -windowed (DISPLAY=$DISPLAY, WAYLAND_DISPLAY unset) ==="
 echo "=== Console log: $CONSOLE_LOG ==="

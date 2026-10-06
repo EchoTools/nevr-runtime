@@ -20,7 +20,10 @@ execute_process(
 if(NOT tar_result EQUAL 0)
   message(FATAL_ERROR "Cannot list distribution tar.zst ${ARCHIVE_TAR}: ${tar_error}")
 endif()
-foreach(required_artifact IN ITEMS BugSplat64.dll echovr_server.exe)
+# The BugSplat64.dll + nevr.dll matched pair must ship together (split step 6):
+# a one-file install is a defect, so nevr.dll is a required artifact alongside the
+# host and launcher.
+foreach(required_artifact IN ITEMS BugSplat64.dll nevr.dll echovr_server.exe)
   string(REPLACE "." "\\." escaped_artifact "${required_artifact}")
   if(NOT tar_entries MATCHES "(^|/)${escaped_artifact}([\r\n]|$)")
     message(FATAL_ERROR "Distribution tar.zst lacks ${required_artifact}: ${ARCHIVE_TAR}")
@@ -36,7 +39,7 @@ execute_process(
 if(NOT zip_result EQUAL 0)
   message(FATAL_ERROR "Cannot list distribution zip ${ARCHIVE_ZIP}: ${zip_error}")
 endif()
-foreach(required_artifact IN ITEMS BugSplat64.dll echovr_server.exe)
+foreach(required_artifact IN ITEMS BugSplat64.dll nevr.dll echovr_server.exe)
   string(REPLACE "." "\\." escaped_artifact "${required_artifact}")
   if(NOT zip_entries MATCHES "(^|/)${escaped_artifact}([\r\n]|$)")
     message(FATAL_ERROR "Distribution zip lacks ${required_artifact}: ${ARCHIVE_ZIP}")

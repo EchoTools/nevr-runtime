@@ -272,9 +272,12 @@ set(DIST_NAME "nevr-runtime-v${PROJECT_VERSION}")
 set(DIST_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_NAME}")
 set(DIST_STAGE_DIR "${CMAKE_SOURCE_DIR}/dist/.staging/${DIST_NAME}")
 
-# List of DLL artifacts to include
+# List of DLL artifacts to include (informational; the dist-prepare copy commands
+# below are authoritative). BugSplat64.dll (stable host) and nevr.dll (changing
+# runtime) are a matched pair and must ship together.
 set(DIST_DLLS
   "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll"
+  "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/nevr.dll"
   # "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll"  # merged into nevr_runtime
 )
 
@@ -291,6 +294,9 @@ add_custom_target(dist-prepare
   # BugSplat64.dll — NEVR runtime (replaces the original crash reporter DLL).
   # The game statically imports it, so it loads at process startup before WinMain.
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_STAGE_DIR}/BugSplat64.dll"
+  # nevr.dll — the changing runtime the host loads lazily. A matched pair: the
+  # host without its sibling runtime boots degraded, so both always ship together.
+  COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:nevr_runtime>" "${DIST_STAGE_DIR}/nevr.dll"
   COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:echovr_server>" "${DIST_STAGE_DIR}/echovr_server.exe"
   # gameserver.dll merged into nevr_runtime — no separate DLL to copy
   # COMMAND test -f "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" && ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gameserver.dll" "${DIST_DIR}/pnsradgameserver.dll" || true
@@ -363,6 +369,9 @@ add_custom_target(dist-lite-prepare
   # Copy the runtime DLL + legacy dbgcore.dll alias, then strip
   COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/BugSplat64.dll" "${DIST_LITE_STAGE_DIR}/BugSplat64.dll"
   COMMAND ${MINGW_STRIP_TOOL} --strip-all "${DIST_LITE_STAGE_DIR}/BugSplat64.dll"
+  # nevr.dll — the matched-pair runtime, stripped alongside the host.
+  COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:nevr_runtime>" "${DIST_LITE_STAGE_DIR}/nevr.dll"
+  COMMAND ${MINGW_STRIP_TOOL} --strip-all "${DIST_LITE_STAGE_DIR}/nevr.dll"
   COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:echovr_server>" "${DIST_LITE_STAGE_DIR}/echovr_server.exe"
   COMMAND ${MINGW_STRIP_TOOL} --strip-all "${DIST_LITE_STAGE_DIR}/echovr_server.exe"
   # gameserver.dll merged into nevr_runtime — no separate DLL to copy

@@ -68,6 +68,8 @@ cd "$REPO" || exit 1
 
 echo "=== Deploying from build/mingw-release/bin/ ===" | tee -a "$LOG"
 cp -v build/mingw-release/bin/BugSplat64.dll echovr/bin/win10/ >> "$LOG" 2>&1
+# nevr.dll is the matched-pair runtime the host loads lazily; it must sit beside BugSplat64.dll.
+cp -v build/mingw-release/bin/nevr.dll echovr/bin/win10/ >> "$LOG" 2>&1
 cp -rv build/mingw-release/bin/modules/* echovr/bin/win10/modules/ >> "$LOG" 2>&1
 if ls build/mingw-release/bin/plugins/*.dll >/dev/null 2>&1; then
   cp -rv build/mingw-release/bin/plugins/* echovr/bin/win10/plugins/ >> "$LOG" 2>&1

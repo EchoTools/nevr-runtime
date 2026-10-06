@@ -15,7 +15,11 @@ from pathlib import Path
 
 
 PE_SUFFIXES = {".dll", ".exe"}
-REQUIRED_FILES = {"BugSplat64.dll", "echovr_server.exe"}
+# The BugSplat64.dll + nevr.dll matched pair (docs/design/2026-10-05-bugsplat-nevr-split.md
+# step 6): the stable host and the changing runtime ship together. Dropping either
+# one would produce a one-file install that boots degraded or not at all, so both
+# are required in the staging package and every published archive.
+REQUIRED_FILES = {"BugSplat64.dll", "nevr.dll", "echovr_server.exe"}
 
 
 def sha256(path: Path) -> str:

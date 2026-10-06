@@ -175,7 +175,7 @@ def setup_rig(g: Guest, tmp: pathlib.Path, with_legacy_dbgcore: bool = False, ru
 $src='@GAME@'; $root='@ROOT@'
 New-Item -ItemType Directory -Force -Path "$root\echovr\bin\win10","$root\echovr\_local","$root\run" | Out-Null
 # /A-:R drops the ReadOnly attribute the install's files carry; left on, Remove-Item cannot clear them.
-robocopy "$src\bin\win10" "$root\echovr\bin\win10" /E /A-:R /XF dbgcore.dll BugSplat64.dll BugSplat64.dll.stock /XD logs /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy "$src\bin\win10" "$root\echovr\bin\win10" /E /A-:R /XF dbgcore.dll BugSplat64.dll BugSplat64.dll.stock nevr.dll /XD logs /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed rc=$LASTEXITCODE" }
 # robocopy without /MIR never deletes: clear anything a previous run left behind.
 $dbg = "$root\echovr\bin\win10\dbgcore.dll"
@@ -207,8 +207,17 @@ foreach ($d in '_data','content','sourcedb') {
 
 
 def deploy(g: Guest, dll: pathlib.Path) -> None:
+    """Copy the matched BugSplat64.dll + nevr.dll pair into the isolated rig.
+
+    ``dll`` is the host (BugSplat64.dll); the runtime (nevr.dll) is its sibling
+    in the same build directory, so the two are always from one build.
+    """
     kill_game(g)
     g.put(dll, f"{SMB_ROOT}/echovr/bin/win10", "BugSplat64.dll")
+    runtime = dll.parent / "nevr.dll"
+    if not runtime.is_file():
+        raise EnvError(f"matched-pair runtime not found beside {dll}: {runtime}")
+    g.put(runtime, f"{SMB_ROOT}/echovr/bin/win10", "nevr.dll")
 
 
 def kill_game(g: Guest) -> None:

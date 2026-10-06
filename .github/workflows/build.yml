@@ -133,12 +133,14 @@ jobs:
           test -s "$archive"
           zip_entries=$(cmake -E tar tf "$archive")
           [[ "$zip_entries" == *BugSplat64.dll* ]]
+          [[ "$zip_entries" == *nevr.dll* ]]
           [[ "$zip_entries" == *echovr_server.exe* ]]
         done
         for archive in "${tars[@]}"; do
           test -s "$archive"
           tar_entries=$(tar --zstd -tf "$archive")
           [[ "$tar_entries" == *BugSplat64.dll* ]]
+          [[ "$tar_entries" == *nevr.dll* ]]
           [[ "$tar_entries" == *echovr_server.exe* ]]
         done
 
@@ -179,7 +181,7 @@ jobs:
         tenant-id: d3ce3222-f299-41bb-8231-dbde3b35abc9
         allow-no-subscriptions: true
 
-    - name: Sign BugSplat64.dll and echovr_server.exe (normal and lite)
+    - name: Sign BugSplat64.dll, nevr.dll and echovr_server.exe (normal and lite)
       uses: azure/artifact-signing-action@v2
       with:
         endpoint: https://eus.codesigning.azure.net/
@@ -196,7 +198,7 @@ jobs:
       shell: pwsh
       run: |
         $files = Get-ChildItem -Path packages -Recurse -Include *.dll,*.exe
-        if ($files.Count -lt 4) { throw "expected BugSplat64.dll and echovr_server.exe in both packages, found $($files.Count) files" }
+        if ($files.Count -lt 6) { throw "expected BugSplat64.dll, nevr.dll and echovr_server.exe in both packages, found $($files.Count) files" }
         $bad = 0
         foreach ($f in $files) {
           $s = Get-AuthenticodeSignature -FilePath $f.FullName

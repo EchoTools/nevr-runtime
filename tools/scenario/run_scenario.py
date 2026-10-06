@@ -653,7 +653,7 @@ def main(argv: list[str]) -> int:
     game_log = re.search(r"=== game log: (\S+) ===", launcher_text)
     if game_log and pathlib.Path(game_log.group(1)).exists():
         shutil.copy(game_log.group(1), out / "game.jsonl")
-    restored = "original BugSplat64.dll restored and verified" in launcher_text
+    restored = "game directory restored and verified (BugSplat64.dll + nevr.dll)" in launcher_text
 
     report = {"scenario": scenario["name"], "dll": str(args.dll), "passed": passed,
               "dll_restored": restored, "steps": run.results}
@@ -661,14 +661,14 @@ def main(argv: list[str]) -> int:
         report["nakama_log"] = "nakama.log" if not nakama_log_error else f"NOT SAVED: {nakama_log_error}"
     (out / "result.json").write_text(json.dumps(report, indent=2))
     md = f"# scenario {scenario['name']}: {'PASS' if passed else 'FAIL'}\n\n{table(run.results)}\n"
-    md += f"\nDLL: {args.dll}\nOriginal BugSplat64.dll restored: {restored}\n"
+    md += f"\nDLL: {args.dll}\nOriginal BugSplat64.dll + nevr.dll restored: {restored}\n"
     if scenario["server"] == "local":
         md += f"Local nakama log: {report['nakama_log']}\n"
     (out / "table.md").write_text(md)
     print(md)
     print(f"run folder: {out}")
     if not restored:
-        print("WARNING: launch-client.sh did not report restoring the original DLL; check "
+        print("WARNING: launch-client.sh did not report restoring the original DLL pair; check "
               f"{out / 'launch-client.out'}", file=sys.stderr)
         return 1
     return 0 if passed else 1
