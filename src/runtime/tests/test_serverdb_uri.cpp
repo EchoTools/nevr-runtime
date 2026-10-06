@@ -214,3 +214,62 @@ TEST(ServerDbUri, BridgeCredentialsAreBothOrNeither) {
   EXPECT_EQ(ServerDbUri::BuildBridgeCredentialUri("ws://h/ws", "", "pw"), "ws://h/ws");
   EXPECT_EQ(ServerDbUri::BuildBridgeCredentialUri("ws://h/ws", "1", "pw"), "ws://h/ws?discordid=1&password=pw");
 }
+
+// --- RemoveQueryParam (issue #116) --------------------------------------
+// ws_bridge.cpp's matchmaker path (connIdx >= 2) strips "format=evr" from the
+// bridge-credential URI. The previous inline version deleted the character
+// before the match unconditionally, which deleted the URI's own '?' whenever
+// format=evr was the first query param, concatenating path and query with no
+// separator: "wss://g.example/ws?format=evr&discordid=1&password=pw" became
+// "wss://g.example/wsdiscordid=1&password=pw".
+
+// The exact shape BuildBridgeCredentialUri produces today for the matchmaker
+// path: format=evr first (nginx forces it onto the base URI per
+// ws_bridge.cpp:985), discordid/password appended after by AppendQuery. This
+// is the trigger case from the issue, reproduced via the real builder rather
+// than a hand-typed string.
+TEST(ServerDbUri, RemoveQueryParamFixesTheActualBridgeCredentialShape) {
+  const std::optional<std::string> withCredentials =
+      ServerDbUri::BuildBridgeCredentialUri("wss://g.example/ws?format=evr", "123456789", "pw");
+  ASSERT_TRUE(withCredentials.has_value());
+  ASSERT_EQ(*withCredentials, "wss://g.example/ws?format=evr&discordid=123456789&password=pw");
+
+  const std::string stripped = ServerDbUri::RemoveQueryParam(*withCredentials, "format=evr");
+  EXPECT_EQ(stripped, "wss://g.example/ws?discordid=123456789&password=pw");
+  // Must still parse as a URI with a '?' separating path from query — the bug
+  // produced "wss://g.example/wsdiscordid=...", which is not.
+  EXPECT_NE(stripped.find('?'), std::string::npos) << stripped;
+  const QueryMap pairs = ParseQuery(stripped);
+  const QueryMap expected = {{"discordid", "123456789"}, {"password", "pw"}};
+  EXPECT_EQ(pairs, expected);
+}
+
+// The example config's shape (docs/reference/example-config.yaml), where
+// format=evr is NOT first — the case that stayed latent because the old
+// inline logic happened to get it right.
+TEST(ServerDbUri, RemoveQueryParamTrailing) {
+  EXPECT_EQ(ServerDbUri::RemoveQueryParam("wss://g.example/ws?discordid=1&password=pw&format=evr", "format=evr"),
+            "wss://g.example/ws?discordid=1&password=pw");
+}
+
+TEST(ServerDbUri, RemoveQueryParamMiddle) {
+  EXPECT_EQ(ServerDbUri::RemoveQueryParam("wss://g.example/ws?discordid=1&format=evr&password=pw", "format=evr"),
+            "wss://g.example/ws?discordid=1&password=pw");
+}
+
+TEST(ServerDbUri, RemoveQueryParamSoleParam) {
+  EXPECT_EQ(ServerDbUri::RemoveQueryParam("wss://g.example/ws?format=evr", "format=evr"), "wss://g.example/ws");
+}
+
+TEST(ServerDbUri, RemoveQueryParamAbsentIsNoOp) {
+  EXPECT_EQ(ServerDbUri::RemoveQueryParam("wss://g.example/ws?discordid=1&password=pw", "format=evr"),
+            "wss://g.example/ws?discordid=1&password=pw");
+  EXPECT_EQ(ServerDbUri::RemoveQueryParam("wss://g.example/ws", "format=evr"), "wss://g.example/ws");
+}
+
+// A substring hit inside another key/value is not a boundary match — leave it
+// alone rather than mangling an unrelated parameter.
+TEST(ServerDbUri, RemoveQueryParamDoesNotMatchSubstring) {
+  EXPECT_EQ(ServerDbUri::RemoveQueryParam("wss://g.example/ws?xformat=evrx=1", "format=evr"),
+            "wss://g.example/ws?xformat=evrx=1");
+}
