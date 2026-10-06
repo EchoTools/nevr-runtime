@@ -448,6 +448,52 @@ TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatUnderAnotherSpellingOfInitFaili
   EXPECT_EQ(GetLoadedPluginCount(), 0);
 }
 
+// A required repeat of a spelling that was itself skipped as the same module: the
+// requirement reaches the entry that holds the module, not the skipped one. The
+// holder loaded fine, so nothing is fatal.
+TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfSkippedSpellingOfLoadedEntryIsNotFatal) {
+  g_serverFatalCalls = 0;
+  g_testPluginLoadPlan.push_back({"first", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"second", ".\\test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"third", ".\\test_plugin_onframe.dll", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 3u) << manifest.dump();
+  EXPECT_EQ(manifest[0].at("required"), true);
+}
+
+// The same chain when the holder's init fails: the fatal names the holder (the
+// first entry), the entry that really holds the module.
+TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfSkippedSpellingOfInitFailingEntryNamesHolder) {
+  g_serverFatalCalls = 0;
+  g_testPluginLoadPlan.push_back({"first", "test_plugin_init_fail.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"second", ".\\test_plugin_init_fail.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"third", ".\\test_plugin_init_fail.dll", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(g_serverFatalCalls, 1) << g_lastServerFatal;
+  EXPECT_NE(g_lastServerFatal.find("first"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(g_lastServerFatal.find("second"), std::string::npos) << g_lastServerFatal;
+  EXPECT_EQ(GetLoadedPluginCount(), 0);
+}
+
+// An optional first entry that loads, then a required repeat of the same spelling.
+TEST_F(PluginLoaderDiagnosticTest, RequiredRepeatOfSameSpellingOfLoadedEntryIsNotFatal) {
+  g_serverFatalCalls = 0;
+  g_testPluginLoadPlan.push_back({"first", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"again", "test_plugin_onframe.dll", true, "", "{}"});
+
+  LoadPlugins();
+
+  EXPECT_EQ(g_serverFatalCalls, 0) << g_lastServerFatal;
+  EXPECT_EQ(GetLoadedPluginCount(), 1);
+}
+
 // Control: an optional repeat of an optional entry stays non-fatal.
 TEST_F(PluginLoaderDiagnosticTest, OptionalRepeatOfInitFailingOptionalEntryIsNotFatal) {
   g_serverFatalCalls = 0;

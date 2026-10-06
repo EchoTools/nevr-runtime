@@ -172,7 +172,18 @@ void LoadPlugins() {
   // entry that is actually loaded. When that entry already failed non-fatally
   // (it was optional then), the failure is raised now, as fatal. Returns true when
   // the requirement was carried over.
-  auto carryRequired = [&](size_t firstIndex, const PluginLoadItem& repeat) -> bool {
+  //
+  // A skipped entry is recorded in `heldBy` against the entry that actually holds its
+  // module, and `carryRequired` follows that chain, so a repeat of a skipped entry
+  // reaches the entry that holds the module rather than the skipped one.
+  std::vector<size_t> heldBy(plan.size());
+  for (size_t i = 0; i < heldBy.size(); ++i) heldBy[i] = i;
+  auto resolveHolder = [&heldBy](size_t index) -> size_t {
+    while (heldBy[index] != index) index = heldBy[index];
+    return index;
+  };
+  auto carryRequired = [&](size_t namedIndex, const PluginLoadItem& repeat) -> bool {
+    const size_t firstIndex = resolveHolder(namedIndex);
     if (!repeat.required || plan[firstIndex].required) return false;
     plan[firstIndex].required = true;
     report[firstIndex].required = true;
@@ -239,6 +250,7 @@ void LoadPlugins() {
       const long first = DuplicatePluginEntry(plan, planIndex);
       if (first >= 0) {
         const bool carried = carryRequired(static_cast<size_t>(first), item);
+        heldBy[planIndex] = resolveHolder(static_cast<size_t>(first));
         const std::string carriedNote = carried
             ? " This entry is required, so entry " + std::to_string(first + 1) +
                   " is now required too."
@@ -293,6 +305,7 @@ void LoadPlugins() {
       if (already) {
         FreeLibrary(hPlugin);
         const bool carried = carryRequired(already->planIndex, item);
+        heldBy[planIndex] = resolveHolder(already->planIndex);
         const std::string carriedNote = carried
             ? " This entry is required, so " + already->item.name + " is now required too."
             : std::string();
