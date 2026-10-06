@@ -239,7 +239,8 @@ You are not the first agent to work here, and you won't be the last. Act like it
 
 These bind every agent that works here, whatever its model or vendor. Another agent's
 worktrees, branches, scratch and PRs are theirs; do not touch them without being told to.
-The agent the owner has made responsible for the repo merges PRs; other agents hand off.
+Only the agent the owner has told to merge merges PRs; other agents hand off. `<agent>` below is
+your seat name, for example `claude-main` or `codex`.
 
 ### Ownership and cleanup
 
@@ -257,12 +258,15 @@ The agent the owner has made responsible for the repo merges PRs; other agents h
   Run logs and evidence are kept. Never delete by pattern across the shared directory.
 - **Remove a worktree only after proving it is redundant.** Its branch tip is merged into
   `origin/main` by ancestry or `git cherry`, or is on a remote; `git status --short` is empty
-  (ignored files are deleted with the worktree); no process has its cwd inside. Run
+  and `git status --short --ignored` lists only build output (move any run log you need out
+  first); no process has its cwd inside. Run
   `git worktree unlock <path>` first. Never `--force`. For a worktree with initialised submodules,
-  run `git submodule deinit --all`, check each submodule's local branches have no commits beyond
-  upstream, delete `.git/worktrees/<name>/modules`, then remove the worktree.
-- **Disk.** A worktree build is 3 to 8 GB. Check `df -h /` before starting one, keep one build
-  tree per agent, and remove it when its PR merges.
+  run `git submodule deinit --all`, check that each submodule's HEAD and local branches have no
+  commits beyond upstream, delete `$(git rev-parse --git-common-dir)/worktrees/<name>/modules`
+  (`<name>` is the directory under `worktrees/`), then remove the worktree. Afterwards delete
+  the branch locally (and on origin once merged) and update the ledger row.
+- **Disk.** Check `df -h /` before starting a worktree build, keep one build tree per agent, and
+  remove it when its PR merges.
 
 ### Git
 
@@ -270,10 +274,9 @@ The agent the owner has made responsible for the repo merges PRs; other agents h
   `git push origin <local>:refs/heads/<remote>`. Record `git ls-remote origin main` before the push
   and compare after it; read the `->` line of every push.
 - **Update with `git fetch` and `git merge origin/main`,** never `git pull`.
-- **Do not rewrite pushed history.** No rebase, amend, squash or force-push on a pushed branch or
-  on any signed commit. Fix a pushed mistake with a new commit.
-- **PRs target `main`.** A unit that needs an unmerged one starts after that one merges; work on
-  something independent meanwhile.
+- **Do not rewrite pushed history.** No rebase, amend, squash or force-push on a pushed branch.
+  Fix a pushed mistake with a new commit.
+- **PRs target `main`.** Do not base a PR on another feature branch.
 - **Report a mistake the moment you see it,** with the command and its output.
 
 ### Review, verification and merge
@@ -286,14 +289,14 @@ The agent the owner has made responsible for the repo merges PRs; other agents h
   source, run it, paste the failing output, restore the source and show it passing.
 - **The PR body is the evidence.** It states each command run on the exact tip and its result, what
   was not run, and the tracking issue. Update it whenever the base or the content changes.
-- **Verification before merge.** `just verify` green on the tip, and the client login test as
-  described under "System test after every commit". The run's log must show all four keys
+- **Verification before merge.** `just verify` green on the tip, and for a change to runtime code
+  the client login test as described under "System test after every commit". The run's log must
+  show all four keys
   (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
 - **Fresh worktrees need build inputs.** From the main checkout, leaving it unchanged, copy
   `extern/{minhook,breakpad,lss}` (without their `.git` files), `gen/` and `.env`; never print
-  `.env`. Configure client builds by hand with `cmake --preset <preset>
-  -DNEVR_REQUIRE_BUILTIN_DEFAULTS=ON`, then `cmake --build --preset <preset>`.
+  `.env`. The build embeds the production endpoints from `.env`.
 - **Client login test mechanics.** Run the main checkout's `./launch-client.sh --dll <absolute path to
   the build's BugSplat64.dll>` in the background, one client at a time. Read the run's JSONL log,
   stop your own `echovr.exe`, and confirm the script restored the original DLL.
@@ -301,14 +304,14 @@ The agent the owner has made responsible for the repo merges PRs; other agents h
 ### Documentation, plans and findings
 
 - **Docs state the current tree.** No "removed", "previously", "approved by", commit shas or dated
-  narrative in markdown or comments, and no citation of a deleted file. Design lives in
+  narrative in markdown or comments you write or change, and no citation of a deleted file.
+  Design lives in
   `docs/adr/`, tests, code comments, or a GitHub issue; `docs/design/` holds only unimplemented
   design the owner has approved. A plan is a tracking issue plus ADRs. In docs and comments cite
   files and symbols, not line ranges; reports and findings use `file:line`. Deleting a doc needs
   the owner's confirmation; move its load-bearing facts first and say where.
 - **Fix it or file it, in the same turn.** A defect you find that you do not fix gets a GitHub issue
-  with evidence. A security-sensitive finding is not filed on this public repo; report it to the
-  owner.
+  with evidence. A security-sensitive finding is not filed as an issue; report it to the owner.
 
 ### Dispatching agents
 
@@ -409,8 +412,8 @@ the `nevr-work` gate skill (`.claude/skills/nevr-work/SKILL.md`, gitignored), wh
 - **Mandatory pre-read gate.** Before any C++/build work, read the project's
   CPP-MINGW-ADDENDUM in full — its Hard-Stops bind every build/config change.
 - **Scratch dir.** All agent scratch/staging/evidence files live under
-  `/var/tmp/work-nevr-runtime/` (see "Working practices"), never `/tmp` (RAM-backed on this
-  host) and never in the repo.
+  `/var/tmp/work-nevr-runtime/` (see "Working practices"), never `/tmp` and never in the
+  repo.
 - **Verify entry point.** `just verify` is the single closed-loop gate:
   `just build`, then a second real `cmake --build` (because `just build` greps its
   own output and always exits 0), then `test-auth-unit` under Wine, then ~35

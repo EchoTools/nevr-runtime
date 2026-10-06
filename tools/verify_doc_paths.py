@@ -246,8 +246,7 @@ def main() -> int:
     if bad:
         print(f"\ndoc-paths: {len(bad)} claimed path(s) do not exist. A document that "
               f"names a path that is not there sends the next reader somewhere real "
-              f"and wrong. If the file was deliberately removed, cite it instead: "
-              f"`git show <40-hex-sha>:<path>`.", file=sys.stderr)
+              f"and wrong. If the file was deliberately removed, remove the citation.", file=sys.stderr)
     if dead_citations:
         print(f"\ndoc-paths: {len(dead_citations)} historical citation(s) do not "
               f"resolve. Get the sha with `git log -1 --format=%H -- <path>` and "
