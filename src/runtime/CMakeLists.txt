@@ -338,6 +338,16 @@ if(BUILD_TESTING)
     target_link_libraries(test_callback_unregistration PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_callback_unregistration DISCOVERY_MODE PRE_TEST)
 
+    # Issue #38: entrant accessors read the lobby's live entrant array.
+    add_executable(test_server_context
+      tests/test_server_context.cpp
+      server/server_context.cpp)
+    set_source_files_properties(tests/test_server_context.cpp
+      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(test_server_context PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_server_context PRIVATE GTest::gtest GTest::gtest_main)
+    gtest_discover_tests(test_server_context DISCOVERY_MODE PRE_TEST)
+
     add_executable(test_session_unregister
       tests/test_session_unregister.cpp
       server/session_unregister.cpp

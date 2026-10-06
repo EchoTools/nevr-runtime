@@ -371,8 +371,11 @@ enum class NetGameState : INT32 {
 /// Lobby objects can be local, dedicated, etc. As a game server, this is a dedicated lobby object.
 /// </summary>
 struct Lobby {
-  /// Per-player data in the Lobby. Validated against echovr-reconstruction CServerConfig.h.
-  /// sizeof == 0xA0 (160 bytes)
+  /// Per-player data in the Lobby. Field offsets 0x00-0x9F match echovr-reconstruction
+  /// CServerConfig.h. sizeof == 0xD8 (216 bytes): echovr.exe indexes the [lobby+0x360]
+  /// array with a 0xD8 stride — CNSLobby::SmiteEntrant 0x14061665d `IMUL RAX,RDX,0xd8`,
+  /// fcn_1406082b0 0x1406082c9 `IMUL RDX,RDX,0xd8`, 0x140616920 loop 0x14061698f
+  /// `ADD R8,0xd8`. The reconstruction's 0xA0 is the mapped prefix, not the element size.
   struct EntrantData {
     XPlatformId userId;            // +0x00
     SymbolId platformId;           // +0x10
@@ -388,6 +391,7 @@ struct Lobby {
     UINT16 genIndex;               // +0x8C
     UINT16 teamIndex;              // +0x8E (0=blue, 1=orange, 2=spec)
     Json json;                     // +0x90 (root + cache pointers, 0x10 bytes)
+    BYTE _unkA0[0x38];             // +0xA0 unmapped tail of the 0xD8-byte element
   };
 
   /// Validated against echovr-reconstruction CServerConfig.h. sizeof == 0x38
@@ -452,7 +456,7 @@ struct Lobby {
 };
 
 // --- Lobby sub-struct validation (echovr-reconstruction CServerConfig.h, CLobby.h) ---
-static_assert(sizeof(Lobby::EntrantData) == 0xA0, "EntrantData size mismatch with reconstruction");
+static_assert(sizeof(Lobby::EntrantData) == 0xD8, "EntrantData stride mismatch with echovr.exe (0x14061665d)");
 static_assert(offsetof(Lobby::EntrantData, userId) == 0x00, "EntrantData::userId offset mismatch");
 static_assert(offsetof(Lobby::EntrantData, platformId) == 0x10, "EntrantData::platformId offset mismatch");
 static_assert(offsetof(Lobby::EntrantData, uniqueName) == 0x18, "EntrantData::uniqueName offset mismatch");

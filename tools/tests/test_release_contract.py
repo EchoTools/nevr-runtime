@@ -39,6 +39,7 @@ class ReleaseContractTest(unittest.TestCase):
             "test_url_diagnostics",
             "test_winhttp_stub",
             "test_callback_unregistration",
+            "test_server_context",
             "test_session_unregister",
             "test_mic_lifecycle",
             "test_telemetry_snapshot_store",
