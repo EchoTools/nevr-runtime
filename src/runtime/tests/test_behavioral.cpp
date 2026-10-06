@@ -460,6 +460,48 @@ TEST_F(PluginLoaderDiagnosticTest, OptionalRepeatOfInitFailingOptionalEntryIsNot
   EXPECT_EQ(GetLoadedPluginCount(), 0);
 }
 
+// AGENTS.md logging rule 6: the Warning the loader writes for an arg whose bytes
+// were replaced exists, names the plugin and the arg KEY, and never carries the value.
+TEST_F(PluginLoaderDiagnosticTest, ReplacedArgKeyIsLoggedByNameNeverByValue) {
+  PluginLoadItem item;
+  item.name = "onframe";
+  item.file = "test_plugin_onframe.dll";
+  item.args_json = "{\"path\":\"SECRETVALUE\"}";
+  item.args_replaced_keys = {"path"};
+  g_testPluginLoadPlan.push_back(item);
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("onframe: arg 'path' held invalid UTF-8"));
+  EXPECT_FALSE(TestLogContains("SECRETVALUE"));
+}
+
+// get_plugin_info reports each plugin's own API version and capabilities. It
+// used to cast NvrPluginInfo (padded to 32 bytes) as NvrLoadedPluginInfo, so
+// api_version read the padding and capabilities read the API version: a v5
+// plugin declaring no capabilities showed as caps 5.
+TEST_F(PluginLoaderDiagnosticTest, LoadedPluginInfoReportsApiVersionAndCapabilities) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"future-api", "test_plugin_future_api.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  const NvrLoadedPluginInfo* first = GetLoadedPluginInfo(0);
+  const NvrLoadedPluginInfo* second = GetLoadedPluginInfo(1);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  // Both declare no capabilities: same priority band, config order kept.
+  EXPECT_STREQ(first->name, "test-plugin-onframe");
+  EXPECT_EQ(first->api_version, static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION));
+  EXPECT_EQ(first->capabilities, static_cast<uint32_t>(NEVR_PLUGIN_CAP_UNDECLARED));
+  EXPECT_STREQ(second->name, "test-plugin-future-api");
+  EXPECT_EQ(second->api_version, static_cast<uint32_t>(NEVR_PLUGIN_API_VERSION + 1u));
+  EXPECT_EQ(second->capabilities, static_cast<uint32_t>(NEVR_PLUGIN_CAP_UNDECLARED));
+  EXPECT_EQ(second->version_major, 1u);
+}
+
 // #60: the login reports every configured plugin — the one that loaded, the one
 // that is enabled but failed, and the one that is disabled — with the real loader
 // filling the record from a real LoadLibraryExA run. The disabled entry names a

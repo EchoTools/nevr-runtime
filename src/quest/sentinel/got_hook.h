@@ -13,8 +13,13 @@
  * This only lets us intercept calls a target module makes to a symbol
  * imported from elsewhere (e.g. libr15.so calling into libc, liblog, or
  * vrapi). It does NOT let us hook an arbitrary internal (non-imported)
- * function inside libr15.so itself — that needs inline patching, which is
- * the natural "generalize" step once this basic form is proven live.
+ * function inside libr15.so itself — that needs inline patching with an arm64
+ * trampoline.
+ *
+ * Verified on a Quest 2: the `clock_gettime` import in libr15.so (a real
+ * R_AARCH64_JUMP_SLOT in .rela.plt; the raw dynstr name carries no version
+ * suffix) is hooked from the sentinel constructor and the hook fires. That
+ * proves the injection mechanism, not a login or matchmaker hook.
  */
 #pragma once
 

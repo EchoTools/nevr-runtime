@@ -1,5 +1,21 @@
-// Black-box contract tests for the crash-report ingest implementation contract.
+// Black-box contract tests for the crash-report ingest sink (docs/adr/0002).
 // Standard library only: a sink written in any language can use this gate.
+//
+// Request: POST multipart/form-data with `Authorization: Bearer <token>`.
+// Required text fields: schema_version ("1"), client_report_id (lower-case
+// UUID), platform ("windows"|"quest"), prod ("echovr"), ver (<=256 bytes),
+// captured_at (RFC 3339 UTC, "Z"), crash_summary_text (<=256 KiB).
+// Optional text fields, omitted rather than empty: session_id, exception_code,
+// rip, location, thread_id, access_op, access_addr, crash_module_name,
+// crash_module_base, crash_module_end, stack_frames.
+// Files: platform=quest requires exactly one upload_file_minidump (".dmp",
+// <=32 MiB) and may add upload_file_maps (".maps", <=8 MiB); platform=windows
+// forbids upload_file_minidump. Total <=41 MiB, <=32 parts.
+//
+// Responses: 201 new / 200 duplicate, both application/json
+// {"report_id":"<=256 bytes","duplicate":bool}; 401|403 unauthenticated,
+// before persistence; 400 unknown or duplicate fields, invalid UTF-8, or a
+// platform/file mismatch; 413 over a size limit.
 package crash_ingest
 
 import (

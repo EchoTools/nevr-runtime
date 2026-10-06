@@ -170,8 +170,7 @@ WASAPI capture:
 
 ### Testing
 
-- **Automatable now, via `tools/winvm/systest.py`** (the same rig that
-  proved local-nakama login end-to-end, `docs/reference/local-nakama.md`):
+- **Automatable now, via `tools/winvm/systest.py`:**
   boot the runtime, confirm `MicAvailable`/`MicRead` get called and return
   nonzero against a fake/silent WASAPI input, and confirm `VoipEncode`
   actually produces output bytes. That is a scriptable pass/fail — it

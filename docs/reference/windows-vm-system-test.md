@@ -8,7 +8,7 @@ built `BugSplat64.dll` on a real Windows guest (libvirt) and judges the boot.
 just build
 WINVM_USER=... WINVM_PASS=... just test-winvm                    # GAI, boot, and local Nakama login
 WINVM_USER=... WINVM_PASS=... just test-winvm --scenario gai     # getaddrinfo timing only
-WINVM_USER=... WINVM_PASS=... just test-winvm --scenario login   # boot + log in to the local nakama (docs/reference/local-nakama.md)
+# --scenario login needs a local Nakama, which this tree does not provide.
 ```
 
 Exit codes: `0` pass, `1` the runtime failed a check, `2` the environment is
@@ -56,9 +56,8 @@ observes for `--wait` seconds (default 90, minimum 45), then judges:
 | `engine_progress` | the boot did not reach `--require-stage` (default `broadcaster`) |
 
 `login` repeats the boot against the local Nakama using the seeded test account
-and checks Nakama's session and `LoginSuccess` records. The default `all` scenario
-runs `gai`, `boot`, and `login`; it requires the local Nakama state created by
-`just nakama-up && just nakama-seed`.
+and checks Nakama's session and `LoginSuccess` records. This tree does not
+provide a local Nakama, so `login` and the default `all` scenario cannot run here.
 
 Hook warnings require an explicit diagnostic tag or a matching failure reason,
 status, and tracked exception context. A successful `All hooks installed` line

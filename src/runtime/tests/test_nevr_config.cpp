@@ -231,6 +231,65 @@ TEST(NevrConfig, BareRequiredVarUnsetThrows) {
                nevr::NevrConfigError);
 }
 
+// $${ is a literal ${: no variable is looked up, so an unset one can't fail the load.
+TEST(NevrConfig, EscapedDollarBraceIsLiteral) {
+  UnsetEnv("NEVR_TEST_ESCAPED");
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"$${NEVR_TEST_ESCAPED}\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "${NEVR_TEST_ESCAPED}");
+}
+
+// An escaped ${ beside a real variable: only the real one is resolved.
+TEST(NevrConfig, EscapedDollarBraceBesideVariable) {
+  SetEnv("NEVR_TEST_REAL", "value");
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  serverdb: \"$${literal}-${NEVR_TEST_REAL}-$$plain\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "${literal}-value-$$plain");
+  UnsetEnv("NEVR_TEST_REAL");
+}
+
+// Only the `$${` triple is special. In `$$${X}` the first `$` is plain and the
+// following `$${` yields `${`, so the output is `$${X}` and X is never looked up.
+TEST(NevrConfig, TripleDollarBraceYieldsDoubleDollarLiteral) {
+  UnsetEnv("NEVR_TEST_TRIPLE");
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"$$${NEVR_TEST_TRIPLE}\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "$${NEVR_TEST_TRIPLE}");
+}
+
+// An unterminated `$${X` is still an escape: `${X`, no throw.
+TEST(NevrConfig, EscapedUnterminatedDollarBraceIsLiteral) {
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"$${X\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "${X");
+}
+
+// The escape also covers the required-with-message syntax: no lookup, no throw.
+TEST(NevrConfig, EscapedRequiredSyntaxIsLiteralAndDoesNotThrow) {
+  UnsetEnv("NEVR_TEST_ESC_REQ");
+  nevr::NevrConfig cfg;
+  EXPECT_NO_THROW(cfg = nevr::NevrConfig::LoadFromString(
+                      "services:\n  serverdb: \"$${NEVR_TEST_ESC_REQ:?msg}\"\n"));
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "${NEVR_TEST_ESC_REQ:?msg}");
+}
+
+// A literal `$` directly before a variable's value: the unset variable's default is `$`.
+TEST(NevrConfig, LiteralDollarBeforeValueViaDefault) {
+  UnsetEnv("NEVR_TEST_NOT_SET");
+  SetEnv("NEVR_TEST_REAL", "value");
+  const nevr::NevrConfig cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  serverdb: \"${NEVR_TEST_NOT_SET:-$}${NEVR_TEST_REAL}\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "$value");
+  UnsetEnv("NEVR_TEST_REAL");
+}
+
+// `$$` not followed by `{` is two literal dollars.
+TEST(NevrConfig, DoubleDollarWithoutBraceIsUnchanged) {
+  const nevr::NevrConfig cfg =
+      nevr::NevrConfig::LoadFromString("services:\n  serverdb: \"$$plain\"\n");
+  EXPECT_EQ(cfg.GetString("services.serverdb").value_or(""), "$$plain");
+}
+
 TEST(NevrConfig, DefaultInterpolationWhenUnset) {
   UnsetEnv("NEVR_TEST_OPT");
   const nevr::NevrConfig cfg =

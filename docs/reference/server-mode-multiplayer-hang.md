@@ -28,7 +28,7 @@ the client's windowed/no-VR flag (`0x0100000` at `GAME_WINDOWED_FLAGS_OFFSET`)
 onto `g_pGame`. That flag's own comment says it makes the game "reach the
 main menu normally, and -mp joins a social lobby" — client behavior, and
 suspicious given our exact stuck state. The same commit also relaxed
-`tests/system/server_test.go` to stop requiring
+the server readiness check to stop requiring
 `"[NEVR.GAMESERVER] Initialized game server"` as a readiness marker.
 
 **Tested live, reverted the flag-condition half only** (commit `151100b`,

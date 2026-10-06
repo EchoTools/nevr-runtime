@@ -75,12 +75,20 @@ std::string ResolveVar(const std::string& inner) {
                         " is not set (referenced as ${" + var + "})");
 }
 
-// Replace every ${...} in `in`. An unterminated ${ is left literal.
+// Replace every ${...} in `in`. An unterminated ${ is left literal. The three-char
+// sequence $${ becomes a literal ${ and nothing after it is looked up, so it is the
+// way to write ${ that isn't a variable (e.g. in a plugin's args, where an unset
+// ${...} would otherwise fail the load). No other `$` is special: $$ not followed by
+// { stays $$, and $$${X} yields $${X}. A literal `$` immediately followed by a
+// variable's value is written with a default: ${NO_SUCH_VAR:-$}${X}.
 std::string InterpolateString(const std::string& in) {
   std::string out;
   std::size_t i = 0;
   while (i < in.size()) {
-    if (in[i] == '$' && i + 1 < in.size() && in[i + 1] == '{') {
+    if (in[i] == '$' && i + 2 < in.size() && in[i + 1] == '$' && in[i + 2] == '{') {
+      out += "${";
+      i += 3;
+    } else if (in[i] == '$' && i + 1 < in.size() && in[i + 1] == '{') {
       const std::size_t close = in.find('}', i + 2);
       if (close == std::string::npos) {
         out += in.substr(i);

@@ -187,6 +187,20 @@ TEST(PluginLoadPlan, DuplicateLookupOutOfRangeIndexFindsNothing) {
   EXPECT_EQ(DuplicatePluginEntry({}, 0), -1);
 }
 
+TEST(PluginLoadPlan, ArgsEscapedDollarBraceReachesThePlugin) {
+  // $${ in an arg reaches the plugin as a literal ${, with no variable looked up.
+  const NevrConfig cfg = NevrConfig::LoadFromString(R"YAML(
+plugins:
+  - name: p
+    file: p.dll
+    args:
+      template: "Hello $${name}"
+)YAML");
+  const std::vector<PluginLoadItem> plan = BuildLoadPlan(cfg);
+  ASSERT_EQ(plan.size(), 1u);
+  EXPECT_EQ(plan[0].args_json, R"({"template":"Hello ${name}"})");
+}
+
 TEST(PluginLoadPlan, ArgsToJsonEmptyMapIsEmptyObject) {
   EXPECT_EQ(ArgsToJson({}), "{}");
 }
@@ -194,6 +208,57 @@ TEST(PluginLoadPlan, ArgsToJsonEmptyMapIsEmptyObject) {
 TEST(PluginLoadPlan, ArgsToJsonSortedStringValues) {
   const std::map<std::string, std::string> args = {{"b", "2"}, {"a", "1"}};
   EXPECT_EQ(ArgsToJson(args), R"({"a":"1","b":"2"})");
+}
+
+// A value that is not UTF-8 (an ANSI-code-page ${VAR}, e.g. a path with "\xe9")
+// must not throw out of the boot path: the args still serialize with the bad
+// byte replaced by U+FFFD (EF BF BD) and the clean entry byte-exact.
+TEST(PluginLoadPlan, ArgsToJsonInvalidUtf8ReplacedWithFffd) {
+  const std::map<std::string, std::string> args = {
+      {"path", std::string("C:\\Users\\Ren") + "\xe9" + "\\x.txt"}, {"ok", "1"}};
+  std::string out;
+  ASSERT_NO_THROW(out = ArgsToJson(args));
+  EXPECT_EQ(out, std::string("{\"ok\":\"1\",\"path\":\"C:\\\\Users\\\\Ren") +
+                     "\xef\xbf\xbd" + "\\\\x.txt\"}");
+}
+
+// The substitution is reported by key (never value) so the loader can log it; a
+// clean map reports nothing.
+TEST(PluginLoadPlan, ArgsToJsonReportsReplacedKeys) {
+  const std::map<std::string, std::string> bad = {
+      {"path", "Ren\xe9"}, {"ok", "1"}, {"zbad", "\xff"}};
+  std::vector<std::string> keys;
+  (void)ArgsToJson(bad, &keys);
+  const std::vector<std::string> expected = {"path", "zbad"};
+  EXPECT_EQ(keys, expected);
+
+  std::vector<std::string> none;
+  (void)ArgsToJson({{"a", "1"}}, &none);
+  EXPECT_TRUE(none.empty());
+}
+
+// An invalid byte in the KEY (a clean value) is the same failure: the key is
+// reported by name, the key reaches the plugin with U+FFFD, the value is untouched.
+TEST(PluginLoadPlan, ArgsToJsonInvalidUtf8KeyReportedAndReplaced) {
+  const std::map<std::string, std::string> args = {
+      {std::string("k") + "\xe9", "v"}, {"ok", "1"}};
+  std::vector<std::string> keys;
+  std::string out;
+  ASSERT_NO_THROW(out = ArgsToJson(args, &keys));
+  const std::vector<std::string> expected = {std::string("k") + "\xe9"};
+  EXPECT_EQ(keys, expected);
+  EXPECT_EQ(out, std::string("{\"k") + "\xef\xbf\xbd" + "\":\"v\",\"ok\":\"1\"}");
+}
+
+// The flag reaches the plan item BuildLoadPlan hands the loader.
+TEST(PluginLoadPlan, BuildLoadPlanCarriesReplacedKeys) {
+  const NevrConfig cfg = NevrConfig::LoadFromString(
+      std::string("plugins:\n  - name: p\n    args:\n      path: \"Ren") + "\xe9" +
+      "\"\n      ok: \"1\"\n");
+  const std::vector<PluginLoadItem> plan = BuildLoadPlan(cfg);
+  ASSERT_EQ(plan.size(), 1u);
+  const std::vector<std::string> expected = {"path"};
+  EXPECT_EQ(plan[0].args_replaced_keys, expected);
 }
 
 // ---------------------------------------------------------------------------
