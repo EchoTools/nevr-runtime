@@ -154,16 +154,41 @@ TEST(PluginLoadPlan, ArgsToJsonSortedStringValues) {
 }
 
 // A value that is not UTF-8 (an ANSI-code-page ${VAR}, e.g. a path with "\xe9")
-// must not throw out of the boot path: the args still serialize, the bad byte
-// replaced, and the result parses.
-TEST(PluginLoadPlan, ArgsToJsonInvalidUtf8DoesNotThrow) {
+// must not throw out of the boot path: the args still serialize with the bad
+// byte replaced by U+FFFD (EF BF BD) and the clean entry byte-exact.
+TEST(PluginLoadPlan, ArgsToJsonInvalidUtf8ReplacedWithFffd) {
   const std::map<std::string, std::string> args = {
       {"path", std::string("C:\\Users\\Ren") + "\xe9" + "\\x.txt"}, {"ok", "1"}};
   std::string out;
   ASSERT_NO_THROW(out = ArgsToJson(args));
-  const nlohmann::json parsed = nlohmann::json::parse(out);
-  EXPECT_EQ(parsed.at("ok"), "1");
-  EXPECT_TRUE(parsed.at("path").is_string());
+  EXPECT_EQ(out, std::string("{\"ok\":\"1\",\"path\":\"C:\\\\Users\\\\Ren") +
+                     "\xef\xbf\xbd" + "\\\\x.txt\"}");
+}
+
+// The substitution is reported by key (never value) so the loader can log it; a
+// clean map reports nothing.
+TEST(PluginLoadPlan, ArgsToJsonReportsReplacedKeys) {
+  const std::map<std::string, std::string> bad = {
+      {"path", "Ren\xe9"}, {"ok", "1"}, {"zbad", "\xff"}};
+  std::vector<std::string> keys;
+  (void)ArgsToJson(bad, &keys);
+  const std::vector<std::string> expected = {"path", "zbad"};
+  EXPECT_EQ(keys, expected);
+
+  std::vector<std::string> none;
+  (void)ArgsToJson({{"a", "1"}}, &none);
+  EXPECT_TRUE(none.empty());
+}
+
+// The flag reaches the plan item BuildLoadPlan hands the loader.
+TEST(PluginLoadPlan, BuildLoadPlanCarriesReplacedKeys) {
+  const NevrConfig cfg = NevrConfig::LoadFromString(
+      std::string("plugins:\n  - name: p\n    args:\n      path: \"Ren") + "\xe9" +
+      "\"\n      ok: \"1\"\n");
+  const std::vector<PluginLoadItem> plan = BuildLoadPlan(cfg);
+  ASSERT_EQ(plan.size(), 1u);
+  const std::vector<std::string> expected = {"path"};
+  EXPECT_EQ(plan[0].args_replaced_keys, expected);
 }
 
 // ---------------------------------------------------------------------------

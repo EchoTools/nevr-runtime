@@ -20,14 +20,23 @@ namespace nevr_plugincfg {
 // scalar strings, as nevr::PluginSpec delivers them) to a FLAT JSON object
 // string. Deterministic (std::map iterates sorted); every value is a JSON string;
 // an empty map yields "{}". This IS the v4 args_json contract.
-std::string ArgsToJson(const std::map<std::string, std::string>& args);
+//
+// Text that is not valid UTF-8 (a key or a value) does not fail the call: each
+// invalid byte is serialized as U+FFFD (EF BF BD), so the plugin receives the
+// replacement character, not the original byte. When `replacedKeys` is non-null,
+// the key of every entry whose key or value needed that substitution is appended
+// to it (map order); values are never reported. This layer does no logging; the
+// caller reports the substitution.
+std::string ArgsToJson(const std::map<std::string, std::string>& args,
+                       std::vector<std::string>* replacedKeys = nullptr);
 
 // The ordered load plan built from a parsed config. Pure: a pure
 // function of `cfg` (reads cfg.Plugins()), so the test drives it from a
 // NevrConfig::LoadFromString(...) with no singleton/Windows/I-O. List order is
 // load order; entries with enabled=false are kept with item.enabled=false (the
 // loader skips them, the login reports them — #60); `file` defaults to
-// name+".dll" (already applied by the parser); `args` is serialized via ArgsToJson.
+// name+".dll" (already applied by the parser); `args` is serialized via ArgsToJson,
+// and item.args_replaced_keys lists the arg keys that held invalid UTF-8.
 std::vector<PluginLoadItem> BuildLoadPlan(const nevr::NevrConfig& cfg);
 
 }  // namespace nevr_plugincfg

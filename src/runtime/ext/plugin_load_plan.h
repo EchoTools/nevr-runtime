@@ -22,6 +22,9 @@
 // `enabled` false means the loader skips it. Disabled entries are carried (not
 // dropped) so the login can report them (#60). `enabled` is last so existing
 // five-value brace initializers keep meaning what they meant.
+// `args_replaced_keys` names the arg keys whose key or value held invalid UTF-8
+// and reached the plugin with U+FFFD in place of the bad bytes (never the values);
+// it is empty when args_json is byte-exact.
 struct PluginLoadItem {
   std::string name;
   std::string file;
@@ -29,6 +32,7 @@ struct PluginLoadItem {
   std::string target;
   std::string args_json;
   bool        enabled = true;
+  std::vector<std::string> args_replaced_keys;
 };
 
 // The ordered plugin load plan from config.yaml's `plugins:` list: every entry,
