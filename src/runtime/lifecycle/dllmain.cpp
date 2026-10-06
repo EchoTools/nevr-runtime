@@ -33,9 +33,11 @@ NevrHost::BootstrapDiagnostics g_diagnostics;
 NevrHost::CrashCapture g_capture;
 HMODULE g_shim_module = nullptr;
 
-// The always-present deferred diagnostic trigger (design F3): a host entry point
-// that fires even when the rendezvous detour is absent flushes the attach-failure
-// record written in fixed memory during DllMain.
+// Best-effort deferred diagnostic trigger (design F3): the two host entry points
+// that fire even when the rendezvous detour is absent flush the attach-failure
+// record written in fixed memory during DllMain. In direct-import mode a failed
+// detour leaves no guaranteed-early trigger, so the record flushes when the game
+// constructs its crash reporter (or on the launcher path) — not before.
 void FlushDeferredAttachDiagnostic() { g_diagnostics.FlushPendingAttachDiagnostic(); }
 
 // Validate the image and install the ONE PreprocessCommandLine detour. Any

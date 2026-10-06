@@ -36,8 +36,12 @@ enum class DiagnosticDestination {
 
 /// Why the host's DLL_PROCESS_ATTACH could not install the PreprocessCommandLine
 /// rendezvous. Recorded in fixed memory during DllMain (no heap, no I/O); the
-/// JSON diagnostic is built and written later, by FlushPendingAttachDiagnostic,
-/// once a host entry point runs after attach has returned (design F3).
+/// JSON diagnostic is built and written later, by FlushPendingAttachDiagnostic.
+/// Delivery is best-effort: the flush runs only from host entry points that fire
+/// without the rendezvous detour (the crash-reporter constructor and
+/// NEVR_SetGameModule), so in direct-import mode a failed detour leaves no
+/// guaranteed-early trigger — the record flushes when the game constructs its
+/// crash reporter, or not until then.
 enum class AttachFailure : std::uint32_t {
   kNone = 0,
   kImageRejected = 1,     // the game module is not a supported echovr.exe build
@@ -63,7 +67,9 @@ class BootstrapDiagnostics {
   void RecordAttachFailure(AttachFailure failure, std::uint32_t detail = 0);
 
   // Build and emit the attach-failure diagnostic once. Idempotent (a second call
-  // is a no-op). Must be called after attach returns, from a host entry point.
+  // is a no-op). Called after attach returns from the two host entry points that
+  // fire without the rendezvous detour — the crash-reporter constructor and
+  // NEVR_SetGameModule — so delivery is best-effort, not guaranteed-early.
   void FlushPendingAttachDiagnostic();
 
   static constexpr std::size_t kMaxRecordBytes = 4096;
