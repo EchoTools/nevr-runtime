@@ -62,7 +62,7 @@ def nakama_runtime_config() -> str:
     """
     state = NAKAMA_DIR / ".state/nakama.yml"
     if not state.exists():
-        raise EnvError("no local nakama state; run `just nakama-up && just nakama-seed`")
+        raise EnvError("required test-server state is missing")
     m = re.search(r"server_key:\s*(\S+)", state.read_text())
     if not m:
         raise EnvError(f"no server_key in {state}")

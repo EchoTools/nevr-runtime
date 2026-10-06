@@ -1,4 +1,4 @@
-# Overlay for docker-compose.yml: run a nakama built from local source (`just nakama-dev-up`) in the
+# Overlay for docker-compose.yml: run a nakama built from local source in the
 # same container, same config and same database, by mounting the binary over the image's. Nothing is
 # built into an image and nothing is pushed; the binary comes from NAKAMA_DEV_BINARY (a static
 # CGO_ENABLED=0 build, so the image's Debian libc does not matter).

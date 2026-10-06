@@ -321,14 +321,14 @@ def write_local_server_config(peers: int = 0, friends: list | None = None, met: 
     as tools/winvm/systest.py). Fails loudly when the local nakama is not up or not seeded."""
     state = NAKAMA_LOCAL / ".state/nakama.yml"
     if not state.exists():
-        raise StepFailed("no local nakama state; run `just nakama-dev-up && just nakama-seed`")
+        raise StepFailed("required test-server state is missing")
     key = re.search(r"server_key:\s*(\S+)", state.read_text())
     if not key:
         raise StepFailed(f"no server_key in {state}")
     try:
         socket.create_connection(("127.0.0.1", 7350), timeout=5).close()
     except OSError as exc:
-        raise StepFailed(f"local nakama is not listening on 127.0.0.1:7350 ({exc}); run `just nakama-dev-up`")
+        raise StepFailed(f"required test service is not listening on 127.0.0.1:7350 ({exc})")
     sys.path.insert(0, str(NAKAMA_LOCAL))
     import seed  # noqa: E402  (constants only)
     discord_id = client_discord_id() or seed.DISCORD_ID

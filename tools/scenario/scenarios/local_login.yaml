@@ -1,5 +1,5 @@
 # The local-nakama path itself (`server: local`): the client logs in to the nakama built from the
-# social feature branch (`just nakama-dev-up && just nakama-seed`) as the seeded test account, and the
+# social feature branch as the seeded test account, and the
 # party the game asks for after login is made by that server. There are no game servers locally, so
 # no social lobby: local scenarios start from "logged in".
 name: local_login

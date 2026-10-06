@@ -48,7 +48,7 @@ checked by name, not by hash).
 existing `server/evr_pipeline_party_invite_test.go`; (b) a scenario in the runtime's suite
 (`just scenario-all`) that injects the new server message and asserts the game-visible slots, as
 `party_invite_join` does for PartyJoinSuccess; and (c) for the server half end to end, the same
-scenario against the local Nakama (`tools/nakama-local`, `just nakama-up`), which a one-client suite
+scenario against a test service (`tools/nakama-local`), which a one-client suite
 can only do for one side of a two-person feature (the other side is a second session, marked where it
 applies).
 

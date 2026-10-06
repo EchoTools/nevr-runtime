@@ -218,8 +218,6 @@ test-system-verbose:
 test-winvm *ARGS:
     tools/winvm/systest.py {{ARGS}}
 
-# Local, isolated nakama (fake Discord, own Postgres) for testing the runtime's
-# login/registration path. See docs/reference/local-nakama.md.
 # One social scenario, end to end, unattended (docs/design/2026-10-01-social-scenario-harness.md):
 # builds the mingw-scenario DLL (test-only control endpoint), launches the client the
 # launch-client.sh way, runs tools/scenario/scenarios/NAME.yaml and prints a PASS/FAIL table.
@@ -235,46 +233,7 @@ scenario-all:
     set -euo pipefail
     just preset=mingw-scenario build
     cmake --build --preset mingw-scenario
-    # `server: local` scenarios run against the nakama built from the social feature branch.
-    just nakama-dev-up
-    just nakama-seed
     python3 tools/scenario/run_all.py
-
-nakama-up:
-    python3 tools/nakama-local/setup.py
-    docker compose -f tools/nakama-local/docker-compose.yml up -d
-
-# The local stack running a nakama built from source (NAKAMA_SRC, default the social feature worktree
-# ~/src/nakama-worktrees/nevr-social, branch feat/nevr-social): a static
-# binary in the scratch dir, mounted over the image's (tools/nakama-local/docker-compose.dev.yml).
-# Unreleased server changes are tested here; nothing is built into an image or pushed.
-nakama-dev-up:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    src="${NAKAMA_SRC:-$HOME/src/nakama-worktrees/nevr-social}"
-    out=/var/tmp/work-nevr-runtime/nakama-dev/nakama
-    mkdir -p "$(dirname "$out")"
-    commit=$(git -C "$src" rev-parse --short HEAD)
-    dirty=$(git -C "$src" status --porcelain | wc -l)
-    echo "nakama-dev: building $src at $commit (uncommitted files: $dirty) -> $out"
-    (cd "$src" && CGO_ENABLED=0 go build -trimpath -mod=mod -ldflags "-s -w -X main.version=nevr-local-$commit" -o "$out" .)
-    python3 tools/nakama-local/setup.py
-    NAKAMA_DEV_BINARY="$out" docker compose -f tools/nakama-local/docker-compose.yml -f tools/nakama-local/docker-compose.dev.yml up -d --force-recreate nakama
-    echo "nakama-dev: started nevr-local-$commit"
-
-nakama-down:
-    docker compose -f tools/nakama-local/docker-compose.yml down
-
-# Also drops the database volume.
-nakama-reset:
-    docker compose -f tools/nakama-local/docker-compose.yml down -v
-
-nakama-logs:
-    docker compose -f tools/nakama-local/docker-compose.yml logs -f nakama
-
-# Insert the test account (fake Discord ID + password) a runtime can log in as.
-nakama-seed:
-    tools/nakama-local/seed.py
 
 # Run plugin ground truth tests (no game binary needed)
 test-plugins-groundtruth:

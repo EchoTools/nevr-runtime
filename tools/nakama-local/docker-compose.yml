@@ -1,6 +1,6 @@
 # Local, isolated EchoTools nakama for testing the NEVR runtime. No production
 # data, no real Discord, no secrets in this file (keys live in .state/, generated
-# by setup.py). Start with `just nakama-up`.
+# by setup.py).
 #
 # Image: the same one production runs (ghcr.io/echotools/nakama:latest at
 # 2026-09-21 == v3.27.2-evr.325). Pin it here so a local run is reproducible.
