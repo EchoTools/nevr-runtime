@@ -1121,8 +1121,16 @@ void GameServerLib::UnregisterAllCallbacks() {
       : GameServer::BroadcasterUnlisten([](EchoVR::Broadcaster* owner, uint16_t handle) {
           EchoVR::BroadcasterUnlisten(owner, handle);
         });
+  // Issue #122: this is the line that would have caught #117 in production.
+  // #117's signature was recordedOwner reading null (never recorded) while
+  // liveOwner was a real pointer — the mismatch that makes removed stay 0
+  // with no actual error. It was Debug, which isn't on by default, so that
+  // week-long silent no-op went unseen.
+  const EchoVR::Broadcaster* recordedOwner = cb.broadcasterOwner;
   const size_t removed = GameServer::UnregisterBroadcasterCallbacks(liveOwner, cb, unlisten);
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Unregistered %zu broadcaster callbacks", removed);
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.GAMESERVER] Unregistered %zu broadcaster callbacks (owner=%p, liveOwner=%p)",
+      removed, static_cast<const void*>(recordedOwner), static_cast<void*>(liveOwner));
 }
 
 VOID GameServerLib::Terminate() {
