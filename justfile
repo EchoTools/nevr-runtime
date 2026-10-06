@@ -1240,6 +1240,20 @@ verify:
         echo "An empty std::function invoked by ixwebsocket throws std::bad_function_call and kills the server." >&2
         exit 1
     fi
+    # Issue #43: received ServerDB payloads reach the game through
+    # CBroadcaster::ReceiveLocalEvent, which takes them as mutable. The receive
+    # callback therefore hands out a writable dispatcher-owned copy, and no server
+    # code casts const away from a payload pointer. test_protobuf_transport pins the
+    # callback type; this catches a handler that re-declares its parameter const
+    # and casts it back. :-anchored N99 comment stripper.
+    I43_RC=0; I43_HITS=$(grep -rnF -- 'const_cast<VOID*>' src/runtime/server) || I43_RC=$?
+    sensor_stage1 "issue #43 const_cast on received payload" "src/runtime/server" "$I43_RC"
+    if [ "$I43_RC" -eq 0 ] && printf '%s\n' "$I43_HITS" \
+         | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
+        echo "verify: FAIL — issue #43 const_cast<VOID*> is back in src/runtime/server." >&2
+        echo "Take the payload as VOID* from WebSocketClient::MessageCallback; it is writable by contract." >&2
+        exit 1
+    fi
     # N71: the session-flags null-deref class is covered by BreakpointVEH's
     # generic null-ptr branch, NOT by per-site hooks. Two things must hold: the
     # generic branch still exists, and the attribution table is still populated

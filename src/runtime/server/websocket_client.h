@@ -34,9 +34,13 @@ class WebSocketClient {
  public:
   /// <summary>
   /// Callback function type for receiving messages from ServerDB.
-  /// Parameters: msgId (SymbolId), payload data pointer, payload size
+  /// Parameters: msgId (SymbolId), payload data pointer, payload size.
+  /// The payload is a copy owned by ProcessReceivedMessages(), valid only for the
+  /// duration of the call (nullptr when size is 0). It is deliberately writable:
+  /// handlers forward it to CBroadcaster::ReceiveLocalEvent, whose listeners take
+  /// it as mutable (issue #43).
   /// </summary>
-  using MessageCallback = std::function<VOID(EchoVR::SymbolId msgId, const VOID* data, UINT64 size)>;
+  using MessageCallback = std::function<VOID(EchoVR::SymbolId msgId, VOID* data, UINT64 size)>;
 
   WebSocketClient();
   ~WebSocketClient();
@@ -138,5 +142,7 @@ class WebSocketClient {
   void TestSetConnected(bool connected);
   std::vector<std::string> TestCopyPendingMessages();
   void TestSetTransportHandler(std::function<bool(const std::string&)> handler);
+  // Feeds ProcessReceivedMessages() without an ixwebsocket connection.
+  void TestEnqueueReceivedMessage(GameServer::ReceivedWebSocketMessage message);
 #endif
 };

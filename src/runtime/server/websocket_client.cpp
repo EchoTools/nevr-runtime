@@ -285,9 +285,11 @@ VOID WebSocketClient::ProcessReceivedMessages() {
   messagesToProcess.swap(receivedMessages_);
   LeaveCriticalSection(&receivedMessagesMutex_);
 
-  for (const auto& msg : messagesToProcess) {
+  // Non-const iteration: messagesToProcess is this function's own copy and is
+  // discarded after dispatch, so handing the handler a writable payload is honest.
+  for (auto& msg : messagesToProcess) {
     if (messageCallback_) {
-      const VOID* data = msg.payload.empty() ? nullptr : msg.payload.data();
+      VOID* data = msg.payload.empty() ? nullptr : msg.payload.data();
       messageCallback_(msg.msgId, data, msg.payload.size());
     }
   }
@@ -309,5 +311,11 @@ std::vector<std::string> WebSocketClient::TestCopyPendingMessages() {
 
 void WebSocketClient::TestSetTransportHandler(std::function<bool(const std::string&)> handler) {
   testTransportHandler_ = std::move(handler);
+}
+
+void WebSocketClient::TestEnqueueReceivedMessage(GameServer::ReceivedWebSocketMessage message) {
+  EnterCriticalSection(&receivedMessagesMutex_);
+  receivedMessages_.push_back(std::move(message));
+  LeaveCriticalSection(&receivedMessagesMutex_);
 }
 #endif
