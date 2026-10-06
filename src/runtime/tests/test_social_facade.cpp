@@ -331,17 +331,18 @@ TEST(SocialFacade, FriendSlotsAnswerFromTheRoster) {
   SocialRoster::Global().Clear();
 }
 
-// Issue #57: a friend added after login (on the web site) must reach the friends tab when the
-// server answers the tab-open refresh (slot 45). Nakama pushes nothing to the game when the web
-// site adds a friend, so this reply is the only way that friend reaches the client. The bytes go
-// through SocialRoster::Feed, the call the ws bridge makes for every server->game message, and
+// Issue #57: the tab-open refresh (slot 45) is answered with a fresh FriendListResponse plus one
+// FriendStatusNotify per friend, and that answer replaces the roster. The refresh here lists a
+// different set than the login did (friend 22 gone, friend 77 new), so upserting notifies alone
+// would give {11, 22, 77}; only a roster rebuilt from the refresh list gives {77, 11}. The bytes
+// go through SocialRoster::Feed, the call the ws bridge makes for every server->game message, and
 // are read back through the facade slots the tab reads.
-TEST(SocialFacade, AFriendAddedSinceLoginAppearsWhenTheRefreshAnswers) {
+TEST(SocialFacade, TheRefreshAnswerReplacesTheRosterWithTheServersCurrentFriends) {
   SocialRoster::Global().Clear();
   const auto feed = [](const char* name, const std::uint8_t* data, std::size_t len) {
     ASSERT_TRUE(SocialRoster::Feed(SocialRoster::Global(), name, data, len)) << name;
   };
-  // Login: two friends.
+  // Login: friends 11 and 22, both offline.
   const auto loginList = ListResponsePayload(2, 0, 0);
   feed("FriendListResponse", loginList.data(), loginList.size());
   for (const std::uint64_t id : {11ULL, 22ULL}) {
@@ -353,26 +354,34 @@ TEST(SocialFacade, AFriendAddedSinceLoginAppearsWhenTheRefreshAnswers) {
   const Slot* vtable = Vtable(object);
   using CountFn = std::uint32_t (*)(void*);
   using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
+  const auto idAt = [&](std::uint32_t index) {
+    std::uint64_t id = 0;
+    reinterpret_cast<IdFn>(vtable[49])(object, &id, index);
+    return id;
+  };
   ASSERT_EQ(reinterpret_cast<CountFn>(vtable[46])(object), 2u);
+  ASSERT_EQ(idAt(0), 11u);
+  ASSERT_EQ(idAt(1), 22u);
 
-  // The refresh's answer: the same two plus friend 77, accepted on the web site since login.
-  const auto refreshList = ListResponsePayload(2, 0, 1);
+  // The refresh's list announces two friends: 11 offline and 77 online. Until the first entry
+  // arrives the previous roster stays visible, unchanged.
+  const auto refreshList = ListResponsePayload(1, 0, 1);
   feed("FriendListResponse", refreshList.data(), refreshList.size());
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[46])(object), 2u) << "the old roster stays until the refresh's entries arrive";
+  EXPECT_EQ(idAt(0), 11u);
+  EXPECT_EQ(idAt(1), 22u);
+
   const auto added = StatusNotifyPayload(77, SocialRoster::kStatusOnline);
   feed("FriendStatusNotify", added.data(), added.size());
-  for (const std::uint64_t id : {11ULL, 22ULL}) {
-    const auto notify = StatusNotifyPayload(id, SocialRoster::kStatusOffline);
-    feed("FriendStatusNotify", notify.data(), notify.size());
-  }
+  const auto kept = StatusNotifyPayload(11, SocialRoster::kStatusOffline);
+  feed("FriendStatusNotify", kept.data(), kept.size());
 
-  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[46])(object), 3u) << "the friend added since login is listed";
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[46])(object), 2u) << "friend 22 is not in the refresh, so it is gone";
   EXPECT_EQ(reinterpret_cast<CountFn>(vtable[47])(object), 1u);
-  std::uint64_t id = 0;
-  EXPECT_EQ(reinterpret_cast<IdFn>(vtable[49])(object, &id, 0), &id);
-  EXPECT_EQ(id, 77u) << "online friends lead the list";
+  EXPECT_EQ(idAt(0), 77u) << "online friends lead the list";
+  EXPECT_EQ(idAt(1), 11u);
   SocialRoster::Global().Clear();
 }
-
 
 std::string Hex(const std::uint8_t* data, std::size_t len) {
   static const char digits[] = "0123456789abcdef";
