@@ -1,13 +1,78 @@
-# Game Patches — deployed as BugSplat64.dll (replaces the original crash reporter).
+# BugSplat64.dll (stable host) + nevr.dll (changing runtime) — the split
+# (docs/design/2026-10-05-bugsplat-nevr-split.md step 5).
+#
 # The game statically imports BugSplat64.dll, so it loads at process startup
-# before WinMain — giving us the earliest possible hook point.
-# Uses MinHook for function hooking (built from extern/minhook)
+# before WinMain — the earliest possible hook point. The host validates the game
+# image and installs ONE MinHook detour on PreprocessCommandLine from
+# DLL_PROCESS_ATTACH; on the first call it loads the sibling nevr.dll and
+# dispatches preprocess_before -> original -> preprocess_after. The full feature
+# runtime (hooks, server, networking, modules, crash-recovery) lives in nevr.dll,
+# which has a no-op DllMain.
 
-set(PATCHES_SOURCES
+# --- Stable host: BugSplat64.dll ---------------------------------------------
+# Host-owned: bootstrap/crash/compat code plus the game-facing 26-symbol export
+# surface (exports.def + the forwarding wrappers in host/host_exports.cpp). The
+# host deliberately does NOT link nevr_core / nevr_abi / the modules, so none of
+# their static state (globals, MinHook, singletons) is duplicated across the two
+# DLLs — the runtime keeps the single copy.
+
+set(HOST_SOURCES
     "lifecycle/dllmain.cpp"
-    "lifecycle/initialize.cpp"
     "lifecycle/game_image_guard.cpp"
     "lifecycle/system_module_loader.cpp"
+    "host/bootstrap_diagnostics.cpp"
+    "host/crash_capture.cpp"
+    "host/runtime_load.cpp"
+    "host/runtime_rendezvous.cpp"
+    "host/host_exports.cpp"
+)
+
+set(HOST_HEADERS
+    "lifecycle/game_image_guard.h"
+    "lifecycle/system_module_loader.h"
+    "host/bootstrap_diagnostics.h"
+    "host/crash_capture.h"
+    "host/runtime_load.h"
+    "host/runtime_rendezvous.h"
+    "host/path_buffer.h"
+    "host/host_exports.h"
+)
+
+add_library(nevr_host SHARED ${HOST_SOURCES} ${HOST_HEADERS} "exports.def")
+
+target_compile_definitions(nevr_host PRIVATE USE_MINHOOK)
+
+target_include_directories(nevr_host PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_BINARY_DIR}
+)
+
+find_package(nlohmann_json CONFIG REQUIRED)
+target_link_libraries(nevr_host PRIVATE minhook nlohmann_json::nlohmann_json)
+
+set_target_properties(nevr_host PROPERTIES
+  OUTPUT_NAME "BugSplat64"
+  PREFIX ""
+)
+
+if(MINGW)
+  # N146: the stock BugSplat64.dll is linked with /BASE:0x180000000. The game's
+  # D3D11/DXVK graphics DLLs fail to load when BugSplat64.dll occupies a
+  # different address range. Setting the same ImageBase fixes the client-mode
+  # window-not-rendering bug.
+  target_link_options(nevr_host PRIVATE
+    -Wl,--image-base=0x180000000
+    -Wl,--allow-multiple-definition
+  )
+endif()
+
+# --- Changing runtime: nevr.dll ----------------------------------------------
+# The frequently-changing feature runtime. PATCHES_SOURCES is the authoritative
+# runtime inventory (tools/verify_patch_source_inventory.py pins its patch/ set).
+
+set(PATCHES_SOURCES
+    "lifecycle/runtime_entry.cpp"
+    "lifecycle/initialize.cpp"
     "log/boot_log_tee.cpp"
     "lifecycle/cli.cpp"
     "lifecycle/boot.cpp"
@@ -67,8 +132,6 @@ set(PATCHES_SOURCES
 set(PATCHES_HEADERS
     "hook/patching.h"
     "lifecycle/initialize.h"
-    "lifecycle/game_image_guard.h"
-    "lifecycle/system_module_loader.h"
     "log/boot_log_tee.h"
     "lifecycle/cli.h"
     "lifecycle/boot.h"
@@ -131,8 +194,7 @@ set(PATCHES_HEADERS
     "server/telemetry_snapshot.h"
 )
 
-add_library(nevr_runtime SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS}
-                               "exports.def")
+add_library(nevr_runtime SHARED ${PATCHES_SOURCES} ${PATCHES_HEADERS})
 
 target_compile_definitions(nevr_runtime PRIVATE USE_MINHOOK PROTOBUF_STATIC_LIB)
 
@@ -188,11 +250,11 @@ if(NEVR_SCENARIO_CONTROL)
   target_sources(nevr_runtime PRIVATE scenario/scenario_control.cpp)
   target_compile_definitions(nevr_runtime PRIVATE NEVR_SCENARIO_CONTROL=1)
   set_source_files_properties(scenario/scenario_control.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-  message(STATUS "NEVR_SCENARIO_CONTROL=ON: BugSplat64.dll carries the scenario control endpoint (test build)")
+  message(STATUS "NEVR_SCENARIO_CONTROL=ON: nevr.dll carries the scenario control endpoint (test build)")
 endif()
 
 set_target_properties(nevr_runtime PROPERTIES
-  OUTPUT_NAME "BugSplat64"
+  OUTPUT_NAME "nevr"
   PREFIX ""
 )
 
@@ -240,12 +302,11 @@ if(MINGW)
 endif()
 
 if(MINGW)
-  # N146: the stock BugSplat64.dll is linked with /BASE:0x180000000.
-  # The game's D3D11/DXVK graphics DLLs fail to load when BugSplat64.dll
-  # occupies a different address range.  Setting the same ImageBase fixes
-  # the client-mode window-not-rendering bug.
+  # nevr.dll is loaded lazily by the host (LoadLibraryExW), so it needs no fixed
+  # image base. --allow-multiple-definition is retained from the monolith build:
+  # the runtime links several static archives that share a handful of weak
+  # symbols.
   target_link_options(nevr_runtime PRIVATE
-    -Wl,--image-base=0x180000000
     -Wl,--allow-multiple-definition
   )
 endif()
@@ -544,6 +605,16 @@ if(BUILD_TESTING)
     target_link_libraries(test_runtime_abi PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_runtime_abi DISCOVERY_MODE PRE_TEST)
 
+    # Pair loading for the BugSplat64.dll / nevr.dll split (step 5): the REAL
+    # nevr.dll, built beside the host, loads and exposes a valid v1 API. Resolves
+    # the sibling at runtime; depends on nevr_runtime so the DLL exists first.
+    add_executable(test_runtime_pair tests/test_runtime_pair.cpp)
+    target_compile_options(test_runtime_pair PRIVATE -Werror)
+    target_include_directories(test_runtime_pair PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(test_runtime_pair PRIVATE GTest::gtest GTest::gtest_main)
+    add_dependencies(test_runtime_pair nevr_runtime)
+    gtest_discover_tests(test_runtime_pair DISCOVERY_MODE PRE_TEST)
+
     # Attach-time MinHook proof gate for the BugSplat64.dll / nevr.dll split
     # (docs/design/2026-10-05-bugsplat-nevr-split.md, Implementation step 2).
     # The probe host (built as BugSplat64.dll) validates the game image and the
@@ -745,6 +816,7 @@ if(BUILD_TESTING)
       host/runtime_rendezvous.cpp
       host/runtime_load.cpp
       host/bootstrap_diagnostics.cpp
+      host/host_exports.cpp
       lifecycle/game_image_guard.cpp)
     target_link_libraries(test_rendezvous_host PRIVATE minhook nlohmann_json::nlohmann_json)
     set_target_properties(test_rendezvous_host PROPERTIES PREFIX "" OUTPUT_NAME "BugSplat64")

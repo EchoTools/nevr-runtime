@@ -279,7 +279,7 @@ test-auth-unit:
     unset VCPKG_ROOT
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_runtime_abi --target test_bootstrap_attach --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_winhttp_stub --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_bootstrap_diagnostics --target test_host_crash_capture --target test_host_runtime_load --target test_host_minidump --target test_host_crash --target test_rendezvous
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_runtime_abi --target test_runtime_pair --target test_bootstrap_attach --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_winhttp_stub --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_bootstrap_diagnostics --target test_host_crash_capture --target test_host_runtime_load --target test_host_minidump --target test_host_crash --target test_rendezvous
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
@@ -408,7 +408,7 @@ test-auth-unit:
         exit 1
     fi
     wine "$bin"
-    for test_name in test_bootstrap_diagnostics test_host_crash_capture test_host_runtime_load test_host_minidump test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_winhttp_stub test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace; do
+    for test_name in test_bootstrap_diagnostics test_host_crash_capture test_host_runtime_load test_host_minidump test_runtime_pair test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_winhttp_stub test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -1235,7 +1235,8 @@ verify:
     python3 tools/verify_hook_invariants.py
     # The scenario-test control endpoint can inject messages into a live session; it exists only in
     # the mingw-scenario preset. The DLL this gate just built must not carry it.
-    python3 tools/verify_scenario_control_absent.py "build/{{ preset }}/bin/BugSplat64.dll"
+    # The endpoint compiles into nevr.dll (the changing runtime), not the stable host.
+    python3 tools/verify_scenario_control_absent.py "build/{{ preset }}/bin/nevr.dll"
     # BugSplat/nevr split, step 1 (docs/design/2026-10-05-bugsplat-nevr-split.md):
     # the game-facing PE surface is pinned before any target-ownership change —
     # exact 26-name export set, DetoursExportPlaceholder at ordinal 1, no eager
@@ -1247,6 +1248,10 @@ verify:
         echo "pe-contract: NOTE game binary absent (echovr/bin/win10/echovr.exe) — game-import cross-check skipped; host export checks still run"
         python3 tools/verify_pe_contract.py --dll "build/{{ preset }}/bin/BugSplat64.dll"
     fi
+    # BugSplat/nevr split, step 5 (docs/design/2026-10-05-bugsplat-nevr-split.md):
+    # no duplicate static state across the pair. nevr_core/the runtime globals must
+    # be defined only in nevr.dll; MinHook must be present in both as separate copies.
+    python3 tools/verify_split_no_duplicate_state.py --host "build/{{ preset }}/bin/BugSplat64.dll" --runtime "build/{{ preset }}/bin/nevr.dll"
     # N84 runtime counterpart. The static check above scans source, so it only
     # sees plugins in THIS tree — a third-party plugin is a DLL we never compile.
     # HookGuard detects the effect (our bytes changed) instead of the source.

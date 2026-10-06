@@ -48,6 +48,7 @@ volatile LONG g_event_count = 0;
 volatile LONG g_event_overflow = 0;
 
 bool g_wrong_prologue = false;
+int g_launcher_mode = 0;
 BYTE* g_image = nullptr;
 constexpr SIZE_T kImageSize = 0x118000;
 constexpr SIZE_T kPage = 0x1000;
@@ -124,6 +125,10 @@ BYTE* BuildGameImage(bool wrong_prologue) {
 extern "C" __declspec(dllexport) HMODULE RendezvousProbeGameImage() {
   if (g_image == nullptr) g_image = BuildGameImage(g_wrong_prologue);
   return reinterpret_cast<HMODULE>(g_image);
+}
+
+extern "C" __declspec(dllexport) int RendezvousProbeLauncherMode() {
+  return g_launcher_mode;
 }
 
 namespace {
@@ -316,6 +321,16 @@ void RunChildScenario(const std::string& scenario) {
   HMODULE host = LoadLibraryW(host_path.c_str());
   Require(host != nullptr, "host shim failed to load");
 
+  // F3: a rejected prologue installs no detour, so there is no first-call trigger.
+  // The host's always-present deferred path flushes the fixed-memory attach
+  // diagnostic on demand (the production trigger is the MiniDmpSender constructor /
+  // NEVR_SetGameModule); exercise it so the parent can verify the record landed.
+  if (scenario == "bad-prologue") {
+    const auto flush =
+        reinterpret_cast<void (*)()>(GetProcAddress(host, "NevrHostTest_FlushDeferred"));
+    if (flush != nullptr) flush();
+  }
+
   for (LONG call = 0; call < calls; ++call) {
     CallTarget(static_cast<std::uintptr_t>(0x1000) + (static_cast<std::uintptr_t>(call) << 4));
   }
@@ -425,6 +440,33 @@ int RunSetGameModuleUnsupported() {
   Fail("NEVR_SetGameModule did not terminate on an unsupported module");
 }
 
+int RunSetGameModuleSupported() {
+  // Launcher-mode success path (the step-4 review gap): DllMain must NOT install
+  // the detour (launcher mode), and NEVR_SetGameModule must do the full
+  // Prepare -> Install -> later dispatch itself.
+  g_launcher_mode = 1;
+  g_image = BuildGameImage(false);
+  Require(g_image != nullptr, "could not build the synthetic game image");
+
+  const std::wstring host_path = ExecutableDirectory() + L"BugSplat64.dll";
+  HMODULE host = LoadLibraryW(host_path.c_str());
+  Require(host != nullptr, "host shim failed to load");
+  const auto set_game_module = reinterpret_cast<void (*)(HMODULE)>(
+      GetProcAddress(host, "NEVR_SetGameModule"));
+  Require(set_game_module != nullptr, "NEVR_SetGameModule export did not resolve");
+  set_game_module(reinterpret_cast<HMODULE>(g_image));
+
+  // The detour must now be live: a later call dispatches through the runtime.
+  // dispatched=true asserts the runtime loaded, initialized, and ran before/after
+  // — impossible unless NEVR_SetGameModule installed the detour (DllMain skipped
+  // it in launcher mode).
+  CallTarget(static_cast<std::uintptr_t>(0x2000));
+  const std::vector<EventRecord> events = Snapshot();
+  ValidateDispatch(events, true, 0);
+  std::printf("rendezvous test: PASS: NEVR_SetGameModule supported (launcher path)\n");
+  return 0;
+}
+
 int RunSuite() {
   const std::wstring root = ExecutableDirectory();
   wchar_t self[MAX_PATH] = {};
@@ -473,6 +515,16 @@ int RunSuite() {
               "missing runtime diagnostic does not record runtime_absent");
       std::printf("rendezvous test: [missing] diagnostic: %s", line.c_str());
     }
+
+    if (std::strcmp(scenario.name, "bad-prologue") == 0) {
+      const std::wstring log = scenario_dir + L"\\EchoVR\\logs\\nevr-bootstrap.jsonl";
+      const std::string line = ReadAll(log.c_str());
+      Require(!line.empty(), "bad-prologue did not write a bootstrap attach diagnostic (F3)");
+      Require(line.find("\"event\":\"host_attach\"") != std::string::npos &&
+                  line.find("\"outcome\":\"prologue_mismatch\"") != std::string::npos,
+              "bad-prologue attach diagnostic does not record prologue_mismatch (F3)");
+      std::printf("rendezvous test: [bad-prologue] diagnostic: %s", line.c_str());
+    }
   }
 
   // External NEVR_SetGameModule contract: resolves, is callable with void(HMODULE),
@@ -483,6 +535,15 @@ int RunSuite() {
     StageRuntimeFixture(root, L"good");
     RunChild(L"\"" + std::wstring(self, length) + L"\" --set-game-module-unsupported",
              "set-game-module-unsupported", 0xE0420003);
+  }
+
+  // External NEVR_SetGameModule contract, success path (step-4 review gap): the
+  // launcher drives Prepare -> Install and a later call dispatches through the
+  // runtime — the supported branch, not just the termination branch.
+  {
+    StageRuntimeFixture(root, L"good");
+    RunChild(L"\"" + std::wstring(self, length) + L"\" --set-game-module-supported",
+             "set-game-module-supported", 0);
   }
 
   std::printf("rendezvous test: PASS: all %llu scenarios + NEVR_SetGameModule contract\n",
@@ -500,8 +561,12 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::strcmp(argv[1], "--set-game-module-unsupported") == 0) {
     return RunSetGameModuleUnsupported();
   }
+  if (argc == 2 && std::strcmp(argv[1], "--set-game-module-supported") == 0) {
+    return RunSetGameModuleSupported();
+  }
   if (argc != 1) {
-    Fail("usage: test_rendezvous.exe [--child <scenario> | --set-game-module-unsupported]");
+    Fail("usage: test_rendezvous.exe [--child <scenario> | --set-game-module-unsupported | "
+         "--set-game-module-supported]");
   }
   return RunSuite();
 }

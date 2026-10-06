@@ -26,6 +26,30 @@ void BootstrapDiagnostics::Prepare() {
   if (temp_ok) fallback_ready_ = AppendPath(fallback_dir_, MAX_PATH, temp_, kLogsSuffix);
 }
 
+void BootstrapDiagnostics::RecordAttachFailure(AttachFailure failure, std::uint32_t detail) {
+  if (failure == AttachFailure::kNone) return;
+  attach_failure_ = failure;
+  attach_detail_ = detail;
+}
+
+void BootstrapDiagnostics::FlushPendingAttachDiagnostic() {
+  if (attach_failure_ == AttachFailure::kNone) return;
+  if (attach_flushed_.exchange(true)) return;  // one record per attach, ever
+  nlohmann::json record;
+  record["event"] = "host_attach";
+  const char* outcome = "hook_failed";
+  switch (attach_failure_) {
+    case AttachFailure::kImageRejected: outcome = "image_rejected"; break;
+    case AttachFailure::kPrologueMismatch: outcome = "prologue_mismatch"; break;
+    case AttachFailure::kHookFailed: outcome = "hook_failed"; break;
+    case AttachFailure::kNone: return;  // unreachable; guarded above
+  }
+  record["outcome"] = outcome;
+  record["degraded_action"] = "run_original_only";
+  if (attach_detail_ != 0) record["detail"] = attach_detail_;
+  Emit(record);
+}
+
 DiagnosticDestination BootstrapDiagnostics::Emit(const nlohmann::json& record) {
   std::string line = record.dump();
   if (line.size() > kMaxRecordBytes) return DiagnosticDestination::kDropped;

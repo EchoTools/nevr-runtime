@@ -20,7 +20,9 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 
 #include <nlohmann/json_fwd.hpp>
 
@@ -30,6 +32,17 @@ enum class DiagnosticDestination {
   kPrimary,   // %LOCALAPPDATA%\EchoVR\logs
   kFallback,  // %TEMP%\EchoVR\logs
   kDropped,   // neither writable, or the record was rejected
+};
+
+/// Why the host's DLL_PROCESS_ATTACH could not install the PreprocessCommandLine
+/// rendezvous. Recorded in fixed memory during DllMain (no heap, no I/O); the
+/// JSON diagnostic is built and written later, by FlushPendingAttachDiagnostic,
+/// once a host entry point runs after attach has returned (design F3).
+enum class AttachFailure : std::uint32_t {
+  kNone = 0,
+  kImageRejected = 1,     // the game module is not a supported echovr.exe build
+  kPrologueMismatch = 2,  // the pinned PreprocessCommandLine prologue moved
+  kHookFailed = 3,        // MinHook initialize/create/enable failed
 };
 
 class BootstrapDiagnostics {
@@ -44,6 +57,15 @@ class BootstrapDiagnostics {
   // truncated: a truncated JSON line is unparseable and worse than no line.
   DiagnosticDestination Emit(const nlohmann::json& record);
 
+  // Record an attach failure in fixed memory. No heap, no I/O, no locks: safe
+  // under the loader lock. detail is an optional win32 / MH status / prologue
+  // byte for the diagnostic.
+  void RecordAttachFailure(AttachFailure failure, std::uint32_t detail = 0);
+
+  // Build and emit the attach-failure diagnostic once. Idempotent (a second call
+  // is a no-op). Must be called after attach returns, from a host entry point.
+  void FlushPendingAttachDiagnostic();
+
   static constexpr std::size_t kMaxRecordBytes = 4096;
 
   // Test seams.
@@ -51,6 +73,8 @@ class BootstrapDiagnostics {
   const wchar_t* FallbackDir() const { return fallback_dir_; }
   bool PrimaryReady() const { return primary_ready_; }
   bool FallbackReady() const { return fallback_ready_; }
+  AttachFailure AttachFailureKind() const { return attach_failure_; }
+  bool AttachDiagnosticFlushed() const { return attach_flushed_.load(); }
 
  private:
   bool EmitTo(const wchar_t* dir, const char* line, std::size_t length);
@@ -61,6 +85,9 @@ class BootstrapDiagnostics {
   wchar_t fallback_dir_[MAX_PATH] = {};  // %TEMP%\EchoVR\logs
   bool primary_ready_ = false;
   bool fallback_ready_ = false;
+  AttachFailure attach_failure_ = AttachFailure::kNone;
+  std::uint32_t attach_detail_ = 0;
+  std::atomic_bool attach_flushed_{false};
 };
 
 }  // namespace NevrHost

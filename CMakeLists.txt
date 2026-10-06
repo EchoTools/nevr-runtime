@@ -304,6 +304,7 @@ add_custom_target(dist-prepare
   VERBATIM
 )
 add_dependencies(dist-prepare nevr_runtime)
+add_dependencies(dist-prepare nevr_host)
 add_dependencies(dist-prepare echovr_server)
 
 # =============================================================================
@@ -375,6 +376,7 @@ add_custom_target(dist-lite-prepare
   VERBATIM
 )
 add_dependencies(dist-lite-prepare nevr_runtime)
+add_dependencies(dist-lite-prepare nevr_host)
 add_dependencies(dist-lite-prepare echovr_server)
 
 add_custom_target(dist-lite-sign

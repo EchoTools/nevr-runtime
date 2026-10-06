@@ -1,5 +1,7 @@
 #include "runtime/host/runtime_rendezvous.h"
 
+#include "runtime/host/host_exports.h"
+
 #include <MinHook.h>
 
 #include <cstring>
@@ -23,18 +25,23 @@ void RuntimeRendezvous::Prepare(HMODULE shim_module, HMODULE game_module,
   g_active_rendezvous = this;
 }
 
-NevrPreprocessCommandLineFn RuntimeRendezvous::Install(void* target) {
-  if (original_ != nullptr) return original_;  // idempotent
-
-  // Prologue-validate before writing the detour: never blind-write into the game
-  // image. ReadProcessMemory reports an unreadable target rather than faulting.
+bool RuntimeRendezvous::PrologueMatches(const void* target) {
   unsigned char bytes[kPreprocessPrologueSize] = {};
   SIZE_T read = 0;
   if (target == nullptr ||
       ReadProcessMemory(GetCurrentProcess(), target, bytes, sizeof(bytes), &read) == FALSE ||
       read != sizeof(bytes) || std::memcmp(bytes, kPreprocessPrologue, sizeof(bytes)) != 0) {
-    return nullptr;
+    return false;
   }
+  return true;
+}
+
+NevrPreprocessCommandLineFn RuntimeRendezvous::Install(void* target) {
+  if (original_ != nullptr) return original_;  // idempotent
+
+  // Prologue-validate before writing the detour: never blind-write into the game
+  // image. ReadProcessMemory reports an unreadable target rather than faulting.
+  if (!PrologueMatches(target)) return nullptr;
 
   MH_STATUS status = MH_Initialize();
   if (status != MH_OK) return nullptr;
@@ -73,7 +80,13 @@ BOOL CALLBACK RuntimeRendezvous::LoadRuntimeOnce(PINIT_ONCE, PVOID parameter, PV
   if (self == nullptr) return TRUE;
   self->loading_thread_.store(GetCurrentThreadId(), std::memory_order_release);
   const RuntimeLoadResult result = self->loader_.Load(self->context_, *self->diagnostics_);
-  if (result.Loaded()) self->api_.store(result.api, std::memory_order_release);
+  if (result.Loaded()) {
+    self->api_.store(result.api, std::memory_order_release);
+    // Publish the runtime module so the host's forwarding wrappers (host_exports)
+    // can resolve the runtime-owned cross-DLL symbols on call. A loaded runtime is
+    // never freed, so the handle is stable for the process lifetime.
+    PublishRuntimeModule(result.module);
+  }
   self->loading_thread_.store(0, std::memory_order_release);
   return TRUE;
 }

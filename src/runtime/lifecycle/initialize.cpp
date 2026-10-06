@@ -1,5 +1,4 @@
 #include "runtime/lifecycle/initialize.h"
-#include "runtime/lifecycle/game_image_guard.h"
 
 #include <cstring>
 #include <vector>
@@ -380,10 +379,6 @@ static VOID InitializeAfterGameImageGuard() {
                              reinterpret_cast<PVOID>(BuildCmdLineSyntaxDefinitionsHook));
   BootLogTee::TeeFprintf("[NEVR.PATCH] hook name=BuildCmdLineSyntaxDefinitions result=%s\n", r1 ? "OK" : "FAILED");
   NoteBootHookResult(r1, "BuildCmdLineSyntaxDefinitions", BootHookRequirement::kRequired);
-  BOOL r2 = Hooking::Attach(reinterpret_cast<PVOID*>(&EchoVR::PreprocessCommandLine),
-                             reinterpret_cast<PVOID>(PreprocessCommandLineHook));
-  BootLogTee::TeeFprintf("[NEVR.PATCH] hook name=PreprocessCommandLine result=%s\n", r2 ? "OK" : "FAILED");
-  NoteBootHookResult(r2, "PreprocessCommandLine", BootHookRequirement::kRequired);
   // Required: on a server it turns NoNetwork/LoadFailed back into a usable
   // state, ends the process when a session ends, and is the shutdown-request
   // check when the frame pacer is not running (state_machine.cpp).
@@ -484,11 +479,7 @@ static VOID InitializeAfterGameImageGuard() {
       "[NEVR.PATCH] boot hooks installed ok=%s", g_bootHookFailed ? "false" : "true");
 }
 
-static void InitializeValidatedGameModule(HMODULE module) {
+void InitializeValidatedRuntime(HMODULE module) {
   EchoVR::g_GameBaseAddress = reinterpret_cast<CHAR*>(module);
   InitializeAfterGameImageGuard();
-}
-
-void InitializeGameModule(HMODULE module) {
-  GameImageGuard::RunWithSupportedGameModule(module, &InitializeValidatedGameModule);
 }

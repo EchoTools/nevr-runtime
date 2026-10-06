@@ -147,10 +147,9 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
                            "subject vanished: no InstallBootDetour calls found")
         helper = extract_braced_function(source, "static void InstallBootDetour(")
         self.assertRegex(helper, r"NoteBootHookResult\(\s*PatchDetour\(")
-        # The two Hooking::Attach results use the same pattern, not a hand-written flag write.
+        # The one Hooking::Attach result uses the same pattern, not a hand-written flag write.
         self.assertNotRegex(body, r"if\s*\(\s*!\s*r\d\s*\)\s*g_bootHookFailed")
         self.assertRegex(body, r"NoteBootHookResult\(\s*r1\s*,[^;]*kRequired")
-        self.assertRegex(body, r"NoteBootHookResult\(\s*r2\s*,[^;]*kRequired")
         # A required failure is what sets the flag boot.cpp checks before starting a server.
         note = extract_braced_function(source, "static void NoteBootHookResult(")
         self.assertRegex(note, r"kRequired\)\s*\{\s*g_bootHookFailed\s*=\s*true;")
@@ -163,9 +162,11 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # only scans InitializeAfterGameImageGuard's own body and would not catch a Log() call
         # added inside this helper.
         self.assertNotRegex(note, r"\bLog\s*\(")
-        # The two Hooking::Attach results (r1, r2) must be captured in a variable, not dropped —
+        # The Hooking::Attach result (r1) must be captured in a variable, not dropped —
         # a new bare `Hooking::Attach(...)` statement would silently discard its result the same
-        # way the original seven PatchDetour calls did.
+        # way the original seven PatchDetour calls did. (The PreprocessCommandLine hook that was
+        # r2 moved to the host in the BugSplat64/nevr split; the runtime must not re-hook that
+        # address.)
         attach_calls = re.findall(r"\bHooking::Attach\s*\(", body)
         captured_calls = re.findall(r"\bBOOL\s+r\d+\s*=\s*Hooking::Attach\s*\(", body)
         self.assertEqual(len(attach_calls), len(captured_calls),

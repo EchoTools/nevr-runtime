@@ -46,8 +46,6 @@ const char* TokenAuth_GetUsername(void);
 #include <atomic>
 #include <shellapi.h>
 
-namespace {
-
 // N146: only this minimal state is needed before the original command-line
 // preprocessing.  In particular, do not start modules, plugins, file I/O, or
 // the bridge here: client D3D initialization is still in the original call.
@@ -128,28 +126,6 @@ void PreflightRuntimeBootstrap() {
         reinterpret_cast<CHAR*>(g_pGame) + PatchAddresses::GAME_WINDOWED_FLAGS_OFFSET);
     *windowedFlags |= 0x0100000;
   }
-}
-
-}  // namespace
-
-/// <summary>
-/// A detour hook for the game's command line pre-processing method, used to parse command line arguments.
-/// </summary>
-/// <param name="pGame">A pointer to the game instance.</param>
-UINT64 PreprocessCommandLineHook(PVOID pGame) {
-  // N146: the first original call initializes the client D3D path.  It can also
-  // be the ONLY call, so waiting for a second invocation leaves the bridge and
-  // all deferred runtime setup permanently disabled.  Store the game instance
-  // before D3D starts so its device hook can complete setup immediately after
-  // creation. A dedicated server has no graphics-device rendezvous, so it
-  // bootstraps immediately after its first original call returns.
-  g_pGame = pGame;
-  PreflightRuntimeBootstrap();
-  UINT64 result = EchoVR::PreprocessCommandLine(pGame);
-  if (g_isServer) {
-    RunDeferredRuntimeBootstrap(pGame, "Preprocess first-call server bootstrap");
-  }
-  return result;
 }
 
 void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {

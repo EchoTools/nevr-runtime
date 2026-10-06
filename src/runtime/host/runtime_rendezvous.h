@@ -55,6 +55,12 @@ class RuntimeRendezvous {
   // call after a successful install returns the same trampoline.
   NevrPreprocessCommandLineFn Install(void* target);
 
+  // True when the 18 pinned bytes at `target` match the expected prologue, read
+  // with ReadProcessMemory (never a direct read, which would fault). Split out of
+  // Install so the host DllMain can distinguish a prologue mismatch from a MinHook
+  // failure for its attach diagnostic (design F3).
+  static bool PrologueMatches(const void* target);
+
   // The detour body (MinHook calls it). Loads nevr.dll once under InitOnce and
   // dispatches; a same-thread re-entry during load bypasses to the original.
   static std::uint64_t PreprocessCommandLineDetour(void* game);

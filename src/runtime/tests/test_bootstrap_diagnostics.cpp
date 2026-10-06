@@ -140,3 +140,46 @@ TEST(BootstrapDiagnostics, EmitRefusesAnOversizedRecordRatherThanTruncate) {
   record["huge"] = std::string(BootstrapDiagnostics::kMaxRecordBytes, 'x');
   EXPECT_EQ(diagnostics.Emit(record), DiagnosticDestination::kDropped);
 }
+
+TEST(BootstrapDiagnostics, RecordAttachFailureAndFlushEmitsOneHostAttachRecord) {
+  const std::wstring local = MakeTempDir(L"local");
+  SetEnv(L"LOCALAPPDATA", local);
+  SetEnv(L"TEMP", MakeTempDir(L"temp"));
+
+  BootstrapDiagnostics diagnostics;
+  diagnostics.Prepare();
+  ASSERT_FALSE(diagnostics.AttachDiagnosticFlushed());
+  diagnostics.RecordAttachFailure(NevrHost::AttachFailure::kPrologueMismatch, 0xb2);
+  EXPECT_EQ(diagnostics.AttachFailureKind(), NevrHost::AttachFailure::kPrologueMismatch);
+  diagnostics.FlushPendingAttachDiagnostic();
+
+  const std::string line = ReadAll((local + kLogsFile).c_str());
+  ASSERT_FALSE(line.empty());
+  const nlohmann::json parsed = nlohmann::json::parse(line);
+  EXPECT_EQ(parsed.at("event"), "host_attach");
+  EXPECT_EQ(parsed.at("outcome"), "prologue_mismatch");
+  EXPECT_EQ(parsed.at("degraded_action"), "run_original_only");
+  EXPECT_EQ(parsed.at("detail"), 0xb2);
+}
+
+TEST(BootstrapDiagnostics, FlushWithoutFailureIsANoopAndFlushIsIdempotent) {
+  const std::wstring local = MakeTempDir(L"local");
+  SetEnv(L"LOCALAPPDATA", local);
+  SetEnv(L"TEMP", MakeTempDir(L"temp"));
+
+  BootstrapDiagnostics diagnostics;
+  diagnostics.Prepare();
+  diagnostics.FlushPendingAttachDiagnostic();  // nothing recorded: no line
+  EXPECT_EQ(diagnostics.Emit({{"event", "runtime_load"}}), DiagnosticDestination::kPrimary);
+
+  diagnostics.RecordAttachFailure(NevrHost::AttachFailure::kHookFailed);
+  diagnostics.FlushPendingAttachDiagnostic();
+  diagnostics.FlushPendingAttachDiagnostic();  // idempotent: no second host_attach
+  EXPECT_TRUE(diagnostics.AttachDiagnosticFlushed());
+
+  const std::string text = ReadAll((local + kLogsFile).c_str());
+  const std::size_t first = text.find("\"event\":\"host_attach\"");
+  ASSERT_NE(first, std::string::npos);
+  EXPECT_EQ(text.find("\"event\":\"host_attach\"", first + 1), std::string::npos);
+  EXPECT_NE(text.find("\"event\":\"runtime_load\""), std::string::npos);
+}

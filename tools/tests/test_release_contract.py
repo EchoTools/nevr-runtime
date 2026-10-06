@@ -194,13 +194,22 @@ class ReleaseContractTest(unittest.TestCase):
         for section in ("auth:", "services:", "identity:", "version:"):
             self.assertRegex(sample, rf"(?m)^\s*{section}")
 
-    def test_dllmain_and_launcher_both_enter_the_validated_game_module_route(self):
+    def test_host_dllmain_and_launcher_both_validate_and_drive_the_rendezvous(self):
         dllmain = (REPO / "src/runtime/lifecycle/dllmain.cpp").read_text()
         initialize = (REPO / "src/runtime/lifecycle/initialize.cpp").read_text()
-        self.assertIn("InitializeGameModule(GetModuleHandle(NULL))", dllmain)
-        self.assertIn("InitializeGameModule(hGame)", dllmain)
-        route = initialize.split("void InitializeGameModule(HMODULE module)", 1)[1].split("}", 1)[0]
-        self.assertIn("RunWithSupportedGameModule", route)
+        # Direct-import DllMain validates the game image and installs the one
+        # PreprocessCommandLine detour; nothing else runs from attach.
+        self.assertIn("GameImageGuard::IsSupportedGameModule", dllmain)
+        self.assertIn("InstallRendezvous(GetModuleHandleW(nullptr))", dllmain)
+        # The launcher entry point validates (terminating on an unsupported image)
+        # and drives the same rendezvous install.
+        self.assertIn("NEVR_SetGameModule", dllmain)
+        self.assertIn("GameImageGuard::RequireSupportedGameModule", dllmain)
+        self.assertIn("g_rendezvous.Install", dllmain)
+        # The runtime no longer owns image validation; it initializes a validated
+        # module (the host already checked the image and supplies the base through
+        # the C ABI).
+        self.assertIn("void InitializeValidatedRuntime(HMODULE module)", initialize)
         self.assertNotIn("VerifyGameVersion", initialize)
 
 

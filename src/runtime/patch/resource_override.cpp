@@ -414,20 +414,23 @@ void DeregisterResourceOverrides(const void* data_start, const void* data_end) {
 
 /* ── Exported wrappers (called by plugins via GetProcAddress) ────── */
 
+// __declspec(dllexport) so nevr.dll exports these directly (the host forwards
+// the game-facing surface through host/host_exports.cpp; the runtime owns the
+// implementations). Plugins resolve these by name from the loaded runtime.
 extern "C" {
 
-void NEVR_RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
-                                   const void* data, uint64_t size,
-                                   const char* label) {
+__declspec(dllexport) void NEVR_RegisterResourceOverride(uint64_t type_hash, uint64_t name_hash,
+                                                         const void* data, uint64_t size,
+                                                         const char* label) {
     RegisterResourceOverride(type_hash, name_hash, data, size, label);
 }
 
-void NEVR_ResetResourceOverrides() {
+__declspec(dllexport) void NEVR_ResetResourceOverrides() {
     ResetResourceOverrides();
 }
 
-void NEVR_DeregisterResourceOverrides(const void* data_start,
-                                      const void* data_end) {
+__declspec(dllexport) void NEVR_DeregisterResourceOverrides(const void* data_start,
+                                                            const void* data_end) {
     DeregisterResourceOverrides(data_start, data_end);
 }
 
