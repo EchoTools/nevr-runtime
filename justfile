@@ -90,7 +90,7 @@ test-android: build-android
     cd tests/quest && go test -v ./...
 
 # Black-box crash-ingest contract gate. Requires a non-production staging sink;
-# see docs/design/2026-09-15-crash-report-ingest-implementation-contract.md.
+# see docs/adr/0002-crash-report-ingest.md.
 test-crash-ingest-contract:
     cd tests/crash-ingest && go test -v ./...
 
