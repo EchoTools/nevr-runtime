@@ -917,8 +917,18 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   RegisterBroadcasterCallbacks();
   RegisterTcpCallbacks();
 
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Initialized game server (game thread %lu)",
-      static_cast<unsigned long>(GetCurrentThreadId()));
+  const auto& registered = m_context->GetCallbackRegistry();
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.GAMESERVER] Initialized game server (game thread %lu, broadcaster callbacks registered=%zu/%zu)",
+      static_cast<unsigned long>(GetCurrentThreadId()),
+      GameServer::CountRegisteredBroadcasterCallbacks(registered), GameServer::kBroadcasterCallbackCount);
+  const std::string missing = GameServer::MissingBroadcasterCallbacks(registered);
+  if (!missing.empty()) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.GAMESERVER] broadcaster callbacks NOT registered: %s — those message types will not reach the "
+        "server (the lobby has no broadcaster, or the game's listener pool had no free slot)",
+        missing.c_str());
+  }
 
   // N87: the game has installed its own console ctrl handler by now, which sits
   // in front of the one InstallConsoleCtrlHandler() registered during

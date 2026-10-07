@@ -34,6 +34,82 @@ void SetAllUdpHandles(GameServer::CallbackRegistry& callbacks) {
 }
 }  // namespace
 
+TEST(CallbackRegistrationCount, CountsAndNamesTheCallbacksWithoutAHandle) {
+  GameServer::CallbackRegistry callbacks;
+  EXPECT_EQ(GameServer::CountRegisteredBroadcasterCallbacks(callbacks), 0U);
+  EXPECT_EQ(GameServer::kBroadcasterCallbackCount, 15U);
+
+  SetAllUdpHandles(callbacks);
+  EXPECT_EQ(GameServer::CountRegisteredBroadcasterCallbacks(callbacks), GameServer::kBroadcasterCallbackCount);
+  EXPECT_EQ(GameServer::MissingBroadcasterCallbacks(callbacks), "");
+
+  callbacks.saveLoadoutPartial = 0;
+  callbacks.reliableTeamStatUpdate = 0;
+  EXPECT_EQ(GameServer::CountRegisteredBroadcasterCallbacks(callbacks), 13U);
+  EXPECT_EQ(GameServer::MissingBroadcasterCallbacks(callbacks), "saveLoadoutPartial, reliableTeamStatUpdate");
+}
+
+// The game's BroadcasterListen returns 0xFFFF when it has no free listener slot. That is not a
+// handle: it is neither counted as registered nor ever passed to BroadcasterUnlisten.
+TEST(CallbackRegistrationCount, TheGamesListenFailureValueIsNotARegistration) {
+  GameServer::CallbackRegistry callbacks;
+  callbacks.broadcasterOwner = FakeBroadcaster(0x1000);
+  SetAllUdpHandles(callbacks);
+  callbacks.newUnlocks = 0xFFFF;
+  EXPECT_EQ(GameServer::CountRegisteredBroadcasterCallbacks(callbacks), 14U);
+  EXPECT_EQ(GameServer::MissingBroadcasterCallbacks(callbacks), "newUnlocks");
+  std::vector<uint16_t> unlistened;
+  GameServer::UnregisterBroadcasterCallbacks(FakeBroadcaster(0x1000), callbacks,
+      [&](EchoVR::Broadcaster*, uint16_t handle) { unlistened.push_back(handle); });
+  EXPECT_EQ(unlistened.size(), 14U);
+  for (uint16_t handle : unlistened) EXPECT_NE(handle, 0xFFFF);
+}
+
+TEST(CallbackRegistrationCount, EveryCallbackIsNamedExactlyWhenItsHandleIsMissing) {
+  const std::array<const char*, 15> expected = {
+      "sessionStart", "sessionError", "saveLoadout", "saveLoadoutSuccess", "saveLoadoutPartial",
+      "currentLoadoutRequest", "currentLoadoutResponse", "refreshProfileForUser", "refreshProfileFromServer",
+      "lobbySendClientSettings", "tierReward", "topAwards", "newUnlocks", "reliableStatUpdate",
+      "reliableTeamStatUpdate"};
+  uint16_t GameServer::CallbackRegistry::* const fields[15] = {
+      &GameServer::CallbackRegistry::sessionStart, &GameServer::CallbackRegistry::sessionError,
+      &GameServer::CallbackRegistry::saveLoadout, &GameServer::CallbackRegistry::saveLoadoutSuccess,
+      &GameServer::CallbackRegistry::saveLoadoutPartial, &GameServer::CallbackRegistry::currentLoadoutRequest,
+      &GameServer::CallbackRegistry::currentLoadoutResponse, &GameServer::CallbackRegistry::refreshProfileForUser,
+      &GameServer::CallbackRegistry::refreshProfileFromServer, &GameServer::CallbackRegistry::lobbySendClientSettings,
+      &GameServer::CallbackRegistry::tierReward, &GameServer::CallbackRegistry::topAwards,
+      &GameServer::CallbackRegistry::newUnlocks, &GameServer::CallbackRegistry::reliableStatUpdate,
+      &GameServer::CallbackRegistry::reliableTeamStatUpdate};
+  for (size_t i = 0; i < expected.size(); ++i) {
+    GameServer::CallbackRegistry callbacks;
+    SetAllUdpHandles(callbacks);
+    callbacks.*(fields[i]) = 0;
+    EXPECT_EQ(GameServer::MissingBroadcasterCallbacks(callbacks), expected[i]) << "field " << i;
+    EXPECT_EQ(GameServer::CountRegisteredBroadcasterCallbacks(callbacks), 14U) << "field " << i;
+  }
+}
+
+TEST(CallbackRegistrationCount, TcpSentinelsAreNotCounted) {
+  GameServer::CallbackRegistry callbacks;
+  callbacks.tcpRegSuccess = 1;
+  callbacks.tcpRegFailure = 1;
+  callbacks.tcpSessionSuccess = 1;
+  callbacks.tcpProtobuf = 1;
+  EXPECT_EQ(GameServer::CountRegisteredBroadcasterCallbacks(callbacks), 0U);
+  EXPECT_EQ(GameServer::MissingBroadcasterCallbacks(callbacks).substr(0, 14), "sessionStart, ");
+}
+
+TEST(CallbackRegistrationCount, TheCountMatchesWhatUnregisterRemoves) {
+  GameServer::CallbackRegistry callbacks;
+  callbacks.broadcasterOwner = FakeBroadcaster(0x1000);
+  SetAllUdpHandles(callbacks);
+  callbacks.topAwards = 0;
+  const size_t registered = GameServer::CountRegisteredBroadcasterCallbacks(callbacks);
+  const size_t removed = GameServer::UnregisterBroadcasterCallbacks(
+      FakeBroadcaster(0x1000), callbacks, [](EchoVR::Broadcaster*, uint16_t) {});
+  EXPECT_EQ(removed, registered);
+}
+
 TEST(CallbackUnregistration, RemovesAllFifteenHandlesFromTheirOwningBroadcaster) {
   auto* owner = FakeBroadcaster(0x1000);
   GameServer::CallbackRegistry callbacks;
