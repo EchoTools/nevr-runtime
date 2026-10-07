@@ -1516,7 +1516,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       // Token auth (BAC-2): identity via the Bearer JWT (sent by Connect()); discord_id/
       // password dropped; guilds/regions stay as registration metadata. nevr_serverdb_uri
       // points at the token route that forwards the real Authorization header
-      // (29ce275710ad4c779d118eafc638fef613343e28:docs/guides/token-auth-migration.md).
+      // (docs/adr/0001-serverdb-token-auth.md).
       // Issue #41: query values are percent-encoded by ServerDbUri, not snprintf.
       std::optional<std::string> built =
           ServerDbUri::BuildTokenRouteUri(tokenUri, orEmpty(guilds), orEmpty(regions));

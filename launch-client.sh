@@ -107,9 +107,8 @@ echo "=== Console log: $CONSOLE_LOG ==="
 start=$(date +%s)
 set +e
 # -windowed alone (owner, 2026-10-03: "just -windowed"; "-windowed is basically -novr (not -noovr)"):
-# it is the game's no-headset mode. A client is not meant to run with -noovr (added in e449958 as a
-# "VR bypass"); -mp has no reader in the runtime and no string in echovr.exe
-# (issue #45).
+# it is the game's no-headset mode. A client is not meant to run with -noovr (a "VR bypass");
+# -mp has no reader in the runtime and no string in echovr.exe (issue #45).
 game_args=(-windowed)
 if [[ -n "$CONFIG" ]]; then
   [[ -f "$CONFIG" ]] || { echo "ERROR: --config $CONFIG does not exist" >&2; exit 2; }
