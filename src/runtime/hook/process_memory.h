@@ -17,20 +17,3 @@ inline VOID ProcessMemcpy(PVOID pDestAddr, PVOID pSrcAddr, size_t szSrcSize) {
     VirtualProtect(pDestAddr, szSrcSize, dwOldProtect, &dwOldProtect);
   }
 }
-
-/// <summary>
-/// Sets a buffer of the given size in process memory to the provided byte value.
-/// </summary>
-/// <param name="pDestAddr">The process address where the memory should be set.</param>
-/// <param name="val">The value to set each byte to.</param>
-/// <param name="szDestSize">The size of the destination buffer to set.</param>
-/// <returns>None</returns>
-inline VOID ProcessMemset(PVOID pDestAddr, BYTE val, size_t szDestSize) {
-  // Memset a new buffer, copy it over, and free it.
-  char* pbScratchPad = (char*)malloc(szDestSize);
-  if (pbScratchPad != NULL) {
-    memset(pbScratchPad, val, szDestSize);
-    ProcessMemcpy(pDestAddr, pbScratchPad, szDestSize);
-    free(pbScratchPad);
-  }
-}
