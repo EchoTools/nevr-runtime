@@ -957,6 +957,9 @@ static void EmitLine(uint32_t level, const char* message, int len);  /* fwd */
  * It is now also driven from the N86 per-frame tick, a site whose liveness is
  * independently proven. Same lesson as N86 and N88: a monitor must not depend on
  * the thing it monitors. */
+/* The CLog::PrintfImpl detour target; null until Init resolved it, and again after Shutdown. */
+static void* g_hook_target = nullptr;
+
 static void MaybeEmitHealth() {
     const uint64_t now = GetEpochSeconds();
     uint64_t last = g_last_health_report.load(std::memory_order_relaxed);
@@ -999,13 +1002,23 @@ static void MaybeEmitHealth() {
     s_lastGameLines = gameLines;
 
     if (delta == 0) {
-        char warn[320];
+        char warn[512];
+        /* Name the cause when the hook guard can tell: the hook was never installed, its target's
+         * bytes changed since install (another module took it), or it is intact, in which case
+         * the game itself is silent. */
+        const char* cause;
+        if (g_hook_target == nullptr) {
+            cause = "the CLog hook is not installed (see the 'hook failed name=CLog::PrintfImpl' line at boot)";
+        } else if (!HookGuard::IsOurDetour(g_hook_target)) {
+            cause = "another module took the hook target (see the 'hook overwritten name=CLog::PrintfImpl' error)";
+        } else {
+            cause = "the hook is intact, so the game is idle or blocked (waiting for a login, or on a modal dialog)";
+        }
         const int wn = snprintf(warn, sizeof(warn),
                                 "[NEVR.LOGFILTER] CAPTURED ZERO GAME LINES this interval "
-                                "(total=%llu) — the CLog hook is installed but receiving "
-                                "nothing. Another module has almost certainly taken the target "
-                                "Filtering, truncation and file logging are all inert.",
-                                static_cast<unsigned long long>(gameLines));
+                                "(total=%llu): %s. Filtering, truncation and file logging have "
+                                "nothing to act on until lines arrive.",
+                                static_cast<unsigned long long>(gameLines), cause);
         if (wn > 0) EmitLine(LOG_LEVEL_WARNING, warn, wn);
     }
 }
@@ -1017,7 +1030,6 @@ static void MaybeEmitHealth() {
 typedef void(__fastcall* CLogPrintfImpl_t)(uint32_t level, int64_t category,
                                             const char* fmt, int64_t* varargs);
 static CLogPrintfImpl_t orig_PrintfImpl = nullptr;
-static void* g_hook_target = nullptr;
 
 static void __fastcall hook_PrintfImpl(uint32_t level, int64_t category,
                                         const char* fmt, int64_t* varargs) {
@@ -1214,11 +1226,10 @@ void BuiltinLogFilter::Init(uintptr_t base_addr, bool is_server) {
         static_cast<unsigned long long>(nevr::addresses::VA_CLOG_PRINTF_IMPL));
 
     // This hook is installed with raw MinHook calls above, not PatchDetour, so
-    // it was previously invisible to HookGuard — a second module taking this
-    // exact address (the N89 failure mode: "CAPTURED ZERO GAME LINES ...
-    // another module has almost certainly taken the target") could never be
-    // named, only guessed at. Recording it here puts it under the same
-    // detection PatchDetour gives every other hook for free.
+    // HookGuard would not see it. Recording it here puts it under the same
+    // detection PatchDetour gives every other hook for free: a second module
+    // taking this address is then named by the "hook overwritten" error and by
+    // the zero-game-lines health warning instead of being guessed at.
     HookGuard::Record(g_hook_target, "CLog::PrintfImpl");
 }
 
