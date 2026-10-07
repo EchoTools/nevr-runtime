@@ -380,9 +380,9 @@ static LogFilterConfig MakeDefaultConfig() {
         //       remainder.
 
         // Not suppressed (N77/N78): "ExitProcess(".
-        // It is the #1 noise source (97.5% of sustained volume) — but it is a
+        // It is the #1 noise source (97.5% of sustained volume in the 2026-06-28 sample) — but it is a
         // NEVR-emitted line, and matching it by substring would also delete
-        // "[NEVR.PATCH] ExitProcess(%u) called" (crash_recovery.cpp:140), the report
+        // "[NEVR.PATCH] ExitProcess(%u) called" (crash_recovery.cpp, ExitProcessHook), the report
         // of a REAL, allowed process exit. A rule that cannot tell a suppressed exit
         // from a real one is not a noise rule. NEVR lines are now exempt from these
         // patterns (ShouldSuppress/N77) and the volume is handled by rate-limited

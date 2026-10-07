@@ -355,21 +355,17 @@ OutputDebugStringA("got here");
 std::cerr << "failed" << std::endl;
 ```
 
-### `Log()` does not emit JSON, and that was a decision — not an omission
+### `Log()` does not emit JSON, and that is a decision — not an omission
 
 `FormatJsonLogEntry` exists in `src/core/logging.cpp:70` and is called from
-nowhere in production (the only other reference is a test stub). It is not
-"not yet wired": it WAS wired, and was deliberately unwired.
-
-  a658d42  2026-02-09  added it, and called it from Log()
-  6c0369f  2026-03-24  removed that call; Log() now routes to the game's own
-                       EchoVR::WriteLog, falling back to vfprintf(stderr) only
-                       before the game logger exists
+nowhere in production (the only other reference is a test stub). `Log()` routes
+to the game's own `EchoVR::WriteLog`, falling back to `vfprintf(stderr)` only
+before the game logger exists.
 
 So NEVR lines go through the game's logger and appear in its stream, rather than
-being emitted as a second, parallel JSON format. Do not "finish" the JSON path on
-the assumption it was left half-done — it was superseded four months ago, and
-re-wiring it would double every log line.
+being emitted as a second, parallel JSON format. Do not wire `FormatJsonLogEntry`
+into `Log()` on the assumption it was left half-done: it would double every log
+line.
 
 **Structured JSONL does ship, from a different place**: the built-in filter writes
 a per-run JSONL file (`src/runtime/log/builtin_filter.cpp`), and its schema is NOT

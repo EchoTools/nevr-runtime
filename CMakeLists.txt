@@ -206,7 +206,7 @@ add_subdirectory(src/legacy/gamepatches)
 # "common/hooking.h" (patches.cpp:8) and "common/nevr_plugin_interface.h"
 # (plugin_loader.h:3). Confirmed from the compiler's dependency graph:
 #   ninja -C build/<preset> -t deps | grep gamepatcheslegacy | grep src/common
-# The 2026-07-29 reorganization moved both. Rather than edit a frozen file, give
+# Both now live under src/core/. Rather than edit a frozen file, give
 # this ONE target a compatibility include root holding two forwarding headers.
 # Scoped to the target so nothing else in the tree can resolve the old spelling.
 # Delete src/legacy-compat/ and this line together when legacy is retired.
@@ -217,8 +217,8 @@ target_include_directories(gamepatcheslegacy PRIVATE "${CMAKE_SOURCE_DIR}/src/le
 # echovr-reconstruction; nothing here may symlink into a private repo, which
 # breaks every clean clone.
 add_subdirectory(src/legacy/gameserver)
-# telemetryagent lives in nevr-runtime-plugins (extras/ moved there 2026-07-27) —
-# needs a protobuf-lite refactor before it could be reintegrated here
+# telemetryagent lives in nevr-runtime-plugins (extras/) — it needs a protobuf-lite
+# refactor before it could be reintegrated here
 
 add_subdirectory(src/libovr-stub)
 

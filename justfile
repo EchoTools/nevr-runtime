@@ -561,8 +561,7 @@ verify:
     fi
     # N64/N105: BeginGracefulShutdown must release the listener before ForceFatalExit.
     # The old sensor matched the STRING 'WsBridge_Shutdown', which a
-    # GetProcAddress returning null satisfies perfectly — and did, on every run
-    # from the N92 fold until 2026-07-28. Assert the DIRECT call instead: a
+    # GetProcAddress returning null satisfies perfectly, on every run. Assert the DIRECT call instead: a
     # symbol the linker must resolve, not a name looked up at runtime.
     if ! grep -q 'StopWebSocketBridgeListener()' src/runtime/server/gameserver.cpp; then
         echo "verify: FAIL — N64/N105 BeginGracefulShutdown does not call StopWebSocketBridgeListener();" >&2
@@ -1102,10 +1101,9 @@ verify:
     # Init saves the already-patched 0xC3 as "the original" and the restore becomes
     # a no-op with the true byte lost for the process lifetime.
     #
-    # That was the live arrangement until 2026-07-29 — PatchServerFramePacing
-    # blind-wrote the same VA with no validation and no save. It was safe only
-    # because Init happened to run first, which is an ordering accident, not a
-    # design. It stays deleted.
+    # A PatchServerFramePacing that blind-wrote the same VA with no validation and
+    # no save would be safe only because Init happens to run first, which is an
+    # ordering accident, not a design; this guard keeps it from existing.
     if grep -rn 'PatchServerFramePacing' src/runtime --include='*.cpp' --include='*.h' \
          | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
         echo "verify: FAIL — N113 PatchServerFramePacing is back. It blind-writes CPrecisionSleep::BusyWait with no prologue validation and no original-byte save." >&2
@@ -1495,11 +1493,10 @@ verify:
     # in README.md and CLAUDE.md because nothing checked. A fact about the tree
     # asserted in prose drifts silently; this is the cheapest possible enforcement.
     python3 tools/verify_doc_paths.py
-    # N92/N105: exactly one ws_bridge. Two divergent copies existed for months —
-    # only the module ran, while N61's matchmaker fix landed in the gamepatches
-    # copy that never did. There is no module tree: its last unique symbol
-    # (WsBridge_Shutdown) lives in-process as StopWebSocketBridgeListener. This
-    # guard keeps the module build from coming back.
+    # N92/N105: exactly one ws_bridge. Two divergent copies would let a fix land in
+    # the one that does not run (N61's matchmaker fix did). The bridge is
+    # in-process (StopWebSocketBridgeListener); this guard keeps a separate
+    # module build from coming back.
     N92A_RC=0; grep -qE '^\s*add_subdirectory\(src/modules/ws-bridge\)' CMakeLists.txt || N92A_RC=$?
     sensor_stage1 "N92 ws-bridge module build" "CMakeLists.txt" "$N92A_RC"
     if [ "$N92A_RC" -eq 0 ]; then

@@ -14,7 +14,7 @@ endif()
 # animation entry points and publishes a map of animation internals. It does
 # nothing on a dedicated server, so keeping it in this PUBLIC repo would pay the
 # disclosure cost for no runtime benefit.
-# crash-handler functionality is in gamepatches core (crash_recovery.cpp)
+# crash-handler functionality is in the runtime (src/runtime/lifecycle/crash_recovery.cpp)
 # audio-intercom, combat-patch, filesystem-loader, force-push, game-rules-override,
 # session-unlocker, skip-splash live in nevr-runtime-plugins
 # log-filter is NOT built (N95). plugin_loader.cpp refuses log_filter.dll by

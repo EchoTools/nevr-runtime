@@ -70,10 +70,9 @@ KNOWN_DOUBLE_DETOURS = {
                          "server runs, the AV it guards is not occurring — remove the gamepatches "
                          "detour entirely and this closes permanently. Runtime HookGuard reports "
                          "the collision at ERROR if the plugin's install actually overwrites ours."),
-    # Previously empty. 0x140F87AA0 was here until 2026-07-26: gamepatches detoured it as
-    # ENGINE_ENTITY_PROP_DISPATCH while broadcaster_bridge hooked it as
-    # VA_BROADCASTER_RECEIVE_LOCAL. Removing the unjustified gamepatches detour
-    # (N83) left the plugin as sole owner, which resolved this too. If a second
+    # 0x140F87AA0 is not registered here: broadcaster_bridge (a plugin outside this
+    # repo) hooks it as VA_BROADCASTER_RECEIVE_LOCAL and gamepatches no longer detours
+    # it as ENGINE_ENTITY_PROP_DISPATCH, so the plugin is its sole owner. If a second
     # owner reappears, that is a NEW violation and fails hard.
 }
 
@@ -433,8 +432,8 @@ def write_manifest():
 VEH_BREAKPOINT_OWNER = "src/runtime/lifecycle/crash_recovery.cpp"
 
 # Not built: plugins/CMakeLists.txt add_subdirectory()s only log-filter and
-# example. (broadcaster-bridge moved out 2026-07-26, anim-debugger 2026-07-27 —
-# both to nevr-runtime-plugins, because this repo is PUBLIC.) This file ships
+# example. (broadcaster-bridge and anim-debugger live in nevr-runtime-plugins,
+# because this repo is PUBLIC.) This file ships
 # nowhere, so it cannot be a second live owner. If it is ever added to the build
 # it MUST be reworked first — hence it is excluded by path, not by pretending it
 # is clean.

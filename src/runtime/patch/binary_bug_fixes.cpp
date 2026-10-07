@@ -147,9 +147,9 @@ static HANDLE s_cached_timer = NULL;    // Persistent waitable timer for frame p
 using GetTimeMicroseconds_t = uint64_t(__fastcall*)();
 static GetTimeMicroseconds_t s_origGetTimeMicroseconds = nullptr;
 
-// The per-frame dispatcher moved to runtime/frame/tick.cpp on 2026-07-29.
-// It lived here only because the hook that drives it lives here; it shared no
-// state with any of the bug fixes in this file. Both call sites below hand it a
+// The per-frame dispatcher lives in runtime/frame/tick.cpp: it shares no state
+// with any of the bug fixes in this file, and only the hook that drives it lives
+// here. Both call sites below hand it a
 // microsecond timestamp — see that file for why GetTimeMicroseconds drives it
 // rather than the engine's own frame pacer (N86).
 
@@ -292,8 +292,8 @@ static void __fastcall EndMultiplayerHook(int64_t arg1, int64_t arg2) {
  * N26 flagged the comment that used to sit here as "doubly false": it claimed
  * server_timing hooks this function later with WSAPoll-based event-driven recv
  * and chains on top. server_timing's Init had zero call sites, so no hook was
- * ever installed, and the file was deleted entirely on 2026-07-27. This hook is
- * the only owner of CPrecisionSleep::Wait.
+ * ever installed, so there is no such hook. This hook is the only owner of
+ * CPrecisionSleep::Wait.
  *
  * Note it does NOT run in server mode at all (N86, measured: zero entries over a
  * full run) — server-mode per-frame work is driven from GetTimeMicroseconds.
@@ -313,9 +313,8 @@ static void __fastcall PrecisionSleepWaitHook(int64_t microseconds, int64_t unk,
     // the first call on a thread this is a single bool test.
     EnsureStackReserve();
 
-    // (A dead frame counter lived here: declared static, incremented, and read
-    // by nothing in the repo. Removed 2026-07-29 — HookLiveness::Mark above is
-    // the entry evidence this hook actually needs.)
+    // (HookLiveness::Mark above is the entry evidence this hook needs; no frame
+    // counter is kept here.)
 
     // Check for graceful shutdown request (set by SIGINT/SIGTERM handler).
     // This fires every game tick, so CTRL+C responsiveness is bounded by the
@@ -654,8 +653,7 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
     // Eliminates the tight QPC + Sleep(0) spin loop that starves the HT sibling.
     // NOT SwitchToThread — ReVault measured the call at 0x1401CE510 as Sleep, and
     // SwitchToThread's IAT slot (0x1416C37F0) has only two xrefs in the whole
-    // binary, both CRT/ConcRT, none in this function. This file claimed
-    // SwitchToThread until 2026-07-29.
+    // binary, both CRT/ConcRT, none in this function.
     // The WaitableTimer phase in Wait handles the bulk of the sleep;
     // only the final ~250us of busy-wait precision is lost.
     void* busywait = nevr::ResolveVA_Checked(g_base, VA_PRECISION_SLEEP_BUSYWAIT);
