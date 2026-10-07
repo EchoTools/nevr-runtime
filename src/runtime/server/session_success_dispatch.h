@@ -12,6 +12,6 @@ namespace GameServer {
 bool ApplyLobbySessionSuccess(const gameservice::v1::SNSLobbySessionSuccessV5Message& message,
                               std::string& lobbySessionId,
                               const std::function<void()>& commitState,
-                              const std::function<void(const EncodedMessage&)>& dispatch);
+                              const std::function<void(EncodedMessage&)>& dispatch);
 
 }  // namespace GameServer

@@ -274,7 +274,7 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
         auto encoded = EncodeRegistrationSuccess(regSuccess);
         if (encoded.size() > 0) {
           EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationSuccess,
-                                               "SNSLobbyRegistrationSuccess", const_cast<uint8_t*>(encoded.ptr()),
+                                               "SNSLobbyRegistrationSuccess", encoded.ptr(),
                                                encoded.size());
         } else {
           Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] failed to encode registration success server_id=%llu",
@@ -341,10 +341,10 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
           static_cast<unsigned long long>(sessionSuccess.game_mode()));
 
       SessionState state = self->GetContext().GetSessionState();
-      const auto dispatch = [broadcaster](const EncodedMessage& encoded) {
+      const auto dispatch = [broadcaster](EncodedMessage& encoded) {
         if (broadcaster) {
           EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbySessionSuccessV5, "SNSLobbySessionSuccessv5",
-                                               const_cast<uint8_t*>(encoded.ptr()), encoded.size());
+                                               encoded.ptr(), encoded.size());
         }
       };
       const auto commitState = [self, &state]() { self->GetContext().UpdateSessionState(state); };
@@ -364,7 +364,7 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
         auto encoded = EncodeLobbyEntrantsAccept(accept);
         if (encoded.size() > 0) {
           EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersSuccessV2,
-                                               "SNSLobbyAcceptPlayersSuccessv2", const_cast<uint8_t*>(encoded.ptr()),
+                                               "SNSLobbyAcceptPlayersSuccessv2", encoded.ptr(),
                                                encoded.size());
         } else {
           Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] failed to encode entrants accept count=%d",
@@ -384,7 +384,7 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
         auto encoded = EncodeLobbyEntrantsReject(reject);
         if (encoded.size() > 0) {
           EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersFailureV2,
-                                               "SNSLobbyAcceptPlayersFailurev2", const_cast<uint8_t*>(encoded.ptr()),
+                                               "SNSLobbyAcceptPlayersFailurev2", encoded.ptr(),
                                                encoded.size());
         } else {
           Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] failed to encode entrants reject count=%d code=%d",
@@ -433,7 +433,7 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
       if (broadcaster) {
         auto encoded = EncodeLobbySmiteEntrant(slotIndex);
         EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbySmiteEntrant, "SNSLobbySmiteEntrant",
-                                             const_cast<uint8_t*>(encoded.ptr()), encoded.size());
+                                             encoded.ptr(), encoded.size());
       }
       break;
     }
@@ -1516,7 +1516,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       // Token auth (BAC-2): identity via the Bearer JWT (sent by Connect()); discord_id/
       // password dropped; guilds/regions stay as registration metadata. nevr_serverdb_uri
       // points at the token route that forwards the real Authorization header
-      // (29ce275710ad4c779d118eafc638fef613343e28:docs/guides/token-auth-migration.md).
+      // (docs/adr/0001-serverdb-token-auth.md).
       // Issue #41: query values are percent-encoded by ServerDbUri, not snprintf.
       std::optional<std::string> built =
           ServerDbUri::BuildTokenRouteUri(tokenUri, orEmpty(guilds), orEmpty(regions));

@@ -196,9 +196,6 @@ in the log.
 
 ```cpp
 // BEFORE (N15 — numeric account ID only, no platform prefix, no full XPID)
-// was: src/modules/ws-bridge/src/ws_bridge.cpp:281-283 — directory deleted in
-// 2e5b4ec; retrieve with
-// git show 46903229b0a7bfff82324e3c2b163ebc653173c9:src/modules/ws-bridge/src/ws_bridge.cpp
 Log(EchoVR::LogLevel::Info,
     "[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)",
     (unsigned long long)discordId, loginMsg.size());
@@ -217,13 +214,8 @@ code 2 is "PSN" in the game's string table and reads "DSC" after the runtime rew
 The bridge logs in as OVR_ORG (code 4), so its XPID is `OVR-ORG-<id>`; a
 login as DSC (code 2) would produce `DSC-<id>`.
 
-**Where:** the module copy is GONE — `src/modules/ws-bridge/` was deleted in
-`2e5b4ec` (N105) after N92 folded the bridge into `BugSplat64.dll`. Its content
-is still retrievable:
-`git show 46903229b0a7bfff82324e3c2b163ebc653173c9:src/modules/ws-bridge/src/ws_bridge.cpp`
-(conn>0 injection at :281-283, conn=0 at :441-444). The surviving injection site
-is `InstallWebSocketBridge` in `src/runtime/compat/ws_bridge.cpp` (the
-`login injected xpid=` log line). Tracked as N15.
+**Where:** the injection site is `InstallWebSocketBridge` in
+`src/runtime/compat/ws_bridge.cpp` (the `login injected xpid=` log line). Tracked as N15.
 
 ### Rule 3: Silence is not success
 
@@ -363,33 +355,22 @@ OutputDebugStringA("got here");
 std::cerr << "failed" << std::endl;
 ```
 
-### `Log()` does not emit JSON, and that was a decision — not an omission
+### `Log()` does not emit JSON, and that is a decision — not an omission
 
 `FormatJsonLogEntry` exists in `src/core/logging.cpp:70` and is called from
-nowhere in production (the only other reference is a test stub). It is not
-"not yet wired": it WAS wired, and was deliberately unwired.
-
-  a658d42  2026-02-09  added it, and called it from Log()
-  6c0369f  2026-03-24  removed that call; Log() now routes to the game's own
-                       EchoVR::WriteLog, falling back to vfprintf(stderr) only
-                       before the game logger exists
+nowhere in production (the only other reference is a test stub). `Log()` routes
+to the game's own `EchoVR::WriteLog`, falling back to `vfprintf(stderr)` only
+before the game logger exists.
 
 So NEVR lines go through the game's logger and appear in its stream, rather than
-being emitted as a second, parallel JSON format. Do not "finish" the JSON path on
-the assumption it was left half-done — it was superseded four months ago, and
-re-wiring it would double every log line.
+being emitted as a second, parallel JSON format. Do not wire `FormatJsonLogEntry`
+into `Log()` on the assumption it was left half-done: it would double every log
+line.
 
 **Structured JSONL does ship, from a different place**: the built-in filter writes
 a per-run JSONL file (`src/runtime/log/builtin_filter.cpp`), and its schema is NOT
 the one `FormatJsonLogEntry` produces — it carries a `run` field and has no
 `caller` field.
-
-`docs/reference/logging-format.md` documented the `FormatJsonLogEntry` shape as
-though it were the live output. It was removed 2026-07-29 rather than corrected,
-since it described a format that has not shipped since March and contradicted this
-section. Retrieve it with:
-
-    git show 94a24a16b67ca21e39cab2cd2b49f8914c1c93ab:docs/reference/logging-format.md
 
 ### Rule 8: State transitions log FROM -> TO
 

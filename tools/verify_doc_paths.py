@@ -10,7 +10,7 @@ wrong in a way anything notices.
 Scope: CURRENT-STATE documents only. A record is immutable — audit records and
 `docs/audits/` describe the tree as it was when written, and a path that has since
 moved is correct history, not a defect. Amending them would violate the ledger's
-own append-only rule. (`extras/` moved to nevr-runtime-plugins on 2026-07-27.)
+own append-only rule.
 
 Checked: README.md, AGENTS.md, CLAUDE.md, docs/ (except audits), tests/**/README.md.
 
@@ -30,7 +30,7 @@ ROOTS = ("src/", "plugins/", "tools/", "docs/", "extern/", "gen/", "tests/", "cm
 
 # Paths that are deliberately referenced but shall not exist on disk.
 ALLOWED_ABSENT = {
-    # N34/N103: deleted 2026-07-28. Still cited by point-in-time records that
+    # N34/N103: no longer in the tree. Still cited by point-in-time records that
     # correctly describe the tree as it was.
     "src/gameserver",
     "src/gameserver/gameserver.cpp",
@@ -45,9 +45,9 @@ ALLOWED_ABSENT = {
     # re-added; the real harness lives outside the repo and is not wired in.
     "extern/evr-test-harness",
     # Pre-rename layer/directory names. The engineer primer cites these to record
-    # WHAT MOVED WHERE (N108 split `src/common/`; N109 renamed `src/gamepatches/`;
-    # N105 deleted `src/modules/ws-bridge/`). A rename note has to name the old
-    # path or it cannot do its job — that is the opposite of a stale claim.
+    # WHAT MOVED WHERE (`src/common/` is now core/abi; `src/gamepatches/` is now
+    # `src/runtime/`; `src/modules/ws-bridge/` is gone). A rename note has to name
+    # the old path or it cannot do its job — that is the opposite of a stale claim.
     "src/gamepatches",
     "src/common",
     "src/modules/ws-bridge",
@@ -68,9 +68,9 @@ CITATION_RE = re.compile(r"git show ([0-9a-f]{40}):([A-Za-z0-9_./-]+)")
 # A backticked BARE filename — `foo.cpp`, not `src/runtime/foo.cpp`. The
 # directory-prefixed check below cannot see these, because it only inspects
 # tokens starting with a known ROOT. That blind spot let two renames rot in
-# place: `wave0_instrumentation.cpp` (renamed to binary_bug_fixes.cpp in the
-# 2026-07-29 reorganisation) and `builtin_server_timing.cpp` (deleted as dead
-# code, ledger N26). Both read as current source files and neither existed.
+# place: `wave0_instrumentation.cpp` (now binary_bug_fixes.cpp) and
+# `builtin_server_timing.cpp` (gone). Both read as current source files and
+# neither existed.
 #
 # A bare filename is resolved against every tracked BASENAME in the repo, so it
 # does not care which directory the file lives in — which is exactly right: a
@@ -166,7 +166,7 @@ def line_citations():
 def claimed_paths():
     for f in all_doc_files():
         text = (REPO / f).read_text(errors="replace")
-        # The class MUST include ':'. It did not until 2026-07-30, so a backticked
+        # The class MUST include ':'. Without it a backticked
         # token carrying a line number — `src/runtime/foo.cpp:35`, the single most
         # common way this repo cites code — never matched, and the `re.sub` strip
         # below was dead code that could not fire. Every path:line claim in every

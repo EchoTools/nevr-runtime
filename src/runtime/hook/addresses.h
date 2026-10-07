@@ -117,9 +117,8 @@ constexpr size_t HEADLESS_RENDERER_SIZE = 2;
 constexpr uintptr_t HEADLESS_EFFECTS = 0x62CA91;
 constexpr size_t HEADLESS_EFFECTS_SIZE = 2;
 
-/// HEADLESS_DELTATIME (0xCF46D) removed 2026-07-27. Two independent reasons, and
-/// the SECOND is the decisive one — an earlier version of this note gave only the
-/// first, which understates how wrong restoring it would be.
+/// HEADLESS_DELTATIME (0xCF46D) is deliberately NOT patched. Two independent
+/// reasons, and the SECOND is the decisive one.
 ///
 /// (1) It only matters under fixed timestep, and `-timestep`/`-fixedtimestep` are
 ///     deprecated-and-ignored in this build (boot.cpp logs "is deprecated and
@@ -362,8 +361,7 @@ constexpr uintptr_t GAME_MAIN = 0x0CD550;
 /// (0x140f80f17 -> reads [RAX+0x3ff8] @0x140f80f1e), and a garbage pointer of
 /// 0x10 lands exactly on the documented 0x4008. Someone hit a genuine crash.
 /// Whether it still occurs is the open question in
-/// N83 (self-collision — primer folded into this entry 2026-08-01) — answerable only by a
-/// live run, not by reading.
+/// N83 (self-collision) — answerable only by a live run, not by reading.
 ///
 /// Both RVAs are ALSO assigned as live function pointers in
 /// src/abi/echovr_functions.cpp (BroadcasterReceiveLocalEvent and BroadcasterListen), so detouring them makes our own calls
@@ -458,7 +456,7 @@ constexpr uintptr_t LOADING_TIP_SELECT_2 = 0xBE7C90;
 constexpr size_t LOADING_TIP_SELECT_2_SIZE = 1;
 
 // ============================================================================
-// Frame Pacing / Timing (PatchServerFramePacing)
+// Frame Pacing / Timing (CPrecisionSleep::BusyWait)
 // ============================================================================
 
 /// Address: CPrecisionSleep::BusyWait (0x1401ce4c0, 112 bytes)
@@ -466,8 +464,7 @@ constexpr size_t LOADING_TIP_SELECT_2_SIZE = 1;
 ///
 /// NOT SwitchToThread: ReVault measured the call at 0x1401CE510 as Sleep, and
 /// SwitchToThread's IAT slot (0x1416C37F0) has exactly two xrefs in the binary,
-/// both CRT/ConcRT and neither in this function. This comment said
-/// SwitchToThread until 2026-07-29 — an unverified name reasoned from for months.
+/// both CRT/ConcRT and neither in this function.
 ///
 /// The measured effect stands regardless of the primitive: RET-patching this
 /// function is what lets a server run under Wine without pinning a core. The

@@ -171,132 +171,21 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
 # headset refuses an in-place update because the debug signature differs; that
 # uninstall deletes the app's data on the headset. Without `yes` the recipe stops
 # and prints what would be deleted. Order: check host tools and the APK, require
-# exactly one authorized headset with ~1.9 GB free on /sdcard and /data/local/tmp,
+# exactly one authorized headset with ~2.2 GiB free on /sdcard and /data/local/tmp,
 # fetch and SHA-256-verify the game data, `adb install -r -g` the debug-signed APK
 # (uninstalling first only on INSTALL_FAILED_UPDATE_INCOMPATIBLE and only with
 # `yes`), then push the data zip and extract it to the legacy path the unpatched
 # APK reads (/sdcard/readyatdawn/_data). The store OBB is DRM-encrypted and cannot
 # be mounted by a debug-signed sideload, so it is never used.
-# The download is cached at build/android-arm64/quest-data/_data.zip (~937 MB),
-# written as _data.zip.part and renamed only after the hash matches. data_sha256
+# The download is cached at build/android-arm64/quest-data/_data.zip (~937 MB; a
+# different data_sha256 gets its own _data-<hash prefix>.zip),
+# written as .part and renamed only after the hash matches. data_sha256
 # is trust-on-first-use: it is the SHA-256 of the file served from data_url when
 # the pin was taken, not a publisher-signed value; a cached file that does not
-# match is deleted.
+# match its own hash is deleted. The download and every long adb call have time
+# limits. The recipe body is tools/quest-install.sh (tested in tools/tests/test_quest_install.py).
 quest-install yes="" apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" data_url="https://mia.cdn.echo.taxi/_data.zip" data_sha256="fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    yes={{ quote(yes) }}
-    apk={{ quote(apk) }}
-    data_url={{ quote(data_url) }}
-    data_sha256={{ quote(data_sha256) }}
-    pkg=com.readyatdawn.r15
-    data=build/android-arm64/quest-data/_data.zip
-    remote_zip=/data/local/tmp/_data.zip
-    need_kb=1945600      # 1.9 GiB
-    max_bytes=1100000000 # download size cap
-
-    die() { echo "error: $*" >&2; exit 1; }
-
-    # 1. Host inputs, before anything touches the headset.
-    for tool in adb curl sha256sum timeout awk; do
-        command -v "$tool" >/dev/null 2>&1 || die "required tool '$tool' not found on PATH"
-    done
-    [ -f "$apk" ] || die "APK not found: $apk (build it with: just android-repack-apk)"
-    if [ -n "$yes" ] && [ "$yes" != "yes" ]; then
-        die "unrecognized argument '$yes' (the only accepted value is: yes)"
-    fi
-
-    # 2. Exactly one authorized device.
-    devices_out=$(timeout 30 adb devices 2>&1) || die "'adb devices' failed or timed out: $devices_out"
-    mapfile -t rows < <(printf '%s\n' "$devices_out" | awk 'NF && $1 != "List" && $1 !~ /^\*/')
-    [ "${#rows[@]}" -ne 0 ] || die "no adb device attached"
-    [ "${#rows[@]}" -eq 1 ] || die "${#rows[@]} adb devices attached, need exactly one: ${rows[*]}"
-    serial=$(printf '%s' "${rows[0]}" | awk '{print $1}')
-    state=$(printf '%s' "${rows[0]}" | awk '{print $2}')
-    case "$state" in
-        device) ;;
-        unauthorized) die "device $serial is unauthorized: accept the USB debugging prompt in the headset and retry" ;;
-        *) die "device $serial is in state '$state', need 'device'" ;;
-    esac
-    a() { adb -s "$serial" "$@"; }
-    timeout 30 adb -s "$serial" wait-for-device || die "device $serial did not become ready within 30 s"
-
-    # 3. Installed state: distinguish adb failure from "not installed".
-    set +e
-    pm_out=$(timeout 30 adb -s "$serial" shell pm path "$pkg" 2>&1)
-    pm_rc=$?
-    set -e
-    if [ "$pm_rc" -eq 0 ]; then
-        echo "$pkg is installed on $serial"
-    elif [ -z "$pm_out" ]; then
-        echo "$pkg is not installed on $serial"
-    else
-        die "package check failed (exit $pm_rc): $pm_out"
-    fi
-
-    # 4. Free space on the headset (KiB available).
-    for path in /sdcard /data/local/tmp; do
-        avail=$(timeout 30 adb -s "$serial" shell "df -Pk $path" 2>&1 | awk 'NR==2 {print $4}') || avail=''
-        case "$avail" in ''|*[!0-9]*) die "could not read free space on $path (got '$avail')" ;; esac
-        [ "$avail" -ge "$need_kb" ] || die "$path has $((avail / 1024)) MiB free, need $((need_kb / 1024)) MiB"
-    done
-
-    # 5. Game data: cached, hash-verified download.
-    verify() { [ "$(sha256sum "$1" | awk '{print $1}')" = "$data_sha256" ]; }
-    mkdir -p "$(dirname "$data")"
-    if [ -f "$data" ] && ! verify "$data"; then
-        echo "Cached $data does not match the pinned SHA-256; deleting it."
-        rm -f "$data"
-    fi
-    if [ ! -f "$data" ]; then
-        echo "Downloading game data (~937 MB) to $data.part ..."
-        rm -f "$data.part"
-        curl -fL --retry 2 --proto '=https' --proto-redir '=https' \
-            --connect-timeout 20 --max-filesize "$max_bytes" -o "$data.part" "$data_url" \
-            || { rm -f "$data.part"; die "download failed: $data_url"; }
-        if ! verify "$data.part"; then
-            rm -f "$data.part"
-            die "downloaded file does not match pinned SHA-256 $data_sha256"
-        fi
-        mv "$data.part" "$data"
-    fi
-    echo "Game data verified (sha256 $data_sha256)"
-
-    # 6. Install the APK; uninstall only if the headset says the signature differs.
-    echo "Installing $apk ..."
-    set +e
-    install_out=$(a install -r -g "$apk" 2>&1)
-    install_rc=$?
-    set -e
-    echo "$install_out"
-    if [ "$install_rc" -ne 0 ]; then
-        case "$install_out" in
-            *INSTALL_FAILED_UPDATE_INCOMPATIBLE*)
-                if [ "$yes" != "yes" ]; then
-                    echo "The installed $pkg is signed differently and cannot be updated in place." >&2
-                    echo "Removing it deletes its app data on the headset (/data/data/$pkg," >&2
-                    echo "/sdcard/Android/data/$pkg, and its OBB) and the data cannot be recovered." >&2
-                    die "re-run with the 'yes' argument to allow it: just quest-install yes"
-                fi
-                echo "Uninstalling $pkg (deletes its app data) ..."
-                a uninstall "$pkg" || die "uninstall of $pkg failed"
-                a install -g "$apk" || die "install of $apk failed after uninstall"
-                ;;
-            *) die "adb install failed (exit $install_rc)" ;;
-        esac
-    fi
-
-    # 7. Push and extract; the temp zip is removed on every exit path.
-    cleanup_remote() {
-        a shell "rm -f $remote_zip" >/dev/null 2>&1 \
-            || echo "warning: could not remove $remote_zip from the headset" >&2
-    }
-    trap cleanup_remote EXIT
-    echo "Pushing + extracting game data to /sdcard/readyatdawn ..."
-    a push "$data" "$remote_zip" || die "adb push failed"
-    a shell "mkdir -p /sdcard/readyatdawn && cd /sdcard/readyatdawn && unzip -o $remote_zip" \
-        || die "unzip on the headset failed (partial files may remain in /sdcard/readyatdawn)"
-    echo "Done."
+    tools/quest-install.sh {{ quote(yes) }} {{ quote(apk) }} {{ quote(data_url) }} {{ quote(data_sha256) }}
 
 # --- Tests ---
 
@@ -591,13 +480,12 @@ verify:
     # whitespace, `/`, or end of line. Use this spelling, not the obvious one.
     #   ^-anchored (file content):  ^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)
     #   :-anchored (grep -n output): :[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)
-    # N34/N103: src/gameserver/ was DELETED on 2026-07-28 after its one piece of
-    # stranded work (N48's fail-fast) was recovered as N102. This guard remains
-    # so the tree cannot be recreated and wired: a second gameserver copy is how
-    # N48 shipped half-implemented for five weeks. CMake would now hard-fail on a
-    # missing directory, but this names the reason instead of the symptom.
+    # N34/N103: src/gameserver/ does not exist. This guard keeps the tree from
+    # being recreated and wired: a second gameserver copy is how N48 shipped
+    # half-implemented for five weeks. CMake would hard-fail on a missing
+    # directory, but this names the reason instead of the symptom.
     if grep -Pn '^\s*add_subdirectory\s*\(\s*src/gameserver\s*\)' CMakeLists.txt; then
-        echo "verify: FAIL — src/gameserver/ was removed (N103). The compiled path is src/runtime/server/." >&2
+        echo "verify: FAIL — src/gameserver/ must not come back (N103). The compiled path is src/runtime/server/." >&2
         echo "Re-adding that tree recreates the two-copy split that let N48 ship half-implemented. Route the change to src/runtime/server/." >&2
         exit 1
     fi
@@ -673,8 +561,7 @@ verify:
     fi
     # N64/N105: BeginGracefulShutdown must release the listener before ForceFatalExit.
     # The old sensor matched the STRING 'WsBridge_Shutdown', which a
-    # GetProcAddress returning null satisfies perfectly — and did, on every run
-    # from the N92 fold until 2026-07-28. Assert the DIRECT call instead: a
+    # GetProcAddress returning null satisfies perfectly, on every run. Assert the DIRECT call instead: a
     # symbol the linker must resolve, not a name looked up at runtime.
     if ! grep -q 'StopWebSocketBridgeListener()' src/runtime/server/gameserver.cpp; then
         echo "verify: FAIL — N64/N105 BeginGracefulShutdown does not call StopWebSocketBridgeListener();" >&2
@@ -1214,10 +1101,9 @@ verify:
     # Init saves the already-patched 0xC3 as "the original" and the restore becomes
     # a no-op with the true byte lost for the process lifetime.
     #
-    # That was the live arrangement until 2026-07-29 — PatchServerFramePacing
-    # blind-wrote the same VA with no validation and no save. It was safe only
-    # because Init happened to run first, which is an ordering accident, not a
-    # design. It stays deleted.
+    # A PatchServerFramePacing that blind-wrote the same VA with no validation and
+    # no save would be safe only because Init happens to run first, which is an
+    # ordering accident, not a design; this guard keeps it from existing.
     if grep -rn 'PatchServerFramePacing' src/runtime --include='*.cpp' --include='*.h' \
          | grep -vE ':[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' | grep .; then
         echo "verify: FAIL — N113 PatchServerFramePacing is back. It blind-writes CPrecisionSleep::BusyWait with no prologue validation and no original-byte save." >&2
@@ -1607,11 +1493,10 @@ verify:
     # in README.md and CLAUDE.md because nothing checked. A fact about the tree
     # asserted in prose drifts silently; this is the cheapest possible enforcement.
     python3 tools/verify_doc_paths.py
-    # N92/N105: exactly one ws_bridge. Two divergent copies existed for months —
-    # only the module ran, while N61's matchmaker fix landed in the gamepatches
-    # copy that never did. The module tree was DELETED 2026-07-28 once its last
-    # unique symbol (WsBridge_Shutdown) was brought in-process as
-    # StopWebSocketBridgeListener. This guard keeps it from coming back.
+    # N92/N105: exactly one ws_bridge. Two divergent copies would let a fix land in
+    # the one that does not run (N61's matchmaker fix did). The bridge is
+    # in-process (StopWebSocketBridgeListener); this guard keeps a separate
+    # module build from coming back.
     N92A_RC=0; grep -qE '^\s*add_subdirectory\(src/modules/ws-bridge\)' CMakeLists.txt || N92A_RC=$?
     sensor_stage1 "N92 ws-bridge module build" "CMakeLists.txt" "$N92A_RC"
     if [ "$N92A_RC" -eq 0 ]; then
@@ -1724,10 +1609,6 @@ verify:
     # its own explanatory comment — which quotes the very string it forbids — so
     # it failed on a correct tree. Comment lines are stripped; the pattern is
     # anchored to the PatchDetour signature.
-    # N100 sensor removed 2026-08-02: its subject (BUGS.md) is being purged from
-    # the public repo. The evidence-rank rule it enforced lives on in
-    # docs/standards/verification.md; the N-ledger entries it checked are now
-    # git history or migrated to ADRs.
     # --- N99: -server shall apply the game's own headless mask --------------
     # `-headless` is a NATIVE echovr.exe token. Its whole effect in the binary
     # is one instruction (0x140504566, `and dword [rbx+0x1D4], 0xFFFEFEFE`),
@@ -1984,10 +1865,6 @@ verify:
     # included: they are not ordinary prologue rewrites.
     python3 tools/verify_mode_patch_ground_truth.py
     echo "verify: OK ({{ preset }})"
-
-# ServerDB token-auth BAC smoke test removed 2026-08-02: the test script
-# (tests/token-auth-smoke.sh) was deleted — superseded by just verify's
-# test-auth-unit and the auth ground-truth tests.
 
 # Generate combat override files from echomod build output
 generate-combat-overrides build_dir:

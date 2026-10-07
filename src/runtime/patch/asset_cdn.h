@@ -14,8 +14,7 @@
 /// ADR and the test vector in tests/test_evrp_package.cpp together.
 ///
 /// Wired into startup: AssetCDN::Initialize() is called from
-/// lifecycle/boot.cpp:361. (This block said "Not wired into startup"
-/// until 2026-07-29, long after it was wired — corrected in N113.)
+/// lifecycle/boot.cpp:361.
 
 #include <cstdint>
 #include <string>

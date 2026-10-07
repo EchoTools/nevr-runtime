@@ -846,14 +846,11 @@ VOID PatchSpectatorStreamAlways() {
 // Server Frame Pacing Optimization
 // ===================================================================================================
 
-// PatchServerFramePacing was removed 2026-07-29 (N113). It wrote 0xC3 to
-// CPrecisionSleep::BusyWait via ApplyPatch with NO prologue validation and no
-// original-byte save — both of which the canonical site in
-// patch/binary_bug_fixes.cpp does (ResolveVA_Checked, then memcpy the original
-// into s_busywait_original_byte for the N33 shutdown restore). It was marked
-// DEPRECATED by N25 with the exit condition "remove once all paths route
-// through BinaryBugFixes::Init"; that condition was already met, since Init
-// patches unconditionally while this copy was server-gated.
+// Server frame pacing is patched only by patch/binary_bug_fixes.cpp, which validates
+// the address (ResolveVA_Checked) and saves the original byte
+// (s_busywait_original_byte) for the N33 shutdown restore. A second writer of 0xC3 to
+// CPrecisionSleep::BusyWait here, without validation or a saved byte, would race
+// that restore.
 
 // ============================================================================
 // PatchLogServerProfile — log memory and module snapshot

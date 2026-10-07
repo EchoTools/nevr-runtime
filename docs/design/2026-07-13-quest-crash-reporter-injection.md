@@ -1,12 +1,12 @@
 # Quest (arm64-v8a) Crash-Reporter `.so` — Injection Recon & Design
 
-> **STATUS 2026-08-01: DESIGN COMPLETE, BUILD NOT YET VERIFIED ON MAIN.**
+> **STATUS: DESIGN COMPLETE.**
 > The `src/quest/` sub-project described in §5 has its own CMake toolchain
 > and NDK build (`just configure-android`, `just build-android`). The ELF-shape
-> BACs in §6 are verified offline; on-device verification (Part B of the sideload
-> runbook at docs/quest-sideload-runbook.md (deleted 2026-08-01;
-> `git show 35b6df580d3af744907db94d843fbde935877857:docs/quest-sideload-runbook.md`)) requires a physical Quest 2 headset
-> and has not been executed. This doc is the canonical design reference for the
+> BACs in §6 are verified offline; the GOT-hook mechanism has been run on a Quest 2
+> (`src/quest/sentinel/got_hook.h`). The full crash-reporter path on a headset
+> (`just android-repack-apk`, then `just quest-install`) needs a physical Quest 2 and
+> has no recorded run. This doc is the canonical design reference for the
 > Quest hijack; it is load-bearing for anyone working on the Quest port.
 
 # Quest (arm64-v8a) Crash-Reporter `.so` — Injection Recon & Design
