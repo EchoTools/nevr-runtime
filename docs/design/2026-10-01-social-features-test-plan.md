@@ -132,7 +132,7 @@ racing through `| grep -q` (9d4945a); the runner launching a client over a dying
 (92e3197). In nakama, local only: an accept with no matching invite got no answer (a8eb2de79); every
 join refusal was code 2, so "party full" never showed (f808932a8).
 
-## Needs the owner (measured 2026-10-01; nothing here is built)
+## Needs the owner (measured 2026-10-01; what has since been built is in the Nakama proposal's "As built" notes)
 
 Each of these is blocked on a choice, not on work. The evidence says what the game and pnsovr do
 and what Nakama has; the recommendation is one option, not a decision.

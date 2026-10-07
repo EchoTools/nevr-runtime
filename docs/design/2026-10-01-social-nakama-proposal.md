@@ -1,6 +1,8 @@
 # Nakama support for the remaining social features (proposal)
 
-2026-10-01. A proposal, not an implementation: nothing here is built. It answers the "Needs the
+2026-10-01. A proposal. Status: sections 2 and 3 carry "As built" notes (Nakama and runtime); section 1's
+presence publish (`SNSPresenceUpdateRequest`) has no runtime implementation; read each section's own notes
+for the rest. It answers the "Needs the
 owner" list in `docs/design/2026-10-01-social-features-test-plan.md`, under the owner's ruling (via
 Spritz): "all those oculus features exist in nakama in one form or another, we just need to support
 them, and that can include modifying an evr message", and "stay away from matchmaking, because i've
