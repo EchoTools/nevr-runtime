@@ -27,8 +27,7 @@
 # the field separator silently truncated every regex that contained one — rows
 # scored ABSENT because the tool was broken, not the feature.
 #
-# A row must test the thing its label names. S19 was labelled "XPID carries DSC
-# platform prefix" but matches `login injected xpid=DSC-`, which ws_bridge builds
+# A row must test the thing its label names. S19 matches `login injected xpid=OVR-ORG-`, which ws_bridge builds
 # from its OWN PlatformPrefix() — it stays green even if the game's string-table
 # patch never ran. S42 tests the patch itself. A row that passes for the wrong
 # reason is worse than a missing row, because it reads as coverage.
@@ -119,7 +118,7 @@ S15@@server@@Service endpoints redirected from config@@\[NEVR\.PATCH\] service r
 S16@@server@@WebSocket bridge listening@@\[NEVR\.WS\] Proxy listening on@@no nevr_socket_uri in early config
 S17@@server@@Game connected through the bridge@@\[NEVR\.WS\] Proxy: game connected@@
 S18@@server@@Login request injected@@\[NEVR\.WS\] login injected xpid=@@
-S19@@server@@Our login prefix is DSC (NOT the game patch)@@login injected xpid=DSC@@login injected xpid=(PSN|UNK)
+S19@@server@@Our login prefix is OVR-ORG (NOT the game patch)@@login injected xpid=OVR-ORG-@@login injected xpid=(PSN|UNK)
 S42@@server@@Game provider strings rewritten to DSC (XPID)@@\[NEVR\.XPID\] DSC provider patch applied at 5 sites@@\[NEVR\.XPID\] validation FAILED
 S20@@server@@Service accepted the login@@\[NEVR\.WS\] LOGIN SUCCESS@@\[NEVR\.WS\] login failed status=
 S21@@server@@GameServer initialised@@\[NEVR\.GAMESERVER\] Initialized game server@@

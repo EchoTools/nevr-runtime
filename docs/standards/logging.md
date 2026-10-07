@@ -211,16 +211,19 @@ Log(EchoVR::LogLevel::Info,
 ```
 
 The platform prefix SHALL be derived from the actual platform code in the
-login payload, not hardcoded. If the platform is DSC (Discord, code 2),
-the XPID is `DSC-<id>`, not `OVR-ORG-<id>`. See N14 (platform
-prefix hardcoded as OVR_ORG in module ws_bridge).
+login payload, not hardcoded. Platform codes are the game's own
+1-indexed numbering (STM=1, DSC=2, XBX=3, OVR_ORG=4, OVR=5, BOT=6, DMO=7);
+code 2 is "PSN" in the game's string table and reads "DSC" after the runtime rewrites it.
+The bridge logs in as OVR_ORG (code 4), so its XPID is `OVR-ORG-<id>`; a
+login as DSC (code 2) would produce `DSC-<id>`.
 
 **Where:** the module copy is GONE — `src/modules/ws-bridge/` was deleted in
 `2e5b4ec` (N105) after N92 folded the bridge into `BugSplat64.dll`. Its content
 is still retrievable:
 `git show 46903229b0a7bfff82324e3c2b163ebc653173c9:src/modules/ws-bridge/src/ws_bridge.cpp`
 (conn>0 injection at :281-283, conn=0 at :441-444). The surviving injection site
-is `src/runtime/compat/ws_bridge.cpp:515`. Tracked as N15.
+is `InstallWebSocketBridge` in `src/runtime/compat/ws_bridge.cpp` (the
+`login injected xpid=` log line). Tracked as N15.
 
 ### Rule 3: Silence is not success
 
@@ -780,7 +783,6 @@ Log(EchoVR::LogLevel::Warning,
   as GitHub issues, not N-entries). Basis for the "Message Content Quality"
   section.
 - **N17** — Startup hook errors not systematically tracked.
-- **N14** — Platform prefix hardcoded as OVR_ORG (affects XPID correctness).
 - **AGENTS.md** — Project conventions, `Log()` usage, subsystem architecture.
 - **CPP-MINGW-ADDENDUM-GENERIC.md** — "Logging (Structured, Always)" section, "No printf" rule.
 - **`src/core/logging.h`** — `Log()` and `FatalError()` declarations.

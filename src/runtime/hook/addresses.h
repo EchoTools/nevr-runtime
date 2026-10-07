@@ -536,7 +536,8 @@ constexpr uintptr_t CJSON_GET_FLOAT = 0x5FCA60;
 // ============================================================================
 
 /// Platform prefix string table entries for PSN (provider 2 in both the game and Nakama numbering).
-/// Patched to "DSC" / "DSC-" so the game formats/parses Discord-based XPIDs.
+/// Patched to "DSC" / "DSC-" so the game paths that read these strings directly (not through the
+/// GetProviderPrefix detour, which returns OVR-ORG) format/parse Discord-based XPIDs.
 /// All three are in .rdata — ProcessMemcpy handles VirtualProtect.
 ///
 /// Source: ReVault search_strings + read_memory on echovr.exe
