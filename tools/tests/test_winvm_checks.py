@@ -116,6 +116,21 @@ class HooksTest(unittest.TestCase):
         other = current.replace("EchoVR::GetProcAddress", "EchoVR::SomethingElse")
         self.assertEqual(by_name(checks.check_hooks(other), "no_unexpected_hook_failure")[0].status, checks.FAIL)
 
+    def test_the_runtimes_boot_hook_verdict_lines_are_classified(self):
+        base = "[NEVR.PATCH] boot hooks installed ok=true\n"
+        optional_known = base + "[NEVR.PATCH] optional boot hook not installed name=EchoVR::GetProcAddress; boot continues\n"
+        results = checks.check_hooks(optional_known)
+        self.assertEqual(by_name(results, "no_unexpected_hook_failure")[0].status, checks.PASS)
+        self.assertEqual(by_name(results, "diagnostic_hook_failure"), [])
+        optional_other = base + "[NEVR.PATCH] optional boot hook not installed name=EchoVR::SetWindowTextA_; boot continues\n"
+        results = checks.check_hooks(optional_other)
+        self.assertEqual(by_name(results, "no_unexpected_hook_failure")[0].status, checks.PASS)
+        self.assertEqual(by_name(results, "diagnostic_hook_failure")[0].status, checks.WARN)
+        required = base + ("[NEVR.PATCH] required boot hook not installed name=EchoVR::HttpConnect; a server will "
+                           "refuse to start, a client continues without it\n")
+        results = checks.check_hooks(required)
+        self.assertEqual(by_name(results, "no_unexpected_hook_failure")[0].status, checks.FAIL)
+
     def test_scoped_headless_known_exception_requires_redundancy_status(self):
         scoped = ("[NEVR.PATCH] hook FAILED name=LoadLibraryW target=0x1 reason=MH_ERROR_ALREADY_CREATED "
                   "detour not installed\n"

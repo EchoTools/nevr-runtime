@@ -24,7 +24,7 @@
 [NEVR.BOOT] installing game function hooks...
 [NEVR.PATCH] hook name=BuildCmdLineSyntaxDefinitions result=OK
 [NEVR.PATCH] hook name=PreprocessCommandLine result=OK
-[90m2026-09-21T16:37:44.806Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=EchoVR::GetProcAddress target=00007ff6ebe2aef0 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed (N126/N128)[0m
+[90m2026-09-21T16:37:44.806Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=EchoVR::GetProcAddress target=00007ff6ebe2aef0 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed[0m
 [NEVR.PATCH] game hooks installed
 [NEVR.PATCH] tls deferred=ws_bridge stage=boot
 [NEVR.BOOT] installing crash recovery hooks...
@@ -87,9 +87,8 @@
 [90m2026-09-21T16:37:45.099Z[0m [0minfo[0m [EVR] [pnsrad] patched "pnsdemo" -> "pnsrad"[0m
 [90m2026-09-21T16:37:45.100Z[0m [0minfo[0m [EVR] [pnsrad] init complete (3 echovr.exe patches)[0m
 [90m2026-09-21T16:37:45.100Z[0m [0minfo[0m [NEVR.PATCH] OVR platform branch bypassed - allowing normal initialization[0m
-[90m2026-09-21T16:37:45.100Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=LoadLibraryW target=00007ffab1f5f710 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed (N126/N128)[0m
-[90m2026-09-21T16:37:45.101Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=LoadLibraryExW target=00007ffab1f5c550 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed (N126/N128)[0m
-[90m2026-09-21T16:37:45.101Z[0m [33mwarn[0m [NEVR.PATCH] Oculus Platform SDK blocking hooks: LoadLibraryW=FAILED LoadLibraryExW=FAILED (redundant on headless �?" OVR SDK is never loaded; N127)[0m
+[90m2026-09-21T16:37:45.100Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=LoadLibraryW target=00007ffab1f5f710 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed[0m
+[90m2026-09-21T16:37:45.101Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=LoadLibraryExW target=00007ffab1f5c550 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed[0m
 [90m2026-09-21T16:37:45.102Z[0m [0minfo[0m [NEVR.PATCH] Disabled loading tips system for server mode[0m
 [90m2026-09-21T16:37:45.123Z[0m [33mwarn[0m [NEVR.CONFIG] no config.yaml found �?" NEVR config keys use built-in defaults[0m
 [90m2026-09-21T16:37:45.123Z[0m [33mwarn[0m [NEVR.WS] no services.socket_uri in config.yaml �?" bridge NOT started; the game will talk to services directly and login injection cannot fire[0m
