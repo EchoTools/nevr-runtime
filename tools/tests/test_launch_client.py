@@ -61,7 +61,8 @@ def make_fake_bin(directory: pathlib.Path) -> None:
     (directory / "wine").write_text(
         '#!/bin/bash\n'
         'logs="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/EchoVR/logs"\n'
-        'echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/nevr-fake.jsonl"\n'
+        'if [[ -n "${FAKE_LOG_TEXT:-}" ]]; then printf "%b" "$FAKE_LOG_TEXT" > "$logs/nevr-fake.jsonl"\n'
+        'else echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/nevr-fake.jsonl"; fi\n'
         'cmp -s "$FAKE_EXPECT_DLL" "./BugSplat64.dll" || { echo "wrong DLL deployed" >&2; exit 9; }\n'
         '(sleep 3) &  # a leftover child, like a lingering wineserver, must not keep the lock\n'
         '[[ -n "${FAKE_WINE_LOCK_DLL:-}" ]] && chmod 444 ./BugSplat64.dll\n'
@@ -108,6 +109,51 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("PASS: client reached logged in", result.stdout)
         self.assertIn("original BugSplat64.dll restored and verified", result.stdout)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def run_until_login(self, log_text=None, *extra, timeout_flag=("--login-timeout", "45"), env_extra=None):
+        env = dict(self.env, FAKE_WINE_SLEEP="6", NEVR_LOGIN_POLL_SECONDS="1")
+        if log_text is not None:
+            env["FAKE_LOG_TEXT"] = log_text
+        env.update(env_extra or {})
+        started = time.monotonic()
+        result = self.run_script("--dll", str(self.dll), "--exit-after-login", *timeout_flag, *extra, env=env)
+        return result, time.monotonic() - started
+
+    def test_exit_after_login_ends_the_run_itself_and_restores(self):
+        result, elapsed = self.run_until_login()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PASS: client reached logged in", result.stdout)
+        self.assertLess(elapsed, 5.5, "it waited for the game to exit instead of ending the run at the verdict")
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_exit_after_login_fails_when_the_service_stays_unavailable(self):
+        result, elapsed = self.run_until_login('{"msg":"Service is unavailable"}\\n' * 3)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("client never reached logged in", result.stderr)
+        self.assertLess(elapsed, 5.5)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_exit_after_login_fails_at_the_deadline_when_nothing_happens(self):
+        result, elapsed = self.run_until_login('{"msg":"noise"}\\n', timeout_flag=("--login-timeout", "2"),
+                                               env_extra={"NEVR_LOGIN_MIN_SECONDS": "1", "FAKE_WINE_SLEEP": "30"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("client never reached logged in", result.stderr)
+        self.assertGreaterEqual(elapsed, 2.0)
+        self.assertLess(elapsed, 12.0)
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_a_dll_that_embeds_no_endpoints_is_refused_even_if_login_appears(self):
+        text = ('{"msg":"[NEVR.CONFIG] built-in defaults embedded in this build: (none)"}\\n'
+                '{"msg":"NetGame switching state (from logging in, to logged in)"}\\n')
+        result, _ = self.run_until_login(text)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("embeds no service endpoints", result.stderr)
+
+    def test_a_login_timeout_below_the_minimum_patience_is_rejected(self):
+        result = self.run_script("--dll", str(self.dll), "--exit-after-login", "--login-timeout", "10")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("--login-timeout must be", result.stderr)
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def test_refuses_to_start_while_echovr_is_running(self):
