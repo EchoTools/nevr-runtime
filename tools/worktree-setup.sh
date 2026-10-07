@@ -90,9 +90,23 @@ exec 9>"$gitdir/worktree-setup/lock"
 flock -n 9 || { echo "error: another worktree-setup is running in this worktree" >&2; exit 1; }
 scratch="$here/.nevr-worktree-setup"
 [[ ! -L "$scratch" ]] || { echo "error: $scratch is a symlink; remove it first" >&2; exit 2; }
-rm -rf "$scratch"
+# Only a directory this script made (it holds our marker) or an empty one may be cleared: the name is
+# git-ignored, so anything else there is the user's and must not be deleted.
+if [[ -e "$scratch" ]]; then
+  if [[ -f "$scratch/.created-by-worktree-setup" || ( -d "$scratch" && -z "$(ls -A "$scratch")" ) ]]; then
+    rm -rf "$scratch"
+  else
+    echo "error: $scratch exists and was not created by this script; move it away first" >&2; exit 2
+  fi
+fi
 mkdir "$scratch" "$scratch/tmp"
+: > "$scratch/.created-by-worktree-setup"
 trap 'rm -rf "$scratch"' EXIT
+# A rename only stays atomic within one filesystem: refuse a destination on another (a mount point
+# for extern/ or the worktree root would turn the move into a copy that a kill can leave truncated).
+for p in extern .; do
+  [[ "$(stat -c %d "$p")" == "$(stat -c %d "$scratch/tmp")" ]] || { echo "error: $p is on a different filesystem than $scratch; setup would copy instead of rename" >&2; exit 2; }
+done
 
 filled=()
 kept=()
@@ -122,14 +136,17 @@ if [[ -e .env ]]; then
 elif [[ -f "$main/.env" ]]; then
   (umask 077; cp "$main/.env" "$scratch/tmp/env")
   mv -T -n "$scratch/tmp/env" .env
-  filled+=(.env)
+  # `mv -n` skips silently when .env appeared meanwhile: believe the filesystem, not the exit status.
+  if [[ -e "$scratch/tmp/env" ]]; then kept+=(.env); else filled+=(.env); fi
 else
   echo "warning: no .env in $main: the build will embed no service endpoints (launch-client.sh refuses such a DLL)" >&2
 fi
-# Warn when this branch pins other submodule commits than the main checkout's HEAD.
-for d in minhook breakpad lss; do
+# Warn when what was just copied is not the commit this branch pins (only for what this run filled).
+for f in "${filled[@]:-}"; do
+  [[ "$f" == extern/* ]] || continue
+  d=${f#extern/}
   mine=$(git ls-tree HEAD "extern/$d" 2>/dev/null | awk '{print $3}')
-  theirs=$(git -C "$main" ls-tree HEAD "extern/$d" 2>/dev/null | awk '{print $3}')
+  theirs=$(git -C "$main/extern/$d" rev-parse HEAD 2>/dev/null || true)
   if [[ -n "$mine" && -n "$theirs" && "$mine" != "$theirs" ]]; then
     echo "warning: this branch pins extern/$d at ${mine:0:12} but the main checkout has ${theirs:0:12}: remove extern/$d and run 'git submodule update --init extern/$d' for this branch's version" >&2
   fi

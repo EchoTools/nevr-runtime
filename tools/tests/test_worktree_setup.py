@@ -221,6 +221,7 @@ class WorktreeSetupTest(unittest.TestCase):
         scratch = self.wt / ".nevr-worktree-setup/tmp/minhook"
         scratch.mkdir(parents=True)
         (scratch / "stale").write_text("x\n")
+        (self.wt / ".nevr-worktree-setup/.created-by-worktree-setup").write_text("")
         for mine in (".gen.backup", ".gen.abcdef", ".gen.??????"):
             (self.wt / mine).mkdir()
             (self.wt / mine / "keep").write_text("mine\n")
@@ -333,6 +334,56 @@ class WorktreeSetupTest(unittest.TestCase):
         self.assertEqual((self.wt / "extern/lss/USERWORK").read_text(), "mine\n")
         self.assertFalse((self.wt / "extern/lss/lss").exists(), "the copy was nested into a directory that appeared")
 
+    def test_a_users_directory_with_the_scratch_name_is_refused_not_deleted(self):
+        mine = self.wt / ".nevr-worktree-setup"
+        mine.mkdir()
+        (mine / "notes.txt").write_text("precious\n")
+        result = self.run_script(self.wt)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("not created by this script", result.stderr)
+        self.assertEqual((mine / "notes.txt").read_text(), "precious\n")
+        mine_file = self.wt / "other"
+        self.assertFalse(mine_file.exists())
+
+    def test_an_env_that_appears_during_the_run_is_kept_and_reported_as_kept(self):
+        shim = self.tmp / "shim-env"
+        shim.mkdir()
+        real_mv = shutil.which("mv")
+        (shim / "mv").write_text(
+            "#!/bin/bash\n"
+            'dest="${@: -1}"\n'
+            'if [[ "$dest" == ".env" ]]; then echo USER_OWN=1 > .env; fi\n'
+            f'exec {real_mv} "$@"\n')
+        (shim / "mv").chmod(0o755)
+        env = dict(os.environ, PATH=f"{shim}:{os.environ['PATH']}")
+        result = subprocess.run([str(self.wt / "tools/worktree-setup.sh")], cwd=self.wt, capture_output=True, text=True,
+                                env=env, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.wt / ".env").read_text(), "USER_OWN=1\n")
+        filled_line = next(l for l in result.stdout.splitlines() if l.startswith("filled from"))
+        self.assertNotIn(".env", filled_line)
+        self.assertIn(".env", result.stdout.split("kept what this worktree already has:")[1])
+
+    def test_the_pin_warning_is_only_for_what_this_run_filled(self):
+        subprocess.run(["git", "-C", str(self.wt), "update-index", "--add", "--cacheinfo",
+                        "160000,2222222222222222222222222222222222222222,extern/minhook"], check=True, capture_output=True)
+        git(self.wt, "commit", "-q", "-m", "pin", "--no-gpg-sign")
+        (self.main / "extern/minhook/.git").unlink()
+        first = self.run_script(self.wt)
+        self.assertIn("pins extern/minhook", first.stderr)
+        second = self.run_script(self.wt)
+        self.assertNotIn("pins extern/", second.stderr)
+
+    def test_a_destination_on_another_filesystem_is_refused(self):
+        script = (
+            f"set -e; mount -t tmpfs tmpfs {self.wt}/extern 2>/dev/null || exit 77; "
+            f"cd {self.wt}; mkdir -p extern/minhook; {self.wt}/tools/worktree-setup.sh")
+        result = subprocess.run(["unshare", "-rm", "bash", "-c", script], capture_output=True, text=True, timeout=60)
+        if result.returncode == 77 or "unshare" in result.stderr and "failed" in result.stderr:
+            self.skipTest("cannot create a mount namespace here")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("different filesystem", result.stderr)
+
     def test_dotfile_only_directories_are_not_content(self):
         (self.wt / "extern/minhook").mkdir(parents=True, exist_ok=True)
         (self.wt / "extern/minhook/.keep").write_text("")
@@ -360,6 +411,7 @@ class WorktreeSetupTest(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.wt), "update-index", "--add", "--cacheinfo",
                         "160000,2222222222222222222222222222222222222222,extern/minhook"], check=True, capture_output=True)
         git(self.wt, "commit", "-q", "-m", "other pin", "--no-gpg-sign")
+        (self.main / "extern/minhook/.git").unlink()  # let git see the main checkout's own HEAD, as a real submodule has one
         result = self.run_script(self.wt)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("pins extern/minhook at 222222222222", result.stderr)
