@@ -191,9 +191,7 @@ def _known_hook_failure(name: str, tail: str, full_log: str) -> str | None:
     if error_match is None or error_match["value"] != "MH_ERROR_ALREADY_CREATED":
         return None
     if name == "EchoVR::GetProcAddress":
-        if "N126/N128" in tail:
-            return _KNOWN_HOOK_FAILURES[name]
-        return None
+        return _KNOWN_HOOK_FAILURES[name]
     if name in {"LoadLibraryW", "LoadLibraryExW"} and _is_headless_server(full_log):
         return _KNOWN_HOOK_FAILURES[name]
     return None

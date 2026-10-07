@@ -102,14 +102,23 @@ class HooksTest(unittest.TestCase):
 
     def test_known_exception_requires_expected_status_reason_and_provenance(self):
         known = ("[NEVR.PATCH] hook FAILED name=EchoVR::GetProcAddress target=0x1 "
-                 "reason=MH_ERROR_ALREADY_CREATED detour not installed (N126/N128)\n")
+                 "reason=MH_ERROR_ALREADY_CREATED detour not installed\n")
         self.assertEqual(by_name(checks.check_hooks(known), "known_hook_failure")[0].status, checks.WARN)
         no_reason = "[NEVR.PATCH] hook FAILED name=EchoVR::GetProcAddress target=0x1 reason=MH_ERROR_ACCESS_DENIED\n"
         self.assertEqual(by_name(checks.check_hooks(no_reason), "no_unexpected_hook_failure")[0].status, checks.FAIL)
 
+    def test_known_exception_is_keyed_on_the_hook_name_and_status_not_on_message_text(self):
+        # The runtime's current wording ends "detour not installed" with no ledger token.
+        current = ("[NEVR.PATCH] hook FAILED name=EchoVR::GetProcAddress target=0x1 "
+                   "reason=MH_ERROR_ALREADY_CREATED — detour not installed\n")
+        self.assertEqual(by_name(checks.check_hooks(current), "known_hook_failure")[0].status, checks.WARN)
+        # Another hook with the same status is not covered by the GetProcAddress exception.
+        other = current.replace("EchoVR::GetProcAddress", "EchoVR::SomethingElse")
+        self.assertEqual(by_name(checks.check_hooks(other), "no_unexpected_hook_failure")[0].status, checks.FAIL)
+
     def test_scoped_headless_known_exception_requires_redundancy_status(self):
         scoped = ("[NEVR.PATCH] hook FAILED name=LoadLibraryW target=0x1 reason=MH_ERROR_ALREADY_CREATED "
-                  "detour not installed (N126/N128)\n"
+                  "detour not installed\n"
                   "[NEVR.PATCH] Server mode: headless\n"
                   "[NEVR.PATCH] Oculus Platform SDK blocking hooks: LoadLibraryW=FAILED LoadLibraryExW=FAILED "
                   "(redundant on headless - OVR SDK is never loaded; N127)\n")
