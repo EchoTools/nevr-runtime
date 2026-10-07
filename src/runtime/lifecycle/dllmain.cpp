@@ -100,10 +100,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         BuiltinLogFilter::Shutdown();
         ShutdownResourceOverride();
         ShutdownWebSocketBridge();
-      }
-      if (g_realDbgCore) {
-        FreeLibrary(g_realDbgCore);
-        g_realDbgCore = nullptr;
+        // Also dynamic-unload only: at process termination the loader lock is held and the
+        // crash path may still be calling MiniDumpWriteDump through this module.
+        if (g_realDbgCore) {
+          FreeLibrary(g_realDbgCore);
+          g_realDbgCore = nullptr;
+        }
       }
       break;
   }
