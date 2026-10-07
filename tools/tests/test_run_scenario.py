@@ -28,6 +28,13 @@ class LoadScenarioTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 run_scenario.load_scenario(path)
 
+    def test_local_server_keys_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "local.yaml"
+            path.write_text("name: x\nserver: local\nsteps:\n  - name: a\n    wait_log: {pattern: a}\n")
+            with self.assertRaisesRegex(ValueError, "server not supported"):
+                run_scenario.load_scenario(path)
+
 
 class StateMatchesTest(unittest.TestCase):
     def test_friend_invitable(self):

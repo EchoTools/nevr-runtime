@@ -9,7 +9,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 # --dll PATH deploys that BugSplat64.dll instead of the release build (the scenario runner passes
 # the mingw-scenario build; see tools/scenario/run_scenario.py). --config PATH starts the game with
 # `-config PATH` (a JSON file; the runtime reads config.yaml from the same directory), so a run can
-# point at the local nakama without touching the game directory. Everything else is unchanged.
+# use its own config without touching the game directory. Everything else is unchanged.
 DLL=build/mingw-release/bin/BugSplat64.dll
 CONFIG=""
 while [[ $# -gt 0 ]]; do

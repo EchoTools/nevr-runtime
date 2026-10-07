@@ -975,12 +975,10 @@ void InstallWebSocketBridge() {
             }
             // conn>=2 (matchmaker): pnsradmatchmaking uses protobuf, not EchoVR
             // binary. Strip format=evr so the server uses default protobuf handling.
-            // Issue #116: format=evr is routinely the FIRST query param here on
-            // local dev rigs, where the configured socket_uri already carries
-            // "?format=evr&token=..." before the credentials block above appends
-            // discordid/password (tools/scenario/run_scenario.py:353,
-            // tools/winvm/systest.py:72, docs/reference/local-nakama.md:55,
-            // tools/nakama-local/evr_peer.py:104) — a naive "delete the preceding
+            // format=evr is routinely the FIRST query param here: a configured
+            // socket_uri such as "wss://host/ws?format=evr&token=..." already
+            // carries it before the credentials block above appends
+            // discordid/password. A naive "delete the preceding
             // ? or &" deleted the URI's only '?' and glued the path to the
             // remaining query. ServerDbUri::RemoveQueryParam handles leading/
             // middle/trailing/sole position correctly; see its own tests.
