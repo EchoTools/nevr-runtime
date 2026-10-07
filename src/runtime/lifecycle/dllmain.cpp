@@ -100,10 +100,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         BuiltinLogFilter::Shutdown();
         ShutdownResourceOverride();
         ShutdownWebSocketBridge();
-      }
-      if (g_realDbgCore) {
-        FreeLibrary(g_realDbgCore);
-        g_realDbgCore = nullptr;
+        // Dynamic unload only: FreeLibrary during process termination can leave a module in use
+        // after the system has run its termination code; the OS reclaims it with the process.
+        if (g_realDbgCore) {
+          FreeLibrary(g_realDbgCore);
+          g_realDbgCore = nullptr;
+        }
       }
       break;
   }
