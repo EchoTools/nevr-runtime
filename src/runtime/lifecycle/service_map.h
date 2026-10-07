@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -43,6 +44,20 @@ std::optional<std::string> LookupFlat(const nevr::NevrConfig& cfg, const std::st
 
 /// Built-in defaults embedded at build time, keyed by flat key (non-empty values only).
 using FlatDefaults = std::map<std::string, std::string>;
+
+/// One build-time default: a flat key and its embedded value ("" when the build did not embed it).
+struct EmbeddedDefault {
+  const char* flatKey;
+  const char* value;
+};
+
+/// The built-in defaults a run may see. Client mode: every entry with a non-empty value, with
+/// `embeddedNames` / `missingNames` (when non-null) receiving the comma-joined key names of the
+/// entries that have / lack a value (names only, never values). Server mode: empty, with both name
+/// lists left untouched, because a dedicated server is configured explicitly and must never start a
+/// bridge or authenticate with an embedded key.
+FlatDefaults SelectBuiltinDefaults(bool serverMode, const EmbeddedDefault* entries, std::size_t count,
+                                   std::string* embeddedNames, std::string* missingNames);
 
 /// LookupFlat layered over the embedded defaults. The config.yaml value wins when it is
 /// present and non-empty after interpolation; otherwise the embedded default is used; with

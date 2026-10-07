@@ -181,11 +181,141 @@ TEST(StableStringPoolAccessors, AbsentServiceHostPublishesSourceTwoAndAllowsNull
   EXPECT_EQ(NevrCfgServiceHost("serverdb_host", nullptr), nullptr);
 }
 
+// The built-in defaults are a client convenience: a dedicated server is configured explicitly
+// and must not start a bridge or authenticate with an embedded key. The accessors' injected
+// defaults pass through the same SelectBuiltinDefaults gate as the embedded ones, so a
+// server-mode run with only built-in defaults finds nothing. (That production passes
+// IsServerMode() into the gate is pinned by tools/tests/test_builtin_defaults_contract.py.)
+TEST(ServerModeDefaultsGate, ClientModeSeesTheEmbeddedDefault) {
+  ResetAccessorInputs();
+  SetAccessorInputs(&EmptyConfig(), &SocketDefault(), false);
+  ASSERT_NE(NevrCfgGetFlat("nevr_socket_uri"), nullptr);
+  EXPECT_STREQ(NevrCfgGetFlat("nevr_socket_uri"), "ws://default.example:80/spr");
+  EXPECT_NE(NevrCfgAutoRelay(53748), nullptr);
+}
+
+TEST(ServerModeDefaultsGate, ServerModeDoesNotSeeTheEmbeddedDefault) {
+  ResetAccessorInputs();
+  SetAccessorInputs(&EmptyConfig(), &SocketDefault(), true);
+  EXPECT_EQ(NevrCfgGetFlat("nevr_socket_uri"), nullptr);
+  EXPECT_EQ(NevrCfgAutoRelay(53748), nullptr);
+  EXPECT_EQ(NevrCfgRedirect("wss://login.readyatdawn.com/rad15", nullptr, 0, 0), nullptr);
+}
+
+TEST(ServerModeDefaultsGate, ServerModeStillReadsAnExplicitConfigValue) {
+  ResetAccessorInputs();
+  SetAccessorInputs(&Config(), &SocketDefault(), true);
+  const char* value = NevrCfgGetFlat("nevr_server_key");
+  ASSERT_NE(value, nullptr);
+  EXPECT_STREQ(value, "secret-test-key");
+}
+
+TEST(ServerModeDefaultsGate, ServerModeSuppliesNoGameNativeConfig) {
+  ResetAccessorInputs();
+  SetAccessorInputs(&Config(), &NoDefaults(), true);
+  EXPECT_EQ(NevrCfgGameNativeConfigJson(), nullptr);
+  SetAccessorInputs(&Config(), &NoDefaults(), false);
+  EXPECT_NE(NevrCfgGameNativeConfigJson(), nullptr);
+}
+
 TEST(StableStringPoolAccessors, UnchangedRedirectPreservesExactGameDefaultPointer) {
   const char defaultValue[] = "https://unrelated.example/path";
   const char* gameResult = defaultValue;
   EXPECT_EQ(nevr::lifecycle::ChooseRedirectedOrOriginal(gameResult, nullptr), defaultValue);
   EXPECT_EQ(nevr::lifecycle::ChooseRedirectedOrOriginal(gameResult, nullptr), gameResult);
+}
+
+// DecideServiceRedirect is the decision RedirectServiceUrl (config.cpp) makes for every string the
+// game reads from its JSON config. The tests drive it with counting callbacks and with callbacks
+// that call the real accessors over injected config. config.cpp itself links into no test; the
+// arguments it passes (the armed flag, the bridge state and port) are pinned by
+// tools/tests/test_quest_shared_redirect_sources.py.
+struct CallCounter {
+  int httpTarget = 0;
+  int redirect = 0;
+};
+
+TEST(DecideServiceRedirect, NothingIsLookedUpBeforeTheRedirectsAreArmed) {
+  CallCounter calls;
+  const char gameResult[] = "wss://login.readyatdawn.com/rad15";
+  const char* chosen = nevr::lifecycle::DecideServiceRedirect(
+      false, "loginservice_host", gameResult, [&] { ++calls.httpTarget; return nullptr; },
+      [&](const char*, const char*) { ++calls.redirect; return nullptr; });
+  EXPECT_EQ(chosen, gameResult);
+  EXPECT_EQ(calls.httpTarget, 0);
+  EXPECT_EQ(calls.redirect, 0);
+}
+
+// A redirect that hands back the very pointer the game passed in is "no change": the caller
+// compares pointers and skips its log line, so it neither logs a from=X to=X pair nor hides a real one.
+TEST(DecideServiceRedirect, ARedirectReturningTheGamesOwnPointerIsNoChange) {
+  const char gameResult[] = "wss://login.readyatdawn.com/rad15";
+  const char* chosen = nevr::lifecycle::DecideServiceRedirect(
+      true, "loginservice_host", gameResult, [] { return nullptr; },
+      [&](const char* r, const char*) { return r; });
+  EXPECT_EQ(chosen, gameResult);
+}
+
+TEST(DecideServiceRedirect, ANullResultOrKeyIsReturnedUntouchedWithoutLookups) {
+  CallCounter calls;
+  auto http = [&] { ++calls.httpTarget; return nullptr; };
+  auto redirect = [&](const char*, const char*) { ++calls.redirect; return nullptr; };
+  EXPECT_EQ(nevr::lifecycle::DecideServiceRedirect(true, "loginservice_host", nullptr, http, redirect), nullptr);
+  const char gameResult[] = "wss://login.readyatdawn.com/rad15";
+  EXPECT_EQ(nevr::lifecycle::DecideServiceRedirect(true, nullptr, gameResult, http, redirect), gameResult);
+  EXPECT_EQ(calls.httpTarget, 0);
+  EXPECT_EQ(calls.redirect, 0);
+}
+
+TEST(DecideServiceRedirect, ArmedHandsTheResultAndTheHttpTargetToTheRedirect) {
+  CallCounter calls;
+  const char gameResult[] = "https://api.readyatdawn.com/x";
+  const char target[] = "https://service.example:7350";
+  const char replacement[] = "https://service.example:7350";
+  const char* seenResult = nullptr;
+  const char* seenTarget = nullptr;
+  const char* chosen = nevr::lifecycle::DecideServiceRedirect(
+      true, "apiservice_host", gameResult, [&] { ++calls.httpTarget; return target; },
+      [&](const char* r, const char* t) { ++calls.redirect; seenResult = r; seenTarget = t; return replacement; });
+  EXPECT_EQ(chosen, replacement);
+  EXPECT_EQ(seenResult, gameResult);
+  EXPECT_EQ(seenTarget, target);
+  EXPECT_EQ(calls.httpTarget, 1);
+  EXPECT_EQ(calls.redirect, 1);
+}
+
+TEST(DecideServiceRedirect, NoRedirectKeepsTheGamesExactPointer) {
+  SetConfigInputs();
+  const char gameResult[] = "https://unrelated.example/path";
+  const char* chosen = nevr::lifecycle::DecideServiceRedirect(
+      true, "somekey", gameResult, [] { return NevrCfgGetFlat("nevr_http_uri"); },
+      [](const char* r, const char* t) { return NevrCfgRedirect(r, t, 0, 0); });
+  EXPECT_EQ(chosen, gameResult);
+}
+
+TEST(DecideServiceRedirect, ArmedWithTheRealAccessorsRedirectsAReadyAtDawnSocket) {
+  SetConfigInputs();
+  const char gameResult[] = "wss://login.readyatdawn.com/rad15";
+  const char* chosen = nevr::lifecycle::DecideServiceRedirect(
+      true, "loginservice_host", gameResult, [] { return NevrCfgGetFlat("nevr_http_uri"); },
+      [](const char* r, const char* t) { return NevrCfgRedirect(r, t, 0, 0); });
+  ASSERT_NE(chosen, gameResult);
+  EXPECT_STREQ(chosen, "ws://service.example:80/spr");
+}
+
+TEST(DecideServiceRedirect, ABridgeRewritesTheSocketToLoopbackAndTheHttpTargetNeverUsesIt) {
+  SetConfigInputs();
+  const char socketResult[] = "wss://login.readyatdawn.com/rad15";
+  const char* viaBridge = nevr::lifecycle::DecideServiceRedirect(
+      true, "loginservice_host", socketResult, [] { return NevrCfgGetFlat("nevr_http_uri"); },
+      [](const char* r, const char* t) { return NevrCfgRedirect(r, t, 1, 53748); });
+  EXPECT_STREQ(viaBridge, "ws://127.0.0.1:53748");
+
+  const char httpResult[] = "https://api.readyatdawn.com/x";
+  const char* http = nevr::lifecycle::DecideServiceRedirect(
+      true, "apiservice_host", httpResult, [] { return NevrCfgGetFlat("nevr_http_uri"); },
+      [](const char* r, const char* t) { return NevrCfgRedirect(r, t, 1, 53748); });
+  EXPECT_STREQ(http, "https://service.example:7350");
 }
 
 TEST(StableStringPoolAccessors, SelectedRedirectReplacesTheGameResultWithTheStablePointer) {

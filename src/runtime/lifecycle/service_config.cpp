@@ -35,6 +35,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #ifdef NEVR_TEST_HOOKS
 #include <stdexcept>
@@ -160,21 +161,19 @@ const nevr::NevrConfig& NevrCfg() {
 const nevr_cfg::FlatDefaults& BuiltinDefaults() {
 #ifdef NEVR_TEST_HOOKS
   if (g_testInputsSet) {
-    static const nevr_cfg::FlatDefaults kNoTestDefaults;
-    return g_testDefaults == nullptr ? kNoTestDefaults : *g_testDefaults;
+    // The injected defaults go through the same gate as the embedded ones.
+    static nevr_cfg::FlatDefaults gated;
+    std::vector<nevr_cfg::EmbeddedDefault> entries;
+    if (g_testDefaults != nullptr) {
+      for (const auto& kv : *g_testDefaults) entries.push_back({kv.first.c_str(), kv.second.c_str()});
+    }
+    gated = nevr_cfg::SelectBuiltinDefaults(g_testServerMode, entries.data(), entries.size(), nullptr,
+                                            nullptr);
+    return gated;
   }
 #endif
   static const nevr_cfg::FlatDefaults defaults = []() {
-    nevr_cfg::FlatDefaults d;
-    if (IsServerMode()) {
-      Log(EchoVR::LogLevel::Info,
-          "[NEVR.CONFIG] built-in defaults are not applied in server mode (config.yaml is required)");
-      return d;
-    }
-    const struct {
-      const char* flatKey;
-      const char* value;
-    } kEmbedded[] = {
+    const nevr_cfg::EmbeddedDefault kEmbedded[] = {
         {"nevr_socket_uri", nevr_builtin::kSocketUri},
         {"nevr_http_uri", nevr_builtin::kHttpUri},
         {"nevr_http_key", nevr_builtin::kPublicApiKey},
@@ -182,11 +181,12 @@ const nevr_cfg::FlatDefaults& BuiltinDefaults() {
     };
     std::string embedded;
     std::string missing;
-    for (const auto& e : kEmbedded) {
-      std::string& list = (e.value[0] != '\0') ? embedded : missing;
-      if (e.value[0] != '\0') d[e.flatKey] = e.value;
-      if (!list.empty()) list += ", ";
-      list += e.flatKey;
+    nevr_cfg::FlatDefaults d = nevr_cfg::SelectBuiltinDefaults(
+        IsServerMode(), kEmbedded, sizeof(kEmbedded) / sizeof(kEmbedded[0]), &embedded, &missing);
+    if (IsServerMode()) {
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.CONFIG] built-in defaults are not applied in server mode (config.yaml is required)");
+      return d;
     }
     Log(EchoVR::LogLevel::Info, "[NEVR.CONFIG] built-in defaults embedded in this build: %s",
         embedded.empty() ? "(none)" : embedded.c_str());

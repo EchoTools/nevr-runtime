@@ -146,7 +146,11 @@ class SharedRedirectSourceParity(unittest.TestCase):
         self.assertIn('"quest/tests/stable_string_pool_vectors.h"', quest_pool_test)
         self.assertIn("nevr_quest_stable_string_pool", target_link_libraries(quest, "stable_string_pool_test"))
         redirect_adapter = cmake_block(runtime_config, "static CHAR* RedirectServiceUrl(", "CHAR* JsonValueAsStringHook(")
-        self.assertIn("ChooseRedirectedOrOriginal(result, redirected)", redirect_adapter)
+        self.assertIn("DecideServiceRedirect(", redirect_adapter)
+        # The arguments only config.cpp can supply: the armed flag and the live bridge state.
+        self.assertIn("s_serviceRedirectsArmed.load(", redirect_adapter)
+        self.assertIn("IsWebSocketBridgeActive() ? 1 : 0", redirect_adapter)
+        self.assertIn("GetWebSocketBridgePort()", redirect_adapter)
         self.assertIn("lifecycle/config_redirect_result.h", headers)
         self.assertIn("config_redirect_result.h", runtime_config)
         self.assertIn("ChooseRedirectedOrOriginal(gameResult, nullptr)", runtime_config_test)
