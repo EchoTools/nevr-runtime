@@ -10,6 +10,7 @@
  */
 
 #include "sentinel.h"
+#include "activation.h"
 #include "got_hook.h"
 
 #include <jni.h>
@@ -82,6 +83,9 @@ static void nevr_sentinel_ctor() {
     __android_log_print(ANDROID_LOG_INFO, NEVR_TAG,
                         "constructor: arming crash reporter (pre-libr15)");
     sentinel::Arm();
+    // Resolve and log the configuration and feature switches. No feature hook is installed here:
+    // each later hook consults sentinel::FeatureEnabled() at its own install point.
+    sentinel::InitActivation();
     InstallBasicsHook();
 }
 

@@ -413,6 +413,12 @@ test-quest-shared:
         -o "$out/service_redirect_test"
     "$out/service_redirect_test"
     echo "test-quest-shared: all redirect vectors pass on the host"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
+        src/runtime/lifecycle/service_redirect.cpp \
+        src/quest/sentinel/quest_config.cpp \
+        src/quest/tests/quest_config_test.cpp \
+        -o "$out/quest_config_test"
+    "$out/quest_config_test"
 
 # --- Verify (closed-loop gate) ---
 
