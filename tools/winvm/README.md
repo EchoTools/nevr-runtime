@@ -6,9 +6,8 @@ built `BugSplat64.dll` on a real Windows guest (libvirt) and judges the boot.
 
 ```sh
 just build
-WINVM_USER=... WINVM_PASS=... just test-winvm                    # GAI, boot, and local Nakama login
+WINVM_USER=... WINVM_PASS=... just test-winvm                    # GAI, then boot
 WINVM_USER=... WINVM_PASS=... just test-winvm --scenario gai     # getaddrinfo timing only
-# --scenario login needs a local Nakama, which this tree does not provide.
 ```
 
 Exit codes: `0` pass, `1` the runtime failed a check, `2` the environment is
@@ -55,9 +54,7 @@ observes for `--wait` seconds (default 90, minimum 45), then judges:
 | `window_enumeration` / `window_pid` | live-process window enumeration lacks a fresh completion marker or is associated with another PID |
 | `engine_progress` | the boot did not reach `--require-stage` (default `broadcaster`) |
 
-`login` repeats the boot against the local Nakama using the seeded test account
-and checks Nakama's session and `LoginSuccess` records. This tree does not
-provide a local Nakama, so `login` and the default `all` scenario cannot run here.
+`all` (the default) runs `gai`, then `boot`.
 
 Hook warnings require an explicit diagnostic tag or a matching failure reason,
 status, and tracked exception context. A successful `All hooks installed` line
@@ -87,9 +84,8 @@ Artifacts (`stdout.txt`, `windows.txt`, `results.txt`, the probe output) go to
   and a missing or unparseable `config.json` no longer stops a server. When present it
   is searched at `bin\win10\_local`, `bin\_local` and `<install root>\_local` (in that
   order); a `config.json` at the install root itself is never read. The offline `boot`
-  rig still writes one, because its `*_host` keys are what point every service at
-  `127.0.0.1:1`. The `login` rig writes none, so it also exercises the no-`config.json`
-  boot.
+  rig writes one, because its `*_host` keys are what point every service at
+  `127.0.0.1:1`.
 - `hook_liveness ... CBroadcaster::ReceiveLocalEvent entries=0` is the **normal**
   signature of a server that never got a service session (the offline config here
   produces it). It is a symptom of "no dispatch happened yet", not evidence of a

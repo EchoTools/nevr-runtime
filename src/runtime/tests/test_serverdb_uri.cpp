@@ -225,12 +225,9 @@ TEST(ServerDbUri, BridgeCredentialsAreBothOrNeither) {
 
 // The exact shape BuildBridgeCredentialUri produces today for the matchmaker
 // path: format=evr first, discordid/password appended after by AppendQuery.
-// This is the shape on local dev rigs, where the configured socket_uri
-// already carries "?format=evr&token=..." before credentials are appended
-// (tools/scenario/run_scenario.py:353, tools/winvm/systest.py:72,
-// docs/reference/local-nakama.md:55, tools/nakama-local/evr_peer.py:104).
-// This is the trigger case from the issue, reproduced via the real builder
-// rather than a hand-typed string.
+// This is the shape whenever the configured socket_uri already carries
+// "?format=evr&token=..." before credentials are appended. The case is
+// reproduced via the real builder rather than a hand-typed string.
 TEST(ServerDbUri, RemoveQueryParamFixesTheActualBridgeCredentialShape) {
   const std::optional<std::string> withCredentials =
       ServerDbUri::BuildBridgeCredentialUri("wss://g.example/ws?format=evr", "123456789", "pw");
