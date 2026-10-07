@@ -295,11 +295,12 @@ your seat name, for example `claude-main` or `codex`.
   show all four keys
   (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
-- **Fresh worktrees need build inputs.** Run `just worktree-setup` in the new worktree: it copies
-  `extern/{minhook,breakpad,lss}` (without their `.git` files), `gen/` and `.env` from the main
-  checkout, fills in only what is missing (an initialised submodule, `gen/` or `.env` the worktree
-  already has is kept; delete `gen/` to refresh it) and leaves the main checkout unchanged. Never print
-  `.env`. The build embeds the production endpoints from `.env`.
+- **Fresh worktrees need build inputs.** Run `just worktree-setup` in the new linked worktree: it
+  copies `extern/{minhook,breakpad,lss}` (without their `.git` files), `gen/` and `.env` from the main
+  checkout, only into places that are absent or empty. It keeps anything already there (delete `gen/`
+  to refresh it), never touches the main checkout, and copies the main checkout's submodule content, so
+  use `git submodule update --init` when the branch pins other submodule commits. Never print `.env`.
+  The build embeds the production endpoints from `.env`.
 - **Client login test mechanics.** Run `./launch-client.sh --dll <absolute path to the build's
   BugSplat64.dll>` from your checkout in the background, one client at a time (it exits 4 while an
   `echovr.exe` runs or another run holds the lock). `NEVR_GAME_ROOT` overrides which checkout's

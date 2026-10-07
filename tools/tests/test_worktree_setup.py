@@ -134,9 +134,17 @@ class WorktreeSetupTest(unittest.TestCase):
         self.assertIn("not inside a git checkout", result.stderr)
         self.assertTrue((loose / "gen/cpp/own.pb.cc").exists())
 
-    def test_a_failed_copy_leaves_what_is_there_and_no_temporary(self):
-        (self.wt / "gen").mkdir()
-        (self.wt / "gen/own.txt").write_text("own\n")  # no generated source, so gen/ would be replaced
+    def test_a_gen_with_other_content_is_refused_not_replaced(self):
+        (self.wt / "gen/go").mkdir(parents=True)
+        (self.wt / "gen/go/own.go").write_text("own\n")
+        (self.wt / "gen/.dot").write_text("own\n")
+        result = self.run_script(self.wt)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("not touched: gen/", result.stderr)
+        self.assertEqual((self.wt / "gen/go/own.go").read_text(), "own\n")
+        self.assertEqual((self.wt / "gen/.dot").read_text(), "own\n")
+
+    def test_a_failed_copy_leaves_no_partial_gen_and_no_temporary(self):
         unreadable = self.main / "gen/cpp/secret.pb.cc"
         unreadable.write_text("x\n")
         unreadable.chmod(0)
@@ -145,8 +153,10 @@ class WorktreeSetupTest(unittest.TestCase):
             self.skipTest("running as a user that can read mode-0 files")
         result = self.run_script(self.wt)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual((self.wt / "gen/own.txt").read_text(), "own\n")
-        self.assertEqual(list(self.wt.glob(".gen.*")), [], "temporary copy left behind")
+        self.assertFalse((self.wt / "gen").exists(), "a partial gen/ was left in place")
+        scratch = pathlib.Path(subprocess.check_output(
+            ["git", "-C", str(self.wt), "rev-parse", "--path-format=absolute", "--git-dir"], text=True).strip())
+        self.assertFalse((scratch / "worktree-setup/tmp").exists(), "temporary copy left behind")
 
     def test_an_existing_env_is_kept_and_a_new_one_is_private(self):
         (self.wt / ".env").write_text("OWN=1\n")
@@ -205,13 +215,98 @@ class WorktreeSetupTest(unittest.TestCase):
         for name in ("minhook", "breakpad", "lss"):
             self.assertTrue((self.main / "extern" / name / "CMakeLists.txt").exists(), name)
 
-    def test_temporaries_from_a_killed_run_are_removed(self):
-        (self.wt / ".gen.abcdef").mkdir()
-        (self.wt / "extern/.lss.abcdef").mkdir()
-        (self.wt / ".gen.abcdef/stale").write_text("x\n")
+    def gitdir(self):
+        return pathlib.Path(subprocess.check_output(
+            ["git", "-C", str(self.wt), "rev-parse", "--path-format=absolute", "--git-dir"], text=True).strip())
+
+    def test_scratch_from_a_killed_run_is_removed_and_user_directories_are_never_touched(self):
+        scratch = self.gitdir() / "worktree-setup/tmp/minhook"
+        scratch.mkdir(parents=True)
+        (scratch / "stale").write_text("x\n")
+        for mine in (".gen.backup", ".gen.abcdef", ".gen.??????"):
+            (self.wt / mine).mkdir()
+            (self.wt / mine / "keep").write_text("mine\n")
+        (self.wt / "extern/.lss.orig12").mkdir()
+        (self.wt / "extern/.lss.orig12/keep").write_text("mine\n")
         self.assertEqual(self.run_script(self.wt).returncode, 0)
-        self.assertFalse((self.wt / ".gen.abcdef").exists())
-        self.assertFalse((self.wt / "extern/.lss.abcdef").exists())
+        self.assertFalse(scratch.exists())
+        for mine in (".gen.backup", ".gen.abcdef", ".gen.??????", "extern/.lss.orig12"):
+            self.assertEqual((self.wt / mine / "keep").read_text(), "mine\n", mine)
+
+    def test_git_environment_cannot_make_the_main_checkout_look_like_a_linked_worktree(self):
+        # GIT_DIR naming a LINKED worktree's git dir would make `git rev-parse --git-dir` differ from the
+        # common dir even when the script sits in the main checkout.
+        env = dict(os.environ, GIT_DIR=str(self.gitdir()), GIT_WORK_TREE=str(self.wt))
+        result = subprocess.run([str(self.main / "tools/worktree-setup.sh")], cwd=self.main, capture_output=True,
+                                text=True, env=env, timeout=60)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("not a linked worktree", result.stderr)
+
+    def test_a_main_checkout_with_a_separate_git_dir_is_still_refused_under_an_override(self):
+        sep = self.tmp / "sepmain"
+        subprocess.run(["git", "clone", "-q", "--separate-git-dir", str(self.tmp / "sep.git"), str(self.main), str(sep)],
+                       check=True, capture_output=True)
+        shutil.copytree(self.main / "extern", sep / "extern", dirs_exist_ok=True)
+        (sep / "gen").mkdir()
+        (sep / "gen/NOTES").write_text("hand written\n")
+        env = dict(os.environ, NEVR_MAIN_CHECKOUT=str(self.wt))
+        result = subprocess.run([str(sep / "tools/worktree-setup.sh")], cwd=sep, capture_output=True, text=True,
+                                env=env, timeout=60)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual((sep / "gen/NOTES").read_text(), "hand written\n")
+        self.assertFalse((sep / ".env").exists())
+
+    def test_the_script_acts_on_the_checkout_it_lives_in_even_when_invoked_through_a_symlink(self):
+        home = self.tmp / "home"
+        (home / "bin").mkdir(parents=True)
+        (home / "bin/ws").symlink_to(self.wt / "tools/worktree-setup.sh")
+        (home / "gen").mkdir()
+        (home / "gen/data.txt").write_text("mine\n")
+        env = dict(os.environ, NEVR_MAIN_CHECKOUT=str(self.main))
+        result = subprocess.run([str(home / "bin/ws")], cwd=home, capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.wt / "extern/minhook/CMakeLists.txt").exists())
+        self.assertEqual((home / "gen/data.txt").read_text(), "mine\n")
+        self.assertFalse((home / "extern").exists())
+        self.assertFalse((home / ".env").exists())
+
+    def test_dangling_symlink_destinations_are_refused(self):
+        for victim in ("gen", ".env", "extern/lss"):
+            link = self.wt / victim
+            if link.exists() or link.is_symlink():
+                shutil.rmtree(link) if link.is_dir() and not link.is_symlink() else link.unlink()
+            link.symlink_to(self.tmp / "nowhere")
+            result = self.run_script(self.wt)
+            self.assertEqual(result.returncode, 2, f"{victim}: {result.stdout}{result.stderr}")
+            self.assertIn("symlink", result.stderr)
+            link.unlink()
+            if victim == "extern/lss":
+                link.mkdir()
+
+    def test_simultaneous_runs_do_not_nest_copies_or_fail_halfway(self):
+        runs = [subprocess.Popen([str(self.wt / "tools/worktree-setup.sh")], cwd=self.wt, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True) for _ in range(8)]
+        codes = []
+        for r in runs:
+            r.communicate(timeout=60)
+            codes.append(r.returncode)
+        self.assertTrue(set(codes) <= {0, 1}, codes)
+        self.assertIn(0, codes)
+        for name in ("minhook", "breakpad", "lss"):
+            self.assertTrue((self.wt / "extern" / name / "CMakeLists.txt").exists(), name)
+            self.assertEqual([p.name for p in (self.wt / "extern" / name).iterdir()], ["CMakeLists.txt"], name)
+        self.assertEqual(sorted(p.name for p in self.wt.glob("extern/.*")), [])
+        self.assertTrue((self.wt / "gen/cpp/x.pb.cc").exists())
+        self.assertFalse((self.wt / "gen/gen").exists())
+
+    def test_directories_with_only_empty_subdirectories_do_not_pass_the_check(self):
+        (self.wt / "extern/minhook/src").mkdir(parents=True)
+        (self.wt / "gen/cpp").mkdir(parents=True)
+        (self.wt / "gen/cpp/.gitkeep").write_text("")
+        result = self.run_script(self.wt, "--check")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("extern/minhook", result.stderr)
+        self.assertIn("gen/cpp", result.stderr)
 
     def test_gen_keeps_the_main_checkouts_mode(self):
         (self.main / "gen").chmod(0o755)
