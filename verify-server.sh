@@ -39,10 +39,8 @@ source tools/lib/game_install.sh
 GAME_ROOT=$(resolve_game_root) || exit $?
 GAME_DIR="$GAME_ROOT/echovr/bin/win10"
 [ -d "$GAME_DIR" ] || { echo "ERROR: no game install at $GAME_DIR (set NEVR_GAME_ROOT to the checkout that has echovr/)" >&2; exit 2; }
-OUT="${NEVR_RUN_SCRATCH_ROOT:-/var/tmp/work-nevr-runtime}/server-runs/${RUN_NAME}"
-mkdir -p "$OUT"
-LOG="$OUT/server.log"
-: > "$LOG"
+SCRATCH_ROOT="${NEVR_RUN_SCRATCH_ROOT:-/var/tmp/work-nevr-runtime}"
+OUT="$SCRATCH_ROOT/server-runs/${RUN_NAME}"
 
 case "$FLAGSET" in
   default) ARGS=(-server -headless -noconsole) ;;
@@ -66,7 +64,12 @@ if [ "$RUN_SECONDS" -lt "$MIN_SECONDS" ]; then
   exit 2
 fi
 
-acquire_game_run_lock verify-server.sh
+# The lock comes before this run's output files are touched: a run that is refused must not empty
+# the log of the run that holds the lock.
+acquire_game_run_lock
+mkdir -p "$OUT"
+LOG="$OUT/server.log"
+: > "$LOG"
 
 {
   echo "run_name=$RUN_NAME"
@@ -80,36 +83,60 @@ acquire_game_run_lock verify-server.sh
 
 # Every file this run deploys: an existing one is saved first and put back on exit, a new one is
 # deleted on exit, so the game directory ends as it started even when the run is interrupted.
-BACKUP="$OUT/deploy-backup"
-rm -rf "$BACKUP"
-mkdir -p "$BACKUP"
+# The backup lives at one fixed place (the lock allows one run at a time), so a run that was
+# SIGKILLed and never restored is found and restored by the next run instead of being mistaken for
+# the original.
+BACKUP="$SCRATCH_ROOT/verify-server-deploy-backup"
 ADDED="$BACKUP/added.txt"
+# Puts back every saved file and deletes every added one. Returns 1 if any restore failed; the
+# backup is kept in that case.
+restore_deployed() {
+  local f dst bad=0
+  [ -d "$BACKUP" ] || return 0
+  if [ -d "$BACKUP/files" ]; then
+    while IFS= read -r f; do
+      dst="$GAME_DIR/${f#"$BACKUP/files/"}"
+      if ! { cp -p "$f" "$dst" && cmp -s "$f" "$dst"; }; then
+        echo "ERROR: restoring $dst failed; the original is $f" | tee -a "${LOG:-/dev/null}" >&2
+        bad=1
+      fi
+    done < <(find "$BACKUP/files" -type f)
+  fi
+  if [ -f "$ADDED" ]; then
+    while IFS= read -r dst; do [ -n "$dst" ] && rm -f "$dst"; done < "$ADDED"
+  fi
+  [ "$bad" -eq 0 ] && rm -rf "$BACKUP"
+  return "$bad"
+}
+if [ -d "$BACKUP" ]; then
+  echo "=== restoring files an earlier verify-server.sh run left deployed ===" | tee -a "$LOG"
+  restore_deployed || { echo "ERROR: could not restore the earlier run's files; fix $BACKUP by hand" >&2; exit 3; }
+fi
+mkdir -p "$BACKUP"
 : > "$ADDED"
 deploy() {
   local src=$1 dst=$2 rel
   rel="${dst#"$GAME_DIR"/}"
   if [ -e "$dst" ]; then
     mkdir -p "$BACKUP/files/$(dirname "$rel")"
-    cp -p "$dst" "$BACKUP/files/$rel"
+    cp -p "$dst" "$BACKUP/files/$rel" || { echo "ERROR: cannot save $dst before overwriting it" >&2; exit 3; }
   else
     echo "$dst" >> "$ADDED"
   fi
   mkdir -p "$(dirname "$dst")"
-  cp -v "$src" "$dst" >> "$LOG" 2>&1
+  cp -v "$src" "$dst" >> "$LOG" 2>&1 || { echo "ERROR: cannot deploy $src to $dst" >&2; exit 3; }
 }
 WINE_PID=""
+WINE_RUNNING=0
 restore() {
   trap - EXIT
-  [ -n "$WINE_PID" ] && kill "$WINE_PID" 2>/dev/null
-  local f dst bad=0
-  if [ -d "$BACKUP/files" ]; then
-    while IFS= read -r f; do
-      dst="$GAME_DIR/${f#"$BACKUP/files/"}"
-      cp -p "$f" "$dst" && cmp -s "$f" "$dst" || { echo "ERROR: restoring $dst failed; original is $f" >&2; bad=1; }
-    done < <(find "$BACKUP/files" -type f)
+  # Only while the game is still ours to stop: after `wait` has reaped it the PID may be reused.
+  if [ "$WINE_RUNNING" -eq 1 ]; then kill "$WINE_PID" 2>/dev/null; fi
+  if restore_deployed; then
+    echo "=== deployed files restored and verified ===" | tee -a "$LOG"
+  else
+    exit 1
   fi
-  while IFS= read -r dst; do [ -n "$dst" ] && rm -f "$dst"; done < "$ADDED"
-  [ "$bad" -eq 0 ] && echo "=== deployed files restored and verified ===" | tee -a "$LOG"
 }
 # INT/TERM become a normal exit so the EXIT trap (restore) always runs.
 trap 'exit 143' INT TERM
@@ -145,13 +172,14 @@ find "$GAME_ROOT/echovr/" -iname '*.dmp' -newermt '-1 minute' 2>/dev/null | wc -
 echo "=== Starting echovr.exe ${ARGS[*]} ===" | tee -a "$LOG"
 ( cd "$GAME_DIR" && exec wine ./echovr.exe "${ARGS[@]}" ) >> "$LOG" 2>&1 9>&- &
 WINE_PID=$!
+WINE_RUNNING=1
 
 # Poll for the window census across the run rather than sampling once at the end:
 # a window that opens and closes before teardown would otherwise go unseen.
 MAX_WINDOWS=0
 elapsed=0
 while [ "$elapsed" -lt "$RUN_SECONDS" ]; do
-  sleep "$POLL_SECONDS"
+  sleep "$POLL_SECONDS" 9>&-
   elapsed=$((elapsed+POLL_SECONDS))
   kill -0 "$WINE_PID" 2>/dev/null || { echo "process exited early at t=${elapsed}s" >> "$OUT/context.txt"; break; }
   pids=$(pgrep -u "$(id -u)" -f "$ECHOVR_CMDLINE" | tr '\n' ' ')
@@ -165,6 +193,7 @@ echo "=== CTRL+C (SIGINT) ===" | tee -a "$LOG"
 for p in $(pgrep -u "$(id -u)" -f "$ECHOVR_CMDLINE"); do kill -INT "$p" 2>/dev/null; done
 wait "$WINE_PID"
 RC=$?
+WINE_RUNNING=0
 echo "$RC" > "$OUT/exit_code.txt"
 
 find "$GAME_ROOT/echovr/" -iname '*.dmp' -newermt '-1 minute' 2>/dev/null | wc -l > "$OUT/dumps_after.txt"

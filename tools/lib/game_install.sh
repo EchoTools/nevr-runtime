@@ -25,13 +25,13 @@ resolve_game_root() {
 # One game run at a time: a second run would save the first run's test DLL as its "original" and
 # restore that. The flock covers the caller's whole run (including its restore); the pgrep covers a
 # game started some other way. fd 9 holds the lock: the caller closes it (9>&-) for the children it
-# starts so a leftover wineserver cannot hold it. $1 names the caller in the messages. Exits 4.
+# starts so a leftover wineserver cannot hold it. Exits 4.
 acquire_game_run_lock() {
-  local who=$1 running
+  local running
   GAME_RUN_LOCK="${NEVR_LAUNCH_LOCK:-/var/tmp/work-nevr-runtime/launch-client.lock}"
   mkdir -p "$(dirname "$GAME_RUN_LOCK")"
   exec 9>"$GAME_RUN_LOCK" || { echo "ERROR: cannot open the lock file $GAME_RUN_LOCK" >&2; exit 4; }
-  flock -n 9 || { echo "ERROR: another $who run holds $GAME_RUN_LOCK" >&2; exit 4; }
+  flock -n 9 || { echo "ERROR: another game run (launch-client.sh or verify-server.sh) holds $GAME_RUN_LOCK" >&2; exit 4; }
   if running=$(pgrep -u "$(id -u)" -f "$ECHOVR_CMDLINE"); then
     echo "ERROR: echovr.exe is already running (pid ${running//$'\n'/ }); stop it first" >&2
     exit 4

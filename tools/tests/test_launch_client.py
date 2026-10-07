@@ -63,9 +63,9 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         'logs="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/EchoVR/logs"\n'
         'echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/nevr-fake.jsonl"\n'
         'cmp -s "$FAKE_EXPECT_DLL" "./BugSplat64.dll" || { echo "wrong DLL deployed" >&2; exit 9; }\n'
-        'sleep "${FAKE_WINE_SLEEP:-0}"\n'
         '(sleep 3) &  # a leftover child, like a lingering wineserver, must not keep the lock\n'
-        'exit 0\n')
+        '[[ -n "${FAKE_WINE_LOCK_DLL:-}" ]] && chmod 444 ./BugSplat64.dll\n'
+        'exec sleep "${FAKE_WINE_SLEEP:-0}"\n')
     (directory / "wineserver").write_text('#!/bin/bash\nexit 0\n')
     for f in directory.iterdir():
         f.chmod(0o755)
@@ -123,7 +123,7 @@ class LaunchClientTest(unittest.TestCase):
             fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
             result = self.run_script("--dll", str(self.dll))
         self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
-        self.assertIn("another launch-client.sh run holds", result.stderr)
+        self.assertIn("another game run (launch-client.sh or verify-server.sh) holds", result.stderr)
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def test_the_lock_is_released_when_the_run_ends_even_if_a_child_outlives_it(self):
@@ -239,6 +239,55 @@ class VerifyServerTest(unittest.TestCase):
             process.stdout.close()
         self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
         self.assertFalse((self.win10 / "plugins/extra.dll").exists())
+
+    def run_verify(self, env=None):
+        return subprocess.run(self.command(), env=env or self.env, cwd=self.checkout, capture_output=True,
+                              text=True, timeout=60)
+
+    def test_back_to_back_runs_both_succeed(self):
+        # A child that outlives the game (the fake wine leaves a sleeping one) must not keep the lock.
+        self.assertEqual(self.run_verify().returncode, 0)
+        self.assertEqual(self.run_verify().returncode, 0)
+
+    def test_a_killed_run_is_restored_by_the_next_run_not_mistaken_for_the_original(self):
+        env = dict(self.env, FAKE_WINE_SLEEP="8")  # the orphan outlives SIGKILL briefly, then exits
+        process = subprocess.Popen(self.command(), env=env, cwd=self.checkout, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL)
+        try:
+            deadline = time.monotonic() + 30
+            while (self.win10 / "BugSplat64.dll").read_bytes() != TEST_DLL:
+                self.assertLess(time.monotonic(), deadline, "the test DLL was never deployed")
+                time.sleep(0.05)
+            process.send_signal(signal.SIGKILL)  # no trap runs: the test DLL and the plugin stay deployed
+            process.wait(timeout=30)
+        finally:
+            if process.poll() is None:
+                process.kill()
+        self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), TEST_DLL)
+        # A rerun under ANOTHER name must find and restore the leftovers before deploying again.
+        result = subprocess.run([str(self.checkout / "verify-server.sh"), "run2", "default", "1"], env=self.env,
+                                cwd=self.checkout, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("restoring files an earlier verify-server.sh run left deployed", result.stdout)
+        self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
+        self.assertFalse((self.win10 / "plugins/extra.dll").exists())
+
+    def test_a_refused_run_leaves_the_running_runs_log_alone(self):
+        log = self.tmp / "server-runs/run1/server.log"
+        log.parent.mkdir(parents=True)
+        log.write_text("lines of the run that holds the lock\n")
+        with open(self.tmp / "launch.lock", "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = self.run_verify()
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertEqual(log.read_text(), "lines of the run that holds the lock\n")
+
+    def test_a_failed_restore_is_loud_and_fails_the_run(self):
+        result = self.run_verify(dict(self.env, FAKE_WINE_LOCK_DLL="1"))
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("ERROR: restoring", result.stderr)
+        self.assertIn("ERROR: restoring", (self.tmp / "server-runs/run1/server.log").read_text())
+        self.assertTrue((self.tmp / "verify-server-deploy-backup").exists(), "the backup must survive a failed restore")
 
     def test_refuses_to_deploy_while_echovr_is_running(self):
         env = dict(self.env, FAKE_ECHOVR_PIDS="4242")

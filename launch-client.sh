@@ -34,7 +34,7 @@ SCRATCH="${NEVR_RUN_SCRATCH_ROOT:-/var/tmp/work-nevr-runtime}/client-run-$(date 
 WINEPREFIX="$GAME_ROOT/echovr/.wineprefix"
 LOGDIR="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/EchoVR/logs"
 
-acquire_game_run_lock launch-client.sh
+acquire_game_run_lock
 
 # Nested display only: never the owner's desktop. Unset every Wayland/session
 # variable so nothing can fall back to it (gamescope did, see AGENTS.md).
