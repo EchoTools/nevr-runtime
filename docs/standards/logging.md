@@ -289,7 +289,8 @@ What constitutes noise:
 
 **Filter audit checklist (N18 fix direction):**
 1. Verify the built-in log filter is capturing game lines (its health line
-   reports `game_lines=`; zero means another module has taken the hook — N89)
+   reports `game_lines=`; a zero-game-lines warning names its cause: hook not
+   installed, hook target taken by another module, or the game idle or blocked)
    configuration.
 2. Capture a representative server log from a live session.
 3. Count lines per subsystem tag; any tag with >50% of total lines is a
