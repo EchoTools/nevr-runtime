@@ -34,9 +34,12 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist; build it first" >&2; exit 2; }
 # 45 s is the minimum patience from process start (AGENTS.md "Startup Timing"): the splash alone is 15-20 s.
+# NEVR_LOGIN_MIN_SECONDS lowers it for the script's own tests only.
 LOGIN_MIN_SECONDS="${NEVR_LOGIN_MIN_SECONDS:-45}"
-[[ "$LOGIN_TIMEOUT" =~ ^[0-9]+$ && "$LOGIN_TIMEOUT" -ge "$LOGIN_MIN_SECONDS" ]] || {
-  echo "ERROR: --login-timeout must be a whole number of seconds >= $LOGIN_MIN_SECONDS (the splash alone takes 15-20 s)" >&2; exit 2; }
+if [[ $EXIT_AFTER_LOGIN -eq 1 ]]; then
+  [[ "$LOGIN_TIMEOUT" =~ ^[0-9]+$ && "$LOGIN_TIMEOUT" -ge "$LOGIN_MIN_SECONDS" ]] || {
+    echo "ERROR: --login-timeout must be a whole number of seconds >= $LOGIN_MIN_SECONDS (the splash alone takes 15-20 s)" >&2; exit 2; }
+fi
 
 GAME_DIR="$GAME_ROOT/echovr/bin/win10"
 LOCAL_DIR="$GAME_ROOT/echovr/_local"
@@ -126,11 +129,16 @@ if [[ -n "$CONFIG" ]]; then
   game_args+=(-config "Z:${CONFIG//\//\\}")
   echo "=== game config: $CONFIG (config.yaml from its directory) ==="
 fi
-# The newest game log written since this run started.
+# The newest game log THIS run wrote: a file that did not exist when the run started (names carry a
+# millisecond timestamp, so they are unique per run) and was modified since. Judging by mtime alone
+# let a previous run's log, last written in the same second the run started, decide the verdict.
+pre_logs=$(ls "$LOGDIR"/nevr-*.jsonl 2>/dev/null || true)
 newest_run_log() {
   local f found=""
   for f in "$LOGDIR"/nevr-*.jsonl; do
-    [[ -f "$f" && $(stat -c %Y "$f") -ge $start ]] && found="$f"
+    [[ -f "$f" && $(stat -c %Y "$f") -ge $start ]] || continue
+    grep -qxF -- "$f" <<<"$pre_logs" && continue
+    found="$f"
   done
   printf '%s' "$found"
 }
@@ -143,15 +151,25 @@ if [[ $EXIT_AFTER_LOGIN -eq 1 ]]; then
     cur=$(newest_run_log)
     if [[ -n "$cur" ]]; then
       if grep -q 'to logged in' "$cur"; then break; fi
+      # A run that logs in never logs "rad15_live failed" (0 of 459 logged-in runs in the logs this
+      # was measured on) and the stuck ones log it again and again (3 or more in 11 of 479, up to
+      # 2038), so three of those, or three "Service is unavailable", is a service that is not coming.
+      if [[ $(grep -c 'rad15_live failed' "$cur" || true) -ge 3 ]]; then break; fi
       if [[ $(grep -c 'Service is unavailable' "$cur" || true) -ge 3 ]]; then break; fi
+      # A DLL built without the production .env can never log in; do not wait out the deadline.
+      if grep -q 'built-in defaults embedded in this build: (none)' "$cur"; then break; fi
     fi
     sleep "$poll" 9>&-
   done
-  # Verdict reached (or the game died or the deadline passed): stop the game. The restore trap runs
-  # wineserver -k as well; the explicit kill lets the wait below return.
+  # Verdict reached (or the game died or the deadline passed): stop the game, and make sure the Wine
+  # server is gone too, so nothing still has BugSplat64.dll mapped when the restore trap copies the
+  # original back over it.
   kill "$game_pid" 2>/dev/null
   for pid in $(pgrep -u "$(id -u)" -f "$ECHOVR_CMDLINE"); do kill "$pid" 2>/dev/null; done
   wait "$game_pid" 2>/dev/null
+  timeout 20 wineserver -k 9>&-
+  timeout 20 wineserver -w 9>&-
+  echo "=== stopped the game after $(( $(date +%s) - start )) s ==="
   exit_code=0
 else
   (cd "$GAME_DIR" && wine ./echovr.exe "${game_args[@]}") > "$CONSOLE_LOG" 2>&1 9>&-

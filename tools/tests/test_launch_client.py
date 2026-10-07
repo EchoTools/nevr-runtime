@@ -61,13 +61,14 @@ def make_fake_bin(directory: pathlib.Path) -> None:
     (directory / "wine").write_text(
         '#!/bin/bash\n'
         'logs="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/EchoVR/logs"\n'
-        'if [[ -n "${FAKE_LOG_TEXT:-}" ]]; then printf "%b" "$FAKE_LOG_TEXT" > "$logs/nevr-fake.jsonl"\n'
-        'else echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/nevr-fake.jsonl"; fi\n'
+        'sleep "${FAKE_WINE_LOG_DELAY:-0}"\n'
+        'if [[ -n "${FAKE_LOG_TEXT:-}" ]]; then printf "%b" "$FAKE_LOG_TEXT" > "$logs/nevr-fake-$(date +%s%N).jsonl"\n'
+        'else echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/nevr-fake-$(date +%s%N).jsonl"; fi\n'
         'cmp -s "$FAKE_EXPECT_DLL" "./BugSplat64.dll" || { echo "wrong DLL deployed" >&2; exit 9; }\n'
         '(sleep 3) &  # a leftover child, like a lingering wineserver, must not keep the lock\n'
         '[[ -n "${FAKE_WINE_LOCK_DLL:-}" ]] && chmod 444 ./BugSplat64.dll\n'
         'exec sleep "${FAKE_WINE_SLEEP:-0}"\n')
-    (directory / "wineserver").write_text('#!/bin/bash\nexit 0\n')
+    (directory / "wineserver").write_text('#!/bin/bash\n[[ -n "${FAKE_WS_LOG:-}" ]] && echo "$*" >> "$FAKE_WS_LOG"\nexit 0\n')
     for f in directory.iterdir():
         f.chmod(0o755)
 
@@ -149,6 +150,44 @@ class LaunchClientTest(unittest.TestCase):
         result, _ = self.run_until_login(text)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("embeds no service endpoints", result.stderr)
+
+    def test_a_service_that_keeps_failing_ends_the_run_early(self):
+        result, elapsed = self.run_until_login('{"msg":"rad15_live failed"}\\n' * 3)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("client never reached logged in", result.stderr)
+        self.assertLess(elapsed, 5.5)
+
+    def test_a_dll_that_embeds_nothing_ends_the_run_without_waiting_for_the_deadline(self):
+        result, elapsed = self.run_until_login('{"msg":"[NEVR.CONFIG] built-in defaults embedded in this build: (none)"}\\n')
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("embeds no service endpoints", result.stderr)
+        self.assertLess(elapsed, 5.5)
+
+    def test_a_previous_runs_log_from_the_same_second_cannot_decide_the_verdict(self):
+        logs = self.game_root / "echovr/.wineprefix/drive_c/users" / getpass.getuser() / "AppData/Local/EchoVR/logs"
+        stale = logs / "nevr-2026-10-07T00-00-00.000.jsonl"
+        stale.write_text('{"msg":"NetGame switching state (from logging in, to logged in)"}\n')
+        # This run's own log has no login at all; the stale file must not be mistaken for it.
+        result, _ = self.run_until_login('{"msg":"noise"}\\n', timeout_flag=("--login-timeout", "2"),
+                                         env_extra={"NEVR_LOGIN_MIN_SECONDS": "1", "FAKE_WINE_SLEEP": "30",
+                                                    "FAKE_WINE_LOG_DELAY": "1"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("client never reached logged in", result.stderr)
+        self.assertNotIn("nevr-2026-10-07T00-00-00.000.jsonl", result.stdout)
+
+    def test_the_wine_server_is_stopped_and_awaited_before_the_dll_is_restored(self):
+        ws_log = self.tmp / "ws.log"
+        result, _ = self.run_until_login(env_extra={"FAKE_WS_LOG": str(ws_log)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = ws_log.read_text().split("\n")
+        self.assertIn("-k", calls)
+        self.assertIn("-w", calls)
+        self.assertLess(calls.index("-w"), len(calls))
+        self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_a_login_timeout_without_the_flag_is_not_validated(self):
+        result = self.run_script("--dll", str(self.dll), "--login-timeout", "10")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_a_login_timeout_below_the_minimum_patience_is_rejected(self):
         result = self.run_script("--dll", str(self.dll), "--exit-after-login", "--login-timeout", "10")
