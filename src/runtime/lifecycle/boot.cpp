@@ -330,8 +330,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       // kept this open in N99 for a week. Closed not-a-defect in N113.
       //
       // g_noOvr is not "only a global": it drives NEVR_MODULE_HOST_IS_NOOVR
-      // (:75) and the login platform code 5-vs-2 (compat/ws_bridge.cpp:485,544),
-      // which is the behaviour -noovr exists to produce. The game's own
+      // (:75) the NEVR_MODULE_HOST_IS_NOOVR flag the modules read, which is the
+      // behaviour -noovr exists to produce (the login platform code no longer depends on it:
+      // SelectPlatformCode always returns OVR_ORG, 4). The game's own
       // -noovr-requires--spectatorstream assert is bypassed by
       // PatchNoOvrRequiresSpectatorStream, inert unless the token is present.
       g_noOvr = TRUE;

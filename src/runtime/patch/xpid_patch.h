@@ -4,8 +4,9 @@
 
 /// Replace PSN- provider prefix with DSC- across all three string tables
 /// in the game binary. Reuses PSN's provider code (2, the same value in the
-/// game's and Nakama's numbering) so all ~70+ inlined format switches
-/// automatically produce "DSC-".
+/// game's and Nakama's numbering) so the inlined format switches that do not
+/// go through the GetProviderPrefix detour below (GetUserIDString) produce
+/// "DSC-".
 VOID PatchDscProvider();
 
 /// Detour CNSUser::GetProviderPrefix (fcn.14060d640, 17 distinct callers) to always

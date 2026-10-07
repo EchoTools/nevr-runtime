@@ -322,8 +322,9 @@ static VOID InitializeAfterGameImageGuard() {
   // N59: re-wire PatchDscProvider — the call site was lost when N43's
   // Initialize() rewrite merged over N41's include+call (a6bb57d).
   // Without this, the 5-site PSN→DSC + ???→DSC string-table rewrite
-  // never executes — game sends PSN-/???- instead of DSC- in provider
-  // strings (RULINGS.md 2026-07-20 login-prefix).
+  // never executes, and the game paths that do not go through the
+  // GetProviderPrefix detour below (GetUserIDString) format PSN-/???-
+  // instead of DSC- (RULINGS.md 2026-07-20 login-prefix).
   BootLogTee::TeeFprintf("[NEVR.BOOT] patching DSC provider strings...\n");
   PatchDscProvider();
   BootLogTee::TeeFprintf("[NEVR.BOOT] detouring GetProviderPrefix → OVR-ORG...\n");
