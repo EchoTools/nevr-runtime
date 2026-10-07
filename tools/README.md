@@ -14,7 +14,8 @@ unit tests in `tests/`; the rest are run by hand or by a `just` recipe.
 | `verify_patch_source_inventory.py` | The `patch/*.cpp` entries of `PATCHES_SOURCES` match the expected inventory (update it deliberately when a patch is added or removed). |
 | `verify_scenario_control_absent.py` | A release `BugSplat64.dll` carries no scenario-test control endpoint. |
 
-`tests/` holds the Python unit tests for these scripts and for the shell and Python tools below
+`tests/` holds the Python unit tests for these scripts and for the shell and Python tools below, plus
+source-invariant tests over the C++ tree and the release contract
 (`python3 -m unittest discover -s tools/tests -p 'test_*.py'`).
 
 ## Run a game or the device
@@ -34,6 +35,6 @@ unit tests in `tests/`; the rest are run by hand or by a `just` recipe.
 | --- | --- |
 | `build_distribution.py` | Sign a staged runtime package and atomically publish verified archives. |
 | `gen_symbol_corpus.py`, `symbol_candidates.txt` | Hash candidate symbol names and emit the reverse-lookup tables (CSymbol64 and SNS message hashes). |
-| `generate-symcache.sh` | Regenerate `src/runtime/log/symcache_data.cpp` from the evrcat symbol cache. |
+| `generate-symcache.sh` | Regenerate `src/runtime/log/symcache_data.cpp` from the evrcat symbol cache (`just build` runs it when that cache is present). |
 | `hook_identity_manifest.json` | The pinned prologues `verify_hook_invariants.py` checks. |
 | `echomod/` | Standalone Echo VR modding scripts; see `echomod/README.md`. |
