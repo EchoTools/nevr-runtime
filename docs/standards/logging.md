@@ -211,9 +211,10 @@ Log(EchoVR::LogLevel::Info,
 ```
 
 The platform prefix SHALL be derived from the actual platform code in the
-login payload, not hardcoded. If the platform is DSC (Discord, code 2),
-the XPID is `DSC-<id>`, not `OVR-ORG-<id>`. See N14 (platform
-prefix hardcoded as OVR_ORG in module ws_bridge).
+login payload, not hardcoded. Platform codes are the game's own
+1-indexed numbering (STM=1, DSC=2, XBX=3, OVR_ORG=4, OVR=5, BOT=6, DMO=7).
+The bridge logs in as OVR_ORG (code 4), so its XPID is `OVR-ORG-<id>`; a
+login as DSC (code 2) would produce `DSC-<id>`.
 
 **Where:** the module copy is GONE — `src/modules/ws-bridge/` was deleted in
 `2e5b4ec` (N105) after N92 folded the bridge into `BugSplat64.dll`. Its content

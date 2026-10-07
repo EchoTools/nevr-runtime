@@ -26,7 +26,9 @@ constexpr std::uintptr_t kPnsradUserProviderIdRva = 0x88D70;
 constexpr std::array<std::uint8_t, 16> kPnsradUserProviderIdExpected = {
     0x48, 0x8B, 0x05, 0x19, 0xD8, 0x2E, 0x00, 0xC3, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC};
 
-/// CSymbol64 of "OVR": echovr.exe's provider table entry for code 4 (.rdata 0x1416d0f00).
+/// CSymbol64 of "OVR". CSymbol64 (echovr.exe 0x1400f6b40) maps this symbol to provider code 4, and the
+/// symbol sits in the provider table at .rdata 0x1416d0f00. The same code 4 is rendered "OVR-ORG" by
+/// GetProviderPrefix (0x14060d640); the string "OVR" belongs to code 5, which CSymbol64 has no symbol for.
 constexpr std::uint64_t kOvrProviderSymbol = 0xc8e8d0b1a89ff4f8ULL;
 
 /// mov rax, imm64 ; ret
