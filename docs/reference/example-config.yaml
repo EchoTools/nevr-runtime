@@ -317,18 +317,22 @@ arena:
 # the rest. A plugin MUST NOT fail if its config entry is absent — it should
 # use sensible defaults.
 #
+# This list is the only source: a DLL in plugins/ that is not listed here is not loaded.
 # Each plugin entry has these keys:
-#   name      — DLL basename (without .dll), matched against plugins/*.dll
-#   enabled   — if false, the plugin DLL is skipped even if present on disk
-#   required  — if true, runtime calls FatalError when the plugin fails to load
-#   args      — plugin-specific arguments, passed as config JSON to InitEx
-#   target    — (optional) "server" | "client" | "both" (default: both);
-#               the loader skips server-only plugins on clients and vice-versa
+#   name      — the plugin's name (required); also the default file name
+#   file      — DLL file name inside plugins/ (default: name + ".dll")
+#   enabled   — if false, the plugin is not loaded (it is still reported at login)
+#   required  — if true and the plugin fails to load or initialise, a dedicated
+#               server stops with a fatal error; a client logs a warning and
+#               continues
+#   args      — plugin-specific arguments, flattened to dotted keys with string
+#               values and passed as a flat JSON object to InitEx
+#   target    — (optional) "server" | "client" | "both"; recorded with the entry
+#               but not acted on: the loader loads the plugin on both
 #
 # All keys except "name" are optional. Absent enabled defaults to true.
 # Absent required defaults to false.
 # Absent args means the plugin gets an empty JSON object.
-# Absent target means the plugin loads on both servers and clients.
 #
 # Reported at login (#60): the client login JSON carries a top-level
 # "nevr_plugins" array with one object per entry of this list, in list order:
@@ -338,7 +342,7 @@ arena:
 #   ver ("M.m.p"), api, caps                loaded
 # Args are never sent. Built by src/runtime/ext/plugin_manifest.cpp.
 #
-# Reader: gamepatches plugin_loader.cpp
+# Reader: src/runtime/ext/plugin_loader.cpp (entries parsed in src/core/nevr_config.cpp)
 # ---------------------------------------------------------------------------
 
 plugins:
