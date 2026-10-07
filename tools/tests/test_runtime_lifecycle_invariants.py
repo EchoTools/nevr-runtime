@@ -211,12 +211,21 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertEqual(len(attach_calls), len(captured_calls),
                          "a Hooking::Attach call's result is not captured in a variable")
 
+    def test_radpluginshutdown_guard_lives_in_the_one_detour_on_the_symbol_resolver(self):
+        # #93/#94: 0x1400EAEF0 takes one detour (CSysDLL_GetSymbol). The server-only
+        # RadPluginShutdown guard has to be inside that hook; a second detour on the
+        # same target never installs.
+        source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
+        body = extract_braced_function(source, "static void* CSysDLL_GetSymbolHook(")
+        self.assertRegex(body, r"g_isServer\s*&&[^)]*\"RadPluginShutdown\"")
+        self.assertIn('"Users"', body)
+        self.assertNotIn("GetProcAddressHook", strip_comments(source))
+        self.assertNotRegex(strip_comments(source), r"InstallBootDetour\(\s*&EchoVR::GetProcAddress")
+
     def test_only_reviewed_boot_hooks_are_optional(self):
         # A required hook that fails makes a server refuse to start (boot.cpp: g_bootHookFailed ->
-        # ServerFatal). EchoVR::GetProcAddress fails on every boot with MH_ERROR_ALREADY_CREATED
-        # (same target 0x1400EAEF0 as the CSysDLL_GetSymbol hook installed earlier), so making it
-        # required would stop every server. Moving a hook between the classes is a policy change
-        # and has to change this list.
+        # ServerFatal). Moving a hook between the classes is a policy change and has to change
+        # this list.
         source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
         body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
 
@@ -226,7 +235,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
                          "an InstallBootDetour call did not parse; the classification below would miss it")
         optional = {name for name, kind in calls if kind == "kOptional"}
         required = {name for name, kind in calls if kind == "kRequired"}
-        self.assertEqual(optional, {"EchoVR::GetProcAddress", "EchoVR::SetWindowTextA_"})
+        self.assertEqual(optional, {"EchoVR::SetWindowTextA_"})
         self.assertEqual(required, {
             "EchoVR::NetGameSwitchState",
             "EchoVR::LoadLocalConfig",

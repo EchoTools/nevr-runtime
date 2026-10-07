@@ -55,19 +55,6 @@ static BOOL SetWindowTextAHook(HWND hWnd, LPCSTR lpString) {
 }
 
 // ============================================================================
-// GetProcAddress hook — prevents server crash during platform DLL shutdown
-// ============================================================================
-
-static FARPROC GetProcAddressHook(HMODULE hModule, LPCSTR lpProcName) {
-  // Platform DLLs (pnsdemo/pnsovr) crash during RadPluginShutdown due to freed memory.
-  // Detect platform DLLs by checking for the "Users" export they all define.
-  if (g_isServer && strcmp(lpProcName, "RadPluginShutdown") == 0) {
-    if (EchoVR::GetProcAddress(hModule, "Users") != NULL) exit(0);
-  }
-  return EchoVR::GetProcAddress(hModule, lpProcName);
-}
-
-// ============================================================================
 // GameServerLib factory — provides IServerLib to the game via CSysDLL_GetSymbol
 // ============================================================================
 
@@ -96,7 +83,7 @@ static CSysDLL_GetSymbol_fn g_original_GetSymbol = nullptr;
 // one address, and MicDestroy/MicStart/MicStop onto a second — a MinHook
 // detour on either address cannot distinguish which export name the game
 // meant to resolve. This is the SAME address-collision trap already
-// documented below for RadPluginShutdown (N128): 0x1400eaef0 is the game's
+// handled below for RadPluginShutdown (N128): 0x1400eaef0 is the game's
 // one symbol-resolution function, and it's what NRadEngine::CPlatformService::
 // MicRead (echovr.exe 0x14060cad0) calls to resolve "MicRead" etc. on a
 // provider handle. So the mic exports are intercepted HERE, by name, against
@@ -136,6 +123,22 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
       logged = true;
     }
     return micFn;
+  }
+  // Platform DLLs (pnsdemo/pnsovr) crash in RadPluginShutdown on a server (freed
+  // memory). They are recognised by the "Users" export they all define. The game's
+  // unload path (0x14105ae30) null-checks the resolved symbol before calling it, so
+  // answering null skips the call and teardown carries on. (The guard used to live
+  // in a second detour on this same address that MinHook never installed, #93/#94;
+  // it ended the process with exit(0), which ExitProcessHook suppresses in server
+  // mode.)
+  if (g_isServer && symbol_name && strcmp(symbol_name, "RadPluginShutdown") == 0 &&
+      g_original_GetSymbol(dll_handle, "Users") != nullptr) {
+    static bool logged = false;
+    if (!logged) {
+      BootLogTee::TeeFprintf("[NEVR.PATCH] RadPluginShutdown of a platform DLL skipped (server)\n");
+      logged = true;
+    }
+    return nullptr;
   }
   void* result = g_original_GetSymbol(dll_handle, symbol_name);
 
@@ -401,20 +404,6 @@ static VOID InitializeAfterGameImageGuard() {
   // Required: redirects the game's HTTP(S) service endpoints.
   InstallBootDetour(&EchoVR::HttpConnect, reinterpret_cast<PVOID>(HttpConnectHook), "EchoVR::HttpConnect",
                     BootHookRequirement::kRequired);
-  // Optional, and it MUST stay optional: required would stop every server.
-  // N128: this detour FAILS with MH_ERROR_ALREADY_CREATED on every boot, and the
-  // reason is now KNOWN (N127 left it undetermined; the MH_STATUS capture added in
-  // N128 resolved it). EchoVR::GetProcAddress is 0x1400eaef0 — the SAME address
-  // already hooked above as CSysDLL_GetSymbol (the CSysDLL hook block, the pnsradgameserver ->
-  // in-process ServerLib redirect). CModule::GetProcAddress, CSysDLL_GetSymbol and
-  // EchoVR::GetProcAddress are one function; MinHook allows one detour per target,
-  // and CSysDLL_GetSymbol wins because it installs first. So this RadPluginShutdown
-  // crash-avoidance never installs. Empirically harmless — shutdowns are clean
-  // across every captured run without it. Proper fix (flagged, not done): fold the
-  // RadPluginShutdown check into CSysDLL_GetSymbolHook, since it already intercepts
-  // symbol lookups on this exact function.
-  InstallBootDetour(&EchoVR::GetProcAddress, reinterpret_cast<PVOID>(GetProcAddressHook), "EchoVR::GetProcAddress",
-                    BootHookRequirement::kOptional);
   // Optional: the hook only records the window handle in g_hWindow, and nothing
   // in the runtime reads g_hWindow.
   InstallBootDetour(&EchoVR::SetWindowTextA_, reinterpret_cast<PVOID>(SetWindowTextAHook), "EchoVR::SetWindowTextA_",

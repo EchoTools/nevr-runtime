@@ -27,6 +27,11 @@ Three checks, in descending order of how badly their absence hurt:
      separate private hook tables) means the second builds its trampoline out
      of the first's JMP stub.
 
+  4. DUPLICATE RUNTIME DETOUR — one address, two detours inside the runtime
+     itself (an EchoVR:: function pointer plus an inline VA, or two pointers
+     that name the same RVA). MinHook refuses the second with
+     MH_ERROR_ALREADY_CREATED, so its hook silently never runs (#93).
+
 KNOWN_* entries below are open bugs, recorded so they are visible and tracked.
 They do NOT pass silently — each prints a warning naming its ledger ID. Anything
 NOT on those lists is a hard failure. When a bug is fixed, delete its entry and
@@ -228,6 +233,31 @@ def gamepatches_detour_targets() -> dict:
     return require_nonempty(found, DETOUR_SCAN_ROOT, "detour targets")
 
 
+def runtime_detour_sites() -> dict:
+    """
+    VA -> sorted list of "file: label", for every detour the runtime installs on a
+    game address through an EchoVR:: function pointer (InstallBootDetour/PatchDetour
+    on &EchoVR::X) or an inline VA (g_GameBaseAddress + (0x14... - 0x140000000)
+    in a file that calls MH_CreateHook). PatchAddresses:: targets are covered by
+    gamepatches_detour_targets().
+    """
+    by_name = {name: va for va, name in live_function_pointers().items()}
+    found = {}
+    for path in scan_cpp(DETOUR_SCAN_ROOT):
+        rel = path.relative_to(REPO).as_posix()
+        text = path.read_text(errors="replace")
+        for m in re.finditer(r"\b(?:InstallBootDetour|PatchDetour)\s*\(\s*&\s*EchoVR::(\w+)", text):
+            va = by_name.get(m.group(1))
+            if va is not None:
+                found.setdefault(va, []).append(f"{rel}: EchoVR::{m.group(1)}")
+        if "MH_CreateHook" in text:
+            for m in re.finditer(
+                r"g_GameBaseAddress\)\s*\+\s*\(\s*(0x14[0-9A-Fa-f]+)\s*-\s*0x140000000\s*\)", text
+            ):
+                found.setdefault(norm_va(int(m.group(1), 16)), []).append(f"{rel}: inline {m.group(1)}")
+    return {va: sorted(sites) for va, sites in found.items()}
+
+
 def plugin_hooked_vas() -> dict:
     """VA -> (plugin, registry-constant) for address_registry constants used in plugins."""
     reg = registry_constants()
@@ -350,6 +380,18 @@ def check_double_detour(failures, warnings, seen):
             warnings.append(f"[{lid}] known double detour 0x{va:X}: {why}")
         else:
             failures.append("DOUBLE-DETOUR: " + desc)
+
+
+def check_runtime_duplicate_detours(failures):
+    """#93: two runtime detours on one target; the second never installs."""
+    sites = runtime_detour_sites()
+    for va in sorted(sites):
+        if len(sites[va]) > 1:
+            failures.append(
+                f"DUPLICATE-RUNTIME-DETOUR: 0x{va:X} is detoured more than once in "
+                f"{DETOUR_SCAN_ROOT}/ ({'; '.join(sites[va])}). MinHook allows one detour per "
+                f"target: the second fails with MH_ERROR_ALREADY_CREATED and never runs. "
+                f"Fold the second hook's logic into the first.")
 
 
 def check_identity(failures, warnings):
@@ -491,6 +533,7 @@ def main() -> int:
     try:
         check_self_collision(failures, warnings, seen_self)
         check_double_detour(failures, warnings, seen_double)
+        check_runtime_duplicate_detours(failures)
         check_identity(failures, notices)
         check_veh_ownership(failures, warnings)
         check_registers_observed(failures, notices, seen_self, seen_double,
