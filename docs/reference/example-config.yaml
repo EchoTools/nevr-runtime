@@ -310,12 +310,11 @@ arena:
 #   NvrPluginOnGameStateChange(ctx, old, new) — state transition hook (optional)
 #   NvrPluginShutdown()     — called at unload time (optional)
 #
-# InitEx contract (NvrPluginInitEx, API v2+): plugins that export
-# NvrPluginInitEx receive an opaque config pointer parsed from this section.
-# The runtime passes the plugin's entry as a nlohmann::json object; the
-# plugin is responsible for extracting the keys it understands and ignoring
-# the rest. A plugin MUST NOT fail if its config entry is absent — it should
-# use sensible defaults.
+# InitEx contract (NvrPluginInitEx, optional, API v4): a plugin that exports it
+# is called with (ctx, args_json), where args_json is the entry's `args` as a
+# flat JSON object string ("{}" when the entry has none, never null). The
+# plugin extracts the keys it understands, ignores the rest, and uses sensible
+# defaults for any key that is missing.
 #
 # This list is the only source: a DLL in plugins/ that is not listed here is not loaded.
 # Each plugin entry has these keys:
@@ -346,11 +345,10 @@ arena:
 # ---------------------------------------------------------------------------
 
 plugins:
-  # Example 1: A server-only plugin that is required for server operation.
+  # Example 1: A plugin a dedicated server must not run without (required).
   # - name: combat_mod
   #   enabled: true
   #   required: true
-  #   target: server
   #   args:
   #     damage_multiplier: 1.5
   #     friendly_fire: false
@@ -358,4 +356,3 @@ plugins:
   # Example 2: An optional plugin with no special config.
   # - name: audio_intercom
   #   enabled: true
-  #   target: both
