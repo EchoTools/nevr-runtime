@@ -53,6 +53,12 @@ social:
 # ---------------------------------------------------------------------------
 
 services:
+  # Dedicated server only: boot without services.socket_uri (no login bridge). Without this a server
+  # that has no socket_uri exits at start-up, because it could never log in. Set it only for offline
+  # boots (test rigs); such a server never logs in or registers.
+  # Default (absent): false
+  # allow_offline_server: true
+
   # Login / authentication service. Also serves as the shared fallback for
   # every other service key that is not explicitly set.
   # Default (absent): https://login.readyatdawn.com

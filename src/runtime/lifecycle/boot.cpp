@@ -1,4 +1,5 @@
 #include "runtime/lifecycle/boot.h"
+#include "runtime/lifecycle/bridge_policy.h"
 #include "runtime/lifecycle/cli.h"
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
@@ -482,14 +483,31 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // an unset required secret fails loud at this point in server mode.
   {
     const char* socketUri = NevrCfgGetFlat("nevr_socket_uri");
-    if (socketUri && socketUri[0] != '\0') {
-      SetWebSocketBridgeTarget(socketUri);
-      InstallWebSocketBridge();
-    } else {
-      Log(EchoVR::LogLevel::Warning,
-          "[NEVR.WS] no services.socket_uri (neither config.yaml nor an embedded build default) "
-          "— bridge NOT started; the game will talk to services directly and login injection "
-          "cannot fire");
+    const bool hasSocketUri = socketUri && socketUri[0] != '\0';
+    switch (BridgePolicy::Decide(hasSocketUri, g_isServer != FALSE,
+                                 BridgePolicy::IsTruthy(NevrCfgGetFlat("nevr_allow_offline_server")))) {
+      case BridgePolicy::Outcome::Start:
+        SetWebSocketBridgeTarget(socketUri);
+        InstallWebSocketBridge();
+        break;
+      case BridgePolicy::Outcome::SkipClient:
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.WS] no services.socket_uri (neither config.yaml nor an embedded build default) "
+            "— bridge NOT started; the game will talk to services directly and login injection "
+            "cannot fire");
+        break;
+      case BridgePolicy::Outcome::SkipOfflineServer:
+        Log(EchoVR::LogLevel::Warning,
+            "[NEVR.WS] no services.socket_uri — bridge NOT started; services.allow_offline_server is "
+            "set, so this server boots offline and will never log in or register");
+        break;
+      case BridgePolicy::Outcome::RefuseServer:
+        // A server without the bridge never sends a LoginRequest: it idles silently (#16).
+        ServerFatal(
+            "no services.socket_uri in config.yaml — a dedicated server cannot log in without the "
+            "login bridge. Set services.socket_uri, or services.allow_offline_server: true for an "
+            "offline boot");
+        break;
     }
   }
 
