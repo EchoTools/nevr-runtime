@@ -1,6 +1,8 @@
 #include "runtime/server/callback_unregistration.h"
 
+#include <algorithm>
 #include <array>
+#include <iterator>
 
 namespace GameServer {
 
@@ -18,8 +20,12 @@ struct NamedHandle {
   uint16_t handle;
 };
 
-std::array<NamedHandle, kBroadcasterCallbackCount> BroadcasterHandles(const CallbackRegistry& callbacks) {
-  return {{
+using HandleTable = std::array<NamedHandle, kBroadcasterCallbackCount>;
+
+HandleTable BroadcasterHandles(const CallbackRegistry& callbacks) {
+  // A plain array so the row count is checked at compile time: a missing row is an error here,
+  // not a silently zero-filled tail entry with a null name.
+  const NamedHandle rows[] = {
       {"sessionStart", callbacks.sessionStart},
       {"sessionError", callbacks.sessionError},
       {"saveLoadout", callbacks.saveLoadout},
@@ -35,7 +41,12 @@ std::array<NamedHandle, kBroadcasterCallbackCount> BroadcasterHandles(const Call
       {"newUnlocks", callbacks.newUnlocks},
       {"reliableStatUpdate", callbacks.reliableStatUpdate},
       {"reliableTeamStatUpdate", callbacks.reliableTeamStatUpdate},
-  }};
+  };
+  static_assert(sizeof(rows) / sizeof(rows[0]) == kBroadcasterCallbackCount,
+                "one row per UDP broadcaster callback");
+  HandleTable table{};
+  std::copy(std::begin(rows), std::end(rows), table.begin());
+  return table;
 }
 
 }  // namespace
@@ -43,7 +54,7 @@ std::array<NamedHandle, kBroadcasterCallbackCount> BroadcasterHandles(const Call
 size_t CountRegisteredBroadcasterCallbacks(const CallbackRegistry& callbacks) {
   size_t registered = 0;
   for (const NamedHandle& entry : BroadcasterHandles(callbacks)) {
-    if (entry.handle != 0) ++registered;
+    if (IsLiveBroadcasterHandle(entry.handle)) ++registered;
   }
   return registered;
 }
@@ -51,7 +62,7 @@ size_t CountRegisteredBroadcasterCallbacks(const CallbackRegistry& callbacks) {
 std::string MissingBroadcasterCallbacks(const CallbackRegistry& callbacks) {
   std::string missing;
   for (const NamedHandle& entry : BroadcasterHandles(callbacks)) {
-    if (entry.handle != 0) continue;
+    if (IsLiveBroadcasterHandle(entry.handle)) continue;
     if (!missing.empty()) missing += ", ";
     missing += entry.name;
   }
@@ -64,7 +75,7 @@ size_t UnregisterBroadcasterCallbacks(EchoVR::Broadcaster* liveOwner,
   size_t removed = 0;
   if (liveOwner != nullptr && liveOwner == callbacks.broadcasterOwner && unlisten) {
     for (const NamedHandle& entry : BroadcasterHandles(callbacks)) {
-      if (entry.handle != 0) {
+      if (IsLiveBroadcasterHandle(entry.handle)) {
         unlisten(liveOwner, entry.handle);
         ++removed;
       }

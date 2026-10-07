@@ -926,7 +926,7 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   if (!missing.empty()) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.GAMESERVER] broadcaster callbacks NOT registered: %s — those message types will not reach the "
-        "server (the lobby has no broadcaster, or the game's listen call failed)",
+        "server (the lobby has no broadcaster, or the game's listener pool had no free slot)",
         missing.c_str());
   }
 
