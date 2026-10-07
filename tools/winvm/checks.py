@@ -154,6 +154,8 @@ _HOOK_RESULT_FAILED = re.compile(r"\bhook\s+name=(?P<name>\S+)\s+result=FAILED\b
 _HOOK_NAME = re.compile(r"\bname=(?P<value>\S+)", re.IGNORECASE)
 _HOOK_ERROR = re.compile(r"\b(?:reason|status)=(?P<value>\S+)", re.IGNORECASE)
 _HOOK_SUMMARY = re.compile(r"hooks installed: (?P<ok>\d+) succeeded, (?P<failed>\d+) failed", re.IGNORECASE)
+_BOOT_HOOK_NOT_INSTALLED = re.compile(
+    r"\b(?P<kind>required|optional) boot hook not installed name=(?P<name>[^\s;]+)", re.IGNORECASE)
 _OCULUS_STATUS = re.compile(
     r"Oculus Platform SDK blocking hooks: LoadLibraryW=(?P<w>ok|FAILED) "
     r"LoadLibraryExW=(?P<ex>ok|FAILED)\s+\((?P<detail>.*)\)", re.IGNORECASE)
@@ -191,9 +193,7 @@ def _known_hook_failure(name: str, tail: str, full_log: str) -> str | None:
     if error_match is None or error_match["value"] != "MH_ERROR_ALREADY_CREATED":
         return None
     if name == "EchoVR::GetProcAddress":
-        if "N126/N128" in tail:
-            return _KNOWN_HOOK_FAILURES[name]
-        return None
+        return _KNOWN_HOOK_FAILURES[name]
     if name in {"LoadLibraryW", "LoadLibraryExW"} and _is_headless_server(full_log):
         return _KNOWN_HOOK_FAILURES[name]
     return None
@@ -210,6 +210,19 @@ def check_hooks(log: str) -> list[Result]:
     for line in text.splitlines():
         if re.search(r"\bDIAG\b.*\bhook\b.*\b(?:failed|skipped)\b", line, re.IGNORECASE):
             diagnostic.append(line.strip())
+            classified.add(line)
+            continue
+
+        not_installed = _BOOT_HOOK_NOT_INSTALLED.search(line)
+        if not_installed:
+            # The runtime's own verdict on a boot hook (initialize.cpp NoteBootHookResult). A required
+            # one fails the boot; an optional one is a warning unless the hook failure line before
+            # it already explained it as a known collision.
+            name = not_installed["name"]
+            if not_installed["kind"].lower() == "required":
+                required.append(name)
+            elif name not in _KNOWN_HOOK_FAILURES:
+                diagnostic.append(line.strip())
             classified.add(line)
             continue
 
