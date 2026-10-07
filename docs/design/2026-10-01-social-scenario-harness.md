@@ -160,12 +160,11 @@ Only the message names, fields, the entry point and the expected lines differ.
   party and roster state machines in `src/runtime/tests/test_social_facade.cpp`
   for a loop that needs no game.
 
-## State as of this document
+## State when this document was written
 
 - The invite fix (first-match override plus event trace,
   `src/runtime/patch/party_invite_gate.cpp`, installed from the social
-  accessor) has never been exercised in a client run. The last client run
-  predates it.
+  accessor) had not been exercised in a client run; the first slice below did that.
 - Facade: `src/runtime/patch/social_facade_object.cpp`. Party state machine and
   wire builders: `src/runtime/compat/social_party.h`. Roster:
   `src/runtime/compat/social_roster.h`.
