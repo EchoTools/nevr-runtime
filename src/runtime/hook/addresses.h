@@ -535,7 +535,7 @@ constexpr uintptr_t CJSON_GET_FLOAT = 0x5FCA60;
 // XPID Provider String Patches (PSN- → DSC-)
 // ============================================================================
 
-/// Platform prefix string table entries for PSN (provider_id 1 in Nakama enum).
+/// Platform prefix string table entries for PSN (provider 2 in both the game and Nakama numbering).
 /// Patched to "DSC" / "DSC-" so the game formats/parses Discord-based XPIDs.
 /// All three are in .rdata — ProcessMemcpy handles VirtualProtect.
 ///

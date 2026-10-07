@@ -35,18 +35,18 @@ func rvaToFile(t *testing.T, f *pe.File, rva uint32) uint32 {
 //	Offset 0x16D713c (game provider 3): "XBX\0"  (4 bytes)
 //	Offset 0x16D7140 (game provider 4): "OVR-ORG\0" (8 bytes)
 //
-// The game's internal provider numbering differs from the Nakama wire enum:
+// The game's provider numbering and Nakama's PlatformCode are the same
+// 1-indexed enum (code 2 reads PSN in the binary, DSC once patched):
 //
-//	Game 1=STM, 2=PSN, 3=XBX, 4=OVR-ORG, 5=OVR, 6=BOT, 7=DMO
-//	Nakama: 0=STM, 1=DSC, 2=XBX, 3=OVR_ORG, 4=OVR, 5=BOT, 6=DMO
+//	1=STM, 2=PSN/DSC, 3=XBX, 4=OVR-ORG, 5=OVR, 6=BOT, 7=DMO
 //
 // The Nakama server echoes PlatformCode from LoginRequest into LoginSuccess
 // without remapping (evr_pipeline_login.go:185). The game interprets the
 // echoed value through its own GetProviderPrefix switch (echovr.exe fcn.14060d640,
-// 17 distinct callers), so the WIRE value must match the GAME's numbering.
+// 17 distinct callers), so the WIRE value must be the game's code for the provider.
 //
-// Regression test for 2026-08-04: OVR_ORG was sent as wire value 3 (Nakama
-// enum), which the game interpreted as XBX (game provider 3).
+// Regression test for 2026-08-04: OVR_ORG was sent as wire value 3, which the
+// game interpreted as XBX (provider 3).
 func TestProviderStringTable_OvrOrg(t *testing.T) {
 	gameDir := getGameDir()
 	exePath := filepath.Join(gameDir, "bin", "win10", "echovr.exe")

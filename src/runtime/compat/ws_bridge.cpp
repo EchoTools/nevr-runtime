@@ -623,8 +623,9 @@ static void AppendLE64(std::string& buf, uint64_t val) {
 }
 
 // Platform codes: Nakama's PlatformCode and the game's own provider numbering are the same
-// 1-indexed enum: STM=1, DSC=2, XBX=3, OVR_ORG=4, OVR=5, BOT=6, DMO=7. Anything else yields
-// "UNK" (the game's own fallback prefix for an unknown provider is "???").
+// 1-indexed enum: STM=1, DSC=2, XBX=3, OVR_ORG=4, OVR=5, BOT=6, DMO=7. Code 2 is "PSN" in the
+// game's string table and reads "DSC" only after PatchDscProvider rewrites it. Anything else
+// yields "UNK" (the game's own fallback prefix for an unknown provider is "???").
 static const char* PlatformPrefix(uint64_t platformCode) {
   switch (platformCode) {
     case 1: return "STM";
@@ -649,14 +650,14 @@ static const char* PlatformPrefix(uint64_t platformCode) {
 // game's own CNSUser (the login-state patch below), because the game then names itself with
 // that platform in every later request (LobbyPlayerSessionsRequest, ...) and Nakama looks the
 // requester up in the match under the platform the LoginRequest carried. Measured 2026-09-30:
-// a token-auth client logged in as platform 6 (DMO) while the game asked for its player
+// a token-auth client logged in as platform 6 (BOT in the 1-indexed enum; -noovr sent it) while the game asked for its player
 // sessions as OVR-ORG, and Nakama answered "requesting player not found in match:
 // OVR-ORG-<id>" (the host never accepted the player, the game ended at "Server connection
 // failed"). Platform 4 is what every URL-credential login already sent.
 static constexpr uint64_t kBridgeLoginPlatform = 4;  // OVR_ORG (game numbering)
 
 // Pure function — testable without config or globals. The arguments no longer influence the
-// result: -noovr (DMO, 6) and the token-auth default (DSC, 1) produced an identity the game
+// result: -noovr (6) and the token-auth default (1) produced an identity the game
 // itself does not use.
 static uint64_t SelectPlatformCode(bool /*hasUrlCredentials*/, bool /*noOvr*/) {
   return kBridgeLoginPlatform;

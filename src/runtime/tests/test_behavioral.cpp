@@ -1066,9 +1066,8 @@ TEST(WsBridgeLoginRequest, HasExpectedHeaderAndPayloadLength) {
 }
 
 // PlatformCode=4 (OVR_ORG in game numbering) at wire offset 40.
-// Regression test for 2026-08-04: PlatformCode was sent as 3 (Nakama enum
-// OVR_ORG), but the game interprets wire values through its own numbering
-// where OVR_ORG=4. The server echoes the value unchanged into LoginSuccess
+// Regression test for 2026-08-04: PlatformCode was sent as 3, which the game
+// resolves to XBX; OVR_ORG is 4 in the game's and Nakama's shared numbering. The server echoes the value unchanged into LoginSuccess
 // (evr_pipeline_login.go:185), and the game resolves it through
 // GetProviderPrefix (echovr.exe fcn.14060d640, switch case 4→\"OVR-ORG\").
 TEST(WsBridgeLoginRequest, PlatformCode4AtWireOffset40) {
@@ -1213,7 +1212,7 @@ TEST(WsBridgeRemoteBearer, OnlyTheWsPathReplacesTheBearer) {
 }
 
 // SelectPlatformCode: the bridge always logs in as platform 4 (OVR_ORG), the provider it forces
-// into the game's own CNSUser. A login as platform 6 (DMO, -noovr) made Nakama answer the game's
+// into the game's own CNSUser. A login as platform 6 (-noovr) made Nakama answer the game's
 // later LobbyPlayerSessionsRequest (sent as OVR-ORG) with "requesting player not found in
 // match", so the game never reached a lobby host.
 TEST(WsBridgeSelectPlatform, AlwaysOvrOrgToMatchTheGamesOwnIdentity) {
