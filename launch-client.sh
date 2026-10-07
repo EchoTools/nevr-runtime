@@ -6,6 +6,20 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+# The game install (echovr/) exists only in the main checkout, so it is resolved independent of
+# where this script lives: NEVR_GAME_ROOT if set, else the main checkout of this repository
+# (the parent of the git common dir, the same from a worktree), else this directory.
+resolve_game_root() {
+  if [[ -n "${NEVR_GAME_ROOT:-}" ]]; then printf '%s\n' "$NEVR_GAME_ROOT"; return; fi
+  local common
+  if common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+    dirname "$common"
+  else
+    pwd
+  fi
+}
+GAME_ROOT=$(resolve_game_root)
+
 # --dll PATH deploys that BugSplat64.dll instead of the release build (the scenario runner passes
 # the mingw-scenario build; see tools/scenario/run_scenario.py). --config PATH starts the game with
 # `-config PATH` (a JSON file; the runtime reads config.yaml from the same directory), so a run can
@@ -16,23 +30,38 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dll) DLL="${2:?--dll needs a path}"; shift 2 ;;
     --config) CONFIG="${2:?--config needs a path}"; shift 2 ;;
-    -h|--help) echo "usage: launch-client.sh [--dll PATH] [--config PATH]  (default $DLL)"; exit 0 ;;
-    *) echo "unknown argument: $1 (usage: launch-client.sh [--dll PATH] [--config PATH])" >&2; exit 2 ;;
+    --print-game-root) echo "$GAME_ROOT"; exit 0 ;;
+    -h|--help) echo "usage: launch-client.sh [--dll PATH] [--config PATH] [--print-game-root]  (default $DLL)"; exit 0 ;;
+    *) echo "unknown argument: $1 (usage: launch-client.sh [--dll PATH] [--config PATH] [--print-game-root])" >&2; exit 2 ;;
   esac
 done
 [[ -f "$DLL" ]] || { echo "ERROR: $DLL does not exist; build it first" >&2; exit 2; }
 
-GAME_DIR=echovr/bin/win10
-LOCAL_DIR=echovr/_local
-SCRATCH=/var/tmp/work-nevr-runtime/client-run-$(date +%Y%m%dT%H%M%S)
-LOGDIR="$HOME/src/nevr-runtime/echovr/.wineprefix/drive_c/users/andrew/AppData/Local/EchoVR/logs"
+GAME_DIR="$GAME_ROOT/echovr/bin/win10"
+LOCAL_DIR="$GAME_ROOT/echovr/_local"
+[[ -d "$GAME_DIR" ]] || { echo "ERROR: no game install at $GAME_DIR (set NEVR_GAME_ROOT to the checkout that has echovr/)" >&2; exit 2; }
+SCRATCH="${NEVR_RUN_SCRATCH_ROOT:-/var/tmp/work-nevr-runtime}/client-run-$(date +%Y%m%dT%H%M%S)"
+WINEPREFIX="$GAME_ROOT/echovr/.wineprefix"
+LOGDIR="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/EchoVR/logs"
+
+# One client at a time: a second run would save the first run's test DLL as its "original" and
+# restore that. The lock covers the whole run (including the restore); the pgrep covers a game
+# started some other way. fd 9 is closed for the children so a leftover wineserver cannot hold it.
+LOCK="${NEVR_LAUNCH_LOCK:-/var/tmp/work-nevr-runtime/launch-client.lock}"
+mkdir -p "$(dirname "$LOCK")"
+exec 9>"$LOCK"
+flock -n 9 || { echo "ERROR: another launch-client.sh run holds $LOCK" >&2; exit 4; }
+if running=$(pgrep -u "$(id -u)" -x echovr.exe); then
+  echo "ERROR: echovr.exe is already running (pid ${running//$'\n'/ }); stop it first" >&2
+  exit 4
+fi
 
 # Nested display only: never the owner's desktop. Unset every Wayland/session
 # variable so nothing can fall back to it (gamescope did, see AGENTS.md).
 pgrep -f 'Xephyr :101' >/dev/null || { echo "ERROR: Xephyr :101 is not running" >&2; exit 2; }
 unset WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_SESSION_TYPE
 export DISPLAY=:101
-export WINEPREFIX="$HOME/src/nevr-runtime/echovr/.wineprefix"
+export WINEPREFIX
 
 # Pristine state. A run is only meaningful against known files, so any drift aborts
 # before anything is deployed. The runtime reads config.yaml and ignores config.json;
@@ -73,7 +102,7 @@ restore() {
   else
     echo "ERROR: BugSplat64.dll restore failed; original is $SCRATCH/BugSplat64.dll.orig" >&2
   fi
-  wineserver -k
+  wineserver -k 9>&-
 }
 # INT/TERM become a normal exit so the EXIT trap (restore) always runs.
 trap 'exit 143' INT TERM
@@ -89,11 +118,11 @@ echo "=== Console log: $CONSOLE_LOG ==="
 
 # Evidence that the game really is on the nested display, read from /proc.
 (
-  sleep 12
+  sleep "${NEVR_EVIDENCE_DELAY:-12}"
   for pid in $(pgrep -x echovr.exe); do
     echo "=== evidence: pid $pid $(tr '\0' '\n' < "/proc/$pid/environ" | grep -E '^(DISPLAY|WAYLAND_DISPLAY)=' | tr '\n' ' ')==="
   done
-) &
+) 9>&- &
 
 start=$(date +%s)
 set +e
@@ -107,7 +136,7 @@ if [[ -n "$CONFIG" ]]; then
   game_args+=(-config "Z:${CONFIG//\//\\}")
   echo "=== game config: $CONFIG (config.yaml from its directory) ==="
 fi
-(cd "$GAME_DIR" && wine ./echovr.exe "${game_args[@]}") > "$CONSOLE_LOG" 2>&1
+(cd "$GAME_DIR" && wine ./echovr.exe "${game_args[@]}") > "$CONSOLE_LOG" 2>&1 9>&-
 exit_code=$?
 set -e
 wait
