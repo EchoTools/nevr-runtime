@@ -1,7 +1,8 @@
 # ADR 0003: Quest networking shares the PCVR protocol core and differs only in adapters
 
-Status: accepted. The login-profile builder and the redirect policy are shared today
-(`src/runtime/compat/login_profile.{h,cpp}`, `src/runtime/lifecycle/service_redirect.{h,cpp}`).
+Status: accepted. The login-profile builder, the EVR frame codec and the redirect policy are
+shared today (`src/runtime/compat/login_profile.{h,cpp}`, `src/runtime/compat/evr_codec.{h,cpp}`,
+`src/runtime/lifecycle/service_redirect.{h,cpp}`).
 The rest is not implemented; the work is tracked in #158 and the test regime is ADR 0004.
 
 ## Outcome
@@ -32,7 +33,7 @@ ignores the result of its last `mprotect` (tranche 1e of #158).
 ```text
            shared source, compiled for both targets
  config key map/defaults | URL policy | login profile JSON
- EVR frame codec (later) | social state | EVR session routing
+  EVR frame codec         | social state | EVR session routing
                          ^
                          | typed inputs and events, no game pointers
              +-----------+-----------+
@@ -57,9 +58,12 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    depends on a game `config.json`, and a test shows any such file is ignored. Quest file
    discovery and precedence need their own measured design before use.
 2. **Identity and wire.** `login_profile.{h,cpp}` builds the login profile with
-   `nlohmann::json` and is compiled for Windows and Android. Windows EVR frame assembly stays
-   in `src/runtime/compat/ws_bridge.cpp` until a reviewed serializer and a server-parser round
-   trip replace it; Quest does not copy that assembly. The platform numbering the bridge sends
+   `nlohmann::json` and is compiled for Windows and Android. `src/runtime/compat/evr_codec.{h,cpp}` holds
+   the EVR frame parse and build functions, the LoginRequest payload layout
+   (`[UUID 16][platform 8][account 8][profile JSON][NUL]`), the bridge login platform
+   (`kBridgeLoginPlatform`, 4) and the bearer-replacing-path test. It has no Windows, Winsock or
+   logging dependency; `ws_bridge.cpp` and `src/quest` compile the same file, and Quest does not
+   copy that assembly. A reviewed serializer and a server-parser round trip remain open. The platform numbering the bridge sends
    is the server's wire enum; Quest identity values need binary or API evidence.
 3. **Session routing.** A pure state machine takes game-side and remote open/frame/close events
    and returns send, close and log actions. Connections have explicit identities so a
