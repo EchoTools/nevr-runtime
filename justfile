@@ -480,13 +480,12 @@ verify:
     # whitespace, `/`, or end of line. Use this spelling, not the obvious one.
     #   ^-anchored (file content):  ^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)
     #   :-anchored (grep -n output): :[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)
-    # N34/N103: src/gameserver/ was DELETED on 2026-07-28 after its one piece of
-    # stranded work (N48's fail-fast) was recovered as N102. This guard remains
-    # so the tree cannot be recreated and wired: a second gameserver copy is how
-    # N48 shipped half-implemented for five weeks. CMake would now hard-fail on a
-    # missing directory, but this names the reason instead of the symptom.
+    # N34/N103: src/gameserver/ does not exist. This guard keeps the tree from
+    # being recreated and wired: a second gameserver copy is how N48 shipped
+    # half-implemented for five weeks. CMake would hard-fail on a missing
+    # directory, but this names the reason instead of the symptom.
     if grep -Pn '^\s*add_subdirectory\s*\(\s*src/gameserver\s*\)' CMakeLists.txt; then
-        echo "verify: FAIL — src/gameserver/ was removed (N103). The compiled path is src/runtime/server/." >&2
+        echo "verify: FAIL — src/gameserver/ must not come back (N103). The compiled path is src/runtime/server/." >&2
         echo "Re-adding that tree recreates the two-copy split that let N48 ship half-implemented. Route the change to src/runtime/server/." >&2
         exit 1
     fi
@@ -1498,9 +1497,9 @@ verify:
     python3 tools/verify_doc_paths.py
     # N92/N105: exactly one ws_bridge. Two divergent copies existed for months —
     # only the module ran, while N61's matchmaker fix landed in the gamepatches
-    # copy that never did. The module tree was DELETED 2026-07-28 once its last
-    # unique symbol (WsBridge_Shutdown) was brought in-process as
-    # StopWebSocketBridgeListener. This guard keeps it from coming back.
+    # copy that never did. There is no module tree: its last unique symbol
+    # (WsBridge_Shutdown) lives in-process as StopWebSocketBridgeListener. This
+    # guard keeps the module build from coming back.
     N92A_RC=0; grep -qE '^\s*add_subdirectory\(src/modules/ws-bridge\)' CMakeLists.txt || N92A_RC=$?
     sensor_stage1 "N92 ws-bridge module build" "CMakeLists.txt" "$N92A_RC"
     if [ "$N92A_RC" -eq 0 ]; then
@@ -1613,10 +1612,6 @@ verify:
     # its own explanatory comment — which quotes the very string it forbids — so
     # it failed on a correct tree. Comment lines are stripped; the pattern is
     # anchored to the PatchDetour signature.
-    # N100 sensor removed 2026-08-02: its subject (BUGS.md) is being purged from
-    # the public repo. The evidence-rank rule it enforced lives on in
-    # docs/standards/verification.md; the N-ledger entries it checked are now
-    # git history or migrated to ADRs.
     # --- N99: -server shall apply the game's own headless mask --------------
     # `-headless` is a NATIVE echovr.exe token. Its whole effect in the binary
     # is one instruction (0x140504566, `and dword [rbx+0x1D4], 0xFFFEFEFE`),
@@ -1873,10 +1868,6 @@ verify:
     # included: they are not ordinary prologue rewrites.
     python3 tools/verify_mode_patch_ground_truth.py
     echo "verify: OK ({{ preset }})"
-
-# ServerDB token-auth BAC smoke test removed 2026-08-02: the test script
-# (tests/token-auth-smoke.sh) was deleted — superseded by just verify's
-# test-auth-unit and the auth ground-truth tests.
 
 # Generate combat override files from echomod build output
 generate-combat-overrides build_dir:

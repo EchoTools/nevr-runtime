@@ -117,9 +117,8 @@ constexpr size_t HEADLESS_RENDERER_SIZE = 2;
 constexpr uintptr_t HEADLESS_EFFECTS = 0x62CA91;
 constexpr size_t HEADLESS_EFFECTS_SIZE = 2;
 
-/// HEADLESS_DELTATIME (0xCF46D) removed 2026-07-27. Two independent reasons, and
-/// the SECOND is the decisive one — an earlier version of this note gave only the
-/// first, which understates how wrong restoring it would be.
+/// HEADLESS_DELTATIME (0xCF46D) is deliberately NOT patched. Two independent
+/// reasons, and the SECOND is the decisive one.
 ///
 /// (1) It only matters under fixed timestep, and `-timestep`/`-fixedtimestep` are
 ///     deprecated-and-ignored in this build (boot.cpp logs "is deprecated and

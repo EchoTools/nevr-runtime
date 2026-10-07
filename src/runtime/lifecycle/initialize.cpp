@@ -12,7 +12,6 @@
 #include "runtime/hook/patching.h"
 #include "runtime/patch/mode_patches.h"
 // platform_compat lives in src/modules/platform-compat (loaded in boot.cpp).
-// The gamepatches copy was deleted 2026-07-26: never compiled, zero call sites.
 #include "runtime/patch/resource_override.h"
 #include "runtime/lifecycle/state_machine.h"
 #include "runtime/compat/ws_bridge.h"

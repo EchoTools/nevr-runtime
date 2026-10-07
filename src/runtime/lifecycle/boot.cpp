@@ -447,11 +447,10 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     // Issue #63: co-op AI bots stand still on community servers; log what gates them.
     CoopAiTrace::Install(reinterpret_cast<std::uintptr_t>(EchoVR::g_GameBaseAddress));
 
-    // (PatchServerFramePacing removed 2026-07-29 — N113. It blind-wrote 0xC3 to
-    // CPrecisionSleep::BusyWait with no address validation and no original-byte
-    // save, duplicating the canonical patch in patch/binary_bug_fixes.cpp which
-    // does both. Two writers to an address whose ORIGINAL byte a shutdown
-    // restore depends on; safe only because Init happened to run first.)
+    // Server frame pacing (CPrecisionSleep::BusyWait) is patched only by
+    // patch/binary_bug_fixes.cpp, which validates the address and saves the
+    // original byte. A second writer here would race the shutdown restore that
+    // depends on that saved byte.
   }
 
   // N131: cosmetics are client-only — a headless server has nothing to render and

@@ -30,7 +30,7 @@ ROOTS = ("src/", "plugins/", "tools/", "docs/", "extern/", "gen/", "tests/", "cm
 
 # Paths that are deliberately referenced but shall not exist on disk.
 ALLOWED_ABSENT = {
-    # N34/N103: deleted 2026-07-28. Still cited by point-in-time records that
+    # N34/N103: no longer in the tree. Still cited by point-in-time records that
     # correctly describe the tree as it was.
     "src/gameserver",
     "src/gameserver/gameserver.cpp",

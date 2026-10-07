@@ -103,9 +103,9 @@ Optional DLLs loaded by the runtime from a `plugins/` subdirectory next to the g
 | `log-filter`         | `log_filter.dll`         | Structured log filtering, suppression, file rotation |
 | `example`            | `example.dll`            | Reference implementation for new plugin authors      |
 
-`broadcaster-bridge` moved to `nevr-runtime-plugins` on 2026-07-26 — this repo is
-public and it is a broadcaster injection tool. `anim-debugger` moved there on
-2026-07-27 for the same reason: it is RE instrumentation that hooks three engine
+`broadcaster-bridge` lives in `nevr-runtime-plugins`, not here — this repo is
+public and it is a broadcaster injection tool. `anim-debugger` lives there for the
+same reason: it is RE instrumentation that hooks three engine
 animation entry points and publishes a map of animation internals, and it does
 nothing on a dedicated server. `log_filter.dll` is superseded by the built-in
 filter and the loader refuses to load it (N89). Other plugins (audio-intercom,
@@ -116,7 +116,7 @@ Plugins have their own shared headers in `plugins/common/include/` (`nevr_common
 
 ### Runtime-loaded modules
 
-`platform_compat` and `token_auth` are **statically linked** into `BugSplat64.dll` (2026-08-02). There are no separate module DLLs — everything ships in one file. The `module_loader` infrastructure (`RegisterStaticModule`, `TickModules`, `NotifyModulesStateChange`) remains for any future modules.
+`platform_compat` and `token_auth` are **statically linked** into `BugSplat64.dll`. There are no separate module DLLs — everything ships in one file. The `module_loader` infrastructure (`RegisterStaticModule`, `TickModules`, `NotifyModulesStateChange`) remains for any future modules.
 
 | Module | Output | Purpose |
 | ------ | ------ | ------- |
@@ -149,7 +149,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 
 - **`src/legacy-compat/`** — two forwarding headers, existing solely because
   `src/legacy/gamepatches` is frozen yet resolves `common/hooking.h` and
-  `common/nevr_plugin_interface.h` out of the pre-2026-07-29 shared directory.
+  `common/nevr_plugin_interface.h` out of the old shared directory.
   Scoped to that
   one target. Delete with `src/legacy/`.
 
@@ -175,7 +175,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
   `CMakeLists.txt`, `just launcher`).
   The older PE-conversion launcher is gone — Wine could not load the game DLL at
   the required base address.
-- Android/Quest standalone target lives in `src/quest/` (separate CMake project). The former src/standalone/ stub was deleted 2026-08-02.
+- Android/Quest standalone target lives in `src/quest/` (separate CMake project).
 - **`src/legacy/`** — Frozen v1 implementations (self-contained, do not modify)
 
 ## Conventions

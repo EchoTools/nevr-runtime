@@ -379,9 +379,9 @@ static LogFilterConfig MakeDefaultConfig() {
         //       battle-pass/store cosmetics, allocator stats) accounted for the
         //       remainder.
 
-        // REMOVED 2026-07-26 (N77/N78): "ExitProcess(".
-        // It was the #1 noise source (97.5% of sustained volume) — but it is a
-        // NEVR-emitted line, and matching it by substring also deleted
+        // Not suppressed (N77/N78): "ExitProcess(".
+        // It is the #1 noise source (97.5% of sustained volume) — but it is a
+        // NEVR-emitted line, and matching it by substring would also delete
         // "[NEVR.PATCH] ExitProcess(%u) called" (crash_recovery.cpp:140), the report
         // of a REAL, allowed process exit. A rule that cannot tell a suppressed exit
         // from a real one is not a noise rule. NEVR lines are now exempt from these
@@ -405,11 +405,11 @@ static LogFilterConfig MakeDefaultConfig() {
         "Loading global archives",
         "Loading game archives",
         "Loading archive 0x",
-        // REMOVED 2026-07-26 (N77): "Finished initializing engine".
-        // This string is the witness quoted in the N7, N8 and N10 close records as
-        // the proof that headless boot advanced past each render gate. It fires ONCE
-        // per boot, so suppressing it saved nothing measurable and destroyed the
-        // evidence the next headless regression would be diagnosed with.
+        // Not suppressed (N77): "Finished initializing engine".
+        // This string is the witness that headless boot advanced past each render
+        // gate (N7, N8, N10). It fires ONCE per boot, so suppressing it would save
+        // nothing measurable and destroy the evidence the next headless regression
+        // is diagnosed with.
         "Initializing enumerate thread",
         "Forking enumerate thread",
 

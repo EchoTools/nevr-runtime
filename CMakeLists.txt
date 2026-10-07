@@ -211,14 +211,11 @@ add_subdirectory(src/legacy/gamepatches)
 # Scoped to the target so nothing else in the tree can resolve the old spelling.
 # Delete src/legacy-compat/ and this line together when legacy is retired.
 target_include_directories(gamepatcheslegacy PRIVATE "${CMAKE_SOURCE_DIR}/src/legacy-compat")
-# src/pnsrad and its src/NRadEngine symlink were removed 2026-07-27. It was an
-# OBJECT library that NOTHING consumed — 28 objects compiled into no artifact —
-# and its approach (a replacement pnsrad.dll whose GetLoggedInUser reads
-# nevr_discord_id from config) is superseded by the shipping one: ws_bridge pokes
-# the game's ORIGINAL pnsrad.dll at the same offsets (+0x88 account_id,
-# +0x90 login state, +0x9c flags), and those layouts are documented there.
-# It was also the only consumer of a symlink into a PRIVATE repo, which broke
-# every clean clone. The pure-RE copy lives in echovr-reconstruction.
+# There is no replacement pnsrad.dll target: ws_bridge pokes the game's ORIGINAL
+# pnsrad.dll at fixed offsets (+0x88 account_id, +0x90 login state, +0x9c flags),
+# and those layouts are documented there. The pure-RE copy of pnsrad lives in
+# echovr-reconstruction; nothing here may symlink into a private repo, which
+# breaks every clean clone.
 add_subdirectory(src/legacy/gameserver)
 # telemetryagent lives in nevr-runtime-plugins (extras/ moved there 2026-07-27) —
 # needs a protobuf-lite refactor before it could be reintegrated here
