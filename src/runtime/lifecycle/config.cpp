@@ -442,7 +442,6 @@ static const char* ResolveLoginOverrideBridgeUrl(void*, uint16_t bridgePort) {
 VOID ArmServiceRedirects() { s_serviceRedirectsArmed.store(true, std::memory_order_release); }
 
 static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
-  if (result == NULL || keyName == NULL) return result;
   // Issue #21: this used to be `if (g_earlyConfigPtr == NULL) return result;`,
   // which made every redirect depend on a config.json existing, although both
   // targets come from config.yaml (N133 S3/S5b). That guard ALSO did a second,
@@ -452,8 +451,6 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
   // singleton — ran on the engine's JsonValueAsString calls before the
   // bootstrap. ArmServiceRedirects() is called at exactly that point, so a
   // config.json-less run arms at the same moment a config.json run always did.
-  if (!s_serviceRedirectsArmed.load(std::memory_order_acquire)) return result;
-
   // N133 S3: the ws/wss redirect target (nevr_socket_uri) resolves from
   // config.yaml inside NevrCfgRedirect. N133 S5b: the https target
   // (nevr_http_uri) resolves from config.yaml too (auth.http_uri, the key
@@ -462,10 +459,12 @@ static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
   // nothing. NevrCfgRedirect runs the scheme detection + bridge rewrite
   // (ws/wss any-host or https readyatdawn.com only; bridge-active ws ->
   // ws://127.0.0.1:<port>; https never hits the bridge).
-  const char* httpTarget = NevrCfgGetFlat("nevr_http_uri");
-  const char* redirected =
-      NevrCfgRedirect(result, httpTarget, IsWebSocketBridgeActive() ? 1 : 0, GetWebSocketBridgePort());
-  const char* chosen = nevr::lifecycle::ChooseRedirectedOrOriginal(result, redirected);
+  const char* chosen = nevr::lifecycle::DecideServiceRedirect(
+      s_serviceRedirectsArmed.load(std::memory_order_acquire), keyName, result,
+      [] { return NevrCfgGetFlat("nevr_http_uri"); },
+      [](const char* url, const char* httpTarget) {
+        return NevrCfgRedirect(url, httpTarget, IsWebSocketBridgeActive() ? 1 : 0, GetWebSocketBridgePort());
+      });
   if (chosen == result) return result;
 
   const std::string diagnostic = LogDiagnostics::FormatRedactedUrlPairDiagnostic(

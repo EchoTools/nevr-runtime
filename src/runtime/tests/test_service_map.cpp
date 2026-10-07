@@ -633,3 +633,59 @@ TEST(ServiceMapEnvOverrides, EnvUnsetFallsBackToConfigYamlThenTheBuiltIn) {
   // Keys with no environment variable are untouched by the layer.
   EXPECT_EQ(nevr_cfg::LookupFlatLayered(none, onlyApi, d, "nevr_socket_uri").value_or(""), "wss://default.example:443/ws");
 }
+
+// SelectBuiltinDefaults: the client-only gate for the build-time embedded defaults.
+namespace {
+
+const nevr_cfg::EmbeddedDefault kEmbeddedFixture[] = {
+    {"nevr_socket_uri", "wss://embedded.example/ws"},
+    {"nevr_http_uri", "https://embedded.example"},
+    {"nevr_http_key", ""},
+    {"nevr_server_key", "embedded-key"},
+};
+constexpr std::size_t kEmbeddedFixtureCount = sizeof(kEmbeddedFixture) / sizeof(kEmbeddedFixture[0]);
+
+}  // namespace
+
+TEST(SelectBuiltinDefaults, ClientModeKeepsEveryNonEmptyEntry) {
+  std::string embedded, missing;
+  const nevr_cfg::FlatDefaults d = nevr_cfg::SelectBuiltinDefaults(
+      false, kEmbeddedFixture, kEmbeddedFixtureCount, &embedded, &missing);
+  ASSERT_EQ(d.size(), 3U);
+  EXPECT_EQ(d.at("nevr_socket_uri"), "wss://embedded.example/ws");
+  EXPECT_EQ(d.at("nevr_http_uri"), "https://embedded.example");
+  EXPECT_EQ(d.at("nevr_server_key"), "embedded-key");
+  EXPECT_EQ(d.count("nevr_http_key"), 0U);  // an unembedded key is absent, not ""
+}
+
+TEST(SelectBuiltinDefaults, ClientModeReportsKeyNamesNotValues) {
+  std::string embedded, missing;
+  nevr_cfg::SelectBuiltinDefaults(false, kEmbeddedFixture, kEmbeddedFixtureCount, &embedded, &missing);
+  EXPECT_EQ(embedded, "nevr_socket_uri, nevr_http_uri, nevr_server_key");
+  EXPECT_EQ(missing, "nevr_http_key");
+  EXPECT_EQ(embedded.find("embedded.example"), std::string::npos);
+  EXPECT_EQ(embedded.find("embedded-key"), std::string::npos);
+}
+
+TEST(SelectBuiltinDefaults, ServerModeIsEmptyEvenWhenEveryValueIsEmbedded) {
+  std::string embedded, missing;
+  const nevr_cfg::FlatDefaults d = nevr_cfg::SelectBuiltinDefaults(
+      true, kEmbeddedFixture, kEmbeddedFixtureCount, &embedded, &missing);
+  EXPECT_TRUE(d.empty());
+  EXPECT_TRUE(embedded.empty());
+  EXPECT_TRUE(missing.empty());
+}
+
+TEST(SelectBuiltinDefaults, NullNameListsAreAccepted) {
+  EXPECT_EQ(nevr_cfg::SelectBuiltinDefaults(false, kEmbeddedFixture, kEmbeddedFixtureCount, nullptr, nullptr)
+                .size(),
+            3U);
+  EXPECT_TRUE(nevr_cfg::SelectBuiltinDefaults(false, nullptr, 0, nullptr, nullptr).empty());
+}
+
+TEST(SelectBuiltinDefaults, ANullValueCountsAsNotEmbedded) {
+  const nevr_cfg::EmbeddedDefault entries[] = {{"nevr_socket_uri", nullptr}};
+  std::string embedded, missing;
+  EXPECT_TRUE(nevr_cfg::SelectBuiltinDefaults(false, entries, 1, &embedded, &missing).empty());
+  EXPECT_EQ(missing, "nevr_socket_uri");
+}
