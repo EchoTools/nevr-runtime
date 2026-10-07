@@ -1660,6 +1660,9 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
       } else {
         // Fall back to cached auth token when telemetry_token not configured
         token = wsToken;
+        // #114: that token expires; after an HTTP 401 on reconnect, mint a new one. A configured
+        // telemetry_token is the operator's and is not refreshed.
+        m_telemetry->SetBearerTokenRefresher([]() { return AcquireServerDbToken(); });
       }
       m_telemetry->Connect(std::string(telemetryUri), token);
     } else {

@@ -4,6 +4,7 @@
 #include <ixwebsocket/IXWebSocket.h>
 
 #include <cstring>
+#include <utility>
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -30,6 +31,10 @@ TelemetryStreamer::~TelemetryStreamer() {
   Disconnect();
 }
 
+void TelemetryStreamer::SetBearerTokenRefresher(BearerReconnectAuth::Refresher refresher) {
+  m_bearerRefresher = std::move(refresher);
+}
+
 bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token) {
   if (uri.empty()) return false;
 
@@ -37,12 +42,8 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
   m_ws = std::make_unique<ix::WebSocket>();
   m_ws->setUrl(uri);
 
-  // Auth — send JWT on WebSocket upgrade request
-  if (!m_token.empty()) {
-    ix::WebSocketHttpHeaders headers;
-    headers["Authorization"] = "Bearer " + m_token;
-    m_ws->setExtraHeaders(headers);
-  }
+  // Auth — send JWT on WebSocket upgrade request, and keep it fresh across auto-reconnects (#114)
+  m_bearerAuth.Attach(*m_ws, m_token, m_bearerRefresher);
 
   // Heartbeat — detect dead connections faster than TCP timeout
   m_ws->setPingInterval(30);
@@ -80,6 +81,7 @@ bool TelemetryStreamer::Connect(const std::string& uri, const std::string& token
           Log(EchoVR::LogLevel::Error, "%s", diagnostic.c_str());
         }
         m_wsConnected.store(false, std::memory_order_release);
+        m_bearerAuth.OnError(msg->errorInfo.http_status);
         break;
       case ix::WebSocketMessageType::Message:
         // Telemetry server responses (acks) — currently just log
