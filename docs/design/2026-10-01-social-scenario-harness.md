@@ -1,7 +1,11 @@
 # Social scenario harness: one-client tests for friends and parties
 
-2026-10-01. Concept only; no harness code exists yet. Written so the next
-session builds from this instead of re-deriving it.
+2026-10-01. Status: built. The runtime's control endpoint (`src/runtime/scenario/`, compiled only by
+the `mingw-scenario` preset and checked absent from release DLLs by
+`tools/verify_scenario_control_absent.py`), the runner (`tools/scenario/`, `just scenario NAME`,
+`just scenario-all`) and the YAML scenarios under `tools/scenario/scenarios/` implement it. The
+endpoint is a loopback TCP listener, not the named pipe this design first described. The rest of this
+document is the design and the owner's constraints.
 
 ## Why
 
@@ -135,11 +139,11 @@ the same roster change.
 
 Only the message names, fields, the entry point and the expected lines differ.
 
-## What to build once (not yet built)
+## What the harness consists of
 
 - **A control endpoint in the runtime**, compiled in test builds only behind a
   CMake option and absent from release DLLs, because it can inject messages
-  into a live session. A local named pipe with three verbs:
+  into a live session. A loopback TCP listener on an OS-assigned port, with three verbs:
   - inject (message name + fields as JSON, encoded by the runtime's existing
     wire builders so the format is the code's, not the test's)
   - fire (a game entry point, such as a UI handler; facade slots only in a
@@ -156,12 +160,11 @@ Only the message names, fields, the entry point and the expected lines differ.
   party and roster state machines in `src/runtime/tests/test_social_facade.cpp`
   for a loop that needs no game.
 
-## State as of this document
+## State when this document was written
 
 - The invite fix (first-match override plus event trace,
   `src/runtime/patch/party_invite_gate.cpp`, installed from the social
-  accessor) has never been exercised in a client run. The last client run
-  predates it.
+  accessor) had not been exercised in a client run; the first slice below did that.
 - Facade: `src/runtime/patch/social_facade_object.cpp`. Party state machine and
   wire builders: `src/runtime/compat/social_party.h`. Roster:
   `src/runtime/compat/social_roster.h`.

@@ -1,8 +1,13 @@
 # Mic provider: fixing one-way voice under NEVR (GH #15)
 
 2026-09-21, Claude + Andrew. Design and investigation record, written so an
-interruption only costs a `git log`/ReVault read, not a re-derivation. No
-code has been written yet — this is the state to build from.
+interruption only costs a `git log`/ReVault read, not a re-derivation.
+
+Status: built. `src/runtime/patch/mic_provider.{h,cpp}` is installed through the
+`CSysDLL_GetSymbol` hook in `src/runtime/lifecycle/initialize.cpp`, with unit tests in
+`src/runtime/tests/test_mic_*.cpp`. Still open: the capture ring buffer overflows soon after
+capture starts (#95), and no `tools/winvm/systest.py` mic check exists. The rest of this
+document is the investigation record.
 
 ## The bug (GH #15)
 

@@ -1,6 +1,9 @@
 # Nakama support for the remaining social features (proposal)
 
-2026-10-01. A proposal, not an implementation: nothing here is built. It answers the "Needs the
+2026-10-01. A proposal. Status: built in the runtime are the login capability field (§0,
+`nevr_social`), the receive half of §1 (`FriendPresenceNotify`), §2, §3 and the join-policy message of §4
+(`kSetJoinPolicyRequest`); §2 and §3 carry "As built" notes with the Nakama and runtime commits. Not
+built: §1's presence publish (`SNSPresenceUpdateRequest`), which has no runtime sender. It answers the "Needs the
 owner" list in `docs/design/2026-10-01-social-features-test-plan.md`, under the owner's ruling (via
 Spritz): "all those oculus features exist in nakama in one form or another, we just need to support
 them, and that can include modifying an evr message", and "stay away from matchmaking, because i've
