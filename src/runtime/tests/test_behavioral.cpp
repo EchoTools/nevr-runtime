@@ -1173,13 +1173,15 @@ TEST(LoginProfile, EmptyDisplayNameFallsBackToTheAccountId) {
 }
 
 TEST(WsBridgePlatformPrefix, EveryDefinedPlatformHasTheNakamaPrefix) {
-  EXPECT_STREQ(TestHook_PlatformPrefix(0), "STM");
-  EXPECT_STREQ(TestHook_PlatformPrefix(1), "DSC");
-  EXPECT_STREQ(TestHook_PlatformPrefix(2), "XBX");
-  EXPECT_STREQ(TestHook_PlatformPrefix(3), "OVR");
+  EXPECT_STREQ(TestHook_PlatformPrefix(0), "UNK");
+  EXPECT_STREQ(TestHook_PlatformPrefix(1), "STM");
+  EXPECT_STREQ(TestHook_PlatformPrefix(2), "DSC");
+  EXPECT_STREQ(TestHook_PlatformPrefix(3), "XBX");
   EXPECT_STREQ(TestHook_PlatformPrefix(4), "OVR-ORG");
-  EXPECT_STREQ(TestHook_PlatformPrefix(5), "BOT");
-  EXPECT_STREQ(TestHook_PlatformPrefix(6), "DSC-NOVR");
+  EXPECT_STREQ(TestHook_PlatformPrefix(5), "OVR");
+  EXPECT_STREQ(TestHook_PlatformPrefix(6), "BOT");
+  EXPECT_STREQ(TestHook_PlatformPrefix(7), "DMO");
+  EXPECT_STREQ(TestHook_PlatformPrefix(8), "UNK");
   EXPECT_STREQ(TestHook_PlatformPrefix(999), "UNK");
 }
 
@@ -1219,6 +1221,8 @@ TEST(WsBridgeSelectPlatform, AlwaysOvrOrgToMatchTheGamesOwnIdentity) {
   EXPECT_EQ(TestHook_SelectPlatformCode(true, false), 4ULL);
   EXPECT_EQ(TestHook_SelectPlatformCode(false, true), 4ULL);
   EXPECT_EQ(TestHook_SelectPlatformCode(false, false), 4ULL);
+  // The code the bridge logs in as is the one labelled OVR-ORG, the provider the game names itself with.
+  EXPECT_STREQ(TestHook_PlatformPrefix(TestHook_SelectPlatformCode(false, false)), "OVR-ORG");
 }
 
 TEST(WsBridgeCallbackGuard, ContainsStdExceptionsAtTheCallbackBoundary) {

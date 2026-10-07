@@ -622,17 +622,18 @@ static void AppendLE64(std::string& buf, uint64_t val) {
   for (int i = 0; i < 8; i++) { buf.push_back((char)(val & 0xFF)); val >>= 8; }
 }
 
-// Platform codes match the server's wire enum (empirically verified 2026-08-04).
-// Wire: STM=0, DSC=1, XBX=2, OVR=3, OVR_ORG=4, BOT=5, DMO=6
+// Platform codes: Nakama's PlatformCode and the game's own provider numbering are the same
+// 1-indexed enum: STM=1, DSC=2, XBX=3, OVR_ORG=4, OVR=5, BOT=6, DMO=7. Anything else yields
+// "UNK" (the game's own fallback prefix for an unknown provider is "???").
 static const char* PlatformPrefix(uint64_t platformCode) {
   switch (platformCode) {
-    case 0: return "STM";
-    case 1: return "DSC";
-    case 2: return "XBX";
-    case 3: return "OVR";
+    case 1: return "STM";
+    case 2: return "DSC";
+    case 3: return "XBX";
     case 4: return "OVR-ORG";
-    case 5: return "BOT";
-    case 6: return "DSC-NOVR";  // DMO = demo/no-VR client
+    case 5: return "OVR";
+    case 6: return "BOT";
+    case 7: return "DMO";
     default: return "UNK";
   }
 }
@@ -698,7 +699,7 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
                                      const std::string& displayName = std::string(),
                                      const std::string& accessToken = std::string(),
                                      const std::string& password = std::string()) {
-  // Platform codes match Go server iota: STM=0, DSC=1, XBX=2, OVR_ORG=3, OVR=4, BOT=5, DMO=6
+  // Platform codes: see PlatformPrefix (1-indexed: STM=1 ... OVR_ORG=4 ... DMO=7).
   uint64_t accountId = discordId;
 
   // Host facts, MEASURED. Every value in this block used to be a literal —
