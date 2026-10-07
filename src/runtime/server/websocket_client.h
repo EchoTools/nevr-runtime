@@ -134,9 +134,6 @@ class WebSocketClient {
   // Message queue for messages sent before connection established
   std::vector<std::string> pendingMessages_;
 
-  // Buffer to store last received message payload (keeps pointer valid during callback)
-  std::vector<UINT8> lastReceivedPayload_;
-
   // Message queue for processing on main thread (thread-safe)
   std::vector<GameServer::ReceivedWebSocketMessage> receivedMessages_;
   CRITICAL_SECTION receivedMessagesMutex_;
