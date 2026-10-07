@@ -8,16 +8,10 @@
 /// Cache location: %LOCALAPPDATA%/EchoVR/cosmetics/v1/packages/
 /// CDN base: https://r2.echo.taxi/v1/
 ///
-/// WIRE FORMAT SPEC: docs/reference/cosmetics-cdn-format.md — the `.evrp`
-/// binary layout, the slot-type enum, the manifest JSON schema and the URL
-/// scheme. Verified against this implementation 2026-07-29: the 28-byte header,
-/// its field offsets, the "EVRP" magic, format version 1 and the 80-byte tint
-/// payload all match, and asset_cdn.cpp static_asserts the header size.
-///
-/// That spec had ZERO inbound references until this line existed, which made it
-/// undiscoverable from the only code it describes. Not the same thing as
-/// orphaned — it was accurate the whole time. If you change the format here,
-/// change it there, and keep the two verified against each other.
+/// WIRE FORMAT: docs/adr/0005-cosmetics-cdn-format.md — the `.evrp` binary layout,
+/// the slot-type enum, the manifest JSON schema and the URL scheme. The `.evrp`
+/// parser is runtime/patch/evrp_package.h. If you change the format, change the
+/// ADR and the test vector in tests/test_evrp_package.cpp together.
 ///
 /// Wired into startup: AssetCDN::Initialize() is called from
 /// lifecycle/boot.cpp:361. (This block said "Not wired into startup"
