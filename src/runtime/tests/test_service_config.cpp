@@ -182,8 +182,10 @@ TEST(StableStringPoolAccessors, AbsentServiceHostPublishesSourceTwoAndAllowsNull
 }
 
 // The built-in defaults are a client convenience: a dedicated server is configured explicitly
-// and must not start a bridge or authenticate with an embedded key. The accessors see the same
-// gate the production path applies, so a server-mode run with only embedded defaults finds nothing.
+// and must not start a bridge or authenticate with an embedded key. The accessors' injected
+// defaults pass through the same SelectBuiltinDefaults gate as the embedded ones, so a
+// server-mode run with only built-in defaults finds nothing. (That production passes
+// IsServerMode() into the gate is pinned by tools/tests/test_builtin_defaults_contract.py.)
 TEST(ServerModeDefaultsGate, ClientModeSeesTheEmbeddedDefault) {
   ResetAccessorInputs();
   SetAccessorInputs(&EmptyConfig(), &SocketDefault(), false);
@@ -205,7 +207,7 @@ TEST(ServerModeDefaultsGate, ServerModeStillReadsAnExplicitConfigValue) {
   SetAccessorInputs(&Config(), &SocketDefault(), true);
   const char* value = NevrCfgGetFlat("nevr_server_key");
   ASSERT_NE(value, nullptr);
-  EXPECT_NE(value[0], '\0');
+  EXPECT_STREQ(value, "secret-test-key");
 }
 
 TEST(ServerModeDefaultsGate, ServerModeSuppliesNoGameNativeConfig) {
@@ -224,15 +226,16 @@ TEST(StableStringPoolAccessors, UnchangedRedirectPreservesExactGameDefaultPointe
 }
 
 // DecideServiceRedirect is the decision RedirectServiceUrl (config.cpp) makes for every string the
-// game reads from its JSON config. The tests drive it with the real accessors over injected
-// config, and with counting callbacks for the "nothing is looked up" cases.
+// game reads from its JSON config. The tests drive it with counting callbacks and with callbacks
+// that call the real accessors over injected config. config.cpp itself links into no test; the
+// arguments it passes (the armed flag, the bridge state and port) are pinned by
+// tools/tests/test_quest_shared_redirect_sources.py.
 struct CallCounter {
   int httpTarget = 0;
   int redirect = 0;
 };
 
 TEST(DecideServiceRedirect, NothingIsLookedUpBeforeTheRedirectsAreArmed) {
-  SetConfigInputs();
   CallCounter calls;
   const char gameResult[] = "wss://login.readyatdawn.com/rad15";
   const char* chosen = nevr::lifecycle::DecideServiceRedirect(
@@ -241,6 +244,16 @@ TEST(DecideServiceRedirect, NothingIsLookedUpBeforeTheRedirectsAreArmed) {
   EXPECT_EQ(chosen, gameResult);
   EXPECT_EQ(calls.httpTarget, 0);
   EXPECT_EQ(calls.redirect, 0);
+}
+
+// A redirect that hands back the very pointer the game passed in is "no change": the caller
+// compares pointers and skips its log line, so it neither logs a from=X to=X pair nor hides a real one.
+TEST(DecideServiceRedirect, ARedirectReturningTheGamesOwnPointerIsNoChange) {
+  const char gameResult[] = "wss://login.readyatdawn.com/rad15";
+  const char* chosen = nevr::lifecycle::DecideServiceRedirect(
+      true, "loginservice_host", gameResult, [] { return nullptr; },
+      [&](const char* r, const char*) { return r; });
+  EXPECT_EQ(chosen, gameResult);
 }
 
 TEST(DecideServiceRedirect, ANullResultOrKeyIsReturnedUntouchedWithoutLookups) {

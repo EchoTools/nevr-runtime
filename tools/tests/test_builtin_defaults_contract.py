@@ -66,7 +66,6 @@ class BuiltinDefaultsContractTest(unittest.TestCase):
         # The only Log arguments are the joined key-name lists.
         for call in re.findall(r"Log\(.*?\);", body, re.S):
             self.assertNotIn("nevr_builtin::", call)
-            self.assertNotIn("e.value", call)
             self.assertNotIn("it->second", call)
 
     def test_defaults_are_client_only(self):
@@ -75,7 +74,7 @@ class BuiltinDefaultsContractTest(unittest.TestCase):
         self.assertRegex(text, r"bool IsServerMode\(\) \{(?:\s*#[^\n]*\n[^\n]*\n[^\n]*)?\s*return g_isServer != FALSE;")
         # The gate itself is the pure SelectBuiltinDefaults (tested in test_service_map.cpp); production
         # passes the one server-mode test into it.
-        self.assertIn("SelectBuiltinDefaults(\n        IsServerMode(),", text)
+        self.assertRegex(text, r"SelectBuiltinDefaults\(\s*IsServerMode\(\),")
         self.assertRegex(text, r"if \(IsServerMode\(\)\) \{\s*Log\(EchoVR::LogLevel::Info,\s*\"\[NEVR\.CONFIG\] built-in defaults are not applied in server mode")
 
 

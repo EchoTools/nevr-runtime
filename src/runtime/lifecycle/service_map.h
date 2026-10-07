@@ -18,9 +18,9 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <cstddef>
 #include <map>
 #include <optional>
 #include <string>
@@ -54,7 +54,7 @@ struct EmbeddedDefault {
 /// The built-in defaults a run may see. Client mode: every entry with a non-empty value, with
 /// `embeddedNames` / `missingNames` (when non-null) receiving the comma-joined key names of the
 /// entries that have / lack a value (names only, never values). Server mode: empty, with both name
-/// lists left empty, because a dedicated server is configured explicitly and must never start a
+/// lists left untouched, because a dedicated server is configured explicitly and must never start a
 /// bridge or authenticate with an embedded key.
 FlatDefaults SelectBuiltinDefaults(bool serverMode, const EmbeddedDefault* entries, std::size_t count,
                                    std::string* embeddedNames, std::string* missingNames);
