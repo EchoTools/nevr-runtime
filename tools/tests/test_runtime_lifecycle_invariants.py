@@ -123,26 +123,31 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertNotIn("NvrPluginShutdown", body)
 
     def test_dllmain_frees_the_real_dbgcore_only_on_dynamic_unload(self):
-        # Issue #40: FreeLibrary(g_realDbgCore) ran on process termination too (lpReserved != NULL),
-        # under the loader lock, while the crash path can still call MiniDumpWriteDump through it.
+        # Issue #40: FreeLibrary(g_realDbgCore) ran on process termination too (lpReserved != NULL).
+        # Calling FreeLibrary from DllMain during termination can leave a module in use after the
+        # system ran its termination code; only a dynamic unload (lpReserved == NULL) frees it.
         source = (ROOT / "src/runtime/lifecycle/dllmain.cpp").read_text()
         body = extract_braced_function(source, "BOOL APIENTRY DllMain(")
 
+        detach = body.index("case DLL_PROCESS_DETACH")
+        section = body[detach:]
         frees = [m.start() for m in re.finditer(r"\bFreeLibrary\s*\(\s*g_realDbgCore\s*\)", body)]
         self.assertEqual(len(frees), 1, "subject vanished: expected exactly one FreeLibrary(g_realDbgCore)")
-        guard = re.search(r"if\s*\(\s*lpReserved\s*==\s*NULL\s*\)\s*\{", body)
-        self.assertIsNotNone(guard, "subject vanished: no lpReserved == NULL guard")
+        free = frees[0] - detach
+        self.assertGreater(free, 0, "FreeLibrary(g_realDbgCore) is not in the DLL_PROCESS_DETACH case")
+        guard = re.search(r"if\s*\(\s*lpReserved\s*==\s*NULL\s*\)\s*\{", section)
+        self.assertIsNotNone(guard, "subject vanished: no lpReserved == NULL guard in DLL_PROCESS_DETACH")
         depth, end = 0, None
-        for index in range(guard.end() - 1, len(body)):
-            if body[index] == "{":
+        for index in range(guard.end() - 1, len(section)):
+            if section[index] == "{":
                 depth += 1
-            elif body[index] == "}":
+            elif section[index] == "}":
                 depth -= 1
                 if depth == 0:
                     end = index
                     break
         self.assertIsNotNone(end)
-        self.assertTrue(guard.end() < frees[0] < end,
+        self.assertTrue(guard.end() < free < end,
                         "FreeLibrary(g_realDbgCore) is outside the lpReserved == NULL block")
 
     def test_early_boot_never_reads_config(self):
