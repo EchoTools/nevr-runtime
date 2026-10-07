@@ -1,4 +1,5 @@
-"""launch-client.sh: where it finds the game, and that only one client runs at a time.
+"""launch-client.sh and verify-server.sh: where they find the game, that only one game run happens
+at a time, and that verify-server.sh puts back what it deployed.
 
 The script runs against a fake game install and fake `wine`/`pgrep`/`wineserver`/`Xephyr` on PATH,
 so these tests never start the real game. NEVR_EVIDENCE_DELAY=0 skips the script's 12 s wait.
@@ -10,14 +11,26 @@ import getpass
 import os
 import pathlib
 import shutil
+import signal
 import subprocess
+import time
 import tempfile
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "launch-client.sh"
+VERIFY_SERVER = REPO / "verify-server.sh"
+LIB = REPO / "tools/lib/game_install.sh"
 ORIGINAL = b"original-dll"
 TEST_DLL = b"test-dll"
+
+
+def install_scripts(checkout: pathlib.Path) -> None:
+    """Copy the scripts under test and the helper they source into a fake checkout."""
+    (checkout / "tools/lib").mkdir(parents=True, exist_ok=True)
+    shutil.copy(LIB, checkout / "tools/lib/game_install.sh")
+    for script in (SCRIPT, VERIFY_SERVER):
+        shutil.copy(script, checkout / script.name)
 
 
 def make_game_root(root: pathlib.Path) -> pathlib.Path:
@@ -50,6 +63,7 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         'logs="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/EchoVR/logs"\n'
         'echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/nevr-fake.jsonl"\n'
         'cmp -s "$FAKE_EXPECT_DLL" "./BugSplat64.dll" || { echo "wrong DLL deployed" >&2; exit 9; }\n'
+        'sleep "${FAKE_WINE_SLEEP:-0}"\n'
         '(sleep 3) &  # a leftover child, like a lingering wineserver, must not keep the lock\n'
         'exit 0\n')
     (directory / "wineserver").write_text('#!/bin/bash\nexit 0\n')
@@ -69,7 +83,7 @@ class LaunchClientTest(unittest.TestCase):
         # A checkout with the script but NO echovr/ of its own, like a worktree.
         self.checkout = self.tmp / "checkout"
         self.checkout.mkdir()
-        shutil.copy(SCRIPT, self.checkout / "launch-client.sh")
+        install_scripts(self.checkout)
         self.lock = self.tmp / "launch.lock"
         self.env = dict(
             os.environ,
@@ -148,7 +162,7 @@ class LaunchClientTest(unittest.TestCase):
         subprocess.run([*git, "worktree", "add", "-q", str(worktree)], check=True)
         env = {k: v for k, v in self.env.items() if k != "NEVR_GAME_ROOT"}
         for where in (main, worktree):
-            shutil.copy(SCRIPT, where / "launch-client.sh")
+            install_scripts(where)
             out = subprocess.run([str(where / "launch-client.sh"), "--print-game-root"], env=env,
                                  cwd=where, capture_output=True, text=True, check=True)
             self.assertEqual(out.stdout.strip(), str(main.resolve()), f"from {where}")
@@ -166,6 +180,81 @@ class LaunchClientTest(unittest.TestCase):
                 del os.environ["NEVR_GAME_ROOT"]
             else:
                 os.environ["NEVR_GAME_ROOT"] = old
+
+
+class VerifyServerTest(unittest.TestCase):
+    """verify-server.sh deploys the test DLL and a plugin, runs a (fake) game, and restores."""
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="verify-server-test-", dir="/var/tmp"))
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.game_root = make_game_root(self.tmp / "main")
+        self.fake_bin = self.tmp / "bin"
+        make_fake_bin(self.fake_bin)
+        self.checkout = self.tmp / "checkout"
+        self.checkout.mkdir()
+        install_scripts(self.checkout)
+        bin_dir = self.checkout / "build/mingw-release/bin"
+        (bin_dir / "plugins").mkdir(parents=True)
+        (bin_dir / "BugSplat64.dll").write_bytes(TEST_DLL)
+        (bin_dir / "plugins/extra.dll").write_bytes(b"plugin")
+        self.win10 = self.game_root / "echovr/bin/win10"
+        self.env = dict(
+            os.environ,
+            PATH=f"{self.fake_bin}:{os.environ['PATH']}",
+            NEVR_GAME_ROOT=str(self.game_root),
+            NEVR_LAUNCH_LOCK=str(self.tmp / "launch.lock"),
+            NEVR_RUN_SCRATCH_ROOT=str(self.tmp),
+            NEVR_VERIFY_MIN_SECONDS="1",
+            NEVR_VERIFY_POLL_SECONDS="1",
+            FAKE_EXPECT_DLL=str(bin_dir / "BugSplat64.dll"),
+        )
+        self.env.pop("FAKE_ECHOVR_PIDS", None)
+
+    def command(self):
+        return [str(self.checkout / "verify-server.sh"), "run1", "default", "1"]
+
+    def test_a_finished_run_leaves_the_game_directory_as_it_found_it(self):
+        result = subprocess.run(self.command(), env=self.env, cwd=self.checkout, capture_output=True,
+                                text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
+        self.assertFalse((self.win10 / "plugins/extra.dll").exists(), "a deployed plugin was left behind")
+        self.assertIn("deployed files restored and verified", (self.tmp / "server-runs/run1/server.log").read_text())
+
+    def test_an_interrupted_run_still_restores(self):
+        env = dict(self.env, FAKE_WINE_SLEEP="30")
+        process = subprocess.Popen(self.command(), env=env, cwd=self.checkout, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True)
+        try:
+            deadline = time.monotonic() + 30
+            while (self.win10 / "BugSplat64.dll").read_bytes() != TEST_DLL:
+                self.assertLess(time.monotonic(), deadline, "the test DLL was never deployed")
+                time.sleep(0.05)
+            process.send_signal(signal.SIGTERM)
+            process.wait(timeout=30)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.stdout.close()
+        self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
+        self.assertFalse((self.win10 / "plugins/extra.dll").exists())
+
+    def test_refuses_to_deploy_while_echovr_is_running(self):
+        env = dict(self.env, FAKE_ECHOVR_PIDS="4242")
+        result = subprocess.run(self.command(), env=env, cwd=self.checkout, capture_output=True, text=True,
+                                timeout=60)
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertIn("echovr.exe is already running (pid 4242)", result.stderr)
+        self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
+
+    def test_refuses_while_a_client_run_holds_the_lock(self):
+        with open(self.tmp / "launch.lock", "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = subprocess.run(self.command(), env=self.env, cwd=self.checkout, capture_output=True,
+                                    text=True, timeout=60)
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
 
 
 if __name__ == "__main__":
