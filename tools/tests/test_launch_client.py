@@ -68,7 +68,16 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         '(sleep 3) &  # a leftover child, like a lingering wineserver, must not keep the lock\n'
         '[[ -n "${FAKE_WINE_LOCK_DLL:-}" ]] && chmod 444 ./BugSplat64.dll\n'
         'exec sleep "${FAKE_WINE_SLEEP:-0}"\n')
-    (directory / "wineserver").write_text('#!/bin/bash\n[[ -n "${FAKE_WS_LOG:-}" ]] && echo "$*" >> "$FAKE_WS_LOG"\nexit 0\n')
+    # wineserver: like the real one, `-k` exits 1 when no server is left (every call after the first), `-w`
+    # exits 0; each call is logged with the deployed DLL's content so tests can see WHEN it ran.
+    (directory / "wineserver").write_text(
+        '#!/bin/bash\n'
+        '[[ -n "${FAKE_WS_LOG:-}" ]] && echo "$* dll=$(cat "$FAKE_WS_DLL" 2>/dev/null)" >> "$FAKE_WS_LOG"\n'
+        'if [[ "$1" == "-k" && -n "${FAKE_WS_STATE:-}" ]]; then\n'
+        '  if [[ -e "$FAKE_WS_STATE" ]]; then exit 1; fi\n'
+        '  touch "$FAKE_WS_STATE"\n'
+        'fi\n'
+        'exit 0\n')
     for f in directory.iterdir():
         f.chmod(0o755)
 
@@ -177,12 +186,13 @@ class LaunchClientTest(unittest.TestCase):
 
     def test_the_wine_server_is_stopped_and_awaited_before_the_dll_is_restored(self):
         ws_log = self.tmp / "ws.log"
-        result, _ = self.run_until_login(env_extra={"FAKE_WS_LOG": str(ws_log)})
+        result, _ = self.run_until_login(env_extra={
+            "FAKE_WS_LOG": str(ws_log), "FAKE_WS_STATE": str(self.tmp / "ws.state"),
+            "FAKE_WS_DLL": str(self.game_root / "echovr/bin/win10/BugSplat64.dll")})
+        # The real wineserver exits 1 when nothing is left to kill: that must not become the exit status.
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        calls = ws_log.read_text().split("\n")
-        self.assertIn("-k", calls)
-        self.assertIn("-w", calls)
-        self.assertLess(calls.index("-w"), len(calls))
+        calls = [l for l in ws_log.read_text().splitlines() if l]
+        self.assertEqual(calls[:2], ["-k dll=test-dll", "-w dll=test-dll"], calls)  # both before the restore
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def test_a_login_timeout_without_the_flag_is_not_validated(self):

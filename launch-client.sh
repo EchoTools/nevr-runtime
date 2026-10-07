@@ -96,7 +96,9 @@ restore() {
   else
     echo "ERROR: BugSplat64.dll restore failed; original is $SCRATCH/BugSplat64.dll.orig" >&2
   fi
-  wineserver -k 9>&-
+  # A cleanup step, not a gate: wineserver exits 1 when no server is left to kill, and as the last command
+  # of an EXIT trap under `set -e` that would replace the script's own exit status.
+  wineserver -k 9>&- || true
 }
 # INT/TERM become a normal exit so the EXIT trap (restore) always runs.
 trap 'exit 143' INT TERM
@@ -132,7 +134,7 @@ fi
 # The newest game log THIS run wrote: a file that did not exist when the run started (names carry a
 # millisecond timestamp, so they are unique per run) and was modified since. Judging by mtime alone
 # let a previous run's log, last written in the same second the run started, decide the verdict.
-pre_logs=$(ls "$LOGDIR"/nevr-*.jsonl 2>/dev/null || true)
+pre_logs=$(for f in "$LOGDIR"/nevr-*.jsonl; do [[ -e "$f" ]] && printf '%s\n' "$f"; done || true)
 newest_run_log() {
   local f found=""
   for f in "$LOGDIR"/nevr-*.jsonl; do
