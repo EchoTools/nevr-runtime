@@ -38,19 +38,19 @@ def normalise(code: str) -> str:
 
 
 class SymbolCorpusTemplateTest(unittest.TestCase):
-    def test_format_symbol_id_in_the_template_matches_the_committed_file(self):
-        generator = load_generator()
-        template = next(v for k, v in vars(generator).items() if k.endswith("FOOTER") and isinstance(v, str)
-                        and "FormatSymbolId" in v)
+    def test_the_committed_file_ends_with_the_templates_footer_byte_for_byte(self):
+        # Regeneration writes CPP_FOOTER verbatim after the table, so the committed file's tail must be the
+        # template: any edit made to one and not the other (a guard, a format string, whitespace) fails here.
+        footer = load_generator().CPP_FOOTER
+        committed = (REPO / "src/runtime/hook/symbol_corpus.cpp").read_text()
+        self.assertTrue(committed.endswith(footer), "symbol_corpus.cpp no longer ends with the generator's CPP_FOOTER")
+
+    def test_format_symbol_id_in_the_template_matches_the_committed_file_and_keeps_its_guard(self):
+        footer = load_generator().CPP_FOOTER
         committed = (REPO / "src/runtime/hook/symbol_corpus.cpp").read_text()
         signature = "int FormatSymbolId(char* buf, int maxLen, uint64_t hash)"
-        self.assertEqual(normalise(function_body(template, signature)), normalise(function_body(committed, signature)))
-
-    def test_the_template_keeps_the_argument_guard(self):
-        generator = load_generator()
-        template = next(v for k, v in vars(generator).items() if k.endswith("FOOTER") and isinstance(v, str)
-                        and "FormatSymbolId" in v)
-        self.assertIn("if (maxLen <= 0 || buf == nullptr) return 0;", template)
+        self.assertEqual(normalise(function_body(footer, signature)), normalise(function_body(committed, signature)))
+        self.assertIn("if (maxLen <= 0 || buf == nullptr) return 0;", footer)
 
 
 if __name__ == "__main__":
