@@ -150,6 +150,18 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertTrue(guard.end() < free < end,
                         "FreeLibrary(g_realDbgCore) is outside the lpReserved == NULL block")
 
+    def test_the_posix_handler_success_line_is_conditional_on_both_registrations(self):
+        # Issue #25: "POSIX signal handlers installed" was logged after the two signal() calls
+        # whether or not either returned SIG_ERR.
+        source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
+        stripped = strip_comments(source)
+        self.assertEqual(stripped.count("POSIX signal handlers installed"), 1)
+        self.assertRegex(stripped, r"if\s*\(\s*sigintOk\s*&&\s*sigtermOk\s*\)\s*\{\s*Log\([^;]*POSIX signal handlers installed")
+        self.assertRegex(stripped, r"const\s+bool\s+sigintOk\s*=\s*signal\(\s*SIGINT\s*,\s*PosixSignalHandler\s*\)\s*!=\s*SIG_ERR\s*;")
+        self.assertRegex(stripped, r"const\s+bool\s+sigtermOk\s*=\s*signal\(\s*SIGTERM\s*,\s*PosixSignalHandler\s*\)\s*!=\s*SIG_ERR\s*;")
+        # The failure branch must exist and name which handler failed.
+        self.assertRegex(stripped, r"else\s*\{\s*Log\(EchoVR::LogLevel::Warning,\s*\"\[NEVR\.PATCH\] POSIX signal handlers NOT fully installed")
+
     def test_early_boot_never_reads_config(self):
         # service_config.cpp NevrCfg() loads config.yaml on first access and documents that first
         # access is after the CLI is parsed (g_isServer, -config-path). 3d4a994 called

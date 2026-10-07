@@ -1169,18 +1169,25 @@ void InstallConsoleCtrlHandler() {
   // These handlers call PerformGracefulShutdown DIRECTLY — the prior flag-based
   // approach (set g_shutdownRequested, check per-frame) lost the race to game
   // teardown; the per-frame check never ran after signal delivery (N13/N38 re-open).
-  if (signal(SIGINT, PosixSignalHandler) == SIG_ERR) {
+  const bool sigintOk = signal(SIGINT, PosixSignalHandler) != SIG_ERR;
+  if (!sigintOk) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] SIGINT handler registration failed (signal()) — no effect under Wine "
         "(SIGINT is delivered via the console ctrl handler there, not the CRT signal table); "
         "would block POSIX-path shutdown on native Windows");
   }
-  if (signal(SIGTERM, PosixSignalHandler) == SIG_ERR) {
+  const bool sigtermOk = signal(SIGTERM, PosixSignalHandler) != SIG_ERR;
+  if (!sigtermOk) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] SIGTERM handler registration failed — a container/orchestrator stop signal "
         "(docker stop, systemd) will not trigger graceful shutdown; process will require SIGKILL");
   }
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] POSIX signal handlers installed (SIGINT/SIGTERM -> direct shutdown)");
+  if (sigintOk && sigtermOk) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] POSIX signal handlers installed (SIGINT/SIGTERM -> direct shutdown)");
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] POSIX signal handlers NOT fully installed: SIGINT=%s SIGTERM=%s",
+        sigintOk ? "ok" : "FAILED", sigtermOk ? "ok" : "FAILED");
+  }
 }
 
 void ServerFatal(const CHAR* format, ...) {
