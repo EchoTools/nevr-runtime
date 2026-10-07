@@ -93,7 +93,9 @@ void InitializeFunctionPointers() {
   // EngineEntityPropDispatchHook null-guards the listener table: it drops the
   // event only when that table is not ready, and otherwise calls through to the
   // game's dispatcher, so a call through EchoVR::BroadcasterReceiveLocalEvent
-  // is delivered.
+  // is delivered. EngineEntityLookupHook guards EchoVR::BroadcasterListen the
+  // same way, but a tripped guard there returns -1, a failed listener
+  // registration that the callers do not check (see mode_patches.cpp).
   //
   // RULE FOR ANYONE ADDING A POINTER TO THIS TABLE: an address the runtime CALLS
   // through must not also be an address the runtime DETOURS. If it is, our own

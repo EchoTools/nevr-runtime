@@ -15,8 +15,8 @@ Three checks, in descending order of how badly their absence hurt:
      not also be an address we install a detour on. Otherwise our own call
      re-enters our own hook. This is what severed the ServerDB -> game message
      path: echovr_functions.cpp assigns BroadcasterReceiveLocalEvent = base +
-     0xF87AA0, and mode_patches.cpp detours that same RVA, so all 15 injection
-     sites in gameserver.cpp land in a hook that returns early on a server.
+     0xF87AA0, and mode_patches.cpp detours that same RVA, so every injection
+     site in gameserver.cpp lands in a hook with a server-only guard.
 
   2. IDENTITY PINNING — the bytes at each hooked address must still match what
      was there when the hook was written. Catches both binary drift and the
@@ -51,15 +51,14 @@ MANIFEST = REPO / "tools" / "hook_identity_manifest.json"
 
 KNOWN_SELF_COLLISIONS = {
     0x140F87AA0: ("N83", "CBroadcaster::ReceiveLocalEvent — called via "
-                         "EchoVR::BroadcasterReceiveLocalEvent (echovr_functions.cpp:87) AND "
+                         "EchoVR::BroadcasterReceiveLocalEvent AND "
                          "detoured as ENGINE_ENTITY_PROP_DISPATCH (mode_patches.cpp). "
                          "ACCEPTED: since 2026-07-26 the hook is a pass-through null-guard, not "
                          "an early return, so a re-entering call is checked and then dispatched. "
                          "Our own injections get the same guard, which is arguably correct. "
                          "Re-evaluate if that hook ever regains an unconditional return path."),
     0x140F80ED0: ("N83", "CBroadcaster::Listen — called via EchoVR::BroadcasterListen "
-                         "(echovr_functions.cpp:88) AND detoured as ENGINE_ENTITY_LOOKUP "
-                         "(mode_patches.cpp:723)."),
+                         "AND detoured as ENGINE_ENTITY_LOOKUP (mode_patches.cpp)."),
 }
 
 KNOWN_DOUBLE_DETOURS = {
