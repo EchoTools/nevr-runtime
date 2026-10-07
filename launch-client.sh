@@ -19,6 +19,10 @@ resolve_game_root() {
   fi
 }
 GAME_ROOT=$(resolve_game_root)
+[[ "$GAME_ROOT" == /* ]] || { echo "ERROR: NEVR_GAME_ROOT must be an absolute path (got $GAME_ROOT)" >&2; exit 2; }
+# The game's process name (comm) is "Main Thread", so `pgrep -x echovr.exe` never matches; match the
+# command line, which starts with ./echovr.exe.
+ECHOVR_CMDLINE='(^|[/\\])echovr\.exe( |$)'
 
 # --dll PATH deploys that BugSplat64.dll instead of the release build (the scenario runner passes
 # the mingw-scenario build; see tools/scenario/run_scenario.py). --config PATH starts the game with
@@ -49,9 +53,9 @@ LOGDIR="$WINEPREFIX/drive_c/users/$(id -un)/AppData/Local/EchoVR/logs"
 # started some other way. fd 9 is closed for the children so a leftover wineserver cannot hold it.
 LOCK="${NEVR_LAUNCH_LOCK:-/var/tmp/work-nevr-runtime/launch-client.lock}"
 mkdir -p "$(dirname "$LOCK")"
-exec 9>"$LOCK"
+exec 9>"$LOCK" || { echo "ERROR: cannot open the lock file $LOCK" >&2; exit 4; }
 flock -n 9 || { echo "ERROR: another launch-client.sh run holds $LOCK" >&2; exit 4; }
-if running=$(pgrep -u "$(id -u)" -x echovr.exe); then
+if running=$(pgrep -u "$(id -u)" -f "$ECHOVR_CMDLINE"); then
   echo "ERROR: echovr.exe is already running (pid ${running//$'\n'/ }); stop it first" >&2
   exit 4
 fi
@@ -119,7 +123,7 @@ echo "=== Console log: $CONSOLE_LOG ==="
 # Evidence that the game really is on the nested display, read from /proc.
 (
   sleep "${NEVR_EVIDENCE_DELAY:-12}"
-  for pid in $(pgrep -x echovr.exe); do
+  for pid in $(pgrep -u "$(id -u)" -f "$ECHOVR_CMDLINE"); do
     echo "=== evidence: pid $pid $(tr '\0' '\n' < "/proc/$pid/environ" | grep -E '^(DISPLAY|WAYLAND_DISPLAY)=' | tr '\n' ' ')==="
   done
 ) 9>&- &

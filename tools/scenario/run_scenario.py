@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import functools
 import json
 import os
 import pathlib
@@ -34,6 +35,7 @@ DEFAULT_DLL = REPO / "build/mingw-scenario/bin/BugSplat64.dll"
 SCRATCH = pathlib.Path("/var/tmp/work-nevr-runtime/scenario-runs")
 
 
+@functools.lru_cache(maxsize=None)
 def wineprefix() -> pathlib.Path:
     """The game's Wine prefix. The game install exists only in the main checkout; launch-client.sh
     is the one place that resolves where (NEVR_GAME_ROOT, else the main checkout), so ask it."""

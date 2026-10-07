@@ -32,15 +32,18 @@ def make_game_root(root: pathlib.Path) -> pathlib.Path:
 
 
 def make_fake_bin(directory: pathlib.Path) -> None:
-    """pgrep: Xephyr is up; echovr.exe is "running" iff FAKE_ECHOVR_PIDS is set. wine writes the log a
-    logged-in run leaves. wineserver and the rest do nothing."""
+    """pgrep: Xephyr is up; echovr.exe is "running" iff FAKE_ECHOVR_PIDS is set AND the caller matches
+    on the command line (-f), because the real game's process name is "Main Thread", so a `-x echovr.exe`
+    match finds nothing. wine writes the log a logged-in run leaves. wineserver and the rest do nothing."""
     directory.mkdir()
     (directory / "pgrep").write_text(
         '#!/bin/bash\n'
         'for a in "$@"; do\n'
         '  if [[ "$a" == "Xephyr :101" ]]; then exit 0; fi\n'
         'done\n'
-        'if [[ -n "${FAKE_ECHOVR_PIDS:-}" ]]; then echo "$FAKE_ECHOVR_PIDS"; exit 0; fi\n'
+        'matches_cmdline=0\n'
+        'for a in "$@"; do [[ "$a" == "-f" ]] && matches_cmdline=1; done\n'
+        'if [[ -n "${FAKE_ECHOVR_PIDS:-}" && $matches_cmdline == 1 ]]; then echo "$FAKE_ECHOVR_PIDS"; exit 0; fi\n'
         'exit 1\n')
     (directory / "wine").write_text(
         '#!/bin/bash\n'
@@ -119,6 +122,18 @@ class LaunchClientTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("no game install at", result.stderr)
 
+    def test_a_relative_game_root_is_rejected(self):
+        env = dict(self.env, NEVR_GAME_ROOT="relative/dir")
+        result = self.run_script("--dll", str(self.dll), env=env)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("must be an absolute path", result.stderr)
+
+    def test_an_unwritable_lock_is_a_clear_error(self):
+        env = dict(self.env, NEVR_LAUNCH_LOCK=str(self.tmp / "no-such-dir-file" / "x" / "lock"))
+        (self.tmp / "no-such-dir-file").write_text("a file, so mkdir -p of its child fails")
+        result = self.run_script("--dll", str(self.dll), env=env)
+        self.assertNotEqual(result.returncode, 0)
+
     def test_print_game_root_honours_the_override(self):
         result = self.run_script("--print-game-root")
         self.assertEqual(result.stdout.strip(), str(self.game_root))
@@ -131,7 +146,6 @@ class LaunchClientTest(unittest.TestCase):
         subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "init", "--no-gpg-sign"], check=True)
         worktree = self.tmp / "wt"
         subprocess.run([*git, "worktree", "add", "-q", str(worktree)], check=True)
-        shutil.copy(SCRIPT, worktree / "launch-client.sh")
         env = {k: v for k, v in self.env.items() if k != "NEVR_GAME_ROOT"}
         for where in (main, worktree):
             shutil.copy(SCRIPT, where / "launch-client.sh")
