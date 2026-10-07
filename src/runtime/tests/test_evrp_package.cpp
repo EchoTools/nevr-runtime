@@ -1,6 +1,6 @@
-// .evrp package parsing (docs/adr/0005-cosmetics-cdn-format.md). The accepting vector is the
-// ADR's worked example, written out byte for byte so the spec and the parser are checked
-// against each other; every rejecting case changes exactly one rule's field of that vector.
+// .evrp package parsing (the layout and rules are in docs/adr/0005-cosmetics-cdn-format.md).
+// The accepting vector is the format's worked example, written out byte for byte with its
+// field breakdown below; every rejecting case changes exactly one rule's field of that vector.
 
 #include <gtest/gtest.h>
 
@@ -85,18 +85,23 @@ TEST(EvrpPackage, RejectsAFileSmallerThanTheHeader) {
   EXPECT_FALSE(Parse({}));
 }
 
-TEST(EvrpPackage, RejectsBadMagic) {
-  std::vector<uint8_t> bytes = WorkedExample();
-  bytes[0] = 'X';
-  EXPECT_FALSE(Parse(bytes));
+TEST(EvrpPackage, RejectsBadMagicInAnyByte) {
+  for (size_t i = 0; i < 4; ++i) {
+    std::vector<uint8_t> bytes = WorkedExample();
+    bytes[i] ^= 0x01;
+    EXPECT_FALSE(Parse(bytes)) << "magic byte " << i;
+  }
 }
 
 TEST(EvrpPackage, RejectsAnUnsupportedFormatVersion) {
-  for (uint8_t version : {uint8_t{0}, uint8_t{2}}) {
+  for (size_t i = 4; i < 8; ++i) {  // format_version is a little-endian uint32 at 0x04
     std::vector<uint8_t> bytes = WorkedExample();
-    bytes[4] = version;
-    EXPECT_FALSE(Parse(bytes)) << "version " << int(version);
+    bytes[i] ^= (i == 4 ? 0x03 : 0x01);  // byte 4: 1 -> 2; the high bytes: 0 -> 1
+    EXPECT_FALSE(Parse(bytes)) << "version byte " << i;
   }
+  std::vector<uint8_t> zero = WorkedExample();
+  zero[4] = 0;
+  EXPECT_FALSE(Parse(zero));
 }
 
 TEST(EvrpPackage, RejectsAnUnknownSlotType) {

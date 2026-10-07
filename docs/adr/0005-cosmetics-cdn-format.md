@@ -6,13 +6,15 @@ Game version: 34.4.631399.1.
 ## Context
 
 Tint cosmetics are produced by Go CLI tools (`nevr-cdn-tools`, Track A) and consumed by C++
-game hooks in this repo (Track B). Both sides must agree on the bytes exactly.
+game hooks in this repo (Track B). Both sides must agree on the bytes exactly. `.evrp` is unrelated to the evrFileTools
+`.evra` and `.cr15` formats; evrFileTools is a build-time dependency of Track A only (it reads
+the source tints from game archives).
 
 ## Decision
 
 Cosmetic assets are distributed as `.evrp` files, a flat binary format invented for this
 project, listed in a JSON manifest under `https://r2.echo.taxi/v1/`. Both sides MUST
-produce and consume data conforming to the layout below. The accepting test vector, a
+produce and consume data conforming to the layout below exactly. The accepting test vector, a
 complete 108-byte tint for symbol `0x74d228d09dc5dc86`, and one rejecting case per
 validation rule are in `src/runtime/tests/test_evrp_package.cpp`.
 
@@ -115,7 +117,7 @@ The manifest is a JSON file listing all available packages on the CDN.
 }
 ```
 
-### Field Definitions
+#### Field Definitions
 
 **Top-level fields:**
 
@@ -134,7 +136,7 @@ The manifest is a JSON file listing all available packages on the CDN.
 | `slot_type` | string | Yes      | Human-readable slot type name (`"tint"`)         |
 | `size`      | int    | Yes      | Total file size in bytes (header + asset_data)   |
 
-### Package Key Format
+#### Package Key Format
 
 Keys in the `packages` object are the `symbol_id` from the `.evrp` header, encoded as:
 
@@ -143,7 +145,7 @@ Keys in the `packages` object are the `symbol_id` from the `.evrp` header, encod
 - 16 characters, zero-padded
 - Example: `"74d228d09dc5dc86"`
 
-### Slot Type String Mapping
+#### Slot Type String Mapping
 
 | `slot_type` value in `.evrp` | String in manifest |
 | ---------------------------- | ------------------ |
@@ -168,11 +170,11 @@ Keys in the `packages` object are the `symbol_id` from the `.evrp` header, encod
 
 ### 6. Byte Order and Validation
 
-### Byte Order
+#### Byte Order
 
 All multi-byte integer and floating-point fields are **little-endian**. This matches x86/x64 native byte order and the game's internal data layout.
 
-### Validation Rules
+#### Validation Rules
 
 Parsers MUST enforce all of the following. Reject the file on any violation.
 
@@ -185,11 +187,11 @@ Parsers MUST enforce all of the following. Reject the file on any violation.
 | Data length consistency | `header_size (28) + data_length` must equal total file size |
 | Tint data length        | If `slot_type == 0x01`, `data_length` must be exactly `80`  |
 
-### Float Validation (Advisory)
+#### Float Validation (Advisory)
 
 Color float values SHOULD be in the range `[0.0, 1.0]` but parsers MUST NOT reject values outside this range. The game engine handles out-of-range colors (e.g., HDR bloom effects use values > 1.0).
 
-### Float representation
+#### Float Representation
 
 Track A tools MUST use `float32` arithmetic throughout and never convert decimal strings to
 `float64` and truncate; a value such as 0.8 is stored as its nearest float32 (`0x3F4CCCCD`).

@@ -16,7 +16,9 @@
 
 #include <gtest/gtest.h>
 #include <cstdarg>
+#include <algorithm>
 #include <array>
+#include <iterator>
 #include <cstdint>
 #include <cstdio>
 #include <nlohmann/json.hpp>
@@ -1182,6 +1184,18 @@ TEST(EvrpPackageLogging, ABufferShorterThanTheHeaderIsRejectedBySizeGuard) {
   const std::vector<uint8_t> shortBuffer(Evrp::kHeaderSize - 1, 0);
   EXPECT_FALSE(Evrp::ParseTint(shortBuffer, "short.evrp", symbol, tint));
   EXPECT_TRUE(TestLogContains("file too small: file=short.evrp"));
+
+  // Exactly the header size is not "too small": it is a header whose data_length promises 80
+  // bytes that are not there, so the size check rejects it instead.
+  ClearTestLogs();
+  std::vector<uint8_t> headerOnly(Evrp::kHeaderSize, 0);
+  const uint8_t header[] = {0x45, 0x56, 0x52, 0x50, 0x01, 0x00, 0x00, 0x00, 0x86, 0xDC, 0xC5, 0x9D,
+                            0xD0, 0x28, 0xD2, 0x74, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                            0x50, 0x00, 0x00, 0x00};
+  std::copy(std::begin(header), std::end(header), headerOnly.begin());
+  EXPECT_FALSE(Evrp::ParseTint(headerOnly, "header.evrp", symbol, tint));
+  EXPECT_FALSE(TestLogContains("file too small"));
+  EXPECT_TRUE(TestLogContains("size mismatch: file=header.evrp"));
 }
 
 TEST(WsBridgePlatformPrefix, EveryDefinedPlatformHasTheNakamaPrefix) {
