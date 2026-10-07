@@ -154,9 +154,7 @@ class WorktreeSetupTest(unittest.TestCase):
         result = self.run_script(self.wt)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse((self.wt / "gen").exists(), "a partial gen/ was left in place")
-        scratch = pathlib.Path(subprocess.check_output(
-            ["git", "-C", str(self.wt), "rev-parse", "--path-format=absolute", "--git-dir"], text=True).strip())
-        self.assertFalse((scratch / "worktree-setup/tmp").exists(), "temporary copy left behind")
+        self.assertFalse((self.wt / ".nevr-worktree-setup").exists(), "temporary copy left behind")
 
     def test_an_existing_env_is_kept_and_a_new_one_is_private(self):
         (self.wt / ".env").write_text("OWN=1\n")
@@ -220,7 +218,7 @@ class WorktreeSetupTest(unittest.TestCase):
             ["git", "-C", str(self.wt), "rev-parse", "--path-format=absolute", "--git-dir"], text=True).strip())
 
     def test_scratch_from_a_killed_run_is_removed_and_user_directories_are_never_touched(self):
-        scratch = self.gitdir() / "worktree-setup/tmp/minhook"
+        scratch = self.wt / ".nevr-worktree-setup/tmp/minhook"
         scratch.mkdir(parents=True)
         (scratch / "stale").write_text("x\n")
         for mine in (".gen.backup", ".gen.abcdef", ".gen.??????"):
@@ -298,6 +296,73 @@ class WorktreeSetupTest(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in self.wt.glob("extern/.*")), [])
         self.assertTrue((self.wt / "gen/cpp/x.pb.cc").exists())
         self.assertFalse((self.wt / "gen/gen").exists())
+
+    def test_a_destination_that_appears_during_the_copy_is_never_nested_into_or_deleted(self):
+        shim = self.tmp / "shim"
+        shim.mkdir()
+        real_tar = shutil.which("tar")
+        (shim / "tar").write_text(
+            "#!/bin/bash\n"
+            'if [[ "$*" == *breakpad* && ! -e "$PWD/extern/.shim-done" ]]; then\n'
+            '  mkdir -p "$PWD/extern/breakpad"; echo mine > "$PWD/extern/breakpad/USERWORK"; touch "$PWD/extern/.shim-done"\n'
+            "fi\n"
+            f'exec {real_tar} "$@"\n')
+        (shim / "tar").chmod(0o755)
+        env = dict(os.environ, PATH=f"{shim}:{os.environ['PATH']}")
+        result = subprocess.run([str(self.wt / "tools/worktree-setup.sh")], cwd=self.wt, capture_output=True, text=True,
+                                env=env, timeout=60)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.wt / "extern/breakpad/USERWORK").read_text(), "mine\n")
+        self.assertFalse((self.wt / "extern/breakpad/breakpad").exists(), "the copy was nested into a directory that appeared")
+        self.assertFalse((self.wt / ".nevr-worktree-setup").exists())
+
+    def test_a_destination_created_between_the_rmdir_and_the_mv_is_not_nested_into(self):
+        shim = self.tmp / "shim-mv"
+        shim.mkdir()
+        real_mv = shutil.which("mv")
+        (shim / "mv").write_text(
+            "#!/bin/bash\n"
+            'dest="${@: -1}"\n'
+            'if [[ "$dest" == "extern/lss" ]]; then mkdir -p "$dest"; echo mine > "$dest/USERWORK"; fi\n'
+            f'exec {real_mv} "$@"\n')
+        (shim / "mv").chmod(0o755)
+        env = dict(os.environ, PATH=f"{shim}:{os.environ['PATH']}")
+        result = subprocess.run([str(self.wt / "tools/worktree-setup.sh")], cwd=self.wt, capture_output=True, text=True,
+                                env=env, timeout=60)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.wt / "extern/lss/USERWORK").read_text(), "mine\n")
+        self.assertFalse((self.wt / "extern/lss/lss").exists(), "the copy was nested into a directory that appeared")
+
+    def test_dotfile_only_directories_are_not_content(self):
+        (self.wt / "extern/minhook").mkdir(parents=True, exist_ok=True)
+        (self.wt / "extern/minhook/.keep").write_text("")
+        (self.wt / "gen/cpp").mkdir(parents=True)
+        (self.wt / "gen/cpp/empty.pb.h").write_text("")
+        result = self.run_script(self.wt, "--check")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("extern/minhook", result.stderr)
+        self.assertIn("gen/cpp", result.stderr)
+
+    def test_a_copy_of_the_script_below_the_worktree_root_is_refused(self):
+        (self.wt / "sub/tools").mkdir(parents=True)
+        shutil.copy(SCRIPT, self.wt / "sub/tools/worktree-setup.sh")
+        result = subprocess.run([str(self.wt / "sub/tools/worktree-setup.sh")], cwd=self.wt / "sub", capture_output=True,
+                                text=True, timeout=60)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("not at the root", result.stderr)
+        self.assertFalse((self.wt / "sub/extern").exists())
+
+    def test_a_branch_that_pins_other_submodule_commits_gets_a_warning(self):
+        gitlink = "160000 commit 1111111111111111111111111111111111111111\textern/minhook\n"
+        subprocess.run(["git", "-C", str(self.main), "update-index", "--add", "--cacheinfo",
+                        "160000,1111111111111111111111111111111111111111,extern/minhook"], check=True, capture_output=True)
+        git(self.main, "commit", "-q", "-m", "pin", "--no-gpg-sign")
+        subprocess.run(["git", "-C", str(self.wt), "update-index", "--add", "--cacheinfo",
+                        "160000,2222222222222222222222222222222222222222,extern/minhook"], check=True, capture_output=True)
+        git(self.wt, "commit", "-q", "-m", "other pin", "--no-gpg-sign")
+        result = self.run_script(self.wt)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("pins extern/minhook at 222222222222", result.stderr)
 
     def test_directories_with_only_empty_subdirectories_do_not_pass_the_check(self):
         (self.wt / "extern/minhook/src").mkdir(parents=True)

@@ -298,8 +298,8 @@ your seat name, for example `claude-main` or `codex`.
 - **Fresh worktrees need build inputs.** Run `just worktree-setup` in the new linked worktree: it
   copies `extern/{minhook,breakpad,lss}` (without their `.git` files), `gen/` and `.env` from the main
   checkout, only into places that are absent or empty. It keeps anything already there (delete `gen/`
-  to refresh it), never touches the main checkout, and copies the main checkout's submodule content, so
-  use `git submodule update --init` when the branch pins other submodule commits. Never print `.env`.
+  to refresh it), never touches the main checkout, and copies the main checkout's submodule content (it warns when this branch pins other commits: then remove
+  that `extern/<d>` and run `git submodule update --init extern/<d>`). Never print `.env`.
   The build embeds the production endpoints from `.env`.
 - **Client login test mechanics.** Run `./launch-client.sh --dll <absolute path to the build's
   BugSplat64.dll>` from your checkout in the background, one client at a time (it exits 4 while an

@@ -13,8 +13,9 @@
 #     generated source is refused, not overwritten.
 #   - It copies the main checkout's submodule CONTENT: a worktree on a branch that pins different
 #     submodule commits should run `git submodule update --init` instead.
-#   - It never touches the main checkout and never prints .env. Copies are made in a private
-#     directory inside this worktree's git dir and moved into place, under a lock.
+#   - It never touches the main checkout and never prints .env. Copies are made in
+#     `.nevr-worktree-setup/` at the worktree root (the same filesystem as the destinations, so a
+#     move is an atomic rename, and a name nothing else uses) and moved into place, under a lock.
 #
 #   tools/worktree-setup.sh          fill in the missing inputs
 #   tools/worktree-setup.sh --check  report what a root-preset build is missing (used by `just
@@ -28,9 +29,9 @@ self=$(readlink -f "${BASH_SOURCE[0]}")
 cd "$(dirname "$self")/.."
 here=$(pwd -P)
 
-# Any regular file counts as content, except a submodule's `.git` pointer (file or directory).
-has_files() { [[ -n "$(find "$1" -name .git -prune -o -type f -print -quit 2>/dev/null)" ]]; }
-has_gen() { [[ -n "$(find "$1/gen/cpp" -type f \( -name '*.pb.cc' -o -name '*.pb.h' \) -print -quit 2>/dev/null)" ]]; }
+# Content is a regular, non-dot file (a `.git` pointer, a `.keep` or an empty directory tree is not).
+has_files() { [[ -d "$1" && -n "$(find "$1" -name .git -prune -o -type f ! -name '.*' -print -quit 2>/dev/null)" ]]; }
+has_gen() { [[ -n "$(find "$1/gen/cpp" -type f \( -name '*.pb.cc' -o -name '*.pb.h' \) -size +0 -print -quit 2>/dev/null)" ]]; }
 # Absent, or a directory with nothing in it (not even dotfiles): safe to fill.
 is_fillable() { [[ ! -e "$1" && ! -L "$1" ]] || { [[ -d "$1" && ! -L "$1" && -z "$(ls -A "$1")" ]]; }; }
 
@@ -50,6 +51,11 @@ fi
 
 gitdir=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || { echo "error: not inside a git checkout" >&2; exit 2; }
 common=$(git rev-parse --path-format=absolute --git-common-dir)
+top=$(git rev-parse --show-toplevel)
+if [[ "$(cd "$top" && pwd -P)" != "$here" ]]; then
+  echo "error: this script is not at the root of its worktree ($top); it only runs from tools/ at the worktree root" >&2
+  exit 2
+fi
 if [[ "$gitdir" == "$common" ]]; then
   echo "error: this is not a linked worktree (it is the main checkout); initialise it with 'git submodule update --init' and 'just proto'" >&2
   exit 2
@@ -77,14 +83,16 @@ for d in minhook breakpad lss; do
 done
 has_gen "$main" || { echo "error: $main/gen/cpp holds no generated source; run 'just proto' in the main checkout first" >&2; exit 1; }
 
-# One run at a time, and a private scratch directory that only this script uses.
-scratch="$gitdir/worktree-setup"
-mkdir -p "$scratch"
-exec 9>"$scratch/lock"
+# One run at a time. The lock lives in the git dir; the copies are made in a directory at the worktree
+# root with a fixed name (so cleaning it never matches anything else).
+mkdir -p "$gitdir/worktree-setup"
+exec 9>"$gitdir/worktree-setup/lock"
 flock -n 9 || { echo "error: another worktree-setup is running in this worktree" >&2; exit 1; }
-rm -rf "$scratch/tmp"
-mkdir "$scratch/tmp"
-trap 'rm -rf "$scratch/tmp"' EXIT
+scratch="$here/.nevr-worktree-setup"
+[[ ! -L "$scratch" ]] || { echo "error: $scratch is a symlink; remove it first" >&2; exit 2; }
+rm -rf "$scratch"
+mkdir "$scratch" "$scratch/tmp"
+trap 'rm -rf "$scratch"' EXIT
 
 filled=()
 kept=()
@@ -95,7 +103,7 @@ for d in minhook breakpad lss; do
   mkdir "$scratch/tmp/$d"
   tar -C "$main/extern/$d" --exclude=.git -cf - . | tar -C "$scratch/tmp/$d" -xf -
   [[ ! -d "extern/$d" ]] || rmdir "extern/$d"
-  mv "$scratch/tmp/$d" "extern/$d"
+  mv -T "$scratch/tmp/$d" "extern/$d"
   filled+=("extern/$d")
 done
 if has_gen "$here"; then
@@ -104,7 +112,7 @@ elif is_fillable gen; then
   mkdir "$scratch/tmp/gen"
   tar -C "$main/gen" -cf - . | tar -C "$scratch/tmp/gen" -xf -
   [[ ! -d gen ]] || rmdir gen
-  mv "$scratch/tmp/gen" gen
+  mv -T "$scratch/tmp/gen" gen
   filled+=(gen/)
 else
   refused+=("gen/ (has other content but no generated source: move it away, then run again)")
@@ -112,11 +120,20 @@ fi
 if [[ -e .env ]]; then
   kept+=(.env)
 elif [[ -f "$main/.env" ]]; then
-  (umask 077; cp "$main/.env" .env)
+  (umask 077; cp "$main/.env" "$scratch/tmp/env")
+  mv -T -n "$scratch/tmp/env" .env
   filled+=(.env)
 else
   echo "warning: no .env in $main: the build will embed no service endpoints (launch-client.sh refuses such a DLL)" >&2
 fi
+# Warn when this branch pins other submodule commits than the main checkout's HEAD.
+for d in minhook breakpad lss; do
+  mine=$(git ls-tree HEAD "extern/$d" 2>/dev/null | awk '{print $3}')
+  theirs=$(git -C "$main" ls-tree HEAD "extern/$d" 2>/dev/null | awk '{print $3}')
+  if [[ -n "$mine" && -n "$theirs" && "$mine" != "$theirs" ]]; then
+    echo "warning: this branch pins extern/$d at ${mine:0:12} but the main checkout has ${theirs:0:12}: remove extern/$d and run 'git submodule update --init extern/$d' for this branch's version" >&2
+  fi
+done
 echo "filled from $main: ${filled[*]:-nothing}"
 [[ ${#kept[@]} -eq 0 ]] || echo "kept what this worktree already has: ${kept[*]}"
 if [[ ${#refused[@]} -gt 0 ]]; then
