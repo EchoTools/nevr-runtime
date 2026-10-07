@@ -1,6 +1,6 @@
 /*
  * platform_compat module — Schannel TLS modernization, CreateDirectory fixes,
- * and WinHTTP-to-libcurl CoCreateInstance hook.
+ * and MSXML6 CoCreateInstance pass-through hook.
  *
  * Each module DLL has its own MinHook statics — calls Hooking::Initialize()
  * before any hook installation.
@@ -8,7 +8,7 @@
  * Hooks:
  *   - AcquireCredentialsHandleW (Schannel): enables TLS 1.2/1.3 with modern cipher suites
  *   - CreateDirectoryW / CreateDirectoryA: fixes _temp directory creation failures under Wine
- *   - CoCreateInstance (ole32): redirects WinHTTP COM creation to libcurl stub
+ *   - CoCreateInstance (ole32): logs the MSXML6 XMLHTTP CLSID and passes it through to the system object
  */
 
 #include <windows.h>
@@ -174,28 +174,15 @@ static CoCreateInstanceFunc OriginalCoCreateInstance = nullptr;
 
 HRESULT WINAPI CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD dwClsContext,
                                     REFIID riid, LPVOID* ppv) {
+  HRESULT hr = OriginalCoCreateInstance(rclsid, pUnkOuter, dwClsContext, riid, ppv);
   if (IsEqualCLSID(rclsid, CLSID_WinHttpRequest)) {
-    Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] WinHTTP COM → libcurl bridge");
-
-    static bool s_protectionFixed = false;
-    if (!s_protectionFixed) {
-      DWORD oldProtect;
-      PVOID rdataStart = (PVOID)(EchoVR::g_GameBaseAddress + 0x16E8000);
-      if (VirtualProtect(rdataStart, 0x2000, PAGE_READWRITE, &oldProtect)) {
-        Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] Made COM rdata page writable (was 0x%lX)", oldProtect);
-      }
-      s_protectionFixed = true;
-    }
-
-    extern HRESULT CreateWinHttpRequestStub(REFIID riid, void** ppvObject);
-    HRESULT hr = CreateWinHttpRequestStub(riid, ppv);
-    if (FAILED(hr)) {
-      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] WinHTTP stub creation failed: 0x%08lX", hr);
-    }
-    return hr;
+    // The game drives this object through IXMLHTTPRequest2/3 (slot 3 Open, slot 4 Send); the
+    // IWinHttpRequest-shaped stub wrote through arguments the game never passed (#133). The
+    // system's object has the right layout, so the request goes to it.
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] MSXML6 XMLHTTP CLSID passed through to the system object hr=0x%08lX",
+        static_cast<unsigned long>(hr));
   }
-
-  return OriginalCoCreateInstance(rclsid, pUnkOuter, dwClsContext, riid, ppv);
+  return hr;
 }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +263,7 @@ static bool InstallWinHTTPHook() {
             Hooking::LastAttachError());
         return false;
       }
-      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] WinHTTP to libcurl hook installed (CoCreateInstance)");
+      Log(EchoVR::LogLevel::Debug, "[NEVR.PATCH] MSXML6 pass-through hook installed (CoCreateInstance)");
       return true;
     }
     Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] failed to find CoCreateInstance export in ole32.dll (error=%lu)",
