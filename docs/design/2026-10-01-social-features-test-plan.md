@@ -31,15 +31,9 @@ the game never asks for them, so that code is unused. pnsovr's only friend API i
 `ovr_User_GetLoggedInUserFriends`; on Oculus, friend requests were handled in the platform
 overlay that `OpenFriendRequestUI` opened.
 
-Rule 0: a feature is done only when it has been shown working on a real Windows PC client
-against production, through the game's own UI, over a full session, with evidence attached (the
-commit, the exact run, and the log lines or recording). Anything less is unproven.
+0. WHAT "WORKS" MEANS. A feature works only when a person on a real Windows PC uses it through the game's own UI and it does its whole job, every time, for a full session, with no caveat. Code that exists, compiles, is "built in", passes a one-client test, or has a closed issue does NOT work. Anything with a known failure (drops, stale data, needs a restart, crashes on some machines) is BROKEN, not "works with caveats". A feature that involves another player is proven only with two real clients.
 
-Status vocabulary: **proven** = rule 0 is met, with the run named; **unproven** = anything short
-of rule 0, including every one-client scenario run (kept in the row as history, not proof);
-**broken** = seen failing; **stub** = the facade slot returns a constant or does nothing;
-**unknown** = never exercised; **absent** = the game has no node, slot or message for it
-(evidence given).
+Status vocabulary: **works** = rule 0 is met, with the run named; **unproven** = anything short of rule 0, including every one-client scenario run (kept in the row as history, not proof); **broken** = a known failure; **stub** = the facade slot returns a constant or does nothing; **unknown** = never exercised; **absent** = the game has no node, slot or message for it (evidence given).
 
 A scenario enters the game only through the game's own entry point: the node's run function,
 replicated or fired the way `fire friend_invite` replicates `R15NetPartySendInviteNode`. The
