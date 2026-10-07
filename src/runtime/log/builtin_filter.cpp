@@ -999,12 +999,15 @@ static void MaybeEmitHealth() {
     s_lastGameLines = gameLines;
 
     if (delta == 0) {
-        char warn[320];
+        char warn[512];
         const int wn = snprintf(warn, sizeof(warn),
                                 "[NEVR.LOGFILTER] CAPTURED ZERO GAME LINES this interval "
-                                "(total=%llu) — the CLog hook is installed but receiving "
-                                "nothing. Another module has almost certainly taken the target "
-                                "Filtering, truncation and file logging are all inert.",
+                                "(total=%llu): the CLog hook is installed but no game line "
+                                "arrived. Either another module took the hook target (look for a "
+                                "hook failure line at boot) or the game is idle or blocked "
+                                "(waiting for a login, or on a modal dialog). Filtering, "
+                                "truncation and file logging have nothing to act on until lines "
+                                "arrive.",
                                 static_cast<unsigned long long>(gameLines));
         if (wn > 0) EmitLine(LOG_LEVEL_WARNING, warn, wn);
     }
