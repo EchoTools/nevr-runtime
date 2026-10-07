@@ -245,15 +245,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       RegisterModuleProc("TokenAuth_GetUsername", (void*)TokenAuth_GetUsername);
     }
 
-    // N92: ws_bridge is no longer a module. It is compiled into this DLL and
-    // started below, after the CLI is parsed. The LoadModule call and the
-    // RegisterModuleProc registrations are gone with it — config.cpp now calls
+    // N92: ws_bridge is not a module. It is compiled into this DLL and started
+    // below, after the CLI is parsed; config.cpp calls
     // IsWebSocketBridgeActive()/GetWebSocketBridgePort() directly.
-    //
-    // Removing the LoadModule call is REQUIRED, not cosmetic: ws_bridge was on
-    // the required-module list, so with the DLL gone the loader correctly
-    // fail-fasts with "[FATAL] ws_bridge: Required module missing" and exit 1.
-    // Measured, 2026-07-27.
   }
 
   // Parse command line arguments.
