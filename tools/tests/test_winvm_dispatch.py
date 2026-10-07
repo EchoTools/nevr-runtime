@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools" / "winvm"))
@@ -39,6 +42,14 @@ class ScenarioDispatchTest(unittest.TestCase):
     def test_unknown_scenario_is_rejected(self):
         with self.assertRaises(ValueError):
             systest.scenario_plan("login")
+
+    def test_missing_credentials_are_environment_exit_two(self):
+        output = io.StringIO()
+        with mock.patch.dict("os.environ", {}, clear=True), contextlib.redirect_stderr(output):
+            result = systest.main(["--scenario", "boot"])
+        self.assertEqual(result, 2)
+        self.assertIn("ENV:", output.getvalue())
+        self.assertIn("WINVM_USER", output.getvalue())
 
 
 if __name__ == "__main__":

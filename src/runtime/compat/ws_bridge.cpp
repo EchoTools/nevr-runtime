@@ -975,7 +975,7 @@ void InstallWebSocketBridge() {
             }
             // conn>=2 (matchmaker): pnsradmatchmaking uses protobuf, not EchoVR
             // binary. Strip format=evr so the server uses default protobuf handling.
-            // format=evr is routinely the FIRST query param here: a configured
+            // Issue #116: format=evr is routinely the FIRST query param here: a configured
             // socket_uri such as "wss://host/ws?format=evr&token=..." already
             // carries it before the credentials block above appends
             // discordid/password. A naive "delete the preceding
