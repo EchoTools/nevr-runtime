@@ -18,6 +18,7 @@ just verbose-build      # Build with full compiler output
 just clean              # Remove build/ and dist/
 just preset=mingw-debug build  # Use a specific preset
 just proto                     # Regenerate protobuf from BSR (requires buf CLI)
+just worktree-setup            # Make a fresh git worktree buildable (copies extern/, gen/, .env from the main checkout)
 just sign               # Code-sign all DLLs/EXEs in dist/ (requires certs/)
 just generate-certs     # Generate CA hierarchy for code signing
 ```
@@ -296,8 +297,8 @@ your seat name, for example `claude-main` or `codex`.
   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
 - **Fresh worktrees need build inputs.** Run `just worktree-setup` in the new worktree: it copies
   `extern/{minhook,breakpad,lss}` (without their `.git` files), `gen/` and `.env` from the main
-  checkout and leaves the main checkout unchanged. Never print `.env`. The build embeds the production
-  endpoints from `.env`.
+  checkout, leaves the main checkout unchanged and keeps a `.env` the worktree already has. Never print
+  `.env`. The build embeds the production endpoints from `.env`.
 - **Client login test mechanics.** Run `./launch-client.sh --dll <absolute path to the build's
   BugSplat64.dll>` from your checkout in the background, one client at a time (it exits 4 while an
   `echovr.exe` runs or another run holds the lock). `NEVR_GAME_ROOT` overrides which checkout's

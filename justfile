@@ -23,10 +23,10 @@ generate-symcache:
     fi
 
 # Configure CMake (fails early with the fix when a fresh worktree lacks its build inputs)
-configure: _build-inputs generate-symcache _vcpkg-mingw
+configure: generate-symcache _vcpkg-mingw _build-inputs
     @unset VCPKG_ROOT && cmake --preset {{ preset }} > /dev/null 2>&1 || (unset VCPKG_ROOT && cmake --preset {{ preset }})
 
-# Stop early, with the fix, when the submodules or gen/ are missing
+# Stop with the fix when the submodule or gen/ a root-preset build needs is missing (after vcpkg, whose protoc `just proto` uses)
 _build-inputs:
     @tools/worktree-setup.sh --check
 
