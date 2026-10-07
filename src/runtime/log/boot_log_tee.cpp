@@ -172,6 +172,8 @@ void BootLogTee::TeeFprintf(const char* fmt, ...) {
     // Failure is silent — nothing to do with a failed write at boot time
 }
 
+bool BootLogTee::IsOpen() { return g_boot_handle != INVALID_HANDLE_VALUE; }
+
 void BootLogTee::Close() {
     if (g_boot_handle != INVALID_HANDLE_VALUE) {
         CloseHandle(g_boot_handle);

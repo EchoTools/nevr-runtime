@@ -660,6 +660,8 @@ if(BUILD_TESTING)
       ext/plugin_manifest.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
+      # patching.h's PatchDetour reports through BootLogTee while boot is running (#92).
+      log/boot_log_tee.cpp
       compat/ws_bridge.cpp
       compat/login_profile.cpp
       # #41: ws_bridge.cpp builds its URL credentials through the ServerDbUri encoder.

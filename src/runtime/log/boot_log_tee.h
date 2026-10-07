@@ -33,6 +33,10 @@ void Init();
 /// Writes to stderr (always) AND to the boot JSONL file (if open).
 void TeeFprintf(const char* fmt, ...);
 
+/// True between Init() and Close(): boot is still running under the loader lock, so
+/// code shared with later phases must report through TeeFprintf, not Log().
+bool IsOpen();
+
 /// Close the boot file handle.  After this call TeeFprintf still writes
 /// to stderr but the file mirror stops.
 void Close();
