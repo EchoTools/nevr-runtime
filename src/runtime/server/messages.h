@@ -25,6 +25,8 @@ struct EncodedMessage {
   std::vector<uint8_t> data;
   size_t size() const { return data.size(); }
   const uint8_t* ptr() const { return data.data(); }
+  // The game's dispatch API takes a mutable pointer to a buffer we encoded ourselves.
+  uint8_t* ptr() { return data.data(); }
 };
 
 // Encode LobbyStartSessionV4 message to binary format
