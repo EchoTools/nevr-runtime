@@ -619,7 +619,7 @@ static const bool g_partySenderRegistered = (SocialParty::SetSender(&SendFrameTo
 static const uint64_t SYM_LOGIN_REQUEST = 0xbdb41ea9e67b200a;
 
 static void AppendLE64(std::string& buf, uint64_t val) {
-  for (int i = 0; i < 8; i++) { buf.push_back((char)(val & 0xFF)); val >>= 8; }
+  for (int i = 0; i < 8; i++) { buf.push_back(static_cast<char>(val & 0xFF)); val >>= 8; }
 }
 
 // Platform codes: Nakama's PlatformCode and the game's own provider numbering are the same
@@ -881,7 +881,7 @@ void InstallWebSocketBridge() {
             if (connIdx >= 2 && g_loginRemoteWs) {
               Log(EchoVR::LogLevel::Info,
                   "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), sharing login session (no LoginRequest)",
-                  connIdx, (void*)&gameWs);
+                  connIdx, static_cast<void*>(&gameWs));
               auto pair = std::make_unique<ProxyPair>();
               pair->remoteWs = g_loginRemoteWs;
               pair->remoteOpen = true;
@@ -997,12 +997,12 @@ void InstallWebSocketBridge() {
             std::string accountName;  // N123 — empty means "not known", never a placeholder
             uint64_t discordId = 0;
             {
-              auto getTokenFn = (const char* (*)())ResolveModuleProc("TokenAuth_GetToken");
-              auto getDiscordIdFn = (uint64_t (*)())ResolveModuleProc("TokenAuth_GetDiscordId");
+              auto getTokenFn = reinterpret_cast<const char* (*)()>(ResolveModuleProc("TokenAuth_GetToken"));
+              auto getDiscordIdFn = reinterpret_cast<uint64_t (*)()>(ResolveModuleProc("TokenAuth_GetDiscordId"));
               // N123. Optional by design: an older token_auth.dll without this
               // export must still load. A null here means "no name available",
               // which BuildLoginRequest already handles.
-              auto getUsernameFn = (const char* (*)())ResolveModuleProc("TokenAuth_GetUsername");
+              auto getUsernameFn = reinterpret_cast<const char* (*)()>(ResolveModuleProc("TokenAuth_GetUsername"));
               if (getTokenFn) {
                 const char* tok = getTokenFn();
                 if (tok) bearerToken = tok;
@@ -1030,7 +1030,7 @@ void InstallWebSocketBridge() {
                 discordId = strtoull(cfgId, nullptr, 10);
                 Log(EchoVR::LogLevel::Info,
                     "[NEVR.WS] Using nevr_discord_id from config: %llu",
-                    (unsigned long long)discordId);
+                    static_cast<unsigned long long>(discordId));
               }
             }
             if (discordId == 0) {
@@ -1113,36 +1113,36 @@ void InstallWebSocketBridge() {
                           HMODULE hPnsrad = GetModuleHandleA("pnsrad.dll");
                           if (hPnsrad) {
                             typedef void* (*UsersFn)();
-                            auto Users = (UsersFn)GetProcAddress(hPnsrad, "Users");
+                            auto Users = reinterpret_cast<UsersFn>(GetProcAddress(hPnsrad, "Users"));
                             if (Users) {
-                              auto* usersObj = (uint8_t*)Users();
+                              auto* usersObj = reinterpret_cast<uint8_t*>(Users());
                               if (usersObj) {
-                                uint64_t userCount = *(uint64_t*)(usersObj + 0x398);
-                                uint8_t** bufCtx = *(uint8_t***)(usersObj + 0x368);
+                                uint64_t userCount = *reinterpret_cast<uint64_t*>(usersObj + 0x398);
+                                uint8_t** bufCtx = *reinterpret_cast<uint8_t***>(usersObj + 0x368);
                                 if (userCount > 0 && bufCtx && *bufCtx) {
                                   uint8_t* user = *bufCtx;
-                                  int64_t*  accountId  = (int64_t*)(user + 0x88);
-                                  uint64_t* loginState = (uint64_t*)(user + 0x90);
-                                  uint32_t* stateFlags = (uint32_t*)(user + 0x9c);
+                                  int64_t*  accountId  = reinterpret_cast<int64_t*>(user + 0x88);
+                                  uint64_t* loginState = reinterpret_cast<uint64_t*>(user + 0x90);
+                                  uint32_t* stateFlags = reinterpret_cast<uint32_t*>(user + 0x9c);
                                   int64_t  beforeAcct    = *accountId;
                                   uint64_t beforeState   = *loginState;
                                   uint32_t beforeFlags   = *stateFlags;
-                                  int      beforeProvider = (int)(beforeState & 0xf);
+                                  int      beforeProvider = static_cast<int>(beforeState & 0xf);
                                   // Set the user's XPID: account_id and provider enum.
                                   // +0x88 = account_id (discord ID from JWT)
                                   // +0x90 low nibble = provider enum (2 = PSN in binary,
                                   //   patched to DSC by PatchDscProvider string table rewrite)
                                   // +0x9c = state flags (0x04 = connected/logged in)
-                                  *accountId  = (int64_t)discordId;
+                                  *accountId  = static_cast<int64_t>(discordId);
                                   *loginState = (*loginState & ~0xFULL) | kBridgeLoginPlatform;  // OVR_ORG (game numbering)
                                   *stateFlags = 0x04;
                                   Log(EchoVR::LogLevel::Info,
                                       "[NEVR.WS] CNSUser login state patched acct=%lld->%lld "
                                       "state=0x%llx->0x%llx provider=%d->%d flags=0x%x->0x%x "
                                       "(unblocks LogInSuccessCB)",
-                                      (long long)beforeAcct, (long long)*accountId,
-                                      (unsigned long long)beforeState, (unsigned long long)*loginState,
-                                      beforeProvider, (int)(*loginState & 0xf), beforeFlags, *stateFlags);
+                                      static_cast<long long>(beforeAcct), static_cast<long long>(*accountId),
+                                      static_cast<unsigned long long>(beforeState), static_cast<unsigned long long>(*loginState),
+                                      beforeProvider, static_cast<int>(*loginState & 0xf), beforeFlags, *stateFlags);
                                 }
                               }
                             }
@@ -1240,10 +1240,10 @@ void InstallWebSocketBridge() {
                           // Server ignores the payload, so send zeros.
                           uint8_t payload[0x20] = {};
                           std::string subscribeMsg;
-                          subscribeMsg.append((const char*)MSG_MARKER, 8);
+                          subscribeMsg.append(reinterpret_cast<const char*>(MSG_MARKER), 8);
                           AppendLE64(subscribeMsg, SYM_FRIEND_SUBSCRIBE);
                           AppendLE64(subscribeMsg, sizeof(payload));
-                          subscribeMsg.append((const char*)payload, sizeof(payload));
+                          subscribeMsg.append(reinterpret_cast<const char*>(payload), sizeof(payload));
                           pairPtr->remoteWs->sendBinary(subscribeMsg);
                           Log(EchoVR::LogLevel::Debug,
                               "[NEVR.WS] Injected FriendListSubscribeRequest (%zu bytes)",
@@ -1261,10 +1261,10 @@ void InstallWebSocketBridge() {
                         uint64_t friendId = 0;
                         uint8_t statusCode = 0;
                         memcpy(&friendId, rmsg->str.data() + 24 + 8, 8);
-                        statusCode = (uint8_t)rmsg->str.data()[24 + 16];
+                        statusCode = static_cast<uint8_t>(rmsg->str.data()[24 + 16]);
                         Log(EchoVR::LogLevel::Warning,
                             "[NEVR.WS] FRIEND INVITE FAILURE: friendId=%llu status=%u",
-                            (unsigned long long)friendId, statusCode);
+                            static_cast<unsigned long long>(friendId), statusCode);
                       }
                       // InviteSuccess (0x7f0c6a3ac83c6f77): Header(8)+FriendID(8)
                       if (rsym == 0x7f0c6a3ac83c6f77 && rmsg->str.size() >= 24 + 16) {
@@ -1272,7 +1272,7 @@ void InstallWebSocketBridge() {
                         memcpy(&friendId, rmsg->str.data() + 24 + 8, 8);
                         Log(EchoVR::LogLevel::Debug,
                             "[NEVR.WS] FRIEND INVITE SUCCESS: friendId=%llu",
-                            (unsigned long long)friendId);
+                            static_cast<unsigned long long>(friendId));
                       }
                       // FriendListResponse (0xa78aeb2a4e89b10b): counts + per-friend entries
                       if (rsym == 0xa78aeb2a4e89b10b && rmsg->str.size() >= 24 + 0x20) {
@@ -1287,7 +1287,7 @@ void InstallWebSocketBridge() {
                             non, nbusy, noff, nsent, nrecv);
                         // Hex dump full payload for friend entry analysis
                         size_t payloadLen = rmsg->str.size() - 24;
-                        const uint8_t* pp = (const uint8_t*)rmsg->str.data() + 24;
+                        const uint8_t* pp = reinterpret_cast<const uint8_t*>(rmsg->str.data()) + 24;
                         char hex[4096] = {};
                         int hoff = 0;
                         for (size_t i = 0; i < payloadLen && hoff < 4000; i++) {
@@ -1375,7 +1375,7 @@ void InstallWebSocketBridge() {
             // EchoVR wire format: [marker(8)][symbol(8)][length(8)][payload(length)]...
             {
               const uint8_t marker_bytes[] = {0xf6,0x40,0xbb,0x78,0xa2,0xe7,0x8c,0xbb};
-              const uint8_t* p = (const uint8_t*)msg->str.data();
+              const uint8_t* p = reinterpret_cast<const uint8_t*>(msg->str.data());
               size_t remaining = msg->str.size();
               int msgIdx = 0;
               while (remaining >= 24) {
@@ -1393,13 +1393,13 @@ void InstallWebSocketBridge() {
                 const char* symName = EchoVR::LookupSymbolName(sym);
                 if (symName) {
                   snprintf(symBuf, sizeof(symBuf), "0x%016llx (%s)",
-                           (unsigned long long)sym, symName);
+                           static_cast<unsigned long long>(sym), symName);
                 } else {
                   snprintf(symBuf, sizeof(symBuf), "0x%016llx",
-                           (unsigned long long)sym);
+                           static_cast<unsigned long long>(sym));
                 }
                 Log(EchoVR::LogLevel::Debug, "[NEVR.WS] game->server [%d]: sym=%s len=%llu ws_conn_id=%s",
-                    msgIdx, symBuf, (unsigned long long)len,
+                    msgIdx, symBuf, static_cast<unsigned long long>(len),
                     connState->getId().c_str());
                 // Hex dump PlayerSessionRequest (0x9af2fab2a0c81a05) for debugging
                 if (sym == 0x9af2fab2a0c81a05 && len <= 256) {
@@ -1420,8 +1420,8 @@ void InstallWebSocketBridge() {
                   memcpy(&targetUserId, p + 24 + 32, 8);
                   Log(EchoVR::LogLevel::Debug,
                       "[NEVR.WS]   FriendInvite: routing=%llu target=%llu session=%llu",
-                      (unsigned long long)routingId, (unsigned long long)targetUserId,
-                      (unsigned long long)sessionGuid);
+                      static_cast<unsigned long long>(routingId), static_cast<unsigned long long>(targetUserId),
+                      static_cast<unsigned long long>(sessionGuid));
                 }
                 // SNSPartyInviteRequest (0xcf13f934540b5f5e): RoutingID(8)+UUID(16)+SessionGUID(8)+TargetUserID(8)
                 // (was briefly logged at Info for a 2026-09-13 investigation into whether
@@ -1434,19 +1434,19 @@ void InstallWebSocketBridge() {
                   memcpy(&targetUserId, p + 24 + 32, 8);
                   Log(EchoVR::LogLevel::Debug,
                       "[NEVR.WS]   PartyInviteRequest: routing=%llu target=%llu session=%llu",
-                      (unsigned long long)routingId, (unsigned long long)targetUserId,
-                      (unsigned long long)sessionGuid);
+                      static_cast<unsigned long long>(routingId), static_cast<unsigned long long>(targetUserId),
+                      static_cast<unsigned long long>(sessionGuid));
                 }
                 // FriendListSubscribe (0xdcfa94680e8d19fc)
                 if (sym == 0xdcfa94680e8d19fc) {
                   Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   FriendListSubscribeRequest sent");
                 }
-                size_t total = 24 + (size_t)len;
+                size_t total = 24 + static_cast<size_t>(len);
                 if (total > remaining) {
                   Log(EchoVR::LogLevel::Warning,
                       "[NEVR.WS]   truncated: need %llu but only %zu remaining — per-message "
                       "diagnostic decode aborted here, raw frame still forwarded to remote unparsed",
-                      (unsigned long long)total, remaining);
+                      static_cast<unsigned long long>(total), remaining);
                   break;
                 }
                 p += total;
@@ -1496,7 +1496,7 @@ void InstallWebSocketBridge() {
               if (dropped == 1 || dropped % 100 == 0) {
                 Log(EchoVR::LogLevel::Warning,
                     "[NEVR.WS]   -> DROPPED (no pair found) — %llu total occurrences",
-                    (unsigned long long)dropped);
+                    static_cast<unsigned long long>(dropped));
               }
             }
             break;
