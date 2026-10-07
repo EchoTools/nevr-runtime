@@ -622,17 +622,19 @@ static void AppendLE64(std::string& buf, uint64_t val) {
   for (int i = 0; i < 8; i++) { buf.push_back((char)(val & 0xFF)); val >>= 8; }
 }
 
-// Platform codes match the server's wire enum (empirically verified 2026-08-04).
-// Wire: STM=0, DSC=1, XBX=2, OVR=3, OVR_ORG=4, BOT=5, DMO=6
+// Platform codes: Nakama's PlatformCode and the game's own provider numbering are the same
+// 1-indexed enum: STM=1, DSC=2, XBX=3, OVR_ORG=4, OVR=5, BOT=6, DMO=7. Code 2 is "PSN" in the
+// game's string table and reads "DSC" only after PatchDscProvider rewrites it. Anything else
+// yields "UNK" (the game's own fallback prefix for an unknown provider is "???").
 static const char* PlatformPrefix(uint64_t platformCode) {
   switch (platformCode) {
-    case 0: return "STM";
-    case 1: return "DSC";
-    case 2: return "XBX";
-    case 3: return "OVR";
+    case 1: return "STM";
+    case 2: return "DSC";
+    case 3: return "XBX";
     case 4: return "OVR-ORG";
-    case 5: return "BOT";
-    case 6: return "DSC-NOVR";  // DMO = demo/no-VR client
+    case 5: return "OVR";
+    case 6: return "BOT";
+    case 7: return "DMO";
     default: return "UNK";
   }
 }
@@ -648,14 +650,14 @@ static const char* PlatformPrefix(uint64_t platformCode) {
 // game's own CNSUser (the login-state patch below), because the game then names itself with
 // that platform in every later request (LobbyPlayerSessionsRequest, ...) and Nakama looks the
 // requester up in the match under the platform the LoginRequest carried. Measured 2026-09-30:
-// a token-auth client logged in as platform 6 (DMO) while the game asked for its player
+// a token-auth client logged in as platform 6 (BOT in the 1-indexed enum; -noovr sent it) while the game asked for its player
 // sessions as OVR-ORG, and Nakama answered "requesting player not found in match:
 // OVR-ORG-<id>" (the host never accepted the player, the game ended at "Server connection
 // failed"). Platform 4 is what every URL-credential login already sent.
 static constexpr uint64_t kBridgeLoginPlatform = 4;  // OVR_ORG (game numbering)
 
 // Pure function — testable without config or globals. The arguments no longer influence the
-// result: -noovr (DMO, 6) and the token-auth default (DSC, 1) produced an identity the game
+// result: -noovr (6) and the token-auth default (1) produced an identity the game
 // itself does not use.
 static uint64_t SelectPlatformCode(bool /*hasUrlCredentials*/, bool /*noOvr*/) {
   return kBridgeLoginPlatform;
@@ -698,7 +700,7 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
                                      const std::string& displayName = std::string(),
                                      const std::string& accessToken = std::string(),
                                      const std::string& password = std::string()) {
-  // Platform codes match Go server iota: STM=0, DSC=1, XBX=2, OVR_ORG=3, OVR=4, BOT=5, DMO=6
+  // Platform codes: see PlatformPrefix (1-indexed: STM=1 ... OVR_ORG=4 ... DMO=7).
   uint64_t accountId = discordId;
 
   // Host facts, MEASURED. Every value in this block used to be a literal —

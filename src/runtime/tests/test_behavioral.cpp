@@ -1066,9 +1066,8 @@ TEST(WsBridgeLoginRequest, HasExpectedHeaderAndPayloadLength) {
 }
 
 // PlatformCode=4 (OVR_ORG in game numbering) at wire offset 40.
-// Regression test for 2026-08-04: PlatformCode was sent as 3 (Nakama enum
-// OVR_ORG), but the game interprets wire values through its own numbering
-// where OVR_ORG=4. The server echoes the value unchanged into LoginSuccess
+// Regression test for 2026-08-04: PlatformCode was sent as 3, which the game
+// resolves to XBX; OVR_ORG is 4 in the game's and Nakama's shared numbering. The server echoes the value unchanged into LoginSuccess
 // (evr_pipeline_login.go:185), and the game resolves it through
 // GetProviderPrefix (echovr.exe fcn.14060d640, switch case 4→\"OVR-ORG\").
 TEST(WsBridgeLoginRequest, PlatformCode4AtWireOffset40) {
@@ -1173,13 +1172,15 @@ TEST(LoginProfile, EmptyDisplayNameFallsBackToTheAccountId) {
 }
 
 TEST(WsBridgePlatformPrefix, EveryDefinedPlatformHasTheNakamaPrefix) {
-  EXPECT_STREQ(TestHook_PlatformPrefix(0), "STM");
-  EXPECT_STREQ(TestHook_PlatformPrefix(1), "DSC");
-  EXPECT_STREQ(TestHook_PlatformPrefix(2), "XBX");
-  EXPECT_STREQ(TestHook_PlatformPrefix(3), "OVR");
+  EXPECT_STREQ(TestHook_PlatformPrefix(0), "UNK");
+  EXPECT_STREQ(TestHook_PlatformPrefix(1), "STM");
+  EXPECT_STREQ(TestHook_PlatformPrefix(2), "DSC");
+  EXPECT_STREQ(TestHook_PlatformPrefix(3), "XBX");
   EXPECT_STREQ(TestHook_PlatformPrefix(4), "OVR-ORG");
-  EXPECT_STREQ(TestHook_PlatformPrefix(5), "BOT");
-  EXPECT_STREQ(TestHook_PlatformPrefix(6), "DSC-NOVR");
+  EXPECT_STREQ(TestHook_PlatformPrefix(5), "OVR");
+  EXPECT_STREQ(TestHook_PlatformPrefix(6), "BOT");
+  EXPECT_STREQ(TestHook_PlatformPrefix(7), "DMO");
+  EXPECT_STREQ(TestHook_PlatformPrefix(8), "UNK");
   EXPECT_STREQ(TestHook_PlatformPrefix(999), "UNK");
 }
 
@@ -1211,7 +1212,7 @@ TEST(WsBridgeRemoteBearer, OnlyTheWsPathReplacesTheBearer) {
 }
 
 // SelectPlatformCode: the bridge always logs in as platform 4 (OVR_ORG), the provider it forces
-// into the game's own CNSUser. A login as platform 6 (DMO, -noovr) made Nakama answer the game's
+// into the game's own CNSUser. A login as platform 6 (-noovr) made Nakama answer the game's
 // later LobbyPlayerSessionsRequest (sent as OVR-ORG) with "requesting player not found in
 // match", so the game never reached a lobby host.
 TEST(WsBridgeSelectPlatform, AlwaysOvrOrgToMatchTheGamesOwnIdentity) {
@@ -1219,6 +1220,8 @@ TEST(WsBridgeSelectPlatform, AlwaysOvrOrgToMatchTheGamesOwnIdentity) {
   EXPECT_EQ(TestHook_SelectPlatformCode(true, false), 4ULL);
   EXPECT_EQ(TestHook_SelectPlatformCode(false, true), 4ULL);
   EXPECT_EQ(TestHook_SelectPlatformCode(false, false), 4ULL);
+  // The code the bridge logs in as is the one labelled OVR-ORG, the provider the game names itself with.
+  EXPECT_STREQ(TestHook_PlatformPrefix(TestHook_SelectPlatformCode(false, false)), "OVR-ORG");
 }
 
 TEST(WsBridgeCallbackGuard, ContainsStdExceptionsAtTheCallbackBoundary) {
