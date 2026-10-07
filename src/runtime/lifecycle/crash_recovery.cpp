@@ -123,6 +123,16 @@ static volatile sig_atomic_t g_inSignalContext = 0;
 ///   - TerminateProcess: Prevent self-kill after crash reporter block
 ///   - VEH (BreakpointVEH): Skip int3 padding byte after suppressed ExitProcess return
 /// </summary>
+// N67 (re-opened 2026-07-26): these two flags are written from CreateProcessAHook, CreateProcessWHook,
+// ExitProcessHook and TerminateProcessHook — any thread — and read/written from
+// BreakpointVEH on the faulting thread. Plain `bool` gives no ordering guarantee and
+// permits the compiler to sink or reorder the stores, so the VEH can observe a stale
+// value and either skip an int3 it should have taken or take one it should not.
+// The earlier fix converted the copies in plugins/crash-handler/, which is not built
+// (plugins/CMakeLists.txt:12) — this is the path that ships.
+static std::atomic<bool> g_crashReporterSuppressed{false};
+static std::atomic<bool> g_justSuppressedCrash{false};
+
 typedef BOOL(WINAPI* CreateProcessAFunc)(LPCSTR, LPSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD,
                                          LPVOID, LPCSTR, LPSTARTUPINFOA, LPPROCESS_INFORMATION);
 CreateProcessAFunc OriginalCreateProcessA = nullptr;
@@ -136,12 +146,14 @@ BOOL WINAPI CreateProcessAHook(LPCSTR lpApplicationName, LPSTR lpCommandLine, LP
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] crash reporter launch blocked api=CreateProcessA match=application_name target=%s",
         lpApplicationName);
+    g_crashReporterSuppressed = true;
     return FALSE;  // Pretend the process failed to start
   }
   if (lpCommandLine && strstr(lpCommandLine, "BsSndRpt")) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] crash reporter launch blocked api=CreateProcessA match=command_line target=%s",
         lpCommandLine);
+    g_crashReporterSuppressed = true;
     return FALSE;
   }
 
@@ -157,16 +169,6 @@ BOOL WINAPI CreateProcessAHook(LPCSTR lpApplicationName, LPSTR lpCommandLine, LP
 typedef BOOL(WINAPI* CreateProcessWFunc)(LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD,
                                          LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
 CreateProcessWFunc OriginalCreateProcessW = nullptr;
-
-// N67 (re-opened 2026-07-26): these two flags are written from CreateProcessWHook,
-// ExitProcessHook and TerminateProcessHook — any thread — and read/written from
-// BreakpointVEH on the faulting thread. Plain `bool` gives no ordering guarantee and
-// permits the compiler to sink or reorder the stores, so the VEH can observe a stale
-// value and either skip an int3 it should have taken or take one it should not.
-// The earlier fix converted the copies in plugins/crash-handler/, which is not built
-// (plugins/CMakeLists.txt:12) — this is the path that ships.
-static std::atomic<bool> g_crashReporterSuppressed{false};
-static std::atomic<bool> g_justSuppressedCrash{false};
 
 BOOL WINAPI CreateProcessWHook(LPCWSTR lpApplicationName, LPWSTR lpCommandLine,
                                LPSECURITY_ATTRIBUTES lpProcessAttributes, LPSECURITY_ATTRIBUTES lpThreadAttributes,
@@ -1169,18 +1171,25 @@ void InstallConsoleCtrlHandler() {
   // These handlers call PerformGracefulShutdown DIRECTLY — the prior flag-based
   // approach (set g_shutdownRequested, check per-frame) lost the race to game
   // teardown; the per-frame check never ran after signal delivery (N13/N38 re-open).
-  if (signal(SIGINT, PosixSignalHandler) == SIG_ERR) {
+  const bool sigintOk = signal(SIGINT, PosixSignalHandler) != SIG_ERR;
+  if (!sigintOk) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] SIGINT handler registration failed (signal()) — no effect under Wine "
         "(SIGINT is delivered via the console ctrl handler there, not the CRT signal table); "
         "would block POSIX-path shutdown on native Windows");
   }
-  if (signal(SIGTERM, PosixSignalHandler) == SIG_ERR) {
+  const bool sigtermOk = signal(SIGTERM, PosixSignalHandler) != SIG_ERR;
+  if (!sigtermOk) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] SIGTERM handler registration failed — a container/orchestrator stop signal "
         "(docker stop, systemd) will not trigger graceful shutdown; process will require SIGKILL");
   }
-  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] POSIX signal handlers installed (SIGINT/SIGTERM -> direct shutdown)");
+  if (sigintOk && sigtermOk) {
+    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] POSIX signal handlers installed (SIGINT/SIGTERM -> direct shutdown)");
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] POSIX signal handlers NOT fully installed: SIGINT=%s SIGTERM=%s",
+        sigintOk ? "ok" : "FAILED", sigtermOk ? "ok" : "FAILED");
+  }
 }
 
 void ServerFatal(const CHAR* format, ...) {
