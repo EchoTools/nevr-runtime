@@ -461,7 +461,7 @@ static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
 // CBroadcaster::ReceiveLocalEvent (the listener dispatcher, not entity property
 // dispatch), that skip suppressed all message delivery on a server, including our
 // own 15 ServerLib injections which reach this VA via
-// EchoVR::BroadcasterReceiveLocalEvent (echovr_functions.cpp:87).
+// EchoVR::BroadcasterReceiveLocalEvent (echovr_functions.cpp).
 //
 // The AV is guarded precisely instead. Disassembly gives the exact fault chain:
 //   0x140f87b81  MOV R8, qword ptr [RDI]          ; inner = *arg1

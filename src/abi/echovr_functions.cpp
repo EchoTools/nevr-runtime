@@ -85,14 +85,15 @@ void InitializeFunctionPointers() {
   PoolFindItem = (PoolFindItemFunc*)(g_GameBaseAddress + 0x2CA9E0);
   TcpBroadcasterListen = (TcpBroadcasterListenFunc*)(g_GameBaseAddress + 0xF81100);
   BroadcasterSend = (BroadcasterSendFunc*)(g_GameBaseAddress + 0xF89AF0);
-  // !! N83 — THESE TWO RVAs ARE ALSO DETOURED (mode_patches.cpp:721-728, as
+  // !! N83 — THESE TWO RVAs ARE ALSO DETOURED (mode_patches.cpp, as
   // !! PatchAddresses::ENGINE_ENTITY_LOOKUP / ENGINE_ENTITY_PROP_DISPATCH).
   //
   // MinHook writes a JMP at the function entry, so these pointers do NOT reach
-  // the game's code — they reach our own hooks. Calling
-  // EchoVR::BroadcasterReceiveLocalEvent on a dedicated server currently returns
-  // without dispatching anything, because EngineEntityPropDispatchHook does
-  // `if (g_isServer) return;`.
+  // the game's code — they reach our own hooks. On a dedicated server
+  // EngineEntityPropDispatchHook null-guards the listener table: it drops the
+  // event only when that table is not ready, and otherwise calls through to the
+  // game's dispatcher, so a call through EchoVR::BroadcasterReceiveLocalEvent
+  // is delivered.
   //
   // RULE FOR ANYONE ADDING A POINTER TO THIS TABLE: an address the runtime CALLS
   // through must not also be an address the runtime DETOURS. If it is, our own
