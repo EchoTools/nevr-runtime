@@ -153,7 +153,7 @@ void BootLogTee::TeeFprintf(const char* fmt, ...) {
 
     // JSON-escape the message
     char escaped[4096];
-    int esc_len = JsonEscape(msg_buf, msg_len, escaped, sizeof(escaped));
+    JsonEscape(msg_buf, msg_len, escaped, sizeof(escaped));
 
     // Build the JSONL line: {"run":"<id>","level":"info","msg":"<escaped>"}\n
     // N80: the run ID is what lets these lines be joined to the runtime log (which

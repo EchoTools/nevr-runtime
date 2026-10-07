@@ -127,6 +127,9 @@ if(MINGW)
   add_compile_options(
     -Wall
     -Wextra
+    -Werror=unused-function
+    -Werror=unused-variable
+    -Werror=unused-but-set-variable
     # Disable specific warnings that are unavoidable in this codebase
     -Wno-unknown-pragmas           # Windows-specific pragmas like #pragma comment
     -Wno-unused-parameter          # DLL export functions have required but unused params
@@ -211,6 +214,8 @@ add_subdirectory(src/legacy/gamepatches)
 # Scoped to the target so nothing else in the tree can resolve the old spelling.
 # Delete src/legacy-compat/ and this line together when legacy is retired.
 target_include_directories(gamepatcheslegacy PRIVATE "${CMAKE_SOURCE_DIR}/src/legacy-compat")
+# Frozen code carries an unused variable it may not lose; the new -Werror=unused-* flags apply to everything else.
+target_compile_options(gamepatcheslegacy PRIVATE -Wno-error=unused-variable -Wno-error=unused-function -Wno-error=unused-but-set-variable)
 # There is no replacement pnsrad.dll target: ws_bridge pokes the game's ORIGINAL
 # pnsrad.dll at fixed offsets (+0x88 account_id, +0x90 login state, +0x9c flags),
 # and those layouts are documented there. The pure-RE copy of pnsrad lives in

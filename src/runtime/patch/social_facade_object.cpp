@@ -91,12 +91,6 @@ std::uint32_t CountCall(std::atomic<std::uint32_t>& counter) {
   return counter.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
-std::uint64_t RoomId(const void* self) {
-  std::uint64_t result = 0;
-  std::memcpy(&result, static_cast<const std::uint8_t*>(self) + 0x2A8, sizeof(result));
-  return result;
-}
-
 void LogQuery(const char* name, std::uintptr_t slot, std::uint32_t callCount, std::uint64_t result) {
   if (callCount > kInitialQueryLogCalls) return;
   Log(EchoVR::LogLevel::Info,
@@ -105,12 +99,9 @@ void LogQuery(const char* name, std::uintptr_t slot, std::uint32_t callCount, st
 }
 
 void Void0(void*) {}
-void VoidU32(void*, std::uint32_t) {}
-void VoidU64(void*, std::uint64_t) {}
 void VoidU32U32(void*, std::uint32_t, std::uint32_t) {}
 std::uint64_t Zero0(void*) { return 0; }
 std::uint64_t ZeroU32(void*, std::uint32_t) { return 0; }
-const char* EmptyU32(void*, std::uint32_t) { return ""; }
 
 template <std::size_t SlotIndex>
 std::uint64_t PaddedSlot(void*) {
@@ -122,11 +113,6 @@ std::uint64_t PaddedSlot(void*) {
         static_cast<unsigned long long>(SlotIndex), static_cast<unsigned long long>(SlotIndex * sizeof(Slot)));
   }
   return 0;
-}
-
-std::uint64_t* ZeroId(void*, std::uint64_t* out, std::uint32_t) {
-  if (out != nullptr) *out = 0;
-  return out;
 }
 
 std::uint32_t JoinPolicy(void* self) {
