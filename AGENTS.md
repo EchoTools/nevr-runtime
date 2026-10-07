@@ -297,9 +297,11 @@ your seat name, for example `claude-main` or `codex`.
 - **Fresh worktrees need build inputs.** From the main checkout, leaving it unchanged, copy
   `extern/{minhook,breakpad,lss}` (without their `.git` files), `gen/` and `.env`; never print
   `.env`. The build embeds the production endpoints from `.env`.
-- **Client login test mechanics.** Run the main checkout's `./launch-client.sh --dll <absolute path to
-  the build's BugSplat64.dll>` in the background, one client at a time. Read the run's JSONL log,
-  stop your own `echovr.exe`, and confirm the script restored the original DLL.
+- **Client login test mechanics.** Run `./launch-client.sh --dll <absolute path to the build's
+  BugSplat64.dll>` from your checkout in the background, one client at a time (it exits 4 while an
+  `echovr.exe` runs or another run holds the lock). `NEVR_GAME_ROOT` overrides which checkout's
+  `echovr/` it uses. Read the run's JSONL log, stop your own `echovr.exe`, and confirm the script
+  restored the original DLL.
 
 ### Documentation, plans and findings
 

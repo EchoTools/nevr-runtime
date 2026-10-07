@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import functools
 import json
 import os
 import pathlib
@@ -32,7 +33,17 @@ import yaml
 REPO = pathlib.Path(__file__).resolve().parents[2]
 DEFAULT_DLL = REPO / "build/mingw-scenario/bin/BugSplat64.dll"
 SCRATCH = pathlib.Path("/var/tmp/work-nevr-runtime/scenario-runs")
-WINEPREFIX = REPO / "echovr/.wineprefix"
+
+
+@functools.lru_cache(maxsize=None)
+def wineprefix() -> pathlib.Path:
+    """The game's Wine prefix. The game install exists only in the main checkout; launch-client.sh
+    is the one place that resolves where (NEVR_GAME_ROOT, else the main checkout), so ask it."""
+    out = subprocess.run([str(REPO / "launch-client.sh"), "--print-game-root"],
+                         capture_output=True, text=True, check=True)
+    return pathlib.Path(out.stdout.strip()) / "echovr/.wineprefix"
+
+
 MARKER = b"[NEVR.SCENARIO]"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 STEP_KINDS = ("wait_log", "expect_log", "state_until", "inject", "fire")
@@ -272,7 +283,7 @@ def wait_for_wineserver_exit() -> None:
     client launched while the old server is still going down started with a broken socket layer
     (2026-10-01, suite 20261001T212821 party_join_errors: proxy bind failed, curl init failed and the
     login connection was refused, 2.8 s after the previous game's last line)."""
-    env = dict(os.environ, WINEPREFIX=str(WINEPREFIX))
+    env = dict(os.environ, WINEPREFIX=str(wineprefix()))
     started = time.monotonic()
     subprocess.run(["wineserver", "-w"], env=env, capture_output=True)
     waited = time.monotonic() - started
@@ -332,7 +343,7 @@ class Run:
     def teardown(self):
         if self.control:
             self.control.close()
-        env = dict(os.environ, WINEPREFIX=str(WINEPREFIX))
+        env = dict(os.environ, WINEPREFIX=str(wineprefix()))
         subprocess.run(["wineserver", "-k"], env=env, capture_output=True)
         wait_for_wineserver_exit()
         if self.launcher:
