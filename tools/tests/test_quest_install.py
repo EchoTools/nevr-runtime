@@ -32,7 +32,7 @@ def make_fakes(directory: pathlib.Path) -> None:
         '  push) exit "${FAKE_PUSH_RC:-0}" ;;\n'
         '  shell)\n'
         '    case "$2" in\n'
-        '      "pm path"*) printf "%s" "${FAKE_PM_OUT:-package:/x}"; exit "${FAKE_PM_RC:-0}" ;;\n'
+        '      pm) printf "%s" "${FAKE_PM_OUT-package:/x}"; exit "${FAKE_PM_RC:-0}" ;;\n'
         '      df*) printf "Filesystem 1K-blocks Used Available Use%% Mounted\\nx 1 1 %s 1%% /\\n" "${FAKE_AVAIL_KB:-4000000}" ;;\n'
         '      *unzip*) exit "${FAKE_UNZIP_RC:-0}" ;;\n'
         '      *) exit 0 ;;\n'
@@ -99,8 +99,60 @@ class QuestInstallTest(unittest.TestCase):
     def test_the_download_has_a_stall_and_total_time_limit(self):
         self.run_script()
         curl = self.curl_log.read_text()
-        for flag in ("--speed-limit", "--speed-time", "--max-time", "--connect-timeout", "--max-filesize"):
+        for flag in ("--speed-limit 10000", "--speed-time 60", "--max-time 7200", "--retry-max-time 7200",
+                     "--connect-timeout 20", "--max-filesize"):
             self.assertIn(flag, curl)
+
+    def test_the_free_space_threshold_is_exactly_2_2_gib(self):
+        self.assertEqual(self.run_script(env=dict(self.env, FAKE_AVAIL_KB="2306867")).returncode, 0)
+        refused = self.run_script(env=dict(self.env, FAKE_AVAIL_KB="2306866"))
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("free, need 2252 MiB", refused.stderr)
+
+    def test_adb_never_reads_the_terminal_under_timeout(self):
+        # adb runs in timeout's own process group; every adb call must have stdin from /dev/null.
+        text = SCRIPT.read_text()
+        import re
+        calls = [l for l in text.splitlines() if re.search(r"timeout (30|\"\$secs\") adb", l)]
+        self.assertGreaterEqual(len(calls), 5)
+        for line in calls:
+            self.assertIn("</dev/null", line, line)
+
+    def test_package_state_branches(self):
+        installed = self.run_script(env=dict(self.env, FAKE_PM_RC="0", FAKE_PM_OUT="package:/x"))
+        self.assertIn("is installed on", installed.stdout)
+        absent = self.run_script(env=dict(self.env, FAKE_PM_RC="1", FAKE_PM_OUT=""))
+        self.assertEqual(absent.returncode, 0, absent.stdout + absent.stderr)
+        self.assertIn("is not installed on", absent.stdout)
+        broken = self.run_script(env=dict(self.env, FAKE_PM_RC="7", FAKE_PM_OUT="Error: boom"))
+        self.assertEqual(broken.returncode, 1)
+        self.assertIn("package check failed (exit 7): Error: boom", broken.stderr)
+
+    def test_a_device_without_permissions_is_named_not_hidden(self):
+        denied = "List of devices attached\nQUEST123\tno permissions (missing udev rules? user is in the plugdev group); see [x]\n"
+        result = self.run_script(env=dict(self.env, FAKE_DEVICES=denied))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no permissions", result.stderr)
+        self.assertIn("usually missing udev rules", result.stderr)
+
+    def test_a_malformed_hash_is_rejected_before_anything_is_touched(self):
+        for bad in ("abc", "x/../_data", "F" * 64, ""):
+            result = self.run_script(sha=bad)
+            self.assertNotEqual(result.returncode, 0, bad)
+        self.assertEqual(self.curl_log.read_text(), "")
+        self.assertEqual(self.adb_calls(), [])
+
+    def test_the_pinned_hash_uses_the_pinned_cache_name(self):
+        cache = self.work / "build/android-arm64/quest-data"
+        cache.mkdir(parents=True)
+        (cache / "_data.zip").write_bytes(b"not the pinned content")
+        result = self.run_script(sha=DEFAULT_SHA)
+        self.assertIn("Cached build/android-arm64/quest-data/_data.zip does not match the pinned SHA-256", result.stdout)
+
+    def test_the_temp_zip_is_removed_even_when_the_push_fails(self):
+        result = self.run_script(env=dict(self.env, FAKE_PUSH_RC="1"))
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(any("rm -f /data/local/tmp/_data.zip" in c for c in self.adb_calls()), self.adb_calls())
 
     def test_every_long_adb_call_runs_under_timeout(self):
         self.run_script()
@@ -140,12 +192,12 @@ class QuestInstallTest(unittest.TestCase):
         result = self.run_script(sha=BODY_SHA)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(pinned.read_bytes(), b"a good cached zip for the pinned hash")
-        self.assertTrue((cache / f"_data-{BODY_SHA[:16]}.zip").exists())
+        self.assertTrue((cache / f"_data-{BODY_SHA}.zip").exists())
 
     def test_a_mismatching_cache_for_the_requested_hash_is_replaced(self):
         cache = self.work / "build/android-arm64/quest-data"
         cache.mkdir(parents=True)
-        named = cache / f"_data-{BODY_SHA[:16]}.zip"
+        named = cache / f"_data-{BODY_SHA}.zip"
         named.write_bytes(b"corrupt")
         result = self.run_script(sha=BODY_SHA)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -184,6 +236,9 @@ class QuestInstallTest(unittest.TestCase):
         calls = self.adb_calls()
         self.assertTrue(any(c.startswith("uninstall com.readyatdawn.r15") for c in calls), calls)
         self.assertTrue(any(c == f"install -g {self.apk}" for c in calls), calls)
+        timeouts = self.timeout_log.read_text()
+        self.assertRegex(timeouts, r"(?m)^120 adb .*uninstall")
+        self.assertRegex(timeouts, rf"(?m)^600 adb .*install -g {self.apk}")
 
     def test_an_unrecognized_first_argument_is_rejected(self):
         result = self.run_script(yes="maybe")

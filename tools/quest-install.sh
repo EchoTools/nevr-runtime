@@ -7,6 +7,7 @@ yes=${1-}
 apk=${2:?usage: quest-install.sh [yes] APK DATA_URL DATA_SHA256 (use "" for the first when not passing yes)}
 data_url=${3:?data_url missing}
 data_sha256=${4:?data_sha256 missing}
+[[ "$data_sha256" =~ ^[0-9a-f]{64}$ ]] || { echo "error: data_sha256 must be 64 lowercase hex characters (got '$data_sha256')" >&2; exit 1; }
 pkg=com.readyatdawn.r15
 default_data_sha256=fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c
 remote_zip=/data/local/tmp/_data.zip
@@ -25,27 +26,30 @@ if [ -n "$yes" ] && [ "$yes" != "yes" ]; then
 fi
 
 # 2. Exactly one authorized device.
-devices_out=$(timeout 30 adb devices 2>&1) || die "'adb devices' failed or timed out: $devices_out"
+devices_out=$(timeout 30 adb devices 2>&1 </dev/null) || die "'adb devices' failed or timed out: $devices_out"
 # Only "<serial> <state>" rows count: a server-version warning ("adb server version (..) doesn't
 # match ...") or a "* daemon ..." line is not a device.
-mapfile -t rows < <(printf '%s\n' "$devices_out" | awk 'NF == 2 && $2 ~ /^(device|offline|unauthorized|authorizing|connecting|recovery|sideload|rescue|bootloader|no)$/ && $1 != "List" && $1 !~ /^\*/')
+mapfile -t rows < <(printf '%s\n' "$devices_out" | awk 'NF >= 2 && $1 != "List" && $1 !~ /^\*/ && $2 ~ /^(device|offline|unauthorized|authorizing|connecting|recovery|sideload|rescue|bootloader|host|unknown|detached|no)$/')
 [ "${#rows[@]}" -ne 0 ] || die "no adb device attached"
 [ "${#rows[@]}" -eq 1 ] || die "${#rows[@]} adb devices attached, need exactly one: ${rows[*]}"
 serial=$(printf '%s' "${rows[0]}" | awk '{print $1}')
-state=$(printf '%s' "${rows[0]}" | awk '{print $2}')
+state=$(printf '%s' "${rows[0]}" | awk '{$1=""; print substr($0, 2)}')
 case "$state" in
     device) ;;
+    "no permissions"*) die "device $serial: $state (usually missing udev rules for the headset, or your user is not in the plugdev group)" ;;
     unauthorized) die "device $serial is unauthorized: accept the USB debugging prompt in the headset and retry" ;;
     *) die "device $serial is in state '$state', need 'device'" ;;
 esac
 # adb against the chosen device with a time limit, so a wedged adb cannot hang the install:
 # at SECONDS adb-args...
-at() { local secs=$1; shift; timeout "$secs" adb -s "$serial" "$@"; }
-timeout 30 adb -s "$serial" wait-for-device || die "device $serial did not become ready within 30 s"
+# stdin is /dev/null: timeout runs adb in its own process group, where a read from the terminal would
+# stop it until the limit fires.
+at() { local secs=$1; shift; timeout "$secs" adb -s "$serial" "$@" </dev/null; }
+timeout 30 adb -s "$serial" wait-for-device </dev/null || die "device $serial did not become ready within 30 s"
 
 # 3. Installed state: distinguish adb failure from "not installed".
 set +e
-pm_out=$(timeout 30 adb -s "$serial" shell pm path "$pkg" 2>&1)
+pm_out=$(timeout 30 adb -s "$serial" shell pm path "$pkg" 2>&1 </dev/null)
 pm_rc=$?
 set -e
 if [ "$pm_rc" -eq 0 ]; then
@@ -60,7 +64,7 @@ fi
 
 # 4. Free space on the headset (KiB available).
 for path in /sdcard /data/local/tmp; do
-    avail=$(timeout 30 adb -s "$serial" shell "df -Pk $path" 2>&1 | awk 'NR==2 {print $4}') || avail=''
+    avail=$(timeout 30 adb -s "$serial" shell "df -Pk $path" 2>&1 </dev/null | awk 'NR==2 {print $4}') || avail=''
     case "$avail" in ''|*[!0-9]*) die "could not read free space on $path (got '$avail')" ;; esac
     [ "$avail" -ge "$need_kb" ] || die "$path has $((avail / 1024)) MiB free, need $((need_kb / 1024)) MiB"
 done
@@ -72,7 +76,7 @@ verify() { [ "$(sha256sum "$1" | awk '{print $1}')" = "$data_sha256" ]; }
 if [ "$data_sha256" = "$default_data_sha256" ]; then
     data=build/android-arm64/quest-data/_data.zip
 else
-    data="build/android-arm64/quest-data/_data-${data_sha256:0:16}.zip"
+    data="build/android-arm64/quest-data/_data-${data_sha256}.zip"
 fi
 mkdir -p "$(dirname "$data")"
 if [ -f "$data" ] && ! verify "$data"; then
@@ -83,7 +87,7 @@ if [ ! -f "$data" ]; then
     echo "Downloading game data (~937 MB) to $data.part ..."
     rm -f "$data.part"
     curl -fL --retry 2 --proto '=https' --proto-redir '=https' \
-        --connect-timeout 20 --speed-limit 10000 --speed-time 60 --max-time 3600 \
+        --connect-timeout 20 --speed-limit 10000 --speed-time 60 --max-time 7200 --retry-max-time 7200 \
         --max-filesize "$max_bytes" -o "$data.part" "$data_url" \
         || { rm -f "$data.part"; die "download failed: $data_url"; }
     if ! verify "$data.part"; then
