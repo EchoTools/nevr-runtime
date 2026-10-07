@@ -294,9 +294,10 @@ your seat name, for example `claude-main` or `codex`.
   show all four keys
   (`nevr_socket_uri, nevr_http_uri, nevr_http_key, nevr_server_key`) on the
   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
-- **Fresh worktrees need build inputs.** From the main checkout, leaving it unchanged, copy
-  `extern/{minhook,breakpad,lss}` (without their `.git` files), `gen/` and `.env`; never print
-  `.env`. The build embeds the production endpoints from `.env`.
+- **Fresh worktrees need build inputs.** Run `just worktree-setup` in the new worktree: it copies
+  `extern/{minhook,breakpad,lss}` (without their `.git` files), `gen/` and `.env` from the main
+  checkout and leaves the main checkout unchanged. Never print `.env`. The build embeds the production
+  endpoints from `.env`.
 - **Client login test mechanics.** Run `./launch-client.sh --dll <absolute path to the build's
   BugSplat64.dll>` from your checkout in the background, one client at a time (it exits 4 while an
   `echovr.exe` runs or another run holds the lock). `NEVR_GAME_ROOT` overrides which checkout's

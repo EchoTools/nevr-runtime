@@ -22,9 +22,17 @@ generate-symcache:
         echo "generate-symcache: Go source not found at $go_file — skipping (using committed symcache_data.cpp)" >&2
     fi
 
-# Configure CMake
-configure: generate-symcache _vcpkg-mingw
+# Configure CMake (fails early with the fix when a fresh worktree lacks its build inputs)
+configure: _build-inputs generate-symcache _vcpkg-mingw
     @unset VCPKG_ROOT && cmake --preset {{ preset }} > /dev/null 2>&1 || (unset VCPKG_ROOT && cmake --preset {{ preset }})
+
+# Stop early, with the fix, when the submodules or gen/ are missing
+_build-inputs:
+    @tools/worktree-setup.sh --check
+
+# Make a fresh git worktree buildable: copy extern/{minhook,breakpad,lss}, gen/ and .env from the main checkout
+worktree-setup:
+    tools/worktree-setup.sh
 
 # Build all components
 build: configure
