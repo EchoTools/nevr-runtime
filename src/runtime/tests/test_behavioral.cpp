@@ -35,6 +35,7 @@
 #include "core/system_info.h"
 #include "core/build_identity.h"
 #include "runtime/log/security_diagnostics.h"
+#include "runtime/patch/evrp_package.h"
 
 // ============================================================================
 // Stubs for extern symbols declared by project headers but not provided by
@@ -1169,6 +1170,18 @@ TEST(LoginProfile, EmptyDisplayNameFallsBackToTheAccountId) {
 
   const nlohmann::json profile = nlohmann::json::parse(LoginProfile::BuildLoginProfileJson(inputs));
   EXPECT_EQ(profile.at("displayname"), "90210");
+}
+
+// A buffer shorter than the 28-byte header must be rejected by the size guard before any header
+// byte is read (the later checks would reject it too, but only after reading past the buffer).
+// The guard's own Warning is the only observable difference, so the test reads the captured log.
+TEST(EvrpPackageLogging, ABufferShorterThanTheHeaderIsRejectedBySizeGuard) {
+  ClearTestLogs();
+  int64_t symbol = 0;
+  Evrp::TintData tint;
+  const std::vector<uint8_t> shortBuffer(Evrp::kHeaderSize - 1, 0);
+  EXPECT_FALSE(Evrp::ParseTint(shortBuffer, "short.evrp", symbol, tint));
+  EXPECT_TRUE(TestLogContains("file too small: file=short.evrp"));
 }
 
 TEST(WsBridgePlatformPrefix, EveryDefinedPlatformHasTheNakamaPrefix) {

@@ -1,14 +1,24 @@
-# CDN Cosmetics Format Specification
+# ADR 0005: Cosmetics arrive as `.evrp` packages listed in a JSON manifest on a CDN
 
-Version: 1
-Status: Normative
-Game Version: 34.4.631399.1
+Status: accepted, implemented (`src/runtime/patch/asset_cdn.cpp`, `src/runtime/patch/evrp_package.cpp`).
+Game version: 34.4.631399.1.
 
-This document is the contract between Track A (Go CLI tools in `nevr-cdn-tools`) and Track B (C++ game hooks in `nevr-runtime`). Both sides MUST produce and consume data conforming to this spec exactly.
+## Context
+
+Tint cosmetics are produced by Go CLI tools (`nevr-cdn-tools`, Track A) and consumed by C++
+game hooks in this repo (Track B). Both sides must agree on the bytes exactly.
+
+## Decision
+
+Cosmetic assets are distributed as `.evrp` files, a flat binary format invented for this
+project, listed in a JSON manifest under `https://r2.echo.taxi/v1/`. Both sides MUST
+produce and consume data conforming to the layout below. The accepting test vector, a
+complete 108-byte tint for symbol `0x74d228d09dc5dc86`, and one rejecting case per
+validation rule are in `src/runtime/tests/test_evrp_package.cpp`.
 
 ---
 
-## 1. `.evrp` Package Binary Layout
+### 1. `.evrp` Package Binary Layout
 
 `.evrp` is a flat binary file format invented for this project. Each file contains exactly one cosmetic asset.
 
@@ -30,7 +40,7 @@ Header: 28 bytes, followed by variable-length asset data.
 
 ---
 
-## 2. Slot Type Enum
+### 2. Slot Type Enum
 
 | Value         | Name     | Status                                          |
 | ------------- | -------- | ----------------------------------------------- |
@@ -42,7 +52,7 @@ Parsers MUST reject files with unknown slot types.
 
 ---
 
-## 3. Tint Asset Data (`slot_type = 0x01`)
+### 3. Tint Asset Data (`slot_type = 0x01`)
 
 `asset_data` is exactly **80 bytes**: 5 colors, 16 bytes each.
 
@@ -65,7 +75,7 @@ Each 16-byte color:
 | `+8`   | 4    | B     | `float32` |
 | `+12`  | 4    | A     | `float32` |
 
-### Relationship to TintEntry (96 bytes)
+#### Relationship to TintEntry (96 bytes)
 
 The game's internal `TintEntry` struct is 96 bytes:
 
@@ -86,7 +96,7 @@ The `.evrp` `asset_data` is the **middle 80 bytes** of a `TintEntry` — the 5 c
 
 ---
 
-## 4. Manifest JSON Schema
+### 4. Manifest JSON Schema
 
 The manifest is a JSON file listing all available packages on the CDN.
 
@@ -141,7 +151,7 @@ Keys in the `packages` object are the `symbol_id` from the `.evrp` header, encod
 
 ---
 
-## 5. CDN URL Scheme
+### 5. CDN URL Scheme
 
 **Base URL**: `https://r2.echo.taxi/`
 
@@ -156,21 +166,7 @@ Keys in the `packages` object are the `symbol_id` from the `.evrp` header, encod
 
 ---
 
-## 6. Relationship to evrFileTools Formats
-
-`.evrp` is a **new format** invented for this project. It is not any of the following:
-
-| Format                          | Relationship                                            |
-| ------------------------------- | ------------------------------------------------------- |
-| evrFileTools archive (`.evra`)  | ZSTD-compressed resource bundles. Completely unrelated. |
-| Game resource bundles (`.cr15`) | Native game format. Not used by CDN pipeline.           |
-| evrFileTools manifest (binary)  | Binary game format. Our manifest is JSON.               |
-
-**evrFileTools is a build-time dependency of Track A only.** It is used to read source tint data from game archives, which is then repackaged into the `.evrp` format. Track B (C++ hooks) never interacts with evrFileTools formats.
-
----
-
-## 7. Byte Order and Validation
+### 6. Byte Order and Validation
 
 ### Byte Order
 
@@ -193,70 +189,7 @@ Parsers MUST enforce all of the following. Reject the file on any violation.
 
 Color float values SHOULD be in the range `[0.0, 1.0]` but parsers MUST NOT reject values outside this range. The game engine handles out-of-range colors (e.g., HDR bloom effects use values > 1.0).
 
----
+### Float representation
 
-## 8. Hex Dump Example
-
-A complete 108-byte `.evrp` tint file with sample color data.
-
-**Asset**: `rwd_tint_custom_red` (hypothetical)
-**Symbol ID**: `0x74d228d09dc5dc86` (example, using known `rwd_tint_0000` hash)
-
-**Colors**:
-
-- Color 0 (Main 1): R=1.0, G=0.0, B=0.0, A=1.0 (red)
-- Color 1 (Accent 1): R=0.8, G=0.2, B=0.0, A=1.0 (dark orange)
-- Color 2 (Main 2): R=0.6, G=0.0, B=0.0, A=1.0 (dark red)
-- Color 3 (Accent 2): R=1.0, G=0.4, B=0.1, A=1.0 (orange)
-- Color 4 (Body): R=0.2, G=0.2, B=0.2, A=1.0 (dark gray)
-
-```
-         00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F
-0x0000:  45 56 52 50 01 00 00 00  86 DC C5 9D D0 28 D2 74   EVRP.........(.t
-0x0010:  01 00 00 00 00 00 00 00  50 00 00 00 00 00 80 3F   ........P......?
-0x0020:  00 00 00 00 00 00 00 00  00 00 80 3F CD CC 4C 3F   ...........?..L?
-0x0030:  CD CC 4C 3E 00 00 00 00  00 00 80 3F 9A 99 19 3F   ..L>.......?...?
-0x0040:  00 00 00 00 00 00 00 00  00 00 80 3F 00 00 80 3F   ...........?...?
-0x0050:  CD CC CC 3E CD CC CC 3D  00 00 80 3F CD CC 4C 3E   ...>...=...?..L>
-0x0060:  CD CC 4C 3E CD CC 4C 3E  00 00 80 3F               ..L>..L>...?
-```
-
-### Breakdown
-
-```
-Header (28 bytes):
-  0x00: 45 56 52 50              magic = "EVRP"
-  0x04: 01 00 00 00              format_version = 1
-  0x08: 86 DC C5 9D D0 28 D2 74  symbol_id = 0x74d228d09dc5dc86
-  0x10: 01                       slot_type = 0x01 (tint)
-  0x11: 00 00 00 00 00 00 00     reserved (7 bytes, zero)
-  0x18: 50 00 00 00              data_length = 80 (0x50)
-
-Asset Data (80 bytes, starting at 0x1C):
-  Color 0 — Main 1:   0x1C: 00 00 80 3F = 1.0 (R)
-                       0x20: 00 00 00 00 = 0.0 (G)
-                       0x24: 00 00 00 00 = 0.0 (B)
-                       0x28: 00 00 80 3F = 1.0 (A)
-
-  Color 1 — Accent 1: 0x2C: CD CC 4C 3F = 0.8 (R)
-                       0x30: CD CC 4C 3E = 0.2 (G)
-                       0x34: 00 00 00 00 = 0.0 (B)
-                       0x38: 00 00 80 3F = 1.0 (A)
-
-  Color 2 — Main 2:   0x3C: 9A 99 19 3F = 0.6 (R)
-                       0x40: 00 00 00 00 = 0.0 (G)
-                       0x44: 00 00 00 00 = 0.0 (B)
-                       0x48: 00 00 80 3F = 1.0 (A)
-
-  Color 3 — Accent 2: 0x4C: 00 00 80 3F = 1.0 (R)
-                       0x50: CD CC CC 3E = 0.4 (G)
-                       0x54: CD CC CC 3D = 0.1 (B)
-                       0x58: 00 00 80 3F = 1.0 (A)
-
-  Color 4 — Body:     0x5C: CD CC 4C 3E = 0.2 (R)
-                       0x60: CD CC 4C 3E = 0.2 (G)
-                       0x64: CD CC 4C 3E = 0.2 (B)
-                       0x68: 00 00 80 3F = 1.0 (A)
-```
-
-Note: IEEE 754 float32 values shown. Values like 0.8 are stored as their nearest float32 representation (`0x3F4CCCCD`). Track A tools MUST use `float32` arithmetic throughout -- never convert decimal strings to float64 and truncate.
+Track A tools MUST use `float32` arithmetic throughout and never convert decimal strings to
+`float64` and truncate; a value such as 0.8 is stored as its nearest float32 (`0x3F4CCCCD`).

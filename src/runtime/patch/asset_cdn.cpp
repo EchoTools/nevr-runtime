@@ -1,4 +1,5 @@
 #include "runtime/patch/asset_cdn.h"
+#include "runtime/patch/evrp_package.h"
 #include "core/curl_global.h"
 
 #include <curl/curl.h>
@@ -35,27 +36,6 @@ namespace {
 
 constexpr const char* CDN_BASE_URL = "https://r2.echo.taxi/v1/";
 constexpr const char* MANIFEST_URL = "https://r2.echo.taxi/v1/manifest.json";
-constexpr uint32_t EVRP_MAGIC = 0x50525645;  // "EVRP" little-endian
-constexpr uint32_t EVRP_FORMAT_VERSION = 1;
-constexpr uint8_t SLOT_TYPE_TINT = 0x01;
-constexpr uint32_t TINT_DATA_LENGTH = 80;
-constexpr size_t EVRP_HEADER_SIZE = 28;
-
-// ============================================================================
-// .evrp header structure (28 bytes)
-// ============================================================================
-
-#pragma pack(push, 1)
-struct EvrpHeader {
-    uint32_t magic;
-    uint32_t format_version;
-    int64_t  symbol_id;
-    uint8_t  slot_type;
-    uint8_t  reserved[7];
-    uint32_t data_length;
-};
-#pragma pack(pop)
-static_assert(sizeof(EvrpHeader) == EVRP_HEADER_SIZE, "EvrpHeader must be 28 bytes");
 
 // ============================================================================
 // Manifest package entry
@@ -67,14 +47,6 @@ struct PackageEntry {
     std::string slot_type;
     int64_t size;
     int64_t symbol_id;
-};
-
-// ============================================================================
-// Tint data (80 bytes of color data from .evrp)
-// ============================================================================
-
-struct TintData {
-    uint8_t colors[TINT_DATA_LENGTH];  // 5 RGBA float32 colors, 16 bytes each
 };
 
 // ============================================================================
@@ -94,7 +66,7 @@ LoadoutResolveDataFromIdFunc g_originalFunc = nullptr;
 // atomically swapped so the hook sees a consistent snapshot. The hook never
 // locks — it reads through the atomic pointer. The background thread builds
 // a new map, then publishes it via atomic store.
-using TintMap = std::unordered_map<int64_t, TintData>;
+using TintMap = std::unordered_map<int64_t, Evrp::TintData>;
 std::atomic<TintMap*> g_tintMap{nullptr};
 
 // Owns the tint map memory. Protected by g_dataMutex during writes.
@@ -214,81 +186,6 @@ static std::string ComputeSHA256(const std::vector<uint8_t>& data) {
 }
 
 // ============================================================================
-// .evrp parsing
-// ============================================================================
-
-/// Parse a .evrp file buffer into symbol_id and tint data. `context` is the
-/// filename the caller is parsing (BackgroundFetchThread already has it) so
-/// every skip Warning below can say WHICH package was rejected, not just why.
-/// Returns true if the file is a valid tint package.
-static bool ParseEvrpTint(const std::vector<uint8_t>& data, const std::string& context,
-                           int64_t& out_symbol_id, TintData& out_tint) {
-    if (data.size() < EVRP_HEADER_SIZE) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.CDN] .evrp package skipped — file too small: file=%s size=%zu min=%zu",
-            context.c_str(), data.size(), EVRP_HEADER_SIZE);
-        return false;
-    }
-
-    EvrpHeader header;
-    memcpy(&header, data.data(), sizeof(header));
-
-    // Validate magic
-    if (header.magic != EVRP_MAGIC) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.CDN] .evrp package skipped — bad magic: file=%s magic=0x%08X want=0x%08X('EVRP')",
-            context.c_str(), header.magic, EVRP_MAGIC);
-        return false;
-    }
-
-    // Validate format version
-    if (header.format_version != EVRP_FORMAT_VERSION) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.CDN] .evrp package skipped — unsupported format version: file=%s got=%u want=%u",
-            context.c_str(), header.format_version, EVRP_FORMAT_VERSION);
-        return false;
-    }
-
-    // Validate slot type
-    if (header.slot_type != SLOT_TYPE_TINT) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.CDN] .evrp package skipped — unknown slot type: file=%s got=0x%02X want=0x%02X(tint)",
-            context.c_str(), header.slot_type, SLOT_TYPE_TINT);
-        return false;
-    }
-
-    // Validate reserved bytes are zero
-    for (int i = 0; i < 7; i++) {
-        if (header.reserved[i] != 0) {
-            Log(EchoVR::LogLevel::Warning,
-                "[NEVR.CDN] .evrp package skipped — reserved byte nonzero: file=%s index=%d value=0x%02X",
-                context.c_str(), i, header.reserved[i]);
-            return false;
-        }
-    }
-
-    // Validate data length for tint
-    if (header.data_length != TINT_DATA_LENGTH) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.CDN] .evrp package skipped — data_length mismatch: file=%s got=%u want=%u",
-            context.c_str(), header.data_length, TINT_DATA_LENGTH);
-        return false;
-    }
-
-    // Validate total file size
-    if (data.size() != EVRP_HEADER_SIZE + header.data_length) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.CDN] .evrp package skipped — size mismatch: file=%s got=%zu want=%zu",
-            context.c_str(), data.size(), static_cast<size_t>(EVRP_HEADER_SIZE + header.data_length));
-        return false;
-    }
-
-    out_symbol_id = header.symbol_id;
-    memcpy(out_tint.colors, data.data() + EVRP_HEADER_SIZE, TINT_DATA_LENGTH);
-    return true;
-}
-
-// ============================================================================
 // Background fetch pipeline
 // ============================================================================
 
@@ -383,8 +280,8 @@ static void BackgroundFetchThread() {
 
         // Parse .evrp and extract tint data
         int64_t parsed_symbol_id;
-        TintData tint;
-        if (ParseEvrpTint(file_data, filename, parsed_symbol_id, tint)) {
+        Evrp::TintData tint;
+        if (Evrp::ParseTint(file_data, filename, parsed_symbol_id, tint)) {
             (*newTintMap)[parsed_symbol_id] = tint;
         }
     }
