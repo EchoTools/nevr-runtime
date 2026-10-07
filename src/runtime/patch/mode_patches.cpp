@@ -461,7 +461,7 @@ static EngineEntityPropDispatchFunc* OriginalEngineEntityPropDispatch = nullptr;
 // CBroadcaster::ReceiveLocalEvent (the listener dispatcher, not entity property
 // dispatch), that skip suppressed all message delivery on a server, including our
 // own 15 ServerLib injections which reach this VA via
-// EchoVR::BroadcasterReceiveLocalEvent (echovr_functions.cpp:87).
+// EchoVR::BroadcasterReceiveLocalEvent (echovr_functions.cpp).
 //
 // The AV is guarded precisely instead. Disassembly gives the exact fault chain:
 //   0x140f87b81  MOV R8, qword ptr [RDI]          ; inner = *arg1
@@ -519,9 +519,9 @@ static VOID EngineEntityPropDispatchHook(INT64 arg1, INT64 arg2, INT64 arg3, INT
   // lifecycle, not rendering. The stated justification was falsified by its own
   // callers; nobody re-checked because the constant was named ENGINE_ENTITY_*.
   //
-  // Worse, src/abi/echovr_functions.cpp:87 points
-  // EchoVR::BroadcasterReceiveLocalEvent at this same RVA, so all 15 injection
-  // sites in gameserver/gameserver.cpp re-enter THIS hook and hit THIS return.
+  // Worse, src/abi/echovr_functions.cpp points
+  // EchoVR::BroadcasterReceiveLocalEvent at this same RVA, so every injection
+  // site in gameserver/gameserver.cpp re-enters THIS hook and hit THIS return.
   // That is the entire ServerDB→game path: LobbyRegistrationSuccess/Failure,
   // LobbyStartSessionV4, LobbyAcceptPlayersSuccess/FailureV2,
   // LobbySessionSuccessV5, LobbySmiteEntrant.
