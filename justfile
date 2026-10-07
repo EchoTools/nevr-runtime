@@ -171,132 +171,21 @@ android-repack-apk apk shim="build/android-arm64/sentinel/libovrplatformloader.s
 # headset refuses an in-place update because the debug signature differs; that
 # uninstall deletes the app's data on the headset. Without `yes` the recipe stops
 # and prints what would be deleted. Order: check host tools and the APK, require
-# exactly one authorized headset with ~1.9 GB free on /sdcard and /data/local/tmp,
+# exactly one authorized headset with ~2.2 GiB free on /sdcard and /data/local/tmp,
 # fetch and SHA-256-verify the game data, `adb install -r -g` the debug-signed APK
 # (uninstalling first only on INSTALL_FAILED_UPDATE_INCOMPATIBLE and only with
 # `yes`), then push the data zip and extract it to the legacy path the unpatched
 # APK reads (/sdcard/readyatdawn/_data). The store OBB is DRM-encrypted and cannot
 # be mounted by a debug-signed sideload, so it is never used.
-# The download is cached at build/android-arm64/quest-data/_data.zip (~937 MB),
-# written as _data.zip.part and renamed only after the hash matches. data_sha256
+# The download is cached at build/android-arm64/quest-data/_data.zip (~937 MB; a
+# different data_sha256 gets its own _data-<hash prefix>.zip),
+# written as .part and renamed only after the hash matches. data_sha256
 # is trust-on-first-use: it is the SHA-256 of the file served from data_url when
 # the pin was taken, not a publisher-signed value; a cached file that does not
-# match is deleted.
+# match its own hash is deleted. The download and every long adb call have time
+# limits. The recipe body is tools/quest-install.sh (tested in tools/tests/test_quest_install.py).
 quest-install yes="" apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk" data_url="https://mia.cdn.echo.taxi/_data.zip" data_sha256="fc2eedeacc50d9ddf751e21914bb4188660cf5e79ce48aab24b84e757f4b543c":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    yes={{ quote(yes) }}
-    apk={{ quote(apk) }}
-    data_url={{ quote(data_url) }}
-    data_sha256={{ quote(data_sha256) }}
-    pkg=com.readyatdawn.r15
-    data=build/android-arm64/quest-data/_data.zip
-    remote_zip=/data/local/tmp/_data.zip
-    need_kb=1945600      # 1.9 GiB
-    max_bytes=1100000000 # download size cap
-
-    die() { echo "error: $*" >&2; exit 1; }
-
-    # 1. Host inputs, before anything touches the headset.
-    for tool in adb curl sha256sum timeout awk; do
-        command -v "$tool" >/dev/null 2>&1 || die "required tool '$tool' not found on PATH"
-    done
-    [ -f "$apk" ] || die "APK not found: $apk (build it with: just android-repack-apk)"
-    if [ -n "$yes" ] && [ "$yes" != "yes" ]; then
-        die "unrecognized argument '$yes' (the only accepted value is: yes)"
-    fi
-
-    # 2. Exactly one authorized device.
-    devices_out=$(timeout 30 adb devices 2>&1) || die "'adb devices' failed or timed out: $devices_out"
-    mapfile -t rows < <(printf '%s\n' "$devices_out" | awk 'NF && $1 != "List" && $1 !~ /^\*/')
-    [ "${#rows[@]}" -ne 0 ] || die "no adb device attached"
-    [ "${#rows[@]}" -eq 1 ] || die "${#rows[@]} adb devices attached, need exactly one: ${rows[*]}"
-    serial=$(printf '%s' "${rows[0]}" | awk '{print $1}')
-    state=$(printf '%s' "${rows[0]}" | awk '{print $2}')
-    case "$state" in
-        device) ;;
-        unauthorized) die "device $serial is unauthorized: accept the USB debugging prompt in the headset and retry" ;;
-        *) die "device $serial is in state '$state', need 'device'" ;;
-    esac
-    a() { adb -s "$serial" "$@"; }
-    timeout 30 adb -s "$serial" wait-for-device || die "device $serial did not become ready within 30 s"
-
-    # 3. Installed state: distinguish adb failure from "not installed".
-    set +e
-    pm_out=$(timeout 30 adb -s "$serial" shell pm path "$pkg" 2>&1)
-    pm_rc=$?
-    set -e
-    if [ "$pm_rc" -eq 0 ]; then
-        echo "$pkg is installed on $serial"
-    elif [ -z "$pm_out" ]; then
-        echo "$pkg is not installed on $serial"
-    else
-        die "package check failed (exit $pm_rc): $pm_out"
-    fi
-
-    # 4. Free space on the headset (KiB available).
-    for path in /sdcard /data/local/tmp; do
-        avail=$(timeout 30 adb -s "$serial" shell "df -Pk $path" 2>&1 | awk 'NR==2 {print $4}') || avail=''
-        case "$avail" in ''|*[!0-9]*) die "could not read free space on $path (got '$avail')" ;; esac
-        [ "$avail" -ge "$need_kb" ] || die "$path has $((avail / 1024)) MiB free, need $((need_kb / 1024)) MiB"
-    done
-
-    # 5. Game data: cached, hash-verified download.
-    verify() { [ "$(sha256sum "$1" | awk '{print $1}')" = "$data_sha256" ]; }
-    mkdir -p "$(dirname "$data")"
-    if [ -f "$data" ] && ! verify "$data"; then
-        echo "Cached $data does not match the pinned SHA-256; deleting it."
-        rm -f "$data"
-    fi
-    if [ ! -f "$data" ]; then
-        echo "Downloading game data (~937 MB) to $data.part ..."
-        rm -f "$data.part"
-        curl -fL --retry 2 --proto '=https' --proto-redir '=https' \
-            --connect-timeout 20 --max-filesize "$max_bytes" -o "$data.part" "$data_url" \
-            || { rm -f "$data.part"; die "download failed: $data_url"; }
-        if ! verify "$data.part"; then
-            rm -f "$data.part"
-            die "downloaded file does not match pinned SHA-256 $data_sha256"
-        fi
-        mv "$data.part" "$data"
-    fi
-    echo "Game data verified (sha256 $data_sha256)"
-
-    # 6. Install the APK; uninstall only if the headset says the signature differs.
-    echo "Installing $apk ..."
-    set +e
-    install_out=$(a install -r -g "$apk" 2>&1)
-    install_rc=$?
-    set -e
-    echo "$install_out"
-    if [ "$install_rc" -ne 0 ]; then
-        case "$install_out" in
-            *INSTALL_FAILED_UPDATE_INCOMPATIBLE*)
-                if [ "$yes" != "yes" ]; then
-                    echo "The installed $pkg is signed differently and cannot be updated in place." >&2
-                    echo "Removing it deletes its app data on the headset (/data/data/$pkg," >&2
-                    echo "/sdcard/Android/data/$pkg, and its OBB) and the data cannot be recovered." >&2
-                    die "re-run with the 'yes' argument to allow it: just quest-install yes"
-                fi
-                echo "Uninstalling $pkg (deletes its app data) ..."
-                a uninstall "$pkg" || die "uninstall of $pkg failed"
-                a install -g "$apk" || die "install of $apk failed after uninstall"
-                ;;
-            *) die "adb install failed (exit $install_rc)" ;;
-        esac
-    fi
-
-    # 7. Push and extract; the temp zip is removed on every exit path.
-    cleanup_remote() {
-        a shell "rm -f $remote_zip" >/dev/null 2>&1 \
-            || echo "warning: could not remove $remote_zip from the headset" >&2
-    }
-    trap cleanup_remote EXIT
-    echo "Pushing + extracting game data to /sdcard/readyatdawn ..."
-    a push "$data" "$remote_zip" || die "adb push failed"
-    a shell "mkdir -p /sdcard/readyatdawn && cd /sdcard/readyatdawn && unzip -o $remote_zip" \
-        || die "unzip on the headset failed (partial files may remain in /sdcard/readyatdawn)"
-    echo "Done."
+    tools/quest-install.sh {{ quote(yes) }} {{ quote(apk) }} {{ quote(data_url) }} {{ quote(data_sha256) }}
 
 # --- Tests ---
 
