@@ -302,10 +302,12 @@ your seat name, for example `claude-main` or `codex`.
   that `extern/<d>` and run `git submodule update --init extern/<d>`). Never print `.env`.
   The build embeds the production endpoints from `.env`.
 - **Client login test mechanics.** Run `./launch-client.sh --dll <absolute path to the build's
-  BugSplat64.dll>` from your checkout in the background, one client at a time (it exits 4 while an
-  `echovr.exe` runs or another run holds the lock). `NEVR_GAME_ROOT` overrides which checkout's
-  `echovr/` it uses. Read the run's JSONL log, stop your own `echovr.exe`, and confirm the script
-  restored the original DLL.
+  BugSplat64.dll> --exit-after-login` from your checkout, one client at a time (it exits 4 while an
+  `echovr.exe` runs or another run holds the lock). It ends the run itself: exit 0 on `to logged in`;
+  exit 1 on repeated `rad15_live failed` or `Service is unavailable` lines, a DLL that embeds no
+  endpoints, or `--login-timeout` seconds without a login (default 120, minimum 45); then it stops
+  the game and the Wine server and restores the original DLL. `NEVR_GAME_ROOT` overrides which
+  checkout's `echovr/` it uses. Read the run's JSONL log and confirm the DLL was restored.
 
 ### Documentation, plans and findings
 
