@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <type_traits>
+
 #include <array>
 #include <cstdint>
 #include <string>
@@ -93,6 +95,18 @@ class ScopedGameLogger {
 };
 
 }  // namespace
+
+TEST(MessagesEncoding, TheMutablePtrAliasesTheBufferAndTheConstOneStaysConst) {
+  EncodedMessage encoded;
+  encoded.data = {1, 2, 3};
+  uint8_t* mutablePtr = encoded.ptr();
+  EXPECT_EQ(mutablePtr, encoded.data.data());
+  mutablePtr[1] = 9;
+  EXPECT_EQ(encoded.data[1], 9);
+  const EncodedMessage& constRef = encoded;
+  static_assert(std::is_same_v<decltype(constRef.ptr()), const uint8_t*>, "const ptr() must stay const");
+  EXPECT_EQ(constRef.ptr(), encoded.data.data());
+}
 
 TEST(MessagesUuid, ValidUuidProducesExpectedWindowsGuidLayout) {
   GUID guid = {};
