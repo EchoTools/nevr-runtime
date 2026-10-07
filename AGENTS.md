@@ -297,7 +297,8 @@ your seat name, for example `claude-main` or `codex`.
   `built-in defaults embedded in this build:` line, then `LOGIN SUCCESS` and `to logged in`.
 - **Fresh worktrees need build inputs.** Run `just worktree-setup` in the new worktree: it copies
   `extern/{minhook,breakpad,lss}` (without their `.git` files), `gen/` and `.env` from the main
-  checkout, leaves the main checkout unchanged and keeps a `.env` the worktree already has. Never print
+  checkout, fills in only what is missing (an initialised submodule, `gen/` or `.env` the worktree
+  already has is kept; delete `gen/` to refresh it) and leaves the main checkout unchanged. Never print
   `.env`. The build embeds the production endpoints from `.env`.
 - **Client login test mechanics.** Run `./launch-client.sh --dll <absolute path to the build's
   BugSplat64.dll>` from your checkout in the background, one client at a time (it exits 4 while an

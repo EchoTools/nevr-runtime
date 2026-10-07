@@ -112,6 +112,9 @@ _temp/
 # Environment files. The root .env holds the build-time defaults embedded into the
 # runtime (NEVR_PUBLIC_API_KEY, NEVR_PUBLIC_SOCKET_KEY, ...): local values, never committed.
 extras/.env
+# temporaries of tools/worktree-setup.sh (a killed run can leave them)
+/.gen.??????
+/extern/.*.??????
 /.env
 
 # Claude Code session files
