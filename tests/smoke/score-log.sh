@@ -133,7 +133,7 @@ S29@@server@@UPnP port mapping added@@\[NEVR\.UPNP\] Port mapping added:@@\[NEVR
 S30@@server@@Telemetry stream connected@@\[NEVR\.TELEMETRY\] Connected to telemetry server@@\[NEVR\.TELEMETRY\] Connection error
 S43@@server@@Telemetry state is stated either way@@Connected to telemetry server|telemetry disabled@@
 S44@@server@@No hook failed for a real (non-collision) reason@@\[NEVR\.PATCH\] boot hooks installed ok=[Tt][Rr][Uu][Ee]@@(reason|status)=MH_ERROR_(UNSUPPORTED_FUNCTION|NOT_EXECUTABLE|MEMORY_ALLOC|MODULE_NOT_FOUND|FUNCTION_NOT_FOUND|UNABLE_TO_UNINSTALL|UNKNOWN)
-S31@@server@@Shutdown signal handlers installed@@POSIX signal handlers installed|console ctrl handler installed@@SetConsoleCtrlHandler FAILED|Failed to register SIG
+S31@@server@@Shutdown signal handlers installed@@POSIX signal handlers installed|console ctrl handler installed@@SetConsoleCtrlHandler FAILED|Failed to register SIG|POSIX signal handlers NOT fully installed
 S32@@server@@Ctrl handler re-armed to front of chain@@console ctrl handler re-armed to front of chain@@
 S33@@server@@Shutdown deps pre-resolved (no loader lock)@@shutdown deps resolved@@
 S34@@server@@CTRL+C reached the runtime@@shutdown signal received@@
