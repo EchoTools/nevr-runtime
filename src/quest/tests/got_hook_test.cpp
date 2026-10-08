@@ -1240,6 +1240,89 @@ void RollbackCompareAndSwapFailureIsLogged() {
   ReleasePoisonedSlotsIn(base, kImageSize);
 }
 
+// ---- record-only arming, unreadable maps --------------------------------------
+
+// Arm takes only a record that lies in the nevr_hook_records section. A record built at run
+// time (the only way to get one outside the macro is HookRecordAccess) is refused, logged, and
+// leaves the thunk as it was; HookRecord itself has no public constructor (compile_fail/).
+void ArmRefusesARecordOutsideTheSection() {
+  Prepare();
+  QCHECK(IsRecordedHook(kAddPlus100));
+  *AddThunk::OriginalOut() = reinterpret_cast<void*>(&AddImpl);
+  auto entry = reinterpret_cast<AddThunk::Fn>(AddThunk::EntryAddress());
+  const HookRecord<AddThunk> runtimeRecord = HookRecordAccess::Make<AddThunk>(AddThunk::EntryFn(), &AddPlus100);
+  QCHECK(!IsRecordedHook(runtimeRecord));
+  AddThunk::Arm(runtimeRecord);
+  QCHECK(Count(LogLevel::kError, "\"status\":\"arm_refused\"") == 1);
+  QCHECK(entry(2, 3) == 5);  // not armed: plain pass-through
+  AddThunk::Arm(kAddPlus100);
+  QCHECK(entry(2, 3) == 105);
+  AddThunk::Reset();
+}
+
+int OpenDirectory() { return open("/", O_RDONLY); }          // read(2) fails with EISDIR
+int OpenEmpty() { return open("/dev/null", O_RDONLY); }      // end of file before any data
+int OpenNothing() { return -1; }                              // open fails
+
+// A poisoned slot is released only on proof that its address is unmapped. A failed open, a read
+// error and an immediate end of file are all "unknown" and keep the reservation (releasing it
+// would let a retry publish a foreign hook that chains our entry as the original).
+void PoisonedSlotIsKeptWhenMapsAreUnreadable() {
+  Prepare();
+  Module m = Open("libgotfx_consumer_now.so");
+  GotTarget target{"libgotfx_consumer_now.so", "fx_add", RelocKind::kJumpSlot};
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  GotHook hook;
+  void* out = nullptr;
+  SetStoreObserver(&AfterStoreClobberObserver);
+  QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), &out), GotStatus::kWriteVerifyFailed);
+  SetStoreObserver(nullptr);
+  const std::uintptr_t page = static_cast<std::uintptr_t>(sysconf(_SC_PAGESIZE));
+  void* const pageStart = reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(r.slot) & ~(page - 1));
+  ForceWrite(r.slot, m.realAdd);  // a plausible original, so only the poison can refuse the retry
+
+  // The module is still mapped, so the slot was never released; make the "unmapped" evidence
+  // unreliable three ways and check nothing is released.
+  const MapsOpener opener[] = {&OpenDirectory, &OpenEmpty, &OpenNothing};
+  for (MapsOpener fn : opener) {
+    Captured().clear();
+    SetMapsOpener(fn);
+    ReleasePoisonedSlotsIn(pageStart, page);
+    SetMapsOpener(nullptr);
+    QCHECK(Count(LogLevel::kError, "\"status\":\"mapping_unknown\"") == 1);
+    void* retryOut = nullptr;
+    QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), &retryOut), GotStatus::kSlotPoisoned);
+  }
+  // A readable maps file that lists the page: still mapped, reported as such.
+  Captured().clear();
+  ReleasePoisonedSlotsIn(pageStart, page);
+  QCHECK(Count(LogLevel::kError, "\"status\":\"still_mapped\"") == 1);
+
+  // Unmapped and readable: released, with a log line saying so.
+  QCHECK(dlclose(m.handle) == 0);
+  Captured().clear();
+  ReleasePoisonedSlotsIn(pageStart, page);
+  QCHECK(Count(LogLevel::kInfo, "\"status\":\"released\"") == 1);
+}
+
+// Start and Stop from two threads at once: no orphaned thread, no double join, no hang.
+void ReporterStartStopRace() {
+  Prepare();
+  auto loop = [] {
+    for (int i = 0; i < 100; ++i) {
+      StartReporter(5, 20, 50);
+      StopReporter();
+    }
+  };
+  SetLogSink(&SilentSink);  // the capture sink is not what is under test here
+  std::thread a(loop), b(loop);
+  a.join();
+  b.join();
+  StopReporter();
+  SetLogSink(&CaptureSink);
+  QCHECK(!ReporterRunning());
+}
+
 // ---- reporter -----------------------------------------------------------------
 
 template <typename Pred>
@@ -1262,6 +1345,8 @@ void ReporterIsBoundedWithAHotAndAnIdleCounter() {
   std::atomic<std::uint64_t> idle{0};
   QCHECK(RegisterReportCounter("hot_counter", &hot));
   QCHECK(RegisterReportCounter("idle_counter", &idle));
+  std::atomic<std::uint64_t> faults{0};
+  QCHECK(RegisterReportCounter("fault_counter", &faults, ReportKind::kFaults));
   QCHECK(StartReporter(10, 200, 600));
   QCHECK(StartReporter(10, 200, 600));  // idempotent
   QCHECK(!RegisterReportCounter("late", &hot));  // refused once running
@@ -1284,6 +1369,7 @@ void ReporterIsBoundedWithAHotAndAnIdleCounter() {
   std::this_thread::sleep_for(std::chrono::milliseconds(700));  // one more steady pass, no change
   QCHECK(Count(LogLevel::kInfo, "\"why\":\"changed\"") == 1);
   QCHECK(Count(LogLevel::kInfo, "never_fired") == 1);  // reported once, not every pass
+  QCHECK(Count(LogLevel::kInfo, "fault_counter") == 0);  // zero faults is healthy: no never_fired
   QCHECK(Count(LogLevel::kInfo, "\"event\":\"hook_counter\"") == 3);
 
   // fork() while the reporter runs: the child has no reporter thread and must not block on it.
@@ -1506,6 +1592,9 @@ int main(int argc, char** argv) {
   ReprotectFailureDoesNotHideAnEarlierFailure();
   RollbackCompareAndSwapFailureIsLogged();
   RegistryBound();
+  ArmRefusesARecordOutsideTheSection();
+  PoisonedSlotIsKeptWhenMapsAreUnreadable();
+  ReporterStartStopRace();
   ReporterIsBoundedWithAHotAndAnIdleCounter();
   ReporterReportsALateFirstChange();
   LogLinesAreValidJson();

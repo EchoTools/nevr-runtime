@@ -52,7 +52,8 @@ NEVR_HOOK_RECORD(kClockHook, ClockThunk, &HookedClockGettime);
 // call intact; it is never fatal to the host process.
 void InstallBasicsHook() {
     sentinel::RegisterReportCounter("clock_gettime_calls", &g_clockGettimeCalls);
-    sentinel::RegisterReportCounter("clock_gettime_thunk_faults", &ClockThunk::FaultCounter());
+    sentinel::RegisterReportCounter("clock_gettime_thunk_faults", &ClockThunk::FaultCounter(),
+                                    sentinel::ReportKind::kFaults);
     sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000);
     ClockThunk::Arm(kClockHook);
     sentinel::InstallThunk<ClockThunk>(g_clockHook, sentinel::pinned::LibR15ClockGettime());

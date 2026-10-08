@@ -9,8 +9,10 @@
  *
  *   using Thunk = CallbackThunk<MyTag, int(int, const char*)>;
  *   int MyHandler(Thunk::Fn original, int a, const char* b) noexcept;
- *   Thunk::Arm(&MyHandler);
- *   hook.Install(target, Thunk::EntryAddress(), Thunk::OriginalOut());
+ *   NEVR_HOOK_RECORD(kMyHook, Thunk, &MyHandler);   // namespace scope
+ *   ...
+ *   Thunk::Arm(kMyHook);
+ *   InstallThunk<Thunk>(hook, target);              // hook_install.h
  *
  * The original. Entry reads the original-call pointer once and hands that value to
  * the handler, so resetting or replacing the published pointer while a call is in
@@ -73,6 +75,16 @@
  *      from every record's entry and handler, follows direct bl/b edges through the sentinel
  *      and fails on any reachable function under a personality-bearing CIE. There is no
  *      allowlist: a hook does not log, so no logging code is reachable from it.
+ *
+ * Limits, stated so nobody mistakes the checks for a proof. The sensor exists to catch an honest
+ * mistake in a package that uses this API; it is not a barrier against someone working around it
+ * inside the repository. It does not follow indirect calls. `Arm` refuses a record that is not in
+ * the nevr_hook_records section and HookRecord cannot be built without the macro's access class,
+ * and InstallThunk accepts only a CallbackThunk instantiation, but a macro that forwards to
+ * HookRecordAccess, or a header under tests/ wrapped by production code, can still get around
+ * them (TestRawInstallOnlyInTests also rejects production includes of anything under tests/).
+ * The #error above is advisory: undefining __cpp_exceptions before the include defeats it; the
+ * frame sensor on the built library is the real check.
  */
 #pragma once
 
@@ -82,32 +94,71 @@
 
 #include <atomic>
 #include <cstdint>
+#include <type_traits>
+
+#include "hook_log.h"
 
 // Defines a hook: records {entry, handler} in the output section nevr_hook_records (found
 // by the build-time sensor through the section's relocations) and gives Thunk::Arm the only
-// thing it accepts.
+// thing it accepts. HookRecord has no public constructor; this macro builds it through
+// HookRecordAccess, and Arm checks that the record it is handed lies in that section.
 // `retain` keeps the record through the linker's --gc-sections (nothing references it).
 #if defined(__clang__)
 #define NEVR_HOOK_RECORD_ATTRS __attribute__((used, retain, section("nevr_hook_records")))
 #else
 #define NEVR_HOOK_RECORD_ATTRS __attribute__((used, section("nevr_hook_records")))
 #endif
-#define NEVR_HOOK_RECORD(name, Thunk, handlerFn)                                  \
-  NEVR_HOOK_RECORD_ATTRS constexpr ::sentinel::HookRecord<Thunk> name {            \
-    Thunk::EntryFn(), handlerFn                                                    \
-  }
+#define NEVR_HOOK_RECORD(name, Thunk, handlerFn)                                        \
+  NEVR_HOOK_RECORD_ATTRS constexpr ::sentinel::HookRecord<Thunk> name =                  \
+      ::sentinel::HookRecordAccess::Make<Thunk>(Thunk::EntryFn(), handlerFn)
+
+// The bounds of the nevr_hook_records section, provided by the linker for a section whose
+// name is a C identifier. Weak: absent when the program defines no record.
+extern "C" {
+extern const char __start_nevr_hook_records[] __attribute__((weak, visibility("hidden")));
+extern const char __stop_nevr_hook_records[] __attribute__((weak, visibility("hidden")));
+}
 
 namespace sentinel {
 
 template <typename Tag, typename Signature>
 class CallbackThunk;
 
-// The two function pointers that make a hook: the thunk's entry and its handler.
+template <typename T>
+struct IsCallbackThunk : std::false_type {};
+template <typename Tag, typename Signature>
+struct IsCallbackThunk<CallbackThunk<Tag, Signature>> : std::true_type {};
+
+struct HookRecordAccess;
+
+// The two function pointers that make a hook: the thunk's entry and its handler. It cannot be
+// constructed outside NEVR_HOOK_RECORD (private constructor, HookRecordAccess is the friend).
 template <typename Thunk>
-struct HookRecord {
+class HookRecord {
+ public:
   typename Thunk::Fn entry;
   typename Thunk::Handler handler;
+
+ private:
+  constexpr HookRecord(typename Thunk::Fn e, typename Thunk::Handler h) : entry(e), handler(h) {}
+  friend struct HookRecordAccess;
 };
+
+struct HookRecordAccess {
+  template <typename Thunk>
+  static constexpr HookRecord<Thunk> Make(typename Thunk::Fn entry, typename Thunk::Handler handler) {
+    return HookRecord<Thunk>(entry, handler);
+  }
+};
+
+// True when `record` lies inside the nevr_hook_records section, i.e. it was defined with
+// NEVR_HOOK_RECORD and is visible to the build-time frame sensor.
+template <typename Thunk>
+bool IsRecordedHook(const HookRecord<Thunk>& record) noexcept {
+  const char* const p = reinterpret_cast<const char*>(&record);
+  return &__start_nevr_hook_records != nullptr && &__stop_nevr_hook_records != nullptr &&
+         p >= __start_nevr_hook_records && p + sizeof(record) <= __stop_nevr_hook_records;
+}
 
 template <typename Tag, typename Ret, typename... Args>
 class CallbackThunk<Tag, Ret(Args...)> {
@@ -129,8 +180,15 @@ class CallbackThunk<Tag, Ret(Args...)> {
     return reinterpret_cast<Fn>(__atomic_load_n(&original_, __ATOMIC_ACQUIRE));
   }
 
-  // Arms the record's handler; Disarm makes calls pass straight through to the original.
+  // Arms the record's handler; Disarm makes calls pass straight through to the original. A
+  // record that is not in the nevr_hook_records section (one built at run time) is refused and
+  // logged, and the thunk stays as it was. Call it from initialisation, not from a hook.
   static void Arm(const HookRecord<CallbackThunk>& record) noexcept {
+    if (!IsRecordedHook(record)) {
+      LogFields(LogLevel::kError, "callback_thunk",
+                {{"status", "arm_refused"}, {"reason", "record_not_in_nevr_hook_records"}});
+      return;
+    }
     handler_.store(record.handler, std::memory_order_release);
   }
   static void Disarm() noexcept { handler_.store(nullptr, std::memory_order_release); }

@@ -19,6 +19,8 @@ namespace sentinel {
 struct ThunkInstaller {
   template <typename Thunk>
   static GotStatus Install(GotHook& hook, const GotTarget& target, ImageLookup lookup) {
+    static_assert(IsCallbackThunk<Thunk>::value,
+                  "InstallThunk requires a CallbackThunk<Tag, Ret(Args...)> instantiation");
     return hook.Install(target, Thunk::EntryAddress(), Thunk::OriginalOut(), lookup);
   }
 };
@@ -28,6 +30,8 @@ struct ThunkInstaller {
 template <typename Thunk>
 GotStatus InstallThunk(GotHook& hook, const GotTarget& target,
                        ImageLookup lookup = FindLoadedImage) {
+  static_assert(IsCallbackThunk<Thunk>::value,
+                "InstallThunk requires a CallbackThunk<Tag, Ret(Args...)> instantiation");
   return ThunkInstaller::Install<Thunk>(hook, target, lookup);
 }
 

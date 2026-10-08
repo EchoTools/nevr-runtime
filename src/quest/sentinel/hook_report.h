@@ -7,9 +7,11 @@
  *   - "reporter_started" once, with its three intervals;
  *   - during the first `graceMs`, it wakes every `firstMs` and logs a counter ONCE, the first
  *     time it is non-zero ("first_change");
- *   - when the grace window ends it logs "never_fired" ONCE for each counter that is still
- *     zero: the hook is installed and the game never called it, which is the signal an
- *     operator needs;
+ *   - when the grace window ends it logs "never_fired" ONCE for each calls counter that is
+ *     still zero: the hook was not called in that window. That is also what a failed install
+ *     looks like (the reporter starts before the install), so read it together with the
+ *     got_hook install line. A counter registered as ReportKind::kFaults is never reported
+ *     never_fired: zero faults is the healthy state;
  *   - from then on every counter is on the steady cadence: one pass per `steadyMs`, and a
  *     counter is logged only if its value changed ("changed"); a counter that fires for the
  *     first time after the grace window is logged "first_change" at the next steady pass.
@@ -39,16 +41,23 @@
 
 namespace sentinel {
 
+enum class ReportKind { kCalls, kFaults };
+
 // Registers a counter to report (at most 8). `name` must outlive the reporter (a literal).
 // Returns false, and logs, when the table is full or the reporter is already running.
-bool RegisterReportCounter(const char* name, const std::atomic<std::uint64_t>* value);
+bool RegisterReportCounter(const char* name, const std::atomic<std::uint64_t>* value,
+                           ReportKind kind = ReportKind::kCalls);
 
 // Starts the reporter thread. Idempotent. Returns false, and logs one error line, when the
 // thread cannot be created.
 bool StartReporter(unsigned firstMs, unsigned graceMs, unsigned steadyMs);
 
 // Wakes and joins the reporter thread, and forgets the registered counters. Safe to call
-// when it is not running.
+// when it is not running, and safe against a concurrent StartReporter/StopReporter: one lock
+// covers the whole start or stop, join included.
 void StopReporter();
+
+// Whether the reporter thread is running.
+bool ReporterRunning();
 
 }  // namespace sentinel
