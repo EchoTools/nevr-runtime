@@ -457,6 +457,30 @@ test-quest-hooks:
         src/quest/sentinel/hook_log.cpp -o "$out/got_hook_test" -ldl -pthread
     "$out/got_hook_test" "$out"
 
+# Quest config-string redirect on the host. Builds two fixture shared objects that import
+# CJson::TString by its mangled name through a PLT slot (src/quest/redirect/tests), then runs
+# redirect_test, which drives the production ServiceRedirector, the typed thunks and GotHook
+# against them with a fake game config. No NDK, no Android. Fail-close.
+test-quest-redirect:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-redirect-host"
+    mkdir -p "$out"
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    fx=src/quest/redirect/tests
+    "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 "$fx/tstring_fixture_provider.cpp" \
+        -o "$out/libredirfx_provider.so"
+    link=(-fPIC -shared -Wl,--build-id=sha1 -L"$out" -lredirfx_provider -Wl,-rpath,'$ORIGIN' -Wl,-z,now,-z,relro)
+    "${cxx[@]}" "${link[@]}" "$fx/tstring_fixture_consumer.cpp" -o "$out/libredirfx_consumer_a.so"
+    "${cxx[@]}" "${link[@]}" "$fx/tstring_fixture_consumer.cpp" -o "$out/libredirfx_consumer_b.so"
+    "${cxx[@]}" "$fx/redirect_test.cpp" \
+        src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp \
+        src/quest/sentinel/quest_config.cpp src/runtime/lifecycle/service_redirect.cpp \
+        src/runtime/lifecycle/stable_string_pool.cpp \
+        -o "$out/redirect_test" -ldl -pthread
+    "$out/redirect_test" "$out"
+
 # Resolve the pinned Quest targets in the real libr15.so / libpnsradmatchmaking.so
 # (docs/adr/0003). Extracts both from the pinned APK, checks their SHA-256, and runs
 # src/quest/tests/got_pinned_test.cpp. Fail-close, including when the APK is absent:
@@ -496,6 +520,7 @@ verify:
     just test-auth-unit
     just test-quest-shared
     just test-quest-hooks
+    just test-quest-redirect
     python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
