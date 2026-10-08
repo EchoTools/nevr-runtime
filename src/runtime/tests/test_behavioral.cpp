@@ -1067,7 +1067,7 @@ TEST(WsBridgeGameToServerLog, AWrappingDeclaredLengthEndsTheWalkAndPrintsTheDecl
   const uint64_t wraps = UINT64_MAX - 23;
   for (size_t i = 0; i < 8; ++i) frame[16 + i] = static_cast<char>((wraps >> (8 * i)) & 0xff);
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
-  EXPECT_TRUE(TestLogContains("header declares 18446744073709551592 payload bytes but only 48 remain"));
+  EXPECT_TRUE(TestLogContains("header declares " + std::to_string(wraps) + " payload bytes but only 48 remain"));
 }
 
 TEST(WsBridgeLoginFailure, DiagnosticRejectsUndersizedTruncatedAndOversizedFrames) {
