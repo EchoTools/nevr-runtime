@@ -63,9 +63,14 @@ Parsed ParseCertificates(const std::string& data, std::string& out) {
   if (data.find("-----BEGIN") != std::string::npos) {
     for (size_t pos = data.find(kBegin); pos != std::string::npos; pos = data.find(kBegin, pos)) {
       const size_t end = data.find(kEnd, pos);
-      if (end == std::string::npos) {
-        ++result.bad;  // a BEGIN with no END
-        break;
+      const size_t next = data.find(kBegin, pos + 1);
+      if (end == std::string::npos || (next != std::string::npos && next < end)) {
+        // An unterminated block ends where the next one begins: it must not swallow the
+        // good certificate after it.
+        ++result.bad;
+        if (next == std::string::npos) break;
+        pos = next;
+        continue;
       }
       const size_t block_end = end + sizeof(kEnd) - 1;
       BioPtr in(BIO_new_mem_buf(data.data() + pos, static_cast<int>(block_end - pos)));
@@ -86,6 +91,12 @@ Parsed ParseCertificates(const std::string& data, std::string& out) {
       ++result.bad;
     }
   }
+  // Other PEM objects (TRUSTED CERTIFICATE, X509 CRL, ...) are not read; count them so a file that
+  // held only those is visible in the log rather than counted nowhere.
+  size_t all = 0, certs = 0;
+  for (size_t p = data.find("-----BEGIN "); p != std::string::npos; p = data.find("-----BEGIN ", p + 1)) ++all;
+  for (size_t p = data.find(kBegin); p != std::string::npos; p = data.find(kBegin, p + 1)) ++certs;
+  result.bad += all - certs;
   ERR_clear_error();  // failed parses leave entries on this thread's OpenSSL error queue
   return result;
 }

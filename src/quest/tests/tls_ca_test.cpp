@@ -444,6 +444,39 @@ TEST(a_corrupt_pem_block_does_not_hide_the_blocks_around_it) {
   CHECK(logs.text.find("certificates=3 unparsable_certs=3") != std::string::npos);
 }
 
+TEST(an_unterminated_pem_block_ends_where_the_next_begins_and_does_not_hide_a_good_certificate) {
+  const std::string good = PemOf(Fix().ca.cert.get());
+  const std::string good2 = PemOf(Fix().other_ca.cert.get());
+  const std::string unterminated = "-----BEGIN CERTIFICATE-----\nMIIB\n";
+  {
+    const std::string dir = FreshDir("ca-unterminated-between");
+    WriteFile(dir + "/a.0", good + unterminated + good2);
+    Logs logs;
+    const CaBundle b = LoadCaBundle({dir}, logs.Sink());
+    CHECK_EQ(b.certificates, size_t(2));
+    CHECK(logs.text.find("certificates=2 unparsable_certs=1") != std::string::npos);
+  }
+  {
+    const std::string dir = FreshDir("ca-unterminated-first");
+    WriteFile(dir + "/a.0", unterminated + good);
+    Logs logs;
+    const CaBundle b = LoadCaBundle({dir}, logs.Sink());
+    CHECK_EQ(b.certificates, size_t(1));  // not "no CA certificates could be loaded"
+    CHECK(logs.text.find("fail closed") == std::string::npos);
+  }
+}
+
+TEST(pem_objects_that_are_not_certificates_are_counted_not_dropped_silently) {
+  const std::string dir = FreshDir("ca-other-pem");
+  WriteFile(dir + "/real.0", PemOf(Fix().ca.cert.get()));
+  WriteFile(dir + "/trusted.0", "-----BEGIN TRUSTED CERTIFICATE-----\nAAAA\n-----END TRUSTED CERTIFICATE-----\n");
+  WriteFile(dir + "/crl.0", "-----BEGIN X509 CRL-----\nAAAA\n-----END X509 CRL-----\n");
+  Logs logs;
+  const CaBundle b = LoadCaBundle({dir}, logs.Sink());
+  CHECK_EQ(b.certificates, size_t(1));
+  CHECK(logs.text.find("certificates=1 unparsable_certs=2") != std::string::npos);
+}
+
 TEST(entries_that_are_not_regular_files_are_skipped_counted_and_never_block) {
   const std::string dir = FreshDir("ca-odd");
   WriteFile(dir + "/real.0", PemOf(Fix().ca.cert.get()));
