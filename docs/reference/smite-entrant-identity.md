@@ -1,16 +1,18 @@
 # Smite: which identifier the game resolves to an entrant slot
 
 Issue #119: the smite handler in `src/runtime/server/gameserver.cpp` (`Envelope::kLobbySmiteEntrant`)
-resolves the server's `entrant_id` to a slot by comparing it with `entrant->userId`, and that comparison
-cannot match. This records what the game itself does with the id, from ReVault (`echovr.exe`), so the
-protocol question can be answered from the binary.
+turns the server's `entrant_id` UUID into the entrant slot index the game's smite event carries. This
+records what the game itself does with the id, from ReVault (`echovr.exe`), and how the runtime resolves it.
 
-## What the runtime does now
+## What the runtime does
 
-`entrant_id` is parsed as a UUID into a `GUID` (`ParseUuidToGuid`), then compared byte for byte
-(`memcmp`, 16 bytes) with `Lobby::EntrantData::userId`, which is an `XPlatformId` (a platform qword
-whose low nibble is the provider, then the account id; `src/abi/echovr.h`). A random v4 UUID never has
-that shape, so `found` stays false and the handler logs `Smite entrant not found in lobby`.
+`entrant_id` is parsed as a UUID into a `GUID` (`ParseUuidToGuid`) and resolved by
+`ServerContext::FindEntrantSlotBySession` (`src/runtime/server/server_context.cpp`), which scans the
+lobby's player-session array (`EchoVR::Lobby::playerSessions`, `playerSessionCount`, `PlayerSessionSlot`
+in `src/abi/echovr.h`) for the item whose `guid` matches and returns its index. An index with no live
+entrant at `lobby+0x360` is not returned. The handler logs `Smite entrant not found in lobby` when nothing
+matches. `Lobby::EntrantData::userId` is an `XPlatformId`, so comparing a UUID with it can never match;
+`ServerContextSmite.EntrantUserIdBytesDoNotMatch` pins that.
 
 ## What the game does with a smite
 
@@ -50,8 +52,6 @@ index = slot.
 
 - Whether items in the `+0xC8` array are cleared or compacted when an entrant leaves (`RemoveEntrant`,
   `0x140610700`, was not read), so an index may be stale after departures.
-- The runtime's `EchoVR::Lobby` hides the array inside `_unk3[0xD0]` (offsets `0x60`-`0x12F`); no
-  runtime code reads `+0xC8` or `+0xD0` today.
 - That nakama sends `entrant_id` as the same UUID it sends in accepts (issue #119 says no smite
   sender exists yet in nakama or nevr-server-rs).
 - No run exercised a smite.
