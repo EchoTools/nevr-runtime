@@ -458,8 +458,19 @@ Traced in the pinned libraries (ELF vaddrs):
   two destructor slots. The fields the game and the engine's non-virtual `CNSISocial` code read
   directly keep their offsets: counts at +0x200/+0x204, member JSON array +0x248, max members +0x250
   (`CNSIRichPresence::Set`, 0x1919000), lobby uuid/match type/team/type/flags at +0x260/+0x270/+0x278/
-  +0x27a/+0x27c, room id +0x2a8, owner index +0x2b0, join policy +0x2b4. The facade keeps a pointer to
-  its owner in the last word.
+  +0x27a/+0x27c, room id +0x2a8, owner index +0x2b0, join policy +0x2b4. Two more are written by the
+  game: +0x1e8 (`CR15NetGame::Initialize` stores 2, libr15 0x12866bc) and the party CJson at +0x1f0,
+  which `CR15NetGame::Update` fills whenever `IsHost` answers true (`SetInt` 0x12951d4/0x1295628,
+  `SetSymbol` 0x1295240, `Clear` 0x1295254) and then sets bit 0 of +0x27c (0x1295044, 0x1295204). The
+  facade keeps a pointer to its owner in the last word.
+- **Member count.** The game indexes the member JSON array at +0x248 by the member count the object
+  reports and checks the index only against slot 27 (`PartyMemberData` 0x129b3fc,
+  `PartyMemberHeadsetType` 0x129b168). The array holds `kMemberJsonSlots` = 10 entries, so slot 27,
+  +0x200/+0x204, `MemberId` and `MemberName` never exceed 10 whatever the server sends; a clamp is counted
+  (`social_members_clamped`). The model keeps its full list. Before the first `Update` the count is
+  at least the local-user count `AddMember` wrote, so the engine's `MemberCount - [+0x200]`
+  (`PlatformPurchaseSucceededCB`) is never negative. The PCVR facade has the same 10-entry array and no
+  clamp (#234).
 - **Callbacks.** `Initialize` copies the 15 delegates (0x20 bytes each, context, 16 inline bytes, proxy)
   that `CR15NetGame::Initialize` builds (0x12866ac..0x1286a60). Their order is the PCVR order:
   created, joined, join failed, updated, host changed, left, kicked, invitation accepted (the gate),
@@ -493,14 +504,29 @@ Traced in the pinned libraries (ELF vaddrs):
   would be destroyed during exit while they run. A test registers an exit check before first use.
 - **Before login.** With no signed-in account the facade sends no party create, defers joins, and
   reports no local member.
+- **Refused requests.** A create, join or lock request the sender refuses (no `SetSender` yet, a closed
+  connection) is logged `NOT_sent`, counted (`social_send_failed`) and rolled back in the model
+  (`SocialParty::State::AbandonCreate`, `AbandonJoining`, `ForgetLockRequest`), so the state does not stay
+  "creating" or "joining" and defer every later join. The create is retried after four seconds. A deferred
+  join is counted every frame (`social_join_deferred`) and logged once per party.
+- **Events.** One `Update` delivers at most 32 callbacks; the rest are carried to the next frame in order,
+  so a `Left`, `Kicked` or `MemberJoined` is delayed, not lost. The carry queue holds 256; past that the
+  newest are dropped and counted (`social_events_dropped`).
+- **Logging.** Every request logs its name, symbol, the id it carries (invite target, party, scope or
+  policy) and whether it was sent; no secret is in any of them. The lines go to logcat unless the
+  integration installs the sentinel's disk sink (`sentinel::SetLogSink`, PR #220's `sentinel_log.h`), so
+  durability is the integration step's to provide; this package does not install one.
 
-What the facade does not carry: the member and party JSON (`MemberDataWritable` returns null, the
-JSON fields stay empty), so headset type in the party list and the lobby id a non-host party member
-follows are not shared; the engine's base `CNSISocial::Update` (0x1919868) would do that sharing
+What the facade does not carry: the member and party JSON. `MemberDataWritable` returns null, so the member
+array at +0x248 stays empty; the party CJson at +0x1f0 is the game's: it writes lobby settings into it while
+this client leads a party (see the field list) and the facade neither serializes nor shares it, and
+`Reset` leaves it alone (zeroing the pointer the game owns would orphan the tree it allocated). So headset
+type in the party list and the lobby id a non-host party member follows are not shared; the engine's base `CNSISocial::Update` (0x1919868) would do that sharing
 given the dirty-bit array at +0x208 and the `ShareData` slots. `libr15.so` exports the CJson calls it would
 need (`DecodeFrom(char const*, unsigned long long)`, `EncodeToCompactTStr`, `Reset`). `RefreshInvites`,
-`DeepLink` and `FriendsRefreshed` are not driven, as on PCVR. Display names need a registered
-`SocialNames::SetDecoder` (zstd) that the Quest build does not link; without it friends show account ids.
+`FriendsRefreshed` are not driven, as on PCVR. Display names need a registered `SocialNames::SetDecoder`
+(zstd) that the Quest build does not link; the profile replies are unreadable without it, so no profile
+request is sent and friends and party members show account ids until an adapter registers one.
 
 ### Integration contract
 
@@ -515,15 +541,16 @@ What the integration commit calls, and when:
    does not have to be loaded, because the handler looks it up when `Social()` is called. The hook must
    be live before `CR15NetGame::Initialize` reaches 0x12866a4 (inside `CR15Game::Initialize`, after the
    providers are created); a constructor install is always earlier.
-2. **Order against the other hooks.** None is required. The login hook is on libpnsovr's GOT and needs
-   libpnsovr loaded (`CSysModule::Load`, libr15 0x2a9e16c); the matchmaking redirect is on
+2. **Order against the other hooks.** None is required. The login hook (#221) is installed from a libr15
+   dlopen JUMP_SLOT (0x36c6380, per `login_hook.h` on that branch; not in this tree) and needs libpnsovr
+   loaded (`CSysModule::Load`, libr15 0x2a9e16c); the matchmaking redirect is on
    libpnsradmatchmaking's GOT and needs that library, which `CNSLobby::LoadMatchmakingSupport` loads at
    the lobby stage; the config-string hooks are on libr15 and libpnsradmatchmaking. Different modules,
    different slots, no shared state.
 3. **Login adapter:** `quest_social::SetLocalAccount(accountId, displayName)` once the service accepts the
    login (the NEVR account id, the id space of everything the facade reports).
-4. **Network adapter:** `SocialParty::SetSender(fn)` before the first request can be sent (until then
-   requests log `NOT_sent`), and `quest_social::ObserveFrames(ProductionPorts(), direction, bytes, length,
+4. **Network adapter:** `SocialParty::SetSender(fn)` before the first request can be sent (until then a
+   request logs `NOT_sent`, is counted and is rolled back, so it is sent again later), and `quest_social::ObserveFrames(ProductionPorts(), direction, bytes, length,
    nowSeconds)` for every frame the bridge relays on the login connection, both directions, after the
    remote EVR login session is open.
 5. **Link:** `nevr_quest_social` into `ovrplatformloader`. `social_install.cpp` and
@@ -549,7 +576,30 @@ absent from the file. The only consumer is the install call above.
   `AddLocalMember`, `RemoveLocalMember`, `SwapMembers`, `RemoveRemoteMember` and the base `Initialize`,
   `Reset`, `Update` and `Shutdown` were not checked and are not called by the facade's slots.
 - Oculus friends, invites and the Oculus party overlay no longer reach the game; social is the NEVR
-  service's.
+  service's. Three more consequences follow from `CNSOVRSocial::Update` never being called:
+  (a) **Oculus deep links stop.** "Launch to join" reaches the game through `CNSOVRSocial::Update` ->
+  `FollowDeepLink` (libpnsovr 0x20460c, taken when the JSON at +0x290 is non-empty); nothing calls it now
+  and the facade does not drive the deep-link callback. This is a loss on Quest, not parity with PCVR
+  (which has no Oculus deep link). (b) **Oculus rich presence now advertises NEVR data.** `RichPresence`
+  stays on pnsovr, but `CNSIRichPresence::Set` (libr15 0x1919000) reads the facade's `Id` (slot 26),
+  `MemberCount` (27), +0x250 and `Joinable` (23), so the presence Oculus shows carries NEVR party ids,
+  sizes and joinability. This is accepted: the data is informational on the Oculus side, and an Oculus
+  "join" from it is not served anyway (a). Zeroing it would need a hook on `RichPresence` that this
+  package does not install; if the owner wants it zeroed, that is a separate change. (c) **The
+  invitable-users refresh goes away** (`RefreshInvitableUsers`, bit 1 of `Update`'s flags, libpnsovr
+  0x20455c): the facade's friend list is the NEVR service's, so there is nothing to refresh.
+- Name pointers: the facade returns `const char*` from the roster and party views. The three callers
+  checked copy them into a 64-byte buffer before returning (`CR15NetFriendExpression` 0x2322db0,
+  `CR15NetRecentlyMetUserExpression` 0x2332768, `CR15NetPartyMemberExpression` 0x232c098), so no pointer is
+  kept across calls. The party view keeps a name valid for 128 `Update`s, the friend and recently-met
+  rosters for 8 publishes (`social_roster.h`, shared with PCVR); only a burst of eight roster publishes on
+  the network thread between the slot call and the copy, a few instructions, could free one. Not changed.
+- `LocalId` (slot 30) returns pnsovr's invalid value for a non-local member, 0xFFFFFFFF (32-bit -1
+  zero-extended, libpnsovr 0x205280). No direct call of that slot was found in libr15 (the review's
+  slot-call scan and `PartyMemberIsLocal`, which compares `[+0x200]` itself).
+- `ExitLobby` stores `NRadEngine::SUuid::kInvalid`, looked up once in libr15's own handle
+  (`dlopen(RTLD_NOLOAD)`, then `RTLD_DEFAULT`) because libr15 is loaded `RTLD_LOCAL`; if neither finds it
+  (logged `missing_zero_fallback`) it stores sixteen zero bytes.
 - `UserProviderID` still comes from pnsovr; if its symbol differs from the one the game maps to platform
   code 4, friend rows are dropped silently, as they were on PCVR before the provider patch.
 - The packaged APK differs from the pinned one only if its `libr15.so`/`libpnsovr.so` hashes differ;
