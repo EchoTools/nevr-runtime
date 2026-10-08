@@ -129,7 +129,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    server on an ephemeral 127.0.0.1 port, RFC 6455 in `ws_wire`), `remote_ws` (the remote
    transport and its policy: `wss://` only, one connect attempt per session, no retry and no
    downgrade after a failure) over `curl_ws_connector` (libcurl from the Quest vcpkg manifest
-   with peer and host verification always on and TLS 1.2 or later), and `session_bridge`, which
+   with peer and host verification always on, TLS 1.2 or later, and trust loaded from the Android
+   CA directories into an in-memory `CURLOPT_CAINFO_BLOB` by the loader token auth uses), and `session_bridge`, which
    composes them and reports the loopback port that `nevr_cfg::ResolveRedirect` needs. The
    Windows `ws_bridge.cpp` does not use the router yet; it keeps its own copy of these rules.
 4. **Game hooks.** The Android adapter records the ELF build ID or SHA-256, module and load

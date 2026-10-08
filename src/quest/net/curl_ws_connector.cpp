@@ -176,6 +176,33 @@ CurlWsConnector::CurlWsConnector(Config config) : config_(std::move(config)) {}
 ConnectResult CurlWsConnector::Connect(const ConnectRequest& request) {
   ConnectResult result;
   GlobalInit();
+
+  // Trust anchors first: with none there is nothing to verify against, and a connection that skipped
+  // verification is never acceptable. The loader logs the directory and count, or its own failure.
+  std::string pem;
+  {
+    std::lock_guard<std::mutex> lock(bundleMutex_);
+    if (bundle_.certificates == 0) {
+      const SessionRouter::LogSink& log = config_.log;
+      bundle_ = nevr::quest_auth::LoadCaBundle(
+          config_.caDirs, [log](nevr::auth::LogLevel level, const std::string& line) {
+            if (!log) return;
+            switch (level) {
+              case nevr::auth::LogLevel::Debug: log(LogLevel::Debug, line); break;
+              case nevr::auth::LogLevel::Info: log(LogLevel::Info, line); break;
+              case nevr::auth::LogLevel::Warning: log(LogLevel::Warning, line); break;
+              case nevr::auth::LogLevel::Error: log(LogLevel::Error, line); break;
+            }
+          });
+    }
+    pem = bundle_.pem;
+  }
+  if (pem.empty()) {
+    result.status = ConnectStatus::TlsError;
+    result.nativeCode = kNoTrustAnchors;
+    return result;
+  }
+
   CURL* curl = curl_easy_init();
   if (curl == nullptr) {
     result.status = ConnectStatus::NetworkError;
@@ -198,8 +225,11 @@ ConnectResult CurlWsConnector::Connect(const ConnectRequest& request) {
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
   curl_easy_setopt(curl, CURLOPT_SSLVERSION, static_cast<long>(CURL_SSLVERSION_TLSv1_2));
-  if (!config_.caDir.empty()) curl_easy_setopt(curl, CURLOPT_CAPATH, config_.caDir.c_str());
-  if (!config_.caFile.empty()) curl_easy_setopt(curl, CURLOPT_CAINFO, config_.caFile.c_str());
+  curl_blob blob;
+  blob.data = &pem[0];
+  blob.len = pem.size();
+  blob.flags = CURL_BLOB_COPY;
+  curl_easy_setopt(curl, CURLOPT_CAINFO_BLOB, &blob);
 
   const CURLcode rc = curl_easy_perform(curl);
   long http = 0;

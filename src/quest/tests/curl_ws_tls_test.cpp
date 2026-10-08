@@ -1,7 +1,10 @@
 // Host test for the libcurl WebSocket connector (src/quest/net/curl_ws_connector.{h,cpp}) against a real
 // TLS server it does and does not trust. Run by `just test-quest-tls`, which creates the certificates and
 // starts src/quest/tests/tls_ws_server.py. Usage:
-//   curl_ws_tls_test <ca.pem> <other-ca.pem> <good_tls_port> <selfsigned_tls_port> <plain_port> <plain_stats_file>
+//   curl_ws_tls_test <trust-dir> <other-trust-dir> <good_tls_port> <selfsigned_tls_port> <plain_port> <plain_stats_file>
+// where <trust-dir> is a directory holding the CA certificate that signed the good server and
+// <other-trust-dir> one holding an unrelated CA. They go through the same CA loader and
+// CURLOPT_CAINFO_BLOB path Android uses (quest/auth/ca_bundle.h), not CAPATH.
 //
 // What it proves: a certificate that chains to the trusted CA for the right address connects and carries a
 // frame; a wrong CA, a wrong host name, a self-signed leaf, an empty trust store and a non-TLS server each
@@ -42,10 +45,9 @@ ConnectRequest Request(const std::string& url) {
   return r;
 }
 
-CurlWsConnector::Config TrustOnly(const std::string& caFile) {
+CurlWsConnector::Config TrustOnly(const std::string& caDir) {
   CurlWsConnector::Config c;
-  c.caDir.clear();
-  c.caFile = caFile;
+  c.caDirs = {caDir};
   c.connectTimeoutSeconds = 10;
   return c;
 }
@@ -54,7 +56,7 @@ CurlWsConnector::Config TrustOnly(const std::string& caFile) {
 
 int main(int argc, char** argv) {
   if (argc != 7) {
-    std::fprintf(stderr, "usage: %s <ca.pem> <other-ca.pem> <good_tls_port> <selfsigned_tls_port> <plain_port> <plain_stats>\n", argv[0]);
+    std::fprintf(stderr, "usage: %s <trust-dir> <other-trust-dir> <good_tls_port> <selfsigned_tls_port> <plain_port> <plain_stats>\n", argv[0]);
     return 2;
   }
   const std::string ca = argv[1], otherCa = argv[2], good = argv[3], selfsigned = argv[4], plain = argv[5], stats = argv[6];
@@ -101,12 +103,13 @@ int main(int argc, char** argv) {
   // 4. No trust anchors at all: nothing verifies.
   {
     CurlWsConnector::Config c;
-    c.caDir = "/nonexistent-ca-dir";
+    c.caDirs = {"/nonexistent-ca-dir"};
     c.connectTimeoutSeconds = 10;
     CurlWsConnector connector(c);
     ConnectResult r = connector.Connect(Request("wss://127.0.0.1:" + good + "/echo"));
-    QCHECK(r.status == ConnectStatus::TlsVerificationFailed || r.status == ConnectStatus::TlsError);
-    QCHECK(r.status != ConnectStatus::Ok);
+    QCHECK(r.status == ConnectStatus::TlsError);  // fails closed before any connection is attempted
+    QCHECK(r.nativeCode == CurlWsConnector::kNoTrustAnchors);
+    QCHECK(!r.connection);
   }
   // 5. A self-signed leaf that merely claims the right address.
   {

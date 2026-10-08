@@ -491,7 +491,7 @@ test-quest-tls:
     rm -rf "$out"
     mkdir -p "$out"
     g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc $(pkg-config --cflags libcurl) \
-        src/quest/net/curl_ws_connector.cpp src/quest/net/remote_ws.cpp \
+        src/quest/net/curl_ws_connector.cpp src/quest/net/remote_ws.cpp src/quest/auth/ca_bundle.cpp \
         src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp src/quest/tests/curl_ws_tls_test.cpp \
         -o "$out/curl_ws_tls_test" $(pkg-config --libs libcurl)
     cd "$out"
@@ -507,6 +507,10 @@ test-quest-tls:
         -extfile server.ext -out server.pem 2>/dev/null
     openssl req -x509 -newkey rsa:2048 -nodes -keyout selfsigned.key -out selfsigned.pem -subj "/CN=selfsigned" -days 2 \
         -addext "subjectAltName=IP:127.0.0.1" 2>/dev/null
+    # Trust directories for the CA loader (one certificate each), not a CApath: see ca_bundle.h.
+    mkdir trust-good trust-other
+    cp nevr-test-ca.pem trust-good/nevr-test-ca.pem
+    cp nevr-other-ca.pem trust-other/nevr-other-ca.pem
     : > plain.stats
     pids=()
     cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; }
@@ -519,7 +523,7 @@ test-quest-tls:
         for _ in $(seq 1 100); do [ -s "$f" ] && break; sleep 0.1; done
         [ -s "$f" ] || { echo "test-quest-tls: server for $f did not start" >&2; exit 1; }
     done
-    ./curl_ws_tls_test nevr-test-ca.pem nevr-other-ca.pem "$(cat good.port)" "$(cat selfsigned.port)" \
+    ./curl_ws_tls_test trust-good trust-other "$(cat good.port)" "$(cat selfsigned.port)" \
         "$(cat plain.port)" plain.stats
     echo "test-quest-tls: verified-TLS connector tests pass on the host"
 
@@ -659,13 +663,13 @@ verify:
     QTLS_RC=0; QTLS_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/quest/net/curl_ws_connector.cpp) || QTLS_RC=$?
     sensor_stage1 "Quest TLS verification" "src/quest/net/curl_ws_connector.cpp" "$QTLS_RC"
     sensor_nonempty "Quest TLS verification" "non-comment lines of src/quest/net/curl_ws_connector.cpp" "$QTLS_CODE"
-    for need in 'CURLOPT_SSL_VERIFYPEER, 1L' 'CURLOPT_SSL_VERIFYHOST, 2L' 'CURLOPT_PROTOCOLS_STR, "wss"' 'CURLOPT_FOLLOWLOCATION, 0L'; do
+    for need in 'CURLOPT_CAINFO_BLOB' 'CURLOPT_SSL_VERIFYPEER, 1L' 'CURLOPT_SSL_VERIFYHOST, 2L' 'CURLOPT_PROTOCOLS_STR, "wss"' 'CURLOPT_FOLLOWLOCATION, 0L'; do
         if ! grep -qF -- "$need" <<<"$QTLS_CODE"; then
             echo "verify: FAIL — Quest TLS verification: curl_ws_connector.cpp no longer sets '$need'. The remote WebSocket must stay verified, wss-only and redirect-free (ADR 0003)." >&2
             exit 1
         fi
     done
-    if grep -qE 'SSL_VERIFY(PEER|HOST|STATUS)[^;]*,[[:space:]]*0|CURLOPT_SSL_OPTIONS|CURLOPT_PROXY|CURLOPT_FOLLOWLOCATION,[[:space:]]*[1-9]|CURLOPT_PROTOCOLS(_STR)?,[[:space:]]*"[^"]*ws,' <<<"$QTLS_CODE"; then
+    if grep -qE 'SSL_VERIFY(PEER|HOST|STATUS)[^;]*,[[:space:]]*0|CURLOPT_SSL_OPTIONS|CURLOPT_CAPATH|CURLOPT_PROXY|CURLOPT_FOLLOWLOCATION,[[:space:]]*[1-9]|CURLOPT_PROTOCOLS(_STR)?,[[:space:]]*"[^"]*ws,' <<<"$QTLS_CODE"; then
         echo "verify: FAIL — Quest TLS verification: curl_ws_connector.cpp contains an option that relaxes verification or widens the protocol list (ADR 0003: no insecure mode)." >&2
         exit 1
     fi

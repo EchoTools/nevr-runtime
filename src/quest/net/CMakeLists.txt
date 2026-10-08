@@ -23,7 +23,8 @@ add_library(nevr_quest_net STATIC
   session_bridge.cpp
   "${NEVR_SRC_ROOT}/runtime/server/serverdb_uri.cpp")
 target_include_directories(nevr_quest_net PUBLIC "${NEVR_SRC_ROOT}")
-target_link_libraries(nevr_quest_net PUBLIC nevr_quest_session_router CURL::libcurl)
+# nevr_quest_token_auth supplies the CA loader (auth/ca_bundle.cpp) both TLS clients share.
+target_link_libraries(nevr_quest_net PUBLIC nevr_quest_session_router nevr_quest_token_auth CURL::libcurl)
 target_compile_options(nevr_quest_net PRIVATE -Wall -Wextra -Werror)
 
 foreach(test_name session_router_test ws_wire_test loopback_game_server_test remote_ws_test curl_ws_tls_test)
