@@ -168,6 +168,39 @@ Oculus login CJson; nothing is serialized yet. `SNSLogInRequestv2::Send` (`libr1
 | platform | `[CNSUser+0x90] & 0xf`; the `CNSOVRUser` constructor (`0x1edd68`-`0x1edd74`) stores 4 (OVR_ORG) | checks it is 4 |
 | account id | `this->AccountID()` by virtual call (`vtable+0x70`, `0x382b90`/`0x382b9c`); `CNSOVRUser` overrides it (vtable slot `0x6a1300`) with `0x1ede14`: `adrp x8,0x70e000; ldr x0,[x8,#0x3e0]; ret` | writes that global (`0x70e3e0`, filled by `GotLoggedInUserOrgIdCb` from `ovr_OrgScopedID_GetID`) after checking the three instructions, then calls the same virtual to prove the wire value |
 
+Which login members the rewrite replaces. The server reads the login JSON as a client
+description plus an identity (nakama `server/evr/login_request.go`, `LoginProfile`):
+
+| Members | Source on Quest | Reason |
+| --- | --- | --- |
+| `accountid`, `access_token`, `nonce`, `displayname`, `bypassauth`, `desiredclientprofileversion`, `hmdserialnumber`, `nevr_identity`, `nevr_social` | NEVR identity and the shared `LoginProfile` | identity; the Oculus token and proof nonce are replaced, not relayed |
+| `buildversion`, `appid`, `lobbyversion`, `publisher_lock` | the game's own value, never written, never invented | they classify the client: `SessionParameters.IsPCVR()` is `BuildNumber != StandaloneBuildNumber (630783)`, `evr_lobby_joinentrant.go` sets `UseQuestFlags` only when `!IsPCVR()` (a different encoder flag layout), and `evr_discord_integrator.go` maps `appid` to a platform. The shared builder's `buildversion` 631547 would make a Quest a PCVR client. The Quest sends 630783 itself (`libpnsovr.so` `0x1ed938`-`0x1ed944`: `mov w2,#0x9fff; movk w2,#0x9,lsl #16`) |
+| `system_info\|*` | the game's measurement; only members it left out are added | real headset values (CPU, cores, memory, network type, OS build) instead of the PCVR builder's empty placeholders |
+
+The CJson type rules the rollback relies on (libr15 `SetString` `0xfa3444`, `SetInt`
+`0xfa5edc`; `libpnsovr.so` carries the same code): `SetString` writes over an absent, string
+or null path and refuses any other type; `SetInt` writes over an absent, integer or null path
+and refuses any other type (a real is refused); a refusal is reported only in the game's log.
+`TypeOf` returns 0 for both a null value and an absent path (`Valid` separates them), and maps
+1 string, 2 int, 3 real, 4 boolean, 5 array, 6 object (`libpnsovr.so` table `0x582a80`).
+
+The account-id global stays set after the send. `CNSUser::LogInSuccessCB` (`libpnsovr.so`
+`0x383a60`-`0x383a8c`) builds `{[this+0x90], AccountID()}` and compares it with the server's
+reply; a mismatch drops the success. Writers of the global in the pinned build: `LogInInternal`
+`0x1ec998` (0 only when it holds -1), `GotLoggedInUserOrgIdCb` `0x1ecef0` (-1 on its error
+path) and `0x1ecf18` (the org id on success), `RadPluginShutdown` `0x207074` (0). Every
+`vtable+0x70` caller sees the NEVR id: `LogOut`, `RefreshProfile`, the `Profile*` and
+`LoginRemoved` callbacks, `CNSUser::UserID`, `CNSIParty::Update`. `CNSOVRUser::OfflineID()`
+(`0x1ede20`) keeps the Oculus id. `CNSOVRSocial::FollowDeepLink` (`0x1f2b30`), `EnsureLocalMember`
+(`0x1f2bd0`), `JoinInternal` (`0x1f38a4`) and `AddMember` (`0x204a30`) copy the global into the
+local party member record at `[CNSOVRSocial+0x2e0]`; remote members arrive from the Oculus
+room as Oculus org ids (`GotRemoteOrgIdCB`). Oculus-room party and deep-link joins therefore
+mix the NEVR id (local) with Oculus ids (remote). NEVR party and join run through the NEVR
+server (contract 5), not through `CNSOVRSocial`; how `CNSOVRSocial::SyncRoom` identifies the
+local member was not traced, so whether an Oculus-room join breaks is not established. If it
+does, the repair is a Quest social adapter that does not rely on `CNSOVRSocial`, not
+restoring the global (which would break `LogInSuccessCB`).
+
 `[CNSUser+0x88]` is not the wire account id for a `CNSOVRUser`. A virtual slot is a data
 relocation, which `GotHook` does not reach, so the global is written instead.
 

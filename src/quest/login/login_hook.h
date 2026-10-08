@@ -47,9 +47,8 @@ const char* InstallStateName(InstallState state);
 // must outlive the process. `log` defaults to the sentinel's structured logcat sink.
 InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build, LogFn log = nullptr);
 
-// LogFn that forwards a line to sentinel::LogEvent: logcat (tag NEVR-Sentinel) by default, and
-// whatever durable sink is installed with sentinel::SetLogSink, so the login lines follow the
-// backend's lines to the same place.
-void SentinelLog(Level level, const char* line);
+// LogFn that forwards a record to sentinel::LogFields: one JSON line, to logcat by default or
+// to whatever sink is installed with sentinel::SetLogSink, the same place the backend's lines go.
+void SentinelLog(Level level, const char* event, const LogKv* fields, std::size_t count);
 
 }  // namespace QuestLogin

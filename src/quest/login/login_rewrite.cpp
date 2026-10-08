@@ -1,7 +1,6 @@
 #include "quest/login/login_rewrite.h"
 
-#include <cstdarg>
-#include <cstdio>
+#include <initializer_list>
 #include <exception>
 #include <limits>
 #include <string_view>
@@ -19,6 +18,7 @@ constexpr char kPathSeparator = '|';
 
 // The game's value when there is no VR (CR15NetGame::LogIn sends "N/A"); relayed as is.
 constexpr std::string_view kNoVrSerial = "N/A";
+constexpr std::string_view kGameMeasuredPrefix = "system_info|";
 
 void Flatten(const nlohmann::json& node, const std::string& prefix, std::vector<Field>& fields,
              std::vector<std::string>& skipped) {
@@ -127,39 +127,48 @@ Composition Compose(const Identity& identity, const GameValues& game, const Buil
   return result;
 }
 
+bool IsClientClassPath(const std::string& path) {
+  return path == "buildversion" || path == "appid" || path == "lobbyversion" ||
+         path == "publisher_lock";
+}
+
+bool IsGameMeasuredPath(const std::string& path) {
+  return std::string_view(path).substr(0, kGameMeasuredPrefix.size()) == kGameMeasuredPrefix;
+}
+
 GameValues ReadGameValues(const JsonAccess& json) {
   GameValues values;
-  bool present = false;
-  std::string serial = json.GetString("hmdserialnumber", present);
-  if (present) values.hmd_serial = std::move(serial);
-  std::string headset = json.GetString("system_info|headset_type", present);
-  if (present) values.headset_type = std::move(headset);
+  if (json.TypeOf("hmdserialnumber") == JsonType::String) values.hmd_serial = json.GetString("hmdserialnumber");
+  if (json.TypeOf("system_info|headset_type") == JsonType::String) {
+    values.headset_type = json.GetString("system_info|headset_type");
+  }
   return values;
 }
 
 namespace {
-
-constexpr std::string_view kGameOwnedPrefix = "system_info|";
 
 // What a key held before the rewrite touched it.
 struct Saved {
   std::string path;
   std::string top;        // first path segment when the path is nested, else empty
   bool top_existed = false;
-  bool existed = false;   // the leaf held a value of some type
-  FieldKind kind = FieldKind::String;
+  JsonType type = JsonType::Absent;
   std::string text;
   std::int64_t number = 0;
 };
 
-bool PresentAnyKind(const JsonAccess& json, const char* path) {
-  bool present = false;
-  json.GetString(path, present);
-  if (present) return true;
-  json.GetInt(path, present);
-  if (present) return true;
-  json.GetBoolean(path, present);
-  return present;
+bool Restorable(JsonType type) {
+  return type == JsonType::Absent || type == JsonType::Null || type == JsonType::String ||
+         type == JsonType::Int || type == JsonType::Boolean;
+}
+
+// The type a Field writes.
+JsonType WrittenType(FieldKind kind) {
+  switch (kind) {
+    case FieldKind::String: return JsonType::String;
+    case FieldKind::Int: return JsonType::Int;
+    default: return JsonType::Boolean;
+  }
 }
 
 Saved Snapshot(const Field& field, const JsonAccess& json) {
@@ -168,46 +177,38 @@ Saved Snapshot(const Field& field, const JsonAccess& json) {
   const std::size_t bar = field.path.find(kPathSeparator);
   if (bar != std::string::npos) {
     saved.top = field.path.substr(0, bar);
-    saved.top_existed = json.IsObject(saved.top.c_str());
+    saved.top_existed = json.TypeOf(saved.top.c_str()) == JsonType::Object;
   }
-  bool present = false;
-  std::string text = json.GetString(field.path.c_str(), present);
-  if (present) {
-    saved.existed = true;
-    saved.kind = FieldKind::String;
-    saved.text = std::move(text);
-    return saved;
-  }
-  const std::int64_t number = json.GetInt(field.path.c_str(), present);
-  if (present) {
-    saved.existed = true;
-    saved.kind = FieldKind::Int;
-    saved.number = number;
-    return saved;
-  }
-  const bool flag = json.GetBoolean(field.path.c_str(), present);
-  if (present) {
-    saved.existed = true;
-    saved.kind = FieldKind::Boolean;
-    saved.number = flag ? 1 : 0;
+  saved.type = json.TypeOf(field.path.c_str());
+  switch (saved.type) {
+    case JsonType::String: saved.text = json.GetString(field.path.c_str()); break;
+    case JsonType::Int: saved.number = json.GetInt(field.path.c_str()); break;
+    case JsonType::Boolean: saved.number = json.GetBoolean(field.path.c_str()) ? 1 : 0; break;
+    default: break;
   }
   return saved;
 }
 
 // Puts one key back. Allocation-free: it only reads strings it already owns.
 void Restore(const Saved& saved, JsonAccess& json) {
-  if (!saved.existed) {
-    if (!saved.top.empty() && !saved.top_existed) {
-      json.Clear(saved.top.c_str());
-    } else {
+  switch (saved.type) {
+    case JsonType::Absent:
+      if (!saved.top.empty() && !saved.top_existed) {
+        json.Clear(saved.top.c_str());
+      } else {
+        json.Clear(saved.path.c_str());
+      }
+      break;
+    case JsonType::Null:
+      // SetNull is a typed write like the others, so the value written over the null is
+      // removed first.
       json.Clear(saved.path.c_str());
-    }
-    return;
-  }
-  switch (saved.kind) {
-    case FieldKind::String: json.SetString(saved.path.c_str(), saved.text.c_str()); break;
-    case FieldKind::Int: json.SetInt(saved.path.c_str(), saved.number); break;
-    case FieldKind::Boolean: json.SetBoolean(saved.path.c_str(), saved.number != 0); break;
+      json.SetNull(saved.path.c_str());
+      break;
+    case JsonType::String: json.SetString(saved.path.c_str(), saved.text.c_str()); break;
+    case JsonType::Int: json.SetInt(saved.path.c_str(), saved.number); break;
+    case JsonType::Boolean: json.SetBoolean(saved.path.c_str(), saved.number != 0); break;
+    default: break;  // never written: Snapshot refuses these before any write
   }
 }
 
@@ -216,17 +217,19 @@ void RestoreAll(const std::vector<Saved>& saved, std::size_t count, JsonAccess& 
 }
 
 bool WriteAndVerify(const Field& field, JsonAccess& json) {
-  bool present = false;
   switch (field.kind) {
     case FieldKind::String:
       json.SetString(field.path.c_str(), field.text.c_str());
-      return json.GetString(field.path.c_str(), present) == field.text && present;
+      return json.TypeOf(field.path.c_str()) == JsonType::String &&
+             json.GetString(field.path.c_str()) == field.text;
     case FieldKind::Int:
       json.SetInt(field.path.c_str(), field.number);
-      return json.GetInt(field.path.c_str(), present) == field.number && present;
+      return json.TypeOf(field.path.c_str()) == JsonType::Int &&
+             json.GetInt(field.path.c_str()) == field.number;
     case FieldKind::Boolean:
       json.SetBoolean(field.path.c_str(), field.number != 0);
-      return json.GetBoolean(field.path.c_str(), present) == (field.number != 0) && present;
+      return json.TypeOf(field.path.c_str()) == JsonType::Boolean &&
+             json.GetBoolean(field.path.c_str()) == (field.number != 0);
   }
   return false;
 }
@@ -242,9 +245,11 @@ bool ApplyFieldsAtomically(const std::vector<Field>& fields, JsonAccess& json,
     saved.reserve(fields.size());
     for (const Field& field : fields) {
       Saved before = Snapshot(field, json);
-      // A key of another type would refuse the write (CJson will not change a type), so
-      // nothing is written at all.
-      if (before.existed && before.kind != field.kind) {
+      // A key of another type would refuse the write (CJson will not change a type), and a
+      // real, array or object value could not be put back; either way nothing is written.
+      const bool same_type = before.type == WrittenType(field.kind);
+      const bool replaceable = before.type == JsonType::Absent || before.type == JsonType::Null;
+      if (!Restorable(before.type) || !(same_type || replaceable)) {
         failed_path = field.path;
         return false;
       }
@@ -281,22 +286,20 @@ const char* OutcomeName(Outcome outcome) {
 
 namespace {
 
-// One structured line: `event=quest_login outcome=<name> <detail>`. Details are fixed tokens
-// and counts, never values.
-void Emit(LogFn log, Level level, Outcome outcome, const char* detail_format, ...)
-    __attribute__((format(printf, 4, 5)));
-
-void Emit(LogFn log, Level level, Outcome outcome, const char* detail_format, ...) {
+// One structured record: event "quest_login", then `outcome`, then the detail fields.
+void Emit(LogFn log, Level level, Outcome outcome, std::initializer_list<LogKv> details) {
   if (log == nullptr) return;
-  char detail[160];
-  va_list args;
-  va_start(args, detail_format);
-  std::vsnprintf(detail, sizeof(detail), detail_format, args);
-  va_end(args);
-  char line[256];
-  std::snprintf(line, sizeof(line), "event=quest_login outcome=%s %s", OutcomeName(outcome), detail);
-  log(level, line);
+  LogKv fields[10];
+  std::size_t count = 0;
+  fields[count++] = LogKv{"outcome", OutcomeName(outcome), 0};
+  for (const LogKv& detail : details) {
+    if (count < sizeof(fields) / sizeof(fields[0])) fields[count++] = detail;
+  }
+  log(level, "quest_login", fields, count);
 }
+
+LogKv Text(const char* key, const char* value) { return LogKv{key, value, 0}; }
+LogKv Num(const char* key, long long value) { return LogKv{key, nullptr, value}; }
 
 }  // namespace
 
@@ -309,8 +312,8 @@ Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
     if (identity_status != IdentityStatus::Ok) {
       // The ADR forbids fabricating an identity: the original Oculus login goes out unchanged
       // and the server answers it.
-      Emit(log, Level::Error, Outcome::NoIdentity, "reason=%s action=original_login_unchanged",
-           IdentityStatusName(identity_status));
+      Emit(log, Level::Error, Outcome::NoIdentity,
+           {Text("reason", IdentityStatusName(identity_status)), Text("action", "original_login_unchanged")});
       return Outcome::NoIdentity;
     }
 
@@ -319,32 +322,34 @@ Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
     // measured on, and the later requests would name a different platform.
     std::uint64_t provider = 0;
     if (!user.Provider(provider)) {
-      Emit(log, Level::Error, Outcome::UserUnreadable, "reason=provider");
+      Emit(log, Level::Error, Outcome::UserUnreadable, {Text("reason", "provider")});
       return Outcome::UserUnreadable;
     }
     if ((provider & kProviderMask) != kPlatformOvrOrg) {
-      Emit(log, Level::Error, Outcome::PlatformMismatch, "provider=%llu expected=%llu",
-           static_cast<unsigned long long>(provider & kProviderMask),
-           static_cast<unsigned long long>(kPlatformOvrOrg));
+      Emit(log, Level::Error, Outcome::PlatformMismatch,
+           {Num("provider", static_cast<long long>(provider & kProviderMask)),
+            Num("expected", static_cast<long long>(kPlatformOvrOrg))});
       return Outcome::PlatformMismatch;
     }
 
     Composition composition = Compose(identity, ReadGameValues(json), build);
     if (composition.status != ComposeStatus::Ok) {
-      Emit(log, Level::Error, Outcome::ComposeFailed, "reason=%s", StatusName(composition.status));
+      Emit(log, Level::Error, Outcome::ComposeFailed, {Text("reason", StatusName(composition.status))});
       return Outcome::ComposeFailed;
     }
 
-    // The game fills system_info (cpu, cores, memory, network type, headset, OS build) with
-    // real measurements from the headset; the PCVR builder's empty/zero placeholders must not
-    // overwrite them. Only members the game left out are added.
+    // Client-class members are never written; hardware members the game measured are kept.
     std::vector<Field> fields;
     fields.reserve(composition.fields.size());
-    std::size_t kept_game_values = 0;
+    std::size_t kept_client_class = 0;
+    std::size_t kept_measured = 0;
     for (Field& field : composition.fields) {
-      if (std::string_view(field.path).substr(0, kGameOwnedPrefix.size()) == kGameOwnedPrefix &&
-          PresentAnyKind(json, field.path.c_str())) {
-        ++kept_game_values;
+      if (IsClientClassPath(field.path)) {
+        ++kept_client_class;
+        continue;
+      }
+      if (IsGameMeasuredPath(field.path) && json.TypeOf(field.path.c_str()) != JsonType::Absent) {
+        ++kept_measured;
         continue;
       }
       fields.push_back(std::move(field));
@@ -359,7 +364,7 @@ Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
     if (!account_set || !user.WireAccountId(wire) || wire != identity.account_id) {
       user.RestoreAccountId();
       account_set = false;
-      Emit(log, Level::Error, Outcome::AccountIdNotCarried, "action=account_id_restored");
+      Emit(log, Level::Error, Outcome::AccountIdNotCarried, {Text("action", "account_id_restored")});
       return Outcome::AccountIdNotCarried;
     }
 
@@ -368,21 +373,31 @@ Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
       user.RestoreAccountId();
       account_set = false;
       Emit(log, Level::Error, Outcome::JsonWriteFailed,
-           "first_path=%s fields=%zu action=json_and_account_id_restored original_login_unchanged",
-           failed_path.c_str(), fields.size());
+           {Text("first_path", failed_path.c_str()), Num("fields", static_cast<long long>(fields.size())),
+            Text("action", "json_and_account_id_restored")});
       return Outcome::JsonWriteFailed;
     }
 
     Emit(log, Level::Info, Outcome::Rewritten,
-         "platform=%llu hmd_serial_source=%s fields=%zu skipped=%zu kept_game_values=%zu",
-         static_cast<unsigned long long>(kPlatformOvrOrg), composition.hmd_serial_source.c_str(),
-         fields.size(), composition.skipped.size(), kept_game_values);
+         {Num("platform", static_cast<long long>(kPlatformOvrOrg)),
+          Text("hmd_serial_source", composition.hmd_serial_source.c_str()),
+          Num("fields", static_cast<long long>(fields.size())),
+          Num("skipped", static_cast<long long>(composition.skipped.size())),
+          Num("kept_client_class", static_cast<long long>(kept_client_class)),
+          Num("kept_measured", static_cast<long long>(kept_measured))});
     return Outcome::Rewritten;
   } catch (const std::exception&) {
     if (account_set) user.RestoreAccountId();
-    Emit(log, Level::Error, Outcome::Exception, "action=original_login_unchanged");
+    Emit(log, Level::Error, Outcome::Exception, {Text("action", "original_login_unchanged")});
     return Outcome::Exception;
   }
+}
+
+Outcome RewriteAndSend(UserAccess& user, JsonAccess& json, IdentitySource& source,
+                       const BuildInfo& build, LogFn log, SendFn send, void* context) {
+  const Outcome outcome = RewriteLogin(user, json, source, build, log);
+  send(context);
+  return outcome;
 }
 
 }  // namespace QuestLogin

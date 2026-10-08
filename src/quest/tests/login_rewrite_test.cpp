@@ -1,7 +1,7 @@
 // Host-buildable test for the Quest login rewrite (src/quest/login/login_rewrite.cpp).
 // Compiles the same sources the device links, plus the shared PCVR login builder
-// (src/runtime/compat/login_profile.cpp), against a fake CJson that mimics the game's
-// refusal to change a key's type.
+// (src/runtime/compat/login_profile.cpp), against a fake CJson that follows CJson's type
+// rules and a fake CNSOVRUser whose account id comes from a virtual AccountID().
 
 #include "quest/login/login_rewrite.h"
 
@@ -16,87 +16,82 @@
 
 #include <nlohmann/json.hpp>
 
+#include "quest/tests/test_check.h"
 #include "runtime/compat/login_profile.h"
 
 namespace {
 
-int g_failures = 0;
-
-#define CHECK(cond)                                                              \
-  do {                                                                           \
-    if (!(cond)) {                                                               \
-      std::fprintf(stderr, "%s:%d CHECK failed: %s\n", __FILE__, __LINE__, #cond); \
-      ++g_failures;                                                              \
-    }                                                                            \
-  } while (0)
-
 using QuestLogin::FieldKind;
+using QuestLogin::JsonType;
 
-// A CJson stand-in. Like the game's, a write that would change a key's type is refused, and
-// clearing a nested key leaves its (possibly empty) parent object behind.
+// CJson stand-in with the type rules measured in the game:
+//   SetString writes over absent, string or null; SetInt over absent, int or null;
+//   SetBoolean over absent, boolean or null; any other existing type is left unchanged.
+//   Clear removes a key and everything under it.
 class FakeJson final : public QuestLogin::JsonAccess {
  public:
   struct Value {
-    FieldKind kind = FieldKind::String;
+    JsonType type = JsonType::Absent;
     std::string text;
     std::int64_t number = 0;
+    double real = 0;
   };
-  std::map<std::string, Value> values;
-  std::set<std::string> objects;  // top-level objects that exist, even when empty
-  std::string refuse_path;        // writes to this path are dropped, like a refused write
-  int throw_after = -1;           // throw std::bad_alloc on the Nth mutating call (0-based); -1 never
+  std::map<std::string, Value> values;  // leaves and the objects that contain them
+  std::string refuse_path;              // writes to this path are dropped
+  int throw_after = -1;                 // throw std::bad_alloc on the Nth mutating call; -1 never
   int mutations = 0;
 
-  void SetString(const char* path, const char* value) override { Put(path, FieldKind::String, value, 0); }
-  void SetInt(const char* path, std::int64_t value) override { Put(path, FieldKind::Int, "", value); }
-  void SetBoolean(const char* path, bool value) override { Put(path, FieldKind::Boolean, "", value ? 1 : 0); }
+  JsonType TypeOf(const char* path) const override {
+    auto it = values.find(path);
+    return it == values.end() ? JsonType::Absent : it->second.type;
+  }
+  std::string GetString(const char* path) const override { return values.at(path).text; }
+  std::int64_t GetInt(const char* path) const override { return values.at(path).number; }
+  bool GetBoolean(const char* path) const override { return values.at(path).number != 0; }
+
+  void SetString(const char* path, const char* value) override {
+    Put(path, JsonType::String, value, 0, 0);
+  }
+  void SetInt(const char* path, std::int64_t value) override { Put(path, JsonType::Int, "", value, 0); }
+  void SetBoolean(const char* path, bool value) override {
+    Put(path, JsonType::Boolean, "", value ? 1 : 0, 0);
+  }
+  void SetNull(const char* path) override { Put(path, JsonType::Null, "", 0, 0); }
+
+  void SetReal(const char* path, double value) { Put(path, JsonType::Real, "", 0, value); }
+  void SetEmptyArray(const char* path) { Put(path, JsonType::Array, "", 0, 0); }
 
   void Clear(const char* path) override {
     Tick();
     const std::string key = path;
-    if (objects.erase(key) != 0) {
-      for (auto it = values.begin(); it != values.end();) {
-        it = it->first.rfind(key + "|", 0) == 0 ? values.erase(it) : std::next(it);
-      }
+    for (auto it = values.begin(); it != values.end();) {
+      it = (it->first == key || it->first.rfind(key + "|", 0) == 0) ? values.erase(it) : std::next(it);
     }
-    values.erase(key);
   }
 
-  std::string GetString(const char* path, bool& present) const override {
-    auto it = values.find(path);
-    present = it != values.end() && it->second.kind == FieldKind::String;
-    return present ? it->second.text : std::string();
-  }
-  std::int64_t GetInt(const char* path, bool& present) const override {
-    auto it = values.find(path);
-    present = it != values.end() && it->second.kind == FieldKind::Int;
-    return present ? it->second.number : 0;
-  }
-  bool GetBoolean(const char* path, bool& present) const override {
-    auto it = values.find(path);
-    present = it != values.end() && it->second.kind == FieldKind::Boolean;
-    return present && it->second.number != 0;
-  }
-  bool IsObject(const char* path) const override { return objects.count(path) != 0; }
-
-  // Rebuilds the nested document the keys describe ('|' nesting), empty objects included.
   nlohmann::json ToJson() const {
     nlohmann::json doc = nlohmann::json::object();
-    for (const std::string& name : objects) doc[name] = nlohmann::json::object();
     for (const auto& [path, value] : values) {
       nlohmann::json* node = &doc;
       std::size_t start = 0;
       for (;;) {
         const std::size_t bar = path.find('|', start);
-        if (bar == std::string::npos) {
-          const std::string leaf = path.substr(start);
-          if (value.kind == FieldKind::String) (*node)[leaf] = value.text;
-          else if (value.kind == FieldKind::Int) (*node)[leaf] = value.number;
-          else (*node)[leaf] = value.number != 0;
-          break;
+        const std::string part = path.substr(start, bar == std::string::npos ? std::string::npos : bar - start);
+        if (bar != std::string::npos) {
+          node = &(*node)[part];
+          start = bar + 1;
+          continue;
         }
-        node = &(*node)[path.substr(start, bar - start)];
-        start = bar + 1;
+        switch (value.type) {
+          case JsonType::String: (*node)[part] = value.text; break;
+          case JsonType::Int: (*node)[part] = value.number; break;
+          case JsonType::Boolean: (*node)[part] = value.number != 0; break;
+          case JsonType::Real: (*node)[part] = value.real; break;
+          case JsonType::Null: (*node)[part] = nullptr; break;
+          case JsonType::Array: (*node)[part] = nlohmann::json::array(); break;
+          default: (*node)[part] = nlohmann::json::object(); break;
+        }
+        break;
       }
     }
     return doc;
@@ -106,18 +101,27 @@ class FakeJson final : public QuestLogin::JsonAccess {
   void Tick() {
     if (throw_after >= 0 && mutations++ == throw_after) throw std::bad_alloc();
   }
-  void Put(const char* path, FieldKind kind, const char* text, std::int64_t number) {
+  void Put(const char* path, JsonType type, const char* text, std::int64_t number, double real) {
     Tick();
     if (refuse_path == path) return;
-    auto it = values.find(path);
-    if (it != values.end() && it->second.kind != kind) return;  // type change refused
     const std::string key = path;
-    const std::size_t bar = key.find('|');
-    if (bar != std::string::npos) objects.insert(key.substr(0, bar));
+    auto it = values.find(key);
+    if (it != values.end()) {
+      const JsonType old = it->second.type;
+      const bool replaceable = old == type || old == JsonType::Null;
+      if (!replaceable) return;  // a type change is refused
+    }
+    // Parents become objects; a parent that is not an object blocks the write.
+    for (std::size_t bar = key.find('|'); bar != std::string::npos; bar = key.find('|', bar + 1)) {
+      Value& parent = values[key.substr(0, bar)];
+      if (parent.type == JsonType::Absent) parent.type = JsonType::Object;
+      if (parent.type != JsonType::Object) return;
+    }
     Value value;
-    value.kind = kind;
+    value.type = type;
     value.text = text;
     value.number = number;
+    value.real = real;
     values[key] = value;
   }
 };
@@ -127,9 +131,9 @@ class FakeJson final : public QuestLogin::JsonAccess {
 class FakeUser final : public QuestLogin::UserAccess {
  public:
   std::uint64_t provider = QuestLogin::kPlatformOvrOrg;
-  std::uint64_t global_account_id = 5551234;  // what AccountID() returns (the OrgScopedID global)
+  std::uint64_t global_account_id = 5551234;     // what AccountID() returns (the org-scoped id)
   std::uint64_t object_account_field = 5551234;  // [this+0x88]: ignored by the override
-  bool setter_reaches_global = true;  // false models a write that AccountID() never sees
+  bool setter_reaches_global = true;             // false: the write lands somewhere AccountID() never reads
   int restores = 0;
 
   bool Provider(std::uint64_t& code) const override {
@@ -137,13 +141,13 @@ class FakeUser final : public QuestLogin::UserAccess {
     return true;
   }
   bool WireAccountId(std::uint64_t& id) const override {
-    id = global_account_id;  // the virtual call; object_account_field is not consulted
+    id = global_account_id;
     return true;
   }
   bool SetAccountId(std::uint64_t id) override {
     previous_ = global_account_id;
     if (setter_reaches_global) global_account_id = id;
-    else object_account_field = id;  // the old, wrong target ([this+0x88])
+    else object_account_field = id;
     return true;
   }
   void RestoreAccountId() override {
@@ -166,10 +170,24 @@ class FakeSource final : public QuestLogin::IdentitySource {
   }
 };
 
+// Log records flattened to `event key=value ...` text for assertions.
 std::vector<std::string> g_log;
-void CaptureLog(QuestLogin::Level, const char* line) { g_log.emplace_back(line); }
+void CaptureLog(QuestLogin::Level, const char* event, const QuestLogin::LogKv* fields, std::size_t count) {
+  std::string line = event;
+  for (std::size_t i = 0; i < count; ++i) {
+    line += std::string(" ") + fields[i].key + "=";
+    line += fields[i].text != nullptr ? std::string(fields[i].text) : std::to_string(fields[i].number);
+  }
+  g_log.push_back(line);
+}
 
 constexpr std::uint64_t kNevrAccount = 987654321012345ULL;
+// Values the Quest build reports and the server classifies on (nakama server/evr/login_request.go
+// StandaloneBuildNumber; server/evr_authenticate.go QuestAppId). The build number is also the
+// constant libpnsovr's GotUserProofCB stores (0x1ed938-0x1ed944).
+constexpr std::int64_t kQuestBuild = 630783;
+constexpr std::int64_t kQuestAppId = 0x7de88f07bd07aLL;
+constexpr std::int64_t kQuestLobbyVersion = 0x3f69c77a;
 
 QuestLogin::Identity MakeIdentity() {
   QuestLogin::Identity id;
@@ -188,20 +206,20 @@ QuestLogin::BuildInfo MakeBuild() {
   return build;
 }
 
-// What the game's own login JSON looks like when the Oculus path built it
-// (libpnsovr GotUserProofCB, CNSUser::SystemInfo and libr15 CR15NetGame::LogIn key names).
+// The login JSON as the Oculus path leaves it (libpnsovr GotUserProofCB, CNSUser::SystemInfo,
+// libr15 CR15NetGame::LogIn key names).
 void SeedOculusLogin(FakeJson& json) {
-  json.SetInt("appid", 1234);
+  json.SetInt("appid", kQuestAppId);
   json.SetInt("accountid", 5551234);
   json.SetString("access_token", "OCULUS-ACCESS-TOKEN");
   json.SetString("nonce", "OCULUS-NONCE");
-  json.SetInt("lobbyversion", 0x3f69c77a);
-  json.SetInt("buildversion", 1111);
+  json.SetInt("lobbyversion", kQuestLobbyVersion);
+  json.SetInt("buildversion", kQuestBuild);
   json.SetString("publisher_lock", "rad15_live");
   json.SetString("hmdserialnumber", "1WMHH000000000");
   json.SetString("hmdproductname", "Quest 2");
   json.SetString("system_info|headset_type", "Quest 2");
-  json.SetString("system_info|build_version", "QuestOS-1");
+  json.SetInt("system_info|build_version", 123456789);
   json.SetString("system_info|cpu", "Snapdragon XR2");
   json.SetInt("system_info|num_physical_cores", 4);
   json.SetInt("system_info|num_logical_cores", 8);
@@ -210,35 +228,49 @@ void SeedOculusLogin(FakeJson& json) {
   json.SetString("system_info|network_type", "wifi");
 }
 
+// Member of a JSON document by '|' path; null when any step is missing.
+nlohmann::json At(const nlohmann::json& doc, const std::string& path) {
+  const nlohmann::json* node = &doc;
+  std::size_t start = 0;
+  for (;;) {
+    const std::size_t bar = path.find('|', start);
+    const std::string part = path.substr(start, bar == std::string::npos ? std::string::npos : bar - start);
+    if (!node->is_object() || !node->contains(part)) return nlohmann::json();
+    node = &(*node)[part];
+    if (bar == std::string::npos) return *node;
+    start = bar + 1;
+  }
+}
+
 void TestComposeFailsClosed() {
   QuestLogin::Identity id = MakeIdentity();
   id.account_id = 0;
-  CHECK(QuestLogin::Compose(id, {}, MakeBuild()).status == QuestLogin::ComposeStatus::MissingAccountId);
+  QCHECK(QuestLogin::Compose(id, {}, MakeBuild()).status == QuestLogin::ComposeStatus::MissingAccountId);
   id = MakeIdentity();
   id.account_id = 0x8000000000000000ULL;  // does not fit CJson's signed integer
-  CHECK(QuestLogin::Compose(id, {}, MakeBuild()).status == QuestLogin::ComposeStatus::MissingAccountId);
+  QCHECK(QuestLogin::Compose(id, {}, MakeBuild()).status == QuestLogin::ComposeStatus::MissingAccountId);
   id = MakeIdentity();
   id.access_token.clear();
   const QuestLogin::Composition c = QuestLogin::Compose(id, {}, MakeBuild());
-  CHECK(c.status == QuestLogin::ComposeStatus::MissingToken);
-  CHECK(c.fields.empty());
+  QCHECK(c.status == QuestLogin::ComposeStatus::MissingToken);
+  QCHECK(c.fields.empty());
 }
 
-// The Quest login carries what the PCVR builder produces for the same inputs, minus the
-// empty plugin array (CJson has no setter for it) and minus the password: the server reads
-// it from the upgrade URL, and the game's own log of the outgoing login does not redact it.
-void TestSameProfileAsPcvrWithoutPassword() {
+// The composed fields are the PCVR builder's output for the same inputs, minus the empty
+// plugin array (CJson has no setter for it) and with no password value: the server reads the
+// password from the upgrade URL, and the game's own log of the outgoing login does not redact it.
+void TestComposedProfileMatchesPcvrBuilder() {
   const QuestLogin::Identity id = MakeIdentity();
   QuestLogin::GameValues game;
   game.hmd_serial = "1WMHH000000000";
   game.headset_type = "Quest 2";
   const QuestLogin::Composition c = QuestLogin::Compose(id, game, MakeBuild());
-  CHECK(c.status == QuestLogin::ComposeStatus::Ok);
-  CHECK(c.skipped.size() == 1 && c.skipped[0] == "nevr_plugins");
+  QCHECK(c.status == QuestLogin::ComposeStatus::Ok);
+  QCHECK(c.skipped.size() == 1 && c.skipped[0] == "nevr_plugins");
 
   FakeJson json;
   std::string failed;
-  CHECK(QuestLogin::ApplyFieldsAtomically(c.fields, json, failed));
+  QCHECK(QuestLogin::ApplyFieldsAtomically(c.fields, json, failed));
 
   LoginProfile::LoginProfileInputs pc;
   pc.account_id = id.account_id;
@@ -252,13 +284,12 @@ void TestSameProfileAsPcvrWithoutPassword() {
   pc.build_type = "Release";
   nlohmann::json expected = nlohmann::json::parse(LoginProfile::BuildLoginProfileJson(pc));
   expected.erase("nevr_plugins");
-  CHECK(json.ToJson() == expected);
-  CHECK(expected.at("accountid") == kNevrAccount);
-  CHECK(expected.at("access_token") == "NEVR-TOKEN-SECRET");
-  CHECK(expected.at("password") == "");
-  // No composed field carries a password value.
+  QCHECK(json.ToJson() == expected);
+  QCHECK(At(expected, "accountid") == kNevrAccount);
+  QCHECK(At(expected, "access_token") == "NEVR-TOKEN-SECRET");
+  QCHECK(At(expected, "password") == "");
   for (const QuestLogin::Field& f : c.fields) {
-    if (f.path == "password") CHECK(f.text.empty());
+    if (f.path == "password") QCHECK(f.text.empty());
   }
 }
 
@@ -272,11 +303,11 @@ void TestSerialRelay() {
     }
     return std::string("<absent>");
   };
-  CHECK(serial_of("1WMHH000000000") == "1WMHH000000000");  // the game's own value
-  CHECK(serial_of("N/A") == "N/A");                          // the game's no-VR value
-  CHECK(serial_of("") == "unknown");                         // nothing to relay
-  CHECK(serial_of("bad serial") == "unknown");               // a space is not a serial
-  CHECK(serial_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ") == "ABCDEFGHIJKLMNOPQRSTUVWX");  // 24-byte buffer
+  QCHECK(serial_of("1WMHH000000000") == "1WMHH000000000");  // the game's own value
+  QCHECK(serial_of("N/A") == "N/A");                          // the game's no-VR value
+  QCHECK(serial_of("") == "unknown");                         // nothing to relay
+  QCHECK(serial_of("bad serial") == "unknown");               // a space is not a serial
+  QCHECK(serial_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ") == "ABCDEFGHIJKLMNOPQRSTUVWX");  // 24-byte buffer
 }
 
 void TestRewriteCarriesNevrIdentityToTheWire() {
@@ -287,46 +318,68 @@ void TestRewriteCarriesNevrIdentityToTheWire() {
   source.identity = MakeIdentity();
   g_log.clear();
 
-  // Before: the wire account id is the Oculus org-scoped id.
   std::uint64_t wire = 0;
-  CHECK(user.WireAccountId(wire) && wire == 5551234);
+  QCHECK(user.WireAccountId(wire) && wire == 5551234);  // before: the org-scoped id
 
   const QuestLogin::Outcome out = QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog);
-  CHECK(out == QuestLogin::Outcome::Rewritten);
-  CHECK(user.WireAccountId(wire) && wire == kNevrAccount);  // what AccountID() now returns
+  QCHECK(out == QuestLogin::Outcome::Rewritten);
+  QCHECK(user.WireAccountId(wire) && wire == kNevrAccount);
 
   const nlohmann::json doc = json.ToJson();
-  CHECK(doc.at("access_token") == "NEVR-TOKEN-SECRET");
-  CHECK(doc.at("accountid") == kNevrAccount);
-  CHECK(doc.at("nonce") == "");                          // the Oculus proof nonce is not relayed
-  CHECK(doc.at("hmdserialnumber") == "1WMHH000000000");  // the game's value survives
-  CHECK(doc.at("hmdproductname") == "Quest 2");          // a game-only key is left alone
-  CHECK(doc.at("password") == "");                       // no credential in the login JSON
-  CHECK(doc.dump().find("OCULUS") == std::string::npos);
-  // The headset's real measurements are kept, not replaced by the PCVR placeholders.
-  const nlohmann::json& sys = doc.at("system_info");
-  CHECK(sys.at("cpu") == "Snapdragon XR2");
-  CHECK(sys.at("num_physical_cores") == 4);
-  CHECK(sys.at("num_logical_cores") == 8);
-  CHECK(sys.at("memory_total") == 5800);
-  CHECK(sys.at("memory_used") == 3100);
-  CHECK(sys.at("network_type") == "wifi");
-  // Members the game left out are filled from the profile.
-  CHECK(sys.contains("driver_version"));
+  QCHECK(At(doc, "access_token") == "NEVR-TOKEN-SECRET");
+  QCHECK(At(doc, "accountid") == kNevrAccount);
+  QCHECK(At(doc, "nonce") == "");                          // the Oculus proof nonce is not relayed
+  QCHECK(At(doc, "hmdserialnumber") == "1WMHH000000000");  // the game's value survives
+  QCHECK(At(doc, "hmdproductname") == "Quest 2");          // a game-only key is left alone
+  QCHECK(At(doc, "password") == "");                       // no credential in the login JSON
+  QCHECK(At(doc, "displayname") == "Pilot");
+  QCHECK(doc.dump().find("OCULUS") == std::string::npos);
+  QCHECK(At(doc, "system_info|cpu") == "Snapdragon XR2");
+  QCHECK(At(doc, "system_info|num_physical_cores") == 4);
+  QCHECK(At(doc, "system_info|memory_total") == 5800);
+  QCHECK(At(doc, "system_info|network_type") == "wifi");
+  QCHECK(!At(doc, "system_info|driver_version").is_null());  // members the game left out are filled
 
-  CHECK(g_log.size() == 1);
+  QCHECK(g_log.size() == 1);
   for (const std::string& line : g_log) {
-    CHECK(line.rfind("event=quest_login outcome=rewritten ", 0) == 0);
-    CHECK(line.find("platform=4") != std::string::npos);
-    CHECK(line.find("NEVR-TOKEN-SECRET") == std::string::npos);
-    CHECK(line.find("1WMHH000000000") == std::string::npos);
-    CHECK(line.find("987654321012345") == std::string::npos);
-    CHECK(line.find("(0,0)") == std::string::npos);
+    QCHECK(line.rfind("quest_login outcome=rewritten ", 0) == 0);
+    QCHECK(line.find("platform=4") != std::string::npos);
+    QCHECK(line.find("NEVR-TOKEN-SECRET") == std::string::npos);
+    QCHECK(line.find("1WMHH000000000") == std::string::npos);
+    QCHECK(line.find("987654321012345") == std::string::npos);
   }
 }
 
-// The reviewer's trap: a change that lands in [this+0x88] (or anything AccountID() does not
-// read) must be caught, because the wire id would still be the Oculus one.
+// buildversion, appid, lobbyversion and publisher_lock say which client this is. The server
+// classifies on them (IsPCVR() is buildversion != 630783; appid maps to a platform), so a
+// Quest login must keep the game's values and must not gain the PCVR constants.
+void TestClientClassKeysAreNeverOverwritten() {
+  FakeJson json;
+  SeedOculusLogin(json);
+  FakeUser user;
+  FakeSource source;
+  source.identity = MakeIdentity();
+  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+  const nlohmann::json doc = json.ToJson();
+  QCHECK(At(doc, "buildversion") == kQuestBuild);
+  QCHECK(At(doc, "appid") == kQuestAppId);
+  QCHECK(At(doc, "lobbyversion") == kQuestLobbyVersion);
+  QCHECK(At(doc, "publisher_lock") == "rad15_live");
+  QCHECK(At(doc, "buildversion") != 631547);  // the PCVR constant
+
+  // A key the game did not send is not invented either.
+  for (const char* key : {"buildversion", "appid", "lobbyversion", "publisher_lock"}) {
+    FakeJson partial;
+    SeedOculusLogin(partial);
+    partial.Clear(key);
+    FakeUser u;
+    QCHECK(QuestLogin::RewriteLogin(u, partial, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+    QCHECK(partial.TypeOf(key) == JsonType::Absent);
+  }
+}
+
+// A write that lands somewhere AccountID() never reads (the [this+0x88] field) must be caught:
+// the wire id would still be the Oculus one.
 void TestAccountIdThatDoesNotReachTheWireIsRejected() {
   FakeJson json;
   SeedOculusLogin(json);
@@ -335,11 +388,11 @@ void TestAccountIdThatDoesNotReachTheWireIsRejected() {
   user.setter_reaches_global = false;
   FakeSource source;
   source.identity = MakeIdentity();
-  CHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) ==
-        QuestLogin::Outcome::AccountIdNotCarried);
-  CHECK(json.ToJson() == before);
+  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) ==
+         QuestLogin::Outcome::AccountIdNotCarried);
+  QCHECK(json.ToJson() == before);
   std::uint64_t wire = 0;
-  CHECK(user.WireAccountId(wire) && wire == 5551234);
+  QCHECK(user.WireAccountId(wire) && wire == 5551234);
 }
 
 void TestPlatformMustAlreadyBeOvrOrg() {
@@ -350,10 +403,10 @@ void TestPlatformMustAlreadyBeOvrOrg() {
   user.provider = 5;
   FakeSource source;
   source.identity = MakeIdentity();
-  CHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) ==
-        QuestLogin::Outcome::PlatformMismatch);
-  CHECK(json.ToJson() == before);
-  CHECK(user.global_account_id == 5551234);
+  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) ==
+         QuestLogin::Outcome::PlatformMismatch);
+  QCHECK(json.ToJson() == before);
+  QCHECK(user.global_account_id == 5551234);
 }
 
 void TestNoIdentityChangesNothing() {
@@ -364,10 +417,10 @@ void TestNoIdentityChangesNothing() {
   FakeSource source;
   source.status = QuestLogin::IdentityStatus::NoToken;
   g_log.clear();
-  CHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::NoIdentity);
-  CHECK(json.ToJson() == before);
-  CHECK(user.global_account_id == 5551234);
-  CHECK(g_log.size() == 1 && g_log[0].find("outcome=no-identity reason=no-token") != std::string::npos);
+  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::NoIdentity);
+  QCHECK(json.ToJson() == before);
+  QCHECK(user.global_account_id == 5551234);
+  QCHECK(g_log.size() == 1 && g_log[0].find("outcome=no-identity reason=no-token") != std::string::npos);
 }
 
 // All-or-nothing: whichever single write the game refuses, the whole JSON and the account id
@@ -375,14 +428,14 @@ void TestNoIdentityChangesNothing() {
 void TestEveryRefusedWriteLeavesEverythingUntouched() {
   FakeJson probe;
   SeedOculusLogin(probe);
-  FakeUser probe_user;
   FakeSource source;
   source.identity = MakeIdentity();
-  QuestLogin::GameValues game = QuestLogin::ReadGameValues(probe);
+  const QuestLogin::GameValues game = QuestLogin::ReadGameValues(probe);
   const QuestLogin::Composition c = QuestLogin::Compose(source.identity, game, MakeBuild());
-  CHECK(c.fields.size() > 10);
+  QCHECK(c.fields.size() > 10);
 
   for (const QuestLogin::Field& field : c.fields) {
+    if (QuestLogin::IsClientClassPath(field.path)) continue;  // never written
     FakeJson json;
     SeedOculusLogin(json);
     const nlohmann::json before = json.ToJson();
@@ -390,29 +443,30 @@ void TestEveryRefusedWriteLeavesEverythingUntouched() {
     FakeUser user;
     g_log.clear();
     const QuestLogin::Outcome out = QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog);
-    // A refused write to a key the game owns (already present with the same value) is not a
-    // failure; everything else is, and in both cases the state is consistent.
     if (out == QuestLogin::Outcome::Rewritten) {
-      CHECK(json.ToJson().at("access_token") == "NEVR-TOKEN-SECRET");
-      CHECK(user.global_account_id == kNevrAccount);
+      // A refusal is harmless only when the write would have changed nothing: the game's
+      // measured value is kept, or the key already holds the value being written.
+      const nlohmann::json current = At(before, field.path);
+      const bool same_value = field.kind == FieldKind::String ? current == field.text : current == field.number;
+      QCHECK(QuestLogin::IsGameMeasuredPath(field.path) || same_value);
+      QCHECK(user.global_account_id == kNevrAccount);
     } else {
-      CHECK(out == QuestLogin::Outcome::JsonWriteFailed);
+      QCHECK(out == QuestLogin::Outcome::JsonWriteFailed);
       if (json.ToJson() != before) std::fprintf(stderr, "state changed after refused path %s\n", field.path.c_str());
-      CHECK(json.ToJson() == before);
-      CHECK(user.global_account_id == 5551234);
-      CHECK(g_log.size() == 1 && g_log[0].find("first_path=") != std::string::npos);
+      QCHECK(json.ToJson() == before);
+      QCHECK(user.global_account_id == 5551234);
+      QCHECK(g_log.size() == 1 && g_log[0].find("first_path=") != std::string::npos);
     }
   }
 
-  // The token itself cannot be written: the reviewer's probe.
   FakeJson json;
   SeedOculusLogin(json);
   const nlohmann::json before = json.ToJson();
   json.refuse_path = "access_token";
   FakeUser user;
-  CHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::JsonWriteFailed);
-  CHECK(json.ToJson() == before);
-  CHECK(user.global_account_id == 5551234);
+  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::JsonWriteFailed);
+  QCHECK(json.ToJson() == before);
+  QCHECK(user.global_account_id == 5551234);
 }
 
 // An exception at any point (an allocation failing mid-rewrite) also leaves nothing behind.
@@ -429,30 +483,59 @@ void TestExceptionAnywhereRestoresEverything() {
     const QuestLogin::Outcome out = QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog);
     json.throw_after = -1;
     if (out == QuestLogin::Outcome::Rewritten) {
-      CHECK(user.global_account_id == kNevrAccount);
+      QCHECK(user.global_account_id == kNevrAccount);
       break;  // n is past the last mutating call
     }
     saw_exception_outcome = true;
-    CHECK(json.ToJson() == before);
-    CHECK(user.global_account_id == 5551234);
+    QCHECK(json.ToJson() == before);
+    QCHECK(user.global_account_id == 5551234);
   }
-  CHECK(saw_exception_outcome);
+  QCHECK(saw_exception_outcome);
 }
 
-void TestTypeConflictWritesNothing() {
-  // The game's "accountid" is an integer; a build that kept it as a string would refuse the
-  // write, so nothing at all is written.
-  FakeJson json;
-  SeedOculusLogin(json);
-  json.values.erase("accountid");
-  json.SetString("accountid", "5551234");
-  const nlohmann::json before = json.ToJson();
-  FakeUser user;
+// CJson holds more than strings, integers and booleans, and the rollback has to put each back.
+void TestEveryJsonTypeSurvivesRollback() {
   FakeSource source;
   source.identity = MakeIdentity();
-  CHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::JsonWriteFailed);
-  CHECK(json.ToJson() == before);
-  CHECK(user.global_account_id == 5551234);
+
+  // A real-typed hardware value the game filled is kept, not replaced and not removed.
+  {
+    FakeJson json;
+    SeedOculusLogin(json);
+    json.Clear("system_info|memory_total");
+    json.SetReal("system_info|memory_total", 5800.5);
+    const nlohmann::json before = json.ToJson();
+    FakeUser user;
+    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+    QCHECK(At(json.ToJson(), "system_info|memory_total") == 5800.5);
+    QCHECK(json.TypeOf("system_info|memory_total") == JsonType::Real);
+  }
+  // A null the rewrite writes over comes back as a null, not as an absent key.
+  {
+    FakeJson json;
+    SeedOculusLogin(json);
+    json.SetNull("nevr_social");
+    json.refuse_path = "system_info|dedicated_gpu_memory";  // fails after nevr_social was written
+    const nlohmann::json before = json.ToJson();
+    FakeUser user;
+    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::JsonWriteFailed);
+    QCHECK(json.TypeOf("nevr_social") == JsonType::Null);
+    QCHECK(json.ToJson() == before);
+  }
+  // A path the rewrite writes that holds a real, an array or a boolean-for-int is refused up
+  // front: it could not be put back, and CJson would not change its type.
+  for (int variant = 0; variant < 3; ++variant) {
+    FakeJson json;
+    SeedOculusLogin(json);
+    if (variant == 0) json.SetReal("nevr_social", 1.5);
+    if (variant == 1) json.SetEmptyArray("nevr_social");
+    if (variant == 2) json.SetBoolean("nevr_social", true);
+    const nlohmann::json before = json.ToJson();
+    FakeUser user;
+    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::JsonWriteFailed);
+    QCHECK(json.ToJson() == before);
+    QCHECK(user.global_account_id == 5551234);
+  }
 }
 
 void TestNestedKeyAddedByRewriteIsRemovedOnRollback() {
@@ -460,49 +543,113 @@ void TestNestedKeyAddedByRewriteIsRemovedOnRollback() {
   // the empty object behind.
   FakeJson json;
   SeedOculusLogin(json);
-  json.refuse_path = "system_info|dedicated_gpu_memory";  // written after nevr_identity members
+  json.refuse_path = "system_info|dedicated_gpu_memory";  // written after the nevr_identity members
   const nlohmann::json before = json.ToJson();
-  CHECK(!before.contains("nevr_identity"));
+  QCHECK(!before.contains("nevr_identity"));
   FakeUser user;
   FakeSource source;
   source.identity = MakeIdentity();
-  CHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::JsonWriteFailed);
-  CHECK(json.ToJson() == before);
+  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::JsonWriteFailed);
+  QCHECK(json.ToJson() == before);
+}
+
+// The id stays installed after the send: LogInSuccessCB compares {platform word, AccountID()}
+// with the server's reply, and every later vtable+0x70 caller must agree.
+struct SendProbe {
+  FakeUser* user = nullptr;
+  FakeJson* json = nullptr;
+  int calls = 0;
+  std::uint64_t wire_at_send = 0;
+  nlohmann::json json_at_send;
+};
+
+void ProbeSend(void* context) {
+  auto* probe = static_cast<SendProbe*>(context);
+  ++probe->calls;
+  probe->user->WireAccountId(probe->wire_at_send);
+  probe->json_at_send = probe->json->ToJson();
+}
+
+void TestAccountIdStaysInstalledAfterSend() {
+  FakeJson json;
+  SeedOculusLogin(json);
+  FakeUser user;
+  FakeSource source;
+  source.identity = MakeIdentity();
+  SendProbe probe;
+  probe.user = &user;
+  probe.json = &json;
+  QCHECK(QuestLogin::RewriteAndSend(user, json, source, MakeBuild(), &CaptureLog, &ProbeSend, &probe) ==
+         QuestLogin::Outcome::Rewritten);
+  QCHECK(probe.calls == 1);
+  QCHECK(probe.wire_at_send == kNevrAccount);
+  QCHECK(At(probe.json_at_send, "access_token") == "NEVR-TOKEN-SECRET");
+
+  // What LogInSuccessCB does with the server's reply {OVR_ORG, NEVR id}.
+  std::uint64_t later = 0;
+  QCHECK(user.WireAccountId(later) && later == kNevrAccount);
+  QCHECK(user.global_account_id == kNevrAccount);
+  QCHECK(user.restores == 0);
+}
+
+void TestSendHappensOnceEvenWhenTheRewriteFails() {
+  for (int variant = 0; variant < 3; ++variant) {
+    FakeJson json;
+    SeedOculusLogin(json);
+    FakeUser user;
+    FakeSource source;
+    source.identity = MakeIdentity();
+    if (variant == 0) source.status = QuestLogin::IdentityStatus::NotReady;
+    if (variant == 1) user.provider = 5;
+    if (variant == 2) json.refuse_path = "access_token";
+    const nlohmann::json before = json.ToJson();
+    SendProbe probe;
+    probe.user = &user;
+    probe.json = &json;
+    QCHECK(QuestLogin::RewriteAndSend(user, json, source, MakeBuild(), &CaptureLog, &ProbeSend, &probe) !=
+           QuestLogin::Outcome::Rewritten);
+    QCHECK(probe.calls == 1);
+    QCHECK(probe.json_at_send == before);
+    QCHECK(probe.wire_at_send == 5551234);
+  }
 }
 
 void TestInvalidUtf8NameDoesNotThrow() {
   QuestLogin::Identity id = MakeIdentity();
   id.display_name = "bad\xff\xfe";
   const QuestLogin::Composition c = QuestLogin::Compose(id, {}, MakeBuild());
-  CHECK(c.status == QuestLogin::ComposeStatus::ProfileBuildFailed);
-  CHECK(c.fields.empty());
+  QCHECK(c.status == QuestLogin::ComposeStatus::ProfileBuildFailed);
+  QCHECK(c.fields.empty());
   FakeJson json;
   SeedOculusLogin(json);
   const nlohmann::json before = json.ToJson();
   FakeUser user;
   FakeSource source;
   source.identity = id;
-  CHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::ComposeFailed);
-  CHECK(json.ToJson() == before);
+  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::ComposeFailed);
+  QCHECK(json.ToJson() == before);
 }
 
 }  // namespace
 
 int main() {
   TestComposeFailsClosed();
-  TestSameProfileAsPcvrWithoutPassword();
+  TestComposedProfileMatchesPcvrBuilder();
   TestSerialRelay();
   TestRewriteCarriesNevrIdentityToTheWire();
+  TestClientClassKeysAreNeverOverwritten();
   TestAccountIdThatDoesNotReachTheWireIsRejected();
   TestPlatformMustAlreadyBeOvrOrg();
   TestNoIdentityChangesNothing();
   TestEveryRefusedWriteLeavesEverythingUntouched();
   TestExceptionAnywhereRestoresEverything();
-  TestTypeConflictWritesNothing();
+  TestEveryJsonTypeSurvivesRollback();
   TestNestedKeyAddedByRewriteIsRemovedOnRollback();
+  TestAccountIdStaysInstalledAfterSend();
+  TestSendHappensOnceEvenWhenTheRewriteFails();
   TestInvalidUtf8NameDoesNotThrow();
-  if (g_failures != 0) {
-    std::fprintf(stderr, "login_rewrite_test: %d check(s) failed\n", g_failures);
+  if (quest_test::Failures() != 0) {
+    std::fprintf(stderr, "login_rewrite_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
   }
   std::printf("login_rewrite_test: all checks passed\n");

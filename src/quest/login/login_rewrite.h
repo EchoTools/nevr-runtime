@@ -58,6 +58,23 @@ struct GameValues {
   std::string headset_type;  // "system_info|headset_type"; empty when absent
 };
 
+// Which login members the rewrite replaces and which it leaves to the game. The server reads
+// the login JSON as a client description plus an identity:
+//   identity        accountid, access_token, nonce, displayname, bypassauth,
+//                   desiredclientprofileversion, hmdserialnumber, nevr_identity, nevr_social
+//                   are written from the NEVR identity and the shared profile.
+//   client class    buildversion, appid, lobbyversion and publisher_lock say which client this
+//                   is. The server derives Quest vs PCVR from them: IsPCVR() is
+//                   buildversion != 630783 (the standalone build number), which selects the
+//                   encoder flag layout on lobby join (UseQuestFlags), and the Discord
+//                   integrator maps appid to a platform. The PCVR constants the shared builder
+//                   emits (buildversion 631547, appid 0) would turn a Quest into a PCVR client,
+//                   so these four are never written, present or not.
+//   hardware        every system_info member the game already filled is kept; only absent ones
+//                   are added.
+bool IsClientClassPath(const std::string& path);
+bool IsGameMeasuredPath(const std::string& path);
+
 enum class FieldKind { String, Int, Boolean };
 
 // One CJson assignment. `path` uses the game's own '|' nesting ("system_info|cpu").
@@ -89,23 +106,30 @@ Composition Compose(const Identity& identity, const GameValues& game, const Buil
 
 const char* StatusName(ComposeStatus status);
 
+// What a CJson path holds. CJson::TypeOf reports 0 for both an absent path and a null value;
+// Valid() separates the two. Real, Array and Object values cannot be restored by the setters
+// the rewrite uses, so a path holding one is never written.
+enum class JsonType { Absent, Null, String, Int, Real, Boolean, Array, Object };
+
 // The game's CJson as seen by the rewrite. login_hook.cpp implements it over the exported
-// NRadEngine::CJson members of libpnsovr.so; the host test implements it over a map.
-// Set* return nothing because CJson::SetString/SetInt are void and report a refused write
-// (for example a type change) only in the game's log, so every write is read back.
+// NRadEngine::CJson members of libpnsovr.so; the host test implements it over a map that
+// follows CJson's type rules (SetString and SetInt refuse to change an existing type; a null
+// is replaceable).
+// Set* return nothing because CJson reports a refused write only in the game's log, so every
+// write is read back. Get* are defined only when TypeOf reports the matching type.
 class JsonAccess {
  public:
   virtual ~JsonAccess() = default;
+  virtual JsonType TypeOf(const char* path) const = 0;
+  virtual std::string GetString(const char* path) const = 0;
+  virtual std::int64_t GetInt(const char* path) const = 0;
+  virtual bool GetBoolean(const char* path) const = 0;
   virtual void SetString(const char* path, const char* value) = 0;
   virtual void SetInt(const char* path, std::int64_t value) = 0;
   virtual void SetBoolean(const char* path, bool value) = 0;
+  virtual void SetNull(const char* path) = 0;
   // Removes the key (CJson::Clear).
   virtual void Clear(const char* path) = 0;
-  // Read-back. `present` is false when the key does not exist or has another type.
-  virtual std::string GetString(const char* path, bool& present) const = 0;
-  virtual std::int64_t GetInt(const char* path, bool& present) const = 0;
-  virtual bool GetBoolean(const char* path, bool& present) const = 0;
-  virtual bool IsObject(const char* path) const = 0;
 };
 
 // Reads the values the rewrite relays from the game's login JSON.
@@ -139,7 +163,16 @@ class IdentitySource {
 };
 
 enum class Level { Info, Warning, Error };
-using LogFn = void (*)(Level level, const char* line);
+
+// One field of a structured log record: a key and either a fixed-token string or a number.
+// Callers pass key names, counts and fixed tokens only, never a token, serial, display name
+// or account id value.
+struct LogKv {
+  const char* key = "";
+  const char* text = nullptr;  // nullptr: use `number`
+  long long number = 0;
+};
+using LogFn = void (*)(Level level, const char* event, const LogKv* fields, std::size_t count);
 
 enum class Outcome {
   Rewritten,          // JSON and wire account id carry the NEVR identity
@@ -154,11 +187,21 @@ enum class Outcome {
 
 const char* OutcomeName(Outcome outcome);
 
+// Hands the actual send to the caller so the rewrite and the send form one unit: the account
+// id the rewrite installed is read by the sender through the virtual AccountID() and again by
+// CNSUser::LogInSuccessCB, which builds {platform word, AccountID()} and compares it with the
+// server's reply (libpnsovr 0x383a60-0x383a8c); a mismatch drops the success. It therefore
+// stays installed after the send. `send(context)` is called exactly once, last, whatever the
+// outcome.
+using SendFn = void (*)(void* context);
+Outcome RewriteAndSend(UserAccess& user, JsonAccess& json, IdentitySource& source,
+                       const BuildInfo& build, LogFn log, SendFn send, void* context);
+
 // The whole decision for one login attempt. Called once per CNSUser::SendLogInRequest, which
 // is per login event (not per frame), so it may allocate and log. All-or-nothing: any
 // non-Rewritten outcome leaves the JSON and the account id exactly as they were on entry.
-// Every non-Rewritten outcome emits one structured log line; no line contains a token,
-// serial, display name or account id value. Never throws.
+// Every outcome emits one structured record (event "quest_login", field "outcome"); no
+// record contains a token, serial, display name or account id value. Never throws.
 Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
                      const BuildInfo& build, LogFn log);
 

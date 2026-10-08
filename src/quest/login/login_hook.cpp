@@ -2,13 +2,10 @@
 
 #include <dlfcn.h>
 #include <elf.h>
-#include <link.h>
 
 #include <atomic>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
-#include <limits>
 #include <mutex>
 #include <string>
 
@@ -37,26 +34,57 @@ constexpr std::uint64_t kAccountIdGlobalVaddr = 0x70e3e0ULL;
 constexpr std::size_t kPlatformWordOffset = 0x90;
 constexpr std::size_t kAccountIdVtableOffset = 0x70;
 
+// CNSOVRUser's vtable pointer as stored in an instance: _ZTVN10NRadEngine10CNSOVRUserE (0x6a1280)
+// plus the 0x10 header.
+constexpr std::uint64_t kCNSOVRUserVptrVaddr = 0x6a1290ULL;
+
 using SetStringFn = void (*)(void*, const char*, const char*);
 using SetIntFn = void (*)(void*, const char*, long long);
 using SetBooleanFn = void (*)(void*, const char*, unsigned);
+using SetNullFn = void (*)(void*, const char*);
 using ClearFn = void (*)(void*, const char*, unsigned);
 using TStringFn = const char* (*)(const void*, const char*, const char*, unsigned);
 using IntFn = long long (*)(const void*, const char*, long long, unsigned);
 using BooleanFn = unsigned (*)(const void*, const char*, unsigned, unsigned);
-using IsObjectFn = unsigned (*)(const void*, const char*);
+using ValidFn = unsigned (*)(const void*, const char*);
+using TypeOfFn = unsigned (*)(const void*, const char*);
 
-// libpnsovr.so does not link libr15.so (no DT_NEEDED) and defines its own CJson, so the
-// object this hook edits was built by, and must be edited with, libpnsovr's own functions.
+// libpnsovr.so does not link libr15.so (no DT_NEEDED) and defines its own CJson; the login
+// CJson is built by libpnsovr.so, so it is edited with libpnsovr's functions.
 struct CJsonApi {
   SetStringFn set_string = nullptr;
   SetIntFn set_int = nullptr;
   SetBooleanFn set_boolean = nullptr;
+  SetNullFn set_null = nullptr;
   ClearFn clear = nullptr;
   TStringFn t_string = nullptr;
   IntFn get_int = nullptr;
   BooleanFn get_boolean = nullptr;
-  IsObjectFn is_object = nullptr;
+  ValidFn valid = nullptr;
+  TypeOfFn type_of = nullptr;
+};
+
+// Every CJson function the rewrite calls: its pinned link-time address in libpnsovr.so and,
+// where libpnsovr's own calls go through a PLT slot, that slot's address. At install the
+// export must resolve to base+function and the slot (BIND_NOW, so already resolved) must
+// hold the same value; otherwise the game's own calls use a different copy and nothing is
+// installed.
+struct CJsonImport {
+  const char* symbol;
+  std::uint64_t function_vaddr;
+  std::uint64_t slot_vaddr;  // 0: libpnsovr never calls it through the PLT
+};
+constexpr CJsonImport kCJsonImports[] = {
+    {"_ZN10NRadEngine5CJson9SetStringEPKcS2_", 0x35917c, 0x6da310},
+    {"_ZN10NRadEngine5CJson6SetIntEPKcx", 0x35bc14, 0x6d9038},
+    {"_ZN10NRadEngine5CJson10SetBooleanEPKcj", 0x358ccc, 0x6db440},
+    {"_ZN10NRadEngine5CJson7SetNullEPKc", 0x35c158, 0x6de7f8},
+    {"_ZN10NRadEngine5CJson5ClearEPKcj", 0x358098, 0x6e1868},
+    {"_ZNK10NRadEngine5CJson7TStringEPKcS2_j", 0x358bb4, 0x6db090},
+    {"_ZNK10NRadEngine5CJson3IntEPKcxj", 0x359e24, 0x6da498},
+    {"_ZNK10NRadEngine5CJson7BooleanEPKcjj", 0x35a0a8, 0x6df500},
+    {"_ZNK10NRadEngine5CJson5ValidEPKc", 0x3595ac, 0x6dffc0},
+    {"_ZNK10NRadEngine5CJson6TypeOfEPKc", 0x35a1d0, 0},
 };
 
 struct State {
@@ -65,6 +93,7 @@ struct State {
   LogFn log = nullptr;
   CJsonApi api;
   std::uint64_t* account_id_global = nullptr;
+  const void* expected_vptr = nullptr;
 };
 
 State g_state;
@@ -75,11 +104,21 @@ sentinel::GotHook g_hook;
 struct LoginTag {};
 using LoginThunk = sentinel::CallbackThunk<LoginTag, void(void*, void*)>;
 
-// The CNSOVRUser the hook was handed. Every access is guarded: the object must have its
-// vtable inside libpnsovr.so before anything is read or called through it.
+// The CNSOVRUser the hook was handed. Every access is guarded: the object's vtable pointer
+// must be exactly CNSOVRUser's before anything is read or called through it.
+//
+// The global is deliberately never restored after a successful send: CNSUser::LogInSuccessCB
+// builds {[this+0x90], AccountID()} and compares it with the server's reply, and every other
+// vtable+0x70 caller (LogOut, RefreshProfile, the Profile*/LoginRemoved callbacks,
+// CNSUser::UserID, CNSIParty::Update) must see the same id. Writers of the global in the
+// pinned build: LogInInternal 0x1ec998 (0 only when it holds -1), GotLoggedInUserOrgIdCb
+// 0x1ecef0 (-1 on the error path) and 0x1ecf18 (the org id on success), RadPluginShutdown
+// 0x207074 (0). CNSOVRSocial copies it into the local party member record at 0x1f2b30,
+// 0x1f2bd0, 0x1f38a4 and 0x204a30 while OfflineID() keeps the Oculus id.
 class LiveUser final : public UserAccess {
  public:
-  LiveUser(void* user, std::uint64_t* account_global) : user_(user), global_(account_global) {}
+  LiveUser(void* user, std::uint64_t* account_global, const void* expected_vptr)
+      : user_(user), global_(account_global), expected_vptr_(expected_vptr) {}
 
   bool Provider(std::uint64_t& code) const override {
     if (!Valid()) return false;
@@ -111,95 +150,119 @@ class LiveUser final : public UserAccess {
 
  private:
   bool Valid() const {
-    if (user_ == nullptr || (reinterpret_cast<std::uintptr_t>(user_) & 7u) != 0) return false;
-    void* vtable = nullptr;
-    std::memcpy(&vtable, user_, sizeof(vtable));
-    Dl_info info;
-    if (vtable == nullptr || dladdr(vtable, &info) == 0 || info.dli_fname == nullptr) return false;
-    const char* slash = std::strrchr(info.dli_fname, '/');
-    return std::strcmp(slash != nullptr ? slash + 1 : info.dli_fname, kPnsovr) == 0;
+    if (user_ == nullptr || expected_vptr_ == nullptr || (reinterpret_cast<std::uintptr_t>(user_) & 7u) != 0) {
+      return false;
+    }
+    const void* vptr = nullptr;
+    std::memcpy(&vptr, user_, sizeof(vptr));
+    return vptr == expected_vptr_;
   }
 
   void* user_;
   std::uint64_t* global_;
+  const void* expected_vptr_;
   std::uint64_t previous_ = 0;
   bool have_previous_ = false;
 };
 
-// NRadEngine::CJson through libpnsovr's exported members. A missing key returns the caller's
-// fallback unchanged (docs/adr/0003 "Config-string seam"), so presence is "the answer differs
-// from at least one of two different fallbacks".
+// NRadEngine::CJson through libpnsovr's functions. TypeOf reports 0 for both a null value and
+// an absent path, so Valid() (does the path resolve) separates them.
 class LiveJson final : public JsonAccess {
  public:
   LiveJson(const CJsonApi& api, void* json) : api_(api), json_(json) {}
+
+  JsonType TypeOf(const char* path) const override {
+    if (api_.valid(json_, path) == 0) return JsonType::Absent;
+    switch (api_.type_of(json_, path)) {
+      case 1: return JsonType::String;
+      case 2: return JsonType::Int;
+      case 3: return JsonType::Real;
+      case 4: return JsonType::Boolean;
+      case 5: return JsonType::Array;
+      case 6: return JsonType::Object;
+      default: return JsonType::Null;
+    }
+  }
+  std::string GetString(const char* path) const override {
+    const char* got = api_.t_string(json_, path, "", 0);
+    return got != nullptr ? std::string(got) : std::string();
+  }
+  std::int64_t GetInt(const char* path) const override {
+    return static_cast<std::int64_t>(api_.get_int(json_, path, 0, 0));
+  }
+  bool GetBoolean(const char* path) const override { return api_.get_boolean(json_, path, 0u, 0) != 0; }
 
   void SetString(const char* path, const char* value) override { api_.set_string(json_, path, value); }
   void SetInt(const char* path, std::int64_t value) override {
     api_.set_int(json_, path, static_cast<long long>(value));
   }
   void SetBoolean(const char* path, bool value) override { api_.set_boolean(json_, path, value ? 1u : 0u); }
+  void SetNull(const char* path) override { api_.set_null(json_, path); }
   void Clear(const char* path) override { api_.clear(json_, path, 0u); }
-
-  std::string GetString(const char* path, bool& present) const override {
-    static const char kFallback[] = "";
-    const char* got = api_.t_string(json_, path, kFallback, 0);
-    present = got != nullptr && got != kFallback;
-    return present ? std::string(got) : std::string();
-  }
-
-  std::int64_t GetInt(const char* path, bool& present) const override {
-    const long long lo = api_.get_int(json_, path, std::numeric_limits<long long>::min(), 0);
-    const long long hi = api_.get_int(json_, path, std::numeric_limits<long long>::max(), 0);
-    present = lo == hi;
-    return present ? static_cast<std::int64_t>(lo) : 0;
-  }
-
-  bool GetBoolean(const char* path, bool& present) const override {
-    const unsigned lo = api_.get_boolean(json_, path, 0u, 0);
-    const unsigned hi = api_.get_boolean(json_, path, 1u, 0);
-    present = (lo != 0) == (hi != 0);
-    return present && lo != 0;
-  }
-
-  bool IsObject(const char* path) const override { return api_.is_object(json_, path) != 0; }
 
  private:
   const CJsonApi& api_;
   void* json_;
 };
 
-// The handler behind the GOT slot. The thunk calls it with the original function; the
-// original is called last and always, so a refused or failed rewrite leaves the game's own
-// login intact. RewriteLogin never throws.
+struct SendContext {
+  LoginThunk::Fn original;
+  void* user;
+  void* json;
+};
+
+void CallOriginal(void* context) {
+  const auto* send = static_cast<const SendContext*>(context);
+  send->original(send->user, send->json);
+}
+
+// The handler behind the GOT slot. The original runs last and always, so a refused or failed
+// rewrite leaves the game's own login intact. RewriteAndSend never throws.
 void HandleSendLogInRequest(LoginThunk::Fn original, void* user, void* json) {
+  SendContext send{original, user, json};
   const State* state = g_published.load(std::memory_order_acquire);
-  if (state != nullptr && json != nullptr) {
-    LiveUser live_user(user, state->account_id_global);
-    LiveJson live_json(state->api, json);
-    RewriteLogin(live_user, live_json, *state->source, state->build, state->log);
+  if (state == nullptr || json == nullptr) {
+    CallOriginal(&send);
+    return;
   }
-  original(user, json);
+  LiveUser live_user(user, state->account_id_global, state->expected_vptr);
+  LiveJson live_json(state->api, json);
+  RewriteAndSend(live_user, live_json, *state->source, state->build, state->log, &CallOriginal, &send);
 }
 
 template <typename Fn>
-bool Resolve(void* handle, const char* symbol, Fn& out) {
-  void* address = dlsym(handle, symbol);
-  if (address == nullptr) return false;
+void Assign(Fn& out, std::uint64_t address) {
   out = reinterpret_cast<Fn>(address);
-  return true;
 }
 
-bool ResolveCJson(CJsonApi& api) {
+// Resolves the CJson functions for the pinned image: each export must equal base+function,
+// and where libpnsovr calls it through a PLT slot the slot must hold that same address.
+bool ResolveCJson(const sentinel::ElfImage& image, CJsonApi& api) {
   void* handle = dlopen(kPnsovr, RTLD_NOW | RTLD_NOLOAD);
-  return handle != nullptr &&
-         Resolve(handle, "_ZN10NRadEngine5CJson9SetStringEPKcS2_", api.set_string) &&
-         Resolve(handle, "_ZN10NRadEngine5CJson6SetIntEPKcx", api.set_int) &&
-         Resolve(handle, "_ZN10NRadEngine5CJson10SetBooleanEPKcj", api.set_boolean) &&
-         Resolve(handle, "_ZN10NRadEngine5CJson5ClearEPKcj", api.clear) &&
-         Resolve(handle, "_ZNK10NRadEngine5CJson7TStringEPKcS2_j", api.t_string) &&
-         Resolve(handle, "_ZNK10NRadEngine5CJson3IntEPKcxj", api.get_int) &&
-         Resolve(handle, "_ZNK10NRadEngine5CJson7BooleanEPKcjj", api.get_boolean) &&
-         Resolve(handle, "_ZNK10NRadEngine5CJson8IsObjectEPKc", api.is_object);
+  if (handle == nullptr) return false;
+  std::uint64_t resolved[sizeof(kCJsonImports) / sizeof(kCJsonImports[0])] = {};
+  std::size_t index = 0;
+  for (const CJsonImport& entry : kCJsonImports) {
+    const std::uint64_t want = image.base + entry.function_vaddr;
+    if (reinterpret_cast<std::uint64_t>(dlsym(handle, entry.symbol)) != want) return false;
+    if (entry.slot_vaddr != 0) {
+      std::uint64_t slot_value = 0;
+      std::memcpy(&slot_value, reinterpret_cast<const void*>(image.base + entry.slot_vaddr), sizeof(slot_value));
+      if (slot_value != want) return false;
+    }
+    resolved[index++] = want;
+  }
+  Assign(api.set_string, resolved[0]);
+  Assign(api.set_int, resolved[1]);
+  Assign(api.set_boolean, resolved[2]);
+  Assign(api.set_null, resolved[3]);
+  Assign(api.clear, resolved[4]);
+  Assign(api.t_string, resolved[5]);
+  Assign(api.get_int, resolved[6]);
+  Assign(api.get_boolean, resolved[7]);
+  Assign(api.valid, resolved[8]);
+  Assign(api.type_of, resolved[9]);
+  return true;
 }
 
 // Proves the account-id global: the three instructions of CNSOVRUser::AccountID() are the
@@ -234,27 +297,48 @@ const char* InstallStateName(InstallState state) {
   }
 }
 
-void SentinelLog(Level level, const char* line) {
+void SentinelLog(Level level, const char* event, const LogKv* fields, std::size_t count) {
   const sentinel::LogLevel mapped = level == Level::Error     ? sentinel::LogLevel::kError
                                     : level == Level::Warning ? sentinel::LogLevel::kWarn
                                                               : sentinel::LogLevel::kInfo;
-  sentinel::LogEvent(mapped, "%s", line);
+  using sentinel::LogField;
+  auto field = [&](std::size_t i) {
+    return fields[i].text != nullptr ? LogField(fields[i].key, fields[i].text)
+                                     : LogField(fields[i].key, fields[i].number);
+  };
+  switch (count) {
+    case 0: sentinel::LogFields(mapped, event, {}); break;
+    case 1: sentinel::LogFields(mapped, event, {field(0)}); break;
+    case 2: sentinel::LogFields(mapped, event, {field(0), field(1)}); break;
+    case 3: sentinel::LogFields(mapped, event, {field(0), field(1), field(2)}); break;
+    case 4: sentinel::LogFields(mapped, event, {field(0), field(1), field(2), field(3)}); break;
+    case 5: sentinel::LogFields(mapped, event, {field(0), field(1), field(2), field(3), field(4)}); break;
+    case 6:
+      sentinel::LogFields(mapped, event, {field(0), field(1), field(2), field(3), field(4), field(5)});
+      break;
+    case 7:
+      sentinel::LogFields(mapped, event,
+                          {field(0), field(1), field(2), field(3), field(4), field(5), field(6)});
+      break;
+    default:
+      sentinel::LogFields(mapped, event,
+                          {field(0), field(1), field(2), field(3), field(4), field(5), field(6), field(7)});
+      break;
+  }
 }
 
 InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build, LogFn log) {
   if (log == nullptr) log = &SentinelLog;
   const std::lock_guard<std::mutex> lock(g_install_mutex);
   if (g_published.load(std::memory_order_acquire) != nullptr) return InstallState::AlreadyInstalled;
-  if (source == nullptr) return InstallState::HookFailed;
 
-  auto refuse = [&](InstallState state, const char* why) {
-    char line[200];
-    std::snprintf(line, sizeof(line), "event=quest_login_install state=%s reason=%s",
-                  InstallStateName(state), why);
-    log(Level::Error, line);
+  auto refuse = [&](InstallState state, const char* reason) {
+    const LogKv fields[] = {{"op", "install", 0}, {"state", InstallStateName(state), 0}, {"reason", reason, 0}};
+    log(Level::Error, "quest_login_install", fields, 3);
     return state;
   };
 
+  if (source == nullptr) return refuse(InstallState::HookFailed, "no_identity_source");
   sentinel::ElfImage image;
   if (!sentinel::FindLoadedImage(kPnsovr, &image)) return InstallState::ModuleNotLoaded;
   char build_id[64] = {};
@@ -265,13 +349,14 @@ InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build,
   std::uint64_t* account_global = ProveAccountIdGlobal(image);
   if (account_global == nullptr) return refuse(InstallState::SlotInvalid, "account_id_global");
   CJsonApi api;
-  if (!ResolveCJson(api)) return refuse(InstallState::SymbolMissing, "pnsovr_cjson_export");
+  if (!ResolveCJson(image, api)) return refuse(InstallState::SymbolMissing, "pnsovr_cjson_binding");
 
   g_state.source = source;
   g_state.build = build;
   g_state.log = log;
   g_state.api = api;
   g_state.account_id_global = account_global;
+  g_state.expected_vptr = reinterpret_cast<const void*>(image.base + kCNSOVRUserVptrVaddr);
   g_published.store(&g_state, std::memory_order_release);
   LoginThunk::Arm(&HandleSendLogInRequest);
 
@@ -283,7 +368,8 @@ InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build,
     g_published.store(nullptr, std::memory_order_release);
     return refuse(InstallState::HookFailed, "got_backend");
   }
-  log(Level::Info, "event=quest_login_install state=installed slot=CNSUser::SendLogInRequest");
+  const LogKv fields[] = {{"op", "install", 0}, {"state", "installed", 0}, {"slot", "CNSUser::SendLogInRequest", 0}};
+  log(Level::Info, "quest_login_install", fields, 3);
   return InstallState::Installed;
 }
 
