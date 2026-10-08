@@ -247,7 +247,7 @@ void UnrelatedValuesAreUntouched() {
   const char* missing = "fallback-pointer";
   QCHECK(s.R15("publisher_lock", missing) == missing);
   // A null result and a null key pass through.
-  QCHECK(R15Entry()(nullptr, "login_host", nullptr, 0U) == nullptr);
+  QCHECK(R15Entry()(nullptr, "config_host", nullptr, 0U) == nullptr);  // absent key, null fallback
   const char* value = "value";
   QCHECK(s.redirector->Apply(nullptr, value) == value);
   QCHECK(s.redirector->counters().redirected == 0);
