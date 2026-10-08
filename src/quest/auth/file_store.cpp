@@ -20,20 +20,24 @@ void Emit(const nevr::auth::LogSink& log, LogLevel level, const std::string& mes
   if (log) log(level, message);
 }
 
-// Writes `data` to `path` atomically (temp + fsync + rename), mode 0600. On any failure
-// the temp file is removed and `path` is untouched. Returns errno-style text on failure.
-bool AtomicWrite(const std::string& path, const std::string& data, std::string& error) {
+// Writes `data` to `path` atomically: fresh temp file (O_EXCL, O_NOFOLLOW, mode 0600),
+// fsync, rename over `path`, fsync of the directory. On any failure before the rename the
+// temp file is removed and `path` is untouched. A failed directory fsync after the rename
+// is reported through `warning` only: the new file is in place.
+bool AtomicWrite(const std::string& path, const std::string& data, std::string& error, std::string& warning) {
   std::error_code ec;
   const std::filesystem::path target(path);
+  const std::filesystem::path parent = target.has_parent_path() ? target.parent_path() : std::filesystem::path(".");
   if (target.has_parent_path()) {
-    std::filesystem::create_directories(target.parent_path(), ec);
+    std::filesystem::create_directories(parent, ec);
     if (ec) {
       error = "create_directories: " + ec.message();
       return false;
     }
   }
   const std::string tmp = path + ".tmp";
-  const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+  ::unlink(tmp.c_str());  // a stale temp from a crashed run; a directory squatting here fails the open below
+  const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
   if (fd < 0) {
     error = std::string("open: ") + std::strerror(errno);
     return false;
@@ -66,9 +70,69 @@ bool AtomicWrite(const std::string& path, const std::string& data, std::string& 
     ::unlink(tmp.c_str());
     return false;
   }
+  const int dfd = ::open(parent.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (dfd < 0) {
+    warning = std::string("open directory for fsync: ") + std::strerror(errno);
+  } else {
+    if (::fsync(dfd) != 0) warning = std::string("fsync directory: ") + std::strerror(errno);
+    ::close(dfd);
+  }
+  return true;
+}
+
+// Reads a whole file without following a symlink. Returns false on any error; `missing`
+// distinguishes "no such file" from the rest.
+bool ReadNoFollow(const std::string& path, std::string& out, bool& missing, std::string& error) {
+  missing = false;
+  const int fd = ::open(path.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  if (fd < 0) {
+    missing = (errno == ENOENT);
+    error = std::string("open: ") + std::strerror(errno);
+    return false;
+  }
+  char buf[4096];
+  for (;;) {
+    const ssize_t n = ::read(fd, buf, sizeof(buf));
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      error = std::string("read: ") + std::strerror(errno);
+      ::close(fd);
+      return false;
+    }
+    if (n == 0) break;
+    out.append(buf, static_cast<size_t>(n));
+    if (out.size() > 1024 * 1024) {
+      error = "file larger than 1 MiB";
+      ::close(fd);
+      return false;
+    }
+  }
+  ::close(fd);
   return true;
 }
 }  // namespace
+
+std::string AppInternalFilesDirFromCmdline(const std::string& cmdline) {
+  const std::string name = cmdline.substr(0, cmdline.find('\0'));
+  // A Java package name: dotted identifiers, at least two segments, no ':' process suffix.
+  if (name.size() < 3 || name.size() > 128 || name.front() == '.' || name.back() == '.') return "";
+  bool dot = false;
+  for (const char c : name) {
+    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '.';
+    if (!ok) return "";
+    if (c == '.') dot = true;
+  }
+  if (!dot || name.find("..") != std::string::npos) return "";
+  return "/data/data/" + name + "/files";
+}
+
+std::string AppInternalFilesDir() {
+  std::string cmdline;
+  bool missing = false;
+  std::string error;
+  if (!ReadNoFollow("/proc/self/cmdline", cmdline, missing, error)) return "";
+  return AppInternalFilesDirFromCmdline(cmdline);
+}
 
 std::string JoinPath(const std::string& dir, const std::string& name) {
   if (dir.empty()) return name;
@@ -79,18 +143,23 @@ FileCredentialStore::FileCredentialStore(std::string path, nevr::auth::LogSink l
     : path_(std::move(path)), log_(std::move(log)) {}
 
 CachedAuthToken FileCredentialStore::Load(uint64_t now) {
-  std::ifstream file(path_, std::ios::binary);
-  if (!file.is_open()) {
-    Emit(log_, LogLevel::Info, "[NEVR.AUTH] credential cache not present path=" + path_);
+  if (path_.empty()) {
+    Emit(log_, LogLevel::Error,
+         "[NEVR.AUTH] no app-internal directory for the credential cache; cached login unavailable");
     return {};
   }
-  std::ostringstream contents;
-  contents << file.rdbuf();
-  if (file.bad()) {
-    Emit(log_, LogLevel::Warning, "[NEVR.AUTH] credential cache unreadable path=" + path_);
+  std::string contents;
+  bool missing = false;
+  std::string error;
+  if (!ReadNoFollow(path_, contents, missing, error)) {
+    if (missing) {
+      Emit(log_, LogLevel::Info, "[NEVR.AUTH] credential cache not present path=" + path_);
+    } else {
+      Emit(log_, LogLevel::Warning, "[NEVR.AUTH] credential cache unreadable path=" + path_ + " error=" + error);
+    }
     return {};
   }
-  CachedAuthToken auth = ParseCredentialsJson(contents.str(), now);
+  CachedAuthToken auth = ParseCredentialsJson(contents, now);
   if (auth.token.empty() && auth.refresh_token.empty()) {
     Emit(log_, LogLevel::Warning, "[NEVR.AUTH] credential cache held no usable login path=" + path_);
   }
@@ -99,12 +168,21 @@ CachedAuthToken FileCredentialStore::Load(uint64_t now) {
 
 bool FileCredentialStore::Save(const CachedAuthToken& auth) {
   if (auth.refresh_token.empty()) return false;
+  if (path_.empty()) {
+    Emit(log_, LogLevel::Error,
+         "[NEVR.AUTH] no app-internal directory for the credential cache; refresh token not persisted");
+    return false;
+  }
   std::string error;
-  if (!AtomicWrite(path_, SerializeCredentialsJson(auth), error)) {
+  std::string warning;
+  if (!AtomicWrite(path_, SerializeCredentialsJson(auth), error, warning)) {
     Emit(log_, LogLevel::Warning,
          "[NEVR.AUTH] failed to write credential cache path=" + path_ + " error=" + error +
              " -- refresh token not persisted, previous file unchanged");
     return false;
+  }
+  if (!warning.empty()) {
+    Emit(log_, LogLevel::Warning, "[NEVR.AUTH] credential cache written but " + warning + " path=" + path_);
   }
   return true;
 }
@@ -114,7 +192,8 @@ FileLinkPresenter::FileLinkPresenter(std::string path, nevr::auth::LogSink log)
 
 intptr_t FileLinkPresenter::Present(const std::string& login_url_with_code) {
   std::string error;
-  if (!AtomicWrite(path_, login_url_with_code + "\n", error)) {
+  std::string warning;
+  if (!AtomicWrite(path_, login_url_with_code + "\n", error, warning)) {
     Emit(log_, LogLevel::Error, "[NEVR.AUTH] could not write the login link file path=" + path_ +
                                     " error=" + error);
     return 0;

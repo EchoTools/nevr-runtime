@@ -10,11 +10,24 @@ SessionConfig MakeSessionConfig(const QuestAuthConfig& c) {
   s.login_url = c.login_url;
   return s;
 }
+
+std::string CredentialsPath(const QuestAuthConfig& c, const nevr::auth::LogSink& log) {
+  std::string dir = c.credentials_dir.empty() ? AppInternalFilesDir() : c.credentials_dir;
+  if (dir.empty()) {
+    if (log) {
+      log(nevr::auth::LogLevel::Error,
+          "[NEVR.AUTH] could not derive the app-internal directory from /proc/self/cmdline; the refresh token "
+          "will not be persisted (external storage is never used for it)");
+    }
+    return "";
+  }
+  return JoinPath(dir, kCredentialsFileName);
+}
 }  // namespace
 
 QuestTokenAuth::QuestTokenAuth(QuestAuthConfig config, nevr::auth::LogSink log)
-    : http_(config.ca_dir),
-      store_(JoinPath(config.files_dir, kCredentialsFileName), log),
+    : http_(config.ca_dirs, log),
+      store_(CredentialsPath(config, log), log),
       presenter_(JoinPath(config.files_dir, kLoginLinkFileName), log),
       session_(MakeSessionConfig(config), http_, clock_, store_, presenter_, log) {}
 

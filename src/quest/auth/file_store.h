@@ -7,14 +7,26 @@
 
 namespace nevr::quest_auth {
 
-// Quest app-private external storage; the cache lives here, never beside the game data.
+// The login link is not a long-lived secret and the player has to be able to read it, so
+// it goes to the app's external files directory (/sdcard is FUSE: the file mode bits are
+// not enforced there, so nothing long-lived may be written to it).
 inline constexpr char kQuestFilesDir[] = "/sdcard/Android/data/com.readyatdawn.r15/files/";
 inline constexpr char kCredentialsFileName[] = ".credentials.json";
 inline constexpr char kLoginLinkFileName[] = "device_login.txt";
 
-// Reads/writes `<dir>/.credentials.json`. Save writes a sibling temp file with mode
-// 0600, fsyncs it and renames it over the target, so a crash or a full disk mid-write
-// leaves the previous file whole.
+// The refresh token is a long-lived credential: it lives in the app-internal directory
+// (/data/data/<package>/files), where Android enforces owner-only access. The package is
+// taken from the process's own command line. Returns "" when the command line does not
+// look like a package name (a ":service" process, an unexpected launcher); the caller
+// must not fall back to external storage.
+std::string AppInternalFilesDirFromCmdline(const std::string& cmdline);
+std::string AppInternalFilesDir();
+
+// Reads/writes `<dir>/.credentials.json`. Save writes a fresh sibling temp file (created
+// exclusively, mode 0600, never through a symlink), fsyncs it, renames it over the target
+// and fsyncs the directory, so a crash or a full disk mid-write leaves the previous file
+// whole. Load refuses a symlink. An empty path means "no private directory": both
+// operations fail and say so.
 class FileCredentialStore : public CredentialStore {
  public:
   FileCredentialStore(std::string path, nevr::auth::LogSink log);
@@ -27,8 +39,8 @@ class FileCredentialStore : public CredentialStore {
 };
 
 // Writes the login URL (which carries the short-lived device code) to
-// `<dir>/device_login.txt`, mode 0600, and removes it when the flow ends. The log
-// gets the path only, never the URL.
+// `<dir>/device_login.txt` and removes it when the flow ends. The log gets the path only,
+// never the URL.
 class FileLinkPresenter : public LinkPresenter {
  public:
   FileLinkPresenter(std::string path, nevr::auth::LogSink log);

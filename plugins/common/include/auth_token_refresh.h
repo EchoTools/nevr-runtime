@@ -88,8 +88,7 @@ inline bool RefreshAuthToken(CachedAuthToken& auth,
     }
 
     SaveAuthToken(auth);
-    // No success log here -- token_auth.cpp (the only real caller) already
-    // logs the success at Info with more detail (expires_in) immediately
-    // after this returns true; a line here would just duplicate it.
+    // No success log here: the callers (token_auth.cpp, gameserver.cpp) log the
+    // success at Info with their own detail, so a line here would duplicate it.
     return true;
 }

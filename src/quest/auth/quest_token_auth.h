@@ -10,6 +10,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace nevr::quest_auth {
 
@@ -18,9 +19,13 @@ inline constexpr char kDefaultLoginUrl[] = "https://echovrce.com/login/device";
 struct QuestAuthConfig {
   std::string base_url;  // public nakama HTTP endpoint
   std::string http_key;  // public RPC key (a credential for the RPC; never logged)
+  // Login link (readable by the player, not a long-lived secret).
   std::string files_dir = kQuestFilesDir;
+  // Refresh-token cache. Empty = derive /data/data/<package>/files from the process; if
+  // that fails the login still runs but is not persisted, and the log says so.
+  std::string credentials_dir;
   std::string login_url = kDefaultLoginUrl;
-  std::string ca_dir = kAndroidSystemCaDir;
+  std::vector<std::string> ca_dirs = AndroidCaDirs();
 };
 
 class QuestTokenAuth {

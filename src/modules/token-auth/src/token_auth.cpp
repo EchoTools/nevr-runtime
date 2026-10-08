@@ -489,13 +489,13 @@ static AuthConfig LoadAuthConfig() {
 // before the token actually dies — each failed attempt logs and retries on the
 // next wake.
 //
-// CAUTION: this must stay BELOW kFallbackAccessTokenLifetimeSec (also 300,
-// core/auth_token.h), which is the lifetime assumed for a token carrying
-// neither a decodable `exp` nor a server `expires_in`. At equal values such a
-// token satisfies this guard the instant it is issued and the every-60s refresh
-// loop returns for that case. Production nakama always signs a JWT with `exp`,
-// so nothing hits it today; raising either constant without the other would.
-// (The constant itself lives in core/auth_refresh.h as nevr::auth::kRefreshLeadSec.)
+// The lead is nevr::auth::kRefreshLeadSec (core/auth_refresh.h). It equals
+// kFallbackAccessTokenLifetimeSec (300, core/auth_token_model.h), the lifetime
+// assumed for a token carrying neither a decodable `exp` nor a server
+// `expires_in`: such a token is due for refresh the moment it is issued, so the
+// every-60s loop refreshes it on each wake. Production nakama always signs a JWT
+// with `exp`, so that case is not reached; a lead ABOVE the fallback is rejected
+// at compile time by the static_assert in core/auth_refresh.h.
 
 // The refresh thread's guard, split out of RefreshThreadFunc so it can be
 // asserted in-process without the 60-second sleep.

@@ -1,6 +1,6 @@
 #pragma once
-// Access-token refresh against the device/auth/refresh RPC, split from transport
-// and from persistence so the Windows runtime and the Quest shim share it.
+// Access-token refresh against the device/auth/refresh RPC. Transport and persistence
+// are the caller's, so the Windows runtime and the Quest shim share this one source.
 //
 // Failure contract: any outcome other than Refreshed leaves `auth` byte-for-byte
 // unchanged. The caller persists only on Refreshed, so a failed refresh (timeout,
@@ -14,12 +14,12 @@
 
 namespace nevr::auth {
 
-// How long before expiry the background refresh runs. The Windows module's
-// comment says this must stay BELOW kFallbackAccessTokenLifetimeSec
-// (core/auth_token_model.h) because at equal values a token with neither `exp` nor
-// `expires_in` satisfies the guard the instant it is issued. Both are 300 today, so
-// that stated margin does not exist; the value is kept (this extraction changes no
-// behaviour) and the assert below only forbids the lead exceeding the fallback.
+// How long before expiry the background refresh runs. It may not exceed
+// kFallbackAccessTokenLifetimeSec (core/auth_token_model.h). At equality, which is
+// today's state (both 300), a token carrying neither a decodable `exp` nor a server
+// `expires_in` is due for refresh from the moment it is issued, so each background
+// wake refreshes it. Production nakama always signs `exp`, so that case is not
+// reached; raising the lead above the fallback is what the assert below rejects.
 inline constexpr uint64_t kRefreshLeadSec = 300;
 
 static_assert(kRefreshLeadSec <= kFallbackAccessTokenLifetimeSec,
@@ -35,9 +35,10 @@ enum class RefreshOutcome {
   Refreshed,
   NoRefreshToken,
   TransportFailed,
-  Rejected,     // HTTP status other than 200
-  Malformed,    // body is not the JSON object the RPC returns
-  NoAccessToken // 200 with neither access_token nor token
+  Denied,        // HTTP 400/401/403: the server refuses this refresh token for good
+  Rejected,      // any other HTTP status than 200 (5xx, 429, ...): worth retrying
+  Malformed,     // body is not the JSON object the RPC returns
+  NoAccessToken  // 200 with neither access_token nor token
 };
 
 const char* RefreshOutcomeName(RefreshOutcome outcome);
