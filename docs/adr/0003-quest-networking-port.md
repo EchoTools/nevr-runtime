@@ -23,6 +23,20 @@ preset (`src/quest/CMakePresets.json`) uses the Quest-local vcpkg manifest, the 
 triplet and the NDK chainload at API 26. `nevr_quest_login_profile` compiles the shared login
 profile but is not linked into the sentinel.
 
+Token auth is shared the same way. The token model, refresh handling and device-code loop are
+platform-neutral sources in `src/core/` (`auth_token_model.h`, `auth_refresh.{h,cpp}`,
+`device_auth_flow.{h,cpp}`, `device_poll_response.{h,cpp}`) behind injected HTTP, clock and log
+interfaces (`auth_types.h`); the Windows `token_auth` module and `src/quest/auth/` both compile
+them. `src/quest/auth/` holds the Android adapters: libcurl over OpenSSL from the Quest vcpkg
+manifest (`arm64-android` triplet) with peer and host verification on and
+`/system/etc/security/cacerts` as the CA directory, an atomic mode-0600 credential file under
+`/sdcard/Android/data/com.readyatdawn.r15/files/`, a login-link file there, and a `Session` whose
+worker thread does the login so `Start()` never blocks the caller. `nevr_quest_token_auth` is not
+linked into the sentinel, and nothing yet hands the token to the login path. The tests are
+`src/quest/tests/auth_core_test.cpp`, run on the host by `just test-quest-shared`. Not
+established: the CA directory and the libcurl/OpenSSL stack on a headset, and how the player is
+shown the login link.
+
 `HookImport` replaces the GOT slot a module uses for a symbol it imports. It cannot hook an
 arbitrary internal function of `libr15.so`. It has no detach, no duplicate-install guard and
 ignores the result of its last `mprotect` (tranche 1e of #158).
