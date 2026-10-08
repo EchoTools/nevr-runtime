@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <dirent.h>
+#include <climits>
 #include <fcntl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -444,6 +445,8 @@ void EachDiskFailureClassIsReportedOnce() {
 void RegularLogFileIsBlockingAfterOpen() {
   ClearLogs();
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "open the log");
+  char resolved[PATH_MAX];  // /proc/self/fd links are absolute; the scratch directory may be relative
+  CHECK(::realpath(LogPath().c_str(), resolved) != nullptr);
   bool checked = false;
   for (int fd = 3; fd < 256; ++fd) {
     char link[64];
@@ -452,7 +455,7 @@ void RegularLogFileIsBlockingAfterOpen() {
     const ssize_t n = ::readlink(link, target, sizeof(target) - 1);
     if (n <= 0) continue;
     target[n] = '\0';
-    if (LogPath() != target) continue;
+    if (std::string(resolved) != target) continue;
     checked = true;
     const int flags = ::fcntl(fd, F_GETFL);
     CHECK(flags >= 0 && (flags & O_NONBLOCK) == 0);

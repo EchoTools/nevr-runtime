@@ -88,7 +88,7 @@ configure-android:
 # Build the Android arm64-v8a crash-reporter .so
 build-android: configure-android
     ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-arm64 -j
-    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" build/android-arm64/sentinel/CMakeFiles/ovrplatformloader.dir/*.o
+    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-arm64/sentinel/libovrplatformloader.so $(find build/android-arm64 -name '*.o' \( -path '*/ovrplatformloader.dir/*' -o -path '*/nevr_quest_config.dir/*' -o -path '*/nevr_quest_got_hook.dir/*' \) | sort)
 
 # Build with full compiler output
 verbose-build-android: configure-android
@@ -414,7 +414,19 @@ test-quest-shared:
         -o "$out/service_redirect_test"
     "$out/service_redirect_test"
     echo "test-quest-shared: all redirect vectors pass on the host"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
+    # The config and sentinel tests parse JSON with nlohmann::json. Use the header the build installed
+    # from vcpkg.json for the mingw triplet the mingw-* presets build with, never a system package and
+    # never whichever triplet sorts first. Only the nlohmann directory is exposed to the host compiler.
+    # Fail loudly when the build has not installed it.
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-shared: FAIL — $json_src/json.hpp not found; run 'just build' with a mingw-* preset first (the header comes from vcpkg.json for the x64-mingw-static triplet, not a system package)" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" \
         src/runtime/lifecycle/service_redirect.cpp \
         src/quest/sentinel/quest_config.cpp \
         src/quest/tests/quest_config_test.cpp \
@@ -424,7 +436,7 @@ test-quest-shared:
     # 102, so it runs before activation.cpp's static initializers whatever the link order.
     files="$out/sentinel-files"
     rm -rf "$files"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/tests/stub -Isrc/quest/sentinel \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" -Isrc/quest/tests/stub -Isrc/quest/sentinel \
         -DNEVR_QUEST_FILES_DIR="\"$files\"" \
         src/quest/tests/sentinel_host_test.cpp \
         src/quest/sentinel/activation.cpp \
@@ -518,7 +530,7 @@ verify:
     just test-auth-unit
     just test-quest-shared
     just test-quest-hooks
-    python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_executable_scripts -v
+    python3 -m unittest tools.tests.test_check_quest_static_init tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_executable_scripts -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
