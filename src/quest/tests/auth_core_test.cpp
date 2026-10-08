@@ -1623,6 +1623,57 @@ TEST(session_a_player_prompt_started_from_recovery_is_logged_at_info) {
   s.Stop();
 }
 
+
+// ---------------------------------------------------------------- the real clock
+TEST(the_system_clock_waits_on_the_monotonic_clock_and_judges_deadlines_on_boottime) {
+  // Wait deadlines must not follow the wall clock (a backward step would stretch them); the
+  // device-code deadline must keep counting while the headset sleeps.
+  CHECK_EQ(static_cast<int>(SystemClock::kWaitClock), static_cast<int>(CLOCK_MONOTONIC));
+  CHECK_EQ(static_cast<int>(SystemClock::kSteadyClock), static_cast<int>(CLOCK_BOOTTIME));
+  SystemClock clock;
+  timespec boot{};
+  clock_gettime(CLOCK_BOOTTIME, &boot);
+  const auto now = clock.SteadyNow();
+  const auto boot_ns = std::chrono::seconds(boot.tv_sec) + std::chrono::nanoseconds(boot.tv_nsec);
+  const auto delta = now.time_since_epoch() - boot_ns;
+  CHECK(delta < std::chrono::seconds(2) && delta > -std::chrono::seconds(2));
+  CHECK(clock.SteadyNow() >= now);
+}
+
+TEST(the_system_clock_sleeps_for_the_time_asked_and_is_interruptible) {
+  SystemClock clock;
+  const auto t0 = std::chrono::steady_clock::now();
+  CHECK(!clock.SleepFor(std::chrono::milliseconds(60)));  // elapsed, not interrupted
+  CHECK(std::chrono::steady_clock::now() - t0 >= std::chrono::milliseconds(55));
+  std::thread interrupter([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    clock.Interrupt();
+  });
+  const auto t1 = std::chrono::steady_clock::now();
+  CHECK(clock.SleepFor(std::chrono::seconds(30)));  // cut short
+  CHECK(std::chrono::steady_clock::now() - t1 < std::chrono::seconds(5));
+  interrupter.join();
+  CHECK(clock.SleepFor(std::chrono::seconds(30)));  // stays interrupted: returns at once
+}
+
+TEST(session_a_suspend_during_the_login_wait_stops_the_poll_of_a_dead_code) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  LogCapture log;
+  DeviceHandler(http, 1000000, kT0 + 3600);  // never verifies
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  CHECK(WaitUntil([&] { return presenter.presented.load() == 1; }));
+  clock.Advance(400);  // the headset slept for longer than the code lives; BOOTTIME and wall time both moved
+  clock.Allow(1);      // the poll wait that straddled the sleep ends
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  CHECK_EQ(http.Count("poll"), 0);  // the dead code is not polled
+  CHECK(log.All().find("timed out after 5 minutes") != std::string::npos);
+  s.Stop();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

@@ -5,6 +5,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <cerrno>
 #include <ctime>
 #include <exception>
 #include <system_error>
@@ -29,22 +31,50 @@ bool BodyHasErrorKey(const std::string& body) {
 }
 }  // namespace
 
+SystemClock::SystemClock() {
+  pthread_mutex_init(&mutex_, nullptr);
+  pthread_condattr_t attr;
+  pthread_condattr_init(&attr);
+  pthread_condattr_setclock(&attr, kWaitClock);
+  pthread_cond_init(&cv_, &attr);
+  pthread_condattr_destroy(&attr);
+}
+
+SystemClock::~SystemClock() {
+  pthread_cond_destroy(&cv_);
+  pthread_mutex_destroy(&mutex_);
+}
+
 uint64_t SystemClock::UnixNow() { return static_cast<uint64_t>(std::time(nullptr)); }
 
-std::chrono::steady_clock::time_point SystemClock::SteadyNow() { return std::chrono::steady_clock::now(); }
+std::chrono::steady_clock::time_point SystemClock::SteadyNow() {
+  timespec ts{};
+  clock_gettime(kSteadyClock, &ts);
+  return std::chrono::steady_clock::time_point(std::chrono::seconds(ts.tv_sec) + std::chrono::nanoseconds(ts.tv_nsec));
+}
 
 bool SystemClock::SleepFor(std::chrono::steady_clock::duration d) {
-  std::unique_lock<std::mutex> lock(mutex_);
-  cv_.wait_for(lock, d, [this] { return interrupted_; });
-  return interrupted_;
+  using std::chrono::nanoseconds;
+  const nanoseconds capped = std::min<nanoseconds>(std::chrono::duration_cast<nanoseconds>(d), std::chrono::hours(24));
+  timespec deadline{};
+  clock_gettime(kWaitClock, &deadline);
+  const long long total_ns = static_cast<long long>(deadline.tv_nsec) + std::max<long long>(capped.count(), 0);
+  deadline.tv_sec += static_cast<time_t>(total_ns / 1000000000LL);
+  deadline.tv_nsec = static_cast<long>(total_ns % 1000000000LL);
+  pthread_mutex_lock(&mutex_);
+  while (!interrupted_) {
+    if (pthread_cond_timedwait(&cv_, &mutex_, &deadline) == ETIMEDOUT) break;
+  }
+  const bool interrupted = interrupted_;
+  pthread_mutex_unlock(&mutex_);
+  return interrupted;
 }
 
 void SystemClock::Interrupt() {
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    interrupted_ = true;
-  }
-  cv_.notify_all();
+  pthread_mutex_lock(&mutex_);
+  interrupted_ = true;
+  pthread_mutex_unlock(&mutex_);
+  pthread_cond_broadcast(&cv_);
 }
 
 const char* ReadinessName(Readiness r) {

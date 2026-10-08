@@ -22,6 +22,9 @@
 #include <thread>
 #include <vector>
 
+#include <pthread.h>
+#include <time.h>
+
 namespace nevr::quest_auth {
 
 // A Clock whose pending sleeps can be cut short at shutdown.
@@ -30,17 +33,33 @@ class InterruptibleClock : public nevr::auth::Clock {
   virtual void Interrupt() = 0;
 };
 
-// Wall clock + real condition-variable sleeps.
+// Wall clock + real sleeps.
+//  - Sleeps wait on a pthread condition variable whose clock is CLOCK_MONOTONIC. With libc++ on
+//    Android API 26 a std::condition_variable wait_for becomes a CLOCK_REALTIME deadline, so a
+//    backward wall-clock step would stretch every wait.
+//  - SteadyNow() reads CLOCK_BOOTTIME, which keeps counting while the headset sleeps. The
+//    device-code deadline is judged on it because the server expires the code in wall time: after
+//    a long sleep the client sees the deadline has passed and stops, instead of polling a dead code.
+//    (The sleeps themselves do not count suspended time, so one that straddles a suspend ends late
+//    and the next deadline check catches it.)
 class SystemClock : public InterruptibleClock {
  public:
+  static constexpr clockid_t kWaitClock = CLOCK_MONOTONIC;
+  static constexpr clockid_t kSteadyClock = CLOCK_BOOTTIME;
+
+  SystemClock();
+  ~SystemClock() override;
+  SystemClock(const SystemClock&) = delete;
+  SystemClock& operator=(const SystemClock&) = delete;
+
   uint64_t UnixNow() override;
   std::chrono::steady_clock::time_point SteadyNow() override;
   bool SleepFor(std::chrono::steady_clock::duration d) override;
   void Interrupt() override;
 
  private:
-  std::mutex mutex_;
-  std::condition_variable cv_;
+  pthread_mutex_t mutex_;
+  pthread_cond_t cv_;
   bool interrupted_ = false;
 };
 
