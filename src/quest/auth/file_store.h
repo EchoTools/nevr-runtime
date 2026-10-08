@@ -40,13 +40,19 @@ class FileCredentialStore : public CredentialStore {
   nevr::auth::LogSink log_;
 };
 
-// Writes the login URL (which carries the short-lived device code) to
-// `<dir>/device_login.txt` and removes it when the flow ends. The log gets the path only,
-// never the URL.
+// Writes what a person holding the headset needs to `<dir>/device_login.txt`, replacing any file left by
+// an earlier session, and removes it when the login ends. Four lines:
+//   URL: <verification page>
+//   Code: <code>
+//   <one line of instructions, with the direct link that has the code filled in>
+//   Expires: <UTC time> (unix <seconds>)
+// The Info line says the file was written and where (never the code). If the directory is not
+// writable, an Error says so and an Info line carries the direct link instead (the code is part of
+// it), so the player can still read it from the log; the login goes on.
 class FileLinkPresenter : public LinkPresenter {
  public:
   FileLinkPresenter(std::string path, nevr::auth::LogSink log);
-  intptr_t Present(const std::string& login_url_with_code) override;
+  intptr_t Present(const LoginPrompt& prompt) override;
   void Clear() override;
 
  private:

@@ -235,8 +235,10 @@ class FakePresenter : public LinkPresenter {
   std::atomic<int> cleared{0};
   std::atomic<bool> deliver{true};
   std::string last_url;
-  intptr_t Present(const std::string& url) override {
-    last_url = url;
+  LoginPrompt last_prompt;
+  intptr_t Present(const LoginPrompt& prompt) override {
+    last_prompt = prompt;
+    last_url = prompt.link;
     ++presented;
     return deliver ? kBrowserOpenAcceptedAbove + 1 : 0;
   }
@@ -806,31 +808,87 @@ TEST(file_store_missing_and_corrupt_files_read_as_empty) {
   std::filesystem::remove_all(dir);
 }
 
-TEST(link_presenter_writes_the_url_privately_and_clears_it) {
+LoginPrompt SamplePrompt() {
+  LoginPrompt p;
+  p.url = "https://login.test/device";
+  p.code = "ABCD-EFGH";
+  p.link = "https://login.test/device?code=ABCD-EFGH";
+  p.expires_unix = 1'800'000'300;  // 2027-01-15T08:05:00Z
+  return p;
+}
+
+TEST(link_file_holds_url_code_instructions_and_expiry_and_is_cleared) {
   const std::string dir = TempDir();
   const std::string path = JoinPath(dir, "device_login.txt");
   LogCapture log;
   FileLinkPresenter p(path, log.Sink());
-  CHECK(p.Present("https://login.test/device?code=ABC") > kBrowserOpenAcceptedAbove);
+  CHECK(p.Present(SamplePrompt()) > kBrowserOpenAcceptedAbove);
   struct stat st {};
   CHECK_EQ(::stat(path.c_str(), &st), 0);
   CHECK_EQ(static_cast<int>(st.st_mode & 0777), 0600);
   std::ifstream in(path);
-  std::string line;
-  std::getline(in, line);
-  CHECK_EQ(line, std::string("https://login.test/device?code=ABC"));
-  CHECK(log.All().find("ABC") == std::string::npos);  // path in the log, never the code
+  std::vector<std::string> lines;
+  for (std::string l; std::getline(in, l);) lines.push_back(l);
+  CHECK_EQ(lines.size(), size_t(4));
+  CHECK_EQ(lines[0], std::string("URL: https://login.test/device"));
+  CHECK_EQ(lines[1], std::string("Code: ABCD-EFGH"));
+  CHECK(lines[2].find("sign in with Discord") != std::string::npos);
+  CHECK(lines[2].find("https://login.test/device?code=ABCD-EFGH") != std::string::npos);
+  CHECK_EQ(lines[3], std::string("Expires: 2027-01-15T08:05:00Z (unix 1800000300)"));
+  // One Info line: that it was written, and where. Never the code.
+  CHECK_EQ(log.Count(LogLevel::Info, "login link written for the player path=" + path), size_t(1));
+  CHECK(log.All().find("ABCD-EFGH") == std::string::npos);
   p.Clear();
   CHECK(!std::filesystem::exists(path));
   p.Clear();  // idempotent
-  std::filesystem::remove_all(dir);
 }
 
-TEST(link_presenter_reports_failure_when_it_cannot_write) {
-  FileLinkPresenter p("/proc/nevr-no-such-dir/device_login.txt", nullptr);
-  CHECK_EQ(p.Present("u"), intptr_t(0));
+TEST(link_file_replaces_a_stale_file_and_a_new_code_replaces_the_old_one) {
+  const std::string dir = TempDir();
+  const std::string path = JoinPath(dir, "device_login.txt");
+  std::ofstream(path) << "URL: old\nCode: DEAD-CODE\n";
+  FileLinkPresenter p(path, nullptr);
+  CHECK(p.Present(SamplePrompt()) > kBrowserOpenAcceptedAbove);
+  std::ifstream first(path);
+  std::string text((std::istreambuf_iterator<char>(first)), std::istreambuf_iterator<char>());
+  CHECK(text.find("DEAD-CODE") == std::string::npos);
+  CHECK(text.find("ABCD-EFGH") != std::string::npos);
+  LoginPrompt next = SamplePrompt();
+  next.code = "WXYZ-1234";
+  next.link = next.url + "?code=" + next.code;
+  CHECK(p.Present(next) > kBrowserOpenAcceptedAbove);
+  std::ifstream second(path);
+  std::string text2((std::istreambuf_iterator<char>(second)), std::istreambuf_iterator<char>());
+  CHECK(text2.find("ABCD-EFGH") == std::string::npos);
+  CHECK(text2.find("WXYZ-1234") != std::string::npos);
 }
 
+TEST(an_unwritable_link_directory_is_an_error_and_the_link_goes_to_the_log_instead) {
+  LogCapture log;
+  FileLinkPresenter p("/proc/nevr-no-such-dir/device_login.txt", log.Sink());
+  CHECK(p.Present(SamplePrompt()) > kBrowserOpenAcceptedAbove);  // the login goes on
+  CHECK_EQ(log.Count(LogLevel::Error, "could not write the login link file"), size_t(1));
+  CHECK_EQ(log.Count(LogLevel::Info, "login link (file not written): https://login.test/device?code=ABCD-EFGH"), size_t(1));
+  CHECK_EQ(log.Count(LogLevel::Info, "login link written"), size_t(0));
+}
+
+TEST(the_session_hands_the_presenter_url_code_link_and_expiry_and_clears_a_stale_file_at_start) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  DeviceHandler(http, 0, kT0 + 3600);
+  Session s(TestConfig(), http, clock, store, presenter, nullptr);
+  s.Start();
+  clock.Allow(1);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK_EQ(presenter.last_prompt.url, std::string("https://login.test/device"));
+  CHECK_EQ(presenter.last_prompt.code, std::string("DEVCODE"));
+  CHECK_EQ(presenter.last_prompt.link, std::string("https://login.test/device?code=DEVCODE"));
+  CHECK_EQ(presenter.last_prompt.expires_unix, kT0 + 300);  // the code lives five minutes from when it was requested
+  CHECK(presenter.cleared.load() >= 2);                     // at start (stale file) and when the login ended
+  s.Stop();
+}
 
 // ---------------------------------------------------------------- refresh classification
 TEST(refresh_denied_needs_the_body_to_name_the_refresh_token_a_bare_401_is_not_that) {

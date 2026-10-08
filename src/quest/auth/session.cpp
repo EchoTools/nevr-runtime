@@ -330,7 +330,16 @@ Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
     }
     return code;
   };
-  ops.open_browser = [this](const std::string& url) { return presenter_.Present(url); };
+  ops.open_browser = [this](const std::string& link) {
+    LoginPrompt prompt;
+    prompt.link = link;
+    const size_t q = link.find("?code=");
+    prompt.url = q == std::string::npos ? link : link.substr(0, q);
+    prompt.code = q == std::string::npos ? std::string() : link.substr(q + 6);
+    const auto lifetime = std::chrono::duration_cast<std::chrono::seconds>(nevr::auth::kDeviceAuthLifetime);
+    prompt.expires_unix = clock_.UnixNow() + static_cast<uint64_t>(lifetime.count());
+    return presenter_.Present(prompt);
+  };
   // Nobody can see a link that was not delivered: stop rather than wait out the code.
   ops.show_open_failure = [](const std::string&, const std::string&, intptr_t) { return 0; };
   // The server answers "code unknown or expired" with a 200 (status "expired"). While the
@@ -522,6 +531,7 @@ void Session::BackgroundRefresh(CachedAuthToken auth) {
 }
 
 void Session::Run() {
+  presenter_.Clear();  // a login file left by an earlier session shows a dead code
   CachedAuthToken auth;
   if (!LoginWithRecovery(auth, /*use_cache=*/true)) return;
   Adopt(auth, Readiness::Ready);
