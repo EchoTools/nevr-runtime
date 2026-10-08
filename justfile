@@ -462,6 +462,22 @@ test-quest-shared:
         src/runtime/lifecycle/service_redirect.cpp \
         -o "$out/sentinel_host_test"
     "$out/sentinel_host_test"
+    # The platform-neutral token-auth core and the Quest session, under a fake HTTP
+    # server and a fake clock. Same sources the NDK build compiles (src/quest/CMakeLists.txt).
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc \
+        src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
+        src/quest/auth/session.cpp src/quest/auth/file_store.cpp  \
+        src/quest/tests/auth_core_test.cpp \
+        -o "$out/auth_core_test"
+    "$out/auth_core_test"
+    echo "test-quest-shared: token-auth core and Quest session tests pass on the host"
+    # CurlHttpClient's trust handling against real TLS peers on loopback (test CA, Android-style
+    # old-hash CA directory). Host libcurl with an OpenSSL backend, libssl and libcrypto.
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc \
+        src/quest/auth/curl_http.cpp src/quest/auth/ca_bundle.cpp src/quest/tests/tls_ca_test.cpp \
+        -lcurl -lssl -lcrypto -o "$out/tls_ca_test"
+    "$out/tls_ca_test"
+    echo "test-quest-shared: CurlHttpClient TLS trust tests pass on the host"
     echo "test-quest-shared: all redirect and EVR codec vectors pass on the host"
 
 # Quest hook backend on the host. Builds three fixture shared objects (BIND_NOW with
@@ -1716,7 +1732,6 @@ verify:
         'Both tokens expired -- will re-authenticate' \
         'Cached token expired, no refresh token' \
         'token saved to .credentials.json' \
-        'Still waiting for authorization' \
         'Token expires in %llus' \
         'Token expired %llus ago'; do
         N94_RC=0; N94_CTX=$(grep -B1 -F "$msg" "$N94_FILE") || N94_RC=$?
@@ -1726,6 +1741,26 @@ verify:
             echo "verify: FAIL — N94 the '[NEVR.AUTH] ${msg}' line is at Info; the N47 taxonomy pins it at Debug (merge 2f29312 once reverted all nine — N94)." >&2
             exit 1
         fi
+    done
+    # The poll-loop line lives in the platform-neutral device-code loop
+    # (src/core/device_auth_flow.cpp, shared with the Quest shim); the same Debug pin
+    # applies there, with the core's own level enum.
+    N94_CORE_FILE=src/core/device_auth_flow.cpp
+    N94_RC=0; N94_CTX=$(grep -B1 -F 'Still waiting for authorization' "$N94_CORE_FILE") || N94_RC=$?
+    sensor_stage1 "N94 auth log taxonomy" "$N94_CORE_FILE" "$N94_RC"
+    sensor_nonempty "N94 auth log taxonomy" "message 'Still waiting for authorization' in $N94_CORE_FILE" "$N94_CTX"
+    if grep -q 'LogLevel::Info' <<<"$N94_CTX"; then
+        echo "verify: FAIL — N94 the '[NEVR.AUTH] Still waiting for authorization' line is at Info; the N47 taxonomy pins it at Debug." >&2
+        exit 1
+    fi
+    # The core logs through its own level enum; the Windows side maps it to EchoVR::LogLevel
+    # in ToEchoLogLevel. Without a pin on that mapping, a swapped case would move the N94
+    # Debug lines to Info while every per-line check above still passes.
+    N94_MAP_FILE=plugins/common/include/auth_token_refresh.h
+    for pair in 'Debug' 'Info' 'Warning' 'Error'; do
+        N94_RC=0; N94_MAP=$(grep -F "case LogLevel::${pair}: return EchoVR::LogLevel::${pair};" "$N94_MAP_FILE") || N94_RC=$?
+        sensor_stage1 "N94 level mapping" "$N94_MAP_FILE" "$N94_RC"
+        sensor_nonempty "N94 level mapping" "ToEchoLogLevel case ${pair} in $N94_MAP_FILE" "$N94_MAP"
     done
     # C2/N84: every PatchDetour shall name its hook. The parameter is required at
     # compile time, so this is belt-and-braces against someone re-adding a default.

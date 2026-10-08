@@ -24,6 +24,48 @@ preset (`src/quest/CMakePresets.json`) uses the Quest-local vcpkg manifest, the 
 triplet and the NDK chainload at API 26. `nevr_quest_login_profile` compiles the shared login
 profile but is not linked into the sentinel.
 
+Token auth is shared the same way. The token model, refresh handling and device-code loop are
+platform-neutral sources in `src/core/` (`auth_token_model.h`, `auth_refresh.{h,cpp}`,
+`device_auth_flow.{h,cpp}`, `device_poll_response.{h,cpp}`) behind injected HTTP, clock and log
+interfaces (`auth_types.h`); the Windows `token_auth` module and `src/quest/auth/` both compile
+them. `src/quest/auth/` holds the Android adapters:
+
+- HTTP is libcurl (>= 7.87, checked at configure time) over OpenSSL from the Quest vcpkg
+  manifest (`arm64-android` triplet, no `builtin-baseline`, as in the root manifest), with peer
+  and host verification on, https only, no redirects, no proxy environment variables, a capped
+  response, and requests that a shutdown interrupts, including during a DNS lookup. Trust anchors
+  are read from `/apex/com.android.conscrypt/cacerts` (when it yields a certificate) or
+  `/system/etc/security/cacerts` into memory, each file parsed with OpenSSL (PEM or DER) and
+  re-encoded, so one corrupt file cannot make libcurl reject the whole blob; the blob is passed
+  as `CAINFO_BLOB`. `CAPATH` is not used: OpenSSL looks a CApath file up by the SHA-1 based
+  subject hash and Android names its files by the old MD5 based one. With no certificate loaded
+  every request fails closed.
+- The refresh token is written to `/data/user/<uid / 100000>/<package>/files/.credentials.json`,
+  the package taken from `/proc/self/cmdline`, because `/sdcard` does not enforce file modes. The
+  write is a fresh exclusive temp file, fsync, rename, directory fsync; a read refuses a symlink.
+  If the directory cannot be derived the login runs without persisting and says so. Only the
+  login link (`device_login.txt`, under `/sdcard/Android/data/com.readyatdawn.r15/files/`) is on
+  external storage.
+- `Session` does the login on a worker thread, so `Start()` never blocks the caller. At startup a
+  cached refresh token is tried first (three attempts); a refresh the server refuses for the token
+  (400/401/403 whose body names the refresh token) goes straight to the device login, with
+  `Refreshing -> AwaitingUser`. A 401/403 that does not name the token (nakama answers a wrong
+  `http_key` with 401) is logged as such and is not treated as a bad token. A transient failure (no
+  connection, 5xx, 429, an unreadable response) of the cached refresh or of the device-code
+  request is retried on a bounded backoff (5, 15, 45, 135, 300 s) and then the login is `Failed`;
+  a 4xx is never retried, and a transient cached-login failure does not prompt the player. After
+  login, a refresh token that has expired or that the server refuses publishes `Expired`, logs
+  once and starts the device login again. A poll request that fails does not end the login, but
+  five in a row do.
+
+`nevr_quest_token_auth` is not linked into the sentinel, and nothing yet hands the token to the
+login path. The tests are `src/quest/tests/auth_core_test.cpp` (fake HTTP and clock) and
+`src/quest/tests/tls_ca_test.cpp` (loopback TLS peers with a generated CA and an Android-style
+directory), run on the host by `just test-quest-shared`. Not established on a headset: the CA
+directories and the libcurl/OpenSSL stack, that the process name is the package name, write access
+to the app-internal directory (and that Quest multi-user uses `/data/user/<n>`), and how the player
+is shown the login link.
+
 `sentinel::GotHook` (`sentinel/got_hook.{h,cpp}`) replaces the GOT slot a module uses for a
 symbol it resolves at load time. It cannot hook an arbitrary internal function of `libr15.so`.
 A target names one slot by module, symbol and relocation type (`R_AARCH64_JUMP_SLOT` or
