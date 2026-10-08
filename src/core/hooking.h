@@ -10,6 +10,8 @@
 
 #include <windows.h>
 
+#include "core/hook_lifecycle.h"
+
 namespace Hooking {
 
 // Initialize the hooking library (call once at startup)
@@ -40,16 +42,9 @@ inline const char*& LastAttachErrorRef() {
 }
 inline const char* LastAttachError() { return LastAttachErrorRef(); }
 
-// A detour may run on another thread as soon as it is enabled. Publish its
-// trampoline first; the callbacks also let the ordering be tested without
-// patching executable memory.
-template <typename Create, typename Publish, typename Enable>
-inline bool CreatePublishEnable(Create&& create, Publish&& publish, Enable&& enable) {
-  PVOID trampoline = nullptr;
-  if (!create(&trampoline) || trampoline == nullptr) return false;
-  publish(trampoline);
-  return enable();
-}
+// The create/publish/enable ordering lives in core/hook_lifecycle.h so the Quest
+// GOT backend runs the same contract. Re-exported here for existing callers.
+using nevr::hook::CreatePublishEnable;
 
 #ifdef USE_MINHOOK
 template <typename Create, typename Enable, typename Remove>
@@ -59,26 +54,30 @@ inline BOOL AttachMinHookWith(PVOID* ppOriginal, PVOID pDetour,
   const PVOID target = *ppOriginal;
   MH_STATUS createStatus = MH_OK;
   MH_STATUS enableStatus = MH_OK;
-  bool created = false;
-  const bool enabled = CreatePublishEnable(
+  const nevr::hook::AttachStage stage = nevr::hook::AttachPublished(
+      ppOriginal,
       [&](PVOID* trampoline) {
         createStatus = create(target, pDetour, trampoline);
-        created = createStatus == MH_OK;
-        return created;
+        return createStatus == MH_OK;
       },
-      [&](PVOID trampoline) { *ppOriginal = trampoline; },
       [&] {
         enableStatus = enable(target);
         return enableStatus == MH_OK;
-      });
-  if (enabled) return TRUE;
-  if (created) {
-    remove(target);
-    *ppOriginal = target;
+      },
+      [&] { remove(target); });
+  switch (stage) {
+    case nevr::hook::AttachStage::kAttached:
+      return TRUE;
+    case nevr::hook::AttachStage::kCreateFailed:
+      LastAttachErrorRef() = MH_StatusToString(createStatus);
+      break;
+    case nevr::hook::AttachStage::kNullTrampoline:
+      LastAttachErrorRef() = "MH_CreateHook returned null trampoline";
+      break;
+    case nevr::hook::AttachStage::kEnableFailed:
+      LastAttachErrorRef() = MH_StatusToString(enableStatus);
+      break;
   }
-  LastAttachErrorRef() = createStatus != MH_OK ? MH_StatusToString(createStatus)
-      : enableStatus != MH_OK ? MH_StatusToString(enableStatus)
-      : "MH_CreateHook returned null trampoline";
   return FALSE;
 }
 #endif

@@ -1,7 +1,8 @@
 # ADR 0003: Quest networking shares the PCVR protocol core and differs only in adapters
 
-Status: accepted. The login-profile builder and the redirect policy are shared today
-(`src/runtime/compat/login_profile.{h,cpp}`, `src/runtime/lifecycle/service_redirect.{h,cpp}`).
+Status: accepted. The login-profile builder, the EVR frame codec and the redirect policy are
+shared today (`src/runtime/compat/login_profile.{h,cpp}`, `src/runtime/compat/evr_codec.{h,cpp}`,
+`src/runtime/lifecycle/service_redirect.{h,cpp}`).
 The rest is not implemented; the work is tracked in #158 and the test regime is ADR 0004.
 
 ## Outcome
@@ -23,16 +24,33 @@ preset (`src/quest/CMakePresets.json`) uses the Quest-local vcpkg manifest, the 
 triplet and the NDK chainload at API 26. `nevr_quest_login_profile` compiles the shared login
 profile but is not linked into the sentinel.
 
-`HookImport` replaces the GOT slot a module uses for a symbol it imports. It cannot hook an
-arbitrary internal function of `libr15.so`. It has no detach, no duplicate-install guard and
-ignores the result of its last `mprotect` (tranche 1e of #158).
+`sentinel::GotHook` (`sentinel/got_hook.{h,cpp}`) replaces the GOT slot a module uses for a
+symbol it resolves at load time. It cannot hook an arbitrary internal function of `libr15.so`.
+A target names one slot by module, symbol and relocation type (`R_AARCH64_JUMP_SLOT` or
+`R_AARCH64_GLOB_DAT`), and optionally pins the build ID, the slot's link-time address and the
+expected original value. `Install` refuses, logs one structured line and leaves the slot, its
+page protection and the caller's original pointer unchanged when: the module is absent or its
+build ID differs; zero or several relocations match; the relocation has an addend, a misaligned
+slot or a slot outside a writable segment; a JUMP_SLOT module is not `BIND_NOW` (a lazy slot is
+overwritten by the resolver on first call); the slot holds neither the expected original nor an
+address in an executable mapping; or another handle owns the slot. `Remove` revalidates the
+module and writes the original back only if the slot still holds the hook. The page protection
+a write restores comes from `PT_GNU_RELRO`, not an assumption. Order and rollback are the shared
+`core/hook_lifecycle.h` contract that the MinHook path in `core/hooking.h` also uses.
+
+`sentinel/callback_thunk.h` gives each hooked function a typed entry point, original-call
+pointer and handler, catches `std::exception` from a handler, and falls back to the original.
+`sentinel/pinned_targets.h` holds the targets and callback types for the pinned artifact:
+`clock_gettime` (installed by `entry.cpp`), `CJson::TString` in both libraries, and the
+`SNSConfigRequestv24Send` and `GLOB_DAT` slots as fixtures. Only `clock_gettime` is installed.
+`SNSConfigRequestv24Send` has no thunk because its return type is not established.
 
 ## Architecture
 
 ```text
            shared source, compiled for both targets
  config key map/defaults | URL policy | login profile JSON
- EVR frame codec (later) | social state | EVR session routing
+  EVR frame codec         | social state | EVR session routing
                          ^
                          | typed inputs and events, no game pointers
              +-----------+-----------+
@@ -57,9 +75,12 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    depends on a game `config.json`, and a test shows any such file is ignored. Quest file
    discovery and precedence need their own measured design before use.
 2. **Identity and wire.** `login_profile.{h,cpp}` builds the login profile with
-   `nlohmann::json` and is compiled for Windows and Android. Windows EVR frame assembly stays
-   in `src/runtime/compat/ws_bridge.cpp` until a reviewed serializer and a server-parser round
-   trip replace it; Quest does not copy that assembly. The platform numbering the bridge sends
+   `nlohmann::json` and is compiled for Windows and Android. `src/runtime/compat/evr_codec.{h,cpp}` holds
+   the EVR frame parse and build functions, the LoginRequest payload layout
+   (`[UUID 16][platform 8][account 8][profile JSON][NUL]`), the bridge login platform
+   (`kBridgeLoginPlatform`, 4) and the bearer-replacing-path test. It has no Windows, Winsock or
+   logging dependency; `ws_bridge.cpp` and `src/quest` compile the same file, and Quest does not
+   copy that assembly. A reviewed serializer and a server-parser round trip remain open. The platform numbering the bridge sends
    is the server's wire enum; Quest identity values need binary or API evidence.
 3. **Session routing.** A pure state machine takes game-side and remote open/frame/close events
    and returns send, close and log actions. Connections have explicit identities so a
@@ -125,7 +146,7 @@ ELF's own symbol and relocation tables establish a GOT hook.
 The sentinel constructor therefore cannot assume the matchmaking module is loaded or install
 its slot. Its slot stays inactive until a post-load install is validated.
 
-`HookImport` reaches this seam by symbol name after the owning module is loaded, so there is no
+`GotHook` reaches this seam by symbol name after the owning module is loaded, so there is no
 need to detour `CNSUser::SendLogInRequest` (`libr15.so` `0x1932838`) or
 `CNSRadMatchmaking::ConnectMatchmaker` (`libpnsradmatchmaking.so` `0x1b2274`); both have unknown
 calling conventions and neither is a hook site. This covers config-string reads only. It does
@@ -189,8 +210,8 @@ convention, argument ownership, lifetime, call frequency and failure return.
 | Matchmaker endpoint and frame type | Verified matchmaking config reader or URI builder, or an imported connect boundary | A validated internal hook, or a separately byte-validated fixed string with size and xref proof. |
 | Social provider and callbacks | Quest provider vtable and runtime object evidence | Social stays disabled; Windows offsets never cross the ISA. |
 
-`HookImport` is suitable only for a module with a named `R_AARCH64_JUMP_SLOT`, `GLOB_DAT` or
-`ABS64` relocation and a confirmed signature. An internal hook needs a backend that validates
+`GotHook` is suitable only for a module with a named `R_AARCH64_JUMP_SLOT` or `R_AARCH64_GLOB_DAT`
+relocation, a build-ID-pinned ELF and a confirmed signature. An internal hook needs a backend that validates
 the exact prologue, relocates PC-relative instructions, handles branch range, builds an
 original-call trampoline, restores page permissions and instruction-cache coherence, and works
 under Android's security policy. No blind branch at a cached address. A third-party backend is

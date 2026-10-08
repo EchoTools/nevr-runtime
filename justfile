@@ -267,7 +267,7 @@ test-auth-unit:
     unset VCPKG_ROOT
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
-    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_winhttp_stub --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace
+    cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_winhttp_stub --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec
     cmake --build --preset {{ preset }} --target test_mic_dsp
     cmake --build --preset {{ preset }} --target test_game_image_guard
     bin="build/{{ preset }}/bin/test_xpid_patch.exe"
@@ -378,7 +378,7 @@ test-auth-unit:
         exit 1
     fi
     wine "$bin"
-    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_winhttp_stub test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace; do
+    for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_winhttp_stub test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
@@ -412,7 +412,56 @@ test-quest-shared:
         src/quest/tests/service_redirect_test.cpp \
         -o "$out/service_redirect_test"
     "$out/service_redirect_test"
-    echo "test-quest-shared: all redirect vectors pass on the host"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
+        src/runtime/compat/evr_codec.cpp \
+        src/runtime/compat/login_profile.cpp \
+        src/quest/tests/evr_codec_test.cpp \
+        -o "$out/evr_codec_test"
+    "$out/evr_codec_test"
+    echo "test-quest-shared: all redirect and EVR codec vectors pass on the host"
+
+# Quest hook backend on the host. Builds three fixture shared objects (BIND_NOW with
+# RELRO, BIND_NOW without RELRO, lazy) and runs src/quest/tests/got_hook_test.cpp,
+# which drives the production GotHook, CallbackThunk and core/hook_lifecycle.h
+# against them and against images built in memory. No NDK, no Android. Fail-close.
+test-quest-hooks:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-hooks-host"
+    mkdir -p "$out" /var/tmp/work-nevr-runtime/claude-main/hooks/host
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 src/quest/tests/got_fixture_provider.cpp \
+        -o "$out/libgotfx_provider.so"
+    link=(-fPIC -shared -Wl,--build-id=sha1 -L"$out" -lgotfx_provider -Wl,-rpath,'$ORIGIN')
+    "${cxx[@]}" "${link[@]}" -Wl,-z,now,-z,relro src/quest/tests/got_fixture_consumer.cpp \
+        -o "$out/libgotfx_consumer_now.so"
+    "${cxx[@]}" "${link[@]}" -Wl,-z,now,-z,norelro src/quest/tests/got_fixture_consumer.cpp \
+        -o "$out/libgotfx_consumer_norelro.so"
+    "${cxx[@]}" "${link[@]}" -Wl,-z,lazy,-z,norelro src/quest/tests/got_fixture_consumer.cpp \
+        -o "$out/libgotfx_consumer_lazy.so"
+    "${cxx[@]}" src/quest/tests/got_hook_test.cpp src/quest/sentinel/got_hook.cpp \
+        src/quest/sentinel/hook_log.cpp -o "$out/got_hook_test" -ldl -pthread
+    "$out/got_hook_test" "$out"
+
+# Resolve the pinned Quest targets in the real libr15.so / libpnsradmatchmaking.so
+# (docs/adr/0003). Extracts both from the pinned APK, checks their SHA-256, and runs
+# src/quest/tests/got_pinned_test.cpp. Fail-close, including when the APK is absent:
+# it is a 58 MB artifact that is not in the repository, so this is not part of
+# `just verify`.
+test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    apk="{{ apk }}"
+    [ -f "$apk" ] || { echo "test-quest-hooks-pinned: pinned APK not found: $apk" >&2; exit 1; }
+    out="build/quest-hooks-pinned"
+    rm -rf "$out"; mkdir -p "$out/lib"
+    unzip -o -q "$apk" lib/arm64-v8a/libr15.so lib/arm64-v8a/libpnsradmatchmaking.so -d "$out/lib"
+    echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $out/lib/lib/arm64-v8a/libr15.so" | sha256sum -c -
+    echo "36236ab1df5783da57c064b0fbccc3a61c0e1d150c208022fbfc9cd6e5ed60ee  $out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" | sha256sum -c -
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel \
+        src/quest/tests/got_pinned_test.cpp src/quest/sentinel/got_hook.cpp \
+        src/quest/sentinel/hook_log.cpp -o "$out/got_pinned_test" -ldl
+    "$out/got_pinned_test" "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so"
 
 # --- Verify (closed-loop gate) ---
 
@@ -432,6 +481,7 @@ verify:
     cmake --build --preset {{ preset }}
     just test-auth-unit
     just test-quest-shared
+    just test-quest-hooks
     python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
