@@ -65,9 +65,115 @@ directories and the libcurl/OpenSSL stack, that the process name is the package 
 to the app-internal directory (and that Quest multi-user uses `/data/user/<n>`), and how the player
 is shown the login link.
 
-`HookImport` replaces the GOT slot a module uses for a symbol it imports. It cannot hook an
-arbitrary internal function of `libr15.so`. It has no detach, no duplicate-install guard and
-ignores the result of its last `mprotect` (tranche 1e of #158).
+`sentinel::GotHook` (`sentinel/got_hook.{h,cpp}`) replaces the GOT slot a module uses for a
+symbol it resolves at load time. It cannot hook an arbitrary internal function of `libr15.so`.
+A target names one slot by module, symbol and relocation type (`R_AARCH64_JUMP_SLOT` or
+`R_AARCH64_GLOB_DAT`), and optionally pins the build ID, the slot's link-time address and the
+expected original value. `Install` refuses, logs one structured line and leaves the slot, its
+page protection and the caller's original pointer unchanged when: the module is absent or its
+build ID differs; zero or several relocations match; the relocation has an addend, a misaligned
+slot or a slot outside a writable segment; a JUMP_SLOT module is not `BIND_NOW` (a lazily bound
+slot starts as a lazy-binding stub, not the target; the pinned libraries are `BIND_NOW` and Bionic's
+lazy behavior is unmeasured, so it is refused); the slot holds neither the expected original nor an
+address in an executable mapping; or another handle owns the slot. `Remove` revalidates the
+module and writes the original back only if the slot still holds the hook (compare-and-swap).
+Every write runs under one process-wide lock, and the protection it restores is read from
+`/proc/self/maps` under that lock (`PT_GNU_RELRO` is the fallback). Log lines are JSON objects
+(`hook_log.h`). Order and rollback are the shared
+`core/hook_lifecycle.h` contract that the MinHook path in `core/hooking.h` also uses.
+
+`sentinel/callback_thunk.h` gives each hooked function a typed entry point, original-call
+pointer and handler; the entry reads the original once per call.
+
+**No exception crosses the thunk.** Measured: libr15.so and libpnsovr.so NEED `libc++_shared.so`,
+which is a libgcc-style unwinder build (`.comment`: GCC 4.9.x, clang 5.0) exporting
+`_Unwind_Find_FDE`, `_Unwind_GetCFA`, `_Unwind_GetIP`, `_Unwind_RaiseException`,
+`_Unwind_Resume`, `__gxx_personality_v0` and `__cxa_throw`. The sentinel does not NEED it; it
+links LLVM libunwind and libc++abi statically, with `_Unwind_Resume`, `_Unwind_GetIP`,
+`__unw_getcontext`, `__gxx_personality_v0`, `__cxa_throw` and `__cxa_begin_catch` as local
+symbols, and its `.eh_frame` has a personality-bearing `zPLR` CIE and a personality-free `zR`
+CIE. A sentinel frame with an LSDA would run the sentinel's personality on the game's unwind
+context (inferred from the layouts, not run on a device); the reverse direction is the same. The
+contract:
+
+1. A frame that is live while game code runs under a hook must be personality-free (`zR` CIE):
+   no try/catch, no object with a destructor. Live frames are the thunk's entry, the handler, and
+   any sentinel function the handler calls that is still on the stack when it calls the original.
+   A function that runs entirely before or after the call into the game is not live during it.
+2. Translation units that include `callback_thunk.h` are built with `-fno-exceptions` (the header
+   refuses otherwise), so the entry has no landing pad and a game exception passes through it on
+   CFI alone.
+3. A hook is a record: `NEVR_HOOK_RECORD(name, Thunk, handler)` emits `{entry, handler}` into the
+   `nevr_hook_records` section and `Thunk::Arm` takes only a record. `HookRecord` has no public
+   constructor, and `Arm` refuses (and logs) a record whose address is not inside that section, so a
+   record built at run time cannot arm a handler the sensor never saw. Handlers are `noexcept`
+   function pointers. Under `-fno-exceptions` `noexcept` is a type marker only; it adds no
+   terminate landing pad. A callee of a handler that can throw must contain the exception inside
+   sentinel-only frames that are not live across a call into game code.
+4. A hook is installed only through `InstallThunk<Thunk>` (`hook_install.h`), which accepts only a
+   `CallbackThunk` instantiation (a `static_assert`; a fake type with `EntryAddress()` does not
+   compile); the raw `GotHook::Install` taking any function pointer is private and reachable only
+   through the test access class. `just test-quest-hooks` compiles snippets that break each
+   type-level rule and requires them to fail with the message that names the rule;
+   `TestRawInstallOnlyInTests` reads every `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp` and `.inc` file under
+   `src/` and fails if a file outside a `tests/` directory names the test access class or includes
+   (resolved relative to the including file, to `src/` and to `src/quest/sentinel`) anything under
+   `src/quest/tests`, recursively.
+5. A function a handler calls directly and that can be on the stack across the call into game
+   code must be personality-free, and must not make an indirect call (function pointer, virtual,
+   `std::function`) into code built with exceptions.
+6. `tests/quest` `TestHookFramesCarryNoPersonality` checks the built library. It requires exactly
+   one record per `CallbackThunk` entry (an entry without one fails), starts from each record's
+   entry and handler, follows direct `bl`/`b` edges and fails on any reachable function under a
+   personality-bearing CIE. There is no allowlist: a hook does not log, so no logging code is
+   reachable from it. Its limits: it does not follow indirect calls (rule 5 is a rule there, not
+   a check), and a hook installed some other way is invisible to it, which is what rule 4 and
+   `TestRawInstallOnlyInTests` prevent. The checks catch honest mistakes by packages that use the
+   API; a macro that forwards to the record access class, or a test-directory wrapper that
+   production includes through a path the scan does not recognise, gets around them, and the
+   `#error` in `callback_thunk.h` is advisory (`#undef __cpp_exceptions` defeats it) while the
+   frame sensor on the built library is the real check. `TestBackendBuiltWithoutExceptions` pins the backend
+   (`GotHook`, `ResolveSlot`, the logger and the reporter) to `zR`, matching the flag the host
+   tests use, and `TestStlContract` fails if the sentinel starts linking `libc++_shared.so`.
+
+A hook never logs on the game's call path (the log call is not async-signal-safe): it increments
+an atomic counter, and a reporter thread (`hook_report.h`, created from the constructor before the
+first hook is installed) logs "reporter_started", then a counter's first change within the first
+10 seconds, then "never_fired" once for each counter still zero when that window closes (the hook
+is installed and the game never called it), and from then on one pass a minute that logs a counter
+only if it changed. The counter table holds 32 counters for the whole program, and every
+`RegisterReportCounter` call must come before `StartReporter` (a later registration, or the 33rd, is
+refused and logged as `register_refused`). The thread ends with the process; creating it from a constructor on a Quest is
+inferred from the Bionic main-branch source and has not been tried on a headset. A slot where a
+failed install left the sentinel's entry possibly reachable through another writer's hook stays
+reserved for the process and a retry is refused with its own status, `slot_poisoned`;
+`ReleasePoisonedSlotsIn` gives such a reservation back only for an address that
+`/proc/self/maps` shows unmapped after one complete pass (a failed open, a read error or an empty
+file reads as "unknown" and keeps the reservation; each outcome is logged), and nothing in the sentinel calls it because the game's libraries
+are never unloaded. Log lines go to logcat, which does not meet the durable-log rule in
+`AGENTS.md`; the planned sink is the sentinel's disk log.
+
+Whether the declared hook targets can throw, from the pinned ELFs: `CJson::TString`
+(`libr15.so` `0xfa2e7c`, `libpnsradmatchmaking.so` `0x209484`): ReVault's callee graph (partial:
+146967 of 178574 functions) lists no throw or allocation entry, and a direct-call scan of the ELF
+(22 functions to depth 7, no indirect call in the set) finds no PLT call to `__cxa_throw`,
+`__cxa_allocate_exception`, `__cxa_rethrow`, `operator new`/`delete`, `malloc`/`calloc`/`realloc`
+or `abort` in libr15's own code; its calls go to engine imports (`CMemoryContext`,
+`CMemory::Fill`, `CFixedString::SPrintF`, `NWriteLog::WriteLog`, `json_string_value`) whose bodies
+were not scanned. `CNSUser::SendLogInRequest` (`libpnsovr.so` `0x382a4c`, 464 bytes) calls
+`CJson::SetInt`, `SNSLogInRequestv24Send`, `CTcpBroadcaster::ConnectionPeer` and
+`STcpPeer::operator` through imports and makes one indirect call (`blr x9` at `0x382b9c`); it
+cannot be shown non-throwing. Neither is established as exception-free, which is why the contract
+does not depend on it.
+
+The sentinel exports only `nevr_sentinel_marker` and `JNI_OnLoad` (`TestExportAllowlist`), has no
+`thread_local` state of its own (`TestNoEmulatedTLSInHookPath`), and compiles the hook backend
+once into `nevr_quest_got_hook`, which every Quest target links (`TestBackendCompiledOnce`).
+
+`sentinel/pinned_targets.h` holds the targets and callback types for the pinned artifact:
+`clock_gettime` (installed by `entry.cpp`), `CJson::TString` in both libraries, and the
+`SNSConfigRequestv24Send` and `GLOB_DAT` slots as fixtures. Only `clock_gettime` is installed.
+`SNSConfigRequestv24Send` has no thunk because its return type is not established.
 
 ## Architecture
 
@@ -167,7 +273,7 @@ ELF's own symbol and relocation tables establish a GOT hook.
 The sentinel constructor therefore cannot assume the matchmaking module is loaded or install
 its slot. Its slot stays inactive until a post-load install is validated.
 
-`HookImport` reaches this seam by symbol name after the owning module is loaded, so there is no
+`GotHook` reaches this seam by symbol name after the owning module is loaded, so there is no
 need to detour `CNSUser::SendLogInRequest` (`libr15.so` `0x1932838`) or
 `CNSRadMatchmaking::ConnectMatchmaker` (`libpnsradmatchmaking.so` `0x1b2274`); both have unknown
 calling conventions and neither is a hook site. This covers config-string reads only. It does
@@ -231,8 +337,8 @@ convention, argument ownership, lifetime, call frequency and failure return.
 | Matchmaker endpoint and frame type | Verified matchmaking config reader or URI builder, or an imported connect boundary | A validated internal hook, or a separately byte-validated fixed string with size and xref proof. |
 | Social provider and callbacks | Quest provider vtable and runtime object evidence | Social stays disabled; Windows offsets never cross the ISA. |
 
-`HookImport` is suitable only for a module with a named `R_AARCH64_JUMP_SLOT`, `GLOB_DAT` or
-`ABS64` relocation and a confirmed signature. An internal hook needs a backend that validates
+`GotHook` is suitable only for a module with a named `R_AARCH64_JUMP_SLOT` or `R_AARCH64_GLOB_DAT`
+relocation, a build-ID-pinned ELF and a confirmed signature. An internal hook needs a backend that validates
 the exact prologue, relocates PC-relative instructions, handles branch range, builds an
 original-call trampoline, restores page permissions and instruction-cache coherence, and works
 under Android's security policy. No blind branch at a cached address. A third-party backend is
