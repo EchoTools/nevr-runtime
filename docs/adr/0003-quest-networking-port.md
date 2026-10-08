@@ -67,8 +67,9 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    feature name, never by value, to logcat tag `NEVR-Sentinel` and to `nevr-sentinel.log` in the
    same directory, as one JSON object per line. A value the file gives as the empty string is
    rejected and cannot clear an embedded default; a key given twice in one object takes the
-   last value and logs a warning. The sentinel constructor reads the file once: a non-blocking
-   open, a regular-file check and a 64 KiB bound, with no network. `sentinel_host_test` runs
+   last value and logs a warning. The sentinel constructor reads the file once (contract 4 states the constructor's I/O
+   limits). Warnings about the file are capped at 32 lines plus one suppression line, and
+   repeated duplicate keys collapse to one line per name. `sentinel_host_test` runs
    the constructor-then-main order, the non-regular-file paths and the log-failure paths on the
    host; the read has not been run on a headset.
 2. **Identity and wire.** `login_profile.{h,cpp}` builds the login profile with
@@ -86,7 +87,14 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
 4. **Game hooks.** The Android adapter records the ELF build ID or SHA-256, module and load
    bias, validates each instruction, string and relocation, then installs a typed callback.
    Callbacks use bounded copies, preserve object ownership and return semantics, never throw
-   through the game ABI, and defer networking and file I/O out of loader constructors. An
+   through the game ABI, and defer networking and file I/O out of loader constructors. The one
+   exception is the sentinel constructor's startup record: it opens `nevr-quest.json` read-only
+   and `nevr-sentinel.log` append-only in the app's external files directory, each opened
+   non-blocking and required to be a regular file, with a 64 KiB read bound and a 1 MiB log
+   rotation bound, and nothing else. No network, TLS or hook install happens in a constructor.
+   The constructor cannot throw: the resolution catch block allocates nothing. The remaining
+   risk is a stall in the storage layer of the headset (FUSE-backed external storage); it has not
+   been measured on a device. An
    unknown binary, a failed validation or a partial install leaves the original call intact
    and emits one structured error.
 5. **Social.** Portable roster, party and name rules in

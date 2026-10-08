@@ -1,7 +1,8 @@
 // Host test for the sentinel's configuration activation and logging (activation.cpp,
-// sentinel_log.cpp) against a stand-in for liblog. Link order matters on purpose: this file comes
-// first, so its constructor runs before activation.cpp's static initializers, the same order as
-// entry.cpp's constructor relative to the sentinel sources.
+// sentinel_log.cpp) against a stand-in for liblog. HostCtor has constructor priority 102, which
+// the loader runs before every default-priority static initializer, so it runs before
+// activation.cpp's regardless of link order, the same relation as entry.cpp's constructor to the
+// sentinel sources' initializers.
 //
 // Compile with -DNEVR_QUEST_FILES_DIR="<dir>" (a scratch directory this test creates and removes).
 #include "activation.h"
@@ -12,13 +13,17 @@
 #include <cerrno>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <csignal>
 #include <fstream>
 #include <iterator>
 #include <string>
 #include <vector>
 
+#include <dirent.h>
 #include <fcntl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -53,7 +58,30 @@ std::vector<Line>& Captured() {
 // dynamic initializers.
 std::string Dir() { return NEVR_QUEST_FILES_DIR; }
 const char* const kSecrets[] = {"FILE-SECRET-KEY-31337", "FILE-SERVER-SECRET-42042",
-                                "STUB-EMBEDDED-API-SECRET-5521", "STUB-EMBEDDED-SERVER-SECRET-9973"};
+                                "STUB-EMBEDDED-API-SECRET-5521", "STUB-EMBEDDED-SERVER-SECRET-9973",
+                                "file.example", "stub-emb.example"};
+
+// Every line is checked the moment it is emitted, for the whole run, not at fixed points.
+std::vector<std::string>& Leaks() {
+  static std::vector<std::string> leaks;
+  return leaks;
+}
+
+void Record(int prio, const std::string& text) {
+  for (const char* secret : kSecrets) {
+    if (text.find(secret) != std::string::npos) Leaks().push_back(text);
+  }
+  Captured().push_back({prio, text});
+}
+
+std::vector<std::string> ListDir() {
+  std::vector<std::string> names;
+  if (DIR* d = ::opendir(Dir().c_str())) {
+    while (const dirent* e = ::readdir(d)) names.push_back(e->d_name);
+    ::closedir(d);
+  }
+  return names;
+}
 
 std::string ReadAll(const std::string& path) {
   std::ifstream in(path, std::ios::binary);
@@ -73,8 +101,21 @@ int Count(const std::string& needle) {
   return n;
 }
 
+// A blocked constructor or test must fail the run, not hang it: armed before every other constructor.
+void OnAlarm(int) {
+  static const char msg[] = "sentinel_host_test: TIMEOUT, something blocked\n";
+  const ssize_t ignored = ::write(2, msg, sizeof(msg) - 1);
+  (void)ignored;
+  ::_exit(3);
+}
+
+__attribute__((constructor(101))) void ArmAlarm() {
+  std::signal(SIGALRM, OnAlarm);
+  ::alarm(30);
+}
+
 // Mirrors entry.cpp: the ELF constructor resolves the configuration before main.
-__attribute__((constructor)) void HostCtor() {
+__attribute__((constructor(102))) void HostCtor() {
   ::mkdir(Dir().c_str(), 0755);
   // Stale leftovers from an interrupted earlier run.
   for (const char* stale : {"/nevr-sentinel.log", "/fifo-config", "/big.json"}) ::unlink((Dir() + stale).c_str());
@@ -121,18 +162,20 @@ void ConfigSurvivesStaticInitialisation() {
   CHECK(Count("feature=login requested=on effective=on") == 1);
 }
 
+void ScanDiskLogForValues(const char* when) {
+  const std::string disk = ReadAll(Dir() + "/nevr-sentinel.log");
+  for (const char* secret : kSecrets) {
+    if (disk.find(secret) != std::string::npos) {
+      std::fprintf(stderr, "disk log holds a configured value (%s) at: %s\n", secret, when);
+      ++g_failures;
+    }
+  }
+}
+
 void NoLogLineCarriesAValue() {
   CHECK(!Captured().empty());
-  for (const Line& l : Captured()) {
-    for (const char* secret : kSecrets) CHECK(l.text.find(secret) == std::string::npos);
-    CHECK(l.text.find("file.example") == std::string::npos);
-    CHECK(l.text.find("stub-emb.example") == std::string::npos);
-  }
-  const std::string disk = ReadAll(Dir() + "/nevr-sentinel.log");
-  CHECK(!disk.empty());
-  for (const char* secret : kSecrets) CHECK(disk.find(secret) == std::string::npos);
-  CHECK(disk.find("file.example") == std::string::npos);
-  CHECK(disk.find("FILE-SECRET") == std::string::npos);
+  ScanDiskLogForValues("after the constructor");
+  CHECK(!ReadAll(Dir() + "/nevr-sentinel.log").empty());
 }
 
 void DiskLogIsOneJsonObjectPerLine() {
@@ -195,6 +238,17 @@ void ReadConfigFileNeverBlocksOnNonRegularFiles() {
   const nevr_quest::ResolvedConfig rejected = sentinel::ResolveFromDisk(big);
   CHECK(rejected.socketUri.source == nevr_quest::Source::kEmbedded && !rejected.effective.redirect);
   ::unlink(big.c_str());
+
+  // Rejected and invalid-value files that carry configured values: none may reach a log line.
+  const std::string bad = Dir() + "/bad.json";
+  WriteFile(bad, R"({"nevr_http_key":"FILE-SECRET-KEY-31337","nevr_server_key":"FILE-SERVER-SECRET-42042")");
+  (void)sentinel::ResolveFromDisk(bad);
+  WriteFile(bad, R"({"nevr_socket_uri":"http://file.example/wrong","nevr_http_key":"has space FILE-SECRET-KEY-31337"})");
+  (void)sentinel::ResolveFromDisk(bad);
+  WriteFile(bad, R"({"FILE-SECRET-KEY-31337":1,"features":{"login":"FILE-SERVER-SECRET-42042"}})");
+  (void)sentinel::ResolveFromDisk(bad);
+  ::unlink(bad.c_str());
+  ScanDiskLogForValues("after rejected files");
 }
 
 void WriteAllRetriesAndReportsFailure() {
@@ -211,6 +265,90 @@ void WriteAllRetriesAndReportsFailure() {
   CHECK(!sentinel::WriteAll(-1, payload.data(), payload.size(), &err, NoSpace) && err == ENOSPC);
 }
 
+void DiskLogAtAFifoNeverBlocks() {
+  sentinel::CloseDiskLog();
+  ::mkdir(Dir().c_str(), 0755);
+  ::unlink((Dir() + "/nevr-sentinel.log").c_str());
+  const std::string fifo = Dir() + "/nevr-sentinel.log";
+  CHECK(::mkfifo(fifo.c_str(), 0600) == 0);
+
+  // No reader: the non-blocking open fails with ENXIO instead of blocking.
+  Captured().clear();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "fifo line one");
+  CHECK(Count("fifo line one") == 1);
+
+  // A reader present: the open succeeds, the type check refuses it, and it is not retried.
+  sentinel::CloseDiskLog();
+  const int reader = ::open(fifo.c_str(), O_RDONLY | O_NONBLOCK);
+  CHECK(reader >= 0);
+  Captured().clear();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "fifo line two");
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "fifo line three");
+  CHECK(Count("fifo line two") == 1 && Count("fifo line three") == 1);
+  CHECK(Count("on-disk log open failed: path is not a regular file") == 1);
+  char buf[64];
+  CHECK(::read(reader, buf, sizeof(buf)) <= 0);  // nothing was written into the FIFO
+  ::close(reader);
+  ::unlink(fifo.c_str());
+  sentinel::CloseDiskLog();
+}
+
+void TornRecordsStayOnTheirOwnLine() {
+  static std::string out;
+  out.clear();
+  static int calls;
+  calls = 0;
+  const auto tearThenSucceed = [](int, const void* data, std::size_t n) -> ssize_t {
+    if (calls++ == 0) {
+      out.append(static_cast<const char*>(data), 5);
+      return 5;
+    }
+    if (calls == 2) {
+      errno = ENOSPC;
+      return -1;
+    }
+    out.append(static_cast<const char*>(data), n);
+    return static_cast<ssize_t>(n);
+  };
+  bool torn = false;
+  int err = 0;
+  const std::string first = nevr_quest::FormatDiskLogLine(nevr_quest::LogLevel::kInfo, 1, "first record");
+  const std::string second = nevr_quest::FormatDiskLogLine(nevr_quest::LogLevel::kInfo, 2, "second record");
+  CHECK(!sentinel::WriteRecord(-1, first, &torn, &err, tearThenSucceed) && torn && err == ENOSPC);
+  CHECK(sentinel::WriteRecord(-1, second, &torn, &err, tearThenSucceed) && !torn);
+  // The fragment is alone on its line and the next record parses.
+  const std::size_t nl = out.find('\n');
+  CHECK(nl == 5);
+  const std::size_t end = out.find('\n', nl + 1);
+  CHECK(end != std::string::npos);
+  const nlohmann::json j = nlohmann::json::parse(out.substr(nl + 1, end - nl - 1), nullptr, false);
+  CHECK(j.is_object() && j.value("msg", "") == "second record");
+}
+
+void LargeLogIsRotatedNotDeleted() {
+  sentinel::CloseDiskLog();
+  ::mkdir(Dir().c_str(), 0755);
+  const std::string log = Dir() + "/nevr-sentinel.log";
+  WriteFile(log, std::string(static_cast<std::size_t>(sentinel::kMaxDiskLogBytes) + 1, 'x'));
+  Captured().clear();
+  sentinel::Emit(nevr_quest::LogLevel::kInfo, "after rotation");
+  CHECK(ReadAll(log).size() < 1024);
+  CHECK(ReadAll(log).find("after rotation") != std::string::npos);
+  int rotated = 0;
+  std::size_t rotatedBytes = 0;
+  for (const std::string& name : ListDir()) {
+    if (name.rfind("nevr-sentinel.", 0) == 0 && name != "nevr-sentinel.log") {
+      ++rotated;
+      rotatedBytes = ReadAll(Dir() + "/" + name).size();
+      ::unlink((Dir() + "/" + name).c_str());
+    }
+  }
+  CHECK(rotated == 1);
+  CHECK(rotatedBytes == static_cast<std::size_t>(sentinel::kMaxDiskLogBytes) + 1);
+  sentinel::CloseDiskLog();
+  ::unlink(log.c_str());
+}
+
 void EachDiskFailureClassIsReportedOnce() {
   sentinel::CloseDiskLog();
   ::unlink((Dir() + "/nevr-sentinel.log").c_str());
@@ -224,12 +362,20 @@ void EachDiskFailureClassIsReportedOnce() {
   CHECK(Count("first line") == 1 && Count("second line") == 1);
 
   CHECK(::mkdir(Dir().c_str(), 0755) == 0);
-  CHECK(::symlink("/dev/full", (Dir() + "/nevr-sentinel.log").c_str()) == 0);
+  // A regular file that refuses every write: the file-size limit is zero (EFBIG once SIGXFSZ is ignored).
+  std::signal(SIGXFSZ, SIG_IGN);
+  struct rlimit saved {};
+  CHECK(::getrlimit(RLIMIT_FSIZE, &saved) == 0);
+  struct rlimit zero = saved;
+  zero.rlim_cur = 0;
+  CHECK(::setrlimit(RLIMIT_FSIZE, &zero) == 0);
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "third line");
   sentinel::Emit(nevr_quest::LogLevel::kInfo, "fourth line");
+  CHECK(::setrlimit(RLIMIT_FSIZE, &saved) == 0);
   CHECK(Count("on-disk log write failed") == 1);
   CHECK(Count("on-disk log open failed") == 1);
   CHECK(Count("third line") == 1 && Count("fourth line") == 1);
+  sentinel::CloseDiskLog();
   ::unlink((Dir() + "/nevr-sentinel.log").c_str());
   ::rmdir(Dir().c_str());
 }
@@ -239,7 +385,7 @@ void EachDiskFailureClassIsReportedOnce() {
 extern "C" {
 
 int __android_log_write(int prio, const char*, const char* text) {
-  Captured().push_back({prio, text});
+  Record(prio, text);
   return 1;
 }
 
@@ -249,21 +395,26 @@ int __android_log_print(int prio, const char*, const char* fmt, ...) {
   va_start(args, fmt);
   std::vsnprintf(buf, sizeof(buf), fmt, args);
   va_end(args);
-  Captured().push_back({prio, buf});
+  Record(prio, buf);
   return 1;
 }
 
 }  // extern "C"
 
 int main() {
-  alarm(30);  // a regression that blocks on a FIFO must fail, not hang
   ConfigSurvivesStaticInitialisation();
   NoLogLineCarriesAValue();
   DiskLogIsOneJsonObjectPerLine();
   FormatEscapesHostileMessages();
   ReadConfigFileNeverBlocksOnNonRegularFiles();
   WriteAllRetriesAndReportsFailure();
+  TornRecordsStayOnTheirOwnLine();
+  LargeLogIsRotatedNotDeleted();
   EachDiskFailureClassIsReportedOnce();
+  DiskLogAtAFifoNeverBlocks();
+  ::rmdir(Dir().c_str());
+  CHECK(Leaks().empty());
+  for (const std::string& leak : Leaks()) std::fprintf(stderr, "a log line carried a configured value: %s\n", leak.c_str());
   if (g_failures != 0) {
     std::fprintf(stderr, "sentinel_host_test: %d check(s) failed\n", g_failures);
     return 1;

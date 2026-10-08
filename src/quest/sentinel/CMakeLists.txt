@@ -33,3 +33,6 @@ add_custom_command(TARGET ovrplatformloader POST_BUILD
           $<TARGET_FILE:ovrplatformloader>
   COMMENT "patchelf: add DT_NEEDED libovrplatformloader_orig.so (forward-to-original)"
   VERBATIM)
+
+# The config, activation and log sources build warning-clean (the host test builds them the same way).
+set_source_files_properties(activation.cpp sentinel_log.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror")

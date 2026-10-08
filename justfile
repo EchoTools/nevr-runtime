@@ -88,6 +88,7 @@ configure-android:
 # Build the Android arm64-v8a crash-reporter .so
 build-android: configure-android
     ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-arm64 -j
+    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" build/android-arm64/sentinel/CMakeFiles/ovrplatformloader.dir/*.o
 
 # Build with full compiler output
 verbose-build-android: configure-android
@@ -419,9 +420,8 @@ test-quest-shared:
         src/quest/tests/quest_config_test.cpp \
         -o "$out/quest_config_test"
     "$out/quest_config_test"
-    # Sentinel activation + logging against a stand-in liblog. The test object is listed first on
-    # purpose: its constructor must run before activation.cpp's static initializers, as
-    # entry.cpp's does.
+    # Sentinel activation + logging against a stand-in liblog. The test's constructor has priority
+    # 102, so it runs before activation.cpp's static initializers whatever the link order.
     files="$out/sentinel-files"
     rm -rf "$files"
     g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/tests/stub -Isrc/quest/sentinel \
