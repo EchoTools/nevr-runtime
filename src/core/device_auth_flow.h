@@ -21,7 +21,8 @@ inline constexpr std::chrono::steady_clock::duration kDeviceAuthLifetime = std::
 inline constexpr std::chrono::steady_clock::duration kDeviceAuthPollInterval = std::chrono::seconds(3);
 
 // open_browser returns a platform status; values above this mean "accepted"
-// (the Windows ShellExecute convention, which the Windows module keeps).
+// (the ShellExecute convention: Windows returns it directly, Quest's link presenter
+// returns a value above it on success and 0 on failure).
 inline constexpr intptr_t kBrowserOpenAcceptedAbove = 32;
 
 struct DeviceFlowOps {

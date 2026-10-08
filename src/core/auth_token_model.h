@@ -5,8 +5,8 @@
 // Platform-neutral token model: the cached-credential record, JWT claim
 // decoding, and the expiry rules. No Windows headers, no logging, no file or
 // network I/O, so the Windows runtime and the Quest (Android/NDK) shim compile
-// the same source. Extracted from core/auth_token.h without change to the
-// Windows behaviour; the cache file location/ACL handling stays there.
+// the same source. The Windows cache-file location and ACL handling is in
+// core/auth_token.h.
 
 #include <nlohmann/json.hpp>
 

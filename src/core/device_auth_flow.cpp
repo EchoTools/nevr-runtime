@@ -29,7 +29,7 @@ DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& 
   // what the open returned, with the code masked (ShellExecute reports success above 32).
   log(LogLevel::Info,
       std::string("[NEVR.AUTH] browser open requested url=") + login_url + "?code=<" +
-          std::to_string(code.size()) + " chars masked> shellexecute_result=" + std::to_string(browserResult) +
+          std::to_string(code.size()) + " chars masked> open_result=" + std::to_string(browserResult) +
           (browserResult <= kBrowserOpenAcceptedAbove ? " (failed)" : " (accepted)"));
   int uiResult = 1;
   if (browserResult <= kBrowserOpenAcceptedAbove) {

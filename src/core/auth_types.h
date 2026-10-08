@@ -32,6 +32,9 @@ class HttpClient {
   // POSTs `body` as application/json. Must be bounded in time and must verify
   // the server certificate. Must not throw.
   virtual HttpResponse PostJson(const std::string& url, const std::string& body) = 0;
+  // Called from another thread at shutdown: a PostJson in flight returns promptly with
+  // transport_ok=false, and later calls fail at once. Default: nothing to interrupt.
+  virtual void Interrupt() {}
 };
 
 class Clock {

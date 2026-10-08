@@ -15,6 +15,7 @@ const char* RefreshOutcomeName(RefreshOutcome outcome) {
     case RefreshOutcome::Refreshed: return "refreshed";
     case RefreshOutcome::NoRefreshToken: return "no_refresh_token";
     case RefreshOutcome::TransportFailed: return "transport_failed";
+    case RefreshOutcome::Denied: return "denied";
     case RefreshOutcome::Rejected: return "rejected";
     case RefreshOutcome::Malformed: return "malformed";
     case RefreshOutcome::NoAccessToken: return "no_access_token";
@@ -54,7 +55,8 @@ RefreshOutcome ApplyRefreshResponse(CachedAuthToken& auth, const HttpResponse& r
     Emit(log, LogLevel::Warning,
          "[NEVR.AUTH] token refresh rejected http_status=" + std::to_string(response.status) +
              " response_bytes=" + std::to_string(response.body.size()));
-    return RefreshOutcome::Rejected;
+    const bool permanent = response.status == 400 || response.status == 401 || response.status == 403;
+    return permanent ? RefreshOutcome::Denied : RefreshOutcome::Rejected;
   }
 
   try {
@@ -92,9 +94,15 @@ RefreshOutcome ApplyRefreshResponse(CachedAuthToken& auth, const HttpResponse& r
       auth.refresh_token_expiry = refresh_expiry;
     }
     return RefreshOutcome::Refreshed;
-  } catch (const nlohmann::json::exception&) {
+  } catch (const nlohmann::json::parse_error&) {
     Emit(log, LogLevel::Warning,
          "[NEVR.AUTH] token refresh response was not valid JSON \xE2\x80\x94 treating as failed refresh");
+    return RefreshOutcome::Malformed;
+  } catch (const nlohmann::json::exception&) {
+    // Valid JSON of the wrong shape ([] or {"access_token":1}): value() throws type_error.
+    Emit(log, LogLevel::Warning,
+         "[NEVR.AUTH] token refresh response was valid JSON of an unexpected shape \xE2\x80\x94 treating as "
+         "failed refresh");
     return RefreshOutcome::Malformed;
   }
 }
