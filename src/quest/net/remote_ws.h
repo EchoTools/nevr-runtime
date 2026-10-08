@@ -114,7 +114,8 @@ class ConnectorRemoteTransport final : public SessionRouter::RemoteTransport {
   ConnectorRemoteTransport& operator=(const ConnectorRemoteTransport&) = delete;
 
   void Attach(SessionRouter::Router* router) { router_ = router; }
-  // Ends every session (close frame, no router callbacks) and joins the workers.
+  // Ends every session (close frame, no router callbacks) and joins the workers. A worker still inside
+  // WsConnector::Connect finishes that call first, so Stop can wait up to the connector's connect timeout.
   void Stop();
 
   bool Open(const SessionRouter::RemoteOpenRequest& request) override;
