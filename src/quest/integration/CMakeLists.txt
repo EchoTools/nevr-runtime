@@ -22,6 +22,7 @@ add_library(nevr_quest_integration STATIC
   post_load.cpp
   identity_source.cpp
   stage_log.cpp
+  bridge_uri.cpp
   frame_tap.cpp
   tapped_transports.cpp
   integrated_bridge.cpp

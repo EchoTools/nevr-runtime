@@ -57,6 +57,9 @@ class IntegratedBridge {
   std::uint16_t Start();
   void Stop();
   std::uint16_t port() const { return server_->port(); }
+  // The value the game must be redirected to: "ws://127.0.0.1:<port>/<token>/" with the per-start access
+  // token the listener requires (quest_net::LoopbackGameServer::LoopbackUri). Never log it.
+  std::string LoopbackUri() const { return server_->LoopbackUri(); }
 
   // A request toward the service on the login session (see TappedRemoteTransport::SendToLogin).
   bool SendToLogin(std::string_view frame) { return remotes_tap_->SendToLogin(frame); }

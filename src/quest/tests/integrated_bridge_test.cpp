@@ -151,12 +151,19 @@ struct Client {
     }
     return out;
   }
-  bool Upgrade() {
-    Write("GET /x HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+  bool Upgrade(const std::string& path = "/x") {
+    Write("GET " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
           "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n");
     return Read(50).rfind("HTTP/1.1 101", 0) == 0;
   }
 };
+
+// "/<token>/" out of "ws://127.0.0.1:<port>/<token>/".
+std::string PathOf(const std::string& uri) {
+  const std::size_t scheme = uri.find("://");
+  const std::size_t slash = uri.find('/', scheme == std::string::npos ? 0 : scheme + 3);
+  return slash == std::string::npos ? std::string() : uri.substr(slash);
+}
 
 struct Observed {
   std::mutex mutex;
@@ -211,9 +218,11 @@ void TestLoginRelayTapAndSideChannel() {
 
   Client config(port), login(port);
   QCHECK(config.fd >= 0 && login.fd >= 0);
-  QCHECK(config.Upgrade());
+  const std::string path = PathOf(bridge.LoopbackUri());
+  QCHECK(!path.empty() && path.size() > 3);
+  QCHECK(config.Upgrade(path));
   QCHECK(connector.WaitConnects(1));
-  QCHECK(login.Upgrade());
+  QCHECK(login.Upgrade(path));
   QCHECK(connector.WaitConnects(2));
 
   // The token-auth route: a Bearer JWT on every upgrade, the configured URI unchanged.
@@ -268,6 +277,24 @@ void TestLoginRelayTapAndSideChannel() {
   bridge.Stop();
 }
 
+// The listener is reachable by any local app; without the per-start token an upgrade is refused and
+// nothing reaches the service.
+void TestUpgradeWithoutTheTokenIsRefused() {
+  FakeConnector connector;
+  Observed seen;
+  IntegratedBridge bridge(MakeConfig(&connector, &seen, "JWT-A"));
+  const uint16_t port = bridge.Start();
+  QCHECK(port != 0);
+  QCHECK(bridge.LoopbackUri().rfind("ws://127.0.0.1:", 0) == 0);
+  Client intruder(port);
+  QCHECK(intruder.fd >= 0);
+  QCHECK(!intruder.Upgrade("/"));
+  QCHECK(!intruder.Upgrade("/not-the-token/"));
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  QCHECK(connector.Calls() == 0);
+  bridge.Stop();
+}
+
 void TestNoJwtMeansNoSessionAndTheGameSocketCloses() {
   FakeConnector connector;
   Observed seen;
@@ -275,7 +302,7 @@ void TestNoJwtMeansNoSessionAndTheGameSocketCloses() {
   const uint16_t port = bridge.Start();
   QCHECK(port != 0);
   Client game(port);
-  QCHECK(game.Upgrade());
+  QCHECK(game.Upgrade(PathOf(bridge.LoopbackUri())));
   bool eof = false;
   game.Read(1u << 20, 3000, &eof);
   QCHECK(connector.Calls() == 0);  // no unauthenticated session, ever
@@ -303,6 +330,7 @@ void TestSideChannelRefusesWhenNothingIsConnected() {
 
 int main() {
   TestLoginRelayTapAndSideChannel();
+  TestUpgradeWithoutTheTokenIsRefused();
   TestNoJwtMeansNoSessionAndTheGameSocketCloses();
   TestPlaintextRemoteUriDoesNotStart();
   TestSideChannelRefusesWhenNothingIsConnected();

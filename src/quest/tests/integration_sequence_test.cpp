@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "quest/integration/bridge_uri.h"
 #include "quest/integration/ctor_sequence.h"
 #include "quest/integration/frame_tap.h"
 #include "quest/integration/identity_source.h"
@@ -416,6 +417,17 @@ void TestFrameTapContainsAThrowingConsumer() {
   QCHECK(logins == 1);                      // the observe failure did not stop the login signal
 }
 
+// ---- bridge redirect value ------------------------------------------------------------------------
+
+void TestBareBridgeUriBecomesTheTokenedOne() {
+  const std::string uri = "ws://127.0.0.1:41234/ab12cd34/";
+  QCHECK(ReplaceBareBridgeUri("ws://127.0.0.1:41234", 41234, uri) == uri);
+  QCHECK(ReplaceBareBridgeUri("ws://127.0.0.1:41235", 41234, uri) == "ws://127.0.0.1:41235");  // another port
+  QCHECK(ReplaceBareBridgeUri("wss://service.example/nevr", 41234, uri) == "wss://service.example/nevr");
+  QCHECK(ReplaceBareBridgeUri("ws://127.0.0.1:41234", 0, uri) == "ws://127.0.0.1:41234");  // no bridge yet
+  QCHECK(ReplaceBareBridgeUri("ws://127.0.0.1:41234", 41234, "") == "ws://127.0.0.1:41234");
+}
+
 // ---- stage lines -----------------------------------------------------------------------------------
 
 void TestStageNamesAreStable() {
@@ -457,6 +469,7 @@ void TestRouterLinesClassify() {
 }  // namespace
 
 int main() {
+  TestBareBridgeUriBecomesTheTokenedOne();
   TestStageNamesAreStable();
   TestRouterLinesClassify();
   TestEverythingOffInstallsOnlyTheProofHook();

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -18,6 +19,7 @@
 #include "sentinel_log.h"
 
 #include "quest/auth/quest_token_auth.h"
+#include "quest/integration/bridge_uri.h"
 #include "quest/integration/ctor_sequence.h"
 #include "quest/integration/dlopen_hook.h"
 #include "quest/integration/entry_hooks.h"
@@ -63,6 +65,7 @@ struct Runtime {
   std::unique_ptr<quest_net::CurlWsConnector> connector;
   std::atomic<IntegratedBridge*> bridge{nullptr};
   std::atomic<unsigned> bridgePort{0};
+  std::string loopbackUri;  // "ws://127.0.0.1:<port>/<token>/"; written once before the redirect is installed
   std::unique_ptr<TokenIdentitySource> identity;
   bool socialWanted = false;
   std::atomic<int> socialLevel{0};  // SocialParty::kSocialLevel once the facade is installed
@@ -148,6 +151,15 @@ bool SendSocialFrame(const std::string& frame) {
 std::uint64_t SteadySeconds() {
   return static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
+// The shared redirect policy answers the bare "ws://127.0.0.1:<port>" for a redirected game URL, which the
+// listener refuses (no access token). The pool receives the tokened URI instead (docs/adr/0003,
+// "Integration"). Only the exact bare value is replaced; anything else is interned as it is.
+nevr_runtime::lifecycle::InternResult InternBridgeAware(std::string_view value) {
+  Runtime& rt = R();
+  const unsigned port = rt.bridgePort.load(std::memory_order_acquire);
+  return nevr_runtime::lifecycle::InternStableCStr(ReplaceBareBridgeUri(value, port, rt.loopbackUri));
 }
 
 nevr_quest::redirect::BridgeState BridgeProbe() {
@@ -277,7 +289,7 @@ class ProductionSteps final : public Steps {
     // never waits on either.
     rt.authThread = std::thread([authConfig] {
       try {
-        auto* const auth = new nevr::quest_auth::QuestTokenAuth(
+        std::unique_ptr<nevr::quest_auth::QuestTokenAuth> created = nevr::quest_auth::QuestTokenAuth::Create(
             authConfig, [](nevr::auth::LogLevel level, const std::string& message) {
               try {
                 sentinel::Emit(MapAuth(level), message);
@@ -285,6 +297,12 @@ class ProductionSteps final : public Steps {
                 sentinel::EmitFixed(nevr_quest::LogLevel::kError, "token auth log line could not be written");
               }
             });
+        if (!created) {
+          sentinel::LogFields(sentinel::LogLevel::kError, "token_auth_state",
+                              {{"status", "failed"}, {"class", "create_failed"}});
+          return;
+        }
+        nevr::quest_auth::QuestTokenAuth* const auth = created.release();  // process lifetime
         auth->Start();
         R().auth.store(auth, std::memory_order_release);
       } catch (const std::exception&) {
@@ -341,6 +359,7 @@ class ProductionSteps final : public Steps {
       return false;
     }
     port_ = port;
+    rt.loopbackUri = bridge->LoopbackUri();
     rt.bridge.store(bridge.release(), std::memory_order_release);  // leaked: threads and hooks outlive statics
     rt.bridgePort.store(port, std::memory_order_release);
     return true;
@@ -349,7 +368,7 @@ class ProductionSteps final : public Steps {
   bool InstallRedirect() override {
     const nevr_quest::ResolvedConfig& cfg = sentinel::ActiveConfig();
     nevr_quest::redirect::InstallOptions options{nevr_quest::redirect::PinnedTargets(), sentinel::FindLoadedImage,
-                                                 &nevr_runtime::lifecycle::InternStableCStr, &BridgeProbe};
+                                                 &InternBridgeAware, &BridgeProbe};
     const nevr_quest::redirect::InstallReport report = nevr_quest::redirect::InstallRedirectHooksWith(cfg, options);
     detail_ = report.featureEnabled ? sentinel::GotStatusName(report.libr15) : "feature_off_or_allocation_failure";
     return report.featureEnabled && (report.libr15 == sentinel::GotStatus::kOk ||
