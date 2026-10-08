@@ -7,6 +7,7 @@
 #include "core/auth_token_model.h"
 #include "core/device_auth_flow.h"
 #include "quest/auth/file_store.h"
+#include "quest/auth/quest_token_auth.h"
 #include "quest/auth/session.h"
 #include "quest/tests/mini_test.h"
 
@@ -27,6 +28,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <thread>
+#include <utility>
 #include <unistd.h>
 #include <vector>
 
@@ -179,11 +181,20 @@ HttpResponse NoTransport(int code = 28) {
 struct LogCapture {
   std::mutex m;
   std::vector<std::string> lines;
+  std::vector<LogLevel> levels;
   LogSink Sink() {
-    return [this](LogLevel, const std::string& s) {
+    return [this](LogLevel level, const std::string& s) {
       std::lock_guard<std::mutex> l(m);
       lines.push_back(s);
+      levels.push_back(level);
     };
+  }
+  // How many lines containing `needle` were logged at `level`.
+  size_t Count(LogLevel level, const std::string& needle) {
+    std::lock_guard<std::mutex> l(m);
+    size_t n = 0;
+    for (size_t i = 0; i < lines.size(); ++i) n += (levels[i] == level && lines[i].find(needle) != std::string::npos) ? 1 : 0;
+    return n;
   }
   std::string All() {
     std::lock_guard<std::mutex> l(m);
@@ -627,7 +638,7 @@ TEST(session_refresh_failure_keeps_the_cache_and_does_not_prompt_when_retries_ar
   CHECK_EQ(store.SaveCount(), size_t(0));  // nothing written: the cached login survives
   CHECK(s.Token().empty());
   CHECK(log.All().find("cache file kept") != std::string::npos);
-  CHECK(log.All().find("Authentication failed") != std::string::npos);
+  CHECK(log.All().find("trying again every 300s") != std::string::npos);
   s.Stop();
 }
 
@@ -838,7 +849,7 @@ TEST(refresh_denied_needs_the_body_to_name_the_refresh_token_a_bare_401_is_not_t
     LogCapture log;
     CHECK(ApplyRefreshResponse(a, Status(status, R"({"message":"HTTP key invalid."})"), kT0, log.Sink()) ==
           RefreshOutcome::Unauthorized);
-    CHECK(log.All().find("names_refresh_token=0") != std::string::npos);
+    CHECK(log.All().find("refresh_token_named=0") != std::string::npos);
     CHECK(log.All().find("http_status=" + std::to_string(status)) != std::string::npos);
     CHECK(log.All().find("HTTP key") == std::string::npos);  // the body is never echoed
   }
@@ -847,11 +858,31 @@ TEST(refresh_denied_needs_the_body_to_name_the_refresh_token_a_bare_401_is_not_t
     LogCapture log;
     CHECK(ApplyRefreshResponse(a, Status(401, R"({"message":"invalid or expired refresh token"})"), kT0,
                                log.Sink()) == RefreshOutcome::Denied);
-    CHECK(log.All().find("names_refresh_token=1") != std::string::npos);
+    CHECK(log.All().find("refresh_token_named=1") != std::string::npos);
   }
-  for (const long status : {400L, 429L, 500L, 502L, 503L}) {
+  for (const long status : {408L, 429L, 500L, 502L, 503L}) {
     CachedAuthToken a = CachedWithRefresh();
     CHECK(ApplyRefreshResponse(a, Status(status, "gateway oops"), kT0, nullptr) == RefreshOutcome::Rejected);
+  }
+  // Other 4xx are permanent for this attempt: nakama's "missing payload" (400), a missing RPC (404).
+  for (const long status : {400L, 404L, 405L, 413L}) {
+    CachedAuthToken a = CachedWithRefresh();
+    CHECK(ApplyRefreshResponse(a, Status(status, R"({"message":"missing payload"})"), kT0, nullptr) ==
+          RefreshOutcome::ClientError);
+  }
+  // A body that echoes the request, an error page, or the right words in the wrong place is not the server's answer.
+  for (const char* body : {R"({"refresh_token":"x","token":"x"})", "<html>invalid or expired refresh token</html>",
+                           R"({"detail":"invalid or expired refresh token"})",
+                           R"({"message":"upstream said: invalid or expired refresh token"})", "[]", ""}) {
+    CachedAuthToken a = CachedWithRefresh();
+    CHECK(ApplyRefreshResponse(a, Status(400, body), kT0, nullptr) == RefreshOutcome::ClientError);
+    CHECK(ApplyRefreshResponse(a, Status(401, body), kT0, nullptr) == RefreshOutcome::Unauthorized);
+  }
+  // The server's own `error` field is accepted as well as `message`.
+  {
+    CachedAuthToken a = CachedWithRefresh();
+    CHECK(ApplyRefreshResponse(a, Status(401, R"({"error":"refresh token expired","code":16})"), kT0, nullptr) ==
+          RefreshOutcome::Denied);
   }
 }
 
@@ -958,7 +989,7 @@ TEST(session_one_failed_poll_request_does_not_end_the_login) {
   s.Stop();
 }
 
-TEST(session_a_permanent_poll_error_gives_up_after_the_failure_limit_and_logs_the_status) {
+TEST(session_a_refused_poll_ends_the_login_at_once_and_is_not_retried) {
   FakeClock clock;
   FakeHttp http;
   FakeStore store;
@@ -971,10 +1002,61 @@ TEST(session_a_permanent_poll_error_gives_up_after_the_failure_limit_and_logs_th
   s.Start();
   clock.Allow(100);
   CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
-  CHECK_EQ(http.Count("poll"), 5);  // the default limit, not the five-minute deadline (100 polls)
-  CHECK(log.All().find("5/5 consecutive") != std::string::npos);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  CHECK_EQ(http.Count("poll"), 1);     // a 4xx is the server's answer, not an outage
+  CHECK_EQ(http.Count("request"), 1);  // the player was already involved: no recovery re-prompt
+  CHECK(log.All().find("device poll refused by the server") != std::string::npos);
   CHECK(log.All().find("http_status=400") != std::string::npos);
   CHECK_EQ(store.SaveCount(), size_t(0));
+  s.Stop();
+}
+
+TEST(session_an_outage_while_polling_is_waited_out_until_the_codes_own_deadline) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  LogCapture log;
+  auto polls = std::make_shared<std::atomic<int>>(0);
+  http.handler = [polls](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint == "request") return Ok({{"code", "C"}});
+    const int n = ++*polls;
+    if (n <= 40) return n % 2 == 0 ? NoTransport() : Status(503);  // two minutes of trouble at 3 s a poll
+    return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 3600)}, {"refresh_token", "rt"},
+               {"refresh_token_expires_in", 2592000}});
+  };
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  clock.Allow(41);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK_EQ(http.Count("poll"), 41);
+  CHECK_EQ(presenter.presented.load(), 1);  // one link, one login
+  CHECK_EQ(http.Count("request"), 1);
+  // Bounded log rate: the first failure and every tenth, not forty lines.
+  size_t lines = 0;
+  for (size_t p = log.All().find("device poll request failed"); p != std::string::npos;
+       p = log.All().find("device poll request failed", p + 1)) {
+    ++lines;
+  }
+  CHECK(lines >= 1 && lines <= 5);
+  s.Stop();
+}
+
+TEST(session_an_expired_device_code_is_final_and_does_not_re_prompt) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  http.handler = [](const std::string& endpoint, const std::string&) -> HttpResponse {
+    return endpoint == "request" ? Ok({{"code", "C"}}) : Ok({{"status", "expired"}});
+  };
+  Session s(TestConfig(), http, clock, store, presenter, nullptr);
+  s.Start();
+  clock.Allow(20);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  CHECK_EQ(http.Count("request"), 1);
+  CHECK_EQ(presenter.presented.load(), 1);
   s.Stop();
 }
 
@@ -1182,7 +1264,7 @@ TEST(session_a_refresh_refused_for_the_token_is_not_retried_and_goes_to_the_devi
   s.Stop();
 }
 
-TEST(session_a_wrong_http_key_fails_at_once_without_retrying_or_discarding_the_cache) {
+TEST(session_a_wrong_http_key_holds_the_login_without_retrying_prompting_or_discarding_the_cache) {
   FakeClock clock;
   FakeHttp http;
   FakeStore store;
@@ -1196,10 +1278,11 @@ TEST(session_a_wrong_http_key_fails_at_once_without_retrying_or_discarding_the_c
   s.Start();
   CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
   CHECK_EQ(http.Count("refresh"), 1);
-  CHECK_EQ(http.Count("request"), 1);
+  CHECK_EQ(http.Count("request"), 0);  // a refused refresh that is not about the token never prompts
+  CHECK_EQ(presenter.presented.load(), 0);
   CHECK_EQ(clock.Sleeps(), 0);  // no backoff for a 4xx
   CHECK_EQ(store.SaveCount(), size_t(0));
-  CHECK(log.All().find("wrong http_key") != std::string::npos);
+  CHECK(log.All().find("not about the refresh token") != std::string::npos);
   CHECK(log.All().find("the server rejected the refresh token itself") == std::string::npos);
   s.Stop();
 }
@@ -1214,7 +1297,7 @@ TEST(session_device_code_request_outage_is_retried_a_bounded_number_of_times) {
   cfg.login_retry_delays = {seconds(1), seconds(2)};
   Session s(cfg, http, clock, store, presenter, nullptr);
   s.Start();
-  clock.Allow(50);
+  clock.Allow(2);  // the two backoffs; the recovery wait after them is left blocked
   CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
   CHECK_EQ(http.Count("request"), 3);  // the first try and two retries
   CHECK_EQ(presenter.presented.load(), 0);
@@ -1301,6 +1384,116 @@ TEST(session_the_login_link_is_removed_even_when_the_flow_throws) {
   CHECK(presenter.cleared.load() >= 1);
   CHECK(log.All().find("auth worker stopped on an exception") != std::string::npos);
   s.Stop();
+}
+
+
+// ---------------------------------------------------------------- session: held failures and recovery
+TEST(session_a_missing_rpc_or_rejected_payload_holds_the_login_after_one_attempt_and_recovers) {
+  for (const long status : {400L, 404L}) {
+    FakeClock clock;
+    FakeHttp http;
+    FakeStore store;
+    store.initial = CachedWithRefresh();
+    FakePresenter presenter;
+    LogCapture log;
+    auto fixed = std::make_shared<std::atomic<bool>>(false);
+    http.handler = [fixed, status](const std::string& endpoint, const std::string&) -> HttpResponse {
+      if (endpoint == "refresh" && *fixed) return Ok(RefreshOkBody(kT0 + 3600, "rt-recovered"));
+      return Status(status, R"({"message":"RPC function not found"})");
+    };
+    Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+    s.Start();
+    CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+    CHECK_EQ(http.Count("refresh"), 1);  // one attempt, not 18 over the backoff
+    CHECK_EQ(http.Count("request"), 0);
+    CHECK_EQ(presenter.presented.load(), 0);
+    CHECK_EQ(clock.Sleeps(), 0);
+    CHECK_EQ(store.SaveCount(), size_t(0));
+    CHECK(log.All().find("client_error") != std::string::npos);
+    CHECK(log.All().find("RPC function") == std::string::npos);  // the body is never logged
+    *fixed = true;
+    clock.Allow(1);  // the recovery period
+    CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+    CHECK_EQ(store.Last().refresh_token, std::string("rt-recovered"));
+    CHECK_EQ(presenter.presented.load(), 0);
+    s.Stop();
+  }
+}
+
+TEST(session_a_bare_403_at_boot_does_not_prompt_or_overwrite_the_cache) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  store.initial = CachedWithRefresh();
+  FakePresenter presenter;
+  http.handler = [](const std::string&, const std::string&) -> HttpResponse { return Status(403, "Forbidden by gateway"); };
+  Session s(TestConfig(), http, clock, store, presenter, nullptr);
+  s.Start();
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  CHECK_EQ(presenter.presented.load(), 0);
+  CHECK_EQ(http.Count("request"), 0);
+  CHECK_EQ(store.SaveCount(), size_t(0));
+  s.Stop();
+}
+
+TEST(session_an_outage_longer_than_the_backoff_ends_failed_then_recovers_with_the_cached_login) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  store.initial = CachedWithRefresh();
+  FakePresenter presenter;
+  LogCapture log;
+  auto up = std::make_shared<std::atomic<bool>>(false);
+  http.handler = [up](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint == "refresh" && *up) return Ok(RefreshOkBody(kT0 + 3600, "rt-after"));
+    return NoTransport();
+  };
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  clock.Allow(17);  // 6 rounds x 2 pauses between attempts + 5 backoffs
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  CHECK(WaitUntil([&] { return log.All().find("trying again every 300s") != std::string::npos; }));
+  CHECK_EQ(http.Count("refresh"), 18);
+  CHECK_EQ(http.Count("request"), 0);
+  CHECK_EQ(presenter.presented.load(), 0);
+  *up = true;
+  clock.Allow(1);  // one recovery period
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK_EQ(http.Count("refresh"), 19);  // a single request per recovery attempt
+  CHECK_EQ(store.Last().refresh_token, std::string("rt-after"));
+  CHECK_EQ(presenter.presented.load(), 0);
+  s.Stop();
+}
+
+TEST(session_recovery_attempts_log_one_warning_per_failure_class_not_one_per_attempt) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  store.initial = CachedWithRefresh();
+  FakePresenter presenter;
+  LogCapture log;
+  http.handler = [](const std::string&, const std::string&) -> HttpResponse { return NoTransport(); };
+  SessionConfig cfg = TestConfig();
+  cfg.login_retry_delays = {};
+  Session s(cfg, http, clock, store, presenter, log.Sink());
+  s.Start();
+  clock.Allow(2 + 5);  // the first attempts' pauses, then five recovery periods
+  CHECK(WaitUntil([&] { return http.Count("refresh") >= 3 + 5; }));
+  clock.Allow(0);
+  CHECK_EQ(log.Count(LogLevel::Warning, "login failed (refresh_transient)"), size_t(1));  // the class, once
+  CHECK(log.Count(LogLevel::Debug, "login failed (refresh_transient)") >= 4);          // the repeats, quietly
+  s.Stop();
+}
+
+// ---------------------------------------------------------------- exception boundary
+TEST(the_calls_a_hook_will_make_into_questtokenauth_cannot_throw) {
+  using nevr::quest_auth::QuestTokenAuth;
+  static_assert(noexcept(std::declval<QuestTokenAuth&>().Start()), "Start must be noexcept");
+  static_assert(noexcept(std::declval<QuestTokenAuth&>().Stop()), "Stop must be noexcept");
+  static_assert(noexcept(std::declval<const QuestTokenAuth&>().Token()), "Token must be noexcept");
+  static_assert(noexcept(std::declval<const QuestTokenAuth&>().DiscordId()), "DiscordId must be noexcept");
+  static_assert(noexcept(std::declval<const QuestTokenAuth&>().Get()), "Get must be noexcept");
 }
 
 }  // namespace
