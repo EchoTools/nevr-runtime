@@ -41,8 +41,17 @@ Every write runs under one process-wide lock, and the protection it restores is 
 `core/hook_lifecycle.h` contract that the MinHook path in `core/hooking.h` also uses.
 
 `sentinel/callback_thunk.h` gives each hooked function a typed entry point, original-call
-pointer and handler. An exception thrown by the original reaches the game unchanged; a
-`std::exception` thrown by a handler falls back to one call of the original, never a second.
+pointer and handler. The entry reads the original once per call. An exception thrown by the
+original is rethrown unchanged; a `std::exception` thrown by a handler falls back to one call of
+the original, never a second. libr15.so links `libc++_shared.so` and the sentinel links libc++
+statically (`readelf -d` and `nm` on the built library; `tests/quest` `TestStlContract` pins it),
+so the game's exceptions belong to a different C++ runtime than the thunk's catch clauses. The
+thunk is written not to depend on matching them, and that behavior is inferred, not measured on a
+device. The sentinel exports only `nevr_sentinel_marker` and `JNI_OnLoad`
+(`TestExportAllowlist`), keeps no `thread_local` state (`TestNoEmulatedTLSInHookPath`), and
+compiles the hook backend once into the `nevr_quest_got_hook` library that every Quest target
+links.
+
 `sentinel/pinned_targets.h` holds the targets and callback types for the pinned artifact:
 `clock_gettime` (installed by `entry.cpp`), `CJson::TString` in both libraries, and the
 `SNSConfigRequestv24Send` and `GLOB_DAT` slots as fixtures. Only `clock_gettime` is installed.

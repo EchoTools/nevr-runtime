@@ -535,9 +535,10 @@ void Build(const SynthSpec& spec, void* originalValue, SynthImage* out) {
     put(kDynamic, dyn.data(), dyn.size() * sizeof(Elf64_Dyn));
   }
   // Slots start holding the same recognisable value.
-  for (std::uint64_t slot : {kRelroSlot, kRelroSlot + 8, kRelroSlot + 16, kPlainSlot}) {
+  for (std::uint64_t slot = kRelroSlot; slot < kRelroSlot + 0x400; slot += 8) {
     put(slot, &originalValue, sizeof(originalValue));
   }
+  put(kPlainSlot, &originalValue, sizeof(originalValue));
 
   if (spec.readOnlyBacking) {
     // Written through a read-write descriptor, mapped through a read-only one:
@@ -922,6 +923,130 @@ void ForgetReleasesAStaleHandle() {
   dlclose(m.handle);
 }
 
+// ---- failed re-protect, compare-and-swap, registry bound ----------------------
+
+int g_protectFailuresLeft = 0;  // PROT_READ calls still to fail; negative: all of them
+int FailingProtect(void* addr, std::size_t length, int prot) {
+  if (prot == PROT_READ && g_protectFailuresLeft != 0) {
+    if (g_protectFailuresLeft > 0) --g_protectFailuresLeft;
+    errno = ENOMEM;
+    return -1;
+  }
+  return mprotect(addr, length, prot);
+}
+
+// The slot is written, then the page cannot be made read-only again. The store is
+// rolled back, the failure reported, and the original stays published: a thread
+// may have entered the detour while the hook was live, and the original is the
+// real function.
+void FailedReprotectRollsBackAndKeepsTheOriginal() {
+  for (const int failures : {1, -1}) {  // the retry succeeds / the retry fails too
+    Prepare();
+    SynthSpec spec = OneRel();
+    SynthImage img;
+    Build(spec, reinterpret_cast<void*>(&AddImpl), &img);
+    g_synth = &img;
+    void** slot = reinterpret_cast<void**>(img.image.base + kRelroSlot);
+    QCHECK(mprotect(img.mem, 3 * kPage, PROT_READ) == 0);  // what the loader does to RELRO
+    GotTarget target = SynthTarget();
+    target.expectedOriginal = reinterpret_cast<void*>(&AddImpl);
+    g_protectFailuresLeft = failures;
+    SetProtectFunction(&FailingProtect);
+    GotHook hook;
+    void* sentinelValue = reinterpret_cast<void*>(0x77);
+    void* out = sentinelValue;
+    QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+                  GotStatus::kRestoreProtectFailed);
+    SetProtectFunction(nullptr);
+    QCHECK(!hook.installed());
+    QCHECK(*slot == reinterpret_cast<void*>(&AddImpl));  // rolled back
+    QCHECK(out == reinterpret_cast<void*>(&AddImpl));    // original stays published
+    QCHECK(Count(LogLevel::kError, "\"status\":\"restore_protect_failed\"") == 1);
+    QCHECK(Count(LogLevel::kError, "\"errno\":12") == 1);
+    if (failures > 0) {
+      QCHECK(PagePerms(slot) == "r--p");
+      QCHECK(Errors() == 1);
+    } else {
+      QCHECK(PagePerms(slot) == "rw-p");  // reported, not hidden
+      QCHECK(Count(LogLevel::kError, "\"status\":\"page_left_writable\"") == 1);
+      QCHECK(mprotect(img.mem, 3 * kPage, PROT_READ) == 0);
+    }
+    // The reservation was released: the same slot installs and removes normally.
+    Captured().clear();
+    QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+                  GotStatus::kOk);
+    QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+    g_synth = nullptr;
+  }
+  g_protectFailuresLeft = 0;
+}
+
+void ClobberObserver(void** slot, void*) { *slot = reinterpret_cast<void*>(&SubImpl); }
+
+// Install stores only over the original it read. A writer outside the lock that
+// changes the slot after the check and before the store wins; Install reports
+// kSlotChanged and the foreign value stays.
+void InstallIsCompareAndSwap() {
+  Prepare();
+  Module m = Open("libgotfx_consumer_now.so");
+  GotTarget target{"libgotfx_consumer_now.so", "fx_add", RelocKind::kJumpSlot};
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  GotHook hook;
+  void* sentinelValue = reinterpret_cast<void*>(0x99);
+  void* out = sentinelValue;
+  SetStoreObserver(&ClobberObserver);
+  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), &out), GotStatus::kSlotChanged);
+  SetStoreObserver(nullptr);
+  QCHECK(*r.slot == reinterpret_cast<void*>(&SubImpl));  // the other writer's value stays
+  QCHECK(out == sentinelValue);
+  QCHECK(!hook.installed());
+  QCHECK(Count(LogLevel::kError, "\"status\":\"slot_changed\"") == 1);
+  ForceWrite(r.slot, m.realAdd);
+  AddThunk::Arm(&AddPlus100);
+  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+  dlclose(m.handle);
+}
+
+// 64 hooks fit; the 65th is refused with one log line; removing frees the room.
+void RegistryBound() {
+  Prepare();
+  constexpr int kHooks = 65;
+  SynthSpec spec;
+  for (int i = 0; i < kHooks; ++i) {
+    spec.rels.push_back({true, kRelroSlot + 8u * static_cast<unsigned>(i), spec.nums.jumpSlot, 1, 0});
+  }
+  SynthImage img;
+  Build(spec, reinterpret_cast<void*>(&AddImpl), &img);
+  g_synth = &img;
+  std::vector<GotHook> hooks(kHooks);
+  auto target = [](int i) {
+    GotTarget t = SynthTarget();
+    t.slotVaddr = kRelroSlot + 8u * static_cast<unsigned>(i);
+    t.expectedOriginal = reinterpret_cast<void*>(&AddImpl);
+    return t;
+  };
+  void* out = nullptr;
+  int installed = 0;
+  for (int i = 0; i < kHooks - 1; ++i) {
+    if (hooks[i].Install(target(i), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup) == GotStatus::kOk) {
+      ++installed;
+    }
+  }
+  QCHECK(installed == 64);
+  Captured().clear();
+  QCHECK_STATUS(hooks[64].Install(target(64), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+                GotStatus::kRegistryFull);
+  QCHECK(Errors() == 1 && Count(LogLevel::kError, "\"status\":\"registry_full\"") == 1);
+  QCHECK(*reinterpret_cast<void**>(img.image.base + kRelroSlot + 8u * 64) ==
+         reinterpret_cast<void*>(&AddImpl));  // the refused slot was not written
+  QCHECK_STATUS(hooks[0].Remove(), GotStatus::kOk);
+  QCHECK_STATUS(hooks[64].Install(target(64), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+                GotStatus::kOk);
+  for (int i = 1; i < kHooks; ++i) QCHECK_STATUS(hooks[i].Remove(), GotStatus::kOk);
+  g_synth = nullptr;
+}
+
 // ---- log lines ----------------------------------------------------------------
 
 // Whatever a caller passes, a line is one valid JSON object: quotes, backslashes,
@@ -967,6 +1092,24 @@ int Pass(FaultThunk::Fn original, int a, int b) { return original(a, b); }
 int CallThenThrow(FaultThunk::Fn original, int a, int b) {
   static_cast<void>(original(a, b));
   throw std::runtime_error("handler failure after the original");
+}
+
+int SwallowThenThrow(FaultThunk::Fn original, int a, int b) {
+  try {
+    static_cast<void>(original(a, b));
+  } catch (const std::runtime_error&) {
+    // swallowed on purpose
+  }
+  throw std::logic_error("handler bug after swallowing");
+}
+int ResetThenCallOriginal(FaultThunk::Fn original, int a, int b) {
+  FaultThunk::Reset();  // clears the published original while this call is in flight
+  return original(a, b);
+}
+FaultThunk::Fn g_stashedProxy = nullptr;
+int StashProxy(FaultThunk::Fn original, int a, int b) {
+  g_stashedProxy = original;
+  return original(a, b);
 }
 
 struct VoidTag {};
@@ -1063,6 +1206,46 @@ void Thunks() {
   QCHECK(g_originalCalls == 2 && FaultThunk::Faults() == 0);
   QCHECK(Errors() == 0);
 
+  // A handler that swallows the original's exception and then throws its own is a
+  // handler failure: logged and counted, the original is not called again, and
+  // (the original never returned) a value-initialised result is returned.
+  FaultThunk::Reset();
+  Captured().clear();
+  *FaultThunk::OriginalOut() = reinterpret_cast<void*>(&ThrowingOriginal);
+  FaultThunk::Arm(&SwallowThenThrow);
+  g_originalCalls = 0;
+  QCHECK(entry(5, 5) == 0);
+  QCHECK(g_originalCalls == 1);
+  QCHECK(FaultThunk::Faults() == 1);
+  QCHECK(Count(LogLevel::kError, "\"status\":\"handler_threw_after_original\"") == 1);
+
+  // The in-flight call keeps the original it started with even if the published
+  // pointer is cleared underneath it (what a rollback used to do).
+  FaultThunk::Reset();
+  *FaultThunk::OriginalOut() = reinterpret_cast<void*>(&CountingAdd);
+  FaultThunk::Arm(&ResetThenCallOriginal);
+  g_originalCalls = 0;
+  QCHECK(entry(3, 4) == 7);
+  QCHECK(g_originalCalls == 1 && FaultThunk::Original() == nullptr);
+
+  // Per-thread state works on a thread that never ran the thunk before, and the
+  // proxy a handler stashed forwards to the original when called later, outside
+  // any handler call.
+  FaultThunk::Reset();
+  *FaultThunk::OriginalOut() = reinterpret_cast<void*>(&CountingAdd);
+  FaultThunk::Arm(&StashProxy);
+  g_originalCalls = 0;
+  int fromThread = 0;
+  std::thread([&] { fromThread = entry(10, 20); }).join();
+  QCHECK(fromThread == 30);
+  QCHECK(g_stashedProxy != nullptr);
+  *FaultThunk::OriginalOut() = reinterpret_cast<void*>(&CountingAdd);
+  QCHECK(g_stashedProxy(1, 2) == 3);  // outside a handler call: plain forward
+  QCHECK(g_originalCalls == 2);
+  FaultThunk::Reset();
+  Captured().clear();
+  *FaultThunk::OriginalOut() = reinterpret_cast<void*>(&CountingAdd);
+
   // Faults are counted always and logged first, then one in 4096.
   FaultThunk::Reset();
   Captured().clear();
@@ -1122,6 +1305,9 @@ int main(int argc, char** argv) {
   OriginalIsPublishedBeforeTheSlotChanges();
   LiveProtectionDecidesWhatIsRestored();
   ForgetReleasesAStaleHandle();
+  FailedReprotectRollsBackAndKeepsTheOriginal();
+  InstallIsCompareAndSwap();
+  RegistryBound();
   LogLinesAreValidJson();
   Thunks();
 
