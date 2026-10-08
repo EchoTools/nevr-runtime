@@ -437,6 +437,26 @@ test-quest-hooks:
         src/quest/sentinel/hook_log.cpp -o "$out/got_hook_test" -ldl -pthread
     "$out/got_hook_test" "$out"
 
+# Resolve the pinned Quest targets in the real libr15.so / libpnsradmatchmaking.so
+# (docs/adr/0003). Extracts both from the pinned APK, checks their SHA-256, and runs
+# src/quest/tests/got_pinned_test.cpp. Fail-close, including when the APK is absent:
+# it is a 58 MB artifact that is not in the repository, so this is not part of
+# `just verify`.
+test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    apk="{{ apk }}"
+    [ -f "$apk" ] || { echo "test-quest-hooks-pinned: pinned APK not found: $apk" >&2; exit 1; }
+    out="build/quest-hooks-pinned"
+    rm -rf "$out"; mkdir -p "$out/lib"
+    unzip -o -q "$apk" lib/arm64-v8a/libr15.so lib/arm64-v8a/libpnsradmatchmaking.so -d "$out/lib"
+    echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $out/lib/lib/arm64-v8a/libr15.so" | sha256sum -c -
+    echo "36236ab1df5783da57c064b0fbccc3a61c0e1d150c208022fbfc9cd6e5ed60ee  $out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" | sha256sum -c -
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel \
+        src/quest/tests/got_pinned_test.cpp src/quest/sentinel/got_hook.cpp \
+        src/quest/sentinel/hook_log.cpp -o "$out/got_pinned_test" -ldl
+    "$out/got_pinned_test" "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so"
+
 # --- Verify (closed-loop gate) ---
 
 # Aggregate verify gate for the all-the-way-down canon: build everything, then run
@@ -455,6 +475,7 @@ verify:
     cmake --build --preset {{ preset }}
     just test-auth-unit
     just test-quest-shared
+    just test-quest-hooks
     python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.

@@ -74,14 +74,4 @@ inline AttachStage AttachPublished(void** ppOriginal, Create&& create, Enable&& 
   return AttachStage::kAttached;
 }
 
-// The reverse order. The detour may still be running on another thread until
-// `disable` has returned, so the original-call pointer is withdrawn only after
-// it succeeds. A failed disable leaves the hook live and the pointer valid.
-template <typename Disable>
-inline bool DetachWithdraw(void** ppOriginal, void* restored, Disable&& disable) {
-  if (!disable()) return false;
-  *ppOriginal = restored;
-  return true;
-}
-
 }  // namespace nevr::hook
