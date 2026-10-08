@@ -55,6 +55,21 @@ add_executable(stable_string_pool_test tests/stable_string_pool_test.cpp)
 target_link_libraries(stable_string_pool_test PRIVATE nevr_quest_stable_string_pool)
 target_compile_options(stable_string_pool_test PRIVATE -Wall -Wextra -Werror)
 
+# Quest configuration and feature activation (pure; the sentinel links it, the host test compiles it).
+add_library(nevr_quest_config STATIC "${CMAKE_CURRENT_SOURCE_DIR}/sentinel/quest_config.cpp")
+target_include_directories(nevr_quest_config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(nevr_quest_config PUBLIC nevr_quest_service_redirect PRIVATE nlohmann_json::nlohmann_json)
+target_compile_options(nevr_quest_config PRIVATE -Wall -Wextra -Werror)
+
+add_executable(quest_config_test tests/quest_config_test.cpp)
+target_link_libraries(quest_config_test PRIVATE nevr_quest_config nlohmann_json::nlohmann_json)
+target_compile_options(quest_config_test PRIVATE -Wall -Wextra -Werror)
+
+# Build-time defaults embedded from the environment or <root>/.env at configure time (never read
+# at run time). Written to the build tree only: ${CMAKE_BINARY_DIR}/generated/nevr_builtin_defaults.h.
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/nevr_builtin_defaults.cmake")
+nevr_generate_builtin_defaults("${CMAKE_CURRENT_SOURCE_DIR}/../..")
+
 # ── Crash-reporter sentinel (libovrplatformloader.so) ───────────────────
 # Added once breakpad is vendored; guarded so the toolchain probe builds
 # standalone.

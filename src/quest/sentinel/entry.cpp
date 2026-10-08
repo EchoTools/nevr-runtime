@@ -10,6 +10,7 @@
  */
 
 #include "sentinel.h"
+#include "activation.h"
 #include "got_hook.h"
 #include "hook_log.h"
 #include "pinned_targets.h"
@@ -67,6 +68,9 @@ __attribute__((constructor))
 static void nevr_sentinel_ctor() {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor", {{"action", "arm_crash_reporter"}});
     sentinel::Arm();
+    // Resolve and log the configuration and feature switches. No feature hook is installed here:
+    // each later hook consults sentinel::FeatureEnabled() at its own install point.
+    sentinel::InitActivation();
     InstallBasicsHook();
 }
 

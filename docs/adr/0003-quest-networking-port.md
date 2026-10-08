@@ -75,8 +75,23 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
 1. **Configuration.** A portable resolved value carries public endpoints and optional client
    auth inputs; platform adapters supply the environment and embedded defaults. The first
    Quest use is the shared URL policy at the config-string lookup below. It neither adds nor
-   depends on a game `config.json`, and a test shows any such file is ignored. Quest file
-   discovery and precedence need their own measured design before use.
+   depends on a game `config.json`, and a test shows the Quest config path never names one.
+   `src/quest/sentinel/quest_config.{h,cpp}` resolves each key from `nevr-quest.json` in
+   `/sdcard/Android/data/com.readyatdawn.r15/files/`, else from the value embedded at build
+   time (`cmake/nevr_builtin_defaults.cmake`, read from the environment or `.env` at configure
+   time only), else absent. Keys: `nevr_socket_uri`, `nevr_http_uri`, `nevr_http_key`,
+   `nevr_server_key`, plus `features` with boolean `redirect`, `bridge` and `login`. A feature
+   is off unless the file turns it on, and is forced off while its prerequisite is missing
+   (bridge needs redirect and a socket URI, login needs bridge and the server key). A malformed,
+   non-object or oversized (64 KiB) file is rejected whole: embedded values, all features off.
+   Every key source, requested and effective feature state, and rejection is logged by key or
+   feature name, never by value, to logcat tag `NEVR-Sentinel` and to `nevr-sentinel.log` in the
+   same directory, as one JSON object per line. A value the file gives as the empty string is
+   rejected and cannot clear an embedded default; a key given twice in one object takes the
+   last value and logs a warning. The sentinel constructor reads the file once: a non-blocking
+   open, a regular-file check and a 64 KiB bound, with no network. `sentinel_host_test` runs
+   the constructor-then-main order, the non-regular-file paths and the log-failure paths on the
+   host; the read has not been run on a headset.
 2. **Identity and wire.** `login_profile.{h,cpp}` builds the login profile with
    `nlohmann::json` and is compiled for Windows and Android. Windows EVR frame assembly stays
    in `src/runtime/compat/ws_bridge.cpp` until a reviewed serializer and a server-parser round
