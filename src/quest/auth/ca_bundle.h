@@ -6,6 +6,10 @@
 // older MD5-based hash (`openssl x509 -subject_hash_old`), so OpenSSL never finds any
 // of them and every handshake fails closed. Reading the files ourselves needs no name
 // match.
+//
+// Every certificate is parsed with OpenSSL and re-encoded, so the blob handed to libcurl
+// holds only certificates that parse: one corrupt file cannot make libcurl reject the
+// whole bundle (CURLE_SSL_CACERT_BADFILE).
 
 #include "core/auth_types.h"
 
@@ -16,21 +20,24 @@
 namespace nevr::quest_auth {
 
 struct CaBundle {
-  std::string pem;           // concatenated PEM certificates
+  std::string pem;           // concatenated PEM certificates, each one parsed and re-encoded
   size_t certificates = 0;   // how many were loaded
 };
 
+// A CA file is a few KiB and the Android store a few hundred KiB; these bound what a
+// damaged or hostile directory can make us read.
+inline constexpr size_t kMaxCaFileBytes = 256 * 1024;
+inline constexpr size_t kMaxCaBundleBytes = 4 * 1024 * 1024;
+
 // Directories in priority order. The updatable Conscrypt store, when present and
-// non-empty, supersedes the read-only system copy.
+// yielding a certificate, supersedes the read-only system copy.
 const std::vector<std::string>& AndroidCaDirs();
 
-// Loads the certificates from the first directory in `dirs` that yields any, as PEM
-// (stored PEM is used as is; stored DER is wrapped). Logs the directory and the count at
-// Info, and logs an Error when no directory yields a certificate (the caller must then
-// fail closed). Never throws.
+// Loads the certificates from the first directory in `dirs` that yields at least one that
+// parses (stored PEM, possibly with trailing text and several certificates per file, or
+// stored DER). Per directory the Info log gives the counts of certificates, unparsable
+// files and otherwise skipped files; no certificate content is logged. An Error is logged
+// when no directory yields a certificate (the caller must then fail closed). Never throws.
 CaBundle LoadCaBundle(const std::vector<std::string>& dirs, const nevr::auth::LogSink& log);
-
-// Base64 of `bytes` wrapped as a PEM CERTIFICATE block. Exposed for the tests.
-std::string DerToPem(const std::string& der);
 
 }  // namespace nevr::quest_auth

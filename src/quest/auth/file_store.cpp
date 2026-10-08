@@ -112,7 +112,7 @@ bool ReadNoFollow(const std::string& path, std::string& out, bool& missing, std:
 }
 }  // namespace
 
-std::string AppInternalFilesDirFromCmdline(const std::string& cmdline) {
+std::string AppInternalFilesDirFromCmdline(const std::string& cmdline, unsigned uid) {
   const std::string name = cmdline.substr(0, cmdline.find('\0'));
   // A Java package name: dotted identifiers, at least two segments, no ':' process suffix.
   if (name.size() < 3 || name.size() > 128 || name.front() == '.' || name.back() == '.') return "";
@@ -123,7 +123,7 @@ std::string AppInternalFilesDirFromCmdline(const std::string& cmdline) {
     if (c == '.') dot = true;
   }
   if (!dot || name.find("..") != std::string::npos) return "";
-  return "/data/data/" + name + "/files";
+  return "/data/user/" + std::to_string(uid / 100000) + "/" + name + "/files";
 }
 
 std::string AppInternalFilesDir() {
@@ -131,7 +131,7 @@ std::string AppInternalFilesDir() {
   bool missing = false;
   std::string error;
   if (!ReadNoFollow("/proc/self/cmdline", cmdline, missing, error)) return "";
-  return AppInternalFilesDirFromCmdline(cmdline);
+  return AppInternalFilesDirFromCmdline(cmdline, static_cast<unsigned>(::getuid()));
 }
 
 std::string JoinPath(const std::string& dir, const std::string& name) {

@@ -2,6 +2,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cctype>
+
 namespace nevr::auth {
 
 namespace {
@@ -16,6 +18,7 @@ const char* RefreshOutcomeName(RefreshOutcome outcome) {
     case RefreshOutcome::NoRefreshToken: return "no_refresh_token";
     case RefreshOutcome::TransportFailed: return "transport_failed";
     case RefreshOutcome::Denied: return "denied";
+    case RefreshOutcome::Unauthorized: return "unauthorized";
     case RefreshOutcome::Rejected: return "rejected";
     case RefreshOutcome::Malformed: return "malformed";
     case RefreshOutcome::NoAccessToken: return "no_access_token";
@@ -52,11 +55,18 @@ RefreshOutcome ApplyRefreshResponse(CachedAuthToken& auth, const HttpResponse& r
     return RefreshOutcome::TransportFailed;
   }
   if (response.status != 200) {
+    std::string lower = response.body;
+    for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const bool names_token = lower.find("refresh token") != std::string::npos ||
+                             lower.find("refresh_token") != std::string::npos;
     Emit(log, LogLevel::Warning,
          "[NEVR.AUTH] token refresh rejected http_status=" + std::to_string(response.status) +
-             " response_bytes=" + std::to_string(response.body.size()));
-    const bool permanent = response.status == 400 || response.status == 401 || response.status == 403;
-    return permanent ? RefreshOutcome::Denied : RefreshOutcome::Rejected;
+             " response_bytes=" + std::to_string(response.body.size()) +
+             " names_refresh_token=" + (names_token ? "1" : "0"));
+    const bool client_error = response.status == 400 || response.status == 401 || response.status == 403;
+    if (client_error && names_token) return RefreshOutcome::Denied;
+    if (response.status == 401 || response.status == 403) return RefreshOutcome::Unauthorized;
+    return RefreshOutcome::Rejected;
   }
 
   try {

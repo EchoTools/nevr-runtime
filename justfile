@@ -417,7 +417,7 @@ test-quest-shared:
     # server and a fake clock. Same sources the NDK build compiles (src/quest/CMakeLists.txt).
     g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc \
         src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
-        src/quest/auth/session.cpp src/quest/auth/file_store.cpp src/quest/auth/ca_bundle.cpp \
+        src/quest/auth/session.cpp src/quest/auth/file_store.cpp  \
         src/quest/tests/auth_core_test.cpp \
         -o "$out/auth_core_test"
     "$out/auth_core_test"

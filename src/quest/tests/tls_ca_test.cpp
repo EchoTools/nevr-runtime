@@ -8,6 +8,7 @@
 // halves of that: the production client verifies against this directory, raw CAPATH cannot.
 // Needs libcurl (OpenSSL backend), libssl and libcrypto on the host.
 
+#include "quest/auth/ca_bundle.h"
 #include "quest/auth/curl_http.h"
 #include "quest/tests/mini_test.h"
 
@@ -26,6 +27,7 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
@@ -92,6 +94,29 @@ std::string PemOf(X509* cert) {
   return out;
 }
 
+std::string DerOf(X509* cert) {
+  unsigned char* der = nullptr;
+  const int len = i2d_X509(cert, &der);
+  std::string out(reinterpret_cast<const char*>(der), static_cast<size_t>(len));
+  OPENSSL_free(der);
+  return out;
+}
+
+void WriteFile(const std::string& path, const std::string& data) { std::ofstream(path, std::ios::binary) << data; }
+
+std::string FreshDir(const std::string& name) {
+  const std::string dir = "build/quest-shared-host/scratch/" + name;
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  return dir;
+}
+
+size_t Count(const std::string& text, const std::string& needle) {
+  size_t n = 0;
+  for (size_t p = text.find(needle); p != std::string::npos; p = text.find(needle, p + 1)) ++n;
+  return n;
+}
+
 // An Android-style CA directory: `<old subject hash>.0`, PEM then a text dump.
 std::string MakeAndroidCaDir(const std::string& name, X509* ca) {
   const std::string dir = "build/quest-shared-host/scratch/" + name;
@@ -106,7 +131,8 @@ std::string MakeAndroidCaDir(const std::string& name, X509* ca) {
 // A one-connection-at-a-time loopback server; TLS when `leaf` is given, plain HTTP otherwise.
 class Server {
  public:
-  Server(const Identity* leaf, size_t body_bytes) : body_bytes_(body_bytes) {
+  // stall: accept connections and then say nothing until the server is destroyed.
+  Server(const Identity* leaf, size_t body_bytes, bool stall = false) : body_bytes_(body_bytes), stall_(stall) {
     if (leaf != nullptr) {
       ctx_.reset(SSL_CTX_new(TLS_server_method()));
       SSL_CTX_use_certificate(ctx_.get(), leaf->cert.get());
@@ -149,6 +175,10 @@ class Server {
   }
 
   void Serve(int fd) {
+    if (stall_) {
+      while (!stop_) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      return;
+    }
     SSL* ssl = nullptr;
     if (ctx_) {
       ssl = SSL_new(ctx_.get());
@@ -202,6 +232,7 @@ class Server {
 
   std::unique_ptr<SSL_CTX, SslDeleter> ctx_;
   size_t body_bytes_;
+  bool stall_;
   int listen_fd_ = -1;
   int port_ = 0;
   std::atomic<bool> stop_{false};
@@ -337,6 +368,84 @@ TEST(interrupt_makes_requests_fail_at_once) {
   CHECK(!r.transport_ok);
   CHECK_EQ(r.transport_code, CurlHttpClient::kInterrupted);
   CHECK_EQ(server.Accepted(), 0);
+}
+
+
+// ---------------------------------------------------------------- CA store loading
+TEST(ca_bundle_keeps_only_certificates_that_parse_and_counts_the_rest) {
+  const std::string dir = FreshDir("ca-mixed");
+  WriteFile(dir + "/aaaa1111.0", PemOf(Fix().ca.cert.get()) + "Certificate:\n  text dump\n");
+  WriteFile(dir + "/bbbb2222.0", DerOf(Fix().other_ca.cert.get()));
+  WriteFile(dir + "/cccc3333.0", "0 is a digit, not a DER sequence tag, and this is not a certificate");
+  WriteFile(dir + "/dddd4444.0", "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n");
+  WriteFile(dir + "/empty.0", "");
+  WriteFile(dir + "/eeee5555.0", std::string("\x30\x82\x01", 3));  // a DER header and nothing else
+  Logs logs;
+  const CaBundle b = LoadCaBundle({dir}, logs.Sink());
+  CHECK_EQ(b.certificates, size_t(2));
+  CHECK_EQ(Count(b.pem, "-----BEGIN CERTIFICATE-----"), size_t(2));
+  CHECK(logs.text.find("certificates=2 unparsable_files=3 skipped_files=1") != std::string::npos);
+  CHECK(logs.text.find("AAAA") == std::string::npos);  // counts only, never content
+}
+
+TEST(ca_bundle_falls_through_a_directory_with_nothing_parsable_and_fails_loudly_with_none) {
+  const std::string bad = FreshDir("ca-garbage");
+  WriteFile(bad + "/x.0", "0000 garbage");
+  {
+    Logs logs;
+    const CaBundle b = LoadCaBundle({bad, Fix().android_dir}, logs.Sink());
+    CHECK_EQ(b.certificates, size_t(1));
+    CHECK(logs.text.find("yielded no certificate") != std::string::npos);
+  }
+  {
+    Logs logs;
+    CHECK_EQ(LoadCaBundle({bad, "build/quest-shared-host/scratch/nope"}, logs.Sink()).certificates, size_t(0));
+    CHECK(logs.text.find("fail closed") != std::string::npos);
+  }
+}
+
+TEST(ca_bundle_stops_at_the_total_size_bound) {
+  const std::string dir = FreshDir("ca-big");
+  std::string block;
+  while (block.size() + PemOf(Fix().ca.cert.get()).size() < kMaxCaFileBytes) block += PemOf(Fix().ca.cert.get());
+  const size_t files = kMaxCaBundleBytes / block.size() + 3;
+  for (size_t i = 0; i < files; ++i) WriteFile(dir + "/f" + std::to_string(1000 + i) + ".0", block);
+  Logs logs;
+  const CaBundle b = LoadCaBundle({dir}, logs.Sink());
+  CHECK(b.certificates > 0);
+  CHECK(b.pem.size() <= kMaxCaBundleBytes);
+  CHECK(logs.text.find("-byte bound") != std::string::npos);
+}
+
+TEST(one_corrupt_file_in_the_directory_does_not_break_the_handshake) {
+  const std::string dir = FreshDir("ca-poisoned");
+  WriteFile(dir + "/0001.0", PemOf(Fix().ca.cert.get()));
+  WriteFile(dir + "/0002.0", "0 definitely not a certificate");
+  WriteFile(dir + "/0003.0", "-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n");
+  Server server(&Fix().leaf, 2);
+  CurlHttpClient client({dir});
+  const nevr::auth::HttpResponse r = client.PostJson(Url(server), "{}");
+  CHECK(r.transport_ok);
+  CHECK_EQ(r.status, 200L);
+}
+
+TEST(interrupt_during_a_stalled_request_returns_promptly) {
+  Server server(nullptr, 2, /*stall=*/true);
+  CurlHttpClient client({}, nullptr, /*timeout_seconds=*/20, /*allow_plain_http=*/true);
+  nevr::auth::HttpResponse r;
+  std::chrono::steady_clock::time_point done_at;
+  std::thread requester([&] {
+    r = client.PostJson(Url(server, "http", "127.0.0.1"), "{}");
+    done_at = std::chrono::steady_clock::now();
+  });
+  CHECK(WaitUntil([&] { return server.Accepted() >= 1; }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));  // the request is now waiting on the peer
+  const auto interrupted_at = std::chrono::steady_clock::now();
+  client.Interrupt();
+  requester.join();
+  CHECK(!r.transport_ok);
+  CHECK_EQ(r.transport_code, CurlHttpClient::kInterrupted);
+  CHECK(done_at - interrupted_at < std::chrono::seconds(5));  // the stalled peer would hold it for 20 s
 }
 
 }  // namespace

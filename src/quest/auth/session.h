@@ -15,10 +15,12 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace nevr::quest_auth {
 
@@ -85,10 +87,20 @@ struct SessionConfig {
   int poll_failure_limit = 5;
   std::chrono::seconds refresh_retry_pause{2};
   std::chrono::seconds background_period{60};
+  // Pauses before each retry of a login that failed for a transient reason (no connection,
+  // 5xx, 429, an unreadable response). Bounded: after the last one the login is Failed.
+  // A refusal (4xx) is never retried: the cached login is dropped for the device flow, or
+  // the login fails at once.
+  std::vector<std::chrono::seconds> login_retry_delays = {std::chrono::seconds(5), std::chrono::seconds(15),
+                                                          std::chrono::seconds(45), std::chrono::seconds(135),
+                                                          std::chrono::seconds(300)};
 };
 
 class Session {
  public:
+  // `log` is called from the worker thread (and from Start/Stop callers) with no Session lock
+  // held, so it may call Get(). A call to Stop() from inside `log` made on the worker thread
+  // only requests the stop; it never joins itself.
   Session(SessionConfig config, nevr::auth::HttpClient& http, InterruptibleClock& clock,
           CredentialStore& store, LinkPresenter& presenter, nevr::auth::LogSink log);
   ~Session();
@@ -97,7 +109,10 @@ class Session {
 
   // Spawns the worker and returns immediately. A second call is a no-op.
   void Start();
-  // Interrupts sleeps and joins the worker. Idempotent.
+  // Interrupts sleeps and in-flight requests and joins the worker. Idempotent; concurrent
+  // calls wait for the same join. Do not call it from a LinkPresenter/CredentialStore/HttpClient
+  // callback: those run on the worker thread and Stop would wait for itself (a call from the
+  // log sink is handled, see the constructor).
   void Stop();
 
   Snapshot Get() const;
@@ -106,8 +121,12 @@ class Session {
 
  private:
   void Run();
-  bool TryCachedLogin(CachedAuthToken& auth);
+  enum class LoginResult { Ok, Permanent, Transient };
+  LoginResult TryCachedLogin(CachedAuthToken& auth);
   bool RunDeviceLogin(CachedAuthToken& out);
+  // Cached login (when use_cache) then device-code login, retrying transient failures on
+  // the configured delays.
+  bool EstablishLogin(CachedAuthToken& auth, bool use_cache);
   void Adopt(const CachedAuthToken& auth, Readiness state);
   void SetState(Readiness state);
   // Runs until stopped, or until a re-login after the credentials died fails.
@@ -130,7 +149,9 @@ class Session {
   Snapshot snapshot_;
   bool stop_ = false;
   std::thread worker_;
+  std::atomic<std::thread::id> worker_id_{};
   bool started_ = false;
+  bool device_request_transient_ = false;  // worker thread only
 };
 
 }  // namespace nevr::quest_auth

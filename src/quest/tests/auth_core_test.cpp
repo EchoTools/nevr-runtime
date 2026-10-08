@@ -6,7 +6,6 @@
 #include "core/auth_refresh.h"
 #include "core/auth_token_model.h"
 #include "core/device_auth_flow.h"
-#include "quest/auth/ca_bundle.h"
 #include "quest/auth/file_store.h"
 #include "quest/auth/session.h"
 #include "quest/tests/mini_test.h"
@@ -24,6 +23,7 @@
 #include <map>
 #include <mutex>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <sys/stat.h>
 #include <thread>
@@ -162,11 +162,11 @@ HttpResponse Ok(const nlohmann::json& j) {
   r.body = j.dump();
   return r;
 }
-HttpResponse Status(long status) {
+HttpResponse Status(long status, const std::string& body = "oops") {
   HttpResponse r;
   r.transport_ok = true;
   r.status = status;
-  r.body = "oops";
+  r.body = body;
   return r;
 }
 HttpResponse NoTransport(int code = 28) {
@@ -334,7 +334,10 @@ TEST(a_failed_refresh_leaves_the_token_record_untouched) {
   const std::vector<Case> cases = {
       {"transport", NoTransport(), RefreshOutcome::TransportFailed},
       {"http500", Status(500), RefreshOutcome::Rejected},
-      {"http401", Status(401), RefreshOutcome::Denied},
+      {"http401_names_token", Status(401, R"({"code":16,"message":"invalid or expired refresh token"})"),
+       RefreshOutcome::Denied},
+      {"http401_wrong_key", Status(401, R"({"code":16,"message":"HTTP key invalid."})"),
+       RefreshOutcome::Unauthorized},
       {"garbage", garbage, RefreshOutcome::Malformed},
       {"array", notObject, RefreshOutcome::Malformed},
       {"no_token", Ok({{"refresh_token", "x"}}), RefreshOutcome::NoAccessToken},
@@ -604,7 +607,7 @@ TEST(session_a_flaky_first_refresh_is_retried_before_the_cache_is_given_up_on) {
   s.Stop();
 }
 
-TEST(session_refresh_failure_keeps_the_cache_and_reports_failed_when_login_also_fails) {
+TEST(session_refresh_failure_keeps_the_cache_and_does_not_prompt_when_retries_are_exhausted) {
   FakeClock clock;
   FakeHttp http;
   FakeStore store;
@@ -612,11 +615,15 @@ TEST(session_refresh_failure_keeps_the_cache_and_reports_failed_when_login_also_
   FakePresenter presenter;
   LogCapture log;
   http.handler = [](const std::string&, const std::string&) { return NoTransport(); };
-  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  SessionConfig cfg = TestConfig();
+  cfg.login_retry_delays = {};  // no login-level retries: the three refresh attempts only
+  Session s(cfg, http, clock, store, presenter, log.Sink());
   s.Start();
   clock.Allow(2);  // two pauses between the three refresh attempts
   CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
   CHECK_EQ(http.Count("refresh"), 3);
+  CHECK_EQ(http.Count("request"), 0);  // a flaky network does not ask the player to sign in again
+  CHECK_EQ(presenter.presented.load(), 0);
   CHECK_EQ(store.SaveCount(), size_t(0));  // nothing written: the cached login survives
   CHECK(s.Token().empty());
   CHECK(log.All().find("cache file kept") != std::string::npos);
@@ -815,16 +822,36 @@ TEST(link_presenter_reports_failure_when_it_cannot_write) {
 
 
 // ---------------------------------------------------------------- refresh classification
-TEST(refresh_denied_means_the_server_refuses_the_token_other_statuses_are_retryable) {
-  for (const long status : {400L, 401L, 403L}) {
-    CachedAuthToken a = CachedWithRefresh();
-    HttpResponse r = Status(status);
-    CHECK(ApplyRefreshResponse(a, r, kT0, nullptr) == RefreshOutcome::Denied);
+TEST(refresh_denied_needs_the_body_to_name_the_refresh_token_a_bare_401_is_not_that) {
+  // The refresh RPC's own errors (nakama server/evr_device_auth.go) name the token.
+  for (const char* body : {R"({"message":"invalid or expired refresh token"})", R"({"message":"refresh token expired"})",
+                           R"({"message":"not a refresh token"})", R"({"message":"invalid payload: refresh_token required"})",
+                           R"({"message":"Refresh Token Expired"})"}) {
+    for (const long status : {400L, 401L, 403L}) {
+      CachedAuthToken a = CachedWithRefresh();
+      CHECK(ApplyRefreshResponse(a, Status(status, body), kT0, nullptr) == RefreshOutcome::Denied);
+    }
   }
-  for (const long status : {429L, 500L, 502L, 503L}) {
+  // A wrong http_key is a 401 from the gateway layer (server/api_rpc.go), not about the token.
+  for (const long status : {401L, 403L}) {
     CachedAuthToken a = CachedWithRefresh();
-    HttpResponse r = Status(status);
-    CHECK(ApplyRefreshResponse(a, r, kT0, nullptr) == RefreshOutcome::Rejected);
+    LogCapture log;
+    CHECK(ApplyRefreshResponse(a, Status(status, R"({"message":"HTTP key invalid."})"), kT0, log.Sink()) ==
+          RefreshOutcome::Unauthorized);
+    CHECK(log.All().find("names_refresh_token=0") != std::string::npos);
+    CHECK(log.All().find("http_status=" + std::to_string(status)) != std::string::npos);
+    CHECK(log.All().find("HTTP key") == std::string::npos);  // the body is never echoed
+  }
+  {
+    CachedAuthToken a = CachedWithRefresh();
+    LogCapture log;
+    CHECK(ApplyRefreshResponse(a, Status(401, R"({"message":"invalid or expired refresh token"})"), kT0,
+                               log.Sink()) == RefreshOutcome::Denied);
+    CHECK(log.All().find("names_refresh_token=1") != std::string::npos);
+  }
+  for (const long status : {400L, 429L, 500L, 502L, 503L}) {
+    CachedAuthToken a = CachedWithRefresh();
+    CHECK(ApplyRefreshResponse(a, Status(status, "gateway oops"), kT0, nullptr) == RefreshOutcome::Rejected);
   }
 }
 
@@ -845,7 +872,7 @@ TEST(refresh_log_wording_tells_bad_json_from_json_of_the_wrong_shape) {
   CHECK(outcome_log("[]").find("not valid JSON") == std::string::npos);
 }
 
-// ---------------------------------------------------------------- CA bundle
+// ---------------------------------------------------------------- scratch helpers
 std::string ScratchDir(const std::string& name) {
   const std::string dir = "build/quest-shared-host/scratch/" + name;
   std::filesystem::remove_all(dir);
@@ -855,54 +882,17 @@ std::string ScratchDir(const std::string& name) {
 void WriteFile(const std::string& path, const std::string& data) {
   std::ofstream(path, std::ios::binary) << data;
 }
-const char kFakePem[] = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\nCertificate:\n  text dump\n";
-
-TEST(der_is_wrapped_as_a_pem_certificate_block) {
-  CHECK_EQ(DerToPem(std::string("\x30\x03\x02\x01\x05", 5)),
-           std::string("-----BEGIN CERTIFICATE-----\nMAMCAQU=\n-----END CERTIFICATE-----\n"));
-}
-
-TEST(ca_bundle_takes_pem_and_der_and_skips_everything_else) {
-  const std::string dir = ScratchDir("ca-mixed");
-  WriteFile(dir + "/aaaa1111.0", kFakePem);
-  WriteFile(dir + "/bbbb2222.0", std::string("\x30\x03\x02\x01\x05", 5));
-  WriteFile(dir + "/readme.txt", "not a certificate");
-  WriteFile(dir + "/empty.0", "");
-  LogCapture log;
-  const CaBundle b = LoadCaBundle({dir}, log.Sink());
-  CHECK_EQ(b.certificates, size_t(2));
-  CHECK(b.pem.find("AAAA") != std::string::npos);
-  CHECK(b.pem.find("MAMCAQU=") != std::string::npos);
-  CHECK(b.pem.find("not a certificate") == std::string::npos);
-  CHECK(log.All().find("certificates=2 skipped_files=2") != std::string::npos);
-}
-
-TEST(ca_bundle_prefers_the_first_directory_that_has_certificates_and_fails_loudly_with_none) {
-  const std::string apex = ScratchDir("ca-apex");
-  const std::string sys = ScratchDir("ca-system");
-  WriteFile(sys + "/a.0", kFakePem);
-  WriteFile(sys + "/b.0", kFakePem);
-  {
-    LogCapture log;
-    CHECK_EQ(LoadCaBundle({apex, sys}, log.Sink()).certificates, size_t(2));  // apex empty: fall through
-    CHECK(log.All().find("held no certificates") != std::string::npos);
-  }
-  WriteFile(apex + "/c.0", kFakePem);
-  CHECK_EQ(LoadCaBundle({apex, sys}, nullptr).certificates, size_t(1));  // apex wins, not merged
-  {
-    LogCapture log;
-    CHECK_EQ(LoadCaBundle({"build/quest-shared-host/scratch/nope"}, log.Sink()).certificates, size_t(0));
-    CHECK(log.All().find("fail closed") != std::string::npos);
-  }
-}
 
 // ---------------------------------------------------------------- credential store location and hygiene
-TEST(the_private_directory_comes_from_the_process_package_name_or_not_at_all) {
+TEST(the_private_directory_comes_from_the_process_package_and_android_user_or_not_at_all) {
   const std::string cmd("com.readyatdawn.r15\0\0", 21);
-  CHECK_EQ(AppInternalFilesDirFromCmdline(cmd), std::string("/data/data/com.readyatdawn.r15/files"));
-  CHECK_EQ(AppInternalFilesDirFromCmdline("com.readyatdawn.r15"), std::string("/data/data/com.readyatdawn.r15/files"));
+  CHECK_EQ(AppInternalFilesDirFromCmdline(cmd, 10234), std::string("/data/user/0/com.readyatdawn.r15/files"));
+  CHECK_EQ(AppInternalFilesDirFromCmdline("com.readyatdawn.r15", 0), std::string("/data/user/0/com.readyatdawn.r15/files"));
+  // Android user 10: uid = 10 * 100000 + app id.
+  CHECK_EQ(AppInternalFilesDirFromCmdline("com.readyatdawn.r15", 1010234),
+           std::string("/data/user/10/com.readyatdawn.r15/files"));
   for (const char* bad : {"", "nodot", "com.x:service", "../x.y", "a..b", ".a.b", "a.b.", "com.x y", "/system/bin/app_process"}) {
-    CHECK_EQ(AppInternalFilesDirFromCmdline(bad), std::string());
+    CHECK_EQ(AppInternalFilesDirFromCmdline(bad, 10234), std::string());
   }
 }
 
@@ -1038,7 +1028,7 @@ TEST(session_a_refresh_the_server_denies_starts_a_new_device_login_instead_of_re
                  {"refresh_token", n == 1 ? "rt-a" : "rt-b"},
                  {"refresh_token_expires_in", 2592000}});
     }
-    return Status(401);
+    return Status(401, R"({"message":"invalid or expired refresh token"})");
   };
   Session s(TestConfig(), http, clock, store, presenter, log.Sink());
   s.Start();
@@ -1048,7 +1038,7 @@ TEST(session_a_refresh_the_server_denies_starts_a_new_device_login_instead_of_re
   CHECK(WaitUntil([&] { return s.Token() == MakeJwt(kT0 + 9000); }));
   CHECK_EQ(http.Count("refresh"), 1);
   CHECK_EQ(presenter.presented.load(), 2);
-  CHECK(log.All().find("the server refuses the refresh token") != std::string::npos);
+  CHECK(log.All().find("the server rejected the refresh token itself") != std::string::npos);
   s.Stop();
 }
 
@@ -1143,6 +1133,167 @@ TEST(session_stop_does_not_wait_for_a_blocked_request) {
   cv.notify_all();
   stopper.join();
   CHECK(s.Get().readiness == Readiness::Stopped);
+}
+
+
+// ---------------------------------------------------------------- session: outages and refusals
+TEST(session_a_boot_time_outage_retries_with_backoff_and_keeps_the_cached_login) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  store.initial = CachedWithRefresh();
+  FakePresenter presenter;
+  LogCapture log;
+  auto calls = std::make_shared<std::atomic<int>>(0);
+  http.handler = [calls](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint != "refresh") return Status(404);
+    return calls->fetch_add(1) < 4 ? NoTransport() : Ok(RefreshOkBody(kT0 + 3600, "rt-after-outage"));
+  };
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  clock.Allow(20);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK_EQ(http.Count("refresh"), 5);      // 3 attempts, a 5 s backoff, 2 more
+  CHECK_EQ(http.Count("request"), 0);      // the player was never prompted
+  CHECK_EQ(presenter.presented.load(), 0);
+  CHECK_EQ(store.Last().refresh_token, std::string("rt-after-outage"));
+  CHECK(log.All().find("retry 1/5 in 5s") != std::string::npos);
+  s.Stop();
+}
+
+TEST(session_a_refresh_refused_for_the_token_is_not_retried_and_goes_to_the_device_login) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  store.initial = CachedWithRefresh();
+  FakePresenter presenter;
+  http.handler = [](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint == "refresh") return Status(401, R"({"message":"invalid or expired refresh token"})");
+    if (endpoint == "request") return Ok({{"code", "C"}});
+    return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 3600)}, {"refresh_token", "rt-new"},
+               {"refresh_token_expires_in", 2592000}});
+  };
+  Session s(TestConfig(), http, clock, store, presenter, nullptr);
+  s.Start();
+  clock.Allow(1);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK_EQ(http.Count("refresh"), 1);
+  CHECK_EQ(presenter.presented.load(), 1);
+  s.Stop();
+}
+
+TEST(session_a_wrong_http_key_fails_at_once_without_retrying_or_discarding_the_cache) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  store.initial = CachedWithRefresh();
+  FakePresenter presenter;
+  LogCapture log;
+  http.handler = [](const std::string&, const std::string&) -> HttpResponse {
+    return Status(401, R"({"code":16,"message":"HTTP key invalid."})");
+  };
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  CHECK_EQ(http.Count("refresh"), 1);
+  CHECK_EQ(http.Count("request"), 1);
+  CHECK_EQ(clock.Sleeps(), 0);  // no backoff for a 4xx
+  CHECK_EQ(store.SaveCount(), size_t(0));
+  CHECK(log.All().find("wrong http_key") != std::string::npos);
+  CHECK(log.All().find("the server rejected the refresh token itself") == std::string::npos);
+  s.Stop();
+}
+
+TEST(session_device_code_request_outage_is_retried_a_bounded_number_of_times) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  http.handler = [](const std::string&, const std::string&) -> HttpResponse { return NoTransport(); };
+  SessionConfig cfg = TestConfig();
+  cfg.login_retry_delays = {seconds(1), seconds(2)};
+  Session s(cfg, http, clock, store, presenter, nullptr);
+  s.Start();
+  clock.Allow(50);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  CHECK_EQ(http.Count("request"), 3);  // the first try and two retries
+  CHECK_EQ(presenter.presented.load(), 0);
+  s.Stop();
+}
+
+TEST(session_device_code_request_outage_that_clears_still_logs_in) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  auto requests = std::make_shared<std::atomic<int>>(0);
+  http.handler = [requests](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint == "request") return requests->fetch_add(1) < 2 ? Status(503) : Ok({{"code", "C"}});
+    return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 3600)}, {"refresh_token", "rt"},
+               {"refresh_token_expires_in", 2592000}});
+  };
+  Session s(TestConfig(), http, clock, store, presenter, nullptr);
+  s.Start();
+  clock.Allow(10);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK_EQ(http.Count("request"), 3);
+  s.Stop();
+}
+
+TEST(session_a_4xx_device_code_request_is_not_retried) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  http.handler = [](const std::string&, const std::string&) -> HttpResponse { return Status(400); };
+  Session s(TestConfig(), http, clock, store, presenter, nullptr);
+  s.Start();
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  CHECK_EQ(http.Count("request"), 1);
+  CHECK_EQ(clock.Sleeps(), 0);
+  s.Stop();
+}
+
+// ---------------------------------------------------------------- session lifecycle edge cases
+TEST(session_a_log_sink_that_calls_stop_does_not_deadlock_or_join_itself) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  DeviceHandler(http, 1000000, kT0 + 3600);
+  Session* self = nullptr;
+  std::atomic<bool> fired{false};
+  const LogSink sink = [&](LogLevel, const std::string& m) {
+    if (self != nullptr && m.find("Device authorization started") != std::string::npos && !fired.exchange(true)) {
+      self->Stop();  // runs on the worker thread
+    }
+  };
+  Session s(TestConfig(), http, clock, store, presenter, sink);
+  self = &s;
+  s.Start();
+  CHECK(WaitUntil([&] { return fired.load(); }));
+  s.Stop();  // the joining Stop: must return although the sink already asked for a stop
+  CHECK(s.Get().readiness == Readiness::Stopped);
+}
+
+TEST(session_the_login_link_is_removed_even_when_the_flow_throws) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  LogCapture log;
+  http.handler = [](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint == "request") return Ok({{"code", "C"}});
+    throw std::runtime_error("poll exploded");
+  };
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  clock.Allow(1);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  CHECK_EQ(presenter.presented.load(), 1);
+  CHECK(presenter.cleared.load() >= 1);
+  CHECK(log.All().find("auth worker stopped on an exception") != std::string::npos);
+  s.Stop();
 }
 
 }  // namespace
