@@ -250,8 +250,11 @@ bool ApplyFieldsAtomically(const std::vector<Field>& fields, JsonAccess& json,
       const bool same_type = before.type == WrittenType(field.kind);
       const bool replaceable = before.type == JsonType::Absent || before.type == JsonType::Null;
       // A nested write under a parent that exists but is not an object is refused by CJson
-      // ("$ json path: ... is not an object", FUN_00faef34 at libr15 0xfaef34); the rewrite
-      // does not attempt it.
+      // ("$ json path: %s is not an object.", libpnsovr.so string 0x5825b1; the setter's path
+      // walker 0x35ba84 branches to 0x364bdc, which tests the node type at 0x364bf8-0x364c00);
+      // the rewrite does not attempt it. Every setter also refuses when the CJson is cached
+      // ([this+8] != 0, "json db is cached, read only", string 0x5820c0); the read-back after
+      // each write covers that.
       const bool parent_ok = before.top.empty() || before.top_type == JsonType::Absent ||
                              before.top_type == JsonType::Object;
       if (!Restorable(before.type) || !(same_type || replaceable) || !parent_ok) {
@@ -292,15 +295,19 @@ const char* OutcomeName(Outcome outcome) {
 namespace {
 
 // One structured record: event "quest_login", then `outcome`, then the detail fields.
-void Emit(LogFn log, Level level, Outcome outcome, std::initializer_list<LogKv> details) {
+void Emit(LogFn log, Level level, Outcome outcome, const LogKv* details, std::size_t n) {
   if (log == nullptr) return;
   LogKv fields[10];
   std::size_t count = 0;
   fields[count++] = LogKv{"outcome", OutcomeName(outcome), 0};
-  for (const LogKv& detail : details) {
-    if (count < sizeof(fields) / sizeof(fields[0])) fields[count++] = detail;
+  for (std::size_t i = 0; i < n; ++i) {
+    if (count < sizeof(fields) / sizeof(fields[0])) fields[count++] = details[i];
   }
   log(level, "quest_login", fields, count);
+}
+
+void Emit(LogFn log, Level level, Outcome outcome, std::initializer_list<LogKv> details) {
+  Emit(log, level, outcome, details.begin(), details.size());
 }
 
 LogKv Text(const char* key, const char* value) { return LogKv{key, value, 0}; }
@@ -310,6 +317,29 @@ LogKv Num(const char* key, long long value) { return LogKv{key, nullptr, value};
 
 namespace {
 
+// Ends a login the rewrite did not take: puts the Oculus account id back (a no-op when no
+// earlier login replaced it) and writes the one record, with `restored` saying whether the
+// id was put back. The JSON needs no undoing here; ApplyFieldsAtomically restores its own.
+Outcome Decline(UserAccess& user, LogFn log, Outcome outcome, Level level,
+                std::initializer_list<LogKv> details) noexcept {
+  bool restored = false;
+  try {
+    restored = user.RestoreAccountId();
+  } catch (const std::exception&) {
+  }
+  try {
+    LogKv fields[10];
+    std::size_t count = 0;
+    for (const LogKv& detail : details) {
+      if (count < sizeof(fields) / sizeof(fields[0]) - 1) fields[count++] = detail;
+    }
+    fields[count++] = LogKv{"restored", nullptr, restored ? 1 : 0};
+    Emit(log, level, outcome, fields, count);
+  } catch (const std::exception&) {
+  }
+  return outcome;
+}
+
 Outcome RewriteLoginImpl(UserAccess& user, JsonAccess& json, IdentitySource& source,
                          const BuildInfo& build, LogFn log) {
   try {
@@ -318,9 +348,8 @@ Outcome RewriteLoginImpl(UserAccess& user, JsonAccess& json, IdentitySource& sou
     if (identity_status != IdentityStatus::Ok) {
       // The ADR forbids fabricating an identity: the original Oculus login goes out unchanged
       // and the server answers it.
-      Emit(log, Level::Error, Outcome::NoIdentity,
-           {Text("reason", IdentityStatusName(identity_status)), Text("action", "original_login_unchanged")});
-      return Outcome::NoIdentity;
+      return Decline(user, log, Outcome::NoIdentity, Level::Error,
+                     {Text("reason", IdentityStatusName(identity_status))});
     }
 
     // CNSOVRUser's constructor stores provider 4 in the platform word, which is the platform
@@ -328,20 +357,18 @@ Outcome RewriteLoginImpl(UserAccess& user, JsonAccess& json, IdentitySource& sou
     // measured on, and the later requests would name a different platform.
     std::uint64_t provider = 0;
     if (!user.Provider(provider)) {
-      Emit(log, Level::Error, Outcome::UserUnreadable, {Text("reason", "provider")});
-      return Outcome::UserUnreadable;
+      return Decline(user, log, Outcome::UserUnreadable, Level::Error, {Text("reason", "provider")});
     }
     if ((provider & kProviderMask) != kPlatformOvrOrg) {
-      Emit(log, Level::Error, Outcome::PlatformMismatch,
-           {Num("provider", static_cast<long long>(provider & kProviderMask)),
-            Num("expected", static_cast<long long>(kPlatformOvrOrg))});
-      return Outcome::PlatformMismatch;
+      return Decline(user, log, Outcome::PlatformMismatch, Level::Error,
+                     {Num("provider", static_cast<long long>(provider & kProviderMask)),
+                      Num("expected", static_cast<long long>(kPlatformOvrOrg))});
     }
 
     Composition composition = Compose(identity, ReadGameValues(json), build);
     if (composition.status != ComposeStatus::Ok) {
-      Emit(log, Level::Error, Outcome::ComposeFailed, {Text("reason", StatusName(composition.status))});
-      return Outcome::ComposeFailed;
+      return Decline(user, log, Outcome::ComposeFailed, Level::Error,
+                     {Text("reason", StatusName(composition.status))});
     }
 
     // Client-class members are never written; hardware members the game measured are kept.
@@ -368,28 +395,25 @@ Outcome RewriteLoginImpl(UserAccess& user, JsonAccess& json, IdentitySource& sou
     std::uint64_t wire = 0;
     if (!user.SetAccountId(identity.account_id) || !user.WireAccountId(wire) ||
         wire != identity.account_id) {
-      Emit(log, Level::Error, Outcome::AccountIdNotCarried, {Text("action", "account_id_restored")});
-      return Outcome::AccountIdNotCarried;
+      return Decline(user, log, Outcome::AccountIdNotCarried, Level::Error, {});
     }
 
     std::string failed_path;
     if (!ApplyFieldsAtomically(fields, json, failed_path)) {
-      Emit(log, Level::Error, Outcome::JsonWriteFailed,
-           {Text("first_path", failed_path.c_str()), Num("fields", static_cast<long long>(fields.size())),
-            Text("action", "json_and_account_id_restored")});
-      return Outcome::JsonWriteFailed;
+      return Decline(user, log, Outcome::JsonWriteFailed, Level::Error,
+                     {Text("first_path", failed_path.c_str()), Num("fields", static_cast<long long>(fields.size()))});
     }
 
     // The JSON is committed from here on. Nothing below may throw into the catch clause, which
     // would otherwise report a failure over a rewritten login; a failing log sink is ignored.
     try {
       Emit(log, Level::Info, Outcome::Rewritten,
-         {Num("platform", static_cast<long long>(kPlatformOvrOrg)),
-          Text("hmd_serial_source", composition.hmd_serial_source.c_str()),
-          Num("fields", static_cast<long long>(fields.size())),
-          Num("skipped", static_cast<long long>(composition.skipped.size())),
-          Num("kept_client_class", static_cast<long long>(kept_client_class)),
-          Num("kept_measured", static_cast<long long>(kept_measured))});
+           {Num("platform", static_cast<long long>(kPlatformOvrOrg)),
+            Text("hmd_serial_source", composition.hmd_serial_source.c_str()),
+            Num("fields", static_cast<long long>(fields.size())),
+            Num("skipped", static_cast<long long>(composition.skipped.size())),
+            Num("kept_client_class", static_cast<long long>(kept_client_class)),
+            Num("kept_measured", static_cast<long long>(kept_measured))});
     } catch (const std::exception&) {
       // Logging failed after the commit; the rewrite itself stands.
     }
@@ -397,11 +421,7 @@ Outcome RewriteLoginImpl(UserAccess& user, JsonAccess& json, IdentitySource& sou
   } catch (const std::exception&) {
     // Reached only before the JSON transaction commits: Fetch, Compose and the field filter
     // run first, ApplyFieldsAtomically restores its own writes, and nothing after it throws.
-    try {
-      Emit(log, Level::Error, Outcome::Exception, {Text("action", "original_login_unchanged")});
-    } catch (const std::exception&) {
-    }
-    return Outcome::Exception;
+    return Decline(user, log, Outcome::Exception, Level::Error, {});
   }
 }
 
@@ -409,16 +429,7 @@ Outcome RewriteLoginImpl(UserAccess& user, JsonAccess& json, IdentitySource& sou
 
 Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
                      const BuildInfo& build, LogFn log) {
-  const Outcome outcome = RewriteLoginImpl(user, json, source, build, log);
-  if (outcome != Outcome::Rewritten) {
-    // Every decline leaves the Oculus login untouched, so the account id it will carry must
-    // be the Oculus one too (see UserAccess::RestoreAccountId).
-    try {
-      user.RestoreAccountId();
-    } catch (const std::exception&) {
-    }
-  }
-  return outcome;
+  return RewriteLoginImpl(user, json, source, build, log);
 }
 
 Outcome RewriteLoginNoThrow(UserAccess& user, JsonAccess& json, IdentitySource& source,

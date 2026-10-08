@@ -42,6 +42,7 @@ class FakeJson final : public QuestLogin::JsonAccess {
   int throw_after = -1;                 // throw std::bad_alloc on the Nth mutating call; -1 never
   int mutations = 0;
   bool int_overwrites_real = false;     // a build whose SetInt replaces a real instead of refusing
+  bool nested_write_replaces_parent = false;  // a build whose nested write turns a non-object parent into an object
 
   JsonType TypeOf(const char* path) const override {
     auto it = values.find(path);
@@ -118,6 +119,10 @@ class FakeJson final : public QuestLogin::JsonAccess {
     for (std::size_t bar = key.find('|'); bar != std::string::npos; bar = key.find('|', bar + 1)) {
       Value& parent = values[key.substr(0, bar)];
       if (parent.type == JsonType::Absent) parent.type = JsonType::Object;
+      if (parent.type != JsonType::Object && nested_write_replaces_parent) {
+        parent = Value();
+        parent.type = JsonType::Object;
+      }
       if (parent.type != JsonType::Object) return;
     }
     Value value;
@@ -137,6 +142,8 @@ class FakeUser final : public QuestLogin::UserAccess {
   std::uint64_t global_account_id = 5551234;     // what AccountID() returns (the org-scoped id)
   std::uint64_t object_account_field = 5551234;  // [this+0x88]: ignored by the override
   bool setter_reaches_global = true;             // false: the write lands somewhere AccountID() never reads
+  bool wire_forced = false;                      // true: AccountID() returns forced_wire whatever the global holds
+  std::uint64_t forced_wire = 0;
   int restores = 0;
 
   bool Provider(std::uint64_t& code) const override {
@@ -144,19 +151,21 @@ class FakeUser final : public QuestLogin::UserAccess {
     return true;
   }
   bool WireAccountId(std::uint64_t& id) const override {
-    id = global_account_id;
+    id = wire_forced ? forced_wire : global_account_id;
     return true;
   }
   bool SetAccountId(std::uint64_t id) override {
-    memory_.NoteBeforeWrite(global_account_id, id);
+    if (!memory_.NoteBeforeWrite(global_account_id, id)) return false;
     if (setter_reaches_global) global_account_id = id;
     else object_account_field = id;
     return true;
   }
-  void RestoreAccountId() override {
-    std::uint64_t oculus = 0;
-    if (memory_.Original(oculus)) global_account_id = oculus;
+  bool RestoreAccountId() override {
     ++restores;
+    std::uint64_t oculus = 0;
+    if (!memory_.RestoreFor(global_account_id, oculus)) return false;
+    global_account_id = oculus;
+    return true;
   }
 
  private:
@@ -685,14 +694,16 @@ void TestSecondRewrittenLoginKeepsTheNevrIdAndALaterDeclineRestoresOculus() {
 }
 
 // A top-level member the profile nests under can exist and not be an object. CJson refuses a
-// nested write under it ("$ json path: ... is not an object", libr15 0xfaef34), so nothing is
-// attempted and the game's value is left exactly as it was.
+// nested write under it ("$ json path: %s is not an object.", libpnsovr.so string 0x5825b1),
+// so nothing is attempted and the game's value is left exactly as it was. The fake models a
+// build whose nested write would overwrite the value instead.
 void TestParentThatIsNotAnObjectIsLeftAlone() {
   for (const char* top : {"nevr_identity", "system_info"}) {
     FakeJson json;
     SeedOculusLogin(json);
     json.Clear(top);
     json.SetString(top, "game-value");
+    json.nested_write_replaces_parent = true;  // a build whose nested write would overwrite the value
     const nlohmann::json before = json.ToJson();
     FakeUser user;
     FakeSource source;
@@ -753,6 +764,99 @@ void TestNoThrowEntryContainsExceptions() {
   }
 }
 
+// AccountIdNotCarried after the global was really written: the restore must put it back.
+void TestAccountIdNotCarriedRestoresTheWrittenGlobal() {
+  FakeJson json;
+  SeedOculusLogin(json);
+  const nlohmann::json before = json.ToJson();
+  FakeUser user;
+  user.wire_forced = true;  // AccountID() answers something else than the global
+  user.forced_wire = 4242;
+  FakeSource source;
+  source.identity = MakeIdentity();
+  g_log.clear();
+  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) ==
+         QuestLogin::Outcome::AccountIdNotCarried);
+  QCHECK(user.global_account_id == 5551234);  // written, then put back
+  QCHECK(json.ToJson() == before);
+  QCHECK(g_log.size() == 1 && g_log[0].find("restored=1") != std::string::npos);
+}
+
+// The id is put back only while the global still holds what the rewrite wrote, and only a real
+// id is ever remembered.
+void TestRestoreLeavesAGameWriteAlone() {
+  FakeUser user;
+  FakeSource source;
+  source.identity = MakeIdentity();
+  FakeJson first;
+  SeedOculusLogin(first);
+  QCHECK(QuestLogin::RewriteLogin(user, first, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+  user.global_account_id = 2222;  // the game stored a new id
+  source.status = QuestLogin::IdentityStatus::NotReady;
+  FakeJson second;
+  SeedOculusLogin(second);
+  g_log.clear();
+  QCHECK(QuestLogin::RewriteLogin(user, second, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::NoIdentity);
+  QCHECK(user.global_account_id == 2222);
+  QCHECK(g_log.size() == 1 && g_log[0].find("restored=0") != std::string::npos);
+}
+
+void TestNoRealIdToRememberRefusesTheRewrite() {
+  for (std::uint64_t value : {std::uint64_t{0}, ~std::uint64_t{0}}) {
+    FakeJson json;
+    SeedOculusLogin(json);
+    const nlohmann::json before = json.ToJson();
+    FakeUser user;
+    user.global_account_id = value;  // RadPluginShutdown wrote 0, or the "fetch again" marker -1
+    FakeSource source;
+    source.identity = MakeIdentity();
+    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) ==
+           QuestLogin::Outcome::AccountIdNotCarried);
+    QCHECK(user.global_account_id == value);
+    QCHECK(json.ToJson() == before);
+  }
+  // A shutdown that zeroes the global after a rewrite: the next rewrite is refused too.
+  FakeUser user;
+  FakeSource source;
+  source.identity = MakeIdentity();
+  FakeJson first;
+  SeedOculusLogin(first);
+  QCHECK(QuestLogin::RewriteLogin(user, first, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+  user.global_account_id = 0;
+  FakeJson second;
+  SeedOculusLogin(second);
+  const nlohmann::json before = second.ToJson();
+  QCHECK(QuestLogin::RewriteLogin(user, second, source, MakeBuild(), &CaptureLog) ==
+         QuestLogin::Outcome::AccountIdNotCarried);
+  QCHECK(user.global_account_id == 0);
+  QCHECK(second.ToJson() == before);
+}
+
+// The record says whether the Oculus id was put back, without values.
+void TestDeclineRecordSaysWhetherTheOculusIdWasRestored() {
+  FakeUser user;
+  FakeSource source;
+  source.status = QuestLogin::IdentityStatus::NoToken;
+  FakeJson never;
+  SeedOculusLogin(never);
+  g_log.clear();
+  QuestLogin::RewriteLogin(user, never, source, MakeBuild(), &CaptureLog);
+  QCHECK(g_log.size() == 1 && g_log[0].find("restored=0") != std::string::npos);
+
+  source.status = QuestLogin::IdentityStatus::Ok;
+  source.identity = MakeIdentity();
+  FakeJson ok;
+  SeedOculusLogin(ok);
+  QuestLogin::RewriteLogin(user, ok, source, MakeBuild(), &CaptureLog);
+  source.status = QuestLogin::IdentityStatus::NoToken;
+  FakeJson after;
+  SeedOculusLogin(after);
+  g_log.clear();
+  QuestLogin::RewriteLogin(user, after, source, MakeBuild(), &CaptureLog);
+  QCHECK(g_log.size() == 1 && g_log[0].find("restored=1") != std::string::npos);
+  QCHECK(g_log[0].find("5551234") == std::string::npos && g_log[0].find("987654321012345") == std::string::npos);
+}
+
 void TestInvalidUtf8NameDoesNotThrow() {
   QuestLogin::Identity id = MakeIdentity();
   id.display_name = "bad\xff\xfe";
@@ -791,6 +895,10 @@ int main() {
   TestParentThatIsNotAnObjectIsLeftAlone();
   TestLogFailureAfterCommitKeepsTheRewrite();
   TestNoThrowEntryContainsExceptions();
+  TestAccountIdNotCarriedRestoresTheWrittenGlobal();
+  TestRestoreLeavesAGameWriteAlone();
+  TestNoRealIdToRememberRefusesTheRewrite();
+  TestDeclineRecordSaysWhetherTheOculusIdWasRestored();
   TestInvalidUtf8NameDoesNotThrow();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "login_rewrite_test: %d check(s) failed\n", quest_test::Failures());

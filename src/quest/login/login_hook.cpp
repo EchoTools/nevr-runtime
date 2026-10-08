@@ -115,7 +115,15 @@ using LoginThunk = sentinel::CallbackThunk<LoginTag, void(void*, void*)>;
 // (docs/adr/0003, "Login interception") must see the same id. On any outcome other than
 // Rewritten it goes back to the Oculus id, because LogInInternal re-reads the Oculus org id
 // only when the global holds -1 (0x1ec96c-0x1ec984) and the Oculus login then goes out.
-// OculusIdMemory keeps the Oculus value across logins in this process.
+// OculusIdMemory keeps the Oculus value across logins in this process, puts it back only while
+// the global still holds the value written here, and never remembers 0 or -1.
+//
+// Threading: g_account_mutex serializes this adapter's own accesses. The game's writers of the
+// global (GotLoggedInUserOrgIdCb 0x1ecef0/0x1ecf18, RadPluginShutdown 0x207074) are not under
+// it, and set -> verify -> JSON -> restore is not atomic against them. The login path is taken
+// to run on one game thread with no concurrent writer while a login is in flight (the fetch
+// is gated on -1 at 0x1ec980, so the game does not write while the NEVR id is installed).
+// That is an assumption, not a measurement.
 class LiveUser final : public UserAccess {
  public:
   LiveUser(void* user, std::uint64_t* account_global, const void* expected_vptr)
@@ -139,16 +147,18 @@ class LiveUser final : public UserAccess {
   bool SetAccountId(std::uint64_t id) override {
     if (!Valid() || global_ == nullptr) return false;
     const std::lock_guard<std::mutex> lock(g_account_mutex);
-    g_oculus_id.NoteBeforeWrite(__atomic_load_n(global_, __ATOMIC_ACQUIRE), id);
+    if (!g_oculus_id.NoteBeforeWrite(__atomic_load_n(global_, __ATOMIC_ACQUIRE), id)) return false;
     __atomic_store_n(global_, id, __ATOMIC_RELEASE);
     return true;
   }
 
-  void RestoreAccountId() override {
-    if (global_ == nullptr) return;
+  bool RestoreAccountId() override {
+    if (global_ == nullptr) return false;
     const std::lock_guard<std::mutex> lock(g_account_mutex);
     std::uint64_t oculus = 0;
-    if (g_oculus_id.Original(oculus)) __atomic_store_n(global_, oculus, __ATOMIC_RELEASE);
+    if (!g_oculus_id.RestoreFor(__atomic_load_n(global_, __ATOMIC_ACQUIRE), oculus)) return false;
+    __atomic_store_n(global_, oculus, __ATOMIC_RELEASE);
+    return true;
   }
 
  private:
@@ -206,10 +216,12 @@ class LiveJson final : public JsonAccess {
   void* json_;
 };
 
-// Runs the rewrite for one login. Its own frame owns the adapters (which have destructors); it
-// returns before the game's original is called, so the original never runs under a frame that
-// has cleanups. RewriteLoginNoThrow never throws; this translation unit is built
-// -fno-exceptions (CMake), as the GOT thunk contract requires.
+// Runs the rewrite for one login. The compiler inlines it into the handler, so the adapters
+// (which have destructors) live in the handler's frame, which also calls the game's original.
+// That frame is built -fno-exceptions: it has no landing pad, no LSDA and sits under the
+// personality-free "zR" CIE (tests/quest TestLoginHookObjectCarriesNoPersonality), which is
+// the property that matters. RewriteLoginNoThrow is the only exceptions-enabled frame it
+// calls, and it has returned before the original runs.
 void RunRewrite(const State& state, void* user, void* json) noexcept {
   LiveUser live_user(user, state.account_id_global, state.expected_vptr);
   LiveJson live_json(state.api, json);

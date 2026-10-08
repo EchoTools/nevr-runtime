@@ -150,31 +150,50 @@ class UserAccess {
   // The account id CNSUser::SendLogInRequest will put on the wire: the result of the same
   // virtual AccountID() call it makes.
   virtual bool WireAccountId(std::uint64_t& id) const = 0;
-  // Changes what AccountID() returns. The first write remembers the Oculus value (see
-  // OculusIdMemory) so it can be put back.
+  // Changes what AccountID() returns. Remembers the Oculus value (see OculusIdMemory) so it can
+  // be put back. Returns false, changing nothing, when the global holds no real id (0 or -1)
+  // and none is remembered: there is no Oculus id to put back and the login is left Oculus.
   virtual bool SetAccountId(std::uint64_t id) = 0;
-  // Puts the Oculus value back; a no-op when no rewrite ever replaced it. Called on every
-  // outcome other than Rewritten, because CNSOVRUser::LogInInternal re-reads the Oculus org
-  // id only when the global holds -1 (libpnsovr 0x1ec96c-0x1ec984): once the NEVR id is in
-  // the global, a later login that the rewrite declines would send the Oculus login with a
-  // NEVR AccountID().
-  virtual void RestoreAccountId() = 0;
+  // Puts the Oculus value back and returns whether it did. Called on every outcome other than
+  // Rewritten, because CNSOVRUser::LogInInternal re-reads the Oculus org id only when the
+  // global holds -1 (libpnsovr 0x1ec96c-0x1ec984): once the NEVR id is in the global, a later
+  // login that the rewrite declines would send the Oculus login with a NEVR AccountID(). It
+  // restores only while the global still holds the value the rewrite wrote; a value the game
+  // wrote in between is left alone. False also when no rewrite ever replaced it.
+  virtual bool RestoreAccountId() = 0;
 };
 
 // The Oculus account id the game stored before the rewrite first replaced it. Shared by the
-// device adapter and the host fake so both follow the same rule: the value found in the
-// global is the Oculus id unless it is the value the rewrite itself wrote last, in which case
-// the remembered one stays.
+// device adapter and the host fake so both follow the same rule:
+//   - a value found in the global is the Oculus id unless it is the value the rewrite itself
+//     wrote last, in which case the remembered one stays;
+//   - only a real id is remembered: 0 (RadPluginShutdown) and -1 (GotLoggedInUserOrgIdCb's
+//     error path, and the "fetch again" marker) are not ids, and a write that would have to
+//     remember one is refused;
+//   - the id is put back only while the global still holds the value the rewrite wrote.
+// Not thread safe by itself; the adapter serializes its own accesses, and the single game
+// thread running the login path is an unverified assumption (docs/adr/0003).
 class OculusIdMemory {
  public:
-  void NoteBeforeWrite(std::uint64_t current, std::uint64_t written) {
-    if (!have_ || current != last_written_) oculus_ = current;
+  static bool IsRealId(std::uint64_t value) { return value != 0 && value != ~std::uint64_t{0}; }
+
+  // `current` is the global's value just before the write. False: refused, nothing noted.
+  bool NoteBeforeWrite(std::uint64_t current, std::uint64_t written) {
+    if (have_ && current == last_written_) {
+      last_written_ = written;
+      return true;
+    }
+    if (!IsRealId(current)) return false;
+    oculus_ = current;
     have_ = true;
     last_written_ = written;
+    return true;
   }
-  bool Original(std::uint64_t& out) const {
+  // True and the Oculus value when `current` is still what the rewrite wrote.
+  bool RestoreFor(std::uint64_t current, std::uint64_t& out) const {
+    if (!have_ || current != last_written_) return false;
     out = oculus_;
-    return have_;
+    return true;
   }
 
  private:
@@ -217,12 +236,30 @@ const char* OutcomeName(Outcome outcome);
 
 // The entry the device adapter calls from a translation unit built -fno-exceptions (the GOT
 // thunk's contract, quest/sentinel/callback_thunk.h). It catches every std::exception inside
-// this exceptions-enabled translation unit and reports Outcome::Exception; it never lets one
-// escape. Residual: a non-std exception thrown by game code called from here (the CJson
-// functions and the virtual AccountID() of libpnsovr.so, which imports __cxa_throw) is not
-// caught (no catch-all, by repo rule) and, since the function is noexcept, ends in
-// std::terminate instead of unwinding through frames with a mixed personality. None of the
-// called game functions was observed to throw; that is inferred, not measured on a device.
+// this exceptions-enabled translation unit and reports Outcome::Exception; it never lets a
+// std::exception escape.
+//
+// Residual, stated exactly. The frames of ApplyFieldsAtomically, RewriteLogin and this function
+// carry an LSDA under the exceptions-enabled personality ("zPLR" CIE), and they are live while
+// the adapter calls into libpnsovr's CJson functions and the virtual AccountID(). If game code
+// threw there, libc++_shared's unwinder would call this library's own __gxx_personality_v0 on
+// those frames in phase 1, which is the unwinder crossing described in callback_thunk.h (a
+// crash), before any noexcept handling could terminate cleanly. Reachability, from the static
+// call graph of the pinned libpnsovr.so (independent review, evidence cjson_throw_reach.txt):
+// none of the 10 CJson functions the rewrite calls, nor AccountID() at 0x1ede14, reaches
+// __cxa_throw, __cxa_allocate_exception, operator new, terminate, _Unwind_Resume or a libc++
+// import by direct edges (39 to 62 functions each). The only throw and allocate sites in
+// libpnsovr.so are libc++ container code (breakpad std::list::push_back at 0x20ebf0/0x20f1ac,
+// __throw_length_error at 0x21059c/0x2113c0, vector/__split_buffer). Indirect edges are
+// unresolved: the jansson allocator hooks installed by CJson::InitializeForGame (0x357cb0,
+// through CAllocator vtable+0x10), three in CMemBlock::Resize, two in
+// CLoggingData::ExecuteAllCallbacks (registered log callbacks), one each in json_delete and
+// fn_5083b0. A throw is therefore reachable only if an allocator or a registered log callback
+// throws. Not done: isolating the game calls into a -fno-exceptions translation unit (read
+// into sentinel memory, decide in the exceptions TU, write and roll back from a zR TU), which
+// would remove the crossing at the cost of splitting the transaction across two units and
+// copying the whole JSON; the reachability above is why it was judged not worth it. Nothing
+// here was run on a device.
 Outcome RewriteLoginNoThrow(UserAccess& user, JsonAccess& json, IdentitySource& source,
                             const BuildInfo& build, LogFn log) noexcept;
 

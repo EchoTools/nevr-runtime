@@ -227,9 +227,20 @@ rewritten login the NEVR id stays in the global for later logins in the process.
 the Oculus value is remembered once, before the first write (`OculusIdMemory`), and put back
 on every outcome other than `Rewritten`, because the declined login goes out with the Oculus
 token and must carry the Oculus account id; a login after a rewritten one is rewritten again
-from the current identity.
+from the current identity. Two guards: the id is put back only while the global still holds
+the value the rewrite wrote (a value the game stored in between is left alone), and only a
+real id is remembered. 0 (`RadPluginShutdown`) and -1 (the error path and the "fetch again"
+marker) are not ids; when the global holds one of them and nothing is remembered the rewrite
+is refused, the Oculus login goes out unchanged, and the record says `restored=0`. Every
+declined record carries `restored=0|1` (no values). The adapter's mutex serializes its own
+accesses only; the game's writers (`0x1ecef0`, `0x1ecf18`, `0x207074`) are not under it, and
+the rewrite (set, verify, JSON, restore) is not atomic against them. The login path is
+assumed to run on one game thread with no concurrent writer while a login is in flight
+(the fetch is gated on -1 at `0x1ec980`, so the game does not write while the NEVR id is
+installed); that is an assumption, not a measurement.
 
-Readers of the global and of `AccountID()` in the pinned build (measured unless marked):
+Readers and writers of the global, and callers of `AccountID()`, in the pinned build (measured
+unless marked; addresses are function starts unless a row says "at"):
 
 | Reader | Effect |
 | --- | --- |
@@ -239,9 +250,9 @@ Readers of the global and of `AccountID()` in the pinned build (measured unless 
 | `RadPluginShutdown` `0x207074` | writes 0 |
 | `CNSOVRUser::AccountID()` `0x1ede14` | returns it (vtable slot `0x6a1300`) |
 | `CNSUser::SendLogInRequest`, `LogInSuccessCB`, `LogInFailureCB`, `LogOut`, `RefreshProfile`, `Profile*CB`, `LoginRemovedCB`, `UniqueName`, `SaveClientProfileChanges`, `CNSIUsers::CreateUser`, `User(UserAccountID)`, `DestroyUserInternal` | call `AccountID()` through `vtable+0x70` |
-| `CNSLobby::JoinAcceptedCBClient`, `AddEntrantAcceptedCBClient` (`0x3720c0`) | find the local user by `AccountID()` equal to the entrant id the server sent: the id the server uses is required here |
+| `CNSLobby::JoinAcceptedCBClient` (`0x3720c0`), `AddEntrantAcceptedCBClient` (`0x3727a0`) | find the local user by `AccountID()` equal to the entrant id the server sent: the id the server uses is required here |
 | `CNSUser::UserID()` | about 60 call sites in `libr15.so` (lobby find, join and create, party, friends, profile, IAP, XPlatformId) |
-| `CNSOVRSocial::FollowDeepLink` `0x1f2b30`, `EnsureLocalMember` `0x1f2bd0`, `JoinInternal` `0x1f38a4`, `AddMember` `0x204a30` | copy it into `[this+0x2e0][0]`, the local party member; `MemberId` (`0x205260`) and `Host` (`0x2051fc`) hand that to the game, while remote members carry Oculus org ids (`GotRemoteOrgIdCB` `0x1f9090`) |
+| `CNSOVRSocial::FollowDeepLink` (`0x1f2ab0`, read at `0x1f2b30`), `EnsureLocalMember` (`0x1f2b98`, at `0x1f2bd0`), `JoinInternal` (`0x1f37ac`, at `0x1f38a4`), `AddMember` (`0x2049f4`, at `0x204a30`) | copy it into `[this+0x2e0][0]`, the local party member; `MemberId` (`0x205260`) and `Host` (`0x2051fc`) hand that to the game, while remote members carry Oculus org ids (`GotRemoteOrgIdCB` `0x1f9090`) |
 | `ovr_Room_KickUser`, `SyncRoom`, `ReceiveData` | use `[0x2c8]` (the app-scoped id), not the global: Oculus room calls are not affected (independent review; not re-traced here) |
 | `CNSIParty::Update` (`0x369764`), `CNSIRichPresence::Update`, `CNSIFriends::Sent` | call `vtable+0x70` on their own object, not `AccountID()` |
 | `libpnsrad.so` `CNSRADFriends`, `CNSRADParty` | use `CNSRADUser` (vtable `0x6f1e00`, `AccountID` = `[this+0x88]` at `0x3cd4c0`), not this global (independent review) |
@@ -268,9 +279,35 @@ unchanged. `SendLogInRequest` is reached only after the Oculus org-id fetch and
 `ovr_User_GetUserProof` succeed (`0x1edca0`, `0x1ece10`); if the Oculus services do not answer
 for this app the hook never fires.
 
-CJson behaviour for a nested write: `FUN_00faef34` (`libr15.so` `0xfaef34`) walks the
-`|`-separated path and, when a parent exists and is not an object, logs `$ json path: %s is not
-an object.` and returns without writing. The rewrite does not attempt such a write.
+CJson behaviour for a write, in `libpnsovr.so` (the code the rewrite calls): the setter walks the
+`|`-separated path (`0x35ba84`, which branches to `0x364bdc`), and when a parent exists and is
+not an object (`ldr w8,[x1]; cbz w8` at `0x364bf8`-`0x364c00`) it logs `$ json path: %s is not an
+object.` (string `0x5825b1`) and writes nothing. Every setter also refuses when the CJson is
+cached (`[this+8] != 0`, `$ json path: %s: ERROR, json db is cached, read only.`, string
+`0x5820c0`). The rewrite does not attempt a nested write under a non-object parent, and the
+read-back after each write covers the cached case.
+
+Exception residual. `RewriteLoginNoThrow` is the `noexcept` entry the `-fno-exceptions` thunk
+translation unit calls; it catches every `std::exception` inside the exceptions-enabled
+`login_rewrite.cpp`. The frames of `ApplyFieldsAtomically`, `RewriteLogin` and
+`RewriteLoginNoThrow` carry an LSDA under the exceptions-enabled personality (`"zPLR"` CIE) and are
+live while the adapter calls libpnsovr's CJson functions and the virtual `AccountID()`. If game
+code threw there, `libc++_shared`'s unwinder would call this library's own `__gxx_personality_v0`
+on those frames in phase 1: the unwinder crossing described above (a crash), before any
+`noexcept` handling could terminate cleanly. Reachability, from the static call graph of the
+pinned `libpnsovr.so` (independent review): none of the 10 CJson functions the rewrite calls,
+nor `AccountID()` at `0x1ede14`, reaches `__cxa_throw`, `__cxa_allocate_exception`, `operator new`,
+terminate, `_Unwind_Resume` or a libc++ import by direct edges (39 to 62 functions each). All 8
+throw and allocate sites in `libpnsovr.so` are libc++ container code (breakpad
+`std::list::push_back` at `0x20ebf0`/`0x20f1ac`, `__throw_length_error` at `0x21059c`/`0x2113c0`,
+vector and `__split_buffer`). Unresolved indirect edges: the jansson allocator hooks installed by
+`CJson::InitializeForGame` (`0x357cb0`, through `CAllocator` vtable+0x10, `br x2` at `0x357d28`),
+three in `CMemBlock::Resize`, two in `CLoggingData::ExecuteAllCallbacks` (registered log
+callbacks), one each in `json_delete` and `fn_5083b0`. A throw is therefore reachable only if an
+allocator or a registered log callback throws. Not done: isolating the game calls into a
+`-fno-exceptions` translation unit (read into sentinel memory, decide in the exceptions unit,
+write and roll back from a `zR` unit), which would remove the crossing at the cost of splitting
+the transaction across two units and copying the whole JSON. Nothing here was run on a device.
 
 `[CNSUser+0x88]` is not the wire account id for a `CNSOVRUser`. A virtual slot is a data
 relocation, which `GotHook` does not reach, so the global is written instead.
