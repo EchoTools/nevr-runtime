@@ -228,7 +228,9 @@ bool ApplyFieldsAtomically(const std::vector<Field>& fields, JsonAccess& json,
     // A nested write under a parent that exists but is not an object is refused by CJson
     // ("$ json path: %s is not an object.", libpnsovr.so string 0x5825b1; the setter's path
     // walker 0x35ba84 branches to 0x364bdc, which tests the node type at 0x364bf8-0x364c00);
-    // the rewrite does not attempt it. Every setter also refuses when the CJson is cached
+    // the rewrite does not attempt it. This check is defensive: with it off, the refused write
+    // fails the read-back and the rollback finds nothing to undo, so the game-visible result is
+    // the same; no test can pin it against real behaviour. Every setter also refuses when the CJson is cached
     // ([this+8] != 0, "json db is cached, read only", string 0x5820c0); the read-back after
     // each write covers that.
     const bool parent_ok = before.top.empty() || before.top_type == JsonType::Absent ||

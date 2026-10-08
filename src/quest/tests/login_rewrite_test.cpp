@@ -663,11 +663,33 @@ void TestSecondRewrittenLoginKeepsTheNevrIdAndALaterDeclineRestoresOculus() {
   QCHECK(user.global_account_id == 777);
 }
 
-// A top-level member the profile nests under can exist and not be an object. CJson refuses a
-// nested write under it ("$ json path: %s is not an object.", libpnsovr.so string 0x5825b1),
-// so nothing is attempted and the game's value is left exactly as it was. The fake models a
-// build whose nested write would overwrite the value instead.
+// A top-level member the profile nests under can exist and not be an object. The real CJson
+// refuses a nested write under it ("$ json path: %s is not an object.", libpnsovr.so string
+// 0x5825b1) and writes nothing; the fake does the same by default. The rewrite's own parent
+// check is defensive on top of that (the refused write would fail the read-back and the
+// rollback would find nothing to undo), so this default-model test documents real behaviour but
+// does not need the check.
 void TestParentThatIsNotAnObjectIsLeftAlone() {
+  for (const char* top : {"nevr_identity", "system_info"}) {
+    FakeJson json;
+    SeedOculusLogin(json);
+    json.Clear(top);
+    json.SetString(top, "game-value");
+    const nlohmann::json before = json.ToJson();
+    FakeUser user;
+    FakeSource source;
+    source.identity = MakeIdentity();
+    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::JsonWriteFailed);
+    QCHECK(json.ToJson() == before);
+    QCHECK(At(json.ToJson(), top) == "game-value");
+    QCHECK(user.global_account_id == 5551234);
+  }
+}
+
+// Defensive case only: a build whose nested write would turn a non-object parent into an object.
+// The game does not do this (see above); the parent check is what keeps such a build from losing
+// the game's value, and this test is the only one that exercises the check.
+void TestParentCheckIsDefensiveAgainstAnOverwritingBuild() {
   for (const char* top : {"nevr_identity", "system_info"}) {
     FakeJson json;
     SeedOculusLogin(json);
@@ -685,7 +707,6 @@ void TestParentThatIsNotAnObjectIsLeftAlone() {
   }
 }
 
-// A log sink that throws after the commit does not turn a rewritten login into a failure.
 
 
 
@@ -865,6 +886,7 @@ int main() {
   TestDeclinedLoginAfterARewrittenOneRestoresTheOculusId();
   TestSecondRewrittenLoginKeepsTheNevrIdAndALaterDeclineRestoresOculus();
   TestParentThatIsNotAnObjectIsLeftAlone();
+  TestParentCheckIsDefensiveAgainstAnOverwritingBuild();
   TestComposeFailureBecomesAnOutcome();
   TestEveryComposedMeasuredPathIsObserved();
   TestAccountIdNotCarriedRestoresTheWrittenGlobal();

@@ -122,9 +122,14 @@ using LoginThunk = sentinel::CallbackThunk<LoginTag, void(void*, void*)>;
 // Threading: g_account_mutex serializes this adapter's own accesses. The game's writers of the
 // global (GotLoggedInUserOrgIdCb 0x1ecef0/0x1ecf18, RadPluginShutdown 0x207074) are not under
 // it, and set -> verify -> JSON -> restore is not atomic against them. The login path is taken
-// to run on one game thread with no concurrent writer while a login is in flight (the fetch
-// is gated on -1 at 0x1ec980, so the game does not write while the NEVR id is installed).
-// That is an assumption, not a measurement.
+// to run on one game thread with no concurrent writer while a login is in flight; that is an
+// assumption, not a measurement. The game's writers are 0x1ec998 (LogInInternal, 0),
+// 0x1ecef0 (-1), 0x1ecf18 (the org id) and 0x207074 (0), and an org-id fetch can also start at
+// plugin init (0x2069bc) or from the error callback (0x1ecf80), not only at the -1 gate
+// (0x1ec980). A send needs the global to be neither 0 nor -1 (0 defers, -1 refetches and
+// defers, a pending login seen with -1 fails with 500), so the refusal to remember 0 or -1 can
+// only be hit by a writer racing between the check and the send and never blocks a login the
+// game would send (inference from the code, not run). See docs/adr/0003.
 class LiveUser final : public UserAccess {
  public:
   LiveUser(void* user, std::uint64_t* account_global, const void* expected_vptr)
@@ -221,7 +226,7 @@ class LiveJson final : public JsonAccess {
 // (which have destructors) live in the handler's frame, which also calls the game's original.
 // Every frame live during a call into the game is built -fno-exceptions and sits under the
 // personality-free "zR" CIE: this function, the handler, RewriteLogin and the rest of
-// login_apply.cpp (tests/quest TestLoginHookObjectsCarryNoPersonality). The one
+// login_apply.cpp (tests/quest TestLoginHookFramesCarryNoPersonality). The one
 // exceptions-enabled function it reaches, ComposePlan, calls no game code and has returned
 // before the next game call.
 void RunRewrite(const State& state, void* user, void* json) noexcept {
@@ -318,6 +323,11 @@ void SentinelLog(Level level, const char* event, const LogKv* fields, std::size_
     return fields[i].text != nullptr ? LogField(fields[i].key, fields[i].text)
                                      : LogField(fields[i].key, fields[i].number);
   };
+  if (count > 8) {
+    // The switch below carries eight fields; say so instead of dropping the rest silently.
+    sentinel::LogFields(sentinel::LogLevel::kError, "quest_login_log_overflow",
+                        {LogField("event", event), LogField("fields", count)});
+  }
   switch (count) {
     case 0: sentinel::LogFields(mapped, event, {}); break;
     case 1: sentinel::LogFields(mapped, event, {field(0)}); break;

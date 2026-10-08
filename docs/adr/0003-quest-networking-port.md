@@ -280,21 +280,31 @@ real id is remembered. 0 (`RadPluginShutdown`) and -1 (the error path and the "f
 marker) are not ids; when the global holds one of them and nothing is remembered the rewrite
 is refused, the Oculus login goes out unchanged, and the record says `restored=0`. Every
 declined record carries `restored=0|1` (no values). The adapter's mutex serializes its own
-accesses only; the game's writers (`0x1ecef0`, `0x1ecf18`, `0x207074`) are not under it, and
-the rewrite (set, verify, JSON, restore) is not atomic against them. The login path is
-assumed to run on one game thread with no concurrent writer while a login is in flight
-(the fetch is gated on -1 at `0x1ec980`, so the game does not write while the NEVR id is
-installed); that is an assumption, not a measurement.
+accesses only; the game's writers (`0x1ec998`, `0x1ecef0`, `0x1ecf18`, `0x207074`) are not under
+it, and the rewrite (set, verify, JSON, restore) is not atomic against them. The login path is
+assumed to run on one game thread with no concurrent writer while a login is in flight; that
+is an assumption, not a measurement. The -1 gate at `0x1ec980` is not the only way an org-id
+fetch starts: one is also issued at plugin init (`ovr_User_GetOrgScopedID` at `0x2069bc`, same
+callback key `0x6e2f10`), and the error callback re-issues one at `0x1ecf80` without writing -1
+first. What follows from the code (inference, not run): a send needs the global to be neither 0
+nor -1. 0 sets `[this+0x170]` to 1 and defers (`0x1ecd14`-`0x1ecd18` to `0x1ecda4`); -1
+refetches (`0x1ec980`, `0x1ec998`, `0x1ecd14`) and defers again; a pending login that
+`UpdateInternal` sees with -1 goes to `LogInFailed` 500 (`0x1eda10` to `0x1edb54`, `blr` through
+`[vtable+0x10]`). So the "refuse to remember 0 or -1" branch can only be reached by a writer
+racing between the check and the send, and it never blocks a login the game would otherwise
+send.
 
 Readers and writers of the global, and callers of `AccountID()`, in the pinned build (measured
 unless marked; addresses are function starts unless a row says "at"):
 
-| Reader | Effect |
+| Reader or writer | Effect |
 | --- | --- |
-| `LogInInternal` `0x1ec96c` | re-fetches only when -1 (above) |
-| `UpdateInternal` `0x1eda08`, `0x1edba4` | -1 leads to `LogInFailed` 500 ("prerequisites are missing", string `0x556b40`); zero waits |
-| `GotLoggedInUserOrgIdCb` `0x1ecef0` / `0x1ecf18` | writes -1 on its error path, the org id on success |
-| `RadPluginShutdown` `0x207074` | writes 0 |
+| `LogInInternal` (reads at `0x1ec96c`) | re-fetches only when -1 (above) |
+| `LogInInternal` (writes at `0x1ec998`) | `str xzr,[x8,#0x18]` with `x8` = `0x70e3c8`, i.e. the global at `0x70e3e0`: writes 0 on the re-fetch path |
+| `UpdateInternal` (reads at `0x1eda08` and `0x1edba8`) | -1 leads to `LogInFailed` 500 ("prerequisites are missing", string `0x556b40`); zero waits |
+| `GotLoggedInUserOrgIdCb` (writes at `0x1ecef0` and `0x1ecf18`) | -1 on its error path, the org id on success; also writes the decimal Oculus id string at `0x70e458` |
+| `RadPluginShutdown` (writes at `0x207074`) | writes 0 |
+| `CNSOVRUser::OfflineID()` (`0x1ede20`, vtable slot `+0x78`) | returns the decimal Oculus id string at `0x70e458` (`adrp x0,0x70e000; add x0,x0,#0x458; ret`), written by `GotLoggedInUserOrgIdCb` (`0x1ecf18`-`0x1ecf2c`) and never changed by the rewrite: after a rewrite `AccountID()` is the NEVR id and `OfflineID()` is still the Oculus id. Who calls it through the vtable was not traced |
 | `CNSOVRUser::AccountID()` `0x1ede14` | returns it (vtable slot `0x6a1300`) |
 | `CNSUser::SendLogInRequest`, `LogInSuccessCB`, `LogInFailureCB`, `LogOut`, `RefreshProfile`, `Profile*CB`, `LoginRemovedCB`, `UniqueName`, `SaveClientProfileChanges`, `CNSIUsers::CreateUser`, `User(UserAccountID)`, `DestroyUserInternal` | call `AccountID()` through `vtable+0x70` |
 | `CNSLobby::JoinAcceptedCBClient` (`0x3720c0`), `AddEntrantAcceptedCBClient` (`0x3727a0`) | find the local user by `AccountID()` equal to the entrant id the server sent: the id the server uses is required here |
@@ -305,7 +315,9 @@ unless marked; addresses are function starts unless a row says "at"):
 | `libpnsrad.so` `CNSRADFriends`, `CNSRADParty` | use `CNSRADUser` (vtable `0x6f1e00`, `AccountID` = `[this+0x88]` at `0x3cd4c0`), not this global (independent review) |
 
 Open: party, room and friends flows that read the global through `CNSOVRSocial` see the NEVR id
-for the local member and Oculus org ids for remote members, two id spaces in one flow. The
+for the local member and Oculus org ids for remote members, two id spaces in one flow; and
+`OfflineID()` keeps the Oculus id while `AccountID()` is the NEVR id (its virtual callers were
+not traced). The
 lobby path needs the NEVR id; the Oculus-room path was not shown to break, and was not shown
 to work. A separate social package owns this.
 
@@ -329,7 +341,10 @@ for this app the hook never fires.
 CJson behaviour for a write, in `libpnsovr.so` (the code the rewrite calls): the setter walks the
 `|`-separated path (`0x35ba84`, which branches to `0x364bdc`), and when a parent exists and is
 not an object (`ldr w8,[x1]; cbz w8` at `0x364bf8`-`0x364c00`) it logs `$ json path: %s is not an
-object.` (string `0x5825b1`) and writes nothing. Every setter also refuses when the CJson is
+object.` (string `0x5825b1`) and writes nothing. The parent check in the rewrite is therefore
+defensive: with it off, the refused write fails the read-back and the rollback finds nothing to
+undo, so real behaviour is the same; the test that exercises the check models a build that would
+overwrite the parent, which the game does not do, and does not pin real behaviour. Every setter also refuses when the CJson is
 cached (`[this+8] != 0`, `$ json path: %s: ERROR, json db is cached, read only.`, string
 `0x5820c0`). The rewrite does not attempt a nested write under a non-object parent, and the
 read-back after each write covers the cached case.
