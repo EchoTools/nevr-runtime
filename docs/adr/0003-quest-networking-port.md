@@ -257,20 +257,70 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
 3. **Session routing.** `src/runtime/compat/session_router.{h,cpp}` is the platform-neutral router:
    no Windows or Winsock headers, no sockets, no threads. Game-side and remote open/frame/close
    events go in; the router owns connection identity (config, login, matchmaker numbered in
-   arrival order, matchmakers attached to the login session), once-per-session login injection
-   ahead of the frames the game queued, frame order, size limits, bounded queues and
+   arrival order, matchmakers attached to the login session, at most
+   `Limits::maxMatchmakerConnections` live), frame order, size limits, bounded queues and
    backpressure, and, when a remote session ends, the close of every game socket on it plus
    forgetting the session so the next connection is a new login. The game transport, the remote
    transport, the login-frame builder and the log sink are injected; the router calls none of
    them under its lock. No token, password, full login frame or credential URL is logged.
-   `src/quest/net/` holds the Android adapters: `loopback_game_server` (a POSIX WebSocket
-   server on an ephemeral 127.0.0.1 port, RFC 6455 in `ws_wire`), `remote_ws` (the remote
-   transport and its policy: `wss://` only, one connect attempt per session, no retry and no
-   downgrade after a failure) over `curl_ws_connector` (libcurl from the Quest vcpkg manifest
-   with peer and host verification always on, TLS 1.2 or later, and trust loaded from the Android
-   CA directories into an in-memory `CURLOPT_CAINFO_BLOB` by the loader token auth uses), and `session_bridge`, which
-   composes them and reports the loopback port that `nevr_cfg::ResolveRedirect` needs. The
-   Windows `ws_bridge.cpp` does not use the router yet; it keeps its own copy of these rules.
+
+   **Login injection is mutually exclusive with the game's own login.** The router injects a
+   LoginRequest (and, separately, a friend-list subscribe after LoginSuccess) only when the
+   wiring sets `Options::buildLogin` (and `subscribeFriendList`); both are off by default. The PC
+   bridge turns them on because pnsrad sends no login. On Quest the game's own login, rewritten
+   in place (PR #221), is the only login: `SessionBridge::Config` has no login builder, the
+   Quest router runs with the defaults, and `TestQuestDefaultsInjectNothing` pins that it sends
+   exactly the frames the game sent. Enabling both would send two logins.
+
+   `src/quest/net/` holds the Android adapters.
+   - `loopback_game_server`: a POSIX WebSocket server bound to `INADDR_LOOPBACK` on an
+     ephemeral port (RFC 6455 in `ws_wire`). **Access control:** every local app can reach that
+     port, and connection identity is arrival order, so an unauthenticated connection could
+     become the login or share the login session. `Start()` therefore draws 128 random bits from
+     the kernel (`getrandom`), `LoopbackUri()` returns `ws://127.0.0.1:<port>/<token>/`, and an
+     upgrade is answered 403 unless its request target carries the token (first path segment, or
+     the query parameter `nevr_token`), compared without an early exit, and has no `Origin`
+     header. The token and the request target are never logged; the refusals are counted
+     (`RejectedUpgrades()`) and logged once each with a generic reason. A connection that
+     completes the upgrade but sends no data frame within `idleFirstFrameMs` is closed with 1008,
+     so idle outsiders cannot hold the connection limit. The redirect hook must use `LoopbackUri()`
+     as the replacement value: `nevr_cfg::ResolveRedirect` with `bridgeActive` returns the bare
+     `ws://127.0.0.1:<port>`, which this listener refuses.
+   - `remote_ws`: the remote transport and its policy: `wss://` only, one connect attempt per
+     session, no retry and no downgrade after a failure.
+   - `curl_ws_connector`: libcurl from the Quest vcpkg manifest with peer and host verification
+     always on, TLS 1.2 or later, redirects off, proxies off (`CURLOPT_NOPROXY "*"`: libcurl
+     otherwise reads `all_proxy`, `https_proxy`, `wss_proxy` from the environment), and trust
+     loaded from the Android CA directories into an in-memory `CURLOPT_CAINFO_BLOB` by the loader
+     token auth uses. The `just verify` sensor on that file (every option an allowlisted
+     `CURLOPT_` literal, each critical option set exactly once) is a tripwire, not the guarantee:
+     `just test-quest-tls` runs the connector against real servers and is what proves the
+     behavior.
+   - `session_bridge` composes them.
+
+   The Windows `ws_bridge.cpp` does not use the router yet; it keeps its own copy of these rules.
+
+   **How the game carries the token (measured, not assumed).** The game's WebSocket client,
+   `NRadEngine::CWebSocketCodec::SendHandshakeRequest` (ReVault `libr15.so` `0x2ad8928`, ghidra
+   raw decompilation), formats the request as
+   `GET %s HTTP/1.1\r\nHost: %s%s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n`,
+   with the target built as `"%s%s%s%s"` from `"/"` (only when the URI's path is empty), the URI's
+   path component, `"?"` (only when the query is non-empty) and the URI's query component. The
+   codec therefore sends the path and query of the URI it was given verbatim, adds no fixed path,
+   and sends no `Origin` header, so a path prefix or a query parameter in the redirect value
+   reaches the listener and rejecting `Origin` cannot refuse the game. Not established: how the
+   caller assembles the URI it hands the codec from the config value (whether a service path is
+   appended to the config string before `CUriContainer::Parse`); the callers
+   (`CNSRadService`, `CR15NetGame`) were not traced. If the game replaced both path and query,
+   neither form could carry the token and a per-role port would be the alternative. ReVault's
+   `libr15.so` was not compared against the pinned build ID here, and the addresses in the
+   "Config-string seam" table did not resolve in ReVault under that spelling.
+
+   **Residual risk.** A process running as the same Android uid as the game can read the token
+   from the game's memory or from the redirect value, and can then connect. Processes of other
+   uids cannot reach it through the network stack's loopback port without the token. The token
+   protects against drive-by local apps and webviews, not against code inside the game's own
+   sandbox.
 4. **Game hooks.** The Android adapter records the ELF build ID or SHA-256, module and load
    bias, validates each instruction, string and relocation, then installs a typed callback.
    Callbacks use bounded copies, preserve object ownership and return semantics, never throw
