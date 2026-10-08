@@ -40,7 +40,14 @@ class Lock {
 };
 
 constexpr std::size_t kMaxSlots = 64;
-void** g_slots[kMaxSlots] = {};
+struct SlotEntry {
+  void** slot = nullptr;
+  // Our entry was stored in this slot and may still be reachable through it (another
+  // writer overwrote or chained it): the reservation is never given back by a handle,
+  // so a retry cannot publish that foreign hook as the original and build a call cycle.
+  bool poisoned = false;
+};
+SlotEntry g_slots[kMaxSlots] = {};
 std::size_t g_slotCount = 0;
 
 std::atomic<StoreObserver> g_storeObserver{nullptr};
@@ -54,21 +61,28 @@ int Protect(void* addr, std::size_t length, int prot) {
 GotStatus ReserveSlot(void** slot) {
   const Lock lock;
   for (std::size_t i = 0; i < g_slotCount; ++i) {
-    if (g_slots[i] == slot) return GotStatus::kAlreadyInstalled;
+    if (g_slots[i].slot == slot) return GotStatus::kAlreadyInstalled;
   }
   if (g_slotCount == kMaxSlots) return GotStatus::kRegistryFull;
-  g_slots[g_slotCount++] = slot;
+  g_slots[g_slotCount++] = SlotEntry{slot, false};
   return GotStatus::kOk;
 }
 
 void ReleaseSlot(void** slot) {
   const Lock lock;
   for (std::size_t i = 0; i < g_slotCount; ++i) {
-    if (g_slots[i] == slot) {
+    if (g_slots[i].slot == slot) {
       g_slots[i] = g_slots[--g_slotCount];
-      g_slots[g_slotCount] = nullptr;
+      g_slots[g_slotCount] = SlotEntry{};
       return;
     }
+  }
+}
+
+void PoisonSlot(void** slot) {
+  const Lock lock;
+  for (std::size_t i = 0; i < g_slotCount; ++i) {
+    if (g_slots[i].slot == slot) g_slots[i].poisoned = true;
   }
 }
 
@@ -184,10 +198,15 @@ int LiveProtection(const void* addr) {
 // read-only again. The whole sequence runs under the process-wide lock. If the
 // page cannot be re-protected the store is undone (compare-and-swap, so only our
 // own value is rolled back) and re-protection is retried.
+// What a write left behind. kStored: our value was stored (and, if the write then failed,
+// rolled back by us). kStoredMayBeLive: it was stored and another writer's value now sits
+// in the slot, possibly chaining it.
+enum class StoreOutcome { kNotStored, kStored, kStoredMayBeLive };
+
 GotStatus WriteSlot(void** slot, void* expected, void* value, bool relroReadOnly,
-                    int* savedErrno, bool* stored) {
+                    int* savedErrno, StoreOutcome* outcome) {
   const Lock lock;
-  *stored = false;
+  *outcome = StoreOutcome::kNotStored;
   if (__atomic_load_n(slot, __ATOMIC_ACQUIRE) != expected) return GotStatus::kSlotChanged;
   const PageRange pages = PagesOf(slot);
   // The protection to restore is read here, under the lock: another handle on the
@@ -205,13 +224,19 @@ GotStatus WriteSlot(void** slot, void* expected, void* value, bool relroReadOnly
 
   void* seen = expected;
   GotStatus status = GotStatus::kOk;
+  // After a successful Install the entry is live by design; the outcome below says what
+  // a FAILED install left behind.
   if (!__atomic_compare_exchange_n(slot, &seen, value, false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
     status = GotStatus::kSlotChanged;  // our value was never stored
   } else {
-    *stored = true;
+    *outcome = StoreOutcome::kStored;  // refined below
     if (observer != nullptr) observer(slot, value, StorePhase::kAfterStore);
     if (__atomic_load_n(slot, __ATOMIC_ACQUIRE) != value) {
-      status = GotStatus::kWriteVerifyFailed;  // a writer outside this lock stored after us; theirs stays
+      // A writer outside this lock stored after us; theirs stays, and may chain our entry.
+      status = GotStatus::kWriteVerifyFailed;
+      *outcome = StoreOutcome::kStoredMayBeLive;
+    } else {
+      *outcome = StoreOutcome::kStored;
     }
   }
   if (restoreReadOnly &&
@@ -224,6 +249,7 @@ GotStatus WriteSlot(void** slot, void* expected, void* value, bool relroReadOnly
       void* ours = value;
       if (!__atomic_compare_exchange_n(slot, &ours, expected, false, __ATOMIC_RELEASE,
                                        __ATOMIC_ACQUIRE)) {
+        *outcome = StoreOutcome::kStoredMayBeLive;  // their value stays, and may chain our entry
         LogFields(LogLevel::kError, "got_hook",
                   {{"op", "rollback"}, {"status", "rollback_cas_failed"},
                    {"page", HexString(page, pages.start)}});
@@ -564,6 +590,20 @@ ProtectFn SetProtectFunction(ProtectFn fn) {
   return g_protect.exchange(fn, std::memory_order_acq_rel);
 }
 
+void ReleasePoisonedSlotsIn(const void* begin, std::size_t length) {
+  const Lock lock;
+  const std::uintptr_t lo = reinterpret_cast<std::uintptr_t>(begin);
+  for (std::size_t i = 0; i < g_slotCount;) {
+    const std::uintptr_t at = reinterpret_cast<std::uintptr_t>(g_slots[i].slot);
+    if (g_slots[i].poisoned && at >= lo && at - lo < length) {
+      g_slots[i] = g_slots[--g_slotCount];
+      g_slots[g_slotCount] = SlotEntry{};
+    } else {
+      ++i;
+    }
+  }
+}
+
 StoreObserver SetStoreObserver(StoreObserver observer) {
   return g_storeObserver.exchange(observer, std::memory_order_acq_rel);
 }
@@ -582,7 +622,7 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
 
   GotStatus status = GotStatus::kOk;
   int savedErrno = 0;
-  bool stored = false;
+  StoreOutcome outcome = StoreOutcome::kNotStored;
   Prepared prepared;
   const nevr::hook::AttachStage stage = nevr::hook::AttachPublished(
       originalOut,
@@ -594,14 +634,21 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
       },
       [&] {
         status = WriteSlot(prepared.resolution.slot, prepared.original, hookFn,
-                           prepared.resolution.restoreReadOnly, &savedErrno, &stored);
+                           prepared.resolution.restoreReadOnly, &savedErrno, &outcome);
         return status == GotStatus::kOk;
       },
-      [&] { ReleaseSlot(prepared.resolution.slot); },
+      [&] {
+        // A slot whose store may still be reachable stays reserved (poisoned).
+        if (outcome == StoreOutcome::kStoredMayBeLive) {
+          PoisonSlot(prepared.resolution.slot);
+        } else {
+          ReleaseSlot(prepared.resolution.slot);
+        }
+      },
       // Once our entry has been stored in the slot, a thread may have jumped into
       // the detour before any rollback; the original (the real function) must stay
       // published for it.
-      [&] { return stored; });
+      [&] { return outcome != StoreOutcome::kNotStored; });
 
   if (stage != nevr::hook::AttachStage::kAttached) {
     LogFailure("install", target, status, nevr::hook::AttachStageName(stage), savedErrno,
@@ -645,10 +692,10 @@ GotStatus GotHook::Remove() {
   // Compare-and-swap under the write lock: a hook chained on top of ours, or a
   // module reloaded at the same base, leaves kSlotChanged and the slot untouched.
   int savedErrno = 0;
-  bool stored = false;
+  StoreOutcome outcome = StoreOutcome::kNotStored;
   const GotStatus status =
-      WriteSlot(slot_, hookFn_, original_, restoreReadOnly_, &savedErrno, &stored);
-  static_cast<void>(stored);
+      WriteSlot(slot_, hookFn_, original_, restoreReadOnly_, &savedErrno, &outcome);
+  static_cast<void>(outcome);
   if (status != GotStatus::kOk) {
     LogFailure("remove", target_, status, "restore", savedErrno);
     return status;

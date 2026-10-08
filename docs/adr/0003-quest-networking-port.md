@@ -51,14 +51,35 @@ links LLVM libunwind and libc++abi statically, with `_Unwind_Resume`, `_Unwind_G
 `__unw_getcontext`, `__gxx_personality_v0`, `__cxa_throw` and `__cxa_begin_catch` as local
 symbols, and its `.eh_frame` has a personality-bearing `zPLR` CIE and a personality-free `zR`
 CIE. A sentinel frame with an LSDA would run the sentinel's personality on the game's unwind
-context (inferred from the layouts, not run on a device). So the contract is structural:
-translation units that include `callback_thunk.h` are built with `-fno-exceptions` (the header
-refuses otherwise), so the entry has no landing pad and an exception from a game original
-passes through it on CFI alone; handlers are `noexcept` (a plain function pointer does not
-compile) and may not wrap a call into game code in a try/catch or an object with a destructor.
-`tests/quest` `TestHookFramesCarryNoPersonality` checks the built library: every
-`CallbackThunk` member and the handler sit under the `zR` CIE. `TestStlContract` fails if the
-sentinel starts linking `libc++_shared.so`.
+context (inferred from the layouts, not run on a device); the reverse direction is the same. The
+contract:
+
+1. A frame that is live while game code runs under a hook must be personality-free (`zR` CIE):
+   no try/catch, no object with a destructor. Live frames are the thunk's entry, the handler, and
+   any sentinel function the handler calls that is still on the stack when it calls the original.
+   A function that runs entirely before or after the call into the game is not live during it.
+2. Translation units that include `callback_thunk.h` are built with `-fno-exceptions` (the header
+   refuses otherwise), so the entry has no landing pad and a game exception passes through it on
+   CFI alone.
+3. Handlers are `noexcept` function pointers marked `NEVR_HOOK_HANDLER` (placed in the
+   `nevr_hook_handlers` section). Under `-fno-exceptions` `noexcept` is a type marker only; it adds
+   no terminate landing pad. A callee of a handler that can throw must contain the exception
+   inside sentinel-only frames that are not live across a call into game code.
+4. `tests/quest` `TestHookFramesCarryNoPersonality` checks the built library: from every thunk
+   entry and every function in `nevr_hook_handlers` it follows direct `bl`/`b` edges and fails on
+   any reachable function under a personality-bearing CIE, except the allowlisted logging leaves
+   (`LogFields`, `LogEvent`, `HexString`), which take no function pointer from a hook and call only
+   libc and liblog. It does not follow indirect calls. `TestBackendBuiltWithoutExceptions` pins the
+   hook backend to the same flag the host tests use, and `TestStlContract` fails if the sentinel
+   starts linking `libc++_shared.so`.
+
+A hook never logs on the game's call path (the log call is not async-signal-safe): it increments
+an atomic counter, and a reporter thread (`hook_report.h`, created from the constructor before the
+first hook is installed, joined by `StopReporter`) logs a counter when it first moves and then at
+most once a minute while it keeps changing. A slot where a failed install left the sentinel's entry
+possibly reachable through another writer's hook stays reserved for the process, so a retry cannot
+publish that hook as the original and build a call cycle; `ReleasePoisonedSlotsIn` gives such
+reservations back when the owning module is unloaded.
 
 Whether the declared hook targets can throw, from the pinned ELFs: `CJson::TString`
 (`libr15.so` `0xfa2e7c`, `libpnsradmatchmaking.so` `0x209484`): ReVault's callee graph (partial:

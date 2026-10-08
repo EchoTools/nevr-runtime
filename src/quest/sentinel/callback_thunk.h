@@ -17,39 +17,53 @@
  * flight cannot make an in-flight call lose its original. GotHook::Install
  * publishes the original before it changes the slot and keeps it published if the
  * slot was ever written, so the game cannot reach the "no original" path
- * (value-initialised Ret, logged) through a hook installed by GotHook.
+ * (a value-initialised Ret, counted as a fault) through a hook installed by GotHook.
  *
- * Exceptions: none cross the thunk, in either direction.
+ * One thunk per hooked slot. The original-call pointer is a static of the instantiation,
+ * so give every hooked slot its own Tag; installing two slots through one thunk makes the
+ * second overwrite the first's original. (Install can't see this, so nothing enforces it.)
+ *
+ * Exceptions: the thunk neither catches nor raises one, and it keeps its own frames out of
+ * the way of a game exception.
  *
  * Measured on the built Android artifact and on the APK's libc++_shared.so:
- *   - libr15.so NEEDs libc++_shared.so. That library is a libgcc-style unwinder
- *     build (its .comment names GCC 4.9.x and clang 5.0) and exports
- *     _Unwind_Find_FDE, _Unwind_GetCFA, _Unwind_GetIP, _Unwind_RaiseException,
- *     _Unwind_Resume, __gxx_personality_v0 and __cxa_throw.
- *   - The sentinel does not NEED it. It links LLVM libunwind and libc++abi
- *     statically; _Unwind_Resume, _Unwind_GetIP, __unw_getcontext,
- *     __gxx_personality_v0, __cxa_throw and __cxa_begin_catch are LOCAL symbols.
- *   - A function that can catch or clean up carries an LSDA under a CIE whose
+ *   - libr15.so NEEDs libc++_shared.so. That library is a libgcc-style unwinder build
+ *     (its .comment names GCC 4.9.x and clang 5.0) and exports _Unwind_Find_FDE,
+ *     _Unwind_GetCFA, _Unwind_GetIP, _Unwind_RaiseException, _Unwind_Resume,
+ *     __gxx_personality_v0 and __cxa_throw.
+ *   - The sentinel does not NEED it. It links LLVM libunwind and libc++abi statically;
+ *     _Unwind_Resume, _Unwind_GetIP, __unw_getcontext, __gxx_personality_v0, __cxa_throw
+ *     and __cxa_begin_catch are LOCAL symbols.
+ *   - A sentinel function that can catch or clean up carries an LSDA under a CIE whose
  *     augmentation is "zPLR", i.e. it names the sentinel's own personality.
- * A game exception unwinding through such a frame would hand the game's
- * _Unwind_Context to the sentinel's personality and unwinder helpers, which read it
- * as their own structure. (That consequence is inferred from the layouts; no such
- * crossing has been run on a device.) The same holds in the other direction.
+ * A game exception unwinding through such a frame would hand the game's _Unwind_Context to
+ * the sentinel's personality and unwinder helpers, which read it as their own structure.
+ * (Inferred from the layouts; no such crossing has been run on a device.) The reverse
+ * holds too: a sentinel exception unwinding into game frames meets the game's unwinder.
  *
- * So the contract is structural:
- *   - This header is included only by translation units built with -fno-exceptions
- *     (enforced by the #error below). Entry has no landing pad, no LSDA and no
- *     personality; the unwinder walks past its frame using the CFI alone, which
- *     both runtimes handle. An exception thrown by the game's original therefore
- *     passes through Entry untouched.
- *   - Handlers are `noexcept` (Handler is a noexcept function pointer type, so a
- *     handler that is not declared noexcept does not compile) and live in the same
- *     kind of translation unit. A handler must not contain a try/catch or an object
- *     with a destructor around a call that can reach game code. A try/catch in a
- *     sentinel-only frame that never calls the game is fine.
- *   - tests/quest TestHookFramesCarryNoPersonality pins the built artifact: the
- *     frames of every CallbackThunk member and of the hook handler sit under the
- *     personality-free "zR" CIE.
+ * What the contract is, exactly:
+ *   1. A frame that is LIVE while game code runs under a hook must be personality-free
+ *      ("zR"): no try/catch, no object with a destructor, no cleanup. Live frames are the
+ *      thunk's Entry, the handler, and any sentinel function the handler calls and that
+ *      is still on the stack when the handler calls `original` (or any other game code).
+ *      A function that runs entirely before or after the call into the game is not live
+ *      during it and is not restricted by this rule, except that it must not let an
+ *      exception out.
+ *   2. This header is included only by translation units built with -fno-exceptions (the
+ *      #error below), so Entry has no landing pad; the unwinder walks past its frame on CFI
+ *      alone and a game exception passes through untouched.
+ *   3. Handlers are `noexcept` function pointers and are marked NEVR_HOOK_HANDLER. Under
+ *      -fno-exceptions `noexcept` is only a type marker: it adds no terminate landing pad.
+ *      Nothing stops an exception raised in a sentinel callee from leaving the handler, so
+ *      a callee that can throw must catch inside sentinel-only frames that are not live
+ *      across a call into game code (a helper that does its throwing work, catches, and
+ *      returns before the handler touches the game).
+ *   4. tests/quest TestHookFramesCarryNoPersonality enforces rule 1 on the built artifact:
+ *      starting from every Entry and every NEVR_HOOK_HANDLER function it follows direct
+ *      bl/b edges through the sentinel and fails on any reachable function under a
+ *      personality-bearing CIE, except the allowlisted sentinel-only logging leaves.
+ *      It cannot see indirect calls, so a handler that reaches code through a function
+ *      pointer or a virtual call is not covered.
  */
 #pragma once
 
@@ -60,7 +74,9 @@
 #include <atomic>
 #include <cstdint>
 
-#include "hook_log.h"
+// Marks a function as a thunk handler. The function is placed in its own output section so
+// the build-time sensor finds every handler by section, not by name.
+#define NEVR_HOOK_HANDLER __attribute__((used, section("nevr_hook_handlers")))
 
 namespace sentinel {
 
@@ -90,6 +106,10 @@ class CallbackThunk<Tag, Ret(Args...)> {
   static std::uint64_t Calls() noexcept { return calls_.load(std::memory_order_relaxed); }
   static std::uint64_t Faults() noexcept { return faults_.load(std::memory_order_relaxed); }
 
+  // The call and fault counters, for the reporter (hook_report.h): the thunk never logs.
+  static const std::atomic<std::uint64_t>& CallCounter() noexcept { return calls_; }
+  static const std::atomic<std::uint64_t>& FaultCounter() noexcept { return faults_; }
+
   // Test support: clears the original, handler and counters.
   static void Reset() noexcept {
     __atomic_store_n(&original_, static_cast<void*>(nullptr), __ATOMIC_RELEASE);
@@ -103,22 +123,12 @@ class CallbackThunk<Tag, Ret(Args...)> {
     calls_.fetch_add(1, std::memory_order_relaxed);
     const Fn original = Original();
     if (original == nullptr) {
-      ReportFault("no_original", "default_return");
+      faults_.fetch_add(1, std::memory_order_relaxed);  // reported by the reporter, not logged here
       return Ret();
     }
     const Handler handler = handler_.load(std::memory_order_acquire);
     if (handler == nullptr) return original(args...);
     return handler(original, args...);
-  }
-
-  // Counts every fault; logs the first and then one in every 4096, so a hook on
-  // a per-frame function cannot flood the log.
-  static void ReportFault(const char* status, const char* action) noexcept {
-    const std::uint64_t n = faults_.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (n == 1 || n % 4096 == 0) {
-      LogFields(LogLevel::kError, "callback_thunk",
-                {{"status", status}, {"action", action}, {"faults", static_cast<long long>(n)}});
-    }
   }
 
   inline static void* original_ = nullptr;
