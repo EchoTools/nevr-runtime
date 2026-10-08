@@ -7,7 +7,8 @@
 # tstring_thunks.cpp includes callback_thunk.h, so it is built without exception support: its
 # frames carry no personality and no LSDA, and a game exception passes through them (see the
 # contract in sentinel/callback_thunk.h). Everything that allocates or can throw is in the other
-# files, which the thunk reaches only through the noexcept ApplyActive in tstring_thunks.h.
+# files, which the thunk reaches only through the noexcept ApplyFn pointer declared in
+# tstring_thunks.h (set from hook_adapter.cpp).
 add_library(nevr_quest_redirect STATIC
   service_redirector.cpp
   hook_adapter.cpp

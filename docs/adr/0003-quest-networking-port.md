@@ -352,7 +352,7 @@ the caller's next lookup and `CUriContainer::Parse`. Other overloads are importe
 `TString(CSymbol64, char const*)` (`0x36fa288`); `libpnsradmatchmaking.so` imports only the
 `CSymbol64` one (`0x6bb458`).
 
-Keys. Each of the eight literal `_host` key strings in the two libraries has the xrefs below; each is
+Keys. Each of the eight literal `_host` key strings in the two libraries has the xrefs below (`libr15.so` also holds `radserverdb_host` at `0x2ba0b25`, referenced only by `CJson::SetString` at `0x11f871c` and `0x11f87ac`, never read through `TString`); each is
 either a `CJson::TString` first argument or a `CJson::SetString` first argument (the latter at `libr15.so`
 `0x11f85fc` and `0x11f868c` for `config_host` and `login_host`, `0x11f871c` and `0x11f87ac` for
 `radserverdb_host`, which `CR15Game::PreprocessCommandLine` writes). In each `TString` pair the
@@ -363,7 +363,7 @@ first call's result, which then goes to `CUriContainer::Parse`.
 | --- | --- | --- | --- |
 | `libr15.so` | `Initialize` (`0x1286060`, `0x1286078`) | `config_host`, `configservice_host` | `wss://config.readyatdawn.com/rad/rad15_live` |
 | `libr15.so` | `VerifyServerLoginConnection` (`0x12508bc`, `0x12508d4`) and `BeginLogIn` (`0x1291b10`, `0x1291b28`) | `login_host`, `loginservice_host` | `wss://login.readyatdawn.com/rad/rad15_live` |
-| `libr15.so` | `LogInSuccess` (`0x126cd1c`, `0x126cd34`) and the function at `0x1289ac8` called from `BeginMultiplayer` (`0x128a790`, `0x128a7a8`) | `transaction_host`, `transactionservice_host` | `wss://transaction.readyatdawn.com/rad/rad15_live` |
+| `libr15.so` | `LogInSuccess` (`0x126cd1c`, `0x126cd34`) and the function at `0x1289ac8` (`0x128a790`, `0x128a7a8`); both addresses lie inside `CR15NetGame::BeginMultiplayer(SR15NetMatchSettings const&)` (`0x128960c`, 9712 bytes) | `transaction_host`, `transactionservice_host` | `wss://transaction.readyatdawn.com/rad/rad15_live` |
 | `libpnsradmatchmaking.so` | `MatchmakerUri` (`0x1b2150`) and `ConnectMatchmaker` (`0x1b22b8`, `0x1b22d0`) | `matchmaker_host`, `matchingservice_host` | `wss://matchmaker.readyatdawn.com/rad/rad15_live` |
 
 `libpnsradmatchmaking.so` also builds two keys per match type with `MakeTStrPrintF`: the formats
@@ -376,7 +376,7 @@ first call's result, which then goes to `CUriContainer::Parse`.
 `matchmaker-%s.readyatdawn.com` from `match_type_specific_matchmakers|%s|host_suffix`; with
 `matchmaker_host` redirected that branch is not taken (inferred, not run). These two formats and the
 eight literals are the only `_host` key formats in the strings of the three Quest libraries
-(`strings -a | grep '%s.*host'`).
+checked (`libr15.so`, `libpnsradmatchmaking.so`, `libpnsrad.so`; `strings -a | grep '%s.*host'`).
 
 The Quest redirect applies to the eight literals and to `matchmaker_<type>_host` and
 `matchingservice_<type>_host` with a non-empty type (`src/quest/redirect/service_redirector.h`,
@@ -390,8 +390,23 @@ for the host keys by the string search above. Whether the NEVR config response c
 `~/src/nakama`, and the reconstruction note `match_join_flow.md` says the game may take a
 match-type-specific URL from that config key.
 
+Four libraries define `CJson::TString(char const*, char const*, unsigned int)`: `libr15.so` and
+`libpnsradmatchmaking.so` (hooked), and `libpnsrad.so` (JUMP_SLOT `0x72bc58`, 49 `bl` and 11 `b` sites)
+and `libpnsovr.so` (`0x6db090`, 58 and 5), which are not hooked and read no endpoint key that this
+analysis found. Paths that can still reach Ready At Dawn with the redirect on, measured from the ELFs:
+- reads made before the slot is hooked (see the caller's contract);
+- HTTP (below);
+- the unhooked `TString(CSymbol64, char const*)` overload: 15 `bl` sites in `libr15.so` (slot
+  `0x36fa288`) and 5 in `libpnsradmatchmaking.so` (`0x6bb458`); four of the `libr15.so` sites are script
+  expressions that read config strings by a script-supplied symbol (`CR15NetConfigStringExpression`,
+  `CJsonConfigString*`). A search for the endpoint keys' symbol hashes found nothing, but it had no
+  positive control, so a script path to an endpoint is not excluded;
+- the `TString(void*, char const*)` overload: 4 `bl` sites in `libr15.so` (`0x36e92d0`).
+PCVR redirects an `https://...readyatdawn.com` value under any key; Quest redirects values only under the
+service keys above.
+
 HTTP is not covered by this hook. `https://api.readyatdawn.com` (`libr15.so` `0x126c270`,
-`0x128958c`) goes to `CSysHttp::CreateConnection`, not through `TString`; so does
+`0x128958c`; the `CreateConnection` calls are at `0x126c274` and `0x1289590`) goes to `CSysHttp::CreateConnection`, not through `TString`; so does
 `CR15NetStoreTransactions::InitializeHttp`, which reads the key `env` (`0x126c214`) and, when it is
 not `live`, builds `https://api-%s.readyatdawn.com` (`0x126c240`) for `CreateConnection`
 (`0x126c25c`). An HTTP hook is a separate tranche.
@@ -416,7 +431,7 @@ thunks and `Apply` only count, and `RegisterRedirectCounters` hands the counters
 thread. `just test-quest-redirect` checks that `tstring_thunks.o` has no `zPLR` frames and runs the
 test under ThreadSanitizer, where deleting the cache lock fails it. `Apply` returns the original pointer unchanged for any other key, when
 the redirect feature is off, for a value the policy declines, and on any failure (a value over 512
-bytes, a pool refusal, an exception), logging the key name and a status token and never a URL. For a
+bytes, a pool refusal, an exception), counting the fault and never logging (a hooked call does not log). For a
 redirected value it returns a pointer from the stable string pool, so the same value always maps to
 the same address for the rest of the process. The first sight of each distinct value runs the policy
 and may intern one string; up to 16 values are remembered, and the game's four built-in defaults are
@@ -424,7 +439,8 @@ resolved when the hooks are installed, so the normal reads allocate nothing. The
 redirect through `InstallRedirectHooksWith` (a bridge probe that reports the loopback listener) from
 `integration/production_steps.cpp`. The caller's contract (also in `hook_adapter.h`): register the
 counters before `StartReporter`; install from the sentinel's ELF constructor so it precedes
-`CR15NetGame::Initialize`, which reads `config_host` at `0x1286060` (a value read earlier stays as
+`CR15NetGame::Initialize`, which reads `config_host` at `0x1286060` (`entry.cpp` starts the reporter right after registering the clock counters, so the integrator moves
+`RegisterRedirectCounters()` ahead of that `StartReporter`; a value read earlier stays as
 parsed; this rests on Bionic constructor ordering and is not tested on a headset); install
 `libpnsradmatchmaking` by hooking libr15's dlopen slot (JUMP_SLOT `0x36c6380`, the string
 "pnsradmatchmaking") and calling `InstallMatchmakingRedirect` after the real call returns, which is
@@ -441,7 +457,9 @@ ELF's own symbol and relocation tables establish a GOT hook.
 
 `libr15.so` and `libpnsrad.so` do not list `libpnsradmatchmaking.so` in `DT_NEEDED`.
 `CNSLobby::LoadMatchmakingSupport` (`libpnsrad.so` `0x3c096c`) builds a module name and calls
-`CModuleLoader::Load` at `0x3c0a3c`; the name it selects and the load time are not established.
+`CModuleLoader::Load` at `0x3c0a3c`. `libr15.so` reads the module name as
+`TString("matchmaking_plugin", "pnsradmatchmaking")` (call at `0x125e8cc`; the key may override the
+fallback); the load time is not established.
 The sentinel constructor therefore cannot assume the matchmaking module is loaded or install
 its slot. Its slot stays inactive until a post-load install is validated.
 

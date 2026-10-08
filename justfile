@@ -646,8 +646,6 @@ test-quest-redirect:
     link=(-fPIC -shared -Wl,--build-id=sha1 -L"$out" -lredirfx_provider -Wl,-rpath,'$ORIGIN' -Wl,-z,now,-z,relro)
     "${cxx[@]}" "${link[@]}" "$fx/tstring_fixture_consumer.cpp" -o "$out/libredirfx_consumer_a.so"
     "${cxx[@]}" "${link[@]}" "$fx/tstring_fixture_consumer.cpp" -o "$out/libredirfx_consumer_b.so"
-    # The thunk translation unit is built without exceptions (callback_thunk.h refuses
-    # otherwise); everything else, including the GOT backend and the test, with them.
     # The thunk translation unit and the hook backend are built without exceptions (as on Android);
     # everything else, including the test, with them.
     "${cxx[@]}" -fno-exceptions -c src/quest/redirect/tstring_thunks.cpp -o "$out/tstring_thunks.o"
