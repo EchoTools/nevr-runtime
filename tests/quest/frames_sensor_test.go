@@ -33,7 +33,7 @@ import (
 // libc++abi (a length or range error, terminate, the exception allocator). Direct container operations
 // reach them but they do not run during a normal call, and when one does run it raises a sentinel
 // exception that never returns, so it is never a frame a game exception passes through.
-var libcxxThrowTail = regexp.MustCompile(`^(__cxa_|_ZSt9terminatev|_ZSt11__terminatePFvvE|_ZNSt6__ndk120__throw_|_ZNSt11logic_error|_ZN10__cxxabiv1|_ZN12_GLOBAL__N_1)`)
+var libcxxThrowTail = regexp.MustCompile(`^(__cxa_|_ZSt9terminatev|_ZSt11__terminatePFvvE|_ZNSt6__ndk120__throw_|_ZNSt11logic_error|_ZN10__cxxabiv1)`)
 
 const outsideSection = "nevr_outside_game_call"
 
@@ -335,5 +335,17 @@ func TestFramesProbeOkIsAcceptedAndListed(t *testing.T) {
 	}
 	if !sawPersonality {
 		t.Errorf("LiveHelper does not sit under a personality-bearing CIE: the control proves nothing")
+	}
+}
+
+// The cold-tail exemption must not swallow our own functions: a function in a top-level anonymous
+// namespace (where hook handlers live) that carries a personality is a violation. An earlier pattern
+// exempted every `_ZN12_GLOBAL__N_1` name and made frames_probe_bad pass.
+func TestSensorDoesNotExemptAnonymousNamespaceFunctions(t *testing.T) {
+	g := synthetic(false)
+	g.names[0x200] = "_ZN12_GLOBAL__N_112ProbeHandlerEPFiiEi"
+	v := walkHookFrames(g)
+	if !strings.Contains(strings.Join(v.violations, "\n"), "ProbeHandler") {
+		t.Fatalf("an anonymous-namespace function under a personality must fail, got %v", v.violations)
 	}
 }
