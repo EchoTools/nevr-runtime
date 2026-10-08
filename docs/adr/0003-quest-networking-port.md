@@ -33,7 +33,7 @@ ignores the result of its last `mprotect` (tranche 1e of #158).
 ```text
            shared source, compiled for both targets
  config key map/defaults | URL policy | login profile JSON
-  EVR frame codec         | social state | EVR session routing
+ EVR frame codec         | social state | EVR session routing
                          ^
                          | typed inputs and events, no game pointers
              +-----------+-----------+

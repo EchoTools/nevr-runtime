@@ -5,6 +5,7 @@
 
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/login_profile.h"
+#include "runtime/tests/evr_codec_test_reader.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -52,11 +53,17 @@ int main() {
   Expect(U64At(*frame, 40) == 4, "platform code is OVR_ORG (4)");
   Expect(U64At(*frame, 48) == 4242, "account id");
   Expect(frame->back() == '\0', "NUL terminated");
-  Expect(nlohmann::json::parse(frame->substr(56, frame->size() - 57)).at("displayname") == "Quest \"Player\"",
-         "profile JSON parses and keeps the quoted name");
+  try {
+    Expect(nlohmann::json::parse(frame->substr(56, frame->size() - 57)).at("displayname") == "Quest \"Player\"",
+           "profile JSON parses and keeps the quoted name");
+  } catch (const nlohmann::json::exception& e) {
+    std::fprintf(stderr, "evr_codec_test FAILED: profile JSON did not parse: %s\n", e.what());
+    ++g_failures;
+  }
 
-  EvrCodec::LoginRequestFields fields;
-  Expect(EvrCodec::ParseLoginRequest(*frame, &fields) == EvrCodec::LoginRequestStatus::Ok, "round trip status");
+  EvrCodecTest::LoginRequestFields fields;
+  Expect(EvrCodecTest::ParseLoginRequest(*frame, &fields) == EvrCodecTest::LoginRequestStatus::Ok,
+         "round trip status");
   Expect(fields.platformCode == 4 && fields.accountId == 4242 && fields.profileJson == json, "round trip fields");
 
   const std::string batched = EvrCodec::BuildMessage(1, "a") + EvrCodec::BuildFriendListSubscribe();
@@ -70,6 +77,17 @@ int main() {
   Expect(EvrCodec::IsBearerReplacingPath("wss://host/ws?format=evr") &&
              !EvrCodec::IsBearerReplacingPath("wss://host/nevr?format=evr"),
          "bearer-replacing path");
+
+  // Truncation: a declared payload longer than what remains, including a length that wraps to 0 when
+  // the header size is added to it (2^64 - 24).
+  std::string truncated = EvrCodec::BuildMessage(5, "12345678");
+  truncated.pop_back();
+  Expect(EvrCodec::ReadMessage(truncated, 0, &message) == EvrCodec::ReadStatus::Truncated, "truncated payload");
+  std::string wrapping = EvrCodec::BuildMessage(5, "");
+  const uint64_t wraps = UINT64_MAX - 23;
+  for (std::size_t i = 0; i < 8; ++i) wrapping[16 + i] = static_cast<char>((wraps >> (8 * i)) & 0xff);
+  Expect(EvrCodec::ReadMessage(wrapping, 0, &message) == EvrCodec::ReadStatus::Truncated,
+         "a declared length that wraps with the header is Truncated");
 
   if (g_failures != 0) return 1;
   std::puts("evr_codec_test: all vectors pass");

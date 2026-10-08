@@ -344,6 +344,87 @@ static int LogFrameMessages(const char* direction, int connIdx, const std::strin
   return count;
 }
 
+// Debug-level decode of every message the game sends to the server, for diagnostics only: the raw
+// frame is forwarded whether or not this walk finishes. A message whose declared payload runs past the
+// end of the frame stops the walk BEFORE any decoder reads its payload. Returns the messages walked.
+static int LogGameToServerFrame(const std::string& frame, const std::string& wsConnId) {
+  size_t offset = 0;
+  int msgIdx = 0;
+  EvrCodec::Message message;
+  while (true) {
+    const EvrCodec::ReadStatus status = EvrCodec::ReadMessage(frame, offset, &message);
+    if (status == EvrCodec::ReadStatus::End) break;
+    if (status == EvrCodec::ReadStatus::BadMarker) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.WS] game->server: bad marker at offset %zu — per-message diagnostic "
+          "decode aborted here, raw frame still forwarded to remote unparsed",
+          offset);
+      break;
+    }
+    const uint64_t sym = message.symbol;
+    const uint64_t len = message.length;
+    if (status == EvrCodec::ReadStatus::Truncated) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.WS]   truncated: header declares %llu payload bytes but only %zu remain — per-message "
+          "diagnostic decode aborted here, raw frame still forwarded to remote unparsed",
+          static_cast<unsigned long long>(len), frame.size() - offset - EvrCodec::kHeaderSize);
+      break;
+    }
+    // From here the message lies wholly inside the frame: message.payload..+len is readable.
+    const uint8_t* payload = message.payload;
+    char symBuf[192];
+    const char* symName = EchoVR::LookupSymbolName(sym);
+    if (symName) {
+      snprintf(symBuf, sizeof(symBuf), "0x%016llx (%s)", static_cast<unsigned long long>(sym), symName);
+    } else {
+      snprintf(symBuf, sizeof(symBuf), "0x%016llx", static_cast<unsigned long long>(sym));
+    }
+    Log(EchoVR::LogLevel::Debug, "[NEVR.WS] game->server [%d]: sym=%s len=%llu ws_conn_id=%s", msgIdx, symBuf,
+        static_cast<unsigned long long>(len), wsConnId.c_str());
+    // Hex dump PlayerSessionRequest (0x9af2fab2a0c81a05) for debugging
+    if (sym == 0x9af2fab2a0c81a05 && len <= 256) {
+      char hex[1024] = {};
+      int hoff = 0;
+      for (size_t i = 0; i < len && hoff < 1000; i++) {
+        hoff += snprintf(hex + hoff, sizeof(hex) - hoff, "%02x ", payload[i]);
+      }
+      Log(EchoVR::LogLevel::Debug, "[NEVR.WS] PlayerSessionReq payload: %s", hex);
+    }
+    // Decode outgoing SNS friend messages
+    // FriendInviteRequest (0x7f0d7a28de3c6f70): RoutingID(8)+UUID(16)+SessionGUID(8)+TargetUserID(8)
+    if (sym == 0x7f0d7a28de3c6f70 && len >= 0x28) {
+      uint64_t routingId, sessionGuid, targetUserId;
+      memcpy(&routingId, payload, 8);
+      memcpy(&sessionGuid, payload + 24, 8);
+      memcpy(&targetUserId, payload + 32, 8);
+      Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   FriendInvite: routing=%llu target=%llu session=%llu",
+          static_cast<unsigned long long>(routingId), static_cast<unsigned long long>(targetUserId),
+          static_cast<unsigned long long>(sessionGuid));
+    }
+    // SNSPartyInviteRequest (0xcf13f934540b5f5e): RoutingID(8)+UUID(16)+SessionGUID(8)+TargetUserID(8)
+    // (Debug, alongside the other per-message decodes in this loop.)
+    if (sym == 0xcf13f934540b5f5e && len >= 0x28) {
+      uint64_t routingId, sessionGuid, targetUserId;
+      memcpy(&routingId, payload, 8);
+      memcpy(&sessionGuid, payload + 24, 8);
+      memcpy(&targetUserId, payload + 32, 8);
+      Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   PartyInviteRequest: routing=%llu target=%llu session=%llu",
+          static_cast<unsigned long long>(routingId), static_cast<unsigned long long>(targetUserId),
+          static_cast<unsigned long long>(sessionGuid));
+    }
+    // FriendListSubscribe (0xdcfa94680e8d19fc)
+    if (sym == 0xdcfa94680e8d19fc) {
+      Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   FriendListSubscribeRequest sent");
+    }
+    offset += EvrCodec::kHeaderSize + static_cast<size_t>(len);
+    msgIdx++;
+  }
+  if (frame.size() - offset > 0 && msgIdx > 0) {
+    Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   %zu trailing bytes after %d messages", frame.size() - offset, msgIdx);
+  }
+  return msgIdx;
+}
+
 // Info-level trace of the social message families (friends, party, social) crossing the bridge,
 // walking EVERY message in a frame ([marker(8)][symbol(8)][length(8)][payload]...), not just the
 // first. The per-message Debug lines are dropped at the default level, so without this a missing
@@ -1241,90 +1322,7 @@ void InstallWebSocketBridge() {
             LogFrameMessages("game->server", ConnIdxOfGameWs(&gameWs), msg->str);
             // Game→remote forwarding — dump all message symbols in the frame
             // EchoVR wire format: [marker(8)][symbol(8)][length(8)][payload(length)]...
-            {
-              size_t diagOffset = 0;
-              int msgIdx = 0;
-              EvrCodec::Message diagMessage;
-              while (true) {
-                const EvrCodec::ReadStatus diagStatus = EvrCodec::ReadMessage(msg->str, diagOffset, &diagMessage);
-                if (diagStatus == EvrCodec::ReadStatus::End) break;
-                if (diagStatus == EvrCodec::ReadStatus::BadMarker) {
-                  Log(EchoVR::LogLevel::Warning,
-                      "[NEVR.WS] game->server: bad marker at offset %zu — per-message diagnostic "
-                      "decode aborted here, raw frame still forwarded to remote unparsed",
-                      diagOffset);
-                  break;
-                }
-                const uint8_t* p = reinterpret_cast<const uint8_t*>(msg->str.data()) + diagOffset;
-                const uint64_t sym = diagMessage.symbol;
-                const uint64_t len = diagMessage.length;
-                char symBuf[192];
-                const char* symName = EchoVR::LookupSymbolName(sym);
-                if (symName) {
-                  snprintf(symBuf, sizeof(symBuf), "0x%016llx (%s)",
-                           static_cast<unsigned long long>(sym), symName);
-                } else {
-                  snprintf(symBuf, sizeof(symBuf), "0x%016llx",
-                           static_cast<unsigned long long>(sym));
-                }
-                Log(EchoVR::LogLevel::Debug, "[NEVR.WS] game->server [%d]: sym=%s len=%llu ws_conn_id=%s",
-                    msgIdx, symBuf, static_cast<unsigned long long>(len),
-                    connState->getId().c_str());
-                // Hex dump PlayerSessionRequest (0x9af2fab2a0c81a05) for debugging
-                if (sym == 0x9af2fab2a0c81a05 && len <= 256) {
-                  char hex[1024] = {};
-                  int hoff = 0;
-                  const uint8_t* pp = p + 24;
-                  for (size_t i = 0; i < len && hoff < 1000; i++) {
-                    hoff += snprintf(hex + hoff, sizeof(hex) - hoff, "%02x ", pp[i]);
-                  }
-                  Log(EchoVR::LogLevel::Debug, "[NEVR.WS] PlayerSessionReq payload: %s", hex);
-                }
-                // Decode outgoing SNS friend messages
-                // FriendInviteRequest (0x7f0d7a28de3c6f70): RoutingID(8)+UUID(16)+SessionGUID(8)+TargetUserID(8)
-                if (sym == 0x7f0d7a28de3c6f70 && len >= 0x28) {
-                  uint64_t routingId, sessionGuid, targetUserId;
-                  memcpy(&routingId, p + 24, 8);
-                  memcpy(&sessionGuid, p + 24 + 24, 8);
-                  memcpy(&targetUserId, p + 24 + 32, 8);
-                  Log(EchoVR::LogLevel::Debug,
-                      "[NEVR.WS]   FriendInvite: routing=%llu target=%llu session=%llu",
-                      static_cast<unsigned long long>(routingId), static_cast<unsigned long long>(targetUserId),
-                      static_cast<unsigned long long>(sessionGuid));
-                }
-                // SNSPartyInviteRequest (0xcf13f934540b5f5e): RoutingID(8)+UUID(16)+SessionGUID(8)+TargetUserID(8)
-                // (was briefly logged at Info for a 2026-09-13 investigation into whether
-                // the client ever sends this; that investigation window has closed, back
-                // to Debug alongside the other per-message decodes in this loop.)
-                if (sym == 0xcf13f934540b5f5e && len >= 0x28) {
-                  uint64_t routingId, sessionGuid, targetUserId;
-                  memcpy(&routingId, p + 24, 8);
-                  memcpy(&sessionGuid, p + 24 + 24, 8);
-                  memcpy(&targetUserId, p + 24 + 32, 8);
-                  Log(EchoVR::LogLevel::Debug,
-                      "[NEVR.WS]   PartyInviteRequest: routing=%llu target=%llu session=%llu",
-                      static_cast<unsigned long long>(routingId), static_cast<unsigned long long>(targetUserId),
-                      static_cast<unsigned long long>(sessionGuid));
-                }
-                // FriendListSubscribe (0xdcfa94680e8d19fc)
-                if (sym == 0xdcfa94680e8d19fc) {
-                  Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   FriendListSubscribeRequest sent");
-                }
-                if (diagStatus == EvrCodec::ReadStatus::Truncated) {
-                  Log(EchoVR::LogLevel::Warning,
-                      "[NEVR.WS]   truncated: need %llu but only %zu remaining — per-message "
-                      "diagnostic decode aborted here, raw frame still forwarded to remote unparsed",
-                      static_cast<unsigned long long>(len) + EvrCodec::kHeaderSize, msg->str.size() - diagOffset);
-                  break;
-                }
-                diagOffset += EvrCodec::kHeaderSize + static_cast<size_t>(len);
-                msgIdx++;
-              }
-              if (msg->str.size() - diagOffset > 0 && msgIdx > 0) {
-                Log(EchoVR::LogLevel::Debug, "[NEVR.WS]   %zu trailing bytes after %d messages",
-                    msg->str.size() - diagOffset, msgIdx);
-              }
-            }
+            LogGameToServerFrame(msg->str, connState->getId());
             std::lock_guard<std::mutex> lk(g_pairsMutex);
             auto it = g_pairs.find(&gameWs);
             if (it != g_pairs.end()) {
@@ -1560,6 +1558,10 @@ bool TestHook_GuardWsCallbackContainsStdException() {
   });
   guarded();
   return true;
+}
+
+int TestHook_LogGameToServerFrame(const std::string& frame) {
+  return LogGameToServerFrame(frame, "test-conn");
 }
 
 int TestHook_LogFrameMessages(const char* direction, int connIdx, const std::string& frame) {
