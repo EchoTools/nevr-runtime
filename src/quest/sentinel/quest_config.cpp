@@ -269,7 +269,7 @@ const char* SourceName(Source source) {
   return "absent";
 }
 
-std::optional<std::string> ResolveRedirect(const ResolvedConfig& config, const std::string& url,
+std::optional<std::string> ResolveQuestRedirect(const ResolvedConfig& config, const std::string& url,
                                            bool bridgeReady, unsigned bridgePort) {
   if (!config.effective.redirect) return std::nullopt;
   const auto target = [](const Value& v) -> std::optional<std::string> {

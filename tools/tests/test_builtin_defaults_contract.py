@@ -45,7 +45,17 @@ class BuiltinDefaultsContractTest(unittest.TestCase):
                     continue
                 if HEADER_INCLUDE in path.read_text(encoding="utf-8", errors="replace"):
                     offenders.append(str(path.relative_to(REPO)))
-        self.assertEqual(offenders, ["src/runtime/lifecycle/service_config.cpp"])
+        # The PC adapter and the Quest adapter are the only two readers of the embedded values.
+        self.assertEqual(sorted(offenders),
+                         ["src/quest/sentinel/activation.cpp", "src/runtime/lifecycle/service_config.cpp"])
+
+    def test_quest_activation_reads_each_value_once_and_never_logs_it(self):
+        text = source("src/quest/sentinel/activation.cpp")
+        for value_name in ("kSocketUri", "kHttpUri", "kPublicApiKey", "kPublicSocketKey"):
+            self.assertEqual(text.count(f"nevr_builtin::{value_name}"), 1, value_name)
+        for call in re.findall(r"Emit\(.*?\);", text, re.S):
+            self.assertNotIn("nevr_builtin::", call)
+            self.assertNotIn("defaults.", call)
 
     def test_values_are_not_passed_on_the_compiler_command_line(self):
         module = source("cmake/nevr_builtin_defaults.cmake")

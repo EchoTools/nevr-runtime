@@ -75,7 +75,7 @@ const char* SourceName(Source source);
 
 // The shared redirect policy (runtime/lifecycle/service_redirect) gated by the redirect and bridge
 // features. nullopt leaves the game's original value untouched.
-std::optional<std::string> ResolveRedirect(const ResolvedConfig& config, const std::string& url,
+std::optional<std::string> ResolveQuestRedirect(const ResolvedConfig& config, const std::string& url,
                                            bool bridgeReady, unsigned bridgePort);
 
 }  // namespace nevr_quest

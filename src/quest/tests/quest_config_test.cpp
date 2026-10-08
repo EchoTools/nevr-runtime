@@ -217,21 +217,21 @@ void RedirectIsGatedByActivation() {
   const std::string httpUrl = "https://config.readyatdawn.com/rad/rad15_live";
 
   LoadResult off = Load(Full(), "{}");
-  CHECK(!nevr_quest::ResolveRedirect(off.config, wsUrl, true, 5000).has_value());
+  CHECK(!nevr_quest::ResolveQuestRedirect(off.config, wsUrl, true, 5000).has_value());
 
   LoadResult redirectOnly = Load(Full(), R"({"features":{"redirect":true}})");
-  const auto ws = nevr_quest::ResolveRedirect(redirectOnly.config, wsUrl, true, 5000);
+  const auto ws = nevr_quest::ResolveQuestRedirect(redirectOnly.config, wsUrl, true, 5000);
   CHECK(ws.has_value() && *ws == kEmbSocket);
-  const auto http = nevr_quest::ResolveRedirect(redirectOnly.config, httpUrl, false, 0);
+  const auto http = nevr_quest::ResolveQuestRedirect(redirectOnly.config, httpUrl, false, 0);
   CHECK(http.has_value() && *http == kEmbHttp);
-  CHECK(!nevr_quest::ResolveRedirect(redirectOnly.config, "https://other.example/x", false, 0).has_value());
+  CHECK(!nevr_quest::ResolveQuestRedirect(redirectOnly.config, "https://other.example/x", false, 0).has_value());
 
   LoadResult bridged = Load(Full(), R"({"features":{"redirect":true,"bridge":true}})");
-  const auto loop = nevr_quest::ResolveRedirect(bridged.config, wsUrl, true, 5000);
+  const auto loop = nevr_quest::ResolveQuestRedirect(bridged.config, wsUrl, true, 5000);
   CHECK(loop.has_value() && *loop == "ws://127.0.0.1:5000");
-  const auto notReady = nevr_quest::ResolveRedirect(bridged.config, wsUrl, false, 0);
+  const auto notReady = nevr_quest::ResolveQuestRedirect(bridged.config, wsUrl, false, 0);
   CHECK(notReady.has_value() && *notReady == kEmbSocket);
-  const auto httpBridged = nevr_quest::ResolveRedirect(bridged.config, httpUrl, true, 5000);
+  const auto httpBridged = nevr_quest::ResolveQuestRedirect(bridged.config, httpUrl, true, 5000);
   CHECK(httpBridged.has_value() && *httpBridged == kEmbHttp);
 }
 
