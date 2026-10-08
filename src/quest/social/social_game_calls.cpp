@@ -47,21 +47,21 @@ Fn FunctionOf(const CallbackEntry& entry) noexcept {
 void CallVoid(void* self, std::size_t index) noexcept {
   const CallbackEntry e = EntryAt(self, index);
   if (e.function == nullptr) return;
-  NoteCallbackDelivered(self);
+  NoteCallbackDelivered(self, index);
   FunctionOf<void (*)(void*, const void*)>(e)(e.context, e.buffer);
 }
 
 void CallU32(void* self, std::size_t index, std::uint32_t value) noexcept {
   const CallbackEntry e = EntryAt(self, index);
   if (e.function == nullptr) return;
-  NoteCallbackDelivered(self);
+  NoteCallbackDelivered(self, index);
   FunctionOf<void (*)(void*, const void*, std::uint32_t)>(e)(e.context, e.buffer, value);
 }
 
 void CallIdName(void* self, std::size_t index, std::uint64_t id, const char* name) noexcept {
   const CallbackEntry e = EntryAt(self, index);
   if (e.function == nullptr) return;
-  NoteCallbackDelivered(self);
+  NoteCallbackDelivered(self, index);
   FunctionOf<void (*)(void*, const void*, std::uint64_t, const char*)>(e)(e.context, e.buffer, id, name);
 }
 
@@ -70,7 +70,7 @@ void CallIdName(void* self, std::size_t index, std::uint64_t id, const char* nam
 bool CallGate(void* self) noexcept {
   const CallbackEntry e = EntryAt(self, kCbInviteAccepted);
   if (e.function == nullptr) return true;
-  NoteCallbackDelivered(self);
+  NoteCallbackDelivered(self, kCbInviteAccepted);
   const std::uint32_t result =
       FunctionOf<std::uint32_t (*)(void*, const void*, std::uint32_t, std::uint32_t)>(e)(e.context, e.buffer, 0, 0);
   return result != 0;
@@ -92,6 +92,66 @@ void Dispatch(void* self, const PendingEvent& event) noexcept {
   }
 }
 
+std::uint8_t* MemberJsonBase(void* self) noexcept {
+  std::uintptr_t base = 0;
+  std::memcpy(&base, static_cast<const std::uint8_t*>(self) + kOffMemberJson, sizeof(base));
+  return reinterpret_cast<std::uint8_t*>(base);
+}
+
+void* JsonSlot(void* self, std::uint8_t slot) noexcept {
+  if (slot == kJsonParty) return static_cast<std::uint8_t*>(self) + kOffPartyJson;
+  return MemberJsonBase(self) + 16 * static_cast<std::size_t>(slot);
+}
+
+// Runs the data plan: each load is the game's CJson::DecodeFrom on the member's or the party's CJson (it replaces
+// what that CJson held), each clear its CJson::Reset. A function the game does not offer (nullptr) leaves the
+// operation unrun and not ok.
+void RunPlan(void* self, JsonPlan* plan) noexcept {
+  for (std::uint32_t i = 0; i < plan->count; ++i) {
+    JsonOp& op = plan->ops[i];
+    op.ok = 0;
+    if (op.slot != kJsonParty && op.slot >= kMemberJsonSlots) continue;
+    void* json = JsonSlot(self, op.slot);
+    if (op.kind == kJsonLoad && plan->game.decode != nullptr) {
+      op.ok = plan->game.decode(json, op.text, op.length) == 0 ? 1 : 0;
+    } else if (op.kind == kJsonClear && plan->game.reset != nullptr) {
+      plan->game.reset(json);
+      op.ok = 1;
+    }
+  }
+}
+
+// What the plan loaded reaches the game as it did natively: a member whose data changed is MemberUpdated, the party's
+// data is Updated.
+void DeliverLoaded(void* self, const JsonPlan& plan) noexcept {
+  for (std::uint32_t i = 0; i < plan.count; ++i) {
+    const JsonOp& op = plan.ops[i];
+    if (op.kind != kJsonLoad || op.ok == 0) continue;
+    if (op.slot == kJsonParty) {
+      CallVoid(self, kCbUpdated);
+    } else {
+      CallU32(self, kCbMemberUpdated, op.slot);
+    }
+  }
+}
+
+// Reads the written data out of the game's CJson into the facade's buffers.
+void RunShare(void* self, ShareJob* job) noexcept {
+  job->partyOk = 0;
+  job->memberOk = 0;
+  if (job->game.encode == nullptr) return;
+  if (job->party != 0) {
+    unsigned long long size = job->capacity;
+    job->partyOk = job->game.encode(JsonSlot(self, kJsonParty), job->partyBuffer, &size, 0, "") == 0 && size < job->capacity ? 1 : 0;
+    job->partySize = size;
+  }
+  if (job->member != 0) {
+    unsigned long long size = job->capacity;
+    job->memberOk = job->game.encode(JsonSlot(self, 0), job->memberBuffer, &size, 0, "") == 0 && size < job->capacity ? 1 : 0;
+    job->memberSize = size;
+  }
+}
+
 // JoinInternal in CNSOVRSocial's order: drop the invites to that party, defer if a create or join is in
 // flight, run the accept gate, then join.
 void JoinFlow(void* self, std::uint64_t partyId) noexcept {
@@ -110,8 +170,22 @@ void SlotUpdateEntry(void* self, const void* params) noexcept {
   EventBatch batch;
   batch.count = 0;
   batch.dropped = 0;
-  UpdateCollect(self, &batch);
+  JsonPlan json;
+  json.count = 0;
+  UpdateCollect(self, &batch, &json);
+  // Received data is loaded before the events fire, so a MemberJoined callback already finds the member's data
+  // (PartyMemberJoinedCB reads its headsettype), as the PC does.
+  RunPlan(self, &json);
+  JsonApplied(self, &json);
   for (std::uint32_t i = 0; i < batch.count; ++i) Dispatch(self, batch.events[i]);
+  DeliverLoaded(self, json);
+  // What the callbacks (and the game's own Update) wrote into the party and member CJson goes to the server.
+  ShareJob share;
+  share.party = 0;
+  share.member = 0;
+  ShareBegin(self, &share);
+  RunShare(self, &share);
+  ShareFinish(self, &share);
   UpdateFinish(self);
 }
 
@@ -130,7 +204,11 @@ void SlotResetEntry(void* self) noexcept {
   if (self == nullptr) return;
   TraceSlotCall(self, kReset);
   const CJsonResetFn reset = ResetPrepare(self);
-  if (reset != nullptr) reset(static_cast<std::uint8_t*>(self) + kOffPartyJson);
+  if (reset == nullptr) return;
+  reset(static_cast<std::uint8_t*>(self) + kOffPartyJson);
+  // The member CJson array too (CNSISocial::Reset resets one per member, libpnsovr 0x36a96c..0x36a988): the
+  // game wrote the local member's into the first, and loaded data sits in the others. A zeroed one is a no-op.
+  for (std::size_t i = 0; i < kMemberJsonSlots; ++i) reset(MemberJsonBase(self) + 16 * i);
 }
 
 void SlotAcceptInviteEntry(void* self, std::uint32_t index) noexcept {

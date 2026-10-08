@@ -1,8 +1,8 @@
 // Checks the social ABI pins against the real pinned libraries, on any host.
 //
 //   - libr15.so: build id, and the JUMP_SLOT for CNSProvider::Social at the pinned address.
-//   - libr15.so: CJson::Reset is the dynamic symbol at kLibR15CJsonResetVaddr (a prologue-validated 36-byte
-//     function), ResolveCJsonReset finds it in the image, and SUuid::kInvalid is in .bss (zero at load).
+//   - libr15.so: CJson::Reset, DecodeFrom and EncodeToCompact are the dynamic symbols at kLibR15CJson*Vaddr (sizes and
+//     first instructions checked), ResolveGameJson finds them in the image, and SUuid::kInvalid is in .bss (zero at load).
 //   - libpnsovr.so: build id, the CNSOVRSocial vtable symbol (address and size), and every slot of
 //     the vtable, read from the library's own R_AARCH64_ABS64 relocations, against kSlotNames.
 //
@@ -174,13 +174,39 @@ void CheckGameFunctions(const LoadedElf& r15) {
     std::memcpy(&first, r15.At(reset->st_value), sizeof(first));
     QCHECK(first == 0xa9bf7bf3U);
   }
-  // The production resolver, on the real image, lands on that address.
+  // DecodeFrom(char const*, unsigned long long) and EncodeToCompact(char*, unsigned long long&, unsigned, char const*)
+  // const: the exports the party and member data go through, their sizes, and their first instructions (sub sp, sp,
+  // #0x150 and mov x5, x4).
+  const Elf64_Sym* decode = FindSymbol(dyn, "_ZN10NRadEngine5CJson10DecodeFromEPKcy");
+  QCHECK(decode != nullptr);
+  if (decode != nullptr) {
+    QCHECK(ELF64_ST_TYPE(decode->st_info) == STT_FUNC && decode->st_size == 356);
+    QCHECK(decode->st_value == quest_social::kLibR15CJsonDecodeFromVaddr);
+    std::uint32_t first = 0;
+    std::memcpy(&first, r15.At(decode->st_value), sizeof(first));
+    QCHECK(first == 0xd10543ffU);
+  }
+  const Elf64_Sym* encode = FindSymbol(dyn, "_ZNK10NRadEngine5CJson15EncodeToCompactEPcRyjPKc");
+  QCHECK(encode != nullptr);
+  if (encode != nullptr) {
+    QCHECK(ELF64_ST_TYPE(encode->st_info) == STT_FUNC && encode->st_size == 12);
+    QCHECK(encode->st_value == quest_social::kLibR15CJsonEncodeToCompactVaddr);
+    std::uint32_t first = 0;
+    std::memcpy(&first, r15.At(encode->st_value), sizeof(first));
+    QCHECK(first == 0xaa0403e5U);
+  }
+  // The production resolver, on the real image, lands on those addresses.
   g_lookupImage = &r15.image;
-  const quest_social::CJsonResetFn fn = quest_social::ResolveCJsonReset(&LookupFixed);
+  const quest_social::GameJson json = quest_social::ResolveGameJson(&LookupFixed);
   g_lookupImage = nullptr;
-  std::uintptr_t resolved = 0;
-  std::memcpy(&resolved, &fn, sizeof(resolved));
-  QCHECK(resolved == r15.image.base + quest_social::kLibR15CJsonResetVaddr);
+  const auto address = [](auto fn) {
+    std::uintptr_t value = 0;
+    std::memcpy(&value, &fn, sizeof(value));
+    return value;
+  };
+  QCHECK(address(json.reset) == r15.image.base + quest_social::kLibR15CJsonResetVaddr);
+  QCHECK(address(json.decode) == r15.image.base + quest_social::kLibR15CJsonDecodeFromVaddr);
+  QCHECK(address(json.encode) == r15.image.base + quest_social::kLibR15CJsonEncodeToCompactVaddr);
 
   // SUuid::kInvalid (ExitLobby and Reset copy it; the facade stores sixteen zero bytes instead): a 16-byte
   // object in the .bss part of a PT_LOAD, so zero at load.

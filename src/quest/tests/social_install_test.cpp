@@ -143,11 +143,11 @@ void TestHandlerThroughThunk() {
 }
 
 void TestCounterRegistration() {
-  // The reporter takes 32 counters in all; the social package uses 12 (the thunk's calls and faults, three
-  // pass-through counters, the selection, and the facade's six) and leaves the rest.
+  // The reporter takes 32 counters in all; the social package uses 19 (the thunk's calls and faults, three
+  // pass-through counters, the selection, and the facade's thirteen) and leaves the rest.
   sentinel::StopReporter();
   QCHECK(RegisterSocialReportCounters());
-  for (int i = 0; i < 20; ++i) QCHECK(sentinel::RegisterReportCounter("filler", &g_dummy));  // 12 + 20 = 32
+  for (int i = 0; i < 13; ++i) QCHECK(sentinel::RegisterReportCounter("filler", &g_dummy));  // 19 + 13 = 32
   QCHECK(!sentinel::RegisterReportCounter("one-too-many", &g_dummy));
   sentinel::StopReporter();
 }
@@ -189,12 +189,15 @@ bool EmptyImage(const char*, sentinel::ElfImage* out) {
   return true;
 }
 
-// The game's CJson::Reset is found only in libr15 of the pinned build.
-void TestResolveCJsonReset() {
-  QCHECK(ResolveCJsonReset(&NoImage) == nullptr);
-  QCHECK(ResolveCJsonReset(&EmptyImage) == nullptr);
-  QCHECK(ResolveCJsonReset(nullptr) == nullptr);
+// The game's CJson functions are found only in libr15 of the pinned build.
+void TestResolveGameJson() {
+  for (const sentinel::ImageLookup lookup : {&NoImage, &EmptyImage, static_cast<sentinel::ImageLookup>(nullptr)}) {
+    const GameJson json = ResolveGameJson(lookup);
+    QCHECK(json.reset == nullptr && json.decode == nullptr && json.encode == nullptr);
+  }
   QCHECK(kLibR15CJsonResetVaddr == 0xfa227cULL);
+  QCHECK(kLibR15CJsonDecodeFromVaddr == 0xfa7e8cULL);
+  QCHECK(kLibR15CJsonEncodeToCompactVaddr == 0xfa7e64ULL);
 }
 
 void TestTarget() {
@@ -214,7 +217,7 @@ int main() {
   TestHandlerThroughThunk();
   TestCounterRegistration();
   TestInstall();
-  TestResolveCJsonReset();
+  TestResolveGameJson();
   TestTarget();
   sentinel::SetLogSink(previous);
   if (quest_test::Failures() != 0) {

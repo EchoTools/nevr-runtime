@@ -555,6 +555,14 @@ Traced in the pinned libraries (ELF vaddrs):
   event repeats (`Created`, `Joined`, `JoinFailed`, `HostChanged`, `Left`, `Kicked`, `MemberJoined`,
   `MemberLeft`) are never dropped for room; the queue may grow to 4096 with them, and only past that is the
   newest dropped. Every drop is counted (`social_events_dropped`).
+- **Observability.** Nothing on the game's call path logs. Deliveries are counted by class and the reporter thread logs
+  the counters (`hook_counter`): `social_cb_created`, `social_cb_joined`, `social_cb_member_joined`,
+  `social_cb_join_failed` and `social_cb_other` (every other callback, the accept gate included); the server frames
+  the observer applied or ignored are logged on the network adapter's thread (`social_frame`, `social_frame_ignored`,
+  `social_party_data_received`). Friend rows have no callback: their deliveries are the `FriendListResponse` and
+  `FriendStatusNotify` frames logged by `social_frame` and the row reads counted by `social_slot`. The package registers 19
+  counters (the hook's 6, the facade's 6 above, the five callback classes, `social_json_failed`, `social_frames_ignored`);
+  the budget is the reporter's 32 for the whole program.
 - **Logging.** Every request logs its name, symbol and whether it was sent, with the ids it carries: the
   account it is aimed at (`target`: the invite target, the kicked, passed or answered member, the profile
   asked about), the party, and the Standard message's subject (`arg`) or a Targeted message's parameter
@@ -563,15 +571,39 @@ Traced in the pinned libraries (ELF vaddrs):
   integration installs the sentinel's disk sink (`sentinel::SetLogSink`, PR #220's `sentinel_log.h`), so
   durability is the integration step's to provide; this package does not install one.
 
-What the facade does not carry: the member and party JSON. `MemberDataWritable` returns null, so the member
-array at +0x248 stays empty; the party CJson at +0x1f0 is written by the game: it writes lobby settings into
-it while this client leads a party (see the field list) and the facade neither serializes nor shares it;
-`Reset` clears it through the game's `CJson::Reset`, so the old party's settings are not read after the party
-is gone. So headset
-type in the party list and the lobby id a non-host party member follows are not shared; the engine's base `CNSISocial::Update` (0x1919868) would do that sharing
-given the dirty-bit array at +0x208 and the `ShareData` slots. `libr15.so` exports the CJson calls it would
-need (`DecodeFrom(char const*, unsigned long long)`, `EncodeToCompactTStr`, `Reset`). `RefreshInvites`,
-`FriendsRefreshed` are not driven, as on PCVR.
+Party and member data (headset type per member, the lobby id a non-host member follows) is carried as on the PC:
+
+- **Receive.** `ObserveFrames` takes `SNSPartyDataNotify` (`social_frames.cpp`), checks it is a JSON object and hands
+  it to `SocialParty::State::ReceiveData`. The first `Update` after it loads it into the game's CJson before the
+  callbacks fire (a `MemberJoined` callback already finds the member's `headsettype`, `PartyMemberJoinedCB`
+  0x126f8ac): each remote member's data into its slot of the member array at +0x248 (16 bytes per slot, slot 0 is the
+  local member's own and is never loaded), the party's into +0x1f0 for a member (the leader's party data is its own).
+  A slot whose member changed is reloaded or cleared. Then `MemberUpdated` for a member whose data loaded, `Updated`
+  for the party's. A frame that changes nothing (unreadable, not an object, for another party, the leader's own) is
+  counted (`social_frames_ignored`) and logged with its reason (`social_frame_ignored`).
+- **Share.** `MemberDataWritable` (slot 31) hands out the local member's CJson (the first slot of the array) and notes
+  it; after the callbacks `Update` reads out what the game wrote (the leader's party data when the game set bit 0 of
+  +0x27c, which is cleared; the local member's after `MemberDataWritable`; both once on entering a party) and sends it
+  as `PartyDataUpdateRequest`. Only a JSON object is sent; the game's empty document is `{}`.
+- **The game's functions.** All three are libr15 exports called through their pinned addresses (build id checked, as
+  for `CJson::Reset`): `CJson::DecodeFrom(char const*, unsigned long long)` at 0xfa7e8c replaces a CJson's document
+  with the text and returns 0, or an engine error id when the text does not parse; `CJson::EncodeToCompact(char*,
+  unsigned long long&, unsigned, char const*) const`, a thunk at 0xfa7e64 to `EncodeTo` at 0xfa7a38, writes the compact
+  text of the node at a path (`""`: the document, `{}` when empty) into a caller buffer of the capacity in the size
+  argument and returns 0, or an error id when the text is longer. A caller buffer avoids `EncodeToCompactTStr`, which
+  returns an engine `CMemBlock` that would have to be released with engine code. `social_pinned_test` checks the three
+  exports, their sizes and first instructions.
+- **Where the calls are.** Every call into the game is in `social_game_calls.cpp` (`-fno-exceptions`). The facade
+  builds a plan of plain operations (`JsonPlan`: load or clear a slot, with a pointer and length into strings it keeps
+  alive until the next plan) and a share job (`ShareJob`: which CJson to read, into buffers the facade owns); the
+  game-call side runs them and records each outcome; the facade reads the outcomes back. No object with a destructor and
+  no landing pad is live across a call.
+- **Without the functions** (libr15 absent or not the pinned build) server data is held, not lost: it is counted once
+  (`social_json_failed`) and loads when the functions are known; nothing is shared. A load the game refuses, or a CJson it
+  cannot read out, is counted and logged and does not stop the other data.
+
+`RefreshInvites` and `FriendsRefreshed` are not driven, as on PCVR. The login must declare `nevr_social` level 1 for the
+server to send `SNSPartyDataNotify` at all (the login package's input; this package cannot set it).
 
 Display names: the server sends friends and party members as account ids; their names come from the game's own
 profile request, whose reply is a zstd frame. `nevr_quest_social` compiles the PC's decoder
@@ -589,7 +621,7 @@ friend row.
 What the integration commit calls, and when:
 
 1. **Install, in the sentinel constructor** (`nevr_sentinel_ctor`, after `InitActivation()`, next to the
-   existing GOT hooks): `quest_social::RegisterSocialReportCounters()` before `StartReporter` (it takes 12
+   existing GOT hooks): `quest_social::RegisterSocialReportCounters()` before `StartReporter` (it takes 19
    of the reporter's 32 counters; the clock hook takes 2 more, leaving room for the login, redirect and router hooks), then
    `quest_social::InstallSocialHook(sentinel::FeatureEnabled(Feature::kSocial))` after it.
    The target is libr15's own BIND_NOW slot, so libr15 only has to be mapped, which it is when its

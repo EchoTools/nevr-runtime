@@ -72,16 +72,21 @@ PnsovrView FindPnsovr() noexcept {
   return view;
 }
 
-CJsonResetFn ResolveCJsonReset(sentinel::ImageLookup lookup) noexcept {
+GameJson ResolveGameJson(sentinel::ImageLookup lookup) noexcept {
+  GameJson json;
   sentinel::ElfImage image;
-  if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) return nullptr;
+  if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) return json;
   char id[64] = {};
-  if (!sentinel::ReadBuildId(image, id, sizeof(id)) || std::strcmp(id, sentinel::pinned::kLibR15BuildId) != 0) return nullptr;
-  const std::uintptr_t address = image.base + static_cast<std::uintptr_t>(kLibR15CJsonResetVaddr);
-  CJsonResetFn reset = nullptr;
-  static_assert(sizeof(reset) == sizeof(address), "function pointer size");
-  std::memcpy(&reset, &address, sizeof(reset));
-  return reset;
+  if (!sentinel::ReadBuildId(image, id, sizeof(id)) || std::strcmp(id, sentinel::pinned::kLibR15BuildId) != 0) return json;
+  const auto at = [&image](std::uint64_t vaddr) { return image.base + static_cast<std::uintptr_t>(vaddr); };
+  const std::uintptr_t reset = at(kLibR15CJsonResetVaddr);
+  const std::uintptr_t decode = at(kLibR15CJsonDecodeFromVaddr);
+  const std::uintptr_t encode = at(kLibR15CJsonEncodeToCompactVaddr);
+  static_assert(sizeof(json.reset) == sizeof(reset), "function pointer size");
+  std::memcpy(&json.reset, &reset, sizeof(json.reset));
+  std::memcpy(&json.decode, &decode, sizeof(json.decode));
+  std::memcpy(&json.encode, &encode, sizeof(json.encode));
+  return json;
 }
 
 PnsovrLookup SetPnsovrLookup(PnsovrLookup lookup) {
@@ -143,6 +148,14 @@ bool RegisterSocialReportCounters() {
                                        sentinel::ReportKind::kFaults) && ok;
   ok = sentinel::RegisterReportCounter("social_cjson_reset_unavailable", &facade.cjsonResetUnavailable,
                                        sentinel::ReportKind::kFaults) && ok;
+  // Callback deliveries by class: a headset run shows PartyCreatedCB, MemberJoined, JoinFailed and the rest.
+  ok = sentinel::RegisterReportCounter("social_cb_created", &facade.cbCreated) && ok;
+  ok = sentinel::RegisterReportCounter("social_cb_joined", &facade.cbJoined) && ok;
+  ok = sentinel::RegisterReportCounter("social_cb_member_joined", &facade.cbMemberJoined) && ok;
+  ok = sentinel::RegisterReportCounter("social_cb_join_failed", &facade.cbJoinFailed) && ok;
+  ok = sentinel::RegisterReportCounter("social_cb_other", &facade.cbOther) && ok;
+  ok = sentinel::RegisterReportCounter("social_json_failed", &facade.jsonFailed, sentinel::ReportKind::kFaults) && ok;
+  ok = sentinel::RegisterReportCounter("social_frames_ignored", &facade.framesIgnored, sentinel::ReportKind::kFaults) && ok;
   return ok;
 }
 
@@ -158,10 +171,10 @@ InstallResult InstallSocialHook(bool enabled) {
   SocialNames::RegisterDefaultDecoder();
   // Allocate and wire the models before any game thread can reach the handler.
   PublishFacadeObject();
-  const CJsonResetFn cjsonReset = ResolveCJsonReset(&sentinel::FindLoadedImage);
-  SetCJsonReset(cjsonReset);
-  LogFields(cjsonReset != nullptr ? LogLevel::kInfo : LogLevel::kWarn, "social_install",
-            {{"cjson_reset", cjsonReset != nullptr ? "resolved" : "unavailable"}});
+  const GameJson gameJson = ResolveGameJson(&sentinel::FindLoadedImage);
+  SetGameJson(gameJson);
+  LogFields(gameJson.reset != nullptr ? LogLevel::kInfo : LogLevel::kWarn, "social_install",
+            {{"game_json", gameJson.reset != nullptr ? "resolved" : "unavailable"}});
   SocialThunk::Arm(kSocialHook);
   result.got = sentinel::InstallThunk<SocialThunk>(hook, LibR15Social());
   if (result.got != sentinel::GotStatus::kOk) {
