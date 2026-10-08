@@ -434,28 +434,53 @@ func TestBackendBuiltWithoutExceptions(t *testing.T) {
 
 // The raw GotHook::Install (any function pointer) is private. Its test access class may be
 // named only in got_hook.h (the friend declaration) and under src/quest/tests; production code
-// installs through InstallThunk, which keeps every hook a recorded, walked thunk entry.
+// installs through InstallThunk, which keeps every hook a recorded, walked thunk entry. The
+// check is textual and cheap: it scans every C++ source/header extension, and it also fails if
+// any file outside a tests/ directory includes a header that lives in src/quest/tests (so a
+// wrapper placed under tests/ cannot be pulled into production). It is not bypass-proof (macro token pasting defeats
+// it); it exists to catch an honest mistake (callback_thunk.h, "Limits").
+var includeRe = regexp.MustCompile(`#\s*include\s*[<"]([^>"]+)[>"]`)
+
 func TestRawInstallOnlyInTests(t *testing.T) {
 	root, err := filepath.Abs("../../src")
 	if err != nil {
 		t.Fatal(err)
 	}
+	exts := map[string]bool{".cpp": true, ".cc": true, ".cxx": true, ".h": true, ".hpp": true, ".inc": true}
+	testDir := filepath.Join(root, "quest", "tests")
+	testBase := map[string]bool{}
+	entries, err := os.ReadDir(testDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		testBase[e.Name()] = true
+	}
 	seen := 0
 	err = filepath.Walk(root, func(path string, info os.FileInfo, werr error) error {
-		if werr != nil || info.IsDir() || !strings.HasSuffix(path, ".cpp") && !strings.HasSuffix(path, ".h") {
+		if werr != nil || info.IsDir() || !exts[filepath.Ext(path)] {
 			return werr
 		}
 		data, rerr := os.ReadFile(path)
 		if rerr != nil {
 			return rerr
 		}
-		if !strings.Contains(string(data), "GotHookTestAccess") {
-			return nil
-		}
-		seen++
 		rel, _ := filepath.Rel(root, path)
-		if rel != "quest/sentinel/got_hook.h" && !strings.HasPrefix(rel, "quest/tests/") {
-			t.Errorf("%s names GotHookTestAccess; only got_hook.h and src/quest/tests may", rel)
+		inTests := strings.HasPrefix(rel, "quest/tests/")
+		if strings.Contains(string(data), "GotHookTestAccess") {
+			seen++
+			if rel != "quest/sentinel/got_hook.h" && !inTests {
+				t.Errorf("%s names GotHookTestAccess; only got_hook.h and src/quest/tests may", rel)
+			}
+		}
+		// Other tests (src/runtime/tests, ...) may include the shared test vectors; production may not.
+		if !strings.Contains("/"+rel, "/tests/") {
+			for _, m := range includeRe.FindAllStringSubmatch(string(data), -1) {
+				inc := m[1]
+				if strings.HasPrefix(inc, "quest/tests/") || testBase[filepath.Base(inc)] && !strings.Contains(inc, "/sentinel/") {
+					t.Errorf("%s includes %s from src/quest/tests; production code must not", rel, inc)
+				}
+			}
 		}
 		return nil
 	})

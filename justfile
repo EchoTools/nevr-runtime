@@ -424,6 +424,20 @@ test-quest-hooks:
     out="build/quest-hooks-host"
     mkdir -p "$out"
     cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    # Type-level gates: the control compiles; each snippet that breaks one rule must fail to
+    # compile, with the message that names the rule (not for some unrelated reason).
+    snip=src/quest/tests/compile_fail
+    "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/control.cpp"
+    for pair in fake_thunk:"InstallThunk requires a CallbackThunk" direct_record:"is private within this context" plain_handler:"invalid conversion"; do
+        name="${pair%%:*}"; want="${pair#*:}"
+        if "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/$name.cpp" > "$out/$name.err" 2>&1; then
+            echo "test-quest-hooks: $snip/$name.cpp compiled, but must not" >&2; exit 1
+        fi
+        if ! grep -q "$want" "$out/$name.err"; then
+            echo "test-quest-hooks: $snip/$name.cpp failed for another reason (wanted '$want'):" >&2
+            cat "$out/$name.err" >&2; exit 1
+        fi
+    done
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 src/quest/tests/got_fixture_provider.cpp \
         -o "$out/libgotfx_provider.so"
     link=(-fPIC -shared -Wl,--build-id=sha1 -L"$out" -lgotfx_provider -Wl,-rpath,'$ORIGIN')

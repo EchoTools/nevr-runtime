@@ -175,6 +175,12 @@ SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
 // calls our entry through a slot we released rather than poisoned.
 void ReleasePoisonedSlotsIn(const void* begin, std::size_t length);
 
+// Test seam: how /proc/self/maps is opened (default: open(2) on that path). A test returns a
+// descriptor whose reads fail or end at once to show that unreadable maps never read as
+// "unmapped". Returns the previous opener.
+using MapsOpener = int (*)();
+MapsOpener SetMapsOpener(MapsOpener opener);
+
 // Test seam. Called with the process-wide write lock held, around the
 // compare-and-swap store of Install and Remove. Production code leaves it unset. Returns the previous observer.
 // kBeforeStore: after the page is writable, before the compare-and-swap.

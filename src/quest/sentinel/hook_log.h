@@ -12,19 +12,18 @@
  * carries a credential, token, URL or key value: callers pass module names, symbol
  * names, link-time addresses and status tokens only.
  *
- * The line is built by hand, not with a JSON library. Reasons: this library and the hook-path
- * translation units are built -fno-exceptions (nlohmann::json reports errors by throwing), and the
- * logger has to be usable from the reporter thread and from the constructor without pulling in a
- * library. The logger itself allocates nothing; the constructor that calls it is not
- * allocation-free (sentinel::Arm allocates). This is a deliberate deviation from the repository's
- * "no hand-built serialization" rule; the host test parses every captured line with
+ * The line is built by hand, not with a JSON library, so that logging needs no heap: it can be
+ * called from the constructor, the reporter thread and the install path alike, and a failure to
+ * allocate cannot swallow the line that reports it. (The constructor that calls it is not
+ * allocation-free as a whole; sentinel::Arm allocates.) That is a deliberate deviation from the
+ * repository's "no hand-built serialization" rule; the host test parses every captured line with
  * nlohmann::json (when the host has it) and with a strict validator, so malformed output fails
  * the build.
  *
  * The sink is logcat on Android and stderr elsewhere. A logcat line lasts only as long as logcat
- * keeps it, which does NOT meet the durable-log rule in AGENTS.md. The planned sink is the
- * sentinel's on-disk log (PR #220, sentinel_log): point SetLogSink at it once that has landed.
- * It had not landed on main when this was written. A test replaces the sink to assert on lines.
+ * keeps it, which does NOT meet the durable-log rule in AGENTS.md. The intended sink is the
+ * sentinel's on-disk log (sentinel_log); SetLogSink is where it plugs in. A test replaces the
+ * sink to assert on lines.
  */
 #pragma once
 

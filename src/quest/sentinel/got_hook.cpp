@@ -159,10 +159,67 @@ PageRange PagesOf(const void* slot) {
   return {start, static_cast<std::size_t>(end - start)};
 }
 
+// Opens the maps file; a test points it elsewhere to provoke read failures.
+int OpenMapsDefault() { return open("/proc/self/maps", O_RDONLY | O_CLOEXEC); }
+std::atomic<MapsOpener> g_mapsOpener{nullptr};
+int OpenMaps() {
+  const MapsOpener fn = g_mapsOpener.load(std::memory_order_acquire);
+  return fn != nullptr ? fn() : OpenMapsDefault();
+}
+
+enum class Mapped { kYes, kNo, kUnknown };
+
+// Whether `addr` lies in a mapping, from one complete pass over the maps file. Anything short
+// of a complete pass is kUnknown, never kNo: a failed open, a read error, an end of file before
+// any data (a live process always has mappings) all say "unknown". Only a pass that read data
+// and reached end of file without finding the address says kNo.
+Mapped IsMapped(const void* addr) {
+  const int fd = OpenMaps();
+  if (fd < 0) return Mapped::kUnknown;
+  const std::uintptr_t want = reinterpret_cast<std::uintptr_t>(addr);
+  char chunk[1024];
+  char line[160];
+  std::size_t len = 0;
+  bool readAny = false;
+  Mapped result = Mapped::kUnknown;
+  bool found = false;
+  bool completePass = false;
+  auto consume = [&]() {
+    line[len] = '\0';
+    len = 0;
+    unsigned long long lo = 0, hi = 0;
+    if (std::sscanf(line, "%llx-%llx", &lo, &hi) == 2 && want >= lo && want < hi) found = true;
+  };
+  for (;;) {
+    const ssize_t n = read(fd, chunk, sizeof(chunk));
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      break;  // a read error: unknown
+    }
+    if (n == 0) {
+      completePass = readAny;  // end of file after data
+      break;
+    }
+    readAny = true;
+    for (ssize_t i = 0; i < n; ++i) {
+      if (chunk[i] != '\n') {
+        if (len < sizeof(line) - 1) line[len++] = chunk[i];
+      } else {
+        consume();
+      }
+    }
+  }
+  if (completePass && len > 0) consume();  // a last line with no newline
+  close(fd);
+  if (found) return Mapped::kYes;  // seeing the address is conclusive even on a short pass
+  if (completePass) result = Mapped::kNo;
+  return result;
+}
+
 // Protection (PROT_*) of the mapping that contains `addr`, from /proc/self/maps,
 // or -1 if it cannot be read. Reads with a fixed buffer, no allocation.
 int LiveProtection(const void* addr) {
-  const int fd = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
+  const int fd = OpenMaps();
   if (fd < 0) return -1;
   const std::uintptr_t want = reinterpret_cast<std::uintptr_t>(addr);
   char chunk[1024];
@@ -194,35 +251,7 @@ int LiveProtection(const void* addr) {
 }
 
 // `relroReadOnly` is the fallback when /proc/self/maps is unreadable.
-// Whether `addr` lies in a mapping: 1 yes, 0 no, -1 /proc/self/maps unreadable.
-int IsMapped(const void* addr) {
-  const int fd = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
-  if (fd < 0) return -1;
-  const std::uintptr_t want = reinterpret_cast<std::uintptr_t>(addr);
-  char chunk[1024];
-  char line[160];
-  std::size_t len = 0;
-  int result = 0;
-  for (;;) {
-    const ssize_t n = read(fd, chunk, sizeof(chunk));
-    if (n <= 0) break;
-    for (ssize_t i = 0; i < n && result == 0; ++i) {
-      const char c = chunk[i];
-      if (c != '\n') {
-        if (len < sizeof(line) - 1) line[len++] = c;
-        continue;
-      }
-      line[len] = '\0';
-      len = 0;
-      unsigned long long lo = 0, hi = 0;
-      if (std::sscanf(line, "%llx-%llx", &lo, &hi) == 2 && want >= lo && want < hi) result = 1;
-    }
-    if (result != 0) break;
-  }
-  close(fd);
-  return result;
-}
-
+// `relroReadOnly` is the fallback when /proc/self/maps is unreadable.
 // Replaces `expected` with `value` in `slot`, and only if the slot still holds
 // `expected`: a hook someone chained on top, or any other writer, is never
 // overwritten. A RELRO page is made writable for the store and protected
@@ -627,14 +656,30 @@ void ReleasePoisonedSlotsIn(const void* begin, std::size_t length) {
   const std::uintptr_t lo = reinterpret_cast<std::uintptr_t>(begin);
   for (std::size_t i = 0; i < g_slotCount;) {
     const std::uintptr_t at = reinterpret_cast<std::uintptr_t>(g_slots[i].slot);
-    // Released only when the address is verifiably unmapped.
-    if (g_slots[i].poisoned && at >= lo && at - lo < length && IsMapped(g_slots[i].slot) == 0) {
+    if (!g_slots[i].poisoned || at < lo || at - lo >= length) {
+      ++i;
+      continue;
+    }
+    // Released only when the address is verifiably unmapped; unreadable maps keep the entry.
+    const Mapped mapped = IsMapped(g_slots[i].slot);
+    char where[19];
+    if (mapped == Mapped::kNo) {
+      LogFields(LogLevel::kInfo, "got_hook",
+                {{"op", "release_poisoned"}, {"status", "released"}, {"slot", HexString(where, at)}});
       g_slots[i] = g_slots[--g_slotCount];
       g_slots[g_slotCount] = SlotEntry{};
     } else {
+      LogFields(LogLevel::kError, "got_hook",
+                {{"op", "release_poisoned"},
+                 {"status", mapped == Mapped::kYes ? "still_mapped" : "mapping_unknown"},
+                 {"slot", HexString(where, at)}});
       ++i;
     }
   }
+}
+
+MapsOpener SetMapsOpener(MapsOpener opener) {
+  return g_mapsOpener.exchange(opener, std::memory_order_acq_rel);
 }
 
 StoreObserver SetStoreObserver(StoreObserver observer) {
