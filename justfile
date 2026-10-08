@@ -514,7 +514,8 @@ test-quest-social:
     "${on[@]}" -c src/quest/social/social_facade.cpp -o "$out/social_facade.o"
     "${on[@]}" -c src/quest/social/social_frames.cpp -o "$out/social_frames.o"
     "${on[@]}" -c src/quest/sentinel/hook_log.cpp -o "$out/hook_log.o"
-    "${on[@]}" -c src/quest/sentinel/got_hook.cpp -o "$out/got_hook.o"
+    "${off[@]}" -c src/quest/sentinel/got_hook.cpp -o "$out/got_hook.o"
+    "${off[@]}" -c src/quest/sentinel/hook_report.cpp -o "$out/hook_report.o"
     "${off[@]}" -c src/quest/social/social_game_calls.cpp -o "$out/social_game_calls.o"
     "${off[@]}" -c src/quest/social/social_install.cpp -o "$out/social_install.o"
     # The frames live across a call into the game carry no exception machinery.
@@ -529,8 +530,9 @@ test-quest-social:
         "$out/social_game_calls.o" "$out/hook_log.o" -o "$out/social_facade_test" -ldl -pthread
     "$out/social_facade_test"
     "${off[@]}" src/quest/tests/social_install_test.cpp "$out/social_install.o" "$out/social_facade.o" \
-        "$out/social_game_calls.o" "$out/got_hook.o" "$out/hook_log.o" -o "$out/social_install_test" -ldl -pthread
-    "$out/social_install_test"
+        "$out/social_game_calls.o" "$out/got_hook.o" "$out/hook_log.o" "$out/hook_report.o" \
+        -o "$out/social_install_test" -ldl -pthread
+    timeout 300 "$out/social_install_test"  # a hang is a failure, not a stuck gate
 
 # The social pins against the real libr15.so and libpnsovr.so (docs/adr/0003). Extracts both from
 # the store APK, checks their SHA-256, runs src/quest/tests/social_pinned_test.cpp, and checks that
@@ -553,7 +555,7 @@ test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signe
     g++ -std=c++17 -fno-exceptions -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel \
         src/quest/tests/social_pinned_test.cpp src/quest/social/social_install.cpp \
         src/quest/social/social_game_calls.cpp "$out/social_facade.o" \
-        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
         -o "$out/social_pinned_test" -ldl -pthread
     "$out/social_pinned_test" "$lib/libr15.so" "$lib/libpnsovr.so"
     "$out/social_pinned_test" --dump "$lib/libpnsovr.so" > "$out/vtable.txt"

@@ -448,7 +448,7 @@ Traced in the pinned libraries (ELF vaddrs):
   the original and replaces the result only when its first word equals libpnsovr's load bias plus
   0x6a1478 (the address point of `CNSOVRSocial`'s vtable, stored by its constructor at 0x203238) and
   libpnsovr's build id is the pinned one. A null result, a missing pnsovr, another build or another
-  class passes through unchanged with one structured line.
+  class passes through unchanged and a counter records which.
 - **Object.** 0xbb0 bytes (what pnsovr allocates), vtable of 76 free functions in Quest slot order
   (`social_abi.h`). Quest slots equal the PCVR facade's plus one from slot 12, where the Itanium ABI has
   two destructor slots. The fields the game and the engine's non-virtual `CNSISocial` code read
@@ -473,8 +473,11 @@ Traced in the pinned libraries (ELF vaddrs):
   `-fno-exceptions`: no landing pad, no LSDA. They call `social_internal.h` functions in
   `social_facade.cpp` that catch `std::exception`, count and log it, and have returned before the game
   is called; events are copied into a fixed batch (32 per frame, the rest counted and logged) so no heap
-  object is alive across a game call. The `Social()` handler is `noexcept` in `social_install.cpp`
-  (`-fno-exceptions`), reads the facade object published at install and constructs nothing. Every other
+  object is alive across a game call. The `Social()` hook is a `NEVR_HOOK_RECORD` in `social_install.cpp`
+  (`-fno-exceptions`) installed with `InstallThunk<SocialThunk>`; its `noexcept` handler reads the
+  facade object published at install, constructs nothing and never logs: it increments counters
+  (selected, null result, pnsovr unavailable, foreign object) that the sentinel's reporter thread logs.
+  The frame sensor walks the direct edges from the record's entry and handler. Every other
   slot is `noexcept`, catches `std::exception` and answers its zero value; none of them calls the game.
   `tools/check_quest_social_frames.sh` pins the built objects (no `__gxx_personality_v0`, no
   `.gcc_except_table`, a negative control on the object that has both); the facade test throws from a
@@ -500,7 +503,9 @@ need (`DecodeFrom(char const*, unsigned long long)`, `EncodeToCompactTStr`, `Res
 What the integration commit calls, and when:
 
 1. **Install, in the sentinel constructor** (`nevr_sentinel_ctor`, after `InitActivation()`, next to the
-   existing GOT hooks): `quest_social::InstallSocialHook(sentinel::FeatureEnabled(Feature::kSocial))`.
+   existing GOT hooks): `quest_social::RegisterSocialReportCounters()` before `StartReporter` (it takes 6
+   of the reporter's 8 counters; the clock hook takes the other 2, so the table is then full), then
+   `quest_social::InstallSocialHook(sentinel::FeatureEnabled(Feature::kSocial))` after it.
    The target is libr15's own BIND_NOW slot, so libr15 only has to be mapped, which it is when its
    `DT_NEEDED` dependencies' constructors run (the `clock_gettime` hook installs there today); libpnsovr
    does not have to be loaded, because the handler looks it up when `Social()` is called. The hook must

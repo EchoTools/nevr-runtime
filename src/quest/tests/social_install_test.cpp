@@ -1,20 +1,23 @@
 // The social hook's decision and its installation, on the host.
 //
 //   - SelectSocialObject hands the game the facade only for pnsovr's CNSOVRSocial of the pinned
-//     build, and passes everything else through with one log line.
-//   - The armed callback, run through the real CallbackThunk entry the GOT slot points at, applies
-//     that decision to the original's result.
+//     build, and passes everything else through, counting why. It never logs.
+//   - The handler, armed through a record this test defines and run through the real CallbackThunk
+//     entry the GOT slot points at, applies that decision to the original's result.
 //   - InstallSocialHook(false) touches nothing; with libr15.so not loaded it fails without arming.
 //
 // Run: social_install_test
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
+#include "hook_install.h"
 #include "hook_log.h"
+#include "hook_report.h"
 #include "quest/social/social_abi.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_install.h"
@@ -51,6 +54,10 @@ FakeObject OvrSocial() {
   return o;
 }
 
+// This test's own record for the production handler (tests define their own records).
+NEVR_HOOK_RECORD(kTestSocialHook, SocialThunk, &OnSocialHandler);
+
+std::atomic<std::uint64_t> g_dummy{0};
 int g_fakeCalls = 0;
 void* g_fakeResult = nullptr;
 void* FakeOriginal(std::uint64_t) {
@@ -58,14 +65,22 @@ void* FakeOriginal(std::uint64_t) {
   return g_fakeResult;
 }
 
+std::uint64_t C(const std::atomic<std::uint64_t>& counter) { return counter.load(); }
+
 void TestSelect() {
   FakeObject facade;  // any distinct address stands in for the facade object
   FakeObject ovr = OvrSocial();
+  ResetCountersForTest();
+  const SocialCounters counters = Counters();
+  g_lines.clear();
   QCHECK(SelectSocialObject(&ovr, &facade, &Loaded) == &facade);
+  QCHECK(C(counters.selected) == 1);
 
   QCHECK(SelectSocialObject(nullptr, &facade, &Loaded) == nullptr);  // a provider with no social object stays that way
+  QCHECK(C(counters.nullResult) == 1);
   QCHECK(SelectSocialObject(&ovr, &facade, &Absent) == &ovr);
   QCHECK(SelectSocialObject(&ovr, &facade, &WrongBuild) == &ovr);
+  QCHECK(C(counters.pnsovrUnavailable) == 2);
 
   FakeObject foreign = OvrSocial();
   foreign.vptr += 8;  // another class's vtable (or a shifted one)
@@ -73,21 +88,27 @@ void TestSelect() {
   FakeObject other;
   other.vptr = kBias;  // the library base itself is not the vtable
   QCHECK(SelectSocialObject(&other, &facade, &Loaded) == &other);
+  QCHECK(C(counters.foreignObject) == 2);
 
   QCHECK(SelectSocialObject(&ovr, nullptr, &Loaded) == &ovr);  // no facade: never substitute nothing
   QCHECK(SelectSocialObject(&ovr, &facade, nullptr) == &ovr);
+  QCHECK(C(counters.selected) == 1);  // none of the pass-throughs counted as a selection
+  QCHECK(g_lines.empty());            // the decision never logs
 }
 
 void TestHandlerThroughThunk() {
   FakeObject ovr = OvrSocial();
   PnsovrLookup previous = SetPnsovrLookup(&Loaded);
+  PublishFacadeObject();
+  ResetCountersForTest();
   SocialThunk::Reset();
   *SocialThunk::OriginalOut() = reinterpret_cast<void*>(&FakeOriginal);
-  SocialThunk::Arm(SocialHandler());
+  SocialThunk::Arm(kTestSocialHook);
   using Entry = void* (*)(std::uint64_t);
   Entry entry = nullptr;
   void* addr = SocialThunk::EntryAddress();
   std::memcpy(&entry, &addr, sizeof(entry));
+  g_lines.clear();
 
   // Pinned pnsovr loaded and the provider returned its CNSOVRSocial: the game receives the facade.
   g_fakeResult = &ovr;
@@ -96,23 +117,38 @@ void TestHandlerThroughThunk() {
   QCHECK(g_fakeCalls == 1);  // the original always runs first
   QCHECK(got == Facade::Instance().Object());
   QCHECK(got != static_cast<void*>(&ovr));
+  QCHECK(C(Counters().selected) == 1);
+  QCHECK(SocialThunk::Calls() == 1);
 
   // The provider returned nothing: nothing is substituted.
   g_fakeResult = nullptr;
   QCHECK(entry(0x1234) == nullptr);
+  QCHECK(C(Counters().nullResult) == 1);
 
   // pnsovr is not the pinned build: the original object passes through.
   SetPnsovrLookup(&WrongBuild);
   g_fakeResult = &ovr;
   QCHECK(entry(0x1234) == static_cast<void*>(&ovr));
+  QCHECK(C(Counters().pnsovrUnavailable) == 1);
 
   // Disarmed: straight through to the original.
   SetPnsovrLookup(&Loaded);
-  SocialThunk::Arm(nullptr);
+  SocialThunk::Disarm();
   QCHECK(entry(0x1234) == static_cast<void*>(&ovr));
+  QCHECK(g_lines.empty());  // the whole hook path logged nothing
 
   SocialThunk::Reset();
   SetPnsovrLookup(previous);
+}
+
+void TestCounterRegistration() {
+  // The reporter takes 8 counters in all; the social package uses 6 and says so.
+  sentinel::StopReporter();
+  QCHECK(RegisterSocialReportCounters());
+  QCHECK(sentinel::RegisterReportCounter("x1", &g_dummy));  // the sentinel's own two fit beside the six
+  QCHECK(sentinel::RegisterReportCounter("x2", &g_dummy));
+  QCHECK(!sentinel::RegisterReportCounter("x3", &g_dummy));  // a ninth is refused
+  sentinel::StopReporter();
 }
 
 void TestInstall() {
@@ -156,6 +192,7 @@ int main() {
   const sentinel::LogSink previous = sentinel::SetLogSink(&Capture);
   TestSelect();
   TestHandlerThroughThunk();
+  TestCounterRegistration();
   TestInstall();
   TestTarget();
   sentinel::SetLogSink(previous);

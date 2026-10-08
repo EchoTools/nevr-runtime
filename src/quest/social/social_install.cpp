@@ -1,9 +1,15 @@
+// Built -fno-exceptions (callback_thunk.h refuses otherwise). The handler path below (OnSocialHandler,
+// SelectSocialObject, FindPnsovr and the loader helpers in got_hook.cpp) is reachable from the thunk
+// entry, so the frame sensor (tests/quest TestHookFramesCarryNoPersonality) requires it to be
+// personality-free, and it never logs: it only counts.
 #include "quest/social/social_install.h"
 
 #include <atomic>
 #include <cstring>
 
+#include "hook_install.h"
 #include "hook_log.h"
+#include "hook_report.h"
 #include "pinned_targets.h"
 #include "quest/social/social_abi.h"
 #include "quest/social/social_facade.h"
@@ -14,37 +20,31 @@ namespace {
 using sentinel::LogFields;
 using sentinel::LogLevel;
 
-// Each distinct outcome is logged once; Social() runs once, but the log must stay bounded if it ever
-// runs more.
-std::atomic<std::uint32_t> g_outcomesLogged{0};
-
-void LogOutcomeOnce(std::uint32_t bit, LogLevel level, const char* result) {
-  const std::uint32_t before = g_outcomesLogged.fetch_or(bit, std::memory_order_relaxed);
-  if ((before & bit) == 0) LogFields(level, "social_select", {{"result", result}});
-}
-
 std::atomic<PnsovrLookup> g_lookup{&FindPnsovr};
 
-constexpr std::uint32_t kLogNull = 1U << 0;
-constexpr std::uint32_t kLogNotLoaded = 1U << 1;
-constexpr std::uint32_t kLogBuild = 1U << 2;
-constexpr std::uint32_t kLogForeign = 1U << 3;
-constexpr std::uint32_t kLogFacade = 1U << 4;
-
-// The facade's object, published by InstallSocialHook before the callback is armed. The handler reads
-// this and never constructs anything.
+// The facade's object, published before the callback is armed. The handler reads this and never
+// constructs anything.
 std::atomic<void*> g_facadeObject{nullptr};
 
-// Runs on the game's thread, once. Built -fno-exceptions (callback_thunk.h refuses otherwise): the frame
-// has no landing pad, so a game exception thrown by the original passes through it untouched, and
-// nothing here can throw into the game.
-void* OnSocial(SocialThunk::Fn original, std::uint64_t handle) noexcept {
+// What the handler counted (constant-initialised: no static initialiser).
+std::atomic<std::uint64_t> g_selected{0};
+std::atomic<std::uint64_t> g_nullResult{0};
+std::atomic<std::uint64_t> g_pnsovrUnavailable{0};
+std::atomic<std::uint64_t> g_foreignObject{0};
+
+void Count(std::atomic<std::uint64_t>& counter) noexcept { counter.fetch_add(1, std::memory_order_relaxed); }
+
+}  // namespace
+
+// Runs on the game's thread, once. The frame has no landing pad, so a game exception thrown by the
+// original passes through it untouched, and nothing here can throw into the game.
+void* OnSocialHandler(SocialThunk::Fn original, std::uint64_t handle) noexcept {
   void* const result = original(handle);
   return SelectSocialObject(result, g_facadeObject.load(std::memory_order_acquire),
                             g_lookup.load(std::memory_order_acquire));
 }
 
-}  // namespace
+NEVR_HOOK_RECORD(kSocialHook, SocialThunk, &OnSocialHandler);
 
 const char* InstallStatusName(InstallStatus status) {
   switch (status) {
@@ -75,34 +75,51 @@ PnsovrLookup SetPnsovrLookup(PnsovrLookup lookup) {
   return g_lookup.exchange(lookup != nullptr ? lookup : &FindPnsovr, std::memory_order_acq_rel);
 }
 
-SocialThunk::Handler SocialHandler() {
-  g_facadeObject.store(Facade::Instance().Object(), std::memory_order_release);
-  return &OnSocial;
-}
+void PublishFacadeObject() { g_facadeObject.store(Facade::Instance().Object(), std::memory_order_release); }
 
 void* SelectSocialObject(void* original, void* facadeObject, PnsovrLookup lookup) noexcept {
   if (original == nullptr) {
-    LogOutcomeOnce(kLogNull, LogLevel::kWarn, "provider_returned_null_pass_through");
+    Count(g_nullResult);
     return original;
   }
   if (facadeObject == nullptr || lookup == nullptr) return original;
   const PnsovrView pnsovr = lookup();
-  if (!pnsovr.found) {
-    LogOutcomeOnce(kLogNotLoaded, LogLevel::kWarn, "pnsovr_not_loaded_pass_through");
-    return original;
-  }
-  if (!pnsovr.buildIdMatches) {
-    LogOutcomeOnce(kLogBuild, LogLevel::kError, "pnsovr_build_mismatch_pass_through");
+  if (!pnsovr.found || !pnsovr.buildIdMatches) {
+    Count(g_pnsovrUnavailable);
     return original;
   }
   std::uintptr_t vptr = 0;
   std::memcpy(&vptr, original, sizeof(vptr));
   if (vptr != pnsovr.loadBias + static_cast<std::uintptr_t>(kOvrSocialVptrVaddr)) {
-    LogOutcomeOnce(kLogForeign, LogLevel::kError, "not_a_cnsovrsocial_pass_through");
+    Count(g_foreignObject);
     return original;
   }
-  LogOutcomeOnce(kLogFacade, LogLevel::kInfo, "facade_selected");
+  Count(g_selected);
   return facadeObject;
+}
+
+SocialCounters Counters() noexcept {
+  return SocialCounters{g_selected, g_nullResult, g_pnsovrUnavailable, g_foreignObject};
+}
+
+void ResetCountersForTest() noexcept {
+  g_selected.store(0, std::memory_order_relaxed);
+  g_nullResult.store(0, std::memory_order_relaxed);
+  g_pnsovrUnavailable.store(0, std::memory_order_relaxed);
+  g_foreignObject.store(0, std::memory_order_relaxed);
+}
+
+bool RegisterSocialReportCounters() {
+  bool ok = true;
+  ok = sentinel::RegisterReportCounter("social_calls", &SocialThunk::CallCounter()) && ok;
+  ok = sentinel::RegisterReportCounter("social_facade_selected", &g_selected) && ok;
+  ok = sentinel::RegisterReportCounter("social_null_result", &g_nullResult, sentinel::ReportKind::kFaults) && ok;
+  ok = sentinel::RegisterReportCounter("social_pnsovr_unavailable", &g_pnsovrUnavailable,
+                                       sentinel::ReportKind::kFaults) && ok;
+  ok = sentinel::RegisterReportCounter("social_foreign_object", &g_foreignObject, sentinel::ReportKind::kFaults) && ok;
+  ok = sentinel::RegisterReportCounter("social_thunk_faults", &SocialThunk::FaultCounter(),
+                                       sentinel::ReportKind::kFaults) && ok;
+  return ok;
 }
 
 InstallResult InstallSocialHook(bool enabled) {
@@ -113,11 +130,11 @@ InstallResult InstallSocialHook(bool enabled) {
   }
   static sentinel::GotHook hook;
   // Allocate and wire the models before any game thread can reach the handler.
-  g_facadeObject.store(Facade::Instance().Object(), std::memory_order_release);
-  SocialThunk::Arm(&OnSocial);
-  result.got = hook.Install(LibR15Social(), SocialThunk::EntryAddress(), SocialThunk::OriginalOut());
+  PublishFacadeObject();
+  SocialThunk::Arm(kSocialHook);
+  result.got = sentinel::InstallThunk<SocialThunk>(hook, LibR15Social());
   if (result.got != sentinel::GotStatus::kOk) {
-    SocialThunk::Arm(nullptr);
+    SocialThunk::Disarm();
     result.status = InstallStatus::kHookFailed;
     LogFields(LogLevel::kError, "social_install",
               {{"status", "hook_failed"}, {"got", sentinel::GotStatusName(result.got)}});
