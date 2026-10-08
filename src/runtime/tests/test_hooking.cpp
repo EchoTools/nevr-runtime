@@ -98,3 +98,93 @@ TEST(Hooking, CreateFailureLeavesOriginalAndNeverEnables) {
   EXPECT_EQ(removals, 0);
   EXPECT_STREQ(Hooking::LastAttachError(), MH_StatusToString(MH_ERROR_UNSUPPORTED_FUNCTION));
 }
+
+// ---- core/hook_lifecycle.h: the ordering contract shared with the Quest backend ----
+
+TEST(HookLifecycle, AttachPublishedPublishesBeforeEnableAndKeepsTrampoline) {
+  int target = 0, trampoline = 0;
+  void* original = &target;
+  std::vector<const char*> calls;
+  const nevr::hook::AttachStage stage = nevr::hook::AttachPublished(
+      &original,
+      [&](void** out) {
+        calls.push_back("create");
+        *out = &trampoline;
+        return true;
+      },
+      [&] {
+        calls.push_back("enable");
+        EXPECT_EQ(original, &trampoline);
+        return true;
+      },
+      [&] { calls.push_back("remove"); });
+  EXPECT_EQ(stage, nevr::hook::AttachStage::kAttached);
+  EXPECT_EQ(original, &trampoline);
+  EXPECT_EQ(calls, (std::vector<const char*>{"create", "enable"}));
+}
+
+TEST(HookLifecycle, EnableFailureRemovesAndRestoresThePriorPointer) {
+  int target = 0, trampoline = 0;
+  void* original = &target;
+  std::vector<const char*> calls;
+  const nevr::hook::AttachStage stage = nevr::hook::AttachPublished(
+      &original,
+      [&](void** out) {
+        calls.push_back("create");
+        *out = &trampoline;
+        return true;
+      },
+      [&] {
+        calls.push_back("enable");
+        return false;
+      },
+      [&] { calls.push_back("remove"); });
+  EXPECT_EQ(stage, nevr::hook::AttachStage::kEnableFailed);
+  EXPECT_EQ(original, &target);
+  EXPECT_EQ(calls, (std::vector<const char*>{"create", "enable", "remove"}));
+}
+
+TEST(HookLifecycle, CreateFailureNeverEnablesOrRemoves) {
+  int target = 0;
+  void* original = &target;
+  int enables = 0, removes = 0;
+  const nevr::hook::AttachStage stage = nevr::hook::AttachPublished(
+      &original, [](void**) { return false; },
+      [&] {
+        ++enables;
+        return true;
+      },
+      [&] { ++removes; });
+  EXPECT_EQ(stage, nevr::hook::AttachStage::kCreateFailed);
+  EXPECT_EQ(original, &target);
+  EXPECT_EQ(enables, 0);
+  EXPECT_EQ(removes, 0);
+}
+
+TEST(HookLifecycle, NullTrampolineIsRemovedAndNeverPublished) {
+  int target = 0;
+  void* original = &target;
+  int enables = 0, removes = 0;
+  const nevr::hook::AttachStage stage = nevr::hook::AttachPublished(
+      &original,
+      [](void** out) {
+        *out = nullptr;
+        return true;
+      },
+      [&] {
+        ++enables;
+        return true;
+      },
+      [&] { ++removes; });
+  EXPECT_EQ(stage, nevr::hook::AttachStage::kNullTrampoline);
+  EXPECT_EQ(original, &target);
+  EXPECT_EQ(enables, 0);
+  EXPECT_EQ(removes, 1);
+}
+
+TEST(HookLifecycle, StageNamesAreDistinctLogTokens) {
+  EXPECT_STREQ(nevr::hook::AttachStageName(nevr::hook::AttachStage::kAttached), "attached");
+  EXPECT_STREQ(nevr::hook::AttachStageName(nevr::hook::AttachStage::kCreateFailed), "create_failed");
+  EXPECT_STREQ(nevr::hook::AttachStageName(nevr::hook::AttachStage::kNullTrampoline), "null_trampoline");
+  EXPECT_STREQ(nevr::hook::AttachStageName(nevr::hook::AttachStage::kEnableFailed), "enable_failed");
+}
