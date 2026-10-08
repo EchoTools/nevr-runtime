@@ -508,7 +508,7 @@ What the integration commit calls, and when:
 
 1. **Install, in the sentinel constructor** (`nevr_sentinel_ctor`, after `InitActivation()`, next to the
    existing GOT hooks): `quest_social::RegisterSocialReportCounters()` before `StartReporter` (it takes 6
-   of the reporter's 8 counters; the clock hook takes the other 2, so the table is then full), then
+   of the reporter's 32 counters; the clock hook takes 2 more, leaving room for the login, redirect and router hooks), then
    `quest_social::InstallSocialHook(sentinel::FeatureEnabled(Feature::kSocial))` after it.
    The target is libr15's own BIND_NOW slot, so libr15 only has to be mapped, which it is when its
    `DT_NEEDED` dependencies' constructors run (the `clock_gettime` hook installs there today); libpnsovr

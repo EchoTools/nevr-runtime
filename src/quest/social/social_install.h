@@ -64,7 +64,7 @@ SocialCounters Counters() noexcept;
 void ResetCountersForTest() noexcept;
 
 // Registers the counters with the sentinel's reporter (hook_report.h): the thunk's calls, the
-// selected count, the three pass-through counters and the thunk's faults, 6 of the reporter's 8.
+// selected count, the three pass-through counters and the thunk's faults, 6 of the reporter's 32.
 // Call before StartReporter; returns false if any registration was refused.
 bool RegisterSocialReportCounters();
 

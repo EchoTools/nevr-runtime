@@ -142,12 +142,11 @@ void TestHandlerThroughThunk() {
 }
 
 void TestCounterRegistration() {
-  // The reporter takes 8 counters in all; the social package uses 6 and says so.
+  // The reporter takes 32 counters in all; the social package uses 6 and leaves the rest.
   sentinel::StopReporter();
   QCHECK(RegisterSocialReportCounters());
-  QCHECK(sentinel::RegisterReportCounter("x1", &g_dummy));  // the sentinel's own two fit beside the six
-  QCHECK(sentinel::RegisterReportCounter("x2", &g_dummy));
-  QCHECK(!sentinel::RegisterReportCounter("x3", &g_dummy));  // a ninth is refused
+  for (int i = 0; i < 26; ++i) QCHECK(sentinel::RegisterReportCounter("filler", &g_dummy));  // 6 + 26 = 32
+  QCHECK(!sentinel::RegisterReportCounter("one-too-many", &g_dummy));
   sentinel::StopReporter();
 }
 
