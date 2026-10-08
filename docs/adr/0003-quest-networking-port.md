@@ -1150,7 +1150,7 @@ libraries (`production_steps.cpp`). The sequence is policy over an abstract `Ste
 that will be installed; (4) the single `StartReporter`; (5) the clock hook; (6) token auth on its own
 thread; (7) the bridge (loopback listener and router); (8) the `CJson::TString` redirect on libr15;
 (9) the social facade; (10) the hook on libr15's `dlopen` slot. Counters are registered only for hooks
-that will be installed: clock 2, redirect 10, dlopen 2, social 12, 26 of the reporter's 32
+that will be installed: clock 2, redirect 10, dlopen 1, social 19, all 32 of the reporter's slots
 (`integration_hooks_test` pins the total against the real registration functions). The login thunk
 registers none (#237).
 

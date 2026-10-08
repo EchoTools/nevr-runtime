@@ -25,7 +25,7 @@ enum class DlopenInstall : std::uint8_t { kOk, kFailed };
 // Installs the thunk. `status` receives GotHook's answer (logged by GotHook itself as well).
 DlopenInstall InstallDlopenHook(sentinel::GotStatus* status) noexcept;
 
-// Registers the hook's two counters (calls, thunk faults) with the reporter. Before StartReporter.
+// Registers the hook's counter (calls) with the reporter. Before StartReporter.
 bool RegisterDlopenCounters() noexcept;
 
 // Test seams: the handler's behaviour without a GOT slot. `original` stands for the real dlopen.

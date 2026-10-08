@@ -799,7 +799,7 @@ test-quest-integration:
     # 1. sequence, post-load policy, identity, social switch, frame tap
     "${on[@]}" src/quest/tests/integration_sequence_test.cpp \
         src/quest/integration/ctor_sequence.cpp src/quest/integration/post_load.cpp \
-        src/quest/integration/identity_source.cpp src/quest/integration/stage_log.cpp \
+        src/quest/integration/identity_source.cpp src/quest/integration/stage_log.cpp src/quest/integration/bridge_uri.cpp \
         src/quest/integration/frame_tap.cpp src/quest/sentinel/hook_log.cpp src/runtime/compat/evr_codec.cpp \
         -o "$out/integration_sequence_test" -pthread
     timeout 300 "$out/integration_sequence_test"
@@ -811,6 +811,7 @@ test-quest-integration:
     "${off[@]}" -c src/quest/integration/social_shim.cpp -o "$out/social_shim.o"
     "${off[@]}" -c src/quest/social/social_game_calls.cpp -o "$out/social_game_calls.o"
     "${off[@]}" -c src/quest/social/social_install.cpp -o "$out/social_install.o"
+    "${off[@]}" -c src/quest/social/social_invite_gate.cpp -o "$out/social_invite_gate.o"
     "${on[@]}" -c src/quest/social/social_facade.cpp -o "$out/social_facade.o"
     "${on[@]}" -c src/quest/sentinel/hook_log.cpp -o "$out/hook_log.o"
     "${on[@]}" -DNEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION -c src/runtime/compat/social_names.cpp -o "$out/social_names.o"
@@ -827,7 +828,7 @@ test-quest-integration:
         src/quest/sentinel/quest_config.cpp src/runtime/lifecycle/service_redirect.cpp \
         src/runtime/lifecycle/stable_string_pool.cpp \
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
-        "$out/social_game_calls.o" "$out/social_install.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
+        "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
         -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
     # 3. the bridge end to end (libcurl only for the percent-encoder the shared URI code uses)

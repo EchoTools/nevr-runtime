@@ -104,7 +104,7 @@ void TestInstallWithoutTheModuleFailsCleanly() {
 }
 
 // The counter budget: every hook of the sentinel registers its counters before the single
-// StartReporter; the table holds 32. Clock hook 2 (entry.cpp), redirect 10, dlopen 2, social 12.
+// StartReporter; the table holds 32. Clock hook 2 (entry.cpp), redirect 10, dlopen 1, social 19.
 void TestCounterBudget() {
   sentinel::StopReporter();  // forget anything registered earlier in this process
   static std::atomic<std::uint64_t> clockCalls{0}, clockFaults{0};
@@ -114,7 +114,7 @@ void TestCounterBudget() {
   QCHECK(RegisterDlopenCounters());
   QCHECK(RegisterSocialCounters());
 
-  constexpr int kUsed = 2 + 10 + 2 + 12;
+  constexpr int kUsed = 2 + 10 + 1 + 19;
   constexpr int kCapacity = 32;
   static std::atomic<std::uint64_t> spare[kCapacity];
   int extra = 0;
