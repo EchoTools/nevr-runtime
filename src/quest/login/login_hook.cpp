@@ -11,6 +11,7 @@
 
 #include "quest/sentinel/callback_thunk.h"
 #include "quest/sentinel/got_hook.h"
+#include "quest/sentinel/hook_install.h"
 #include "quest/sentinel/hook_log.h"
 
 namespace QuestLogin {
@@ -231,11 +232,15 @@ void RunRewrite(const State& state, void* user, void* json) noexcept {
 
 // The handler behind the GOT slot: rewrite, then the original, last and always, so a refused
 // or failed rewrite leaves the game's own login intact. It has no cleanup of its own.
-NEVR_HOOK_HANDLER void HandleSendLogInRequest(LoginThunk::Fn original, void* user, void* json) noexcept {
+void HandleSendLogInRequest(LoginThunk::Fn original, void* user, void* json) noexcept {
   const State* state = g_published.load(std::memory_order_acquire);
   if (state != nullptr && json != nullptr) RunRewrite(*state, user, json);
   original(user, json);
 }
+
+// The hook's record: {thunk entry, handler} in the nevr_hook_records section, which is what the
+// frame sensor walks from and what Thunk::Arm accepts.
+NEVR_HOOK_RECORD(kLoginHook, LoginThunk, &HandleSendLogInRequest);
 
 template <typename Fn>
 void Assign(Fn& out, std::uint64_t address) {
@@ -365,16 +370,15 @@ InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build,
   g_state.account_id_global = account_global;
   g_state.expected_vptr = reinterpret_cast<const void*>(image.base + kCNSOVRUserVptrVaddr);
   g_published.store(&g_state, std::memory_order_release);
-  LoginThunk::Arm(&HandleSendLogInRequest);
+  LoginThunk::Arm(kLoginHook);
 
   // The slot must hold libpnsovr's own CNSUser::SendLogInRequest (0x382a4c); libr15 exports
   // the same symbol at 0x1932838, and a slot bound there is refused instead of hooked.
   const sentinel::GotTarget target(kPnsovr, kHookedSymbol, sentinel::RelocKind::kJumpSlot,
                                    kPnsovrBuildId, kHookedSlotVaddr,
                                    reinterpret_cast<const void*>(image.base + kOwnSendLogInRequestVaddr));
-  if (g_hook.Install(target, LoginThunk::EntryAddress(), LoginThunk::OriginalOut()) !=
-      sentinel::GotStatus::kOk) {
-    LoginThunk::Arm(nullptr);
+  if (sentinel::InstallThunk<LoginThunk>(g_hook, target) != sentinel::GotStatus::kOk) {
+    LoginThunk::Disarm();
     g_published.store(nullptr, std::memory_order_release);
     return refuse(InstallState::HookFailed, "got_backend");
   }

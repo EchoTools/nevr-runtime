@@ -332,8 +332,8 @@ phase (`login_rewrite.cpp`, exceptions enabled) builds the profile and calls no 
 `ComposePlan` catches every `std::exception` (named types, no catch-all) and returns plain data.
 The handler calls observe, compose, apply, then the original, and `ComposePlan` has returned
 before the next game call. `tests/quest` `TestLoginHookFramesCarryNoPersonality` pins this on a
-probe executable that links the whole login archive: it walks every direct `bl`/`b` edge from the
-`nevr_hook_handlers` functions and fails on any reachable function under a personality-bearing
+probe executable that links the whole login archive: it walks every direct `bl`/`b` edge from every
+hook record's entry and handler (`nevr_hook_records`) and fails on any reachable function under a personality-bearing
 CIE, except `ComposePlan` (required to be reached and to carry a personality, so the exemption
 cannot go stale) and the cold noreturn tail of libc++ (`__throw_length_error`, `terminate`, the
 exception allocator).

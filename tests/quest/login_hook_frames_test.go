@@ -13,8 +13,8 @@ import (
 // 1): a frame that is live while game code runs must sit under the personality-free "zR" CIE.
 // The login code is not part of the sentinel .so yet, so this test applies the same walk to a
 // probe executable that links the whole nevr_quest_login archive (login_frames_probe): start
-// from every function in the nevr_hook_handlers section, follow direct bl/b edges and fail on
-// any reachable function under a personality-bearing CIE.
+// from every hook record's entry and handler (the nevr_hook_records section), follow direct
+// bl/b edges and fail on any reachable function under a personality-bearing CIE.
 //
 // The one allowed exception is ComposePlan, the exceptions-enabled compose phase. It calls no
 // game code and has returned before the next game call, so it is never on the stack while game
@@ -141,16 +141,34 @@ func TestLoginHookFramesCarryNoPersonality(t *testing.T) {
 		edges[caller.addr][callee.addr] = true
 	}
 
-	var roots []uint64
-	for i := range funcs {
-		if funcs[i].section == "nevr_hook_handlers" {
-			roots = append(roots, funcs[i].addr)
+	// Hook records: {entry, handler} pairs read from the section's relocation addends.
+	var recAddr, recSize uint64
+	for _, line := range strings.Split(run(t, "readelf", "-SW", path), "\n") {
+		if m := secFull.FindStringSubmatch(line); m != nil && m[1] == "nevr_hook_records" {
+			recAddr, _ = strconv.ParseUint(m[2], 16, 64)
+			recSize, _ = strconv.ParseUint(m[3], 16, 64)
 		}
 	}
-	if len(roots) == 0 {
-		t.Fatalf("no function in the nevr_hook_handlers section: the walk has no roots")
+	relative := map[uint64]uint64{}
+	for _, line := range strings.Split(run(t, "readelf", "-rW", path), "\n") {
+		if m := relRe.FindStringSubmatch(line); m != nil {
+			off, _ := strconv.ParseUint(m[1], 16, 64)
+			add, _ := strconv.ParseUint(m[2], 16, 64)
+			relative[off] = add
+		}
 	}
-
+	if recSize == 0 || recSize%16 != 0 {
+		t.Fatalf("no nevr_hook_records section (size %d): the walk has no roots", recSize)
+	}
+	var roots []uint64
+	for off := recAddr; off < recAddr+recSize; off += 16 {
+		entry, okE := relative[off]
+		handler, okH := relative[off+8]
+		if !okE || !okH {
+			t.Fatalf("hook record at %#x has no relocation for its entry/handler pointer", off)
+		}
+		roots = append(roots, entry, handler)
+	}
 	reached := map[uint64]bool{}
 	queue := append([]uint64(nil), roots...)
 	for _, r := range roots {
@@ -174,7 +192,7 @@ func TestLoginHookFramesCarryNoPersonality(t *testing.T) {
 			composeReached, composeAug = true, cieAug[cie]
 			continue // runs between game calls and calls none; not entered
 		}
-		if allowedLeaves.MatchString(f.name) || libcxxThrowTail.MatchString(f.name) {
+		if libcxxThrowTail.MatchString(f.name) {
 			continue
 		}
 		checked++
