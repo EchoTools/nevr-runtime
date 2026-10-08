@@ -26,8 +26,8 @@ GO_OK = "package quest\n\nfunc TestExportAllowlist(t *testing.T) {\n\tcheck()\n}
 class Tree:
     def __init__(self, name):
         self.root = SCRATCH / name
-        (self.root / "src" / "quest" / "sentinel").mkdir(parents=True)
-        (self.root / "tests" / "quest").mkdir(parents=True)
+        (self.root / "src" / "quest" / "sentinel").mkdir(parents=True, exist_ok=True)
+        (self.root / "tests" / "quest").mkdir(parents=True, exist_ok=True)
 
     def sentinel(self, libs="nevr_quest_got_hook breakpad_client log dl", options=FLAG):
         (self.root / "src/quest/sentinel/CMakeLists.txt").write_text(SENTINEL_CMAKE.format(libs=libs, options=options))
