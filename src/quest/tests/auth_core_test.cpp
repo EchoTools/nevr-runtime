@@ -1619,8 +1619,7 @@ TEST(session_a_player_prompt_started_from_recovery_is_logged_at_info) {
   *up = true;
   clock.Allow(2);  // recovery period, then the poll wait
   CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
-  CHECK(log.Count(LogLevel::Info, "auth state failed -> awaiting_user") + log.Count(LogLevel::Info, "auth state refreshing -> awaiting_user") +
-            log.Count(LogLevel::Info, "auth state starting -> awaiting_user") >= 1);
+  CHECK_EQ(log.Count(LogLevel::Info, "auth state failed -> awaiting_user"), size_t(1));  // the prompt, at Info
   s.Stop();
 }
 
