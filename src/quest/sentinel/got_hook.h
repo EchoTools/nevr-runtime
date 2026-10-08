@@ -41,10 +41,11 @@
  * Install and Remove log exactly one structured line (hook_log.h) and return a
  * status; a failed Install leaves the slot and its page protection as they were
  * and the caller's original pointer at its entry value, with one exception: if the
- * slot was written and then rolled back because the page could not be
- * re-protected (kRestoreProtectFailed), the original stays published, because a
- * thread may already have entered the detour while the hook was live and the
- * original is the real function. Tokens never include a secret.
+ * our entry was stored in the slot (rolled back because the page could not be
+ * re-protected, or overwritten by another writer right after), the original stays
+ * published, because a thread may already have entered the detour while the hook
+ * was live and the original is the real function. A failed re-protect after a
+ * failed store reports the store's status, not kRestoreProtectFailed. Tokens never include a secret.
  */
 #pragma once
 
@@ -159,10 +160,12 @@ struct SlotResolution {
 SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
                            const RelocNumbers& relocs);
 
-// Test seam. Called with the process-wide write lock held, after the slot's page
-// is writable and immediately before the compare-and-swap store, for Install and
-// Remove. Production code leaves it unset. Returns the previous observer.
-using StoreObserver = void (*)(void** slot, void* value);
+// Test seam. Called with the process-wide write lock held, around the
+// compare-and-swap store of Install and Remove. Production code leaves it unset. Returns the previous observer.
+// kBeforeStore: after the page is writable, before the compare-and-swap.
+// kAfterStore: only when the compare-and-swap succeeded, before the read-back.
+enum class StorePhase { kBeforeStore, kAfterStore };
+using StoreObserver = void (*)(void** slot, void* value, StorePhase phase);
 StoreObserver SetStoreObserver(StoreObserver observer);
 
 // Test seam for the page-protection call (default: mprotect). Used to make a
