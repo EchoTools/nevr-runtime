@@ -347,13 +347,27 @@ what removes the Oculus provider; the facade is what provides the social object.
 
 ### Id spaces on Quest
 
-- The local member: `CNSOVRSocial::AddMember` (libpnsovr 0x2049f4) stores the 8 bytes at libpnsovr
-  0x70e3e0 into `[this+0x2e0][0]`. The login rewrite sets that global to the NEVR account id (#221
-  review; the global's writer was not re-measured here).
-- Remote members come from the Oculus platform callbacks (`GotRemoteOrgIdCB`, 0x1f9090, from the #221
-  review; not re-measured here) and are Oculus org-scoped ids.
-- `Host` (0x2051fc) returns `[this+0x2e0][owner index]` and `MemberId` (0x205260) returns
-  `[this+0x2e0][i]`, so a party mixes the two spaces.
+Traced in the pinned libraries (ELF vaddrs):
+
+- **Local member, native value.** `SCallbacks::GotLoggedInUserOrgIdCb` (libpnsovr 0x1ece60) stores
+  `ovr_OrgScopedID_GetID(ovr_Message_GetOrgScopedID(msg))`, the logged-in Oculus user's org-scoped id,
+  at libpnsovr 0x70e3e0 (and its decimal text at 0x70e458); on an error reply it stores -1.
+  `CNSOVRSocial::AddMember` (0x2049f4) copies the 8 bytes at 0x70e3e0 into `[this+0x2e0][0]`. So the
+  local member is also an Oculus id unless the login rewrite overwrites that global before `AddMember`
+  runs; whether it does is the login package's to establish, and the facade does not read the global.
+- **Remote members.** `CNSOVRSocial::GotRemoteOrgIdCB` (0x1f8d58) calls `ovr_Message_GetOrgScopedID` and
+  `ovr_OrgScopedID_GetID` and stores the result at `[[this+0x2e0] + index*8]` (0x1f91bc): an Oculus
+  org-scoped id.
+- **Readers.** `Host` (0x2051fc) returns `[this+0x2e0][owner index]` and `MemberId` (0x205260)
+  returns `[this+0x2e0][i]`, both in x0, so a party mixes the two sources.
+- **pnsrad's identity.** `CNSUser::AccountID()` (libpnsrad 0x3cd4c0) returns `[this+0x88]` when it is
+  nonzero and otherwise `CSysUsers::GetAccountID` of the `LocalUserID` at `[this+0x98]`; `[this+0x90]`
+  is the provider/flags word. In `0x3c9000..0x3cd600` the only store to `+0x88` is
+  `CNSUser::SetGuest(UserAccountID)` (0x3cd530, `stp x1, x9, [x0, #0x88]`); the PCVR bridge writes the
+  fields directly. `CNSRADUsers::CreateUserInternal` (0x1fd814) allocates 0xb0 bytes, runs the
+  `CNSUser` constructor and `CNSRADUser`'s vtable (0x6f1e00 + 0x10) and sets flags |= 0x30.
+  `CNSUser::SendLogInRequest` (0x3ca208) reads `[this+0x90]` (0x3ca344); the message layout beyond
+  that is from the #221 review.
 - The game compares a friend id's provider with `CNSProvider::UserProviderID(primary)` (`FriendId`,
   libr15 0x129b6f8). pnsovr's export returns the global at libpnsovr 0x70e380, a value set at run time
   that was not read here.
@@ -406,10 +420,25 @@ what removes the Oculus provider; the facade is what provides the social object.
 - **Frames.** `ObserveFrames` walks the EVR frames the loopback bridge relays and applies the
   server-to-game ones by CSymbol64 hash, as `ObserveSocialFrames` does by name. Requests the models ask
   for go out through `SocialParty::SetSender`.
-- **Containment.** Every slot is `noexcept`, catches `std::exception`, counts and logs the failure and
-  returns the slot's zero value; no exception reaches the game's frames. The handler never throws and
-  does not catch the original's exceptions: a foreign exception in the original is the hook backend's
-  concern.
+- **Exceptions.** None crosses between game frames and sentinel frames in either direction
+  (`callback_thunk.h`). The slots that call the game (`Update` delivering the party callbacks,
+  `JoinInternal` and `AcceptInvite` asking the accept gate) are in `social_game_calls.cpp`, built
+  `-fno-exceptions`: no landing pad, no LSDA. They call `social_internal.h` functions in
+  `social_facade.cpp` that catch `std::exception`, count and log it, and have returned before the game
+  is called; events are copied into a fixed batch (32 per frame, the rest counted and logged) so no heap
+  object is alive across a game call. The `Social()` handler is `noexcept` in `social_install.cpp`
+  (`-fno-exceptions`), reads the facade object published at install and constructs nothing. Every other
+  slot is `noexcept`, catches `std::exception` and answers its zero value; none of them calls the game.
+  `tools/check_quest_social_frames.sh` pins the built objects (no `__gxx_personality_v0`, no
+  `.gcc_except_table`, a negative control on the object that has both); the facade test throws from a
+  callback and from the accept gate and checks the exception reaches the game's caller uncaught and
+  uncounted. Measured on the host with one C++ runtime; the two-runtime crossing is the thunk contract's
+  inferred consequence and was not run on a device.
+- **Lifetime.** `Facade::Instance()` is constructed on first use and never destroyed (a leaked
+  object): the game and network threads use it until the process ends, and a function-local static
+  would be destroyed during exit while they run. A test registers an exit check before first use.
+- **Before login.** With no signed-in account the facade sends no party create, defers joins, and
+  reports no local member.
 
 What the facade does not carry: the member and party JSON (`MemberDataWritable` returns null, the
 JSON fields stay empty), so headset type in the party list and the lobby id a non-host party member
@@ -421,13 +450,37 @@ need (`DecodeFrom(char const*, unsigned long long)`, `EncodeToCompactTStr`, `Res
 
 ### Integration contract
 
-- Login adapter: `quest_social::SetLocalAccount(accountId, displayName)` once the service accepts the login.
-- Network adapter: `SocialParty::SetSender(fn)` for the upstream send, and
-  `quest_social::ObserveFrames(ProductionPorts(), direction, bytes, length, nowSeconds)` for every frame
-  the bridge relays, both directions.
-- Sentinel: `quest_social::InstallSocialHook(enabled)` once libr15 is mapped and before
-  `CR15NetGame::Initialize`; `Feature` in `quest_config.h` has no social switch yet, so there is no
-  `enabled` source.
+What the integration commit calls, and when:
+
+1. **Install, in the sentinel constructor** (`nevr_sentinel_ctor`, after `InitActivation()`, next to the
+   existing GOT hooks): `quest_social::InstallSocialHook(sentinel::FeatureEnabled(Feature::kSocial))`.
+   The target is libr15's own BIND_NOW slot, so libr15 only has to be mapped, which it is when its
+   `DT_NEEDED` dependencies' constructors run (the `clock_gettime` hook installs there today); libpnsovr
+   does not have to be loaded, because the handler looks it up when `Social()` is called. The hook must
+   be live before `CR15NetGame::Initialize` reaches 0x12866a4 (inside `CR15Game::Initialize`, after the
+   providers are created); a constructor install is always earlier.
+2. **Order against the other hooks.** None is required. The login hook is on libpnsovr's GOT and needs
+   libpnsovr loaded (`CSysModule::Load`, libr15 0x2a9e16c); the matchmaking redirect is on
+   libpnsradmatchmaking's GOT and needs that library, which `CNSLobby::LoadMatchmakingSupport` loads at
+   the lobby stage; the config-string hooks are on libr15 and libpnsradmatchmaking. Different modules,
+   different slots, no shared state.
+3. **Login adapter:** `quest_social::SetLocalAccount(accountId, displayName)` once the service accepts the
+   login (the NEVR account id, the id space of everything the facade reports).
+4. **Network adapter:** `SocialParty::SetSender(fn)` before the first request can be sent (until then
+   requests log `NOT_sent`), and `quest_social::ObserveFrames(ProductionPorts(), direction, bytes, length,
+   nowSeconds)` for every frame the bridge relays on the login connection, both directions, after the
+   remote EVR login session is open.
+5. **Link:** `nevr_quest_social` into `ovrplatformloader`. `social_install.cpp` and
+   `social_game_calls.cpp` are `-fno-exceptions` (CMake source properties); the sentinel's link must not
+   change that.
+
+The social switch (for `quest_config.*`, owned by the config package; not edited here): a fourth
+`Feature`, `kSocial`, named `social`, read from `features.social` in `nevr-quest.json`, off unless the file
+turns it on, like the others. Its prerequisite is the login feature being effective (the facade is only
+meaningful with an account and the service connection behind it); otherwise it is forced off with the
+logged reason `login_not_enabled`. `Features` gains a `social` flag, `kFeatures` a fourth entry, and the
+config test vectors cover: social alone forced off; social with login, bridge and redirect on; social
+absent from the file. The only consumer is the install call above.
 
 ### Risks
 
