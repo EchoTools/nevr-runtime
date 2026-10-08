@@ -1,5 +1,6 @@
 #include "hook_report.h"
 
+#include <errno.h>
 #include <pthread.h>
 #include <time.h>
 
@@ -11,28 +12,36 @@ namespace {
 
 constexpr unsigned kMaxCounters = 8;
 
-struct Entry {
+struct Counter {
   const char* name = nullptr;
   const std::atomic<std::uint64_t>* value = nullptr;
   std::uint64_t lastLogged = 0;
   bool seen = false;
 };
 
+// One line decided under the lock and written after it is released.
+struct Event {
+  const char* name;
+  std::uint64_t value;
+  const char* why;
+};
+
 pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t g_cond;
 bool g_condReady = false;
+bool g_atforkRegistered = false;
 pthread_t g_thread;
 bool g_running = false;
 bool g_stop = false;
 unsigned g_firstMs = 0;
+unsigned g_graceMs = 0;
 unsigned g_steadyMs = 0;
-Entry g_counters[kMaxCounters];
+Counter g_counters[kMaxCounters];
 unsigned g_counterCount = 0;
 
-// Absolute CLOCK_MONOTONIC deadline `ms` from now (the condition variable uses that clock).
-timespec Deadline(unsigned ms) {
-  timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
+// Absolute CLOCK_MONOTONIC time `ms` after `from`.
+timespec After(const timespec& from, unsigned ms) {
+  timespec ts = from;
   ts.tv_sec += ms / 1000;
   ts.tv_nsec += static_cast<long>(ms % 1000) * 1000000L;
   if (ts.tv_nsec >= 1000000000L) {
@@ -42,55 +51,96 @@ timespec Deadline(unsigned ms) {
   return ts;
 }
 
-void Report(const Entry& e, std::uint64_t now, const char* why) {
-  LogFields(LogLevel::kInfo, "hook_counter",
-            {{"counter", e.name}, {"value", static_cast<long long>(now)}, {"why", why}});
+timespec Now() {
+  timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return ts;
 }
 
-// One pass over the counters; returns whether every registered counter has been seen non-zero.
-// `steady` is true once the steady cadence applies.
-void Pass(bool* allSeen) {
-  bool all = true;
-  for (unsigned i = 0; i < g_counterCount; ++i) {
-    Entry& e = g_counters[i];
-    const std::uint64_t now = e.value->load(std::memory_order_relaxed);
-    if (!e.seen) {
+bool Before(const timespec& a, const timespec& b) {
+  return a.tv_sec < b.tv_sec || (a.tv_sec == b.tv_sec && a.tv_nsec < b.tv_nsec);
+}
+
+void Emit(const Event* events, unsigned count) {
+  for (unsigned i = 0; i < count; ++i) {
+    LogFields(LogLevel::kInfo, "hook_counter",
+              {{"counter", events[i].name},
+               {"value", static_cast<long long>(events[i].value)},
+               {"why", events[i].why}});
+  }
+}
+
+// Decides what to report for one pass; called with the mutex held. `steady` is true on the
+// steady passes after the grace window (they may log "changed"); `closingGrace` is true on the
+// pass that ends the grace window (it logs "never_fired", and never "changed").
+unsigned Decide(bool steady, bool closingGrace, Event* out) {
+  unsigned n = 0;
+  for (unsigned i = 0; i < g_counterCount && n < kMaxCounters; ++i) {
+    Counter& c = g_counters[i];
+    const std::uint64_t now = c.value->load(std::memory_order_relaxed);
+    if (!c.seen) {
       if (now != 0) {
-        e.seen = true;
-        e.lastLogged = now;
-        Report(e, now, "first_change");
-      } else {
-        all = false;
+        c.seen = true;
+        c.lastLogged = now;
+        out[n++] = Event{c.name, now, "first_change"};
+      } else if (closingGrace) {
+        out[n++] = Event{c.name, 0, "never_fired"};
       }
-    } else if (now != e.lastLogged) {
-      e.lastLogged = now;
-      Report(e, now, "changed");
+    } else if (steady && now != c.lastLogged) {
+      c.lastLogged = now;
+      out[n++] = Event{c.name, now, "changed"};
     }
   }
-  *allSeen = all;
+  return n;
 }
 
 void* ReporterMain(void*) {
   pthread_mutex_lock(&g_mutex);
-  bool allSeen = false;
+  const timespec start = Now();
+  const timespec graceEnd = After(start, g_graceMs);
+  bool graceClosed = false;
   while (!g_stop) {
-    // Fast cadence until every counter has fired once, then the steady one.
-    const timespec deadline = Deadline(allSeen ? g_steadyMs : g_firstMs);
-    pthread_cond_timedwait(&g_cond, &g_mutex, &deadline);
+    const timespec now = Now();
+    // Fast ticks until the grace window ends (the last tick lands on its end), then steady.
+    timespec deadline;
+    if (!graceClosed) {
+      deadline = After(now, g_firstMs);
+      if (Before(graceEnd, deadline)) deadline = graceEnd;
+    } else {
+      deadline = After(now, g_steadyMs);
+    }
+    // A spurious wakeup returns 0 without g_stop; wait again for the same deadline.
+    int rc = 0;
+    while (!g_stop && rc != ETIMEDOUT) rc = pthread_cond_timedwait(&g_cond, &g_mutex, &deadline);
     if (g_stop) break;
-    Pass(&allSeen);
+    const bool closing = !graceClosed && !Before(Now(), graceEnd);
+    if (closing) graceClosed = true;
+    Event events[kMaxCounters];
+    const unsigned n = Decide(graceClosed && !closing, closing, events);
+    // Log with the mutex released: a line never blocks Register/Stop, and a fork cannot
+    // catch the lock held across logging.
+    pthread_mutex_unlock(&g_mutex);
+    Emit(events, n);
+    pthread_mutex_lock(&g_mutex);
   }
   pthread_mutex_unlock(&g_mutex);
   return nullptr;
+}
+
+void AtforkPrepare() { pthread_mutex_lock(&g_mutex); }
+void AtforkParent() { pthread_mutex_unlock(&g_mutex); }
+void AtforkChild() {
+  g_running = false;  // the reporter thread does not exist in the child
+  pthread_mutex_unlock(&g_mutex);
 }
 
 }  // namespace
 
 bool RegisterReportCounter(const char* name, const std::atomic<std::uint64_t>* value) {
   pthread_mutex_lock(&g_mutex);
-  bool ok = !g_running && g_counterCount < kMaxCounters && name != nullptr && value != nullptr;
+  const bool ok = !g_running && g_counterCount < kMaxCounters && name != nullptr && value != nullptr;
   if (ok) {
-    g_counters[g_counterCount] = Entry{name, value, 0, false};
+    g_counters[g_counterCount] = Counter{name, value, 0, false};
     ++g_counterCount;
   }
   pthread_mutex_unlock(&g_mutex);
@@ -101,7 +151,7 @@ bool RegisterReportCounter(const char* name, const std::atomic<std::uint64_t>* v
   return ok;
 }
 
-bool StartReporter(unsigned firstMs, unsigned steadyMs) {
+bool StartReporter(unsigned firstMs, unsigned graceMs, unsigned steadyMs) {
   pthread_mutex_lock(&g_mutex);
   if (g_running) {
     pthread_mutex_unlock(&g_mutex);
@@ -115,16 +165,25 @@ bool StartReporter(unsigned firstMs, unsigned steadyMs) {
     pthread_condattr_destroy(&attr);
     g_condReady = true;
   }
+  if (!g_atforkRegistered) {
+    g_atforkRegistered = pthread_atfork(&AtforkPrepare, &AtforkParent, &AtforkChild) == 0;
+  }
   g_stop = false;
   g_firstMs = firstMs;
+  g_graceMs = graceMs;
   g_steadyMs = steadyMs;
   const int rc = pthread_create(&g_thread, nullptr, &ReporterMain, nullptr);
   g_running = rc == 0;
+  const unsigned counters = g_counterCount;
   pthread_mutex_unlock(&g_mutex);
   if (rc != 0) {
     LogFields(LogLevel::kError, "hook_report", {{"status", "thread_create_failed"}, {"errno", rc}});
     return false;
   }
+  pthread_setname_np(g_thread, "nevr-hook-rpt");
+  LogFields(LogLevel::kInfo, "hook_report",
+            {{"status", "reporter_started"}, {"first_ms", firstMs}, {"grace_ms", graceMs},
+             {"steady_ms", steadyMs}, {"counters", counters}});
   return true;
 }
 

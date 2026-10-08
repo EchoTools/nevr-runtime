@@ -11,6 +11,7 @@
 
 #include "sentinel.h"
 #include "got_hook.h"
+#include "hook_install.h"
 #include "hook_log.h"
 #include "hook_report.h"
 #include "pinned_targets.h"
@@ -37,23 +38,24 @@ using ClockThunk = sentinel::pinned::ClockGettimeThunk;
 sentinel::GotHook     g_clockHook;
 std::atomic<uint64_t> g_clockGettimeCalls{0};
 
-NEVR_HOOK_HANDLER int HookedClockGettime(ClockThunk::Fn original, clockid_t clk_id,
-                                         struct timespec* tp) noexcept {
+int HookedClockGettime(ClockThunk::Fn original, clockid_t clk_id, struct timespec* tp) noexcept {
     // Runs on every clock_gettime libr15 makes, on any thread, possibly from a signal
     // handler: one atomic increment and the original call, nothing else.
     g_clockGettimeCalls.fetch_add(1, std::memory_order_relaxed);
     return original(clk_id, tp);
 }
 
+// The hook: the thunk's entry and its handler, recorded for the build-time frame sensor.
+NEVR_HOOK_RECORD(kClockHook, ClockThunk, &HookedClockGettime);
+
 // A failed install is logged by GotHook with its status and leaves the original
 // call intact; it is never fatal to the host process.
 void InstallBasicsHook() {
     sentinel::RegisterReportCounter("clock_gettime_calls", &g_clockGettimeCalls);
     sentinel::RegisterReportCounter("clock_gettime_thunk_faults", &ClockThunk::FaultCounter());
-    sentinel::StartReporter(/*firstMs=*/1000, /*steadyMs=*/60000);
-    ClockThunk::Arm(&HookedClockGettime);
-    g_clockHook.Install(sentinel::pinned::LibR15ClockGettime(), ClockThunk::EntryAddress(),
-                        ClockThunk::OriginalOut());
+    sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000);
+    ClockThunk::Arm(kClockHook);
+    sentinel::InstallThunk<ClockThunk>(g_clockHook, sentinel::pinned::LibR15ClockGettime());
 }
 
 }  // namespace

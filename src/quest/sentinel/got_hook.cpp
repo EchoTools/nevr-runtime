@@ -61,7 +61,9 @@ int Protect(void* addr, std::size_t length, int prot) {
 GotStatus ReserveSlot(void** slot) {
   const Lock lock;
   for (std::size_t i = 0; i < g_slotCount; ++i) {
-    if (g_slots[i].slot == slot) return GotStatus::kAlreadyInstalled;
+    if (g_slots[i].slot == slot) {
+      return g_slots[i].poisoned ? GotStatus::kSlotPoisoned : GotStatus::kAlreadyInstalled;
+    }
   }
   if (g_slotCount == kMaxSlots) return GotStatus::kRegistryFull;
   g_slots[g_slotCount++] = SlotEntry{slot, false};
@@ -192,6 +194,35 @@ int LiveProtection(const void* addr) {
 }
 
 // `relroReadOnly` is the fallback when /proc/self/maps is unreadable.
+// Whether `addr` lies in a mapping: 1 yes, 0 no, -1 /proc/self/maps unreadable.
+int IsMapped(const void* addr) {
+  const int fd = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return -1;
+  const std::uintptr_t want = reinterpret_cast<std::uintptr_t>(addr);
+  char chunk[1024];
+  char line[160];
+  std::size_t len = 0;
+  int result = 0;
+  for (;;) {
+    const ssize_t n = read(fd, chunk, sizeof(chunk));
+    if (n <= 0) break;
+    for (ssize_t i = 0; i < n && result == 0; ++i) {
+      const char c = chunk[i];
+      if (c != '\n') {
+        if (len < sizeof(line) - 1) line[len++] = c;
+        continue;
+      }
+      line[len] = '\0';
+      len = 0;
+      unsigned long long lo = 0, hi = 0;
+      if (std::sscanf(line, "%llx-%llx", &lo, &hi) == 2 && want >= lo && want < hi) result = 1;
+    }
+    if (result != 0) break;
+  }
+  close(fd);
+  return result;
+}
+
 // Replaces `expected` with `value` in `slot`, and only if the slot still holds
 // `expected`: a hook someone chained on top, or any other writer, is never
 // overwritten. A RELRO page is made writable for the store and protected
@@ -334,6 +365,7 @@ const char* GotStatusName(GotStatus status) {
     case GotStatus::kModuleChanged:        return "module_changed";
     case GotStatus::kSlotChanged:          return "slot_changed";
     case GotStatus::kRegistryFull:         return "registry_full";
+    case GotStatus::kSlotPoisoned:         return "slot_poisoned";
   }
   return "unknown";
 }
@@ -595,7 +627,8 @@ void ReleasePoisonedSlotsIn(const void* begin, std::size_t length) {
   const std::uintptr_t lo = reinterpret_cast<std::uintptr_t>(begin);
   for (std::size_t i = 0; i < g_slotCount;) {
     const std::uintptr_t at = reinterpret_cast<std::uintptr_t>(g_slots[i].slot);
-    if (g_slots[i].poisoned && at >= lo && at - lo < length) {
+    // Released only when the address is verifiably unmapped.
+    if (g_slots[i].poisoned && at >= lo && at - lo < length && IsMapped(g_slots[i].slot) == 0) {
       g_slots[i] = g_slots[--g_slotCount];
       g_slots[g_slotCount] = SlotEntry{};
     } else {
