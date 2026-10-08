@@ -444,6 +444,20 @@ test-quest-hooks:
     out="build/quest-hooks-host"
     mkdir -p "$out"
     cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    # Type-level gates: the control compiles; each snippet that breaks one rule must fail to
+    # compile, with the message that names the rule (not for some unrelated reason).
+    snip=src/quest/tests/compile_fail
+    "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/control.cpp"
+    for pair in fake_thunk:"InstallThunk requires a CallbackThunk" direct_record:"is private within this context" plain_handler:"invalid conversion"; do
+        name="${pair%%:*}"; want="${pair#*:}"
+        if "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/$name.cpp" > "$out/$name.err" 2>&1; then
+            echo "test-quest-hooks: $snip/$name.cpp compiled, but must not" >&2; exit 1
+        fi
+        if ! grep -q "$want" "$out/$name.err"; then
+            echo "test-quest-hooks: $snip/$name.cpp failed for another reason (wanted '$want'):" >&2
+            cat "$out/$name.err" >&2; exit 1
+        fi
+    done
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 src/quest/tests/got_fixture_provider.cpp \
         -o "$out/libgotfx_provider.so"
     link=(-fPIC -shared -Wl,--build-id=sha1 -L"$out" -lgotfx_provider -Wl,-rpath,'$ORIGIN')
@@ -457,9 +471,9 @@ test-quest-hooks:
     # callback_thunk.h is built without (the header refuses otherwise).
     "${cxx[@]}" -c src/quest/tests/thunk_exception_fixture.cpp -o "$out/thunk_exception_fixture.o"
     "${cxx[@]}" -fno-exceptions src/quest/tests/got_hook_test.cpp src/quest/sentinel/got_hook.cpp \
-        src/quest/sentinel/hook_log.cpp "$out/thunk_exception_fixture.o" \
+        src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "$out/thunk_exception_fixture.o" \
         -o "$out/got_hook_test" -ldl -pthread
-    "$out/got_hook_test" "$out"
+    timeout 300 "$out/got_hook_test" "$out"  # a hang is a failure, not a stuck gate
 
 # Resolve the pinned Quest targets in the real libr15.so / libpnsradmatchmaking.so
 # (docs/adr/0003). Extracts both from the pinned APK, checks their SHA-256, and runs

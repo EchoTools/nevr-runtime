@@ -9,47 +9,82 @@
  *
  *   using Thunk = CallbackThunk<MyTag, int(int, const char*)>;
  *   int MyHandler(Thunk::Fn original, int a, const char* b) noexcept;
- *   Thunk::Arm(&MyHandler);
- *   hook.Install(target, Thunk::EntryAddress(), Thunk::OriginalOut());
+ *   NEVR_HOOK_RECORD(kMyHook, Thunk, &MyHandler);   // namespace scope
+ *   ...
+ *   Thunk::Arm(kMyHook);
+ *   InstallThunk<Thunk>(hook, target);              // hook_install.h
  *
  * The original. Entry reads the original-call pointer once and hands that value to
  * the handler, so resetting or replacing the published pointer while a call is in
  * flight cannot make an in-flight call lose its original. GotHook::Install
  * publishes the original before it changes the slot and keeps it published if the
  * slot was ever written, so the game cannot reach the "no original" path
- * (value-initialised Ret, logged) through a hook installed by GotHook.
+ * (a value-initialised Ret, counted as a fault) through a hook installed by GotHook.
  *
- * Exceptions: none cross the thunk, in either direction.
+ * One thunk per hooked slot. The original-call pointer is a static of the instantiation,
+ * so give every hooked slot its own Tag; installing two slots through one thunk makes the
+ * second overwrite the first's original. (Install can't see this, so nothing enforces it.)
+ *
+ * Exceptions: the thunk neither catches nor raises one, and it keeps its own frames out of
+ * the way of a game exception.
  *
  * Measured on the built Android artifact and on the APK's libc++_shared.so:
- *   - libr15.so NEEDs libc++_shared.so. That library is a libgcc-style unwinder
- *     build (its .comment names GCC 4.9.x and clang 5.0) and exports
- *     _Unwind_Find_FDE, _Unwind_GetCFA, _Unwind_GetIP, _Unwind_RaiseException,
- *     _Unwind_Resume, __gxx_personality_v0 and __cxa_throw.
- *   - The sentinel does not NEED it. It links LLVM libunwind and libc++abi
- *     statically; _Unwind_Resume, _Unwind_GetIP, __unw_getcontext,
- *     __gxx_personality_v0, __cxa_throw and __cxa_begin_catch are LOCAL symbols.
- *   - A function that can catch or clean up carries an LSDA under a CIE whose
+ *   - libr15.so NEEDs libc++_shared.so. That library is a libgcc-style unwinder build
+ *     (its .comment names GCC 4.9.x and clang 5.0) and exports _Unwind_Find_FDE,
+ *     _Unwind_GetCFA, _Unwind_GetIP, _Unwind_RaiseException, _Unwind_Resume,
+ *     __gxx_personality_v0 and __cxa_throw.
+ *   - The sentinel does not NEED it. It links LLVM libunwind and libc++abi statically;
+ *     _Unwind_Resume, _Unwind_GetIP, __unw_getcontext, __gxx_personality_v0, __cxa_throw
+ *     and __cxa_begin_catch are LOCAL symbols.
+ *   - A sentinel function that can catch or clean up carries an LSDA under a CIE whose
  *     augmentation is "zPLR", i.e. it names the sentinel's own personality.
- * A game exception unwinding through such a frame would hand the game's
- * _Unwind_Context to the sentinel's personality and unwinder helpers, which read it
- * as their own structure. (That consequence is inferred from the layouts; no such
- * crossing has been run on a device.) The same holds in the other direction.
+ * A game exception unwinding through such a frame would hand the game's _Unwind_Context to
+ * the sentinel's personality and unwinder helpers, which read it as their own structure.
+ * (Inferred from the layouts; no such crossing has been run on a device.) The reverse
+ * holds too: a sentinel exception unwinding into game frames meets the game's unwinder.
  *
- * So the contract is structural:
- *   - This header is included only by translation units built with -fno-exceptions
- *     (enforced by the #error below). Entry has no landing pad, no LSDA and no
- *     personality; the unwinder walks past its frame using the CFI alone, which
- *     both runtimes handle. An exception thrown by the game's original therefore
- *     passes through Entry untouched.
- *   - Handlers are `noexcept` (Handler is a noexcept function pointer type, so a
- *     handler that is not declared noexcept does not compile) and live in the same
- *     kind of translation unit. A handler must not contain a try/catch or an object
- *     with a destructor around a call that can reach game code. A try/catch in a
- *     sentinel-only frame that never calls the game is fine.
- *   - tests/quest TestHookFramesCarryNoPersonality pins the built artifact: the
- *     frames of every CallbackThunk member and of the hook handler sit under the
- *     personality-free "zR" CIE.
+ * What the contract is, exactly:
+ *   1. A frame that is LIVE while game code runs under a hook must be personality-free
+ *      ("zR"): no try/catch, no object with a destructor, no cleanup. Live frames are the
+ *      thunk's Entry, the handler, and any sentinel function the handler calls and that
+ *      is still on the stack when the handler calls `original` (or any other game code).
+ *      A function that runs entirely before or after the call into the game is not live
+ *      during it and is not restricted by this rule, except that it must not let an
+ *      exception out.
+ *   2. This header is included only by translation units built with -fno-exceptions (the
+ *      #error below), so Entry has no landing pad; the unwinder walks past its frame on CFI
+ *      alone and a game exception passes through untouched.
+ *   3. A hook is defined by a record: NEVR_HOOK_RECORD(name, Thunk, handler) emits a
+ *      {entry, handler} pair into the output section nevr_hook_records, and Thunk::Arm takes
+ *      that record, so the only way to arm a handler is to have it recorded. Handlers are
+ *      `noexcept` function pointers. Under -fno-exceptions `noexcept` is only a type marker:
+ *      it adds no terminate landing pad. Nothing stops an exception raised in a sentinel
+ *      callee from leaving the handler, so a callee that can throw must catch inside
+ *      sentinel-only frames that are not live across a call into game code (a helper that does
+ *      its throwing work, catches, and returns before the handler touches the game).
+ *   4. A hook is installed only through InstallThunk<Thunk> (hook_install.h). The raw
+ *      GotHook::Install taking an arbitrary function pointer is private; only the test access
+ *      class (tests/) may call it, and TestRawInstallOnlyInTests pins that.
+ *   5. Helpers. A function a handler calls directly and that can be on the stack across the
+ *      call into game code must be personality-free ("zR"): no try/catch, no destructor-bearing
+ *      object, and no indirect call (function pointer, virtual, std::function) into code built
+ *      with exceptions. The sensor cannot follow indirect calls, so that last part is a rule,
+ *      not a check.
+ *   6. tests/quest TestHookFramesCarryNoPersonality enforces rule 1 on the built artifact: it
+ *      requires exactly one record per thunk Entry (an Entry without a record fails), starts
+ *      from every record's entry and handler, follows direct bl/b edges through the sentinel
+ *      and fails on any reachable function under a personality-bearing CIE. There is no
+ *      allowlist: a hook does not log, so no logging code is reachable from it.
+ *
+ * Limits, stated so nobody mistakes the checks for a proof. The sensor exists to catch an honest
+ * mistake in a package that uses this API; it is not a barrier against someone working around it
+ * inside the repository. It does not follow indirect calls. `Arm` refuses a record that is not in
+ * the nevr_hook_records section and HookRecord cannot be built without the macro's access class,
+ * and InstallThunk accepts only a CallbackThunk instantiation, but a macro that forwards to
+ * HookRecordAccess, or a header under tests/ wrapped by production code, can still get around
+ * them (TestRawInstallOnlyInTests also rejects production includes of anything under tests/).
+ * The #error above is advisory: undefining __cpp_exceptions before the include defeats it; the
+ * frame sensor on the built library is the real check.
  */
 #pragma once
 
@@ -59,13 +94,71 @@
 
 #include <atomic>
 #include <cstdint>
+#include <type_traits>
 
 #include "hook_log.h"
+
+// Defines a hook: records {entry, handler} in the output section nevr_hook_records (found
+// by the build-time sensor through the section's relocations) and gives Thunk::Arm the only
+// thing it accepts. HookRecord has no public constructor; this macro builds it through
+// HookRecordAccess, and Arm checks that the record it is handed lies in that section.
+// `retain` keeps the record through the linker's --gc-sections (nothing references it).
+#if defined(__clang__)
+#define NEVR_HOOK_RECORD_ATTRS __attribute__((used, retain, section("nevr_hook_records")))
+#else
+#define NEVR_HOOK_RECORD_ATTRS __attribute__((used, section("nevr_hook_records")))
+#endif
+#define NEVR_HOOK_RECORD(name, Thunk, handlerFn)                                        \
+  NEVR_HOOK_RECORD_ATTRS constexpr ::sentinel::HookRecord<Thunk> name =                  \
+      ::sentinel::HookRecordAccess::Make<Thunk>(Thunk::EntryFn(), handlerFn)
+
+// The bounds of the nevr_hook_records section, provided by the linker for a section whose
+// name is a C identifier. Weak: absent when the program defines no record.
+extern "C" {
+extern const char __start_nevr_hook_records[] __attribute__((weak, visibility("hidden")));
+extern const char __stop_nevr_hook_records[] __attribute__((weak, visibility("hidden")));
+}
 
 namespace sentinel {
 
 template <typename Tag, typename Signature>
 class CallbackThunk;
+
+template <typename T>
+struct IsCallbackThunk : std::false_type {};
+template <typename Tag, typename Signature>
+struct IsCallbackThunk<CallbackThunk<Tag, Signature>> : std::true_type {};
+
+struct HookRecordAccess;
+
+// The two function pointers that make a hook: the thunk's entry and its handler. It cannot be
+// constructed outside NEVR_HOOK_RECORD (private constructor, HookRecordAccess is the friend).
+template <typename Thunk>
+class HookRecord {
+ public:
+  typename Thunk::Fn entry;
+  typename Thunk::Handler handler;
+
+ private:
+  constexpr HookRecord(typename Thunk::Fn e, typename Thunk::Handler h) : entry(e), handler(h) {}
+  friend struct HookRecordAccess;
+};
+
+struct HookRecordAccess {
+  template <typename Thunk>
+  static constexpr HookRecord<Thunk> Make(typename Thunk::Fn entry, typename Thunk::Handler handler) {
+    return HookRecord<Thunk>(entry, handler);
+  }
+};
+
+// True when `record` lies inside the nevr_hook_records section, i.e. it was defined with
+// NEVR_HOOK_RECORD and is visible to the build-time frame sensor.
+template <typename Thunk>
+bool IsRecordedHook(const HookRecord<Thunk>& record) noexcept {
+  const char* const p = reinterpret_cast<const char*>(&record);
+  return &__start_nevr_hook_records != nullptr && &__stop_nevr_hook_records != nullptr &&
+         p >= __start_nevr_hook_records && p + sizeof(record) <= __stop_nevr_hook_records;
+}
 
 template <typename Tag, typename Ret, typename... Args>
 class CallbackThunk<Tag, Ret(Args...)> {
@@ -73,7 +166,10 @@ class CallbackThunk<Tag, Ret(Args...)> {
   using Fn = Ret (*)(Args...);
   using Handler = Ret (*)(Fn original, Args... args) noexcept;
 
-  // The address to install into the GOT slot.
+  // The thunk's entry as a function pointer (a constant expression, for NEVR_HOOK_RECORD).
+  static constexpr Fn EntryFn() noexcept { return &Entry; }
+
+  // The address to install into the GOT slot (InstallThunk does this; nothing else should).
   static void* EntryAddress() noexcept { return reinterpret_cast<void*>(&Entry); }
 
   // Where Install stores the original function (the `originalOut` argument).
@@ -84,11 +180,25 @@ class CallbackThunk<Tag, Ret(Args...)> {
     return reinterpret_cast<Fn>(__atomic_load_n(&original_, __ATOMIC_ACQUIRE));
   }
 
-  // nullptr disarms: calls pass straight through to the original.
-  static void Arm(Handler handler) noexcept { handler_.store(handler, std::memory_order_release); }
+  // Arms the record's handler; Disarm makes calls pass straight through to the original. A
+  // record that is not in the nevr_hook_records section (one built at run time) is refused and
+  // logged, and the thunk stays as it was. Call it from initialisation, not from a hook.
+  static void Arm(const HookRecord<CallbackThunk>& record) noexcept {
+    if (!IsRecordedHook(record)) {
+      LogFields(LogLevel::kError, "callback_thunk",
+                {{"status", "arm_refused"}, {"reason", "record_not_in_nevr_hook_records"}});
+      return;
+    }
+    handler_.store(record.handler, std::memory_order_release);
+  }
+  static void Disarm() noexcept { handler_.store(nullptr, std::memory_order_release); }
 
   static std::uint64_t Calls() noexcept { return calls_.load(std::memory_order_relaxed); }
   static std::uint64_t Faults() noexcept { return faults_.load(std::memory_order_relaxed); }
+
+  // The call and fault counters, for the reporter (hook_report.h): the thunk never logs.
+  static const std::atomic<std::uint64_t>& CallCounter() noexcept { return calls_; }
+  static const std::atomic<std::uint64_t>& FaultCounter() noexcept { return faults_; }
 
   // Test support: clears the original, handler and counters.
   static void Reset() noexcept {
@@ -103,22 +213,12 @@ class CallbackThunk<Tag, Ret(Args...)> {
     calls_.fetch_add(1, std::memory_order_relaxed);
     const Fn original = Original();
     if (original == nullptr) {
-      ReportFault("no_original", "default_return");
+      faults_.fetch_add(1, std::memory_order_relaxed);  // reported by the reporter, not logged here
       return Ret();
     }
     const Handler handler = handler_.load(std::memory_order_acquire);
     if (handler == nullptr) return original(args...);
     return handler(original, args...);
-  }
-
-  // Counts every fault; logs the first and then one in every 4096, so a hook on
-  // a per-frame function cannot flood the log.
-  static void ReportFault(const char* status, const char* action) noexcept {
-    const std::uint64_t n = faults_.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (n == 1 || n % 4096 == 0) {
-      LogFields(LogLevel::kError, "callback_thunk",
-                {{"status", status}, {"action", action}, {"faults", static_cast<long long>(n)}});
-    }
   }
 
   inline static void* original_ = nullptr;

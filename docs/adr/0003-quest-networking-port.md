@@ -52,14 +52,61 @@ links LLVM libunwind and libc++abi statically, with `_Unwind_Resume`, `_Unwind_G
 `__unw_getcontext`, `__gxx_personality_v0`, `__cxa_throw` and `__cxa_begin_catch` as local
 symbols, and its `.eh_frame` has a personality-bearing `zPLR` CIE and a personality-free `zR`
 CIE. A sentinel frame with an LSDA would run the sentinel's personality on the game's unwind
-context (inferred from the layouts, not run on a device). So the contract is structural:
-translation units that include `callback_thunk.h` are built with `-fno-exceptions` (the header
-refuses otherwise), so the entry has no landing pad and an exception from a game original
-passes through it on CFI alone; handlers are `noexcept` (a plain function pointer does not
-compile) and may not wrap a call into game code in a try/catch or an object with a destructor.
-`tests/quest` `TestHookFramesCarryNoPersonality` checks the built library: every
-`CallbackThunk` member and the handler sit under the `zR` CIE. `TestStlContract` fails if the
-sentinel starts linking `libc++_shared.so`.
+context (inferred from the layouts, not run on a device); the reverse direction is the same. The
+contract:
+
+1. A frame that is live while game code runs under a hook must be personality-free (`zR` CIE):
+   no try/catch, no object with a destructor. Live frames are the thunk's entry, the handler, and
+   any sentinel function the handler calls that is still on the stack when it calls the original.
+   A function that runs entirely before or after the call into the game is not live during it.
+2. Translation units that include `callback_thunk.h` are built with `-fno-exceptions` (the header
+   refuses otherwise), so the entry has no landing pad and a game exception passes through it on
+   CFI alone.
+3. A hook is a record: `NEVR_HOOK_RECORD(name, Thunk, handler)` emits `{entry, handler}` into the
+   `nevr_hook_records` section and `Thunk::Arm` takes only a record. `HookRecord` has no public
+   constructor, and `Arm` refuses (and logs) a record whose address is not inside that section, so a
+   record built at run time cannot arm a handler the sensor never saw. Handlers are `noexcept`
+   function pointers. Under `-fno-exceptions` `noexcept` is a type marker only; it adds no
+   terminate landing pad. A callee of a handler that can throw must contain the exception inside
+   sentinel-only frames that are not live across a call into game code.
+4. A hook is installed only through `InstallThunk<Thunk>` (`hook_install.h`), which accepts only a
+   `CallbackThunk` instantiation (a `static_assert`; a fake type with `EntryAddress()` does not
+   compile); the raw `GotHook::Install` taking any function pointer is private and reachable only
+   through the test access class. `just test-quest-hooks` compiles snippets that break each
+   type-level rule and requires them to fail with the message that names the rule;
+   `TestRawInstallOnlyInTests` scans every C++ source and header and fails if production code names
+   the test access class or includes anything from `src/quest/tests`.
+5. A function a handler calls directly and that can be on the stack across the call into game
+   code must be personality-free, and must not make an indirect call (function pointer, virtual,
+   `std::function`) into code built with exceptions.
+6. `tests/quest` `TestHookFramesCarryNoPersonality` checks the built library. It requires exactly
+   one record per `CallbackThunk` entry (an entry without one fails), starts from each record's
+   entry and handler, follows direct `bl`/`b` edges and fails on any reachable function under a
+   personality-bearing CIE. There is no allowlist: a hook does not log, so no logging code is
+   reachable from it. Its limits: it does not follow indirect calls (rule 5 is a rule there, not
+   a check), and a hook installed some other way is invisible to it, which is what rule 4 and
+   `TestRawInstallOnlyInTests` prevent. The checks catch honest mistakes by packages that use the
+   API; a macro that forwards to the record access class, or a test-directory wrapper that
+   production includes through a path the scan does not recognise, gets around them, and the
+   `#error` in `callback_thunk.h` is advisory (`#undef __cpp_exceptions` defeats it) while the
+   frame sensor on the built library is the real check. `TestBackendBuiltWithoutExceptions` pins the backend
+   (`GotHook`, `ResolveSlot`, the logger and the reporter) to `zR`, matching the flag the host
+   tests use, and `TestStlContract` fails if the sentinel starts linking `libc++_shared.so`.
+
+A hook never logs on the game's call path (the log call is not async-signal-safe): it increments
+an atomic counter, and a reporter thread (`hook_report.h`, created from the constructor before the
+first hook is installed) logs "reporter_started", then a counter's first change within the first
+10 seconds, then "never_fired" once for each counter still zero when that window closes (the hook
+is installed and the game never called it), and from then on one pass a minute that logs a counter
+only if it changed. The thread ends with the process; creating it from a constructor on a Quest is
+inferred from the Bionic main-branch source and has not been tried on a headset. A slot where a
+failed install left the sentinel's entry possibly reachable through another writer's hook stays
+reserved for the process and a retry is refused with its own status, `slot_poisoned`;
+`ReleasePoisonedSlotsIn` gives such a reservation back only for an address that
+`/proc/self/maps` shows unmapped after one complete pass (a failed open, a read error or an empty
+file reads as "unknown" and keeps the reservation; each outcome is logged), and nothing in the sentinel calls it because the game's libraries
+are never unloaded. Log lines go to logcat, which does not meet the durable-log rule in
+`AGENTS.md`; the planned sink is the sentinel's disk log.
 
 Whether the declared hook targets can throw, from the pinned ELFs: `CJson::TString`
 (`libr15.so` `0xfa2e7c`, `libpnsradmatchmaking.so` `0x209484`): ReVault's callee graph (partial:

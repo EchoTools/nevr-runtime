@@ -12,10 +12,18 @@
  * carries a credential, token, URL or key value: callers pass module names, symbol
  * names, link-time addresses and status tokens only.
  *
- * The sink is logcat on Android and stderr elsewhere. The durable on-device log
- * file belongs to the sentinel config/log work (separate PR); until it lands a
- * line is durable only as long as logcat keeps it. A test replaces the sink with
- * SetLogSink to assert on the lines.
+ * The line is built by hand, not with a JSON library, so that logging needs no heap: it can be
+ * called from the constructor, the reporter thread and the install path alike, and a failure to
+ * allocate cannot swallow the line that reports it. (The constructor that calls it is not
+ * allocation-free as a whole; sentinel::Arm allocates.) That is a deliberate deviation from the
+ * repository's "no hand-built serialization" rule; the host test parses every captured line with
+ * nlohmann::json (when the host has it) and with a strict validator, so malformed output fails
+ * the build.
+ *
+ * The sink is logcat on Android and stderr elsewhere. A logcat line lasts only as long as logcat
+ * keeps it, which does NOT meet the durable-log rule in AGENTS.md. The intended sink is the
+ * sentinel's on-disk log (sentinel_log); SetLogSink is where it plugs in. A test replaces the
+ * sink to assert on lines.
  */
 #pragma once
 
