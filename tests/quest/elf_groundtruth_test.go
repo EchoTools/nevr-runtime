@@ -113,3 +113,50 @@ func TestExportHygiene_NoBreakpadLeak(t *testing.T) {
 		}
 	}
 }
+
+// Only the two entry points the loader needs are exported. Everything else,
+// including the hook API and its test seams, is hidden (-fvisibility=hidden).
+func TestExportAllowlist(t *testing.T) {
+	requireArtifact(t)
+	allowed := map[string]bool{"nevr_sentinel_marker": true, "JNI_OnLoad": true}
+	dyn := run(t, "nm", "-D", "--defined-only", soPath(t))
+	for _, line := range strings.Split(dyn, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		if name := fields[len(fields)-1]; !allowed[name] {
+			t.Errorf("unexpected dynamic export %q (allowed: nevr_sentinel_marker, JNI_OnLoad)", name)
+		}
+	}
+}
+
+// The hook path keeps no thread_local state: with the API 26 toolchain
+// thread_local is emulated (__emutls_v.*) and its first use on a thread
+// allocates, which must not happen inside a hooked libc function.
+func TestNoEmulatedTLSInHookPath(t *testing.T) {
+	requireArtifact(t)
+	syms := run(t, "nm", soPath(t))
+	for _, line := range strings.Split(syms, "\n") {
+		if strings.Contains(line, "__emutls_v.") && strings.Contains(line, "sentinel") {
+			t.Errorf("emulated TLS variable in the sentinel: %s", line)
+		}
+	}
+}
+
+// callback_thunk.h's exception contract depends on the sentinel having its own
+// C++ runtime while libr15.so uses libc++_shared.so. If the sentinel starts
+// linking libc++_shared.so, that contract (and docs/adr/0003) must be revisited.
+func TestStlContract(t *testing.T) {
+	requireArtifact(t)
+	dyn := run(t, "readelf", "-d", soPath(t))
+	if strings.Contains(dyn, "libc++_shared.so") {
+		t.Errorf("sentinel NEEDs libc++_shared.so; revisit callback_thunk.h 'Two C++ runtimes' and ADR 0003\n%s", dyn)
+	}
+	exported := run(t, "nm", "-D", "--defined-only", soPath(t))
+	for _, sym := range []string{"__cxa_throw", "__cxa_begin_catch", "__gxx_personality_v0"} {
+		if strings.Contains(exported, sym) {
+			t.Errorf("C++ runtime symbol %s is exported by the sentinel", sym)
+		}
+	}
+}

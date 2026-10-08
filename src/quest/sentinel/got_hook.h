@@ -35,14 +35,16 @@
  * changed by anyone else (a hook chained on top, a module reloaded at the same
  * base) yields kSlotChanged and is left alone. The protection a write restores is
  * read from /proc/self/maps under that lock; the PT_GNU_RELRO range is the fallback when that is
- * unreadable. At most 8 distinct slots per symbol and relocation type are
- * examined; more than one match is refused unless the target pins the slot, so a
- * symbol with more than 8 slots in one module cannot be hooked by a pin beyond
- * the eighth.
+ * unreadable. More than one slot for the symbol and relocation type is refused
+ * unless the target pins the slot.
  *
  * Install and Remove log exactly one structured line (hook_log.h) and return a
- * status; a failed Install leaves the slot, its page protection and the caller's
- * original pointer as they were. Tokens never include a secret.
+ * status; a failed Install leaves the slot and its page protection as they were
+ * and the caller's original pointer at its entry value, with one exception: if the
+ * slot was written and then rolled back because the page could not be
+ * re-protected (kRestoreProtectFailed), the original stays published, because a
+ * thread may already have entered the detour while the hook was live and the
+ * original is the real function. Tokens never include a secret.
  */
 #pragma once
 
@@ -163,9 +165,21 @@ SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
 using StoreObserver = void (*)(void** slot, void* value);
 StoreObserver SetStoreObserver(StoreObserver observer);
 
+// Test seam for the page-protection call (default: mprotect). Used to make a
+// re-protect fail deterministically. Returns the previous function.
+using ProtectFn = int (*)(void* addr, std::size_t length, int prot);
+ProtectFn SetProtectFunction(ProtectFn fn);
+
 // One installed (or empty) hook. Not copyable. Install and Remove on one handle
 // must not race each other; the callbacks the hook redirects may run on any
 // thread at any time.
+//
+// A handle has no destructor on purpose. A hook is process-lifetime state: its slot
+// stays redirected, and its slot reservation stays held, when the handle goes out
+// of scope. Un-hooking from a destructor would run during static destruction while
+// other threads may still be inside the detour. Call Remove() (or Forget(), to drop
+// the reservation without writing) before the handle is destroyed if the hook must
+// not outlive it.
 class GotHook {
  public:
   GotHook() = default;

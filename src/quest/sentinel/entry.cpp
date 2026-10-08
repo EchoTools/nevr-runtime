@@ -26,19 +26,20 @@ namespace {
 // reconstructed first. clock_gettime is chosen deliberately: its signature is
 // unambiguous POSIX (no risk of a wrong-arity/wrong-return-type call corrupting
 // the engine's real args), and it's called continuously by any real-time engine
-// loop, so a live counter climbing in logcat while sitting in a lobby is an
-// immediate, unambiguous "did the hook take" signal.
+// loop, so the first-call line in logcat is an unambiguous "did the hook take"
+// signal.
 using ClockThunk = sentinel::pinned::ClockGettimeThunk;
 sentinel::GotHook     g_clockHook;
 std::atomic<uint64_t> g_clockGettimeCalls{0};
 
 int HookedClockGettime(ClockThunk::Fn original, clockid_t clk_id, struct timespec* tp) {
-    const uint64_t n = g_clockGettimeCalls.fetch_add(1, std::memory_order_relaxed) + 1;
-    // Every 300th call: several lines/sec at a real engine's tick rate without
-    // flooding logcat. Real work would filter/aggregate; this is a proof.
-    if (n % 300 == 1) {
+    // The hook runs on every clock_gettime libr15 makes, on any thread, possibly from
+    // a signal handler. It counts with one atomic increment and logs once, on the
+    // first call, to show the hook fired; there is no periodic line, because any
+    // logging here would be on the game's call path.
+    if (g_clockGettimeCalls.fetch_add(1, std::memory_order_relaxed) == 0) {
         sentinel::LogFields(sentinel::LogLevel::kInfo, "clock_gettime_proof",
-                            {{"module", "libr15.so"}, {"call", static_cast<long long>(n)}});
+                            {{"module", "libr15.so"}, {"call", 1}});
     }
     return original(clk_id, tp);
 }
