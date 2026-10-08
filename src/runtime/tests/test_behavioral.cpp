@@ -33,6 +33,7 @@
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/compat/login_profile.h"
+#include "runtime/tests/test_log_cap.h"
 #include "runtime/ext/plugin_load_plan.h"  // PluginLoadItem / NevrCfgPluginLoadPlan (N134 S6)
 #include "core/system_info.h"
 #include "core/build_identity.h"
@@ -195,7 +196,6 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/ext/module_loader.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/compat/evr_codec.h"
-#include "runtime/tests/test_log_cap.h"
 #include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/hook/symbol_corpus.h"
