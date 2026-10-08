@@ -3,7 +3,7 @@
 //
 // Precedence per key: file value, else the value embedded at build time, else absent. The file is
 // `nevr-quest.json` in the app's external files directory; it is never `config.json`, never a
-// `.env`, and nothing here reads the environment. Features (redirect, bridge, login) are off
+// `.env`, and nothing here reads the environment. Features (redirect, bridge, login, social) are off
 // unless the file turns them on, and a feature whose prerequisite is off or missing is forced off
 // with a logged reason. A value in the file that is invalid (including the empty string) is
 // rejected and the embedded default stays: the file cannot clear a default. A key that appears
@@ -20,7 +20,7 @@ namespace nevr_quest {
 inline constexpr const char* kConfigFileName = "nevr-quest.json";
 inline constexpr std::size_t kMaxConfigBytes = 64 * 1024;
 
-enum class Feature { kRedirect, kBridge, kLogin };
+enum class Feature { kRedirect, kBridge, kLogin, kSocial };
 
 enum class Source { kAbsent, kEmbedded, kFile };
 
@@ -43,6 +43,7 @@ struct Features {
   bool redirect = false;
   bool bridge = false;
   bool login = false;
+  bool social = false;
 };
 
 struct LogEvent {

@@ -46,7 +46,15 @@ bool HasLevel(const LoadResult& r, LogLevel level) {
   return false;
 }
 
-bool AllOff(const nevr_quest::Features& f) { return !f.redirect && !f.bridge && !f.login; }
+bool AllOff(const nevr_quest::Features& f) { return !f.redirect && !f.bridge && !f.login && !f.social; }
+
+// Index of the first event whose message contains `needle`, or -1.
+int EventIndex(const LoadResult& r, const std::string& needle) {
+  for (std::size_t i = 0; i < r.events.size(); ++i) {
+    if (r.events[i].message.find(needle) != std::string::npos) return static_cast<int>(i);
+  }
+  return -1;
+}
 
 void DefaultsWithoutFile() {
   const LoadResult r = nevr_quest::ResolveConfig(Full(), nullptr);
@@ -57,6 +65,8 @@ void DefaultsWithoutFile() {
   CHECK(r.config.serverKey.text == kEmbServerKey);
   CHECK(AllOff(r.config.requested) && AllOff(r.config.effective));
   CHECK(EventsContain(r, "feature=login requested=off effective=off"));
+  CHECK(EventsContain(r, "feature=social requested=off effective=off"));
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
   CHECK(EventsContain(r, "config key=nevr_socket_uri source=embedded"));
   CHECK(!HasLevel(r, LogLevel::kError));
 }
@@ -88,9 +98,13 @@ void FileOverridesPerKey() {
 }
 
 void FeaturesEnableWhenPrerequisitesHold() {
-  const LoadResult r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true}})");
-  CHECK(r.config.requested.redirect && r.config.requested.bridge && r.config.requested.login);
-  CHECK(r.config.effective.redirect && r.config.effective.bridge && r.config.effective.login);
+  const LoadResult r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true}})");
+  CHECK(r.config.requested.redirect && r.config.requested.bridge && r.config.requested.login &&
+        r.config.requested.social);
+  CHECK(r.config.effective.redirect && r.config.effective.bridge && r.config.effective.login &&
+        r.config.effective.social);
+  CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
+  CHECK(EventsContain(r, "feature=social requested=on effective=on"));
   CHECK(nevr_quest::FeatureEnabled(r.config, Feature::kLogin));
   CHECK(EventsContain(r, "feature=login requested=on effective=on"));
   CHECK(!HasLevel(r, LogLevel::kWarn));
@@ -121,6 +135,46 @@ void FeatureDependenciesForceOff() {
   r = Load(httpOnly, R"({"features":{"redirect":true,"bridge":true}})");
   CHECK(r.config.effective.redirect && !r.config.effective.bridge);
   CHECK(EventsContain(r, "feature=bridge forced off reason=no_socket_uri"));
+}
+
+void SocialNeedsLoginAndResolvesLast() {
+  // Social alone: login is not enabled, so social is forced off, with that one reason.
+  LoadResult r = Load(Full(), R"({"features":{"social":true}})");
+  CHECK(r.config.requested.social && !r.config.effective.social);
+  CHECK(!nevr_quest::FeatureEnabled(r.config, Feature::kSocial));
+  CHECK(EventsContain(r, "feature=social forced off reason=login_not_enabled"));
+  CHECK(EventsContain(r, "feature=social requested=on effective=off"));
+
+  // The chain: login loses its bridge, and social loses login, in that order in the log.
+  r = Load(Full(), R"({"features":{"redirect":true,"login":true,"social":true}})");
+  CHECK(r.config.effective.redirect && !r.config.effective.bridge && !r.config.effective.login &&
+        !r.config.effective.social);
+  const int loginOff = EventIndex(r, "feature=login forced off reason=bridge_not_enabled");
+  const int socialOff = EventIndex(r, "feature=social forced off reason=login_not_enabled");
+  CHECK(loginOff >= 0 && socialOff > loginOff);
+
+  // Login that loses the server key takes social with it.
+  EmbeddedDefaults noKey = Full();
+  noKey.serverKey = "";
+  r = Load(noKey, R"({"features":{"redirect":true,"bridge":true,"login":true,"social":true}})");
+  CHECK(r.config.effective.bridge && !r.config.effective.login && !r.config.effective.social);
+  CHECK(EventsContain(r, "feature=login forced off reason=no_server_key"));
+  CHECK(EventsContain(r, "feature=social forced off reason=login_not_enabled"));
+
+  // Login without social stays on.
+  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true}})");
+  CHECK(r.config.effective.login && !r.config.effective.social);
+  CHECK(!EventsContain(r, "feature=social forced off"));
+
+  // A malformed value stays off and is rejected by name, whatever login does.
+  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"social":"yes"}})");
+  CHECK(r.config.effective.login && !r.config.requested.social && !r.config.effective.social);
+  CHECK(EventsContain(r, "feature=social rejected reason=not_a_boolean"));
+  r = Load(Full(), R"({"features":{"redirect":true,"bridge":true,"login":true,"social":1}})");
+  CHECK(!r.config.requested.social);
+
+  // The name is the file key and the log name.
+  CHECK(std::string(nevr_quest::FeatureName(Feature::kSocial)) == "social");
 }
 
 void MalformedFileFallsBackToDefaultsWithFeaturesOff() {
@@ -295,6 +349,7 @@ int main() {
   FileOverridesPerKey();
   FeaturesEnableWhenPrerequisitesHold();
   FeatureDependenciesForceOff();
+  SocialNeedsLoginAndResolvesLast();
   MalformedFileFallsBackToDefaultsWithFeaturesOff();
   OversizedFileIsRejected();
   BadKeyValuesKeepTheDefault();
