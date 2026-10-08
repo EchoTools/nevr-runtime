@@ -619,6 +619,51 @@ test-quest-hooks:
         -o "$out/got_hook_test" -ldl -pthread
     timeout 300 "$out/got_hook_test" "$out"  # a hang is a failure, not a stuck gate
 
+# Quest config-string redirect on the host. Builds two fixture shared objects that import
+# CJson::TString by its mangled name through a PLT slot (src/quest/redirect/tests), then runs
+# redirect_test, which drives the production ServiceRedirector, the typed thunks and GotHook
+# against them with a fake game config. No NDK, no Android. Fail-close.
+test-quest-redirect:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-redirect-host"
+    mkdir -p "$out"
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    fx=src/quest/redirect/tests
+    "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 "$fx/tstring_fixture_provider.cpp" \
+        -o "$out/libredirfx_provider.so"
+    link=(-fPIC -shared -Wl,--build-id=sha1 -L"$out" -lredirfx_provider -Wl,-rpath,'$ORIGIN' -Wl,-z,now,-z,relro)
+    "${cxx[@]}" "${link[@]}" "$fx/tstring_fixture_consumer.cpp" -o "$out/libredirfx_consumer_a.so"
+    "${cxx[@]}" "${link[@]}" "$fx/tstring_fixture_consumer.cpp" -o "$out/libredirfx_consumer_b.so"
+    # The thunk translation unit is built without exceptions (callback_thunk.h refuses
+    # otherwise); everything else, including the GOT backend and the test, with them.
+    # The thunk translation unit and the hook backend are built without exceptions (as on Android);
+    # everything else, including the test, with them.
+    "${cxx[@]}" -fno-exceptions -c src/quest/redirect/tstring_thunks.cpp -o "$out/tstring_thunks.o"
+    for f in got_hook hook_log hook_report; do
+        "${cxx[@]}" -fno-exceptions -c "src/quest/sentinel/$f.cpp" -o "$out/$f.o"
+    done
+    # The thunk's frames must sit under the personality-free CIE: no "zPLR" augmentation, at least one "zR".
+    frames="$out/tstring_thunks.frames.txt"
+    readelf --debug-dump=frames "$out/tstring_thunks.o" > "$frames"
+    if grep -q '"zPLR"' "$frames"; then
+        echo "test-quest-redirect: FAIL - tstring_thunks.o has frames under a personality CIE (zPLR)" >&2
+        exit 1
+    fi
+    grep -q '"zR"' "$frames" || { echo "test-quest-redirect: FAIL - tstring_thunks.o has no zR frames to check" >&2; exit 1; }
+    srcs=("$fx/redirect_test.cpp" src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp
+        src/quest/sentinel/quest_config.cpp src/runtime/lifecycle/service_redirect.cpp
+        src/runtime/lifecycle/stable_string_pool.cpp)
+    objs=("$out/tstring_thunks.o" "$out/got_hook.o" "$out/hook_log.o" "$out/hook_report.o")
+    "${cxx[@]}" "${srcs[@]}" "${objs[@]}" -o "$out/redirect_test" -ldl -pthread
+    "$out/redirect_test" "$out"
+    # The same test under ThreadSanitizer at -O1: the cache lock is only observable as a data race, and
+    # -O1 also exercises the warnings that -O0 hides. The thunk TU and backend stay uninstrumented
+    # objects (they hold no shared state beyond atomics).
+    tsan=(-fsanitize=thread -O1 -g)
+    "${cxx[@]}" "${tsan[@]}" "${srcs[@]}" "${objs[@]}" -o "$out/redirect_test_tsan" -ldl -pthread
+    TSAN_OPTIONS="halt_on_error=1 exitcode=66" "$out/redirect_test_tsan" "$out"
+
 # Resolve the pinned Quest targets in the real libr15.so / libpnsradmatchmaking.so
 # (docs/adr/0003). Extracts both from the pinned APK, checks their SHA-256, and runs
 # src/quest/tests/got_pinned_test.cpp. Fail-close, including when the APK is absent:
@@ -660,6 +705,7 @@ verify:
     just test-quest-hooks
     just test-quest-router
     just test-quest-tls
+    just test-quest-redirect
     timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_executable_scripts -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
