@@ -308,27 +308,37 @@ cached (`[this+8] != 0`, `$ json path: %s: ERROR, json db is cached, read only.`
 `0x5820c0`). The rewrite does not attempt a nested write under a non-object parent, and the
 read-back after each write covers the cached case.
 
-Exception residual. `RewriteLoginNoThrow` is the `noexcept` entry the `-fno-exceptions` thunk
-translation unit calls; it catches every `std::exception` inside the exceptions-enabled
-`login_rewrite.cpp`. The frames of `ApplyFieldsAtomically`, `RewriteLogin` and
-`RewriteLoginNoThrow` carry an LSDA under the exceptions-enabled personality (`"zPLR"` CIE) and are
-live while the adapter calls libpnsovr's CJson functions and the virtual `AccountID()`. If game
-code threw there, `libc++_shared`'s unwinder would call this library's own `__gxx_personality_v0`
-on those frames in phase 1: the unwinder crossing described above (a crash), before any
-`noexcept` handling could terminate cleanly. Reachability, from the static call graph of the
-pinned `libpnsovr.so` (independent review): none of the 10 CJson functions the rewrite calls,
-nor `AccountID()` at `0x1ede14`, reaches `__cxa_throw`, `__cxa_allocate_exception`, `operator new`,
-terminate, `_Unwind_Resume` or a libc++ import by direct edges (39 to 62 functions each). All 8
+Exception frames. The login code is split by whether it calls into the game. The apply phase
+(`login_apply.cpp`: `Observe`, the account-id write and its read-back, the JSON snapshot, write
+and rollback, `RewriteLogin`) and the thunk handler (`login_hook.cpp`) are built `-fno-exceptions`:
+no frame in them carries a personality or an LSDA, so every frame live while libpnsovr's CJson
+functions or the virtual `AccountID()` run sits under the personality-free `"zR"` CIE. The compose
+phase (`login_rewrite.cpp`, exceptions enabled) builds the profile and calls no game code;
+`ComposePlan` catches every `std::exception` (named types, no catch-all) and returns plain data.
+The handler calls observe, compose, apply, then the original, and `ComposePlan` has returned
+before the next game call. `tests/quest` `TestLoginHookFramesCarryNoPersonality` pins this on a
+probe executable that links the whole login archive: it walks every direct `bl`/`b` edge from the
+`nevr_hook_handlers` functions and fails on any reachable function under a personality-bearing
+CIE, except `ComposePlan` (required to be reached and to carry a personality, so the exemption
+cannot go stale) and the cold noreturn tail of libc++ (`__throw_length_error`, `terminate`, the
+exception allocator).
+
+Residual. A foreign exception thrown by the game while these frames are live (libpnsovr's
+allocator hooks installed by `CJson::InitializeForGame` `0x357cb0`, or a registered log
+callback in `CLoggingData::ExecuteAllCallbacks`) passes through on CFI alone, as it would
+without this code. Reachability from the CJson functions the rewrite calls and from `AccountID()`
+(`0x1ede14`), from the static call graph of the pinned `libpnsovr.so` (independent review): none
+of the 10 CJson functions nor `AccountID()` reaches `__cxa_throw`, `__cxa_allocate_exception`,
+`operator new`, terminate or `_Unwind_Resume` by direct edges (39 to 62 functions each); all 8
 throw and allocate sites in `libpnsovr.so` are libc++ container code (breakpad
 `std::list::push_back` at `0x20ebf0`/`0x20f1ac`, `__throw_length_error` at `0x21059c`/`0x2113c0`,
-vector and `__split_buffer`). Unresolved indirect edges: the jansson allocator hooks installed by
-`CJson::InitializeForGame` (`0x357cb0`, through `CAllocator` vtable+0x10, `br x2` at `0x357d28`),
-three in `CMemBlock::Resize`, two in `CLoggingData::ExecuteAllCallbacks` (registered log
-callbacks), one each in `json_delete` and `fn_5083b0`. A throw is therefore reachable only if an
-allocator or a registered log callback throws. Not done: isolating the game calls into a
-`-fno-exceptions` translation unit (read into sentinel memory, decide in the exceptions unit,
-write and roll back from a `zR` unit), which would remove the crossing at the cost of splitting
-the transaction across two units and copying the whole JSON. Nothing here was run on a device.
+vector and `__split_buffer`); the unresolved indirect edges are the allocator hooks (`br x2` at
+`0x357d28`), three in `CMemBlock::Resize`, two in `ExecuteAllCallbacks`, and one each in
+`json_delete` and `fn_5083b0`. The apply phase has no try/catch; a failure of the sentinel's own
+allocation there is expected to raise `std::bad_alloc` from libc++'s `operator new` (the library is
+built with exceptions, whatever the caller's flags) through `zR` frames, which nothing catches:
+the out-of-memory case only, inferred and not run. The
+call graph was not run on a device.
 
 `[CNSUser+0x88]` is not the wire account id for a `CNSOVRUser`. A virtual slot is a data
 relocation, which `GotHook` does not reach, so the global is written instead.

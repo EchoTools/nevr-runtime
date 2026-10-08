@@ -39,8 +39,6 @@ class FakeJson final : public QuestLogin::JsonAccess {
   };
   std::map<std::string, Value> values;  // leaves and the objects that contain them
   std::string refuse_path;              // writes to this path are dropped
-  int throw_after = -1;                 // throw std::bad_alloc on the Nth mutating call; -1 never
-  int mutations = 0;
   bool int_overwrites_real = false;     // a build whose SetInt replaces a real instead of refusing
   bool nested_write_replaces_parent = false;  // a build whose nested write turns a non-object parent into an object
 
@@ -65,7 +63,6 @@ class FakeJson final : public QuestLogin::JsonAccess {
   void SetEmptyArray(const char* path) { Put(path, JsonType::Array, "", 0, 0); }
 
   void Clear(const char* path) override {
-    Tick();
     const std::string key = path;
     for (auto it = values.begin(); it != values.end();) {
       it = (it->first == key || it->first.rfind(key + "|", 0) == 0) ? values.erase(it) : std::next(it);
@@ -101,11 +98,7 @@ class FakeJson final : public QuestLogin::JsonAccess {
   }
 
  private:
-  void Tick() {
-    if (throw_after >= 0 && mutations++ == throw_after) throw std::bad_alloc();
-  }
   void Put(const char* path, JsonType type, const char* text, std::int64_t number, double real) {
-    Tick();
     if (refuse_path == path) return;
     const std::string key = path;
     auto it = values.find(key);
@@ -482,29 +475,6 @@ void TestEveryRefusedWriteLeavesEverythingUntouched() {
   QCHECK(user.global_account_id == 5551234);
 }
 
-// An exception at any point (an allocation failing mid-rewrite) also leaves nothing behind.
-void TestExceptionAnywhereRestoresEverything() {
-  FakeSource source;
-  source.identity = MakeIdentity();
-  bool saw_exception_outcome = false;
-  for (int n = 0; n < 200; ++n) {
-    FakeJson json;
-    SeedOculusLogin(json);
-    const nlohmann::json before = json.ToJson();
-    json.throw_after = n;
-    FakeUser user;
-    const QuestLogin::Outcome out = QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog);
-    json.throw_after = -1;
-    if (out == QuestLogin::Outcome::Rewritten) {
-      QCHECK(user.global_account_id == kNevrAccount);
-      break;  // n is past the last mutating call
-    }
-    saw_exception_outcome = true;
-    QCHECK(json.ToJson() == before);
-    QCHECK(user.global_account_id == 5551234);
-  }
-  QCHECK(saw_exception_outcome);
-}
 
 // CJson holds more than strings, integers and booleans, and the rollback has to put each back.
 void TestEveryJsonTypeSurvivesRollback() {
@@ -716,53 +686,9 @@ void TestParentThatIsNotAnObjectIsLeftAlone() {
 }
 
 // A log sink that throws after the commit does not turn a rewritten login into a failure.
-void ThrowingLog(QuestLogin::Level, const char*, const QuestLogin::LogKv*, std::size_t) { throw std::bad_alloc(); }
 
-void TestLogFailureAfterCommitKeepsTheRewrite() {
-  FakeJson json;
-  SeedOculusLogin(json);
-  FakeUser user;
-  FakeSource source;
-  source.identity = MakeIdentity();
-  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &ThrowingLog) == QuestLogin::Outcome::Rewritten);
-  QCHECK(At(json.ToJson(), "access_token") == "NEVR-TOKEN-SECRET");
-  QCHECK(user.global_account_id == kNevrAccount);
-}
 
-// The entry the thunk TU calls is noexcept: an exception from the identity source or the JSON
-// layer comes back as Outcome::Exception with everything as it was.
-class ThrowingSource final : public QuestLogin::IdentitySource {
- public:
-  QuestLogin::IdentityStatus Fetch(QuestLogin::Identity&) override { throw std::runtime_error("source"); }
-};
 
-void TestNoThrowEntryContainsExceptions() {
-  {
-    FakeJson json;
-    SeedOculusLogin(json);
-    const nlohmann::json before = json.ToJson();
-    FakeUser user;
-    ThrowingSource source;
-    QCHECK(QuestLogin::RewriteLoginNoThrow(user, json, source, MakeBuild(), &CaptureLog) ==
-           QuestLogin::Outcome::Exception);
-    QCHECK(json.ToJson() == before);
-    QCHECK(user.global_account_id == 5551234);
-  }
-  for (int n = 0; n < 40; ++n) {
-    FakeJson json;
-    SeedOculusLogin(json);
-    const nlohmann::json before = json.ToJson();
-    json.throw_after = n;
-    FakeUser user;
-    FakeSource source;
-    source.identity = MakeIdentity();
-    const QuestLogin::Outcome out = QuestLogin::RewriteLoginNoThrow(user, json, source, MakeBuild(), &CaptureLog);
-    json.throw_after = -1;
-    if (out == QuestLogin::Outcome::Rewritten) break;
-    QCHECK(json.ToJson() == before);
-    QCHECK(user.global_account_id == 5551234);
-  }
-}
 
 // AccountIdNotCarried after the global was really written: the restore must put it back.
 void TestAccountIdNotCarriedRestoresTheWrittenGlobal() {
@@ -857,6 +783,53 @@ void TestDeclineRecordSaysWhetherTheOculusIdWasRestored() {
   QCHECK(g_log[0].find("5551234") == std::string::npos && g_log[0].find("987654321012345") == std::string::npos);
 }
 
+// The compose phase is the only part that runs exceptions-enabled code; an exception from the
+// identity source becomes an outcome, with nothing changed and the account id at the Oculus value.
+class ThrowingSource final : public QuestLogin::IdentitySource {
+ public:
+  QuestLogin::IdentityStatus Fetch(QuestLogin::Identity&) override { throw std::runtime_error("source"); }
+};
+
+void TestComposeFailureBecomesAnOutcome() {
+  FakeJson json;
+  SeedOculusLogin(json);
+  const nlohmann::json before = json.ToJson();
+  FakeUser user;
+  ThrowingSource source;
+  g_log.clear();
+  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Exception);
+  QCHECK(json.ToJson() == before);
+  QCHECK(user.global_account_id == 5551234);
+  QCHECK(g_log.size() == 1 && g_log[0].find("outcome=exception") != std::string::npos);
+
+  // After a rewritten login the same failure still puts the Oculus id back.
+  FakeSource ok;
+  ok.identity = MakeIdentity();
+  FakeJson first;
+  SeedOculusLogin(first);
+  QCHECK(QuestLogin::RewriteLogin(user, first, ok, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+  FakeJson second;
+  SeedOculusLogin(second);
+  QCHECK(QuestLogin::RewriteLogin(user, second, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Exception);
+  QCHECK(user.global_account_id == 5551234);
+}
+
+// The compose phase keeps game-measured members using only what Observe recorded, so every
+// system_info member the profile can produce has to be one Observe looks at.
+void TestEveryComposedMeasuredPathIsObserved() {
+  const QuestLogin::Composition c = QuestLogin::Compose(MakeIdentity(), {}, MakeBuild());
+  QCHECK(c.status == QuestLogin::ComposeStatus::Ok);
+  std::size_t measured = 0;
+  for (const QuestLogin::Field& f : c.fields) {
+    if (!QuestLogin::IsGameMeasuredPath(f.path)) continue;
+    ++measured;
+    bool known = false;
+    for (const char* path : QuestLogin::kMeasuredPaths) known = known || f.path == path;
+    QCHECK(known);
+  }
+  QCHECK(measured == QuestLogin::kMeasuredCount);
+}
+
 void TestInvalidUtf8NameDoesNotThrow() {
   QuestLogin::Identity id = MakeIdentity();
   id.display_name = "bad\xff\xfe";
@@ -885,7 +858,6 @@ int main() {
   TestPlatformMustAlreadyBeOvrOrg();
   TestNoIdentityChangesNothing();
   TestEveryRefusedWriteLeavesEverythingUntouched();
-  TestExceptionAnywhereRestoresEverything();
   TestEveryJsonTypeSurvivesRollback();
   TestNestedKeyAddedByRewriteIsRemovedOnRollback();
   TestAccountIdStaysInstalledAfterSend();
@@ -893,8 +865,8 @@ int main() {
   TestDeclinedLoginAfterARewrittenOneRestoresTheOculusId();
   TestSecondRewrittenLoginKeepsTheNevrIdAndALaterDeclineRestoresOculus();
   TestParentThatIsNotAnObjectIsLeftAlone();
-  TestLogFailureAfterCommitKeepsTheRewrite();
-  TestNoThrowEntryContainsExceptions();
+  TestComposeFailureBecomesAnOutcome();
+  TestEveryComposedMeasuredPathIsObserved();
   TestAccountIdNotCarriedRestoresTheWrittenGlobal();
   TestRestoreLeavesAGameWriteAlone();
   TestNoRealIdToRememberRefusesTheRewrite();

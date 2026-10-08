@@ -1,14 +1,13 @@
 #pragma once
-// Quest login rewrite: the portable half.
+// Quest login rewrite.
 //
-// The Quest game logs in with Oculus identity. NEVR needs the same login the
-// PCVR bridge sends (src/runtime/compat/ws_bridge.cpp BuildLoginRequest): the NEVR
-// token, the NEVR account id, platform code 4 (OVR_ORG) and the HMD serial the
-// game itself reports. This file decides WHAT the login says and applies it
-// all-or-nothing; it contains no game pointers and no Android headers, so the host
-// test (tests/login_rewrite_test.cpp) exercises the same code the device runs.
-// login_hook.cpp is the Android adapter that applies the result to the live
-// CNSOVRUser and CJson.
+// The Quest game logs in with Oculus identity. NEVR needs the same login the PCVR bridge sends
+// (src/runtime/compat/ws_bridge.cpp BuildLoginRequest): the NEVR token, the NEVR account id,
+// platform code 4 (OVR_ORG) and the HMD serial the game itself reports. This file declares what
+// the login says and how it is applied all-or-nothing; it contains no game pointers and no
+// Android headers, so the host test (tests/login_rewrite_test.cpp) runs the same code the
+// device runs. login_hook.cpp is the Android adapter that implements JsonAccess and UserAccess
+// over the live CNSOVRUser and libpnsovr's CJson.
 //
 // Where each wire field comes from on the Quest (measured, docs/adr/0003):
 //   JSON            the CJson passed to CNSUser::SendLogInRequest (rewritten here)
@@ -18,6 +17,15 @@
 //                   CNSOVRUser overrides it to return a process global, so the rewrite
 //                   changes that global (UserAccess::SetAccountId) and proves the wire
 //                   value by calling the same virtual (UserAccess::WireAccountId)
+//
+// Translation units. A frame that is live while game code runs must be personality-free
+// (quest/sentinel/callback_thunk.h), so the work is split by whether it calls into the game:
+//   login_apply.cpp    built -fno-exceptions: everything that calls the game (Observe,
+//                      ApplyFieldsAtomically, RewriteLogin, RewriteAndSend). No try/catch;
+//                      an allocation failure there is expected to raise std::bad_alloc from
+//                      libc++'s operator new, uncaught (out of memory only).
+//   login_rewrite.cpp  exceptions enabled: Compose and ComposePlan. They call no game code, run
+//                      between game calls, and return before the next one.
 
 #include <cstddef>
 #include <cstdint>
@@ -75,6 +83,16 @@ struct GameValues {
 bool IsClientClassPath(const std::string& path);
 bool IsGameMeasuredPath(const std::string& path);
 
+// The system_info members the shared profile can produce. Observe records which of them the
+// game already holds, so the compose phase (which calls no game code) can keep them.
+inline constexpr const char* kMeasuredPaths[] = {
+    "system_info|headset_type",   "system_info|driver_version",    "system_info|network_type",
+    "system_info|video_card",     "system_info|cpu",               "system_info|num_physical_cores",
+    "system_info|num_logical_cores", "system_info|memory_total",   "system_info|memory_used",
+    "system_info|dedicated_gpu_memory",
+};
+inline constexpr std::size_t kMeasuredCount = sizeof(kMeasuredPaths) / sizeof(kMeasuredPaths[0]);
+
 enum class FieldKind { String, Int, Boolean };
 
 // One CJson assignment. `path` uses the game's own '|' nesting ("system_info|cpu").
@@ -101,7 +119,8 @@ struct Composition {
 
 // Builds the login fields from the shared LoginProfile builder, so Quest and PCVR run one
 // implementation of the field set and of JSON escaping. Fail-close: no account id or no
-// token yields no fields (the Quest identity is never fabricated).
+// token yields no fields (the Quest identity is never fabricated). Exceptions enabled; calls
+// no game code.
 Composition Compose(const Identity& identity, const GameValues& game, const BuildInfo& build);
 
 const char* StatusName(ComposeStatus status);
@@ -111,12 +130,12 @@ const char* StatusName(ComposeStatus status);
 // the rewrite uses, so a path holding one is never written.
 enum class JsonType { Absent, Null, String, Int, Real, Boolean, Array, Object };
 
-// The game's CJson as seen by the rewrite. login_hook.cpp implements it over the exported
-// NRadEngine::CJson members of libpnsovr.so; the host test implements it over a map that
-// follows CJson's type rules (SetString and SetInt refuse to change an existing type; a null
-// is replaceable).
-// Set* return nothing because CJson reports a refused write only in the game's log, so every
-// write is read back. Get* are defined only when TypeOf reports the matching type.
+// The game's CJson as seen by the rewrite. login_hook.cpp implements it over libpnsovr's
+// NRadEngine::CJson; the host test implements it over a map that follows CJson's type rules
+// (SetString and SetInt refuse to change an existing type; a null is replaceable). None of
+// these may throw. Set* return nothing because CJson reports a refused write only in the
+// game's log, so every write is read back. Get* are defined only when TypeOf reports the
+// matching type.
 class JsonAccess {
  public:
   virtual ~JsonAccess() = default;
@@ -132,16 +151,16 @@ class JsonAccess {
   virtual void Clear(const char* path) = 0;
 };
 
-// Reads the values the rewrite relays from the game's login JSON.
+// Reads the values the rewrite relays from the game's login JSON. (login_apply.cpp)
 GameValues ReadGameValues(const JsonAccess& json);
 
-// Writes `fields`, reads each back, and on any refusal or exception restores every key it
-// touched to its previous value or absence. On a false return the JSON is as it was on entry.
-// `failed_path` receives the first path that was refused (a key name, never a value).
+// Writes `fields`, reads each back, and on any refusal restores every key it touched to its
+// previous value or absence. On a false return the JSON is as it was on entry. `failed_path`
+// receives the first path that was refused (a key name, never a value). (login_apply.cpp)
 bool ApplyFieldsAtomically(const std::vector<Field>& fields, JsonAccess& json,
                            std::string& failed_path);
 
-// The CNSUser as the login path sees it.
+// The CNSUser as the login path sees it. None of these may throw.
 class UserAccess {
  public:
   virtual ~UserAccess() = default;
@@ -202,7 +221,8 @@ class OculusIdMemory {
   std::uint64_t last_written_ = 0;
 };
 
-// Where identity comes from (token auth). Fail-close: anything but Ok means "no identity".
+// Where identity comes from (token auth). Fail-close: anything but Ok means "no identity". May
+// throw std::exception; it is called only from the exceptions-enabled compose phase.
 class IdentitySource {
  public:
   virtual ~IdentitySource() = default;
@@ -219,49 +239,75 @@ struct LogKv {
   const char* text = nullptr;  // nullptr: use `number`
   long long number = 0;
 };
+// A LogFn must not throw.
 using LogFn = void (*)(Level level, const char* event, const LogKv* fields, std::size_t count);
 
 enum class Outcome {
-  Rewritten,          // JSON and wire account id carry the NEVR identity
-  NoIdentity,         // nothing was changed
-  PlatformMismatch,   // the user is not OVR_ORG; nothing was changed
-  UserUnreadable,     // nothing was changed
-  ComposeFailed,      // nothing was changed
-  JsonWriteFailed,    // a field was refused; the JSON was restored, the user untouched
+  Rewritten,            // JSON and wire account id carry the NEVR identity
+  NoIdentity,           // nothing was changed
+  PlatformMismatch,     // the user is not OVR_ORG; nothing was changed
+  UserUnreadable,       // nothing was changed
+  ComposeFailed,        // nothing was changed
+  JsonWriteFailed,      // a field was refused; the JSON was restored, the user untouched
   AccountIdNotCarried,  // the wire account id did not become the NEVR id; everything restored
-  Exception,          // an exception was caught; everything restored
+  Exception,            // the compose phase threw a std::exception; nothing was changed
 };
 
 const char* OutcomeName(Outcome outcome);
 
-// The entry the device adapter calls from a translation unit built -fno-exceptions (the GOT
-// thunk's contract, quest/sentinel/callback_thunk.h). It catches every std::exception inside
-// this exceptions-enabled translation unit and reports Outcome::Exception; it never lets a
-// std::exception escape.
+// Phase 1 (login_apply.cpp, calls the game): what the later phases need to know about the game's
+// state. Plain data; nothing in it refers back to the game.
+struct Observation {
+  bool provider_readable = false;
+  std::uint64_t provider = 0;
+  GameValues game;
+  bool measured_present[kMeasuredCount] = {};  // parallel to kMeasuredPaths
+};
+void Observe(const UserAccess& user, const JsonAccess& json, Observation& out);
+
+// Phase 2 (login_rewrite.cpp, exceptions enabled, calls no game code): decides what the login
+// says. `outcome` is Rewritten when the apply phase should run, otherwise the reason it is
+// declined; the other members are the data for the log record and the apply phase.
+struct Plan {
+  Outcome outcome = Outcome::Exception;
+  IdentityStatus identity_status = IdentityStatus::Ok;
+  ComposeStatus compose_status = ComposeStatus::Ok;
+  std::uint64_t provider = 0;
+  std::uint64_t account_id = 0;
+  std::vector<Field> fields;
+  std::size_t skipped = 0;
+  std::size_t kept_client_class = 0;
+  std::size_t kept_measured = 0;
+  std::string hmd_serial_source;
+};
+// Catches every std::exception and reports Outcome::Exception (named types only, no
+// catch-all, by repo rule). Never throws.
+void ComposePlan(IdentitySource& source, const BuildInfo& build, const Observation& observed,
+                 Plan& plan) noexcept;
+
+// Phases 1 to 3 in order (login_apply.cpp, -fno-exceptions): Observe, ComposePlan, then the
+// account id and the JSON transaction. All-or-nothing: any non-Rewritten outcome leaves the
+// JSON as it was on entry and the account id at the Oculus value, including when an earlier
+// login was Rewritten. A login after a rewritten one is rewritten again from the current
+// identity. Every outcome emits one structured record (event "quest_login", field "outcome");
+// no record contains a token, serial, display name or account id value. This function is the
+// frame that is live while the game's CJson and AccountID() run, so it is personality-free:
+// it has no try/catch (an allocation failure is the out-of-memory case described below).
 //
-// Residual, stated exactly. The frames of ApplyFieldsAtomically, RewriteLogin and this function
-// carry an LSDA under the exceptions-enabled personality ("zPLR" CIE), and they are live while
-// the adapter calls into libpnsovr's CJson functions and the virtual AccountID(). If game code
-// threw there, libc++_shared's unwinder would call this library's own __gxx_personality_v0 on
-// those frames in phase 1, which is the unwinder crossing described in callback_thunk.h (a
-// crash), before any noexcept handling could terminate cleanly. Reachability, from the static
-// call graph of the pinned libpnsovr.so (independent review, evidence cjson_throw_reach.txt):
-// none of the 10 CJson functions the rewrite calls, nor AccountID() at 0x1ede14, reaches
-// __cxa_throw, __cxa_allocate_exception, operator new, terminate, _Unwind_Resume or a libc++
-// import by direct edges (39 to 62 functions each). The only throw and allocate sites in
-// libpnsovr.so are libc++ container code (breakpad std::list::push_back at 0x20ebf0/0x20f1ac,
-// __throw_length_error at 0x21059c/0x2113c0, vector/__split_buffer). Indirect edges are
-// unresolved: the jansson allocator hooks installed by CJson::InitializeForGame (0x357cb0,
-// through CAllocator vtable+0x10), three in CMemBlock::Resize, two in
-// CLoggingData::ExecuteAllCallbacks (registered log callbacks), one each in json_delete and
-// fn_5083b0. A throw is therefore reachable only if an allocator or a registered log callback
-// throws. Not done: isolating the game calls into a -fno-exceptions translation unit (read
-// into sentinel memory, decide in the exceptions TU, write and roll back from a zR TU), which
-// would remove the crossing at the cost of splitting the transaction across two units and
-// copying the whole JSON; the reachability above is why it was judged not worth it. Nothing
-// here was run on a device.
-Outcome RewriteLoginNoThrow(UserAccess& user, JsonAccess& json, IdentitySource& source,
-                            const BuildInfo& build, LogFn log) noexcept;
+// Residual, stated exactly. Every frame live during a call into the game (this function, its
+// callees in login_apply.cpp, the thunk and the handler) sits under the personality-free "zR"
+// CIE, so a foreign exception thrown by libpnsovr's allocator hooks (CJson::InitializeForGame
+// 0x357cb0, CAllocator vtable+0x10) or by a registered log callback (CLoggingData::
+// ExecuteAllCallbacks) passes through on CFI alone, as it would without this code. The
+// exceptions-enabled frames (ComposePlan and what it calls) are never on the stack during a
+// game call. Reachability of a throw from the CJson functions and AccountID() was analysed
+// statically (independent review, evidence cjson_throw_reach.txt): none of the 10 CJson
+// functions nor AccountID() at 0x1ede14 reaches __cxa_throw, __cxa_allocate_exception,
+// operator new, terminate or _Unwind_Resume by direct edges (39 to 62 functions each); the
+// unresolved indirect edges are the allocator hooks, three in CMemBlock::Resize, two in
+// ExecuteAllCallbacks, and one each in json_delete and fn_5083b0. Nothing was run on a device.
+Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
+                     const BuildInfo& build, LogFn log);
 
 // Hands the actual send to the caller so the rewrite and the send form one unit: the account
 // id the rewrite installed is read by the sender through the virtual AccountID() and again by
@@ -272,15 +318,5 @@ Outcome RewriteLoginNoThrow(UserAccess& user, JsonAccess& json, IdentitySource& 
 using SendFn = void (*)(void* context);
 Outcome RewriteAndSend(UserAccess& user, JsonAccess& json, IdentitySource& source,
                        const BuildInfo& build, LogFn log, SendFn send, void* context);
-
-// The whole decision for one login attempt. Called once per CNSUser::SendLogInRequest, which
-// is per login event (not per frame), so it may allocate and log. All-or-nothing: any
-// non-Rewritten outcome leaves the JSON as it was on entry and the account id at the Oculus
-// value, including when an earlier login was Rewritten. A login after a Rewritten one is
-// rewritten again from the current identity.
-// Every outcome emits one structured record (event "quest_login", field "outcome"); no
-// record contains a token, serial, display name or account id value. Never throws.
-Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
-                     const BuildInfo& build, LogFn log);
 
 }  // namespace QuestLogin

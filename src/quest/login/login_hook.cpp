@@ -218,19 +218,20 @@ class LiveJson final : public JsonAccess {
 
 // Runs the rewrite for one login. The compiler inlines it into the handler, so the adapters
 // (which have destructors) live in the handler's frame, which also calls the game's original.
-// That frame is built -fno-exceptions: it has no landing pad, no LSDA and sits under the
-// personality-free "zR" CIE (tests/quest TestLoginHookObjectCarriesNoPersonality), which is
-// the property that matters. RewriteLoginNoThrow is the only exceptions-enabled frame it
-// calls, and it has returned before the original runs.
+// Every frame live during a call into the game is built -fno-exceptions and sits under the
+// personality-free "zR" CIE: this function, the handler, RewriteLogin and the rest of
+// login_apply.cpp (tests/quest TestLoginHookObjectsCarryNoPersonality). The one
+// exceptions-enabled function it reaches, ComposePlan, calls no game code and has returned
+// before the next game call.
 void RunRewrite(const State& state, void* user, void* json) noexcept {
   LiveUser live_user(user, state.account_id_global, state.expected_vptr);
   LiveJson live_json(state.api, json);
-  RewriteLoginNoThrow(live_user, live_json, *state.source, state.build, state.log);
+  RewriteLogin(live_user, live_json, *state.source, state.build, state.log);
 }
 
 // The handler behind the GOT slot: rewrite, then the original, last and always, so a refused
 // or failed rewrite leaves the game's own login intact. It has no cleanup of its own.
-void HandleSendLogInRequest(LoginThunk::Fn original, void* user, void* json) noexcept {
+NEVR_HOOK_HANDLER void HandleSendLogInRequest(LoginThunk::Fn original, void* user, void* json) noexcept {
   const State* state = g_published.load(std::memory_order_acquire);
   if (state != nullptr && json != nullptr) RunRewrite(*state, user, json);
   original(user, json);
