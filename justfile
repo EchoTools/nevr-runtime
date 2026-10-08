@@ -95,7 +95,7 @@ verbose-build-android: configure-android
 
 # Run the Quest .so ground-truth (ELF-shape) tests
 test-android: build-android
-    cd tests/quest && go test -v ./...
+    cd tests/quest && go test -count=1 -v ./...
 
 # Black-box crash-ingest contract gate. Requires a non-production staging sink;
 # see docs/adr/0002-crash-report-ingest.md.
@@ -453,8 +453,12 @@ test-quest-hooks:
         -o "$out/libgotfx_consumer_norelro.so"
     "${cxx[@]}" "${link[@]}" -Wl,-z,lazy,-z,norelro src/quest/tests/got_fixture_consumer.cpp \
         -o "$out/libgotfx_consumer_lazy.so"
-    "${cxx[@]}" src/quest/tests/got_hook_test.cpp src/quest/sentinel/got_hook.cpp \
-        src/quest/sentinel/hook_log.cpp -o "$out/got_hook_test" -ldl -pthread
+    # The thunk fixture is built WITH exceptions; everything that includes
+    # callback_thunk.h is built without (the header refuses otherwise).
+    "${cxx[@]}" -c src/quest/tests/thunk_exception_fixture.cpp -o "$out/thunk_exception_fixture.o"
+    "${cxx[@]}" -fno-exceptions src/quest/tests/got_hook_test.cpp src/quest/sentinel/got_hook.cpp \
+        src/quest/sentinel/hook_log.cpp "$out/thunk_exception_fixture.o" \
+        -o "$out/got_hook_test" -ldl -pthread
     "$out/got_hook_test" "$out"
 
 # Quest config-string redirect on the host. Builds two fixture shared objects that import
@@ -496,7 +500,7 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     unzip -o -q "$apk" lib/arm64-v8a/libr15.so lib/arm64-v8a/libpnsradmatchmaking.so -d "$out/lib"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $out/lib/lib/arm64-v8a/libr15.so" | sha256sum -c -
     echo "36236ab1df5783da57c064b0fbccc3a61c0e1d150c208022fbfc9cd6e5ed60ee  $out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" | sha256sum -c -
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel \
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel \
         src/quest/tests/got_pinned_test.cpp src/quest/sentinel/got_hook.cpp \
         src/quest/sentinel/hook_log.cpp -o "$out/got_pinned_test" -ldl
     "$out/got_pinned_test" "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so"

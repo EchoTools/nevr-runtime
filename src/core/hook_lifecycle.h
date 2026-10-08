@@ -68,9 +68,17 @@ inline bool CreatePublishEnable(Create&& create, Publish&& publish, Enable&& ena
 // on entry (or any prior value); on kAttached it holds the original-call
 // pointer; on every other result it holds its entry value again. `remove` runs
 // after a successful create whenever a later stage fails.
-template <typename Create, typename Enable, typename Remove>
+//
+// `keepPublished()` is asked after a failed enable, once `remove` has run. If it
+// returns true the original-call pointer stays published instead of reverting to
+// its entry value. A backend whose original-call pointer is the real function
+// (the GOT backend) uses this when the hook was live for a moment before its
+// rollback: a thread that already jumped into the detour must still find a valid
+// original. The MinHook backend never keeps it, because its trampoline is freed
+// by `remove`.
+template <typename Create, typename Enable, typename Remove, typename KeepPublished>
 inline AttachStage AttachPublished(void** ppOriginal, Create&& create, Enable&& enable,
-                                   Remove&& remove) {
+                                   Remove&& remove, KeepPublished&& keepPublished) {
   void* const prior = *ppOriginal;
   void* trampoline = nullptr;
   if (!create(&trampoline)) return AttachStage::kCreateFailed;
@@ -81,10 +89,16 @@ inline AttachStage AttachPublished(void** ppOriginal, Create&& create, Enable&& 
   PublishPointer(ppOriginal, trampoline);
   if (!enable()) {
     remove();
-    PublishPointer(ppOriginal, prior);
+    if (!keepPublished()) PublishPointer(ppOriginal, prior);
     return AttachStage::kEnableFailed;
   }
   return AttachStage::kAttached;
+}
+
+template <typename Create, typename Enable, typename Remove>
+inline AttachStage AttachPublished(void** ppOriginal, Create&& create, Enable&& enable,
+                                   Remove&& remove) {
+  return AttachPublished(ppOriginal, create, enable, remove, [] { return false; });
 }
 
 }  // namespace nevr::hook

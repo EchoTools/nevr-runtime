@@ -41,8 +41,42 @@ Every write runs under one process-wide lock, and the protection it restores is 
 `core/hook_lifecycle.h` contract that the MinHook path in `core/hooking.h` also uses.
 
 `sentinel/callback_thunk.h` gives each hooked function a typed entry point, original-call
-pointer and handler. An exception thrown by the original reaches the game unchanged; a
-`std::exception` thrown by a handler falls back to one call of the original, never a second.
+pointer and handler; the entry reads the original once per call.
+
+**No exception crosses the thunk.** Measured: libr15.so and libpnsovr.so NEED `libc++_shared.so`,
+which is a libgcc-style unwinder build (`.comment`: GCC 4.9.x, clang 5.0) exporting
+`_Unwind_Find_FDE`, `_Unwind_GetCFA`, `_Unwind_GetIP`, `_Unwind_RaiseException`,
+`_Unwind_Resume`, `__gxx_personality_v0` and `__cxa_throw`. The sentinel does not NEED it; it
+links LLVM libunwind and libc++abi statically, with `_Unwind_Resume`, `_Unwind_GetIP`,
+`__unw_getcontext`, `__gxx_personality_v0`, `__cxa_throw` and `__cxa_begin_catch` as local
+symbols, and its `.eh_frame` has a personality-bearing `zPLR` CIE and a personality-free `zR`
+CIE. A sentinel frame with an LSDA would run the sentinel's personality on the game's unwind
+context (inferred from the layouts, not run on a device). So the contract is structural:
+translation units that include `callback_thunk.h` are built with `-fno-exceptions` (the header
+refuses otherwise), so the entry has no landing pad and an exception from a game original
+passes through it on CFI alone; handlers are `noexcept` (a plain function pointer does not
+compile) and may not wrap a call into game code in a try/catch or an object with a destructor.
+`tests/quest` `TestHookFramesCarryNoPersonality` checks the built library: every
+`CallbackThunk` member and the handler sit under the `zR` CIE. `TestStlContract` fails if the
+sentinel starts linking `libc++_shared.so`.
+
+Whether the declared hook targets can throw, from the pinned ELFs: `CJson::TString`
+(`libr15.so` `0xfa2e7c`, `libpnsradmatchmaking.so` `0x209484`): ReVault's callee graph (partial:
+146967 of 178574 functions) lists no throw or allocation entry, and a direct-call scan of the ELF
+(22 functions to depth 7, no indirect call in the set) finds no PLT call to `__cxa_throw`,
+`__cxa_allocate_exception`, `__cxa_rethrow`, `operator new`/`delete`, `malloc`/`calloc`/`realloc`
+or `abort` in libr15's own code; its calls go to engine imports (`CMemoryContext`,
+`CMemory::Fill`, `CFixedString::SPrintF`, `NWriteLog::WriteLog`, `json_string_value`) whose bodies
+were not scanned. `CNSUser::SendLogInRequest` (`libpnsovr.so` `0x382a4c`, 464 bytes) calls
+`CJson::SetInt`, `SNSLogInRequestv24Send`, `CTcpBroadcaster::ConnectionPeer` and
+`STcpPeer::operator` through imports and makes one indirect call (`blr x9` at `0x382b9c`); it
+cannot be shown non-throwing. Neither is established as exception-free, which is why the contract
+does not depend on it.
+
+The sentinel exports only `nevr_sentinel_marker` and `JNI_OnLoad` (`TestExportAllowlist`), has no
+`thread_local` state of its own (`TestNoEmulatedTLSInHookPath`), and compiles the hook backend
+once into `nevr_quest_got_hook`, which every Quest target links (`TestBackendCompiledOnce`).
+
 `sentinel/pinned_targets.h` holds the targets and callback types for the pinned artifact:
 `clock_gettime` (installed by `entry.cpp`), `CJson::TString` in both libraries, and the
 `SNSConfigRequestv24Send` and `GLOB_DAT` slots as fixtures. Only `clock_gettime` is installed.

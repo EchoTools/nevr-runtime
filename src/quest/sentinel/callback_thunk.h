@@ -8,38 +8,57 @@
  * is armed.
  *
  *   using Thunk = CallbackThunk<MyTag, int(int, const char*)>;
- *   Thunk::Arm(&MyHandler);                       // int MyHandler(Thunk::Fn, int, const char*)
+ *   int MyHandler(Thunk::Fn original, int a, const char* b) noexcept;
+ *   Thunk::Arm(&MyHandler);
  *   hook.Install(target, Thunk::EntryAddress(), Thunk::OriginalOut());
  *
- * Exceptions. The game libraries use C++ exceptions (they import __cxa_throw,
- * __cxa_begin_catch and _Unwind_Resume and carry .gcc_except_table), so the entry
- * is not noexcept and an exception thrown by the ORIGINAL function reaches the
- * game's own handler unchanged, exactly as it would without the hook. The `Fn`
- * a handler receives is a proxy for the original that records whether it was
- * called, whether it returned, and what it returned. What happens when the
- * handler itself throws a std::exception:
+ * The original. Entry reads the original-call pointer once and hands that value to
+ * the handler, so resetting or replacing the published pointer while a call is in
+ * flight cannot make an in-flight call lose its original. GotHook::Install
+ * publishes the original before it changes the slot and keeps it published if the
+ * slot was ever written, so the game cannot reach the "no original" path
+ * (value-initialised Ret, logged) through a hook installed by GotHook.
  *
- *   - the original was not called yet: the failure is logged and counted, and the
- *     original runs once with the call's arguments;
- *   - the original threw: that exception is rethrown to the game (not ours);
- *   - the original already returned: the failure is logged and counted, the
- *     original is NOT called again, and its recorded result is returned.
+ * Exceptions: none cross the thunk, in either direction.
  *
- * An exception that is not a std::exception thrown by a handler propagates to the
- * game's frames like any other; handlers must not throw one. The recorded result
- * requires Ret to be copy-constructible.
+ * Measured on the built Android artifact and on the APK's libc++_shared.so:
+ *   - libr15.so NEEDs libc++_shared.so. That library is a libgcc-style unwinder
+ *     build (its .comment names GCC 4.9.x and clang 5.0) and exports
+ *     _Unwind_Find_FDE, _Unwind_GetCFA, _Unwind_GetIP, _Unwind_RaiseException,
+ *     _Unwind_Resume, __gxx_personality_v0 and __cxa_throw.
+ *   - The sentinel does not NEED it. It links LLVM libunwind and libc++abi
+ *     statically; _Unwind_Resume, _Unwind_GetIP, __unw_getcontext,
+ *     __gxx_personality_v0, __cxa_throw and __cxa_begin_catch are LOCAL symbols.
+ *   - A function that can catch or clean up carries an LSDA under a CIE whose
+ *     augmentation is "zPLR", i.e. it names the sentinel's own personality.
+ * A game exception unwinding through such a frame would hand the game's
+ * _Unwind_Context to the sentinel's personality and unwinder helpers, which read it
+ * as their own structure. (That consequence is inferred from the layouts; no such
+ * crossing has been run on a device.) The same holds in the other direction.
  *
- * Until the original has been published a call returns a value-initialised Ret
- * and logs. GotHook::Install publishes the original before it changes the slot,
- * so the game cannot reach that path through a hook installed by GotHook.
+ * So the contract is structural:
+ *   - This header is included only by translation units built with -fno-exceptions
+ *     (enforced by the #error below). Entry has no landing pad, no LSDA and no
+ *     personality; the unwinder walks past its frame using the CFI alone, which
+ *     both runtimes handle. An exception thrown by the game's original therefore
+ *     passes through Entry untouched.
+ *   - Handlers are `noexcept` (Handler is a noexcept function pointer type, so a
+ *     handler that is not declared noexcept does not compile) and live in the same
+ *     kind of translation unit. A handler must not contain a try/catch or an object
+ *     with a destructor around a call that can reach game code. A try/catch in a
+ *     sentinel-only frame that never calls the game is fine.
+ *   - tests/quest TestHookFramesCarryNoPersonality pins the built artifact: the
+ *     frames of every CallbackThunk member and of the hook handler sit under the
+ *     personality-free "zR" CIE.
  */
 #pragma once
 
+#if defined(__cpp_exceptions)
+#error "callback_thunk.h must be included only by translation units built with -fno-exceptions (see the contract above)"
+#endif
+
 #include <atomic>
 #include <cstdint>
-#include <exception>
-#include <optional>
-#include <type_traits>
 
 #include "hook_log.h"
 
@@ -52,7 +71,7 @@ template <typename Tag, typename Ret, typename... Args>
 class CallbackThunk<Tag, Ret(Args...)> {
  public:
   using Fn = Ret (*)(Args...);
-  using Handler = Ret (*)(Fn original, Args... args);
+  using Handler = Ret (*)(Fn original, Args... args) noexcept;
 
   // The address to install into the GOT slot.
   static void* EntryAddress() noexcept { return reinterpret_cast<void*>(&Entry); }
@@ -60,7 +79,7 @@ class CallbackThunk<Tag, Ret(Args...)> {
   // Where Install stores the original function (the `originalOut` argument).
   static void** OriginalOut() noexcept { return &original_; }
 
-  // The real original function (not the proxy a handler receives).
+  // The real original function.
   static Fn Original() noexcept {
     return reinterpret_cast<Fn>(__atomic_load_n(&original_, __ATOMIC_ACQUIRE));
   }
@@ -80,33 +99,6 @@ class CallbackThunk<Tag, Ret(Args...)> {
   }
 
  private:
-  struct Empty {};
-  using Stored = std::conditional_t<std::is_void_v<Ret>, Empty, Ret>;
-
-  // What the handler did with the original during one call.
-  struct CallState {
-    unsigned calls = 0;
-    bool threw = false;  // set before the original runs, cleared when it returns
-    std::optional<Stored> result;
-  };
-
-  // The `Fn original` a handler receives. Outside a handler call it just forwards.
-  static Ret Proxy(Args... args) {
-    const Fn original = Original();
-    CallState* const state = current_;
-    if (state == nullptr) return original(args...);
-    ++state->calls;
-    state->threw = true;
-    if constexpr (std::is_void_v<Ret>) {
-      original(args...);
-      state->threw = false;
-    } else {
-      state->result.emplace(original(args...));
-      state->threw = false;
-      return *state->result;
-    }
-  }
-
   static Ret Entry(Args... args) {
     calls_.fetch_add(1, std::memory_order_relaxed);
     const Fn original = Original();
@@ -116,24 +108,7 @@ class CallbackThunk<Tag, Ret(Args...)> {
     }
     const Handler handler = handler_.load(std::memory_order_acquire);
     if (handler == nullptr) return original(args...);
-
-    CallState state;
-    struct Scope {
-      CallState* outer;
-      explicit Scope(CallState* inner) : outer(current_) { current_ = inner; }
-      ~Scope() { current_ = outer; }
-    } scope(&state);
-    try {
-      return handler(&Proxy, args...);
-    } catch (const std::exception&) {
-      if (state.threw) throw;
-      if (state.calls == 0) {
-        ReportFault("handler_threw", "call_original");
-        return original(args...);
-      }
-      ReportFault("handler_threw_after_original", "return_original_result");
-      if constexpr (!std::is_void_v<Ret>) return *state.result;
-    }
+    return handler(original, args...);
   }
 
   // Counts every fault; logs the first and then one in every 4096, so a hook on
@@ -150,7 +125,6 @@ class CallbackThunk<Tag, Ret(Args...)> {
   inline static std::atomic<Handler> handler_{nullptr};
   inline static std::atomic<std::uint64_t> calls_{0};
   inline static std::atomic<std::uint64_t> faults_{0};
-  inline static thread_local CallState* current_ = nullptr;
 };
 
 }  // namespace sentinel

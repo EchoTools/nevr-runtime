@@ -10,6 +10,11 @@
 // Nothing here restores memory by hand to fake a success; the only direct slot
 // writes are the ones that stage a hostile state for a negative case.
 //
+// Built with -fno-exceptions, like every translation unit that includes
+// callback_thunk.h. The one place an exception is thrown is thunk_exception_fixture.cpp,
+// built with exceptions, so an exception crosses a thunk frame the way a game exception
+// would.
+//
 // Run: got_hook_test <fixture-dir>
 
 #include <dlfcn.h>
@@ -25,9 +30,10 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
-#include <stdexcept>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include "callback_thunk.h"
@@ -98,7 +104,9 @@ bool ValidFlatJson(const std::string& t) {
 void SilentSink(LogLevel, const char*) {}
 
 int g_invalidLines = 0;
+std::mutex g_captureMutex;
 void CaptureSink(LogLevel level, const char* line) {
+  const std::lock_guard<std::mutex> guard(g_captureMutex);
   if (!ValidFlatJson(line)) {
     ++g_invalidLines;
     std::fprintf(stderr, "invalid JSON log line: %s\n", line);
@@ -153,8 +161,8 @@ struct SubTag {};
 using AddThunk = CallbackThunk<AddTag, int(int, int)>;
 using SubThunk = CallbackThunk<SubTag, int(int, int)>;
 
-int AddPlus100(AddThunk::Fn original, int a, int b) { return original(a, b) + 100; }
-int SubPlus100(SubThunk::Fn original, int a, int b) { return original(a, b) + 100; }
+int AddPlus100(AddThunk::Fn original, int a, int b) noexcept { return original(a, b) + 100; }
+int SubPlus100(SubThunk::Fn original, int a, int b) noexcept { return original(a, b) + 100; }
 
 struct Module {
   void* handle = nullptr;
@@ -535,9 +543,10 @@ void Build(const SynthSpec& spec, void* originalValue, SynthImage* out) {
     put(kDynamic, dyn.data(), dyn.size() * sizeof(Elf64_Dyn));
   }
   // Slots start holding the same recognisable value.
-  for (std::uint64_t slot : {kRelroSlot, kRelroSlot + 8, kRelroSlot + 16, kPlainSlot}) {
+  for (std::uint64_t slot = kRelroSlot; slot < kRelroSlot + 0x400; slot += 8) {
     put(slot, &originalValue, sizeof(originalValue));
   }
+  put(kPlainSlot, &originalValue, sizeof(originalValue));
 
   if (spec.readOnlyBacking) {
     // Written through a read-write descriptor, mapped through a read-only one:
@@ -781,8 +790,8 @@ GotHook* g_raceOtherHook = nullptr;
 // SAME page, and gives it 300 ms to finish. With the lock B is parked until A has
 // stored and re-protected the page; without it B completes in microseconds and
 // protects the page read-only under A, whose store then faults.
-void RaceObserver(void**, void*) {
-  if (!g_raceArmed.exchange(false)) return;
+void RaceObserver(void**, void*, StorePhase phase) {
+  if (phase != StorePhase::kBeforeStore || !g_raceArmed.exchange(false)) return;
   g_raceThread = new std::thread([] {
     void* original = nullptr;
     const GotStatus st = g_raceOtherHook->Install(*g_raceOtherTarget, reinterpret_cast<void*>(&SubImpl),
@@ -858,8 +867,8 @@ void SamePageWritesAreSerialized() {
 
 void* g_originalSeenAtStore = nullptr;
 void* g_entryAtStore = nullptr;
-void PublishObserver(void**, void* value) {
-  if (value == g_entryAtStore) g_originalSeenAtStore = reinterpret_cast<void*>(AddThunk::Original());
+void PublishObserver(void**, void* value, StorePhase phase) {
+  if (phase == StorePhase::kBeforeStore && value == g_entryAtStore) g_originalSeenAtStore = reinterpret_cast<void*>(AddThunk::Original());
 }
 
 // The original has to be visible to the detour before the slot points at it. This
@@ -922,6 +931,234 @@ void ForgetReleasesAStaleHandle() {
   dlclose(m.handle);
 }
 
+// ---- failed re-protect, compare-and-swap, registry bound ----------------------
+
+int g_protectFailuresLeft = 0;  // PROT_READ calls still to fail; negative: all of them
+int FailingProtect(void* addr, std::size_t length, int prot) {
+  if (prot == PROT_READ && g_protectFailuresLeft != 0) {
+    if (g_protectFailuresLeft > 0) --g_protectFailuresLeft;
+    errno = ENOMEM;
+    return -1;
+  }
+  return mprotect(addr, length, prot);
+}
+
+// The slot is written, then the page cannot be made read-only again. The store is
+// rolled back, the failure reported, and the original stays published: a thread
+// may have entered the detour while the hook was live, and the original is the
+// real function.
+void FailedReprotectRollsBackAndKeepsTheOriginal() {
+  for (const int failures : {1, -1}) {  // the retry succeeds / the retry fails too
+    Prepare();
+    SynthSpec spec = OneRel();
+    SynthImage img;
+    Build(spec, reinterpret_cast<void*>(&AddImpl), &img);
+    g_synth = &img;
+    void** slot = reinterpret_cast<void**>(img.image.base + kRelroSlot);
+    QCHECK(mprotect(img.mem, 3 * kPage, PROT_READ) == 0);  // what the loader does to RELRO
+    GotTarget target = SynthTarget();
+    target.expectedOriginal = reinterpret_cast<void*>(&AddImpl);
+    g_protectFailuresLeft = failures;
+    SetProtectFunction(&FailingProtect);
+    GotHook hook;
+    void* sentinelValue = reinterpret_cast<void*>(0x77);
+    void* out = sentinelValue;
+    QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+                  GotStatus::kRestoreProtectFailed);
+    SetProtectFunction(nullptr);
+    QCHECK(!hook.installed());
+    QCHECK(*slot == reinterpret_cast<void*>(&AddImpl));  // rolled back
+    QCHECK(out == reinterpret_cast<void*>(&AddImpl));    // original stays published
+    QCHECK(Count(LogLevel::kError, "\"status\":\"restore_protect_failed\"") == 1);
+    QCHECK(Count(LogLevel::kError, "\"errno\":12") == 1);
+    if (failures > 0) {
+      QCHECK(PagePerms(slot) == "r--p");
+      QCHECK(Errors() == 1);
+    } else {
+      QCHECK(PagePerms(slot) == "rw-p");  // reported, not hidden
+      QCHECK(Count(LogLevel::kError, "\"status\":\"page_left_writable\"") == 1);
+      QCHECK(mprotect(img.mem, 3 * kPage, PROT_READ) == 0);
+    }
+    // The reservation was released: the same slot installs and removes normally.
+    Captured().clear();
+    QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+                  GotStatus::kOk);
+    QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+    g_synth = nullptr;
+  }
+  g_protectFailuresLeft = 0;
+}
+
+void ClobberObserver(void** slot, void*, StorePhase phase) {
+  if (phase == StorePhase::kBeforeStore) *slot = reinterpret_cast<void*>(&SubImpl);
+}
+
+// Install stores only over the original it read. A writer outside the lock that
+// changes the slot after the check and before the store wins; Install reports
+// kSlotChanged and the foreign value stays.
+void InstallIsCompareAndSwap() {
+  Prepare();
+  Module m = Open("libgotfx_consumer_now.so");
+  GotTarget target{"libgotfx_consumer_now.so", "fx_add", RelocKind::kJumpSlot};
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  GotHook hook;
+  void* sentinelValue = reinterpret_cast<void*>(0x99);
+  void* out = sentinelValue;
+  SetStoreObserver(&ClobberObserver);
+  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), &out), GotStatus::kSlotChanged);
+  SetStoreObserver(nullptr);
+  QCHECK(*r.slot == reinterpret_cast<void*>(&SubImpl));  // the other writer's value stays
+  QCHECK(out == sentinelValue);
+  QCHECK(!hook.installed());
+  QCHECK(Count(LogLevel::kError, "\"status\":\"slot_changed\"") == 1);
+  ForceWrite(r.slot, m.realAdd);
+  AddThunk::Arm(&AddPlus100);
+  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+  dlclose(m.handle);
+}
+
+// 64 hooks fit; the 65th is refused with one log line; removing frees the room.
+void RegistryBound() {
+  Prepare();
+  constexpr int kHooks = 65;
+  SynthSpec spec;
+  for (int i = 0; i < kHooks; ++i) {
+    spec.rels.push_back({true, kRelroSlot + 8u * static_cast<unsigned>(i), spec.nums.jumpSlot, 1, 0});
+  }
+  SynthImage img;
+  Build(spec, reinterpret_cast<void*>(&AddImpl), &img);
+  g_synth = &img;
+  std::vector<GotHook> hooks(kHooks);
+  auto target = [](int i) {
+    GotTarget t = SynthTarget();
+    t.slotVaddr = kRelroSlot + 8u * static_cast<unsigned>(i);
+    t.expectedOriginal = reinterpret_cast<void*>(&AddImpl);
+    return t;
+  };
+  void* out = nullptr;
+  int installed = 0;
+  for (int i = 0; i < kHooks - 1; ++i) {
+    if (hooks[i].Install(target(i), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup) == GotStatus::kOk) {
+      ++installed;
+    }
+  }
+  QCHECK(installed == 64);
+  Captured().clear();
+  QCHECK_STATUS(hooks[64].Install(target(64), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+                GotStatus::kRegistryFull);
+  QCHECK(Errors() == 1 && Count(LogLevel::kError, "\"status\":\"registry_full\"") == 1);
+  QCHECK(*reinterpret_cast<void**>(img.image.base + kRelroSlot + 8u * 64) ==
+         reinterpret_cast<void*>(&AddImpl));  // the refused slot was not written
+  QCHECK_STATUS(hooks[0].Remove(), GotStatus::kOk);
+  QCHECK_STATUS(hooks[64].Install(target(64), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+                GotStatus::kOk);
+  for (int i = 1; i < kHooks; ++i) QCHECK_STATUS(hooks[i].Remove(), GotStatus::kOk);
+  g_synth = nullptr;
+}
+
+void AfterStoreClobberObserver(void** slot, void*, StorePhase phase) {
+  if (phase == StorePhase::kAfterStore) *slot = reinterpret_cast<void*>(&SubImpl);
+}
+
+// Our compare-and-swap stored the entry, then another writer overwrote it before the
+// read-back: Install reports kWriteVerifyFailed, leaves their value alone, and keeps
+// the original published for any thread that already jumped into the entry.
+void WriteVerifyFailureKeepsTheOriginalPublished() {
+  Prepare();
+  Module m = Open("libgotfx_consumer_now.so");
+  GotTarget target{"libgotfx_consumer_now.so", "fx_add", RelocKind::kJumpSlot};
+  const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
+  GotHook hook;
+  void* sentinelValue = reinterpret_cast<void*>(0x55);
+  void* out = sentinelValue;
+  SetStoreObserver(&AfterStoreClobberObserver);
+  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), &out), GotStatus::kWriteVerifyFailed);
+  SetStoreObserver(nullptr);
+  QCHECK(*r.slot == reinterpret_cast<void*>(&SubImpl));  // the other writer's value stays
+  QCHECK(out == m.realAdd);                               // not reverted to the entry value
+  QCHECK(!hook.installed());
+  QCHECK(Count(LogLevel::kError, "\"status\":\"write_verify_failed\"") == 1);
+  ForceWrite(r.slot, m.realAdd);
+  AddThunk::Arm(&AddPlus100);
+  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+  dlclose(m.handle);
+}
+
+void* g_clobberSlot = nullptr;
+bool g_clobberOnce = false;
+int ClobberingProtect(void* addr, std::size_t length, int prot) {
+  if (prot == PROT_READ && g_clobberOnce) {
+    g_clobberOnce = false;
+    *static_cast<void**>(g_clobberSlot) = &g_clobberOnce;  // a third value; the page is writable here
+    errno = ENOMEM;
+    return -1;
+  }
+  return mprotect(addr, length, prot);
+}
+
+// The re-protect fails after the compare-and-swap itself failed (our value never
+// stored): the status stays kSlotChanged, the page-left-writable failure is still
+// logged, and the entry value of the caller's pointer is restored.
+void ReprotectFailureDoesNotHideAnEarlierFailure() {
+  Prepare();
+  SynthSpec spec = OneRel();
+  SynthImage img;
+  Build(spec, reinterpret_cast<void*>(&AddImpl), &img);
+  g_synth = &img;
+  void** slot = reinterpret_cast<void**>(img.image.base + kRelroSlot);
+  QCHECK(mprotect(img.mem, 3 * kPage, PROT_READ) == 0);
+  GotTarget target = SynthTarget();
+  target.expectedOriginal = reinterpret_cast<void*>(&AddImpl);
+  g_protectFailuresLeft = -1;
+  SetProtectFunction(&FailingProtect);
+  SetStoreObserver(&ClobberObserver);
+  GotHook hook;
+  void* sentinelValue = reinterpret_cast<void*>(0x66);
+  void* out = sentinelValue;
+  QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+                GotStatus::kSlotChanged);
+  SetStoreObserver(nullptr);
+  SetProtectFunction(nullptr);
+  g_protectFailuresLeft = 0;
+  QCHECK(out == sentinelValue);  // our value was never stored: entry value restored
+  QCHECK(*slot == reinterpret_cast<void*>(&SubImpl));
+  QCHECK(Count(LogLevel::kError, "\"status\":\"page_left_writable\"") == 1);
+  QCHECK(Count(LogLevel::kError, "\"status\":\"slot_changed\"") == 1);
+  QCHECK(mprotect(img.mem, 3 * kPage, PROT_READ) == 0);
+  g_synth = nullptr;
+}
+
+// The re-protect fails after our store, and the slot changed again before the
+// rollback: the rollback compare-and-swap fails, is logged, the other value stays and
+// the original stays published (the entry may still be reachable through it).
+void RollbackCompareAndSwapFailureIsLogged() {
+  Prepare();
+  SynthSpec spec = OneRel();
+  SynthImage img;
+  Build(spec, reinterpret_cast<void*>(&AddImpl), &img);
+  g_synth = &img;
+  void** slot = reinterpret_cast<void**>(img.image.base + kRelroSlot);
+  QCHECK(mprotect(img.mem, 3 * kPage, PROT_READ) == 0);
+  GotTarget target = SynthTarget();
+  target.expectedOriginal = reinterpret_cast<void*>(&AddImpl);
+  g_clobberSlot = slot;
+  g_clobberOnce = true;
+  SetProtectFunction(&ClobberingProtect);
+  GotHook hook;
+  void* sentinelValue = reinterpret_cast<void*>(0x88);
+  void* out = sentinelValue;
+  QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+                GotStatus::kRestoreProtectFailed);
+  SetProtectFunction(nullptr);
+  QCHECK(*slot == static_cast<void*>(&g_clobberOnce));  // not overwritten by the rollback
+  QCHECK(out == reinterpret_cast<void*>(&AddImpl));
+  QCHECK(Count(LogLevel::kError, "\"status\":\"rollback_cas_failed\"") == 1);
+  QCHECK(PagePerms(slot) == "r--p");  // the retry succeeded
+  g_synth = nullptr;
+}
+
 // ---- log lines ----------------------------------------------------------------
 
 // Whatever a caller passes, a line is one valid JSON object: quotes, backslashes,
@@ -951,6 +1188,10 @@ void LogLinesAreValidJson() {
 
 // ---- thunks -----------------------------------------------------------------
 
+// thunk_exception_fixture.cpp, built with exceptions.
+extern "C" int fx_throwing_original(int a, int b);
+extern "C" int fx_call_catching(int (*entry)(int, int), int a, int b, int* result);
+
 struct FaultTag {};
 using FaultThunk = CallbackThunk<FaultTag, int(int, int)>;
 int g_originalCalls = 0;
@@ -958,15 +1199,16 @@ int CountingAdd(int a, int b) {
   ++g_originalCalls;
   return a + b;
 }
-int ThrowingOriginal(int, int) {
-  ++g_originalCalls;
-  throw std::runtime_error("original failure");
-}
-int Throwing(FaultThunk::Fn, int, int) { throw std::runtime_error("handler failure"); }
-int Pass(FaultThunk::Fn original, int a, int b) { return original(a, b); }
-int CallThenThrow(FaultThunk::Fn original, int a, int b) {
-  static_cast<void>(original(a, b));
-  throw std::runtime_error("handler failure after the original");
+int Pass(FaultThunk::Fn original, int a, int b) noexcept { return original(a, b); }
+
+// A handler that is not declared noexcept does not convert to a Handler.
+int NotNoexcept(FaultThunk::Fn original, int a, int b) { return original(a, b); }
+static_assert(std::is_convertible_v<decltype(&Pass), FaultThunk::Handler>);
+static_assert(!std::is_convertible_v<decltype(&NotNoexcept), FaultThunk::Handler>,
+              "thunk handlers must be noexcept");
+int ResetThenCallOriginal(FaultThunk::Fn original, int a, int b) noexcept {
+  FaultThunk::Reset();  // clears the published original while this call is in flight
+  return original(a, b);
 }
 
 struct VoidTag {};
@@ -976,10 +1218,7 @@ void VoidOriginal(int* p) {
   ++g_voidCalls;
   *p += 1;
 }
-void VoidCallThenThrow(VoidThunk::Fn original, int* p) {
-  original(p);
-  throw std::runtime_error("void handler failure");
-}
+void VoidPass(VoidThunk::Fn original, int* p) noexcept { original(p); }
 
 using PinnedThunk = pinned::LibR15TStringThunk;
 const char* g_seenKey = nullptr;
@@ -993,20 +1232,9 @@ const char* PinnedOriginal(const pinned::CJsonOpaque* self, const char* key, con
 }
 const char* g_replacement = "replacement";
 const char* PinnedHandler(PinnedThunk::Fn original, const pinned::CJsonOpaque* self, const char* key,
-                          const char* fallback, std::uint32_t flag) {
+                          const char* fallback, std::uint32_t flag) noexcept {
   const char* r = original(self, key, fallback, flag);
   return std::strcmp(key, "login_host") == 0 ? g_replacement : r;
-}
-
-// True if calling `entry` throws a runtime_error whose message is `what`.
-template <typename F>
-bool ThrowsRuntimeError(F&& call, const char* what) {
-  try {
-    call();
-  } catch (const std::runtime_error& e) {
-    return std::strcmp(e.what(), what) == 0;
-  }
-  return false;
 }
 
 void Thunks() {
@@ -1027,59 +1255,50 @@ void Thunks() {
   g_originalCalls = 0;
   QCHECK(entry(2, 3) == 5);
   QCHECK(g_originalCalls == 1 && FaultThunk::Calls() == 1 && FaultThunk::Faults() == 0);
-  // Handler gets the original and the arguments, and its result is returned.
+  // The handler gets the original and the arguments, and its result is returned.
   FaultThunk::Arm(&Pass);
   QCHECK(entry(4, 5) == 9 && g_originalCalls == 2);
-  // A handler that throws before touching the original never unwinds into the
-  // caller: logged, counted, and the original runs once.
-  FaultThunk::Arm(&Throwing);
-  QCHECK(entry(6, 7) == 13);
-  QCHECK(g_originalCalls == 3 && FaultThunk::Faults() == 1);
-  QCHECK(Count(LogLevel::kError, "\"status\":\"handler_threw\",\"action\":\"call_original\",\"faults\":1") == 1);
-  // A handler that throws AFTER the original returned never causes a second call;
-  // the original's recorded result is returned.
-  FaultThunk::Reset();  // the fault counter restarts so this one is logged
-  *FaultThunk::OriginalOut() = reinterpret_cast<void*>(&CountingAdd);
-  FaultThunk::Arm(&CallThenThrow);
-  Captured().clear();
-  QCHECK(entry(8, 9) == 17);
-  QCHECK(g_originalCalls == 4);
-  QCHECK(FaultThunk::Faults() == 1);
-  QCHECK(Count(LogLevel::kError, "\"status\":\"handler_threw_after_original\"") == 1);
-  // Disarm restores pass-through.
   FaultThunk::Arm(nullptr);
   QCHECK(entry(1, 1) == 2);
 
-  // An exception from the ORIGINAL belongs to the game: it reaches the caller
-  // unchanged, once, and is neither logged nor counted as a fault.
+  // An exception thrown by the original crosses the thunk's frames untouched, with
+  // and without a handler: the catch in the exception-enabled fixture receives it,
+  // the original ran once, and the thunk neither logged nor counted anything.
   FaultThunk::Reset();
   Captured().clear();
-  *FaultThunk::OriginalOut() = reinterpret_cast<void*>(&ThrowingOriginal);
-  g_originalCalls = 0;
-  QCHECK(ThrowsRuntimeError([&] { static_cast<void>(entry(0, 0)); }, "original failure"));
-  QCHECK(g_originalCalls == 1 && FaultThunk::Faults() == 0);
+  *FaultThunk::OriginalOut() = reinterpret_cast<void*>(&fx_throwing_original);
+  int result = -1;
+  QCHECK(fx_call_catching(entry, 0, 0, &result) == 1);
+  QCHECK(result == -1);
   FaultThunk::Arm(&Pass);
-  QCHECK(ThrowsRuntimeError([&] { static_cast<void>(entry(0, 0)); }, "original failure"));
-  QCHECK(g_originalCalls == 2 && FaultThunk::Faults() == 0);
-  QCHECK(Errors() == 0);
+  QCHECK(fx_call_catching(entry, 0, 0, &result) == 1);
+  QCHECK(result == -1);
+  QCHECK(FaultThunk::Calls() == 2 && FaultThunk::Faults() == 0 && Errors() == 0);
+
+  // The in-flight call keeps the original it started with even if the published
+  // pointer is cleared underneath it.
+  FaultThunk::Reset();
+  *FaultThunk::OriginalOut() = reinterpret_cast<void*>(&CountingAdd);
+  FaultThunk::Arm(&ResetThenCallOriginal);
+  g_originalCalls = 0;
+  QCHECK(entry(3, 4) == 7);
+  QCHECK(g_originalCalls == 1 && FaultThunk::Original() == nullptr);
 
   // Faults are counted always and logged first, then one in 4096.
   FaultThunk::Reset();
   Captured().clear();
-  *FaultThunk::OriginalOut() = reinterpret_cast<void*>(&CountingAdd);
-  FaultThunk::Arm(&Throwing);
-  for (int i = 0; i < 5000; ++i) static_cast<void>(entry(0, 0));
+  for (int i = 0; i < 5000; ++i) static_cast<void>(entry(0, 0));  // no original published
   QCHECK(FaultThunk::Faults() == 5000);
-  QCHECK(Count(LogLevel::kError, "\"status\":\"handler_threw\"") == 2);  // faults #1 and #4096
+  QCHECK(Count(LogLevel::kError, "\"status\":\"no_original\"") == 2);  // faults #1 and #4096
 
-  // void signature: same contract, no result to record.
+  // void signature.
   VoidThunk::Reset();
   *VoidThunk::OriginalOut() = reinterpret_cast<void*>(&VoidOriginal);
-  VoidThunk::Arm(&VoidCallThenThrow);
+  VoidThunk::Arm(&VoidPass);
   auto voidEntry = reinterpret_cast<VoidThunk::Fn>(VoidThunk::EntryAddress());
   int counter = 0;
   voidEntry(&counter);
-  QCHECK(counter == 1 && g_voidCalls == 1 && VoidThunk::Faults() == 1);
+  QCHECK(counter == 1 && g_voidCalls == 1 && VoidThunk::Faults() == 0);
   VoidThunk::Reset();
 
   // The CJson::TString signature declared for the Quest libraries: arguments
@@ -1122,6 +1341,12 @@ int main(int argc, char** argv) {
   OriginalIsPublishedBeforeTheSlotChanges();
   LiveProtectionDecidesWhatIsRestored();
   ForgetReleasesAStaleHandle();
+  FailedReprotectRollsBackAndKeepsTheOriginal();
+  InstallIsCompareAndSwap();
+  WriteVerifyFailureKeepsTheOriginalPublished();
+  ReprotectFailureDoesNotHideAnEarlierFailure();
+  RollbackCompareAndSwapFailureIsLogged();
+  RegistryBound();
   LogLinesAreValidJson();
   Thunks();
 

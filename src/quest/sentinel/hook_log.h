@@ -1,7 +1,9 @@
 /* Structured, allocation-free log lines for the Quest hook backend.
  *
- * Every line is one JSON object built in a fixed stack buffer, so it is safe from
- * an ELF constructor and from inside a hooked call:
+ * Every line is one JSON object built in a fixed stack buffer: no heap allocation,
+ * so it can run from an ELF constructor. It is NOT async-signal-safe (it uses
+ * snprintf and __android_log_write) and must not be called from a hooked function
+ * that a signal handler may reach. Format:
  *
  *   {"ts_ms":1760000000000,"level":"error","event":"got_hook","op":"install",...}
  *

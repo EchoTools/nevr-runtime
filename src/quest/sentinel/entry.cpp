@@ -27,20 +27,19 @@ namespace {
 // reconstructed first. clock_gettime is chosen deliberately: its signature is
 // unambiguous POSIX (no risk of a wrong-arity/wrong-return-type call corrupting
 // the engine's real args), and it's called continuously by any real-time engine
-// loop, so a live counter climbing in logcat while sitting in a lobby is an
-// immediate, unambiguous "did the hook take" signal.
+// loop. The install line in the log says the slot was patched; the call counter,
+// reported from JNI_OnLoad, says it fired.
+//
+// This translation unit is built with -fno-exceptions (callback_thunk.h requires
+// it): the handler is noexcept and nothing in it can unwind.
 using ClockThunk = sentinel::pinned::ClockGettimeThunk;
 sentinel::GotHook     g_clockHook;
 std::atomic<uint64_t> g_clockGettimeCalls{0};
 
-int HookedClockGettime(ClockThunk::Fn original, clockid_t clk_id, struct timespec* tp) {
-    const uint64_t n = g_clockGettimeCalls.fetch_add(1, std::memory_order_relaxed) + 1;
-    // Every 300th call: several lines/sec at a real engine's tick rate without
-    // flooding logcat. Real work would filter/aggregate; this is a proof.
-    if (n % 300 == 1) {
-        sentinel::LogFields(sentinel::LogLevel::kInfo, "clock_gettime_proof",
-                            {{"module", "libr15.so"}, {"call", static_cast<long long>(n)}});
-    }
+int HookedClockGettime(ClockThunk::Fn original, clockid_t clk_id, struct timespec* tp) noexcept {
+    // Runs on every clock_gettime libr15 makes, on any thread, possibly from a signal
+    // handler: one atomic increment and the original call, nothing else.
+    g_clockGettimeCalls.fetch_add(1, std::memory_order_relaxed);
     return original(clk_id, tp);
 }
 
@@ -78,6 +77,10 @@ static void nevr_sentinel_ctor() {
 // too. (Under DT_NEEDED loading the runtime does not auto-call this.)
 JNIEXPORT jint JNI_OnLoad(JavaVM* /*vm*/, void* /*reserved*/) {
     sentinel::Arm();
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "clock_gettime_proof",
+                        {{"module", "libr15.so"},
+                         {"calls", static_cast<long long>(
+                                       g_clockGettimeCalls.load(std::memory_order_relaxed))}});
     return JNI_VERSION_1_6;
 }
 
