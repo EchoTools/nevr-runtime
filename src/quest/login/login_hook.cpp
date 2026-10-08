@@ -1,6 +1,5 @@
 #include "quest/login/login_hook.h"
 
-#include <android/log.h>
 #include <dlfcn.h>
 #include <elf.h>
 #include <link.h>
@@ -9,124 +8,108 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <exception>
 #include <limits>
+#include <mutex>
 #include <string>
+
+#include "quest/sentinel/callback_thunk.h"
+#include "quest/sentinel/got_hook.h"
+#include "quest/sentinel/hook_log.h"
 
 namespace QuestLogin {
 
 namespace {
 
-// Pinned artifact: store APK v4987566 (docs/adr/0003 "Pinned artifact"). The hook is installed
-// only when both libraries carry these GNU build ids.
+// Pinned artifact: store APK v4987566 (docs/adr/0003 "Pinned artifact"). Nothing is touched
+// unless libpnsovr.so carries this GNU build id.
 constexpr const char* kPnsovr = "libpnsovr.so";
 constexpr const char* kPnsovrBuildId = "ca47bb8d03e6f43c1825133bbb9c15f174705c51";
-constexpr const char* kR15 = "libr15.so";
-constexpr const char* kR15BuildId = "b243509c08ce677aeb95fa348016949b3fc45230";
-
 constexpr const char* kHookedSymbol = "_ZN10NRadEngine7CNSUser16SendLogInRequestERNS_5CJsonE";
+constexpr std::uint64_t kHookedSlotVaddr = 0x6dd1b8ULL;
 
-// CNSUser layout, measured in both libr15.so and libpnsovr.so: CNSUser::AccountID() const reads
-// [this+0x88]; CNSUser::SendLogInRequest copies [this+0x90] into the SNSUserID platform word.
-// These are the same offsets the PCVR bridge patches (ws_bridge.cpp, user+0x88 / user+0x90).
-constexpr std::size_t kAccountIdOffset = 0x88;
+// CNSOVRUser::AccountID() const @0x1ede14: adrp x8,0x70e000 / ldr x0,[x8,#0x3e0] / ret.
+constexpr std::uint64_t kAccountIdFnVaddr = 0x1ede14ULL;
+constexpr std::uint32_t kAccountIdFnCode[3] = {0xb0002908u, 0xf941f100u, 0xd65f03c0u};
+constexpr std::uint64_t kAccountIdGlobalVaddr = 0x70e3e0ULL;
+
+// CNSUser layout, measured in libr15.so and libpnsovr.so: SendLogInRequest copies
+// [this+0x90] into the SNSUserID platform word; the account id comes from vtable+0x70.
 constexpr std::size_t kPlatformWordOffset = 0x90;
+constexpr std::size_t kAccountIdVtableOffset = 0x70;
 
 using SetStringFn = void (*)(void*, const char*, const char*);
 using SetIntFn = void (*)(void*, const char*, long long);
 using SetBooleanFn = void (*)(void*, const char*, unsigned);
+using ClearFn = void (*)(void*, const char*, unsigned);
 using TStringFn = const char* (*)(const void*, const char*, const char*, unsigned);
 using IntFn = long long (*)(const void*, const char*, long long, unsigned);
 using BooleanFn = unsigned (*)(const void*, const char*, unsigned, unsigned);
-using SendLogInRequestFn = void (*)(void*, void*);
+using IsObjectFn = unsigned (*)(const void*, const char*);
 
+// libpnsovr.so does not link libr15.so (no DT_NEEDED) and defines its own CJson, so the
+// object this hook edits was built by, and must be edited with, libpnsovr's own functions.
 struct CJsonApi {
   SetStringFn set_string = nullptr;
   SetIntFn set_int = nullptr;
   SetBooleanFn set_boolean = nullptr;
+  ClearFn clear = nullptr;
   TStringFn t_string = nullptr;
   IntFn get_int = nullptr;
   BooleanFn get_boolean = nullptr;
+  IsObjectFn is_object = nullptr;
 };
 
-struct HookState {
+struct State {
   IdentitySource* source = nullptr;
   BuildInfo build;
   LogFn log = nullptr;
   CJsonApi api;
+  std::uint64_t* account_id_global = nullptr;
 };
 
-std::atomic<bool> g_installed{false};
-HookState g_state;
-// Written by the hook backend (originalOut) at install; read by Hook(). A void* because the
-// backend's contract is `void**`; converted to the call signature only at the call.
-void* g_original = nullptr;
+State g_state;
+std::atomic<const State*> g_published{nullptr};
+std::mutex g_install_mutex;
+sentinel::GotHook g_hook;
 
-void Log(LogFn log, Level level, const char* line) {
-  if (log != nullptr) log(level, line);
-}
+struct LoginTag {};
+using LoginThunk = sentinel::CallbackThunk<LoginTag, void(void*, void*)>;
 
-struct BuildIdProbe {
-  const char* name;
-  std::string build_id;
-  bool found = false;
-};
-
-std::string Hex(const std::uint8_t* bytes, std::size_t size) {
-  static const char digits[] = "0123456789abcdef";
-  std::string out;
-  out.reserve(size * 2);
-  for (std::size_t i = 0; i < size; ++i) {
-    out.push_back(digits[bytes[i] >> 4]);
-    out.push_back(digits[bytes[i] & 0xf]);
-  }
-  return out;
-}
-
-int PhdrCallback(dl_phdr_info* info, std::size_t, void* data) {
-  auto* probe = static_cast<BuildIdProbe*>(data);
-  if (info->dlpi_name == nullptr) return 0;
-  const char* slash = std::strrchr(info->dlpi_name, '/');
-  const char* base = slash != nullptr ? slash + 1 : info->dlpi_name;
-  if (std::strcmp(base, probe->name) != 0) return 0;
-  probe->found = true;
-  for (int i = 0; i < info->dlpi_phnum; ++i) {
-    const ElfW(Phdr)& ph = info->dlpi_phdr[i];
-    if (ph.p_type != PT_NOTE) continue;
-    const std::uint8_t* cursor = reinterpret_cast<const std::uint8_t*>(info->dlpi_addr + ph.p_vaddr);
-    const std::uint8_t* end = cursor + ph.p_memsz;
-    while (cursor + sizeof(ElfW(Nhdr)) <= end) {
-      ElfW(Nhdr) note;
-      std::memcpy(&note, cursor, sizeof(note));
-      const std::uint8_t* name = cursor + sizeof(note);
-      const std::size_t name_size = (note.n_namesz + 3u) & ~3u;
-      const std::uint8_t* desc = name + name_size;
-      const std::size_t desc_size = (note.n_descsz + 3u) & ~3u;
-      if (desc + desc_size > end) break;
-      if (note.n_type == NT_GNU_BUILD_ID && note.n_namesz == 4 &&
-          std::memcmp(name, "GNU", 4) == 0) {
-        probe->build_id = Hex(desc, note.n_descsz);
-        return 1;
-      }
-      cursor = desc + desc_size;
-    }
-  }
-  return 1;
-}
-
-BuildIdProbe ProbeBuildId(const char* soName) {
-  BuildIdProbe probe;
-  probe.name = soName;
-  dl_iterate_phdr(&PhdrCallback, &probe);
-  return probe;
-}
-
-// CNSUser identity words, guarded: the object must be a CNSOVRUser, whose vtable lives in
-// libpnsovr.so. A pointer that fails the check is never written through.
+// The CNSOVRUser the hook was handed. Every access is guarded: the object must have its
+// vtable inside libpnsovr.so before anything is read or called through it.
 class LiveUser final : public UserAccess {
  public:
-  explicit LiveUser(void* user) : user_(user) {}
+  LiveUser(void* user, std::uint64_t* account_global) : user_(user), global_(account_global) {}
 
+  bool Provider(std::uint64_t& code) const override {
+    if (!Valid()) return false;
+    std::memcpy(&code, static_cast<const std::uint8_t*>(user_) + kPlatformWordOffset, sizeof(code));
+    return true;
+  }
+
+  bool WireAccountId(std::uint64_t& id) const override {
+    if (!Valid()) return false;
+    const auto* vtable = *static_cast<void* const* const*>(user_);
+    using AccountIdFn = std::uint64_t (*)(const void*);
+    const AccountIdFn fn = reinterpret_cast<AccountIdFn>(vtable[kAccountIdVtableOffset / sizeof(void*)]);
+    id = fn(user_);
+    return true;
+  }
+
+  bool SetAccountId(std::uint64_t id) override {
+    if (!Valid() || global_ == nullptr) return false;
+    previous_ = __atomic_load_n(global_, __ATOMIC_ACQUIRE);
+    have_previous_ = true;
+    __atomic_store_n(global_, id, __ATOMIC_RELEASE);
+    return true;
+  }
+
+  void RestoreAccountId() override {
+    if (have_previous_ && global_ != nullptr) __atomic_store_n(global_, previous_, __ATOMIC_RELEASE);
+    have_previous_ = false;
+  }
+
+ private:
   bool Valid() const {
     if (user_ == nullptr || (reinterpret_cast<std::uintptr_t>(user_) & 7u) != 0) return false;
     void* vtable = nullptr;
@@ -137,29 +120,15 @@ class LiveUser final : public UserAccess {
     return std::strcmp(slash != nullptr ? slash + 1 : info.dli_fname, kPnsovr) == 0;
   }
 
-  bool Read(UserIdWords& out) const override {
-    if (!Valid()) return false;
-    const auto* bytes = static_cast<const std::uint8_t*>(user_);
-    std::memcpy(&out.account_id, bytes + kAccountIdOffset, sizeof(out.account_id));
-    std::memcpy(&out.platform_word, bytes + kPlatformWordOffset, sizeof(out.platform_word));
-    return true;
-  }
-
-  bool Write(const UserIdWords& words) override {
-    if (!Valid()) return false;
-    auto* bytes = static_cast<std::uint8_t*>(user_);
-    std::memcpy(bytes + kAccountIdOffset, &words.account_id, sizeof(words.account_id));
-    std::memcpy(bytes + kPlatformWordOffset, &words.platform_word, sizeof(words.platform_word));
-    return true;
-  }
-
- private:
   void* user_;
+  std::uint64_t* global_;
+  std::uint64_t previous_ = 0;
+  bool have_previous_ = false;
 };
 
-// NRadEngine::CJson through its exported members. A missing key returns the caller's fallback
-// unchanged (docs/adr/0003 "Config-string seam"), so presence is "the answer differs from at
-// least one of two different fallbacks".
+// NRadEngine::CJson through libpnsovr's exported members. A missing key returns the caller's
+// fallback unchanged (docs/adr/0003 "Config-string seam"), so presence is "the answer differs
+// from at least one of two different fallbacks".
 class LiveJson final : public JsonAccess {
  public:
   LiveJson(const CJsonApi& api, void* json) : api_(api), json_(json) {}
@@ -169,6 +138,7 @@ class LiveJson final : public JsonAccess {
     api_.set_int(json_, path, static_cast<long long>(value));
   }
   void SetBoolean(const char* path, bool value) override { api_.set_boolean(json_, path, value ? 1u : 0u); }
+  void Clear(const char* path) override { api_.clear(json_, path, 0u); }
 
   std::string GetString(const char* path, bool& present) const override {
     static const char kFallback[] = "";
@@ -191,25 +161,24 @@ class LiveJson final : public JsonAccess {
     return present && lo != 0;
   }
 
+  bool IsObject(const char* path) const override { return api_.is_object(json_, path) != 0; }
+
  private:
   const CJsonApi& api_;
   void* json_;
 };
 
-// The replacement for the slot. Always ends in the original call: a refused rewrite leaves the
-// game's own login intact (docs/adr/0003 contract 4), and nothing thrown crosses this boundary.
-void Hook(void* user, void* json) {
-  HookState& state = g_state;
-  try {
-    if (state.source != nullptr && json != nullptr) {
-      LiveUser live_user(user);
-      LiveJson live_json(state.api, json);
-      RewriteLogin(live_user, live_json, *state.source, state.build, state.log);
-    }
-  } catch (const std::exception&) {
-    Log(state.log, Level::Error, "quest.login outcome=exception: rewrite threw, original login left as is");
+// The handler behind the GOT slot. The thunk calls it with the original function; the
+// original is called last and always, so a refused or failed rewrite leaves the game's own
+// login intact. RewriteLogin never throws.
+void HandleSendLogInRequest(LoginThunk::Fn original, void* user, void* json) {
+  const State* state = g_published.load(std::memory_order_acquire);
+  if (state != nullptr && json != nullptr) {
+    LiveUser live_user(user, state->account_id_global);
+    LiveJson live_json(state->api, json);
+    RewriteLogin(live_user, live_json, *state->source, state->build, state->log);
   }
-  reinterpret_cast<SendLogInRequestFn>(g_original)(user, json);
+  original(user, json);
 }
 
 template <typename Fn>
@@ -220,6 +189,37 @@ bool Resolve(void* handle, const char* symbol, Fn& out) {
   return true;
 }
 
+bool ResolveCJson(CJsonApi& api) {
+  void* handle = dlopen(kPnsovr, RTLD_NOW | RTLD_NOLOAD);
+  return handle != nullptr &&
+         Resolve(handle, "_ZN10NRadEngine5CJson9SetStringEPKcS2_", api.set_string) &&
+         Resolve(handle, "_ZN10NRadEngine5CJson6SetIntEPKcx", api.set_int) &&
+         Resolve(handle, "_ZN10NRadEngine5CJson10SetBooleanEPKcj", api.set_boolean) &&
+         Resolve(handle, "_ZN10NRadEngine5CJson5ClearEPKcj", api.clear) &&
+         Resolve(handle, "_ZNK10NRadEngine5CJson7TStringEPKcS2_j", api.t_string) &&
+         Resolve(handle, "_ZNK10NRadEngine5CJson3IntEPKcxj", api.get_int) &&
+         Resolve(handle, "_ZNK10NRadEngine5CJson7BooleanEPKcjj", api.get_boolean) &&
+         Resolve(handle, "_ZNK10NRadEngine5CJson8IsObjectEPKc", api.is_object);
+}
+
+// Proves the account-id global: the three instructions of CNSOVRUser::AccountID() are the
+// pinned ones (so base+0x70e3e0 is the address that function loads), and the address lies in
+// a writable PT_LOAD of the image. Returns nullptr unless both hold.
+std::uint64_t* ProveAccountIdGlobal(const sentinel::ElfImage& image) {
+  std::uint32_t code[3];
+  std::memcpy(code, reinterpret_cast<const void*>(image.base + kAccountIdFnVaddr), sizeof(code));
+  if (std::memcmp(code, kAccountIdFnCode, sizeof(code)) != 0) return nullptr;
+  for (std::size_t i = 0; i < image.phnum; ++i) {
+    const Elf64_Phdr& ph = image.phdr[i];
+    if (ph.p_type != PT_LOAD || (ph.p_flags & PF_W) == 0) continue;
+    if (kAccountIdGlobalVaddr >= ph.p_vaddr &&
+        kAccountIdGlobalVaddr + sizeof(std::uint64_t) <= ph.p_vaddr + ph.p_memsz) {
+      return reinterpret_cast<std::uint64_t*>(image.base + kAccountIdGlobalVaddr);
+    }
+  }
+  return nullptr;
+}
+
 }  // namespace
 
 const char* InstallStateName(InstallState state) {
@@ -228,63 +228,62 @@ const char* InstallStateName(InstallState state) {
     case InstallState::AlreadyInstalled: return "already-installed";
     case InstallState::ModuleNotLoaded: return "module-not-loaded";
     case InstallState::BuildMismatch: return "build-mismatch";
+    case InstallState::SlotInvalid: return "slot-invalid";
     case InstallState::SymbolMissing: return "symbol-missing";
     default: return "hook-failed";
   }
 }
 
-void AndroidLog(Level level, const char* line) {
-  const int priority = level == Level::Error     ? ANDROID_LOG_ERROR
-                       : level == Level::Warning ? ANDROID_LOG_WARN
-                                                 : ANDROID_LOG_INFO;
-  __android_log_write(priority, "NEVR-Login", line);
+void SentinelLog(Level level, const char* line) {
+  const sentinel::LogLevel mapped = level == Level::Error     ? sentinel::LogLevel::kError
+                                    : level == Level::Warning ? sentinel::LogLevel::kWarn
+                                                              : sentinel::LogLevel::kInfo;
+  sentinel::LogEvent(mapped, "%s", line);
 }
 
-InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build,
-                                 ImportHookFn hookImport, LogFn log) {
-  if (g_installed.load(std::memory_order_acquire)) return InstallState::AlreadyInstalled;
-  if (source == nullptr || hookImport == nullptr) return InstallState::HookFailed;
+InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build, LogFn log) {
+  if (log == nullptr) log = &SentinelLog;
+  const std::lock_guard<std::mutex> lock(g_install_mutex);
+  if (g_published.load(std::memory_order_acquire) != nullptr) return InstallState::AlreadyInstalled;
+  if (source == nullptr) return InstallState::HookFailed;
 
-  char line[256];
-  const BuildIdProbe pnsovr = ProbeBuildId(kPnsovr);
-  const BuildIdProbe r15 = ProbeBuildId(kR15);
-  if (!pnsovr.found || !r15.found) return InstallState::ModuleNotLoaded;
-  if (pnsovr.build_id != kPnsovrBuildId || r15.build_id != kR15BuildId) {
-    std::snprintf(line, sizeof(line),
-                  "quest.login install=%s: pinned build ids differ (pnsovr_match=%d r15_match=%d), no hook installed",
-                  InstallStateName(InstallState::BuildMismatch), pnsovr.build_id == kPnsovrBuildId ? 1 : 0,
-                  r15.build_id == kR15BuildId ? 1 : 0);
-    Log(log, Level::Error, line);
-    return InstallState::BuildMismatch;
+  auto refuse = [&](InstallState state, const char* why) {
+    char line[200];
+    std::snprintf(line, sizeof(line), "event=quest_login_install state=%s reason=%s",
+                  InstallStateName(state), why);
+    log(Level::Error, line);
+    return state;
+  };
+
+  sentinel::ElfImage image;
+  if (!sentinel::FindLoadedImage(kPnsovr, &image)) return InstallState::ModuleNotLoaded;
+  char build_id[64] = {};
+  if (!sentinel::ReadBuildId(image, build_id, sizeof(build_id)) ||
+      std::strcmp(build_id, kPnsovrBuildId) != 0) {
+    return refuse(InstallState::BuildMismatch, "pinned_build_id");
   }
-
-  // CJson lives in libr15.so; the rewrite calls its exports directly.
-  void* r15_handle = dlopen(kR15, RTLD_NOW | RTLD_NOLOAD);
+  std::uint64_t* account_global = ProveAccountIdGlobal(image);
+  if (account_global == nullptr) return refuse(InstallState::SlotInvalid, "account_id_global");
   CJsonApi api;
-  const bool resolved =
-      r15_handle != nullptr &&
-      Resolve(r15_handle, "_ZN10NRadEngine5CJson9SetStringEPKcS2_", api.set_string) &&
-      Resolve(r15_handle, "_ZN10NRadEngine5CJson6SetIntEPKcx", api.set_int) &&
-      Resolve(r15_handle, "_ZN10NRadEngine5CJson10SetBooleanEPKcj", api.set_boolean) &&
-      Resolve(r15_handle, "_ZNK10NRadEngine5CJson7TStringEPKcS2_j", api.t_string) &&
-      Resolve(r15_handle, "_ZNK10NRadEngine5CJson3IntEPKcxj", api.get_int) &&
-      Resolve(r15_handle, "_ZNK10NRadEngine5CJson7BooleanEPKcjj", api.get_boolean);
-  if (!resolved) {
-    Log(log, Level::Error, "quest.login install=symbol-missing: a CJson export is absent, no hook installed");
-    return InstallState::SymbolMissing;
-  }
+  if (!ResolveCJson(api)) return refuse(InstallState::SymbolMissing, "pnsovr_cjson_export");
 
   g_state.source = source;
   g_state.build = build;
   g_state.log = log;
   g_state.api = api;
-  if (!hookImport(kPnsovr, kHookedSymbol, reinterpret_cast<void*>(&Hook), &g_original) ||
-      g_original == nullptr) {
-    Log(log, Level::Error, "quest.login install=hook-failed: backend refused the libpnsovr SendLogInRequest slot");
-    return InstallState::HookFailed;
+  g_state.account_id_global = account_global;
+  g_published.store(&g_state, std::memory_order_release);
+  LoginThunk::Arm(&HandleSendLogInRequest);
+
+  const sentinel::GotTarget target(kPnsovr, kHookedSymbol, sentinel::RelocKind::kJumpSlot,
+                                   kPnsovrBuildId, kHookedSlotVaddr);
+  if (g_hook.Install(target, LoginThunk::EntryAddress(), LoginThunk::OriginalOut()) !=
+      sentinel::GotStatus::kOk) {
+    LoginThunk::Arm(nullptr);
+    g_published.store(nullptr, std::memory_order_release);
+    return refuse(InstallState::HookFailed, "got_backend");
   }
-  g_installed.store(true, std::memory_order_release);
-  Log(log, Level::Info, "quest.login install=installed module=libpnsovr.so slot=CNSUser::SendLogInRequest");
+  log(Level::Info, "event=quest_login_install state=installed slot=CNSUser::SendLogInRequest");
   return InstallState::Installed;
 }
 

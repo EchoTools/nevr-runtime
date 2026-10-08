@@ -118,6 +118,7 @@ Pinned artifact: `build/android-arm64/repack/r15_nevr-sentinel_signed.apk`, pack
 | `libr15.so` | `8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20` | `b243509c08ce677aeb95fa348016949b3fc45230` |
 | `libpnsradmatchmaking.so` | `36236ab1df5783da57c064b0fbccc3a61c0e1d150c208022fbfc9cd6e5ed60ee` | `8c4fddc079eae65909530132a56c48da48b2708c` |
 | `libpnsrad.so` | `d9995c877a6623d8e48879f80c5749f313a0eba8a00b35a936c0df60e6d23aa8` | `c58fb82e42d9ed6564744cfa10f05af74aedd0ee` |
+| `libpnsovr.so` | `26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79` | `ca47bb8d03e6f43c1825133bbb9c15f174705c51` |
 
 These match the ReVault records. They identify a local repack, not an installed headset build.
 
@@ -143,10 +144,42 @@ The sentinel constructor therefore cannot assume the matchmaking module is loade
 its slot. Its slot stays inactive until a post-load install is validated.
 
 `GotHook` reaches this seam by symbol name after the owning module is loaded, so there is no
-need to detour `CNSUser::SendLogInRequest` (`libr15.so` `0x1932838`) or
-`CNSRadMatchmaking::ConnectMatchmaker` (`libpnsradmatchmaking.so` `0x1b2274`); both have unknown
-calling conventions and neither is a hook site. This covers config-string reads only. It does
-not establish a Quest HTTP connect hook or every URL source.
+need to detour `CNSRadMatchmaking::ConnectMatchmaker` (`libpnsradmatchmaking.so` `0x1b2274`);
+its calling convention is unknown and it is not a hook site. This covers config-string reads
+only. It does not establish a Quest HTTP connect hook or every URL source.
+
+## Login interception
+
+`CNSOVRUser::SendLogInRequest(CJson&)` (`libpnsovr.so` `0x1ec584`) tail-calls
+`CNSUser::SendLogInRequest(CJson&)` through a PLT stub; the BIND_NOW `R_AARCH64_JUMP_SLOT` at
+GOT `0x6dd1b8` names `_ZN10NRadEngine7CNSUser16SendLogInRequestERNS_5CJsonE`, so `GotHook`
+takes it (`src/quest/login/login_hook.cpp`). At that call `x0` is the `CNSOVRUser` and `x1` the
+Oculus login CJson; nothing is serialized yet. `SNSLogInRequestv2::Send` (`libr15.so`
+`0x1932a08`, `libpnsovr.so` `0x382c1c`) then writes `SNSLoginId` (16 bytes), `SNSUserID`
+(16 bytes) and the compact JSON in one `CTcpBroadcaster::Send`.
+
+| Wire field | Source on Quest | What the rewrite does |
+| --- | --- | --- |
+| JSON | the CJson argument | replaces the login fields with the shared `LoginProfile` set, all-or-nothing |
+| platform | `[CNSUser+0x90] & 0xf`; the `CNSOVRUser` constructor (`0x1edd68`-`0x1edd74`) stores 4 (OVR_ORG) | checks it is 4 |
+| account id | `this->AccountID()` by virtual call (`vtable+0x70`, `0x382b90`/`0x382b9c`); `CNSOVRUser` overrides it (vtable slot `0x6a1300`) with `0x1ede14`: `adrp x8,0x70e000; ldr x0,[x8,#0x3e0]; ret` | writes that global (`0x70e3e0`, filled by `GotLoggedInUserOrgIdCb` from `ovr_OrgScopedID_GetID`) after checking the three instructions, then calls the same virtual to prove the wire value |
+
+`[CNSUser+0x88]` is not the wire account id for a `CNSOVRUser`. A virtual slot is a data
+relocation, which `GotHook` does not reach, so the global is written instead.
+
+`libpnsovr.so` has no `DT_NEEDED` on `libr15.so` and defines its own `NRadEngine::CJson`
+(`SetString` `0x35917c`, `SetInt` `0x35bc14`, `SetBoolean` `0x358ccc`, `Clear` `0x358098`,
+`TString` `0x358bb4`, `Int` `0x359e24`, `Boolean` `0x35a0a8`, `IsObject` `0x359a6c`). The login
+CJson is built by `libpnsovr.so`, so the rewrite edits it with those exports resolved from the
+`libpnsovr.so` handle, never with `libr15.so`'s.
+
+The game logs the outgoing login: `Send` copies the CJson, clears `access_token`, `nonce`,
+`authticket`, `authcode`, `authtoken` and `userhash`, and logs the copy at level 2
+(`[LOGIN] Logging in %s: %s`, string `0x3173c79`). Any other member is logged in clear, so
+the login JSON carries no credential: the server authenticates the session from the WebSocket
+upgrade (`session_ws.go` reads `password` from the URL query; `LoginProfile` in
+`server/evr/login_request.go` has no `password` member). The NEVR token travels in
+`access_token`, which the game's own logger clears.
 
 ## Endpoint and authentication
 

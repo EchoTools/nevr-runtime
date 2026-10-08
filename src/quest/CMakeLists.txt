@@ -39,6 +39,8 @@ target_link_libraries(nevr_quest_login_profile PRIVATE nlohmann_json::nlohmann_j
 add_library(nevr_quest_login STATIC
   login/login_rewrite.cpp
   login/login_hook.cpp
+  sentinel/got_hook.cpp
+  sentinel/hook_log.cpp
   "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/login_profile.cpp")
 target_include_directories(nevr_quest_login PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(nevr_quest_login PUBLIC nlohmann_json::nlohmann_json PRIVATE log dl)
