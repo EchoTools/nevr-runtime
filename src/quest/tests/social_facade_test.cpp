@@ -341,7 +341,10 @@ void TestCreateRetriesAfterInterval() {
   g_now += 2;
   Update(w, 1);
   QCHECK(g_sent.size() == 1);  // inside the five-second retry interval (libpnsovr 0x2045f4: cmp w8, #5)
-  g_now += 3;
+  g_now += 2;
+  Update(w, 1);
+  QCHECK(g_sent.size() == 1);  // 4 s: still inside it
+  g_now += 1;
   Update(w, 1);
   QCHECK(g_sent.size() == 2);
 }
@@ -681,6 +684,20 @@ void TestEventQueueDropsOnlyWhatALaterEventRepeats() {
   QCHECK(g_rec.calls.size() == 256 && g_rec.calls[254] == "u" + std::to_string(kCbJoinFailed) + ":4");
   QCHECK(g_rec.calls.size() == 256 && g_rec.calls[255] == "v" + std::to_string(kCbHostChanged));
   QCHECK(CountLines("social_events_dropped") == 1);  // logged once, counted always
+}
+
+void TestRepeatedUpdatesAreMerged() {
+  World w;
+  Init(w, MakeCallbacks());
+  CreateParty(w, 777);
+  FeedParty(w, "PartyJoinNotify", 777, 3001);
+  Update(w, 0);
+  g_rec.calls.clear();
+  for (int i = 0; i < 50; ++i) FeedParty(w, "PartyUpdateNotify", 777, 0);          // 50 Updated in a row: one
+  for (int i = 0; i < 50; ++i) FeedParty(w, "PartyUpdateMemberNotify", 777, 3001);  // 50 MemberUpdated(1): one
+  Update(w, 0);
+  QCHECK(CalledCount("v" + std::to_string(kCbUpdated)) == 1);
+  QCHECK(CalledCount("u" + std::to_string(kCbMemberUpdated) + ":1") == 1);
 }
 
 void TestEventQueueHardLimit() {
@@ -1186,6 +1203,7 @@ int main() {
   TestEventBatchCarriesTheRemainder();
   TestInviteNotificationsAreMerged();
   TestEventQueueDropsOnlyWhatALaterEventRepeats();
+  TestRepeatedUpdatesAreMerged();
   TestEventQueueHardLimit();
   TestMemberCountNeverExceedsTheGamesArray();
   TestFailedSendsDoNotStickTheModel();

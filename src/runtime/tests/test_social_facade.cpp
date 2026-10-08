@@ -827,6 +827,25 @@ TEST(SocialParty, AnAbandonedJoinGivesTheInviteBackAndFailsToTheGame) {
   EXPECT_TRUE(state.Snapshot().invites.empty());
 }
 
+TEST(SocialParty, TargetedRequestsRecordTheAccountTheyAreAimedAt) {
+  SocialParty::State state;
+  state.SetSelf(100);
+  ASSERT_TRUE(FeedParty(state, "PartyCreateSuccess", U64s({7, 100})));
+  ASSERT_TRUE(FeedParty(state, "PartyJoinNotify", U64s({7, 301})));
+  ASSERT_TRUE(FeedParty(state, "PartyJoinNotify", U64s({7, 302})));
+  const auto pass = state.Pass(2);
+  ASSERT_EQ(pass.size(), 1u);
+  EXPECT_EQ(pass[0].target, 302u);
+  ASSERT_TRUE(FeedParty(state, "PartyPassNotify", U64s({7, 100})));
+  const auto kick = state.Kick(1);
+  ASSERT_EQ(kick.size(), 1u);
+  EXPECT_EQ(kick[0].target, 301u);
+  ASSERT_TRUE(FeedParty(state, "PartyInviteNotify", U64s({9, 303})));
+  const auto dismiss = state.Dismiss(0);
+  ASSERT_EQ(dismiss.size(), 1u);
+  EXPECT_EQ(dismiss[0].target, 303u);
+}
+
 TEST(SocialParty, AnInviteIsQueuedOncePerTargetBehindTheCreate) {
   SocialParty::State state;
   state.SetSelf(100);
