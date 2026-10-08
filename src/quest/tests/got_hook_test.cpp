@@ -33,6 +33,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include "callback_thunk.h"
@@ -1199,6 +1200,12 @@ int CountingAdd(int a, int b) {
   return a + b;
 }
 int Pass(FaultThunk::Fn original, int a, int b) noexcept { return original(a, b); }
+
+// A handler that is not declared noexcept does not convert to a Handler.
+int NotNoexcept(FaultThunk::Fn original, int a, int b) { return original(a, b); }
+static_assert(std::is_convertible_v<decltype(&Pass), FaultThunk::Handler>);
+static_assert(!std::is_convertible_v<decltype(&NotNoexcept), FaultThunk::Handler>,
+              "thunk handlers must be noexcept");
 int ResetThenCallOriginal(FaultThunk::Fn original, int a, int b) noexcept {
   FaultThunk::Reset();  // clears the published original while this call is in flight
   return original(a, b);
