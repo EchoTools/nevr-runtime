@@ -16,7 +16,6 @@ namespace {
 
 constexpr std::size_t kMaxUriBytes = 2048;
 constexpr std::size_t kMaxKeyBytes = 512;
-constexpr std::size_t kMaxNameLogBytes = 48;
 // A file of thousands of bad keys must not become thousands of log writes at startup.
 constexpr std::size_t kMaxFileWarnings = 32;
 
@@ -81,15 +80,17 @@ const char* ValidateValue(Kind kind, std::string_view v) {
   return "";
 }
 
-// A name taken from the file is logged only when it looks like a config key: short, lowercase
-// letters, digits, '_' or '.'. Anything else (a value pasted as a key, a token) is not echoed.
-std::string SafeName(const std::string& name) {
-  if (name.empty() || name.size() > kMaxNameLogBytes) return "<unloggable>";
-  for (const char ch : name) {
-    const bool ok = (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '.';
-    if (!ok) return "<unloggable>";
+// A name taken from the file is logged only when it is one of ours. Anything else (a typo, a value
+// pasted as a key, a token of any shape) is counted, never echoed.
+const char* KnownName(const std::string& name) {
+  if (name == "features") return "features";
+  for (const KeySpec& k : kKeys) {
+    if (name == k.name) return k.name;
   }
-  return name;
+  for (const FeatureSpec& f : kFeatures) {
+    if (name == f.name) return f.name;
+  }
+  return "<unknown>";
 }
 
 void Add(LoadResult& r, LogLevel level, std::string message) {
@@ -137,6 +138,8 @@ void ApplyFileImpl(LoadResult& r, const std::string& text, WarnBudget& budget) {
   // The parser keeps the last of two equal keys; the callback sees every key so duplicates are logged.
   std::vector<std::set<std::string>> seen;
   std::map<std::string, std::size_t> duplicates;
+  std::size_t unknownKeys = 0;
+  std::size_t unknownFeatures = 0;
   const nlohmann::json::parser_callback_t onParse = [&seen, &duplicates](int, nlohmann::json::parse_event_t event,
                                                                          nlohmann::json& parsed) {
     if (event == nlohmann::json::parse_event_t::object_start) {
@@ -150,7 +153,7 @@ void ApplyFileImpl(LoadResult& r, const std::string& text, WarnBudget& budget) {
   };
   const nlohmann::json doc = nlohmann::json::parse(text, onParse, /*allow_exceptions=*/false);
   for (const auto& entry : duplicates) {
-    warn("config file duplicate key=" + SafeName(entry.first) + " extra=" + std::to_string(entry.second) +
+    warn(std::string("config file duplicate key=") + KnownName(entry.first) + " extra=" + std::to_string(entry.second) +
          " last value wins");
   }
   if (doc.is_discarded()) {
@@ -173,7 +176,7 @@ void ApplyFileImpl(LoadResult& r, const std::string& text, WarnBudget& budget) {
       if (name == k.name) spec = &k;
     }
     if (spec == nullptr) {
-      warn("config file unknown key=" + SafeName(name) + " ignored");
+      warn("config file unknown key #" + std::to_string(++unknownKeys) + " ignored");
       continue;
     }
     if (!value.is_string()) {
@@ -201,7 +204,7 @@ void ApplyFileImpl(LoadResult& r, const std::string& text, WarnBudget& budget) {
       if (item.key() == f.name) spec = &f;
     }
     if (spec == nullptr) {
-      warn("config file unknown feature=" + SafeName(item.key()) + " ignored");
+      warn("config file unknown feature #" + std::to_string(++unknownFeatures) + " ignored");
       continue;
     }
     if (!item.value().is_boolean()) {
