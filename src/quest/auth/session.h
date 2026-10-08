@@ -60,7 +60,9 @@ class LinkPresenter {
   virtual void Clear() = 0;
 };
 
-enum class Readiness { Starting, Refreshing, AwaitingUser, Ready, Failed, Stopped };
+// Expired: the access token (or the refresh token behind it) is dead and no replacement
+// is in hand yet; Token() serves nothing. Failed: login gave up.
+enum class Readiness { Starting, Refreshing, AwaitingUser, Ready, Expired, Failed, Stopped };
 
 const char* ReadinessName(Readiness r);
 
@@ -78,6 +80,9 @@ struct SessionConfig {
   std::string http_key;
   std::string login_url;  // page the player opens, without the code
   int refresh_attempts = 3;
+  // Consecutive failed poll requests (transport error or non-200) after which the
+  // device-code login gives up. A 3 s poll interval makes the default a 15 s outage.
+  int poll_failure_limit = 5;
   std::chrono::seconds refresh_retry_pause{2};
   std::chrono::seconds background_period{60};
 };
@@ -105,7 +110,9 @@ class Session {
   bool RunDeviceLogin(CachedAuthToken& out);
   void Adopt(const CachedAuthToken& auth, Readiness state);
   void SetState(Readiness state);
+  // Runs until stopped, or until a re-login after the credentials died fails.
   void BackgroundRefresh(CachedAuthToken auth);
+  bool StopRequested() const;
   void Log(nevr::auth::LogLevel level, const std::string& message) const;
 
   SessionConfig config_;
@@ -115,6 +122,10 @@ class Session {
   LinkPresenter& presenter_;
   nevr::auth::LogSink log_;
 
+  // Serialises Start/Stop (and so every touch of worker_). Never held by the worker.
+  std::mutex lifecycle_mutex_;
+  // Guards snapshot_ and stop_. The log sink is never called with it held, so a sink may
+  // call Get().
   mutable std::mutex mutex_;
   Snapshot snapshot_;
   bool stop_ = false;

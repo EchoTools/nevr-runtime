@@ -6,8 +6,10 @@
 #include "core/auth_refresh.h"
 #include "core/auth_token_model.h"
 #include "core/device_auth_flow.h"
+#include "quest/auth/ca_bundle.h"
 #include "quest/auth/file_store.h"
 #include "quest/auth/session.h"
+#include "quest/tests/mini_test.h"
 
 #include <nlohmann/json.hpp>
 
@@ -34,47 +36,7 @@ using namespace nevr::auth;
 using namespace nevr::quest_auth;
 using std::chrono::seconds;
 
-// ---------------------------------------------------------------- mini harness
-struct TestCase {
-  const char* name;
-  void (*fn)();
-};
-std::vector<TestCase>& Registry() {
-  static std::vector<TestCase> r;
-  return r;
-}
-struct Registrar {
-  Registrar(const char* n, void (*f)()) { Registry().push_back({n, f}); }
-};
-int g_failures = 0;
-#define TEST(name)                                  \
-  void name();                                      \
-  const Registrar name##_registrar(#name, &name);   \
-  void name()
-#define CHECK(cond)                                                                    \
-  do {                                                                                 \
-    if (!(cond)) {                                                                     \
-      std::fprintf(stderr, "  CHECK failed %s:%d: %s\n", __FILE__, __LINE__, #cond);   \
-      ++g_failures;                                                                    \
-    }                                                                                  \
-  } while (0)
-#define CHECK_EQ(a, b)                                                                              \
-  do {                                                                                              \
-    const auto va_ = (a);                                                                           \
-    const auto vb_ = (b);                                                                           \
-    if (!(va_ == vb_)) {                                                                            \
-      std::fprintf(stderr, "  CHECK_EQ failed %s:%d: %s == %s\n", __FILE__, __LINE__, #a, #b);      \
-      ++g_failures;                                                                                 \
-    }                                                                                               \
-  } while (0)
-
-bool WaitUntil(const std::function<bool()>& pred, int timeout_ms = 5000) {
-  for (int i = 0; i < timeout_ms; ++i) {
-    if (pred()) return true;
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  return pred();
-}
+using namespace mini_test;
 
 // ---------------------------------------------------------------- fixtures
 std::string B64Url(const std::string& in) {
@@ -166,6 +128,8 @@ struct Call {
 class FakeHttp : public HttpClient {
  public:
   std::function<HttpResponse(const std::string& endpoint, const std::string& body)> handler;
+  std::atomic<int> interrupts{0};
+  void Interrupt() override { ++interrupts; }
   HttpResponse PostJson(const std::string& url, const std::string& body) override {
     const size_t a = url.find("/device/auth/");
     const size_t b = url.find('?', a);
@@ -370,7 +334,7 @@ TEST(a_failed_refresh_leaves_the_token_record_untouched) {
   const std::vector<Case> cases = {
       {"transport", NoTransport(), RefreshOutcome::TransportFailed},
       {"http500", Status(500), RefreshOutcome::Rejected},
-      {"http401", Status(401), RefreshOutcome::Rejected},
+      {"http401", Status(401), RefreshOutcome::Denied},
       {"garbage", garbage, RefreshOutcome::Malformed},
       {"array", notObject, RefreshOutcome::Malformed},
       {"no_token", Ok({{"refresh_token", "x"}}), RefreshOutcome::NoAccessToken},
@@ -849,24 +813,338 @@ TEST(link_presenter_reports_failure_when_it_cannot_write) {
   CHECK_EQ(p.Present("u"), intptr_t(0));
 }
 
+
+// ---------------------------------------------------------------- refresh classification
+TEST(refresh_denied_means_the_server_refuses_the_token_other_statuses_are_retryable) {
+  for (const long status : {400L, 401L, 403L}) {
+    CachedAuthToken a = CachedWithRefresh();
+    HttpResponse r = Status(status);
+    CHECK(ApplyRefreshResponse(a, r, kT0, nullptr) == RefreshOutcome::Denied);
+  }
+  for (const long status : {429L, 500L, 502L, 503L}) {
+    CachedAuthToken a = CachedWithRefresh();
+    HttpResponse r = Status(status);
+    CHECK(ApplyRefreshResponse(a, r, kT0, nullptr) == RefreshOutcome::Rejected);
+  }
+}
+
+TEST(refresh_log_wording_tells_bad_json_from_json_of_the_wrong_shape) {
+  const auto outcome_log = [](const std::string& body) {
+    CachedAuthToken a = CachedWithRefresh();
+    HttpResponse r;
+    r.transport_ok = true;
+    r.status = 200;
+    r.body = body;
+    LogCapture log;
+    CHECK(ApplyRefreshResponse(a, r, kT0, log.Sink()) == RefreshOutcome::Malformed);
+    return log.All();
+  };
+  CHECK(outcome_log("<html>").find("was not valid JSON") != std::string::npos);
+  CHECK(outcome_log("[]").find("unexpected shape") != std::string::npos);
+  CHECK(outcome_log("{\"access_token\":1}").find("unexpected shape") != std::string::npos);
+  CHECK(outcome_log("[]").find("not valid JSON") == std::string::npos);
+}
+
+// ---------------------------------------------------------------- CA bundle
+std::string ScratchDir(const std::string& name) {
+  const std::string dir = "build/quest-shared-host/scratch/" + name;
+  std::filesystem::remove_all(dir);
+  std::filesystem::create_directories(dir);
+  return dir;
+}
+void WriteFile(const std::string& path, const std::string& data) {
+  std::ofstream(path, std::ios::binary) << data;
+}
+const char kFakePem[] = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\nCertificate:\n  text dump\n";
+
+TEST(der_is_wrapped_as_a_pem_certificate_block) {
+  CHECK_EQ(DerToPem(std::string("\x30\x03\x02\x01\x05", 5)),
+           std::string("-----BEGIN CERTIFICATE-----\nMAMCAQU=\n-----END CERTIFICATE-----\n"));
+}
+
+TEST(ca_bundle_takes_pem_and_der_and_skips_everything_else) {
+  const std::string dir = ScratchDir("ca-mixed");
+  WriteFile(dir + "/aaaa1111.0", kFakePem);
+  WriteFile(dir + "/bbbb2222.0", std::string("\x30\x03\x02\x01\x05", 5));
+  WriteFile(dir + "/readme.txt", "not a certificate");
+  WriteFile(dir + "/empty.0", "");
+  LogCapture log;
+  const CaBundle b = LoadCaBundle({dir}, log.Sink());
+  CHECK_EQ(b.certificates, size_t(2));
+  CHECK(b.pem.find("AAAA") != std::string::npos);
+  CHECK(b.pem.find("MAMCAQU=") != std::string::npos);
+  CHECK(b.pem.find("not a certificate") == std::string::npos);
+  CHECK(log.All().find("certificates=2 skipped_files=2") != std::string::npos);
+}
+
+TEST(ca_bundle_prefers_the_first_directory_that_has_certificates_and_fails_loudly_with_none) {
+  const std::string apex = ScratchDir("ca-apex");
+  const std::string sys = ScratchDir("ca-system");
+  WriteFile(sys + "/a.0", kFakePem);
+  WriteFile(sys + "/b.0", kFakePem);
+  {
+    LogCapture log;
+    CHECK_EQ(LoadCaBundle({apex, sys}, log.Sink()).certificates, size_t(2));  // apex empty: fall through
+    CHECK(log.All().find("held no certificates") != std::string::npos);
+  }
+  WriteFile(apex + "/c.0", kFakePem);
+  CHECK_EQ(LoadCaBundle({apex, sys}, nullptr).certificates, size_t(1));  // apex wins, not merged
+  {
+    LogCapture log;
+    CHECK_EQ(LoadCaBundle({"build/quest-shared-host/scratch/nope"}, log.Sink()).certificates, size_t(0));
+    CHECK(log.All().find("fail closed") != std::string::npos);
+  }
+}
+
+// ---------------------------------------------------------------- credential store location and hygiene
+TEST(the_private_directory_comes_from_the_process_package_name_or_not_at_all) {
+  const std::string cmd("com.readyatdawn.r15\0\0", 21);
+  CHECK_EQ(AppInternalFilesDirFromCmdline(cmd), std::string("/data/data/com.readyatdawn.r15/files"));
+  CHECK_EQ(AppInternalFilesDirFromCmdline("com.readyatdawn.r15"), std::string("/data/data/com.readyatdawn.r15/files"));
+  for (const char* bad : {"", "nodot", "com.x:service", "../x.y", "a..b", ".a.b", "a.b.", "com.x y", "/system/bin/app_process"}) {
+    CHECK_EQ(AppInternalFilesDirFromCmdline(bad), std::string());
+  }
+}
+
+TEST(a_store_without_a_private_directory_neither_loads_nor_saves_and_says_so) {
+  LogCapture log;
+  FileCredentialStore store("", log.Sink());
+  CHECK(store.Load(kT0).refresh_token.empty());
+  CHECK(!store.Save(CachedWithRefresh("rt-nowhere")));
+  CHECK(log.All().find("no app-internal directory") != std::string::npos);
+  CHECK(log.All().find("rt-nowhere") == std::string::npos);
+}
+
+TEST(the_store_never_follows_a_symlink_on_load_or_save) {
+  const std::string dir = ScratchDir("store-symlink");
+  const std::string path = dir + "/.credentials.json";
+  const std::string real = dir + "/real.json";
+  WriteFile(real, SerializeCredentialsJson(CachedWithRefresh("rt-behind-link")));
+  CHECK(::symlink("real.json", path.c_str()) == 0);
+  LogCapture log;
+  FileCredentialStore store(path, log.Sink());
+  CHECK(store.Load(kT0).refresh_token.empty());  // O_NOFOLLOW: the link is refused
+  CHECK(log.All().find("unreadable") != std::string::npos);
+
+  // A symlink squatting on the temp name must not redirect the write.
+  const std::string victim = dir + "/victim.txt";
+  WriteFile(victim, "untouched");
+  std::filesystem::remove(path);
+  CHECK(::symlink("victim.txt", (path + ".tmp").c_str()) == 0);
+  CHECK(store.Save(CachedWithRefresh("rt-saved")));
+  std::ifstream in(victim);
+  std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  CHECK_EQ(text, std::string("untouched"));
+  CHECK_EQ(store.Load(kT0).refresh_token, std::string("rt-saved"));
+}
+
+TEST(a_stale_temp_file_from_a_crashed_run_does_not_block_a_save) {
+  const std::string dir = ScratchDir("store-stale");
+  const std::string path = dir + "/.credentials.json";
+  WriteFile(path + ".tmp", "half written garbage");
+  FileCredentialStore store(path, nullptr);
+  CHECK(store.Save(CachedWithRefresh("rt-fresh")));
+  CHECK_EQ(store.Load(kT0).refresh_token, std::string("rt-fresh"));
+  CHECK(!std::filesystem::exists(path + ".tmp"));
+}
+
+// ---------------------------------------------------------------- session: poll failures
+TEST(session_one_failed_poll_request_does_not_end_the_login) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  auto polls = std::make_shared<std::atomic<int>>(0);
+  http.handler = [polls](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint == "request") return Ok({{"code", "C"}});
+    if (polls->fetch_add(1) == 0) return NoTransport();
+    return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 3600)}, {"refresh_token", "rt"}});
+  };
+  Session s(TestConfig(), http, clock, store, presenter, nullptr);
+  s.Start();
+  clock.Allow(2);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK_EQ(http.Count("poll"), 2);
+  s.Stop();
+}
+
+TEST(session_a_permanent_poll_error_gives_up_after_the_failure_limit_and_logs_the_status) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  LogCapture log;
+  http.handler = [](const std::string& endpoint, const std::string&) -> HttpResponse {
+    return endpoint == "request" ? Ok({{"code", "C"}}) : Status(400);
+  };
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  clock.Allow(100);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  CHECK_EQ(http.Count("poll"), 5);  // the default limit, not the five-minute deadline (100 polls)
+  CHECK(log.All().find("5/5 consecutive") != std::string::npos);
+  CHECK(log.All().find("http_status=400") != std::string::npos);
+  CHECK_EQ(store.SaveCount(), size_t(0));
+  s.Stop();
+}
+
+// ---------------------------------------------------------------- session: credentials that die
+TEST(session_an_expired_refresh_token_publishes_expired_and_starts_a_new_device_login) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  LogCapture log;
+  auto logins = std::make_shared<std::atomic<int>>(0);
+  http.handler = [logins](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint == "request") return Ok({{"code", "C"}});
+    if (endpoint == "poll") {
+      const int n = ++*logins;
+      return Ok({{"status", "verified"},
+                 {"access_token", MakeJwt(n == 1 ? kT0 + 400 : kT0 + 9000)},
+                 {"refresh_token", n == 1 ? "rt-a" : "rt-b"},
+                 {"refresh_token_expires_in", n == 1 ? 2000 : 2592000}});
+    }
+    return Status(500);
+  };
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  clock.Allow(1);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  clock.Advance(2500);  // access token and refresh token are both dead now
+  clock.Allow(2);       // one background period, then the poll wait of the second login
+  CHECK(WaitUntil([&] { return presenter.presented.load() == 2; }));
+  CHECK(WaitUntil([&] { return s.Token() == MakeJwt(kT0 + 9000); }));
+  CHECK_EQ(http.Count("refresh"), 0);  // an expired refresh token is not sent
+  CHECK(log.All().find("auth state ready -> expired") != std::string::npos);
+  CHECK(log.All().find("the refresh token has expired") != std::string::npos);
+  CHECK_EQ(store.Last().refresh_token, std::string("rt-b"));
+  s.Stop();
+}
+
+TEST(session_a_refresh_the_server_denies_starts_a_new_device_login_instead_of_retrying_forever) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  LogCapture log;
+  auto logins = std::make_shared<std::atomic<int>>(0);
+  http.handler = [logins](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint == "request") return Ok({{"code", "C"}});
+    if (endpoint == "poll") {
+      const int n = ++*logins;
+      return Ok({{"status", "verified"},
+                 {"access_token", MakeJwt(n == 1 ? kT0 + 320 : kT0 + 9000)},
+                 {"refresh_token", n == 1 ? "rt-a" : "rt-b"},
+                 {"refresh_token_expires_in", 2592000}});
+    }
+    return Status(401);
+  };
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  clock.Allow(1);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  clock.Allow(2);  // background period (token is inside the lead window), then the second poll wait
+  CHECK(WaitUntil([&] { return s.Token() == MakeJwt(kT0 + 9000); }));
+  CHECK_EQ(http.Count("refresh"), 1);
+  CHECK_EQ(presenter.presented.load(), 2);
+  CHECK(log.All().find("the server refuses the refresh token") != std::string::npos);
+  s.Stop();
+}
+
+TEST(session_publishes_expired_while_refresh_keeps_failing_and_serves_no_token) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  http.handler = [](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint == "request") return Ok({{"code", "C"}});
+    if (endpoint == "poll")
+      return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 320)}, {"refresh_token", "rt1"},
+                 {"refresh_token_expires_in", 2592000}});
+    return Status(503);
+  };
+  Session s(TestConfig(), http, clock, store, presenter, nullptr);
+  s.Start();
+  clock.Allow(1);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  clock.Advance(400);
+  clock.Allow(1);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Expired; }));
+  CHECK(s.Token().empty());
+  CHECK_EQ(store.SaveCount(), size_t(1));  // the cache from the login, untouched by the failures
+  s.Stop();
+}
+
+// ---------------------------------------------------------------- session lifetime
+TEST(session_concurrent_stops_both_return_and_leave_it_stopped) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  DeviceHandler(http, 1000000, kT0 + 3600);
+  Session s(TestConfig(), http, clock, store, presenter, nullptr);
+  s.Start();
+  CHECK(WaitUntil([&] { return presenter.presented.load() == 1; }));
+  std::thread a([&] { s.Stop(); });
+  std::thread b([&] { s.Stop(); });
+  a.join();
+  b.join();
+  CHECK(s.Get().readiness == Readiness::Stopped);
+  CHECK(http.interrupts.load() >= 1);
+}
+
+TEST(session_log_sink_may_call_back_into_the_session) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  DeviceHandler(http, 0, kT0 + 3600);
+  Session* self = nullptr;
+  std::atomic<int> sink_calls{0};
+  const LogSink sink = [&](LogLevel, const std::string&) {
+    if (self != nullptr) (void)self->Get();  // would deadlock if a lock were held across the sink
+    ++sink_calls;
+  };
+  Session s(TestConfig(), http, clock, store, presenter, sink);
+  self = &s;
+  s.Start();
+  clock.Allow(1);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK(sink_calls.load() > 0);
+  s.Stop();
+}
+
+TEST(session_stop_does_not_wait_for_a_blocked_request) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  std::mutex m;
+  std::condition_variable cv;
+  bool entered = false;
+  http.handler = [&](const std::string&, const std::string&) -> HttpResponse {
+    std::unique_lock<std::mutex> l(m);
+    entered = true;
+    cv.notify_all();
+    cv.wait(l, [&] { return http.interrupts.load() > 0; });  // a real client returns when interrupted
+    return NoTransport(-2);
+  };
+  Session s(TestConfig(), http, clock, store, presenter, nullptr);
+  s.Start();
+  {
+    std::unique_lock<std::mutex> l(m);
+    CHECK(cv.wait_for(l, std::chrono::seconds(5), [&] { return entered; }));
+  }
+  std::thread stopper([&] { s.Stop(); });
+  // Interrupt() is called without the handler's mutex; wake the handler's wait.
+  CHECK(WaitUntil([&] { return http.interrupts.load() > 0; }));
+  { std::lock_guard<std::mutex> l(m); }  // order the notify after the handler is waiting or has seen the flag
+  cv.notify_all();
+  stopper.join();
+  CHECK(s.Get().readiness == Readiness::Stopped);
+}
+
 }  // namespace
 
-int main(int argc, char** argv) {
-  // Optional substring filter: `auth_core_test session_start` runs only matching tests.
-  const std::string filter = argc > 1 ? argv[1] : "";
-  int ran = 0;
-  for (const TestCase& t : Registry()) {
-    if (!filter.empty() && std::string(t.name).find(filter) == std::string::npos) continue;
-    const int before = g_failures;
-    try {
-      t.fn();
-    } catch (const std::exception& e) {
-      std::fprintf(stderr, "  exception: %s\n", e.what());
-      ++g_failures;
-    }
-    std::printf("%s %s\n", g_failures == before ? "PASS" : "FAIL", t.name);
-    ++ran;
-  }
-  std::printf("%d tests, %d failed checks\n", ran, g_failures);
-  return g_failures == 0 ? 0 : 1;
-}
+int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }
