@@ -48,7 +48,10 @@ class ReleaseContractTest(unittest.TestCase):
         for target in targets:
             self.assertIn(f"--target {target}", recipe)
             self.assertIn(target, recipe.split("for test_name in ", 1)[1].split("; do", 1)[0])
-        self.assertIn('wine "$bin"', recipe)
+        # Every binary runs through run_test, which bounds it with timeout so a hang fails the gate.
+        self.assertIn('run_test "$bin"', recipe)
+        self.assertIn('timeout -k 10 900 wine "$1"', recipe)
+        self.assertNotIn('\n    wine "$bin"', recipe)
         self.assertIn('if [[ ! -f "$bin" ]]; then', recipe)
 
     def test_url_diagnostic_sinks_use_redaction_and_hide_reasons(self):
