@@ -494,6 +494,15 @@ void TestExceptionContainment() {
   QCHECK(w.facade->SlotFailures() == 1);
 }
 
+void TestLocalAccount() {
+  // The process-wide model: SetLocalAccount makes the account the facade's local member.
+  SetLocalAccount(4242, "bob");
+  const SocialParty::View view = SocialParty::Global().Snapshot();
+  QCHECK(view.selfId == 4242 && view.selfName == "bob");
+  SetLocalAccount(4242, nullptr);  // no name: the id stays, the name is not invented
+  QCHECK(SocialParty::Global().Snapshot().selfId == 4242);
+}
+
 void TestFrameWalker() {
   World w;
   w.party.SetSelf(kSelf, "alice");
@@ -536,6 +545,7 @@ int main() {
   TestRecentlyMet();
   TestExceptionContainment();
   TestFrameWalker();
+  TestLocalAccount();
   sentinel::SetLogSink(previous);
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "social_facade_test: %d check(s) failed\n", quest_test::Failures());

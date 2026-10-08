@@ -798,6 +798,11 @@ Ports ProductionPorts() {
   return ports;
 }
 
+void SetLocalAccount(std::uint64_t accountId, const char* displayName) {
+  SocialParty::Global().SetSelf(accountId, displayName != nullptr ? std::string(displayName) : std::string());
+  LogFields(LogLevel::kInfo, "social_local_account", {{"account", static_cast<long long>(accountId)}});
+}
+
 Facade& Facade::Instance() {
   static Facade facade(ProductionPorts());
   return facade;

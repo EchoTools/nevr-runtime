@@ -42,6 +42,11 @@ struct Ports {
 // The process-wide models and SocialParty::Send.
 Ports ProductionPorts();
 
+// The signed-in account, in the NEVR id space the whole facade speaks: the id the login hands the game
+// and the name to show for it. The login adapter calls it once the service accepts the login; until then
+// the facade reports no local user and sends no party request. Safe from any thread.
+void SetLocalAccount(std::uint64_t accountId, const char* displayName);
+
 class Facade {
  public:
   explicit Facade(const Ports& ports);

@@ -2,7 +2,8 @@
 
 Status: accepted. The login-profile builder and the redirect policy are shared today
 (`src/runtime/compat/login_profile.{h,cpp}`, `src/runtime/lifecycle/service_redirect.{h,cpp}`).
-The rest is not implemented; the work is tracked in #158 and the test regime is ADR 0004.
+The social facade is implemented and host-tested in `src/quest/social/` but not linked into the
+sentinel. The rest is not implemented; the work is tracked in #158 and the test regime is ADR 0004.
 
 ## Outcome
 
@@ -128,10 +129,10 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    unknown binary, a failed validation or a partial install leaves the original call intact
    and emits one structured error.
 5. **Social.** Portable roster, party and name rules in
-   `src/runtime/compat/social_{roster,party,names}.*` are reused after dependency validation.
-   The 75-slot Windows facade and `echovr.exe` offsets are not a Quest ABI: a Quest provider
-   adapter maps verified Quest slots, objects and callbacks to the same events. `nevr_social`
-   is declared only for implemented handlers.
+   `src/runtime/compat/social_{roster,party,names}.*` are shared with the Windows facade. The 75-slot
+   Windows facade and `echovr.exe` offsets are not a Quest ABI: `src/quest/social/` is a Quest
+   provider adapter over the same models with the 76-slot Quest vtable (section "Social provider").
+   `nevr_social` is declared only for implemented handlers.
 
 ## Config-string seam (the first hook)
 
@@ -249,6 +250,176 @@ original-call trampoline, restores page permissions and instruction-cache cohere
 under Android's security policy. No blind branch at a cached address. A third-party backend is
 integrated through the dependency system and verified on the real binary. A failed install
 leaves no partial patch. Hook frequency is measured before any blocking call is added.
+
+## Social provider
+
+The Quest game has two social providers and uses one of them for friends, parties and rooms.
+Everything below was read from the pinned store build (`libr15.so` build id `b243509c...`,
+`libpnsovr.so` `ca47bb8d...`, `libpnsrad.so` `c58fb82e...`) with `readelf`, `llvm-objdump` and ReVault.
+Addresses are ELF vaddrs. ReVault's decompilation prints pointer immediates into `libpnsovr.so` data and
+`FUN_` names 0x100000 higher than the ELF (the vtable it shows as `0x7a1240` is the ELF's `0x6a1240`);
+the ELF values are used here.
+
+### Which provider serves what
+
+`CR15Game::Initialize` (`libr15.so` 0x11f9b40) calls `CNSProvider::Create` (0x192f3e4). That function
+loads the module by name, then calls its exported `InitGlobals` with the game's `CTcpBroadcaster`
+(`CNSProvider::TcpBroadcaster()` at 0x1915d04 returns the global at 0x379d3e8; the call is at 0x192f530).
+The providers it creates:
+
+| Handle | Module | Condition |
+| --- | --- | --- |
+| `CR15Game` +0x84f8 | `pnsovr` (rodata 0x2ba11f7) | bit 27 of the flags word at `CR15Game`+0x7ad8 is clear. The constructor stores 0x40000000. |
+| `CR15Game` +0x8508 | `pnsdemo` (0x2ba1215) | bit 27 set. `PreprocessCommandLine` sets it at 0x11f7348 when the command line has `-noovr`. The APK has no `libpnsdemo.so`. |
+| `CR15Game` +0x8500 | `pnsrad` (0x2ba1233) | always |
+
+Nothing else selects between them: the function reads that flags word, the Android permission check and
+string literals. There is no configuration key. The microphone provider is chosen separately, by a
+symbol at +0x84f0 that defaults to OVR and becomes RAD when a `-moderator*` argument sets bit 20.
+
+`CR15NetGame`'s constructor (0x1283db8) stores the handles at +0x10 (primary: pnsovr), +0x18
+(microphone) and +0x20 (pnsrad). The calls into `CNSProvider` in `libr15.so`, by handle:
+
+| Handle | Calls |
+| --- | --- |
+| +0x10 (pnsovr) | `Social` (1, at 0x12866a4), `Users`, `IAP`, `RichPresence` (1 each, 0x12860a4, 0x1286530, 0x1286670), `ProviderID` (9), `UserProviderID` (19) |
+| +0x18 (microphone) | `Mic*` |
+| +0x20 (pnsrad) | `Voip*` (encoder, decoder, packet size, sample rate) |
+
+`CNSProvider::Friends`, `Party` and `Activities` have no call site in `libr15.so`: no PLT stub exists for
+them and no direct branch targets them. Each provider module exports only the methods it implements,
+and `CNSProvider::Social` looks the name up with `dlsym`:
+
+- `libpnsovr.so`: `Users`, `IAP`, `RichPresence`, `Social`, `CheckEntitlement`, `Mic*`, `Voip*`.
+- `libpnsrad.so`: `Users`, `Friends`, `Party`, `Activities`, `Mic*`, `Voip*`. It exports no `Social`.
+
+So on Quest the social object (friends, party, rooms, invites, recently met) is pnsovr's `CNSOVRSocial`,
+returned by `Social()` (the exported function at 0x2077d8 returns the global at 0x70e420). The game
+stores it at `CR15NetGame` +0x647c8 and reaches the friend list, party and invites through its vtable.
+pnsrad's `Users`/`Friends`/`Party` objects are constructed (`InitGlobals` at 0x20632c, sizes 0x428,
+0x420, 0x430, 0x2c8, on the game's broadcaster) but nothing in the game asks for them.
+
+### What the PCVR pnsrad-enabler does and why
+
+`src/runtime/patch/pnsrad_enabler.cpp` makes `echovr.exe` load `pnsrad.dll` for every provider slot and
+repairs what that breaks:
+
+- It overwrites the `pnsovr` and `pnsdemo` strings in `echovr.exe` data with `pnsrad`, and NOPs the
+  OVR branch in `PlatformModuleDecisionAndInitialize`, so the Oculus runtime is never required.
+- It patches `pnsrad.dll`'s login-provider check and the identity and state guards in `LogInSuccessCB` and
+  `LoginIdResponseCB` so the `LoginRequest` the bridge injects is accepted although pnsrad's own state
+  machine never produced it.
+- It makes pnsrad's exported `UserProviderID` return the OVR symbol, because the game compares a friend
+  id's provider with it and every id the runtime builds is `OVR-ORG-<id>`.
+- It re-points `pnsradmatchmaking.dll`'s compiled matchmaker host to the loopback listener.
+
+pnsrad exports no `Social`, so on PCVR the social accessor (`echovr.exe` 0x1406169c0) returns null; the
+runtime's social facade (`src/runtime/patch/social_facade*.cpp`) supplies a `CNSISocial` object whose
+vtable mirrors `CNSOVRSocial`'s, and `ObserveSocialFrames` in `src/runtime/compat/ws_bridge.cpp` feeds
+`SocialRoster` and `SocialParty` from the service's SNS messages. Every id in that path is a NEVR
+account id (`SocialParty::MemberUuid` derives the party UUID from `OVR-ORG-<id>`). On PCVR the enabler is
+what removes the Oculus provider; the facade is what provides the social object. Both are needed there.
+
+### Id spaces on Quest
+
+- The local member: `CNSOVRSocial::AddMember` (libpnsovr 0x2049f4) stores the 8 bytes at libpnsovr
+  0x70e3e0 into `[this+0x2e0][0]`. The login rewrite sets that global to the NEVR account id (#221
+  review; the global's writer was not re-measured here).
+- Remote members come from the Oculus platform callbacks (`GotRemoteOrgIdCB`, 0x1f9090, from the #221
+  review; not re-measured here) and are Oculus org-scoped ids.
+- `Host` (0x2051fc) returns `[this+0x2e0][owner index]` and `MemberId` (0x205260) returns
+  `[this+0x2e0][i]`, so a party mixes the two spaces.
+- The game compares a friend id's provider with `CNSProvider::UserProviderID(primary)` (`FriendId`,
+  libr15 0x129b6f8). pnsovr's export returns the global at libpnsovr 0x70e380, a value set at run time
+  that was not read here.
+
+### Options
+
+1. **Select pnsrad as the primary provider** (the PCVR enabler's route; the string `pnsovr` at libr15
+   0x2ba11f7, or the `-noovr` flag, which selects `pnsdemo`). `Social`, `IAP` and `RichPresence` would
+   resolve against a module that exports none of them, so the game gets no social object at all
+   (`CR15NetGame::Initialize` skips the social callback registration when `Social()` returns null), and pnsovr's login, entitlement
+   check and `Users` go with it. It also replaces the login flow the #221 rewrite hooks. pnsrad's
+   `Friends` and `Party` stay unreachable. This alone does not produce NEVR friends or parties.
+2. **Rewrite the remote-member id path** (`GotRemoteOrgIdCB`). Party and room state stay in the Oculus
+   platform: the service never sees a party, the friend list is the Oculus one, and a NEVR id for an
+   Oculus org id needs a server-side mapping the client does not have. It fixes the ids and delivers none
+   of the PCVR friends or party behavior.
+3. **Replace the `CNSOVRSocial` slots in place** (76 `R_AARCH64_ABS64` relocations in libpnsovr's
+   `.data.rel.ro`, `_ZTVN10NRadEngine12CNSOVRSocialE` at 0x6a1468). Same logic as the facade, but it needs
+   a data-slot write primitive `GotHook` does not have, and the Oculus-side state machine keeps running
+   against a half-replaced object.
+4. **Hand the game a different `CNSISocial` object** by swapping the `CNSProvider::Social` PLT slot in
+   libr15. Chosen.
+
+### The facade
+
+`src/quest/social/` is the Quest counterpart of the PCVR facade.
+
+- **Hook point.** libr15's `R_AARCH64_JUMP_SLOT` for `_ZN10NRadEngine11CNSProvider6SocialEm` at
+  0x36ef528 (BIND_NOW, one relocation for the symbol, defined in libr15 itself at 0x192fe20), the same
+  kind of seam as the config-string hook. It has one call site, so it runs once per run. The handler calls
+  the original and replaces the result only when its first word equals libpnsovr's load bias plus
+  0x6a1478 (the address point of `CNSOVRSocial`'s vtable, stored by its constructor at 0x203238) and
+  libpnsovr's build id is the pinned one. A null result, a missing pnsovr, another build or another
+  class passes through unchanged with one structured line.
+- **Object.** 0xbb0 bytes (what pnsovr allocates), vtable of 76 free functions in Quest slot order
+  (`social_abi.h`). Quest slots equal the PCVR facade's plus one from slot 12, where the Itanium ABI has
+  two destructor slots. The fields the game and the engine's non-virtual `CNSISocial` code read
+  directly keep their offsets: counts at +0x200/+0x204, member JSON array +0x248, max members +0x250
+  (`CNSIRichPresence::Set`, 0x1919000), lobby uuid/match type/team/type/flags at +0x260/+0x270/+0x278/
+  +0x27a/+0x27c, room id +0x2a8, owner index +0x2b0, join policy +0x2b4. The facade keeps a pointer to
+  its owner in the last word.
+- **Callbacks.** `Initialize` copies the 15 delegates (0x20 bytes each, context, 16 inline bytes, proxy)
+  that `CR15NetGame::Initialize` builds (0x12866ac..0x1286a60). Their order is the PCVR order:
+  created, joined, join failed, updated, host changed, left, kicked, invitation accepted (the gate),
+  deep link, member joined, member updated, member left, friends refreshed, invite failed, invite
+  received. They run on the game thread from `Update`.
+- **Ids.** IDs are returned by value in x0 (AAPCS64); there is no hidden result pointer.
+  Everything the facade reports is a NEVR account id from `SocialParty`/`SocialRoster`, which the
+  service's messages fill; the local member is the account passed to `SetLocalAccount`.
+- **Frames.** `ObserveFrames` walks the EVR frames the loopback bridge relays and applies the
+  server-to-game ones by CSymbol64 hash, as `ObserveSocialFrames` does by name. Requests the models ask
+  for go out through `SocialParty::SetSender`.
+- **Containment.** Every slot is `noexcept`, catches `std::exception`, counts and logs the failure and
+  returns the slot's zero value; no exception reaches the game's frames. The handler never throws and
+  does not catch the original's exceptions: a foreign exception in the original is the hook backend's
+  concern.
+
+What the facade does not carry: the member and party JSON (`MemberDataWritable` returns null, the
+JSON fields stay empty), so headset type in the party list and the lobby id a non-host party member
+follows are not shared; the engine's base `CNSISocial::Update` (0x1919868) would do that sharing
+given the dirty-bit array at +0x208 and the `ShareData` slots. `libr15.so` exports the CJson calls it would
+need (`DecodeFrom(char const*, unsigned long long)`, `EncodeToCompactTStr`, `Reset`). `RefreshInvites`,
+`DeepLink` and `FriendsRefreshed` are not driven, as on PCVR. Display names need a registered
+`SocialNames::SetDecoder` (zstd) that the Quest build does not link; without it friends show account ids.
+
+### Integration contract
+
+- Login adapter: `quest_social::SetLocalAccount(accountId, displayName)` once the service accepts the login.
+- Network adapter: `SocialParty::SetSender(fn)` for the upstream send, and
+  `quest_social::ObserveFrames(ProductionPorts(), direction, bytes, length, nowSeconds)` for every frame
+  the bridge relays, both directions.
+- Sentinel: `quest_social::InstallSocialHook(enabled)` once libr15 is mapped and before
+  `CR15NetGame::Initialize`; `Feature` in `quest_config.h` has no social switch yet, so there is no
+  `enabled` source.
+
+### Risks
+
+- The object is a hand-built vtable over a layout read from two binaries; nothing ran on a headset.
+  A wrong field offset shows as a wrong value, not a crash, except where the game or base code
+  dereferences a pointer inside the object (+0x208, +0x2c8, +0x2e0, +0x2f8, +0x310, +0x328 are
+  pointers `CNSOVRSocial::Initialize` (0x203604) and the base class set up; the facade leaves them
+  null). The non-virtual wrappers checked (`LobbyId`, `CNSIRichPresence::Set`, `UpdateLobbyData`,
+  `Join`, `Leave`, `Kick`, `PassOwnership`, `SendInvite`) read only the fields and slots listed above;
+  `AddLocalMember`, `RemoveLocalMember`, `SwapMembers`, `RemoveRemoteMember` and the base `Initialize`,
+  `Reset`, `Update` and `Shutdown` were not checked and are not called by the facade's slots.
+- Oculus friends, invites and the Oculus party overlay no longer reach the game; social is the NEVR
+  service's.
+- `UserProviderID` still comes from pnsovr; if its symbol differs from the one the game maps to platform
+  code 4, friend rows are dropped silently, as they were on PCVR before the provider patch.
+- The packaged APK differs from the pinned one only if its `libr15.so`/`libpnsovr.so` hashes differ;
+  the hook refuses on a build id mismatch.
 
 ## Consequences
 
