@@ -1263,7 +1263,10 @@ TEST(session_a_log_sink_that_calls_stop_does_not_deadlock_or_join_itself) {
   DeviceHandler(http, 1000000, kT0 + 3600);
   Session* self = nullptr;
   std::atomic<bool> fired{false};
-  const LogSink sink = [&](LogLevel, const std::string& m) {
+  LogCapture capture;
+  const LogSink inner = capture.Sink();
+  const LogSink sink = [&](LogLevel l, const std::string& m) {
+    inner(l, m);
     if (self != nullptr && m.find("Device authorization started") != std::string::npos && !fired.exchange(true)) {
       self->Stop();  // runs on the worker thread
     }
@@ -1272,6 +1275,10 @@ TEST(session_a_log_sink_that_calls_stop_does_not_deadlock_or_join_itself) {
   self = &s;
   s.Start();
   CHECK(WaitUntil([&] { return fired.load(); }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  // A Stop() that tried to join its own thread would have thrown out of the sink and ended the worker in Failed.
+  CHECK(s.Get().readiness != Readiness::Failed);
+  CHECK(capture.All().find("auth worker stopped on an exception") == std::string::npos);
   s.Stop();  // the joining Stop: must return although the sink already asked for a stop
   CHECK(s.Get().readiness == Readiness::Stopped);
 }
