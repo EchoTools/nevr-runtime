@@ -276,6 +276,7 @@ Pinned artifact: `build/android-arm64/repack/r15_nevr-sentinel_signed.apk`, pack
 | `libr15.so` | `8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20` | `b243509c08ce677aeb95fa348016949b3fc45230` |
 | `libpnsradmatchmaking.so` | `36236ab1df5783da57c064b0fbccc3a61c0e1d150c208022fbfc9cd6e5ed60ee` | `8c4fddc079eae65909530132a56c48da48b2708c` |
 | `libpnsrad.so` | `d9995c877a6623d8e48879f80c5749f313a0eba8a00b35a936c0df60e6d23aa8` | `c58fb82e42d9ed6564744cfa10f05af74aedd0ee` |
+| `libpnsovr.so` | `26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79` | `ca47bb8d03e6f43c1825133bbb9c15f174705c51` |
 
 These match the ReVault records. They identify a local repack, not an installed headset build.
 
@@ -301,10 +302,174 @@ The sentinel constructor therefore cannot assume the matchmaking module is loade
 its slot. Its slot stays inactive until a post-load install is validated.
 
 `GotHook` reaches this seam by symbol name after the owning module is loaded, so there is no
-need to detour `CNSUser::SendLogInRequest` (`libr15.so` `0x1932838`) or
-`CNSRadMatchmaking::ConnectMatchmaker` (`libpnsradmatchmaking.so` `0x1b2274`); both have unknown
-calling conventions and neither is a hook site. This covers config-string reads only. It does
-not establish a Quest HTTP connect hook or every URL source.
+need to detour `CNSRadMatchmaking::ConnectMatchmaker` (`libpnsradmatchmaking.so` `0x1b2274`);
+its calling convention is unknown and it is not a hook site. This covers config-string reads
+only. It does not establish a Quest HTTP connect hook or every URL source.
+
+## Login interception
+
+`CNSOVRUser::SendLogInRequest(CJson&)` (`libpnsovr.so` `0x1ec584`) tail-calls
+`CNSUser::SendLogInRequest(CJson&)` through a PLT stub; the BIND_NOW `R_AARCH64_JUMP_SLOT` at
+GOT `0x6dd1b8` names `_ZN10NRadEngine7CNSUser16SendLogInRequestERNS_5CJsonE`, so `GotHook`
+takes it (`src/quest/login/login_hook.cpp`). At that call `x0` is the `CNSOVRUser` and `x1` the
+Oculus login CJson; nothing is serialized yet. `SNSLogInRequestv2::Send` (`libr15.so`
+`0x1932a08`, `libpnsovr.so` `0x382c1c`) then writes `SNSLoginId` (16 bytes), `SNSUserID`
+(16 bytes) and the compact JSON in one `CTcpBroadcaster::Send`.
+
+| Wire field | Source on Quest | What the rewrite does |
+| --- | --- | --- |
+| JSON | the CJson argument | replaces the login fields with the shared `LoginProfile` set, all-or-nothing |
+| platform | `[CNSUser+0x90] & 0xf`; the `CNSOVRUser` constructor (`0x1edd68`-`0x1edd74`) stores 4 (OVR_ORG) | checks it is 4 |
+| account id | `this->AccountID()` by virtual call (`vtable+0x70`, `0x382b90`/`0x382b9c`); `CNSOVRUser` overrides it (vtable slot `0x6a1300`) with `0x1ede14`: `adrp x8,0x70e000; ldr x0,[x8,#0x3e0]; ret` | writes that global (`0x70e3e0`, filled by `GotLoggedInUserOrgIdCb` from `ovr_OrgScopedID_GetID`) after checking the three instructions, then calls the same virtual to prove the wire value |
+
+Which login members the rewrite replaces. The server reads the login JSON as a client
+description plus an identity (nakama `server/evr/login_request.go`, `LoginProfile`):
+
+| Members | Source on Quest | Reason |
+| --- | --- | --- |
+| `accountid`, `access_token`, `nonce`, `displayname`, `bypassauth`, `desiredclientprofileversion`, `hmdserialnumber`, `nevr_identity`, `nevr_social` | NEVR identity and the shared `LoginProfile` | identity; the Oculus token and proof nonce are replaced, not relayed |
+| `buildversion`, `appid`, `lobbyversion`, `publisher_lock` | the game's own value, never written, never invented | they classify the client: `SessionParameters.IsPCVR()` is `BuildNumber != StandaloneBuildNumber (630783)`, `evr_lobby_joinentrant.go` sets `UseQuestFlags` only when `!IsPCVR()` (a different encoder flag layout), and `evr_discord_integrator.go` maps `appid` to a platform. The shared builder's `buildversion` 631547 would make a Quest a PCVR client. The Quest sends 630783 itself (`libpnsovr.so` `0x1ed938`-`0x1ed944`: `mov w2,#0x9fff; movk w2,#0x9,lsl #16`) |
+| `system_info\|*` | the game's measurement; only members it left out are added | real headset values (CPU, cores, memory, network type, OS build) instead of the PCVR builder's empty placeholders |
+
+The CJson type rules the rollback relies on (libr15 `SetString` `0xfa3444`, `SetInt`
+`0xfa5edc`; `libpnsovr.so` carries the same code): `SetString` writes over an absent, string
+or null path and refuses any other type; `SetInt` writes over an absent, integer or null path
+and refuses any other type (a real is refused); a refusal is reported only in the game's log.
+`TypeOf` returns 0 for both a null value and an absent path (`Valid` separates them), and maps
+1 string, 2 int, 3 real, 4 boolean, 5 array, 6 object (`libpnsovr.so` table `0x582a80`).
+
+The account-id global holds the NEVR id from the rewrite until the next login that is not
+rewritten. `CNSUser::LogInSuccessCB` (`libpnsovr.so` `0x383a60`-`0x383a8c`) builds
+`{[this+0x90], AccountID()}` and compares it with the server's reply; a mismatch drops the
+success, so it cannot be restored after a successful send. `CNSOVRUser::LogInInternal`
+re-reads the Oculus org id only when the global holds -1 (`0x1ec96c`-`0x1ec984`), so after a
+rewritten login the NEVR id stays in the global for later logins in the process. The rule:
+the Oculus value is remembered once, before the first write (`OculusIdMemory`), and put back
+on every outcome other than `Rewritten`, because the declined login goes out with the Oculus
+token and must carry the Oculus account id; a login after a rewritten one is rewritten again
+from the current identity. Two guards: the id is put back only while the global still holds
+the value the rewrite wrote (a value the game stored in between is left alone), and only a
+real id is remembered. 0 (`RadPluginShutdown`) and -1 (the error path and the "fetch again"
+marker) are not ids; when the global holds one of them and nothing is remembered the rewrite
+is refused, the Oculus login goes out unchanged, and the record says `restored=0`. Every
+declined record carries `restored=0|1` (no values). The adapter's mutex serializes its own
+accesses only; the game's writers (`0x1ec998`, `0x1ecef0`, `0x1ecf18`, `0x207074`) are not under
+it, and the rewrite (set, verify, JSON, restore) is not atomic against them. The login path is
+assumed to run on one game thread with no concurrent writer while a login is in flight; that
+is an assumption, not a measurement. The -1 gate at `0x1ec980` is not the only way an org-id
+fetch starts: one is also issued at plugin init (`ovr_User_GetOrgScopedID` at `0x2069bc`, same
+callback key `0x6e2f10`), and the error callback re-issues one at `0x1ecf80` without writing -1
+first. What follows from the code (inference, not run): a send needs the global to be neither 0
+nor -1. 0 sets `[this+0x170]` to 1 and defers (`0x1ecd14`-`0x1ecd18` to `0x1ecda4`); -1
+refetches (`0x1ec980`, `0x1ec998`, `0x1ecd14`) and defers again; a pending login that
+`UpdateInternal` sees with -1 goes to `LogInFailed` 500 (`0x1eda10` to `0x1edb54`, `blr` through
+`[vtable+0x10]`). So the "refuse to remember 0 or -1" branch can only be reached by a writer
+racing between the check and the send, and it never blocks a login the game would otherwise
+send.
+
+Readers and writers of the global, and callers of `AccountID()`, in the pinned build (measured
+unless marked; addresses are function starts unless a row says "at"):
+
+| Reader or writer | Effect |
+| --- | --- |
+| `LogInInternal` (reads at `0x1ec96c`) | re-fetches only when -1 (above) |
+| `LogInInternal` (writes at `0x1ec998`) | `str xzr,[x8,#0x18]` with `x8` = `0x70e3c8`, i.e. the global at `0x70e3e0`: writes 0 on the re-fetch path |
+| `UpdateInternal` (reads at `0x1eda08` and `0x1edba8`) | -1 leads to `LogInFailed` 500 ("prerequisites are missing", string `0x556b40`); zero waits |
+| `GotLoggedInUserOrgIdCb` (writes at `0x1ecef0` and `0x1ecf18`) | -1 on its error path, the org id on success; also writes the decimal Oculus id string at `0x70e458` |
+| `RadPluginShutdown` (writes at `0x207074`) | writes 0 |
+| `CNSOVRUser::OfflineID()` (`0x1ede20`, vtable slot `+0x78`) | returns the decimal Oculus id string at `0x70e458` (`adrp x0,0x70e000; add x0,x0,#0x458; ret`), written by `GotLoggedInUserOrgIdCb` (`0x1ecf18`-`0x1ecf2c`) and never changed by the rewrite: after a rewrite `AccountID()` is the NEVR id and `OfflineID()` is still the Oculus id. Who calls it through the vtable was not traced |
+| `CNSOVRUser::AccountID()` `0x1ede14` | returns it (vtable slot `0x6a1300`) |
+| `CNSUser::SendLogInRequest`, `LogInSuccessCB`, `LogInFailureCB`, `LogOut`, `RefreshProfile`, `Profile*CB`, `LoginRemovedCB`, `UniqueName`, `SaveClientProfileChanges`, `CNSIUsers::CreateUser`, `User(UserAccountID)`, `DestroyUserInternal` | call `AccountID()` through `vtable+0x70` |
+| `CNSLobby::JoinAcceptedCBClient` (`0x3720c0`), `AddEntrantAcceptedCBClient` (`0x3727a0`) | find the local user by `AccountID()` equal to the entrant id the server sent: the id the server uses is required here |
+| `CNSUser::UserID()` | about 60 call sites in `libr15.so` (lobby find, join and create, party, friends, profile, IAP, XPlatformId) |
+| `CNSOVRSocial::FollowDeepLink` (`0x1f2ab0`, read at `0x1f2b30`), `EnsureLocalMember` (`0x1f2b98`, at `0x1f2bd0`), `JoinInternal` (`0x1f37ac`, at `0x1f38a4`), `AddMember` (`0x2049f4`, at `0x204a30`) | copy it into `[this+0x2e0][0]`, the local party member; `MemberId` (`0x205260`) and `Host` (`0x2051fc`) hand that to the game, while remote members carry Oculus org ids (`GotRemoteOrgIdCB` `0x1f9090`) |
+| `ovr_Room_KickUser`, `SyncRoom`, `ReceiveData` | use `[0x2c8]` (the app-scoped id), not the global: Oculus room calls are not affected (independent review; not re-traced here) |
+| `CNSIParty::Update` (`0x369764`), `CNSIRichPresence::Update`, `CNSIFriends::Sent` | call `vtable+0x70` on their own object, not `AccountID()` |
+| `libpnsrad.so` `CNSRADFriends`, `CNSRADParty` | use `CNSRADUser` (vtable `0x6f1e00`, `AccountID` = `[this+0x88]` at `0x3cd4c0`), not this global (independent review) |
+
+Open: party, room and friends flows that read the global through `CNSOVRSocial` see the NEVR id
+for the local member and Oculus org ids for remote members, two id spaces in one flow; and
+`OfflineID()` keeps the Oculus id while `AccountID()` is the NEVR id (its virtual callers were
+not traced). The
+lobby path needs the NEVR id; the Oculus-room path was not shown to break, and was not shown
+to work. A separate social package owns this.
+
+## Hook activation
+
+`TryInstallLoginHook` has no caller yet and the only `IdentitySource` is the test fake; the
+sentinel does not install it. The install point is `libr15.so`'s `dlopen` import:
+`CSysModule::Load` (`0x2a9e16c`) calls `dlopen@plt` at `0x2a9e1ec` through the BIND_NOW
+`R_AARCH64_JUMP_SLOT` at `0x36c6380` (the only `dlopen` reference in `libr15.so`; `readelf -rW`
+lists one). A `GotHook` on that slot lets the sentinel run the `libpnsovr.so`-dependent installs
+right after the real `dlopen` returns with the module mapped: the login hook, and the
+matchmaking redirect once `libpnsradmatchmaking.so` is loaded. The `dlopen` handler calls the
+original, and on a non-null handle calls `TryInstallLoginHook(source, build)`; a
+`ModuleNotLoaded` result means another module was opened and the install is retried on the
+next `dlopen`. The handler must not throw and must not block. The install needs an
+`IdentitySource` backed by token auth: until it answers `Ok` the Oculus login is left
+unchanged. `SendLogInRequest` is reached only after the Oculus org-id fetch and
+`ovr_User_GetUserProof` succeed (`0x1edca0`, `0x1ece10`); if the Oculus services do not answer
+for this app the hook never fires.
+
+CJson behaviour for a write, in `libpnsovr.so` (the code the rewrite calls): the setter walks the
+`|`-separated path (`0x35ba84`, which branches to `0x364bdc`), and when a parent exists and is
+not an object (`ldr w8,[x1]; cbz w8` at `0x364bf8`-`0x364c00`) it logs `$ json path: %s is not an
+object.` (string `0x5825b1`) and writes nothing. The parent check in the rewrite is therefore
+defensive: with it off, the refused write fails the read-back and the rollback finds nothing to
+undo, so real behaviour is the same; the test that exercises the check models a build that would
+overwrite the parent, which the game does not do, and does not pin real behaviour. Every setter also refuses when the CJson is
+cached (`[this+8] != 0`, `$ json path: %s: ERROR, json db is cached, read only.`, string
+`0x5820c0`). The rewrite does not attempt a nested write under a non-object parent, and the
+read-back after each write covers the cached case.
+
+Exception frames. The login code is split by whether it calls into the game. The apply phase
+(`login_apply.cpp`: `Observe`, the account-id write and its read-back, the JSON snapshot, write
+and rollback, `RewriteLogin`) and the thunk handler (`login_hook.cpp`) are built `-fno-exceptions`:
+no frame in them carries a personality or an LSDA, so every frame live while libpnsovr's CJson
+functions or the virtual `AccountID()` run sits under the personality-free `"zR"` CIE. The compose
+phase (`login_rewrite.cpp`, exceptions enabled) builds the profile and calls no game code;
+`ComposePlan` catches every `std::exception` (named types, no catch-all) and returns plain data.
+The handler calls observe, compose, apply, then the original, and `ComposePlan` has returned
+before the next game call. `tests/quest` `TestLoginHookFramesCarryNoPersonality` pins this on a
+probe executable that links the whole login archive: it walks every direct `bl`/`b` edge from every
+hook record's entry and handler (`nevr_hook_records`) and fails on any reachable function under a personality-bearing
+CIE, except `ComposePlan` (required to be reached and to carry a personality, so the exemption
+cannot go stale) and the cold noreturn tail of libc++ (`__throw_length_error`, `terminate`, the
+exception allocator).
+
+Residual. A foreign exception thrown by the game while these frames are live (libpnsovr's
+allocator hooks installed by `CJson::InitializeForGame` `0x357cb0`, or a registered log
+callback in `CLoggingData::ExecuteAllCallbacks`) passes through on CFI alone, as it would
+without this code. Reachability from the CJson functions the rewrite calls and from `AccountID()`
+(`0x1ede14`), from the static call graph of the pinned `libpnsovr.so` (independent review): none
+of the 10 CJson functions nor `AccountID()` reaches `__cxa_throw`, `__cxa_allocate_exception`,
+`operator new`, terminate or `_Unwind_Resume` by direct edges (39 to 62 functions each); all 8
+throw and allocate sites in `libpnsovr.so` are libc++ container code (breakpad
+`std::list::push_back` at `0x20ebf0`/`0x20f1ac`, `__throw_length_error` at `0x21059c`/`0x2113c0`,
+vector and `__split_buffer`); the unresolved indirect edges are the allocator hooks (`br x2` at
+`0x357d28`), three in `CMemBlock::Resize`, two in `ExecuteAllCallbacks`, and one each in
+`json_delete` and `fn_5083b0`. The apply phase has no try/catch; a failure of the sentinel's own
+allocation there is expected to raise `std::bad_alloc` from libc++'s `operator new` (the library is
+built with exceptions, whatever the caller's flags) through `zR` frames, which nothing catches:
+the out-of-memory case only, inferred and not run. The
+call graph was not run on a device.
+
+`[CNSUser+0x88]` is not the wire account id for a `CNSOVRUser`. A virtual slot is a data
+relocation, which `GotHook` does not reach, so the global is written instead.
+
+`libpnsovr.so` has no `DT_NEEDED` on `libr15.so` and defines its own `NRadEngine::CJson`
+(`SetString` `0x35917c`, `SetInt` `0x35bc14`, `SetBoolean` `0x358ccc`, `Clear` `0x358098`,
+`TString` `0x358bb4`, `Int` `0x359e24`, `Boolean` `0x35a0a8`, `IsObject` `0x359a6c`). The login
+CJson is built by `libpnsovr.so`, so the rewrite edits it with those exports resolved from the
+`libpnsovr.so` handle, never with `libr15.so`'s.
+
+The game logs the outgoing login: `Send` copies the CJson, clears `access_token`, `nonce`,
+`authticket`, `authcode`, `authtoken` and `userhash`, and logs the copy at level 2
+(`[LOGIN] Logging in %s: %s`, string `0x3173c79`). Any other member is logged in clear, so
+the login JSON carries no credential: the server authenticates the session from the WebSocket
+upgrade (`session_ws.go` reads `password` from the URL query; `LoginProfile` in
+`server/evr/login_request.go` has no `password` member). The NEVR token travels in
+`access_token`, which the game's own logger clears.
 
 ## Endpoint and authentication
 

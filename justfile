@@ -478,6 +478,19 @@ test-quest-shared:
         -lcurl -lssl -lcrypto -o "$out/tls_ca_test"
     "$out/tls_ca_test"
     echo "test-quest-shared: CurlHttpClient TLS trust tests pass on the host"
+    # Quest login rewrite: the compose half (login_rewrite.cpp, exceptions enabled) and the apply
+    # half (login_apply.cpp, built -fno-exceptions exactly as on the device, because it runs while
+    # game code is live) plus the shared PCVR login builder, against a fake CJson. The Android
+    # adapter (login_hook.cpp) cannot run on the host; build-android compiles it.
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -c \
+        src/quest/login/login_apply.cpp -o "$out/login_apply.o"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" \
+        "$out/login_apply.o" \
+        src/quest/login/login_rewrite.cpp \
+        src/runtime/compat/login_profile.cpp \
+        src/quest/tests/login_rewrite_test.cpp \
+        -o "$out/login_rewrite_test"
+    "$out/login_rewrite_test"
     echo "test-quest-shared: all redirect and EVR codec vectors pass on the host"
 
 # Quest hook backend on the host. Builds three fixture shared objects (BIND_NOW with
