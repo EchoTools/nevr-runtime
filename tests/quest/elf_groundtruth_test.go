@@ -1,8 +1,9 @@
 // Ground-truth tests for the Quest crash-reporter .so.
 //
 // On-device runtime needs a headset, so the automatable ground truth is the
-// ELF shape of the built artifact. Each test traces to a BAC in
-// docs/2026-07-13-quest-crash-reporter-injection.md and shells to
+// ELF shape of the built artifact. Each test traces to one of the acceptance criteria numbered
+// BAC-1..5 in docs/design/2026-07-13-quest-crash-reporter-injection.md or to the hook contract in
+// docs/adr/0003-quest-networking-port.md, and shells to
 // readelf/nm on the real output (success derives from the artifact, not a
 // proxy). The test FAILS (not skips) when the .so is absent — build it first:
 //
@@ -12,6 +13,7 @@ package quest
 import (
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -162,16 +164,34 @@ var (
 	augRe = regexp.MustCompile(`^\s+Augmentation:\s+("[^"]*")`)
 )
 
-// The frames a game call passes through on its way into the hook (the thunk's
-// Entry and its members, and the handler) must carry no personality routine and
-// no LSDA: they sit under the "zR" CIE. A "zPLR" CIE names the sentinel's own
-// personality, and a game exception unwinding through such a frame would hand
-// libc++_shared's _Unwind_Context to it (callback_thunk.h, "Exceptions").
-func TestHookFramesCarryNoPersonality(t *testing.T) {
-	requireArtifact(t)
+// Rule (callback_thunk.h, "What the contract is"): a frame that is live while game code
+// runs under a hook must carry no personality routine and no LSDA, i.e. sit under the "zR"
+// CIE. A "zPLR" CIE names the sentinel's own personality, and a game exception unwinding
+// through such a frame would hand libc++_shared's _Unwind_Context to it.
+//
+// Live frames are the thunk's Entry, every handler, and every sentinel function a handler
+// can have on the stack when it calls `original`. A static check cannot tell "before/after
+// the call" from "across the call", so it is conservative: it starts from every hook and
+// follows direct bl/b edges through the library, failing on any reachable function under a
+// personality-bearing CIE. There is no allowlist: a hook does not log, so no logging code is
+// reachable from it. Indirect calls (function pointers, virtual calls, std::function) are not
+// followed: that part of the rule is a rule, not a check (callback_thunk.h, item 5).
+//
+// A hook is a record in the nevr_hook_records output section, emitted by NEVR_HOOK_RECORD:
+// {entry, handler}, two function pointers that the dynamic linker relocates (R_AARCH64_RELATIVE),
+// so they are read from the relocation addends. Every thunk Entry must have exactly one
+// record, so a thunk whose handler is not recorded (and therefore not walked) fails.
+type elfFunc struct {
+	addr, size uint64
+	name       string
+	section    string
+}
+
+func parseFrames(t *testing.T) (cieAug map[string]string, fdeCIE map[uint64]string) {
+	t.Helper()
 	frames := run(t, "readelf", "--debug-dump=frames", soPath(t))
-	cieAug := map[string]string{} // CIE offset -> augmentation
-	fdeCIE := map[uint64]string{} // FDE start pc -> CIE offset
+	cieAug = map[string]string{} // CIE offset -> augmentation
+	fdeCIE = map[uint64]string{} // FDE start pc -> CIE offset
 	current := ""
 	for _, line := range strings.Split(frames, "\n") {
 		if m := cieRe.FindStringSubmatch(line); m != nil {
@@ -194,39 +214,302 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 	if len(cieAug) == 0 || len(fdeCIE) == 0 {
 		t.Fatalf("parsed no CIE/FDE from readelf --debug-dump=frames; the parser is blind")
 	}
+	return cieAug, fdeCIE
+}
 
-	hookFrames := 0
-	var sawEntry, sawHandler bool
-	for _, line := range strings.Split(run(t, "nm", "-S", "--defined-only", soPath(t)), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 4 {
+var (
+	secRe   = regexp.MustCompile(`^\s*\[\s*(\d+)\]\s+(\S+)`)
+	secFull = regexp.MustCompile(`^\s*\[\s*\d+\]\s+(\S+)\s+\S+\s+([0-9a-f]+)\s+[0-9a-f]+\s+([0-9a-f]+)`)
+	relRe   = regexp.MustCompile(`^([0-9a-f]+)\s+[0-9a-f]+\s+R_AARCH64_RELATIVE\s+([0-9a-f]+)\s*$`)
+	symRe   = regexp.MustCompile(`^\s*\d+:\s+([0-9a-f]+)\s+(\d+)\s+FUNC\s+\S+\s+\S+\s+(\d+)\s+(\S+)`)
+	hdrRe   = regexp.MustCompile(`^([0-9a-f]{16}) <(.*)>:$`)
+	branchR = regexp.MustCompile(`^\s+[0-9a-f]+:\s+(bl|b)\s+0x([0-9a-f]+)\s+<(.*)>$`)
+)
+
+func parseFuncs(t *testing.T) []elfFunc {
+	t.Helper()
+	sections := map[string]string{}
+	for _, line := range strings.Split(run(t, "readelf", "-SW", soPath(t)), "\n") {
+		if m := secRe.FindStringSubmatch(line); m != nil {
+			sections[m[1]] = m[2]
+		}
+	}
+	var fs []elfFunc
+	for _, line := range strings.Split(run(t, "readelf", "-sW", soPath(t)), "\n") {
+		m := symRe.FindStringSubmatch(line)
+		if m == nil {
 			continue
 		}
-		name := f[3]
-		if !strings.ContainsAny(f[2], "tTwW") { // code symbols only; the thunk's data members have no frame
+		addr, _ := strconv.ParseUint(m[1], 16, 64)
+		size, _ := strconv.ParseUint(m[2], 10, 64)
+		if size == 0 {
 			continue
 		}
-		if !strings.Contains(name, "CallbackThunk") && !strings.Contains(name, "HookedClockGettime") {
+		fs = append(fs, elfFunc{addr: addr, size: size, name: m[4], section: sections[m[3]]})
+	}
+	if len(fs) == 0 {
+		t.Fatalf("no function symbols parsed from readelf -s")
+	}
+	return fs
+}
+
+func TestHookFramesCarryNoPersonality(t *testing.T) {
+	requireArtifact(t)
+	cieAug, fdeCIE := parseFrames(t)
+	funcs := parseFuncs(t)
+	byAddr := map[uint64]*elfFunc{}
+	for i := range funcs {
+		byAddr[funcs[i].addr] = &funcs[i]
+	}
+	containing := func(a uint64) *elfFunc {
+		if f, ok := byAddr[a]; ok {
+			return f
+		}
+		for i := range funcs {
+			if a >= funcs[i].addr && a < funcs[i].addr+funcs[i].size {
+				return &funcs[i]
+			}
+		}
+		return nil
+	}
+
+	// Direct call/branch edges, from one disassembly of the library.
+	edges := map[uint64]map[uint64]bool{}
+	var from uint64
+	for _, line := range strings.Split(run(t, "llvm-objdump", "-d", "--no-show-raw-insn", soPath(t)), "\n") {
+		if m := hdrRe.FindStringSubmatch(line); m != nil {
+			from, _ = strconv.ParseUint(m[1], 16, 64)
 			continue
 		}
-		addr, err := strconv.ParseUint(f[0], 16, 64)
-		if err != nil {
+		m := branchR.FindStringSubmatch(line)
+		if m == nil || strings.HasSuffix(m[3], "@plt") {
+			continue // imports are not sentinel frames
+		}
+		to, _ := strconv.ParseUint(m[2], 16, 64)
+		callee := containing(to)
+		caller := containing(from)
+		if callee == nil || caller == nil || callee.addr == caller.addr {
+			continue
+		}
+		if edges[caller.addr] == nil {
+			edges[caller.addr] = map[uint64]bool{}
+		}
+		edges[caller.addr][callee.addr] = true
+	}
+
+	// Hook records: {entry, handler} pairs read from the section's relocation addends.
+	var recAddr, recSize uint64
+	for _, line := range strings.Split(run(t, "readelf", "-SW", soPath(t)), "\n") {
+		if m := secFull.FindStringSubmatch(line); m != nil && m[1] == "nevr_hook_records" {
+			recAddr, _ = strconv.ParseUint(m[2], 16, 64)
+			recSize, _ = strconv.ParseUint(m[3], 16, 64)
+		}
+	}
+	relative := map[uint64]uint64{} // slot address -> function address
+	for _, line := range strings.Split(run(t, "readelf", "-rW", soPath(t)), "\n") {
+		if m := relRe.FindStringSubmatch(line); m != nil {
+			off, _ := strconv.ParseUint(m[1], 16, 64)
+			add, _ := strconv.ParseUint(m[2], 16, 64)
+			relative[off] = add
+		}
+	}
+	if recSize == 0 || recSize%16 != 0 {
+		t.Fatalf("no nevr_hook_records section (size %d): no hook is recorded, the sensor is looking at nothing", recSize)
+	}
+	recordEntries := map[uint64]int{}
+	var roots []*elfFunc
+	for off := recAddr; off < recAddr+recSize; off += 16 {
+		entry, okE := relative[off]
+		handler, okH := relative[off+8]
+		if !okE || !okH {
+			t.Fatalf("hook record at %#x has no relocation for its entry/handler pointer", off)
+		}
+		recordEntries[entry]++
+		for _, a := range []uint64{entry, handler} {
+			f := byAddr[a]
+			if f == nil {
+				t.Errorf("hook record at %#x points at %#x, which is not a function symbol", off, a)
+				continue
+			}
+			roots = append(roots, f)
+		}
+	}
+	// Exactly one record per thunk Entry, and no record for anything else.
+	thunkEntries := map[uint64]bool{}
+	for i := range funcs {
+		if strings.Contains(funcs[i].name, "CallbackThunk") && strings.Contains(funcs[i].name, "5EntryE") {
+			thunkEntries[funcs[i].addr] = true
+		}
+	}
+	if len(thunkEntries) == 0 {
+		t.Fatalf("no CallbackThunk Entry in the library: the sensor is looking at nothing")
+	}
+	for a := range thunkEntries {
+		if recordEntries[a] != 1 {
+			t.Errorf("thunk entry %s has %d hook records, want exactly 1 (define the hook with NEVR_HOOK_RECORD)", byAddr[a].name, recordEntries[a])
+		}
+	}
+	for a, n := range recordEntries {
+		if !thunkEntries[a] {
+			t.Errorf("hook record names %#x (x%d), which is not a CallbackThunk Entry", a, n)
+		}
+	}
+
+	reached := map[uint64]bool{}
+	var queue []uint64
+	for _, r := range roots {
+		reached[r.addr] = true
+		queue = append(queue, r.addr)
+	}
+	for len(queue) > 0 {
+		a := queue[0]
+		queue = queue[1:]
+		for callee := range edges[a] {
+			if !reached[callee] {
+				reached[callee] = true
+				queue = append(queue, callee)
+			}
+		}
+	}
+
+	checked := 0
+	for addr := range reached {
+		f := byAddr[addr]
+		if f == nil {
 			continue
 		}
 		cie, ok := fdeCIE[addr]
 		if !ok {
-			t.Errorf("%s at %#x has no FDE", name, addr)
+			t.Errorf("%s at %#x has no FDE", f.name, addr)
 			continue
 		}
-		hookFrames++
-		sawEntry = sawEntry || strings.Contains(name, "5EntryE")
-		sawHandler = sawHandler || strings.Contains(name, "HookedClockGettime")
+		checked++
 		if aug := cieAug[cie]; aug != `"zR"` {
-			t.Errorf("hook frame %s sits under CIE augmentation %s, want \"zR\" (no personality, no LSDA)", name, aug)
+			t.Errorf("function %s (reachable from a hook entry or handler) sits under CIE augmentation %s, want \"zR\" (no personality, no LSDA)", f.name, aug)
 		}
 	}
-	if hookFrames == 0 || !sawEntry || !sawHandler {
-		t.Errorf("hook frames not found (frames=%d entry=%v handler=%v): the test is looking at nothing", hookFrames, sawEntry, sawHandler)
+	if checked < len(roots) {
+		t.Errorf("checked %d functions for %d roots: the walk lost its roots", checked, len(roots))
+	}
+	t.Logf("hooks=%d (roots=%d), reachable sentinel functions checked=%d", len(recordEntries), len(roots), checked)
+}
+
+// The backend library is built with -fno-exceptions, exactly like the host test build, so the
+// host tests exercise the same code generation and the backend's frames carry no personality
+// either.
+func TestBackendBuiltWithoutExceptions(t *testing.T) {
+	requireArtifact(t)
+	cieAug, fdeCIE := parseFrames(t)
+	// The hook backend's own symbols, by exact mangled prefix: namespace sentinel, then the name's
+	// length and the name. A function elsewhere that merely mentions one of these names (for
+	// example one taking a std::vector<LogEvent>) is not the backend and is not matched.
+	backend := regexp.MustCompile(`^_ZN8sentinel(7GotHook|11ResolveSlot|9LogFields|8LogEvent|9HexString|` +
+		`10SetLogSink|13StartReporter|20RegisterReportCounter|12StopReporter|15ReporterRunning|` +
+		`12_GLOBAL__N_112ReporterMain)`)
+	want := map[string]bool{"_ZN8sentinel7GotHook7Install": false, "_ZN8sentinel11ResolveSlot": false,
+		"_ZN8sentinel9LogFields": false, "_ZN8sentinel13StartReporter": false,
+		"_ZN8sentinel12_GLOBAL__N_112ReporterMain": false}
+	for _, f := range parseFuncs(t) {
+		if !backend.MatchString(f.name) {
+			continue
+		}
+		for k := range want {
+			if strings.HasPrefix(f.name, k) {
+				want[k] = true
+			}
+		}
+		cie, ok := fdeCIE[f.addr]
+		if !ok {
+			t.Errorf("%s has no FDE", f.name)
+			continue
+		}
+		if aug := cieAug[cie]; aug != `"zR"` {
+			t.Errorf("backend function %s sits under CIE augmentation %s, want \"zR\"", f.name, aug)
+		}
+	}
+	for k, seen := range want {
+		if !seen {
+			t.Errorf("backend function with prefix %q not found: the test is looking at nothing", k)
+		}
+	}
+}
+
+// The raw GotHook::Install (any function pointer) is private. Its test access class may be
+// named only in got_hook.h (the friend declaration) and under src/quest/tests; production code
+// installs through InstallThunk, which keeps every hook a recorded, walked thunk entry. The
+// check is textual and cheap. It reads every file with a .cpp, .cc, .cxx, .h, .hpp or .inc
+// extension under src/, and it fails if a file outside a tests/ directory
+//   - names GotHookTestAccess, or
+//   - includes a header that lives anywhere under src/quest/tests (recursively): the include is
+//     resolved the ways a compiler would find it here (relative to the including file, relative
+//     to src/ because of -Isrc, and relative to src/quest/sentinel because of the target's own
+//     include directory), each cleaned with path.Clean, before the prefix test.
+//
+// It is not bypass-proof (macro token pasting defeats it); it exists to catch an honest mistake
+// (callback_thunk.h, "Limits").
+var includeRe = regexp.MustCompile(`#\s*include\s*[<"]([^>"]+)[>"]`)
+
+func TestRawInstallOnlyInTests(t *testing.T) {
+	root, err := filepath.Abs("../../src")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exts := map[string]bool{".cpp": true, ".cc": true, ".cxx": true, ".h": true, ".hpp": true, ".inc": true}
+	testFiles := map[string]bool{} // slash paths relative to src/, everything under quest/tests
+	err = filepath.Walk(filepath.Join(root, "quest", "tests"), func(p string, info os.FileInfo, werr error) error {
+		if werr != nil || info.IsDir() {
+			return werr
+		}
+		rel, _ := filepath.Rel(root, p)
+		testFiles[filepath.ToSlash(rel)] = true
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(testFiles) < 5 {
+		t.Fatalf("found only %d files under src/quest/tests: the walk is looking at nothing", len(testFiles))
+	}
+	seen := 0
+	err = filepath.Walk(root, func(p string, info os.FileInfo, werr error) error {
+		if werr != nil || info.IsDir() || !exts[filepath.Ext(p)] {
+			return werr
+		}
+		data, rerr := os.ReadFile(p)
+		if rerr != nil {
+			return rerr
+		}
+		relOS, _ := filepath.Rel(root, p)
+		rel := filepath.ToSlash(relOS)
+		inTests := strings.HasPrefix(rel, "quest/tests/")
+		if strings.Contains(string(data), "GotHookTestAccess") {
+			seen++
+			if rel != "quest/sentinel/got_hook.h" && !inTests {
+				t.Errorf("%s names GotHookTestAccess; only got_hook.h and src/quest/tests may", rel)
+			}
+		}
+		// Other tests (src/runtime/tests, ...) may include the shared test vectors; production may not.
+		if !strings.Contains("/"+rel, "/tests/") {
+			for _, m := range includeRe.FindAllStringSubmatch(string(data), -1) {
+				for _, cand := range []string{
+					path.Join(path.Dir(rel), m[1]),
+					path.Clean(m[1]),
+					path.Join("quest/sentinel", m[1]),
+				} {
+					if testFiles[cand] {
+						t.Errorf("%s includes %s, which resolves to %s under src/quest/tests; production code must not", rel, m[1], cand)
+						break
+					}
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen < 2 {
+		t.Errorf("GotHookTestAccess found in %d files, want at least got_hook.h and the host test", seen)
 	}
 }
 
@@ -269,7 +552,7 @@ func TestStlContract(t *testing.T) {
 	requireArtifact(t)
 	dyn := run(t, "readelf", "-d", soPath(t))
 	if strings.Contains(dyn, "libc++_shared.so") {
-		t.Errorf("sentinel NEEDs libc++_shared.so; revisit callback_thunk.h 'Two C++ runtimes' and ADR 0003\n%s", dyn)
+		t.Errorf("sentinel NEEDs libc++_shared.so; revisit the Exceptions section of callback_thunk.h and ADR 0003\n%s", dyn)
 	}
 	exported := run(t, "nm", "-D", "--defined-only", soPath(t))
 	for _, sym := range []string{"__cxa_throw", "__cxa_begin_catch", "__gxx_personality_v0"} {

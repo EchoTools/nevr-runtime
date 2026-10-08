@@ -444,6 +444,24 @@ test-quest-hooks:
     out="build/quest-hooks-host"
     mkdir -p "$out"
     cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    # Type-level gates: the control compiles; each snippet that breaks one rule must fail to
+    # compile, with the message that names the rule (not for some unrelated reason).
+    snip=src/quest/tests/compile_fail
+    "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/control.cpp"
+    # Each snippet must fail with errors that are ALL the rule's own: every `error:` line has to
+    # match the rule's pattern (a second, unrelated error fails the check), and there must be one.
+    for pair in fake_thunk:"error: static assertion failed: InstallThunk requires a CallbackThunk" direct_record:"HookRecord.*is private within this context" plain_handler:"error: invalid conversion from .*::Handler"; do
+        name="${pair%%:*}"; want="${pair#*:}"
+        if "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/$name.cpp" > "$out/$name.err" 2>&1; then
+            echo "test-quest-hooks: $snip/$name.cpp compiled, but must not" >&2; exit 1
+        fi
+        total=$(grep -c 'error:' "$out/$name.err" || true)
+        matched=$(grep 'error:' "$out/$name.err" | grep -c "$want" || true)
+        if [ "$total" -lt 1 ] || [ "$total" -ne "$matched" ]; then
+            echo "test-quest-hooks: $snip/$name.cpp: $total error line(s), $matched match '$want'; every error must be the rule's own:" >&2
+            cat "$out/$name.err" >&2; exit 1
+        fi
+    done
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 src/quest/tests/got_fixture_provider.cpp \
         -o "$out/libgotfx_provider.so"
     link=(-fPIC -shared -Wl,--build-id=sha1 -L"$out" -lgotfx_provider -Wl,-rpath,'$ORIGIN')
@@ -457,9 +475,9 @@ test-quest-hooks:
     # callback_thunk.h is built without (the header refuses otherwise).
     "${cxx[@]}" -c src/quest/tests/thunk_exception_fixture.cpp -o "$out/thunk_exception_fixture.o"
     "${cxx[@]}" -fno-exceptions src/quest/tests/got_hook_test.cpp src/quest/sentinel/got_hook.cpp \
-        src/quest/sentinel/hook_log.cpp "$out/thunk_exception_fixture.o" \
+        src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "$out/thunk_exception_fixture.o" \
         -o "$out/got_hook_test" -ldl -pthread
-    "$out/got_hook_test" "$out"
+    timeout 300 "$out/got_hook_test" "$out"  # a hang is a failure, not a stuck gate
 
 # Quest config-string redirect on the host. Builds two fixture shared objects that import
 # CJson::TString by its mangled name through a PLT slot (src/quest/redirect/tests), then runs

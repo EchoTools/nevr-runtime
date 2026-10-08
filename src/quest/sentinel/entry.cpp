@@ -12,7 +12,9 @@
 #include "sentinel.h"
 #include "activation.h"
 #include "got_hook.h"
+#include "hook_install.h"
 #include "hook_log.h"
+#include "hook_report.h"
 #include "pinned_targets.h"
 
 #include <jni.h>
@@ -27,8 +29,9 @@ namespace {
 // reconstructed first. clock_gettime is chosen deliberately: its signature is
 // unambiguous POSIX (no risk of a wrong-arity/wrong-return-type call corrupting
 // the engine's real args), and it's called continuously by any real-time engine
-// loop. The install line in the log says the slot was patched; the call counter,
-// reported from JNI_OnLoad, says it fired.
+// loop. The install line in the log says the slot was patched; the reporter thread
+// (hook_report.h) logs the call counter when it first moves and, if it keeps moving, at
+// most once a minute.
 //
 // This translation unit is built with -fno-exceptions (callback_thunk.h requires
 // it): the handler is noexcept and nothing in it can unwind.
@@ -43,12 +46,18 @@ int HookedClockGettime(ClockThunk::Fn original, clockid_t clk_id, struct timespe
     return original(clk_id, tp);
 }
 
+// The hook: the thunk's entry and its handler, recorded for the build-time frame sensor.
+NEVR_HOOK_RECORD(kClockHook, ClockThunk, &HookedClockGettime);
+
 // A failed install is logged by GotHook with its status and leaves the original
 // call intact; it is never fatal to the host process.
 void InstallBasicsHook() {
-    ClockThunk::Arm(&HookedClockGettime);
-    g_clockHook.Install(sentinel::pinned::LibR15ClockGettime(), ClockThunk::EntryAddress(),
-                        ClockThunk::OriginalOut());
+    sentinel::RegisterReportCounter("clock_gettime_calls", &g_clockGettimeCalls);
+    sentinel::RegisterReportCounter("clock_gettime_thunk_faults", &ClockThunk::FaultCounter(),
+                                    sentinel::ReportKind::kFaults);
+    sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000);
+    ClockThunk::Arm(kClockHook);
+    sentinel::InstallThunk<ClockThunk>(g_clockHook, sentinel::pinned::LibR15ClockGettime());
 }
 
 }  // namespace
@@ -77,10 +86,6 @@ static void nevr_sentinel_ctor() {
 // too. (Under DT_NEEDED loading the runtime does not auto-call this.)
 JNIEXPORT jint JNI_OnLoad(JavaVM* /*vm*/, void* /*reserved*/) {
     sentinel::Arm();
-    sentinel::LogFields(sentinel::LogLevel::kInfo, "clock_gettime_proof",
-                        {{"module", "libr15.so"},
-                         {"calls", static_cast<long long>(
-                                       g_clockGettimeCalls.load(std::memory_order_relaxed))}});
     return JNI_VERSION_1_6;
 }
 
