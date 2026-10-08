@@ -173,8 +173,11 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    feature name, never by value, to logcat tag `NEVR-Sentinel` and to `nevr-sentinel.log` in the
    same directory, as one JSON object per line. A value the file gives as the empty string is
    rejected and cannot clear an embedded default; a key given twice in one object takes the
-   last value and logs a warning. The sentinel constructor reads the file once: a non-blocking
-   open, a regular-file check and a 64 KiB bound, with no network. `sentinel_host_test` runs
+   last value and logs a warning. The sentinel constructor reads the file once (contract 4 states the constructor's I/O
+   limits). Warnings about the file are capped at 32 lines plus one suppression line, and
+   repeated duplicate keys collapse to one line per name. A name taken from the file is logged
+   only when it is one of the keys or features above; any other name is counted ("unknown key
+   #N"), never echoed. `sentinel_host_test` runs
    the constructor-then-main order, the non-regular-file paths and the log-failure paths on the
    host; the read has not been run on a headset.
 2. **Identity and wire.** `login_profile.{h,cpp}` builds the login profile with
@@ -192,7 +195,28 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
 4. **Game hooks.** The Android adapter records the ELF build ID or SHA-256, module and load
    bias, validates each instruction, string and relocation, then installs a typed callback.
    Callbacks use bounded copies, preserve object ownership and return semantics, never throw
-   through the game ABI, and defer networking and file I/O out of loader constructors. An
+   through the game ABI, and defer networking and file I/O out of loader constructors. The
+   sentinel's ELF constructor (`nevr_sentinel_ctor`) is the exception, and does exactly this, in
+   this order:
+   - logs one `sentinel_ctor` record (logcat only);
+   - `Arm()`: `mkdir`/`access` on up to four candidate crash-dump directories, then allocates the
+     Breakpad exception handler (`new`), outside any `try` block;
+   - `InitActivation()`: opens `nevr-quest.json` read-only and `nevr-sentinel.log` read-write in
+     append mode in the app's external files directory. Both opens are non-blocking, the log open
+     does not follow symlinks, and each target must be a regular file (a FIFO or device is
+     refused, not opened for I/O). The config read is bounded at 64 KiB. A failed log open is
+     retried at most once per 30 s, and never when the path is not a regular file. The catch block
+     of `InitActivation()` allocates nothing, so a failure there cannot escape the constructor;
+   - `InstallBasicsHook()`: installs one GOT hook on `libr15.so`'s `clock_gettime` import (an
+     `mprotect` of the slot's page) and creates the counter reporter thread.
+
+   It opens no socket and does no TLS. `Arm()` can still throw `std::bad_alloc` (it allocates
+   outside a `try`). The on-disk log is rotated, never deleted: at open once it is 1 MiB or more,
+   and in-process once this run has written 1 MiB; the old file keeps a `nevr-sentinel.<unix_ms>`
+   name, so every process start that begins with a full log, and every 1 MiB written, leaves one
+   more file. Nothing prunes them; whether that is acceptable is the owner's decision. The remaining
+   risk is a stall in the storage layer of the headset (FUSE-backed external storage): the
+   non-blocking opens do not bound it, and it has not been measured on a device. An
    unknown binary, a failed validation or a partial install leaves the original call intact
    and emits one structured error.
 5. **Social.** Portable roster, party and name rules in

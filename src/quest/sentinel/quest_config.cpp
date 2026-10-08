@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstring>
+#include <map>
 #include <set>
 #include <string_view>
 #include <utility>
@@ -15,7 +16,8 @@ namespace {
 
 constexpr std::size_t kMaxUriBytes = 2048;
 constexpr std::size_t kMaxKeyBytes = 512;
-constexpr std::size_t kMaxNameLogBytes = 48;
+// A file of thousands of bad keys must not become thousands of log writes at startup.
+constexpr std::size_t kMaxFileWarnings = 32;
 
 enum class Kind { kSocketUri, kHttpUri, kSecret };
 
@@ -78,14 +80,17 @@ const char* ValidateValue(Kind kind, std::string_view v) {
   return "";
 }
 
-// A name taken from the file is logged only when it is short and printable.
-std::string SafeName(const std::string& name) {
-  if (name.empty() || name.size() > kMaxNameLogBytes) return "<unloggable>";
-  for (const char ch : name) {
-    const auto u = static_cast<unsigned char>(ch);
-    if (u < 0x21 || u > 0x7e) return "<unloggable>";
+// A name taken from the file is logged only when it is one of ours. Anything else (a typo, a value
+// pasted as a key, a token of any shape) is counted, never echoed.
+const char* KnownName(const std::string& name) {
+  if (name == "features") return "features";
+  for (const KeySpec& k : kKeys) {
+    if (name == k.name) return k.name;
   }
-  return name;
+  for (const FeatureSpec& f : kFeatures) {
+    if (name == f.name) return f.name;
+  }
+  return "<unknown>";
 }
 
 void Add(LoadResult& r, LogLevel level, std::string message) {
@@ -110,7 +115,20 @@ void ApplyEmbedded(ResolvedConfig& config, const EmbeddedDefaults& d, std::vecto
   }
 }
 
-void ApplyFile(LoadResult& r, const std::string& text) {
+struct WarnBudget {
+  std::size_t emitted = 0;
+  std::size_t suppressed = 0;
+};
+
+void ApplyFileImpl(LoadResult& r, const std::string& text, WarnBudget& budget) {
+  const auto warn = [&r, &budget](std::string message) {
+    if (budget.emitted < kMaxFileWarnings) {
+      ++budget.emitted;
+      Add(r, LogLevel::kWarn, std::move(message));
+    } else {
+      ++budget.suppressed;
+    }
+  };
   if (text.size() > kMaxConfigBytes) {
     r.fileRejected = true;
     Add(r, LogLevel::kError,
@@ -119,7 +137,9 @@ void ApplyFile(LoadResult& r, const std::string& text) {
   }
   // The parser keeps the last of two equal keys; the callback sees every key so duplicates are logged.
   std::vector<std::set<std::string>> seen;
-  std::vector<std::string> duplicates;
+  std::map<std::string, std::size_t> duplicates;
+  std::size_t unknownKeys = 0;
+  std::size_t unknownFeatures = 0;
   const nlohmann::json::parser_callback_t onParse = [&seen, &duplicates](int, nlohmann::json::parse_event_t event,
                                                                          nlohmann::json& parsed) {
     if (event == nlohmann::json::parse_event_t::object_start) {
@@ -127,13 +147,14 @@ void ApplyFile(LoadResult& r, const std::string& text) {
     } else if (event == nlohmann::json::parse_event_t::object_end) {
       if (!seen.empty()) seen.pop_back();
     } else if (event == nlohmann::json::parse_event_t::key && !seen.empty() && parsed.is_string()) {
-      if (!seen.back().insert(parsed.get<std::string>()).second) duplicates.push_back(parsed.get<std::string>());
+      if (!seen.back().insert(parsed.get<std::string>()).second) ++duplicates[parsed.get<std::string>()];
     }
     return true;
   };
   const nlohmann::json doc = nlohmann::json::parse(text, onParse, /*allow_exceptions=*/false);
-  for (const std::string& name : duplicates) {
-    Add(r, LogLevel::kWarn, "config file duplicate key=" + SafeName(name) + " last value wins");
+  for (const auto& entry : duplicates) {
+    warn(std::string("config file duplicate key=") + KnownName(entry.first) + " extra=" + std::to_string(entry.second) +
+         " last value wins");
   }
   if (doc.is_discarded()) {
     r.fileRejected = true;
@@ -155,17 +176,17 @@ void ApplyFile(LoadResult& r, const std::string& text) {
       if (name == k.name) spec = &k;
     }
     if (spec == nullptr) {
-      Add(r, LogLevel::kWarn, "config file unknown key=" + SafeName(name) + " ignored");
+      warn("config file unknown key #" + std::to_string(++unknownKeys) + " ignored");
       continue;
     }
     if (!value.is_string()) {
-      Add(r, LogLevel::kWarn, std::string("config file key=") + spec->name + " rejected reason=not_a_string");
+      warn(std::string("config file key=") + spec->name + " rejected reason=not_a_string");
       continue;
     }
     const std::string& text_value = value.get_ref<const std::string&>();
     const char* bad = ValidateValue(spec->kind, text_value);
     if (bad[0] != '\0') {
-      Add(r, LogLevel::kWarn, std::string("config file key=") + spec->name + " rejected reason=" + bad);
+      warn(std::string("config file key=") + spec->name + " rejected reason=" + bad);
       continue;
     }
     (r.config.*spec->slot) = {text_value, Source::kFile};
@@ -174,7 +195,7 @@ void ApplyFile(LoadResult& r, const std::string& text) {
   const auto features = doc.find("features");
   if (features == doc.end()) return;
   if (!features->is_object()) {
-    Add(r, LogLevel::kWarn, "config file features rejected reason=not_an_object (all features stay off)");
+    warn("config file features rejected reason=not_an_object (all features stay off)");
     return;
   }
   for (const auto& item : features->items()) {
@@ -183,15 +204,25 @@ void ApplyFile(LoadResult& r, const std::string& text) {
       if (item.key() == f.name) spec = &f;
     }
     if (spec == nullptr) {
-      Add(r, LogLevel::kWarn, "config file unknown feature=" + SafeName(item.key()) + " ignored");
+      warn("config file unknown feature #" + std::to_string(++unknownFeatures) + " ignored");
       continue;
     }
     if (!item.value().is_boolean()) {
-      Add(r, LogLevel::kWarn,
+      warn(
           std::string("config file feature=") + spec->name + " rejected reason=not_a_boolean (stays off)");
       continue;
     }
     r.config.requested.*spec->flag = item.value().get<bool>();
+  }
+}
+
+
+void ApplyFile(LoadResult& r, const std::string& text) {
+  WarnBudget budget;
+  ApplyFileImpl(r, text, budget);
+  if (budget.suppressed != 0) {
+    Add(r, LogLevel::kWarn,
+        "config file further warnings suppressed count=" + std::to_string(budget.suppressed));
   }
 }
 

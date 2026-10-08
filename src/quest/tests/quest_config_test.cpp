@@ -185,15 +185,25 @@ void WrongFeatureTypesStayOff() {
 
   r = Load(Full(), R"({"features":{"redirect":true,"turbo":true}})");
   CHECK(r.config.effective.redirect);
-  CHECK(EventsContain(r, "unknown feature=turbo"));
+  CHECK(EventsContain(r, "unknown feature #1 ignored"));
 }
 
 void UnknownKeysWarnWithoutLeakingValues() {
   const LoadResult r = Load(Full(), R"({"nevr_pasword":"SECRETPW-77","bad\u0001key":"x"})");
   CHECK(!r.fileRejected);
-  CHECK(EventsContain(r, "unknown key=nevr_pasword ignored"));
-  CHECK(EventsContain(r, "unknown key=<unloggable> ignored"));
+  CHECK(EventsContain(r, "unknown key #1 ignored"));
+  CHECK(EventsContain(r, "unknown key #2 ignored"));
   CHECK(!EventsContain(r, "SECRETPW-77"));
+
+  // Names shaped like identifiers, hex digests or words are not echoed either.
+  const LoadResult shaped = Load(Full(), R"({"5f4dcc3b5aa765d61d8327deb882cf99":"x","defaultkey":1,"defaultkey":2,)"
+                                        R"("features":{"s3cr3tlowercase":true}})");
+  CHECK(!shaped.fileRejected);
+  for (const char* name : {"5f4dcc3b5aa765d61d8327deb882cf99", "defaultkey", "s3cr3tlowercase"}) {
+    CHECK(!EventsContain(shaped, name));
+  }
+  CHECK(EventsContain(shaped, "unknown key #1 ignored") && EventsContain(shaped, "unknown feature #1 ignored"));
+  CHECK(EventsContain(shaped, "duplicate key=<unknown> extra=1"));
 }
 
 void NoEventEverCarriesAConfiguredValue() {
@@ -209,12 +219,32 @@ void DuplicateKeysWarnAndTheLastValueWins() {
   CHECK(!r.fileRejected);
   CHECK(r.config.httpKey.text == "LAST-2");
   CHECK(r.config.effective.redirect);
-  CHECK(EventsContain(r, "duplicate key=nevr_http_key last value wins"));
-  CHECK(EventsContain(r, "duplicate key=redirect last value wins"));
+  CHECK(EventsContain(r, "duplicate key=nevr_http_key extra=1 last value wins"));
+  CHECK(EventsContain(r, "duplicate key=redirect extra=1 last value wins"));
   CHECK(!EventsContain(r, "FIRST-1") && !EventsContain(r, "LAST-2"));
   // The same key in two different objects is not a duplicate.
   const LoadResult ok = Load(Full(), R"({"features":{"redirect":true},"other":{"redirect":1}})");
   CHECK(!EventsContain(ok, "duplicate"));
+}
+
+void ManyBadKeysProduceBoundedLogging() {
+  // 6000 copies of one key collapse to one warning.
+  std::string dup = "{";
+  for (int i = 0; i < 6000; ++i) dup += "\"a\":1,";
+  dup += "\"nevr_http_uri\":\"https://h.example\"}";
+  LoadResult r = Load(Full(), dup);
+  CHECK(!r.fileRejected && r.config.httpUri.text == "https://h.example");
+  CHECK(EventsContain(r, "duplicate key=<unknown> extra=5999 last value wins"));
+  CHECK(r.events.size() < 40);
+
+  // 5000 distinct unknown keys are capped, with one line saying how many were dropped.
+  std::string many = "{";
+  for (int i = 0; i < 5000; ++i) many += "\"u" + std::to_string(i) + "\":1,";
+  many += "\"nevr_http_uri\":\"https://h.example\"}";
+  r = Load(Full(), many);
+  CHECK(!r.fileRejected);
+  CHECK(r.events.size() < 60);
+  CHECK(EventsContain(r, "further warnings suppressed count=4968"));
 }
 
 void AnEmptyFileValueCannotClearAnEmbeddedDefault() {
@@ -273,6 +303,7 @@ int main() {
   UnknownKeysWarnWithoutLeakingValues();
   NoEventEverCarriesAConfiguredValue();
   DuplicateKeysWarnAndTheLastValueWins();
+  ManyBadKeysProduceBoundedLogging();
   AnEmptyFileValueCannotClearAnEmbeddedDefault();
   ConfigPathIsNeverGameConfigJson();
   RedirectIsGatedByActivation();

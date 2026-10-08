@@ -94,13 +94,13 @@ nevr_quest::ResolvedConfig ResolveFromDisk(const std::string& path) {
 
 void InitActivation() {
   std::call_once(g_once, [] {
-    // A failure here must not take the host process down: fall back to the all-off config.
+    // Nothing may escape the ELF constructor. The handler allocates nothing: an allocation failure
+    // lands here too, and a throw from this block would reach std::terminate.
     try {
       Storage() = ResolveFromDisk(nevr_quest::ConfigFilePath(FilesDir()));
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       Storage() = nevr_quest::ResolvedConfig();
-      Emit(nevr_quest::LogLevel::kError, std::string("config resolution failed: ") + e.what() +
-                                             "; all features off, no embedded defaults");
+      EmitFixed(nevr_quest::LogLevel::kError, "config resolution threw; all features off, no embedded defaults");
     }
   });
 }
