@@ -33,6 +33,7 @@
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
 #include "runtime/compat/login_profile.h"
+#include "runtime/tests/test_log_cap.h"
 #include "runtime/ext/plugin_load_plan.h"  // PluginLoadItem / NevrCfgPluginLoadPlan (N134 S6)
 #include "core/system_info.h"
 #include "core/build_identity.h"
@@ -134,7 +135,7 @@ void Log(EchoVR::LogLevel level, const char* format, ...) {
   vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
   std::lock_guard<std::mutex> lock(g_testLogMutex);
-  g_testLogMessages.emplace_back(buffer);
+  TestLogCap::Append(g_testLogMessages, buffer);
 }
 
 FatalErrorHandlerFunc g_fatalErrorHandler = nullptr;
@@ -1098,7 +1099,12 @@ TEST(WsBridgeGameToServerLog, AWholeMessageThenATruncatedOneDecodesOnlyTheFirst)
   ClearTestLogs();
   std::string second = BuildMarkedMessage(kFriendInviteSym, std::string(0x30, '\x07'));
   PutU64(second, 16, 0x1000);
-  const std::string frame = BuildMarkedMessage(kFriendInviteSym, PatternedInvitePayload()) + second;
+  const std::string first = BuildMarkedMessage(kFriendInviteSym, PatternedInvitePayload());
+  const std::string frame = first + second;
+  // Fail fast, before the walk: the first message is whole and the second is truncated.
+  EvrCodec::Message message;
+  ASSERT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Ok);
+  ASSERT_EQ(EvrCodec::ReadMessage(frame, first.size(), &message), EvrCodec::ReadStatus::Truncated);
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 1);
   EXPECT_TRUE(TestLogContains("FriendInvite: routing=111 target=333 session=222"));
   EXPECT_TRUE(TestLogContains("truncated: header declares 4096 payload bytes but only 48 remain"));
@@ -1109,6 +1115,8 @@ TEST(WsBridgeGameToServerLog, ATruncatedPlayerSessionRequestIsNotHexDumped) {
   ClearTestLogs();
   std::string frame = BuildMarkedMessage(kPlayerSessionSym, std::string(4, 'p'));
   PutU64(frame, 16, 16);  // declares 16 payload bytes, has 4
+  EvrCodec::Message message;
+  ASSERT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Truncated);
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
   EXPECT_FALSE(TestLogContains("PlayerSessionReq payload:"));
 }
@@ -1125,6 +1133,32 @@ TEST(WsBridgeGameToServerLog, AWrappingDeclaredLengthEndsTheWalkAndPrintsTheDecl
   ASSERT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Truncated);
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
   EXPECT_TRUE(TestLogContains("header declares " + std::to_string(wraps) + " payload bytes but only 48 remain"));
+}
+
+// The log sink is capped: a loop that logs on every pass ends the process (TestLogCap::EndProcessOnOverflow)
+// instead of growing the sink until memory runs out. Here the handler is replaced to observe the overflow.
+static size_t g_capOverflowCalls = 0;
+static size_t g_capOverflowLines = 0;
+static void CountCapOverflow(size_t lines) {
+  ++g_capOverflowCalls;
+  g_capOverflowLines = lines;
+}
+
+TEST(TestLogCapSink, ASpinningLoggerStopsGrowingAtTheCapAndReportsTheOverflow) {
+  ClearTestLogs();
+  g_capOverflowCalls = 0;
+  TestLogCap::g_overflowHandler = CountCapOverflow;
+  for (size_t i = 0; i < TestLogCap::kMaxLines + 50; ++i) Log(EchoVR::LogLevel::Info, "spin %zu", i);
+  TestLogCap::g_overflowHandler = TestLogCap::EndProcessOnOverflow;
+  size_t held = 0;
+  {
+    std::lock_guard<std::mutex> lock(g_testLogMutex);
+    held = g_testLogMessages.size();
+  }
+  ClearTestLogs();
+  EXPECT_EQ(held, TestLogCap::kMaxLines);
+  EXPECT_EQ(g_capOverflowCalls, 50u);
+  EXPECT_EQ(g_capOverflowLines, 10000u);
 }
 
 TEST(WsBridgeLoginFailure, DiagnosticRejectsUndersizedTruncatedAndOversizedFrames) {

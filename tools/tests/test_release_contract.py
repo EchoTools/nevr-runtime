@@ -4,6 +4,7 @@ import pathlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -59,22 +60,56 @@ class ReleaseContractTest(unittest.TestCase):
                           "a wine command runs outside run_test, so it has no time limit")
         self.assertGreaterEqual(code.count('run_test "$bin"'), 15)
         self.assertIn('timeout -k 10 900 wine "$1"', match.group(0))
-        # run_test must carry a failing exit status out of the recipe: run it with a wine that fails.
+        # run_test is pinned to the memory cap, with a stated fallback when systemd-run is absent.
         body = match.group(0)
+        self.assertIn("command -v systemd-run", body)
+        self.assertIn("systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- timeout -k 10 900 wine", body)
+        self.assertIn("memory cap exceeded (MemoryMax=4G)", body)
+        self.assertIn("no memory cap", body)
+        # Run the real body against stub wine, systemd-run and timeout programs.
+        bash = shutil.which("bash")
+        timeout_bin = shutil.which("timeout")
         with tempfile.TemporaryDirectory(dir="/var/tmp") as tmp:
-            shim = pathlib.Path(tmp) / "wine"
-            shim.write_text("#!/bin/sh\nexit 7\n")
-            shim.chmod(0o755)
-            env = dict(os.environ, PATH=f"{tmp}:{os.environ['PATH']}")
-            failing = subprocess.run(["bash", "-c", body + '\nrun_test x.exe; echo reached'],
-                                     env=env, capture_output=True, text=True)
+            tmpdir = pathlib.Path(tmp)
+            (tmpdir / "args.txt").write_text("")
+
+            def program(name, text):
+                path = tmpdir / name
+                path.write_text(text)
+                path.chmod(0o755)
+
+            def run(wine_status, with_systemd_run):
+                program("wine", f"#!/bin/sh\nexit {wine_status}\n")
+                (tmpdir / "args.txt").write_text("")
+                if with_systemd_run:
+                    # Records its options, then runs the command after `--` as systemd-run would.
+                    program("systemd-run",
+                            f'#!/bin/sh\necho "$@" > {tmpdir}/args.txt\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n')
+                else:
+                    (tmpdir / "systemd-run").unlink(missing_ok=True)
+                link = tmpdir / "timeout"
+                if not link.exists():
+                    link.symlink_to(timeout_bin)
+                env = dict(os.environ, PATH=str(tmpdir))
+                result = subprocess.run([bash, "-c", body + '\nrun_test x.exe; echo reached'],
+                                        env=env, capture_output=True, text=True)
+                return result, (tmpdir / "args.txt").read_text()
+
+            failing, args = run(7, True)
             self.assertEqual(failing.returncode, 7, failing.stderr)
             self.assertNotIn("reached", failing.stdout)
-            shim.write_text("#!/bin/sh\nexit 0\n")
-            passing = subprocess.run(["bash", "-c", body + '\nrun_test x.exe; echo reached'],
-                                     env=env, capture_output=True, text=True)
+            self.assertIn("MemoryMax=4G", args)
+            self.assertIn("MemorySwapMax=0", args)
+            killed, _ = run(137, True)
+            self.assertEqual(killed.returncode, 137, killed.stderr)
+            self.assertIn("memory cap exceeded (MemoryMax=4G)", killed.stderr)
+            passing, _ = run(0, True)
             self.assertEqual(passing.returncode, 0, passing.stderr)
             self.assertIn("reached", passing.stdout)
+            fallback, args = run(7, False)
+            self.assertEqual(fallback.returncode, 7, fallback.stderr)
+            self.assertIn("no memory cap", fallback.stderr)
+            self.assertEqual(args, "")
         self.assertIn('if [[ ! -f "$bin" ]]; then', recipe)
 
     def test_url_diagnostic_sinks_use_redaction_and_hide_reasons(self):
