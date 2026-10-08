@@ -54,14 +54,12 @@ std::atomic<std::uint64_t> g_eventsDropped{0};
 std::atomic<std::uint64_t> g_sendFailed{0};
 std::atomic<std::uint64_t> g_joinDeferred{0};
 std::atomic<std::uint64_t> g_requestTimeout{0};
-std::atomic<std::uint64_t> g_cjsonResetUnavailable{0};
 // The game's CJson functions (SetGameJson), read on the game's thread.
 std::atomic<CJsonResetFn> g_cjsonReset{nullptr};
 std::atomic<CJsonDecodeFromFn> g_cjsonDecode{nullptr};
 std::atomic<CJsonEncodeToCompactFn> g_cjsonEncode{nullptr};
 // Callbacks delivered to the game, by class (the reporter thread logs them; nothing logs on the delivery).
 std::atomic<std::uint64_t> g_cbCreated{0};
-std::atomic<std::uint64_t> g_cbJoined{0};
 std::atomic<std::uint64_t> g_cbMemberJoined{0};
 std::atomic<std::uint64_t> g_cbJoinFailed{0};
 std::atomic<std::uint64_t> g_cbOther{0};
@@ -903,7 +901,6 @@ void NoteCallbackDelivered(void* self, std::size_t callback) noexcept {
   if (impl != nullptr) impl->callbackCalls.fetch_add(1, std::memory_order_relaxed);
   switch (callback) {
     case kCbCreated: Count(g_cbCreated); break;
-    case kCbJoined: Count(g_cbJoined); break;
     case kCbMemberJoined: Count(g_cbMemberJoined); break;
     case kCbJoinFailed: Count(g_cbJoinFailed); break;
     default: Count(g_cbOther); break;
@@ -1124,7 +1121,7 @@ CJsonResetFn ResetPrepare(void* self) noexcept {
     impl->sharedParty = 0;
     impl->memberDataWritten.store(false, std::memory_order_relaxed);
     if (reset == nullptr) {
-      Count(g_cjsonResetUnavailable);
+      Count(g_jsonFailed);
       LogFields(LogLevel::kWarn, "social_reset", {{"cjson_reset", "unavailable"}, {"action", "party_cjson_left_alone"}});
     }
     return reset;
@@ -1350,7 +1347,7 @@ void NoteFrameIgnored() noexcept { Count(g_framesIgnored); }
 
 FacadeCounters FacadeCountersView() noexcept {
   return FacadeCounters{g_membersHidden, g_eventsDropped, g_sendFailed, g_joinDeferred, g_requestTimeout,
-                        g_cjsonResetUnavailable, g_cbCreated, g_cbJoined, g_cbMemberJoined, g_cbJoinFailed, g_cbOther,
+                        g_cbCreated, g_cbMemberJoined, g_cbJoinFailed, g_cbOther,
                         g_jsonFailed, g_framesIgnored};
 }
 
@@ -1360,9 +1357,7 @@ void ResetFacadeCountersForTest() noexcept {
   g_sendFailed.store(0, std::memory_order_relaxed);
   g_joinDeferred.store(0, std::memory_order_relaxed);
   g_requestTimeout.store(0, std::memory_order_relaxed);
-  g_cjsonResetUnavailable.store(0, std::memory_order_relaxed);
   g_cbCreated.store(0, std::memory_order_relaxed);
-  g_cbJoined.store(0, std::memory_order_relaxed);
   g_cbMemberJoined.store(0, std::memory_order_relaxed);
   g_cbJoinFailed.store(0, std::memory_order_relaxed);
   g_cbOther.store(0, std::memory_order_relaxed);

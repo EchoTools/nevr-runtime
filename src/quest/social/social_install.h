@@ -71,9 +71,9 @@ void ResetCountersForTest() noexcept;
 GameJson ResolveGameJson(sentinel::ImageLookup lookup) noexcept;
 
 // Registers the counters with the sentinel's reporter (hook_report.h): the thunk's calls, the selected
-// count, the three pass-through counters, the thunk's faults and the facade's thirteen (members hidden,
-// events dropped, sends failed, joins deferred, requests timed out, CJson::Reset unavailable, five callback
-// delivery classes, JSON failures, frames ignored): 19 of the reporter's 32.
+// count, the three pass-through counters, the thunk's faults, the facade's eleven (members hidden,
+// events dropped, sends failed, joins deferred, requests timed out, four callback delivery classes, JSON failures,
+// frames ignored) and the invite gate's two (social_invite_gate.h): 19 of the reporter's 32.
 // Call before StartReporter; returns false if any registration was refused.
 bool RegisterSocialReportCounters();
 
@@ -93,7 +93,8 @@ PnsovrLookup SetPnsovrLookup(PnsovrLookup lookup);
 void PublishFacadeObject();
 
 // Registers the friend-name decoder (SocialNames::RegisterDefaultDecoder, the zstd profile reader), builds the
-// process-wide facade (outside any game frame), arms the callback and redirects the slot.
+// process-wide facade (outside any game frame), arms the callback and redirects the slot. Once that has worked it also
+// installs the party-invite gate override (social_invite_gate.h), whose outcome is logged, not returned.
 // `enabled` is the caller's activation decision; false touches nothing.
 InstallResult InstallSocialHook(bool enabled);
 

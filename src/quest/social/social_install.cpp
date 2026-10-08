@@ -13,6 +13,7 @@
 #include "pinned_targets.h"
 #include "quest/social/social_abi.h"
 #include "quest/social/social_facade.h"
+#include "quest/social/social_invite_gate.h"
 #include "runtime/compat/social_names.h"
 
 namespace quest_social {
@@ -146,16 +147,14 @@ bool RegisterSocialReportCounters() {
   ok = sentinel::RegisterReportCounter("social_join_deferred", &facade.joinDeferred) && ok;
   ok = sentinel::RegisterReportCounter("social_request_timeout", &facade.requestTimeout,
                                        sentinel::ReportKind::kFaults) && ok;
-  ok = sentinel::RegisterReportCounter("social_cjson_reset_unavailable", &facade.cjsonResetUnavailable,
-                                       sentinel::ReportKind::kFaults) && ok;
   // Callback deliveries by class: a headset run shows PartyCreatedCB, MemberJoined, JoinFailed and the rest.
   ok = sentinel::RegisterReportCounter("social_cb_created", &facade.cbCreated) && ok;
-  ok = sentinel::RegisterReportCounter("social_cb_joined", &facade.cbJoined) && ok;
   ok = sentinel::RegisterReportCounter("social_cb_member_joined", &facade.cbMemberJoined) && ok;
   ok = sentinel::RegisterReportCounter("social_cb_join_failed", &facade.cbJoinFailed) && ok;
   ok = sentinel::RegisterReportCounter("social_cb_other", &facade.cbOther) && ok;
   ok = sentinel::RegisterReportCounter("social_json_failed", &facade.jsonFailed, sentinel::ReportKind::kFaults) && ok;
   ok = sentinel::RegisterReportCounter("social_frames_ignored", &facade.framesIgnored, sentinel::ReportKind::kFaults) && ok;
+  ok = RegisterInviteGateCounters() && ok;
   return ok;
 }
 
@@ -186,6 +185,8 @@ InstallResult InstallSocialHook(bool enabled) {
   }
   result.status = InstallStatus::kOk;
   LogFields(LogLevel::kInfo, "social_install", {{"status", "ok"}});
+  // The facade is live: let the invite "+" reach it (the gate logs its own outcome; the facade works without it).
+  InstallInviteGate();
   return result;
 }
 

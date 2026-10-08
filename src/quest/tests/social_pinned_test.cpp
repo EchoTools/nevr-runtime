@@ -27,6 +27,7 @@
 #include "pinned_targets.h"
 #include "quest/social/social_abi.h"
 #include "quest/social/social_install.h"
+#include "quest/social/social_invite_gate.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -275,6 +276,21 @@ int main(int argc, char** argv) {
   GotTarget shifted = target;
   shifted.slotVaddr = quest_social::kSocialSlotVaddr + 8;
   QCHECK_STATUS(ResolveSlot(r15.image, shifted, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
+
+  // libr15's slot for CJson::Boolean (the invite gate): pinned, the only one for the symbol, and the export it imports.
+  const GotTarget gate = quest_social::LibR15Boolean();
+  QCHECK_STATUS(ResolveSlot(r15.image, gate, kAarch64Relocs).status, GotStatus::kOk);
+  QCHECK(ResolveSlot(r15.image, gate, kAarch64Relocs).slotVaddr == quest_social::kBooleanSlotVaddr);
+  GotTarget gateUnpinned = gate;
+  gateUnpinned.slotVaddr = std::nullopt;
+  QCHECK_STATUS(ResolveSlot(r15.image, gateUnpinned, kAarch64Relocs).status, GotStatus::kOk);
+  QCHECK(ResolveSlot(r15.image, gateUnpinned, kAarch64Relocs).slotVaddr == quest_social::kBooleanSlotVaddr);
+  {
+    Dynamic r15dyn;
+    QCHECK(ReadDynamic(r15, &r15dyn));
+    const Elf64_Sym* boolean = FindSymbol(r15dyn, quest_social::kBooleanSymbol);
+    QCHECK(boolean != nullptr && boolean->st_value == 0xfa4370ULL && ELF64_ST_TYPE(boolean->st_info) == STT_FUNC);
+  }
 
   // libpnsovr's CNSOVRSocial vtable: the address point the hook compares against, and every slot.
   std::size_t size = 0;

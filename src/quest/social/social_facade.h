@@ -45,7 +45,7 @@ const Ports& ProductionPorts();
 // The game's CJson functions (social_abi.h): Reset on the party and member CJson when the social object is reset,
 // DecodeFrom to load the server's party and member data, EncodeToCompact to read out what the game wrote. The
 // installer sets them once it has found libr15 of the pinned build (social_install.h); the default (all nullptr)
-// loads and shares nothing, leaves the CJson alone and counts a Reset (cjsonResetUnavailable). A test sets fakes.
+// loads and shares nothing, leaves the CJson alone and counts a Reset (jsonFailed). A test sets fakes.
 void SetGameJson(const GameJson& json) noexcept;
 
 // A server frame of a social kind that changed nothing (unreadable, not an object, for another party): counted for
@@ -60,14 +60,12 @@ struct FacadeCounters {
   const std::atomic<std::uint64_t>& sendFailed;      // requests the sender refused (state rolled back)
   const std::atomic<std::uint64_t>& joinDeferred;    // join attempts deferred behind a create or join in flight
   const std::atomic<std::uint64_t>& requestTimeout;  // create, join or lock requests the sender took and the server never answered
-  const std::atomic<std::uint64_t>& cjsonResetUnavailable;  // Resets that could not call the game's CJson::Reset
   // Callbacks delivered to the game, by class (the delivery itself never logs; the reporter does).
   const std::atomic<std::uint64_t>& cbCreated;      // PartyCreatedCB
-  const std::atomic<std::uint64_t>& cbJoined;       // PartyJoinedCB
   const std::atomic<std::uint64_t>& cbMemberJoined; // PartyMemberJoinedCB
   const std::atomic<std::uint64_t>& cbJoinFailed;   // PartyJoinFailedCB
-  const std::atomic<std::uint64_t>& cbOther;        // every other callback: updated, host changed, left, kicked, member updated/left, invite received, the accept gate
-  const std::atomic<std::uint64_t>& jsonFailed;     // party or member data the game's JSON would not load, could not be read out, or was held for want of the game's functions
+  const std::atomic<std::uint64_t>& cbOther;        // every other callback: joined, updated, host changed, left, kicked, member updated/left, invite received, the accept gate
+  const std::atomic<std::uint64_t>& jsonFailed;     // party or member data the game's JSON would not load, could not be read out, or was held for want of the game's functions; a Reset that could not call the game's CJson::Reset
   const std::atomic<std::uint64_t>& framesIgnored;  // server frames of a social kind that changed nothing
 };
 FacadeCounters FacadeCountersView() noexcept;

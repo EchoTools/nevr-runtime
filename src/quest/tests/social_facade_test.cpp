@@ -416,7 +416,7 @@ void TestInvitesAndJoin() {
   Update(w, 0);
   QCHECK(Called("v" + std::to_string(kCbJoined)));
   QCHECK(Called("u" + std::to_string(kCbMemberJoined) + ":1"));
-  QCHECK(FacadeCountersView().cbJoined.load() == 1);
+  QCHECK(FacadeCountersView().cbOther.load() >= 2);  // PartyJoinedCB is counted with the other callbacks
   QCHECK(FacadeCountersView().cbOther.load() >= 1);  // the accept gate, InviteReceived, ...
   QCHECK(SlotFn<U64_0>(obj, kId)(obj) == 556);
   QCHECK(SlotFn<U64_0>(obj, kHost)(obj) == 2002);
@@ -948,7 +948,7 @@ void TestResetCallsTheGamesCJsonReset() {
   QCHECK(DocOf(PartyJson(obj)) == nullptr && DocOf(MemberJson(obj, 0)) == nullptr);  // freed by the game's function
   const std::uint8_t zero[16] = {};
   QCHECK(std::memcmp(static_cast<std::uint8_t*>(obj) + kOffLobbyUuid, zero, 16) == 0);  // Reset stores kInvalid (zero)
-  QCHECK(FacadeCountersView().cjsonResetUnavailable.load() == 0);
+  QCHECK(FacadeCountersView().jsonFailed.load() == 0);
   SlotFn<Void0>(obj, kReset)(obj);
   QCHECK(g_fakeResets == 2 * (1 + static_cast<int>(kMemberJsonSlots)));
 
@@ -962,7 +962,7 @@ void TestResetCallsTheGamesCJsonReset() {
   SlotFn<Void0>(obj, kReset)(obj);
   QCHECK(g_fakeResets == before);
   QCHECK(std::memcmp(PartyJson(obj), pattern, 16) == 0);
-  QCHECK(FacadeCountersView().cjsonResetUnavailable.load() == 1);
+  QCHECK(FacadeCountersView().jsonFailed.load() == 1);
   std::memset(PartyJson(obj), 0, 16);
 }
 
