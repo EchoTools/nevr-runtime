@@ -34,13 +34,34 @@ inline constexpr std::size_t kMaxHandshakeBytes = 8192;
 
 struct UpgradeRequest {
   std::string key;        // Sec-WebSocket-Key
+  std::string target;     // the request target exactly as sent ("/path?query"); may carry the access token
+  bool hasOrigin = false;  // an Origin header was present (a browser or webview, never the game)
   std::size_t consumed = 0;  // bytes of the buffer the request occupied; frame bytes may follow
 };
+
+// ---- access token -------------------------------------------------------------------------------
+// The loopback listener is reachable by every local app, so the upgrade must prove it was dialled with the
+// URI the runtime handed the game. The token is 128 random bits as 32 lowercase hex characters. It may
+// ride as the first path segment ("/<token>/..." or "/<token>") or as the query parameter
+// "nevr_token=<token>": the game's WebSocket client sends the URI's path and query verbatim as the request
+// target (CWebSocketCodec::SendHandshakeRequest builds "%s%s%s%s" from path, "?" and query).
+inline constexpr std::size_t kTokenHexLength = 32;
+inline constexpr char kTokenQueryName[] = "nevr_token";
+
+// Compares without an early exit on the first differing byte. Different lengths are not equal (lengths
+// are not secret).
+bool ConstantTimeEquals(std::string_view a, std::string_view b);
+// True when `target` carries `token` in either supported place. Evaluates both places and every byte.
+bool TargetCarriesToken(std::string_view target, std::string_view token);
+// 32 lowercase hex characters from 16 raw bytes.
+std::string HexEncode(const uint8_t* bytes, std::size_t count);
 
 HandshakeStatus ParseUpgradeRequest(std::string_view buffer, UpgradeRequest* out);
 std::string BuildUpgradeResponse(std::string_view clientKey);
 // What the listener answers a request it will not upgrade.
 std::string BuildBadRequestResponse();
+// What the listener answers an upgrade that lacks the access token or carries an Origin header.
+std::string BuildForbiddenResponse();
 
 // ---- frames ------------------------------------------------------------------------------------
 
