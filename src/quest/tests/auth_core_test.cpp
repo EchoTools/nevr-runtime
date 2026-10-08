@@ -851,9 +851,12 @@ TEST(link_presenter_reports_failure_when_it_cannot_write) {
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  // Optional substring filter: `auth_core_test session_start` runs only matching tests.
+  const std::string filter = argc > 1 ? argv[1] : "";
   int ran = 0;
   for (const TestCase& t : Registry()) {
+    if (!filter.empty() && std::string(t.name).find(filter) == std::string::npos) continue;
     const int before = g_failures;
     try {
       t.fn();
