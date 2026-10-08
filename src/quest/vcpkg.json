@@ -2,6 +2,7 @@
   "name": "nevr-quest",
   "version-string": "0.1.0",
   "dependencies": [
-    "nlohmann-json"
+    "nlohmann-json",
+    "zstd"
   ]
 }

@@ -22,6 +22,7 @@
 #include "quest/social/social_facade.h"
 #include "quest/social/social_install.h"
 #include "quest/tests/test_check.h"
+#include "runtime/compat/social_names.h"
 
 namespace {
 
@@ -153,15 +154,20 @@ void TestCounterRegistration() {
 
 void TestInstall() {
   g_lines.clear();
+  // Quest registers the friend-name decoder explicitly (no static initializer): a disabled install leaves it
+  // alone, an enabled one registers it.
+  QCHECK(SocialNames::DecoderSlot().load() == nullptr);
   const InstallResult off = InstallSocialHook(false);
   QCHECK(off.status == InstallStatus::kDisabled);
   QCHECK(CountLines("\"status\":\"disabled\"") == 1);
+  QCHECK(SocialNames::DecoderSlot().load() == nullptr);
 
   // libr15.so is not loaded in this process: GotHook refuses and the callback is left disarmed.
   g_lines.clear();
   const InstallResult on = InstallSocialHook(true);
   QCHECK(on.status == InstallStatus::kHookFailed);
   QCHECK(on.got == sentinel::GotStatus::kModuleNotLoaded);
+  QCHECK(SocialNames::DecoderSlot().load() != nullptr);
   QCHECK(CountLines("\"status\":\"hook_failed\"") == 1);
   QCHECK(CountLines("\"got\":\"") >= 1);
   *SocialThunk::OriginalOut() = reinterpret_cast<void*>(&FakeOriginal);

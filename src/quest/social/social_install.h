@@ -91,7 +91,8 @@ void* OnSocialHandler(SocialThunk::Fn original, std::uint64_t handle) noexcept;
 PnsovrLookup SetPnsovrLookup(PnsovrLookup lookup);
 void PublishFacadeObject();
 
-// Builds the process-wide facade (outside any game frame), arms the callback and redirects the slot.
+// Registers the friend-name decoder (SocialNames::RegisterDefaultDecoder, the zstd profile reader), builds the
+// process-wide facade (outside any game frame), arms the callback and redirects the slot.
 // `enabled` is the caller's activation decision; false touches nothing.
 InstallResult InstallSocialHook(bool enabled);
 

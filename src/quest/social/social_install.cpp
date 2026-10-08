@@ -13,6 +13,7 @@
 #include "pinned_targets.h"
 #include "quest/social/social_abi.h"
 #include "quest/social/social_facade.h"
+#include "runtime/compat/social_names.h"
 
 namespace quest_social {
 namespace {
@@ -152,6 +153,9 @@ InstallResult InstallSocialHook(bool enabled) {
     return result;
   }
   static sentinel::GotHook hook;
+  // The friend-name decoder (zstd) is registered by this explicit call: the PC registers it from a static
+  // initializer, which the sentinel may not carry. Without it no profile is requested and rows show ids.
+  SocialNames::RegisterDefaultDecoder();
   // Allocate and wire the models before any game thread can reach the handler.
   PublishFacadeObject();
   const CJsonResetFn cjsonReset = ResolveCJsonReset(&sentinel::FindLoadedImage);

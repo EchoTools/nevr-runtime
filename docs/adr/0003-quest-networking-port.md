@@ -571,9 +571,18 @@ is gone. So headset
 type in the party list and the lobby id a non-host party member follows are not shared; the engine's base `CNSISocial::Update` (0x1919868) would do that sharing
 given the dirty-bit array at +0x208 and the `ShareData` slots. `libr15.so` exports the CJson calls it would
 need (`DecodeFrom(char const*, unsigned long long)`, `EncodeToCompactTStr`, `Reset`). `RefreshInvites`,
-`FriendsRefreshed` are not driven, as on PCVR. Display names need a registered `SocialNames::SetDecoder`
-(zstd) that the Quest build does not link; the profile replies are unreadable without it, so no profile
-request is sent and friends and party members show account ids until an adapter registers one.
+`FriendsRefreshed` are not driven, as on PCVR.
+
+Display names: the server sends friends and party members as account ids; their names come from the game's own
+profile request, whose reply is a zstd frame. `nevr_quest_social` compiles the PC's decoder
+(`runtime/compat/social_names.cpp`) with the `zstd` port in `src/quest/vcpkg.json` (static, linked into the
+sentinel, which links `-Wl,--exclude-libs,ALL` and exports only `JNI_OnLoad` and `nevr_sentinel_marker`; the
+game's `libr15.so` and `libpnsovr.so` each export their own 138 `ZSTD_*` symbols, which a hidden static copy does
+not meet). The PC registers the decoder from a namespace-scope initializer, which the sentinel may not carry
+(`tools/check_quest_static_init.sh`), so the Quest compile defines `NEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION` and
+`InstallSocialHook` calls `SocialNames::RegisterDefaultDecoder()`. Without that call no profile is requested and
+rows show account ids. `social_names_test` decodes the real zstd frame the PC tests use and shows the name on a
+friend row.
 
 ### Integration contract
 
@@ -601,7 +610,7 @@ What the integration commit calls, and when:
    a join is reported to the game as failed), and `quest_social::ObserveFrames(ProductionPorts(), direction, bytes, length,
    nowSeconds)` for every frame the bridge relays on the login connection, both directions, after the
    remote EVR login session is open.
-5. **Link:** `nevr_quest_social` into `ovrplatformloader`. `social_install.cpp` and
+5. **Link:** `nevr_quest_social` (with its `zstd` and `nlohmann-json` dependencies) into `ovrplatformloader`. `social_install.cpp` and
    `social_game_calls.cpp` are `-fno-exceptions` (CMake source properties); the sentinel's link must not
    change that.
 

@@ -522,6 +522,9 @@ test-quest-social:
     "${off[@]}" -c src/quest/sentinel/hook_report.cpp -o "$out/hook_report.o"
     "${off[@]}" -c src/quest/social/social_game_calls.cpp -o "$out/social_game_calls.o"
     "${off[@]}" -c src/quest/social/social_install.cpp -o "$out/social_install.o"
+    # The friend-name decoder, as the Quest build compiles it: no static registration (the sentinel carries no
+    # dynamic initializer; InstallSocialHook registers it).
+    "${on[@]}" -DNEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION -c src/runtime/compat/social_names.cpp -o "$out/social_names.o"
     # The frames live across a call into the game carry no exception machinery.
     tools/check_quest_social_frames.sh nm readelf \
         "$out/social_game_calls.o=SlotUpdateEntry" "$out/social_install.o=OnSocial"
@@ -533,9 +536,12 @@ test-quest-social:
     "${on[@]}" src/quest/tests/social_facade_test.cpp "$out/social_facade.o" "$out/social_frames.o" \
         "$out/social_game_calls.o" "$out/hook_log.o" -o "$out/social_facade_test" -ldl -pthread
     "$out/social_facade_test"
+    "${on[@]}" src/quest/tests/social_names_test.cpp "$out/social_facade.o" "$out/social_frames.o" \
+        "$out/social_game_calls.o" "$out/hook_log.o" "$out/social_names.o" -o "$out/social_names_test" -ldl -pthread -lzstd
+    "$out/social_names_test"
     "${off[@]}" src/quest/tests/social_install_test.cpp "$out/social_install.o" "$out/social_facade.o" \
-        "$out/social_game_calls.o" "$out/got_hook.o" "$out/hook_log.o" "$out/hook_report.o" \
-        -o "$out/social_install_test" -ldl -pthread
+        "$out/social_game_calls.o" "$out/got_hook.o" "$out/hook_log.o" "$out/hook_report.o" "$out/social_names.o" \
+        -o "$out/social_install_test" -ldl -pthread -lzstd
     timeout 300 "$out/social_install_test"  # a hang is a failure, not a stuck gate
 
 # The social pins against the real libr15.so and libpnsovr.so (docs/adr/0003). Extracts both from
@@ -556,11 +562,13 @@ test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signe
     echo "26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79  $lib/libpnsovr.so" | sha256sum -c -
     g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -c src/quest/social/social_facade.cpp \
         -o "$out/social_facade.o"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -DNEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION -c \
+        src/runtime/compat/social_names.cpp -o "$out/social_names.o"
     g++ -std=c++17 -fno-exceptions -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel \
         src/quest/tests/social_pinned_test.cpp src/quest/social/social_install.cpp \
-        src/quest/social/social_game_calls.cpp "$out/social_facade.o" \
+        src/quest/social/social_game_calls.cpp "$out/social_facade.o" "$out/social_names.o" \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
-        -o "$out/social_pinned_test" -ldl -pthread
+        -o "$out/social_pinned_test" -ldl -pthread -lzstd
     "$out/social_pinned_test" "$lib/libr15.so" "$lib/libpnsovr.so"
     "$out/social_pinned_test" --dump "$lib/libpnsovr.so" > "$out/vtable.txt"
     diff -u src/quest/tests/fixtures/cnsovrsocial_vtable.txt "$out/vtable.txt"
