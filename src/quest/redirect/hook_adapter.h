@@ -25,8 +25,13 @@
 //      string "pnsradmatchmaking") and calls InstallMatchmakingRedirect() after the real dlopen
 //      returns. ConnectMatchmaker (0x1b22b8) re-reads the host on every connect, so installing
 //      before the first dial is enough.
-//   4. A failed install leaves the redirector in place; calling InstallRedirectHooks again retries
-//      the slot that is not installed. A poisoned slot (kSlotPoisoned) is logged and not retried.
+//   4. The first call with the redirect feature effective fixes the configuration, targets, pool and
+//      bridge probe for the process; a later InstallRedirectHooks call with another configuration
+//      is ignored (it only retries slots). A call with the feature off or without a pool installs
+//      nothing and fixes nothing, so a later call can still activate. A failed install leaves the
+//      redirector in place: retry libr15's slot with InstallLibR15Redirect() (or by calling
+//      InstallRedirectHooks again) and the matchmaking slot with InstallMatchmakingRedirect().
+//      A poisoned slot (kSlotPoisoned) is logged once and not retried.
 // The bridge feature has no effect on Quest yet: the production install passes no BridgeProbe, so
 // every redirect uses the configured target.
 #pragma once
@@ -51,6 +56,10 @@ bool RegisterRedirectCounters() noexcept;
 // Production entry: pinned targets, the process-wide pool, no bridge probe.
 InstallReport InstallRedirectHooks(const nevr_quest::ResolvedConfig& config);
 
+// Retries libr15's slot with the options the first call fixed. kNotInstalled if the redirect was
+// never enabled; kAlreadyInstalled if installed; kSlotPoisoned if an earlier attempt poisoned it.
+sentinel::GotStatus InstallLibR15Redirect();
+
 // Installs the matchmaking slot after its module has loaded (see the contract above). kNotInstalled
 // if InstallRedirectHooks has not enabled the redirect; kAlreadyInstalled if it is installed;
 // kSlotPoisoned if an earlier attempt left the slot poisoned.
@@ -68,6 +77,7 @@ struct InstallOptions {
 };
 InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config, const InstallOptions& options);
 sentinel::GotStatus InstallMatchmakingRedirectWith(sentinel::ImageLookup lookup);
+sentinel::GotStatus InstallLibR15RedirectWith(sentinel::ImageLookup lookup);
 
 // Test seam: arms the typed handlers on `redirector` (or disarms with nullptr) without touching
 // any GOT slot. A test then calls each ThunkEntry(slot) with a fake original.

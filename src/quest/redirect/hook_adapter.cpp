@@ -87,9 +87,15 @@ InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config,
   if (s.redirector == nullptr) {
     InstallReport off;
     off.featureEnabled = nevr_quest::FeatureEnabled(config, nevr_quest::Feature::kRedirect);
-    if (!off.featureEnabled || options.intern == nullptr) {
+    if (!off.featureEnabled) {
       sentinel::LogFields(sentinel::LogLevel::kInfo, "redirect_install",
                           {{"target", "redirect"}, {"status", "feature_off"}, {"action", "nothing_installed"}});
+      return off;
+    }
+    if (options.intern == nullptr) {
+      sentinel::LogFields(sentinel::LogLevel::kError, "redirect_install",
+                          {{"target", "redirect"}, {"status", "no_string_pool"}, {"action", "nothing_installed"}});
+      off.featureEnabled = false;
       return off;
     }
     ServiceRedirector* redirector = nullptr;
@@ -129,6 +135,16 @@ InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config,
 InstallReport InstallRedirectHooks(const nevr_quest::ResolvedConfig& config) {
   return InstallRedirectHooksWith(config, {PinnedTargets(), sentinel::FindLoadedImage, &nevr_runtime::lifecycle::InternStableCStr, nullptr});
 }
+
+GotStatus InstallLibR15RedirectWith(sentinel::ImageLookup lookup) {
+  Installation& s = State();
+  const std::lock_guard<std::mutex> lock(s.mutex);
+  if (s.redirector == nullptr) return GotStatus::kNotInstalled;
+  return InstallSlotLocked(Slot::kLibR15, s.libr15Hook, s.options.targets.libr15, lookup, &s.report.libr15,
+                           "libr15_tstring");
+}
+
+GotStatus InstallLibR15Redirect() { return InstallLibR15RedirectWith(sentinel::FindLoadedImage); }
 
 GotStatus InstallMatchmakingRedirectWith(sentinel::ImageLookup lookup) {
   Installation& s = State();

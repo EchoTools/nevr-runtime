@@ -469,6 +469,74 @@ void ThunkPassesExceptionsFromTheOriginal() {
   QCHECK(caught);
 }
 
+// The handler must apply the redirect to what the original returned, after it returned: a fake
+// original records that it ran, and the apply function checks the flag and the value it was handed.
+bool g_originalRan = false;
+bool g_applyAfterOriginal = false;
+const char* g_applySawResult = nullptr;
+const char* g_originalReturned = nullptr;
+
+const char* OrderOriginal(const void*, const char*, const char* fallback, std::uint32_t) {
+  g_originalRan = true;
+  g_originalReturned = fallback;
+  return fallback;
+}
+const char* OrderApply(const char*, const char* result) noexcept {
+  g_applyAfterOriginal = g_originalRan;
+  g_applySawResult = result;
+  return result;
+}
+
+void HandlerAppliesAfterTheOriginalToItsResult() {
+  ResetThunks();
+  *ThunkOriginalOut(Slot::kLibR15) = reinterpret_cast<void*>(&OrderOriginal);
+  *ThunkOriginalOut(Slot::kMatchmaking) = reinterpret_cast<void*>(&OrderOriginal);
+  SetApply(&OrderApply);
+  ArmThunk(Slot::kLibR15, true);
+  ArmThunk(Slot::kMatchmaking, true);
+  for (int slot = 0; slot < 2; ++slot) {
+    g_originalRan = g_applyAfterOriginal = false;
+    g_applySawResult = g_originalReturned = nullptr;
+    const char* const fallback = "fallback-marker";
+    const char* const got = (slot == 0 ? R15Entry() : MmEntry())(nullptr, "login_host", fallback, 0U);
+    QCHECK(g_originalRan);
+    QCHECK(g_applyAfterOriginal);
+    QCHECK(g_applySawResult == g_originalReturned);
+    QCHECK(got == fallback);
+  }
+  SetApply(nullptr);
+  ArmThunk(Slot::kLibR15, false);
+  ArmThunk(Slot::kMatchmaking, false);
+  ResetThunks();
+}
+
+// All 16 slots computed under the current bridge state: a further value is not remembered. A change
+// of bridge state makes those entries stale, and a stale slot is recycled.
+void CacheFullAndStaleBridgeBehaviour() {
+  Scenario s(Config(kRedirectAndBridgeOn), &InternReal, &BridgeProbeFn);
+  g_bridge = {false, 0};
+  auto read = [&](int i) {
+    GameConfig()["loginservice_host"] = "wss://v" + std::to_string(i) + ".example/x";
+    return s.R15("loginservice_host", kDefaultLogin);
+  };
+  for (int i = 0; i < static_cast<int>(kMaxCachedValues); ++i) (void)read(i);
+  QCHECK(s.redirector->counters().policyRuns == kMaxCachedValues);
+  (void)read(100);
+  (void)read(100);  // full under the current bridge state: not remembered, so the policy runs again
+  QCHECK(s.redirector->counters().policyRuns == kMaxCachedValues + 2);
+  (void)read(3);    // an entry that is cached stays a hit
+  QCHECK(s.redirector->counters().policyRuns == kMaxCachedValues + 2);
+
+  g_bridge = {true, 53748};
+  const std::uint64_t before = s.redirector->counters().policyRuns;
+  const char* bridged = read(0);  // every entry is stale now: this miss recycles one
+  QCHECK(std::strcmp(bridged, "ws://127.0.0.1:53748") == 0);
+  QCHECK(s.redirector->counters().policyRuns == before + 1);
+  QCHECK(read(0) == bridged);
+  QCHECK(s.redirector->counters().policyRuns == before + 1);  // remembered: no second policy run
+  g_bridge = {false, 0};
+}
+
 // ---- layer 3: concurrency ---------------------------------------------------
 
 void ConcurrentCallsAgree() {
@@ -511,6 +579,31 @@ InstallOptions FixtureOptions(InternFn intern) {
           sentinel::FindLoadedImage, intern, nullptr};
 }
 
+// Another writer overwrites the slot between our store and the read-back: Install reports
+// kWriteVerifyFailed, and the backend then refuses the slot as poisoned. The adapter stops there:
+// no further attempt, no further log line, and the thunk stays disarmed.
+void ClobberAfterStore(void** slot, void*, sentinel::StorePhase phase) {
+  if (phase == sentinel::StorePhase::kAfterStore) *slot = reinterpret_cast<void*>(&FakeTString);
+}
+
+void PoisonedSlotIsNotRetried(void*, void*) {
+  RemoveRedirectHooks();
+  Lines().clear();
+  sentinel::SetStoreObserver(&ClobberAfterStore);
+  const InstallReport report = InstallRedirectHooksWith(Config(kRedirectOn), FixtureOptions(&InternReal));
+  sentinel::SetStoreObserver(nullptr);
+  QCHECK_STATUS(report.libr15, GotStatus::kWriteVerifyFailed);
+  QCHECK_STATUS(InstallLibR15RedirectWith(sentinel::FindLoadedImage), GotStatus::kSlotPoisoned);
+  Lines().clear();
+  QCHECK_STATUS(InstallLibR15RedirectWith(sentinel::FindLoadedImage), GotStatus::kSlotPoisoned);
+  QCHECK(Lines().empty());  // the stored poisoned status short-circuits: no attempt, no log line
+  *ThunkOriginalOut(Slot::kLibR15) = reinterpret_cast<void*>(&FakeTString);
+  GameConfig().clear();
+  QCHECK(R15Entry()(nullptr, "login_host", kDefaultLogin, 0U) == kDefaultLogin);  // disarmed
+  ResetThunk(Slot::kLibR15);
+  RemoveRedirectHooks();
+}
+
 void RealHookEndToEnd(const std::string& dir) {
   ResetThunks();
   Lines().clear();
@@ -528,6 +621,11 @@ void RealHookEndToEnd(const std::string& dir) {
   QCHECK(early.featureEnabled);
   QCHECK_STATUS(early.libr15, GotStatus::kModuleNotLoaded);
   QCHECK_STATUS(early.matchmaking, GotStatus::kModuleNotLoaded);
+  // A failed install leaves the handler disarmed: a call through the entry is a pass-through.
+  *ThunkOriginalOut(Slot::kLibR15) = reinterpret_cast<void*>(&FakeTString);
+  GameConfig().clear();
+  QCHECK(R15Entry()(nullptr, "login_host", kDefaultLogin, 0U) == kDefaultLogin);
+  ResetThunk(Slot::kLibR15);
 
   void* a = OpenFixture(dir, "libredirfx_consumer_a.so");
   QCHECK(a != nullptr);
@@ -538,6 +636,8 @@ void RealHookEndToEnd(const std::string& dir) {
   QCHECK(readA("login_host", kDefaultLogin) == kDefaultLogin);  // loaded but not yet hooked
 
   // The retry installs the libr15 slot; the matchmaking module is still not loaded.
+  QCHECK_STATUS(InstallLibR15RedirectWith(sentinel::FindLoadedImage), GotStatus::kOk);
+  QCHECK_STATUS(InstallLibR15RedirectWith(sentinel::FindLoadedImage), GotStatus::kAlreadyInstalled);
   const InstallReport on = InstallRedirectHooksWith(Config(kRedirectOn), FixtureOptions(&InternReal));
   QCHECK(on.featureEnabled);
   QCHECK_STATUS(on.libr15, GotStatus::kOk);
@@ -585,6 +685,8 @@ void RealHookEndToEnd(const std::string& dir) {
   QCHECK(readA("login_host", kDefaultLogin) == kDefaultLogin);
   RemoveRedirectHooks();
 
+  PoisonedSlotIsNotRetried(a, b);
+
   if (b != nullptr) dlclose(b);
   dlclose(a);
 }
@@ -625,6 +727,8 @@ int main(int argc, char** argv) {
   HitsDoNotAllocateOrLog();
   PrewarmMakesTheBuiltinDefaultsHits();
   ThunkPassesExceptionsFromTheOriginal();
+  HandlerAppliesAfterTheOriginalToItsResult();
+  CacheFullAndStaleBridgeBehaviour();
   ConcurrentCallsAgree();
   PinnedTargetsMatchTheMeasuredBinaries();
   RealHookEndToEnd(dir);
