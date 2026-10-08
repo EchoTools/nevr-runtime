@@ -183,8 +183,16 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
 5. **Social.** Portable roster, party and name rules in
    `src/runtime/compat/social_{roster,party,names}.*` are reused after dependency validation.
    The 75-slot Windows facade and `echovr.exe` offsets are not a Quest ABI: a Quest provider
-   adapter maps verified Quest slots, objects and callbacks to the same events. `nevr_social`
-   is declared only for implemented handlers.
+   adapter maps verified Quest slots, objects and callbacks to the same events. The login
+   declares the same `nevr_social` level as the PCVR login, from the one shared constant
+   (`SocialParty::kSocialLevel`, `runtime/compat/social_level.h`), through
+   `BuildInfo::social_level`; 0 declares none. The server sends friend presence, recently met,
+   the lobby tablet and party data only to a session that declared level 1 or more (nakama
+   `evr_friend_presence.go`, `evr_recently_met.go`, `evr_lobby_tablet.go`,
+   `evr_pipeline_party_data.go`), so a login that declares 0 leaves them empty. The Quest has no
+   social handlers in place yet, and what the Quest game does with a social message it does not
+   parse was not verified; the code that activates the hook passes the value, and passes 0 for
+   a build whose handlers are not in place.
 
 ## Config-string seam (the first hook)
 

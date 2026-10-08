@@ -32,6 +32,8 @@
 #include <string>
 #include <vector>
 
+#include "runtime/compat/social_level.h"
+
 namespace QuestLogin {
 
 // Platform code the PCVR bridge logs in as (ws_bridge.cpp kBridgeLoginPlatform). The game
@@ -58,6 +60,13 @@ struct BuildInfo {
   std::string git_commit;
   std::string git_describe;
   std::string build_type;
+  // The social message level the login declares ("nevr_social"), the same value and meaning as
+  // the PCVR login (SocialParty::kSocialLevel, runtime/compat/social_level.h): the server sends a
+  // newer social message (friend presence, recently met, the lobby tablet, party data) only to a
+  // session that declared it. 0 declares none. The default is the shared level; the code that
+  // activates the hook passes 0 for a build whose social handlers are not in place
+  // (docs/adr/0003, contract 5).
+  int social_level = SocialParty::kSocialLevel;
 };
 
 // Values the game already placed in the login JSON; the rewrite relays them.

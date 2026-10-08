@@ -19,6 +19,7 @@
 
 #include "quest/tests/test_check.h"
 #include "runtime/compat/login_profile.h"
+#include "runtime/compat/social_level.h"
 
 namespace {
 
@@ -288,6 +289,7 @@ void TestComposedProfileMatchesPcvrBuilder() {
   pc.git_commit = "abc123";
   pc.git_describe = "v1.2.3-4-gabc123";
   pc.build_type = "Release";
+  pc.social_level = SocialParty::kSocialLevel;  // what the PCVR login declares (ws_bridge.cpp)
   nlohmann::json expected = nlohmann::json::parse(LoginProfile::BuildLoginProfileJson(pc));
   expected.erase("nevr_plugins");
   QCHECK(json.ToJson() == expected);
@@ -296,6 +298,42 @@ void TestComposedProfileMatchesPcvrBuilder() {
   QCHECK(At(expected, "password") == "");
   for (const QuestLogin::Field& f : c.fields) {
     if (f.path == "password") QCHECK(f.text.empty());
+  }
+}
+
+// The login declares the social message level the PCVR login declares, from the same shared
+// constant, so the server sends friend presence, recently met, the lobby tablet and party data
+// (each requires level 1 or more: nakama evr_friend_presence.go, evr_recently_met.go,
+// evr_lobby_tablet.go, evr_pipeline_party_data.go). With social off the login carries 0.
+void TestSocialLevelIsDeclaredAndCanBeTurnedOff() {
+  auto level_of = [](const QuestLogin::BuildInfo& build) {
+    const QuestLogin::Composition c = QuestLogin::Compose(MakeIdentity(), {}, build);
+    for (const QuestLogin::Field& f : c.fields) {
+      if (f.path == "nevr_social") return f.kind == FieldKind::Int ? f.number : std::int64_t{-1};
+    }
+    return std::int64_t{-2};  // member absent
+  };
+  QCHECK(SocialParty::kSocialLevel >= 1);
+  QCHECK(level_of(MakeBuild()) == SocialParty::kSocialLevel);
+  QuestLogin::BuildInfo off = MakeBuild();
+  off.social_level = 0;
+  QCHECK(level_of(off) == 0);
+
+  // End to end through the rewrite: the member lands in the game's JSON, and the client-class
+  // members next to it are still the game's.
+  for (int level : {SocialParty::kSocialLevel, 0}) {
+    FakeJson json;
+    SeedOculusLogin(json);
+    FakeUser user;
+    FakeSource source;
+    source.identity = MakeIdentity();
+    QuestLogin::BuildInfo build = MakeBuild();
+    build.social_level = level;
+    QCHECK(QuestLogin::RewriteLogin(user, json, source, build, &CaptureLog) == QuestLogin::Outcome::Rewritten);
+    const nlohmann::json doc = json.ToJson();
+    QCHECK(At(doc, "nevr_social") == level);
+    QCHECK(At(doc, "buildversion") == kQuestBuild);
+    QCHECK(At(doc, "appid") == kQuestAppId);
   }
 }
 
@@ -873,6 +911,7 @@ int main() {
   TestComposeFailsClosed();
   TestComposedProfileMatchesPcvrBuilder();
   TestSerialRelay();
+  TestSocialLevelIsDeclaredAndCanBeTurnedOff();
   TestRewriteCarriesNevrIdentityToTheWire();
   TestClientClassKeysAreNeverOverwritten();
   TestAccountIdThatDoesNotReachTheWireIsRejected();
