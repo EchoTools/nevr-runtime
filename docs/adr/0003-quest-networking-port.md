@@ -193,22 +193,59 @@ and refuses any other type (a real is refused); a refusal is reported only in th
 `TypeOf` returns 0 for both a null value and an absent path (`Valid` separates them), and maps
 1 string, 2 int, 3 real, 4 boolean, 5 array, 6 object (`libpnsovr.so` table `0x582a80`).
 
-The account-id global stays set after the send. `CNSUser::LogInSuccessCB` (`libpnsovr.so`
-`0x383a60`-`0x383a8c`) builds `{[this+0x90], AccountID()}` and compares it with the server's
-reply; a mismatch drops the success. Writers of the global in the pinned build: `LogInInternal`
-`0x1ec998` (0 only when it holds -1), `GotLoggedInUserOrgIdCb` `0x1ecef0` (-1 on its error
-path) and `0x1ecf18` (the org id on success), `RadPluginShutdown` `0x207074` (0). Every
-`vtable+0x70` caller sees the NEVR id: `LogOut`, `RefreshProfile`, the `Profile*` and
-`LoginRemoved` callbacks, `CNSUser::UserID`, `CNSIParty::Update`. `CNSOVRUser::OfflineID()`
-(`0x1ede20`) keeps the Oculus id. `CNSOVRSocial::FollowDeepLink` (`0x1f2b30`), `EnsureLocalMember`
-(`0x1f2bd0`), `JoinInternal` (`0x1f38a4`) and `AddMember` (`0x204a30`) copy the global into the
-local party member record at `[CNSOVRSocial+0x2e0]`; remote members arrive from the Oculus
-room as Oculus org ids (`GotRemoteOrgIdCB`). Oculus-room party and deep-link joins therefore
-mix the NEVR id (local) with Oculus ids (remote). NEVR party and join run through the NEVR
-server (contract 5), not through `CNSOVRSocial`; how `CNSOVRSocial::SyncRoom` identifies the
-local member was not traced, so whether an Oculus-room join breaks is not established. If it
-does, the repair is a Quest social adapter that does not rely on `CNSOVRSocial`, not
-restoring the global (which would break `LogInSuccessCB`).
+The account-id global holds the NEVR id from the rewrite until the next login that is not
+rewritten. `CNSUser::LogInSuccessCB` (`libpnsovr.so` `0x383a60`-`0x383a8c`) builds
+`{[this+0x90], AccountID()}` and compares it with the server's reply; a mismatch drops the
+success, so it cannot be restored after a successful send. `CNSOVRUser::LogInInternal`
+re-reads the Oculus org id only when the global holds -1 (`0x1ec96c`-`0x1ec984`), so after a
+rewritten login the NEVR id stays in the global for later logins in the process. The rule:
+the Oculus value is remembered once, before the first write (`OculusIdMemory`), and put back
+on every outcome other than `Rewritten`, because the declined login goes out with the Oculus
+token and must carry the Oculus account id; a login after a rewritten one is rewritten again
+from the current identity.
+
+Readers of the global and of `AccountID()` in the pinned build (measured unless marked):
+
+| Reader | Effect |
+| --- | --- |
+| `LogInInternal` `0x1ec96c` | re-fetches only when -1 (above) |
+| `UpdateInternal` `0x1eda08`, `0x1edba4` | -1 leads to `LogInFailed` 500 ("prerequisites are missing", string `0x556b40`); zero waits |
+| `GotLoggedInUserOrgIdCb` `0x1ecef0` / `0x1ecf18` | writes -1 on its error path, the org id on success |
+| `RadPluginShutdown` `0x207074` | writes 0 |
+| `CNSOVRUser::AccountID()` `0x1ede14` | returns it (vtable slot `0x6a1300`) |
+| `CNSUser::SendLogInRequest`, `LogInSuccessCB`, `LogInFailureCB`, `LogOut`, `RefreshProfile`, `Profile*CB`, `LoginRemovedCB`, `UniqueName`, `SaveClientProfileChanges`, `CNSIUsers::CreateUser`, `User(UserAccountID)`, `DestroyUserInternal` | call `AccountID()` through `vtable+0x70` |
+| `CNSLobby::JoinAcceptedCBClient`, `AddEntrantAcceptedCBClient` (`0x3720c0`) | find the local user by `AccountID()` equal to the entrant id the server sent: the id the server uses is required here |
+| `CNSUser::UserID()` | about 60 call sites in `libr15.so` (lobby find, join and create, party, friends, profile, IAP, XPlatformId) |
+| `CNSOVRSocial::FollowDeepLink` `0x1f2b30`, `EnsureLocalMember` `0x1f2bd0`, `JoinInternal` `0x1f38a4`, `AddMember` `0x204a30` | copy it into `[this+0x2e0][0]`, the local party member; `MemberId` (`0x205260`) and `Host` (`0x2051fc`) hand that to the game, while remote members carry Oculus org ids (`GotRemoteOrgIdCB` `0x1f9090`) |
+| `ovr_Room_KickUser`, `SyncRoom`, `ReceiveData` | use `[0x2c8]` (the app-scoped id), not the global: Oculus room calls are not affected (independent review; not re-traced here) |
+| `CNSIParty::Update` (`0x369764`), `CNSIRichPresence::Update`, `CNSIFriends::Sent` | call `vtable+0x70` on their own object, not `AccountID()` |
+| `libpnsrad.so` `CNSRADFriends`, `CNSRADParty` | use `CNSRADUser` (vtable `0x6f1e00`, `AccountID` = `[this+0x88]` at `0x3cd4c0`), not this global (independent review) |
+
+Open: party, room and friends flows that read the global through `CNSOVRSocial` see the NEVR id
+for the local member and Oculus org ids for remote members, two id spaces in one flow. The
+lobby path needs the NEVR id; the Oculus-room path was not shown to break, and was not shown
+to work. A separate social package owns this.
+
+## Hook activation
+
+`TryInstallLoginHook` has no caller yet and the only `IdentitySource` is the test fake; the
+sentinel does not install it. The install point is `libr15.so`'s `dlopen` import:
+`CSysModule::Load` (`0x2a9e16c`) calls `dlopen@plt` at `0x2a9e1ec` through the BIND_NOW
+`R_AARCH64_JUMP_SLOT` at `0x36c6380` (the only `dlopen` reference in `libr15.so`; `readelf -rW`
+lists one). A `GotHook` on that slot lets the sentinel run the `libpnsovr.so`-dependent installs
+right after the real `dlopen` returns with the module mapped: the login hook, and the
+matchmaking redirect once `libpnsradmatchmaking.so` is loaded. The `dlopen` handler calls the
+original, and on a non-null handle calls `TryInstallLoginHook(source, build)`; a
+`ModuleNotLoaded` result means another module was opened and the install is retried on the
+next `dlopen`. The handler must not throw and must not block. The install needs an
+`IdentitySource` backed by token auth: until it answers `Ok` the Oculus login is left
+unchanged. `SendLogInRequest` is reached only after the Oculus org-id fetch and
+`ovr_User_GetUserProof` succeed (`0x1edca0`, `0x1ece10`); if the Oculus services do not answer
+for this app the hook never fires.
+
+CJson behaviour for a nested write: `FUN_00faef34` (`libr15.so` `0xfaef34`) walks the
+`|`-separated path and, when a parent exists and is not an object, logs `$ json path: %s is not
+an object.` and returns without writing. The rewrite does not attempt such a write.
 
 `[CNSUser+0x88]` is not the wire account id for a `CNSOVRUser`. A virtual slot is a data
 relocation, which `GotHook` does not reach, so the global is written instead.

@@ -112,7 +112,7 @@ using LoginThunk = sentinel::CallbackThunk<LoginTag, void(void*, void*)>;
 //
 // After a successful send the global keeps the NEVR id: CNSUser::LogInSuccessCB builds
 // {[this+0x90], AccountID()} and compares it with the server's reply, and the other readers
-// (docs/adr/0003, "Readers of the global") must see the same id. On any outcome other than
+// (docs/adr/0003, "Login interception") must see the same id. On any outcome other than
 // Rewritten it goes back to the Oculus id, because LogInInternal re-reads the Oculus org id
 // only when the global holds -1 (0x1ec96c-0x1ec984) and the Oculus login then goes out.
 // OculusIdMemory keeps the Oculus value across logins in this process.
