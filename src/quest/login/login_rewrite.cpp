@@ -87,8 +87,9 @@ Composition Compose(const Identity& identity, const GameValues& game, const Buil
   inputs.git_commit = build.git_commit;
   inputs.git_describe = build.git_describe;
   inputs.build_type = build.build_type;
-  // social_level stays 0: the Quest adapter implements no social handler yet, and the server
-  // sends a newer social message only to a session that declared its level (ADR 0003).
+  // The same social declaration as the PCVR login, through the shared builder's field; the
+  // IdentitySource sets it (Identity::social_level), 0 declares none.
+  inputs.social_level = static_cast<std::uint64_t>(identity.social_level < 0 ? 0 : identity.social_level);
 
   // dump() throws on a display name that is not valid UTF-8; the game ABI must never see it.
   try {

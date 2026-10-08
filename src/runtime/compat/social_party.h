@@ -26,6 +26,8 @@
 #include <utility>
 #include <vector>
 
+#include "runtime/compat/social_level.h"
+
 namespace SocialParty {
 
 // ---------------------------------------------------------------------------------------------
@@ -35,9 +37,8 @@ constexpr std::uint64_t kCreateRequest = 0x0b7bd21332523994ULL;
 constexpr std::uint64_t kJoinRequest = 0xb57b22cc5352e00cULL;
 constexpr std::uint64_t kLeaveRequest = 0xb77b0be7a94a9fb6ULL;
 constexpr std::uint64_t kInviteRequest = 0xcf13f934540b5f5eULL;  // SNSPartySendInviteRequest
-/// The social message level the bridge declares at login ("nevr_social"): which of the server's newer
-/// social messages it parses. 1 = docs/design/2026-10-01-social-nakama-proposal.md.
-constexpr int kSocialLevel = 1;
+// kSocialLevel, the social message level the bridge declares at login ("nevr_social"), is defined in
+// social_level.h so the Quest login can share it without this whole header.
 
 constexpr std::uint64_t kLockRequest = 0xc2478aa479f3e16aULL;
 /// SNSPartySetJoinPolicyRequest (nevr social level 1): the leader's join policy in TargetParam. A server

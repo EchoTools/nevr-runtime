@@ -19,6 +19,7 @@
 
 #include "quest/tests/test_check.h"
 #include "runtime/compat/login_profile.h"
+#include "runtime/compat/social_level.h"
 
 namespace {
 
@@ -266,7 +267,8 @@ void TestComposeFailsClosed() {
 // plugin array (CJson has no setter for it) and with no password value: the server reads the
 // password from the upgrade URL, and the game's own log of the outgoing login does not redact it.
 void TestComposedProfileMatchesPcvrBuilder() {
-  const QuestLogin::Identity id = MakeIdentity();
+  QuestLogin::Identity id = MakeIdentity();
+  id.social_level = SocialParty::kSocialLevel;  // a source with the social facade installed
   QuestLogin::GameValues game;
   game.hmd_serial = "1WMHH000000000";
   game.headset_type = "Quest 2";
@@ -288,6 +290,7 @@ void TestComposedProfileMatchesPcvrBuilder() {
   pc.git_commit = "abc123";
   pc.git_describe = "v1.2.3-4-gabc123";
   pc.build_type = "Release";
+  pc.social_level = SocialParty::kSocialLevel;  // what the PCVR login declares (ws_bridge.cpp)
   nlohmann::json expected = nlohmann::json::parse(LoginProfile::BuildLoginProfileJson(pc));
   expected.erase("nevr_plugins");
   QCHECK(json.ToJson() == expected);
@@ -297,6 +300,55 @@ void TestComposedProfileMatchesPcvrBuilder() {
   for (const QuestLogin::Field& f : c.fields) {
     if (f.path == "password") QCHECK(f.text.empty());
   }
+}
+
+// An identity source modelling the production wiring rule (docs/adr/0003, contract 5): the
+// login declares the shared social level only when the social feature is effective AND the
+// social facade is actually installed; otherwise 0. The server sends friend presence, recently
+// met, the lobby tablet and party data only to a session that declared level 1 or more (nakama
+// evr_friend_presence.go, evr_recently_met.go, evr_lobby_tablet.go, evr_pipeline_party_data.go).
+class SocialAwareSource final : public QuestLogin::IdentitySource {
+ public:
+  bool feature_enabled = true;
+  bool facade_installed = true;
+  QuestLogin::IdentityStatus Fetch(QuestLogin::Identity& out) override {
+    out = MakeIdentity();
+    out.social_level = (feature_enabled && facade_installed) ? SocialParty::kSocialLevel : 0;
+    return QuestLogin::IdentityStatus::Ok;
+  }
+};
+
+void TestSocialLevelFollowsTheIdentitySource() {
+  auto declared = [](bool feature, bool installed) {
+    FakeJson json;
+    SeedOculusLogin(json);
+    FakeUser user;
+    SocialAwareSource source;
+    source.feature_enabled = feature;
+    source.facade_installed = installed;
+    const QuestLogin::Outcome out = QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog);
+    QCHECK(out == QuestLogin::Outcome::Rewritten);
+    const nlohmann::json doc = json.ToJson();
+    // The client-class members next to it are still the game's.
+    QCHECK(At(doc, "buildversion") == kQuestBuild);
+    QCHECK(At(doc, "appid") == kQuestAppId);
+    return At(doc, "nevr_social");
+  };
+  QCHECK(SocialParty::kSocialLevel >= 1);
+  QCHECK(declared(true, true) == SocialParty::kSocialLevel);  // feature on and facade installed
+  QCHECK(declared(true, false) == 0);                          // social not installed
+  QCHECK(declared(false, true) == 0);                          // feature off
+  QCHECK(declared(false, false) == 0);
+
+  // An identity that says nothing about social declares nothing.
+  const QuestLogin::Composition plain = QuestLogin::Compose(MakeIdentity(), {}, MakeBuild());
+  bool found = false;
+  for (const QuestLogin::Field& f : plain.fields) {
+    if (f.path != "nevr_social") continue;
+    found = true;
+    QCHECK(f.kind == FieldKind::Int && f.number == 0);
+  }
+  QCHECK(found);
 }
 
 void TestSerialRelay() {
@@ -873,6 +925,7 @@ int main() {
   TestComposeFailsClosed();
   TestComposedProfileMatchesPcvrBuilder();
   TestSerialRelay();
+  TestSocialLevelFollowsTheIdentitySource();
   TestRewriteCarriesNevrIdentityToTheWire();
   TestClientClassKeysAreNeverOverwritten();
   TestAccountIdThatDoesNotReachTheWireIsRejected();

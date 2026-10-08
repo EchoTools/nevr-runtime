@@ -303,8 +303,7 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    `src/runtime/compat/social_{roster,party,names}.*` are shared with the Windows facade. The 75-slot
    Windows facade and `echovr.exe` offsets are not a Quest ABI: `src/quest/social/` is a Quest
    provider adapter over the same models with the 76-slot Quest vtable (section "Social provider").
-   `nevr_social` is declared only for implemented handlers.
-
+   
 ## Config-string seam (the first hook)
 
 PCVR detours `EchoVR::JsonValueAsString` (`CJson::String`, `echovr.exe` RVA `0x5fe290`) and

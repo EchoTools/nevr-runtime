@@ -32,6 +32,8 @@
 #include <string>
 #include <vector>
 
+#include "runtime/compat/social_level.h"
+
 namespace QuestLogin {
 
 // Platform code the PCVR bridge logs in as (ws_bridge.cpp kBridgeLoginPlatform). The game
@@ -47,6 +49,13 @@ struct Identity {
   std::uint64_t account_id = 0;
   std::string display_name;
   std::string access_token;  // the NEVR token that replaces the Oculus access_token
+  // The social message level the login declares ("nevr_social"), same value and meaning as the
+  // PCVR login. The server sends friend presence, recently met, the lobby tablet and party data
+  // only to a session that declared level 1 or more. It is declared only when the social
+  // feature is effective AND the social facade is actually installed (docs/adr/0003, contract
+  // 5), so the default is 0 and the production IdentitySource sets it to
+  // SocialParty::kSocialLevel (runtime/compat/social_level.h) when, and only when, both hold.
+  int social_level = 0;
 };
 
 enum class IdentityStatus { Ok, NotReady, NoAccount, NoToken };
