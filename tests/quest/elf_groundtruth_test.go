@@ -162,16 +162,32 @@ var (
 	augRe = regexp.MustCompile(`^\s+Augmentation:\s+("[^"]*")`)
 )
 
-// The frames a game call passes through on its way into the hook (the thunk's
-// Entry and its members, and the handler) must carry no personality routine and
-// no LSDA: they sit under the "zR" CIE. A "zPLR" CIE names the sentinel's own
-// personality, and a game exception unwinding through such a frame would hand
-// libc++_shared's _Unwind_Context to it (callback_thunk.h, "Exceptions").
-func TestHookFramesCarryNoPersonality(t *testing.T) {
-	requireArtifact(t)
+// Rule (callback_thunk.h, "What the contract is"): a frame that is live while game code
+// runs under a hook must carry no personality routine and no LSDA, i.e. sit under the "zR"
+// CIE. A "zPLR" CIE names the sentinel's own personality, and a game exception unwinding
+// through such a frame would hand libc++_shared's _Unwind_Context to it.
+//
+// Live frames are the thunk's Entry, every handler, and every sentinel function a handler
+// can have on the stack when it calls `original`. A static check cannot tell "before/after
+// the call" from "across the call", so it is conservative: starting from each Entry and each
+// function in the nevr_hook_handlers section (the NEVR_HOOK_HANDLER marker, so handlers are
+// found by registration and not by name) it follows direct bl/b edges through the library and
+// fails on any reachable function under a personality-bearing CIE. Indirect calls are not
+// followed. The only exceptions are sentinel-only logging leaves, which take no function
+// pointer from the hook and call only libc/liblog, listed in allowedLeaves.
+var allowedLeaves = regexp.MustCompile(`^_ZN8sentinel(9LogFields|8LogEvent|9HexString)`)
+
+type elfFunc struct {
+	addr, size uint64
+	name       string
+	section    string
+}
+
+func parseFrames(t *testing.T) (cieAug map[string]string, fdeCIE map[uint64]string) {
+	t.Helper()
 	frames := run(t, "readelf", "--debug-dump=frames", soPath(t))
-	cieAug := map[string]string{} // CIE offset -> augmentation
-	fdeCIE := map[uint64]string{} // FDE start pc -> CIE offset
+	cieAug = map[string]string{} // CIE offset -> augmentation
+	fdeCIE = map[uint64]string{} // FDE start pc -> CIE offset
 	current := ""
 	for _, line := range strings.Split(frames, "\n") {
 		if m := cieRe.FindStringSubmatch(line); m != nil {
@@ -194,39 +210,166 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 	if len(cieAug) == 0 || len(fdeCIE) == 0 {
 		t.Fatalf("parsed no CIE/FDE from readelf --debug-dump=frames; the parser is blind")
 	}
+	return cieAug, fdeCIE
+}
 
-	hookFrames := 0
-	var sawEntry, sawHandler bool
-	for _, line := range strings.Split(run(t, "nm", "-S", "--defined-only", soPath(t)), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 4 {
+var (
+	secRe   = regexp.MustCompile(`^\s*\[\s*(\d+)\]\s+(\S+)`)
+	symRe   = regexp.MustCompile(`^\s*\d+:\s+([0-9a-f]+)\s+(\d+)\s+FUNC\s+\S+\s+\S+\s+(\d+)\s+(\S+)`)
+	hdrRe   = regexp.MustCompile(`^([0-9a-f]{16}) <(.*)>:$`)
+	branchR = regexp.MustCompile(`^\s+[0-9a-f]+:\s+(bl|b)\s+0x([0-9a-f]+)\s+<(.*)>$`)
+)
+
+func parseFuncs(t *testing.T) []elfFunc {
+	t.Helper()
+	sections := map[string]string{}
+	for _, line := range strings.Split(run(t, "readelf", "-SW", soPath(t)), "\n") {
+		if m := secRe.FindStringSubmatch(line); m != nil {
+			sections[m[1]] = m[2]
+		}
+	}
+	var fs []elfFunc
+	for _, line := range strings.Split(run(t, "readelf", "-sW", soPath(t)), "\n") {
+		m := symRe.FindStringSubmatch(line)
+		if m == nil {
 			continue
 		}
-		name := f[3]
-		if !strings.ContainsAny(f[2], "tTwW") { // code symbols only; the thunk's data members have no frame
+		addr, _ := strconv.ParseUint(m[1], 16, 64)
+		size, _ := strconv.ParseUint(m[2], 10, 64)
+		if size == 0 {
 			continue
 		}
-		if !strings.Contains(name, "CallbackThunk") && !strings.Contains(name, "HookedClockGettime") {
+		fs = append(fs, elfFunc{addr: addr, size: size, name: m[4], section: sections[m[3]]})
+	}
+	if len(fs) == 0 {
+		t.Fatalf("no function symbols parsed from readelf -s")
+	}
+	return fs
+}
+
+func TestHookFramesCarryNoPersonality(t *testing.T) {
+	requireArtifact(t)
+	cieAug, fdeCIE := parseFrames(t)
+	funcs := parseFuncs(t)
+	byAddr := map[uint64]*elfFunc{}
+	for i := range funcs {
+		byAddr[funcs[i].addr] = &funcs[i]
+	}
+	containing := func(a uint64) *elfFunc {
+		if f, ok := byAddr[a]; ok {
+			return f
+		}
+		for i := range funcs {
+			if a >= funcs[i].addr && a < funcs[i].addr+funcs[i].size {
+				return &funcs[i]
+			}
+		}
+		return nil
+	}
+
+	// Direct call/branch edges, from one disassembly of the library.
+	edges := map[uint64]map[uint64]bool{}
+	var from uint64
+	for _, line := range strings.Split(run(t, "llvm-objdump", "-d", "--no-show-raw-insn", soPath(t)), "\n") {
+		if m := hdrRe.FindStringSubmatch(line); m != nil {
+			from, _ = strconv.ParseUint(m[1], 16, 64)
 			continue
 		}
-		addr, err := strconv.ParseUint(f[0], 16, 64)
-		if err != nil {
+		m := branchR.FindStringSubmatch(line)
+		if m == nil || strings.HasSuffix(m[3], "@plt") {
+			continue // imports are not sentinel frames
+		}
+		to, _ := strconv.ParseUint(m[2], 16, 64)
+		callee := containing(to)
+		caller := containing(from)
+		if callee == nil || caller == nil || callee.addr == caller.addr {
+			continue
+		}
+		if edges[caller.addr] == nil {
+			edges[caller.addr] = map[uint64]bool{}
+		}
+		edges[caller.addr][callee.addr] = true
+	}
+
+	var roots []*elfFunc
+	handlers := 0
+	for i := range funcs {
+		f := &funcs[i]
+		switch {
+		case strings.Contains(f.name, "CallbackThunk") && strings.Contains(f.name, "5EntryE"):
+			roots = append(roots, f)
+		case f.section == "nevr_hook_handlers":
+			roots = append(roots, f)
+			handlers++
+		}
+	}
+	if len(roots) < 2 || handlers < 1 {
+		t.Fatalf("hook roots not found (roots=%d handlers in nevr_hook_handlers=%d): the sensor is looking at nothing", len(roots), handlers)
+	}
+
+	reached := map[uint64]bool{}
+	var queue []uint64
+	for _, r := range roots {
+		reached[r.addr] = true
+		queue = append(queue, r.addr)
+	}
+	for len(queue) > 0 {
+		a := queue[0]
+		queue = queue[1:]
+		for callee := range edges[a] {
+			if !reached[callee] {
+				reached[callee] = true
+				queue = append(queue, callee)
+			}
+		}
+	}
+
+	checked := 0
+	for addr := range reached {
+		f := byAddr[addr]
+		if f == nil || allowedLeaves.MatchString(f.name) {
 			continue
 		}
 		cie, ok := fdeCIE[addr]
 		if !ok {
-			t.Errorf("%s at %#x has no FDE", name, addr)
+			t.Errorf("%s at %#x has no FDE", f.name, addr)
 			continue
 		}
-		hookFrames++
-		sawEntry = sawEntry || strings.Contains(name, "5EntryE")
-		sawHandler = sawHandler || strings.Contains(name, "HookedClockGettime")
+		checked++
 		if aug := cieAug[cie]; aug != `"zR"` {
-			t.Errorf("hook frame %s sits under CIE augmentation %s, want \"zR\" (no personality, no LSDA)", name, aug)
+			t.Errorf("function %s (reachable from a hook entry or handler) sits under CIE augmentation %s, want \"zR\" (no personality, no LSDA)", f.name, aug)
 		}
 	}
-	if hookFrames == 0 || !sawEntry || !sawHandler {
-		t.Errorf("hook frames not found (frames=%d entry=%v handler=%v): the test is looking at nothing", hookFrames, sawEntry, sawHandler)
+	if checked < len(roots) {
+		t.Errorf("checked %d functions for %d roots: the walk lost its roots", checked, len(roots))
+	}
+	t.Logf("hook roots=%d (handlers=%d), reachable sentinel functions checked=%d", len(roots), handlers, checked)
+}
+
+// The backend library is built with -fno-exceptions, exactly like the host test build, so the
+// host tests exercise the same code generation and the backend's frames carry no personality
+// either.
+func TestBackendBuiltWithoutExceptions(t *testing.T) {
+	requireArtifact(t)
+	cieAug, fdeCIE := parseFrames(t)
+	sawInstall, sawResolve := false, false
+	for _, f := range parseFuncs(t) {
+		if !strings.Contains(f.name, "7GotHook") && !strings.Contains(f.name, "ResolveSlot") {
+			continue
+		}
+		sawInstall = sawInstall || strings.Contains(f.name, "7GotHook7Install")
+		sawResolve = sawResolve || strings.Contains(f.name, "ResolveSlot")
+		cie, ok := fdeCIE[f.addr]
+		if !ok {
+			t.Errorf("%s has no FDE", f.name)
+			continue
+		}
+		if aug := cieAug[cie]; aug != `"zR"` {
+			t.Errorf("backend function %s sits under CIE augmentation %s, want \"zR\"", f.name, aug)
+		}
+	}
+	if !sawInstall || !sawResolve {
+		t.Errorf("backend functions not found (GotHook::Install=%v ResolveSlot=%v): the test is looking at nothing", sawInstall, sawResolve)
 	}
 }
 
@@ -269,7 +412,7 @@ func TestStlContract(t *testing.T) {
 	requireArtifact(t)
 	dyn := run(t, "readelf", "-d", soPath(t))
 	if strings.Contains(dyn, "libc++_shared.so") {
-		t.Errorf("sentinel NEEDs libc++_shared.so; revisit callback_thunk.h 'Two C++ runtimes' and ADR 0003\n%s", dyn)
+		t.Errorf("sentinel NEEDs libc++_shared.so; revisit the Exceptions section of callback_thunk.h and ADR 0003\n%s", dyn)
 	}
 	exported := run(t, "nm", "-D", "--defined-only", soPath(t))
 	for _, sym := range []string{"__cxa_throw", "__cxa_begin_catch", "__gxx_personality_v0"} {

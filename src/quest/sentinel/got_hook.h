@@ -160,6 +160,12 @@ struct SlotResolution {
 SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
                            const RelocNumbers& relocs);
 
+// Gives back poisoned reservations (slots where a failed Install left our entry possibly
+// reachable) that lie in [begin, begin + length). Call it when the module that owns the
+// slots has been unloaded; nothing else releases them, so a retry on a live module cannot
+// publish a foreign hook that chains our entry as the original and build a call cycle.
+void ReleasePoisonedSlotsIn(const void* begin, std::size_t length);
+
 // Test seam. Called with the process-wide write lock held, around the
 // compare-and-swap store of Install and Remove. Production code leaves it unset. Returns the previous observer.
 // kBeforeStore: after the page is writable, before the compare-and-swap.

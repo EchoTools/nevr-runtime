@@ -12,10 +12,14 @@
  * carries a credential, token, URL or key value: callers pass module names, symbol
  * names, link-time addresses and status tokens only.
  *
- * The sink is logcat on Android and stderr elsewhere. The durable on-device log
- * file belongs to the sentinel config/log work (separate PR); until it lands a
- * line is durable only as long as logcat keeps it. A test replaces the sink with
- * SetLogSink to assert on the lines.
+ * The line is built by hand rather than with a JSON library: this code runs from an ELF
+ * constructor, where it must not allocate, and nlohmann::json does. That is a deliberate
+ * deviation from the repository's "no hand-built serialization" rule; the host test parses
+ * every captured line with nlohmann::json (when the host has it) and with a strict
+ * validator, so malformed output fails the build.
+ *
+ * The sink is logcat on Android and stderr elsewhere; a line is as durable as logcat. A
+ * test replaces the sink with SetLogSink to assert on the lines.
  */
 #pragma once
 

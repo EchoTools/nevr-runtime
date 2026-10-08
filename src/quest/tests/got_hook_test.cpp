@@ -36,9 +36,15 @@
 #include <type_traits>
 #include <vector>
 
+#if __has_include(<nlohmann/json.hpp>)
+#include <nlohmann/json.hpp>
+#define NEVR_TEST_HAVE_NLOHMANN 1
+#endif
+
 #include "callback_thunk.h"
 #include "got_hook.h"
 #include "hook_log.h"
+#include "hook_report.h"
 #include "pinned_targets.h"
 #include "quest/tests/test_check.h"
 
@@ -47,6 +53,8 @@ namespace {
 using namespace sentinel;
 
 // ---- log capture ------------------------------------------------------------
+
+std::mutex g_captureMutex;
 
 struct Line {
   LogLevel level;
@@ -104,17 +112,30 @@ bool ValidFlatJson(const std::string& t) {
 void SilentSink(LogLevel, const char*) {}
 
 int g_invalidLines = 0;
-std::mutex g_captureMutex;
+int g_nlohmannParsed = 0;
 void CaptureSink(LogLevel level, const char* line) {
   const std::lock_guard<std::mutex> guard(g_captureMutex);
   if (!ValidFlatJson(line)) {
     ++g_invalidLines;
     std::fprintf(stderr, "invalid JSON log line: %s\n", line);
   }
+#ifdef NEVR_TEST_HAVE_NLOHMANN
+  {
+    const nlohmann::json parsed = nlohmann::json::parse(line, nullptr, /*allow_exceptions=*/false);
+    if (parsed.is_discarded() || !parsed.is_object() || !parsed.contains("event") ||
+        !parsed.contains("level") || !parsed.contains("ts_ms")) {
+      ++g_invalidLines;
+      std::fprintf(stderr, "nlohmann rejected log line: %s\n", line);
+    } else {
+      ++g_nlohmannParsed;
+    }
+  }
+#endif
   Captured().push_back({level, line});
 }
 
 std::size_t Count(LogLevel level, const std::string& needle) {
+  const std::lock_guard<std::mutex> guard(g_captureMutex);
   std::size_t n = 0;
   for (const Line& l : Captured()) {
     if (l.level == level && l.text.find(needle) != std::string::npos) ++n;
@@ -122,6 +143,7 @@ std::size_t Count(LogLevel level, const std::string& needle) {
   return n;
 }
 std::size_t Errors() {
+  const std::lock_guard<std::mutex> guard(g_captureMutex);
   std::size_t n = 0;
   for (const Line& l : Captured()) n += l.level == LogLevel::kError ? 1 : 0;
   return n;
@@ -1079,6 +1101,18 @@ void WriteVerifyFailureKeepsTheOriginalPublished() {
   QCHECK(out == m.realAdd);                               // not reverted to the entry value
   QCHECK(!hook.installed());
   QCHECK(Count(LogLevel::kError, "\"status\":\"write_verify_failed\"") == 1);
+
+  // The slot stays reserved: the foreign value in it may chain our entry, and a retry would
+  // publish it as the original and make the entry call itself.
+  void* retryOut = reinterpret_cast<void*>(0x56);
+  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), &retryOut), GotStatus::kAlreadyInstalled);
+  QCHECK(retryOut == reinterpret_cast<void*>(0x56));
+  QCHECK(*r.slot == reinterpret_cast<void*>(&SubImpl));
+
+  // Giving the reservations back is the module owner's job, once the module is gone.
+  const std::uintptr_t page = static_cast<std::uintptr_t>(sysconf(_SC_PAGESIZE));
+  ReleasePoisonedSlotsIn(reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(r.slot) & ~(page - 1)),
+                         page);
   ForceWrite(r.slot, m.realAdd);
   AddThunk::Arm(&AddPlus100);
   QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
@@ -1156,7 +1190,50 @@ void RollbackCompareAndSwapFailureIsLogged() {
   QCHECK(out == reinterpret_cast<void*>(&AddImpl));
   QCHECK(Count(LogLevel::kError, "\"status\":\"rollback_cas_failed\"") == 1);
   QCHECK(PagePerms(slot) == "r--p");  // the retry succeeded
+  // Their value is in the slot, so a retry is refused (by the original check here; the slot is
+  // also poisoned, which WriteVerifyFailureKeepsTheOriginalPublished shows with a plausible value).
+  void* retryOut = nullptr;
+  QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &retryOut, SynthLookup),
+                GotStatus::kOriginalMismatch);
+  ReleasePoisonedSlotsIn(img.mem, kImageSize);  // the image is about to be unmapped
   g_synth = nullptr;
+}
+
+// ---- reporter -----------------------------------------------------------------
+
+template <typename Pred>
+bool WaitFor(Pred pred) {
+  for (int i = 0; i < 600; ++i) {  // up to 3 s
+    if (pred()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return pred();
+}
+
+// A hook only increments a counter; the reporter thread logs it: once when it first moves,
+// then only when it changes. Nothing is logged for a counter that never moves.
+void ReporterLogsFirstChangeThenChanges() {
+  Prepare();
+  std::atomic<std::uint64_t> counter{0};
+  std::atomic<std::uint64_t> idle{0};
+  QCHECK(RegisterReportCounter("test_counter", &counter));
+  QCHECK(RegisterReportCounter("idle_counter", &idle));
+  QCHECK(StartReporter(10, 40));
+  QCHECK(StartReporter(10, 40));  // idempotent
+  QCHECK(!RegisterReportCounter("late", &counter));  // refused once running
+  counter.store(5);
+  QCHECK(WaitFor([] { return Count(LogLevel::kInfo, "\"counter\":\"test_counter\",\"value\":5,\"why\":\"first_change\"") == 1; }));
+  counter.store(9);
+  QCHECK(WaitFor([] { return Count(LogLevel::kInfo, "\"counter\":\"test_counter\",\"value\":9,\"why\":\"changed\"") == 1; }));
+  // Unchanged for several steady intervals: no further line for either counter.
+  std::this_thread::sleep_for(std::chrono::milliseconds(250));
+  QCHECK(Count(LogLevel::kInfo, "\"event\":\"hook_counter\"") == 2);
+  QCHECK(Count(LogLevel::kInfo, "idle_counter") == 0);
+  StopReporter();  // joins
+  counter.store(11);
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  QCHECK(Count(LogLevel::kInfo, "\"value\":11") == 0);  // stopped: nothing more is reported
+  QCHECK(Count(LogLevel::kInfo, "\"event\":\"hook_counter\"") == 2);
 }
 
 // ---- log lines ----------------------------------------------------------------
@@ -1245,7 +1322,7 @@ void Thunks() {
     auto entry = reinterpret_cast<FaultThunk::Fn>(FaultThunk::EntryAddress());
     QCHECK(entry(1, 2) == 0);
     QCHECK(FaultThunk::Faults() == 1);
-    QCHECK(Count(LogLevel::kError, "\"event\":\"callback_thunk\",\"status\":\"no_original\"") == 1);
+    QCHECK(Errors() == 0);  // the thunk counts a fault; it never logs on the game's call path
   }
   FaultThunk::Reset();
   Captured().clear();
@@ -1284,12 +1361,12 @@ void Thunks() {
   QCHECK(entry(3, 4) == 7);
   QCHECK(g_originalCalls == 1 && FaultThunk::Original() == nullptr);
 
-  // Faults are counted always and logged first, then one in 4096.
+  // Faults are counted, never logged by the thunk.
   FaultThunk::Reset();
   Captured().clear();
   for (int i = 0; i < 5000; ++i) static_cast<void>(entry(0, 0));  // no original published
   QCHECK(FaultThunk::Faults() == 5000);
-  QCHECK(Count(LogLevel::kError, "\"status\":\"no_original\"") == 2);  // faults #1 and #4096
+  QCHECK(Errors() == 0);
 
   // void signature.
   VoidThunk::Reset();
@@ -1347,11 +1424,18 @@ int main(int argc, char** argv) {
   ReprotectFailureDoesNotHideAnEarlierFailure();
   RollbackCompareAndSwapFailureIsLogged();
   RegistryBound();
+  ReporterLogsFirstChangeThenChanges();
   LogLinesAreValidJson();
   Thunks();
 
   SetLogSink(nullptr);
   QCHECK(g_invalidLines == 0);
+#ifdef NEVR_TEST_HAVE_NLOHMANN
+  QCHECK(g_nlohmannParsed > 100);
+  std::printf("got_hook_test: %d log lines parsed with nlohmann::json\n", g_nlohmannParsed);
+#else
+  std::printf("got_hook_test: nlohmann::json not available on this host; strict validator only\n");
+#endif
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "got_hook_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
