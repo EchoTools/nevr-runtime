@@ -149,6 +149,12 @@ class Session {
   void BackgroundRefresh(CachedAuthToken auth);
   bool StopRequested() const;
   void Log(nevr::auth::LogLevel level, const std::string& message) const;
+  // During recovery attempts a repeated failure is logged at Debug, not Warning/Error.
+  nevr::auth::LogLevel Quiet(nevr::auth::LogLevel level) const {
+    return quiet_ && (level == nevr::auth::LogLevel::Warning || level == nevr::auth::LogLevel::Error)
+               ? nevr::auth::LogLevel::Debug
+               : level;
+  }
 
   SessionConfig config_;
   nevr::auth::HttpClient& http_;

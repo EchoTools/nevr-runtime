@@ -17,7 +17,17 @@ namespace nevr::quest_auth {
 
 namespace {
 using nevr::auth::LogLevel;
+
+// True when the body is a JSON object with an "error" member: the server's own refusal.
+bool BodyHasErrorKey(const std::string& body) {
+  try {
+    const nlohmann::json j = nlohmann::json::parse(body);
+    return j.is_object() && j.contains("error");
+  } catch (const nlohmann::json::exception&) {
+    return false;
+  }
 }
+}  // namespace
 
 uint64_t SystemClock::UnixNow() { return static_cast<uint64_t>(std::time(nullptr)); }
 
@@ -185,7 +195,7 @@ Session::LoginResult Session::TryCachedLogin(CachedAuthToken& auth, int attempts
   }
 
   SetState(Readiness::Refreshing);
-  const auto sink = [this](LogLevel l, const std::string& m) { Log(l, m); };
+  const auto sink = [this](LogLevel l, const std::string& m) { Log(Quiet(l), m); };
   if (attempts < 1) attempts = 1;
   nevr::auth::RefreshOutcome outcome = nevr::auth::RefreshOutcome::TransportFailed;
   for (int i = 1; i <= attempts; ++i) {
@@ -201,7 +211,7 @@ Session::LoginResult Session::TryCachedLogin(CachedAuthToken& auth, int attempts
       Log(LogLevel::Info, "[NEVR.AUTH] cached-login refresh succeeded attempt=" + std::to_string(i));
       return LoginResult::Ok;
     }
-    Log(LogLevel::Warning, std::string("[NEVR.AUTH] cached-login refresh failed attempt=") +
+    Log(Quiet(LogLevel::Warning), std::string("[NEVR.AUTH] cached-login refresh failed attempt=") +
                                std::to_string(i) + "/" + std::to_string(attempts) +
                                " outcome=" + nevr::auth::RefreshOutcomeName(outcome));
     using nevr::auth::RefreshOutcome;
@@ -214,18 +224,19 @@ Session::LoginResult Session::TryCachedLogin(CachedAuthToken& auth, int attempts
       // http_key, a missing RPC, a rejected payload). One attempt; the cache stays, the player
       // is not prompted, and the login waits for the next recovery attempt.
       failure_class_ = std::string("refresh_") + nevr::auth::RefreshOutcomeName(outcome);
-      Log(LogLevel::Error, std::string("[NEVR.AUTH] refresh refused (") + nevr::auth::RefreshOutcomeName(outcome) +
+      Log(Quiet(LogLevel::Error), std::string("[NEVR.AUTH] refresh refused (") + nevr::auth::RefreshOutcomeName(outcome) +
                                "), not about the refresh token; cache kept, player not prompted");
       return LoginResult::Held;
     }
     if (i < attempts && clock_.SleepFor(config_.refresh_retry_pause)) return LoginResult::Transient;
   }
   failure_class_ = "refresh_transient";
-  Log(LogLevel::Warning, "[NEVR.AUTH] cached-login refresh unsuccessful for a transient reason; cache file kept");
+  Log(Quiet(LogLevel::Warning), "[NEVR.AUTH] cached-login refresh unsuccessful for a transient reason; cache file kept");
   return LoginResult::Transient;
 }
 
 Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
+  quiet_ = false;  // a player prompt is always worth an Info line, also when it starts from recovery
   SetState(Readiness::AwaitingUser);
   device_result_ = DeviceResult::Ended;
   // The link file carries the device code: remove it however this function ends, including
@@ -280,10 +291,16 @@ Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
         nevr::auth::BuildDeviceAuthUrl(config_.base_url, config_.http_key, "poll"), body.dump());
     TokenAuth::DevicePollResponse response;
     if (r.transport_ok && r.status == 200) {
-      *consecutive_failures = 0;
-      return TokenAuth::ParseDevicePollResponse(r.body);
+      TokenAuth::DevicePollResponse parsed = TokenAuth::ParseDevicePollResponse(r.body);
+      // The parser reports Error both for the server's own {"error":...} and for a body it could not
+      // read (HTML from a captive portal). Only the first is the server's answer.
+      if (parsed.status != TokenAuth::DevicePollStatus::Error || BodyHasErrorKey(r.body)) {
+        *consecutive_failures = 0;
+        return parsed;
+      }
     }
-    const bool transient = !r.transport_ok || r.status >= 500 || r.status == 429 || r.status == 408;
+    // A 200 the parser could not read is treated like an outage: keep polling until the deadline.
+    const bool transient = !r.transport_ok || r.status >= 500 || r.status == 429 || r.status == 408 || r.status == 200;
     ++*consecutive_failures;
     const std::string what = " transport_ok=" + std::to_string(r.transport_ok ? 1 : 0) +
                              " code=" + std::to_string(r.transport_code) +
@@ -382,10 +399,15 @@ bool Session::LoginWithRecovery(CachedAuthToken& auth, bool use_cache) {
 
 void Session::BackgroundRefresh(CachedAuthToken auth) {
   int consecutiveFailures = 0;
+  // A refresh refused for a reason that is not about the token (a wrong http_key, a missing RPC) is
+  // retried at the recovery cadence, with one Warning per class, as at startup.
+  uint64_t held_until = 0;
+  std::string held_class;
   while (!clock_.SleepFor(config_.background_period)) {
     const uint64_t now = clock_.UnixNow();
     if (auth.token_expiry <= now) SetState(Readiness::Expired);  // logs the transition once
     if (!nevr::auth::AccessTokenNeedsRefresh(auth.token_expiry, now)) continue;
+    if (now < held_until) continue;
 
     bool relogin = false;
     if (!auth.HasValidRefreshToken(now)) {
@@ -393,10 +415,15 @@ void Session::BackgroundRefresh(CachedAuthToken auth) {
       relogin = true;
     } else {
       CachedAuthToken candidate = auth;
-      const auto sink = [this](LogLevel l, const std::string& m) { Log(l, m); };
+      const bool repeat = !held_class.empty();
+      const auto sink = [this, repeat](LogLevel l, const std::string& m) {
+        Log(repeat && l == LogLevel::Warning ? LogLevel::Debug : l, m);
+      };
       const nevr::auth::RefreshOutcome outcome = nevr::auth::RefreshAccessToken(
           candidate, config_.base_url, config_.http_key, http_, now, sink);
       if (outcome == nevr::auth::RefreshOutcome::Refreshed) {
+        held_class.clear();
+        held_until = 0;
         auth = candidate;
         consecutiveFailures = 0;
         Adopt(auth, Readiness::Ready);
@@ -410,9 +437,19 @@ void Session::BackgroundRefresh(CachedAuthToken auth) {
         Log(LogLevel::Warning,
             "[NEVR.AUTH] the server rejected the refresh token itself; starting a new device-code login");
         relogin = true;
+      } else if (outcome == nevr::auth::RefreshOutcome::Unauthorized ||
+                 outcome == nevr::auth::RefreshOutcome::ClientError) {
+        const std::string klass = nevr::auth::RefreshOutcomeName(outcome);
+        Log(klass != held_class ? LogLevel::Warning : LogLevel::Debug,
+            "[NEVR.AUTH] token refresh held (" + klass + "), not about the refresh token; login kept, trying again every " +
+                std::to_string(config_.recovery_period.count()) + "s");
+        held_class = klass;
+        held_until = now + static_cast<uint64_t>(config_.recovery_period.count());
       } else {
-        // Anything else leaves the login alone, as at startup: the cache is kept, the player is
-        // not prompted, and the next period tries again.
+        // A transient failure leaves the login alone: the cache is kept, the player is not
+        // prompted, and the next period tries again.
+        held_class.clear();
+        held_until = 0;
         ++consecutiveFailures;
         Log(LogLevel::Warning, "[NEVR.AUTH] token refresh failed (" + std::to_string(consecutiveFailures) +
                                    " consecutive) outcome=" + nevr::auth::RefreshOutcomeName(outcome) +

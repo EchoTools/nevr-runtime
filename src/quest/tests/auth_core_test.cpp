@@ -1530,6 +1530,100 @@ TEST(session_a_200_without_a_usable_code_is_transient_not_final_because_the_play
   }
 }
 
+
+TEST(session_a_200_poll_body_that_cannot_be_read_is_waited_out_but_the_servers_own_error_is_final) {
+  {
+    FakeClock clock;
+    FakeHttp http;
+    FakeStore store;
+    FakePresenter presenter;
+    auto polls = std::make_shared<std::atomic<int>>(0);
+    http.handler = [polls](const std::string& endpoint, const std::string&) -> HttpResponse {
+      if (endpoint == "request") return Ok({{"code", "C"}});
+      if (++*polls <= 4) return Status(200, "<html>captive portal</html>");
+      return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 3600)}, {"refresh_token", "rt"},
+                 {"refresh_token_expires_in", 2592000}});
+    };
+    Session s(TestConfig(), http, clock, store, presenter, nullptr);
+    s.Start();
+    clock.Allow(5);
+    CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+    CHECK_EQ(http.Count("poll"), 5);
+    CHECK_EQ(presenter.presented.load(), 1);
+    s.Stop();
+  }
+  {
+    FakeClock clock;
+    FakeHttp http;
+    FakeStore store;
+    FakePresenter presenter;
+    http.handler = [](const std::string& endpoint, const std::string&) -> HttpResponse {
+      return endpoint == "request" ? Ok({{"code", "C"}}) : Ok({{"error", "bad code"}});
+    };
+    Session s(TestConfig(), http, clock, store, presenter, nullptr);
+    s.Start();
+    clock.Allow(5);
+    CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+    CHECK_EQ(http.Count("poll"), 1);  // the server said no: final
+    s.Stop();
+  }
+}
+
+TEST(session_a_held_refresh_in_the_background_follows_the_recovery_cadence_and_warns_once) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  LogCapture log;
+  http.handler = [](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint == "request") return Ok({{"code", "C"}});
+    if (endpoint == "poll")
+      return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 320)}, {"refresh_token", "rt1"},
+                 {"refresh_token_expires_in", 2592000}});
+    return Status(403, "Forbidden by gateway");
+  };
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  clock.Allow(1);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  clock.Allow(20);  // twenty background periods of 60 s
+  CHECK(WaitUntil([&] { return clock.Sleeps() >= 21; }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  // 20 minutes: one attempt at the start of each 300 s window, not one per minute.
+  CHECK(http.Count("refresh") >= 3 && http.Count("refresh") <= 5);
+  CHECK_EQ(log.Count(LogLevel::Warning, "token refresh held (unauthorized)"), size_t(1));
+  CHECK_EQ(log.Count(LogLevel::Warning, "token refresh rejected"), size_t(1));  // the core's line, first time only
+  CHECK_EQ(presenter.presented.load(), 1);
+  CHECK_EQ(store.SaveCount(), size_t(1));
+  s.Stop();
+}
+
+TEST(session_a_player_prompt_started_from_recovery_is_logged_at_info) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  LogCapture log;
+  auto up = std::make_shared<std::atomic<bool>>(false);
+  http.handler = [up](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (!*up) return NoTransport();
+    if (endpoint == "request") return Ok({{"code", "C"}});
+    return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 3600)}, {"refresh_token", "rt"},
+               {"refresh_token_expires_in", 2592000}});
+  };
+  SessionConfig cfg = TestConfig();
+  cfg.login_retry_delays = {};
+  Session s(cfg, http, clock, store, presenter, log.Sink());
+  s.Start();
+  CHECK(WaitUntil([&] { return log.Count(LogLevel::Warning, "trying again every 300s") == 1; }));
+  *up = true;
+  clock.Allow(2);  // recovery period, then the poll wait
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK(log.Count(LogLevel::Info, "auth state failed -> awaiting_user") + log.Count(LogLevel::Info, "auth state refreshing -> awaiting_user") +
+            log.Count(LogLevel::Info, "auth state starting -> awaiting_user") >= 1);
+  s.Stop();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }
