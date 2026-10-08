@@ -536,6 +536,18 @@ test-quest-hooks:
     set -euo pipefail
     out="build/quest-hooks-host"
     mkdir -p "$out"
+    # The hook backend is compiled into exactly one CMake target; a second copy would
+    # carry its own write lock and slot registry.
+    set +e
+    owners="$(grep -rn --include=CMakeLists.txt 'got_hook\.cpp' src/quest)"
+    rc=$?
+    set -e
+    if [ "$rc" -ge 2 ]; then echo "test-quest-hooks: cannot scan src/quest for got_hook.cpp owners" >&2; exit 1; fi
+    if [ "$(printf '%s\n' "$owners" | grep -c .)" -ne 1 ]; then
+        echo "test-quest-hooks: got_hook.cpp must be listed by exactly one Quest CMake target (link nevr_quest_got_hook instead):" >&2
+        printf '%s\n' "$owners" >&2
+        exit 1
+    fi
     cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 src/quest/tests/got_fixture_provider.cpp \
         -o "$out/libgotfx_provider.so"

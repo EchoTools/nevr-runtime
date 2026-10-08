@@ -44,6 +44,12 @@ void** g_slots[kMaxSlots] = {};
 std::size_t g_slotCount = 0;
 
 std::atomic<StoreObserver> g_storeObserver{nullptr};
+std::atomic<ProtectFn> g_protect{nullptr};
+
+int Protect(void* addr, std::size_t length, int prot) {
+  const ProtectFn fn = g_protect.load(std::memory_order_acquire);
+  return fn != nullptr ? fn(addr, length, prot) : mprotect(addr, length, prot);
+}
 
 GotStatus ReserveSlot(void** slot) {
   const Lock lock;
@@ -189,7 +195,7 @@ GotStatus WriteSlot(void** slot, void* expected, void* value, bool relroReadOnly
   const int live = LiveProtection(slot);
   const bool restoreReadOnly = live >= 0 ? (live & PROT_WRITE) == 0 : relroReadOnly;
   if (restoreReadOnly &&
-      mprotect(reinterpret_cast<void*>(pages.start), pages.length, PROT_READ | PROT_WRITE) != 0) {
+      Protect(reinterpret_cast<void*>(pages.start), pages.length, PROT_READ | PROT_WRITE) != 0) {
     *savedErrno = errno;
     return GotStatus::kProtectFailed;
   }
@@ -204,13 +210,13 @@ GotStatus WriteSlot(void** slot, void* expected, void* value, bool relroReadOnly
     status = GotStatus::kWriteVerifyFailed;  // a writer outside this lock stored after us; theirs stays
   }
   if (restoreReadOnly &&
-      mprotect(reinterpret_cast<void*>(pages.start), pages.length, PROT_READ) != 0) {
+      Protect(reinterpret_cast<void*>(pages.start), pages.length, PROT_READ) != 0) {
     *savedErrno = errno;
     if (status == GotStatus::kOk) {
       void* ours = value;
       __atomic_compare_exchange_n(slot, &ours, expected, false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE);
     }
-    if (mprotect(reinterpret_cast<void*>(pages.start), pages.length, PROT_READ) != 0) {
+    if (Protect(reinterpret_cast<void*>(pages.start), pages.length, PROT_READ) != 0) {
       char page[19];
       LogFields(LogLevel::kError, "got_hook",
                 {{"op", "protect"}, {"status", "page_left_writable"},
@@ -244,13 +250,16 @@ struct RelaTable {
   std::size_t count = 0;
 };
 
-constexpr std::size_t kMaxMatches = 8;
-
+// What the relocation scan keeps. Streaming, so the number of slots a symbol has
+// is unbounded: the first slot and whether a different one exists (enough to tell
+// "one" from "several") and, when the target pins a slot, whether that slot matched.
 struct Matches {
-  std::uint64_t offset[kMaxMatches] = {};
-  std::int64_t addend[kMaxMatches] = {};
-  std::size_t distinct = 0;   // distinct slot offsets seen (may exceed kMaxMatches)
-  std::size_t stored = 0;
+  std::uint64_t first = 0;
+  std::int64_t firstAddend = 0;
+  std::size_t distinct = 0;  // saturates at 2
+  bool pinnedFound = false;
+  std::int64_t pinnedAddend = 0;
+  bool any = false;
   bool otherKind = false;
 };
 
@@ -426,37 +435,39 @@ SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
         matches.otherKind = true;
         continue;
       }
-      bool seen = false;
-      for (std::size_t m = 0; m < matches.stored; ++m) seen = seen || matches.offset[m] == rel.r_offset;
-      if (seen) continue;
-      ++matches.distinct;
-      if (matches.stored < kMaxMatches) {
-        matches.offset[matches.stored] = rel.r_offset;
-        matches.addend[matches.stored] = rel.r_addend;
-        ++matches.stored;
+      matches.any = true;
+      if (target.slotVaddr.has_value()) {
+        if (rel.r_offset == *target.slotVaddr) {
+          matches.pinnedFound = true;
+          matches.pinnedAddend = rel.r_addend;
+        }
+      } else if (matches.distinct == 0) {
+        matches.first = rel.r_offset;
+        matches.firstAddend = rel.r_addend;
+        matches.distinct = 1;
+      } else if (rel.r_offset != matches.first) {
+        matches.distinct = 2;
       }
     }
   }
 
-  if (matches.distinct == 0) {
+  if (!matches.any) {
     return fail(matches.otherKind ? GotStatus::kWrongRelocationType : GotStatus::kSymbolNotFound);
   }
-  std::size_t chosen = 0;
+  std::uint64_t chosenVaddr = 0;
+  std::int64_t chosenAddend = 0;
   if (target.slotVaddr.has_value()) {
-    bool found = false;
-    for (std::size_t m = 0; m < matches.stored; ++m) {
-      if (matches.offset[m] == *target.slotVaddr) {
-        chosen = m;
-        found = true;
-      }
-    }
-    if (!found) return fail(GotStatus::kSlotOffsetMismatch);
-  } else if (matches.distinct > 1) {
-    return fail(GotStatus::kAmbiguousRelocation);
+    if (!matches.pinnedFound) return fail(GotStatus::kSlotOffsetMismatch);
+    chosenVaddr = *target.slotVaddr;
+    chosenAddend = matches.pinnedAddend;
+  } else {
+    if (matches.distinct > 1) return fail(GotStatus::kAmbiguousRelocation);
+    chosenVaddr = matches.first;
+    chosenAddend = matches.firstAddend;
   }
-  if (matches.addend[chosen] != 0) return fail(GotStatus::kUnsupportedAddend);
+  if (chosenAddend != 0) return fail(GotStatus::kUnsupportedAddend);
 
-  const std::uint64_t vaddr = matches.offset[chosen];
+  const std::uint64_t vaddr = chosenVaddr;
   if (vaddr % kSlotSize != 0) return fail(GotStatus::kSlotMisaligned);
   bool writable = false;
   for (std::size_t i = 0; i < image.phnum; ++i) {
@@ -536,6 +547,10 @@ GotStatus Prepare(const GotTarget& target, void* hookFn, ImageLookup lookup, Pre
 
 }  // namespace
 
+ProtectFn SetProtectFunction(ProtectFn fn) {
+  return g_protect.exchange(fn, std::memory_order_acq_rel);
+}
+
 StoreObserver SetStoreObserver(StoreObserver observer) {
   return g_storeObserver.exchange(observer, std::memory_order_acq_rel);
 }
@@ -568,7 +583,8 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
                            prepared.resolution.restoreReadOnly, &savedErrno);
         return status == GotStatus::kOk;
       },
-      [&] { ReleaseSlot(prepared.resolution.slot); });
+      [&] { ReleaseSlot(prepared.resolution.slot); },
+      [&] { return status == GotStatus::kRestoreProtectFailed; });
 
   if (stage != nevr::hook::AttachStage::kAttached) {
     LogFailure("install", target, status, nevr::hook::AttachStageName(stage), savedErrno,

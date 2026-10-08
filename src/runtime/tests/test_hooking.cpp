@@ -188,3 +188,34 @@ TEST(HookLifecycle, StageNamesAreDistinctLogTokens) {
   EXPECT_STREQ(nevr::hook::AttachStageName(nevr::hook::AttachStage::kNullTrampoline), "null_trampoline");
   EXPECT_STREQ(nevr::hook::AttachStageName(nevr::hook::AttachStage::kEnableFailed), "enable_failed");
 }
+
+TEST(HookLifecycle, KeepPublishedLeavesTheOriginalAfterAFailedEnable) {
+  int target = 0, trampoline = 0;
+  void* original = &target;
+  int removes = 0;
+  const nevr::hook::AttachStage stage = nevr::hook::AttachPublished(
+      &original,
+      [&](void** out) {
+        *out = &trampoline;
+        return true;
+      },
+      [] { return false; }, [&] { ++removes; }, [] { return true; });
+  EXPECT_EQ(stage, nevr::hook::AttachStage::kEnableFailed);
+  EXPECT_EQ(original, &trampoline);
+  EXPECT_EQ(removes, 1);
+}
+
+TEST(HookLifecycle, KeepPublishedIsNotAskedWhenCreateFails) {
+  int target = 0;
+  void* original = &target;
+  bool asked = false;
+  const nevr::hook::AttachStage stage = nevr::hook::AttachPublished(
+      &original, [](void**) { return false; }, [] { return true; }, [] {},
+      [&] {
+        asked = true;
+        return true;
+      });
+  EXPECT_EQ(stage, nevr::hook::AttachStage::kCreateFailed);
+  EXPECT_EQ(original, &target);
+  EXPECT_FALSE(asked);
+}
