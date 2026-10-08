@@ -88,6 +88,7 @@ configure-android:
 # Build the Android arm64-v8a crash-reporter .so
 build-android: configure-android
     ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-arm64 -j
+    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" build/android-arm64/sentinel/CMakeFiles/ovrplatformloader.dir/*.o
 
 # Build with full compiler output
 verbose-build-android: configure-android
@@ -442,6 +443,25 @@ test-quest-shared:
         src/quest/tests/evr_codec_test.cpp \
         -o "$out/evr_codec_test"
     timeout -k 5 120 "$out/evr_codec_test"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
+        src/runtime/lifecycle/service_redirect.cpp \
+        src/quest/sentinel/quest_config.cpp \
+        src/quest/tests/quest_config_test.cpp \
+        -o "$out/quest_config_test"
+    "$out/quest_config_test"
+    # Sentinel activation + logging against a stand-in liblog. The test's constructor has priority
+    # 102, so it runs before activation.cpp's static initializers whatever the link order.
+    files="$out/sentinel-files"
+    rm -rf "$files"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/tests/stub -Isrc/quest/sentinel \
+        -DNEVR_QUEST_FILES_DIR="\"$files\"" \
+        src/quest/tests/sentinel_host_test.cpp \
+        src/quest/sentinel/activation.cpp \
+        src/quest/sentinel/sentinel_log.cpp \
+        src/quest/sentinel/quest_config.cpp \
+        src/runtime/lifecycle/service_redirect.cpp \
+        -o "$out/sentinel_host_test"
+    "$out/sentinel_host_test"
     echo "test-quest-shared: all redirect and EVR codec vectors pass on the host"
 
 # Quest hook backend on the host. Builds three fixture shared objects (BIND_NOW with
@@ -528,7 +548,7 @@ verify:
     just test-auth-unit
     just test-quest-shared
     just test-quest-hooks
-    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants -v
+    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_executable_scripts -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
