@@ -6,6 +6,7 @@
 #include <mutex>
 
 #include "hook_log.h"
+#include "hook_report.h"
 
 namespace nevr_quest::redirect {
 namespace {
@@ -34,67 +35,95 @@ void LogInstall(const char* what, GotStatus status) {
                       "redirect_install", {{"target", what}, {"status", sentinel::GotStatusName(status)}});
 }
 
-GotStatus InstallMatchmakingLocked(Installation& s, sentinel::ImageLookup lookup) {
-  if (s.redirector == nullptr) return GotStatus::kNotInstalled;
-  if (s.matchmakingHook.installed()) return GotStatus::kAlreadyInstalled;
-  ArmThunk(Slot::kMatchmaking, true);
-  const GotStatus status = s.matchmakingHook.Install(
-      s.options.targets.matchmaking, ThunkEntry(Slot::kMatchmaking),
-      ThunkOriginalOut(Slot::kMatchmaking), lookup);
-  if (status != GotStatus::kOk) ArmThunk(Slot::kMatchmaking, false);
-  s.report.matchmaking = status;
-  LogInstall("matchmaking_tstring", status);
+// Installs one slot unless it is already installed. A poisoned slot (a failed install left our entry
+// possibly reachable through it) is final for this process: it is logged as such and never retried
+// here, and the thunk stays disarmed.
+GotStatus InstallSlotLocked(Slot slot, sentinel::GotHook& hook, const sentinel::GotTarget& target,
+                            sentinel::ImageLookup lookup, GotStatus* stored, const char* what) {
+  if (hook.installed()) return GotStatus::kAlreadyInstalled;
+  if (*stored == GotStatus::kSlotPoisoned) return GotStatus::kSlotPoisoned;
+  ArmThunk(slot, true);
+  const GotStatus status = InstallThunk(slot, hook, target, lookup);
+  if (status != GotStatus::kOk) ArmThunk(slot, false);
+  *stored = status;
+  if (status == GotStatus::kSlotPoisoned) {
+    sentinel::LogFields(sentinel::LogLevel::kError, "redirect_install",
+                        {{"target", what}, {"status", "slot_poisoned"}, {"action", "not_retried"}});
+  } else {
+    LogInstall(what, status);
+  }
   return status;
 }
 
-}  // namespace
+GotStatus InstallMatchmakingLocked(Installation& s, sentinel::ImageLookup lookup) {
+  if (s.redirector == nullptr) return GotStatus::kNotInstalled;
+  return InstallSlotLocked(Slot::kMatchmaking, s.matchmakingHook, s.options.targets.matchmaking, lookup,
+                           &s.report.matchmaking, "matchmaking_tstring");
+}
 
 const char* ApplyActive(const char* key, const char* result) noexcept {
   ServiceRedirector* const redirector = g_redirector.load(std::memory_order_acquire);
   return redirector == nullptr ? result : redirector->Apply(key, result);
 }
 
+}  // namespace
+
+bool RegisterRedirectCounters() noexcept {
+  RedirectCounters& c = GlobalCounters();
+  bool ok = RegisterThunkCounters();
+  ok = sentinel::RegisterReportCounter("redirect_service_reads", &c.reads) && ok;
+  ok = sentinel::RegisterReportCounter("redirect_applied", &c.redirected) && ok;
+  ok = sentinel::RegisterReportCounter("redirect_policy_runs", &c.policyRuns) && ok;
+  ok = sentinel::RegisterReportCounter("redirect_value_too_long", &c.valueTooLong, sentinel::ReportKind::kFaults) && ok;
+  ok = sentinel::RegisterReportCounter("redirect_pool_refused", &c.poolRefused, sentinel::ReportKind::kFaults) && ok;
+  ok = sentinel::RegisterReportCounter("redirect_exceptions", &c.exceptions, sentinel::ReportKind::kFaults) && ok;
+  return ok;
+}
+
 InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config, const InstallOptions& options) {
   Installation& s = State();
   const std::lock_guard<std::mutex> lock(s.mutex);
 
-  if (s.redirector != nullptr) {
-    LogInstall("redirect", GotStatus::kAlreadyInstalled);
-    return s.report;
-  }
-  InstallReport report;
-  report.featureEnabled = nevr_quest::FeatureEnabled(config, nevr_quest::Feature::kRedirect);
-  if (!report.featureEnabled || options.intern == nullptr) {
+  if (s.redirector == nullptr) {
+    InstallReport off;
+    off.featureEnabled = nevr_quest::FeatureEnabled(config, nevr_quest::Feature::kRedirect);
+    if (!off.featureEnabled || options.intern == nullptr) {
+      sentinel::LogFields(sentinel::LogLevel::kInfo, "redirect_install",
+                          {{"target", "redirect"}, {"status", "feature_off"}, {"action", "nothing_installed"}});
+      return off;
+    }
+    ServiceRedirector* redirector = nullptr;
+    try {
+      redirector = new ServiceRedirector(config, options.intern, options.bridge);
+    } catch (const std::exception&) {
+      sentinel::LogFields(sentinel::LogLevel::kError, "redirect_install",
+                          {{"target", "redirect"}, {"status", "allocation_failure"}, {"action", "nothing_installed"}});
+      off.featureEnabled = false;
+      return off;
+    }
+    redirector->Prewarm();
+    const Counters warmed = redirector->counters();
     sentinel::LogFields(sentinel::LogLevel::kInfo, "redirect_install",
-                        {{"target", "redirect"}, {"status", "feature_off"}, {"action", "nothing_installed"}});
-    return report;
+                        {{"target", "redirect"}, {"status", "prewarmed"},
+                         {"policy_runs", static_cast<long long>(warmed.policyRuns)},
+                         {"redirected", static_cast<long long>(warmed.redirected)},
+                         {"failures", static_cast<long long>(warmed.failures)}});
+    s.redirector = redirector;
+    s.options = options;
+    s.report = InstallReport{};
+    s.report.featureEnabled = true;
+    SetApply(&ApplyActive);
+    g_redirector.store(redirector, std::memory_order_release);
+  } else {
+    LogInstall("redirect", GotStatus::kAlreadyInstalled);
   }
 
-  ServiceRedirector* redirector = nullptr;
-  try {
-    redirector = new ServiceRedirector(config, options.intern, options.bridge);
-  } catch (const std::exception&) {
-    sentinel::LogFields(sentinel::LogLevel::kError, "redirect_install",
-                        {{"target", "redirect"}, {"status", "allocation_failure"}, {"action", "nothing_installed"}});
-    report.featureEnabled = false;
-    return report;
-  }
-  redirector->Prewarm();
-
-  s.redirector = redirector;
-  s.options = options;
-  g_redirector.store(redirector, std::memory_order_release);
-
-  ArmThunk(Slot::kLibR15, true);
-  report.libr15 = s.libr15Hook.Install(options.targets.libr15, ThunkEntry(Slot::kLibR15),
-                                       ThunkOriginalOut(Slot::kLibR15), options.lookup);
-  if (report.libr15 != GotStatus::kOk) ArmThunk(Slot::kLibR15, false);
-  LogInstall("libr15_tstring", report.libr15);
-
-  s.report = report;
-  report.matchmaking = InstallMatchmakingLocked(s, options.lookup);
-  s.report = report;
-  return report;
+  // A repeated call re-attempts whichever slot is not installed (a failed install leaves the
+  // redirector in place), and leaves an installed slot's recorded status alone.
+  InstallSlotLocked(Slot::kLibR15, s.libr15Hook, s.options.targets.libr15, s.options.lookup,
+                    &s.report.libr15, "libr15_tstring");
+  InstallMatchmakingLocked(s, s.options.lookup);
+  return s.report;
 }
 
 InstallReport InstallRedirectHooks(const nevr_quest::ResolvedConfig& config) {
@@ -116,6 +145,7 @@ void RemoveRedirectHooks() {
   if (s.matchmakingHook.installed()) LogInstall("matchmaking_tstring_remove", s.matchmakingHook.Remove());
   ArmThunk(Slot::kLibR15, false);
   ArmThunk(Slot::kMatchmaking, false);
+  SetApply(nullptr);
   g_redirector.store(nullptr, std::memory_order_release);
   s.redirector = nullptr;
   s.report = InstallReport{};
@@ -123,6 +153,7 @@ void RemoveRedirectHooks() {
 
 void ArmHandlersForTest(ServiceRedirector* redirector) {
   g_redirector.store(redirector, std::memory_order_release);
+  SetApply(redirector != nullptr ? &ApplyActive : nullptr);
   ArmThunk(Slot::kLibR15, redirector != nullptr);
   ArmThunk(Slot::kMatchmaking, redirector != nullptr);
 }

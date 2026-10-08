@@ -43,14 +43,21 @@ std::atomic<bool> g_countAllocations{false};
 std::atomic<long> g_allocations{0};
 }  // namespace
 
+// The malloc/free pair sits behind noinline helpers so an optimising build cannot inline `free`
+// into a caller that inlined `operator new` (-Wmismatched-new-delete).
+namespace {
+__attribute__((noinline)) void* RawAllocate(std::size_t size) { return std::malloc(size == 0 ? 1 : size); }
+__attribute__((noinline)) void RawFree(void* p) { std::free(p); }
+}  // namespace
+
 void* operator new(std::size_t size) {
   if (g_countAllocations.load(std::memory_order_relaxed)) g_allocations.fetch_add(1, std::memory_order_relaxed);
-  void* p = std::malloc(size == 0 ? 1 : size);
+  void* p = RawAllocate(size);
   if (p == nullptr) throw std::bad_alloc();
   return p;
 }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void operator delete(void* p) noexcept { RawFree(p); }
+void operator delete(void* p, std::size_t) noexcept { RawFree(p); }
 
 namespace {
 
@@ -173,6 +180,7 @@ struct Scenario {
   Scenario(const ResolvedConfig& config, InternFn intern = &InternReal, BridgeProbe bridge = nullptr) {
     GameConfig().clear();
     Lines().clear();
+    ResetCountersForTest();
     ResetThunks();
     PublishFakeOriginal();
     redirector = std::make_unique<ServiceRedirector>(config, intern, bridge);
@@ -201,6 +209,33 @@ void KeyTable() {
   QCHECK(!IsServiceHostKey("login_hos"));
   QCHECK(!IsServiceHostKey("radserverdb_host"));
   QCHECK(!IsServiceHostKey("server_plugin"));
+  // The per-match-type formats libpnsradmatchmaking passes to TString.
+  QCHECK(IsServiceHostKey("matchmaker_arena_host"));
+  QCHECK(IsServiceHostKey("matchingservice_combat_host"));
+  QCHECK(IsServiceHostKey("matchmaker_x_host"));
+  QCHECK(!IsServiceHostKey("matchmaker__host"));        // empty <type>
+  QCHECK(!IsServiceHostKey("matchmaker_arena_hosts"));
+  QCHECK(!IsServiceHostKey("xmatchmaker_arena_host"));
+  QCHECK(!IsServiceHostKey("matchmaker_arena_hos"));
+  QCHECK(!IsServiceHostKey("matchingservice__host"));
+  QCHECK(!IsServiceHostKey("login_arena_host"));
+}
+
+void PerMatchTypeKeysAreRedirected() {
+  Scenario s(Config(kRedirectOn));
+  // ConnectMatchmaker formats the key per match type, reads it with fallback '' and passes the
+  // result to the second read as its fallback (libpnsradmatchmaking 0x1b2510, 0x1b2524).
+  GameConfig()["matchmaker_arena_host"] = "wss://elsewhere.example/arena";
+  QCHECK(std::strcmp(s.Mm("matchmaker_arena_host", ""), kSocketTarget) == 0);
+  const char* second = s.Mm("matchingservice_arena_host", s.Mm("matchmaker_arena_host", ""));
+  QCHECK(std::strcmp(second, kSocketTarget) == 0);
+  // Absent per-type key with the empty fallback: nothing to redirect, the exact pointer comes back.
+  const char* empty = "";
+  QCHECK(s.Mm("matchmaker_combat_host", empty) == empty);
+  // An unrelated key carrying a ws:// value is left alone under this rule.
+  GameConfig()["matchmaker_queue_mode"] = "wss://elsewhere.example/q";
+  const char* stored = GameConfig()["matchmaker_queue_mode"].c_str();
+  QCHECK(s.Mm("matchmaker_queue_mode", "x") == stored);
 }
 
 void RedirectsDefaultsToNevrHost() {
@@ -343,16 +378,16 @@ void PoolRefusalFallsBackToTheOriginal() {
   Scenario s(Config(kRedirectOn), &InternRefuse);
   QCHECK(s.R15("login_host", kDefaultLogin) == kDefaultLogin);
   QCHECK(s.redirector->counters().failures == 1);
-  QCHECK(AnyLineContains("\"decision\":\"failed\""));
-  QCHECK(AnyLineContains("count_limit"));
-  QCHECK(AnyLineContains("\"key\":\"login_host\""));
+  QCHECK(GlobalCounters().poolRefused.load() == 1);
+  QCHECK(Lines().empty());  // a hooked call never logs
 }
 
 void ExceptionFromThePoolFallsBackToTheOriginal() {
   Scenario s(Config(kRedirectOn), &InternThrow);
   QCHECK(s.R15("login_host", kDefaultLogin) == kDefaultLogin);
   QCHECK(s.redirector->counters().failures == 1);
-  QCHECK(AnyLineContains("\"status\":\"exception\""));
+  QCHECK(GlobalCounters().exceptions.load() == 1);
+  QCHECK(Lines().empty());
 }
 
 void OverlongValueFallsBack() {
@@ -360,25 +395,26 @@ void OverlongValueFallsBack() {
   GameConfig()["login_host"] = "wss://" + std::string(kMaxValueBytes, 'a') + ".example/x";
   const char* stored = GameConfig()["login_host"].c_str();
   QCHECK(s.R15("login_host", kDefaultLogin) == stored);
-  QCHECK(AnyLineContains("value_too_long"));
+  QCHECK(GlobalCounters().valueTooLong.load() == 1);
+  QCHECK(Lines().empty());
   // A value exactly at the limit is still handled.
   GameConfig()["login_host"] = "wss://" + std::string(kMaxValueBytes - 6, 'a');
   QCHECK(std::strcmp(s.R15("login_host", kDefaultLogin), kSocketTarget) == 0);
 }
 
-void LogsCarryNoUrls() {
+void HookedCallsNeverLog() {
+  // Logging is unsafe inside a hooked call (hook_log.h): the decision path only counts.
   Scenario s(Config(kRedirectOn), &InternReal, &BridgeProbeFn);
   g_bridge = {true, 53748};
   s.redirector->Prewarm();
   GameConfig()["loginservice_host"] = "wss://secret-token-host.example/x?token=SECRETTOKEN";
   (void)s.R15("loginservice_host", kDefaultLogin);
+  (void)s.R15("login_host", kDefaultLogin);
   g_bridge = {false, 0};
-  QCHECK(!Lines().empty());
-  QCHECK(!AnyLineContains("nevr.example"));
-  QCHECK(!AnyLineContains("readyatdawn"));
-  QCHECK(!AnyLineContains("secret-token-host"));
-  QCHECK(!AnyLineContains("SECRETTOKEN"));
-  QCHECK(!AnyLineContains("127.0.0.1"));
+  (void)s.R15("login_host", kDefaultLogin);
+  QCHECK(Lines().empty());
+  QCHECK(GlobalCounters().reads.load() > 0);
+  QCHECK(GlobalCounters().redirected.load() > 0);
 }
 
 void HitsDoNotAllocateOrLog() {
@@ -479,22 +515,29 @@ void RealHookEndToEnd(const std::string& dir) {
   ResetThunks();
   Lines().clear();
 
+  // Feature off: nothing installs.
+  EmbeddedDefaults embedded;
+  embedded.socketUri = "wss://emb.example/nevr";
+  const InstallReport off = InstallRedirectHooksWith(nevr_quest::ResolveConfig(embedded, nullptr).config, FixtureOptions(&InternReal));
+  QCHECK(!off.featureEnabled);
+  QCHECK_STATUS(off.libr15, GotStatus::kNotInstalled);
+
+  // Feature on but neither module is loaded: both installs fail, nothing is hooked, and the
+  // redirector stays so that a later call can retry.
+  const InstallReport early = InstallRedirectHooksWith(Config(kRedirectOn), FixtureOptions(&InternReal));
+  QCHECK(early.featureEnabled);
+  QCHECK_STATUS(early.libr15, GotStatus::kModuleNotLoaded);
+  QCHECK_STATUS(early.matchmaking, GotStatus::kModuleNotLoaded);
+
   void* a = OpenFixture(dir, "libredirfx_consumer_a.so");
   QCHECK(a != nullptr);
   if (a == nullptr) return;
   const FxRead readA = reinterpret_cast<FxRead>(dlsym(a, "fx_read"));
   QCHECK(readA != nullptr);
   if (readA == nullptr) return;
+  QCHECK(readA("login_host", kDefaultLogin) == kDefaultLogin);  // loaded but not yet hooked
 
-  // Feature off: nothing installs, the slot is untouched.
-  EmbeddedDefaults embedded;
-  embedded.socketUri = "wss://emb.example/nevr";
-  const InstallReport off = InstallRedirectHooksWith(nevr_quest::ResolveConfig(embedded, nullptr).config, FixtureOptions(&InternReal));
-  QCHECK(!off.featureEnabled);
-  QCHECK_STATUS(off.libr15, GotStatus::kNotInstalled);
-  QCHECK(readA("login_host", kDefaultLogin) == kDefaultLogin);
-
-  // Feature on, matchmaking module not loaded yet.
+  // The retry installs the libr15 slot; the matchmaking module is still not loaded.
   const InstallReport on = InstallRedirectHooksWith(Config(kRedirectOn), FixtureOptions(&InternReal));
   QCHECK(on.featureEnabled);
   QCHECK_STATUS(on.libr15, GotStatus::kOk);
@@ -577,7 +620,8 @@ int main(int argc, char** argv) {
   PoolRefusalFallsBackToTheOriginal();
   ExceptionFromThePoolFallsBackToTheOriginal();
   OverlongValueFallsBack();
-  LogsCarryNoUrls();
+  HookedCallsNeverLog();
+  PerMatchTypeKeysAreRedirected();
   HitsDoNotAllocateOrLog();
   PrewarmMakesTheBuiltinDefaultsHits();
   ThunkPassesExceptionsFromTheOriginal();

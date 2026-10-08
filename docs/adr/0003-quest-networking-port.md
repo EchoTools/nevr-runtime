@@ -236,18 +236,20 @@ the exact callers before it is final.
 
 Return value and lifetime, from the disassembly of both copies (`libr15.so` `0xfa2e7c`,
 `libpnsradmatchmaking.so` `0x209484`): `this` is saved from `x0`, the key from `x1`, the fallback
-from `x2`, the flag from `w3`. `CJson::PopulateCache` (`0xfa0950`, `0x207f58`) looks the key up; if
-it finds a node whose type word is 2 (string) the result is `json_string_value` of that node
+from `x2`, the flag from `w3`. A lookup helper (`0xfa0950`, `0x207f58`; no symbol at either
+address, `CJson::PopulateCache` is at `0xfa06b0` and `0x207cb8` and also calls it) looks the key
+up; if it finds a node whose type word is 2 (string) the result is `json_string_value` of that node
 (`0xfa2efc`, `0x209504`), a pointer into the `CJson`'s own value, else the result is the caller's
 `x2` unchanged. A nonzero `w3` only adds an error log line for a missing key (`0xfa2f08`). The
 function returns that pointer in `x0` (`0xfa2f78`) and neither copies nor transfers ownership, so a
 fallback or a stored value has the lifetime its owner gives it, and a replacement has to outlive
-the caller's next lookup and `CUriContainer::Parse`. Both libraries also import two other
-overloads (`TString(void*, char const*)` and `TString(CSymbol64, char const*)`); they are not the
-host-key reads and are not hooked.
+the caller's next lookup and `CUriContainer::Parse`. Other overloads are imported and not hooked:
+`libr15.so` also imports `TString(void*, char const*)` (JUMP_SLOT `0x36e92d0`) and
+`TString(CSymbol64, char const*)` (`0x36fa288`); `libpnsradmatchmaking.so` imports only the
+`CSymbol64` one (`0x6bb458`).
 
-Keys. Every `_host` key string in the two libraries has the xrefs below; each is either a
-`CJson::TString` first argument or a `CJson::SetString` first argument (the latter at `libr15.so`
+Keys. Each of the eight literal `_host` key strings in the two libraries has the xrefs below; each is
+either a `CJson::TString` first argument or a `CJson::SetString` first argument (the latter at `libr15.so`
 `0x11f85fc` and `0x11f868c` for `config_host` and `login_host`, `0x11f871c` and `0x11f87ac` for
 `radserverdb_host`, which `CR15Game::PreprocessCommandLine` writes). In each `TString` pair the
 first call's fallback is the game's built-in `wss://` default and the second call's fallback is the
@@ -260,12 +262,35 @@ first call's result, which then goes to `CUriContainer::Parse`.
 | `libr15.so` | `LogInSuccess` (`0x126cd1c`, `0x126cd34`) and the function at `0x1289ac8` called from `BeginMultiplayer` (`0x128a790`, `0x128a7a8`) | `transaction_host`, `transactionservice_host` | `wss://transaction.readyatdawn.com/rad/rad15_live` |
 | `libpnsradmatchmaking.so` | `MatchmakerUri` (`0x1b2150`) and `ConnectMatchmaker` (`0x1b22b8`, `0x1b22d0`) | `matchmaker_host`, `matchingservice_host` | `wss://matchmaker.readyatdawn.com/rad/rad15_live` |
 
-Those eight keys are the set the Quest redirect applies to (`src/quest/redirect/service_redirector.h`,
-`IsServiceHostKey`). Each library has further `TString` call sites whose key was not recovered
-statically (87 of the 169 in `libr15.so`, 28 of the 56 in `libpnsradmatchmaking.so`); none of them
-references one of the eight key strings, because every reference to those strings is listed above.
-The REST base `https://api.readyatdawn.com` (`libr15.so` `0x126c270`, `0x128958c`) goes to
-`CSysHttp::CreateConnection`, not through `TString`, and is not covered.
+`libpnsradmatchmaking.so` also builds two keys per match type with `MakeTStrPrintF`: the formats
+`matchingservice_%s_host` (string `0x530ac2`) and `matchmaker_%s_host` (`0x530ada`), referenced at
+`0x1b2184`, `0x1b219c` (`MatchTypeSpecificMatchmakerUri`, read at `0x1b21c0` and `0x1b21d4`) and
+`0x1b24e0`, `0x1b24f4` (the per-match-type loop in `ConnectMatchmaker`, read at `0x1b2510` and
+`0x1b2524` with fallback `''`, the result chained as the next fallback and passed to
+`CUriContainer::Parse` at `0x1b2538`). The game compares the plain host to
+`matchmaker.readyatdawn.com` (`0x530b3c`) at `0x1b2698` and only on a match builds
+`matchmaker-%s.readyatdawn.com` from `match_type_specific_matchmakers|%s|host_suffix`; with
+`matchmaker_host` redirected that branch is not taken (inferred, not run). These two formats and the
+eight literals are the only `_host` key formats in the strings of the three Quest libraries
+(`strings -a | grep '%s.*host'`).
+
+The Quest redirect applies to the eight literals and to `matchmaker_<type>_host` and
+`matchingservice_<type>_host` with a non-empty type (`src/quest/redirect/service_redirector.h`,
+`IsServiceHostKey`). It matches by key, not by value like PCVR, because the two libraries make 175
+and 62 `TString` calls (169 and 56 `bl` plus 6 tail-call `b` sites each, one of them the second read
+in `MatchmakerUri` at `0x1b216c`), 87 and 28 of the `bl` sites with a key not recovered statically,
+many from per-frame script readers (for example `0x23270ac`); a by-value rule would take the cache lock
+and run the policy for any `ws://` or `https://` string any of them reads. The key rule is exhaustive
+for the host keys by the string search above. Whether the NEVR config response carries
+`match_type_specific_matchmakers` or these keys is not verified: no reference exists in
+`~/src/nakama`, and the reconstruction note `match_join_flow.md` says the game may take a
+match-type-specific URL from that config key.
+
+HTTP is not covered by this hook. `https://api.readyatdawn.com` (`libr15.so` `0x126c270`,
+`0x128958c`) goes to `CSysHttp::CreateConnection`, not through `TString`; so does
+`CR15NetStoreTransactions::InitializeHttp`, which reads the key `env` (`0x126c214`) and, when it is
+not `live`, builds `https://api-%s.readyatdawn.com` (`0x126c240`) for `CreateConnection`
+(`0x126c25c`). An HTTP hook is a separate tranche.
 
 The PCVR runtime redirects by value for every key (`config.cpp`, `RedirectServiceUrl`) and uses a
 key list only for the login override. Quest keeps the shared value policy
@@ -274,21 +299,34 @@ config key is never rewritten.
 
 Quest hook (`src/quest/redirect`). `tstring_thunks.cpp` is the only redirect file that includes
 `callback_thunk.h` and `pinned_targets.h`, so it is built with `-fno-exceptions`: its `noexcept`
-handler calls the game's original and then one `noexcept` function, `ApplyActive`
-(`tstring_thunks.h`), and has no landing pad. `hook_adapter.cpp` (exceptions enabled) holds the
-`GotHook` installation, the redirector's lifetime and `ApplyActive`, which hands the key and the
-result to `ServiceRedirector::Apply`. `Apply` catches `std::exception` in its own frames, which
-never call the game; an exception of any other type would reach the `noexcept` boundary and
-terminate, and nothing it calls throws one. `just test-quest-redirect` checks that
-`tstring_thunks.o` has no `zPLR` frames. `Apply` returns the original pointer unchanged for any other key, when
+handler calls the game's original and then one `noexcept` function pointer (`ApplyFn`,
+`tstring_thunks.h`), and has no landing pad. The pointer is set by `hook_adapter.cpp` (exceptions
+enabled), which holds the installation, the redirector's lifetime and `ApplyActive`, which hands the
+key and the result to `ServiceRedirector::Apply`. The call is indirect on purpose: the callee's frames
+are sentinel-only and never on the stack across a call into the game, but they do carry a
+personality (they catch), so a direct call would put them in the frame sensor's walk
+(`TestHookFramesCarryNoPersonality`), which follows direct edges only. `Apply` catches
+`std::exception` in its own frames; an exception of any other type would reach the `noexcept`
+boundary and terminate, and nothing it calls throws one. Nothing in a hooked call logs: the
+thunks and `Apply` only count, and `RegisterRedirectCounters` hands the counters to the reporter
+thread. `just test-quest-redirect` checks that `tstring_thunks.o` has no `zPLR` frames and runs the
+test under ThreadSanitizer, where deleting the cache lock fails it. `Apply` returns the original pointer unchanged for any other key, when
 the redirect feature is off, for a value the policy declines, and on any failure (a value over 512
 bytes, a pool refusal, an exception), logging the key name and a status token and never a URL. For a
 redirected value it returns a pointer from the stable string pool, so the same value always maps to
 the same address for the rest of the process. The first sight of each distinct value runs the policy
 and may intern one string; up to 16 values are remembered, and the game's four built-in defaults are
 resolved when the hooks are installed, so the normal reads allocate nothing. The sentinel does not
-call `InstallRedirectHooks` yet, and the matchmaking slot needs `InstallMatchmakingRedirect` after
-its module loads.
+call `InstallRedirectHooks` yet. The caller's contract (also in `hook_adapter.h`): register the
+counters before `StartReporter`; install from the sentinel's ELF constructor so it precedes
+`CR15NetGame::Initialize`, which reads `config_host` at `0x1286060` (a value read earlier stays as
+parsed; this rests on Bionic constructor ordering and is not tested on a headset); install
+`libpnsradmatchmaking` by hooking libr15's dlopen slot (JUMP_SLOT `0x36c6380`, the string
+"pnsradmatchmaking") and calling `InstallMatchmakingRedirect` after the real call returns, which is
+early enough because `ConnectMatchmaker` (`0x1b22b8`) re-reads the host on every connect. A failed
+install keeps the redirector and the next call retries the slot that is not installed; a poisoned
+slot is logged and not retried. When all 16 cache entries were computed under the current bridge
+state, a further distinct value is not remembered and each read of it runs the policy again.
 
 The relocation resolves the PLT stub `0xf28e40` to the defined `CJson::TString` at `0xfa2e7c`,
 not to the unrelated function at `0x10a2e7c`. The `libr15.so` string locations `0x2bae9b8`,

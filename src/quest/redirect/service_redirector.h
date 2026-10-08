@@ -10,9 +10,14 @@
 // Policy is not decided here. A value is redirected only when the shared policy
 // (nevr_quest::ResolveQuestRedirect -> nevr_cfg::ResolveRedirect, the same source the PCVR runtime
 // compiles) returns a replacement, and only for the endpoint keys in IsServiceHostKey. PCVR
-// redirects by value for every key; Quest narrows to the eight keys the binaries read for the
-// service, config, login, transaction and matchmaker hosts, so no unrelated config string is ever
-// rewritten.
+// redirects by value for every key; Quest narrows to the keys the binaries read for the config,
+// login, transaction and matchmaker hosts, so no unrelated config string is ever rewritten.
+// Why not by value for every key: the two libraries make 175 and 62 TString calls, 87 and 28 of them
+// with a key that is not a literal this analysis could recover, many from per-frame script readers;
+// a by-value rule would take the cache lock and run the policy for any ws:// or https:// string any
+// of them reads. The key rule is exhaustive for the host keys: the only `_host` key formats in the
+// three Quest libraries' strings are the eight literals and the two matchmaker per-type formats
+// below (`strings -a | grep '%s.*host'`).
 //
 // Allocation. Apply copies nothing and allocates nothing for a key outside the list, for a value
 // it has already seen, or when redirect is off. The first sight of each distinct value (at most
@@ -21,9 +26,22 @@
 // so the normal login and matchmaking reads are cache hits. Config reads happen at connect time,
 // not per frame.
 //
+// Full cache. A value is remembered only if a slot is free or holds an entry computed for another
+// bridge state. When all kMaxCachedValues slots were computed under the current bridge state, a
+// further distinct value is not remembered: every read of it runs the policy again and allocates
+// (the pool interns it once, so pool growth is bounded by the distinct redirect targets). That is
+// acceptable here because the game reads a host key a handful of times per connect, and the
+// policyRuns counter shows it if it ever happens.
+//
 // Failure. Any doubt returns the original pointer: a value longer than kMaxValueBytes, a pool
-// refusal, an exception from the policy or the pool. Each failure logs one structured line with
-// the key name and a status token; no line contains a URL, host or credential.
+// refusal, an exception from the policy or the pool. Apply never logs: it runs inside a hooked
+// game call, where logging is unsafe (hook_log.h). It only increments the process-wide counters
+// below, which RegisterRedirectCounters hands to the sentinel's reporter thread; the install path
+// logs the rest. No counter or line carries a URL, host or credential.
+//
+// Residual. Apply catches std::exception (which covers bad_alloc and system_error) around the
+// policy, the lock and the pool. It does not catch(...) (repo rule), so an exception of another
+// type would reach Apply's noexcept boundary and terminate; nothing it calls throws one.
 #pragma once
 
 #include <array>
@@ -43,7 +61,9 @@ inline constexpr std::size_t kMaxValueBytes = 512;
 
 // The keys the pinned libr15.so / libpnsradmatchmaking.so read for service endpoints
 // (docs/adr/0003; each is the first argument of a CJson::TString call whose fallback is the
-// game's built-in wss:// default). Exact, case-sensitive match.
+// game's built-in wss:// default or ''). The eight literals, plus `matchmaker_<type>_host` and
+// `matchingservice_<type>_host` with a non-empty <type> (the two formats libpnsradmatchmaking
+// passes to TString for each match type). Exact, case-sensitive, allocation-free.
 bool IsServiceHostKey(const char* key) noexcept;
 
 // The built-in defaults the game passes as fallback for those keys. Used to prewarm the cache.
@@ -72,11 +92,23 @@ enum class Outcome : std::uint8_t {
   kFailed,        // doubt or failure: original pointer returned
 };
 
+// Process-wide, because the reporter holds pointers to them from before any redirector exists.
+struct RedirectCounters {
+  std::atomic<std::uint64_t> reads{0};          // Apply calls for a service key with a value
+  std::atomic<std::uint64_t> redirected{0};     // returned a pool pointer
+  std::atomic<std::uint64_t> policyRuns{0};     // cache misses that ran the shared policy
+  std::atomic<std::uint64_t> valueTooLong{0};   // fault: value over kMaxValueBytes
+  std::atomic<std::uint64_t> poolRefused{0};    // fault: the pool returned a non-success status
+  std::atomic<std::uint64_t> exceptions{0};     // fault: std::exception inside Apply
+};
+RedirectCounters& GlobalCounters() noexcept;
+void ResetCountersForTest() noexcept;
+
 struct Counters {
-  std::uint64_t calls = 0;        // Apply calls for a service key with a value
-  std::uint64_t redirected = 0;   // returned a pool pointer
-  std::uint64_t failures = 0;     // returned the original because of doubt or an error
-  std::uint64_t policyRuns = 0;   // cache misses that ran the shared policy
+  std::uint64_t calls = 0;
+  std::uint64_t redirected = 0;
+  std::uint64_t failures = 0;    // valueTooLong + poolRefused + exceptions
+  std::uint64_t policyRuns = 0;
 };
 
 class ServiceRedirector {
@@ -109,8 +141,7 @@ class ServiceRedirector {
     std::array<char, kMaxValueBytes> original{};
   };
 
-  const char* Resolve(const char* key, const char* result, std::size_t length, BridgeState bridge,
-                      Outcome* outcome);
+  const char* Resolve(const char* result, std::size_t length, BridgeState bridge, Outcome* outcome);
 
   const nevr_quest::ResolvedConfig config_;
   const InternFn intern_;
@@ -120,10 +151,6 @@ class ServiceRedirector {
   std::mutex mutex_;
   std::array<Entry, kMaxCachedValues> cache_{};
 
-  std::atomic<std::uint64_t> calls_{0};
-  std::atomic<std::uint64_t> redirected_{0};
-  std::atomic<std::uint64_t> failures_{0};
-  std::atomic<std::uint64_t> policyRuns_{0};
 };
 
 }  // namespace nevr_quest::redirect

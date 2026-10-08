@@ -497,8 +497,13 @@ test-quest-redirect:
     "${cxx[@]}" "${link[@]}" "$fx/tstring_fixture_consumer.cpp" -o "$out/libredirfx_consumer_b.so"
     # The thunk translation unit is built without exceptions (callback_thunk.h refuses
     # otherwise); everything else, including the GOT backend and the test, with them.
+    # The thunk translation unit and the hook backend are built without exceptions (as on Android);
+    # everything else, including the test, with them.
     "${cxx[@]}" -fno-exceptions -c src/quest/redirect/tstring_thunks.cpp -o "$out/tstring_thunks.o"
-    # Its frames must sit under the personality-free CIE: no "zPLR" augmentation, at least one "zR".
+    for f in got_hook hook_log hook_report; do
+        "${cxx[@]}" -fno-exceptions -c "src/quest/sentinel/$f.cpp" -o "$out/$f.o"
+    done
+    # The thunk's frames must sit under the personality-free CIE: no "zPLR" augmentation, at least one "zR".
     frames="$out/tstring_thunks.frames.txt"
     readelf --debug-dump=frames "$out/tstring_thunks.o" > "$frames"
     if grep -q '"zPLR"' "$frames"; then
@@ -506,13 +511,18 @@ test-quest-redirect:
         exit 1
     fi
     grep -q '"zR"' "$frames" || { echo "test-quest-redirect: FAIL - tstring_thunks.o has no zR frames to check" >&2; exit 1; }
-    "${cxx[@]}" "$fx/redirect_test.cpp" "$out/tstring_thunks.o" \
-        src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp \
-        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp \
-        src/quest/sentinel/quest_config.cpp src/runtime/lifecycle/service_redirect.cpp \
-        src/runtime/lifecycle/stable_string_pool.cpp \
-        -o "$out/redirect_test" -ldl -pthread
+    srcs=("$fx/redirect_test.cpp" src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp
+        src/quest/sentinel/quest_config.cpp src/runtime/lifecycle/service_redirect.cpp
+        src/runtime/lifecycle/stable_string_pool.cpp)
+    objs=("$out/tstring_thunks.o" "$out/got_hook.o" "$out/hook_log.o" "$out/hook_report.o")
+    "${cxx[@]}" "${srcs[@]}" "${objs[@]}" -o "$out/redirect_test" -ldl -pthread
     "$out/redirect_test" "$out"
+    # The same test under ThreadSanitizer at -O1: the cache lock is only observable as a data race, and
+    # -O1 also exercises the warnings that -O0 hides. The thunk TU and backend stay uninstrumented
+    # objects (they hold no shared state beyond atomics).
+    tsan=(-fsanitize=thread -O1 -g)
+    "${cxx[@]}" "${tsan[@]}" "${srcs[@]}" "${objs[@]}" -o "$out/redirect_test_tsan" -ldl -pthread
+    TSAN_OPTIONS="halt_on_error=1 exitcode=66" "$out/redirect_test_tsan" "$out"
 
 # Resolve the pinned Quest targets in the real libr15.so / libpnsradmatchmaking.so
 # (docs/adr/0003). Extracts both from the pinned APK, checks their SHA-256, and runs

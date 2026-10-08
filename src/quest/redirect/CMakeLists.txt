@@ -2,7 +2,7 @@
 # adapter. A static library the sentinel links when it enables the redirect; the host test is
 # built by `just test-quest-redirect` (it needs dlopen fixtures and a host libc, not the NDK).
 #
-# The GOT backend comes from nevr_quest_got_hook, the one library that holds it.
+# The hook backend comes from nevr_quest_got_hook, the one library that holds it.
 #
 # tstring_thunks.cpp includes callback_thunk.h, so it is built without exception support: its
 # frames carry no personality and no LSDA, and a game exception passes through them (see the
@@ -20,4 +20,7 @@ target_link_libraries(nevr_quest_redirect PUBLIC
   nevr_quest_config
   nevr_quest_got_hook
   nevr_quest_stable_string_pool)
-target_compile_options(nevr_quest_redirect PRIVATE -Wall -Wextra -Werror)
+# Hidden visibility: linked into the sentinel, nothing here may become an export
+# (tests/quest TestExportAllowlist).
+target_compile_options(nevr_quest_redirect PRIVATE -Wall -Wextra -Werror
+  -fvisibility=hidden -fvisibility-inlines-hidden)

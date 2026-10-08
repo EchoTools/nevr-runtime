@@ -11,11 +11,24 @@
 // pool leaves the game's original calls exactly as they were and logs one structured line per
 // target (GotHook's own `got_hook` line plus this file's `redirect_install` line).
 //
-// libpnsradmatchmaking.so is not a dependency of libr15.so or libpnsrad.so and is loaded later
-// (CNSLobby::LoadMatchmakingSupport), so its slot may not exist when InstallRedirectHooks runs.
-// InstallRedirectHooks reports that as kModuleNotLoaded; the caller invokes
-// InstallMatchmakingRedirect() once the module is loaded and before the first dial. Nothing here
-// decides when that is.
+// The caller's contract (nothing in this directory calls these; the sentinel does):
+//   1. RegisterRedirectCounters() before sentinel::StartReporter (the reporter refuses a
+//      registration after it starts; 10 of the 32 counter slots are used).
+//   2. InstallRedirectHooks(config) from the sentinel's ELF constructor, early enough to precede
+//      CR15NetGame::Initialize, which reads config_host and configservice_host (libr15.so
+//      0x1286060). A value the game read before the slot was hooked stays as the game parsed it. That
+//      ordering rests on Bionic running the constructor before game code and is not tested on a
+//      headset.
+//   3. libpnsradmatchmaking.so is not a dependency of libr15.so or libpnsrad.so and is loaded
+//      later (CNSLobby::LoadMatchmakingSupport), so its slot may not exist at step 2, which then
+//      reports kModuleNotLoaded. The caller hooks libr15's dlopen slot (JUMP_SLOT 0x36c6380, the
+//      string "pnsradmatchmaking") and calls InstallMatchmakingRedirect() after the real dlopen
+//      returns. ConnectMatchmaker (0x1b22b8) re-reads the host on every connect, so installing
+//      before the first dial is enough.
+//   4. A failed install leaves the redirector in place; calling InstallRedirectHooks again retries
+//      the slot that is not installed. A poisoned slot (kSlotPoisoned) is logged and not retried.
+// The bridge feature has no effect on Quest yet: the production install passes no BridgeProbe, so
+// every redirect uses the configured target.
 #pragma once
 
 #include "got_hook.h"
@@ -31,11 +44,16 @@ struct InstallReport {
   sentinel::GotStatus matchmaking = sentinel::GotStatus::kNotInstalled;
 };
 
-// Production entry: pinned targets, the process-wide pool, no bridge until SetBridgeProbe.
+// Registers every counter the redirect and its thunks keep (nothing here logs from a hooked call).
+// Call before sentinel::StartReporter. False if a counter was refused.
+bool RegisterRedirectCounters() noexcept;
+
+// Production entry: pinned targets, the process-wide pool, no bridge probe.
 InstallReport InstallRedirectHooks(const nevr_quest::ResolvedConfig& config);
 
-// Retries the matchmaking slot after its module has loaded. kNotInstalled if
-// InstallRedirectHooks has not enabled the redirect.
+// Installs the matchmaking slot after its module has loaded (see the contract above). kNotInstalled
+// if InstallRedirectHooks has not enabled the redirect; kAlreadyInstalled if it is installed;
+// kSlotPoisoned if an earlier attempt left the slot poisoned.
 sentinel::GotStatus InstallMatchmakingRedirect();
 
 // Restores both slots and disarms the handlers. Pool strings already handed to the game stay valid.

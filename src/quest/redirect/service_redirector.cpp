@@ -5,7 +5,6 @@
 #include <optional>
 #include <string>
 
-#include "hook_log.h"
 
 namespace nevr_quest::redirect {
 namespace {
@@ -17,29 +16,39 @@ constexpr const char* kServiceHostKeys[] = {
     "matchmaker_host",    "matchingservice_host",    // libpnsradmatchmaking MatchmakerUri, ConnectMatchmaker
 };
 
-// Log-only classification of a URL's scheme. It never influences a decision.
-const char* SchemeToken(const char* url) {
-  if (std::strncmp(url, "wss://", 6) == 0) return "wss";
-  if (std::strncmp(url, "ws://", 5) == 0) return "ws";
-  if (std::strncmp(url, "https://", 8) == 0) return "https";
-  if (std::strncmp(url, "http://", 7) == 0) return "http";
-  return "other";
-}
-
-void LogFailure(const char* key, const char* status) noexcept {
-  sentinel::LogFields(sentinel::LogLevel::kError, "service_redirect",
-                      {{"key", key}, {"decision", "failed"}, {"status", status},
-                       {"action", "return_original"}});
+// key == prefix + <at least one character> + suffix.
+bool IsFormattedKey(const char* key, const char* prefix, const char* suffix) noexcept {
+  const std::size_t keyLen = std::strlen(key);
+  const std::size_t prefixLen = std::strlen(prefix);
+  const std::size_t suffixLen = std::strlen(suffix);
+  if (keyLen < prefixLen + 1 + suffixLen) return false;
+  return std::memcmp(key, prefix, prefixLen) == 0 &&
+         std::memcmp(key + keyLen - suffixLen, suffix, suffixLen) == 0;
 }
 
 }  // namespace
+
+RedirectCounters& GlobalCounters() noexcept {
+  static RedirectCounters counters;
+  return counters;
+}
+
+void ResetCountersForTest() noexcept {
+  RedirectCounters& c = GlobalCounters();
+  c.reads.store(0);
+  c.redirected.store(0);
+  c.policyRuns.store(0);
+  c.valueTooLong.store(0);
+  c.poolRefused.store(0);
+  c.exceptions.store(0);
+}
 
 bool IsServiceHostKey(const char* key) noexcept {
   if (key == nullptr) return false;
   for (const char* candidate : kServiceHostKeys) {
     if (std::strcmp(key, candidate) == 0) return true;
   }
-  return false;
+  return IsFormattedKey(key, "matchmaker_", "_host") || IsFormattedKey(key, "matchingservice_", "_host");
 }
 
 ServiceRedirector::ServiceRedirector(const nevr_quest::ResolvedConfig& config, InternFn intern,
@@ -49,8 +58,8 @@ ServiceRedirector::ServiceRedirector(const nevr_quest::ResolvedConfig& config, I
       bridge_(bridge),
       active_(intern != nullptr && config.effective.redirect) {}
 
-const char* ServiceRedirector::Resolve(const char* key, const char* result, std::size_t length,
-                                       BridgeState bridge, Outcome* outcome) {
+const char* ServiceRedirector::Resolve(const char* result, std::size_t length, BridgeState bridge,
+                                       Outcome* outcome) {
   Entry* slot = nullptr;
   for (Entry& e : cache_) {
     if (!e.used) {
@@ -70,7 +79,7 @@ const char* ServiceRedirector::Resolve(const char* key, const char* result, std:
     if (slot == nullptr && !sameBridge) slot = &e;
   }
 
-  policyRuns_.fetch_add(1, std::memory_order_relaxed);
+  GlobalCounters().policyRuns.fetch_add(1, std::memory_order_relaxed);
   const std::optional<std::string> replacement = nevr_quest::ResolveQuestRedirect(
       config_, std::string(result, length), bridge.ready, bridge.port);
 
@@ -78,7 +87,7 @@ const char* ServiceRedirector::Resolve(const char* key, const char* result, std:
   if (replacement && *replacement != std::string_view(result, length)) {
     const nevr_runtime::lifecycle::InternResult interned = intern_(*replacement);
     if (interned.status != nevr_runtime::lifecycle::InternStatus::kSuccess || interned.pointer == nullptr) {
-      LogFailure(key, nevr_runtime::lifecycle::InternStatusName(interned.status));
+      GlobalCounters().poolRefused.fetch_add(1, std::memory_order_relaxed);
       *outcome = Outcome::kFailed;
       return result;
     }
@@ -95,27 +104,21 @@ const char* ServiceRedirector::Resolve(const char* key, const char* result, std:
   }
 
   if (published == nullptr) {
-    sentinel::LogFields(sentinel::LogLevel::kInfo, "service_redirect",
-                        {{"key", key}, {"decision", "pass"}, {"from", SchemeToken(result)}});
     *outcome = Outcome::kPassThrough;
     return result;
   }
-  sentinel::LogFields(sentinel::LogLevel::kInfo, "service_redirect",
-                      {{"key", key}, {"decision", "redirect"}, {"from", SchemeToken(result)},
-                       {"to", SchemeToken(published)}, {"via", bridge.ready ? "bridge" : "target"},
-                       {"cached", slot != nullptr ? 1 : 0}});
   *outcome = Outcome::kRedirected;
   return published;
 }
 
 const char* ServiceRedirector::Apply(const char* key, const char* result) noexcept {
   if (!active_ || key == nullptr || result == nullptr || !IsServiceHostKey(key)) return result;
-  calls_.fetch_add(1, std::memory_order_relaxed);
+  RedirectCounters& counters = GlobalCounters();
+  counters.reads.fetch_add(1, std::memory_order_relaxed);
 
   const std::size_t length = strnlen(result, kMaxValueBytes + 1);
   if (length > kMaxValueBytes) {
-    failures_.fetch_add(1, std::memory_order_relaxed);
-    LogFailure(key, "value_too_long");
+    counters.valueTooLong.fetch_add(1, std::memory_order_relaxed);
     return result;
   }
 
@@ -125,15 +128,13 @@ const char* ServiceRedirector::Apply(const char* key, const char* result) noexce
     BridgeState bridge;
     if (bridge_ != nullptr) bridge = bridge_();
     const std::lock_guard<std::mutex> lock(mutex_);
-    chosen = Resolve(key, result, length, bridge, &outcome);
+    chosen = Resolve(result, length, bridge, &outcome);
   } catch (const std::exception&) {
-    failures_.fetch_add(1, std::memory_order_relaxed);
-    LogFailure(key, "exception");
+    counters.exceptions.fetch_add(1, std::memory_order_relaxed);
     return result;
   }
 
-  if (outcome == Outcome::kRedirected) redirected_.fetch_add(1, std::memory_order_relaxed);
-  if (outcome == Outcome::kFailed) failures_.fetch_add(1, std::memory_order_relaxed);
+  if (outcome == Outcome::kRedirected) counters.redirected.fetch_add(1, std::memory_order_relaxed);
   return chosen;
 }
 
@@ -143,11 +144,13 @@ void ServiceRedirector::Prewarm() noexcept {
 }
 
 Counters ServiceRedirector::counters() const noexcept {
+  const RedirectCounters& g = GlobalCounters();
   Counters c;
-  c.calls = calls_.load(std::memory_order_relaxed);
-  c.redirected = redirected_.load(std::memory_order_relaxed);
-  c.failures = failures_.load(std::memory_order_relaxed);
-  c.policyRuns = policyRuns_.load(std::memory_order_relaxed);
+  c.calls = g.reads.load(std::memory_order_relaxed);
+  c.redirected = g.redirected.load(std::memory_order_relaxed);
+  c.failures = g.valueTooLong.load(std::memory_order_relaxed) + g.poolRefused.load(std::memory_order_relaxed) +
+               g.exceptions.load(std::memory_order_relaxed);
+  c.policyRuns = g.policyRuns.load(std::memory_order_relaxed);
   return c;
 }
 
