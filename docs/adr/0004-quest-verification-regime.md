@@ -138,11 +138,15 @@ as a pass.
 
 ## Commands
 
-`just verify` covers the Windows build, unit tests, source checks and `just test-quest-hooks`
+`just verify` covers the Windows build, unit tests, source checks, `just test-quest-router` (the
+session router through fake transports, the WebSocket wire codec, and the loopback game server
+with a raw TCP client) and `just test-quest-hooks`
 (the GOT backend, lifecycle and thunks against fixture shared objects and in-memory images, on
 the host). `just test-quest-hooks-pinned` resolves the pinned targets in the real `libr15.so`
 and `libpnsradmatchmaking.so` extracted from the pinned APK and fails if the APK is absent.
-`just test-android` covers the Android build and ELF shape. None of these executes a Quest
+`just test-quest-tls` runs the libcurl connector against real TLS servers made on the host (trusted
+chain, wrong CA, wrong host name, self-signed leaf, empty trust store, non-TLS server, `ws://`) and
+asserts no plaintext fallback. `just test-android` covers the Android build and ELF shape. None of these executes a Quest
 binary under Bionic, so none establishes callback compatibility by itself. The commands below
 do not exist yet:
 

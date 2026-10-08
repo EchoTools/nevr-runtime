@@ -2,6 +2,14 @@
   "name": "nevr-quest",
   "version-string": "0.1.0",
   "dependencies": [
-    "nlohmann-json"
+    "nlohmann-json",
+    {
+      "name": "curl",
+      "default-features": false,
+      "features": [
+        "ssl",
+        "websockets"
+      ]
+    }
   ]
 }

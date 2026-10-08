@@ -74,3 +74,7 @@ option(NEVR_QUEST_BUILD_SENTINEL "Build the breakpad crash-reporter .so" ON)
 if(NEVR_QUEST_BUILD_SENTINEL AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/sentinel/CMakeLists.txt")
   add_subdirectory(sentinel)
 endif()
+
+# ── Session router + loopback transport (ADR 0003, contract 3) ───────────
+# Kept in its own subdirectory so it merges cleanly alongside the other Quest packages.
+add_subdirectory(net)
