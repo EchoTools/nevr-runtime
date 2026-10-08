@@ -6,6 +6,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/breakpad.cmake)
 add_library(ovrplatformloader SHARED
   entry.cpp
   sentinel.cpp
+  hook_log.cpp
   got_hook.cpp)
 
 # Emit libovrplatformloader.so (CMake adds the lib prefix + .so suffix).
@@ -13,9 +14,12 @@ set_target_properties(ovrplatformloader PROPERTIES OUTPUT_NAME ovrplatformloader
 
 target_include_directories(ovrplatformloader PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../..
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/breakpad/src)
 
 target_link_libraries(ovrplatformloader PRIVATE breakpad_client log dl)
+
+target_compile_options(ovrplatformloader PRIVATE -Wall -Wextra -Werror)
 
 # Keep breakpad's internal symbols from leaking out of our public export set.
 target_link_options(ovrplatformloader PRIVATE -Wl,--exclude-libs,ALL)
