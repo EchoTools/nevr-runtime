@@ -29,9 +29,9 @@
 
 #include "got_hook.h"
 #include "hook_log.h"
-#include "pinned_targets.h"
 #include "quest/redirect/hook_adapter.h"
 #include "quest/redirect/service_redirector.h"
+#include "quest/redirect/tstring_thunks.h"
 #include "quest/sentinel/quest_config.h"
 #include "quest/tests/test_check.h"
 #include "runtime/lifecycle/stable_string_pool.h"
@@ -58,9 +58,10 @@ using namespace nevr_quest::redirect;
 using nevr_quest::EmbeddedDefaults;
 using nevr_quest::ResolvedConfig;
 using sentinel::GotStatus;
-using sentinel::pinned::CJsonOpaque;
-using sentinel::pinned::LibR15TStringThunk;
-using sentinel::pinned::MatchmakingTStringThunk;
+
+// The thunks' own types are not visible here (callback_thunk.h needs -fno-exceptions); the entry
+// points are called through the same ABI with `this` as an opaque pointer.
+constexpr const char* kTStringSymbol = "_ZNK10NRadEngine5CJson7TStringEPKcS2_j";
 
 constexpr const char* kDefaultLogin = "wss://login.readyatdawn.com/rad/rad15_live";
 constexpr const char* kDefaultConfig = "wss://config.readyatdawn.com/rad/rad15_live";
@@ -145,19 +146,24 @@ GameMap& GameConfig() {
 
 // CJson::TString as the game defines it: the stored value's pointer when the key is present,
 // else the caller's fallback pointer itself.
-const char* FakeTString(const CJsonOpaque*, const char* key, const char* fallback, std::uint32_t) {
+const char* FakeTString(const void*, const char* key, const char* fallback, std::uint32_t) {
   const std::string* value = GameConfig().Find(key);
   return value == nullptr ? fallback : value->c_str();
 }
 
-using TStringFn = LibR15TStringThunk::Fn;
+using TStringFn = const char* (*)(const void*, const char*, const char*, std::uint32_t);
 
-TStringFn R15Entry() { return reinterpret_cast<TStringFn>(LibR15TStringThunk::EntryAddress()); }
-TStringFn MmEntry() { return reinterpret_cast<TStringFn>(MatchmakingTStringThunk::EntryAddress()); }
+TStringFn R15Entry() { return reinterpret_cast<TStringFn>(ThunkEntry(Slot::kLibR15)); }
+TStringFn MmEntry() { return reinterpret_cast<TStringFn>(ThunkEntry(Slot::kMatchmaking)); }
 
 void PublishFakeOriginal() {
-  *LibR15TStringThunk::OriginalOut() = reinterpret_cast<void*>(&FakeTString);
-  *MatchmakingTStringThunk::OriginalOut() = reinterpret_cast<void*>(&FakeTString);
+  *ThunkOriginalOut(Slot::kLibR15) = reinterpret_cast<void*>(&FakeTString);
+  *ThunkOriginalOut(Slot::kMatchmaking) = reinterpret_cast<void*>(&FakeTString);
+}
+
+void ResetThunks() {
+  ResetThunk(Slot::kLibR15);
+  ResetThunk(Slot::kMatchmaking);
 }
 
 // One scenario: a redirector armed behind both thunks, torn down on destruction.
@@ -167,16 +173,14 @@ struct Scenario {
   Scenario(const ResolvedConfig& config, InternFn intern = &InternReal, BridgeProbe bridge = nullptr) {
     GameConfig().clear();
     Lines().clear();
-    LibR15TStringThunk::Reset();
-    MatchmakingTStringThunk::Reset();
+    ResetThunks();
     PublishFakeOriginal();
     redirector = std::make_unique<ServiceRedirector>(config, intern, bridge);
     ArmHandlersForTest(redirector.get());
   }
   ~Scenario() {
     ArmHandlersForTest(nullptr);
-    LibR15TStringThunk::Reset();
-    MatchmakingTStringThunk::Reset();
+    ResetThunks();
   }
 
   const char* R15(const char* key, const char* fallback) { return R15Entry()(nullptr, key, fallback, 0U); }
@@ -416,10 +420,10 @@ void PrewarmMakesTheBuiltinDefaultsHits() {
 void ThunkPassesExceptionsFromTheOriginal() {
   Scenario s(Config(kRedirectOn));
   struct Boom {};
-  static auto thrower = +[](const CJsonOpaque*, const char*, const char*, std::uint32_t) -> const char* {
+  static auto thrower = +[](const void*, const char*, const char*, std::uint32_t) -> const char* {
     throw Boom();
   };
-  *LibR15TStringThunk::OriginalOut() = reinterpret_cast<void*>(thrower);
+  *ThunkOriginalOut(Slot::kLibR15) = reinterpret_cast<void*>(thrower);
   bool caught = false;
   try {
     (void)s.R15("login_host", kDefaultLogin);
@@ -466,14 +470,13 @@ void* OpenFixture(const std::string& dir, const char* name) {
 }
 
 InstallOptions FixtureOptions(InternFn intern) {
-  return {{sentinel::GotTarget("libredirfx_consumer_a.so", sentinel::pinned::kTStringSymbol, sentinel::RelocKind::kJumpSlot),
-           sentinel::GotTarget("libredirfx_consumer_b.so", sentinel::pinned::kTStringSymbol, sentinel::RelocKind::kJumpSlot)},
+  return {{sentinel::GotTarget("libredirfx_consumer_a.so", kTStringSymbol, sentinel::RelocKind::kJumpSlot),
+           sentinel::GotTarget("libredirfx_consumer_b.so", kTStringSymbol, sentinel::RelocKind::kJumpSlot)},
           sentinel::FindLoadedImage, intern, nullptr};
 }
 
 void RealHookEndToEnd(const std::string& dir) {
-  LibR15TStringThunk::Reset();
-  MatchmakingTStringThunk::Reset();
+  ResetThunks();
   Lines().clear();
 
   void* a = OpenFixture(dir, "libredirfx_consumer_a.so");

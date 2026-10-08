@@ -1,8 +1,10 @@
 // Installs the CJson::TString thunks for the redirect (docs/adr/0003, "Config-string seam").
 //
-// This is the only redirect file that names GotHook, CallbackThunk and the pinned targets, so a
-// change to that API (hook-backend work is still under review) lands here and nowhere else. The
-// decision logic is in service_redirector.h and does not know the hook exists.
+// Installation and lifetime: GotHook, the redirector, the process-wide state. This file is built with
+// exceptions. The thunks themselves (CallbackThunk, the pinned targets, the handler) are in
+// tstring_thunks.{h,cpp}, built without, so a change to the thunk API lands there and here only
+// through that header. The decision logic is in service_redirector.h and does not know the hook
+// exists.
 //
 // Nothing installs unless the redirect feature is effective in the resolved configuration. A
 // disabled feature, an unknown module or build ID, a slot that fails validation, or a refused
@@ -18,6 +20,7 @@
 
 #include "got_hook.h"
 #include "quest/redirect/service_redirector.h"
+#include "quest/redirect/tstring_thunks.h"
 #include "quest/sentinel/quest_config.h"
 
 namespace nevr_quest::redirect {
@@ -27,13 +30,6 @@ struct InstallReport {
   sentinel::GotStatus libr15 = sentinel::GotStatus::kNotInstalled;
   sentinel::GotStatus matchmaking = sentinel::GotStatus::kNotInstalled;
 };
-
-// Where to hook. PinnedTargets() is the production value (build-ID and slot pinned).
-struct HookTargets {
-  sentinel::GotTarget libr15;
-  sentinel::GotTarget matchmaking;
-};
-HookTargets PinnedTargets();
 
 // Production entry: pinned targets, the process-wide pool, no bridge until SetBridgeProbe.
 InstallReport InstallRedirectHooks(const nevr_quest::ResolvedConfig& config);
@@ -56,7 +52,7 @@ InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config,
 sentinel::GotStatus InstallMatchmakingRedirectWith(sentinel::ImageLookup lookup);
 
 // Test seam: arms the typed handlers on `redirector` (or disarms with nullptr) without touching
-// any GOT slot. A test then calls each thunk's EntryAddress() with a fake original.
+// any GOT slot. A test then calls each ThunkEntry(slot) with a fake original.
 void ArmHandlersForTest(ServiceRedirector* redirector);
 
 }  // namespace nevr_quest::redirect

@@ -477,7 +477,18 @@ test-quest-redirect:
     link=(-fPIC -shared -Wl,--build-id=sha1 -L"$out" -lredirfx_provider -Wl,-rpath,'$ORIGIN' -Wl,-z,now,-z,relro)
     "${cxx[@]}" "${link[@]}" "$fx/tstring_fixture_consumer.cpp" -o "$out/libredirfx_consumer_a.so"
     "${cxx[@]}" "${link[@]}" "$fx/tstring_fixture_consumer.cpp" -o "$out/libredirfx_consumer_b.so"
-    "${cxx[@]}" "$fx/redirect_test.cpp" \
+    # The thunk translation unit is built without exceptions (callback_thunk.h refuses
+    # otherwise); everything else, including the GOT backend and the test, with them.
+    "${cxx[@]}" -fno-exceptions -c src/quest/redirect/tstring_thunks.cpp -o "$out/tstring_thunks.o"
+    # Its frames must sit under the personality-free CIE: no "zPLR" augmentation, at least one "zR".
+    frames="$out/tstring_thunks.frames.txt"
+    readelf --debug-dump=frames "$out/tstring_thunks.o" > "$frames"
+    if grep -q '"zPLR"' "$frames"; then
+        echo "test-quest-redirect: FAIL - tstring_thunks.o has frames under a personality CIE (zPLR)" >&2
+        exit 1
+    fi
+    grep -q '"zR"' "$frames" || { echo "test-quest-redirect: FAIL - tstring_thunks.o has no zR frames to check" >&2; exit 1; }
+    "${cxx[@]}" "$fx/redirect_test.cpp" "$out/tstring_thunks.o" \
         src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp \
         src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp \
         src/quest/sentinel/quest_config.cpp src/runtime/lifecycle/service_redirect.cpp \

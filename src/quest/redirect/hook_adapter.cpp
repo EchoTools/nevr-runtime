@@ -6,27 +6,12 @@
 #include <mutex>
 
 #include "hook_log.h"
-#include "pinned_targets.h"
 
 namespace nevr_quest::redirect {
 namespace {
 
 using sentinel::GotStatus;
-using sentinel::pinned::LibR15TStringThunk;
-using sentinel::pinned::MatchmakingTStringThunk;
-
 std::atomic<ServiceRedirector*> g_redirector{nullptr};
-
-// Calls the original first and only then asks the redirector, so an exception thrown by the game's
-// own code reaches the game unchanged and a failure inside Apply (which is noexcept) cannot
-// replace a result the game would have received.
-template <typename Thunk>
-const char* HandleTString(typename Thunk::Fn original, const sentinel::pinned::CJsonOpaque* self,
-                          const char* key, const char* fallback, std::uint32_t flag) {
-  const char* const result = original(self, key, fallback, flag);
-  ServiceRedirector* const redirector = g_redirector.load(std::memory_order_acquire);
-  return redirector == nullptr ? result : redirector->Apply(key, result);
-}
 
 struct Installation {
   std::mutex mutex;
@@ -52,11 +37,11 @@ void LogInstall(const char* what, GotStatus status) {
 GotStatus InstallMatchmakingLocked(Installation& s, sentinel::ImageLookup lookup) {
   if (s.redirector == nullptr) return GotStatus::kNotInstalled;
   if (s.matchmakingHook.installed()) return GotStatus::kAlreadyInstalled;
-  MatchmakingTStringThunk::Arm(&HandleTString<MatchmakingTStringThunk>);
+  ArmThunk(Slot::kMatchmaking, true);
   const GotStatus status = s.matchmakingHook.Install(
-      s.options.targets.matchmaking, MatchmakingTStringThunk::EntryAddress(),
-      MatchmakingTStringThunk::OriginalOut(), lookup);
-  if (status != GotStatus::kOk) MatchmakingTStringThunk::Arm(nullptr);
+      s.options.targets.matchmaking, ThunkEntry(Slot::kMatchmaking),
+      ThunkOriginalOut(Slot::kMatchmaking), lookup);
+  if (status != GotStatus::kOk) ArmThunk(Slot::kMatchmaking, false);
   s.report.matchmaking = status;
   LogInstall("matchmaking_tstring", status);
   return status;
@@ -64,8 +49,9 @@ GotStatus InstallMatchmakingLocked(Installation& s, sentinel::ImageLookup lookup
 
 }  // namespace
 
-HookTargets PinnedTargets() {
-  return {sentinel::pinned::LibR15TString(), sentinel::pinned::MatchmakingTString()};
+const char* ApplyActive(const char* key, const char* result) noexcept {
+  ServiceRedirector* const redirector = g_redirector.load(std::memory_order_acquire);
+  return redirector == nullptr ? result : redirector->Apply(key, result);
 }
 
 InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config, const InstallOptions& options) {
@@ -99,10 +85,10 @@ InstallReport InstallRedirectHooksWith(const nevr_quest::ResolvedConfig& config,
   s.options = options;
   g_redirector.store(redirector, std::memory_order_release);
 
-  LibR15TStringThunk::Arm(&HandleTString<LibR15TStringThunk>);
-  report.libr15 = s.libr15Hook.Install(options.targets.libr15, LibR15TStringThunk::EntryAddress(),
-                                       LibR15TStringThunk::OriginalOut(), options.lookup);
-  if (report.libr15 != GotStatus::kOk) LibR15TStringThunk::Arm(nullptr);
+  ArmThunk(Slot::kLibR15, true);
+  report.libr15 = s.libr15Hook.Install(options.targets.libr15, ThunkEntry(Slot::kLibR15),
+                                       ThunkOriginalOut(Slot::kLibR15), options.lookup);
+  if (report.libr15 != GotStatus::kOk) ArmThunk(Slot::kLibR15, false);
   LogInstall("libr15_tstring", report.libr15);
 
   s.report = report;
@@ -128,8 +114,8 @@ void RemoveRedirectHooks() {
   const std::lock_guard<std::mutex> lock(s.mutex);
   if (s.libr15Hook.installed()) LogInstall("libr15_tstring_remove", s.libr15Hook.Remove());
   if (s.matchmakingHook.installed()) LogInstall("matchmaking_tstring_remove", s.matchmakingHook.Remove());
-  LibR15TStringThunk::Arm(nullptr);
-  MatchmakingTStringThunk::Arm(nullptr);
+  ArmThunk(Slot::kLibR15, false);
+  ArmThunk(Slot::kMatchmaking, false);
   g_redirector.store(nullptr, std::memory_order_release);
   s.redirector = nullptr;
   s.report = InstallReport{};
@@ -137,8 +123,8 @@ void RemoveRedirectHooks() {
 
 void ArmHandlersForTest(ServiceRedirector* redirector) {
   g_redirector.store(redirector, std::memory_order_release);
-  LibR15TStringThunk::Arm(redirector != nullptr ? &HandleTString<LibR15TStringThunk> : nullptr);
-  MatchmakingTStringThunk::Arm(redirector != nullptr ? &HandleTString<MatchmakingTStringThunk> : nullptr);
+  ArmThunk(Slot::kLibR15, redirector != nullptr);
+  ArmThunk(Slot::kMatchmaking, redirector != nullptr);
 }
 
 }  // namespace nevr_quest::redirect

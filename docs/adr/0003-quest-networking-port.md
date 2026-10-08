@@ -221,9 +221,15 @@ key list only for the login override. Quest keeps the shared value policy
 (`nevr_cfg::ResolveRedirect`) and narrows it to the eight keys, so a ws:// value in an unrelated
 config key is never rewritten.
 
-Quest hook (`src/quest/redirect`). `hook_adapter.cpp` installs a `CallbackThunk` handler on each
-`TString` slot; the handler calls the original and passes the key and the result to
-`ServiceRedirector::Apply`. `Apply` returns the original pointer unchanged for any other key, when
+Quest hook (`src/quest/redirect`). `tstring_thunks.cpp` is the only redirect file that includes
+`callback_thunk.h` and `pinned_targets.h`, so it is built with `-fno-exceptions`: its `noexcept`
+handler calls the game's original and then one `noexcept` function, `ApplyActive`
+(`tstring_thunks.h`), and has no landing pad. `hook_adapter.cpp` (exceptions enabled) holds the
+`GotHook` installation, the redirector's lifetime and `ApplyActive`, which hands the key and the
+result to `ServiceRedirector::Apply`. `Apply` catches `std::exception` in its own frames, which
+never call the game; an exception of any other type would reach the `noexcept` boundary and
+terminate, and nothing it calls throws one. `just test-quest-redirect` checks that
+`tstring_thunks.o` has no `zPLR` frames. `Apply` returns the original pointer unchanged for any other key, when
 the redirect feature is off, for a value the policy declines, and on any failure (a value over 512
 bytes, a pool refusal, an exception), logging the key name and a status token and never a URL. For a
 redirected value it returns a pointer from the stable string pool, so the same value always maps to
