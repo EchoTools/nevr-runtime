@@ -142,10 +142,11 @@ void TestHandlerThroughThunk() {
 }
 
 void TestCounterRegistration() {
-  // The reporter takes 32 counters in all; the social package uses 10 and leaves the rest.
+  // The reporter takes 32 counters in all; the social package uses 12 (the thunk's calls and faults, three
+  // pass-through counters, the selection, and the facade's six) and leaves the rest.
   sentinel::StopReporter();
   QCHECK(RegisterSocialReportCounters());
-  for (int i = 0; i < 22; ++i) QCHECK(sentinel::RegisterReportCounter("filler", &g_dummy));  // 10 + 22 = 32
+  for (int i = 0; i < 20; ++i) QCHECK(sentinel::RegisterReportCounter("filler", &g_dummy));  // 12 + 20 = 32
   QCHECK(!sentinel::RegisterReportCounter("one-too-many", &g_dummy));
   sentinel::StopReporter();
 }
@@ -176,6 +177,20 @@ void TestInstall() {
   QCHECK(std::string(InstallStatusName(InstallStatus::kOk)) == "ok");
 }
 
+bool NoImage(const char*, sentinel::ElfImage*) { return false; }
+bool EmptyImage(const char*, sentinel::ElfImage* out) {
+  *out = sentinel::ElfImage{};  // loaded, but with no program headers: no build id can be read
+  return true;
+}
+
+// The game's CJson::Reset is found only in libr15 of the pinned build.
+void TestResolveCJsonReset() {
+  QCHECK(ResolveCJsonReset(&NoImage) == nullptr);
+  QCHECK(ResolveCJsonReset(&EmptyImage) == nullptr);
+  QCHECK(ResolveCJsonReset(nullptr) == nullptr);
+  QCHECK(kLibR15CJsonResetVaddr == 0xfa227cULL);
+}
+
 void TestTarget() {
   const sentinel::GotTarget t = LibR15Social();
   QCHECK(std::strcmp(t.module, "libr15.so") == 0);
@@ -193,6 +208,7 @@ int main() {
   TestHandlerThroughThunk();
   TestCounterRegistration();
   TestInstall();
+  TestResolveCJsonReset();
   TestTarget();
   sentinel::SetLogSink(previous);
   if (quest_test::Failures() != 0) {

@@ -1,5 +1,5 @@
 // The facade slots that call into the game: Update (delivers the party callbacks), JoinInternal and
-// AcceptInvite (ask the game's accept gate).
+// AcceptInvite (ask the game's accept gate), Reset (the game's CJson::Reset on the party CJson).
 //
 // Built with -fno-exceptions (and checked by tools/check_quest_social_frames.sh): the frames here carry
 // no landing pad, no LSDA and no personality, so a game exception thrown by a callback unwinds through
@@ -119,6 +119,18 @@ void SlotJoinInternalEntry(void* self, std::uint64_t partyId) noexcept {
   if (self == nullptr) return;
   TraceSlotCall(self, kJoinInternal);
   JoinFlow(self, partyId);
+}
+
+// Reset: the facade side leaves the party and clears the object's own fields, then the game's own
+// CJson::Reset runs on the party CJson at +0x1f0, as CNSISocial::Reset does (libpnsovr 0x36a92c). That
+// CJson belongs to the social object (its constructor builds it, 0x203254, its destructor destroys it,
+// 0x20845c), and the game's Update fills it while this client leads a party, so the tree it holds must be
+// freed by the game's own code, here, in a frame with no landing pad.
+void SlotResetEntry(void* self) noexcept {
+  if (self == nullptr) return;
+  TraceSlotCall(self, kReset);
+  const CJsonResetFn reset = ResetPrepare(self);
+  if (reset != nullptr) reset(static_cast<std::uint8_t*>(self) + kOffPartyJson);
 }
 
 void SlotAcceptInviteEntry(void* self, std::uint32_t index) noexcept {

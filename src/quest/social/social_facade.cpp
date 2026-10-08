@@ -1,7 +1,5 @@
 #include "quest/social/social_facade.h"
 
-#include <dlfcn.h>
-
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -9,11 +7,13 @@
 #include <exception>
 #include <mutex>
 #include <new>
+#include <set>
 #include <string>
 
 #include "hook_log.h"
 #include "quest/social/social_abi.h"
 #include "quest/social/social_internal.h"
+#include "quest/social/social_request_log.h"
 
 namespace quest_social {
 namespace {
@@ -25,15 +25,35 @@ using sentinel::LogLevel;
 constexpr std::size_t kViewRing = 128;  // a name pointer the game reads stays valid this many Updates
 constexpr std::uint32_t kTraceFirstCalls = 8;
 constexpr std::uint32_t kTraceEvery = 600;
-constexpr std::uint64_t kCreateRetrySeconds = 4;
+// CNSOVRSocial::Update retries a failed create no sooner than 5 s after the last one: it compares whole
+// seconds (CSysTime::GetTick / GetTicksPerSecond) against the time stored at +0x340 with `cmp w8, #5; b.lo`
+// (libpnsovr 0x2045dc..0x2045f8). The lock retry uses the same interval.
+constexpr std::uint64_t kCreateRetrySeconds = 5;
+constexpr std::uint64_t kLockRetrySeconds = 5;
+// A create, join or lock request the sender took and the server never answers is treated as refused after
+// this long. How it was chosen: Nakama answers a create at once, success or failure (snsPartyCreateRequest),
+// and answers a join at once too, except that a join to a LOCKED party queues for the leader's approval with
+// no reply at all (snsPartyJoinRequest); so silence is a normal state for a join and must end in the game
+// being told. 10 s is twice the longest wait the game's own social code applies (the 5 s create retry
+// above), so a slow reply is not mistaken for none. A reply that arrives after the deadline is still
+// applied by the model (a late PartyJoinSuccess admits the player as usual). Not measured against a live
+// server's reply times.
+constexpr std::uint64_t kPendingDeadlineSeconds = 10;
 constexpr std::uint8_t kUpdateWantsParty = 1;  // Update's flags byte, bit 0: a party should exist
-// Callbacks carried to later frames when more than a batch is due; past this the newest are dropped and counted.
-constexpr std::size_t kMaxQueuedEvents = 256;
+// The carry queue. Past kSoftQueueLimit the oldest coalescible event (one a later event of its kind makes
+// redundant) is dropped to make room; events that carry information no later event repeats (Created,
+// Joined, JoinFailed, HostChanged, Left, Kicked, MemberJoined, MemberLeft) are never dropped for room, so
+// the queue may grow past the soft limit up to kHardQueueLimit, where the newest is dropped and counted.
+constexpr std::size_t kSoftQueueLimit = 256;
+constexpr std::size_t kHardQueueLimit = 4096;
 
-std::atomic<std::uint64_t> g_membersClamped{0};
+std::atomic<std::uint64_t> g_membersHidden{0};
 std::atomic<std::uint64_t> g_eventsDropped{0};
 std::atomic<std::uint64_t> g_sendFailed{0};
 std::atomic<std::uint64_t> g_joinDeferred{0};
+std::atomic<std::uint64_t> g_requestTimeout{0};
+std::atomic<std::uint64_t> g_cjsonResetUnavailable{0};
+std::atomic<CJsonResetFn> g_cjsonReset{nullptr};
 
 void Count(std::atomic<std::uint64_t>& counter, std::uint64_t n = 1) noexcept {
   counter.fetch_add(n, std::memory_order_relaxed);
@@ -63,6 +83,16 @@ struct Facade::Impl {
   std::deque<SocialParty::Event> queuedEvents;  // drained from the model, not yet delivered (game thread only)
   bool queueOverflowLogged = false;
   std::uint64_t deferredLoggedParty = 0;  // the party whose deferral was last logged (0: none)
+  // Party members past the game's array (kMemberJsonSlots): in the model, never announced to the game.
+  std::set<std::uint64_t> hiddenMembers;
+  std::uint64_t hiddenLoggedParty = 0;
+  // When the sender took a request that has no answer yet (0: none); see kPendingDeadlineSeconds.
+  std::uint64_t createSince = 0;
+  std::uint64_t joinSince = 0;
+  std::uint64_t lockSince = 0;
+  bool lockWantLocked = false;  // what the lock request in flight (or last refused) asked for
+  bool lockTried = false;
+  std::uint64_t lastLock = 0;
 
   bool processWide = false;  // the Instance(): its destruction is a defect the test pins
   bool createTried = false;
@@ -113,7 +143,12 @@ std::shared_ptr<const SocialParty::View> CurrentView(Impl& impl) {
   return impl.view;
 }
 
-void PublishView(Impl& impl) {
+// Publishes the model for the game and returns every member's id in model order. The game indexes a member
+// JSON array of kMemberJsonSlots entries by the member count this object reports and by the index each
+// member callback carries (libr15 PartyMemberData 0x129b3fc, PartyMemberHeadsetType 0x129b168,
+// PartyMemberJoinedCB 0x126f8ac), with no check against anything but slot 27, so the game is shown the
+// first kMemberJsonSlots members and no more; the rest stay in the model, hidden (see QueueEvents).
+std::vector<std::uint64_t> PublishView(Impl& impl) {
   SocialParty::View next = Party(impl).Snapshot();
   // The game's party UI reads member 0, the local user, whether or not a party exists, so the local
   // user is the only member until a party replaces the list (CNSOVRSocial counts the local member too).
@@ -123,18 +158,16 @@ void PublishView(Impl& impl) {
     self.name = next.selfName.empty() ? std::to_string(next.selfId) : next.selfName;
     next.members.push_back(self);
   }
-  // The game indexes a member JSON array of kMemberJsonSlots entries by the member count this object
-  // reports (libr15 PartyMemberData 0x129b3fc, PartyMemberHeadsetType 0x129b168), so the count can
-  // never exceed it, whatever the server sends. The model keeps its own list.
-  if (next.members.size() > kMemberJsonSlots) {
-    next.members.resize(kMemberJsonSlots);
-    Count(g_membersClamped);
-  }
+  std::vector<std::uint64_t> ids;
+  ids.reserve(next.members.size());
+  for (const SocialParty::Member& member : next.members) ids.push_back(member.id);
+  if (next.members.size() > kMemberJsonSlots) next.members.resize(kMemberJsonSlots);
   auto shared = std::make_shared<const SocialParty::View>(std::move(next));
   std::lock_guard<std::mutex> guard(impl.viewMutex);
   impl.retired[impl.retiredNext] = impl.view;
   impl.retiredNext = (impl.retiredNext + 1) % impl.retired.size();
   impl.view = std::move(shared);
+  return ids;
 }
 
 std::uint64_t ViewRoomId(const SocialParty::View& view) {
@@ -143,16 +176,9 @@ std::uint64_t ViewRoomId(const SocialParty::View& view) {
 
 // ---- sending --------------------------------------------------------------------------------
 
-std::uint64_t PayloadU64(const std::string& payload, std::size_t offset) {
-  if (payload.size() < offset + 8) return 0;
-  std::uint64_t v = 0;
-  for (int i = 7; i >= 0; --i) v = (v << 8) | static_cast<std::uint8_t>(payload[offset + static_cast<std::size_t>(i)]);
-  return v;
-}
-
-// Sends the requests and logs one line per request with its stable ids: the request name, its symbol, the
-// id it carries last (the invite target, party, scope or policy at payload +0x20 of a Standard message)
-// and, for a Targeted one, its parameter (+0x28). No secret is in either. Returns true only if all went.
+// Sends the requests and logs one line per request with its stable ids (social_request_log.h). Returns true
+// only if the sender took all of them; nothing to send is true, and logs one line saying so. A create the
+// sender took starts the clock on its answer (kPendingDeadlineSeconds).
 bool SendParty(Impl& impl, const char* what, const std::vector<SocialParty::Message>& messages) {
   if (messages.empty()) {
     LogFields(LogLevel::kInfo, "social_send", {{"what", what}, {"count", 0}, {"sent", "nothing_to_send"}});
@@ -160,22 +186,87 @@ bool SendParty(Impl& impl, const char* what, const std::vector<SocialParty::Mess
   }
   const bool sent = impl.ports.send != nullptr && impl.ports.send(messages);
   if (!sent) Count(g_sendFailed);
-  for (const SocialParty::Message& m : messages) {
-    const char* name = SocialParty::RequestName(m.symbol);
-    char symbol[19];
-    LogFields(sent ? LogLevel::kInfo : LogLevel::kWarn, "social_send",
-              {{"what", what}, {"name", name != nullptr ? name : "unnamed"},
-               {"symbol", sentinel::HexString(symbol, m.symbol)},
-               {"arg", static_cast<long long>(PayloadU64(m.payload, 0x20))},
-               {"param", static_cast<long long>(m.payload.size() >= 0x2C ? PayloadU64(m.payload, 0x28) & 0xFFFFFFFFULL : 0)},
-               {"sent", sent ? "yes" : "NOT_sent"}});
+  LogRequests(what, messages, sent, ViewRoomId(*CurrentView(impl)));
+  if (sent) {
+    for (const SocialParty::Message& m : messages) {
+      if (m.symbol == SocialParty::kCreateRequest) impl.createSince = Now(impl);
+    }
   }
   return sent;
 }
 
+// The lock or unlock the host's joinable bit asks for. `retry` is the automatic retry from Update, which waits
+// kLockRetrySeconds after the last attempt at the same state; a call from the game (slot 5) goes at once. A
+// refused send rolls the model back so the next attempt can send it.
+void RequestLock(Impl& impl, bool wantLocked, bool retry) {
+  const std::uint64_t now = Now(impl);
+  if (retry && impl.lockTried && impl.lockWantLocked == wantLocked && now >= impl.lastLock &&
+      now - impl.lastLock < kLockRetrySeconds) {
+    return;
+  }
+  const std::vector<SocialParty::Message> request = Party(impl).SetLocked(wantLocked);
+  if (request.empty()) return;  // already asked and not yet answered (or no party)
+  impl.lockTried = true;
+  impl.lastLock = now;
+  impl.lockWantLocked = wantLocked;
+  if (SendParty(impl, wantLocked ? "party lock" : "party unlock", request)) {
+    impl.lockSince = now;
+  } else {
+    Party(impl).ForgetLockRequest();
+  }
+}
+
+// A create, join or lock request the sender took and the server never answered is failed after
+// kPendingDeadlineSeconds exactly like a refused send: the model rolls back (the join also gives the invites
+// back and tells the game, State::AbandonJoining), the failure is counted and logged once, and the usual
+// retry applies (the create by Update's decision, the lock by Update's backoff; a join is retried by the player
+// from the JoinFailed the game was told).
+bool Overdue(std::uint64_t since, std::uint64_t now) {
+  return since != 0 && now >= since && now - since >= kPendingDeadlineSeconds;
+}
+
+void ExpirePending(Impl& impl) {
+  const std::uint64_t now = Now(impl);
+  SocialParty::State& party = Party(impl);
+  if (Overdue(impl.createSince, now)) {
+    impl.createSince = 0;
+    if (party.AbandonCreate()) {
+      Count(g_requestTimeout);
+      LogFields(LogLevel::kWarn, "social_request_timeout",
+                {{"what", "party create"}, {"seconds", static_cast<long long>(kPendingDeadlineSeconds)}, {"action", "rolled_back"}});
+    }
+  }
+  if (Overdue(impl.joinSince, now)) {
+    impl.joinSince = 0;
+    const std::uint64_t joining = CurrentView(impl)->joiningPartyId;
+    if (party.AbandonJoining()) {
+      Count(g_requestTimeout);
+      LogFields(LogLevel::kWarn, "social_request_timeout",
+                {{"what", "party join"}, {"party", static_cast<long long>(joining)},
+                 {"seconds", static_cast<long long>(kPendingDeadlineSeconds)}, {"action", "join_failed_to_game"}});
+    }
+  }
+  if (Overdue(impl.lockSince, now)) {
+    impl.lockSince = 0;
+    if (party.ExpireLockRequest(impl.lockWantLocked)) {
+      Count(g_requestTimeout);
+      LogFields(LogLevel::kWarn, "social_request_timeout",
+                {{"what", impl.lockWantLocked ? "party lock" : "party unlock"},
+                 {"seconds", static_cast<long long>(kPendingDeadlineSeconds)}, {"action", "rolled_back"}});
+    }
+  }
+}
+
 // ---- object fields the game reads directly --------------------------------------------------
 
+// "No lobby": the invalid uuid, no match type, no team, the private lobby type. NRadEngine::SUuid::kInvalid is
+// sixteen zero bytes: libr15 defines it in .bss (0x376c3b8, 16 bytes, so zero at load; social_pinned_test checks
+// the section) and the only write through its GOT entry (0x372adc8) is its own initialiser,
+// CMemory::Fill(&kInvalid, 0, 16) at 0xf54c4c..0xf54c58. The other 136 GOT loads only read it: copies of its
+// value, CMemory::Compare arguments, const-reference calls. No direct (non-GOT) reference exists. CNSISocial::
+// Reset (libr15 0x1919854) and ExitLobby (pnsovr 0x2084d0) both copy it to +0x260.
 void ResetLobbyFields(void* self) {
+  std::memset(Bytes(self) + kOffLobbyUuid, 0, 16);
   Put<std::uint64_t>(self, kOffLobbyMatchType, UINT64_MAX);
   Put<std::uint16_t>(self, kOffLobbyTeam, UINT16_MAX);
   Put<std::uint8_t>(self, kOffLobbyType, 2);
@@ -330,10 +421,7 @@ std::uint64_t SlotMemberDataWritable(void*, std::uint32_t) { return 0; }
 std::uint32_t SlotJoinableInternal(void* self) { return CurrentView(*OwnerOf(self))->locked ? 0U : 1U; }
 
 void SlotSetJoinableInternal(void* self, std::uint32_t joinable) {
-  Impl& impl = *OwnerOf(self);
-  if (!SendParty(impl, joinable != 0 ? "party unlock" : "party lock", Party(impl).SetLocked(joinable == 0))) {
-    Party(impl).ForgetLockRequest();
-  }
+  RequestLock(*OwnerOf(self), joinable == 0, false);
 }
 
 std::int32_t SlotInitialize(void* self, std::uint32_t maxUsers, const void* callbacks) {
@@ -363,25 +451,22 @@ void SlotDestructor(void*) {
 
 // The base reset (libpnsovr 0x1800ab420's twin): clear the member data, put the state word to
 // (state & ~1) | 2, zero both member counts and put the lobby fields back to "no lobby".
+//
+// +0x1F0 is the party CJson. The social object owns it (the native constructor builds it, pnsovr 0x203254,
+// the destructor destroys it, 0x20845c) and the game fills it while this client leads a party
+// (CR15NetGame::Update, libr15 0x12951d4..0x1295254). The native Reset clears it with CJson::Reset (pnsovr
+// 0x36a92c): SlotResetEntry does the same with the game's own function, outside this exception-enabled file
+// (social_game_calls.cpp). Zeroing the pointer here would leak the tree; leaving it would keep the old
+// party's lobby settings, which the game reads when it is not the host (PartyTeam libr15 0x129a9ac, PartyData
+// 0x129aa08). The constructor path (ResetBase before any game call) finds it zero, which CJson::Reset accepts.
 void ResetBase(Impl& impl) {
   void* self = impl.object.data();
-  // +0x1F0 is the party CJson. The game allocates a tree in it while this client leads a party
-  // (CR15NetGame::Update, libr15 0x12951d4..0x1295254), so it is neither zeroed nor freed here: zeroing
-  // the pointer it owns leaks the tree on every Reset. Only the member array, which nothing writes
-  // (MemberDataWritable answers null), is cleared.
+  // The member array, which nothing writes (MemberDataWritable answers null), is cleared.
   std::memset(impl.memberJson.data(), 0, impl.memberJson.size());
   Put<std::uint32_t>(self, kOffFlags, (Get<std::uint32_t>(self, kOffFlags) & ~kFlagDataWritten) | kFlagJoinable);
   Put<std::uint32_t>(self, kOffLocalCount, 0);
   Put<std::uint32_t>(self, kOffMemberCount, 0);
   ResetLobbyFields(self);
-}
-
-// Reset leaves the party the user is in (no Left callback), then clears the object. The game follows every
-// call with AddMember.
-void SlotReset(void* self) {
-  Impl& impl = *OwnerOf(self);
-  SendParty(impl, "party reset", Party(impl).ResetParty());
-  ResetBase(impl);
 }
 
 void SlotAddMember(void* self, std::uint32_t userIndex) {
@@ -416,10 +501,7 @@ void SyncHostJoinable(Impl& impl) {
   if (view->partyId == 0 || view->joining || view->ownerId != view->selfId) return;
   const std::uint32_t wanted = HostWantsJoinable(impl) ? 1U : 0U;
   const std::uint32_t current = view->locked ? 0U : 1U;
-  if (wanted != current &&
-      !SendParty(impl, wanted != 0 ? "party unlock" : "party lock", Party(impl).SetLocked(wanted == 0))) {
-    Party(impl).ForgetLockRequest();
-  }
+  if (wanted != current) RequestLock(impl, wanted == 0, true);
 }
 
 void EnterLobbyFields(void* self, const void* uuid, std::uint64_t matchType, std::uint16_t team, std::uint8_t lobbyType,
@@ -452,10 +534,6 @@ void SlotEnterOfflineLobby(void* self, const void* uuid, std::uint64_t matchType
 // CNSISocial::ExitLobby (0x2084d0): the invalid uuid, no match type, no team, the private lobby type, and
 // the offline bit cleared. Nothing about the party is touched.
 void SlotExitLobby(void* self) {
-  Impl& impl = *OwnerOf(self);
-  std::uint8_t invalid[16] = {};
-  if (impl.ports.invalidUuid != nullptr) std::memcpy(invalid, impl.ports.invalidUuid, sizeof(invalid));
-  std::memcpy(Bytes(self) + kOffLobbyUuid, invalid, sizeof(invalid));
   ResetLobbyFields(self);
   Put<std::uint32_t>(self, kOffFlags, Get<std::uint32_t>(self, kOffFlags) & ~kFlagOfflineLobby);
 }
@@ -527,7 +605,11 @@ void SlotRefreshRecentlyMet(void* self) {
   }
   const std::vector<SocialParty::Message> request = Party(impl).RefreshRecentlyMet();
   const bool sent = !request.empty() && impl.ports.send != nullptr && impl.ports.send(request);
-  if (!sent) Recent(impl).EndRefresh();
+  if (!sent) {
+    Recent(impl).EndRefresh();
+    if (!request.empty()) Count(g_sendFailed);
+  }
+  LogRequests("recently met refresh", request, sent, 0);
   LogFields(sent ? LogLevel::kInfo : LogLevel::kWarn, "social_recently_met", {{"result", sent ? "requested" : "NOT_sent"}});
 }
 
@@ -644,7 +726,7 @@ void BuildVtable(std::array<SlotWord, kSlotCount>* table) {
   t[kShutdown] = Entry<kShutdown, &SlotShutdown>();
   t[kDestructorComplete] = Entry<kDestructorComplete, &SlotDestructor>();
   t[kDestructorDeleting] = Entry<kDestructorDeleting, &SlotDestructor>();
-  t[kReset] = Entry<kReset, &SlotReset>();
+  t[kReset] = reinterpret_cast<SlotWord>(&internal::SlotResetEntry);
   t[kUpdate] = reinterpret_cast<SlotWord>(&internal::SlotUpdateEntry);
   t[kAddMember] = Entry<kAddMember, &SlotAddMember>();
   t[kRemoveMember] = Entry<kRemoveMember, &SlotNothingU32>();
@@ -727,6 +809,9 @@ std::uint64_t UpdatePrepare(void* self, const void* params) noexcept {
   Impl* impl = OwnerOf(self);
   if (impl == nullptr) return 0;
   try {
+    // Requests the server never answered are given up before the create / join decision, so the same
+    // Update asks again (the create) or lets the deferred join through.
+    ExpirePending(*impl);
     const std::uint64_t deferredJoin = Party(*impl).DeferredJoin();
     if (deferredJoin != 0) return deferredJoin;
     MaybeCreateParty(*impl, params);
@@ -761,6 +846,118 @@ EventKind KindOf(SocialParty::EventKind kind, bool* deliver) {
 
 }  // namespace
 
+namespace {
+
+bool Coalescible(SocialParty::EventKind kind) {
+  using Kind = SocialParty::EventKind;
+  return kind == Kind::kUpdated || kind == Kind::kMemberUpdated || kind == Kind::kInviteReceived;
+}
+
+// Adds one event to the carry queue. A repeat of a callback that carries nothing a second one adds is merged
+// into the one already due: any pending InviteReceived (its argument is always 0 and the invite list it
+// announces is read when it runs), or an Updated / MemberUpdated of the same index directly after its twin.
+// Past kSoftQueueLimit the oldest coalescible event makes room; if there is none the queue grows to
+// kHardQueueLimit, and only past that is the newest event dropped. Everything dropped is counted.
+void Enqueue(Impl& impl, SocialParty::Event&& event, EventBatch* out) {
+  using Kind = SocialParty::EventKind;
+  std::deque<SocialParty::Event>& queue = impl.queuedEvents;
+  if (event.kind == Kind::kInviteReceived) {
+    for (const SocialParty::Event& queued : queue) {
+      if (queued.kind == Kind::kInviteReceived) return;
+    }
+  } else if (Coalescible(event.kind) && !queue.empty() && queue.back().kind == event.kind &&
+             queue.back().index == event.index) {
+    return;
+  }
+  if (queue.size() >= kSoftQueueLimit) {
+    bool made = false;
+    for (auto it = queue.begin(); it != queue.end(); ++it) {
+      if (!Coalescible(it->kind)) continue;
+      queue.erase(it);
+      Count(g_eventsDropped);
+      ++out->dropped;
+      made = true;
+      break;
+    }
+    if (!made && queue.size() >= kHardQueueLimit) {
+      Count(g_eventsDropped);
+      ++out->dropped;
+      return;
+    }
+  }
+  queue.push_back(std::move(event));
+}
+
+int PositionOf(const std::vector<std::uint64_t>& ids, std::uint64_t id) {
+  for (std::size_t i = 0; i < ids.size(); ++i) {
+    if (ids[i] == id) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+// Moves the events the model queued into the carry queue, showing the game only the members it can hold.
+// `ids` is every member's id in model order after this frame's publish; the game sees the first
+// kMemberJsonSlots. A member past that is hidden: its MemberJoined, MemberUpdated and MemberLeft never reach the
+// game (any index at or past the array would be read out of bounds, PartyMemberJoinedCB 0x126f8ac), and when
+// a visible member leaves, the first hidden one moves into the window and is announced then. A member
+// callback's index is the member's position now, not the one it had when the event was queued.
+void QueueEvents(Impl& impl, std::vector<SocialParty::Event>& events, const std::vector<std::uint64_t>& ids,
+                 std::uint64_t partyId, EventBatch* out) {
+  using Kind = SocialParty::EventKind;
+  for (SocialParty::Event& event : events) {
+    switch (event.kind) {
+      case Kind::kMemberJoined: {
+        const int at = PositionOf(ids, event.id);
+        if (at >= 0 && static_cast<std::size_t>(at) < kMemberJsonSlots) {
+          event.index = static_cast<std::uint32_t>(at);
+          impl.hiddenMembers.erase(event.id);
+          Enqueue(impl, std::move(event), out);
+        } else {
+          impl.hiddenMembers.insert(event.id);
+          Count(g_membersHidden);
+          if (impl.hiddenLoggedParty != partyId) {
+            impl.hiddenLoggedParty = partyId;
+            LogFields(LogLevel::kWarn, "social_members_hidden",
+                      {{"party", static_cast<long long>(partyId)}, {"capacity", static_cast<long long>(kMemberJsonSlots)},
+                       {"note", "members past the game's array stay in the model and are not shown to the game"}});
+          }
+        }
+        break;
+      }
+      case Kind::kMemberUpdated: {
+        const int at = PositionOf(ids, event.id);
+        if (at >= 0 && static_cast<std::size_t>(at) < kMemberJsonSlots) {
+          event.index = static_cast<std::uint32_t>(at);
+          Enqueue(impl, std::move(event), out);
+        }
+        break;
+      }
+      case Kind::kMemberLeft:
+        if (impl.hiddenMembers.erase(event.id) == 0) Enqueue(impl, std::move(event), out);
+        break;
+      case Kind::kCreated:
+      case Kind::kJoined:
+      case Kind::kLeft:
+      case Kind::kKicked:
+        impl.hiddenMembers.clear();  // a different party, or none
+        Enqueue(impl, std::move(event), out);
+        break;
+      default:
+        Enqueue(impl, std::move(event), out);
+        break;
+    }
+  }
+  // A hidden member now inside the window (a visible one left): the game has not heard of it yet.
+  const std::size_t window = ids.size() < kMemberJsonSlots ? ids.size() : kMemberJsonSlots;
+  for (std::size_t i = 0; i < window; ++i) {
+    if (impl.hiddenMembers.erase(ids[i]) != 0) {
+      Enqueue(impl, SocialParty::MakeEvent(Kind::kMemberJoined, static_cast<std::uint32_t>(i), ids[i]), out);
+    }
+  }
+}
+
+}  // namespace
+
 void UpdateCollect(void* self, EventBatch* out) noexcept {
   if (out == nullptr) return;
   out->count = 0;
@@ -768,23 +965,18 @@ void UpdateCollect(void* self, EventBatch* out) noexcept {
   Impl* impl = OwnerOf(self);
   if (impl == nullptr) return;
   try {
-    PublishView(*impl);
-    SyncObject(*impl, *CurrentView(*impl));
+    const std::vector<std::uint64_t> ids = PublishView(*impl);
+    const auto view = CurrentView(*impl);
+    SyncObject(*impl, *view);
     // Everything the model queued joins the carry queue, oldest first; one batch is delivered now and the
-    // rest next frame, in order. Dropping a Left, Kicked or MemberJoined would leave the game's party
-    // state out of step with the server's, so events are only dropped when the queue itself overflows.
-    for (SocialParty::Event& event : Party(*impl).DrainEvents()) {
-      if (impl->queuedEvents.size() >= kMaxQueuedEvents) {
-        Count(g_eventsDropped);
-        ++out->dropped;
-        continue;
-      }
-      impl->queuedEvents.push_back(std::move(event));
-    }
+    // rest next frame, in order (see Enqueue for what is merged and what may be dropped).
+    std::vector<SocialParty::Event> events = Party(*impl).DrainEvents();
+    QueueEvents(*impl, events, ids, ViewRoomId(*view), out);
     if (out->dropped != 0 && !impl->queueOverflowLogged) {
       impl->queueOverflowLogged = true;
       LogFields(LogLevel::kError, "social_events_dropped",
-                {{"capacity", static_cast<long long>(kMaxQueuedEvents)}, {"note", "newest events dropped; counted by social_events_dropped"}});
+                {{"soft_limit", static_cast<long long>(kSoftQueueLimit)}, {"hard_limit", static_cast<long long>(kHardQueueLimit)},
+                 {"note", "coalescible events dropped for room, or the newest past the hard limit; counted by social_events_dropped"}});
     }
     while (!impl->queuedEvents.empty() && out->count < kMaxPendingEvents) {
       const SocialParty::Event& event = impl->queuedEvents.front();
@@ -804,6 +996,27 @@ void UpdateCollect(void* self, EventBatch* out) noexcept {
   } catch (const std::exception&) {
     ReportFailure(impl, kUpdate);
   }
+}
+
+CJsonResetFn ResetPrepare(void* self) noexcept {
+  Impl* impl = OwnerOf(self);
+  if (impl == nullptr) return nullptr;
+  try {
+    SendParty(*impl, "party reset", Party(*impl).ResetParty());
+    ResetBase(*impl);
+    impl->createSince = 0;
+    impl->joinSince = 0;
+    impl->lockSince = 0;
+    const CJsonResetFn reset = g_cjsonReset.load(std::memory_order_acquire);
+    if (reset == nullptr) {
+      Count(g_cjsonResetUnavailable);
+      LogFields(LogLevel::kWarn, "social_reset", {{"cjson_reset", "unavailable"}, {"action", "party_cjson_left_alone"}});
+    }
+    return reset;
+  } catch (const std::exception&) {
+    ReportFailure(impl, kReset);
+  }
+  return nullptr;
 }
 
 void UpdateFinish(void* self) noexcept {
@@ -850,7 +1063,11 @@ void JoinFinish(void* self, std::uint64_t partyId, bool allowed) noexcept {
       LogFields(LogLevel::kInfo, "social_join", {{"party", static_cast<long long>(partyId)}, {"result", "declined"}});
       return;
     }
-    if (!SendParty(*impl, "party join", party.Join(partyId))) party.AbandonJoining();
+    if (SendParty(*impl, "party join", party.Join(partyId))) {
+      if (party.Snapshot().joining) impl->joinSince = Now(*impl);
+    } else {
+      party.AbandonJoining();  // restores the invites and tells the game the join failed
+    }
     impl->deferredLoggedParty = 0;
   } catch (const std::exception&) {
     ReportFailure(impl, kJoinInternal);
@@ -897,23 +1114,6 @@ std::uint32_t Facade::ShutdownCalls() const noexcept { return impl_->shutdownCal
 std::uint32_t Facade::SlotFailures() const noexcept { return impl_->slotFailures.load(std::memory_order_relaxed); }
 std::uint32_t Facade::CallbackCalls() const noexcept { return impl_->callbackCalls.load(std::memory_order_relaxed); }
 
-namespace {
-
-// libr15.so is loaded RTLD_LOCAL by the Java side, so the symbol may be invisible to RTLD_DEFAULT: look it up
-// in libr15's own handle (RTLD_NOLOAD: never loads it), fall back to the global scope, and say which worked.
-const std::uint8_t* ResolveInvalidUuid() {
-  static const char kSymbol[] = "_ZN10NRadEngine5SUuid8kInvalidE";
-  void* handle = dlopen("libr15.so", RTLD_NOW | RTLD_NOLOAD);
-  void* symbol = handle != nullptr ? dlsym(handle, kSymbol) : nullptr;
-  if (handle != nullptr) dlclose(handle);
-  if (symbol == nullptr) symbol = dlsym(RTLD_DEFAULT, kSymbol);
-  LogFields(symbol != nullptr ? LogLevel::kInfo : LogLevel::kWarn, "social_ports",
-            {{"invalid_uuid", symbol != nullptr ? "resolved" : "missing_zero_fallback"}});
-  return static_cast<const std::uint8_t*>(symbol);
-}
-
-}  // namespace
-
 const Ports& ProductionPorts() {
   static const Ports ports = [] {
     Ports p;
@@ -921,24 +1121,25 @@ const Ports& ProductionPorts() {
     p.friends = &SocialRoster::Global();
     p.recent = &SocialRoster::RecentlyMet();
     p.send = &SocialParty::Send;
-    // ExitLobby stores NRadEngine::SUuid::kInvalid, a global the game initialises at startup; the pointer is
-    // read at call time. Not found (a host test, or a different library layout): ExitLobby stores sixteen
-    // zero bytes, which is what an unset uuid is.
-    p.invalidUuid = ResolveInvalidUuid();
     return p;
   }();
   return ports;
 }
 
+void SetCJsonReset(CJsonResetFn reset) noexcept { g_cjsonReset.store(reset, std::memory_order_release); }
+
 FacadeCounters FacadeCountersView() noexcept {
-  return FacadeCounters{g_membersClamped, g_eventsDropped, g_sendFailed, g_joinDeferred};
+  return FacadeCounters{g_membersHidden, g_eventsDropped, g_sendFailed, g_joinDeferred, g_requestTimeout,
+                        g_cjsonResetUnavailable};
 }
 
 void ResetFacadeCountersForTest() noexcept {
-  g_membersClamped.store(0, std::memory_order_relaxed);
+  g_membersHidden.store(0, std::memory_order_relaxed);
   g_eventsDropped.store(0, std::memory_order_relaxed);
   g_sendFailed.store(0, std::memory_order_relaxed);
   g_joinDeferred.store(0, std::memory_order_relaxed);
+  g_requestTimeout.store(0, std::memory_order_relaxed);
+  g_cjsonResetUnavailable.store(0, std::memory_order_relaxed);
 }
 
 void SetLocalAccount(std::uint64_t accountId, const char* displayName) {

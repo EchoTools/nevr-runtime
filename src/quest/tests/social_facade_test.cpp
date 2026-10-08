@@ -28,6 +28,7 @@ using namespace quest_social;
 // ---- harness --------------------------------------------------------------------------------
 
 std::vector<SocialParty::Message> g_sent;
+std::vector<std::uint64_t> g_sentAt;  // g_now when each entry of g_sent was handed to the sender
 std::vector<std::string> g_lines;
 bool g_sendOk = true;
 bool g_sendThrows = false;
@@ -35,8 +36,17 @@ std::uint64_t g_now = 1000;
 
 bool RecordingSend(const std::vector<SocialParty::Message>& messages) {
   if (g_sendThrows) throw std::runtime_error("send failed");
-  for (const SocialParty::Message& m : messages) g_sent.push_back(m);
+  for (const SocialParty::Message& m : messages) {
+    g_sent.push_back(m);
+    g_sentAt.push_back(g_now);
+  }
   return g_sendOk;
+}
+
+std::size_t SentCount(std::uint64_t symbol) {
+  std::size_t n = 0;
+  for (const SocialParty::Message& m : g_sent) n += m.symbol == symbol ? 1 : 0;
+  return n;
 }
 
 std::uint64_t Clock() { return g_now; }
@@ -56,9 +66,11 @@ struct World {
     ports.nowSeconds = &Clock;
     facade = std::make_unique<Facade>(ports);
     g_sent.clear();
+    g_sentAt.clear();
     g_sendOk = true;
     g_sendThrows = false;
     g_now = 1000;
+    SetCJsonReset(nullptr);
     SocialNames::GlobalResolver().Reset();
     ResetFacadeCountersForTest();
     g_lines.clear();
@@ -168,6 +180,28 @@ bool Called(const std::string& call) {
   for (const std::string& c : g_rec.calls)
     if (c == call) return true;
   return false;
+}
+
+std::size_t CalledCount(const std::string& call) {
+  std::size_t n = 0;
+  for (const std::string& c : g_rec.calls) n += c == call ? 1 : 0;
+  return n;
+}
+
+// The index argument of every PartyMemberJoinedCB the game received ("u9:<index>").
+std::vector<std::size_t> JoinedIndices() {
+  std::vector<std::size_t> out;
+  const std::string prefix = "u" + std::to_string(kCbMemberJoined) + ":";
+  for (const std::string& c : g_rec.calls) {
+    if (c.compare(0, prefix.size(), prefix) == 0) out.push_back(static_cast<std::size_t>(std::stoul(c.substr(prefix.size()))));
+  }
+  return out;
+}
+
+// Frame times that wander the way a game's do: 1 to 7 s between Updates, never the same twice in a row.
+std::uint64_t Jitter(std::size_t i) {
+  static const std::uint64_t kSteps[] = {1, 3, 2, 7, 1, 5, 2, 4, 6, 1, 3};
+  return kSteps[i % (sizeof(kSteps) / sizeof(kSteps[0]))];
 }
 
 constexpr std::uint64_t kSelf = 1001;
@@ -306,7 +340,7 @@ void TestCreateRetriesAfterInterval() {
   FeedParty(w, "PartyCreateFailure", 0, 0);  // the server refused; the game still wants a party
   g_now += 2;
   Update(w, 1);
-  QCHECK(g_sent.size() == 1);  // inside the four-second retry interval
+  QCHECK(g_sent.size() == 1);  // inside the five-second retry interval (libpnsovr 0x2045f4: cmp w8, #5)
   g_now += 3;
   Update(w, 1);
   QCHECK(g_sent.size() == 2);
@@ -594,32 +628,70 @@ void TestEventBatchCarriesTheRemainder() {
   Init(w, MakeCallbacks());
   w.party.SetSelf(kSelf, "alice");
   g_rec.calls.clear();
-  // 40 senders, one invite each: 40 InviteReceived events in one frame; a batch holds 32.
-  for (std::uint64_t sender = 3000; sender < 3040; ++sender) FeedParty(w, "PartyInviteNotify", 9000 + sender, sender);
-  const auto received = [] {
-    std::size_t n = 0;
-    for (const std::string& c : g_rec.calls) n += c == "u" + std::to_string(kCbInviteReceived) + ":0" ? 1 : 0;
-    return n;
-  };
+  // 40 JoinFailed events in one frame: none can be merged or dropped, and a batch holds 32.
+  for (int i = 0; i < 40; ++i) FeedParty(w, "PartyJoinFailure", 0, 3);
+  const std::string failed = "u" + std::to_string(kCbJoinFailed) + ":3";
   Update(w, 0);
-  QCHECK(received() == 32);
+  QCHECK(CalledCount(failed) == 32);
   Update(w, 0);  // the remainder is carried to the next frame, not dropped
-  QCHECK(received() == 40);
+  QCHECK(CalledCount(failed) == 40);
   QCHECK(FacadeCountersView().eventsDropped.load() == 0);
-  QCHECK(SlotFn<U32_0>(w.Obj(), kInviteCount)(w.Obj()) == 40);
 }
 
-void TestEventQueueOverflowIsCounted() {
+void TestInviteNotificationsAreMerged() {
   World w;
   Init(w, MakeCallbacks());
   w.party.SetSelf(kSelf, "alice");
   g_rec.calls.clear();
-  // 300 events in one frame: the carry queue holds 256, the newest 44 are dropped and counted.
+  // 300 senders, one invite each: the callback takes no argument (always 0) and reads the invite list when it
+  // runs, so the 300 notifications are one callback, and every invite is still listed.
   for (std::uint64_t sender = 4000; sender < 4300; ++sender) FeedParty(w, "PartyInviteNotify", 9000 + sender, sender);
   for (int i = 0; i < 12; ++i) Update(w, 0);
+  QCHECK(CalledCount("u" + std::to_string(kCbInviteReceived) + ":0") == 1);
+  QCHECK(FacadeCountersView().eventsDropped.load() == 0);
+  QCHECK(SlotFn<U32_0>(w.Obj(), kInviteCount)(w.Obj()) == 300);
+}
+
+// The carry queue's drop policy. 256 is the soft limit. Events that say something nothing later repeats
+// (Created, MemberJoined, JoinFailed, HostChanged) are never dropped to make room; the oldest Updated or
+// MemberUpdated is. Dropping the newest (the old policy) loses the tail, dropping the oldest of any kind loses
+// the head: both are pinned here.
+void TestEventQueueDropsOnlyWhatALaterEventRepeats() {
+  World w;
+  Init(w, MakeCallbacks());
+  w.party.SetSelf(kSelf, "alice");
+  g_rec.calls.clear();
+  FeedParty(w, "PartyCreateSuccess", 700, kSelf);   // Created
+  FeedParty(w, "PartyJoinNotify", 700, 3001);       // MemberJoined(1)
+  FeedParty(w, "PartyJoinFailure", 0, 3);           // JoinFailed(3)
+  FeedParty(w, "PartyPassNotify", 700, 3001);       // HostChanged
+  for (int i = 0; i < 150; ++i) {                   // 300 events a later one of its kind repeats
+    FeedParty(w, "PartyUpdateNotify", 700, 0);       // Updated
+    FeedParty(w, "PartyUpdateMemberNotify", 700, 3001);  // MemberUpdated(1)
+  }
+  FeedParty(w, "PartyJoinFailure", 0, 4);           // JoinFailed(4)
+  FeedParty(w, "PartyPassNotify", 700, kSelf);      // HostChanged
+  for (int i = 0; i < 10; ++i) Update(w, 0);
   QCHECK(g_rec.calls.size() == 256);
-  QCHECK(FacadeCountersView().eventsDropped.load() == 44);
+  QCHECK(FacadeCountersView().eventsDropped.load() == 50);  // 306 events, 256 kept
+  QCHECK(g_rec.calls.size() == 256 && g_rec.calls[0] == "v" + std::to_string(kCbCreated));
+  QCHECK(g_rec.calls.size() == 256 && g_rec.calls[1] == "u" + std::to_string(kCbMemberJoined) + ":1");
+  QCHECK(g_rec.calls.size() == 256 && g_rec.calls[2] == "u" + std::to_string(kCbJoinFailed) + ":3");
+  QCHECK(g_rec.calls.size() == 256 && g_rec.calls[3] == "v" + std::to_string(kCbHostChanged));
+  QCHECK(g_rec.calls.size() == 256 && g_rec.calls[254] == "u" + std::to_string(kCbJoinFailed) + ":4");
+  QCHECK(g_rec.calls.size() == 256 && g_rec.calls[255] == "v" + std::to_string(kCbHostChanged));
   QCHECK(CountLines("social_events_dropped") == 1);  // logged once, counted always
+}
+
+void TestEventQueueHardLimit() {
+  World w;
+  Init(w, MakeCallbacks());
+  w.party.SetSelf(kSelf, "alice");
+  // Events that are never dropped for room still stop somewhere: past 4096 the newest is dropped and counted.
+  for (int i = 0; i < 5000; ++i) FeedParty(w, "PartyJoinFailure", 0, 3);
+  Update(w, 0);
+  QCHECK(FacadeCountersView().eventsDropped.load() == 5000 - 4096);
+  QCHECK(CountLines("social_events_dropped") == 1);
 }
 
 void TestMemberCountNeverExceedsTheGamesArray() {
@@ -627,6 +699,7 @@ void TestMemberCountNeverExceedsTheGamesArray() {
   Init(w, MakeCallbacks());
   CreateParty(w, 777);  // the local user alone: 1 member
   void* obj = w.Obj();
+  g_rec.calls.clear();
   for (std::uint64_t id = 3000; id < 3008; ++id) FeedParty(w, "PartyJoinNotify", 777, id);  // 9 members
   Update(w, 0);
   QCHECK(SlotFn<U32_0>(obj, kMemberCount)(obj) == 9);
@@ -635,19 +708,59 @@ void TestMemberCountNeverExceedsTheGamesArray() {
   Update(w, 0);
   QCHECK(SlotFn<U32_0>(obj, kMemberCount)(obj) == kMemberJsonSlots);
   QCHECK(Get32(obj, kOffMemberCount) == kMemberJsonSlots);
-  QCHECK(FacadeCountersView().membersClamped.load() == 0);
-  FeedParty(w, "PartyJoinNotify", 777, 3009);  // 11: one past it
+  QCHECK(FacadeCountersView().membersHidden.load() == 0);
+  // 11 and 12: past the array. The game indexes it with the index each MemberJoined carries
+  // (CR15NetGame::PartyMemberJoinedCB, libr15 0x126f8ac) and checks nothing, so no callback may carry 10 or 11.
+  FeedParty(w, "PartyJoinNotify", 777, 3009);
+  FeedParty(w, "PartyJoinNotify", 777, 3010);
   Update(w, 0);
   QCHECK(SlotFn<U32_0>(obj, kMemberCount)(obj) == kMemberJsonSlots);
   QCHECK(Get32(obj, kOffMemberCount) == kMemberJsonSlots);
-  QCHECK(FacadeCountersView().membersClamped.load() >= 1);
-  for (std::uint64_t id = 3010; id < 3013; ++id) FeedParty(w, "PartyJoinNotify", 777, id);  // 14
-  Update(w, 0);
-  QCHECK(SlotFn<U32_0>(obj, kMemberCount)(obj) == kMemberJsonSlots);
-  QCHECK(Get32(obj, kOffMemberCount) == kMemberJsonSlots);
-  QCHECK(SlotFn<U64_U32>(obj, kMemberId)(obj, kMemberJsonSlots - 1) != 0);
+  QCHECK(FacadeCountersView().membersHidden.load() == 2);
+  QCHECK(CountLines("social_members_hidden") == 1);  // once per party
+  const std::vector<std::size_t> joined = JoinedIndices();
+  QCHECK(joined.size() == 9);  // members 1..9; the two past the array were not announced
+  for (const std::size_t index : joined) QCHECK(index < kMemberJsonSlots);
+  QCHECK(SlotFn<U64_U32>(obj, kMemberId)(obj, kMemberJsonSlots - 1) == 3008);
   QCHECK(SlotFn<U64_U32>(obj, kMemberId)(obj, kMemberJsonSlots) == 0);  // past the array: answered, never read
   QCHECK(std::string(SlotFn<Str_U32>(obj, kMemberName)(obj, 12)).empty());
+
+  // A hidden member's updates are not delivered either; a visible member's are, at its position.
+  g_rec.calls.clear();
+  FeedParty(w, "PartyUpdateMemberNotify", 777, 3010);
+  FeedParty(w, "PartyUpdateMemberNotify", 777, 3001);
+  Update(w, 0);
+  QCHECK(g_rec.calls.size() == 1 && Called("u" + std::to_string(kCbMemberUpdated) + ":2"));
+
+  // A visible member leaves: the game hears MemberLeft, and the first hidden member moves into the window and
+  // is announced at the position it takes (9), after it.
+  g_rec.calls.clear();
+  FeedParty(w, "PartyLeaveNotify", 777, 3000);
+  Update(w, 0);
+  QCHECK(g_rec.calls.size() == 2);
+  QCHECK(Called("n" + std::to_string(kCbMemberLeft) + ":3000:3000"));
+  QCHECK(Called("u" + std::to_string(kCbMemberJoined) + ":9"));
+  QCHECK(SlotFn<U32_0>(obj, kMemberCount)(obj) == kMemberJsonSlots);
+  QCHECK(SlotFn<U64_U32>(obj, kMemberId)(obj, kMemberJsonSlots - 1) == 3009);
+
+  // The member still hidden (3010) leaves: the game never heard of it, so it hears nothing.
+  g_rec.calls.clear();
+  FeedParty(w, "PartyLeaveNotify", 777, 3010);
+  Update(w, 0);
+  QCHECK(g_rec.calls.empty());
+  QCHECK(SlotFn<U32_0>(obj, kMemberCount)(obj) == kMemberJsonSlots);
+
+  // Eleven members again, then the host passes to the one past the array: the game is told the host changed,
+  // Host answers with that id, and no index goes out of range.
+  FeedParty(w, "PartyJoinNotify", 777, 3011);
+  Update(w, 0);
+  g_rec.calls.clear();
+  FeedParty(w, "PartyPassNotify", 777, 3011);
+  Update(w, 0);
+  QCHECK(Called("v" + std::to_string(kCbHostChanged)));
+  QCHECK(SlotFn<U64_0>(obj, kHost)(obj) == 3011);
+  QCHECK(SlotFn<U32_0>(obj, kIsHost)(obj) == 0);
+  QCHECK(Get32(obj, kOffOwnerIndex) < kMemberJsonSlots);
 }
 
 void TestFailedSendsDoNotStickTheModel() {
@@ -715,14 +828,262 @@ void TestDeferredJoinLogsOncePerParty() {
   QCHECK(FacadeCountersView().joinDeferred.load() >= 100);
 }
 
-void TestResetKeepsTheGamesPartyJson() {
+int g_cjsonResetCalls = 0;
+void* g_cjsonResetArg = nullptr;
+void FakeCJsonReset(void* cjson) {
+  ++g_cjsonResetCalls;
+  g_cjsonResetArg = cjson;
+}
+
+// CNSISocial::Reset clears the party CJson at +0x1f0 with CJson::Reset (libpnsovr 0x36a92c): the social object
+// owns it, so the old party's lobby settings must not outlive the party. The facade calls the game's own
+// function on it (it cannot free a tree it did not allocate), from social_game_calls.cpp.
+void TestResetCallsTheGamesCJsonReset() {
   World w;
   void* obj = w.Obj();
+  g_cjsonResetCalls = 0;
+  g_cjsonResetArg = nullptr;
+  SetCJsonReset(&FakeCJsonReset);
+  std::memset(static_cast<std::uint8_t*>(obj) + kOffLobbyUuid, 0xAB, 16);
+  SlotFn<Void0>(obj, kReset)(obj);
+  QCHECK(g_cjsonResetCalls == 1);
+  QCHECK(g_cjsonResetArg == static_cast<void*>(static_cast<std::uint8_t*>(obj) + kOffPartyJson));
+  const std::uint8_t zero[16] = {};
+  QCHECK(std::memcmp(static_cast<std::uint8_t*>(obj) + kOffLobbyUuid, zero, 16) == 0);  // Reset stores kInvalid (zero)
+  QCHECK(FacadeCountersView().cjsonResetUnavailable.load() == 0);
+  SlotFn<Void0>(obj, kReset)(obj);
+  QCHECK(g_cjsonResetCalls == 2);
+
+  // The game's function is not known (libr15 absent or not the pinned build): the CJson is left alone, not
+  // zeroed (that would leak the tree the game built), and the Reset is counted.
+  SetCJsonReset(nullptr);
   std::uint8_t pattern[16];
   for (int i = 0; i < 16; ++i) pattern[i] = static_cast<std::uint8_t>(0xA0 + i);
-  std::memcpy(static_cast<std::uint8_t*>(obj) + kOffPartyJson, pattern, 16);  // the game's tree pointers
+  std::memcpy(static_cast<std::uint8_t*>(obj) + kOffPartyJson, pattern, 16);
   SlotFn<Void0>(obj, kReset)(obj);
-  QCHECK(std::memcmp(static_cast<std::uint8_t*>(obj) + kOffPartyJson, pattern, 16) == 0);  // not zeroed, not leaked
+  QCHECK(g_cjsonResetCalls == 2);
+  QCHECK(std::memcmp(static_cast<std::uint8_t*>(obj) + kOffPartyJson, pattern, 16) == 0);
+  QCHECK(FacadeCountersView().cjsonResetUnavailable.load() == 1);
+}
+
+// A lock the sender refuses is asked again, but not every frame: the game calls Update once per frame and the
+// host's joinable bit disagrees with the server's lock until a request gets through.
+void TestRefusedLockIsRetriedOnABackoff() {
+  World w;
+  Init(w, MakeCallbacks());
+  CreateParty(w, 777);
+  void* obj = w.Obj();
+  const std::uint32_t flags = Get32(obj, kOffFlags);
+  const std::uint32_t locked = flags & ~kFlagJoinable;  // the host wants the party closed; the server has it open
+  std::memcpy(static_cast<std::uint8_t*>(obj) + kOffFlags, &locked, sizeof(locked));
+  g_sendOk = false;
+  g_sent.clear();
+  g_lines.clear();
+  for (int i = 0; i < 100; ++i) Update(w, 0);  // one second, a hundred frames
+  QCHECK(SentCount(SocialParty::kLockRequest) == 1);
+  QCHECK(CountLines("\"name\":\"PartyLockRequest\"") == 1);
+  QCHECK(FacadeCountersView().sendFailed.load() == 1);
+  for (int i = 0; i < 100; ++i) {  // a hundred seconds, a frame each
+    g_now += 1;
+    Update(w, 0);
+  }
+  const std::size_t attempts = SentCount(SocialParty::kLockRequest);
+  QCHECK(attempts >= 19 && attempts <= 21);  // one per 5 s
+  QCHECK(CountLines("\"name\":\"PartyLockRequest\"") == attempts);  // one log line per attempt
+  // The sender recovers: the next attempt after the interval goes through and is not repeated.
+  g_sendOk = true;
+  g_now += 5;
+  g_sent.clear();
+  Update(w, 0);
+  QCHECK(SentCount(SocialParty::kLockRequest) == 1);
+  Update(w, 0);
+  QCHECK(SentCount(SocialParty::kLockRequest) == 1);
+}
+
+// A request the sender took and the server never answers is failed after 10 s like a refused one. Frame
+// times wander; the deadline is measured from the send.
+void TestUnansweredCreateTimesOut() {
+  World w;
+  w.party.SetSelf(kSelf, "alice");
+  Update(w, 1);  // t = 1000: the create is sent and taken
+  QCHECK(SentCount(SocialParty::kCreateRequest) == 1 && w.party.Snapshot().creating);
+  g_now += 9;
+  Update(w, 1);
+  QCHECK(w.party.Snapshot().creating && FacadeCountersView().requestTimeout.load() == 0);  // not yet
+  g_now += 1;
+  Update(w, 1);  // t = 1010
+  QCHECK(FacadeCountersView().requestTimeout.load() == 1);
+  QCHECK(CountLines("social_request_timeout") == 1);
+  QCHECK(SentCount(SocialParty::kCreateRequest) == 2);  // rolled back, and the game still wants a party: asked again
+  // 600 more seconds of silence, jittered frame times: one attempt per 10 s at most, never faster.
+  for (std::size_t i = 0; i < 400 && g_now < 1610; ++i) {
+    g_now += Jitter(i);
+    Update(w, 1);
+  }
+  const std::size_t creates = SentCount(SocialParty::kCreateRequest);
+  QCHECK(creates >= 40 && creates <= 62);
+  for (std::size_t i = 1; i < g_sentAt.size(); ++i) QCHECK(g_sentAt[i] - g_sentAt[i - 1] >= 10);
+  QCHECK(FacadeCountersView().requestTimeout.load() + 1 >= creates && FacadeCountersView().requestTimeout.load() <= creates);
+  // A late reply is applied as usual.
+  FeedParty(w, "PartyCreateSuccess", 777, kSelf);
+  Update(w, 0);
+  QCHECK(w.party.Snapshot().partyId == 777 && !w.party.Snapshot().creating);
+}
+
+void TestAnsweredCreateAndLockDoNotTimeOut() {
+  World w;
+  Init(w, MakeCallbacks());
+  CreateParty(w, 777);  // sent and answered within the frame
+  void* obj = w.Obj();
+  const std::uint32_t closed = Get32(obj, kOffFlags) & ~kFlagJoinable;
+  std::memcpy(static_cast<std::uint8_t*>(obj) + kOffFlags, &closed, sizeof(closed));
+  Update(w, 0);  // the lock request goes out
+  QCHECK(SentCount(SocialParty::kLockRequest) == 1);
+  FeedParty(w, "PartyLockSuccess", 777, 0);  // and is answered
+  for (std::size_t i = 0; i < 100; ++i) {
+    g_now += Jitter(i);
+    Update(w, 1);
+  }
+  QCHECK(FacadeCountersView().requestTimeout.load() == 0);
+  QCHECK(SentCount(SocialParty::kLockRequest) == 1 && SentCount(SocialParty::kCreateRequest) == 1);
+}
+
+void TestUnansweredLockTimesOut() {
+  World w;
+  Init(w, MakeCallbacks());
+  CreateParty(w, 777);
+  void* obj = w.Obj();
+  const std::uint32_t closed = Get32(obj, kOffFlags) & ~kFlagJoinable;
+  std::memcpy(static_cast<std::uint8_t*>(obj) + kOffFlags, &closed, sizeof(closed));
+  g_sent.clear();
+  g_sentAt.clear();
+  const std::uint64_t start = g_now;
+  Update(w, 0);  // taken, never answered
+  QCHECK(SentCount(SocialParty::kLockRequest) == 1);
+  for (std::size_t i = 0; i < 400 && g_now < start + 600; ++i) {
+    g_now += Jitter(i);
+    Update(w, 0);
+  }
+  const std::size_t attempts = SentCount(SocialParty::kLockRequest);
+  QCHECK(attempts >= 40 && attempts <= 62);
+  for (std::size_t i = 1; i < g_sentAt.size(); ++i) QCHECK(g_sentAt[i] - g_sentAt[i - 1] >= 10);
+  QCHECK(FacadeCountersView().requestTimeout.load() + 1 >= attempts);
+  QCHECK(CountLines("\"name\":\"PartyLockRequest\"") == attempts);
+}
+
+// The probe that found it: a create the sender took and the server never answered stuck the model for good, and
+// every join after it was deferred. Now the create times out, the deferred join goes ahead, and a join the
+// server never answers (a locked party queues it without a reply) fails to the game.
+void TestUnansweredJoinFailsToTheGame() {
+  World w;
+  Init(w, MakeCallbacks());
+  w.party.SetSelf(kSelf, "alice");
+  Update(w, 1);  // a create, taken and never answered
+  SlotFn<Void_U64>(w.Obj(), kJoinInternal)(w.Obj(), 556);  // deferred behind it
+  QCHECK(SentCount(SocialParty::kJoinRequest) == 0);
+  g_rec.calls.clear();
+  for (std::size_t i = 0; i < 100 && SentCount(SocialParty::kJoinRequest) == 0; ++i) {
+    g_now += Jitter(i);
+    Update(w, 1);
+  }
+  QCHECK(SentCount(SocialParty::kJoinRequest) == 1);  // went out once the create was given up
+  const std::uint64_t joinSentAt = g_sentAt[g_sentAt.size() - 1];
+  QCHECK(w.party.Snapshot().joining);
+  // 600 s of silence: the join fails once, to the game, and is not sent again by the facade.
+  for (std::size_t i = 0; i < 400 && g_now < joinSentAt + 600; ++i) {
+    g_now += Jitter(i);
+    Update(w, 0);
+  }
+  QCHECK(!w.party.Snapshot().joining);
+  QCHECK(CalledCount("u" + std::to_string(kCbJoinFailed) + ":0") == 1);
+  QCHECK((Get32(w.Obj(), kOffFlags) & kFlagJoining) == 0);
+  QCHECK(SentCount(SocialParty::kJoinRequest) == 1);
+  QCHECK(FacadeCountersView().requestTimeout.load() == 2);  // the create and the join
+}
+
+// A join the sender refuses: the invite it consumed comes back, the request type of a retry is the invite's
+// accept again, and the game is told (JoinFailed, code 0).
+void TestRefusedInviteJoinKeepsTheInviteAndTellsTheGame() {
+  World w;
+  Init(w, MakeCallbacks());
+  w.party.SetSelf(kSelf, "alice");
+  void* obj = w.Obj();
+  FeedParty(w, "PartyInviteNotify", 556, 2002);
+  Update(w, 0);
+  QCHECK(SlotFn<U32_0>(obj, kInviteCount)(obj) == 1);
+  g_rec.calls.clear();
+  g_rec.gate = 1;
+  g_sendOk = false;
+  g_sent.clear();
+  SlotFn<Void_U32>(obj, kAcceptInvite)(obj, 0);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kInviteResponse);
+  QCHECK(!w.party.Snapshot().joining);
+  QCHECK(w.party.Snapshot().invites.size() == 1);  // given back
+  Update(w, 0);
+  QCHECK(CalledCount("u" + std::to_string(kCbJoinFailed) + ":0") == 1);  // the game was told
+  QCHECK(SlotFn<U32_0>(obj, kInviteCount)(obj) == 1);
+  // The retry (the same accept, or a join by party id) is the invite's accept to the inviter again.
+  g_sendOk = true;
+  g_sent.clear();
+  SlotFn<Void_U64>(obj, kJoinInternal)(obj, 556);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kInviteResponse);
+  QCHECK(g_sent.size() == 1 && g_sent[0].target == 2002);
+  QCHECK(w.party.Snapshot().joining);
+}
+
+void TestRequestLogsCarryTheTargetAccount() {
+  World w;
+  Init(w, MakeCallbacks());
+  CreateParty(w, 777);
+  void* obj = w.Obj();
+  FeedParty(w, "PartyJoinNotify", 777, 3003);
+  FeedParty(w, "PartyJoinNotify", 777, 4004);
+  Update(w, 0);
+  g_lines.clear();
+  SlotFn<Void_U32>(obj, kKick)(obj, 1);  // 3003
+  QCHECK(CountLines("\"name\":\"PartyKickRequest\"") == 1);
+  QCHECK(CountLines("\"target\":3003") == 1);
+  g_lines.clear();
+  Update(w, 0);
+  SlotFn<Void_U32>(obj, kPassOwnership)(obj, 1);  // 4004 is now at 1
+  QCHECK(CountLines("\"name\":\"PartyPassRequest\"") == 1);
+  QCHECK(CountLines("\"target\":4004") == 1);
+  g_lines.clear();
+  FeedParty(w, "PartyInviteNotify", 600, 7007);
+  Update(w, 0);
+  SlotFn<Void_U32>(obj, kDismissInvite)(obj, 0);
+  QCHECK(CountLines("\"name\":\"PartyInviteResponse\"") == 1);
+  QCHECK(CountLines("\"target\":7007") == 1);
+  QCHECK(CountLines("\"param\":0") >= 1);
+  g_lines.clear();
+  FeedParty(w, "PartyInviteNotify", 601, 8008);
+  Update(w, 0);
+  g_rec.gate = 1;
+  SlotFn<Void_U32>(obj, kAcceptInvite)(obj, 0);
+  QCHECK(CountLines("\"target\":8008") == 1);
+  QCHECK(CountLines("\"param\":1") == 1);
+  QCHECK(CountLines("\"party\":") >= 1);
+  g_lines.clear();
+  SlotFn<Void0>(obj, kRefreshRecentlyMetUsers)(obj);
+  QCHECK(CountLines("\"name\":\"RecentlyMetRefreshRequest\"") == 1);
+}
+
+// A refused invite stays queued behind its create; asking again must not queue it twice.
+void TestInviteIsQueuedOnce() {
+  World w;
+  Init(w, MakeCallbacks());
+  w.party.SetSelf(kSelf, "alice");
+  void* obj = w.Obj();
+  g_sendOk = false;
+  SlotFn<Void_U64>(obj, kSendInviteInternal)(obj, 2002);  // the create is refused; the invite waits
+  SlotFn<Void_U64>(obj, kSendInviteInternal)(obj, 2002);  // the user asks again
+  g_sendOk = true;
+  SlotFn<Void_U64>(obj, kSendInviteInternal)(obj, 2002);  // and again, this time the create goes
+  g_sent.clear();
+  FeedParty(w, "PartyCreateSuccess", 777, kSelf);
+  std::size_t invites = 0;
+  for (const SocialParty::Message& m : g_sent) invites += m.symbol == SocialParty::kInviteRequest ? 1 : 0;
+  QCHECK(invites == 1);
 }
 
 void TestMemberCountAgreesBeforeLogin() {
@@ -759,6 +1120,8 @@ void TestNamesAreAskedForOnlyWithADecoder() {
   int profileRequests = 0;
   for (const SocialParty::Message& m : g_sent) profileRequests += m.symbol == SocialNames::kProfileRequest ? 1 : 0;
   QCHECK(profileRequests == 1);
+  QCHECK(CountLines("\"name\":\"OtherUserProfileRequest\"") == 1);  // the log names the account asked about
+  QCHECK(CountLines("\"target\":2002") >= 1);
   Feed(w, SocialNames::kProfileSuccess, Le(0, 16));
   void* obj = w.Obj();
   QCHECK(std::string(SlotFn<Str_U32>(obj, kFriendName)(obj, 0)) == "Zed");
@@ -821,11 +1184,21 @@ int main() {
   TestGameExceptionThroughUpdate();
   TestGameExceptionThroughGate();
   TestEventBatchCarriesTheRemainder();
-  TestEventQueueOverflowIsCounted();
+  TestInviteNotificationsAreMerged();
+  TestEventQueueDropsOnlyWhatALaterEventRepeats();
+  TestEventQueueHardLimit();
   TestMemberCountNeverExceedsTheGamesArray();
   TestFailedSendsDoNotStickTheModel();
   TestDeferredJoinLogsOncePerParty();
-  TestResetKeepsTheGamesPartyJson();
+  TestResetCallsTheGamesCJsonReset();
+  TestRefusedLockIsRetriedOnABackoff();
+  TestUnansweredCreateTimesOut();
+  TestAnsweredCreateAndLockDoNotTimeOut();
+  TestUnansweredLockTimesOut();
+  TestUnansweredJoinFailsToTheGame();
+  TestRefusedInviteJoinKeepsTheInviteAndTellsTheGame();
+  TestRequestLogsCarryTheTargetAccount();
+  TestInviteIsQueuedOnce();
   TestMemberCountAgreesBeforeLogin();
   TestSendLogsStableIds();
   TestNamesAreAskedForOnlyWithADecoder();

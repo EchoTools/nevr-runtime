@@ -1,6 +1,8 @@
 // Checks the social ABI pins against the real pinned libraries, on any host.
 //
 //   - libr15.so: build id, and the JUMP_SLOT for CNSProvider::Social at the pinned address.
+//   - libr15.so: CJson::Reset is the dynamic symbol at kLibR15CJsonResetVaddr (a prologue-validated 36-byte
+//     function), ResolveCJsonReset finds it in the image, and SUuid::kInvalid is in .bss (zero at load).
 //   - libpnsovr.so: build id, the CNSOVRSocial vtable symbol (address and size), and every slot of
 //     the vtable, read from the library's own R_AARCH64_ABS64 relocations, against kSlotNames.
 //
@@ -144,6 +146,59 @@ std::vector<std::string> VtableMethods(const LoadedElf& pnsovr, std::size_t* siz
   return methods;
 }
 
+const Elf64_Sym* FindSymbol(const Dynamic& dyn, const char* name) {
+  for (std::size_t i = 0; i < dyn.symCount; ++i) {
+    if (std::strcmp(dyn.strtab + dyn.symtab[i].st_name, name) == 0) return &dyn.symtab[i];
+  }
+  return nullptr;
+}
+
+const ElfImage* g_lookupImage = nullptr;
+bool LookupFixed(const char*, ElfImage* out) {
+  if (g_lookupImage == nullptr) return false;
+  *out = *g_lookupImage;
+  return true;
+}
+
+void CheckGameFunctions(const LoadedElf& r15) {
+  Dynamic dyn;
+  QCHECK(ReadDynamic(r15, &dyn));
+  const Elf64_Sym* reset = FindSymbol(dyn, "_ZN10NRadEngine5CJson5ResetEv");
+  QCHECK(reset != nullptr);
+  if (reset != nullptr) {
+    QCHECK(ELF64_ST_TYPE(reset->st_info) == STT_FUNC);
+    QCHECK(reset->st_value == quest_social::kLibR15CJsonResetVaddr);
+    QCHECK(reset->st_size == 36);
+    // stp x19, x30, [sp, #-0x10]! : the first instruction of the 36 bytes the game's Reset is made of
+    std::uint32_t first = 0;
+    std::memcpy(&first, r15.At(reset->st_value), sizeof(first));
+    QCHECK(first == 0xa9bf7bf3U);
+  }
+  // The production resolver, on the real image, lands on that address.
+  g_lookupImage = &r15.image;
+  const quest_social::CJsonResetFn fn = quest_social::ResolveCJsonReset(&LookupFixed);
+  g_lookupImage = nullptr;
+  std::uintptr_t resolved = 0;
+  std::memcpy(&resolved, &fn, sizeof(resolved));
+  QCHECK(resolved == r15.image.base + quest_social::kLibR15CJsonResetVaddr);
+
+  // SUuid::kInvalid (ExitLobby and Reset copy it; the facade stores sixteen zero bytes instead): a 16-byte
+  // object in the .bss part of a PT_LOAD, so zero at load.
+  const Elf64_Sym* invalid = FindSymbol(dyn, "_ZN10NRadEngine5SUuid8kInvalidE");
+  QCHECK(invalid != nullptr);
+  if (invalid != nullptr) {
+    QCHECK(ELF64_ST_TYPE(invalid->st_info) == STT_OBJECT && invalid->st_size == 16);
+    bool inBss = false;
+    for (const Elf64_Phdr& ph : r15.phdrs) {
+      if (ph.p_type == PT_LOAD && invalid->st_value >= ph.p_vaddr + ph.p_filesz &&
+          invalid->st_value + invalid->st_size <= ph.p_vaddr + ph.p_memsz) {
+        inBss = true;
+      }
+    }
+    QCHECK(inBss);
+  }
+}
+
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
   QCHECK(ReadBuildId(elf.image, actual, sizeof(actual)));
@@ -179,6 +234,7 @@ int main(int argc, char** argv) {
   }
   CheckBuildId(r15, pinned::kLibR15BuildId);
   CheckBuildId(ovr, quest_social::kLibPnsovrBuildId);
+  CheckGameFunctions(r15);
 
   // libr15's slot for CNSProvider::Social: pinned, and the only one for the symbol.
   const GotTarget target = quest_social::LibR15Social();
@@ -211,6 +267,6 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "social_pinned_test: %d check(s) failed\n", quest_test::Failures());
     return 1;
   }
-  std::printf("social_pinned_test: the Social slot and the CNSOVRSocial vtable match the real ELFs\n");
+  std::printf("social_pinned_test: the Social slot, CJson::Reset, kInvalid and the CNSOVRSocial vtable match the real ELFs\n");
   return 0;
 }

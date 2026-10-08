@@ -137,6 +137,9 @@ inline const char* RequestName(std::uint64_t symbol) {
 struct Message {
   std::uint64_t symbol = 0;
   std::string payload;
+  /// The account id a Targeted request is aimed at (0: none). The payload carries only the UUID derived
+  /// from it, so a log line cannot recover the id from the bytes; the request's builder records it here.
+  std::uint64_t target = 0;
 };
 
 using Uuid = std::array<std::uint8_t, 16>;
@@ -237,6 +240,13 @@ inline Message Targeted(std::uint64_t symbol, const Uuid& self, const Uuid& targ
   return m;
 }
 
+/// Targeted() aimed at an account: the UUID goes on the wire, the account id stays in `target` for logs.
+inline Message TargetedTo(std::uint64_t symbol, const Uuid& self, std::uint64_t accountId, std::uint32_t param) {
+  Message m = Targeted(symbol, self, MemberUuid(accountId), param);
+  m.target = accountId;
+  return m;
+}
+
 // ---------------------------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------------------------
@@ -248,8 +258,8 @@ enum class EventKind {
   kHostChanged,
   kLeft,
   kKicked,
-  kMemberJoined,     // index
-  kMemberUpdated,    // index
+  kMemberJoined,     // index, id
+  kMemberUpdated,    // index, id
   kMemberLeft,       // id, name
   kInviteReceived,
   kInviteFailed,     // id, name, code
@@ -395,7 +405,10 @@ class State {
     if (partyId_ != 0) {
       out.push_back(Standard(kInviteRequest, SelfUuid(), target));
     } else {
-      pendingInvites_.push_back(target);
+      // One queued invite per target: a refused invite stays queued, and the user asking again must not
+      // send it twice when the party exists.
+      if (std::find(pendingInvites_.begin(), pendingInvites_.end(), target) == pendingInvites_.end())
+        pendingInvites_.push_back(target);
       if (!creating_) {
         creating_ = true;
         out.push_back(Standard(kCreateRequest, SelfUuid(), 0));
@@ -428,6 +441,7 @@ class State {
         joinInviteParty_ = partyId;
         joinInviter_ = invites_[i - 1].senderId;
       }
+      StashInviteLocked(invites_[i - 1]);
       invites_.erase(invites_.begin() + static_cast<std::ptrdiff_t>(i - 1));
     }
     if (creating_ || joining_ || self_ == 0) {
@@ -441,28 +455,51 @@ class State {
   void AbandonJoin(std::uint64_t partyId) {
     std::lock_guard<std::mutex> guard(mutex_);
     ForgetJoinLocked(partyId);
+    joinStash_.clear();  // declined at the gate: the invites stay dropped, as pnsovr dropped them
   }
 
   /// A request that changed this state before being sent could not be sent: put the state back so a
   /// later attempt can send it. Without these the flag set by CreateParty / SendInvite / Join /
   /// SetLocked stays set, the server never answers, and every later join is deferred forever.
   /// A create that could not be sent is no longer in flight; invites queued behind it stay queued.
-  void AbandonCreate() {
+  /// Returns whether a create was in flight (false: the server answered first, nothing changed).
+  bool AbandonCreate() {
     std::lock_guard<std::mutex> guard(mutex_);
+    const bool was = creating_;
     creating_ = false;
+    return was;
   }
 
-  /// A join request that could not be sent is no longer in flight.
-  void AbandonJoining() {
+  /// A join the server will not answer: the request could not be sent, or the facade gave up waiting. The
+  /// join is no longer in flight, the invites it consumed come back (BeginJoin and Join dropped them before
+  /// the request left, as pnsovr did, so a retry by party id would otherwise send a plain join), and the game
+  /// is told the join failed (JoinFailed, code 0: the game's "unknown error", libr15 PartyJoinFailedCB
+  /// 0x126f630 takes any code outside 1..6 down its default branch at 0x126f6c4).
+  /// Returns whether a join was in flight (false: the server answered first, nothing changed).
+  bool AbandonJoining() {
     std::lock_guard<std::mutex> guard(mutex_);
+    if (!joining_) return false;
     joining_ = false;
     joiningPartyId_ = 0;
+    RestoreInvitesLocked();
+    events_.push_back(MakeEvent(EventKind::kJoinFailed, 0, 0, std::string(), 0));
+    return true;
   }
 
   /// A lock or unlock request that could not be sent: SetLocked may ask again.
   void ForgetLockRequest() {
     std::lock_guard<std::mutex> guard(mutex_);
     lockRequested_ = -1;
+  }
+
+  /// The server never answered a lock (or unlock) request: forget it if it is still unanswered, so SetLocked
+  /// may ask again. Returns false when the server answered first (the party is in the state asked for, or the
+  /// request was already forgotten).
+  bool ExpireLockRequest(bool wantLocked) {
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (lockRequested_ != (wantLocked ? 1 : 0) || locked_ == wantLocked) return false;
+    lockRequested_ = -1;
+    return true;
   }
 
   /// JoinInternal, second half (after the accept gate): nothing if already in that party; otherwise
@@ -479,17 +516,21 @@ class State {
     }
     if (partyId == partyId_) {
       ForgetJoinLocked(partyId);
+      joinStash_.clear();
       return out;
     }
     // The current party is kept until the server admits us to the new one (PartyJoinSuccess): a player
     // whose join fails stays where they were (owner, 2026-10-01). pnsovr left first; the server now
     // leaves the old party only on success too (nakama snsPartyLeaveForJoin).
-    for (std::size_t i = invites_.size(); i > 0; --i)
-      if (invites_[i - 1].partyId == partyId) invites_.erase(invites_.begin() + static_cast<std::ptrdiff_t>(i - 1));
+    for (std::size_t i = invites_.size(); i > 0; --i) {
+      if (invites_[i - 1].partyId != partyId) continue;
+      StashInviteLocked(invites_[i - 1]);
+      invites_.erase(invites_.begin() + static_cast<std::ptrdiff_t>(i - 1));
+    }
     joining_ = true;
     joiningPartyId_ = partyId;
     if (joinInviteParty_ == partyId && joinInviter_ != 0)
-      out.push_back(Targeted(kInviteResponse, SelfUuid(), MemberUuid(joinInviter_), 1));
+      out.push_back(TargetedTo(kInviteResponse, SelfUuid(), joinInviter_, 1));
     else
       out.push_back(Standard(kJoinRequest, SelfUuid(), partyId));
     ForgetJoinLocked(partyId);
@@ -526,7 +567,7 @@ class State {
     std::vector<Message> out;
     Invite invite;
     if (!TakeInvite(index, &invite)) return out;
-    out.push_back(Targeted(kInviteResponse, SelfUuid(), MemberUuid(invite.senderId), 0));
+    out.push_back(TargetedTo(kInviteResponse, SelfUuid(), invite.senderId, 0));
     return out;
   }
 
@@ -549,7 +590,7 @@ class State {
     std::vector<Message> out;
     if (partyId_ == 0 || ownerId_ != self_ || index == 0 || index >= members_.size()) return out;
     const Member member = members_[index];
-    out.push_back(Targeted(kKickRequest, SelfUuid(), MemberUuid(member.id), 0));
+    out.push_back(TargetedTo(kKickRequest, SelfUuid(), member.id, 0));
     members_.erase(members_.begin() + index);
     events_.push_back(MakeEvent(EventKind::kMemberLeft, 0, member.id, member.name));
     return out;
@@ -559,7 +600,7 @@ class State {
     std::lock_guard<std::mutex> guard(mutex_);
     std::vector<Message> out;
     if (partyId_ == 0 || ownerId_ != self_ || index >= members_.size() || members_[index].id == self_) return out;
-    out.push_back(Targeted(kPassRequest, SelfUuid(), MemberUuid(members_[index].id), 0));
+    out.push_back(TargetedTo(kPassRequest, SelfUuid(), members_[index].id, 0));
     ownerId_ = members_[index].id;
     events_.push_back(MakeEvent(EventKind::kHostChanged));
     return out;
@@ -658,7 +699,7 @@ class State {
         return DataOutcome::kMember;
       }
       members_.push_back(Member{memberId, NameLocked(memberId), std::move(text)});
-      events_.push_back(MakeEvent(EventKind::kMemberJoined, static_cast<std::uint32_t>(members_.size() - 1)));
+      events_.push_back(MakeEvent(EventKind::kMemberJoined, static_cast<std::uint32_t>(members_.size() - 1), memberId));
       return DataOutcome::kMemberAdded;
     }
     if (partyId != 0 && joining_ && partyId == joiningPartyId_) {
@@ -720,6 +761,7 @@ class State {
       }
       joining_ = false;
       joiningPartyId_ = 0;
+      joinStash_.clear();
       locked_ = false;
       lockRequested_ = -1;
       partyId_ = u64(0);
@@ -742,10 +784,11 @@ class State {
       ForgetHeldData();
       events_.push_back(MakeEvent(EventKind::kJoined));
       for (std::size_t i = 1; i < members_.size(); ++i)
-        events_.push_back(MakeEvent(EventKind::kMemberJoined, static_cast<std::uint32_t>(i)));
+        events_.push_back(MakeEvent(EventKind::kMemberJoined, static_cast<std::uint32_t>(i), members_[i].id));
     } else if (n == "PartyJoinFailure") {
       joining_ = false;
       joiningPartyId_ = 0;
+      joinStash_.clear();
       ForgetHeldData();
       // The game's codes (PartyJoinFailedCB 0x140189590): 1 not found, 3 no permission, 4 locked,
       // 5 full, 6 version, anything else unknown. Nakama sends those, plus 2 for a join it refused
@@ -755,7 +798,7 @@ class State {
       const std::uint64_t id = u64(8);
       if (id != self_ && Find(id) < 0) {
         members_.push_back(Member{id, NameLocked(id), nullptr});
-        events_.push_back(MakeEvent(EventKind::kMemberJoined, static_cast<std::uint32_t>(members_.size() - 1)));
+        events_.push_back(MakeEvent(EventKind::kMemberJoined, static_cast<std::uint32_t>(members_.size() - 1), id));
       }
     } else if (n == "PartyLeaveNotify" && len >= 16 && u64(0) == partyId_) {
       RemoveMember(u64(8));
@@ -783,7 +826,7 @@ class State {
       events_.push_back(MakeEvent(EventKind::kUpdated));
     } else if (n == "PartyUpdateMemberNotify" && len >= 16 && u64(0) == partyId_) {
       const int at = Find(u64(8));
-      if (at >= 0) events_.push_back(MakeEvent(EventKind::kMemberUpdated, static_cast<std::uint32_t>(at)));
+      if (at >= 0) events_.push_back(MakeEvent(EventKind::kMemberUpdated, static_cast<std::uint32_t>(at), u64(8)));
     } else if (n == "PartyInviteNotify" && len >= 16) {
       Invite invite;
       invite.partyId = u64(0);
@@ -891,6 +934,27 @@ class State {
     }
   }
 
+  /// The invites a join consumed, kept until the server answers it, so a join that never gets that far can
+  /// give them back.
+  void StashInviteLocked(const Invite& invite) {
+    for (const Invite& kept : joinStash_)
+      if (kept.partyId == invite.partyId && kept.senderId == invite.senderId) return;
+    joinStash_.push_back(invite);
+  }
+
+  /// Puts the stashed invites back ahead of newer ones (oldest first), skipping a sender who has since sent
+  /// a newer invite: one invite per sender, the newer one wins.
+  void RestoreInvitesLocked() {
+    std::vector<Invite> back;
+    for (const Invite& kept : joinStash_) {
+      bool newer = false;
+      for (const Invite& now : invites_) newer = newer || now.senderId == kept.senderId;
+      if (!newer) back.push_back(kept);
+    }
+    invites_.insert(invites_.begin(), back.begin(), back.end());
+    joinStash_.clear();
+  }
+
   void ForgetHeldData() {
     heldParty_ = 0;
     heldPartyData_.reset();
@@ -905,6 +969,7 @@ class State {
     creating_ = false;
     joining_ = false;
     joiningPartyId_ = 0;
+    joinStash_.clear();
     locked_ = false;
     lockRequested_ = -1;
     members_.clear();
@@ -927,6 +992,7 @@ class State {
   std::int8_t lockRequested_ = -1;  // the lock state last asked of the server, -1 none
   std::vector<Member> members_;
   std::vector<Invite> invites_;
+  std::vector<Invite> joinStash_;  // the invites the join in flight consumed (restored if it is abandoned)
   std::map<std::uint64_t, std::string> names_;  // display names from profile replies
   std::vector<std::uint64_t> unnamed_;          // ids shown without a name, waiting for a lookup
   std::vector<std::uint64_t> pendingInvites_;

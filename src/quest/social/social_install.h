@@ -20,6 +20,7 @@
 
 #include "callback_thunk.h"
 #include "got_hook.h"
+#include "quest/social/social_abi.h"
 
 namespace quest_social {
 
@@ -63,9 +64,15 @@ struct SocialCounters {
 SocialCounters Counters() noexcept;
 void ResetCountersForTest() noexcept;
 
+// The game's CJson::Reset in the loaded libr15, or nullptr unless libr15 is loaded and its build id is the
+// pinned one: the image base plus the export's link-time address (kLibR15CJsonResetVaddr, which
+// social_pinned_test checks against the library's dynamic symbol table). Never throws.
+CJsonResetFn ResolveCJsonReset(sentinel::ImageLookup lookup) noexcept;
+
 // Registers the counters with the sentinel's reporter (hook_report.h): the thunk's calls, the selected
-// count, the three pass-through counters, the thunk's faults and the facade's four (members clamped, events
-// dropped, sends failed, joins deferred): 10 of the reporter's 32.
+// count, the three pass-through counters, the thunk's faults and the facade's six (members hidden, events
+// dropped, sends failed, joins deferred, requests timed out, CJson::Reset unavailable): 12 of the
+// reporter's 32.
 // Call before StartReporter; returns false if any registration was refused.
 bool RegisterSocialReportCounters();
 

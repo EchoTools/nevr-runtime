@@ -71,6 +71,18 @@ PnsovrView FindPnsovr() noexcept {
   return view;
 }
 
+CJsonResetFn ResolveCJsonReset(sentinel::ImageLookup lookup) noexcept {
+  sentinel::ElfImage image;
+  if (lookup == nullptr || !lookup(sentinel::pinned::kLibR15, &image)) return nullptr;
+  char id[64] = {};
+  if (!sentinel::ReadBuildId(image, id, sizeof(id)) || std::strcmp(id, sentinel::pinned::kLibR15BuildId) != 0) return nullptr;
+  const std::uintptr_t address = image.base + static_cast<std::uintptr_t>(kLibR15CJsonResetVaddr);
+  CJsonResetFn reset = nullptr;
+  static_assert(sizeof(reset) == sizeof(address), "function pointer size");
+  std::memcpy(&reset, &address, sizeof(reset));
+  return reset;
+}
+
 PnsovrLookup SetPnsovrLookup(PnsovrLookup lookup) {
   return g_lookup.exchange(lookup != nullptr ? lookup : &FindPnsovr, std::memory_order_acq_rel);
 }
@@ -120,12 +132,16 @@ bool RegisterSocialReportCounters() {
   ok = sentinel::RegisterReportCounter("social_thunk_faults", &SocialThunk::FaultCounter(),
                                        sentinel::ReportKind::kFaults) && ok;
   const FacadeCounters facade = FacadeCountersView();
-  ok = sentinel::RegisterReportCounter("social_members_clamped", &facade.membersClamped,
+  ok = sentinel::RegisterReportCounter("social_members_hidden", &facade.membersHidden,
                                        sentinel::ReportKind::kFaults) && ok;
   ok = sentinel::RegisterReportCounter("social_events_dropped", &facade.eventsDropped,
                                        sentinel::ReportKind::kFaults) && ok;
   ok = sentinel::RegisterReportCounter("social_send_failed", &facade.sendFailed, sentinel::ReportKind::kFaults) && ok;
   ok = sentinel::RegisterReportCounter("social_join_deferred", &facade.joinDeferred) && ok;
+  ok = sentinel::RegisterReportCounter("social_request_timeout", &facade.requestTimeout,
+                                       sentinel::ReportKind::kFaults) && ok;
+  ok = sentinel::RegisterReportCounter("social_cjson_reset_unavailable", &facade.cjsonResetUnavailable,
+                                       sentinel::ReportKind::kFaults) && ok;
   return ok;
 }
 
@@ -138,6 +154,10 @@ InstallResult InstallSocialHook(bool enabled) {
   static sentinel::GotHook hook;
   // Allocate and wire the models before any game thread can reach the handler.
   PublishFacadeObject();
+  const CJsonResetFn cjsonReset = ResolveCJsonReset(&sentinel::FindLoadedImage);
+  SetCJsonReset(cjsonReset);
+  LogFields(cjsonReset != nullptr ? LogLevel::kInfo : LogLevel::kWarn, "social_install",
+            {{"cjson_reset", cjsonReset != nullptr ? "resolved" : "unavailable"}});
   SocialThunk::Arm(kSocialHook);
   result.got = sentinel::InstallThunk<SocialThunk>(hook, LibR15Social());
   if (result.got != sentinel::GotStatus::kOk) {
