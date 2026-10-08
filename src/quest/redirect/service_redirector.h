@@ -16,7 +16,7 @@
 // with a key that is not a literal this analysis could recover, many from per-frame script readers;
 // a by-value rule would take the cache lock and run the policy for any ws:// or https:// string any
 // of them reads. The key rule is exhaustive for the host keys: the only `_host` key formats in the
-// three Quest libraries' strings are the eight literals and the two matchmaker per-type formats
+// three Quest libraries' strings checked (libr15, libpnsradmatchmaking, libpnsrad) are the eight literals and the two matchmaker per-type formats
 // below (`strings -a | grep '%s.*host'`).
 //
 // Allocation. Apply copies nothing and allocates nothing for a key outside the list, for a value
