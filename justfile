@@ -489,6 +489,50 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
         src/quest/sentinel/hook_log.cpp -o "$out/got_pinned_test" -ldl
     "$out/got_pinned_test" "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so"
 
+# Quest social provider on the host (docs/adr/0003, "Social provider"): the ABI pins against the
+# recorded vtable, the facade driven through its vtable, and the hook decision through the real
+# callback thunk. No NDK, no Android, no APK. Fail-close.
+test-quest-social:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-social-host"
+    mkdir -p "$out"
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    "${cxx[@]}" src/quest/tests/social_abi_test.cpp -o "$out/social_abi_test"
+    "$out/social_abi_test" src/quest/tests/fixtures/cnsovrsocial_vtable.txt
+    "${cxx[@]}" src/quest/tests/social_facade_test.cpp src/quest/social/social_facade.cpp \
+        src/quest/social/social_frames.cpp src/quest/sentinel/hook_log.cpp \
+        -o "$out/social_facade_test" -ldl -pthread
+    "$out/social_facade_test"
+    "${cxx[@]}" src/quest/tests/social_install_test.cpp src/quest/social/social_install.cpp \
+        src/quest/social/social_facade.cpp src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp \
+        -o "$out/social_install_test" -ldl -pthread
+    "$out/social_install_test"
+
+# The social pins against the real libr15.so and libpnsovr.so (docs/adr/0003). Extracts both from
+# the store APK, checks their SHA-256, runs src/quest/tests/social_pinned_test.cpp, and checks that
+# the recorded vtable (src/quest/tests/fixtures/cnsovrsocial_vtable.txt) is what the library holds.
+# Fail-close, including when the APK is absent (58 MB, not in the repository), so it is not part of
+# `just verify`.
+test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    apk="{{ apk }}"
+    [ -f "$apk" ] || { echo "test-quest-social-pinned: pinned APK not found: $apk" >&2; exit 1; }
+    out="build/quest-social-pinned"
+    rm -rf "$out"; mkdir -p "$out/lib"
+    unzip -o -q "$apk" lib/arm64-v8a/libr15.so lib/arm64-v8a/libpnsovr.so -d "$out/lib"
+    lib="$out/lib/lib/arm64-v8a"
+    echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $lib/libr15.so" | sha256sum -c -
+    echo "26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79  $lib/libpnsovr.so" | sha256sum -c -
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel \
+        src/quest/tests/social_pinned_test.cpp src/quest/social/social_install.cpp \
+        src/quest/social/social_facade.cpp src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp \
+        -o "$out/social_pinned_test" -ldl -pthread
+    "$out/social_pinned_test" "$lib/libr15.so" "$lib/libpnsovr.so"
+    "$out/social_pinned_test" --dump "$lib/libpnsovr.so" > "$out/vtable.txt"
+    diff -u src/quest/tests/fixtures/cnsovrsocial_vtable.txt "$out/vtable.txt"
+
 # --- Verify (closed-loop gate) ---
 
 # Aggregate verify gate for the all-the-way-down canon: build everything, then run
@@ -508,6 +552,7 @@ verify:
     just test-auth-unit
     just test-quest-shared
     just test-quest-hooks
+    just test-quest-social
     python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
