@@ -414,7 +414,10 @@ test-quest-shared:
     "$out/service_redirect_test"
     # The codec test parses the login profile with nlohmann::json. Use the header the build installed
     # from vcpkg.json, never a system package: fail loudly when the build has not installed it.
-    json_inc=$(ls -d build/{{ preset }}/vcpkg_installed/*/include 2>/dev/null | while read -r d; do [ -f "$d/nlohmann/json.hpp" ] && echo "$d" && break; done)
+    json_inc=""
+    for d in build/{{ preset }}/vcpkg_installed/*/include; do
+        if [[ -f "$d/nlohmann/json.hpp" ]]; then json_inc="$d"; break; fi
+    done
     if [[ -z "$json_inc" ]]; then
         echo "test-quest-shared: FAIL — nlohmann/json.hpp not found under build/{{ preset }}/vcpkg_installed/*/include; run 'just build' first (the header comes from vcpkg.json, not a system package)" >&2
         exit 1
