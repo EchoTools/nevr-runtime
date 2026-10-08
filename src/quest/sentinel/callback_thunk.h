@@ -3,32 +3,43 @@
  * A GOT slot holds a bare C function pointer, so the hook has no place to carry
  * state. CallbackThunk<Tag, Ret(Args...)> gives one hooked game function its own
  * statically allocated entry point, original-call pointer and handler, all typed
- * from the signature the binary was checked against. The game calls Entry();
- * Entry() calls the handler, or the original when no handler is armed.
+ * from the signature the binary was checked against. The game calls
+ * EntryAddress(); the entry calls the handler, or the original when no handler
+ * is armed.
  *
  *   using Thunk = CallbackThunk<MyTag, int(int, const char*)>;
  *   Thunk::Arm(&MyHandler);                       // int MyHandler(Thunk::Fn, int, const char*)
  *   hook.Install(target, Thunk::EntryAddress(), Thunk::OriginalOut());
  *
- * Contract for a handler:
- *   - it receives the original function and the call's arguments by value;
- *   - it returns what the game should see;
- *   - it must not throw. A std::exception that escapes is caught here, logged,
- *     counted, and the call falls back to the original function, so a handler
- *     that already called the original before throwing causes a second call.
- *     Call the original last.
- * An exception that is not a std::exception cannot cross the noexcept entry
- * point and terminates the process; handlers must not throw one.
+ * Exceptions. The game libraries use C++ exceptions (they import __cxa_throw,
+ * __cxa_begin_catch and _Unwind_Resume and carry .gcc_except_table), so the entry
+ * is not noexcept and an exception thrown by the ORIGINAL function reaches the
+ * game's own handler unchanged, exactly as it would without the hook. The `Fn`
+ * a handler receives is a proxy for the original that records whether it was
+ * called, whether it returned, and what it returned. What happens when the
+ * handler itself throws a std::exception:
+ *
+ *   - the original was not called yet: the failure is logged and counted, and the
+ *     original runs once with the call's arguments;
+ *   - the original threw: that exception is rethrown to the game (not ours);
+ *   - the original already returned: the failure is logged and counted, the
+ *     original is NOT called again, and its recorded result is returned.
+ *
+ * An exception that is not a std::exception thrown by a handler propagates to the
+ * game's frames like any other; handlers must not throw one. The recorded result
+ * requires Ret to be copy-constructible.
  *
  * Until the original has been published a call returns a value-initialised Ret
- * and logs once. Install publishes the original before it changes the slot, so
- * the game cannot reach that path through a hook installed by GotHook.
+ * and logs. GotHook::Install publishes the original before it changes the slot,
+ * so the game cannot reach that path through a hook installed by GotHook.
  */
 #pragma once
 
 #include <atomic>
 #include <cstdint>
 #include <exception>
+#include <optional>
+#include <type_traits>
 
 #include "hook_log.h"
 
@@ -49,6 +60,7 @@ class CallbackThunk<Tag, Ret(Args...)> {
   // Where Install stores the original function (the `originalOut` argument).
   static void** OriginalOut() noexcept { return &original_; }
 
+  // The real original function (not the proxy a handler receives).
   static Fn Original() noexcept {
     return reinterpret_cast<Fn>(__atomic_load_n(&original_, __ATOMIC_ACQUIRE));
   }
@@ -68,7 +80,34 @@ class CallbackThunk<Tag, Ret(Args...)> {
   }
 
  private:
-  static Ret Entry(Args... args) noexcept {
+  struct Empty {};
+  using Stored = std::conditional_t<std::is_void_v<Ret>, Empty, Ret>;
+
+  // What the handler did with the original during one call.
+  struct CallState {
+    unsigned calls = 0;
+    bool threw = false;  // set before the original runs, cleared when it returns
+    std::optional<Stored> result;
+  };
+
+  // The `Fn original` a handler receives. Outside a handler call it just forwards.
+  static Ret Proxy(Args... args) {
+    const Fn original = Original();
+    CallState* const state = current_;
+    if (state == nullptr) return original(args...);
+    ++state->calls;
+    state->threw = true;
+    if constexpr (std::is_void_v<Ret>) {
+      original(args...);
+      state->threw = false;
+    } else {
+      state->result.emplace(original(args...));
+      state->threw = false;
+      return *state->result;
+    }
+  }
+
+  static Ret Entry(Args... args) {
     calls_.fetch_add(1, std::memory_order_relaxed);
     const Fn original = Original();
     if (original == nullptr) {
@@ -77,12 +116,24 @@ class CallbackThunk<Tag, Ret(Args...)> {
     }
     const Handler handler = handler_.load(std::memory_order_acquire);
     if (handler == nullptr) return original(args...);
+
+    CallState state;
+    struct Scope {
+      CallState* outer;
+      explicit Scope(CallState* inner) : outer(current_) { current_ = inner; }
+      ~Scope() { current_ = outer; }
+    } scope(&state);
     try {
-      return handler(original, args...);
+      return handler(&Proxy, args...);
     } catch (const std::exception&) {
-      ReportFault("handler_threw", "call_original");
+      if (state.threw) throw;
+      if (state.calls == 0) {
+        ReportFault("handler_threw", "call_original");
+        return original(args...);
+      }
+      ReportFault("handler_threw_after_original", "return_original_result");
+      if constexpr (!std::is_void_v<Ret>) return *state.result;
     }
-    return original(args...);
   }
 
   // Counts every fault; logs the first and then one in every 4096, so a hook on
@@ -90,8 +141,8 @@ class CallbackThunk<Tag, Ret(Args...)> {
   static void ReportFault(const char* status, const char* action) noexcept {
     const std::uint64_t n = faults_.fetch_add(1, std::memory_order_relaxed) + 1;
     if (n == 1 || n % 4096 == 0) {
-      LogEvent(LogLevel::kError, "event=callback_thunk status=%s action=%s faults=%llu", status,
-               action, static_cast<unsigned long long>(n));
+      LogFields(LogLevel::kError, "callback_thunk",
+                {{"status", status}, {"action", action}, {"faults", static_cast<long long>(n)}});
     }
   }
 
@@ -99,6 +150,7 @@ class CallbackThunk<Tag, Ret(Args...)> {
   inline static std::atomic<Handler> handler_{nullptr};
   inline static std::atomic<std::uint64_t> calls_{0};
   inline static std::atomic<std::uint64_t> faults_{0};
+  inline static thread_local CallState* current_ = nullptr;
 };
 
 }  // namespace sentinel

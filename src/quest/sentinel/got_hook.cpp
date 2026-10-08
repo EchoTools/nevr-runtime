@@ -1,14 +1,15 @@
 #include "got_hook.h"
 
+#include <fcntl.h>
 #include <link.h>  // dl_iterate_phdr, struct dl_phdr_info
+#include <pthread.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
-#include <mutex>
-#include <vector>
 
 #include "core/hook_lifecycle.h"
 #include "hook_log.h"
@@ -17,37 +18,49 @@ namespace sentinel {
 
 namespace {
 
-using ULL = unsigned long long;
-
 constexpr std::size_t kSlotSize = sizeof(void*);
 static_assert(sizeof(Elf64_Rela) == 24, "ELF64 RELA entry layout");
 
-// ---- process-wide slot ownership -------------------------------------------
+// ---- process-wide lock, slot ownership, store observer ------------------------
 
-std::mutex& RegistryMutex() {
-  static std::mutex m;
-  return m;
-}
-std::vector<void**>& RegistrySlots() {
-  static std::vector<void**> v;
-  return v;
-}
+// One mutex covers slot reservation and every slot write. Writes must be
+// serialized process-wide, not per handle: two handles on different slots of one
+// RELRO page each make the page writable and then read-only again, and without a
+// common lock the second handle's mprotect(PROT_READ) can land between the first
+// handle's mprotect(PROT_WRITE) and its store. A pthread mutex is used because it
+// cannot throw, and this code runs from an ELF constructor.
+pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 
-bool ReserveSlot(void** slot) {
-  const std::lock_guard<std::mutex> lock(RegistryMutex());
-  for (void** s : RegistrySlots()) {
-    if (s == slot) return false;
+class Lock {
+ public:
+  Lock() { pthread_mutex_lock(&g_lock); }
+  ~Lock() { pthread_mutex_unlock(&g_lock); }
+  Lock(const Lock&) = delete;
+  Lock& operator=(const Lock&) = delete;
+};
+
+constexpr std::size_t kMaxSlots = 64;
+void** g_slots[kMaxSlots] = {};
+std::size_t g_slotCount = 0;
+
+std::atomic<StoreObserver> g_storeObserver{nullptr};
+
+GotStatus ReserveSlot(void** slot) {
+  const Lock lock;
+  for (std::size_t i = 0; i < g_slotCount; ++i) {
+    if (g_slots[i] == slot) return GotStatus::kAlreadyInstalled;
   }
-  RegistrySlots().push_back(slot);
-  return true;
+  if (g_slotCount == kMaxSlots) return GotStatus::kRegistryFull;
+  g_slots[g_slotCount++] = slot;
+  return GotStatus::kOk;
 }
 
 void ReleaseSlot(void** slot) {
-  const std::lock_guard<std::mutex> lock(RegistryMutex());
-  auto& slots = RegistrySlots();
-  for (auto it = slots.begin(); it != slots.end(); ++it) {
-    if (*it == slot) {
-      slots.erase(it);
+  const Lock lock;
+  for (std::size_t i = 0; i < g_slotCount; ++i) {
+    if (g_slots[i] == slot) {
+      g_slots[i] = g_slots[--g_slotCount];
+      g_slots[g_slotCount] = nullptr;
       return;
     }
   }
@@ -124,31 +137,84 @@ PageRange PagesOf(const void* slot) {
   return {start, static_cast<std::size_t>(end - start)};
 }
 
-// Stores `value` into `slot`. A page that is RELRO is made writable for the
-// store and protected read-only again; any failure after the page became
-// writable puts the previous value back and tries to re-protect, so the slot is
-// never left patched and the page never silently left writable.
-GotStatus WriteSlot(void** slot, void* value, bool restoreReadOnly, int* savedErrno) {
+// Protection (PROT_*) of the mapping that contains `addr`, from /proc/self/maps,
+// or -1 if it cannot be read. Reads with a fixed buffer, no allocation.
+int LiveProtection(const void* addr) {
+  const int fd = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return -1;
+  const std::uintptr_t want = reinterpret_cast<std::uintptr_t>(addr);
+  char chunk[1024];
+  char line[160];
+  std::size_t len = 0;
+  int result = -1;
+  for (;;) {
+    const ssize_t n = read(fd, chunk, sizeof(chunk));
+    if (n <= 0) break;
+    for (ssize_t i = 0; i < n && result < 0; ++i) {
+      const char c = chunk[i];
+      if (c != '\n') {
+        if (len < sizeof(line) - 1) line[len++] = c;
+        continue;
+      }
+      line[len] = '\0';
+      len = 0;
+      unsigned long long lo = 0, hi = 0;
+      char perms[8] = {};
+      if (std::sscanf(line, "%llx-%llx %7s", &lo, &hi, perms) == 3 && want >= lo && want < hi) {
+        result = (perms[0] == 'r' ? PROT_READ : 0) | (perms[1] == 'w' ? PROT_WRITE : 0) |
+                 (perms[2] == 'x' ? PROT_EXEC : 0);
+      }
+    }
+    if (result >= 0) break;
+  }
+  close(fd);
+  return result;
+}
+
+// `relroReadOnly` is the fallback when /proc/self/maps is unreadable.
+// Replaces `expected` with `value` in `slot`, and only if the slot still holds
+// `expected`: a hook someone chained on top, or any other writer, is never
+// overwritten. A RELRO page is made writable for the store and protected
+// read-only again. The whole sequence runs under the process-wide lock. If the
+// page cannot be re-protected the store is undone (compare-and-swap, so only our
+// own value is rolled back) and re-protection is retried.
+GotStatus WriteSlot(void** slot, void* expected, void* value, bool relroReadOnly,
+                    int* savedErrno) {
+  const Lock lock;
+  if (__atomic_load_n(slot, __ATOMIC_ACQUIRE) != expected) return GotStatus::kSlotChanged;
   const PageRange pages = PagesOf(slot);
-  void* const previous = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
+  // The protection to restore is read here, under the lock: another handle on the
+  // same page may have it writable right now, and a value sampled earlier could
+  // describe that transient state.
+  const int live = LiveProtection(slot);
+  const bool restoreReadOnly = live >= 0 ? (live & PROT_WRITE) == 0 : relroReadOnly;
   if (restoreReadOnly &&
       mprotect(reinterpret_cast<void*>(pages.start), pages.length, PROT_READ | PROT_WRITE) != 0) {
     *savedErrno = errno;
     return GotStatus::kProtectFailed;
   }
-  __atomic_store_n(slot, value, __ATOMIC_RELEASE);
+  const StoreObserver observer = g_storeObserver.load(std::memory_order_acquire);
+  if (observer != nullptr) observer(slot, value);
+
+  void* seen = expected;
   GotStatus status = GotStatus::kOk;
-  if (__atomic_load_n(slot, __ATOMIC_ACQUIRE) != value) {
-    __atomic_store_n(slot, previous, __ATOMIC_RELEASE);
-    status = GotStatus::kWriteVerifyFailed;
+  if (!__atomic_compare_exchange_n(slot, &seen, value, false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+    status = GotStatus::kSlotChanged;
+  } else if (__atomic_load_n(slot, __ATOMIC_ACQUIRE) != value) {
+    status = GotStatus::kWriteVerifyFailed;  // a writer outside this lock stored after us; theirs stays
   }
   if (restoreReadOnly &&
       mprotect(reinterpret_cast<void*>(pages.start), pages.length, PROT_READ) != 0) {
     *savedErrno = errno;
-    if (status == GotStatus::kOk) __atomic_store_n(slot, previous, __ATOMIC_RELEASE);
+    if (status == GotStatus::kOk) {
+      void* ours = value;
+      __atomic_compare_exchange_n(slot, &ours, expected, false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE);
+    }
     if (mprotect(reinterpret_cast<void*>(pages.start), pages.length, PROT_READ) != 0) {
-      LogEvent(LogLevel::kError, "event=got_hook op=protect status=page_left_writable page=0x%llx",
-               static_cast<ULL>(pages.start));
+      char page[19];
+      LogFields(LogLevel::kError, "got_hook",
+                {{"op", "protect"}, {"status", "page_left_writable"},
+                 {"page", HexString(page, pages.start)}});
     }
     return GotStatus::kRestoreProtectFailed;
   }
@@ -219,6 +285,7 @@ const char* GotStatusName(GotStatus status) {
     case GotStatus::kNotInstalled:         return "not_installed";
     case GotStatus::kModuleChanged:        return "module_changed";
     case GotStatus::kSlotChanged:          return "slot_changed";
+    case GotStatus::kRegistryFull:         return "registry_full";
   }
   return "unknown";
 }
@@ -420,29 +487,34 @@ struct Prepared {
   ElfImage image;
   SlotResolution resolution;
   void* original = nullptr;
-  char detail[160] = {};  // status-specific key=value pairs appended to the failure line
+  char actualBuildId[64] = {};   // filled when a build-ID check fails
 };
 
 // The one failure record for an operation. Build IDs and module names are public
 // identifiers; nothing here is a credential.
 void LogFailure(const char* op, const GotTarget& t, GotStatus status, const char* stage, int err,
-                const char* detail = "") {
-  LogEvent(LogLevel::kError,
-           "event=got_hook op=%s status=%s stage=%s module=%s symbol=%s reloc=%s errno=%d%s%s", op,
-           GotStatusName(status), stage, t.module != nullptr ? t.module : "(null)",
-           t.symbol != nullptr ? t.symbol : "(null)", RelocKindName(t.kind), err,
-           detail[0] != '\0' ? " " : "", detail);
+                const char* actualBuildId = nullptr) {
+  const char* module = t.module != nullptr ? t.module : "(null)";
+  const char* symbol = t.symbol != nullptr ? t.symbol : "(null)";
+  if (actualBuildId != nullptr) {
+    LogFields(LogLevel::kError, "got_hook",
+              {{"op", op}, {"status", GotStatusName(status)}, {"stage", stage}, {"module", module},
+               {"symbol", symbol}, {"reloc", RelocKindName(t.kind)}, {"errno", err},
+               {"expected_build_id", t.buildId != nullptr ? t.buildId : ""},
+               {"actual_build_id", actualBuildId[0] != '\0' ? actualBuildId : "(none)"}});
+    return;
+  }
+  LogFields(LogLevel::kError, "got_hook",
+            {{"op", op}, {"status", GotStatusName(status)}, {"stage", stage}, {"module", module},
+             {"symbol", symbol}, {"reloc", RelocKindName(t.kind)}, {"errno", err}});
 }
 
 // Everything that can be checked without writing. On kOk the slot is reserved.
 GotStatus Prepare(const GotTarget& target, void* hookFn, ImageLookup lookup, Prepared* out) {
   if (!lookup(target.module, &out->image)) return GotStatus::kModuleNotLoaded;
   if (target.buildId != nullptr) {
-    char actual[64] = {};
-    if (!ReadBuildId(out->image, actual, sizeof(actual)) ||
-        std::strcmp(actual, target.buildId) != 0) {
-      std::snprintf(out->detail, sizeof(out->detail), "expected=%s actual=%s", target.buildId,
-                    actual[0] != '\0' ? actual : "(none)");
+    if (!ReadBuildId(out->image, out->actualBuildId, sizeof(out->actualBuildId)) ||
+        std::strcmp(out->actualBuildId, target.buildId) != 0) {
       return GotStatus::kBuildIdMismatch;
     }
   }
@@ -456,12 +528,17 @@ GotStatus Prepare(const GotTarget& target, void* hookFn, ImageLookup lookup, Pre
   } else if (current == nullptr || !IsExecutableAddress(current)) {
     return GotStatus::kOriginalImplausible;
   }
-  if (!ReserveSlot(out->resolution.slot)) return GotStatus::kAlreadyInstalled;
+  const GotStatus reserved = ReserveSlot(out->resolution.slot);
+  if (reserved != GotStatus::kOk) return reserved;
   out->original = current;
   return GotStatus::kOk;
 }
 
 }  // namespace
+
+StoreObserver SetStoreObserver(StoreObserver observer) {
+  return g_storeObserver.exchange(observer, std::memory_order_acq_rel);
+}
 
 GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** originalOut,
                            ImageLookup lookup) {
@@ -487,15 +564,15 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
         return true;
       },
       [&] {
-        status = WriteSlot(prepared.resolution.slot, hookFn, prepared.resolution.restoreReadOnly,
-                           &savedErrno);
+        status = WriteSlot(prepared.resolution.slot, prepared.original, hookFn,
+                           prepared.resolution.restoreReadOnly, &savedErrno);
         return status == GotStatus::kOk;
       },
       [&] { ReleaseSlot(prepared.resolution.slot); });
 
   if (stage != nevr::hook::AttachStage::kAttached) {
     LogFailure("install", target, status, nevr::hook::AttachStageName(stage), savedErrno,
-               prepared.detail);
+               status == GotStatus::kBuildIdMismatch ? prepared.actualBuildId : nullptr);
     return status;
   }
   target_ = target;
@@ -506,17 +583,18 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
   original_ = prepared.original;
   restoreReadOnly_ = prepared.resolution.restoreReadOnly;
   installed_ = true;
-  LogEvent(LogLevel::kInfo,
-           "event=got_hook op=install status=ok module=%s symbol=%s reloc=%s slot_vaddr=0x%llx "
-           "load_bias=0x%llx",
-           target.module, target.symbol, RelocKindName(target.kind),
-           static_cast<ULL>(prepared.resolution.slotVaddr), static_cast<ULL>(image_.base));
+  char vaddr[19], bias[19];
+  LogFields(LogLevel::kInfo, "got_hook",
+            {{"op", "install"}, {"status", "ok"}, {"module", target.module},
+             {"symbol", target.symbol}, {"reloc", RelocKindName(target.kind)},
+             {"slot_vaddr", HexString(vaddr, prepared.resolution.slotVaddr)},
+             {"load_bias", HexString(bias, image_.base)}});
   return GotStatus::kOk;
 }
 
 GotStatus GotHook::Remove() {
   if (!installed_) {
-    LogEvent(LogLevel::kWarn, "event=got_hook op=remove status=not_installed");
+    LogFields(LogLevel::kWarn, "got_hook", {{"op", "remove"}, {"status", "not_installed"}});
     return GotStatus::kNotInstalled;
   }
   ElfImage now;
@@ -531,21 +609,29 @@ GotStatus GotHook::Remove() {
     LogFailure("remove", target_, GotStatus::kModuleChanged, "revalidate", 0);
     return GotStatus::kModuleChanged;
   }
-  if (__atomic_load_n(slot_, __ATOMIC_ACQUIRE) != hookFn_) {
-    LogFailure("remove", target_, GotStatus::kSlotChanged, "revalidate", 0);
-    return GotStatus::kSlotChanged;
-  }
+  // Compare-and-swap under the write lock: a hook chained on top of ours, or a
+  // module reloaded at the same base, leaves kSlotChanged and the slot untouched.
   int savedErrno = 0;
-  const GotStatus status = WriteSlot(slot_, original_, restoreReadOnly_, &savedErrno);
+  const GotStatus status = WriteSlot(slot_, hookFn_, original_, restoreReadOnly_, &savedErrno);
   if (status != GotStatus::kOk) {
     LogFailure("remove", target_, status, "restore", savedErrno);
     return status;
   }
   ReleaseSlot(slot_);
   installed_ = false;
-  LogEvent(LogLevel::kInfo, "event=got_hook op=remove status=ok module=%s symbol=%s reloc=%s",
-           target_.module, target_.symbol, RelocKindName(target_.kind));
+  LogFields(LogLevel::kInfo, "got_hook",
+            {{"op", "remove"}, {"status", "ok"}, {"module", target_.module},
+             {"symbol", target_.symbol}, {"reloc", RelocKindName(target_.kind)}});
   return GotStatus::kOk;
+}
+
+void GotHook::Forget() {
+  if (!installed_) return;
+  ReleaseSlot(slot_);
+  installed_ = false;
+  LogFields(LogLevel::kWarn, "got_hook",
+            {{"op", "forget"}, {"status", "ok"}, {"module", target_.module},
+             {"symbol", target_.symbol}, {"reloc", RelocKindName(target_.kind)}});
 }
 
 }  // namespace sentinel

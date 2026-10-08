@@ -16,8 +16,12 @@
  * (R_AARCH64_JUMP_SLOT or R_AARCH64_GLOB_DAT). Nothing is patched unless
  *
  *   - the module is loaded and its optional build ID matches,
- *   - for a JUMP_SLOT, the module is linked BIND_NOW (a lazy slot holds a
- *     resolver stub that overwrites the slot on first call, undoing the hook),
+ *   - for a JUMP_SLOT, the module is linked BIND_NOW. A lazily bound slot starts
+ *     out holding the address of a lazy-binding stub, not of the target, and the
+ *     dynamic linker rewrites the slot when it resolves it. Both pinned Quest
+ *     libraries are BIND_NOW (`readelf -d`: FLAGS BIND_NOW). How Bionic resolves
+ *     lazy slots was not measured here, so a lazy JUMP_SLOT is refused rather
+ *     than hooked on a guess,
  *   - exactly one relocation of the requested type names the symbol (or the one
  *     at the pinned link-time address does),
  *   - the relocation has no addend and its slot is an aligned pointer inside a
@@ -25,6 +29,16 @@
  *   - the slot holds the expected original, or an address inside an executable
  *     mapping, and does not already hold the hook,
  *   - no other handle in the process owns the slot.
+ *
+ * Writes are serialized by one process-wide lock and are compare-and-swap: Install
+ * stores only over the original it read, Remove only over its own hook. A slot
+ * changed by anyone else (a hook chained on top, a module reloaded at the same
+ * base) yields kSlotChanged and is left alone. The protection a write restores is
+ * read from /proc/self/maps under that lock; the PT_GNU_RELRO range is the fallback when that is
+ * unreadable. At most 8 distinct slots per symbol and relocation type are
+ * examined; more than one match is refused unless the target pins the slot, so a
+ * symbol with more than 8 slots in one module cannot be hooked by a pin beyond
+ * the eighth.
  *
  * Install and Remove log exactly one structured line (hook_log.h) and return a
  * status; a failed Install leaves the slot, its page protection and the caller's
@@ -74,7 +88,7 @@ enum class GotStatus : std::uint8_t {
   kWrongRelocationType,    // the symbol is only relocated under the other type
   kAmbiguousRelocation,    // several slots match and no link-time address pins one
   kSlotOffsetMismatch,     // the pinned link-time address is not a matching relocation
-  kLazyBinding,            // JUMP_SLOT in a module not linked BIND_NOW: the resolver would overwrite the hook
+  kLazyBinding,            // JUMP_SLOT in a module not linked BIND_NOW (see above)
   kUnsupportedAddend,
   kSlotMisaligned,
   kSlotOutsideImage,       // not inside a writable PT_LOAD
@@ -85,7 +99,8 @@ enum class GotStatus : std::uint8_t {
   kRestoreProtectFailed,
   kNotInstalled,
   kModuleChanged,          // Remove: the module unloaded, moved or no longer resolves the slot
-  kSlotChanged,            // Remove: the slot no longer holds our hook (someone chained on top)
+  kSlotChanged,            // the slot no longer holds the value this write expected (chained hook, reload)
+  kRegistryFull,           // more than 64 hooks in one process
 };
 
 // Stable tokens for log lines and tests.
@@ -142,6 +157,12 @@ struct SlotResolution {
 SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
                            const RelocNumbers& relocs);
 
+// Test seam. Called with the process-wide write lock held, after the slot's page
+// is writable and immediately before the compare-and-swap store, for Install and
+// Remove. Production code leaves it unset. Returns the previous observer.
+using StoreObserver = void (*)(void** slot, void* value);
+StoreObserver SetStoreObserver(StoreObserver observer);
+
 // One installed (or empty) hook. Not copyable. Install and Remove on one handle
 // must not race each other; the callbacks the hook redirects may run on any
 // thread at any time.
@@ -160,6 +181,12 @@ class GotHook {
   // Writes the original value back and releases the slot. The pointer previously
   // published through `originalOut` stays valid: it is the real function.
   GotStatus Remove();
+
+  // Drops the handle without writing: releases the slot reservation and clears
+  // the state. For a module that was unloaded and loaded again at the same base,
+  // where Remove would report kSlotChanged for a slot that now holds a fresh
+  // value. Does nothing if not installed.
+  void Forget();
 
   bool installed() const { return installed_; }
 
