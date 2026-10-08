@@ -15,14 +15,25 @@ uint64_t ReadLE64(const uint8_t* p) {
   return value;
 }
 
-}  // namespace
-
 void AppendLE64(std::string& buffer, uint64_t value) {
   for (int i = 0; i < 8; ++i) {
     buffer.push_back(static_cast<char>(value & 0xFF));
     value >>= 8;
   }
 }
+
+ReadStatus ReadMessageAt(const uint8_t* data, std::size_t remaining, Message* out) {
+  *out = Message{};
+  if (remaining < kHeaderSize) return ReadStatus::End;
+  if (std::memcmp(data, kMarker, kMarkerSize) != 0) return ReadStatus::BadMarker;
+  out->symbol = ReadLE64(data + 8);
+  out->length = ReadLE64(data + 16);
+  if (out->length > remaining - kHeaderSize) return ReadStatus::Truncated;
+  out->payload = data + kHeaderSize;
+  return ReadStatus::Ok;
+}
+
+}  // namespace
 
 std::string BuildMessage(uint64_t symbol, std::string_view payload) {
   std::string message;
@@ -60,19 +71,12 @@ std::string BuildFriendListSubscribe() {
   return BuildMessage(kSymFriendListSubscribe, std::string(kFriendListSubscribePayloadSize, '\0'));
 }
 
-ReadStatus ReadMessage(const uint8_t* data, std::size_t remaining, Message* out) {
-  if (remaining < kHeaderSize) return ReadStatus::End;
-  if (std::memcmp(data, kMarker, kMarkerSize) != 0) return ReadStatus::BadMarker;
-  out->symbol = ReadLE64(data + 8);
-  out->length = ReadLE64(data + 16);
-  if (out->length > remaining - kHeaderSize) return ReadStatus::Truncated;
-  out->payload = data + kHeaderSize;
-  return ReadStatus::Ok;
-}
-
 ReadStatus ReadMessage(const std::string& frame, std::size_t offset, Message* out) {
-  if (offset > frame.size()) return ReadStatus::End;
-  return ReadMessage(reinterpret_cast<const uint8_t*>(frame.data()) + offset, frame.size() - offset, out);
+  if (offset > frame.size()) {
+    *out = Message{};
+    return ReadStatus::End;
+  }
+  return ReadMessageAt(reinterpret_cast<const uint8_t*>(frame.data()) + offset, frame.size() - offset, out);
 }
 
 uint64_t FirstSymbol(const std::string& frame) {

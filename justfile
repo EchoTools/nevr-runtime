@@ -265,6 +265,15 @@ test-auth-unit:
     #!/usr/bin/env bash
     set -euo pipefail
     unset VCPKG_ROOT
+    # A test binary that hangs must fail the gate, not block it: 124 is timeout's "timed out" status.
+    run_test() {
+        local rc=0
+        timeout -k 10 900 wine "$1" || rc=$?
+        if [[ "$rc" -ne 0 ]]; then
+            echo "test-auth-unit: FAIL — $1 exited $rc (124 = timed out after 900s)" >&2
+            exit "$rc"
+        fi
+    }
     cmake --preset {{ preset }} -DBUILD_TESTING=ON > /dev/null 2>&1 \
         || cmake --preset {{ preset }} -DBUILD_TESTING=ON
     cmake --build --preset {{ preset }} --target test_xpid_patch --target test_parse_endpoint --target test_behavioral --target test_token_auth --target test_messages --target test_crash_recovery --target test_nevr_config --target test_service_map --target test_service_config --target test_social_facade --target test_scenario_early_quit --target test_early_quit_lockout --target test_schannel_cred_guard --target test_hooking --target test_plugin_load_plan --target test_system_module_loader --target test_login_redirect_override --target test_websocket_frame --target test_protobuf_transport --target test_websocket_client_auth --target test_url_diagnostics --target test_serverdb_uri --target test_winhttp_stub --target test_callback_unregistration --target test_server_context --target test_session_unregister --target test_mic_lifecycle --target test_telemetry_snapshot_store --target test_coop_ai_trace --target test_evr_codec
@@ -276,115 +285,115 @@ test-auth-unit:
         echo "       (is 'gtest' available in vcpkg for triplet x64-mingw-static?)" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_mic_dsp.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_game_image_guard.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_token_auth.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_messages.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_crash_recovery.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_parse_endpoint.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         echo "       (is 'gtest' available in vcpkg for triplet x64-mingw-static?)" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_behavioral.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         echo "       (is 'gtest' available in vcpkg for triplet x64-mingw-static?)" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_nevr_config.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         echo "       (is 'gtest'/'yaml-cpp' available in vcpkg for triplet x64-mingw-static?)" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_service_map.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         echo "       (is 'gtest'/'yaml-cpp' available in vcpkg for triplet x64-mingw-static?)" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_service_config.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_social_facade.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_early_quit_lockout.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_scenario_early_quit.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_schannel_cred_guard.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_hooking.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     bin="build/{{ preset }}/bin/test_plugin_load_plan.exe"
     if [[ ! -f "$bin" ]]; then
         echo "ERROR: GTest binary not found: $bin" >&2
         echo "       (is 'gtest'/'yaml-cpp' available in vcpkg for triplet x64-mingw-static?)" >&2
         exit 1
     fi
-    wine "$bin"
+    run_test "$bin"
     for test_name in test_system_module_loader test_login_redirect_override test_websocket_frame test_protobuf_transport test_websocket_client_auth test_url_diagnostics test_serverdb_uri test_winhttp_stub test_callback_unregistration test_server_context test_session_unregister test_mic_lifecycle test_telemetry_snapshot_store test_coop_ai_trace test_evr_codec; do
         bin="build/{{ preset }}/bin/${test_name}.exe"
         if [[ ! -f "$bin" ]]; then
             echo "ERROR: GTest binary not found: $bin" >&2
             exit 1
         fi
-        wine "$bin"
+        run_test "$bin"
     done
     # test_broadcaster_bridge / test_broadcaster_guards moved to
     # ~/src/nevr-runtime-plugins with the broadcaster-bridge plugin (2026-07-26).
@@ -413,15 +422,17 @@ test-quest-shared:
         -o "$out/service_redirect_test"
     "$out/service_redirect_test"
     # The codec test parses the login profile with nlohmann::json. Use the header the build installed
-    # from vcpkg.json, never a system package: fail loudly when the build has not installed it.
-    json_inc=""
-    for d in build/{{ preset }}/vcpkg_installed/*/include; do
-        if [[ -f "$d/nlohmann/json.hpp" ]]; then json_inc="$d"; break; fi
-    done
-    if [[ -z "$json_inc" ]]; then
-        echo "test-quest-shared: FAIL — nlohmann/json.hpp not found under build/{{ preset }}/vcpkg_installed/*/include; run 'just build' first (the header comes from vcpkg.json, not a system package)" >&2
+    # from vcpkg.json for the mingw triplet the mingw-* presets build with, never a system package and
+    # never whichever triplet sorts first. Only the nlohmann directory is exposed to the host compiler.
+    # Fail loudly when the build has not installed it.
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-shared: FAIL — $json_src/json.hpp not found; run 'just build' with a mingw-* preset first (the header comes from vcpkg.json for the x64-mingw-static triplet, not a system package)" >&2
         exit 1
     fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
     g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" \
         src/runtime/compat/evr_codec.cpp \
         src/runtime/compat/login_profile.cpp \
