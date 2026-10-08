@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -495,12 +496,102 @@ void TestExceptionContainment() {
 }
 
 void TestLocalAccount() {
+  QCHECK(&Facade::Instance() == &Facade::Instance());  // constructed on first use, one object
   // The process-wide model: SetLocalAccount makes the account the facade's local member.
   SetLocalAccount(4242, "bob");
   const SocialParty::View view = SocialParty::Global().Snapshot();
   QCHECK(view.selfId == 4242 && view.selfName == "bob");
   SetLocalAccount(4242, nullptr);  // no name: the id stays, the name is not invented
   QCHECK(SocialParty::Global().Snapshot().selfId == 4242);
+}
+
+
+// ---- a game exception passes through the facade's frames untouched ---------------------------
+// The callbacks below are "game code": they throw, and the test plays the game's caller, catching
+// above the slot. The slot frames between them carry no landing pad (tools/check_quest_social_frames.sh
+// pins that on the object), so nothing in the facade may catch, count or swallow the exception.
+
+struct GameError : std::runtime_error {
+  GameError() : std::runtime_error("game callback failed") {}
+};
+void CbThrowVoid(void*, const void*) { throw GameError(); }
+std::uint32_t CbGateThrows(void*, const void*, std::uint32_t, std::uint32_t) { throw GameError(); }
+
+void SetCallback(std::array<std::uint8_t, kCallbackBytes>* bytes, std::size_t index, void* fn) {
+  const std::uintptr_t function = reinterpret_cast<std::uintptr_t>(fn);
+  std::memcpy(bytes->data() + kCallbackStride * index + 0x18, &function, sizeof(function));
+}
+
+void TestGameExceptionThroughUpdate() {
+  World w;
+  auto callbacks = MakeCallbacks();
+  SetCallback(&callbacks, kCbCreated, reinterpret_cast<void*>(&CbThrowVoid));
+  Init(w, callbacks);
+  w.party.SetSelf(kSelf, "alice");
+  FeedParty(w, "PartyCreateSuccess", 777, kSelf);  // queues a Created event, delivered by the next Update
+  using UpdateFn = void (*)(void*, const void*);
+  const std::uint8_t flags = 0;
+  bool caught = false;
+  try {
+    SlotFn<UpdateFn>(w.Obj(), kUpdate)(w.Obj(), &flags);
+  } catch (const GameError&) {
+    caught = true;
+  }
+  QCHECK(caught);                         // the game's exception reached the game's caller
+  QCHECK(w.facade->SlotFailures() == 0);  // and the facade neither caught nor counted it
+  // The facade is intact afterwards: the next Update runs and the slots answer.
+  g_rec.calls.clear();
+  SlotFn<UpdateFn>(w.Obj(), kUpdate)(w.Obj(), &flags);
+  QCHECK(SlotFn<U64_0>(w.Obj(), kId)(w.Obj()) == 777);
+}
+
+void TestGameExceptionThroughGate() {
+  World w;
+  auto callbacks = MakeCallbacks();
+  SetCallback(&callbacks, kCbInviteAccepted, reinterpret_cast<void*>(&CbGateThrows));
+  Init(w, callbacks);
+  w.party.SetSelf(kSelf, "alice");
+  FeedParty(w, "PartyInviteNotify", 555, 2002);
+  Update(w, 0);
+  bool caught = false;
+  try {
+    SlotFn<Void_U32>(w.Obj(), kAcceptInvite)(w.Obj(), 0);
+  } catch (const GameError&) {
+    caught = true;
+  }
+  QCHECK(caught);
+  QCHECK(w.facade->SlotFailures() == 0);
+  caught = false;
+  try {
+    SlotFn<Void_U64>(w.Obj(), kJoinInternal)(w.Obj(), 556);
+  } catch (const GameError&) {
+    caught = true;
+  }
+  QCHECK(caught);
+  QCHECK(w.facade->SlotFailures() == 0);
+}
+
+void TestEventBatchOverflow() {
+  World w;
+  Init(w, MakeCallbacks());
+  w.party.SetSelf(kSelf, "alice");
+  g_rec.calls.clear();
+  // 40 senders, one invite each: 40 InviteReceived events in one frame, 32 fit a batch.
+  for (std::uint64_t sender = 3000; sender < 3040; ++sender) FeedParty(w, "PartyInviteNotify", 9000 + sender, sender);
+  Update(w, 0);
+  std::size_t received = 0;
+  for (const std::string& c : g_rec.calls) received += c == "u" + std::to_string(kCbInviteReceived) + ":0" ? 1 : 0;
+  QCHECK(received == 32);
+  QCHECK(SlotFn<U32_0>(w.Obj(), kInviteCount)(w.Obj()) == 40);  // the model kept all 40; only the callbacks were capped
+}
+
+void CheckInstanceSurvivesExit() {
+  // Registered before Instance() is first called, so it runs after any destructor of the instance would.
+  if (Facade::ProcessWideDestroyedCountForTest() != 0) {
+    std::fprintf(stderr, "social_facade_test: the process-wide Facade was destroyed at exit\n");
+    std::_Exit(3);
+  }
+  std::printf("social_facade_test: the process-wide Facade survives process exit\n");
 }
 
 void TestFrameWalker() {
@@ -531,6 +622,7 @@ void TestFrameWalker() {
 }  // namespace
 
 int main() {
+  std::atexit(&CheckInstanceSurvivesExit);
   const sentinel::LogSink previous = sentinel::SetLogSink(&LogToNowhere);
   TestObjectShape();
   TestInitializeAndShutdown();
@@ -545,6 +637,9 @@ int main() {
   TestRecentlyMet();
   TestExceptionContainment();
   TestFrameWalker();
+  TestGameExceptionThroughUpdate();
+  TestGameExceptionThroughGate();
+  TestEventBatchOverflow();
   TestLocalAccount();
   sentinel::SetLogSink(previous);
   if (quest_test::Failures() != 0) {

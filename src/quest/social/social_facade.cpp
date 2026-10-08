@@ -12,6 +12,7 @@
 
 #include "hook_log.h"
 #include "quest/social/social_abi.h"
+#include "quest/social/social_internal.h"
 
 namespace quest_social {
 namespace {
@@ -27,6 +28,8 @@ constexpr std::uint64_t kCreateRetrySeconds = 4;
 constexpr std::uint8_t kUpdateWantsParty = 1;  // Update's flags byte, bit 0: a party should exist
 
 }  // namespace
+
+static std::atomic<std::uint32_t> g_destroyed{0};
 
 struct Facade::Impl {
   Ports ports;
@@ -45,6 +48,7 @@ struct Facade::Impl {
   std::atomic<std::uint32_t> slotFailures{0};
   std::atomic<std::uint32_t> callbackCalls{0};
 
+  bool processWide = false;  // the Instance(): its destruction is a defect the test pins
   bool createTried = false;
   std::uint64_t lastCreate = 0;
   int lastUpdateFlags = -1;
@@ -126,82 +130,6 @@ void SendParty(Impl& impl, const char* what, const std::vector<SocialParty::Mess
             {{"what", what}, {"count", static_cast<long long>(messages.size())}, {"sent", sent ? "yes" : "NOT_sent"}});
 }
 
-// ---- callbacks into the game ----------------------------------------------------------------
-
-struct CallbackEntry {
-  void* context = nullptr;
-  const void* buffer = nullptr;
-  void* function = nullptr;
-};
-
-CallbackEntry EntryAt(Impl& impl, std::size_t index) {
-  CallbackEntry entry;
-  const std::uint8_t* base = impl.object.data() + 8 + kCallbackStride * index;
-  std::memcpy(&entry.context, base, sizeof(void*));
-  entry.buffer = base + 8;
-  std::memcpy(&entry.function, base + 0x18, sizeof(void*));
-  return entry;
-}
-
-// The delegate proxies are MemberProxy<CR15NetGame, ...>(void* context, const void* buffer, args...).
-template <typename Fn>
-Fn FunctionOf(const CallbackEntry& entry) {
-  Fn fn = nullptr;
-  static_assert(sizeof(fn) == sizeof(entry.function), "function pointer size");
-  std::memcpy(&fn, &entry.function, sizeof(fn));
-  return fn;
-}
-
-void CallVoid(Impl& impl, std::size_t index) {
-  const CallbackEntry e = EntryAt(impl, index);
-  if (e.function == nullptr) return;
-  impl.callbackCalls.fetch_add(1, std::memory_order_relaxed);
-  FunctionOf<void (*)(void*, const void*)>(e)(e.context, e.buffer);
-}
-
-void CallU32(Impl& impl, std::size_t index, std::uint32_t value) {
-  const CallbackEntry e = EntryAt(impl, index);
-  if (e.function == nullptr) return;
-  impl.callbackCalls.fetch_add(1, std::memory_order_relaxed);
-  FunctionOf<void (*)(void*, const void*, std::uint32_t)>(e)(e.context, e.buffer, value);
-}
-
-void CallIdName(Impl& impl, std::size_t index, std::uint64_t id, const char* name) {
-  const CallbackEntry e = EntryAt(impl, index);
-  if (e.function == nullptr) return;
-  impl.callbackCalls.fetch_add(1, std::memory_order_relaxed);
-  FunctionOf<void (*)(void*, const void*, std::uint64_t, const char*)>(e)(e.context, e.buffer, id, name);
-}
-
-// PartyInvitationCB(LocalUserID, u32) -> u32 is the accept gate: nonzero lets the join go ahead. It
-// reads neither argument (libr15 0x127053c), so both are zero.
-bool CallGate(Impl& impl, std::size_t index) {
-  const CallbackEntry e = EntryAt(impl, index);
-  if (e.function == nullptr) return true;
-  impl.callbackCalls.fetch_add(1, std::memory_order_relaxed);
-  const std::uint32_t result =
-      FunctionOf<std::uint32_t (*)(void*, const void*, std::uint32_t, std::uint32_t)>(e)(e.context, e.buffer, 0, 0);
-  return result != 0;
-}
-
-void DispatchEvent(Impl& impl, const SocialParty::Event& event) {
-  using Kind = SocialParty::EventKind;
-  switch (event.kind) {
-    case Kind::kCreated: CallVoid(impl, kCbCreated); break;
-    case Kind::kJoined: CallVoid(impl, kCbJoined); break;
-    case Kind::kJoinFailed: CallU32(impl, kCbJoinFailed, event.code); break;
-    case Kind::kUpdated: CallVoid(impl, kCbUpdated); break;
-    case Kind::kHostChanged: CallVoid(impl, kCbHostChanged); break;
-    case Kind::kLeft: CallVoid(impl, kCbLeft); break;
-    case Kind::kKicked: CallVoid(impl, kCbKicked); break;
-    case Kind::kMemberJoined: CallU32(impl, kCbMemberJoined, event.index); break;
-    case Kind::kMemberUpdated: CallU32(impl, kCbMemberUpdated, event.index); break;
-    case Kind::kMemberLeft: CallIdName(impl, kCbMemberLeft, event.id, event.name.c_str()); break;
-    case Kind::kInviteReceived: CallU32(impl, kCbInviteReceived, 0); break;
-    case Kind::kInviteFailed: break;  // no game callback is driven from here
-  }
-}
-
 // ---- object fields the game reads directly --------------------------------------------------
 
 void ResetLobbyFields(void* self) {
@@ -277,33 +205,6 @@ void SlotKick(void* self, std::uint32_t index) {
 void SlotDismissInvite(void* self, std::uint32_t index) {
   Impl& impl = *OwnerOf(self);
   SendParty(impl, "party invite dismiss", Party(impl).Dismiss(index));
-}
-
-// JoinInternal in CNSOVRSocial's order: drop the invites to that party, defer if a create or join is in
-// flight, run the accept gate, then join.
-void JoinParty(Impl& impl, std::uint64_t partyId) {
-  SocialParty::State& party = Party(impl);
-  if (!party.BeginJoin(partyId)) {
-    LogFields(LogLevel::kInfo, "social_join",
-              {{"party", static_cast<long long>(partyId)}, {"result", "deferred"},
-               {"deferred_party", static_cast<long long>(party.DeferredJoin())}});
-    return;
-  }
-  if (!CallGate(impl, kCbInviteAccepted)) {
-    party.AbandonJoin(partyId);
-    LogFields(LogLevel::kInfo, "social_join", {{"party", static_cast<long long>(partyId)}, {"result", "declined"}});
-    return;
-  }
-  SendParty(impl, "party join", party.Join(partyId));
-}
-
-void SlotJoinInternal(void* self, std::uint64_t partyId) { JoinParty(*OwnerOf(self), partyId); }
-
-void SlotAcceptInvite(void* self, std::uint32_t index) {
-  Impl& impl = *OwnerOf(self);
-  const std::uint64_t partyId = Party(impl).InvitePartyAt(index);
-  LogFields(LogLevel::kInfo, "social_accept", {{"index", index}, {"party", static_cast<long long>(partyId)}});
-  if (partyId != 0) JoinParty(impl, partyId);
 }
 
 void SlotRefreshFriends(void* self) {
@@ -452,26 +353,6 @@ void SyncHostJoinable(Impl& impl) {
   const std::uint32_t wanted = HostWantsJoinable(impl) ? 1U : 0U;
   const std::uint32_t current = view->locked ? 0U : 1U;
   if (wanted != current) SendParty(impl, wanted != 0 ? "party unlock" : "party lock", Party(impl).SetLocked(wanted == 0));
-}
-
-// Once per Update, on the game's thread: publish the model, mirror the fields the game reads, then
-// deliver the events the model queued.
-void PumpParty(Impl& impl) {
-  PublishView(impl);
-  SyncObject(impl, *CurrentView(impl));
-  for (const SocialParty::Event& event : Party(impl).DrainEvents()) DispatchEvent(impl, event);
-}
-
-void SlotUpdate(void* self, const void* parameters) {
-  Impl& impl = *OwnerOf(self);
-  const std::uint64_t deferredJoin = Party(impl).DeferredJoin();
-  if (deferredJoin != 0) {
-    JoinParty(impl, deferredJoin);  // a deferred join takes the place of the create decision
-  } else {
-    MaybeCreateParty(impl, parameters);
-  }
-  PumpParty(impl);
-  SyncHostJoinable(impl);
 }
 
 void EnterLobbyFields(void* self, const void* uuid, std::uint64_t matchType, std::uint16_t team, std::uint8_t lobbyType,
@@ -685,7 +566,7 @@ void BuildVtable(std::array<SlotWord, kSlotCount>* table) {
   std::array<SlotWord, kSlotCount>& t = *table;
   t[kSwapMembers] = Entry<kSwapMembers, &SlotNothingU32U32>();
   t[kRemoveRemoteMember] = Entry<kRemoveRemoteMember, &SlotNothingU32>();
-  t[kJoinInternal] = Entry<kJoinInternal, &SlotJoinInternal>();
+  t[kJoinInternal] = reinterpret_cast<SlotWord>(&internal::SlotJoinInternalEntry);
   t[kLeaveInternal] = Entry<kLeaveInternal, &SlotNothingPtr>();
   t[kJoinableInternal] = Entry<kJoinableInternal, &SlotJoinableInternal>();
   t[kSetJoinableInternal] = Entry<kSetJoinableInternal, &SlotSetJoinableInternal>();
@@ -697,7 +578,7 @@ void BuildVtable(std::array<SlotWord, kSlotCount>* table) {
   t[kDestructorComplete] = Entry<kDestructorComplete, &SlotDestructor>();
   t[kDestructorDeleting] = Entry<kDestructorDeleting, &SlotDestructor>();
   t[kReset] = Entry<kReset, &SlotReset>();
-  t[kUpdate] = Entry<kUpdate, &SlotUpdate>();
+  t[kUpdate] = reinterpret_cast<SlotWord>(&internal::SlotUpdateEntry);
   t[kAddMember] = Entry<kAddMember, &SlotAddMember>();
   t[kRemoveMember] = Entry<kRemoveMember, &SlotNothingU32>();
   t[kSetJoinPolicy] = Entry<kSetJoinPolicy, &SlotSetJoinPolicy>();
@@ -757,11 +638,150 @@ void BuildVtable(std::array<SlotWord, kSlotCount>* table) {
   t[kInviteCount] = Entry<kInviteCount, &SlotInviteCount>();
   t[kInviteSender] = Entry<kInviteSender, &SlotInviteSender>();
   t[kInviteSentTime] = Entry<kInviteSentTime, &SlotInviteSentTime>();
-  t[kAcceptInvite] = Entry<kAcceptInvite, &SlotAcceptInvite>();
+  t[kAcceptInvite] = reinterpret_cast<SlotWord>(&internal::SlotAcceptInviteEntry);
   t[kDismissInvite] = Entry<kDismissInvite, &SlotDismissInvite>();
 }
 
 }  // namespace
+
+// ---- the seam to social_game_calls.cpp (social_internal.h) ----------------------------------------
+// Each function contains its own failures and returns before the game is called.
+
+namespace internal {
+
+void TraceSlotCall(void* self, std::size_t slot) noexcept { TraceCall(OwnerOf(self), slot); }
+
+void NoteCallbackDelivered(void* self) noexcept {
+  Impl* impl = OwnerOf(self);
+  if (impl != nullptr) impl->callbackCalls.fetch_add(1, std::memory_order_relaxed);
+}
+
+std::uint64_t UpdatePrepare(void* self, const void* params) noexcept {
+  Impl* impl = OwnerOf(self);
+  if (impl == nullptr) return 0;
+  try {
+    const std::uint64_t deferredJoin = Party(*impl).DeferredJoin();
+    if (deferredJoin != 0) return deferredJoin;
+    MaybeCreateParty(*impl, params);
+  } catch (const std::exception&) {
+    ReportFailure(impl, kUpdate);
+  }
+  return 0;
+}
+
+namespace {
+
+EventKind KindOf(SocialParty::EventKind kind, bool* deliver) {
+  using Kind = SocialParty::EventKind;
+  *deliver = true;
+  switch (kind) {
+    case Kind::kCreated: return kEvCreated;
+    case Kind::kJoined: return kEvJoined;
+    case Kind::kJoinFailed: return kEvJoinFailed;
+    case Kind::kUpdated: return kEvUpdated;
+    case Kind::kHostChanged: return kEvHostChanged;
+    case Kind::kLeft: return kEvLeft;
+    case Kind::kKicked: return kEvKicked;
+    case Kind::kMemberJoined: return kEvMemberJoined;
+    case Kind::kMemberUpdated: return kEvMemberUpdated;
+    case Kind::kMemberLeft: return kEvMemberLeft;
+    case Kind::kInviteReceived: return kEvInviteReceived;
+    case Kind::kInviteFailed: break;  // no game callback is driven from here
+  }
+  *deliver = false;
+  return kEvUpdated;
+}
+
+}  // namespace
+
+void UpdateCollect(void* self, EventBatch* out) noexcept {
+  if (out == nullptr) return;
+  out->count = 0;
+  out->dropped = 0;
+  Impl* impl = OwnerOf(self);
+  if (impl == nullptr) return;
+  try {
+    PublishView(*impl);
+    SyncObject(*impl, *CurrentView(*impl));
+    for (const SocialParty::Event& event : Party(*impl).DrainEvents()) {
+      bool deliver = false;
+      const EventKind kind = KindOf(event.kind, &deliver);
+      if (!deliver) continue;
+      if (out->count >= kMaxPendingEvents) {
+        ++out->dropped;
+        continue;
+      }
+      PendingEvent& slot = out->events[out->count++];
+      slot.kind = kind;
+      slot.index = event.index;
+      slot.code = event.code;
+      slot.id = event.id;
+      std::strncpy(slot.name, event.name.c_str(), kEventNameBytes - 1);
+      slot.name[kEventNameBytes - 1] = '\0';
+    }
+    if (out->dropped != 0) {
+      LogFields(LogLevel::kError, "social_events_dropped", {{"dropped", out->dropped}, {"capacity", kMaxPendingEvents}});
+    }
+  } catch (const std::exception&) {
+    ReportFailure(impl, kUpdate);
+  }
+}
+
+void UpdateFinish(void* self) noexcept {
+  Impl* impl = OwnerOf(self);
+  if (impl == nullptr) return;
+  try {
+    SyncHostJoinable(*impl);
+  } catch (const std::exception&) {
+    ReportFailure(impl, kUpdate);
+  }
+}
+
+JoinStep JoinBegin(void* self, std::uint64_t partyId) noexcept {
+  Impl* impl = OwnerOf(self);
+  if (impl == nullptr) return JoinStep::kDeferred;
+  try {
+    SocialParty::State& party = Party(*impl);
+    if (party.BeginJoin(partyId)) return JoinStep::kAskGate;
+    LogFields(LogLevel::kInfo, "social_join",
+              {{"party", static_cast<long long>(partyId)}, {"result", "deferred"},
+               {"deferred_party", static_cast<long long>(party.DeferredJoin())}});
+  } catch (const std::exception&) {
+    ReportFailure(impl, kJoinInternal);
+  }
+  return JoinStep::kDeferred;
+}
+
+void JoinFinish(void* self, std::uint64_t partyId, bool allowed) noexcept {
+  Impl* impl = OwnerOf(self);
+  if (impl == nullptr) return;
+  try {
+    SocialParty::State& party = Party(*impl);
+    if (!allowed) {
+      party.AbandonJoin(partyId);
+      LogFields(LogLevel::kInfo, "social_join", {{"party", static_cast<long long>(partyId)}, {"result", "declined"}});
+      return;
+    }
+    SendParty(*impl, "party join", party.Join(partyId));
+  } catch (const std::exception&) {
+    ReportFailure(impl, kJoinInternal);
+  }
+}
+
+std::uint64_t InvitePartyAt(void* self, std::uint32_t index) noexcept {
+  Impl* impl = OwnerOf(self);
+  if (impl == nullptr) return 0;
+  try {
+    const std::uint64_t partyId = Party(*impl).InvitePartyAt(index);
+    LogFields(LogLevel::kInfo, "social_accept", {{"index", index}, {"party", static_cast<long long>(partyId)}});
+    return partyId;
+  } catch (const std::exception&) {
+    ReportFailure(impl, kAcceptInvite);
+  }
+  return 0;
+}
+
+}  // namespace internal
 
 // ---- public ---------------------------------------------------------------------------------
 
@@ -777,7 +797,9 @@ Facade::Facade(const Ports& ports) : impl_(std::make_unique<Impl>()) {
   Put<std::uintptr_t>(object, kOffMemberJson, reinterpret_cast<std::uintptr_t>(impl_->memberJson.data()));
 }
 
-Facade::~Facade() = default;
+Facade::~Facade() {
+  if (impl_ != nullptr && impl_->processWide) g_destroyed.fetch_add(1, std::memory_order_relaxed);
+}
 
 void* Facade::Object() noexcept { return impl_->object.data(); }
 
@@ -804,8 +826,17 @@ void SetLocalAccount(std::uint64_t accountId, const char* displayName) {
 }
 
 Facade& Facade::Instance() {
-  static Facade facade(ProductionPorts());
-  return facade;
+  // Never destroyed, on purpose. The object is handed to the game and read by network threads for as
+  // long as the process runs; a function-local static would be destroyed during exit while those
+  // threads are still running. The leak is one object at process end, reclaimed by the OS.
+  static Facade* const facade = [] {
+    Facade* created = new Facade(ProductionPorts());
+    created->impl_->processWide = true;
+    return created;
+  }();
+  return *facade;
 }
+
+std::uint32_t Facade::ProcessWideDestroyedCountForTest() noexcept { return g_destroyed.load(std::memory_order_relaxed); }
 
 }  // namespace quest_social

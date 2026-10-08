@@ -62,6 +62,9 @@ class Facade {
   // an installer, outside any game frame, so the allocation happens before the hook is armed.
   static Facade& Instance();
 
+  // 1 if the process-wide Instance() was ever destroyed; it never is.
+  static std::uint32_t ProcessWideDestroyedCountForTest() noexcept;
+
   // Counters for tests and diagnostics.
   std::uint32_t InitializeCalls() const noexcept;
   std::uint32_t ShutdownCalls() const noexcept;

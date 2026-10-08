@@ -31,10 +31,17 @@ constexpr std::uint32_t kLogBuild = 1U << 2;
 constexpr std::uint32_t kLogForeign = 1U << 3;
 constexpr std::uint32_t kLogFacade = 1U << 4;
 
-void* OnSocial(SocialThunk::Fn original, std::uint64_t handle) {
+// The facade's object, published by InstallSocialHook before the callback is armed. The handler reads
+// this and never constructs anything.
+std::atomic<void*> g_facadeObject{nullptr};
+
+// Runs on the game's thread, once. Built -fno-exceptions (callback_thunk.h refuses otherwise): the frame
+// has no landing pad, so a game exception thrown by the original passes through it untouched, and
+// nothing here can throw into the game.
+void* OnSocial(SocialThunk::Fn original, std::uint64_t handle) noexcept {
   void* const result = original(handle);
-  // The facade is built before the hook is armed; Instance() here only returns it.
-  return SelectSocialObject(result, Facade::Instance().Object(), g_lookup.load(std::memory_order_acquire));
+  return SelectSocialObject(result, g_facadeObject.load(std::memory_order_acquire),
+                            g_lookup.load(std::memory_order_acquire));
 }
 
 }  // namespace
@@ -68,7 +75,10 @@ PnsovrLookup SetPnsovrLookup(PnsovrLookup lookup) {
   return g_lookup.exchange(lookup != nullptr ? lookup : &FindPnsovr, std::memory_order_acq_rel);
 }
 
-SocialThunk::Handler SocialHandler() { return &OnSocial; }
+SocialThunk::Handler SocialHandler() {
+  g_facadeObject.store(Facade::Instance().Object(), std::memory_order_release);
+  return &OnSocial;
+}
 
 void* SelectSocialObject(void* original, void* facadeObject, PnsovrLookup lookup) noexcept {
   if (original == nullptr) {
@@ -102,7 +112,8 @@ InstallResult InstallSocialHook(bool enabled) {
     return result;
   }
   static sentinel::GotHook hook;
-  Facade::Instance();  // allocate and wire the models before any game thread can reach the handler
+  // Allocate and wire the models before any game thread can reach the handler.
+  g_facadeObject.store(Facade::Instance().Object(), std::memory_order_release);
   SocialThunk::Arm(&OnSocial);
   result.got = hook.Install(LibR15Social(), SocialThunk::EntryAddress(), SocialThunk::OriginalOut());
   if (result.got != sentinel::GotStatus::kOk) {

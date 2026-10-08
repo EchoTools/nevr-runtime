@@ -482,23 +482,40 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     "$out/got_pinned_test" "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so"
 
 # Quest social provider on the host (docs/adr/0003, "Social provider"): the ABI pins against the
-# recorded vtable, the facade driven through its vtable, and the hook decision through the real
-# callback thunk. No NDK, no Android, no APK. Fail-close.
+# recorded vtable, the facade driven through its vtable, the hook decision through the real callback
+# thunk, and the exception contract. The frames that sit under a call into the game
+# (social_game_calls.cpp, social_install.cpp) and everything that includes callback_thunk.h are built
+# with -fno-exceptions, and tools/check_quest_social_frames.sh pins that their objects carry no
+# personality and no LSDA (with a negative control on the object that does). No NDK, no Android, no
+# APK. Fail-close.
 test-quest-social:
     #!/usr/bin/env bash
     set -euo pipefail
     out="build/quest-social-host"
     mkdir -p "$out"
-    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
-    "${cxx[@]}" src/quest/tests/social_abi_test.cpp -o "$out/social_abi_test"
+    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    off=("${on[@]}" -fno-exceptions)
+    "${on[@]}" src/quest/tests/social_abi_test.cpp -o "$out/social_abi_test"
     "$out/social_abi_test" src/quest/tests/fixtures/cnsovrsocial_vtable.txt
-    "${cxx[@]}" src/quest/tests/social_facade_test.cpp src/quest/social/social_facade.cpp \
-        src/quest/social/social_frames.cpp src/quest/sentinel/hook_log.cpp \
-        -o "$out/social_facade_test" -ldl -pthread
+    "${on[@]}" -c src/quest/social/social_facade.cpp -o "$out/social_facade.o"
+    "${on[@]}" -c src/quest/social/social_frames.cpp -o "$out/social_frames.o"
+    "${on[@]}" -c src/quest/sentinel/hook_log.cpp -o "$out/hook_log.o"
+    "${on[@]}" -c src/quest/sentinel/got_hook.cpp -o "$out/got_hook.o"
+    "${off[@]}" -c src/quest/social/social_game_calls.cpp -o "$out/social_game_calls.o"
+    "${off[@]}" -c src/quest/social/social_install.cpp -o "$out/social_install.o"
+    # The frames live across a call into the game carry no exception machinery.
+    tools/check_quest_social_frames.sh nm readelf \
+        "$out/social_game_calls.o=SlotUpdateEntry" "$out/social_install.o=OnSocial"
+    if err="$(tools/check_quest_social_frames.sh nm readelf "$out/social_facade.o=Facade" 2>&1)"; then
+        echo "test-quest-social: the frame checker accepted an object with landing pads (it is blind)" >&2
+        exit 1
+    fi
+    grep -q 'personality' <<<"$err" || { echo "test-quest-social: the negative control failed for another reason: $err" >&2; exit 1; }
+    "${on[@]}" src/quest/tests/social_facade_test.cpp "$out/social_facade.o" "$out/social_frames.o" \
+        "$out/social_game_calls.o" "$out/hook_log.o" -o "$out/social_facade_test" -ldl -pthread
     "$out/social_facade_test"
-    "${cxx[@]}" src/quest/tests/social_install_test.cpp src/quest/social/social_install.cpp \
-        src/quest/social/social_facade.cpp src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp \
-        -o "$out/social_install_test" -ldl -pthread
+    "${off[@]}" src/quest/tests/social_install_test.cpp "$out/social_install.o" "$out/social_facade.o" \
+        "$out/social_game_calls.o" "$out/got_hook.o" "$out/hook_log.o" -o "$out/social_install_test" -ldl -pthread
     "$out/social_install_test"
 
 # The social pins against the real libr15.so and libpnsovr.so (docs/adr/0003). Extracts both from
@@ -517,9 +534,12 @@ test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signe
     lib="$out/lib/lib/arm64-v8a"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $lib/libr15.so" | sha256sum -c -
     echo "26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79  $lib/libpnsovr.so" | sha256sum -c -
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel \
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -c src/quest/social/social_facade.cpp \
+        -o "$out/social_facade.o"
+    g++ -std=c++17 -fno-exceptions -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel \
         src/quest/tests/social_pinned_test.cpp src/quest/social/social_install.cpp \
-        src/quest/social/social_facade.cpp src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp \
+        src/quest/social/social_game_calls.cpp "$out/social_facade.o" \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp \
         -o "$out/social_pinned_test" -ldl -pthread
     "$out/social_pinned_test" "$lib/libr15.so" "$lib/libpnsovr.so"
     "$out/social_pinned_test" --dump "$lib/libpnsovr.so" > "$out/vtable.txt"

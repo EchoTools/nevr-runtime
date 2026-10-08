@@ -61,7 +61,16 @@ target_compile_options(stable_string_pool_test PRIVATE -Wall -Wextra -Werror)
 add_library(nevr_quest_social STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_facade.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_frames.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/social/social_game_calls.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_install.cpp")
+# The frames a game call passes through (the Update/Join slots that call the game's callbacks and the
+# Social() handler) are built without exception support, as callback_thunk.h requires; the rest of the
+# facade keeps exceptions so it can contain its own failures. tools/check_quest_social_frames.sh pins it.
+set_source_files_properties(
+  "${CMAKE_CURRENT_SOURCE_DIR}/social/social_game_calls.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/social/social_install.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/tests/social_install_test.cpp"
+  PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_include_directories(nevr_quest_social PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(nevr_quest_social PUBLIC nevr_quest_got_hook dl)
 target_compile_options(nevr_quest_social PRIVATE -Wall -Wextra -Werror)
