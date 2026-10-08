@@ -1067,6 +1067,44 @@ not meet). The PC registers the decoder from a namespace-scope initializer, whic
 rows show account ids. `social_names_test` decodes the real zstd frame the PC tests use and shows the name on a
 friend row.
 
+### The player's path on Quest
+
+Each step, the game function that drives it (libr15) and the facade answer. Slot numbers are Quest's vtable slots and
+callback numbers are the indices of `Callback` (`social_abi.h`).
+
+| Step | The game | The facade |
+| --- | --- | --- |
+| Friends tab opens | `R15NetRefreshFriendsNode` | `RefreshFriends` (46) sends `FriendListRefreshRequest` |
+| Rows | `CR15NetGame::FriendId` (0x129b6f8) reads `FriendCount` (47) and `FriendId` (50), then `FriendName` (51), `FriendStatus` (52), `FriendStatusString` (53), `FriendIsInvitable` (54), `FriendPartyId` (56) | the roster fed by `FriendListResponse`, `FriendStatusNotify`, `FriendPresenceNotify`; names from the zstd profile reply |
+| "+" on a friend | `R15NetPartySendInviteNode` -> `CR15NetGame::PartySendInvite` (0x129c7d8): the profile gate (hooked true), then a provider comparison (silent exit on mismatch), then `SendInvite` | `SendInviteInternal` (8) sends `PartyInviteRequest`, or a create first |
+| The tablet shows a party | `CR15NetGame::Update` passes the "wants a party" flag | `Update` (14) sends `PartyCreateRequest`; `Ready` (21), `Id` (26), `MemberCount` (27), `MemberName` (29), `Host` (24), `IsHost` (25) |
+| Friend gets the invite | `PartyInviteReceivedCB` (14); `InviteCount` (71), `InviteSender` (72); accept = `AcceptInvite` (74) -> `JoinInternal` (2), gate `PartyInvitationCB` (7) | `PartyInviteNotify` -> `InviteReceived`; the accept sends `PartyInviteResponse` |
+| Member list, headset type | `PartyMemberJoinedCB` (9), `PartyMemberLeftCB` (11), `PartyMemberUpdatedCB` (10); `PartyMemberHeadsetType` (0x129b168) reads the member array at +0x248 | members shown up to the game's 10-entry array; the server's member data loaded into the array before the callbacks; the local member's data (`MemberDataWritable`, 31) shared |
+| Party joins a match together | the leader's `CR15NetGame::Update` writes the lobby settings into the party CJson (+0x1f0); a member reads it (`PartyTeam` 0x129a9ac, `PartyData` 0x129aa08) and `PartyUpdatedCB` (3) | the leader's CJson is read out and shared (`PartyDataUpdateRequest`); a member's is loaded from `PartyDataNotify`; `EnterLobby` (32..34) / `ExitLobby` (35) set the lobby fields |
+| Join errors | `PartyJoinFailedCB` (0x126f630), codes 1..6 | `JoinFailed` with the server's code; code 0 for a join that could not be sent or timed out |
+
+Game-native, needing nothing from the facade. Voice mute (`SetVoipMuted` 0x1290ed8 sets a lobby-entrant boolean through
+`CNSLobby::SetEntrantBoolean`; the voice stream is pnsovr's `Voip*`, which stays) and MUTE ALL / Personal Bubble / Ghost All
+(`CR15NetEnableSocialFeatureNode::Enter` 0x23222d4 calls `CR15NetSocialInteractCS::EnableFeature` on game state) never reach
+the social object. `RequestProfile` (0x1257fa4) builds its JSON and calls the provider's `CNSIUsers::RequestProfile`, which is
+pnsovr's `CNSOVRUsers` (kept), so it works as natively when the reply (`OtherUserProfileSuccess`) reaches the game over its
+own login connection; LOBBY INFO (`CR15NetSocialGroups`) listens for `SNSChannelInfoResponse` on the game's TCP broadcaster
+the same way. What they need is the router carrying the server's frames to the game and the rewritten login carrying the profile
+fields; the facade neither sees nor changes those frames (the observer logs only the social symbols it knows). The
+`social_plugin` config block the PC builds is not in any library of the store APK (searched in every `.so`).
+
+What differs from the PC, and why: the object is handed over by a GOT hook on libr15's `CNSProvider::Social` instead of a
+patch in `echovr.exe`, with an AArch64/Itanium vtable of 76 slots; every call into the game is isolated in a
+`-fno-exceptions` unit over plain-data plans, because the game and the sentinel carry two unwinders; the CJson,
+invite-gate and provider calls use libr15 exports at pinned addresses; and the Quest facade has guards the PC lacks (members
+past the array hidden, refused and unanswered requests rolled back, a bounded event queue), which the PC reaches through issue
+#234 and its own later fixes. Everything else (party model, roster, names, login profile, wire building) is the same source.
+
+Accepted regressions against native Quest, final: Oculus deep links stop (`FollowDeepLink` is reached only through
+`CNSOVRSocial::Update`, which the facade replaces); Oculus rich presence advertises NEVR party id, size and joinability
+(`CNSIRichPresence::Set` reads the facade, accepted pending the owner's call on zeroing it, which needs a hook this package does
+not install); the invitable-users refresh goes away; Oculus friends, invites and the Oculus party overlay no longer reach the game.
+
 ### Integration contract
 
 What the integration commit calls, and when:
