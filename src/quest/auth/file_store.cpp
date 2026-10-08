@@ -4,6 +4,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -190,13 +191,25 @@ bool FileCredentialStore::Save(const CachedAuthToken& auth) {
 FileLinkPresenter::FileLinkPresenter(std::string path, nevr::auth::LogSink log)
     : path_(std::move(path)), log_(std::move(log)) {}
 
-intptr_t FileLinkPresenter::Present(const std::string& login_url_with_code) {
+std::string FormatLoginPrompt(const LoginPrompt& prompt) {
+  char when[32] = "unknown";
+  const time_t t = static_cast<time_t>(prompt.expires_unix);
+  tm utc{};
+  if (gmtime_r(&t, &utc) != nullptr) std::strftime(when, sizeof(when), "%Y-%m-%dT%H:%M:%SZ", &utc);
+  return "URL: " + prompt.url + "\nCode: " + prompt.code +
+         "\nOpen the URL on a phone or computer, sign in with Discord and enter the code (or open " + prompt.link +
+         " , which has it filled in).\nExpires: " + when + " (unix " + std::to_string(prompt.expires_unix) + ")\n";
+}
+
+intptr_t FileLinkPresenter::Present(const LoginPrompt& prompt) {
   std::string error;
   std::string warning;
-  if (!AtomicWrite(path_, login_url_with_code + "\n", error, warning)) {
+  if (path_.empty() || !AtomicWrite(path_, FormatLoginPrompt(prompt), error, warning)) {
     Emit(log_, LogLevel::Error, "[NEVR.AUTH] could not write the login link file path=" + path_ +
-                                    " error=" + error);
-    return 0;
+                                    " error=" + (path_.empty() ? std::string("no path") : error));
+    // The login must still be possible: the direct link goes to the log, where logcat shows it.
+    Emit(log_, LogLevel::Info, "[NEVR.AUTH] login link (file not written): " + prompt.link);
+    return nevr::auth::kBrowserOpenAcceptedAbove + 1;
   }
   Emit(log_, LogLevel::Info, "[NEVR.AUTH] login link written for the player path=" + path_);
   return nevr::auth::kBrowserOpenAcceptedAbove + 1;

@@ -72,12 +72,21 @@ class CredentialStore {
   virtual bool Save(const CachedAuthToken& auth) = 0;
 };
 
+// What the player needs to sign in: the verification page, the code to enter there, the link with
+// the code filled in, and when the code stops working (unix seconds).
+struct LoginPrompt {
+  std::string url;   // verification page, e.g. https://echovrce.com/login/device
+  std::string code;
+  std::string link;  // url + "?code=" + code
+  uint64_t expires_unix = 0;
+};
+
 // How the player is told where to log in. Present returns a value above
-// nevr::auth::kBrowserOpenAcceptedAbove when the link was delivered, 0 otherwise.
+// nevr::auth::kBrowserOpenAcceptedAbove when the prompt was delivered, 0 otherwise.
 class LinkPresenter {
  public:
   virtual ~LinkPresenter() = default;
-  virtual intptr_t Present(const std::string& login_url_with_code) = 0;
+  virtual intptr_t Present(const LoginPrompt& prompt) = 0;
   virtual void Clear() = 0;
 };
 
