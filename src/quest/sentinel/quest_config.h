@@ -5,7 +5,9 @@
 // `nevr-quest.json` in the app's external files directory; it is never `config.json`, never a
 // `.env`, and nothing here reads the environment. Features (redirect, bridge, login) are off
 // unless the file turns them on, and a feature whose prerequisite is off or missing is forced off
-// with a logged reason.
+// with a logged reason. A value in the file that is invalid (including the empty string) is
+// rejected and the embedded default stays: the file cannot clear a default. A key that appears
+// twice in one object takes its last value and logs a warning.
 #pragma once
 
 #include <cstddef>
@@ -65,6 +67,12 @@ struct LoadResult {
 
 // `fileText` is null when the file does not exist. Never throws on malformed input.
 LoadResult ResolveConfig(const EmbeddedDefaults& defaults, const std::string* fileText);
+
+const char* LevelName(LogLevel level);
+
+// One line of the on-disk log: a single JSON object ending in '\n', no ANSI, valid UTF-8
+// (invalid bytes in `message` are replaced).
+std::string FormatDiskLogLine(LogLevel level, long long unixMs, const std::string& message);
 
 // `<filesDir>/nevr-quest.json`, tolerant of a trailing slash.
 std::string ConfigFilePath(const std::string& filesDir);

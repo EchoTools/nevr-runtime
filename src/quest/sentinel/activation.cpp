@@ -13,23 +13,40 @@
 #include <utility>
 
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace sentinel {
 
 namespace {
 
+// std::once_flag is constant-initialised. The configuration is a function-local static: a
+// namespace-scope ResolvedConfig has std::string members and so a dynamic initializer that runs
+// after the ELF constructor that resolved it, and would blank the result.
 std::once_flag g_once;
-nevr_quest::ResolvedConfig g_config;
 
-enum class ReadStatus { kRead, kAbsent, kError };
+nevr_quest::ResolvedConfig& Storage() {
+  static nevr_quest::ResolvedConfig config;
+  return config;
+}
 
-// Reads at most kMaxConfigBytes + 1 bytes so an oversized file is detected without loading it.
+}  // namespace
+
 ReadStatus ReadConfigFile(const std::string& path, std::string* out, int* err) {
-  const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
   if (fd < 0) {
     *err = errno;
     return *err == ENOENT ? ReadStatus::kAbsent : ReadStatus::kError;
+  }
+  struct stat st {};
+  if (::fstat(fd, &st) != 0) {
+    *err = errno;
+    ::close(fd);
+    return ReadStatus::kError;
+  }
+  if (!S_ISREG(st.st_mode)) {
+    ::close(fd);
+    return ReadStatus::kNotRegularFile;
   }
   std::string data;
   char buf[4096];
@@ -50,8 +67,7 @@ ReadStatus ReadConfigFile(const std::string& path, std::string* out, int* err) {
   return ReadStatus::kRead;
 }
 
-void Resolve() {
-  const std::string path = nevr_quest::ConfigFilePath(FilesDir());
+nevr_quest::ResolvedConfig ResolveFromDisk(const std::string& path) {
   std::string text;
   int err = 0;
   const ReadStatus status = ReadConfigFile(path, &text, &err);
@@ -59,6 +75,9 @@ void Resolve() {
     Emit(nevr_quest::LogLevel::kError,
          std::string("config file ") + nevr_quest::kConfigFileName + " unreadable errno=" + std::to_string(err) +
              " (" + std::strerror(err) + "), using embedded defaults");
+  } else if (status == ReadStatus::kNotRegularFile) {
+    Emit(nevr_quest::LogLevel::kError, std::string("config file ") + nevr_quest::kConfigFileName +
+                                           " is not a regular file, not read, using embedded defaults");
   }
 
   nevr_quest::EmbeddedDefaults defaults;
@@ -70,18 +89,16 @@ void Resolve() {
   nevr_quest::LoadResult result =
       nevr_quest::ResolveConfig(defaults, status == ReadStatus::kRead ? &text : nullptr);
   for (const nevr_quest::LogEvent& e : result.events) Emit(e.level, e.message);
-  g_config = std::move(result.config);
+  return std::move(result.config);
 }
-
-}  // namespace
 
 void InitActivation() {
   std::call_once(g_once, [] {
     // A failure here must not take the host process down: fall back to the all-off config.
     try {
-      Resolve();
+      Storage() = ResolveFromDisk(nevr_quest::ConfigFilePath(FilesDir()));
     } catch (const std::exception& e) {
-      g_config = nevr_quest::ResolvedConfig();
+      Storage() = nevr_quest::ResolvedConfig();
       Emit(nevr_quest::LogLevel::kError, std::string("config resolution failed: ") + e.what() +
                                              "; all features off, no embedded defaults");
     }
@@ -90,7 +107,7 @@ void InitActivation() {
 
 const nevr_quest::ResolvedConfig& ActiveConfig() {
   InitActivation();
-  return g_config;
+  return Storage();
 }
 
 bool FeatureEnabled(nevr_quest::Feature feature) {

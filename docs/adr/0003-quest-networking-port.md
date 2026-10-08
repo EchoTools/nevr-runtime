@@ -65,7 +65,12 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    non-object or oversized (64 KiB) file is rejected whole: embedded values, all features off.
    Every key source, requested and effective feature state, and rejection is logged by key or
    feature name, never by value, to logcat tag `NEVR-Sentinel` and to `nevr-sentinel.log` in the
-   same directory.
+   same directory, as one JSON object per line. A value the file gives as the empty string is
+   rejected and cannot clear an embedded default; a key given twice in one object takes the
+   last value and logs a warning. The sentinel constructor reads the file once: a non-blocking
+   open, a regular-file check and a 64 KiB bound, with no network. `sentinel_host_test` runs
+   the constructor-then-main order, the non-regular-file paths and the log-failure paths on the
+   host; the read has not been run on a headset.
 2. **Identity and wire.** `login_profile.{h,cpp}` builds the login profile with
    `nlohmann::json` and is compiled for Windows and Android. Windows EVR frame assembly stays
    in `src/runtime/compat/ws_bridge.cpp` until a reviewed serializer and a server-parser round

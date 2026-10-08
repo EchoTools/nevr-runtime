@@ -419,6 +419,20 @@ test-quest-shared:
         src/quest/tests/quest_config_test.cpp \
         -o "$out/quest_config_test"
     "$out/quest_config_test"
+    # Sentinel activation + logging against a stand-in liblog. The test object is listed first on
+    # purpose: its constructor must run before activation.cpp's static initializers, as
+    # entry.cpp's does.
+    files="$out/sentinel-files"
+    rm -rf "$files"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/tests/stub -Isrc/quest/sentinel \
+        -DNEVR_QUEST_FILES_DIR="\"$files\"" \
+        src/quest/tests/sentinel_host_test.cpp \
+        src/quest/sentinel/activation.cpp \
+        src/quest/sentinel/sentinel_log.cpp \
+        src/quest/sentinel/quest_config.cpp \
+        src/runtime/lifecycle/service_redirect.cpp \
+        -o "$out/sentinel_host_test"
+    "$out/sentinel_host_test"
 
 # --- Verify (closed-loop gate) ---
 

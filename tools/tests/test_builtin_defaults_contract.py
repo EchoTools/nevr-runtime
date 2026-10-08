@@ -35,7 +35,7 @@ class BuiltinDefaultsContractTest(unittest.TestCase):
         for literal in literals:
             self.assertRegex(literal, r"^@NEVR_DEFAULT_[A-Z_]+@$")
 
-    def test_only_service_config_includes_the_generated_header(self):
+    def test_only_the_pc_and_quest_config_adapters_include_the_generated_header(self):
         offenders = []
         for root in ("src", "plugins"):
             for path in (REPO / root).rglob("*"):

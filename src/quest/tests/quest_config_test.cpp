@@ -203,6 +203,27 @@ void NoEventEverCarriesAConfiguredValue() {
   }
 }
 
+void DuplicateKeysWarnAndTheLastValueWins() {
+  const LoadResult r = Load(Full(), R"({"nevr_http_key":"FIRST-1","nevr_http_key":"LAST-2",)"
+                                    R"("features":{"redirect":false,"redirect":true}})");
+  CHECK(!r.fileRejected);
+  CHECK(r.config.httpKey.text == "LAST-2");
+  CHECK(r.config.effective.redirect);
+  CHECK(EventsContain(r, "duplicate key=nevr_http_key last value wins"));
+  CHECK(EventsContain(r, "duplicate key=redirect last value wins"));
+  CHECK(!EventsContain(r, "FIRST-1") && !EventsContain(r, "LAST-2"));
+  // The same key in two different objects is not a duplicate.
+  const LoadResult ok = Load(Full(), R"({"features":{"redirect":true},"other":{"redirect":1}})");
+  CHECK(!EventsContain(ok, "duplicate"));
+}
+
+void AnEmptyFileValueCannotClearAnEmbeddedDefault() {
+  const LoadResult r = Load(Full(), R"({"nevr_http_key":"","nevr_socket_uri":""})");
+  CHECK(r.config.httpKey.text == kEmbApiKey && r.config.httpKey.source == Source::kEmbedded);
+  CHECK(r.config.socketUri.text == kEmbSocket);
+  CHECK(EventsContain(r, "key=nevr_http_key rejected reason=empty"));
+}
+
 void ConfigPathIsNeverGameConfigJson() {
   const std::string a = nevr_quest::ConfigFilePath("/sdcard/x/files");
   const std::string b = nevr_quest::ConfigFilePath("/sdcard/x/files/");
@@ -251,6 +272,8 @@ int main() {
   WrongFeatureTypesStayOff();
   UnknownKeysWarnWithoutLeakingValues();
   NoEventEverCarriesAConfiguredValue();
+  DuplicateKeysWarnAndTheLastValueWins();
+  AnEmptyFileValueCannotClearAnEmbeddedDefault();
   ConfigPathIsNeverGameConfigJson();
   RedirectIsGatedByActivation();
   if (g_failures != 0) {

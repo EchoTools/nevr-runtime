@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstring>
+#include <set>
 #include <string_view>
 #include <utility>
 
@@ -116,7 +117,24 @@ void ApplyFile(LoadResult& r, const std::string& text) {
         "config file rejected reason=too_large limit_bytes=" + std::to_string(kMaxConfigBytes));
     return;
   }
-  const nlohmann::json doc = nlohmann::json::parse(text, nullptr, /*allow_exceptions=*/false);
+  // The parser keeps the last of two equal keys; the callback sees every key so duplicates are logged.
+  std::vector<std::set<std::string>> seen;
+  std::vector<std::string> duplicates;
+  const nlohmann::json::parser_callback_t onParse = [&seen, &duplicates](int, nlohmann::json::parse_event_t event,
+                                                                         nlohmann::json& parsed) {
+    if (event == nlohmann::json::parse_event_t::object_start) {
+      seen.emplace_back();
+    } else if (event == nlohmann::json::parse_event_t::object_end) {
+      if (!seen.empty()) seen.pop_back();
+    } else if (event == nlohmann::json::parse_event_t::key && !seen.empty() && parsed.is_string()) {
+      if (!seen.back().insert(parsed.get<std::string>()).second) duplicates.push_back(parsed.get<std::string>());
+    }
+    return true;
+  };
+  const nlohmann::json doc = nlohmann::json::parse(text, onParse, /*allow_exceptions=*/false);
+  for (const std::string& name : duplicates) {
+    Add(r, LogLevel::kWarn, "config file duplicate key=" + SafeName(name) + " last value wins");
+  }
   if (doc.is_discarded()) {
     r.fileRejected = true;
     Add(r, LogLevel::kError, "config file rejected reason=malformed_json");
@@ -239,6 +257,24 @@ LoadResult ResolveConfig(const EmbeddedDefaults& defaults, const std::string* fi
   Derive(r);
   ReportState(r);
   return r;
+}
+
+const char* LevelName(LogLevel level) {
+  switch (level) {
+    case LogLevel::kInfo: return "INFO";
+    case LogLevel::kWarn: return "WARN";
+    case LogLevel::kError: break;
+  }
+  return "ERROR";
+}
+
+std::string FormatDiskLogLine(LogLevel level, long long unixMs, const std::string& message) {
+  nlohmann::json line;
+  line["ts_unix_ms"] = unixMs;
+  line["level"] = LevelName(level);
+  line["tag"] = "NEVR-Sentinel";
+  line["msg"] = message;
+  return line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
 }
 
 std::string ConfigFilePath(const std::string& filesDir) {
