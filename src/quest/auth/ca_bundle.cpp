@@ -1,8 +1,14 @@
 #include "quest/auth/ca_bundle.h"
 
+#include <openssl/bio.h>
+#include <openssl/err.h>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <system_error>
 
@@ -11,17 +17,44 @@ namespace nevr::quest_auth {
 namespace {
 using nevr::auth::LogLevel;
 
-constexpr char kPemBegin[] = "-----BEGIN CERTIFICATE-----";
-constexpr size_t kMaxCertFileBytes = 256 * 1024;  // a CA file is a few KiB
-
 void Emit(const nevr::auth::LogSink& log, LogLevel level, const std::string& message) {
   if (log) log(level, message);
 }
 
-size_t CountOccurrences(const std::string& text, const char* needle) {
-  size_t count = 0;
-  for (size_t pos = text.find(needle); pos != std::string::npos; pos = text.find(needle, pos + 1)) ++count;
-  return count;
+struct X509Deleter {
+  void operator()(X509* x) const { X509_free(x); }
+};
+struct BioDeleter {
+  void operator()(BIO* b) const { BIO_free(b); }
+};
+using X509Ptr = std::unique_ptr<X509, X509Deleter>;
+using BioPtr = std::unique_ptr<BIO, BioDeleter>;
+
+// Parses every certificate in `data` (PEM, any number, trailing text tolerated; else one
+// DER certificate) and appends each as PEM to `out`. Returns how many parsed.
+size_t ParseCertificates(const std::string& data, std::string& out) {
+  std::vector<X509Ptr> certs;
+  if (data.find("-----BEGIN") != std::string::npos) {
+    BioPtr in(BIO_new_mem_buf(data.data(), static_cast<int>(data.size())));
+    while (in) {
+      X509Ptr cert(PEM_read_bio_X509(in.get(), nullptr, nullptr, nullptr));
+      if (!cert) break;
+      certs.push_back(std::move(cert));
+    }
+  } else {
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(data.data());
+    X509Ptr cert(d2i_X509(nullptr, &p, static_cast<long>(data.size())));
+    if (cert) certs.push_back(std::move(cert));
+  }
+  for (const X509Ptr& cert : certs) {
+    BioPtr mem(BIO_new(BIO_s_mem()));
+    if (!mem || PEM_write_bio_X509(mem.get(), cert.get()) != 1) return 0;
+    char* bytes = nullptr;
+    const long len = BIO_get_mem_data(mem.get(), &bytes);
+    out.append(bytes, static_cast<size_t>(len));
+  }
+  ERR_clear_error();  // a failed parse leaves entries on this thread's OpenSSL error queue
+  return certs.size();
 }
 
 }  // namespace
@@ -30,25 +63,6 @@ const std::vector<std::string>& AndroidCaDirs() {
   static const std::vector<std::string> dirs = {"/apex/com.android.conscrypt/cacerts",
                                                 "/system/etc/security/cacerts"};
   return dirs;
-}
-
-std::string DerToPem(const std::string& der) {
-  static const char* t = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  std::string b64;
-  for (size_t i = 0; i < der.size(); i += 3) {
-    const uint32_t b0 = static_cast<unsigned char>(der[i]);
-    const uint32_t b1 = i + 1 < der.size() ? static_cast<unsigned char>(der[i + 1]) : 0;
-    const uint32_t b2 = i + 2 < der.size() ? static_cast<unsigned char>(der[i + 2]) : 0;
-    const uint32_t v = (b0 << 16) | (b1 << 8) | b2;
-    b64.push_back(t[(v >> 18) & 63]);
-    b64.push_back(t[(v >> 12) & 63]);
-    b64.push_back(i + 1 < der.size() ? t[(v >> 6) & 63] : '=');
-    b64.push_back(i + 2 < der.size() ? t[v & 63] : '=');
-  }
-  std::string out = std::string(kPemBegin) + "\n";
-  for (size_t i = 0; i < b64.size(); i += 64) out += b64.substr(i, 64) + "\n";
-  out += "-----END CERTIFICATE-----\n";
-  return out;
 }
 
 CaBundle LoadCaBundle(const std::vector<std::string>& dirs, const nevr::auth::LogSink& log) {
@@ -66,39 +80,45 @@ CaBundle LoadCaBundle(const std::vector<std::string>& dirs, const nevr::auth::Lo
     std::sort(files.begin(), files.end());  // deterministic bundle
 
     CaBundle bundle;
-    size_t skipped = 0;
+    size_t unparsable = 0, skipped = 0;
+    bool truncated = false;
     for (const std::filesystem::path& file : files) {
       std::ifstream in(file, std::ios::binary);
       std::ostringstream contents;
       contents << in.rdbuf();
       const std::string data = contents.str();
-      if (!in.good() && !in.eof()) {
+      if ((!in.good() && !in.eof()) || data.empty() || data.size() > kMaxCaFileBytes) {
         ++skipped;
         continue;
       }
-      if (data.empty() || data.size() > kMaxCertFileBytes) {
-        ++skipped;
+      std::string pem;
+      const size_t parsed = ParseCertificates(data, pem);
+      if (parsed == 0) {
+        ++unparsable;
         continue;
       }
-      if (const size_t pem = CountOccurrences(data, kPemBegin); pem > 0) {
-        bundle.pem += data;
-        if (data.back() != '\n') bundle.pem += '\n';
-        bundle.certificates += pem;
-      } else if (static_cast<unsigned char>(data[0]) == 0x30) {  // DER SEQUENCE
-        bundle.pem += DerToPem(data);
-        ++bundle.certificates;
-      } else {
-        ++skipped;
+      if (bundle.pem.size() + pem.size() > kMaxCaBundleBytes) {
+        truncated = true;
+        break;
       }
+      bundle.pem += pem;
+      bundle.certificates += parsed;
     }
     if (bundle.certificates > 0) {
       Emit(log, LogLevel::Info, "[NEVR.AUTH] CA store loaded dir=" + dir +
                                     " certificates=" + std::to_string(bundle.certificates) +
+                                    " unparsable_files=" + std::to_string(unparsable) +
                                     " skipped_files=" + std::to_string(skipped));
+      if (truncated) {
+        Emit(log, LogLevel::Warning, "[NEVR.AUTH] CA store reached the " + std::to_string(kMaxCaBundleBytes) +
+                                         "-byte bound; the remaining files were not read dir=" + dir);
+      }
       return bundle;
     }
-    Emit(log, LogLevel::Info, "[NEVR.AUTH] CA directory held no certificates dir=" + dir +
-                                  " files=" + std::to_string(files.size()));
+    Emit(log, LogLevel::Info, "[NEVR.AUTH] CA directory yielded no certificate dir=" + dir +
+                                  " files=" + std::to_string(files.size()) +
+                                  " unparsable_files=" + std::to_string(unparsable) +
+                                  " skipped_files=" + std::to_string(skipped));
   }
   Emit(log, LogLevel::Error,
        "[NEVR.AUTH] no CA certificates could be loaded from any Android CA directory; every TLS request "

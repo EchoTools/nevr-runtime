@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -34,7 +35,9 @@ class CurlHttpClient : public nevr::auth::HttpClient {
   void Interrupt() override;
 
  private:
-  const CaBundle& Bundle();
+  // The bundle, loading it if none has loaded yet. Loading (file I/O, logging) happens
+  // outside bundle_mutex_; the shared_ptr keeps a bundle alive across a concurrent reload.
+  std::shared_ptr<const CaBundle> Bundle();
 
   std::vector<std::string> ca_dirs_;
   nevr::auth::LogSink log_;
@@ -43,8 +46,7 @@ class CurlHttpClient : public nevr::auth::HttpClient {
   size_t max_response_bytes_;
   std::atomic<bool> interrupted_{false};
   std::mutex bundle_mutex_;
-  bool bundle_loaded_ = false;
-  CaBundle bundle_;
+  std::shared_ptr<const CaBundle> bundle_;
 };
 
 }  // namespace nevr::quest_auth

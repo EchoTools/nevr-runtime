@@ -48,13 +48,16 @@ CurlHttpClient::CurlHttpClient(std::vector<std::string> ca_dirs, nevr::auth::Log
 
 void CurlHttpClient::Interrupt() { interrupted_ = true; }
 
-const CaBundle& CurlHttpClient::Bundle() {
-  std::lock_guard<std::mutex> lock(bundle_mutex_);
-  if (!bundle_loaded_ || bundle_.certificates == 0) {  // a failed load is retried: the store may appear late
-    bundle_ = LoadCaBundle(ca_dirs_, log_);
-    bundle_loaded_ = true;
+std::shared_ptr<const CaBundle> CurlHttpClient::Bundle() {
+  {
+    std::lock_guard<std::mutex> lock(bundle_mutex_);
+    if (bundle_ && bundle_->certificates > 0) return bundle_;
   }
-  return bundle_;
+  // A failed load is retried on the next request: the store may appear late.
+  auto loaded = std::make_shared<const CaBundle>(LoadCaBundle(ca_dirs_, log_));
+  std::lock_guard<std::mutex> lock(bundle_mutex_);
+  if (loaded->certificates > 0 || !bundle_) bundle_ = loaded;
+  return loaded;
 }
 
 nevr::auth::HttpResponse CurlHttpClient::PostJson(const std::string& url, const std::string& body) {
@@ -69,12 +72,12 @@ nevr::auth::HttpResponse CurlHttpClient::PostJson(const std::string& url, const 
   // that skipped verification is the one outcome that is never acceptable.
   std::string pem;
   if (!allow_plain_http_) {
-    const CaBundle& bundle = Bundle();
-    if (bundle.certificates == 0) {
+    const std::shared_ptr<const CaBundle> bundle = Bundle();
+    if (bundle->certificates == 0) {
       out.transport_code = kNoTrustAnchors;
       return out;
     }
-    pem = bundle.pem;
+    pem = bundle->pem;
   }
 
   Easy easy;
@@ -98,6 +101,9 @@ nevr::auth::HttpResponse CurlHttpClient::PostJson(const std::string& url, const 
   set(CURLOPT_TIMEOUT, timeout_seconds_);
   set(CURLOPT_CONNECTTIMEOUT, timeout_seconds_);
   set(CURLOPT_NOSIGNAL, 1L);  // worker thread: no SIGALRM resolver timeouts
+  // Without this, cleaning up the handle waits for an in-flight resolver thread, so a
+  // shutdown during a slow DNS lookup would block until getaddrinfo returns.
+  set(CURLOPT_QUICK_EXIT, 1L);
   set(CURLOPT_FOLLOWLOCATION, 0L);
   set(CURLOPT_PROTOCOLS_STR, allow_plain_http_ ? "http,https" : "https");
   set(CURLOPT_PROXY, "");      // ignore http_proxy/https_proxy/all_proxy from the environment

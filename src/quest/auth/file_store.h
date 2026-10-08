@@ -15,11 +15,13 @@ inline constexpr char kCredentialsFileName[] = ".credentials.json";
 inline constexpr char kLoginLinkFileName[] = "device_login.txt";
 
 // The refresh token is a long-lived credential: it lives in the app-internal directory
-// (/data/data/<package>/files), where Android enforces owner-only access. The package is
-// taken from the process's own command line. Returns "" when the command line does not
-// look like a package name (a ":service" process, an unexpected launcher); the caller
-// must not fall back to external storage.
-std::string AppInternalFilesDirFromCmdline(const std::string& cmdline);
+// (/data/user/<user>/<package>/files), where Android enforces owner-only access. The package
+// is taken from the process's own command line and the Android user from its uid
+// (uid / 100000), so a secondary user gets its own directory; user 0's /data/user/0 is what
+// /data/data points at. Returns "" when the command line does not look like a package name
+// (a ":service" process, an unexpected launcher); the caller must not fall back to external
+// storage.
+std::string AppInternalFilesDirFromCmdline(const std::string& cmdline, unsigned uid);
 std::string AppInternalFilesDir();
 
 // Reads/writes `<dir>/.credentials.json`. Save writes a fresh sibling temp file (created

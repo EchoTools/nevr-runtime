@@ -35,8 +35,9 @@ enum class RefreshOutcome {
   Refreshed,
   NoRefreshToken,
   TransportFailed,
-  Denied,        // HTTP 400/401/403: the server refuses this refresh token for good
-  Rejected,      // any other HTTP status than 200 (5xx, 429, ...): worth retrying
+  Denied,        // HTTP 400/401/403 whose body names the refresh token: the server refuses THIS token
+  Unauthorized,  // HTTP 401/403 that does not name it: a wrong http_key or a gateway, not the token
+  Rejected,      // any other HTTP status than 200 (5xx, 429, 400 without a named token, ...): retryable
   Malformed,     // body is not the JSON object the RPC returns
   NoAccessToken  // 200 with neither access_token nor token
 };
@@ -51,6 +52,11 @@ std::string BuildDeviceAuthUrl(const std::string& base_url, const std::string& h
 std::string BuildRefreshBody(const std::string& refresh_token);
 
 // Interprets the RPC's HTTP result. Mutates `auth` only when returning Refreshed.
+//
+// A 401 is also what nakama answers for a wrong http_key (server/api_rpc.go), so the status
+// alone cannot say the refresh token is bad. The refresh RPC's own errors name it ("invalid or
+// expired refresh token", "refresh token expired", "not a refresh token", "refresh_token
+// required"); only a 400/401/403 whose body contains "refresh token" or "refresh_token" is Denied.
 RefreshOutcome ApplyRefreshResponse(CachedAuthToken& auth, const HttpResponse& response, uint64_t now,
                                     const LogSink& log);
 

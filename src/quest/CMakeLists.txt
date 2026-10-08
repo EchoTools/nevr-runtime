@@ -74,6 +74,14 @@ target_compile_options(stable_string_pool_test PRIVATE -Wall -Wextra -Werror)
 # Not linked into the sentinel yet: the hook that hands the token to the login
 # path is gated by ADR 0003.
 find_package(CURL CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
+# curl_http.cpp needs CURLOPT_PROTOCOLS_STR (7.85) and CURLOPT_QUICK_EXIT (7.87). The Quest manifest
+# has no builtin-baseline (neither does the root one), so what vcpkg resolves is whatever the
+# local vcpkg checkout carries; fail the configure rather than the compile when it is too old.
+if(NOT CURL_VERSION OR CURL_VERSION VERSION_LESS 7.87.0)
+  message(FATAL_ERROR "nevr_quest: libcurl ${CURL_VERSION} found, need >= 7.87.0 (CURLOPT_QUICK_EXIT)")
+endif()
+message(STATUS "nevr_quest: libcurl ${CURL_VERSION}")
 add_library(nevr_quest_token_auth STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../core/auth_refresh.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../core/device_auth_flow.cpp"
@@ -84,7 +92,7 @@ add_library(nevr_quest_token_auth STATIC
   auth/curl_http.cpp
   auth/quest_token_auth.cpp)
 target_include_directories(nevr_quest_token_auth PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
-target_link_libraries(nevr_quest_token_auth PUBLIC nlohmann_json::nlohmann_json CURL::libcurl)
+target_link_libraries(nevr_quest_token_auth PUBLIC nlohmann_json::nlohmann_json CURL::libcurl OpenSSL::Crypto)
 target_compile_options(nevr_quest_token_auth PRIVATE -Wall -Wextra -Werror)
 
 add_executable(auth_core_test tests/auth_core_test.cpp)

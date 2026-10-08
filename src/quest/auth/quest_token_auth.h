@@ -1,7 +1,7 @@
 #pragma once
 // Quest entry point for token auth: the Android collaborators (libcurl over the system
-// CA store, the cache file under the app's external files dir, SystemClock) wired into
-// a Session. NOT yet called from the sentinel: the hook that hands the token to the
+// CA store, the credential cache in the app-internal directory, the login-link file under
+// the external files dir, SystemClock) wired into a Session. NOT yet called from the sentinel: the hook that hands the token to the
 // login path is gated by ADR 0003; this is the part that can be built and tested now.
 
 #include "quest/auth/curl_http.h"
@@ -21,7 +21,7 @@ struct QuestAuthConfig {
   std::string http_key;  // public RPC key (a credential for the RPC; never logged)
   // Login link (readable by the player, not a long-lived secret).
   std::string files_dir = kQuestFilesDir;
-  // Refresh-token cache. Empty = derive /data/data/<package>/files from the process; if
+  // Refresh-token cache. Empty = derive /data/user/<uid/100000>/<package>/files from the process; if
   // that fails the login still runs but is not persisted, and the log says so.
   std::string credentials_dir;
   std::string login_url = kDefaultLoginUrl;
