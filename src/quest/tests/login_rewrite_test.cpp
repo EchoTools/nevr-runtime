@@ -267,7 +267,8 @@ void TestComposeFailsClosed() {
 // plugin array (CJson has no setter for it) and with no password value: the server reads the
 // password from the upgrade URL, and the game's own log of the outgoing login does not redact it.
 void TestComposedProfileMatchesPcvrBuilder() {
-  const QuestLogin::Identity id = MakeIdentity();
+  QuestLogin::Identity id = MakeIdentity();
+  id.social_level = SocialParty::kSocialLevel;  // a source with the social facade installed
   QuestLogin::GameValues game;
   game.hmd_serial = "1WMHH000000000";
   game.headset_type = "Quest 2";
@@ -301,40 +302,53 @@ void TestComposedProfileMatchesPcvrBuilder() {
   }
 }
 
-// The login declares the social message level the PCVR login declares, from the same shared
-// constant, so the server sends friend presence, recently met, the lobby tablet and party data
-// (each requires level 1 or more: nakama evr_friend_presence.go, evr_recently_met.go,
-// evr_lobby_tablet.go, evr_pipeline_party_data.go). With social off the login carries 0.
-void TestSocialLevelIsDeclaredAndCanBeTurnedOff() {
-  auto level_of = [](const QuestLogin::BuildInfo& build) {
-    const QuestLogin::Composition c = QuestLogin::Compose(MakeIdentity(), {}, build);
-    for (const QuestLogin::Field& f : c.fields) {
-      if (f.path == "nevr_social") return f.kind == FieldKind::Int ? f.number : std::int64_t{-1};
-    }
-    return std::int64_t{-2};  // member absent
-  };
-  QCHECK(SocialParty::kSocialLevel >= 1);
-  QCHECK(level_of(MakeBuild()) == SocialParty::kSocialLevel);
-  QuestLogin::BuildInfo off = MakeBuild();
-  off.social_level = 0;
-  QCHECK(level_of(off) == 0);
+// An identity source modelling the production wiring rule (docs/adr/0003, contract 5): the
+// login declares the shared social level only when the social feature is effective AND the
+// social facade is actually installed; otherwise 0. The server sends friend presence, recently
+// met, the lobby tablet and party data only to a session that declared level 1 or more (nakama
+// evr_friend_presence.go, evr_recently_met.go, evr_lobby_tablet.go, evr_pipeline_party_data.go).
+class SocialAwareSource final : public QuestLogin::IdentitySource {
+ public:
+  bool feature_enabled = true;
+  bool facade_installed = true;
+  QuestLogin::IdentityStatus Fetch(QuestLogin::Identity& out) override {
+    out = MakeIdentity();
+    out.social_level = (feature_enabled && facade_installed) ? SocialParty::kSocialLevel : 0;
+    return QuestLogin::IdentityStatus::Ok;
+  }
+};
 
-  // End to end through the rewrite: the member lands in the game's JSON, and the client-class
-  // members next to it are still the game's.
-  for (int level : {SocialParty::kSocialLevel, 0}) {
+void TestSocialLevelFollowsTheIdentitySource() {
+  auto declared = [](bool feature, bool installed) {
     FakeJson json;
     SeedOculusLogin(json);
     FakeUser user;
-    FakeSource source;
-    source.identity = MakeIdentity();
-    QuestLogin::BuildInfo build = MakeBuild();
-    build.social_level = level;
-    QCHECK(QuestLogin::RewriteLogin(user, json, source, build, &CaptureLog) == QuestLogin::Outcome::Rewritten);
+    SocialAwareSource source;
+    source.feature_enabled = feature;
+    source.facade_installed = installed;
+    const QuestLogin::Outcome out = QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog);
+    QCHECK(out == QuestLogin::Outcome::Rewritten);
     const nlohmann::json doc = json.ToJson();
-    QCHECK(At(doc, "nevr_social") == level);
+    // The client-class members next to it are still the game's.
     QCHECK(At(doc, "buildversion") == kQuestBuild);
     QCHECK(At(doc, "appid") == kQuestAppId);
+    return At(doc, "nevr_social");
+  };
+  QCHECK(SocialParty::kSocialLevel >= 1);
+  QCHECK(declared(true, true) == SocialParty::kSocialLevel);  // feature on and facade installed
+  QCHECK(declared(true, false) == 0);                          // social not installed
+  QCHECK(declared(false, true) == 0);                          // feature off
+  QCHECK(declared(false, false) == 0);
+
+  // An identity that says nothing about social declares nothing.
+  const QuestLogin::Composition plain = QuestLogin::Compose(MakeIdentity(), {}, MakeBuild());
+  bool found = false;
+  for (const QuestLogin::Field& f : plain.fields) {
+    if (f.path != "nevr_social") continue;
+    found = true;
+    QCHECK(f.kind == FieldKind::Int && f.number == 0);
   }
+  QCHECK(found);
 }
 
 void TestSerialRelay() {
@@ -911,7 +925,7 @@ int main() {
   TestComposeFailsClosed();
   TestComposedProfileMatchesPcvrBuilder();
   TestSerialRelay();
-  TestSocialLevelIsDeclaredAndCanBeTurnedOff();
+  TestSocialLevelFollowsTheIdentitySource();
   TestRewriteCarriesNevrIdentityToTheWire();
   TestClientClassKeysAreNeverOverwritten();
   TestAccountIdThatDoesNotReachTheWireIsRejected();

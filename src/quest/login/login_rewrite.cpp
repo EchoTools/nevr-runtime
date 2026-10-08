@@ -86,9 +86,9 @@ Composition Compose(const Identity& identity, const GameValues& game, const Buil
   inputs.git_commit = build.git_commit;
   inputs.git_describe = build.git_describe;
   inputs.build_type = build.build_type;
-  // The same social declaration as the PCVR login, from the shared builder's field; 0 declares
-  // none (BuildInfo::social_level).
-  inputs.social_level = static_cast<std::uint64_t>(build.social_level < 0 ? 0 : build.social_level);
+  // The same social declaration as the PCVR login, through the shared builder's field; the
+  // IdentitySource sets it (Identity::social_level), 0 declares none.
+  inputs.social_level = static_cast<std::uint64_t>(identity.social_level < 0 ? 0 : identity.social_level);
 
   // dump() throws on a display name that is not valid UTF-8; the game ABI must never see it.
   try {

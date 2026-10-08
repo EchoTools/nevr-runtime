@@ -183,16 +183,18 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
 5. **Social.** Portable roster, party and name rules in
    `src/runtime/compat/social_{roster,party,names}.*` are reused after dependency validation.
    The 75-slot Windows facade and `echovr.exe` offsets are not a Quest ABI: a Quest provider
-   adapter maps verified Quest slots, objects and callbacks to the same events. The login
-   declares the same `nevr_social` level as the PCVR login, from the one shared constant
-   (`SocialParty::kSocialLevel`, `runtime/compat/social_level.h`), through
-   `BuildInfo::social_level`; 0 declares none. The server sends friend presence, recently met,
-   the lobby tablet and party data only to a session that declared level 1 or more (nakama
-   `evr_friend_presence.go`, `evr_recently_met.go`, `evr_lobby_tablet.go`,
-   `evr_pipeline_party_data.go`), so a login that declares 0 leaves them empty. The Quest has no
-   social handlers in place yet, and what the Quest game does with a social message it does not
-   parse was not verified; the code that activates the hook passes the value, and passes 0 for
-   a build whose handlers are not in place.
+   adapter maps verified Quest slots, objects and callbacks to the same events. `nevr_social` is declared
+   only when the social feature is effective AND the social facade is actually installed;
+   otherwise the login carries 0. The shared value is `SocialParty::kSocialLevel`
+   (`runtime/compat/social_level.h`, the PCVR login's constant); the production
+   `IdentitySource` sets `Identity::social_level` to it when, and only when, both conditions
+   hold, and the default is 0. The server sends friend presence, recently met, the lobby tablet
+   and party data only to a session that declared level 1 or more (nakama
+   `evr_friend_presence.go:122`, `evr_recently_met.go:181`, `evr_lobby_tablet.go:52`,
+   `evr_pipeline_party_data.go:256`; `LoginProfile.SocialLevel()` in `server/evr/login_request.go`),
+   so a login that declares 0 leaves them empty and a login that declares 1 without handlers in
+   place would be sent messages the Quest cannot parse. What the Quest game does with a social
+   message it does not parse was not verified.
 
 ## Config-string seam (the first hook)
 
