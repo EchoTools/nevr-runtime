@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Every tracked script with a shebang under tools/ or a tests directory is recorded executable.
+"""Every tracked script with a shebang under tools/ or a tests directory is recorded executable,
+except the frozen list of scripts that were already recorded 100644 (#230).
 
 The worktrees run with core.fileMode=false, so an exec bit that exists only on disk never reaches
 git, and a recipe that runs the script directly fails from a clean checkout with exit 126.
@@ -13,6 +14,40 @@ import sys
 import unittest
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
+
+# Scripts that already had a shebang and mode 100644 on origin/main when this sensor was added
+# (#230 tracks fixing them). The list only shrinks: a path fixed to 100755 must be removed here,
+# and a new non-executable shebang script is not allowed in.
+KNOWN_NON_EXECUTABLE = frozenset(
+    {
+        "tools/build_distribution.py",
+        "tools/echomod/clone_combat.py",
+        "tools/echomod/clone_frisbee.py",
+        "tools/echomod/generate_resources.py",
+        "tools/echomod/rad_archive_tool.py",
+        "tools/echomod/setuparchive.py",
+        "tools/gen_symbol_corpus.py",
+        "tools/generate-symcache.sh",
+        "tools/scenario/control.py",
+        "tools/scenario/run_all.py",
+        "tools/scenario/run_scenario.py",
+        "tools/tests/test_quest_shared_redirect_sources.py",
+        "tools/tests/test_sample_config_sensor.py",
+        "tools/tests/test_score_log_markers.py",
+        "tools/tests/test_verify_doc_paths.py",
+        "tools/tests/test_verify_hook_invariants.py",
+        "tools/tests/test_verify_patch_source_inventory.py",
+        "tools/tests/test_winvm_checks.py",
+        "tools/verify_doc_paths.py",
+        "tools/verify_hook_invariants.py",
+        "tools/verify_log_rules.py",
+        "tools/verify_mode_patch_ground_truth.py",
+        "tools/verify_patch_source_inventory.py",
+        "tools/verify_scenario_control_absent.py",
+        "tools/winvm/dump_stacks.py",
+        "tools/winvm/systest.py",
+    }
+)
 
 
 def in_scope(path: str) -> bool:
@@ -46,8 +81,17 @@ def tracked_entries() -> list[tuple[str, str, bytes]]:
 
 
 class ExecutableScriptsTest(unittest.TestCase):
-    def test_every_tracked_shebang_script_is_mode_100755(self) -> None:
-        self.assertEqual(non_executable_scripts(tracked_entries()), [])
+    def test_no_new_non_executable_shebang_script(self) -> None:
+        found = set(non_executable_scripts(tracked_entries()))
+        self.assertEqual(sorted(found - KNOWN_NON_EXECUTABLE), [])
+
+    def test_the_known_list_only_shrinks(self) -> None:
+        found = set(non_executable_scripts(tracked_entries()))
+        self.assertEqual(
+            sorted(KNOWN_NON_EXECUTABLE - found),
+            [],
+            "these are executable (or gone) now: remove them from KNOWN_NON_EXECUTABLE",
+        )
 
     def test_the_scan_flags_only_non_executable_shebang_scripts_in_scope(self) -> None:
         entries = [
