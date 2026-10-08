@@ -459,18 +459,33 @@ Traced in the pinned libraries (ELF vaddrs):
   directly keep their offsets: counts at +0x200/+0x204, member JSON array +0x248, max members +0x250
   (`CNSIRichPresence::Set`, 0x1919000), lobby uuid/match type/team/type/flags at +0x260/+0x270/+0x278/
   +0x27a/+0x27c, room id +0x2a8, owner index +0x2b0, join policy +0x2b4. Two more are written by the
-  game: +0x1e8 (`CR15NetGame::Initialize` stores 2, libr15 0x12866bc) and the party CJson at +0x1f0,
-  which `CR15NetGame::Update` fills whenever `IsHost` answers true (`SetInt` 0x12951d4/0x1295628,
-  `SetSymbol` 0x1295240, `Clear` 0x1295254) and then sets bit 0 of +0x27c (0x1295044, 0x1295204). The
-  facade keeps a pointer to its owner in the last word.
+  game: +0x1e8 (`CR15NetGame::Initialize` stores 2, libr15 0x12866bc) and the party CJson at +0x1f0.
+  That CJson belongs to the social object (pnsovr's constructor builds it, 0x203254, its destructor
+  destroys it, `CJson::~CJson` at 0x20845c), and `CR15NetGame::Update` fills it whenever `IsHost` answers
+  true (`SetInt` 0x12951d4/0x1295628, `SetSymbol` 0x1295240, `Clear` 0x1295254) and then sets bit 0 of
+  +0x27c (0x1295044, 0x1295204). `Reset` clears it, as the native `CNSISocial::Reset` does with
+  `CJson::Reset` (libpnsovr 0x36a92c, libr15 0x19197cc): the facade calls the game's own `CJson::Reset`
+  (libr15 export, 36 bytes at 0xfa227c) on it from `SlotResetEntry` in `social_game_calls.cpp`, the
+  `-fno-exceptions` unit, because the call frees a tree the game allocated. The installer resolves the
+  function as libr15's load address plus the pinned export address, after checking libr15's build id;
+  `social_pinned_test` checks that address against the library's dynamic symbol table and the function's
+  first instruction. Where it cannot be resolved, `Reset` leaves the CJson alone and counts
+  (`social_cjson_reset_unavailable`). The facade keeps a pointer to its owner in the last word.
 - **Member count.** The game indexes the member JSON array at +0x248 by the member count the object
-  reports and checks the index only against slot 27 (`PartyMemberData` 0x129b3fc,
-  `PartyMemberHeadsetType` 0x129b168). The array holds `kMemberJsonSlots` = 10 entries, so slot 27,
-  +0x200/+0x204, `MemberId` and `MemberName` never exceed 10 whatever the server sends; a clamp is counted
-  (`social_members_clamped`). The model keeps its full list. Before the first `Update` the count is
+  reports and by the index each member callback carries, and checks the index only against slot 27
+  (`PartyMemberData` 0x129b3fc, `PartyMemberHeadsetType` 0x129b168; `PartyMemberJoinedCB` 0x126f8ac loads the
+  array pointer at +0x248, adds `index << 4` and calls `CJson::Int` with no check at all). The array holds
+  `kMemberJsonSlots` = 10 entries, so the game is shown the first 10 members of the model and no more,
+  whatever the server sends: slot 27, +0x200/+0x204, `MemberId` and `MemberName` stay within 10, and no
+  `MemberJoined`, `MemberUpdated` or `MemberLeft` is delivered for a member past it. Such a member exists in
+  the model and is invisible to the game (counted, `social_members_hidden`, logged once per party). When a
+  visible member leaves, the first hidden one moves into the window and is announced then, at its new
+  position, after the `MemberLeft`. A callback's index is the member's position when the frame is published,
+  not the one it had when the model queued the event. `Host` and `IsHost` answer from the model's owner id,
+  so a hidden host is still the host. Before the first `Update` the count is
   at least the local-user count `AddMember` wrote, so the engine's `MemberCount - [+0x200]`
   (`PlatformPurchaseSucceededCB`) is never negative. The PCVR facade has the same 10-entry array and no
-  clamp (#234).
+  such handling (#234).
 - **Callbacks.** `Initialize` copies the 15 delegates (0x20 bytes each, context, 16 inline bytes, proxy)
   that `CR15NetGame::Initialize` builds (0x12866ac..0x1286a60). Their order is the PCVR order:
   created, joined, join failed, updated, host changed, left, kicked, invitation accepted (the gate),
@@ -507,20 +522,52 @@ Traced in the pinned libraries (ELF vaddrs):
 - **Refused requests.** A create, join or lock request the sender refuses (no `SetSender` yet, a closed
   connection) is logged `NOT_sent`, counted (`social_send_failed`) and rolled back in the model
   (`SocialParty::State::AbandonCreate`, `AbandonJoining`, `ForgetLockRequest`), so the state does not stay
-  "creating" or "joining" and defer every later join. The create is retried after four seconds. A deferred
-  join is counted every frame (`social_join_deferred`) and logged once per party.
+  "creating" or "joining" and defer every later join. What happens next differs by request. A create is asked
+  again by `Update` once the game still wants a party and five seconds have passed since the last attempt
+  (pnsovr's own interval, libpnsovr 0x2045f4, `cmp w8, #5`). A lock is asked again by `Update` on the same
+  interval, one log line per attempt. A join is not sent again by the facade: the model restores the invites
+  the join consumed (so a retry by party id is the invite's accept again, not a plain join) and the game is told
+  `JoinFailed` with code 0, which `CR15NetGame::PartyJoinFailedCB` (libr15 0x126f630) takes down its
+  "unknown" branch (any code outside 1..6: the `b.hi` at 0x126f648 and 0x126f674, to 0x126f69c and 0x126f6c4) to the
+  generic failure event; the player
+  retries. A deferred join is counted every frame (`social_join_deferred`) and logged once per party. An
+  invite queued behind a create is queued once per target.
+- **Unanswered requests.** A create, join or lock the sender took and the server never answers is treated
+  as refused after 10 seconds (`social_request_timeout`, one warning line each): the same rollback, the same
+  retry for the create and the lock, and for a join the same `JoinFailed` to the game. The 10 seconds is twice
+  the longest wait the game's own code applies (the 5 s create retry). Nakama answers a create at once and
+  answers a join at once, except that a join to a locked party waits for the leader with no reply at all
+  (`snsPartyJoinRequest`), so silence is a normal outcome there. A reply that arrives after the deadline is
+  applied as usual. A create asked twice is not two parties: Nakama leaves the caller's current party before it
+  creates the new one (`snsPartyCreateRequest`), so the later `PartyCreateSuccess` is the party the model ends
+  in. Reply times of a live server were not measured.
+- **Sender contract.** `SocialParty::Send` returns false when any frame of the batch was refused, and still
+  hands the remaining frames of the batch to the sender; a false return means that frame was not written. The
+  PCVR sender returns false only with no login connection or when the websocket refused the frame, and true
+  for a frame queued while the connection opens, which is the unanswered case above. The Quest network
+  adapter's sender must follow the same rule (false: nothing of that frame left; true: taken, possibly queued).
+  Create, join and lock requests are single frames.
 - **Events.** One `Update` delivers at most 32 callbacks; the rest are carried to the next frame in order,
-  so a `Left`, `Kicked` or `MemberJoined` is delayed, not lost. The carry queue holds 256; past that the
-  newest are dropped and counted (`social_events_dropped`).
-- **Logging.** Every request logs its name, symbol, the id it carries (invite target, party, scope or
-  policy) and whether it was sent; no secret is in any of them. The lines go to logcat unless the
+  so a `Left`, `Kicked` or `MemberJoined` is delayed, not lost. A repeat of an `Updated` or `MemberUpdated` of
+  the same index directly after its twin, and any `InviteReceived` while one is due (its argument is always 0
+  and the invite list is read when it runs), are merged. The carry queue holds 256; past that the oldest
+  `Updated`, `MemberUpdated` or `InviteReceived` is dropped to make room. Events that say something no later
+  event repeats (`Created`, `Joined`, `JoinFailed`, `HostChanged`, `Left`, `Kicked`, `MemberJoined`,
+  `MemberLeft`) are never dropped for room; the queue may grow to 4096 with them, and only past that is the
+  newest dropped. Every drop is counted (`social_events_dropped`).
+- **Logging.** Every request logs its name, symbol and whether it was sent, with the ids it carries: the
+  account it is aimed at (`target`: the invite target, the kicked, passed or answered member, the profile
+  asked about), the party, and the Standard message's subject (`arg`) or a Targeted message's parameter
+  (`param`); a Targeted message carries only a UUID derived from the account id, so its builder records the
+  account id for the log. No secret is in any of them. The lines go to logcat unless the
   integration installs the sentinel's disk sink (`sentinel::SetLogSink`, PR #220's `sentinel_log.h`), so
   durability is the integration step's to provide; this package does not install one.
 
 What the facade does not carry: the member and party JSON. `MemberDataWritable` returns null, so the member
-array at +0x248 stays empty; the party CJson at +0x1f0 is the game's: it writes lobby settings into it while
-this client leads a party (see the field list) and the facade neither serializes nor shares it, and
-`Reset` leaves it alone (zeroing the pointer the game owns would orphan the tree it allocated). So headset
+array at +0x248 stays empty; the party CJson at +0x1f0 is written by the game: it writes lobby settings into
+it while this client leads a party (see the field list) and the facade neither serializes nor shares it;
+`Reset` clears it through the game's `CJson::Reset`, so the old party's settings are not read after the party
+is gone. So headset
 type in the party list and the lobby id a non-host party member follows are not shared; the engine's base `CNSISocial::Update` (0x1919868) would do that sharing
 given the dirty-bit array at +0x208 and the `ShareData` slots. `libr15.so` exports the CJson calls it would
 need (`DecodeFrom(char const*, unsigned long long)`, `EncodeToCompactTStr`, `Reset`). `RefreshInvites`,
@@ -533,7 +580,7 @@ request is sent and friends and party members show account ids until an adapter 
 What the integration commit calls, and when:
 
 1. **Install, in the sentinel constructor** (`nevr_sentinel_ctor`, after `InitActivation()`, next to the
-   existing GOT hooks): `quest_social::RegisterSocialReportCounters()` before `StartReporter` (it takes 6
+   existing GOT hooks): `quest_social::RegisterSocialReportCounters()` before `StartReporter` (it takes 12
    of the reporter's 32 counters; the clock hook takes 2 more, leaving room for the login, redirect and router hooks), then
    `quest_social::InstallSocialHook(sentinel::FeatureEnabled(Feature::kSocial))` after it.
    The target is libr15's own BIND_NOW slot, so libr15 only has to be mapped, which it is when its
@@ -550,7 +597,8 @@ What the integration commit calls, and when:
 3. **Login adapter:** `quest_social::SetLocalAccount(accountId, displayName)` once the service accepts the
    login (the NEVR account id, the id space of everything the facade reports).
 4. **Network adapter:** `SocialParty::SetSender(fn)` before the first request can be sent (until then a
-   request logs `NOT_sent`, is counted and is rolled back, so it is sent again later), and `quest_social::ObserveFrames(ProductionPorts(), direction, bytes, length,
+   request logs `NOT_sent`, is counted and is rolled back; the create and the lock are asked again by `Update`,
+   a join is reported to the game as failed), and `quest_social::ObserveFrames(ProductionPorts(), direction, bytes, length,
    nowSeconds)` for every frame the bridge relays on the login connection, both directions, after the
    remote EVR login session is open.
 5. **Link:** `nevr_quest_social` into `ovrplatformloader`. `social_install.cpp` and
@@ -597,9 +645,10 @@ absent from the file. The only consumer is the install call above.
 - `LocalId` (slot 30) returns pnsovr's invalid value for a non-local member, 0xFFFFFFFF (32-bit -1
   zero-extended, libpnsovr 0x205280). No direct call of that slot was found in libr15 (the review's
   slot-call scan and `PartyMemberIsLocal`, which compares `[+0x200]` itself).
-- `ExitLobby` stores `NRadEngine::SUuid::kInvalid`, looked up once in libr15's own handle
-  (`dlopen(RTLD_NOLOAD)`, then `RTLD_DEFAULT`) because libr15 is loaded `RTLD_LOCAL`; if neither finds it
-  (logged `missing_zero_fallback`) it stores sixteen zero bytes.
+- `ExitLobby` and `Reset` store sixteen zero bytes where the native code copies `NRadEngine::SUuid::kInvalid`.
+  libr15 defines that object in .bss (0x376c3b8, 16 bytes) and the only write through its GOT entry
+  (0x372adc8) is its initialiser, `CMemory::Fill(&kInvalid, 0, 16)` at 0xf54c4c..0xf54c58; the other 136
+  loads of the entry read it. libpnsovr defines its own copy (0x71ab68), which the facade never reads.
 - `UserProviderID` still comes from pnsovr; if its symbol differs from the one the game maps to platform
   code 4, friend rows are dropped silently, as they were on PCVR before the provider patch.
 - The packaged APK differs from the pinned one only if its `libr15.so`/`libpnsovr.so` hashes differ;
