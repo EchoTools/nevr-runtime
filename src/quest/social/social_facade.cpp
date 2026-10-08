@@ -338,6 +338,8 @@ void MaybeCreateParty(Impl& impl, const void* flagsPointer) {
     LogFields(LogLevel::kInfo, "social_update_flags", {{"flags", flags}});
   }
   if ((flags & kUpdateWantsParty) == 0) return;
+  // No signed-in account yet (the login has not finished): a create would carry a null user uuid.
+  if (Party(impl).Snapshot().selfId == 0) return;
   const std::uint64_t now = Now(impl);
   if (impl.createTried && now - impl.lastCreate < kCreateRetrySeconds) return;
   const std::vector<SocialParty::Message> request = Party(impl).CreateParty();

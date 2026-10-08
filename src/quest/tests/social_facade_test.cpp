@@ -280,6 +280,15 @@ void TestPartyCreateAndSlots() {
   QCHECK(SlotFn<U64_U32>(obj, kMemberDataWritable)(obj, 0) == 0);
 }
 
+void TestNoCreateBeforeLogin() {
+  World w;
+  Update(w, 1);  // the game wants a party, but no account is signed in
+  QCHECK(g_sent.empty());
+  w.party.SetSelf(kSelf, "alice");
+  Update(w, 1);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kCreateRequest);
+}
+
 void TestCreateRetriesAfterInterval() {
   World w;
   w.party.SetSelf(kSelf, "alice");
@@ -628,6 +637,7 @@ int main() {
   TestInitializeAndShutdown();
   TestFriendRoster();
   TestPartyCreateAndSlots();
+  TestNoCreateBeforeLogin();
   TestCreateRetriesAfterInterval();
   TestMembersJoinAndLeave();
   TestInvitesAndJoin();
