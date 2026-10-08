@@ -1,8 +1,9 @@
 // Ground-truth tests for the Quest crash-reporter .so.
 //
 // On-device runtime needs a headset, so the automatable ground truth is the
-// ELF shape of the built artifact. Each test traces to a BAC in
-// docs/2026-07-13-quest-crash-reporter-injection.md and shells to
+// ELF shape of the built artifact. Each test traces to one of the acceptance criteria numbered
+// BAC-1..5 in docs/design/2026-07-13-quest-crash-reporter-injection.md or to the hook contract in
+// docs/adr/0003-quest-networking-port.md, and shells to
 // readelf/nm on the real output (success derives from the artifact, not a
 // proxy). The test FAILS (not skips) when the .so is absent — build it first:
 //
@@ -12,6 +13,7 @@ package quest
 import (
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -398,21 +400,21 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 func TestBackendBuiltWithoutExceptions(t *testing.T) {
 	requireArtifact(t)
 	cieAug, fdeCIE := parseFrames(t)
-	want := map[string]bool{"7GotHook7Install": false, "ResolveSlot": false, "9LogFields": false, "13StartReporter": false, "ReporterMain": false}
-	backend := []string{"7GotHook", "ResolveSlot", "9LogFields", "8LogEvent", "9HexString", "10SetLogSink",
-		"13StartReporter", "20RegisterReportCounter", "12StopReporter", "ReporterMain"}
+	// The hook backend's own symbols, by exact mangled prefix: namespace sentinel, then the name's
+	// length and the name. A function elsewhere that merely mentions one of these names (for
+	// example one taking a std::vector<LogEvent>) is not the backend and is not matched.
+	backend := regexp.MustCompile(`^_ZN8sentinel(7GotHook|11ResolveSlot|9LogFields|8LogEvent|9HexString|` +
+		`10SetLogSink|13StartReporter|20RegisterReportCounter|12StopReporter|15ReporterRunning|` +
+		`12_GLOBAL__N_112ReporterMain)`)
+	want := map[string]bool{"_ZN8sentinel7GotHook7Install": false, "_ZN8sentinel11ResolveSlot": false,
+		"_ZN8sentinel9LogFields": false, "_ZN8sentinel13StartReporter": false,
+		"_ZN8sentinel12_GLOBAL__N_112ReporterMain": false}
 	for _, f := range parseFuncs(t) {
-		match := false
-		for _, b := range backend {
-			if strings.Contains(f.name, b) {
-				match = true
-			}
-		}
-		if !match {
+		if !backend.MatchString(f.name) {
 			continue
 		}
 		for k := range want {
-			if strings.Contains(f.name, k) {
+			if strings.HasPrefix(f.name, k) {
 				want[k] = true
 			}
 		}
@@ -427,7 +429,7 @@ func TestBackendBuiltWithoutExceptions(t *testing.T) {
 	}
 	for k, seen := range want {
 		if !seen {
-			t.Errorf("backend function matching %q not found: the test is looking at nothing", k)
+			t.Errorf("backend function with prefix %q not found: the test is looking at nothing", k)
 		}
 	}
 }
@@ -435,10 +437,16 @@ func TestBackendBuiltWithoutExceptions(t *testing.T) {
 // The raw GotHook::Install (any function pointer) is private. Its test access class may be
 // named only in got_hook.h (the friend declaration) and under src/quest/tests; production code
 // installs through InstallThunk, which keeps every hook a recorded, walked thunk entry. The
-// check is textual and cheap: it scans every C++ source/header extension, and it also fails if
-// any file outside a tests/ directory includes a header that lives in src/quest/tests (so a
-// wrapper placed under tests/ cannot be pulled into production). It is not bypass-proof (macro token pasting defeats
-// it); it exists to catch an honest mistake (callback_thunk.h, "Limits").
+// check is textual and cheap. It reads every file with a .cpp, .cc, .cxx, .h, .hpp or .inc
+// extension under src/, and it fails if a file outside a tests/ directory
+//   - names GotHookTestAccess, or
+//   - includes a header that lives anywhere under src/quest/tests (recursively): the include is
+//     resolved the ways a compiler would find it here (relative to the including file, relative
+//     to src/ because of -Isrc, and relative to src/quest/sentinel because of the target's own
+//     include directory), each cleaned with path.Clean, before the prefix test.
+//
+// It is not bypass-proof (macro token pasting defeats it); it exists to catch an honest mistake
+// (callback_thunk.h, "Limits").
 var includeRe = regexp.MustCompile(`#\s*include\s*[<"]([^>"]+)[>"]`)
 
 func TestRawInstallOnlyInTests(t *testing.T) {
@@ -447,25 +455,32 @@ func TestRawInstallOnlyInTests(t *testing.T) {
 		t.Fatal(err)
 	}
 	exts := map[string]bool{".cpp": true, ".cc": true, ".cxx": true, ".h": true, ".hpp": true, ".inc": true}
-	testDir := filepath.Join(root, "quest", "tests")
-	testBase := map[string]bool{}
-	entries, err := os.ReadDir(testDir)
+	testFiles := map[string]bool{} // slash paths relative to src/, everything under quest/tests
+	err = filepath.Walk(filepath.Join(root, "quest", "tests"), func(p string, info os.FileInfo, werr error) error {
+		if werr != nil || info.IsDir() {
+			return werr
+		}
+		rel, _ := filepath.Rel(root, p)
+		testFiles[filepath.ToSlash(rel)] = true
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range entries {
-		testBase[e.Name()] = true
+	if len(testFiles) < 5 {
+		t.Fatalf("found only %d files under src/quest/tests: the walk is looking at nothing", len(testFiles))
 	}
 	seen := 0
-	err = filepath.Walk(root, func(path string, info os.FileInfo, werr error) error {
-		if werr != nil || info.IsDir() || !exts[filepath.Ext(path)] {
+	err = filepath.Walk(root, func(p string, info os.FileInfo, werr error) error {
+		if werr != nil || info.IsDir() || !exts[filepath.Ext(p)] {
 			return werr
 		}
-		data, rerr := os.ReadFile(path)
+		data, rerr := os.ReadFile(p)
 		if rerr != nil {
 			return rerr
 		}
-		rel, _ := filepath.Rel(root, path)
+		relOS, _ := filepath.Rel(root, p)
+		rel := filepath.ToSlash(relOS)
 		inTests := strings.HasPrefix(rel, "quest/tests/")
 		if strings.Contains(string(data), "GotHookTestAccess") {
 			seen++
@@ -476,9 +491,15 @@ func TestRawInstallOnlyInTests(t *testing.T) {
 		// Other tests (src/runtime/tests, ...) may include the shared test vectors; production may not.
 		if !strings.Contains("/"+rel, "/tests/") {
 			for _, m := range includeRe.FindAllStringSubmatch(string(data), -1) {
-				inc := m[1]
-				if strings.HasPrefix(inc, "quest/tests/") || testBase[filepath.Base(inc)] && !strings.Contains(inc, "/sentinel/") {
-					t.Errorf("%s includes %s from src/quest/tests; production code must not", rel, inc)
+				for _, cand := range []string{
+					path.Join(path.Dir(rel), m[1]),
+					path.Clean(m[1]),
+					path.Join("quest/sentinel", m[1]),
+				} {
+					if testFiles[cand] {
+						t.Errorf("%s includes %s, which resolves to %s under src/quest/tests; production code must not", rel, m[1], cand)
+						break
+					}
 				}
 			}
 		}

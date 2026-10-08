@@ -73,8 +73,10 @@ contract:
    compile); the raw `GotHook::Install` taking any function pointer is private and reachable only
    through the test access class. `just test-quest-hooks` compiles snippets that break each
    type-level rule and requires them to fail with the message that names the rule;
-   `TestRawInstallOnlyInTests` scans every C++ source and header and fails if production code names
-   the test access class or includes anything from `src/quest/tests`.
+   `TestRawInstallOnlyInTests` reads every `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp` and `.inc` file under
+   `src/` and fails if a file outside a `tests/` directory names the test access class or includes
+   (resolved relative to the including file, to `src/` and to `src/quest/sentinel`) anything under
+   `src/quest/tests`, recursively.
 5. A function a handler calls directly and that can be on the stack across the call into game
    code must be personality-free, and must not make an indirect call (function pointer, virtual,
    `std::function`) into code built with exceptions.
@@ -97,7 +99,9 @@ an atomic counter, and a reporter thread (`hook_report.h`, created from the cons
 first hook is installed) logs "reporter_started", then a counter's first change within the first
 10 seconds, then "never_fired" once for each counter still zero when that window closes (the hook
 is installed and the game never called it), and from then on one pass a minute that logs a counter
-only if it changed. The thread ends with the process; creating it from a constructor on a Quest is
+only if it changed. The counter table holds 32 counters for the whole program, and every
+`RegisterReportCounter` call must come before `StartReporter` (a later registration, or the 33rd, is
+refused and logged as `register_refused`). The thread ends with the process; creating it from a constructor on a Quest is
 inferred from the Bionic main-branch source and has not been tried on a headset. A slot where a
 failed install left the sentinel's entry possibly reachable through another writer's hook stays
 reserved for the process and a retry is refused with its own status, `slot_poisoned`;
