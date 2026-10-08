@@ -312,6 +312,13 @@ void TestUpgradeNeedsTheToken() {
   const uint16_t port = rig.server->Start();
   const std::string token = rig.Token();
   QCHECK(token.size() == 32);
+  for (const char c : token) QCHECK((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+  {  // a fresh token per Start(): two servers never share one, and it is not a constant or a repeated byte
+    Rig other;
+    other.server->Start();
+    QCHECK(other.Token().size() == 32 && other.Token() != token);
+    QCHECK(token.find_first_not_of(token[0]) != std::string::npos);
+  }
   QCHECK(rig.server->LoopbackUri() == "ws://127.0.0.1:" + std::to_string(port) + "/" + token + "/");
 
   std::string wrong = token;
