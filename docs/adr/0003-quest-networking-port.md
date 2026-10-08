@@ -420,8 +420,16 @@ Traced in the pinned libraries (ELF vaddrs):
   `CNSUser::SendLogInRequest` (0x3ca208) reads `[this+0x90]` (0x3ca344); the message layout beyond
   that is from the #221 review.
 - The game compares a friend id's provider with `CNSProvider::UserProviderID(primary)` (`FriendId`,
-  libr15 0x129b6f8). pnsovr's export returns the global at libpnsovr 0x70e380, a value set at run time
-  that was not read here.
+  libr15 0x129b6f8): the symbol is compared in turn with seven CSymbol64 constants in libr15's rodata and the match
+  picks the platform code of the id (the "OVR" hash, 0xc8e8d0b1a89ff4f8 at 0x2ba11c0, gives 4; "PSN" 2; "DMO" 7); no
+  match gives 0. pnsovr's `UserProviderID` and `ProviderID` exports both return the word at libpnsovr 0x70e380 (.bss,
+  written at run time; no store to it was found by static search). pnsovr's own `SNSUserID` constructor and
+  `OpenFriendRequestUI` compare that word with the same "OVR" hash and make code 4, and the login rewrite refuses to run
+  unless `CNSOVRUser`'s platform word is 4 (the platform the NEVR login carries and `SocialParty::MemberUuid`
+  derives ids for: `OVR-ORG-<id>`). So the chain is consistent when the word holds the "OVR" hash, which is what pnsovr's
+  native friend flow needs; the value itself was not read from a running process. `Initialize` reads the word once and
+  logs `social_provider` (symbol, the platform code the game will derive, the code the login carries, match yes/NO), at
+  warn level on a mismatch; a mismatch is the case that drops friend rows silently.
 
 ### Options
 
@@ -705,8 +713,10 @@ absent from the file. The only consumer is the install call above.
   libr15 defines that object in .bss (0x376c3b8, 16 bytes) and the only write through its GOT entry
   (0x372adc8) is its initialiser, `CMemory::Fill(&kInvalid, 0, 16)` at 0xf54c4c..0xf54c58; the other 136
   loads of the entry read it. libpnsovr defines its own copy (0x71ab68), which the facade never reads.
-- `UserProviderID` still comes from pnsovr; if its symbol differs from the one the game maps to platform
-  code 4, friend rows are dropped silently, as they were on PCVR before the provider patch.
+- `UserProviderID` still comes from pnsovr (no pnsrad-enabler equivalent is installed). If its word is not the "OVR"
+  hash, friend rows are dropped silently, as they were on PCVR before its provider patch; `social_provider` at
+  `Initialize` shows which case a headset run is in. The fix for a mismatch (storing the "OVR" hash in that word) is not
+  made without that evidence, because pnsovr uses the word for its own user and presence code.
 - The packaged APK differs from the pinned one only if its `libr15.so`/`libpnsovr.so` hashes differ;
   the hook refuses on a build id mismatch.
 

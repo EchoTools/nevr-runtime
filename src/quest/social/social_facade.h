@@ -48,6 +48,11 @@ const Ports& ProductionPorts();
 // loads and shares nothing, leaves the CJson alone and counts a Reset (jsonFailed). A test sets fakes.
 void SetGameJson(const GameJson& json) noexcept;
 
+// The load address of the pinned libpnsovr, set when the Social() hook selected the facade (0: not known). The facade's
+// Initialize reads pnsovr's provider symbol from it and logs whether the game will derive the platform code the login
+// carries (social_abi.h, "provider identity").
+void SetPnsovrBias(std::uintptr_t loadBias) noexcept;
+
 // A server frame of a social kind that changed nothing (unreadable, not an object, for another party): counted for
 // the reporter (framesIgnored); the observer logs the reason on its own thread.
 void NoteFrameIgnored() noexcept;
