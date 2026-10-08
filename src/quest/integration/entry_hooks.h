@@ -13,4 +13,8 @@ bool InstallClockHook() noexcept;       // false when GotHook refused the slot (
 // libraries. Never throws and never blocks.
 void RunSentinelConstructor() noexcept;
 
+// Stops the bridge and joins the token-auth thread. Nothing calls it at process exit (the sentinel is
+// never unloaded); it is the teardown path for tests and for a future unload.
+void ShutdownIntegration() noexcept;
+
 }  // namespace nevr_quest::integration

@@ -25,6 +25,8 @@ Slot g_matchmaking{nullptr, false, nullptr, "matchmaking"};
 std::atomic<bool> g_pending{false};
 std::atomic<std::uint64_t> g_calls{0};
 std::atomic<std::uint64_t> g_attempts{0};
+std::atomic<bool> g_sawPnsovr{false};
+std::atomic<bool> g_sawMatchmaking{false};
 
 const char* Basename(const char* path) {
   if (path == nullptr) return "(null)";
@@ -59,6 +61,8 @@ void SetPostLoadActions(const PostLoadActions& actions) {
   g_login = Slot{actions.login, false, nullptr, "login"};
   g_matchmaking = Slot{actions.matchmaking, false, nullptr, "matchmaking"};
   g_calls.store(0);
+  g_sawPnsovr.store(false);
+  g_sawMatchmaking.store(false);
   g_attempts.store(0);
   g_pending.store(AnyUnsettled(), std::memory_order_release);
 }
@@ -79,6 +83,18 @@ PostLoadStats PostLoadStatsView() noexcept {
 NEVR_OUTSIDE_GAME_CALL void AfterDlopen(const char* name, void* handle) noexcept {
   if (handle == nullptr) return;
   g_calls.fetch_add(1, std::memory_order_relaxed);
+  // Stage lines (stage_log.h): the game mapped the libraries the later installs need. Once each.
+  if (name != nullptr) {
+    if (std::strstr(name, "pnsradmatchmaking") != nullptr) {
+      if (!g_sawMatchmaking.exchange(true)) {
+        sentinel::LogFields(sentinel::LogLevel::kInfo, "libpnsradmatchmaking_loaded", {{"status", "ok"}});
+      }
+    } else if (std::strstr(name, "pnsovr") != nullptr) {
+      if (!g_sawPnsovr.exchange(true)) {
+        sentinel::LogFields(sentinel::LogLevel::kInfo, "libpnsovr_loaded", {{"status", "ok"}});
+      }
+    }
+  }
   if (!g_pending.load(std::memory_order_acquire)) return;
   try {
     const std::lock_guard<std::mutex> lock(g_mutex);

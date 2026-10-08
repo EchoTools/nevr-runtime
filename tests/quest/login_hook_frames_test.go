@@ -16,20 +16,14 @@ import (
 // from every hook record's entry and handler (the nevr_hook_records section), follow direct
 // bl/b edges and fail on any reachable function under a personality-bearing CIE.
 //
-// The one allowed exception is ComposePlan, the exceptions-enabled compose phase. It calls no
-// game code and has returned before the next game call, so it is never on the stack while game
-// code runs; the walk does not enter it. The test requires that it IS reached, so the
-// exemption cannot go stale, and that it does sit under a personality, so the parser is not
-// blind to one.
+// The exemption is the shared one (frames_sensor_test.go): ComposePlan, the exceptions-enabled compose
+// phase, calls no game code and has returned before the next game call, so it is marked
+// NEVR_OUTSIDE_GAME_CALL and the walk does not enter it. The test requires that it IS reached as an
+// annotated function, so the exemption cannot go stale, and that it does sit under a personality, so
+// the parser is not blind to one.
 const loginProbeRel = "../../build/android-arm64/login_frames_probe"
 
 var composePlanRe = regexp.MustCompile(`^_ZN10QuestLogin11ComposePlanE`)
-
-// The cold, noreturn tail of libc++ and libc++abi's checks (a length or range error, terminate,
-// the exception allocator). They are reached by direct edges from container operations but do
-// not run during a normal call, and when one does run it raises a sentinel exception that never
-// returns, so it is never a frame a game exception passes through. Not entered by the walk.
-var libcxxThrowTail = regexp.MustCompile(`^(__cxa_|_ZSt9terminatev|_ZSt11__terminatePFvvE|_ZNSt6__ndk120__throw_|_ZNSt11logic_error|_ZN10__cxxabiv1|_ZN12_GLOBAL__N_1)`)
 
 func probePath(t *testing.T) string {
 	t.Helper()
@@ -100,120 +94,24 @@ func funcsOf(t *testing.T, path string) []elfFunc {
 }
 
 func TestLoginHookFramesCarryNoPersonality(t *testing.T) {
-	path := probePath(t)
-	cieAug, fdeCIE := framesOf(t, path)
-	funcs := funcsOf(t, path)
-	byAddr := map[uint64]*elfFunc{}
-	for i := range funcs {
-		byAddr[funcs[i].addr] = &funcs[i]
+	art := loadFrameGraph(t, probePath(t))
+	v := walkHookFrames(art.graph)
+	for _, msg := range v.violations {
+		t.Error(msg)
 	}
-	containing := func(a uint64) *elfFunc {
-		if f, ok := byAddr[a]; ok {
-			return f
-		}
-		for i := range funcs {
-			if a >= funcs[i].addr && a < funcs[i].addr+funcs[i].size {
-				return &funcs[i]
-			}
-		}
-		return nil
+	// ComposePlan is the exceptions-enabled compose phase. It is exempt only through its
+	// NEVR_OUTSIDE_GAME_CALL annotation; the walk must reach it (so the exemption cannot go stale) and it
+	// must sit under a personality (so the parser is not blind to one).
+	if !anyMatches(v.annotatedReached, composePlanRe) {
+		t.Errorf("ComposePlan was not reached as an annotated function: the annotation or the edge is gone (reached: %v)", v.annotatedReached)
 	}
-
-	edges := map[uint64]map[uint64]bool{}
-	var from uint64
-	for _, line := range strings.Split(run(t, "llvm-objdump", "-d", "--no-show-raw-insn", path), "\n") {
-		if m := hdrRe.FindStringSubmatch(line); m != nil {
-			from, _ = strconv.ParseUint(m[1], 16, 64)
-			continue
-		}
-		m := branchR.FindStringSubmatch(line)
-		if m == nil || strings.HasSuffix(m[3], "@plt") {
-			continue
-		}
-		to, _ := strconv.ParseUint(m[2], 16, 64)
-		callee, caller := containing(to), containing(from)
-		if callee == nil || caller == nil || callee.addr == caller.addr {
-			continue
-		}
-		if edges[caller.addr] == nil {
-			edges[caller.addr] = map[uint64]bool{}
-		}
-		edges[caller.addr][callee.addr] = true
-	}
-
-	// Hook records: {entry, handler} pairs read from the section's relocation addends.
-	var recAddr, recSize uint64
-	for _, line := range strings.Split(run(t, "readelf", "-SW", path), "\n") {
-		if m := secFull.FindStringSubmatch(line); m != nil && m[1] == "nevr_hook_records" {
-			recAddr, _ = strconv.ParseUint(m[2], 16, 64)
-			recSize, _ = strconv.ParseUint(m[3], 16, 64)
+	for addr, name := range art.graph.names {
+		if composePlanRe.MatchString(name) && !strings.Contains(art.graph.aug[addr], "P") {
+			t.Errorf("ComposePlan sits under CIE augmentation %s, want a personality-bearing CIE", art.graph.aug[addr])
 		}
 	}
-	relative := map[uint64]uint64{}
-	for _, line := range strings.Split(run(t, "readelf", "-rW", path), "\n") {
-		if m := relRe.FindStringSubmatch(line); m != nil {
-			off, _ := strconv.ParseUint(m[1], 16, 64)
-			add, _ := strconv.ParseUint(m[2], 16, 64)
-			relative[off] = add
-		}
+	if v.checked < len(art.graph.roots)+3 {
+		t.Errorf("checked only %d functions for %d roots: the walk lost its edges", v.checked, len(art.graph.roots))
 	}
-	if recSize == 0 || recSize%16 != 0 {
-		t.Fatalf("no nevr_hook_records section (size %d): the walk has no roots", recSize)
-	}
-	var roots []uint64
-	for off := recAddr; off < recAddr+recSize; off += 16 {
-		entry, okE := relative[off]
-		handler, okH := relative[off+8]
-		if !okE || !okH {
-			t.Fatalf("hook record at %#x has no relocation for its entry/handler pointer", off)
-		}
-		roots = append(roots, entry, handler)
-	}
-	reached := map[uint64]bool{}
-	queue := append([]uint64(nil), roots...)
-	for _, r := range roots {
-		reached[r] = true
-	}
-	composeReached, composeAug := false, ""
-	checked := 0
-	for len(queue) > 0 {
-		a := queue[0]
-		queue = queue[1:]
-		f := byAddr[a]
-		if f == nil {
-			continue
-		}
-		cie, ok := fdeCIE[a]
-		if !ok {
-			t.Errorf("%s at %#x has no FDE", f.name, a)
-			continue
-		}
-		if composePlanRe.MatchString(f.name) {
-			composeReached, composeAug = true, cieAug[cie]
-			continue // runs between game calls and calls none; not entered
-		}
-		if libcxxThrowTail.MatchString(f.name) {
-			continue
-		}
-		checked++
-		if aug := cieAug[cie]; aug != `"zR"` {
-			t.Errorf("function %s (reachable from the login handler) sits under CIE augmentation %s, want \"zR\" (no personality, no LSDA)", f.name, aug)
-		}
-		for callee := range edges[a] {
-			if !reached[callee] {
-				reached[callee] = true
-				queue = append(queue, callee)
-			}
-		}
-	}
-	if !composeReached {
-		t.Errorf("ComposePlan was not reached from the handler: the exemption is stale or the walk lost an edge")
-	}
-	if !strings.Contains(composeAug, "P") {
-		t.Errorf("ComposePlan sits under CIE augmentation %s, want a personality-bearing CIE (the parser must be able to see one)", composeAug)
-	}
-	if checked < len(roots)+3 {
-		t.Errorf("checked only %d functions for %d roots: the walk lost its edges", checked, len(roots))
-	}
-	t.Logf("login roots=%d, functions checked=%d", len(roots), checked)
+	t.Logf("login roots=%d, functions checked=%d", len(art.graph.roots), v.checked)
 }

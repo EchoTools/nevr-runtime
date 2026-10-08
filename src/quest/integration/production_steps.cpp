@@ -3,6 +3,8 @@
 // are dlopen_hook.cpp, social_shim.cpp, entry.cpp and the library packages' own).
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <cstring>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -23,6 +25,7 @@
 #include "quest/integration/integrated_bridge.h"
 #include "quest/integration/post_load.h"
 #include "quest/integration/social_gate.h"
+#include "quest/integration/stage_log.h"
 #include "quest/integration/social_shim.h"
 #include "quest/login/login_hook.h"
 #include "quest/net/curl_ws_connector.h"
@@ -54,6 +57,9 @@ namespace {
 struct Runtime {
   std::atomic<nevr::quest_auth::QuestTokenAuth*> auth{nullptr};
   std::thread authThread;
+  std::mutex pollMutex;                 // guards stopPoll; the auth thread waits on pollCv between polls
+  std::condition_variable pollCv;
+  bool stopPoll = false;
   std::unique_ptr<quest_net::CurlWsConnector> connector;
   std::atomic<IntegratedBridge*> bridge{nullptr};
   std::atomic<unsigned> bridgePort{0};
@@ -111,6 +117,26 @@ nevr::quest_auth::Snapshot AuthSnapshot() {
   return snap;
 }
 
+// Logs the token session's readiness whenever it changes (stage line `token_auth_state`), until shutdown.
+// This is the thread that outlives Start(); it waits on a condition variable, so ShutdownIntegration
+// wakes and joins it.
+void PollTokenAuthState() {
+  Runtime& rt = R();
+  int last = -1;
+  for (;;) {
+    const nevr::quest_auth::Snapshot snap = AuthSnapshot();
+    if (static_cast<int>(snap.readiness) != last) {
+      last = static_cast<int>(snap.readiness);
+      const bool bad = snap.readiness == nevr::quest_auth::Readiness::Failed ||
+                       snap.readiness == nevr::quest_auth::Readiness::Expired;
+      sentinel::LogFields(bad ? sentinel::LogLevel::kWarn : sentinel::LogLevel::kInfo, "token_auth_state",
+                          {{"status", nevr::quest_auth::ReadinessName(snap.readiness)}});
+    }
+    std::unique_lock<std::mutex> lock(rt.pollMutex);
+    if (rt.pollCv.wait_for(lock, std::chrono::seconds(2), [&rt] { return rt.stopPoll; })) return;
+  }
+}
+
 // --- bridge --------------------------------------------------------------------------------------
 
 bool SendSocialFrame(const std::string& frame) {
@@ -139,35 +165,63 @@ QuestLogin::BuildInfo ThisBuild() {
   return build;
 }
 
+// The login library's own records, plus the stage line `login_rewritten` for each login it handled.
+void LoginLog(QuestLogin::Level level, const char* event, const QuestLogin::LogKv* fields, std::size_t count) {
+  QuestLogin::SentinelLog(level, event, fields, count);
+  if (std::strcmp(event, "quest_login") != 0) return;
+  const char* outcome = "unknown";
+  for (std::size_t i = 0; i < count; ++i) {
+    if (std::strcmp(fields[i].key, "outcome") == 0 && fields[i].text != nullptr) outcome = fields[i].text;
+  }
+  const bool ok = std::strcmp(outcome, QuestLogin::OutcomeName(QuestLogin::Outcome::Rewritten)) == 0;
+  sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn, "login_rewritten",
+                      {{"status", ok ? "ok" : "failed"}, {"class", outcome}});
+}
+
+// A stage line for a post-load install once it is settled (a retry is not a result).
+ActionResult Staged(const char* stage, ActionResult result) {
+  if (result.settle != Settle::kRetryLater) {
+    const bool ok = result.settle == Settle::kDone;
+    sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, stage,
+                        {{"status", ok ? "ok" : "failed"}, {"class", result.status}});
+  }
+  return result;
+}
+
 ActionResult LoginAction() noexcept {
   try {
     static const QuestLogin::BuildInfo build = ThisBuild();
-    switch (QuestLogin::TryInstallLoginHook(R().identity.get(), build)) {
-      case QuestLogin::InstallState::Installed: return {Settle::kDone, "installed"};
-      case QuestLogin::InstallState::AlreadyInstalled: return {Settle::kDone, "already_installed"};
+    switch (QuestLogin::TryInstallLoginHook(R().identity.get(), build, &LoginLog)) {
+      case QuestLogin::InstallState::Installed: return Staged("login_hook_installed", {Settle::kDone, "installed"});
+      case QuestLogin::InstallState::AlreadyInstalled:
+        return Staged("login_hook_installed", {Settle::kDone, "already_installed"});
       case QuestLogin::InstallState::ModuleNotLoaded: return {Settle::kRetryLater, "module_not_loaded"};
-      case QuestLogin::InstallState::BuildMismatch: return {Settle::kGiveUp, "build_mismatch"};
-      case QuestLogin::InstallState::SlotInvalid: return {Settle::kGiveUp, "slot_invalid"};
-      case QuestLogin::InstallState::SymbolMissing: return {Settle::kGiveUp, "symbol_missing"};
-      case QuestLogin::InstallState::HookFailed: return {Settle::kGiveUp, "hook_failed"};
+      case QuestLogin::InstallState::BuildMismatch:
+        return Staged("login_hook_installed", {Settle::kGiveUp, "build_mismatch"});
+      case QuestLogin::InstallState::SlotInvalid: return Staged("login_hook_installed", {Settle::kGiveUp, "slot_invalid"});
+      case QuestLogin::InstallState::SymbolMissing:
+        return Staged("login_hook_installed", {Settle::kGiveUp, "symbol_missing"});
+      case QuestLogin::InstallState::HookFailed: return Staged("login_hook_installed", {Settle::kGiveUp, "hook_failed"});
     }
-    return {Settle::kGiveUp, "unknown_state"};
+    return Staged("login_hook_installed", {Settle::kGiveUp, "unknown_state"});
   } catch (const std::exception&) {
-    return {Settle::kGiveUp, "exception"};
+    return Staged("login_hook_installed", {Settle::kGiveUp, "exception"});
   }
 }
 
 ActionResult MatchmakingAction() noexcept {
   try {
-    switch (nevr_quest::redirect::InstallMatchmakingRedirect()) {
-      case sentinel::GotStatus::kOk: return {Settle::kDone, "installed"};
-      case sentinel::GotStatus::kAlreadyInstalled: return {Settle::kDone, "already_installed"};
+    const sentinel::GotStatus status = nevr_quest::redirect::InstallMatchmakingRedirect();
+    switch (status) {
+      case sentinel::GotStatus::kOk: return Staged("matchmaking_redirect_installed", {Settle::kDone, "installed"});
+      case sentinel::GotStatus::kAlreadyInstalled:
+        return Staged("matchmaking_redirect_installed", {Settle::kDone, "already_installed"});
       case sentinel::GotStatus::kModuleNotLoaded: return {Settle::kRetryLater, "module_not_loaded"};
       default: break;
     }
-    return {Settle::kGiveUp, "install_refused"};
+    return Staged("matchmaking_redirect_installed", {Settle::kGiveUp, sentinel::GotStatusName(status)});
   } catch (const std::exception&) {
-    return {Settle::kGiveUp, "exception"};
+    return Staged("matchmaking_redirect_installed", {Settle::kGiveUp, "exception"});
   }
 }
 
@@ -182,7 +236,15 @@ class ProductionSteps final : public Steps {
 
   const nevr_quest::ResolvedConfig& ResolveConfig() override {
     sentinel::InitActivation();
-    return sentinel::ActiveConfig();
+    const nevr_quest::ResolvedConfig& cfg = sentinel::ActiveConfig();
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "config_loaded",
+                        {{"status", "ok"}, {"redirect", cfg.effective.redirect ? 1 : 0},
+                         {"bridge", cfg.effective.bridge ? 1 : 0}, {"login", cfg.effective.login ? 1 : 0},
+                         {"socket_uri", nevr_quest::SourceName(cfg.socketUri.source)},
+                         {"http_uri", nevr_quest::SourceName(cfg.httpUri.source)},
+                         {"http_key", nevr_quest::SourceName(cfg.httpKey.source)},
+                         {"server_key", nevr_quest::SourceName(cfg.serverKey.source)}});
+    return cfg;
   }
 
   bool SocialWanted(const nevr_quest::Features& effective) override {
@@ -210,13 +272,16 @@ class ProductionSteps final : public Steps {
   bool RegisterSocialCounters() override { return nevr_quest::integration::RegisterSocialCounters(); }
   bool StartReporter() override { return sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000); }
 
-  bool InstallClockHook() override { return nevr_quest::integration::InstallClockHook(); }
+  bool InstallClockHook() override {
+    const bool ok = nevr_quest::integration::InstallClockHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
+  }
 
   bool StartTokenAuth() override {
     const nevr_quest::ResolvedConfig& cfg = sentinel::ActiveConfig();
     if (cfg.httpUri.text.empty() || cfg.httpKey.text.empty()) {
-      sentinel::LogFields(sentinel::LogLevel::kError, "token_auth",
-                          {{"status", "not_started"}, {"reason", "http_uri_or_key_absent"}});
+      detail_ = "http_uri_or_key_absent";
       return false;
     }
     Runtime& rt = R();
@@ -238,11 +303,14 @@ class ProductionSteps final : public Steps {
             });
         auth->Start();
         R().auth.store(auth, std::memory_order_release);
-        sentinel::LogFields(sentinel::LogLevel::kInfo, "token_auth", {{"status", "started"}});
       } catch (const std::exception&) {
-        sentinel::LogFields(sentinel::LogLevel::kError, "token_auth", {{"status", "start_threw"}});
+        sentinel::LogFields(sentinel::LogLevel::kError, "token_auth_state",
+                            {{"status", "failed"}, {"class", "start_threw"}});
+        return;
       }
+      PollTokenAuthState();
     });
+    detail_ = "launched";
     return true;
   }
 
@@ -278,10 +346,17 @@ class ProductionSteps final : public Steps {
       };
       SocialParty::SetSender(&SendSocialFrame);
     }
+    if (!quest_net::IsAcceptableRemoteUrl(config.remoteUri)) {
+      detail_ = "socket_uri_not_wss";
+      return false;
+    }
     auto bridge = std::make_unique<IntegratedBridge>(std::move(config));
     const std::uint16_t port = bridge->Start();
-    if (port == 0) return false;
-    sentinel::LogFields(sentinel::LogLevel::kInfo, "bridge", {{"status", "listening"}, {"port", port}});
+    if (port == 0) {
+      detail_ = "listener_failed";
+      return false;
+    }
+    port_ = port;
     rt.bridge.store(bridge.release(), std::memory_order_release);  // leaked: threads and hooks outlive statics
     rt.bridgePort.store(port, std::memory_order_release);
     return true;
@@ -292,11 +367,17 @@ class ProductionSteps final : public Steps {
     nevr_quest::redirect::InstallOptions options{nevr_quest::redirect::PinnedTargets(), sentinel::FindLoadedImage,
                                                  &nevr_runtime::lifecycle::InternStableCStr, &BridgeProbe};
     const nevr_quest::redirect::InstallReport report = nevr_quest::redirect::InstallRedirectHooksWith(cfg, options);
+    detail_ = report.featureEnabled ? sentinel::GotStatusName(report.libr15) : "feature_off_or_allocation_failure";
     return report.featureEnabled && (report.libr15 == sentinel::GotStatus::kOk ||
                                      report.libr15 == sentinel::GotStatus::kAlreadyInstalled);
   }
 
-  bool InstallSocial() override { return nevr_quest::integration::InstallSocialHook(); }
+  bool InstallSocial() override {
+    const char* detail = "unknown";
+    const bool ok = nevr_quest::integration::InstallSocialHook(&detail);
+    detail_ = detail;
+    return ok;
+  }
 
   bool InstallDlopenHook(bool login, bool matchmaking) override {
     PostLoadActions actions;
@@ -304,21 +385,45 @@ class ProductionSteps final : public Steps {
     if (matchmaking) actions.matchmaking = &MatchmakingAction;
     SetPostLoadActions(actions);
     sentinel::GotStatus status = sentinel::GotStatus::kNotInstalled;
-    return nevr_quest::integration::InstallDlopenHook(&status) == DlopenInstall::kOk;
+    const bool ok = nevr_quest::integration::InstallDlopenHook(&status) == DlopenInstall::kOk;
+    detail_ = sentinel::GotStatusName(status);
+    return ok;
   }
 
   void Note(const char* step, const char* state, const char* reason) override {
-    sentinel::LogFields(std::string_view(state) == "ok" || std::string_view(state) == "skipped"
-                            ? sentinel::LogLevel::kInfo
-                            : sentinel::LogLevel::kError,
-                        "sentinel_step", {{"step", step}, {"state", state}, {"reason", reason}});
+    const bool good = std::string_view(state) == "ok" || std::string_view(state) == "skipped";
+    const sentinel::LogLevel level = good ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError;
+    sentinel::LogFields(level, "sentinel_step", {{"step", step}, {"state", state}, {"reason", reason}});
+    // The stage line: stable name, status, and the class that says why (the step's detail when it set
+    // one, else the sequence's reason).
+    const char* stage = StageForStep(step);
+    const bool ok = std::string_view(state) == "ok";
+    if (stage == nullptr || (ok && std::string_view(step) == "resolve_config")) {
+      detail_ = nullptr;  // config_loaded was logged with its fields by ResolveConfig
+      return;
+    }
+    const char* cls = detail_ != nullptr ? detail_ : reason;
+    if (ok && port_ != 0 && std::string_view(step) == "start_bridge") {
+      sentinel::LogFields(level, stage, {{"status", state}, {"class", cls}, {"port", port_}});
+    } else {
+      sentinel::LogFields(level, stage, {{"status", state}, {"class", cls}});
+    }
+    detail_ = nullptr;
   }
 
  private:
+  const char* detail_ = nullptr;  // set by a step to say why it ended as it did (a fixed token)
+  unsigned port_ = 0;
   static SessionRouter::LogSink RouterLog() {
     return [](SessionRouter::LogLevel level, const std::string& line) {
       try {
         sentinel::Emit(MapRouter(level), line);
+        // The stage lines (stage_log.h) that only the router's own log can tell: a remote session
+        // connected or failed, the service accepted or refused the login.
+        if (const std::optional<StageEvent> ev = ClassifyRouterLine(line)) {
+          sentinel::LogFields(ev->status[0] == 'o' ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kWarn,
+                              ev->event, {{"status", ev->status}, {"class", ev->cls}});
+        }
       } catch (const std::exception&) {
         sentinel::EmitFixed(nevr_quest::LogLevel::kError, "router log line could not be written");
       }
@@ -337,6 +442,11 @@ void ShutdownIntegration() noexcept {
       bridge->Stop();
       delete bridge;
     }
+    {
+      const std::lock_guard<std::mutex> lock(rt.pollMutex);
+      rt.stopPoll = true;
+    }
+    rt.pollCv.notify_all();
     if (rt.authThread.joinable()) rt.authThread.join();
     if (nevr::quest_auth::QuestTokenAuth* const auth = rt.auth.exchange(nullptr)) {
       auth->Stop();

@@ -14,6 +14,7 @@
 #include "quest/integration/identity_source.h"
 #include "quest/integration/post_load.h"
 #include "quest/integration/social_gate.h"
+#include "quest/integration/stage_log.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
 
@@ -437,9 +438,49 @@ void TestFrameTapContainsAThrowingConsumer() {
   QCHECK(logins == 1);                      // the observe failure did not stop the login signal
 }
 
+// ---- stage lines -----------------------------------------------------------------------------------
+
+void TestStageNamesAreStable() {
+  QCHECK(std::strcmp(StageForStep("resolve_config"), "config_loaded") == 0);
+  QCHECK(std::strcmp(StageForStep("install_redirect"), "redirect_installed") == 0);
+  QCHECK(std::strcmp(StageForStep("install_dlopen_hook"), "dlopen_hook_installed") == 0);
+  QCHECK(std::strcmp(StageForStep("start_bridge"), "router_listening") == 0);
+  QCHECK(std::strcmp(StageForStep("start_token_auth"), "token_auth_state") == 0);
+  QCHECK(std::strcmp(StageForStep("install_social"), "social_hook_installed") == 0);
+  QCHECK(StageForStep("arm_crash_reporter") == nullptr);
+  // Every step the sequence names that has a stage is mapped by its real name.
+  for (int i = 0; i < static_cast<int>(StepId::kCount); ++i) {
+    const char* step = StepName(static_cast<StepId>(i));
+    const char* stage = StageForStep(step);
+    if (stage != nullptr) QCHECK(std::strlen(stage) > 0);
+  }
+}
+
+void TestRouterLinesClassify() {
+  auto c = [](const char* line) { return ClassifyRouterLine(line); };
+  QCHECK(c("[remote] remote=3 connected") && std::strcmp(c("[remote] remote=3 connected")->event, "router_remote_connected") == 0);
+  const auto tls = c("[remote] remote=3 connect failed: tls verification failed http_status=0 native_code=60 (no retry, no downgrade)");
+  QCHECK(tls && std::strcmp(tls->event, "router_remote_failed") == 0 && std::strcmp(tls->cls, "tls_verification_failed") == 0);
+  const auto net = c("[remote] remote=1 connect failed: network error http_status=0 native_code=6 (no retry, no downgrade)");
+  QCHECK(net && std::strcmp(net->cls, "network_error") == 0);
+  const auto up = c("[remote] remote=1 connect failed: websocket upgrade rejected http_status=401 native_code=0 (no retry, no downgrade)");
+  QCHECK(up && std::strcmp(up->cls, "handshake_rejected") == 0);
+  const auto jwt = c("[bridge] remote=2 not started: neither an account JWT nor configured credentials (no unauthenticated session)");
+  QCHECK(jwt && std::strcmp(jwt->cls, "no_jwt") == 0);
+  const auto nocr = c("[remote] remote=2 not started: no connect request (identity or configuration missing)");
+  QCHECK(nocr && std::strcmp(nocr->cls, "no_connect_request") == 0);
+  const auto ok = c("[router] LOGIN SUCCESS remote=2");
+  QCHECK(ok && std::strcmp(ok->event, "login_accepted") == 0);
+  const auto bad = c("[router] LOGIN FAILURE remote=2 status=4 message_bytes=12");
+  QCHECK(bad && std::strcmp(bad->event, "login_refused") == 0);
+  QCHECK(!c("[router] game=1 conn=0 (config)"));
+}
+
 }  // namespace
 
 int main() {
+  TestStageNamesAreStable();
+  TestRouterLinesClassify();
   TestEverythingOffInstallsOnlyTheProofHook();
   TestFullStackOrder();
   TestCountersBeforeTheSingleReporterStart();

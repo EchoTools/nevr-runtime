@@ -9,7 +9,8 @@ namespace nevr_quest::integration {
 bool RegisterSocialCounters() noexcept;
 
 // quest_social::InstallSocialHook(true): builds the facade, arms the callback, redirects the slot.
-// False when the hook was refused (the game keeps the Oculus social object).
-bool InstallSocialHook() noexcept;
+// False when the hook was refused (the game keeps the Oculus social object). `detail` receives a fixed
+// token naming the outcome (an InstallStatus or GotStatus name).
+bool InstallSocialHook(const char** detail) noexcept;
 
 }  // namespace nevr_quest::integration

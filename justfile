@@ -774,7 +774,7 @@ test-quest-integration:
     # 1. sequence, post-load policy, identity, social switch, frame tap
     "${on[@]}" src/quest/tests/integration_sequence_test.cpp \
         src/quest/integration/ctor_sequence.cpp src/quest/integration/post_load.cpp \
-        src/quest/integration/identity_source.cpp src/quest/integration/social_gate.cpp \
+        src/quest/integration/identity_source.cpp src/quest/integration/social_gate.cpp src/quest/integration/stage_log.cpp \
         src/quest/integration/frame_tap.cpp src/quest/sentinel/hook_log.cpp src/runtime/compat/evr_codec.cpp \
         -o "$out/integration_sequence_test" -pthread
     timeout 300 "$out/integration_sequence_test"
