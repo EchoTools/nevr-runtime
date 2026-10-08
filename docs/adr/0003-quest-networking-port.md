@@ -45,17 +45,28 @@ them. `src/quest/auth/` holds the Android adapters:
   If the directory cannot be derived the login runs without persisting and says so. Only the
   login link (`device_login.txt`, under `/sdcard/Android/data/com.readyatdawn.r15/files/`) is on
   external storage.
-- `Session` does the login on a worker thread, so `Start()` never blocks the caller. At startup a
-  cached refresh token is tried first (three attempts); a refresh the server refuses for the token
-  (400/401/403 whose body names the refresh token) goes straight to the device login, with
-  `Refreshing -> AwaitingUser`. A 401/403 that does not name the token (nakama answers a wrong
-  `http_key` with 401) is logged as such and is not treated as a bad token. A transient failure (no
-  connection, 5xx, 429, an unreadable response) of the cached refresh or of the device-code
-  request is retried on a bounded backoff (5, 15, 45, 135, 300 s) and then the login is `Failed`;
-  a 4xx is never retried, and a transient cached-login failure does not prompt the player. After
-  login, a refresh token that has expired or that the server refuses publishes `Expired`, logs
-  once and starts the device login again. A poll request that fails does not end the login, but
-  five in a row do.
+- `Session` does the login on a worker thread named `nevr-auth`, so `Start()` never blocks the
+  caller. Failures are handled by what they say:
+  - A cached refresh token is tried first (three attempts). If the server refuses the token itself
+    (400/401/403 whose JSON `message` is exactly one of the refresh RPC's own errors: `invalid or
+    expired refresh token`, `refresh token expired`, `not a refresh token`, `invalid payload:
+    refresh_token required`) the device login runs, `Refreshing -> AwaitingUser`.
+  - A transient failure (no connection, 5xx, 408, 429, an unreadable response) of the cached
+    refresh or of the device-code request is retried after 5, 15, 45, 135 and 300 s; the cache is
+    kept and the player is not prompted for it.
+  - Any other 4xx (a bare 401/403, which is also nakama's answer to a wrong `http_key`; a 400
+    `missing payload`; a 404 for a missing RPC) is one attempt, no backoff: the cache is kept, the
+    player is not prompted, an Error is logged with the status (never the body), and the login is
+    `Failed`.
+  - A `Failed` login that is not final is attempted again every five minutes with one request, for
+    as long as the process runs, logging one Warning per failure class. Final, because the player
+    was involved: the code expired or timed out, the link could not be delivered, or the server
+    refused a poll with a 4xx.
+  - While the player holds a link, poll failures that are transient (no connection, 5xx, 408, 429)
+    are waited out until the code's own five-minute deadline at the normal poll interval.
+  - After login, a refresh token that has expired or that the server refuses publishes `Expired`,
+    logs once and starts the device login again; other refresh failures keep the login and retry
+    next period.
 
 `nevr_quest_token_auth` is not linked into the sentinel, and nothing yet hands the token to the
 login path. The tests are `src/quest/tests/auth_core_test.cpp` (fake HTTP and clock) and
@@ -64,6 +75,18 @@ directory), run on the host by `just test-quest-shared`. Not established on a he
 directories and the libcurl/OpenSSL stack, that the process name is the package name, write access
 to the app-internal directory (and that Quest multi-user uses `/data/user/<n>`), and how the player
 is shown the login link.
+
+Linking token auth into the sentinel brings OpenSSL and libcurl with it (the sentinel grows from
+about 1.8 MB to about 35 MB unstripped). `libr15.so`, `libpnsrad.so`, `libpnsovr.so` and
+`libpnsradmatchmaking.so` each export about 2411 OpenSSL and libcurl symbols (OpenSSL 3.0.0-dev,
+libcurl 7.68.0) and have the sentinel as `DT_NEEDED`. The sentinel therefore keeps
+`-Wl,--exclude-libs,ALL` and exports only `JNI_OnLoad` and `nevr_sentinel_marker`
+(`TestExportAllowlist`): in a probe, a sentinel-like library linked with the flag exported 2 symbols
+and had no PLT/GOT relocation bound to OpenSSL or libcurl, and without it exported 12130 and bound
+1367. That the flag keeps the sentinel's OpenSSL calls from resolving into the game's older copy
+is an inference from the probe, not run on a device. `just verify` fails if the sentinel links
+`nevr_quest_token_auth` without the flag or without `TestExportAllowlist`; run `just test-android`
+on the built artifact.
 
 `sentinel::GotHook` (`sentinel/got_hook.{h,cpp}`) replaces the GOT slot a module uses for a
 symbol it resolves at load time. It cannot hook an arbitrary internal function of `libr15.so`.

@@ -26,17 +26,65 @@ std::string CredentialsPath(const QuestAuthConfig& c, const nevr::auth::LogSink&
 }  // namespace
 
 QuestTokenAuth::QuestTokenAuth(QuestAuthConfig config, nevr::auth::LogSink log)
-    : http_(config.ca_dirs, log),
+    : log_(log),
+      http_(config.ca_dirs, log),
       store_(CredentialsPath(config, log), log),
       presenter_(JoinPath(config.files_dir, kLoginLinkFileName), log),
       session_(MakeSessionConfig(config), http_, clock_, store_, presenter_, log) {}
 
 QuestTokenAuth::~QuestTokenAuth() { Stop(); }
 
-void QuestTokenAuth::Start() { session_.Start(); }
-void QuestTokenAuth::Stop() { session_.Stop(); }
-std::string QuestTokenAuth::Token() const { return session_.Token(); }
-uint64_t QuestTokenAuth::DiscordId() const { return session_.Get().discord_id; }
-Snapshot QuestTokenAuth::Get() const { return session_.Get(); }
+void QuestTokenAuth::ReportFailure(const char* what, const char* where) const noexcept {
+  try {
+    if (log_) log_(nevr::auth::LogLevel::Error, std::string("[NEVR.AUTH] ") + where + " threw: " + what);
+  } catch (const std::exception&) {
+    // The sink itself failed; there is nowhere left to report to.
+  }
+}
+
+void QuestTokenAuth::Start() noexcept {
+  try {
+    session_.Start();
+  } catch (const std::exception& e) {
+    ReportFailure(e.what(), "Start");
+  }
+}
+
+void QuestTokenAuth::Stop() noexcept {
+  try {
+    session_.Stop();
+  } catch (const std::exception& e) {
+    ReportFailure(e.what(), "Stop");
+  }
+}
+
+std::string QuestTokenAuth::Token() const noexcept {
+  try {
+    return session_.Token();
+  } catch (const std::exception& e) {
+    ReportFailure(e.what(), "Token");
+    return "";
+  }
+}
+
+uint64_t QuestTokenAuth::DiscordId() const noexcept {
+  try {
+    return session_.Get().discord_id;
+  } catch (const std::exception& e) {
+    ReportFailure(e.what(), "DiscordId");
+    return 0;
+  }
+}
+
+Snapshot QuestTokenAuth::Get() const noexcept {
+  try {
+    return session_.Get();
+  } catch (const std::exception& e) {
+    ReportFailure(e.what(), "Get");
+    Snapshot failed;
+    failed.readiness = Readiness::Failed;
+    return failed;
+  }
+}
 
 }  // namespace nevr::quest_auth

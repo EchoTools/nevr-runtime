@@ -10,6 +10,28 @@ namespace {
 void Emit(const LogSink& log, LogLevel level, const std::string& message) {
   if (log) log(level, message);
 }
+
+// True when the body is a nakama error object whose message is one of the refresh RPC's own.
+bool NamesRefreshToken(const std::string& body) {
+  static const char* const kMessages[] = {"invalid or expired refresh token", "refresh token expired",
+                                          "not a refresh token", "invalid payload: refresh_token required"};
+  try {
+    const nlohmann::json j = nlohmann::json::parse(body);
+    if (!j.is_object()) return false;
+    for (const char* field : {"message", "error"}) {
+      if (!j.contains(field) || !j.at(field).is_string()) continue;
+      std::string text = j.at(field).get<std::string>();
+      for (char& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) text.pop_back();
+      for (const char* known : kMessages) {
+        if (text == known) return true;
+      }
+    }
+  } catch (const nlohmann::json::exception&) {
+  }
+  return false;
+}
+
 }  // namespace
 
 const char* RefreshOutcomeName(RefreshOutcome outcome) {
@@ -19,6 +41,7 @@ const char* RefreshOutcomeName(RefreshOutcome outcome) {
     case RefreshOutcome::TransportFailed: return "transport_failed";
     case RefreshOutcome::Denied: return "denied";
     case RefreshOutcome::Unauthorized: return "unauthorized";
+    case RefreshOutcome::ClientError: return "client_error";
     case RefreshOutcome::Rejected: return "rejected";
     case RefreshOutcome::Malformed: return "malformed";
     case RefreshOutcome::NoAccessToken: return "no_access_token";
@@ -55,17 +78,17 @@ RefreshOutcome ApplyRefreshResponse(CachedAuthToken& auth, const HttpResponse& r
     return RefreshOutcome::TransportFailed;
   }
   if (response.status != 200) {
-    std::string lower = response.body;
-    for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    const bool names_token = lower.find("refresh token") != std::string::npos ||
-                             lower.find("refresh_token") != std::string::npos;
+    const bool named = NamesRefreshToken(response.body);
     Emit(log, LogLevel::Warning,
          "[NEVR.AUTH] token refresh rejected http_status=" + std::to_string(response.status) +
              " response_bytes=" + std::to_string(response.body.size()) +
-             " names_refresh_token=" + (names_token ? "1" : "0"));
-    const bool client_error = response.status == 400 || response.status == 401 || response.status == 403;
-    if (client_error && names_token) return RefreshOutcome::Denied;
+             " refresh_token_named=" + (named ? "1" : "0"));
+    const bool auth_error = response.status == 400 || response.status == 401 || response.status == 403;
+    if (auth_error && named) return RefreshOutcome::Denied;
     if (response.status == 401 || response.status == 403) return RefreshOutcome::Unauthorized;
+    if (response.status >= 400 && response.status < 500 && response.status != 408 && response.status != 429) {
+      return RefreshOutcome::ClientError;
+    }
     return RefreshOutcome::Rejected;
   }
 

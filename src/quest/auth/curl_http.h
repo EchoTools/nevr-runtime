@@ -6,7 +6,9 @@
 // Trust: the certificates are read from the Android CA directories into memory
 // (ca_bundle.h) and handed to libcurl as CAINFO_BLOB. Peer and host verification are
 // always on; with no certificate loaded every request fails closed with
-// kNoTrustAnchors. Proxy environment variables are ignored, redirects are not followed,
+// kNoTrustAnchors. The bundle is handed to libcurl (copied and parsed) on every request, about
+// 1 ms for one CA and 5 ms for the 123 of a full store: negligible at one request per login step
+// or per refresh period, so no shared X509_STORE is kept. Proxy environment variables are ignored, redirects are not followed,
 // and a response is capped at max_response_bytes.
 
 #include "core/auth_types.h"

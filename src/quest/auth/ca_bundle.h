@@ -25,7 +25,8 @@ struct CaBundle {
 };
 
 // A CA file is a few KiB and the Android store a few hundred KiB; these bound what a
-// damaged or hostile directory can make us read.
+// damaged or hostile directory can make us read. The per-file bound is checked on the open file
+// (fstat) before anything is read, so a huge or endless entry costs nothing.
 inline constexpr size_t kMaxCaFileBytes = 256 * 1024;
 inline constexpr size_t kMaxCaBundleBytes = 4 * 1024 * 1024;
 
@@ -35,8 +36,11 @@ const std::vector<std::string>& AndroidCaDirs();
 
 // Loads the certificates from the first directory in `dirs` that yields at least one that
 // parses (stored PEM, possibly with trailing text and several certificates per file, or
-// stored DER). Per directory the Info log gives the counts of certificates, unparsable
-// files and otherwise skipped files; no certificate content is logged. An Error is logged
+// stored DER). Each PEM block is parsed on its own, so a corrupt block does not hide its
+// neighbours; "BEGIN TRUSTED CERTIFICATE" blocks are not read. Entries that are not regular
+// files (FIFOs, dangling links, directories), empty or oversize are counted as skipped. Per
+// directory the Info log gives the counts of certificates, unparsable certificates and skipped
+// entries; no certificate content is logged. An Error is logged
 // when no directory yields a certificate (the caller must then fail closed). Never throws.
 CaBundle LoadCaBundle(const std::vector<std::string>& dirs, const nevr::auth::LogSink& log);
 

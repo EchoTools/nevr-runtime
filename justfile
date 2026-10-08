@@ -1712,6 +1712,28 @@ verify:
         sensor_stage1 "N94 level mapping" "$N94_MAP_FILE" "$N94_RC"
         sensor_nonempty "N94 level mapping" "ToEchoLogLevel case ${pair} in $N94_MAP_FILE" "$N94_MAP"
     done
+    # Quest token auth brings OpenSSL and libcurl. The game's own libraries export 2411 OpenSSL/curl
+    # symbols (an older OpenSSL) and have the sentinel as DT_NEEDED, so a sentinel that exported its own
+    # copy could have its calls bound to theirs (or theirs to ours). Once nevr_quest_token_auth is linked
+    # into the sentinel, the sentinel must keep `--exclude-libs,ALL` and the export allowlist test
+    # (JNI_OnLoad and nevr_sentinel_marker only, tests/quest TestExportAllowlist) must exist; run
+    # `just test-android` on the built artifact.
+    QS_FILE=src/quest/sentinel/CMakeLists.txt
+    QS_RC=0; QS_LINKS=$(grep -c 'nevr_quest_token_auth' "$QS_FILE") || QS_RC=$?
+    if [ "$QS_RC" -ge 2 ]; then
+        echo "verify: FAIL — sensor 'sentinel token-auth link': could not read $QS_FILE" >&2
+        exit 1
+    fi
+    if [ "${QS_LINKS:-0}" -gt 0 ]; then
+        QS_EX_RC=0; QS_EX=$(grep -c -e '--exclude-libs,ALL' "$QS_FILE") || QS_EX_RC=$?
+        sensor_stage1 "sentinel token-auth link" "$QS_FILE" "$QS_EX_RC"
+        QS_AL_RC=0; QS_AL=$(grep -c 'func TestExportAllowlist' tests/quest/elf_groundtruth_test.go) || QS_AL_RC=$?
+        sensor_stage1 "sentinel token-auth link" "tests/quest/elf_groundtruth_test.go" "$QS_AL_RC"
+        if [ "${QS_EX:-0}" -lt 1 ] || [ "${QS_AL:-0}" -lt 1 ]; then
+            echo "verify: FAIL — nevr_quest_token_auth is linked into the sentinel but -Wl,--exclude-libs,ALL or TestExportAllowlist is missing; the sentinel would export OpenSSL/libcurl symbols next to the game's older copy (ADR 0003)." >&2
+            exit 1
+        fi
+    fi
     # C2/N84: every PatchDetour shall name its hook. The parameter is required at
     # compile time, so this is belt-and-braces against someone re-adding a default.
     # Match the DECLARATION, not prose. The first version of this check matched

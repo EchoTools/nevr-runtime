@@ -9,6 +9,10 @@
 #include <exception>
 #include <system_error>
 
+#if defined(__linux__)
+#include <pthread.h>
+#endif
+
 namespace nevr::quest_auth {
 
 namespace {
@@ -68,6 +72,9 @@ void Session::Start() {
   try {
     worker_ = std::thread([this] {
       worker_id_ = std::this_thread::get_id();
+#if defined(__linux__)
+      pthread_setname_np(pthread_self(), "nevr-auth");  // visible in a tombstone or a thread dump
+#endif
       try {
         Run();
       } catch (const std::exception& e) {
@@ -132,7 +139,7 @@ void Session::SetState(Readiness state) {
     }
     snapshot_.readiness = state;
   }
-  if (!transition.empty()) Log(LogLevel::Info, transition);
+  if (!transition.empty()) Log(quiet_ ? LogLevel::Debug : LogLevel::Info, transition);
 }
 
 void Session::Adopt(const CachedAuthToken& auth, Readiness state) {
@@ -155,15 +162,13 @@ void Session::Adopt(const CachedAuthToken& auth, Readiness state) {
 }
 
 // Loads the cache and, when only a refresh token is there, refreshes it. A failed
-// refresh never writes: the cached login stays exactly as it was on disk. Transient: the
-// refresh failed in a way that says nothing about the token (no connection, 5xx, an
-// unreadable response); Permanent: there is no usable cached login, or the server refused it.
-Session::LoginResult Session::TryCachedLogin(CachedAuthToken& auth) {
+// refresh never writes: the cached login stays exactly as it was on disk.
+Session::LoginResult Session::TryCachedLogin(CachedAuthToken& auth, int attempts) {
   const uint64_t now = clock_.UnixNow();
   auth = store_.Load(now);
   if (auth.token.empty() && auth.refresh_token.empty()) {
     Log(LogLevel::Info, "[NEVR.AUTH] no cached credentials");
-    return LoginResult::Permanent;
+    return LoginResult::NeedDevice;
   }
   // A legacy cache file may still carry a short-lived access token (clamped at load).
   if (auth.HasValidToken(now)) {
@@ -172,16 +177,16 @@ Session::LoginResult Session::TryCachedLogin(CachedAuthToken& auth) {
   }
   if (auth.refresh_token.empty()) {
     Log(LogLevel::Info, "[NEVR.AUTH] cached access token expired and no refresh token");
-    return LoginResult::Permanent;
+    return LoginResult::NeedDevice;
   }
   if (!auth.HasValidRefreshToken(now)) {
     Log(LogLevel::Info, "[NEVR.AUTH] cached refresh token has expired");
-    return LoginResult::Permanent;
+    return LoginResult::NeedDevice;
   }
 
   SetState(Readiness::Refreshing);
   const auto sink = [this](LogLevel l, const std::string& m) { Log(l, m); };
-  const int attempts = config_.refresh_attempts < 1 ? 1 : config_.refresh_attempts;
+  if (attempts < 1) attempts = 1;
   nevr::auth::RefreshOutcome outcome = nevr::auth::RefreshOutcome::TransportFailed;
   for (int i = 1; i <= attempts; ++i) {
     CachedAuthToken candidate = auth;  // a failed attempt must not alter `auth`
@@ -199,30 +204,30 @@ Session::LoginResult Session::TryCachedLogin(CachedAuthToken& auth) {
     Log(LogLevel::Warning, std::string("[NEVR.AUTH] cached-login refresh failed attempt=") +
                                std::to_string(i) + "/" + std::to_string(attempts) +
                                " outcome=" + nevr::auth::RefreshOutcomeName(outcome));
-    if (outcome == nevr::auth::RefreshOutcome::Denied) {
-      Log(LogLevel::Warning,
-          "[NEVR.AUTH] the server rejected the refresh token itself; retrying cannot help");
-      break;
+    using nevr::auth::RefreshOutcome;
+    if (outcome == RefreshOutcome::Denied) {
+      Log(LogLevel::Warning, "[NEVR.AUTH] the server rejected the refresh token itself; retrying cannot help");
+      return LoginResult::NeedDevice;
     }
-    if (outcome == nevr::auth::RefreshOutcome::Unauthorized) {
-      Log(LogLevel::Warning,
-          "[NEVR.AUTH] refresh refused with 401/403 that does not name the refresh token (wrong http_key or "
-          "a gateway); retrying cannot help");
-      break;
+    if (outcome == RefreshOutcome::Unauthorized || outcome == RefreshOutcome::ClientError) {
+      // The refresh was refused for a reason that says nothing about the token (a wrong
+      // http_key, a missing RPC, a rejected payload). One attempt; the cache stays, the player
+      // is not prompted, and the login waits for the next recovery attempt.
+      failure_class_ = std::string("refresh_") + nevr::auth::RefreshOutcomeName(outcome);
+      Log(LogLevel::Error, std::string("[NEVR.AUTH] refresh refused (") + nevr::auth::RefreshOutcomeName(outcome) +
+                               "), not about the refresh token; cache kept, player not prompted");
+      return LoginResult::Held;
     }
     if (i < attempts && clock_.SleepFor(config_.refresh_retry_pause)) return LoginResult::Transient;
   }
-  const bool permanent = outcome == nevr::auth::RefreshOutcome::Denied ||
-                         outcome == nevr::auth::RefreshOutcome::Unauthorized;
-  Log(LogLevel::Warning, permanent
-                             ? "[NEVR.AUTH] cached login unusable; cache file kept, falling back to device-code login"
-                             : "[NEVR.AUTH] cached-login refresh unsuccessful for a transient reason; cache file kept");
-  return permanent ? LoginResult::Permanent : LoginResult::Transient;
+  failure_class_ = "refresh_transient";
+  Log(LogLevel::Warning, "[NEVR.AUTH] cached-login refresh unsuccessful for a transient reason; cache file kept");
+  return LoginResult::Transient;
 }
 
-bool Session::RunDeviceLogin(CachedAuthToken& out) {
+Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
   SetState(Readiness::AwaitingUser);
-  device_request_transient_ = false;
+  device_result_ = DeviceResult::Ended;
   // The link file carries the device code: remove it however this function ends, including
   // by an exception out of one of the operations below.
   struct ClearLink {
@@ -237,7 +242,9 @@ bool Session::RunDeviceLogin(CachedAuthToken& out) {
         nevr::auth::BuildDeviceAuthUrl(config_.base_url, config_.http_key, "request"), "{}");
     if (!r.transport_ok || r.status != 200) {
       // No answer, a server error or a rate limit say nothing about the request itself.
-      device_request_transient_ = !r.transport_ok || r.status >= 500 || r.status == 429;
+      const bool transient = !r.transport_ok || r.status >= 500 || r.status == 429 || r.status == 408;
+      device_result_ = transient ? DeviceResult::RequestTransient : DeviceResult::RequestRefused;
+      failure_class_ = transient ? "device_request_transient" : "device_request_refused";
       Log(LogLevel::Warning, "[NEVR.AUTH] device code request failed transport_ok=" +
                                  std::to_string(r.transport_ok ? 1 : 0) +
                                  " code=" + std::to_string(r.transport_code) +
@@ -247,6 +254,8 @@ bool Session::RunDeviceLogin(CachedAuthToken& out) {
     try {
       return nlohmann::json::parse(r.body).value("code", "");
     } catch (const nlohmann::json::exception&) {
+      device_result_ = DeviceResult::RequestTransient;
+      failure_class_ = "device_request_transient";
       Log(LogLevel::Warning, "[NEVR.AUTH] device code request: malformed JSON response");
       return "";
     }
@@ -254,10 +263,9 @@ bool Session::RunDeviceLogin(CachedAuthToken& out) {
   ops.open_browser = [this](const std::string& url) { return presenter_.Present(url); };
   // Nobody can see a link that was not delivered: stop rather than wait out the code.
   ops.show_open_failure = [](const std::string&, const std::string&, intptr_t) { return 0; };
-  // The server answers "code unknown or expired" with a 200 (status "expired"); a transport
-  // error or any non-200 is a failed request. One dropped request must not end a login the
-  // player is in the middle of, but a run of them (a permanent 400, an outage) must not
-  // poll silently for the whole five minutes either.
+  // The server answers "code unknown or expired" with a 200 (status "expired"). While the
+  // player holds a link, an outage (no connection, 5xx, 429) is waited out until the code's own
+  // deadline, polling no faster than the poll interval; any other 4xx ends the login.
   auto consecutive_failures = std::make_shared<int>(0);  // the poll op runs on this one worker thread
   ops.poll = [this, consecutive_failures](const std::string& code) {
     nlohmann::json body;
@@ -269,14 +277,22 @@ bool Session::RunDeviceLogin(CachedAuthToken& out) {
       *consecutive_failures = 0;
       return TokenAuth::ParseDevicePollResponse(r.body);
     }
+    const bool transient = !r.transport_ok || r.status >= 500 || r.status == 429 || r.status == 408;
     ++*consecutive_failures;
-    const int limit = config_.poll_failure_limit < 1 ? 1 : config_.poll_failure_limit;
-    Log(LogLevel::Info, "[NEVR.AUTH] device poll request failed (" + std::to_string(*consecutive_failures) + "/" +
-                            std::to_string(limit) + " consecutive) transport_ok=" +
-                            std::to_string(r.transport_ok ? 1 : 0) + " code=" + std::to_string(r.transport_code) +
-                            " http_status=" + std::to_string(r.status));
-    response.status = *consecutive_failures >= limit ? TokenAuth::DevicePollStatus::Error
-                                                     : TokenAuth::DevicePollStatus::Pending;
+    const std::string what = " transport_ok=" + std::to_string(r.transport_ok ? 1 : 0) +
+                             " code=" + std::to_string(r.transport_code) +
+                             " http_status=" + std::to_string(r.status);
+    if (transient) {
+      // One line for the first failure of a run and then one in ten: bounded log rate.
+      if (*consecutive_failures == 1 || *consecutive_failures % 10 == 0) {
+        Log(LogLevel::Info, "[NEVR.AUTH] device poll request failed (transient, " +
+                                std::to_string(*consecutive_failures) + " consecutive); polling on" + what);
+      }
+      response.status = TokenAuth::DevicePollStatus::Pending;
+    } else {
+      Log(LogLevel::Warning, "[NEVR.AUTH] device poll refused by the server; ending the login" + what);
+      response.status = TokenAuth::DevicePollStatus::Error;
+    }
     return response;
   };
   ops.sleep = [this](std::chrono::steady_clock::duration d) { (void)clock_.SleepFor(d); };
@@ -284,7 +300,7 @@ bool Session::RunDeviceLogin(CachedAuthToken& out) {
   ops.log = [this](LogLevel l, const std::string& m) { Log(l, m); };
 
   const nevr::auth::DeviceFlowResult flow = nevr::auth::RunDeviceCodeFlow(ops, config_.login_url);
-  if (!flow.verified) return false;
+  if (!flow.verified) return device_result_;
 
   const uint64_t now = clock_.UnixNow();
   CachedAuthToken auth;
@@ -300,7 +316,62 @@ bool Session::RunDeviceLogin(CachedAuthToken& out) {
         "[NEVR.AUTH] credential cache save failed; in-memory authentication remains active");
   }
   Log(LogLevel::Info, "[NEVR.AUTH] Device authorization completed");
-  return true;
+  return DeviceResult::Verified;
+}
+
+Session::LoginEnd Session::EstablishLogin(CachedAuthToken& auth, bool use_cache, bool with_backoff) {
+  const std::vector<std::chrono::seconds>& delays = config_.login_retry_delays;
+  for (size_t round = 0;; ++round) {
+    bool transient = false;
+    if (use_cache) {
+      // A recovery attempt (no backoff) makes one request, not the full run of attempts.
+      const LoginResult cached = TryCachedLogin(auth, with_backoff ? config_.refresh_attempts : 1);
+      if (cached == LoginResult::Ok) return LoginEnd::Ok;
+      if (cached == LoginResult::Held) return StopRequested() ? LoginEnd::Stopped : LoginEnd::Recoverable;
+      transient = cached == LoginResult::Transient;
+    }
+    if (StopRequested()) return LoginEnd::Stopped;
+    // A transient cached-login failure does not start the interactive login: the player is
+    // not asked to sign in again because the network blinked.
+    if (!transient) {
+      const DeviceResult d = RunDeviceLogin(auth);
+      if (d == DeviceResult::Verified) return LoginEnd::Ok;
+      if (StopRequested()) return LoginEnd::Stopped;
+      if (d == DeviceResult::Ended) return LoginEnd::Final;
+      if (d == DeviceResult::RequestRefused) return LoginEnd::Recoverable;
+      transient = true;  // RequestTransient
+    }
+    if (!with_backoff || round >= delays.size()) return LoginEnd::Recoverable;
+    Log(LogLevel::Warning, "[NEVR.AUTH] login failed for a transient reason; retry " + std::to_string(round + 1) +
+                               "/" + std::to_string(delays.size()) + " in " + std::to_string(delays[round].count()) +
+                               "s");
+    if (clock_.SleepFor(delays[round])) return LoginEnd::Stopped;
+  }
+}
+
+bool Session::LoginWithRecovery(CachedAuthToken& auth, bool use_cache) {
+  std::string last_class_logged;
+  for (bool first = true;; first = false) {
+    const LoginEnd end = EstablishLogin(auth, use_cache, /*with_backoff=*/first);
+    if (end == LoginEnd::Ok) {
+      quiet_ = false;
+      return true;
+    }
+    if (end == LoginEnd::Stopped || StopRequested()) return false;
+    if (end == LoginEnd::Final) {
+      Log(LogLevel::Warning, "[NEVR.AUTH] Authentication failed -- social features may be limited");
+      SetState(Readiness::Failed);
+      return false;
+    }
+    // Recoverable: Failed for now. Say so when the kind of failure changes, not on every attempt.
+    SetState(Readiness::Failed);
+    quiet_ = true;
+    Log(failure_class_ != last_class_logged ? LogLevel::Warning : LogLevel::Debug,
+        "[NEVR.AUTH] login failed (" + failure_class_ + "); trying again every " +
+            std::to_string(config_.recovery_period.count()) + "s");
+    last_class_logged = failure_class_;
+    if (clock_.SleepFor(config_.recovery_period)) return false;
+  }
 }
 
 void Session::BackgroundRefresh(CachedAuthToken auth) {
@@ -334,11 +405,8 @@ void Session::BackgroundRefresh(CachedAuthToken auth) {
             "[NEVR.AUTH] the server rejected the refresh token itself; starting a new device-code login");
         relogin = true;
       } else {
-        if (outcome == nevr::auth::RefreshOutcome::Unauthorized) {
-          Log(LogLevel::Warning,
-              "[NEVR.AUTH] refresh refused with 401/403 that does not name the refresh token (wrong http_key "
-              "or a gateway); the login is kept");
-        }
+        // Anything else leaves the login alone, as at startup: the cache is kept, the player is
+        // not prompted, and the next period tries again.
         ++consecutiveFailures;
         Log(LogLevel::Warning, "[NEVR.AUTH] token refresh failed (" + std::to_string(consecutiveFailures) +
                                    " consecutive) outcome=" + nevr::auth::RefreshOutcomeName(outcome) +
@@ -349,12 +417,7 @@ void Session::BackgroundRefresh(CachedAuthToken auth) {
     if (relogin) {
       SetState(Readiness::Expired);
       CachedAuthToken fresh;
-      if (!EstablishLogin(fresh, /*use_cache=*/false)) {
-        if (StopRequested()) return;
-        Log(LogLevel::Warning, "[NEVR.AUTH] Authentication failed -- social features may be limited");
-        SetState(Readiness::Failed);
-        return;
-      }
+      if (!LoginWithRecovery(fresh, /*use_cache=*/false)) return;
       auth = fresh;
       consecutiveFailures = 0;
       Adopt(auth, Readiness::Ready);
@@ -362,44 +425,9 @@ void Session::BackgroundRefresh(CachedAuthToken auth) {
   }
 }
 
-bool Session::EstablishLogin(CachedAuthToken& auth, bool use_cache) {
-  const std::vector<std::chrono::seconds>& delays = config_.login_retry_delays;
-  for (size_t round = 0;; ++round) {
-    bool transient = false;
-    if (use_cache) {
-      const LoginResult cached = TryCachedLogin(auth);
-      if (cached == LoginResult::Ok) return true;
-      transient = cached == LoginResult::Transient;
-    }
-    if (StopRequested()) return false;
-    // A transient cached-login failure does not start the interactive login: the player is
-    // not asked to sign in again because the network blinked.
-    if (!transient) {
-      if (RunDeviceLogin(auth)) return true;
-      transient = device_request_transient_;
-    }
-    if (!transient || StopRequested()) return false;
-    if (round >= delays.size()) {
-      Log(LogLevel::Warning, "[NEVR.AUTH] login gave up after " + std::to_string(delays.size()) +
-                                 " retries of a transient failure");
-      return false;
-    }
-    Log(LogLevel::Warning, "[NEVR.AUTH] login failed for a transient reason; retry " + std::to_string(round + 1) +
-                               "/" + std::to_string(delays.size()) + " in " + std::to_string(delays[round].count()) +
-                               "s");
-    if (clock_.SleepFor(delays[round])) return false;
-  }
-}
-
 void Session::Run() {
   CachedAuthToken auth;
-  const bool ok = EstablishLogin(auth, /*use_cache=*/true);
-  if (!ok) {
-    if (StopRequested()) return;  // shutting down is not a failed login
-    Log(LogLevel::Warning, "[NEVR.AUTH] Authentication failed -- social features may be limited");
-    SetState(Readiness::Failed);
-    return;
-  }
+  if (!LoginWithRecovery(auth, /*use_cache=*/true)) return;
   Adopt(auth, Readiness::Ready);
   BackgroundRefresh(auth);
 }

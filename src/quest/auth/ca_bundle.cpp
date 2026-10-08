@@ -5,7 +5,12 @@
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <algorithm>
+#include <cerrno>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -30,31 +35,97 @@ struct BioDeleter {
 using X509Ptr = std::unique_ptr<X509, X509Deleter>;
 using BioPtr = std::unique_ptr<BIO, BioDeleter>;
 
-// Parses every certificate in `data` (PEM, any number, trailing text tolerated; else one
-// DER certificate) and appends each as PEM to `out`. Returns how many parsed.
-size_t ParseCertificates(const std::string& data, std::string& out) {
-  std::vector<X509Ptr> certs;
+// Appends the PEM of `cert` to `out`; false if it cannot be encoded.
+bool AppendPem(X509* cert, std::string& out) {
+  BioPtr mem(BIO_new(BIO_s_mem()));
+  if (!mem || PEM_write_bio_X509(mem.get(), cert) != 1) return false;
+  char* bytes = nullptr;
+  const long len = BIO_get_mem_data(mem.get(), &bytes);
+  out.append(bytes, static_cast<size_t>(len));
+  return true;
+}
+
+constexpr char kBegin[] = "-----BEGIN CERTIFICATE-----";
+constexpr char kEnd[] = "-----END CERTIFICATE-----";
+
+struct Parsed {
+  size_t good = 0;
+  size_t bad = 0;  // PEM blocks (or a DER file) that did not parse
+};
+
+// Parses every certificate in `data` and appends each as PEM to `out`. PEM: each
+// BEGIN/END CERTIFICATE block is parsed on its own, so a corrupt block is counted and skipped
+// without hiding the blocks around it; text between blocks is ignored. "BEGIN TRUSTED
+// CERTIFICATE" blocks are not read (Android does not use that form). A file with no PEM marker
+// at all is tried as one DER certificate.
+Parsed ParseCertificates(const std::string& data, std::string& out) {
+  Parsed result;
   if (data.find("-----BEGIN") != std::string::npos) {
-    BioPtr in(BIO_new_mem_buf(data.data(), static_cast<int>(data.size())));
-    while (in) {
-      X509Ptr cert(PEM_read_bio_X509(in.get(), nullptr, nullptr, nullptr));
-      if (!cert) break;
-      certs.push_back(std::move(cert));
+    for (size_t pos = data.find(kBegin); pos != std::string::npos; pos = data.find(kBegin, pos)) {
+      const size_t end = data.find(kEnd, pos);
+      if (end == std::string::npos) {
+        ++result.bad;  // a BEGIN with no END
+        break;
+      }
+      const size_t block_end = end + sizeof(kEnd) - 1;
+      BioPtr in(BIO_new_mem_buf(data.data() + pos, static_cast<int>(block_end - pos)));
+      X509Ptr cert(in ? PEM_read_bio_X509(in.get(), nullptr, nullptr, nullptr) : nullptr);
+      if (cert && AppendPem(cert.get(), out)) {
+        ++result.good;
+      } else {
+        ++result.bad;
+      }
+      pos = block_end;
     }
   } else {
     const unsigned char* p = reinterpret_cast<const unsigned char*>(data.data());
     X509Ptr cert(d2i_X509(nullptr, &p, static_cast<long>(data.size())));
-    if (cert) certs.push_back(std::move(cert));
+    if (cert && AppendPem(cert.get(), out)) {
+      ++result.good;
+    } else {
+      ++result.bad;
+    }
   }
-  for (const X509Ptr& cert : certs) {
-    BioPtr mem(BIO_new(BIO_s_mem()));
-    if (!mem || PEM_write_bio_X509(mem.get(), cert.get()) != 1) return 0;
-    char* bytes = nullptr;
-    const long len = BIO_get_mem_data(mem.get(), &bytes);
-    out.append(bytes, static_cast<size_t>(len));
+  ERR_clear_error();  // failed parses leave entries on this thread's OpenSSL error queue
+  return result;
+}
+
+// Reads a CA file without trusting its size or type: opened non-blocking (a FIFO cannot hang
+// us), required to be a regular file, and never read past kMaxCaFileBytes. Symlinks to regular
+// files are followed (Android's cacerts entries are regular files; a link is tolerated).
+// Returns false, with `why` set, when the entry is not usable.
+bool ReadCaFile(const std::filesystem::path& path, std::string& data, const char*& why) {
+  const int fd = ::open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+  if (fd < 0) {
+    why = "unopenable";
+    return false;
   }
-  ERR_clear_error();  // a failed parse leaves entries on this thread's OpenSSL error queue
-  return certs.size();
+  struct stat st {};
+  if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+    ::close(fd);
+    why = "not a regular file";
+    return false;
+  }
+  if (st.st_size <= 0 || static_cast<size_t>(st.st_size) > kMaxCaFileBytes) {
+    ::close(fd);
+    why = st.st_size <= 0 ? "empty" : "too large";
+    return false;
+  }
+  data.resize(static_cast<size_t>(st.st_size));
+  size_t have = 0;
+  while (have < data.size()) {
+    const ssize_t n = ::read(fd, &data[have], data.size() - have);
+    if (n < 0 && errno == EINTR) continue;
+    if (n <= 0) break;
+    have += static_cast<size_t>(n);
+  }
+  ::close(fd);
+  data.resize(have);
+  if (data.empty()) {
+    why = "empty";
+    return false;
+  }
+  return true;
 }
 
 }  // namespace
@@ -70,8 +141,7 @@ CaBundle LoadCaBundle(const std::vector<std::string>& dirs, const nevr::auth::Lo
     std::error_code ec;
     std::vector<std::filesystem::path> files;
     for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-      std::error_code type_ec;
-      if (it->is_regular_file(type_ec) && !type_ec) files.push_back(it->path());
+      files.push_back(it->path());  // every entry; ReadCaFile decides what is usable
     }
     if (ec) {
       Emit(log, LogLevel::Info, "[NEVR.AUTH] CA directory not readable dir=" + dir + " error=" + ec.message());
@@ -83,31 +153,27 @@ CaBundle LoadCaBundle(const std::vector<std::string>& dirs, const nevr::auth::Lo
     size_t unparsable = 0, skipped = 0;
     bool truncated = false;
     for (const std::filesystem::path& file : files) {
-      std::ifstream in(file, std::ios::binary);
-      std::ostringstream contents;
-      contents << in.rdbuf();
-      const std::string data = contents.str();
-      if ((!in.good() && !in.eof()) || data.empty() || data.size() > kMaxCaFileBytes) {
+      std::string data;
+      const char* why = "";
+      if (!ReadCaFile(file, data, why)) {
         ++skipped;
         continue;
       }
       std::string pem;
-      const size_t parsed = ParseCertificates(data, pem);
-      if (parsed == 0) {
-        ++unparsable;
-        continue;
-      }
+      const Parsed parsed = ParseCertificates(data, pem);
+      unparsable += parsed.bad;
+      if (parsed.good == 0) continue;
       if (bundle.pem.size() + pem.size() > kMaxCaBundleBytes) {
         truncated = true;
         break;
       }
       bundle.pem += pem;
-      bundle.certificates += parsed;
+      bundle.certificates += parsed.good;
     }
     if (bundle.certificates > 0) {
       Emit(log, LogLevel::Info, "[NEVR.AUTH] CA store loaded dir=" + dir +
                                     " certificates=" + std::to_string(bundle.certificates) +
-                                    " unparsable_files=" + std::to_string(unparsable) +
+                                    " unparsable_certs=" + std::to_string(unparsable) +
                                     " skipped_files=" + std::to_string(skipped));
       if (truncated) {
         Emit(log, LogLevel::Warning, "[NEVR.AUTH] CA store reached the " + std::to_string(kMaxCaBundleBytes) +
@@ -117,7 +183,7 @@ CaBundle LoadCaBundle(const std::vector<std::string>& dirs, const nevr::auth::Lo
     }
     Emit(log, LogLevel::Info, "[NEVR.AUTH] CA directory yielded no certificate dir=" + dir +
                                   " files=" + std::to_string(files.size()) +
-                                  " unparsable_files=" + std::to_string(unparsable) +
+                                  " unparsable_certs=" + std::to_string(unparsable) +
                                   " skipped_files=" + std::to_string(skipped));
   }
   Emit(log, LogLevel::Error,
