@@ -32,6 +32,19 @@ QuestTokenAuth::QuestTokenAuth(QuestAuthConfig config, nevr::auth::LogSink log)
       presenter_(JoinPath(config.files_dir, kLoginLinkFileName), log),
       session_(MakeSessionConfig(config), http_, clock_, store_, presenter_, log) {}
 
+std::unique_ptr<QuestTokenAuth> QuestTokenAuth::Create(QuestAuthConfig config, nevr::auth::LogSink log) noexcept {
+  try {
+    return std::unique_ptr<QuestTokenAuth>(new QuestTokenAuth(std::move(config), log));
+  } catch (const std::exception& e) {
+    try {
+      if (log) log(nevr::auth::LogLevel::Error, std::string("[NEVR.AUTH] token auth could not be created: ") + e.what());
+    } catch (const std::exception&) {
+      // The sink failed too; there is nowhere left to report to.
+    }
+    return nullptr;
+  }
+}
+
 QuestTokenAuth::~QuestTokenAuth() { Stop(); }
 
 void QuestTokenAuth::ReportFailure(const char* what, const char* where) const noexcept {
