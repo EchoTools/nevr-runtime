@@ -1149,16 +1149,31 @@ TEST(TestLogCapSink, ASpinningLoggerStopsGrowingAtTheCapAndReportsTheOverflow) {
   g_capOverflowCalls = 0;
   TestLogCap::g_overflowHandler = CountCapOverflow;
   for (size_t i = 0; i < TestLogCap::kMaxLines + 50; ++i) Log(EchoVR::LogLevel::Info, "spin %zu", i);
-  TestLogCap::g_overflowHandler = TestLogCap::EndProcessOnOverflow;
+  // Empty the sink before the default handler comes back: a Log from another thread in between would
+  // otherwise overflow and end the process.
   size_t held = 0;
   {
     std::lock_guard<std::mutex> lock(g_testLogMutex);
     held = g_testLogMessages.size();
+    g_testLogMessages.clear();
   }
-  ClearTestLogs();
-  EXPECT_EQ(held, TestLogCap::kMaxLines);
+  TestLogCap::g_overflowHandler = TestLogCap::EndProcessOnOverflow;
+  EXPECT_EQ(held, 10000u);
+  EXPECT_EQ(TestLogCap::kMaxLines, 10000u);
   EXPECT_EQ(g_capOverflowCalls, 50u);
   EXPECT_EQ(g_capOverflowLines, 10000u);
+}
+
+// The default action is the one a spinning loop meets: print the failure and end the process with the
+// overflow exit code, so the loop stops at once instead of running to the time limit.
+TEST(TestLogCapSinkDeathTest, TheDefaultHandlerPrintsTheMessageAndExits98) {
+  ASSERT_EXIT(
+      {
+        for (size_t i = 0; i <= TestLogCap::kMaxLines; ++i) Log(EchoVR::LogLevel::Info, "spin %zu", i);
+        std::_Exit(0);  // reached only if the cap did not end the process
+      },
+      ::testing::ExitedWithCode(TestLogCap::kOverflowExitCode),
+      "FAILED: log capture overflowed: 10000 lines, a loop is spinning \\(in TestLogCapSinkDeathTest\\.");
 }
 
 TEST(WsBridgeLoginFailure, DiagnosticRejectsUndersizedTruncatedAndOversizedFrames) {

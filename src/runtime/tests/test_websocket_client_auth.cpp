@@ -231,14 +231,16 @@ TEST(WebSocketClientAuth, ASpinningLoggerStopsGrowingTheLogSinkAtTheCap) {
   g_capOverflowCalls = 0;
   TestLogCap::g_overflowHandler = CountCapOverflow;
   for (size_t i = 0; i < TestLogCap::kMaxLines + 20; ++i) Log(EchoVR::LogLevel::Info, "spin %zu", i);
-  TestLogCap::g_overflowHandler = TestLogCap::EndProcessOnOverflow;
+  // Empty the sink before the default handler comes back (see test_behavioral.cpp).
   size_t held = 0;
   {
     std::lock_guard<std::mutex> lock(g_logMutex);
     held = g_logLines.size();
+    g_logLines.clear();
   }
-  ClearLog();
-  EXPECT_EQ(held, TestLogCap::kMaxLines);
+  TestLogCap::g_overflowHandler = TestLogCap::EndProcessOnOverflow;
+  EXPECT_EQ(held, 10000u);
+  EXPECT_EQ(TestLogCap::kMaxLines, 10000u);
   EXPECT_EQ(g_capOverflowCalls, 20u);
 }
 
