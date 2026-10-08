@@ -441,13 +441,17 @@ test-quest-hooks:
     # compile, with the message that names the rule (not for some unrelated reason).
     snip=src/quest/tests/compile_fail
     "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/control.cpp"
-    for pair in fake_thunk:"InstallThunk requires a CallbackThunk" direct_record:"is private within this context" plain_handler:"invalid conversion"; do
+    # Each snippet must fail with errors that are ALL the rule's own: every `error:` line has to
+    # match the rule's pattern (a second, unrelated error fails the check), and there must be one.
+    for pair in fake_thunk:"error: static assertion failed: InstallThunk requires a CallbackThunk" direct_record:"HookRecord.*is private within this context" plain_handler:"error: invalid conversion from .*::Handler"; do
         name="${pair%%:*}"; want="${pair#*:}"
         if "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/$name.cpp" > "$out/$name.err" 2>&1; then
             echo "test-quest-hooks: $snip/$name.cpp compiled, but must not" >&2; exit 1
         fi
-        if ! grep -q "$want" "$out/$name.err"; then
-            echo "test-quest-hooks: $snip/$name.cpp failed for another reason (wanted '$want'):" >&2
+        total=$(grep -c 'error:' "$out/$name.err" || true)
+        matched=$(grep 'error:' "$out/$name.err" | grep -c "$want" || true)
+        if [ "$total" -lt 1 ] || [ "$total" -ne "$matched" ]; then
+            echo "test-quest-hooks: $snip/$name.cpp: $total error line(s), $matched match '$want'; every error must be the rule's own:" >&2
             cat "$out/$name.err" >&2; exit 1
         fi
     done
