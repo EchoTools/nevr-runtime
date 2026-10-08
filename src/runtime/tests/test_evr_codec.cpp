@@ -143,6 +143,27 @@ TEST(EvrCodecParse, ADeclaredLengthThatWrapsWithTheHeaderIsTruncatedNotOk) {
   EXPECT_EQ(message.length, wraps);
 }
 
+TEST(EvrCodecParse, PayloadIsNullUnlessTheMessageIsWhole) {
+  const std::string whole = EvrCodec::BuildMessage(7, "abc");
+  EvrCodec::Message message;
+  ASSERT_EQ(EvrCodec::ReadMessage(whole, 0, &message), EvrCodec::ReadStatus::Ok);
+  ASSERT_NE(message.payload, nullptr);
+
+  // The same Message object reused for a truncated, a bad-marker and an end read must not keep the
+  // previous message's payload.
+  std::string truncated = EvrCodec::BuildMessage(8, "12345678");
+  truncated.pop_back();
+  ASSERT_EQ(EvrCodec::ReadMessage(whole, 0, &message), EvrCodec::ReadStatus::Ok);
+  EXPECT_EQ(EvrCodec::ReadMessage(truncated, 0, &message), EvrCodec::ReadStatus::Truncated);
+  EXPECT_EQ(message.payload, nullptr);
+  ASSERT_EQ(EvrCodec::ReadMessage(whole, 0, &message), EvrCodec::ReadStatus::Ok);
+  EXPECT_EQ(EvrCodec::ReadMessage(std::string(24, '\0'), 0, &message), EvrCodec::ReadStatus::BadMarker);
+  EXPECT_EQ(message.payload, nullptr);
+  ASSERT_EQ(EvrCodec::ReadMessage(whole, 0, &message), EvrCodec::ReadStatus::Ok);
+  EXPECT_EQ(EvrCodec::ReadMessage(whole, whole.size(), &message), EvrCodec::ReadStatus::End);
+  EXPECT_EQ(message.payload, nullptr);
+}
+
 TEST(EvrCodecParse, FirstSymbolIsZeroOnAShortFrame) {
   EXPECT_EQ(EvrCodec::FirstSymbol(EvrCodec::BuildMessage(0xdeadbeefULL, "x")), 0xdeadbeefULL);
   EXPECT_EQ(EvrCodec::FirstSymbol(std::string(23, 'x')), 0u);

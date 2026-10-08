@@ -41,8 +41,6 @@ inline constexpr uint64_t kBridgeLoginPlatform = 4;
 
 // ---- building -------------------------------------------------------------------------------
 
-void AppendLE64(std::string& buffer, uint64_t value);
-
 // One message: marker, symbol, payload length, payload.
 std::string BuildMessage(uint64_t symbol, std::string_view payload);
 
@@ -73,9 +71,9 @@ enum class ReadStatus {
   Truncated,  // the header declares more payload than remains; out->symbol/length are set
 };
 
-// Reads the message at `data` with `remaining` bytes left. On Ok the message occupies
-// kHeaderSize + out->length bytes (which cannot overflow: it fits in `remaining`).
-ReadStatus ReadMessage(const uint8_t* data, std::size_t remaining, Message* out);
+// Reads the message at byte `offset` of `frame`. `*out` is reset first, so `payload` is nullptr unless the
+// status is Ok. On Ok the message occupies kHeaderSize + out->length bytes (which cannot overflow: it fits
+// in what remains of the frame).
 ReadStatus ReadMessage(const std::string& frame, std::size_t offset, Message* out);
 
 // The first message's symbol, or 0 when the frame is shorter than a header. Does not check the marker.

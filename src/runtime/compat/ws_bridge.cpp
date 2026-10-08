@@ -370,7 +370,8 @@ static int LogGameToServerFrame(const std::string& frame, const std::string& wsC
           static_cast<unsigned long long>(len), frame.size() - offset - EvrCodec::kHeaderSize);
       break;
     }
-    // From here the message lies wholly inside the frame: message.payload..+len is readable.
+    // From here the message lies wholly inside the frame: message.payload..+len is readable (the codec
+    // sets payload only for such a message).
     const uint8_t* payload = message.payload;
     char symBuf[192];
     const char* symName = EchoVR::LookupSymbolName(sym);

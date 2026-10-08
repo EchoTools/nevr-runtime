@@ -194,6 +194,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/module_loader.h"
 #include "runtime/compat/ws_bridge.h"
+#include "runtime/compat/evr_codec.h"
 #include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/hook/symbol_corpus.h"
@@ -1036,36 +1037,92 @@ TEST(WsBridgeFrameLog, StopsAtATruncatedMessageAndSaysSo) {
 
 // The game->server diagnostic walk decodes payloads (hex dump, invite targets). A message whose declared
 // payload runs past the frame must stop the walk before any decoder reads it.
-TEST(WsBridgeGameToServerLog, DecodesTheInviteTargetOfAWholeMessage) {
+static void PutU64(std::string& bytes, size_t offset, uint64_t value) {
+  for (size_t i = 0; i < 8; ++i) bytes[offset + i] = static_cast<char>((value >> (8 * i)) & 0xff);
+}
+
+// A 0x30-byte invite payload with distinct values in the three decoded fields:
+// routing at +0, session at +0x18, target at +0x20.
+static std::string PatternedInvitePayload() {
+  std::string payload(0x30, '\0');
+  PutU64(payload, 0x00, 111);
+  PutU64(payload, 0x18, 222);
+  PutU64(payload, 0x20, 333);
+  return payload;
+}
+
+constexpr uint64_t kFriendInviteSym = 0x7f0d7a28de3c6f70ULL;
+constexpr uint64_t kPartyInviteSym = 0xcf13f934540b5f5eULL;
+constexpr uint64_t kPlayerSessionSym = 0x9af2fab2a0c81a05ULL;
+constexpr uint64_t kFriendSubscribeSym = 0xdcfa94680e8d19fcULL;
+
+TEST(WsBridgeGameToServerLog, DecodesTheFieldsOfAWholeFriendInvite) {
   ClearTestLogs();
-  EXPECT_EQ(TestHook_LogGameToServerFrame(BuildMarkedMessage(0x7f0d7a28de3c6f70ULL, std::string(0x30, 'i'))), 1);
-  EXPECT_TRUE(TestLogContains("FriendInvite: routing="));
+  EXPECT_EQ(TestHook_LogGameToServerFrame(BuildMarkedMessage(kFriendInviteSym, PatternedInvitePayload())), 1);
+  EXPECT_TRUE(TestLogContains("FriendInvite: routing=111 target=333 session=222"));
+}
+
+TEST(WsBridgeGameToServerLog, DecodesTheFieldsOfAWholePartyInvite) {
+  ClearTestLogs();
+  EXPECT_EQ(TestHook_LogGameToServerFrame(BuildMarkedMessage(kPartyInviteSym, PatternedInvitePayload())), 1);
+  EXPECT_TRUE(TestLogContains("PartyInviteRequest: routing=111 target=333 session=222"));
+}
+
+TEST(WsBridgeGameToServerLog, HexDumpsAWholePlayerSessionRequest) {
+  ClearTestLogs();
+  EXPECT_EQ(TestHook_LogGameToServerFrame(BuildMarkedMessage(kPlayerSessionSym, std::string("\x01\xab\xff", 3))), 1);
+  EXPECT_TRUE(TestLogContains("PlayerSessionReq payload: 01 ab ff "));
+}
+
+TEST(WsBridgeGameToServerLog, NotesAFriendListSubscribe) {
+  ClearTestLogs();
+  EXPECT_EQ(TestHook_LogGameToServerFrame(BuildMarkedMessage(kFriendSubscribeSym, "")), 1);
+  EXPECT_TRUE(TestLogContains("FriendListSubscribeRequest sent"));
 }
 
 TEST(WsBridgeGameToServerLog, ATruncatedMessageIsNotDecoded) {
   ClearTestLogs();
-  std::string frame = BuildMarkedMessage(0x7f0d7a28de3c6f70ULL, std::string(0x30, 'i'));
-  // Claim 0x1000 payload bytes while 0x30 are present.
-  for (size_t i = 0; i < 8; ++i) frame[16 + i] = static_cast<char>((0x1000ULL >> (8 * i)) & 0xff);
+  std::string frame = BuildMarkedMessage(kFriendInviteSym, PatternedInvitePayload());
+  PutU64(frame, 16, 0x1000);  // claim 0x1000 payload bytes while 0x30 are present
+  const uint8_t stale = 0;
+  EvrCodec::Message message;
+  message.payload = &stale;  // a payload left over from an earlier read must not survive a Truncated one
+  ASSERT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Truncated);
+  EXPECT_EQ(message.payload, nullptr);
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
   EXPECT_TRUE(TestLogContains("truncated: header declares 4096 payload bytes but only 48 remain"));
   EXPECT_FALSE(TestLogContains("FriendInvite:"));
 }
 
+TEST(WsBridgeGameToServerLog, AWholeMessageThenATruncatedOneDecodesOnlyTheFirst) {
+  ClearTestLogs();
+  std::string second = BuildMarkedMessage(kFriendInviteSym, std::string(0x30, '\x07'));
+  PutU64(second, 16, 0x1000);
+  const std::string frame = BuildMarkedMessage(kFriendInviteSym, PatternedInvitePayload()) + second;
+  EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 1);
+  EXPECT_TRUE(TestLogContains("FriendInvite: routing=111 target=333 session=222"));
+  EXPECT_TRUE(TestLogContains("truncated: header declares 4096 payload bytes but only 48 remain"));
+  EXPECT_FALSE(TestLogContains("routing=506381209866536711"));  // the second message's 0x07 bytes
+}
+
 TEST(WsBridgeGameToServerLog, ATruncatedPlayerSessionRequestIsNotHexDumped) {
   ClearTestLogs();
-  std::string frame = BuildMarkedMessage(0x9af2fab2a0c81a05ULL, std::string(4, 'p'));
-  for (size_t i = 0; i < 8; ++i) frame[16 + i] = static_cast<char>((16ULL >> (8 * i)) & 0xff);  // declares 16, has 4
+  std::string frame = BuildMarkedMessage(kPlayerSessionSym, std::string(4, 'p'));
+  PutU64(frame, 16, 16);  // declares 16 payload bytes, has 4
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
   EXPECT_FALSE(TestLogContains("PlayerSessionReq payload:"));
 }
 
-// A declared length of 2^64-24 wrapped to zero when added to the header size, so the walk never advanced.
+// Pins: a declared payload length that wraps to zero once the 24-byte header is added is read as truncated,
+// ends the walk at that message, and is printed as declared. The codec result is asserted first so a
+// regression there fails here at once instead of looping in the walk.
 TEST(WsBridgeGameToServerLog, AWrappingDeclaredLengthEndsTheWalkAndPrintsTheDeclaredLength) {
   ClearTestLogs();
-  std::string frame = BuildMarkedMessage(0x7f0d7a28de3c6f70ULL, std::string(0x30, 'i'));
+  std::string frame = BuildMarkedMessage(kFriendInviteSym, PatternedInvitePayload());
   const uint64_t wraps = UINT64_MAX - 23;
-  for (size_t i = 0; i < 8; ++i) frame[16 + i] = static_cast<char>((wraps >> (8 * i)) & 0xff);
+  PutU64(frame, 16, wraps);
+  EvrCodec::Message message;
+  ASSERT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Truncated);
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
   EXPECT_TRUE(TestLogContains("header declares " + std::to_string(wraps) + " payload bytes but only 48 remain"));
 }
