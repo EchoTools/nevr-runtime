@@ -429,10 +429,10 @@ void TestSendingFromSlots() {
   SlotFn<Void0>(obj, kReset)(obj);
   QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kLeaveRequest);
   QCHECK(Get32(obj, kOffLocalCount) == 0 && Get32(obj, kOffMemberCount) == 0);
+  SlotFn<Void_U32>(obj, kAddMember)(obj, 3);  // only local user 0 exists
+  QCHECK(Get32(obj, kOffLocalCount) == 0 && Get32(obj, kOffMemberCount) == 0);
   SlotFn<Void_U32>(obj, kAddMember)(obj, 0);
   QCHECK(Get32(obj, kOffLocalCount) == 1 && Get32(obj, kOffMemberCount) == 1);
-  SlotFn<Void_U32>(obj, kAddMember)(obj, 3);  // only local user 0 exists
-  QCHECK(Get32(obj, kOffLocalCount) == 1);
 }
 
 void TestLobbyFields() {
