@@ -1084,13 +1084,14 @@ TEST(WsBridgeGameToServerLog, ATruncatedMessageIsNotDecoded) {
   ClearTestLogs();
   std::string frame = BuildMarkedMessage(kFriendInviteSym, PatternedInvitePayload());
   PutU64(frame, 16, 0x1000);  // claim 0x1000 payload bytes while 0x30 are present
+  const uint8_t stale = 0;
   EvrCodec::Message message;
+  message.payload = &stale;  // a payload left over from an earlier read must not survive a Truncated one
   ASSERT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Truncated);
   EXPECT_EQ(message.payload, nullptr);
   EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
   EXPECT_TRUE(TestLogContains("truncated: header declares 4096 payload bytes but only 48 remain"));
   EXPECT_FALSE(TestLogContains("FriendInvite:"));
-  EXPECT_FALSE(TestLogContains("the codec returned no payload"));
 }
 
 TEST(WsBridgeGameToServerLog, AWholeMessageThenATruncatedOneDecodesOnlyTheFirst) {

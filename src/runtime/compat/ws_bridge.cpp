@@ -370,16 +370,9 @@ static int LogGameToServerFrame(const std::string& frame, const std::string& wsC
           static_cast<unsigned long long>(len), frame.size() - offset - EvrCodec::kHeaderSize);
       break;
     }
-    // From here the message lies wholly inside the frame: message.payload..+len is readable. The codec
-    // sets payload only for such a message; a null here is a codec contract break, so stop, never decode.
+    // From here the message lies wholly inside the frame: message.payload..+len is readable (the codec
+    // sets payload only for such a message).
     const uint8_t* payload = message.payload;
-    if (payload == nullptr) {
-      Log(EchoVR::LogLevel::Error,
-          "[NEVR.WS] game->server: the codec returned no payload for the message at offset %zu — "
-          "per-message diagnostic decode aborted here, raw frame still forwarded to remote unparsed",
-          offset);
-      break;
-    }
     char symBuf[192];
     const char* symName = EchoVR::LookupSymbolName(sym);
     if (symName) {

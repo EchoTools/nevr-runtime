@@ -2,6 +2,7 @@
 
 import pathlib
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -48,10 +49,32 @@ class ReleaseContractTest(unittest.TestCase):
         for target in targets:
             self.assertIn(f"--target {target}", recipe)
             self.assertIn(target, recipe.split("for test_name in ", 1)[1].split("; do", 1)[0])
-        # Every binary runs through run_test, which bounds it with timeout so a hang fails the gate.
-        self.assertIn('run_test "$bin"', recipe)
-        self.assertIn('timeout -k 10 900 wine "$1"', recipe)
-        self.assertNotIn('\n    wine "$bin"', recipe)
+        # Every binary runs through run_test, which bounds it with timeout so a hang fails the gate: no
+        # `wine` command may appear outside run_test's body, at any indentation.
+        match = re.search(r"^ *run_test\(\) \{\n.*?^ *\}\n", recipe, re.S | re.M)
+        self.assertIsNotNone(match, "run_test is not defined in test-auth-unit")
+        outside = (recipe[:match.start()] + recipe[match.end():])
+        code = "\n".join(line for line in outside.splitlines() if not line.lstrip().startswith("#"))
+        self.assertIsNone(re.search(r"(^|[;&|(]|\s)wine\s", code),
+                          "a wine command runs outside run_test, so it has no time limit")
+        self.assertGreaterEqual(code.count('run_test "$bin"'), 15)
+        self.assertIn('timeout -k 10 900 wine "$1"', match.group(0))
+        # run_test must carry a failing exit status out of the recipe: run it with a wine that fails.
+        body = match.group(0)
+        with tempfile.TemporaryDirectory(dir="/var/tmp") as tmp:
+            shim = pathlib.Path(tmp) / "wine"
+            shim.write_text("#!/bin/sh\nexit 7\n")
+            shim.chmod(0o755)
+            env = dict(os.environ, PATH=f"{tmp}:{os.environ['PATH']}")
+            failing = subprocess.run(["bash", "-c", body + '\nrun_test x.exe; echo reached'],
+                                     env=env, capture_output=True, text=True)
+            self.assertEqual(failing.returncode, 7, failing.stderr)
+            self.assertNotIn("reached", failing.stdout)
+            shim.write_text("#!/bin/sh\nexit 0\n")
+            passing = subprocess.run(["bash", "-c", body + '\nrun_test x.exe; echo reached'],
+                                     env=env, capture_output=True, text=True)
+            self.assertEqual(passing.returncode, 0, passing.stderr)
+            self.assertIn("reached", passing.stdout)
         self.assertIn('if [[ ! -f "$bin" ]]; then', recipe)
 
     def test_url_diagnostic_sinks_use_redaction_and_hide_reasons(self):

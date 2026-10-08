@@ -269,8 +269,11 @@ test-auth-unit:
     run_test() {
         local rc=0
         timeout -k 10 900 wine "$1" || rc=$?
-        if [[ "$rc" -ne 0 ]]; then
-            echo "test-auth-unit: FAIL — $1 exited $rc (124 = timed out after 900s)" >&2
+        if [[ "$rc" -eq 124 ]]; then
+            echo "test-auth-unit: FAIL — $1 timed out after 900s" >&2
+            exit "$rc"
+        elif [[ "$rc" -ne 0 ]]; then
+            echo "test-auth-unit: FAIL — $1 exited $rc" >&2
             exit "$rc"
         fi
     }
@@ -420,7 +423,7 @@ test-quest-shared:
         src/runtime/lifecycle/service_redirect.cpp \
         src/quest/tests/service_redirect_test.cpp \
         -o "$out/service_redirect_test"
-    "$out/service_redirect_test"
+    timeout -k 5 120 "$out/service_redirect_test"
     # The codec test parses the login profile with nlohmann::json. Use the header the build installed
     # from vcpkg.json for the mingw triplet the mingw-* presets build with, never a system package and
     # never whichever triplet sorts first. Only the nlohmann directory is exposed to the host compiler.
@@ -438,7 +441,7 @@ test-quest-shared:
         src/runtime/compat/login_profile.cpp \
         src/quest/tests/evr_codec_test.cpp \
         -o "$out/evr_codec_test"
-    "$out/evr_codec_test"
+    timeout -k 5 120 "$out/evr_codec_test"
     echo "test-quest-shared: all redirect and EVR codec vectors pass on the host"
 
 # --- Verify (closed-loop gate) ---
@@ -459,7 +462,7 @@ verify:
     cmake --build --preset {{ preset }}
     just test-auth-unit
     just test-quest-shared
-    python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants -v
+    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
