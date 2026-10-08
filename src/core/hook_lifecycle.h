@@ -18,6 +18,7 @@
 // removed and the caller's pointer is put back to its prior value, so a failed
 // attach leaves no partial state.
 
+#include <atomic>
 #include <cstdint>
 
 namespace nevr::hook {
@@ -38,6 +39,18 @@ constexpr const char* AttachStageName(AttachStage stage) {
     case AttachStage::kEnableFailed:   return "enable_failed";
   }
   return "unknown";
+}
+
+// Stores the original-call pointer with release semantics. A detour on another
+// thread reads it with an acquire load; the release store means everything the
+// backend did before publishing is visible to a thread that sees the pointer.
+inline void PublishPointer(void** where, void* value) {
+#if defined(__GNUC__)
+  __atomic_store_n(where, value, __ATOMIC_RELEASE);
+#else
+  std::atomic_thread_fence(std::memory_order_release);
+  *static_cast<void* volatile*>(where) = value;
+#endif
 }
 
 // Create, publish, enable. `create(void** original)` returns whether the hook
@@ -65,10 +78,10 @@ inline AttachStage AttachPublished(void** ppOriginal, Create&& create, Enable&& 
     remove();
     return AttachStage::kNullTrampoline;
   }
-  *ppOriginal = trampoline;
+  PublishPointer(ppOriginal, trampoline);
   if (!enable()) {
     remove();
-    *ppOriginal = prior;
+    PublishPointer(ppOriginal, prior);
     return AttachStage::kEnableFailed;
   }
   return AttachStage::kAttached;

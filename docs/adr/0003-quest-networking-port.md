@@ -31,26 +31,44 @@ A target names one slot by module, symbol and relocation type (`R_AARCH64_JUMP_S
 expected original value. `Install` refuses, logs one structured line and leaves the slot, its
 page protection and the caller's original pointer unchanged when: the module is absent or its
 build ID differs; zero or several relocations match; the relocation has an addend, a misaligned
-slot or a slot outside a writable segment; a JUMP_SLOT module is not `BIND_NOW` (a lazy slot is
-overwritten by the resolver on first call); the slot holds neither the expected original nor an
+slot or a slot outside a writable segment; a JUMP_SLOT module is not `BIND_NOW` (a lazily bound
+slot starts as a lazy-binding stub, not the target; the pinned libraries are `BIND_NOW` and Bionic's
+lazy behavior is unmeasured, so it is refused); the slot holds neither the expected original nor an
 address in an executable mapping; or another handle owns the slot. `Remove` revalidates the
-module and writes the original back only if the slot still holds the hook. The page protection
-a write restores comes from `PT_GNU_RELRO`, not an assumption. Order and rollback are the shared
+module and writes the original back only if the slot still holds the hook (compare-and-swap).
+Every write runs under one process-wide lock, and the protection it restores is read from
+`/proc/self/maps` under that lock (`PT_GNU_RELRO` is the fallback). Log lines are JSON objects
+(`hook_log.h`). Order and rollback are the shared
 `core/hook_lifecycle.h` contract that the MinHook path in `core/hooking.h` also uses.
 
 `sentinel/callback_thunk.h` gives each hooked function a typed entry point, original-call
-pointer and handler, catches `std::exception` from a handler, and falls back to the original.
+pointer and handler. An exception thrown by the original reaches the game unchanged; a
+`std::exception` thrown by a handler falls back to one call of the original, never a second.
 `sentinel/pinned_targets.h` holds the targets and callback types for the pinned artifact:
 `clock_gettime` (installed by `entry.cpp`), `CJson::TString` in both libraries, and the
 `SNSConfigRequestv24Send` and `GLOB_DAT` slots as fixtures. Only `clock_gettime` is installed.
 `SNSConfigRequestv24Send` has no thunk because its return type is not established.
+
+Token auth is shared the same way. The token model, refresh handling and device-code loop are
+platform-neutral sources in `src/core/` (`auth_token_model.h`, `auth_refresh.{h,cpp}`,
+`device_auth_flow.{h,cpp}`, `device_poll_response.{h,cpp}`) behind injected HTTP, clock and log
+interfaces (`auth_types.h`); the Windows `token_auth` module and `src/quest/auth/` both compile
+them. `src/quest/auth/` holds the Android adapters: libcurl over OpenSSL from the Quest vcpkg
+manifest (`arm64-android` triplet) with peer and host verification on and
+`/system/etc/security/cacerts` as the CA directory, an atomic mode-0600 credential file under
+`/sdcard/Android/data/com.readyatdawn.r15/files/`, a login-link file there, and a `Session` whose
+worker thread does the login so `Start()` never blocks the caller. `nevr_quest_token_auth` is not
+linked into the sentinel, and nothing yet hands the token to the login path. The tests are
+`src/quest/tests/auth_core_test.cpp`, run on the host by `just test-quest-shared`. Not
+established: the CA directory and the libcurl/OpenSSL stack on a headset, and how the player is
+shown the login link.
 
 ## Architecture
 
 ```text
            shared source, compiled for both targets
  config key map/defaults | URL policy | login profile JSON
-  EVR frame codec         | social state | EVR session routing
+ EVR frame codec         | social state | EVR session routing
                          ^
                          | typed inputs and events, no game pointers
              +-----------+-----------+

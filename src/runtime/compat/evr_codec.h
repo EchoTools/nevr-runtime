@@ -81,27 +81,6 @@ ReadStatus ReadMessage(const std::string& frame, std::size_t offset, Message* ou
 // The first message's symbol, or 0 when the frame is shorter than a header. Does not check the marker.
 uint64_t FirstSymbol(const std::string& frame);
 
-struct LoginRequestFields {
-  uint64_t platformCode = 0;
-  uint64_t accountId = 0;
-  std::string profileJson;  // without the terminating NUL
-};
-
-enum class LoginRequestStatus {
-  Ok,
-  NotAFrame,         // shorter than a header, or the marker is wrong
-  WrongSymbol,       // the first message is not a LoginRequest
-  LengthMismatch,    // the declared payload length is not the rest of the frame
-  PayloadTooShort,   // no room for UUID, platform, account and the NUL
-  NotNulTerminated,  // the payload does not end in NUL
-  EmbeddedNul,       // a NUL inside the profile JSON
-};
-
-const char* LoginRequestStatusName(LoginRequestStatus status);
-
-// Reads exactly one LoginRequest message that spans the whole frame.
-LoginRequestStatus ParseLoginRequest(const std::string& frame, LoginRequestFields* out);
-
 struct LoginFailure {
   uint64_t statusCode = 0;
   std::size_t messageBytes = 0;  // length of the server's message text; the text is never read out
@@ -113,15 +92,21 @@ std::optional<LoginFailure> ParseLoginFailure(const std::string& frame);
 
 // ---- login policy ---------------------------------------------------------------------------
 
-// Short platform name for an XPID prefix, from the game's 1-indexed provider enum
-// (STM=1, DSC=2, XBX=3, OVR_ORG=4, OVR=5, BOT=6, DMO=7); anything else is "UNK".
+// Short platform name for an XPID prefix, from the game's 1-indexed provider enum, which is also
+// Nakama's PlatformCode: STM=1, DSC=2, XBX=3, OVR_ORG=4, OVR=5, BOT=6, DMO=7; anything else is "UNK".
+// Code 2 is "PSN" in the game's string table and reads "DSC" only after PatchDscProvider rewrites it;
+// the game's own fallback prefix for an unknown provider is "???".
 const char* PlatformPrefix(uint64_t platformCode);
 
 // The platform code the bridge sends. The arguments do not influence the result.
 uint64_t SelectPlatformCode(bool hasUrlCredentials, bool noOvr);
 
-// Which Bearer goes on the remote upgrade: the server key when the URL carries credentials, else the JWT.
-// Empty means "attach no Authorization header".
+// Which Bearer goes on the remote upgrade. The game front's /nevr ingress forwards the caller's
+// Authorization header unchanged. A token-auth client sends its JWT, which authenticates the session.
+// A client logging in with URL credentials (discordid/password) sends the SERVER KEY instead: Nakama
+// treats a token equal to the server key as the legacy unauthenticated session and then authenticates it
+// from the discordid/password query parameters, as the /ws catch-all does. Empty means "attach no
+// Authorization header".
 std::string SelectRemoteBearer(bool hasUrlCredentials, const std::string& jwt, const std::string& serverKey);
 
 // True when the URL's path is the /ws catch-all, whose front replaces the client's Bearer with the server

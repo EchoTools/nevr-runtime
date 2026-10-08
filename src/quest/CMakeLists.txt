@@ -67,6 +67,29 @@ add_executable(stable_string_pool_test tests/stable_string_pool_test.cpp)
 target_link_libraries(stable_string_pool_test PRIVATE nevr_quest_stable_string_pool)
 target_compile_options(stable_string_pool_test PRIVATE -Wall -Wextra -Werror)
 
+# ── Token auth (device-code login, refresh, cache) ──────────────────────
+# The platform-neutral core (src/core) is the SAME source the Windows runtime
+# compiles; src/quest/auth is the Android adapter set (libcurl over OpenSSL from
+# the Quest vcpkg manifest, the cache file, the login-link file, a real clock).
+# Not linked into the sentinel yet: the hook that hands the token to the login
+# path is gated by ADR 0003.
+find_package(CURL CONFIG REQUIRED)
+add_library(nevr_quest_token_auth STATIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/../core/auth_refresh.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../core/device_auth_flow.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../core/device_poll_response.cpp"
+  auth/session.cpp
+  auth/file_store.cpp
+  auth/curl_http.cpp
+  auth/quest_token_auth.cpp)
+target_include_directories(nevr_quest_token_auth PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(nevr_quest_token_auth PUBLIC nlohmann_json::nlohmann_json CURL::libcurl)
+target_compile_options(nevr_quest_token_auth PRIVATE -Wall -Wextra -Werror)
+
+add_executable(auth_core_test tests/auth_core_test.cpp)
+target_link_libraries(auth_core_test PRIVATE nevr_quest_token_auth)
+target_compile_options(auth_core_test PRIVATE -Wall -Wextra -Werror)
+
 # ── Crash-reporter sentinel (libovrplatformloader.so) ───────────────────
 # Added once breakpad is vendored; guarded so the toolchain probe builds
 # standalone.

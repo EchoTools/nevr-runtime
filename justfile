@@ -412,13 +412,32 @@ test-quest-shared:
         src/quest/tests/service_redirect_test.cpp \
         -o "$out/service_redirect_test"
     "$out/service_redirect_test"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
+    # The codec test parses the login profile with nlohmann::json. Use the header the build installed
+    # from vcpkg.json, never a system package: fail loudly when the build has not installed it.
+    json_inc=""
+    for d in build/{{ preset }}/vcpkg_installed/*/include; do
+        if [[ -f "$d/nlohmann/json.hpp" ]]; then json_inc="$d"; break; fi
+    done
+    if [[ -z "$json_inc" ]]; then
+        echo "test-quest-shared: FAIL — nlohmann/json.hpp not found under build/{{ preset }}/vcpkg_installed/*/include; run 'just build' first (the header comes from vcpkg.json, not a system package)" >&2
+        exit 1
+    fi
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" \
         src/runtime/compat/evr_codec.cpp \
         src/runtime/compat/login_profile.cpp \
         src/quest/tests/evr_codec_test.cpp \
         -o "$out/evr_codec_test"
     "$out/evr_codec_test"
     echo "test-quest-shared: all redirect and EVR codec vectors pass on the host"
+    # The platform-neutral token-auth core and the Quest session, under a fake HTTP
+    # server and a fake clock. Same sources the NDK build compiles (src/quest/CMakeLists.txt).
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc \
+        src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
+        src/quest/auth/session.cpp src/quest/auth/file_store.cpp \
+        src/quest/tests/auth_core_test.cpp \
+        -o "$out/auth_core_test"
+    "$out/auth_core_test"
+    echo "test-quest-shared: token-auth core and Quest session tests pass on the host"
 
 # Shared EVR session router and the Quest loopback transport on the host. Plain g++, no NDK,
 # fail-close:
@@ -505,7 +524,7 @@ test-quest-hooks:
     #!/usr/bin/env bash
     set -euo pipefail
     out="build/quest-hooks-host"
-    mkdir -p "$out" /var/tmp/work-nevr-runtime/claude-main/hooks/host
+    mkdir -p "$out"
     cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 src/quest/tests/got_fixture_provider.cpp \
         -o "$out/libgotfx_provider.so"
@@ -1746,7 +1765,6 @@ verify:
         'Both tokens expired -- will re-authenticate' \
         'Cached token expired, no refresh token' \
         'token saved to .credentials.json' \
-        'Still waiting for authorization' \
         'Token expires in %llus' \
         'Token expired %llus ago'; do
         N94_RC=0; N94_CTX=$(grep -B1 -F "$msg" "$N94_FILE") || N94_RC=$?
@@ -1757,6 +1775,17 @@ verify:
             exit 1
         fi
     done
+    # The poll-loop line moved with the device-code loop into the platform-neutral core
+    # (shared with the Quest shim); the same Debug pin applies there, with the core's own
+    # level enum.
+    N94_CORE_FILE=src/core/device_auth_flow.cpp
+    N94_RC=0; N94_CTX=$(grep -B1 -F 'Still waiting for authorization' "$N94_CORE_FILE") || N94_RC=$?
+    sensor_stage1 "N94 auth log taxonomy" "$N94_CORE_FILE" "$N94_RC"
+    sensor_nonempty "N94 auth log taxonomy" "message 'Still waiting for authorization' in $N94_CORE_FILE" "$N94_CTX"
+    if grep -q 'LogLevel::Info' <<<"$N94_CTX"; then
+        echo "verify: FAIL — N94 the '[NEVR.AUTH] Still waiting for authorization' line is at Info; the N47 taxonomy pins it at Debug." >&2
+        exit 1
+    fi
     # C2/N84: every PatchDetour shall name its hook. The parameter is required at
     # compile time, so this is belt-and-braces against someone re-adding a default.
     # Match the DECLARATION, not prose. The first version of this check matched

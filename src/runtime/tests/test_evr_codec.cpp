@@ -4,6 +4,7 @@
 
 #include "runtime/compat/evr_codec.h"
 #include "runtime/compat/login_profile.h"
+#include "runtime/tests/evr_codec_test_reader.h"
 
 #include <gtest/gtest.h>
 
@@ -62,8 +63,8 @@ TEST(EvrCodecBuild, LoginRequestLayoutAndProfileJsonRoundTrip) {
   EXPECT_EQ(parsed.at("accountid").get<uint64_t>(), 987654321ULL);
   EXPECT_EQ(parsed.at("displayname").get<std::string>(), "A \"quoted\" \\ name");
 
-  EvrCodec::LoginRequestFields fields;
-  ASSERT_EQ(EvrCodec::ParseLoginRequest(*frame, &fields), EvrCodec::LoginRequestStatus::Ok);
+  EvrCodecTest::LoginRequestFields fields;
+  ASSERT_EQ(EvrCodecTest::ParseLoginRequest(*frame, &fields), EvrCodecTest::LoginRequestStatus::Ok);
   EXPECT_EQ(fields.platformCode, 4u);
   EXPECT_EQ(fields.accountId, 987654321ULL);
   EXPECT_EQ(fields.profileJson, json);
@@ -132,38 +133,48 @@ TEST(EvrCodecParse, ADeclaredLengthNearTheMaximumDoesNotOverflow) {
   EXPECT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Truncated);
 }
 
+TEST(EvrCodecParse, ADeclaredLengthThatWrapsWithTheHeaderIsTruncatedNotOk) {
+  // length + 24 wraps to 0 for this length; a check written as `length + kHeaderSize > remaining` reads it as Ok.
+  std::string frame = EvrCodec::BuildMessage(5, "");
+  const uint64_t wraps = std::numeric_limits<uint64_t>::max() - 23;
+  for (std::size_t i = 0; i < 8; ++i) frame[16 + i] = static_cast<char>((wraps >> (8 * i)) & 0xff);
+  EvrCodec::Message message;
+  ASSERT_EQ(EvrCodec::ReadMessage(frame, 0, &message), EvrCodec::ReadStatus::Truncated);
+  EXPECT_EQ(message.length, wraps);
+}
+
 TEST(EvrCodecParse, FirstSymbolIsZeroOnAShortFrame) {
   EXPECT_EQ(EvrCodec::FirstSymbol(EvrCodec::BuildMessage(0xdeadbeefULL, "x")), 0xdeadbeefULL);
   EXPECT_EQ(EvrCodec::FirstSymbol(std::string(23, 'x')), 0u);
 }
 
 TEST(EvrCodecParse, LoginRequestRejectsEveryMalformedShape) {
-  EvrCodec::LoginRequestFields fields;
+  EvrCodecTest::LoginRequestFields fields;
   const std::string good = *EvrCodec::BuildLoginRequest(4, 9, "{}");
-  ASSERT_EQ(EvrCodec::ParseLoginRequest(good, &fields), EvrCodec::LoginRequestStatus::Ok);
+  ASSERT_EQ(EvrCodecTest::ParseLoginRequest(good, &fields), EvrCodecTest::LoginRequestStatus::Ok);
 
-  EXPECT_EQ(EvrCodec::ParseLoginRequest(good.substr(0, 10), &fields), EvrCodec::LoginRequestStatus::NotAFrame);
+  EXPECT_EQ(EvrCodecTest::ParseLoginRequest(good.substr(0, 10), &fields), EvrCodecTest::LoginRequestStatus::NotAFrame);
   std::string badMarker = good;
   badMarker[0] = '\0';
-  EXPECT_EQ(EvrCodec::ParseLoginRequest(badMarker, &fields), EvrCodec::LoginRequestStatus::NotAFrame);
+  EXPECT_EQ(EvrCodecTest::ParseLoginRequest(badMarker, &fields), EvrCodecTest::LoginRequestStatus::NotAFrame);
 
-  EXPECT_EQ(EvrCodec::ParseLoginRequest(EvrCodec::BuildLoginSuccess(4, 9), &fields),
-            EvrCodec::LoginRequestStatus::WrongSymbol);
+  EXPECT_EQ(EvrCodecTest::ParseLoginRequest(EvrCodec::BuildLoginSuccess(4, 9), &fields),
+            EvrCodecTest::LoginRequestStatus::WrongSymbol);
 
-  EXPECT_EQ(EvrCodec::ParseLoginRequest(good + "x", &fields), EvrCodec::LoginRequestStatus::LengthMismatch);
-  EXPECT_EQ(EvrCodec::ParseLoginRequest(good.substr(0, good.size() - 1), &fields),
-            EvrCodec::LoginRequestStatus::LengthMismatch);
+  EXPECT_EQ(EvrCodecTest::ParseLoginRequest(good + "x", &fields), EvrCodecTest::LoginRequestStatus::LengthMismatch);
+  EXPECT_EQ(EvrCodecTest::ParseLoginRequest(good.substr(0, good.size() - 1), &fields),
+            EvrCodecTest::LoginRequestStatus::LengthMismatch);
 
-  EXPECT_EQ(EvrCodec::ParseLoginRequest(EvrCodec::BuildMessage(EvrCodec::kSymLoginRequest, std::string(32, '\0')),
+  EXPECT_EQ(EvrCodecTest::ParseLoginRequest(EvrCodec::BuildMessage(EvrCodec::kSymLoginRequest, std::string(32, '\0')),
                                         &fields),
-            EvrCodec::LoginRequestStatus::PayloadTooShort);
-  EXPECT_EQ(EvrCodec::ParseLoginRequest(
+            EvrCodecTest::LoginRequestStatus::PayloadTooShort);
+  EXPECT_EQ(EvrCodecTest::ParseLoginRequest(
                 EvrCodec::BuildMessage(EvrCodec::kSymLoginRequest, std::string(32, '\0') + "{}"), &fields),
-            EvrCodec::LoginRequestStatus::NotNulTerminated);
-  EXPECT_EQ(EvrCodec::ParseLoginRequest(
+            EvrCodecTest::LoginRequestStatus::NotNulTerminated);
+  EXPECT_EQ(EvrCodecTest::ParseLoginRequest(
                 EvrCodec::BuildMessage(EvrCodec::kSymLoginRequest, std::string(32, '\0') + std::string("{\0}\0", 4)),
                 &fields),
-            EvrCodec::LoginRequestStatus::EmbeddedNul);
+            EvrCodecTest::LoginRequestStatus::EmbeddedNul);
 }
 
 TEST(EvrCodecParse, LoginFailureReadsTheStatusCodeAndMessageLengthOnly) {

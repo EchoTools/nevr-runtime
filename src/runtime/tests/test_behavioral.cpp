@@ -1034,6 +1034,42 @@ TEST(WsBridgeFrameLog, StopsAtATruncatedMessageAndSaysSo) {
   EXPECT_TRUE(TestLogContains("declares 10 bytes but 6 remain"));
 }
 
+// The game->server diagnostic walk decodes payloads (hex dump, invite targets). A message whose declared
+// payload runs past the frame must stop the walk before any decoder reads it.
+TEST(WsBridgeGameToServerLog, DecodesTheInviteTargetOfAWholeMessage) {
+  ClearTestLogs();
+  EXPECT_EQ(TestHook_LogGameToServerFrame(BuildMarkedMessage(0x7f0d7a28de3c6f70ULL, std::string(0x30, 'i'))), 1);
+  EXPECT_TRUE(TestLogContains("FriendInvite: routing="));
+}
+
+TEST(WsBridgeGameToServerLog, ATruncatedMessageIsNotDecoded) {
+  ClearTestLogs();
+  std::string frame = BuildMarkedMessage(0x7f0d7a28de3c6f70ULL, std::string(0x30, 'i'));
+  // Claim 0x1000 payload bytes while 0x30 are present.
+  for (size_t i = 0; i < 8; ++i) frame[16 + i] = static_cast<char>((0x1000ULL >> (8 * i)) & 0xff);
+  EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
+  EXPECT_TRUE(TestLogContains("truncated: header declares 4096 payload bytes but only 48 remain"));
+  EXPECT_FALSE(TestLogContains("FriendInvite:"));
+}
+
+TEST(WsBridgeGameToServerLog, ATruncatedPlayerSessionRequestIsNotHexDumped) {
+  ClearTestLogs();
+  std::string frame = BuildMarkedMessage(0x9af2fab2a0c81a05ULL, std::string(4, 'p'));
+  for (size_t i = 0; i < 8; ++i) frame[16 + i] = static_cast<char>((16ULL >> (8 * i)) & 0xff);  // declares 16, has 4
+  EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
+  EXPECT_FALSE(TestLogContains("PlayerSessionReq payload:"));
+}
+
+// A declared length of 2^64-24 wrapped to zero when added to the header size, so the walk never advanced.
+TEST(WsBridgeGameToServerLog, AWrappingDeclaredLengthEndsTheWalkAndPrintsTheDeclaredLength) {
+  ClearTestLogs();
+  std::string frame = BuildMarkedMessage(0x7f0d7a28de3c6f70ULL, std::string(0x30, 'i'));
+  const uint64_t wraps = UINT64_MAX - 23;
+  for (size_t i = 0; i < 8; ++i) frame[16 + i] = static_cast<char>((wraps >> (8 * i)) & 0xff);
+  EXPECT_EQ(TestHook_LogGameToServerFrame(frame), 0);
+  EXPECT_TRUE(TestLogContains("header declares " + std::to_string(wraps) + " payload bytes but only 48 remain"));
+}
+
 TEST(WsBridgeLoginFailure, DiagnosticRejectsUndersizedTruncatedAndOversizedFrames) {
   uint64_t statusCode = 0;
   size_t messageBytes = 0;

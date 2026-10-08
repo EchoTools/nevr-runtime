@@ -80,41 +80,6 @@ uint64_t FirstSymbol(const std::string& frame) {
   return ReadLE64(reinterpret_cast<const uint8_t*>(frame.data()) + 8);
 }
 
-const char* LoginRequestStatusName(LoginRequestStatus status) {
-  switch (status) {
-    case LoginRequestStatus::Ok: return "ok";
-    case LoginRequestStatus::NotAFrame: return "not-a-frame";
-    case LoginRequestStatus::WrongSymbol: return "wrong-symbol";
-    case LoginRequestStatus::LengthMismatch: return "length-mismatch";
-    case LoginRequestStatus::PayloadTooShort: return "payload-too-short";
-    case LoginRequestStatus::NotNulTerminated: return "not-nul-terminated";
-    case LoginRequestStatus::EmbeddedNul: return "embedded-nul";
-  }
-  return "unknown";
-}
-
-LoginRequestStatus ParseLoginRequest(const std::string& frame, LoginRequestFields* out) {
-  if (frame.size() < kHeaderSize ||
-      std::memcmp(frame.data(), kMarker, kMarkerSize) != 0) {
-    return LoginRequestStatus::NotAFrame;
-  }
-  const uint8_t* bytes = reinterpret_cast<const uint8_t*>(frame.data());
-  if (ReadLE64(bytes + 8) != kSymLoginRequest) return LoginRequestStatus::WrongSymbol;
-  const uint64_t declared = ReadLE64(bytes + 16);
-  if (declared != frame.size() - kHeaderSize) return LoginRequestStatus::LengthMismatch;
-  const std::size_t payloadSize = frame.size() - kHeaderSize;
-  if (payloadSize < kLoginRequestFixedSize + 1) return LoginRequestStatus::PayloadTooShort;
-  const uint8_t* payload = bytes + kHeaderSize;
-  if (payload[payloadSize - 1] != 0) return LoginRequestStatus::NotNulTerminated;
-  const std::size_t jsonSize = payloadSize - kLoginRequestFixedSize - 1;
-  const char* json = reinterpret_cast<const char*>(payload) + kLoginRequestFixedSize;
-  if (std::memchr(json, '\0', jsonSize) != nullptr) return LoginRequestStatus::EmbeddedNul;
-  out->platformCode = ReadLE64(payload + kUuidSize);
-  out->accountId = ReadLE64(payload + kUuidSize + 8);
-  out->profileJson.assign(json, jsonSize);
-  return LoginRequestStatus::Ok;
-}
-
 std::optional<LoginFailure> ParseLoginFailure(const std::string& frame) {
   if (frame.size() < kHeaderSize) return std::nullopt;
   const uint8_t* bytes = reinterpret_cast<const uint8_t*>(frame.data());
