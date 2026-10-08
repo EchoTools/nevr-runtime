@@ -422,7 +422,7 @@ test-quest-hooks:
     #!/usr/bin/env bash
     set -euo pipefail
     out="build/quest-hooks-host"
-    mkdir -p "$out" /var/tmp/work-nevr-runtime/claude-main/hooks/host
+    mkdir -p "$out"
     cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 src/quest/tests/got_fixture_provider.cpp \
         -o "$out/libgotfx_provider.so"

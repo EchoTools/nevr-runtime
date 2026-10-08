@@ -30,15 +30,19 @@ A target names one slot by module, symbol and relocation type (`R_AARCH64_JUMP_S
 expected original value. `Install` refuses, logs one structured line and leaves the slot, its
 page protection and the caller's original pointer unchanged when: the module is absent or its
 build ID differs; zero or several relocations match; the relocation has an addend, a misaligned
-slot or a slot outside a writable segment; a JUMP_SLOT module is not `BIND_NOW` (a lazy slot is
-overwritten by the resolver on first call); the slot holds neither the expected original nor an
+slot or a slot outside a writable segment; a JUMP_SLOT module is not `BIND_NOW` (a lazily bound
+slot starts as a lazy-binding stub, not the target; the pinned libraries are `BIND_NOW` and Bionic's
+lazy behavior is unmeasured, so it is refused); the slot holds neither the expected original nor an
 address in an executable mapping; or another handle owns the slot. `Remove` revalidates the
-module and writes the original back only if the slot still holds the hook. The page protection
-a write restores comes from `PT_GNU_RELRO`, not an assumption. Order and rollback are the shared
+module and writes the original back only if the slot still holds the hook (compare-and-swap).
+Every write runs under one process-wide lock, and the protection it restores is read from
+`/proc/self/maps` under that lock (`PT_GNU_RELRO` is the fallback). Log lines are JSON objects
+(`hook_log.h`). Order and rollback are the shared
 `core/hook_lifecycle.h` contract that the MinHook path in `core/hooking.h` also uses.
 
 `sentinel/callback_thunk.h` gives each hooked function a typed entry point, original-call
-pointer and handler, catches `std::exception` from a handler, and falls back to the original.
+pointer and handler. An exception thrown by the original reaches the game unchanged; a
+`std::exception` thrown by a handler falls back to one call of the original, never a second.
 `sentinel/pinned_targets.h` holds the targets and callback types for the pinned artifact:
 `clock_gettime` (installed by `entry.cpp`), `CJson::TString` in both libraries, and the
 `SNSConfigRequestv24Send` and `GLOB_DAT` slots as fixtures. Only `clock_gettime` is installed.

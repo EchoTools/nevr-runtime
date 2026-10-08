@@ -11,15 +11,13 @@
 
 #include "sentinel.h"
 #include "got_hook.h"
+#include "hook_log.h"
 #include "pinned_targets.h"
 
 #include <jni.h>
-#include <android/log.h>
 
 #include <atomic>
 #include <cstdint>
-
-#define NEVR_TAG "NEVR-Sentinel"
 
 namespace {
 
@@ -39,9 +37,8 @@ int HookedClockGettime(ClockThunk::Fn original, clockid_t clk_id, struct timespe
     // Every 300th call: several lines/sec at a real engine's tick rate without
     // flooding logcat. Real work would filter/aggregate; this is a proof.
     if (n % 300 == 1) {
-        __android_log_print(ANDROID_LOG_INFO, NEVR_TAG,
-                            "hook: libr15.so clock_gettime call #%llu (GOT hook live)",
-                            static_cast<unsigned long long>(n));
+        sentinel::LogFields(sentinel::LogLevel::kInfo, "clock_gettime_proof",
+                            {{"module", "libr15.so"}, {"call", static_cast<long long>(n)}});
     }
     return original(clk_id, tp);
 }
@@ -68,8 +65,7 @@ const char* nevr_sentinel_marker() {
 // DT_NEEDED closure, before libr15's JNI_OnLoad / ANativeActivity_onCreate.
 __attribute__((constructor))
 static void nevr_sentinel_ctor() {
-    __android_log_print(ANDROID_LOG_INFO, NEVR_TAG,
-                        "constructor: arming crash reporter (pre-libr15)");
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor", {{"action", "arm_crash_reporter"}});
     sentinel::Arm();
     InstallBasicsHook();
 }
