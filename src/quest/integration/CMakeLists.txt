@@ -21,7 +21,6 @@ add_library(nevr_quest_integration STATIC
   ctor_sequence.cpp
   post_load.cpp
   identity_source.cpp
-  social_gate.cpp
   stage_log.cpp
   frame_tap.cpp
   tapped_transports.cpp

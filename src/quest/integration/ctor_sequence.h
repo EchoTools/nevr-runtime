@@ -85,9 +85,6 @@ class Steps {
   virtual void ArmCrashReporter() = 0;
   // InitActivation, then the resolved configuration.
   virtual const nevr_quest::ResolvedConfig& ResolveConfig() = 0;
-  // features.social from the config file text, combined with the effective features; true when the
-  // social facade is wanted.
-  virtual bool SocialWanted(const nevr_quest::Features& effective) = 0;
 
   virtual bool RegisterClockCounters() = 0;
   virtual bool RegisterRedirectCounters() = 0;

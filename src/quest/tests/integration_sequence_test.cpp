@@ -13,7 +13,6 @@
 #include "quest/integration/frame_tap.h"
 #include "quest/integration/identity_source.h"
 #include "quest/integration/post_load.h"
-#include "quest/integration/social_gate.h"
 #include "quest/integration/stage_log.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
@@ -27,7 +26,6 @@ namespace {
 
 struct FakeSteps final : Steps {
   nevr_quest::ResolvedConfig config;
-  bool social = false;
   std::vector<std::string> calls;
   // Per step: true = report failure, "throw" = throw.
   std::vector<std::string> failing;
@@ -54,7 +52,6 @@ struct FakeSteps final : Steps {
     if (!Step("config")) throw std::runtime_error("config");
     return config;
   }
-  bool SocialWanted(const nevr_quest::Features&) override { return social; }
   bool RegisterClockCounters() override { return Step("reg_clock"); }
   bool RegisterRedirectCounters() override { return Step("reg_redirect"); }
   bool RegisterDlopenCounters() override { return Step("reg_dlopen"); }
@@ -78,7 +75,7 @@ struct FakeSteps final : Steps {
     s.config.effective.redirect = redirect;
     s.config.effective.bridge = bridge;
     s.config.effective.login = login;
-    s.social = socialOn;
+    s.config.effective.social = socialOn;
     return s;
   }
   int Index(const char* name) const {
@@ -353,6 +350,12 @@ void TestIdentitySourceAnswers() {
   QuestLogin::Identity id;
   QCHECK(Fetch(Snap(Readiness::Ready, "tok", 4242, "player"), &id) == QuestLogin::IdentityStatus::Ok);
   QCHECK(id.account_id == 4242 && id.access_token == "tok" && id.display_name == "player");
+  QCHECK(id.social_level == 0);  // no facade installed: the login declares no social level
+  {
+    TokenIdentitySource withSocial([] { return Snap(Readiness::Ready, "tok", 4242, "player"); }, [] { return 1; });
+    QuestLogin::Identity declared;
+    QCHECK(withSocial.Fetch(declared) == QuestLogin::IdentityStatus::Ok && declared.social_level == 1);
+  }
 
   for (Readiness r : {Readiness::Starting, Readiness::Refreshing, Readiness::AwaitingUser}) {
     QuestLogin::Identity none;
@@ -369,31 +372,6 @@ void TestIdentitySourceAnswers() {
   QCHECK(Fetch(Snap(Readiness::Ready, "tok", 0, "p"), &none) == QuestLogin::IdentityStatus::NoAccount);
   TokenIdentitySource empty(nullptr);
   QCHECK(empty.Fetch(none) == QuestLogin::IdentityStatus::NotReady);
-}
-
-// ---- social switch ---------------------------------------------------------------------------------
-
-void TestSocialGate() {
-  const std::string on = R"({"features":{"login":true,"social":true}})";
-  const std::string off = R"({"features":{"login":true}})";
-  const std::string asString = R"({"features":{"social":"true"}})";
-  const std::string notObject = "[1,2]";
-  const std::string broken = "{";
-  QCHECK(SocialRequested(&on));
-  QCHECK(!SocialRequested(&off));
-  QCHECK(!SocialRequested(&asString));
-  QCHECK(!SocialRequested(&notObject));
-  QCHECK(!SocialRequested(&broken));
-  QCHECK(!SocialRequested(nullptr));
-  const std::string huge(nevr_quest::kMaxConfigBytes + 1, ' ');
-  QCHECK(!SocialRequested(&huge));
-
-  const char* reason = "";
-  nevr_quest::Features f;
-  QCHECK(!SocialEffective(false, f, &reason) && std::strcmp(reason, "not_requested") == 0);
-  QCHECK(!SocialEffective(true, f, &reason) && std::strcmp(reason, "login_not_enabled") == 0);
-  f.redirect = f.bridge = f.login = true;
-  QCHECK(SocialEffective(true, f, &reason) && std::strcmp(reason, "ok") == 0);
 }
 
 // ---- frame tap -------------------------------------------------------------------------------------
@@ -500,7 +478,6 @@ int main() {
   TestPostLoadWithNoActionsIsInert();
   TestPostLoadAcceptsANullName();
   TestIdentitySourceAnswers();
-  TestSocialGate();
   TestFrameTapSignalsLoginSuccessOnlyFromTheServer();
   TestFrameTapContainsAThrowingConsumer();
   if (quest_test::Failures() != 0) {

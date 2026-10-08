@@ -23,6 +23,7 @@ QuestLogin::IdentityStatus TokenIdentitySource::Fetch(QuestLogin::Identity& out)
   out.account_id = snap.discord_id;
   out.display_name = snap.username;
   out.access_token = snap.access_token;
+  out.social_level = socialLevel_ ? socialLevel_() : 0;
   return QuestLogin::IdentityStatus::Ok;
 }
 

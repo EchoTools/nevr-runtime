@@ -303,7 +303,14 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    `src/runtime/compat/social_{roster,party,names}.*` are shared with the Windows facade. The 75-slot
    Windows facade and `echovr.exe` offsets are not a Quest ABI: `src/quest/social/` is a Quest
    provider adapter over the same models with the 76-slot Quest vtable (section "Social provider").
-   
+   `nevr_social` is declared only when the social feature is effective AND the social facade is actually
+   installed; otherwise the login carries 0. The shared value is `SocialParty::kSocialLevel`
+   (`runtime/compat/social_level.h`, the PCVR login's constant); the production `IdentitySource` sets
+   `Identity::social_level` to it when, and only when, both conditions hold, and the default is 0. The
+   server sends friend presence, recently met, the lobby tablet and party data only to a session that
+   declared level 1 or more, so a login that declares 1 without handlers in place would be sent messages
+   the Quest cannot parse.
+
 ## Config-string seam (the first hook)
 
 PCVR detours `EchoVR::JsonValueAsString` (`CJson::String`, `echovr.exe` RVA `0x5fe290`) and
@@ -1046,7 +1053,7 @@ libraries (`production_steps.cpp`). The sequence is policy over an abstract `Ste
 that will be installed; (4) the single `StartReporter`; (5) the clock hook; (6) token auth on its own
 thread; (7) the bridge (loopback listener and router); (8) the `CJson::TString` redirect on libr15;
 (9) the social facade; (10) the hook on libr15's `dlopen` slot. Counters are registered only for hooks
-that will be installed: clock 2, redirect 10, dlopen 2, social 10, 24 of the reporter's 32
+that will be installed: clock 2, redirect 10, dlopen 2, social 12, 26 of the reporter's 32
 (`integration_hooks_test` pins the total against the real registration functions). The login thunk
 registers none (#237).
 
@@ -1072,8 +1079,8 @@ until each settles: `module_not_loaded` is retried after the next `dlopen`, anyt
 action. The handler restores `errno`. `AfterDlopen` runs after the game's call has returned and calls
 no game code; it is marked `NEVR_OUTSIDE_GAME_CALL`.
 
-**Social.** `features.social` is read by `integration/social_gate.cpp` until the config package owns
-it (#235), and requires login. The bridge is `integrated_bridge.cpp`: the same composition as
+**Social.** `FeatureEnabled(kSocial)` gates the facade (it requires login). The login declares
+`nevr_social` only after `InstallSocialHook` succeeded (`Runtime::socialLevel`). The bridge is `integrated_bridge.cpp`: the same composition as
 `SessionBridge` with decorators (`tapped_transports.cpp`) that show every relayed frame to
 `frame_tap.cpp`, which feeds `quest_social::ObserveFrames` and, on the service's `LoginSuccess`
 (account id at payload offset 24), `quest_social::SetLocalAccount`. The facade's requests go out

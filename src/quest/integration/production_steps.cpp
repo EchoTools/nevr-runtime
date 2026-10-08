@@ -24,7 +24,6 @@
 #include "quest/integration/identity_source.h"
 #include "quest/integration/integrated_bridge.h"
 #include "quest/integration/post_load.h"
-#include "quest/integration/social_gate.h"
 #include "quest/integration/stage_log.h"
 #include "quest/integration/social_shim.h"
 #include "quest/login/login_hook.h"
@@ -32,6 +31,7 @@
 #include "quest/redirect/hook_adapter.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
+#include "runtime/compat/social_level.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/lifecycle/stable_string_pool.h"
 
@@ -65,6 +65,7 @@ struct Runtime {
   std::atomic<unsigned> bridgePort{0};
   std::unique_ptr<TokenIdentitySource> identity;
   bool socialWanted = false;
+  std::atomic<int> socialLevel{0};  // SocialParty::kSocialLevel once the facade is installed
 };
 
 Runtime& R() {
@@ -240,30 +241,13 @@ class ProductionSteps final : public Steps {
     sentinel::LogFields(sentinel::LogLevel::kInfo, "config_loaded",
                         {{"status", "ok"}, {"redirect", cfg.effective.redirect ? 1 : 0},
                          {"bridge", cfg.effective.bridge ? 1 : 0}, {"login", cfg.effective.login ? 1 : 0},
+                         {"social", cfg.effective.social ? 1 : 0},
                          {"socket_uri", nevr_quest::SourceName(cfg.socketUri.source)},
                          {"http_uri", nevr_quest::SourceName(cfg.httpUri.source)},
                          {"http_key", nevr_quest::SourceName(cfg.httpKey.source)},
                          {"server_key", nevr_quest::SourceName(cfg.serverKey.source)}});
+    R().socialWanted = cfg.effective.social;
     return cfg;
-  }
-
-  bool SocialWanted(const nevr_quest::Features& effective) override {
-    // Social needs login, so a file that does not enable login is not read a second time.
-    if (!effective.login) {
-      R().socialWanted = false;
-      return false;
-    }
-    std::string text;
-    int err = 0;
-    const sentinel::ReadStatus status =
-        sentinel::ReadConfigFile(nevr_quest::ConfigFilePath(sentinel::FilesDir()), &text, &err);
-    const bool requested = SocialRequested(status == sentinel::ReadStatus::kRead ? &text : nullptr);
-    const char* reason = "";
-    R().socialWanted = SocialEffective(requested, effective, &reason);
-    sentinel::LogFields(sentinel::LogLevel::kInfo, "feature",
-                        {{"name", "social"}, {"requested", requested ? 1 : 0},
-                         {"effective", R().socialWanted ? 1 : 0}, {"reason", reason}});
-    return R().socialWanted;
   }
 
   bool RegisterClockCounters() override { return nevr_quest::integration::RegisterClockCounters(); }
@@ -285,7 +269,7 @@ class ProductionSteps final : public Steps {
       return false;
     }
     Runtime& rt = R();
-    rt.identity = std::make_unique<TokenIdentitySource>(&AuthSnapshot);
+    rt.identity = std::make_unique<TokenIdentitySource>(&AuthSnapshot, [] { return R().socialLevel.load(); });
     nevr::quest_auth::QuestAuthConfig authConfig;
     authConfig.base_url = cfg.httpUri.text;
     authConfig.http_key = cfg.httpKey.text;
@@ -376,6 +360,8 @@ class ProductionSteps final : public Steps {
     const char* detail = "unknown";
     const bool ok = nevr_quest::integration::InstallSocialHook(&detail);
     detail_ = detail;
+    // The login declares the social level only when the facade is in place (docs/adr/0003, contract 5).
+    if (ok) R().socialLevel.store(SocialParty::kSocialLevel);
     return ok;
   }
 

@@ -82,18 +82,16 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     r.Run(StepId::kArmCrashReporter, [&] { steps.ArmCrashReporter(); return true; });
 
     nevr_quest::Features want;  // all off if the configuration cannot be resolved
-    bool socialWanted = false;
     r.Run(StepId::kResolveConfig, [&] {
       const nevr_quest::ResolvedConfig& cfg = steps.ResolveConfig();
       want = cfg.effective;
-      socialWanted = steps.SocialWanted(cfg.effective);
       return true;
     });
 
     const bool wantRedirect = want.redirect;
     const bool wantBridge = want.bridge;
     const bool wantLogin = want.login;
-    const bool wantSocial = socialWanted;
+    const bool wantSocial = want.social;  // the config package already requires login for it
     const bool wantTokenAuth = wantBridge || wantLogin;
     const bool wantDlopen = wantLogin || wantRedirect;
 

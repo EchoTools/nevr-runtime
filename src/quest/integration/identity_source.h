@@ -22,12 +22,16 @@ namespace nevr_quest::integration {
 class TokenIdentitySource final : public QuestLogin::IdentitySource {
  public:
   using SnapshotFn = std::function<nevr::quest_auth::Snapshot()>;
-  explicit TokenIdentitySource(SnapshotFn snapshot) : snapshot_(std::move(snapshot)) {}
+  // `socialLevel` is asked on every Fetch and answers the level the login declares ("nevr_social"):
+  // SocialParty::kSocialLevel only when the social facade is installed, else 0.
+  explicit TokenIdentitySource(SnapshotFn snapshot, std::function<int()> socialLevel = nullptr)
+      : snapshot_(std::move(snapshot)), socialLevel_(std::move(socialLevel)) {}
 
   QuestLogin::IdentityStatus Fetch(QuestLogin::Identity& out) override;
 
  private:
   SnapshotFn snapshot_;
+  std::function<int()> socialLevel_;
 };
 
 }  // namespace nevr_quest::integration
