@@ -267,14 +267,18 @@ test-auth-unit:
     unset VCPKG_ROOT
     # A test binary that hangs or runs away must fail the gate, not block it or exhaust the machine:
     # 124 is timeout's "timed out" status and 137 is a process killed by the memory cap. The cap
-    # (systemd user scope, MemoryMax=4G, no swap) applies when systemd-run exists; otherwise the run
-    # keeps only the time limit and says so.
+    # (systemd user scope, MemoryMax=4G, no swap) applies when a probe scope with the same properties
+    # starts; when systemd-run is missing or cannot start a user scope (no user manager or session bus,
+    # as in a container), the run keeps only the time limit and says so. The probe does not detect a
+    # host whose cgroups do not enforce MemoryMax. systemd-run expands "$" in its arguments, which the
+    # test path below never contains. Each scope is its own unit, so the wrapper that runs this recipe
+    # does not bound the test processes: each test has its own 4G cap.
     run_test() {
         local rc=0
-        if command -v systemd-run >/dev/null; then
+        if command -v systemd-run >/dev/null && systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- true 2>/dev/null; then
             systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- timeout -k 10 900 wine "$1" || rc=$?
         else
-            echo "test-auth-unit: systemd-run not found; running $1 with the time limit only (no memory cap)" >&2
+            echo "test-auth-unit: systemd-run unavailable or cannot start a user scope: running $1 with the time limit only (no memory cap)" >&2
             timeout -k 10 900 wine "$1" || rc=$?
         fi
         if [[ "$rc" -eq 124 ]]; then
