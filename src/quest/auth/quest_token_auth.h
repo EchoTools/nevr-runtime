@@ -30,7 +30,10 @@ struct QuestAuthConfig {
 
 class QuestTokenAuth {
  public:
-  QuestTokenAuth(QuestAuthConfig config, nevr::auth::LogSink log);
+  // Construction allocates and reads /proc/self/cmdline, so it can fail; it is a noexcept factory
+  // for the caller that lives in game/loader frames. Returns nullptr, with the reason sent to `log`
+  // (when the sink itself still works), instead of throwing.
+  static std::unique_ptr<QuestTokenAuth> Create(QuestAuthConfig config, nevr::auth::LogSink log) noexcept;
   ~QuestTokenAuth();
 
   // Every call below is noexcept and catches std::exception itself: the hook that will call them
@@ -45,6 +48,7 @@ class QuestTokenAuth {
   Snapshot Get() const noexcept;
 
  private:
+  QuestTokenAuth(QuestAuthConfig config, nevr::auth::LogSink log);
   void ReportFailure(const char* what, const char* where) const noexcept;
 
   nevr::auth::LogSink log_;

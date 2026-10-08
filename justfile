@@ -425,6 +425,8 @@ test-quest-shared:
     # CurlHttpClient's trust handling against real TLS peers on loopback (test CA, Android-style
     # old-hash CA directory). Host libcurl with an OpenSSL backend, libssl and libcrypto.
     g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc \
+        src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
+        src/quest/auth/session.cpp src/quest/auth/file_store.cpp src/quest/auth/quest_token_auth.cpp \
         src/quest/auth/curl_http.cpp src/quest/auth/ca_bundle.cpp src/quest/tests/tls_ca_test.cpp \
         -lcurl -lssl -lcrypto -o "$out/tls_ca_test"
     "$out/tls_ca_test"

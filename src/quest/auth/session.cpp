@@ -95,7 +95,13 @@ Session::Session(SessionConfig config, nevr::auth::HttpClient& http, Interruptib
     : config_(std::move(config)), http_(http), clock_(clock), store_(store), presenter_(presenter),
       log_(std::move(log)) {}
 
-Session::~Session() { Stop(); }
+Session::~Session() {
+  try {
+    Stop();
+  } catch (const std::exception&) {
+    // A destructor must not throw; Stop() reports what it can itself.
+  }
+}
 
 void Session::Log(LogLevel level, const std::string& message) const {
   if (log_) log_(level, message);
@@ -118,9 +124,14 @@ void Session::Start() {
       try {
         Run();
       } catch (const std::exception& e) {
-        // Nothing may escape a thread body: it would terminate the game process.
-        Log(LogLevel::Error, std::string("[NEVR.AUTH] auth worker stopped on an exception: ") + e.what());
-        SetState(Readiness::Failed);
+        // Nothing may escape a thread body: it would terminate the game process. Reporting the
+        // failure can itself throw (the log sink, an allocation), so that is contained too.
+        try {
+          Log(LogLevel::Error, std::string("[NEVR.AUTH] auth worker stopped on an exception: ") + e.what());
+          SetState(Readiness::Failed);
+        } catch (const std::exception&) {
+          // Nowhere left to report to.
+        }
       }
     });
     started_ = true;
@@ -151,7 +162,19 @@ void Session::Stop() {
   }
   clock_.Interrupt();
   http_.Interrupt();  // a request in flight returns now instead of at its own timeout
-  if (worker_.joinable()) worker_.join();
+  if (worker_.joinable()) {
+    try {
+      worker_.join();
+    } catch (const std::system_error& e) {
+      // join() failing (EINVAL, EDEADLK) is not expected here. A joinable std::thread that is
+      // destroyed terminates the process, so release it and say so; the stop flag is already set.
+      worker_.detach();
+      try {
+        Log(LogLevel::Error, std::string("[NEVR.AUTH] auth worker could not be joined: ") + e.what());
+      } catch (const std::exception&) {
+      }
+    }
+  }
   std::lock_guard<std::mutex> lock(mutex_);
   snapshot_.readiness = Readiness::Stopped;
 }

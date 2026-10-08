@@ -10,6 +10,7 @@
 
 #include "quest/auth/ca_bundle.h"
 #include "quest/auth/curl_http.h"
+#include "quest/auth/quest_token_auth.h"
 #include "quest/tests/mini_test.h"
 
 #include <curl/curl.h>
@@ -37,7 +38,9 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <stdexcept>
 #include <thread>
+#include <utility>
 
 namespace {
 
@@ -508,6 +511,30 @@ TEST(a_huge_file_is_rejected_from_its_size_without_being_read) {
   const CaBundle b = LoadCaBundle({dir}, logs.Sink());
   CHECK_EQ(b.certificates, size_t(1));
   CHECK(logs.text.find("skipped_files=1") != std::string::npos);
+}
+
+TEST(creating_questtokenauth_cannot_throw_into_the_caller) {
+  using nevr::quest_auth::QuestAuthConfig;
+  using nevr::quest_auth::QuestTokenAuth;
+  static_assert(noexcept(QuestTokenAuth::Create(std::declval<QuestAuthConfig>(), std::declval<nevr::auth::LogSink>())),
+                "Create must be noexcept");
+  // On the host the process command line is not a package name, so construction logs an Error; a
+  // sink that throws makes construction throw, and the factory must contain it.
+  const nevr::auth::LogSink throwing = [](nevr::auth::LogLevel, const std::string&) {
+    throw std::runtime_error("sink exploded");
+  };
+  CHECK(QuestTokenAuth::Create(QuestAuthConfig{}, throwing) == nullptr);
+  Logs logs;
+  QuestAuthConfig config;
+  config.files_dir = FreshDir("auth-files");
+  auto auth = QuestTokenAuth::Create(config, logs.Sink());
+  CHECK(auth != nullptr);
+  if (auth) {
+    CHECK(auth->Token().empty());
+    CHECK(auth->Get().readiness == nevr::quest_auth::Readiness::Starting);
+    auth->Stop();  // never started: still fine
+  }
+  CHECK(logs.text.find("could not derive the app-internal directory") != std::string::npos);
 }
 
 TEST(interrupt_during_a_stalled_request_returns_promptly) {
