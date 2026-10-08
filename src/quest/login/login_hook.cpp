@@ -98,12 +98,23 @@ struct State {
   const void* expected_vptr = nullptr;
 };
 
-State g_state;
+// The adapter's state lives in one function-local object that is never destroyed. A namespace-scope
+// object with a constructor or destructor would get an .init_array entry (and an atexit registration),
+// which tools/check_quest_static_init.sh rejects once this code is linked into the sentinel: it would
+// run after the sentinel's own constructor and is torn down at exit while the game's threads may still
+// call the hook.
+struct Globals {
+  State state;
+  std::mutex install_mutex;
+  sentinel::GotHook hook;
+  std::mutex account_mutex;
+};
+Globals& G() {
+  static Globals* const globals = new Globals();
+  return *globals;
+}
 std::atomic<const State*> g_published{nullptr};
-std::mutex g_install_mutex;
-sentinel::GotHook g_hook;
-std::mutex g_account_mutex;
-OculusIdMemory g_oculus_id;  // guarded by g_account_mutex
+OculusIdMemory g_oculus_id;  // guarded by G().account_mutex
 
 struct LoginTag {};
 using LoginThunk = sentinel::CallbackThunk<LoginTag, void(void*, void*)>;
@@ -119,7 +130,7 @@ using LoginThunk = sentinel::CallbackThunk<LoginTag, void(void*, void*)>;
 // OculusIdMemory keeps the Oculus value across logins in this process, puts it back only while
 // the global still holds the value written here, and never remembers 0 or -1.
 //
-// Threading: g_account_mutex serializes this adapter's own accesses. The game's writers of the
+// Threading: G().account_mutex serializes this adapter's own accesses. The game's writers of the
 // global (GotLoggedInUserOrgIdCb 0x1ecef0/0x1ecf18, RadPluginShutdown 0x207074) are not under
 // it, and set -> verify -> JSON -> restore is not atomic against them. The login path is taken
 // to run on one game thread with no concurrent writer while a login is in flight; that is an
@@ -152,7 +163,7 @@ class LiveUser final : public UserAccess {
 
   bool SetAccountId(std::uint64_t id) override {
     if (!Valid() || global_ == nullptr) return false;
-    const std::lock_guard<std::mutex> lock(g_account_mutex);
+    const std::lock_guard<std::mutex> lock(G().account_mutex);
     if (!g_oculus_id.NoteBeforeWrite(__atomic_load_n(global_, __ATOMIC_ACQUIRE), id)) return false;
     __atomic_store_n(global_, id, __ATOMIC_RELEASE);
     return true;
@@ -160,7 +171,7 @@ class LiveUser final : public UserAccess {
 
   bool RestoreAccountId() override {
     if (global_ == nullptr) return false;
-    const std::lock_guard<std::mutex> lock(g_account_mutex);
+    const std::lock_guard<std::mutex> lock(G().account_mutex);
     std::uint64_t oculus = 0;
     if (!g_oculus_id.RestoreFor(__atomic_load_n(global_, __ATOMIC_ACQUIRE), oculus)) return false;
     __atomic_store_n(global_, oculus, __ATOMIC_RELEASE);
@@ -351,7 +362,7 @@ void SentinelLog(Level level, const char* event, const LogKv* fields, std::size_
 
 InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build, LogFn log) {
   if (log == nullptr) log = &SentinelLog;
-  const std::lock_guard<std::mutex> lock(g_install_mutex);
+  const std::lock_guard<std::mutex> lock(G().install_mutex);
   if (g_published.load(std::memory_order_acquire) != nullptr) return InstallState::AlreadyInstalled;
 
   auto refuse = [&](InstallState state, const char* reason) {
@@ -373,13 +384,13 @@ InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build,
   CJsonApi api;
   if (!ResolveCJson(image, api)) return refuse(InstallState::SymbolMissing, "pnsovr_cjson_binding");
 
-  g_state.source = source;
-  g_state.build = build;
-  g_state.log = log;
-  g_state.api = api;
-  g_state.account_id_global = account_global;
-  g_state.expected_vptr = reinterpret_cast<const void*>(image.base + kCNSOVRUserVptrVaddr);
-  g_published.store(&g_state, std::memory_order_release);
+  G().state.source = source;
+  G().state.build = build;
+  G().state.log = log;
+  G().state.api = api;
+  G().state.account_id_global = account_global;
+  G().state.expected_vptr = reinterpret_cast<const void*>(image.base + kCNSOVRUserVptrVaddr);
+  g_published.store(&G().state, std::memory_order_release);
   LoginThunk::Arm(kLoginHook);
 
   // The slot must hold libpnsovr's own CNSUser::SendLogInRequest (0x382a4c); libr15 exports
@@ -387,7 +398,7 @@ InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build,
   const sentinel::GotTarget target(kPnsovr, kHookedSymbol, sentinel::RelocKind::kJumpSlot,
                                    kPnsovrBuildId, kHookedSlotVaddr,
                                    reinterpret_cast<const void*>(image.base + kOwnSendLogInRequestVaddr));
-  if (sentinel::InstallThunk<LoginThunk>(g_hook, target) != sentinel::GotStatus::kOk) {
+  if (sentinel::InstallThunk<LoginThunk>(G().hook, target) != sentinel::GotStatus::kOk) {
     LoginThunk::Disarm();
     g_published.store(nullptr, std::memory_order_release);
     return refuse(InstallState::HookFailed, "got_backend");

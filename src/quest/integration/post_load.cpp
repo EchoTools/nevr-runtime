@@ -19,9 +19,17 @@ struct Slot {
   const char* name = "";
 };
 
-std::mutex g_mutex;
-Slot g_login{nullptr, false, nullptr, "login"};
-Slot g_matchmaking{nullptr, false, nullptr, "matchmaking"};
+// The slots and their lock live in one function-local object that is never destroyed (a namespace-scope
+// std::mutex registers an atexit destructor, which tools/check_quest_static_init.sh rejects).
+struct State {
+  std::mutex mutex;
+  Slot login{nullptr, false, nullptr, "login"};
+  Slot matchmaking{nullptr, false, nullptr, "matchmaking"};
+};
+State& S() {
+  static State* const state = new State();
+  return *state;
+}
 std::atomic<bool> g_pending{false};
 std::atomic<std::uint64_t> g_calls{0};
 std::atomic<std::uint64_t> g_attempts{0};
@@ -51,15 +59,15 @@ void RunSlot(Slot& slot, const char* module) {
 }
 
 bool AnyUnsettled() {
-  return (g_login.fn != nullptr && !g_login.settled) || (g_matchmaking.fn != nullptr && !g_matchmaking.settled);
+  return (S().login.fn != nullptr && !S().login.settled) || (S().matchmaking.fn != nullptr && !S().matchmaking.settled);
 }
 
 }  // namespace
 
 void SetPostLoadActions(const PostLoadActions& actions) {
-  const std::lock_guard<std::mutex> lock(g_mutex);
-  g_login = Slot{actions.login, false, nullptr, "login"};
-  g_matchmaking = Slot{actions.matchmaking, false, nullptr, "matchmaking"};
+  const std::lock_guard<std::mutex> lock(S().mutex);
+  S().login = Slot{actions.login, false, nullptr, "login"};
+  S().matchmaking = Slot{actions.matchmaking, false, nullptr, "matchmaking"};
   g_calls.store(0);
   g_sawPnsovr.store(false);
   g_sawMatchmaking.store(false);
@@ -73,9 +81,9 @@ PostLoadStats PostLoadStatsView() noexcept {
   PostLoadStats s;
   s.calls = g_calls.load();
   s.attempts = g_attempts.load();
-  const std::lock_guard<std::mutex> lock(g_mutex);
-  s.loginSettled = g_login.settled ? 1 : 0;
-  s.matchmakingSettled = g_matchmaking.settled ? 1 : 0;
+  const std::lock_guard<std::mutex> lock(S().mutex);
+  s.loginSettled = S().login.settled ? 1 : 0;
+  s.matchmakingSettled = S().matchmaking.settled ? 1 : 0;
   return s;
 }
 
@@ -97,10 +105,10 @@ NEVR_OUTSIDE_GAME_CALL void AfterDlopen(const char* name, void* handle) noexcept
   }
   if (!g_pending.load(std::memory_order_acquire)) return;
   try {
-    const std::lock_guard<std::mutex> lock(g_mutex);
+    const std::lock_guard<std::mutex> lock(S().mutex);
     const char* module = Basename(name);
-    RunSlot(g_login, module);
-    RunSlot(g_matchmaking, module);
+    RunSlot(S().login, module);
+    RunSlot(S().matchmaking, module);
     g_pending.store(AnyUnsettled(), std::memory_order_release);
   } catch (const std::exception&) {
     // std::system_error from the lock: leave the game's dlopen result alone; the next call retries.
