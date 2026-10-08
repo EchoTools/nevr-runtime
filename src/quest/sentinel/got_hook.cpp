@@ -250,19 +250,18 @@ int LiveProtection(const void* addr) {
   return result;
 }
 
-// `relroReadOnly` is the fallback when /proc/self/maps is unreadable.
-// `relroReadOnly` is the fallback when /proc/self/maps is unreadable.
-// Replaces `expected` with `value` in `slot`, and only if the slot still holds
-// `expected`: a hook someone chained on top, or any other writer, is never
-// overwritten. A RELRO page is made writable for the store and protected
-// read-only again. The whole sequence runs under the process-wide lock. If the
-// page cannot be re-protected the store is undone (compare-and-swap, so only our
-// own value is rolled back) and re-protection is retried.
 // What a write left behind. kStored: our value was stored (and, if the write then failed,
 // rolled back by us). kStoredMayBeLive: it was stored and another writer's value now sits
 // in the slot, possibly chaining it.
 enum class StoreOutcome { kNotStored, kStored, kStoredMayBeLive };
 
+// Replaces `expected` with `value` in `slot`, and only if the slot still holds
+// `expected`: a hook someone chained on top, or any other writer, is never
+// overwritten. A RELRO page is made writable for the store and protected
+// read-only again. The whole sequence runs under the process-wide lock. If the
+// page cannot be re-protected the store is undone (compare-and-swap, so only our
+// own value is rolled back) and re-protection is retried. `relroReadOnly` is the
+// fallback for the protection to restore when /proc/self/maps is unreadable.
 GotStatus WriteSlot(void** slot, void* expected, void* value, bool relroReadOnly,
                     int* savedErrno, StoreOutcome* outcome) {
   const Lock lock;

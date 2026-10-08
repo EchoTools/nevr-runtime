@@ -43,8 +43,9 @@ namespace sentinel {
 
 enum class ReportKind { kCalls, kFaults };
 
-// Registers a counter to report (at most 8). `name` must outlive the reporter (a literal).
-// Returns false, and logs, when the table is full or the reporter is already running.
+// Registers a counter to report (at most 32 across the whole program). `name` must outlive the
+// reporter (a literal). Returns false, and logs `register_refused`, when the table is full or the
+// reporter is already running: every RegisterReportCounter call must come before StartReporter.
 bool RegisterReportCounter(const char* name, const std::atomic<std::uint64_t>* value,
                            ReportKind kind = ReportKind::kCalls);
 

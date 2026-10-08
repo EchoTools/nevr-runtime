@@ -10,7 +10,9 @@ namespace sentinel {
 
 namespace {
 
-constexpr unsigned kMaxCounters = 8;
+// Static storage, no heap. Every package that hooks registers its own counters (calls, faults,
+// outcomes), so this is sized for all of them together.
+constexpr unsigned kMaxCounters = 32;
 
 struct Counter {
   const char* name = nullptr;
