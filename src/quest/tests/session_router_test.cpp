@@ -430,9 +430,13 @@ void TestLoginSuccessAndFailureHandling() {
   if (sent.size() == 2) QCHECK(sent[1].data == EvrCodec::BuildFriendListSubscribe());
 
   std::string failurePayload;
-  EvrCodec::AppendLE64(failurePayload, 0);   // placeholder fields
-  EvrCodec::AppendLE64(failurePayload, 0);
-  EvrCodec::AppendLE64(failurePayload, 7);   // status
+  // The codec no longer exports a little-endian appender; the payload layout is three u64 fields.
+  const auto appendLE64 = [&failurePayload](uint64_t v) {
+    for (int i = 0; i < 8; ++i) failurePayload.push_back(static_cast<char>((v >> (8 * i)) & 0xFF));
+  };
+  appendLE64(0);   // placeholder fields
+  appendLE64(0);
+  appendLE64(7);   // status
   failurePayload += "PRIVATE-SERVER-TEXT";
   rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoginFailure, failurePayload), true);
   QCHECK(rig.games.Sent().size() == 2);  // forwarded: the client retries
