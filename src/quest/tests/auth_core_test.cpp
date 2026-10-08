@@ -1496,6 +1496,40 @@ TEST(the_calls_a_hook_will_make_into_questtokenauth_cannot_throw) {
   static_assert(noexcept(std::declval<const QuestTokenAuth&>().Get()), "Get must be noexcept");
 }
 
+
+TEST(session_a_200_without_a_usable_code_is_transient_not_final_because_the_player_saw_nothing) {
+  for (const char* bad : {R"({"status":"ok"})", R"({"code":""})", "<html>captive portal</html>", R"({"code":5})", "[]"}) {
+    FakeClock clock;
+    FakeHttp http;
+    FakeStore store;
+    FakePresenter presenter;
+    LogCapture log;
+    auto good = std::make_shared<std::atomic<bool>>(false);
+    const std::string bad_body = bad;
+    http.handler = [good, bad_body](const std::string& endpoint, const std::string&) -> HttpResponse {
+      if (endpoint == "request") {
+        if (!*good) return Status(200, bad_body);
+        return Ok({{"code", "C"}});
+      }
+      return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 3600)}, {"refresh_token", "rt"},
+                 {"refresh_token_expires_in", 2592000}});
+    };
+    Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+    s.Start();
+    clock.Allow(5);  // the five backoffs
+    CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+    CHECK_EQ(http.Count("request"), 6);
+    CHECK_EQ(presenter.presented.load(), 0);
+    CHECK(log.All().find("trying again every 300s") != std::string::npos);   // recoverable ...
+    CHECK(log.All().find("Authentication failed") == std::string::npos);     // ... not final
+    *good = true;
+    clock.Allow(2);  // the recovery period, then the poll wait
+    CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+    CHECK_EQ(presenter.presented.load(), 1);
+    s.Stop();
+  }
+}
+
 }  // namespace
 
 int main(int argc, char** argv) { return mini_test::RunAll(argc, argv); }

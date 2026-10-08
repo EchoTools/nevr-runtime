@@ -251,14 +251,20 @@ Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
                                  " http_status=" + std::to_string(r.status));
       return "";
     }
+    // A 200 that carries no usable code (HTML from a captive portal, an object without "code")
+    // shows the player nothing, so it is as transient as any other unreadable response.
+    std::string code;
     try {
-      return nlohmann::json::parse(r.body).value("code", "");
+      const nlohmann::json j = nlohmann::json::parse(r.body);
+      if (j.is_object() && j.contains("code") && j.at("code").is_string()) code = j.at("code").get<std::string>();
     } catch (const nlohmann::json::exception&) {
+    }
+    if (code.empty()) {
       device_result_ = DeviceResult::RequestTransient;
       failure_class_ = "device_request_transient";
-      Log(LogLevel::Warning, "[NEVR.AUTH] device code request: malformed JSON response");
-      return "";
+      Log(LogLevel::Warning, "[NEVR.AUTH] device code request: the response carried no usable code");
     }
+    return code;
   };
   ops.open_browser = [this](const std::string& url) { return presenter_.Present(url); };
   // Nobody can see a link that was not delivered: stop rather than wait out the code.
