@@ -965,12 +965,14 @@ void UpdateCollect(void* self, EventBatch* out) noexcept {
   Impl* impl = OwnerOf(self);
   if (impl == nullptr) return;
   try {
+    // The events are drained before the view is published, so the view is at least as new as every event: a
+    // member an event names is in it unless it has left since (see QueueEvents).
+    std::vector<SocialParty::Event> events = Party(*impl).DrainEvents();
     const std::vector<std::uint64_t> ids = PublishView(*impl);
     const auto view = CurrentView(*impl);
     SyncObject(*impl, *view);
     // Everything the model queued joins the carry queue, oldest first; one batch is delivered now and the
     // rest next frame, in order (see Enqueue for what is merged and what may be dropped).
-    std::vector<SocialParty::Event> events = Party(*impl).DrainEvents();
     QueueEvents(*impl, events, ids, ViewRoomId(*view), out);
     if (out->dropped != 0 && !impl->queueOverflowLogged) {
       impl->queueOverflowLogged = true;
