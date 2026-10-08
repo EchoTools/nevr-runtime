@@ -965,7 +965,7 @@ absent from the file. The only consumer is the install call above.
 `src/quest/integration/` wires the packages above into the sentinel entry point. `entry.cpp` calls one
 function, `RunSentinelConstructor`, which runs the sequence in `ctor_sequence.cpp` over the real
 libraries (`production_steps.cpp`). The sequence is policy over an abstract `Steps`, so
-`tests/integration_sequence_test.cpp` drives it with fakes.
+`src/quest/tests/integration_sequence_test.cpp` drives it with fakes.
 
 **Order.** (1) crash reporter; (2) configuration (`InitActivation`); (3) every counter of every hook
 that will be installed; (4) the single `StartReporter`; (5) the clock hook; (6) token auth on its own
