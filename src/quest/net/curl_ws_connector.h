@@ -2,9 +2,11 @@
 // WsConnector over libcurl's WebSocket API (CURLOPT_CONNECT_ONLY=2), reusing the libcurl-over-OpenSSL the
 // Quest vcpkg manifest provides (ADR 0003: no second TLS stack).
 //
-// Verification is not configurable here. Peer and host verification are always on, the minimum protocol is
-// TLS 1.2, the scheme is restricted to wss, redirects are off, and there is no field, flag or environment
-// variable that relaxes any of it. Trust is the certificates found in Config::caDirs (the Android CA
+// Verification and routing are not configurable here. Peer and host verification are always on, the minimum
+// protocol is TLS 1.2, the scheme is restricted to wss, redirects are off, and proxies are off
+// (CURLOPT_NOPROXY "*": libcurl otherwise honours all_proxy, https_proxy, wss_proxy and friends from the
+// environment and would send the Authorization header to whatever they name). There is no field, flag or
+// environment variable that changes any of it. Trust is the certificates found in Config::caDirs (the Android CA
 // directories by default), read into memory by the same loader token auth uses
 // (quest/auth/ca_bundle.h) and handed to libcurl as CURLOPT_CAINFO_BLOB. CURLOPT_CAPATH is not used:
 // OpenSSL looks certificates up by the SHA-1 subject hash and Android names them by the old MD5 hash,

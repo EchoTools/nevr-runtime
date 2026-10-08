@@ -161,14 +161,16 @@ HandshakeStatus ParseUpgradeRequest(std::string_view buffer, UpgradeRequest* out
 
   std::size_t lineEnd = head.find("\r\n");
   const std::string_view requestLine = head.substr(0, lineEnd);
-  // "GET <target> HTTP/1.1": the target is not interpreted (the game's path and query mean nothing to the
-  // loopback listener; the adapter decides the remote URL).
+  // "GET <target> HTTP/1.1". The target is returned verbatim for the access-token check; nothing else
+  // uses it (the adapter decides the remote URL from its own configuration, never from this path).
   if (requestLine.substr(0, 4) != "GET " || requestLine.size() < 14 ||
-      requestLine.substr(requestLine.size() - 8) != "HTTP/1.1") {
+      requestLine.substr(requestLine.size() - 9) != " HTTP/1.1") {
     return HandshakeStatus::Bad;
   }
+  const std::string_view target = requestLine.substr(4, requestLine.size() - 4 - 9);
+  if (target.empty() || target.find(' ') != std::string_view::npos) return HandshakeStatus::Bad;
 
-  bool upgradeWebSocket = false, connectionUpgrade = false, version13 = false;
+  bool upgradeWebSocket = false, connectionUpgrade = false, version13 = false, hasOrigin = false;
   std::string key;
   std::string_view rest = lineEnd == std::string_view::npos ? std::string_view() : head.substr(lineEnd + 2);
   while (!rest.empty()) {
@@ -187,11 +189,15 @@ HandshakeStatus ParseUpgradeRequest(std::string_view buffer, UpgradeRequest* out
       version13 = HasToken(value, "13");
     } else if (IEquals(name, "Sec-WebSocket-Key")) {
       key.assign(value);
+    } else if (IEquals(name, "Origin")) {
+      hasOrigin = true;
     }
   }
   // A key is 16 random bytes in base64: 24 characters. Anything that cannot be that is not a client.
   if (!upgradeWebSocket || !connectionUpgrade || !version13 || key.size() != 24) return HandshakeStatus::Bad;
   out->key = std::move(key);
+  out->target.assign(target);
+  out->hasOrigin = hasOrigin;
   out->consumed = end + 4;
   return HandshakeStatus::Ok;
 }
@@ -206,6 +212,66 @@ std::string BuildUpgradeResponse(std::string_view clientKey) {
 
 std::string BuildBadRequestResponse() {
   return "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+}
+
+std::string BuildForbiddenResponse() {
+  return "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+}
+
+bool ConstantTimeEquals(std::string_view a, std::string_view b) {
+  if (a.size() != b.size()) return false;
+  volatile uint8_t diff = 0;
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    diff = static_cast<uint8_t>(diff | (static_cast<uint8_t>(a[i]) ^ static_cast<uint8_t>(b[i])));
+  }
+  return diff == 0;
+}
+
+bool TargetCarriesToken(std::string_view target, std::string_view token) {
+  if (token.size() != kTokenHexLength) return false;  // no token configured: nothing can match
+  const std::size_t q = target.find('?');
+  const std::string_view path = target.substr(0, q);
+  const std::string_view query = q == std::string_view::npos ? std::string_view() : target.substr(q + 1);
+
+  // Path form: "/<token>" followed by end of path or "/". Always compared, even when the shape is wrong,
+  // against a same-length slice so the work does not depend on where the input diverges.
+  bool pathOk = false;
+  {
+    std::string_view candidate = path.size() > 1 && path[0] == '/' ? path.substr(1) : std::string_view();
+    const bool shapeOk = candidate.size() >= token.size() &&
+                         (candidate.size() == token.size() || candidate[token.size()] == '/');
+    candidate = candidate.substr(0, token.size());
+    std::string padded(candidate);
+    padded.resize(token.size(), '\0');
+    pathOk = ConstantTimeEquals(padded, token) && shapeOk;
+  }
+
+  // Query form: a "nevr_token=<token>" pair among the '&'-separated pairs.
+  bool queryOk = false;
+  {
+    std::string_view rest = query;
+    const std::string_view name = kTokenQueryName;
+    while (!rest.empty()) {
+      const std::size_t amp = rest.find('&');
+      const std::string_view pair = rest.substr(0, amp);
+      rest = amp == std::string_view::npos ? std::string_view() : rest.substr(amp + 1);
+      if (pair.size() > name.size() && pair.substr(0, name.size()) == name && pair[name.size()] == '=') {
+        if (ConstantTimeEquals(pair.substr(name.size() + 1), token)) queryOk = true;
+      }
+    }
+  }
+  return pathOk || queryOk;
+}
+
+std::string HexEncode(const uint8_t* bytes, std::size_t count) {
+  static const char kDigits[] = "0123456789abcdef";
+  std::string out;
+  out.reserve(count * 2);
+  for (std::size_t i = 0; i < count; ++i) {
+    out.push_back(kDigits[bytes[i] >> 4]);
+    out.push_back(kDigits[bytes[i] & 0x0F]);
+  }
+  return out;
 }
 
 // ---- frames ------------------------------------------------------------------------------------

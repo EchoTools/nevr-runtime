@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
+#include <sys/syscall.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -47,6 +48,18 @@ void CloseFd(int& fd) {
   fd = -1;
 }
 
+// 16 bytes from the kernel's CSPRNG. False (and nothing usable) on any failure: no token, no listener.
+bool RandomBytes(uint8_t* out, std::size_t count) {
+  std::size_t have = 0;
+  while (have < count) {
+    const long n = ::syscall(SYS_getrandom, out + have, count - have, 0);
+    if (n < 0 && errno == EINTR) continue;
+    if (n <= 0) return false;
+    have += static_cast<std::size_t>(n);
+  }
+  return true;
+}
+
 void Poke(int fd) {
   const char byte = 1;
   if (fd >= 0) {
@@ -85,8 +98,21 @@ void LoopbackGameServer::Log(LogLevel level, const std::string& line) {
   if (config_.log) config_.log(level, line);
 }
 
+std::string LoopbackGameServer::LoopbackUri() const {
+  if (port_ == 0 || token_.empty()) return std::string();
+  return "ws://127.0.0.1:" + std::to_string(port_) + "/" + token_ + "/";
+}
+
 uint16_t LoopbackGameServer::Start() {
   if (router_ == nullptr || listenFd_ >= 0) return 0;
+  uint8_t raw[kTokenHexLength / 2];
+  if (!RandomBytes(raw, sizeof(raw))) {
+    Log(LogLevel::Error, "[loopback] could not draw the access token from the kernel random source; not listening");
+    return 0;
+  }
+  token_ = HexEncode(raw, sizeof(raw));
+  volatile uint8_t* scrub = raw;
+  for (std::size_t i = 0; i < sizeof(raw); ++i) scrub[i] = 0;
   listenFd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (listenFd_ < 0) {
     Log(LogLevel::Error, Fmt("[loopback] socket() failed errno=%llu", static_cast<unsigned long long>(errno)));
@@ -227,6 +253,8 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
   std::string inbox;               // handshake bytes
   FrameDecoder decoder(config_.maxMessageBytes);
   bool handshaken = false;
+  bool sawDataFrame = false;
+  std::chrono::steady_clock::time_point upgradedAt;
 
   auto queueWrite = [&](const std::string& bytes, bool bypassCap) {
     std::lock_guard<std::mutex> lock(conn->writeMutex);
@@ -258,6 +286,14 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
     if (!handshaken && std::chrono::steady_clock::now() - started > std::chrono::milliseconds(config_.handshakeTimeoutMs)) {
       endReason = "handshake timed out";
       break;
+    }
+    if (handshaken && !sawDataFrame && !closing &&
+        std::chrono::steady_clock::now() - upgradedAt > std::chrono::milliseconds(config_.idleFirstFrameMs)) {
+      ++idleClosed_;
+      Log(LogLevel::Warning, Fmt("[loopback] conn=%llu closed: no data frame within %llu ms of the upgrade", id,
+                                 static_cast<unsigned long long>(config_.idleFirstFrameMs)));
+      beginClose(SessionRouter::kClosePolicyViolation, "idle");
+      endReason = "idle before first frame";
     }
     const short interest = static_cast<short>((closing ? 0 : POLLIN) | (wantWrite ? POLLOUT : 0));
     pollfd fds[2] = {{conn->fd, interest, 0}, {conn->wake[0], POLLIN, 0}};
@@ -317,8 +353,28 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
         FlushSome(conn->fd, conn->writeBuf);
         break;
       }
+      // Access check: every local app can reach this port, so the upgrade must carry the token the runtime put
+      // in the redirect, and a browser or webview (Origin header) is refused regardless. The token and the
+      // request target are never logged.
+      const char* refusal = nullptr;
+      if (request.hasOrigin) {
+        refusal = "an Origin header was present";
+      } else if (!TargetCarriesToken(request.target, token_)) {
+        refusal = "the access token was missing or wrong";
+      }
+      if (refusal != nullptr) {
+        ++rejected_;
+        queueWrite(BuildForbiddenResponse(), true);
+        beginClose(0, "");
+        endReason = "upgrade refused";
+        Log(LogLevel::Warning, std::string("[loopback] conn=") + std::to_string(id) + " upgrade refused (403): " + refusal);
+        std::lock_guard<std::mutex> lock(conn->writeMutex);
+        FlushSome(conn->fd, conn->writeBuf);
+        break;
+      }
       queueWrite(BuildUpgradeResponse(request.key), true);
       handshaken = true;
+      upgradedAt = std::chrono::steady_clock::now();
       {
         std::lock_guard<std::mutex> lock(conn->writeMutex);
         if (!FlushSome(conn->fd, conn->writeBuf)) {
@@ -356,6 +412,7 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
       switch (message.opcode) {
         case Opcode::Text:
         case Opcode::Binary:
+          sawDataFrame = true;
           router_->OnGameFrame(id, std::move(message.payload), message.opcode == Opcode::Binary);
           break;
         case Opcode::Ping:

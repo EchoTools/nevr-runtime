@@ -50,6 +50,7 @@ const char* RoleName(Role role);
 
 // WebSocket close codes the router closes with (RFC 6455 7.4.1).
 inline constexpr uint16_t kCloseGoingAway = 1001;      // the remote session ended; game should reconnect
+inline constexpr uint16_t kClosePolicyViolation = 1008;  // a connection the router refuses to serve
 inline constexpr uint16_t kCloseMessageTooBig = 1009;  // a frame over Limits::maxFrameBytes
 inline constexpr uint16_t kCloseInternalError = 1011;  // the remote could not be started
 inline constexpr uint16_t kCloseTryAgainLater = 1013;  // a bounded buffer overflowed
@@ -98,12 +99,17 @@ struct Limits {
   std::size_t maxPendingFrames = 256;                   // game frames waiting for a remote to open
   std::size_t maxPendingBytes = 4u * 1024u * 1024u;
   std::size_t maxOutboundBytes = 4u * 1024u * 1024u;    // frames a full transport has not taken yet
+  std::size_t maxMatchmakerConnections = 8;             // live matchmaker connections sharing the login session
 };
 
+// Injection is OFF unless the wiring turns it on, and is mutually exclusive with a game that sends its own
+// login. The PC bridge injects (pnsrad sends no login: it has no identity). On Quest the game's own login is
+// rewritten in place (PR #221) and is the only login, so the Quest wiring leaves both fields at their
+// defaults and the router sends no frame the game did not send.
 struct Options {
   Limits limits;
-  LoginFrameBuilder buildLogin;       // null: no injection (the game would send its own)
-  bool subscribeFriendList = true;    // send the friend-list subscribe after LoginSuccess
+  LoginFrameBuilder buildLogin;       // null (default): no login injection; the game sends its own
+  bool subscribeFriendList = false;   // true: send a friend-list subscribe after LoginSuccess (PC only)
   LogSink log;                        // null: logging off
 };
 
@@ -180,6 +186,7 @@ class Router {
   void FlushOpenLocked(RemoteId remote, Remote& r, std::optional<std::string> login, Effects& fx);
   void CloseGameLocked(GameId game, uint16_t code, const char* why, Effects& fx);
   Game* SharedRouteLocked(GameId* target);
+  std::size_t LiveMatchmakersLocked() const;
   void FailSession(RemoteId remote, uint16_t code, const char* why, bool closeRemote);
   void Log(Effects& fx, LogLevel level, std::string line);
 

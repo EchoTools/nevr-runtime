@@ -2,12 +2,16 @@
 // The Quest counterpart of the PC ws_bridge: one object that owns the loopback game server, the shared
 // session router, the remote transport and the verified-TLS WebSocket connector, wired together.
 //
-//   game --ws://127.0.0.1:<port>--> LoopbackGameServer --> Router --> ConnectorRemoteTransport
+//   game --ws://127.0.0.1:<port>/<token>/--> LoopbackGameServer --> Router --> ConnectorRemoteTransport
 //                                                                 --wss (verified TLS)--> service
 //
-// The redirect that points the game at LocalUri() is the shared nevr_cfg::ResolveRedirect with
-// bridgeActive=true and bridgePort=port() (src/runtime/lifecycle/service_redirect.h); this class only
-// reports the port. Nothing here installs a hook: hook activation is gated by ADR 0003.
+// Redirect: nevr_cfg::ResolveRedirect (src/runtime/lifecycle/service_redirect.h) decides WHETHER a game URL
+// is redirected, but with bridgeActive=true it returns the bare "ws://127.0.0.1:<port>", which this
+// listener answers 403 (no access token). The wiring that installs the redirect must use LocalUri() as
+// the replacement value for such a URL. Nothing here installs a hook: hook activation is gated by ADR 0003.
+//
+// Login: the bridge injects NOTHING. On Quest the game's own login (rewritten in place, PR #221) is the only
+// login, so Config has no login builder and the router runs with its injection options at their defaults.
 //
 // Identity: the bridge reads the credentials for each remote session from the caller's IdentityProvider
 // when the session starts, mirrors the PC route selection (EvrCodec::SelectRemoteBearer), and never
@@ -37,7 +41,6 @@ class SessionBridge {
   struct Config {
     std::string remoteUri;                                  // wss://... community socket URI
     std::function<Identity()> identity;                     // called once per remote session
-    SessionRouter::LoginFrameBuilder buildLogin;            // the complete EVR LoginRequest message
     CurlWsConnector::Config tls;                            // CA store; verification itself is not configurable
     LoopbackGameServer::Config loopback;
     SessionRouter::Limits limits;
@@ -54,7 +57,8 @@ class SessionBridge {
   uint16_t Start();
   void Stop();
   uint16_t port() const { return server_->port(); }
-  std::string LocalUri() const { return "ws://127.0.0.1:" + std::to_string(server_->port()); }
+  // The redirect value for the game: carries the per-start access token (see LoopbackGameServer).
+  std::string LocalUri() const { return server_->LoopbackUri(); }
 
  private:
   std::optional<ConnectRequest> BuildRequest(const SessionRouter::RemoteOpenRequest& request);

@@ -30,6 +30,7 @@ class LoopbackGameServer final : public SessionRouter::GameTransport {
     std::size_t maxConnections = 16;
     std::size_t maxWriteBufferBytes = 8u * 1024u * 1024u;  // unsent bytes kept per connection
     int handshakeTimeoutMs = 5000;
+    int idleFirstFrameMs = 30000;  // an upgraded connection that sends no data frame in this long is closed
     int closeFlushTimeoutMs = 1000;
     SessionRouter::LogSink log;
   };
@@ -49,6 +50,14 @@ class LoopbackGameServer final : public SessionRouter::GameTransport {
   void Stop();
   uint16_t port() const { return port_; }
 
+  // The URI the game must be redirected to: "ws://127.0.0.1:<port>/<token>/". The token is drawn from the
+  // kernel's random source at Start(), is never logged, and every upgrade must carry it (path or query) or
+  // is answered 403. Empty before a successful Start().
+  std::string LoopbackUri() const;
+  // Upgrades refused (no/wrong token, Origin header) and connections closed for sending no data frame.
+  uint64_t RejectedUpgrades() const { return rejected_.load(); }
+  uint64_t IdleClosed() const { return idleClosed_.load(); }
+
   // SessionRouter::GameTransport
   SessionRouter::SendResult Send(SessionRouter::GameId game, std::string_view frame, bool binary) override;
   void Close(SessionRouter::GameId game, uint16_t code, std::string_view reason) override;
@@ -66,6 +75,9 @@ class LoopbackGameServer final : public SessionRouter::GameTransport {
   int listenFd_ = -1;
   int wakeFds_[2] = {-1, -1};
   uint16_t port_ = 0;
+  std::string token_;  // written once in Start() before any thread runs; read-only afterwards
+  std::atomic<uint64_t> rejected_{0};
+  std::atomic<uint64_t> idleClosed_{0};
   std::atomic<bool> stop_{false};
   std::thread acceptThread_;
   std::mutex mutex_;  // guards conns_ only

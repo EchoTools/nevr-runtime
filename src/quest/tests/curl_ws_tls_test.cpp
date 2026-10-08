@@ -59,6 +59,16 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "usage: %s <trust-dir> <other-trust-dir> <good_tls_port> <selfsigned_tls_port> <plain_port> <plain_stats>\n", argv[0]);
     return 2;
   }
+  // Proxy variables must not matter: libcurl would otherwise route the connection (and its Authorization
+  // header) through them. Point every spelling at a port nothing listens on; a connect that honoured one
+  // would fail with a network error instead of succeeding in case 1 below.
+  for (const char* name : {"all_proxy", "ALL_PROXY", "https_proxy", "HTTPS_PROXY", "wss_proxy", "WSS_PROXY",
+                           "http_proxy", "HTTP_PROXY"}) {
+    setenv(name, "http://127.0.0.1:9", 1);
+  }
+  unsetenv("no_proxy");
+  unsetenv("NO_PROXY");
+
   const std::string ca = argv[1], otherCa = argv[2], good = argv[3], selfsigned = argv[4], plain = argv[5], stats = argv[6];
 
   // 1. Right CA, right address: connects, carries a frame both ways, closes.

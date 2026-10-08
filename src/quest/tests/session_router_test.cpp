@@ -417,7 +417,9 @@ void TestRemoteFramesFollowTheActiveGameAndFallBack() {
 // LoginSuccess is forwarded and answered with a friend-list subscribe on the same remote; LoginFailure
 // is forwarded and logged with numbers only.
 void TestLoginSuccessAndFailureHandling() {
-  Rig rig(WithLogin(kLogin));
+  Options withSubscribe = WithLogin(kLogin);
+  withSubscribe.subscribeFriendList = true;  // the PC wiring; off by default
+  Rig rig(std::move(withSubscribe));
   rig.router->OnGameOpen(1);
   rig.router->OnGameOpen(2);
   const RemoteId login = rig.remotes.Opens()[1].remote;
@@ -655,6 +657,67 @@ void TestConcurrentProducersKeepPerSourceOrder() {
   QCHECK(rig.games.Sent().size() == static_cast<std::size_t>(kPerThread));
 }
 
+
+// The Quest wiring leaves every injection option at its default, because the game's own (rewritten) login is
+// the only login. Failure caught: any frame the game did not send reaching the service: a LoginRequest on
+// the login connection, or a friend-list subscribe after LoginSuccess.
+void TestQuestDefaultsInjectNothing() {
+  Rig rig;  // default Options: no buildLogin, subscribeFriendList off
+  OpenThree(rig);
+  const auto opens = rig.remotes.Opens();
+  QCHECK(opens.size() == 2);
+  rig.router->OnRemoteOpen(opens[0].remote);
+  rig.router->OnRemoteOpen(opens[1].remote);
+  QCHECK(rig.remotes.Sent().empty());  // opening a session sends nothing by itself
+  const std::string gameLogin = Msg(EvrCodec::kSymLoginRequest, "the-game's-own-login");
+  rig.router->OnGameFrame(2, gameLogin, true);
+  rig.router->OnRemoteFrame(opens[1].remote, Msg(EvrCodec::kSymLoginSuccess, std::string(32, '\0')), true);
+  rig.router->OnGameFrame(3, Msg(kSymSomething, "mm"), true);
+  const auto sent = rig.remotes.Sent();
+  QCHECK(sent.size() == 2);  // exactly what the game sent, in order
+  if (sent.size() == 2) {
+    QCHECK(sent[0].data == gameLogin);
+    QCHECK(sent[1].data == Msg(kSymSomething, "mm"));
+  }
+  QCHECK(!rig.logs.Has("login injected"));
+}
+
+// Failure caught: an unbounded number of matchmaker connections riding the login session (a local flood).
+void TestMatchmakerConnectionsAreCapped() {
+  Options o = WithLogin(kLogin);
+  o.limits.maxMatchmakerConnections = 2;
+  Rig rig(std::move(o));
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
+  rig.router->OnGameOpen(3);  // matchmaker 1
+  rig.router->OnGameOpen(4);  // matchmaker 2
+  QCHECK(rig.games.Closes().empty());
+  rig.router->OnGameOpen(5);  // over the cap: refused, never registered
+  const auto closes = rig.games.Closes();
+  QCHECK(closes.size() == 1 && closes[0].id == 5 && closes[0].code == kCloseTryAgainLater);
+  QCHECK(rig.router->GetStats().games == 4);
+  QCHECK(rig.router->GetStats().nextConnIdx == 4);  // the refused connection consumed no number
+  rig.router->OnGameClose(3);  // a slot frees up
+  rig.router->OnGameOpen(6);
+  QCHECK(rig.games.Closes().size() == 1);
+  QCHECK(rig.router->GetStats().games == 4);
+}
+
+// A connection that arrives while a login session is established is a matchmaker on that session, never a
+// second login: no new remote, no login frame. (Numbering only returns to "login" after the session ends.)
+void TestExtraConnectionNeverBecomesASecondLogin() {
+  Rig rig(WithLogin(kLogin));
+  OpenThree(rig);
+  const auto before = rig.remotes.Opens();
+  rig.router->OnRemoteOpen(before[1].remote);
+  for (GameId g = 10; g < 14; ++g) rig.router->OnGameOpen(g);
+  QCHECK(rig.remotes.Opens().size() == before.size());  // none of them opened a remote
+  int logins = 0;
+  for (const auto& s : rig.remotes.Sent()) logins += (s.data == kLogin);
+  QCHECK(logins == 1);
+  QCHECK(rig.router->GetStats().remotes == 2);
+}
+
 // Shutdown closes everything once and later events are harmless.
 void TestShutdown() {
   Rig rig(WithLogin(kLogin));
@@ -699,6 +762,9 @@ int main() {
   TestGameBackpressureKeepsOrder();
   TestGameBackpressureOverflowClosesTheGame();
   TestConcurrentProducersKeepPerSourceOrder();
+  TestQuestDefaultsInjectNothing();
+  TestMatchmakerConnectionsAreCapped();
+  TestExtraConnectionNeverBecomesASecondLogin();
   TestShutdown();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "session_router_test: %d check(s) failed\n", quest_test::Failures());

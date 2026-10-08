@@ -116,9 +116,11 @@ struct Client {
   }
 };
 
-const std::string kUpgrade =
-    "GET /config HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+// An upgrade request for `target`, with optional extra header lines (each ending in CRLF).
+std::string UpgradeRequestText(const std::string& target, const std::string& extra = "") {
+  return "GET " + target + " HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n" + extra + "\r\n";
+}
 
 struct Rig {
   FakeRemotes remotes;
@@ -126,11 +128,12 @@ struct Rig {
   std::vector<std::string> logs;
   std::unique_ptr<LoopbackGameServer> server;
   std::unique_ptr<Router> router;
-  explicit Rig(std::size_t maxMessage = 1u << 20, std::size_t maxWrite = 8u << 20) {
+  explicit Rig(std::size_t maxMessage = 1u << 20, std::size_t maxWrite = 8u << 20, int idleFirstFrameMs = 30000) {
     LoopbackGameServer::Config cfg;
     cfg.maxMessageBytes = maxMessage;
     cfg.maxWriteBufferBytes = maxWrite;
     cfg.handshakeTimeoutMs = 800;
+    cfg.idleFirstFrameMs = idleFirstFrameMs;
     cfg.log = [this](LogLevel, const std::string& l) {
       std::lock_guard<std::mutex> lock(logMutex);
       logs.push_back(l);
@@ -148,6 +151,13 @@ struct Rig {
     server->Stop();
     router->Shutdown();
   }
+  // The access token, as the redirect value LoopbackUri() carries it ("ws://127.0.0.1:<port>/<token>/").
+  std::string Token() const {
+    const std::string uri = server->LoopbackUri();
+    const std::size_t slash = uri.find('/', 6);  // after "ws://" and the authority
+    return slash == std::string::npos || uri.size() < slash + 1 + 32 ? std::string() : uri.substr(slash + 1, 32);
+  }
+  std::string GoodTarget(const std::string& rest = "config") const { return "/" + Token() + "/" + rest; }
   bool HasLog(const std::string& needle) {
     std::lock_guard<std::mutex> lock(logMutex);
     for (const auto& l : logs) {
@@ -157,8 +167,8 @@ struct Rig {
   }
 };
 
-bool Upgrade(Client& c) {
-  c.Write(kUpgrade, /*oneByteAtATime=*/true);  // partial reads on the server's handshake parser
+bool Upgrade(Rig& rig, Client& c) {
+  c.Write(UpgradeRequestText(rig.GoodTarget()), /*oneByteAtATime=*/true);  // partial reads on the server's handshake parser
   const std::string resp = c.Read(50, 3000);
   return resp.rfind("HTTP/1.1 101", 0) == 0 && resp.find("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != std::string::npos;
 }
@@ -170,7 +180,7 @@ void TestRoundTrip() {
   QCHECK(port != 0);
   Client game(port);
   QCHECK(game.fd >= 0);
-  QCHECK(Upgrade(game));
+  QCHECK(Upgrade(rig, game));
   QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 1; }));
   const RemoteId remote = rig.remotes.opens.empty() ? 0 : rig.remotes.opens[0].remote;
   QCHECK(rig.remotes.opens[0].role == Role::Config);
@@ -196,9 +206,9 @@ void TestRemoteCloseReachesTheSocket() {
   Rig rig;
   const uint16_t port = rig.server->Start();
   Client config(port), login(port);
-  QCHECK(Upgrade(config));
+  QCHECK(Upgrade(rig, config));
   QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 1; }));
-  QCHECK(Upgrade(login));
+  QCHECK(Upgrade(rig, login));
   QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 2; }));
   const RemoteId loginRemote = rig.remotes.opens[1].remote;
   rig.router->OnRemoteOpen(loginRemote);
@@ -228,7 +238,7 @@ void TestOversizedMessage() {
   Rig rig(/*maxMessage=*/1000);
   const uint16_t port = rig.server->Start();
   Client game(port);
-  QCHECK(Upgrade(game));
+  QCHECK(Upgrade(rig, game));
   QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 1; }));
   rig.router->OnRemoteOpen(rig.remotes.opens[0].remote);
   game.Write(BuildMaskedFrame(Opcode::Binary, std::string(2000, 'x'), kMask));
@@ -245,7 +255,7 @@ void TestSlowReaderBackpressure() {
   Rig rig(/*maxMessage=*/1u << 20, /*maxWrite=*/256u << 10);
   const uint16_t port = rig.server->Start();
   Client game(port);
-  QCHECK(Upgrade(game));
+  QCHECK(Upgrade(rig, game));
   QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 1; }));
   const RemoteId remote = rig.remotes.opens[0].remote;
   rig.router->OnRemoteOpen(remote);
@@ -283,13 +293,92 @@ void TestStopClosesEverything() {
   Rig rig;
   const uint16_t port = rig.server->Start();
   Client a(port), b(port);
-  QCHECK(Upgrade(a));
-  QCHECK(Upgrade(b));
+  QCHECK(Upgrade(rig, a));
+  QCHECK(Upgrade(rig, b));
   QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 2; }));
   QCHECK(rig.router->GetStats().games == 2);
   rig.server->Stop();
   QCHECK(rig.router->GetStats().games == 0);
   QCHECK(a.WaitEof());
+}
+
+
+// ---- access token ---------------------------------------------------------------------------------
+
+// Failure caught: any local app taking the NEVR-authenticated session (probe: a first-arriving outside
+// connection became the login and a later one shared the login remote and read the server's frames).
+void TestUpgradeNeedsTheToken() {
+  Rig rig;
+  const uint16_t port = rig.server->Start();
+  const std::string token = rig.Token();
+  QCHECK(token.size() == 32);
+  for (const char c : token) QCHECK((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+  {  // a fresh token per Start(): two servers never share one, and it is not a constant or a repeated byte
+    Rig other;
+    other.server->Start();
+    QCHECK(other.Token().size() == 32 && other.Token() != token);
+    QCHECK(token.find_first_not_of(token[0]) != std::string::npos);
+  }
+  QCHECK(rig.server->LoopbackUri() == "ws://127.0.0.1:" + std::to_string(port) + "/" + token + "/");
+
+  std::string wrong = token;
+  wrong.back() = wrong.back() == '0' ? '1' : '0';
+  const std::vector<std::string> refused = {"/config", "/", "/" + wrong + "/config", "/x/" + token, "/?nevr_token=" + wrong};
+  uint64_t expectRefused = 0;
+  for (const std::string& target : refused) {
+    Client outsider(port);
+    outsider.Write(UpgradeRequestText(target));
+    QCHECK(outsider.Read(12).rfind("HTTP/1.1 403", 0) == 0);
+    QCHECK(outsider.WaitEof());
+    ++expectRefused;
+  }
+  {  // the right token with an Origin header (a browser or webview)
+    Client browser(port);
+    browser.Write(UpgradeRequestText(rig.GoodTarget(), "Origin: https://evil.example\r\n"));
+    QCHECK(browser.Read(12).rfind("HTTP/1.1 403", 0) == 0);
+    QCHECK(browser.WaitEof());
+    ++expectRefused;
+  }
+  QCHECK(rig.server->RejectedUpgrades() == expectRefused);
+  // Outsiders consumed no connection number and reached no remote: the game, arriving last, is still conn 0.
+  QCHECK(rig.remotes.opens.empty());
+  QCHECK(rig.router->GetStats().games == 0);
+
+  // The three accepted spellings of the same token.
+  for (const std::string& target : {rig.GoodTarget("rad/config"), "/" + token, "/anything?x=1&nevr_token=" + token}) {
+    Client game(port);
+    game.Write(UpgradeRequestText(target));
+    const std::string resp = game.Read(50, 3000);
+    QCHECK(resp.rfind("HTTP/1.1 101", 0) == 0);
+  }
+  QCHECK(rig.remotes.WaitFor([&] { return rig.remotes.opens.size() == 2; }));  // config + login for the first two
+  QCHECK(rig.remotes.opens[0].connIdx == 0);
+  QCHECK(rig.server->RejectedUpgrades() == expectRefused);
+
+  // The token is a secret: it is in no log line (the 403 reasons are generic).
+  QCHECK(!rig.HasLog(token));
+  QCHECK(!rig.HasLog(wrong));
+  QCHECK(rig.HasLog("upgrade refused (403)"));
+}
+
+// Failure caught: upgraded connections that never speak holding the listener's slots (16) and the game out.
+void TestSilentUpgradedConnectionsAreClosed() {
+  Rig rig(1u << 20, 8u << 20, /*idleFirstFrameMs=*/400);
+  const uint16_t port = rig.server->Start();
+  Client silent(port);
+  QCHECK(Upgrade(rig, silent));
+  Client talker(port);
+  QCHECK(Upgrade(rig, talker));
+  talker.Write(BuildMaskedFrame(Opcode::Binary, "hello", kMask));
+  const std::string expected = BuildCloseFrame(SessionRouter::kClosePolicyViolation, "idle");
+  QCHECK(silent.Read(expected.size()) == expected);
+  QCHECK(silent.WaitEof());
+  QCHECK(rig.server->IdleClosed() == 1);
+  std::this_thread::sleep_for(std::chrono::milliseconds(700));
+  bool eof = false;
+  talker.Read(1, 100, &eof);
+  QCHECK(!eof);  // a connection that sent a frame is not idle-closed
+  QCHECK(rig.server->IdleClosed() == 1);
 }
 
 }  // namespace
@@ -301,6 +390,8 @@ int main() {
   TestOversizedMessage();
   TestSlowReaderBackpressure();
   TestStopClosesEverything();
+  TestUpgradeNeedsTheToken();
+  TestSilentUpgradedConnectionsAreClosed();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "loopback_game_server_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

@@ -261,6 +261,68 @@ void TestBuildFrameLengths() {
   QCHECK(m.opcode == Opcode::Close && m.closeCode == 1009 && m.payload.size() <= 125);
 }
 
+
+// ---- access token ---------------------------------------------------------------------------------
+
+const std::string kTok = "0123456789abcdef0123456789abcdef";
+
+// Failure caught: the listener accepting an upgrade that does not carry the token, or refusing one that does.
+void TestTargetCarriesToken() {
+  const std::vector<std::string> accept = {
+      "/" + kTok + "/", "/" + kTok, "/" + kTok + "/rad/login?x=1", "/other?nevr_token=" + kTok,
+      "/?a=b&nevr_token=" + kTok + "&c=d", "/x/?nevr_token=" + kTok, "/?nevr_token=" + kTok};
+  for (const std::string& t : accept) {
+    if (!TargetCarriesToken(t, kTok)) std::fprintf(stderr, "should accept: %s\n", t.c_str());
+    QCHECK(TargetCarriesToken(t, kTok));
+  }
+  std::string lastWrong = kTok;
+  lastWrong.back() = '0';
+  std::string upper = kTok;
+  upper[10] = 'A';  // 'a' -> 'A'
+  const std::vector<std::string> refuse = {
+      "/", "/config", "/rad/login", "/" + kTok + "x", "/" + kTok.substr(0, 31), "/ " + kTok, "/" + upper + "/",
+      "/x/" + kTok, "/" + lastWrong + "/", "/?nevr_token=", "/?nevr_token=" + lastWrong, "/?nevr_tokenx=" + kTok,
+      "/?xnevr_token=" + kTok, "/?nevr_token" + kTok, "", "?nevr_token=" + lastWrong, "/%2f" + kTok};
+  for (const std::string& t : refuse) {
+    if (TargetCarriesToken(t, kTok)) std::fprintf(stderr, "should refuse: %s\n", t.c_str());
+    QCHECK(!TargetCarriesToken(t, kTok));
+  }
+  // No usable token configured: nothing matches, in particular not the empty target or an empty token.
+  QCHECK(!TargetCarriesToken("/", ""));
+  QCHECK(!TargetCarriesToken("/" + kTok, ""));
+  QCHECK(!TargetCarriesToken("/" + kTok, kTok.substr(0, 31)));
+}
+
+void TestConstantTimeEqualsAndHex() {
+  QCHECK(ConstantTimeEquals("", ""));
+  QCHECK(ConstantTimeEquals(kTok, kTok));
+  QCHECK(!ConstantTimeEquals(kTok, kTok.substr(0, 31)));
+  std::string first = kTok, last = kTok;
+  first[0] = 'f';
+  last[31] = 'e';
+  QCHECK(!ConstantTimeEquals(kTok, first));
+  QCHECK(!ConstantTimeEquals(kTok, last));
+  const uint8_t bytes[4] = {0x00, 0x0f, 0xa5, 0xff};
+  QCHECK(HexEncode(bytes, 4) == "000fa5ff");
+  QCHECK(HexEncode(bytes, 0).empty());
+}
+
+void TestUpgradeCarriesTargetAndOrigin() {
+  UpgradeRequest req;
+  QCHECK(ParseUpgradeRequest(Request(), &req) == HandshakeStatus::Ok);
+  QCHECK(req.target == "/x?y=1");
+  QCHECK(!req.hasOrigin);
+  UpgradeRequest withOrigin;
+  QCHECK(ParseUpgradeRequest(Request("origin: https://evil.example\r\n"), &withOrigin) == HandshakeStatus::Ok);
+  QCHECK(withOrigin.hasOrigin);
+  UpgradeRequest oddTarget;
+  QCHECK(ParseUpgradeRequest("GET /" + kTok + "/a?b=c HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                             "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+                             &oddTarget) == HandshakeStatus::Ok);
+  QCHECK(oddTarget.target == "/" + kTok + "/a?b=c");
+  QCHECK(BuildForbiddenResponse().rfind("HTTP/1.1 403", 0) == 0);
+}
+
 }  // namespace
 
 int main() {
@@ -274,6 +336,9 @@ int main() {
   TestMalformedStreams();
   TestSizeLimits();
   TestBuildFrameLengths();
+  TestTargetCarriesToken();
+  TestConstantTimeEqualsAndHex();
+  TestUpgradeCarriesTargetAndOrigin();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "ws_wire_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

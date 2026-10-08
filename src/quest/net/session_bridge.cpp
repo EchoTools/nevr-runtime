@@ -32,7 +32,7 @@ SessionBridge::SessionBridge(Config config)
   server_ = std::make_unique<LoopbackGameServer>(WithLog(config_.loopback, config_.log));
   SessionRouter::Options options;
   options.limits = config_.limits;
-  options.buildLogin = config_.buildLogin;
+  // No buildLogin and no friend-list subscribe: the game sends its own login (see the header).
   options.log = config_.log;
   router_ = std::make_unique<SessionRouter::Router>(server_.get(), remotes_.get(), options);
   server_->Attach(router_.get());
