@@ -4,18 +4,33 @@
  * atomic counter. A reporter thread, created from the sentinel's ELF constructor before the
  * first hook is installed, logs the counters:
  *
- *   - once, when a counter first becomes non-zero ("first_change"), checked every `firstMs`;
- *   - afterwards only when the value has changed, at most once per `steadyMs`.
+ *   - "reporter_started" once, with its three intervals;
+ *   - during the first `graceMs`, it wakes every `firstMs` and logs a counter ONCE, the first
+ *     time it is non-zero ("first_change");
+ *   - when the grace window ends it logs "never_fired" ONCE for each counter that is still
+ *     zero: the hook is installed and the game never called it, which is the signal an
+ *     operator needs;
+ *   - from then on every counter is on the steady cadence: one pass per `steadyMs`, and a
+ *     counter is logged only if its value changed ("changed"); a counter that fires for the
+ *     first time after the grace window is logged "first_change" at the next steady pass.
  *
- * So a hook that never fires logs nothing after the install line, a hook that fires logs its
- * first call within `firstMs`, and a hot hook logs at most one line per counter per
- * `steadyMs`. Production uses 1 s and 60 s.
+ * So the total rate is bounded: at most one line per counter during the grace window, then
+ * at most one line per counter per `steadyMs`, no matter how many counters never fire.
+ * Production uses 1 s, 10 s and 60 s.
  *
  * Teardown. The sentinel is a DT_NEEDED dependency of the game and is never unloaded, so the
- * thread simply ends with the process. StopReporter() (used by tests and available to a
- * teardown path) wakes the thread through a condition variable and joins it; there is no
- * sleep in the loop. The thread is created with pthread_create directly so that no exception
- * can come out of creating it (this library is built without exceptions).
+ * thread simply ends with the process and StopReporter() is never called at process exit
+ * (a dlclose of the sentinel would unmap code the thread is running and crash it; nothing
+ * dlcloses it). StopReporter() wakes the thread through a condition variable and joins it, and
+ * is used by tests. There is no sleep in the loop. The thread is created with pthread_create
+ * directly so no exception can come out of creating it. Whether pthread_create works from an
+ * ELF constructor on the headset is inferred from the Bionic main-branch source (the loader
+ * does not hold a lock that thread creation needs) and has not been verified on a Quest.
+ *
+ * fork(): the reporter takes its mutex only to read the counter table, and never logs while
+ * holding it. pthread_atfork handlers hold the mutex across the fork so the child does not
+ * inherit it locked; the child has no reporter thread, and StopReporter in the child does not
+ * try to join one.
  */
 #pragma once
 
@@ -30,7 +45,7 @@ bool RegisterReportCounter(const char* name, const std::atomic<std::uint64_t>* v
 
 // Starts the reporter thread. Idempotent. Returns false, and logs one error line, when the
 // thread cannot be created.
-bool StartReporter(unsigned firstMs, unsigned steadyMs);
+bool StartReporter(unsigned firstMs, unsigned graceMs, unsigned steadyMs);
 
 // Wakes and joins the reporter thread, and forgets the registered counters. Safe to call
 // when it is not running.

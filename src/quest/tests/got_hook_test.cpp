@@ -20,6 +20,7 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -30,6 +31,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -43,6 +45,7 @@
 
 #include "callback_thunk.h"
 #include "got_hook.h"
+#include "hook_install.h"
 #include "hook_log.h"
 #include "hook_report.h"
 #include "pinned_targets.h"
@@ -178,13 +181,34 @@ void ForceWrite(void** slot, void* value) {
 int AddImpl(int a, int b) { return a + b; }
 int SubImpl(int a, int b) { return a - b; }
 
+}  // namespace
+
+// The raw install is private to GotHook; tests (and only tests) reach it through this class.
+namespace sentinel {
+struct GotHookTestAccess {
+  static GotStatus Install(GotHook& hook, const GotTarget& target, void* hookFn, void** originalOut,
+                           ImageLookup lookup) {
+    return hook.Install(target, hookFn, originalOut, lookup);
+  }
+};
+}  // namespace sentinel
+
+namespace {
+
+GotStatus Install(GotHook& hook, const GotTarget& target, void* hookFn, void** originalOut,
+                  ImageLookup lookup = FindLoadedImage) {
+  return GotHookTestAccess::Install(hook, target, hookFn, originalOut, lookup);
+}
+
 struct AddTag {};
 struct SubTag {};
 using AddThunk = CallbackThunk<AddTag, int(int, int)>;
 using SubThunk = CallbackThunk<SubTag, int(int, int)>;
 
 int AddPlus100(AddThunk::Fn original, int a, int b) noexcept { return original(a, b) + 100; }
+NEVR_HOOK_RECORD(kAddPlus100, AddThunk, &AddPlus100);
 int SubPlus100(SubThunk::Fn original, int a, int b) noexcept { return original(a, b) + 100; }
+NEVR_HOOK_RECORD(kSubPlus100, SubThunk, &SubPlus100);
 
 struct Module {
   void* handle = nullptr;
@@ -241,9 +265,9 @@ void JumpSlotRoundTrip(const char* soname, bool expectRelro) {
   QCHECK(before == (expectRelro ? "r--p" : "rw-p"));
   QCHECK(*r.slot == m.realAdd);
 
-  AddThunk::Arm(&AddPlus100);
+  AddThunk::Arm(kAddPlus100);
   GotHook hook;
-  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), AddThunk::OriginalOut()),
+  QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), AddThunk::OriginalOut()),
                 GotStatus::kOk);
   QCHECK(hook.installed());
   QCHECK(AddThunk::Original() == reinterpret_cast<AddThunk::Fn>(m.realAdd));
@@ -271,10 +295,10 @@ void GlobDatRoundTrip(const char* soname) {
   const SlotResolution r = Resolve(m, "fx_sub", RelocKind::kGlobDat);
   QCHECK_STATUS(r.status, GotStatus::kOk);
   QCHECK(*r.slot == m.realSub);
-  SubThunk::Arm(&SubPlus100);
+  SubThunk::Arm(kSubPlus100);
   GotHook hook;
   GotTarget target{soname, "fx_sub", RelocKind::kGlobDat};
-  QCHECK_STATUS(hook.Install(target, SubThunk::EntryAddress(), SubThunk::OriginalOut()),
+  QCHECK_STATUS(Install(hook, target, SubThunk::EntryAddress(), SubThunk::OriginalOut()),
                 GotStatus::kOk);
   QCHECK(m.callSub(5, 3) == 102);
   QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
@@ -294,15 +318,15 @@ void LazyLinkedModuleRefused() {
   void* sentinelValue = reinterpret_cast<void*>(0x1234);
   void* out = sentinelValue;
   GotTarget target{"libgotfx_consumer_lazy.so", "fx_add", RelocKind::kJumpSlot};
-  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), &out), GotStatus::kLazyBinding);
+  QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), &out), GotStatus::kLazyBinding);
   QCHECK(out == sentinelValue);
   QCHECK(Errors() == 1 && Count(LogLevel::kError, "\"status\":\"lazy_binding\"") == 1);
   QCHECK(m.callAdd(2, 3) == 5);
   // GLOB_DAT slots are resolved at load time even in a lazy module.
   GotTarget glob{"libgotfx_consumer_lazy.so", "fx_sub", RelocKind::kGlobDat};
-  SubThunk::Arm(&SubPlus100);
+  SubThunk::Arm(kSubPlus100);
   GotHook globHook;
-  QCHECK_STATUS(globHook.Install(glob, SubThunk::EntryAddress(), SubThunk::OriginalOut()),
+  QCHECK_STATUS(Install(globHook, glob, SubThunk::EntryAddress(), SubThunk::OriginalOut()),
                 GotStatus::kOk);
   QCHECK(m.callSub(5, 3) == 102);
   QCHECK_STATUS(globHook.Remove(), GotStatus::kOk);
@@ -347,7 +371,7 @@ void NegativeCases() {
     void* sentinelValue = reinterpret_cast<void*>(0x4242);
     void* out = sentinelValue;
     GotHook hook;
-    const GotStatus status = hook.Install(c.target, AddThunk::EntryAddress(), &out);
+    const GotStatus status = Install(hook, c.target, AddThunk::EntryAddress(), &out);
     if (status != c.expected) std::fprintf(stderr, "case: %s\n", c.name);
     QCHECK_STATUS(status, c.expected);
     QCHECK(!hook.installed());
@@ -360,18 +384,18 @@ void NegativeCases() {
   Captured().clear();
   GotHook hook;
   void* out = nullptr;
-  QCHECK_STATUS(hook.Install(wrongBuildId, AddThunk::EntryAddress(), &out), GotStatus::kBuildIdMismatch);
+  QCHECK_STATUS(Install(hook, wrongBuildId, AddThunk::EntryAddress(), &out), GotStatus::kBuildIdMismatch);
   QCHECK(Count(LogLevel::kError, "\"expected_build_id\":\"0000000000000000000000000000000000000000\",\"actual_build_id\":\"") == 1);
 
   GotHook nullFn;
-  QCHECK_STATUS(nullFn.Install(GotTarget{so, "fx_add", RelocKind::kJumpSlot}, nullptr, &out),
+  QCHECK_STATUS(Install(nullFn, GotTarget{so, "fx_add", RelocKind::kJumpSlot}, nullptr, &out),
                 GotStatus::kBadArgument);
 
   // The right pin and the right expected original install.
   GotTarget exact{so, "fx_add", RelocKind::kJumpSlot, nullptr, addSlot.slotVaddr, m.realAdd};
-  AddThunk::Arm(&AddPlus100);
+  AddThunk::Arm(kAddPlus100);
   GotHook good;
-  QCHECK_STATUS(good.Install(exact, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK_STATUS(Install(good, exact, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
   QCHECK_STATUS(good.Remove(), GotStatus::kOk);
   dlclose(m.handle);
 }
@@ -382,18 +406,18 @@ void DuplicateAndChained() {
   const char* so = "libgotfx_consumer_now.so";
   GotTarget target{so, "fx_add", RelocKind::kJumpSlot};
   const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
-  AddThunk::Arm(&AddPlus100);
+  AddThunk::Arm(kAddPlus100);
   GotHook first;
-  QCHECK_STATUS(first.Install(target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK_STATUS(Install(first, target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
 
-  QCHECK_STATUS(first.Install(target, AddThunk::EntryAddress(), AddThunk::OriginalOut()),
+  QCHECK_STATUS(Install(first, target, AddThunk::EntryAddress(), AddThunk::OriginalOut()),
                 GotStatus::kAlreadyInstalled);
   GotHook second;
   void* out = nullptr;
-  QCHECK_STATUS(second.Install(target, AddThunk::EntryAddress(), &out), GotStatus::kAlreadyInstalled);
+  QCHECK_STATUS(Install(second, target, AddThunk::EntryAddress(), &out), GotStatus::kAlreadyInstalled);
   QCHECK(out == nullptr);
   // A different hook function reaches the slot registry rather than the value check.
-  QCHECK_STATUS(second.Install(target, reinterpret_cast<void*>(&AddImpl), &out),
+  QCHECK_STATUS(Install(second, target, reinterpret_cast<void*>(&AddImpl), &out),
                 GotStatus::kAlreadyInstalled);
   QCHECK(out == nullptr);
   QCHECK(m.callAdd(2, 3) == 105);
@@ -409,7 +433,7 @@ void DuplicateAndChained() {
   QCHECK_STATUS(first.Remove(), GotStatus::kOk);
   QCHECK(*r.slot == m.realAdd);
   // The slot is free again for a new handle.
-  QCHECK_STATUS(second.Install(target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK_STATUS(Install(second, target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
   QCHECK_STATUS(second.Remove(), GotStatus::kOk);
   dlclose(m.handle);
 }
@@ -418,9 +442,9 @@ void ModuleUnloaded() {
   Prepare();
   Module m = Open("libgotfx_consumer_now.so");
   GotTarget target{"libgotfx_consumer_now.so", "fx_add", RelocKind::kJumpSlot};
-  AddThunk::Arm(&AddPlus100);
+  AddThunk::Arm(kAddPlus100);
   GotHook hook;
-  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
   QCHECK(dlclose(m.handle) == 0);
   Captured().clear();
   QCHECK_STATUS(hook.Remove(), GotStatus::kModuleChanged);
@@ -432,7 +456,7 @@ void ConcurrentCallers() {
   Prepare();
   Module m = Open("libgotfx_consumer_now.so");
   GotTarget target{"libgotfx_consumer_now.so", "fx_add", RelocKind::kJumpSlot};
-  AddThunk::Arm(&AddPlus100);
+  AddThunk::Arm(kAddPlus100);
   std::atomic<bool> stop{false};
   std::atomic<long> bad{0};
   std::atomic<long> calls{0};
@@ -445,7 +469,7 @@ void ConcurrentCallers() {
   });
   GotHook hook;
   for (int i = 0; i < 300; ++i) {
-    QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+    QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
     QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
   }
   stop.store(true);
@@ -733,7 +757,7 @@ void SyntheticInstall() {
     target.expectedOriginal = reinterpret_cast<void*>(&AddImpl);
     GotHook hook;
     void* out = nullptr;
-    QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+    QCHECK_STATUS(Install(hook, target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
                   GotStatus::kOk);
     QCHECK(out == reinterpret_cast<void*>(&AddImpl));
     QCHECK(*slot == reinterpret_cast<void*>(&SubImpl));
@@ -743,7 +767,7 @@ void SyntheticInstall() {
     QCHECK(PagePerms(slot) == perms);
 
     // The module moves: Remove must not write into the old mapping.
-    QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+    QCHECK_STATUS(Install(hook, target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
                   GotStatus::kOk);
     g_synth = nullptr;
     Captured().clear();
@@ -759,7 +783,7 @@ void SyntheticInstall() {
     GotHook hook;
     void* out = nullptr;
     Captured().clear();
-    QCHECK_STATUS(hook.Install(SynthTarget(), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+    QCHECK_STATUS(Install(hook, SynthTarget(), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
                   GotStatus::kOriginalImplausible);
     QCHECK(Count(LogLevel::kError, "\"status\":\"original_implausible\"") == 1);
     g_synth = nullptr;
@@ -767,7 +791,7 @@ void SyntheticInstall() {
     SynthImage img2;
     Build(spec, &dataObject, &img2);
     g_synth = &img2;
-    QCHECK_STATUS(hook.Install(SynthTarget(), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+    QCHECK_STATUS(Install(hook, SynthTarget(), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
                   GotStatus::kOriginalImplausible);
     g_synth = nullptr;
   }
@@ -785,7 +809,7 @@ void SyntheticInstall() {
       GotHook hook;
       void* sentinelValue = reinterpret_cast<void*>(0x77);
       void* out = sentinelValue;
-      QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+      QCHECK_STATUS(Install(hook, target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
                     GotStatus::kProtectFailed);
       QCHECK(out == sentinelValue);
       QCHECK(*slot == reinterpret_cast<void*>(&AddImpl));
@@ -816,8 +840,8 @@ void RaceObserver(void**, void*, StorePhase phase) {
   if (phase != StorePhase::kBeforeStore || !g_raceArmed.exchange(false)) return;
   g_raceThread = new std::thread([] {
     void* original = nullptr;
-    const GotStatus st = g_raceOtherHook->Install(*g_raceOtherTarget, reinterpret_cast<void*>(&SubImpl),
-                                                  &original);
+    const GotStatus st = Install(*g_raceOtherHook, *g_raceOtherTarget,
+                                 reinterpret_cast<void*>(&SubImpl), &original);
     QCHECK_STATUS(st, GotStatus::kOk);
     g_raceOtherDone.store(true);
   });
@@ -850,7 +874,7 @@ void SamePageWritesAreSerialized() {
   g_raceArmed.store(true);
   SetStoreObserver(&RaceObserver);
   void* addOriginal = nullptr;
-  QCHECK_STATUS(addHook.Install(addTarget, reinterpret_cast<void*>(&AddImpl), &addOriginal),
+  QCHECK_STATUS(Install(addHook, addTarget, reinterpret_cast<void*>(&AddImpl), &addOriginal),
                 GotStatus::kOk);
   SetStoreObserver(nullptr);
   QCHECK(!g_raceOverlapped.load());  // B was still waiting while A held the page writable
@@ -873,7 +897,7 @@ void SamePageWritesAreSerialized() {
     GotHook hook;
     void* original = nullptr;
     for (int i = 0; i < 1500; ++i) {
-      if (hook.Install(t, fn, &original) != GotStatus::kOk) failures.fetch_add(1);
+      if (Install(hook, t, fn, &original) != GotStatus::kOk) failures.fetch_add(1);
       if (hook.Remove() != GotStatus::kOk) failures.fetch_add(1);
     }
   };
@@ -903,7 +927,7 @@ void OriginalIsPublishedBeforeTheSlotChanges() {
   g_originalSeenAtStore = nullptr;
   SetStoreObserver(&PublishObserver);
   GotHook hook;
-  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
   SetStoreObserver(nullptr);
   QCHECK(g_originalSeenAtStore == m.realAdd);
   QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
@@ -924,7 +948,7 @@ void LiveProtectionDecidesWhatIsRestored() {
   target.expectedOriginal = reinterpret_cast<void*>(&AddImpl);
   GotHook hook;
   void* out = nullptr;
-  QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup), GotStatus::kOk);
+  QCHECK_STATUS(Install(hook, target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup), GotStatus::kOk);
   QCHECK(PagePerms(slot) == "rw-p");
   QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
   QCHECK(PagePerms(slot) == "rw-p");
@@ -938,16 +962,16 @@ void ForgetReleasesAStaleHandle() {
   Module m = Open("libgotfx_consumer_now.so");
   GotTarget target{"libgotfx_consumer_now.so", "fx_add", RelocKind::kJumpSlot};
   const SlotResolution r = Resolve(m, "fx_add", RelocKind::kJumpSlot);
-  AddThunk::Arm(&AddPlus100);
+  AddThunk::Arm(kAddPlus100);
   GotHook stale;
-  QCHECK_STATUS(stale.Install(target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK_STATUS(Install(stale, target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
   ForceWrite(r.slot, m.realAdd);  // what a reload at the same base looks like
   QCHECK_STATUS(stale.Remove(), GotStatus::kSlotChanged);
   stale.Forget();
   QCHECK(!stale.installed());
   Captured().clear();
   GotHook fresh;
-  QCHECK_STATUS(fresh.Install(target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK_STATUS(Install(fresh, target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
   QCHECK_STATUS(fresh.Remove(), GotStatus::kOk);
   QCHECK(Errors() == 0);
   dlclose(m.handle);
@@ -985,7 +1009,7 @@ void FailedReprotectRollsBackAndKeepsTheOriginal() {
     GotHook hook;
     void* sentinelValue = reinterpret_cast<void*>(0x77);
     void* out = sentinelValue;
-    QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+    QCHECK_STATUS(Install(hook, target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
                   GotStatus::kRestoreProtectFailed);
     SetProtectFunction(nullptr);
     QCHECK(!hook.installed());
@@ -1003,7 +1027,7 @@ void FailedReprotectRollsBackAndKeepsTheOriginal() {
     }
     // The reservation was released: the same slot installs and removes normally.
     Captured().clear();
-    QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+    QCHECK_STATUS(Install(hook, target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
                   GotStatus::kOk);
     QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
     g_synth = nullptr;
@@ -1027,15 +1051,15 @@ void InstallIsCompareAndSwap() {
   void* sentinelValue = reinterpret_cast<void*>(0x99);
   void* out = sentinelValue;
   SetStoreObserver(&ClobberObserver);
-  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), &out), GotStatus::kSlotChanged);
+  QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), &out), GotStatus::kSlotChanged);
   SetStoreObserver(nullptr);
   QCHECK(*r.slot == reinterpret_cast<void*>(&SubImpl));  // the other writer's value stays
   QCHECK(out == sentinelValue);
   QCHECK(!hook.installed());
   QCHECK(Count(LogLevel::kError, "\"status\":\"slot_changed\"") == 1);
   ForceWrite(r.slot, m.realAdd);
-  AddThunk::Arm(&AddPlus100);
-  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  AddThunk::Arm(kAddPlus100);
+  QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
   QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
   dlclose(m.handle);
 }
@@ -1061,19 +1085,19 @@ void RegistryBound() {
   void* out = nullptr;
   int installed = 0;
   for (int i = 0; i < kHooks - 1; ++i) {
-    if (hooks[i].Install(target(i), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup) == GotStatus::kOk) {
+    if (Install(hooks[i], target(i), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup) == GotStatus::kOk) {
       ++installed;
     }
   }
   QCHECK(installed == 64);
   Captured().clear();
-  QCHECK_STATUS(hooks[64].Install(target(64), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+  QCHECK_STATUS(Install(hooks[64], target(64), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
                 GotStatus::kRegistryFull);
   QCHECK(Errors() == 1 && Count(LogLevel::kError, "\"status\":\"registry_full\"") == 1);
   QCHECK(*reinterpret_cast<void**>(img.image.base + kRelroSlot + 8u * 64) ==
          reinterpret_cast<void*>(&AddImpl));  // the refused slot was not written
   QCHECK_STATUS(hooks[0].Remove(), GotStatus::kOk);
-  QCHECK_STATUS(hooks[64].Install(target(64), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+  QCHECK_STATUS(Install(hooks[64], target(64), reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
                 GotStatus::kOk);
   for (int i = 1; i < kHooks; ++i) QCHECK_STATUS(hooks[i].Remove(), GotStatus::kOk);
   g_synth = nullptr;
@@ -1095,7 +1119,7 @@ void WriteVerifyFailureKeepsTheOriginalPublished() {
   void* sentinelValue = reinterpret_cast<void*>(0x55);
   void* out = sentinelValue;
   SetStoreObserver(&AfterStoreClobberObserver);
-  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), &out), GotStatus::kWriteVerifyFailed);
+  QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), &out), GotStatus::kWriteVerifyFailed);
   SetStoreObserver(nullptr);
   QCHECK(*r.slot == reinterpret_cast<void*>(&SubImpl));  // the other writer's value stays
   QCHECK(out == m.realAdd);                               // not reverted to the entry value
@@ -1103,20 +1127,32 @@ void WriteVerifyFailureKeepsTheOriginalPublished() {
   QCHECK(Count(LogLevel::kError, "\"status\":\"write_verify_failed\"") == 1);
 
   // The slot stays reserved: the foreign value in it may chain our entry, and a retry would
-  // publish it as the original and make the entry call itself.
+  // publish it as the original and make the entry call itself. The refusal has its own status,
+  // so an operator can tell it from a real duplicate.
+  Captured().clear();
   void* retryOut = reinterpret_cast<void*>(0x56);
-  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), &retryOut), GotStatus::kAlreadyInstalled);
+  QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), &retryOut), GotStatus::kSlotPoisoned);
   QCHECK(retryOut == reinterpret_cast<void*>(0x56));
   QCHECK(*r.slot == reinterpret_cast<void*>(&SubImpl));
+  QCHECK(Count(LogLevel::kError, "\"status\":\"slot_poisoned\"") == 1);
 
-  // Giving the reservations back is the module owner's job, once the module is gone.
+  // A poisoned slot on a mapped module is never given back, whatever range is named.
   const std::uintptr_t page = static_cast<std::uintptr_t>(sysconf(_SC_PAGESIZE));
-  ReleasePoisonedSlotsIn(reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(r.slot) & ~(page - 1)),
-                         page);
+  void* const pageStart =
+      reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(r.slot) & ~(page - 1));
+  ReleasePoisonedSlotsIn(pageStart, page);
+  QCHECK_STATUS(Install(hook, target, AddThunk::EntryAddress(), &retryOut), GotStatus::kSlotPoisoned);
+
+  // Once the module is unmapped the reservation can be released, and a fresh mapping installs.
   ForceWrite(r.slot, m.realAdd);
-  AddThunk::Arm(&AddPlus100);
-  QCHECK_STATUS(hook.Install(target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
-  QCHECK_STATUS(hook.Remove(), GotStatus::kOk);
+  QCHECK(dlclose(m.handle) == 0);
+  QCHECK(PagePerms(pageStart).empty());  // really unmapped
+  ReleasePoisonedSlotsIn(pageStart, page);
+  m = Open("libgotfx_consumer_now.so");
+  AddThunk::Arm(kAddPlus100);
+  GotHook again;
+  QCHECK_STATUS(Install(again, target, AddThunk::EntryAddress(), AddThunk::OriginalOut()), GotStatus::kOk);
+  QCHECK_STATUS(again.Remove(), GotStatus::kOk);
   dlclose(m.handle);
 }
 
@@ -1151,7 +1187,7 @@ void ReprotectFailureDoesNotHideAnEarlierFailure() {
   GotHook hook;
   void* sentinelValue = reinterpret_cast<void*>(0x66);
   void* out = sentinelValue;
-  QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+  QCHECK_STATUS(Install(hook, target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
                 GotStatus::kSlotChanged);
   SetStoreObserver(nullptr);
   SetProtectFunction(nullptr);
@@ -1170,7 +1206,8 @@ void ReprotectFailureDoesNotHideAnEarlierFailure() {
 void RollbackCompareAndSwapFailureIsLogged() {
   Prepare();
   SynthSpec spec = OneRel();
-  SynthImage img;
+  auto imgPtr = std::make_unique<SynthImage>();
+  SynthImage& img = *imgPtr;
   Build(spec, reinterpret_cast<void*>(&AddImpl), &img);
   g_synth = &img;
   void** slot = reinterpret_cast<void**>(img.image.base + kRelroSlot);
@@ -1183,7 +1220,7 @@ void RollbackCompareAndSwapFailureIsLogged() {
   GotHook hook;
   void* sentinelValue = reinterpret_cast<void*>(0x88);
   void* out = sentinelValue;
-  QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
+  QCHECK_STATUS(Install(hook, target, reinterpret_cast<void*>(&SubImpl), &out, SynthLookup),
                 GotStatus::kRestoreProtectFailed);
   SetProtectFunction(nullptr);
   QCHECK(*slot == static_cast<void*>(&g_clobberOnce));  // not overwritten by the rollback
@@ -1193,10 +1230,14 @@ void RollbackCompareAndSwapFailureIsLogged() {
   // Their value is in the slot, so a retry is refused (by the original check here; the slot is
   // also poisoned, which WriteVerifyFailureKeepsTheOriginalPublished shows with a plausible value).
   void* retryOut = nullptr;
-  QCHECK_STATUS(hook.Install(target, reinterpret_cast<void*>(&SubImpl), &retryOut, SynthLookup),
+  QCHECK_STATUS(Install(hook, target, reinterpret_cast<void*>(&SubImpl), &retryOut, SynthLookup),
                 GotStatus::kOriginalMismatch);
-  ReleasePoisonedSlotsIn(img.mem, kImageSize);  // the image is about to be unmapped
+  // Released only once the image is really unmapped.
+  ReleasePoisonedSlotsIn(img.mem, kImageSize);
+  void* const base = img.mem;
   g_synth = nullptr;
+  imgPtr.reset();
+  ReleasePoisonedSlotsIn(base, kImageSize);
 }
 
 // ---- reporter -----------------------------------------------------------------
@@ -1210,30 +1251,67 @@ bool WaitFor(Pred pred) {
   return pred();
 }
 
-// A hook only increments a counter; the reporter thread logs it: once when it first moves,
-// then only when it changes. Nothing is logged for a counter that never moves.
-void ReporterLogsFirstChangeThenChanges() {
+// A hook only increments a counter; the reporter thread logs it. A counter that never fires
+// must not hold the others in fast mode (it once logged the hot counter every pass, forever):
+//   grace window (200 ms): the hot counter's first change is logged once; at its end the idle
+//   counter is reported "never_fired" once; then the steady cadence (600 ms) takes over for
+//   both, logging "changed" at most once per pass.
+void ReporterIsBoundedWithAHotAndAnIdleCounter() {
   Prepare();
-  std::atomic<std::uint64_t> counter{0};
+  std::atomic<std::uint64_t> hot{0};
   std::atomic<std::uint64_t> idle{0};
-  QCHECK(RegisterReportCounter("test_counter", &counter));
+  QCHECK(RegisterReportCounter("hot_counter", &hot));
   QCHECK(RegisterReportCounter("idle_counter", &idle));
-  QCHECK(StartReporter(10, 40));
-  QCHECK(StartReporter(10, 40));  // idempotent
-  QCHECK(!RegisterReportCounter("late", &counter));  // refused once running
-  counter.store(5);
-  QCHECK(WaitFor([] { return Count(LogLevel::kInfo, "\"counter\":\"test_counter\",\"value\":5,\"why\":\"first_change\"") == 1; }));
-  counter.store(9);
-  QCHECK(WaitFor([] { return Count(LogLevel::kInfo, "\"counter\":\"test_counter\",\"value\":9,\"why\":\"changed\"") == 1; }));
-  // Unchanged for several steady intervals: no further line for either counter.
-  std::this_thread::sleep_for(std::chrono::milliseconds(250));
+  QCHECK(StartReporter(10, 200, 600));
+  QCHECK(StartReporter(10, 200, 600));  // idempotent
+  QCHECK(!RegisterReportCounter("late", &hot));  // refused once running
+  QCHECK(Count(LogLevel::kInfo, "\"status\":\"reporter_started\"") == 1);
+
+  // The hot counter moves continuously for 450 ms, well past the grace window.
+  for (int i = 1; i <= 90; ++i) {
+    hot.store(static_cast<std::uint64_t>(i));
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  QCHECK(WaitFor([] { return Count(LogLevel::kInfo, "\"counter\":\"idle_counter\",\"value\":0,\"why\":\"never_fired\"") == 1; }));
+  // 450+ ms in, before the first steady pass: exactly the first change and the never_fired line.
+  QCHECK(Count(LogLevel::kInfo, "\"counter\":\"hot_counter\"") == 1);
   QCHECK(Count(LogLevel::kInfo, "\"event\":\"hook_counter\"") == 2);
-  QCHECK(Count(LogLevel::kInfo, "idle_counter") == 0);
+  QCHECK(Count(LogLevel::kInfo, "\"why\":\"first_change\"") == 1);
+
+  // The steady pass reports the hot counter's new value once; the idle one stays quiet.
+  hot.store(1000);
+  QCHECK(WaitFor([] { return Count(LogLevel::kInfo, "\"value\":1000,\"why\":\"changed\"") == 1; }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(700));  // one more steady pass, no change
+  QCHECK(Count(LogLevel::kInfo, "\"why\":\"changed\"") == 1);
+  QCHECK(Count(LogLevel::kInfo, "never_fired") == 1);  // reported once, not every pass
+  QCHECK(Count(LogLevel::kInfo, "\"event\":\"hook_counter\"") == 3);
+
+  // fork() while the reporter runs: the child has no reporter thread and must not block on it.
+  const pid_t child = fork();
+  if (child == 0) {
+    StopReporter();
+    _exit(0);
+  }
+  int wstatus = -1;
+  QCHECK(child > 0 && waitpid(child, &wstatus, 0) == child && WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 0);
+
   StopReporter();  // joins
-  counter.store(11);
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  QCHECK(Count(LogLevel::kInfo, "\"value\":11") == 0);  // stopped: nothing more is reported
-  QCHECK(Count(LogLevel::kInfo, "\"event\":\"hook_counter\"") == 2);
+  hot.store(2000);
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  QCHECK(Count(LogLevel::kInfo, "\"value\":2000") == 0);  // stopped: nothing more is reported
+}
+
+// A counter that fires for the first time after the grace window is reported at the next
+// steady pass.
+void ReporterReportsALateFirstChange() {
+  Prepare();
+  std::atomic<std::uint64_t> late{0};
+  QCHECK(RegisterReportCounter("late_counter", &late));
+  QCHECK(StartReporter(10, 60, 100));
+  QCHECK(WaitFor([] { return Count(LogLevel::kInfo, "never_fired") == 1; }));
+  late.store(3);
+  QCHECK(WaitFor([] { return Count(LogLevel::kInfo, "\"value\":3,\"why\":\"first_change\"") == 1; }));
+  StopReporter();
 }
 
 // ---- log lines ----------------------------------------------------------------
@@ -1277,6 +1355,7 @@ int CountingAdd(int a, int b) {
   return a + b;
 }
 int Pass(FaultThunk::Fn original, int a, int b) noexcept { return original(a, b); }
+NEVR_HOOK_RECORD(kPass, FaultThunk, &Pass);
 
 // A handler that is not declared noexcept does not convert to a Handler.
 int NotNoexcept(FaultThunk::Fn original, int a, int b) { return original(a, b); }
@@ -1287,6 +1366,7 @@ int ResetThenCallOriginal(FaultThunk::Fn original, int a, int b) noexcept {
   FaultThunk::Reset();  // clears the published original while this call is in flight
   return original(a, b);
 }
+NEVR_HOOK_RECORD(kResetThenCall, FaultThunk, &ResetThenCallOriginal);
 
 struct VoidTag {};
 using VoidThunk = CallbackThunk<VoidTag, void(int*)>;
@@ -1296,6 +1376,7 @@ void VoidOriginal(int* p) {
   *p += 1;
 }
 void VoidPass(VoidThunk::Fn original, int* p) noexcept { original(p); }
+NEVR_HOOK_RECORD(kVoidPass, VoidThunk, &VoidPass);
 
 using PinnedThunk = pinned::LibR15TStringThunk;
 const char* g_seenKey = nullptr;
@@ -1313,6 +1394,7 @@ const char* PinnedHandler(PinnedThunk::Fn original, const pinned::CJsonOpaque* s
   const char* r = original(self, key, fallback, flag);
   return std::strcmp(key, "login_host") == 0 ? g_replacement : r;
 }
+NEVR_HOOK_RECORD(kPinnedHandler, PinnedThunk, &PinnedHandler);
 
 void Thunks() {
   Prepare();
@@ -1333,9 +1415,9 @@ void Thunks() {
   QCHECK(entry(2, 3) == 5);
   QCHECK(g_originalCalls == 1 && FaultThunk::Calls() == 1 && FaultThunk::Faults() == 0);
   // The handler gets the original and the arguments, and its result is returned.
-  FaultThunk::Arm(&Pass);
+  FaultThunk::Arm(kPass);
   QCHECK(entry(4, 5) == 9 && g_originalCalls == 2);
-  FaultThunk::Arm(nullptr);
+  FaultThunk::Disarm();
   QCHECK(entry(1, 1) == 2);
 
   // An exception thrown by the original crosses the thunk's frames untouched, with
@@ -1347,7 +1429,7 @@ void Thunks() {
   int result = -1;
   QCHECK(fx_call_catching(entry, 0, 0, &result) == 1);
   QCHECK(result == -1);
-  FaultThunk::Arm(&Pass);
+  FaultThunk::Arm(kPass);
   QCHECK(fx_call_catching(entry, 0, 0, &result) == 1);
   QCHECK(result == -1);
   QCHECK(FaultThunk::Calls() == 2 && FaultThunk::Faults() == 0 && Errors() == 0);
@@ -1356,7 +1438,7 @@ void Thunks() {
   // pointer is cleared underneath it.
   FaultThunk::Reset();
   *FaultThunk::OriginalOut() = reinterpret_cast<void*>(&CountingAdd);
-  FaultThunk::Arm(&ResetThenCallOriginal);
+  FaultThunk::Arm(kResetThenCall);
   g_originalCalls = 0;
   QCHECK(entry(3, 4) == 7);
   QCHECK(g_originalCalls == 1 && FaultThunk::Original() == nullptr);
@@ -1371,7 +1453,7 @@ void Thunks() {
   // void signature.
   VoidThunk::Reset();
   *VoidThunk::OriginalOut() = reinterpret_cast<void*>(&VoidOriginal);
-  VoidThunk::Arm(&VoidPass);
+  VoidThunk::Arm(kVoidPass);
   auto voidEntry = reinterpret_cast<VoidThunk::Fn>(VoidThunk::EntryAddress());
   int counter = 0;
   voidEntry(&counter);
@@ -1383,7 +1465,7 @@ void Thunks() {
   // can replace the result.
   PinnedThunk::Reset();
   *PinnedThunk::OriginalOut() = reinterpret_cast<void*>(&PinnedOriginal);
-  PinnedThunk::Arm(&PinnedHandler);
+  PinnedThunk::Arm(kPinnedHandler);
   auto tstring = reinterpret_cast<PinnedThunk::Fn>(PinnedThunk::EntryAddress());
   const auto* self = reinterpret_cast<const pinned::CJsonOpaque*>(&g_marker);
   const char* key = "matchmaker_host";
@@ -1424,7 +1506,8 @@ int main(int argc, char** argv) {
   ReprotectFailureDoesNotHideAnEarlierFailure();
   RollbackCompareAndSwapFailureIsLogged();
   RegistryBound();
-  ReporterLogsFirstChangeThenChanges();
+  ReporterIsBoundedWithAHotAndAnIdleCounter();
+  ReporterReportsALateFirstChange();
   LogLinesAreValidJson();
   Thunks();
 

@@ -169,14 +169,16 @@ var (
 //
 // Live frames are the thunk's Entry, every handler, and every sentinel function a handler
 // can have on the stack when it calls `original`. A static check cannot tell "before/after
-// the call" from "across the call", so it is conservative: starting from each Entry and each
-// function in the nevr_hook_handlers section (the NEVR_HOOK_HANDLER marker, so handlers are
-// found by registration and not by name) it follows direct bl/b edges through the library and
-// fails on any reachable function under a personality-bearing CIE. Indirect calls are not
-// followed. The only exceptions are sentinel-only logging leaves, which take no function
-// pointer from the hook and call only libc/liblog, listed in allowedLeaves.
-var allowedLeaves = regexp.MustCompile(`^_ZN8sentinel(9LogFields|8LogEvent|9HexString)`)
-
+// the call" from "across the call", so it is conservative: it starts from every hook and
+// follows direct bl/b edges through the library, failing on any reachable function under a
+// personality-bearing CIE. There is no allowlist: a hook does not log, so no logging code is
+// reachable from it. Indirect calls (function pointers, virtual calls, std::function) are not
+// followed: that part of the rule is a rule, not a check (callback_thunk.h, item 5).
+//
+// A hook is a record in the nevr_hook_records output section, emitted by NEVR_HOOK_RECORD:
+// {entry, handler}, two function pointers that the dynamic linker relocates (R_AARCH64_RELATIVE),
+// so they are read from the relocation addends. Every thunk Entry must have exactly one
+// record, so a thunk whose handler is not recorded (and therefore not walked) fails.
 type elfFunc struct {
 	addr, size uint64
 	name       string
@@ -215,6 +217,8 @@ func parseFrames(t *testing.T) (cieAug map[string]string, fdeCIE map[uint64]stri
 
 var (
 	secRe   = regexp.MustCompile(`^\s*\[\s*(\d+)\]\s+(\S+)`)
+	secFull = regexp.MustCompile(`^\s*\[\s*\d+\]\s+(\S+)\s+\S+\s+([0-9a-f]+)\s+[0-9a-f]+\s+([0-9a-f]+)`)
+	relRe   = regexp.MustCompile(`^([0-9a-f]+)\s+[0-9a-f]+\s+R_AARCH64_RELATIVE\s+([0-9a-f]+)\s*$`)
 	symRe   = regexp.MustCompile(`^\s*\d+:\s+([0-9a-f]+)\s+(\d+)\s+FUNC\s+\S+\s+\S+\s+(\d+)\s+(\S+)`)
 	hdrRe   = regexp.MustCompile(`^([0-9a-f]{16}) <(.*)>:$`)
 	branchR = regexp.MustCompile(`^\s+[0-9a-f]+:\s+(bl|b)\s+0x([0-9a-f]+)\s+<(.*)>$`)
@@ -291,20 +295,62 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 		edges[caller.addr][callee.addr] = true
 	}
 
-	var roots []*elfFunc
-	handlers := 0
-	for i := range funcs {
-		f := &funcs[i]
-		switch {
-		case strings.Contains(f.name, "CallbackThunk") && strings.Contains(f.name, "5EntryE"):
-			roots = append(roots, f)
-		case f.section == "nevr_hook_handlers":
-			roots = append(roots, f)
-			handlers++
+	// Hook records: {entry, handler} pairs read from the section's relocation addends.
+	var recAddr, recSize uint64
+	for _, line := range strings.Split(run(t, "readelf", "-SW", soPath(t)), "\n") {
+		if m := secFull.FindStringSubmatch(line); m != nil && m[1] == "nevr_hook_records" {
+			recAddr, _ = strconv.ParseUint(m[2], 16, 64)
+			recSize, _ = strconv.ParseUint(m[3], 16, 64)
 		}
 	}
-	if len(roots) < 2 || handlers < 1 {
-		t.Fatalf("hook roots not found (roots=%d handlers in nevr_hook_handlers=%d): the sensor is looking at nothing", len(roots), handlers)
+	relative := map[uint64]uint64{} // slot address -> function address
+	for _, line := range strings.Split(run(t, "readelf", "-rW", soPath(t)), "\n") {
+		if m := relRe.FindStringSubmatch(line); m != nil {
+			off, _ := strconv.ParseUint(m[1], 16, 64)
+			add, _ := strconv.ParseUint(m[2], 16, 64)
+			relative[off] = add
+		}
+	}
+	if recSize == 0 || recSize%16 != 0 {
+		t.Fatalf("no nevr_hook_records section (size %d): no hook is recorded, the sensor is looking at nothing", recSize)
+	}
+	recordEntries := map[uint64]int{}
+	var roots []*elfFunc
+	for off := recAddr; off < recAddr+recSize; off += 16 {
+		entry, okE := relative[off]
+		handler, okH := relative[off+8]
+		if !okE || !okH {
+			t.Fatalf("hook record at %#x has no relocation for its entry/handler pointer", off)
+		}
+		recordEntries[entry]++
+		for _, a := range []uint64{entry, handler} {
+			f := byAddr[a]
+			if f == nil {
+				t.Errorf("hook record at %#x points at %#x, which is not a function symbol", off, a)
+				continue
+			}
+			roots = append(roots, f)
+		}
+	}
+	// Exactly one record per thunk Entry, and no record for anything else.
+	thunkEntries := map[uint64]bool{}
+	for i := range funcs {
+		if strings.Contains(funcs[i].name, "CallbackThunk") && strings.Contains(funcs[i].name, "5EntryE") {
+			thunkEntries[funcs[i].addr] = true
+		}
+	}
+	if len(thunkEntries) == 0 {
+		t.Fatalf("no CallbackThunk Entry in the library: the sensor is looking at nothing")
+	}
+	for a := range thunkEntries {
+		if recordEntries[a] != 1 {
+			t.Errorf("thunk entry %s has %d hook records, want exactly 1 (define the hook with NEVR_HOOK_RECORD)", byAddr[a].name, recordEntries[a])
+		}
+	}
+	for a, n := range recordEntries {
+		if !thunkEntries[a] {
+			t.Errorf("hook record names %#x (x%d), which is not a CallbackThunk Entry", a, n)
+		}
 	}
 
 	reached := map[uint64]bool{}
@@ -327,7 +373,7 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 	checked := 0
 	for addr := range reached {
 		f := byAddr[addr]
-		if f == nil || allowedLeaves.MatchString(f.name) {
+		if f == nil {
 			continue
 		}
 		cie, ok := fdeCIE[addr]
@@ -343,7 +389,7 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 	if checked < len(roots) {
 		t.Errorf("checked %d functions for %d roots: the walk lost its roots", checked, len(roots))
 	}
-	t.Logf("hook roots=%d (handlers=%d), reachable sentinel functions checked=%d", len(roots), handlers, checked)
+	t.Logf("hooks=%d (roots=%d), reachable sentinel functions checked=%d", len(recordEntries), len(roots), checked)
 }
 
 // The backend library is built with -fno-exceptions, exactly like the host test build, so the
@@ -352,13 +398,24 @@ func TestHookFramesCarryNoPersonality(t *testing.T) {
 func TestBackendBuiltWithoutExceptions(t *testing.T) {
 	requireArtifact(t)
 	cieAug, fdeCIE := parseFrames(t)
-	sawInstall, sawResolve := false, false
+	want := map[string]bool{"7GotHook7Install": false, "ResolveSlot": false, "9LogFields": false, "13StartReporter": false, "ReporterMain": false}
+	backend := []string{"7GotHook", "ResolveSlot", "9LogFields", "8LogEvent", "9HexString", "10SetLogSink",
+		"13StartReporter", "20RegisterReportCounter", "12StopReporter", "ReporterMain"}
 	for _, f := range parseFuncs(t) {
-		if !strings.Contains(f.name, "7GotHook") && !strings.Contains(f.name, "ResolveSlot") {
+		match := false
+		for _, b := range backend {
+			if strings.Contains(f.name, b) {
+				match = true
+			}
+		}
+		if !match {
 			continue
 		}
-		sawInstall = sawInstall || strings.Contains(f.name, "7GotHook7Install")
-		sawResolve = sawResolve || strings.Contains(f.name, "ResolveSlot")
+		for k := range want {
+			if strings.Contains(f.name, k) {
+				want[k] = true
+			}
+		}
 		cie, ok := fdeCIE[f.addr]
 		if !ok {
 			t.Errorf("%s has no FDE", f.name)
@@ -368,8 +425,45 @@ func TestBackendBuiltWithoutExceptions(t *testing.T) {
 			t.Errorf("backend function %s sits under CIE augmentation %s, want \"zR\"", f.name, aug)
 		}
 	}
-	if !sawInstall || !sawResolve {
-		t.Errorf("backend functions not found (GotHook::Install=%v ResolveSlot=%v): the test is looking at nothing", sawInstall, sawResolve)
+	for k, seen := range want {
+		if !seen {
+			t.Errorf("backend function matching %q not found: the test is looking at nothing", k)
+		}
+	}
+}
+
+// The raw GotHook::Install (any function pointer) is private. Its test access class may be
+// named only in got_hook.h (the friend declaration) and under src/quest/tests; production code
+// installs through InstallThunk, which keeps every hook a recorded, walked thunk entry.
+func TestRawInstallOnlyInTests(t *testing.T) {
+	root, err := filepath.Abs("../../src")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	err = filepath.Walk(root, func(path string, info os.FileInfo, werr error) error {
+		if werr != nil || info.IsDir() || !strings.HasSuffix(path, ".cpp") && !strings.HasSuffix(path, ".h") {
+			return werr
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		if !strings.Contains(string(data), "GotHookTestAccess") {
+			return nil
+		}
+		seen++
+		rel, _ := filepath.Rel(root, path)
+		if rel != "quest/sentinel/got_hook.h" && !strings.HasPrefix(rel, "quest/tests/") {
+			t.Errorf("%s names GotHookTestAccess; only got_hook.h and src/quest/tests may", rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seen < 2 {
+		t.Errorf("GotHookTestAccess found in %d files, want at least got_hook.h and the host test", seen)
 	}
 }
 

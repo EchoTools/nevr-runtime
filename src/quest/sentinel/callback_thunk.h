@@ -52,18 +52,27 @@
  *   2. This header is included only by translation units built with -fno-exceptions (the
  *      #error below), so Entry has no landing pad; the unwinder walks past its frame on CFI
  *      alone and a game exception passes through untouched.
- *   3. Handlers are `noexcept` function pointers and are marked NEVR_HOOK_HANDLER. Under
- *      -fno-exceptions `noexcept` is only a type marker: it adds no terminate landing pad.
- *      Nothing stops an exception raised in a sentinel callee from leaving the handler, so
- *      a callee that can throw must catch inside sentinel-only frames that are not live
- *      across a call into game code (a helper that does its throwing work, catches, and
- *      returns before the handler touches the game).
- *   4. tests/quest TestHookFramesCarryNoPersonality enforces rule 1 on the built artifact:
- *      starting from every Entry and every NEVR_HOOK_HANDLER function it follows direct
- *      bl/b edges through the sentinel and fails on any reachable function under a
- *      personality-bearing CIE, except the allowlisted sentinel-only logging leaves.
- *      It cannot see indirect calls, so a handler that reaches code through a function
- *      pointer or a virtual call is not covered.
+ *   3. A hook is defined by a record: NEVR_HOOK_RECORD(name, Thunk, handler) emits a
+ *      {entry, handler} pair into the output section nevr_hook_records, and Thunk::Arm takes
+ *      that record, so the only way to arm a handler is to have it recorded. Handlers are
+ *      `noexcept` function pointers. Under -fno-exceptions `noexcept` is only a type marker:
+ *      it adds no terminate landing pad. Nothing stops an exception raised in a sentinel
+ *      callee from leaving the handler, so a callee that can throw must catch inside
+ *      sentinel-only frames that are not live across a call into game code (a helper that does
+ *      its throwing work, catches, and returns before the handler touches the game).
+ *   4. A hook is installed only through InstallThunk<Thunk> (hook_install.h). The raw
+ *      GotHook::Install taking an arbitrary function pointer is private; only the test access
+ *      class (tests/) may call it, and TestRawInstallOnlyInTests pins that.
+ *   5. Helpers. A function a handler calls directly and that can be on the stack across the
+ *      call into game code must be personality-free ("zR"): no try/catch, no destructor-bearing
+ *      object, and no indirect call (function pointer, virtual, std::function) into code built
+ *      with exceptions. The sensor cannot follow indirect calls, so that last part is a rule,
+ *      not a check.
+ *   6. tests/quest TestHookFramesCarryNoPersonality enforces rule 1 on the built artifact: it
+ *      requires exactly one record per thunk Entry (an Entry without a record fails), starts
+ *      from every record's entry and handler, follows direct bl/b edges through the sentinel
+ *      and fails on any reachable function under a personality-bearing CIE. There is no
+ *      allowlist: a hook does not log, so no logging code is reachable from it.
  */
 #pragma once
 
@@ -74,14 +83,31 @@
 #include <atomic>
 #include <cstdint>
 
-// Marks a function as a thunk handler. The function is placed in its own output section so
-// the build-time sensor finds every handler by section, not by name.
-#define NEVR_HOOK_HANDLER __attribute__((used, section("nevr_hook_handlers")))
+// Defines a hook: records {entry, handler} in the output section nevr_hook_records (found
+// by the build-time sensor through the section's relocations) and gives Thunk::Arm the only
+// thing it accepts.
+// `retain` keeps the record through the linker's --gc-sections (nothing references it).
+#if defined(__clang__)
+#define NEVR_HOOK_RECORD_ATTRS __attribute__((used, retain, section("nevr_hook_records")))
+#else
+#define NEVR_HOOK_RECORD_ATTRS __attribute__((used, section("nevr_hook_records")))
+#endif
+#define NEVR_HOOK_RECORD(name, Thunk, handlerFn)                                  \
+  NEVR_HOOK_RECORD_ATTRS constexpr ::sentinel::HookRecord<Thunk> name {            \
+    Thunk::EntryFn(), handlerFn                                                    \
+  }
 
 namespace sentinel {
 
 template <typename Tag, typename Signature>
 class CallbackThunk;
+
+// The two function pointers that make a hook: the thunk's entry and its handler.
+template <typename Thunk>
+struct HookRecord {
+  typename Thunk::Fn entry;
+  typename Thunk::Handler handler;
+};
 
 template <typename Tag, typename Ret, typename... Args>
 class CallbackThunk<Tag, Ret(Args...)> {
@@ -89,7 +115,10 @@ class CallbackThunk<Tag, Ret(Args...)> {
   using Fn = Ret (*)(Args...);
   using Handler = Ret (*)(Fn original, Args... args) noexcept;
 
-  // The address to install into the GOT slot.
+  // The thunk's entry as a function pointer (a constant expression, for NEVR_HOOK_RECORD).
+  static constexpr Fn EntryFn() noexcept { return &Entry; }
+
+  // The address to install into the GOT slot (InstallThunk does this; nothing else should).
   static void* EntryAddress() noexcept { return reinterpret_cast<void*>(&Entry); }
 
   // Where Install stores the original function (the `originalOut` argument).
@@ -100,8 +129,11 @@ class CallbackThunk<Tag, Ret(Args...)> {
     return reinterpret_cast<Fn>(__atomic_load_n(&original_, __ATOMIC_ACQUIRE));
   }
 
-  // nullptr disarms: calls pass straight through to the original.
-  static void Arm(Handler handler) noexcept { handler_.store(handler, std::memory_order_release); }
+  // Arms the record's handler; Disarm makes calls pass straight through to the original.
+  static void Arm(const HookRecord<CallbackThunk>& record) noexcept {
+    handler_.store(record.handler, std::memory_order_release);
+  }
+  static void Disarm() noexcept { handler_.store(nullptr, std::memory_order_release); }
 
   static std::uint64_t Calls() noexcept { return calls_.load(std::memory_order_relaxed); }
   static std::uint64_t Faults() noexcept { return faults_.load(std::memory_order_relaxed); }
