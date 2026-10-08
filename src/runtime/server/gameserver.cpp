@@ -178,16 +178,6 @@ SlotInfo ExtractSlotIndex(const void* msg, uint64_t msgSize) {
 
 // --- TCP Broadcaster Callbacks ---
 
-void OnTcpMsgRegistrationSuccess(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  self->GetContext().SetRegistered(true);
-
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyRegistrationSuccess, "SNSLobbyRegistrationSuccess", msg,
-                                         msgSize);
-  }
-}
-
 void OnTcpMsgRegistrationFailure(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
   self->GetContext().SetRegistered(false);
 
@@ -202,44 +192,6 @@ void OnTcpMsgRegistrationFailure(GameServerLib* self, VOID*, EchoVR::TcpPeer, VO
   // ServerFatal (not FatalError) because it is mode-gated: in client mode this
   // is a Warning and execution continues.
   ServerFatal("GameServer registration rejected by ServerDB");
-}
-
-void OnTcpMessageStartSession(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  self->GetContext().StartSession();
-
-  Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Starting new session");
-
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyStartSessionV4, "SNSLobbyStartSessionv4", msg, msgSize);
-  }
-}
-
-void OnTcpMsgPlayersAccepted(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersSuccessV2,
-                                         "SNSLobbyAcceptPlayersSuccessv2", msg, msgSize);
-  }
-}
-
-void OnTcpMsgPlayersRejected(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbyAcceptPlayersFailureV2,
-                                         "SNSLobbyAcceptPlayersFailurev2", msg, msgSize);
-  }
-}
-
-void OnTcpMsgSessionSuccessv5(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] Received session success (SNSLobbySessionSuccessv5), size=%llu",
-      msgSize);
-
-  auto* broadcaster = self->GetContext().GetBroadcaster();
-  if (broadcaster) {
-    EchoVR::BroadcasterReceiveLocalEvent(broadcaster, Sym::LobbySessionSuccessV5, "SNSLobbySessionSuccessv5",
-                                         static_cast<CHAR*>(msg), msgSize);
-  }
 }
 
 // Handle incoming protobuf messages from Nakama. Reads `msg` only (it is parsed,
@@ -856,18 +808,6 @@ void OnMsgReliableStatUpdate(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoV
 
 void OnMsgReliableTeamStatUpdate(GameServerLib*, VOID*, VOID*, UINT64 msgSize, EchoVR::Peer, EchoVR::Peer) {
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] team stat update received (no server-side action — observability only) size=%llu", msgSize);
-}
-
-void OnTcpMsgGameClientMsg1(GameServerLib*, VOID*, EchoVR::TcpPeer, VOID*, VOID*, UINT64 msgSize) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] TCP game client msg 1 (size: %llu)", msgSize);
-}
-
-void OnTcpMsgGameClientMsg2(GameServerLib*, VOID*, EchoVR::TcpPeer, VOID*, VOID*, UINT64 msgSize) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] TCP game client msg 2 (size: %llu)", msgSize);
-}
-
-void OnTcpMsgGameClientMsg3(GameServerLib*, VOID*, EchoVR::TcpPeer, VOID*, VOID*, UINT64 msgSize) {
-  Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] TCP game client msg 3 (size: %llu)", msgSize);
 }
 
 // --- GameServerLib Implementation ---
