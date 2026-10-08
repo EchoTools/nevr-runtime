@@ -88,6 +88,7 @@ configure-android:
 # Build the Android arm64-v8a crash-reporter .so
 build-android: configure-android
     ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-arm64 -j
+    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" build/android-arm64/sentinel/CMakeFiles/ovrplatformloader.dir/*.o
 
 # Build with full compiler output
 verbose-build-android: configure-android
@@ -413,6 +414,25 @@ test-quest-shared:
         -o "$out/service_redirect_test"
     "$out/service_redirect_test"
     echo "test-quest-shared: all redirect vectors pass on the host"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
+        src/runtime/lifecycle/service_redirect.cpp \
+        src/quest/sentinel/quest_config.cpp \
+        src/quest/tests/quest_config_test.cpp \
+        -o "$out/quest_config_test"
+    "$out/quest_config_test"
+    # Sentinel activation + logging against a stand-in liblog. The test's constructor has priority
+    # 102, so it runs before activation.cpp's static initializers whatever the link order.
+    files="$out/sentinel-files"
+    rm -rf "$files"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/tests/stub -Isrc/quest/sentinel \
+        -DNEVR_QUEST_FILES_DIR="\"$files\"" \
+        src/quest/tests/sentinel_host_test.cpp \
+        src/quest/sentinel/activation.cpp \
+        src/quest/sentinel/sentinel_log.cpp \
+        src/quest/sentinel/quest_config.cpp \
+        src/runtime/lifecycle/service_redirect.cpp \
+        -o "$out/sentinel_host_test"
+    "$out/sentinel_host_test"
 
 # Quest hook backend on the host. Builds three fixture shared objects (BIND_NOW with
 # RELRO, BIND_NOW without RELRO, lazy) and runs src/quest/tests/got_hook_test.cpp,

@@ -19,16 +19,19 @@ target_link_libraries(nevr_quest_got_hook PUBLIC log dl)
 
 add_library(ovrplatformloader SHARED
   entry.cpp
-  sentinel.cpp)
+  sentinel.cpp
+  sentinel_log.cpp
+  activation.cpp)
 
 # Emit libovrplatformloader.so (CMake adds the lib prefix + .so suffix).
 set_target_properties(ovrplatformloader PROPERTIES OUTPUT_NAME ovrplatformloader)
 
 target_include_directories(ovrplatformloader PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_BINARY_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/breakpad/src)
 
-target_link_libraries(ovrplatformloader PRIVATE nevr_quest_got_hook breakpad_client log dl)
+target_link_libraries(ovrplatformloader PRIVATE nevr_quest_got_hook nevr_quest_config breakpad_client log dl)
 
 # Only nevr_sentinel_marker and JNI_OnLoad are exported (both carry explicit default
 # visibility); everything else, including the hook API and the test seams, is hidden.
@@ -49,3 +52,6 @@ add_custom_command(TARGET ovrplatformloader POST_BUILD
           $<TARGET_FILE:ovrplatformloader>
   COMMENT "patchelf: add DT_NEEDED libovrplatformloader_orig.so (forward-to-original)"
   VERBATIM)
+
+# The config, activation and log sources build warning-clean (the host test builds them the same way).
+set_source_files_properties(activation.cpp sentinel_log.cpp PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror")
