@@ -750,6 +750,92 @@ test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signe
     "$out/social_pinned_test" --dump "$lib/libpnsovr.so" > "$out/vtable.txt"
     diff -u src/quest/tests/fixtures/cnsovrsocial_vtable.txt "$out/vtable.txt"
 
+# Quest sentinel integration on the host (docs/adr/0003, "Integration"): the constructor sequence with
+# fakes (order, gating by feature, counters before the single reporter start, one failing piece leaves the
+# others running), the post-load policy, the dlopen handler and the pinned dlopen target, the identity
+# source, the social switch, the frame tap, the counter budget over the real hook libraries, and the
+# bridge end to end through the real loopback server and router with a fake connector. The hook
+# translation units are built -fno-exceptions as on the device. No NDK, no Android. Fail-close.
+test-quest-integration:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-integration-host"
+    mkdir -p "$out"
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-integration: FAIL - $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -isystem "$json_inc")
+    off=("${on[@]}" -fno-exceptions)
+    # 1. sequence, post-load policy, identity, social switch, frame tap
+    "${on[@]}" src/quest/tests/integration_sequence_test.cpp \
+        src/quest/integration/ctor_sequence.cpp src/quest/integration/post_load.cpp \
+        src/quest/integration/identity_source.cpp src/quest/integration/social_gate.cpp \
+        src/quest/integration/frame_tap.cpp src/quest/sentinel/hook_log.cpp src/runtime/compat/evr_codec.cpp \
+        -o "$out/integration_sequence_test" -pthread
+    timeout 300 "$out/integration_sequence_test"
+    # 2. the hook translation units and the counter budget
+    "${off[@]}" -c src/quest/sentinel/got_hook.cpp -o "$out/got_hook.o"
+    "${off[@]}" -c src/quest/sentinel/hook_report.cpp -o "$out/hook_report.o"
+    "${off[@]}" -c src/quest/redirect/tstring_thunks.cpp -o "$out/tstring_thunks.o"
+    "${off[@]}" -c src/quest/integration/dlopen_hook.cpp -o "$out/dlopen_hook.o"
+    "${off[@]}" -c src/quest/integration/social_shim.cpp -o "$out/social_shim.o"
+    "${off[@]}" -c src/quest/social/social_game_calls.cpp -o "$out/social_game_calls.o"
+    "${off[@]}" -c src/quest/social/social_install.cpp -o "$out/social_install.o"
+    "${on[@]}" -c src/quest/social/social_facade.cpp -o "$out/social_facade.o"
+    "${on[@]}" -c src/quest/sentinel/hook_log.cpp -o "$out/hook_log.o"
+    # The dlopen hook's frames carry no personality (the one helper it calls is annotated and lives in
+    # another translation unit).
+    readelf --debug-dump=frames "$out/dlopen_hook.o" > "$out/dlopen_hook.frames.txt"
+    if grep -q '"zPLR"' "$out/dlopen_hook.frames.txt"; then
+        echo "test-quest-integration: FAIL - dlopen_hook.o has frames under a personality CIE (zPLR)" >&2
+        exit 1
+    fi
+    grep -q '"zR"' "$out/dlopen_hook.frames.txt" || { echo "test-quest-integration: FAIL - dlopen_hook.o has no zR frames to check" >&2; exit 1; }
+    "${on[@]}" src/quest/tests/integration_hooks_test.cpp src/quest/integration/post_load.cpp \
+        src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp \
+        src/quest/sentinel/quest_config.cpp src/runtime/lifecycle/service_redirect.cpp \
+        src/runtime/lifecycle/stable_string_pool.cpp \
+        "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
+        "$out/social_game_calls.o" "$out/social_install.o" "$out/social_facade.o" "$out/hook_log.o" \
+        -o "$out/integration_hooks_test" -ldl -pthread
+    timeout 300 "$out/integration_hooks_test"
+    # 3. the bridge end to end (libcurl only for the percent-encoder the shared URI code uses)
+    "${on[@]}" -pthread $(pkg-config --cflags libcurl) \
+        src/quest/tests/integrated_bridge_test.cpp src/quest/integration/integrated_bridge.cpp \
+        src/quest/integration/tapped_transports.cpp src/quest/integration/frame_tap.cpp \
+        src/quest/net/ws_wire.cpp src/quest/net/loopback_game_server.cpp src/quest/net/remote_ws.cpp \
+        src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp src/runtime/server/serverdb_uri.cpp \
+        -o "$out/integrated_bridge_test" $(pkg-config --libs libcurl)
+    timeout 300 "$out/integrated_bridge_test"
+    echo "test-quest-integration: all integration tests pass on the host"
+
+# The integration's pinned dlopen target against the real libr15.so (docs/adr/0003). Extracts it from the
+# store APK, checks its SHA-256 and resolves LibR15Dlopen() the way the loader would lay the image out.
+# Fail-close, including when the APK is absent (58 MB, not in the repository), so it is not part of
+# `just verify`.
+test-quest-integration-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    apk="{{ apk }}"
+    [ -f "$apk" ] || { echo "test-quest-integration-pinned: pinned APK not found: $apk" >&2; exit 1; }
+    out="build/quest-integration-pinned"
+    mkdir -p "$out/lib"
+    unzip -o -q "$apk" lib/arm64-v8a/libr15.so -d "$out/lib"
+    lib="$out/lib/lib/arm64-v8a"
+    echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $lib/libr15.so" | sha256sum -c -
+    off=(g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel)
+    "${off[@]}" -c src/quest/integration/dlopen_hook.cpp -o "$out/dlopen_hook.o"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -c src/quest/integration/post_load.cpp -o "$out/post_load.o"
+    "${off[@]}" src/quest/tests/integration_pinned_test.cpp "$out/dlopen_hook.o" "$out/post_load.o" \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/integration_pinned_test" -ldl -pthread
+    "$out/integration_pinned_test" "$lib/libr15.so"
+
 # --- Verify (closed-loop gate) ---
 
 # Aggregate verify gate for the all-the-way-down canon: build everything, then run
@@ -773,6 +859,7 @@ verify:
     just test-quest-tls
     just test-quest-redirect
     just test-quest-social
+    just test-quest-integration
     timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_executable_scripts -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.

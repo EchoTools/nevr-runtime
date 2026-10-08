@@ -8,6 +8,7 @@
 
 #include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/login_profile.h"
+#include "quest/sentinel/outside_game_call.h"
 
 namespace QuestLogin {
 
@@ -178,8 +179,10 @@ void ComposePlanImpl(IdentitySource& source, const BuildInfo& build, const Obser
 
 }  // namespace
 
-void ComposePlan(IdentitySource& source, const BuildInfo& build, const Observation& observed,
-                 Plan& plan) noexcept {
+// Runs between game calls and calls none (the compose phase): the one function in the login path that
+// carries a personality, marked so the frame sensor does not enter it (outside_game_call.h).
+NEVR_OUTSIDE_GAME_CALL void ComposePlan(IdentitySource& source, const BuildInfo& build,
+                                        const Observation& observed, Plan& plan) noexcept {
   plan = Plan();
   try {
     ComposePlanImpl(source, build, observed, plan);

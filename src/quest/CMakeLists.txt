@@ -187,3 +187,10 @@ endif()
 # ── Session router + loopback transport (ADR 0003, contract 3) ───────────
 # Kept in its own subdirectory so it merges cleanly alongside the other Quest packages.
 add_subdirectory(net)
+
+# ── Sentinel integration (ADR 0003, "Integration") ───────────────────────
+# Wires every package above into the sentinel entry point. After net/, login, social and the redirect,
+# because it links all of them.
+if(TARGET ovrplatformloader)
+  add_subdirectory(integration)
+endif()
