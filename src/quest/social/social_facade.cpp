@@ -10,6 +10,8 @@
 #include <set>
 #include <string>
 
+#include <nlohmann/json.hpp>
+
 #include "hook_log.h"
 #include "quest/social/social_abi.h"
 #include "quest/social/social_internal.h"
@@ -52,8 +54,25 @@ std::atomic<std::uint64_t> g_eventsDropped{0};
 std::atomic<std::uint64_t> g_sendFailed{0};
 std::atomic<std::uint64_t> g_joinDeferred{0};
 std::atomic<std::uint64_t> g_requestTimeout{0};
-std::atomic<std::uint64_t> g_cjsonResetUnavailable{0};
+// The game's CJson functions (SetGameJson), read on the game's thread.
 std::atomic<CJsonResetFn> g_cjsonReset{nullptr};
+std::atomic<CJsonDecodeFromFn> g_cjsonDecode{nullptr};
+std::atomic<CJsonEncodeToCompactFn> g_cjsonEncode{nullptr};
+// Callbacks delivered to the game, by class (the reporter thread logs them; nothing logs on the delivery).
+std::atomic<std::uint64_t> g_cbCreated{0};
+std::atomic<std::uint64_t> g_cbMemberJoined{0};
+std::atomic<std::uint64_t> g_cbJoinFailed{0};
+std::atomic<std::uint64_t> g_cbOther{0};
+std::atomic<std::uint64_t> g_jsonFailed{0};     // party or member data the game's JSON would not load, or could not be read out
+std::atomic<std::uint64_t> g_framesIgnored{0};  // server frames of a social kind that changed nothing (NoteFrameIgnored)
+
+GameJson CurrentGameJson() {
+  GameJson json;
+  json.reset = g_cjsonReset.load(std::memory_order_acquire);
+  json.decode = g_cjsonDecode.load(std::memory_order_acquire);
+  json.encode = g_cjsonEncode.load(std::memory_order_acquire);
+  return json;
+}
 
 void Count(std::atomic<std::uint64_t>& counter, std::uint64_t n = 1) noexcept {
   counter.fetch_add(n, std::memory_order_relaxed);
@@ -86,6 +105,16 @@ struct Facade::Impl {
   // Party members past the game's array (kMemberJsonSlots): in the model, never announced to the game.
   std::set<std::uint64_t> hiddenMembers;
   std::uint64_t hiddenLoggedParty = 0;
+  // Party and member data: whose server data each member JSON slot holds (slot 0, the local member's, never
+  // holds the server's), the text loaded there, and the party data loaded into +0x1F0.
+  std::array<std::uint64_t, kMemberJsonSlots> slotMember{};
+  std::array<SocialParty::JsonText, kMemberJsonSlots> slotData{};
+  SocialParty::JsonText partyDataLoaded;
+  std::atomic<bool> memberDataWritten{false};  // slot 31 handed out the local member's JSON since it was last shared
+  std::uint64_t sharedParty = 0;               // the party the local data was last shared into
+  bool jsonUnavailableLogged = false;
+  std::array<char, internal::kShareBufferBytes> partyBuffer{};
+  std::array<char, internal::kShareBufferBytes> memberBuffer{};
   // When the sender took a request that has no answer yet (0: none); see kPendingDeadlineSeconds.
   std::uint64_t createSince = 0;
   std::uint64_t joinSince = 0;
@@ -257,6 +286,65 @@ void ExpirePending(Impl& impl) {
   }
 }
 
+// ---- party and member data ------------------------------------------------------------------
+
+// What the game's JSON must load from the server's data (SocialParty::State::ReceiveData keeps it): each remote member's
+// data into its slot of the member array (+0x248; slot 0 is the local member's own and is never loaded) and the party's
+// into +0x1F0 for a member (the leader's is its own). A slot whose member changed (a join, a leave shifting the list)
+// is reloaded or cleared, so slot i always holds member i's data. The texts are the strings the view shares and the
+// facade keeps in slotData / partyDataLoaded until the next plan. Without the game's functions nothing is planned and
+// nothing is marked loaded, so the data loads once they are known.
+void PlanReceivedData(Impl& impl, const SocialParty::View& view, internal::JsonPlan* plan) {
+  plan->game = CurrentGameJson();
+  plan->count = 0;
+  const bool canLoad = plan->game.decode != nullptr && plan->game.reset != nullptr;
+  const auto add = [plan](internal::JsonOpKind kind, std::uint8_t slot, const std::string* text) {
+    internal::JsonOp& op = plan->ops[plan->count++];
+    op.kind = kind;
+    op.slot = slot;
+    op.ok = 0;
+    op.text = text != nullptr ? text->data() : nullptr;
+    op.length = text != nullptr ? text->size() : 0;
+  };
+  bool pending = false;
+  for (std::size_t i = 1; i < kMemberJsonSlots; ++i) {
+    const SocialParty::Member* member = i < view.members.size() ? &view.members[i] : nullptr;
+    const std::uint64_t id = member != nullptr ? member->id : 0;
+    const SocialParty::JsonText data = member != nullptr ? member->data : nullptr;
+    if (impl.slotMember[i] == id && impl.slotData[i] == data) continue;
+    if (!canLoad) {
+      pending = pending || data != nullptr || impl.slotData[i] != nullptr;
+      continue;
+    }
+    if (data != nullptr) {
+      add(internal::kJsonLoad, static_cast<std::uint8_t>(i), data.get());
+    } else if (impl.slotData[i] != nullptr) {
+      add(internal::kJsonClear, static_cast<std::uint8_t>(i), nullptr);
+    }
+    impl.slotMember[i] = id;
+    impl.slotData[i] = data;
+  }
+  const bool host = view.partyId != 0 && view.ownerId == view.selfId;
+  if (!host && view.partyData != impl.partyDataLoaded) {
+    if (!canLoad) {
+      pending = true;
+    } else {
+      if (view.partyData != nullptr) {
+        add(internal::kJsonLoad, internal::kJsonParty, view.partyData.get());
+      } else if (impl.partyDataLoaded != nullptr) {
+        add(internal::kJsonClear, internal::kJsonParty, nullptr);
+      }
+      impl.partyDataLoaded = view.partyData;
+    }
+  }
+  if (pending && !impl.jsonUnavailableLogged) {
+    impl.jsonUnavailableLogged = true;
+    Count(g_jsonFailed);
+    LogFields(LogLevel::kWarn, "social_party_data",
+              {{"result", "game_json_unavailable"}, {"note", "server party or member data is held until the game's CJson functions are known"}});
+  }
+}
+
 // ---- object fields the game reads directly --------------------------------------------------
 
 // "No lobby": the invalid uuid, no match type, no team, the private lobby type. NRadEngine::SUuid::kInvalid is
@@ -413,10 +501,15 @@ const char* SlotMemberName(void* self, std::uint32_t index) {
 // 32-bit -1 zero-extended, not 64 bits of ones.
 std::uint64_t SlotLocalId(void*, std::uint32_t index) { return index == 0 ? 0 : 0xFFFFFFFFULL; }
 
-// MemberDataWritable hands out the local member's CJson. Party data (the headset type and other
-// per-member JSON) needs the game's CJson functions and is not carried yet; null is what CNSOVRSocial
-// answers for every case but the local member (libpnsovr 0x205308), so the game already handles it.
-std::uint64_t SlotMemberDataWritable(void*, std::uint32_t) { return 0; }
+// MemberDataWritable hands out the local member's CJson (the first of the member array) for the game to write its
+// per-member data into (the headset type), and notes that it has to be shared; null is what CNSOVRSocial answers for
+// every other member and before a local user exists (libpnsovr 0x205308). The game's Update shares it (ShareBegin).
+std::uint64_t SlotMemberDataWritable(void* self, std::uint32_t index) {
+  Impl& impl = *OwnerOf(self);
+  if (index != 0 || Get<std::uint32_t>(self, kOffLocalCount) == 0) return 0;
+  impl.memberDataWritten.store(true, std::memory_order_relaxed);  // shared by the next Update (ShareBegin)
+  return static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(impl.memberJson.data()));
+}
 
 std::uint32_t SlotJoinableInternal(void* self) { return CurrentView(*OwnerOf(self))->locked ? 0U : 1U; }
 
@@ -459,10 +552,13 @@ void SlotDestructor(void*) {
 // (social_game_calls.cpp). Zeroing the pointer here would leak the tree; leaving it would keep the old
 // party's lobby settings, which the game reads when it is not the host (PartyTeam libr15 0x129a9ac, PartyData
 // 0x129aa08). The constructor path (ResetBase before any game call) finds it zero, which CJson::Reset accepts.
-void ResetBase(Impl& impl) {
+//
+// The member JSON array (+0x248) holds the local member's data the game wrote and the server's data for the others:
+// trees the game allocated. With the game's CJson::Reset known, SlotResetEntry frees them (so they are not zeroed
+// here); without it nothing was ever loaded into them, and they are zeroed.
+void ResetBase(Impl& impl, bool gameFreesJson) {
   void* self = impl.object.data();
-  // The member array, which nothing writes (MemberDataWritable answers null), is cleared.
-  std::memset(impl.memberJson.data(), 0, impl.memberJson.size());
+  if (!gameFreesJson) std::memset(impl.memberJson.data(), 0, impl.memberJson.size());
   Put<std::uint32_t>(self, kOffFlags, (Get<std::uint32_t>(self, kOffFlags) & ~kFlagDataWritten) | kFlagJoinable);
   Put<std::uint32_t>(self, kOffLocalCount, 0);
   Put<std::uint32_t>(self, kOffMemberCount, 0);
@@ -800,9 +896,15 @@ namespace internal {
 
 void TraceSlotCall(void* self, std::size_t slot) noexcept { TraceCall(OwnerOf(self), slot); }
 
-void NoteCallbackDelivered(void* self) noexcept {
+void NoteCallbackDelivered(void* self, std::size_t callback) noexcept {
   Impl* impl = OwnerOf(self);
   if (impl != nullptr) impl->callbackCalls.fetch_add(1, std::memory_order_relaxed);
+  switch (callback) {
+    case kCbCreated: Count(g_cbCreated); break;
+    case kCbMemberJoined: Count(g_cbMemberJoined); break;
+    case kCbJoinFailed: Count(g_cbJoinFailed); break;
+    default: Count(g_cbOther); break;
+  }
 }
 
 std::uint64_t UpdatePrepare(void* self, const void* params) noexcept {
@@ -958,10 +1060,11 @@ void QueueEvents(Impl& impl, std::vector<SocialParty::Event>& events, const std:
 
 }  // namespace
 
-void UpdateCollect(void* self, EventBatch* out) noexcept {
-  if (out == nullptr) return;
+void UpdateCollect(void* self, EventBatch* out, JsonPlan* json) noexcept {
+  if (out == nullptr || json == nullptr) return;
   out->count = 0;
   out->dropped = 0;
+  json->count = 0;
   Impl* impl = OwnerOf(self);
   if (impl == nullptr) return;
   try {
@@ -971,6 +1074,7 @@ void UpdateCollect(void* self, EventBatch* out) noexcept {
     const std::vector<std::uint64_t> ids = PublishView(*impl);
     const auto view = CurrentView(*impl);
     SyncObject(*impl, *view);
+    PlanReceivedData(*impl, *view, json);
     // Everything the model queued joins the carry queue, oldest first; one batch is delivered now and the
     // rest next frame, in order (see Enqueue for what is merged and what may be dropped).
     QueueEvents(*impl, events, ids, ViewRoomId(*view), out);
@@ -1005,13 +1109,19 @@ CJsonResetFn ResetPrepare(void* self) noexcept {
   if (impl == nullptr) return nullptr;
   try {
     SendParty(*impl, "party reset", Party(*impl).ResetParty());
-    ResetBase(*impl);
+    const CJsonResetFn reset = g_cjsonReset.load(std::memory_order_acquire);
+    ResetBase(*impl, reset != nullptr);
     impl->createSince = 0;
     impl->joinSince = 0;
     impl->lockSince = 0;
-    const CJsonResetFn reset = g_cjsonReset.load(std::memory_order_acquire);
+    // What was loaded or shared belonged to the party that is gone.
+    impl->slotMember.fill(0);
+    for (SocialParty::JsonText& data : impl->slotData) data.reset();
+    impl->partyDataLoaded.reset();
+    impl->sharedParty = 0;
+    impl->memberDataWritten.store(false, std::memory_order_relaxed);
     if (reset == nullptr) {
-      Count(g_cjsonResetUnavailable);
+      Count(g_jsonFailed);
       LogFields(LogLevel::kWarn, "social_reset", {{"cjson_reset", "unavailable"}, {"action", "party_cjson_left_alone"}});
     }
     return reset;
@@ -1019,6 +1129,105 @@ CJsonResetFn ResetPrepare(void* self) noexcept {
     ReportFailure(impl, kReset);
   }
   return nullptr;
+}
+
+void JsonApplied(void* self, const JsonPlan* json) noexcept {
+  Impl* impl = OwnerOf(self);
+  if (impl == nullptr || json == nullptr) return;
+  try {
+    for (std::uint32_t i = 0; i < json->count; ++i) {
+      const JsonOp& op = json->ops[i];
+      if (op.ok != 0 && op.kind == kJsonLoad) {
+        LogFields(LogLevel::kInfo, "social_party_data",
+                  {{"result", "loaded"}, {"what", op.slot == kJsonParty ? "party" : "member"},
+                   {"slot", op.slot == kJsonParty ? -1LL : static_cast<long long>(op.slot)},
+                   {"bytes", static_cast<long long>(op.length)}});
+      } else if (op.ok == 0) {
+        Count(g_jsonFailed);
+        LogFields(LogLevel::kWarn, "social_party_data",
+                  {{"result", op.kind == kJsonLoad ? "load_failed" : "clear_failed"},
+                   {"what", op.slot == kJsonParty ? "party" : "member"},
+                   {"slot", op.slot == kJsonParty ? -1LL : static_cast<long long>(op.slot)},
+                   {"bytes", static_cast<long long>(op.length)}});
+      }
+    }
+  } catch (const std::exception&) {
+    ReportFailure(impl, kUpdate);
+  }
+}
+
+// The game's own Update shares what the game wrote: the leader's party data when the game marked it written (flag bit 0,
+// which is then cleared), the local member's after MemberDataWritable handed it out; both once more on entering a
+// party, so the server holds them from the start (pnsovr 0x1800ac240, slots 7 and 6, on PC the same).
+void ShareBegin(void* self, ShareJob* job) noexcept {
+  Impl* impl = OwnerOf(self);
+  if (impl == nullptr || job == nullptr) return;
+  job->party = 0;
+  job->member = 0;
+  job->partyOk = 0;
+  job->memberOk = 0;
+  job->partySize = 0;
+  job->memberSize = 0;
+  job->capacity = kShareBufferBytes - 1;
+  job->partyBuffer = impl->partyBuffer.data();
+  job->memberBuffer = impl->memberBuffer.data();
+  job->game = CurrentGameJson();
+  try {
+    const auto view = CurrentView(*impl);
+    if (job->game.encode == nullptr || view->partyId == 0 || view->joining) return;
+    const bool newParty = view->partyId != impl->sharedParty;
+    if (newParty) {
+      impl->sharedParty = view->partyId;
+      impl->memberDataWritten.store(true, std::memory_order_relaxed);
+    }
+    const std::uint32_t flags = Get<std::uint32_t>(self, kOffFlags);
+    if (view->ownerId == view->selfId && ((flags & kFlagDataWritten) != 0 || newParty)) {
+      Put<std::uint32_t>(self, kOffFlags, flags & ~kFlagDataWritten);
+      job->party = 1;
+    }
+    if (impl->memberDataWritten.exchange(false, std::memory_order_relaxed)) job->member = 1;
+  } catch (const std::exception&) {
+    ReportFailure(impl, kUpdate);
+  }
+}
+
+namespace {
+
+// One read-out text to the server: the game's empty document is "{}", and only a JSON object is sent.
+void ShareOne(Impl& impl, const char* what, std::uint64_t scope, bool ok, const char* buffer, std::uint64_t size) {
+  if (!ok) {
+    Count(g_jsonFailed);
+    LogFields(LogLevel::kWarn, "social_party_data", {{"result", "share_failed"}, {"what", what}, {"note", "the game's CJson could not be read out"}});
+    return;
+  }
+  std::string text(buffer, static_cast<std::size_t>(size));
+  while (!text.empty() && text.back() == '\0') text.pop_back();
+  if (text.find_first_not_of(" \t\r\n") == std::string::npos) text = "{}";
+  const nlohmann::json parsed = nlohmann::json::parse(text, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_object()) {
+    Count(g_jsonFailed);
+    LogFields(LogLevel::kWarn, "social_party_data", {{"result", "share_rejected"}, {"what", what}, {"bytes", static_cast<long long>(text.size())},
+                                                      {"note", "the game's JSON is not an object"}});
+    return;
+  }
+  SendParty(impl, what, Party(impl).ShareData(scope, text));
+}
+
+}  // namespace
+
+void ShareFinish(void* self, const ShareJob* job) noexcept {
+  Impl* impl = OwnerOf(self);
+  if (impl == nullptr || job == nullptr) return;
+  try {
+    if (job->party != 0) {
+      ShareOne(*impl, "party data (party)", SocialParty::kPartyDataScopeParty, job->partyOk != 0, job->partyBuffer, job->partySize);
+    }
+    if (job->member != 0) {
+      ShareOne(*impl, "party data (member)", SocialParty::kPartyDataScopeMember, job->memberOk != 0, job->memberBuffer, job->memberSize);
+    }
+  } catch (const std::exception&) {
+    ReportFailure(impl, kUpdate);
+  }
 }
 
 void UpdateFinish(void* self) noexcept {
@@ -1100,7 +1309,7 @@ Facade::Facade(const Ports& ports) : impl_(std::make_unique<Impl>()) {
   const SlotWord* table = impl_->vtable.data();
   Put<const SlotWord*>(object, 0, table);
   Put<Impl*>(object, kOffOwner, impl_.get());
-  ResetBase(*impl_);
+  ResetBase(*impl_, false);
   Put<std::uint32_t>(object, kOffJoinPolicy, SocialParty::kJoinPolicyEveryone);
   Put<std::uintptr_t>(object, kOffMemberJson, reinterpret_cast<std::uintptr_t>(impl_->memberJson.data()));
 }
@@ -1128,11 +1337,18 @@ const Ports& ProductionPorts() {
   return ports;
 }
 
-void SetCJsonReset(CJsonResetFn reset) noexcept { g_cjsonReset.store(reset, std::memory_order_release); }
+void SetGameJson(const GameJson& json) noexcept {
+  g_cjsonReset.store(json.reset, std::memory_order_release);
+  g_cjsonDecode.store(json.decode, std::memory_order_release);
+  g_cjsonEncode.store(json.encode, std::memory_order_release);
+}
+
+void NoteFrameIgnored() noexcept { Count(g_framesIgnored); }
 
 FacadeCounters FacadeCountersView() noexcept {
   return FacadeCounters{g_membersHidden, g_eventsDropped, g_sendFailed, g_joinDeferred, g_requestTimeout,
-                        g_cjsonResetUnavailable};
+                        g_cbCreated, g_cbMemberJoined, g_cbJoinFailed, g_cbOther,
+                        g_jsonFailed, g_framesIgnored};
 }
 
 void ResetFacadeCountersForTest() noexcept {
@@ -1141,7 +1357,12 @@ void ResetFacadeCountersForTest() noexcept {
   g_sendFailed.store(0, std::memory_order_relaxed);
   g_joinDeferred.store(0, std::memory_order_relaxed);
   g_requestTimeout.store(0, std::memory_order_relaxed);
-  g_cjsonResetUnavailable.store(0, std::memory_order_relaxed);
+  g_cbCreated.store(0, std::memory_order_relaxed);
+  g_cbMemberJoined.store(0, std::memory_order_relaxed);
+  g_cbJoinFailed.store(0, std::memory_order_relaxed);
+  g_cbOther.store(0, std::memory_order_relaxed);
+  g_jsonFailed.store(0, std::memory_order_relaxed);
+  g_framesIgnored.store(0, std::memory_order_relaxed);
 }
 
 void SetLocalAccount(std::uint64_t accountId, const char* displayName) {

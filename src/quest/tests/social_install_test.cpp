@@ -21,6 +21,7 @@
 #include "quest/social/social_abi.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_install.h"
+#include "quest/social/social_invite_gate.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/social_names.h"
 
@@ -143,11 +144,11 @@ void TestHandlerThroughThunk() {
 }
 
 void TestCounterRegistration() {
-  // The reporter takes 32 counters in all; the social package uses 12 (the thunk's calls and faults, three
-  // pass-through counters, the selection, and the facade's six) and leaves the rest.
+  // The reporter takes 32 counters in all; the social package uses 19 (the thunk's calls and faults, three
+  // pass-through counters, the selection, and the facade's thirteen) and leaves the rest.
   sentinel::StopReporter();
   QCHECK(RegisterSocialReportCounters());
-  for (int i = 0; i < 20; ++i) QCHECK(sentinel::RegisterReportCounter("filler", &g_dummy));  // 12 + 20 = 32
+  for (int i = 0; i < 13; ++i) QCHECK(sentinel::RegisterReportCounter("filler", &g_dummy));  // 19 + 13 = 32
   QCHECK(!sentinel::RegisterReportCounter("one-too-many", &g_dummy));
   sentinel::StopReporter();
 }
@@ -183,18 +184,72 @@ void TestInstall() {
   QCHECK(std::string(InstallStatusName(InstallStatus::kOk)) == "ok");
 }
 
+// This test's own record for the invite gate's production handler.
+NEVR_HOOK_RECORD(kTestGateHook, GateThunk, &OnBooleanHandler);
+
+int g_boolCalls = 0;
+std::uint32_t g_boolValue = 0;
+std::uint32_t FakeBoolean(const void*, const char*, std::uint32_t, std::uint32_t) {
+  ++g_boolCalls;
+  return g_boolValue;
+}
+
+void TestInviteGateResult() {
+  QCHECK(GateResult("npe|firstmatch|completed", 0) == 1);  // the gate reads true whatever the profile says
+  QCHECK(GateResult("npe|firstmatch|completed", 1) == 1);
+  for (const char* other : {"npe|firstmatch|completedX", "npe|firstmatch|complete", "npe|firstmatch", "Npe|firstmatch|completed",
+                            "", "npe|firstmatch|completed|x", "social|group"}) {
+    QCHECK(GateResult(other, 0) == 0);  // every other path is the game's own answer
+    QCHECK(GateResult(other, 1) == 1);
+  }
+  QCHECK(GateResult(nullptr, 0) == 0 && GateResult(nullptr, 1) == 1);
+}
+
+void TestInviteGateThroughThunk() {
+  ResetInviteGateCountersForTest();
+  GateThunk::Reset();
+  *GateThunk::OriginalOut() = reinterpret_cast<void*>(&FakeBoolean);
+  GateThunk::Arm(kTestGateHook);
+  using Entry = std::uint32_t (*)(const void*, const char*, std::uint32_t, std::uint32_t);
+  Entry entry = nullptr;
+  void* addr = GateThunk::EntryAddress();
+  std::memcpy(&entry, &addr, sizeof(entry));
+  g_lines.clear();
+  g_boolCalls = 0;
+  g_boolValue = 0;
+  QCHECK(entry(nullptr, "npe|firstmatch|completed", 0, 0) == 1);  // profile said false: forced true
+  QCHECK(C(InviteGateCounters().forced) == 1);
+  g_boolValue = 1;
+  QCHECK(entry(nullptr, "npe|firstmatch|completed", 0, 0) == 1);  // profile said true: nothing to force
+  QCHECK(C(InviteGateCounters().forced) == 1);
+  g_boolValue = 0;
+  QCHECK(entry(nullptr, "social|group", 0, 0) == 0);  // other reads are the game's
+  g_boolValue = 1;
+  QCHECK(entry(nullptr, "social|group", 0, 0) == 1);
+  QCHECK(g_boolCalls == 4);  // the original always runs
+  QCHECK(GateThunk::Calls() == 4);
+  QCHECK(g_lines.empty());  // the handler path logged nothing
+  GateThunk::Disarm();
+  g_boolValue = 0;
+  QCHECK(entry(nullptr, "npe|firstmatch|completed", 0, 0) == 0);  // disarmed: straight through
+  GateThunk::Reset();
+}
+
 bool NoImage(const char*, sentinel::ElfImage*) { return false; }
 bool EmptyImage(const char*, sentinel::ElfImage* out) {
   *out = sentinel::ElfImage{};  // loaded, but with no program headers: no build id can be read
   return true;
 }
 
-// The game's CJson::Reset is found only in libr15 of the pinned build.
-void TestResolveCJsonReset() {
-  QCHECK(ResolveCJsonReset(&NoImage) == nullptr);
-  QCHECK(ResolveCJsonReset(&EmptyImage) == nullptr);
-  QCHECK(ResolveCJsonReset(nullptr) == nullptr);
+// The game's CJson functions are found only in libr15 of the pinned build.
+void TestResolveGameJson() {
+  for (const sentinel::ImageLookup lookup : {&NoImage, &EmptyImage, static_cast<sentinel::ImageLookup>(nullptr)}) {
+    const GameJson json = ResolveGameJson(lookup);
+    QCHECK(json.reset == nullptr && json.decode == nullptr && json.encode == nullptr);
+  }
   QCHECK(kLibR15CJsonResetVaddr == 0xfa227cULL);
+  QCHECK(kLibR15CJsonDecodeFromVaddr == 0xfa7e8cULL);
+  QCHECK(kLibR15CJsonEncodeToCompactVaddr == 0xfa7e64ULL);
 }
 
 void TestTarget() {
@@ -212,9 +267,11 @@ int main() {
   const sentinel::LogSink previous = sentinel::SetLogSink(&Capture);
   TestSelect();
   TestHandlerThroughThunk();
+  TestInviteGateResult();
+  TestInviteGateThroughThunk();
   TestCounterRegistration();
   TestInstall();
-  TestResolveCJsonReset();
+  TestResolveGameJson();
   TestTarget();
   sentinel::SetLogSink(previous);
   if (quest_test::Failures() != 0) {

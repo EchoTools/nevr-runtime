@@ -64,15 +64,16 @@ struct SocialCounters {
 SocialCounters Counters() noexcept;
 void ResetCountersForTest() noexcept;
 
-// The game's CJson::Reset in the loaded libr15, or nullptr unless libr15 is loaded and its build id is the
-// pinned one: the image base plus the export's link-time address (kLibR15CJsonResetVaddr, which
-// social_pinned_test checks against the library's dynamic symbol table). Never throws.
-CJsonResetFn ResolveCJsonReset(sentinel::ImageLookup lookup) noexcept;
+// The game's CJson functions (Reset, DecodeFrom, EncodeToCompact) in the loaded libr15, all nullptr unless libr15
+// is loaded and its build id is the pinned one: the image base plus each export's link-time address
+// (kLibR15CJson*Vaddr, which social_pinned_test checks against the library's dynamic symbol table and the first
+// instruction of each). Never throws.
+GameJson ResolveGameJson(sentinel::ImageLookup lookup) noexcept;
 
 // Registers the counters with the sentinel's reporter (hook_report.h): the thunk's calls, the selected
-// count, the three pass-through counters, the thunk's faults and the facade's six (members hidden, events
-// dropped, sends failed, joins deferred, requests timed out, CJson::Reset unavailable): 12 of the
-// reporter's 32.
+// count, the three pass-through counters, the thunk's faults, the facade's eleven (members hidden,
+// events dropped, sends failed, joins deferred, requests timed out, four callback delivery classes, JSON failures,
+// frames ignored) and the invite gate's two (social_invite_gate.h): 19 of the reporter's 32.
 // Call before StartReporter; returns false if any registration was refused.
 bool RegisterSocialReportCounters();
 
@@ -92,7 +93,8 @@ PnsovrLookup SetPnsovrLookup(PnsovrLookup lookup);
 void PublishFacadeObject();
 
 // Registers the friend-name decoder (SocialNames::RegisterDefaultDecoder, the zstd profile reader), builds the
-// process-wide facade (outside any game frame), arms the callback and redirects the slot.
+// process-wide facade (outside any game frame), arms the callback and redirects the slot. Once that has worked it also
+// installs the party-invite gate override (social_invite_gate.h), whose outcome is logged, not returned.
 // `enabled` is the caller's activation decision; false touches nothing.
 InstallResult InstallSocialHook(bool enabled);
 

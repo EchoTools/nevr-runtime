@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "hook_log.h"
 #include "quest/social/social_request_log.h"
 #include "runtime/compat/social_names.h"
@@ -57,9 +59,42 @@ const char* KnownName(std::uint64_t symbol) {
   return SocialParty::RequestName(symbol);
 }
 
+// SNSPartyDataNotify: party or member data (a JSON object) for the party model, which holds it for the facade's Update
+// to load into the game's CJson. Only a JSON object goes on. Returns whether the model took it; else `why` names the
+// reason.
+bool ApplyPartyData(const Ports& ports, const std::uint8_t* payload, std::size_t len, const char** why) {
+  SocialParty::DataNotify notify;
+  if (!SocialParty::ParseDataNotify(payload, len, &notify)) {
+    *why = "party_data_unreadable";
+    return false;
+  }
+  const nlohmann::json parsed = nlohmann::json::parse(notify.json, nullptr, false);
+  if (parsed.is_discarded() || !parsed.is_object()) {
+    *why = "party_data_not_a_json_object";
+    return false;
+  }
+  const SocialParty::DataOutcome outcome = ports.party->ReceiveData(notify.partyId, notify.memberId, notify.json);
+  const auto headset = parsed.find("headsettype");
+  LogFields(LogLevel::kInfo, "social_party_data_received",
+            {{"party", static_cast<long long>(notify.partyId)}, {"member", static_cast<long long>(notify.memberId)},
+             {"seq", static_cast<long long>(notify.seq)}, {"bytes", notify.json.size()},
+             {"keys", parsed.size()}, {"headsettype", headset != parsed.end() ? headset->dump().c_str() : "-"},
+             {"outcome", SocialParty::DataOutcomeName(outcome)}});
+  if (outcome == SocialParty::DataOutcome::kOwnIgnored) {
+    *why = "party_data_own";
+    return false;
+  }
+  if (outcome == SocialParty::DataOutcome::kOtherParty) {
+    *why = "party_data_other_party";
+    return false;
+  }
+  return true;
+}
+
 bool ApplyServerMessage(const Ports& ports, std::uint64_t sym, const std::uint8_t* payload, std::size_t len,
-                        std::uint64_t now) {
+                        std::uint64_t now, const char** why) {
   bool consumed = false;
+  *why = "no_change";
 
   if (sym == SocialNames::kProfileSuccess) {
     std::uint64_t accountId = 0;
@@ -102,6 +137,8 @@ bool ApplyServerMessage(const Ports& ports, std::uint64_t sym, const std::uint8_
       consumed = true;
     }
   }
+
+  if (sym == SocialParty::kPartyDataNotify) consumed = ApplyPartyData(ports, payload, len, why) || consumed;
 
   // A friend added, accepted, removed or withdrawn carries no presence: ask for the list again.
   if (SocialRoster::IsFriendChangeSymbol(sym)) {
@@ -149,7 +186,17 @@ FrameStats ObserveFrames(const Ports& ports, Direction direction, const std::uin
                   {{"dir", direction == Direction::kServerToGame ? "server_to_game" : "game_to_server"},
                    {"name", name}, {"bytes", n}});
       }
-      if (direction == Direction::kServerToGame && ApplyServerMessage(ports, sym, payload, n, nowSeconds)) ++stats.consumed;
+      if (direction == Direction::kServerToGame) {
+        const char* why = "no_change";
+        if (ApplyServerMessage(ports, sym, payload, n, nowSeconds, &why)) {
+          ++stats.consumed;
+        } else if (const char* name = KnownName(sym)) {
+          // A social frame the observer recognised and changed nothing for: counted for the reporter, logged here
+          // (the network adapter's thread, not the game's).
+          NoteFrameIgnored();
+          LogFields(LogLevel::kWarn, "social_frame_ignored", {{"name", name}, {"why", why}, {"bytes", n}});
+        }
+      }
       p += kFrameHeaderBytes + n;
       remaining -= kFrameHeaderBytes + n;
     }

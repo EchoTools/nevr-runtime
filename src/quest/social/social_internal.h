@@ -53,6 +53,48 @@ struct EventBatch {
   PendingEvent events[kMaxPendingEvents];
 };
 
+// ---- party and member JSON ----------------------------------------------------------------------
+// The game's CJson functions (social_abi.h GameJson) are called only from social_game_calls.cpp. The facade side
+// builds a plan of POD operations, the game-call side runs it and records the outcome, and the facade side reads the
+// outcome back. Texts are pointers into strings the facade keeps alive until the next plan (the member and party
+// data it has loaded), so nothing with a destructor is live across a game call.
+
+inline constexpr std::uint8_t kJsonParty = 0xFF;  // JsonOp::slot of the party CJson (+0x1f0); 0..9 are member slots
+inline constexpr std::size_t kJsonOpSlots = kMemberJsonSlots + 1;
+
+enum JsonOpKind : std::uint8_t { kJsonNone, kJsonLoad, kJsonClear };
+
+struct JsonOp {
+  JsonOpKind kind;
+  std::uint8_t slot;
+  std::uint8_t ok;       // written by the game-call side: the game function returned 0
+  const char* text;      // kJsonLoad: the JSON text (not NUL-terminated)
+  std::uint64_t length;
+};
+
+struct JsonPlan {
+  GameJson game;
+  std::uint32_t count;
+  JsonOp ops[kJsonOpSlots];
+};
+
+inline constexpr std::size_t kShareBufferBytes = 16 * 1024;
+
+// The party and local-member data the game wrote, to be read out with EncodeToCompact and sent. The buffers belong to
+// the facade.
+struct ShareJob {
+  GameJson game;
+  std::uint8_t party;      // encode the party CJson
+  std::uint8_t member;     // encode the local member's CJson (member slot 0)
+  std::uint8_t partyOk;    // written by the game-call side: EncodeToCompact returned 0
+  std::uint8_t memberOk;
+  char* partyBuffer;
+  char* memberBuffer;
+  std::uint64_t capacity;  // kShareBufferBytes - 1: the NUL fits after the longest accepted text
+  std::uint64_t partySize;
+  std::uint64_t memberSize;
+};
+
 enum class JoinStep : std::uint8_t { kDeferred, kAskGate };
 
 // ---- implemented in social_facade.cpp: every one is noexcept and contains its own failures ---------
@@ -60,12 +102,20 @@ enum class JoinStep : std::uint8_t { kDeferred, kAskGate };
 // `self` is the object the game holds. A null or foreign object is answered with the neutral value.
 
 void TraceSlotCall(void* self, std::size_t slot) noexcept;
-void NoteCallbackDelivered(void* self) noexcept;
+// A callback of the game was just called: `callback` is its Callback index (social_abi.h).
+void NoteCallbackDelivered(void* self, std::size_t callback) noexcept;
 
 // Update, first half: the join the model deferred (returned, 0 if none), else the party-create decision.
 std::uint64_t UpdatePrepare(void* self, const void* params) noexcept;
-// Update, second half: publish the model, mirror the object fields, drain the events into `out`.
-void UpdateCollect(void* self, EventBatch* out) noexcept;
+// Update, second half: publish the model, mirror the object fields, drain the events into `out`, and plan the
+// party and member data the game's JSON must load (`json`).
+void UpdateCollect(void* self, EventBatch* out, JsonPlan* json) noexcept;
+// The plan has run: count and log what failed.
+void JsonApplied(void* self, const JsonPlan* json) noexcept;
+// After the callbacks: which of the game's written data has to be shared (party data the leader wrote, the local
+// member's data), then (after the game-call side encoded it) validate and send it.
+void ShareBegin(void* self, ShareJob* job) noexcept;
+void ShareFinish(void* self, const ShareJob* job) noexcept;
 // Update, last step: the host's joinable bit against the server's lock.
 void UpdateFinish(void* self) noexcept;
 

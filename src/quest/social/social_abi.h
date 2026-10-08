@@ -40,6 +40,33 @@ inline constexpr std::uint64_t kOvrSocialVptrVaddr = 0x6a1478ULL;
 using CJsonResetFn = void (*)(void* cjson);
 inline constexpr std::uint64_t kLibR15CJsonResetVaddr = 0xfa227cULL;
 
+// NRadEngine::CJson::DecodeFrom(char const*, unsigned long long) (libr15 export _ZN10NRadEngine5CJson10DecodeFromEPKcy,
+// 356 bytes at 0xfa7e8c): replaces the CJson's document with the JSON text of the given length (CJson::ResetCache and
+// CJson::Clear, then json_loadb) and returns 0, or an engine error id (CErrMsg::CreateAndAdd, so the game logs it)
+// when the text does not parse. An empty text leaves an empty document. The bytes are read, not kept.
+using CJsonDecodeFromFn = unsigned (*)(void* cjson, const char* text, unsigned long long length);
+inline constexpr std::uint64_t kLibR15CJsonDecodeFromVaddr = 0xfa7e8cULL;
+
+// NRadEngine::CJson::EncodeToCompact(char*, unsigned long long&, unsigned, char const*) const (libr15 export
+// _ZNK10NRadEngine5CJson15EncodeToCompactEPcRyjPKc, a 12-byte thunk at 0xfa7e64 to EncodeTo(char*, ull&, unsigned,
+// unsigned, char const*) at 0xfa7a38 with the fourth argument 0): writes the compact JSON text of the node at `path`
+// ("" is the whole document; an empty document is "{}") into `out`, whose capacity is *size on entry, and sets *size to
+// the text's length; returns 0, or an engine error id (CErrMsg::CreateAndAdd) when the text is longer than the capacity.
+// `sortKeys` nonzero sorts the object keys (json_dumps flag 0x80). The copy goes through CSysString::Copy with the
+// capacity as its limit, so a text exactly as long as the capacity may lose its last byte: callers treat *size ==
+// capacity as an overflow.
+using CJsonEncodeToCompactFn = unsigned (*)(const void* cjson, char* out, unsigned long long* size, unsigned sortKeys,
+                                            const char* path);
+inline constexpr std::uint64_t kLibR15CJsonEncodeToCompactVaddr = 0xfa7e64ULL;
+
+// The three game functions the facade calls on its CJson fields. nullptr: not known (libr15 absent or not the pinned
+// build), and then nothing is loaded, shared or freed.
+struct GameJson {
+  CJsonResetFn reset = nullptr;
+  CJsonDecodeFromFn decode = nullptr;
+  CJsonEncodeToCompactFn encode = nullptr;
+};
+
 // ---- the CNSISocial vtable ------------------------------------------------------------------
 
 // 76 slots. Quest numbering is the PCVR facade's numbering plus one from slot 12 on: the Itanium

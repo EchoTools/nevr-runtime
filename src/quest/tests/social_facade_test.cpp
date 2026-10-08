@@ -16,6 +16,7 @@
 #include "quest/social/social_abi.h"
 #include "quest/social/social_facade.h"
 #include "quest/social/social_frames.h"
+#include "quest/social/social_request_log.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
@@ -70,7 +71,7 @@ struct World {
     g_sendOk = true;
     g_sendThrows = false;
     g_now = 1000;
-    SetCJsonReset(nullptr);
+    SetGameJson(GameJson{});
     SocialNames::GlobalResolver().Reset();
     ResetFacadeCountersForTest();
     g_lines.clear();
@@ -307,6 +308,7 @@ void TestPartyCreateAndSlots() {
   FeedParty(w, "PartyCreateSuccess", 777, kSelf);
   Update(w, 0);
   QCHECK(Called("v" + std::to_string(kCbCreated)));
+  QCHECK(FacadeCountersView().cbCreated.load() == 1);  // the reporter shows a headset run PartyCreatedCB
   QCHECK(SlotFn<U32_0>(obj, kReady)(obj) == 1);
   QCHECK(SlotFn<U64_0>(obj, kId)(obj) == 777);
   QCHECK(SlotFn<U64_0>(obj, kHost)(obj) == kSelf);
@@ -320,7 +322,7 @@ void TestPartyCreateAndSlots() {
   QCHECK(Get32(obj, kOffMaxMembers) == kPartyMaxMembers);
   QCHECK(SlotFn<U64_U32>(obj, kLocalId)(obj, 0) == 0);
   QCHECK(SlotFn<U64_U32>(obj, kLocalId)(obj, 1) == 0xFFFFFFFFULL);  // pnsovr's value: 32-bit -1, zero-extended
-  QCHECK(SlotFn<U64_U32>(obj, kMemberDataWritable)(obj, 0) == 0);
+  QCHECK(SlotFn<U64_U32>(obj, kMemberDataWritable)(obj, 0) == Get64(obj, kOffMemberJson));  // the local member's CJson, for the game to write
 }
 
 void TestNoCreateBeforeLogin() {
@@ -358,6 +360,7 @@ void TestMembersJoinAndLeave() {
   FeedParty(w, "PartyJoinNotify", 777, 3003);
   Update(w, 0);
   QCHECK(Called("u" + std::to_string(kCbMemberJoined) + ":1"));
+  QCHECK(FacadeCountersView().cbMemberJoined.load() == 1);
   QCHECK(SlotFn<U32_0>(obj, kMemberCount)(obj) == 2);
   QCHECK(SlotFn<U64_U32>(obj, kMemberId)(obj, 1) == 3003);
   QCHECK(Get32(obj, kOffMemberCount) == 2);
@@ -413,6 +416,8 @@ void TestInvitesAndJoin() {
   Update(w, 0);
   QCHECK(Called("v" + std::to_string(kCbJoined)));
   QCHECK(Called("u" + std::to_string(kCbMemberJoined) + ":1"));
+  QCHECK(FacadeCountersView().cbOther.load() >= 2);  // PartyJoinedCB is counted with the other callbacks
+  QCHECK(FacadeCountersView().cbOther.load() >= 1);  // the accept gate, InviteReceived, ...
   QCHECK(SlotFn<U64_0>(obj, kId)(obj) == 556);
   QCHECK(SlotFn<U64_0>(obj, kHost)(obj) == 2002);
 
@@ -845,42 +850,327 @@ void TestDeferredJoinLogsOncePerParty() {
   QCHECK(FacadeCountersView().joinDeferred.load() >= 100);
 }
 
-int g_cjsonResetCalls = 0;
-void* g_cjsonResetArg = nullptr;
-void FakeCJsonReset(void* cjson) {
-  ++g_cjsonResetCalls;
-  g_cjsonResetArg = cjson;
+// A fake of the game's CJson: sixteen bytes whose first word points at the document text (a heap string; zero is the
+// empty document, which is what a zeroed CJson is). Decode replaces the document, Reset frees it, EncodeToCompact
+// writes it ("{}" when empty). A text with a "BAD" key does not load (the game refuses it).
+std::string* DocOf(const void* cjson) {
+  std::string* doc = nullptr;
+  std::memcpy(&doc, cjson, sizeof(doc));
+  return doc;
+}
+void SetDoc(void* cjson, const std::string& text) {
+  delete DocOf(cjson);
+  std::string* doc = new std::string(text);
+  std::memcpy(cjson, &doc, sizeof(doc));
+}
+std::string DocText(const void* cjson) {
+  const std::string* doc = DocOf(cjson);
+  return doc != nullptr ? *doc : std::string();
+}
+int g_fakeResets = 0;
+int g_fakeDecodes = 0;
+void* g_lastResetArg = nullptr;
+std::vector<void*> g_resetArgs;
+void FakeReset(void* cjson) {
+  ++g_fakeResets;
+  g_lastResetArg = cjson;
+  g_resetArgs.push_back(cjson);
+  delete DocOf(cjson);
+  std::memset(cjson, 0, 16);
+}
+unsigned FakeDecode(void* cjson, const char* text, unsigned long long length) {
+  ++g_fakeDecodes;
+  const std::string t(text, static_cast<std::size_t>(length));
+  if (t.find("\"BAD\"") != std::string::npos) return 7;
+  SetDoc(cjson, t);
+  // The slot's offset in the member array, to see which slot loaded, in order with the callbacks.
+  g_rec.calls.push_back("load:" + t);
+  return 0;
+}
+int g_encodeFails = 0;
+unsigned FakeEncode(const void* cjson, char* out, unsigned long long* size, unsigned, const char* path) {
+  if (g_encodeFails > 0 || path == nullptr || path[0] != '\0') return 9;
+  const std::string* doc = DocOf(cjson);
+  const std::string text = doc != nullptr ? *doc : std::string("{}");
+  if (text.size() > *size) return 1;
+  std::memcpy(out, text.data(), text.size());
+  *size = text.size();
+  return 0;
+}
+void UseFakeJson() {
+  GameJson json;
+  json.reset = &FakeReset;
+  json.decode = &FakeDecode;
+  json.encode = &FakeEncode;
+  SetGameJson(json);
+  g_fakeResets = 0;
+  g_fakeDecodes = 0;
+  g_lastResetArg = nullptr;
+  g_resetArgs.clear();
+  g_encodeFails = 0;
+}
+std::uint8_t* PartyJson(void* obj) { return static_cast<std::uint8_t*>(obj) + kOffPartyJson; }
+std::uint8_t* MemberJson(void* obj, std::size_t slot) {
+  std::uintptr_t base = 0;
+  std::memcpy(&base, static_cast<std::uint8_t*>(obj) + kOffMemberJson, sizeof(base));
+  return reinterpret_cast<std::uint8_t*>(base) + 16 * slot;
+}
+void FreeDocs(void* obj) {  // a test's own cleanup of the fake documents
+  delete DocOf(PartyJson(obj));
+  std::memset(PartyJson(obj), 0, 16);
+  for (std::size_t i = 0; i < kMemberJsonSlots; ++i) {
+    delete DocOf(MemberJson(obj, i));
+    std::memset(MemberJson(obj, i), 0, 16);
+  }
 }
 
-// CNSISocial::Reset clears the party CJson at +0x1f0 with CJson::Reset (libpnsovr 0x36a92c): the social object
-// owns it, so the old party's lobby settings must not outlive the party. The facade calls the game's own
-// function on it (it cannot free a tree it did not allocate), from social_game_calls.cpp.
+std::string DataNotifyPayload(std::uint64_t party, std::uint64_t member, std::uint32_t seq, const std::string& json) {
+  return Le(party, 8) + Le(member, 8) + Le(seq, 4) + Le(json.size(), 4) + json;
+}
+
+// CNSISocial::Reset clears the party CJson at +0x1f0 and every member CJson with CJson::Reset (libpnsovr 0x36a92c,
+// 0x36a974): the social object owns them, so the old party's lobby settings and the members' data must not outlive the
+// party. The facade calls the game's own function on all eleven (it cannot free a tree it did not allocate), from
+// social_game_calls.cpp.
 void TestResetCallsTheGamesCJsonReset() {
   World w;
   void* obj = w.Obj();
-  g_cjsonResetCalls = 0;
-  g_cjsonResetArg = nullptr;
-  SetCJsonReset(&FakeCJsonReset);
+  UseFakeJson();
   std::memset(static_cast<std::uint8_t*>(obj) + kOffLobbyUuid, 0xAB, 16);
+  SetDoc(PartyJson(obj), "{\"lobbyid\":\"x\"}");
+  SetDoc(MemberJson(obj, 0), "{\"headsettype\":1}");
   SlotFn<Void0>(obj, kReset)(obj);
-  QCHECK(g_cjsonResetCalls == 1);
-  QCHECK(g_cjsonResetArg == static_cast<void*>(static_cast<std::uint8_t*>(obj) + kOffPartyJson));
+  QCHECK(g_fakeResets == 1 + static_cast<int>(kMemberJsonSlots));
+  QCHECK(g_resetArgs.size() == 1 + kMemberJsonSlots && g_resetArgs[0] == static_cast<void*>(PartyJson(obj)));
+  for (std::size_t i = 0; i < kMemberJsonSlots && g_resetArgs.size() == 1 + kMemberJsonSlots; ++i) {
+    QCHECK(g_resetArgs[1 + i] == static_cast<void*>(MemberJson(obj, i)));
+  }
+  QCHECK(DocOf(PartyJson(obj)) == nullptr && DocOf(MemberJson(obj, 0)) == nullptr);  // freed by the game's function
   const std::uint8_t zero[16] = {};
   QCHECK(std::memcmp(static_cast<std::uint8_t*>(obj) + kOffLobbyUuid, zero, 16) == 0);  // Reset stores kInvalid (zero)
-  QCHECK(FacadeCountersView().cjsonResetUnavailable.load() == 0);
+  QCHECK(FacadeCountersView().jsonFailed.load() == 0);
   SlotFn<Void0>(obj, kReset)(obj);
-  QCHECK(g_cjsonResetCalls == 2);
+  QCHECK(g_fakeResets == 2 * (1 + static_cast<int>(kMemberJsonSlots)));
 
-  // The game's function is not known (libr15 absent or not the pinned build): the CJson is left alone, not
+  // The game's function is not known (libr15 absent or not the pinned build): the CJson are left alone, not
   // zeroed (that would leak the tree the game built), and the Reset is counted.
-  SetCJsonReset(nullptr);
+  SetGameJson(GameJson{});
   std::uint8_t pattern[16];
   for (int i = 0; i < 16; ++i) pattern[i] = static_cast<std::uint8_t>(0xA0 + i);
-  std::memcpy(static_cast<std::uint8_t*>(obj) + kOffPartyJson, pattern, 16);
+  std::memcpy(PartyJson(obj), pattern, 16);
+  const int before = g_fakeResets;
   SlotFn<Void0>(obj, kReset)(obj);
-  QCHECK(g_cjsonResetCalls == 2);
-  QCHECK(std::memcmp(static_cast<std::uint8_t*>(obj) + kOffPartyJson, pattern, 16) == 0);
-  QCHECK(FacadeCountersView().cjsonResetUnavailable.load() == 1);
+  QCHECK(g_fakeResets == before);
+  QCHECK(std::memcmp(PartyJson(obj), pattern, 16) == 0);
+  QCHECK(FacadeCountersView().jsonFailed.load() == 1);
+  std::memset(PartyJson(obj), 0, 16);
+}
+
+// The server's party and member data reaches the game's JSON, as on the PC: loaded before the callbacks fire (a
+// MemberJoined callback already finds the member's headsettype), then MemberUpdated for a member whose data changed
+// and Updated for the party's.
+void TestReceivedMemberDataIsLoadedBeforeTheCallbacks() {
+  World w;
+  UseFakeJson();
+  Init(w, MakeCallbacks());
+  CreateParty(w, 777);
+  void* obj = w.Obj();
+  g_rec.calls.clear();
+  // The data of a member the party has not heard of yet adds the member (MemberJoined), with its data.
+  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(777, 3001, 1, "{\"headsettype\":3}"));
+  Update(w, 0);
+  const std::string joined = "u" + std::to_string(kCbMemberJoined) + ":1";
+  const std::string updated = "u" + std::to_string(kCbMemberUpdated) + ":1";
+  QCHECK(g_rec.calls.size() == 3);
+  QCHECK(g_rec.calls.size() == 3 && g_rec.calls[0] == "load:{\"headsettype\":3}");  // loaded first
+  QCHECK(g_rec.calls.size() == 3 && g_rec.calls[1] == joined);
+  QCHECK(g_rec.calls.size() == 3 && g_rec.calls[2] == updated);
+  QCHECK(DocText(MemberJson(obj, 1)) == "{\"headsettype\":3}");  // the game reads member 1's data at +0x248 + 16
+  QCHECK(DocOf(MemberJson(obj, 2)) == nullptr);
+
+  // New data for the same member replaces it; the same data again changes nothing.
+  g_rec.calls.clear();
+  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(777, 3001, 2, "{\"headsettype\":4}"));
+  Update(w, 0);
+  QCHECK(DocText(MemberJson(obj, 1)) == "{\"headsettype\":4}");
+  QCHECK(CalledCount(updated) == 1);
+  g_rec.calls.clear();
+  Update(w, 0);
+  QCHECK(g_rec.calls.empty());
+
+  // The member leaves: its slot is cleared, and the member after it moves up with its data.
+  FeedParty(w, "PartyJoinNotify", 777, 3002);
+  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(777, 3002, 1, "{\"headsettype\":5}"));
+  Update(w, 0);
+  QCHECK(DocText(MemberJson(obj, 2)) == "{\"headsettype\":5}");
+  FeedParty(w, "PartyLeaveNotify", 777, 3001);
+  g_fakeResets = 0;
+  Update(w, 0);
+  QCHECK(DocText(MemberJson(obj, 1)) == "{\"headsettype\":5}");
+  QCHECK(DocOf(MemberJson(obj, 2)) == nullptr);
+  QCHECK(g_fakeResets == 1);
+  QCHECK(FacadeCountersView().jsonFailed.load() == 0);
+  FreeDocs(obj);
+}
+
+void TestPartyDataIsLoadedForAMemberNotForTheLeader() {
+  World w;
+  UseFakeJson();
+  Init(w, MakeCallbacks());
+  w.party.SetSelf(kSelf, "alice");
+  void* obj = w.Obj();
+  // Joined as a member of 2002's party: its party data goes to +0x1f0 and the game is told the party updated.
+  FeedParty(w, "PartyJoinSuccess", 556, 2002);
+  Update(w, 0);
+  g_rec.calls.clear();
+  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(556, 0, 1, "{\"lobbyid\":\"abc\"}"));
+  Update(w, 0);
+  QCHECK(DocText(PartyJson(obj)) == "{\"lobbyid\":\"abc\"}");
+  QCHECK(CalledCount("v" + std::to_string(kCbUpdated)) == 1);
+  QCHECK(Called("load:{\"lobbyid\":\"abc\"}"));
+
+  // As the leader, the server's party data is the leader's own: ignored, and counted as an ignored frame.
+  World l;
+  UseFakeJson();
+  Init(l, MakeCallbacks());
+  CreateParty(l, 777);
+  g_lines.clear();
+  Feed(l, SocialParty::kPartyDataNotify, DataNotifyPayload(777, 0, 1, "{\"lobbyid\":\"mine\"}"));
+  Update(l, 0);
+  QCHECK(DocOf(PartyJson(l.Obj())) == nullptr);
+  QCHECK(FacadeCountersView().framesIgnored.load() == 1);
+  QCHECK(CountLines("\"event\":\"social_frame_ignored\"") == 1 && CountLines("\"why\":\"party_data_own\"") == 1);
+  FreeDocs(obj);
+  FreeDocs(l.Obj());
+}
+
+void TestUnreadablePartyDataIsIgnoredAndSaysWhy() {
+  World w;
+  UseFakeJson();
+  CreateParty(w, 777);
+  g_lines.clear();
+  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(777, 3001, 1, "[1,2]"));  // not an object
+  Feed(w, SocialParty::kPartyDataNotify, Le(777, 8));                                // shorter than its header
+  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(999, 3001, 1, "{\"a\":1}"));  // another party
+  QCHECK(FacadeCountersView().framesIgnored.load() == 3);
+  QCHECK(CountLines("\"why\":\"party_data_not_a_json_object\"") == 1);
+  QCHECK(CountLines("\"why\":\"party_data_unreadable\"") == 1);
+  QCHECK(CountLines("\"why\":\"party_data_other_party\"") == 1);
+  Update(w, 0);
+  QCHECK(g_fakeDecodes == 0);
+}
+
+// Without the game's functions the data is held, counted once and loaded when they become known.
+void TestDataWaitsForTheGamesFunctions() {
+  World w;
+  Init(w, MakeCallbacks());
+  CreateParty(w, 777);
+  void* obj = w.Obj();
+  FeedParty(w, "PartyJoinNotify", 777, 3001);
+  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(777, 3001, 1, "{\"headsettype\":3}"));
+  g_lines.clear();
+  Update(w, 0);
+  Update(w, 0);
+  QCHECK(FacadeCountersView().jsonFailed.load() == 1);  // counted once, not every frame
+  QCHECK(CountLines("\"result\":\"game_json_unavailable\"") == 1);
+  UseFakeJson();
+  Update(w, 0);
+  QCHECK(DocText(MemberJson(obj, 1)) == "{\"headsettype\":3}");
+  FreeDocs(obj);
+}
+
+void TestARejectedLoadIsCounted() {
+  World w;
+  UseFakeJson();
+  Init(w, MakeCallbacks());
+  CreateParty(w, 777);
+  FeedParty(w, "PartyJoinNotify", 777, 3001);
+  Feed(w, SocialParty::kPartyDataNotify, DataNotifyPayload(777, 3001, 1, "{\"BAD\":1}"));
+  g_lines.clear();
+  g_rec.calls.clear();
+  Update(w, 0);
+  QCHECK(g_fakeDecodes == 1);
+  QCHECK(FacadeCountersView().jsonFailed.load() == 1);
+  QCHECK(CountLines("\"result\":\"load_failed\"") == 1);
+  QCHECK(!Called("u" + std::to_string(kCbMemberUpdated) + ":1"));  // no MemberUpdated for data the game refused
+}
+
+// What the game writes into the party and member CJson goes to the server: the leader's party data when the game marked
+// it written (flag bit 0), the local member's after MemberDataWritable handed it out; both once on entering a party.
+void TestWrittenDataIsSharedWithTheServer() {
+  World w;
+  UseFakeJson();
+  Init(w, MakeCallbacks());
+  w.party.SetSelf(kSelf, "alice");
+  void* obj = w.Obj();
+  QCHECK(SlotFn<U64_U32>(obj, kMemberDataWritable)(obj, 0) == 0);  // no local user yet
+  SlotFn<Void_U32>(obj, kAddMember)(obj, 0);
+  QCHECK(SlotFn<U64_U32>(obj, kMemberDataWritable)(obj, 1) == 0);  // only the local member's is writable
+  QCHECK(SlotFn<U64_U32>(obj, kMemberDataWritable)(obj, 0) == reinterpret_cast<std::uint64_t>(MemberJson(obj, 0)));
+  Update(w, 1);
+  FeedParty(w, "PartyCreateSuccess", 777, kSelf);
+  g_sent.clear();
+  Update(w, 0);  // entering the party shares both (the game's documents are empty: "{}")
+  const auto shared = [&](std::uint64_t scope) {
+    std::vector<std::string> texts;
+    for (const SocialParty::Message& m : g_sent) {
+      if (m.symbol != SocialParty::kPartyDataUpdateRequest) continue;
+      if (PayloadU64(m.payload, 0x20) != scope) continue;
+      texts.push_back(m.payload.substr(0x28 + 8));  // seq(4) length(4) then the text
+    }
+    return texts;
+  };
+  QCHECK(shared(SocialParty::kPartyDataScopeParty) == std::vector<std::string>{"{}"});
+  QCHECK(shared(SocialParty::kPartyDataScopeMember) == std::vector<std::string>{"{}"});
+
+  // The game writes the party data and marks it (bit 0): shared once, the bit cleared.
+  SetDoc(PartyJson(obj), "{\"lobbyid\":\"abc\"}");
+  const std::uint32_t flags = Get32(obj, kOffFlags) | kFlagDataWritten;
+  std::memcpy(static_cast<std::uint8_t*>(obj) + kOffFlags, &flags, sizeof(flags));
+  g_sent.clear();
+  Update(w, 0);
+  QCHECK(shared(SocialParty::kPartyDataScopeParty) == std::vector<std::string>{"{\"lobbyid\":\"abc\"}"});
+  QCHECK(shared(SocialParty::kPartyDataScopeMember).empty());
+  QCHECK((Get32(obj, kOffFlags) & kFlagDataWritten) == 0);
+  g_sent.clear();
+  Update(w, 0);
+  QCHECK(shared(SocialParty::kPartyDataScopeParty).empty());  // not again until the game marks it
+
+  // The game takes the member's JSON (slot 31) and writes the headset type: shared as the member's.
+  SetDoc(MemberJson(obj, 0), "{\"headsettype\":2}");
+  SlotFn<U64_U32>(obj, kMemberDataWritable)(obj, 0);
+  g_sent.clear();
+  Update(w, 0);
+  QCHECK(shared(SocialParty::kPartyDataScopeMember) == std::vector<std::string>{"{\"headsettype\":2}"});
+  QCHECK(shared(SocialParty::kPartyDataScopeParty).empty());
+
+  // A game JSON that cannot be read out is counted, and nothing is sent.
+  SlotFn<U64_U32>(obj, kMemberDataWritable)(obj, 0);
+  g_encodeFails = 1;
+  g_sent.clear();
+  Update(w, 0);
+  QCHECK(shared(SocialParty::kPartyDataScopeMember).empty());
+  QCHECK(FacadeCountersView().jsonFailed.load() == 1);
+  FreeDocs(obj);
+}
+
+void TestAMemberDoesNotShareThePartyData() {
+  World w;
+  UseFakeJson();
+  Init(w, MakeCallbacks());
+  w.party.SetSelf(kSelf, "alice");
+  void* obj = w.Obj();
+  FeedParty(w, "PartyJoinSuccess", 556, 2002);
+  Update(w, 0);
+  g_sent.clear();
+  SetDoc(PartyJson(obj), "{\"x\":1}");
+  const std::uint32_t flags = Get32(obj, kOffFlags) | kFlagDataWritten;
+  std::memcpy(static_cast<std::uint8_t*>(obj) + kOffFlags, &flags, sizeof(flags));
+  Update(w, 0);
+  for (const SocialParty::Message& m : g_sent) {
+    QCHECK(!(m.symbol == SocialParty::kPartyDataUpdateRequest && PayloadU64(m.payload, 0x20) == SocialParty::kPartyDataScopeParty));
+  }
+  FreeDocs(obj);
 }
 
 // A lock the sender refuses is asked again, but not every frame: the game calls Update once per frame and the
@@ -1038,6 +1328,7 @@ void TestRefusedInviteJoinKeepsTheInviteAndTellsTheGame() {
   QCHECK(w.party.Snapshot().invites.size() == 1);  // given back
   Update(w, 0);
   QCHECK(CalledCount("u" + std::to_string(kCbJoinFailed) + ":0") == 1);  // the game was told
+  QCHECK(FacadeCountersView().cbJoinFailed.load() == 1);
   QCHECK(SlotFn<U32_0>(obj, kInviteCount)(obj) == 1);
   // The retry (the same accept, or a join by party id) is the invite's accept to the inviter again.
   g_sendOk = true;
@@ -1209,6 +1500,13 @@ int main() {
   TestFailedSendsDoNotStickTheModel();
   TestDeferredJoinLogsOncePerParty();
   TestResetCallsTheGamesCJsonReset();
+  TestReceivedMemberDataIsLoadedBeforeTheCallbacks();
+  TestPartyDataIsLoadedForAMemberNotForTheLeader();
+  TestUnreadablePartyDataIsIgnoredAndSaysWhy();
+  TestDataWaitsForTheGamesFunctions();
+  TestARejectedLoadIsCounted();
+  TestWrittenDataIsSharedWithTheServer();
+  TestAMemberDoesNotShareThePartyData();
   TestRefusedLockIsRetriedOnABackoff();
   TestUnansweredCreateTimesOut();
   TestAnsweredCreateAndLockDoNotTimeOut();
