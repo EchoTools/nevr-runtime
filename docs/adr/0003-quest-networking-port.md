@@ -23,7 +23,7 @@ out of scope.
 import hook (`sentinel/got_hook.{h,cpp}`); it does not build the Windows runtime. The Android
 preset (`src/quest/CMakePresets.json`) uses the Quest-local vcpkg manifest, the `arm64-android`
 triplet and the NDK chainload at API 26. `nevr_quest_login_profile` compiles the shared login
-profile but is not linked into the sentinel.
+profile, and the sentinel links it through `nevr_quest_login`.
 
 Token auth is shared the same way. The token model, refresh handling and device-code loop are
 platform-neutral sources in `src/core/` (`auth_token_model.h`, `auth_refresh.{h,cpp}`,
@@ -70,8 +70,8 @@ them. `src/quest/auth/` holds the Android adapters:
     logs once and starts the device login again; other refresh failures keep the login and retry
     next period.
 
-`nevr_quest_token_auth` is not linked into the sentinel, and nothing yet hands the token to the
-login path. The tests are `src/quest/tests/auth_core_test.cpp` (fake HTTP and clock) and
+`nevr_quest_token_auth` is linked into the sentinel; `integration/production_steps.cpp` starts the
+session and `integration/identity_source.cpp` hands its token to the login rewrite. The tests are `src/quest/tests/auth_core_test.cpp` (fake HTTP and clock) and
 `src/quest/tests/tls_ca_test.cpp` (loopback TLS peers with a generated CA and an Android-style
 directory), run on the host by `just test-quest-shared`. Not established on a headset: the CA
 directories and the libcurl/OpenSSL stack, that the process name is the package name, write access
@@ -421,8 +421,9 @@ bytes, a pool refusal, an exception), logging the key name and a status token an
 redirected value it returns a pointer from the stable string pool, so the same value always maps to
 the same address for the rest of the process. The first sight of each distinct value runs the policy
 and may intern one string; up to 16 values are remembered, and the game's four built-in defaults are
-resolved when the hooks are installed, so the normal reads allocate nothing. The sentinel does not
-call `InstallRedirectHooks` yet. The caller's contract (also in `hook_adapter.h`): register the
+resolved when the hooks are installed, so the normal reads allocate nothing. The sentinel installs the
+redirect through `InstallRedirectHooksWith` (a bridge probe that reports the loopback listener) from
+`integration/production_steps.cpp`. The caller's contract (also in `hook_adapter.h`): register the
 counters before `StartReporter`; install from the sentinel's ELF constructor so it precedes
 `CR15NetGame::Initialize`, which reads `config_host` at `0x1286060` (a value read earlier stays as
 parsed; this rests on Bionic constructor ordering and is not tested on a headset); install
@@ -540,8 +541,8 @@ to work. A separate social package owns this.
 
 ## Hook activation
 
-`TryInstallLoginHook` has no caller yet and the only `IdentitySource` is the test fake; the
-sentinel does not install it. The install point is `libr15.so`'s `dlopen` import:
+`TryInstallLoginHook` is called by the sentinel from the post-load installs (section
+"Integration") with the token-auth `IdentitySource`. The install point is `libr15.so`'s `dlopen` import:
 `CSysModule::Load` (`0x2a9e16c`) calls `dlopen@plt` at `0x2a9e1ec` through the BIND_NOW
 `R_AARCH64_JUMP_SLOT` at `0x36c6380` (the only `dlopen` reference in `libr15.so`; `readelf -rW`
 lists one). A `GotHook` on that slot lets the sentinel run the `libpnsovr.so`-dependent installs
@@ -958,6 +959,71 @@ absent from the file. The only consumer is the install call above.
   code 4, friend rows are dropped silently, as they were on PCVR before the provider patch.
 - The packaged APK differs from the pinned one only if its `libr15.so`/`libpnsovr.so` hashes differ;
   the hook refuses on a build id mismatch.
+
+## Integration
+
+`src/quest/integration/` wires the packages above into the sentinel entry point. `entry.cpp` calls one
+function, `RunSentinelConstructor`, which runs the sequence in `ctor_sequence.cpp` over the real
+libraries (`production_steps.cpp`). The sequence is policy over an abstract `Steps`, so
+`tests/integration_sequence_test.cpp` drives it with fakes.
+
+**Order.** (1) crash reporter; (2) configuration (`InitActivation`); (3) every counter of every hook
+that will be installed; (4) the single `StartReporter`; (5) the clock hook; (6) token auth on its own
+thread; (7) the bridge (loopback listener and router); (8) the `CJson::TString` redirect on libr15;
+(9) the social facade; (10) the hook on libr15's `dlopen` slot. Counters are registered only for hooks
+that will be installed: clock 2, redirect 10, dlopen 2, social 10, 24 of the reporter's 32
+(`integration_hooks_test` pins the total against the real registration functions). The login thunk
+registers none (#237).
+
+**Dependencies.** A failed or skipped piece turns off what needs it and nothing else. Token auth
+failing turns off the bridge, the login hook, the social facade and the redirect; the bridge failing
+does the same. A redirect that points the game at a loopback port nobody listens on, or straight at a
+TLS endpoint the game cannot speak, is worse than the game's own hosts. Refused counters turn off only
+their own hook. Every step is contained: a `std::exception` from a step is a `threw` outcome and the
+sequence goes on. The constructor never waits on the network or on a thread; the only socket it opens
+is the loopback listener, because the redirect needs its port before the game reads `config_host`.
+
+**Login.** The router is built without a login builder. The Quest game sends its own `LoginRequest`
+through `CNSUser::SendLogInRequest`, and the login rewrite has already put the NEVR token, the NEVR
+account id (the id the token carries), platform code 4 and the game's own HMD serial into it; the
+router relays it as the first frame of the login session. A second, injected `LoginRequest` would give
+the service two logins on one session while the game still waits for its reply. The remote upgrade
+carries the token session's JWT as its Bearer; with no JWT the remote session is not started.
+
+**Post-load installs.** The hook on libr15's `dlopen` slot (`dlopen_hook.cpp`, JUMP_SLOT `0x36c6380`,
+measured in the store APK's `libr15.so`) calls the real `dlopen` and, for a non-null handle,
+`AfterDlopen` (`post_load.cpp`), which runs the login hook install and the matchmaking redirect install
+until each settles: `module_not_loaded` is retried after the next `dlopen`, anything else ends the
+action. The handler restores `errno`. `AfterDlopen` runs after the game's call has returned and calls
+no game code; it is marked `NEVR_OUTSIDE_GAME_CALL`.
+
+**Social.** `features.social` is read by `integration/social_gate.cpp` until the config package owns
+it (#235), and requires login. The bridge is `integrated_bridge.cpp`: the same composition as
+`SessionBridge` with decorators (`tapped_transports.cpp`) that show every relayed frame to
+`frame_tap.cpp`, which feeds `quest_social::ObserveFrames` and, on the service's `LoginSuccess`
+(account id at payload offset 24), `quest_social::SetLocalAccount`. The facade's requests go out
+through `SocialParty::SetSender` on a side channel that refuses until the login is accepted (#236).
+
+**Sensor annotation.** `NEVR_OUTSIDE_GAME_CALL` (`sentinel/outside_game_call.h`) places a function in the
+output section `nevr_outside_game_call`. `TestHookFramesCarryNoPersonality` reads that section from the
+built library: a function inside it is not checked and its callees are not followed from it, and every
+one the walk reaches is listed and compared with a reviewed list (`ComposePlan`, `AfterDlopen`). There
+is no name list in the sensor. The annotation asserts that the function calls no game code, lets no
+exception out and is not on the stack across a game call; a personality-bearing function that is live
+across a game call fails however it is marked. `frames_sensor_test.go` pins this with synthetic graphs
+and two linked probes (`frames_probe_ok`, `frames_probe_bad`).
+
+**Stage logs.** One structured line per stage, with a stable `event`, a `status` and a failure `class`
+(`stage_log.h`): `config_loaded`, `clock_hook_installed`, `token_auth_state`, `router_listening`,
+`redirect_installed`, `social_hook_installed`, `dlopen_hook_installed`, `libpnsovr_loaded`,
+`login_hook_installed`, `matchmaking_redirect_installed`, `router_remote_connected`,
+`router_remote_failed`, `login_rewritten`, `login_accepted`, `login_refused`. The hook backend's lines
+and the stage lines reach logcat (tag `NEVR-Sentinel`) and the on-disk `nevr-sentinel.log`.
+
+**Not run on a headset.** Everything in this section except the sentinel base (loader shim, Breakpad,
+clock hook) is built and host-tested only: the order of the constructor against the game's first config
+read, the `dlopen` hook, the login rewrite, token auth, the TLS connection to the service, and the
+social facade.
 
 ## Consequences
 
