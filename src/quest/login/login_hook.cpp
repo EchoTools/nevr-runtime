@@ -206,29 +206,22 @@ class LiveJson final : public JsonAccess {
   void* json_;
 };
 
-struct SendContext {
-  LoginThunk::Fn original;
-  void* user;
-  void* json;
-};
-
-void CallOriginal(void* context) {
-  const auto* send = static_cast<const SendContext*>(context);
-  send->original(send->user, send->json);
+// Runs the rewrite for one login. Its own frame owns the adapters (which have destructors); it
+// returns before the game's original is called, so the original never runs under a frame that
+// has cleanups. RewriteLoginNoThrow never throws; this translation unit is built
+// -fno-exceptions (CMake), as the GOT thunk contract requires.
+void RunRewrite(const State& state, void* user, void* json) noexcept {
+  LiveUser live_user(user, state.account_id_global, state.expected_vptr);
+  LiveJson live_json(state.api, json);
+  RewriteLoginNoThrow(live_user, live_json, *state.source, state.build, state.log);
 }
 
-// The handler behind the GOT slot. The original runs last and always, so a refused or failed
-// rewrite leaves the game's own login intact. RewriteAndSend never throws.
-void HandleSendLogInRequest(LoginThunk::Fn original, void* user, void* json) {
-  SendContext send{original, user, json};
+// The handler behind the GOT slot: rewrite, then the original, last and always, so a refused
+// or failed rewrite leaves the game's own login intact. It has no cleanup of its own.
+void HandleSendLogInRequest(LoginThunk::Fn original, void* user, void* json) noexcept {
   const State* state = g_published.load(std::memory_order_acquire);
-  if (state == nullptr || json == nullptr) {
-    CallOriginal(&send);
-    return;
-  }
-  LiveUser live_user(user, state->account_id_global, state->expected_vptr);
-  LiveJson live_json(state->api, json);
-  RewriteAndSend(live_user, live_json, *state->source, state->build, state->log, &CallOriginal, &send);
+  if (state != nullptr && json != nullptr) RunRewrite(*state, user, json);
+  original(user, json);
 }
 
 template <typename Fn>

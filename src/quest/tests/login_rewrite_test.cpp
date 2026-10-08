@@ -11,6 +11,7 @@
 #include <map>
 #include <new>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -717,6 +718,41 @@ void TestLogFailureAfterCommitKeepsTheRewrite() {
   QCHECK(user.global_account_id == kNevrAccount);
 }
 
+// The entry the thunk TU calls is noexcept: an exception from the identity source or the JSON
+// layer comes back as Outcome::Exception with everything as it was.
+class ThrowingSource final : public QuestLogin::IdentitySource {
+ public:
+  QuestLogin::IdentityStatus Fetch(QuestLogin::Identity&) override { throw std::runtime_error("source"); }
+};
+
+void TestNoThrowEntryContainsExceptions() {
+  {
+    FakeJson json;
+    SeedOculusLogin(json);
+    const nlohmann::json before = json.ToJson();
+    FakeUser user;
+    ThrowingSource source;
+    QCHECK(QuestLogin::RewriteLoginNoThrow(user, json, source, MakeBuild(), &CaptureLog) ==
+           QuestLogin::Outcome::Exception);
+    QCHECK(json.ToJson() == before);
+    QCHECK(user.global_account_id == 5551234);
+  }
+  for (int n = 0; n < 40; ++n) {
+    FakeJson json;
+    SeedOculusLogin(json);
+    const nlohmann::json before = json.ToJson();
+    json.throw_after = n;
+    FakeUser user;
+    FakeSource source;
+    source.identity = MakeIdentity();
+    const QuestLogin::Outcome out = QuestLogin::RewriteLoginNoThrow(user, json, source, MakeBuild(), &CaptureLog);
+    json.throw_after = -1;
+    if (out == QuestLogin::Outcome::Rewritten) break;
+    QCHECK(json.ToJson() == before);
+    QCHECK(user.global_account_id == 5551234);
+  }
+}
+
 void TestInvalidUtf8NameDoesNotThrow() {
   QuestLogin::Identity id = MakeIdentity();
   id.display_name = "bad\xff\xfe";
@@ -754,6 +790,7 @@ int main() {
   TestSecondRewrittenLoginKeepsTheNevrIdAndALaterDeclineRestoresOculus();
   TestParentThatIsNotAnObjectIsLeftAlone();
   TestLogFailureAfterCommitKeepsTheRewrite();
+  TestNoThrowEntryContainsExceptions();
   TestInvalidUtf8NameDoesNotThrow();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "login_rewrite_test: %d check(s) failed\n", quest_test::Failures());

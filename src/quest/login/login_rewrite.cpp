@@ -421,6 +421,20 @@ Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
   return outcome;
 }
 
+Outcome RewriteLoginNoThrow(UserAccess& user, JsonAccess& json, IdentitySource& source,
+                            const BuildInfo& build, LogFn log) noexcept {
+  try {
+    return RewriteLogin(user, json, source, build, log);
+  } catch (const std::exception&) {
+    // RewriteLogin handles its own std::exception; this is the last line before noexcept.
+    try {
+      user.RestoreAccountId();
+    } catch (const std::exception&) {
+    }
+    return Outcome::Exception;
+  }
+}
+
 Outcome RewriteAndSend(UserAccess& user, JsonAccess& json, IdentitySource& source,
                        const BuildInfo& build, LogFn log, SendFn send, void* context) {
   const Outcome outcome = RewriteLogin(user, json, source, build, log);

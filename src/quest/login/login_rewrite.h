@@ -215,6 +215,17 @@ enum class Outcome {
 
 const char* OutcomeName(Outcome outcome);
 
+// The entry the device adapter calls from a translation unit built -fno-exceptions (the GOT
+// thunk's contract, quest/sentinel/callback_thunk.h). It catches every std::exception inside
+// this exceptions-enabled translation unit and reports Outcome::Exception; it never lets one
+// escape. Residual: a non-std exception thrown by game code called from here (the CJson
+// functions and the virtual AccountID() of libpnsovr.so, which imports __cxa_throw) is not
+// caught (no catch-all, by repo rule) and, since the function is noexcept, ends in
+// std::terminate instead of unwinding through frames with a mixed personality. None of the
+// called game functions was observed to throw; that is inferred, not measured on a device.
+Outcome RewriteLoginNoThrow(UserAccess& user, JsonAccess& json, IdentitySource& source,
+                            const BuildInfo& build, LogFn log) noexcept;
+
 // Hands the actual send to the caller so the rewrite and the send form one unit: the account
 // id the rewrite installed is read by the sender through the virtual AccountID() and again by
 // CNSUser::LogInSuccessCB, which builds {platform word, AccountID()} and compares it with the

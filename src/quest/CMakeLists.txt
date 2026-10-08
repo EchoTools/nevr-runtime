@@ -75,6 +75,11 @@ if(TARGET nevr_quest_got_hook)
   target_include_directories(nevr_quest_login PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
   target_link_libraries(nevr_quest_login PUBLIC nlohmann_json::nlohmann_json PRIVATE nevr_quest_got_hook log dl)
   target_compile_options(nevr_quest_login PRIVATE -Wall -Wextra -Werror)
+  # The thunk handler and the install code are compiled without exception support so their
+  # frames carry no personality or LSDA (the contract in sentinel/callback_thunk.h); the
+  # rewrite itself (login_rewrite.cpp) keeps exceptions and is entered through the noexcept
+  # RewriteLoginNoThrow.
+  set_source_files_properties(login/login_hook.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
   # Android-linkable build of the host test (cannot execute on the build machine).
   add_executable(login_rewrite_test tests/login_rewrite_test.cpp)
