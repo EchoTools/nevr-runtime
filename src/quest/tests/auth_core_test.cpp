@@ -222,7 +222,7 @@ class FakeStore : public CredentialStore {
   }
   CachedAuthToken Last() {
     std::lock_guard<std::mutex> l(m_);
-    return saved.back();
+    return saved.empty() ? CachedAuthToken{} : saved.back();  // an empty record fails the check, not the run
   }
 
  private:
@@ -1323,7 +1323,7 @@ TEST(session_device_code_request_outage_that_clears_still_logs_in) {
   s.Stop();
 }
 
-TEST(session_a_4xx_device_code_request_is_not_retried) {
+TEST(session_a_4xx_device_code_request_gets_no_backoff_and_is_attempted_again_at_the_recovery_period) {
   FakeClock clock;
   FakeHttp http;
   FakeStore store;
@@ -1332,8 +1332,12 @@ TEST(session_a_4xx_device_code_request_is_not_retried) {
   Session s(TestConfig(), http, clock, store, presenter, nullptr);
   s.Start();
   CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
-  CHECK_EQ(http.Count("request"), 1);
-  CHECK_EQ(clock.Sleeps(), 0);
+  CHECK_EQ(http.Count("request"), 1);   // no fast retries ...
+  CHECK_EQ(clock.Sleeps(), 0);          // ... no backoff sleep was taken
+  clock.Allow(1);                       // the one wait left is the 300 s recovery period
+  CHECK(WaitUntil([&] { return http.Count("request") == 2; }));
+  CHECK_EQ(clock.Sleeps(), 1);
+  CHECK_EQ(presenter.presented.load(), 0);
   s.Stop();
 }
 
@@ -1671,6 +1675,93 @@ TEST(session_a_suspend_during_the_login_wait_stops_the_poll_of_a_dead_code) {
   CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
   CHECK_EQ(http.Count("poll"), 0);  // the dead code is not polled
   CHECK(log.All().find("timed out after 5 minutes") != std::string::npos);
+  s.Stop();
+}
+
+
+// ---------------------------------------------------------------- session: transitions between the paths
+TEST(session_recovery_with_no_cache_ends_in_a_device_login_when_the_network_returns) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;  // no cache
+  FakePresenter presenter;
+  auto up = std::make_shared<std::atomic<bool>>(false);
+  http.handler = [up](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (!*up) return NoTransport();
+    if (endpoint == "request") return Ok({{"code", "C"}});
+    return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 3600)}, {"refresh_token", "rt-new"},
+               {"refresh_token_expires_in", 2592000}});
+  };
+  SessionConfig cfg = TestConfig();
+  cfg.login_retry_delays = {seconds(1)};
+  Session s(cfg, http, clock, store, presenter, nullptr);
+  s.Start();
+  clock.Allow(1);  // the single backoff
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  CHECK_EQ(presenter.presented.load(), 0);
+  *up = true;
+  clock.Allow(2);  // recovery period, then the poll wait
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK_EQ(presenter.presented.load(), 1);
+  CHECK_EQ(store.Last().refresh_token, std::string("rt-new"));
+  s.Stop();
+}
+
+TEST(session_a_relogin_whose_request_is_refused_recovers_when_the_server_does) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  auto fixed = std::make_shared<std::atomic<bool>>(false);
+  auto logins = std::make_shared<std::atomic<int>>(0);
+  http.handler = [fixed, logins](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint == "request") return *fixed || logins->load() == 0 ? Ok({{"code", "C"}}) : Status(400);
+    const int n = ++*logins;
+    return Ok({{"status", "verified"}, {"access_token", MakeJwt(n == 1 ? kT0 + 400 : kT0 + 9000)},
+               {"refresh_token", n == 1 ? "rt-a" : "rt-b"}, {"refresh_token_expires_in", n == 1 ? 2000 : 2592000}});
+  };
+  Session s(TestConfig(), http, clock, store, presenter, nullptr);
+  s.Start();
+  clock.Allow(1);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  clock.Advance(2500);  // access and refresh token both dead
+  clock.Allow(1);       // one background period: the re-login's device request is refused (400)
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  CHECK_EQ(presenter.presented.load(), 1);  // no second prompt happened
+  *fixed = true;
+  clock.Allow(2);  // recovery period, then the poll wait
+  CHECK(WaitUntil([&] { return s.Token() == MakeJwt(kT0 + 9000); }));
+  CHECK_EQ(presenter.presented.load(), 2);
+  CHECK_EQ(store.Last().refresh_token, std::string("rt-b"));
+  s.Stop();
+}
+
+TEST(session_recovery_that_meets_a_refused_refresh_token_prompts_the_player) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  store.initial = CachedWithRefresh();
+  FakePresenter presenter;
+  auto state = std::make_shared<std::atomic<int>>(0);  // 0: outage, 1: the server refuses the token
+  http.handler = [state](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (*state == 0) return NoTransport();
+    if (endpoint == "refresh") return Status(401, R"({"message":"invalid or expired refresh token"})");
+    if (endpoint == "request") return Ok({{"code", "C"}});
+    return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 3600)}, {"refresh_token", "rt-new"},
+               {"refresh_token_expires_in", 2592000}});
+  };
+  SessionConfig cfg = TestConfig();
+  cfg.login_retry_delays = {};
+  Session s(cfg, http, clock, store, presenter, nullptr);
+  s.Start();
+  clock.Allow(2);  // pauses between the three refresh attempts
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  CHECK_EQ(presenter.presented.load(), 0);
+  *state = 1;
+  clock.Allow(2);  // recovery period, then the poll wait
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK_EQ(presenter.presented.load(), 1);
+  CHECK_EQ(store.Last().refresh_token, std::string("rt-new"));
   s.Stop();
 }
 

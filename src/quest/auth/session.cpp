@@ -311,7 +311,7 @@ Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
   // Nobody can see a link that was not delivered: stop rather than wait out the code.
   ops.show_open_failure = [](const std::string&, const std::string&, intptr_t) { return 0; };
   // The server answers "code unknown or expired" with a 200 (status "expired"). While the
-  // player holds a link, an outage (no connection, 5xx, 429) is waited out until the code's own
+  // player holds a link, an outage (no connection, 5xx, 408, 429, or a 200 the parser cannot read) is waited out until the code's own
   // deadline, polling no faster than the poll interval; any other 4xx ends the login.
   auto consecutive_failures = std::make_shared<int>(0);  // the poll op runs on this one worker thread
   ops.poll = [this, consecutive_failures](const std::string& code) {

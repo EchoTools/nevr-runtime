@@ -104,7 +104,7 @@ struct SessionConfig {
   std::chrono::seconds refresh_retry_pause{2};
   std::chrono::seconds background_period{60};
   // Failure handling, by what the failure says:
-  //  - transient (no connection, 5xx, 429, an unreadable response): the cached refresh or the
+  //  - transient (no connection, 5xx, 408, 429, an unreadable response): the cached refresh or the
   //    device-code request is retried after each of these pauses; the cached login is kept and
   //    the player is never prompted for it.
   //  - held (a 4xx that is not "this refresh token is refused": a wrong http_key, a missing RPC,
