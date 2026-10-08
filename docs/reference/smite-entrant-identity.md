@@ -22,8 +22,8 @@ matches. `Lobby::EntrantData::userId` is an `XPlatformId`, so comparing a UUID w
 | Handler | `0x140616870`, registered in `CNSLobby::RegisterHostCallbacks` (`0x14060f730`, registration at `0x14060fdcb`) | when an owner slot is set (`lobby+0x1F0 != -1`) it rejects a sender that is neither the local sentinel peer nor the owner's peer (`[NSLOBBY] smite entrant received from non-host non-owner peer`); otherwise logs `[NSLOBBY] smiting entrant in slot %llu` and calls `RemoveEntrant` (`0x140610700`) with the slot and the reason byte |
 | Slot space | `lobby+0x360`, element stride `0xD8` (`CNSLobby::SmiteEntrant`, `IMUL RAX,RDX,0xd8` at `0x14061665d`) | the slot is an index into this entrant array |
 
-So the runtime's output (a slot index) is what the game wants; only the lookup from `entrant_id` to the
-index is wrong.
+So the runtime's output is a slot index, which is what the game wants; the work is the lookup from
+`entrant_id` to that index.
 
 ## The identifier the game itself maps to a slot
 
