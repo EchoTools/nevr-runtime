@@ -220,6 +220,7 @@ ConnectResult CurlWsConnector::Connect(const ConnectRequest& request) {
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);  // worker thread: no SIGALRM resolver timeouts
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, config_.connectTimeoutSeconds);
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+  curl_easy_setopt(curl, CURLOPT_NOPROXY, "*");  // never route through a proxy named by the environment
   curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "wss");
   // Verification: always on. There is deliberately no code path that sets either of these to zero.
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);

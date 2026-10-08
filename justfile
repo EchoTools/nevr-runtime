@@ -724,23 +724,40 @@ verify:
         echo "Re-adding that tree recreates the two-copy split that let N48 ship half-implemented. Route the change to src/runtime/server/." >&2
         exit 1
     fi
-    # Quest remote transport (ADR 0003): TLS verification is part of the source, not a setting. The
-    # connector must pin peer and host verification on and the protocol allow-list to wss, and must not
-    # contain any option that relaxes verification or lets the connection leave the verified path.
-    # Comment-stripped (N99 spelling) and herestring-fed (N101).
+    # Quest remote transport (ADR 0003): TLS verification and routing are part of the source, not a setting.
+    # This sensor is a tripwire for an edit that relaxes them, NOT the guarantee: test-quest-tls drives the
+    # real connector against real servers and is what proves the behaviour. It is deliberately strict and
+    # literal-minded: comment-stripped (N99 spelling), herestring-fed (N101), case-insensitive on option
+    # names (libcurl's protocol strings are case-insensitive too), and it requires
+    #   (a) every curl_easy_setopt call to name its option with a CURLOPT_ literal, so no variable can
+    #       smuggle an option id past it;
+    #   (b) every CURLOPT_ name in the file to be on the allowlist below (anything else fails);
+    #   (c) each security-critical option to be set EXACTLY ONCE, with its required value.
     QTLS_RC=0; QTLS_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/quest/net/curl_ws_connector.cpp) || QTLS_RC=$?
     sensor_stage1 "Quest TLS verification" "src/quest/net/curl_ws_connector.cpp" "$QTLS_RC"
     sensor_nonempty "Quest TLS verification" "non-comment lines of src/quest/net/curl_ws_connector.cpp" "$QTLS_CODE"
-    for need in 'CURLOPT_CAINFO_BLOB' 'CURLOPT_SSL_VERIFYPEER, 1L' 'CURLOPT_SSL_VERIFYHOST, 2L' 'CURLOPT_PROTOCOLS_STR, "wss"' 'CURLOPT_FOLLOWLOCATION, 0L'; do
-        if ! grep -qF -- "$need" <<<"$QTLS_CODE"; then
-            echo "verify: FAIL — Quest TLS verification: curl_ws_connector.cpp no longer sets '$need'. The remote WebSocket must stay verified, wss-only and redirect-free (ADR 0003)." >&2
-            exit 1
-        fi
+    qtls_fail() { echo "verify: FAIL — Quest TLS verification: $1 (ADR 0003: the remote WebSocket stays verified, wss-only, proxy-free and redirect-free)." >&2; exit 1; }
+    QTLS_CALLS=$(grep -ciE 'curl_easy_setopt' <<<"$QTLS_CODE" || true)
+    QTLS_LITERAL=$(grep -ciE 'curl_easy_setopt\(curl,[[:space:]]*CURLOPT_[A-Z0-9_]+,' <<<"$QTLS_CODE" || true)
+    [ "$QTLS_CALLS" = "$QTLS_LITERAL" ] || qtls_fail "$QTLS_CALLS curl_easy_setopt line(s) but only $QTLS_LITERAL name their option with a direct CURLOPT_ literal"
+    if grep -qiE 'curl_easy_option|curl_easy_setopt[^(]' <<<"$QTLS_CODE"; then qtls_fail "curl_easy_option_* or an indirect curl_easy_setopt reference"; fi
+    QTLS_ALLOWED=" CURLOPT_URL CURLOPT_CONNECT_ONLY CURLOPT_HTTPHEADER CURLOPT_NOSIGNAL CURLOPT_CONNECTTIMEOUT CURLOPT_FOLLOWLOCATION CURLOPT_NOPROXY CURLOPT_PROTOCOLS_STR CURLOPT_SSL_VERIFYPEER CURLOPT_SSL_VERIFYHOST CURLOPT_SSLVERSION CURLOPT_CAINFO_BLOB "
+    QTLS_NAMES=$(grep -oiE 'CURLOPT_[A-Z0-9_]+' <<<"$QTLS_CODE" || true)
+    while IFS= read -r qtls_name; do
+        [ -n "$qtls_name" ] || continue
+        qtls_upper=$(tr '[:lower:]' '[:upper:]' <<<"$qtls_name")
+        case "$QTLS_ALLOWED" in *" $qtls_upper "*) ;; *) qtls_fail "option $qtls_name is not on the connector's allowlist" ;; esac
+        [ "$qtls_name" = "$qtls_upper" ] || qtls_fail "option name $qtls_name is not spelled in upper case"
+    done <<<"$QTLS_NAMES"
+    for pair in 'CURLOPT_SSL_VERIFYPEER|1L' 'CURLOPT_SSL_VERIFYHOST|2L' 'CURLOPT_PROTOCOLS_STR|"wss"' 'CURLOPT_FOLLOWLOCATION|0L' 'CURLOPT_NOPROXY|"\*"' 'CURLOPT_CAINFO_BLOB|&blob' 'CURLOPT_SSLVERSION|static_cast<long>\(CURL_SSLVERSION_TLSv1_2\)'; do
+        qtls_opt="${pair%%|*}"; qtls_val="${pair#*|}"
+        qtls_sets=$(grep -ciE "curl_easy_setopt\(curl,[[:space:]]*${qtls_opt}," <<<"$QTLS_CODE" || true)
+        qtls_good=$(grep -cE "curl_easy_setopt\(curl, ${qtls_opt}, ${qtls_val}\)" <<<"$QTLS_CODE" || true)
+        [ "$qtls_sets" = "1" ] || qtls_fail "$qtls_opt is set $qtls_sets time(s); it must be set exactly once"
+        [ "$qtls_good" = "1" ] || qtls_fail "$qtls_opt is not set to its required value"
     done
-    if grep -qE 'SSL_VERIFY(PEER|HOST|STATUS)[^;]*,[[:space:]]*0|CURLOPT_SSL_OPTIONS|CURLOPT_CAPATH|CURLOPT_PROXY|CURLOPT_FOLLOWLOCATION,[[:space:]]*[1-9]|CURLOPT_PROTOCOLS(_STR)?,[[:space:]]*"[^"]*ws,' <<<"$QTLS_CODE"; then
-        echo "verify: FAIL — Quest TLS verification: curl_ws_connector.cpp contains an option that relaxes verification or widens the protocol list (ADR 0003: no insecure mode)." >&2
-        exit 1
-    fi
+    QTLS_PROTO=$(grep -ciE 'CURLOPT_[A-Z_]*PROTO' <<<"$QTLS_CODE" || true)
+    [ "$QTLS_PROTO" = "1" ] || qtls_fail "$QTLS_PROTO protocol-related option(s); exactly one (CURLOPT_PROTOCOLS_STR) is allowed"
     # N111: the per-frame dispatcher, COMMENT-STRIPPED once and reused below.
     # `grep -q 'EnsureStackReserve()' tick.cpp` matches `// EnsureStackReserve();`
     # just as happily as the real call, so every one of these "the call site is
