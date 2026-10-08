@@ -265,12 +265,23 @@ test-auth-unit:
     #!/usr/bin/env bash
     set -euo pipefail
     unset VCPKG_ROOT
-    # A test binary that hangs must fail the gate, not block it: 124 is timeout's "timed out" status.
+    # A test binary that hangs or runs away must fail the gate, not block it or exhaust the machine:
+    # 124 is timeout's "timed out" status and 137 is a process killed by the memory cap. The cap
+    # (systemd user scope, MemoryMax=4G, no swap) applies when systemd-run exists; otherwise the run
+    # keeps only the time limit and says so.
     run_test() {
         local rc=0
-        timeout -k 10 900 wine "$1" || rc=$?
+        if command -v systemd-run >/dev/null; then
+            systemd-run --user --scope --quiet -p MemoryMax=4G -p MemorySwapMax=0 -- timeout -k 10 900 wine "$1" || rc=$?
+        else
+            echo "test-auth-unit: systemd-run not found; running $1 with the time limit only (no memory cap)" >&2
+            timeout -k 10 900 wine "$1" || rc=$?
+        fi
         if [[ "$rc" -eq 124 ]]; then
             echo "test-auth-unit: FAIL — $1 timed out after 900s" >&2
+            exit "$rc"
+        elif [[ "$rc" -eq 137 ]]; then
+            echo "test-auth-unit: FAIL — $1 killed: memory cap exceeded (MemoryMax=4G)" >&2
             exit "$rc"
         elif [[ "$rc" -ne 0 ]]; then
             echo "test-auth-unit: FAIL — $1 exited $rc" >&2

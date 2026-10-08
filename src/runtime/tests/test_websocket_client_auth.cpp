@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "runtime/server/websocket_client.h"
+#include "runtime/tests/test_log_cap.h"
 
 namespace {
 std::mutex g_logMutex;
@@ -44,7 +45,7 @@ VOID Log(EchoVR::LogLevel, const CHAR* format, ...) {
   std::vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
   std::lock_guard<std::mutex> lock(g_logMutex);
-  g_logLines.emplace_back(buffer);
+  TestLogCap::Append(g_logLines, buffer);
 }
 
 namespace {
@@ -219,6 +220,27 @@ std::string UriFor(const ScriptedUpgradeServer& server) {
 }
 
 }  // namespace
+
+// The log sink is capped: a loop that logs on every pass ends the process instead of growing the sink until
+// memory runs out. The handler is replaced here to observe the overflow.
+static size_t g_capOverflowCalls = 0;
+static void CountCapOverflow(size_t) { ++g_capOverflowCalls; }
+
+TEST(WebSocketClientAuth, ASpinningLoggerStopsGrowingTheLogSinkAtTheCap) {
+  ClearLog();
+  g_capOverflowCalls = 0;
+  TestLogCap::g_overflowHandler = CountCapOverflow;
+  for (size_t i = 0; i < TestLogCap::kMaxLines + 20; ++i) Log(EchoVR::LogLevel::Info, "spin %zu", i);
+  TestLogCap::g_overflowHandler = TestLogCap::EndProcessOnOverflow;
+  size_t held = 0;
+  {
+    std::lock_guard<std::mutex> lock(g_logMutex);
+    held = g_logLines.size();
+  }
+  ClearLog();
+  EXPECT_EQ(held, TestLogCap::kMaxLines);
+  EXPECT_EQ(g_capOverflowCalls, 20u);
+}
 
 // The library behaviour the fix depends on, pinned: with nothing to replace it,
 // every automatic reconnect presents the header stored at Connect — including
