@@ -542,7 +542,7 @@ What the integration commit calls, and when:
    be live before `CR15NetGame::Initialize` reaches 0x12866a4 (inside `CR15Game::Initialize`, after the
    providers are created); a constructor install is always earlier.
 2. **Order against the other hooks.** None is required. The login hook (#221) is installed from a libr15
-   dlopen JUMP_SLOT (0x36c6380, per `login_hook.h` on that branch; not in this tree) and needs libpnsovr
+   dlopen JUMP_SLOT (0x36c6380, from that branch's login hook source; not in this tree) and needs libpnsovr
    loaded (`CSysModule::Load`, libr15 0x2a9e16c); the matchmaking redirect is on
    libpnsradmatchmaking's GOT and needs that library, which `CNSLobby::LoadMatchmakingSupport` loads at
    the lobby stage; the config-string hooks are on libr15 and libpnsradmatchmaking. Different modules,
