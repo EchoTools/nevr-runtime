@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Throwaway WebSocket echo server for the Quest TLS host test (just test-quest-tls).
 
 TLS mode:   tls_ws_server.py tls <cert.pem> <key.pem> <port-file>

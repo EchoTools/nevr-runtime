@@ -493,7 +493,7 @@ test-quest-router:
 # server src/quest/tests/tls_ws_server.py. A chain that verifies connects; a wrong CA, a wrong host
 # name, a self-signed leaf, an empty trust store and a non-TLS server each fail; ws:// is refused; the
 # plaintext server never sees an upgrade request. Needs openssl, python3 and libcurl development files
-# (pkg-config libcurl) on the host. Fail-close: a missing tool exits nonzero.
+# (pkg-config libcurl) and libssl/libcrypto on the host. Fail-close: a missing tool exits nonzero.
 test-quest-tls:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -507,7 +507,7 @@ test-quest-tls:
     g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc $(pkg-config --cflags libcurl) \
         src/quest/net/curl_ws_connector.cpp src/quest/net/remote_ws.cpp src/quest/auth/ca_bundle.cpp \
         src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp src/quest/tests/curl_ws_tls_test.cpp \
-        -o "$out/curl_ws_tls_test" $(pkg-config --libs libcurl)
+        -o "$out/curl_ws_tls_test" $(pkg-config --libs libcurl) -lssl -lcrypto
     cd "$out"
     mk_ca() { # name
         openssl req -x509 -newkey rsa:2048 -nodes -keyout "$1.key" -out "$1.pem" -subj "/CN=$1" -days 2 \
