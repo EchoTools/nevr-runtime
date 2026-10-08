@@ -413,6 +413,15 @@ test-quest-shared:
         -o "$out/service_redirect_test"
     "$out/service_redirect_test"
     echo "test-quest-shared: all redirect vectors pass on the host"
+    # Quest login rewrite: the portable half (src/quest/login/login_rewrite.cpp) plus the
+    # shared PCVR login builder, run against a fake CJson. The Android adapter
+    # (login_hook.cpp) cannot run on the host; build-android compiles it.
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
+        src/quest/login/login_rewrite.cpp \
+        src/runtime/compat/login_profile.cpp \
+        src/quest/tests/login_rewrite_test.cpp \
+        -o "$out/login_rewrite_test"
+    "$out/login_rewrite_test"
 
 # --- Verify (closed-loop gate) ---
 

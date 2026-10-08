@@ -34,6 +34,21 @@ add_library(nevr_quest_login_profile STATIC
 target_include_directories(nevr_quest_login_profile PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(nevr_quest_login_profile PRIVATE nlohmann_json::nlohmann_json)
 
+# Quest login rewrite: portable decision code + the Android adapter that hooks
+# CNSUser::SendLogInRequest in libpnsovr.so through the GOT import hook backend.
+add_library(nevr_quest_login STATIC
+  login/login_rewrite.cpp
+  login/login_hook.cpp
+  "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/login_profile.cpp")
+target_include_directories(nevr_quest_login PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(nevr_quest_login PUBLIC nlohmann_json::nlohmann_json PRIVATE log dl)
+target_compile_options(nevr_quest_login PRIVATE -Wall -Wextra -Werror)
+
+# Android-linkable build of the host test (cannot execute on the build machine).
+add_executable(login_rewrite_test tests/login_rewrite_test.cpp)
+target_link_libraries(login_rewrite_test PRIVATE nevr_quest_login)
+target_compile_options(login_rewrite_test PRIVATE -Wall -Wextra -Werror)
+
 # Compile the exact redirect policy source used by the Windows runtime.
 add_library(nevr_quest_service_redirect STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/lifecycle/service_redirect.cpp")
