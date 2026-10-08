@@ -24,16 +24,19 @@ target_link_libraries(nevr_quest_got_hook PUBLIC log dl)
 
 add_library(ovrplatformloader SHARED
   entry.cpp
-  sentinel.cpp)
+  sentinel.cpp
+  sentinel_log.cpp
+  activation.cpp)
 
 # Emit libovrplatformloader.so (CMake adds the lib prefix + .so suffix).
 set_target_properties(ovrplatformloader PROPERTIES OUTPUT_NAME ovrplatformloader)
 
 target_include_directories(ovrplatformloader PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_BINARY_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/breakpad/src)
 
-target_link_libraries(ovrplatformloader PRIVATE nevr_quest_got_hook breakpad_client log dl)
+target_link_libraries(ovrplatformloader PRIVATE nevr_quest_got_hook nevr_quest_config breakpad_client log dl)
 
 # The hook path (entry.cpp: the thunk entry and the handler it calls) is compiled
 # without exception support so its frames carry no personality or LSDA; see the
