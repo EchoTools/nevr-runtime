@@ -238,6 +238,28 @@ inline constexpr std::array<const char*, kSlotCount> kSlotNames = {
     "CNSOVRSocial13DismissInviteEj",
 };
 
+// ---- provider identity ------------------------------------------------------------------------
+
+// The game turns the social provider's symbol into the platform code its friend and user ids carry
+// (CR15NetGame::FriendId, libr15 0x129b6f8: `CNSProvider::UserProviderID(netGame + 0x10)` compared in turn with seven
+// CSymbol64 constants; the match picks the code, no match gives 0). The constants are CSymbol64 hashes (abi/symbol_hash.h)
+// stored in libr15's rodata: "OVR" at 0x2ba11c0 -> code 4, "PSN" at 0x2ba2428 -> 2, "DMO" at 0x2ba1260 -> 7, and
+// 0x2ba2418 -> 1, 0x2ba2440 -> 3, 0x2ba2450 -> 16, 0x2ba2468 -> 6 (social_pinned_test reads them). pnsovr's own
+// SNSUserID constructor and OpenFriendRequestUI compare the same "OVR" constant (libpnsovr 0x5568e0) and make code 4.
+inline constexpr std::uint64_t kProviderSymbolOvr = 0xc8e8d0b1a89ff4f8ULL;  // CSymbol64("OVR")
+inline constexpr std::uint32_t kPlatformCodeOvr = 4;
+struct ProviderConstant {
+  std::uint64_t libr15Vaddr;  // where libr15 keeps the constant
+  std::uint32_t platformCode;
+};
+inline constexpr std::array<ProviderConstant, 7> kProviderConstants = {{
+    {0x2ba2418ULL, 1}, {0x2ba2428ULL, 2}, {0x2ba2440ULL, 3}, {0x2ba11c0ULL, 4},
+    {0x2ba1260ULL, 7}, {0x2ba2450ULL, 16}, {0x2ba2468ULL, 6}}};
+
+// libpnsovr's exported UserProviderID (0x206710) and ProviderID (0x206704) both return the 64-bit word at 0x70e380 (.bss,
+// ELF vaddr): the provider symbol pnsovr registers. The facade reads that word, never calls the function.
+inline constexpr std::uint64_t kPnsovrProviderSymbolVaddr = 0x70e380ULL;
+
 // ---- the object -----------------------------------------------------------------------------
 
 // pnsovr's InitGlobals allocates 0xbb0 bytes for the CNSOVRSocial (libpnsovr 0x207384).

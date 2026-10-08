@@ -196,6 +196,15 @@ void CheckGameFunctions(const LoadedElf& r15) {
     std::memcpy(&first, r15.At(encode->st_value), sizeof(first));
     QCHECK(first == 0xaa0403e5U);
   }
+  // The provider constants FriendId compares (see social_abi.h): seven CSymbol64 words in libr15's rodata, and "OVR" is
+  // the one that gives platform code 4.
+  for (const quest_social::ProviderConstant& c : quest_social::kProviderConstants) {
+    std::uint64_t value = 0;
+    std::memcpy(&value, r15.At(c.libr15Vaddr), sizeof(value));
+    if (c.platformCode == quest_social::kPlatformCodeOvr) QCHECK(value == quest_social::kProviderSymbolOvr);
+    else QCHECK(value != quest_social::kProviderSymbolOvr);
+  }
+  QCHECK(quest_social::kProviderConstants[3].platformCode == 4 && quest_social::kProviderConstants[3].libr15Vaddr == 0x2ba11c0ULL);
   // The production resolver, on the real image, lands on those addresses.
   g_lookupImage = &r15.image;
   const quest_social::GameJson json = quest_social::ResolveGameJson(&LookupFixed);
@@ -223,6 +232,27 @@ void CheckGameFunctions(const LoadedElf& r15) {
       }
     }
     QCHECK(inBss);
+  }
+}
+
+void CheckPnsovrProvider(const LoadedElf& ovr) {
+  // pnsovr's provider symbol word is in .bss (zero in the file; written at run time), and both exports read it.
+  {
+    bool inBss = false;
+    for (const Elf64_Phdr& ph : ovr.phdrs) {
+      if (ph.p_type == PT_LOAD && quest_social::kPnsovrProviderSymbolVaddr >= ph.p_vaddr + ph.p_filesz &&
+          quest_social::kPnsovrProviderSymbolVaddr + 8 <= ph.p_vaddr + ph.p_memsz) {
+        inBss = true;
+      }
+    }
+    QCHECK(inBss);
+    Dynamic ovrDyn;
+    QCHECK(ReadDynamic(ovr, &ovrDyn));
+    const Elf64_Sym* userProvider = FindSymbol(ovrDyn, "UserProviderID");
+    QCHECK(userProvider != nullptr && userProvider->st_value == 0x206710ULL);
+    std::uint32_t first = 0;
+    if (userProvider != nullptr) std::memcpy(&first, ovr.At(userProvider->st_value), sizeof(first));
+    QCHECK(first == 0xb0000f48U || (first & 0x9f000000U) == 0x90000000U);  // adrp x8, 0x70e000
   }
 }
 
@@ -262,6 +292,7 @@ int main(int argc, char** argv) {
   CheckBuildId(r15, pinned::kLibR15BuildId);
   CheckBuildId(ovr, quest_social::kLibPnsovrBuildId);
   CheckGameFunctions(r15);
+  CheckPnsovrProvider(ovr);
 
   // libr15's slot for CNSProvider::Social: pinned, and the only one for the symbol.
   const GotTarget target = quest_social::LibR15Social();

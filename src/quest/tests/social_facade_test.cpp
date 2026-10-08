@@ -243,6 +243,34 @@ void TestObjectShape() {
   QCHECK(Get64(obj, kOffLobbyMatchType) == UINT64_MAX);
 }
 
+// The game turns the provider symbol into the platform code friend ids carry; Initialize says once whether pnsovr's
+// symbol is the one that makes the code the login carries (4), because a mismatch drops friend rows silently.
+void TestInitializeChecksTheProviderIdentity() {
+  {
+    World w;
+    SetPnsovrBias(0);
+    g_lines.clear();
+    Init(w, MakeCallbacks());
+    QCHECK(CountLines("\"event\":\"social_provider\"") == 1 && CountLines("\"result\":\"pnsovr_not_selected\"") == 1);
+  }
+  const auto run = [](std::uint64_t symbol) {
+    World w;
+    std::uint64_t word = symbol;  // stands for pnsovr's .bss word at bias + 0x70e380
+    SetPnsovrBias(reinterpret_cast<std::uintptr_t>(&word) - static_cast<std::uintptr_t>(kPnsovrProviderSymbolVaddr));
+    g_lines.clear();
+    Init(w, MakeCallbacks());
+    Init(w, MakeCallbacks());  // only the first Initialize reports
+    SetPnsovrBias(0);
+  };
+  run(kProviderSymbolOvr);
+  QCHECK(CountLines("\"event\":\"social_provider\"") == 1);
+  QCHECK(CountLines("\"symbol\":\"0xc8e8d0b1a89ff4f8\"") == 1 && CountLines("\"match\":\"yes\"") == 1);
+  QCHECK(CountLines("\"game_platform_code\":4") == 1 && CountLines("\"login_platform_code\":4") == 1);
+  run(0x1122334455667788ULL);  // some other provider (here: not the Oculus one)
+  QCHECK(CountLines("\"match\":\"NO_friend_rows_would_be_dropped\"") == 1 && CountLines("\"game_platform_code\":0") == 1);
+  QCHECK(CountLines("\"level\":\"warn\"") >= 1);
+}
+
 void TestInitializeAndShutdown() {
   World w;
   const auto callbacks = MakeCallbacks();
@@ -1476,6 +1504,7 @@ int main() {
   std::atexit(&CheckInstanceSurvivesExit);
   const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLog);
   TestObjectShape();
+  TestInitializeChecksTheProviderIdentity();
   TestInitializeAndShutdown();
   TestFriendRoster();
   TestPartyCreateAndSlots();

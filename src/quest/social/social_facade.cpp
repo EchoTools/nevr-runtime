@@ -55,6 +55,7 @@ std::atomic<std::uint64_t> g_sendFailed{0};
 std::atomic<std::uint64_t> g_joinDeferred{0};
 std::atomic<std::uint64_t> g_requestTimeout{0};
 // The game's CJson functions (SetGameJson), read on the game's thread.
+std::atomic<std::uintptr_t> g_pnsovrBias{0};
 std::atomic<CJsonResetFn> g_cjsonReset{nullptr};
 std::atomic<CJsonDecodeFromFn> g_cjsonDecode{nullptr};
 std::atomic<CJsonEncodeToCompactFn> g_cjsonEncode{nullptr};
@@ -517,6 +518,27 @@ void SlotSetJoinableInternal(void* self, std::uint32_t joinable) {
   RequestLock(*OwnerOf(self), joinable == 0, false);
 }
 
+// Once, when the game takes the facade: the provider symbol pnsovr registered, the platform code the game derives from it
+// for friend ids (CR15NetGame::FriendId) and the code the login carries. If they differ every friend row would carry
+// another platform than the one the server keys accounts by, and the game drops such rows silently.
+void LogProviderIdentity() {
+  const std::uintptr_t bias = g_pnsovrBias.load(std::memory_order_acquire);
+  if (bias == 0) {
+    LogFields(LogLevel::kInfo, "social_provider", {{"result", "pnsovr_not_selected"}});
+    return;
+  }
+  std::uint64_t symbol = 0;
+  std::memcpy(&symbol, reinterpret_cast<const void*>(bias + static_cast<std::uintptr_t>(kPnsovrProviderSymbolVaddr)),
+              sizeof(symbol));
+  const bool ovr = symbol == kProviderSymbolOvr;
+  char hex[19];
+  LogFields(ovr ? LogLevel::kInfo : LogLevel::kWarn, "social_provider",
+            {{"symbol", sentinel::HexString(hex, symbol)},
+             {"game_platform_code", ovr ? static_cast<long long>(kPlatformCodeOvr) : 0LL},
+             {"login_platform_code", static_cast<long long>(kPlatformCodeOvr)},
+             {"match", ovr ? "yes" : "NO_friend_rows_would_be_dropped"}});
+}
+
 std::int32_t SlotInitialize(void* self, std::uint32_t maxUsers, const void* callbacks) {
   Impl& impl = *OwnerOf(self);
   if (callbacks != nullptr) {
@@ -527,6 +549,7 @@ std::int32_t SlotInitialize(void* self, std::uint32_t maxUsers, const void* call
   const std::uint32_t calls = impl.initializeCalls.fetch_add(1, std::memory_order_relaxed) + 1;
   LogFields(LogLevel::kInfo, "social_initialize",
             {{"max_users", maxUsers}, {"callbacks", callbacks != nullptr ? "given" : "null"}, {"calls", calls}});
+  if (calls == 1) LogProviderIdentity();
   return 0;
 }
 
@@ -1336,6 +1359,8 @@ const Ports& ProductionPorts() {
   }();
   return ports;
 }
+
+void SetPnsovrBias(std::uintptr_t loadBias) noexcept { g_pnsovrBias.store(loadBias, std::memory_order_release); }
 
 void SetGameJson(const GameJson& json) noexcept {
   g_cjsonReset.store(json.reset, std::memory_order_release);

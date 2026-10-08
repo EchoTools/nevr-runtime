@@ -113,6 +113,7 @@ void* SelectSocialObject(void* original, void* facadeObject, PnsovrLookup lookup
     Count(g_foreignObject);
     return original;
   }
+  SetPnsovrBias(pnsovr.loadBias);  // the facade's Initialize checks pnsovr's provider symbol against the login's platform
   Count(g_selected);
   return facadeObject;
 }
