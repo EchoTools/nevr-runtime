@@ -229,13 +229,23 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    logging dependency; `ws_bridge.cpp` and `src/quest` compile the same file, and Quest does not
    copy that assembly. A reviewed serializer and a server-parser round trip remain open. The platform numbering the bridge sends
    is the server's wire enum; Quest identity values need binary or API evidence.
-3. **Session routing.** A pure state machine takes game-side and remote open/frame/close events
-   and returns send, close and log actions. Connections have explicit identities so a
-   reconnect never confuses a new login with matchmaking. The Windows topology is preserved:
-   separate game-facing EVR sockets, with the matchmaker connection attached to the
-   authenticated remote EVR login session. Queueing, once-per-session login injection,
-   callback lifetime and close propagation are requirements. Adapters own sockets, threads and
-   TLS. No token, password, full login frame or credential URL is logged.
+3. **Session routing.** `src/runtime/compat/session_router.{h,cpp}` is the platform-neutral router:
+   no Windows or Winsock headers, no sockets, no threads. Game-side and remote open/frame/close
+   events go in; the router owns connection identity (config, login, matchmaker numbered in
+   arrival order, matchmakers attached to the login session), once-per-session login injection
+   ahead of the frames the game queued, frame order, size limits, bounded queues and
+   backpressure, and, when a remote session ends, the close of every game socket on it plus
+   forgetting the session so the next connection is a new login. The game transport, the remote
+   transport, the login-frame builder and the log sink are injected; the router calls none of
+   them under its lock. No token, password, full login frame or credential URL is logged.
+   `src/quest/net/` holds the Android adapters: `loopback_game_server` (a POSIX WebSocket
+   server on an ephemeral 127.0.0.1 port, RFC 6455 in `ws_wire`), `remote_ws` (the remote
+   transport and its policy: `wss://` only, one connect attempt per session, no retry and no
+   downgrade after a failure) over `curl_ws_connector` (libcurl from the Quest vcpkg manifest
+   with peer and host verification always on, TLS 1.2 or later, and trust loaded from the Android
+   CA directories into an in-memory `CURLOPT_CAINFO_BLOB` by the loader token auth uses), and `session_bridge`, which
+   composes them and reports the loopback port that `nevr_cfg::ResolveRedirect` needs. The
+   Windows `ws_bridge.cpp` does not use the router yet; it keeps its own copy of these rules.
 4. **Game hooks.** The Android adapter records the ELF build ID or SHA-256, module and load
    bias, validates each instruction, string and relocation, then installs a typed callback.
    Callbacks use bounded copies, preserve object ownership and return semantics, never throw

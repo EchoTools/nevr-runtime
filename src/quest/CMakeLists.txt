@@ -155,3 +155,6 @@ if(TARGET nevr_quest_got_hook)
 
 endif()
 
+# ── Session router + loopback transport (ADR 0003, contract 3) ───────────
+# Kept in its own subdirectory so it merges cleanly alongside the other Quest packages.
+add_subdirectory(net)

@@ -493,6 +493,87 @@ test-quest-shared:
     "$out/login_rewrite_test"
     echo "test-quest-shared: all redirect and EVR codec vectors pass on the host"
 
+# Shared EVR session router and the Quest loopback transport on the host. Plain g++, no NDK,
+# fail-close:
+#   session_router_test        the router state machine through fake transports (login ordering,
+#                              remote close, limits, backpressure)
+#   ws_wire_test               RFC 6455 handshake and frame decoder under partial reads and bad input
+#   loopback_game_server_test  the real loopback server + router + a raw TCP "game" client
+#   remote_ws_test             the remote transport policy (wss only, one attempt, no downgrade) and
+#                              worker through a fake connector and the real router
+test-quest-router:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-router-host"
+    mkdir -p "$out"
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc)
+    "${cxx[@]}" src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp \
+        src/quest/tests/session_router_test.cpp -o "$out/session_router_test"
+    "$out/session_router_test"
+    "${cxx[@]}" src/quest/net/ws_wire.cpp src/quest/tests/ws_wire_test.cpp -o "$out/ws_wire_test"
+    "$out/ws_wire_test"
+    "${cxx[@]}" src/quest/net/ws_wire.cpp src/quest/net/loopback_game_server.cpp \
+        src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp \
+        src/quest/tests/loopback_game_server_test.cpp -o "$out/loopback_game_server_test"
+    "$out/loopback_game_server_test"
+    "${cxx[@]}" src/quest/net/remote_ws.cpp src/runtime/compat/session_router.cpp \
+        src/runtime/compat/evr_codec.cpp src/quest/tests/remote_ws_test.cpp -o "$out/remote_ws_test"
+    "$out/remote_ws_test"
+    echo "test-quest-router: router, WebSocket wire, loopback server and remote transport tests pass on the host"
+
+# The Quest remote WebSocket connector (libcurl over TLS) against real TLS servers on the host:
+# src/quest/tests/curl_ws_tls_test.cpp, with certificates made here by openssl and the throwaway
+# server src/quest/tests/tls_ws_server.py. A chain that verifies connects; a wrong CA, a wrong host
+# name, a self-signed leaf, an empty trust store and a non-TLS server each fail; ws:// is refused; the
+# plaintext server never sees an upgrade request. Needs openssl, python3 and libcurl development files
+# (pkg-config libcurl) and libssl/libcrypto on the host. Fail-close: a missing tool exits nonzero.
+test-quest-tls:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for tool in openssl python3 pkg-config g++; do
+        command -v "$tool" >/dev/null || { echo "test-quest-tls: missing tool: $tool" >&2; exit 1; }
+    done
+    pkg-config --exists libcurl || { echo "test-quest-tls: libcurl development files not found (pkg-config libcurl)" >&2; exit 1; }
+    out="build/quest-tls-host"
+    rm -rf "$out"
+    mkdir -p "$out"
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc $(pkg-config --cflags libcurl) \
+        src/quest/net/curl_ws_connector.cpp src/quest/net/remote_ws.cpp src/quest/auth/ca_bundle.cpp \
+        src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp src/quest/tests/curl_ws_tls_test.cpp \
+        -o "$out/curl_ws_tls_test" $(pkg-config --libs libcurl) -lssl -lcrypto
+    cd "$out"
+    mk_ca() { # name
+        openssl req -x509 -newkey rsa:2048 -nodes -keyout "$1.key" -out "$1.pem" -subj "/CN=$1" -days 2 \
+            -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
+    }
+    mk_ca nevr-test-ca
+    mk_ca nevr-other-ca
+    openssl req -newkey rsa:2048 -nodes -keyout server.key -out server.csr -subj "/CN=nevr-test" 2>/dev/null
+    printf 'subjectAltName=IP:127.0.0.1,DNS:nevr-test.invalid\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n' > server.ext
+    openssl x509 -req -in server.csr -CA nevr-test-ca.pem -CAkey nevr-test-ca.key -CAcreateserial -days 2 \
+        -extfile server.ext -out server.pem 2>/dev/null
+    openssl req -x509 -newkey rsa:2048 -nodes -keyout selfsigned.key -out selfsigned.pem -subj "/CN=selfsigned" -days 2 \
+        -addext "subjectAltName=IP:127.0.0.1" 2>/dev/null
+    # Trust directories for the CA loader (one certificate each), not a CApath: see ca_bundle.h.
+    mkdir trust-good trust-other
+    cp nevr-test-ca.pem trust-good/nevr-test-ca.pem
+    cp nevr-other-ca.pem trust-other/nevr-other-ca.pem
+    : > plain.stats
+    pids=()
+    cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; }
+    trap cleanup EXIT
+    server=../../src/quest/tests/tls_ws_server.py
+    python3 -I "$server" tls server.pem server.key good.port & pids+=($!)
+    python3 -I "$server" tls selfsigned.pem selfsigned.key selfsigned.port & pids+=($!)
+    python3 -I "$server" plain plain.stats plain.port & pids+=($!)
+    for f in good.port selfsigned.port plain.port; do
+        for _ in $(seq 1 100); do [ -s "$f" ] && break; sleep 0.1; done
+        [ -s "$f" ] || { echo "test-quest-tls: server for $f did not start" >&2; exit 1; }
+    done
+    ./curl_ws_tls_test trust-good trust-other "$(cat good.port)" "$(cat selfsigned.port)" \
+        "$(cat plain.port)" plain.stats
+    echo "test-quest-tls: verified-TLS connector tests pass on the host"
+
 # Quest hook backend on the host. Builds three fixture shared objects (BIND_NOW with
 # RELRO, BIND_NOW without RELRO, lazy) and runs src/quest/tests/got_hook_test.cpp,
 # which drives the production GotHook, CallbackThunk and core/hook_lifecycle.h
@@ -577,6 +658,8 @@ verify:
     just test-auth-unit
     just test-quest-shared
     just test-quest-hooks
+    just test-quest-router
+    just test-quest-tls
     timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_executable_scripts -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
@@ -640,6 +723,23 @@ verify:
     if grep -Pn '^\s*add_subdirectory\s*\(\s*src/gameserver\s*\)' CMakeLists.txt; then
         echo "verify: FAIL — src/gameserver/ must not come back (N103). The compiled path is src/runtime/server/." >&2
         echo "Re-adding that tree recreates the two-copy split that let N48 ship half-implemented. Route the change to src/runtime/server/." >&2
+        exit 1
+    fi
+    # Quest remote transport (ADR 0003): TLS verification is part of the source, not a setting. The
+    # connector must pin peer and host verification on and the protocol allow-list to wss, and must not
+    # contain any option that relaxes verification or lets the connection leave the verified path.
+    # Comment-stripped (N99 spelling) and herestring-fed (N101).
+    QTLS_RC=0; QTLS_CODE=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/quest/net/curl_ws_connector.cpp) || QTLS_RC=$?
+    sensor_stage1 "Quest TLS verification" "src/quest/net/curl_ws_connector.cpp" "$QTLS_RC"
+    sensor_nonempty "Quest TLS verification" "non-comment lines of src/quest/net/curl_ws_connector.cpp" "$QTLS_CODE"
+    for need in 'CURLOPT_CAINFO_BLOB' 'CURLOPT_SSL_VERIFYPEER, 1L' 'CURLOPT_SSL_VERIFYHOST, 2L' 'CURLOPT_PROTOCOLS_STR, "wss"' 'CURLOPT_FOLLOWLOCATION, 0L'; do
+        if ! grep -qF -- "$need" <<<"$QTLS_CODE"; then
+            echo "verify: FAIL — Quest TLS verification: curl_ws_connector.cpp no longer sets '$need'. The remote WebSocket must stay verified, wss-only and redirect-free (ADR 0003)." >&2
+            exit 1
+        fi
+    done
+    if grep -qE 'SSL_VERIFY(PEER|HOST|STATUS)[^;]*,[[:space:]]*0|CURLOPT_SSL_OPTIONS|CURLOPT_CAPATH|CURLOPT_PROXY|CURLOPT_FOLLOWLOCATION,[[:space:]]*[1-9]|CURLOPT_PROTOCOLS(_STR)?,[[:space:]]*"[^"]*ws,' <<<"$QTLS_CODE"; then
+        echo "verify: FAIL — Quest TLS verification: curl_ws_connector.cpp contains an option that relaxes verification or widens the protocol list (ADR 0003: no insecure mode)." >&2
         exit 1
     fi
     # N111: the per-frame dispatcher, COMMENT-STRIPPED once and reused below.
