@@ -96,9 +96,19 @@ struct GotTarget {
   const char* module;   // soname, or a path whose last segment is the soname
   const char* symbol;   // exact dynstr name, no @VERSION suffix
   RelocKind kind;
-  const char* buildId = nullptr;  // lowercase hex GNU build ID, or nullptr to skip
+  const char* buildId;  // lowercase hex GNU build ID, or nullptr to skip
   std::optional<std::uint64_t> slotVaddr;  // pinned link-time address of the slot
-  const void* expectedOriginal = nullptr;  // exact slot value, or nullptr to require plausibility
+  const void* expectedOriginal;            // exact slot value, or nullptr to require plausibility
+
+  GotTarget(const char* moduleName, const char* symbolName, RelocKind relocKind,
+            const char* build = nullptr, std::optional<std::uint64_t> pinnedSlot = std::nullopt,
+            const void* original = nullptr)
+      : module(moduleName),
+        symbol(symbolName),
+        kind(relocKind),
+        buildId(build),
+        slotVaddr(pinnedSlot),
+        expectedOriginal(original) {}
 };
 
 // A loaded (or synthetic) ELF64 image: load bias and program headers.
@@ -155,7 +165,7 @@ class GotHook {
 
  private:
   bool installed_ = false;
-  GotTarget target_{};
+  GotTarget target_{"", "", RelocKind::kJumpSlot};
   ElfImage image_{};
   void** slot_ = nullptr;
   void* hookFn_ = nullptr;

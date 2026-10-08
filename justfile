@@ -414,6 +414,29 @@ test-quest-shared:
     "$out/service_redirect_test"
     echo "test-quest-shared: all redirect vectors pass on the host"
 
+# Quest hook backend on the host. Builds three fixture shared objects (BIND_NOW with
+# RELRO, BIND_NOW without RELRO, lazy) and runs src/quest/tests/got_hook_test.cpp,
+# which drives the production GotHook, CallbackThunk and core/hook_lifecycle.h
+# against them and against images built in memory. No NDK, no Android. Fail-close.
+test-quest-hooks:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-hooks-host"
+    mkdir -p "$out" /var/tmp/work-nevr-runtime/claude-main/hooks/host
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 src/quest/tests/got_fixture_provider.cpp \
+        -o "$out/libgotfx_provider.so"
+    link=(-fPIC -shared -Wl,--build-id=sha1 -L"$out" -lgotfx_provider -Wl,-rpath,'$ORIGIN')
+    "${cxx[@]}" "${link[@]}" -Wl,-z,now,-z,relro src/quest/tests/got_fixture_consumer.cpp \
+        -o "$out/libgotfx_consumer_now.so"
+    "${cxx[@]}" "${link[@]}" -Wl,-z,now,-z,norelro src/quest/tests/got_fixture_consumer.cpp \
+        -o "$out/libgotfx_consumer_norelro.so"
+    "${cxx[@]}" "${link[@]}" -Wl,-z,lazy,-z,norelro src/quest/tests/got_fixture_consumer.cpp \
+        -o "$out/libgotfx_consumer_lazy.so"
+    "${cxx[@]}" src/quest/tests/got_hook_test.cpp src/quest/sentinel/got_hook.cpp \
+        src/quest/sentinel/hook_log.cpp -o "$out/got_hook_test" -ldl -pthread
+    "$out/got_hook_test" "$out"
+
 # --- Verify (closed-loop gate) ---
 
 # Aggregate verify gate for the all-the-way-down canon: build everything, then run
