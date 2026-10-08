@@ -453,7 +453,7 @@ test-quest-hooks:
     "${cxx[@]}" -fno-exceptions src/quest/tests/got_hook_test.cpp src/quest/sentinel/got_hook.cpp \
         src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "$out/thunk_exception_fixture.o" \
         -o "$out/got_hook_test" -ldl -pthread
-    "$out/got_hook_test" "$out"
+    timeout 300 "$out/got_hook_test" "$out"  # a hang is a failure, not a stuck gate
 
 # Resolve the pinned Quest targets in the real libr15.so / libpnsradmatchmaking.so
 # (docs/adr/0003). Extracts both from the pinned APK, checks their SHA-256, and runs
