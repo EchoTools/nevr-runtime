@@ -151,7 +151,7 @@ namespace {
 struct Saved {
   std::string path;
   std::string top;        // first path segment when the path is nested, else empty
-  bool top_existed = false;
+  JsonType top_type = JsonType::Absent;
   JsonType type = JsonType::Absent;
   std::string text;
   std::int64_t number = 0;
@@ -177,7 +177,7 @@ Saved Snapshot(const Field& field, const JsonAccess& json) {
   const std::size_t bar = field.path.find(kPathSeparator);
   if (bar != std::string::npos) {
     saved.top = field.path.substr(0, bar);
-    saved.top_existed = json.TypeOf(saved.top.c_str()) == JsonType::Object;
+    saved.top_type = json.TypeOf(saved.top.c_str());
   }
   saved.type = json.TypeOf(field.path.c_str());
   switch (saved.type) {
@@ -193,7 +193,7 @@ Saved Snapshot(const Field& field, const JsonAccess& json) {
 void Restore(const Saved& saved, JsonAccess& json) {
   switch (saved.type) {
     case JsonType::Absent:
-      if (!saved.top.empty() && !saved.top_existed) {
+      if (!saved.top.empty() && saved.top_type == JsonType::Absent) {
         json.Clear(saved.top.c_str());
       } else {
         json.Clear(saved.path.c_str());
@@ -249,7 +249,12 @@ bool ApplyFieldsAtomically(const std::vector<Field>& fields, JsonAccess& json,
       // real, array or object value could not be put back; either way nothing is written.
       const bool same_type = before.type == WrittenType(field.kind);
       const bool replaceable = before.type == JsonType::Absent || before.type == JsonType::Null;
-      if (!Restorable(before.type) || !(same_type || replaceable)) {
+      // A nested write under a parent that exists but is not an object is refused by CJson
+      // ("$ json path: ... is not an object", FUN_00faef34 at libr15 0xfaef34); the rewrite
+      // does not attempt it.
+      const bool parent_ok = before.top.empty() || before.top_type == JsonType::Absent ||
+                             before.top_type == JsonType::Object;
+      if (!Restorable(before.type) || !(same_type || replaceable) || !parent_ok) {
         failed_path = field.path;
         return false;
       }
@@ -303,9 +308,10 @@ LogKv Num(const char* key, long long value) { return LogKv{key, nullptr, value};
 
 }  // namespace
 
-Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
-                     const BuildInfo& build, LogFn log) {
-  bool account_set = false;
+namespace {
+
+Outcome RewriteLoginImpl(UserAccess& user, JsonAccess& json, IdentitySource& source,
+                         const BuildInfo& build, LogFn log) {
   try {
     Identity identity;
     const IdentityStatus identity_status = source.Fetch(identity);
@@ -360,37 +366,59 @@ Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
     // This step runs first so the JSON transaction is the last thing that can fail and the
     // account id is restored if it does.
     std::uint64_t wire = 0;
-    account_set = user.SetAccountId(identity.account_id);
-    if (!account_set || !user.WireAccountId(wire) || wire != identity.account_id) {
-      user.RestoreAccountId();
-      account_set = false;
+    if (!user.SetAccountId(identity.account_id) || !user.WireAccountId(wire) ||
+        wire != identity.account_id) {
       Emit(log, Level::Error, Outcome::AccountIdNotCarried, {Text("action", "account_id_restored")});
       return Outcome::AccountIdNotCarried;
     }
 
     std::string failed_path;
     if (!ApplyFieldsAtomically(fields, json, failed_path)) {
-      user.RestoreAccountId();
-      account_set = false;
       Emit(log, Level::Error, Outcome::JsonWriteFailed,
            {Text("first_path", failed_path.c_str()), Num("fields", static_cast<long long>(fields.size())),
             Text("action", "json_and_account_id_restored")});
       return Outcome::JsonWriteFailed;
     }
 
-    Emit(log, Level::Info, Outcome::Rewritten,
+    // The JSON is committed from here on. Nothing below may throw into the catch clause, which
+    // would otherwise report a failure over a rewritten login; a failing log sink is ignored.
+    try {
+      Emit(log, Level::Info, Outcome::Rewritten,
          {Num("platform", static_cast<long long>(kPlatformOvrOrg)),
           Text("hmd_serial_source", composition.hmd_serial_source.c_str()),
           Num("fields", static_cast<long long>(fields.size())),
           Num("skipped", static_cast<long long>(composition.skipped.size())),
           Num("kept_client_class", static_cast<long long>(kept_client_class)),
           Num("kept_measured", static_cast<long long>(kept_measured))});
+    } catch (const std::exception&) {
+      // Logging failed after the commit; the rewrite itself stands.
+    }
     return Outcome::Rewritten;
   } catch (const std::exception&) {
-    if (account_set) user.RestoreAccountId();
-    Emit(log, Level::Error, Outcome::Exception, {Text("action", "original_login_unchanged")});
+    // Reached only before the JSON transaction commits: Fetch, Compose and the field filter
+    // run first, ApplyFieldsAtomically restores its own writes, and nothing after it throws.
+    try {
+      Emit(log, Level::Error, Outcome::Exception, {Text("action", "original_login_unchanged")});
+    } catch (const std::exception&) {
+    }
     return Outcome::Exception;
   }
+}
+
+}  // namespace
+
+Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
+                     const BuildInfo& build, LogFn log) {
+  const Outcome outcome = RewriteLoginImpl(user, json, source, build, log);
+  if (outcome != Outcome::Rewritten) {
+    // Every decline leaves the Oculus login untouched, so the account id it will carry must
+    // be the Oculus one too (see UserAccess::RestoreAccountId).
+    try {
+      user.RestoreAccountId();
+    } catch (const std::exception&) {
+    }
+  }
+  return outcome;
 }
 
 Outcome RewriteAndSend(UserAccess& user, JsonAccess& json, IdentitySource& source,

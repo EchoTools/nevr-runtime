@@ -25,6 +25,24 @@
 //
 // Hook frequency: once per login attempt, on the game's login path. Nothing here sleeps,
 // yields or blocks.
+//
+// Activation (nothing calls TryInstallLoginHook yet, and no IdentitySource other than the test
+// fake exists; another package wires both):
+//   When   libpnsovr.so is loaded by CSysModule::Load (libr15 0x2a9e16c), which calls
+//          dlopen@plt at 0x2a9e1ec through the BIND_NOW JUMP_SLOT 0x36c6380 of libr15.so
+//          (the only dlopen reference in libr15). A GotHook on that slot (name "dlopen",
+//          kJumpSlot, libr15 build id) lets the caller run its post-load installs right
+//          after the real dlopen returns with the module mapped: this login hook, and the
+//          matchmaking redirect once libpnsradmatchmaking.so is loaded.
+//   What   the dlopen handler calls the original, and if the returned handle is non-null
+//          calls TryInstallLoginHook(source, build); ModuleNotLoaded means a different
+//          module was opened and it is retried on the next dlopen. The handler must not
+//          throw and must not block (the game thread is inside module loading).
+//   Needs  an IdentitySource that answers from token auth. Until it is Ok the hook leaves
+//          the Oculus login unchanged; a NotReady answer is retried on the next login.
+// SendLogInRequest is reached only after the Oculus org-id fetch and ovr_User_GetUserProof
+// succeed (libpnsovr 0x1edca0, 0x1ece10); if the Oculus services do not answer for this app
+// the hook never fires.
 
 #include "quest/login/login_rewrite.h"
 

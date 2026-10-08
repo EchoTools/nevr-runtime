@@ -150,9 +150,37 @@ class UserAccess {
   // The account id CNSUser::SendLogInRequest will put on the wire: the result of the same
   // virtual AccountID() call it makes.
   virtual bool WireAccountId(std::uint64_t& id) const = 0;
-  // Changes what AccountID() returns; remembers the previous value for RestoreAccountId.
+  // Changes what AccountID() returns. The first write remembers the Oculus value (see
+  // OculusIdMemory) so it can be put back.
   virtual bool SetAccountId(std::uint64_t id) = 0;
+  // Puts the Oculus value back; a no-op when no rewrite ever replaced it. Called on every
+  // outcome other than Rewritten, because CNSOVRUser::LogInInternal re-reads the Oculus org
+  // id only when the global holds -1 (libpnsovr 0x1ec96c-0x1ec984): once the NEVR id is in
+  // the global, a later login that the rewrite declines would send the Oculus login with a
+  // NEVR AccountID().
   virtual void RestoreAccountId() = 0;
+};
+
+// The Oculus account id the game stored before the rewrite first replaced it. Shared by the
+// device adapter and the host fake so both follow the same rule: the value found in the
+// global is the Oculus id unless it is the value the rewrite itself wrote last, in which case
+// the remembered one stays.
+class OculusIdMemory {
+ public:
+  void NoteBeforeWrite(std::uint64_t current, std::uint64_t written) {
+    if (!have_ || current != last_written_) oculus_ = current;
+    have_ = true;
+    last_written_ = written;
+  }
+  bool Original(std::uint64_t& out) const {
+    out = oculus_;
+    return have_;
+  }
+
+ private:
+  bool have_ = false;
+  std::uint64_t oculus_ = 0;
+  std::uint64_t last_written_ = 0;
 };
 
 // Where identity comes from (token auth). Fail-close: anything but Ok means "no identity".
@@ -199,7 +227,9 @@ Outcome RewriteAndSend(UserAccess& user, JsonAccess& json, IdentitySource& sourc
 
 // The whole decision for one login attempt. Called once per CNSUser::SendLogInRequest, which
 // is per login event (not per frame), so it may allocate and log. All-or-nothing: any
-// non-Rewritten outcome leaves the JSON and the account id exactly as they were on entry.
+// non-Rewritten outcome leaves the JSON as it was on entry and the account id at the Oculus
+// value, including when an earlier login was Rewritten. A login after a Rewritten one is
+// rewritten again from the current identity.
 // Every outcome emits one structured record (event "quest_login", field "outcome"); no
 // record contains a token, serial, display name or account id value. Never throws.
 Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,

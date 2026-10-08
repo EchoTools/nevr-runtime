@@ -147,18 +147,19 @@ class FakeUser final : public QuestLogin::UserAccess {
     return true;
   }
   bool SetAccountId(std::uint64_t id) override {
-    previous_ = global_account_id;
+    memory_.NoteBeforeWrite(global_account_id, id);
     if (setter_reaches_global) global_account_id = id;
     else object_account_field = id;
     return true;
   }
   void RestoreAccountId() override {
-    global_account_id = previous_;
+    std::uint64_t oculus = 0;
+    if (memory_.Original(oculus)) global_account_id = oculus;
     ++restores;
   }
 
  private:
-  std::uint64_t previous_ = 0;
+  QuestLogin::OculusIdMemory memory_;
 };
 
 class FakeSource final : public QuestLogin::IdentitySource {
@@ -617,6 +618,105 @@ void TestSendHappensOnceEvenWhenTheRewriteFails() {
   }
 }
 
+// CNSOVRUser::LogInInternal re-reads the Oculus org id only when the global holds -1, so after
+// one Rewritten login the global keeps the NEVR id. A later login the rewrite declines sends
+// the Oculus login unchanged, and AccountID() must then be the Oculus id again.
+void TestDeclinedLoginAfterARewrittenOneRestoresTheOculusId() {
+  const char* names[] = {"no-identity", "not-ready", "platform-mismatch", "compose-failed", "json-write-failed"};
+  for (int variant = 0; variant < 5; ++variant) {
+    FakeUser user;
+    FakeSource source;
+    source.identity = MakeIdentity();
+    FakeJson first;
+    SeedOculusLogin(first);
+    QCHECK(QuestLogin::RewriteLogin(user, first, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+    QCHECK(user.global_account_id == kNevrAccount);
+
+    FakeJson second;
+    SeedOculusLogin(second);
+    const nlohmann::json before = second.ToJson();
+    if (variant == 0) source.status = QuestLogin::IdentityStatus::NoToken;
+    if (variant == 1) source.status = QuestLogin::IdentityStatus::NotReady;
+    if (variant == 2) user.provider = 5;
+    if (variant == 3) source.identity.display_name = "bad\xff\xfe";
+    if (variant == 4) second.refuse_path = "access_token";
+    SendProbe probe;
+    probe.user = &user;
+    probe.json = &second;
+    const QuestLogin::Outcome out =
+        QuestLogin::RewriteAndSend(user, second, source, MakeBuild(), &CaptureLog, &ProbeSend, &probe);
+    if (out == QuestLogin::Outcome::Rewritten) std::fprintf(stderr, "variant %s was rewritten\n", names[variant]);
+    QCHECK(out != QuestLogin::Outcome::Rewritten);
+    QCHECK(probe.calls == 1);
+    QCHECK(probe.json_at_send == before);                 // the Oculus login, untouched
+    QCHECK(probe.wire_at_send == 5551234);                // carrying the Oculus account id
+    QCHECK(user.global_account_id == 5551234);
+  }
+}
+
+void TestSecondRewrittenLoginKeepsTheNevrIdAndALaterDeclineRestoresOculus() {
+  FakeUser user;
+  FakeSource source;
+  source.identity = MakeIdentity();
+  for (int attempt = 0; attempt < 2; ++attempt) {
+    FakeJson json;
+    SeedOculusLogin(json);
+    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+    QCHECK(user.global_account_id == kNevrAccount);
+  }
+  source.status = QuestLogin::IdentityStatus::NotReady;
+  FakeJson json;
+  SeedOculusLogin(json);
+  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::NoIdentity);
+  QCHECK(user.global_account_id == 5551234);
+
+  // A new Oculus id written by the game in between is the one remembered.
+  user.global_account_id = 777;
+  source.status = QuestLogin::IdentityStatus::Ok;
+  FakeJson again;
+  SeedOculusLogin(again);
+  QCHECK(QuestLogin::RewriteLogin(user, again, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::Rewritten);
+  source.status = QuestLogin::IdentityStatus::NoToken;
+  FakeJson last;
+  SeedOculusLogin(last);
+  QCHECK(QuestLogin::RewriteLogin(user, last, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::NoIdentity);
+  QCHECK(user.global_account_id == 777);
+}
+
+// A top-level member the profile nests under can exist and not be an object. CJson refuses a
+// nested write under it ("$ json path: ... is not an object", libr15 0xfaef34), so nothing is
+// attempted and the game's value is left exactly as it was.
+void TestParentThatIsNotAnObjectIsLeftAlone() {
+  for (const char* top : {"nevr_identity", "system_info"}) {
+    FakeJson json;
+    SeedOculusLogin(json);
+    json.Clear(top);
+    json.SetString(top, "game-value");
+    const nlohmann::json before = json.ToJson();
+    FakeUser user;
+    FakeSource source;
+    source.identity = MakeIdentity();
+    QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &CaptureLog) == QuestLogin::Outcome::JsonWriteFailed);
+    QCHECK(json.ToJson() == before);
+    QCHECK(At(json.ToJson(), top) == "game-value");
+    QCHECK(user.global_account_id == 5551234);
+  }
+}
+
+// A log sink that throws after the commit does not turn a rewritten login into a failure.
+void ThrowingLog(QuestLogin::Level, const char*, const QuestLogin::LogKv*, std::size_t) { throw std::bad_alloc(); }
+
+void TestLogFailureAfterCommitKeepsTheRewrite() {
+  FakeJson json;
+  SeedOculusLogin(json);
+  FakeUser user;
+  FakeSource source;
+  source.identity = MakeIdentity();
+  QCHECK(QuestLogin::RewriteLogin(user, json, source, MakeBuild(), &ThrowingLog) == QuestLogin::Outcome::Rewritten);
+  QCHECK(At(json.ToJson(), "access_token") == "NEVR-TOKEN-SECRET");
+  QCHECK(user.global_account_id == kNevrAccount);
+}
+
 void TestInvalidUtf8NameDoesNotThrow() {
   QuestLogin::Identity id = MakeIdentity();
   id.display_name = "bad\xff\xfe";
@@ -650,6 +750,10 @@ int main() {
   TestNestedKeyAddedByRewriteIsRemovedOnRollback();
   TestAccountIdStaysInstalledAfterSend();
   TestSendHappensOnceEvenWhenTheRewriteFails();
+  TestDeclinedLoginAfterARewrittenOneRestoresTheOculusId();
+  TestSecondRewrittenLoginKeepsTheNevrIdAndALaterDeclineRestoresOculus();
+  TestParentThatIsNotAnObjectIsLeftAlone();
+  TestLogFailureAfterCommitKeepsTheRewrite();
   TestInvalidUtf8NameDoesNotThrow();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "login_rewrite_test: %d check(s) failed\n", quest_test::Failures());

@@ -23,6 +23,7 @@ constexpr const char* kPnsovr = "libpnsovr.so";
 constexpr const char* kPnsovrBuildId = "ca47bb8d03e6f43c1825133bbb9c15f174705c51";
 constexpr const char* kHookedSymbol = "_ZN10NRadEngine7CNSUser16SendLogInRequestERNS_5CJsonE";
 constexpr std::uint64_t kHookedSlotVaddr = 0x6dd1b8ULL;
+constexpr std::uint64_t kOwnSendLogInRequestVaddr = 0x382a4cULL;
 
 // CNSOVRUser::AccountID() const @0x1ede14: adrp x8,0x70e000 / ldr x0,[x8,#0x3e0] / ret.
 constexpr std::uint64_t kAccountIdFnVaddr = 0x1ede14ULL;
@@ -100,6 +101,8 @@ State g_state;
 std::atomic<const State*> g_published{nullptr};
 std::mutex g_install_mutex;
 sentinel::GotHook g_hook;
+std::mutex g_account_mutex;
+OculusIdMemory g_oculus_id;  // guarded by g_account_mutex
 
 struct LoginTag {};
 using LoginThunk = sentinel::CallbackThunk<LoginTag, void(void*, void*)>;
@@ -107,14 +110,12 @@ using LoginThunk = sentinel::CallbackThunk<LoginTag, void(void*, void*)>;
 // The CNSOVRUser the hook was handed. Every access is guarded: the object's vtable pointer
 // must be exactly CNSOVRUser's before anything is read or called through it.
 //
-// The global is deliberately never restored after a successful send: CNSUser::LogInSuccessCB
-// builds {[this+0x90], AccountID()} and compares it with the server's reply, and every other
-// vtable+0x70 caller (LogOut, RefreshProfile, the Profile*/LoginRemoved callbacks,
-// CNSUser::UserID, CNSIParty::Update) must see the same id. Writers of the global in the
-// pinned build: LogInInternal 0x1ec998 (0 only when it holds -1), GotLoggedInUserOrgIdCb
-// 0x1ecef0 (-1 on the error path) and 0x1ecf18 (the org id on success), RadPluginShutdown
-// 0x207074 (0). CNSOVRSocial copies it into the local party member record at 0x1f2b30,
-// 0x1f2bd0, 0x1f38a4 and 0x204a30 while OfflineID() keeps the Oculus id.
+// After a successful send the global keeps the NEVR id: CNSUser::LogInSuccessCB builds
+// {[this+0x90], AccountID()} and compares it with the server's reply, and the other readers
+// (docs/adr/0003, "Readers of the global") must see the same id. On any outcome other than
+// Rewritten it goes back to the Oculus id, because LogInInternal re-reads the Oculus org id
+// only when the global holds -1 (0x1ec96c-0x1ec984) and the Oculus login then goes out.
+// OculusIdMemory keeps the Oculus value across logins in this process.
 class LiveUser final : public UserAccess {
  public:
   LiveUser(void* user, std::uint64_t* account_global, const void* expected_vptr)
@@ -137,15 +138,17 @@ class LiveUser final : public UserAccess {
 
   bool SetAccountId(std::uint64_t id) override {
     if (!Valid() || global_ == nullptr) return false;
-    previous_ = __atomic_load_n(global_, __ATOMIC_ACQUIRE);
-    have_previous_ = true;
+    const std::lock_guard<std::mutex> lock(g_account_mutex);
+    g_oculus_id.NoteBeforeWrite(__atomic_load_n(global_, __ATOMIC_ACQUIRE), id);
     __atomic_store_n(global_, id, __ATOMIC_RELEASE);
     return true;
   }
 
   void RestoreAccountId() override {
-    if (have_previous_ && global_ != nullptr) __atomic_store_n(global_, previous_, __ATOMIC_RELEASE);
-    have_previous_ = false;
+    if (global_ == nullptr) return;
+    const std::lock_guard<std::mutex> lock(g_account_mutex);
+    std::uint64_t oculus = 0;
+    if (g_oculus_id.Original(oculus)) __atomic_store_n(global_, oculus, __ATOMIC_RELEASE);
   }
 
  private:
@@ -161,8 +164,6 @@ class LiveUser final : public UserAccess {
   void* user_;
   std::uint64_t* global_;
   const void* expected_vptr_;
-  std::uint64_t previous_ = 0;
-  bool have_previous_ = false;
 };
 
 // NRadEngine::CJson through libpnsovr's functions. TypeOf reports 0 for both a null value and
@@ -360,8 +361,11 @@ InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build,
   g_published.store(&g_state, std::memory_order_release);
   LoginThunk::Arm(&HandleSendLogInRequest);
 
+  // The slot must hold libpnsovr's own CNSUser::SendLogInRequest (0x382a4c); libr15 exports
+  // the same symbol at 0x1932838, and a slot bound there is refused instead of hooked.
   const sentinel::GotTarget target(kPnsovr, kHookedSymbol, sentinel::RelocKind::kJumpSlot,
-                                   kPnsovrBuildId, kHookedSlotVaddr);
+                                   kPnsovrBuildId, kHookedSlotVaddr,
+                                   reinterpret_cast<const void*>(image.base + kOwnSendLogInRequestVaddr));
   if (g_hook.Install(target, LoginThunk::EntryAddress(), LoginThunk::OriginalOut()) !=
       sentinel::GotStatus::kOk) {
     LoginThunk::Arm(nullptr);
