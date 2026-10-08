@@ -125,7 +125,7 @@ __attribute__((constructor(102))) void HostCtor() {
   WriteFile(Dir() + "/nevr-quest.json",
             R"({"nevr_socket_uri":"wss://file.example/nevr","nevr_http_key":"FILE-SECRET-KEY-31337",)"
             R"("nevr_server_key":"FILE-SERVER-SECRET-42042",)"
-            R"("features":{"redirect":true,"bridge":true,"login":true}})");
+            R"("features":{"redirect":true,"bridge":true,"login":true,"social":true}})");
   sentinel::InitActivation();
 }
 
@@ -162,6 +162,8 @@ void ConfigSurvivesStaticInitialisation() {
   CHECK(c.effective.redirect && c.effective.bridge && c.effective.login);
   CHECK(sentinel::FeatureEnabled(nevr_quest::Feature::kRedirect));
   CHECK(sentinel::FeatureEnabled(nevr_quest::Feature::kLogin));
+  CHECK(sentinel::FeatureEnabled(nevr_quest::Feature::kSocial));
+  CHECK(Count("feature=social requested=on effective=on") == 1);
   CHECK(Count("feature=login requested=on effective=on") == 1);
 }
 

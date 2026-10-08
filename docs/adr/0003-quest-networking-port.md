@@ -232,9 +232,9 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    `/sdcard/Android/data/com.readyatdawn.r15/files/`, else from the value embedded at build
    time (`cmake/nevr_builtin_defaults.cmake`, read from the environment or `.env` at configure
    time only), else absent. Keys: `nevr_socket_uri`, `nevr_http_uri`, `nevr_http_key`,
-   `nevr_server_key`, plus `features` with boolean `redirect`, `bridge` and `login`. A feature
+   `nevr_server_key`, plus `features` with boolean `redirect`, `bridge`, `login` and `social`. A feature
    is off unless the file turns it on, and is forced off while its prerequisite is missing
-   (bridge needs redirect and a socket URI, login needs bridge and the server key). A malformed,
+   (bridge needs redirect and a socket URI, login needs bridge and the server key, social needs login to be effective; they resolve in that order, so a feature that loses its prerequisite takes the ones above it down with it, and each logs `forced off reason=<name>`). A malformed,
    non-object or oversized (64 KiB) file is rejected whole: embedded values, all features off.
    Every key source, requested and effective feature state, and rejection is logged by key or
    feature name, never by value, to logcat tag `NEVR-Sentinel` and to `nevr-sentinel.log` in the

@@ -40,10 +40,11 @@ struct FeatureSpec {
   bool Features::*flag;
 };
 
-constexpr std::array<FeatureSpec, 3> kFeatures = {{
+constexpr std::array<FeatureSpec, 4> kFeatures = {{
     {"redirect", Feature::kRedirect, &Features::redirect},
     {"bridge", Feature::kBridge, &Features::bridge},
     {"login", Feature::kLogin, &Features::login},
+    {"social", Feature::kSocial, &Features::social},
 }};
 
 bool HasControlOrSpace(std::string_view s) {
@@ -229,7 +230,7 @@ void ApplyFile(LoadResult& r, const std::string& text) {
 bool Present(const Value& v) { return v.source != Source::kAbsent; }
 
 // Redirect needs a target, bridge needs redirect and a socket target, login needs the bridge and
-// both the socket target and the server key. Each forced-off feature logs why.
+// both the socket target and the server key, social needs login. Each forced-off feature logs why.
 void Derive(LoadResult& r) {
   ResolvedConfig& c = r.config;
   c.effective = c.requested;
@@ -255,6 +256,11 @@ void Derive(LoadResult& r) {
   if (c.effective.login && !Present(c.serverKey)) {
     c.effective.login = false;
     force_off("login", "no_server_key");
+  }
+  // Resolved last: social needs login to be effective, so every rule above applies to it too.
+  if (c.effective.social && !c.effective.login) {
+    c.effective.social = false;
+    force_off("social", "login_not_enabled");
   }
 }
 
