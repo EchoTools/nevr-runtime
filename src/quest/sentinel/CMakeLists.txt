@@ -30,6 +30,11 @@ target_include_directories(ovrplatformloader PRIVATE
 
 target_link_libraries(ovrplatformloader PRIVATE nevr_quest_got_hook breakpad_client log dl)
 
+# The hook path (entry.cpp: the thunk entry and the handler it calls) is compiled
+# without exception support so its frames carry no personality or LSDA; see the
+# contract in callback_thunk.h. tests/quest TestHookFramesCarryNoPersonality pins it.
+set_source_files_properties(entry.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+
 # Only nevr_sentinel_marker and JNI_OnLoad are exported (both carry explicit default
 # visibility); everything else, including the hook API and the test seams, is hidden.
 # tests/quest TestExportAllowlist pins the list.

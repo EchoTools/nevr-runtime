@@ -5,6 +5,9 @@
  * the Itanium mangling of the symbol the relocation names. They apply only to
  * the build IDs below; GotHook refuses a module whose build ID differs.
  *
+ * This header includes callback_thunk.h, so a translation unit that includes it must be
+ * built with -fno-exceptions (see the contract there). Handlers are `noexcept`.
+ *
  * Nothing in this header activates a hook. entry.cpp installs the clock_gettime
  * proof hook only; the CJson::TString thunks are declared for the config-string
  * seam and stay uninstalled until the gates in #158 pass.
