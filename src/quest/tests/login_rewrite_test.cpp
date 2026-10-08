@@ -40,6 +40,7 @@ class FakeJson final : public QuestLogin::JsonAccess {
   std::string refuse_path;              // writes to this path are dropped
   int throw_after = -1;                 // throw std::bad_alloc on the Nth mutating call; -1 never
   int mutations = 0;
+  bool int_overwrites_real = false;     // a build whose SetInt replaces a real instead of refusing
 
   JsonType TypeOf(const char* path) const override {
     auto it = values.find(path);
@@ -108,7 +109,8 @@ class FakeJson final : public QuestLogin::JsonAccess {
     auto it = values.find(key);
     if (it != values.end()) {
       const JsonType old = it->second.type;
-      const bool replaceable = old == type || old == JsonType::Null;
+      const bool replaceable = old == type || old == JsonType::Null ||
+                               (int_overwrites_real && type == JsonType::Int && old == JsonType::Real);
       if (!replaceable) return;  // a type change is refused
     }
     // Parents become objects; a parent that is not an object blocks the write.
@@ -528,6 +530,7 @@ void TestEveryJsonTypeSurvivesRollback() {
     FakeJson json;
     SeedOculusLogin(json);
     if (variant == 0) json.SetReal("nevr_social", 1.5);
+    json.int_overwrites_real = true;  // the real could not be put back if it were overwritten
     if (variant == 1) json.SetEmptyArray("nevr_social");
     if (variant == 2) json.SetBoolean("nevr_social", true);
     const nlohmann::json before = json.ToJson();
