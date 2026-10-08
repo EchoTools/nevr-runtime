@@ -443,6 +443,28 @@ class State {
     ForgetJoinLocked(partyId);
   }
 
+  /// A request that changed this state before being sent could not be sent: put the state back so a
+  /// later attempt can send it. Without these the flag set by CreateParty / SendInvite / Join /
+  /// SetLocked stays set, the server never answers, and every later join is deferred forever.
+  /// A create that could not be sent is no longer in flight; invites queued behind it stay queued.
+  void AbandonCreate() {
+    std::lock_guard<std::mutex> guard(mutex_);
+    creating_ = false;
+  }
+
+  /// A join request that could not be sent is no longer in flight.
+  void AbandonJoining() {
+    std::lock_guard<std::mutex> guard(mutex_);
+    joining_ = false;
+    joiningPartyId_ = 0;
+  }
+
+  /// A lock or unlock request that could not be sent: SetLocked may ask again.
+  void ForgetLockRequest() {
+    std::lock_guard<std::mutex> guard(mutex_);
+    lockRequested_ = -1;
+  }
+
   /// JoinInternal, second half (after the accept gate): nothing if already in that party; otherwise
   /// leave the current one (slot 3 "for join", then PartyLeft, as pnsovr does; Nakama leaves the old
   /// party itself) and ask to join. A join that came from an invite is the invite's accept, sent to

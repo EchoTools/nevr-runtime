@@ -1,5 +1,6 @@
 #include "quest/social/social_frames.h"
 
+#include <atomic>
 #include <cstring>
 #include <exception>
 #include <string>
@@ -31,8 +32,17 @@ void Send(const Ports& ports, const char* what, const std::vector<SocialParty::M
             {{"what", what}, {"count", static_cast<long long>(messages.size())}, {"sent", sent ? "yes" : "NOT_sent"}});
 }
 
-// Asks for the display name of `accountId` once per session.
+// Asks for the display name of `accountId` once per session, but only if the reply can be read: the profile
+// is zstd-compressed and the Quest build registers no decoder (SocialNames::SetDecoder) unless an adapter
+// links one. Without it every reply is unreadable, so no request is sent and the roster shows account ids.
 void WantName(const Ports& ports, const char* what, std::uint64_t accountId) {
+  if (SocialNames::DecoderSlot().load(std::memory_order_acquire) == nullptr) {
+    static std::atomic<bool> logged{false};
+    if (!logged.exchange(true, std::memory_order_relaxed)) {
+      LogFields(LogLevel::kWarn, "social_names", {{"result", "no_profile_decoder_requests_skipped"}});
+    }
+    return;
+  }
   Send(ports, what, SocialNames::GlobalResolver().Want(accountId));
 }
 

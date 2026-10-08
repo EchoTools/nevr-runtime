@@ -122,9 +122,9 @@ static_assert(kDismissInvite + 1 == kSlotCount, "slot enum must end at the last 
 
 // The Itanium-mangled method names of CNSOVRSocial's vtable, in slot order, as read from the
 // R_AARCH64_ABS64 relocations of the vtable (readelf -rW libpnsovr.so, offsets 0x6a1478 + 8 * n),
-// with the "_ZN[K]10NRadEngine" prefix and the class length stripped. tools/quest_social_vtable.sh
-// regenerates the list; src/quest/tests/fixtures/cnsovrsocial_vtable.txt holds the extraction
-// and social_abi_test compares the two.
+// with the "_ZN[K]10NRadEngine" prefix and the class length stripped. `social_pinned_test --dump
+// libpnsovr.so` regenerates the list; src/quest/tests/fixtures/cnsovrsocial_vtable.txt holds the
+// extraction and social_abi_test compares the two.
 inline constexpr std::array<const char*, kSlotCount> kSlotNames = {
     "CNSOVRSocial11SwapMembersEjj",
     "CNSOVRSocial18RemoveRemoteMemberEj",

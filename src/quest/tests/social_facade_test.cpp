@@ -28,6 +28,7 @@ using namespace quest_social;
 // ---- harness --------------------------------------------------------------------------------
 
 std::vector<SocialParty::Message> g_sent;
+std::vector<std::string> g_lines;
 bool g_sendOk = true;
 bool g_sendThrows = false;
 std::uint64_t g_now = 1000;
@@ -59,6 +60,8 @@ struct World {
     g_sendThrows = false;
     g_now = 1000;
     SocialNames::GlobalResolver().Reset();
+    ResetFacadeCountersForTest();
+    g_lines.clear();
   }
   void* Obj() { return facade->Object(); }
 };
@@ -177,7 +180,13 @@ void CreateParty(World& w, std::uint64_t partyId) {
   Update(w, 0);
 }
 
-void LogToNowhere(sentinel::LogLevel, const char*) {}
+void CaptureLog(sentinel::LogLevel, const char* line) { g_lines.emplace_back(line); }
+
+std::size_t CountLines(const char* needle) {
+  std::size_t n = 0;
+  for (const std::string& l : g_lines) n += l.find(needle) != std::string::npos ? 1 : 0;
+  return n;
+}
 
 // ---- tests ----------------------------------------------------------------------------------
 
@@ -238,7 +247,7 @@ void TestFriendRoster() {
   // Each friend's name was asked for once.
   int profileRequests = 0;
   for (const SocialParty::Message& m : g_sent) profileRequests += m.symbol == SocialNames::kProfileRequest ? 1 : 0;
-  QCHECK(profileRequests == 2);
+  QCHECK(profileRequests == 0);  // no profile decoder is registered, so no reply could be read: none asked for
   // The friend tab refresh sends the refresh request.
   g_sent.clear();
   SlotFn<Void0>(obj, kRefreshFriends)(obj);
@@ -276,7 +285,7 @@ void TestPartyCreateAndSlots() {
   QCHECK(Get32(obj, kOffMemberCount) == 1 && Get32(obj, kOffLocalCount) == 1);
   QCHECK(Get32(obj, kOffMaxMembers) == kPartyMaxMembers);
   QCHECK(SlotFn<U64_U32>(obj, kLocalId)(obj, 0) == 0);
-  QCHECK(SlotFn<U64_U32>(obj, kLocalId)(obj, 1) == UINT64_MAX);
+  QCHECK(SlotFn<U64_U32>(obj, kLocalId)(obj, 1) == 0xFFFFFFFFULL);  // pnsovr's value: 32-bit -1, zero-extended
   QCHECK(SlotFn<U64_U32>(obj, kMemberDataWritable)(obj, 0) == 0);
 }
 
@@ -580,18 +589,180 @@ void TestGameExceptionThroughGate() {
   QCHECK(w.facade->SlotFailures() == 0);
 }
 
-void TestEventBatchOverflow() {
+void TestEventBatchCarriesTheRemainder() {
   World w;
   Init(w, MakeCallbacks());
   w.party.SetSelf(kSelf, "alice");
   g_rec.calls.clear();
-  // 40 senders, one invite each: 40 InviteReceived events in one frame, 32 fit a batch.
+  // 40 senders, one invite each: 40 InviteReceived events in one frame; a batch holds 32.
   for (std::uint64_t sender = 3000; sender < 3040; ++sender) FeedParty(w, "PartyInviteNotify", 9000 + sender, sender);
+  const auto received = [] {
+    std::size_t n = 0;
+    for (const std::string& c : g_rec.calls) n += c == "u" + std::to_string(kCbInviteReceived) + ":0" ? 1 : 0;
+    return n;
+  };
   Update(w, 0);
-  std::size_t received = 0;
-  for (const std::string& c : g_rec.calls) received += c == "u" + std::to_string(kCbInviteReceived) + ":0" ? 1 : 0;
-  QCHECK(received == 32);
-  QCHECK(SlotFn<U32_0>(w.Obj(), kInviteCount)(w.Obj()) == 40);  // the model kept all 40; only the callbacks were capped
+  QCHECK(received() == 32);
+  Update(w, 0);  // the remainder is carried to the next frame, not dropped
+  QCHECK(received() == 40);
+  QCHECK(FacadeCountersView().eventsDropped.load() == 0);
+  QCHECK(SlotFn<U32_0>(w.Obj(), kInviteCount)(w.Obj()) == 40);
+}
+
+void TestEventQueueOverflowIsCounted() {
+  World w;
+  Init(w, MakeCallbacks());
+  w.party.SetSelf(kSelf, "alice");
+  g_rec.calls.clear();
+  // 300 events in one frame: the carry queue holds 256, the newest 44 are dropped and counted.
+  for (std::uint64_t sender = 4000; sender < 4300; ++sender) FeedParty(w, "PartyInviteNotify", 9000 + sender, sender);
+  for (int i = 0; i < 12; ++i) Update(w, 0);
+  QCHECK(g_rec.calls.size() == 256);
+  QCHECK(FacadeCountersView().eventsDropped.load() == 44);
+  QCHECK(CountLines("social_events_dropped") == 1);  // logged once, counted always
+}
+
+void TestMemberCountNeverExceedsTheGamesArray() {
+  World w;
+  Init(w, MakeCallbacks());
+  CreateParty(w, 777);  // the local user alone: 1 member
+  void* obj = w.Obj();
+  for (std::uint64_t id = 3000; id < 3008; ++id) FeedParty(w, "PartyJoinNotify", 777, id);  // 9 members
+  Update(w, 0);
+  QCHECK(SlotFn<U32_0>(obj, kMemberCount)(obj) == 9);
+  QCHECK(Get32(obj, kOffMemberCount) == 9);
+  FeedParty(w, "PartyJoinNotify", 777, 3008);  // 10: exactly the array
+  Update(w, 0);
+  QCHECK(SlotFn<U32_0>(obj, kMemberCount)(obj) == kMemberJsonSlots);
+  QCHECK(Get32(obj, kOffMemberCount) == kMemberJsonSlots);
+  QCHECK(FacadeCountersView().membersClamped.load() == 0);
+  FeedParty(w, "PartyJoinNotify", 777, 3009);  // 11: one past it
+  Update(w, 0);
+  QCHECK(SlotFn<U32_0>(obj, kMemberCount)(obj) == kMemberJsonSlots);
+  QCHECK(Get32(obj, kOffMemberCount) == kMemberJsonSlots);
+  QCHECK(FacadeCountersView().membersClamped.load() >= 1);
+  for (std::uint64_t id = 3010; id < 3013; ++id) FeedParty(w, "PartyJoinNotify", 777, id);  // 14
+  Update(w, 0);
+  QCHECK(SlotFn<U32_0>(obj, kMemberCount)(obj) == kMemberJsonSlots);
+  QCHECK(Get32(obj, kOffMemberCount) == kMemberJsonSlots);
+  QCHECK(SlotFn<U64_U32>(obj, kMemberId)(obj, kMemberJsonSlots - 1) != 0);
+  QCHECK(SlotFn<U64_U32>(obj, kMemberId)(obj, kMemberJsonSlots) == 0);  // past the array: answered, never read
+  QCHECK(std::string(SlotFn<Str_U32>(obj, kMemberName)(obj, 12)).empty());
+}
+
+void TestFailedSendsDoNotStickTheModel() {
+  // Create: the sender refuses, so the model must not stay "creating"; a working sender then creates.
+  World w;
+  w.party.SetSelf(kSelf, "alice");
+  g_sendOk = false;
+  Update(w, 1);
+  QCHECK(g_sent.size() == 1);  // attempted
+  QCHECK(!w.party.Snapshot().creating);
+  QCHECK(FacadeCountersView().sendFailed.load() == 1);
+  g_sendOk = true;
+  g_now += 5;  // past the retry interval
+  Update(w, 1);
+  QCHECK(g_sent.size() == 2 && g_sent[1].symbol == SocialParty::kCreateRequest);
+  QCHECK(w.party.Snapshot().creating);  // now genuinely in flight
+  // ... and after the server answers, a join is not deferred forever.
+  FeedParty(w, "PartyCreateSuccess", 777, kSelf);
+  Update(w, 0);
+
+  // Invite with no party: the create it implies must roll back when it cannot be sent.
+  World v;
+  v.party.SetSelf(kSelf, "alice");
+  g_sendOk = false;
+  SlotFn<Void_U64>(v.Obj(), kSendInviteInternal)(v.Obj(), 2002);
+  QCHECK(!v.party.Snapshot().creating);
+  g_sendOk = true;
+  g_sent.clear();
+  SlotFn<Void_U64>(v.Obj(), kSendInviteInternal)(v.Obj(), 2002);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kCreateRequest);
+
+  // Join: the request is refused, so the model is not left "joining".
+  World j;
+  j.party.SetSelf(kSelf, "alice");
+  Init(j, MakeCallbacks());
+  g_sendOk = false;
+  SlotFn<Void_U64>(j.Obj(), kJoinInternal)(j.Obj(), 556);
+  QCHECK(!j.party.Snapshot().joining);
+  g_sendOk = true;
+  g_sent.clear();
+  SlotFn<Void_U64>(j.Obj(), kJoinInternal)(j.Obj(), 556);
+  QCHECK(g_sent.size() == 1 && j.party.Snapshot().joining);
+
+  // Lock: a refused lock request is asked again.
+  World l;
+  Init(l, MakeCallbacks());
+  CreateParty(l, 777);
+  g_sendOk = false;
+  SlotFn<Void_U32>(l.Obj(), kSetJoinableInternal)(l.Obj(), 0);
+  g_sendOk = true;
+  g_sent.clear();
+  SlotFn<Void_U32>(l.Obj(), kSetJoinableInternal)(l.Obj(), 0);
+  QCHECK(g_sent.size() == 1 && g_sent[0].symbol == SocialParty::kLockRequest);
+}
+
+void TestDeferredJoinLogsOncePerParty() {
+  World w;
+  Init(w, MakeCallbacks());
+  w.party.SetSelf(kSelf, "alice");
+  Update(w, 1);  // a create is now in flight, unanswered
+  g_lines.clear();
+  SlotFn<Void_U64>(w.Obj(), kJoinInternal)(w.Obj(), 556);  // deferred behind the create
+  for (int i = 0; i < 100; ++i) Update(w, 0);              // the model retries it every frame
+  QCHECK(CountLines("\"result\":\"deferred\"") == 1);
+  QCHECK(FacadeCountersView().joinDeferred.load() >= 100);
+}
+
+void TestResetKeepsTheGamesPartyJson() {
+  World w;
+  void* obj = w.Obj();
+  std::uint8_t pattern[16];
+  for (int i = 0; i < 16; ++i) pattern[i] = static_cast<std::uint8_t>(0xA0 + i);
+  std::memcpy(static_cast<std::uint8_t*>(obj) + kOffPartyJson, pattern, 16);  // the game's tree pointers
+  SlotFn<Void0>(obj, kReset)(obj);
+  QCHECK(std::memcmp(static_cast<std::uint8_t*>(obj) + kOffPartyJson, pattern, 16) == 0);  // not zeroed, not leaked
+}
+
+void TestMemberCountAgreesBeforeLogin() {
+  World w;  // no account signed in
+  void* obj = w.Obj();
+  SlotFn<Void_U32>(obj, kAddMember)(obj, 0);
+  const std::uint32_t reported = SlotFn<U32_0>(obj, kMemberCount)(obj);
+  QCHECK(reported == 1);
+  QCHECK(reported == Get32(obj, kOffMemberCount));
+  QCHECK(reported - Get32(obj, kOffLocalCount) == 0);  // PlatformPurchaseSucceededCB's MemberCount - [+0x200]
+  QCHECK(SlotFn<U64_U32>(obj, kMemberId)(obj, 0) == 0);
+}
+
+void TestSendLogsStableIds() {
+  World w;
+  Init(w, MakeCallbacks());
+  CreateParty(w, 777);
+  g_lines.clear();
+  SlotFn<Void_U64>(w.Obj(), kSendInviteInternal)(w.Obj(), 2002);
+  QCHECK(CountLines("\"name\":\"PartyInviteRequest\"") == 1);
+  QCHECK(CountLines("\"arg\":2002") == 1);
+}
+
+void TestNamesAreAskedForOnlyWithADecoder() {
+  World w;
+  w.party.SetSelf(kSelf, "alice");
+  SocialNames::SetDecoder([](const std::uint8_t*, std::size_t, std::uint64_t* id, std::string* name) {
+    *id = 2002;
+    *name = "Zed";
+    return true;
+  });
+  Feed(w, kSymFriendListResponse, Le(0, 8) + Le(0, 4) + Le(0, 4) + Le(1, 4) + Le(0, 4) + Le(0, 4) + Le(0, 4));
+  Feed(w, kSymFriendStatusNotify, Le(0, 8) + Le(2002, 8) + Le(0, 1) + Le(0, 7));
+  int profileRequests = 0;
+  for (const SocialParty::Message& m : g_sent) profileRequests += m.symbol == SocialNames::kProfileRequest ? 1 : 0;
+  QCHECK(profileRequests == 1);
+  Feed(w, SocialNames::kProfileSuccess, Le(0, 16));
+  void* obj = w.Obj();
+  QCHECK(std::string(SlotFn<Str_U32>(obj, kFriendName)(obj, 0)) == "Zed");
+  SocialNames::SetDecoder(nullptr);
 }
 
 void CheckInstanceSurvivesExit() {
@@ -632,7 +803,7 @@ void TestFrameWalker() {
 
 int main() {
   std::atexit(&CheckInstanceSurvivesExit);
-  const sentinel::LogSink previous = sentinel::SetLogSink(&LogToNowhere);
+  const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLog);
   TestObjectShape();
   TestInitializeAndShutdown();
   TestFriendRoster();
@@ -649,7 +820,15 @@ int main() {
   TestFrameWalker();
   TestGameExceptionThroughUpdate();
   TestGameExceptionThroughGate();
-  TestEventBatchOverflow();
+  TestEventBatchCarriesTheRemainder();
+  TestEventQueueOverflowIsCounted();
+  TestMemberCountNeverExceedsTheGamesArray();
+  TestFailedSendsDoNotStickTheModel();
+  TestDeferredJoinLogsOncePerParty();
+  TestResetKeepsTheGamesPartyJson();
+  TestMemberCountAgreesBeforeLogin();
+  TestSendLogsStableIds();
+  TestNamesAreAskedForOnlyWithADecoder();
   TestLocalAccount();
   sentinel::SetLogSink(previous);
   if (quest_test::Failures() != 0) {

@@ -15,6 +15,7 @@
 // counted and answered with the slot's zero value, and never propagates into the game's frames.
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -39,8 +40,20 @@ struct Ports {
   const std::uint8_t* invalidUuid = nullptr;
 };
 
-// The process-wide models and SocialParty::Send.
-Ports ProductionPorts();
+// The process-wide models and SocialParty::Send. Built once (the dynamic symbol it resolves is looked up
+// once, not per frame) and returned by reference.
+const Ports& ProductionPorts();
+
+// What the facade counted, for the sentinel's reporter (RegisterSocialReportCounters). Zero is the
+// healthy state for all of them except joinDeferred.
+struct FacadeCounters {
+  const std::atomic<std::uint64_t>& membersClamped;  // a party reported more members than the game's array holds
+  const std::atomic<std::uint64_t>& eventsDropped;   // callbacks lost because the carry queue was full
+  const std::atomic<std::uint64_t>& sendFailed;      // requests the sender refused (state rolled back)
+  const std::atomic<std::uint64_t>& joinDeferred;    // join attempts deferred behind a create or join in flight
+};
+FacadeCounters FacadeCountersView() noexcept;
+void ResetFacadeCountersForTest() noexcept;
 
 // The signed-in account, in the NEVR id space the whole facade speaks: the id the login hands the game
 // and the name to show for it. The login adapter calls it once the service accepts the login; until then

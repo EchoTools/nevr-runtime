@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <cstring>
 #include <exception>
 #include <mutex>
@@ -26,6 +27,17 @@ constexpr std::uint32_t kTraceFirstCalls = 8;
 constexpr std::uint32_t kTraceEvery = 600;
 constexpr std::uint64_t kCreateRetrySeconds = 4;
 constexpr std::uint8_t kUpdateWantsParty = 1;  // Update's flags byte, bit 0: a party should exist
+// Callbacks carried to later frames when more than a batch is due; past this the newest are dropped and counted.
+constexpr std::size_t kMaxQueuedEvents = 256;
+
+std::atomic<std::uint64_t> g_membersClamped{0};
+std::atomic<std::uint64_t> g_eventsDropped{0};
+std::atomic<std::uint64_t> g_sendFailed{0};
+std::atomic<std::uint64_t> g_joinDeferred{0};
+
+void Count(std::atomic<std::uint64_t>& counter, std::uint64_t n = 1) noexcept {
+  counter.fetch_add(n, std::memory_order_relaxed);
+}
 
 }  // namespace
 
@@ -47,6 +59,10 @@ struct Facade::Impl {
   std::atomic<std::uint32_t> shutdownCalls{0};
   std::atomic<std::uint32_t> slotFailures{0};
   std::atomic<std::uint32_t> callbackCalls{0};
+
+  std::deque<SocialParty::Event> queuedEvents;  // drained from the model, not yet delivered (game thread only)
+  bool queueOverflowLogged = false;
+  std::uint64_t deferredLoggedParty = 0;  // the party whose deferral was last logged (0: none)
 
   bool processWide = false;  // the Instance(): its destruction is a defect the test pins
   bool createTried = false;
@@ -107,6 +123,13 @@ void PublishView(Impl& impl) {
     self.name = next.selfName.empty() ? std::to_string(next.selfId) : next.selfName;
     next.members.push_back(self);
   }
+  // The game indexes a member JSON array of kMemberJsonSlots entries by the member count this object
+  // reports (libr15 PartyMemberData 0x129b3fc, PartyMemberHeadsetType 0x129b168), so the count can
+  // never exceed it, whatever the server sends. The model keeps its own list.
+  if (next.members.size() > kMemberJsonSlots) {
+    next.members.resize(kMemberJsonSlots);
+    Count(g_membersClamped);
+  }
   auto shared = std::make_shared<const SocialParty::View>(std::move(next));
   std::lock_guard<std::mutex> guard(impl.viewMutex);
   impl.retired[impl.retiredNext] = impl.view;
@@ -120,14 +143,34 @@ std::uint64_t ViewRoomId(const SocialParty::View& view) {
 
 // ---- sending --------------------------------------------------------------------------------
 
-void SendParty(Impl& impl, const char* what, const std::vector<SocialParty::Message>& messages) {
+std::uint64_t PayloadU64(const std::string& payload, std::size_t offset) {
+  if (payload.size() < offset + 8) return 0;
+  std::uint64_t v = 0;
+  for (int i = 7; i >= 0; --i) v = (v << 8) | static_cast<std::uint8_t>(payload[offset + static_cast<std::size_t>(i)]);
+  return v;
+}
+
+// Sends the requests and logs one line per request with its stable ids: the request name, its symbol, the
+// id it carries last (the invite target, party, scope or policy at payload +0x20 of a Standard message)
+// and, for a Targeted one, its parameter (+0x28). No secret is in either. Returns true only if all went.
+bool SendParty(Impl& impl, const char* what, const std::vector<SocialParty::Message>& messages) {
   if (messages.empty()) {
     LogFields(LogLevel::kInfo, "social_send", {{"what", what}, {"count", 0}, {"sent", "nothing_to_send"}});
-    return;
+    return true;
   }
   const bool sent = impl.ports.send != nullptr && impl.ports.send(messages);
-  LogFields(sent ? LogLevel::kInfo : LogLevel::kWarn, "social_send",
-            {{"what", what}, {"count", static_cast<long long>(messages.size())}, {"sent", sent ? "yes" : "NOT_sent"}});
+  if (!sent) Count(g_sendFailed);
+  for (const SocialParty::Message& m : messages) {
+    const char* name = SocialParty::RequestName(m.symbol);
+    char symbol[19];
+    LogFields(sent ? LogLevel::kInfo : LogLevel::kWarn, "social_send",
+              {{"what", what}, {"name", name != nullptr ? name : "unnamed"},
+               {"symbol", sentinel::HexString(symbol, m.symbol)},
+               {"arg", static_cast<long long>(PayloadU64(m.payload, 0x20))},
+               {"param", static_cast<long long>(m.payload.size() >= 0x2C ? PayloadU64(m.payload, 0x28) & 0xFFFFFFFFULL : 0)},
+               {"sent", sent ? "yes" : "NOT_sent"}});
+  }
+  return sent;
 }
 
 // ---- object fields the game reads directly --------------------------------------------------
@@ -184,7 +227,7 @@ std::uint32_t SlotZero32(void*) { return 0; }
 
 void SlotSendInvite(void* self, std::uint64_t target) {
   Impl& impl = *OwnerOf(self);
-  SendParty(impl, "party invite", Party(impl).SendInvite(target));
+  if (!SendParty(impl, "party invite", Party(impl).SendInvite(target))) Party(impl).AbandonCreate();
 }
 
 void SlotLeave(void* self) {
@@ -250,22 +293,34 @@ std::uint32_t SlotIsHost(void* self) {
 
 std::uint64_t SlotId(void* self) { return ViewRoomId(*CurrentView(*OwnerOf(self))); }
 
-std::uint32_t SlotMemberCount(void* self) {
-  return static_cast<std::uint32_t>(CurrentView(*OwnerOf(self))->members.size());
+// The count the object reports: the party's members, at least the local-user count AddMember wrote (so
+// the engine's MemberCount - [+0x200] is never negative before the first Update), never more than the
+// game's member JSON array holds.
+std::uint32_t ReportedMemberCount(Impl& impl) {
+  std::uint32_t count = static_cast<std::uint32_t>(CurrentView(impl)->members.size());
+  const std::uint32_t local = Get<std::uint32_t>(impl.object.data(), kOffLocalCount);
+  if (count < local) count = local;
+  return count > kMemberJsonSlots ? kMemberJsonSlots : count;
 }
 
+std::uint32_t SlotMemberCount(void* self) { return ReportedMemberCount(*OwnerOf(self)); }
+
 std::uint64_t SlotMemberId(void* self, std::uint32_t index) {
-  const auto view = CurrentView(*OwnerOf(self));
-  return index < view->members.size() ? view->members[index].id : 0;
+  Impl& impl = *OwnerOf(self);
+  const auto view = CurrentView(impl);
+  return index < view->members.size() && index < kMemberJsonSlots ? view->members[index].id : 0;
 }
 
 const char* SlotMemberName(void* self, std::uint32_t index) {
-  const auto view = CurrentView(*OwnerOf(self));
-  return index < view->members.size() ? view->members[index].name.c_str() : "";
+  Impl& impl = *OwnerOf(self);
+  const auto view = CurrentView(impl);
+  return index < view->members.size() && index < kMemberJsonSlots ? view->members[index].name.c_str() : "";
 }
 
 // CNSOVRSocial::LocalId (libpnsovr 0x20527c): member 0 is local user 0, anyone else is no local user.
-std::uint64_t SlotLocalId(void*, std::uint32_t index) { return index == 0 ? 0 : UINT64_MAX; }
+// CNSOVRSocial::LocalId (libpnsovr 0x20527c, `mov w8, #-1; csel x0, xzr, x8, eq`): the invalid local user id is the
+// 32-bit -1 zero-extended, not 64 bits of ones.
+std::uint64_t SlotLocalId(void*, std::uint32_t index) { return index == 0 ? 0 : 0xFFFFFFFFULL; }
 
 // MemberDataWritable hands out the local member's CJson. Party data (the headset type and other
 // per-member JSON) needs the game's CJson functions and is not carried yet; null is what CNSOVRSocial
@@ -276,7 +331,9 @@ std::uint32_t SlotJoinableInternal(void* self) { return CurrentView(*OwnerOf(sel
 
 void SlotSetJoinableInternal(void* self, std::uint32_t joinable) {
   Impl& impl = *OwnerOf(self);
-  SendParty(impl, joinable != 0 ? "party unlock" : "party lock", Party(impl).SetLocked(joinable == 0));
+  if (!SendParty(impl, joinable != 0 ? "party unlock" : "party lock", Party(impl).SetLocked(joinable == 0))) {
+    Party(impl).ForgetLockRequest();
+  }
 }
 
 std::int32_t SlotInitialize(void* self, std::uint32_t maxUsers, const void* callbacks) {
@@ -308,7 +365,10 @@ void SlotDestructor(void*) {
 // (state & ~1) | 2, zero both member counts and put the lobby fields back to "no lobby".
 void ResetBase(Impl& impl) {
   void* self = impl.object.data();
-  std::memset(Bytes(self) + kOffPartyJson, 0, 16);
+  // +0x1F0 is the party CJson. The game allocates a tree in it while this client leads a party
+  // (CR15NetGame::Update, libr15 0x12951d4..0x1295254), so it is neither zeroed nor freed here: zeroing
+  // the pointer it owns leaks the tree on every Reset. Only the member array, which nothing writes
+  // (MemberDataWritable answers null), is cleared.
   std::memset(impl.memberJson.data(), 0, impl.memberJson.size());
   Put<std::uint32_t>(self, kOffFlags, (Get<std::uint32_t>(self, kOffFlags) & ~kFlagDataWritten) | kFlagJoinable);
   Put<std::uint32_t>(self, kOffLocalCount, 0);
@@ -346,7 +406,9 @@ void MaybeCreateParty(Impl& impl, const void* flagsPointer) {
   if (request.empty()) return;
   impl.createTried = true;
   impl.lastCreate = now;
-  SendParty(impl, "party create", request);
+  // A create that could not be sent is not in flight: put the model back so the retry after the
+  // interval can send it (the model set "creating" when it built the request).
+  if (!SendParty(impl, "party create", request)) Party(impl).AbandonCreate();
 }
 
 void SyncHostJoinable(Impl& impl) {
@@ -354,7 +416,10 @@ void SyncHostJoinable(Impl& impl) {
   if (view->partyId == 0 || view->joining || view->ownerId != view->selfId) return;
   const std::uint32_t wanted = HostWantsJoinable(impl) ? 1U : 0U;
   const std::uint32_t current = view->locked ? 0U : 1U;
-  if (wanted != current) SendParty(impl, wanted != 0 ? "party unlock" : "party lock", Party(impl).SetLocked(wanted == 0));
+  if (wanted != current &&
+      !SendParty(impl, wanted != 0 ? "party unlock" : "party lock", Party(impl).SetLocked(wanted == 0))) {
+    Party(impl).ForgetLockRequest();
+  }
 }
 
 void EnterLobbyFields(void* self, const void* uuid, std::uint64_t matchType, std::uint16_t team, std::uint8_t lobbyType,
@@ -705,24 +770,36 @@ void UpdateCollect(void* self, EventBatch* out) noexcept {
   try {
     PublishView(*impl);
     SyncObject(*impl, *CurrentView(*impl));
-    for (const SocialParty::Event& event : Party(*impl).DrainEvents()) {
-      bool deliver = false;
-      const EventKind kind = KindOf(event.kind, &deliver);
-      if (!deliver) continue;
-      if (out->count >= kMaxPendingEvents) {
+    // Everything the model queued joins the carry queue, oldest first; one batch is delivered now and the
+    // rest next frame, in order. Dropping a Left, Kicked or MemberJoined would leave the game's party
+    // state out of step with the server's, so events are only dropped when the queue itself overflows.
+    for (SocialParty::Event& event : Party(*impl).DrainEvents()) {
+      if (impl->queuedEvents.size() >= kMaxQueuedEvents) {
+        Count(g_eventsDropped);
         ++out->dropped;
         continue;
       }
-      PendingEvent& slot = out->events[out->count++];
-      slot.kind = kind;
-      slot.index = event.index;
-      slot.code = event.code;
-      slot.id = event.id;
-      std::strncpy(slot.name, event.name.c_str(), kEventNameBytes - 1);
-      slot.name[kEventNameBytes - 1] = '\0';
+      impl->queuedEvents.push_back(std::move(event));
     }
-    if (out->dropped != 0) {
-      LogFields(LogLevel::kError, "social_events_dropped", {{"dropped", out->dropped}, {"capacity", kMaxPendingEvents}});
+    if (out->dropped != 0 && !impl->queueOverflowLogged) {
+      impl->queueOverflowLogged = true;
+      LogFields(LogLevel::kError, "social_events_dropped",
+                {{"capacity", static_cast<long long>(kMaxQueuedEvents)}, {"note", "newest events dropped; counted by social_events_dropped"}});
+    }
+    while (!impl->queuedEvents.empty() && out->count < kMaxPendingEvents) {
+      const SocialParty::Event& event = impl->queuedEvents.front();
+      bool deliver = false;
+      const EventKind kind = KindOf(event.kind, &deliver);
+      if (deliver) {
+        PendingEvent& slot = out->events[out->count++];
+        slot.kind = kind;
+        slot.index = event.index;
+        slot.code = event.code;
+        slot.id = event.id;
+        std::strncpy(slot.name, event.name.c_str(), kEventNameBytes - 1);
+        slot.name[kEventNameBytes - 1] = '\0';
+      }
+      impl->queuedEvents.pop_front();
     }
   } catch (const std::exception&) {
     ReportFailure(impl, kUpdate);
@@ -744,10 +821,19 @@ JoinStep JoinBegin(void* self, std::uint64_t partyId) noexcept {
   if (impl == nullptr) return JoinStep::kDeferred;
   try {
     SocialParty::State& party = Party(*impl);
-    if (party.BeginJoin(partyId)) return JoinStep::kAskGate;
-    LogFields(LogLevel::kInfo, "social_join",
-              {{"party", static_cast<long long>(partyId)}, {"result", "deferred"},
-               {"deferred_party", static_cast<long long>(party.DeferredJoin())}});
+    if (party.BeginJoin(partyId)) {
+      impl->deferredLoggedParty = 0;
+      return JoinStep::kAskGate;
+    }
+    // The model retries a deferred join every Update until the create or join in flight answers: count each
+    // deferral, log it once per party (a state change), not once per frame.
+    Count(g_joinDeferred);
+    if (impl->deferredLoggedParty != partyId) {
+      impl->deferredLoggedParty = partyId;
+      LogFields(LogLevel::kInfo, "social_join",
+                {{"party", static_cast<long long>(partyId)}, {"result", "deferred"},
+                 {"deferred_party", static_cast<long long>(party.DeferredJoin())}});
+    }
   } catch (const std::exception&) {
     ReportFailure(impl, kJoinInternal);
   }
@@ -764,7 +850,8 @@ void JoinFinish(void* self, std::uint64_t partyId, bool allowed) noexcept {
       LogFields(LogLevel::kInfo, "social_join", {{"party", static_cast<long long>(partyId)}, {"result", "declined"}});
       return;
     }
-    SendParty(*impl, "party join", party.Join(partyId));
+    if (!SendParty(*impl, "party join", party.Join(partyId))) party.AbandonJoining();
+    impl->deferredLoggedParty = 0;
   } catch (const std::exception&) {
     ReportFailure(impl, kJoinInternal);
   }
@@ -810,16 +897,48 @@ std::uint32_t Facade::ShutdownCalls() const noexcept { return impl_->shutdownCal
 std::uint32_t Facade::SlotFailures() const noexcept { return impl_->slotFailures.load(std::memory_order_relaxed); }
 std::uint32_t Facade::CallbackCalls() const noexcept { return impl_->callbackCalls.load(std::memory_order_relaxed); }
 
-Ports ProductionPorts() {
-  Ports ports;
-  ports.party = &SocialParty::Global();
-  ports.friends = &SocialRoster::Global();
-  ports.recent = &SocialRoster::RecentlyMet();
-  ports.send = &SocialParty::Send;
-  // ExitLobby stores NRadEngine::SUuid::kInvalid, a global the game initialises at startup; the pointer
-  // is read at call time. Not found (a host test) is sixteen zero bytes.
-  ports.invalidUuid = static_cast<const std::uint8_t*>(dlsym(RTLD_DEFAULT, "_ZN10NRadEngine5SUuid8kInvalidE"));
+namespace {
+
+// libr15.so is loaded RTLD_LOCAL by the Java side, so the symbol may be invisible to RTLD_DEFAULT: look it up
+// in libr15's own handle (RTLD_NOLOAD: never loads it), fall back to the global scope, and say which worked.
+const std::uint8_t* ResolveInvalidUuid() {
+  static const char kSymbol[] = "_ZN10NRadEngine5SUuid8kInvalidE";
+  void* handle = dlopen("libr15.so", RTLD_NOW | RTLD_NOLOAD);
+  void* symbol = handle != nullptr ? dlsym(handle, kSymbol) : nullptr;
+  if (handle != nullptr) dlclose(handle);
+  if (symbol == nullptr) symbol = dlsym(RTLD_DEFAULT, kSymbol);
+  LogFields(symbol != nullptr ? LogLevel::kInfo : LogLevel::kWarn, "social_ports",
+            {{"invalid_uuid", symbol != nullptr ? "resolved" : "missing_zero_fallback"}});
+  return static_cast<const std::uint8_t*>(symbol);
+}
+
+}  // namespace
+
+const Ports& ProductionPorts() {
+  static const Ports ports = [] {
+    Ports p;
+    p.party = &SocialParty::Global();
+    p.friends = &SocialRoster::Global();
+    p.recent = &SocialRoster::RecentlyMet();
+    p.send = &SocialParty::Send;
+    // ExitLobby stores NRadEngine::SUuid::kInvalid, a global the game initialises at startup; the pointer is
+    // read at call time. Not found (a host test, or a different library layout): ExitLobby stores sixteen
+    // zero bytes, which is what an unset uuid is.
+    p.invalidUuid = ResolveInvalidUuid();
+    return p;
+  }();
   return ports;
+}
+
+FacadeCounters FacadeCountersView() noexcept {
+  return FacadeCounters{g_membersClamped, g_eventsDropped, g_sendFailed, g_joinDeferred};
+}
+
+void ResetFacadeCountersForTest() noexcept {
+  g_membersClamped.store(0, std::memory_order_relaxed);
+  g_eventsDropped.store(0, std::memory_order_relaxed);
+  g_sendFailed.store(0, std::memory_order_relaxed);
+  g_joinDeferred.store(0, std::memory_order_relaxed);
 }
 
 void SetLocalAccount(std::uint64_t accountId, const char* displayName) {

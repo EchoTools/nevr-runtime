@@ -119,6 +119,13 @@ bool RegisterSocialReportCounters() {
   ok = sentinel::RegisterReportCounter("social_foreign_object", &g_foreignObject, sentinel::ReportKind::kFaults) && ok;
   ok = sentinel::RegisterReportCounter("social_thunk_faults", &SocialThunk::FaultCounter(),
                                        sentinel::ReportKind::kFaults) && ok;
+  const FacadeCounters facade = FacadeCountersView();
+  ok = sentinel::RegisterReportCounter("social_members_clamped", &facade.membersClamped,
+                                       sentinel::ReportKind::kFaults) && ok;
+  ok = sentinel::RegisterReportCounter("social_events_dropped", &facade.eventsDropped,
+                                       sentinel::ReportKind::kFaults) && ok;
+  ok = sentinel::RegisterReportCounter("social_send_failed", &facade.sendFailed, sentinel::ReportKind::kFaults) && ok;
+  ok = sentinel::RegisterReportCounter("social_join_deferred", &facade.joinDeferred) && ok;
   return ok;
 }
 

@@ -87,15 +87,13 @@ struct Dynamic {
 bool ReadDynamic(const LoadedElf& elf, Dynamic* out) {
   for (const Elf64_Phdr& ph : elf.phdrs) {
     if (ph.p_type != PT_DYNAMIC) continue;
-    std::uint64_t rela = 0, relasz = 0, symtab = 0, strtab = 0, hashEnd = 0;
+    std::uint64_t rela = 0, relasz = 0, symtab = 0, strtab = 0;
     for (const Elf64_Dyn* d = reinterpret_cast<const Elf64_Dyn*>(elf.At(ph.p_vaddr)); d->d_tag != DT_NULL; ++d) {
       if (d->d_tag == DT_RELA) rela = d->d_un.d_ptr;
       if (d->d_tag == DT_RELASZ) relasz = d->d_un.d_val;
       if (d->d_tag == DT_SYMTAB) symtab = d->d_un.d_ptr;
       if (d->d_tag == DT_STRTAB) strtab = d->d_un.d_ptr;
-      if (d->d_tag == DT_GNU_HASH || d->d_tag == DT_HASH) hashEnd = d->d_un.d_ptr;
     }
-    (void)hashEnd;
     if (rela == 0 || symtab == 0 || strtab == 0) return false;
     out->rela = reinterpret_cast<const Elf64_Rela*>(elf.At(rela));
     out->relaCount = relasz / sizeof(Elf64_Rela);
