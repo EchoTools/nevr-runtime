@@ -27,15 +27,31 @@ Token auth is shared the same way. The token model, refresh handling and device-
 platform-neutral sources in `src/core/` (`auth_token_model.h`, `auth_refresh.{h,cpp}`,
 `device_auth_flow.{h,cpp}`, `device_poll_response.{h,cpp}`) behind injected HTTP, clock and log
 interfaces (`auth_types.h`); the Windows `token_auth` module and `src/quest/auth/` both compile
-them. `src/quest/auth/` holds the Android adapters: libcurl over OpenSSL from the Quest vcpkg
-manifest (`arm64-android` triplet) with peer and host verification on and
-`/system/etc/security/cacerts` as the CA directory, an atomic mode-0600 credential file under
-`/sdcard/Android/data/com.readyatdawn.r15/files/`, a login-link file there, and a `Session` whose
-worker thread does the login so `Start()` never blocks the caller. `nevr_quest_token_auth` is not
-linked into the sentinel, and nothing yet hands the token to the login path. The tests are
-`src/quest/tests/auth_core_test.cpp`, run on the host by `just test-quest-shared`. Not
-established: the CA directory and the libcurl/OpenSSL stack on a headset, and how the player is
-shown the login link.
+them. `src/quest/auth/` holds the Android adapters:
+
+- HTTP is libcurl over OpenSSL from the Quest vcpkg manifest (`arm64-android` triplet), with peer
+  and host verification on, https only, no redirects, no proxy environment variables and a capped
+  response. Trust anchors are read from `/apex/com.android.conscrypt/cacerts` (when it holds
+  certificates) or `/system/etc/security/cacerts` into memory and passed as `CAINFO_BLOB`.
+  `CAPATH` is not used: OpenSSL looks a CApath file up by the SHA-1 based subject hash and
+  Android names its files by the old MD5 based one. With no certificate loaded every request
+  fails closed.
+- The refresh token is written to `/data/data/<package>/files/.credentials.json`, the package
+  taken from `/proc/self/cmdline`, because `/sdcard` does not enforce file modes. The write is a
+  fresh exclusive temp file, fsync, rename, directory fsync; a read refuses a symlink. If the
+  directory cannot be derived the login runs without persisting and says so. Only the login link
+  (`device_login.txt`, under `/sdcard/Android/data/com.readyatdawn.r15/files/`) is on external
+  storage.
+- `Session` does the login on a worker thread, so `Start()` never blocks the caller. A permanent
+  poll error ends the login after five consecutive failures; a refresh token the server refuses
+  (400/401/403) or that has expired publishes `Expired` and starts the device login again.
+
+`nevr_quest_token_auth` is not linked into the sentinel, and nothing yet hands the token to the
+login path. The tests are `src/quest/tests/auth_core_test.cpp` (fake HTTP and clock) and
+`src/quest/tests/tls_ca_test.cpp` (loopback TLS peers with a generated CA and an Android-style
+directory), run on the host by `just test-quest-shared`. Not established on a headset: the CA
+directories and the libcurl/OpenSSL stack, that the process name is the package name, write access
+to the app-internal directory, and how the player is shown the login link.
 
 `HookImport` replaces the GOT slot a module uses for a symbol it imports. It cannot hook an
 arbitrary internal function of `libr15.so`. It has no detach, no duplicate-install guard and
