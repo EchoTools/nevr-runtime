@@ -200,6 +200,14 @@ void Router::FailSessionLocked(RemoteId remote, uint16_t code, const char* why, 
   if (closeRemote) fx.remoteCloses.emplace_back(remote, code);
 }
 
+std::size_t Router::LiveMatchmakersLocked() const {
+  std::size_t live = 0;
+  for (const auto& entry : gameTable_) {
+    if (entry.second.role == Role::Matchmaker && !entry.second.closing) ++live;
+  }
+  return live;
+}
+
 Router::Game* Router::SharedRouteLocked(GameId* target) {
   for (const GameId id : {activeGame_, loginGame_}) {
     if (id == kNoGame) continue;
@@ -251,10 +259,16 @@ void Router::OnGameOpen(GameId game) {
       fx.gameCloses.push_back({game, kCloseGoingAway, "router shut down"});
     } else if (gameTable_.count(game) != 0) {
       Log(fx, LogLevel::Error, Fmt("[router] duplicate open for game=%llu ignored", Ull(game)));
+    } else if (const Role next = connectionCount_ == 0 ? Role::Config : (connectionCount_ == 1 ? Role::Login : Role::Matchmaker);
+               next == Role::Matchmaker && LiveMatchmakersLocked() >= options_.limits.maxMatchmakerConnections) {
+      Log(fx, LogLevel::Warning,
+          Fmt("[router] game=%llu refused: %zu matchmaker connections are already open", Ull(game),
+              options_.limits.maxMatchmakerConnections));
+      fx.gameCloses.push_back({game, kCloseTryAgainLater, "too many matchmaker connections"});
     } else {
       Game g;
       g.connIdx = connectionCount_++;
-      g.role = g.connIdx == 0 ? Role::Config : (g.connIdx == 1 ? Role::Login : Role::Matchmaker);
+      g.role = next;
       if (g.role == Role::Matchmaker && loginRemote_ != kNoRemote && remoteTable_.count(loginRemote_) != 0) {
         g.remote = loginRemote_;
         activeGame_ = game;
