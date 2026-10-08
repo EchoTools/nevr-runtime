@@ -16,6 +16,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "quest/social/social_abi.h"
+
 namespace quest_social::internal {
 
 enum EventKind : std::uint8_t {
@@ -67,6 +69,11 @@ void UpdateCollect(void* self, EventBatch* out) noexcept;
 // Update, last step: the host's joinable bit against the server's lock.
 void UpdateFinish(void* self) noexcept;
 
+// Reset: leave the party silently and put the object's own fields back (the game follows with AddMember).
+// Returns the game's CJson::Reset to call on the party CJson at +0x1f0, or nullptr when it is not known (it
+// is counted); the call itself is made by SlotResetEntry, outside any frame with a landing pad.
+CJsonResetFn ResetPrepare(void* self) noexcept;
+
 // Join: begin (drop the invites to that party, defer if a create or join is in flight) ...
 JoinStep JoinBegin(void* self, std::uint64_t partyId) noexcept;
 // ... and finish after the game's accept gate answered.
@@ -78,5 +85,6 @@ std::uint64_t InvitePartyAt(void* self, std::uint32_t index) noexcept;
 void SlotUpdateEntry(void* self, const void* params) noexcept;
 void SlotJoinInternalEntry(void* self, std::uint64_t partyId) noexcept;
 void SlotAcceptInviteEntry(void* self, std::uint32_t index) noexcept;
+void SlotResetEntry(void* self) noexcept;
 
 }  // namespace quest_social::internal

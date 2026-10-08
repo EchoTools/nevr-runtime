@@ -29,6 +29,7 @@ target_link_libraries(nevr_toolchain_probe PRIVATE log)
 
 # Compile the shared login profile source with the Quest Android toolchain.
 find_package(nlohmann_json CONFIG REQUIRED)
+find_package(zstd CONFIG REQUIRED)  # the friend-name profile reply is a zstd frame (runtime/compat/social_names.cpp)
 add_library(nevr_quest_login_profile STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/login_profile.cpp")
 target_include_directories(nevr_quest_login_profile PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
@@ -74,7 +75,12 @@ add_library(nevr_quest_social STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_facade.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_frames.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_game_calls.cpp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/social/social_install.cpp")
+  "${CMAKE_CURRENT_SOURCE_DIR}/social/social_install.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/social_names.cpp")
+# social_names.cpp is the PC's friend-name decoder. The sentinel may carry no dynamic initializer, so the
+# static registration the PC uses is compiled out and InstallSocialHook registers the decoder explicitly.
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/social_names.cpp"
+  PROPERTIES COMPILE_DEFINITIONS "NEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION")
 # The frames a game call passes through (the Update/Join slots that call the game's callbacks and the
 # Social() handler) are built without exception support, as callback_thunk.h requires; the rest of the
 # facade keeps exceptions so it can contain its own failures. tools/check_quest_social_frames.sh pins it.
@@ -84,10 +90,10 @@ set_source_files_properties(
   "${CMAKE_CURRENT_SOURCE_DIR}/tests/social_install_test.cpp"
   PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 target_include_directories(nevr_quest_social PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
-target_link_libraries(nevr_quest_social PUBLIC nevr_quest_got_hook dl)
+target_link_libraries(nevr_quest_social PUBLIC nevr_quest_got_hook dl PRIVATE zstd::libzstd nlohmann_json::nlohmann_json)
 target_compile_options(nevr_quest_social PRIVATE -Wall -Wextra -Werror)
 
-foreach(social_test social_facade_test social_install_test)
+foreach(social_test social_facade_test social_install_test social_names_test)
   add_executable(${social_test} "tests/${social_test}.cpp")
   target_link_libraries(${social_test} PRIVATE nevr_quest_social)
   target_compile_options(${social_test} PRIVATE -Wall -Wextra -Werror)

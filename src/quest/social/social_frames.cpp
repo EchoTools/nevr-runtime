@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "hook_log.h"
+#include "quest/social/social_request_log.h"
 #include "runtime/compat/social_names.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
@@ -28,8 +29,7 @@ std::uint64_t Le64(const std::uint8_t* p) {
 void Send(const Ports& ports, const char* what, const std::vector<SocialParty::Message>& messages) {
   if (messages.empty()) return;
   const bool sent = ports.send != nullptr && ports.send(messages);
-  LogFields(sent ? LogLevel::kInfo : LogLevel::kWarn, "social_send",
-            {{"what", what}, {"count", static_cast<long long>(messages.size())}, {"sent", sent ? "yes" : "NOT_sent"}});
+  LogRequests(what, messages, sent, 0);  // one line per request, with the account or party it is aimed at
 }
 
 // Asks for the display name of `accountId` once per session, but only if the reply can be read: the profile

@@ -20,6 +20,7 @@
 #include <memory>
 #include <vector>
 
+#include "quest/social/social_abi.h"
 #include "runtime/compat/social_party.h"
 #include "runtime/compat/social_roster.h"
 
@@ -36,21 +37,25 @@ struct Ports {
   bool (*send)(const std::vector<SocialParty::Message>& messages) = nullptr;
   // Monotonic seconds. nullptr: a steady clock.
   std::uint64_t (*nowSeconds)() = nullptr;
-  // NRadEngine::SUuid::kInvalid (16 bytes), which ExitLobby stores. nullptr: sixteen zero bytes.
-  const std::uint8_t* invalidUuid = nullptr;
 };
 
-// The process-wide models and SocialParty::Send. Built once (the dynamic symbol it resolves is looked up
-// once, not per frame) and returned by reference.
+// The process-wide models and SocialParty::Send, returned by reference.
 const Ports& ProductionPorts();
+
+// The game's CJson::Reset (social_abi.h), which Reset calls on the party CJson at +0x1f0. The installer sets it
+// once it has found libr15 of the pinned build (social_install.h); nullptr (the default) leaves that CJson
+// alone and counts the Reset (cjsonResetUnavailable). A test sets a fake.
+void SetCJsonReset(CJsonResetFn reset) noexcept;
 
 // What the facade counted, for the sentinel's reporter (RegisterSocialReportCounters). Zero is the
 // healthy state for all of them except joinDeferred.
 struct FacadeCounters {
-  const std::atomic<std::uint64_t>& membersClamped;  // a party reported more members than the game's array holds
+  const std::atomic<std::uint64_t>& membersHidden;   // party members past the game's array: in the model, invisible to the game
   const std::atomic<std::uint64_t>& eventsDropped;   // callbacks lost because the carry queue was full
   const std::atomic<std::uint64_t>& sendFailed;      // requests the sender refused (state rolled back)
   const std::atomic<std::uint64_t>& joinDeferred;    // join attempts deferred behind a create or join in flight
+  const std::atomic<std::uint64_t>& requestTimeout;  // create, join or lock requests the sender took and the server never answered
+  const std::atomic<std::uint64_t>& cjsonResetUnavailable;  // Resets that could not call the game's CJson::Reset
 };
 FacadeCounters FacadeCountersView() noexcept;
 void ResetFacadeCountersForTest() noexcept;

@@ -33,6 +33,13 @@ inline constexpr std::uint64_t kSocialSlotVaddr = 0x36ef528ULL;
 // replaced when its first word equals libpnsovr's load bias plus this value.
 inline constexpr std::uint64_t kOvrSocialVptrVaddr = 0x6a1478ULL;
 
+// NRadEngine::CJson::Reset() (libr15 export _ZN10NRadEngine5CJson5ResetEv, 36 bytes at 0xfa227c): drops
+// the tree a CJson owns (CJson::ResetCache, then CJson::Clear with an empty path) and is a no-op on a
+// zeroed CJson. CNSISocial::Reset calls it on +0x1f0 (libpnsovr 0x36a92c, libr15 0x19197cc). Returns void;
+// the argument is the CJson.
+using CJsonResetFn = void (*)(void* cjson);
+inline constexpr std::uint64_t kLibR15CJsonResetVaddr = 0xfa227cULL;
+
 // ---- the CNSISocial vtable ------------------------------------------------------------------
 
 // 76 slots. Quest numbering is the PCVR facade's numbering plus one from slot 12 on: the Itanium
@@ -239,7 +246,7 @@ enum Callback : std::size_t {
 // (CNSISocial::MemberName 0x1935a4c indexes it with stride 16).
 inline constexpr std::size_t kOffLocalCount = 0x200;
 inline constexpr std::size_t kOffMemberCount = 0x204;
-inline constexpr std::size_t kOffPartyJson = 0x1F0;
+inline constexpr std::size_t kOffPartyJson = 0x1F0;  // the social object's own CJson (see CNSISocial::Reset)
 inline constexpr std::size_t kOffMemberJson = 0x248;
 inline constexpr std::size_t kOffMaxMembers = 0x250;
 inline constexpr std::size_t kOffLobbyUuid = 0x260;
