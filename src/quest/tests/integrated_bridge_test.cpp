@@ -212,7 +212,9 @@ bool WaitFor(const std::function<bool()>& pred, int ms = 3000) {
 void TestLoginRelayTapAndSideChannel() {
   FakeConnector connector;
   Observed seen;
-  IntegratedBridge bridge(MakeConfig(&connector, &seen, "JWT-A"));
+  IntegratedBridge::Config withFriends = MakeConfig(&connector, &seen, "JWT-A");
+  withFriends.subscribeFriendList = true;
+  IntegratedBridge bridge(std::move(withFriends));
   const uint16_t port = bridge.Start();
   QCHECK(port != 0);
 
@@ -265,6 +267,12 @@ void TestLoginRelayTapAndSideChannel() {
     return seen.logins.size() == 1 && seen.logins[0] == 31337;
   }));
   QCHECK(HasFrame(seen, /*s2g=*/true, success));
+
+  // With social on, the friend-list subscribe follows the accepted login (the game never sends it).
+  QCHECK(WaitFor([&] {
+    for (const std::string& s : loginConn->Sent()) if (s == EvrCodec::BuildFriendListSubscribe()) return true;
+    return false;
+  }));
 
   const std::string request = EvrCodec::BuildMessage(0x1234, "party-request");
   QCHECK(bridge.SendToLogin(request));

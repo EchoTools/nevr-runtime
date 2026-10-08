@@ -43,6 +43,10 @@ class IntegratedBridge {
     quest_net::WsConnector* connector = nullptr;            // not owned; must outlive the bridge
     quest_net::LoopbackGameServer::Config loopback;
     SessionRouter::Limits limits;
+    // Send the friend-list subscribe once the service accepts the login. The Quest game never asks for the
+    // NEVR friend list itself (its own friend code talks to the Oculus platform, which the social facade
+    // replaces), so the bridge asks, exactly as the PC bridge does after LoginSuccess.
+    bool subscribeFriendList = false;
     SessionRouter::LogSink log;
     FrameTapSinks tap;                                      // consumers of the relayed frames
   };

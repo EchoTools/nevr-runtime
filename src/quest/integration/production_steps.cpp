@@ -326,6 +326,7 @@ class ProductionSteps final : public Steps {
 
     IntegratedBridge::Config config;
     config.remoteUri = cfg.socketUri.text;
+    config.subscribeFriendList = rt.socialWanted;
     config.connector = rt.connector.get();
     config.log = RouterLog();
     config.identity = [serverKey] {
