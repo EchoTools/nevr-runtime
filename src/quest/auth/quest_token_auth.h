@@ -33,14 +33,21 @@ class QuestTokenAuth {
   QuestTokenAuth(QuestAuthConfig config, nevr::auth::LogSink log);
   ~QuestTokenAuth();
 
-  // Returns at once; the login runs on a worker thread.
-  void Start();
-  void Stop();
-  std::string Token() const;
-  uint64_t DiscordId() const;
-  Snapshot Get() const;
+  // Every call below is noexcept and catches std::exception itself: the hook that will call them
+  // from game frames must never see an exception cross that boundary. A failure is logged and
+  // reported as "no token" / a Failed snapshot.
+  //
+  // Returns at once; the login runs on a worker thread named "nevr-auth".
+  void Start() noexcept;
+  void Stop() noexcept;
+  std::string Token() const noexcept;
+  uint64_t DiscordId() const noexcept;
+  Snapshot Get() const noexcept;
 
  private:
+  void ReportFailure(const char* what, const char* where) const noexcept;
+
+  nevr::auth::LogSink log_;
   SystemClock clock_;
   CurlHttpClient http_;
   FileCredentialStore store_;

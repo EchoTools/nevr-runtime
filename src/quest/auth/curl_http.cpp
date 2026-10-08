@@ -2,6 +2,8 @@
 
 #include <curl/curl.h>
 
+#include <new>
+
 namespace nevr::quest_auth {
 
 namespace {
@@ -14,7 +16,11 @@ size_t WriteBody(void* contents, size_t size, size_t nmemb, void* user) {
   Sink* sink = static_cast<Sink*>(user);
   const size_t n = size * nmemb;
   if (sink->out->size() + n > sink->cap) return 0;  // makes curl fail with CURLE_WRITE_ERROR
-  sink->out->append(static_cast<char*>(contents), n);
+  try {
+    sink->out->append(static_cast<char*>(contents), n);
+  } catch (const std::bad_alloc&) {
+    return 0;  // an exception must not unwind through libcurl's C frames
+  }
   return n;
 }
 

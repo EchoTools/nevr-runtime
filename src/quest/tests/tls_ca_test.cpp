@@ -23,7 +23,9 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <fcntl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -384,7 +386,7 @@ TEST(ca_bundle_keeps_only_certificates_that_parse_and_counts_the_rest) {
   const CaBundle b = LoadCaBundle({dir}, logs.Sink());
   CHECK_EQ(b.certificates, size_t(2));
   CHECK_EQ(Count(b.pem, "-----BEGIN CERTIFICATE-----"), size_t(2));
-  CHECK(logs.text.find("certificates=2 unparsable_files=3 skipped_files=1") != std::string::npos);
+  CHECK(logs.text.find("certificates=2 unparsable_certs=3 skipped_files=1") != std::string::npos);
   CHECK(logs.text.find("AAAA") == std::string::npos);  // counts only, never content
 }
 
@@ -427,6 +429,52 @@ TEST(one_corrupt_file_in_the_directory_does_not_break_the_handshake) {
   const nevr::auth::HttpResponse r = client.PostJson(Url(server), "{}");
   CHECK(r.transport_ok);
   CHECK_EQ(r.status, 200L);
+}
+
+TEST(a_corrupt_pem_block_does_not_hide_the_blocks_around_it) {
+  const std::string good = PemOf(Fix().ca.cert.get());
+  const std::string bad = "-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n";
+  const std::string dir = FreshDir("ca-blocks");
+  WriteFile(dir + "/good-bad-good.0", good + bad + PemOf(Fix().other_ca.cert.get()));
+  WriteFile(dir + "/bad-then-good.0", bad + PemOf(Fix().leaf.cert.get()));
+  WriteFile(dir + "/unterminated.0", good.substr(0, good.size() / 2));
+  Logs logs;
+  const CaBundle b = LoadCaBundle({dir}, logs.Sink());
+  CHECK_EQ(b.certificates, size_t(3));
+  CHECK(logs.text.find("certificates=3 unparsable_certs=3") != std::string::npos);
+}
+
+TEST(entries_that_are_not_regular_files_are_skipped_counted_and_never_block) {
+  const std::string dir = FreshDir("ca-odd");
+  WriteFile(dir + "/real.0", PemOf(Fix().ca.cert.get()));
+  CHECK(::mkfifo((dir + "/fifo.0").c_str(), 0600) == 0);
+  CHECK(::symlink((dir + "/fifo.0").c_str(), (dir + "/link-to-fifo.0").c_str()) == 0);
+  CHECK(::symlink("/nonexistent/target", (dir + "/dangling.0").c_str()) == 0);
+  CHECK(::symlink("loop-b.0", (dir + "/loop-a.0").c_str()) == 0);
+  CHECK(::symlink("loop-a.0", (dir + "/loop-b.0").c_str()) == 0);
+  std::filesystem::create_directory(dir + "/subdir.0");
+  // A link to a regular file is followed.
+  CHECK(::symlink("real.0", (dir + "/link-to-real.0").c_str()) == 0);
+  Logs logs;
+  const CaBundle b = LoadCaBundle({dir}, logs.Sink());
+  CHECK_EQ(b.certificates, size_t(2));  // real.0 and link-to-real.0
+  CHECK(logs.text.find("skipped_files=6") != std::string::npos);
+}
+
+TEST(a_huge_file_is_rejected_from_its_size_without_being_read) {
+  const std::string dir = FreshDir("ca-huge");
+  WriteFile(dir + "/real.0", PemOf(Fix().ca.cert.get()));
+  {
+    // 512 MiB sparse file: reading it would cost 512 MiB of memory.
+    const int fd = ::open((dir + "/huge.0").c_str(), O_WRONLY | O_CREAT, 0600);
+    CHECK(fd >= 0);
+    CHECK(::ftruncate(fd, 512L * 1024 * 1024) == 0);
+    ::close(fd);
+  }
+  Logs logs;
+  const CaBundle b = LoadCaBundle({dir}, logs.Sink());
+  CHECK_EQ(b.certificates, size_t(1));
+  CHECK(logs.text.find("skipped_files=1") != std::string::npos);
 }
 
 TEST(interrupt_during_a_stalled_request_returns_promptly) {

@@ -82,18 +82,24 @@ struct SessionConfig {
   std::string http_key;
   std::string login_url;  // page the player opens, without the code
   int refresh_attempts = 3;
-  // Consecutive failed poll requests (transport error or non-200) after which the
-  // device-code login gives up. A 3 s poll interval makes the default a 15 s outage.
-  int poll_failure_limit = 5;
   std::chrono::seconds refresh_retry_pause{2};
   std::chrono::seconds background_period{60};
-  // Pauses before each retry of a login that failed for a transient reason (no connection,
-  // 5xx, 429, an unreadable response). Bounded: after the last one the login is Failed.
-  // A refusal (4xx) is never retried: the cached login is dropped for the device flow, or
-  // the login fails at once.
+  // Failure handling, by what the failure says:
+  //  - transient (no connection, 5xx, 429, an unreadable response): the cached refresh or the
+  //    device-code request is retried after each of these pauses; the cached login is kept and
+  //    the player is never prompted for it.
+  //  - held (a 4xx that is not "this refresh token is refused": a wrong http_key, a missing RPC,
+  //    a rejected payload): one attempt, no fast retry, the cache is kept and the player is not
+  //    prompted; the login is Failed until the next recovery attempt.
+  //  - the server refuses the refresh token itself (400/401/403 whose JSON message is one of the
+  //    refresh RPC's own errors) or there is no usable cache: the device-code login runs.
+  // After the pauses are used up, or on a held failure, the login is Failed and is attempted again
+  // every recovery_period until it succeeds, a stop, or the player's own device login ends without
+  // a login (expired code, deadline, a refused poll), which is final.
   std::vector<std::chrono::seconds> login_retry_delays = {std::chrono::seconds(5), std::chrono::seconds(15),
                                                           std::chrono::seconds(45), std::chrono::seconds(135),
                                                           std::chrono::seconds(300)};
+  std::chrono::seconds recovery_period{300};
 };
 
 class Session {
@@ -121,12 +127,22 @@ class Session {
 
  private:
   void Run();
-  enum class LoginResult { Ok, Permanent, Transient };
-  LoginResult TryCachedLogin(CachedAuthToken& auth);
-  bool RunDeviceLogin(CachedAuthToken& out);
-  // Cached login (when use_cache) then device-code login, retrying transient failures on
-  // the configured delays.
-  bool EstablishLogin(CachedAuthToken& auth, bool use_cache);
+  // Ok; NeedDevice: no usable cache or the server refused the token; Transient: retry later;
+  // Held: a 4xx that says nothing about the token, keep the cache and do not prompt.
+  enum class LoginResult { Ok, NeedDevice, Transient, Held };
+  // Verified; RequestTransient / RequestRefused: the device-code request failed (nothing shown to
+  // the player); Ended: the flow ran and ended without a login (expired code, deadline, a poll
+  // the server refused, an undeliverable link) -- the player was involved, so it is final.
+  enum class DeviceResult { Verified, RequestTransient, RequestRefused, Ended };
+  // Ok; Stopped; Recoverable: Failed for now, try again later; Final: do not try again.
+  enum class LoginEnd { Ok, Stopped, Recoverable, Final };
+  LoginResult TryCachedLogin(CachedAuthToken& auth, int attempts);
+  DeviceResult RunDeviceLogin(CachedAuthToken& out);
+  // Cached login (when use_cache) then device-code login; with_backoff retries transient
+  // failures on login_retry_delays.
+  LoginEnd EstablishLogin(CachedAuthToken& auth, bool use_cache, bool with_backoff);
+  // EstablishLogin, then recovery attempts every recovery_period after a recoverable failure.
+  bool LoginWithRecovery(CachedAuthToken& auth, bool use_cache);
   void Adopt(const CachedAuthToken& auth, Readiness state);
   void SetState(Readiness state);
   // Runs until stopped, or until a re-login after the credentials died fails.
@@ -151,7 +167,10 @@ class Session {
   std::thread worker_;
   std::atomic<std::thread::id> worker_id_{};
   bool started_ = false;
-  bool device_request_transient_ = false;  // worker thread only
+  // Worker thread only:
+  DeviceResult device_result_ = DeviceResult::Ended;
+  std::string failure_class_;
+  bool quiet_ = false;  // recovery attempts log state changes at Debug
 };
 
 }  // namespace nevr::quest_auth
