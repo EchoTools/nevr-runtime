@@ -420,6 +420,20 @@ test-quest-shared:
     "$out/evr_codec_test"
     echo "test-quest-shared: all redirect and EVR codec vectors pass on the host"
 
+# Shared EVR session router on the host: src/quest/tests/session_router_test.cpp drives
+# src/runtime/compat/session_router.cpp through fake game and remote transports (login
+# ordering, remote close, limits, backpressure). Plain g++, no NDK. Fail-close.
+test-quest-router:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-router-host"
+    mkdir -p "$out"
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc \
+        src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp \
+        src/quest/tests/session_router_test.cpp -o "$out/session_router_test"
+    "$out/session_router_test"
+    echo "test-quest-router: session router tests pass on the host"
+
 # Quest hook backend on the host. Builds three fixture shared objects (BIND_NOW with
 # RELRO, BIND_NOW without RELRO, lazy) and runs src/quest/tests/got_hook_test.cpp,
 # which drives the production GotHook, CallbackThunk and core/hook_lifecycle.h
@@ -482,6 +496,7 @@ verify:
     just test-auth-unit
     just test-quest-shared
     just test-quest-hooks
+    just test-quest-router
     python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
