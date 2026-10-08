@@ -805,6 +805,7 @@ test-quest-integration:
     "${off[@]}" -c src/quest/social/social_install.cpp -o "$out/social_install.o"
     "${on[@]}" -c src/quest/social/social_facade.cpp -o "$out/social_facade.o"
     "${on[@]}" -c src/quest/sentinel/hook_log.cpp -o "$out/hook_log.o"
+    "${on[@]}" -DNEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION -c src/runtime/compat/social_names.cpp -o "$out/social_names.o"
     # The dlopen hook's frames carry no personality (the one helper it calls is annotated and lives in
     # another translation unit).
     readelf --debug-dump=frames "$out/dlopen_hook.o" > "$out/dlopen_hook.frames.txt"
@@ -818,8 +819,8 @@ test-quest-integration:
         src/quest/sentinel/quest_config.cpp src/runtime/lifecycle/service_redirect.cpp \
         src/runtime/lifecycle/stable_string_pool.cpp \
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
-        "$out/social_game_calls.o" "$out/social_install.o" "$out/social_facade.o" "$out/hook_log.o" \
-        -o "$out/integration_hooks_test" -ldl -pthread
+        "$out/social_game_calls.o" "$out/social_install.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
+        -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
     # 3. the bridge end to end (libcurl only for the percent-encoder the shared URI code uses)
     "${on[@]}" -pthread $(pkg-config --cflags libcurl) \
