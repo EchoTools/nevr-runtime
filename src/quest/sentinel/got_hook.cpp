@@ -40,7 +40,14 @@ class Lock {
 };
 
 constexpr std::size_t kMaxSlots = 64;
-void** g_slots[kMaxSlots] = {};
+struct SlotEntry {
+  void** slot = nullptr;
+  // Our entry was stored in this slot and may still be reachable through it (another
+  // writer overwrote or chained it): the reservation is never given back by a handle,
+  // so a retry cannot publish that foreign hook as the original and build a call cycle.
+  bool poisoned = false;
+};
+SlotEntry g_slots[kMaxSlots] = {};
 std::size_t g_slotCount = 0;
 
 std::atomic<StoreObserver> g_storeObserver{nullptr};
@@ -54,21 +61,30 @@ int Protect(void* addr, std::size_t length, int prot) {
 GotStatus ReserveSlot(void** slot) {
   const Lock lock;
   for (std::size_t i = 0; i < g_slotCount; ++i) {
-    if (g_slots[i] == slot) return GotStatus::kAlreadyInstalled;
+    if (g_slots[i].slot == slot) {
+      return g_slots[i].poisoned ? GotStatus::kSlotPoisoned : GotStatus::kAlreadyInstalled;
+    }
   }
   if (g_slotCount == kMaxSlots) return GotStatus::kRegistryFull;
-  g_slots[g_slotCount++] = slot;
+  g_slots[g_slotCount++] = SlotEntry{slot, false};
   return GotStatus::kOk;
 }
 
 void ReleaseSlot(void** slot) {
   const Lock lock;
   for (std::size_t i = 0; i < g_slotCount; ++i) {
-    if (g_slots[i] == slot) {
+    if (g_slots[i].slot == slot) {
       g_slots[i] = g_slots[--g_slotCount];
-      g_slots[g_slotCount] = nullptr;
+      g_slots[g_slotCount] = SlotEntry{};
       return;
     }
+  }
+}
+
+void PoisonSlot(void** slot) {
+  const Lock lock;
+  for (std::size_t i = 0; i < g_slotCount; ++i) {
+    if (g_slots[i].slot == slot) g_slots[i].poisoned = true;
   }
 }
 
@@ -143,10 +159,67 @@ PageRange PagesOf(const void* slot) {
   return {start, static_cast<std::size_t>(end - start)};
 }
 
+// Opens the maps file; a test points it elsewhere to provoke read failures.
+int OpenMapsDefault() { return open("/proc/self/maps", O_RDONLY | O_CLOEXEC); }
+std::atomic<MapsOpener> g_mapsOpener{nullptr};
+int OpenMaps() {
+  const MapsOpener fn = g_mapsOpener.load(std::memory_order_acquire);
+  return fn != nullptr ? fn() : OpenMapsDefault();
+}
+
+enum class Mapped { kYes, kNo, kUnknown };
+
+// Whether `addr` lies in a mapping, from one complete pass over the maps file. Anything short
+// of a complete pass is kUnknown, never kNo: a failed open, a read error, an end of file before
+// any data (a live process always has mappings) all say "unknown". Only a pass that read data
+// and reached end of file without finding the address says kNo.
+Mapped IsMapped(const void* addr) {
+  const int fd = OpenMaps();
+  if (fd < 0) return Mapped::kUnknown;
+  const std::uintptr_t want = reinterpret_cast<std::uintptr_t>(addr);
+  char chunk[1024];
+  char line[160];
+  std::size_t len = 0;
+  bool readAny = false;
+  Mapped result = Mapped::kUnknown;
+  bool found = false;
+  bool completePass = false;
+  auto consume = [&]() {
+    line[len] = '\0';
+    len = 0;
+    unsigned long long lo = 0, hi = 0;
+    if (std::sscanf(line, "%llx-%llx", &lo, &hi) == 2 && want >= lo && want < hi) found = true;
+  };
+  for (;;) {
+    const ssize_t n = read(fd, chunk, sizeof(chunk));
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      break;  // a read error: unknown
+    }
+    if (n == 0) {
+      completePass = readAny;  // end of file after data
+      break;
+    }
+    readAny = true;
+    for (ssize_t i = 0; i < n; ++i) {
+      if (chunk[i] != '\n') {
+        if (len < sizeof(line) - 1) line[len++] = chunk[i];
+      } else {
+        consume();
+      }
+    }
+  }
+  if (completePass && len > 0) consume();  // a last line with no newline
+  close(fd);
+  if (found) return Mapped::kYes;  // seeing the address is conclusive even on a short pass
+  if (completePass) result = Mapped::kNo;
+  return result;
+}
+
 // Protection (PROT_*) of the mapping that contains `addr`, from /proc/self/maps,
 // or -1 if it cannot be read. Reads with a fixed buffer, no allocation.
 int LiveProtection(const void* addr) {
-  const int fd = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
+  const int fd = OpenMaps();
   if (fd < 0) return -1;
   const std::uintptr_t want = reinterpret_cast<std::uintptr_t>(addr);
   char chunk[1024];
@@ -177,16 +250,22 @@ int LiveProtection(const void* addr) {
   return result;
 }
 
-// `relroReadOnly` is the fallback when /proc/self/maps is unreadable.
+// What a write left behind. kStored: our value was stored (and, if the write then failed,
+// rolled back by us). kStoredMayBeLive: it was stored and another writer's value now sits
+// in the slot, possibly chaining it.
+enum class StoreOutcome { kNotStored, kStored, kStoredMayBeLive };
+
 // Replaces `expected` with `value` in `slot`, and only if the slot still holds
 // `expected`: a hook someone chained on top, or any other writer, is never
 // overwritten. A RELRO page is made writable for the store and protected
 // read-only again. The whole sequence runs under the process-wide lock. If the
 // page cannot be re-protected the store is undone (compare-and-swap, so only our
-// own value is rolled back) and re-protection is retried.
+// own value is rolled back) and re-protection is retried. `relroReadOnly` is the
+// fallback for the protection to restore when /proc/self/maps is unreadable.
 GotStatus WriteSlot(void** slot, void* expected, void* value, bool relroReadOnly,
-                    int* savedErrno) {
+                    int* savedErrno, StoreOutcome* outcome) {
   const Lock lock;
+  *outcome = StoreOutcome::kNotStored;
   if (__atomic_load_n(slot, __ATOMIC_ACQUIRE) != expected) return GotStatus::kSlotChanged;
   const PageRange pages = PagesOf(slot);
   // The protection to restore is read here, under the lock: another handle on the
@@ -200,29 +279,48 @@ GotStatus WriteSlot(void** slot, void* expected, void* value, bool relroReadOnly
     return GotStatus::kProtectFailed;
   }
   const StoreObserver observer = g_storeObserver.load(std::memory_order_acquire);
-  if (observer != nullptr) observer(slot, value);
+  if (observer != nullptr) observer(slot, value, StorePhase::kBeforeStore);
 
   void* seen = expected;
   GotStatus status = GotStatus::kOk;
+  // After a successful Install the entry is live by design; the outcome below says what
+  // a FAILED install left behind.
   if (!__atomic_compare_exchange_n(slot, &seen, value, false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
-    status = GotStatus::kSlotChanged;
-  } else if (__atomic_load_n(slot, __ATOMIC_ACQUIRE) != value) {
-    status = GotStatus::kWriteVerifyFailed;  // a writer outside this lock stored after us; theirs stays
+    status = GotStatus::kSlotChanged;  // our value was never stored
+  } else {
+    *outcome = StoreOutcome::kStored;  // refined below
+    if (observer != nullptr) observer(slot, value, StorePhase::kAfterStore);
+    if (__atomic_load_n(slot, __ATOMIC_ACQUIRE) != value) {
+      // A writer outside this lock stored after us; theirs stays, and may chain our entry.
+      status = GotStatus::kWriteVerifyFailed;
+      *outcome = StoreOutcome::kStoredMayBeLive;
+    } else {
+      *outcome = StoreOutcome::kStored;
+    }
   }
   if (restoreReadOnly &&
       Protect(reinterpret_cast<void*>(pages.start), pages.length, PROT_READ) != 0) {
     *savedErrno = errno;
+    char page[19];
     if (status == GotStatus::kOk) {
+      // Undo our own store only; if someone changed the slot since (for example
+      // chained our entry), their value stays and the hook is still live.
       void* ours = value;
-      __atomic_compare_exchange_n(slot, &ours, expected, false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE);
+      if (!__atomic_compare_exchange_n(slot, &ours, expected, false, __ATOMIC_RELEASE,
+                                       __ATOMIC_ACQUIRE)) {
+        *outcome = StoreOutcome::kStoredMayBeLive;  // their value stays, and may chain our entry
+        LogFields(LogLevel::kError, "got_hook",
+                  {{"op", "rollback"}, {"status", "rollback_cas_failed"},
+                   {"page", HexString(page, pages.start)}});
+      }
     }
     if (Protect(reinterpret_cast<void*>(pages.start), pages.length, PROT_READ) != 0) {
-      char page[19];
       LogFields(LogLevel::kError, "got_hook",
                 {{"op", "protect"}, {"status", "page_left_writable"},
                  {"page", HexString(page, pages.start)}});
     }
-    return GotStatus::kRestoreProtectFailed;
+    // A failed re-protect does not hide an earlier, more specific failure.
+    return status == GotStatus::kOk ? GotStatus::kRestoreProtectFailed : status;
   }
   return status;
 }
@@ -295,6 +393,7 @@ const char* GotStatusName(GotStatus status) {
     case GotStatus::kModuleChanged:        return "module_changed";
     case GotStatus::kSlotChanged:          return "slot_changed";
     case GotStatus::kRegistryFull:         return "registry_full";
+    case GotStatus::kSlotPoisoned:         return "slot_poisoned";
   }
   return "unknown";
 }
@@ -551,6 +650,37 @@ ProtectFn SetProtectFunction(ProtectFn fn) {
   return g_protect.exchange(fn, std::memory_order_acq_rel);
 }
 
+void ReleasePoisonedSlotsIn(const void* begin, std::size_t length) {
+  const Lock lock;
+  const std::uintptr_t lo = reinterpret_cast<std::uintptr_t>(begin);
+  for (std::size_t i = 0; i < g_slotCount;) {
+    const std::uintptr_t at = reinterpret_cast<std::uintptr_t>(g_slots[i].slot);
+    if (!g_slots[i].poisoned || at < lo || at - lo >= length) {
+      ++i;
+      continue;
+    }
+    // Released only when the address is verifiably unmapped; unreadable maps keep the entry.
+    const Mapped mapped = IsMapped(g_slots[i].slot);
+    char where[19];
+    if (mapped == Mapped::kNo) {
+      LogFields(LogLevel::kInfo, "got_hook",
+                {{"op", "release_poisoned"}, {"status", "released"}, {"slot", HexString(where, at)}});
+      g_slots[i] = g_slots[--g_slotCount];
+      g_slots[g_slotCount] = SlotEntry{};
+    } else {
+      LogFields(LogLevel::kError, "got_hook",
+                {{"op", "release_poisoned"},
+                 {"status", mapped == Mapped::kYes ? "still_mapped" : "mapping_unknown"},
+                 {"slot", HexString(where, at)}});
+      ++i;
+    }
+  }
+}
+
+MapsOpener SetMapsOpener(MapsOpener opener) {
+  return g_mapsOpener.exchange(opener, std::memory_order_acq_rel);
+}
+
 StoreObserver SetStoreObserver(StoreObserver observer) {
   return g_storeObserver.exchange(observer, std::memory_order_acq_rel);
 }
@@ -569,6 +699,7 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
 
   GotStatus status = GotStatus::kOk;
   int savedErrno = 0;
+  StoreOutcome outcome = StoreOutcome::kNotStored;
   Prepared prepared;
   const nevr::hook::AttachStage stage = nevr::hook::AttachPublished(
       originalOut,
@@ -580,11 +711,21 @@ GotStatus GotHook::Install(const GotTarget& target, void* hookFn, void** origina
       },
       [&] {
         status = WriteSlot(prepared.resolution.slot, prepared.original, hookFn,
-                           prepared.resolution.restoreReadOnly, &savedErrno);
+                           prepared.resolution.restoreReadOnly, &savedErrno, &outcome);
         return status == GotStatus::kOk;
       },
-      [&] { ReleaseSlot(prepared.resolution.slot); },
-      [&] { return status == GotStatus::kRestoreProtectFailed; });
+      [&] {
+        // A slot whose store may still be reachable stays reserved (poisoned).
+        if (outcome == StoreOutcome::kStoredMayBeLive) {
+          PoisonSlot(prepared.resolution.slot);
+        } else {
+          ReleaseSlot(prepared.resolution.slot);
+        }
+      },
+      // Once our entry has been stored in the slot, a thread may have jumped into
+      // the detour before any rollback; the original (the real function) must stay
+      // published for it.
+      [&] { return outcome != StoreOutcome::kNotStored; });
 
   if (stage != nevr::hook::AttachStage::kAttached) {
     LogFailure("install", target, status, nevr::hook::AttachStageName(stage), savedErrno,
@@ -628,7 +769,10 @@ GotStatus GotHook::Remove() {
   // Compare-and-swap under the write lock: a hook chained on top of ours, or a
   // module reloaded at the same base, leaves kSlotChanged and the slot untouched.
   int savedErrno = 0;
-  const GotStatus status = WriteSlot(slot_, hookFn_, original_, restoreReadOnly_, &savedErrno);
+  StoreOutcome outcome = StoreOutcome::kNotStored;
+  const GotStatus status =
+      WriteSlot(slot_, hookFn_, original_, restoreReadOnly_, &savedErrno, &outcome);
+  static_cast<void>(outcome);
   if (status != GotStatus::kOk) {
     LogFailure("remove", target_, status, "restore", savedErrno);
     return status;

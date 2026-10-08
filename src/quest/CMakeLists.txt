@@ -3,7 +3,7 @@
 # Self-contained CMake project, deliberately separate from the repo root
 # CMakeLists.txt (which is hard-wired to the MinGW/MSVC + vcpkg toolchain).
 # Configure with the android-arm64 preset (NDK r26d, arm64-v8a, API 26,
-# static libc++).  See docs/2026-07-13-quest-crash-reporter-injection.md.
+# static libc++).  See docs/design/2026-07-13-quest-crash-reporter-injection.md.
 
 cmake_minimum_required(VERSION 3.20)
 project(nevr_quest LANGUAGES C CXX)

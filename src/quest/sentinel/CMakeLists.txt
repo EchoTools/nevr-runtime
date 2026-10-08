@@ -3,18 +3,23 @@
 
 include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/breakpad.cmake)
 
-# The GOT backend and its log live in ONE static library. Every Quest target that
-# hooks links this target; compiling the backend source again elsewhere would give that
-# copy its own write lock and slot registry (the justfile's test-quest-hooks fails
-# if a second CMake list names the file).
+# The GOT backend, its log and the counter reporter live in ONE static library. Every Quest
+# target that hooks links this target; compiling the backend source again elsewhere would give
+# that copy its own write lock and slot registry. tests/quest TestBackendCompiledOnce counts
+# the compile rules in the configured build graph.
+#
+# Built without exceptions, like the host test build (just test-quest-hooks), so the host tests
+# exercise the same code generation as the artifact and the backend's frames carry no
+# personality.
 add_library(nevr_quest_got_hook STATIC
   got_hook.cpp
-  hook_log.cpp)
+  hook_log.cpp
+  hook_report.cpp)
 target_include_directories(nevr_quest_got_hook PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 target_compile_options(nevr_quest_got_hook PRIVATE
-  -Wall -Wextra -Werror -fvisibility=hidden -fvisibility-inlines-hidden)
+  -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)
 target_link_libraries(nevr_quest_got_hook PUBLIC log dl)
 
 add_library(ovrplatformloader SHARED
@@ -29,6 +34,11 @@ target_include_directories(ovrplatformloader PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/breakpad/src)
 
 target_link_libraries(ovrplatformloader PRIVATE nevr_quest_got_hook breakpad_client log dl)
+
+# The hook path (entry.cpp: the thunk entry and the handler it calls) is compiled
+# without exception support so its frames carry no personality or LSDA; see the
+# contract in callback_thunk.h. tests/quest TestHookFramesCarryNoPersonality pins it.
+set_source_files_properties(entry.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # Only nevr_sentinel_marker and JNI_OnLoad are exported (both carry explicit default
 # visibility); everything else, including the hook API and the test seams, is hidden.

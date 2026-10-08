@@ -41,10 +41,11 @@
  * Install and Remove log exactly one structured line (hook_log.h) and return a
  * status; a failed Install leaves the slot and its page protection as they were
  * and the caller's original pointer at its entry value, with one exception: if the
- * slot was written and then rolled back because the page could not be
- * re-protected (kRestoreProtectFailed), the original stays published, because a
- * thread may already have entered the detour while the hook was live and the
- * original is the real function. Tokens never include a secret.
+ * our entry was stored in the slot (rolled back because the page could not be
+ * re-protected, or overwritten by another writer right after), the original stays
+ * published, because a thread may already have entered the detour while the hook
+ * was live and the original is the real function. A failed re-protect after a
+ * failed store reports the store's status, not kRestoreProtectFailed. Tokens never include a secret.
  */
 #pragma once
 
@@ -103,6 +104,7 @@ enum class GotStatus : std::uint8_t {
   kModuleChanged,          // Remove: the module unloaded, moved or no longer resolves the slot
   kSlotChanged,            // the slot no longer holds the value this write expected (chained hook, reload)
   kRegistryFull,           // more than 64 hooks in one process
+  kSlotPoisoned,           // a failed Install left our entry possibly reachable through this slot
 };
 
 // Stable tokens for log lines and tests.
@@ -159,10 +161,32 @@ struct SlotResolution {
 SlotResolution ResolveSlot(const ElfImage& image, const GotTarget& target,
                            const RelocNumbers& relocs);
 
-// Test seam. Called with the process-wide write lock held, after the slot's page
-// is writable and immediately before the compare-and-swap store, for Install and
-// Remove. Production code leaves it unset. Returns the previous observer.
-using StoreObserver = void (*)(void** slot, void* value);
+// Gives back poisoned reservations (slots where a failed Install left our entry possibly
+// reachable) that lie in [begin, begin + length) AND whose address /proc/self/maps shows as
+// unmapped, i.e. the module that owned them is gone. A poisoned slot on a live module is never
+// released, so a retry cannot publish a foreign hook that chains our entry as the original
+// and build a call cycle; it is refused with kSlotPoisoned. Nothing in the sentinel calls this:
+// the game's libraries are never unloaded, so there is no unload hook point to call it from.
+// A poisoned slot occupies one of the 64 registry entries for the rest of the process, and a
+// module reloaded at the same address gets kSlotPoisoned until this has released it.
+//
+// Residual window, not closed: a foreign writer that reads our entry inside the store-to-
+// rollback window and stores its own chain after a SUCCESSFUL rollback leaves a hook that
+// calls our entry through a slot we released rather than poisoned.
+void ReleasePoisonedSlotsIn(const void* begin, std::size_t length);
+
+// Test seam: how /proc/self/maps is opened (default: open(2) on that path). A test returns a
+// descriptor whose reads fail or end at once to show that unreadable maps never read as
+// "unmapped". Returns the previous opener.
+using MapsOpener = int (*)();
+MapsOpener SetMapsOpener(MapsOpener opener);
+
+// Test seam. Called with the process-wide write lock held, around the
+// compare-and-swap store of Install and Remove. Production code leaves it unset. Returns the previous observer.
+// kBeforeStore: after the page is writable, before the compare-and-swap.
+// kAfterStore: only when the compare-and-swap succeeded, before the read-back.
+enum class StorePhase { kBeforeStore, kAfterStore };
+using StoreObserver = void (*)(void** slot, void* value, StorePhase phase);
 StoreObserver SetStoreObserver(StoreObserver observer);
 
 // Test seam for the page-protection call (default: mprotect). Used to make a
@@ -186,12 +210,6 @@ class GotHook {
   GotHook(const GotHook&) = delete;
   GotHook& operator=(const GotHook&) = delete;
 
-  // Redirects the slot to `hookFn` and stores the previous slot value in
-  // `*originalOut` before the slot changes. `*originalOut` is restored to its
-  // entry value on failure.
-  GotStatus Install(const GotTarget& target, void* hookFn, void** originalOut,
-                    ImageLookup lookup = FindLoadedImage);
-
   // Writes the original value back and releases the slot. The pointer previously
   // published through `originalOut` stays valid: it is the real function.
   GotStatus Remove();
@@ -205,6 +223,17 @@ class GotHook {
   bool installed() const { return installed_; }
 
  private:
+  // The raw install, taking any function pointer: redirects the slot to `hookFn` and stores
+  // the previous slot value in `*originalOut` before the slot changes; `*originalOut` is
+  // restored to its entry value on failure (see the notes at the top of this file for the
+  // one exception). Private on purpose: production code installs a CallbackThunk through
+  // InstallThunk (hook_install.h), which keeps every hook inside the frame sensor's reach;
+  // tests use GotHookTestAccess.
+  friend struct ThunkInstaller;
+  friend struct GotHookTestAccess;
+  GotStatus Install(const GotTarget& target, void* hookFn, void** originalOut,
+                    ImageLookup lookup = FindLoadedImage);
+
   bool installed_ = false;
   GotTarget target_{"", "", RelocKind::kJumpSlot};
   ElfImage image_{};

@@ -95,7 +95,7 @@ verbose-build-android: configure-android
 
 # Run the Quest .so ground-truth (ELF-shape) tests
 test-android: build-android
-    cd tests/quest && go test -v ./...
+    cd tests/quest && go test -count=1 -v ./...
 
 # Black-box crash-ingest contract gate. Requires a non-production staging sink;
 # see docs/adr/0002-crash-report-ingest.md.
@@ -550,19 +550,25 @@ test-quest-hooks:
     set -euo pipefail
     out="build/quest-hooks-host"
     mkdir -p "$out"
-    # The hook backend is compiled into exactly one CMake target; a second copy would
-    # carry its own write lock and slot registry.
-    set +e
-    owners="$(grep -rn --include=CMakeLists.txt 'got_hook\.cpp' src/quest)"
-    rc=$?
-    set -e
-    if [ "$rc" -ge 2 ]; then echo "test-quest-hooks: cannot scan src/quest for got_hook.cpp owners" >&2; exit 1; fi
-    if [ "$(printf '%s\n' "$owners" | grep -c .)" -ne 1 ]; then
-        echo "test-quest-hooks: got_hook.cpp must be listed by exactly one Quest CMake target (link nevr_quest_got_hook instead):" >&2
-        printf '%s\n' "$owners" >&2
-        exit 1
-    fi
     cxx=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    # Type-level gates: the control compiles; each snippet that breaks one rule must fail to
+    # compile, with the message that names the rule (not for some unrelated reason).
+    snip=src/quest/tests/compile_fail
+    "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/control.cpp"
+    # Each snippet must fail with errors that are ALL the rule's own: every `error:` line has to
+    # match the rule's pattern (a second, unrelated error fails the check), and there must be one.
+    for pair in fake_thunk:"error: static assertion failed: InstallThunk requires a CallbackThunk" direct_record:"HookRecord.*is private within this context" plain_handler:"error: invalid conversion from .*::Handler"; do
+        name="${pair%%:*}"; want="${pair#*:}"
+        if "${cxx[@]}" -fno-exceptions -fsyntax-only "$snip/$name.cpp" > "$out/$name.err" 2>&1; then
+            echo "test-quest-hooks: $snip/$name.cpp compiled, but must not" >&2; exit 1
+        fi
+        total=$(grep -c 'error:' "$out/$name.err" || true)
+        matched=$(grep 'error:' "$out/$name.err" | grep -c "$want" || true)
+        if [ "$total" -lt 1 ] || [ "$total" -ne "$matched" ]; then
+            echo "test-quest-hooks: $snip/$name.cpp: $total error line(s), $matched match '$want'; every error must be the rule's own:" >&2
+            cat "$out/$name.err" >&2; exit 1
+        fi
+    done
     "${cxx[@]}" -shared -fPIC -Wl,--build-id=sha1 src/quest/tests/got_fixture_provider.cpp \
         -o "$out/libgotfx_provider.so"
     link=(-fPIC -shared -Wl,--build-id=sha1 -L"$out" -lgotfx_provider -Wl,-rpath,'$ORIGIN')
@@ -572,9 +578,13 @@ test-quest-hooks:
         -o "$out/libgotfx_consumer_norelro.so"
     "${cxx[@]}" "${link[@]}" -Wl,-z,lazy,-z,norelro src/quest/tests/got_fixture_consumer.cpp \
         -o "$out/libgotfx_consumer_lazy.so"
-    "${cxx[@]}" src/quest/tests/got_hook_test.cpp src/quest/sentinel/got_hook.cpp \
-        src/quest/sentinel/hook_log.cpp -o "$out/got_hook_test" -ldl -pthread
-    "$out/got_hook_test" "$out"
+    # The thunk fixture is built WITH exceptions; everything that includes
+    # callback_thunk.h is built without (the header refuses otherwise).
+    "${cxx[@]}" -c src/quest/tests/thunk_exception_fixture.cpp -o "$out/thunk_exception_fixture.o"
+    "${cxx[@]}" -fno-exceptions src/quest/tests/got_hook_test.cpp src/quest/sentinel/got_hook.cpp \
+        src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "$out/thunk_exception_fixture.o" \
+        -o "$out/got_hook_test" -ldl -pthread
+    timeout 300 "$out/got_hook_test" "$out"  # a hang is a failure, not a stuck gate
 
 # Resolve the pinned Quest targets in the real libr15.so / libpnsradmatchmaking.so
 # (docs/adr/0003). Extracts both from the pinned APK, checks their SHA-256, and runs
@@ -591,7 +601,7 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     unzip -o -q "$apk" lib/arm64-v8a/libr15.so lib/arm64-v8a/libpnsradmatchmaking.so -d "$out/lib"
     echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $out/lib/lib/arm64-v8a/libr15.so" | sha256sum -c -
     echo "36236ab1df5783da57c064b0fbccc3a61c0e1d150c208022fbfc9cd6e5ed60ee  $out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" | sha256sum -c -
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel \
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel \
         src/quest/tests/got_pinned_test.cpp src/quest/sentinel/got_hook.cpp \
         src/quest/sentinel/hook_log.cpp -o "$out/got_pinned_test" -ldl
     "$out/got_pinned_test" "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so"
