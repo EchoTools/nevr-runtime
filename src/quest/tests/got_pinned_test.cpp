@@ -1,5 +1,6 @@
-// Resolves the pinned Quest targets (src/quest/sentinel/pinned_targets.h) against
-// the real libr15.so and libpnsradmatchmaking.so, on any host.
+// Resolves the pinned Quest targets (src/quest/sentinel/pinned_targets.h and the login
+// prerequisites' src/quest/login/login_prerequisite_targets.h) against the real libr15.so,
+// libpnsradmatchmaking.so and libpnsovr.so, on any host.
 //
 // The ELF is laid out in memory the way a loader would (PT_LOAD segments copied to
 // their vaddrs inside one anonymous mapping), so the production ResolveSlot walks
@@ -8,7 +9,7 @@
 // patched, and relocation numbers are passed as AArch64's, so an x86_64 host can
 // check an AArch64 image.
 //
-// Run: got_pinned_test <libr15.so> <libpnsradmatchmaking.so>
+// Run: got_pinned_test <libr15.so> <libpnsradmatchmaking.so> <libpnsovr.so>
 
 #include <elf.h>
 #include <sys/mman.h>
@@ -22,6 +23,7 @@
 
 #include "got_hook.h"
 #include "pinned_targets.h"
+#include "quest/login/login_prerequisite_targets.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -29,6 +31,7 @@ namespace {
 using namespace sentinel;
 
 struct LoadedElf {
+  std::vector<char> bytes;  // the file, for the section headers
   void* mem = nullptr;
   std::size_t span = 0;
   std::vector<Elf64_Phdr> phdrs;
@@ -42,6 +45,7 @@ bool Load(const char* path, LoadedElf* out) {
   std::ifstream file(path, std::ios::binary);
   std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
   if (bytes.size() < sizeof(Elf64_Ehdr)) return false;
+  out->bytes = bytes;
   Elf64_Ehdr eh;
   std::memcpy(&eh, bytes.data(), sizeof(eh));
   if (std::memcmp(eh.e_ident, ELFMAG, SELFMAG) != 0 || eh.e_machine != EM_AARCH64 ||
@@ -96,6 +100,28 @@ void CheckTarget(const LoadedElf& elf, const GotTarget& pinnedTarget, const char
   QCHECK_STATUS(ResolveSlot(elf.image, shifted, kAarch64Relocs).status, GotStatus::kSlotOffsetMismatch);
 }
 
+// The value .dynsym gives `symbol` (its link-time address), or 0 when absent.
+std::uint64_t DynamicSymbolValue(const LoadedElf& elf, const char* symbol) {
+  const std::vector<char>& b = elf.bytes;
+  Elf64_Ehdr eh;
+  std::memcpy(&eh, b.data(), sizeof(eh));
+  if (eh.e_shoff == 0 || eh.e_shoff + eh.e_shnum * sizeof(Elf64_Shdr) > b.size()) return 0;
+  std::vector<Elf64_Shdr> sh(eh.e_shnum);
+  std::memcpy(sh.data(), b.data() + eh.e_shoff, eh.e_shnum * sizeof(Elf64_Shdr));
+  for (const Elf64_Shdr& s : sh) {
+    if (s.sh_type != SHT_DYNSYM || s.sh_link >= sh.size()) continue;
+    const Elf64_Shdr& str = sh[s.sh_link];
+    for (std::uint64_t off = 0; off + sizeof(Elf64_Sym) <= s.sh_size; off += sizeof(Elf64_Sym)) {
+      Elf64_Sym sym;
+      std::memcpy(&sym, b.data() + s.sh_offset + off, sizeof(sym));
+      if (sym.st_name < str.sh_size && std::strcmp(b.data() + str.sh_offset + sym.st_name, symbol) == 0) {
+        return sym.st_value;
+      }
+    }
+  }
+  return 0;
+}
+
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
   char actual[64] = {};
   QCHECK(ReadBuildId(elf.image, actual, sizeof(actual)));
@@ -105,17 +131,18 @@ void CheckBuildId(const LoadedElf& elf, const char* expected) {
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 3) {
-    std::fprintf(stderr, "usage: got_pinned_test <libr15.so> <libpnsradmatchmaking.so>\n");
+  if (argc != 4) {
+    std::fprintf(stderr, "usage: got_pinned_test <libr15.so> <libpnsradmatchmaking.so> <libpnsovr.so>\n");
     return 2;
   }
-  LoadedElf r15, mm;
-  if (!Load(argv[1], &r15) || !Load(argv[2], &mm)) {
+  LoadedElf r15, mm, ovr;
+  if (!Load(argv[1], &r15) || !Load(argv[2], &mm) || !Load(argv[3], &ovr)) {
     std::fprintf(stderr, "got_pinned_test: cannot load an AArch64 ELF64 from the given paths\n");
     return 2;
   }
   CheckBuildId(r15, pinned::kLibR15BuildId);
   CheckBuildId(mm, pinned::kMatchmakingBuildId);
+  CheckBuildId(ovr, QuestLogin::PrerequisiteTargets::kPnsovrBuildId);
 
   CheckTarget(r15, pinned::LibR15ClockGettime(), "libr15 clock_gettime JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15TString(), "libr15 CJson::TString JUMP_SLOT");
@@ -132,6 +159,17 @@ int main(int argc, char** argv) {
   const SlotResolution overload = ResolveSlot(mm.image, symbolOverload, kAarch64Relocs);
   QCHECK_STATUS(overload.status, GotStatus::kOk);
   QCHECK(overload.slotVaddr == 0x6bb458ULL);
+
+  // The login prerequisites (login_prerequisite_targets.h): every slot resolves at its pin, and a
+  // callback slot's symbol is defined at the function the install expects the slot to hold.
+  for (const QuestLogin::PrerequisiteTargets::PinnedSlot& slot : QuestLogin::PrerequisiteTargets::kAll) {
+    CheckTarget(ovr, QuestLogin::PrerequisiteTargets::TargetFor(slot), slot.symbol);
+    if (slot.function != 0 && DynamicSymbolValue(ovr, slot.symbol) != slot.function) {
+      std::fprintf(stderr, "libpnsovr %s: .dynsym value is not %#llx\n", slot.symbol,
+                   static_cast<unsigned long long>(slot.function));
+      QCHECK(false);
+    }
+  }
 
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "got_pinned_test: %d check(s) failed\n", quest_test::Failures());

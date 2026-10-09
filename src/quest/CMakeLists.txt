@@ -131,3 +131,42 @@ option(NEVR_QUEST_BUILD_SENTINEL "Build the breakpad crash-reporter .so" ON)
 if(NEVR_QUEST_BUILD_SENTINEL AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/sentinel/CMakeLists.txt")
   add_subdirectory(sentinel)
 endif()
+
+# The login hook links the shared GOT backend target built by the sentinel (a second copy of
+# the backend source would carry its own write lock and slot registry).
+if(TARGET nevr_quest_got_hook)
+  # Quest login rewrite: portable decision code + the Android adapter that hooks
+  # CNSUser::SendLogInRequest in libpnsovr.so through the GOT import hook backend.
+  add_library(nevr_quest_login STATIC
+    login/login_rewrite.cpp
+    login/login_hook.cpp
+    login/login_apply.cpp
+    login/login_prerequisites.cpp
+    login/login_prerequisites_install.cpp
+    "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/login_profile.cpp")
+  target_include_directories(nevr_quest_login PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
+  target_link_libraries(nevr_quest_login PUBLIC nlohmann_json::nlohmann_json PRIVATE nevr_quest_got_hook log dl)
+  target_compile_options(nevr_quest_login PRIVATE -Wall -Wextra -Werror)
+  # Every frame that is live while game code runs is built without exception support, so it
+  # carries no personality or LSDA (the contract in sentinel/callback_thunk.h): the thunk
+  # handler and install code (login_hook.cpp) and everything that calls the game
+  # (login_apply.cpp), and the login-prerequisite handlers and their install
+  # (login_prerequisites.cpp, login_prerequisites_install.cpp), which run inside the game's OVR
+  # callbacks. login_rewrite.cpp keeps exceptions; it calls no game code and returns before the
+  # next game call.
+  set_source_files_properties(login/login_hook.cpp login/login_apply.cpp login/login_prerequisites.cpp
+    login/login_prerequisites_install.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+
+  # Android-linkable build of the host test (cannot execute on the build machine).
+  add_executable(login_rewrite_test tests/login_rewrite_test.cpp)
+  target_link_libraries(login_rewrite_test PRIVATE nevr_quest_login)
+  target_compile_options(login_rewrite_test PRIVATE -Wall -Wextra -Werror)
+
+  # Never run: the frames sensor in tests/quest reads it. It links the whole archive so the
+  # login handler and everything it calls are present at final addresses.
+  add_executable(login_frames_probe tests/login_frames_probe.cpp)
+  target_link_libraries(login_frames_probe PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,nevr_quest_login>")
+  target_compile_options(login_frames_probe PRIVATE -Wall -Wextra -Werror)
+
+endif()
+
