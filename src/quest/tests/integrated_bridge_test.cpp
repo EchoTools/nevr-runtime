@@ -116,9 +116,9 @@ struct Client {
     fd = ::socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = htons(port);
-    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+    if (::inet_pton(AF_INET, quest_net::kListenAddress, &addr.sin_addr) != 1 ||
+        ::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
       ::close(fd);
       fd = -1;
     }
@@ -152,13 +152,13 @@ struct Client {
     return out;
   }
   bool Upgrade(const std::string& path = "/x") {
-    Write("GET " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+    Write("GET " + path + " HTTP/1.1\r\nHost: 127.0.0.2\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
           "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n");
     return Read(50).rfind("HTTP/1.1 101", 0) == 0;
   }
 };
 
-// "/<token>/" out of "ws://127.0.0.1:<port>/<token>/".
+// "/<token>/" out of "ws://127.0.0.2:<port>/<token>/".
 std::string PathOf(const std::string& uri) {
   const std::size_t scheme = uri.find("://");
   const std::size_t slash = uri.find('/', scheme == std::string::npos ? 0 : scheme + 3);
@@ -293,7 +293,7 @@ void TestUpgradeWithoutTheTokenIsRefused() {
   IntegratedBridge bridge(MakeConfig(&connector, &seen, "JWT-A"));
   const uint16_t port = bridge.Start();
   QCHECK(port != 0);
-  QCHECK(bridge.LoopbackUri().rfind("ws://127.0.0.1:", 0) == 0);
+  QCHECK(bridge.LoopbackUri().rfind("ws://127.0.0.2:", 0) == 0);
   Client intruder(port);
   QCHECK(intruder.fd >= 0);
   QCHECK(!intruder.Upgrade("/"));

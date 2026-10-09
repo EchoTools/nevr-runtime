@@ -2,7 +2,7 @@
 // server -> shared session router -> remote WebSocket transport) with FrameTap decorators between
 // the router and the two transports, and a side channel for the social facade's requests.
 //
-//   game --ws://127.0.0.1:<port>--> LoopbackGameServer --> Router --> ConnectorRemoteTransport --> service
+//   game --ws://127.0.0.2:<port>--> LoopbackGameServer --> Router --> ConnectorRemoteTransport --> service
 //                                       ^ tap (server->game)   ^ tap (game->server)
 //
 // The route selection and the credentials handling are the same as SessionBridge::BuildRequest (the
@@ -56,12 +56,12 @@ class IntegratedBridge {
   IntegratedBridge(const IntegratedBridge&) = delete;
   IntegratedBridge& operator=(const IntegratedBridge&) = delete;
 
-  // Binds 127.0.0.1 on an ephemeral port. Returns the port, or 0 (logged) when it could not start or
+  // Binds 127.0.0.2 (quest_net::kListenAddress) on an ephemeral port. Returns the port, or 0 (logged) when it could not start or
   // the remote URI is not wss://.
   std::uint16_t Start();
   void Stop();
   std::uint16_t port() const { return server_->port(); }
-  // The value the game must be redirected to: "ws://127.0.0.1:<port>/<token>/" with the per-start access
+  // The value the game must be redirected to: "ws://127.0.0.2:<port>/<token>/" with the per-start access
   // token the listener requires (quest_net::LoopbackGameServer::LoopbackUri). Never log it.
   std::string LoopbackUri() const { return server_->LoopbackUri(); }
 

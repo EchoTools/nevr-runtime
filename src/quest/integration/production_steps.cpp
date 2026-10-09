@@ -65,7 +65,7 @@ struct Runtime {
   std::unique_ptr<quest_net::CurlWsConnector> connector;
   std::atomic<IntegratedBridge*> bridge{nullptr};
   std::atomic<unsigned> bridgePort{0};
-  std::string loopbackUri;  // "ws://127.0.0.1:<port>/<token>/"; written once before the redirect is installed
+  std::string loopbackUri;  // "ws://127.0.0.2:<port>/<token>/"; written once before the redirect is installed
   std::unique_ptr<TokenIdentitySource> identity;
   bool socialWanted = false;
   std::atomic<int> socialLevel{0};  // SocialParty::kSocialLevel once the facade is installed
@@ -157,7 +157,7 @@ std::uint64_t SteadySeconds() {
 }
 
 // The shared redirect policy answers the bare "ws://127.0.0.1:<port>" for a redirected game URL, which the
-// listener refuses (no access token). The pool receives the tokened URI instead (docs/adr/0003,
+// game cannot reach (libr15 dials a non-loopback interface for 127.0.0.1) and which has no access token. The pool receives the tokened URI instead (docs/adr/0003,
 // "Integration"). Only the exact bare value is replaced; anything else is interned as it is.
 nevr_runtime::lifecycle::InternResult InternBridgeAware(std::string_view value) {
   Runtime& rt = R();
