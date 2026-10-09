@@ -284,6 +284,17 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
             self.assertFalse((ROOT / "src/runtime/patch" / gone).exists(), f"{gone} has no caller and was deleted")
         self.assertIn('HookLiveness::Report("periodic")', tick)
 
+    def test_platform_compat_reports_a_failed_xmlhttp_creation_loudly(self):
+        # Issue #242: the pass-through line logged a failed CoCreateInstance (hr=0x80040154) at Info.
+        # A failure is Warning or higher; an observe-only hook that fails to attach is a Warning too.
+        source = (ROOT / "src/modules/platform-compat/src/platform_compat.cpp").read_text()
+        hook = extract_braced_function(source, "HRESULT WINAPI CoCreateInstanceHook(")
+        self.assertRegex(hook, r"Log\(SUCCEEDED\(hr\)\s*\?\s*EchoVR::LogLevel::Info\s*:\s*EchoVR::LogLevel::Warning")
+        install = extract_braced_function(source, "static bool InstallMsxml6PassThroughHook(")
+        attach_failure = install.split("Hooking::Attach", 1)[1].split("return false;", 1)[0]
+        self.assertIn("EchoVR::LogLevel::Warning", attach_failure)
+        self.assertNotIn("EchoVR::LogLevel::Error", attach_failure)
+
     def test_verify_server_supplies_a_config_when_the_install_has_none(self):
         # Issue #245: a server with no config.yaml gets no embedded defaults and refuses to boot without a
         # login bridge (#16), so every verify-server.sh flag set died at boot. The script deploys the
