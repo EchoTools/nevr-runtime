@@ -1663,7 +1663,7 @@ TEST(SystemInfo, ReportsRealCpuAndMemory) {
     EXPECT_GT(h.memory_total_mb, 0u) << "physical memory was never measured";
     EXPECT_LE(h.memory_used_mb, h.memory_total_mb) << "used exceeds total — derivation is wrong";
 
-    // The old fabricated tuple, guarded as a set. Any single value could
+    // The fabricated tuple (4 cores, 8 threads, 16384 MB total, 8192 MB used), guarded as a set. Any single value could
     // legitimately match on some machine; all of them matching means the
     // literals came back.
     const bool all_old_literals = (h.physical_cores == 4 && h.logical_cores == 8 &&
@@ -1700,7 +1700,7 @@ TEST(SystemInfo, IsCachedNotRemeasured) {
 // WOULD-FAIL-IF (N112): restore the literals in ws_bridge.cpp's system_info
 //   block -> not caught here (that is a format string, not a value this test
 //   can reach). ReportsRealCpuAndMemory catches the case where SystemInfo
-//   itself starts returning the old tuple; the `just verify` sensor catches
+//   itself starts returning the fabricated tuple; the `just verify` sensor catches
 //   the format string.
 
 // ============================================================================

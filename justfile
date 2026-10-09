@@ -573,9 +573,9 @@ verify:
         exit 1
     fi
     # N64/N105: BeginGracefulShutdown must release the listener before ForceFatalExit.
-    # The old sensor matched the STRING 'WsBridge_Shutdown', which a
-    # GetProcAddress returning null satisfies perfectly, on every run. Assert the DIRECT call instead: a
-    # symbol the linker must resolve, not a name looked up at runtime.
+    # Assert the DIRECT call: a symbol the linker must resolve, not a name looked up at runtime.
+    # (Matching the STRING 'WsBridge_Shutdown' would be satisfied on every run by a GetProcAddress
+    # that returns null.)
     if ! grep -q 'StopWebSocketBridgeListener()' src/runtime/server/gameserver.cpp; then
         echo "verify: FAIL — N64/N105 BeginGracefulShutdown does not call StopWebSocketBridgeListener();" >&2
         echo "the ws bridge listening socket leaks as a wineserver zombie (N37: no SO_REUSEADDR)." >&2
@@ -1139,9 +1139,8 @@ verify:
     # never runs on a server (N86)". The one path that runs only on a client told
     # every plugin it was on a server, for as long as both copies existed.
     #
-    # Two copies is the shape, not the typo: N86 measured the truth, added a
-    # correct dispatcher, and left the old one asserting the opposite. So the
-    # invariant is about COUNT, not about the flag value.
+    # Two copies is the shape to guard against: a correct dispatcher beside a second one that
+    # asserts the opposite flag. So the invariant is about COUNT, not about the flag value.
     N110_RC=0; N110_TICKS=$(grep -rn 'TickPlugins(&\|TickModules(&' src/runtime --include='*.cpp') || N110_RC=$?
     sensor_stage1 "N110 single dispatcher" "src/runtime/**/*.cpp" "$N110_RC"
     sensor_nonempty "N110 single dispatcher" "Tick*(&...) call sites" "$N110_TICKS"
@@ -1733,7 +1732,7 @@ verify:
         echo "A key was added or removed from the cutover map in service_map.cpp." >&2
         echo "If adding: also add a test to test_service_map.cpp and update this count." >&2
         echo "If removing: that key's reader must be deleted first, or it silently" >&2
-        echo "falls back to the old game-JSON path (exactly what the cutover prevents)." >&2
+        echo "falls back to the game-JSON path (exactly what the cutover prevents)." >&2
         exit 1
     fi
     # S7c — the module context config_get accessor (S5 deliverable) must remain
@@ -1808,8 +1807,8 @@ verify:
     # N112 — BuildIdentity: the client login and server registration now carry
     # NEVR build identity (version, commit, git describe, build type) and a
     # plugin manifest. These sensors prove the wiring is present and catch the
-    # case where the old literals ("buildversion":631547, bare GIT_DESCRIBE)
-    # are restored by a merge or refactor.
+    # literals ("buildversion":631547, bare GIT_DESCRIBE) being restored by a
+    # merge or refactor.
     #
     # N112a — BuildIdentity struct exists and is compiled.
     if [ ! -f src/core/build_identity.h ]; then

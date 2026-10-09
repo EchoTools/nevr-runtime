@@ -118,7 +118,7 @@ VOID PatchEnableHeadless(PVOID pGame) {
   // echovr.exe), so the game's parser never acted on it and NOTHING applied
   // that mask. g_isHeadless gated OUR patches only. This block wrote just
   // ENGINE_FLAGS_NOAUDIO_MASK, so bit 0 — the render/window master bit — stayed
-  // SET on every `-server`-only run. Measured before this fix, `-server` alone:
+  // SET on every `-server`-only run. Without this write, `-server` alone gives:
   //   engine flags 0x00000137 -> 0x00000135 (bit0_render=SET(WINDOWED))
   // with one game window present for the entire run.
   //

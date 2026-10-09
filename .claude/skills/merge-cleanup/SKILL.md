@@ -14,8 +14,10 @@ description: Use right after you merge a PR, or when df shows the disk tight. Re
 2. `just reap-merged --apply`. It unlocks, runs `git worktree remove` (never `--force`), deletes the
    local branch, deletes the origin branch when its PR is merged and origin still holds the tip, and
    appends a removal row to the ledger.
-3. `df -h /`. Build trees outside `.claude/worktrees` (scratch under `/var/tmp/work-nevr-runtime/`)
-   are not touched; delete the ones you made.
+3. Build output is deleted outright; the Trash is the same disk. `git worktree remove` does that for the
+   ignored `build/`, `vcpkg_installed/` and `target/` trees; never move them to the Trash.
+4. `df -h /`. Build trees outside `.claude/worktrees` (scratch under `/var/tmp/work-nevr-runtime/`) are
+   not touched; delete the ones you made.
 
 `--owner <seat>` limits a run to one seat's worktrees. Each decision is a JSON line in
 `~/.local/state/nevr-runtime/reap-merged.jsonl`. A worktree with initialised submodules is always

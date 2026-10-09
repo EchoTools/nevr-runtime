@@ -110,10 +110,9 @@ func TestMatchmakerClientConnects(t *testing.T) {
 }
 
 // TestBootTriggerPrecedesBridgeAction verifies the observable bootstrap
-// boundary is emitted before bridge setup. The old coverage-plan wording used
-// "intent:" and "BEGIN:" markers, but those literals are not emitted by the
-// current runtime; bootstrap trigger and proxy-listening are the corresponding
-// source-backed markers.
+// boundary is emitted before bridge setup. The markers are the bootstrap trigger
+// and proxy-listening lines the runtime emits ("intent:" and "BEGIN:" literals
+// are not emitted).
 func TestBootTriggerPrecedesBridgeAction(t *testing.T) {
 	output := requireLiveClient(t)
 	trigger := strings.Index(output, "[NEVR.BOOT] runtime bootstrap trigger=")

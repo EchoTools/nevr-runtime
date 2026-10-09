@@ -776,8 +776,8 @@ static bool ShouldSuppress(const char* message, uint32_t level) {
  * Identity is a digit-insensitive hash: "ExitProcess(3) ... (call #41)" and
  * "ExitProcess(3) ... (call #42)" must collapse together, so runs of digits are
  * folded to a single sentinel before hashing. Fixed-size table, no heap in the hot
- * path, its own mutex (never g_file_mutex — that is the lock the crash path used to
- * deadlock on, see N70).
+ * path, its own mutex (never g_file_mutex — a fault raised while that lock was held
+ * would deadlock the crash path, see N70).
  */
 
 static constexpr uint32_t kRateWindowSec = 5;
