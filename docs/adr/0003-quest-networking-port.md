@@ -469,8 +469,14 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    `RemoteLogSetv3`; every matchmaker send but `MatchmakerStatusRequest`, the `PingResponse` included;
    `SNSConfigRequestv2` on the config connection) and never delivers an Unrequire to a connection with
    nothing outstanding; such an Unrequire is dropped and counted (`Stats::droppedUnrequires`; the token-auth poll logs
-   `router_unrequire_dropped` with the total and the increase each time it changed, because the reporter's
-   counter table is nearly full). The service
+   `router_unrequire_dropped` with the totals and the increases each time one changed, because the reporter's
+   counter table is nearly full).
+   **A limit the router cannot remove.** An Unrequire cannot be taken out of a frame. With nakama's
+   `DisableLoginMessage` branch (`evr_pipeline_login.go`: the failure and its Unrequire, then a login that
+   still succeeds) the success frame's embedded Unrequire arrives after the failure's Unrequire already
+   covered the login request, so it reaches the game with nothing outstanding and wraps the game's count; the
+   router counts it (`Stats::unmatchedEmbeddedUnrequires`, the `unmatched_embedded_*` fields of the same
+   line) and does not prevent it. The same count covers an Unrequire inside a frame the router drops. The service
    pairs an Unrequire with `LoginFailure` (every login failure is a `LoginFailure` frame and then a standalone
    Unrequire), `ChannelInfoResponse`, `DocumentSuccess`, `UpdateProfileSuccess`, config replies
    and its own `LobbyPingRequest`; it sends the Unrequire as a frame of its own from a concurrent goroutine,

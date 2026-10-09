@@ -978,6 +978,33 @@ void TestALoginFailureAndItsUnrequireLowerTheLoginCount() {
   QCHECK(rig.router->GetStats().droppedUnrequires == 1);
 }
 
+// Failure caught (#239 final review): with nakama's DisableLoginMessage branch a login failure and its Unrequire
+// are followed by a login that still succeeds, so the success frame's embedded Unrequire arrives with the login
+// request already covered. The router cannot take an Unrequire out of a frame: it reaches the game, and the
+// count the router cannot cover is counted, where production reports it, instead of passing unseen.
+void TestAnEmbeddedUnrequireTheCountCannotCoverIsCounted() {
+  Rig rig;
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
+  const RemoteId login = rig.remotes.Opens()[1].remote;
+  rig.router->OnRemoteOpen(login);
+  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest), true);
+  std::string failure;
+  for (int i = 0; i < 3; ++i) failure.append(8, '\0');
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoginFailure, failure + "text"), true);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);  // covers the login request
+  QCHECK(rig.router->GetStats().unmatchedEmbeddedUnrequires == 0);
+  rig.router->OnRemoteFrame(login, LoginReplyFrame(), true);  // the login that still succeeds: its Unrequire is unowed
+  QCHECK(rig.games.Sent().size() == 3);  // the frame is delivered whole
+  QCHECK(rig.router->GetStats().unmatchedEmbeddedUnrequires == 1);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 0);
+  // A frame the router drops with its Unrequire inside counts it too (a ping with no matchmaker, batched).
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLobbyPingRequest, "ping") +
+                                       Msg(EvrCodec::kSymConnectionUnrequire, ""), true);
+  QCHECK(rig.games.Sent().size() == 3);
+  QCHECK(rig.router->GetStats().unmatchedEmbeddedUnrequires == 2);
+}
+
 // The config connection has a remote of its own; its Unrequire follows the same rule with its own count.
 void TestConfigConnectionUnrequireNeverExceedsItsRequests() {
   Rig rig;
@@ -1302,6 +1329,7 @@ int main() {
   TestConfigConnectionUnrequireNeverExceedsItsRequests();
   TestTheUnrequireInsideTheLoginReplyFrameLowersTheLoginCount();
   TestALoginFailureAndItsUnrequireLowerTheLoginCount();
+  TestAnEmbeddedUnrequireTheCountCannotCoverIsCounted();
   TestUnknownFirstFrameKeepsTheProvisionalRole();
   TestReconnectedLoginConnectionTakesOverTheSession();
   TestLoginReplyWithoutALoginConnectionIsDropped();

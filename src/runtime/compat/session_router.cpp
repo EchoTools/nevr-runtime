@@ -377,9 +377,11 @@ GameId Router::RouteLoginSessionFrameLocked(const std::string& frame, bool* quie
   if (embedded > 0) {
     // The Unrequires inside the frame belong to its own messages: they lower the count of the connection the
     // frame goes to, never below zero.
-    for (std::size_t i = 0; i < embedded && target != kNoGame; ++i) {
-      if (!TakeUnrequireLocked(target)) break;
-    }
+    // One the count cannot cover (the connection has nothing outstanding, or the frame is dropped) cannot be
+    // stripped out of the frame either: it is delivered with the frame (or dropped with it) and counted.
+    std::size_t matched = 0;
+    while (matched < embedded && target != kNoGame && TakeUnrequireLocked(target)) ++matched;
+    unmatchedEmbeddedUnrequires_ += embedded - matched;
   } else if (PairsWithUnrequire(symbol)) {
     owedUnrequires_.push_back(target);  // kNoGame when the message is dropped: its Unrequire is too
     while (owedUnrequires_.size() > 64) owedUnrequires_.pop_front();
@@ -889,6 +891,7 @@ Stats Router::GetStats() const {
   stats.droppedGameFrames = droppedGameFrames_;
   stats.droppedRemoteFrames = droppedRemoteFrames_;
   stats.droppedUnrequires = droppedUnrequires_;
+  stats.unmatchedEmbeddedUnrequires = unmatchedEmbeddedUnrequires_;
   return stats;
 }
 

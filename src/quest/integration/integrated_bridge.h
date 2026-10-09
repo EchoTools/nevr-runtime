@@ -80,6 +80,8 @@ class IntegratedBridge {
   void ReevaluateLoginGate() { router_->ReevaluateHeldLogins(); }
   // Unrequires the router dropped because the connection had nothing outstanding (production reports changes).
   std::uint64_t DroppedUnrequires() const { return router_->GetStats().droppedUnrequires; }
+  // Unrequires inside a frame that the connection had nothing outstanding for; they reach the game anyway.
+  std::uint64_t UnmatchedEmbeddedUnrequires() const { return router_->GetStats().unmatchedEmbeddedUnrequires; }
   // Login connections currently held for the account (0 or 1 in practice).
   std::size_t HeldLogins() const { return router_->GetStats().heldRemotes; }
 

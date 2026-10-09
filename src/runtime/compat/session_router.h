@@ -166,6 +166,9 @@ struct Stats {
   uint64_t droppedGameFrames = 0;
   uint64_t droppedRemoteFrames = 0;
   uint64_t droppedUnrequires = 0;  // Unrequires with no request outstanding to lower, or whose message was dropped
+  // Unrequires inside a frame whose connection had nothing outstanding to lower. They cannot be removed from the
+  // frame, so they reach the game (or are dropped with the frame) and wrap its count: counted, not prevented.
+  uint64_t unmatchedEmbeddedUnrequires = 0;
 };
 
 class Router {
@@ -273,6 +276,7 @@ class Router {
   // messages went out (kNoGame: the message was dropped, so its Unrequire is too).
   std::deque<GameId> owedUnrequires_;
   uint64_t droppedUnrequires_ = 0;
+  uint64_t unmatchedEmbeddedUnrequires_ = 0;
   uint64_t droppedGameFrames_ = 0;
   uint64_t droppedRemoteFrames_ = 0;
   bool shutdown_ = false;

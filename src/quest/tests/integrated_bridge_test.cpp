@@ -440,6 +440,12 @@ void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
   bool configGotProfile = false;
   config.Read(1, 200, &configGotProfile);
   QCHECK(!configGotProfile);
+  // An Unrequire inside a frame can reach the game with nothing outstanding; the bridge reports the count.
+  const std::string reply = EvrCodec::BuildMessage(EvrCodec::kSymLoginSuccess, std::string(32, '\0')) +
+                            EvrCodec::BuildMessage(EvrCodec::kSymConnectionUnrequire, "");
+  loginConn->Push(reply);  // the login request is still outstanding: covered
+  loginConn->Push(reply);  // nothing left to cover
+  QCHECK(WaitFor([&] { return bridge.UnmatchedEmbeddedUnrequires() == 1; }));
   bridge.Stop();
 }
 
