@@ -47,6 +47,10 @@ class BearerReconnectAuth {
   // Call from the Error message handler with errorInfo.http_status.
   void OnError(int httpStatus);
 
+  // The socket is being torn down: later 401s start no mint (one already in flight finishes,
+  // bounded by its HTTP timeout). Attach() re-arms for the next connect.
+  void Cancel() { cancelled_.store(true, std::memory_order_release); }
+
   uint32_t RefreshCount() const { return refreshCount_.load(); }
 
  private:
@@ -59,4 +63,5 @@ class BearerReconnectAuth {
   std::string token_;
   Refresher refresher_;
   std::atomic<uint32_t> refreshCount_{0};
+  std::atomic<bool> cancelled_{false};
 };

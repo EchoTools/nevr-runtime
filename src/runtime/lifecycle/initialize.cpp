@@ -63,7 +63,7 @@ static EchoVR::IServerLib* g_ServerLib = nullptr;
 static EchoVR::IServerLib* ServerLibFactory() {
     if (!g_ServerLib) {
         g_ServerLib = new GameServerLib();
-        BootLogTee::TeeFprintf("[NEVR.GAMESERVER] ServerLib() created obj=%p\n", (void*)g_ServerLib);
+        BootLogTee::TeeFprintf("[NEVR.GAMESERVER] ServerLib() created obj=%p\n", static_cast<void*>(g_ServerLib));
     }
     return g_ServerLib;
 }
@@ -127,9 +127,10 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
   // Platform DLLs (pnsdemo/pnsovr) crash in RadPluginShutdown on a server (freed
   // memory). They are recognised by the "Users" export they all define. The game's
   // unload path (0x14105ae30) null-checks the resolved symbol before calling it, so
-  // answering null skips the call and teardown carries on. (The guard used to live
-  // in a second detour on this same address that never installed; it ended the
-  // process with exit(0), which ExitProcessHook suppresses in server mode.)
+  // answering null skips the call and teardown carries on. (A second detour on
+  // this same address would not install under MinHook, #93/#94; ending the
+  // process with exit(0) instead is suppressed by ExitProcessHook in server
+  // mode.)
   if (g_isServer && symbol_name && strcmp(symbol_name, "RadPluginShutdown") == 0 &&
       g_original_GetSymbol(dll_handle, "Users") != nullptr) {
     static bool logged = false;
@@ -336,9 +337,15 @@ static VOID InitializeAfterGameImageGuard() {
   {
       void* sym_target = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + (0x1400eaef0 - 0x140000000));
-      if (MH_CreateHook(sym_target, reinterpret_cast<void*>(&CSysDLL_GetSymbolHook),
-              reinterpret_cast<void**>(&g_original_GetSymbol)) == MH_OK &&
-          MH_EnableHook(sym_target) == MH_OK) {
+      // Prologue of CSysDLL_GetSymbol (echovr.exe 0x1400eaef0: sub rsp,0xA8; test rdx,rdx).
+      static const unsigned char kGetSymbolPrologue[8] = {0x48, 0x81, 0xEC, 0xA8, 0x00, 0x00, 0x00, 0x48};
+      if (memcmp(sym_target, kGetSymbolPrologue, sizeof(kGetSymbolPrologue)) != 0) {
+        BootLogTee::TeeFprintf(
+            "[NEVR.PATCH] hook skipped name=CSysDLL_GetSymbol va=0x1400eaef0 reason=prologue_mismatch\n");
+        g_bootHookFailed = true;
+      } else if (MH_CreateHook(sym_target, reinterpret_cast<void*>(&CSysDLL_GetSymbolHook),
+                     reinterpret_cast<void**>(&g_original_GetSymbol)) == MH_OK &&
+                 MH_EnableHook(sym_target) == MH_OK) {
         BootLogTee::TeeFprintf("[NEVR.PATCH] hooked name=CSysDLL_GetSymbol\n");
       } else {
         BootLogTee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_GetSymbol\n");
@@ -460,8 +467,8 @@ static VOID InitializeAfterGameImageGuard() {
   // --- CDN asset loading ---
   // N131: moved to boot.cpp, gated `if (!g_isServer)`. g_isServer is NOT set yet
   // here (CLI is parsed later, in the PreprocessCommandLine hook), so a gate here
-  // could not distinguish server from client. The call now lives where g_isServer
-  // is known so a headless server never opens the CDN connection.
+  // could not distinguish server from client. The call lives in boot.cpp, where g_isServer
+  // is known, so a headless server never opens the CDN connection.
 
   // Boot phase complete — close the boot log file.  From here on, Log() and
   // the builtin_log_filter own the rotating JSONL file.  Any remaining
