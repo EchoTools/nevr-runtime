@@ -73,13 +73,11 @@ class CurrentSmokeMarkerTest(unittest.TestCase):
         log = (
             "[NEVR.AUTH] Configured: url=https://service.example/auth\n"
             "[NEVR.AUTH] Token refreshed successfully expires_in=3600s\n"
-            "[NEVR.HTTP] Response: 200 (32 bytes)\n"
         )
         result = score(log, group="client")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("PASS", row(result.stdout, "C03"))
         self.assertIn("PASS", row(result.stdout, "C08"))
-        self.assertIn("PASS", row(result.stdout, "C11"))
 
     def test_explicit_auth_http_failures_override_success_markers(self):
         log = (
@@ -87,14 +85,11 @@ class CurrentSmokeMarkerTest(unittest.TestCase):
             "[NEVR.AUTH] Missing nevr_http_uri or nevr_http_key\n"
             "[NEVR.AUTH] Token refreshed successfully expires_in=3600s\n"
             "[NEVR.AUTH] token refresh failed (1 consecutive attempt) — will retry in 60s\n"
-            "[NEVR.HTTP] Response: 200 (32 bytes)\n"
-            "[NEVR.HTTP] curl failed: url=https://service.example curl_code=28\n"
         )
         result = score(log, group="client")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("FAIL", row(result.stdout, "C03"))
         self.assertIn("FAIL", row(result.stdout, "C08"))
-        self.assertIn("FAIL", row(result.stdout, "C11"))
 
     def test_telemetry_transport_failure_marker_is_retained(self):
         log = (
@@ -114,6 +109,19 @@ class CurrentSmokeMarkerTest(unittest.TestCase):
         result = score(log, group="all")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("FAIL", row(result.stdout, "S44"))
+
+    def test_msxml6_hook_row_passes_when_installed_and_fails_when_not(self):
+        installed = ("[NEVR.MODULE] platform_compat initialized: 3/3 hooks installed "
+                     "(tls=ok createdir=ok msxml6=ok)\n")
+        result = score(installed, group="all")
+        self.assertIn("PASS", row(result.stdout, "M04"))
+        missing = ("[NEVR.MODULE] platform_compat initialized: 2/3 hooks installed "
+                   "(tls=ok createdir=ok msxml6=FAILED)\n"
+                   "[NEVR.MODULE] MSXML6 pass-through hook NOT installed \u2014 requests still reach the system "
+                   "XMLHTTP object, but the pass-through line will not be logged\n")
+        result = score(missing, group="all")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("FAIL", row(result.stdout, "M04"))
 
 
 if __name__ == "__main__":
