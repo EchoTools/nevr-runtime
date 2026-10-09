@@ -254,7 +254,10 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
             r"case ix::WebSocketMessageType::Error:(?:(?!WebSocketMessageType::Message).)*?"
             r"m_bearerAuth\.OnError\s*\(\s*msg->errorInfo\.http_status", re.S))
         server = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
-        fallback = extract_braced_function(server, "VOID GameServerLib::RequestRegistration(")
+        request = extract_braced_function(server, "VOID GameServerLib::RequestRegistration(")
+        self.assertRegex(request, r"\bConnectTelemetry\s*\(\s*wsToken\s*\)")
+        telemetry = (ROOT / "src/runtime/server/gameserver_telemetry.cpp").read_text()
+        fallback = extract_braced_function(telemetry, "void GameServerLib::ConnectTelemetry(")
         self.assertRegex(fallback, re.compile(
             r"token = wsToken;(?:(?!m_telemetry->Connect).)*?m_telemetry->SetBearerTokenRefresher\s*\(", re.S))
 
@@ -305,7 +308,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # Issue #246: the ServerDB refresher, the telemetry refresher and RequestRegistration all
         # reach RefreshAuthToken -> SaveAuthToken (an unlocked truncating write of .credentials.json).
         server = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
-        acquire = extract_braced_function(server, "static std::string AcquireServerDbToken(")
+        acquire = extract_braced_function(server, "std::string AcquireServerDbToken(")
         self.assertRegex(acquire, r"ServerDbAuth::RunSerializedMint\s*\(")
         helper = (ROOT / "src/runtime/server/serialized_mint.h").read_text()
         self.assertRegex(helper, r"std::lock_guard<std::mutex>")
