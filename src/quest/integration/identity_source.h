@@ -29,19 +29,25 @@ class TokenIdentitySource final : public QuestLogin::IdentitySource {
 
   QuestLogin::IdentityStatus Fetch(QuestLogin::Identity& out) override;
 
-  // True exactly when Fetch would return Ok: token auth is Ready with an access token and a NEVR account id.
-  // The #240 login prerequisites ask it from the Oculus message pump before they stand in for an Oculus
-  // answer (login_rewrite.h); false in every other state, when there is no snapshot function, and when
-  // taking the snapshot throws (contained here, so nothing unwinds into the game's frames). Cost: one
-  // snapshot, the same read Fetch does; no network, no wait on the game.
-  bool Ready() const noexcept override;
+  // The #240 login prerequisites ask this from the Oculus message pump before they stand in for an Oculus
+  // answer (login_rewrite.h). It is one lock-free atomic load of the flag Observe and Fetch keep: no
+  // snapshot, no allocation, no lock. True only after the last observed state was one in which Fetch
+  // returns Ok (token auth Ready with an access token and a NEVR account id).
+  bool Ready() const noexcept override { return ready_.Get(); }
+
+  // Records a token-auth state change: sets the Ready flag to (Classify(snap) == Ok), so it is cleared in
+  // every other state (starting, refreshing, awaiting the player, expired, failed, stopped, no token, no
+  // account). Allocation-free; called from whichever thread observes the state (the integration's
+  // token-auth poll thread) and by Fetch with the snapshot it read.
+  void Observe(const nevr::quest_auth::Snapshot& snap) noexcept;
 
  private:
-  // The answer for one snapshot, shared by Fetch and Ready so the two cannot disagree.
-  static QuestLogin::IdentityStatus Classify(const nevr::quest_auth::Snapshot& snap);
+  // The answer for one snapshot, shared by Fetch and Observe so Fetch and Ready cannot disagree.
+  static QuestLogin::IdentityStatus Classify(const nevr::quest_auth::Snapshot& snap) noexcept;
 
   SnapshotFn snapshot_;
   std::function<int()> socialLevel_;
+  QuestLogin::ReadyFlag ready_;
 };
 
 }  // namespace nevr_quest::integration

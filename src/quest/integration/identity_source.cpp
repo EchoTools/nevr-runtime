@@ -1,10 +1,8 @@
 #include "quest/integration/identity_source.h"
 
-#include <exception>
-
 namespace nevr_quest::integration {
 
-QuestLogin::IdentityStatus TokenIdentitySource::Classify(const nevr::quest_auth::Snapshot& snap) {
+QuestLogin::IdentityStatus TokenIdentitySource::Classify(const nevr::quest_auth::Snapshot& snap) noexcept {
   using nevr::quest_auth::Readiness;
   switch (snap.readiness) {
     case Readiness::Starting:
@@ -24,9 +22,13 @@ QuestLogin::IdentityStatus TokenIdentitySource::Classify(const nevr::quest_auth:
 }
 
 QuestLogin::IdentityStatus TokenIdentitySource::Fetch(QuestLogin::Identity& out) {
-  if (!snapshot_) return QuestLogin::IdentityStatus::NotReady;
+  if (!snapshot_) {
+    ready_.Set(false);
+    return QuestLogin::IdentityStatus::NotReady;
+  }
   const nevr::quest_auth::Snapshot snap = snapshot_();
   const QuestLogin::IdentityStatus status = Classify(snap);
+  ready_.Set(status == QuestLogin::IdentityStatus::Ok);  // the state this login saw
   if (status != QuestLogin::IdentityStatus::Ok) return status;
   out.account_id = snap.discord_id;
   out.display_name = snap.username;
@@ -35,13 +37,8 @@ QuestLogin::IdentityStatus TokenIdentitySource::Fetch(QuestLogin::Identity& out)
   return QuestLogin::IdentityStatus::Ok;
 }
 
-bool TokenIdentitySource::Ready() const noexcept {
-  if (!snapshot_) return false;
-  try {
-    return Classify(snapshot_()) == QuestLogin::IdentityStatus::Ok;
-  } catch (const std::exception&) {
-    return false;  // no snapshot: not ready, and nothing leaves this frame
-  }
+void TokenIdentitySource::Observe(const nevr::quest_auth::Snapshot& snap) noexcept {
+  ready_.Set(Classify(snap) == QuestLogin::IdentityStatus::Ok);
 }
 
 }  // namespace nevr_quest::integration

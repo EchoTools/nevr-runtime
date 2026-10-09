@@ -142,7 +142,7 @@ struct RealCounterSteps final : Steps {
   bool StartReporter() override { return true; }
   bool InstallClockHook() override { return true; }
   bool StartTokenAuth() override { return true; }
-  bool InstallLoginPrompt() override { return true; }
+  bool InstallLoginPrompt(bool counted) override { return counted; }
   bool StartBridge() override { return true; }
   bool InstallRedirect() override { return true; }
   bool InstallSocial() override { return true; }

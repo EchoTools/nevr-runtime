@@ -141,11 +141,17 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     if (!wantTokenAuth) {
       r.Skip(StepId::kInstallLoginPrompt, "bridge_and_login_off");
     } else if (!promptCounters) {
+      // The hook's own rule (InstallIfCounted) logs that it installs nothing; the sequence records the skip.
+      try {
+        steps.InstallLoginPrompt(false);
+      } catch (const std::exception&) {
+        // Contained like every step; the outcome is the skip below either way.
+      }
       r.Skip(StepId::kInstallLoginPrompt, "counters_refused");
     } else if (!tokenOk) {
       r.Skip(StepId::kInstallLoginPrompt, "token_auth_unavailable");
     } else {
-      r.Run(StepId::kInstallLoginPrompt, [&] { return steps.InstallLoginPrompt(); });
+      r.Run(StepId::kInstallLoginPrompt, [&] { return steps.InstallLoginPrompt(true); });
     }
 
     bool bridgeOk = false;

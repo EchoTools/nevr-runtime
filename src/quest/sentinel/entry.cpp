@@ -75,7 +75,9 @@ bool RegisterLoginPromptCounters() noexcept { return nevr_quest::login_prompt::R
 
 // The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
 // token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.
-bool InstallLoginPromptHook() noexcept { return nevr_quest::login_prompt::Install(); }
+bool InstallLoginPromptHook(bool countersRegistered) noexcept {
+    return nevr_quest::login_prompt::InstallIfCounted(countersRegistered);
+}
 
 }  // namespace nevr_quest::integration
 

@@ -3,7 +3,10 @@
 // before the single reporter start, the isolation of one failing piece from the others, the post-load
 // policy, the identity source, the social switch and the frame tap. Fakes stand in for every library.
 
+#include <atomic>
 #include <cstdint>
+#include <cstdlib>
+#include <new>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -19,6 +22,17 @@
 #include "quest/integration/stage_log.h"
 #include "quest/tests/test_check.h"
 #include "runtime/compat/evr_codec.h"
+
+// Counts every allocation through the global operator new in this test binary, for the no-allocation check
+// on IdentitySource::Ready (it runs on the Oculus message pump).
+std::atomic<long> g_allocations{0};
+void* operator new(std::size_t n) {
+  g_allocations.fetch_add(1, std::memory_order_relaxed);
+  if (void* p = std::malloc(n == 0 ? 1 : n)) return p;
+  throw std::bad_alloc();
+}
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 
 using namespace nevr_quest;
 using namespace nevr_quest::integration;
@@ -63,7 +77,7 @@ struct FakeSteps final : Steps {
   bool StartReporter() override { return Step("reporter"); }
   bool InstallClockHook() override { return Step("clock"); }
   bool StartTokenAuth() override { return Step("token"); }
-  bool InstallLoginPrompt() override { return Step("prompt"); }
+  bool InstallLoginPrompt(bool counted) override { return Step(counted ? "prompt" : "prompt_uncounted"); }
   bool StartBridge() override { return Step("bridge"); }
   bool InstallRedirect() override { return Step("redirect"); }
   bool InstallSocial() override { return Step("social"); }
@@ -230,6 +244,7 @@ void TestCounterRefusalDisablesOnlyThatPiece() {
     s.failing = {"reg_prompt"};
     const ConstructorReport r = RunConstructorSequence(s);
     QCHECK(!s.Ran("prompt"));
+    QCHECK(s.Ran("prompt_uncounted"));  // the hook's rule ran with "no counters": nothing installed
     QCHECK(s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen") && s.loginArg && s.mmArg);
     QCHECK(std::strcmp(r.at(StepId::kInstallLoginPrompt).reason, "counters_refused") == 0);
   }
@@ -412,31 +427,89 @@ void TestIdentitySourceAnswers() {
 }
 
 // #240 fail-closed: the login prerequisites stand in for an Oculus answer only while Ready() is true, and
-// IdentitySource's default Ready() is false. The production source answers true exactly when Fetch is Ok.
-void TestIdentitySourceReadyIsFetchOk() {
+// IdentitySource's default Ready() is false. The production source's Ready() is one load of a flag that
+// Observe (token-auth state changes) and Fetch keep equal to (Classify(state) == Ok).
+void TestIdentitySourceReadyFollowsObservedState() {
   using nevr::quest_auth::Readiness;
+  const Readiness kAll[] = {Readiness::Starting, Readiness::Refreshing, Readiness::AwaitingUser, Readiness::Ready,
+                            Readiness::Expired,  Readiness::Failed,     Readiness::Stopped};
   int readyCount = 0;
-  for (Readiness r : {Readiness::Starting, Readiness::Refreshing, Readiness::AwaitingUser, Readiness::Ready,
-                      Readiness::Expired, Readiness::Failed, Readiness::Stopped}) {
+  for (Readiness r : kAll) {
     for (const char* token : {"", "tok"}) {
       for (std::uint64_t account : {std::uint64_t{0}, std::uint64_t{4242}}) {
         const nevr::quest_auth::Snapshot snap = Snap(r, token, account, "p");
-        TokenIdentitySource source([snap] { return snap; });
+        // Fetch's answer from a separate source, so the flag below comes from Observe alone.
+        TokenIdentitySource fetcher([snap] { return snap; });
         QuestLogin::Identity id;
-        const bool fetchOk = source.Fetch(id) == QuestLogin::IdentityStatus::Ok;
-        const QuestLogin::IdentitySource& asBase = source;  // the prerequisites call it through the base
-        QCHECK(asBase.Ready() == fetchOk);
-        readyCount += asBase.Ready() ? 1 : 0;
+        const bool fetchOk = fetcher.Fetch(id) == QuestLogin::IdentityStatus::Ok;
+        for (bool startReady : {false, true}) {  // from either earlier flag value
+          TokenIdentitySource source([snap] { return snap; });
+          source.Observe(startReady ? Snap(Readiness::Ready, "tok", 4242, "p") : Snap(Readiness::Starting, "", 0, "p"));
+          QCHECK(source.Ready() == startReady);
+          source.Observe(snap);
+          const QuestLogin::IdentitySource& asBase = source;  // the prerequisites call it through the base
+          QCHECK(asBase.Ready() == fetchOk);
+          if (!startReady) readyCount += asBase.Ready() ? 1 : 0;
+        }
       }
     }
   }
   QCHECK(readyCount == 1);  // only Ready + token + account
-  TokenIdentitySource ready([] { return Snap(Readiness::Ready, "tok", 4242, "p"); });
-  QCHECK(ready.Ready());
-  QCHECK(!TokenIdentitySource(nullptr).Ready());
-  TokenIdentitySource throwing([]() -> nevr::quest_auth::Snapshot { throw std::runtime_error("snapshot"); });
-  QCHECK(!throwing.Ready());  // contained: false, no exception
+  // Every way out of Ready clears the flag.
+  for (Readiness r : {Readiness::Starting, Readiness::Refreshing, Readiness::AwaitingUser, Readiness::Expired,
+                      Readiness::Failed, Readiness::Stopped}) {
+    TokenIdentitySource source(nullptr);
+    source.Observe(Snap(Readiness::Ready, "tok", 4242, "p"));
+    QCHECK(source.Ready());
+    source.Observe(Snap(r, "tok", 4242, "p"));
+    QCHECK(!source.Ready());
+  }
+  {  // an access token that ran out (empty) or a missing account clears it too
+    TokenIdentitySource source(nullptr);
+    source.Observe(Snap(Readiness::Ready, "tok", 4242, "p"));
+    source.Observe(Snap(Readiness::Ready, "", 4242, "p"));
+    QCHECK(!source.Ready());
+    source.Observe(Snap(Readiness::Ready, "tok", 4242, "p"));
+    source.Observe(Snap(Readiness::Ready, "tok", 0, "p"));
+    QCHECK(!source.Ready());
+  }
+  {  // Fetch updates the flag with the state it saw; a source without a snapshot is never ready
+    nevr::quest_auth::Snapshot state = Snap(Readiness::Ready, "tok", 4242, "p");
+    TokenIdentitySource source([&state] { return state; });
+    QCHECK(!source.Ready());  // nothing observed yet
+    QuestLogin::Identity id;
+    QCHECK(source.Fetch(id) == QuestLogin::IdentityStatus::Ok && source.Ready());
+    state = Snap(Readiness::Expired, "tok", 4242, "p");
+    QCHECK(source.Fetch(id) == QuestLogin::IdentityStatus::NoToken && !source.Ready());
+    TokenIdentitySource none(nullptr);
+    QCHECK(!none.Ready() && none.Fetch(id) == QuestLogin::IdentityStatus::NotReady && !none.Ready());
+  }
   static_assert(noexcept(std::declval<const TokenIdentitySource&>().Ready()), "Ready must be noexcept");
+  static_assert(noexcept(std::declval<TokenIdentitySource&>().Observe(std::declval<const nevr::quest_auth::Snapshot&>())),
+                "Observe must be noexcept");
+}
+
+// Ready() runs on the Oculus message pump: it must not allocate. The snapshot here has strings longer than
+// any small-string buffer, so a Ready() that took or copied a snapshot would allocate.
+void TestIdentitySourceReadyDoesNotAllocate() {
+  const std::string longToken(96, 't');
+  const std::string longName(96, 'n');
+  const nevr::quest_auth::Snapshot snap = Snap(nevr::quest_auth::Readiness::Ready, longToken.c_str(), 4242, longName.c_str());
+  TokenIdentitySource source([snap] { return snap; });
+  source.Observe(snap);
+  const long before = g_allocations.load();
+  bool all = true;
+  for (int i = 0; i < 1000; ++i) all = source.Ready() && all;
+  QCHECK(all);
+  QCHECK(g_allocations.load() == before);
+  // Observe does not allocate either (it is called with a snapshot the caller already holds).
+  const long beforeObserve = g_allocations.load();
+  for (int i = 0; i < 1000; ++i) source.Observe(snap);
+  QCHECK(g_allocations.load() == beforeObserve);
+  // The counter itself works: copying the snapshot allocates.
+  const long beforeCopy = g_allocations.load();
+  const nevr::quest_auth::Snapshot copy = snap;
+  QCHECK(g_allocations.load() > beforeCopy && copy.access_token == longToken);
 }
 
 // ---- frame tap -------------------------------------------------------------------------------------
@@ -580,7 +653,8 @@ int main() {
   TestPostLoadWithNoActionsIsInert();
   TestPostLoadAcceptsANullName();
   TestIdentitySourceAnswers();
-  TestIdentitySourceReadyIsFetchOk();
+  TestIdentitySourceReadyFollowsObservedState();
+  TestIdentitySourceReadyDoesNotAllocate();
   TestFrameTapSignalsLoginSuccessOnlyFromTheServer();
   TestFrameTapContainsAThrowingConsumer();
   if (quest_test::Failures() != 0) {

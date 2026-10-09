@@ -103,7 +103,9 @@ class Steps {
 
   virtual bool InstallClockHook() = 0;
   virtual bool StartTokenAuth() = 0;
-  virtual bool InstallLoginPrompt() = 0;
+  // `countersRegistered`: the result of RegisterLoginPromptCounters. The step applies the hook's own rule
+  // (login_prompt::InstallIfCounted): without its counters it logs the skip and installs nothing.
+  virtual bool InstallLoginPrompt(bool countersRegistered) = 0;
   virtual bool StartBridge() = 0;
   virtual bool InstallRedirect() = 0;
   virtual bool InstallSocial() = 0;

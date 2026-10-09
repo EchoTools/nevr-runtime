@@ -129,6 +129,9 @@ void PollTokenAuthState() {
   int last = -1;
   for (;;) {
     const nevr::quest_auth::Snapshot snap = AuthSnapshot();
+    // The login prerequisites' Ready() flag (#240) follows every observed state, including an access
+    // token that ran out without a readiness change.
+    if (rt.identity) rt.identity->Observe(snap);
     if (static_cast<int>(snap.readiness) != last) {
       last = static_cast<int>(snap.readiness);
       const bool bad = snap.readiness == nevr::quest_auth::Readiness::Failed ||
@@ -317,8 +320,8 @@ class ProductionSteps final : public Steps {
     return true;
   }
 
-  bool InstallLoginPrompt() override {
-    const bool ok = nevr_quest::integration::InstallLoginPromptHook();
+  bool InstallLoginPrompt(bool countersRegistered) override {
+    const bool ok = nevr_quest::integration::InstallLoginPromptHook(countersRegistered);
     detail_ = ok ? "ok" : "got_hook_refused";
     return ok;
   }
