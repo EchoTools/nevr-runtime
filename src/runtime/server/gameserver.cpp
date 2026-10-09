@@ -192,8 +192,8 @@ void OnTcpMsgRegistrationFailure(GameServerLib* self, VOID*, EchoVR::TcpPeer, VO
   // anything — it would sit idle for hours with nobody watching. Fail fast.
   // ServerFatal (not FatalError) because it is mode-gated: in client mode this
   // is a Warning and execution continues.
-  // #35: the rejection payload has no protobuf form, so the cause is whatever
-  // bytes the server sent, quoted (failure_detail.h).
+  // #35/#243: the rejection payload is one BroadcasterRegistrationFailureCode
+  // byte, decoded by failure_detail.h.
   const std::string rejection = FailureDetail::DescribeRegistrationRejection(msg, msgSize);
   ServerFatal("GameServer registration rejected by ServerDB: %s", rejection.c_str());
 }
@@ -1331,35 +1331,24 @@ static std::string AuthenticateServer(std::string& reason) {
         const std::string diagnostic =
             LogDiagnostics::FormatCurlFailureDiagnostic("[NEVR.GAMESERVER] Server auth failed ", static_cast<int>(res));
         Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
-        reason = "password auth: request to " + std::string(httpUri) + " failed: " + curl_easy_strerror(res) +
-                 " (curl code " + std::to_string(static_cast<int>(res)) + ")";
+        reason = FailureDetail::PasswordAuthRequestFailed(httpUri, curl_easy_strerror(res), static_cast<int>(res));
         return "";
     }
 
     if (http_code != 200) {
         LogDiagnostics::LogHttpResponseSummary(EchoVR::LogLevel::Warning,
                                                "[NEVR.GAMESERVER] Server auth rejected ", http_code, response);
-        reason = "password auth: " + std::string(httpUri) + " answered HTTP " + std::to_string(http_code);
+        reason = FailureDetail::PasswordAuthHttpStatus(httpUri, http_code);
         return "";
     }
 
-    try {
-        auto j = nlohmann::json::parse(response);
-        std::string token = j.value("token", "");
-        if (token.empty()) {
-            Log(EchoVR::LogLevel::Warning,
-                "[NEVR.GAMESERVER] Server auth returned empty token");
-            reason = "password auth: the response carried no token";
-        } else {
-            Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Server authenticated (token acquired)");
-        }
-        return token;
-    } catch (const std::exception&) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] Server auth response parse error");
-        reason = "password auth: the response was not valid JSON";
-        return "";
+    std::string token = FailureDetail::ExtractAuthToken(response, reason);
+    if (token.empty()) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Server auth response carried no usable token");
+    } else {
+        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Server authenticated (token acquired)");
     }
+    return token;
 }
 
 // Mints a ServerDB access token: refresh-token exchange first, password auth as
