@@ -69,8 +69,8 @@ target_link_libraries(stable_string_pool_test PRIVATE nevr_quest_stable_string_p
 target_compile_options(stable_string_pool_test PRIVATE -Wall -Wextra -Werror)
 
 # Quest social provider: a CNSISocial-compatible facade over the shared PCVR social model, the frame
-# observer that feeds it and the hook installer (docs/adr/0003, "Social provider"). Not linked into the
-# sentinel yet: the sentinel entry point owns activation.
+# observer that feeds it and the hook installer (docs/adr/0003, "Social provider"). The sentinel links it
+# through nevr_quest_integration, which owns activation.
 add_library(nevr_quest_social STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_facade.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/social/social_frames.cpp"
@@ -123,8 +123,7 @@ nevr_generate_builtin_defaults("${CMAKE_CURRENT_SOURCE_DIR}/../..")
 # The platform-neutral core (src/core) is the SAME source the Windows runtime
 # compiles; src/quest/auth is the Android adapter set (libcurl over OpenSSL from
 # the Quest vcpkg manifest, the cache file, the login-link file, a real clock).
-# Not linked into the sentinel yet: the hook that hands the token to the login
-# path is gated by ADR 0003.
+# Linked into the sentinel through nevr_quest_integration (the token feeds the login rewrite).
 find_package(CURL CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 # curl_http.cpp needs CURLOPT_PROTOCOLS_STR (7.85) and CURLOPT_QUICK_EXIT (7.87). The Quest manifest
@@ -210,3 +209,10 @@ endif()
 # ── Session router + loopback transport (ADR 0003, contract 3) ───────────
 # Kept in its own subdirectory so it merges cleanly alongside the other Quest packages.
 add_subdirectory(net)
+
+# ── Sentinel integration (ADR 0003, "Integration") ───────────────────────
+# Wires every package above into the sentinel entry point. After net/, login, social and the redirect,
+# because it links all of them.
+if(TARGET ovrplatformloader)
+  add_subdirectory(integration)
+endif()

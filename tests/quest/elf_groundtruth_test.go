@@ -255,143 +255,72 @@ func parseFuncs(t *testing.T) []elfFunc {
 
 func TestHookFramesCarryNoPersonality(t *testing.T) {
 	requireArtifact(t)
-	cieAug, fdeCIE := parseFrames(t)
-	funcs := parseFuncs(t)
+	art := loadFrameGraph(t, soPath(t))
 	byAddr := map[uint64]*elfFunc{}
-	for i := range funcs {
-		byAddr[funcs[i].addr] = &funcs[i]
-	}
-	containing := func(a uint64) *elfFunc {
-		if f, ok := byAddr[a]; ok {
-			return f
-		}
-		for i := range funcs {
-			if a >= funcs[i].addr && a < funcs[i].addr+funcs[i].size {
-				return &funcs[i]
-			}
-		}
-		return nil
-	}
-
-	// Direct call/branch edges, from one disassembly of the library.
-	edges := map[uint64]map[uint64]bool{}
-	var from uint64
-	for _, line := range strings.Split(run(t, "llvm-objdump", "-d", "--no-show-raw-insn", soPath(t)), "\n") {
-		if m := hdrRe.FindStringSubmatch(line); m != nil {
-			from, _ = strconv.ParseUint(m[1], 16, 64)
-			continue
-		}
-		m := branchR.FindStringSubmatch(line)
-		if m == nil || strings.HasSuffix(m[3], "@plt") {
-			continue // imports are not sentinel frames
-		}
-		to, _ := strconv.ParseUint(m[2], 16, 64)
-		callee := containing(to)
-		caller := containing(from)
-		if callee == nil || caller == nil || callee.addr == caller.addr {
-			continue
-		}
-		if edges[caller.addr] == nil {
-			edges[caller.addr] = map[uint64]bool{}
-		}
-		edges[caller.addr][callee.addr] = true
-	}
-
-	// Hook records: {entry, handler} pairs read from the section's relocation addends.
-	var recAddr, recSize uint64
-	for _, line := range strings.Split(run(t, "readelf", "-SW", soPath(t)), "\n") {
-		if m := secFull.FindStringSubmatch(line); m != nil && m[1] == "nevr_hook_records" {
-			recAddr, _ = strconv.ParseUint(m[2], 16, 64)
-			recSize, _ = strconv.ParseUint(m[3], 16, 64)
-		}
-	}
-	relative := map[uint64]uint64{} // slot address -> function address
-	for _, line := range strings.Split(run(t, "readelf", "-rW", soPath(t)), "\n") {
-		if m := relRe.FindStringSubmatch(line); m != nil {
-			off, _ := strconv.ParseUint(m[1], 16, 64)
-			add, _ := strconv.ParseUint(m[2], 16, 64)
-			relative[off] = add
-		}
-	}
-	if recSize == 0 || recSize%16 != 0 {
-		t.Fatalf("no nevr_hook_records section (size %d): no hook is recorded, the sensor is looking at nothing", recSize)
-	}
-	recordEntries := map[uint64]int{}
-	var roots []*elfFunc
-	for off := recAddr; off < recAddr+recSize; off += 16 {
-		entry, okE := relative[off]
-		handler, okH := relative[off+8]
-		if !okE || !okH {
-			t.Fatalf("hook record at %#x has no relocation for its entry/handler pointer", off)
-		}
-		recordEntries[entry]++
-		for _, a := range []uint64{entry, handler} {
-			f := byAddr[a]
-			if f == nil {
-				t.Errorf("hook record at %#x points at %#x, which is not a function symbol", off, a)
-				continue
-			}
-			roots = append(roots, f)
-		}
+	for i := range art.funcs {
+		byAddr[art.funcs[i].addr] = &art.funcs[i]
 	}
 	// Exactly one record per thunk Entry, and no record for anything else.
 	thunkEntries := map[uint64]bool{}
-	for i := range funcs {
-		if strings.Contains(funcs[i].name, "CallbackThunk") && strings.Contains(funcs[i].name, "5EntryE") {
-			thunkEntries[funcs[i].addr] = true
+	for i := range art.funcs {
+		if strings.Contains(art.funcs[i].name, "CallbackThunk") && strings.Contains(art.funcs[i].name, "5EntryE") {
+			thunkEntries[art.funcs[i].addr] = true
 		}
 	}
 	if len(thunkEntries) == 0 {
 		t.Fatalf("no CallbackThunk Entry in the library: the sensor is looking at nothing")
 	}
 	for a := range thunkEntries {
-		if recordEntries[a] != 1 {
-			t.Errorf("thunk entry %s has %d hook records, want exactly 1 (define the hook with NEVR_HOOK_RECORD)", byAddr[a].name, recordEntries[a])
+		if art.recordEntries[a] != 1 {
+			t.Errorf("thunk entry %s has %d hook records, want exactly 1 (define the hook with NEVR_HOOK_RECORD)", byAddr[a].name, art.recordEntries[a])
 		}
 	}
-	for a, n := range recordEntries {
+	for a, n := range art.recordEntries {
 		if !thunkEntries[a] {
 			t.Errorf("hook record names %#x (x%d), which is not a CallbackThunk Entry", a, n)
 		}
 	}
 
-	reached := map[uint64]bool{}
-	var queue []uint64
-	for _, r := range roots {
-		reached[r.addr] = true
-		queue = append(queue, r.addr)
+	v := walkHookFrames(art.graph)
+	for _, msg := range v.violations {
+		t.Error(msg)
 	}
-	for len(queue) > 0 {
-		a := queue[0]
-		queue = queue[1:]
-		for callee := range edges[a] {
-			if !reached[callee] {
-				reached[callee] = true
-				queue = append(queue, callee)
-			}
+	if v.checked < len(art.graph.roots) {
+		t.Errorf("checked %d functions for %d roots: the walk lost its roots", v.checked, len(art.graph.roots))
+	}
+	// The annotated set the sentinel is allowed to have, pinned so that dropping an annotation fails here
+	// (the function then carries a personality and is reported above) and adding one is a reviewed change.
+	want := map[string]*regexp.Regexp{
+		"login compose phase":         regexp.MustCompile(`^_ZN10QuestLogin11ComposePlanE`),
+		"post-load installs (dlopen)": regexp.MustCompile(`^_ZN10nevr_quest11integration11AfterDlopenE`),
+	}
+	for what, re := range want {
+		if !anyMatches(v.annotatedReached, re) {
+			t.Errorf("annotated function for the %s was not reached from a hook: the annotation or the call edge is gone (reached: %v)", what, v.annotatedReached)
 		}
 	}
-
-	checked := 0
-	for addr := range reached {
-		f := byAddr[addr]
-		if f == nil {
-			continue
+	for _, n := range v.annotatedReached {
+		ok := false
+		for _, re := range want {
+			ok = ok || re.MatchString(n)
 		}
-		cie, ok := fdeCIE[addr]
 		if !ok {
-			t.Errorf("%s at %#x has no FDE", f.name, addr)
-			continue
-		}
-		checked++
-		if aug := cieAug[cie]; aug != `"zR"` {
-			t.Errorf("function %s (reachable from a hook entry or handler) sits under CIE augmentation %s, want \"zR\" (no personality, no LSDA)", f.name, aug)
+			t.Errorf("unreviewed NEVR_OUTSIDE_GAME_CALL function reached from a hook: %s (add it to this list in the change that annotates it)", n)
 		}
 	}
-	if checked < len(roots) {
-		t.Errorf("checked %d functions for %d roots: the walk lost its roots", checked, len(roots))
+	// The annotation section must hold only what the sensor lists: an annotated function the walk never
+	// reaches is a stale annotation or a lost edge.
+	for addr := range art.graph.annotated {
+		found := false
+		for _, n := range v.annotatedReached {
+			found = found || n == art.graph.names[addr]
+		}
+		if !found {
+			t.Logf("annotated function not reached by a direct edge from any hook (called indirectly, or stale): %s", art.graph.names[addr])
+		}
 	}
-	t.Logf("hooks=%d (roots=%d), reachable sentinel functions checked=%d", len(recordEntries), len(roots), checked)
+	t.Logf("hooks=%d (roots=%d), reachable sentinel functions checked=%d, annotated outside-game-call functions reached=%v",
+		len(art.recordEntries), len(art.graph.roots), v.checked, v.annotatedReached)
 }
 
 // The backend library is built with -fno-exceptions, exactly like the host test build, so the

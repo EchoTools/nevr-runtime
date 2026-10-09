@@ -2,8 +2,8 @@
 # (src/runtime/compat/session_router.cpp), the loopback WebSocket game server and the verified-TLS
 # remote WebSocket client over the libcurl/OpenSSL the Quest vcpkg manifest provides.
 #
-# Built, linked into test executables, not linked into the sentinel: the hook that points the game at
-# the loopback port is gated by ADR 0003. The test sources also run on the host (`just test-quest-router`,
+# Linked into test executables and, through nevr_quest_integration, into the sentinel (the redirect points
+# the game at the loopback port when the bridge feature is on). The test sources also run on the host (`just test-quest-router`,
 # `just test-quest-tls`); here they only prove the NDK toolchain compiles and links them.
 
 find_package(CURL CONFIG REQUIRED)

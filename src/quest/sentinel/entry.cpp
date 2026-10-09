@@ -10,13 +10,13 @@
  */
 
 #include "sentinel.h"
-#include "activation.h"
 #include "got_hook.h"
 #include "hook_install.h"
 #include "hook_log.h"
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "pinned_targets.h"
+#include "quest/integration/entry_hooks.h"
 
 #include <jni.h>
 
@@ -50,22 +50,28 @@ int HookedClockGettime(ClockThunk::Fn original, clockid_t clk_id, struct timespe
 // The hook: the thunk's entry and its handler, recorded for the build-time frame sensor.
 NEVR_HOOK_RECORD(kClockHook, ClockThunk, &HookedClockGettime);
 
-// A failed install is logged by GotHook with its status and leaves the original
-// call intact; it is never fatal to the host process.
-void InstallBasicsHook() {
-    sentinel::RegisterReportCounter("clock_gettime_calls", &g_clockGettimeCalls);
-    sentinel::RegisterReportCounter("clock_gettime_thunk_faults", &ClockThunk::FaultCounter(),
-                                    sentinel::ReportKind::kFaults);
-    nevr_quest::login_prompt::RegisterCounters();
-    sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000);
-    ClockThunk::Arm(kClockHook);
-    sentinel::InstallThunk<ClockThunk>(g_clockHook, sentinel::pinned::LibR15ClockGettime());
-    // The sign-in prompt in the game's login-error text (#239). Passes the game's message through
-    // until token auth publishes a prompt.
-    nevr_quest::login_prompt::Install();
+}  // namespace
+
+namespace nevr_quest::integration {
+
+// The counters are registered by the constructor sequence together with every other hook's, before
+// the single StartReporter (ctor_sequence.h).
+bool RegisterClockCounters() noexcept {
+    bool ok = sentinel::RegisterReportCounter("clock_gettime_calls", &g_clockGettimeCalls);
+    ok = sentinel::RegisterReportCounter("clock_gettime_thunk_faults", &ClockThunk::FaultCounter(),
+                                         sentinel::ReportKind::kFaults) && ok;
+    return ok;
 }
 
-}  // namespace
+// A failed install is logged by GotHook with its status and leaves the original
+// call intact; it is never fatal to the host process.
+bool InstallClockHook() noexcept {
+    ClockThunk::Arm(kClockHook);
+    return sentinel::InstallThunk<ClockThunk>(g_clockHook, sentinel::pinned::LibR15ClockGettime()) ==
+           sentinel::GotStatus::kOk;
+}
+
+}  // namespace nevr_quest::integration
 
 extern "C" {
 
@@ -79,12 +85,10 @@ const char* nevr_sentinel_marker() {
 // DT_NEEDED closure, before libr15's JNI_OnLoad / ANativeActivity_onCreate.
 __attribute__((constructor))
 static void nevr_sentinel_ctor() {
-    sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor", {{"action", "arm_crash_reporter"}});
-    sentinel::Arm();
-    // Resolve and log the configuration and feature switches. No feature hook is installed here:
-    // each later hook consults sentinel::FeatureEnabled() at its own install point.
-    sentinel::InitActivation();
-    InstallBasicsHook();
+    sentinel::LogFields(sentinel::LogLevel::kInfo, "sentinel_ctor", {{"action", "begin"}});
+    // Everything the constructor does is one sequence (integration/ctor_sequence.h): crash reporter,
+    // configuration, counters, the single reporter start, then each hook gated by its feature switch.
+    nevr_quest::integration::RunSentinelConstructor();
 }
 
 // Belt-and-suspenders: if anything System.loadLibrary's this by name, arm here
