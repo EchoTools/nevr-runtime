@@ -231,6 +231,24 @@ int ListenerFdFor(uint16_t port) {
   return found;
 }
 
+// A real listening TCP socket on its own ephemeral 127.0.0.1 port. Returns its fd; *port gets the port.
+int OpenForeignListener(uint16_t* port) {
+  const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+  if (fd < 0) return -1;
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = 0;
+  socklen_t len = sizeof(addr);
+  if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), len) != 0 || ::listen(fd, 16) != 0 ||
+      ::getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len) != 0) {
+    ::close(fd);
+    return -1;
+  }
+  *port = ntohs(addr.sin_port);
+  return fd;
+}
+
 bool Upgrade(Rig& rig, Client& c) {
   c.Write(UpgradeRequestText(rig.GoodTarget()), /*oneByteAtATime=*/true);  // partial reads on the server's handshake parser
   const std::string resp = c.Read(50, 3000);
@@ -542,6 +560,98 @@ void TestListenerThatStopsListeningIsReportedAndRestored() {
   QCHECK(rig.server->ListenerLosses() == 1);
 }
 
+// Finding 4 (#240): the listener number is reused by ANOTHER listening socket with connections already
+// queued on it. The router must not accept those -- they are not its connections. Before the fix the
+// accept ran before the identity check, so the router would drain the foreign socket's backlog (and
+// answer each 403) for up to listenerCheckMs; after the fix the pre-accept identity check refuses the
+// replaced descriptor, so the foreign owner can still accept all of its own connections.
+void TestReplacedByAnotherListenerIsNotAccepted() {
+  Rig rig(1u << 20, 8u << 20, 30000, [](LoopbackGameServer::Config& c) { c.listenerCheckMs = 2000; });
+  const uint16_t port = rig.server->Start();
+  const int fd = ListenerFdFor(port);
+  QCHECK(fd >= 0);
+  if (fd < 0) return;
+  uint16_t foreignPort = 0;
+  const int foreign = OpenForeignListener(&foreignPort);
+  QCHECK(foreign >= 0);
+  if (foreign < 0) return;
+  // Queue three connections on the foreign listener before it takes over the number.
+  Client c1(foreignPort), c2(foreignPort), c3(foreignPort);
+  QCHECK(c1.fd >= 0 && c2.fd >= 0 && c3.fd >= 0);
+  QCHECK(::dup2(foreign, fd) == fd);  // the router's number now refers to the foreign listening socket
+  QCHECK(rig.WaitForRecord("router_listener", "lost", "fd_replaced"));
+  QCHECK(rig.WaitForRecord("router_listener", "restored"));
+  // The router never accepted on the foreign socket: all three queued connections are still ours to take.
+  int accepted = 0;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2000);
+  while (accepted < 3 && std::chrono::steady_clock::now() < deadline) {
+    const int c = ::accept4(foreign, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
+    if (c >= 0) {
+      ++accepted;
+      ::close(c);
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  QCHECK(accepted == 3);
+  ::close(fd);
+  ::close(foreign);
+}
+
+// Finding 5 (#240): Start() is idempotent while running and returns the live port (not 0), so a second
+// Start() never reassigns the accept thread while it is joinable (which would std::terminate).
+void TestStartIsIdempotentAndReturnsThePort() {
+  Rig rig;
+  const uint16_t p1 = rig.server->Start();
+  QCHECK(p1 != 0);
+  const uint16_t p2 = rig.server->Start();
+  QCHECK(p2 == p1);  // same live port, not 0 and not a relaunch
+  Client game(p1);
+  QCHECK(Upgrade(rig, game));
+}
+
+// Finding 5: Stop() resets state so a later Start() runs again on a fresh port, and Stop() is safe twice.
+void TestStopThenStartAgain() {
+  Rig rig;
+  const uint16_t p1 = rig.server->Start();
+  QCHECK(p1 != 0);
+  rig.server->Stop();
+  rig.server->Stop();  // idempotent
+  const uint16_t p2 = rig.server->Start();
+  QCHECK(p2 != 0);
+  Client game(p2);
+  QCHECK(Upgrade(rig, game));
+}
+
+// Finding 5: concurrent Start() calls are serialized and create exactly one accept thread. Without the
+// lifecycle lock two racing Start()s both assign acceptThread_ while joinable and std::terminate.
+void TestConcurrentStartIsSafe() {
+  for (int iter = 0; iter < 8; ++iter) {
+    Rig rig;
+    std::atomic<int> go{0};
+    std::vector<std::thread> starters;
+    std::vector<uint16_t> ports(4, 0);
+    for (int i = 0; i < 4; ++i) {
+      starters.emplace_back([&, i]() {
+        while (go.load() == 0) {
+        }
+        ports[i] = rig.server->Start();
+      });
+    }
+    go.store(1);
+    for (auto& t : starters) t.join();
+    uint16_t live = 0;
+    for (const uint16_t p : ports) {
+      if (p != 0) {
+        QCHECK(live == 0 || live == p);  // every non-zero return is the one live port
+        live = p;
+      }
+    }
+    QCHECK(live != 0);
+    QCHECK(rig.server->port() == live);
+  }
+}
+
 // A healthy listener is never reported lost, however often it is checked.
 void TestHealthyListenerIsNotReported() {
   Rig rig(1u << 20, 8u << 20, 30000, [](LoopbackGameServer::Config& c) { c.listenerCheckMs = 50; });
@@ -569,6 +679,10 @@ int main() {
   TestListenerClosedUnderneathIsReportedAndRestored();
   TestListenerThatStopsListeningIsReportedAndRestored();
   TestReplacedListenerNumberIsNotClosed();
+  TestReplacedByAnotherListenerIsNotAccepted();
+  TestStartIsIdempotentAndReturnsThePort();
+  TestStopThenStartAgain();
+  TestConcurrentStartIsSafe();
   TestHealthyListenerIsNotReported();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "loopback_game_server_test: %d check(s) failed\n", quest_test::Failures());

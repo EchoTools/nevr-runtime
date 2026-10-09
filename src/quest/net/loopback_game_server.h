@@ -92,10 +92,16 @@ class LoopbackGameServer final : public SessionRouter::GameTransport {
   void CheckListener(short revents, int acceptErrno);
   // Accept thread only. Listens on port_ again after a loss; logs the outcome on each change.
   void TryRestoreListener();
+  // Accept thread only. Cheap identity probe (fstat inode/device) run BEFORE accepting, so a
+  // descriptor whose number was reused by another socket is never accepted on. false also when the
+  // listener is gone. CheckListener does the full classification and logging.
+  bool ListenerStillOurs() const;
 
   Config config_;
   SessionRouter::Router* router_ = nullptr;
-  int listenFd_ = -1;
+  std::mutex lifecycleMutex_;    // serializes Start() and Stop() so the accept thread is created/joined once
+  std::atomic<int> listenFd_{-1};  // written by the accept thread (CheckListener/TryRestoreListener) and by
+                                 // Start/Stop around it; atomic so those reads/writes are defined
   ino_t listenIno_ = 0;          // inode and device of the listening socket; a different file at listenFd_ is
   dev_t listenDev_ = 0;          // not ours
   int lastRestoreErrno_ = 0;     // accept thread only: the last restore failure reported, so a retry that fails
