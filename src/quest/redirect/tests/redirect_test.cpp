@@ -121,6 +121,14 @@ bool AnyLineContains(const char* needle) {
   return false;
 }
 
+std::size_t CountLinesContaining(const char* needle) {
+  std::size_t n = 0;
+  for (const std::string& l : Lines()) {
+    if (l.find(needle) != std::string::npos) ++n;
+  }
+  return n;
+}
+
 // ---- the fake game ----------------------------------------------------------
 
 // Insert-only storage with stable element addresses (a deque), so a pointer taken from a value
@@ -626,6 +634,17 @@ void RealHookEndToEnd(const std::string& dir) {
   GameConfig().clear();
   QCHECK(R15Entry()(nullptr, "login_host", kDefaultLogin, 0U) == kDefaultLogin);
   ResetThunk(Slot::kLibR15);
+
+  // The sentinel retries the matchmaking slot after every dlopen until the module loads (#240: 113
+  // retries in one run). The first attempt is logged once; a retry with the same status logs
+  // nothing, neither this adapter's line nor the backend's.
+  QCHECK(CountLinesContaining("\"target\":\"matchmaking_tstring\",\"status\":\"module_not_loaded\"") == 1);
+  const std::size_t linesBeforeRetries = Lines().size();
+  for (int i = 0; i < 5; ++i) {
+    QCHECK_STATUS(InstallMatchmakingRedirectWith(sentinel::FindLoadedImage), GotStatus::kModuleNotLoaded);
+  }
+  QCHECK(Lines().size() == linesBeforeRetries);
+  QCHECK(CountLinesContaining("\"target\":\"matchmaking_tstring\",\"status\":\"module_not_loaded\"") == 1);
 
   void* a = OpenFixture(dir, "libredirfx_consumer_a.so");
   QCHECK(a != nullptr);

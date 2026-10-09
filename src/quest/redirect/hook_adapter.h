@@ -9,7 +9,9 @@
 // Nothing installs unless the redirect feature is effective in the resolved configuration. A
 // disabled feature, an unknown module or build ID, a slot that fails validation, or a refused
 // pool leaves the game's original calls exactly as they were and logs one structured line per
-// target (GotHook's own `got_hook` line plus this file's `redirect_install` line).
+// target (GotHook's own `got_hook` line plus this file's `redirect_install` line). A module that is
+// not loaded yet is reported by `redirect_install` alone, and a retry that ends in the same status
+// as the attempt before it logs nothing.
 //
 // The caller's contract (nothing in this directory calls these; the sentinel does):
 //   1. RegisterRedirectCounters() before sentinel::StartReporter (the reporter refuses a

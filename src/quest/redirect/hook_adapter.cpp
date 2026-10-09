@@ -38,18 +38,29 @@ void LogInstall(const char* what, GotStatus status) {
 // Installs one slot unless it is already installed. A poisoned slot (a failed install left our entry
 // possibly reachable through it) is final for this process: it is logged as such and never retried
 // here, and the thunk stays disarmed.
+//
+// The caller retries the matchmaking slot after every dlopen until libpnsradmatchmaking.so is
+// loaded, which happens only after a login. A module that is not loaded yet is answered here,
+// without asking the backend (which would log its own got_hook line for each attempt), and the
+// redirect_install line is written only when the slot's status changes, so the retries before the
+// load leave one line, not one per dlopen.
 GotStatus InstallSlotLocked(Slot slot, sentinel::GotHook& hook, const sentinel::GotTarget& target,
                             sentinel::ImageLookup lookup, GotStatus* stored, const char* what) {
   if (hook.installed()) return GotStatus::kAlreadyInstalled;
   if (*stored == GotStatus::kSlotPoisoned) return GotStatus::kSlotPoisoned;
-  ArmThunk(slot, true);
-  const GotStatus status = InstallThunk(slot, hook, target, lookup);
-  if (status != GotStatus::kOk) ArmThunk(slot, false);
+  const GotStatus previous = *stored;
+  GotStatus status = GotStatus::kModuleNotLoaded;
+  sentinel::ElfImage image;
+  if (lookup == nullptr || target.module == nullptr || lookup(target.module, &image)) {
+    ArmThunk(slot, true);
+    status = InstallThunk(slot, hook, target, lookup);
+    if (status != GotStatus::kOk) ArmThunk(slot, false);
+  }
   *stored = status;
   if (status == GotStatus::kSlotPoisoned) {
     sentinel::LogFields(sentinel::LogLevel::kError, "redirect_install",
                         {{"target", what}, {"status", "slot_poisoned"}, {"action", "not_retried"}});
-  } else {
+  } else if (status != previous) {
     LogInstall(what, status);
   }
   return status;
