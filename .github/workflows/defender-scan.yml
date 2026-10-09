@@ -42,18 +42,9 @@ jobs:
         go install github.com/bufbuild/buf/cmd/buf@v1.47.2
         echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
-    # The pinned vcpkg revision's ixwebsocket port links `-lCrypt32`; Arch's MinGW package ships
-    # libcrypt32.a only, and ld on Linux is case-sensitive. The development machine carries the same
-    # symlink by hand (unowned by any package); the link step of the legacy gameserver fails without it.
-    - name: Provide libCrypt32.a (case-folded name the vcpkg ixwebsocket port links)
-      run: ln -s libcrypt32.a /usr/x86_64-w64-mingw32/lib/libCrypt32.a
-
     - name: Setup vcpkg
       run: |
         git clone https://github.com/Microsoft/vcpkg.git "$HOME/.vcpkg"
-        # The vcpkg revision is the one in .vcpkg-commit, the same one `just vcpkg-pin-check` holds a
-        # local ~/.vcpkg to, so CI builds the dependency versions that are tested locally.
-        git -C "$HOME/.vcpkg" checkout --detach "$(cat "$GITHUB_WORKSPACE/.vcpkg-commit")"
         "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
         "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
           --x-manifest-root="$GITHUB_WORKSPACE" \

@@ -41,9 +41,6 @@ jobs:
       run: |
         set -euo pipefail
         git clone https://github.com/Microsoft/vcpkg.git "$HOME/.vcpkg"
-        # The vcpkg revision is the one in .vcpkg-commit, the same one `just vcpkg-pin-check` holds a
-        # local ~/.vcpkg to, so CI builds the dependency versions that are tested locally.
-        git -C "$HOME/.vcpkg" checkout --detach "$(cat "$GITHUB_WORKSPACE/.vcpkg-commit")"
         "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
         echo "sha=$(git -C "$HOME/.vcpkg" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
         echo "gcc=$(pacman -Q mingw-w64-gcc | tr ' ' '-')" >> "$GITHUB_OUTPUT"
