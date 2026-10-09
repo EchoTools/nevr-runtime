@@ -30,6 +30,7 @@
 #include "abi/echovr.h"
 #include "abi/echovr_functions.h"
 #include "core/globals.h"
+#include "core/login_session.h"
 #include "core/build_identity.h"  // N112: NEVR build identity
 #include "runtime/server/messages.h"
 
@@ -1014,7 +1015,7 @@ void GameServerLib::RegisterTcpCallbacks() {
 
     const BuildIdentity::Info& buildId = BuildIdentity::Get();  // N112: commit hash and build type in the version
     GameServer::RegistrationParams params;
-    params.loginSessionId = GuidToUuidString(g_loginSessionId);
+    params.loginSessionId = GuidToUuidString(LoginSession::Get());
     params.serverId = static_cast<uint64_t>(state.serverId);
     params.externalIp = externalIp;
     params.port = static_cast<uint32_t>(broadcasterPort);
@@ -1561,7 +1562,7 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   // Build protobuf registration request
   const BuildIdentity::Info& buildId = BuildIdentity::Get();  // N112: commit hash and build type in the version
   GameServer::RegistrationParams params;
-  params.loginSessionId = GuidToUuidString(g_loginSessionId);
+  params.loginSessionId = GuidToUuidString(LoginSession::Get());
   params.serverId = static_cast<uint64_t>(serverId);
   params.externalIp = externalIp;  // public-facing IP
   params.port = static_cast<uint32_t>(broadcasterPort);
