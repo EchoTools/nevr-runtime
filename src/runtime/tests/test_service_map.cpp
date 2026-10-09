@@ -473,6 +473,35 @@ TEST(ServiceMapDefaults, UnsetBareVarYieldsNothingWhenThereIsNoDefault) {
   EXPECT_FALSE(nevr_cfg::LookupFlatWithDefaults(cfg, none, "nevr_http_key").has_value());
 }
 
+// #286: only a variable that really was unset makes a service key "unset". A literal `${` written
+// with the documented `$${` escape is a value.
+TEST(ServiceMapDefaults, EscapedDollarBraceIsAValueNotAnUnsetReference) {
+  const auto cfg = nevr::NevrConfig::LoadFromString("auth:\n  http_key: \"pa$${ss\"\n");
+  EXPECT_EQ(nevr_cfg::LookupFlatWithDefaults(cfg, EmbeddedDefaults(), "nevr_http_key").value_or(""), "pa${ss");
+  EXPECT_EQ(nevr_cfg::LookupFlat(cfg, "nevr_http_key").value_or(""), "pa${ss");
+}
+
+TEST(ServiceMapDefaults, ASetVariableWhoseValueContainsDollarBraceIsAValue) {
+  SetEnv("NEVR_TEST_SET_286", "x${y");
+  const auto cfg = nevr::NevrConfig::LoadFromString("auth:\n  http_key: \"${NEVR_TEST_SET_286}\"\n");
+  EXPECT_EQ(nevr_cfg::LookupFlat(cfg, "nevr_http_key").value_or(""), "x${y");
+  UnsetEnv("NEVR_TEST_SET_286");
+}
+
+// The service-host lookup (config.cpp's redirects) must not hand an unresolved reference out as a host.
+TEST(ServiceMap, ResolveServiceHost_UnsetReferenceIsNotAHost) {
+  const auto cfg = nevr::NevrConfig::LoadFromString(
+      "services:\n  matchmaking: \"${NEVR_TEST_UNSET_HOST_286}\"\n  login: \"wss://login.example/nevr\"\n");
+  const auto r = ResolveServiceHost(cfg, "matchingservice_host");
+  EXPECT_EQ(r.source, HostSource::kLoginFallback);
+  EXPECT_EQ(r.value.value_or(""), "wss://login.example/nevr");
+
+  const auto only = nevr::NevrConfig::LoadFromString("services:\n  login: \"${NEVR_TEST_UNSET_HOST_286}\"\n");
+  const auto none = ResolveServiceHost(only, "serverdb_host");
+  EXPECT_EQ(none.source, HostSource::kNone);
+  EXPECT_FALSE(none.value.has_value());
+}
+
 TEST(ServiceMapDefaults, ConfigYamlValueOverridesTheDefault) {
   const auto cfg = nevr::NevrConfig::LoadFromString(
       "services:\n  socket_uri: \"wss://file.example/ws\"\nauth:\n  http_key: file-key\n");

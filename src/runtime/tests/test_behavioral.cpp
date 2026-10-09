@@ -1052,6 +1052,17 @@ const char* HostOf(const std::vector<uint8_t>& image) {
 }
 }  // namespace
 
+// The slot is the original string and its NUL: the byte after it belongs to other data
+// (`dd if=pnsradmatchmaking.dll bs=1 skip=$((0x1c76d8)) count=64 | xxd` shows the NUL, then 0x13 0xcc ...).
+TEST(MatchmakerHostPatch, SlotIsTheOriginalStringAndItsNulNothingMore) {
+  EXPECT_EQ(MatchmakerHostPatch::kHostSlotSize, sizeof(MatchmakerHostPatch::kHostExpected));
+  EXPECT_EQ(MatchmakerHostPatch::kHostSlotSize, 48U);
+  EXPECT_TRUE(MatchmakerHostPatch::FitsInHostSlot(47)) << "47 characters and the NUL fill the slot";
+  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(48)) << "one byte more would overwrite the next field";
+  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(0));
+  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(-1));
+}
+
 TEST(MatchmakerHostPatch, EveryFreshImageAfterAReloadIsPatched) {
   std::vector<uint8_t> first = FreshMatchmakerImage();
   ASSERT_EQ(MatchmakerHostPatch::Apply(first.data(), 51234, CopyWrite), MatchmakerHostPatch::Result::Patched);

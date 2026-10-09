@@ -30,6 +30,24 @@ def by_name(results, name):
     return [r for r in results if r.name == name]
 
 
+class FixtureProvenanceTest(unittest.TestCase):
+    """tools/winvm/README.md asks for a fixture taken from a real run: a captured log, not a
+    hand-edited one. The healthy-boot capture is CRLF throughout (it came off the Windows VM) and its
+    bridge warning is the wording that build printed."""
+
+    def test_healthy_boot_is_an_unedited_windows_capture(self):
+        raw = (FIX / "healthy_boot.txt").read_bytes()
+        lines = raw.split(b"\n")
+        if lines and lines[-1] == b"":
+            lines.pop()
+        self.assertTrue(lines)
+        bare = [i + 1 for i, line in enumerate(lines) if not line.endswith(b"\r")]
+        self.assertEqual(bare, [], f"lines without CR (the capture was converted or edited): {bare[:5]}")
+        bridge = [line for line in lines if b"[NEVR.WS] no services.socket_uri" in line]
+        self.assertEqual(len(bridge), 1)
+        self.assertIn(b"login injection cannot fire", bridge[0])
+
+
 class ModalDialogTest(unittest.TestCase):
     def test_echo_relay_dialog_is_a_failure_that_names_the_message(self):
         r = checks.check_no_modal_dialog(fixture("echo_relay_dialog_windows.txt"))

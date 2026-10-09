@@ -300,7 +300,8 @@ NevrConfig NevrConfig::LoadFromString(const std::string& yaml) {
   cfg.unsetBareVars_.assign(unsetBare.begin(), unsetBare.end());
   for (const std::string& name : unsetBare) {
     Log(EchoVR::LogLevel::Warning,
-        "[NEVR.CONFIG] environment variable %s is not set; the text ${%s} is kept as written",
+        "[NEVR.CONFIG] environment variable %s is not set; the text ${%s} is kept as written, and a "
+        "service key that uses it counts as unset",
         name.c_str(), name.c_str());
   }
   cfg.impl_->root = raw;       // store the parsed tree; scalars interpolate at read time
@@ -336,9 +337,14 @@ NevrConfig NevrConfig::LoadFromFileOrFail(const std::string& path, bool is_serve
   }
 }
 
-std::optional<std::string> NevrConfig::GetString(const std::string& path) const {
+std::optional<std::string> NevrConfig::GetString(const std::string& path, bool* hadUnsetBare) const {
   if (!impl_) return std::nullopt;
-  return InterpolateScalar(ResolvePath(impl_->root, path));
+  if (hadUnsetBare == nullptr) return InterpolateScalar(ResolvePath(impl_->root, path));
+  std::set<std::string> unset;
+  UnsetBareSink sink(&unset);
+  std::optional<std::string> value = InterpolateScalar(ResolvePath(impl_->root, path));
+  *hadUnsetBare = !unset.empty();
+  return value;
 }
 
 std::optional<bool> NevrConfig::GetBool(const std::string& path) const {
