@@ -87,6 +87,12 @@ static constexpr uint8_t HTTP_LISTENER_PROLOGUE[5] = {0x48, 0x89, 0x5C, 0x24, 0x
  * ReVault-verified via revault_disassemble: 0x140157fb0: 48 89 54 24 10. */
 static constexpr uint8_t NETGAME_HOST_CHECK_PROLOGUE[5] = {0x48, 0x89, 0x54, 0x24, 0x10};
 
+/* Expected prologues of the two hooks that had none (read from echovr.exe at the VA):
+ *   VA_PRECISION_SLEEP_WAIT (0x1401CE0B0): push rdi; sub rsp,0x60; mov rdi,rcx
+ *   VA_SPINWAIT_WAIT_FOR_VALUE (0x141500ED8): mov [rsp+8],rbx; mov [rsp+0x10],rsi */
+static constexpr uint8_t PRECISION_SLEEP_WAIT_PROLOGUE[8] = {0x40, 0x57, 0x48, 0x83, 0xEC, 0x60, 0x48, 0x8B};
+static constexpr uint8_t SPINWAIT_WAIT_FOR_VALUE_PROLOGUE[8] = {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74};
+
 /* Expected prologue at VA_GET_TIME_MICROSECONDS (0x1400D00C0): SUB RSP,0x28
  * Same prologue at VA_GET_TIME_MILLISECONDS (0x1400D0110). Both ReVault-verified. */
 static constexpr uint8_t GET_TIME_MICROSECONDS_PROLOGUE[4] = {0x48, 0x83, 0xEC, 0x28};
@@ -564,7 +570,7 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
         void* detour;
         void** original;
         const char* name;
-        const uint8_t* prologue;  // nullptr = skip prologue validation
+        const uint8_t* prologue;  // required: the tool (verify_hook_invariants.py) rejects a nullptr row
         uint8_t prologue_len;     // byte count for prologue comparison (0 if no prologue)
         const char* why;          // what the hook changes and why; logged when it installs
     };
@@ -584,11 +590,11 @@ void BinaryBugFixes::Init(uintptr_t base_addr) {
           "a null pointer at arg1+0x2DA0 is dereferenced when multiplayer ends; checked before use" },
         { VA_PRECISION_SLEEP_WAIT, (void*)&PrecisionSleepWaitHook,
           (void**)&s_origPrecisionSleepWait, "CPrecisionSleep::Wait",
-          nullptr, 0,
+          PRECISION_SLEEP_WAIT_PROLOGUE, sizeof(PRECISION_SLEEP_WAIT_PROLOGUE),
           "it creates and destroys a kernel timer every frame (about 180 kernel transitions a second at 90 fps); uses one persistent high-resolution timer" },
         { VA_SPINWAIT_WAIT_FOR_VALUE, (void*)&WaitForValueHook,
           (void**)&s_origWaitForValue, "CSpinWait::WaitForValue",
-          nullptr, 0,
+          SPINWAIT_WAIT_FOR_VALUE_PROLOGUE, sizeof(SPINWAIT_WAIT_FOR_VALUE_PROLOGUE),
           "its backoff decreased (10 to 0 ms) under contention; it now increases (0 to 10 ms) and yields the hyper-thread" },
     };
 
