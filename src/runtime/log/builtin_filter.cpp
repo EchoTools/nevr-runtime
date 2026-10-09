@@ -17,6 +17,8 @@
 #include "core/json_escape.h"
 #include "core/logging.h"
 #include "runtime/hook/hook_guard.h"
+#include "runtime/log/boot_log_tee.h"
+#include "runtime/log/boot_replay.h"
 
 #include <MinHook.h>
 #include <nlohmann/json.hpp>
@@ -625,6 +627,62 @@ static std::string GetDefaultLogDir() {
 #endif
 }
 
+/* One record in the main log. fromBoot marks a line replayed from nevr-boot.jsonl (#5). */
+static void WriteFileRecord(const char* ts, const char* lvl, const char* message, int len, bool fromBoot) {
+    if (g_config.file_jsonl) {
+        std::string line = "{\"ts\":\"";
+        line += ts;
+        line += "\",\"run\":\"";   /* N80 — correlates with nevr-boot.jsonl */
+        line += GetRunId();
+        line += "\",\"level\":\"";
+        line += lvl;
+        line += fromBoot ? "\",\"src\":\"boot\",\"msg\":\"" : "\",\"msg\":\"";
+        JsonEscape::AppendTo(line, message, len);
+        line += "\"}\n";
+
+        size_t written = std::fwrite(line.data(), 1, line.size(), g_log_file);
+        g_file_bytes_written += written;
+    } else {
+        int n;
+        if (g_config.timestamps) {
+            n = std::fprintf(g_log_file, "%s %s %.*s\n", ts, lvl, len, message);
+        } else {
+            n = std::fprintf(g_log_file, "%s %.*s\n", lvl, len, message);
+        }
+        if (n > 0) g_file_bytes_written += n;
+    }
+}
+
+/* #5: at the main log's first open, replay this run's nevr-boot.jsonl lines into it, so boot and
+ * runtime events are one stream. The boot file stays where it is: it is the crash spool and is never
+ * deleted. Only the last 1 MiB is read (the file accumulates every run). Not called on rotation. */
+static void ReplayBootLines() {
+    const char* path = BootLogTee::Path();
+    if (path == nullptr || path[0] == '\0' || !g_log_file) return;
+    FILE* in = std::fopen(path, "rb");
+    if (!in) return;
+    constexpr long kTailBytes = 1024 * 1024;
+    std::fseek(in, 0, SEEK_END);
+    const long size = std::ftell(in);
+    const long start = size > kTailBytes ? size - kTailBytes : 0;
+    std::fseek(in, start, SEEK_SET);
+    std::string contents(static_cast<size_t>(size - start), '\0');
+    const size_t got = std::fread(&contents[0], 1, contents.size(), in);
+    std::fclose(in);
+    contents.resize(got);
+    if (start > 0) {  /* drop the partial first line */
+        const size_t nl = contents.find('\n');
+        contents.erase(0, nl == std::string::npos ? contents.size() : nl + 1);
+    }
+    const std::vector<BootReplay::Line> lines = BootReplay::ParseRun(contents, GetRunId());
+    for (const BootReplay::Line& line : lines) {
+        WriteFileRecord(line.ts.c_str(), line.level.c_str(), line.msg.c_str(), static_cast<int>(line.msg.size()),
+                        /*fromBoot=*/true);
+    }
+    std::fflush(g_log_file);
+    BlfLog("replayed %zu boot line(s) from %s into this log", lines.size(), path);
+}
+
 static void InitFileLogging() {
     if (!g_config.file_enabled) return;
 
@@ -642,6 +700,7 @@ static void InitFileLogging() {
     }
 
     OpenLogFile();
+    ReplayBootLines();  // the first open only: RotateIfNeeded calls OpenLogFile, not this
 }
 
 static void ShutdownFileLogging() {
@@ -861,29 +920,7 @@ static void EmitLine(uint32_t level, const char* message, int len) {
     /* File output */
     if (g_config.file_enabled && g_log_file) {
         std::lock_guard<std::mutex> lock(g_file_mutex);
-
-        if (g_config.file_jsonl) {
-            std::string line = "{\"ts\":\"";
-            line += ts;
-            line += "\",\"run\":\"";   /* N80 — correlates with nevr-boot.jsonl */
-            line += GetRunId();
-            line += "\",\"level\":\"";
-            line += lvl;
-            line += "\",\"msg\":\"";
-            JsonEscape::AppendTo(line, message, len);
-            line += "\"}\n";
-
-            size_t written = std::fwrite(line.data(), 1, line.size(), g_log_file);
-            g_file_bytes_written += written;
-        } else {
-            int n;
-            if (g_config.timestamps) {
-                n = std::fprintf(g_log_file, "%s %s %.*s\n", ts, lvl, len, message);
-            } else {
-                n = std::fprintf(g_log_file, "%s %.*s\n", lvl, len, message);
-            }
-            if (n > 0) g_file_bytes_written += n;
-        }
+        WriteFileRecord(ts, lvl, message, len, /*fromBoot=*/false);
 
         std::fflush(g_log_file);
         RotateIfNeeded();
