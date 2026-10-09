@@ -73,12 +73,16 @@ class NevrConfig {
 
   const std::vector<PluginSpec>& Plugins() const { return plugins_; }
   bool Empty() const { return empty_; }
+  /// Names of unset bare ${VAR} references found at load, each once, sorted. Their text stays in
+  /// the value as written; LoadFromString logs one warning per name.
+  const std::vector<std::string>& UnsetBareVars() const { return unsetBareVars_; }
 
  private:
   struct Impl;                       // holds the interpolated yaml-cpp tree (.cpp only)
   std::unique_ptr<Impl> impl_;
   std::vector<PluginSpec> plugins_;
   bool empty_ = true;
+  std::vector<std::string> unsetBareVars_;
 };
 
 }  // namespace nevr
