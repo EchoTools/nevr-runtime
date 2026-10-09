@@ -100,7 +100,7 @@ static constexpr uint8_t   PNSRAD_IDENTITY_JNE_EXPECTED[] = {0x0F, 0x85, 0x9C, 0
 //   RVA 0x1c84d8 (.rdata section, VMA 0x1801c6000, file offset 0x1c5200 per
 //   `objdump -h`; string file offset = 0x1c76d8, verified byte-for-byte via
 //   `dd if=pnsradmatchmaking.dll bs=1 skip=$((0x1c76d8)) count=64 | xxd`) —
-//   a 49-byte slot (the 47-char string + NUL, then unrelated data
+//   a 48-byte slot (the 47-char string + NUL, then unrelated data
 //   immediately follows with no padding) holding
 //   "wss://matchmaker.readyatdawn.com/rad/rad15_live\0".
 // Replacing with "ws://127.0.0.1:PPPPP\0" (21 bytes, port always 5 digits —
@@ -109,21 +109,9 @@ static constexpr uint8_t   PNSRAD_IDENTITY_JNE_EXPECTED[] = {0x0F, 0x85, 0x9C, 0
 // pattern xpid_patch.cpp already uses for a shorter replacement in a fixed
 // slot.
 //
-// 2026-09-13 (Andrew): the replacement was originally the literal port
-// 42148. Static ports collide with a still-releasing socket from a
-// just-killed prior process (TIME_WAIT), so ws_bridge.cpp now binds an
-// ephemeral port with retry instead of a fixed one — this patch reads
-// GetMatchmakerBridgePort() at call time and builds the replacement string
-// to match, rather than a compile-time constant.
-//
-// CONFIRMED LIVE 2026-09-13 (against the original hardcoded-42148 version):
-// patch applied ("[pnsradmatchmaking] patched matchmaker host default at
-// +0x1c84d8"), matchmaker connected through our own listener, "[NSLOBBY]
-// received lobby session success", joined a real server
-// (108.218.163.196:6792), loaded into a live social lobby. Not yet
-// re-confirmed live against the ephemeral-port version below — the string
-// length and patch mechanics are identical either way, but flagging that
-// the "CONFIRMED LIVE" evidence predates this specific change.
+// The replacement is built from GetMatchmakerBridgePort() at call time: ws_bridge.cpp binds an
+// ephemeral port with retry (a fixed port collides with a still-releasing socket from a just-killed
+// process), so no compile-time constant exists.
 static constexpr uintptr_t PNSRADMATCHMAKING_HOST_RVA = MatchmakerHostPatch::kHostRva;
 static constexpr size_t    PNSRADMATCHMAKING_HOST_SLOT_SIZE = MatchmakerHostPatch::kHostSlotSize;
 static constexpr const char* PNSRADMATCHMAKING_HOST_EXPECTED = MatchmakerHostPatch::kHostExpected;
@@ -246,7 +234,7 @@ static void PatchMatchmakingHost(uintptr_t base) {
         Log(EchoVR::LogLevel::Info,
             "[NEVR.PATCH] pnsradmatchmaking patched matchmaker host default at +0x%x: "
             "\"%s\" -> \"ws://127.0.0.1:%u\"", (unsigned)PNSRADMATCHMAKING_HOST_RVA,
-            PNSRADMATCHMAKING_HOST_EXPECTED, (unsigned)port);
+            PNSRADMATCHMAKING_HOST_EXPECTED, static_cast<unsigned>(port));
         break;
     case MatchmakerHostPatch::Result::NoPort:
         Log(EchoVR::LogLevel::Warning,
@@ -255,14 +243,14 @@ static void PatchMatchmakingHost(uintptr_t base) {
         break;
     case MatchmakerHostPatch::Result::DoesNotFit:
         Log(EchoVR::LogLevel::Warning,
-            "[NEVR.PATCH] pnsradmatchmaking replacement does not fit the %zu-byte slot — NOT patched",
-            PNSRADMATCHMAKING_HOST_SLOT_SIZE);
+            "[NEVR.PATCH] pnsradmatchmaking replacement does not fit the %zu-byte slot at +0x%x — NOT patched",
+            PNSRADMATCHMAKING_HOST_SLOT_SIZE, static_cast<unsigned>(PNSRADMATCHMAKING_HOST_RVA));
         break;
     case MatchmakerHostPatch::Result::BytesMismatch:
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] pnsradmatchmaking host patch skipped rva=0x%x reason=bytes_mismatch "
-            "expected=\"%s\" actual=\"%.49s\"",
-            (unsigned)PNSRADMATCHMAKING_HOST_RVA, PNSRADMATCHMAKING_HOST_EXPECTED,
+            "expected=\"%s\" actual=\"%.48s\"",
+            static_cast<unsigned>(PNSRADMATCHMAKING_HOST_RVA), PNSRADMATCHMAKING_HOST_EXPECTED,
             reinterpret_cast<const char*>(image + PNSRADMATCHMAKING_HOST_RVA));
         break;
     case MatchmakerHostPatch::Result::WriteFailed:
@@ -423,15 +411,12 @@ static void CALLBACK OnDllLoaded(ULONG reason, const LDR_DLL_NOTIFICATION_DATA* 
     // the r14 log's "loading matchmaking library 'pnsradmatchmaking'") and
     // must not be gated on s_pnsradPatched.
     //
-    // 2026-09-13 (BUGS.md 81c7e6b): this DLL unloads/reloads mid-session — a
-    // reload gets a fresh DllBase with the original (unpatched) bytes, so a
-    // one-shot guard here (as pnsrad.dll's s_pnsradPatched below correctly
-    // uses, since that DLL doesn't reload) left the reloaded copy unpatched
-    // and the matchmaker fell back to the dead readyatdawn.com default —
-    // blank terminal, no queue. No guard: patch unconditionally on every
-    // load. Idempotent by construction — PatchMatchmakingHost's own memcmp
-    // against PNSRADMATCHMAKING_HOST_EXPECTED no-ops (with a Warning log)
-    // if this exact base was somehow already patched.
+    // This DLL unloads and reloads mid-session: a reload gets a fresh DllBase with the original
+    // (unpatched) bytes, so a one-shot guard here (as pnsrad.dll's s_pnsradPatched below correctly
+    // uses, since that DLL does not reload) would leave the reloaded copy unpatched and the
+    // matchmaker on the dead readyatdawn.com default. No guard: patch on every load.
+    // PatchMatchmakingHost's own memcmp against PNSRADMATCHMAKING_HOST_EXPECTED no-ops (with a
+    // Warning log) if this exact base was already patched.
     if (WideNameEqualsAscii(name->Buffer, name->Length / sizeof(WCHAR),
                              "pnsradmatchmaking.dll")) {
         PatchMatchmakingHost(reinterpret_cast<uintptr_t>(data->DllBase));

@@ -303,6 +303,19 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         boot = (ROOT / "src/runtime/lifecycle/boot.cpp").read_text()
         self.assertNotRegex(boot, r"\bRearmConsoleCtrlHandler\s*\(")
 
+    def test_matchmaking_host_patch_runs_on_every_load_without_a_guard(self):
+        # Issue #18 / #286 F5: pnsradmatchmaking.dll is unloaded and reloaded mid-session, so the host
+        # rewrite must run for every load notification. The pure Apply() is unit-tested; the property
+        # that OnDllLoaded does not guard it lives here.
+        source = strip_comments((ROOT / "src/runtime/patch/pnsrad_enabler.cpp").read_text())
+        body = extract_braced_function(source, "static VOID CALLBACK OnDllLoaded(") if "static VOID CALLBACK OnDllLoaded(" in source else None
+        if body is None:
+            body = source[source.index("OnDllLoaded"):]
+        start = body.index('"pnsradmatchmaking.dll"')
+        branch = body[start:body.index("PatchMatchmakingHost(", start)]
+        self.assertNotRegex(branch, r"\bstatic\b|Patched|\bonce\b|\bdone\b",
+                            "a guard around the matchmaking host patch leaves a reloaded image unpatched")
+
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches
         # UnregisterAllCallbacks -> GetCallbackRegistry() and EchoVR::BroadcasterUnlisten. The

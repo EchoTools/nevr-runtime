@@ -13,7 +13,8 @@
 # NEVER be committed to version control.
 #
 # Every value is interpolated: ${VAR} (an unset one is logged
-# once at load and its text is kept), ${VAR:?msg} (required: the load fails when it is
+# once at load; its text is kept in plugin args and other values, and a service key that
+# uses it counts as unset), ${VAR:?msg} (required: the load fails when it is
 # unset), ${VAR:-default} (optional). Write $${ for a literal ${ that is not a
 # variable, e.g. in a plugin's args; nothing after it is looked up. $${ is the
 # only escape: $$ not followed by { stays $$. A literal $ immediately followed by
