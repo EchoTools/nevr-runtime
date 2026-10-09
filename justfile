@@ -420,12 +420,12 @@ test-quest-shared:
     # also link the prerequisite handlers and the stand-ins (both -fno-exceptions as on the device),
     # because the send gate and the end-to-end flow test drive them together with the rewrite.
     for f in login/login_apply login/login_prerequisites login/login_standin; do
-        g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -c \
+        g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc -c \
             "src/quest/$f.cpp" -o "$out/$(basename "$f").o"
     done
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -c \
         src/quest/sentinel/hook_log.cpp -o "$out/hook_log.o"
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
+    g++ -std=c++17 -Wall -Wextra -Werror -DNEVR_QUEST_TESTING -Isrc \
         "$out/login_apply.o" "$out/login_prerequisites.o" "$out/login_standin.o" "$out/hook_log.o" \
         src/quest/login/login_rewrite.cpp \
         src/runtime/compat/login_profile.cpp \
@@ -435,7 +435,7 @@ test-quest-shared:
     # Quest login prerequisites: the handler bodies driven through a fake Platform SDK and the game's
     # four callbacks. The install (login_prerequisites_install.cpp) needs libpnsovr.so for real slots;
     # build-android compiles it and test-quest-hooks-pinned resolves its slots in the real library.
-    g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
+    g++ -std=c++17 -Wall -Wextra -Werror -DNEVR_QUEST_TESTING -Isrc \
         "$out/login_prerequisites.o" "$out/login_standin.o" "$out/hook_log.o" \
         src/quest/tests/login_prerequisites_test.cpp \
         -o "$out/login_prerequisites_test"
@@ -454,8 +454,9 @@ test-quest-shared:
         src/quest/tests/login_prerequisites_install_test.cpp \
         -o "$out/login_prerequisites_install_test" -ldl -pthread
     "$out/login_prerequisites_install_test"
-    # The per-process stand-ins and their predicates.
-    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc \
+    # The per-process stand-ins and their predicates. NEVR_QUEST_TESTING exposes SetForTest/ResetForTest,
+    # which exist only in the test build.
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -DNEVR_QUEST_TESTING -Isrc \
         "$out/login_standin.o" src/quest/tests/login_standin_test.cpp -o "$out/login_standin_test"
     "$out/login_standin_test"
 
@@ -545,7 +546,7 @@ verify:
     just test-auth-unit
     just test-quest-shared
     just test-quest-hooks
-    python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants -v
+    python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_quest_standin_testonly -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —

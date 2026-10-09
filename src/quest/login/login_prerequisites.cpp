@@ -32,6 +32,7 @@ struct Config {
   OvrErrorApi api;
   bool substitute;
   ReadyFn ready;
+  ResetFn reset;
 };
 
 Config g_config;
@@ -345,11 +346,12 @@ bool SubstitutionAllowed(int accessors_hooked, bool have_is_error) noexcept {
   return accessors_hooked == 8 && have_is_error;
 }
 
-void ConfigurePrerequisites(const OvrErrorApi& api, bool substitute, ReadyFn ready) noexcept {
+void ConfigurePrerequisites(const OvrErrorApi& api, bool substitute, ReadyFn ready, ResetFn reset) noexcept {
   StandIn::Generate();
   g_config.api = api;
   g_config.substitute = substitute && api.message_is_error != nullptr;
   g_config.ready = ready;
+  g_config.reset = reset;
   g_configured.store(true, std::memory_order_release);
 }
 
@@ -441,6 +443,10 @@ void OnPrerequisiteCallback(Prerequisite which, GameCallback original, void* sel
                      : !claimed           ? "busy"
                                           : "error_not_consulted";  // the game never asked IsError
   }
+
+  // Not ready this attempt: clear any stand-in an earlier ready attempt left in the globals, so it
+  // cannot persist in OfflineID() or a party record when the game fails a login on its own path.
+  if (!ready && g_config.reset != nullptr) g_config.reset();
 
   bool summary = false;
   if (WindowAllows(g_callback_window_ms[i], g_callback_logged[i], kCallbackLogLimit, &summary)) {

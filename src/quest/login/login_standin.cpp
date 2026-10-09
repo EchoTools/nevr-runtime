@@ -20,6 +20,7 @@ constexpr std::size_t kNameHex = 8;
 // 0 = empty, 1 = being written, 2 = published (acquire to read the buffers).
 std::atomic<int> g_state{0};
 std::uint64_t g_org = 0;
+char g_org_text[21] = {};  // "%llu" of g_org; u64 max is 20 digits + NUL
 char g_token[kTokenHex + 1] = {};
 char g_nonce[kNonceHex + 1] = {};
 char g_name[sizeof(kNamePrefix) - 1 + kNameHex + 1] = {};
@@ -35,6 +36,7 @@ void Hex(const unsigned char* bytes, std::size_t count, char* out) {
   out[2 * count] = '\0';
 }
 
+#if defined(NEVR_QUEST_TESTING)
 void Copy(char* dst, std::size_t capacity, const char* src) {
   std::size_t i = 0;
   if (src != nullptr) {
@@ -42,6 +44,7 @@ void Copy(char* dst, std::size_t capacity, const char* src) {
   }
   dst[i] = '\0';
 }
+#endif
 
 // True when NUL-terminated `value` equals the stand-in `standin` (a NUL-terminated array of
 // `standin_size` bytes). Reads `value` only up to the first mismatch, so never past its own NUL.
@@ -72,15 +75,24 @@ void Generate() noexcept {
   std::memcpy(g_name, kNamePrefix, sizeof(kNamePrefix) - 1);
   Hex(raw, kNameHex / 2, g_name + sizeof(kNamePrefix) - 1);
   g_org = org;
+  // decimal "%llu" without snprintf (keep this allocation-free and format-locale-free)
+  char tmp[21];
+  std::size_t n = 0;
+  std::uint64_t v = org;
+  do { tmp[n++] = static_cast<char>('0' + v % 10); v /= 10; } while (v != 0);
+  for (std::size_t i = 0; i < n; ++i) g_org_text[i] = tmp[n - 1 - i];
+  g_org_text[n] = '\0';
   g_state.store(2, std::memory_order_release);
 }
 
 std::uint64_t OrgId() noexcept { return Published() ? g_org : 0; }
+const char* OrgIdText() noexcept { return Published() ? g_org_text : ""; }
 const char* AccessToken() noexcept { return Published() ? g_token : ""; }
 const char* Nonce() noexcept { return Published() ? g_nonce : ""; }
 const char* OculusId() noexcept { return Published() ? g_name : ""; }
 
 bool IsOrgId(std::uint64_t value) noexcept { return Published() && value != 0 && value == g_org; }
+bool IsOrgIdText(const char* value) noexcept { return Published() && Equal(value, g_org_text, sizeof(g_org_text)); }
 bool IsAccessToken(const char* value) noexcept { return Published() && Equal(value, g_token, sizeof(g_token)); }
 bool IsNonce(const char* value) noexcept { return Published() && Equal(value, g_nonce, sizeof(g_nonce)); }
 bool IsOculusId(const char* value, std::size_t capacity) noexcept {
@@ -94,9 +106,16 @@ bool IsOculusId(const char* value, std::size_t capacity) noexcept {
   return false;
 }
 
+#if defined(NEVR_QUEST_TESTING)
 void SetForTest(std::uint64_t org, const char* token, const char* nonce, const char* oculus_id) noexcept {
   g_state.store(1, std::memory_order_release);
   g_org = org;
+  char tmp[21];
+  std::size_t n = 0;
+  std::uint64_t v = org;
+  do { tmp[n++] = static_cast<char>('0' + v % 10); v /= 10; } while (v != 0);
+  for (std::size_t i = 0; i < n; ++i) g_org_text[i] = tmp[n - 1 - i];
+  g_org_text[n] = '\0';
   Copy(g_token, sizeof(g_token), token);
   Copy(g_nonce, sizeof(g_nonce), nonce);
   Copy(g_name, sizeof(g_name), oculus_id);
@@ -104,5 +123,6 @@ void SetForTest(std::uint64_t org, const char* token, const char* nonce, const c
 }
 
 void ResetForTest() noexcept { g_state.store(0, std::memory_order_release); }
+#endif
 
 }  // namespace QuestLogin::StandIn

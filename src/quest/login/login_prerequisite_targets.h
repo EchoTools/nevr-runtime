@@ -13,6 +13,26 @@ namespace QuestLogin::PrerequisiteTargets {
 inline constexpr const char* kPnsovr = "libpnsovr.so";
 inline constexpr const char* kPnsovrBuildId = "ca47bb8d03e6f43c1825133bbb9c15f174705c51";
 
+// Non-GOT byte facts the login send path pins in libpnsovr.so, shared by login_hook.cpp (which acts
+// on them) and tests/got_pinned_test.cpp (which checks them against the real library), so the two
+// never drift. Each is a function prologue (code) or a global address.
+//   CNSUser::DeferredLogInFailed @0x382e44: str w1,[x0,#0xa0]; str x2,[x0,#0xa8]; ret
+inline constexpr std::uint64_t kDeferredFailedVaddr = 0x382e44ULL;
+inline constexpr std::uint32_t kDeferredFailedCode[3] = {0xb900a001u, 0xf9005402u, 0xd65f03c0u};
+inline constexpr const char* kDeferredFailedSymbol = "_ZN10NRadEngine7CNSUser19DeferredLogInFailedENS_15ENSResponseCodeEPKc";
+//   GotLoggedInUserCb @0x1ed0fc/0x1ed100: adrp x8,0x70e000; add x8,x8,#0x470 -> the 36-byte name buffer
+inline constexpr std::uint64_t kUserNameCodeVaddr = 0x1ed0fcULL;
+inline constexpr std::uint32_t kUserNameCode[2] = {0xb0002908u, 0x9111c108u};
+inline constexpr std::uint64_t kUserNameVaddr = 0x70e470ULL;
+inline constexpr std::size_t kUserNameBytes = 0x24;
+//   CNSOVRUser::OfflineID @0x1ede20: adrp x0,0x70e000; add x0,x0,#0x458; ret -> the 21-byte decimal buffer
+inline constexpr std::uint64_t kOfflineIdFnVaddr = 0x1ede20ULL;
+inline constexpr std::uint32_t kOfflineIdFnCode[3] = {0xb0002900u, 0x91116000u, 0xd65f03c0u};
+inline constexpr std::uint64_t kOfflineIdVaddr = 0x70e458ULL;
+inline constexpr std::size_t kOfflineIdBytes = 21;
+//   The "prerequisites are missing" text the gate passes to DeferredLogInFailed (string 0x556b40).
+inline constexpr std::uint64_t kPrerequisitesMissingTextVaddr = 0x556b40ULL;
+
 struct PinnedSlot {
   const char* symbol;
   sentinel::RelocKind kind;

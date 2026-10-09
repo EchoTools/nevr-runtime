@@ -175,6 +175,9 @@ int main(int argc, char** argv) {
   // three instructions, GotLoggedInUserCb's two instructions that form the user-name buffer address,
   // and the exact "prerequisites are missing" bytes the gate passes to the failure (also the #239
   // prompt's recognised local text).
+  // The non-GOT byte facts the login send gate pins, checked against the real libpnsovr using the
+  // SAME production constants login_hook.cpp acts on (login_prerequisite_targets.h).
+  namespace PT = QuestLogin::PrerequisiteTargets;
   const unsigned char* ovr_base = static_cast<const unsigned char*>(ovr.mem);
   auto CheckCode = [&](std::uint64_t vaddr, const std::uint32_t* code, std::size_t words, const char* what) {
     std::uint32_t got[4] = {};
@@ -185,13 +188,18 @@ int main(int argc, char** argv) {
       QCHECK(false);
     }
   };
-  const std::uint32_t kDeferredFailedCode[3] = {0xb900a001u, 0xf9005402u, 0xd65f03c0u};
-  const std::uint32_t kUserNameCode[2] = {0xb0002908u, 0x9111c108u};
-  CheckCode(0x382e44, kDeferredFailedCode, 3, "CNSUser::DeferredLogInFailed");
-  CheckCode(0x1ed0fc, kUserNameCode, 2, "GotLoggedInUserCb user-name address");
-  const char* msg = reinterpret_cast<const char*>(ovr_base + 0x556b40);
+  CheckCode(PT::kDeferredFailedVaddr, PT::kDeferredFailedCode, 3, "CNSUser::DeferredLogInFailed");
+  CheckCode(PT::kOfflineIdFnVaddr, PT::kOfflineIdFnCode, 3, "CNSOVRUser::OfflineID");
+  CheckCode(PT::kUserNameCodeVaddr, PT::kUserNameCode, 2, "GotLoggedInUserCb user-name address");
+  // The symbol DeferredLogInFailed resolves at the pinned vaddr (what ProveDeferredFailed requires).
+  if (DynamicSymbolValue(ovr, PT::kDeferredFailedSymbol) != PT::kDeferredFailedVaddr) {
+    std::fprintf(stderr, "libpnsovr %s: .dynsym value is not %#llx\n", PT::kDeferredFailedSymbol,
+                 static_cast<unsigned long long>(PT::kDeferredFailedVaddr));
+    QCHECK(false);
+  }
+  const char* msg = reinterpret_cast<const char*>(ovr_base + PT::kPrerequisitesMissingTextVaddr);
   if (std::strcmp(msg, QuestLogin::kPrerequisitesMissingText) != 0) {
-    std::fprintf(stderr, "libpnsovr 0x556b40 is not the pinned prerequisites-missing text\n");
+    std::fprintf(stderr, "libpnsovr prerequisites-missing text differs from the production constant\n");
     QCHECK(false);
   }
 

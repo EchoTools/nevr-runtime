@@ -316,11 +316,23 @@ FinishResult FinishLogin(UserAccess& user, const JsonAccess& json, PrerequisiteS
       state.ResetUserNameToRefetch();
       result.reset_user_name = true;
     }
-  } else if (state.UserNameIsStandIn() && json.TypeOf("displayname") == JsonType::String) {
-    const std::string name = json.GetString("displayname");
-    if (!name.empty()) {
-      state.SetUserName(name.c_str());
-      result.renamed_user = true;
+    if (state.OfflineIdIsStandIn()) {
+      state.ResetOfflineId();  // the org-id decimal OfflineID() returns; refilled on the next fetch
+      result.reset_offline_id = true;
+    }
+  } else {
+    if (state.UserNameIsStandIn() && json.TypeOf("displayname") == JsonType::String) {
+      const std::string name = json.GetString("displayname");
+      if (!name.empty()) {
+        state.SetUserName(name.c_str());
+        result.renamed_user = true;
+      }
+    }
+    // OfflineID() must not keep returning the stand-in decimal after a NEVR login: set it to the
+    // decimal of the id now on the wire (the NEVR AccountID()).
+    if (state.OfflineIdIsStandIn()) {
+      state.SetOfflineIdText(id);
+      result.renamed_offline_id = true;
     }
   }
 
@@ -333,7 +345,8 @@ FinishResult FinishLogin(UserAccess& user, const JsonAccess& json, PrerequisiteS
         Num("account_id_invalid", result.wire.account_id_invalid ? 1 : 0),
         Num("access_token_stand_in", result.wire.access_token_stand_in ? 1 : 0),
         Num("nonce_stand_in", result.wire.nonce_stand_in ? 1 : 0),
-        Num("reset", (result.reset_org_id ? 1 : 0) | (result.reset_user_name ? 2 : 0) | (result.renamed_user ? 4 : 0)),
+        Num("reset", (result.reset_org_id ? 1 : 0) | (result.reset_user_name ? 2 : 0) | (result.renamed_user ? 4 : 0) |
+                         (result.reset_offline_id ? 8 : 0) | (result.renamed_offline_id ? 16 : 0)),
     };
     log(result.decision == SendDecision::SendOriginal ? Level::Info : Level::Warning, "quest_login_send", fields,
         sizeof(fields) / sizeof(fields[0]));
@@ -341,11 +354,23 @@ FinishResult FinishLogin(UserAccess& user, const JsonAccess& json, PrerequisiteS
   return result;
 }
 
-Outcome RewriteAndSend(UserAccess& user, JsonAccess& json, IdentitySource& source,
-                       const BuildInfo& build, LogFn log, SendFn send, void* context) {
-  const Outcome outcome = RewriteLogin(user, json, source, build, log);
-  send(context);
-  return outcome;
+HeldReset ResetHeldStandIns(PrerequisiteState& state) noexcept {
+  HeldReset reset;
+  if (state.OrgIdIsStandIn()) {
+    state.ResetOrgIdToRefetch();
+    reset.org_id = true;
+  }
+  if (state.OfflineIdIsStandIn()) {
+    state.ResetOfflineId();
+    reset.offline_id = true;
+  }
+  if (state.UserNameIsStandIn()) {
+    state.ResetUserNameToRefetch();
+    reset.user_name = true;
+  }
+  return reset;
 }
+
+
 
 }  // namespace QuestLogin

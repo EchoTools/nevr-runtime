@@ -59,12 +59,12 @@ int main() {
   // and idempotent (second call re-logs nothing).
   QuestLogin::ResetPrerequisitesForTest();
   sentinel::ElfImage dummy{};  // base 0, no program headers: every slot resolution fails
-  const QuestLogin::PrerequisiteInstall r = QuestLogin::InstallLoginPrerequisites(dummy, &Ready);
+  const QuestLogin::PrerequisiteInstall r = QuestLogin::InstallLoginPrerequisites(dummy, &Ready, nullptr);
   QCHECK(r.callbacks == 0 && r.accessors == 0 && r.requests == 0 && !r.substitute);
   QCHECK(g_sawPartial);
   QCHECK(!g_sawResidual);  // only a substituting install warns about residuals
   const int linesAfterFirst = g_lines;
-  const QuestLogin::PrerequisiteInstall r2 = QuestLogin::InstallLoginPrerequisites(dummy, &Ready);
+  const QuestLogin::PrerequisiteInstall r2 = QuestLogin::InstallLoginPrerequisites(dummy, &Ready, nullptr);
   QCHECK(r2.accessors == 0 && !r2.substitute);
   QCHECK(g_lines == linesAfterFirst);
 
@@ -73,7 +73,7 @@ int main() {
   // "substitution_unavailable" -- the gate, not the unconfigured pass-through.
   QuestLogin::ResetPrerequisitesForTest();
   QuestLogin::OvrErrorApi api{&IsError, nullptr, nullptr, nullptr, &ErrMsg};
-  QuestLogin::ConfigurePrerequisites(api, /*substitute=*/false, &Ready);
+  QuestLogin::ConfigurePrerequisites(api, /*substitute=*/false, &Ready, nullptr);
   g_sawPartial = false;
   int seen_is_error = 0;
   struct Ctx {

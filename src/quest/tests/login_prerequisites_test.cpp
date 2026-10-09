@@ -236,7 +236,7 @@ void Fresh(bool configure, bool substitute, bool ready = true, const QuestLogin:
   g_game = GameState{};
   g_lines.clear();
   g_violations = 0;
-  if (configure) QuestLogin::ConfigurePrerequisites(api, substitute, ready ? &ReadyTrue : nullptr);
+  if (configure) QuestLogin::ConfigurePrerequisites(api, substitute, ready ? &ReadyTrue : nullptr, nullptr);
 }
 
 FakeMessage Ok(std::uint64_t org, const char* oculus_id, const char* token, const char* nonce) {
