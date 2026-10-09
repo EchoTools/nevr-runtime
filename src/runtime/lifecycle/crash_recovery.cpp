@@ -1,4 +1,5 @@
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/log/boot_log_tee.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
 #endif
@@ -95,7 +96,13 @@ void InstallGameMainHook() {
   GameMain = (GameMainFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN);
   OriginalGameMainWrapper =
       (GameMainWrapperFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN_WRAPPER);
-  if (PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper")) {
+  // Runs in the boot phase, under the DllMain loader lock, where Log() must not be called.
+  const bool hooked = PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper");
+  if (BootLogTee::InBootPhase()) {
+    BootLogTee::TeeFprintf(hooked ? "[NEVR.PATCH] game main wrapper hooked — crash recovery armed\n"
+                                  : "[NEVR.PATCH] game main wrapper hook FAILED — server crash recovery via "
+                                    "longjmp is NOT armed\n");
+  } else if (hooked) {
     Log(EchoVR::LogLevel::Debug,
         "[NEVR.PATCH] game main wrapper hooked — crash recovery armed (setjmp installed; a "
         "null-deref AV in server mode will longjmp back here instead of terminating the process)");
@@ -112,13 +119,12 @@ void InstallGameMainHook() {
 static volatile sig_atomic_t g_inSignalContext = 0;
 
 
-// N67 (re-opened 2026-07-26): these two flags are written from CreateProcessAHook, CreateProcessWHook,
+// N67: these two flags are written from CreateProcessAHook, CreateProcessWHook,
 // ExitProcessHook and TerminateProcessHook — any thread — and read/written from
 // BreakpointVEH on the faulting thread. Plain `bool` gives no ordering guarantee and
 // permits the compiler to sink or reorder the stores, so the VEH can observe a stale
 // value and either skip an int3 it should have taken or take one it should not.
-// The earlier fix converted the copies in plugins/crash-handler/, which is not built
-// (plugins/CMakeLists.txt:12) — this is the path that ships.
+// The copies in plugins/crash-handler/ are not built; this is the path that ships.
 static std::atomic<bool> g_crashReporterSuppressed{false};
 static std::atomic<bool> g_justSuppressedCrash{false};
 

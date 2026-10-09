@@ -269,6 +269,15 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
         self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
 
+    def test_token_mints_are_serialized(self):
+        # Issue #246: the ServerDB refresher, the telemetry refresher and RequestRegistration all
+        # reach RefreshAuthToken -> SaveAuthToken (an unlocked truncating write of .credentials.json).
+        server = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
+        acquire = extract_braced_function(server, "static std::string AcquireServerDbToken(")
+        self.assertRegex(acquire, r"ServerDbAuth::RunSerializedMint\s*\(")
+        helper = (ROOT / "src/runtime/server/serialized_mint.h").read_text()
+        self.assertRegex(helper, r"std::lock_guard<std::mutex>")
+
     def test_console_defer_needs_gameserverlib_started(self):
         # Issue #241: re-arming the handler used to set the defer flag unconditionally, so a server that
         # never reached GameServerLib::Initialize deferred to a teardown that never ends (watchdog, exit 1).

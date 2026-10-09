@@ -133,6 +133,7 @@ set(PATCHES_HEADERS
     "server/serverdb_uri.h"
     "server/telemetry_streamer.h"
     "server/bearer_reconnect_auth.h"
+    "server/serialized_mint.h"
     "server/messages.h"
     "server/upnp.h"
     "server/constants.h"
