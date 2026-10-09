@@ -361,10 +361,12 @@ if(BUILD_TESTING)
     # existing `just test-auth-unit` loop runs it with no recipe change.
 
     # Issue #41: the ServerDB URI builder (percent-encoded query) — pure, curl only.
+    # test_failure_detail.cpp (#35, header-only failure_detail.h) rides in this executable.
     add_executable(test_serverdb_uri
       tests/test_serverdb_uri.cpp
+      tests/test_failure_detail.cpp
       server/serverdb_uri.cpp)
-    set_source_files_properties(tests/test_serverdb_uri.cpp server/serverdb_uri.cpp
+    set_source_files_properties(tests/test_serverdb_uri.cpp tests/test_failure_detail.cpp server/serverdb_uri.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_serverdb_uri PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_serverdb_uri PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)

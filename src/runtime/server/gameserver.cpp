@@ -15,6 +15,7 @@
 #include "core/auth_token.h"
 #include "auth_token_refresh.h"
 #include "runtime/server/constants.h"
+#include "runtime/server/failure_detail.h"
 #include "runtime/server/protobuf_transport.h"
 #include "runtime/server/serverdb_uri.h"
 #include "runtime/server/session_success_dispatch.h"
@@ -201,7 +202,10 @@ void OnTcpMsgRegistrationFailure(GameServerLib* self, VOID*, EchoVR::TcpPeer, VO
   // anything — it would sit idle for hours with nobody watching. Fail fast.
   // ServerFatal (not FatalError) because it is mode-gated: in client mode this
   // is a Warning and execution continues.
-  ServerFatal("GameServer registration rejected by ServerDB");
+  // #35: the rejection payload has no protobuf form, so the cause is whatever
+  // bytes the server sent, quoted (failure_detail.h).
+  const std::string rejection = FailureDetail::DescribeRegistrationRejection(msg, msgSize);
+  ServerFatal("GameServer registration rejected by ServerDB: %s", rejection.c_str());
 }
 
 void OnTcpMessageStartSession(GameServerLib* self, VOID*, EchoVR::TcpPeer, VOID* msg, VOID*, UINT64 msgSize) {
@@ -1333,7 +1337,7 @@ void GameServerLib::BeginGracefulShutdown(bool registrationFailed) {
 // token's uid is the operator's discord-linked account, which carries the
 // server-host role checked at registration (gg.IsServerHost). Verified live
 // 2026-06-29: uid=metis.sprock, access token (no vrs.refresh), TTL ~1h.
-static std::string AuthenticateServer() {
+static std::string AuthenticateServer(std::string& reason) {
     // N133 S4b: config.yaml (nevr_config), not the game JSON. auth.http_key is a
     // SECRET; its ${VAR:?} form fails loud at config load in server mode.
     const char* httpUri = NevrCfgGetFlat("nevr_http_uri");
@@ -1351,6 +1355,7 @@ static std::string AuthenticateServer() {
         if (!missingKeysCsv.empty()) missingKeysCsv.pop_back();  // drop trailing comma
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.GAMESERVER] cannot authenticate — missing config keys: %s", missingKeysCsv.c_str());
+        reason = "password auth: missing config keys " + missingKeysCsv;
         return "";
     }
 
@@ -1362,7 +1367,10 @@ static std::string AuthenticateServer() {
 
     nevr::EnsureCurlGlobalInit();
     CURL* curl = curl_easy_init();
-    if (!curl) return "";
+    if (!curl) {
+        reason = "password auth: curl_easy_init failed";
+        return "";
+    }
 
     std::string response;
     std::string postData = body.dump();
@@ -1389,12 +1397,15 @@ static std::string AuthenticateServer() {
         const std::string diagnostic =
             LogDiagnostics::FormatCurlFailureDiagnostic("[NEVR.GAMESERVER] Server auth failed ", static_cast<int>(res));
         Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
+        reason = "password auth: request to " + std::string(httpUri) + " failed: " + curl_easy_strerror(res) +
+                 " (curl code " + std::to_string(static_cast<int>(res)) + ")";
         return "";
     }
 
     if (http_code != 200) {
         LogDiagnostics::LogHttpResponseSummary(EchoVR::LogLevel::Warning,
                                                "[NEVR.GAMESERVER] Server auth rejected ", http_code, response);
+        reason = "password auth: " + std::string(httpUri) + " answered HTTP " + std::to_string(http_code);
         return "";
     }
 
@@ -1404,6 +1415,7 @@ static std::string AuthenticateServer() {
         if (token.empty()) {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.GAMESERVER] Server auth returned empty token");
+            reason = "password auth: the response carried no token";
         } else {
             Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Server authenticated (token acquired)");
         }
@@ -1411,6 +1423,7 @@ static std::string AuthenticateServer() {
     } catch (const std::exception&) {
         Log(EchoVR::LogLevel::Warning,
             "[NEVR.GAMESERVER] Server auth response parse error");
+        reason = "password auth: the response was not valid JSON";
         return "";
     }
 }
@@ -1424,7 +1437,7 @@ static std::string AuthenticateServer() {
 // the refresher is installed just before Connect, after RequestRegistration's own
 // acquisition has returned, so only a second RequestRegistration racing a 401
 // could overlap the two.
-static std::string AcquireServerDbToken() {
+static std::string AcquireServerDbToken(std::string& reason) {
     std::string token;
     auto auth = LoadCachedAuthToken();
     if (auth.HasValidToken()) {
@@ -1455,10 +1468,15 @@ static std::string AcquireServerDbToken() {
         } else {
             Log(EchoVR::LogLevel::Warning,
                 "[NEVR.GAMESERVER] Refresh token present but exchange failed — falling back to password auth");
+            reason = "refresh-token exchange failed; ";
         }
     }
 
-    if (token.empty()) token = AuthenticateServer();
+    if (token.empty()) {
+        std::string passwordReason;
+        token = AuthenticateServer(passwordReason);
+        reason += passwordReason;
+    }
     return token;
 }
 
@@ -1490,12 +1508,15 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
 
   // Acquire a session JWT for the operator's server-host account (token auth, BAC-1).
   // Re-auth each registration: the access token TTL is ~1h (BAC-5).
-  std::string wsToken = AcquireServerDbToken();
+  std::string tokenFailureReason;
+  std::string wsToken = AcquireServerDbToken(tokenFailureReason);
   // N102: no token means every ServerDB connection below will be rejected.
   // Continuing produces a server that logs connection failures forever
   // instead of exiting with a cause.
   if (wsToken.empty()) {
-    ServerFatal("Server authentication failed — no valid token for ServerDB connection");
+    const std::string message = FailureDetail::WithCause(
+        "Server authentication failed — no valid token for ServerDB connection", tokenFailureReason);
+    ServerFatal("%s", message.c_str());
   }
 
   // Owns the constructed URI for the rest of this call; Connect() copies it
@@ -1566,7 +1587,10 @@ VOID GameServerLib::RequestRegistration(INT64 serverId, CHAR*, EchoVR::SymbolId 
   // #39: the header is stored once, and ixwebsocket's automatic reconnect
   // re-presents it. Once the ~1h token has expired, ServerDB answers every
   // reconnect with 401; this lets the client mint a fresh token instead.
-  m_wsClient->SetBearerTokenRefresher([]() { return AcquireServerDbToken(); });
+  m_wsClient->SetBearerTokenRefresher([]() {
+    std::string reason;  // the refresher has no operator to tell; each step already logged its cause
+    return AcquireServerDbToken(reason);
+  });
 
   // Connect with the JWT as Authorization: Bearer; the token route forwards it
   // to Nakama's acceptor, which sets the operator identity (BAC-2/3).
