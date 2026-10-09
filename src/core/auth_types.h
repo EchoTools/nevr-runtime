@@ -17,6 +17,14 @@ enum class LogLevel { Debug, Info, Warning, Error };
 // token, device code or full URL with a credential in a line it passes here.
 using LogSink = std::function<void(LogLevel, const std::string&)>;
 
+// Overwrites a string that held a credential (a device code, a URL carrying one) before it is
+// released, so the freed memory no longer holds it. Best effort: copies the string made earlier
+// (library buffers, other strings) are not reached.
+inline void WipeSecret(std::string& s) noexcept {
+  volatile char* p = s.empty() ? nullptr : &s[0];
+  for (std::size_t i = 0; i < s.size(); ++i) p[i] = '\0';
+}
+
 struct HttpResponse {
   // false: no HTTP response was obtained (DNS, connect, TLS, timeout). The
   // platform's own code goes in transport_code and is logged by number only.
