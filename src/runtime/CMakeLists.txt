@@ -30,7 +30,6 @@ set(PATCHES_SOURCES
     "ext/plugin_manifest.cpp"
     "ext/module_loader.cpp"
     "patch/resource_override.cpp"
-    "compat/winhttp_stub.cpp"
     "compat/ws_bridge.cpp"
     "compat/login_profile.cpp"
     "compat/social_names.cpp"
@@ -100,7 +99,6 @@ set(PATCHES_HEADERS
     "ext/plugin_load_plan_build.h"
     "ext/plugin_manifest.h"
     "ext/module_loader.h"
-    "compat/winhttp_stub.h"
     "patch/asset_cdn.h"
     "patch/evrp_package.h"
     "hook/process_memory.h"
@@ -376,20 +374,6 @@ if(BUILD_TESTING)
     target_include_directories(test_serverdb_uri PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_serverdb_uri PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
     gtest_discover_tests(test_serverdb_uri DISCOVERY_MODE PRE_TEST)
-
-    # GH #27: drives the REAL libcurl-backed IWinHttpRequest stub through its COM
-    # vtable and IDispatch::Invoke against a loopback HTTP/1.1 listener, so the
-    # StatusText it reports is the reason phrase the server actually sent.
-    add_executable(test_winhttp_stub
-      tests/test_winhttp_stub.cpp
-      compat/winhttp_stub.cpp
-      log/url_diagnostics.cpp)
-    set_source_files_properties(tests/test_winhttp_stub.cpp compat/winhttp_stub.cpp log/url_diagnostics.cpp
-      PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_include_directories(test_winhttp_stub PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_link_libraries(test_winhttp_stub PRIVATE
-      GTest::gtest GTest::gtest_main CURL::libcurl ws2_32 ole32 oleaut32 uuid)
-    gtest_discover_tests(test_winhttp_stub DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_callback_unregistration
       tests/test_callback_unregistration.cpp
