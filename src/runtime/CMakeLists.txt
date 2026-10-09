@@ -21,6 +21,7 @@ set(PATCHES_SOURCES
     "patch/broadcaster_hook_stats.cpp"
     "patch/coop_ai_trace.cpp"
     "lifecycle/crash_recovery.cpp"
+    "lifecycle/return_to_lobby.cpp"
     "lifecycle/crash_dump_format.cpp"
     "hook/hook_guard.cpp"
     "hook/hook_liveness.cpp"
@@ -89,6 +90,8 @@ set(PATCHES_HEADERS
     "patch/coop_ai_trace.h"
     "patch/coop_ai_trace_rules.h"
     "lifecycle/crash_recovery.h"
+    "lifecycle/return_to_lobby.h"
+    "lifecycle/return_to_lobby_hold.h"
     "lifecycle/crash_dump_format.h"
     "lifecycle/readable_memory.h"
     "lifecycle/console_ctrl_policy.h"
@@ -376,9 +379,10 @@ if(BUILD_TESTING)
     add_executable(test_serverdb_uri
       tests/test_serverdb_uri.cpp
       tests/test_failure_detail.cpp
+      tests/test_login_session.cpp
       server/serverdb_uri.cpp
       log/url_diagnostics.cpp)
-    set_source_files_properties(tests/test_serverdb_uri.cpp tests/test_failure_detail.cpp server/serverdb_uri.cpp log/url_diagnostics.cpp
+    set_source_files_properties(tests/test_serverdb_uri.cpp tests/test_failure_detail.cpp tests/test_login_session.cpp server/serverdb_uri.cpp log/url_diagnostics.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_serverdb_uri PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_serverdb_uri PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
@@ -601,7 +605,8 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_scenario_early_quit DISCOVERY_MODE PRE_TEST)
 
-    add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp)
+    # test_return_to_lobby_hold.cpp (#58, header-only lifecycle/return_to_lobby_hold.h) rides in this executable.
+    add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp tests/test_return_to_lobby_hold.cpp)
     target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_schannel_cred_guard PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_schannel_cred_guard DISCOVERY_MODE PRE_TEST)
@@ -792,8 +797,8 @@ if(BUILD_TESTING)
     gtest_discover_tests(test_messages DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main)

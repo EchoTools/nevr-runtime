@@ -127,9 +127,10 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
   // Platform DLLs (pnsdemo/pnsovr) crash in RadPluginShutdown on a server (freed
   // memory). They are recognised by the "Users" export they all define. The game's
   // unload path (0x14105ae30) null-checks the resolved symbol before calling it, so
-  // answering null skips the call and teardown carries on. (The guard used to live
-  // in a second detour on this same address that never installed; it ended the
-  // process with exit(0), which ExitProcessHook suppresses in server mode.)
+  // answering null skips the call and teardown carries on. (A second detour on
+  // this same address would not install under MinHook, #93/#94; ending the
+  // process with exit(0) instead is suppressed by ExitProcessHook in server
+  // mode.)
   if (g_isServer && symbol_name && strcmp(symbol_name, "RadPluginShutdown") == 0 &&
       g_original_GetSymbol(dll_handle, "Users") != nullptr) {
     static bool logged = false;
@@ -466,8 +467,8 @@ static VOID InitializeAfterGameImageGuard() {
   // --- CDN asset loading ---
   // N131: moved to boot.cpp, gated `if (!g_isServer)`. g_isServer is NOT set yet
   // here (CLI is parsed later, in the PreprocessCommandLine hook), so a gate here
-  // could not distinguish server from client. The call now lives where g_isServer
-  // is known so a headless server never opens the CDN connection.
+  // could not distinguish server from client. The call lives in boot.cpp, where g_isServer
+  // is known, so a headless server never opens the CDN connection.
 
   // Boot phase complete — close the boot log file.  From here on, Log() and
   // the builtin_log_filter own the rotating JSONL file.  Any remaining

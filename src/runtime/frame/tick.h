@@ -8,11 +8,11 @@
 /// driven, plus the periodic health and liveness work that has to happen on
 /// *some* thread that actually runs. It lives in its own translation unit
 /// because it is the most load-bearing function on a dedicated server and it
-/// has nothing to do with the binary bug fixes it used to be buried in.
+/// has nothing to do with the binary bug fixes.
 ///
-/// There is exactly ONE of these, deliberately. A second copy existed until
-/// 2026-07-29 and spent that time reporting the wrong host type to every plugin
-/// on every client (N110). `just verify` fails if a second one appears.
+/// There is exactly ONE of these, deliberately. A second copy could report the
+/// wrong host type to every plugin on every client (N110). `just verify` fails
+/// if a second one appears.
 namespace Frame {
 
 /// Dispatch per-frame work. Safe to call from any hook on any thread, at any
