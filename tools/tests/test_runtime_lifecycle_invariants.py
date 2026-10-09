@@ -280,6 +280,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
             self.assertIn(f"HookLiveness::Mark(HookLiveness::{marker})", extract_braced_function(patches, hook))
         tick = strip_comments((ROOT / "src/runtime/frame/tick.cpp").read_text())
         self.assertNotIn("LogBroadcasterHookStats", tick)
+        for gone in ("broadcaster_hook_stats.cpp", "broadcaster_hook_stats.h"):
+            self.assertFalse((ROOT / "src/runtime/patch" / gone).exists(), f"{gone} has no caller and was deleted")
         self.assertIn('HookLiveness::Report("periodic")', tick)
 
     def test_shutdown_thread_never_touches_the_callback_registry(self):

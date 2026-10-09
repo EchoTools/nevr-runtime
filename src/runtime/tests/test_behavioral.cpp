@@ -201,7 +201,6 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/compat/social_party.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/hook/addresses.h"
-#include "runtime/patch/broadcaster_hook_stats.h"
 
 // WOULD-FAIL-IF (N68): delete TickPlugins iteration loop in plugin_loader.cpp.
 // WOULD-FAIL-IF (N68-module): delete TickModules loop in module_loader.cpp.
@@ -1288,14 +1287,6 @@ TEST(ModuleProcRegistry, ResolvesRegisteredProcAndRejectsUnknownName) {
 
   EXPECT_EQ(ResolveModuleProc(kName), &kProbe);
   EXPECT_EQ(ResolveModuleProc("test.module_proc_registry.absent"), nullptr);
-}
-
-TEST(BroadcasterHookStats, FormatsMockedLivenessCounters) {
-  char line[192] = {};
-  EXPECT_GT(BroadcasterHookStats::Format(line, sizeof(line), 17, 9), 0);
-  EXPECT_STREQ(line,
-      "[NEVR.PATCH] broadcaster hook stats listen_entries=17 dispatch_entries=9 "
-      "(zero entries means idle runs prove nothing)");
 }
 
 // ============================================================================
