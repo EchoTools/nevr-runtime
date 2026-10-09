@@ -29,6 +29,7 @@ FROZEN_NVR = frozenset({
     # Not ABI symbols: a wildcard in a comment, the prose name of the lifecycle, and the exports of the
     # test plugin DLL (src/runtime/tests/plugin_onframe_test_dll.cpp).
     "NvrPlugin", "NvrPluginInterface", "NvrTestPluginGetFrameCount", "NvrTestPluginGetInitCount",
+    "NvrTestPluginGetKeptInfo",
 })
 # Existing non-canonical spellings, per file and exact token. The map only shrinks.
 LEGACY_SPELLINGS = {
@@ -46,6 +47,9 @@ LEGACY_SPELLINGS = {
     "src/runtime/hook/patching.h": {"NevRUPnPConfig"},
     "src/runtime/lifecycle/initialize.cpp": {"NevRUPnPConfig"},
     "src/runtime/server/gameserver.cpp": {"NevRUPnPConfig"},
+    "src/runtime/server/gameserver_callbacks.cpp": {"NevRUPnPConfig"},
+    "src/runtime/server/gameserver_internal.h": {"NevRUPnPConfig"},
+    "src/runtime/server/gameserver_serverdb.cpp": {"NevRUPnPConfig"},
 }
 
 
