@@ -272,12 +272,14 @@ void ConcurrentReadsAreNeverTorn() {
 }
 
 void CounterRefusalIsLoudAndInstallReportsBothSlots() {
-  // A full reporter table: the counters are refused, RegisterCounters says so in one line.
+  // A nearly full reporter table (two slots left, the hook needs eight): the counters are refused,
+  // RegisterCounters says so in one line. Sized from the reporter's capacity, not a literal.
   sentinel::StopReporter();
-  static std::atomic<std::uint64_t> filler[32];
-  int taken = 0;
-  for (int i = 0; i < 30; ++i) taken += sentinel::RegisterReportCounter("filler", &filler[i]) ? 1 : 0;
-  QCHECK(taken == 30);
+  constexpr unsigned kFill = sentinel::kMaxReportCounters - 2;
+  static std::atomic<std::uint64_t> filler[kFill];
+  unsigned taken = 0;
+  for (unsigned i = 0; i < kFill; ++i) taken += sentinel::RegisterReportCounter("filler", &filler[i]) ? 1 : 0;
+  QCHECK(taken == kFill);
   g_lines.clear();
   QCHECK(!lp::RegisterCounters());
   QCHECK(CountLines("\"event\":\"login_prompt_counters\"") == 1);
