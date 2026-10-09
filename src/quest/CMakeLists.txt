@@ -34,6 +34,18 @@ add_library(nevr_quest_login_profile STATIC
 target_include_directories(nevr_quest_login_profile PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(nevr_quest_login_profile PRIVATE nlohmann_json::nlohmann_json)
 
+# Compile the exact EVR codec source used by the Windows runtime (no Windows headers, no sockets).
+add_library(nevr_quest_evr_codec STATIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/evr_codec.cpp")
+target_include_directories(nevr_quest_evr_codec PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_compile_options(nevr_quest_evr_codec PRIVATE -Wall -Wextra -Werror)
+
+# Android-linkable codec test; the same file runs on the host in `just test-quest-shared`.
+add_executable(evr_codec_test tests/evr_codec_test.cpp)
+target_link_libraries(evr_codec_test PRIVATE nevr_quest_evr_codec nevr_quest_login_profile nlohmann_json::nlohmann_json)
+target_include_directories(evr_codec_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_compile_options(evr_codec_test PRIVATE -Wall -Wextra -Werror)
+
 # Compile the exact redirect policy source used by the Windows runtime.
 add_library(nevr_quest_service_redirect STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/lifecycle/service_redirect.cpp")

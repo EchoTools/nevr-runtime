@@ -60,6 +60,7 @@ int TestHook_GuardWsCallbackForwardsArguments(int first, int second);
 bool TestHook_GuardWsCallbackContainsStdException();
 bool TestHook_GuardWsCallbackPropagatesNonStdException();
 int TestHook_LogFrameMessages(const char* direction, int connIdx, const std::string& frame);
+int TestHook_LogGameToServerFrame(const std::string& frame);
 bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* statusCode, size_t* messageBytes);
 bool TestHook_LogLoginFailureDiagnostic(const std::string& frame, bool serverMode);
 uint64_t TestHook_SelectPlatformCode(bool hasUrlCredentials, bool noOvr);
