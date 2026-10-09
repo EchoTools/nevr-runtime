@@ -22,14 +22,24 @@ QuestLogin::IdentityStatus TokenIdentitySource::Classify(const nevr::quest_auth:
 }
 
 SessionRouter::LoginGate TokenIdentitySource::GateFor(const nevr::quest_auth::Snapshot& snap) noexcept {
-  switch (Classify(snap)) {
-    case QuestLogin::IdentityStatus::Ok:
-      return SessionRouter::LoginGate::Ready;
-    case QuestLogin::IdentityStatus::NotReady:
-      return SessionRouter::LoginGate::Awaiting;
-    default:
-      return SessionRouter::LoginGate::Refused;
+  using nevr::quest_auth::Readiness;
+  using SessionRouter::LoginGate;
+  switch (snap.readiness) {
+    case Readiness::Starting:
+    case Readiness::Refreshing:
+    case Readiness::AwaitingUser:
+    case Readiness::Expired:  // the background refresh or re-login is replacing the token
+      return LoginGate::Awaiting;
+    case Readiness::Failed:  // a failure the session retries every recovery period is not the end
+      return snap.will_retry ? LoginGate::Awaiting : LoginGate::Refused;
+    case Readiness::Stopped:
+      return LoginGate::Refused;
+    case Readiness::Ready:
+      break;
   }
+  if (snap.access_token.empty()) return LoginGate::Awaiting;  // the token ran out; a refresh is under way
+  if (snap.discord_id == 0) return LoginGate::Refused;        // a token without an account will not get one
+  return LoginGate::Ready;
 }
 
 QuestLogin::IdentityStatus TokenIdentitySource::Fetch(QuestLogin::Identity& out) {

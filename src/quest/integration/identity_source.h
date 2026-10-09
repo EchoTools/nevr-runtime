@@ -30,10 +30,11 @@ class TokenIdentitySource final : public QuestLogin::IdentitySource {
 
   QuestLogin::IdentityStatus Fetch(QuestLogin::Identity& out) override;
 
-  // The router's login gate for one token-auth state: Ready when Fetch would answer Ok, Awaiting while the
-  // session is starting, refreshing or waiting for the player (the login connection is held), Refused for
-  // every state that will not produce a token without a new sign-in (expired, failed, stopped, no token or
-  // no account). Allocation-free; the answer is exactly Classify's, so the gate and the login rewrite cannot
+  // The router's login gate for one token-auth state: Ready when Fetch would answer Ok, Awaiting while a
+  // token is still to come (starting, refreshing, waiting for the player, expired and being replaced, a
+  // failure the session retries every recovery period, a token that ran out and is being refreshed): the
+  // login connection is held through all of these. Refused only when no token will come: a final failure
+  // (Snapshot::will_retry false), a stopped session, a token without an account. Allocation-free; the answer is exactly Classify's, so the gate and the login rewrite cannot
   // disagree.
   static SessionRouter::LoginGate GateFor(const nevr::quest_auth::Snapshot& snap) noexcept;
 

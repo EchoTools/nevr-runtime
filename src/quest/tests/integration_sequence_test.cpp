@@ -432,15 +432,21 @@ void TestIdentitySourceAnswers() {
 void TestLoginGateFollowsTheIdentityAnswer() {
   using nevr::quest_auth::Readiness;
   using SessionRouter::LoginGate;
-  for (Readiness r : {Readiness::Starting, Readiness::Refreshing, Readiness::AwaitingUser}) {
+  // A token is still to come: starting, refreshing, waiting for the player, expired (being replaced).
+  for (Readiness r : {Readiness::Starting, Readiness::Refreshing, Readiness::AwaitingUser, Readiness::Expired}) {
     QCHECK(TokenIdentitySource::GateFor(Snap(r, "tok", 4242, "p")) == LoginGate::Awaiting);
     QCHECK(TokenIdentitySource::GateFor(Snap(r, "", 0, "p")) == LoginGate::Awaiting);
   }
   QCHECK(TokenIdentitySource::GateFor(Snap(Readiness::Ready, "tok", 4242, "p")) == LoginGate::Ready);
-  for (Readiness r : {Readiness::Expired, Readiness::Failed, Readiness::Stopped}) {
-    QCHECK(TokenIdentitySource::GateFor(Snap(r, "tok", 4242, "p")) == LoginGate::Refused);
-  }
-  QCHECK(TokenIdentitySource::GateFor(Snap(Readiness::Ready, "", 4242, "p")) == LoginGate::Refused);  // token ran out
+  // Failed: held while the session retries (a recoverable failure), refused when it is final.
+  nevr::quest_auth::Snapshot failed = Snap(Readiness::Failed, "", 0, "p");
+  failed.will_retry = true;
+  QCHECK(TokenIdentitySource::GateFor(failed) == LoginGate::Awaiting);
+  failed.will_retry = false;
+  QCHECK(TokenIdentitySource::GateFor(failed) == LoginGate::Refused);
+  QCHECK(TokenIdentitySource::GateFor(Snap(Readiness::Stopped, "tok", 4242, "p")) == LoginGate::Refused);
+  // Ready with the token run out: a refresh is under way. Ready with no account: none will come.
+  QCHECK(TokenIdentitySource::GateFor(Snap(Readiness::Ready, "", 4242, "p")) == LoginGate::Awaiting);
   QCHECK(TokenIdentitySource::GateFor(Snap(Readiness::Ready, "tok", 0, "p")) == LoginGate::Refused);
   static_assert(noexcept(TokenIdentitySource::GateFor(std::declval<const nevr::quest_auth::Snapshot&>())),
                 "GateFor must be noexcept");

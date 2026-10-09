@@ -125,7 +125,7 @@ using LogSink = std::function<void(LogLevel level, const std::string& line)>;
 using LoginFrameBuilder = std::function<std::optional<std::string>()>;
 
 // Whether the account a login needs is available. Awaiting: not yet (the player has not signed in); the
-// login connection is held. Ready: it is. Refused: it will not be (the sign-in expired or failed).
+// login connection is held. Ready: it is. Refused: it will not be (the sign-in failed for good).
 enum class LoginGate { Ready, Awaiting, Refused };
 // Called with the router lock held, from OnGameOpen/OnGameFrame/ReevaluateHeldLogins: it must be a lock-free
 // read of a flag the wiring keeps current (never the token session itself), and must not call the router.

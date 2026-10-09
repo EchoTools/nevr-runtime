@@ -111,6 +111,10 @@ struct Snapshot {
   std::string access_token;
   uint64_t access_expiry = 0;
   uint64_t discord_id = 0;
+  // Meaningful with Failed: the session will try again (a recoverable failure, retried every recovery
+  // period). False for a Failed that is final (the bound on unanswered codes, an unrecoverable refusal) and
+  // in every state but Failed. A login gate holds the game's login connection through a recoverable failure.
+  bool will_retry = false;
   std::string user_id;
   std::string username;
 };
@@ -205,7 +209,7 @@ class Session {
   // EstablishLogin, then recovery attempts every recovery_period after a recoverable failure.
   bool LoginWithRecovery(CachedAuthToken& auth, bool use_cache);
   void Adopt(const CachedAuthToken& auth, Readiness state);
-  void SetState(Readiness state);
+  void SetState(Readiness state, bool will_retry = false);
   // Runs until stopped, or until a re-login after the credentials died fails.
   void BackgroundRefresh(CachedAuthToken auth);
   bool StopRequested() const;

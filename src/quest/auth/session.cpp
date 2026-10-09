@@ -191,7 +191,7 @@ std::string Session::Token() const {
   return s.access_token;
 }
 
-void Session::SetState(Readiness state) {
+void Session::SetState(Readiness state, bool will_retry) {
   std::string transition;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -201,6 +201,7 @@ void Session::SetState(Readiness state) {
                    ReadinessName(state);
     }
     snapshot_.readiness = state;
+    snapshot_.will_retry = state == Readiness::Failed && will_retry;
   }
   if (!transition.empty()) Log(quiet_ ? LogLevel::Debug : LogLevel::Info, transition);
 }
@@ -215,6 +216,7 @@ void Session::Adopt(const CachedAuthToken& auth, Readiness state) {
     snapshot_.discord_id = auth.GetDiscordId();
     snapshot_.user_id = auth.user_id;
     snapshot_.username = auth.username;
+    snapshot_.will_retry = false;
     if (snapshot_.readiness != state) {
       transition = std::string("[NEVR.AUTH] auth state ") + ReadinessName(snapshot_.readiness) + " -> " +
                    ReadinessName(state);
@@ -524,7 +526,7 @@ bool Session::LoginWithRecovery(CachedAuthToken& auth, bool use_cache) {
       return false;
     }
     // Recoverable: Failed for now. Say so when the kind of failure changes, not on every attempt.
-    SetState(Readiness::Failed);
+    SetState(Readiness::Failed, /*will_retry=*/true);
     quiet_ = true;
     Log(failure_class_ != last_class_logged ? LogLevel::Warning : LogLevel::Debug,
         "[NEVR.AUTH] login failed (" + failure_class_ + "); trying again every " +

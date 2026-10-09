@@ -688,6 +688,7 @@ TEST(session_refresh_failure_keeps_the_cache_and_does_not_prompt_when_retries_ar
   s.Start();
   clock.Allow(2);  // two pauses between the three refresh attempts
   CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  CHECK(s.Get().will_retry);  // a flaky network is retried every recovery period: not the end
   CHECK_EQ(http.Count("refresh"), 3);
   CHECK_EQ(http.Count("request"), 0);  // a flaky network does not ask the player to sign in again
   CHECK_EQ(presenter.presented.load(), 0);
@@ -1102,6 +1103,7 @@ TEST(when_no_code_is_entered_the_login_stops_after_six_codes_and_tells_the_playe
   s.Start();
   clock.Allow(100 * static_cast<int>(Session::kMaxUnansweredCodes));  // 100 poll waits run each code out
   CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  CHECK(!s.Get().will_retry);  // the bound on unanswered codes is final
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
   CHECK_EQ(http.Count("request"), static_cast<int>(Session::kMaxUnansweredCodes));  // and no more
   CHECK_EQ(log.Count(LogLevel::Warning, "no sign-in after 6 device codes"), size_t(1));

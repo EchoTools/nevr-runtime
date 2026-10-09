@@ -461,6 +461,9 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    connection (silent, long-lived: the game fails over to "service unavailable" after three failed
    connects) must not fail. `Options::loginGate` answers Awaiting, Ready or Refused
    (`TokenIdentitySource::GateFor`, kept current by the token-auth poll as a lock-free atomic).
+   Awaiting covers every state in which a token is still to come, including a failure the session
+   retries every recovery period (`Snapshot::will_retry`) and an expired token being replaced; only a
+   final failure, a stopped session or a token without an account is Refused.
    While it answers Awaiting the router creates the login session's record but does not open its
    remote (`Stats::heldRemotes`), and queues what the
    game sends in order. The login connection is silent until the game's `LogInRequestv2` (the game
