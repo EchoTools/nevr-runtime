@@ -75,7 +75,9 @@ set(PATCHES_HEADERS
     "lifecycle/initialize.h"
     "lifecycle/game_image_guard.h"
     "lifecycle/system_module_loader.h"
+    "log/boot_lines.h"
     "log/boot_log_tee.h"
+    "log/boot_replay.h"
     "lifecycle/cli.h"
     "lifecycle/boot.h"
     "lifecycle/config.h"
@@ -376,13 +378,15 @@ if(BUILD_TESTING)
 
     # Issue #41: the ServerDB URI builder (percent-encoded query) — pure, curl only.
     # test_failure_detail.cpp (#35, header-only failure_detail.h) rides in this executable.
+    # test_boot_replay.cpp (#5, header-only log/boot_lines.h and log/boot_replay.h) rides in this executable.
     add_executable(test_serverdb_uri
       tests/test_serverdb_uri.cpp
       tests/test_failure_detail.cpp
+      tests/test_boot_replay.cpp
       tests/test_login_session.cpp
       server/serverdb_uri.cpp
       log/url_diagnostics.cpp)
-    set_source_files_properties(tests/test_serverdb_uri.cpp tests/test_failure_detail.cpp tests/test_login_session.cpp server/serverdb_uri.cpp log/url_diagnostics.cpp
+    set_source_files_properties(tests/test_serverdb_uri.cpp tests/test_failure_detail.cpp tests/test_boot_replay.cpp tests/test_login_session.cpp server/serverdb_uri.cpp log/url_diagnostics.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_serverdb_uri PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_serverdb_uri PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
