@@ -26,9 +26,15 @@ std::string DisplayUrl(const std::string& url) {
 
 constexpr char kLine1[] = "Sign in to play: on a phone or computer, open";
 constexpr char kLine3Prefix[] = "and enter the code ";
-constexpr char kLine4[] = "A new code appears here if this one expires.";
+constexpr char kLine4[] = "Each code lasts 5 minutes, then a new one is issued.";
 static_assert(sizeof(kLine1) - 1 <= prompt_board::kMaxLineChars, "line 1 fits the game's line");
 static_assert(sizeof(kLine4) - 1 <= prompt_board::kMaxLineChars, "line 4 fits the game's line");
+static_assert(sizeof(kSignedInText) - 1 <= prompt_board::kCapacity, "the signed-in notice fits the board");
+static_assert(sizeof(kTimedOutText) - 1 <= prompt_board::kCapacity, "the timed-out text fits the board");
+
+const char* ModeName(prompt_board::Mode mode) {
+  return mode == prompt_board::Mode::kNotice ? "notice" : "prompt";
+}
 }  // namespace
 
 std::string LoginPromptLogLine(const char* mechanism, const char* result, const nlohmann::json& fields) {
@@ -66,30 +72,44 @@ bool FormatGamePromptText(const LoginPrompt& prompt, std::string& out, std::stri
 
 GameTextPresenter::GameTextPresenter(nevr::auth::LogSink log) : log_(std::move(log)) {}
 
+bool GameTextPresenter::Publish(const std::string& text, prompt_board::Mode mode, const char* what) {
+  if (!prompt_board::Publish(text.data(), text.size(), mode)) {
+    prompt_board::Withdraw();  // an older code must not stay on screen
+    Emit(log_, LogLevel::Error,
+         LoginPromptLogLine("game_error_text", "refused",
+                            {{"why", "board_refused"}, {"what", what}, {"chars", text.size()}}));
+    return false;
+  }
+  Emit(log_, LogLevel::Info,
+       LoginPromptLogLine("game_error_text", "published",
+                          {{"what", what}, {"mode", ModeName(mode)}, {"chars", text.size()},
+                           {"version", prompt_board::Version()}}));
+  return true;
+}
+
 intptr_t GameTextPresenter::Present(const LoginPrompt& prompt) {
   std::string text;
   std::string why;
   if (!FormatGamePromptText(prompt, text, why)) {
     prompt_board::Withdraw();  // an older code must not stay on screen
-    Emit(log_, LogLevel::Error, LoginPromptLogLine("game_error_text", "refused", {{"why", why}}));
+    Emit(log_, LogLevel::Error, LoginPromptLogLine("game_error_text", "refused", {{"what", "code"}, {"why", why}}));
     return 0;
   }
-  if (!prompt_board::Publish(text.data(), text.size())) {
-    prompt_board::Withdraw();
-    Emit(log_, LogLevel::Error,
-         LoginPromptLogLine("game_error_text", "refused", {{"why", "board_refused"}, {"chars", text.size()}}));
-    return 0;
-  }
-  Emit(log_, LogLevel::Info,
-       LoginPromptLogLine("game_error_text", "published",
-                          {{"lines", prompt_board::kMaxLines},
-                           {"chars", text.size()},
-                           {"shown", "in place of the game's login error message while the player is asked to sign in"}}));
-  return nevr::auth::kBrowserOpenAcceptedAbove + 1;
+  return Publish(text, prompt_board::Mode::kPrompt, "code") ? nevr::auth::kBrowserOpenAcceptedAbove + 1 : 0;
 }
 
 void GameTextPresenter::Clear() {
   if (prompt_board::Withdraw()) Emit(log_, LogLevel::Info, LoginPromptLogLine("game_error_text", "withdrawn"));
+}
+
+void GameTextPresenter::Conclude(LoginOutcome outcome) {
+  if (outcome == LoginOutcome::SignedIn) {
+    // Only a screen that shows a prompt is changed: a later login failure shows the game's own text.
+    Publish(kSignedInText, prompt_board::Mode::kNotice, "signed_in");
+  } else {
+    // Shown at every later login failure: no code is coming until the game restarts.
+    Publish(kTimedOutText, prompt_board::Mode::kPrompt, "timed_out");
+  }
 }
 
 FanOutPresenter::FanOutPresenter(std::vector<Mechanism> presenters, nevr::auth::LogSink log)
@@ -116,6 +136,17 @@ void FanOutPresenter::Clear() {
       m.presenter->Clear();
     } catch (const std::exception& e) {
       Emit(log_, LogLevel::Error, LoginPromptLogLine(m.name, "clear_failed", {{"why", e.what()}}));
+    }
+  }
+}
+
+void FanOutPresenter::Conclude(LoginOutcome outcome) {
+  for (const Mechanism& m : presenters_) {
+    if (m.presenter == nullptr) continue;
+    try {
+      m.presenter->Conclude(outcome);
+    } catch (const std::exception& e) {
+      Emit(log_, LogLevel::Error, LoginPromptLogLine(m.name, "conclude_failed", {{"why", e.what()}}));
     }
   }
 }

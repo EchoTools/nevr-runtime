@@ -1,16 +1,16 @@
 #pragma once
-// The login prompt the game shows in its own login-error text (issue #239).
+// What the game's login-error screen should say while token auth deals with the player (issue #239).
 //
-// The token-auth worker publishes the text while it waits for the player; the sentinel's hook on
-// CR15NetGame::SetDelimitedErrorMessage (src/quest/sentinel/login_prompt_hook.h) copies it into
-// the game's error message. The two run on different threads and the hook runs on the game's
-// call path, so:
-//   - Copy() takes no lock, allocates nothing and cannot throw. It is a sequence-lock read of a
-//     fixed buffer and gives up after a few attempts rather than wait for a writer.
+// The token-auth worker publishes text here; the sentinel's login-prompt hooks
+// (src/quest/sentinel/login_prompt_hook.h) copy it into the game's error-message buffers. The two
+// run on different threads and the hooks run on the game's call path, so:
+//   - Read() takes no lock, allocates nothing, cannot throw and never waits for a writer: it is a
+//     sequence-lock read of a fixed buffer that gives up (kBusy) after kReadAttempts tries, with a
+//     CPU relax hint (no syscall, no sleep) between them.
 //   - Publish() and Withdraw() serialise against each other with a pthread mutex and never run on
 //     a game call path.
 // This file and prompt_board.cpp are built with -fno-exceptions (src/quest/CMakeLists.txt), so
-// every frame the hook reaches through Copy() is personality-free (docs/adr/0003, hook contract
+// every frame a hook reaches through Read() is personality-free (docs/adr/0003, hook contract
 // rule 5). Nothing here logs: the callers do.
 
 #include <cstddef>
@@ -23,20 +23,40 @@ namespace nevr::quest_auth::prompt_board {
 inline constexpr std::size_t kMaxLines = 4;
 inline constexpr std::size_t kMaxLineChars = 63;
 inline constexpr std::size_t kCapacity = kMaxLines * kMaxLineChars + (kMaxLines - 1);
+inline constexpr int kReadAttempts = 16;
 
-// Makes `text` (`len` bytes, no NUL inside) the published prompt. Returns false and leaves the
+enum class Mode : std::uint8_t {
+  // Replaces the game's message when its login fails, and refreshes a screen that shows a prompt.
+  kPrompt = 1,
+  // Only refreshes a screen that already shows a prompt (e.g. "signed in"); a new login failure
+  // shows the game's own message.
+  kNotice = 2,
+};
+
+enum class ReadResult {
+  kEmpty,   // nothing published (out is "")
+  kCopied,  // `out`, `mode` and `version` hold the published text
+  kBusy,    // a writer kept the buffer busy through every attempt (out is "")
+};
+
+// Makes `text` (`len` bytes, no NUL inside) the published text. Returns false and leaves the
 // board unchanged when `text` is null, `len` is 0 or above kCapacity, or `text` holds a NUL.
-bool Publish(const char* text, std::size_t len) noexcept;
+bool Publish(const char* text, std::size_t len, Mode mode) noexcept;
 
-// Removes the published prompt. Returns whether one was published.
+// Removes the published text. Returns whether text was published.
 bool Withdraw() noexcept;
 
-// Copies the published prompt, NUL-terminated, into `out`. Returns false (and writes "" when
-// cap > 0) when nothing is published, `cap` is below kCapacity + 1, or a writer kept the buffer
-// busy through every attempt.
-bool Copy(char* out, std::size_t cap) noexcept;
+// Copies the published text, NUL-terminated, into `out` (`cap` must be at least kCapacity + 1;
+// smaller reads as kEmpty). `mode` and `version` may be null.
+ReadResult Read(char* out, std::size_t cap, Mode* mode, std::uint64_t* version) noexcept;
 
-// How many times the board has changed (a publish or a withdraw). For tests and logging.
+// Changes so far (each publish or withdraw adds one). Read() reports the version it copied, so a
+// reader can tell whether what it applied is still current.
 std::uint64_t Version() noexcept;
+
+// Test support: holds the board in the "writer inside" state, so a reader deterministically gets
+// kBusy, until EndWriteForTest. Nothing in production calls these.
+void BeginWriteForTest() noexcept;
+void EndWriteForTest() noexcept;
 
 }  // namespace nevr::quest_auth::prompt_board

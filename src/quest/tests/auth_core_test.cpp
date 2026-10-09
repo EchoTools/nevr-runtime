@@ -911,13 +911,13 @@ TEST(link_file_replaces_a_stale_file_and_a_new_code_replaces_the_old_one) {
   CHECK(text2.find("WXYZ-1234") != std::string::npos);
 }
 
-TEST(an_unwritable_link_directory_is_an_error_and_the_link_goes_to_the_log_instead) {
+TEST(an_unwritable_link_directory_is_an_error_that_names_the_page_but_never_the_code) {
   LogCapture log;
   FileLinkPresenter p("/proc/nevr-no-such-dir/device_login.txt", log.Sink());
-  CHECK(p.Present(SamplePrompt()) > kBrowserOpenAcceptedAbove);  // the login goes on
-  CHECK_EQ(log.Count(LogLevel::Error, R"("mechanism":"file","path":"/proc/nevr-no-such-dir/device_login.txt","result":"write_failed")"),
+  CHECK_EQ(p.Present(SamplePrompt()), intptr_t(0));  // not delivered by this mechanism
+  CHECK_EQ(log.Count(LogLevel::Error, R"("mechanism":"file","path":"/proc/nevr-no-such-dir/device_login.txt","result":"write_failed","url":"https://login.test/device")"),
            size_t(1));
-  CHECK_EQ(log.Count(LogLevel::Info, "login link (file not written): https://login.test/device?code=ABCD-EFGH"), size_t(1));
+  CHECK(log.All().find("ABCD-EFGH") == std::string::npos);  // the code is a credential: no log line carries it
   CHECK_EQ(log.Count(LogLevel::Info, R"("result":"written")"), size_t(0));
 }
 
@@ -929,9 +929,10 @@ std::vector<std::string> SplitLines(const std::string& text) {
   return lines;
 }
 
-std::string BoardText() {
+std::string BoardText(prompt_board::Mode* mode = nullptr) {
   char out[prompt_board::kCapacity + 1];
-  return prompt_board::Copy(out, sizeof(out)) ? std::string(out) : std::string();
+  return prompt_board::Read(out, sizeof(out), mode, nullptr) == prompt_board::ReadResult::kCopied ? std::string(out)
+                                                                                                  : std::string();
 }
 
 TEST(the_game_prompt_is_four_lines_the_game_can_hold_with_the_url_and_the_code) {
@@ -979,6 +980,7 @@ TEST(the_game_text_presenter_publishes_the_prompt_and_withdraws_it_logging_json_
   CHECK(shown.find("ABCD-EFGH") != std::string::npos);
   CHECK_EQ(log.Count(LogLevel::Info, R"("mechanism":"game_error_text")"), size_t(1));
   CHECK_EQ(log.Count(LogLevel::Info, R"("result":"published")"), size_t(1));
+  CHECK_EQ(log.Count(LogLevel::Info, R"("mode":"prompt")"), size_t(1));
   CHECK(log.All().find("ABCD-EFGH") == std::string::npos);
   for (const std::string& line : log.lines) CHECK(nlohmann::json::parse(line).is_object());
   p.Clear();
@@ -997,7 +999,7 @@ TEST(a_prompt_the_game_cannot_show_is_refused_and_takes_any_older_code_off_the_b
   longUrl.url = "https://" + std::string(64, 'u');
   CHECK_EQ(p.Present(longUrl), intptr_t(0));
   CHECK(BoardText().empty());  // the old code is not left on screen
-  CHECK_EQ(log.Count(LogLevel::Error, R"("result":"refused","why":"url_too_long")"), size_t(1));
+  CHECK_EQ(log.Count(LogLevel::Error, R"("result":"refused","what":"code","why":"url_too_long")"), size_t(1));
 }
 
 class ThrowingPresenter : public LinkPresenter {
@@ -1053,14 +1055,63 @@ TEST(while_the_player_is_asked_to_sign_in_the_game_text_holds_the_current_code_a
   *second_verifies = true;
   clock.Allow(1);
   CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
-  CHECK(BoardText().empty());  // signed in: the game's own messages are back
+  // Signed in: a screen that still shows the prompt now says so; a new failure shows the game's text.
+  prompt_board::Mode mode = prompt_board::Mode::kPrompt;
+  CHECK_EQ(BoardText(&mode), std::string(kSignedInText));
+  CHECK(mode == prompt_board::Mode::kNotice);
   CHECK(!std::filesystem::exists(JoinPath(dir, "device_login.txt")));
   CHECK(log.All().find("FIRSTCODE") == std::string::npos);
   CHECK(log.All().find("SECONDCODE") == std::string::npos);
-  CHECK_EQ(log.Count(LogLevel::Info, R"("mechanism":"game_error_text","result":"published")"), size_t(2));
+  CHECK_EQ(log.Count(LogLevel::Info, R"("what":"code")"), size_t(2));
+  CHECK_EQ(log.Count(LogLevel::Info, R"("what":"signed_in")"), size_t(1));
   CHECK_EQ(log.Count(LogLevel::Info, R"("mechanism":"file","path")"), size_t(2));
   s.Stop();
+  prompt_board::Withdraw();
   std::filesystem::remove_all(dir);
+}
+
+TEST(when_no_code_is_entered_the_login_stops_after_six_codes_and_tells_the_player_to_restart) {
+  prompt_board::Withdraw();
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  LogCapture log;
+  DeviceHandler(http, 1000000, kT0 + 3600);  // never verifies
+  GameTextPresenter game(log.Sink());
+  FanOutPresenter fan({{"game_error_text", &game}}, log.Sink());
+  Session s(TestConfig(), http, clock, store, fan, log.Sink());
+  s.Start();
+  clock.Allow(100 * static_cast<int>(Session::kMaxCodesPerLogin));  // 100 poll waits run each code out
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  CHECK_EQ(http.Count("request"), static_cast<int>(Session::kMaxCodesPerLogin));  // and no more
+  CHECK_EQ(log.Count(LogLevel::Warning, "no sign-in after 6 device codes"), size_t(1));
+  prompt_board::Mode mode = prompt_board::Mode::kNotice;
+  CHECK_EQ(BoardText(&mode), std::string(kTimedOutText));  // shown at every later login failure
+  CHECK(mode == prompt_board::Mode::kPrompt);
+  clock.Allow(10);  // the recovery period passes: a final login does not come back
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  CHECK_EQ(http.Count("request"), static_cast<int>(Session::kMaxCodesPerLogin));
+  s.Stop();
+  prompt_board::Withdraw();
+}
+
+TEST(the_game_text_presenter_concludes_with_the_signed_in_notice_or_the_timed_out_text) {
+  prompt_board::Withdraw();
+  LogCapture log;
+  GameTextPresenter p(log.Sink());
+  prompt_board::Mode mode = prompt_board::Mode::kPrompt;
+  p.Conclude(LoginOutcome::SignedIn);
+  CHECK_EQ(BoardText(&mode), std::string(kSignedInText));
+  CHECK(mode == prompt_board::Mode::kNotice);
+  p.Conclude(LoginOutcome::TimedOut);
+  CHECK_EQ(BoardText(&mode), std::string(kTimedOutText));
+  CHECK(mode == prompt_board::Mode::kPrompt);
+  for (const char* text : {kSignedInText, kTimedOutText}) {
+    for (const std::string& line : SplitLines(text)) CHECK(line.size() <= prompt_board::kMaxLineChars);
+  }
+  p.Clear();
+  CHECK(BoardText().empty());
 }
 
 TEST(the_session_hands_the_presenter_url_code_link_and_expiry_and_clears_a_stale_file_at_start) {
@@ -1317,7 +1368,7 @@ TEST(session_an_expired_device_code_is_replaced_and_the_prompt_stays_up_until_th
   // Cleared at the start (a stale file) and when the login ended: never between the two codes.
   CHECK_EQ(presenter.cleared.load(), 2);
   CHECK_EQ(clock.Sleeps(), 3);
-  CHECK_EQ(log.Count(LogLevel::Info, "the device code ran out without a sign-in; requesting a new one (renewal 1)"),
+  CHECK_EQ(log.Count(LogLevel::Info, "the device code ran out without a sign-in; requesting a new one (code 2 of 6)"),
            size_t(1));
   CHECK(log.All().find("FIRSTCODE") == std::string::npos);
   CHECK(log.All().find("SECONDCODE") == std::string::npos);

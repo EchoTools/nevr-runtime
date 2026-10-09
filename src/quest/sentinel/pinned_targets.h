@@ -9,14 +9,15 @@
  * built with -fno-exceptions (see the contract there). Handlers are `noexcept`.
  *
  * Nothing in this header activates a hook. entry.cpp installs the clock_gettime
- * proof hook and the login-prompt hook (login_prompt_hook.h, on
- * SetDelimitedErrorMessage); the CJson::TString thunks are declared for the
- * config-string seam and stay uninstalled until the gates in #158 pass.
+ * proof hook and the login-prompt hooks (login_prompt_hook.h, on
+ * SetDelimitedErrorMessage and CR15NetGame::Update); the CJson::TString thunks are
+ * declared for the config-string seam and stay uninstalled until the gates in #158 pass.
  */
 #pragma once
 
 #include <time.h>
 
+#include <cstddef>
 #include <cstdint>
 
 #include "callback_thunk.h"
@@ -35,6 +36,7 @@ inline constexpr const char* kConfigRequestSendSymbol =
     "_ZN10NRadEngine18SNSConfigRequestv24SendERNS_15CTcpBroadcasterEPKcS4_";
 inline constexpr const char* kSetDelimitedErrorMessageSymbol =
     "_ZN10NRadEngine8NRadGame11CR15NetGame24SetDelimitedErrorMessageEPKc";
+inline constexpr const char* kNetGameUpdateSymbol = "_ZN10NRadEngine8NRadGame11CR15NetGame6UpdateEy";
 
 // ---- typed callbacks --------------------------------------------------------
 
@@ -58,16 +60,40 @@ using MatchmakingTStringThunk = CallbackThunk<MatchmakingTStringTag, CJsonTStrin
 // NRadEngine::NRadGame::CR15NetGame::SetDelimitedErrorMessage(char const*), defined in libr15 at
 // 0x125f768 (member: `this` in x0, the message in x1, no return value). It splits the message on
 // '\n' (CStringTable(msg, 10)) into at most four lines and stores them with
-// CR15NetGame::SetErrorMessage, which copies each line (four 64-byte buffers at
-// CR15NetGame+0x63309) and logs them as "[NETGAME] %s %s %s %s". Its three callers are the login
-// error callbacks, each followed by SwitchTo(-0x5e): LogInFailedCB (bl at 0x125f604),
-// LoginRemovedCB (0x125f9b4) and LocalUserProfileErrorCB (0x126d588). The message is borrowed for
-// the call only. CR15NetGame is never dereferenced by a handler.
+// CR15NetGame::SetErrorMessage, which copies each line into the error block (game_layout below)
+// and logs them as "[NETGAME] %s %s %s %s". Its three callers are the login error callbacks,
+// each followed by SwitchTo(-0x5e): LogInFailedCB (bl at 0x125f604), LoginRemovedCB (0x125f9b4,
+// only when the state is >= 3, logged in) and LocalUserProfileErrorCB (0x126d588, only when the
+// state is 2, logging in). The message is borrowed for the call only.
 struct CR15NetGameOpaque;
 using SetDelimitedErrorMessageSig = void(CR15NetGameOpaque* self, const char* message);
 struct LibR15SetDelimitedErrorMessageTag {};
 using LibR15SetDelimitedErrorMessageThunk =
     CallbackThunk<LibR15SetDelimitedErrorMessageTag, SetDelimitedErrorMessageSig>;
+
+// NRadEngine::NRadGame::CR15NetGame::Update(unsigned long long), defined in libr15 at 0x1294b40,
+// called once per game update from CR15Game::UpdateGame (bl at 0x11fb5cc, the only call site;
+// the caller does not read x0 afterwards: the next instruction loads x0 for CncaGame::UpdateGame).
+using CR15NetGameUpdateSig = void(CR15NetGameOpaque* self, std::uint64_t arg);
+struct LibR15NetGameUpdateTag {};
+using LibR15NetGameUpdateThunk = CallbackThunk<LibR15NetGameUpdateTag, CR15NetGameUpdateSig>;
+
+// CR15NetGame fields the login-prompt hook reads and writes, measured on the pinned libr15:
+namespace game_layout {
+// EState at offset 0: SwitchTo (0x125b8b4) compares `ldr w0, [x0]` with the new state and stores
+// it with `str w20, [x19]` (0x125b9f4). Names from GameStateString (0x124d478).
+inline constexpr std::size_t kStateOffset = 0;
+inline constexpr std::int32_t kStateLoggingIn = 2;      // "logging in"
+inline constexpr std::int32_t kStateLoginFailed = -94;  // "login failed"
+// The error block SetErrorMessage(4 args) (0x1241430) writes: a byte at +0x63308 (1 for the 2- and
+// 4-line forms, 0 for the 1-line form), then four 64-byte lines from +0x63309, each forced to end
+// in NUL at its 64th byte; CR15NetErrorMessageExpression::operator() (0x23225d0) copies these
+// 0x101 bytes to the UI script.
+inline constexpr std::size_t kErrorBlockOffset = 0x63308;
+inline constexpr std::size_t kErrorLineBytes = 0x40;
+inline constexpr std::size_t kErrorLines = 4;
+inline constexpr std::size_t kErrorBlockBytes = 1 + kErrorLines * kErrorLineBytes;
+}  // namespace game_layout
 
 // SNSConfigRequestv24Send(CTcpBroadcaster&, char const*, char const*): the
 // mangling encodes the parameters but not the return type, and no caller has
@@ -89,6 +115,12 @@ inline GotTarget LibR15TString() {
 // (PLT 0xf23510 loads JUMP_SLOT 0x36e9170).
 inline GotTarget LibR15SetDelimitedErrorMessage() {
   return {kLibR15, kSetDelimitedErrorMessageSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36e9170ULL};
+}
+
+// libr15.so's slot for CR15NetGame::Update, defined in libr15 itself (PLT 0xf11e20 loads
+// JUMP_SLOT 0x36e05f8).
+inline GotTarget LibR15NetGameUpdate() {
+  return {kLibR15, kNetGameUpdateSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36e05f8ULL};
 }
 
 // libpnsradmatchmaking.so's slot for the same function, defined in

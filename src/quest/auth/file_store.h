@@ -47,9 +47,11 @@ class FileCredentialStore : public CredentialStore {
 //   <one line of instructions, with the direct link that has the code filled in>
 //   Expires: <UTC time> (unix <seconds>)
 // One JSON line per attempt, {"event":"login_prompt","mechanism":"file","result":"written",
-// "path":...} at Info (never the code). If the directory is not writable, the line says
-// "write_failed" with the reason at Error and an Info line carries the direct link instead (the
-// code is part of it), so the player can still read it from the log; the login goes on.
+// "path":...} at Info. If the directory is not writable, the line says "write_failed" with the
+// reason and the verification page at Error, and Present returns 0 (not delivered). No line ever
+// carries the code: it is also the poll credential while it lives. The file itself stays on
+// /sdcard, readable by apps with storage access, until the login ends, or, if the process dies
+// first, until the next start (Session::Run clears it).
 class FileLinkPresenter : public LinkPresenter {
  public:
   FileLinkPresenter(std::string path, nevr::auth::LogSink log);

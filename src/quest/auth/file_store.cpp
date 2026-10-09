@@ -206,12 +206,14 @@ intptr_t FileLinkPresenter::Present(const LoginPrompt& prompt) {
   std::string error;
   std::string warning;
   if (path_.empty() || !AtomicWrite(path_, FormatLoginPrompt(prompt), error, warning)) {
+    // The device code never goes to a log (the sink can be durable): it is also the poll
+    // credential for its five minutes. The verification page is not secret.
     Emit(log_, LogLevel::Error,
          LoginPromptLogLine("file", "write_failed",
-                            {{"path", path_}, {"why", path_.empty() ? std::string("no path") : error}}));
-    // The login must still be possible: the direct link goes to the log, where logcat shows it.
-    Emit(log_, LogLevel::Info, "[NEVR.AUTH] login link (file not written): " + prompt.link);
-    return nevr::auth::kBrowserOpenAcceptedAbove + 1;
+                            {{"path", path_},
+                             {"url", prompt.url},
+                             {"why", path_.empty() ? std::string("no path") : error}}));
+    return 0;
   }
   Emit(log_, LogLevel::Info, LoginPromptLogLine("file", "written", {{"path", path_}}));
   return nevr::auth::kBrowserOpenAcceptedAbove + 1;

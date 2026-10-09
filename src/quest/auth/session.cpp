@@ -291,26 +291,44 @@ Session::LoginResult Session::TryCachedLogin(CachedAuthToken& auth, int attempts
 Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
   quiet_ = false;  // a player prompt is always worth an Info line, also when it starts from recovery
   SetState(Readiness::AwaitingUser);
-  // The prompt carries the device code: remove it however this function ends, including by an
-  // exception out of one of the operations below. It is NOT removed between one code and the
-  // next, so what the player sees goes from the old code straight to the new one.
+  // The prompt carries the device code: take it down however this function ends, including by an
+  // exception out of one of the operations below, unless the outcome replaced it (Conclude). It is
+  // NOT taken down between one code and the next, so what the player sees goes from the old code
+  // straight to the new one.
   struct ClearLink {
     LinkPresenter& presenter;
-    ~ClearLink() { presenter.Clear(); }
+    bool concluded = false;
+    void Conclude(LoginOutcome outcome) {
+      concluded = true;
+      presenter.Conclude(outcome);
+    }
+    ~ClearLink() {
+      if (!concluded) presenter.Clear();
+    }
   } clear_link{presenter_};
 
-  for (unsigned renewal = 0;; ++renewal) {
+  for (unsigned code = 1;; ++code) {
     const auto requested_at = clock_.SteadyNow();
     const DeviceResult r = RunDeviceCode(out);
+    if (r == DeviceResult::Verified) {
+      clear_link.Conclude(LoginOutcome::SignedIn);
+      return r;
+    }
     if (r != DeviceResult::CodeExpired) return r;
     if (StopRequested()) return DeviceResult::Ended;
+    if (code >= kMaxCodesPerLogin) {
+      Log(LogLevel::Warning, "[NEVR.AUTH] no sign-in after " + std::to_string(code) +
+                                 " device codes; no more are requested until the game restarts");
+      clear_link.Conclude(LoginOutcome::TimedOut);
+      return DeviceResult::Ended;
+    }
     // The player was shown a code and it ran out (the server's "expired", or its five minutes
     // passed): the login is still wanted, so ask for a new code and show it in place of the old
     // one. Codes are asked for no more often than once per kMinCodeInterval, whatever the server
     // says about them.
     const auto since = clock_.SteadyNow() - requested_at;
-    Log(LogLevel::Info, "[NEVR.AUTH] the device code ran out without a sign-in; requesting a new one (renewal " +
-                            std::to_string(renewal + 1) + ")");
+    Log(LogLevel::Info, "[NEVR.AUTH] the device code ran out without a sign-in; requesting a new one (code " +
+                            std::to_string(code + 1) + " of " + std::to_string(kMaxCodesPerLogin) + ")");
     if (since < kMinCodeInterval && clock_.SleepFor(kMinCodeInterval - since)) return DeviceResult::Ended;
     if (StopRequested()) return DeviceResult::Ended;
   }
@@ -407,6 +425,7 @@ Session::DeviceResult Session::RunDeviceCode(CachedAuthToken& out) {
   ops.sleep = [this](std::chrono::steady_clock::duration d) { (void)clock_.SleepFor(d); };
   ops.cancelled = [this] { return StopRequested(); };
   ops.log = [this](LogLevel l, const std::string& m) { Log(l, m); };
+  ops.renews_expired_codes = true;  // RunDeviceLogin answers a code that runs out with a new one
 
   const nevr::auth::DeviceFlowResult flow = nevr::auth::RunDeviceCodeFlow(ops, config_.login_url);
   if (!flow.verified) return device_result_;
