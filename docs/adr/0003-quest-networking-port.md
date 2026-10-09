@@ -82,8 +82,10 @@ them. `src/quest/auth/` holds the Android adapters:
     logs once and starts the device login again; other refresh failures keep the login and retry
     next period.
 
-`nevr_quest_token_auth` is not linked into the sentinel, and nothing yet hands the token to the
-login path. The tests are `src/quest/tests/auth_core_test.cpp` (fake HTTP and clock) and
+`nevr_quest_token_auth` is not linked into the sentinel built from `src/quest/sentinel/`, and
+nothing in it creates `QuestTokenAuth` or hands the token to the login path; a startup sequence that
+links token auth into the same shared object and creates it (`QuestTokenAuth::Create`) is what makes
+the sign-in prompt below live. The tests are `src/quest/tests/auth_core_test.cpp` (fake HTTP and clock) and
 `src/quest/tests/tls_ca_test.cpp` (loopback TLS peers with a generated CA and an Android-style
 directory), run on the host by `just test-quest-shared`. Not established on a headset: the CA
 directories and the libcurl/OpenSSL stack, that the process name is the package name, write access
@@ -128,33 +130,40 @@ What the game does, measured on the pinned `libr15.so` and `libpnsovr.so`:
   (`0x23225d0`) copies the block to the UI script.
 - The state is the `int` at offset 0 (`SwitchTo`, `0x125b8b4`); `GameStateString` (`0x124d478`)
   names 2 "logging in", 3 "logged in", -94 "login failed", 0 "logged out". Entering -94 runs
-  `ScheduleQuitOnError`, whose deferred `QuitOnError` (`0x12713f8`) ends multiplayer and then takes
-  one of two paths on `[CR15Game+0x7af0]`: when it is set, a component event to that game space;
-  when it is zero, it stores 1 at `[*0x376ce08 + 0x16db8]`, the flag `CR15Game::UpdateGame` sets
-  when `CVR::ShouldQuit()` returns true (`0x11fb598`-`0x11fb5b4`), that is, a quit request. A new
+  `ScheduleQuitOnError`, whose deferred `QuitOnError` (`0x12713f8`) takes one of three paths:
+  - `[CR15Game+0x1f08]` set (`0x1271408`, `cbz` at `0x1271410`): it sets bit `0x200000` in the
+    flags word at `[CR15NetGame+0x2da0]` and returns (`0x1271414`-`0x1271420`); while that bit is
+    set and `[CR15Game+0x1f08]` is zero, `CR15NetGame::Update` schedules it again (`0x1294c4c`-
+    `0x1294c60`). No multiplayer is ended, no event sent, no quit requested.
+  - otherwise it ends multiplayer (`CR15Game::EndMultiplayer`, `0x127144c`), then with
+    `[CR15Game+0x7af0]` set sends that game space a component event;
+  - or, with it zero, stores 1 at `[*0x376ce08 + 0x16db8]`, the flag `CR15Game::UpdateGame` sets
+    when `CVR::ShouldQuit()` returns true (`0x11fb598`-`0x11fb5b4`), that is, a quit request.
+
+  Which path runs on a headset is not measured. A new
   login is started by the UI script (`CR15NetBeginLoginNode::Enter`, `0x231c118`, calls
   `BeginLogIn`), not by `CR15NetGame`. The only `SwitchTo(0)` is in `CR15NetGame::LogOut`
   (`0x1289168`), whose only caller is `~CR15NetGame` (`0x128824c`), whose only caller is
   `CR15Game::ShutdownEngine` (`0x11f4fe4`): a "login failed -> logged out" line is the engine
   shutting down.
-- What the headset showed (owner's smoke runs, 2026-10-08): in the first run the process was still
-  alive more than a minute after the login failed (18:40:38); in the second (pid 8915) it kept
-  running and retrying for minutes after the failure at 18:43:07. So no exit followed the failure
-  in those windows. Not known: whether a game space existed (which `QuitOnError` path ran), which
-  screen renders the error block, and whether the UI re-reads it while that screen is up (the
-  assets decide, not the ELF).
+- Not known from the ELF: which screen renders the error block and whether the UI re-reads it
+  while that screen is up (the assets decide).
 - So the prompt must also work if the game quits after the failure: the player starts the game
   again. A code the player had not used is then gone (nothing polls it any more) and the new start
   shows a new one, in the game text and in `device_login.txt`; a sign-in that finished before the
   quit is in the credential cache and logs in. The signed-in notice therefore says "Restart the
-  game to finish." (nothing on this branch hands a new sign-in to a login the game already runs).
+  game to finish.": the new sign-in goes to the credential cache and `QuestTokenAuth::Token()`, and
+  nothing hands it to a login the game is already running. The player-facing steps are in
+  `docs/quest/SIGN-IN.md`.
 
 How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`):
 
 - Token auth writes the text to the prompt board, a sequence-locked fixed buffer built without
   exceptions, in one of two modes: `prompt` (the code; after the last code, "Sign-in timed out.
-  Restart the game to try again.") or `notice` ("Signed in to EchoVRCE. Restart the game to
-  finish.", after a sign-in). Publishing rewrites the whole buffer and withdrawing zeroes it.
+  Restart the game to try again.", or "No sign-in code could be shown. Restart the game to try
+  again." when none of the codes could be shown) or `notice` ("Signed in to EchoVRCE. Restart the
+  game to finish.", after a sign-in). A notice only ever replaces a prompt the screen shows.
+  Publishing rewrites the whole buffer and withdrawing zeroes it.
 - A GOT hook on `SetDelimitedErrorMessage` lets the game store and log its own message first, so
   the code never passes through the game's logging. If the game was logging in (state 2), the
   message is exactly one of the local texts above (`src/quest/game_login_failures.h`, which
@@ -164,13 +173,22 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   over the block at once.
 - A GOT hook on `CR15NetGame::Update` (`0x1294b40`, `R_AARCH64_JUMP_SLOT` `0x36e05f8`, called once
   per game update from `CR15Game::UpdateGame` at `0x11fb5cc`) rewrites the followed block while
-  that instance is still in -94 and the board has changed: a prompt published after the failure,
-  a new code, the signed-in notice, the timed-out text, or the game's saved block when the board
-  is withdrawn. It first checks the block still holds what the hook last left there: the game
-  writes the same block for other errors (`CR15NetClientLobby::SwitchTo` from `0x123e950`,
-  `LobbySessionFailureCB` `0x1240fa4`, `LobbyStatusNotifyCB` `0x125fa88`/`0x125fb58`,
-  `OnGameSpaceUnloaded`/`Aborted` `0x12939f4`/`0x1293ad4`), and a block another writer changed is
-  left alone for good. Every later login failure writes the current text again.
+  that instance is still in -94 and the board or the block has changed: a prompt published after
+  the failure, a new code, the signed-in notice (only over a prompt), the timed-out text, or the
+  game's saved block when the board is withdrawn. Every frame it checks the block still holds
+  what the hook last left there. The game writes the same block for other errors (for example
+  `CR15NetClientLobby::SwitchTo` from `0x123e950`, `LobbySessionFailureCB` `0x1240fa4`/
+  `0x1240fcc`, `LobbyStatusNotifyCB` `0x125fa88`/`0x125fa9c`/`0x125fb58`, `CR15NetGame::SwitchTo`
+  `0x125bba4`/`0x125bbe8`/`0x125bc44`, `OnGameSpaceUnloaded`/`Aborted` `0x12939f4`/`0x1293ad4`);
+  a block another writer changed is left alone for good, unless it holds one of the local
+  login-failure texts again (a new failure), which is taken up as the game's text.
+- Both hooks run on one thread: `CncaGame::RunLoop` calls `CR15Game::Update` (vtable slot
+  `0x408`), which updates the login providers (`CNSProvider::Update`, `0x11fd858`-`0x11fd870`,
+  and `CR15NetGame::UpdateBroadcaster`, `0x11fd878`, where login failures are delivered) and then
+  `CncaGame::Update` (`0x11fd8ac`), which calls `CR15Game::UpdateGame` (slot `0x198`) and so
+  `CR15NetGame::Update`. That the login-failure callbacks run inside those provider and
+  broadcaster updates is inferred from the call chain, not traced instruction by instruction; the
+  hooks' writer flag does not rely on it.
 - Neither hook logs or takes a lock. Their eight counters are `login_prompt_text_shown`,
   `_text_refreshed`, `_text_kept`, `_text_not_local`, `_board_busy`, `_block_not_ours` and the two
   thunks' fault counters; installing logs one `login_prompt_install` line (or `skipped` when the
