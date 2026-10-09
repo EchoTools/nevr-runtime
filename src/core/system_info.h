@@ -5,10 +5,10 @@
 
 /// Host description — measured, never invented.
 ///
-/// This exists because the login payload used to carry a `system_info` block
-/// made entirely of string literals: "cpu":"Wine", "video_card":"Wine D3D12",
-/// 4 physical cores, 8 logical, 16384 MB. None of it measured, all of it sent
-/// as though it were. Fabricated telemetry is worse than absent telemetry —
+/// This exists so the login payload's `system_info` block is never made of
+/// string literals ("cpu":"Wine", "video_card":"Wine D3D12", 4 physical cores,
+/// 8 logical, 16384 MB), which would be sent as though measured.
+/// Fabricated telemetry is worse than absent telemetry —
 /// absent data is obviously absent, while fabricated data is indistinguishable
 /// from a real reading and gets acted on.
 ///

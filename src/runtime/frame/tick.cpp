@@ -20,9 +20,9 @@
  * value — no extra clock, and it tracks real time rather than a call count that
  * varies with engine load.
  *
- * Both sites call this one function. They used to have a copy each, and the
- * copies disagreed about something as basic as whether the host was a server
- * (N110). One dispatcher, always.
+ * Both sites call this one function. Separate copies could disagree about
+ * something as basic as whether the host was a server (N110). One dispatcher,
+ * always.
  */
 
 #include "runtime/frame/tick.h"

@@ -330,9 +330,8 @@ inline bool SaveAuthToken(const CachedAuthToken& auth, const std::string& exeDir
     // Access token deliberately NOT written — lives in memory only. The refresh
     // token is the only persistent credential.
     //
-    // "(60s lifetime)" used to be asserted here and is wrong: 60s was the old
-    // unconditional cap, now kMaxDiskAccessTokenLifetimeSec and applied to the
-    // LOAD path only. A live access token lasts as long as its own JWT `exp`
+    // The 60s cap (kMaxDiskAccessTokenLifetimeSec) applies to the LOAD path
+    // only; it is not the access token's lifetime. A live access token lasts as long as its own JWT `exp`
     // says — one hour from nakama (server/evr_device_auth.go:289). Because that
     // number exists nowhere on disk, no reader of this file can answer "when
     // does the access token expire"; only the running DeviceAuth can.
