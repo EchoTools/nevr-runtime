@@ -125,7 +125,7 @@ typedef int (*NvrPluginInit_fn)(const NvrGameContext* ctx);
  * args_json shape (v4 contract): a FLAT JSON object whose keys are the entry's
  * args flattened to dotted paths (a nested `a: {b: 1}` becomes "a.b") and whose
  * values are strings (post-interpolation; the runtime interpolates ${VAR} refs
- * before serialization). Example: {"greeting":"hi","limits.max":"5"}.
+ * before serialization, and an unset bare ${VAR} stays as written). Example: {"greeting":"hi","limits.max":"5"}.
  */
 typedef int (*NvrPluginInitEx_fn)(const NvrGameContext* ctx, const char* args_json);
 

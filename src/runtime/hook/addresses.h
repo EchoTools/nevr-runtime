@@ -304,8 +304,8 @@ constexpr uintptr_t INIT_GLOBAL_GAMESPACE = 0x110ab0;
 /// Address: Game main wrapper (0x1400cd510, 62 bytes)
 /// Called from WinMain. An MSVC SEH frame around the game's main function.
 ///
-/// This comment used to say it "calls the BugSplat crash handler if it returns",
-/// which is wrong twice over. The bytes (ReVault, 2026-07-29):
+/// It does not "call the BugSplat crash handler if it returns", and no return
+/// value is tested. The bytes (ReVault):
 ///
 ///   SUB  RSP,0x38
 ///   MOV  qword [RSP+0x20],0

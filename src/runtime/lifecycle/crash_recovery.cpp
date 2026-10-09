@@ -1,9 +1,11 @@
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/log/boot_log_tee.h"
 #ifdef NEVR_SCENARIO_CONTROL
 #include "runtime/scenario/scenario_control.h"
 #endif
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/lifecycle/readable_memory.h"
+#include "runtime/lifecycle/console_ctrl_policy.h"
 #include "runtime/lifecycle/crash_recovery_sites.h"
 #include "runtime/lifecycle/crash_dump_format.h"
 #include "runtime/lifecycle/stack_alloc_check.h"
@@ -27,14 +29,12 @@
 #include "runtime/hook/addresses.h"
 #include "runtime/patch/binary_bug_fixes.h"
 
-// N125: the game-loop crash-recovery mechanism. The longjmp CONSUMER (VEH) has
-// always lived here; its setjmp PRODUCER (GameMainWrapperHook) and this shared
-// jmp_buf used to live in mode_patches.cpp, coupled across the file boundary by
-// an `extern`. A setjmp in one translation unit and its matching longjmp in
+// N125: the game-loop crash-recovery mechanism. The longjmp CONSUMER (VEH) and
+// its setjmp PRODUCER (GameMainWrapperHook) share this jmp_buf and both live in
+// this file. A setjmp in one translation unit and its matching longjmp in
 // another, communicating through a global, is exactly the seam that reads as
-// "which file owns crash recovery?" and answers it in two places. Both halves now
-// live in this file; the definition is here and mode_patches.cpp no longer knows
-// about it.
+// "which file owns crash recovery?" and answers it in two places. The
+// definition is here and mode_patches.cpp does not know about it.
 jmp_buf g_gameLoopJmpBuf;
 volatile bool g_gameLoopJmpBufValid = false;
 
@@ -73,7 +73,7 @@ static VOID GameMainWrapperHook(INT64 arg1) {
   // The game loop returned on its own: the player quit (closed the window, chose Exit) or the game
   // ended its session. A client has nothing left to run, so return and let the process exit; the
   // hold below is only for a dedicated server, where a supervisor watches the broadcaster/HTTP API
-  // and is the one to restart it. (The hold used to apply to clients too, so a closed client kept
+  // and is the one to restart it. (A hold on clients would leave a closed client
   // running with no window on Windows and under Wine.)
   g_gameLoopJmpBufValid = false;
   if (!g_isServer) {
@@ -91,10 +91,16 @@ static VOID GameMainWrapperHook(INT64 arg1) {
 
 void InstallGameMainHook() {
   // Hook game main wrapper — longjmp recovery on crash keeps server alive
-  GameMain = (GameMainFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN);
+  GameMain = reinterpret_cast<GameMainFunc*>(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN);
   OriginalGameMainWrapper =
-      (GameMainWrapperFunc*)(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN_WRAPPER);
-  if (PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper")) {
+      reinterpret_cast<GameMainWrapperFunc*>(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_MAIN_WRAPPER);
+  // Runs in the boot phase, under the DllMain loader lock, where Log() must not be called.
+  const bool hooked = PatchDetour(&OriginalGameMainWrapper, reinterpret_cast<PVOID>(GameMainWrapperHook), "GameMainWrapper");
+  if (BootLogTee::InBootPhase()) {
+    BootLogTee::TeeFprintf(hooked ? "[NEVR.PATCH] game main wrapper hooked — crash recovery armed\n"
+                                  : "[NEVR.PATCH] game main wrapper hook FAILED — server crash recovery via "
+                                    "longjmp is NOT armed\n");
+  } else if (hooked) {
     Log(EchoVR::LogLevel::Debug,
         "[NEVR.PATCH] game main wrapper hooked — crash recovery armed (setjmp installed; a "
         "null-deref AV in server mode will longjmp back here instead of terminating the process)");
@@ -111,13 +117,12 @@ void InstallGameMainHook() {
 static volatile sig_atomic_t g_inSignalContext = 0;
 
 
-// N67 (re-opened 2026-07-26): these two flags are written from CreateProcessAHook, CreateProcessWHook,
+// N67: these two flags are written from CreateProcessAHook, CreateProcessWHook,
 // ExitProcessHook and TerminateProcessHook — any thread — and read/written from
 // BreakpointVEH on the faulting thread. Plain `bool` gives no ordering guarantee and
 // permits the compiler to sink or reorder the stores, so the VEH can observe a stale
 // value and either skip an int3 it should have taken or take one it should not.
-// The earlier fix converted the copies in plugins/crash-handler/, which is not built
-// (plugins/CMakeLists.txt:12) — this is the path that ships.
+// The copies in plugins/crash-handler/ are not built; this is the path that ships.
 static std::atomic<bool> g_crashReporterSuppressed{false};
 static std::atomic<bool> g_justSuppressedCrash{false};
 
@@ -1072,7 +1077,11 @@ static volatile LONG s_consoleShutdownPending = 0;
 // chain, which is also the point at which we know there is a handler BEHIND us
 // to hand the event to. Before that, returning FALSE would hand the event to
 // nobody, so we must do the shutdown ourselves.
-static volatile LONG s_deferToGameTeardown = 0;
+static volatile LONG s_gameHandlerBehindUs = 0;
+
+// Non-zero once GameServerLib::Initialize ran: only then can the game's teardown
+// reach GameServerLib::Terminate, which is where a deferred shutdown exits.
+static volatile LONG s_gameServerLibStarted = 0;
 
 // Upper bound on the game's own teardown. Measured at ~3.1s from
 // "Console close signal received" to "Terminated game server"
@@ -1138,12 +1147,17 @@ static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
     return TRUE;
   }
 
+  const bool handlerBehind = s_gameHandlerBehindUs != 0;
+  const bool libStarted = s_gameServerLibStarted != 0;
+  const bool defer = ConsoleCtrlPolicy::ShouldDeferToGame(handlerBehind, libStarted);
   ShutdownReport(EchoVR::LogLevel::Info,
                  "[NEVR.PATCH] shutdown signal received — console ctrl event %lu "
-                 "(CTRL+C; a tty SIGINT arrives here under Wine) defer_to_game=%s",
-                 dwCtrlType, s_deferToGameTeardown != 0 ? "true" : "false");
+                 "(CTRL+C; a tty SIGINT arrives here under Wine) defer_to_game=%s game_handler_behind=%s "
+                 "game_server_lib_started=%s",
+                 dwCtrlType, defer ? "true" : "false", handlerBehind ? "true" : "false",
+                 libStarted ? "true" : "false");
 
-  if (s_deferToGameTeardown != 0) {
+  if (defer) {
     // Return FALSE so the chain continues to the game's own handler, which is
     // what actually unregisters the lobby and closes the ServerDB socket. We
     // exit cleanly at the end of GameServerLib::Terminate(), once that work is
@@ -1155,7 +1169,9 @@ static BOOL WINAPI ConsoleCtrlHandler(DWORD dwCtrlType) {
     return FALSE;
   }
 
-  // Nobody behind us in the chain yet — do it ourselves.
+  // The game's teardown cannot finish this for us — do it ourselves.
+  ShutdownReport(EchoVR::LogLevel::Info, "[NEVR.PATCH] shutting down directly: %s",
+                 ConsoleCtrlPolicy::NoDeferReason(handlerBehind, libStarted));
   PerformGracefulShutdown(0);
   // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
   return TRUE;
@@ -1173,10 +1189,17 @@ void RearmConsoleCtrlHandler() {
         GetLastError());
     return;
   }
-  InterlockedExchange(&s_deferToGameTeardown, 1);
+  InterlockedExchange(&s_gameHandlerBehindUs, 1);
   Log(EchoVR::LogLevel::Info,
       "[NEVR.PATCH] console ctrl handler re-armed to front of chain (CTRL+C reaches us first; the "
-      "game's teardown runs behind us)");
+      "game's handler runs behind us)");
+}
+
+void NotifyGameServerLibStarted() {
+  InterlockedExchange(&s_gameServerLibStarted, 1);
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.PATCH] GameServerLib started — CTRL+C now defers to the game's teardown, which exits at "
+      "GameServerLib::Terminate");
 }
 
 void InstallConsoleCtrlHandler() {
@@ -1185,7 +1208,7 @@ void InstallConsoleCtrlHandler() {
   // the chain is LIFO). It only becomes reachable once RearmConsoleCtrlHandler()
   // moves it to the front. Registering now still matters: it covers a CTRL+C
   // that arrives before the game has installed its own handler, where
-  // s_deferToGameTeardown is 0 and we shut down directly.
+  // the game handler is not behind us and we shut down directly.
   if (SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE) == FALSE) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.PATCH] SetConsoleCtrlHandler install FAILED err=%lu — no CTRL+C/close handling "

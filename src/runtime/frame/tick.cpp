@@ -20,9 +20,9 @@
  * value — no extra clock, and it tracks real time rather than a call count that
  * varies with engine load.
  *
- * Both sites call this one function. They used to have a copy each, and the
- * copies disagreed about something as basic as whether the host was a server
- * (N110). One dispatcher, always.
+ * Both sites call this one function. Separate copies could disagree about
+ * something as basic as whether the host was a server (N110). One dispatcher,
+ * always.
  */
 
 #include "runtime/frame/tick.h"
@@ -40,7 +40,6 @@
 #include "runtime/lifecycle/cli.h"             // g_isServer
 #include "runtime/lifecycle/crash_recovery.h"  // EnsureStackReserve
 #include "runtime/log/builtin_filter.h"
-#include "runtime/patch/mode_patches.h"   // LogBroadcasterHookStats
 
 namespace Frame {
 
@@ -78,7 +77,6 @@ void DispatchPerFrameWork(uint64_t nowUs) {
                 "now dispatched (host=%s)", g_isServer ? "server" : "client");
         }
         if ((t % kLivenessReportEvery) == 0) {
-            LogBroadcasterHookStats();
             // N86-class standing check: name every hook that installed and has
             // never been entered. This is the measurement whose absence let a
             // dead per-frame tick ship for a day.

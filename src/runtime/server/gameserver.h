@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <memory>
+#include <string>
 #include <thread>
 
 #include "runtime/server/constants.h"
@@ -78,6 +79,10 @@ class GameServerLib : public EchoVR::IServerLib {
   void RegisterBroadcasterCallbacks();
   void RegisterTcpCallbacks();
   void UnregisterAllCallbacks();
+
+  // Connects the telemetry streamer when telemetry is enabled and configured (gameserver_telemetry.cpp);
+  // `wsToken` is the ServerDB token, used when no telemetry_token is configured.
+  void ConnectTelemetry(const std::string& wsToken);
 
   // Unregister() body. touchCallbackRegistry=false skips UnregisterAllCallbacks
   // and is the only form allowed off the game thread.

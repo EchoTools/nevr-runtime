@@ -220,14 +220,39 @@ bool ServerContext::FindEntrantSlotBySession(const GUID& session, uint64_t& slot
     return false;
   }
 
+  // Both arrays are sized to the player limit (CNSLobby::StartSessionCBHost), so entrants.count is
+  // capacity, not a live count; the bound only keeps the index inside both arrays. A slot is live
+  // when its join state is 4 (accepted): RemoveEntrant resets a departed slot in place (join state 0),
+  // and its GUID can equal a caller's nil UUID.
+  constexpr uint64_t kJoinStateAccepted = 4;
   const uint64_t limit = m_lobby->playerSessionCount < entrants.count ? m_lobby->playerSessionCount : entrants.count;
   for (uint64_t i = 0; i < limit; i++) {
-    if (std::memcmp(&sessions[i].guid, &session, sizeof(GUID)) == 0) {
+    if (sessions[i].joinState == kJoinStateAccepted && std::memcmp(&sessions[i].guid, &session, sizeof(GUID)) == 0) {
       slot = i;
       return true;
     }
   }
   return false;
+}
+
+uint64_t ServerContext::CountAcceptedEntrants() const {
+  std::shared_lock lock(m_stateMutex);
+
+  if (m_state == ServerState::Uninitialized || m_state == ServerState::Terminated || !m_lobby) {
+    return 0;
+  }
+  const auto& entrants = m_lobby->entrantData;
+  const auto* sessions = m_lobby->playerSessions;
+  if (!sessions || !entrants.items) {
+    return 0;
+  }
+  constexpr uint64_t kJoinStateAccepted = 4;
+  const uint64_t limit = m_lobby->playerSessionCount < entrants.count ? m_lobby->playerSessionCount : entrants.count;
+  uint64_t accepted = 0;
+  for (uint64_t i = 0; i < limit; i++) {
+    if (sessions[i].joinState == kJoinStateAccepted) accepted++;
+  }
+  return accepted;
 }
 
 void ServerContext::SetServerDbPeer(const EchoVR::TcpPeer& peer) {

@@ -107,7 +107,6 @@ subsystems that NEVR annotates.
 | `[NEVR.CRASH]`        | Crash recovery, dump, longjmp                 |
 | `[NEVR.AUTH]`         | Token acquisition, device-code flow, refresh  |
 | `[NEVR.CDN]`          | Asset CDN download and override              |
-| `[NEVR.HTTP]`         | WinHTTP/curl bridge                          |
 | `[NEVR.UPNP]`         | UPnP port mapping                            |
 | `[NEVR.RESOURCE]`     | Resource override / embedded asset injection |
 | `[NEVR.LOGFILTER]`    | The log filter's own health and rate summary |
@@ -514,8 +513,8 @@ form.
 | Context | BEFORE | AFTER |
 | ------- | ------ | ----- |
 | Login injection (N15) | `"[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)"` | `"[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu"` |
-| WebSocket connected | `"[WEBSOCKET] Connected to ServerDB"` | `"[NEVR.WS] websocket connected uri=%s conn=%d"` |
-| WebSocket disconnected | `"[WEBSOCKET] Disconnected from ServerDB (code: %d, reason: %s)"` | `"[WEBSOCKET] Disconnected from ServerDB (code: %u) reconnect_count=%u"` |
+| WebSocket connected | `"[NEVR.SERVERDB] Connected to ServerDB"` | `"[NEVR.WS] websocket connected uri=%s conn=%d"` |
+| WebSocket disconnected | `"[NEVR.SERVERDB] Disconnected from ServerDB (code: %d, reason: %s)"` | `"[NEVR.SERVERDB] Disconnected from ServerDB (code: %u) reconnect_count=%u"` |
 | Login success | `"[NEVR.WS] LOGIN SUCCESS"` | `"[NEVR.WS] login success xpid=%s conn=%d session=%s"` |
 | Login failure | `"[NEVR.WS] LOGIN FAILURE: status=%llu msg=%.*s"` | `"[NEVR.WS] login failed status=%llu message_bytes=%zu"` |
 | Hook failure | `"[wave0] FAILED to hook fcn.0x%llX"` | `"[NEVR.PATCH] hook failed name=%s va=0x%llX expected=%s actual=%s"` |

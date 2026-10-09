@@ -122,7 +122,7 @@ Plugins have their own shared headers in `plugins/common/include/` (`nevr_common
 
 | Module | Output | Purpose |
 | ------ | ------ | ------- |
-| `src/modules/platform-compat/` | *(in `BugSplat64.dll`)* | Schannel TLS modernisation, WinHTTP→curl bridge, Wine `_temp` fix |
+| `src/modules/platform-compat/` | *(in `BugSplat64.dll`)* | Schannel TLS modernisation, MSXML6 pass-through hook, Wine `_temp` fix |
 | `src/modules/token-auth/` | *(in `BugSplat64.dll`)* | Device-code auth, token cache, `TokenAuth_GetToken`/`GetDiscordId` |
 
 ### Shared Libraries (static)
@@ -187,6 +187,7 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 - **Protocol messages**: Symbol IDs in `src/runtime/server/messages.h`. Serialize via protobuf `rtapi::v1::Envelope`.
 - **Protobuf**: Generated from BSR (`buf.build/echotools/nevr-api`) via `just proto`. Never edit `.pb.cc`/`.pb.h` in `gen/` directly.
 - **Global state**: CLI flags as globals in `src/core/globals.h`, set in `src/runtime/lifecycle/cli.cpp`.
+- **Naming**: spellings of the project name, log tags, exports, namespaces, config keys and the frozen `Nvr*` plugin ABI are in `docs/standards/naming.md`; `tools/tests/test_naming.py` enforces the `Nvr` freeze and the project-name spellings.
 - **Local overrides**: `cmake/local.cmake` (include currently commented out in root CMakeLists.txt).
 
 ## ReVault — Reverse Engineering Data Warehouse

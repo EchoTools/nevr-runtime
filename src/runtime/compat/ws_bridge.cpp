@@ -103,6 +103,60 @@ std::optional<LoginFailureDiagnostic> ReadLoginFailureDiagnostic(const std::stri
   memcpy(&statusCode, frame.data() + kEnvelopeHeaderSize + 16, sizeof(statusCode));
   return LoginFailureDiagnostic{statusCode, payloadSize - kLoginFailureFixedPayloadSize};
 }
+
+// The server's NewLocationError (nakama server/evr_pipeline_login.go) puts the line
+// "Select code >>> NN <<<" last; the game's login-failure screen shows only the first lines, so the
+// player never sees the code (#201). When the frame is exactly one LoginFailure whose text has such a
+// line, return the frame with that line moved to the front and the rest of the text after it. Any other
+// frame or text returns nullopt and is forwarded byte-identical.
+std::optional<std::string> MoveCodeLineFirst(const std::string& frame) {
+  if (frame.size() < kEnvelopeHeaderSize + kLoginFailureFixedPayloadSize + 1) return std::nullopt;
+  uint64_t symbol = 0;
+  uint64_t payloadLength = 0;
+  memcpy(&symbol, frame.data() + 8, sizeof(symbol));
+  memcpy(&payloadLength, frame.data() + 16, sizeof(payloadLength));
+  if (symbol != kLoginFailureSymbol || payloadLength != frame.size() - kEnvelopeHeaderSize) return std::nullopt;
+  if (frame.back() != '\0') return std::nullopt;
+
+  const size_t textStart = kEnvelopeHeaderSize + kLoginFailureFixedPayloadSize;
+  const std::string text = frame.substr(textStart, frame.size() - 1 - textStart);
+  if (text.find('\0') != std::string::npos) return std::nullopt;
+
+  std::vector<std::string> lines;
+  size_t begin = 0;
+  while (true) {
+    const size_t end = text.find('\n', begin);
+    lines.push_back(text.substr(begin, end == std::string::npos ? std::string::npos : end - begin));
+    if (end == std::string::npos) break;
+    begin = end + 1;
+  }
+  static const std::string kPrefix = "Select code >>> ";
+  static const std::string kSuffix = " <<<";
+  size_t codeLine = lines.size();
+  for (size_t i = 0; i < lines.size(); ++i) {
+    const std::string& line = lines[i];
+    if (line.size() <= kPrefix.size() + kSuffix.size() || line.compare(0, kPrefix.size(), kPrefix) != 0 ||
+        line.compare(line.size() - kSuffix.size(), kSuffix.size(), kSuffix) != 0) {
+      continue;
+    }
+    const std::string code = line.substr(kPrefix.size(), line.size() - kPrefix.size() - kSuffix.size());
+    if (!code.empty() && code.find_first_not_of("0123456789") == std::string::npos) codeLine = i;
+  }
+  if (codeLine == lines.size() || codeLine == 0) return std::nullopt;
+
+  std::string reordered = lines[codeLine];
+  for (size_t i = 0; i < lines.size(); ++i) {
+    if (i == codeLine) continue;
+    reordered += '\n';
+    reordered += lines[i];
+  }
+  std::string out = frame.substr(0, textStart);
+  out += reordered;
+  out.push_back('\0');
+  const uint64_t newLength = out.size() - kEnvelopeHeaderSize;
+  memcpy(&out[16], &newLength, sizeof(newLength));
+  return out;
+}
 }  // namespace
 
 // ============================================================================
@@ -529,7 +583,7 @@ static void ObserveSocialFrames(const char* direction, int connIdx, const std::s
       }
       // A friend added, accepted, removed or withdrawn: none of these carries presence, so ask the
       // server for the list again; the reply rebuilds the roster (a friend added on the website
-      // used to stay invisible until the next login).
+      // would otherwise stay invisible until the next login).
       if (SocialRoster::IsFriendChangeSymbol(sym) || SocialRoster::IsFriendChange(gameName)) {
         uint64_t friendId = 0;
         if (len >= 16) memcpy(&friendId, payload + 8, sizeof(friendId));
@@ -703,13 +757,13 @@ static std::string BuildLoginRequest(uint64_t discordId, uint64_t platformCode =
   // Platform codes: see PlatformPrefix (1-indexed: STM=1 ... OVR_ORG=4 ... DMO=7).
   uint64_t accountId = discordId;
 
-  // Host facts, MEASURED. Every value in this block used to be a literal —
-  // "cpu":"Wine", "video_card":"Wine D3D12", 4 physical cores, 8 logical,
-  // 16384 MB total, 8192 used — sent as though read from the machine. That is
+  // Host facts, MEASURED. No value in this block is a literal ("cpu":"Wine",
+  // "video_card":"Wine D3D12", 4 physical cores, 8 logical, 16384 MB total,
+  // 8192 used would be sent as though read from the machine). That is
   // worse than sending nothing: absent data is visibly absent, while invented
   // data is indistinguishable from a reading and gets acted on.
   //
-  // Fields this process cannot honestly determine are now sent EMPTY or 0
+  // Fields this process cannot honestly determine are sent EMPTY or 0
   // rather than guessed. video_card and dedicated_gpu_memory have no truthful
   // answer on a headless server with no device enumerated, and network_type
   // was never anything but a guess. Empty is a true statement; "Wine D3D12" is
@@ -880,8 +934,8 @@ void InstallWebSocketBridge() {
             // Don't inject LoginRequest — the session is already logged in.
             if (connIdx >= 2 && g_loginRemoteWs) {
               Log(EchoVR::LogLevel::Info,
-                  "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), sharing login session (no LoginRequest)",
-                  connIdx, static_cast<void*>(&gameWs));
+                  "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p), sharing login session (no LoginRequest)",
+                  connIdx, ConnLabel(connIdx), static_cast<void*>(&gameWs));
               auto pair = std::make_unique<ProxyPair>();
               pair->remoteWs = g_loginRemoteWs;
               pair->remoteOpen = true;
@@ -892,10 +946,10 @@ void InstallWebSocketBridge() {
               ix::WebSocket* gameWsPtr = &gameWs;
 
               // N61: register an independent callback for each matchmaker
-              // connection on the shared remote. Previously matchmaker relied
-              // entirely on the login connection's callback — when login
-              // disconnected and B2/N54 nulled that callback, all matchmaker
-              // server→game message routing silently died.
+              // connection on the shared remote. Relying on the login
+              // connection's callback alone fails: when login
+              // disconnects and B2/N54 nulls that callback, all matchmaker
+              // server→game message routing silently dies.
               g_loginRemoteWs->setOnMessageCallback(GuardWsCallback("ws_bridge.cpp:setOnMessageCallback",
                   [pairPtr, gameWsPtr, connIdx,
                    remoteAddress = static_cast<const ix::WebSocket*>(g_loginRemoteWs.get())](const ix::WebSocketMessagePtr& rmsg) {
@@ -969,8 +1023,8 @@ void InstallWebSocketBridge() {
                 // Allocation failure in the encoder: connect without URL credentials
                 // (Bearer path below) rather than put an unencoded secret on the wire.
                 Log(EchoVR::LogLevel::Error,
-                    "[NEVR.WS] conn=%d could not percent-encode URL credentials; connecting without them",
-                    connIdx);
+                    "[NEVR.WS] conn=%d (%s) could not percent-encode URL credentials; connecting without them",
+                    connIdx, ConnLabel(connIdx));
               }
             }
             // conn>=2 (matchmaker): pnsradmatchmaking uses protobuf, not EchoVR
@@ -1091,7 +1145,8 @@ void InstallWebSocketBridge() {
                       std::lock_guard<std::mutex> lk(g_pairsMutex);
                       pairPtr->remoteOpen = true;
                       const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
-                          "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + "): ", g_remoteUri);
+                          "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + ", " + ConnLabel(connIdx) + "): ",
+                          g_remoteUri);
                       Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
 
                       // Inject LoginRequest on login connections (not config).
@@ -1164,8 +1219,8 @@ void InstallWebSocketBridge() {
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
                         Log(EchoVR::LogLevel::Info,
-                            "[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu",
-                            xpid.c_str(), static_cast<int>(platformCode), connIdx, loginMsg.size());
+                            "[NEVR.WS] login injected xpid=%s platform=%d conn=%d (%s) size=%zu",
+                            xpid.c_str(), static_cast<int>(platformCode), connIdx, ConnLabel(connIdx), loginMsg.size());
                       }
 
                       for (auto& pending : pairPtr->pendingToRemote) {
@@ -1315,10 +1370,20 @@ void InstallWebSocketBridge() {
                           LogSharedFrameDropped(rmsg->str.size());
                           break;
                         }
+                        std::optional<std::string> reordered;
+                        if (rmsg->binary && rsym == kLoginFailureSymbol) {
+                          reordered = MoveCodeLineFirst(rmsg->str);
+                          if (reordered.has_value()) {
+                            Log(EchoVR::LogLevel::Info,
+                                "[NEVR.WS] login failure text reordered: code line moved first bytes=%zu",
+                                reordered->size());
+                          }
+                        }
+                        const std::string& outFrame = reordered.has_value() ? *reordered : rmsg->str;
                         if (rmsg->binary) {
-                          target->sendBinary(rmsg->str);
+                          target->sendBinary(outFrame);
                         } else {
-                          target->sendText(rmsg->str);
+                          target->sendText(outFrame);
                         }
                       }
                       break;
@@ -1360,8 +1425,8 @@ void InstallWebSocketBridge() {
             }
             // Start after insertion so the remote callback can find the pair in g_pairs
             remote->start();
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p)", connIdx,
-                static_cast<void*>(gameWsPtr));
+            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p)", connIdx,
+                ConnLabel(connIdx), static_cast<void*>(gameWsPtr));
             const std::string remoteDiagnostic =
                 LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
             Log(EchoVR::LogLevel::Info, "%s", remoteDiagnostic.c_str());
@@ -1704,6 +1769,14 @@ bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* sta
   if (!diagnostic.has_value()) return false;
   *statusCode = diagnostic->statusCode;
   *messageBytes = diagnostic->messageBytes;
+  return true;
+}
+
+bool TestHook_MoveCodeLineFirst(const std::string& frame, std::string* out) {
+  if (out == nullptr) return false;
+  const std::optional<std::string> reordered = MoveCodeLineFirst(frame);
+  if (!reordered.has_value()) return false;
+  *out = *reordered;
   return true;
 }
 
