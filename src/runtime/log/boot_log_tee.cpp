@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "core/json_escape.h"
 #include "core/logging.h"  // GetRunId (N80)
 
 // ---------------------------------------------------------------------------
@@ -18,49 +19,6 @@ static HANDLE g_boot_handle = INVALID_HANDLE_VALUE;
 // True from Init() to Close(), whether or not the file opened: the boot phase is
 // defined by the loader lock being held, not by the file being writable.
 static std::atomic<bool> g_boot_phase{false};
-
-// ---------------------------------------------------------------------------
-// JSON escape — writes directly into a caller-provided buffer
-// ---------------------------------------------------------------------------
-static int JsonEscape(const char* src, int src_len, char* dst, int dst_size) {
-    int d = 0;
-    for (int i = 0; i < src_len && d < dst_size - 2; ++i) {
-        char c = src[i];
-        switch (c) {
-            case '"':
-                if (d + 2 >= dst_size) goto done;
-                dst[d++] = '\\';
-                dst[d++] = '"';
-                break;
-            case '\\':
-                if (d + 2 >= dst_size) goto done;
-                dst[d++] = '\\';
-                dst[d++] = '\\';
-                break;
-            case '\n':
-                if (d + 2 >= dst_size) goto done;
-                dst[d++] = '\\';
-                dst[d++] = 'n';
-                break;
-            case '\r':
-                if (d + 2 >= dst_size) goto done;
-                dst[d++] = '\\';
-                dst[d++] = 'r';
-                break;
-            case '\t':
-                if (d + 2 >= dst_size) goto done;
-                dst[d++] = '\\';
-                dst[d++] = 't';
-                break;
-            default:
-                dst[d++] = c;
-                break;
-        }
-    }
-done:
-    dst[d] = '\0';
-    return d;
-}
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -159,7 +117,7 @@ void BootLogTee::TeeFprintf(const char* fmt, ...) {
 
     // JSON-escape the message
     char escaped[4096];
-    JsonEscape(msg_buf, msg_len, escaped, sizeof(escaped));
+    JsonEscape::Into(msg_buf, msg_len, escaped, sizeof(escaped));
 
     // Build the JSONL line: {"run":"<id>","level":"info","msg":"<escaped>"}\n
     // N80: the run ID is what lets these lines be joined to the runtime log (which

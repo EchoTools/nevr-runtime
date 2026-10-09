@@ -365,28 +365,70 @@ class VerifyServerTest(unittest.TestCase):
         self.assertEqual(self.run_verify().returncode, 0)
         self.assertEqual(self.run_verify().returncode, 0)
 
-    def test_a_killed_run_is_restored_by_the_next_run_not_mistaken_for_the_original(self):
-        env = dict(self.env, FAKE_WINE_SLEEP="8")  # the orphan outlives SIGKILL briefly, then exits
+    def wait_for_lock_release(self, timeout=30.0) -> float:
+        """Seconds until nothing holds the run lock. SIGKILL stops the shell at once, but a child it had
+        just started (a cp copying the DLL) can outlive it by a moment and, having inherited the lock
+        descriptor, keeps the lock until it ends; a rerun in that moment is refused, correctly (#295)."""
+        started = time.monotonic()
+        while True:
+            with open(self.tmp / "launch.lock", "a") as probe:
+                try:
+                    fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return time.monotonic() - started
+                except OSError:
+                    pass
+            self.assertLess(time.monotonic() - started, timeout, "the killed run's lock was never released")
+            time.sleep(0.02)
+
+    def kill_after_deploy(self, env, also_wait_for=lambda: True):
         process = subprocess.Popen(self.command(), env=env, cwd=self.checkout, stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL)
         try:
             deadline = time.monotonic() + 30
-            while (self.win10 / "BugSplat64.dll").read_bytes() != TEST_DLL:
+            while (self.win10 / "BugSplat64.dll").read_bytes() != TEST_DLL or not also_wait_for():
                 self.assertLess(time.monotonic(), deadline, "the test DLL was never deployed")
-                time.sleep(0.05)
+                time.sleep(0.01)
             process.send_signal(signal.SIGKILL)  # no trap runs: the test DLL and the plugin stay deployed
             process.wait(timeout=30)
         finally:
             if process.poll() is None:
                 process.kill()
+
+    def rerun(self, name="run2"):
+        return subprocess.run([str(self.checkout / "verify-server.sh"), name, "default", "1"], env=self.env,
+                              cwd=self.checkout, capture_output=True, text=True, timeout=60)
+
+    def test_a_killed_run_is_restored_by_the_next_run_not_mistaken_for_the_original(self):
+        # The fake wine's orphan (FAKE_WINE_SLEEP) outlives SIGKILL for 8 s; it must NOT hold the lock.
+        self.kill_after_deploy(dict(self.env, FAKE_WINE_SLEEP="8"))
         self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), TEST_DLL)
+        waited = self.wait_for_lock_release()
+        self.assertLess(waited, 5.0, "the orphaned game kept the run lock")
         # A rerun under ANOTHER name must find and restore the leftovers before deploying again.
-        result = subprocess.run([str(self.checkout / "verify-server.sh"), "run2", "default", "1"], env=self.env,
-                                cwd=self.checkout, capture_output=True, text=True, timeout=60)
+        result = self.rerun()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("restoring files an earlier verify-server.sh run left deployed", result.stdout)
         self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
         self.assertFalse((self.win10 / "plugins/extra.dll").exists())
+
+    def test_a_rerun_while_a_child_of_the_killed_run_is_still_working_is_refused_then_succeeds(self):
+        # A slow cp stands for the child the killed shell had just started: it holds the lock descriptor.
+        slow = self.tmp / "slowbin"
+        slow.mkdir()
+        mark = self.tmp / "cp-started"
+        (slow / "cp").write_text('#!/bin/bash\necho started >> "$FAKE_CP_MARK"\nsleep "${FAKE_CP_DELAY:-0}"\nexec /bin/cp "$@"\n')
+        (slow / "cp").chmod(0o755)
+        env = dict(self.env, FAKE_CP_DELAY="1.5", FAKE_WINE_SLEEP="8", FAKE_CP_MARK=str(mark))
+        env["PATH"] = f"{slow}:{env['PATH']}"
+        # cp 1 saves the DLL, cp 2 deploys it, cp 3 deploys the plugin: kill while cp 3 is running and sleeping.
+        self.kill_after_deploy(env, lambda: mark.exists() and len(mark.read_text().split()) >= 3)
+        refused = self.rerun()
+        self.assertEqual(refused.returncode, 4, refused.stdout + refused.stderr)
+        self.assertIn("holds", refused.stderr)
+        self.wait_for_lock_release()
+        result = self.rerun("run3")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
 
     def test_a_refused_run_leaves_the_running_runs_log_alone(self):
         log = self.tmp / "server-runs/run1/server.log"

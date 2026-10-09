@@ -4,6 +4,8 @@
 #include "runtime/lifecycle/config.h"
 #include "runtime/lifecycle/service_config.h"  // NevrCfgGetFlat (N133 S4a: config.yaml reads)
 #include "runtime/lifecycle/crash_recovery.h"
+#include "runtime/lifecycle/return_to_lobby.h"
+#include "runtime/lifecycle/return_to_lobby_hold.h"
 #include "runtime/lifecycle/initialize.h"
 #include "runtime/patch/mode_patches.h"
 #ifdef NEVR_SCENARIO_CONTROL
@@ -506,6 +508,22 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
             "login bridge. Set services.socket_uri, or services.allow_offline_server: true for an "
             "offline boot");
         break;
+    }
+  }
+
+  // #58: hold the game's return to lobby for an empty server (network.empty_server_ttl_seconds,
+  // default 0 = off). Server only: a client's returns to lobby are the player's.
+  if (g_isServer) {
+    std::string ttlProblem;
+    const uint64_t ttlSeconds =
+        ReturnToLobbyHold::ParseTtlSeconds(NevrCfgGetFlat("nevr_empty_server_ttl_s"), &ttlProblem);
+    if (!ttlProblem.empty()) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.PATCH] network.empty_server_ttl_seconds is %s; using %llu s", ttlProblem.c_str(),
+          static_cast<unsigned long long>(ttlSeconds));
+    }
+    if (!ReturnToLobby::Configure(ttlSeconds)) {
+      Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] empty-server TTL requested but not armed; the server keeps today's behaviour");
     }
   }
 

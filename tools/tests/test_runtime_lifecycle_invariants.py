@@ -269,6 +269,18 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
         self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
 
+    def test_bridge_connection_lines_carry_the_connection_label(self):
+        # Issue #48: only close/disconnect lines named the connection (config/login/matchmaker); the
+        # open, login-injected and game-connected lines gave the bare number.
+        source = strip_comments((ROOT / "src/runtime/compat/ws_bridge.cpp").read_text())
+        for anchor in ("Proxy: game connected (conn=", "login injected xpid=", "Remote open (conn=",
+                       "could not percent-encode URL credentials"):
+            starts = [m.start() for m in re.finditer(re.escape(anchor), source)]
+            self.assertTrue(starts, anchor)
+            for start in starts:
+                statement = source[start:source.index(");", start)]
+                self.assertIn("ConnLabel(", statement, f"{anchor!r} logs a bare connection number")
+
     def test_platform_compat_reports_a_failed_xmlhttp_creation_loudly(self):
         # Issue #242: the pass-through line logged a failed CoCreateInstance (hr=0x80040154) at Info.
         # A failure is Warning or higher; an observe-only hook that fails to attach is a Warning too.
@@ -313,6 +325,22 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertRegex(initialize, r"\bNotifyGameServerLibStarted\s*\(\s*\)")
         boot = (ROOT / "src/runtime/lifecycle/boot.cpp").read_text()
         self.assertNotRegex(boot, r"\bRearmConsoleCtrlHandler\s*\(")
+
+    def test_runtime_schedules_return_to_lobby_through_the_ttl_hold(self):
+        # Issue #58: the ServerDB CODE_ENDED path calls ReturnToLobby::Request (not the game function
+        # directly) and the game thread polls the hold once per Update.
+        server = strip_comments((ROOT / "src/runtime/server/gameserver.cpp").read_text())
+        call = extract_braced_function(server, "static void CallScheduleReturnToLobby(")
+        self.assertIn("ReturnToLobby::Request(", call)
+        self.assertNotIn("EchoVR::NetGameScheduleReturnToLobby", call)
+        update = extract_braced_function(server, "VOID GameServerLib::Update(")
+        self.assertRegex(update.lstrip("{ \n"), r"^ReturnToLobby::Poll\(\)")
+        boot = strip_comments((ROOT / "src/runtime/lifecycle/boot.cpp").read_text())
+        self.assertRegex(boot, r"ReturnToLobby::Configure\(")
+        glue = strip_comments((ROOT / "src/runtime/lifecycle/return_to_lobby.cpp").read_text())
+        self.assertIn("0x1A89F0", glue)
+        self.assertRegex(glue, r"memcmp\(target, kPrologue")
+        self.assertLess(glue.index("memcmp(target, kPrologue"), glue.index("PatchDetour("))
 
     def test_both_registration_sites_use_the_shared_envelope_builder(self):
         # Issue #46: the initial registration and the post-reconnect re-registration built the same
