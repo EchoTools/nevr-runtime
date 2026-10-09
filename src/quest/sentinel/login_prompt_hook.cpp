@@ -151,6 +151,8 @@ bool LatchHoldsLive() noexcept {
   if (self == nullptr || hash == 0) return false;
   const bool same = HashLiveBlock(BlockOfConst(self)) == hash;
   if (same) return true;
+  // The byte loads above are relaxed: on arm64 they may not be reordered after the sequence load below.
+  std::atomic_thread_fence(std::memory_order_acquire);
   // A mismatch while one of our own writes began or finished in the meantime is our write, not a genuine one.
   return g_writeSeq.load(std::memory_order_acquire) != before;
 }
