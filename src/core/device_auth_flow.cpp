@@ -36,13 +36,18 @@ DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& 
     uiResult = ops.show_open_failure(code, login_url, browserResult);
   }
 
+  // A code that runs out is the end of the login on Windows, and routine on Quest, which asks
+  // for a new code: the level says which.
+  const LogLevel runOutLevel = ops.renews_expired_codes ? LogLevel::Info : LogLevel::Warning;
+  const auto timedOut = [&] { log(runOutLevel, "[NEVR.AUTH] Device auth timed out after 5 minutes"); };
+
   const bool expiredAfterBrowserOrUi = ops.now() >= deadline;
   if (browserResult <= kBrowserOpenAcceptedAbove && uiResult == 0) {
     log(LogLevel::Error, "[NEVR.AUTH] device authorization stopped because the browser could not be opened");
     return none;
   }
   if (expiredAfterBrowserOrUi) {
-    log(LogLevel::Warning, "[NEVR.AUTH] Device auth timed out after 5 minutes");
+    timedOut();
     return none;
   }
 
@@ -50,7 +55,7 @@ DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& 
   while (true) {
     const DeviceFlowOps::Clock::time_point beforeSleep = ops.now();
     if (beforeSleep >= deadline) {
-      log(LogLevel::Warning, "[NEVR.AUTH] Device auth timed out after 5 minutes");
+      timedOut();
       return none;
     }
     const DeviceFlowOps::Clock::duration remaining = deadline - beforeSleep;
@@ -62,13 +67,16 @@ DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& 
       return none;
     }
     if (ops.now() >= deadline) {
-      log(LogLevel::Warning, "[NEVR.AUTH] Device auth timed out after 5 minutes");
+      timedOut();
       return none;
     }
 
     const TokenAuth::DevicePollResponse response = ops.poll(code);
-    if (ops.now() >= deadline) {
-      log(LogLevel::Warning, "[NEVR.AUTH] Device auth timed out after 5 minutes");
+    // The server deletes a verified code when it answers this poll, so a "verified" that arrives
+    // after the deadline is still the player's login: it is taken. Anything else after the
+    // deadline ends the code.
+    if (response.status != TokenAuth::DevicePollStatus::Verified && ops.now() >= deadline) {
+      timedOut();
       return none;
     }
 
@@ -80,7 +88,11 @@ DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& 
         return ok;
       }
       case TokenAuth::DevicePollStatus::Expired:
-        log(LogLevel::Warning, "[NEVR.AUTH] Device code expired. Please restart to try again.");
+        if (ops.renews_expired_codes) {
+          log(LogLevel::Info, "[NEVR.AUTH] Device code expired before a sign-in; a new code will be requested");
+        } else {
+          log(LogLevel::Warning, "[NEVR.AUTH] Device code expired. Please restart to try again.");
+        }
         return none;
       case TokenAuth::DevicePollStatus::Pending:
         ++pollCount;

@@ -65,8 +65,12 @@ them. `src/quest/auth/` holds the Android adapters:
     was involved: the link could not be delivered, or the server refused a poll with a 4xx.
   - A code that runs out (the server answers `expired`, or its five minutes pass) is replaced: the
     state stays `AwaitingUser`, a new code is requested (no sooner than 30 s after the previous
-    request) and shown in place of the old one, and the prompt is not taken down in between. This
-    repeats until the player signs in, a poll is refused, or the game stops.
+    request) and shown in place of the old one, and the prompt is not taken down in between. After
+    `Session::kMaxCodesPerLogin` (6) codes without a sign-in no more are requested (the server does
+    not rate-limit them): the player is told to restart the game and the login is `Failed`, final.
+  - A poll that answers `verified` is taken even when it returns after the code's deadline: the
+    server deletes the code when it hands out the tokens (`evr_device_auth.go`, the verified branch
+    of the poll RPC).
   - While the player holds a link, poll failures that are transient (no connection, 5xx, 408, 429)
     are waited out until the code's own five-minute deadline at the normal poll interval.
   - After login, a refresh token that has expired or that the server refuses publishes `Expired`,
@@ -90,55 +94,74 @@ when it fails and never the code:
 
 | Mechanism | What the player gets | Line |
 | --- | --- | --- |
-| `file` | `device_login.txt` (URL, code, instructions, expiry) under the external files dir; when it cannot be written, the direct link in logcat | `written` / `write_failed` |
-| `game_error_text` | the prompt as the game's own login-error text | `published` / `refused` / `withdrawn` |
+| `file` | `device_login.txt` (URL, code, instructions, expiry) under the external files dir | `written` / `write_failed` (with the page URL, not the code) |
+| `game_error_text` | the prompt as the game's own login-error screen | `published` (`what`: `code`, `signed_in`, `timed_out`) / `refused` / `withdrawn` |
 
 There is no Android intent, toast or notification: the sentinel holds no `JavaVM` or activity
 object (it is loaded as a `DT_NEEDED` dependency, so its `JNI_OnLoad` is not called).
 
-The game-text path, measured on the pinned `libr15.so` and `libpnsovr.so`:
+What the game does, measured on the pinned `libr15.so` and `libpnsovr.so`:
 
 - A login that fails before it is sent (`CNSOVRUser::UpdateInternal`, `libpnsovr.so` `0x1edb64`
   to `0x1edb7c`: code 500, "Log in request failed: One or more prerequisites are missing") calls
-  `LogInFailed` through the vtable; `CNSOVRUser::LogInFailed` (`0x1ec5d0`) tail-calls
-  `CNSUser::LogInFailed`, which logs `[LOGIN] %s` and calls the login-failed delegate. A server
+  the vtable slot at `0x6a12a0`, `CNSOVRUser::LogInFailed` (`0x1ec5d0`), which tail-calls
+  `CNSUser::LogInFailed`; that logs `[LOGIN] %s` and calls the login-failed delegate. A server
   `SNSLogInFailure` reaches the same `CNSUser::LogInFailed` through `LogInFailureCB`
-  (`libr15.so` `0x1933928`).
-- `CR15NetGame::LogInFailedCB` (`libr15.so` `0x125f298`, address taken by the `GLOB_DAT` at
-  `0x3708518`) calls `CR15NetGame::SetDelimitedErrorMessage(char const*)` through PLT `0xf23510`,
-  whose `R_AARCH64_JUMP_SLOT` is `0x36e9170`, then `SwitchTo(-0x5e)`. The other two callers of
-  that PLT entry are `LoginRemovedCB` (`0x125f9b4`) and `LocalUserProfileErrorCB` (`0x126d588`),
-  both followed by the same `SwitchTo`.
-- `SetDelimitedErrorMessage` (`0x125f768`) splits the message on `'\n'` into at most four lines
-  and calls `SetErrorMessage`, which copies each line into a 64-byte buffer (63 characters) at
-  `CR15NetGame+0x63309`, logs `[NETGAME] %s %s %s %s`, and `CR15NetErrorMessageExpression`
-  (`0x23225d0`) hands those buffers to the UI script. Which screen renders the expression is in the
-  game's assets, not in the ELF.
+  (`libr15.so` `0x1933928`). The local texts ("Log in request failed: " plus "One or more
+  prerequisites are missing", "Failed to get user proof", "Client error", "Cryptography error",
+  "Service unavailable") are referenced only on those login paths.
+- `CR15NetGame::LogInFailedCB` (`libr15.so` `0x125f298`, whose address `CR15NetGame::Initialize`
+  loads from the `GLOB_DAT` at `0x3708518`, at `0x12861c0`) calls `SetDelimitedErrorMessage` through PLT `0xf23510`
+  (`R_AARCH64_JUMP_SLOT` `0x36e9170`), then `SwitchTo(-0x5e)`. The other two callers are
+  `LoginRemovedCB` (`0x125f9b4`, which acts only when the state is 3 or higher, logged in) and
+  `LocalUserProfileErrorCB` (`0x126d588`, only in state 2, logging in).
+- `SetDelimitedErrorMessage` (`0x125f768`) splits the message on `'\n'` into at most four lines and
+  calls `SetErrorMessage`, which writes the error block at `CR15NetGame+0x63308` (a byte that is 0
+  for one line and 1 for two or four, then four 64-byte lines), logs `[NETGAME] %s %s %s %s`, and
+  builds a JSON record of the lines that it hands to a logger through an indirect call
+  (`0x12413f4`). `CR15NetErrorMessageExpression`
+  (`0x23225d0`) copies the block to the UI script.
+- The state is the `int` at offset 0 (`SwitchTo`, `0x125b8b4`); `GameStateString` (`0x124d478`)
+  names 2 "logging in", 3 "logged in", -94 "login failed", 0 "logged out". Entering -94 runs
+  `ScheduleQuitOnError`, whose deferred `QuitOnError` (`0x12713f8`) ends multiplayer and sends the
+  game space a component event. A new login is started by the UI script
+  (`CR15NetBeginLoginNode::Enter`, `0x231c118`, calls `BeginLogIn`), not by `CR15NetGame`. The
+  only `SwitchTo(0)` is in `CR15NetGame::LogOut` (`0x1289168`), whose only caller in `libr15.so` is
+  `~CR15NetGame` (`0x128824c`): "login failed -> logged out" is the net game being destroyed.
+  Which screen renders the error block, and whether the UI re-reads it while that screen is up, is
+  in the game's assets, not in the ELF.
 
-The token-auth worker writes the four-line prompt (`FormatGamePromptText`) to the prompt board
-(`auth/prompt_board.h`, a sequence-locked fixed buffer built without exceptions) and withdraws it
-when the login ends. The sentinel installs a GOT hook on `0x36e9170`
-(`sentinel/login_prompt_hook.h`): while the board holds a prompt, the game's message is replaced by
-it; otherwise it passes unchanged. The hook runs once per failed login, takes no lock and does not
-log; its counters `login_prompt_text_shown` and `login_prompt_text_passed` are reported by
-`hook_report.h`. The game's own `[NETGAME]` line then carries the prompt, code included. The host
-tests are `src/quest/tests/login_prompt_hook_test.cpp` and the presenter and session tests in
-`auth_core_test.cpp`; `got_pinned_test.cpp` resolves the slot in the pinned `libr15.so`.
+How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`):
+
+- Token auth writes the prompt text to the prompt board, a sequence-locked fixed buffer built
+  without exceptions, in one of two modes: `prompt` (the code, or, after the last code, "Sign-in
+  timed out ... Restart the game to get a new code") or `notice` ("Signed in to EchoVRCE.", after
+  a sign-in).
+- A GOT hook on `SetDelimitedErrorMessage` lets the game store and log its own message first, so
+  the code never passes through the game's logging. If the game was logging in (state 2), the
+  message is one of the local texts above (a server-sent message, such as a ban or a suspension,
+  is never replaced) and the board holds a `prompt`, it checks that the block holds the game's
+  message and writes the prompt's lines over it, saving the game's block.
+- A GOT hook on `CR15NetGame::Update` (`0x1294b40`, `R_AARCH64_JUMP_SLOT` `0x36e05f8`, called once
+  per game update from `CR15Game::UpdateGame` at `0x11fb5cc`) rewrites that block while the same
+  object is still in -94 and the board has changed: a new code, the signed-in notice, the
+  timed-out text, or the game's saved block when the board is withdrawn. Every later login
+  failure writes the current text again.
+- Neither hook logs or takes a lock. Their eight counters are `login_prompt_text_shown`,
+  `_text_refreshed`, `_text_kept`, `_text_not_local`, `_board_busy`, `_layout_mismatch` and the two
+  thunks' fault counters; installing logs one `login_prompt_install` line.
+
+Exposure of the device code. It is shown to the player by design and is written to
+`device_login.txt` on `/sdcard`, readable by apps with storage access, until the login ends (or,
+after a crash, until the next start). No log line carries it, the game's included. While it lives
+(single use, five minutes) it is also the poll credential: whoever polls it after the player
+verifies receives the tokens. The verify RPC signs the code in to the account of whoever calls it
+(`DeviceAuthVerifyRpc` in `evr_device_auth.go` uses the caller's user id), so someone who reads
+the code can make this headset sign in to their own account, not take over the player's. Those
+limits are why the code is shown on screen and kept in that file, and why it is kept out of logs.
 
 Nothing here holds the game's login while the player signs in; that belongs to whatever intercepts
-the game's login request. The prompt is shown each time that login fails while the board holds it.
-
-Linking token auth into the sentinel brings OpenSSL and libcurl with it (the sentinel grows from
-about 1.8 MB to about 35 MB unstripped). `libr15.so`, `libpnsrad.so`, `libpnsovr.so` and
-`libpnsradmatchmaking.so` each export about 2411 OpenSSL and libcurl symbols (OpenSSL 3.0.0-dev,
-libcurl 7.68.0) and have the sentinel as `DT_NEEDED`. The sentinel therefore keeps
-`-Wl,--exclude-libs,ALL` and exports only `JNI_OnLoad` and `nevr_sentinel_marker`
-(`TestExportAllowlist`): in a probe, a sentinel-like library linked with the flag exported 2 symbols
-and had no PLT/GOT relocation bound to OpenSSL or libcurl, and without it exported 12130 and bound
-1367. That the flag keeps the sentinel's OpenSSL calls from resolving into the game's older copy
-is an inference from the probe, not run on a device. `just verify` fails if the sentinel links
-`nevr_quest_token_auth` without the flag or without `TestExportAllowlist`; run `just test-android`
-on the built artifact.
+the game's login request.
 
 `sentinel::GotHook` (`sentinel/got_hook.{h,cpp}`) replaces the GOT slot a module uses for a
 symbol it resolves at load time. It cannot hook an arbitrary internal function of `libr15.so`.
@@ -246,9 +269,10 @@ The sentinel exports only `nevr_sentinel_marker` and `JNI_OnLoad` (`TestExportAl
 once into `nevr_quest_got_hook`, which every Quest target links (`TestBackendCompiledOnce`).
 
 `sentinel/pinned_targets.h` holds the targets and callback types for the pinned artifact:
-`clock_gettime` and `CR15NetGame::SetDelimitedErrorMessage` (both installed by `entry.cpp`),
+`clock_gettime`, `CR15NetGame::SetDelimitedErrorMessage` and `CR15NetGame::Update` (installed by
+`entry.cpp`),
 `CJson::TString` in both libraries, and the `SNSConfigRequestv24Send` and `GLOB_DAT` slots as
-fixtures. Only `clock_gettime` and `SetDelimitedErrorMessage` are installed.
+fixtures. Only `clock_gettime`, `SetDelimitedErrorMessage` and `CR15NetGame::Update` are installed.
 `SNSConfigRequestv24Send` has no thunk because its return type is not established.
 
 ## Architecture

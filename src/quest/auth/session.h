@@ -81,13 +81,22 @@ struct LoginPrompt {
   uint64_t expires_unix = 0;
 };
 
+// How a device login that showed the player a prompt ended, when that is worth telling them.
+enum class LoginOutcome {
+  SignedIn,  // the player signed in
+  TimedOut,  // every code ran out (Session::kMaxCodesPerLogin); no more are requested
+};
+
 // How the player is told where to log in. Present returns a value above
-// nevr::auth::kBrowserOpenAcceptedAbove when the prompt was delivered, 0 otherwise.
+// nevr::auth::kBrowserOpenAcceptedAbove when the prompt was delivered, 0 otherwise. Clear takes the
+// prompt down; Conclude replaces it with what the player needs to know about the outcome (by
+// default it just takes it down).
 class LinkPresenter {
  public:
   virtual ~LinkPresenter() = default;
   virtual intptr_t Present(const LoginPrompt& prompt) = 0;
   virtual void Clear() = 0;
+  virtual void Conclude(LoginOutcome) { Clear(); }
 };
 
 // Expired: the access token (or the refresh token behind it) is dead and no replacement
@@ -168,6 +177,14 @@ class Session {
   // The shortest time between two device-code requests of one RunDeviceLogin, so a server that
   // calls every code expired at once is not asked for codes in a tight loop.
   static constexpr std::chrono::seconds kMinCodeInterval{30};
+
+ public:
+  // How many codes one device login shows before it stops asking (about 30 minutes of five-minute
+  // codes). The server does not rate-limit code requests, so the client bounds them; after the
+  // last one the player is told to restart the game and the login ends Failed (final).
+  static constexpr unsigned kMaxCodesPerLogin = 6;
+
+ private:
   // Ok; Stopped; Recoverable: Failed for now, try again later; Final: do not try again.
   enum class LoginEnd { Ok, Stopped, Recoverable, Final };
   LoginResult TryCachedLogin(CachedAuthToken& auth, int attempts);

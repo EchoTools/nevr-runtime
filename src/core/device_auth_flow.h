@@ -37,6 +37,9 @@ struct DeviceFlowOps {
   std::function<void(LogLevel, const std::string&)> log;
   // Optional: true once the flow should stop (the game is closing while it waits, #37).
   std::function<bool()> cancelled;
+  // True when the caller answers a code that runs out with a new one (the Quest session does):
+  // the expiry and deadline lines then say so, at Info, instead of asking the player to restart.
+  bool renews_expired_codes = false;
 };
 
 struct DeviceFlowResult {
@@ -46,7 +49,8 @@ struct DeviceFlowResult {
 
 // `login_url` is the page the player opens, without the code ("?code=<code>" is
 // appended). Returns verified=false for every non-success ending, having logged
-// which one. Requires now, request_device_code, open_browser, show_open_failure,
+// which one. A poll that answers "verified" is honoured even when it returns after the
+// five-minute deadline: the server hands the tokens out once and then deletes the code. Requires now, request_device_code, open_browser, show_open_failure,
 // poll, sleep and log; returns unverified (and logs if it can) when one is missing.
 DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& login_url);
 

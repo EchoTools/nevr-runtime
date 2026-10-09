@@ -3,15 +3,17 @@
 // a FanOutPresenter that tries each mechanism independently, so no single one has to work:
 //
 //   file             device_login.txt under the external files dir (FileLinkPresenter,
-//                    file_store.h), plus the logcat line when that file cannot be written.
-//   game_error_text  the text the game shows when its login fails: the prompt is published on the
-//                    prompt board (prompt_board.h) and the sentinel's hook on
-//                    CR15NetGame::SetDelimitedErrorMessage puts it in place of the game's own
-//                    message while the board holds it (src/quest/sentinel/login_prompt_hook.h).
+//                    file_store.h).
+//   game_error_text  the game's login-error screen: the text is published on the prompt board
+//                    (prompt_board.h); the sentinel's hooks (src/quest/sentinel/login_prompt_hook.h)
+//                    write it over the game's message when a local login failure happens while the
+//                    game is logging in, and keep that screen current while the game stays in
+//                    "login failed" (a new code, then "signed in" or "timed out").
 //
 // Every mechanism logs one JSON line per attempt: {"event":"login_prompt","mechanism":...,
 // "result":...,"why":...}. The device code is never in those lines.
 
+#include "quest/auth/prompt_board.h"
 #include "quest/auth/session.h"
 
 #include <nlohmann/json.hpp>
@@ -21,23 +23,33 @@
 
 namespace nevr::quest_auth {
 
+// What the game's login-error screen says once the player has signed in (refreshes a screen that
+// shows a prompt; Mode::kNotice), and once every code of a login has run out (Mode::kPrompt).
+inline constexpr char kSignedInText[] =
+    "Signed in to EchoVRCE.\nThe game's next login attempt uses this sign-in.";
+inline constexpr char kTimedOutText[] =
+    "Sign-in timed out: no code was entered for 30 minutes.\nRestart the game to get a new code.";
+
 // The four lines the game's login-error text shows, '\n'-separated, each at most
 // prompt_board::kMaxLineChars characters (the game truncates longer lines). The URL is shown
 // without its scheme. Returns false and sets `why` ("url_too_long", "code_too_long",
 // "code_missing", "newline_in_prompt") when the prompt cannot be shown whole.
 bool FormatGamePromptText(const LoginPrompt& prompt, std::string& out, std::string& why);
 
-// Publishes the prompt on the prompt board while the player is asked to sign in and withdraws it
-// when the login ends. Present returns accepted only when the text was published; whether the game
-// then shows it depends on the game reaching its login-error screen, which the sentinel's hook
-// counters record (login_prompt_text_shown).
+// Publishes the prompt on the prompt board while the player is asked to sign in; on the outcome it
+// publishes the signed-in notice or the timed-out text, and Clear withdraws whatever is there.
+// Present returns accepted only when the text was published; whether the game then shows it
+// depends on the game reaching its login-error screen, which the sentinel's hook counters record
+// (login_prompt_text_shown, login_prompt_text_refreshed).
 class GameTextPresenter : public LinkPresenter {
  public:
   explicit GameTextPresenter(nevr::auth::LogSink log);
   intptr_t Present(const LoginPrompt& prompt) override;
   void Clear() override;
+  void Conclude(LoginOutcome outcome) override;
 
  private:
+  bool Publish(const std::string& text, prompt_board::Mode mode, const char* what);
   nevr::auth::LogSink log_;
 };
 
@@ -53,6 +65,7 @@ class FanOutPresenter : public LinkPresenter {
   FanOutPresenter(std::vector<Mechanism> presenters, nevr::auth::LogSink log);
   intptr_t Present(const LoginPrompt& prompt) override;
   void Clear() override;
+  void Conclude(LoginOutcome outcome) override;
 
  private:
   std::vector<Mechanism> presenters_;
