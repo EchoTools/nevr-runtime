@@ -113,6 +113,10 @@ class ServerContext {
   // false when not initialized, the array is absent, or nothing matches.
   bool FindEntrantSlotBySession(const GUID& session, uint64_t& slot) const;
 
+  // Number of player sessions whose join state is 4 (accepted): the players actually in the session.
+  // GetEntrantCount() is the array capacity, not this. 0 when not initialized.
+  uint64_t CountAcceptedEntrants() const;
+
   // ServerDB peer (exclusive lock for write)
   void SetServerDbPeer(const EchoVR::TcpPeer& peer);
   EchoVR::TcpPeer GetServerDbPeer() const;
