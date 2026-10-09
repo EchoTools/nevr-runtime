@@ -7,6 +7,8 @@
 #include "core/auth_token_model.h"
 #include "core/device_auth_flow.h"
 #include "quest/auth/file_store.h"
+#include "quest/auth/prompt_board.h"
+#include "quest/auth/prompt_presenters.h"
 #include "quest/auth/quest_token_auth.h"
 #include "quest/auth/session.h"
 #include "quest/tests/mini_test.h"
@@ -835,8 +837,10 @@ TEST(link_file_holds_url_code_instructions_and_expiry_and_is_cleared) {
   CHECK(lines[2].find("sign in with Discord") != std::string::npos);
   CHECK(lines[2].find("https://login.test/device?code=ABCD-EFGH") != std::string::npos);
   CHECK_EQ(lines[3], std::string("Expires: 2027-01-15T08:05:00Z (unix 1800000300)"));
-  // One Info line: that it was written, and where. Never the code.
-  CHECK_EQ(log.Count(LogLevel::Info, "login link written for the player path=" + path), size_t(1));
+  // One Info JSON line: that it was written, and where. Never the code.
+  CHECK_EQ(log.Count(LogLevel::Info, R"({"event":"login_prompt","mechanism":"file","path":")" + path +
+                                         R"(","result":"written"})"),
+           size_t(1));
   CHECK(log.All().find("ABCD-EFGH") == std::string::npos);
   p.Clear();
   CHECK(!std::filesystem::exists(path));
@@ -867,9 +871,152 @@ TEST(an_unwritable_link_directory_is_an_error_and_the_link_goes_to_the_log_inste
   LogCapture log;
   FileLinkPresenter p("/proc/nevr-no-such-dir/device_login.txt", log.Sink());
   CHECK(p.Present(SamplePrompt()) > kBrowserOpenAcceptedAbove);  // the login goes on
-  CHECK_EQ(log.Count(LogLevel::Error, "could not write the login link file"), size_t(1));
+  CHECK_EQ(log.Count(LogLevel::Error, R"("mechanism":"file","path":"/proc/nevr-no-such-dir/device_login.txt","result":"write_failed")"),
+           size_t(1));
   CHECK_EQ(log.Count(LogLevel::Info, "login link (file not written): https://login.test/device?code=ABCD-EFGH"), size_t(1));
-  CHECK_EQ(log.Count(LogLevel::Info, "login link written"), size_t(0));
+  CHECK_EQ(log.Count(LogLevel::Info, R"("result":"written")"), size_t(0));
+}
+
+// ---------------------------------------------------------------- in-game prompt (#239)
+std::vector<std::string> SplitLines(const std::string& text) {
+  std::vector<std::string> lines;
+  std::stringstream in(text);
+  for (std::string l; std::getline(in, l);) lines.push_back(l);
+  return lines;
+}
+
+std::string BoardText() {
+  char out[prompt_board::kCapacity + 1];
+  return prompt_board::Copy(out, sizeof(out)) ? std::string(out) : std::string();
+}
+
+TEST(the_game_prompt_is_four_lines_the_game_can_hold_with_the_url_and_the_code) {
+  LoginPrompt p = SamplePrompt();
+  p.url = "https://echovrce.com/login/device";
+  p.code = "ABCDEFGHI";
+  std::string text, why;
+  CHECK(FormatGamePromptText(p, text, why));
+  CHECK(why.empty());
+  const std::vector<std::string> lines = SplitLines(text);
+  CHECK_EQ(lines.size(), prompt_board::kMaxLines);
+  for (const std::string& l : lines) CHECK(l.size() <= prompt_board::kMaxLineChars);
+  CHECK_EQ(lines[1], std::string("echovrce.com/login/device"));  // what the player types, no scheme
+  CHECK_EQ(lines[2], std::string("and enter the code ABCDEFGHI"));
+  CHECK(text.size() <= prompt_board::kCapacity);
+}
+
+TEST(a_game_prompt_the_game_would_cut_short_is_refused_with_the_reason) {
+  std::string text, why;
+  LoginPrompt longUrl = SamplePrompt();
+  longUrl.url = "https://" + std::string(64, 'u');
+  CHECK(!FormatGamePromptText(longUrl, text, why));
+  CHECK_EQ(why, std::string("url_too_long"));
+  LoginPrompt longCode = SamplePrompt();
+  longCode.code = std::string(45, 'C');
+  CHECK(!FormatGamePromptText(longCode, text, why));
+  CHECK_EQ(why, std::string("code_too_long"));
+  LoginPrompt noCode = SamplePrompt();
+  noCode.code.clear();
+  CHECK(!FormatGamePromptText(noCode, text, why));
+  CHECK_EQ(why, std::string("code_missing"));
+  LoginPrompt newline = SamplePrompt();
+  newline.code = "AB\nCD";
+  CHECK(!FormatGamePromptText(newline, text, why));
+  CHECK_EQ(why, std::string("newline_in_prompt"));
+}
+
+TEST(the_game_text_presenter_publishes_the_prompt_and_withdraws_it_logging_json_without_the_code) {
+  prompt_board::Withdraw();
+  LogCapture log;
+  GameTextPresenter p(log.Sink());
+  CHECK(p.Present(SamplePrompt()) > kBrowserOpenAcceptedAbove);
+  const std::string shown = BoardText();
+  CHECK(shown.find("login.test/device") != std::string::npos);
+  CHECK(shown.find("ABCD-EFGH") != std::string::npos);
+  CHECK_EQ(log.Count(LogLevel::Info, R"("mechanism":"game_error_text")"), size_t(1));
+  CHECK_EQ(log.Count(LogLevel::Info, R"("result":"published")"), size_t(1));
+  CHECK(log.All().find("ABCD-EFGH") == std::string::npos);
+  for (const std::string& line : log.lines) CHECK(nlohmann::json::parse(line).is_object());
+  p.Clear();
+  CHECK(BoardText().empty());
+  CHECK_EQ(log.Count(LogLevel::Info, R"("result":"withdrawn")"), size_t(1));
+  p.Clear();  // nothing published: no second line
+  CHECK_EQ(log.Count(LogLevel::Info, R"("result":"withdrawn")"), size_t(1));
+}
+
+TEST(a_prompt_the_game_cannot_show_is_refused_and_takes_any_older_code_off_the_board) {
+  prompt_board::Withdraw();
+  LogCapture log;
+  GameTextPresenter p(log.Sink());
+  CHECK(p.Present(SamplePrompt()) > kBrowserOpenAcceptedAbove);
+  LoginPrompt longUrl = SamplePrompt();
+  longUrl.url = "https://" + std::string(64, 'u');
+  CHECK_EQ(p.Present(longUrl), intptr_t(0));
+  CHECK(BoardText().empty());  // the old code is not left on screen
+  CHECK_EQ(log.Count(LogLevel::Error, R"("result":"refused","why":"url_too_long")"), size_t(1));
+}
+
+class ThrowingPresenter : public LinkPresenter {
+ public:
+  intptr_t Present(const LoginPrompt&) override { throw std::runtime_error("disk on fire"); }
+  void Clear() override { throw std::runtime_error("still on fire"); }
+};
+
+TEST(the_fan_out_reaches_every_mechanism_even_when_one_throws) {
+  LogCapture log;
+  ThrowingPresenter broken;
+  FakePresenter working;
+  FanOutPresenter fan({{"file", &broken}, {"game_error_text", &working}}, log.Sink());
+  CHECK(fan.Present(SamplePrompt()) > kBrowserOpenAcceptedAbove);
+  CHECK_EQ(working.presented.load(), 1);
+  CHECK_EQ(log.Count(LogLevel::Error, R"("mechanism":"file","result":"failed","why":"disk on fire")"), size_t(1));
+  fan.Clear();
+  CHECK_EQ(working.cleared.load(), 1);
+  CHECK_EQ(log.Count(LogLevel::Error, R"("result":"clear_failed")"), size_t(1));
+  // Nothing accepted: not delivered.
+  FakePresenter refusing;
+  refusing.deliver = false;
+  FanOutPresenter none({{"file", &broken}, {"game_error_text", &refusing}}, nullptr);
+  CHECK_EQ(none.Present(SamplePrompt()), intptr_t(0));
+}
+
+TEST(while_the_player_is_asked_to_sign_in_the_game_text_holds_the_current_code_and_is_withdrawn_at_ready) {
+  prompt_board::Withdraw();
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  LogCapture log;
+  auto requests = std::make_shared<std::atomic<int>>(0);
+  auto second_verifies = std::make_shared<std::atomic<bool>>(false);
+  http.handler = [requests, second_verifies](const std::string& endpoint, const std::string& body) -> HttpResponse {
+    if (endpoint == "request") return Ok({{"code", ++*requests == 1 ? "FIRSTCODE" : "SECONDCODE"}});
+    if (body.find("FIRSTCODE") != std::string::npos) return Ok({{"status", "expired"}});
+    if (!*second_verifies) return Ok({{"status", "pending"}});
+    return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 3600)}, {"refresh_token", "rt"},
+               {"refresh_token_expires_in", 2592000}});
+  };
+  const std::string dir = TempDir();
+  FileLinkPresenter file(JoinPath(dir, "device_login.txt"), log.Sink());
+  GameTextPresenter game(log.Sink());
+  FanOutPresenter fan({{"file", &file}, {"game_error_text", &game}}, log.Sink());
+  Session s(TestConfig(), http, clock, store, fan, log.Sink());
+  s.Start();
+  CHECK(WaitUntil([&] { return BoardText().find("FIRSTCODE") != std::string::npos; }));
+  CHECK(s.Get().readiness == Readiness::AwaitingUser);
+  clock.Allow(2);  // the poll that hears "expired", then the wait before the next code
+  CHECK(WaitUntil([&] { return BoardText().find("SECONDCODE") != std::string::npos; }));
+  CHECK(s.Get().readiness == Readiness::AwaitingUser);
+  *second_verifies = true;
+  clock.Allow(1);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK(BoardText().empty());  // signed in: the game's own messages are back
+  CHECK(!std::filesystem::exists(JoinPath(dir, "device_login.txt")));
+  CHECK(log.All().find("FIRSTCODE") == std::string::npos);
+  CHECK(log.All().find("SECONDCODE") == std::string::npos);
+  CHECK_EQ(log.Count(LogLevel::Info, R"("mechanism":"game_error_text","result":"published")"), size_t(2));
+  CHECK_EQ(log.Count(LogLevel::Info, R"("mechanism":"file","path")"), size_t(2));
+  s.Stop();
+  std::filesystem::remove_all(dir);
 }
 
 TEST(the_session_hands_the_presenter_url_code_link_and_expiry_and_clears_a_stale_file_at_start) {

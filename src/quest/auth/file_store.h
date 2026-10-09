@@ -46,9 +46,10 @@ class FileCredentialStore : public CredentialStore {
 //   Code: <code>
 //   <one line of instructions, with the direct link that has the code filled in>
 //   Expires: <UTC time> (unix <seconds>)
-// The Info line says the file was written and where (never the code). If the directory is not
-// writable, an Error says so and an Info line carries the direct link instead (the code is part of
-// it), so the player can still read it from the log; the login goes on.
+// One JSON line per attempt, {"event":"login_prompt","mechanism":"file","result":"written",
+// "path":...} at Info (never the code). If the directory is not writable, the line says
+// "write_failed" with the reason at Error and an Info line carries the direct link instead (the
+// code is part of it), so the player can still read it from the log; the login goes on.
 class FileLinkPresenter : public LinkPresenter {
  public:
   FileLinkPresenter(std::string path, nevr::auth::LogSink log);

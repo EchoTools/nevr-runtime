@@ -24,6 +24,7 @@ target_link_libraries(nevr_quest_got_hook PUBLIC log dl)
 
 add_library(ovrplatformloader SHARED
   entry.cpp
+  login_prompt_hook.cpp
   sentinel.cpp)
 
 # Emit libovrplatformloader.so (CMake adds the lib prefix + .so suffix).
@@ -33,12 +34,14 @@ target_include_directories(ovrplatformloader PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/breakpad/src)
 
-target_link_libraries(ovrplatformloader PRIVATE nevr_quest_got_hook breakpad_client log dl)
+target_link_libraries(ovrplatformloader PRIVATE nevr_quest_got_hook nevr_quest_prompt_board breakpad_client log dl)
 
-# The hook path (entry.cpp: the thunk entry and the handler it calls) is compiled
-# without exception support so its frames carry no personality or LSDA; see the
-# contract in callback_thunk.h. tests/quest TestHookFramesCarryNoPersonality pins it.
-set_source_files_properties(entry.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# The hook path (entry.cpp and login_prompt_hook.cpp: the thunk entries and the handlers they
+# call; the prompt board the login-prompt handler reads is built the same way, see
+# src/quest/CMakeLists.txt) is compiled without exception support so its frames carry no
+# personality or LSDA; see the contract in callback_thunk.h. tests/quest
+# TestHookFramesCarryNoPersonality pins it.
+set_source_files_properties(entry.cpp login_prompt_hook.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
 # Only nevr_sentinel_marker and JNI_OnLoad are exported (both carry explicit default
 # visibility); everything else, including the hook API and the test seams, is hidden.

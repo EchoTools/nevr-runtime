@@ -1,6 +1,7 @@
 #include "quest/auth/file_store.h"
 
 #include "core/device_auth_flow.h"
+#include "quest/auth/prompt_presenters.h"
 
 #include <cerrno>
 #include <cstring>
@@ -205,13 +206,14 @@ intptr_t FileLinkPresenter::Present(const LoginPrompt& prompt) {
   std::string error;
   std::string warning;
   if (path_.empty() || !AtomicWrite(path_, FormatLoginPrompt(prompt), error, warning)) {
-    Emit(log_, LogLevel::Error, "[NEVR.AUTH] could not write the login link file path=" + path_ +
-                                    " error=" + (path_.empty() ? std::string("no path") : error));
+    Emit(log_, LogLevel::Error,
+         LoginPromptLogLine("file", "write_failed",
+                            {{"path", path_}, {"why", path_.empty() ? std::string("no path") : error}}));
     // The login must still be possible: the direct link goes to the log, where logcat shows it.
     Emit(log_, LogLevel::Info, "[NEVR.AUTH] login link (file not written): " + prompt.link);
     return nevr::auth::kBrowserOpenAcceptedAbove + 1;
   }
-  Emit(log_, LogLevel::Info, "[NEVR.AUTH] login link written for the player path=" + path_);
+  Emit(log_, LogLevel::Info, LoginPromptLogLine("file", "written", {{"path", path_}}));
   return nevr::auth::kBrowserOpenAcceptedAbove + 1;
 }
 

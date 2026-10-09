@@ -70,17 +70,27 @@ if(NOT CURL_VERSION OR CURL_VERSION VERSION_LESS 7.87.0)
   message(FATAL_ERROR "nevr_quest: libcurl ${CURL_VERSION} found, need >= 7.87.0 (CURLOPT_QUICK_EXIT)")
 endif()
 message(STATUS "nevr_quest: libcurl ${CURL_VERSION}")
+# The sign-in prompt shared by token auth (the writer) and the sentinel's login-prompt hook (the
+# reader, on the game's call path). Built without exceptions so the reader's frames carry no
+# personality (docs/adr/0003, hook contract rule 5); it allocates nothing and does not log.
+add_library(nevr_quest_prompt_board STATIC auth/prompt_board.cpp)
+target_include_directories(nevr_quest_prompt_board PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_compile_options(nevr_quest_prompt_board PRIVATE
+  -Wall -Wextra -Werror -fno-exceptions -fvisibility=hidden -fvisibility-inlines-hidden)
+
 add_library(nevr_quest_token_auth STATIC
   "${CMAKE_CURRENT_SOURCE_DIR}/../core/auth_refresh.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../core/device_auth_flow.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/../core/device_poll_response.cpp"
   auth/session.cpp
   auth/file_store.cpp
+  auth/prompt_presenters.cpp
   auth/ca_bundle.cpp
   auth/curl_http.cpp
   auth/quest_token_auth.cpp)
 target_include_directories(nevr_quest_token_auth PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
-target_link_libraries(nevr_quest_token_auth PUBLIC nlohmann_json::nlohmann_json CURL::libcurl OpenSSL::Crypto)
+target_link_libraries(nevr_quest_token_auth PUBLIC nlohmann_json::nlohmann_json CURL::libcurl OpenSSL::Crypto
+  nevr_quest_prompt_board)
 target_compile_options(nevr_quest_token_auth PRIVATE -Wall -Wextra -Werror)
 
 add_executable(auth_core_test tests/auth_core_test.cpp)

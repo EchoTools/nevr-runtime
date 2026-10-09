@@ -29,7 +29,9 @@ QuestTokenAuth::QuestTokenAuth(QuestAuthConfig config, nevr::auth::LogSink log)
     : log_(log),
       http_(config.ca_dirs, log),
       store_(CredentialsPath(config, log), log),
-      presenter_(JoinPath(config.files_dir, kLoginLinkFileName), log),
+      file_presenter_(JoinPath(config.files_dir, kLoginLinkFileName), log),
+      game_presenter_(log),
+      presenter_({{"file", &file_presenter_}, {"game_error_text", &game_presenter_}}, log),
       session_(MakeSessionConfig(config), http_, clock_, store_, presenter_, log) {}
 
 std::unique_ptr<QuestTokenAuth> QuestTokenAuth::Create(QuestAuthConfig config, nevr::auth::LogSink log) noexcept {

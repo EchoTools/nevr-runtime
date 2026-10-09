@@ -417,7 +417,8 @@ test-quest-shared:
     # server and a fake clock. Same sources the NDK build compiles (src/quest/CMakeLists.txt).
     g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc \
         src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
-        src/quest/auth/session.cpp src/quest/auth/file_store.cpp  \
+        src/quest/auth/session.cpp src/quest/auth/file_store.cpp \
+        src/quest/auth/prompt_presenters.cpp src/quest/auth/prompt_board.cpp \
         src/quest/tests/auth_core_test.cpp \
         -o "$out/auth_core_test"
     "$out/auth_core_test"
@@ -427,6 +428,7 @@ test-quest-shared:
     g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc \
         src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
         src/quest/auth/session.cpp src/quest/auth/file_store.cpp src/quest/auth/quest_token_auth.cpp \
+        src/quest/auth/prompt_presenters.cpp src/quest/auth/prompt_board.cpp \
         src/quest/auth/curl_http.cpp src/quest/auth/ca_bundle.cpp src/quest/tests/tls_ca_test.cpp \
         -lcurl -lssl -lcrypto -o "$out/tls_ca_test"
     "$out/tls_ca_test"
@@ -476,6 +478,13 @@ test-quest-hooks:
         src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp "$out/thunk_exception_fixture.o" \
         -o "$out/got_hook_test" -ldl -pthread
     timeout 300 "$out/got_hook_test" "$out"  # a hang is a failure, not a stuck gate
+    # The login-prompt hook (#239): the real handler and prompt board, built as the sentinel builds
+    # them (no exceptions), driven through the thunk entry.
+    "${cxx[@]}" -fno-exceptions -pthread src/quest/tests/login_prompt_hook_test.cpp \
+        src/quest/sentinel/login_prompt_hook.cpp src/quest/auth/prompt_board.cpp \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/login_prompt_hook_test" -ldl
+    timeout 120 "$out/login_prompt_hook_test"
 
 # Resolve the pinned Quest targets in the real libr15.so / libpnsradmatchmaking.so
 # (docs/adr/0003). Extracts both from the pinned APK, checks their SHA-256, and runs

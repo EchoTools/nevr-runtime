@@ -1,11 +1,13 @@
 #pragma once
 // Quest entry point for token auth: the Android collaborators (libcurl over the system
-// CA store, the credential cache in the app-internal directory, the login-link file under
-// the external files dir, SystemClock) wired into a Session. NOT yet called from the sentinel: the hook that hands the token to the
+// CA store, the credential cache in the app-internal directory, the sign-in prompt as the
+// login-link file under the external files dir and as the game's login-error text, SystemClock)
+// wired into a Session. NOT yet called from the sentinel: the hook that hands the token to the
 // login path is gated by ADR 0003; this is the part that can be built and tested now.
 
 #include "quest/auth/curl_http.h"
 #include "quest/auth/file_store.h"
+#include "quest/auth/prompt_presenters.h"
 #include "quest/auth/session.h"
 
 #include <memory>
@@ -55,7 +57,11 @@ class QuestTokenAuth {
   SystemClock clock_;
   CurlHttpClient http_;
   FileCredentialStore store_;
-  FileLinkPresenter presenter_;
+  // The player is told where to sign in by every mechanism at once (prompt_presenters.h):
+  // device_login.txt (and logcat when that cannot be written) and the game's login-error text.
+  FileLinkPresenter file_presenter_;
+  GameTextPresenter game_presenter_;
+  FanOutPresenter presenter_;
   Session session_;
 };
 
