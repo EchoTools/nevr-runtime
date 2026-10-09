@@ -27,6 +27,7 @@
 //   login_rewrite.cpp  exceptions enabled: Compose and ComposePlan. They call no game code, run
 //                      between game calls, and return before the next one.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -41,12 +42,18 @@ namespace QuestLogin {
 constexpr std::uint64_t kPlatformOvrOrg = 4;
 constexpr std::uint64_t kProviderMask = 0xf;
 
-// The org-scoped id the login prerequisites (login_prerequisites.h) stand in when Oculus gives
-// no usable org id AND a real NEVR login is ready to replace it. It is written into the global
-// 0x70e3e0 only transiently: the rewrite's SetAccountId overwrites it with the NEVR account id
-// before CNSUser::SendLogInRequest sends, so it never reaches the wire or the post-login party
-// records. It is defined here so OculusIdMemory refuses to ever remember it as a real Oculus id.
-constexpr std::uint64_t kSynthesizedOrgScopedId = 0x4e455652ULL;  // "NEVR"; neither 0 nor -1
+// The org-id global value that makes CNSOVRUser::LogInInternal fetch the Oculus org id again
+// (0x1ec980 `cmn x8,#0x1`): the game's own "fetch again" marker, also what its error callback
+// stores (0x1ecef0).
+constexpr std::uint64_t kRefetchOrgId = ~std::uint64_t{0};
+
+// The game's own local login-failure text (libpnsovr string 0x556b40, used by UpdateInternal at
+// 0x1edb54) that the login send gate passes to CNSUser::DeferredLogInFailed when it refuses a
+// login. Exactly these bytes, because the in-headset sign-in prompt (#239) replaces the on-screen
+// error only for the game's own local failure texts, and this is the one the headset showed in the
+// smoke run; tests/got_pinned_test.cpp checks these bytes against the pinned library.
+inline constexpr char kPrerequisitesMissingText[] = "Log in request failed: One or more prerequisites are missing";
+inline constexpr int kLoginFailedCode = 0x1f4;  // 500, the code the game passes with that text
 
 // What token auth hands the login. Never logged. There is deliberately no password: the
 // server authenticates the session from the WebSocket upgrade (session_ws.go reads
@@ -205,22 +212,27 @@ class UserAccess {
 //   - only a real id is remembered: 0 (RadPluginShutdown) and -1 (GotLoggedInUserOrgIdCb's
 //     error path, and the "fetch again" marker) are not ids, and a write that would have to
 //     remember one is refused;
+//   - a stand-in org id (login_standin.h: the login prerequisites wrote it because Oculus gave no
+//     usable one) is NOT an id either, but it must not block the NEVR login it exists for: the
+//     write is allowed, and what is remembered for a later restore is kRefetchOrgId, so a declined
+//     login after a rewritten one puts back the game's "fetch again" marker, never the stand-in;
 //   - the id is put back only while the global still holds the value the rewrite wrote.
 // Not thread safe by itself; the adapter serializes its own accesses, and the single game
 // thread running the login path is an unverified assumption (docs/adr/0003).
 class OculusIdMemory {
  public:
-  // 0 (RadPluginShutdown), -1 (the error / "fetch again" marker) and the synthesized stand-in
-  // (kSynthesizedOrgScopedId, written by the login prerequisites) are never real Oculus ids and
-  // are never remembered: remembering the synthesized value would let a later declined login
-  // restore a shared constant as if it were this device's Oculus id.
-  static bool IsRealId(std::uint64_t value) {
-    return value != 0 && value != ~std::uint64_t{0} && value != kSynthesizedOrgScopedId;
-  }
+  static bool IsRealId(std::uint64_t value) { return value != 0 && value != ~std::uint64_t{0}; }
 
-  // `current` is the global's value just before the write. False: refused, nothing noted.
-  bool NoteBeforeWrite(std::uint64_t current, std::uint64_t written) {
+  // `current` is the global's value just before the write; `current_is_stand_in` says it is the
+  // prerequisites' stand-in (StandIn::IsOrgId). False: refused, nothing noted.
+  bool NoteBeforeWrite(std::uint64_t current, std::uint64_t written, bool current_is_stand_in = false) {
     if (have_ && current == last_written_) {
+      last_written_ = written;
+      return true;
+    }
+    if (current_is_stand_in) {
+      oculus_ = kRefetchOrgId;  // never the stand-in itself
+      have_ = true;
       last_written_ = written;
       return true;
     }
@@ -250,15 +262,32 @@ class IdentitySource {
   virtual ~IdentitySource() = default;
   virtual IdentityStatus Fetch(Identity& out) = 0;
 
-  // True when a real NEVR login is ready, i.e. Fetch would return Ok. The login prerequisites
-  // (login_prerequisites.h) consult this before they stand in for an Oculus answer: a synthesized
-  // Oculus prerequisite is only safe when the rewrite will then replace accountid, access_token,
-  // nonce and displayname with the NEVR identity, so synthesis is gated on Ready. It must not
-  // throw (it runs inside the game's -fno-exceptions OVR callback), and the default is false so a
-  // source that does not override it fails closed: nothing is synthesized, the game's own Oculus
-  // login failure runs, and it retries when a token arrives.
+  // True when a real NEVR login is ready, i.e. Fetch would return Ok right now. The login
+  // prerequisites (login_prerequisites.h) ask this inside the game's OVR callbacks before they
+  // stand in for an Oculus answer.
+  //
+  // CONTRACT (it runs on the game's OVR message pump thread, inside a -fno-exceptions frame):
+  //   - exactly one lock-free atomic load: return a ReadyFlag's Get() (below), nothing else;
+  //   - no allocation, no lock, no I/O, no logging, no call to Fetch, never throws;
+  //   - the flag is Set(true) only when Fetch would return Ok without blocking (a token and an
+  //     account id are present), and Set(false) on every other state (starting, refreshing,
+  //     awaiting the user, failed, signed out), from whatever thread changes token-auth state.
+  // The default answers false, so a source that does not implement it fails closed: nothing is
+  // synthesized and the game's own Oculus login failure runs.
   virtual bool Ready() const noexcept { return false; }
 };
+
+// The readiness summary an IdentitySource keeps for Ready(). Lock-free (static_assert below),
+// allocation-free; Set from token-auth state changes on any thread, Get from Ready().
+class ReadyFlag {
+ public:
+  void Set(bool ready) noexcept { ready_.store(ready, std::memory_order_release); }
+  bool Get() const noexcept { return ready_.load(std::memory_order_acquire); }
+
+ private:
+  std::atomic<bool> ready_{false};
+};
+static_assert(std::atomic<bool>::is_always_lock_free, "Ready() must be a lock-free load");
 
 enum class Level { Info, Warning, Error };
 
@@ -286,15 +315,67 @@ enum class Outcome {
 
 const char* OutcomeName(Outcome outcome);
 
-// What the login send hook does after the rewrite ran. Synthesized Oculus prerequisites must never
-// reach the wire behind a declining rewrite (the account id would be a shared constant XPID): fail
-// closed. A real Oculus login (nothing was synthesized) still goes out unchanged when the rewrite
-// declines, exactly as before the prerequisites existed.
+// What the login that is about to go out carries, read from the CURRENT state (after the rewrite
+// ran, or declined and restored): the account id CNSUser::SendLogInRequest will send (the virtual
+// AccountID(), 0x382b9c) and the JSON access_token and nonce. Not a per-attempt flag: the game
+// keeps a stand-in across attempts (it re-fetches the org id only at -1, the user name and token
+// only at "?"; only the user proof is requested every attempt), so only the state itself is sound.
+struct WireCheck {
+  bool account_id_unreadable = false;  // AccountID() could not be called (the object is not a CNSOVRUser)
+  bool account_id_stand_in = false;    // AccountID() is the prerequisites' stand-in org id
+  bool account_id_invalid = false;     // AccountID() is 0 or -1: the game never sends those
+  bool access_token_stand_in = false;  // JSON access_token is the stand-in token
+  bool nonce_stand_in = false;         // JSON nonce is the stand-in nonce
+  bool Unsafe() const {
+    return account_id_unreadable || account_id_stand_in || account_id_invalid || access_token_stand_in ||
+           nonce_stand_in;
+  }
+};
+
+// The send gate. Whatever the outcome and whether or not NEVR is ready: a login whose wire carries
+// a stand-in or an account id the game never sends is not sent (FailClosed). A rewritten login
+// carries the NEVR account id, token and nonce, so it passes; a declined login with real Oculus
+// answers passes and goes out unchanged, as before the prerequisites existed.
 enum class SendDecision { SendOriginal, FailClosed };
-inline SendDecision DecideSend(Outcome outcome, bool prerequisites_synthesized) noexcept {
-  if (outcome == Outcome::Rewritten) return SendDecision::SendOriginal;
-  return prerequisites_synthesized ? SendDecision::FailClosed : SendDecision::SendOriginal;
+inline SendDecision DecideSend(const WireCheck& wire) noexcept {
+  return wire.Unsafe() ? SendDecision::FailClosed : SendDecision::SendOriginal;
 }
+
+// The game's prerequisite state the send gate may put back, so a later attempt asks Oculus again.
+// Implemented by login_hook.cpp over the proven globals (0x70e3e0, 0x70e470) and by host fakes.
+// Every method is called on the OVR pump thread inside the login send hook, the thread on which
+// the game's own writers of these values (the four callbacks) run.
+class PrerequisiteState {
+ public:
+  virtual ~PrerequisiteState() = default;
+  // The user-name buffer 0x70e470 holds the stand-in user name.
+  virtual bool UserNameIsStandIn() const = 0;
+  // Writes "?" (string 0x61d3cb): LogInInternal re-fetches the user when it reads it (0x1ec9f4).
+  virtual void ResetUserNameToRefetch() = 0;
+  // Writes `name` (truncated to the 36-byte buffer, zero-filled) over the stand-in after a NEVR
+  // login, so the crash report name and party records carry the NEVR name, not a placeholder.
+  virtual void SetUserName(const char* name) = 0;
+  // Writes kRefetchOrgId to 0x70e3e0: LogInInternal re-fetches the org id (0x1ec980).
+  virtual void ResetOrgIdToRefetch() = 0;
+};
+
+struct FinishResult {
+  SendDecision decision = SendDecision::FailClosed;
+  WireCheck wire;
+  bool reset_org_id = false;
+  bool reset_user_name = false;
+  bool renamed_user = false;
+};
+
+// Runs after RewriteLogin, before the send (login_apply.cpp, -fno-exceptions). Reads the wire,
+// decides, and repairs the game's prerequisite state:
+//   - not going out as a NEVR login (a decline, or refused): every stand-in the game holds that has
+//     a re-fetch marker is put back to it (org id -> -1, user name -> "?"), so the next attempt asks
+//     Oculus again instead of reusing a stand-in;
+//   - going out as a NEVR login: a stand-in user name is replaced by the login's displayname.
+// One record (event "quest_login_send") with the decision, the outcome and the wire flags.
+FinishResult FinishLogin(UserAccess& user, const JsonAccess& json, PrerequisiteState& state, Outcome outcome,
+                         LogFn log);
 
 // Phase 1 (login_apply.cpp, calls the game): what the later phases need to know about the game's
 // state. Plain data; nothing in it refers back to the game.

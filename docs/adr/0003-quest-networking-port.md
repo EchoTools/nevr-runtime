@@ -778,30 +778,44 @@ and the accessors return a synthesized value; a usable real answer passes throug
 unusable one (null, empty, `"?"`, an id of 0 or -1) is replaced. The game's own success path then
 writes its globals and continues.
 
-Substitution is **fail-closed**. It is enabled only when all eight accessor hooks are installed AND
-the identity source reports a real NEVR login is ready (`IdentitySource::Ready`, default false, so
-an unwired source never synthesizes); otherwise the callback hooks only measure, the game's own
-Oculus login failure runs, and the game retries when a token arrives (#239's prompt is on the
-login-failed screen while `awaiting_user`). This matters because a synthesized Oculus answer is only
-safe when the rewrite at `SendLogInRequest` then replaces `accountid`, `access_token`, `nonce` and
-`displayname` with the NEVR identity: synthesizing without a ready NEVR login would send a shared
-constant account id (the XPID `OVR-ORG-1313166930`) that the unauthenticated server would look up by
-device link. A transient Oculus error (`error|is_transient`, read from `ovr_Error_GetMessage`) is
-passed through so the game re-requests, up to `kMaxTransientPasses` per prerequisite, then
-synthesized so a permanently-transient error still proceeds. The synthesized org id
-(`kSynthesizedOrgScopedId`) is excluded from `OculusIdMemory` so it is never remembered as a real
-Oculus id.
+A stand-in is used only when all eight accessor hooks are installed AND the identity source reports
+a real NEVR login is ready (`IdentitySource::Ready`, a lock-free atomic load by contract, default
+false so an unwired source never stands in); otherwise the callback hooks only measure and the
+game's own Oculus login failure runs. The stand-ins (`login_standin.h`) are drawn from the kernel's
+random source once per process, so no two headsets share a value and a leaked one links nothing; a
+stand-in is recognised again by exact comparison. A transient Oculus error (the game's own
+`error|is_transient` test, re-implemented as a strict JSON walk over `ovr_Error_GetMessage`) is
+passed through so the game's own re-request runs, bounded per attempt by `kMaxTransientPasses` and
+`kTransientWindowMs`, then stood in so a permanently-transient error still proceeds.
 
-The login send hook (`login_hook.cpp`) enforces the same rule a second time: after the rewrite it
-calls `DecideSend(outcome, synthesized)`. A `Rewritten` login sends; a declining rewrite with nothing
-synthesized sends the real Oculus login unchanged; a declining rewrite that saw a synthesized
-prerequisite sends nothing and drives the game's own failure (`CNSOVRUser::LogInFailed` `0x1ec5d0`),
-so a synthesized Oculus login never reaches the wire. `SetAccountId` overwrites the org-id global
-with the NEVR id before the send, so the wire account id and the post-login party records carry the
-NEVR id, not the synthesized stand-in. Two values the rewrite does not touch stay synthesized after a
-ready login and are logged once (`quest_login_prerequisites_residual`): the access-token CString read
-by the `CR15NetMatchmakerQueue` URLs, and the user-name buffer `0x70e470` read by
-`CrashReportUserName` and the party member records.
+Whether a login goes out is decided at the send, not from a per-attempt flag — the game keeps a
+stand-in across attempts (it re-fetches the org id only at -1, the user name and token only at
+`"?"`; only the user proof is requested every attempt). The send gate (`FinishLogin` / `DecideSend`,
+`login_rewrite.h`) reads the **current** wire state after the rewrite: the account id
+`CNSUser::SendLogInRequest` will send (the virtual `AccountID()`), the JSON `access_token` and the
+JSON `nonce`. A login whose account id is a stand-in, or 0 or -1, or whose token or nonce is a
+stand-in, is refused whatever the outcome and whether or not NEVR is ready; a clean wire is sent. A
+`Rewritten` login carries the NEVR account id, token and nonce (and `SetAccountId` is allowed to
+overwrite a stood-in org-id global with the NEVR id — `OculusIdMemory` never remembers the stand-in,
+putting back the game's `-1` re-fetch marker instead), so it passes. A refused or declined login
+resets the stand-ins the game holds to the game's re-fetch markers (org id to `-1`, user name to
+`"?"`) so the next attempt asks Oculus again, and is reported to the game through
+`CNSUser::DeferredLogInFailed` (`0x382e44`) with code 500 and the game's own text "Log in request
+failed: One or more prerequisites are missing" (libpnsovr `0x556b40`), which runs on the game's next
+update outside the OVR callback. A rewritten login replaces the user-name buffer `0x70e470` with the
+NEVR display name before the send.
+
+Residual after an accepted NEVR login (`quest_login_prerequisites_residual`): a stood-in access
+token stays in the engine's token string (not rewritten), read by the `CR15NetMatchmakerQueue` URLs
+to `graph.oculus.com`; it is a per-process random value, not a shared constant. The user object's
+construction-time copy of the name (`[CNSOVRUser+0x60]`) is not rewritten either.
+
+What restarts a login after a failure is not established from the binary: `LogInFailedCB` switches
+the game to the "login failed" state and a new login comes from the UI script (`CR15NetBeginLoginNode`
+calls `BeginLogIn`); nothing was shown to re-enter login on its own. In both smoke runs the process
+stayed alive for over a minute after the failure. In practice a player who signs in restarts the
+game, and a cached token makes `Ready` true at the next startup; an automatic in-process retry is not
+claimed.
 
 Each callback logs one `quest_login_prerequisite` record (call, `result` real or synthesized,
 `reason`, `accessor`, `ovr_error`, `error_code`, `http_code`) and each request one

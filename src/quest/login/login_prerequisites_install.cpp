@@ -172,7 +172,7 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, R
   result.accessors += Install(hooks.accessors[6], kGetUserProofHook, T::kMessageGetUserProof, base) ? 1 : 0;
   result.accessors += Install(hooks.accessors[7], kUserProofGetNonceHook, T::kUserProofGetNonce, base) ? 1 : 0;
 
-  result.substitute = result.accessors == 8 && api.message_is_error != nullptr;
+  result.substitute = SubstitutionAllowed(result.accessors, api.message_is_error != nullptr);
   ConfigurePrerequisites(api, result.substitute, ready);
 
   result.callbacks += Install(hooks.callbacks[0], kOrgCallbackHook, T::kOrgScopedIdCallback, base) ? 1 : 0;
@@ -195,14 +195,13 @@ PrerequisiteInstall InstallLoginPrerequisites(const sentinel::ElfImage& image, R
                        {"substitution", result.substitute ? "on" : "off"},
                        {"ready_gated", ready != nullptr ? 1 : 0},
                        {"error_api", api.message_get_error != nullptr && api.error_get_code != nullptr ? 1 : 0}});
-  // Two values the rewrite never touches stay synthesized after a ready login and can leak to paths
-  // outside SendLogInRequest (matchmaker queue URLs read the access-token CString; the user-name
-  // buffer 0x70e470 feeds CrashReportUserName and party member records). Say so once at install.
+  // What can still read a stand-in after a NEVR login (login_prerequisites.h "Residual"): a stood-in
+  // access token stays in the engine's token string, read by the matchmaker queue URLs; the user
+  // object's construction-time copy of the name is not rewritten. Say so once at install.
   if (result.substitute) {
     sentinel::LogFields(sentinel::LogLevel::kWarn, "quest_login_prerequisites_residual",
-                        {{"access_token", "matchmaker_queue_urls"},
-                         {"user_name_buffer", "crash_report_and_party_records"},
-                         {"org_id", "overwritten_by_rewrite_before_send"}});
+                        {{"access_token_string", "matchmaker_queue_urls"},
+                         {"user_object_name_copy", "not_rewritten"}});
   }
   g_result_storage = result;
   g_installed.store(true, std::memory_order_release);

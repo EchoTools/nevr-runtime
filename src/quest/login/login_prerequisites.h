@@ -33,47 +33,56 @@
 // the one message a login callback is handling right now (the active attempt below): every other
 // caller of the same accessors (social, rooms, IAP) gets the real function untouched.
 //
-// Substitution is FAIL-CLOSED and gated on a real NEVR login being ready (ReadyFn, from
-// IdentitySource::Ready). It happens only when the ready predicate is true, i.e. when the rewrite
-// at CNSUser::SendLogInRequest will then replace accountid, access_token, nonce and displayname
-// with the NEVR identity. When NEVR is not ready, nothing is synthesized: the game's own Oculus
-// login failure runs and it retries when a token arrives (#239's prompt shows on the login-failed
-// screen while awaiting_user). A synthesized prerequisite therefore never reaches the wire behind
-// a declining rewrite; the login send hook additionally refuses to send if a prerequisite was
-// synthesized and the rewrite did not produce a NEVR login (login_hook.cpp, DecideSend).
-//   not ready               nothing synthesized; the real error/empty value passes through
+// Substitution is gated on a real NEVR login being ready (ReadyFn, from IdentitySource::Ready,
+// whose contract is in login_rewrite.h). It happens only when ready is true AND all eight accessor
+// hooks are installed (SubstitutionAllowed). When NEVR is not ready nothing is stood in: the real
+// error or empty value passes through and the game's own Oculus login failure runs.
+//   not ready               nothing stood in; the real answer (error or value) passes through
 //   ready + real usable     passed through unchanged
 //   ready + ovr error       ovr_Message_IsError answers false and the accessors return the
-//                           synthesized value; the real accessors are never called on that message
-//   ready + transient error passed through so the game re-requests (up to kMaxTransientPasses per
-//                           call), then synthesized so a permanently-transient error still proceeds
+//                           stand-in; the real accessors are never called on that message
+//   ready + transient error passed through so the game's own re-request runs, for up to
+//                           kTransientWindowMs after the first transient error of this attempt (and
+//                           at most kMaxTransientPasses passes), then stood in; the budget is reset
+//                           when the attempt ends (EndPrerequisiteAttempt) or a non-transient answer
+//                           arrives. "Transient" is the game's own test: the error message is a JSON
+//                           object whose member "error" is an object whose member "is_transient" is
+//                           the literal true (CJson::DecodeFrom then CJson::Boolean("error|is_transient")
+//                           at 0x1ecea8/0x1ecf68).
 //   ready + real unusable   (a null or empty string, "?", an org id of 0 or -1, a null handle) the
-//                           accessor returns the synthesized value instead
-// Synthesized values are non-credential placeholders. The rewrite replaces accountid, access_token,
-// nonce and displayname in the login JSON, and SetAccountId overwrites the org-id global with the
-// NEVR id before the send, so the wire login and the post-login party records carry the NEVR id.
-// Two values the rewrite does NOT touch stay synthesized after a ready login and can leak to paths
-// outside SendLogInRequest (logged once, see login_prerequisites_install / the install summary):
-//   access token  the CNSLoggedInUserAccessToken CString feeds CR15NetMatchmakerQueue Join /
-//                 Heartbeat / Leave URLs (ready_at_dawn/poll_queue_position?access_token=%s)
-//   user name     the buffer 0x70e470 feeds CrashReportUserName and the party member records
-//                 (CNSOVRUsers::CreateUserInternal, CNSOVRSocial::AddMember, FollowDeepLink)
+//                           accessor returns the stand-in instead
+// The stand-ins (login_standin.h) are generated per process, not shared between headsets, and are
+// recognised again by exact comparison. Whether a login may go out is decided at the send, from
+// the CURRENT wire state, by FinishLogin/DecideSend (login_rewrite.h): a login whose account id,
+// access_token or nonce is a stand-in is never sent, whatever the outcome; a refused or declined
+// login puts the stand-in org id and user name back to the game's re-fetch markers.
+//
+// Residual (what can still read a stand-in after a NEVR login was accepted):
+//   access token  the CNSLoggedInUserAccessToken CString is not rewritten (it is an engine string in
+//                 the CEnvironment store, written only through the game's CString assignment), so a
+//                 stood-in token stays there; libr15's CR15NetMatchmakerQueue Join / Heartbeat /
+//                 Leave put it in https://graph.oculus.com URLs (strings 0x2bad390, 0x2bad5a5). It is
+//                 a per-process random value, not a shared constant.
+//   user name     the 36-byte buffer 0x70e470 is overwritten with the login's NEVR displayname by
+//                 FinishLogin before the send; the user object's copy of it at [CNSOVRUser+0x60],
+//                 taken by the constructor (0x1edd5c-0x1edd8c) when the user was created, is not.
 //
 // Every callback the game receives is logged (event "quest_login_prerequisite"): which call,
-// whether the game got the real answer or a synthesized one, why, and the Oculus error code. The
-// first kCallbackLogLimit per call are logged with their fields, then one summary line, so a
-// callback the game spins on cannot flood the log. Every request the game issues is logged too
-// ("quest_login_prerequisite_request", the request id, also capped), so a request that is never
-// answered shows as a request line with no callback line. No line carries a token, a nonce, a
-// user name or an id value.
+// whether the game got the real answer or a stand-in, why, and the Oculus error code. Records are
+// capped per prerequisite per window (kCallbackLogLimit per kLogWindowMs, then one summary line,
+// counters reset when the attempt ends), so every attempt's records exist and a spinning callback
+// cannot flood the log. Every request the game issues is logged the same way
+// ("quest_login_prerequisite_request", the request id), so a request that is never answered shows
+// as a request line with no callback line. No line carries a token, nonce, user name or id value.
 //
-// Threading. The callbacks run on the thread that pumps the game's OVR mailbox with ovr_PopMessage;
-// the same thread runs CNSOVRUser::LogInInternal and UpdateInternal, which is where the game's own
-// login state advances. Whether a second thread can deliver an OVR message concurrently was not
-// measured on a device. One attempt is claimed at a time; a second callback that arrives while one
-// is active is passed through unchanged and logged with reason "busy". The accessors decide by
-// comparing the message (or the handle) with the active one, which only the thread running that
-// callback can be holding.
+// Threading. The callbacks run on the thread that pumps the game's OVR messages: libpnsovr's
+// Update (0x207534) loops ovr_PopMessage (PLT 0x1b15a0, at 0x20754c/0x207588) and dispatches
+// through CNSOVRMailbox::FulfillRequest (0x2ebf04). That function is not exported and its caller
+// was not traced, so whether the same thread runs CNSIUsers::Update (0x36bf68, which runs
+// UpdateInternal) is not measured. One attempt is claimed at a time; a second callback that
+// arrives while one is active is passed through unchanged and logged with reason "busy". The
+// accessors decide by comparing the message (or the handle) with the active one, which only the
+// thread running that callback can be holding.
 //
 // Frames. Every handler here is live while game code runs (the callback's original calls the
 // accessors, and GotUserProofCB calls SendLogInRequest), so this code is built -fno-exceptions,
@@ -83,6 +92,7 @@
 #include <cstdint>
 
 #include "quest/login/login_rewrite.h"
+#include "quest/login/login_standin.h"
 
 namespace sentinel {
 struct ElfImage;
@@ -96,22 +106,22 @@ inline constexpr std::size_t kPrerequisiteCount = 4;
 // The Oculus request the prerequisite comes from ("ovr_User_GetAccessToken", ...).
 const char* PrerequisiteCall(Prerequisite which);
 
-// What the game receives when Oculus gives no usable answer. None is a credential. The org id
-// stand-in is kSynthesizedOrgScopedId from login_rewrite.h (shared so OculusIdMemory excludes it).
-inline constexpr const char kSynthesizedOculusId[] = "nevr-quest-player";  // fits the 36-byte buffer
-inline constexpr const char kSynthesizedAccessToken[] = "nevr-synthesized-oculus-access-token";
-inline constexpr const char kSynthesizedNonce[] = "nevr-synthesized-oculus-nonce";
+// Transient budget per prerequisite per attempt: pass transient errors through for this long after
+// the first one, and at most this many times, then stand in.
+inline constexpr std::uint64_t kTransientWindowMs = 5000;
+inline constexpr std::uint64_t kMaxTransientPasses = 50;
 
-// How many transient Oculus errors are passed through (so the game re-requests) before a
-// permanently-transient error is synthesized anyway, per prerequisite.
-inline constexpr std::uint64_t kMaxTransientPasses = 3;
-
-// How many callback records are logged with their fields per prerequisite before one summary line.
+// Log caps per prerequisite: this many records with their fields per window, then one summary line.
 inline constexpr std::uint64_t kCallbackLogLimit = 8;
+inline constexpr std::uint64_t kRequestLogLimit = 8;
+inline constexpr std::uint64_t kLogWindowMs = 60000;
 
-// True when a real NEVR login is ready (IdentitySource::Ready). nullptr or false => never
-// synthesize (fail closed).
+// True when a real NEVR login is ready (IdentitySource::Ready). nullptr => never stand in.
 using ReadyFn = bool (*)() noexcept;
+
+// The game's test for a transient Oculus error, on the error message text (see above). Exposed for
+// the host test.
+bool IsTransientErrorMessage(const char* message) noexcept;
 
 // The Platform SDK functions a callback handler calls itself, read from libpnsovr's own GOT so
 // they are the functions the game calls. Any member may be null; what it measures is then
@@ -121,20 +131,21 @@ struct OvrErrorApi {
   const void* (*message_get_error)(const void* message);
   int (*error_get_code)(const void* error);
   int (*error_get_http_code)(const void* error);
-  const char* (*error_get_message)(const void* error);  // JSON; scanned for "error|is_transient"
+  const char* (*error_get_message)(const void* error);  // the JSON the game reads is_transient from
 };
 
-// Publishes the API and turns the handlers on. `substitute` is true only when all eight accessor
-// hooks are installed: a callback hook without them may observe but must not claim an attempt,
-// or the game's success path would call a real accessor on an error message. `ready` gates every
-// substitution (nullptr => never synthesize, fail closed). Until this is called every handler
-// passes straight through and logs nothing. Call once, before the callback hooks are installed.
+// Substitution needs every accessor hook: a callback hook without them may observe but must not
+// claim an attempt, or the game's success path would call a real accessor on an error message.
+bool SubstitutionAllowed(int accessors_hooked, bool have_is_error) noexcept;
+
+// Publishes the API, generates the stand-ins and turns the handlers on. `substitute` comes from
+// SubstitutionAllowed; `ready` gates every stand-in. Until this is called every handler passes
+// straight through and logs nothing. Call once, before the callback hooks are installed.
 void ConfigurePrerequisites(const OvrErrorApi& api, bool substitute, ReadyFn ready) noexcept;
 
-// True if any prerequisite was synthesized since the last ResetSynthesisMark. The login send hook
-// reads this to decide whether a declining rewrite may still send the Oculus login (DecideSend).
-bool PrerequisitesSynthesizedSinceReset() noexcept;
-void ResetPrerequisitesSynthesisMark() noexcept;
+// Ends the current login attempt: resets the transient budgets and the log windows, so the next
+// attempt gets its own. The login send hook calls it on every send decision.
+void EndPrerequisiteAttempt() noexcept;
 
 // ---- handler bodies -------------------------------------------------------------------------
 // `original` is the real function behind the hooked slot, as CallbackThunk hands it over.
@@ -151,24 +162,24 @@ const char* OnUserGetOculusId(const char* (*original)(const void*), const void* 
 const void* OnMessageGetUserProof(const void* (*original)(const void*), const void* message) noexcept;
 const char* OnUserProofGetNonce(const char* (*original)(const void*), const void* handle) noexcept;
 
-// Logs one issued request (the first kRequestLogLimit per prerequisite, then one line saying the
-// rest are counted only). Called after the real request function has returned.
-inline constexpr std::uint64_t kRequestLogLimit = 8;
+// Logs one issued request (capped per window). Called after the real request function returned.
 void NoteRequest(Prerequisite which, std::uint64_t request_id) noexcept;
 
 // Callbacks and requests seen so far for `which` (also for tests).
 std::uint64_t PrerequisiteCallbacks(Prerequisite which) noexcept;
 std::uint64_t PrerequisiteRequests(Prerequisite which) noexcept;
 
-// Test support: back to the unconfigured state with zero counters.
+// Test support: back to the unconfigured state with zero counters; replaceable monotonic clock.
 void ResetPrerequisitesForTest() noexcept;
+using MonotonicMsFn = std::uint64_t (*)() noexcept;
+void SetPrerequisiteClockForTest(MonotonicMsFn clock) noexcept;  // nullptr: the real clock
 
 // ---- install (Android; login_prerequisites_install.cpp) ------------------------------------
 // Installs the accessor, callback and request hooks into the pinned libpnsovr.so `image` and
 // logs one summary line (event "quest_login_prerequisites_install"). Each hook is independent and
-// a failed one leaves its slot as it was; substitution is enabled only when every accessor hook is
-// in place. Idempotent; call it after libpnsovr.so is loaded and before RadPluginMain runs (the
-// dlopen post-load step does both, through TryInstallLoginHook).
+// a failed one leaves its slot as it was; substitution is enabled only when SubstitutionAllowed.
+// Idempotent; call it after libpnsovr.so is loaded and before RadPluginMain runs (the dlopen
+// post-load step does both, through TryInstallLoginHook).
 struct PrerequisiteInstall {
   int callbacks = 0;  // of 4
   int accessors = 0;  // of 8
