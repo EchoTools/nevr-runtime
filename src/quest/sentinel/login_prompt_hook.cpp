@@ -10,6 +10,7 @@
 #include "hook_log.h"
 #include "hook_report.h"
 #include "quest/auth/prompt_board.h"
+#include "quest/login/login_attempt_gate.h"
 #include "quest/game_login_failures.h"
 
 namespace nevr_quest::login_prompt {
@@ -19,6 +20,7 @@ namespace {
 namespace board = nevr::quest_auth::prompt_board;
 namespace layout = sentinel::pinned::game_layout;
 namespace ui = sentinel::pinned::ui_layout;
+namespace gate = QuestLogin::attempt_gate;
 using sentinel::pinned::CR15NetGameOpaque;
 
 sentinel::GotHook g_errorHook;
@@ -73,7 +75,8 @@ unsigned char g_saved[layout::kErrorBlockBytes];
 unsigned char g_written[layout::kErrorBlockBytes];
 // What g_written holds: the game's own text, a prompt, or a notice that replaced a prompt. A notice
 // only ever replaces a prompt; on a screen that shows the game's own text it is not applied.
-enum class Kind : std::uint8_t { kGame, kPrompt, kNotice };
+// kAwaitingNotice: the game's own text on a screen where a notice is due as soon as the login may proceed.
+enum class Kind : std::uint8_t { kGame, kPrompt, kNotice, kAwaitingNotice };
 Kind g_kind = Kind::kGame;
 
 // ---- the prompt latch ---------------------------------------------------------------------------
@@ -93,8 +96,6 @@ std::atomic<bool> g_latchArmed{false};
 std::atomic<bool> g_latchDead{false};
 std::atomic<std::uint64_t> g_latchHash{0};
 std::atomic<CR15NetGameOpaque*> g_latchSelf{nullptr};
-// Whether token auth is waiting for the player to sign in (no account token yet).
-std::atomic<bool> g_awaitingPlayer{false};
 
 // FNV-1a over the whole error block; never 0 (0 means "no latch").
 std::uint64_t HashBlock(const unsigned char* block) noexcept {
@@ -254,9 +255,10 @@ void HookedSetDelimitedErrorMessage(ErrorThunk::Fn original, CR15NetGameOpaque* 
     g_applied.store(version, std::memory_order_relaxed);
     g_shown.fetch_add(1, std::memory_order_relaxed);
     ArmLatch(self, block);
-  } else if (read == board::ReadResult::kCopied && mode == board::Mode::kNotice) {
+  } else if (read == board::ReadResult::kCopied && mode == board::Mode::kNotice && gate::IsReady()) {
     // The player signed in while this attempt was in flight, and the attempt failed with the game's local
-    // text: the screen says so, because RETRY on it now logs in with the new sign-in.
+    // text: the screen says so, because RETRY on it now logs in with the new sign-in. (Only once the login
+    // may proceed: a RETRY before that is held back by the page-enable hook and would strand the player.)
     LayOut(g_written, text);
     CopyBlock(block, g_written);
     g_kind = Kind::kNotice;
@@ -265,14 +267,16 @@ void HookedSetDelimitedErrorMessage(ErrorThunk::Fn original, CR15NetGameOpaque* 
     ArmLatch(self, block);
   } else {
     // Nothing to show yet (or the board was busy): the game's text stays, and the
-    // instance is followed so that a prompt published later still reaches this screen.
+    // instance is followed so that a prompt published later still reaches this screen. A notice that is
+    // not due yet (the login may not proceed) is applied by Update once it is.
     CopyBlock(g_written, block);
-    g_kind = Kind::kGame;
+    g_kind = (read == board::ReadResult::kCopied && mode == board::Mode::kNotice) ? Kind::kAwaitingNotice : Kind::kGame;
     if (read == board::ReadResult::kBusy) {
       g_applied.store(kNothingApplied, std::memory_order_relaxed);
       g_busy.fetch_add(1, std::memory_order_relaxed);
     } else {
-      g_applied.store(version, std::memory_order_relaxed);
+      // A notice that is not due yet stays unapplied, so Update looks at it again every frame.
+      g_applied.store(g_kind == Kind::kAwaitingNotice ? kNothingApplied : version, std::memory_order_relaxed);
       g_kept.fetch_add(1, std::memory_order_relaxed);
     }
   }
@@ -327,6 +331,14 @@ bool Refresh(CR15NetGameOpaque* self) noexcept {
   board::Mode mode = board::Mode::kPrompt;
   std::uint64_t version = 0;
   const board::ReadResult read = board::Read(text, sizeof(text), &mode, &version);
+  if (read == board::ReadResult::kCopied && mode == board::Mode::kNotice && !gate::IsReady()) {
+    // Signed in, but the login may not proceed yet: a "select RETRY" now would send the player to a RETRY the
+    // page-enable hook still holds back. The screen stays as it is, and the notice is applied on the frame
+    // after the gate turns ready (the board version stays unapplied, so every frame looks again).
+    Wipe(text, sizeof(text));
+    g_writing.clear(std::memory_order_release);
+    return false;
+  }
   if (read == board::ReadResult::kCopied && mode == board::Mode::kPrompt) {
     LayOut(g_written, text);
     g_kind = Kind::kPrompt;
@@ -382,6 +394,8 @@ void ResendErrorEvent(CR15NetGameOpaque* self) noexcept {
 
 void HookedNetGameUpdate(UpdateThunk::Fn original, CR15NetGameOpaque* self, std::uint64_t arg) noexcept {
   RecheckLatch(self);
+  // A poisoned attempt ends when the game leaves "logging in" (its prerequisites failed): the next one is clean.
+  if (self != nullptr && State(self) != layout::kStateLoggingIn) gate::ClearPoison();
   if (self != nullptr && self == g_object.load(std::memory_order_acquire)) {
     if (Refresh(self)) g_resendPending.store(true, std::memory_order_relaxed);
     ResendErrorEvent(self);
@@ -402,12 +416,16 @@ void HookedEnablePageNodeEnter(EnablePageThunk::Fn original, void* node, const v
     std::uint64_t actor = 0;
     __builtin_memcpy(&actor, bytes + ui::kEnablePageActorIdOffset, sizeof(actor));
     const bool errorPage = actor == ui::kErrorDisplayPage || actor == ui::kFatalErrorDisplayPage;
-    const bool loggingIn = actor == ui::kLoggingInPage && g_awaitingPlayer.load(std::memory_order_relaxed);
+    // Not ready: the login this RETRY started cannot succeed yet. The same word the login prerequisites read.
+    const bool loggingIn = actor == ui::kLoggingInPage && !gate::IsReady();
     if (errorPage || loggingIn) {
       // The record's own shape: the node is the record plus 0x20. A mismatch means this is not the record
       // measured, so the game's call goes ahead.
       if (node == const_cast<unsigned char*>(bytes) + ui::kEnablePageNodeOffset) {
         (errorPage ? g_errorPageDropped : g_loggingInPageDropped).fetch_add(1, std::memory_order_relaxed);
+        // The attempt whose page was skipped must fail, even if the gate turns ready before it is checked: it
+        // would otherwise log in on a screen that has no way to show it.
+        if (!errorPage) gate::Poison();
         return;
       }
       g_pagePassedArmed.fetch_add(1, std::memory_order_relaxed);
@@ -523,14 +541,12 @@ void ArmForTest() noexcept {
   EnablePageThunk::Arm(kEnablePageHook);
 }
 
-void SetAwaitingPlayer(bool awaiting) noexcept { g_awaitingPlayer.store(awaiting, std::memory_order_relaxed); }
-
 bool LatchArmedForTest() noexcept { return g_latchArmed.load(std::memory_order_acquire); }
 
 void ResetLatchForTest() noexcept {
   g_latchDead.store(false, std::memory_order_relaxed);
   g_latchSelf.store(nullptr, std::memory_order_relaxed);
-  g_awaitingPlayer.store(false, std::memory_order_relaxed);
+  gate::ClearPoison();  // the gate's readiness is the caller's to set
   ClearLatch();
 }
 

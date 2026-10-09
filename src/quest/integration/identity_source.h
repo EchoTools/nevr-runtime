@@ -6,6 +6,7 @@
 #include <functional>
 
 #include "quest/auth/session.h"
+#include "quest/login/login_attempt_gate.h"
 #include "quest/login/login_rewrite.h"
 #include "runtime/compat/session_router.h"
 
@@ -25,8 +26,12 @@ class TokenIdentitySource final : public QuestLogin::IdentitySource {
   using SnapshotFn = std::function<nevr::quest_auth::Snapshot()>;
   // `socialLevel` is asked on every Fetch and answers the level the login declares ("nevr_social"):
   // SocialParty::kSocialLevel only when the social facade is installed, else 0.
+  // The readiness it publishes is process-wide (the attempt gate), so constructing a source starts it not ready
+  // and not poisoned: the process has one.
   explicit TokenIdentitySource(SnapshotFn snapshot, std::function<int()> socialLevel = nullptr)
-      : snapshot_(std::move(snapshot)), socialLevel_(std::move(socialLevel)) {}
+      : snapshot_(std::move(snapshot)), socialLevel_(std::move(socialLevel)) {
+    QuestLogin::attempt_gate::Reset();
+  }
 
   QuestLogin::IdentityStatus Fetch(QuestLogin::Identity& out) override;
 
@@ -39,10 +44,12 @@ class TokenIdentitySource final : public QuestLogin::IdentitySource {
   static SessionRouter::LoginGate GateFor(const nevr::quest_auth::Snapshot& snap) noexcept;
 
   // The #240 login prerequisites ask this from the Oculus message pump before they stand in for an Oculus
-  // answer (login_rewrite.h). It is one lock-free atomic load of the flag Observe and Fetch keep: no
-  // snapshot, no allocation, no lock. True only after the last observed state was one in which Fetch
-  // returns Ok (token auth Ready with an access token and a NEVR account id).
-  bool Ready() const noexcept override { return ready_.Get(); }
+  // answer (login_rewrite.h). It is one lock-free atomic load of the process-wide attempt gate
+  // (login_attempt_gate.h) that Observe and Fetch keep, which the sign-in prompt's page-enable hook reads
+  // too: no snapshot, no allocation, no lock. True only after the last observed state was one in which
+  // Fetch returns Ok (token auth Ready with an access token and a NEVR account id) and the current login
+  // attempt has not been poisoned by a skipped logging-in page.
+  bool Ready() const noexcept override { return QuestLogin::attempt_gate::LoginMayProceed(); }
 
   // Records a token-auth state change: sets the Ready flag to (Classify(snap) == Ok), so it is cleared in
   // every other state (starting, refreshing, awaiting the player, expired, failed, stopped, no token, no
@@ -56,7 +63,6 @@ class TokenIdentitySource final : public QuestLogin::IdentitySource {
 
   SnapshotFn snapshot_;
   std::function<int()> socialLevel_;
-  QuestLogin::ReadyFlag ready_;
 };
 
 }  // namespace nevr_quest::integration

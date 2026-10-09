@@ -52,7 +52,9 @@
  *     armed (the error block still holds exactly the prompt or notice this hook last wrote, kept apart
  *     from the followed-instance state, which is dropped when the game leaves "login failed") the enable
  *     of the error page and of the fatal error page is skipped, and so is the enable of the logging-in
- *     page while token auth waits for the player (SetAwaitingPlayer). The latch is cleared as soon as the
+ *     page while the login may not proceed yet (the attempt gate, quest/login/login_attempt_gate.h, the same word the
+ *     login prerequisites read: the skip stops the instant the login may proceed, and the attempt it skipped
+ *     for fails its prerequisites). The latch is cleared as soon as the
  *     block holds anything else, so a genuine error is shown, and dies for good when the game reaches
  *     "loading global". Skipping is a plain return.
  *
@@ -126,11 +128,6 @@ bool InstallIfCounted(bool countersRegistered) noexcept;
 // Arms both handlers without touching a GOT slot: for the host test, which publishes originals
 // through the thunks' OriginalOut() and calls their EntryFn() directly.
 void ArmForTest() noexcept;
-
-// Token auth is waiting for the player to sign in (no account token yet). While it is, and the prompt latch
-// is armed, the logging-in page is not enabled. Called by the integration whenever the state changes;
-// lock-free, any thread.
-void SetAwaitingPlayer(bool awaiting) noexcept;
 
 // Test support: whether the prompt latch is armed, and a reset of the latch and the awaiting flag (the
 // latch dies for good at "loading global", so tests start each case from a reset).

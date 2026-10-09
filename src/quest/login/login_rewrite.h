@@ -267,7 +267,8 @@ class IdentitySource {
   // stand in for an Oculus answer.
   //
   // CONTRACT (it runs on the game's OVR message pump thread, inside a -fno-exceptions frame):
-  //   - exactly one lock-free atomic load: return a ReadyFlag's Get() (below), nothing else;
+  //   - exactly one lock-free atomic load: return a ReadyFlag's Get() (below), or the process-wide attempt
+  //     gate's LoginMayProceed() (login_attempt_gate.h), nothing else;
   //   - no allocation, no lock, no I/O, no logging, no call to Fetch, never throws;
   //   - the flag is Set(true) only when Fetch would return Ok without blocking (a token and an
   //     account id are present), and Set(false) on every other state (starting, refreshing,

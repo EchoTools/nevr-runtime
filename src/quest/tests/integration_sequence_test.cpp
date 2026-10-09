@@ -452,6 +452,31 @@ void TestLoginGateFollowsTheIdentityAnswer() {
                 "GateFor must be noexcept");
 }
 
+// #239 review H2: the page-enable hook and the login prerequisites read one word. The source publishes it as it
+// observes; a poisoned attempt (its logging-in page was skipped) fails the prerequisites whatever the state is,
+// until the poison is cleared; a new source starts not ready.
+void TestIdentitySourcePublishesTheSharedAttemptGate() {
+  using nevr::quest_auth::Readiness;
+  namespace gate = QuestLogin::attempt_gate;
+  TokenIdentitySource source(nullptr);
+  QCHECK(!source.Ready() && !gate::IsReady());
+  source.Observe(Snap(Readiness::Ready, "tok", 4242, "p"));
+  QCHECK(source.Ready() && gate::IsReady() && gate::LoginMayProceed());
+  gate::Poison();  // an attempt's logging-in page was skipped
+  QCHECK(gate::IsReady());  // the readiness itself is unchanged: the page-enable skip has stopped
+  QCHECK(!source.Ready());  // but that attempt fails its prerequisites, through the base-class call too
+  const QuestLogin::IdentitySource& base = source;
+  QCHECK(!base.Ready());
+  source.Observe(Snap(Readiness::Ready, "tok", 4242, "p"));  // a later observation does not lift it
+  QCHECK(!source.Ready());
+  gate::ClearPoison();  // the attempt ended
+  QCHECK(source.Ready());
+  source.Observe(Snap(Readiness::AwaitingUser, "", 0, "p"));
+  QCHECK(!source.Ready() && !gate::IsReady());  // one flip, both readers
+  TokenIdentitySource next(nullptr);            // a new source starts clean
+  QCHECK(!next.Ready());
+}
+
 // #240 fail-closed: the login prerequisites stand in for an Oculus answer only while Ready() is true, and
 // IdentitySource's default Ready() is false. The production source's Ready() is one load of a flag that
 // Observe (token-auth state changes) and Fetch keep equal to (Classify(state) == Ok).
@@ -680,6 +705,7 @@ int main() {
   TestPostLoadAcceptsANullName();
   TestIdentitySourceAnswers();
   TestLoginGateFollowsTheIdentityAnswer();
+  TestIdentitySourcePublishesTheSharedAttemptGate();
   TestIdentitySourceReadyFollowsObservedState();
   TestIdentitySourceReadyDoesNotAllocate();
   TestFrameTapSignalsLoginSuccessOnlyFromTheServer();

@@ -211,8 +211,14 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   `delegate_onnetgameerror`) which enables the error page (`error_display_page`, `0x4b8a0630361f3ac5`;
   `fatal_error_display_page`, `0xe26415a8c369eb2e`), and the logging-in page has no header and no buttons.
   The hook skips (a plain return) the enable of the error pages while the latch is armed, and the enable of
-  the logging-in page while the latch is armed and token auth is waiting for the player
-  (`SetAwaitingPlayer`, fed by the token-auth poll). The latch is armed when the Update or error text
+  the logging-in page while the latch is armed and the login may not proceed. "May proceed" is one
+  process-wide word (`quest/login/login_attempt_gate.h`) that the token-auth source publishes and that
+  both this hook and the login prerequisites (`IdentitySource::Ready`) read, so they cannot disagree: the
+  skip stops in the same instant the login may proceed, and an attempt whose logging-in page was skipped is
+  poisoned and fails its prerequisites until the game leaves "logging in", even if the gate turns ready
+  meanwhile (otherwise the login would succeed on a screen that cannot show it). The signed-in notice is
+  applied to the block only once the login may proceed, so "Select RETRY" never appears while that RETRY
+  would be held back. The latch is armed when the Update or error text
   hook writes a prompt or a notice into the error block, cleared as soon as the block holds anything else
   (checked after every write the error text hook sees and on every Update call), and dead for good when
   the game reaches "loading global" (state 4). It does not depend on the followed instance, which is dropped

@@ -135,8 +135,6 @@ void PollTokenAuthState() {
     // The login prerequisites' Ready() flag (#240) follows every observed state, including an access
     // token that ran out without a readiness change.
     if (rt.identity) rt.identity->Observe(snap);
-    // While the player has not signed in the logging-in page is not enabled over the screen that shows the code.
-    nevr_quest::integration::SetLoginPromptAwaitingPlayer(snap.readiness == nevr::quest_auth::Readiness::AwaitingUser);
     // The held login connection opens when the account appears and closes when it will not (router gate).
     const int gate = static_cast<int>(TokenIdentitySource::GateFor(snap));
     if (rt.loginGate.exchange(gate) != gate) {

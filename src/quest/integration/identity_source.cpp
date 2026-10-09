@@ -44,12 +44,12 @@ SessionRouter::LoginGate TokenIdentitySource::GateFor(const nevr::quest_auth::Sn
 
 QuestLogin::IdentityStatus TokenIdentitySource::Fetch(QuestLogin::Identity& out) {
   if (!snapshot_) {
-    ready_.Set(false);
+    QuestLogin::attempt_gate::SetReady(false);
     return QuestLogin::IdentityStatus::NotReady;
   }
   const nevr::quest_auth::Snapshot snap = snapshot_();
   const QuestLogin::IdentityStatus status = Classify(snap);
-  ready_.Set(status == QuestLogin::IdentityStatus::Ok);  // the state this login saw
+  QuestLogin::attempt_gate::SetReady(status == QuestLogin::IdentityStatus::Ok);  // the state this login saw
   if (status != QuestLogin::IdentityStatus::Ok) return status;
   out.account_id = snap.discord_id;
   out.display_name = snap.username;
@@ -59,7 +59,7 @@ QuestLogin::IdentityStatus TokenIdentitySource::Fetch(QuestLogin::Identity& out)
 }
 
 void TokenIdentitySource::Observe(const nevr::quest_auth::Snapshot& snap) noexcept {
-  ready_.Set(Classify(snap) == QuestLogin::IdentityStatus::Ok);
+  QuestLogin::attempt_gate::SetReady(Classify(snap) == QuestLogin::IdentityStatus::Ok);
 }
 
 }  // namespace nevr_quest::integration

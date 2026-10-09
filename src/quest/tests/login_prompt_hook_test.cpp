@@ -21,6 +21,7 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "quest/auth/prompt_board.h"
+#include "quest/login/login_attempt_gate.h"
 #include "quest/game_login_failures.h"
 #include "quest/tests/test_check.h"
 
@@ -29,6 +30,7 @@ namespace {
 namespace board = nevr::quest_auth::prompt_board;
 namespace lp = nevr_quest::login_prompt;
 namespace layout = sentinel::pinned::game_layout;
+namespace gate = QuestLogin::attempt_gate;
 using sentinel::pinned::CR15NetGameOpaque;
 
 // A CR15NetGame stand-in: large enough for the error block, state at offset 0.
@@ -613,7 +615,8 @@ void PromptOnScreen(const char* code) {
 
 // Failure caught (#239 D5): after RETRY a parked UI script replaced the screen that shows the code with the
 // error page; the player never saw the code. While the sentinel's text is in the block the error pages are
-// skipped; the logging-in page is skipped only while the player is awaited; anything else goes through.
+// skipped; the logging-in page is skipped only while the login may not proceed (the attempt gate); anything
+// else goes through.
 void WhileThePromptIsOnScreenTheErrorPagesAreNotEnabled() {
   PromptOnScreen("LATCH1-CODE");
   QCHECK(lp::LatchArmedForTest());
@@ -621,14 +624,18 @@ void WhileThePromptIsOnScreenTheErrorPagesAreNotEnabled() {
   QCHECK(!Enabled(ui::kErrorDisplayPage));
   QCHECK(!Enabled(ui::kFatalErrorDisplayPage));
   QCHECK(lp::CurrentCounts().error_page_dropped == before.error_page_dropped + 2);
-  // The logging-in page: through while token auth is not waiting for the player, skipped while it is.
+  // The logging-in page: through while the login may proceed, skipped (and the attempt poisoned) while it
+  // may not, and through again the instant it may.
+  gate::SetReady(true);
   QCHECK(Enabled(ui::kLoggingInPage));
   QCHECK(lp::CurrentCounts().page_passed_armed == before.page_passed_armed + 1);
-  lp::SetAwaitingPlayer(true);
+  QCHECK(gate::LoginMayProceed());
+  gate::SetReady(false);
   QCHECK(!Enabled(ui::kLoggingInPage));
   QCHECK(lp::CurrentCounts().logging_in_page_dropped == before.logging_in_page_dropped + 1);
-  lp::SetAwaitingPlayer(false);
-  QCHECK(Enabled(ui::kLoggingInPage));
+  gate::SetReady(true);
+  QCHECK(Enabled(ui::kLoggingInPage));  // the skip stopped with the readiness
+  gate::SetReady(true);
   // Any other page is the game's business.
   QCHECK(Enabled(kSomeOtherPage));
   // A record that is not the measured shape (node != data + 0x20) goes through, counted.
@@ -701,9 +708,9 @@ void WithoutAPromptOnScreenNothingIsHeldBack() {
   board::Withdraw();
   const lp::Counts before = lp::CurrentCounts();
   QCHECK(Enabled(ui::kErrorDisplayPage) && Enabled(ui::kFatalErrorDisplayPage) && Enabled(ui::kLoggingInPage));
-  lp::SetAwaitingPlayer(true);
-  QCHECK(Enabled(ui::kLoggingInPage));
-  lp::SetAwaitingPlayer(false);
+  gate::SetReady(false);
+  QCHECK(Enabled(ui::kLoggingInPage));  // nothing on screen to protect: not skipped even though not ready
+  gate::SetReady(true);
   QCHECK(lp::CurrentCounts().error_page_dropped == before.error_page_dropped);
   QCHECK(lp::CurrentCounts().logging_in_page_dropped == before.logging_in_page_dropped);
   QCHECK(lp::CurrentCounts().page_passed_armed == before.page_passed_armed);
@@ -754,6 +761,76 @@ void EnablesOnAnotherThreadDuringRewritesAreAllSkipped() {
   lp::ResetLatchForTest();
 }
 
+// ---- the attempt gate (review H2) --------------------------------------------------------------------
+
+// Failure caught (#239 review H2): "Select RETRY" shown before the login may proceed. The notice is published
+// at verification; the readiness the page-enable hook and the login prerequisites share turns ready on the
+// token-auth poll, up to 2 s later, and a RETRY in between got its logging-in page skipped while the login
+// went on to succeed. The notice is not applied until the gate is ready, on a screen showing the prompt and on
+// one showing the game's own text, and then it is, on the next frame.
+void ANoticeWaitsForTheLoginToBeAbleToProceed() {
+  lp::ResetLatchForTest();
+  gate::SetReady(false);
+  // (a) The prompt is on screen when the player signs in.
+  board::Withdraw();
+  Publish(Prompt("GATE1-CODE"));
+  FailLocally(g_game);
+  Publish(kNotice, board::Mode::kNotice);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 2) == "and enter the code GATE1-CODE");  // still the prompt: RETRY would be held back
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 2) == "and enter the code GATE1-CODE");
+  gate::SetReady(true);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 0) == "Signed in to EchoVRCE." && Line(g_game, 1) == "Select RETRY to finish.");
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 0) == kLocal);
+  // (b) The attempt in flight fails with the notice already on the board but the login not yet able to proceed.
+  lp::ResetLatchForTest();
+  gate::SetReady(false);
+  Publish(kNotice, board::Mode::kNotice);
+  FailLocally(g_game);
+  QCHECK(Line(g_game, 0) == kLocal);  // the game's text, not the notice
+  QCHECK(!lp::LatchArmedForTest());
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 0) == kLocal);
+  gate::SetReady(true);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 0) == "Signed in to EchoVRCE." && Line(g_game, 1) == "Select RETRY to finish.");
+  QCHECK(lp::LatchArmedForTest());
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 0) == kLocal);
+  lp::ResetLatchForTest();
+}
+
+// Failure caught (#239 review H2b): an attempt whose logging-in page was skipped must fail its prerequisites,
+// even if the readiness flips before they run (they run a moment after the page enable): one shared word, and
+// the poison ends with the attempt, when the game leaves "logging in".
+void ASkippedLoggingInPagePoisonsTheAttemptUntilItEnds() {
+  PromptOnScreen("GATE2-CODE");
+  gate::SetReady(false);
+  SetState(g_game, layout::kStateLoggingIn);  // RETRY
+  QCHECK(!Enabled(ui::kLoggingInPage));       // skipped: poisoned
+  gate::SetReady(true);                       // the poll catches up before the prerequisites run
+  QCHECK(!gate::LoginMayProceed());           // the attempt still fails them
+  QCHECK(Enabled(ui::kLoggingInPage));        // the skip itself stopped with the readiness, at once
+  UpdateEntry()(Obj(g_game), 16);             // still logging in: the poison stays
+  QCHECK(!gate::LoginMayProceed());
+  SetState(g_game, layout::kStateLoginFailed);  // the attempt failed (prerequisites)
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(gate::LoginMayProceed());              // the next RETRY starts clean
+  // A RETRY with the gate ready is not poisoned and its page is enabled.
+  SetState(g_game, layout::kStateLoggingIn);
+  QCHECK(Enabled(ui::kLoggingInPage));
+  QCHECK(gate::LoginMayProceed());
+  board::Withdraw();
+  SetState(g_game, layout::kStateLoginFailed);
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
 }  // namespace
 
 int main() {
@@ -765,6 +842,7 @@ int main() {
   *lp::UpdateThunk::OriginalOut() = reinterpret_cast<void*>(&FakeUpdate);
   *lp::EnablePageThunk::OriginalOut() = reinterpret_cast<void*>(&FakeEnableOriginal);
   lp::ArmForTest();
+  gate::SetReady(true);  // the default for the cases below; the ones that need another state set it
 
   TheGameKnowsWhichFailuresAreItsOwn();
   ALocalFailureWithNothingPublishedKeepsTheGameTextAndAPromptPublishedLaterReachesIt();
@@ -786,6 +864,8 @@ int main() {
   TheLatchOutlivesLoginFailedAndDiesAtLoadingGlobal();
   AGenuineErrorTextPassesThrough();
   WithoutAPromptOnScreenNothingIsHeldBack();
+  ANoticeWaitsForTheLoginToBeAbleToProceed();
+  ASkippedLoggingInPagePoisonsTheAttemptUntilItEnds();
   EnablesOnAnotherThreadDuringRewritesAreAllSkipped();
   AWithdrawnBoardKeepsNoCode();
   TheBoardRefusesWhatTheGameCouldNotShow();
