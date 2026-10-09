@@ -235,6 +235,20 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
             "EchoVR::JsonValueAsString",
         })
 
+    def test_telemetry_socket_refreshes_its_token_on_a_reconnect_401(self):
+        # Issue #114: TelemetryStreamer set the Authorization header once, and ixwebsocket's automatic
+        # reconnect re-presented it after it expired. The Error handler must feed BearerReconnectAuth,
+        # and the ServerDB-token fallback must install a refresher (a configured telemetry_token must not).
+        streamer = strip_comments((ROOT / "src/runtime/server/telemetry_streamer.cpp").read_text())
+        self.assertRegex(streamer, r"m_bearerAuth\.Attach\s*\(")
+        self.assertRegex(streamer, re.compile(
+            r"case ix::WebSocketMessageType::Error:(?:(?!WebSocketMessageType::Message).)*?"
+            r"m_bearerAuth\.OnError\s*\(\s*msg->errorInfo\.http_status", re.S))
+        server = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
+        fallback = extract_braced_function(server, "VOID GameServerLib::RequestRegistration(")
+        self.assertRegex(fallback, re.compile(
+            r"token = wsToken;(?:(?!m_telemetry->Connect).)*?m_telemetry->SetBearerTokenRefresher\s*\(", re.S))
+
     def test_console_handler_is_rearmed_after_the_game_installs_its_own(self):
         # Issue #102: the game installs its console ctrl handler (echovr.exe 0x1400dcbb0, from
         # CR15Game::InitRenderWindowFromEngineFlags) after our boot-time re-arm, so its handler sat in
