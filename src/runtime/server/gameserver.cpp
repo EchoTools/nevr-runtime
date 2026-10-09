@@ -411,18 +411,11 @@ void OnTcpMsgProtobuf(GameServerLib* self, VOID*, EchoVR::TcpPeer, const VOID* m
         break;
       }
 
-      // Find the entrant's slot index by matching playerSession GUID
+      // Resolve the entrant's slot the way the game resolves accepts: the index of the lobby's
+      // player-session slot whose GUID matches (issue #119; echovr.exe 0x140603e20).
       uint64_t slotIndex = 0;
-      bool found = false;
       uint64_t entrantCount = self->GetContext().GetEntrantCount();
-      for (uint64_t i = 0; i < entrantCount; i++) {
-        auto* entrant = self->GetContext().GetEntrant(static_cast<uint32_t>(i));
-        if (entrant && memcmp(&entrant->userId, &entrantGuid, sizeof(GUID)) == 0) {
-          slotIndex = i;
-          found = true;
-          break;
-        }
-      }
+      const bool found = self->GetContext().FindEntrantSlotBySession(entrantGuid, slotIndex);
 
       if (!found) {
         Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Smite entrant not found in lobby: %s entrants=%llu",
