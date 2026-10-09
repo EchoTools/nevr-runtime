@@ -60,12 +60,19 @@ them. `src/quest/auth/` holds the Android adapters:
     `Failed`.
   - A `Failed` login that is not final is attempted again every five minutes with one request, for
     as long as the process runs, logging one Warning per failure class. Final, because the player
-    was involved: the link could not be delivered, or the server refused a poll with a 4xx.
+    was involved: the server refused a poll with a 4xx, or the bound on unanswered codes was
+    reached. A code that no mechanism could show (the file not written and the game text refused)
+    is not polled; one `{"mechanism":"all","result":"not_shown"}` line says so, and a new code is
+    tried at the next recovery attempt.
   - A code that runs out (the server answers `expired`, or its five minutes pass) is replaced: the
     state stays `AwaitingUser`, a new code is requested (no sooner than 30 s after the previous
-    request) and shown in place of the old one, and the prompt is not taken down in between. After
-    `Session::kMaxCodesPerLogin` (6) codes without a sign-in no more are requested (the server does
-    not rate-limit them): the player is told to restart the game and the login is `Failed`, final.
+    request) and shown in place of the old one, and the prompt is not taken down in between.
+    `Session::kMaxUnansweredCodes` (6) bounds the codes a session issues without a sign-in, counted
+    across every device login of the session (renewals and recovery attempts alike; a sign-in
+    resets it). The server does not rate-limit code requests, so this is the client's bound: per
+    game start without a sign-in, at most six codes, at least 30 s apart. After the sixth the
+    player is told "Sign-in timed out. Restart the game to try again." and the login is `Failed`,
+    final.
   - A poll that answers `verified` is taken even when it returns after the code's deadline: the
     server deletes the code when it hands out the tokens (`evr_device_auth.go`, the verified branch
     of the poll RPC).
@@ -121,42 +128,72 @@ What the game does, measured on the pinned `libr15.so` and `libpnsovr.so`:
   (`0x23225d0`) copies the block to the UI script.
 - The state is the `int` at offset 0 (`SwitchTo`, `0x125b8b4`); `GameStateString` (`0x124d478`)
   names 2 "logging in", 3 "logged in", -94 "login failed", 0 "logged out". Entering -94 runs
-  `ScheduleQuitOnError`, whose deferred `QuitOnError` (`0x12713f8`) ends multiplayer and sends the
-  game space a component event. A new login is started by the UI script
-  (`CR15NetBeginLoginNode::Enter`, `0x231c118`, calls `BeginLogIn`), not by `CR15NetGame`. The
-  only `SwitchTo(0)` is in `CR15NetGame::LogOut` (`0x1289168`), whose only caller in `libr15.so` is
-  `~CR15NetGame` (`0x128824c`): "login failed -> logged out" is the net game being destroyed.
-  Which screen renders the error block, and whether the UI re-reads it while that screen is up, is
-  in the game's assets, not in the ELF.
+  `ScheduleQuitOnError`, whose deferred `QuitOnError` (`0x12713f8`) ends multiplayer and then takes
+  one of two paths on `[CR15Game+0x7af0]`: when it is set, a component event to that game space;
+  when it is zero, it stores 1 at `[*0x376ce08 + 0x16db8]`, the flag `CR15Game::UpdateGame` sets
+  when `CVR::ShouldQuit()` returns true (`0x11fb598`-`0x11fb5b4`), that is, a quit request. A new
+  login is started by the UI script (`CR15NetBeginLoginNode::Enter`, `0x231c118`, calls
+  `BeginLogIn`), not by `CR15NetGame`. The only `SwitchTo(0)` is in `CR15NetGame::LogOut`
+  (`0x1289168`), whose only caller is `~CR15NetGame` (`0x128824c`), whose only caller is
+  `CR15Game::ShutdownEngine` (`0x11f4fe4`): a "login failed -> logged out" line is the engine
+  shutting down.
+- What the headset showed (owner's smoke runs, 2026-10-08): in the first run the process was still
+  alive more than a minute after the login failed (18:40:38); in the second (pid 8915) it kept
+  running and retrying for minutes after the failure at 18:43:07. So no exit followed the failure
+  in those windows. Not known: whether a game space existed (which `QuitOnError` path ran), which
+  screen renders the error block, and whether the UI re-reads it while that screen is up (the
+  assets decide, not the ELF).
+- So the prompt must also work if the game quits after the failure: the player starts the game
+  again. A code the player had not used is then gone (nothing polls it any more) and the new start
+  shows a new one, in the game text and in `device_login.txt`; a sign-in that finished before the
+  quit is in the credential cache and logs in. The signed-in notice therefore says "Restart the
+  game to finish." (nothing on this branch hands a new sign-in to a login the game already runs).
 
 How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`):
 
-- Token auth writes the prompt text to the prompt board, a sequence-locked fixed buffer built
-  without exceptions, in one of two modes: `prompt` (the code, or, after the last code, "Sign-in
-  timed out ... Restart the game to get a new code") or `notice` ("Signed in to EchoVRCE.", after
-  a sign-in).
+- Token auth writes the text to the prompt board, a sequence-locked fixed buffer built without
+  exceptions, in one of two modes: `prompt` (the code; after the last code, "Sign-in timed out.
+  Restart the game to try again.") or `notice` ("Signed in to EchoVRCE. Restart the game to
+  finish.", after a sign-in). Publishing rewrites the whole buffer and withdrawing zeroes it.
 - A GOT hook on `SetDelimitedErrorMessage` lets the game store and log its own message first, so
   the code never passes through the game's logging. If the game was logging in (state 2), the
-  message is one of the local texts above (a server-sent message, such as a ban or a suspension,
-  is never replaced) and the board holds a `prompt`, it checks that the block holds the game's
-  message and writes the prompt's lines over it, saving the game's block.
+  message is exactly one of the local texts above (`src/quest/game_login_failures.h`, which
+  `got_pinned_test.cpp` checks against the pinned `libpnsovr.so`; a server-sent message, such as a
+  ban or a suspension, is never replaced) and the block holds that message, the instance is
+  followed from then on and the game's block saved; if the board holds a `prompt` it is written
+  over the block at once.
 - A GOT hook on `CR15NetGame::Update` (`0x1294b40`, `R_AARCH64_JUMP_SLOT` `0x36e05f8`, called once
-  per game update from `CR15Game::UpdateGame` at `0x11fb5cc`) rewrites that block while the same
-  object is still in -94 and the board has changed: a new code, the signed-in notice, the
-  timed-out text, or the game's saved block when the board is withdrawn. Every later login
-  failure writes the current text again.
+  per game update from `CR15Game::UpdateGame` at `0x11fb5cc`) rewrites the followed block while
+  that instance is still in -94 and the board has changed: a prompt published after the failure,
+  a new code, the signed-in notice, the timed-out text, or the game's saved block when the board
+  is withdrawn. It first checks the block still holds what the hook last left there: the game
+  writes the same block for other errors (`CR15NetClientLobby::SwitchTo` from `0x123e950`,
+  `LobbySessionFailureCB` `0x1240fa4`, `LobbyStatusNotifyCB` `0x125fa88`/`0x125fb58`,
+  `OnGameSpaceUnloaded`/`Aborted` `0x12939f4`/`0x1293ad4`), and a block another writer changed is
+  left alone for good. Every later login failure writes the current text again.
 - Neither hook logs or takes a lock. Their eight counters are `login_prompt_text_shown`,
-  `_text_refreshed`, `_text_kept`, `_text_not_local`, `_board_busy`, `_layout_mismatch` and the two
-  thunks' fault counters; installing logs one `login_prompt_install` line.
+  `_text_refreshed`, `_text_kept`, `_text_not_local`, `_board_busy`, `_block_not_ours` and the two
+  thunks' fault counters; installing logs one `login_prompt_install` line (or `skipped` when the
+  counters were refused).
 
 Exposure of the device code. It is shown to the player by design and is written to
 `device_login.txt` on `/sdcard`, readable by apps with storage access, until the login ends (or,
-after a crash, until the next start). No log line carries it, the game's included. While it lives
-(single use, five minutes) it is also the poll credential: whoever polls it after the player
-verifies receives the tokens. The verify RPC signs the code in to the account of whoever calls it
-(`DeviceAuthVerifyRpc` in `evr_device_auth.go` uses the caller's user id), so someone who reads
-the code can make this headset sign in to their own account, not take over the player's. Those
-limits are why the code is shown on screen and kept in that file, and why it is kept out of logs.
+after a crash, until the next start). No client log line carries it (the sentinel's, token auth's
+and, because of the hook order above, the game's own); the server logs it at Info when it is
+verified (`evr_device_auth.go`, `DeviceAuthVerifyRpc`). A crash while a code is live can put it in
+a minidump: the sentinel's Breakpad handler writes dumps to the first writable of
+`/sdcard/Android/data/com.readyatdawn.r15/files/nevr-crashes`, the app-internal `files`
+directory and `/data/local/tmp` (`sentinel/sentinel.cpp`), and a dump holds process memory: the
+game's error block while it shows the code, library buffers (libcurl's request and response) and
+anything else. The client overwrites these copies when it is done with them: the board (on
+withdraw and on each publish), the hooks' stack copies and their record of the block, the flow's
+code and URL, the session's prompt, and the presenters' formatted texts. Temporaries made while
+building those strings, and copies held by libraries and the game, are not reached. While a code lives (single use,
+five minutes) it is also the poll credential: whoever polls it after the player verifies receives
+the tokens. The verify RPC signs the code in to the account of whoever calls it
+(`DeviceAuthVerifyRpc` uses the caller's user id), so someone who reads the code can make this
+headset sign in to their own account, not take over the player's. Those limits are why the code is
+shown on screen and kept in that file, and why it is kept out of the client's logs.
 
 Nothing here holds the game's login while the player signs in; that belongs to whatever intercepts
 the game's login request.
