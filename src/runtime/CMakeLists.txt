@@ -133,6 +133,7 @@ set(PATCHES_HEADERS
     "server/serverdb_uri.h"
     "server/telemetry_streamer.h"
     "server/bearer_reconnect_auth.h"
+    "server/serialized_mint.h"
     "server/messages.h"
     "server/upnp.h"
     "server/constants.h"
@@ -236,8 +237,10 @@ if(MINGW)
   add_custom_command(
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/stubs"
-    COMMAND x86_64-w64-mingw32-dlltool -d "${CMAKE_CURRENT_SOURCE_DIR}/link/bcrypt_minimal.def"
-            -l "${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a"
+    # dlltool names the archive's import-name symbol after the -l argument as given, so an absolute
+    # path would put the build directory into the DLL: run it in the output directory with a bare name.
+    COMMAND x86_64-w64-mingw32-dlltool -d "${CMAKE_CURRENT_SOURCE_DIR}/link/bcrypt_minimal.def" -l libbcrypt.a
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/stubs"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/link/bcrypt_minimal.def"
     COMMENT "Generating minimal bcrypt import library for nevr_runtime"
   )
