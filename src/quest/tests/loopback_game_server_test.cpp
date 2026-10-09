@@ -3,8 +3,10 @@
 // client half of RFC 6455 by hand, including one-byte writes (partial reads on the server side).
 
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -12,10 +14,14 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 #include "quest/net/loopback_game_server.h"
 #include "quest/net/ws_wire.h"
@@ -128,12 +134,14 @@ struct Rig {
   std::vector<std::string> logs;
   std::unique_ptr<LoopbackGameServer> server;
   std::unique_ptr<Router> router;
-  explicit Rig(std::size_t maxMessage = 1u << 20, std::size_t maxWrite = 8u << 20, int idleFirstFrameMs = 30000) {
+  explicit Rig(std::size_t maxMessage = 1u << 20, std::size_t maxWrite = 8u << 20, int idleFirstFrameMs = 30000,
+               const std::function<void(LoopbackGameServer::Config&)>& tweak = nullptr) {
     LoopbackGameServer::Config cfg;
     cfg.maxMessageBytes = maxMessage;
     cfg.maxWriteBufferBytes = maxWrite;
     cfg.handshakeTimeoutMs = 800;
     cfg.idleFirstFrameMs = idleFirstFrameMs;
+    if (tweak) tweak(cfg);
     cfg.log = [this](LogLevel, const std::string& l) {
       std::lock_guard<std::mutex> lock(logMutex);
       logs.push_back(l);
@@ -165,7 +173,63 @@ struct Rig {
     }
     return false;
   }
+  // The loopback server's records (the router's own lines are not JSON), parsed. A line from the server that
+  // does not parse is a failure of the record contract.
+  std::vector<nlohmann::json> Records() {
+    std::lock_guard<std::mutex> lock(logMutex);
+    std::vector<nlohmann::json> out;
+    for (const auto& l : logs) {
+      if (l.find("\"event\":\"router_") == std::string::npos) continue;
+      try {
+        out.push_back(nlohmann::json::parse(l));
+      } catch (const nlohmann::json::exception&) {
+        std::fprintf(stderr, "a loopback record is not valid JSON: %s\n", l.c_str());
+        ++quest_test::Failures();
+      }
+    }
+    return out;
+  }
+  // Records with this event and action (and, when given, this reason or class).
+  std::size_t Count(const std::string& event, const std::string& action, const std::string& why = "") {
+    std::size_t n = 0;
+    for (const nlohmann::json& r : Records()) {
+      if (r.value("event", "") != event || r.value("action", "") != action) continue;
+      if (!why.empty() && r.value("reason", "") != why && r.value("class", "") != why) continue;
+      ++n;
+    }
+    return n;
+  }
+  bool WaitForRecord(const std::string& event, const std::string& action, const std::string& why = "",
+                     int ms = 3000) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+      if (Count(event, action, why) != 0) return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return false;
+  }
 };
+
+// The descriptor of this process's socket listening on 127.0.0.1:`port`, found the way a foreign component
+// would hold it: by number. -1 when there is none.
+int ListenerFdFor(uint16_t port) {
+  DIR* dir = ::opendir("/proc/self/fd");
+  if (dir == nullptr) return -1;
+  int found = -1;
+  while (dirent* e = ::readdir(dir)) {
+    const int fd = std::atoi(e->d_name);
+    if (fd <= 2 || fd == ::dirfd(dir)) continue;
+    int accepting = 0;
+    socklen_t len = sizeof(accepting);
+    if (::getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &accepting, &len) != 0 || accepting == 0) continue;
+    sockaddr_in addr{};
+    socklen_t alen = sizeof(addr);
+    if (::getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &alen) != 0 || addr.sin_family != AF_INET) continue;
+    if (ntohs(addr.sin_port) == port) found = fd;
+  }
+  ::closedir(dir);
+  return found;
+}
 
 bool Upgrade(Rig& rig, Client& c) {
   c.Write(UpgradeRequestText(rig.GoodTarget()), /*oneByteAtATime=*/true);  // partial reads on the server's handshake parser
@@ -358,7 +422,8 @@ void TestUpgradeNeedsTheToken() {
   // The token is a secret: it is in no log line (the 403 reasons are generic).
   QCHECK(!rig.HasLog(token));
   QCHECK(!rig.HasLog(wrong));
-  QCHECK(rig.HasLog("upgrade refused (403)"));
+  QCHECK(rig.Count("router_game_conn", "upgrade_refused", "access_token_missing_or_wrong") == 5);
+  QCHECK(rig.Count("router_game_conn", "upgrade_refused", "origin_header_present") == 1);
 }
 
 // Failure caught: upgraded connections that never speak holding the listener's slots (16) and the game out.
@@ -381,9 +446,117 @@ void TestSilentUpgradedConnectionsAreClosed() {
   QCHECK(rig.server->IdleClosed() == 1);
 }
 
+// ---- records and the listener -----------------------------------------------------------------------
+
+// Failure caught (#240): the game's connections reaching the listener and ending with no line saying they
+// arrived, were refused, or why they ended. Every accept, rejection and end is one JSON record with a reason.
+void TestEveryConnectionIsRecorded() {
+  Rig rig(1u << 20, 8u << 20, 30000, [](LoopbackGameServer::Config& c) { c.maxConnections = 2; });
+  const uint16_t port = rig.server->Start();
+  QCHECK(rig.Count("router_listener", "listening") == 1);
+  Client game(port);
+  QCHECK(Upgrade(rig, game));
+  QCHECK(rig.WaitForRecord("router_game_conn", "upgraded"));
+  {
+    Client outsider(port);  // second slot: no token
+    outsider.Write(UpgradeRequestText("/config"));
+    QCHECK(outsider.Read(12).rfind("HTTP/1.1 403", 0) == 0);
+    QCHECK(outsider.WaitEof());
+  }
+  QCHECK(rig.WaitForRecord("router_game_conn", "ended", "upgrade_refused"));
+  QCHECK(rig.WaitForRecord("router_game_conn", "upgrade_refused", "access_token_missing_or_wrong"));
+  // The refused connection's slot is freed when the accept thread reaps it (one poll period, 250 ms).
+  std::this_thread::sleep_for(std::chrono::milliseconds(600));
+  Client second(port);
+  QCHECK(Upgrade(rig, second));
+  Client third(port);
+  QCHECK(third.WaitEof());  // over the limit: closed without an answer
+  QCHECK(rig.WaitForRecord("router_game_conn", "rejected", "connection_limit"));
+  QCHECK(rig.Count("router_game_conn", "accepted") == 3);
+  bool sawLimit = false;
+  for (const nlohmann::json& r : rig.Records()) {
+    if (r.value("action", "") == "rejected") sawLimit = r.value("open", 0) == 2 && r.value("limit", 0) == 2;
+    if (r.value("action", "") == "ended") QCHECK(r.contains("ms") && r.contains("upgraded"));
+  }
+  QCHECK(sawLimit);
+  QCHECK(!rig.HasLog(rig.Token()));
+}
+
+// Failure caught (#240): the listening socket closed by someone else in the process (a stale close of a
+// reused number). The game then got ECONNREFUSED every 5 s and the server logged nothing. Now the loss is
+// reported with the class that names it, and the same port listens again with the same token.
+void TestListenerClosedUnderneathIsReportedAndRestored() {
+  Rig rig(1u << 20, 8u << 20, 30000, [](LoopbackGameServer::Config& c) { c.listenerCheckMs = 100; });
+  const uint16_t port = rig.server->Start();
+  const int fd = ListenerFdFor(port);
+  QCHECK(fd >= 0);
+  if (fd < 0) return;
+  ::close(fd);  // the foreign close
+  QCHECK(rig.WaitForRecord("router_listener", "lost", "fd_closed"));
+  QCHECK(rig.WaitForRecord("router_listener", "restored"));
+  QCHECK(rig.server->ListenerLosses() == 1 && rig.server->ListenerRestores() == 1);
+  Client game(port);
+  QCHECK(game.fd >= 0);
+  QCHECK(Upgrade(rig, game));
+  QCHECK(rig.WaitForRecord("router_game_conn", "upgraded"));
+}
+
+// The listening number closed and reused by another component's file (dup2 does both at once): reported as
+// fd_replaced, the other component's file is left open, and the port listens again.
+void TestReplacedListenerNumberIsNotClosed() {
+  Rig rig(1u << 20, 8u << 20, 30000, [](LoopbackGameServer::Config& c) { c.listenerCheckMs = 100; });
+  const uint16_t port = rig.server->Start();
+  const int fd = ListenerFdFor(port);
+  QCHECK(fd >= 0);
+  if (fd < 0) return;
+  int other[2] = {-1, -1};
+  QCHECK(::pipe(other) == 0);
+  QCHECK(::dup2(other[1], fd) == fd);  // closes the listener, puts the pipe's write end at its number
+  QCHECK(rig.WaitForRecord("router_listener", "lost", "fd_replaced"));
+  QCHECK(rig.WaitForRecord("router_listener", "restored"));
+  const bool wrote = ::write(fd, "x", 1) == 1;  // still the other component's open file
+  QCHECK(wrote);
+  char byte = 0;
+  if (wrote) QCHECK(::read(other[0], &byte, 1) == 1 && byte == 'x');
+  Client game(port);
+  QCHECK(Upgrade(rig, game));
+  ::close(fd);
+  ::close(other[0]);
+  ::close(other[1]);
+}
+
+// Failure caught (#240): the listening socket still held but no longer listening (shut down, or destroyed by
+// the kernel the way a socket-destroy request does). Reported as not_listening, closed, listened for again.
+void TestListenerThatStopsListeningIsReportedAndRestored() {
+  Rig rig(1u << 20, 8u << 20, 30000, [](LoopbackGameServer::Config& c) { c.listenerCheckMs = 100; });
+  const uint16_t port = rig.server->Start();
+  const int fd = ListenerFdFor(port);
+  QCHECK(fd >= 0);
+  if (fd < 0) return;
+  ::shutdown(fd, SHUT_RDWR);
+  QCHECK(rig.WaitForRecord("router_listener", "lost", "not_listening"));
+  QCHECK(rig.WaitForRecord("router_listener", "restored"));
+  Client game(port);
+  QCHECK(game.fd >= 0);
+  QCHECK(Upgrade(rig, game));
+  QCHECK(rig.server->ListenerLosses() == 1);
+}
+
+// A healthy listener is never reported lost, however often it is checked.
+void TestHealthyListenerIsNotReported() {
+  Rig rig(1u << 20, 8u << 20, 30000, [](LoopbackGameServer::Config& c) { c.listenerCheckMs = 50; });
+  const uint16_t port = rig.server->Start();
+  std::this_thread::sleep_for(std::chrono::milliseconds(400));
+  Client game(port);
+  QCHECK(Upgrade(rig, game));
+  QCHECK(rig.server->ListenerLosses() == 0);
+  QCHECK(rig.Count("router_listener", "lost") == 0);
+}
+
 }  // namespace
 
 int main() {
+  ::signal(SIGPIPE, SIG_IGN);  // a write to a socket at a reused number must fail a check, not end the run
   TestRoundTrip();
   TestRemoteCloseReachesTheSocket();
   TestBadHandshake();
@@ -392,6 +565,11 @@ int main() {
   TestStopClosesEverything();
   TestUpgradeNeedsTheToken();
   TestSilentUpgradedConnectionsAreClosed();
+  TestEveryConnectionIsRecorded();
+  TestListenerClosedUnderneathIsReportedAndRestored();
+  TestListenerThatStopsListeningIsReportedAndRestored();
+  TestReplacedListenerNumberIsNotClosed();
+  TestHealthyListenerIsNotReported();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "loopback_game_server_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

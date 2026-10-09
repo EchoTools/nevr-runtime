@@ -6,14 +6,17 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
-#include <sys/syscall.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <chrono>
-#include <cstdio>
 #include <cstring>
+#include <exception>
 #include <vector>
+
+#include <nlohmann/json.hpp>
 
 #include "quest/net/ws_wire.h"
 
@@ -25,10 +28,61 @@ using SessionRouter::SendResult;
 
 namespace {
 
-std::string Fmt(const char* format, unsigned long long a = 0, unsigned long long b = 0, unsigned long long c = 0) {
-  char buf[256];
-  std::snprintf(buf, sizeof(buf), format, a, b, c);
-  return buf;
+constexpr const char* kListenerEvent = "router_listener";
+constexpr const char* kConnEvent = "router_game_conn";
+
+nlohmann::json Record(const char* event, const char* action) {
+  nlohmann::json record;
+  record["event"] = event;
+  record["action"] = action;
+  return record;
+}
+
+// One JSON line. Every value written here is a number or a fixed ASCII token, so dump() cannot meet invalid
+// UTF-8; the fallback is still a valid record rather than a lost one.
+std::string Dump(const nlohmann::json& record) {
+  try {
+    return record.dump();
+  } catch (const std::exception&) {
+    return "{\"event\":\"router_log_error\"}";
+  }
+}
+
+long long MillisSince(std::chrono::steady_clock::time_point start) {
+  return static_cast<long long>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count());
+}
+
+// A non-blocking, close-on-exec TCP listener on 127.0.0.1:`port` (0 = an ephemeral port). Returns the
+// descriptor and fills *st with its identity, or -1 with *err set.
+int OpenListener(uint16_t port, struct stat* st, uint16_t* boundPort, int* err) {
+  const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  if (fd < 0) {
+    *err = errno;
+    return -1;
+  }
+  if (port != 0) {
+    // Listening again on the port the game already holds: connections that ended moments ago may sit in
+    // TIME_WAIT on it.
+    const int one = 1;
+    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+  }
+  sockaddr_in addr;
+  std::memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = htons(port);
+  socklen_t len = sizeof(addr);
+  const int flags = ::fcntl(fd, F_GETFL, 0);
+  if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || ::listen(fd, 8) != 0 ||
+      ::getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len) != 0 || flags < 0 ||
+      ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0 || ::fstat(fd, st) != 0) {
+    *err = errno;
+    ::close(fd);
+    return -1;
+  }
+  *boundPort = ntohs(addr.sin_port);
+  return fd;
 }
 
 bool SetNonBlocking(int fd) {
@@ -107,34 +161,35 @@ uint16_t LoopbackGameServer::Start() {
   if (router_ == nullptr || listenFd_ >= 0) return 0;
   uint8_t raw[kTokenHexLength / 2];
   if (!RandomBytes(raw, sizeof(raw))) {
-    Log(LogLevel::Error, "[loopback] could not draw the access token from the kernel random source; not listening");
+    nlohmann::json record = Record(kListenerEvent, "start_failed");
+    record["reason"] = "random_source_failed";  // no token, so no listener
+    Log(LogLevel::Error, Dump(record));
     return 0;
   }
   token_ = HexEncode(raw, sizeof(raw));
   volatile uint8_t* scrub = raw;
   for (std::size_t i = 0; i < sizeof(raw); ++i) scrub[i] = 0;
-  listenFd_ = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  struct stat st {};
+  int err = 0;
+  uint16_t port = 0;
+  listenFd_ = OpenListener(/*port=*/0, &st, &port, &err);  // ephemeral: never a fixed port
   if (listenFd_ < 0) {
-    Log(LogLevel::Error, Fmt("[loopback] socket() failed errno=%llu", static_cast<unsigned long long>(errno)));
+    nlohmann::json record = Record(kListenerEvent, "start_failed");
+    record["reason"] = "listen_failed";
+    record["errno"] = err;
+    Log(LogLevel::Error, Dump(record));
     return 0;
   }
-  sockaddr_in addr;
-  std::memset(&addr, 0, sizeof(addr));
-  addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  addr.sin_port = 0;  // ephemeral: never a fixed port
-  socklen_t len = sizeof(addr);
-  if (::bind(listenFd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0 || ::listen(listenFd_, 8) != 0 ||
-      ::getsockname(listenFd_, reinterpret_cast<sockaddr*>(&addr), &len) != 0 || !SetNonBlocking(listenFd_)) {
-    Log(LogLevel::Error, Fmt("[loopback] bind/listen failed errno=%llu", static_cast<unsigned long long>(errno)));
-    CloseFd(listenFd_);
-    return 0;
-  }
-  port_ = ntohs(addr.sin_port);
+  listenIno_ = st.st_ino;
+  listenDev_ = st.st_dev;
+  port_ = port;
   MakePipe(wakeFds_);
   stop_ = false;
   acceptThread_ = std::thread([this]() { AcceptLoop(); });
-  Log(LogLevel::Info, Fmt("[loopback] listening on 127.0.0.1:%llu", port_));
+  nlohmann::json record = Record(kListenerEvent, "listening");
+  record["address"] = "127.0.0.1";
+  record["port"] = port_;
+  Log(LogLevel::Info, Dump(record));
   return port_;
 }
 
@@ -159,7 +214,9 @@ void LoopbackGameServer::Stop() {
   CloseFd(listenFd_);
   CloseFd(wakeFds_[0]);
   CloseFd(wakeFds_[1]);
-  Log(LogLevel::Info, "[loopback] stopped");
+  nlohmann::json record = Record(kListenerEvent, "stopped");
+  record["port"] = port_;
+  Log(LogLevel::Info, Dump(record));
 }
 
 std::shared_ptr<LoopbackGameServer::Conn> LoopbackGameServer::Find(GameId game) {
@@ -190,39 +247,154 @@ void LoopbackGameServer::Reap() {
 }
 
 void LoopbackGameServer::AcceptLoop() {
+  auto lastCheck = std::chrono::steady_clock::now();
+  bool resourceBlocked = false;
   while (!stop_) {
-    pollfd fds[2] = {{listenFd_, POLLIN, 0}, {wakeFds_[0], POLLIN, 0}};
+    // poll() ignores a negative descriptor, so after a loss only the wake pipe and the timeout run. After
+    // accept() ran out of descriptors the listener is watched for errors only: a queued connection would
+    // otherwise report POLLIN on every pass and spin this thread.
+    const short listenInterest = resourceBlocked ? 0 : POLLIN;
+    pollfd fds[2] = {{listenFd_, listenInterest, 0}, {wakeFds_[0], POLLIN, 0}};
     const int ready = ::poll(fds, 2, 250);
     Reap();
-    if (ready <= 0) continue;
-    if ((fds[1].revents & POLLIN) != 0) Drain(wakeFds_[0]);
-    if ((fds[0].revents & POLLIN) == 0) continue;
-    for (;;) {
-      const int fd = ::accept4(listenFd_, nullptr, nullptr, SOCK_CLOEXEC);
-      if (fd < 0) break;
-      std::size_t count = 0;
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        count = conns_.size();
+    if (stop_) break;
+    const short revents = ready > 0 ? fds[0].revents : 0;
+    if (ready > 0 && (fds[1].revents & POLLIN) != 0) Drain(wakeFds_[0]);
+    const bool faulted = (revents & (POLLERR | POLLHUP | POLLNVAL)) != 0;
+    int acceptErrno = 0;
+    resourceBlocked = false;
+    if (listenFd_ >= 0 && !faulted && (revents & POLLIN) != 0) acceptErrno = AcceptPending(&resourceBlocked);
+    const auto now = std::chrono::steady_clock::now();
+    if (faulted || acceptErrno != 0 || now - lastCheck >= std::chrono::milliseconds(config_.listenerCheckMs)) {
+      lastCheck = now;
+      if (listenFd_ >= 0) {
+        CheckListener(revents, acceptErrno);
+      } else {
+        TryRestoreListener();
       }
-      if (count >= config_.maxConnections || !SetNonBlocking(fd)) {
-        Log(LogLevel::Warning, Fmt("[loopback] connection refused: %llu connections already open", count));
-        ::close(fd);
-        continue;
-      }
-      const int one = 1;
-      ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
-      auto conn = std::make_shared<Conn>();
-      conn->fd = fd;
-      MakePipe(conn->wake);
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        conn->id = nextId_++;
-        conns_[conn->id] = conn;
-      }
-      conn->thread = std::thread([this, conn]() { ConnLoop(conn); });
     }
   }
+}
+
+int LoopbackGameServer::AcceptPending(bool* resourceBlocked) {
+  for (;;) {
+    const int fd = ::accept4(listenFd_, nullptr, nullptr, SOCK_CLOEXEC);
+    if (fd < 0) {
+      const int err = errno;
+      if (err == EAGAIN || err == EWOULDBLOCK || err == EINTR || err == ECONNABORTED) return 0;
+      if (err == EMFILE || err == ENFILE || err == ENOBUFS || err == ENOMEM) {
+        // The connection stays queued; the game sees it connected but never answered. Said once per errno.
+        *resourceBlocked = true;
+        if (err != lastAcceptErrno_) {
+          lastAcceptErrno_ = err;
+          nlohmann::json record = Record(kConnEvent, "rejected");
+          record["reason"] = "accept_out_of_resources";
+          record["errno"] = err;
+          Log(LogLevel::Error, Dump(record));
+        }
+        return 0;
+      }
+      return err;  // the listener itself: CheckListener says what happened to it
+    }
+    lastAcceptErrno_ = 0;
+    std::size_t count = 0;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      count = conns_.size();
+    }
+    const char* refusal = nullptr;
+    if (count >= config_.maxConnections) {
+      refusal = "connection_limit";
+    } else if (!SetNonBlocking(fd)) {
+      refusal = "set_nonblocking_failed";
+    }
+    if (refusal != nullptr) {
+      nlohmann::json record = Record(kConnEvent, "rejected");
+      record["reason"] = refusal;
+      record["open"] = count;
+      record["limit"] = config_.maxConnections;
+      Log(LogLevel::Warning, Dump(record));
+      ::close(fd);
+      continue;
+    }
+    const int one = 1;
+    ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+    auto conn = std::make_shared<Conn>();
+    conn->fd = fd;
+    MakePipe(conn->wake);
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      conn->id = nextId_++;
+      conns_[conn->id] = conn;
+    }
+    nlohmann::json record = Record(kConnEvent, "accepted");
+    record["conn"] = conn->id;
+    record["open"] = count + 1;
+    Log(LogLevel::Info, Dump(record));
+    conn->thread = std::thread([this, conn]() { ConnLoop(conn); });
+  }
+}
+
+void LoopbackGameServer::CheckListener(short revents, int acceptErrno) {
+  const char* cls = nullptr;
+  bool ours = false;
+  int soError = 0;
+  struct stat st {};
+  if (::fstat(listenFd_, &st) != 0) {
+    cls = "fd_closed";  // something in the process closed the descriptor underneath this class
+  } else if (!S_ISSOCK(st.st_mode) || st.st_ino != listenIno_ || st.st_dev != listenDev_) {
+    cls = "fd_replaced";  // closed, and the number reused by another file: that file is not ours to touch
+  } else {
+    ours = true;
+    int accepting = 0;
+    socklen_t len = sizeof(accepting);
+    if (::getsockopt(listenFd_, SOL_SOCKET, SO_ACCEPTCONN, &accepting, &len) != 0 || accepting == 0) {
+      cls = "not_listening";  // still our socket, but the kernel no longer listens on it (shut down or destroyed)
+      socklen_t errLen = sizeof(soError);
+      if (::getsockopt(listenFd_, SOL_SOCKET, SO_ERROR, &soError, &errLen) != 0) soError = 0;
+    }
+  }
+  if (cls == nullptr) return;
+  listenerLosses_.fetch_add(1);
+  nlohmann::json record = Record(kListenerEvent, "lost");
+  record["class"] = cls;
+  record["port"] = port_;
+  record["fd"] = listenFd_;
+  record["revents"] = static_cast<int>(revents);
+  record["accept_errno"] = acceptErrno;
+  record["so_error"] = soError;
+  Log(LogLevel::Error, Dump(record));
+  if (ours) ::close(listenFd_);
+  listenFd_ = -1;
+  lastRestoreErrno_ = 0;
+  TryRestoreListener();
+}
+
+void LoopbackGameServer::TryRestoreListener() {
+  struct stat st {};
+  int err = 0;
+  uint16_t port = 0;
+  const int fd = OpenListener(port_, &st, &port, &err);
+  if (fd < 0) {
+    if (err != lastRestoreErrno_) {
+      lastRestoreErrno_ = err;
+      nlohmann::json record = Record(kListenerEvent, "restore_failed");
+      record["port"] = port_;
+      record["errno"] = err;
+      record["retry_ms"] = config_.listenerCheckMs;
+      Log(LogLevel::Error, Dump(record));
+    }
+    return;
+  }
+  listenFd_ = fd;
+  listenIno_ = st.st_ino;
+  listenDev_ = st.st_dev;
+  lastRestoreErrno_ = 0;
+  listenerRestores_.fetch_add(1);
+  nlohmann::json record = Record(kListenerEvent, "restored");
+  record["port"] = port;
+  record["fd"] = fd;
+  Log(LogLevel::Warning, Dump(record));
 }
 
 namespace {
@@ -249,7 +421,7 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
   const auto started = std::chrono::steady_clock::now();
   bool opened = false;
   bool open = true;
-  const char* endReason = "peer closed";
+  const char* endReason = nullptr;  // a fixed token; set where the loop decides to end
   std::string inbox;               // handshake bytes
   FrameDecoder decoder(config_.maxMessageBytes);
   bool handshaken = false;
@@ -277,36 +449,42 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
       std::lock_guard<std::mutex> lock(conn->writeMutex);
       wantWrite = !conn->writeBuf.empty();
       closing = conn->closeRequested;
-      if (closing && !wantWrite) break;  // close frame flushed
+      if (closing && !wantWrite) {  // close frame flushed
+        if (endReason == nullptr) endReason = "closed_by_router";
+        break;
+      }
       if (closing && std::chrono::steady_clock::now() > conn->closeDeadline) {
-        endReason = "close flush timed out";
+        endReason = "close_flush_timed_out";
         break;
       }
     }
     if (!handshaken && std::chrono::steady_clock::now() - started > std::chrono::milliseconds(config_.handshakeTimeoutMs)) {
-      endReason = "handshake timed out";
+      endReason = "handshake_timed_out";
       break;
     }
     if (handshaken && !sawDataFrame && !closing &&
         std::chrono::steady_clock::now() - upgradedAt > std::chrono::milliseconds(config_.idleFirstFrameMs)) {
       ++idleClosed_;
-      Log(LogLevel::Warning, Fmt("[loopback] conn=%llu closed: no data frame within %llu ms of the upgrade", id,
-                                 static_cast<unsigned long long>(config_.idleFirstFrameMs)));
+      nlohmann::json record = Record(kConnEvent, "closing");
+      record["conn"] = id;
+      record["reason"] = "idle_before_first_frame";
+      record["idle_ms"] = config_.idleFirstFrameMs;
+      Log(LogLevel::Warning, Dump(record));
       beginClose(SessionRouter::kClosePolicyViolation, "idle");
-      endReason = "idle before first frame";
+      endReason = "idle_before_first_frame";
     }
     const short interest = static_cast<short>((closing ? 0 : POLLIN) | (wantWrite ? POLLOUT : 0));
     pollfd fds[2] = {{conn->fd, interest, 0}, {conn->wake[0], POLLIN, 0}};
     const int ready = ::poll(fds, 2, 200);
     if (ready < 0 && errno != EINTR) {
-      endReason = "poll failed";
+      endReason = "poll_failed";
       break;
     }
     if (ready <= 0) continue;
     if ((fds[1].revents & POLLIN) != 0) Drain(conn->wake[0]);
 
     if ((fds[0].revents & (POLLERR | POLLNVAL)) != 0) {
-      endReason = "socket error";
+      endReason = "socket_error";
       break;
     }
     if (wantWrite && (fds[0].revents & POLLOUT) != 0) {
@@ -321,7 +499,7 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
         }
       }
       if (!ok) {
-        endReason = "write failed";
+        endReason = "write_failed";
         break;
       }
       if (owe && opened) router_->OnGameWritable(id);
@@ -331,10 +509,13 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
 
     char chunk[16384];
     const ssize_t got = ::recv(conn->fd, chunk, sizeof(chunk), MSG_DONTWAIT);
-    if (got == 0) break;
+    if (got == 0) {
+      endReason = "peer_closed";
+      break;
+    }
     if (got < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
-      endReason = "read failed";
+      endReason = "read_failed";
       break;
     }
 
@@ -347,8 +528,12 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
         // Not an upgrade we can answer: say so once and hang up. The request itself is never logged.
         queueWrite(BuildBadRequestResponse(), true);
         beginClose(0, "");
-        endReason = hs == HandshakeStatus::TooLarge ? "handshake too large" : "bad handshake";
-        Log(LogLevel::Warning, Fmt("[loopback] conn=%llu handshake rejected", id));
+        endReason = hs == HandshakeStatus::TooLarge ? "handshake_too_large" : "bad_handshake";
+        nlohmann::json record = Record(kConnEvent, "upgrade_refused");
+        record["conn"] = id;
+        record["reason"] = endReason;
+        record["status"] = 400;
+        Log(LogLevel::Warning, Dump(record));
         std::lock_guard<std::mutex> lock(conn->writeMutex);
         FlushSome(conn->fd, conn->writeBuf);
         break;
@@ -358,16 +543,20 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
       // request target are never logged.
       const char* refusal = nullptr;
       if (request.hasOrigin) {
-        refusal = "an Origin header was present";
+        refusal = "origin_header_present";
       } else if (!TargetCarriesToken(request.target, token_)) {
-        refusal = "the access token was missing or wrong";
+        refusal = "access_token_missing_or_wrong";
       }
       if (refusal != nullptr) {
         ++rejected_;
         queueWrite(BuildForbiddenResponse(), true);
         beginClose(0, "");
-        endReason = "upgrade refused";
-        Log(LogLevel::Warning, std::string("[loopback] conn=") + std::to_string(id) + " upgrade refused (403): " + refusal);
+        endReason = "upgrade_refused";
+        nlohmann::json record = Record(kConnEvent, "upgrade_refused");
+        record["conn"] = id;
+        record["reason"] = refusal;
+        record["status"] = 403;
+        Log(LogLevel::Warning, Dump(record));
         std::lock_guard<std::mutex> lock(conn->writeMutex);
         FlushSome(conn->fd, conn->writeBuf);
         break;
@@ -378,12 +567,17 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
       {
         std::lock_guard<std::mutex> lock(conn->writeMutex);
         if (!FlushSome(conn->fd, conn->writeBuf)) {
-          endReason = "write failed";
+          endReason = "write_failed";
           break;
         }
       }
       opened = true;
-      Log(LogLevel::Info, Fmt("[loopback] conn=%llu upgraded", id));
+      {
+        nlohmann::json record = Record(kConnEvent, "upgraded");
+        record["conn"] = id;
+        record["handshake_ms"] = MillisSince(started);
+        Log(LogLevel::Info, Dump(record));
+      }
       router_->OnGameOpen(id);
       const std::string leftover = inbox.substr(request.consumed);
       inbox.clear();
@@ -398,15 +592,22 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
       const DecodeStatus status = decoder.Next(&message);
       if (status == DecodeStatus::NeedMore) break;
       if (status == DecodeStatus::TooBig) {
-        Log(LogLevel::Error, Fmt("[loopback] conn=%llu message exceeds the %llu byte limit", id, config_.maxMessageBytes));
+        nlohmann::json record = Record(kConnEvent, "closing");
+        record["conn"] = id;
+        record["reason"] = "message_too_big";
+        record["limit_bytes"] = config_.maxMessageBytes;
+        Log(LogLevel::Error, Dump(record));
         beginClose(SessionRouter::kCloseMessageTooBig, "message too big");
-        endReason = "message too big";
+        endReason = "message_too_big";
         break;
       }
       if (status == DecodeStatus::ProtocolError) {
-        Log(LogLevel::Warning, Fmt("[loopback] conn=%llu WebSocket protocol error", id));
+        nlohmann::json record = Record(kConnEvent, "closing");
+        record["conn"] = id;
+        record["reason"] = "protocol_error";
+        Log(LogLevel::Warning, Dump(record));
         beginClose(1002, "protocol error");
-        endReason = "protocol error";
+        endReason = "protocol_error";
         break;
       }
       switch (message.opcode) {
@@ -420,7 +621,7 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
           break;
         case Opcode::Close:
           beginClose(message.closeCode == 1005 ? static_cast<uint16_t>(1000) : message.closeCode, "");
-          endReason = "peer sent close";
+          endReason = "peer_sent_close";
           break;
         default:
           break;
@@ -430,16 +631,20 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
     {
       std::lock_guard<std::mutex> lock(conn->writeMutex);
       if (!FlushSome(conn->fd, conn->writeBuf)) {
-        endReason = "write failed";
+        endReason = "write_failed";
         open = false;
       }
     }
   }
 
-  if (decoder.UnmaskedFrames() != 0) {
-    Log(LogLevel::Info, Fmt("[loopback] conn=%llu sent %llu frame(s) without the mask bit (accepted)", id, decoder.UnmaskedFrames()));
-  }
-  Log(LogLevel::Info, std::string("[loopback] conn=") + std::to_string(id) + " ended: " + endReason);
+  if (endReason == nullptr) endReason = stop_ ? "server_stopped" : "unknown";
+  nlohmann::json record = Record(kConnEvent, "ended");
+  record["conn"] = id;
+  record["reason"] = endReason;
+  record["upgraded"] = opened;
+  record["ms"] = MillisSince(started);
+  record["unmasked_frames"] = decoder.UnmaskedFrames();  // client frames without the mask bit, accepted
+  Log(LogLevel::Info, Dump(record));
   ::shutdown(conn->fd, SHUT_RDWR);
   if (opened) router_->OnGameClose(id);
   conn->done = true;
