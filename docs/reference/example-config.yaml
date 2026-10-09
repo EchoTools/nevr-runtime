@@ -12,8 +12,9 @@
 # substitution in production. The literal form is for local dev only and MUST
 # NEVER be committed to version control.
 #
-# Every value is interpolated: ${VAR} (required), ${VAR:?msg} (required, with a
-# message), ${VAR:-default} (optional). Write $${ for a literal ${ that is not a
+# Every value is interpolated: ${VAR} (an unset one is logged
+# once at load and its text is kept), ${VAR:?msg} (required: the load fails when it is
+# unset), ${VAR:-default} (optional). Write $${ for a literal ${ that is not a
 # variable, e.g. in a plugin's args; nothing after it is looked up. $${ is the
 # only escape: $$ not followed by { stays $$. A literal $ immediately followed by
 # a variable's value is written ${NO_SUCH_VAR:-$}${VAR}.
