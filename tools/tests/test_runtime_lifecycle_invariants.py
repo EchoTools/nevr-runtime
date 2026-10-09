@@ -343,7 +343,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # Issue #58: the ServerDB CODE_ENDED path calls ReturnToLobby::Request (not the game function
         # directly) and the game thread polls the hold once per Update.
         server = strip_comments((ROOT / "src/runtime/server/gameserver.cpp").read_text())
-        call = extract_braced_function(server, "static void CallScheduleReturnToLobby(")
+        call = extract_braced_function(server, "void CallScheduleReturnToLobby(")
         self.assertIn("ReturnToLobby::Request(", call)
         self.assertNotIn("EchoVR::NetGameScheduleReturnToLobby", call)
         update = extract_braced_function(server, "VOID GameServerLib::Update(")
@@ -358,9 +358,30 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
     def test_both_registration_sites_use_the_shared_envelope_builder(self):
         # Issue #46: the initial registration and the post-reconnect re-registration built the same
         # envelope field by field in two places. Both go through BuildRegistrationEnvelope.
-        server = strip_comments((ROOT / "src/runtime/server/gameserver.cpp").read_text())
+        # gameserver.cpp holds the initial registration, gameserver_callbacks.cpp the re-registration.
+        server = strip_comments((ROOT / "src/runtime/server/gameserver.cpp").read_text() +
+                                (ROOT / "src/runtime/server/gameserver_callbacks.cpp").read_text())
         self.assertEqual(len(re.findall(r"GameServer::BuildRegistrationEnvelope\s*\(", server)), 2)
         self.assertNotIn("mutable_game_server_registration()", server)
+
+    def test_boot_lines_are_replayed_into_the_main_log_at_first_open_only(self):
+        # Issue #5: boot and runtime events are one stream. The main log replays this run's
+        # nevr-boot.jsonl lines when it first opens; rotation reopens without replaying; the boot file
+        # is read, never deleted (it is the crash spool).
+        filt = strip_comments((ROOT / "src/runtime/log/builtin_filter.cpp").read_text())
+        init = extract_braced_function(filt, "static void InitFileLogging(")
+        self.assertLess(init.index("OpenLogFile()"), init.index("ReplayBootLines()"))
+        rotate = extract_braced_function(filt, "static void RotateIfNeeded(")
+        self.assertNotIn("ReplayBootLines", rotate)
+        replay = extract_braced_function(filt, "static void ReplayBootLines(")
+        self.assertIn("BootReplay::ParseRun(contents, GetRunId())", replay)
+        for forbidden in ("remove(", "DeleteFile", "unlink(", "trash"):
+            self.assertNotIn(forbidden, replay, "the boot file is the crash spool and is never deleted")
+        tee = strip_comments((ROOT / "src/runtime/log/boot_log_tee.cpp").read_text())
+        self.assertIn("BootLines::Build(", tee)
+        self.assertIn("GetSystemTime(", tee)
+        close = extract_braced_function(tee, "void BootLogTee::Close(")
+        self.assertNotIn("g_boot_path", close, "Path() must stay valid after Close()")
 
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches
@@ -409,7 +430,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # commented-out RecordBroadcasterOwner call with a `owner = nullptr;`
         # decoy nearby can't satisfy the substring these regexes look for,
         # because extract_braced_function strips comments before returning.
-        register = extract_braced_function(source, "void GameServerLib::RegisterBroadcasterCallbacks(")
+        callbacks = (ROOT / "src/runtime/server/gameserver_callbacks.cpp").read_text()
+        register = extract_braced_function(callbacks, "void GameServerLib::RegisterBroadcasterCallbacks(")
         record = re.search(r"\bGameServer::RecordBroadcasterOwner\s*\(\s*\*m_context\s*\)", register)
         self.assertIsNotNone(record, "RegisterBroadcasterCallbacks no longer records the callback owner")
         first_listen = re.search(r"\bListenForBroadcasterMessage\s*\(", register)
@@ -421,7 +443,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # broadcaster (the lobby's), or the guard rejects every handle again.
         listen = extract_braced_function(source, "uint16_t ListenForBroadcasterMessage(")
         self.assertRegex(listen, r"BroadcasterListen\(\s*lobby->broadcaster\s*,")
-        unregister = extract_braced_function(source, "void GameServerLib::UnregisterAllCallbacks(")
+        unregister = extract_braced_function(callbacks, "void GameServerLib::UnregisterAllCallbacks(")
         self.assertRegex(unregister, r"liveOwner\s*=\s*lobby\s*!=\s*nullptr\s*\?\s*lobby->broadcaster\s*:")
         helper_source = (ROOT / "src/runtime/server/callback_unregistration.cpp").read_text()
         helper = extract_braced_function(helper_source, "EchoVR::Broadcaster* RecordBroadcasterOwner(")
