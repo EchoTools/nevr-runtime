@@ -126,22 +126,25 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: .vcpkg-binary-cache
-        key: vcpkg-bin-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
+        key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
         restore-keys: |
-          vcpkg-bin-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-
-          vcpkg-bin-${{ hashFiles('vcpkg.json') }}-
+          vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-
+          vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-
 
     - name: Install vcpkg dependencies
-      env:
-        VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/.vcpkg-binary-cache,readwrite
       run: |
         set -euo pipefail
+        # $GITHUB_WORKSPACE, not ${{ github.workspace }}: in a container job the second is the host's
+        # path, which does not exist here, and vcpkg would write its archives where nothing saves them.
         mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
+        export VCPKG_BINARY_SOURCES="clear;files,$GITHUB_WORKSPACE/.vcpkg-binary-cache,readwrite"
         echo "archives restored from the cache entry: $(find "$GITHUB_WORKSPACE/.vcpkg-binary-cache" -name '*.zip' | wc -l)"
         "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
           --x-manifest-root="$GITHUB_WORKSPACE" \
           --x-install-root="$GITHUB_WORKSPACE/build/mingw-release/vcpkg_installed"
-        echo "archives in the binary cache now: $(find "$GITHUB_WORKSPACE/.vcpkg-binary-cache" -name '*.zip' | wc -l)"
+        count=$(find "$GITHUB_WORKSPACE/.vcpkg-binary-cache" -name '*.zip' | wc -l)
+        echo "archives in the binary cache now: $count"
+        test "$count" -gt 0
 
     # Saved right after the install, so a failure in a later step does not lose the dependency build.
     - name: Save the vcpkg binary cache
@@ -149,7 +152,7 @@ jobs:
       uses: actions/cache/save@v4
       with:
         path: .vcpkg-binary-cache
-        key: vcpkg-bin-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
+        key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
 
     - name: Generate pinned protobuf sources
       run: |
