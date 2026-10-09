@@ -884,6 +884,40 @@ static long long StackDirectAllocProbe(void* self, long long request, long long 
   return OriginalStackDirectAlloc(self, request, align);
 }
 
+// The game installs its own console ctrl handler from CR15Game::InitRenderWindowFromEngineFlags, after
+// our boot-time RearmConsoleCtrlHandler(). Handlers run newest-first, so from then on the game's handler
+// returns TRUE before ours is reached and the shutdown never reports or hits the watchdog (#102: a
+// server that never logged in got SIGINT, only the game's "Console close signal received" appeared, and
+// the process then sat in the server hold). Re-arm the moment the game's installer returns.
+typedef INT64 (*GameConsoleHandlerInstallFunc)(void*);
+static GameConsoleHandlerInstallFunc OriginalGameConsoleHandlerInstall = nullptr;
+
+static INT64 GameConsoleHandlerInstallHook(void* arg) {
+  const INT64 result = OriginalGameConsoleHandlerInstall(arg);
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] game console ctrl handler installed result=%lld", result);
+  RearmConsoleCtrlHandler();
+  return result;
+}
+
+static void InstallGameConsoleHandlerRearmHook() {
+  void* target = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_CONSOLE_HANDLER_INSTALL);
+  if (memcmp(target, PatchAddresses::GAME_CONSOLE_HANDLER_INSTALL_PROLOGUE,
+             sizeof(PatchAddresses::GAME_CONSOLE_HANDLER_INSTALL_PROLOGUE)) != 0) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] hook skipped name=GameConsoleHandlerInstall reason=prologue_mismatch — CTRL+C may be "
+        "consumed by the game's handler before ours");
+    return;
+  }
+  OriginalGameConsoleHandlerInstall = reinterpret_cast<GameConsoleHandlerInstallFunc>(target);
+  if (PatchDetour(&OriginalGameConsoleHandlerInstall, reinterpret_cast<PVOID>(GameConsoleHandlerInstallHook),
+                  "GameConsoleHandlerInstall")) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] hooked name=GameConsoleHandlerInstall (re-arms our CTRL+C handler after the game's)");
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] hook failed name=GameConsoleHandlerInstall");
+  }
+}
+
 void InstallCrashFilterInstrumentation() {
   PrepareCrashRecordPath();
   if (g_crashRecordPath[0] != '\0') {
@@ -1144,6 +1178,7 @@ void RearmConsoleCtrlHandler() {
 }
 
 void InstallConsoleCtrlHandler() {
+  InstallGameConsoleHandlerRearmHook();
   // Installed here, this handler sits BEHIND the game's (registered later, and
   // the chain is LIFO). It only becomes reachable once RearmConsoleCtrlHandler()
   // moves it to the front. Registering now still matters: it covers a CTRL+C

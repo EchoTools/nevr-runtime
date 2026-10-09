@@ -23,6 +23,11 @@
       "prologue": "48895c2408574881"
     },
     {
+      "va": "0x1400DCBB0",
+      "name": "GAME_CONSOLE_HANDLER_INSTALL",
+      "prologue": "4883ec284885c974"
+    },
+    {
       "va": "0x1400EAEF0",
       "name": "EchoVR::GetProcAddress",
       "prologue": "4881eca800000048"

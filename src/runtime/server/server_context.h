@@ -107,6 +107,12 @@ class ServerContext {
   EchoVR::Lobby::EntrantData* GetEntrant(uint32_t index) const;
   uint64_t GetEntrantCount() const;
 
+  // Resolves an entrant's session GUID to its entrant slot the way the game does for accepts
+  // (echovr.exe 0x140603e20): the index of the lobby's player-session slot (lobby+0xC8, stride 0x28)
+  // whose GUID matches, valid only when that index also names a live entrant. Returns false when
+  // not initialized, the array is absent, or nothing matches.
+  bool FindEntrantSlotBySession(const GUID& session, uint64_t& slot) const;
+
   // ServerDB peer (exclusive lock for write)
   void SetServerDbPeer(const EchoVR::TcpPeer& peer);
   EchoVR::TcpPeer GetServerDbPeer() const;

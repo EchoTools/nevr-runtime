@@ -381,6 +381,15 @@ constexpr uintptr_t ENGINE_ENTITY_PROP_DISPATCH = 0xF87AA0;   // = CBroadcaster:
 constexpr uintptr_t CRASH_EXCEPTION_FILTER = 0x1CEF00;
 constexpr unsigned char CRASH_EXCEPTION_FILTER_PROLOGUE[5] = {0x48, 0x89, 0x5C, 0x24, 0x08};
 
+/// Address: the game's console-ctrl-handler installer (fcn.1400dcbb0, 15 instructions) — ReVault-verified.
+/// Sole caller: CR15Game::InitRenderWindowFromEngineFlags (0x1404f5870). Stores RCX to a global, then
+/// calls SetConsoleCtrlHandler(0x1400db960, TRUE). It runs AFTER our boot-time re-arm, so without a
+/// second re-arm the game's handler sits in front of ours and a CTRL+C never reaches us (#102).
+/// Prologue: 48 83 EC 28 48 85 C9 74 27 (SUB RSP,0x28; TEST RCX,RCX; JZ +0x27) — MinHook-safe.
+constexpr uintptr_t GAME_CONSOLE_HANDLER_INSTALL = 0xDCBB0;
+constexpr unsigned char GAME_CONSOLE_HANDLER_INSTALL_PROLOGUE[9] = {0x48, 0x83, 0xEC, 0x28, 0x48,
+                                                                    0x85, 0xC9, 0x74, 0x27};
+
 /// Address: BugSplat crash handler (0x1400dbbc0, 141 bytes)
 /// Fatal error handler called from 5 sites in the game. Builds an error report,
 /// calls ExitProcess(1), then executes int3. In server mode we hook this to log
