@@ -113,7 +113,8 @@ services:
 # Controls how the game server advertises itself to ServerDB and which
 # IP addresses it uses for peer-to-peer connections. All keys are optional.
 #
-# Reader: gamepatches config.cpp (LoadLocalConfigHook), gameserver_callbacks.cpp
+# Reader: config.cpp (external_ip, upnp, upnp_port), and ReadUPnPConfig callers in
+#         gameserver_serverdb.cpp (RequestRegistration) and gameserver_callbacks.cpp (re-registration)
 # ---------------------------------------------------------------------------
 
 network:
