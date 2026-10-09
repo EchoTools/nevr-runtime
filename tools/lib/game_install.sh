@@ -1,4 +1,4 @@
-# Shared by launch-client.sh and verify-server.sh (source it after cd'ing into the checkout).
+# Shared by launch-client.sh, launch-server.sh and verify-server.sh (source it after cd'ing into the checkout).
 # Defines functions and one variable; running it has no side effects.
 
 # The game's process name (comm) is "Main Thread", so `pgrep -x echovr.exe` never matches; match the
@@ -31,7 +31,7 @@ acquire_game_run_lock() {
   GAME_RUN_LOCK="${NEVR_LAUNCH_LOCK:-/var/tmp/work-nevr-runtime/launch-client.lock}"
   mkdir -p "$(dirname "$GAME_RUN_LOCK")"
   exec 9>"$GAME_RUN_LOCK" || { echo "ERROR: cannot open the lock file $GAME_RUN_LOCK" >&2; exit 4; }
-  flock -n 9 || { echo "ERROR: another game run (launch-client.sh or verify-server.sh) holds $GAME_RUN_LOCK" >&2; exit 4; }
+  flock -n 9 || { echo "ERROR: another game run (launch-client.sh, launch-server.sh or verify-server.sh) holds $GAME_RUN_LOCK" >&2; exit 4; }
   if running=$(pgrep -u "$(id -u)" -f "$ECHOVR_CMDLINE"); then
     echo "ERROR: echovr.exe is already running (pid ${running//$'\n'/ }); stop it first" >&2
     exit 4

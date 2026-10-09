@@ -196,6 +196,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/module_loader.h"
+#include "core/hex_dump.h"
 #include "runtime/patch/matchmaker_host_patch.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/compat/hmd_serial.h"
@@ -998,6 +999,25 @@ TEST(SecurityDiagnostics, NumericTransportFormatterCarriesOnlyNumericFields) {
             "[NEVR.WS] Proxy port 5000 bind failed failure=1 — retrying (1/3)");
   EXPECT_EQ(LogDiagnostics::FormatBindFailureDiagnostic("Matchmaker", 5001, 2, 3),
             "[NEVR.WS] Matchmaker port 5001 bind failed failure=1 — retrying (2/3)");
+}
+
+// #47: the one hex-dump helper behind the SAVE_SUCCESS, CURRENT_LOADOUT and bone dumps.
+TEST(HexDump, FormatsBytesAsUppercaseHexWithATrailingSpace) {
+  const uint8_t bytes[] = {0xDE, 0xAD, 0x0B, 0x00};
+  const auto lines = nevr::HexDumpLines(bytes, sizeof(bytes), 256, 32);
+  ASSERT_EQ(lines.size(), 1U);
+  EXPECT_EQ(lines[0], "DE AD 0B 00 ");
+}
+
+TEST(HexDump, SplitsIntoLinesAndCapsTheLength) {
+  std::vector<uint8_t> bytes(100);
+  for (size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<uint8_t>(i);
+  const auto lines = nevr::HexDumpLines(bytes.data(), bytes.size(), 70, 32);
+  ASSERT_EQ(lines.size(), 3U);                 // 32 + 32 + 6 of the first 70 bytes
+  EXPECT_EQ(lines[0].size(), 32U * 3U);
+  EXPECT_EQ(lines[2], "40 41 42 43 44 45 ");
+  EXPECT_TRUE(nevr::HexDumpLines(bytes.data(), 0, 70, 32).empty());
+  EXPECT_TRUE(nevr::HexDumpLines(nullptr, 4, 70, 32).empty());
 }
 
 // #18: pnsradmatchmaking.dll is unloaded and reloaded mid-session and every load maps a fresh image,

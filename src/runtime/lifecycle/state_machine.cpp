@@ -60,8 +60,7 @@ VOID NetGameSwitchStateHook(PVOID pGame, EchoVR::NetGameState state) {
   }
 
   if (g_isServer) {
-    // Redirect "no network" — the game's HTTP client rejects ws:// service-redirect URLs before calling Open.
-    // The actual service traffic goes through the ws_bridge, which handles the
+    // Redirect "no network". The actual service traffic goes through the ws_bridge, which handles the
     // WebSocket connection independently. Redirect back to LoadingRoot so the
     // game re-attempts the loading process without ending multiplayer.
     if (state == EchoVR::NetGameState::NoNetwork) {
