@@ -63,9 +63,81 @@ TEST(ReturnToLobbyHold, AnEmptySessionIsHeldUntilTheTtlThenReleased) {
 TEST(ReturnToLobbyHold, RepeatedRequestsDoNotRestartTheClock) {
   Policy policy = WithTtl(kTtl);
   EXPECT_EQ(policy.OnReturnRequested(1000, 0, false), RequestVerdict::Hold);
-  EXPECT_EQ(policy.OnReturnRequested(900000, 0, false), RequestVerdict::Hold);
+  EXPECT_EQ(policy.OnReturnRequested(900000, 0, false), RequestVerdict::HoldAgain);
   EXPECT_EQ(policy.HeldSinceMs(), 1000U);
   EXPECT_EQ(policy.Poll(1000 + kTtl, 0, false), PollVerdict::Release);
+}
+
+// The game re-issues the request every tick while a session is empty (CR15NetDedicatedLobby
+// vslot[1] in state 0xb), so only the first request of a hold may be reported as a new hold.
+TEST(ReturnToLobbyHold, OnlyTheFirstRequestOfAHoldIsNew) {
+  Policy policy = WithTtl(kTtl);
+  EXPECT_EQ(policy.OnReturnRequested(1000, 0, false), RequestVerdict::Hold);
+  for (int tick = 1; tick <= 100; ++tick) {
+    EXPECT_EQ(policy.OnReturnRequested(1000 + tick, 0, false), RequestVerdict::HoldAgain);
+  }
+  EXPECT_EQ(policy.HeldRequests(), 101U);
+  ASSERT_EQ(policy.Poll(1000 + kTtl, 0, false), PollVerdict::Release);
+  EXPECT_EQ(policy.OnReturnRequested(5000000, 0, false), RequestVerdict::Proceed);
+}
+
+// After the TTL releases the return, the game's queued callback has not run yet and the next tick
+// asks again: that must reach the game, not start a second TTL.
+TEST(ReturnToLobbyHold, ARequestAfterTheReleaseProceedsInsteadOfStartingAFreshHold) {
+  Policy policy = WithTtl(kTtl);
+  ASSERT_EQ(policy.OnReturnRequested(1000, 0, false), RequestVerdict::Hold);
+  ASSERT_EQ(policy.Poll(1000 + kTtl, 0, false), PollVerdict::Release);
+  EXPECT_EQ(policy.OnReturnRequested(1000 + kTtl + 16, 0, false), RequestVerdict::Proceed);
+  EXPECT_FALSE(policy.Holding());
+  EXPECT_EQ(policy.OnReturnRequested(1000 + kTtl + 32, 0, false), RequestVerdict::Proceed);
+}
+
+TEST(ReturnToLobbyHold, ThePostReleaseLatchEndsOncePlayersAreSeenAgain) {
+  Policy policy = WithTtl(kTtl);
+  ASSERT_EQ(policy.OnReturnRequested(1000, 0, false), RequestVerdict::Hold);
+  ASSERT_EQ(policy.Poll(1000 + kTtl, 0, false), PollVerdict::Release);
+  // Latched: a later empty session is not held again while no player has been seen.
+  EXPECT_EQ(policy.OnReturnRequested(2000000, 0, false), RequestVerdict::Proceed);
+  EXPECT_EQ(policy.Poll(2000010, 0, false), PollVerdict::Keep);
+  EXPECT_EQ(policy.OnReturnRequested(3000000, 0, false), RequestVerdict::Proceed) << "still latched";
+  // A player is seen (by a Poll, or by a request): the latch ends.
+  EXPECT_EQ(policy.Poll(3000010, 2, false), PollVerdict::Keep);
+  EXPECT_EQ(policy.OnReturnRequested(9000000, 0, false), RequestVerdict::Hold) << "a new empty session holds again";
+  EXPECT_EQ(policy.HeldSinceMs(), 9000000U);
+}
+
+TEST(ReturnToLobbyHold, ARequestWithPlayersAlsoEndsTheLatch) {
+  Policy policy = WithTtl(kTtl);
+  ASSERT_EQ(policy.OnReturnRequested(1000, 0, false), RequestVerdict::Hold);
+  ASSERT_EQ(policy.Poll(1000 + kTtl, 0, false), PollVerdict::Release);
+  EXPECT_EQ(policy.OnReturnRequested(2000000, 0, false), RequestVerdict::Proceed);
+  EXPECT_EQ(policy.OnReturnRequested(2000010, 1, false), RequestVerdict::Proceed);
+  EXPECT_EQ(policy.OnReturnRequested(2000020, 0, false), RequestVerdict::Hold);
+}
+
+// At TTL 0 (the default) the per-frame poll must not even count entrants.
+TEST(ReturnToLobbyHold, PollAtZeroTtlCallsNothing) {
+  Policy policy = WithTtl(0);
+  int counted = 0;
+  int shutdownChecks = 0;
+  for (int frame = 0; frame < 1000; ++frame) {
+    EXPECT_EQ(ReturnToLobbyHold::PollIfActive(
+                  policy, frame, [&] { ++counted; return uint64_t{0}; }, [&] { ++shutdownChecks; return false; }),
+              PollVerdict::Keep);
+  }
+  EXPECT_EQ(counted, 0);
+  EXPECT_EQ(shutdownChecks, 0);
+}
+
+TEST(ReturnToLobbyHold, PollWithATtlStillDecides) {
+  Policy policy = WithTtl(kTtl);
+  ASSERT_EQ(policy.OnReturnRequested(1000, 0, false), RequestVerdict::Hold);
+  int counted = 0;
+  const auto count = [&] { ++counted; return uint64_t{0}; };
+  const auto noShutdown = [] { return false; };
+  EXPECT_EQ(ReturnToLobbyHold::PollIfActive(policy, 2000, count, noShutdown), PollVerdict::Keep);
+  EXPECT_EQ(ReturnToLobbyHold::PollIfActive(policy, 1000 + kTtl, count, noShutdown), PollVerdict::Release);
+  EXPECT_EQ(counted, 2);
 }
 
 TEST(ReturnToLobbyHold, APlayerJoiningCancelsTheHold) {

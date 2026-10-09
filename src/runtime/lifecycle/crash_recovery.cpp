@@ -62,31 +62,42 @@ static VOID GameMainWrapperHook(INT64 arg1) {
     // The game loop crashed and can't be safely restarted (internal state is
     // corrupted). Keep the process alive — the broadcaster and game server
     // were already initialized, and the HTTP API may still be listening.
-    while (true) {
+    // A console shutdown (CTRL+C, close) ends the hold. When the shutdown was deferred to the game's
+    // handler, the shutdown watchdog would end it at kGameTeardownWatchdogMs with exit 1; this ends
+    // it within a second. The exit code stays 1: a server that crashed and was then stopped is
+    // still a crash, and a restart-on-failure supervisor must see it.
+    while (!ConsoleShutdownPending()) {
       Sleep(1000);
     }
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] server hold ended by a console shutdown request — exiting with code 1 (the "
+        "game loop had crashed)");
+    PerformGracefulShutdown(1);
+    // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
   }
 
   // Run the game main loop
   GameMain(arg1);
 
   // The game loop returned on its own: the player quit (closed the window, chose Exit) or the game
-  // ended its session. A client has nothing left to run, so return and let the process exit; the
-  // hold below is only for a dedicated server, where a supervisor watches the broadcaster/HTTP API
-  // and is the one to restart it. (A hold on clients would leave a closed client
-  // running with no window on Windows and under Wine.)
+  // ended its session. A client has nothing left to run, so return and let the process exit. (A hold
+  // on clients would leave a closed client running with no window on Windows and under Wine.)
   g_gameLoopJmpBufValid = false;
   if (!g_isServer) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] game loop returned: the client is exiting (no server hold outside server mode)");
     return;
   }
-  Log(EchoVR::LogLevel::Warning,
-      "[NEVR.PATCH] game loop returned on a server (the loop should only end by crash or shutdown) — "
-      "entering server hold; game loop will not run again");
-  while (true) {
-    Sleep(1000);
-  }
+  // On a server the loop ends only by shutdown (a crash longjmps to the recovery branch above).
+  // Holding here would never exit: ExitProcess is suppressed in server mode, so returning does not
+  // end the process either. Exit through the same path as every other shutdown: code 0 only when a
+  // console shutdown was requested, code 1 when the loop ended for a reason nobody can explain.
+  const bool requested = ConsoleShutdownPending();
+  Log(requested ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+      "[NEVR.PATCH] game loop returned on a server — console_shutdown_pending=%s, exiting with code %d",
+      requested ? "true" : "false", requested ? 0 : 1);
+  PerformGracefulShutdown(requested ? 0 : 1);
+  // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
 }
 
 void InstallGameMainHook() {
@@ -1318,9 +1329,6 @@ void InstallFatalErrorHandler() {
 // resolving WsBridge_Shutdown ONCE at init; N105 satisfies it completely by
 // removing the lookup altogether. The bridge is compiled into this DLL (N92),
 // so PerformGracefulShutdown calls StopWebSocketBridgeListener() directly.
-//
-// The old lookup targeted ws_bridge.dll, which has not been built since the N92
-// fold — it returned null on every run and the listener was never stopped.
 void ResolveShutdownDependencies() {
   Log(EchoVR::LogLevel::Info,
       "[NEVR.PATCH] shutdown deps resolved ws_bridge=in-process "
