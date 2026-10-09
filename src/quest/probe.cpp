@@ -1,4 +1,4 @@
-/* nevr_quest toolchain probe.
+// (demo) /* nevr_quest toolchain probe.
  *
  * Trivial translation unit whose only purpose is to prove the NDK r26d
  * arm64-v8a build path compiles and links a shared object cleanly.
