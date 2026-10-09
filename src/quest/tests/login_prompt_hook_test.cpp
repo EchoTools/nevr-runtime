@@ -108,7 +108,7 @@ void FailLocally(FakeGame& g) {
   SetState(g, layout::kStateLoginFailed);  // what LogInFailedCB's SwitchTo(-0x5e) does next
 }
 
-constexpr char kNotice[] = "Signed in to EchoVRCE.\nRestart the game to finish.";
+constexpr char kNotice[] = "Signed in to EchoVRCE.\nSelect RETRY to finish.";
 
 void ALocalFailureWithNothingPublishedKeepsTheGameTextAndAPromptPublishedLaterReachesIt() {
   board::Withdraw();
@@ -169,7 +169,7 @@ void TheScreenFollowsTheBoardWhileTheGameStaysInLoginFailed() {
   lp::ReleaseBlockWriterForTest();
   UpdateEntry()(Obj(g_game), 16);
   QCHECK(Line(g_game, 0) == "Signed in to EchoVRCE.");
-  QCHECK(Line(g_game, 1) == "Restart the game to finish.");
+  QCHECK(Line(g_game, 1) == "Select RETRY to finish.");
   QCHECK(Line(g_game, 2).empty() && Line(g_game, 3).empty());
   board::Withdraw();  // stopped: the game's own message comes back
   UpdateEntry()(Obj(g_game), 16);

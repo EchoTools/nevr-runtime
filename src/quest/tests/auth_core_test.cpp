@@ -261,6 +261,14 @@ CachedAuthToken CachedWithRefresh(const std::string& rt = "rt-old", uint64_t exp
 }
 
 // ---------------------------------------------------------------- token model
+// #239: the notice replaces the login-failed screen, which has a RETRY button; telling the player to
+// restart the game made them close a game that was ready to log in.
+TEST(the_signed_in_notice_tells_the_player_to_select_retry_not_to_restart) {
+  CHECK_EQ(std::string(kSignedInText), std::string("Signed in to EchoVRCE.\nSelect RETRY to finish."));
+  CHECK(std::string(kSignedInText).find("estart") == std::string::npos);
+  CHECK(sizeof(kSignedInText) - 1 <= prompt_board::kCapacity);
+}
+
 TEST(credentials_roundtrip_never_persists_the_access_token) {
   CachedAuthToken a = CachedWithRefresh();
   a.token = "access-token-should-not-be-written";

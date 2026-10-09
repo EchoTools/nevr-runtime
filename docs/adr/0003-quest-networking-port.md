@@ -157,9 +157,10 @@ What the game does, measured on the pinned `libr15.so` and `libpnsovr.so`:
 - So the prompt must also work if the game quits after the failure: the player starts the game
   again. A code the player had not used is then gone (nothing polls it any more) and the new start
   shows a new one, in the game text and in `device_login.txt`; a sign-in that finished before the
-  quit is in the credential cache and logs in. The signed-in notice therefore says "Restart the
-  game to finish.": the new sign-in goes to the credential cache and `QuestTokenAuth::Token()`, and
-  nothing hands it to a login the game is already running. The player-facing steps are in
+  quit is in the credential cache and logs in. The signed-in notice says "Select RETRY to
+  finish.": the new sign-in goes to the credential cache and `QuestTokenAuth::Token()`, nothing hands
+  it to a login the game is already running, and the login-failed screen's RETRY button starts a new
+  login, which asks for the stored sign-in. The player-facing steps are in
   `docs/quest/SIGN-IN.md`.
 
 How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`):
@@ -167,8 +168,8 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
 - Token auth writes the text to the prompt board, a sequence-locked fixed buffer built without
   exceptions, in one of two modes: `prompt` (the code; after the last code, "Sign-in timed out.
   Restart the game to try again.", or "No sign-in code could be shown. Restart the game to try
-  again." when none of the codes could be shown) or `notice` ("Signed in to EchoVRCE. Restart the
-  game to finish.", after a sign-in). A notice only ever replaces a prompt the screen shows.
+  again." when none of the codes could be shown) or `notice` ("Signed in to EchoVRCE. Select RETRY
+  to finish.", after a sign-in). A notice only ever replaces a prompt the screen shows.
   Publishing rewrites the whole buffer and withdrawing zeroes it.
 - A GOT hook on `SetDelimitedErrorMessage` lets the game store and log its own message first, so
   the code never passes through the game's logging. If the game was logging in (state 2), the

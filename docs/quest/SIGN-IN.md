@@ -29,10 +29,10 @@ or with `adb pull`.
 
 1. On a phone or computer, open `https://echovrce.com/login/device` and sign in with Discord.
 2. Enter the code shown in the headset.
-3. When the headset says "Signed in to EchoVRCE. Restart the game to finish.", close the game and
-   start it again. It logs in with the saved sign-in from then on. If the screen does not change,
+3. When the headset says "Signed in to EchoVRCE. Select RETRY to finish.", select RETRY. The game
+   logs in with the saved sign-in, now and every time it starts. If the screen does not change,
    wait about ten seconds after the web page confirms your sign-in (the headset checks every three
-   seconds), then restart the game.
+   seconds); if it still says the code, restart the game.
 
 A code works for 5 minutes. If it runs out, the headset shows a new one in its place; use the
 newest code. After six codes without a sign-in it stops and says "Sign-in timed out. Restart the
