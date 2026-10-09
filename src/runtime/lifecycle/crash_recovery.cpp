@@ -62,14 +62,17 @@ static VOID GameMainWrapperHook(INT64 arg1) {
     // The game loop crashed and can't be safely restarted (internal state is
     // corrupted). Keep the process alive — the broadcaster and game server
     // were already initialized, and the HTTP API may still be listening.
-    // A console shutdown (CTRL+C, SIGTERM-style close) ends the hold: the game loop is gone, so no
-    // game teardown follows and nothing else will ever exit the process.
+    // A console shutdown (CTRL+C, close) ends the hold. When the shutdown was deferred to the game's
+    // handler, the shutdown watchdog would end it at kGameTeardownWatchdogMs with exit 1; this ends
+    // it within a second. The exit code stays 1: a server that crashed and was then stopped is
+    // still a crash, and a restart-on-failure supervisor must see it.
     while (!ConsoleShutdownPending()) {
       Sleep(1000);
     }
     Log(EchoVR::LogLevel::Info,
-        "[NEVR.PATCH] server hold ended by a console shutdown request — exiting");
-    PerformGracefulShutdown(0);
+        "[NEVR.PATCH] server hold ended by a console shutdown request — exiting with code 1 (the "
+        "game loop had crashed)");
+    PerformGracefulShutdown(1);
     // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
   }
 
@@ -85,13 +88,15 @@ static VOID GameMainWrapperHook(INT64 arg1) {
         "[NEVR.PATCH] game loop returned: the client is exiting (no server hold outside server mode)");
     return;
   }
-  // On a server the loop ends only by shutdown (a crash longjmps to the recovery branch above), and
-  // the game's own teardown has already run by the time it returns. Holding here would never exit:
-  // ExitProcess is suppressed in server mode, so returning does not end the process either. Exit
-  // through the same path as every other shutdown.
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.PATCH] game loop returned on a server — treating it as the shutdown and exiting");
-  PerformGracefulShutdown(0);
+  // On a server the loop ends only by shutdown (a crash longjmps to the recovery branch above).
+  // Holding here would never exit: ExitProcess is suppressed in server mode, so returning does not
+  // end the process either. Exit through the same path as every other shutdown: code 0 only when a
+  // console shutdown was requested, code 1 when the loop ended for a reason nobody can explain.
+  const bool requested = ConsoleShutdownPending();
+  Log(requested ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+      "[NEVR.PATCH] game loop returned on a server — console_shutdown_pending=%s, exiting with code %d",
+      requested ? "true" : "false", requested ? 0 : 1);
+  PerformGracefulShutdown(requested ? 0 : 1);
   // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
 }
 
