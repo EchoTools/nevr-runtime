@@ -202,8 +202,8 @@ Log(EchoVR::LogLevel::Info,
 // AFTER — full XPID string, connection index, byte count
 std::string xpid = platformPrefix + "-" + std::to_string(accountId);
 Log(EchoVR::LogLevel::Info,
-    "[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu",
-    xpid.c_str(), platformCode, connIdx, loginMsg.size());
+    "[NEVR.WS] login injected xpid=%s platform=%d conn=%d (%s) size=%zu",
+    xpid.c_str(), platformCode, connIdx, ConnLabel(connIdx), loginMsg.size());
 ```
 
 The platform prefix SHALL be derived from the actual platform code in the
@@ -512,7 +512,7 @@ form.
 
 | Context | BEFORE | AFTER |
 | ------- | ------ | ----- |
-| Login injection (N15) | `"[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)"` | `"[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu"` |
+| Login injection (N15) | `"[NEVR.WS] Injected LoginRequest (OVR-ORG-%llu, %zu bytes)"` | `"[NEVR.WS] login injected xpid=%s platform=%d conn=%d (%s) size=%zu"` |
 | WebSocket connected | `"[NEVR.SERVERDB] Connected to ServerDB"` | `"[NEVR.WS] websocket connected uri=%s conn=%d"` |
 | WebSocket disconnected | `"[NEVR.SERVERDB] Disconnected from ServerDB (code: %d, reason: %s)"` | `"[NEVR.SERVERDB] Disconnected from ServerDB (code: %u) reconnect_count=%u"` |
 | Login success | `"[NEVR.WS] LOGIN SUCCESS"` | `"[NEVR.WS] login success xpid=%s conn=%d session=%s"` |
