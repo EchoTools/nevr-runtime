@@ -14,7 +14,7 @@
  * The prompt therefore has to be useful also if the game quits after the failure: the player
  * restarts it and sees a new code (or logs in with the cached sign-in).
  *
- * Two GOT hooks in libr15.so, both lock-free. Both run on the game loop's thread: each
+ * Three GOT hooks in libr15.so, all lock-free. The first two run on the game loop's thread: each
  * CncaGame::RunLoop iteration calls CR15Game::Update four times (arguments 0 to 3); the call with
  * argument 0 updates the login providers and the broadcaster (where login
  * failures arrive) and then CR15NetGame::Update (through CncaGame::Update and CR15Game::UpdateGame);
@@ -42,7 +42,16 @@
  *     once per change and not within 50 ms of the last one, from the game's thread. Install()
  *     proves the function (build ID, first four instructions) and logs "quit_on_error".
  *
- * It never logs on the game's call path. Its ten counters (hook_report.h), registered by
+ *   - CR15UIPage2EnablePageNode::Enter (the third; it can run on a task-scheduler worker thread, so it reads
+ *     only atomics): the prompt latch. After the player selects RETRY a script parked since boot wakes
+ *     and replaces the screen that shows the code with the error page. While the latch is armed (the error
+ *     block still holds exactly the prompt or notice this hook last wrote, kept apart from the followed-
+ *     instance state, which is dropped when the game leaves "login failed") the enable of the error page
+ *     and of the fatal error page is skipped. The latch is cleared as soon as the block holds anything
+ *     else, so a genuine error is shown, and dies for good when the game reaches "loading global".
+ *     Skipping is a plain return.
+ *
+ * It never logs on the game's call path. Its thirteen counters (hook_report.h), registered by
  * RegisterCounters():
  *   login_prompt_text_shown         a login failure's message was replaced by the prompt
  *   login_prompt_text_refreshed     the followed block was rewritten or restored after a change
@@ -55,6 +64,9 @@
  *   login_prompt_block_not_ours     the block did not hold the game's message at the failure, or
  *                                   another writer changed it later: nothing written, not followed
  *   login_prompt_error_thunk_faults / login_prompt_update_thunk_faults  a thunk had no original
+ *   login_prompt_enable_thunk_faults       the page-enable thunk had no original
+ *   login_prompt_error_page_dropped        an error page / fatal error page enable was skipped (latch armed)
+ *   login_prompt_page_passed_armed         an error page enable went through with the latch armed (not the measured record)
  *   login_prompt_error_resent       the block was rewritten while the game sat in "login failed" and
  *                                   the game's error event (CR15NetGame::QuitOnError) was sent once so
  *                                   the status script copies the new text to the screen
@@ -65,7 +77,7 @@
  * startup sequence that links token auth into the same shared object and creates it
  * (QuestTokenAuth::Create, whose presenters publish to the board) calls, in this order:
  *   1. RegisterCounters()  before sentinel::StartReporter. Returns false, after one JSON line, when
- *                          the reporter refused any of the ten.
+ *                          the reporter refused any of the thirteen.
  *   2. InstallIfCounted(<result of 1>)  after QuestTokenAuth::Create; nothing else needs
  *                          attaching. Skips, with one JSON line, when the counters were refused;
  *                          otherwise Install(). Both slots are in
@@ -87,9 +99,10 @@ namespace nevr_quest::login_prompt {
 
 using ErrorThunk = sentinel::pinned::LibR15SetDelimitedErrorMessageThunk;
 using UpdateThunk = sentinel::pinned::LibR15NetGameUpdateThunk;
+using EnablePageThunk = sentinel::pinned::LibR15EnablePageNodeEnterThunk;
 using QuitFn = void (*)(sentinel::pinned::CR15NetGameOpaque*) noexcept;
 
-inline constexpr int kCounterCount = 10;
+inline constexpr int kCounterCount = 13;
 
 // Registers the counters. Call before sentinel::StartReporter. Returns false, having logged one
 // line {"event":"login_prompt_counters","result":"refused",...}, when any was refused.
@@ -108,6 +121,11 @@ bool InstallIfCounted(bool countersRegistered) noexcept;
 // through the thunks' OriginalOut() and calls their EntryFn() directly.
 void ArmForTest() noexcept;
 
+// Test support: whether the prompt latch is armed, and a reset of the latch (the
+// latch dies for good at "loading global", so tests start each case from a reset).
+bool LatchArmedForTest() noexcept;
+void ResetLatchForTest() noexcept;
+
 // Test support: the function the hook calls as CR15NetGame::QuitOnError (null: unavailable), and the
 // monotonic clock (nanoseconds) it spaces those calls with (null: the steady clock).
 void SetQuitOnErrorForTest(QuitFn quit) noexcept;
@@ -120,7 +138,8 @@ void ReleaseBlockWriterForTest() noexcept;
 
 // The counters' current values, in the order of the comment above.
 struct Counts {
-  std::uint64_t shown, refreshed, kept, not_local, busy, not_ours, resent, resend_unavailable;
+  std::uint64_t shown, refreshed, kept, not_local, busy, not_ours, resent, resend_unavailable, error_page_dropped,
+      page_passed_armed;
 };
 Counts CurrentCounts() noexcept;
 

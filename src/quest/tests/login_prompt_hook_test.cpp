@@ -260,7 +260,7 @@ void ABusyBoardIsCountedAndThePromptFollowsOnTheNextFrame() {
 
 // A notice only ever replaces a prompt: on a screen that shows the game's own text it is not applied,
 // whether the board was busy at the failure (a) or a second notice follows a first (b).
-void ANoticeNeverReplacesTheGameTextOfAScreenThatShowedNoPrompt() {
+void ANoticeDoesNotReplaceTheGameTextOfAScreenThatShowedNoPrompt() {
   // (a) Busy board at the failure, a notice published: the next frame applies nothing.
   Publish(kNotice, board::Mode::kNotice);
   board::BeginWriteForTest();
@@ -402,7 +402,7 @@ void ConcurrentReadsAreNeverTorn() {
 }
 
 void CounterRefusalIsLoudAndInstallReportsBothSlots() {
-  // A nearly full reporter table (two slots left, the hook needs ten): the counters are refused,
+  // A nearly full reporter table (two slots left, the hook needs thirteen): the counters are refused,
   // RegisterCounters says so in one line. Sized from the reporter's capacity, not a literal.
   sentinel::StopReporter();
   constexpr unsigned kFill = sentinel::kMaxReportCounters - 2;
@@ -567,14 +567,180 @@ void NoErrorEventForAnInstanceThatIsNotFollowed() {
   lp::SetQuitOnErrorForTest(nullptr);
 }
 
+// ---- the prompt latch and the page-enable hook (D5, D6') ------------------------------------------
+
+namespace ui = sentinel::pinned::ui_layout;
+
+struct alignas(16) FakePageData {
+  unsigned char bytes[0x80];
+};
+std::atomic<int> g_enableOriginalCalls{0};
+void FakeEnableOriginal(void*, const void*) { g_enableOriginalCalls.fetch_add(1); }
+lp::EnablePageThunk::Fn EnableEntry() { return reinterpret_cast<lp::EnablePageThunk::Fn>(lp::EnablePageThunk::EntryAddress()); }
+
+// Calls the hooked Enter for a record naming `actor`; true when the game's own Enter ran.
+bool Enabled(std::uint64_t actor, std::ptrdiff_t nodeOffset = static_cast<std::ptrdiff_t>(ui::kEnablePageNodeOffset)) {
+  FakePageData data;
+  std::memset(data.bytes, 0, sizeof(data.bytes));
+  std::memcpy(data.bytes + ui::kEnablePageActorIdOffset, &actor, sizeof(actor));
+  const int before = g_enableOriginalCalls.load();
+  EnableEntry()(data.bytes + nodeOffset, data.bytes);
+  return g_enableOriginalCalls.load() == before + 1;
+}
+
+constexpr std::uint64_t kSomeOtherPage = 0x1234567890abcdefULL;
+
+// Starts a case with the sign-in prompt on screen after a local failure, latch armed.
+void PromptOnScreen(const char* code) {
+  lp::ResetLatchForTest();
+  board::Withdraw();
+  Publish(Prompt(code));
+  FailLocally(g_game);
+}
+
+// Failure caught (#239 D5): after RETRY a parked UI script replaced the screen that shows the code with the
+// error page; the player never saw the code. While the sentinel's text is in the block the error pages are
+// skipped; anything else goes through.
+void WhileThePromptIsOnScreenTheErrorPagesAreNotEnabled() {
+  PromptOnScreen("LATCH1-CODE");
+  QCHECK(lp::LatchArmedForTest());
+  const lp::Counts before = lp::CurrentCounts();
+  QCHECK(!Enabled(ui::kErrorDisplayPage));
+  QCHECK(!Enabled(ui::kFatalErrorDisplayPage));
+  QCHECK(lp::CurrentCounts().error_page_dropped == before.error_page_dropped + 2);
+  // The logging-in page is the game's business here.
+  QCHECK(Enabled(ui::kLoggingInPage));
+  // Any other page is the game's business.
+  QCHECK(Enabled(kSomeOtherPage));
+  // A record that is not the measured shape (node != data + 0x20) goes through, counted.
+  const std::uint64_t passed = lp::CurrentCounts().page_passed_armed;
+  QCHECK(Enabled(ui::kErrorDisplayPage, 0x28));
+  QCHECK(lp::CurrentCounts().page_passed_armed == passed + 1);
+  // A null record goes through.
+  const int calls = g_enableOriginalCalls.load();
+  EnableEntry()(nullptr, nullptr);
+  QCHECK(g_enableOriginalCalls.load() == calls + 1);
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
+// Failure caught: tying the latch to the followed instance, which is dropped when the game leaves "login
+// failed" -- before the parked script wakes on RETRY. The latch lives through "logging in" and "logged in"
+// and dies for good at "loading global", after which an error page is a real error.
+void TheLatchOutlivesLoginFailedAndDiesAtLoadingGlobal() {
+  PromptOnScreen("LATCH2-CODE");
+  SetState(g_game, 2);  // RETRY: "logging in"
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(lp::LatchArmedForTest());
+  QCHECK(!Enabled(ui::kErrorDisplayPage));
+  SetState(g_game, 3);  // logged in
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(lp::LatchArmedForTest() && !Enabled(ui::kFatalErrorDisplayPage));
+  SetState(g_game, layout::kStateLoadingGlobal);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(!lp::LatchArmedForTest());
+  QCHECK(Enabled(ui::kErrorDisplayPage));
+  QCHECK(Enabled(ui::kFatalErrorDisplayPage));
+  // Dead for good: a later prompt on the same instance does not arm it again.
+  Publish(Prompt("LATCH3-CODE"));
+  FailLocally(g_game);
+  QCHECK(!lp::LatchArmedForTest());
+  QCHECK(Enabled(ui::kErrorDisplayPage));
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
+// Failure caught: holding back a genuine error. Text the game writes into the block is not ours: the error
+// text hook sees the write at once; a writer that bypasses it is seen at the next Update.
+void AGenuineErrorTextPassesThrough() {
+  PromptOnScreen("LATCH4-CODE");
+  QCHECK(lp::LatchArmedForTest());
+  SetState(g_game, layout::kStateLoggingIn);
+  ErrorEntry()(Obj(g_game), "Account disabled by EchoVRCE Admins");  // a server message, not replaced
+  QCHECK(Line(g_game, 0) == "Account disabled by EchoVRCE Admins");
+  QCHECK(!lp::LatchArmedForTest());
+  QCHECK(Enabled(ui::kErrorDisplayPage));
+  QCHECK(Enabled(ui::kFatalErrorDisplayPage));
+  board::Withdraw();
+
+  PromptOnScreen("LATCH5-CODE");
+  QCHECK(lp::LatchArmedForTest());
+  FakeSetDelimitedErrorMessage(Obj(g_game), "Service is unavailable");  // another writer, not through the hook
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(!lp::LatchArmedForTest());
+  QCHECK(Enabled(ui::kErrorDisplayPage));
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
+// No prompt was ever shown, or it was withdrawn and the game's own text came back: nothing is held.
+void WithoutAPromptOnScreenNothingIsHeldBack() {
+  lp::ResetLatchForTest();
+  board::Withdraw();
+  const lp::Counts before = lp::CurrentCounts();
+  QCHECK(Enabled(ui::kErrorDisplayPage) && Enabled(ui::kFatalErrorDisplayPage) && Enabled(ui::kLoggingInPage));
+  QCHECK(lp::CurrentCounts().error_page_dropped == before.error_page_dropped);
+  QCHECK(lp::CurrentCounts().page_passed_armed == before.page_passed_armed);
+  PromptOnScreen("LATCH6-CODE");
+  QCHECK(lp::LatchArmedForTest());
+  board::Withdraw();  // the game's own message comes back
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 0) == kLocal);
+  QCHECK(!lp::LatchArmedForTest());
+  QCHECK(Enabled(ui::kErrorDisplayPage));
+  lp::ResetLatchForTest();
+}
+
+// The page-enable hook may run on a worker thread while Update rewrites the block on the game thread: it
+// reads only atomics, and the latch never opens while the block holds our text, so every enable of the error
+// page is skipped. Built without ThreadSanitizer here; the invariant is exact counts and no game call.
+void EnablesOnAnotherThreadDuringRewritesAreAllSkipped() {
+  PromptOnScreen("RACE0-CODE");
+  QCHECK(lp::LatchArmedForTest());
+  const lp::Counts before = lp::CurrentCounts();
+  g_enableOriginalCalls = 0;
+  std::atomic<bool> stop{false};
+  std::atomic<std::uint64_t> calls{0};
+  std::thread worker([&] {
+    FakePageData data;
+    std::memset(data.bytes, 0, sizeof(data.bytes));
+    const std::uint64_t actor = ui::kErrorDisplayPage;
+    std::memcpy(data.bytes + ui::kEnablePageActorIdOffset, &actor, sizeof(actor));
+    while (!stop.load()) {
+      EnableEntry()(data.bytes + ui::kEnablePageNodeOffset, data.bytes);
+      calls.fetch_add(1);
+    }
+  });
+  for (int i = 0; i < 3000; ++i) {
+    char code[32];
+    std::snprintf(code, sizeof(code), "RACE%04d-CODE", i);
+    Publish(Prompt(code));
+    UpdateEntry()(Obj(g_game), 16);
+    QCHECK(lp::LatchArmedForTest());
+  }
+  stop = true;
+  worker.join();
+  QCHECK(calls.load() > 0);
+  QCHECK(g_enableOriginalCalls.load() == 0);
+  QCHECK(lp::CurrentCounts().error_page_dropped == before.error_page_dropped + calls.load());
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
 }  // namespace
 
 int main() {
   sentinel::SetLogSink(&CaptureSink);
   lp::ErrorThunk::Reset();
   lp::UpdateThunk::Reset();
+  lp::EnablePageThunk::Reset();
   *lp::ErrorThunk::OriginalOut() = reinterpret_cast<void*>(&FakeSetDelimitedErrorMessage);
   *lp::UpdateThunk::OriginalOut() = reinterpret_cast<void*>(&FakeUpdate);
+  *lp::EnablePageThunk::OriginalOut() = reinterpret_cast<void*>(&FakeEnableOriginal);
   lp::ArmForTest();
 
   TheGameKnowsWhichFailuresAreItsOwn();
@@ -586,17 +752,22 @@ int main() {
   ServerMessagesAndLoggedInRemovalsAreNeverReplaced();
   ABlockThatDoesNotHoldTheGameMessageIsNotWritten();
   ABusyBoardIsCountedAndThePromptFollowsOnTheNextFrame();
-  ANoticeNeverReplacesTheGameTextOfAScreenThatShowedNoPrompt();
+  ANoticeDoesNotReplaceTheGameTextOfAScreenThatShowedNoPrompt();
   ANewLocalFailureMissedByTheErrorHookIsTakenUpByUpdate();
   ASecondLocalFailureWhileAlreadyInLoginFailedGetsThePromptToo();
   ARewriteInLoginFailedSendsOneErrorEvent();
   NoErrorEventAfterTheGameLeftLoginFailed();
   AnUnresolvedErrorEventIsCountedAndNotCalled();
   NoErrorEventForAnInstanceThatIsNotFollowed();
+  WhileThePromptIsOnScreenTheErrorPagesAreNotEnabled();
+  TheLatchOutlivesLoginFailedAndDiesAtLoadingGlobal();
+  AGenuineErrorTextPassesThrough();
+  WithoutAPromptOnScreenNothingIsHeldBack();
+  EnablesOnAnotherThreadDuringRewritesAreAllSkipped();
   AWithdrawnBoardKeepsNoCode();
   TheBoardRefusesWhatTheGameCouldNotShow();
   ConcurrentReadsAreNeverTorn();
-  QCHECK(lp::ErrorThunk::Faults() == 0 && lp::UpdateThunk::Faults() == 0);
+  QCHECK(lp::ErrorThunk::Faults() == 0 && lp::UpdateThunk::Faults() == 0 && lp::EnablePageThunk::Faults() == 0);
   CounterRefusalIsLoudAndInstallReportsBothSlots();
 
   if (quest_test::Failures() != 0) {

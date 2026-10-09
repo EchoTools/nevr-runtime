@@ -200,7 +200,22 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   target; the install proves it (the module's build ID, then its first four instructions, then
   `base + 0x12713f8`) and logs `quit_on_error` in `login_prompt_install`. The extra call also ends
   multiplayer once more (`Ending multiplayer`) and clears flag bits at `+0x2da0`; it switches no state.
-- Both hooks run on one thread: each `CncaGame::RunLoop` iteration calls `CR15Game::Update` (vtable
+- The prompt latch and a GOT hook on `CR15UIPage2EnablePageNode::Enter` (`0x1fc210c`,
+  `R_AARCH64_JUMP_SLOT` `0x36c1cf8`; `x0` is the node, `x1` the record, `node == record + 0x20`; the record's
+  `+0x10` is the target page's level actor id; the one caller, `BindBranchingNode` `0x2005aa4`, ignores the
+  return and the node writes nothing to its script thread). After the player selects RETRY, the
+  login-failed page's script starts a login and enables the logging-in page (`logging_in_page`,
+  `0xee753e35461e0ef4`); that wakes a script parked since boot (`libfe3f05ac05841a2e.so`, on
+  `delegate_onnetgameerror`) which enables the error page (`error_display_page`, `0x4b8a0630361f3ac5`;
+  `fatal_error_display_page`, `0xe26415a8c369eb2e`), and the logging-in page has no header and no buttons.
+  The hook skips (a plain return) the enable of the error pages while the latch is armed. The latch is armed when the Update or error text
+  hook writes a prompt or a notice into the error block, cleared as soon as the block holds anything else
+  (checked after every write the error text hook sees and on every Update call), and dead for good when
+  the game reaches "loading global" (state 4). It does not depend on the followed instance, which is dropped
+  when the game leaves "login failed". The hook may run on a task-scheduler worker thread
+  (`CScriptCS::UpdateScripts` may use `CComponentSystem::TaskedUpdate`), so it reads atomics only; the
+  records at other pages go to the game unchanged.
+- The Update and error text hooks run on one thread: each `CncaGame::RunLoop` iteration calls `CR15Game::Update` (vtable
   slot `0x408`) four times, with the arguments 0 to 3 (`0x17ec5ec`, `0x17ec5fc`, `0x17ec610`,
   `0x17ec624`). Only the call with argument 0 updates the login providers (`cbz x1` at
   `0x11fd838`; `CNSProvider::Update` at `0x11fd858`-`0x11fd870` and
@@ -210,9 +225,10 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   `0x11fb5cc`). So the Update hook runs up to four times per loop iteration. That the login-failure callbacks run inside those provider and
   broadcaster updates is inferred from the call chain, not traced instruction by instruction; the
   hooks' writer flag does not rely on it.
-- Neither hook logs or takes a lock. Their ten counters are `login_prompt_text_shown`,
-  `_text_refreshed`, `_text_kept`, `_text_not_local`, `_board_busy`, `_block_not_ours`, the two
-  thunks' fault counters, `_error_resent` and `_error_resend_unavailable`; installing logs one `login_prompt_install` line (or `skipped` when the
+- No hook logs or takes a lock. Their thirteen counters are `login_prompt_text_shown`,
+  `_text_refreshed`, `_text_kept`, `_text_not_local`, `_board_busy`, `_block_not_ours`, the three
+  thunks' fault counters, `_error_page_dropped`, `_page_passed_armed`,
+  `_error_resent` and `_error_resend_unavailable`; installing logs one `login_prompt_install` line (or `skipped` when the
   counters were refused).
 
 Exposure of the device code. It is shown to the player by design and is written to
@@ -343,10 +359,11 @@ The sentinel exports only `nevr_sentinel_marker` and `JNI_OnLoad` (`TestExportAl
 once into `nevr_quest_got_hook`, which every Quest target links (`TestBackendCompiledOnce`).
 
 `sentinel/pinned_targets.h` holds the targets and callback types for the pinned artifact:
-`clock_gettime`, `CR15NetGame::SetDelimitedErrorMessage` and `CR15NetGame::Update` (installed by
-`entry.cpp`),
+`clock_gettime`, `CR15NetGame::SetDelimitedErrorMessage`, `CR15NetGame::Update` and
+`CR15UIPage2EnablePageNode::Enter` (installed by `entry.cpp`),
 `CJson::TString` in both libraries, and the `SNSConfigRequestv24Send` and `GLOB_DAT` slots as
-fixtures. Only `clock_gettime`, `SetDelimitedErrorMessage` and `CR15NetGame::Update` are installed.
+fixtures. Only `clock_gettime`, `SetDelimitedErrorMessage`, `CR15NetGame::Update` and
+`CR15UIPage2EnablePageNode::Enter` are installed.
 `SNSConfigRequestv24Send` has no thunk because its return type is not established.
 
 ## Architecture
@@ -1509,8 +1526,8 @@ libraries (`production_steps.cpp`). The sequence is policy over an abstract `Ste
 
 **Order.** (1) crash reporter; (2) configuration (`InitActivation`); (3) every counter of every hook
 that will be installed; (4) the single `StartReporter`; (5) the clock hook; (6) token auth on its own
-thread; (7) the sign-in prompt hooks on libr15's `SetDelimitedErrorMessage` and `CR15NetGame::Update`
-slots (#239), wherever token auth is wanted, once it has started, since token auth is what publishes the
+thread; (7) the sign-in prompt hooks on libr15's `SetDelimitedErrorMessage`, `CR15NetGame::Update` and
+`CR15UIPage2EnablePageNode::Enter` slots (#239), wherever token auth is wanted, once it has started, since token auth is what publishes the
 prompt; (8) the bridge (loopback listener and router); (9) the `CJson::TString` redirect on libr15;
 (10) the social facade; (11) the hook on libr15's `dlopen` slot, whose post-load login install also
 installs the login prerequisites (#240). Counters are registered only for hooks that will be installed:

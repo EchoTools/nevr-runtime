@@ -18,10 +18,12 @@ namespace {
 
 namespace board = nevr::quest_auth::prompt_board;
 namespace layout = sentinel::pinned::game_layout;
+namespace ui = sentinel::pinned::ui_layout;
 using sentinel::pinned::CR15NetGameOpaque;
 
 sentinel::GotHook g_errorHook;
 sentinel::GotHook g_updateHook;
+sentinel::GotHook g_enableHook;
 
 std::atomic<std::uint64_t> g_shown{0};
 std::atomic<std::uint64_t> g_refreshed{0};
@@ -29,6 +31,8 @@ std::atomic<std::uint64_t> g_kept{0};
 std::atomic<std::uint64_t> g_notLocal{0};
 std::atomic<std::uint64_t> g_busy{0};
 std::atomic<std::uint64_t> g_notOurs{0};
+std::atomic<std::uint64_t> g_errorPageDropped{0};
+std::atomic<std::uint64_t> g_pagePassedArmed{0};
 std::atomic<std::uint64_t> g_resent{0};
 std::atomic<std::uint64_t> g_resendUnavailable{0};
 
@@ -71,6 +75,62 @@ unsigned char g_written[layout::kErrorBlockBytes];
 enum class Kind : std::uint8_t { kGame, kPrompt, kNotice };
 Kind g_kind = Kind::kGame;
 
+// ---- the prompt latch ---------------------------------------------------------------------------
+//
+// The latch says: "the error block still holds exactly the text this hook last wrote". While it is armed,
+// the page-enable hook keeps the game from replacing the screen that shows the sign-in code with an error
+// page or the logging-in page. The game thread owns it (every writer runs in the Update hook or the error
+// text hook); the page-enable hook, which may run on a worker thread, reads only g_latchArmed.
+//   * armed when this hook writes a prompt or a notice into the block (ArmLatch);
+//   * cleared the moment the block holds anything else (RecheckLatch, after every game write this hook
+//     sees and on every Update call): the game's own text or another writer's error is genuine;
+//   * dead for good once the game reaches "loading global" (RecheckLatch): the login went through, and no
+//     later error page is held back.
+// It is independent of g_object/g_written, which are dropped when the game leaves "login failed" (the
+// page-enable hook fires after the player selects RETRY, when the game is in "logging in").
+std::atomic<bool> g_latchArmed{false};
+std::atomic<bool> g_latchDead{false};
+std::atomic<std::uint64_t> g_latchHash{0};
+std::atomic<CR15NetGameOpaque*> g_latchSelf{nullptr};
+
+// FNV-1a over the whole error block; never 0 (0 means "no latch").
+std::uint64_t HashBlock(const unsigned char* block) noexcept {
+  std::uint64_t h = 0xcbf29ce484222325ULL;
+  for (std::size_t i = 0; i < layout::kErrorBlockBytes; ++i) {
+    h ^= block[i];
+    h *= 0x100000001b3ULL;
+  }
+  return h == 0 ? 1 : h;
+}
+
+void ClearLatch() noexcept {
+  g_latchArmed.store(false, std::memory_order_release);
+  g_latchHash.store(0, std::memory_order_relaxed);
+}
+
+// `block` is what this hook just left in `self`'s error block.
+void ArmLatch(CR15NetGameOpaque* self, const unsigned char* block) noexcept {
+  if (g_latchDead.load(std::memory_order_relaxed)) return;
+  g_latchSelf.store(self, std::memory_order_relaxed);
+  g_latchHash.store(HashBlock(block), std::memory_order_relaxed);
+  g_latchArmed.store(true, std::memory_order_release);
+}
+
+const unsigned char* BlockOfConst(const CR15NetGameOpaque* self) noexcept;
+std::int32_t State(const CR15NetGameOpaque* self) noexcept;
+
+void RecheckLatch(CR15NetGameOpaque* self) noexcept {
+  if (self == nullptr || self != g_latchSelf.load(std::memory_order_relaxed)) return;
+  if (g_latchDead.load(std::memory_order_relaxed)) return;
+  if (State(self) >= layout::kStateLoadingGlobal) {
+    g_latchDead.store(true, std::memory_order_relaxed);
+    ClearLatch();
+    return;
+  }
+  const std::uint64_t hash = g_latchHash.load(std::memory_order_relaxed);
+  if (hash == 0 || HashBlock(BlockOfConst(self)) != hash) ClearLatch();
+}
+
 bool Equal(const char* a, const char* b) noexcept {
   while (*a != '\0' && *a == *b) {
     ++a;
@@ -95,6 +155,10 @@ std::int32_t State(const CR15NetGameOpaque* self) noexcept {
 
 unsigned char* Block(CR15NetGameOpaque* self) noexcept {
   return reinterpret_cast<unsigned char*>(self) + layout::kErrorBlockOffset;
+}
+
+const unsigned char* BlockOfConst(const CR15NetGameOpaque* self) noexcept {
+  return reinterpret_cast<const unsigned char*>(self) + layout::kErrorBlockOffset;
 }
 
 // The block holds the one-line `message` the way SetErrorMessage(char const*) leaves it
@@ -160,6 +224,7 @@ void Drop(CR15NetGameOpaque* self) noexcept {
 void HookedSetDelimitedErrorMessage(ErrorThunk::Fn original, CR15NetGameOpaque* self, const char* message) noexcept {
   const std::int32_t state = State(self);  // read before the game's own write (it does not change it)
   original(self, message);
+  RecheckLatch(self);  // the game just wrote the block: the latch holds only if it wrote what we left
   if (state != layout::kStateLoggingIn || message == nullptr || !IsLocalLoginFailure(message)) {
     g_notLocal.fetch_add(1, std::memory_order_relaxed);
     return;
@@ -185,6 +250,7 @@ void HookedSetDelimitedErrorMessage(ErrorThunk::Fn original, CR15NetGameOpaque* 
     g_kind = Kind::kPrompt;
     g_applied.store(version, std::memory_order_relaxed);
     g_shown.fetch_add(1, std::memory_order_relaxed);
+    ArmLatch(self, block);
   } else {
     // Nothing to show yet (or only a notice, or the board was busy): the game's text stays, and the
     // instance is followed so that a prompt published later still reaches this screen.
@@ -267,6 +333,13 @@ bool Refresh(CR15NetGameOpaque* self) noexcept {
       rewrote = true;
     }
     g_applied.store(version, std::memory_order_relaxed);
+    // The block holds what was last written: a prompt or a notice keeps the latch, the game's own text
+    // (a withdrawn board) does not.
+    if (g_kind != Kind::kGame) {
+      ArmLatch(self, block);
+    } else {
+      ClearLatch();
+    }
   }
   Wipe(text, sizeof(text));
   g_writing.clear(std::memory_order_release);
@@ -296,6 +369,7 @@ void ResendErrorEvent(CR15NetGameOpaque* self) noexcept {
 }
 
 void HookedNetGameUpdate(UpdateThunk::Fn original, CR15NetGameOpaque* self, std::uint64_t arg) noexcept {
+  RecheckLatch(self);
   if (self != nullptr && self == g_object.load(std::memory_order_acquire)) {
     if (Refresh(self)) g_resendPending.store(true, std::memory_order_relaxed);
     ResendErrorEvent(self);
@@ -303,8 +377,32 @@ void HookedNetGameUpdate(UpdateThunk::Fn original, CR15NetGameOpaque* self, std:
   original(self, arg);
 }
 
+// CR15UIPage2EnablePageNode::Enter. While the latch is armed (the screen shows our sign-in text) the game
+// must not replace it with an error page: the enable of the error page and of the fatal error page is
+// skipped. Skipping is a plain return: the node writes nothing to its thread, and its caller ignores the
+// return. Anything else, and every enable while the latch is not armed (a genuine error), goes to the game
+// unchanged. Reads atomics only, no logging: it may run on a task-scheduler worker thread.
+void HookedEnablePageNodeEnter(EnablePageThunk::Fn original, void* node, const void* data) noexcept {
+  if (data != nullptr && g_latchArmed.load(std::memory_order_acquire)) {
+    const unsigned char* bytes = static_cast<const unsigned char*>(data);
+    std::uint64_t actor = 0;
+    __builtin_memcpy(&actor, bytes + ui::kEnablePageActorIdOffset, sizeof(actor));
+    if (actor == ui::kErrorDisplayPage || actor == ui::kFatalErrorDisplayPage) {
+      // The record's own shape: the node is the record plus 0x20. A mismatch means this is not the record
+      // measured, so the game's call goes ahead.
+      if (node == const_cast<unsigned char*>(bytes) + ui::kEnablePageNodeOffset) {
+        g_errorPageDropped.fetch_add(1, std::memory_order_relaxed);
+        return;
+      }
+      g_pagePassedArmed.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+  original(node, data);
+}
+
 NEVR_HOOK_RECORD(kErrorTextHook, ErrorThunk, &HookedSetDelimitedErrorMessage);
 NEVR_HOOK_RECORD(kNetGameUpdateHook, UpdateThunk, &HookedNetGameUpdate);
+NEVR_HOOK_RECORD(kEnablePageHook, EnablePageThunk, &HookedEnablePageNodeEnter);
 
 }  // namespace
 
@@ -331,6 +429,9 @@ bool RegisterCounters() noexcept {
       {"login_prompt_block_not_ours", &g_notOurs, sentinel::ReportKind::kFaults},
       {"login_prompt_error_thunk_faults", &ErrorThunk::FaultCounter(), sentinel::ReportKind::kFaults},
       {"login_prompt_update_thunk_faults", &UpdateThunk::FaultCounter(), sentinel::ReportKind::kFaults},
+      {"login_prompt_enable_thunk_faults", &EnablePageThunk::FaultCounter(), sentinel::ReportKind::kFaults},
+      {"login_prompt_error_page_dropped", &g_errorPageDropped, sentinel::ReportKind::kCalls},
+      {"login_prompt_page_passed_armed", &g_pagePassedArmed, sentinel::ReportKind::kCalls},
       {"login_prompt_error_resent", &g_resent, sentinel::ReportKind::kCalls},
       {"login_prompt_error_resend_unavailable", &g_resendUnavailable, sentinel::ReportKind::kFaults},
   };
@@ -367,17 +468,23 @@ const char* ResolveQuitOnError() noexcept {
 bool Install() noexcept {
   ErrorThunk::Arm(kErrorTextHook);
   UpdateThunk::Arm(kNetGameUpdateHook);
+  EnablePageThunk::Arm(kEnablePageHook);
   const sentinel::GotStatus error =
       sentinel::InstallThunk<ErrorThunk>(g_errorHook, sentinel::pinned::LibR15SetDelimitedErrorMessage());
   const sentinel::GotStatus update =
       sentinel::InstallThunk<UpdateThunk>(g_updateHook, sentinel::pinned::LibR15NetGameUpdate());
-  const bool ok = error == sentinel::GotStatus::kOk && update == sentinel::GotStatus::kOk;
-  const bool any = error == sentinel::GotStatus::kOk || update == sentinel::GotStatus::kOk;
+  const sentinel::GotStatus enable =
+      sentinel::InstallThunk<EnablePageThunk>(g_enableHook, sentinel::pinned::LibR15EnablePageNodeEnter());
+  const bool ok = error == sentinel::GotStatus::kOk && update == sentinel::GotStatus::kOk &&
+                  enable == sentinel::GotStatus::kOk;
+  const bool any = error == sentinel::GotStatus::kOk || update == sentinel::GotStatus::kOk ||
+                   enable == sentinel::GotStatus::kOk;
   const char* const quit = ResolveQuitOnError();
   sentinel::LogFields(ok ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError, "login_prompt_install",
                       {{"result", ok ? "installed" : (any ? "partial" : "failed")},
                        {"error_text", sentinel::GotStatusName(error)},
                        {"update", sentinel::GotStatusName(update)},
+                       {"enable_page", sentinel::GotStatusName(enable)},
                        {"quit_on_error", quit}});
   return ok;
 }
@@ -394,6 +501,15 @@ bool InstallIfCounted(bool countersRegistered) noexcept {
 void ArmForTest() noexcept {
   ErrorThunk::Arm(kErrorTextHook);
   UpdateThunk::Arm(kNetGameUpdateHook);
+  EnablePageThunk::Arm(kEnablePageHook);
+}
+
+bool LatchArmedForTest() noexcept { return g_latchArmed.load(std::memory_order_acquire); }
+
+void ResetLatchForTest() noexcept {
+  g_latchDead.store(false, std::memory_order_relaxed);
+  g_latchSelf.store(nullptr, std::memory_order_relaxed);
+  ClearLatch();
 }
 
 void SetQuitOnErrorForTest(QuitFn quit) noexcept {
@@ -412,7 +528,8 @@ Counts CurrentCounts() noexcept {
   return {g_shown.load(std::memory_order_relaxed),    g_refreshed.load(std::memory_order_relaxed),
           g_kept.load(std::memory_order_relaxed),     g_notLocal.load(std::memory_order_relaxed),
           g_busy.load(std::memory_order_relaxed),     g_notOurs.load(std::memory_order_relaxed),
-          g_resent.load(std::memory_order_relaxed),   g_resendUnavailable.load(std::memory_order_relaxed)};
+          g_resent.load(std::memory_order_relaxed),   g_resendUnavailable.load(std::memory_order_relaxed),
+          g_errorPageDropped.load(std::memory_order_relaxed), g_pagePassedArmed.load(std::memory_order_relaxed)};
 }
 
 }  // namespace nevr_quest::login_prompt

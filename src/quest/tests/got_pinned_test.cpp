@@ -166,6 +166,7 @@ int main(int argc, char** argv) {
   CheckTarget(r15, pinned::LibR15ConfigRequestSend(), "libr15 SNSConfigRequestv24Send JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15SetDelimitedErrorMessage(), "libr15 CR15NetGame::SetDelimitedErrorMessage JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15NetGameUpdate(), "libr15 CR15NetGame::Update JUMP_SLOT");
+  CheckTarget(r15, pinned::LibR15EnablePageNodeEnter(), "libr15 CR15UIPage2EnablePageNode::Enter JUMP_SLOT");
   CheckTarget(r15, pinned::LibR15BindNodeGlobDat(), "libr15 BindNode GLOB_DAT");
   CheckTarget(r15, pinned::LibR15LookupDataBindingGlobDat(), "libr15 LookupDataBinding GLOB_DAT");
   CheckTarget(mm, pinned::MatchmakingTString(), "libpnsradmatchmaking CJson::TString JUMP_SLOT");
@@ -230,6 +231,11 @@ int main(int argc, char** argv) {
     QCHECK(false);
   }
 
+  // CR15UIPage2EnablePageNode::Enter: the symbol the slot names is defined at the address the hook's comments give.
+  if (DynamicSymbolValue(r15, pinned::kEnablePageNodeEnterSymbol) != 0x1fc210cULL) {
+    std::fprintf(stderr, "libr15 %s: .dynsym value is not 0x1fc210c\n", pinned::kEnablePageNodeEnterSymbol);
+    QCHECK(false);
+  }
   // CR15NetGame::QuitOnError, which the login prompt hook calls (not a hook target): its symbol is defined at
   // the pinned address and its first four instructions are the ones the install proves before using it.
   if (DynamicSymbolValue(r15, pinned::kQuitOnErrorSymbol) != pinned::kQuitOnErrorVaddr) {

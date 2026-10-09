@@ -37,6 +37,8 @@ inline constexpr const char* kConfigRequestSendSymbol =
 inline constexpr const char* kSetDelimitedErrorMessageSymbol =
     "_ZN10NRadEngine8NRadGame11CR15NetGame24SetDelimitedErrorMessageEPKc";
 inline constexpr const char* kNetGameUpdateSymbol = "_ZN10NRadEngine8NRadGame11CR15NetGame6UpdateEy";
+inline constexpr const char* kEnablePageNodeEnterSymbol =
+    "_ZN10NRadEngine8NRadGame25CR15UIPage2EnablePageNode5EnterERKNS0_29SR15UIPage2EnablePageNodeDataE";
 
 // ---- typed callbacks --------------------------------------------------------
 
@@ -71,6 +73,30 @@ struct LibR15SetDelimitedErrorMessageTag {};
 using LibR15SetDelimitedErrorMessageThunk =
     CallbackThunk<LibR15SetDelimitedErrorMessageTag, SetDelimitedErrorMessageSig>;
 
+// NRadEngine::NRadGame::CR15UIPage2EnablePageNode::Enter(SR15UIPage2EnablePageNodeData const&), defined in
+// libr15 at 0x1fc210c: the UI script node that enables a page. `node` (x0) is the node object, which is the
+// data record plus 0x20 (`node == data + 0x20`, checked by the hook), and `data` (x1) is the record. It
+// returns nothing (the one caller, BindBranchingNode at 0x2005aa4, ignores x0), writes nothing to the thread
+// or the node, and either enables the page (EnablePage 0x1f79314, directly or deferred) or reports a script
+// component error. Skipping the call, as a plain return, leaves the page disabled and the script thread
+// where it was. It can run on a task-scheduler worker thread (CScriptCS::UpdateScripts may run instances
+// through CComponentSystem::TaskedUpdate), so a handler reads only atomics and never logs.
+using EnablePageNodeEnterSig = void(void* node, const void* data);
+struct LibR15EnablePageNodeEnterTag {};
+using LibR15EnablePageNodeEnterThunk = CallbackThunk<LibR15EnablePageNodeEnterTag, EnablePageNodeEnterSig>;
+
+// SR15UIPage2EnablePageNodeData as the hook reads it: +0x10 is the target page's level actor id (set by
+// InitScriptVars 0x168b56c from the script variable binding, kept by RefreshActors 0x25f6824 even when the
+// actor is not resolved), +0x20 is the node object. The ids are the pages' symbol hashes in the main menu
+// level (f927772b9e2aefb1).
+namespace ui_layout {
+inline constexpr std::size_t kEnablePageActorIdOffset = 0x10;
+inline constexpr std::size_t kEnablePageNodeOffset = 0x20;
+inline constexpr std::uint64_t kErrorDisplayPage = 0x4b8a0630361f3ac5ULL;       // error_display_page
+inline constexpr std::uint64_t kFatalErrorDisplayPage = 0xe26415a8c369eb2eULL;  // fatal_error_display_page
+inline constexpr std::uint64_t kLoggingInPage = 0xee753e35461e0ef4ULL;          // logging_in_page
+}  // namespace ui_layout
+
 // NRadEngine::NRadGame::CR15NetGame::Update(unsigned long long), defined in libr15 at 0x1294b40,
 // called from CR15Game::UpdateGame (bl at 0x11fb5cc, the only call site, up to four times per
 // game-loop iteration with UpdateGame's own argument;
@@ -100,6 +126,7 @@ namespace game_layout {
 inline constexpr std::size_t kStateOffset = 0;
 inline constexpr std::int32_t kStateLoggingIn = 2;      // "logging in"
 inline constexpr std::int32_t kStateLoginFailed = -94;  // "login failed"
+inline constexpr std::int32_t kStateLoadingGlobal = 4;  // "loading global" (GameStateString 0x124d478)
 // The error block SetErrorMessage(4 args) (0x1241430) writes: a byte at +0x63308 (1 for the 2- and
 // 4-line forms, 0 for the 1-line form), then four 64-byte lines from +0x63309, each forced to end
 // in NUL at its 64th byte; CR15NetErrorMessageExpression::operator() (0x23225d0) copies these
@@ -136,6 +163,11 @@ inline GotTarget LibR15SetDelimitedErrorMessage() {
 // JUMP_SLOT 0x36e05f8).
 inline GotTarget LibR15NetGameUpdate() {
   return {kLibR15, kNetGameUpdateSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36e05f8ULL};
+}
+
+// libr15.so's slot for CR15UIPage2EnablePageNode::Enter, defined in libr15 itself (JUMP_SLOT 0x36c1cf8).
+inline GotTarget LibR15EnablePageNodeEnter() {
+  return {kLibR15, kEnablePageNodeEnterSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36c1cf8ULL};
 }
 
 // libpnsradmatchmaking.so's slot for the same function, defined in
