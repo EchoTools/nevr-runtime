@@ -92,6 +92,45 @@ const char* RoleName(Role role) {
   return "unknown";
 }
 
+Role ClassifyFirstFrame(uint64_t symbol) {
+  switch (symbol) {
+    case EvrCodec::kSymConfigRequest:
+      return Role::Config;
+    case EvrCodec::kSymMatchmakerStatusRequest:
+    case EvrCodec::kSymFindSessionRequest:
+    case EvrCodec::kSymCreateSessionRequest:
+    case EvrCodec::kSymJoinSessionRequest:
+    case EvrCodec::kSymDirectoryRequest:
+    case EvrCodec::kSymPendingSessionCancel:
+    case EvrCodec::kSymPlayerSessionsRequest:
+    case EvrCodec::kSymLobbyPingResponse:
+      return Role::Matchmaker;
+    default:
+      return Role::Login;  // LogInRequestv2, or anything the login connection could be sending
+  }
+}
+
+bool IsLoginSessionReply(uint64_t symbol) {
+  switch (symbol) {
+    case EvrCodec::kSymLoginSuccess:
+    case EvrCodec::kSymLoginFailure:
+    case EvrCodec::kSymLoginSettings:
+    case EvrCodec::kSymLoggedInUserProfileSuccess:
+    case EvrCodec::kSymLoggedInUserProfileFailure:
+    case EvrCodec::kSymDocumentSuccess:
+    case EvrCodec::kSymDocumentFailure:
+    case EvrCodec::kSymOtherUserProfileSuccess:
+    case EvrCodec::kSymOtherUserProfileFailure:
+    case EvrCodec::kSymUpdateProfileSuccess:
+    case EvrCodec::kSymUpdateProfileFailure:
+    case EvrCodec::kSymServerProfileUpdateSuccess:
+    case EvrCodec::kSymServerProfileUpdateFailure:
+      return true;
+    default:
+      return false;
+  }
+}
+
 // Work recorded under the lock and executed after it is released.
 struct Router::Effects {
   struct GameClose {
@@ -183,6 +222,7 @@ void Router::FailSessionLocked(RemoteId remote, uint16_t code, const char* why, 
     loginRemote_ = kNoRemote;
     loginGame_ = kNoGame;
     activeGame_ = kNoGame;
+    lastReplyTarget_ = kNoGame;
     connectionCount_ = 1;  // the game's next connection is a login
   }
   Log(fx, LogLevel::Warning,
@@ -208,18 +248,48 @@ std::size_t Router::LiveMatchmakersLocked() const {
   return live;
 }
 
-Router::Game* Router::SharedRouteLocked(GameId* target) {
-  for (const GameId id : {activeGame_, loginGame_}) {
-    if (id == kNoGame) continue;
-    const auto it = gameTable_.find(id);
-    if (it != gameTable_.end() && !it->second.closing && it->second.remote == loginRemote_ &&
-        loginRemote_ != kNoRemote) {
-      *target = id;
-      return &it->second;
+// True when `id` is a live (not closing) connection on the shared login session.
+bool Router::OnLoginSessionLocked(GameId id) const {
+  if (id == kNoGame || loginRemote_ == kNoRemote) return false;
+  const auto it = gameTable_.find(id);
+  return it != gameTable_.end() && !it->second.closing && it->second.remote == loginRemote_;
+}
+
+// The newest live matchmaker connection on the login session becomes the lobby-traffic target.
+void Router::RecomputeActiveLocked() {
+  activeGame_ = kNoGame;
+  int newest = -1;
+  for (const auto& entry : gameTable_) {
+    if (entry.second.role == Role::Matchmaker && OnLoginSessionLocked(entry.first) && entry.second.connIdx > newest) {
+      newest = entry.second.connIdx;
+      activeGame_ = entry.first;
     }
   }
-  *target = kNoGame;
-  return nullptr;
+}
+
+// Picks the game connection a frame from the login session's remote is delivered to, by what the frame is:
+//   * an answer to a login-connection request: the login connection (libpnsovr drops these on any other
+//     peer), and nowhere else if that connection is gone;
+//   * STcpConnectionUnrequireEvent: the connection that received the reply before it (it lowers that
+//     connection's outstanding-request count), else the login connection;
+//   * anything else (lobby traffic): the newest matchmaker connection, else the login connection.
+GameId Router::RouteLoginSessionFrameLocked(uint64_t symbol) {
+  if (IsLoginSessionReply(symbol)) {
+    lastReplyTarget_ = OnLoginSessionLocked(loginGame_) ? loginGame_ : kNoGame;
+    return lastReplyTarget_;
+  }
+  if (symbol == EvrCodec::kSymConnectionUnrequire) {
+    if (OnLoginSessionLocked(lastReplyTarget_)) return lastReplyTarget_;
+    return OnLoginSessionLocked(loginGame_) ? loginGame_ : kNoGame;
+  }
+  GameId target = kNoGame;
+  if (OnLoginSessionLocked(activeGame_) && gameTable_.at(activeGame_).role == Role::Matchmaker) {
+    target = activeGame_;
+  } else if (OnLoginSessionLocked(loginGame_)) {
+    target = loginGame_;
+  }
+  lastReplyTarget_ = target;
+  return target;
 }
 
 bool Router::PushToRemoteLocked(RemoteId remote, Remote& r, std::shared_ptr<const std::string> data, bool binary,
@@ -251,6 +321,106 @@ void Router::FlushOpenLocked(RemoteId remote, Remote& r, std::optional<std::stri
 
 // ---- game side ---------------------------------------------------------------------------------
 
+// Gives `g` (whose connIdx and role are set) its remote: matchmaker connections share the login session
+// when one is live; every other connection, and a matchmaker with no session to share, opens its own.
+void Router::AttachLocked(GameId game, Game& g, Effects& fx) {
+  if (g.role == Role::Matchmaker && loginRemote_ != kNoRemote && remoteTable_.count(loginRemote_) != 0) {
+    g.remote = loginRemote_;
+    activeGame_ = game;
+    Log(fx, LogLevel::Info,
+        Fmt("[router] game=%llu conn=%d (matchmaker) shares login session remote=%llu (no LoginRequest)", Ull(game),
+            g.connIdx, Ull(loginRemote_)));
+    return;
+  }
+  const RemoteId remote = nextRemote_++;
+  Remote r;
+  r.ownerConn = g.connIdx;
+  remoteTable_.emplace(remote, std::move(r));
+  g.remote = remote;
+  if (g.role == Role::Login) {
+    loginRemote_ = remote;
+    loginGame_ = game;
+  }
+  RemoteOpenRequest request;
+  request.remote = remote;
+  request.connIdx = g.connIdx;
+  request.role = g.role;
+  request.standaloneMatchmaker = (g.role == Role::Matchmaker);
+  fx.opens.push_back(request);
+  Log(fx, LogLevel::Info,
+      Fmt("[router] game=%llu conn=%d (%s) opened remote=%llu", Ull(game), g.connIdx, RoleName(g.role), Ull(remote)));
+}
+
+// Lets go of the remote `g` holds so it can be given another. A matchmaker only shares the login session; a
+// config connection's remote is its own and is closed; a login connection that is alone on its session takes
+// the session with it (the next connection is a login again). False when the connection is the login
+// connection of a session other connections ride: that session is not ours to end here.
+bool Router::ReleaseRemoteLocked(GameId game, Game& g, Effects& fx) {
+  if (g.remote == kNoRemote) return true;
+  if (g.remote == loginRemote_) {
+    if (g.role == Role::Matchmaker) {
+      g.remote = kNoRemote;
+      return true;
+    }
+    for (const auto& entry : gameTable_) {
+      if (entry.first != game && !entry.second.closing && entry.second.remote == loginRemote_) return false;
+    }
+    Log(fx, LogLevel::Info,
+        Fmt("[router] login session remote=%llu ended with its only connection game=%llu; next connection is a login",
+            Ull(loginRemote_), Ull(game)));
+    loginRemote_ = kNoRemote;
+    loginGame_ = kNoGame;
+    lastReplyTarget_ = kNoGame;
+    connectionCount_ = 1;
+  }
+  remoteTable_.erase(g.remote);
+  fx.remoteCloses.emplace_back(g.remote, static_cast<uint16_t>(1000));
+  g.remote = kNoRemote;
+  return true;
+}
+
+// The first data frame of a connection names its role. A frame that contradicts the provisional role (set by
+// connection order when the socket opened) moves the connection: it is detached from the remote it was given
+// and attached to the one its real role uses. Unknown symbols name the login role (ClassifyFirstFrame), but
+// they never take a connection that is not already the login connection: only LogInRequestv2 does, so an
+// unlisted lobby message cannot steal the login session's replies.
+void Router::ClassifyGameLocked(GameId game, Game& g, uint64_t symbol, Effects& fx) {
+  g.classified = true;
+  Role observed = ClassifyFirstFrame(symbol);
+  if (observed == Role::Login && g.role != Role::Login && symbol != EvrCodec::kSymLoginRequest) observed = g.role;
+  if (observed == g.role) return;
+  const Role provisional = g.role;
+  if (!ReleaseRemoteLocked(game, g, fx)) {
+    Log(fx, LogLevel::Warning,
+        Fmt("[router] game=%llu conn=%d first frame names %s but the connection owns the shared login session; role "
+            "stays %s",
+            Ull(game), g.connIdx, RoleName(observed), RoleName(provisional)));
+    return;
+  }
+  if (loginGame_ == game) loginGame_ = kNoGame;
+  g.role = observed;
+  Log(fx, LogLevel::Info,
+      Fmt("[router] game=%llu conn=%d first frame symbol=0x%016llx: %s -> %s", Ull(game), g.connIdx, Ull(symbol),
+          RoleName(provisional), RoleName(observed)));
+  if (observed == Role::Login && loginRemote_ != kNoRemote && remoteTable_.count(loginRemote_) != 0) {
+    // A login on a session that is already live (the game reconnected its login connection): the new
+    // connection takes over the session's login role; the old login connection, if still open, rides it.
+    const GameId previous = loginGame_;
+    if (previous != kNoGame) {
+      const auto pit = gameTable_.find(previous);
+      if (pit != gameTable_.end()) pit->second.role = Role::Matchmaker;
+    }
+    g.remote = loginRemote_;
+    loginGame_ = game;
+    Log(fx, LogLevel::Info,
+        Fmt("[router] game=%llu conn=%d (login) takes over login session remote=%llu", Ull(game), g.connIdx,
+            Ull(loginRemote_)));
+  } else {
+    AttachLocked(game, g, fx);
+  }
+  RecomputeActiveLocked();
+}
+
 void Router::OnGameOpen(GameId game) {
   Effects fx;
   {
@@ -269,33 +439,7 @@ void Router::OnGameOpen(GameId game) {
       Game g;
       g.connIdx = connectionCount_++;
       g.role = next;
-      if (g.role == Role::Matchmaker && loginRemote_ != kNoRemote && remoteTable_.count(loginRemote_) != 0) {
-        g.remote = loginRemote_;
-        activeGame_ = game;
-        Log(fx, LogLevel::Info,
-            Fmt("[router] game=%llu conn=%d (matchmaker) shares login session remote=%llu (no LoginRequest)",
-                Ull(game), g.connIdx, Ull(loginRemote_)));
-      } else {
-        const RemoteId remote = nextRemote_++;
-        Remote r;
-        r.ownerConn = g.connIdx;
-        remoteTable_.emplace(remote, std::move(r));
-        g.remote = remote;
-        if (g.role == Role::Login) {
-          loginRemote_ = remote;
-          loginGame_ = game;
-          activeGame_ = game;
-        }
-        RemoteOpenRequest request;
-        request.remote = remote;
-        request.connIdx = g.connIdx;
-        request.role = g.role;
-        request.standaloneMatchmaker = (g.role == Role::Matchmaker);
-        fx.opens.push_back(request);
-        Log(fx, LogLevel::Info,
-            Fmt("[router] game=%llu conn=%d (%s) opened remote=%llu", Ull(game), g.connIdx, RoleName(g.role),
-                Ull(remote)));
-      }
+      AttachLocked(game, g, fx);
       gameTable_.emplace(game, std::move(g));
     }
   }
@@ -320,6 +464,7 @@ void Router::OnGameFrame(GameId game, std::string frame, bool binary) {
               options_.limits.maxFrameBytes));
       CloseGameLocked(game, kCloseMessageTooBig, "frame exceeds the size limit", fx);
     } else {
+      if (!git->second.classified) ClassifyGameLocked(game, git->second, EvrCodec::FirstSymbol(frame), fx);
       const RemoteId remoteId = git->second.remote;
       const auto rit = remoteTable_.find(remoteId);
       if (rit == remoteTable_.end()) {
@@ -357,22 +502,14 @@ void Router::OnGameClose(GameId game) {
     const RemoteId remote = it->second.remote;
     gameTable_.erase(it);
     if (loginGame_ == game) loginGame_ = kNoGame;
+    if (lastReplyTarget_ == game) lastReplyTarget_ = kNoGame;
     if (activeGame_ == game) {
-      // Route the login session's frames to the newest connection still on it.
-      activeGame_ = kNoGame;
-      int newest = -1;
-      for (const auto& entry : gameTable_) {
-        if (entry.first != loginGame_ && !entry.second.closing && entry.second.remote == loginRemote_ &&
-            loginRemote_ != kNoRemote && entry.second.connIdx > newest) {
-          newest = entry.second.connIdx;
-          activeGame_ = entry.first;
-        }
-      }
-      GameId target = kNoGame;
-      SharedRouteLocked(&target);
+      // Lobby traffic goes to the newest matchmaker connection still on the session.
+      RecomputeActiveLocked();
+      GameId target = activeGame_ != kNoGame ? activeGame_ : (OnLoginSessionLocked(loginGame_) ? loginGame_ : kNoGame);
       Log(fx, LogLevel::Info,
-          Fmt("[router] server->game routing: game=%llu closed, login-session frames now go to game=%llu",
-              Ull(game), Ull(target)));
+          Fmt("[router] server->game routing: game=%llu closed, lobby frames now go to game=%llu", Ull(game),
+              Ull(target)));
     }
     // A remote that only this game used ends with it. The login session is shared with the matchmaker
     // connections and stays until the session itself ends.
@@ -479,7 +616,7 @@ void Router::OnRemoteFrame(RemoteId remote, std::string frame, bool binary) {
       if (remoteTable_.count(remote) != 0) {
         GameId target = kNoGame;
         if (remote == loginRemote_) {
-          SharedRouteLocked(&target);
+          target = RouteLoginSessionFrameLocked(symbol);
         } else {
           for (const auto& entry : gameTable_) {
             if (entry.second.remote == remote && !entry.second.closing) target = entry.first;
@@ -553,6 +690,7 @@ void Router::Shutdown() {
     loginRemote_ = kNoRemote;
     loginGame_ = kNoGame;
     activeGame_ = kNoGame;
+    lastReplyTarget_ = kNoGame;
     connectionCount_ = 0;
     Log(fx, LogLevel::Info, Fmt("[router] shutdown: %zu remote(s), %zu game(s) closed", fx.remoteCloses.size(),
                                 fx.gameCloses.size()));

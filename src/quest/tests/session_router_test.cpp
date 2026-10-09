@@ -28,6 +28,8 @@ using namespace SessionRouter;
 namespace {
 
 constexpr uint64_t kSymSomething = 0x1111222233334444ULL;  // an arbitrary game message
+constexpr uint64_t kSymLobbySessionSuccess = 0x6d4de3650ee3110fULL;  // SNSLobbySessionSuccessv5
+constexpr uint64_t kSymConfigSuccess = 0xb9cdaf586f7bd012ULL;         // SNSConfigSuccessv2
 const std::string kSecret = "SECRET-TOKEN-VALUE";
 
 std::string Msg(uint64_t symbol, const std::string& payload = "x") { return EvrCodec::BuildMessage(symbol, payload); }
@@ -734,6 +736,188 @@ void TestShutdown() {
   QCHECK(rig.games.Closes().size() == 4);  // a game that connects after shutdown is closed at once
 }
 
+// ---------------------------------------------------------------------------------------------
+// Roles by first data frame, and routing by role.
+
+// Failure caught: a symbol landing in the wrong role. Every config and lobby request the game opens a
+// connection with is named; LogInRequestv2, silence and anything else are the login role.
+void TestClassifyFirstFrameTable() {
+  QCHECK(ClassifyFirstFrame(EvrCodec::kSymConfigRequest) == Role::Config);
+  const uint64_t lobby[] = {EvrCodec::kSymMatchmakerStatusRequest, EvrCodec::kSymFindSessionRequest,
+                            EvrCodec::kSymCreateSessionRequest,    EvrCodec::kSymJoinSessionRequest,
+                            EvrCodec::kSymDirectoryRequest,        EvrCodec::kSymPendingSessionCancel,
+                            EvrCodec::kSymPlayerSessionsRequest,   EvrCodec::kSymLobbyPingResponse};
+  for (const uint64_t symbol : lobby) QCHECK(ClassifyFirstFrame(symbol) == Role::Matchmaker);
+  QCHECK(ClassifyFirstFrame(EvrCodec::kSymLoginRequest) == Role::Login);
+  QCHECK(ClassifyFirstFrame(0) == Role::Login);  // nothing sent yet, or a frame shorter than a header
+  QCHECK(ClassifyFirstFrame(kSymSomething) == Role::Login);
+  // The literal values are the ones the game sends (libr15/libpnsovr, recorded in ADR 0003).
+  QCHECK(EvrCodec::kSymConfigRequest == 0x82869f0b37eb4378ULL);
+  QCHECK(EvrCodec::kSymFindSessionRequest == 0x312c2a01819aa3f5ULL);
+  QCHECK(EvrCodec::kSymConnectionUnrequire == 0x43e6963ac76beee4ULL);
+}
+
+// The smoke failure (#239): the config connection fails at boot (no account token yet), the login
+// connection stays, and after the player signs in the game opens a NEW config connection. By order that
+// connection is a matchmaker riding the login session, and the login session's profile reply went to it
+// (the newest socket) instead of the login connection. Failure caught: that mis-role and mis-delivery.
+void TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin() {
+  Rig rig;
+  rig.router->OnGameOpen(1);  // boot config connection
+  const RemoteId bootConfig = rig.remotes.Opens()[0].remote;
+  rig.router->OnGameFrame(1, Msg(EvrCodec::kSymConfigRequest), true);
+  rig.router->OnRemoteError(bootConfig, 0, "no account token");  // fail-fast: the router closes game 1
+  rig.router->OnGameClose(1);
+  rig.router->OnGameOpen(2);  // the login connection (silent until the game sends its LogInRequest)
+  const RemoteId login = rig.remotes.Opens()[1].remote;
+  QCHECK(rig.remotes.Opens()[1].role == Role::Login);
+  rig.router->OnRemoteOpen(login);
+  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest, "login"), true);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoginSuccess, std::string(32, '\0')), true);
+
+  rig.router->OnGameOpen(3);  // the post-login config connection: provisionally a matchmaker (order)
+  QCHECK(rig.remotes.Opens().size() == 2);  // sharing the login session: no remote yet
+  rig.router->OnGameFrame(3, Msg(EvrCodec::kSymConfigRequest), true);
+  const auto opens = rig.remotes.Opens();
+  QCHECK(opens.size() == 3);
+  RemoteId config = kNoRemote;
+  if (opens.size() == 3) {
+    QCHECK(opens[2].role == Role::Config);
+    QCHECK(opens[2].remote != login);
+    config = opens[2].remote;
+  }
+  rig.router->OnRemoteOpen(config);
+
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoggedInUserProfileSuccess, "profile"), true);
+  rig.router->OnRemoteFrame(config, Msg(kSymConfigSuccess, "config"), true);
+  const auto sent = rig.games.Sent();
+  QCHECK(sent.size() == 3);  // LoginSuccess, profile, config
+  if (sent.size() == 3) {
+    QCHECK(sent[0].id == 2);
+    QCHECK(sent[1].id == 2);  // the profile reply is the login connection's
+    QCHECK(sent[2].id == 3);  // the config reply is the config connection's
+  }
+  // The config request went to the config remote, not the login session.
+  bool configOnConfigRemote = false;
+  for (const auto& f : rig.remotes.Sent()) {
+    if (EvrCodec::FirstSymbol(f.data) == EvrCodec::kSymConfigRequest && f.id == config) configOnConfigRemote = true;
+    if (EvrCodec::FirstSymbol(f.data) == EvrCodec::kSymConfigRequest) QCHECK(f.id != login);
+  }
+  QCHECK(configOnConfigRemote);
+  QCHECK(rig.logs.Has("first frame symbol=0x82869f0b37eb4378: matchmaker -> config"));
+}
+
+// Failure caught: lobby replies going to the login socket (or login replies to a matchmaker), and an
+// STcpConnectionUnrequireEvent going to a socket whose request it does not release.
+void TestServerFramesRouteByRole() {
+  Rig rig;
+  OpenThree(rig);  // config 1, login 2, matchmaker 3 (provisional)
+  const RemoteId login = rig.remotes.Opens()[1].remote;
+  rig.router->OnRemoteOpen(login);
+  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest), true);
+  rig.router->OnGameFrame(3, Msg(EvrCodec::kSymFindSessionRequest), true);
+  const std::string unrequire = Msg(EvrCodec::kSymConnectionUnrequire, "");
+  rig.router->OnRemoteFrame(login, Msg(kSymLobbySessionSuccess, "lobby"), true);
+  rig.router->OnRemoteFrame(login, unrequire, true);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoggedInUserProfileSuccess, "profile"), true);
+  rig.router->OnRemoteFrame(login, unrequire, true);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymDocumentSuccess, "doc"), true);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymOtherUserProfileSuccess, "other"), true);
+  rig.router->OnRemoteFrame(login, unrequire, true);
+  rig.router->OnRemoteFrame(login, Msg(kSymLobbySessionSuccess, "lobby2"), true);
+  const auto sent = rig.games.Sent();
+  const uint64_t expected[] = {3, 3, 2, 2, 2, 2, 2, 3};
+  QCHECK(sent.size() == 8);
+  for (std::size_t i = 0; i < sent.size() && i < 8; ++i) QCHECK(sent[i].id == expected[i]);
+}
+
+// Failure caught: an unlisted message on a matchmaker connection moving it to the login role and taking the
+// login session's replies. Only LogInRequestv2 moves a connection to login.
+void TestUnknownFirstFrameKeepsTheProvisionalRole() {
+  Rig rig;
+  OpenThree(rig);
+  const RemoteId login = rig.remotes.Opens()[1].remote;
+  rig.router->OnRemoteOpen(login);
+  rig.router->OnGameFrame(3, Msg(kSymSomething, "unlisted"), true);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoggedInUserProfileSuccess, "profile"), true);
+  const auto sent = rig.games.Sent();
+  QCHECK(sent.size() == 1 && sent[0].id == 2);
+  QCHECK(!rig.logs.Has("-> login"));
+}
+
+// Failure caught: the game's reconnected login connection (the old one closed with nothing outstanding)
+// being left a matchmaker, so the login replies had no login socket to reach.
+void TestReconnectedLoginConnectionTakesOverTheSession() {
+  Rig rig;
+  OpenThree(rig);
+  const RemoteId login = rig.remotes.Opens()[1].remote;
+  rig.router->OnRemoteOpen(login);
+  rig.router->OnGameClose(2);  // the login connection goes
+  rig.router->OnGameOpen(4);   // the game's new login connection: provisionally a matchmaker
+  rig.router->OnGameFrame(4, Msg(EvrCodec::kSymLoginRequest), true);
+  QCHECK(rig.remotes.Opens().size() == 2);  // it rides the live session: no second login remote
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoginSuccess, std::string(32, '\0')), true);
+  rig.router->OnRemoteFrame(login, Msg(kSymLobbySessionSuccess, "lobby"), true);
+  const auto sent = rig.games.Sent();
+  QCHECK(sent.size() == 2);
+  if (sent.size() == 2) {
+    QCHECK(sent[0].id == 4);  // the login reply: the new login connection
+    QCHECK(sent[1].id == 3);  // the lobby reply: the matchmaker, still
+  }
+  QCHECK(rig.logs.Has("(login) takes over login session"));
+}
+
+// Failure caught: a login reply, with the login connection gone, being handed to whichever socket is
+// newest. It is dropped and counted; lobby traffic still reaches the matchmaker.
+void TestLoginReplyWithoutALoginConnectionIsDropped() {
+  Rig rig;
+  OpenThree(rig);
+  const RemoteId login = rig.remotes.Opens()[1].remote;
+  rig.router->OnRemoteOpen(login);
+  rig.router->OnGameClose(2);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoggedInUserProfileSuccess, "profile"), true);
+  QCHECK(rig.games.Sent().empty());
+  QCHECK(rig.router->GetStats().droppedRemoteFrames == 1);
+  rig.router->OnRemoteFrame(login, Msg(kSymLobbySessionSuccess, "lobby"), true);
+  QCHECK(rig.games.Sent().size() == 1 && rig.games.Sent()[0].id == 3);
+}
+
+// Failure caught: a connection that was given the login role by order (the session was just forgotten, so
+// the next connection is a login) but opens with a config request staying on the login session. It is
+// moved to a config remote of its own and the session it opened is ended.
+void TestProvisionalLoginThatSendsConfigIsMoved() {
+  Rig rig;
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);  // provisional login, alone on its session
+  const RemoteId provisional = rig.remotes.Opens()[1].remote;
+  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymConfigRequest), true);
+  const auto opens = rig.remotes.Opens();
+  QCHECK(opens.size() == 3);
+  if (opens.size() == 3) {
+    QCHECK(opens[2].role == Role::Config && opens[2].remote != provisional);
+  }
+  bool closedProvisional = false;
+  for (const auto& c : rig.remotes.Closes()) closedProvisional = closedProvisional || c.id == provisional;
+  QCHECK(closedProvisional);
+  QCHECK(rig.router->GetStats().nextConnIdx == 1);  // the next connection is a login again
+  rig.router->OnGameOpen(3);
+  QCHECK(rig.remotes.Opens().size() == 4 && rig.remotes.Opens()[3].role == Role::Login);
+}
+
+// Failure caught: the login connection of a session other connections ride being torn away from them by
+// its own first frame. Its role stays; the refusal is logged.
+void TestLoginConnectionWithSharersKeepsItsRole() {
+  Rig rig;
+  OpenThree(rig);
+  const RemoteId login = rig.remotes.Opens()[1].remote;
+  rig.router->OnRemoteOpen(login);
+  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymConfigRequest), true);
+  QCHECK(rig.remotes.Opens().size() == 2);
+  QCHECK(rig.logs.Has("role stays login", static_cast<int>(LogLevel::Warning)));
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoggedInUserProfileSuccess, "profile"), true);
+  QCHECK(rig.games.Sent().size() == 1 && rig.games.Sent()[0].id == 2);
+}
+
 }  // namespace
 
 int main() {
@@ -766,6 +950,14 @@ int main() {
   TestMatchmakerConnectionsAreCapped();
   TestExtraConnectionNeverBecomesASecondLogin();
   TestShutdown();
+  TestClassifyFirstFrameTable();
+  TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin();
+  TestServerFramesRouteByRole();
+  TestUnknownFirstFrameKeepsTheProvisionalRole();
+  TestReconnectedLoginConnectionTakesOverTheSession();
+  TestLoginReplyWithoutALoginConnectionIsDropped();
+  TestProvisionalLoginThatSendsConfigIsMoved();
+  TestLoginConnectionWithSharersKeepsItsRole();
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "session_router_test: %d check(s) failed\n", quest_test::Failures());
     return 1;

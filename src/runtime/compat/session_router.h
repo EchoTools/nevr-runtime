@@ -6,9 +6,17 @@
 // no TLS, no game state, no logging backend. Adapters supply the two transports and the login frame;
 // the router owns the rules:
 //
-//   * connection identity: the Nth connection the game opens is config (0), login (1) or matchmaker
-//     (2+). The login connection owns a remote session; matchmaker connections attach to that same
-//     remote session (Nakama correlates a matchmaker allocation with the login session).
+//   * connection identity: a connection's role is named by its FIRST data frame (ClassifyFirstFrame):
+//     SNSConfigRequestv2 is config, the lobby requests are matchmaker, LogInRequestv2 is login. Until that
+//     frame arrives the role is provisional, by connection order: the Nth connection is config (0), login
+//     (1) or matchmaker (2+), so the remote can open before the game has said anything. The login
+//     connection owns a remote session; matchmaker connections attach to that same remote session (Nakama
+//     correlates a matchmaker allocation with the login session). A first frame that contradicts the
+//     provisional role moves the connection to the role the frame names.
+//   * server-to-game routing on the shared login session is by role, never to whichever socket spoke last:
+//     replies to login-connection requests (and the settings that follow a login) go to the login
+//     connection, lobby traffic to the newest matchmaker connection, and an STcpConnectionUnrequireEvent to
+//     the connection that received the reply before it.
 //   * login injection: exactly once per login session, before any frame the game queued while the
 //     remote was still opening, from a caller-supplied builder (the router never sees a token).
 //   * ordering: frames reach the remote in the order they arrived; the login request is first.
@@ -60,6 +68,12 @@ enum class SendResult {
   WouldBlock,  // the transport is full: keep the frame, wait for OnGameWritable/OnRemoteWritable
   Failed,      // the endpoint is gone; the frame is lost
 };
+
+// The role a connection's first data frame names. LogInRequestv2 and any symbol that is not a config or
+// lobby request name the login connection. Pure; the router applies it with one guard (see Router).
+Role ClassifyFirstFrame(uint64_t symbol);
+// True for the server-to-game messages that answer a request made on the login connection.
+bool IsLoginSessionReply(uint64_t symbol);
 
 class GameTransport {
  public:
@@ -166,6 +180,7 @@ class Router {
     Role role = Role::Config;
     RemoteId remote = kNoRemote;  // kNoRemote once its session ended
     bool closing = false;         // a close was issued; waiting for the transport's OnGameClose
+    bool classified = false;      // the first data frame has named the role
     Outbox out;
   };
   struct Remote {
@@ -185,7 +200,12 @@ class Router {
                           Effects& fx);
   void FlushOpenLocked(RemoteId remote, Remote& r, std::optional<std::string> login, Effects& fx);
   void CloseGameLocked(GameId game, uint16_t code, const char* why, Effects& fx);
-  Game* SharedRouteLocked(GameId* target);
+  void AttachLocked(GameId game, Game& g, Effects& fx);
+  void ClassifyGameLocked(GameId game, Game& g, uint64_t symbol, Effects& fx);
+  bool ReleaseRemoteLocked(GameId game, Game& g, Effects& fx);
+  void RecomputeActiveLocked();
+  bool OnLoginSessionLocked(GameId id) const;
+  GameId RouteLoginSessionFrameLocked(uint64_t symbol);
   std::size_t LiveMatchmakersLocked() const;
   void FailSession(RemoteId remote, uint16_t code, const char* why, bool closeRemote);
   void Log(Effects& fx, LogLevel level, std::string line);
@@ -205,7 +225,8 @@ class Router {
   int connectionCount_ = 0;
   RemoteId loginRemote_ = kNoRemote;
   GameId loginGame_ = kNoGame;
-  GameId activeGame_ = kNoGame;
+  GameId activeGame_ = kNoGame;   // the newest matchmaker connection on the login session
+  GameId lastReplyTarget_ = kNoGame;  // where the last non-Unrequire login-session frame went
   uint64_t droppedGameFrames_ = 0;
   uint64_t droppedRemoteFrames_ = 0;
   bool shutdown_ = false;

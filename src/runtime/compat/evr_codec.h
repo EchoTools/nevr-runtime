@@ -30,6 +30,36 @@ inline constexpr uint8_t kMarker[kMarkerSize] = {0xf6, 0x40, 0xbb, 0x78, 0xa2, 0
 inline constexpr uint64_t kSymLoginRequest = 0xbdb41ea9e67b200aULL;
 inline constexpr uint64_t kSymLoginSuccess = 0xa5acc1a90d0cce47ULL;
 inline constexpr uint64_t kSymLoginFailure = 0xa5b9d5a3021ccf51ULL;
+// The first data frame a Quest game connection sends names its role (libr15/libpnsovr, ADR 0003):
+// the config connection always opens with SNSConfigRequestv2; a matchmaker connection with one of the
+// lobby requests below; the login connection sends nothing until LogInRequestv2.
+inline constexpr uint64_t kSymConfigRequest = 0x82869f0b37eb4378ULL;                // SNSConfigRequestv2
+inline constexpr uint64_t kSymMatchmakerStatusRequest = 0x128b777ae0ebb650ULL;      // SNSLobbyMatchmakerStatusRequest
+inline constexpr uint64_t kSymFindSessionRequest = 0x312c2a01819aa3f5ULL;           // SNSLobbyFindSessionRequestv11
+inline constexpr uint64_t kSymCreateSessionRequest = 0x599a6b1bbda3cc13ULL;         // SNSLobbyCreateSessionRequestv9
+inline constexpr uint64_t kSymJoinSessionRequest = 0x2f03468f77ffb211ULL;           // SNSLobbyJoinSessionRequestv7
+inline constexpr uint64_t kSymDirectoryRequest = 0x15a861716705052cULL;             // SNSLobbyDirectoryRequestJsonv2
+inline constexpr uint64_t kSymPendingSessionCancel = 0x8da9eb83ffee9fd6ULL;         // SNSLobbyPendingSessionCancelv2
+inline constexpr uint64_t kSymPlayerSessionsRequest = 0x9af2fab2a0c81a05ULL;        // SNSLobbyPlayerSessionsRequestv5
+inline constexpr uint64_t kSymLobbyPingResponse = 0x6047d0043033ae4fULL;            // SNSLobbyPingResponse
+
+// Server-to-game messages that answer a request made on the login connection (or announce its settings).
+// Every one is delivered only to the game's login connection: libpnsovr drops these when they arrive on
+// any other peer (CNSUser::ProfileSuccessCB and the other login-peer checks).
+inline constexpr uint64_t kSymLoginSettings = 0xed5be2c3632155f1ULL;                // SNSLoginSettings
+inline constexpr uint64_t kSymLoggedInUserProfileSuccess = 0xfb763a5037fc8d77ULL;
+inline constexpr uint64_t kSymLoggedInUserProfileFailure = 0xfb632e5a38ec8c61ULL;
+inline constexpr uint64_t kSymDocumentSuccess = 0xd07ffd782fb7b509ULL;
+inline constexpr uint64_t kSymDocumentFailure = 0xd06ae97220a7b41fULL;
+inline constexpr uint64_t kSymOtherUserProfileSuccess = 0x1230073227050cb5ULL;
+inline constexpr uint64_t kSymOtherUserProfileFailure = 0x1225133828150da3ULL;
+inline constexpr uint64_t kSymUpdateProfileSuccess = 0xf25491d001cef757ULL;
+inline constexpr uint64_t kSymUpdateProfileFailure = 0xf24185da0edef641ULL;
+inline constexpr uint64_t kSymServerProfileUpdateSuccess = 0xd299785ba56b9c75ULL;   // SNSUserServerProfileUpdateSuccess
+inline constexpr uint64_t kSymServerProfileUpdateFailure = 0xd28c6c51aa7b9d63ULL;
+// Lowers the connection's outstanding-request count on the peer it arrives on.
+inline constexpr uint64_t kSymConnectionUnrequire = 0x43e6963ac76beee4ULL;          // STcpConnectionUnrequireEvent
+
 // The friend-list subscribe the bridge sends after LoginSuccess (payload ignored by the server).
 inline constexpr uint64_t kSymFriendListSubscribe = 0xcdc02fd1dbee3aaaULL;
 constexpr std::size_t kFriendListSubscribePayloadSize = 0x20;

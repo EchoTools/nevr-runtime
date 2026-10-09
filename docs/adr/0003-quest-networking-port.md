@@ -396,13 +396,35 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    is the server's wire enum; Quest identity values need binary or API evidence.
 3. **Session routing.** `src/runtime/compat/session_router.{h,cpp}` is the platform-neutral router:
    no Windows or Winsock headers, no sockets, no threads. Game-side and remote open/frame/close
-   events go in; the router owns connection identity (config, login, matchmaker numbered in
-   arrival order, matchmakers attached to the login session, at most
-   `Limits::maxMatchmakerConnections` live), frame order, size limits, bounded queues and
+   events go in; the router owns connection identity (config, login, matchmaker; matchmakers
+   attached to the login session, at most `Limits::maxMatchmakerConnections` live), frame order,
+   size limits, bounded queues and
    backpressure, and, when a remote session ends, the close of every game socket on it plus
    forgetting the session so the next connection is a new login. The game transport, the remote
    transport, the login-frame builder and the log sink are injected; the router calls none of
    them under its lock. No token, password, full login frame or credential URL is logged.
+
+   **A connection's role is named by its first data frame** (`ClassifyFirstFrame`): the config
+   connection always opens with `SNSConfigRequestv2`; a matchmaker connection with one of
+   `SNSLobbyMatchmakerStatusRequest`, `FindSessionRequestv11`, `CreateSessionRequestv9`,
+   `JoinSessionRequestv7`, `DirectoryRequestJsonv2`, `PendingSessionCancelv2`,
+   `PlayerSessionsRequestv5` or `PingResponse`; the login connection sends nothing until
+   `LogInRequestv2`. Until that frame the role is provisional, by connection order (0 config, 1 login,
+   later ones matchmaker), so the remote can open before the game has spoken. A first frame that
+   contradicts the provisional role moves the connection to the remote its real role uses; only
+   `LogInRequestv2` moves a connection to login (an unlisted message never takes the login role). The
+   game opens a new config connection after login, and by order that connection is a matchmaker: the
+   first frame is what makes it a config connection with a remote of its own.
+
+   **Frames from the login session's remote are routed by role**, never to the socket that spoke
+   last. libpnsovr drops a reply to a login-connection request that arrives on another peer
+   (`CNSUser::ProfileSuccessCB` and the other login-peer checks), so login and profile replies,
+   document and other-user-profile replies and the login settings (`IsLoginSessionReply`) go to the
+   login connection, and are dropped (counted, logged) when it is gone. Lobby traffic goes to the newest
+   matchmaker connection, falling back to the login connection. An `STcpConnectionUnrequireEvent` goes
+   to the connection that received the reply before it, because it lowers that connection's
+   outstanding-request count. `TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin` and
+   `TestServerFramesRouteByRole` pin this.
 
    **Login injection is mutually exclusive with the game's own login.** The router injects a
    LoginRequest (and, separately, a friend-list subscribe after LoginSuccess) only when the
