@@ -355,7 +355,7 @@ static void VehPrintf(const char* fmt, ...) {
 //
 // EnumProcessModules / GetModuleFileNameA / GetModuleInformation all serialise on
 // the loader lock. A fault raised while that lock is held — i.e. anywhere inside
-// LoadModule / LoadPlugins / the game's own CSysDLL_Load — would deadlock a handler
+// LoadPlugins / the game's own CSysDLL_Load — would deadlock a handler
 // that enumerates. Snapshot once at init; the handler reads the snapshot.
 
 struct CachedModule {

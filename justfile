@@ -432,7 +432,7 @@ verify:
     cmake --build --preset {{ preset }}
     just test-auth-unit
     just test-quest-shared
-    python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order -v
+    python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
@@ -1484,11 +1484,12 @@ verify:
         echo "would never install, since pnsrad.dll loads long after filter init." >&2
         exit 1
     fi
-    # N75: plugins and modules must load with a restricted search path. With
+    # N75: plugins must load with a restricted search path (modules are statically
+    # linked and load no DLL). With
     # dwFlags=0 the search starts at the application directory, so a dll dropped
     # next to echovr.exe can satisfy a dependency ahead of the real one. N89
     # demonstrated the mechanism accidentally.
-    for f in src/runtime/ext/plugin_loader.cpp src/runtime/ext/module_loader.cpp; do
+    for f in src/runtime/ext/plugin_loader.cpp; do
         if ! grep -q 'LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR' "$f"; then
             echo "verify: FAIL — N75 restricted search flags missing from $f;" >&2
             echo "dependencies would resolve from the application directory first." >&2

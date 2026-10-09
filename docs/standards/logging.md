@@ -99,7 +99,7 @@ subsystems that NEVR annotates.
 | `[NEVR.GAMESERVER]`   | GameServerLib (lobby registration, sessions)  |
 | `[NEVR.PATCH]`        | gamepatches (boot hooks, config, CLI, mode)   |
 | `[NEVR.HEADLESS]`     | Headless graphics stub, render-skip patches   |
-| `[NEVR.MODULE]`       | Module loader (LoadModule, drop-in modules)   |
+| `[NEVR.MODULE]`       | Module registry and static modules            |
 | `[NEVR.PLUGIN]`       | Plugin loader (discovery, lifecycle)          |
 | `[NEVR.TELEMETRY]`    | Telemetry streamer (WebSocket, snapshots)     |
 | `[NEVR.XPID]`         | Platform-identity patches (DSC provider)      |
