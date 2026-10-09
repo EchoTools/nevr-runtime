@@ -475,8 +475,8 @@ static VOID InitializeAfterGameImageGuard() {
   // TeeFprintf calls after this write to stderr only.
   BootLogTee::TeeFprintf(
       "[NEVR.BOOT] initialization complete; continuing in %%LOCALAPPDATA%%\\EchoVR\\logs\\nevr-<timestamp>.jsonl\n");
-  BuiltinLogFilter::ReplayBootTail();  // the tee lines written since the main log opened (#5)
   BootLogTee::Close();
+  BuiltinLogFilter::ReplayBootTail();  // after Close nothing appends: the lines written since the main log opened (#5)
 
   Log(g_bootHookFailed ? EchoVR::LogLevel::Warning : EchoVR::LogLevel::Info,
       "[NEVR.PATCH] boot hooks installed ok=%s", g_bootHookFailed ? "false" : "true");

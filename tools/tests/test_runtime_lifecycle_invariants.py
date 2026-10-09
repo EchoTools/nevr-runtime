@@ -436,8 +436,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         rotate = extract_braced_function(filt, "static void RotateIfNeeded(")
         self.assertNotIn("ReplayBootLines", rotate)
         replay = extract_braced_function(filt, "static void ReplayBootLines(")
-        self.assertIn("BootReplay::ParseRun(contents, GetRunId(), g_boot_lines_replayed)", replay)
-        self.assertRegex(replay, r"if \(!in\)\s*\{\s*BlfLog\(", "an unreadable boot file is reported, not skipped")
+        self.assertIn("BootReplay::ReadNew(path, GetRunId(), g_boot_cursor", replay)
+        self.assertRegex(replay, r"ReadNew\([^;]*\)\)\s*\{\s*BlfLog\(", "an unreadable boot file is reported, not skipped")
         record = extract_braced_function(filt, "static void WriteFileRecord(")
         self.assertEqual(len(re.findall(r"JsonEscape::AppendTo\(line, (ts|lvl)", record)), 2,
                          "ts and level come from the parsed boot file and are escaped like the message")
@@ -447,7 +447,8 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertIn("g_file_mutex", tail)
         self.assertIn("ReplayBootLines()", tail)
         init_cpp = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
-        self.assertRegex(init_cpp, r"BuiltinLogFilter::ReplayBootTail\(\);\s*BootLogTee::Close\(\);")
+        self.assertRegex(init_cpp, r"BootLogTee::Close\(\);\s*BuiltinLogFilter::ReplayBootTail\(\);",
+                         "the tail is read after Close(), when nothing can append any more")
         for forbidden in ("remove(", "DeleteFile", "unlink(", "trash"):
             self.assertNotIn(forbidden, replay, "the boot file is the crash spool and is never deleted")
         tee = strip_comments((ROOT / "src/runtime/log/boot_log_tee.cpp").read_text())
