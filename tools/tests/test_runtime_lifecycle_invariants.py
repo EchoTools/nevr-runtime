@@ -424,6 +424,9 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         glue = strip_comments((ROOT / "src/runtime/lifecycle/return_to_lobby.cpp").read_text())
         configure = extract_braced_function(glue, "bool Configure(")
         self.assertRegex(configure, r"if \(!armed\)[^}]*SetTtlMs\(0\)")
+        poll = extract_braced_function(glue, "void Poll(")
+        self.assertIn("PollIfActive(g_policy", poll, "Poll must stay a no-op at TTL 0")
+        self.assertNotIn("LiveEntrants()", poll)
         request = extract_braced_function(glue, "void Request(")
         self.assertRegex(request, r"RequestVerdict::Hold\)\s*\{\s*Log\(")
 

@@ -58,6 +58,8 @@ class Policy {
   void SetTtlMs(uint64_t ttlMs) { ttlMs_ = ttlMs; }
   uint64_t TtlMs() const { return ttlMs_; }
   bool Holding() const { return holding_; }
+  /// TTL 0 and nothing held: Poll has nothing to decide and must cost nothing.
+  bool Idle() const { return !holding_ && ttlMs_ == 0; }
   uint64_t HeldSinceMs() const { return heldSinceMs_; }
   /// Requests swallowed by the current (or just-ended) hold, repeats included.
   uint64_t HeldRequests() const { return heldRequests_; }
@@ -97,5 +99,13 @@ class Policy {
   uint64_t heldRequests_ = 0;
   bool released_ = false;
 };
+
+/// Polls only when there is something to decide: at TTL 0 (the default) neither callback is
+/// called, so the feature being off costs the game thread nothing.
+template <typename CountEntrants, typename ShutdownPending>
+PollVerdict PollIfActive(Policy& policy, uint64_t nowMs, CountEntrants countEntrants, ShutdownPending shutdownPending) {
+  if (policy.Idle()) return PollVerdict::Keep;
+  return policy.Poll(nowMs, countEntrants(), shutdownPending());
+}
 
 }  // namespace ReturnToLobbyHold

@@ -111,7 +111,7 @@ void Poll() {
     std::lock_guard<std::mutex> lock(g_mutex);
     const uint64_t now = NowMs();
     heldMs = g_policy.Holding() ? now - g_policy.HeldSinceMs() : 0;
-    verdict = g_policy.Poll(now, LiveEntrants(), ShutdownPending());
+    verdict = ReturnToLobbyHold::PollIfActive(g_policy, now, LiveEntrants, ShutdownPending);
     game = g_heldGame;
     requests = g_policy.HeldRequests();
     if (verdict != ReturnToLobbyHold::PollVerdict::Keep) g_heldGame = nullptr;
