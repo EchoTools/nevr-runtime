@@ -119,6 +119,7 @@ void FireJoinFailedForTest(std::uint32_t code);
 std::uint32_t TestInitializeCallCount();
 std::uint32_t TestShutdownCallCount();
 std::uint32_t TestMaxUsers();
+std::uint32_t TestMembersClamped();
 const void* TestCallbacksSource();
 #endif
 
