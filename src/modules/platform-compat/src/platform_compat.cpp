@@ -249,7 +249,7 @@ static bool InstallCreateDirectoryHooks() {
   return ok;
 }
 
-static bool InstallWinHTTPHook() {
+static bool InstallMsxml6PassThroughHook() {
   HMODULE hOle32 = GetModuleHandleA("ole32.dll");
   if (hOle32 == NULL) {
     hOle32 = LoadLibraryA("ole32.dll");
@@ -308,12 +308,12 @@ NEVR_MODULE_API int platform_compat_Init(const NvrModuleContext* ctx) {
    * hook installs. */
   const bool tlsOk = InstallTLSHook();
   const bool dirOk = InstallCreateDirectoryHooks();
-  const bool httpOk = InstallWinHTTPHook();
+  const bool httpOk = InstallMsxml6PassThroughHook();
   const int okCount = (tlsOk ? 1 : 0) + (dirOk ? 1 : 0) + (httpOk ? 1 : 0);
 
   Log(okCount == 3 ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
       "[NEVR.MODULE] platform_compat initialized: %d/3 hooks installed "
-      "(tls=%s createdir=%s winhttp=%s)",
+      "(tls=%s createdir=%s msxml6=%s)",
       okCount, tlsOk ? "ok" : "FAILED", dirOk ? "ok" : "FAILED",
       httpOk ? "ok" : "FAILED");
 
