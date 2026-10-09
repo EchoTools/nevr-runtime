@@ -211,12 +211,21 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertEqual(len(attach_calls), len(captured_calls),
                          "a Hooking::Attach call's result is not captured in a variable")
 
+    def test_radpluginshutdown_guard_lives_in_the_one_detour_on_the_symbol_resolver(self):
+        # #93/#94: 0x1400EAEF0 takes one detour (CSysDLL_GetSymbol). The server-only
+        # RadPluginShutdown guard has to be inside that hook; a second detour on the
+        # same target never installs.
+        source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
+        body = extract_braced_function(source, "static void* CSysDLL_GetSymbolHook(")
+        self.assertRegex(body, r"g_isServer\s*&&[^)]*\"RadPluginShutdown\"")
+        self.assertIn('"Users"', body)
+        self.assertNotIn("GetProcAddressHook", strip_comments(source))
+        self.assertNotRegex(strip_comments(source), r"InstallBootDetour\(\s*&EchoVR::GetProcAddress")
+
     def test_only_reviewed_boot_hooks_are_optional(self):
         # A required hook that fails makes a server refuse to start (boot.cpp: g_bootHookFailed ->
-        # ServerFatal). EchoVR::GetProcAddress fails on every boot with MH_ERROR_ALREADY_CREATED
-        # (same target 0x1400EAEF0 as the CSysDLL_GetSymbol hook installed earlier), so making it
-        # required would stop every server. Moving a hook between the classes is a policy change
-        # and has to change this list.
+        # ServerFatal). Moving a hook between the classes is a policy change and has to change
+        # this list.
         source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
         body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
 
@@ -226,7 +235,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
                          "an InstallBootDetour call did not parse; the classification below would miss it")
         optional = {name for name, kind in calls if kind == "kOptional"}
         required = {name for name, kind in calls if kind == "kRequired"}
-        self.assertEqual(optional, {"EchoVR::GetProcAddress", "EchoVR::SetWindowTextA_"})
+        self.assertEqual(optional, {"EchoVR::SetWindowTextA_"})
         self.assertEqual(required, {
             "EchoVR::NetGameSwitchState",
             "EchoVR::LoadLocalConfig",
@@ -234,6 +243,31 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
             "EchoVR::HttpConnect",
             "EchoVR::JsonValueAsString",
         })
+
+    def test_telemetry_socket_refreshes_its_token_on_a_reconnect_401(self):
+        # Issue #114: TelemetryStreamer set the Authorization header once, and ixwebsocket's automatic
+        # reconnect re-presented it after it expired. The Error handler must feed BearerReconnectAuth,
+        # and the ServerDB-token fallback must install a refresher (a configured telemetry_token must not).
+        streamer = strip_comments((ROOT / "src/runtime/server/telemetry_streamer.cpp").read_text())
+        self.assertRegex(streamer, r"m_bearerAuth\.Attach\s*\(")
+        self.assertRegex(streamer, re.compile(
+            r"case ix::WebSocketMessageType::Error:(?:(?!WebSocketMessageType::Message).)*?"
+            r"m_bearerAuth\.OnError\s*\(\s*msg->errorInfo\.http_status", re.S))
+        server = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
+        fallback = extract_braced_function(server, "VOID GameServerLib::RequestRegistration(")
+        self.assertRegex(fallback, re.compile(
+            r"token = wsToken;(?:(?!m_telemetry->Connect).)*?m_telemetry->SetBearerTokenRefresher\s*\(", re.S))
+
+    def test_console_handler_is_rearmed_after_the_game_installs_its_own(self):
+        # Issue #102: the game installs its console ctrl handler (echovr.exe 0x1400dcbb0, from
+        # CR15Game::InitRenderWindowFromEngineFlags) after our boot-time re-arm, so its handler sat in
+        # front and swallowed CTRL+C. The installer is hooked and our handler re-armed once it returns.
+        source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
+        hook = extract_braced_function(source, "static INT64 GameConsoleHandlerInstallHook(")
+        self.assertRegex(hook, r"OriginalGameConsoleHandlerInstall\s*\(")
+        self.assertRegex(hook, r"\bRearmConsoleCtrlHandler\s*\(\s*\)")
+        install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
+        self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
 
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches

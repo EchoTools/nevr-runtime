@@ -2,11 +2,6 @@
 
 #include "extension/module_interface.h"
 
-/// Load a module DLL from the modules/ subdirectory next to echovr.exe.
-/// Calls NvrModuleInit — on failure, calls FatalError (game exits).
-/// Prefer RegisterStaticModule for modules compiled directly into BugSplat64.dll.
-void LoadModule(const char* name, const NvrModuleContext* ctx);
-
 /// Register a statically-linked module that was initialized directly (no DLL).
 /// The module's init was already called; this records it so TickModules,
 /// NotifyModulesStateChange, and UnloadModules find it. hModule must be nullptr

@@ -47,8 +47,21 @@ std::optional<std::string> GetEnv(const std::string& name) {
   return s;
 }
 
+// Collects the names of unset bare ${VAR} references while a load validates the
+// tree; null outside that pass, so the repeated read-time interpolation is silent.
+thread_local std::set<std::string>* t_unsetBareVars = nullptr;
+
+// Points t_unsetBareVars at a set for the guard's lifetime, including on a throw.
+class UnsetBareSink {
+ public:
+  explicit UnsetBareSink(std::set<std::string>* sink) { t_unsetBareVars = sink; }
+  ~UnsetBareSink() { t_unsetBareVars = nullptr; }
+  UnsetBareSink(const UnsetBareSink&) = delete;
+  UnsetBareSink& operator=(const UnsetBareSink&) = delete;
+};
+
 // Resolve one `${...}` body. Forms:
-//   ${VAR}        required — throws if unset
+//   ${VAR}        optional in effect — stays literal "${VAR}" if unset (warned at load)
 //   ${VAR:?msg}   required — throws with `msg` (or a default) if unset
 //   ${VAR:-def}   optional — `def` if unset
 std::string ResolveVar(const std::string& inner) {
@@ -71,8 +84,11 @@ std::string ResolveVar(const std::string& inner) {
                               ? ("config: required environment variable " + var + " is not set")
                               : ("config: " + rest));
   }
-  throw NevrConfigError("config: required environment variable " + var +
-                        " is not set (referenced as ${" + var + "})");
+  // Bare ${VAR}, unset: the text stays as written. Failing here would cost a client
+  // its whole config (every plugin) over one value; secrets use ${VAR:?msg}, which
+  // still throws. The name is reported once per load by LoadFromString.
+  if (t_unsetBareVars != nullptr) t_unsetBareVars->insert(var);
+  return "${" + inner + "}";
 }
 
 // Replace every ${...} in `in`. An unterminated ${ is left literal. The three-char
@@ -110,8 +126,8 @@ std::optional<std::string> InterpolateScalar(const YAML::Node& n) {
 }
 
 // Read-only walk that interpolates every scalar and DISCARDS the result — its
-// sole purpose is to make a required ${VAR:?}/${VAR} that is unset fail LOUD at
-// load time (InterpolateString throws). It never mutates the tree: reassigning a
+// sole purpose is to make a required ${VAR:?} that is unset fail LOUD at
+// load time (InterpolateString throws) and to collect unset bare ${VAR} names. It never mutates the tree: reassigning a
 // scalar in place during map iteration corrupts later sibling map entries in
 // yaml-cpp (measured — services/network/arena became unreadable after `auth`,
 // the one section whose values actually changed). So interpolation is applied
@@ -276,7 +292,16 @@ NevrConfig NevrConfig::LoadFromString(const std::string& yaml) {
   if (!raw.IsMap()) throw NevrConfigError("config: the top level must be a mapping");
 
   ValidateTopLevel(raw);
-  ValidateInterpolation(raw);  // fail loud NOW on an unset ${VAR:?}; does not mutate raw
+  std::set<std::string> unsetBare;
+  {
+    UnsetBareSink sink(&unsetBare);
+    ValidateInterpolation(raw);  // fail loud NOW on an unset ${VAR:?}; does not mutate raw
+  }
+  for (const std::string& name : unsetBare) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.CONFIG] environment variable %s is not set; the text ${%s} is kept as written",
+        name.c_str(), name.c_str());
+  }
   cfg.impl_->root = raw;       // store the parsed tree; scalars interpolate at read time
   ParsePlugins(cfg.impl_->root, cfg.plugins_);
   cfg.empty_ = false;

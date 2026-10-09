@@ -44,6 +44,45 @@ class VerifyHookInvariantsTest(unittest.TestCase):
         self.assertIn("EchoVR::UnexpectedHook", result.stderr)
         self.assertIn("PatchAddresses::INIT_GLOBAL_GAMESPACE", result.stderr)
 
+    def _run_in_fixture(self, extra_runtime_source=None):
+        with tempfile.TemporaryDirectory(
+            prefix="hook-invariants-", dir="/var/tmp/work-nevr-runtime"
+        ) as temp_dir:
+            fixture = pathlib.Path(temp_dir)
+            shutil.copytree(REPO / "src", fixture / "src")
+            shutil.copytree(REPO / "plugins", fixture / "plugins")
+            (fixture / "tools").mkdir()
+            shutil.copy2(VERIFIER, fixture / "tools" / VERIFIER.name)
+            if extra_runtime_source is not None:
+                (fixture / "src" / "runtime" / "patch" / "fixture_duplicate.cpp").write_text(
+                    extra_runtime_source
+                )
+            return subprocess.run(
+                [sys.executable, fixture / "tools" / VERIFIER.name],
+                cwd=fixture,
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+
+    def test_rejects_two_runtime_detours_on_one_target(self):
+        """#93: an EchoVR:: pointer detour on the address initialize.cpp already hooks inline."""
+        result = self._run_in_fixture(
+            "void Fixture() {\n"
+            '  InstallBootDetour(&EchoVR::GetProcAddress, nullptr, "EchoVR::GetProcAddress",\n'
+            "                    BootHookRequirement::kOptional);\n"
+            "}\n"
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("DUPLICATE-RUNTIME-DETOUR: 0x1400EAEF0", result.stderr)
+        self.assertIn("fixture_duplicate.cpp: EchoVR::GetProcAddress", result.stderr)
+        self.assertIn("initialize.cpp: inline 0x1400eaef0", result.stderr)
+
+    def test_accepts_the_tree_as_it_is(self):
+        result = self._run_in_fixture()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("DUPLICATE-RUNTIME-DETOUR", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
