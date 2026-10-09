@@ -585,7 +585,16 @@ test-quest-router:
     "${cxx[@]}" src/quest/net/remote_ws.cpp src/runtime/compat/session_router.cpp \
         src/runtime/compat/evr_codec.cpp src/quest/tests/remote_ws_test.cpp -o "$out/remote_ws_test"
     "$out/remote_ws_test"
-    echo "test-quest-router: router, WebSocket wire, loopback server and remote transport tests pass on the host"
+    # The loopback server under ThreadSanitizer: it has the accept thread, per-connection threads and
+    # the concurrent-Start test, so a data race on listenFd_/port_/token_ or an unsynchronised
+    # Start/Stop would be reported. -O1 also exercises warnings -O0 hides. halt_on_error makes any
+    # race fail the recipe.
+    tsan=(g++ -std=c++17 -Wall -Wextra -Werror -pthread -fsanitize=thread -O1 -g -Isrc -isystem "$json_inc")
+    "${tsan[@]}" src/quest/net/ws_wire.cpp src/quest/net/loopback_game_server.cpp \
+        src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp \
+        src/quest/tests/loopback_game_server_test.cpp -o "$out/loopback_game_server_test_tsan"
+    TSAN_OPTIONS="halt_on_error=1 exitcode=66" "$out/loopback_game_server_test_tsan"
+    echo "test-quest-router: router, WebSocket wire, loopback server (incl. ThreadSanitizer) and remote transport tests pass on the host"
 
 # The Quest remote WebSocket connector (libcurl over TLS) against real TLS servers on the host:
 # src/quest/tests/curl_ws_tls_test.cpp, with certificates made here by openssl and the throwaway
