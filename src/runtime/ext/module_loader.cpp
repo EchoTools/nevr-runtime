@@ -8,13 +8,10 @@
 #include "core/logging.h"
 
 struct LoadedModule {
-  HMODULE                       hModule;
   const char*                   name;
-  NvrModuleInit_fn              init;
   NvrModuleShutdown_fn          shutdown;
   NvrModuleOnFrame_fn           on_frame;
   NvrModuleOnGameStateChange_fn on_state;
-  std::string                   path;
 };
 
 static std::vector<LoadedModule> g_modules;
@@ -44,9 +41,7 @@ void RegisterStaticModule(const char* name, uint32_t api_version,
                           NvrModuleOnGameStateChange_fn on_state,
                           NvrModuleShutdown_fn shutdown) {
   LoadedModule m = {};
-  m.hModule = nullptr;  // static — no DLL to free
   m.name = name;
-  m.init = nullptr;      // already called
   m.shutdown = shutdown;
   m.on_frame = on_frame;
   m.on_state = on_state;
@@ -58,9 +53,6 @@ void UnloadModules() {
   for (auto it = g_modules.rbegin(); it != g_modules.rend(); ++it) {
     if (it->shutdown) {
       it->shutdown();
-    }
-    if (it->hModule) {
-      FreeLibrary(it->hModule);
     }
   }
   g_modules.clear();
@@ -94,9 +86,7 @@ void NotifyModulesStateChange(const NvrModuleContext* ctx, uint32_t old_state, u
 
 void TestHook_RegisterModuleOnFrame(NvrModuleOnFrame_fn fn) {
   LoadedModule m = {};
-  m.hModule = nullptr;
   m.name = "test_mock";
-  m.init = nullptr;
   m.shutdown = nullptr;
   m.on_frame = fn;
   m.on_state = nullptr;
@@ -105,9 +95,7 @@ void TestHook_RegisterModuleOnFrame(NvrModuleOnFrame_fn fn) {
 
 void TestHook_RegisterModuleOnStateChange(NvrModuleOnGameStateChange_fn fn) {
   LoadedModule m = {};
-  m.hModule = nullptr;
   m.name = "test_mock";
-  m.init = nullptr;
   m.shutdown = nullptr;
   m.on_frame = nullptr;
   m.on_state = fn;

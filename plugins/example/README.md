@@ -237,7 +237,7 @@ When `NvrPluginInitEx` is exported, the host passes the plugin's `args` map from
 its `config.yaml` entry serialized to a flat JSON object string:
 
 - Keys are flattened dotted paths (a nested YAML `a: {b: 1}` becomes `"a.b"`)
-- Values are strings (post-interpolation; the host resolves `${VAR}` refs before serialization; `$${` yields a literal `${`)
+- Values are strings (post-interpolation; the host resolves `${VAR}` refs before serialization, an unset bare `${VAR}` stays as written, and `$${` yields a literal `${`)
 - When the entry declared no args, `args_json` is the empty object `"{}"` (never null)
 
 Example: `{"greeting":"hi","limits.max":"5"}`
