@@ -39,9 +39,8 @@ using nevr_cfg::ResolveServiceHost;
 void SetEnv(const char* name, const char* value) { _putenv_s(name, value); }
 void UnsetEnv(const char* name) { _putenv_s(name, ""); }
 
-// Every migrated NEVR key present, at the value config.json used to carry (the
-// two ws hosts) plus representative values for the rest. Mirrors the on-disk
-// echovr/_local/config.yaml sample where they overlap.
+// Every migrated NEVR key present: the two ws hosts plus representative values for the rest. Mirrors the
+// on-disk echovr/_local/config.yaml sample where they overlap.
 const char* kFullYaml = R"YAML(
 version: "1"
 services:

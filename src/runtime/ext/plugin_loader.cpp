@@ -419,8 +419,8 @@ class PluginLoadRun {
   });
 
   // Log the sorted order so an operator can see the load sequence: one INFO
-  // summary naming the order, with the full per-item detail at DEBUG — the
-  // per-item line used to also be INFO, which was a near-duplicate of the
+  // summary naming the order, with the full per-item detail at DEBUG — an
+  // INFO per-item line would near-duplicate the
   // per-plugin "Loaded: ..." INFO confirmation below once each plugin's init
   // succeeds (Rule 12: INFO is summary, DEBUG is narrative).
   {
@@ -576,7 +576,9 @@ void UnloadPlugins() {
     }
     FreeLibrary(it->hModule);
   }
-  g_plugins.clear();
+  // Release the storage as well: the next load starts from capacity 0, so it is the reserve in
+  // LoadPlugins (not leftover capacity from an earlier load) that keeps kept info pointers valid.
+  std::vector<LoadedPlugin>().swap(g_plugins);
   PublishPluginReport({});  // nothing is loaded any more; do not report stale state
 }
 

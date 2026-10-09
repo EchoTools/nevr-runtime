@@ -2,6 +2,7 @@
 
 #include "log_filter.h"
 #include "extension/plugin_interface.h"
+#include "plugin_logger.h"
 
 #include <cstdarg>
 #include <cstdio>
@@ -12,14 +13,7 @@
 #include <windows.h>
 #endif
 
-static void Log(const char* fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    std::fprintf(stderr, "[log_filter] ");
-    std::vfprintf(stderr, fmt, args);
-    std::fprintf(stderr, "\n");
-    va_end(args);
-}
+NEVR_DEFINE_PLUGIN_LOG("[log_filter]")
 
 /* Local copy of log_filter.cpp's LevelStr() — that one has internal linkage
  * in a different translation unit, so it isn't reusable from here. */
@@ -153,23 +147,23 @@ NEVR_PLUGIN_API uint32_t NvrPluginGetApiVersion(void) {
 }
 
 NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
-    Log("initializing (base=0x%llx)", static_cast<unsigned long long>(ctx->base_addr));
+    PluginLog("initializing (base=0x%llx)", static_cast<unsigned long long>(ctx->base_addr));
 
     /* Load config or use defaults */
     std::string config_path = FindConfigFile();
     if (config_path.empty()) {
         LogFilterConfig defaults = MakeDefaultConfig();
-        Log("no config file found, using built-in defaults (%zu suppress patterns)",
+        PluginLog("no config file found, using built-in defaults (%zu suppress patterns)",
             defaults.suppress_patterns.size());
         SetLogFilterConfig(defaults);
     } else {
         LogFilterConfig cfg = LoadLogFilterConfig(config_path.c_str());
         if (!cfg.valid) {
-            Log("config parse failed (path=%s), using built-in defaults", config_path.c_str());
+            PluginLogWarning("config parse failed (path=%s), using built-in defaults", config_path.c_str());
             SetLogFilterConfig(MakeDefaultConfig());
         } else {
             SetLogFilterConfig(cfg);
-            Log("config loaded: path=%s min_level=%s channels=%zu patterns=%zu truncate=%zu file=%s(%s) color=%s rotate=%s",
+            PluginLog("config loaded: path=%s min_level=%s channels=%zu patterns=%zu truncate=%zu file=%s(%s) color=%s rotate=%s",
                 config_path.c_str(),
                 LevelStr(cfg.min_level),
                 cfg.suppress_channels.size(),
@@ -184,17 +178,17 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
 
     /* Install hook on CLog::PrintfImpl */
     if (!InstallLogFilterHook(ctx->base_addr)) {
-        Log("hook install failed — plugin load aborted"
+        PluginLogError("hook install failed — plugin load aborted"
             " (fatal if configured required:true in config.yaml;"
             " game logs run unfiltered otherwise)");
         return -1;
     }
 
-    Log("initialization complete — engine logging is now filtered");
+    PluginLog("initialization complete — engine logging is now filtered");
     return 0;
 }
 
 NEVR_PLUGIN_API void NvrPluginShutdown(void) {
-    Log("shutting down");
+    PluginLog("shutting down");
     RemoveLogFilterHook();
 }
