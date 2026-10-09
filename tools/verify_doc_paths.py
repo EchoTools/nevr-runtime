@@ -14,6 +14,10 @@ own append-only rule.
 
 Checked: README.md, AGENTS.md, CLAUDE.md, docs/ (except audits), tests/**/README.md.
 
+Also checked: every `docs/...md` path named in a tracked C/C++ source file (comments cite
+documents without backticks, so the markdown rules above never saw them; #128). A reference
+preceded on its line by `echovr-reconstruction` names a file in that repository and is skipped.
+
 Backticked paths in those files that look like repo paths. A path is
 "claimed" if it starts with a known top-level directory. Trailing slashes and
 line-suffixes (`file.cpp:123`) are stripped before the check.
@@ -185,6 +189,41 @@ def claimed_paths():
             yield f, raw, p
 
 
+# A document path in a source comment: no backticks, so claimed_paths() never saw these. The
+# stale citation behind #110 (a comment pointing at a deleted doc) was invisible for that reason.
+SOURCE_DOC_RE = re.compile(r"docs/[A-Za-z0-9_./-]*[A-Za-z0-9_]\.md")
+EXTERNAL_REPO_MARKER = "echovr-reconstruction"
+SOURCE_GLOBS = ("*.cpp", "*.h", "*.hpp")
+
+
+def source_doc_refs(text: str):
+    """(line number, path) for each repo-local docs/*.md reference in `text`.
+
+    A reference with `echovr-reconstruction` earlier on the same line points into that repository,
+    where "exists in this tree" is not the question, so it is not returned."""
+    for number, line in enumerate(text.splitlines(), start=1):
+        for m in SOURCE_DOC_RE.finditer(line):
+            if EXTERNAL_REPO_MARKER in line[:m.start()]:
+                continue
+            yield number, m.group(0)
+
+
+def bad_source_refs(files, read=lambda f: (REPO / f).read_text(errors="replace"),
+                    exists=lambda p: (REPO / p).exists()):
+    """(file, line, path) for every source reference whose document is not in the tree."""
+    bad = []
+    for f in files:
+        for number, path in source_doc_refs(read(f)):
+            if not exists(path):
+                bad.append((f, number, path))
+    return bad
+
+
+def tracked_source_files():
+    out = subprocess.run(["git", "ls-files", *SOURCE_GLOBS], cwd=REPO, capture_output=True, text=True)
+    return out.stdout.split()
+
+
 def main() -> int:
     # Verify every historical citation actually resolves in git history.
     dead_citations = []
@@ -238,6 +277,10 @@ def main() -> int:
             bad.append((f, raw))
     for f, raw in bad:
         print(f"doc-paths: FAIL {f} claims `{raw}` — no such path", file=sys.stderr)
+    bad_source = bad_source_refs(tracked_source_files())
+    for f, number, path in bad_source:
+        print(f"doc-paths: FAIL {f}:{number} cites `{path}` — no such document. Point the comment at "
+              f"the document that exists, or drop the citation.", file=sys.stderr)
     # Each explanation prints for its OWN failure class. This used to be one
     # `if bad or dead_citations or bare_bad:` that returned 1 from inside, which
     # made the bare-filename explanation below unreachable whenever bare_bad was
@@ -262,7 +305,7 @@ def main() -> int:
               f"path that still resolves while its line number does not is the quietest "
               f"kind of rot: it reads as correct until someone follows it. Re-derive the "
               f"line with grep rather than adjusting it by hand.", file=sys.stderr)
-    if bad or dead_citations or bare_bad or stale_lines:
+    if bad or dead_citations or bare_bad or stale_lines or bad_source:
         return 1
     n = len(cited_paths())
     local = sum(1 for _ in local_docs())
