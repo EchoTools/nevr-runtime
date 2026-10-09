@@ -1,7 +1,7 @@
 #pragma once
 
 // libcurl's global state must be initialised before any handle is created, exactly once, and
-// must outlive every thread that uses curl. Several subsystems (token auth, the WinHTTP bridge,
+// must outlive every thread that uses curl. Several subsystems (token auth, the WinHTTP stub,
 // the asset CDN, the game server link) each create handles from their own threads; when one of
 // them called curl_global_init/curl_global_cleanup around its own lifetime it tore the state
 // down under the others (CDN requests failing with CURLE_UNSUPPORTED_PROTOCOL right after a

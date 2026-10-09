@@ -115,6 +115,19 @@ class CurrentSmokeMarkerTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("FAIL", row(result.stdout, "S44"))
 
+    def test_msxml6_hook_row_passes_when_installed_and_fails_when_not(self):
+        installed = ("[NEVR.MODULE] platform_compat initialized: 3/3 hooks installed "
+                     "(tls=ok createdir=ok msxml6=ok)\n")
+        result = score(installed, group="all")
+        self.assertIn("PASS", row(result.stdout, "M04"))
+        missing = ("[NEVR.MODULE] platform_compat initialized: 2/3 hooks installed "
+                   "(tls=ok createdir=ok msxml6=FAILED)\n"
+                   "[NEVR.MODULE] MSXML6 pass-through hook NOT installed \u2014 requests still reach the system "
+                   "XMLHTTP object, but the pass-through line will not be logged\n")
+        result = score(missing, group="all")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("FAIL", row(result.stdout, "M04"))
+
 
 if __name__ == "__main__":
     unittest.main()

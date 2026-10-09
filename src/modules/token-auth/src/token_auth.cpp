@@ -999,7 +999,7 @@ NEVR_MODULE_API int token_auth_Init(const NvrModuleContext* ctx) {
     TokenAuth::Init(ctx->base_addr, is_server);
 
     // Carry the real outcome, matching the richer sibling pattern in
-    // platform_compat_Init (tls=%s createdir=%s winhttp=%s). Servers skip
+    // platform_compat_Init (tls=%s createdir=%s msxml6=%s). Servers skip
     // token auth entirely (early return in TokenAuth::Init), hence "n/a".
     const bool authOk = !TokenAuth::GetToken().empty();
     Log(EchoVR::LogLevel::Info, "[NEVR.MODULE] token_auth initialized mode=%s auth=%s",

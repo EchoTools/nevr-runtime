@@ -107,7 +107,7 @@ subsystems that NEVR annotates.
 | `[NEVR.CRASH]`        | Crash recovery, dump, longjmp                 |
 | `[NEVR.AUTH]`         | Token acquisition, device-code flow, refresh  |
 | `[NEVR.CDN]`          | Asset CDN download and override              |
-| `[NEVR.HTTP]`         | WinHTTP/curl bridge                          |
+| `[NEVR.HTTP]`         | WinHTTP COM stub (compat/winhttp_stub.cpp)   |
 | `[NEVR.UPNP]`         | UPnP port mapping                            |
 | `[NEVR.RESOURCE]`     | Resource override / embedded asset injection |
 | `[NEVR.LOGFILTER]`    | The log filter's own health and rate summary |
