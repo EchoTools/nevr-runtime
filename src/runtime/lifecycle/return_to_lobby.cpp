@@ -36,20 +36,7 @@ void CallGame(PVOID pGame) {
 
 VOID HookedScheduleReturnToLobby(PVOID pGame) { Request(pGame); }
 
-}  // namespace
-
-void SetEntrantCounter(EntrantCounter counter) {
-  std::lock_guard<std::mutex> lock(g_mutex);
-  g_counter = counter;
-}
-
-bool Configure(uint64_t ttlSeconds) {
-  {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    g_policy.SetTtlMs(ttlSeconds * 1000ULL);
-  }
-  if (ttlSeconds == 0 || !g_isServer) return true;
-
+bool ArmDetour(uint64_t ttlSeconds) {
   void* target = EchoVR::g_GameBaseAddress + 0x1A89F0;
   if (std::memcmp(target, kPrologue, sizeof(kPrologue)) != 0) {
     Log(EchoVR::LogLevel::Warning,
@@ -68,6 +55,30 @@ bool Configure(uint64_t ttlSeconds) {
   return true;
 }
 
+}  // namespace
+
+void SetEntrantCounter(EntrantCounter counter) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_counter = counter;
+}
+
+bool Configure(uint64_t ttlSeconds) {
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_policy.SetTtlMs(ttlSeconds * 1000ULL);
+  }
+  if (ttlSeconds == 0 || !g_isServer) return true;
+
+  // The hold is armed only together with the detour: without it the runtime's own CODE_ENDED
+  // return would be held while the game's own returns were not.
+  const bool armed = ArmDetour(ttlSeconds);
+  if (!armed) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_policy.SetTtlMs(0);
+  }
+  return armed;
+}
+
 void Request(PVOID pGame) {
   ReturnToLobbyHold::RequestVerdict verdict;
   uint64_t ttlMs = 0;
@@ -81,23 +92,28 @@ void Request(PVOID pGame) {
     CallGame(pGame);
     return;
   }
-  Log(EchoVR::LogLevel::Info,
-      "[NEVR.PATCH] return to lobby held: the session has no players (ttl_s=%llu); a player joining or a "
-      "shutdown cancels the hold",
-      static_cast<unsigned long long>(ttlMs / 1000ULL));
+  // The game asks again every tick while the session stays empty; only the first request of a
+  // hold is logged, the count rides on the line that ends the hold.
+  if (verdict == ReturnToLobbyHold::RequestVerdict::Hold) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] return to lobby held: the session has no players (ttl_s=%llu); a player joining or a "
+        "shutdown cancels the hold",
+        static_cast<unsigned long long>(ttlMs / 1000ULL));
+  }
 }
 
 void Poll() {
   ReturnToLobbyHold::PollVerdict verdict;
   PVOID game = nullptr;
   uint64_t heldMs = 0;
+  uint64_t requests = 0;
   {
     std::lock_guard<std::mutex> lock(g_mutex);
-    if (!g_policy.Holding()) return;
     const uint64_t now = NowMs();
-    heldMs = now - g_policy.HeldSinceMs();
+    heldMs = g_policy.Holding() ? now - g_policy.HeldSinceMs() : 0;
     verdict = g_policy.Poll(now, LiveEntrants(), ShutdownPending());
     game = g_heldGame;
+    requests = g_policy.HeldRequests();
     if (verdict != ReturnToLobbyHold::PollVerdict::Keep) g_heldGame = nullptr;
   }
   switch (verdict) {
@@ -105,12 +121,14 @@ void Poll() {
       return;
     case ReturnToLobbyHold::PollVerdict::Cancel:
       Log(EchoVR::LogLevel::Info,
-          "[NEVR.PATCH] return to lobby hold cancelled after %llu ms: a player joined or a shutdown is pending",
-          static_cast<unsigned long long>(heldMs));
+          "[NEVR.PATCH] return to lobby hold cancelled after %llu ms (%llu requests): a player joined or a "
+          "shutdown is pending",
+          static_cast<unsigned long long>(heldMs), static_cast<unsigned long long>(requests));
       return;
     case ReturnToLobbyHold::PollVerdict::Release:
-      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] return to lobby hold expired after %llu ms — returning to lobby",
-          static_cast<unsigned long long>(heldMs));
+      Log(EchoVR::LogLevel::Info,
+          "[NEVR.PATCH] return to lobby hold expired after %llu ms (%llu requests) — returning to lobby",
+          static_cast<unsigned long long>(heldMs), static_cast<unsigned long long>(requests));
       CallGame(game);
       return;
   }

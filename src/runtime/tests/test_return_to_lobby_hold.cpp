@@ -63,9 +63,42 @@ TEST(ReturnToLobbyHold, AnEmptySessionIsHeldUntilTheTtlThenReleased) {
 TEST(ReturnToLobbyHold, RepeatedRequestsDoNotRestartTheClock) {
   Policy policy = WithTtl(kTtl);
   EXPECT_EQ(policy.OnReturnRequested(1000, 0, false), RequestVerdict::Hold);
-  EXPECT_EQ(policy.OnReturnRequested(900000, 0, false), RequestVerdict::Hold);
+  EXPECT_EQ(policy.OnReturnRequested(900000, 0, false), RequestVerdict::HoldAgain);
   EXPECT_EQ(policy.HeldSinceMs(), 1000U);
   EXPECT_EQ(policy.Poll(1000 + kTtl, 0, false), PollVerdict::Release);
+}
+
+// The game re-issues the request every tick while a session is empty (CR15NetDedicatedLobby
+// vslot[1] in state 0xb), so only the first request of a hold may be reported as a new hold.
+TEST(ReturnToLobbyHold, OnlyTheFirstRequestOfAHoldIsNew) {
+  Policy policy = WithTtl(kTtl);
+  EXPECT_EQ(policy.OnReturnRequested(1000, 0, false), RequestVerdict::Hold);
+  for (int tick = 1; tick <= 100; ++tick) {
+    EXPECT_EQ(policy.OnReturnRequested(1000 + tick, 0, false), RequestVerdict::HoldAgain);
+  }
+  EXPECT_EQ(policy.HeldRequests(), 101U);
+  ASSERT_EQ(policy.Poll(1000 + kTtl, 0, false), PollVerdict::Release);
+  EXPECT_EQ(policy.OnReturnRequested(5000000, 0, false), RequestVerdict::Proceed);
+}
+
+// After the TTL releases the return, the game's queued callback has not run yet and the next tick
+// asks again: that must reach the game, not start a second TTL.
+TEST(ReturnToLobbyHold, ARequestAfterTheReleaseProceedsInsteadOfStartingAFreshHold) {
+  Policy policy = WithTtl(kTtl);
+  ASSERT_EQ(policy.OnReturnRequested(1000, 0, false), RequestVerdict::Hold);
+  ASSERT_EQ(policy.Poll(1000 + kTtl, 0, false), PollVerdict::Release);
+  EXPECT_EQ(policy.OnReturnRequested(1000 + kTtl + 16, 0, false), RequestVerdict::Proceed);
+  EXPECT_FALSE(policy.Holding());
+  EXPECT_EQ(policy.OnReturnRequested(1000 + kTtl + 32, 0, false), RequestVerdict::Proceed);
+}
+
+TEST(ReturnToLobbyHold, ThePostReleaseLatchEndsOncePlayersAreSeenAgain) {
+  Policy policy = WithTtl(kTtl);
+  ASSERT_EQ(policy.OnReturnRequested(1000, 0, false), RequestVerdict::Hold);
+  ASSERT_EQ(policy.Poll(1000 + kTtl, 0, false), PollVerdict::Release);
+  EXPECT_EQ(policy.Poll(1000 + kTtl + 5, 2, false), PollVerdict::Keep);
+  EXPECT_EQ(policy.OnReturnRequested(9000000, 0, false), RequestVerdict::Hold) << "a new empty session holds again";
+  EXPECT_EQ(policy.HeldSinceMs(), 9000000U);
 }
 
 TEST(ReturnToLobbyHold, APlayerJoiningCancelsTheHold) {
