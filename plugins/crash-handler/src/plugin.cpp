@@ -329,8 +329,8 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx) {
     g_gameBase = ctx->base_addr;
     g_isServer = (ctx->flags & NEVR_HOST_IS_SERVER) != 0;
 
-    // MinHook's init is process-wide: the host or an earlier plugin may already have
-    // run it, which is benign (as in the sibling plugins).
+    // Each plugin links its own static MinHook, so ALREADY_INITIALIZED only follows a
+    // second init inside this plugin; tolerated all the same.
     MH_STATUS mhStatus = MH_Initialize();
     if (mhStatus != MH_OK && mhStatus != MH_ERROR_ALREADY_INITIALIZED) {
         PluginLog("MH_Initialize failed: %s", MH_StatusToString(mhStatus));

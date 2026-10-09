@@ -91,7 +91,7 @@
 [90m2026-09-21T16:37:45.101Z[0m [33mwarn[0m [NEVR.PATCH] hook FAILED name=LoadLibraryExW target=00007ffab1f5c550 reason=MH_ERROR_ALREADY_CREATED �?" detour not installed[0m
 [90m2026-09-21T16:37:45.102Z[0m [0minfo[0m [NEVR.PATCH] Disabled loading tips system for server mode[0m
 [90m2026-09-21T16:37:45.123Z[0m [33mwarn[0m [NEVR.CONFIG] no config.yaml found �?" NEVR config keys use built-in defaults[0m
-[90m2026-09-21T16:37:45.123Z[0m [33mwarn[0m [NEVR.WS] no services.socket_uri in config.yaml �?" bridge NOT started; the game will talk to services directly and login injection cannot fire[0m
+[90m2026-09-21T16:37:45.123Z[0m [33mwarn[0m [NEVR.WS] no services.socket_uri in config.yaml �?" bridge NOT started; services.allow_offline_server is set, so this server boots offline and will never log in or register[0m
 [90m2026-09-21T16:37:45.124Z[0m [0minfo[0m [NEVR.PLUGIN] no plugins configured in config.yaml �?" loading none[0m
 [90m2026-09-21T16:37:45.124Z[0m [0minfo[0m [NEVR.CRASH] module cache refreshed count=38 (post module/plugin load)[0m
 [90m2026-09-21T16:37:45.125Z[0m [0minfo[0m [NEVR.PATCH] shutdown deps resolved ws_bridge=in-process StopWebSocketBridgeListener=direct (no loader lock on the signal path, N62/N105)[0m

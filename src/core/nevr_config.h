@@ -85,4 +85,8 @@ class NevrConfig {
   std::vector<std::string> unsetBareVars_;
 };
 
+/// Case-insensitive true/yes/on/1 and false/no/off/0; nullopt for anything else. The one
+/// boolean-scalar rule shared by config.yaml reads and the flat-key consumers.
+std::optional<bool> ParseBool(const std::string& s);
+
 }  // namespace nevr

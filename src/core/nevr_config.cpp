@@ -176,15 +176,6 @@ YAML::Node ResolvePath(const YAML::Node& root, const std::string& path) {
   }
 }
 
-std::optional<bool> ParseBool(const std::string& s) {
-  std::string t;
-  t.reserve(s.size());
-  for (char c : s) t += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  if (t == "true" || t == "yes" || t == "on" || t == "1") return true;
-  if (t == "false" || t == "no" || t == "off" || t == "0") return false;
-  return std::nullopt;
-}
-
 // --- top-level validation + plugins ----------------------------------------
 
 const std::set<std::string>& AllowedTopLevelKeys() {
@@ -265,6 +256,15 @@ void ParsePlugins(const YAML::Node& root, std::vector<PluginSpec>& out) {
 }
 
 }  // namespace
+
+std::optional<bool> ParseBool(const std::string& s) {
+  std::string t;
+  t.reserve(s.size());
+  for (char c : s) t += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  if (t == "true" || t == "yes" || t == "on" || t == "1") return true;
+  if (t == "false" || t == "no" || t == "off" || t == "0") return false;
+  return std::nullopt;
+}
 
 // --- NevrConfig -------------------------------------------------------------
 
