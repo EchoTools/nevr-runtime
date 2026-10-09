@@ -1063,7 +1063,7 @@ VOID GameServerLib::Terminate() {
   m_context->Terminate();
 
   // N87: on the CTRL+C path this is the last point at which the server-visible
-  // work is provably finished — "[NSLOBBY] unregistering", "[WEBSOCKET]
+  // work is provably finished — "[NSLOBBY] unregistering", "[NEVR.SERVERDB]
   // Disconnected from ServerDB (code: 1000, Normal closure)" and
   // "[NEVR.GAMESERVER] Unregistered game server" are all logged above this line.
   // Everything the game does after this is client-side teardown (level unload,

@@ -24,6 +24,7 @@
 
 #include "address_registry.h"
 #include "hook_manager.h"
+#include "core/json_escape.h"
 #include "nevr_common.h"
 #include "yaml_config.h"
 
@@ -416,33 +417,6 @@ void ShutdownFileLogging() {
 }
 
 /* ------------------------------------------------------------------ */
-/* JSON escaping for JSONL output                                      */
-/* ------------------------------------------------------------------ */
-
-static void JsonEscapeAppend(std::string& out, const char* s, int len) {
-    out.reserve(out.size() + len + 16);
-    for (int i = 0; i < len; i++) {
-        char c = s[i];
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n";  break;
-            case '\r': out += "\\r";  break;
-            case '\t': out += "\\t";  break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20) {
-                    char esc[8];
-                    snprintf(esc, sizeof(esc), "\\u%04x", static_cast<unsigned char>(c));
-                    out += esc;
-                } else {
-                    out += c;
-                }
-                break;
-        }
-    }
-}
-
-/* ------------------------------------------------------------------ */
 /* Filtering logic                                                     */
 /* ------------------------------------------------------------------ */
 
@@ -546,7 +520,7 @@ static void EmitLine(uint32_t level, const char* message, int len) {
             line += "\",\"level\":\"";
             line += lvl;
             line += "\",\"msg\":\"";
-            JsonEscapeAppend(line, message, len);
+            JsonEscape::AppendTo(line, message, len);
             line += "\"}\n";
 
             size_t written = std::fwrite(line.data(), 1, line.size(), g_log_file);

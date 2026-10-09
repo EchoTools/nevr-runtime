@@ -934,8 +934,8 @@ void InstallWebSocketBridge() {
             // Don't inject LoginRequest — the session is already logged in.
             if (connIdx >= 2 && g_loginRemoteWs) {
               Log(EchoVR::LogLevel::Info,
-                  "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p), sharing login session (no LoginRequest)",
-                  connIdx, static_cast<void*>(&gameWs));
+                  "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p), sharing login session (no LoginRequest)",
+                  connIdx, ConnLabel(connIdx), static_cast<void*>(&gameWs));
               auto pair = std::make_unique<ProxyPair>();
               pair->remoteWs = g_loginRemoteWs;
               pair->remoteOpen = true;
@@ -1023,8 +1023,8 @@ void InstallWebSocketBridge() {
                 // Allocation failure in the encoder: connect without URL credentials
                 // (Bearer path below) rather than put an unencoded secret on the wire.
                 Log(EchoVR::LogLevel::Error,
-                    "[NEVR.WS] conn=%d could not percent-encode URL credentials; connecting without them",
-                    connIdx);
+                    "[NEVR.WS] conn=%d (%s) could not percent-encode URL credentials; connecting without them",
+                    connIdx, ConnLabel(connIdx));
               }
             }
             // conn>=2 (matchmaker): pnsradmatchmaking uses protobuf, not EchoVR
@@ -1145,7 +1145,8 @@ void InstallWebSocketBridge() {
                       std::lock_guard<std::mutex> lk(g_pairsMutex);
                       pairPtr->remoteOpen = true;
                       const std::string diagnostic = LogDiagnostics::FormatRedactedUrlDiagnostic(
-                          "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + "): ", g_remoteUri);
+                          "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + ", " + ConnLabel(connIdx) + "): ",
+                          g_remoteUri);
                       Log(EchoVR::LogLevel::Debug, "%s", diagnostic.c_str());
 
                       // Inject LoginRequest on login connections (not config).
@@ -1218,8 +1219,8 @@ void InstallWebSocketBridge() {
                         pairPtr->remoteWs->sendBinary(loginMsg);
                         std::string xpid = std::string(PlatformPrefix(platformCode)) + "-" + std::to_string(discordId);
                         Log(EchoVR::LogLevel::Info,
-                            "[NEVR.WS] login injected xpid=%s platform=%d conn=%d size=%zu",
-                            xpid.c_str(), static_cast<int>(platformCode), connIdx, loginMsg.size());
+                            "[NEVR.WS] login injected xpid=%s platform=%d conn=%d (%s) size=%zu",
+                            xpid.c_str(), static_cast<int>(platformCode), connIdx, ConnLabel(connIdx), loginMsg.size());
                       }
 
                       for (auto& pending : pairPtr->pendingToRemote) {
@@ -1424,8 +1425,8 @@ void InstallWebSocketBridge() {
             }
             // Start after insertion so the remote callback can find the pair in g_pairs
             remote->start();
-            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, ws=%p)", connIdx,
-                static_cast<void*>(gameWsPtr));
+            Log(EchoVR::LogLevel::Info, "[NEVR.WS] Proxy: game connected (conn=%d, %s, ws=%p)", connIdx,
+                ConnLabel(connIdx), static_cast<void*>(gameWsPtr));
             const std::string remoteDiagnostic =
                 LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: ", g_remoteUri);
             Log(EchoVR::LogLevel::Info, "%s", remoteDiagnostic.c_str());
