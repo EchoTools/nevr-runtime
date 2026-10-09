@@ -275,7 +275,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         source = (ROOT / "src/modules/platform-compat/src/platform_compat.cpp").read_text()
         hook = extract_braced_function(source, "HRESULT WINAPI CoCreateInstanceHook(")
         self.assertRegex(hook, r"Log\(SUCCEEDED\(hr\)\s*\?\s*EchoVR::LogLevel::Info\s*:\s*EchoVR::LogLevel::Warning")
-        install = extract_braced_function(source, "static bool InstallWinHTTPHook(")
+        install = extract_braced_function(source, "static bool InstallMsxml6PassThroughHook(")
         attach_failure = install.split("Hooking::Attach", 1)[1].split("return false;", 1)[0]
         self.assertIn("EchoVR::LogLevel::Warning", attach_failure)
         self.assertNotIn("EchoVR::LogLevel::Error", attach_failure)
