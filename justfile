@@ -416,26 +416,27 @@ test-quest-shared:
     # Quest login rewrite: the compose half (login_rewrite.cpp, exceptions enabled) and the apply
     # half (login_apply.cpp, built -fno-exceptions exactly as on the device, because it runs while
     # game code is live) plus the shared PCVR login builder, against a fake CJson. The Android
-    # adapter (login_hook.cpp) cannot run on the host; build-android compiles it.
+    # adapter (login_hook.cpp) cannot run on the host; build-android compiles it. The login tests
+    # also link the prerequisite handlers and the stand-ins (both -fno-exceptions as on the device),
+    # because the send gate and the end-to-end flow test drive them together with the rewrite.
+    for f in login/login_apply login/login_prerequisites login/login_standin; do
+        g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -c \
+            "src/quest/$f.cpp" -o "$out/$(basename "$f").o"
+    done
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -c \
-        src/quest/login/login_apply.cpp -o "$out/login_apply.o"
+        src/quest/sentinel/hook_log.cpp -o "$out/hook_log.o"
     g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
-        "$out/login_apply.o" \
+        "$out/login_apply.o" "$out/login_prerequisites.o" "$out/login_standin.o" "$out/hook_log.o" \
         src/quest/login/login_rewrite.cpp \
         src/runtime/compat/login_profile.cpp \
         src/quest/tests/login_rewrite_test.cpp \
         -o "$out/login_rewrite_test"
     "$out/login_rewrite_test"
-    # Quest login prerequisites: the handler bodies (login_prerequisites.cpp, -fno-exceptions as on
-    # the device) driven through a fake Platform SDK and the game's four callbacks. The install
-    # (login_prerequisites_install.cpp) needs libpnsovr.so; build-android compiles it and
-    # test-quest-hooks-pinned resolves its slots in the real library.
-    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -c \
-        src/quest/login/login_prerequisites.cpp -o "$out/login_prerequisites.o"
-    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -c \
-        src/quest/sentinel/hook_log.cpp -o "$out/hook_log.o"
+    # Quest login prerequisites: the handler bodies driven through a fake Platform SDK and the game's
+    # four callbacks. The install (login_prerequisites_install.cpp) needs libpnsovr.so for real slots;
+    # build-android compiles it and test-quest-hooks-pinned resolves its slots in the real library.
     g++ -std=c++17 -Wall -Wextra -Werror -Isrc \
-        "$out/login_prerequisites.o" "$out/hook_log.o" \
+        "$out/login_prerequisites.o" "$out/login_standin.o" "$out/hook_log.o" \
         src/quest/tests/login_prerequisites_test.cpp \
         -o "$out/login_prerequisites_test"
     "$out/login_prerequisites_test"
@@ -448,11 +449,15 @@ test-quest-shared:
             "src/quest/sentinel/$f.cpp" -o "$out/$f.o"
     done
     g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc -Isrc/quest/sentinel \
-        "$out/login_prerequisites.o" "$out/login_prerequisites_install.o" \
+        "$out/login_prerequisites.o" "$out/login_prerequisites_install.o" "$out/login_standin.o" \
         "$out/got_hook.o" "$out/hook_log.o" "$out/hook_report.o" \
         src/quest/tests/login_prerequisites_install_test.cpp \
         -o "$out/login_prerequisites_install_test" -ldl -pthread
     "$out/login_prerequisites_install_test"
+    # The per-process stand-ins and their predicates.
+    g++ -std=c++17 -Wall -Wextra -Werror -fno-exceptions -Isrc \
+        "$out/login_standin.o" src/quest/tests/login_standin_test.cpp -o "$out/login_standin_test"
+    "$out/login_standin_test"
 
 # Quest hook backend on the host. Builds three fixture shared objects (BIND_NOW with
 # RELRO, BIND_NOW without RELRO, lazy) and runs src/quest/tests/got_hook_test.cpp,

@@ -24,6 +24,7 @@
 #include "got_hook.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
+#include "quest/login/login_rewrite.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -168,6 +169,30 @@ int main(int argc, char** argv) {
                    static_cast<unsigned long long>(slot.function));
       QCHECK(false);
     }
+  }
+
+  // The non-GOT facts the login send gate pins in the real libpnsovr.so: CNSUser::DeferredLogInFailed's
+  // three instructions, GotLoggedInUserCb's two instructions that form the user-name buffer address,
+  // and the exact "prerequisites are missing" bytes the gate passes to the failure (also the #239
+  // prompt's recognised local text).
+  const unsigned char* ovr_base = static_cast<const unsigned char*>(ovr.mem);
+  auto CheckCode = [&](std::uint64_t vaddr, const std::uint32_t* code, std::size_t words, const char* what) {
+    std::uint32_t got[4] = {};
+    std::memcpy(got, ovr_base + vaddr, words * sizeof(std::uint32_t));
+    if (std::memcmp(got, code, words * sizeof(std::uint32_t)) != 0) {
+      std::fprintf(stderr, "libpnsovr %s: instruction bytes at %#llx differ\n", what,
+                   static_cast<unsigned long long>(vaddr));
+      QCHECK(false);
+    }
+  };
+  const std::uint32_t kDeferredFailedCode[3] = {0xb900a001u, 0xf9005402u, 0xd65f03c0u};
+  const std::uint32_t kUserNameCode[2] = {0xb0002908u, 0x9111c108u};
+  CheckCode(0x382e44, kDeferredFailedCode, 3, "CNSUser::DeferredLogInFailed");
+  CheckCode(0x1ed0fc, kUserNameCode, 2, "GotLoggedInUserCb user-name address");
+  const char* msg = reinterpret_cast<const char*>(ovr_base + 0x556b40);
+  if (std::strcmp(msg, QuestLogin::kPrerequisitesMissingText) != 0) {
+    std::fprintf(stderr, "libpnsovr 0x556b40 is not the pinned prerequisites-missing text\n");
+    QCHECK(false);
   }
 
   if (quest_test::Failures() != 0) {

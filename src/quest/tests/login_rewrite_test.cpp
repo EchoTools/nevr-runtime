@@ -4,9 +4,11 @@
 // rules and a fake CNSOVRUser whose account id comes from a virtual AccountID().
 
 #include "quest/login/login_rewrite.h"
+#include "quest/login/login_standin.h"
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <iterator>
 #include <map>
 #include <new>
@@ -137,6 +139,7 @@ class FakeUser final : public QuestLogin::UserAccess {
   std::uint64_t object_account_field = 5551234;  // [this+0x88]: ignored by the override
   bool setter_reaches_global = true;             // false: the write lands somewhere AccountID() never reads
   bool wire_forced = false;                      // true: AccountID() returns forced_wire whatever the global holds
+  bool wire_readable = true;                     // false: the object is not a CNSOVRUser; AccountID() cannot be called
   std::uint64_t forced_wire = 0;
   int restores = 0;
 
@@ -145,11 +148,12 @@ class FakeUser final : public QuestLogin::UserAccess {
     return true;
   }
   bool WireAccountId(std::uint64_t& id) const override {
+    if (!wire_readable) return false;
     id = wire_forced ? forced_wire : global_account_id;
     return true;
   }
   bool SetAccountId(std::uint64_t id) override {
-    if (!memory_.NoteBeforeWrite(global_account_id, id)) return false;
+    if (!memory_.NoteBeforeWrite(global_account_id, id, QuestLogin::StandIn::IsOrgId(global_account_id))) return false;
     if (setter_reaches_global) global_account_id = id;
     else object_account_field = id;
     return true;
@@ -919,46 +923,154 @@ void TestInvalidUtf8NameDoesNotThrow() {
   QCHECK(json.ToJson() == before);
 }
 
-// DecideSend is the login send hook's fail-closed rule: a Rewritten login always sends; a declining
-// rewrite sends the real Oculus login ONLY when nothing was synthesized, and fails closed (sends
-// nothing) when a prerequisite was synthesized, so a synthesized Oculus login never reaches the
-// wire. Every decline reason behaves the same way.
-void TestDecideSendFailsClosedOnlyWhenSynthesized() {
+// DecideSend reads the current wire state: a login whose account id, access_token or nonce is a
+// stand-in, or whose account id is 0 or -1, is refused; a clean wire is sent.
+void TestDecideSendReadsTheWire() {
   using QuestLogin::DecideSend;
-  using QuestLogin::Outcome;
   using QuestLogin::SendDecision;
-  // Rewritten -> always send, synthesized or not.
-  QCHECK(DecideSend(Outcome::Rewritten, false) == SendDecision::SendOriginal);
-  QCHECK(DecideSend(Outcome::Rewritten, true) == SendDecision::SendOriginal);
-  const Outcome declines[] = {Outcome::NoIdentity,      Outcome::PlatformMismatch, Outcome::UserUnreadable,
-                              Outcome::ComposeFailed,    Outcome::JsonWriteFailed,  Outcome::AccountIdNotCarried,
-                              Outcome::Exception};
-  for (const Outcome o : declines) {
-    // Nothing synthesized: the real Oculus login still goes out, unchanged from before.
-    QCHECK(DecideSend(o, false) == SendDecision::SendOriginal);
-    // A prerequisite was synthesized: fail closed, send nothing.
-    QCHECK(DecideSend(o, true) == SendDecision::FailClosed);
+  using QuestLogin::WireCheck;
+  QCHECK(DecideSend(WireCheck{}) == SendDecision::SendOriginal);  // all clean
+  WireCheck w;
+  w.account_id_stand_in = true;
+  QCHECK(DecideSend(w) == SendDecision::FailClosed);
+  for (bool WireCheck::*flag : {&WireCheck::account_id_unreadable, &WireCheck::account_id_stand_in,
+                                &WireCheck::account_id_invalid, &WireCheck::access_token_stand_in,
+                                &WireCheck::nonce_stand_in}) {
+    WireCheck one;
+    one.*flag = true;
+    QCHECK(one.Unsafe());
+    QCHECK(DecideSend(one) == SendDecision::FailClosed);
   }
 }
 
-// The synthesized org-id stand-in is never remembered as a real Oculus id, so a later declined
-// login cannot restore it as this device's id.
-void TestOculusIdMemoryNeverRemembersTheSynthesizedId() {
+// OculusIdMemory: a stand-in org id is allowed as `current` (so a Ready login that stood the org id
+// in still rewrites to the NEVR id), but is never remembered -- a later restore puts back the
+// game's "fetch again" marker, never the stand-in.
+void TestOculusIdMemoryHandlesTheStandIn() {
+  QuestLogin::StandIn::SetForTest(0xABCDEF12ULL, "tok", "non", "player-00");
+  const std::uint64_t standin = QuestLogin::StandIn::OrgId();
   QuestLogin::OculusIdMemory mem;
-  QCHECK(!QuestLogin::OculusIdMemory::IsRealId(QuestLogin::kSynthesizedOrgScopedId));
-  QCHECK(!mem.NoteBeforeWrite(QuestLogin::kSynthesizedOrgScopedId, 777ULL));  // refused
+  // Allowed to overwrite a stand-in with the NEVR id...
+  QCHECK(mem.NoteBeforeWrite(standin, 777ULL, /*current_is_stand_in=*/true));
   std::uint64_t out = 0;
-  QCHECK(!mem.RestoreFor(777ULL, out));  // nothing was remembered to restore
-  // A real id is still remembered as before.
-  QCHECK(mem.NoteBeforeWrite(1234ULL, 777ULL));
-  QCHECK(mem.RestoreFor(777ULL, out) && out == 1234ULL);
+  // ...and the value put back for a later decline is the re-fetch marker, not the stand-in.
+  QCHECK(mem.RestoreFor(777ULL, out) && out == ~std::uint64_t{0});
+  // 0 and -1 are still not ids and are refused.
+  QuestLogin::OculusIdMemory mem2;
+  QCHECK(!mem2.NoteBeforeWrite(0ULL, 5ULL));
+  QCHECK(!mem2.NoteBeforeWrite(~std::uint64_t{0}, 5ULL));
+  // A real Oculus id is remembered and restored as before.
+  QuestLogin::OculusIdMemory mem3;
+  QCHECK(mem3.NoteBeforeWrite(1234ULL, 777ULL));
+  std::uint64_t r = 0;
+  QCHECK(mem3.RestoreFor(777ULL, r) && r == 1234ULL);
+}
+
+// A PrerequisiteState over a plain org-id value and a 36-byte name buffer, for FinishLogin.
+class FakePrereqState final : public QuestLogin::PrerequisiteState {
+ public:
+  std::uint64_t org = 0;
+  char name[0x24] = {};
+  bool UserNameIsStandIn() const override { return QuestLogin::StandIn::IsOculusId(name, sizeof(name)); }
+  void ResetUserNameToRefetch() override {
+    std::memset(name, 0, sizeof(name));
+    name[0] = '?';
+  }
+  void SetUserName(const char* n) override {
+    std::memset(name, 0, sizeof(name));
+    for (std::size_t i = 0; i + 1 < sizeof(name) && n[i] != '\0'; ++i) name[i] = n[i];
+  }
+  void ResetOrgIdToRefetch() override { org = ~std::uint64_t{0}; }
+};
+
+// FinishLogin: a rewritten login with a clean wire sends and renames a stood-in user; a stand-in on
+// the wire (any field) is refused whatever the outcome; a refused/declined login resets the
+// stand-ins the game holds so the next attempt asks Oculus again.
+void TestFinishLoginGate() {
+  QuestLogin::StandIn::SetForTest(0x4242ULL, "standtoken", "standnonce", "player-ab");
+
+  // Rewritten, clean wire, stood-in user name -> send, and the name is replaced by the NEVR name.
+  {
+    FakeUser user;
+    user.global_account_id = kNevrAccount;
+    FakeJson json;
+    json.SetString("access_token", "NEVR-TOKEN-SECRET");
+    json.SetString("nonce", "real-nonce");
+    json.SetString("displayname", "Pilot");
+    FakePrereqState st;
+    std::memcpy(st.name, "player-ab", 10);  // the stand-in name
+    g_log.clear();
+    const QuestLogin::FinishResult r =
+        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::Rewritten, &CaptureLog);
+    QCHECK(r.decision == QuestLogin::SendDecision::SendOriginal);
+    QCHECK(r.renamed_user && std::string(st.name) == "Pilot");
+    QCHECK(st.org == 0);  // not reset on a send
+  }
+  // Rewritten but the wire account id is still the stand-in -> refused, and the stand-in org id and
+  // name are reset to the game's re-fetch markers.
+  {
+    FakeUser user;
+    user.wire_forced = true;
+    user.forced_wire = QuestLogin::StandIn::OrgId();
+    FakeJson json;
+    json.SetString("access_token", "NEVR-TOKEN-SECRET");
+    FakePrereqState st;
+    st.org = QuestLogin::StandIn::OrgId();
+    std::memcpy(st.name, "player-ab", 10);
+    const QuestLogin::FinishResult r =
+        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::Rewritten, &CaptureLog);
+    QCHECK(r.decision == QuestLogin::SendDecision::FailClosed);
+    QCHECK(r.wire.account_id_stand_in);
+    QCHECK(r.reset_org_id && st.org == ~std::uint64_t{0});
+    QCHECK(r.reset_user_name && st.name[0] == '?');
+  }
+  // A declined login whose JSON access_token is a stand-in (the org id on the wire is a real
+  // Oculus value) is refused on the token alone. The real org id is NOT reset (it is genuine); the
+  // stand-in token lives in the engine string and is a documented residual, not reset here.
+  {
+    FakeUser user;
+    user.global_account_id = 5551234;  // a real wire id
+    FakeJson json;
+    json.SetString("access_token", QuestLogin::StandIn::AccessToken());
+    FakePrereqState st;  // no stand-in org id or name held
+    const QuestLogin::FinishResult r =
+        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::NoIdentity, &CaptureLog);
+    QCHECK(r.decision == QuestLogin::SendDecision::FailClosed);
+    QCHECK(r.wire.access_token_stand_in);
+    QCHECK(!r.reset_org_id && st.org == 0);  // a genuine org id is left alone
+  }
+  // A declined login with real Oculus answers on the wire is still sent, unchanged, and nothing is
+  // reset: the behaviour before the prerequisites existed.
+  {
+    FakeUser user;
+    user.global_account_id = 5551234;
+    FakeJson json;
+    json.SetString("access_token", "OCULUS-TOKEN");
+    json.SetString("nonce", "oculus-nonce");
+    FakePrereqState st;  // no stand-in held
+    const QuestLogin::FinishResult r =
+        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::NoIdentity, &CaptureLog);
+    QCHECK(r.decision == QuestLogin::SendDecision::SendOriginal);
+    QCHECK(!r.reset_org_id && !r.reset_user_name && st.org == 0);
+  }
+  // An unreadable account id (the object is not a CNSOVRUser) is refused.
+  {
+    FakeUser user;
+    user.wire_readable = false;
+    FakeJson json;
+    FakePrereqState st;
+    const QuestLogin::FinishResult r =
+        QuestLogin::FinishLogin(user, json, st, QuestLogin::Outcome::Rewritten, &CaptureLog);
+    QCHECK(r.decision == QuestLogin::SendDecision::FailClosed && r.wire.account_id_unreadable);
+  }
 }
 
 }  // namespace
 
 int main() {
-  TestDecideSendFailsClosedOnlyWhenSynthesized();
-  TestOculusIdMemoryNeverRemembersTheSynthesizedId();
+  TestDecideSendReadsTheWire();
+  TestOculusIdMemoryHandlesTheStandIn();
+  TestFinishLoginGate();
   TestComposeFailsClosed();
   TestComposedProfileMatchesPcvrBuilder();
   TestSerialRelay();

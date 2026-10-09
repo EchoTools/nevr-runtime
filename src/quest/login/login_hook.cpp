@@ -27,15 +27,23 @@ constexpr const char* kHookedSymbol = "_ZN10NRadEngine7CNSUser16SendLogInRequest
 constexpr std::uint64_t kHookedSlotVaddr = 0x6dd1b8ULL;
 constexpr std::uint64_t kOwnSendLogInRequestVaddr = 0x382a4cULL;
 
-// CNSOVRUser::LogInFailed(ENSResponseCode, char const*, CJson const&) @0x1ec5d0: the game's own
-// login-failure entry. Calling it drives the game to the login-failed state (it tail-calls
-// CNSUser::LogInFailed 0x382e50, which clears the pending flag and invokes the registered failure
-// delegate); it sends nothing. Used to fail closed when a prerequisite was synthesized but the
-// rewrite produced no NEVR login, so no synthesized Oculus login goes out.
-constexpr const char* kLogInFailedSymbol =
-    "_ZN10NRadEngine10CNSOVRUser11LogInFailedENS_15ENSResponseCodeEPKcRKNS_5CJsonE";
-constexpr std::uint64_t kLogInFailedVaddr = 0x1ec5d0ULL;
-constexpr int kNevrNotReadyResponseCode = 0x1f4;  // 500, the game's own client-error code
+// CNSUser::DeferredLogInFailed(ENSResponseCode, char const*) @0x382e44: `str w1,[x0,#0xa0];
+// str x2,[x0,#0xa8]; ret`. The game's own deferred failure: CNSIUsers::Update (0x36bf68) and
+// CNSUser::Update (0x36c02c) see [user+0xa0] != 200 on the next update, call LogInFailed through
+// vtable+0x10 with a fresh empty CJson and reset it to 200. CNSUser::SendLogInRequest uses the same
+// idiom for a dead connection (0x382bf4). Used when the send gate refuses a login: nothing is sent
+// and the failure runs on the next update, outside the OVR callback (no re-entrancy). The message
+// pointer must outlive that update (kPrerequisitesMissingText is a string literal).
+constexpr const char* kDeferredFailedSymbol = "_ZN10NRadEngine7CNSUser19DeferredLogInFailedENS_15ENSResponseCodeEPKc";
+constexpr std::uint64_t kDeferredFailedVaddr = 0x382e44ULL;
+constexpr std::uint32_t kDeferredFailedCode[3] = {0xb900a001u, 0xf9005402u, 0xd65f03c0u};
+
+// The user-name buffer: SCallbacks::GotLoggedInUserCb @0x1ed0fc/0x1ed100 `adrp x8,0x70e000;
+// add x8,x8,#0x470` is the address it copies the Oculus id into (36 bytes, 0x1ed118-0x1ed17c).
+constexpr std::uint64_t kUserNameCodeVaddr = 0x1ed0fcULL;
+constexpr std::uint32_t kUserNameCode[2] = {0xb0002908u, 0x9111c108u};
+constexpr std::uint64_t kUserNameVaddr = 0x70e470ULL;
+constexpr std::size_t kUserNameBytes = 0x24;
 
 // CNSOVRUser::AccountID() const @0x1ede14: adrp x8,0x70e000 / ldr x0,[x8,#0x3e0] / ret.
 constexpr std::uint64_t kAccountIdFnVaddr = 0x1ede14ULL;
@@ -100,7 +108,7 @@ constexpr CJsonImport kCJsonImports[] = {
     {"_ZNK10NRadEngine5CJson6TypeOfEPKc", 0x35a1d0, 0},
 };
 
-using LogInFailedFn = void (*)(void* user, int code, const char* msg, const void* json);
+using DeferredFailedFn = void (*)(void* user, int code, const char* msg);
 
 struct State {
   IdentitySource* source = nullptr;
@@ -109,7 +117,8 @@ struct State {
   CJsonApi api;
   std::uint64_t* account_id_global = nullptr;
   const void* expected_vptr = nullptr;
-  LogInFailedFn login_failed = nullptr;  // nullptr when the symbol did not resolve
+  DeferredFailedFn deferred_failed = nullptr;  // nullptr when the symbol or its code did not prove
+  char* user_name = nullptr;                   // the 36-byte buffer 0x70e470, nullptr when unproven
 };
 
 State g_state;
@@ -167,7 +176,8 @@ class LiveUser final : public UserAccess {
   bool SetAccountId(std::uint64_t id) override {
     if (!Valid() || global_ == nullptr) return false;
     const std::lock_guard<std::mutex> lock(g_account_mutex);
-    if (!g_oculus_id.NoteBeforeWrite(__atomic_load_n(global_, __ATOMIC_ACQUIRE), id)) return false;
+    const std::uint64_t current = __atomic_load_n(global_, __ATOMIC_ACQUIRE);
+    if (!g_oculus_id.NoteBeforeWrite(current, id, StandIn::IsOrgId(current))) return false;
     __atomic_store_n(global_, id, __ATOMIC_RELEASE);
     return true;
   }
@@ -180,6 +190,10 @@ class LiveUser final : public UserAccess {
     __atomic_store_n(global_, oculus, __ATOMIC_RELEASE);
     return true;
   }
+
+ // True when the object is a CNSOVRUser (its vtable pointer is exactly CNSOVRUser's), so a call that
+  // treats it as a CNSUser is sound.
+  bool IsCNSOVRUser() const { return Valid(); }
 
  private:
   bool Valid() const {
@@ -236,59 +250,79 @@ class LiveJson final : public JsonAccess {
   void* json_;
 };
 
-// Runs the rewrite for one login. The compiler inlines it into the handler, so the adapters
-// (which have destructors) live in the handler's frame, which also calls the game's original.
-// Every frame live during a call into the game is built -fno-exceptions and sits under the
-// personality-free "zR" CIE: this function, the handler, RewriteLogin and the rest of
-// login_apply.cpp (tests/quest TestLoginHookFramesCarryNoPersonality). The one
-// exceptions-enabled function it reaches, ComposePlan, calls no game code and has returned
-// before the next game call.
-Outcome RunRewrite(const State& state, void* user, void* json) noexcept {
+// The game's prerequisite state over the proven globals: the org-id global 0x70e3e0 and the
+// user-name buffer 0x70e470. Written only from the login send hook, which runs inside
+// GotUserProofCB on the OVR pump thread, the thread on which the game's own writers of these two
+// values (the org-id and user callbacks) run.
+class LivePrerequisiteState final : public PrerequisiteState {
+ public:
+  LivePrerequisiteState(std::uint64_t* org_global, char* user_name) : org_(org_global), name_(user_name) {}
+
+  bool UserNameIsStandIn() const override {
+    return name_ != nullptr && StandIn::IsOculusId(name_, kUserNameBytes);
+  }
+  void ResetUserNameToRefetch() override {
+    if (name_ == nullptr) return;
+    std::memset(name_, 0, kUserNameBytes);
+    name_[0] = '?';  // string 0x61d3cb: LogInInternal re-fetches the user (0x1ec9f4)
+  }
+  void SetUserName(const char* name) override {
+    if (name_ == nullptr || name == nullptr) return;
+    std::memset(name_, 0, kUserNameBytes);
+    for (std::size_t i = 0; i + 1 < kUserNameBytes && name[i] != '\0'; ++i) name_[i] = name[i];
+  }
+  void ResetOrgIdToRefetch() override {
+    if (org_ != nullptr) __atomic_store_n(org_, kRefetchOrgId, __ATOMIC_RELEASE);
+  }
+
+ private:
+  std::uint64_t* org_;
+  char* name_;
+};
+
+// Runs the rewrite and the send gate for one login. The compiler inlines it into the handler, so
+// the adapters (which have destructors) live in the handler's frame, which also calls the game's
+// original. Every frame live during a call into the game is built -fno-exceptions and sits under
+// the personality-free "zR" CIE: this function, the handler, RewriteLogin, FinishLogin and the rest
+// of login_apply.cpp (tests/quest TestLoginHookFramesCarryNoPersonality). The one exceptions-enabled
+// function it reaches, ComposePlan, calls no game code and has returned before the next game call.
+//
+// The gate (FinishLogin/DecideSend, login_rewrite.h) reads the CURRENT wire state after the rewrite:
+// a login whose account id, access_token or nonce is a stand-in, or whose account id is 0 or -1, is
+// refused whatever the outcome and whether or not NEVR is ready. A refused login is not sent; the
+// game's own deferred failure runs on its next update with the game's own text, and the stand-in
+// org id and user name are put back to the game's re-fetch markers.
+void RunLogin(const State& state, LoginThunk::Fn original, void* user, void* json) noexcept {
   LiveUser live_user(user, state.account_id_global, state.expected_vptr);
   LiveJson live_json(state.api, json);
-  return RewriteLogin(live_user, live_json, *state.source, state.build, state.log);
-}
-
-// The handler behind the GOT slot. It rewrites, then decides whether to send:
-//   - the rewrite produced a NEVR login (Rewritten): send it (call original);
-//   - the rewrite declined and nothing was synthesized for this attempt: send the real Oculus
-//     login unchanged (call original), exactly as before the prerequisites existed;
-//   - the rewrite declined but a prerequisite WAS synthesized: fail closed. A synthesized Oculus
-//     login carries a shared-constant XPID and no real credential; it must not reach the wire. Run
-//     the game's own login-failure path instead (CNSOVRUser::LogInFailed) so the game shows a
-//     failure and retries once a NEVR token is ready, and send nothing.
-// The synthesis mark is read and cleared here, once per send, so the next attempt starts clean.
-void HandleSendLogInRequest(LoginThunk::Fn original, void* user, void* json) noexcept {
-  const State* state = g_published.load(std::memory_order_acquire);
-  const Outcome outcome = (state != nullptr && json != nullptr) ? RunRewrite(*state, user, json)
-                                                                : Outcome::NoIdentity;
-  const bool synthesized = PrerequisitesSynthesizedSinceReset();
-  ResetPrerequisitesSynthesisMark();
-
-  if (DecideSend(outcome, synthesized) == SendDecision::SendOriginal) {
-    if (state != nullptr && state->log != nullptr && outcome == Outcome::Rewritten && synthesized) {
-      // A NEVR login went out, but the access-token CString and user-name buffer still hold the
-      // synthesized placeholders (the rewrite does not touch them); matchmaker URLs, crash report
-      // and party records read them. Say so once per such send.
-      const LogKv fields[] = {{"op", "send", 0},
-                              {"decision", "sent_rewritten", 0},
-                              {"residual", "access_token+user_name_buffer", 0}};
-      state->log(Level::Warning, "quest_login_send", fields, 3);
-    }
+  LivePrerequisiteState prereq(state.account_id_global, state.user_name);
+  const Outcome outcome = RewriteLogin(live_user, live_json, *state.source, state.build, state.log);
+  const FinishResult finish = FinishLogin(live_user, live_json, prereq, outcome, state.log);
+  EndPrerequisiteAttempt();
+  if (finish.decision == SendDecision::SendOriginal) {
     original(user, json);
     return;
   }
-
-  // Fail closed: do not send. Drive the game's own failure if we resolved its entry; otherwise the
-  // only safe thing is to send nothing (the game re-drives login from UpdateInternal) and say so.
-  if (state != nullptr && state->login_failed != nullptr) {
-    state->login_failed(user, kNevrNotReadyResponseCode, "nevr_identity_not_ready", json);
-    const LogKv fields[] = {{"op", "send", 0}, {"decision", "fail_closed", 0}, {"reason", "synthesized_without_nevr_login", 0}};
-    if (state->log != nullptr) state->log(Level::Warning, "quest_login_send", fields, 3);
-  } else {
-    const LogKv fields[] = {{"op", "send", 0}, {"decision", "withheld", 0}, {"reason", "no_login_failed_entry", 0}};
-    if (state != nullptr && state->log != nullptr) state->log(Level::Error, "quest_login_send", fields, 3);
+  // Refused: send nothing. Drive the game's own deferred failure only on a proven CNSOVRUser.
+  if (state.deferred_failed != nullptr && live_user.IsCNSOVRUser()) {
+    state.deferred_failed(user, kLoginFailedCode, kPrerequisitesMissingText);
+    return;
   }
+  if (state.log != nullptr) {
+    const LogKv fields[] = {{"op", "send", 0}, {"decision", "withheld", 0}, {"reason", "no_deferred_failure_entry", 0}};
+    state.log(Level::Error, "quest_login_send", fields, 3);
+  }
+}
+
+// The handler behind the GOT slot. With the hook state published, the rewrite and the gate decide;
+// without it the game's own login goes out exactly as it would without this hook.
+void HandleSendLogInRequest(LoginThunk::Fn original, void* user, void* json) noexcept {
+  const State* state = g_published.load(std::memory_order_acquire);
+  if (state == nullptr || json == nullptr) {
+    original(user, json);
+    return;
+  }
+  RunLogin(*state, original, user, json);
 }
 
 // The hook's record: {thunk entry, handler} in the nevr_hook_records section, which is what the
@@ -330,28 +364,51 @@ bool ResolveCJson(const sentinel::ElfImage& image, CJsonApi& api) {
   return true;
 }
 
-// Proves the account-id global: the three instructions of CNSOVRUser::AccountID() are the
-// pinned ones (so base+0x70e3e0 is the address that function loads), and the address lies in
-// a writable PT_LOAD of the image. Returns nullptr unless both hold.
-// Resolves CNSOVRUser::LogInFailed for the pinned image: the export must equal base+0x1ec5d0.
-// nullptr (the fail-closed path then withholds the send rather than driving a failure) if it does
-// not, which is treated as a defect, not a reason to send synthesized values.
-LogInFailedFn ResolveLogInFailed(const sentinel::ElfImage& image) {
+// Resolves CNSUser::DeferredLogInFailed for the pinned image: the export must equal base+0x382e44
+// and its three instructions must be the pinned ones. nullptr otherwise (the gate then withholds a
+// refused login without driving a failure, and says so).
+DeferredFailedFn ProveDeferredFailed(const sentinel::ElfImage& image) {
   void* handle = dlopen(kPnsovr, RTLD_NOW | RTLD_NOLOAD);
   if (handle == nullptr) return nullptr;
-  const std::uint64_t want = image.base + kLogInFailedVaddr;
-  if (reinterpret_cast<std::uint64_t>(dlsym(handle, kLogInFailedSymbol)) != want) return nullptr;
-  return reinterpret_cast<LogInFailedFn>(want);
+  const std::uint64_t want = image.base + kDeferredFailedVaddr;
+  if (reinterpret_cast<std::uint64_t>(dlsym(handle, kDeferredFailedSymbol)) != want) return nullptr;
+  std::uint32_t code[3];
+  std::memcpy(code, reinterpret_cast<const void*>(want), sizeof(code));
+  if (std::memcmp(code, kDeferredFailedCode, sizeof(code)) != 0) return nullptr;
+  return reinterpret_cast<DeferredFailedFn>(want);
+}
+
+// True when [vaddr, vaddr + bytes) lies inside a writable PT_LOAD of the image.
+bool InWritableSegment(const sentinel::ElfImage& image, std::uint64_t vaddr, std::size_t bytes) {
+  for (std::size_t i = 0; i < image.phnum; ++i) {
+    const Elf64_Phdr& ph = image.phdr[i];
+    if (ph.p_type != PT_LOAD || (ph.p_flags & PF_W) == 0) continue;
+    if (vaddr >= ph.p_vaddr && vaddr + bytes <= ph.p_vaddr + ph.p_memsz) return true;
+  }
+  return false;
+}
+
+// Proves the user-name buffer: the two instructions of GotLoggedInUserCb that form its address are
+// the pinned ones, and the 36 bytes lie in a writable PT_LOAD. nullptr unless both hold.
+char* ProveUserName(const sentinel::ElfImage& image) {
+  std::uint32_t code[2];
+  std::memcpy(code, reinterpret_cast<const void*>(image.base + kUserNameCodeVaddr), sizeof(code));
+  if (std::memcmp(code, kUserNameCode, sizeof(code)) != 0) return nullptr;
+  if (!InWritableSegment(image, kUserNameVaddr, kUserNameBytes)) return nullptr;
+  return reinterpret_cast<char*>(image.base + kUserNameVaddr);
 }
 
 // ReadyFn for the prerequisites: a real NEVR login is ready when the installed identity source
-// says so. A noexcept virtual call (IdentitySource::Ready); the default source answers false, so
-// an unwired source fails closed and nothing is synthesized.
+// says so (IdentitySource::Ready, one lock-free atomic load by contract); the default source
+// answers false, so an unwired source fails closed and nothing is stood in.
 bool LoginIdentityReady() noexcept {
   const State* state = g_published.load(std::memory_order_acquire);
   return state != nullptr && state->source != nullptr && state->source->Ready();
 }
 
+// Proves the account-id global: the three instructions of CNSOVRUser::AccountID() are the
+// pinned ones (so base+0x70e3e0 is the address that function loads), and the address lies in
+// a writable PT_LOAD of the image. Returns nullptr unless both hold.
 std::uint64_t* ProveAccountIdGlobal(const sentinel::ElfImage& image) {
   std::uint32_t code[3];
   std::memcpy(code, reinterpret_cast<const void*>(image.base + kAccountIdFnVaddr), sizeof(code));
@@ -446,7 +503,8 @@ InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build,
   g_state.api = api;
   g_state.account_id_global = account_global;
   g_state.expected_vptr = reinterpret_cast<const void*>(image.base + kCNSOVRUserVptrVaddr);
-  g_state.login_failed = ResolveLogInFailed(image);
+  g_state.deferred_failed = ProveDeferredFailed(image);
+  g_state.user_name = ProveUserName(image);
   g_published.store(&g_state, std::memory_order_release);
   LoginThunk::Arm(kLoginHook);
 

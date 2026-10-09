@@ -14,6 +14,7 @@
 // The core is compiled -fno-exceptions exactly as on the device; this file has exceptions (it parses
 // the captured log lines with nlohmann::json). Run by `just test-quest-shared`.
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -23,6 +24,7 @@
 #include <nlohmann/json.hpp>
 
 #include "quest/login/login_prerequisites.h"
+#include "quest/login/login_standin.h"
 #include "quest/sentinel/hook_log.h"
 #include "quest/tests/test_check.h"
 
@@ -210,10 +212,10 @@ std::vector<nlohmann::json> Records(const char* event) {
 }
 
 // Secrets and identifiers never appear in a line: neither the real values nor the synthesized ones.
-void CheckNoValuesLogged(const std::vector<const char*>& values) {
+void CheckNoValuesLogged(const std::vector<std::string>& values) {
   for (const std::string& line : g_lines) {
-    for (const char* value : values) {
-      if (line.find(value) != std::string::npos) {
+    for (const std::string& value : values) {
+      if (!value.empty() && line.find(value) != std::string::npos) {
         std::fprintf(stderr, "log line carries a value it must not: %s\n", line.c_str());
         QCHECK(false);
       }
@@ -224,8 +226,13 @@ void CheckNoValuesLogged(const std::vector<const char*>& values) {
 const QuestLogin::OvrErrorApi kRealApi{&RealIsError, &RealGetError, &RealErrorGetCode,
                                        &RealErrorGetHttpCode, &RealErrorGetMessage};
 
+std::atomic<std::uint64_t> g_fake_ms{1000};
+std::uint64_t FakeClock() noexcept { return g_fake_ms.load(std::memory_order_relaxed); }
+
 void Fresh(bool configure, bool substitute, bool ready = true, const QuestLogin::OvrErrorApi& api = kRealApi) {
   QuestLogin::ResetPrerequisitesForTest();
+  g_fake_ms.store(1000, std::memory_order_relaxed);
+  QuestLogin::SetPrerequisiteClockForTest(&FakeClock);
   g_game = GameState{};
   g_lines.clear();
   g_violations = 0;
@@ -304,20 +311,20 @@ void TestAccessTokenErrorIsSynthesized() {
   FakeMessage user = Ok(0, "real-oculus-name", nullptr, nullptr);
   FakeMessage token = Error(2006);
   DeliverAll(org, user, token);
-  QCHECK(g_game.token == QuestLogin::kSynthesizedAccessToken);
+  QCHECK(g_game.token == std::string(QuestLogin::StandIn::AccessToken()));
   QCHECK(PrerequisitesMet());
   QCHECK(g_violations == 0);
   const auto records = Records("quest_login_prerequisite");
   QCHECK(records.size() == 3);
   if (records.size() == 3) {
-    ExpectRecord(records[2], "ovr_User_GetAccessToken", "synthesized", "ovr_error");
+    ExpectRecord(records[2], "ovr_User_GetAccessToken", "stand_in", "ovr_error");
     QCHECK(records[2].value("error_code", 0) == 2006);
     QCHECK(records[2].value("http_code", 0) == 401);
     QCHECK(records[2].value("ovr_error", -2) == 1);
     QCHECK(records[2].value("accessor", "") == "ovr_Message_GetString");
     QCHECK(records[2].value("level", "") == "warn");
   }
-  CheckNoValuesLogged({QuestLogin::kSynthesizedAccessToken, "real-oculus-name", "1234567890123456"});
+  CheckNoValuesLogged({std::string(QuestLogin::StandIn::AccessToken()), "real-oculus-name", "1234567890123456"});
 }
 
 // Every one of the four fails: the game still reaches the send, with synthesized values, and the
@@ -328,29 +335,29 @@ void TestAllFourErrorsAreSynthesized() {
   FakeMessage user = Error(2002);
   FakeMessage token = Error(2006);
   DeliverAll(org, user, token);
-  QCHECK(g_game.org_global == QuestLogin::kSynthesizedOrgScopedId);
-  QCHECK(g_game.name == QuestLogin::kSynthesizedOculusId);
-  QCHECK(g_game.token == QuestLogin::kSynthesizedAccessToken);
+  QCHECK(g_game.org_global == QuestLogin::StandIn::OrgId());
+  QCHECK(g_game.name == std::string(QuestLogin::StandIn::OculusId()));
+  QCHECK(g_game.token == std::string(QuestLogin::StandIn::AccessToken()));
   QCHECK(PrerequisitesMet());
   FakeMessage proof = Error(2007);
   Deliver(Prerequisite::UserProof, proof);
   QCHECK(g_game.sent && !g_game.login_failed);
-  QCHECK(g_game.nonce == QuestLogin::kSynthesizedNonce);
+  QCHECK(g_game.nonce == std::string(QuestLogin::StandIn::Nonce()));
   QCHECK(g_violations == 0);
   const auto records = Records("quest_login_prerequisite");
   QCHECK(records.size() == 4);
   if (records.size() == 4) {
-    ExpectRecord(records[0], "ovr_User_GetOrgScopedID", "synthesized", "ovr_error");
-    ExpectRecord(records[1], "ovr_User_GetLoggedInUser", "synthesized", "ovr_error");
-    ExpectRecord(records[2], "ovr_User_GetAccessToken", "synthesized", "ovr_error");
-    ExpectRecord(records[3], "ovr_User_GetUserProof", "synthesized", "ovr_error");
+    ExpectRecord(records[0], "ovr_User_GetOrgScopedID", "stand_in", "ovr_error");
+    ExpectRecord(records[1], "ovr_User_GetLoggedInUser", "stand_in", "ovr_error");
+    ExpectRecord(records[2], "ovr_User_GetAccessToken", "stand_in", "ovr_error");
+    ExpectRecord(records[3], "ovr_User_GetUserProof", "stand_in", "ovr_error");
     QCHECK(records[0].value("error_code", 0) == 2001 && records[3].value("error_code", 0) == 2007);
     QCHECK(records[0].value("accessor", "") == "ovr_Message_GetOrgScopedID");
     QCHECK(records[1].value("accessor", "") == "ovr_Message_GetUser");
     QCHECK(records[3].value("accessor", "") == "ovr_Message_GetUserProof");
   }
-  CheckNoValuesLogged({QuestLogin::kSynthesizedAccessToken, QuestLogin::kSynthesizedNonce,
-                       QuestLogin::kSynthesizedOculusId, "1313166930"});
+  CheckNoValuesLogged({std::string(QuestLogin::StandIn::AccessToken()), std::string(QuestLogin::StandIn::Nonce()),
+                       std::string(QuestLogin::StandIn::OculusId()), std::to_string(QuestLogin::StandIn::OrgId())});
 }
 
 // A success that carries nothing usable would leave the game waiting forever (an empty user name
@@ -361,21 +368,21 @@ void TestUnusableAnswersAreSynthesized() {
   FakeMessage user = Ok(0, nullptr, nullptr, nullptr);  // GetOculusID answers null
   FakeMessage token = Ok(0, nullptr, "", nullptr);
   DeliverAll(org, user, token);
-  QCHECK(g_game.org_global == QuestLogin::kSynthesizedOrgScopedId);
-  QCHECK(g_game.name == QuestLogin::kSynthesizedOculusId);
-  QCHECK(g_game.token == QuestLogin::kSynthesizedAccessToken);
+  QCHECK(g_game.org_global == QuestLogin::StandIn::OrgId());
+  QCHECK(g_game.name == std::string(QuestLogin::StandIn::OculusId()));
+  QCHECK(g_game.token == std::string(QuestLogin::StandIn::AccessToken()));
   FakeMessage proof = Ok(0, nullptr, nullptr, nullptr);
   proof.proof_null = true;  // GetUserProof answers a null handle
   Deliver(Prerequisite::UserProof, proof);
-  QCHECK(g_game.nonce == QuestLogin::kSynthesizedNonce);
+  QCHECK(g_game.nonce == std::string(QuestLogin::StandIn::Nonce()));
   QCHECK(g_violations == 0);
   const auto records = Records("quest_login_prerequisite");
   QCHECK(records.size() == 4);
   if (records.size() == 4) {
-    ExpectRecord(records[0], "ovr_User_GetOrgScopedID", "synthesized", "empty_value");
-    ExpectRecord(records[1], "ovr_User_GetLoggedInUser", "synthesized", "empty_value");
-    ExpectRecord(records[2], "ovr_User_GetAccessToken", "synthesized", "empty_value");
-    ExpectRecord(records[3], "ovr_User_GetUserProof", "synthesized", "empty_value");
+    ExpectRecord(records[0], "ovr_User_GetOrgScopedID", "stand_in", "empty_value");
+    ExpectRecord(records[1], "ovr_User_GetLoggedInUser", "stand_in", "empty_value");
+    ExpectRecord(records[2], "ovr_User_GetAccessToken", "stand_in", "empty_value");
+    ExpectRecord(records[3], "ovr_User_GetUserProof", "stand_in", "empty_value");
     QCHECK(records[0].value("accessor", "") == "ovr_OrgScopedID_GetID");
     QCHECK(records[1].value("accessor", "") == "ovr_User_GetOculusID");
   }
@@ -385,16 +392,16 @@ void TestUnusableAnswersAreSynthesized() {
   FakeMessage question = Ok(0, nullptr, "?", nullptr);
   Deliver(Prerequisite::OrgScopedId, zero);
   Deliver(Prerequisite::AccessToken, question);
-  QCHECK(g_game.org_global == QuestLogin::kSynthesizedOrgScopedId);
-  QCHECK(g_game.token == QuestLogin::kSynthesizedAccessToken);
+  QCHECK(g_game.org_global == QuestLogin::StandIn::OrgId());
+  QCHECK(g_game.token == std::string(QuestLogin::StandIn::AccessToken()));
   // An empty (not null) user name and nonce are unusable as well.
   Fresh(true, true);
   FakeMessage empty_user = Ok(0, "", nullptr, nullptr);
   FakeMessage empty_nonce = Ok(0, nullptr, nullptr, "");
   Deliver(Prerequisite::LoggedInUser, empty_user);
   Deliver(Prerequisite::UserProof, empty_nonce);
-  QCHECK(g_game.name == QuestLogin::kSynthesizedOculusId);
-  QCHECK(g_game.nonce == QuestLogin::kSynthesizedNonce);
+  QCHECK(g_game.name == std::string(QuestLogin::StandIn::OculusId()));
+  QCHECK(g_game.nonce == std::string(QuestLogin::StandIn::Nonce()));
 }
 
 // Without the accessor hooks the handler only measures: the game handles the error itself (the
@@ -451,7 +458,7 @@ void TestOtherMessagesAreUntouched() {
   g_live.clear();
   QCHECK(seen.other_error);
   QCHECK(seen.other_text == "OTHER-REAL-TEXT");
-  QCHECK(g_game.token == QuestLogin::kSynthesizedAccessToken);
+  QCHECK(g_game.token == std::string(QuestLogin::StandIn::AccessToken()));
   QCHECK(g_violations == 0);
 }
 
@@ -480,7 +487,7 @@ void TestNestedCallbackIsBusy() {
 }
 
 // Fail closed: when NEVR is not ready, nothing is synthesized even on an error. The game runs its
-// own login-failure path (token "?") and the line says not_ready; the synthesis mark stays clear.
+// own login-failure path (token "?") and the line says not_ready.
 void TestNotReadyFailsClosed() {
   Fresh(true, true, /*ready=*/false);
   FakeMessage org = Error(2001);
@@ -491,7 +498,6 @@ void TestNotReadyFailsClosed() {
   QCHECK(g_game.name.empty());
   QCHECK(g_game.token == "?");
   QCHECK(!PrerequisitesMet());
-  QCHECK(!QuestLogin::PrerequisitesSynthesizedSinceReset());
   QCHECK(g_violations == 0);
   const auto records = Records("quest_login_prerequisite");
   QCHECK(records.size() == 3);
@@ -505,49 +511,58 @@ void TestNotReadyFailsClosed() {
   FakeMessage good = Ok(0, nullptr, "REAL-TOKEN", nullptr);
   Deliver(Prerequisite::AccessToken, good);
   QCHECK(g_game.token == "REAL-TOKEN");
-  QCHECK(!QuestLogin::PrerequisitesSynthesizedSinceReset());
 }
 
-// A transient Oculus error is passed through so the game re-requests, up to the cap; after the cap
-// a permanently-transient error is synthesized so login still proceeds.
+// A transient Oculus error is passed through so the game re-requests, bounded per attempt: by the
+// pass count within the window, and by the window itself. Then a still-transient error is stood in.
 void TestTransientErrorIsPassedThroughThenSynthesized() {
+  // Pass cap: repeated transient errors inside the window pass through until kMaxTransientPasses,
+  // then are stood in.
   Fresh(true, true);
   for (std::uint64_t i = 0; i < QuestLogin::kMaxTransientPasses; ++i) {
     FakeMessage t = TransientError(2006);
     Deliver(Prerequisite::AccessToken, t);
-    QCHECK(g_game.token == "?");  // the game's own error path ran; nothing synthesized yet
+    QCHECK(g_game.token == "?");  // the game's own error path ran; nothing stood in yet
   }
-  QCHECK(!QuestLogin::PrerequisitesSynthesizedSinceReset());
-  FakeMessage last = TransientError(2006);
-  Deliver(Prerequisite::AccessToken, last);
-  QCHECK(g_game.token == QuestLogin::kSynthesizedAccessToken);  // cap reached: synthesized
-  QCHECK(QuestLogin::PrerequisitesSynthesizedSinceReset());
-  QCHECK(g_violations == 0);
-  const auto records = Records("quest_login_prerequisite");
-  QCHECK(records.size() == QuestLogin::kMaxTransientPasses + 1);
-  if (records.size() == QuestLogin::kMaxTransientPasses + 1) {
-    ExpectRecord(records[0], "ovr_User_GetAccessToken", "real", "transient_passthrough");
-    ExpectRecord(records.back(), "ovr_User_GetAccessToken", "synthesized", "ovr_error");
+  FakeMessage capped = TransientError(2006);
+  Deliver(Prerequisite::AccessToken, capped);
+  QCHECK(g_game.token == std::string(QuestLogin::StandIn::AccessToken()));  // pass cap reached
+
+  // Window: a transient error, then another after the window elapses, is stood in (the budget did
+  // not survive the window), not passed through forever.
+  Fresh(true, true);
+  FakeMessage first = TransientError(2006);
+  Deliver(Prerequisite::AccessToken, first);
+  QCHECK(g_game.token == "?");
+  g_fake_ms.store(1000 + QuestLogin::kTransientWindowMs, std::memory_order_relaxed);
+  FakeMessage late = TransientError(2006);
+  Deliver(Prerequisite::AccessToken, late);
+  QCHECK(g_game.token == std::string(QuestLogin::StandIn::AccessToken()));
+
+  // The budget is per attempt: EndPrerequisiteAttempt resets it, so the next attempt passes a
+  // transient error through again rather than standing in immediately.
+  Fresh(true, true);
+  for (int i = 0; i < 2; ++i) {
+    FakeMessage t = TransientError(2006);
+    Deliver(Prerequisite::AccessToken, t);
   }
-  // A non-transient error synthesizes immediately (no passthrough).
+  QCHECK(g_game.token == "?");
+  QuestLogin::EndPrerequisiteAttempt();
+  FakeMessage next_attempt = TransientError(2006);
+  Deliver(Prerequisite::AccessToken, next_attempt);
+  QCHECK(g_game.token == "?");  // fresh budget: passed through, not stood in
+
+  // A non-transient error is stood in immediately (no passthrough).
   Fresh(true, true);
   FakeMessage hard = Error(2006);
   Deliver(Prerequisite::AccessToken, hard);
-  QCHECK(g_game.token == QuestLogin::kSynthesizedAccessToken);
-}
-
-// The synthesis mark tracks whether any prerequisite was synthesized since the last reset; the
-// login send hook reads and clears it to decide fail-closed.
-void TestSynthesisMarkTracksSubstitution() {
+  QCHECK(g_game.token == std::string(QuestLogin::StandIn::AccessToken()));
+  // The "is_transient": 1 form is NOT the game's transient (it needs the literal true).
   Fresh(true, true);
-  FakeMessage real = Ok(1234ULL, "n", "t", nullptr);
-  Deliver(Prerequisite::OrgScopedId, real);
-  QCHECK(!QuestLogin::PrerequisitesSynthesizedSinceReset());  // a real answer does not set it
-  FakeMessage err = Error(2006);
-  Deliver(Prerequisite::AccessToken, err);
-  QCHECK(QuestLogin::PrerequisitesSynthesizedSinceReset());
-  QuestLogin::ResetPrerequisitesSynthesisMark();
-  QCHECK(!QuestLogin::PrerequisitesSynthesizedSinceReset());
+  FakeMessage not_true = Error(2006);
+  not_true.error_json = "{\"error\":{\"is_transient\":1}}";
+  Deliver(Prerequisite::AccessToken, not_true);
+  QCHECK(g_game.token == std::string(QuestLogin::StandIn::AccessToken()));  // stood in, not passed through
 }
 
 // Callback log lines are capped per prerequisite (like requests): the first kCallbackLogLimit carry
@@ -565,6 +580,12 @@ void TestCallbackLogIsCappedPerCall() {
     QCHECK(records.back().value("status", "") == "log_limit_reached");
   }
   QCHECK(QuestLogin::PrerequisiteCallbacks(Prerequisite::AccessToken) == n);
+  // The cap is per attempt: after EndPrerequisiteAttempt a new attempt's records appear again.
+  QuestLogin::EndPrerequisiteAttempt();
+  g_lines.clear();
+  FakeMessage t = Ok(0, nullptr, "REAL-TOKEN", nullptr);
+  Deliver(Prerequisite::AccessToken, t);
+  QCHECK(Records("quest_login_prerequisite").size() == 1);
 }
 
 // Without ovr_Message_IsError the handler cannot measure and never substitutes.
@@ -615,7 +636,6 @@ int main() {
   TestNestedCallbackIsBusy();
   TestNotReadyFailsClosed();
   TestTransientErrorIsPassedThroughThenSynthesized();
-  TestSynthesisMarkTracksSubstitution();
   TestCallbackLogIsCappedPerCall();
   TestUnmeasuredWithoutIsError();
   TestRequestsAreLoggedThenCounted();

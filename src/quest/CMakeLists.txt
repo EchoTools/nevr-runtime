@@ -74,6 +74,7 @@ if(TARGET nevr_quest_got_hook)
     login/login_apply.cpp
     login/login_prerequisites.cpp
     login/login_prerequisites_install.cpp
+    login/login_standin.cpp
     "${CMAKE_CURRENT_SOURCE_DIR}/../runtime/compat/login_profile.cpp")
   target_include_directories(nevr_quest_login PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
   target_link_libraries(nevr_quest_login PUBLIC nlohmann_json::nlohmann_json PRIVATE nevr_quest_got_hook log dl)
@@ -86,7 +87,7 @@ if(TARGET nevr_quest_got_hook)
   # callbacks. login_rewrite.cpp keeps exceptions; it calls no game code and returns before the
   # next game call.
   set_source_files_properties(login/login_hook.cpp login/login_apply.cpp login/login_prerequisites.cpp
-    login/login_prerequisites_install.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+    login/login_prerequisites_install.cpp login/login_standin.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
 
   # Android-linkable build of the host test (cannot execute on the build machine).
   add_executable(login_rewrite_test tests/login_rewrite_test.cpp)
@@ -98,6 +99,10 @@ if(TARGET nevr_quest_got_hook)
   add_executable(login_prerequisites_install_test tests/login_prerequisites_install_test.cpp)
   target_link_libraries(login_prerequisites_install_test PRIVATE nevr_quest_login)
   target_compile_options(login_prerequisites_install_test PRIVATE -Wall -Wextra -Werror)
+
+  add_executable(login_standin_test tests/login_standin_test.cpp)
+  target_link_libraries(login_standin_test PRIVATE nevr_quest_login)
+  target_compile_options(login_standin_test PRIVATE -Wall -Wextra -Werror)
 
   # Never run: the frames sensor in tests/quest reads it. It links the whole archive so the
   # login handler and everything it calls are present at final addresses.

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "quest/login/login_rewrite.h"
+#include "quest/login/login_standin.h"
 
 #if defined(__cpp_exceptions)
 #error "login_apply.cpp must be built with -fno-exceptions (it runs while game code is live)"
@@ -286,6 +287,58 @@ Outcome RewriteLogin(UserAccess& user, JsonAccess& json, IdentitySource& source,
                      Num("kept_measured", static_cast<long long>(plan.kept_measured))};
   Emit(log, Level::Info, Outcome::Rewritten, d, sizeof(d) / sizeof(d[0]));
   return Outcome::Rewritten;
+}
+
+FinishResult FinishLogin(UserAccess& user, const JsonAccess& json, PrerequisiteState& state, Outcome outcome,
+                         LogFn log) {
+  FinishResult result;
+  std::uint64_t id = 0;
+  const bool readable = user.WireAccountId(id);
+  result.wire.account_id_unreadable = !readable;
+  result.wire.account_id_stand_in = readable && StandIn::IsOrgId(id);
+  result.wire.account_id_invalid = readable && !OculusIdMemory::IsRealId(id);
+  if (json.TypeOf("access_token") == JsonType::String) {
+    result.wire.access_token_stand_in = StandIn::IsAccessToken(json.GetString("access_token").c_str());
+  }
+  if (json.TypeOf("nonce") == JsonType::String) {
+    result.wire.nonce_stand_in = StandIn::IsNonce(json.GetString("nonce").c_str());
+  }
+  result.decision = DecideSend(result.wire);
+
+  const bool nevr_login = outcome == Outcome::Rewritten && result.decision == SendDecision::SendOriginal;
+  if (!nevr_login) {
+    // Put every stand-in that has a re-fetch marker back to it, so the next attempt asks Oculus.
+    if (readable && StandIn::IsOrgId(id)) {
+      state.ResetOrgIdToRefetch();
+      result.reset_org_id = true;
+    }
+    if (state.UserNameIsStandIn()) {
+      state.ResetUserNameToRefetch();
+      result.reset_user_name = true;
+    }
+  } else if (state.UserNameIsStandIn() && json.TypeOf("displayname") == JsonType::String) {
+    const std::string name = json.GetString("displayname");
+    if (!name.empty()) {
+      state.SetUserName(name.c_str());
+      result.renamed_user = true;
+    }
+  }
+
+  if (log != nullptr) {
+    const LogKv fields[] = {
+        Text("decision", result.decision == SendDecision::SendOriginal ? "send" : "fail_closed"),
+        Text("outcome", OutcomeName(outcome)),
+        Num("account_id_unreadable", result.wire.account_id_unreadable ? 1 : 0),
+        Num("account_id_stand_in", result.wire.account_id_stand_in ? 1 : 0),
+        Num("account_id_invalid", result.wire.account_id_invalid ? 1 : 0),
+        Num("access_token_stand_in", result.wire.access_token_stand_in ? 1 : 0),
+        Num("nonce_stand_in", result.wire.nonce_stand_in ? 1 : 0),
+        Num("reset", (result.reset_org_id ? 1 : 0) | (result.reset_user_name ? 2 : 0) | (result.renamed_user ? 4 : 0)),
+    };
+    log(result.decision == SendDecision::SendOriginal ? Level::Info : Level::Warning, "quest_login_send", fields,
+        sizeof(fields) / sizeof(fields[0]));
+  }
+  return result;
 }
 
 Outcome RewriteAndSend(UserAccess& user, JsonAccess& json, IdentitySource& source,
