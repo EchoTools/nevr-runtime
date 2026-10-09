@@ -278,6 +278,31 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertIn("allow_offline_server: true", script)
         self.assertRegex(script, r'deploy "\$OUT/offline-config\.yaml" "\$GAME_DIR/\.\./\.\./_local/config\.yaml"')
 
+    def test_token_mints_are_serialized(self):
+        # Issue #246: the ServerDB refresher, the telemetry refresher and RequestRegistration all
+        # reach RefreshAuthToken -> SaveAuthToken (an unlocked truncating write of .credentials.json).
+        server = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
+        acquire = extract_braced_function(server, "static std::string AcquireServerDbToken(")
+        self.assertRegex(acquire, r"ServerDbAuth::RunSerializedMint\s*\(")
+        helper = (ROOT / "src/runtime/server/serialized_mint.h").read_text()
+        self.assertRegex(helper, r"std::lock_guard<std::mutex>")
+
+    def test_console_defer_needs_gameserverlib_started(self):
+        # Issue #241: re-arming the handler used to set the defer flag unconditionally, so a server that
+        # never reached GameServerLib::Initialize deferred to a teardown that never ends (watchdog, exit 1).
+        # Only GameServerLib::Initialize marks the library started, and the boot sequence no longer
+        # re-arms before the game has installed its handler.
+        recovery = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
+        rearm = extract_braced_function(recovery, "void RearmConsoleCtrlHandler(")
+        self.assertNotRegex(rearm, r"s_gameServerLibStarted")
+        handler = extract_braced_function(recovery, "static BOOL WINAPI ConsoleCtrlHandler(")
+        self.assertRegex(handler, r"ConsoleCtrlPolicy::ShouldDeferToGame\s*\(")
+        server = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
+        initialize = extract_braced_function(server, "VOID* GameServerLib::Initialize(")
+        self.assertRegex(initialize, r"\bNotifyGameServerLibStarted\s*\(\s*\)")
+        boot = (ROOT / "src/runtime/lifecycle/boot.cpp").read_text()
+        self.assertNotRegex(boot, r"\bRearmConsoleCtrlHandler\s*\(")
+
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches
         # UnregisterAllCallbacks -> GetCallbackRegistry() and EchoVR::BroadcasterUnlisten. The
