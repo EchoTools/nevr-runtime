@@ -266,6 +266,7 @@ class ProductionSteps final : public Steps {
   bool RegisterRedirectCounters() override { return nevr_quest::redirect::RegisterRedirectCounters(); }
   bool RegisterDlopenCounters() override { return nevr_quest::integration::RegisterDlopenCounters(); }
   bool RegisterSocialCounters() override { return nevr_quest::integration::RegisterSocialCounters(); }
+  bool RegisterLoginPromptCounters() override { return nevr_quest::integration::RegisterLoginPromptCounters(); }
   bool StartReporter() override { return sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000); }
 
   bool InstallClockHook() override {
@@ -314,6 +315,12 @@ class ProductionSteps final : public Steps {
     });
     detail_ = "launched";
     return true;
+  }
+
+  bool InstallLoginPrompt() override {
+    const bool ok = nevr_quest::integration::InstallLoginPromptHook();
+    detail_ = ok ? "ok" : "got_hook_refused";
+    return ok;
   }
 
   bool StartBridge() override {
@@ -397,8 +404,12 @@ class ProductionSteps final : public Steps {
   }
 
   void Note(const char* step, const char* state, const char* reason) override {
-    const bool good = std::string_view(state) == "ok" || std::string_view(state) == "skipped";
-    const sentinel::LogLevel level = good ? sentinel::LogLevel::kInfo : sentinel::LogLevel::kError;
+    sentinel::LogLevel level = sentinel::LogLevel::kInfo;
+    switch (StepLogLevel(state, reason)) {
+      case StepLevel::kInfo: break;
+      case StepLevel::kWarn: level = sentinel::LogLevel::kWarn; break;
+      case StepLevel::kError: level = sentinel::LogLevel::kError; break;
+    }
     sentinel::LogFields(level, "sentinel_step", {{"step", step}, {"state", state}, {"reason", reason}});
     // The stage line: stable name, status, and the class that says why (the step's detail when it set
     // one, else the sequence's reason).

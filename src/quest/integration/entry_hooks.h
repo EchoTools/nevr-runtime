@@ -8,6 +8,10 @@ namespace nevr_quest::integration {
 // Defined in entry.cpp.
 bool RegisterClockCounters() noexcept;  // 2 counters
 bool InstallClockHook() noexcept;       // false when GotHook refused the slot (logged by GotHook)
+// The #239 login-prompt hook (sentinel/login_prompt_hook.h): its counters and its install, through this
+// seam because login_prompt_hook.h includes callback_thunk.h, which only -fno-exceptions units may.
+bool RegisterLoginPromptCounters() noexcept;  // 3 counters
+bool InstallLoginPromptHook() noexcept;       // false when GotHook refused the slot (logged by GotHook)
 
 // Defined in production_steps.cpp: the whole constructor sequence (ctor_sequence.h) over the real
 // libraries. Never throws and never blocks.

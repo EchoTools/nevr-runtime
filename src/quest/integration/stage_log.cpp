@@ -10,7 +10,7 @@ const char* StageForStep(const char* step) noexcept {
       {"resolve_config", "config_loaded"},       {"install_clock_hook", "clock_hook_installed"},
       {"start_token_auth", "token_auth_state"},  {"start_bridge", "router_listening"},
       {"install_redirect", "redirect_installed"}, {"install_social", "social_hook_installed"},
-      {"install_dlopen_hook", "dlopen_hook_installed"},
+      {"install_dlopen_hook", "dlopen_hook_installed"},  {"install_login_prompt", "login_prompt_hook_installed"},
   };
   for (const Map& m : kMap) {
     if (std::strcmp(m.step, step) == 0) return m.stage;
@@ -21,6 +21,18 @@ const char* StageForStep(const char* step) noexcept {
 namespace {
 bool Has(std::string_view line, std::string_view needle) { return line.find(needle) != std::string_view::npos; }
 }  // namespace
+
+StepLevel StepLogLevel(const char* state, const char* reason) noexcept {
+  const std::string_view s = state != nullptr ? state : "";
+  const std::string_view r = reason != nullptr ? reason : "";
+  if (s == "ok") return StepLevel::kInfo;
+  if (s != "skipped") return StepLevel::kError;
+  if (r == "counters_refused") return StepLevel::kError;
+  const std::string_view off = "_off";
+  const bool featureOff = r.size() >= off.size() && r.substr(r.size() - off.size()) == off;
+  if (featureOff || r == "nothing_to_install_after_load") return StepLevel::kInfo;
+  return StepLevel::kWarn;
+}
 
 std::optional<StageEvent> ClassifyRouterLine(std::string_view line) noexcept {
   if (Has(line, "[remote] ") && Has(line, " connected")) return StageEvent{"router_remote_connected", "ok", "connected"};

@@ -71,6 +71,12 @@ bool InstallClockHook() noexcept {
            sentinel::GotStatus::kOk;
 }
 
+bool RegisterLoginPromptCounters() noexcept { return nevr_quest::login_prompt::RegisterCounters(); }
+
+// The sign-in prompt in the game's login-error text (#239). Passes the game's message through until
+// token auth publishes a prompt; a refused install is logged by GotHook and leaves the call intact.
+bool InstallLoginPromptHook() noexcept { return nevr_quest::login_prompt::Install(); }
+
 }  // namespace nevr_quest::integration
 
 extern "C" {

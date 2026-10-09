@@ -12,17 +12,22 @@
 //   4  StartReporter                 ... the single StartReporter (the reporter refuses a later register)
 //   5  InstallClockHook              the always-on proof hook
 //   6  StartTokenAuth                needed by the bridge (the remote JWT) and the login rewrite
-//   7  StartBridge                   loopback listener + router; the redirect needs its port
-//   8  InstallRedirect               CJson::TString thunks on libr15
-//   9  InstallSocial                 the NEVR social facade on libr15's CNSProvider::Social slot
-//  10  InstallDlopenHook             the post-load installs: login hook, matchmaking redirect
+//   7  InstallLoginPrompt            the sign-in prompt as the game's login-error text (#239), on libr15;
+//                                    login feature, needs token auth (its GameTextPresenter publishes it)
+//   8  StartBridge                   loopback listener + router; the redirect needs its port
+//   9  InstallRedirect               CJson::TString thunks on libr15
+//  10  InstallSocial                 the NEVR social facade on libr15's CNSProvider::Social slot
+//  11  InstallDlopenHook             the post-load installs: login hook (and with it the login
+//                                    prerequisites), matchmaking redirect
 //
 // Dependencies (a failed or skipped piece disables what needs it and nothing else):
-//   token auth fails        -> bridge, login, social and the redirect-through-the-bridge are not started
+//   token auth fails        -> the login prompt (token auth is what publishes it), bridge, login, social
+//                              and the redirect-through-the-bridge are not started
 //   bridge fails            -> login, social and the redirect-through-the-bridge are not started
 //   redirect counters fail  -> redirect (and the matchmaking install) is not installed
 //   dlopen counters fail    -> the dlopen hook, and so the login and matchmaking installs, are not installed
 //   social counters fail    -> social is not installed
+//   prompt counters fail    -> the login-prompt hook is not installed
 // "redirect-through-the-bridge" is the redirect when the bridge feature is effective: a redirect that
 // points the game at a loopback port nobody listens on, or straight at a TLS endpoint the game cannot
 // speak, is worse than leaving the game's own hosts.
@@ -53,9 +58,11 @@ enum class StepId : std::uint8_t {
   kRegisterRedirectCounters,
   kRegisterDlopenCounters,
   kRegisterSocialCounters,
+  kRegisterLoginPromptCounters,
   kStartReporter,
   kInstallClockHook,
   kStartTokenAuth,
+  kInstallLoginPrompt,
   kStartBridge,
   kInstallRedirect,
   kInstallSocial,
@@ -90,10 +97,12 @@ class Steps {
   virtual bool RegisterRedirectCounters() = 0;
   virtual bool RegisterDlopenCounters() = 0;
   virtual bool RegisterSocialCounters() = 0;
+  virtual bool RegisterLoginPromptCounters() = 0;
   virtual bool StartReporter() = 0;
 
   virtual bool InstallClockHook() = 0;
   virtual bool StartTokenAuth() = 0;
+  virtual bool InstallLoginPrompt() = 0;
   virtual bool StartBridge() = 0;
   virtual bool InstallRedirect() = 0;
   virtual bool InstallSocial() = 0;

@@ -22,9 +22,11 @@ const char* StepName(StepId id) {
     case StepId::kRegisterRedirectCounters: return "register_redirect_counters";
     case StepId::kRegisterDlopenCounters: return "register_dlopen_counters";
     case StepId::kRegisterSocialCounters: return "register_social_counters";
+    case StepId::kRegisterLoginPromptCounters: return "register_login_prompt_counters";
     case StepId::kStartReporter: return "start_reporter";
     case StepId::kInstallClockHook: return "install_clock_hook";
     case StepId::kStartTokenAuth: return "start_token_auth";
+    case StepId::kInstallLoginPrompt: return "install_login_prompt";
     case StepId::kStartBridge: return "start_bridge";
     case StepId::kInstallRedirect: return "install_redirect";
     case StepId::kInstallSocial: return "install_social";
@@ -98,7 +100,7 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     // 3: every counter, before the one StartReporter. A refused registration turns off only the piece
     // whose counters those are.
     r.Run(StepId::kRegisterClockCounters, [&] { return steps.RegisterClockCounters(); });
-    bool redirectCounters = false, dlopenCounters = false, socialCounters = false;
+    bool redirectCounters = false, dlopenCounters = false, socialCounters = false, promptCounters = false;
     if (wantRedirect) {
       redirectCounters = r.Run(StepId::kRegisterRedirectCounters, [&] { return steps.RegisterRedirectCounters(); });
     } else {
@@ -114,6 +116,14 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Skip(StepId::kRegisterSocialCounters, "social_off");
     }
+    // The sign-in prompt belongs to the login feature (#239), like the login hook it stands in for while
+    // the player signs in.
+    if (wantLogin) {
+      promptCounters =
+          r.Run(StepId::kRegisterLoginPromptCounters, [&] { return steps.RegisterLoginPromptCounters(); });
+    } else {
+      r.Skip(StepId::kRegisterLoginPromptCounters, "login_off");
+    }
     r.Run(StepId::kStartReporter, [&] { return steps.StartReporter(); });
 
     r.Run(StepId::kInstallClockHook, [&] { return steps.InstallClockHook(); });
@@ -123,6 +133,19 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       tokenOk = r.Run(StepId::kStartTokenAuth, [&] { return steps.StartTokenAuth(); });
     } else {
       r.Skip(StepId::kStartTokenAuth, "bridge_and_login_off");
+    }
+
+    // The sign-in prompt in the game's login-error text (#239), behind the login feature. Token auth is
+    // what publishes the prompt (its GameTextPresenter), so without it the hook would only pass the game's
+    // message through and is not installed.
+    if (!wantLogin) {
+      r.Skip(StepId::kInstallLoginPrompt, "login_off");
+    } else if (!promptCounters) {
+      r.Skip(StepId::kInstallLoginPrompt, "counters_refused");
+    } else if (!tokenOk) {
+      r.Skip(StepId::kInstallLoginPrompt, "token_auth_unavailable");
+    } else {
+      r.Run(StepId::kInstallLoginPrompt, [&] { return steps.InstallLoginPrompt(); });
     }
 
     bool bridgeOk = false;

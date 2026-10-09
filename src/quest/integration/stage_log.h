@@ -5,6 +5,7 @@
 //   config_loaded            configuration resolved; the effective feature switches
 //   clock_hook_installed     the always-on proof hook
 //   token_auth_state         the token session's readiness (launched, then every change)
+//   login_prompt_hook_installed  the sign-in prompt hook on libr15's SetDelimitedErrorMessage slot (#239)
 //   router_listening         the loopback listener is bound (port)
 //   redirect_installed       the CJson::TString thunk on libr15
 //   social_hook_installed    the social facade on libr15's CNSProvider::Social slot
@@ -30,6 +31,13 @@ namespace nevr_quest::integration {
 
 // The stage a constructor-sequence step reports under; nullptr for a step with no stage line.
 const char* StageForStep(const char* stepName) noexcept;
+
+// The level a step's outcome is logged at. ok, and a skip because the feature is off (`*_off`,
+// `nothing_to_install_after_load`), are Info; a skip because a dependency is unavailable is Warn; a skip
+// because the step's counters were refused, and a failed or thrown step, are Error, so a hook that silently
+// stayed out (for example social after `register_social_counters` was refused) is an error line.
+enum class StepLevel { kInfo, kWarn, kError };
+StepLevel StepLogLevel(const char* state, const char* reason) noexcept;
 
 struct StageEvent {
   const char* event;   // a stage name above

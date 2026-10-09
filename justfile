@@ -837,6 +837,8 @@ test-quest-integration:
     "${off[@]}" -c src/quest/redirect/tstring_thunks.cpp -o "$out/tstring_thunks.o"
     "${off[@]}" -c src/quest/integration/dlopen_hook.cpp -o "$out/dlopen_hook.o"
     "${off[@]}" -c src/quest/integration/social_shim.cpp -o "$out/social_shim.o"
+    "${off[@]}" -c src/quest/sentinel/login_prompt_hook.cpp -o "$out/login_prompt_hook.o"
+    "${off[@]}" -c src/quest/auth/prompt_board.cpp -o "$out/prompt_board.o"
     "${off[@]}" -c src/quest/social/social_game_calls.cpp -o "$out/social_game_calls.o"
     "${off[@]}" -c src/quest/social/social_install.cpp -o "$out/social_install.o"
     "${off[@]}" -c src/quest/social/social_invite_gate.cpp -o "$out/social_invite_gate.o"
@@ -851,12 +853,13 @@ test-quest-integration:
         exit 1
     fi
     grep -q '"zR"' "$out/dlopen_hook.frames.txt" || { echo "test-quest-integration: FAIL - dlopen_hook.o has no zR frames to check" >&2; exit 1; }
-    "${on[@]}" src/quest/tests/integration_hooks_test.cpp src/quest/integration/post_load.cpp \
+    "${on[@]}" src/quest/tests/integration_hooks_test.cpp src/quest/integration/post_load.cpp src/quest/integration/ctor_sequence.cpp \
         src/quest/redirect/service_redirector.cpp src/quest/redirect/hook_adapter.cpp \
         src/quest/sentinel/quest_config.cpp src/runtime/lifecycle/service_redirect.cpp \
         src/runtime/lifecycle/stable_string_pool.cpp \
         "$out/got_hook.o" "$out/hook_report.o" "$out/tstring_thunks.o" "$out/dlopen_hook.o" "$out/social_shim.o" \
         "$out/social_game_calls.o" "$out/social_install.o" "$out/social_invite_gate.o" "$out/social_facade.o" "$out/hook_log.o" "$out/social_names.o" \
+        "$out/login_prompt_hook.o" "$out/prompt_board.o" \
         -o "$out/integration_hooks_test" -ldl -pthread -lzstd
     timeout 300 "$out/integration_hooks_test"
     # 3. the bridge end to end (libcurl only for the percent-encoder the shared URI code uses)

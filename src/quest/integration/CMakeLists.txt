@@ -56,6 +56,13 @@ foreach(test_name integration_sequence_test integration_hooks_test integrated_br
   target_include_directories(${test_name} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel")
   target_compile_options(${test_name} PRIVATE -Wall -Wextra -Werror)
 endforeach()
+# The counter budget in integration_hooks_test registers the #239 login-prompt hook's counters through its
+# real function. The hook's translation unit includes callback_thunk.h, so it is built without exceptions
+# here as in the sentinel (sentinel/CMakeLists.txt).
+target_sources(integration_hooks_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/login_prompt_hook.cpp")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/../sentinel/login_prompt_hook.cpp"
+  PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+target_link_libraries(integration_hooks_test PRIVATE nevr_quest_prompt_board)
 
 # Sensor controls, never run: tests/quest frames_sensor_test.go reads them. Both hooks have a handler that
 # calls a helper with a personality directly; only in frames_probe_ok is the helper annotated.

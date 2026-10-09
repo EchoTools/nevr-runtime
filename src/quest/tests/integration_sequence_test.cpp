@@ -57,9 +57,11 @@ struct FakeSteps final : Steps {
   bool RegisterRedirectCounters() override { return Step("reg_redirect"); }
   bool RegisterDlopenCounters() override { return Step("reg_dlopen"); }
   bool RegisterSocialCounters() override { return Step("reg_social"); }
+  bool RegisterLoginPromptCounters() override { return Step("reg_prompt"); }
   bool StartReporter() override { return Step("reporter"); }
   bool InstallClockHook() override { return Step("clock"); }
   bool StartTokenAuth() override { return Step("token"); }
+  bool InstallLoginPrompt() override { return Step("prompt"); }
   bool StartBridge() override { return Step("bridge"); }
   bool InstallRedirect() override { return Step("redirect"); }
   bool InstallSocial() override { return Step("social"); }
@@ -99,9 +101,9 @@ void TestEverythingOffInstallsOnlyTheProofHook() {
 void TestFullStackOrder() {
   FakeSteps s = FakeSteps::With(true, true, true, true);
   const ConstructorReport r = RunConstructorSequence(s);
-  const std::vector<std::string> want = {"arm",     "config", "reg_clock", "reg_redirect", "reg_dlopen",
-                                         "reg_social", "reporter", "clock",    "token",        "bridge",
-                                         "redirect", "social", "dlopen"};
+  const std::vector<std::string> want = {"arm",        "config",     "reg_clock", "reg_redirect", "reg_dlopen",
+                                         "reg_social", "reg_prompt", "reporter",  "clock",        "token",
+                                         "prompt",     "bridge",     "redirect",  "social",       "dlopen"};
   QCHECK(s.calls == want);
   QCHECK(s.loginArg && s.mmArg);
   for (int i = 0; i < static_cast<int>(StepId::kCount); ++i) QCHECK(r.steps[i].state == StepState::kOk);
@@ -115,11 +117,13 @@ void TestCountersBeforeTheSingleReporterStart() {
   for (const std::string& c : s.calls) if (c == "reporter") ++starts;
   QCHECK(starts == 1);
   const int reporter = s.Index("reporter");
-  for (const char* reg : {"reg_clock", "reg_redirect", "reg_dlopen", "reg_social"}) {
+  for (const char* reg : {"reg_clock", "reg_redirect", "reg_dlopen", "reg_social", "reg_prompt"}) {
     QCHECK(s.Index(reg) >= 0 && s.Index(reg) < reporter);
   }
   // No hook is installed before the reporter is up.
-  for (const char* hook : {"clock", "redirect", "social", "dlopen", "bridge", "token"}) QCHECK(s.Index(hook) > reporter);
+  for (const char* hook : {"clock", "redirect", "social", "dlopen", "bridge", "token", "prompt"}) {
+    QCHECK(s.Index(hook) > reporter);
+  }
 }
 
 void TestCrashReporterAndConfigComeFirst() {
@@ -136,12 +140,21 @@ void TestFeatureGating() {
     QCHECK(s.Ran("redirect") && !s.Ran("token") && !s.Ran("bridge") && !s.Ran("social"));
     QCHECK(s.Ran("dlopen") && !s.loginArg && s.mmArg);
     QCHECK(s.Ran("reg_redirect") && s.Ran("reg_dlopen") && !s.Ran("reg_social"));
+    QCHECK(!s.Ran("reg_prompt") && !s.Ran("prompt"));  // the prompt belongs to the login feature
   }
   {  // redirect + bridge, no login: token auth runs (the remote needs a JWT), no login install
     FakeSteps s = FakeSteps::With(true, true, false, false);
     RunConstructorSequence(s);
     QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect"));
     QCHECK(s.Ran("dlopen") && !s.loginArg && s.mmArg);
+    QCHECK(!s.Ran("reg_prompt") && !s.Ran("prompt"));  // token auth runs, but the login feature is off
+  }
+  {  // login on: the sign-in prompt hook is registered and installed after token auth (#239)
+    FakeSteps s = FakeSteps::With(true, true, true, false);
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(s.Ran("reg_prompt") && s.Ran("prompt"));
+    QCHECK(s.Index("reg_prompt") < s.Index("reporter") && s.Index("token") < s.Index("prompt"));
+    QCHECK(r.at(StepId::kInstallLoginPrompt).state == StepState::kOk);
   }
   {  // social wanted but the config says login is off: the facade is not installed unless asked
     FakeSteps s = FakeSteps::With(true, true, true, false);
@@ -165,9 +178,12 @@ void TestTokenAuthFailureTurnsOffTheBridgeAndWhatNeedsIt() {
   const ConstructorReport r = RunConstructorSequence(s);
   QCHECK(!s.Ran("bridge") && !s.Ran("redirect") && !s.Ran("social"));
   QCHECK(!s.Ran("dlopen"));  // login needs the bridge; the matchmaking install needs the redirect
+  QCHECK(!s.Ran("prompt"));  // nothing publishes a prompt without token auth
   QCHECK(s.Ran("clock") && s.Ran("reporter"));
   QCHECK(r.at(StepId::kStartBridge).state == StepState::kSkipped);
   QCHECK(std::strcmp(r.at(StepId::kStartBridge).reason, "token_auth_unavailable") == 0);
+  QCHECK(r.at(StepId::kInstallLoginPrompt).state == StepState::kSkipped);
+  QCHECK(std::strcmp(r.at(StepId::kInstallLoginPrompt).reason, "token_auth_unavailable") == 0);
 }
 
 void TestBridgeFailureLeavesTheGameOnItsOwnHosts() {
@@ -197,7 +213,24 @@ void TestSocialFailureLeavesTheRest() {
   QCHECK(s.Ran("dlopen") && s.loginArg && s.mmArg);
 }
 
+void TestLoginPromptFailureLeavesTheRest() {
+  FakeSteps s = FakeSteps::With(true, true, true, true);
+  s.failing = {"prompt"};
+  const ConstructorReport r = RunConstructorSequence(s);
+  QCHECK(r.at(StepId::kInstallLoginPrompt).state == StepState::kFailed);
+  for (const char* ran : {"bridge", "redirect", "social", "dlopen"}) QCHECK(s.Ran(ran));
+  QCHECK(s.loginArg && s.mmArg);
+}
+
 void TestCounterRefusalDisablesOnlyThatPiece() {
+  {
+    FakeSteps s = FakeSteps::With(true, true, true, true);
+    s.failing = {"reg_prompt"};
+    const ConstructorReport r = RunConstructorSequence(s);
+    QCHECK(!s.Ran("prompt"));
+    QCHECK(s.Ran("redirect") && s.Ran("social") && s.Ran("dlopen") && s.loginArg && s.mmArg);
+    QCHECK(std::strcmp(r.at(StepId::kInstallLoginPrompt).reason, "counters_refused") == 0);
+  }
   {
     FakeSteps s = FakeSteps::With(true, true, true, true);
     s.failing = {"reg_redirect"};
@@ -224,8 +257,8 @@ void TestCounterRefusalDisablesOnlyThatPiece() {
 }
 
 void TestEveryStepThrowingIsContained() {
-  for (const char* name : {"arm", "config", "reg_clock", "reg_redirect", "reg_dlopen", "reg_social", "reporter",
-                           "clock", "token", "bridge", "redirect", "social", "dlopen"}) {
+  for (const char* name : {"arm", "config", "reg_clock", "reg_redirect", "reg_dlopen", "reg_social", "reg_prompt",
+                           "reporter", "clock", "token", "prompt", "bridge", "redirect", "social", "dlopen"}) {
     FakeSteps s = FakeSteps::With(true, true, true, true);
     s.throwing = {name};
     const ConstructorReport r = RunConstructorSequence(s);  // must return, not terminate
@@ -242,6 +275,7 @@ void TestConfigFailureLeavesAllFeaturesOff() {
   const ConstructorReport r = RunConstructorSequence(s);
   QCHECK(r.at(StepId::kResolveConfig).state == StepState::kThrew);
   QCHECK(!s.Ran("redirect") && !s.Ran("bridge") && !s.Ran("token") && !s.Ran("social") && !s.Ran("dlopen"));
+  QCHECK(!s.Ran("prompt"));
   QCHECK(s.Ran("clock"));  // the proof hook does not depend on configuration
 }
 
@@ -437,12 +471,35 @@ void TestStageNamesAreStable() {
   QCHECK(std::strcmp(StageForStep("start_bridge"), "router_listening") == 0);
   QCHECK(std::strcmp(StageForStep("start_token_auth"), "token_auth_state") == 0);
   QCHECK(std::strcmp(StageForStep("install_social"), "social_hook_installed") == 0);
+  QCHECK(std::strcmp(StageForStep("install_login_prompt"), "login_prompt_hook_installed") == 0);
   QCHECK(StageForStep("arm_crash_reporter") == nullptr);
   // Every step the sequence names that has a stage is mapped by its real name.
   for (int i = 0; i < static_cast<int>(StepId::kCount); ++i) {
     const char* step = StepName(static_cast<StepId>(i));
     const char* stage = StageForStep(step);
     if (stage != nullptr) QCHECK(std::strlen(stage) > 0);
+  }
+}
+
+// A hook that stays out because its counters were refused is an error line, not an info one (#239 review).
+void TestStepLogLevels() {
+  QCHECK(StepLogLevel("ok", "ok") == StepLevel::kInfo);
+  QCHECK(StepLogLevel("skipped", "social_off") == StepLevel::kInfo);
+  QCHECK(StepLogLevel("skipped", "login_off") == StepLevel::kInfo);
+  QCHECK(StepLogLevel("skipped", "bridge_and_login_off") == StepLevel::kInfo);
+  QCHECK(StepLogLevel("skipped", "nothing_to_install_after_load") == StepLevel::kInfo);
+  QCHECK(StepLogLevel("skipped", "token_auth_unavailable") == StepLevel::kWarn);
+  QCHECK(StepLogLevel("skipped", "bridge_unavailable") == StepLevel::kWarn);
+  QCHECK(StepLogLevel("skipped", "counters_refused") == StepLevel::kError);
+  QCHECK(StepLogLevel("failed", "step_reported_failure") == StepLevel::kError);
+  QCHECK(StepLogLevel("threw", "exception") == StepLevel::kError);
+  QCHECK(StepLogLevel(nullptr, nullptr) == StepLevel::kError);
+  // Every skip reason the sequence can produce for a refused registration is an error.
+  FakeSteps s = FakeSteps::With(true, true, true, true);
+  s.failing = {"reg_social", "reg_prompt", "reg_redirect", "reg_dlopen"};
+  const ConstructorReport r = RunConstructorSequence(s);
+  for (StepId id : {StepId::kInstallSocial, StepId::kInstallLoginPrompt, StepId::kInstallRedirect, StepId::kInstallDlopenHook}) {
+    QCHECK(StepLogLevel(StepStateName(r.at(id).state), r.at(id).reason) == StepLevel::kError);
   }
 }
 
@@ -472,6 +529,7 @@ int main() {
   TestBareBridgeUriBecomesTheTokenedOne();
   TestStageNamesAreStable();
   TestRouterLinesClassify();
+  TestStepLogLevels();
   TestEverythingOffInstallsOnlyTheProofHook();
   TestFullStackOrder();
   TestCountersBeforeTheSingleReporterStart();
@@ -482,6 +540,7 @@ int main() {
   TestBridgeFailureLeavesTheGameOnItsOwnHosts();
   TestRedirectFailureLeavesLoginAndSocialRunning();
   TestSocialFailureLeavesTheRest();
+  TestLoginPromptFailureLeavesTheRest();
   TestCounterRefusalDisablesOnlyThatPiece();
   TestEveryStepThrowingIsContained();
   TestConfigFailureLeavesAllFeaturesOff();
