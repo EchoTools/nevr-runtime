@@ -1,4 +1,5 @@
 #include "runtime/server/gameserver.h"
+#include "core/hex_dump.h"
 #include "core/curl_global.h"
 
 #include <atomic>
@@ -17,6 +18,7 @@
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
 #include "runtime/server/protobuf_transport.h"
+#include "runtime/server/serialized_mint.h"
 #include "runtime/server/serverdb_uri.h"
 #include "runtime/server/session_success_dispatch.h"
 #include "runtime/server/session_unregister.h"
@@ -693,19 +695,8 @@ void OnMsgSaveLoadoutSuccess(GameServerLib*, VOID*, VOID* msg, UINT64 msgSize, E
         msgSize - 4);
 
     // Dump payload (skip 4-byte header)
-    size_t dumpLen = (msgSize - 4 > 256) ? 256 : (msgSize - 4);
-    char hexBuf[800] = {0};
-    int pos = 0;
-    for (size_t i = 0; i < dumpLen && pos < 780; i++) {
-      pos += snprintf(hexBuf + pos, sizeof(hexBuf) - pos, "%02X ", data[4 + i]);
-      if ((i + 1) % 32 == 0) {
-        Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_SUCCESS] %s", hexBuf);
-        pos = 0;
-        hexBuf[0] = 0;
-      }
-    }
-    if (pos > 0) {
-      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_SUCCESS] %s", hexBuf);
+    for (const std::string& line : nevr::HexDumpLines(data + 4, msgSize - 4, 256, 32)) {
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [SAVE_SUCCESS] %s", line.c_str());
     }
   }
 }
@@ -758,19 +749,10 @@ void OnMsgCurrentLoadoutResponse(GameServerLib* self, VOID*, VOID* msg, UINT64 m
     size_t payloadSize = msgSize - 4;
 
     // Dump first 256 bytes of payload in hex
-    size_t dumpLen = (payloadSize > 256) ? 256 : payloadSize;
-    char hexBuf[800] = {0};
-    int pos = 0;
-    for (size_t i = 0; i < dumpLen && pos < 780; i++) {
-      pos += snprintf(hexBuf + pos, sizeof(hexBuf) - pos, "%02X ", data[4 + i]);
-      if ((i + 1) % 32 == 0) {
-        Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] +%03zu: %s", i - 31, hexBuf);
-        pos = 0;
-        hexBuf[0] = 0;
-      }
-    }
-    if (pos > 0) {
-      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] +%03zu: %s", (dumpLen / 32) * 32, hexBuf);
+    size_t offset = 0;
+    for (const std::string& line : nevr::HexDumpLines(data + 4, payloadSize, 256, 32)) {
+      Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] [CURRENT_LOADOUT] +%03zu: %s", offset, line.c_str());
+      offset += 32;
     }
   }
 }
@@ -874,6 +856,7 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   // game's teardown (lobby unregistration + ServerDB close) still runs behind
   // it, and we exit cleanly in Terminate() below.
   RearmConsoleCtrlHandler();
+  NotifyGameServerLibStarted();
 
 #if _DEBUG
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] EchoVR base address = 0x%p", EchoVR::g_GameBaseAddress);
@@ -1355,11 +1338,17 @@ static std::string AuthenticateServer(std::string& reason) {
 // RequestRegistration (game thread) and, since #39, from the WebSocketClient's
 // token refresher on ixwebsocket's thread after ServerDB answers 401. Config
 // reads go through NevrCfgGetFlat's mutex-guarded intern pool. RefreshAuthToken
-// also rewrites the on-disk credential cache (auth_token_refresh.h SaveAuthToken);
-// the refresher is installed just before Connect, after RequestRegistration's own
-// acquisition has returned, so only a second RequestRegistration racing a 401
-// could overlap the two.
+// also rewrites the on-disk credential cache (auth_token_refresh.h SaveAuthToken)
+// without a lock, and three callers can mint at once (this function on the game
+// thread, the ServerDB socket's 401 refresher, the telemetry socket's), so the
+// whole mint runs under ServerDbAuth::RunSerializedMint.
+static std::string AcquireServerDbTokenUnserialized(std::string& reason);
+
 static std::string AcquireServerDbToken(std::string& reason) {
+    return ServerDbAuth::RunSerializedMint([&reason]() { return AcquireServerDbTokenUnserialized(reason); });
+}
+
+static std::string AcquireServerDbTokenUnserialized(std::string& reason) {
     std::string token;
     auto auth = LoadCachedAuthToken();
     if (auth.HasValidToken()) {

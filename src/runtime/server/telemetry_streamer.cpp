@@ -1,4 +1,5 @@
 #include "runtime/server/telemetry_streamer.h"
+#include "core/hex_dump.h"
 
 #include <ixwebsocket/IXNetSystem.h>
 #include <ixwebsocket/IXWebSocket.h>
@@ -367,12 +368,9 @@ void TelemetryStreamer::RunDiagnostics() {
 
             // Hex dump first 64 bytes of bone data for manual inspection
             uint8_t* raw = reinterpret_cast<uint8_t*>(bone0);
-            char hex[200] = {0};
-            int pos = 0;
-            for (int j = 0; j < 64 && pos < 190; j++) {
-              pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X ", raw[j]);
+            for (const std::string& hex : nevr::HexDumpLines(raw, 64, 64, 64)) {
+              Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   Bone[0] raw: %s", hex.c_str());
             }
-            Log(EchoVR::LogLevel::Debug, "[TELEMETRY.DIAG]   Bone[0] raw: %s", hex);
           }
 
           // Try bone 4 (assumed head)

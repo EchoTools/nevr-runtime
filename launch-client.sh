@@ -147,9 +147,12 @@ newest_run_log() {
 if [[ $EXIT_AFTER_LOGIN -eq 1 ]]; then
   (cd "$GAME_DIR" && wine ./echovr.exe "${game_args[@]}") > "$CONSOLE_LOG" 2>&1 9>&- &
   game_pid=$!
-  deadline=$((start + LOGIN_TIMEOUT))
+  # $start is whole seconds (it is compared with file mtimes), so start + timeout can fall up to a
+  # second short of the timeout. The deadline is measured in microseconds from the launch instead.
+  launched_us=${EPOCHREALTIME/./}
+  deadline_us=$((launched_us + LOGIN_TIMEOUT * 1000000))
   poll="${NEVR_LOGIN_POLL_SECONDS:-2}"
-  while kill -0 "$game_pid" 2>/dev/null && [[ $(date +%s) -lt $deadline ]]; do
+  while kill -0 "$game_pid" 2>/dev/null && [[ ${EPOCHREALTIME/./} -lt $deadline_us ]]; do
     cur=$(newest_run_log)
     if [[ -n "$cur" ]]; then
       if grep -q 'to logged in' "$cur"; then break; fi

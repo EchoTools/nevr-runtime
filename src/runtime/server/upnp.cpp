@@ -16,6 +16,37 @@
 // Forward-declare Log from gameserver.cpp (same DLL, no extra header needed)
 extern void Log(EchoVR::LogLevel level, const char* format, ...);
 
+namespace {
+
+// What one discovery pass found. `igd` is UPNP_GetValidIGD's result (1 or 2 = a valid IGD); `urls`
+// is only meaningful then and the caller frees it. `devicesFound` false means no UPnP device answered.
+struct IgdDiscovery {
+  bool devicesFound = false;
+  int error = 0;
+  int igd = 0;
+  UPNPUrls urls = {};
+  IGDdatas data = {};
+  char lanIp[64] = {};
+  char wanIp[64] = {};
+};
+
+IgdDiscovery DiscoverIgd() {
+  IgdDiscovery found;
+  UPNPDev* devlist = upnpDiscover(2000, nullptr, nullptr, UPNP_LOCAL_PORT_ANY, 0, 2, &found.error);
+  if (!devlist) return found;
+  found.devicesFound = true;
+  // UPNP_GetValidIGD signature (miniupnpc 2.x):
+  // int UPNP_GetValidIGD(UPNPDev*, UPNPUrls*, IGDdatas*,
+  //                      char* lanaddr, int lanaddrlen,
+  //                      char* wanaddr, int wanaddrlen)
+  found.igd = UPNP_GetValidIGD(devlist, &found.urls, &found.data, found.lanIp, sizeof(found.lanIp),
+                               found.wanIp, sizeof(found.wanIp));
+  freeUPNPDevlist(devlist);
+  return found;
+}
+
+}  // namespace
+
 bool UPnPHelper::s_active = false;
 uint16_t UPnPHelper::s_mappedExternalPort = 0;
 
@@ -23,29 +54,18 @@ bool UPnPHelper::OpenPort(uint16_t internalPort, uint16_t externalPort,
                           std::string& outExternalIp) {
   if (externalPort == 0) externalPort = internalPort;
 
-  int error = 0;
-  UPNPDev* devlist = upnpDiscover(2000, nullptr, nullptr,
-                                  UPNP_LOCAL_PORT_ANY, 0, 2, &error);
-  if (!devlist) {
+  IgdDiscovery found = DiscoverIgd();
+  if (!found.devicesFound) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.UPNP] No UPnP devices found (error=%d) — continues without automatic port mapping;"
-        " forward the port manually if NAT requires it", error);
+        " forward the port manually if NAT requires it", found.error);
     return false;
   }
-
-  UPNPUrls urls  = {};
-  IGDdatas  data = {};
-  char      lanIp[64] = {};
-  char      wanIp[64] = {};
-
-  // UPNP_GetValidIGD signature (miniupnpc 2.x):
-  // int UPNP_GetValidIGD(UPNPDev*, UPNPUrls*, IGDdatas*,
-  //                      char* lanaddr, int lanaddrlen,
-  //                      char* wanaddr, int wanaddrlen)
-  int igd = UPNP_GetValidIGD(devlist, &urls, &data,
-                              lanIp,  sizeof(lanIp),
-                              wanIp,  sizeof(wanIp));
-  freeUPNPDevlist(devlist);
+  UPNPUrls& urls = found.urls;
+  IGDdatas& data = found.data;
+  const char* lanIp = found.lanIp;
+  const char* wanIp = found.wanIp;
+  const int igd = found.igd;
 
   if (igd != 1 && igd != 2) {
     Log(EchoVR::LogLevel::Warning,
@@ -106,25 +126,16 @@ bool UPnPHelper::OpenPort(uint16_t internalPort, uint16_t externalPort,
 void UPnPHelper::ClosePort() {
   if (!s_active) return;
 
-  int error = 0;
-  UPNPDev* devlist = upnpDiscover(2000, nullptr, nullptr,
-                                  UPNP_LOCAL_PORT_ANY, 0, 2, &error);
-  if (!devlist) {
+  IgdDiscovery found = DiscoverIgd();
+  if (!found.devicesFound) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.UPNP] ClosePort: no UPnP devices found — mapping may persist");
     s_active = false;
     return;
   }
-
-  UPNPUrls urls  = {};
-  IGDdatas  data = {};
-  char      lanIp[64] = {};
-  char      wanIp[64] = {};
-
-  int igd = UPNP_GetValidIGD(devlist, &urls, &data,
-                              lanIp, sizeof(lanIp),
-                              wanIp, sizeof(wanIp));
-  freeUPNPDevlist(devlist);
+  UPNPUrls& urls = found.urls;
+  IGDdatas& data = found.data;
+  const int igd = found.igd;
 
   if (igd == 1 || igd == 2) {
     char portStr[8];
