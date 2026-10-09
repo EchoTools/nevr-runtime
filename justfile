@@ -437,7 +437,7 @@ verify:
     cmake --build --preset {{ preset }}
     just test-auth-unit
     just test-quest-shared
-    python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_build_android_jobs -v
+    python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_executable_scripts tools.tests.test_reap_merged tools.tests.test_version_reconfigure tools.tests.test_vcpkg_pin tools.tests.test_android_workflow tools.tests.test_build_android_jobs -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
@@ -558,9 +558,9 @@ verify:
     # password auth. Nothing else refreshes in server mode: TokenAuth::Init
     # returns early on is_server, before the background refresh thread starts.
     # This exchange is the ONLY place a dedicated server can mint an access token.
-    N106_RC=0; N106_GS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp) || N106_RC=$?
-    sensor_stage1 "N106 OAuth2 refresh reachable" "src/runtime/server/gameserver.cpp" "$N106_RC"
-    sensor_nonempty "N106 OAuth2 refresh reachable" "non-comment lines of gameserver.cpp" "$N106_GS"
+    N106_RC=0; N106_GS=$(grep -hvE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp) || N106_RC=$?
+    sensor_stage1 "N106 OAuth2 refresh reachable" "src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp" "$N106_RC"
+    sensor_nonempty "N106 OAuth2 refresh reachable" "non-comment lines of gameserver.cpp and gameserver_serverdb.cpp" "$N106_GS"
     if ! grep -q 'HasValidRefreshToken()' <<<"$N106_GS"; then
         echo "verify: FAIL — N106 the gameserver no longer exchanges a refresh token for an" >&2
         echo "access token. The OAuth2 device-flow path becomes unreachable on a server and" >&2
@@ -606,9 +606,9 @@ verify:
     # built on 2026-06-26 — so the feature was recorded as done while production
     # had no fatal path at all for either condition. Assert on the compiled file
     # (src/runtime/server/), never the dead one.
-    N102_RC=0; N102_GS=$(grep -hvE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_callbacks.cpp) || N102_RC=$?
-    sensor_stage1 "N102 gameserver fail-fast" "src/runtime/server/gameserver.cpp src/runtime/server/gameserver_callbacks.cpp" "$N102_RC"
-    sensor_nonempty "N102 gameserver fail-fast" "non-comment lines of gameserver.cpp and gameserver_callbacks.cpp" "$N102_GS"
+    N102_RC=0; N102_GS=$(grep -hvE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_callbacks.cpp src/runtime/server/gameserver_serverdb.cpp) || N102_RC=$?
+    sensor_stage1 "N102 gameserver fail-fast" "src/runtime/server/gameserver.cpp src/runtime/server/gameserver_callbacks.cpp src/runtime/server/gameserver_serverdb.cpp" "$N102_RC"
+    sensor_nonempty "N102 gameserver fail-fast" "non-comment lines of gameserver.cpp, gameserver_callbacks.cpp and gameserver_serverdb.cpp" "$N102_GS"
     for site in 'registration rejected by ServerDB' 'no valid token for ServerDB connection'; do
         if ! grep -qF "$site" <<<"$N102_GS"; then
             echo "verify: FAIL — N102 the fail-fast for '${site}' is missing from the SHIPPING gameserver." >&2
@@ -1378,14 +1378,14 @@ verify:
     # Falsified 2026-10-05 against 323352b: the pattern hits gameserver.cpp:1433
     # and ws_bridge.cpp:1002-1003; on the fixed tree it exits 1.
     I41_RC=0; I41_HITS=$(grep -nE '[?&]password=%s|\+= *cfgPassword|"&password="' \
-        src/runtime/server/gameserver.cpp src/runtime/compat/ws_bridge.cpp) || I41_RC=$?
-    sensor_stage1 "#41 raw URL credential" "server/gameserver.cpp compat/ws_bridge.cpp" "$I41_RC"
+        src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp src/runtime/compat/ws_bridge.cpp) || I41_RC=$?
+    sensor_stage1 "#41 raw URL credential" "server/gameserver.cpp server/gameserver_serverdb.cpp compat/ws_bridge.cpp" "$I41_RC"
     if [ "$I41_RC" -eq 0 ]; then
         printf '%s\n' "$I41_HITS" >&2
         echo "verify: FAIL — #41 a credential is concatenated into a URL unencoded; use ServerDbUri (server/serverdb_uri.h)." >&2
         exit 1
     fi
-    if ! grep -q 'ServerDbUri::BuildLegacyUri(' src/runtime/server/gameserver.cpp \
+    if ! grep -q 'ServerDbUri::BuildLegacyUri(' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp \
        || ! grep -q 'ServerDbUri::BuildBridgeCredentialUri(' src/runtime/compat/ws_bridge.cpp; then
         echo "verify: FAIL — #41 a URL-credential site no longer calls the ServerDbUri encoder." >&2
         exit 1
@@ -1837,7 +1837,7 @@ verify:
         exit 1
     fi
     # N112c — server registration uses BuildIdentity (not bare GIT_DESCRIBE).
-    if ! grep -q 'BuildIdentity::Get()' src/runtime/server/gameserver.cpp; then
+    if ! grep -q 'BuildIdentity::Get()' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp; then
         echo "verify: FAIL — N112c: gameserver.cpp does not call BuildIdentity::Get()." >&2
         echo "The server registration version field must be enriched with commit" >&2
         echo "hash and build type, not just bare GIT_DESCRIBE (N112)." >&2
@@ -1923,6 +1923,28 @@ verify-sign file:
     osslsigncode verify -CAfile certs/root-ca.crt -in {{ file }}
 
 # --- Internal ---
+
+# Fail unless the local ~/.vcpkg is on the revision CI builds (.vcpkg-commit). Bumping that file is a
+# deliberate dependency upgrade: the vcpkg ports, and so the library versions, change with it.
+vcpkg-pin-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    want=$(tr -d '[:space:]' < "{{ justfile_directory() }}/.vcpkg-commit")
+    have=$(git -C "$HOME/.vcpkg" rev-parse HEAD)
+    if [ "$have" != "$want" ]; then
+        echo "vcpkg-pin-check: FAIL — ~/.vcpkg is at $have, CI builds $want (.vcpkg-commit)." >&2
+        echo "Fix: git -C ~/.vcpkg checkout --detach $want   (or bump .vcpkg-commit on purpose, in its own PR)." >&2
+        exit 1
+    fi
+    # The pinned ixwebsocket port links -lCrypt32; the MinGW package ships libcrypt32.a only and ld on
+    # Linux is case-sensitive. CI creates the link; a development machine needs it too (#294).
+    lib=${NEVR_MINGW_LIB:-/usr/x86_64-w64-mingw32/lib}
+    if [ ! -e "$lib/libCrypt32.a" ]; then
+        echo "vcpkg-pin-check: FAIL — $lib/libCrypt32.a is missing; the legacy gameserver will not link (cannot find -lCrypt32)." >&2
+        echo "Fix: sudo ln -s libcrypt32.a $lib/libCrypt32.a   (CI does the same, see .github/workflows/build.yml)" >&2
+        exit 1
+    fi
+    echo "vcpkg-pin-check: OK ($have, libCrypt32.a present)"
 
 # Install vcpkg dependencies for MinGW cross-compilation (runs only for mingw presets)
 [private]

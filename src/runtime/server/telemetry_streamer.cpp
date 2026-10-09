@@ -180,6 +180,7 @@ void TelemetryStreamer::StopLocked() {
 void TelemetryStreamer::Disconnect() {
   if (m_ws) {
     Log(EchoVR::LogLevel::Debug, "[NEVR.TELEMETRY] Disconnecting from telemetry server");
+    m_bearerAuth.Cancel();  // stop() joins the thread a 401 mint would run on
     m_ws->stop();
     m_ws.reset();
     m_wsConnected.store(false, std::memory_order_relaxed);

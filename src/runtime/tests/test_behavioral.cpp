@@ -390,6 +390,23 @@ TEST_F(PluginLoaderDiagnosticTest, PluginListedTwiceLoadsOnce) {
   EXPECT_EQ(manifest[1].at("error"), "listed twice in config.yaml");
 }
 
+// N89 (#100 regression net): a plugin whose function is built in is refused even when it is listed
+// as required, with the reason in the login's report; the plugin after it still loads.
+TEST_F(PluginLoaderDiagnosticTest, SupersededPluginIsRefusedAndTheNextOneLoads) {
+  g_testPluginLoadPlan.push_back({"filter", "Log_Filter.dll", true, "", "{}"});
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("SKIPPED Log_Filter.dll"));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+  EXPECT_EQ(manifest[0].at("loaded"), false);
+  EXPECT_EQ(manifest[0].at("error"), "superseded by the built-in log filter");
+  EXPECT_EQ(manifest[1].at("loaded"), true);
+}
+
 // The same DLL under another spelling of its path passes the file-name check, so
 // the loader's same-module check is what stops it.
 TEST_F(PluginLoaderDiagnosticTest, PluginListedUnderAnotherPathSpellingLoadsOnce) {
@@ -527,6 +544,28 @@ TEST_F(PluginLoaderDiagnosticTest, ReplacedArgKeyIsLoggedByNameNeverByValue) {
   ASSERT_EQ(GetLoadedPluginCount(), 1);
   EXPECT_TRUE(TestLogContains("onframe: arg 'path' held invalid UTF-8"));
   EXPECT_FALSE(TestLogContains("SECRETVALUE"));
+}
+
+// #152: a plugin may keep what get_plugin_info returned during its init. The loader reserves
+// g_plugins before any init so the push_back that follows that init cannot move the entry the kept
+// pointer names. The keeper fixture takes plugin 0's pointer in its init; after the load it must still
+// be the pointer the host hands out for index 0.
+TEST_F(PluginLoaderDiagnosticTest, InfoPointerKeptDuringALaterPluginsInitStaysValid) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"keeper", "test_plugin_info_keeper.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  const HMODULE keeper = GetModuleHandleA("test_plugin_info_keeper.dll");
+  ASSERT_NE(keeper, nullptr);
+  const auto getKept = reinterpret_cast<const NvrLoadedPluginInfo* (*)(void)>(
+      GetProcAddress(keeper, "NvrTestPluginGetKeptInfo"));
+  ASSERT_NE(getKept, nullptr);
+  const NvrLoadedPluginInfo* kept = getKept();
+  ASSERT_NE(kept, nullptr);
+  EXPECT_EQ(kept, GetLoadedPluginInfo(0)) << "the pointer a plugin kept was invalidated by a later load";
+  EXPECT_STREQ(kept->name, "test-plugin-onframe");
 }
 
 // get_plugin_info reports each plugin's own API version and capabilities. Casting
@@ -1012,6 +1051,17 @@ const char* HostOf(const std::vector<uint8_t>& image) {
   return reinterpret_cast<const char*>(image.data() + MatchmakerHostPatch::kHostRva);
 }
 }  // namespace
+
+// The slot is the original string and its NUL: the byte after it belongs to other data
+// (`dd if=pnsradmatchmaking.dll bs=1 skip=$((0x1c76d8)) count=64 | xxd` shows the NUL, then 0x13 0xcc ...).
+TEST(MatchmakerHostPatch, SlotIsTheOriginalStringAndItsNulNothingMore) {
+  EXPECT_EQ(MatchmakerHostPatch::kHostSlotSize, sizeof(MatchmakerHostPatch::kHostExpected));
+  EXPECT_EQ(MatchmakerHostPatch::kHostSlotSize, 48U);
+  EXPECT_TRUE(MatchmakerHostPatch::FitsInHostSlot(47)) << "47 characters and the NUL fill the slot";
+  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(48)) << "one byte more would overwrite the next field";
+  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(0));
+  EXPECT_FALSE(MatchmakerHostPatch::FitsInHostSlot(-1));
+}
 
 TEST(MatchmakerHostPatch, EveryFreshImageAfterAReloadIsPatched) {
   std::vector<uint8_t> first = FreshMatchmakerImage();

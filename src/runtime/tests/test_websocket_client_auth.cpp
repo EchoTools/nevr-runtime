@@ -450,6 +450,32 @@ TEST(BearerReconnectAuth, RepeatedRejectionsMintOncePerInterval) {
   EXPECT_TRUE(LogContains("not re-acquiring again within"));
 }
 
+// #254: Disconnect() joins ixwebsocket's thread; a 401 arriving during the stop must not start another
+// mint (a mint can block 10 s in HTTP). Attach() re-arms for the next Connect.
+TEST(BearerReconnectAuth, CancelStopsFurtherMintsUntilTheNextAttach) {
+  ix::WebSocket ws;
+  ws.enableAutomaticReconnection();
+  std::atomic<int> mints{0};
+  BearerReconnectAuth auth("[TEST.BEARER]", std::chrono::milliseconds(0));
+  const auto refresher = [&mints]() {
+    ++mints;
+    return std::string("t-fresh");
+  };
+  auth.Attach(ws, "t0", refresher);
+  auth.OnError(401);
+  EXPECT_EQ(mints.load(), 1);
+
+  auth.Cancel();
+  auth.OnError(401);
+  auth.OnError(401);
+  EXPECT_EQ(mints.load(), 1) << "no mint after Cancel";
+  EXPECT_EQ(auth.RefreshCount(), 1U);
+
+  auth.Attach(ws, "t1", refresher);
+  auth.OnError(401);
+  EXPECT_EQ(mints.load(), 2) << "Attach re-arms";
+}
+
 TEST(BearerReconnectAuth, ZeroIntervalMintsOnEveryRejection) {
   ix::WebSocket ws;
   ws.enableAutomaticReconnection();

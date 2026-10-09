@@ -28,7 +28,8 @@ constexpr Outcome Decide(bool hasSocketUri, bool isServer, bool allowOfflineServ
 }
 
 // config.yaml scalars arrive as strings; only an explicit truthy value opts in. The spelling rule is
-// nevr::ParseBool's (case-insensitive true/yes/on/1), the same one config.yaml booleans use.
+// nevr::ParseBool's (case-insensitive true/yes/on/1). NevrConfig::GetBool also falls back to
+// yaml-cpp's boolean spellings, which ParseBool does not know.
 inline bool IsTruthy(const char* value) {
   if (value == nullptr) return false;
   return nevr::ParseBool(value).value_or(false);
