@@ -977,6 +977,46 @@ TEST(SecurityDiagnostics, NumericTransportFormatterCarriesOnlyNumericFields) {
             "[NEVR.WS] Matchmaker port 5001 bind failed failure=1 — retrying (2/3)");
 }
 
+// #201: the server's new-location text ends with the code line, which the game's screen drops.
+namespace {
+std::string FrameWithText(const std::string& text) {
+  const std::string withNul = text + std::string(1, '\0');
+  return BuildLoginFailureFrame(24 + withNul.size(), 400, withNul);
+}
+}  // namespace
+
+TEST(WsBridgeLoginFailure, NewLocationCodeLineMovesFirst) {
+  const std::string text =
+      "[XPID:OVR-ORG-1 / Discord:1]\n Please authorize this new location.\n"
+      "Check your Discord DMs from @EchoVRCE.\nSelect code >>> 42 <<<";
+  std::string out;
+  ASSERT_TRUE(TestHook_MoveCodeLineFirst(FrameWithText(text), &out));
+  EXPECT_EQ(out, FrameWithText("Select code >>> 42 <<<\n[XPID:OVR-ORG-1 / Discord:1]\n Please authorize this new "
+                               "location.\nCheck your Discord DMs from @EchoVRCE."));
+  uint64_t statusCode = 0;
+  size_t messageBytes = 0;
+  ASSERT_TRUE(TestHook_ReadLoginFailureDiagnostic(out, &statusCode, &messageBytes));
+  EXPECT_EQ(statusCode, 400U);
+  EXPECT_EQ(messageBytes, text.size() + 1);
+}
+
+TEST(WsBridgeLoginFailure, OtherFailureTextsAreLeftAlone) {
+  std::string out;
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("Account banned."), &out));
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("Select code >>> 42 <<<"), &out));  // already first
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("a\nSelect code >>> xx <<<"), &out));  // not digits
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("a\nSelect code >>>  <<<"), &out));  // empty code
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("Go to G, type /verify\nWhen prompted, select code >>> 42 <<<"),
+                                         &out));  // guild variant: code is not a line of its own
+  // Two frames in one message are not rewritten.
+  const std::string two = FrameWithText("a\nSelect code >>> 42 <<<") + FrameWithText("b");
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(two, &out));
+  // A different message symbol is not touched.
+  std::string other = FrameWithText("a\nSelect code >>> 42 <<<");
+  other[8] ^= 1;
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(other, &out));
+}
+
 TEST(SecurityDiagnostics, CapturedLoginFailureSummaryExcludesServerMessage) {
   ClearTestLogs();
   constexpr char kSecret[] = "login-failure-secret-sentinel";
