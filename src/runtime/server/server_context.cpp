@@ -220,9 +220,14 @@ bool ServerContext::FindEntrantSlotBySession(const GUID& session, uint64_t& slot
     return false;
   }
 
+  // Both arrays are sized to the player limit (CNSLobby::StartSessionCBHost), so entrants.count is
+  // capacity, not a live count; the bound only keeps the index inside both arrays. A slot is live
+  // when its join state is 4 (accepted): RemoveEntrant resets a departed slot in place (join state 0),
+  // and its GUID can equal a caller's nil UUID.
+  constexpr uint64_t kJoinStateAccepted = 4;
   const uint64_t limit = m_lobby->playerSessionCount < entrants.count ? m_lobby->playerSessionCount : entrants.count;
   for (uint64_t i = 0; i < limit; i++) {
-    if (std::memcmp(&sessions[i].guid, &session, sizeof(GUID)) == 0) {
+    if (sessions[i].joinState == kJoinStateAccepted && std::memcmp(&sessions[i].guid, &session, sizeof(GUID)) == 0) {
       slot = i;
       return true;
     }

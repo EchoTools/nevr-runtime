@@ -128,14 +128,13 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
   // memory). They are recognised by the "Users" export they all define. The game's
   // unload path (0x14105ae30) null-checks the resolved symbol before calling it, so
   // answering null skips the call and teardown carries on. (The guard used to live
-  // in a second detour on this same address that MinHook never installed, #93/#94;
-  // it ended the process with exit(0), which ExitProcessHook suppresses in server
-  // mode.)
+  // in a second detour on this same address that never installed; it ended the
+  // process with exit(0), which ExitProcessHook suppresses in server mode.)
   if (g_isServer && symbol_name && strcmp(symbol_name, "RadPluginShutdown") == 0 &&
       g_original_GetSymbol(dll_handle, "Users") != nullptr) {
     static bool logged = false;
     if (!logged) {
-      BootLogTee::TeeFprintf("[NEVR.PATCH] RadPluginShutdown of a platform DLL skipped (server)\n");
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] RadPluginShutdown of a platform DLL skipped (server)");
       logged = true;
     }
     return nullptr;
@@ -294,6 +293,7 @@ static VOID InitializeAfterGameImageGuard() {
   if (!Hooking::Initialize()) {
     BootLogTee::TeeFprintf("[NEVR.PATCH] FATAL hooking init failed\n");
     g_bootHookFailed = true;
+    BootLogTee::Close();  // the boot phase ends here too: later callers must use Log(), not the tee
     return;
   }
   BootLogTee::TeeFprintf("[NEVR.PATCH] minhook initialized\n");
