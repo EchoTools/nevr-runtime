@@ -45,6 +45,9 @@ jobs:
     - name: Setup vcpkg
       run: |
         git clone https://github.com/Microsoft/vcpkg.git "$HOME/.vcpkg"
+        # The vcpkg revision is the one in .vcpkg-commit, the same one `just vcpkg-pin-check` holds a
+        # local ~/.vcpkg to, so CI builds the dependency versions that are tested locally.
+        git -C "$HOME/.vcpkg" checkout --detach "$(cat "$GITHUB_WORKSPACE/.vcpkg-commit")"
         "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
         "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
           --x-manifest-root="$GITHUB_WORKSPACE" \
