@@ -152,9 +152,12 @@
 /*
  * ── PER-PLUGIN LOGGING ─────────────────────────────────────────────
  *
- * NEVR_DEFINE_PLUGIN_LOG generates an inline PluginLog() function that
- * writes printf-style formatted output to stderr. Call it ONCE per
- * plugin at file scope. The prefix identifies this plugin's log lines.
+ * NEVR_DEFINE_PLUGIN_LOG generates inline PluginLog(), PluginLogWarning()
+ * and PluginLogError() functions that write one printf-style formatted,
+ * leveled line to stderr ("<prefix> INFO|WARNING|ERROR <message>"). A
+ * failure is a warning or an error, never PluginLog(). Call the macro
+ * ONCE per plugin at file scope. The prefix identifies this plugin's
+ * log lines.
  *
  * For multi-translation-unit plugins, wrap in a namespace:
  *
@@ -561,7 +564,7 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
                           a["greeting"].get<std::string>().c_str());
             }
         } catch (const nlohmann::json::parse_error& e) {
-            PluginLog("initex: args_json parse error: %s", e.what());
+            PluginLogError("initex: args_json parse error: %s", e.what());
             /* Do not fail the load for a parse error — the plugin may
              * work fine with defaults. A `required: true` plugin that
              * truly can't function without args should return non-zero
@@ -574,7 +577,7 @@ NEVR_PLUGIN_API int NvrPluginInitEx(const NvrGameContext* ctx, const char* args_
          * host or a pre-v4 host that exported InitEx via GetProcAddress
          * but passed null. Handle it gracefully.
          */
-        PluginLog("initex: host violated v4 contract — args_json is null, expected \"{}\"");
+        PluginLogWarning("initex: host violated v4 contract — args_json is null, expected \"{}\"");
     }
 
     /*
@@ -641,7 +644,7 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
      * non-standard host (test harness, manual LoadLibrary).
      */
     if (ctx == nullptr) {
-        PluginLog("init: *** context is null — violates host contract (ctx guaranteed non-null); plugin cannot initialize ***");
+        PluginLogError("init: *** context is null — violates host contract (ctx guaranteed non-null); plugin cannot initialize ***");
         return -1;
     }
 
@@ -676,7 +679,7 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
                           " (no nevr_http_uri key)");
             }
         } catch (const nlohmann::json::parse_error& e) {
-            PluginLog("config: parse error in _local/config.json: %s",
+            PluginLogError("config: parse error in _local/config.json: %s",
                       e.what());
         }
     } else {
@@ -700,7 +703,7 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
      */
     MH_STATUS mhStatus = MH_Initialize();
     if (mhStatus != MH_OK && mhStatus != MH_ERROR_ALREADY_INITIALIZED) {
-        PluginLog("hook: MH_Initialize failed: %s",
+        PluginLogError("hook: MH_Initialize failed: %s",
                   MH_StatusToString(mhStatus));
         return -1;
     }
@@ -713,7 +716,7 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
      */
     void* target = nevr::ResolveVA_Checked(ctx->base_addr, kHookTargetVA);
     if (target == nullptr) {
-        PluginLog("hook: VA 0x%llx not valid in this process"
+        PluginLogWarning("hook: VA 0x%llx not valid in this process"
                   " (cannot tell from here whether no game binary is loaded,"
                   " or this VA is outside the loaded image);"
                   " plugin continues without this hook",
@@ -729,7 +732,7 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
      */
     const uint8_t* actualBytes = static_cast<const uint8_t*>(target);
     if (!nevr::ValidatePrologue(target, kPrologue, sizeof(kPrologue))) {
-        PluginLog("hook: prologue mismatch at 0x%llx expected=%02x%02x%02x%02x%02x%02x"
+        PluginLogError("hook: prologue mismatch at 0x%llx expected=%02x%02x%02x%02x%02x%02x"
                   " actual=%02x%02x%02x%02x%02x%02x —"
                   " wrong game version? skipping this hook",
                   static_cast<unsigned long long>(kHookTargetVA),
@@ -759,7 +762,7 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
         reinterpret_cast<void**>(&g_original_hash));
 
     if (s != MH_OK) {
-        PluginLog("hook: CreateAndEnable failed for CMatSym::Hash @ 0x%llx: %s",
+        PluginLogError("hook: CreateAndEnable failed for CMatSym::Hash @ 0x%llx: %s",
                   static_cast<unsigned long long>(kHookTargetVA),
                   MH_StatusToString(s));
         return -1;

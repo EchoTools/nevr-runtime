@@ -238,15 +238,20 @@ def runtime_detour_sites() -> dict:
     VA -> sorted list of "file: label", for every detour the runtime installs on a
     game address through an EchoVR:: function pointer (InstallBootDetour/PatchDetour
     on &EchoVR::X) or an inline VA (g_GameBaseAddress + (0x14... - 0x140000000)
-    in a file that calls MH_CreateHook). PatchAddresses:: targets are covered by
-    gamepatches_detour_targets().
+    in a file that calls MH_CreateHook), plus every PatchAddresses:: detour target
+    (gamepatches_detour_targets()). Table-driven MH_CreateHook calls (an array of
+    {name, va, detour} entries) are not matched here.
     """
     by_name = {name: va for va, name in live_function_pointers().items()}
     found = {}
     for path in scan_cpp(DETOUR_SCAN_ROOT):
         rel = path.relative_to(REPO).as_posix()
         text = path.read_text(errors="replace")
-        for m in re.finditer(r"\b(?:InstallBootDetour|PatchDetour)\s*\(\s*&\s*EchoVR::(\w+)", text):
+        # InstallBootDetour/PatchDetour(&EchoVR::X, ...) and Hooking::Attach(reinterpret_cast<PVOID*>(&EchoVR::X), ...)
+        for m in re.finditer(
+            r"\b(?:InstallBootDetour|PatchDetour|Attach)\s*\(\s*(?:reinterpret_cast\s*<\s*PVOID\s*\*\s*>\s*\(\s*)?&\s*EchoVR::(\w+)",
+            text,
+        ):
             va = by_name.get(m.group(1))
             if va is not None:
                 found.setdefault(va, []).append(f"{rel}: EchoVR::{m.group(1)}")
@@ -255,7 +260,81 @@ def runtime_detour_sites() -> dict:
                 r"g_GameBaseAddress\)\s*\+\s*\(\s*(0x14[0-9A-Fa-f]+)\s*-\s*0x140000000\s*\)", text
             ):
                 found.setdefault(norm_va(int(m.group(1), 16)), []).append(f"{rel}: inline {m.group(1)}")
+    # A PatchAddresses:: constant detoured at the same address as an EchoVR:: pointer is the same
+    # collision: the constants are the other way this runtime names a game address.
+    for va, const in gamepatches_detour_targets().items():
+        found.setdefault(va, []).append(f"{DETOUR_SCAN_ROOT}: PatchAddresses::{const}")
     return {va: sorted(sites) for va, sites in found.items()}
+
+
+_FILE_VA_CONSTANT = re.compile(
+    r"(?:static\s+)?constexpr\s+(?:std::)?uint64_t\s+(\w+)\s*=\s*(0x14[0-9A-Fa-f]{7,8})\s*;")
+_HOOK_TABLE_ROW = re.compile(
+    r"\{\s*(\w+)\s*,\s*\(void\*\)\s*&\s*(\w+)\s*,\s*\(void\*\*\)\s*&\s*\w+\s*,\s*"
+    r"\"([^\"]+)\"\s*,\s*(nullptr|\w+)\s*,")
+
+
+def _va_names(text: str) -> dict:
+    """name -> normalized VA for every address constant a runtime file can name: PatchAddresses::
+    (RVAs), address_registry (full VAs) and the file's own `constexpr uint64_t NAME = 0x14...;`."""
+    names = dict(patch_address_constants())
+    names.update(registry_constants())
+    for m in _FILE_VA_CONSTANT.finditer(text):
+        names[m.group(1)] = norm_va(int(m.group(2), 16))
+    return names
+
+
+def mh_create_hook_sites() -> dict:
+    """
+    VA -> sorted list of "file: MH_CreateHook NAME", for the detours runtime files install with
+    MH_CreateHook directly: rows of a `{ VA_X, (void*)&Hook, (void**)&orig, "name", PROLOGUE, ...}`
+    hook table, the address (a named constant or a literal RVA) assigned to the variable passed as
+    the first argument of an MH_CreateHook call, and InstallJsonProbe/InstallChecked(kXVA, ...) probes. Targets that resolve to no known game
+    address (Win32 exports, a runtime-computed module base) are not game addresses and are skipped.
+    """
+    found = {}
+    for path in scan_cpp(DETOUR_SCAN_ROOT):
+        text = path.read_text(errors="replace")
+        if "MH_CreateHook" not in text:
+            continue
+        rel = path.relative_to(REPO).as_posix()
+        names = _va_names(text)
+
+        def add(name, via):
+            if name in names:
+                found.setdefault(names[name], []).append(f"{rel}: MH_CreateHook {via}{name}")
+
+        for m in _HOOK_TABLE_ROW.finditer(text):
+            add(m.group(1), "table ")
+        for m in re.finditer(r"Install(?:JsonProbe|Checked)\s*\(\s*(?:\w+\s*,\s*)?(k\w+VA)\b", text):
+            add(m.group(1), "probe ")
+        for m in re.finditer(r"MH_CreateHook\s*\(\s*(?:\(void\*\)\s*)?(\w+)\s*,", text):
+            window = text[max(0, m.start() - 3000):m.start()]
+            assignments = list(re.finditer(rf"\b{re.escape(m.group(1))}\s*=\s*([^;]+);", window))
+            if not assignments:
+                continue
+            expression = assignments[-1].group(1)
+            for ident in re.findall(r"[A-Za-z_][\w:]*", expression):
+                add(ident.split("::")[-1], "")
+            # `g_GameBaseAddress + 0xFA16D0`: a literal RVA written in place.
+            for literal in re.findall(r"\+\s*(0x[0-9A-Fa-f]{5,8})\b", expression):
+                found.setdefault(norm_va(int(literal, 16)), []).append(
+                    f"{rel}: MH_CreateHook literal RVA {literal}")
+    return require_nonempty({va: sorted(set(sites)) for va, sites in found.items()},
+                            DETOUR_SCAN_ROOT, "MH_CreateHook detour targets")
+
+
+def hook_table_rows_without_prologue() -> list:
+    """(file, hook name, address constant) for every hook-table row with a nullptr prologue:
+    a binary detour installed without checking the bytes it is about to displace."""
+    rows = []
+    for path in scan_cpp(DETOUR_SCAN_ROOT):
+        text = path.read_text(errors="replace")
+        rel = path.relative_to(REPO).as_posix()
+        for m in _HOOK_TABLE_ROW.finditer(text):
+            if m.group(4) == "nullptr":
+                rows.append((rel, m.group(3), m.group(1)))
+    return rows
 
 
 def plugin_hooked_vas() -> dict:
@@ -385,6 +464,15 @@ def check_double_detour(failures, warnings, seen):
 def check_runtime_duplicate_detours(failures):
     """#93: two runtime detours on one target; the second never installs."""
     sites = runtime_detour_sites()
+    for va, labels in mh_create_hook_sites().items():
+        sites.setdefault(va, []).extend(labels)
+    for va in sites:
+        sites[va] = sorted(set(sites[va]))
+    for rel, name, constant in hook_table_rows_without_prologue():
+        failures.append(
+            f"UNVALIDATED-HOOK: {name} ({constant}) in {rel} is installed with a nullptr prologue. "
+            f"Binary patches require prologue validation; read the first bytes at the address "
+            f"and add them to the table row.")
     for va in sorted(sites):
         if len(sites[va]) > 1:
             failures.append(

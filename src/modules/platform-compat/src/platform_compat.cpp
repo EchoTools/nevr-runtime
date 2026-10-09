@@ -341,7 +341,7 @@ NEVR_MODULE_API int platform_compat_Init(const NvrModuleContext* ctx) {
    *
    * Server-gated deliberately. module_loader treats a non-zero init as fatal in
    * BOTH modes, so returning non-zero unconditionally would newly hard-fail a
-   * client that previously limped along with a degraded network stack — the opposite of the
+   * client that otherwise limps along with a degraded network stack — the opposite of the
    * rule, which is that a server dies and a client warns. */
   if (isServer && !tlsOk) {
     Log(EchoVR::LogLevel::Error,

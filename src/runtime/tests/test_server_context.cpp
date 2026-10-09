@@ -284,6 +284,25 @@ TEST(ServerContextSmite, SlotThatIsNotAcceptedIsNotReturned) {
   EXPECT_FALSE(context.FindEntrantSlotBySession(MakeGuid(1), slot));
 }
 
+// #58: the live entrant count is the accepted player sessions (join state 4), not the array capacity.
+TEST(ServerContextSmite, AcceptedEntrantCountIgnoresEmptyAndPendingSlots) {
+  EchoVR::Lobby lobby{};
+  std::vector<Entrant> entrants = {MakeEntrant(11), MakeEntrant(12), MakeEntrant(13), MakeEntrant(14)};
+  std::vector<Slot> sessions = {MakeSlot(MakeGuid(1)), MakeDepartedSlot(GUID{}), MakeSlot(MakeGuid(3)),
+                                MakeSlot(MakeGuid(4))};
+  sessions[3].joinState = 2;  // add pending
+  Attach(lobby, entrants);
+  AttachSessions(lobby, sessions);
+  GameServer::ServerContext context;
+  EXPECT_EQ(context.CountAcceptedEntrants(), 0U) << "not initialized";
+  context.Initialize(&lobby, nullptr);
+  context.FinalizeInitialization();
+  EXPECT_EQ(context.CountAcceptedEntrants(), 2U);
+
+  sessions[1].joinState = 4;
+  EXPECT_EQ(context.CountAcceptedEntrants(), 3U);
+}
+
 TEST(ServerContextSmite, AbsentSessionArrayIsNotFound) {
   EchoVR::Lobby lobby{};
   std::vector<Entrant> entrants = {MakeEntrant(11)};

@@ -483,7 +483,7 @@ TEST(RefreshRequestBody, CarriesBothFieldNamesWithTheSameValue) {
 }
 
 // Both ways of obtaining an access token must agree about when it dies. The
-// refresh path used to hardcode now+60 while the poll path honoured the JWT.
+// refresh path must not hardcode now+60 while the poll path honours the JWT.
 TEST(AccessTokenExpiry, RefreshAndPollPathsShareOneAuthorityOrder) {
   constexpr uint64_t kNow = 1000;
   const std::string jwt = MakeJwt("eyJleHAiOjUwMDB9");
