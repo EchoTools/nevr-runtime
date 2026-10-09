@@ -61,6 +61,8 @@ struct InternalDeviceAuthFlowOps {
 
 static constexpr InternalDeviceAuthFlowOps::Clock::duration kDeviceAuthLifetime = std::chrono::minutes(5);
 static constexpr InternalDeviceAuthFlowOps::Clock::duration kDeviceAuthPollInterval = std::chrono::seconds(3);
+// Consecutive failed polls (timeout, transport error) the wait tolerates before it gives up (#202).
+static constexpr unsigned kMaxConsecutivePollErrors = 5;
 static constexpr char kDeviceLoginUrl[] = "https://echovrce.com/login/device";
 
 // ---------------------------------------------------------------------------
@@ -420,6 +422,7 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowO
     }
 
     unsigned int pollCount = 0;
+    unsigned int consecutiveErrors = 0;
     while (true) {
         const InternalDeviceAuthFlowOps::Clock::time_point beforeSleep = ops.now();
         if (beforeSleep >= deadline) {
@@ -461,6 +464,7 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowO
                     "[NEVR.AUTH] Device code expired. Please restart to try again.");
                 return false;
             case TokenAuth::DevicePollStatus::Pending:
+                consecutiveErrors = 0;
                 ++pollCount;
                 if (pollCount % 10U == 0U) {
                     const auto left = std::chrono::duration_cast<std::chrono::seconds>(deadline - ops.now());
@@ -469,9 +473,14 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowO
                 }
                 break;
             case TokenAuth::DevicePollStatus::Error:
-                log(EchoVR::LogLevel::Warning,
-                    "[NEVR.AUTH] polling aborted after single error (no retry)");
-                return false;
+                if (++consecutiveErrors >= kMaxConsecutivePollErrors) {
+                    log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] polling aborted after " +
+                                                       std::to_string(consecutiveErrors) + " consecutive errors");
+                    return false;
+                }
+                log(EchoVR::LogLevel::Warning, "[NEVR.AUTH] poll error " + std::to_string(consecutiveErrors) + " of " +
+                                                   std::to_string(kMaxConsecutivePollErrors) + ", retrying");
+                break;
         }
     }
 }
