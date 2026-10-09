@@ -1,6 +1,6 @@
 # Social features: prioritized list and how each is tested
 
-2026-10-01. Companion to `docs/design/2026-10-01-social-scenario-harness.md` (the harness this
+Companion to `docs/design/2026-10-01-social-scenario-harness.md` (the harness this
 list runs on). Owner's order: "create a prioritized list of all social features and how it's
 going to test them." Owner's ruling on the first version: "accept, invite etc. are all part of
 it. there also is and add i think.. where you can add somebody as a friend, in game. i want all
@@ -129,7 +129,7 @@ lock reaches the server; slot labels 39/40 and 42/43 are the right way round; re
 session reach the game after the lobby join. In nakama, local only: an accept with no matching
 invite gets an answer, and "party full" has its own join-refusal code.
 
-## Needs the owner (measured 2026-10-01; what has since been built is in the Nakama proposal's "As built" notes)
+## Needs the owner (what has since been built is in the Nakama proposal's "As built" notes)
 
 Each of these is blocked on a choice, not on work. The evidence says what the game and pnsovr do
 and what Nakama has; the recommendation is one option, not a decision.
@@ -141,8 +141,8 @@ and what Nakama has; the recommendation is one option, not a decision.
 | 21 | Friend status text (slot 52) | pnsovr returned the friend's Oculus presence string (0x1800850e0, pool +0x448), which each game publishes through SyncRichPresence (0x1401b9510). The game cuts it at the first '\|' (FUN_140da5d80). Nakama carries online/busy/offline only | as #18 | **needs the owner** (see "Needs the owner"): stub (empty string); no server source for a friend's status text
 | 22 | Recently met players (slots 56-67) | pnsovr's were getters over ovr_User_GetLoggedInUserRecentlyMetUsersAndRooms (slot 57 0x180091070); nothing in the game feeds them. Nakama has nothing (`grep -i recentlymet` hits only hash names) | (a) Nakama records who shared a match and answers a new request; (b) the client records lobby entrants locally | **needs the owner** (see "Needs the owner"): stub (empty); slot 57 is reached by the node (0x14019b870), no server source for the list
 | 19 | Party and member data reaching other members | The game's writes land (party_data.yaml). pnsovr then shared them from its Update (0x1800ac240 -> slots 6/7, Oculus room data store). Nakama's PartyUpdateRequest/UpdateMemberRequest carry no data and only rebroadcast a notify (evr/sns_party.go:104-148, evr_pipeline_party.go:717-733) | (a) give those requests a JSON payload and forward it in the notifies; (b) leave party data local | unproven. History (one-client scenario, not proof): (the game's writes): member data through slot 30 and party data marked written (`party_data`). Sharing it with members: see "Needs the owner"
-| 17 | Join policy (invite-only, friends, friends of members, everyone) | Slot 16 stores it (party_lock.yaml); pnsovr set the Oculus room policy (import 0x1801fa5d0). Nakama has lock/unlock (open/closed) and no policy | (a) a policy field on the party, enforced on join; (b) map invite-only to locked | unproven. History (one-client scenario, not proof): (lock): the lock node makes the party unjoinable at once, the server locks it (PartyLockRequest, LockSuccess) and unlock reverses it (`party_lock`); slots 4/5 and pnsovr's host sync were missing, so a lock never reached the server (fixed d2283ee). Join policy: slot 16 stores it (same run); a server-side policy needs the owner
-| 13 | What the "invitable users" button (slot 38) opens on PC | pnsovr opened the Oculus overlay (ovr_Room_LaunchInvitableUserFlow, 0x18008fe40); slots 39-43 were already bare `ret` in pnsovr | (a) open the game's own friends list; (b) nothing | unproven. History (one-client scenario, not proof): (routing): every mode of the node reaches its slot, 38, 40/39, 43/42 (`party_ui_buttons`); 39-43 do nothing, as pnsovr's bare `ret`. The slot labels 39/40 and 42/43 were swapped (fixed d2283ee). What slot 38 should open on PC: see "Needs the owner"
+| 17 | Join policy (invite-only, friends, friends of members, everyone) | Slot 16 stores it (party_lock.yaml); pnsovr set the Oculus room policy (import 0x1801fa5d0). Nakama has lock/unlock (open/closed) and no policy | (a) a policy field on the party, enforced on join; (b) map invite-only to locked | unproven. History (one-client scenario, not proof): (lock): the lock node makes the party unjoinable at once, the server locks it (PartyLockRequest, LockSuccess) and unlock reverses it (`party_lock`); the lock reaches the server through slots 4/5 and pnsovr's host sync. Join policy: slot 16 stores it (same run); a server-side policy needs the owner
+| 13 | What the "invitable users" button (slot 38) opens on PC | pnsovr opened the Oculus overlay (ovr_Room_LaunchInvitableUserFlow, 0x18008fe40); slots 39-43 were already bare `ret` in pnsovr | (a) open the game's own friends list; (b) nothing | unproven. History (one-client scenario, not proof): (routing): every mode of the node reaches its slot, 38, 40/39, 43/42 (`party_ui_buttons`); 39-43 do nothing, as pnsovr's bare `ret`. What slot 38 should open on PC: see "Needs the owner"
 
 ## In-game: party join failure codes (the owner plays, the harness forges)
 
@@ -205,17 +205,17 @@ Use N = 0, 1, 2, 3, 4, 5, 6, 7.
 Every command and reply is also appended to `/var/tmp/work-nevr-runtime/control-log.jsonl`.
 
 **Already measured.** The log text for path B matches the table above for codes 0–7: scenario
-`party_join_failed_codes`, run 20261002T132250, 19/19. The bridge mapping in path A is covered by
+`party_join_failed_codes` (19/19). The bridge mapping in path A is covered by
 `party_join_errors`. What is still open is what the player sees.
 
 The runtime's log filter folds a repeated identical line into `[NEVR.LOGFILTER] repeated
 count=...`. If you send the same code twice in a row, the second callback line is folded; record the
 screen anyway.
 
-**Results, 2026-10-02.** The owner watched while the harness sent the codes. The game was this
-build (`v4.0.0-151-g891b510`, mingw-scenario) on the nested display, logged in to production, in a
-social lobby, with the tablet's party page open. Client run `client-run-20261002T151652`; screenshots
-in `/var/tmp/work-nevr-runtime/ingame-shots/`. Every failure opens the same popup, titled
+**Results.** The owner watched while the harness sent the codes. The game was a
+mingw-scenario build on the nested display, logged in to production, in a
+social lobby, with the tablet's party page open. Screenshots are in
+`/var/tmp/work-nevr-runtime/ingame-shots/`. Every failure opens the same popup, titled
 **PARTY JOIN ERROR**, with one line of text and an OK button. A new failure replaces an open popup.
 
 | Path | Code sent | Code the game saw | Log text | Popup text |
@@ -253,7 +253,7 @@ The invite scenario enters at the friend row's script node action (0x140dddf60, 
 its raw instructions: NetGame from the script context, SNSUserID on its input string, then the
 handler posted on the deferred queue, nothing else). It cannot see what is above the node: the
 input string the real row binds, which NetGame the script context yields, and whether the button
-reaches the node. Since 6a99d5f the three nodes (send invite 0x140dddf60, add friend
+reaches the node. The three nodes (send invite 0x140dddf60, add friend
 0x140dd90f0, respond to invite 0x140dddd30) log their input once per press (`[NEVR.PARTY] node
 <name> run input=...` / `index= accept=`), so one real click by a person gives a line to diff
 against the scenario's fire line. The click itself has not happened yet. Every "entry: to
@@ -261,8 +261,7 @@ measure" scenario gets the same treatment: find the node, trace it, calibrate on
 
 ## The other 18 UserProviderID callers
 
-7160561 changed what `UserProviderID` returns (RAD to OVR), so every caller now sees code 4
-instead of 0. The table is from a ReVault read (decompile and caller lists; the call graph covers
+`UserProviderID` returns OVR (code 4, not RAD's 0), so every caller sees code 4. The table is from a ReVault read (decompile and caller lists; the call graph covers
 54816 of 55267 functions). Rows marked *raw* were checked against the instructions. The 0x647c8
 object is the social object, from NetGame+0x647c8.
 
@@ -295,8 +294,8 @@ scenarios that would reach them; their assertions should include the game's own 
 
 ## Build order
 
-1. Node traces: done (6a99d5f). The calibration click is still open (Spritz is asking the owner).
-2. #4 receive, #5 accept, #12 dismiss: done in scenario (190941, 191139). #9 and #11: done (193721, 193907).
+1. Node traces: done. The calibration click is still open (Spritz is asking the owner).
+2. #4 receive, #5 accept, #12 dismiss: done in scenario. #9 and #11: done.
 3. #6/#7 add a friend: implement slot 37 as a friend request, then the scenario; with #8 so the
    result shows up.
 4. #9 join errors and #11 member join/leave: injection only.

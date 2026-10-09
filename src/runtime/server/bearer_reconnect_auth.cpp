@@ -14,6 +14,7 @@ extern VOID Log(EchoVR::LogLevel level, const CHAR* format, ...);
 void BearerReconnectAuth::Attach(ix::WebSocket& ws, const std::string& token, Refresher refresher) {
   std::lock_guard<std::mutex> lock(mutex_);
   ws_ = &ws;
+  cancelled_.store(false, std::memory_order_release);
   token_ = token;
   refresher_ = std::move(refresher);
   if (token_.empty()) return;
@@ -24,6 +25,7 @@ void BearerReconnectAuth::Attach(ix::WebSocket& ws, const std::string& token, Re
 
 void BearerReconnectAuth::OnError(int httpStatus) {
   if (httpStatus != 401) return;
+  if (cancelled_.load(std::memory_order_acquire)) return;  // Disconnect() is joining this thread
 
   Refresher refresher;
   ix::WebSocket* ws = nullptr;

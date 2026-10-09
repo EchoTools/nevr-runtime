@@ -53,7 +53,8 @@ class ReleaseContractTest(unittest.TestCase):
     def test_url_diagnostic_sinks_use_redaction_and_hide_reasons(self):
         websocket = (REPO / "src/runtime/server/websocket_client.cpp").read_text()
         telemetry = (REPO / "src/runtime/server/telemetry_streamer.cpp").read_text()
-        gameserver = (REPO / "src/runtime/server/gameserver.cpp").read_text()
+        gameserver = "\n".join((REPO / "src/runtime/server" / name).read_text()
+                               for name in ("gameserver.cpp", "gameserver_callbacks.cpp", "gameserver_telemetry.cpp", "gameserver_serverdb.cpp"))
         self.assertIn("FormatRedactedUrlDiagnostic", websocket)
         self.assertIn("FormatWebSocketCloseDiagnostic", websocket)
         self.assertIn("FormatWebSocketErrorDiagnostic", websocket)

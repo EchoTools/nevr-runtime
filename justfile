@@ -557,9 +557,9 @@ verify:
     # password auth. Nothing else refreshes in server mode: TokenAuth::Init
     # returns early on is_server, before the background refresh thread starts.
     # This exchange is the ONLY place a dedicated server can mint an access token.
-    N106_RC=0; N106_GS=$(grep -vE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp) || N106_RC=$?
-    sensor_stage1 "N106 OAuth2 refresh reachable" "src/runtime/server/gameserver.cpp" "$N106_RC"
-    sensor_nonempty "N106 OAuth2 refresh reachable" "non-comment lines of gameserver.cpp" "$N106_GS"
+    N106_RC=0; N106_GS=$(grep -hvE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp) || N106_RC=$?
+    sensor_stage1 "N106 OAuth2 refresh reachable" "src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp" "$N106_RC"
+    sensor_nonempty "N106 OAuth2 refresh reachable" "non-comment lines of gameserver.cpp and gameserver_serverdb.cpp" "$N106_GS"
     if ! grep -q 'HasValidRefreshToken()' <<<"$N106_GS"; then
         echo "verify: FAIL — N106 the gameserver no longer exchanges a refresh token for an" >&2
         echo "access token. The OAuth2 device-flow path becomes unreachable on a server and" >&2
@@ -605,9 +605,9 @@ verify:
     # built on 2026-06-26 — so the feature was recorded as done while production
     # had no fatal path at all for either condition. Assert on the compiled file
     # (src/runtime/server/), never the dead one.
-    N102_RC=0; N102_GS=$(grep -hvE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_callbacks.cpp) || N102_RC=$?
-    sensor_stage1 "N102 gameserver fail-fast" "src/runtime/server/gameserver.cpp src/runtime/server/gameserver_callbacks.cpp" "$N102_RC"
-    sensor_nonempty "N102 gameserver fail-fast" "non-comment lines of gameserver.cpp and gameserver_callbacks.cpp" "$N102_GS"
+    N102_RC=0; N102_GS=$(grep -hvE '^[[:space:]]*(//|/\*|\*[[:space:]/]|\*$)' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_callbacks.cpp src/runtime/server/gameserver_serverdb.cpp) || N102_RC=$?
+    sensor_stage1 "N102 gameserver fail-fast" "src/runtime/server/gameserver.cpp src/runtime/server/gameserver_callbacks.cpp src/runtime/server/gameserver_serverdb.cpp" "$N102_RC"
+    sensor_nonempty "N102 gameserver fail-fast" "non-comment lines of gameserver.cpp, gameserver_callbacks.cpp and gameserver_serverdb.cpp" "$N102_GS"
     for site in 'registration rejected by ServerDB' 'no valid token for ServerDB connection'; do
         if ! grep -qF "$site" <<<"$N102_GS"; then
             echo "verify: FAIL — N102 the fail-fast for '${site}' is missing from the SHIPPING gameserver." >&2
@@ -1377,14 +1377,14 @@ verify:
     # Falsified 2026-10-05 against 323352b: the pattern hits gameserver.cpp:1433
     # and ws_bridge.cpp:1002-1003; on the fixed tree it exits 1.
     I41_RC=0; I41_HITS=$(grep -nE '[?&]password=%s|\+= *cfgPassword|"&password="' \
-        src/runtime/server/gameserver.cpp src/runtime/compat/ws_bridge.cpp) || I41_RC=$?
-    sensor_stage1 "#41 raw URL credential" "server/gameserver.cpp compat/ws_bridge.cpp" "$I41_RC"
+        src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp src/runtime/compat/ws_bridge.cpp) || I41_RC=$?
+    sensor_stage1 "#41 raw URL credential" "server/gameserver.cpp server/gameserver_serverdb.cpp compat/ws_bridge.cpp" "$I41_RC"
     if [ "$I41_RC" -eq 0 ]; then
         printf '%s\n' "$I41_HITS" >&2
         echo "verify: FAIL — #41 a credential is concatenated into a URL unencoded; use ServerDbUri (server/serverdb_uri.h)." >&2
         exit 1
     fi
-    if ! grep -q 'ServerDbUri::BuildLegacyUri(' src/runtime/server/gameserver.cpp \
+    if ! grep -q 'ServerDbUri::BuildLegacyUri(' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp \
        || ! grep -q 'ServerDbUri::BuildBridgeCredentialUri(' src/runtime/compat/ws_bridge.cpp; then
         echo "verify: FAIL — #41 a URL-credential site no longer calls the ServerDbUri encoder." >&2
         exit 1
@@ -1836,7 +1836,7 @@ verify:
         exit 1
     fi
     # N112c — server registration uses BuildIdentity (not bare GIT_DESCRIBE).
-    if ! grep -q 'BuildIdentity::Get()' src/runtime/server/gameserver.cpp; then
+    if ! grep -q 'BuildIdentity::Get()' src/runtime/server/gameserver.cpp src/runtime/server/gameserver_serverdb.cpp; then
         echo "verify: FAIL — N112c: gameserver.cpp does not call BuildIdentity::Get()." >&2
         echo "The server registration version field must be enriched with commit" >&2
         echo "hash and build type, not just bare GIT_DESCRIBE (N112)." >&2

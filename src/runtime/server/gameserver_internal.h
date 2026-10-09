@@ -10,6 +10,7 @@
 
 #include "abi/echovr.h"
 #include "runtime/server/gameserver.h"
+#include "runtime/hook/patching.h"  // NevRUPnPConfig
 #include "runtime/server/upnp.h"
 #include "gameservice/v1/gameservice.pb.h"
 
@@ -26,6 +27,8 @@ uint16_t ListenForBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId
 uint16_t ListenForTcpBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId, VOID* func);
 /// Send a protobuf Envelope to ServerDB as binary; false when it was not accepted.
 bool SendProtobufEnvelope(GameServerLib* self, const gameservice::v1::Envelope& envelope);
+/// A ServerDB bearer token (refreshed or re-minted under the serialized-mint lock); empty with `reason` set on failure.
+std::string AcquireServerDbToken(std::string& reason);
 /// UPnP settings from the runtime's globals.
 bool ReadUPnPConfig(NevRUPnPConfig& out);
 /// Ask the game to return to the lobby (no-op without a game object).

@@ -81,7 +81,7 @@ static void __fastcall Detour_ApplyEarlyQuitState(void* playerCS, uint64_t penal
               (unsigned long long)field_64828,
               field_64828 == (uint64_t)-1 ? "SENTINEL (-1)" : "VALUE SET");
     if (field_64828 == (uint64_t)-1) {
-        PluginLog("  *** BUG CONFIRMED: +0x64828 is -1, lockout will never activate ***");
+        PluginLogWarning("  *** BUG CONFIRMED: +0x64828 is -1, lockout will never activate ***");
     }
 
     // Force bit 46: ApplyEarlyQuitState clears it unconditionally when state
@@ -92,7 +92,7 @@ static void __fastcall Detour_ApplyEarlyQuitState(void* playerCS, uint64_t penal
         *flags |= (1ULL << 46);
         PluginLog("FORCE-LOCKOUT: flags bit 46 set (flags[0] = 0x%llx)", *flags);
     } else {
-        PluginLog("FORCE-LOCKOUT: *** flags pointer at +0x2da0 is null, cannot set bit 46 — lockout countdown will not activate ***");
+        PluginLogWarning("FORCE-LOCKOUT: *** flags pointer at +0x2da0 is null, cannot set bit 46 — lockout countdown will not activate ***");
     }
 
     // Force feature flags byte: the SNSEarlyQuitFeatureFlags handler would
@@ -136,7 +136,7 @@ NEVR_PLUGIN_API uint32_t NvrPluginGetCapabilities(void)
 NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
 {
     if (ctx == nullptr) {
-        PluginLog("init: *** context is null — violates host contract (ctx guaranteed non-null); plugin cannot initialize ***");
+        PluginLogError("init: *** context is null — violates host contract (ctx guaranteed non-null); plugin cannot initialize ***");
         return -1;
     }
 
@@ -150,7 +150,7 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
     /* Step 1: Initialize MinHook. ALREADY_INITIALIZED is harmless. */
     MH_STATUS mhStatus = MH_Initialize();
     if (mhStatus != MH_OK && mhStatus != MH_ERROR_ALREADY_INITIALIZED) {
-        PluginLog("hook: MH_Initialize failed: %s",
+        PluginLogError("hook: MH_Initialize failed: %s",
                   MH_StatusToString(mhStatus));
         return -1;
     }
@@ -158,7 +158,7 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
     /* Step 2: Resolve the VA. nullptr = no game binary / VA out of range. */
     void* target = nevr::ResolveVA_Checked(ctx->base_addr, kHookTargetVA);
     if (target == nullptr) {
-        PluginLog("hook: VA 0x%llx not valid in this process"
+        PluginLogWarning("hook: VA 0x%llx not valid in this process"
                   " (cannot tell from here whether no game binary is loaded,"
                   " or this VA is outside the loaded image);"
                   " plugin continues without this hook",
@@ -169,7 +169,7 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
     /* Step 3: Validate the prologue — wrong bytes = wrong game version. */
     const uint8_t* actualBytes = static_cast<const uint8_t*>(target);
     if (!nevr::ValidatePrologue(target, kPrologue, sizeof(kPrologue))) {
-        PluginLog("hook: prologue mismatch at 0x%llx expected=%02x%02x%02x%02x%02x%02x"
+        PluginLogError("hook: prologue mismatch at 0x%llx expected=%02x%02x%02x%02x%02x%02x"
                   " actual=%02x%02x%02x%02x%02x%02x —"
                   " wrong game version? skipping this hook",
                   static_cast<unsigned long long>(kHookTargetVA),
@@ -189,7 +189,7 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx)
         reinterpret_cast<void**>(&g_original));
 
     if (s != MH_OK) {
-        PluginLog("hook: CreateAndEnable failed for ApplyEarlyQuitState @ 0x%llx: %s",
+        PluginLogError("hook: CreateAndEnable failed for ApplyEarlyQuitState @ 0x%llx: %s",
                   static_cast<unsigned long long>(kHookTargetVA),
                   MH_StatusToString(s));
         return -1;

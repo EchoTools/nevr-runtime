@@ -478,7 +478,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     const char* socketUri = NevrCfgGetFlat("nevr_socket_uri");
     const bool hasSocketUri = socketUri && socketUri[0] != '\0';
     const char* allowOffline = NevrCfgGetFlat("nevr_allow_offline_server");
-    if (BridgePolicy::IsUnrecognized(allowOffline)) {
+    if (g_isServer && BridgePolicy::IsUnrecognized(allowOffline)) {  // a server-only key
       Log(EchoVR::LogLevel::Warning,
           "[NEVR.WS] services.allow_offline_server is not a boolean (use true/false); treating it as false");
     }
