@@ -3,6 +3,12 @@
 The first time you start the game, and whenever your saved sign-in can no longer be used, the
 headset asks you to sign in to EchoVRCE with a short code.
 
+This applies to Quest builds whose sentinel starts NEVR token auth (`QuestTokenAuth`); the sentinel
+built from `src/quest/sentinel/` on its own does not, and shows the game's own login error instead.
+That the game's login error screen displays the sign-in text has not been confirmed on a headset;
+in those builds `device_login.txt` (below) holds the same page and code whether or not the screen
+shows them.
+
 ## What you see
 
 When the game cannot log in yet, its login error screen shows:

@@ -3,8 +3,8 @@
  * What the game does (pinned libr15; pinned_targets.h has the addresses): a failed login reaches
  * CR15NetGame::LogInFailedCB, which hands the message to SetDelimitedErrorMessage (the error block
  * in game_layout), switches to "login failed" (-94) and queues QuitOnError, which has three paths:
- * with CR15Game+0x1f08 set it only marks itself pending (bit 0x200000 of the flags at
- * CR15NetGame+0x2da0) and returns; otherwise it ends multiplayer and then sends the game space a
+ * with CR15Game+0x1f08 set it only marks itself pending (bit 0x200000 of the flags word the
+ * pointer at CR15NetGame+0x2da0 points to) and returns; otherwise it ends multiplayer and then sends the game space a
  * component event when CR15Game+0x7af0 is set, or sets the flag CR15Game::UpdateGame also sets when
  * CVR::ShouldQuit() is true (a quit request). Which one runs on a headset is not measured. The UI
  * script reads the
@@ -14,8 +14,9 @@
  * The prompt therefore has to be useful also if the game quits after the failure: the player
  * restarts it and sees a new code (or logs in with the cached sign-in).
  *
- * Two GOT hooks in libr15.so, both lock-free. Both run on the game loop's thread: CncaGame::RunLoop
- * calls CR15Game::Update, which updates the login providers and the broadcaster (where login
+ * Two GOT hooks in libr15.so, both lock-free. Both run on the game loop's thread: each
+ * CncaGame::RunLoop iteration calls CR15Game::Update four times (arguments 0 to 3); the call with
+ * argument 0 updates the login providers and the broadcaster (where login
  * failures arrive) and then CR15NetGame::Update (through CncaGame::Update and CR15Game::UpdateGame);
  * the writer flag below does not depend on that.
  *   - SetDelimitedErrorMessage: the game stores and logs its own message first (no code ever
@@ -24,15 +25,18 @@
  *     server-sent message, so a ban or suspension text always shows) and the block holds that
  *     message, the instance is followed from then on and the game's block is saved; if the prompt
  *     board holds a prompt (Mode::kPrompt), it is written over the block now.
- *   - CR15NetGame::Update (once per game update): while the followed instance is still in "login
+ *   - CR15NetGame::Update (up to four times per game-loop iteration: CR15Game::UpdateGame passes
+ *     its argument on): while the followed instance is still in "login
  *     failed" and the board or the block has changed since the block was written (a prompt
  *     published after the failure, a new code, a notice in place of a prompt, the timed-out text,
  *     or withdrawn), the block is rewritten, or the game's saved block restored. A notice never
- *     replaces the game's own text. It checks every frame that the block still holds what this
+ *     replaces the game's own text. It checks on every call that the block still holds what this
  *     hook last left there: the game has other writers of the block (lobby, lobby-status and
  *     game-space errors, for example), and a block one of them changed is left alone for good,
- *     unless it holds one of the local login-failure texts again (a new failure the error hook
- *     could not take up), which becomes the game's text to follow. Whether the UI re-reads the
+ *     unless it holds one of the local login-failure texts again, which becomes the game's text to
+ *     follow and gets the prompt: a new failure the error hook could not take up (its writer flag
+ *     was held), or one it did not take up because the game was not logging in at that moment
+ *     (already in "login failed"; that call also counts login_prompt_text_not_local). Whether the UI re-reads the
  *     block while the error screen is up is not known from the binary; the next login failure
  *     writes the current text either way.
  *

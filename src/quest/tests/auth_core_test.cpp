@@ -1171,8 +1171,53 @@ TEST(codes_nobody_could_show_count_toward_the_bound_and_the_player_is_told_none_
        at = log.All().find("-> awaiting_user", at + 1)) {
     ++asked;
   }
-  CHECK_EQ(asked, size_t(Session::kMaxUnansweredCodes));
-  CHECK_EQ(log.Count(LogLevel::Warning, "(0 shown)"), size_t(1));
+  CHECK_EQ(asked, static_cast<size_t>(Session::kMaxUnansweredCodes));
+  CHECK_EQ(log.Count(LogLevel::Warning, "(0 shown)"), static_cast<size_t>(1));
+  s.Stop();
+  prompt_board::Withdraw();
+}
+
+// Shows codes until told not to; concludes on the game text.
+class ShowsUntilToldNot : public LinkPresenter {
+ public:
+  explicit ShowsUntilToldNot(LogSink log) : game_(std::move(log)) {}
+  std::atomic<bool> show{true};
+  intptr_t Present(const LoginPrompt&) override { return show ? kBrowserOpenAcceptedAbove + 1 : 0; }
+  void Clear() override { game_.Clear(); }
+  void Conclude(LoginOutcome outcome) override { game_.Conclude(outcome); }
+
+ private:
+  GameTextPresenter game_;
+};
+
+// A sign-in resets what the bound counts: codes shown before it do not make a later bound, reached
+// with codes nobody could show, say "timed out".
+TEST(after_a_sign_in_the_bound_counts_afresh_and_says_no_code_could_be_shown_when_none_was) {
+  prompt_board::Withdraw();
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  LogCapture log;
+  auto requests = std::make_shared<std::atomic<int>>(0);
+  http.handler = [requests](const std::string& endpoint, const std::string& body) -> HttpResponse {
+    if (endpoint == "request") return Ok({{"code", "K" + std::to_string(++*requests)}});
+    if (body.find("K1") != std::string::npos) return Ok({{"status", "expired"}});  // shown, ran out
+    // K2 signs in, with tokens that are dead after 2500 s, so a new device login follows.
+    return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 400)}, {"refresh_token", "rt-a"},
+               {"refresh_token_expires_in", 2000}});
+  };
+  ShowsUntilToldNot presenter(log.Sink());
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  clock.Allow(3);  // K1's poll (expired), the 27 s wait, K2's poll (verified)
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  presenter.show = false;  // from now on no code can be shown
+  clock.Advance(2500);     // access and refresh token both dead: a new device login
+  clock.Allow(50);         // a background period, then recovery periods
+  CHECK(WaitUntil([&] { return BoardText() == std::string(kNoCodeShownText); }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  CHECK_EQ(http.Count("request"), 2 + static_cast<int>(Session::kMaxUnansweredCodes));
+  CHECK_EQ(log.Count(LogLevel::Warning, "(0 shown)"), static_cast<size_t>(1));
   s.Stop();
   prompt_board::Withdraw();
 }
