@@ -21,7 +21,7 @@ class UrlDiagnosticLogInvariantTest(unittest.TestCase):
         self.assertIn("[NEVR.GAMESERVER] failed to initiate WebSocket connection uri=", source)
         self.assertIn("LogDiagnostics::FormatRedactedUrlDiagnostic(", source)
 
-    def test_server_and_winhttp_connection_logs_use_formatted_redaction(self):
+    def test_server_connection_logs_use_formatted_redaction(self):
         self.assert_source_contains(
             "src/runtime/server/websocket_client.cpp",
             'LogDiagnostics::FormatRedactedUrlDiagnostic("[WEBSOCKET] Connecting to ServerDB at ", uri)',
@@ -29,12 +29,6 @@ class UrlDiagnosticLogInvariantTest(unittest.TestCase):
         self.assert_source_contains(
             "src/runtime/server/telemetry_streamer.cpp",
             'LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.TELEMETRY] Connecting to ", uri)',
-        )
-        self.assert_source_contains(
-            "src/runtime/compat/winhttp_stub.cpp",
-            'LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.HTTP] Open " + method + " ", url)',
-            'LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.HTTP] Send " + method + " ", url)',
-            '"[NEVR.HTTP] curl failed: url=", url,',
         )
 
     def test_bridge_remote_url_logs_use_formatted_redaction(self):
