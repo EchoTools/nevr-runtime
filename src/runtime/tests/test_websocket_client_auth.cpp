@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "runtime/server/bearer_reconnect_auth.h"
+#include "runtime/server/serialized_mint.h"
 #include "runtime/server/websocket_client.h"
 
 namespace {
@@ -429,4 +430,57 @@ TEST(BearerReconnectAuth, FailedMintKeepsTheTokenAndLogsTheFailure) {
   ASSERT_GE(seen.size(), 3U);
   EXPECT_EQ(seen[2], "Bearer token-at-connect");
   EXPECT_TRUE(LogContains("bearer token re-acquisition failed"));
+}
+
+// #246: a server that rejects even a fresh token must not cost a mint per 401. A bare ix::WebSocket
+// that is never started is enough: OnError only needs automatic reconnection enabled.
+TEST(BearerReconnectAuth, RepeatedRejectionsMintOncePerInterval) {
+  ClearLog();
+  ix::WebSocket ws;
+  ws.enableAutomaticReconnection();
+  std::atomic<int> mints{0};
+  BearerReconnectAuth auth("[TEST.BEARER]", std::chrono::hours(1));
+  auth.Attach(ws, "t0", [&mints]() {
+    ++mints;
+    return std::string("t-fresh");
+  });
+  for (int i = 0; i < 5; ++i) auth.OnError(401);
+  EXPECT_EQ(mints.load(), 1);
+  EXPECT_EQ(auth.RefreshCount(), 1U);
+  EXPECT_TRUE(LogContains("not re-acquiring again within"));
+}
+
+TEST(BearerReconnectAuth, ZeroIntervalMintsOnEveryRejection) {
+  ix::WebSocket ws;
+  ws.enableAutomaticReconnection();
+  std::atomic<int> mints{0};
+  BearerReconnectAuth auth("[TEST.BEARER]", std::chrono::milliseconds(0));
+  auth.Attach(ws, "t0", [&mints]() {
+    ++mints;
+    return std::string("t-fresh");
+  });
+  for (int i = 0; i < 3; ++i) auth.OnError(401);
+  EXPECT_EQ(mints.load(), 3);
+}
+
+// #246: the ServerDB refresher, the telemetry refresher and RequestRegistration all end in an unlocked
+// write of .credentials.json, so no two mints may overlap.
+TEST(SerializedMint, ConcurrentMintsNeverOverlap) {
+  std::atomic<int> active{0};
+  std::atomic<int> maxActive{0};
+  auto mint = [&]() {
+    const int now = ++active;
+    int seen = maxActive.load();
+    while (now > seen && !maxActive.compare_exchange_weak(seen, now)) {
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    --active;
+    return std::string("tok");
+  };
+  std::vector<std::thread> threads;
+  for (int i = 0; i < 4; ++i) {
+    threads.emplace_back([&]() { EXPECT_EQ(ServerDbAuth::RunSerializedMint(mint), "tok"); });
+  }
+  for (auto& t : threads) t.join();
+  EXPECT_EQ(maxActive.load(), 1);
 }
