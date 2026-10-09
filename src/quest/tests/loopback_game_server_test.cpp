@@ -261,8 +261,8 @@ int OpenForeignListener(uint16_t* port) {
 // The address libr15 dials for a ws:// URI, the way NRadEngine::CSysNet::Lookup (libr15.so 0xf991a4)
 // picks it: a host it dials verbatim (GameDialsHostVerbatim) is resolved numerically; "localhost",
 // "127.0.0.1" or an empty host is replaced by the first IPv4 interface that is running and not loopback
-// (getifaddrs, ifa_flags & (IFF_LOOPBACK | IFF_RUNNING) == IFF_RUNNING). False when the URI does not
-// parse or no such interface exists (the game then has no address to dial).
+// (getifaddrs, ifa_flags & (IFF_LOOPBACK | IFF_RUNNING) == IFF_RUNNING), else by the first IPv4
+// interface that is not loopback. False when the URI does not parse or no interface qualifies.
 bool GameDialAddress(const std::string& uri, sockaddr_in* out) {
   const std::string scheme = "ws://";
   if (uri.rfind(scheme, 0) != 0) return false;
@@ -279,11 +279,14 @@ bool GameDialAddress(const std::string& uri, sockaddr_in* out) {
   ifaddrs* list = nullptr;
   if (::getifaddrs(&list) != 0) return false;
   bool found = false;
-  for (ifaddrs* i = list; i != nullptr && !found; i = i->ifa_next) {
-    if (i->ifa_addr == nullptr || i->ifa_addr->sa_family != AF_INET) continue;
-    if ((i->ifa_flags & (IFF_LOOPBACK | IFF_RUNNING)) != IFF_RUNNING) continue;
-    out->sin_addr = reinterpret_cast<const sockaddr_in*>(i->ifa_addr)->sin_addr;
-    found = true;
+  for (const unsigned want : {static_cast<unsigned>(IFF_RUNNING), 0u}) {  // libr15's two passes
+    const unsigned mask = IFF_LOOPBACK | want;
+    for (ifaddrs* i = list; i != nullptr && !found; i = i->ifa_next) {
+      if (i->ifa_addr == nullptr || i->ifa_addr->sa_family != AF_INET) continue;
+      if ((i->ifa_flags & mask) != want) continue;
+      out->sin_addr = reinterpret_cast<const sockaddr_in*>(i->ifa_addr)->sin_addr;
+      found = true;
+    }
   }
   ::freeifaddrs(list);
   return found;

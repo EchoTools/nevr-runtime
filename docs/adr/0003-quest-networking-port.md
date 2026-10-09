@@ -273,11 +273,11 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    exactly the frames the game sent. Enabling both would send two logins.
 
    `src/quest/net/` holds the Android adapters.
-   - `loopback_game_server`: a POSIX WebSocket server bound to `INADDR_LOOPBACK` on an
+   - `loopback_game_server`: a POSIX WebSocket server bound to `127.0.0.2` (`kListenAddress`) on an
      ephemeral port (RFC 6455 in `ws_wire`). **Access control:** every local app can reach that
      port, and connection identity is arrival order, so an unauthenticated connection could
      become the login or share the login session. `Start()` therefore draws 128 random bits from
-     the kernel (`getrandom`), `LoopbackUri()` returns `ws://127.0.0.1:<port>/<token>/`, and an
+     the kernel (`getrandom`), `LoopbackUri()` returns `ws://127.0.0.2:<port>/<token>/`, and an
      upgrade is answered 403 unless its request target carries the token (first path segment, or
      the query parameter `nevr_token`), compared without an early exit, and has no `Origin`
      header. The token and the request target are never logged; the refusals are counted
@@ -285,7 +285,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
      completes the upgrade but sends no data frame within `idleFirstFrameMs` is closed with 1008,
      so idle outsiders cannot hold the connection limit. The redirect hook must use `LoopbackUri()`
      as the replacement value: `nevr_cfg::ResolveRedirect` with `bridgeActive` returns the bare
-     `ws://127.0.0.1:<port>`, which this listener refuses.
+     `ws://127.0.0.1:<port>`, which carries no token and which the game cannot reach at all (next
+     paragraph).
    - `remote_ws`: the remote transport and its policy: `wss://` only, one connect attempt per
      session, no retry and no downgrade after a failure.
    - `curl_ws_connector`: libcurl from the Quest vcpkg manifest with peer and host verification
@@ -300,6 +301,22 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
 
    The Windows `ws_bridge.cpp` does not use the router yet; it keeps its own copy of these rules.
 
+   **Which address the game dials (measured).** The game's peers (`SClientData::STcpPeerData::Connect`
+   `0x24fd120`, `SWebSocketData::Connect` `0x2adadbc`, `SServerData::CreatePeer` `0x2505000`) resolve
+   their host through `CDnsLookup::Lookup` (`0x193856c`) and `NRadEngine::CSysNet::Lookup(char const*,
+   unsigned short)` (`libr15.so` `0xf991a4`; `CDnsResolver::Lookup` `0x1939250` hands numeric hosts to it
+   too). `CSysNet::Lookup` compares the host with `"localhost"` and `"127.0.0.1"` (`CSysString::Compare`
+   `0xf824ac`, whole string, ASCII case-insensitive). On a match, or an empty host, it calls `getifaddrs`
+   and dials the first IPv4 interface that is running and not loopback (`ifa_flags & 0x48 == 0x40`), or,
+   when none is running, the first IPv4 interface that is not loopback. Every other host goes to
+   `getaddrinfo(host, "%hu")` and is dialled as written. So the game never dials `127.0.0.1`; on the
+   Quest it dials wlan0, where nothing listens, and the connect is refused. The listener therefore binds
+   `127.0.0.2`: Linux and Android route all of `127.0.0.0/8` to `lo`, so it stays loopback-only, and
+   `GameDialsHostVerbatim` (`loopback_game_server.h`) with a `static_assert` keeps `kListenAddress` out
+   of the substituted set. `libpnsrad.so`, `libpnsradmatchmaking.so` and `libpnsovr.so` link their own
+   copies of `CSysNet::Lookup` with the same rule. `TestGameDialsTheRedirectUri` resolves
+   `LoopbackUri()` by this rule and must reach the listener.
+
    **How the game carries the token (measured, not assumed).** The game's WebSocket client,
    `NRadEngine::CWebSocketCodec::SendHandshakeRequest` (ReVault `libr15.so` `0x2ad8928`, ghidra
    raw decompilation), formats the request as
@@ -313,7 +330,8 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    appended to the config string before `CUriContainer::Parse`); the callers
    (`CNSRadService`, `CR15NetGame`) were not traced. If the game replaced both path and query,
    neither form could carry the token and a per-role port would be the alternative. ReVault's
-   `libr15.so` was not compared against the pinned build ID here, and the addresses in the
+   `libr15.so` bytes match the shipped build (sha256 `8dd9a961...1d8b20`) at `0xf991a4` and
+   `0x1939250`; the rest of it was not compared, and the addresses in the
    "Config-string seam" table did not resolve in ReVault under that spelling.
 
    **Residual risk.** A process running as the same Android uid as the game can read the token

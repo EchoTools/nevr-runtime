@@ -8,9 +8,11 @@
 // SClientData::STcpPeerData::Connect 0x24fd120 via CDnsLookup::Lookup), which compares the host against
 // "localhost" and "127.0.0.1" (CSysString::Compare, whole string, ASCII case-insensitive) and, on a match
 // or an empty host, calls getifaddrs and dials the first running non-loopback IPv4 interface instead
-// (the Quest's wlan0). Any other host goes to getaddrinfo(host, "%hu") and is dialled as given. Every
-// other 127/8 address is local on Linux and Android ("local 127.0.0.0/8 dev lo"), so 127.0.0.2 keeps
-// the listener loopback-only and is dialled verbatim. GameDialsHostVerbatim encodes that rule.
+// (the Quest's wlan0), or, when none is running, the first non-loopback one. Any other host goes to
+// getaddrinfo(host, "%hu") and is dialled as given. libpnsrad.so, libpnsradmatchmaking.so and
+// libpnsovr.so link their own copies of CSysNet::Lookup with the same rule. Every other 127/8 address
+// is local on Linux and Android ("local 127.0.0.0/8 dev lo"), so 127.0.0.2 keeps the listener
+// loopback-only and is dialled verbatim. GameDialsHostVerbatim encodes that rule.
 //
 // One thread accepts; one thread per connection reads, so a slow or stuck connection never holds up the
 // others. Every Router call and every Log call happens with none of this class's locks held. Send() and
