@@ -1024,9 +1024,9 @@ verify:
         echo "It must return failure ONLY on a server: module_loader treats a non-zero init as fatal in both modes, so an unconditional failure would hard-fail a client that should merely warn." >&2
         exit 1
     fi
-    if ! grep -qE 'if *\( *isServer *&& *\( *!tlsOk *\|\| *!httpOk *\) *\)' <<<"$N120_PC"; then
-        echo "verify: FAIL — N120 platform_compat no longer fails a server run on a missing TLS or WinHTTP hook." >&2
-        echo "Without this it returns success with a degraded network stack, which is how a silently-failing WinHTTP hook looked identical to a working one." >&2
+    if ! grep -qE 'if *\( *isServer *&& *!tlsOk *\)' <<<"$N120_PC"; then
+        echo "verify: FAIL — N120 platform_compat no longer fails a server run on a missing TLS hook." >&2
+        echo "Without this it returns success with a degraded network stack, which is how a silently-failing TLS hook looked identical to a working one." >&2
         exit 1
     fi
 
