@@ -269,6 +269,18 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
         self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
 
+    def test_plugins_log_through_the_shared_leveled_logger(self):
+        # Issue #34: each plugin hand-rolled a stderr wrapper (one named Log(), shadowing the host's
+        # structured Log()) or used a levelless PluginLog. All plugins use NEVR_DEFINE_PLUGIN_LOG.
+        for rel in sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "plugins").glob("*/src/*.cpp")):
+            text = strip_comments((ROOT / rel).read_text())
+            if "fprintf(stderr" in text.replace("std::", ""):
+                self.assertIn("NEVR_DEFINE_PLUGIN_LOG", text, f"{rel} writes to stderr without the shared logger")
+            self.assertNotRegex(text, r"static\s+void\s+(Log|PluginLog)\s*\(", f"{rel} hand-rolls a logger")
+        header = (ROOT / "plugins/common/include/plugin_logger.h").read_text()
+        for level in ("INFO", "WARNING", "ERROR"):
+            self.assertIn(f'"{level}"', header)
+
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches
         # UnregisterAllCallbacks -> GetCallbackRegistry() and EchoVR::BroadcasterUnlisten. The

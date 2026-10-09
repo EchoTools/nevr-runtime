@@ -25,20 +25,14 @@
 #include "address_registry.h"
 #include "hook_manager.h"
 #include "nevr_common.h"
+#include "plugin_logger.h"
 #include "yaml_config.h"
 
 /* ------------------------------------------------------------------ */
 /* Logging (bootstrap — before hook is installed)                      */
 /* ------------------------------------------------------------------ */
 
-static void PluginLog(const char* fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    std::fprintf(stderr, "[log_filter] ");
-    std::vfprintf(stderr, fmt, args);
-    std::fprintf(stderr, "\n");
-    va_end(args);
-}
+NEVR_DEFINE_PLUGIN_LOG("[log_filter]")
 
 /* ------------------------------------------------------------------ */
 /* Global state                                                        */
@@ -213,7 +207,7 @@ LogFilterConfig ParseYamlLogFilterConfig(const std::string& yaml_str) {
 LogFilterConfig LoadLogFilterConfig(const char* path) {
     std::string content = nevr::LoadConfigFile(path);
     if (content.empty()) {
-        PluginLog("failed to read config file: %s", path);
+        PluginLogWarning("failed to read config file: %s", path);
         return {};
     }
     std::string p(path);
@@ -287,7 +281,7 @@ static void OpenLogFile(bool isRotate) {
     g_log_file_path = BuildLogFilePath();
     g_log_file = std::fopen(g_log_file_path.c_str(), "ab");
     if (!g_log_file) {
-        PluginLog("failed to open log file: %s (errno=%d: %s)",
+        PluginLogError("failed to open log file: %s (errno=%d: %s)",
                   g_log_file_path.c_str(), errno, std::strerror(errno));
         return;
     }
@@ -633,7 +627,7 @@ bool InstallLogFilterHook(uintptr_t base_addr) {
                                                 reinterpret_cast<void*>(&hook_PrintfImpl),
                                                 reinterpret_cast<void**>(&orig_PrintfImpl));
     if (status != MH_OK) {
-        PluginLog("HookManager::CreateAndEnable failed for CLog::PrintfImpl: %s", MH_StatusToString(status));
+        PluginLogError("HookManager::CreateAndEnable failed for CLog::PrintfImpl: %s", MH_StatusToString(status));
         return false;
     }
 
