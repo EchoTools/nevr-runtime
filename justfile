@@ -483,7 +483,7 @@ test-quest-shared:
     "$out/sentinel_host_test"
     # The platform-neutral token-auth core and the Quest session, under a fake HTTP
     # server and a fake clock. Same sources the NDK build compiles (src/quest/CMakeLists.txt).
-    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc \
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json_inc" \
         src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
         src/quest/auth/session.cpp src/quest/auth/file_store.cpp \
         src/quest/auth/prompt_presenters.cpp src/quest/auth/prompt_board.cpp \
@@ -493,7 +493,7 @@ test-quest-shared:
     echo "test-quest-shared: token-auth core and Quest session tests pass on the host"
     # CurlHttpClient's trust handling against real TLS peers on loopback (test CA, Android-style
     # old-hash CA directory). Host libcurl with an OpenSSL backend, libssl and libcrypto.
-    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc \
+    g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json_inc" \
         src/core/auth_refresh.cpp src/core/device_auth_flow.cpp src/core/device_poll_response.cpp \
         src/quest/auth/session.cpp src/quest/auth/file_store.cpp src/quest/auth/quest_token_auth.cpp \
         src/quest/auth/prompt_presenters.cpp src/quest/auth/prompt_board.cpp \

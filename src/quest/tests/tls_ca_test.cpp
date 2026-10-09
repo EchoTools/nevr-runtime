@@ -9,6 +9,7 @@
 // Needs libcurl (OpenSSL backend), libssl and libcrypto on the host.
 
 #include "quest/auth/ca_bundle.h"
+#include "quest/auth/prompt_board.h"
 #include "quest/auth/curl_http.h"
 #include "quest/auth/quest_token_auth.h"
 #include "quest/tests/mini_test.h"
@@ -137,7 +138,9 @@ std::string MakeAndroidCaDir(const std::string& name, X509* ca) {
 class Server {
  public:
   // stall: accept connections and then say nothing until the server is destroyed.
-  Server(const Identity* leaf, size_t body_bytes, bool stall = false) : body_bytes_(body_bytes), stall_(stall) {
+  // body: when not empty, the body of every 200 instead of body_bytes of 'x'.
+  Server(const Identity* leaf, size_t body_bytes, bool stall = false, std::string body = {})
+      : body_bytes_(body_bytes), stall_(stall), fixed_body_(std::move(body)) {
     if (leaf != nullptr) {
       ctx_.reset(SSL_CTX_new(TLS_server_method()));
       SSL_CTX_use_certificate(ctx_.get(), leaf->cert.get());
@@ -226,7 +229,7 @@ class Server {
       if (n <= 0) break;
       req.append(buf, static_cast<size_t>(n));
     }
-    const std::string body(body_bytes_, 'x');
+    const std::string body = fixed_body_.empty() ? std::string(body_bytes_, 'x') : fixed_body_;
     write_all("HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(body.size()) +
               "\r\nConnection: close\r\n\r\n" + body);
     if (ssl != nullptr) {
@@ -238,6 +241,7 @@ class Server {
   std::unique_ptr<SSL_CTX, SslDeleter> ctx_;
   size_t body_bytes_;
   bool stall_;
+  std::string fixed_body_;
   int listen_fd_ = -1;
   int port_ = 0;
   std::atomic<bool> stop_{false};
@@ -535,6 +539,39 @@ TEST(creating_questtokenauth_cannot_throw_into_the_caller) {
     auth->Stop();  // never started: still fine
   }
   CHECK(logs.text.find("could not derive the app-internal directory") != std::string::npos);
+}
+
+// #239: the token-auth session the sentinel creates (QuestTokenAuth::Create, as the constructor
+// sequence's start_token_auth step does) publishes the sign-in prompt on the prompt board while it
+// waits for the player, and withdraws it when it stops. The service answers the device-code request with
+// a code and every poll with a body that is not a poll answer (so the session keeps polling and keeps the
+// prompt up); the board is read the way the sentinel's login-prompt hook reads it.
+TEST(questtokenauth_publishes_the_sign_in_prompt_on_the_prompt_board) {
+  namespace board = nevr::quest_auth::prompt_board;
+  using nevr::quest_auth::QuestAuthConfig;
+  using nevr::quest_auth::QuestTokenAuth;
+  board::Withdraw();
+  Server server(&Fix().leaf, 0, /*stall=*/false, R"({"code":"ABCD-EFGH"})");
+  Logs logs;
+  QuestAuthConfig config;
+  config.base_url = "https://localhost:" + std::to_string(server.Port());
+  config.http_key = "k";
+  config.files_dir = FreshDir("auth-prompt-files");
+  config.ca_dirs = {Fix().android_dir};
+  auto auth = QuestTokenAuth::Create(config, logs.Sink());
+  CHECK(auth != nullptr);
+  if (!auth) return;
+  const auto shown = [] {
+    char text[board::kCapacity + 1];
+    return board::Copy(text, sizeof(text)) && std::string(text).find("ABCD-EFGH") != std::string::npos;
+  };
+  auth->Start();
+  CHECK(WaitUntil(shown, 20000));
+  CHECK(auth->Get().readiness == nevr::quest_auth::Readiness::AwaitingUser);
+  auth->Stop();
+  char after[board::kCapacity + 1];
+  CHECK(!board::Copy(after, sizeof(after)));  // withdrawn when the login ends
+  CHECK(logs.text.find(R"("mechanism":"game_error_text","result":"published")") != std::string::npos);
 }
 
 TEST(interrupt_during_a_stalled_request_returns_promptly) {
