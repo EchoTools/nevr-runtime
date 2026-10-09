@@ -1,9 +1,12 @@
 // Host test for the loopback game server (src/quest/net/loopback_game_server.{h,cpp}) wired to the real
-// session router with a fake remote transport. The "game" is a raw TCP client on 127.0.0.1 that speaks the
-// client half of RFC 6455 by hand, including one-byte writes (partial reads on the server side).
+// session router with a fake remote transport. The "game" is a raw TCP client that dials the listener's
+// address (kListenAddress) and speaks the client half of RFC 6455 by hand, including one-byte writes
+// (partial reads on the server side). TestGameDialsTheRedirectUri dials the way libr15 does.
 
 #include <arpa/inet.h>
 #include <dirent.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <signal.h>
@@ -69,12 +72,15 @@ class FakeRemotes : public RemoteTransport {
 struct Client {
   int fd = -1;
   explicit Client(uint16_t port) {
-    fd = ::socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = htons(port);
-    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+    if (::inet_pton(AF_INET, kListenAddress, &addr.sin_addr) == 1) Connect(addr);
+  }
+  explicit Client(const sockaddr_in& addr) { Connect(addr); }
+  void Connect(const sockaddr_in& addr) {
+    fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (::connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0) {
       ::close(fd);
       fd = -1;
     }
@@ -124,7 +130,7 @@ struct Client {
 
 // An upgrade request for `target`, with optional extra header lines (each ending in CRLF).
 std::string UpgradeRequestText(const std::string& target, const std::string& extra = "") {
-  return "GET " + target + " HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+  return "GET " + target + " HTTP/1.1\r\nHost: 127.0.0.2\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n" + extra + "\r\n";
 }
 
@@ -159,7 +165,7 @@ struct Rig {
     server->Stop();
     router->Shutdown();
   }
-  // The access token, as the redirect value LoopbackUri() carries it ("ws://127.0.0.1:<port>/<token>/").
+  // The access token, as the redirect value LoopbackUri() carries it ("ws://127.0.0.2:<port>/<token>/").
   std::string Token() const {
     const std::string uri = server->LoopbackUri();
     const std::size_t slash = uri.find('/', 6);  // after "ws://" and the authority
@@ -210,7 +216,7 @@ struct Rig {
   }
 };
 
-// The descriptor of this process's socket listening on 127.0.0.1:`port`, found the way a foreign component
+// The descriptor of this process's socket listening on kListenAddress:`port`, found the way a foreign component
 // would hold it: by number. -1 when there is none.
 int ListenerFdFor(uint16_t port) {
   DIR* dir = ::opendir("/proc/self/fd");
@@ -231,13 +237,16 @@ int ListenerFdFor(uint16_t port) {
   return found;
 }
 
-// A real listening TCP socket on its own ephemeral 127.0.0.1 port. Returns its fd; *port gets the port.
+// A real listening TCP socket on its own ephemeral kListenAddress port. Returns its fd; *port gets the port.
 int OpenForeignListener(uint16_t* port) {
   const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
   if (fd < 0) return -1;
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  if (::inet_pton(AF_INET, kListenAddress, &addr.sin_addr) != 1) {
+    ::close(fd);
+    return -1;
+  }
   addr.sin_port = 0;
   socklen_t len = sizeof(addr);
   if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), len) != 0 || ::listen(fd, 16) != 0 ||
@@ -249,10 +258,66 @@ int OpenForeignListener(uint16_t* port) {
   return fd;
 }
 
+// The address libr15 dials for a ws:// URI, the way NRadEngine::CSysNet::Lookup (libr15.so 0xf991a4)
+// picks it: a host it dials verbatim (GameDialsHostVerbatim) is resolved numerically; "localhost",
+// "127.0.0.1" or an empty host is replaced by the first IPv4 interface that is running and not loopback
+// (getifaddrs, ifa_flags & (IFF_LOOPBACK | IFF_RUNNING) == IFF_RUNNING). False when the URI does not
+// parse or no such interface exists (the game then has no address to dial).
+bool GameDialAddress(const std::string& uri, sockaddr_in* out) {
+  const std::string scheme = "ws://";
+  if (uri.rfind(scheme, 0) != 0) return false;
+  const std::size_t colon = uri.find(':', scheme.size());
+  const std::size_t slash = uri.find('/', scheme.size());
+  if (colon == std::string::npos || slash == std::string::npos || colon > slash) return false;
+  const std::string host = uri.substr(scheme.size(), colon - scheme.size());
+  const long port = std::strtol(uri.substr(colon + 1, slash - colon - 1).c_str(), nullptr, 10);
+  if (port <= 0 || port > 65535) return false;
+  *out = sockaddr_in{};
+  out->sin_family = AF_INET;
+  out->sin_port = htons(static_cast<uint16_t>(port));
+  if (GameDialsHostVerbatim(host.c_str())) return ::inet_pton(AF_INET, host.c_str(), &out->sin_addr) == 1;
+  ifaddrs* list = nullptr;
+  if (::getifaddrs(&list) != 0) return false;
+  bool found = false;
+  for (ifaddrs* i = list; i != nullptr && !found; i = i->ifa_next) {
+    if (i->ifa_addr == nullptr || i->ifa_addr->sa_family != AF_INET) continue;
+    if ((i->ifa_flags & (IFF_LOOPBACK | IFF_RUNNING)) != IFF_RUNNING) continue;
+    out->sin_addr = reinterpret_cast<const sockaddr_in*>(i->ifa_addr)->sin_addr;
+    found = true;
+  }
+  ::freeifaddrs(list);
+  return found;
+}
+
 bool Upgrade(Rig& rig, Client& c) {
   c.Write(UpgradeRequestText(rig.GoodTarget()), /*oneByteAtATime=*/true);  // partial reads on the server's handshake parser
   const std::string resp = c.Read(50, 3000);
   return resp.rfind("HTTP/1.1 101", 0) == 0 && resp.find("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") != std::string::npos;
+}
+
+// Failure caught (smoke test 2026-10-09, #240): the redirect value named 127.0.0.1, which libr15 never
+// dials (it substitutes a non-loopback interface address), so every game connect was refused while the
+// listener sat idle. The game must reach the listener through LoopbackUri() exactly as libr15 resolves it.
+void TestGameDialsTheRedirectUri() {
+  QCHECK(!GameDialsHostVerbatim("127.0.0.1"));
+  QCHECK(!GameDialsHostVerbatim("LocalHost"));
+  QCHECK(!GameDialsHostVerbatim(""));
+  QCHECK(GameDialsHostVerbatim("127.0.0.2"));
+  QCHECK(GameDialsHostVerbatim("127.0.0.10"));
+  Rig rig;
+  const uint16_t port = rig.server->Start();
+  QCHECK(port != 0);
+  const std::string uri = rig.server->LoopbackUri();
+  sockaddr_in addr{};
+  QCHECK(GameDialAddress(uri, &addr));
+  char dialled[INET_ADDRSTRLEN] = {};
+  ::inet_ntop(AF_INET, &addr.sin_addr, dialled, sizeof(dialled));
+  QCHECK(std::string(dialled) == kListenAddress);  // the game dials the address the listener holds
+  QCHECK((ntohl(addr.sin_addr.s_addr) >> 24) == 127);  // and it is loopback, never a LAN interface
+  Client game(addr);
+  QCHECK(game.fd >= 0);
+  QCHECK(Upgrade(rig, game));
+  QCHECK(rig.WaitForRecord("router_game_conn", "upgraded"));
 }
 
 // Handshake, frames in pieces, reply path, and the first connection becoming "config".
@@ -401,7 +466,7 @@ void TestUpgradeNeedsTheToken() {
     QCHECK(other.Token().size() == 32 && other.Token() != token);
     QCHECK(token.find_first_not_of(token[0]) != std::string::npos);
   }
-  QCHECK(rig.server->LoopbackUri() == "ws://127.0.0.1:" + std::to_string(port) + "/" + token + "/");
+  QCHECK(rig.server->LoopbackUri() == "ws://127.0.0.2:" + std::to_string(port) + "/" + token + "/");
 
   std::string wrong = token;
   wrong.back() = wrong.back() == '0' ? '1' : '0';
@@ -667,6 +732,7 @@ void TestHealthyListenerIsNotReported() {
 
 int main() {
   ::signal(SIGPIPE, SIG_IGN);  // a write to a socket at a reused number must fail a check, not end the run
+  TestGameDialsTheRedirectUri();
   TestRoundTrip();
   TestRemoteCloseReachesTheSocket();
   TestBadHandshake();

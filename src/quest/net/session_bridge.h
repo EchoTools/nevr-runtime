@@ -2,13 +2,14 @@
 // The Quest counterpart of the PC ws_bridge: one object that owns the loopback game server, the shared
 // session router, the remote transport and the verified-TLS WebSocket connector, wired together.
 //
-//   game --ws://127.0.0.1:<port>/<token>/--> LoopbackGameServer --> Router --> ConnectorRemoteTransport
+//   game --ws://127.0.0.2:<port>/<token>/--> LoopbackGameServer --> Router --> ConnectorRemoteTransport
 //                                                                 --wss (verified TLS)--> service
 //
 // Redirect: nevr_cfg::ResolveRedirect (src/runtime/lifecycle/service_redirect.h) decides WHETHER a game URL
-// is redirected, but with bridgeActive=true it returns the bare "ws://127.0.0.1:<port>", which this
-// listener answers 403 (no access token). The wiring that installs the redirect must use LocalUri() as
-// the replacement value for such a URL. Nothing here installs a hook: hook activation is gated by ADR 0003.
+// is redirected, but with bridgeActive=true it returns the bare "ws://127.0.0.1:<port>", which the game
+// never reaches (libr15 dials a non-loopback interface for 127.0.0.1; see loopback_game_server.h) and which
+// carries no access token. The wiring that installs the redirect must use LocalUri() as the replacement
+// value for such a URL. Nothing here installs a hook: hook activation is gated by ADR 0003.
 //
 // Login: the bridge injects NOTHING. On Quest the game's own login (rewritten in place, PR #221) is the only
 // login, so Config has no login builder and the router runs with its injection options at their defaults.

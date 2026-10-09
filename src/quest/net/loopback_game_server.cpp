@@ -53,9 +53,14 @@ long long MillisSince(std::chrono::steady_clock::time_point start) {
       std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count());
 }
 
-// A non-blocking, close-on-exec TCP listener on 127.0.0.1:`port` (0 = an ephemeral port). Returns the
+// A non-blocking, close-on-exec TCP listener on kListenAddress:`port` (0 = an ephemeral port). Returns the
 // descriptor and fills *st with its identity, or -1 with *err set.
 int OpenListener(uint16_t port, struct stat* st, uint16_t* boundPort, int* err) {
+  in_addr listenAddr{};
+  if (::inet_pton(AF_INET, kListenAddress, &listenAddr) != 1) {
+    *err = EINVAL;
+    return -1;
+  }
   const int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (fd < 0) {
     *err = errno;
@@ -70,7 +75,7 @@ int OpenListener(uint16_t port, struct stat* st, uint16_t* boundPort, int* err) 
   sockaddr_in addr;
   std::memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_addr = listenAddr;
   addr.sin_port = htons(port);
   socklen_t len = sizeof(addr);
   const int flags = ::fcntl(fd, F_GETFL, 0);
@@ -156,7 +161,7 @@ std::string LoopbackGameServer::LoopbackUri() const {
   const std::lock_guard<std::mutex> lock(uriMutex_);
   const uint16_t port = port_.load(std::memory_order_acquire);
   if (port == 0 || token_.empty()) return std::string();
-  return "ws://127.0.0.1:" + std::to_string(port) + "/" + token_ + "/";
+  return std::string("ws://") + kListenAddress + ":" + std::to_string(port) + "/" + token_ + "/";
 }
 
 uint16_t LoopbackGameServer::Start() {
@@ -198,7 +203,7 @@ uint16_t LoopbackGameServer::Start() {
   stop_ = false;
   acceptThread_ = std::thread([this]() { AcceptLoop(); });
   nlohmann::json record = Record(kListenerEvent, "listening");
-  record["address"] = "127.0.0.1";
+  record["address"] = kListenAddress;
   record["port"] = port;
   Log(LogLevel::Info, Dump(record));
   return port;
