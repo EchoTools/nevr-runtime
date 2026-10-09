@@ -137,6 +137,9 @@ void Log(EchoVR::LogLevel level, const char* format, ...) {
   g_testLogMessages.emplace_back(buffer);
 }
 
+// boot_log_tee.cpp stamps its lines with the run id; the test links it without core.
+const CHAR* GetRunId() { return "test-run"; }
+
 FatalErrorHandlerFunc g_fatalErrorHandler = nullptr;
 void SetFatalErrorHandler(FatalErrorHandlerFunc) {}
 
@@ -694,12 +697,11 @@ TEST_F(N68_ModuleTickTest, OnStateChange_Fires_When_Registered) {
 }
 
 // ============================================================================
-// N133 S5 — module API version gate. The loader refuses a module whose reported
-// version exceeds the host's (module_loader.cpp LoadModule -> FatalError, N120).
-// LoadModule itself is not unit-testable (real LoadLibraryExA + a process-killing
-// FatalError), so the refusal RULE is factored into the header-only predicate
-// NvrModuleApiVersionSupported, which the loader and these tests share. Verifying
-// the predicate verifies the mismatch decision without spawning a process.
+// N133 S5 — module API version gate. The host refuses a module whose reported
+// version exceeds its own (boot.cpp, N120). The refusal RULE is the header-only
+// predicate NvrModuleApiVersionSupported, which boot.cpp and these tests share.
+// Verifying the predicate verifies the mismatch decision without spawning a
+// process.
 // ============================================================================
 
 TEST(N133_ModuleApiVersion, HostVersionIsTwo) {

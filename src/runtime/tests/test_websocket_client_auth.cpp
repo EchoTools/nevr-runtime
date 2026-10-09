@@ -16,6 +16,8 @@
 
 #include <gtest/gtest.h>
 
+#include <ixwebsocket/IXNetSystem.h>
+#include <ixwebsocket/IXWebSocket.h>
 #include <ixwebsocket/IXWebSocketHandshakeKeyGen.h>
 
 #include <algorithm>
@@ -30,6 +32,7 @@
 #include <thread>
 #include <vector>
 
+#include "runtime/server/bearer_reconnect_auth.h"
 #include "runtime/server/websocket_client.h"
 
 namespace {
@@ -313,4 +316,117 @@ TEST(WebSocketClientAuth, FailedMintKeepsTheTokenAndLogsTheFailure) {
   ASSERT_GE(seen.size(), 3U);
   EXPECT_EQ(seen[2], "Bearer token-at-connect");
   EXPECT_TRUE(LogContains("Bearer token re-acquisition failed"));
+}
+
+// ---------------------------------------------------------------------------
+// #114: BearerReconnectAuth, the telemetry socket's equivalent of the above. The same scripted
+// server and a bare ix::WebSocket wired the way TelemetryStreamer::Connect wires it.
+// ---------------------------------------------------------------------------
+namespace {
+
+class BearerSocket {
+ public:
+  BearerSocket(const std::string& uri, const std::string& token, BearerReconnectAuth::Refresher refresher)
+      : auth_("[TEST.BEARER]") {
+    ix::initNetSystem();
+    ws_.setUrl(uri);
+    auth_.Attach(ws_, token, std::move(refresher));
+    ws_.enableAutomaticReconnection();
+    ws_.setMinWaitBetweenReconnectionRetries(50);
+    ws_.setMaxWaitBetweenReconnectionRetries(200);
+    ws_.setOnMessageCallback([this](const ix::WebSocketMessagePtr& msg) {
+      if (msg->type == ix::WebSocketMessageType::Error) auth_.OnError(msg->errorInfo.http_status);
+    });
+    ws_.start();
+  }
+  void StopReconnecting() {
+    ws_.disableAutomaticReconnection();
+    ws_.stop();
+  }
+  ~BearerSocket() { ws_.stop(); }
+  BearerReconnectAuth& Auth() { return auth_; }
+
+ private:
+  ix::WebSocket ws_;
+  BearerReconnectAuth auth_;
+};
+
+}  // namespace
+
+TEST(BearerReconnectAuth, Reconnect401MintsAFreshTokenForTheNextAttempt) {
+  ClearLog();
+  using Reply = ScriptedUpgradeServer::Reply;
+  ScriptedUpgradeServer server({Reply::AcceptThenDrop, Reply::Reject401, Reply::AcceptAndHold});
+  ASSERT_NE(server.Port(), 0);
+
+  std::atomic<int> refreshes{0};
+  BearerSocket socket(UriFor(server), "token-at-connect", [&refreshes]() {
+    ++refreshes;
+    return std::string("token-after-401");
+  });
+  ASSERT_TRUE(server.WaitForHandshakes(3, kHandshakeWait));
+  socket.StopReconnecting();
+
+  const auto seen = server.Authorizations();
+  ASSERT_GE(seen.size(), 3U);
+  EXPECT_EQ(seen[0], "Bearer token-at-connect");
+  EXPECT_EQ(seen[1], "Bearer token-at-connect");  // the drop alone does not mint
+  EXPECT_EQ(seen[2], "Bearer token-after-401");
+  EXPECT_EQ(refreshes.load(), 1);
+  EXPECT_EQ(socket.Auth().RefreshCount(), 1U);
+  EXPECT_TRUE(LogContains("rejected the bearer token (HTTP 401) — re-acquiring"));
+}
+
+// A configured telemetry_token has no refresher: the 401 is logged and the token is presented again.
+TEST(BearerReconnectAuth, FixedTokenIsNotReplacedAndTheRejectionIsLogged) {
+  ClearLog();
+  using Reply = ScriptedUpgradeServer::Reply;
+  ScriptedUpgradeServer server({Reply::AcceptThenDrop, Reply::Reject401, Reply::AcceptAndHold});
+  ASSERT_NE(server.Port(), 0);
+
+  BearerSocket socket(UriFor(server), "configured-token", nullptr);
+  ASSERT_TRUE(server.WaitForHandshakes(3, kHandshakeWait));
+  socket.StopReconnecting();
+
+  const auto seen = server.Authorizations();
+  ASSERT_GE(seen.size(), 3U);
+  EXPECT_EQ(seen[2], "Bearer configured-token");
+  EXPECT_EQ(socket.Auth().RefreshCount(), 0U);
+  EXPECT_TRUE(LogContains("not refreshable (configured token)"));
+}
+
+TEST(BearerReconnectAuth, NonAuthFailureDoesNotMintAToken) {
+  ClearLog();
+  using Reply = ScriptedUpgradeServer::Reply;
+  ScriptedUpgradeServer server({Reply::AcceptThenDrop, Reply::Reject503, Reply::AcceptAndHold});
+  ASSERT_NE(server.Port(), 0);
+
+  std::atomic<int> refreshes{0};
+  BearerSocket socket(UriFor(server), "token-at-connect", [&refreshes]() {
+    ++refreshes;
+    return std::string("unexpected");
+  });
+  ASSERT_TRUE(server.WaitForHandshakes(3, kHandshakeWait));
+  socket.StopReconnecting();
+
+  const auto seen = server.Authorizations();
+  ASSERT_GE(seen.size(), 3U);
+  EXPECT_EQ(seen[2], "Bearer token-at-connect");
+  EXPECT_EQ(refreshes.load(), 0);
+}
+
+TEST(BearerReconnectAuth, FailedMintKeepsTheTokenAndLogsTheFailure) {
+  ClearLog();
+  using Reply = ScriptedUpgradeServer::Reply;
+  ScriptedUpgradeServer server({Reply::AcceptThenDrop, Reply::Reject401, Reply::AcceptAndHold});
+  ASSERT_NE(server.Port(), 0);
+
+  BearerSocket socket(UriFor(server), "token-at-connect", []() { return std::string(); });
+  ASSERT_TRUE(server.WaitForHandshakes(3, kHandshakeWait));
+  socket.StopReconnecting();
+
+  const auto seen = server.Authorizations();
+  ASSERT_GE(seen.size(), 3U);
+  EXPECT_EQ(seen[2], "Bearer token-at-connect");
+  EXPECT_TRUE(LogContains("bearer token re-acquisition failed"));
 }

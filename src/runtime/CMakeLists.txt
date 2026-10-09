@@ -65,6 +65,7 @@ set(PATCHES_SOURCES
     "server/main_thread_handoff.cpp"
     "server/serverdb_uri.cpp"
     "server/telemetry_streamer.cpp"
+    "server/bearer_reconnect_auth.cpp"
     "server/upnp.cpp"
 )
 
@@ -132,6 +133,7 @@ set(PATCHES_HEADERS
     "server/main_thread_handoff.h"
     "server/serverdb_uri.h"
     "server/telemetry_streamer.h"
+    "server/bearer_reconnect_auth.h"
     "server/messages.h"
     "server/upnp.h"
     "server/constants.h"
@@ -192,7 +194,7 @@ set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_
 # #60: plugin_manifest.cpp builds the login's nevr_plugins array with nlohmann-json;
 # pure and PCH-free for the same reason as plugin_load_plan.cpp.
 set_source_files_properties(ext/plugin_manifest.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-set_source_files_properties(log/url_diagnostics.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # ws_bridge.cpp has no C-style casts (CPP-MINGW-ADDENDUM hard stop); keep it that way at compile time.
 # The property is directory-scoped, so the test target that compiles the same file gets it too.
@@ -331,8 +333,10 @@ if(BUILD_TESTING)
 
     # Issue #39: the bearer header presented on ixwebsocket's automatic reconnect,
     # driven against a scripted loopback upgrade server.
+    # #114: BearerReconnectAuth (the telemetry socket's equivalent) rides in this executable.
     add_executable(test_websocket_client_auth
       tests/test_websocket_client_auth.cpp
+      server/bearer_reconnect_auth.cpp
       server/websocket_client.cpp
       server/websocket_frame.cpp
       log/url_diagnostics.cpp)
@@ -361,10 +365,12 @@ if(BUILD_TESTING)
     # existing `just test-auth-unit` loop runs it with no recipe change.
 
     # Issue #41: the ServerDB URI builder (percent-encoded query) — pure, curl only.
+    # test_failure_detail.cpp (#35, header-only failure_detail.h) rides in this executable.
     add_executable(test_serverdb_uri
       tests/test_serverdb_uri.cpp
+      tests/test_failure_detail.cpp
       server/serverdb_uri.cpp)
-    set_source_files_properties(tests/test_serverdb_uri.cpp server/serverdb_uri.cpp
+    set_source_files_properties(tests/test_serverdb_uri.cpp tests/test_failure_detail.cpp server/serverdb_uri.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_serverdb_uri PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_serverdb_uri PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
@@ -513,10 +519,12 @@ if(BUILD_TESTING)
     # linked here — it is exercised by the differential server run.
     add_executable(test_service_map
       tests/test_service_map.cpp
+      tests/test_bridge_policy.cpp
       lifecycle/service_map.cpp
       lifecycle/service_redirect.cpp)
     set_source_files_properties(
       tests/test_service_map.cpp
+      tests/test_bridge_policy.cpp
       lifecycle/service_map.cpp
       lifecycle/service_redirect.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
@@ -660,6 +668,8 @@ if(BUILD_TESTING)
       ext/plugin_manifest.cpp
       ext/module_loader.cpp
       log/url_diagnostics.cpp
+      # patching.h's PatchDetour reports through BootLogTee while boot is running (#92).
+      log/boot_log_tee.cpp
       compat/ws_bridge.cpp
       compat/login_profile.cpp
       # #41: ws_bridge.cpp builds its URL credentials through the ServerDbUri encoder.
