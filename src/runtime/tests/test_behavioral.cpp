@@ -196,6 +196,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/module_loader.h"
+#include "runtime/patch/matchmaker_host_patch.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/social_party.h"
@@ -975,6 +976,51 @@ TEST(SecurityDiagnostics, NumericTransportFormatterCarriesOnlyNumericFields) {
             "[NEVR.WS] Proxy port 5000 bind failed failure=1 — retrying (1/3)");
   EXPECT_EQ(LogDiagnostics::FormatBindFailureDiagnostic("Matchmaker", 5001, 2, 3),
             "[NEVR.WS] Matchmaker port 5001 bind failed failure=1 — retrying (2/3)");
+}
+
+// #18: pnsradmatchmaking.dll is unloaded and reloaded mid-session and every load maps a fresh image,
+// so the host rewrite must apply to each image on its own.
+namespace {
+std::vector<uint8_t> FreshMatchmakerImage() {
+  std::vector<uint8_t> image(MatchmakerHostPatch::kHostRva + MatchmakerHostPatch::kHostSlotSize + 16, 0xAA);
+  std::memcpy(image.data() + MatchmakerHostPatch::kHostRva, MatchmakerHostPatch::kHostExpected,
+              sizeof(MatchmakerHostPatch::kHostExpected));
+  return image;
+}
+bool CopyWrite(uint8_t* dst, const char* src, size_t len) {
+  std::memcpy(dst, src, len);
+  return true;
+}
+const char* HostOf(const std::vector<uint8_t>& image) {
+  return reinterpret_cast<const char*>(image.data() + MatchmakerHostPatch::kHostRva);
+}
+}  // namespace
+
+TEST(MatchmakerHostPatch, EveryFreshImageAfterAReloadIsPatched) {
+  std::vector<uint8_t> first = FreshMatchmakerImage();
+  ASSERT_EQ(MatchmakerHostPatch::Apply(first.data(), 51234, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  EXPECT_STREQ(HostOf(first), "ws://127.0.0.1:51234");
+
+  // The game frees the module and loads it again: a new, unpatched image, possibly a new port.
+  std::vector<uint8_t> second = FreshMatchmakerImage();
+  EXPECT_STREQ(HostOf(second), MatchmakerHostPatch::kHostExpected);
+  ASSERT_EQ(MatchmakerHostPatch::Apply(second.data(), 60001, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  EXPECT_STREQ(HostOf(second), "ws://127.0.0.1:60001");
+}
+
+TEST(MatchmakerHostPatch, AnAlreadyPatchedImageIsLeftAlone) {
+  std::vector<uint8_t> image = FreshMatchmakerImage();
+  ASSERT_EQ(MatchmakerHostPatch::Apply(image.data(), 51234, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 60001, CopyWrite), MatchmakerHostPatch::Result::BytesMismatch);
+  EXPECT_STREQ(HostOf(image), "ws://127.0.0.1:51234");
+}
+
+TEST(MatchmakerHostPatch, NoPortAndWriteFailureAreReportedNotPatched) {
+  std::vector<uint8_t> image = FreshMatchmakerImage();
+  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 0, CopyWrite), MatchmakerHostPatch::Result::NoPort);
+  EXPECT_STREQ(HostOf(image), MatchmakerHostPatch::kHostExpected);
+  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 51234, [](uint8_t*, const char*, size_t) { return false; }),
+            MatchmakerHostPatch::Result::WriteFailed);
 }
 
 // #201: the server's new-location text ends with the code line, which the game's screen drops.
