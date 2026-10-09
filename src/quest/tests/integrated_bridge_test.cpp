@@ -151,11 +151,14 @@ struct Client {
     }
     return out;
   }
-  bool Upgrade(const std::string& path = "/x") {
+  // Sends the upgrade request and returns every byte that arrived with the first read: the 101 response, and
+  // anything the server sent right behind it (a close, for a connection it refuses at once).
+  std::string UpgradeBytes(const std::string& path = "/x") {
     Write("GET " + path + " HTTP/1.1\r\nHost: 127.0.0.2\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
           "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n");
-    return Read(50).rfind("HTTP/1.1 101", 0) == 0;
+    return Read(50);
   }
+  bool Upgrade(const std::string& path = "/x") { return UpgradeBytes(path).rfind("HTTP/1.1 101", 0) == 0; }
 };
 
 // "/<token>/" out of "ws://127.0.0.2:<port>/<token>/".
@@ -362,11 +365,15 @@ void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
   const std::string path = PathOf(bridge.LoopbackUri());
 
   Client bootConfig(port);
-  QCHECK(bootConfig.Upgrade(path));
+  std::string bootBytes = bootConfig.UpgradeBytes(path);
+  QCHECK(bootBytes.rfind("HTTP/1.1 101", 0) == 0);
   bootConfig.Write(BuildMaskedFrame(Opcode::Binary, EvrCodec::BuildMessage(EvrCodec::kSymConfigRequest, "c"), kMask));
   bool bootEof = false;
   const std::string closeFrame = BuildCloseFrame(SessionRouter::kCloseInternalError, "remote could not be started");
-  QCHECK(bootConfig.Read(closeFrame.size(), 3000, &bootEof) == closeFrame);  // fail-fast: 1011, as before
+  // Fail-fast, as before: the connection is closed 1011 (the close frame can share a read with the upgrade
+  // response, so everything up to the end of the stream is read).
+  bootBytes += bootConfig.Read(1u << 20, 3000, &bootEof);
+  QCHECK(bootBytes.find(closeFrame) != std::string::npos);
   QCHECK(connector.Calls() == 0);
 
   Client login(port);
