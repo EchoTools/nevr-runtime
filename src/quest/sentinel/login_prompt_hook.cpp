@@ -42,9 +42,14 @@ std::atomic_flag g_writing = ATOMIC_FLAG_INIT;
 // The game's own block, saved at the failure, restored when the board is withdrawn.
 unsigned char g_saved[layout::kErrorBlockBytes];
 // What the block holds as far as this hook knows: the game's own block or the text it wrote. The
-// game has other writers of the block (lobby, game-space and lobby-status errors); a block that no
-// longer matches this copy was rewritten by one of them and is left alone from then on.
+// game has other writers of the block (lobby, game-space and lobby-status errors, for example); a
+// block that no longer matches this copy was rewritten by one of them and is left alone from then
+// on, unless it again holds one of the game's own local login-failure texts (a new failure).
 unsigned char g_written[layout::kErrorBlockBytes];
+// What g_written holds: the game's own text, a prompt, or a notice that replaced a prompt. A notice
+// only ever replaces a prompt; on a screen that shows the game's own text it is not applied.
+enum class Kind : std::uint8_t { kGame, kPrompt, kNotice };
+Kind g_kind = Kind::kGame;
 
 bool Equal(const char* a, const char* b) noexcept {
   while (*a != '\0' && *a == *b) {
@@ -85,6 +90,15 @@ bool HoldsMessage(const unsigned char* block, const char* message) noexcept {
   return line[i] == '\0';
 }
 
+// The block holds one of the game's local login-failure texts as its only line: what
+// SetErrorMessage(char const*) leaves after a new local failure.
+bool HoldsLocalFailure(const unsigned char* block) noexcept {
+  for (const char* known : game_login_failures::kAll) {
+    if (HoldsMessage(block, known)) return true;
+  }
+  return false;
+}
+
 bool SameBlock(const unsigned char* a, const unsigned char* b) noexcept {
   for (std::size_t i = 0; i < layout::kErrorBlockBytes; ++i) {
     if (a[i] != b[i]) return false;
@@ -117,6 +131,7 @@ void Drop(CR15NetGameOpaque* self) noexcept {
   CR15NetGameOpaque* expected = self;
   if (g_object.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel)) {
     Wipe(g_written, sizeof(g_written));
+    g_kind = Kind::kGame;
   }
 }
 
@@ -146,12 +161,14 @@ void HookedSetDelimitedErrorMessage(ErrorThunk::Fn original, CR15NetGameOpaque* 
   if (read == board::ReadResult::kCopied && mode == board::Mode::kPrompt) {
     LayOut(g_written, text);
     CopyBlock(block, g_written);
+    g_kind = Kind::kPrompt;
     g_applied.store(version, std::memory_order_relaxed);
     g_shown.fetch_add(1, std::memory_order_relaxed);
   } else {
     // Nothing to show yet (or only a notice, or the board was busy): the game's text stays, and the
     // instance is followed so that a prompt published later still reaches this screen.
     CopyBlock(g_written, block);
+    g_kind = Kind::kGame;
     if (read == board::ReadResult::kBusy) {
       g_applied.store(kNothingApplied, std::memory_order_relaxed);
       g_busy.fetch_add(1, std::memory_order_relaxed);
@@ -168,33 +185,62 @@ void HookedSetDelimitedErrorMessage(ErrorThunk::Fn original, CR15NetGameOpaque* 
 // Keeps the followed instance's block current. Runs once per game update, before the game's own.
 void Refresh(CR15NetGameOpaque* self) noexcept {
   const bool leftLoginFailed = State(self) != layout::kStateLoginFailed;
-  if (!leftLoginFailed && board::Version() == g_applied.load(std::memory_order_relaxed)) return;
   if (g_writing.test_and_set(std::memory_order_acquire)) return;  // the other writer: next frame
-  unsigned char* block = Block(self);
-  if (leftLoginFailed) {
-    Drop(self);  // the game left its error screen's state
-  } else if (!SameBlock(block, g_written)) {
-    g_notOurs.fetch_add(1, std::memory_order_relaxed);  // another writer changed the block
-    Drop(self);
-  } else {
-    char text[board::kCapacity + 1];
-    board::Mode mode = board::Mode::kPrompt;
-    std::uint64_t version = 0;
-    const board::ReadResult read = board::Read(text, sizeof(text), &mode, &version);
-    if (read == board::ReadResult::kCopied) {
-      LayOut(g_written, text);
-    } else if (read == board::ReadResult::kEmpty) {
-      CopyBlock(g_written, g_saved);  // withdrawn: the game's own message again
-    }
-    if (read != board::ReadResult::kBusy) {  // busy: next frame
-      if (!SameBlock(block, g_written)) {
-        CopyBlock(block, g_written);
-        g_refreshed.fetch_add(1, std::memory_order_relaxed);
-      }
-      g_applied.store(version, std::memory_order_relaxed);
-    }
-    Wipe(text, sizeof(text));
+  if (g_object.load(std::memory_order_acquire) != self) {  // dropped or replaced meanwhile
+    g_writing.clear(std::memory_order_release);
+    return;
   }
+  unsigned char* block = Block(self);
+  // Nothing to do while the board and the block are as last left (checked every frame: the game can
+  // write the block again without the board changing, e.g. a new failure the error hook missed).
+  if (!leftLoginFailed && board::Version() == g_applied.load(std::memory_order_relaxed) &&
+      SameBlock(block, g_written)) {
+    g_writing.clear(std::memory_order_release);
+    return;
+  }
+  bool follow = true;
+  if (leftLoginFailed) {
+    follow = false;  // the game left its error screen's state
+  } else if (!SameBlock(block, g_written)) {
+    if (HoldsLocalFailure(block)) {
+      // A new local failure the error hook could not take up (its writer flag was held): the game's
+      // own text, so start over from it.
+      CopyBlock(g_saved, block);
+      CopyBlock(g_written, block);
+      g_kind = Kind::kGame;
+      g_applied.store(kNothingApplied, std::memory_order_relaxed);
+    } else {
+      g_notOurs.fetch_add(1, std::memory_order_relaxed);  // another writer changed the block
+      follow = false;
+    }
+  }
+  if (!follow) {
+    Drop(self);
+    g_writing.clear(std::memory_order_release);
+    return;
+  }
+  char text[board::kCapacity + 1];
+  board::Mode mode = board::Mode::kPrompt;
+  std::uint64_t version = 0;
+  const board::ReadResult read = board::Read(text, sizeof(text), &mode, &version);
+  if (read == board::ReadResult::kCopied && mode == board::Mode::kPrompt) {
+    LayOut(g_written, text);
+    g_kind = Kind::kPrompt;
+  } else if (read == board::ReadResult::kCopied && g_kind != Kind::kGame) {
+    LayOut(g_written, text);  // a notice, in place of the prompt this screen shows
+    g_kind = Kind::kNotice;
+  } else if (read == board::ReadResult::kEmpty && g_kind != Kind::kGame) {
+    CopyBlock(g_written, g_saved);  // withdrawn: the game's own message again
+    g_kind = Kind::kGame;
+  }  // a notice on a screen with the game's own text, or an empty board there: nothing to change
+  if (read != board::ReadResult::kBusy) {  // busy: next frame
+    if (!SameBlock(block, g_written)) {
+      CopyBlock(block, g_written);
+      g_refreshed.fetch_add(1, std::memory_order_relaxed);
+    }
+    g_applied.store(version, std::memory_order_relaxed);
+  }
+  Wipe(text, sizeof(text));
   g_writing.clear(std::memory_order_release);
 }
 

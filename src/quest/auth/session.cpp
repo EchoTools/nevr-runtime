@@ -289,6 +289,12 @@ Session::LoginResult Session::TryCachedLogin(CachedAuthToken& auth, int attempts
 }
 
 Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
+  // The bound is checked before the player is asked for anything: a recovery attempt after the last
+  // code does not announce a new sign-in (AwaitingUser) it will not run.
+  if (unanswered_codes_ >= kMaxUnansweredCodes) {
+    ConcludeBound();
+    return DeviceResult::Ended;
+  }
   quiet_ = false;  // a player prompt is always worth an Info line, also when it starts from recovery
   SetState(Readiness::AwaitingUser);
   // The prompt carries the device code: take it down however this function ends, including by an
@@ -311,15 +317,15 @@ Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
     // The bound is for the whole session, not one call: a code-request failure in between leads to a
     // fresh call after the recovery period, and that must not start the count again.
     if (unanswered_codes_ >= kMaxUnansweredCodes) {
-      Log(LogLevel::Warning, "[NEVR.AUTH] no sign-in after " + std::to_string(unanswered_codes_) +
-                                 " device codes; no more are requested until the game restarts");
-      clear_link.Conclude(LoginOutcome::TimedOut);
+      clear_link.concluded = true;
+      ConcludeBound();
       return DeviceResult::Ended;
     }
     const auto requested_at = clock_.SteadyNow();
     const DeviceResult r = RunDeviceCode(out);
     if (r == DeviceResult::Verified) {
       unanswered_codes_ = 0;
+      shown_codes_ = 0;
       clear_link.Conclude(LoginOutcome::SignedIn);
       return r;
     }
@@ -331,6 +337,7 @@ Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
     }
     if (r != DeviceResult::CodeExpired) return r;
     ++unanswered_codes_;
+    ++shown_codes_;
     if (StopRequested()) return DeviceResult::Ended;
     if (unanswered_codes_ >= kMaxUnansweredCodes) continue;  // the bound, at the top of the loop
     // The player was shown a code and it ran out (the server's "expired", or its five minutes
@@ -344,6 +351,15 @@ Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
     if (since < kMinCodeInterval && clock_.SleepFor(kMinCodeInterval - since)) return DeviceResult::Ended;
     if (StopRequested()) return DeviceResult::Ended;
   }
+}
+
+void Session::ConcludeBound() {
+  // What the player is told depends on whether any of those codes reached them.
+  const bool anyShown = shown_codes_ > 0;
+  Log(LogLevel::Warning, "[NEVR.AUTH] no sign-in after " + std::to_string(unanswered_codes_) + " device codes (" +
+                             std::to_string(shown_codes_) +
+                             " shown); no more are requested until the game restarts");
+  presenter_.Conclude(anyShown ? LoginOutcome::TimedOut : LoginOutcome::NoCodeShown);
 }
 
 Session::DeviceResult Session::RunDeviceCode(CachedAuthToken& out) {

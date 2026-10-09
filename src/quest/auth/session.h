@@ -84,7 +84,8 @@ struct LoginPrompt {
 // How a device login that showed the player a prompt ended, when that is worth telling them.
 enum class LoginOutcome {
   SignedIn,  // the player signed in
-  TimedOut,  // Session::kMaxUnansweredCodes codes went unanswered; no more are requested
+  TimedOut,     // Session::kMaxUnansweredCodes codes went unanswered; no more are requested
+  NoCodeShown,  // as TimedOut, but no presenter could show any of those codes
 };
 
 // How the player is told where to log in. Present returns a value above
@@ -196,6 +197,8 @@ class Session {
   DeviceResult RunDeviceLogin(CachedAuthToken& out);
   // One device code: request, present, poll until it is verified or ends.
   DeviceResult RunDeviceCode(CachedAuthToken& out);
+  // The bound on unanswered codes is reached: log it and tell the player (TimedOut or NoCodeShown).
+  void ConcludeBound();
   // Cached login (when use_cache) then device-code login; with_backoff retries transient
   // failures on login_retry_delays.
   LoginEnd EstablishLogin(CachedAuthToken& auth, bool use_cache, bool with_backoff);
@@ -236,6 +239,7 @@ class Session {
   std::string failure_class_;
   bool quiet_ = false;  // recovery attempts log state changes at Debug
   unsigned unanswered_codes_ = 0;  // codes issued without a sign-in since the last one (kMaxUnansweredCodes)
+  unsigned shown_codes_ = 0;       // of those, the codes a presenter showed
 };
 
 }  // namespace nevr::quest_auth
