@@ -349,6 +349,25 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertEqual(len(re.findall(r"GameServer::BuildRegistrationEnvelope\s*\(", server)), 2)
         self.assertNotIn("mutable_game_server_registration()", server)
 
+    def test_boot_lines_are_replayed_into_the_main_log_at_first_open_only(self):
+        # Issue #5: boot and runtime events are one stream. The main log replays this run's
+        # nevr-boot.jsonl lines when it first opens; rotation reopens without replaying; the boot file
+        # is read, never deleted (it is the crash spool).
+        filt = strip_comments((ROOT / "src/runtime/log/builtin_filter.cpp").read_text())
+        init = extract_braced_function(filt, "static void InitFileLogging(")
+        self.assertLess(init.index("OpenLogFile()"), init.index("ReplayBootLines()"))
+        rotate = extract_braced_function(filt, "static void RotateIfNeeded(")
+        self.assertNotIn("ReplayBootLines", rotate)
+        replay = extract_braced_function(filt, "static void ReplayBootLines(")
+        self.assertIn("BootReplay::ParseRun(contents, GetRunId())", replay)
+        for forbidden in ("remove(", "DeleteFile", "unlink(", "trash"):
+            self.assertNotIn(forbidden, replay, "the boot file is the crash spool and is never deleted")
+        tee = strip_comments((ROOT / "src/runtime/log/boot_log_tee.cpp").read_text())
+        self.assertIn("BootLines::Build(", tee)
+        self.assertIn("GetSystemTime(", tee)
+        close = extract_braced_function(tee, "void BootLogTee::Close(")
+        self.assertNotIn("g_boot_path", close, "Path() must stay valid after Close()")
+
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches
         # UnregisterAllCallbacks -> GetCallbackRegistry() and EchoVR::BroadcasterUnlisten. The
