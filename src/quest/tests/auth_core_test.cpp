@@ -401,6 +401,8 @@ struct FlowRig {
   size_t poll_index = 0;
   int sleeps = 0;
   bool cancel = false;
+  bool renews = false;
+  uint64_t poll_takes_s = 0;  // how long each poll request takes on the fake clock
   intptr_t browser = 33;
   int ui = 1;
   std::string code = "SECRETCODE123";
@@ -416,6 +418,7 @@ struct FlowRig {
     };
     o.show_open_failure = [this](const std::string&, const std::string&, intptr_t) { return ui; };
     o.poll = [this](const std::string&) {
+      now_s += poll_takes_s;
       TokenAuth::DevicePollResponse r = poll_index < polls.size() ? polls[poll_index] : TokenAuth::DevicePollResponse{};
       if (poll_index < polls.size()) ++poll_index;
       else r.status = TokenAuth::DevicePollStatus::Pending;
@@ -427,6 +430,7 @@ struct FlowRig {
     };
     o.cancelled = [this] { return cancel; };
     o.log = log.Sink();
+    o.renews_expired_codes = renews;
     return o;
   }
 };
@@ -493,6 +497,46 @@ TEST(flow_stops_on_server_expiry_error_cancel_and_undeliverable_link) {
     rig.code.clear();
     CHECK(!RunDeviceCodeFlow(rig.Ops(), "u").verified);
     CHECK(rig.log.All().find("device code request failed") != std::string::npos);
+  }
+}
+
+TEST(flow_takes_a_verified_answer_that_arrives_after_the_deadline) {
+  // The server deletes a verified code when it answers the poll, so dropping this answer would
+  // lose the player's login. Each round is a 3 s wait and a 25 s poll: ten pending rounds end at
+  // 280 s, the eleventh poll starts at 283 s (before the deadline) and answers at 308 s (after it).
+  FlowRig rig;
+  rig.poll_takes_s = 25;
+  rig.polls.assign(10, Poll(TokenAuth::DevicePollStatus::Pending));
+  rig.polls.push_back(Poll(TokenAuth::DevicePollStatus::Verified));
+  const DeviceFlowResult r = RunDeviceCodeFlow(rig.Ops(), "https://x/login");
+  CHECK(r.verified);
+  CHECK_EQ(rig.now_s, uint64_t(308));
+  CHECK_EQ(r.response.refresh_token, std::string("refresh"));
+  CHECK(rig.log.All().find("timed out") == std::string::npos);
+}
+
+TEST(flow_says_a_new_code_follows_when_the_caller_renews_and_restart_when_it_does_not) {
+  {
+    FlowRig rig;  // Windows: the code running out ends the login
+    rig.polls = {Poll(TokenAuth::DevicePollStatus::Expired)};
+    CHECK(!RunDeviceCodeFlow(rig.Ops(), "u").verified);
+    CHECK_EQ(rig.log.Count(LogLevel::Warning, "Device code expired. Please restart to try again."), size_t(1));
+  }
+  {
+    FlowRig rig;  // Quest: a new code follows
+    rig.renews = true;
+    rig.polls = {Poll(TokenAuth::DevicePollStatus::Expired)};
+    CHECK(!RunDeviceCodeFlow(rig.Ops(), "u").verified);
+    CHECK_EQ(rig.log.Count(LogLevel::Info, "Device code expired before a sign-in; a new code will be requested"),
+             size_t(1));
+    CHECK(rig.log.All().find("restart") == std::string::npos);
+  }
+  {
+    FlowRig rig;  // Quest: the deadline is routine, not a warning
+    rig.renews = true;
+    CHECK(!RunDeviceCodeFlow(rig.Ops(), "u").verified);
+    CHECK_EQ(rig.log.Count(LogLevel::Info, "Device auth timed out after 5 minutes"), size_t(1));
+    CHECK_EQ(rig.log.Count(LogLevel::Warning, "Device auth timed out after 5 minutes"), size_t(0));
   }
 }
 
