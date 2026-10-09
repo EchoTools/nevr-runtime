@@ -62,31 +62,37 @@ static VOID GameMainWrapperHook(INT64 arg1) {
     // The game loop crashed and can't be safely restarted (internal state is
     // corrupted). Keep the process alive — the broadcaster and game server
     // were already initialized, and the HTTP API may still be listening.
-    while (true) {
+    // A console shutdown (CTRL+C, SIGTERM-style close) ends the hold: the game loop is gone, so no
+    // game teardown follows and nothing else will ever exit the process.
+    while (!ConsoleShutdownPending()) {
       Sleep(1000);
     }
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] server hold ended by a console shutdown request — exiting");
+    PerformGracefulShutdown(0);
+    // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
   }
 
   // Run the game main loop
   GameMain(arg1);
 
   // The game loop returned on its own: the player quit (closed the window, chose Exit) or the game
-  // ended its session. A client has nothing left to run, so return and let the process exit; the
-  // hold below is only for a dedicated server, where a supervisor watches the broadcaster/HTTP API
-  // and is the one to restart it. (A hold on clients would leave a closed client
-  // running with no window on Windows and under Wine.)
+  // ended its session. A client has nothing left to run, so return and let the process exit. (A hold
+  // on clients would leave a closed client running with no window on Windows and under Wine.)
   g_gameLoopJmpBufValid = false;
   if (!g_isServer) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] game loop returned: the client is exiting (no server hold outside server mode)");
     return;
   }
-  Log(EchoVR::LogLevel::Warning,
-      "[NEVR.PATCH] game loop returned on a server (the loop should only end by crash or shutdown) — "
-      "entering server hold; game loop will not run again");
-  while (true) {
-    Sleep(1000);
-  }
+  // On a server the loop ends only by shutdown (a crash longjmps to the recovery branch above), and
+  // the game's own teardown has already run by the time it returns. Holding here would never exit:
+  // ExitProcess is suppressed in server mode, so returning does not end the process either. Exit
+  // through the same path as every other shutdown.
+  Log(EchoVR::LogLevel::Info,
+      "[NEVR.PATCH] game loop returned on a server — treating it as the shutdown and exiting");
+  PerformGracefulShutdown(0);
+  // Unreachable — PerformGracefulShutdown calls ForceFatalExit.
 }
 
 void InstallGameMainHook() {
