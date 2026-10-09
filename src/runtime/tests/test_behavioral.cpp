@@ -529,6 +529,28 @@ TEST_F(PluginLoaderDiagnosticTest, ReplacedArgKeyIsLoggedByNameNeverByValue) {
   EXPECT_FALSE(TestLogContains("SECRETVALUE"));
 }
 
+// #152: a plugin may keep what get_plugin_info returned during its init. The loader reserves
+// g_plugins before any init so the push_back that follows that init cannot move the entry the kept
+// pointer names. The keeper fixture takes plugin 0's pointer in its init; after the load it must still
+// be the pointer the host hands out for index 0.
+TEST_F(PluginLoaderDiagnosticTest, InfoPointerKeptDuringALaterPluginsInitStaysValid) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"keeper", "test_plugin_info_keeper.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  const HMODULE keeper = GetModuleHandleA("test_plugin_info_keeper.dll");
+  ASSERT_NE(keeper, nullptr);
+  const auto getKept = reinterpret_cast<const NvrLoadedPluginInfo* (*)(void)>(
+      GetProcAddress(keeper, "NvrTestPluginGetKeptInfo"));
+  ASSERT_NE(getKept, nullptr);
+  const NvrLoadedPluginInfo* kept = getKept();
+  ASSERT_NE(kept, nullptr);
+  EXPECT_EQ(kept, GetLoadedPluginInfo(0)) << "the pointer a plugin kept was invalidated by a later load";
+  EXPECT_STREQ(kept->name, "test-plugin-onframe");
+}
+
 // get_plugin_info reports each plugin's own API version and capabilities. Casting
 // NvrPluginInfo (padded to 32 bytes) as NvrLoadedPluginInfo would make
 // api_version read the padding and capabilities read the API version: a v5
