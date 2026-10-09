@@ -111,9 +111,14 @@ std::optional<std::string> LookupFlatWithDefaults(const nevr::NevrConfig& cfg,
                                                   const FlatDefaults& defaults,
                                                   const std::string& flatKey) {
   const std::optional<std::string> fromFile = LookupFlat(cfg, flatKey);
-  if (fromFile && !fromFile->empty()) return fromFile;
+  // An unset bare ${VAR} stays in the value as written (nevr_config.cpp ResolveVar). For a service
+  // key that text is not a value: it must neither beat the built-in default nor reach a caller as a
+  // credential or URI, so it counts as unset.
+  const bool unresolved = fromFile && fromFile->find("${") != std::string::npos;
+  if (fromFile && !fromFile->empty() && !unresolved) return fromFile;
   const auto it = defaults.find(flatKey);
   if (it != defaults.end() && !it->second.empty()) return it->second;
+  if (unresolved) return std::nullopt;
   return fromFile;
 }
 

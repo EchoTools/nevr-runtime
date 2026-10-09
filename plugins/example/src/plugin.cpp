@@ -451,7 +451,8 @@ NEVR_PLUGIN_API int NvrPluginInit(const NvrGameContext* ctx);
  *            never null. Keys are flattened dotted paths (a nested
  *            YAML `a: {b: 1}` becomes `"a.b"`), and values are
  *            strings (post-interpolation; the host resolves ${VAR}
- *            references before serialization).
+ *            references before serialization; an unset bare ${VAR}
+ *            stays as written).
  *
  *            Example: {"greeting":"hi","limits.max":"5"}
  *
