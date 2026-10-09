@@ -33,6 +33,14 @@ class VcpkgPinTest(unittest.TestCase):
                 self.assertLess(text.index("actions/checkout"), text.index("Microsoft/vcpkg.git"),
                                 f"{workflow.name}: .vcpkg-commit is read before the checkout")
 
+    def test_a_pin_bump_on_main_reseeds_the_cache(self):
+        # The cache key includes the pinned revision; without .vcpkg-commit in the push paths a bump
+        # waits for the daily cron and the first PRs after it rebuild every port.
+        text = (WORKFLOWS / "vcpkg-cache.yml").read_text()
+        push = text[text.index("  push:"):text.index("  schedule:")]
+        self.assertIn("- .vcpkg-commit", push)
+        self.assertNotIn("revision, which moves", text)
+
     def test_the_workflows_that_link_provide_the_case_folded_crypt32(self):
         # The pinned ixwebsocket port links -lCrypt32 and Arch ships libcrypt32.a only.
         for name in ("build.yml", "defender-scan.yml"):
