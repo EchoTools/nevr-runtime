@@ -100,7 +100,7 @@ static constexpr uint8_t   PNSRAD_IDENTITY_JNE_EXPECTED[] = {0x0F, 0x85, 0x9C, 0
 //   RVA 0x1c84d8 (.rdata section, VMA 0x1801c6000, file offset 0x1c5200 per
 //   `objdump -h`; string file offset = 0x1c76d8, verified byte-for-byte via
 //   `dd if=pnsradmatchmaking.dll bs=1 skip=$((0x1c76d8)) count=64 | xxd`) —
-//   a 49-byte slot (the 48-char string + NUL, then unrelated data
+//   a 49-byte slot (the 47-char string + NUL, then unrelated data
 //   immediately follows with no padding) holding
 //   "wss://matchmaker.readyatdawn.com/rad/rad15_live\0".
 // Replacing with "ws://127.0.0.1:PPPPP\0" (21 bytes, port always 5 digits —

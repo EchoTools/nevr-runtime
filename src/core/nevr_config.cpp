@@ -93,8 +93,8 @@ std::string ResolveVar(const std::string& inner) {
 
 // Replace every ${...} in `in`. An unterminated ${ is left literal. The three-char
 // sequence $${ becomes a literal ${ and nothing after it is looked up, so it is the
-// way to write ${ that isn't a variable (e.g. in a plugin's args, where an unset
-// ${...} would otherwise fail the load). No other `$` is special: $$ not followed by
+// way to write ${ that isn't a variable (e.g. in a plugin's args, whose value would
+// otherwise be read as a variable reference). No other `$` is special: $$ not followed by
 // { stays $$, and $$${X} yields $${X}. A literal `$` immediately followed by a
 // variable's value is written with a default: ${NO_SUCH_VAR:-$}${X}.
 std::string InterpolateString(const std::string& in) {
@@ -297,6 +297,7 @@ NevrConfig NevrConfig::LoadFromString(const std::string& yaml) {
     UnsetBareSink sink(&unsetBare);
     ValidateInterpolation(raw);  // fail loud NOW on an unset ${VAR:?}; does not mutate raw
   }
+  cfg.unsetBareVars_.assign(unsetBare.begin(), unsetBare.end());
   for (const std::string& name : unsetBare) {
     Log(EchoVR::LogLevel::Warning,
         "[NEVR.CONFIG] environment variable %s is not set; the text ${%s} is kept as written",
