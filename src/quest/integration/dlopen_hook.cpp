@@ -51,7 +51,7 @@ DlopenInstall InstallDlopenHook(sentinel::GotStatus* status) noexcept {
 }
 
 bool RegisterDlopenCounters() noexcept {
-  // One counter: the reporter's 32 slots are full (clock 2, redirect 10, dlopen 1, social 19). The thunk's
+  // One counter, as when the reporter's table held 32 (clock 2, redirect 10, dlopen 1, social 19). The thunk's
   // fault counter (no original published) cannot move for a hook GotHook installed, and a failed install
   // is its own stage line.
   return sentinel::RegisterReportCounter("dlopen_calls", &DlopenThunk::CallCounter());

@@ -144,11 +144,13 @@ void TestHandlerThroughThunk() {
 }
 
 void TestCounterRegistration() {
-  // The reporter takes 32 counters in all; the social package uses 19 (the thunk's calls and faults, three
+  // The reporter takes kMaxReportCounters counters in all; the social package uses 19 (the thunk's calls and faults, three
   // pass-through counters, the selection, and the facade's thirteen) and leaves the rest.
   sentinel::StopReporter();
   QCHECK(RegisterSocialReportCounters());
-  for (int i = 0; i < 13; ++i) QCHECK(sentinel::RegisterReportCounter("filler", &g_dummy));  // 19 + 13 = 32
+  for (unsigned i = 0; i < sentinel::kMaxReportCounters - 19; ++i) {
+    QCHECK(sentinel::RegisterReportCounter("filler", &g_dummy));  // 19 + the rest = the whole table
+  }
   QCHECK(!sentinel::RegisterReportCounter("one-too-many", &g_dummy));
   sentinel::StopReporter();
 }

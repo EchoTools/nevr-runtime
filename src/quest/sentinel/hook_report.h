@@ -43,7 +43,11 @@ namespace sentinel {
 
 enum class ReportKind { kCalls, kFaults };
 
-// Registers a counter to report (at most 32 across the whole program). `name` must outlive the
+// The counter table's size for the whole program. Every hook the sentinel installs registers its
+// counters here; the sentinel's own total is pinned by src/quest/tests/integration_hooks_test.cpp.
+inline constexpr unsigned kMaxReportCounters = 48;
+
+// Registers a counter to report (at most kMaxReportCounters across the whole program). `name` must outlive the
 // reporter (a literal). Returns false, and logs `register_refused`, when the table is full or the
 // reporter is already running: every RegisterReportCounter call must come before StartReporter.
 bool RegisterReportCounter(const char* name, const std::atomic<std::uint64_t>* value,

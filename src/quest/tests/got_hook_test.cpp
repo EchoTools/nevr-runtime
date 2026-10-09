@@ -1323,21 +1323,21 @@ void ReporterStartStopRace() {
   QCHECK(!ReporterRunning());
 }
 
-// The counter table holds 32 across the whole program; the 33rd is refused and logged, and so is
-// any registration after the reporter has started.
+// The counter table holds kMaxReportCounters (48) across the whole program; the next one is refused
+// and logged, and so is any registration after the reporter has started.
 void ReporterCounterTableBound() {
+  static_assert(kMaxReportCounters == 48, "the reporter's capacity changed: update this test and ADR 0003");
   Prepare();
-  static const char* const kNames[33] = {
-      "c00", "c01", "c02", "c03", "c04", "c05", "c06", "c07", "c08", "c09", "c10",
-      "c11", "c12", "c13", "c14", "c15", "c16", "c17", "c18", "c19", "c20", "c21",
-      "c22", "c23", "c24", "c25", "c26", "c27", "c28", "c29", "c30", "c31", "c32"};
-  static std::atomic<std::uint64_t> values[33];
-  int accepted = 0;
-  for (int i = 0; i < 32; ++i) accepted += RegisterReportCounter(kNames[i], &values[i]) ? 1 : 0;
-  QCHECK(accepted == 32);
+  constexpr unsigned kTotal = kMaxReportCounters + 1;
+  static char names[kTotal][16];  // "c00".."c48": must outlive the reporter, like a literal
+  for (unsigned i = 0; i < kTotal; ++i) std::snprintf(names[i], sizeof(names[i]), "c%02u", i);
+  static std::atomic<std::uint64_t> values[kTotal];
+  unsigned accepted = 0;
+  for (unsigned i = 0; i < kMaxReportCounters; ++i) accepted += RegisterReportCounter(names[i], &values[i]) ? 1 : 0;
+  QCHECK(accepted == kMaxReportCounters);
   QCHECK(Errors() == 0);
-  QCHECK(!RegisterReportCounter(kNames[32], &values[32]));
-  QCHECK(Count(LogLevel::kError, "\"status\":\"register_refused\",\"counter\":\"c32\"") == 1);
+  QCHECK(!RegisterReportCounter(names[kMaxReportCounters], &values[kMaxReportCounters]));
+  QCHECK(Count(LogLevel::kError, "\"status\":\"register_refused\",\"counter\":\"c48\"") == 1);
   SetLogSink(&SilentSink);
   QCHECK(StartReporter(10, 20, 50));
   QCHECK(!RegisterReportCounter("after_start", &values[0]));  // registration order contract

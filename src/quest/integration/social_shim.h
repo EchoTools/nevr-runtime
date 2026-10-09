@@ -5,7 +5,7 @@
 
 namespace nevr_quest::integration {
 
-// quest_social::RegisterSocialReportCounters(): 10 of the reporter's 32 counters.
+// quest_social::RegisterSocialReportCounters(): 19 of the reporter's counters (hook_report.h).
 bool RegisterSocialCounters() noexcept;
 
 // quest_social::InstallSocialHook(true): builds the facade, arms the callback, redirects the slot.

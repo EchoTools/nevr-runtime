@@ -12,7 +12,7 @@ namespace {
 
 // Static storage, no heap. Every package that hooks registers its own counters (calls, faults,
 // outcomes), so this is sized for all of them together.
-constexpr unsigned kMaxCounters = 32;
+constexpr unsigned kMaxCounters = kMaxReportCounters;
 
 struct Counter {
   const char* name = nullptr;
