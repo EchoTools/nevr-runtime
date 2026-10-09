@@ -679,6 +679,47 @@ TEST(SocialFacade, AFriendRowIsInvitableOnlyWhileThePartyIsJoinableAndTheFriendI
   publish();
 }
 
+// Server-controlled: every PartyJoinNotify appends a member, but the game indexes a 10-entry member
+// JSON array by the reported count (CR15NetGame::PartyMemberData), so the count is capped at the array.
+TEST(SocialFacade, MemberCountNeverExceedsTheMemberJsonArray) {
+  using CountFn = std::uint32_t (*)(void*);
+  using IdFn = std::uint64_t* (*)(void*, std::uint64_t*, std::uint32_t);
+  using UpdateFn = void (*)(void*, const void*);
+  SocialRoster::Global().Clear();
+  SocialParty::Global().SetSelf(77, "Me");
+  SocialParty::Global().ResetParty();
+  void* object = SocialFacade::Object();
+  const Slot* vtable = Vtable(object);
+  std::uint8_t flags = 0;
+  const auto publish = [&] { reinterpret_cast<UpdateFn>(vtable[13])(object, &flags); };
+  const std::uint32_t clampedBefore = SocialFacade::TestMembersClamped();
+
+  FeedParty(SocialParty::Global(), "PartyCreateSuccess", U64s({7, 77}));
+  for (std::uint64_t id = 301; id <= 311; ++id) FeedParty(SocialParty::Global(), "PartyJoinNotify", U64s({7, id}));
+  ASSERT_EQ(SocialParty::Global().Snapshot().members.size(), 12U) << "the party model itself holds all twelve";
+  publish();
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[26])(object), 10U);
+  EXPECT_EQ(SocialFacade::TestMembersClamped(), clampedBefore + 1);
+  std::uint64_t id = 0;
+  reinterpret_cast<IdFn>(vtable[27])(object, &id, 9);
+  EXPECT_EQ(id, 309U) << "index 9 is the last reported member";
+  reinterpret_cast<IdFn>(vtable[27])(object, &id, 10);
+  EXPECT_EQ(id, 0U) << "index 10 names nobody";
+
+  publish();
+  EXPECT_EQ(SocialFacade::TestMembersClamped(), clampedBefore + 1) << "an unchanged clamp is counted once";
+
+  // The 10/11 boundary: exactly ten members is not clamped.
+  SocialParty::Global().ResetParty();
+  FeedParty(SocialParty::Global(), "PartyCreateSuccess", U64s({8, 77}));
+  for (std::uint64_t member = 301; member <= 309; ++member) FeedParty(SocialParty::Global(), "PartyJoinNotify", U64s({8, member}));
+  publish();
+  EXPECT_EQ(reinterpret_cast<CountFn>(vtable[26])(object), 10U);
+
+  SocialParty::Global().ResetParty();
+  publish();
+}
+
 TEST(SocialParty, TheGamesCreateRequestMakesOnePartyAndNoMore) {
   SocialParty::State state;
   state.SetSelf(100);
