@@ -515,10 +515,12 @@ if(BUILD_TESTING)
     # linked here — it is exercised by the differential server run.
     add_executable(test_service_map
       tests/test_service_map.cpp
+      tests/test_bridge_policy.cpp
       lifecycle/service_map.cpp
       lifecycle/service_redirect.cpp)
     set_source_files_properties(
       tests/test_service_map.cpp
+      tests/test_bridge_policy.cpp
       lifecycle/service_map.cpp
       lifecycle/service_redirect.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

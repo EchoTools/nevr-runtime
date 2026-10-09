@@ -90,6 +90,8 @@ Artifacts (`stdout.txt`, `windows.txt`, `results.txt`, the probe output) go to
   signature of a server that never got a service session (the offline config here
   produces it). It is a symptom of "no dispatch happened yet", not evidence of a
   broken hook.
+- The offline rig also writes `_local\config.yaml` with `services.allow_offline_server: true`.
+  A server with no `services.socket_uri` exits at start-up unless that key is set (#16).
 
 ## Adding a check
 
