@@ -56,11 +56,15 @@ class LoopbackGameServer final : public SessionRouter::GameTransport {
   void Attach(SessionRouter::Router* router) { router_ = router; }
 
   // Binds 127.0.0.1 on an ephemeral port and starts accepting. Returns the port, or 0 on failure (logged).
+  // Start() and Stop() are the startup owner's to call; they must NOT be called from a router callback
+  // or from a connection thread, because Stop() joins those threads while it holds lifecycleMutex_ (a
+  // thread that called Stop() on itself, or a Start() racing that join, would deadlock). The transport
+  // interface the router drives (Send/Close) never calls them.
   uint16_t Start();
   // Closes the listener and every connection, joins every thread. Each connection that completed its
-  // handshake reports OnGameClose to the router before this returns. Idempotent.
+  // handshake reports OnGameClose to the router before this returns. Idempotent. See the thread note above.
   void Stop();
-  uint16_t port() const { return port_; }
+  uint16_t port() const { return port_.load(std::memory_order_acquire); }
 
   // The URI the game must be redirected to: "ws://127.0.0.1:<port>/<token>/". The token is drawn from the
   // kernel's random source at Start(), is never logged, and every upgrade must carry it (path or query) or
@@ -85,8 +89,9 @@ class LoopbackGameServer final : public SessionRouter::GameTransport {
   void Reap();
   void Log(SessionRouter::LogLevel level, const std::string& line);
   // Accepts every queued connection. Returns 0, or the errno of an accept() failure that says the listener
-  // itself is broken; sets *resourceBlocked when accept() failed for lack of descriptors or memory.
-  int AcceptPending(bool* resourceBlocked);
+  // itself is broken; sets *resourceBlocked when accept() failed for lack of descriptors or memory, and
+  // *identityLost when the descriptor stopped being our listening socket mid-drain (re-checked per accept).
+  int AcceptPending(bool* resourceBlocked, bool* identityLost);
   // Accept thread only. Proves listenFd_ is still the socket Start() made and still listening; on a loss,
   // reports it and drops the descriptor (closing it only when it is still ours).
   void CheckListener(short revents, int acceptErrno);
@@ -110,8 +115,9 @@ class LoopbackGameServer final : public SessionRouter::GameTransport {
   std::atomic<uint64_t> listenerLosses_{0};
   std::atomic<uint64_t> listenerRestores_{0};
   int wakeFds_[2] = {-1, -1};
-  uint16_t port_ = 0;
-  std::string token_;  // written once in Start() before any thread runs; read-only afterwards
+  std::atomic<uint16_t> port_{0};  // set by Start, cleared by Stop; read unlocked by port()
+  mutable std::mutex uriMutex_;    // guards token_ and the (port, token) pair LoopbackUri() reads
+  std::string token_;              // set by Start, cleared by Stop, under uriMutex_
   std::atomic<uint64_t> rejected_{0};
   std::atomic<uint64_t> idleClosed_{0};
   std::atomic<bool> stop_{false};

@@ -17,6 +17,7 @@
 // when the session starts, mirrors the PC route selection (EvrCodec::SelectRemoteBearer), and never
 // stores, logs or caches a value. With neither a JWT nor URL credentials the session is not started.
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -68,7 +69,7 @@ class SessionBridge {
   std::unique_ptr<ConnectorRemoteTransport> remotes_;
   std::unique_ptr<LoopbackGameServer> server_;
   std::unique_ptr<SessionRouter::Router> router_;
-  bool started_ = false;
+  std::atomic<bool> started_{false};  // Start/Stop are the owner's to call (see LoopbackGameServer)
 };
 
 }  // namespace quest_net

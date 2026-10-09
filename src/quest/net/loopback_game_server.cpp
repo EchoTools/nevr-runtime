@@ -153,8 +153,10 @@ void LoopbackGameServer::Log(LogLevel level, const std::string& line) {
 }
 
 std::string LoopbackGameServer::LoopbackUri() const {
-  if (port_ == 0 || token_.empty()) return std::string();
-  return "ws://127.0.0.1:" + std::to_string(port_) + "/" + token_ + "/";
+  const std::lock_guard<std::mutex> lock(uriMutex_);
+  const uint16_t port = port_.load(std::memory_order_acquire);
+  if (port == 0 || token_.empty()) return std::string();
+  return "ws://127.0.0.1:" + std::to_string(port) + "/" + token_ + "/";
 }
 
 uint16_t LoopbackGameServer::Start() {
@@ -163,7 +165,7 @@ uint16_t LoopbackGameServer::Start() {
   // Already running (even with no live descriptor: after a failed restore the accept thread keeps
   // retrying with listenFd_ < 0). Re-entry must not reassign acceptThread_ while it is joinable --
   // that calls std::terminate -- so return the current port instead.
-  if (acceptThread_.joinable() || listenFd_.load(std::memory_order_acquire) >= 0) return port_;
+  if (acceptThread_.joinable() || listenFd_.load(std::memory_order_acquire) >= 0) return port_.load(std::memory_order_acquire);
   uint8_t raw[kTokenHexLength / 2];
   if (!RandomBytes(raw, sizeof(raw))) {
     nlohmann::json record = Record(kListenerEvent, "start_failed");
@@ -171,7 +173,10 @@ uint16_t LoopbackGameServer::Start() {
     Log(LogLevel::Error, Dump(record));
     return 0;
   }
-  token_ = HexEncode(raw, sizeof(raw));
+  {
+    const std::lock_guard<std::mutex> lock(uriMutex_);
+    token_ = HexEncode(raw, sizeof(raw));
+  }
   volatile uint8_t* scrub = raw;
   for (std::size_t i = 0; i < sizeof(raw); ++i) scrub[i] = 0;
   struct stat st {};
@@ -188,15 +193,15 @@ uint16_t LoopbackGameServer::Start() {
   listenFd_.store(listenFd, std::memory_order_release);
   listenIno_ = st.st_ino;
   listenDev_ = st.st_dev;
-  port_ = port;
+  port_.store(port, std::memory_order_release);
   MakePipe(wakeFds_);
   stop_ = false;
   acceptThread_ = std::thread([this]() { AcceptLoop(); });
   nlohmann::json record = Record(kListenerEvent, "listening");
   record["address"] = "127.0.0.1";
-  record["port"] = port_;
+  record["port"] = port;
   Log(LogLevel::Info, Dump(record));
-  return port_;
+  return port;
 }
 
 void LoopbackGameServer::Stop() {
@@ -227,8 +232,13 @@ void LoopbackGameServer::Stop() {
   wakeFds_[0] = -1;
   wakeFds_[1] = -1;
   nlohmann::json record = Record(kListenerEvent, "stopped");
-  record["port"] = port_;
+  record["port"] = port_.load(std::memory_order_acquire);
   Log(LogLevel::Info, Dump(record));
+  port_.store(0, std::memory_order_release);  // a later Start() rebinds; port()/LoopbackUri() read 0 meanwhile
+  {
+    const std::lock_guard<std::mutex> lock(uriMutex_);
+    token_.clear();
+  }
 }
 
 std::shared_ptr<LoopbackGameServer::Conn> LoopbackGameServer::Find(GameId game) {
@@ -284,7 +294,7 @@ void LoopbackGameServer::AcceptLoop() {
       // 403; CheckListener runs only periodically, so the window would be up to listenerCheckMs. The
       // pre-check closes it: a replaced descriptor is never accepted on, it is handed to CheckListener.
       if (ListenerStillOurs()) {
-        acceptErrno = AcceptPending(&resourceBlocked);
+        acceptErrno = AcceptPending(&resourceBlocked, &identityLost);
       } else {
         identityLost = true;
       }
@@ -312,9 +322,17 @@ bool LoopbackGameServer::ListenerStillOurs() const {
   return S_ISSOCK(st.st_mode) && st.st_ino == listenIno_ && st.st_dev == listenDev_;
 }
 
-int LoopbackGameServer::AcceptPending(bool* resourceBlocked) {
-  const int listenFd = listenFd_.load(std::memory_order_acquire);
+int LoopbackGameServer::AcceptPending(bool* resourceBlocked, bool* identityLost) {
   for (;;) {
+    // Re-prove the listener on every pass, not just before the first accept: its number could be
+    // closed and reused by another socket mid-drain, and the next accept4 would then take that
+    // socket's connections. A changed identity stops the drain and tells the caller to run
+    // CheckListener this pass (listenFd_ now resolves fd_replaced/fd_closed).
+    if (!ListenerStillOurs()) {
+      *identityLost = true;
+      return 0;
+    }
+    const int listenFd = listenFd_.load(std::memory_order_acquire);
     const int fd = ::accept4(listenFd, nullptr, nullptr, SOCK_CLOEXEC);
     if (fd < 0) {
       const int err = errno;
@@ -396,7 +414,7 @@ void LoopbackGameServer::CheckListener(short revents, int acceptErrno) {
   listenerLosses_.fetch_add(1);
   nlohmann::json record = Record(kListenerEvent, "lost");
   record["class"] = cls;
-  record["port"] = port_;
+  record["port"] = port_.load(std::memory_order_acquire);
   record["fd"] = listenFd;
   record["revents"] = static_cast<int>(revents);
   record["accept_errno"] = acceptErrno;
@@ -412,12 +430,12 @@ void LoopbackGameServer::TryRestoreListener() {
   struct stat st {};
   int err = 0;
   uint16_t port = 0;
-  const int fd = OpenListener(port_, &st, &port, &err);
+  const int fd = OpenListener(port_.load(std::memory_order_acquire), &st, &port, &err);
   if (fd < 0) {
     if (err != lastRestoreErrno_) {
       lastRestoreErrno_ = err;
       nlohmann::json record = Record(kListenerEvent, "restore_failed");
-      record["port"] = port_;
+      record["port"] = port_.load(std::memory_order_acquire);
       record["errno"] = err;
       record["retry_ms"] = config_.listenerCheckMs;
       Log(LogLevel::Error, Dump(record));
@@ -582,7 +600,10 @@ void LoopbackGameServer::ConnLoop(std::shared_ptr<Conn> conn) {
       const char* refusal = nullptr;
       if (request.hasOrigin) {
         refusal = "origin_header_present";
-      } else if (!TargetCarriesToken(request.target, token_)) {
+      } else if (![this, &request] {
+                   const std::lock_guard<std::mutex> lock(uriMutex_);
+                   return TargetCarriesToken(request.target, token_);
+                 }()) {
         refusal = "access_token_missing_or_wrong";
       }
       if (refusal != nullptr) {
