@@ -269,6 +269,21 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
         self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
 
+    def test_broadcaster_hook_entries_are_counted_only_by_hook_liveness(self):
+        # Issue #33: mode_patches.cpp kept its own entry counters and a periodic log line that
+        # duplicated HookLiveness::Report for the same two hooks. HookLiveness is the one instrument.
+        patches = strip_comments((ROOT / "src/runtime/patch/mode_patches.cpp").read_text())
+        for gone in ("g_listenHookEntries", "g_dispatchHookEntries", "LogBroadcasterHookStats"):
+            self.assertNotIn(gone, patches)
+        for hook, marker in (("static INT16 EngineEntityLookupHook(", "kBroadcasterListen"),
+                             ("static VOID EngineEntityPropDispatchHook(", "kBroadcasterReceiveLocal")):
+            self.assertIn(f"HookLiveness::Mark(HookLiveness::{marker})", extract_braced_function(patches, hook))
+        tick = strip_comments((ROOT / "src/runtime/frame/tick.cpp").read_text())
+        self.assertNotIn("LogBroadcasterHookStats", tick)
+        for gone in ("broadcaster_hook_stats.cpp", "broadcaster_hook_stats.h"):
+            self.assertFalse((ROOT / "src/runtime/patch" / gone).exists(), f"{gone} has no caller and was deleted")
+        self.assertIn('HookLiveness::Report("periodic")', tick)
+
     def test_getsymbol_hook_validates_its_prologue(self):
         # Issue #254: the CSysDLL_GetSymbol detour (echovr.exe 0x1400eaef0) was written blind. Binary
         # patches require prologue validation (AGENTS.md Guardrails); a mismatch marks the boot hook failed.
