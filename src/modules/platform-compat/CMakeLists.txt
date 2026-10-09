@@ -4,16 +4,11 @@
 # — separate deployable DLLs are a failure mode when they must always ship
 # together).
 #
-# Includes winhttp_stub (libcurl-backed COM stub) since the CoCreateInstance
-# hook redirects WinHTTP COM creation to it.
-
 find_package(CURL REQUIRED)
 
 add_library(platform_compat STATIC
     src/platform_compat.cpp
 )
-# winhttp_stub.cpp is already compiled directly into nevr_runtime
-# (src/runtime/CMakeLists.txt:24) — linking it here would duplicate symbols.
 
 target_compile_definitions(platform_compat PRIVATE USE_MINHOOK NEVR_MODULE_EXPORTS)
 

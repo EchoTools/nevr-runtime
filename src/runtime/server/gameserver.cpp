@@ -17,6 +17,7 @@
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
 #include "runtime/server/protobuf_transport.h"
+#include "runtime/server/serialized_mint.h"
 #include "runtime/server/serverdb_uri.h"
 #include "runtime/server/session_success_dispatch.h"
 #include "runtime/server/session_unregister.h"
@@ -192,8 +193,8 @@ void OnTcpMsgRegistrationFailure(GameServerLib* self, VOID*, EchoVR::TcpPeer, VO
   // anything — it would sit idle for hours with nobody watching. Fail fast.
   // ServerFatal (not FatalError) because it is mode-gated: in client mode this
   // is a Warning and execution continues.
-  // #35: the rejection payload has no protobuf form, so the cause is whatever
-  // bytes the server sent, quoted (failure_detail.h).
+  // #35/#243: the rejection payload is one BroadcasterRegistrationFailureCode
+  // byte, decoded by failure_detail.h.
   const std::string rejection = FailureDetail::DescribeRegistrationRejection(msg, msgSize);
   ServerFatal("GameServer registration rejected by ServerDB: %s", rejection.c_str());
 }
@@ -874,6 +875,7 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   // game's teardown (lobby unregistration + ServerDB close) still runs behind
   // it, and we exit cleanly in Terminate() below.
   RearmConsoleCtrlHandler();
+  NotifyGameServerLibStarted();
 
 #if _DEBUG
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] EchoVR base address = 0x%p", EchoVR::g_GameBaseAddress);
@@ -1330,35 +1332,24 @@ static std::string AuthenticateServer(std::string& reason) {
         const std::string diagnostic =
             LogDiagnostics::FormatCurlFailureDiagnostic("[NEVR.GAMESERVER] Server auth failed ", static_cast<int>(res));
         Log(EchoVR::LogLevel::Warning, "%s", diagnostic.c_str());
-        reason = "password auth: request to " + std::string(httpUri) + " failed: " + curl_easy_strerror(res) +
-                 " (curl code " + std::to_string(static_cast<int>(res)) + ")";
+        reason = FailureDetail::PasswordAuthRequestFailed(httpUri, curl_easy_strerror(res), static_cast<int>(res));
         return "";
     }
 
     if (http_code != 200) {
         LogDiagnostics::LogHttpResponseSummary(EchoVR::LogLevel::Warning,
                                                "[NEVR.GAMESERVER] Server auth rejected ", http_code, response);
-        reason = "password auth: " + std::string(httpUri) + " answered HTTP " + std::to_string(http_code);
+        reason = FailureDetail::PasswordAuthHttpStatus(httpUri, http_code);
         return "";
     }
 
-    try {
-        auto j = nlohmann::json::parse(response);
-        std::string token = j.value("token", "");
-        if (token.empty()) {
-            Log(EchoVR::LogLevel::Warning,
-                "[NEVR.GAMESERVER] Server auth returned empty token");
-            reason = "password auth: the response carried no token";
-        } else {
-            Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Server authenticated (token acquired)");
-        }
-        return token;
-    } catch (const std::exception&) {
-        Log(EchoVR::LogLevel::Warning,
-            "[NEVR.GAMESERVER] Server auth response parse error");
-        reason = "password auth: the response was not valid JSON";
-        return "";
+    std::string token = FailureDetail::ExtractAuthToken(response, reason);
+    if (token.empty()) {
+        Log(EchoVR::LogLevel::Warning, "[NEVR.GAMESERVER] Server auth response carried no usable token");
+    } else {
+        Log(EchoVR::LogLevel::Info, "[NEVR.GAMESERVER] Server authenticated (token acquired)");
     }
+    return token;
 }
 
 // Mints a ServerDB access token: refresh-token exchange first, password auth as
@@ -1366,11 +1357,17 @@ static std::string AuthenticateServer(std::string& reason) {
 // RequestRegistration (game thread) and, since #39, from the WebSocketClient's
 // token refresher on ixwebsocket's thread after ServerDB answers 401. Config
 // reads go through NevrCfgGetFlat's mutex-guarded intern pool. RefreshAuthToken
-// also rewrites the on-disk credential cache (auth_token_refresh.h SaveAuthToken);
-// the refresher is installed just before Connect, after RequestRegistration's own
-// acquisition has returned, so only a second RequestRegistration racing a 401
-// could overlap the two.
+// also rewrites the on-disk credential cache (auth_token_refresh.h SaveAuthToken)
+// without a lock, and three callers can mint at once (this function on the game
+// thread, the ServerDB socket's 401 refresher, the telemetry socket's), so the
+// whole mint runs under ServerDbAuth::RunSerializedMint.
+static std::string AcquireServerDbTokenUnserialized(std::string& reason);
+
 static std::string AcquireServerDbToken(std::string& reason) {
+    return ServerDbAuth::RunSerializedMint([&reason]() { return AcquireServerDbTokenUnserialized(reason); });
+}
+
+static std::string AcquireServerDbTokenUnserialized(std::string& reason) {
     std::string token;
     auto auth = LoadCachedAuthToken();
     if (auth.HasValidToken()) {

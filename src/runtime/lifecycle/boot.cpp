@@ -512,12 +512,6 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   RefreshModuleCache();
   ResolveShutdownDependencies();  // N62
 
-  // N87: re-arm the console ctrl handler so CTRL+C works in client mode.
-  // Our handler is installed behind the game's during Initialize(); this
-  // re-registers it at the front so it fires before the game's handler.
-  // Previously only called from the server path (GameServerLib::Terminate).
-  RearmConsoleCtrlHandler();
-
   Log(EchoVR::LogLevel::Info,
       "[NEVR.BOOT] runtime bootstrap complete early_config=%s bridge=%s port=%u",
       g_earlyConfigPtr != nullptr ? "true" : "false", IsWebSocketBridgeActive() ? "true" : "false",
