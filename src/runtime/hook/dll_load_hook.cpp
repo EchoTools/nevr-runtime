@@ -139,8 +139,8 @@ void Install() {
 #ifdef _WIN32
     // N129. This is the N75/N89 search-path hardening — it hooks LoadLibrary so a
     // DLL dropped next to the exe cannot satisfy a dependency ahead of the real
-    // one. The old code accumulated `ok &=` across all four variants and logged a
-    // single "OK"/"PARTIAL", which hid WHICH variant failed and WHY. In the one
+    // one. A single "OK"/"PARTIAL" across all four variants would hide WHICH
+    // variant failed and WHY. In the one
     // path where a silently-unhooked LoadLibrary is a hijack gap, that is the worst
     // place to be vague. Report each variant and its MH_STATUS, mirroring N126/N128
     // for the PatchDetour path. (This path does not go through PatchDetour, so it

@@ -1318,9 +1318,6 @@ void InstallFatalErrorHandler() {
 // resolving WsBridge_Shutdown ONCE at init; N105 satisfies it completely by
 // removing the lookup altogether. The bridge is compiled into this DLL (N92),
 // so PerformGracefulShutdown calls StopWebSocketBridgeListener() directly.
-//
-// The old lookup targeted ws_bridge.dll, which has not been built since the N92
-// fold — it returned null on every run and the listener was never stopped.
 void ResolveShutdownDependencies() {
   Log(EchoVR::LogLevel::Info,
       "[NEVR.PATCH] shutdown deps resolved ws_bridge=in-process "

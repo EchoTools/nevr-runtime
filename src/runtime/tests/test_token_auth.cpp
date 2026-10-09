@@ -387,7 +387,7 @@ TEST(DevicePollResponse, WrongTypedVerifiedFieldsRemainErrorAndExpiryTypesStayAb
   EXPECT_FALSE(wrongExpiry.refresh_token_expires_in.has_value());
 }
 
-// RFC 6749 §5.1 renamed the poll response fields (EchoTools/nakama f945f631d).
+// The poll response carries the RFC 6749 §5.1 field `access_token` and the deprecated `token`.
 // The server sends access_token and token with the same value, so a test where
 // they are EQUAL cannot tell "read the new name" from "read the old one". They
 // differ here specifically so preference is observable.
@@ -463,8 +463,8 @@ TEST(RefreshTokenExpiry, ServerValueWinsAndFallbackOnlyFillsSilence) {
   EXPECT_EQ(ResolveRefreshTokenExpirySec(kNow, 7200), kNow + 7200U);
   EXPECT_EQ(ResolveRefreshTokenExpirySec(kNow, std::nullopt),
             kNow + kFallbackRefreshTokenLifetimeSec);
-  // A server-stated lifetime SHORTER than the old hardcoded 30 days must shorten
-  // the client's belief — that is the whole failure the constant was hiding.
+  // A server-stated lifetime SHORTER than the fallback lifetime (30 days) must shorten
+  // the client's belief — a fixed assumption would hide that.
   EXPECT_LT(ResolveRefreshTokenExpirySec(kNow, 86400),
             ResolveRefreshTokenExpirySec(kNow, std::nullopt));
 }

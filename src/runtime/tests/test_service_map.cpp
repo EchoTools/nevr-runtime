@@ -411,7 +411,7 @@ TEST(ServiceMap, S4b_TelemetryTokenOptionalNeverFailsLoud) {
   EXPECT_FALSE(LookupFlat(cfg, "telemetry_uri").has_value());
 }
 
-// Issue #21: _local/config.json is optional, so the stock-engine key it used to
+// Issue #21: _local/config.json is optional, so the stock-engine key it would
 // supply comes from NEVR. Owner-chosen value; only publisher_lock is supplied —
 // every other key is left to the engine's own default.
 TEST(ServiceMap, I21_GameNativeDefaultSuppliesPublisherLockOnly) {

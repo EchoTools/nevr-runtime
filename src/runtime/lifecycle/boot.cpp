@@ -326,7 +326,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
       //
       // g_noOvr is not "only a global": it drives NEVR_MODULE_HOST_IS_NOOVR
       // (:75) the NEVR_MODULE_HOST_IS_NOOVR flag the modules read, which is the
-      // behaviour -noovr exists to produce (the login platform code no longer depends on it:
+      // behaviour -noovr exists to produce (the login platform code does not depend on it:
       // SelectPlatformCode always returns OVR_ORG, 4). The game's own
       // -noovr-requires--spectatorstream assert is bypassed by
       // PatchNoOvrRequiresSpectatorStream, inert unless the token is present.
