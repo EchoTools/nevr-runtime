@@ -484,16 +484,19 @@ void ShutdownIntegration() noexcept {
   // a DT_NEEDED dependency and is never unloaded (hook_report.h states the same for the reporter).
   Runtime& rt = R();
   try {
-    if (IntegratedBridge* const bridge = rt.bridge.exchange(nullptr)) {
-      bridge->Stop();
-      delete bridge;
-    }
+    // The token-auth thread runs PollTokenAuthState, which loads rt.bridge and calls into it every 2 s: it is
+    // stopped and joined first, so no call can reach the bridge once it is deleted. (Other threads that reach
+    // the bridge, the social facade's sender among them, are the game's own and outlive this function.)
     {
       const std::lock_guard<std::mutex> lock(rt.pollMutex);
       rt.stopPoll = true;
     }
     rt.pollCv.notify_all();
     if (rt.authThread.joinable()) rt.authThread.join();
+    if (IntegratedBridge* const bridge = rt.bridge.exchange(nullptr)) {
+      bridge->Stop();
+      delete bridge;
+    }
     if (nevr::quest_auth::QuestTokenAuth* const auth = rt.auth.exchange(nullptr)) {
       auth->Stop();
       delete auth;
