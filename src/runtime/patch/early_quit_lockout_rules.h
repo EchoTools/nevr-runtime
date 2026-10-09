@@ -1,7 +1,7 @@
 #pragma once
 // The early quit lockout's decisions, apart from the hooks that apply them (early_quit_lockout.cpp), so they
-// are unit-tested without the game. Field map and evidence: echovr-reconstruction
-// docs/earlyquit_field_analysis.md (dc719052).
+// are unit-tested without the game. Field map and evidence:
+// echovr-reconstruction docs/earlyquit_field_analysis.md (dc719052).
 //
 // The game service's penalty timestamp (nakama EarlyQuitPlayerState.PenaltyTimestamp) is the lockout's
 // absolute expiry, in Unix seconds; -1 or 0 means no penalty. It reaches the client as `penaltyts`, through

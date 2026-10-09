@@ -269,6 +269,15 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
         self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
 
+    def test_verify_server_supplies_a_config_when_the_install_has_none(self):
+        # Issue #245: a server with no config.yaml gets no embedded defaults and refuses to boot without a
+        # login bridge (#16), so every verify-server.sh flag set died at boot. The script deploys the
+        # offline-boot config the Windows-VM rig uses, only when the install has none.
+        script = (ROOT / "verify-server.sh").read_text()
+        self.assertRegex(script, r'if \[ ! -e "\$GAME_ROOT/echovr/_local/config\.yaml" \]')
+        self.assertIn("allow_offline_server: true", script)
+        self.assertRegex(script, r'deploy "\$OUT/offline-config\.yaml" "\$GAME_DIR/\.\./\.\./_local/config\.yaml"')
+
     def test_token_mints_are_serialized(self):
         # Issue #246: the ServerDB refresher, the telemetry refresher and RequestRegistration all
         # reach RefreshAuthToken -> SaveAuthToken (an unlocked truncating write of .credentials.json).
