@@ -1935,7 +1935,15 @@ vcpkg-pin-check:
         echo "Fix: git -C ~/.vcpkg checkout --detach $want   (or bump .vcpkg-commit on purpose, in its own PR)." >&2
         exit 1
     fi
-    echo "vcpkg-pin-check: OK ($have)"
+    # The pinned ixwebsocket port links -lCrypt32; the MinGW package ships libcrypt32.a only and ld on
+    # Linux is case-sensitive. CI creates the link; a development machine needs it too (#294).
+    lib=${NEVR_MINGW_LIB:-/usr/x86_64-w64-mingw32/lib}
+    if [ ! -e "$lib/libCrypt32.a" ]; then
+        echo "vcpkg-pin-check: FAIL — $lib/libCrypt32.a is missing; the legacy gameserver will not link (cannot find -lCrypt32)." >&2
+        echo "Fix: sudo ln -s libcrypt32.a $lib/libCrypt32.a   (CI does the same, see .github/workflows/build.yml)" >&2
+        exit 1
+    fi
+    echo "vcpkg-pin-check: OK ($have, libCrypt32.a present)"
 
 # Install vcpkg dependencies for MinGW cross-compilation (runs only for mingw presets)
 [private]
