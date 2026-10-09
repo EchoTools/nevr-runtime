@@ -727,6 +727,82 @@ test-quest-hooks-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed
     "$out/got_pinned_test" "$out/lib/lib/arm64-v8a/libr15.so" "$out/lib/lib/arm64-v8a/libpnsradmatchmaking.so" \
         "$out/lib/lib/arm64-v8a/libpnsovr.so"
 
+# Quest social provider on the host (docs/adr/0003, "Social provider"): the ABI pins against the
+# recorded vtable, the facade driven through its vtable, the hook decision through the real callback
+# thunk, and the exception contract. The frames that sit under a call into the game
+# (social_game_calls.cpp, social_install.cpp) and everything that includes callback_thunk.h are built
+# with -fno-exceptions, and tools/check_quest_social_frames.sh pins that their objects carry no
+# personality and no LSDA (with a negative control on the object that does). No NDK, no Android, no
+# APK. Fail-close.
+test-quest-social:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="build/quest-social-host"
+    mkdir -p "$out"
+    on=(g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel)
+    off=("${on[@]}" -fno-exceptions)
+    "${on[@]}" src/quest/tests/social_abi_test.cpp -o "$out/social_abi_test"
+    "$out/social_abi_test" src/quest/tests/fixtures/cnsovrsocial_vtable.txt
+    "${on[@]}" -c src/quest/social/social_facade.cpp -o "$out/social_facade.o"
+    "${on[@]}" -c src/quest/social/social_frames.cpp -o "$out/social_frames.o"
+    "${on[@]}" -c src/quest/sentinel/hook_log.cpp -o "$out/hook_log.o"
+    "${off[@]}" -c src/quest/sentinel/got_hook.cpp -o "$out/got_hook.o"
+    "${off[@]}" -c src/quest/sentinel/hook_report.cpp -o "$out/hook_report.o"
+    "${off[@]}" -c src/quest/social/social_game_calls.cpp -o "$out/social_game_calls.o"
+    "${off[@]}" -c src/quest/social/social_install.cpp -o "$out/social_install.o"
+    "${off[@]}" -c src/quest/social/social_invite_gate.cpp -o "$out/social_invite_gate.o"
+    # The friend-name decoder, as the Quest build compiles it: no static registration (the sentinel carries no
+    # dynamic initializer; InstallSocialHook registers it).
+    "${on[@]}" -DNEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION -c src/runtime/compat/social_names.cpp -o "$out/social_names.o"
+    # The frames live across a call into the game carry no exception machinery.
+    tools/check_quest_social_frames.sh nm readelf \
+        "$out/social_game_calls.o=SlotUpdateEntry" "$out/social_game_calls.o=SlotResetEntry" \
+        "$out/social_install.o=OnSocial" "$out/social_invite_gate.o=OnBoolean"
+    if err="$(tools/check_quest_social_frames.sh nm readelf "$out/social_facade.o=Facade" 2>&1)"; then
+        echo "test-quest-social: the frame checker accepted an object with landing pads (it is blind)" >&2
+        exit 1
+    fi
+    grep -q 'personality' <<<"$err" || { echo "test-quest-social: the negative control failed for another reason: $err" >&2; exit 1; }
+    "${on[@]}" src/quest/tests/social_facade_test.cpp "$out/social_facade.o" "$out/social_frames.o" \
+        "$out/social_game_calls.o" "$out/hook_log.o" -o "$out/social_facade_test" -ldl -pthread
+    "$out/social_facade_test"
+    "${on[@]}" src/quest/tests/social_names_test.cpp "$out/social_facade.o" "$out/social_frames.o" \
+        "$out/social_game_calls.o" "$out/hook_log.o" "$out/social_names.o" -o "$out/social_names_test" -ldl -pthread -lzstd
+    "$out/social_names_test"
+    "${off[@]}" src/quest/tests/social_install_test.cpp "$out/social_install.o" "$out/social_facade.o" \
+        "$out/social_game_calls.o" "$out/got_hook.o" "$out/hook_log.o" "$out/hook_report.o" "$out/social_names.o" \
+        "$out/social_invite_gate.o" -o "$out/social_install_test" -ldl -pthread -lzstd
+    timeout 300 "$out/social_install_test"  # a hang is a failure, not a stuck gate
+
+# The social pins against the real libr15.so and libpnsovr.so (docs/adr/0003). Extracts both from
+# the store APK, checks their SHA-256, runs src/quest/tests/social_pinned_test.cpp, and checks that
+# the recorded vtable (src/quest/tests/fixtures/cnsovrsocial_vtable.txt) is what the library holds.
+# Fail-close, including when the APK is absent (58 MB, not in the repository), so it is not part of
+# `just verify`.
+test-quest-social-pinned apk="build/android-arm64/repack/r15_nevr-sentinel_signed.apk":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    apk="{{ apk }}"
+    [ -f "$apk" ] || { echo "test-quest-social-pinned: pinned APK not found: $apk" >&2; exit 1; }
+    out="build/quest-social-pinned"
+    rm -rf "$out"; mkdir -p "$out/lib"
+    unzip -o -q "$apk" lib/arm64-v8a/libr15.so lib/arm64-v8a/libpnsovr.so -d "$out/lib"
+    lib="$out/lib/lib/arm64-v8a"
+    echo "8dd9a961b9dca8566069a4f65b3ddee9c65682c4e9c91a6d41e3c5727b1d8b20  $lib/libr15.so" | sha256sum -c -
+    echo "26e9a216a710d42a303346a4ca5b84037ff38250ea725dc7112b055fcacada79  $lib/libpnsovr.so" | sha256sum -c -
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel -c src/quest/social/social_facade.cpp \
+        -o "$out/social_facade.o"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -DNEVR_SOCIAL_NAMES_NO_STATIC_REGISTRATION -c \
+        src/runtime/compat/social_names.cpp -o "$out/social_names.o"
+    g++ -std=c++17 -fno-exceptions -Wall -Wextra -Werror -Isrc -Isrc/quest/sentinel \
+        src/quest/tests/social_pinned_test.cpp src/quest/social/social_install.cpp src/quest/social/social_invite_gate.cpp \
+        src/quest/social/social_game_calls.cpp "$out/social_facade.o" "$out/social_names.o" \
+        src/quest/sentinel/got_hook.cpp src/quest/sentinel/hook_log.cpp src/quest/sentinel/hook_report.cpp \
+        -o "$out/social_pinned_test" -ldl -pthread -lzstd
+    "$out/social_pinned_test" "$lib/libr15.so" "$lib/libpnsovr.so"
+    "$out/social_pinned_test" --dump "$lib/libpnsovr.so" > "$out/vtable.txt"
+    diff -u src/quest/tests/fixtures/cnsovrsocial_vtable.txt "$out/vtable.txt"
+
 # --- Verify (closed-loop gate) ---
 
 # Aggregate verify gate for the all-the-way-down canon: build everything, then run
@@ -749,6 +825,7 @@ verify:
     just test-quest-router
     just test-quest-tls
     just test-quest-redirect
+    just test-quest-social
     timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_reap_merged tools.tests.test_check_quest_static_init tools.tests.test_executable_scripts -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.

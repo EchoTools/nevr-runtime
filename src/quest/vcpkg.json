@@ -10,6 +10,7 @@
         "ssl",
         "websockets"
       ]
-    }
+    },
+    "zstd"
   ]
 }
