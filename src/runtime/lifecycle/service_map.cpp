@@ -31,7 +31,7 @@ std::string FlatKeyToYamlPath(const std::string& flatKey) {
       // #16 — opt-in for a dedicated server that boots with no login bridge (offline rigs). Without
       // it a server with no socket_uri is fatal (bridge_policy.h).
       {"nevr_allow_offline_server", "services.allow_offline_server"},
-      // S4b — gameserver.cpp's ServerDB DIAL URI (the token route, e.g. /nevr).
+      // S4b — gameserver_serverdb.cpp's ServerDB DIAL URI (the token route, e.g. /nevr).
       // DISTINCT from serverdb_host -> services.serverdb (S3, the redirect HOST):
       // one is the address the gameserver dials, the other is a service-endpoint
       // override the game's URL producer rewrites through. Different keys, no

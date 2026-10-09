@@ -1,6 +1,7 @@
 #pragma once
 
-// Helpers shared by gameserver.cpp (lifecycle, ServerDB socket) and gameserver_callbacks.cpp
+// Helpers shared by gameserver.cpp (lifecycle), gameserver_serverdb.cpp (ServerDB socket) and
+// gameserver_callbacks.cpp
 // (broadcaster/TCP callback registration and the handlers it registers). Not part of the
 // GameServerLib interface.
 

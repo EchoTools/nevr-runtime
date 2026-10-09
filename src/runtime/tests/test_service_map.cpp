@@ -315,7 +315,7 @@ TEST(ServiceMap, ResolveRedirect_SharedQuestVectors) {
 }
 
 // ---------------------------------------------------------------------------
-// S4b — gameserver.cpp reads. The scalar auth/services/telemetry keys resolve
+// S4b — gameserver_serverdb.cpp and gameserver_telemetry.cpp reads. The scalar auth/services/telemetry keys resolve
 // through the same flat->path map that config.cpp/ws_bridge use.
 // ---------------------------------------------------------------------------
 TEST(ServiceMap, LookupFlat_S4bGameserverScalarKeysResolve) {

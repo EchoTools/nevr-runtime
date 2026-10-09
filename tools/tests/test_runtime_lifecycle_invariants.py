@@ -394,9 +394,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # rewrite must run for every load notification. The pure Apply() is unit-tested; the property
         # that OnDllLoaded does not guard it lives here.
         source = strip_comments((ROOT / "src/runtime/patch/pnsrad_enabler.cpp").read_text())
-        body = extract_braced_function(source, "static VOID CALLBACK OnDllLoaded(") if "static VOID CALLBACK OnDllLoaded(" in source else None
-        if body is None:
-            body = source[source.index("OnDllLoaded"):]
+        body = extract_braced_function(source, "static void CALLBACK OnDllLoaded(")
         start = body.index('"pnsradmatchmaking.dll"')
         branch = body[start:body.index("PatchMatchmakingHost(", start)]
         self.assertNotRegex(branch, r"\bstatic\b|Patched|\bonce\b|\bdone\b",
@@ -433,7 +431,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
     def test_both_registration_sites_use_the_shared_envelope_builder(self):
         # Issue #46: the initial registration and the post-reconnect re-registration built the same
         # envelope field by field in two places. Both go through BuildRegistrationEnvelope.
-        # gameserver.cpp holds the initial registration, gameserver_callbacks.cpp the re-registration.
+        # gameserver_serverdb.cpp holds the initial registration, gameserver_callbacks.cpp the re-registration.
         server = strip_comments(gameserver_text())
         self.assertEqual(len(re.findall(r"GameServer::BuildRegistrationEnvelope\s*\(", server)), 2)
         self.assertNotIn("mutable_game_server_registration()", server)

@@ -466,10 +466,9 @@ class PluginLoadRun {
       continue;
     }
 
-    // N84: re-verify hooked addresses after this plugin's init may have
-    // installed its own detours (see the full comment in the original; moved
-    // here as the guard is unchanged from S6 except the variables are now
-    // on the staged struct).
+    // N84: re-verify hooked addresses after this plugin's init may have installed its own detours.
+    // A plugin that re-hooked an address this runtime already owns undoes our patch there, so that
+    // is fatal on a server.
     if (s.initKind != PluginInitKind::None) {
       const int collisions = HookGuard::VerifyAll(s.item.file.c_str());
       if (collisions > 0) {

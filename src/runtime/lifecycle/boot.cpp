@@ -454,7 +454,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // is parsed, so g_isServer was still FALSE there and a server fetched tints it
   // never draws. Moved here, post-CLI-parse where g_isServer is known, gated on
   // client — the same deferral InstallResourceOverride uses (boot.cpp:29). The
-  // loadout SAVE/CURRENT protocol in gameserver.cpp is independent of this hook,
+  // loadout SAVE/CURRENT protocol in gameserver_callbacks.cpp is independent of this hook,
   // so gating it off on a server does not affect loadout handling.
   if (!g_isServer) {
     AssetCDN::Initialize();

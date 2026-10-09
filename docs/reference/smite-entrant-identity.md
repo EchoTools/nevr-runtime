@@ -1,6 +1,6 @@
 # Smite: which identifier the game resolves to an entrant slot
 
-Issue #119: the smite handler in `src/runtime/server/gameserver.cpp` (`Envelope::kLobbySmiteEntrant`)
+Issue #119: the smite handler in `src/runtime/server/gameserver_callbacks.cpp` (`Envelope::kLobbySmiteEntrant`)
 turns the server's `entrant_id` UUID into the entrant slot index the game's smite event carries. This
 records what the game itself does with the id, from ReVault (`echovr.exe`), and how the runtime resolves it.
 

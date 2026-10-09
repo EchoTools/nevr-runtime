@@ -72,8 +72,8 @@ separate namespace is an open ABI decision, issue #130.
   and their siblings (declared with `NEVR_MODULE_API`).
 - Library targets without `nevr_` (`platform_compat`, `token_auth`, `crash_handler`, `log_filter`),
   flat config keys without it (`asset_cdn_url`, `telemetry_uri`, `upnp`), macros without `NEVR_`
-  (`PROJECT_VERSION`, `GIT_COMMIT_HASH`), log tags outside `[NEVR.<AREA>]` (`[WEBSOCKET]`,
-  `[TELEMETRY.DIAG]`, a bare `[NEVR]`), and the PascalCase namespaces (`GameServer`, `TokenAuth`).
+  (`PROJECT_VERSION`, `GIT_COMMIT_HASH`), log tags outside `[NEVR.<AREA>]` (`[TELEMETRY.DIAG]`,
+  a bare `[NEVR]`), and the PascalCase namespaces (`GameServer`, `TokenAuth`).
 - `NEVRProtobufJSONMessageV1` (`src/abi/symbols.h`): its spelling is fixed by the hashed protocol string.
 - `NevrCfg*` functions are global, not in `namespace nevr`; `NevrConfig` and `NevrConfigError` are in it.
 
