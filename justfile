@@ -92,6 +92,7 @@ configure-android:
 # Build the Android arm64-v8a crash-reporter .so
 build-android: configure-android
     ANDROID_NDK_HOME="{{ ndk }}" cmake --build build/android-arm64 -j
+    tools/check_quest_static_init.sh "{{ ndk }}/toolchains/llvm/prebuilt/linux-x86_64/bin" build/android-arm64/sentinel/libovrplatformloader.so $(find build/android-arm64 -name '*.o' \( -path '*/ovrplatformloader.dir/*' -o -path '*/nevr_quest_config.dir/*' -o -path '*/nevr_quest_got_hook.dir/*' \) | sort)
 
 # Build with full compiler output
 verbose-build-android: configure-android
@@ -443,7 +444,7 @@ test-quest-shared:
         src/quest/tests/service_redirect_test.cpp \
         -o "$out/service_redirect_test"
     timeout -k 5 120 "$out/service_redirect_test"
-    # The codec test parses the login profile with nlohmann::json. Use the header the build installed
+    # The codec, config and sentinel tests parse JSON with nlohmann::json. Use the header the build installed
     # from vcpkg.json for the mingw triplet the mingw-* presets build with, never a system package and
     # never whichever triplet sorts first. Only the nlohmann directory is exposed to the host compiler.
     # Fail loudly when the build has not installed it.
@@ -461,6 +462,25 @@ test-quest-shared:
         src/quest/tests/evr_codec_test.cpp \
         -o "$out/evr_codec_test"
     timeout -k 5 120 "$out/evr_codec_test"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" \
+        src/runtime/lifecycle/service_redirect.cpp \
+        src/quest/sentinel/quest_config.cpp \
+        src/quest/tests/quest_config_test.cpp \
+        -o "$out/quest_config_test"
+    "$out/quest_config_test"
+    # Sentinel activation + logging against a stand-in liblog. The test's constructor has priority
+    # 102, so it runs before activation.cpp's static initializers whatever the link order.
+    files="$out/sentinel-files"
+    rm -rf "$files"
+    g++ -std=c++17 -Wall -Wextra -Werror -Isrc -isystem "$json_inc" -Isrc/quest/tests/stub -Isrc/quest/sentinel \
+        -DNEVR_QUEST_FILES_DIR="\"$files\"" \
+        src/quest/tests/sentinel_host_test.cpp \
+        src/quest/sentinel/activation.cpp \
+        src/quest/sentinel/sentinel_log.cpp \
+        src/quest/sentinel/quest_config.cpp \
+        src/runtime/lifecycle/service_redirect.cpp \
+        -o "$out/sentinel_host_test"
+    "$out/sentinel_host_test"
     echo "test-quest-shared: all redirect and EVR codec vectors pass on the host"
 
 # Quest hook backend on the host. Builds three fixture shared objects (BIND_NOW with
@@ -547,7 +567,7 @@ verify:
     just test-auth-unit
     just test-quest-shared
     just test-quest-hooks
-    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_reap_merged -v
+    timeout -k 10 600 python3 -m unittest tools.tests.test_winvm_checks tools.tests.test_release_contract tools.tests.test_verify_doc_paths tools.tests.test_build_distribution tools.tests.test_runtime_lifecycle_invariants tools.tests.test_crash_handler_plugin_source tools.tests.test_header_include_order tools.tests.test_module_loader_surface tools.tests.test_crash_reporter_suppression tools.tests.test_verify_hook_invariants tools.tests.test_patch_detour_logging tools.tests.test_reap_merged tools.tests.test_check_quest_static_init tools.tests.test_executable_scripts -v
     # --- Sensor plumbing (N93) -----------------------------------------------
     # Under `set -o pipefail` a pipeline returns the RIGHTMOST nonzero status.
     # In `if grep A … | grep -v B; then FAIL; fi` a stage-1 hard error (rc 2 —
