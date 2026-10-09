@@ -60,8 +60,11 @@ them. `src/quest/auth/` holds the Android adapters:
     `Failed`.
   - A `Failed` login that is not final is attempted again every five minutes with one request, for
     as long as the process runs, logging one Warning per failure class. Final, because the player
-    was involved: the code expired or timed out, the link could not be delivered, or the server
-    refused a poll with a 4xx.
+    was involved: the link could not be delivered, or the server refused a poll with a 4xx.
+  - A code that runs out (the server answers `expired`, or its five minutes pass) is replaced: the
+    state stays `AwaitingUser`, a new code is requested (no sooner than 30 s after the previous
+    request) and shown in place of the old one, and the prompt is not taken down in between. This
+    repeats until the player signs in, a poll is refused, or the game stops.
   - While the player holds a link, poll failures that are transient (no connection, 5xx, 408, 429)
     are waited out until the code's own five-minute deadline at the normal poll interval.
   - After login, a refresh token that has expired or that the server refuses publishes `Expired`,
@@ -73,8 +76,56 @@ login path. The tests are `src/quest/tests/auth_core_test.cpp` (fake HTTP and cl
 `src/quest/tests/tls_ca_test.cpp` (loopback TLS peers with a generated CA and an Android-style
 directory), run on the host by `just test-quest-shared`. Not established on a headset: the CA
 directories and the libcurl/OpenSSL stack, that the process name is the package name, write access
-to the app-internal directory (and that Quest multi-user uses `/data/user/<n>`), and how the player
-is shown the login link.
+to the app-internal directory (and that Quest multi-user uses `/data/user/<n>`), and that the
+game's login-error screen shows the sign-in prompt below.
+
+### Sign-in prompt in the headset
+
+`QuestTokenAuth` hands each prompt (verification page, code, expiry) to every mechanism at once
+(`auth/prompt_presenters.h`, `FanOutPresenter`), so none of them has to work alone. Each logs one
+JSON line per attempt, `{"event":"login_prompt","mechanism":...,"result":...}`, with the reason
+when it fails and never the code:
+
+| Mechanism | What the player gets | Line |
+| --- | --- | --- |
+| `file` | `device_login.txt` (URL, code, instructions, expiry) under the external files dir; when it cannot be written, the direct link in logcat | `written` / `write_failed` |
+| `game_error_text` | the prompt as the game's own login-error text | `published` / `refused` / `withdrawn` |
+
+There is no Android intent, toast or notification: the sentinel holds no `JavaVM` or activity
+object (it is loaded as a `DT_NEEDED` dependency, so its `JNI_OnLoad` is not called).
+
+The game-text path, measured on the pinned `libr15.so` and `libpnsovr.so`:
+
+- A login that fails before it is sent (`CNSOVRUser::UpdateInternal`, `libpnsovr.so` `0x1edb64`
+  to `0x1edb7c`: code 500, "Log in request failed: One or more prerequisites are missing") calls
+  `LogInFailed` through the vtable; `CNSOVRUser::LogInFailed` (`0x1ec5d0`) tail-calls
+  `CNSUser::LogInFailed`, which logs `[LOGIN] %s` and calls the login-failed delegate. A server
+  `SNSLogInFailure` reaches the same `CNSUser::LogInFailed` through `LogInFailureCB`
+  (`libr15.so` `0x1933928`).
+- `CR15NetGame::LogInFailedCB` (`libr15.so` `0x125f298`, address taken by the `GLOB_DAT` at
+  `0x3708518`) calls `CR15NetGame::SetDelimitedErrorMessage(char const*)` through PLT `0xf23510`,
+  whose `R_AARCH64_JUMP_SLOT` is `0x36e9170`, then `SwitchTo(-0x5e)`. The other two callers of
+  that PLT entry are `LoginRemovedCB` (`0x125f9b4`) and `LocalUserProfileErrorCB` (`0x126d588`),
+  both followed by the same `SwitchTo`.
+- `SetDelimitedErrorMessage` (`0x125f768`) splits the message on `'\n'` into at most four lines
+  and calls `SetErrorMessage`, which copies each line into a 64-byte buffer (63 characters) at
+  `CR15NetGame+0x63309`, logs `[NETGAME] %s %s %s %s`, and `CR15NetErrorMessageExpression`
+  (`0x23225d0`) hands those buffers to the UI script. Which screen renders the expression is in the
+  game's assets, not in the ELF.
+
+The token-auth worker writes the four-line prompt (`FormatGamePromptText`) to the prompt board
+(`auth/prompt_board.h`, a sequence-locked fixed buffer built without exceptions) and withdraws it
+when the login ends. The sentinel installs a GOT hook on `0x36e9170`
+(`sentinel/login_prompt_hook.h`): while the board holds a prompt, the game's message is replaced by
+it; otherwise it passes unchanged. The hook runs once per failed login, takes no lock and does not
+log; its counters `login_prompt_text_shown` and `login_prompt_text_passed` are reported by
+`hook_report.h`. The game's own `[NETGAME]` line then carries the prompt, code included. The host
+tests are `src/quest/tests/login_prompt_hook_test.cpp` and the presenter and session tests in
+`auth_core_test.cpp`; `got_pinned_test.cpp` resolves the slot in the pinned `libr15.so`.
+
+Nothing here holds the game's login while the player signs in: the game's login is the login
+hook's (`src/quest/login/`). The prompt is shown each time that login fails while the board holds
+it.
 
 Linking token auth into the sentinel brings OpenSSL and libcurl with it (the sentinel grows from
 about 1.8 MB to about 35 MB unstripped). `libr15.so`, `libpnsrad.so`, `libpnsovr.so` and
@@ -194,8 +245,9 @@ The sentinel exports only `nevr_sentinel_marker` and `JNI_OnLoad` (`TestExportAl
 once into `nevr_quest_got_hook`, which every Quest target links (`TestBackendCompiledOnce`).
 
 `sentinel/pinned_targets.h` holds the targets and callback types for the pinned artifact:
-`clock_gettime` (installed by `entry.cpp`), `CJson::TString` in both libraries, and the
-`SNSConfigRequestv24Send` and `GLOB_DAT` slots as fixtures. Only `clock_gettime` is installed.
+`clock_gettime` and `CR15NetGame::SetDelimitedErrorMessage` (both installed by `entry.cpp`),
+`CJson::TString` in both libraries, and the `SNSConfigRequestv24Send` and `GLOB_DAT` slots as
+fixtures. Only `clock_gettime` and `SetDelimitedErrorMessage` are installed.
 `SNSConfigRequestv24Send` has no thunk because its return type is not established.
 
 ## Architecture
