@@ -81,7 +81,7 @@ std::optional<ConnectRequest> SessionBridge::BuildRequest(const SessionRouter::R
 }
 
 uint16_t SessionBridge::Start() {
-  if (started_) return server_->port();
+  if (started_.load(std::memory_order_acquire)) return server_->port();
   if (!IsAcceptableRemoteUrl(config_.remoteUri)) {
     if (config_.log) {
       config_.log(LogLevel::Error, "[bridge] not started: the configured remote URI is not wss://");
@@ -89,13 +89,13 @@ uint16_t SessionBridge::Start() {
     return 0;
   }
   const uint16_t port = server_->Start();
-  started_ = port != 0;
+  started_.store(port != 0, std::memory_order_release);
   return port;
 }
 
 void SessionBridge::Stop() {
-  if (!started_) return;
-  started_ = false;
+  if (!started_.load(std::memory_order_acquire)) return;
+  started_.store(false, std::memory_order_release);
   server_->Stop();    // reports OnGameClose for every upgraded connection
   remotes_->Stop();   // close frames, joins workers, no router callbacks
   router_->Shutdown();
