@@ -150,8 +150,9 @@ Headers are included **path-qualified** — `#include "abi/echovr.h"`, not
 `CMakeLists.txt`), so the spelling states which layer a dependency crosses.
 
 - **`src/legacy-compat/`** — two forwarding headers, existing solely because
-  `src/legacy/gamepatches` is frozen yet resolves `common/hooking.h` and
-  `common/nevr_plugin_interface.h` out of a shared `common/` directory.
+  `src/legacy/gamepatches` is frozen yet includes `common/hooking.h` and
+  `common/nevr_plugin_interface.h`, which these headers provide from
+  `src/legacy-compat/common/`.
   Scoped to that
   one target. Delete with `src/legacy/`.
 
