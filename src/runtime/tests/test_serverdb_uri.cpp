@@ -164,7 +164,7 @@ TEST(ServerDbUri, TokenRouteUriEncodesListsAndRoundTrips) {
   EXPECT_EQ(pairs, expected);
 }
 
-// The old builder truncated at 1024 bytes; the new one has no fixed buffer.
+// The builder has no fixed buffer: a value longer than 1024 bytes is not truncated.
 TEST(ServerDbUri, LongValuesAreNotTruncated) {
   const std::string longRegions(2000, 'r');
   const std::optional<std::string> uri = ServerDbUri::BuildLegacyUri("ws://h/s", "1", "pw", "", longRegions);

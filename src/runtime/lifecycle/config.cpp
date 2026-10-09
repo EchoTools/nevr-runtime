@@ -334,7 +334,7 @@ static CHAR* AutoRelayThroughBridge(const CHAR* serviceKey, CHAR* url) {
 
   // N133 S3: nevr_socket_uri now comes from config.yaml. NevrCfgAutoRelay returns
   // the interned ws://127.0.0.1:<port> relay when socket_uri is configured, else
-  // null (the old early-JSON presence check + thread_local buffer, migrated).
+  // null.
   const char* relayUrl = NevrCfgAutoRelay(GetWebSocketBridgePort());
   if (relayUrl == NULL) return url;
 
@@ -367,7 +367,7 @@ UINT64 HttpConnectHook(PVOID unk, CHAR* uri) {
       uri = GetServiceHostWithFallback("apiservice_host", uri);
       // Legacy compatibility: also try "api_host" (N133 S3: from config.yaml).
       // Present -> use it (JsonValueAsString returned the value); absent -> uri
-      // stays the game default, exactly as the old default=uri argument did.
+      // stays the game default.
       if (uri == originalUri) {
         const char* apiHost = NevrCfgGetFlat("api_host");
         if (apiHost != NULL) uri = const_cast<CHAR*>(apiHost);

@@ -555,9 +555,8 @@ static AuthConfig LoadAuthConfig() {
     AuthConfig cfg;
 
     if (s_configGet) {
-        // config_get returns NULL for an absent/unmapped key — same "missing"
-        // signal the old JsonValueAsString(..., NULL, false) form returned, so
-        // an absent key keeps token_auth's existing behaviour (warn + disable).
+        // config_get returns NULL for an absent/unmapped key; token_auth treats that
+        // as a missing key (warn + disable).
         const char* url  = s_configGet("nevr_http_uri");
         const char* key  = s_configGet("nevr_http_key");
         const char* skey = s_configGet("nevr_server_key");
