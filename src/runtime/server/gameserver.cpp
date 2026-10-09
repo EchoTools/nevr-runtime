@@ -56,19 +56,14 @@ static void CallScheduleReturnToLobby() {
 
 using namespace GameServer;
 
-// D1/N78: this file used to define its own ::Log — a SECOND strong definition of
-// the same mangled symbol as src/core/logging.cpp, both linked into
-// BugSplat64.dll. Confirmed with nm: `T _Z3LogN6EchoVR8LogLevelEPKcz` in both
-// gamepatches.dir/gameserver/gameserver.cpp.obj and common.dir/logging.cpp.obj.
-//
-// That is an ODR violation, and the two were NOT equivalent: this copy called
-// EchoVR::WriteLog unconditionally, while common/logging.cpp null-checks it and
-// falls back to stderr. Which one every Log() call in the DLL bound to was
-// link-order dependent — and if this one won, every early-boot log line was a
-// null function-pointer call and the stderr fallback silently did not exist.
-//
-// Deleted. common/logging.h declares the guarded one; this file already
-// includes it.
+// D1/N78: this file defines no ::Log. A second strong definition of the same
+// mangled symbol as src/core/logging.cpp (both linked into BugSplat64.dll) is an
+// ODR violation, and the two would not be equivalent: a copy calling
+// EchoVR::WriteLog unconditionally, versus logging.cpp, which null-checks it and
+// falls back to stderr. Which one every Log() call in the DLL bound to would be
+// link-order dependent — and if the unguarded one won, every early-boot log line
+// would be a null function-pointer call and the stderr fallback would silently
+// not exist. common/logging.h declares the guarded one; this file includes it.
 
 // Subscribe to internal broadcaster (UDP) events
 uint16_t ListenForBroadcasterMessage(GameServerLib* self, EchoVR::SymbolId msgId, BOOL isMsgReliable, VOID* func) {

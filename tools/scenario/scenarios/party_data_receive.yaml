@@ -2,7 +2,7 @@
 # know yet adds that member with its data, as pnsovr's data packet did (0x180090650 -> 0x180082cd0), and
 # the data is in the member's JSON slot before MemberJoined fires, so the game's PartyMemberJoinedCB
 # (0x14018a3c0) names the member's headset ("'%s' joined party (%s)", GetHeadsetTypeName 0x140170770:
-# 2 = Rift S) where every remote member used to show "(Unknown)". The party's own data, sent to the
+# 2 = Rift S) rather than "(Unknown)". The party's own data, sent to the
 # leader, is ignored (the leader writes it). The member is synthetic; nothing is sent but its name
 # lookup.
 name: party_data_receive

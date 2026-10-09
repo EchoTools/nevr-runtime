@@ -569,13 +569,13 @@ static constexpr uint64_t kRefreshLeadSec = 300;
 // The refresh thread's guard, split out of RefreshThreadFunc so it can be
 // asserted in-process without the 60-second sleep.
 //
-// Reads the LIVE expiry off the running DeviceAuth. It previously read
-// token_expiry out of LoadCachedAuthToken(), and that field is structurally
-// always 0: SaveAuthToken (core/auth_token.h) writes only the refresh token and
-// identity — the access token is deliberately never persisted. So the guard
-// compared 0 against now+300, never held, and the thread issued an HTTP refresh
-// every 60 seconds for the entire hour a perfectly valid token was alive. The
-// disk behaviour is correct; consulting disk for a memory-only value was not.
+// Reads the LIVE expiry off the running DeviceAuth, not token_expiry out of
+// LoadCachedAuthToken(): that field is structurally always 0, because
+// SaveAuthToken (core/auth_token.h) writes only the refresh token and
+// identity — the access token is deliberately never persisted. A guard on the
+// disk value would compare 0 against now+300, never hold, and the thread would
+// issue an HTTP refresh every 60 seconds for the entire hour a perfectly valid
+// token is alive. The disk value is for the load path only.
 static bool ShouldRefreshAccessToken(const DeviceAuth& auth, uint64_t now) {
     return auth.GetTokenExpiryValue() <= now + kRefreshLeadSec;
 }

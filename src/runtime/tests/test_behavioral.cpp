@@ -530,10 +530,10 @@ TEST_F(PluginLoaderDiagnosticTest, ReplacedArgKeyIsLoggedByNameNeverByValue) {
   EXPECT_FALSE(TestLogContains("SECRETVALUE"));
 }
 
-// get_plugin_info reports each plugin's own API version and capabilities. It
-// used to cast NvrPluginInfo (padded to 32 bytes) as NvrLoadedPluginInfo, so
+// get_plugin_info reports each plugin's own API version and capabilities. Casting
+// NvrPluginInfo (padded to 32 bytes) as NvrLoadedPluginInfo would make
 // api_version read the padding and capabilities read the API version: a v5
-// plugin declaring no capabilities showed as caps 5.
+// plugin declaring no capabilities would show as caps 5.
 TEST_F(PluginLoaderDiagnosticTest, LoadedPluginInfoReportsApiVersionAndCapabilities) {
   g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
   g_testPluginLoadPlan.push_back({"future-api", "test_plugin_future_api.dll", false, "", "{}"});
@@ -1014,8 +1014,8 @@ std::string BuildMarkedMessage(uint64_t symbol, const std::string& payload) {
 }  // namespace
 
 // Nakama batches LoginSuccess, STcpConnectionUnrequireEvent and GameSettings into one frame. The
-// bridge used to log only the first symbol of a server->game frame, so the other two never
-// appeared in a server's log. Every message in the frame must be logged.
+// bridge logs every symbol of a server->game frame; logging only the first would leave the other
+// two out of a server's log. Every message in the frame must be logged.
 TEST(WsBridgeFrameLog, LogsEveryMessageInABatchedFrame) {
   ClearTestLogs();
   const std::string frame = BuildMarkedMessage(0x1111111111111111ULL, std::string(40, 'a')) +

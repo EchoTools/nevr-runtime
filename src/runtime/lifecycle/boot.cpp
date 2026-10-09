@@ -16,10 +16,9 @@
 #include "runtime/ext/plugin_loader.h"
 #include "extension/module_interface.h"
 
-// Statically-linked module entry points (2026-08-02: folded from separate
-// DLLs into BugSplat64.dll). Each module's symbols are prefixed to avoid
-// collisions — both used to export NvrModuleInit/NvrModuleApiVersion/etc.
-// as separate DLLs with their own symbol tables.
+// Statically-linked module entry points (the modules are linked into
+// BugSplat64.dll). Each module's symbols are prefixed to avoid
+// collisions — both define NvrModuleInit/NvrModuleApiVersion/etc.
 extern "C" {
 // platform_compat
 int platform_compat_Init(const NvrModuleContext* ctx);
@@ -137,7 +136,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
 
   // Deferred from Initialize() — file I/O deadlocks during DllMain loader lock.
   // config.json is optional (issue #21); redirects are armed here whether or not
-  // one was found — this is where g_earlyConfigPtr used to open that gate.
+  // one was found — g_earlyConfigPtr does not gate them.
   LoadEarlyConfig();
   ArmServiceRedirects();
   InstallResourceOverride();
@@ -306,10 +305,9 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
           "no CLI override exists)",
           arg);
     } else if (lstrcmpW(arg, L"-headless") == 0) {
-      // N99: this branch used to call -headless "redundant" and tell the
-      // operator to remove it. That was false and it cost a real regression —
-      // a unit believed the message, removed the flag, and a window opened on
-      // the owner's screen. -headless is a NATIVE echovr.exe token; the game's
+      // N99: -headless is never "redundant", and the log must not tell the
+      // operator to remove it: removing the flag opens a window.
+      // -headless is a NATIVE echovr.exe token; the game's
       // own arg handler applies pGame+0x1D4 &= 0xFFFEFEFE only when it is
       // present. NEVR now applies that same mask for -server
       // (PatchEnableHeadless), and AND-masking is idempotent, so the token is
@@ -460,17 +458,16 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     AssetCDN::Initialize();
   }
 
-  // N92: start the WebSocket bridge in-process. It used to be
-  // modules/ws_bridge.dll, started from that module's NvrModuleInit. Folding it
-  // into this DLL removes the second, divergent copy that had drifted apart from
-  // the shipping one — session sharing lived in the copy that never ran, and the
-  // fake-LoginSuccess path lived only in the one that did.
+  // N92: start the WebSocket bridge in-process, as part of this DLL rather than
+  // a separate module DLL, so there is one copy of the bridge and no second,
+  // divergent one (session sharing and the fake-LoginSuccess path live in the
+  // same code).
   //
   // Started here, before plugins, because config.cpp's service redirect needs the
   // bridge port and the game asks for redirects during PreprocessCommandLine.
   // N133 S4a: the bridge target (nevr_socket_uri) now comes from config.yaml
   // services.socket_uri via nevr_config, not the game JSON. No g_earlyConfigPtr
-  // guard here — the value no longer lives in the early game config; the bridge
+  // guard here — the value does not live in the early game config; the bridge
   // starts iff socket_uri is configured (absent -> no bridge, unchanged). First
   // NevrCfg() access happens here, after the CLI loop (so -config-path is
   // honoured), after g_isServer/InstallFatalErrorHandler — a bad config.yaml or
@@ -515,7 +512,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // N87: re-arm the console ctrl handler so CTRL+C works in client mode.
   // Our handler is installed behind the game's during Initialize(); this
   // re-registers it at the front so it fires before the game's handler.
-  // Previously only called from the server path (GameServerLib::Terminate).
+  // The server path also calls it (GameServerLib::Terminate).
   RearmConsoleCtrlHandler();
 
   Log(EchoVR::LogLevel::Info,
