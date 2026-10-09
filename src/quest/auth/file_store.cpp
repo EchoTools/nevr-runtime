@@ -205,7 +205,10 @@ std::string FormatLoginPrompt(const LoginPrompt& prompt) {
 intptr_t FileLinkPresenter::Present(const LoginPrompt& prompt) {
   std::string error;
   std::string warning;
-  if (path_.empty() || !AtomicWrite(path_, FormatLoginPrompt(prompt), error, warning)) {
+  std::string body = FormatLoginPrompt(prompt);
+  const bool written = !path_.empty() && AtomicWrite(path_, body, error, warning);
+  nevr::auth::WipeSecret(body);  // the file is the copy the player reads
+  if (!written) {
     // The device code never goes to a log (the sink can be durable): it is also the poll
     // credential for its five minutes. The verification page is not secret.
     Emit(log_, LogLevel::Error,

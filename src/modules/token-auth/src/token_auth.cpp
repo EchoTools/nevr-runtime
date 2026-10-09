@@ -359,10 +359,11 @@ bool DeviceAuth::RunDeviceAuthFlow(bool is_server, TokenAuth::AuthCancellation* 
 // TokenAuth::Init runs this on a worker thread and waits for it before module
 // initialization returns, pumping the bootstrap thread's messages meanwhile
 // (#37). HTTP, ShellExecuteA, and the fallback modal MessageBoxA can block
-// beyond the five-minute deadline; the deadline rejects any late result after
-// those calls return, except a poll that answers "verified" (the server has
-// deleted the code and handed over the only copy of the tokens), but does not
-// cancel or bound the calls themselves.
+// beyond the five-minute deadline. When those calls return after it, the
+// result is rejected unless it is a poll that answers "verified": the server
+// has then deleted the code and handed over the only copy of the tokens, so
+// that answer is applied. The deadline does not cancel or bound the calls
+// themselves.
 bool DeviceAuth::RunDeviceAuthFlow(bool is_server, const InternalDeviceAuthFlowOps& ops) {
     const auto log = [&ops](EchoVR::LogLevel level, const std::string& message) {
         if (ops.log) ops.log(level, message);

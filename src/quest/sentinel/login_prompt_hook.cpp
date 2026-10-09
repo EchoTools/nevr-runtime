@@ -8,6 +8,7 @@
 #include "hook_log.h"
 #include "hook_report.h"
 #include "quest/auth/prompt_board.h"
+#include "quest/game_login_failures.h"
 
 namespace nevr_quest::login_prompt {
 
@@ -25,30 +26,25 @@ std::atomic<std::uint64_t> g_refreshed{0};
 std::atomic<std::uint64_t> g_kept{0};
 std::atomic<std::uint64_t> g_notLocal{0};
 std::atomic<std::uint64_t> g_busy{0};
-std::atomic<std::uint64_t> g_layoutMismatch{0};
+std::atomic<std::uint64_t> g_notOurs{0};
 
-// The object whose error block holds a prompt, and the board version written there. The pointer is
-// only compared with the `this` the game passes to Update; it is never dereferenced on its own.
+// The instance whose error block this hook follows: one whose login failed with a local text while
+// it was logging in. The pointer is only compared with the `this` the game passes to Update; it is
+// never dereferenced on its own.
 std::atomic<CR15NetGameOpaque*> g_object{nullptr};
+// The board version the block reflects; kNothingApplied when the board was busy at the failure, so
+// the next Update applies whatever the board holds.
+constexpr std::uint64_t kNothingApplied = ~static_cast<std::uint64_t>(0);
 std::atomic<std::uint64_t> g_applied{0};
-// One writer of the block at a time (the two hooks could run on different threads); a hook that
-// finds it taken does nothing now: Update tries again on the next frame.
+// One writer of the block and of the two copies below at a time (the hooks can run on different
+// threads). A hook that finds it taken leaves things as they are; Update looks again next frame.
 std::atomic_flag g_writing = ATOMIC_FLAG_INIT;
-// The game's own block, saved when the prompt replaced it, restored when the board is withdrawn.
+// The game's own block, saved at the failure, restored when the board is withdrawn.
 unsigned char g_saved[layout::kErrorBlockBytes];
-
-// The game's own local login-failure texts. Each is passed only to CNSUser::LogInFailed (through
-// DeferredLogInFailed or the CNSOVRUser vtable slot): libpnsovr 0x5569ab (LogInInternal,
-// GotUserProofCB), 0x556a5a and 0x556abf (GotUserProofCB), 0x556b40 (UpdateInternal), 0x584c42 and
-// libr15 0x31737d7 (CNSUser::SendLogInRequest, ConnectFailedCB). A server-sent failure text is
-// never one of these.
-constexpr const char* kLocalFailures[] = {
-    "Log in request failed: One or more prerequisites are missing",
-    "Log in request failed: Failed to get user proof",
-    "Log in request failed: Client error",
-    "Log in request failed: Cryptography error",
-    "Log in request failed: Service unavailable",
-};
+// What the block holds as far as this hook knows: the game's own block or the text it wrote. The
+// game has other writers of the block (lobby, game-space and lobby-status errors); a block that no
+// longer matches this copy was rewritten by one of them and is left alone from then on.
+unsigned char g_written[layout::kErrorBlockBytes];
 
 bool Equal(const char* a, const char* b) noexcept {
   while (*a != '\0' && *a == *b) {
@@ -56,6 +52,13 @@ bool Equal(const char* a, const char* b) noexcept {
     ++b;
   }
   return *a == *b;
+}
+
+// Overwrites `n` bytes the compiler may not drop as dead stores (a dump of the process must not
+// find a code in a buffer this hook is done with).
+void Wipe(void* p, std::size_t n) noexcept {
+  volatile unsigned char* v = static_cast<volatile unsigned char*>(p);
+  for (std::size_t i = 0; i < n; ++i) v[i] = 0;
 }
 
 std::int32_t State(const CR15NetGameOpaque* self) noexcept {
@@ -82,10 +85,21 @@ bool HoldsMessage(const unsigned char* block, const char* message) noexcept {
   return line[i] == '\0';
 }
 
-// Writes `text` ('\n'-separated, at most four lines of at most 63 characters, as the board holds
-// it) the way SetErrorMessage(4 args) does: the byte before the lines is 1, each line is cut at 63
+bool SameBlock(const unsigned char* a, const unsigned char* b) noexcept {
+  for (std::size_t i = 0; i < layout::kErrorBlockBytes; ++i) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
+void CopyBlock(unsigned char* to, const unsigned char* from) noexcept {
+  for (std::size_t i = 0; i < layout::kErrorBlockBytes; ++i) to[i] = from[i];
+}
+
+// Lays `text` ('\n'-separated, at most four lines of at most 63 characters, as the board holds it)
+// out the way SetErrorMessage(4 args) does: the byte before the lines is 1, each line is cut at 63
 // and NUL-filled to 64.
-void WriteLines(unsigned char* block, const char* text) noexcept {
+void LayOut(unsigned char* block, const char* text) noexcept {
   block[0] = 1;
   const char* p = text;
   for (std::size_t n = 0; n < layout::kErrorLines; ++n) {
@@ -98,28 +112,20 @@ void WriteLines(unsigned char* block, const char* text) noexcept {
   }
 }
 
-void CopyBlock(unsigned char* to, const unsigned char* from) noexcept {
-  for (std::size_t i = 0; i < layout::kErrorBlockBytes; ++i) to[i] = from[i];
+// Stop following `self` (call with g_writing held). The copy of what was written may hold a code.
+void Drop(CR15NetGameOpaque* self) noexcept {
+  CR15NetGameOpaque* expected = self;
+  if (g_object.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel)) {
+    Wipe(g_written, sizeof(g_written));
+  }
 }
 
-// The game's login failed: its message is in the block. Runs on the game's call path.
+// The game's login failed; its message is in the block. Runs on the game's call path.
 void HookedSetDelimitedErrorMessage(ErrorThunk::Fn original, CR15NetGameOpaque* self, const char* message) noexcept {
   const std::int32_t state = State(self);  // read before the game's own write (it does not change it)
   original(self, message);
   if (state != layout::kStateLoggingIn || message == nullptr || !IsLocalLoginFailure(message)) {
     g_notLocal.fetch_add(1, std::memory_order_relaxed);
-    return;
-  }
-  char text[board::kCapacity + 1];
-  board::Mode mode = board::Mode::kPrompt;
-  std::uint64_t version = 0;
-  const board::ReadResult read = board::Read(text, sizeof(text), &mode, &version);
-  if (read == board::ReadResult::kBusy) {
-    g_busy.fetch_add(1, std::memory_order_relaxed);
-    return;
-  }
-  if (read == board::ReadResult::kEmpty || mode != board::Mode::kPrompt) {
-    g_kept.fetch_add(1, std::memory_order_relaxed);
     return;
   }
   if (g_writing.test_and_set(std::memory_order_acquire)) {
@@ -128,40 +134,67 @@ void HookedSetDelimitedErrorMessage(ErrorThunk::Fn original, CR15NetGameOpaque* 
   }
   unsigned char* block = Block(self);
   if (!HoldsMessage(block, message)) {
-    g_layoutMismatch.fetch_add(1, std::memory_order_relaxed);
-  } else {
-    CopyBlock(g_saved, block);
-    WriteLines(block, text);
-    g_applied.store(version, std::memory_order_relaxed);
-    g_object.store(self, std::memory_order_release);
-    g_shown.fetch_add(1, std::memory_order_relaxed);
-  }
-  g_writing.clear(std::memory_order_release);
-}
-
-// Keeps a screen that shows the prompt current. Runs once per game update, before the game's own.
-void Refresh(CR15NetGameOpaque* self) noexcept {
-  if (State(self) != layout::kStateLoginFailed) {
-    // The game left the error screen's state: stop following this object.
-    CR15NetGameOpaque* expected = self;
-    g_object.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel);
+    g_notOurs.fetch_add(1, std::memory_order_relaxed);
+    g_writing.clear(std::memory_order_release);
     return;
   }
-  if (board::Version() == g_applied.load(std::memory_order_relaxed)) return;
-  if (g_writing.test_and_set(std::memory_order_acquire)) return;  // the other writer: next frame
+  CopyBlock(g_saved, block);
   char text[board::kCapacity + 1];
   board::Mode mode = board::Mode::kPrompt;
   std::uint64_t version = 0;
   const board::ReadResult read = board::Read(text, sizeof(text), &mode, &version);
-  if (read == board::ReadResult::kCopied) {
-    WriteLines(Block(self), text);
+  if (read == board::ReadResult::kCopied && mode == board::Mode::kPrompt) {
+    LayOut(g_written, text);
+    CopyBlock(block, g_written);
     g_applied.store(version, std::memory_order_relaxed);
-    g_refreshed.fetch_add(1, std::memory_order_relaxed);
-  } else if (read == board::ReadResult::kEmpty) {
-    CopyBlock(Block(self), g_saved);  // withdrawn: the game's own message again
-    g_applied.store(version, std::memory_order_relaxed);
-    g_refreshed.fetch_add(1, std::memory_order_relaxed);
-  }  // kBusy: next frame
+    g_shown.fetch_add(1, std::memory_order_relaxed);
+  } else {
+    // Nothing to show yet (or only a notice, or the board was busy): the game's text stays, and the
+    // instance is followed so that a prompt published later still reaches this screen.
+    CopyBlock(g_written, block);
+    if (read == board::ReadResult::kBusy) {
+      g_applied.store(kNothingApplied, std::memory_order_relaxed);
+      g_busy.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      g_applied.store(version, std::memory_order_relaxed);
+      g_kept.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+  g_object.store(self, std::memory_order_release);
+  Wipe(text, sizeof(text));
+  g_writing.clear(std::memory_order_release);
+}
+
+// Keeps the followed instance's block current. Runs once per game update, before the game's own.
+void Refresh(CR15NetGameOpaque* self) noexcept {
+  const bool leftLoginFailed = State(self) != layout::kStateLoginFailed;
+  if (!leftLoginFailed && board::Version() == g_applied.load(std::memory_order_relaxed)) return;
+  if (g_writing.test_and_set(std::memory_order_acquire)) return;  // the other writer: next frame
+  unsigned char* block = Block(self);
+  if (leftLoginFailed) {
+    Drop(self);  // the game left its error screen's state
+  } else if (!SameBlock(block, g_written)) {
+    g_notOurs.fetch_add(1, std::memory_order_relaxed);  // another writer changed the block
+    Drop(self);
+  } else {
+    char text[board::kCapacity + 1];
+    board::Mode mode = board::Mode::kPrompt;
+    std::uint64_t version = 0;
+    const board::ReadResult read = board::Read(text, sizeof(text), &mode, &version);
+    if (read == board::ReadResult::kCopied) {
+      LayOut(g_written, text);
+    } else if (read == board::ReadResult::kEmpty) {
+      CopyBlock(g_written, g_saved);  // withdrawn: the game's own message again
+    }
+    if (read != board::ReadResult::kBusy) {  // busy: next frame
+      if (!SameBlock(block, g_written)) {
+        CopyBlock(block, g_written);
+        g_refreshed.fetch_add(1, std::memory_order_relaxed);
+      }
+      g_applied.store(version, std::memory_order_relaxed);
+    }
+    Wipe(text, sizeof(text));
+  }
   g_writing.clear(std::memory_order_release);
 }
 
@@ -177,7 +210,7 @@ NEVR_HOOK_RECORD(kNetGameUpdateHook, UpdateThunk, &HookedNetGameUpdate);
 
 bool IsLocalLoginFailure(const char* message) noexcept {
   if (message == nullptr) return false;
-  for (const char* known : kLocalFailures) {
+  for (const char* known : game_login_failures::kAll) {
     if (Equal(message, known)) return true;
   }
   return false;
@@ -195,7 +228,7 @@ bool RegisterCounters() noexcept {
       {"login_prompt_text_kept", &g_kept, sentinel::ReportKind::kCalls},
       {"login_prompt_text_not_local", &g_notLocal, sentinel::ReportKind::kCalls},
       {"login_prompt_board_busy", &g_busy, sentinel::ReportKind::kFaults},
-      {"login_prompt_layout_mismatch", &g_layoutMismatch, sentinel::ReportKind::kFaults},
+      {"login_prompt_block_not_ours", &g_notOurs, sentinel::ReportKind::kFaults},
       {"login_prompt_error_thunk_faults", &ErrorThunk::FaultCounter(), sentinel::ReportKind::kFaults},
       {"login_prompt_update_thunk_faults", &UpdateThunk::FaultCounter(), sentinel::ReportKind::kFaults},
   };
@@ -225,15 +258,27 @@ bool Install() noexcept {
   return ok;
 }
 
+bool InstallIfCounted(bool countersRegistered) noexcept {
+  if (!countersRegistered) {
+    sentinel::LogFields(sentinel::LogLevel::kError, "login_prompt_install",
+                        {{"result", "skipped"}, {"why", "counters_refused"}});
+    return false;
+  }
+  return Install();
+}
+
 void ArmForTest() noexcept {
   ErrorThunk::Arm(kErrorTextHook);
   UpdateThunk::Arm(kNetGameUpdateHook);
 }
 
+bool HoldBlockWriterForTest() noexcept { return !g_writing.test_and_set(std::memory_order_acquire); }
+void ReleaseBlockWriterForTest() noexcept { g_writing.clear(std::memory_order_release); }
+
 Counts CurrentCounts() noexcept {
   return {g_shown.load(std::memory_order_relaxed),    g_refreshed.load(std::memory_order_relaxed),
           g_kept.load(std::memory_order_relaxed),     g_notLocal.load(std::memory_order_relaxed),
-          g_busy.load(std::memory_order_relaxed),     g_layoutMismatch.load(std::memory_order_relaxed)};
+          g_busy.load(std::memory_order_relaxed),     g_notOurs.load(std::memory_order_relaxed)};
 }
 
 }  // namespace nevr_quest::login_prompt

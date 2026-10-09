@@ -2,42 +2,51 @@
  *
  * What the game does (pinned libr15; pinned_targets.h has the addresses): a failed login reaches
  * CR15NetGame::LogInFailedCB, which hands the message to SetDelimitedErrorMessage (the error block
- * in game_layout), switches to "login failed" (-94) and queues QuitOnError, whose component event
- * takes the UI to its error screen; the UI script reads the block through
- * CR15NetErrorMessageExpression. A new login is started by the UI script (CR15NetBeginLoginNode
- * calls BeginLogIn), not by CR15NetGame itself; "logged out" (0) is entered only by
- * CR15NetGame::LogOut, whose one call is in ~CR15NetGame.
+ * in game_layout), switches to "login failed" (-94) and queues QuitOnError. QuitOnError sends the
+ * game space a component event when CR15Game+0x7af0 is set, and otherwise sets the flag CR15Game::
+ * UpdateGame also sets when CVR::ShouldQuit() is true (a quit request). The UI script reads the
+ * block through CR15NetErrorMessageExpression. A new login is started by the UI script
+ * (CR15NetBeginLoginNode calls BeginLogIn); "logged out" (0) is entered only by
+ * CR15NetGame::LogOut, called only from ~CR15NetGame, called only from CR15Game::ShutdownEngine.
+ * The prompt therefore has to be useful also if the game quits after the failure: the player
+ * restarts it and sees a new code (or logs in with the cached sign-in).
  *
  * Two GOT hooks in libr15.so, both on the thread the game runs them on, both lock-free:
  *   - SetDelimitedErrorMessage: the game stores and logs its own message first (no code ever
- *     passes through the game's logging). Then, if the game was logging in (state 2), the message
- *     is one of the game's own local login-failure texts (never a server-sent message, so a ban or
- *     suspension text always shows), and the prompt board holds a prompt (Mode::kPrompt), the
- *     prompt is written over the error block after checking the block holds the game's message,
- *     and the game's block is saved.
- *   - CR15NetGame::Update (once per game update): while that same object is still in "login failed"
- *     and the board has changed since it was written (a new code, the signed-in notice, the
- *     timed-out text, or withdrawn), the block is rewritten, or the game's saved block restored.
- *     Whether the UI re-reads the block while the error screen is up is not known from the binary;
- *     the next login failure writes the current text either way.
+ *     passes through the game's logging). If the game was logging in (state 2), the message is one
+ *     of the game's own local login-failure texts (quest/game_login_failures.h; never a
+ *     server-sent message, so a ban or suspension text always shows) and the block holds that
+ *     message, the instance is followed from then on and the game's block is saved; if the prompt
+ *     board holds a prompt (Mode::kPrompt), it is written over the block now.
+ *   - CR15NetGame::Update (once per game update): while the followed instance is still in "login
+ *     failed" and the board has changed since the block was written (a prompt published after the
+ *     failure, a new code, the signed-in notice, the timed-out text, or withdrawn), the block is
+ *     rewritten, or the game's saved block restored. Before writing it checks the block still holds
+ *     what this hook last left there: the game has other writers of the block (lobby, lobby-status
+ *     and game-space errors), and a block one of them changed is left alone for good. Whether the
+ *     UI re-reads the block while the error screen is up is not known from the binary; the next
+ *     login failure writes the current text either way.
  *
  * It never logs on the game's call path. Its eight counters (hook_report.h), registered by
  * RegisterCounters():
  *   login_prompt_text_shown         a login failure's message was replaced by the prompt
- *   login_prompt_text_refreshed     a prompt on screen was rewritten or restored after a change
- *   login_prompt_text_kept          a local login failure kept the game's text: nothing, or only a
- *                                   notice, was published
+ *   login_prompt_text_refreshed     the followed block was rewritten or restored after a change
+ *   login_prompt_text_kept          a local login failure kept the game's text for now: nothing,
+ *                                   or only a notice, was published (the instance is followed)
  *   login_prompt_text_not_local     not a local login failure while logging in (a server message,
  *                                   a profile or removal error): the game's text, untouched
- *   login_prompt_board_busy         the board stayed busy through every read attempt
- *   login_prompt_layout_mismatch    the error block did not hold the game's message: nothing written
+ *   login_prompt_board_busy         the board, or the other hook, was busy at the failure (the
+ *                                   instance is followed when the board was the busy one)
+ *   login_prompt_block_not_ours     the block did not hold the game's message at the failure, or
+ *                                   another writer changed it later: nothing written, not followed
  *   login_prompt_error_thunk_faults / login_prompt_update_thunk_faults  a thunk had no original
  *
  * Integration surface (the startup sequence owns the order):
  *   1. RegisterCounters()  before sentinel::StartReporter. Returns false, after one JSON line, when
- *                          the reporter refused any of the eight; then do not Install.
- *   2. Install()           after token auth is created (QuestTokenAuth publishes to the prompt
- *                          board itself; nothing else needs attaching). Both slots are in
+ *                          the reporter refused any of the eight.
+ *   2. InstallIfCounted(<result of 1>)  after token auth is created (QuestTokenAuth publishes to
+ *                          the prompt board itself; nothing else needs attaching). Skips, with one
+ *                          JSON line, when the counters were refused; otherwise Install(). Both slots are in
  *                          libr15.so, which is relocated before the sentinel's constructor runs,
  *                          so it does not wait for the dlopen hook and does not depend on the login
  *                          hook. Logs one JSON line with both install results.
@@ -68,18 +77,26 @@ bool RegisterCounters() noexcept;
 // installed. Returns true only when both slots hold their thunks.
 bool Install() noexcept;
 
+// Install() when `countersRegistered`; otherwise logs {"event":"login_prompt_install","result":
+// "skipped","why":"counters_refused"} and installs nothing. Returns whether both slots hold thunks.
+bool InstallIfCounted(bool countersRegistered) noexcept;
+
 // Arms both handlers without touching a GOT slot: for the host test, which publishes originals
 // through the thunks' OriginalOut() and calls their EntryFn() directly.
 void ArmForTest() noexcept;
 
+// Test support: takes / gives back the hooks' single-writer flag, as the other hook would hold it.
+// Returns false when it was already taken. Nothing in production calls these.
+bool HoldBlockWriterForTest() noexcept;
+void ReleaseBlockWriterForTest() noexcept;
+
 // The counters' current values, in the order of the comment above.
 struct Counts {
-  std::uint64_t shown, refreshed, kept, not_local, busy, layout_mismatch;
+  std::uint64_t shown, refreshed, kept, not_local, busy, not_ours;
 };
 Counts CurrentCounts() noexcept;
 
-// Whether `message` is one of the game's own local login-failure texts (libpnsovr / libr15
-// "Log in request failed: ..." literals, passed only to CNSUser::LogInFailed).
+// Whether `message` is exactly one of quest/game_login_failures.h's texts.
 bool IsLocalLoginFailure(const char* message) noexcept;
 
 }  // namespace nevr_quest::login_prompt

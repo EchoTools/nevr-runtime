@@ -21,6 +21,7 @@
 #include "hook_report.h"
 #include "login_prompt_hook.h"
 #include "quest/auth/prompt_board.h"
+#include "quest/game_login_failures.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -71,7 +72,7 @@ void FakeUpdate(CR15NetGameOpaque*, std::uint64_t arg) {
 lp::ErrorThunk::Fn ErrorEntry() { return reinterpret_cast<lp::ErrorThunk::Fn>(lp::ErrorThunk::EntryAddress()); }
 lp::UpdateThunk::Fn UpdateEntry() { return reinterpret_cast<lp::UpdateThunk::Fn>(lp::UpdateThunk::EntryAddress()); }
 
-constexpr char kLocal[] = "Log in request failed: One or more prerequisites are missing";
+constexpr const char* kLocal = nevr_quest::game_login_failures::kPrerequisitesMissing;
 constexpr char kServerBan[] = "[XPID:OVR-ORG-1 / Discord:1]\nAccount disabled by EchoVRCE Admins";
 std::string Prompt(const char* code) {
   return std::string("Sign in to play: on a phone or computer, open\necho.test/login/device\nand enter the code ") +
@@ -100,22 +101,39 @@ void TheGameKnowsWhichFailuresAreItsOwn() {
   QCHECK(!lp::IsLocalLoginFailure(nullptr));
 }
 
-void ALocalFailureWithNothingPublishedKeepsTheGameText() {
+// Puts a fresh instance into "its login just failed with a local text" with the board as it is now.
+void FailLocally(FakeGame& g) {
+  SetState(g, layout::kStateLoggingIn);
+  ErrorEntry()(Obj(g), kLocal);
+  SetState(g, layout::kStateLoginFailed);  // what LogInFailedCB's SwitchTo(-0x5e) does next
+}
+
+constexpr char kNotice[] = "Signed in to EchoVRCE.\nRestart the game to finish.";
+
+void ALocalFailureWithNothingPublishedKeepsTheGameTextAndAPromptPublishedLaterReachesIt() {
   board::Withdraw();
-  SetState(g_game, layout::kStateLoggingIn);
   const lp::Counts before = lp::CurrentCounts();
-  ErrorEntry()(Obj(g_game), kLocal);
+  FailLocally(g_game);
   QCHECK(g_gameReceived == kLocal);
   QCHECK(Line(g_game, 0) == kLocal);
   QCHECK(BlockOf(g_game)[0] == 0);
   QCHECK(lp::CurrentCounts().kept == before.kept + 1);
+  // Token auth publishes after the failure (a slow refresh, a code request that took a while).
+  Publish(Prompt("LATE1-CODE"));
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 2) == "and enter the code LATE1-CODE");
+  QCHECK(BlockOf(g_game)[0] == 1);
+  QCHECK(lp::CurrentCounts().refreshed == before.refreshed + 1);
+  board::Withdraw();  // the game's own message comes back
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(BlockOf(g_game)[0] == 0 && Line(g_game, 0) == kLocal);
+  QCHECK(lp::CurrentCounts().refreshed == before.refreshed + 2);
 }
 
 void ALocalFailureWhileLoggingInShowsThePromptAndTheGameNeverSeesTheCode() {
   Publish(Prompt("CODE1-ABCD"));
-  SetState(g_game, layout::kStateLoggingIn);
   const lp::Counts before = lp::CurrentCounts();
-  ErrorEntry()(Obj(g_game), kLocal);
+  FailLocally(g_game);
   QCHECK(g_gameReceived == kLocal);  // the game stored and logged its own message, not the prompt
   QCHECK(BlockOf(g_game)[0] == 1);
   QCHECK(Line(g_game, 0) == "Sign in to play: on a phone or computer, open");
@@ -126,31 +144,40 @@ void ALocalFailureWhileLoggingInShowsThePromptAndTheGameNeverSeesTheCode() {
 }
 
 void TheScreenFollowsTheBoardWhileTheGameStaysInLoginFailed() {
-  // Continues from the previous case: the prompt for CODE1 is on screen.
-  SetState(g_game, layout::kStateLoginFailed);
+  // Continues from the previous case: the prompt for CODE1 is on screen, state -94.
   g_updateCalls = 0;
   const lp::Counts before = lp::CurrentCounts();
   UpdateEntry()(Obj(g_game), 16);  // nothing changed
   QCHECK(g_updateCalls == 1);
   QCHECK(lp::CurrentCounts().refreshed == before.refreshed);
   Publish(Prompt("CODE2-WXYZ"));  // the code ran out and a new one was issued
+  // Another instance, also in "login failed" and with a block identical to the followed one, is not
+  // the followed instance: it is left alone (the `self == followed` guard, not the state or block
+  // checks, is what stops this).
+  std::memcpy(g_other.bytes, g_game.bytes, sizeof(g_other.bytes));
+  UpdateEntry()(Obj(g_other), 16);
+  QCHECK(Line(g_other, 2) == "and enter the code CODE1-ABCD");
+  QCHECK(lp::CurrentCounts().refreshed == before.refreshed);
   UpdateEntry()(Obj(g_game), 16);
   QCHECK(Line(g_game, 2) == "and enter the code CODE2-WXYZ");
   QCHECK(lp::CurrentCounts().refreshed == before.refreshed + 1);
-  UpdateEntry()(Obj(g_other), 16);  // another object is left alone
-  QCHECK(lp::CurrentCounts().refreshed == before.refreshed + 1);
-  Publish("Signed in to EchoVRCE.\nThe game's next login attempt uses this sign-in.", board::Mode::kNotice);
+  // While the other hook holds the writer flag nothing is written; the next frame writes.
+  Publish(kNotice, board::Mode::kNotice);
+  QCHECK(lp::HoldBlockWriterForTest());
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 2) == "and enter the code CODE2-WXYZ");
+  lp::ReleaseBlockWriterForTest();
   UpdateEntry()(Obj(g_game), 16);
   QCHECK(Line(g_game, 0) == "Signed in to EchoVRCE.");
-  QCHECK(Line(g_game, 1) == "The game's next login attempt uses this sign-in.");
+  QCHECK(Line(g_game, 1) == "Restart the game to finish.");
   QCHECK(Line(g_game, 2).empty() && Line(g_game, 3).empty());
   board::Withdraw();  // stopped: the game's own message comes back
   UpdateEntry()(Obj(g_game), 16);
   QCHECK(BlockOf(g_game)[0] == 0);
   QCHECK(Line(g_game, 0) == kLocal);
   QCHECK(lp::CurrentCounts().refreshed == before.refreshed + 3);
-  QCHECK(g_updateCalls == 5);  // the game's Update ran every time
-  // The game leaves "login failed": the object is no longer followed.
+  QCHECK(g_updateCalls == 6);  // the game's Update ran every time, for both instances
+  // The game leaves "login failed": the instance is no longer followed.
   SetState(g_game, 0);
   UpdateEntry()(Obj(g_game), 16);
   Publish(Prompt("CODE3-QQQQ"));
@@ -161,11 +188,27 @@ void TheScreenFollowsTheBoardWhileTheGameStaysInLoginFailed() {
   board::Withdraw();
 }
 
-void ANoticeIsNotShownForANewFailure() {
-  Publish("Signed in to EchoVRCE.\nThe game's next login attempt uses this sign-in.", board::Mode::kNotice);
-  SetState(g_game, layout::kStateLoggingIn);
+void ABlockAnotherWriterChangedIsLeftAlone() {
+  Publish(Prompt("CODE7-UUUU"));
+  FailLocally(g_game);
+  QCHECK(Line(g_game, 2) == "and enter the code CODE7-UUUU");
+  // The game shows a different error with the same block (a lobby or game-space error).
+  FakeSetDelimitedErrorMessage(Obj(g_game), "Service is unavailable");
   const lp::Counts before = lp::CurrentCounts();
-  ErrorEntry()(Obj(g_game), kLocal);
+  Publish(Prompt("CODE8-VVVV"));
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 0) == "Service is unavailable");  // not overwritten
+  QCHECK(lp::CurrentCounts().not_ours == before.not_ours + 1);
+  board::Withdraw();  // and not "restored" over the other writer's text either
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 0) == "Service is unavailable");
+  QCHECK(lp::CurrentCounts().refreshed == before.refreshed);
+}
+
+void ANoticeIsNotShownForANewFailure() {
+  Publish(kNotice, board::Mode::kNotice);
+  const lp::Counts before = lp::CurrentCounts();
+  FailLocally(g_game);
   QCHECK(Line(g_game, 0) == kLocal);
   QCHECK(lp::CurrentCounts().kept == before.kept + 1);
   board::Withdraw();
@@ -196,21 +239,32 @@ void ABlockThatDoesNotHoldTheGameMessageIsNotWritten() {
   ErrorEntry()(Obj(g_game), kLocal);
   g_errorWrites = true;
   QCHECK(BlockOf(g_game)[0] == 0x5a && BlockOf(g_game)[1] == 0x5a);  // untouched
-  QCHECK(lp::CurrentCounts().layout_mismatch == before.layout_mismatch + 1);
+  QCHECK(lp::CurrentCounts().not_ours == before.not_ours + 1);
   board::Withdraw();
 }
 
-void ABusyBoardIsCountedAndTheGameTextKept() {
+void ABusyBoardIsCountedAndThePromptFollowsOnTheNextFrame() {
   Publish(Prompt("CODE6-TTTT"));
-  SetState(g_game, layout::kStateLoggingIn);
   const lp::Counts before = lp::CurrentCounts();
   board::BeginWriteForTest();
-  ErrorEntry()(Obj(g_game), kLocal);
+  FailLocally(g_game);
   board::EndWriteForTest();
   QCHECK(Line(g_game, 0) == kLocal);
   QCHECK(lp::CurrentCounts().busy == before.busy + 1);
   QCHECK(lp::CurrentCounts().kept == before.kept);  // busy is not "nothing published"
+  UpdateEntry()(Obj(g_game), 16);  // the board is free again: the prompt goes up
+  QCHECK(Line(g_game, 2) == "and enter the code CODE6-TTTT");
   board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+}
+
+void AWithdrawnBoardKeepsNoCode() {
+  Publish(Prompt("WIPE1-CODE"));
+  QCHECK(board::NonZeroTextBytesForTest() == Prompt("WIPE1-CODE").size());
+  Publish("short", board::Mode::kNotice);  // nothing of the longer text stays behind it
+  QCHECK(board::NonZeroTextBytesForTest() == 5);
+  board::Withdraw();
+  QCHECK(board::NonZeroTextBytesForTest() == 0);
 }
 
 void TheBoardRefusesWhatTheGameCouldNotShow() {
@@ -294,6 +348,16 @@ void CounterRefusalIsLoudAndInstallReportsBothSlots() {
   QCHECK(!lp::Install());
   QCHECK(CountLines("\"event\":\"login_prompt_install\"") == 1);
   QCHECK(CountLines("\"result\":\"failed\"") == 1);
+  // Without its counters the hook is not installed: one "skipped" line, no install attempt.
+  g_lines.clear();
+  QCHECK(!lp::InstallIfCounted(false));
+  QCHECK(CountLines("\"result\":\"skipped\"") == 1);
+  QCHECK(CountLines("\"why\":\"counters_refused\"") == 1);
+  QCHECK(CountLines("got_hook") == 0);
+  QCHECK(CountLines("\"result\":\"failed\"") == 0);
+  g_lines.clear();
+  QCHECK(!lp::InstallIfCounted(true));  // with them, Install runs (and is refused on the host)
+  QCHECK(CountLines("\"result\":\"failed\"") == 1);
 }
 
 }  // namespace
@@ -307,13 +371,15 @@ int main() {
   lp::ArmForTest();
 
   TheGameKnowsWhichFailuresAreItsOwn();
-  ALocalFailureWithNothingPublishedKeepsTheGameText();
+  ALocalFailureWithNothingPublishedKeepsTheGameTextAndAPromptPublishedLaterReachesIt();
   ALocalFailureWhileLoggingInShowsThePromptAndTheGameNeverSeesTheCode();
   TheScreenFollowsTheBoardWhileTheGameStaysInLoginFailed();
+  ABlockAnotherWriterChangedIsLeftAlone();
   ANoticeIsNotShownForANewFailure();
   ServerMessagesAndLoggedInRemovalsAreNeverReplaced();
   ABlockThatDoesNotHoldTheGameMessageIsNotWritten();
-  ABusyBoardIsCountedAndTheGameTextKept();
+  ABusyBoardIsCountedAndThePromptFollowsOnTheNextFrame();
+  AWithdrawnBoardKeepsNoCode();
   TheBoardRefusesWhatTheGameCouldNotShow();
   ConcurrentReadsAreNeverTorn();
   QCHECK(lp::ErrorThunk::Faults() == 0 && lp::UpdateThunk::Faults() == 0);

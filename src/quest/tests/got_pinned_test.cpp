@@ -16,14 +16,17 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <string>
 #include <iterator>
 #include <vector>
 
 #include "got_hook.h"
 #include "pinned_targets.h"
 #include "quest/login/login_prerequisite_targets.h"
+#include "quest/game_login_failures.h"
 #include "quest/tests/test_check.h"
 
 namespace {
@@ -120,6 +123,17 @@ std::uint64_t DynamicSymbolValue(const LoadedElf& elf, const char* symbol) {
     }
   }
   return 0;
+// `text` is a whole NUL-terminated string in the file (a NUL before and after it).
+bool HoldsString(const std::vector<char>& file, const char* text) {
+  std::string needle(1, '\0');
+  needle += text;
+  needle += '\0';
+  return std::search(file.begin(), file.end(), needle.begin(), needle.end()) != file.end();
+}
+
+std::vector<char> ReadAll(const char* path) {
+  std::ifstream file(path, std::ios::binary);
+  return std::vector<char>((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 }
 
 void CheckBuildId(const LoadedElf& elf, const char* expected) {
@@ -171,6 +185,15 @@ int main(int argc, char** argv) {
       QCHECK(false);
     }
   }
+  // The login-failure texts the sign-in prompt hook recognises are the game's own strings.
+  const std::vector<char> pnsovr = ReadAll(argv[3]);
+  QCHECK(pnsovr.size() > 1000000);
+  for (const char* text : nevr_quest::game_login_failures::kAll) {
+    if (!HoldsString(pnsovr, text)) std::fprintf(stderr, "not in libpnsovr.so: %s\n", text);
+    QCHECK(HoldsString(pnsovr, text));
+  }
+  const std::vector<char> r15File = ReadAll(argv[1]);
+  QCHECK(HoldsString(r15File, nevr_quest::game_login_failures::kServiceUnavailable));
 
   if (quest_test::Failures() != 0) {
     std::fprintf(stderr, "got_pinned_test: %d check(s) failed\n", quest_test::Failures());

@@ -2,6 +2,14 @@
 
 namespace nevr::auth {
 
+namespace {
+// Wipes the code and the URL carrying it however the flow ends.
+struct WipeOnExit {
+  std::string& secret;
+  ~WipeOnExit() { WipeSecret(secret); }
+};
+}  // namespace
+
 DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& login_url) {
   const auto log = [&ops](LogLevel level, const std::string& message) {
     if (ops.log) ops.log(level, message);
@@ -13,7 +21,8 @@ DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& 
     return none;
   }
 
-  const std::string code = ops.request_device_code();
+  std::string code = ops.request_device_code();
+  const WipeOnExit wipe_code{code};
   if (code.empty()) {
     log(LogLevel::Warning, "[NEVR.AUTH] device code request failed, cannot start device-auth flow");
     return none;
@@ -23,7 +32,8 @@ DeviceFlowResult RunDeviceCodeFlow(const DeviceFlowOps& ops, const std::string& 
   log(LogLevel::Info, "[NEVR.AUTH] Device authorization started; browser opening requested");
   log(LogLevel::Info, "[NEVR.AUTH] Device code expires in 5 minutes");
 
-  const std::string full_url = login_url + "?code=" + code;
+  std::string full_url = login_url + "?code=" + code;
+  const WipeOnExit wipe_url{full_url};
   const intptr_t browserResult = ops.open_browser(full_url);
   // The code is a credential for this session, so the log says where the browser was sent and
   // what the open returned, with the code masked (ShellExecute reports success above 32).
