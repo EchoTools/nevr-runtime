@@ -254,7 +254,10 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
             r"case ix::WebSocketMessageType::Error:(?:(?!WebSocketMessageType::Message).)*?"
             r"m_bearerAuth\.OnError\s*\(\s*msg->errorInfo\.http_status", re.S))
         server = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
-        fallback = extract_braced_function(server, "VOID GameServerLib::RequestRegistration(")
+        request = extract_braced_function(server, "VOID GameServerLib::RequestRegistration(")
+        self.assertRegex(request, r"\bConnectTelemetry\s*\(\s*wsToken\s*\)")
+        telemetry = (ROOT / "src/runtime/server/gameserver_telemetry.cpp").read_text()
+        fallback = extract_braced_function(telemetry, "void GameServerLib::ConnectTelemetry(")
         self.assertRegex(fallback, re.compile(
             r"token = wsToken;(?:(?!m_telemetry->Connect).)*?m_telemetry->SetBearerTokenRefresher\s*\(", re.S))
 
@@ -268,6 +271,21 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertRegex(hook, r"\bRearmConsoleCtrlHandler\s*\(\s*\)")
         install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
         self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
+
+    def test_broadcaster_hook_entries_are_counted_only_by_hook_liveness(self):
+        # Issue #33: mode_patches.cpp kept its own entry counters and a periodic log line that
+        # duplicated HookLiveness::Report for the same two hooks. HookLiveness is the one instrument.
+        patches = strip_comments((ROOT / "src/runtime/patch/mode_patches.cpp").read_text())
+        for gone in ("g_listenHookEntries", "g_dispatchHookEntries", "LogBroadcasterHookStats"):
+            self.assertNotIn(gone, patches)
+        for hook, marker in (("static INT16 EngineEntityLookupHook(", "kBroadcasterListen"),
+                             ("static VOID EngineEntityPropDispatchHook(", "kBroadcasterReceiveLocal")):
+            self.assertIn(f"HookLiveness::Mark(HookLiveness::{marker})", extract_braced_function(patches, hook))
+        tick = strip_comments((ROOT / "src/runtime/frame/tick.cpp").read_text())
+        self.assertNotIn("LogBroadcasterHookStats", tick)
+        for gone in ("broadcaster_hook_stats.cpp", "broadcaster_hook_stats.h"):
+            self.assertFalse((ROOT / "src/runtime/patch" / gone).exists(), f"{gone} has no caller and was deleted")
+        self.assertIn('HookLiveness::Report("periodic")', tick)
 
     def test_getsymbol_hook_validates_its_prologue(self):
         # Issue #254: the CSysDLL_GetSymbol detour (echovr.exe 0x1400eaef0) was written blind. Binary
@@ -318,7 +336,7 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         # Issue #246: the ServerDB refresher, the telemetry refresher and RequestRegistration all
         # reach RefreshAuthToken -> SaveAuthToken (an unlocked truncating write of .credentials.json).
         server = (ROOT / "src/runtime/server/gameserver.cpp").read_text()
-        acquire = extract_braced_function(server, "static std::string AcquireServerDbToken(")
+        acquire = extract_braced_function(server, "std::string AcquireServerDbToken(")
         self.assertRegex(acquire, r"ServerDbAuth::RunSerializedMint\s*\(")
         helper = (ROOT / "src/runtime/server/serialized_mint.h").read_text()
         self.assertRegex(helper, r"std::lock_guard<std::mutex>")

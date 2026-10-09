@@ -18,7 +18,6 @@ set(PATCHES_SOURCES
     "lifecycle/service_config.cpp"
     "lifecycle/login_redirect_override.cpp"
     "patch/mode_patches.cpp"
-    "patch/broadcaster_hook_stats.cpp"
     "patch/coop_ai_trace.cpp"
     "lifecycle/crash_recovery.cpp"
     "lifecycle/return_to_lobby.cpp"
@@ -55,6 +54,7 @@ set(PATCHES_SOURCES
     "hook/symbol_corpus.cpp"
     "server/gameserver.cpp"
     "server/gameserver_callbacks.cpp"
+    "server/gameserver_telemetry.cpp"
     "server/registration_envelope.cpp"
     "server/messages.cpp"
     "server/server_context.cpp"
@@ -89,7 +89,6 @@ set(PATCHES_HEADERS
     "lifecycle/service_config.h"
     "lifecycle/login_redirect_override.h"
     "patch/mode_patches.h"
-    "patch/broadcaster_hook_stats.h"
     "patch/coop_ai_trace.h"
     "patch/coop_ai_trace_rules.h"
     "lifecycle/crash_recovery.h"
@@ -203,7 +202,7 @@ set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_
 # #60: plugin_manifest.cpp builds the login's nevr_plugins array with nlohmann-json;
 # pure and PCH-free for the same reason as plugin_load_plan.cpp.
 set_source_files_properties(ext/plugin_manifest.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/gameserver_callbacks.cpp server/registration_envelope.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/gameserver_callbacks.cpp server/gameserver_telemetry.cpp server/registration_envelope.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # ws_bridge.cpp has no C-style casts (CPP-MINGW-ADDENDUM hard stop); keep it that way at compile time.
 # The property is directory-scoped, so the test target that compiles the same file gets it too.
@@ -684,13 +683,7 @@ if(BUILD_TESTING)
       # Linked as production source (not a stub) so the test drives the real
       # guard — a stub here would make the N84 tests tautological.
       hook/hook_guard.cpp
-      # N83/N84: link the full production patch unit so the test calls the
-      # real LogBroadcasterHookStats entry point, not merely its formatter.
-      # The test invokes only that log-only function with its zero-initialized
-      # counters; no game-memory patch or hook installation path is entered.
       hook/hook_liveness.cpp
-      patch/mode_patches.cpp
-      patch/broadcaster_hook_stats.cpp
     )
     target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS USE_MINHOOK
       PROJECT_VERSION="${PROJECT_VERSION}"
@@ -713,9 +706,7 @@ if(BUILD_TESTING)
       compat/login_profile.cpp
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
-      patch/broadcaster_hook_stats.cpp
       hook/hook_liveness.cpp
-      patch/mode_patches.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON
     )
     target_include_directories(test_behavioral PRIVATE
