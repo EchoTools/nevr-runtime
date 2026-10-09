@@ -91,6 +91,7 @@ set(PATCHES_HEADERS
     "lifecycle/crash_recovery.h"
     "lifecycle/crash_dump_format.h"
     "lifecycle/readable_memory.h"
+    "lifecycle/console_ctrl_policy.h"
     "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
     "patch/splash_texture.h"
