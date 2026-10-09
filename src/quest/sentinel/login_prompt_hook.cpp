@@ -465,11 +465,14 @@ void HookedEnablePageNodeEnter(EnablePageThunk::Fn original, void* node, const v
       // now. Otherwise this is not the record measured, or the game just wrote a genuine error: the game's
       // call goes ahead.
       if (node == const_cast<unsigned char*>(bytes) + ui::kEnablePageNodeOffset && LatchHoldsLive()) {
-        (errorPage ? g_errorPageDropped : g_loggingInPageDropped).fetch_add(1, std::memory_order_relaxed);
-        // The attempt whose page was skipped must fail, even if the gate turns ready before it is checked: it
-        // would otherwise log in on a screen that has no way to show it.
-        if (!errorPage) gate::Poison();
-        return;
+        // The attempt whose logging-in page is skipped must fail, even if the gate turns ready before it is
+        // checked: it would otherwise log in on a screen that has no way to show it. Skipping and poisoning
+        // are one compare-and-swap on the gate word: if the gate turned ready since it was read, the login
+        // may proceed and needs the page, so the page goes through.
+        if (errorPage || gate::PoisonIfNotReady()) {
+          (errorPage ? g_errorPageDropped : g_loggingInPageDropped).fetch_add(1, std::memory_order_relaxed);
+          return;
+        }
       }
       g_pagePassedArmed.fetch_add(1, std::memory_order_relaxed);
     } else if (actor == ui::kLoggingInPage) {

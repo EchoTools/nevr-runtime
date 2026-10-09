@@ -878,6 +878,31 @@ void AGenuineErrorWrittenInTheSameFrameIsNotDropped() {
   lp::ResetLatchForTest();
 }
 
+// Failure caught (#239 second review L1): the logging-in page skip and the poison were two steps. If the gate
+// turned ready between the decision and the poison, the page was skipped and the attempt poisoned although the
+// login could proceed: stranded on the login-failed screen, then failed by its own prerequisites. The poison is
+// one compare-and-swap that fails when the gate turned ready, and then the page goes through. The flip is
+// injected between the read and the swap.
+void ALoggingInPageIsNotSkippedWhenTheGateTurnsReadyBeforeThePoison() {
+  PromptOnScreen("CAS1-CODE");
+  gate::SetReady(false);
+  gate::g_beforePoisonCas = [](void) noexcept { gate::SetReady(true); };
+  const lp::Counts before = lp::CurrentCounts();
+  QCHECK(Enabled(ui::kLoggingInPage));  // passes through
+  gate::g_beforePoisonCas = nullptr;
+  QCHECK(lp::CurrentCounts().logging_in_page_dropped == before.logging_in_page_dropped);
+  QCHECK(gate::LoginMayProceed());  // and the attempt is not poisoned
+  // Without the flip the skip and the poison still happen together.
+  gate::SetReady(false);
+  QCHECK(!Enabled(ui::kLoggingInPage));
+  QCHECK(!gate::LoginMayProceed() && !gate::IsReady());
+  gate::SetReady(true);
+  gate::ClearPoison();
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  lp::ResetLatchForTest();
+}
+
 }  // namespace
 
 int main() {
@@ -915,6 +940,7 @@ int main() {
   WithoutAPromptOnScreenNothingIsHeldBack();
   ANoticeWaitsForTheLoginToBeAbleToProceed();
   ASkippedLoggingInPagePoisonsTheAttemptUntilItEnds();
+  ALoggingInPageIsNotSkippedWhenTheGateTurnsReadyBeforeThePoison();
   EnablesOnAnotherThreadDuringRewritesAreAllSkipped();
   AWithdrawnBoardKeepsNoCode();
   TheBoardRefusesWhatTheGameCouldNotShow();

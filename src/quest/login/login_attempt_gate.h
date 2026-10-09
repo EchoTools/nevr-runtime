@@ -40,6 +40,25 @@ inline bool IsReady() noexcept { return (g_state.load(std::memory_order_acquire)
 
 // The current login attempt had its logging-in page skipped: it must fail.
 inline void Poison() noexcept { g_state.fetch_or(kPoisonedBit, std::memory_order_acq_rel); }
+
+// Test seam: called between PoisonIfNotReady's read of the word and its compare-and-swap, to flip the
+// readiness exactly there. Null in production.
+inline void (*g_beforePoisonCas)() noexcept = nullptr;
+
+// Poisons the attempt only if the gate is still not ready: one compare-and-swap on the word, so the decision
+// to skip a logging-in page and the poison are a single step. False (nothing poisoned) when the gate is ready
+// or turned ready meanwhile: the caller lets the page through, because a login that may proceed needs it.
+inline bool PoisonIfNotReady() noexcept {
+  std::uint32_t seen = g_state.load(std::memory_order_acquire);
+  for (;;) {
+    if ((seen & kReadyBit) != 0) return false;
+    if (g_beforePoisonCas != nullptr) g_beforePoisonCas();
+    if (g_state.compare_exchange_weak(seen, seen | kPoisonedBit, std::memory_order_acq_rel,
+                                      std::memory_order_acquire)) {
+      return true;
+    }
+  }
+}
 inline void ClearPoison() noexcept { g_state.fetch_and(~kPoisonedBit, std::memory_order_acq_rel); }
 
 // A login may stand in for the Oculus answers: ready, and the attempt is not poisoned. One atomic load.
