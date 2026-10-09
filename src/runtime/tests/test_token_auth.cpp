@@ -693,7 +693,27 @@ TEST(DeviceAuthFlow, BrowserThatReturnsAfterDeadlineDoesNotStartPolling) {
   ExpectSameDeviceAuthState(result.state, original);
 }
 
-TEST(DeviceAuthFlow, PollResultAtOrAfterDeadlineDoesNotMutateOrSaveAnyAuthField) {
+TEST(DeviceAuthFlow, PollResultAtOrAfterDeadlineThatIsNotVerifiedDoesNotMutateOrSaveAnyAuthField) {
+  for (const char* body : {R"({"status":"pending"})", R"({"status":"expired"})"}) {
+    for (const auto elapsedSeconds : {300, 301}) {
+      FakeDeviceAuthFlow fake;
+      fake.poll_response = TokenAuth::ParseDevicePollResponse(body);
+      fake.poll_elapsed = std::chrono::seconds(elapsedSeconds - 3);
+      const auto original = ExistingDeviceAuthState();
+      const auto flow = TokenAuth::TestHook::RunDeviceAuthFlow(false, original, fake.Ops());
+
+      EXPECT_FALSE(flow.success) << body << " " << elapsedSeconds;
+      EXPECT_EQ(fake.poll_calls, 1);
+      EXPECT_EQ(fake.save_calls, 0);
+      ExpectSameDeviceAuthState(flow.state, original);
+    }
+  }
+}
+
+// The server deletes a device code when the poll that reports it verified returns the tokens
+// (nakama evr_device_auth.go, verified branch of the poll RPC), so a verified answer whose poll
+// returns at or after the deadline is the player's only copy of the login: it is applied and saved.
+TEST(DeviceAuthFlow, VerifiedPollResultReturningAtOrAfterDeadlineIsApplied) {
   for (const auto elapsedSeconds : {300, 301}) {
     FakeDeviceAuthFlow fake;
     fake.poll_response = VerifiedPollResponse();
@@ -701,10 +721,11 @@ TEST(DeviceAuthFlow, PollResultAtOrAfterDeadlineDoesNotMutateOrSaveAnyAuthField)
     const auto original = ExistingDeviceAuthState();
     const auto flow = TokenAuth::TestHook::RunDeviceAuthFlow(false, original, fake.Ops());
 
-    EXPECT_FALSE(flow.success) << elapsedSeconds;
+    EXPECT_TRUE(flow.success) << elapsedSeconds;
     EXPECT_EQ(fake.poll_calls, 1);
-    EXPECT_EQ(fake.save_calls, 0);
-    ExpectSameDeviceAuthState(flow.state, original);
+    EXPECT_EQ(fake.save_calls, 1);
+    EXPECT_EQ(flow.state.refresh_token, "new-refresh");
+    EXPECT_EQ(flow.state.user_id, "new-user");
   }
 }
 
