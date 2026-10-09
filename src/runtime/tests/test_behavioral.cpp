@@ -99,7 +99,6 @@ CHAR   g_internalIpOverride[46] = {};
 CHAR   g_externalIpOverride[46] = {};
 CHAR   g_customConfigPath[MAX_PATH] = {};
 CHAR   g_regionOverride[64]   = {};
-GUID   g_loginSessionId       = {};
 FLOAT  g_arenaRoundTime       = 0.0f;
 FLOAT  g_arenaCelebrationTime = 0.0f;
 FLOAT  g_arenaMercyScore      = 0.0f;
