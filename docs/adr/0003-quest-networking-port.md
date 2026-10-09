@@ -123,9 +123,8 @@ log; its counters `login_prompt_text_shown` and `login_prompt_text_passed` are r
 tests are `src/quest/tests/login_prompt_hook_test.cpp` and the presenter and session tests in
 `auth_core_test.cpp`; `got_pinned_test.cpp` resolves the slot in the pinned `libr15.so`.
 
-Nothing here holds the game's login while the player signs in: the game's login is the login
-hook's (`src/quest/login/`). The prompt is shown each time that login fails while the board holds
-it.
+Nothing here holds the game's login while the player signs in; that belongs to whatever intercepts
+the game's login request. The prompt is shown each time that login fails while the board holds it.
 
 Linking token auth into the sentinel brings OpenSSL and libcurl with it (the sentinel grows from
 about 1.8 MB to about 35 MB unstripped). `libr15.so`, `libpnsrad.so`, `libpnsovr.so` and
