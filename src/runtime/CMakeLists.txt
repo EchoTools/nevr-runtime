@@ -18,9 +18,9 @@ set(PATCHES_SOURCES
     "lifecycle/service_config.cpp"
     "lifecycle/login_redirect_override.cpp"
     "patch/mode_patches.cpp"
-    "patch/broadcaster_hook_stats.cpp"
     "patch/coop_ai_trace.cpp"
     "lifecycle/crash_recovery.cpp"
+    "lifecycle/return_to_lobby.cpp"
     "lifecycle/crash_dump_format.cpp"
     "hook/hook_guard.cpp"
     "hook/hook_liveness.cpp"
@@ -53,6 +53,9 @@ set(PATCHES_SOURCES
     "patch/headless_graphics.cpp"
     "hook/symbol_corpus.cpp"
     "server/gameserver.cpp"
+    "server/gameserver_callbacks.cpp"
+    "server/gameserver_telemetry.cpp"
+    "server/gameserver_serverdb.cpp"
     "server/registration_envelope.cpp"
     "server/messages.cpp"
     "server/server_context.cpp"
@@ -74,7 +77,9 @@ set(PATCHES_HEADERS
     "lifecycle/initialize.h"
     "lifecycle/game_image_guard.h"
     "lifecycle/system_module_loader.h"
+    "log/boot_lines.h"
     "log/boot_log_tee.h"
+    "log/boot_replay.h"
     "lifecycle/cli.h"
     "lifecycle/boot.h"
     "lifecycle/config.h"
@@ -85,10 +90,11 @@ set(PATCHES_HEADERS
     "lifecycle/service_config.h"
     "lifecycle/login_redirect_override.h"
     "patch/mode_patches.h"
-    "patch/broadcaster_hook_stats.h"
     "patch/coop_ai_trace.h"
     "patch/coop_ai_trace_rules.h"
     "lifecycle/crash_recovery.h"
+    "lifecycle/return_to_lobby.h"
+    "lifecycle/return_to_lobby_hold.h"
     "lifecycle/crash_dump_format.h"
     "lifecycle/readable_memory.h"
     "lifecycle/console_ctrl_policy.h"
@@ -123,6 +129,7 @@ set(PATCHES_HEADERS
     "patch/headless_graphics.h"
     "hook/symbol_corpus.h"
     "server/gameserver.h"
+    "server/gameserver_internal.h"
     "server/registration_envelope.h"
     "server/server_context.h"
     "server/websocket_client.h"
@@ -196,7 +203,7 @@ set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_
 # #60: plugin_manifest.cpp builds the login's nevr_plugins array with nlohmann-json;
 # pure and PCH-free for the same reason as plugin_load_plan.cpp.
 set_source_files_properties(ext/plugin_manifest.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/registration_envelope.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/gameserver_callbacks.cpp server/gameserver_telemetry.cpp server/gameserver_serverdb.cpp server/registration_envelope.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # ws_bridge.cpp has no C-style casts (CPP-MINGW-ADDENDUM hard stop); keep it that way at compile time.
 # The property is directory-scoped, so the test target that compiles the same file gets it too.
@@ -373,12 +380,15 @@ if(BUILD_TESTING)
 
     # Issue #41: the ServerDB URI builder (percent-encoded query) — pure, curl only.
     # test_failure_detail.cpp (#35, header-only failure_detail.h) rides in this executable.
+    # test_boot_replay.cpp (#5, header-only log/boot_lines.h and log/boot_replay.h) rides in this executable.
     add_executable(test_serverdb_uri
       tests/test_serverdb_uri.cpp
       tests/test_failure_detail.cpp
+      tests/test_boot_replay.cpp
+      tests/test_login_session.cpp
       server/serverdb_uri.cpp
       log/url_diagnostics.cpp)
-    set_source_files_properties(tests/test_serverdb_uri.cpp tests/test_failure_detail.cpp server/serverdb_uri.cpp log/url_diagnostics.cpp
+    set_source_files_properties(tests/test_serverdb_uri.cpp tests/test_failure_detail.cpp tests/test_boot_replay.cpp tests/test_login_session.cpp server/serverdb_uri.cpp log/url_diagnostics.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(test_serverdb_uri PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_serverdb_uri PRIVATE GTest::gtest GTest::gtest_main CURL::libcurl)
@@ -601,7 +611,8 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_core nlohmann_json::nlohmann_json)
     gtest_discover_tests(test_scenario_early_quit DISCOVERY_MODE PRE_TEST)
 
-    add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp)
+    # test_return_to_lobby_hold.cpp (#58, header-only lifecycle/return_to_lobby_hold.h) rides in this executable.
+    add_executable(test_schannel_cred_guard tests/test_schannel_cred_guard.cpp tests/test_return_to_lobby_hold.cpp)
     target_include_directories(test_schannel_cred_guard PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(test_schannel_cred_guard PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_schannel_cred_guard DISCOVERY_MODE PRE_TEST)
@@ -673,13 +684,7 @@ if(BUILD_TESTING)
       # Linked as production source (not a stub) so the test drives the real
       # guard — a stub here would make the N84 tests tautological.
       hook/hook_guard.cpp
-      # N83/N84: link the full production patch unit so the test calls the
-      # real LogBroadcasterHookStats entry point, not merely its formatter.
-      # The test invokes only that log-only function with its zero-initialized
-      # counters; no game-memory patch or hook installation path is entered.
       hook/hook_liveness.cpp
-      patch/mode_patches.cpp
-      patch/broadcaster_hook_stats.cpp
     )
     target_compile_definitions(test_behavioral PRIVATE NEVR_TEST_HOOKS USE_MINHOOK
       PROJECT_VERSION="${PROJECT_VERSION}"
@@ -702,9 +707,7 @@ if(BUILD_TESTING)
       compat/login_profile.cpp
       server/serverdb_uri.cpp
       hook/symbol_corpus.cpp
-      patch/broadcaster_hook_stats.cpp
       hook/hook_liveness.cpp
-      patch/mode_patches.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON
     )
     target_include_directories(test_behavioral PRIVATE
@@ -764,7 +767,15 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_init_fail"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
-    add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail)
+    add_library(test_plugin_info_keeper SHARED
+      tests/plugin_info_keeper_test_dll.cpp)
+    target_compile_definitions(test_plugin_info_keeper PRIVATE NEVR_PLUGIN_EXPORTS)
+    target_include_directories(test_plugin_info_keeper PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    set_target_properties(test_plugin_info_keeper PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "test_plugin_info_keeper"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail test_plugin_info_keeper)
 
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
 
@@ -791,11 +802,14 @@ if(BUILD_TESTING)
       GTest::gtest GTest::gtest_main nevr_abi nevr_api ws2_32)
     gtest_discover_tests(test_messages DISCOVERY_MODE PRE_TEST)
 
+    # test_plugin_logger.cpp (#34, header-only plugins/common/include/plugin_logger.h) rides in this
+    # executable so the existing `just test-auth-unit` loop runs it.
     add_executable(test_crash_recovery
-      tests/test_crash_recovery.cpp lifecycle/crash_dump_format.cpp)
-    set_source_files_properties(tests/test_crash_recovery.cpp lifecycle/crash_dump_format.cpp
+      tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp lifecycle/crash_dump_format.cpp)
+    set_source_files_properties(tests/test_crash_recovery.cpp tests/test_process_memory.cpp tests/test_json_escape.cpp tests/test_plugin_logger.cpp lifecycle/crash_dump_format.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-    target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(test_crash_recovery PRIVATE ${CMAKE_SOURCE_DIR}/src
+      ${CMAKE_SOURCE_DIR}/plugins/common/include)
     target_link_libraries(test_crash_recovery PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_crash_recovery DISCOVERY_MODE PRE_TEST)
   endif()
