@@ -391,6 +391,23 @@ TEST_F(PluginLoaderDiagnosticTest, PluginListedTwiceLoadsOnce) {
   EXPECT_EQ(manifest[1].at("error"), "listed twice in config.yaml");
 }
 
+// N89 (#100 regression net): a plugin whose function is built in is refused even when it is listed
+// as required, with the reason in the login's report; the plugin after it still loads.
+TEST_F(PluginLoaderDiagnosticTest, SupersededPluginIsRefusedAndTheNextOneLoads) {
+  g_testPluginLoadPlan.push_back({"filter", "Log_Filter.dll", true, "", "{}"});
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 1);
+  EXPECT_TRUE(TestLogContains("SKIPPED Log_Filter.dll"));
+  const nlohmann::json manifest = nlohmann::json::parse(BuildPluginManifestJson());
+  ASSERT_EQ(manifest.size(), 2u) << manifest.dump();
+  EXPECT_EQ(manifest[0].at("loaded"), false);
+  EXPECT_EQ(manifest[0].at("error"), "superseded by the built-in log filter");
+  EXPECT_EQ(manifest[1].at("loaded"), true);
+}
+
 // The same DLL under another spelling of its path passes the file-name check, so
 // the loader's same-module check is what stops it.
 TEST_F(PluginLoaderDiagnosticTest, PluginListedUnderAnotherPathSpellingLoadsOnce) {
