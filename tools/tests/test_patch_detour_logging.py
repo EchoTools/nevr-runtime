@@ -35,6 +35,30 @@ class BootPhaseLogging(unittest.TestCase):
             body = extract_braced_function(source, signature)
             self.assertNotRegex(body, r"\bLog\(", f"{signature} calls Log() under the loader lock")
 
+    def test_game_main_hook_reports_through_the_tee_during_boot(self):
+        # InstallGameMainHook runs in the boot phase (initialize.cpp), under the loader lock.
+        source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
+        body = extract_braced_function(source, "void InstallGameMainHook(")
+        self.assertRegex(body, r"BootLogTee::InBootPhase\(\)")
+        before_else = body.split("} else", 1)[0]
+        self.assertNotRegex(before_else, r"\bLog\(", "InstallGameMainHook logs before the InBootPhase branch ends")
+        self.assertIn("BootLogTee::TeeFprintf(", before_else)
+
+    def test_every_boot_return_ends_the_boot_phase(self):
+        # An early return that skips BootLogTee::Close() leaves InBootPhase() true for the whole run.
+        source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
+        body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
+        failure = re.search(r"if\s*\(\s*!Hooking::Initialize\(\)\s*\)\s*\{(?P<b>.*?)\n  \}", body, re.S)
+        self.assertIsNotNone(failure)
+        self.assertRegex(failure.group("b"), r"BootLogTee::Close\(\)\s*;[^}]*return\s*;")
+
+    def test_late_unload_records_go_through_log(self):
+        # CSysDLL_GetSymbol runs at unload, long after BootLogTee::Close(): TeeFprintf there is stderr only.
+        source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
+        line = re.search(r"[^\n]*RadPluginShutdown of a platform DLL skipped[^\n]*", source).group(0)
+        self.assertIn("Log(", line)
+        self.assertNotIn("TeeFprintf", line)
+
     def test_boot_phase_flag_does_not_depend_on_the_file_opening(self):
         source = (ROOT / "src/runtime/log/boot_log_tee.cpp").read_text()
         init = extract_braced_function(source, "void BootLogTee::Init(")
