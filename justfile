@@ -556,7 +556,17 @@ test-quest-router:
     set -euo pipefail
     out="build/quest-router-host"
     mkdir -p "$out"
-    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc)
+    # The loopback server and its test write and parse their JSON records with nlohmann::json: the header
+    # the build installed from vcpkg.json for the x64-mingw-static triplet, never a system package.
+    json_src="build/{{ preset }}/vcpkg_installed/x64-mingw-static/include/nlohmann"
+    if [[ ! -f "$json_src/json.hpp" ]]; then
+        echo "test-quest-router: FAIL - $json_src/json.hpp not found; run 'just build' with a mingw-* preset first" >&2
+        exit 1
+    fi
+    json_inc="$out/json_inc"
+    mkdir -p "$json_inc"
+    ln -sfn "$PWD/$json_src" "$json_inc/nlohmann"
+    cxx=(g++ -std=c++17 -Wall -Wextra -Werror -pthread -Isrc -isystem "$json_inc")
     "${cxx[@]}" src/runtime/compat/session_router.cpp src/runtime/compat/evr_codec.cpp \
         src/quest/tests/session_router_test.cpp -o "$out/session_router_test"
     "$out/session_router_test"
