@@ -123,11 +123,10 @@ def cited_paths() -> set:
 # the private hardening overlay, its local symlink path, and the purged leak
 # commit, none of which may be republished into this public repo.
 #
-# But "untracked" is exactly why the primer rotted. It sat outside every gate and
-# accumulated 14 references to `src/gamepatches/`, a directory deleted in N109,
-# plus a `src/common/` layer split apart in N108 — and a dispatched agent walked
-# into all of them before anything noticed. A file does not have to be committed
-# to be checked; it only has to be on disk.
+# But "untracked" is exactly how a primer rots: outside every gate it accumulates
+# references to directories that no longer exist (e.g. `src/gamepatches/`, N109;
+# the `src/common/` layer split, N108), and a dispatched agent walks into them. A
+# file does not have to be committed to be checked; it only has to be on disk.
 #
 # So these are scanned when present and silently skipped when absent, which keeps
 # a fresh clone green while still gating the owner's checkout where the file lives.
@@ -281,11 +280,9 @@ def main() -> int:
     for f, number, path in bad_source:
         print(f"doc-paths: FAIL {f}:{number} cites `{path}` — no such document. Point the comment at "
               f"the document that exists, or drop the citation.", file=sys.stderr)
-    # Each explanation prints for its OWN failure class. This used to be one
-    # `if bad or dead_citations or bare_bad:` that returned 1 from inside, which
-    # made the bare-filename explanation below unreachable whenever bare_bad was
-    # the only failure — the check still failed the build, but with no reason
-    # attached, which is the least useful way to fail.
+    # Each explanation prints for its OWN failure class, so the bare-filename
+    # explanation below is reachable when bare_bad is the only failure — a check
+    # that fails the build with no reason attached is the least useful way to fail.
     if bad:
         print(f"\ndoc-paths: {len(bad)} claimed path(s) do not exist. A document that "
               f"names a path that is not there sends the next reader somewhere real "

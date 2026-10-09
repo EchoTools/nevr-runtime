@@ -24,7 +24,7 @@ class UrlDiagnosticLogInvariantTest(unittest.TestCase):
     def test_server_connection_logs_use_formatted_redaction(self):
         self.assert_source_contains(
             "src/runtime/server/websocket_client.cpp",
-            'LogDiagnostics::FormatRedactedUrlDiagnostic("[WEBSOCKET] Connecting to ServerDB at ", uri)',
+            'LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.SERVERDB] Connecting to ServerDB at ", uri)',
         )
         self.assert_source_contains(
             "src/runtime/server/telemetry_streamer.cpp",
@@ -35,7 +35,7 @@ class UrlDiagnosticLogInvariantTest(unittest.TestCase):
         self.assert_source_contains(
             "src/runtime/compat/ws_bridge.cpp",
             'LogDiagnostics::FormatRedactedUrlDiagnostic(\n                  "[NEVR.WS] Matchmaker conn=" + std::to_string(connIdx) + " using protobuf URL: "',
-            'LogDiagnostics::FormatRedactedUrlDiagnostic(\n                          "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + "): "',
+            'LogDiagnostics::FormatRedactedUrlDiagnostic(\n                          "[NEVR.WS] Remote open (conn=" + std::to_string(connIdx) + ", " + ConnLabel(connIdx) + "): "',
             'LogDiagnostics::FormatRedactedUrlDiagnostic("[NEVR.WS] Proxy remote target: "',
             'LogDiagnostics::FormatRedactedUrlPairDiagnostic(\n      "[NEVR.WS] Proxy listening on "',
         )

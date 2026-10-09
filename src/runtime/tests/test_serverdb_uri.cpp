@@ -1,5 +1,6 @@
-// Issue #41: the ServerDB URI used to be built with snprintf, so a password (or any
-// config value) containing '&', '=', '#', '%', '+', or whitespace rewrote the query.
+// Issue #41: the ServerDB URI is percent-encoded, because building it with snprintf
+// lets a password (or any config value) containing '&', '=', '#', '%', '+', or whitespace
+// rewrite the query.
 // These tests pin the percent-encoded output and parse it back the way the server
 // does (split on '&', split on the first '=', percent-decode the value).
 
@@ -217,10 +218,10 @@ TEST(ServerDbUri, BridgeCredentialsAreBothOrNeither) {
 
 // --- RemoveQueryParam (issue #116) --------------------------------------
 // ws_bridge.cpp's matchmaker path (connIdx >= 2) strips "format=evr" from the
-// bridge-credential URI. The previous inline version deleted the character
-// before the match unconditionally, which deleted the URI's own '?' whenever
+// bridge-credential URI. Deleting the character before the match
+// unconditionally would delete the URI's own '?' whenever
 // format=evr was the first query param, concatenating path and query with no
-// separator: "wss://g.example/ws?format=evr&discordid=1&password=pw" became
+// separator: "wss://g.example/ws?format=evr&discordid=1&password=pw" becomes
 // "wss://g.example/wsdiscordid=1&password=pw".
 
 // The exact shape BuildBridgeCredentialUri produces today for the matchmaker

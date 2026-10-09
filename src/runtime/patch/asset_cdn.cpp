@@ -108,10 +108,10 @@ static const uint8_t EXPECTED_PROLOGUE[] = {
 };
 constexpr size_t PROLOGUE_LEN = sizeof(EXPECTED_PROLOGUE);
 
-// Validation is nevr::ValidatePrologue (N97). The zero-extra-arg wrapper this
-// file used to carry is not preserved: with one call site it bought nothing,
-// and a file-local ValidatePrologue taking a different argument list is exactly
-// the one-name-two-meanings defect N96 removed.
+// Validation is nevr::ValidatePrologue (N97). There is no file-local wrapper:
+// with one call site it would buy nothing, and a file-local ValidatePrologue
+// taking a different argument list is exactly the one-name-two-meanings defect
+// N96 guards against.
 
 /// Lowercase hex dump of len bytes — same conversion ComputeSHA256 already
 /// does locally for its digest; pulled out so prologue-mismatch logging can

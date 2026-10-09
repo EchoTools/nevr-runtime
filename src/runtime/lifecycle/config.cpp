@@ -39,8 +39,8 @@ EchoVR::Json* g_earlyConfigPtr = NULL;
 /// Issue #21: this file is OPTIONAL. N133 moved every NEVR-owned key to
 /// config.yaml; what is left in a config.json is only what the stock engine reads
 /// natively, and the engine loads its own copy regardless (LoadLocalConfigHook).
-/// A server used to ServerFatal when this found nothing (N48, from before N133),
-/// killing a correctly configured config.yaml-only deployment. Absent is now
+/// A server must not ServerFatal when this finds nothing: that would kill a
+/// correctly configured config.yaml-only deployment. Absent is
 /// normal (Info); present but unparseable is a Warning naming the file, because
 /// the operator wrote something the engine is going to ignore.
 /// </summary>
@@ -442,10 +442,10 @@ static const char* ResolveLoginOverrideBridgeUrl(void*, uint16_t bridgePort) {
 VOID ArmServiceRedirects() { s_serviceRedirectsArmed.store(true, std::memory_order_release); }
 
 static CHAR* RedirectServiceUrl(CHAR* keyName, CHAR* result) {
-  // Issue #21: this used to be `if (g_earlyConfigPtr == NULL) return result;`,
-  // which made every redirect depend on a config.json existing, although both
-  // targets come from config.yaml (N133 S3/S5b). That guard ALSO did a second,
-  // unstated job, kept here: g_earlyConfigPtr only became non-null at the start
+  // Issue #21: redirects do not depend on a config.json existing (both
+  // targets come from config.yaml, N133 S3/S5b), so there is no
+  // `g_earlyConfigPtr == NULL` guard. The armed flag does the job that guard
+  // would otherwise do: g_earlyConfigPtr is only non-null from the start
   // of RunDeferredRuntimeBootstrap, so no redirect — and therefore no
   // NevrCfgGetFlat, which is the first access to the lazily loaded config.yaml
   // singleton — ran on the engine's JsonValueAsString calls before the
@@ -514,8 +514,8 @@ CHAR* JsonValueAsStringHook(EchoVR::Json* root, CHAR* keyName, CHAR* defaultValu
     return const_cast<CHAR*>(overrideOutcome.value);
   }
 
-  // Issue #21: _local/config.json is optional, and it used to be the only source
-  // of publisher_lock (read by the engine through THIS function: 10 of the 12
+  // Issue #21: _local/config.json is optional, and publisher_lock may come from
+  // NEVR config instead (read by the engine through THIS function: 10 of the 12
   // code references to the "publisher_lock" string at 0x1416D2F08 are followed
   // by a call to 0x1405FE290, incl. CNSLobby::RequestRegistration). When no
   // config supplied the key — same "result is still the default" test as the
