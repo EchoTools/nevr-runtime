@@ -503,7 +503,9 @@ void UnloadPlugins() {
     }
     FreeLibrary(it->hModule);
   }
-  g_plugins.clear();
+  // Release the storage as well: the next load starts from capacity 0, so it is the reserve in
+  // LoadPlugins (not leftover capacity from an earlier load) that keeps kept info pointers valid.
+  std::vector<LoadedPlugin>().swap(g_plugins);
   PublishPluginReport({});  // nothing is loaded any more; do not report stale state
 }
 

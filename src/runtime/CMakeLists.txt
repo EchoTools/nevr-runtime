@@ -755,7 +755,15 @@ if(BUILD_TESTING)
       PREFIX ""
       OUTPUT_NAME "test_plugin_init_fail"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
-    add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail)
+    add_library(test_plugin_info_keeper SHARED
+      tests/plugin_info_keeper_test_dll.cpp)
+    target_compile_definitions(test_plugin_info_keeper PRIVATE NEVR_PLUGIN_EXPORTS)
+    target_include_directories(test_plugin_info_keeper PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    set_target_properties(test_plugin_info_keeper PROPERTIES
+      PREFIX ""
+      OUTPUT_NAME "test_plugin_info_keeper"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/plugins")
+    add_dependencies(test_behavioral test_plugin_future_api test_plugin_onframe test_plugin_init_fail test_plugin_info_keeper)
 
     gtest_discover_tests(test_behavioral DISCOVERY_MODE PRE_TEST)
 
