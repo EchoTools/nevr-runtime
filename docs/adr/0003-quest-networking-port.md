@@ -1399,9 +1399,11 @@ installs the login prerequisites (#240). Counters are registered only for hooks 
 clock 2, redirect 10, dlopen 1, social 19, login prompt 8, 40 of the reporter's 48 slots
 (`integration_hooks_test` runs the sequence against the real registration functions). The login thunk and
 the login prerequisites register none (#237). The production identity source answers the prerequisites'
-`IdentitySource::Ready()` with true exactly when its `Fetch` would return `Ok` (token auth Ready with an
-access token and a NEVR account), so a stand-in Oculus answer is given only when the NEVR rewrite will
-replace it (#240).
+`IdentitySource::Ready()` from a lock-free `QuestLogin::ReadyFlag` (one atomic load, no allocation): the
+token-auth poll thread and each `Fetch` set it to whether `Fetch` returns `Ok` for the state they observed
+(token auth Ready with an access token and a NEVR account) and clear it in every other state, so a
+stand-in Oculus answer is given only when the NEVR rewrite will replace it (#240). It can trail a state
+change by up to one poll period (2 s).
 
 **Dependencies.** A failed or skipped piece turns off what needs it and nothing else. Token auth
 failing turns off the login prompt, the bridge, the login hook, the social facade and the redirect; the bridge failing
