@@ -66,7 +66,9 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         'else echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/nevr-fake-$(date +%s%N).jsonl"; fi\n'
         'cmp -s "$FAKE_EXPECT_DLL" "./BugSplat64.dll" || { echo "wrong DLL deployed" >&2; exit 9; }\n'
         '(sleep 3) &  # a leftover child, like a lingering wineserver, must not keep the lock\n'
-        '[[ -n "${FAKE_WINE_LOCK_DLL:-}" ]] && chmod 444 ./BugSplat64.dll\n'
+        '# A directory where the DLL was makes the restore fail for any user; chmod 444 does not stop root,\n'
+        '# which is who runs the tests in the CI container.\n'
+        '[[ -n "${FAKE_WINE_LOCK_DLL:-}" ]] && { rm -f ./BugSplat64.dll; mkdir ./BugSplat64.dll; }\n'
         'exec sleep "${FAKE_WINE_SLEEP:-0}"\n')
     # wineserver: like the real one, `-k` exits 1 when no server is left (every call after the first), `-w`
     # exits 0; each call is logged with the deployed DLL's content so tests can see WHEN it ran.
