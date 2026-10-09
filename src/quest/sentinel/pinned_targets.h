@@ -9,8 +9,9 @@
  * built with -fno-exceptions (see the contract there). Handlers are `noexcept`.
  *
  * Nothing in this header activates a hook. entry.cpp installs the clock_gettime
- * proof hook only; the CJson::TString thunks are declared for the config-string
- * seam and stay uninstalled until the gates in #158 pass.
+ * proof hook and the login-prompt hook (login_prompt_hook.h, on
+ * SetDelimitedErrorMessage); the CJson::TString thunks are declared for the
+ * config-string seam and stay uninstalled until the gates in #158 pass.
  */
 #pragma once
 
@@ -32,6 +33,8 @@ inline constexpr const char* kTStringSymbol = "_ZNK10NRadEngine5CJson7TStringEPK
 inline constexpr const char* kClockGettimeSymbol = "clock_gettime";
 inline constexpr const char* kConfigRequestSendSymbol =
     "_ZN10NRadEngine18SNSConfigRequestv24SendERNS_15CTcpBroadcasterEPKcS4_";
+inline constexpr const char* kSetDelimitedErrorMessageSymbol =
+    "_ZN10NRadEngine8NRadGame11CR15NetGame24SetDelimitedErrorMessageEPKc";
 
 // ---- typed callbacks --------------------------------------------------------
 
@@ -52,6 +55,20 @@ struct MatchmakingTStringTag {};
 using LibR15TStringThunk = CallbackThunk<LibR15TStringTag, CJsonTStringSig>;
 using MatchmakingTStringThunk = CallbackThunk<MatchmakingTStringTag, CJsonTStringSig>;
 
+// NRadEngine::NRadGame::CR15NetGame::SetDelimitedErrorMessage(char const*), defined in libr15 at
+// 0x125f768 (member: `this` in x0, the message in x1, no return value). It splits the message on
+// '\n' (CStringTable(msg, 10)) into at most four lines and stores them with
+// CR15NetGame::SetErrorMessage, which copies each line (four 64-byte buffers at
+// CR15NetGame+0x63309) and logs them as "[NETGAME] %s %s %s %s". Its three callers are the login
+// error callbacks, each followed by SwitchTo(-0x5e): LogInFailedCB (bl at 0x125f604),
+// LoginRemovedCB (0x125f9b4) and LocalUserProfileErrorCB (0x126d588). The message is borrowed for
+// the call only. CR15NetGame is never dereferenced by a handler.
+struct CR15NetGameOpaque;
+using SetDelimitedErrorMessageSig = void(CR15NetGameOpaque* self, const char* message);
+struct LibR15SetDelimitedErrorMessageTag {};
+using LibR15SetDelimitedErrorMessageThunk =
+    CallbackThunk<LibR15SetDelimitedErrorMessageTag, SetDelimitedErrorMessageSig>;
+
 // SNSConfigRequestv24Send(CTcpBroadcaster&, char const*, char const*): the
 // mangling encodes the parameters but not the return type, and no caller has
 // been decoded, so there is deliberately no thunk for it.
@@ -66,6 +83,12 @@ inline GotTarget LibR15ClockGettime() {
 // libr15.so's slot for CJson::TString, defined in libr15 itself (JUMP_SLOT 0x36ebe08).
 inline GotTarget LibR15TString() {
   return {kLibR15, kTStringSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36ebe08ULL};
+}
+
+// libr15.so's slot for CR15NetGame::SetDelimitedErrorMessage, defined in libr15 itself
+// (PLT 0xf23510 loads JUMP_SLOT 0x36e9170).
+inline GotTarget LibR15SetDelimitedErrorMessage() {
+  return {kLibR15, kSetDelimitedErrorMessageSymbol, RelocKind::kJumpSlot, kLibR15BuildId, 0x36e9170ULL};
 }
 
 // libpnsradmatchmaking.so's slot for the same function, defined in

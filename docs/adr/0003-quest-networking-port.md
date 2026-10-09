@@ -24,6 +24,121 @@ preset (`src/quest/CMakePresets.json`) uses the Quest-local vcpkg manifest, the 
 triplet and the NDK chainload at API 26. `nevr_quest_login_profile` compiles the shared login
 profile but is not linked into the sentinel.
 
+Token auth is shared the same way. The token model, refresh handling and device-code loop are
+platform-neutral sources in `src/core/` (`auth_token_model.h`, `auth_refresh.{h,cpp}`,
+`device_auth_flow.{h,cpp}`, `device_poll_response.{h,cpp}`) behind injected HTTP, clock and log
+interfaces (`auth_types.h`); the Windows `token_auth` module and `src/quest/auth/` both compile
+them. `src/quest/auth/` holds the Android adapters:
+
+- HTTP is libcurl (>= 7.87, checked at configure time) over OpenSSL from the Quest vcpkg
+  manifest (`arm64-android` triplet, no `builtin-baseline`, as in the root manifest), with peer
+  and host verification on, https only, no redirects, no proxy environment variables, a capped
+  response, and requests that a shutdown interrupts, including during a DNS lookup. Trust anchors
+  are read from `/apex/com.android.conscrypt/cacerts` (when it yields a certificate) or
+  `/system/etc/security/cacerts` into memory, each file parsed with OpenSSL (PEM or DER) and
+  re-encoded, so one corrupt file cannot make libcurl reject the whole blob; the blob is passed
+  as `CAINFO_BLOB`. `CAPATH` is not used: OpenSSL looks a CApath file up by the SHA-1 based
+  subject hash and Android names its files by the old MD5 based one. With no certificate loaded
+  every request fails closed.
+- The refresh token is written to `/data/user/<uid / 100000>/<package>/files/.credentials.json`,
+  the package taken from `/proc/self/cmdline`, because `/sdcard` does not enforce file modes. The
+  write is a fresh exclusive temp file, fsync, rename, directory fsync; a read refuses a symlink.
+  If the directory cannot be derived the login runs without persisting and says so. Only the
+  login link (`device_login.txt`, under `/sdcard/Android/data/com.readyatdawn.r15/files/`) is on
+  external storage.
+- `Session` does the login on a worker thread named `nevr-auth`, so `Start()` never blocks the
+  caller. Failures are handled by what they say:
+  - A cached refresh token is tried first (three attempts). If the server refuses the token itself
+    (400/401/403 whose JSON `message` is exactly one of the refresh RPC's own errors: `invalid or
+    expired refresh token`, `refresh token expired`, `not a refresh token`, `invalid payload:
+    refresh_token required`) the device login runs, `Refreshing -> AwaitingUser`.
+  - A transient failure (no connection, 5xx, 408, 429, an unreadable response) of the cached
+    refresh or of the device-code request is retried after 5, 15, 45, 135 and 300 s; the cache is
+    kept and the player is not prompted for it.
+  - Any other 4xx (a bare 401/403, which is also nakama's answer to a wrong `http_key`; a 400
+    `missing payload`; a 404 for a missing RPC) is one attempt, no backoff: the cache is kept, the
+    player is not prompted, an Error is logged with the status (never the body), and the login is
+    `Failed`.
+  - A `Failed` login that is not final is attempted again every five minutes with one request, for
+    as long as the process runs, logging one Warning per failure class. Final, because the player
+    was involved: the link could not be delivered, or the server refused a poll with a 4xx.
+  - A code that runs out (the server answers `expired`, or its five minutes pass) is replaced: the
+    state stays `AwaitingUser`, a new code is requested (no sooner than 30 s after the previous
+    request) and shown in place of the old one, and the prompt is not taken down in between. This
+    repeats until the player signs in, a poll is refused, or the game stops.
+  - While the player holds a link, poll failures that are transient (no connection, 5xx, 408, 429)
+    are waited out until the code's own five-minute deadline at the normal poll interval.
+  - After login, a refresh token that has expired or that the server refuses publishes `Expired`,
+    logs once and starts the device login again; other refresh failures keep the login and retry
+    next period.
+
+`nevr_quest_token_auth` is not linked into the sentinel, and nothing yet hands the token to the
+login path. The tests are `src/quest/tests/auth_core_test.cpp` (fake HTTP and clock) and
+`src/quest/tests/tls_ca_test.cpp` (loopback TLS peers with a generated CA and an Android-style
+directory), run on the host by `just test-quest-shared`. Not established on a headset: the CA
+directories and the libcurl/OpenSSL stack, that the process name is the package name, write access
+to the app-internal directory (and that Quest multi-user uses `/data/user/<n>`), and that the
+game's login-error screen shows the sign-in prompt below.
+
+### Sign-in prompt in the headset
+
+`QuestTokenAuth` hands each prompt (verification page, code, expiry) to every mechanism at once
+(`auth/prompt_presenters.h`, `FanOutPresenter`), so none of them has to work alone. Each logs one
+JSON line per attempt, `{"event":"login_prompt","mechanism":...,"result":...}`, with the reason
+when it fails and never the code:
+
+| Mechanism | What the player gets | Line |
+| --- | --- | --- |
+| `file` | `device_login.txt` (URL, code, instructions, expiry) under the external files dir; when it cannot be written, the direct link in logcat | `written` / `write_failed` |
+| `game_error_text` | the prompt as the game's own login-error text | `published` / `refused` / `withdrawn` |
+
+There is no Android intent, toast or notification: the sentinel holds no `JavaVM` or activity
+object (it is loaded as a `DT_NEEDED` dependency, so its `JNI_OnLoad` is not called).
+
+The game-text path, measured on the pinned `libr15.so` and `libpnsovr.so`:
+
+- A login that fails before it is sent (`CNSOVRUser::UpdateInternal`, `libpnsovr.so` `0x1edb64`
+  to `0x1edb7c`: code 500, "Log in request failed: One or more prerequisites are missing") calls
+  `LogInFailed` through the vtable; `CNSOVRUser::LogInFailed` (`0x1ec5d0`) tail-calls
+  `CNSUser::LogInFailed`, which logs `[LOGIN] %s` and calls the login-failed delegate. A server
+  `SNSLogInFailure` reaches the same `CNSUser::LogInFailed` through `LogInFailureCB`
+  (`libr15.so` `0x1933928`).
+- `CR15NetGame::LogInFailedCB` (`libr15.so` `0x125f298`, address taken by the `GLOB_DAT` at
+  `0x3708518`) calls `CR15NetGame::SetDelimitedErrorMessage(char const*)` through PLT `0xf23510`,
+  whose `R_AARCH64_JUMP_SLOT` is `0x36e9170`, then `SwitchTo(-0x5e)`. The other two callers of
+  that PLT entry are `LoginRemovedCB` (`0x125f9b4`) and `LocalUserProfileErrorCB` (`0x126d588`),
+  both followed by the same `SwitchTo`.
+- `SetDelimitedErrorMessage` (`0x125f768`) splits the message on `'\n'` into at most four lines
+  and calls `SetErrorMessage`, which copies each line into a 64-byte buffer (63 characters) at
+  `CR15NetGame+0x63309`, logs `[NETGAME] %s %s %s %s`, and `CR15NetErrorMessageExpression`
+  (`0x23225d0`) hands those buffers to the UI script. Which screen renders the expression is in the
+  game's assets, not in the ELF.
+
+The token-auth worker writes the four-line prompt (`FormatGamePromptText`) to the prompt board
+(`auth/prompt_board.h`, a sequence-locked fixed buffer built without exceptions) and withdraws it
+when the login ends. The sentinel installs a GOT hook on `0x36e9170`
+(`sentinel/login_prompt_hook.h`): while the board holds a prompt, the game's message is replaced by
+it; otherwise it passes unchanged. The hook runs once per failed login, takes no lock and does not
+log; its counters `login_prompt_text_shown` and `login_prompt_text_passed` are reported by
+`hook_report.h`. The game's own `[NETGAME]` line then carries the prompt, code included. The host
+tests are `src/quest/tests/login_prompt_hook_test.cpp` and the presenter and session tests in
+`auth_core_test.cpp`; `got_pinned_test.cpp` resolves the slot in the pinned `libr15.so`.
+
+Nothing here holds the game's login while the player signs in; that belongs to whatever intercepts
+the game's login request. The prompt is shown each time that login fails while the board holds it.
+
+Linking token auth into the sentinel brings OpenSSL and libcurl with it (the sentinel grows from
+about 1.8 MB to about 35 MB unstripped). `libr15.so`, `libpnsrad.so`, `libpnsovr.so` and
+`libpnsradmatchmaking.so` each export about 2411 OpenSSL and libcurl symbols (OpenSSL 3.0.0-dev,
+libcurl 7.68.0) and have the sentinel as `DT_NEEDED`. The sentinel therefore keeps
+`-Wl,--exclude-libs,ALL` and exports only `JNI_OnLoad` and `nevr_sentinel_marker`
+(`TestExportAllowlist`): in a probe, a sentinel-like library linked with the flag exported 2 symbols
+and had no PLT/GOT relocation bound to OpenSSL or libcurl, and without it exported 12130 and bound
+1367. That the flag keeps the sentinel's OpenSSL calls from resolving into the game's older copy
+is an inference from the probe, not run on a device. `just verify` fails if the sentinel links
+`nevr_quest_token_auth` without the flag or without `TestExportAllowlist`; run `just test-android`
+on the built artifact.
+
 `sentinel::GotHook` (`sentinel/got_hook.{h,cpp}`) replaces the GOT slot a module uses for a
 symbol it resolves at load time. It cannot hook an arbitrary internal function of `libr15.so`.
 A target names one slot by module, symbol and relocation type (`R_AARCH64_JUMP_SLOT` or
@@ -130,8 +245,9 @@ The sentinel exports only `nevr_sentinel_marker` and `JNI_OnLoad` (`TestExportAl
 once into `nevr_quest_got_hook`, which every Quest target links (`TestBackendCompiledOnce`).
 
 `sentinel/pinned_targets.h` holds the targets and callback types for the pinned artifact:
-`clock_gettime` (installed by `entry.cpp`), `CJson::TString` in both libraries, and the
-`SNSConfigRequestv24Send` and `GLOB_DAT` slots as fixtures. Only `clock_gettime` is installed.
+`clock_gettime` and `CR15NetGame::SetDelimitedErrorMessage` (both installed by `entry.cpp`),
+`CJson::TString` in both libraries, and the `SNSConfigRequestv24Send` and `GLOB_DAT` slots as
+fixtures. Only `clock_gettime` and `SetDelimitedErrorMessage` are installed.
 `SNSConfigRequestv24Send` has no thunk because its return type is not established.
 
 ## Architecture

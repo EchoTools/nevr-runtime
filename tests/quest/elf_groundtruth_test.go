@@ -561,3 +561,83 @@ func TestStlContract(t *testing.T) {
 		}
 	}
 }
+
+// heavyLink matches what must not reach the sentinel unguarded: token auth, libcurl, OpenSSL.
+var heavyLink = regexp.MustCompile(`libnevr_quest_token_auth\.a|lib(ssl|crypto|curl)\.a|(^|\s)-l(ssl|crypto|curl)(\s|$)`)
+
+// sentinelLinkViolations reads a build.ninja and judges the sentinel's link statement: when it
+// carries token auth, libcurl or OpenSSL it must also carry -Wl,--exclude-libs,ALL, because the
+// game's own libraries export an older OpenSSL/libcurl and have the sentinel as DT_NEEDED.
+func sentinelLinkViolations(ninja string) []string {
+	lines := strings.Split(ninja, "\n")
+	start := -1
+	for i, l := range lines {
+		if strings.HasPrefix(l, "build sentinel/libovrplatformloader.so:") {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return []string{"no link statement for sentinel/libovrplatformloader.so in build.ninja"}
+	}
+	block := lines[start]
+	for _, l := range lines[start+1:] {
+		if !strings.HasPrefix(l, "  ") {
+			break
+		}
+		block += "\n" + l
+	}
+	var v []string
+	if heavyLink.MatchString(block) && !strings.Contains(block, "--exclude-libs,ALL") {
+		v = append(v, "the sentinel link line carries token auth/libcurl/OpenSSL without -Wl,--exclude-libs,ALL")
+	}
+	return v
+}
+
+// The real, configured link line of the built sentinel.
+func TestSentinelLinkLineGuard(t *testing.T) {
+	requireArtifact(t)
+	p, err := filepath.Abs("../../build/android-arm64/build.ninja")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("cannot read the configured build graph %s (run `just build-android`): %v", p, err)
+	}
+	for _, v := range sentinelLinkViolations(string(data)) {
+		t.Error(v)
+	}
+}
+
+// The guard itself, on synthetic link statements.
+func TestSentinelLinkLineGuardJudgesLinkStatements(t *testing.T) {
+	stmt := func(libs, flags string) string {
+		return "build sentinel/libovrplatformloader.so: LINK a.o b.o\n  LINK_FLAGS = -shared " + flags +
+			"\n  LINK_LIBRARIES = " + libs + "\n  OBJECT_DIR = x\nbuild other: PHONY\n"
+	}
+	const guard = "-Wl,--exclude-libs,ALL"
+	cases := []struct {
+		name  string
+		ninja string
+		bad   bool
+	}{
+		{"plain sentinel", stmt("sentinel/libnevr_quest_got_hook.a -llog -ldl", guard), false},
+		{"plain sentinel without the flag", stmt("sentinel/libnevr_quest_got_hook.a -llog", ""), false},
+		{"token auth with the flag", stmt("libnevr_quest_token_auth.a vcpkg/lib/libssl.a", guard), false},
+		{"token auth without the flag", stmt("libnevr_quest_token_auth.a -llog", ""), true},
+		{"libssl by path without the flag", stmt("/x/vcpkg_installed/arm64-android/lib/libssl.a -llog", ""), true},
+		{"libcrypto without the flag", stmt("sentinel/libcrypto.a", ""), true},
+		{"libcurl without the flag", stmt("vcpkg/lib/libcurl.a", ""), true},
+		{"-lcurl without the flag", stmt("-lcurl -llog", ""), true},
+		{"the flag on another target only", stmt("libnevr_quest_token_auth.a", "") +
+			"build other.so: LINK c.o\n  LINK_FLAGS = " + guard + "\n", true},
+		{"no sentinel statement at all", "build other.so: LINK c.o\n", true},
+	}
+	for _, c := range cases {
+		got := sentinelLinkViolations(c.ninja)
+		if (len(got) > 0) != c.bad {
+			t.Errorf("%s: violations=%v, want bad=%v", c.name, got, c.bad)
+		}
+	}
+}
