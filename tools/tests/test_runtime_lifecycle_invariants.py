@@ -376,6 +376,19 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         boot = (ROOT / "src/runtime/lifecycle/boot.cpp").read_text()
         self.assertNotRegex(boot, r"\bRearmConsoleCtrlHandler\s*\(")
 
+    def test_telemetry_disconnect_cancels_the_bearer_refresh_before_stopping(self):
+        # Issue #254: stop() joins ixwebsocket's thread, so a 401 mint (up to the 10 s HTTP timeout)
+        # started during the stop would stall Disconnect.
+        source = strip_comments((ROOT / "src/runtime/server/telemetry_streamer.cpp").read_text())
+        body = extract_braced_function(source, "void TelemetryStreamer::Disconnect(")
+        self.assertLess(body.index("m_bearerAuth.Cancel()"), body.index("m_ws->stop()"))
+
+    def test_game_main_hook_has_no_c_style_casts(self):
+        # Issue #254 (CPP-MINGW addendum: no C-style casts).
+        source = strip_comments((ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text())
+        body = extract_braced_function(source, "void InstallGameMainHook(")
+        self.assertNotRegex(body, r"=\s*\(\s*\w+\s*\*\s*\)\s*\(")
+
     def test_matchmaking_host_patch_runs_on_every_load_without_a_guard(self):
         # Issue #18 / #286 F5: pnsradmatchmaking.dll is unloaded and reloaded mid-session, so the host
         # rewrite must run for every load notification. The pure Apply() is unit-tested; the property
