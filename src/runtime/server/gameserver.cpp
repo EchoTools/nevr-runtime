@@ -17,6 +17,7 @@
 #include "runtime/server/constants.h"
 #include "runtime/server/failure_detail.h"
 #include "runtime/server/protobuf_transport.h"
+#include "runtime/server/serialized_mint.h"
 #include "runtime/server/serverdb_uri.h"
 #include "runtime/server/session_success_dispatch.h"
 #include "runtime/server/session_unregister.h"
@@ -875,6 +876,7 @@ VOID* GameServerLib::Initialize(EchoVR::Lobby* lobby, EchoVR::Broadcaster* broad
   // game's teardown (lobby unregistration + ServerDB close) still runs behind
   // it, and we exit cleanly in Terminate() below.
   RearmConsoleCtrlHandler();
+  NotifyGameServerLibStarted();
 
 #if _DEBUG
   Log(EchoVR::LogLevel::Debug, "[NEVR.GAMESERVER] EchoVR base address = 0x%p", EchoVR::g_GameBaseAddress);
@@ -1356,11 +1358,17 @@ static std::string AuthenticateServer(std::string& reason) {
 // RequestRegistration (game thread) and, since #39, from the WebSocketClient's
 // token refresher on ixwebsocket's thread after ServerDB answers 401. Config
 // reads go through NevrCfgGetFlat's mutex-guarded intern pool. RefreshAuthToken
-// also rewrites the on-disk credential cache (auth_token_refresh.h SaveAuthToken);
-// the refresher is installed just before Connect, after RequestRegistration's own
-// acquisition has returned, so only a second RequestRegistration racing a 401
-// could overlap the two.
+// also rewrites the on-disk credential cache (auth_token_refresh.h SaveAuthToken)
+// without a lock, and three callers can mint at once (this function on the game
+// thread, the ServerDB socket's 401 refresher, the telemetry socket's), so the
+// whole mint runs under ServerDbAuth::RunSerializedMint.
+static std::string AcquireServerDbTokenUnserialized(std::string& reason);
+
 static std::string AcquireServerDbToken(std::string& reason) {
+    return ServerDbAuth::RunSerializedMint([&reason]() { return AcquireServerDbTokenUnserialized(reason); });
+}
+
+static std::string AcquireServerDbTokenUnserialized(std::string& reason) {
     std::string token;
     auto auth = LoadCachedAuthToken();
     if (auth.HasValidToken()) {

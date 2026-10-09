@@ -62,6 +62,7 @@ bool TestHook_GuardWsCallbackPropagatesNonStdException();
 int TestHook_LogFrameMessages(const char* direction, int connIdx, const std::string& frame);
 bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* statusCode, size_t* messageBytes);
 bool TestHook_LogLoginFailureDiagnostic(const std::string& frame, bool serverMode);
+bool TestHook_MoveCodeLineFirst(const std::string& frame, std::string* out);
 uint64_t TestHook_SelectPlatformCode(bool hasUrlCredentials, bool noOvr);
 std::string TestHook_SelectRemoteBearer(bool hasUrlCredentials, const std::string& jwt,
                                         const std::string& serverKey);

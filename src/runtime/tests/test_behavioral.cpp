@@ -195,6 +195,7 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 
 #include "runtime/ext/plugin_loader.h"
 #include "runtime/ext/module_loader.h"
+#include "runtime/patch/matchmaker_host_patch.h"
 #include "runtime/compat/ws_bridge.h"
 #include "runtime/compat/hmd_serial.h"
 #include "runtime/compat/social_party.h"
@@ -974,6 +975,91 @@ TEST(SecurityDiagnostics, NumericTransportFormatterCarriesOnlyNumericFields) {
             "[NEVR.WS] Proxy port 5000 bind failed failure=1 — retrying (1/3)");
   EXPECT_EQ(LogDiagnostics::FormatBindFailureDiagnostic("Matchmaker", 5001, 2, 3),
             "[NEVR.WS] Matchmaker port 5001 bind failed failure=1 — retrying (2/3)");
+}
+
+// #18: pnsradmatchmaking.dll is unloaded and reloaded mid-session and every load maps a fresh image,
+// so the host rewrite must apply to each image on its own.
+namespace {
+std::vector<uint8_t> FreshMatchmakerImage() {
+  std::vector<uint8_t> image(MatchmakerHostPatch::kHostRva + MatchmakerHostPatch::kHostSlotSize + 16, 0xAA);
+  std::memcpy(image.data() + MatchmakerHostPatch::kHostRva, MatchmakerHostPatch::kHostExpected,
+              sizeof(MatchmakerHostPatch::kHostExpected));
+  return image;
+}
+bool CopyWrite(uint8_t* dst, const char* src, size_t len) {
+  std::memcpy(dst, src, len);
+  return true;
+}
+const char* HostOf(const std::vector<uint8_t>& image) {
+  return reinterpret_cast<const char*>(image.data() + MatchmakerHostPatch::kHostRva);
+}
+}  // namespace
+
+TEST(MatchmakerHostPatch, EveryFreshImageAfterAReloadIsPatched) {
+  std::vector<uint8_t> first = FreshMatchmakerImage();
+  ASSERT_EQ(MatchmakerHostPatch::Apply(first.data(), 51234, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  EXPECT_STREQ(HostOf(first), "ws://127.0.0.1:51234");
+
+  // The game frees the module and loads it again: a new, unpatched image, possibly a new port.
+  std::vector<uint8_t> second = FreshMatchmakerImage();
+  EXPECT_STREQ(HostOf(second), MatchmakerHostPatch::kHostExpected);
+  ASSERT_EQ(MatchmakerHostPatch::Apply(second.data(), 60001, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  EXPECT_STREQ(HostOf(second), "ws://127.0.0.1:60001");
+}
+
+TEST(MatchmakerHostPatch, AnAlreadyPatchedImageIsLeftAlone) {
+  std::vector<uint8_t> image = FreshMatchmakerImage();
+  ASSERT_EQ(MatchmakerHostPatch::Apply(image.data(), 51234, CopyWrite), MatchmakerHostPatch::Result::Patched);
+  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 60001, CopyWrite), MatchmakerHostPatch::Result::BytesMismatch);
+  EXPECT_STREQ(HostOf(image), "ws://127.0.0.1:51234");
+}
+
+TEST(MatchmakerHostPatch, NoPortAndWriteFailureAreReportedNotPatched) {
+  std::vector<uint8_t> image = FreshMatchmakerImage();
+  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 0, CopyWrite), MatchmakerHostPatch::Result::NoPort);
+  EXPECT_STREQ(HostOf(image), MatchmakerHostPatch::kHostExpected);
+  EXPECT_EQ(MatchmakerHostPatch::Apply(image.data(), 51234, [](uint8_t*, const char*, size_t) { return false; }),
+            MatchmakerHostPatch::Result::WriteFailed);
+}
+
+// #201: the server's new-location text ends with the code line, which the game's screen drops.
+namespace {
+std::string FrameWithText(const std::string& text) {
+  const std::string withNul = text + std::string(1, '\0');
+  return BuildLoginFailureFrame(24 + withNul.size(), 400, withNul);
+}
+}  // namespace
+
+TEST(WsBridgeLoginFailure, NewLocationCodeLineMovesFirst) {
+  const std::string text =
+      "[XPID:OVR-ORG-1 / Discord:1]\n Please authorize this new location.\n"
+      "Check your Discord DMs from @EchoVRCE.\nSelect code >>> 42 <<<";
+  std::string out;
+  ASSERT_TRUE(TestHook_MoveCodeLineFirst(FrameWithText(text), &out));
+  EXPECT_EQ(out, FrameWithText("Select code >>> 42 <<<\n[XPID:OVR-ORG-1 / Discord:1]\n Please authorize this new "
+                               "location.\nCheck your Discord DMs from @EchoVRCE."));
+  uint64_t statusCode = 0;
+  size_t messageBytes = 0;
+  ASSERT_TRUE(TestHook_ReadLoginFailureDiagnostic(out, &statusCode, &messageBytes));
+  EXPECT_EQ(statusCode, 400U);
+  EXPECT_EQ(messageBytes, text.size() + 1);
+}
+
+TEST(WsBridgeLoginFailure, OtherFailureTextsAreLeftAlone) {
+  std::string out;
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("Account banned."), &out));
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("Select code >>> 42 <<<"), &out));  // already first
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("a\nSelect code >>> xx <<<"), &out));  // not digits
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("a\nSelect code >>>  <<<"), &out));  // empty code
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(FrameWithText("Go to G, type /verify\nWhen prompted, select code >>> 42 <<<"),
+                                         &out));  // guild variant: code is not a line of its own
+  // Two frames in one message are not rewritten.
+  const std::string two = FrameWithText("a\nSelect code >>> 42 <<<") + FrameWithText("b");
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(two, &out));
+  // A different message symbol is not touched.
+  std::string other = FrameWithText("a\nSelect code >>> 42 <<<");
+  other[8] ^= 1;
+  EXPECT_FALSE(TestHook_MoveCodeLineFirst(other, &out));
 }
 
 TEST(SecurityDiagnostics, CapturedLoginFailureSummaryExcludesServerMessage) {

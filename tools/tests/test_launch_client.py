@@ -66,7 +66,9 @@ def make_fake_bin(directory: pathlib.Path) -> None:
         'else echo \'{"msg":"NetGame switching state (from logging in, to logged in)"}\' > "$logs/nevr-fake-$(date +%s%N).jsonl"; fi\n'
         'cmp -s "$FAKE_EXPECT_DLL" "./BugSplat64.dll" || { echo "wrong DLL deployed" >&2; exit 9; }\n'
         '(sleep 3) &  # a leftover child, like a lingering wineserver, must not keep the lock\n'
-        '[[ -n "${FAKE_WINE_LOCK_DLL:-}" ]] && chmod 444 ./BugSplat64.dll\n'
+        '# A directory where the DLL was makes the restore fail for any user; chmod 444 does not stop root,\n'
+        '# which is who runs the tests in the CI container.\n'
+        '[[ -n "${FAKE_WINE_LOCK_DLL:-}" ]] && { rm -f ./BugSplat64.dll; mkdir ./BugSplat64.dll; }\n'
         'exec sleep "${FAKE_WINE_SLEEP:-0}"\n')
     # wineserver: like the real one, `-k` exits 1 when no server is left (every call after the first), `-w`
     # exits 0; each call is logged with the deployed DLL's content so tests can see WHEN it ran.
@@ -152,6 +154,24 @@ class LaunchClientTest(unittest.TestCase):
         self.assertGreaterEqual(elapsed, 2.0)
         self.assertLess(elapsed, 12.0)
         self.assertEqual(self.deployed(), ORIGINAL)
+
+    def test_the_deadline_is_not_short_when_the_run_starts_late_in_a_second(self):
+        # Whole-second arithmetic once ended a 2 s deadline after 1.04 s when the script read its
+        # start at x.99. A `date +%s` whose clock reads x.99 the first time it is asked puts every run
+        # in that position, so the outcome does not depend on when the test happens to start.
+        clock = self.tmp / "clock-shift"
+        fake_date = self.fake_bin / "date"
+        fake_date.write_text(
+            '#!/bin/bash\n'
+            'if [[ "$1" != "+%s" ]]; then exec /usr/bin/date "$@"; fi\n'
+            'now_us=${EPOCHREALTIME/./}\n'
+            f'[[ -e {clock} ]] || echo $((990000 - now_us % 1000000)) > {clock}\n'
+            f'echo $(( (now_us + $(cat {clock})) / 1000000 ))\n')
+        fake_date.chmod(0o755)
+        result, elapsed = self.run_until_login('{"msg":"noise"}\\n', timeout_flag=("--login-timeout", "2"),
+                                               env_extra={"NEVR_LOGIN_MIN_SECONDS": "1", "FAKE_WINE_SLEEP": "30"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertGreaterEqual(elapsed, 2.0)
 
     def test_a_dll_that_embeds_no_endpoints_is_refused_even_if_login_appears(self):
         text = ('{"msg":"[NEVR.CONFIG] built-in defaults embedded in this build: (none)"}\\n'
