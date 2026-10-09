@@ -238,15 +238,20 @@ def runtime_detour_sites() -> dict:
     VA -> sorted list of "file: label", for every detour the runtime installs on a
     game address through an EchoVR:: function pointer (InstallBootDetour/PatchDetour
     on &EchoVR::X) or an inline VA (g_GameBaseAddress + (0x14... - 0x140000000)
-    in a file that calls MH_CreateHook). PatchAddresses:: targets are covered by
-    gamepatches_detour_targets().
+    in a file that calls MH_CreateHook), plus every PatchAddresses:: detour target
+    (gamepatches_detour_targets()). Table-driven MH_CreateHook calls (an array of
+    {name, va, detour} entries) are not matched here.
     """
     by_name = {name: va for va, name in live_function_pointers().items()}
     found = {}
     for path in scan_cpp(DETOUR_SCAN_ROOT):
         rel = path.relative_to(REPO).as_posix()
         text = path.read_text(errors="replace")
-        for m in re.finditer(r"\b(?:InstallBootDetour|PatchDetour)\s*\(\s*&\s*EchoVR::(\w+)", text):
+        # InstallBootDetour/PatchDetour(&EchoVR::X, ...) and Hooking::Attach(reinterpret_cast<PVOID*>(&EchoVR::X), ...)
+        for m in re.finditer(
+            r"\b(?:InstallBootDetour|PatchDetour|Attach)\s*\(\s*(?:reinterpret_cast\s*<\s*PVOID\s*\*\s*>\s*\(\s*)?&\s*EchoVR::(\w+)",
+            text,
+        ):
             va = by_name.get(m.group(1))
             if va is not None:
                 found.setdefault(va, []).append(f"{rel}: EchoVR::{m.group(1)}")
@@ -255,6 +260,10 @@ def runtime_detour_sites() -> dict:
                 r"g_GameBaseAddress\)\s*\+\s*\(\s*(0x14[0-9A-Fa-f]+)\s*-\s*0x140000000\s*\)", text
             ):
                 found.setdefault(norm_va(int(m.group(1), 16)), []).append(f"{rel}: inline {m.group(1)}")
+    # A PatchAddresses:: constant detoured at the same address as an EchoVR:: pointer is the same
+    # collision: the constants are the other way this runtime names a game address.
+    for va, const in gamepatches_detour_targets().items():
+        found.setdefault(va, []).append(f"{DETOUR_SCAN_ROOT}: PatchAddresses::{const}")
     return {va: sorted(sites) for va, sites in found.items()}
 
 

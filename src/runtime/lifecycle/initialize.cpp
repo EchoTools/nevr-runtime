@@ -63,7 +63,7 @@ static EchoVR::IServerLib* g_ServerLib = nullptr;
 static EchoVR::IServerLib* ServerLibFactory() {
     if (!g_ServerLib) {
         g_ServerLib = new GameServerLib();
-        BootLogTee::TeeFprintf("[NEVR.GAMESERVER] ServerLib() created obj=%p\n", (void*)g_ServerLib);
+        BootLogTee::TeeFprintf("[NEVR.GAMESERVER] ServerLib() created obj=%p\n", static_cast<void*>(g_ServerLib));
     }
     return g_ServerLib;
 }
@@ -337,9 +337,15 @@ static VOID InitializeAfterGameImageGuard() {
   {
       void* sym_target = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(EchoVR::g_GameBaseAddress) + (0x1400eaef0 - 0x140000000));
-      if (MH_CreateHook(sym_target, reinterpret_cast<void*>(&CSysDLL_GetSymbolHook),
-              reinterpret_cast<void**>(&g_original_GetSymbol)) == MH_OK &&
-          MH_EnableHook(sym_target) == MH_OK) {
+      // Prologue of CSysDLL_GetSymbol (echovr.exe 0x1400eaef0: sub rsp,0xA8; test rdx,rdx).
+      static const unsigned char kGetSymbolPrologue[8] = {0x48, 0x81, 0xEC, 0xA8, 0x00, 0x00, 0x00, 0x48};
+      if (memcmp(sym_target, kGetSymbolPrologue, sizeof(kGetSymbolPrologue)) != 0) {
+        BootLogTee::TeeFprintf(
+            "[NEVR.PATCH] hook skipped name=CSysDLL_GetSymbol va=0x1400eaef0 reason=prologue_mismatch\n");
+        g_bootHookFailed = true;
+      } else if (MH_CreateHook(sym_target, reinterpret_cast<void*>(&CSysDLL_GetSymbolHook),
+                     reinterpret_cast<void**>(&g_original_GetSymbol)) == MH_OK &&
+                 MH_EnableHook(sym_target) == MH_OK) {
         BootLogTee::TeeFprintf("[NEVR.PATCH] hooked name=CSysDLL_GetSymbol\n");
       } else {
         BootLogTee::TeeFprintf("[NEVR.PATCH] hook failed name=CSysDLL_GetSymbol\n");
