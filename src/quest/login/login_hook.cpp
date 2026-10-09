@@ -27,6 +27,16 @@ constexpr const char* kHookedSymbol = "_ZN10NRadEngine7CNSUser16SendLogInRequest
 constexpr std::uint64_t kHookedSlotVaddr = 0x6dd1b8ULL;
 constexpr std::uint64_t kOwnSendLogInRequestVaddr = 0x382a4cULL;
 
+// CNSOVRUser::LogInFailed(ENSResponseCode, char const*, CJson const&) @0x1ec5d0: the game's own
+// login-failure entry. Calling it drives the game to the login-failed state (it tail-calls
+// CNSUser::LogInFailed 0x382e50, which clears the pending flag and invokes the registered failure
+// delegate); it sends nothing. Used to fail closed when a prerequisite was synthesized but the
+// rewrite produced no NEVR login, so no synthesized Oculus login goes out.
+constexpr const char* kLogInFailedSymbol =
+    "_ZN10NRadEngine10CNSOVRUser11LogInFailedENS_15ENSResponseCodeEPKcRKNS_5CJsonE";
+constexpr std::uint64_t kLogInFailedVaddr = 0x1ec5d0ULL;
+constexpr int kNevrNotReadyResponseCode = 0x1f4;  // 500, the game's own client-error code
+
 // CNSOVRUser::AccountID() const @0x1ede14: adrp x8,0x70e000 / ldr x0,[x8,#0x3e0] / ret.
 constexpr std::uint64_t kAccountIdFnVaddr = 0x1ede14ULL;
 constexpr std::uint32_t kAccountIdFnCode[3] = {0xb0002908u, 0xf941f100u, 0xd65f03c0u};
@@ -90,6 +100,8 @@ constexpr CJsonImport kCJsonImports[] = {
     {"_ZNK10NRadEngine5CJson6TypeOfEPKc", 0x35a1d0, 0},
 };
 
+using LogInFailedFn = void (*)(void* user, int code, const char* msg, const void* json);
+
 struct State {
   IdentitySource* source = nullptr;
   BuildInfo build;
@@ -97,6 +109,7 @@ struct State {
   CJsonApi api;
   std::uint64_t* account_id_global = nullptr;
   const void* expected_vptr = nullptr;
+  LogInFailedFn login_failed = nullptr;  // nullptr when the symbol did not resolve
 };
 
 // The adapter's state lives in one function-local object that is never destroyed. A namespace-scope
@@ -241,18 +254,52 @@ class LiveJson final : public JsonAccess {
 // login_apply.cpp (tests/quest TestLoginHookFramesCarryNoPersonality). The one
 // exceptions-enabled function it reaches, ComposePlan, calls no game code and has returned
 // before the next game call.
-void RunRewrite(const State& state, void* user, void* json) noexcept {
+Outcome RunRewrite(const State& state, void* user, void* json) noexcept {
   LiveUser live_user(user, state.account_id_global, state.expected_vptr);
   LiveJson live_json(state.api, json);
-  RewriteLogin(live_user, live_json, *state.source, state.build, state.log);
+  return RewriteLogin(live_user, live_json, *state.source, state.build, state.log);
 }
 
-// The handler behind the GOT slot: rewrite, then the original, last and always, so a refused
-// or failed rewrite leaves the game's own login intact. It has no cleanup of its own.
+// The handler behind the GOT slot. It rewrites, then decides whether to send:
+//   - the rewrite produced a NEVR login (Rewritten): send it (call original);
+//   - the rewrite declined and nothing was synthesized for this attempt: send the real Oculus
+//     login unchanged (call original), exactly as before the prerequisites existed;
+//   - the rewrite declined but a prerequisite WAS synthesized: fail closed. A synthesized Oculus
+//     login carries a shared-constant XPID and no real credential; it must not reach the wire. Run
+//     the game's own login-failure path instead (CNSOVRUser::LogInFailed) so the game shows a
+//     failure and retries once a NEVR token is ready, and send nothing.
+// The synthesis mark is read and cleared here, once per send, so the next attempt starts clean.
 void HandleSendLogInRequest(LoginThunk::Fn original, void* user, void* json) noexcept {
   const State* state = g_published.load(std::memory_order_acquire);
-  if (state != nullptr && json != nullptr) RunRewrite(*state, user, json);
-  original(user, json);
+  const Outcome outcome = (state != nullptr && json != nullptr) ? RunRewrite(*state, user, json)
+                                                                : Outcome::NoIdentity;
+  const bool synthesized = PrerequisitesSynthesizedSinceReset();
+  ResetPrerequisitesSynthesisMark();
+
+  if (DecideSend(outcome, synthesized) == SendDecision::SendOriginal) {
+    if (state != nullptr && state->log != nullptr && outcome == Outcome::Rewritten && synthesized) {
+      // A NEVR login went out, but the access-token CString and user-name buffer still hold the
+      // synthesized placeholders (the rewrite does not touch them); matchmaker URLs, crash report
+      // and party records read them. Say so once per such send.
+      const LogKv fields[] = {{"op", "send", 0},
+                              {"decision", "sent_rewritten", 0},
+                              {"residual", "access_token+user_name_buffer", 0}};
+      state->log(Level::Warning, "quest_login_send", fields, 3);
+    }
+    original(user, json);
+    return;
+  }
+
+  // Fail closed: do not send. Drive the game's own failure if we resolved its entry; otherwise the
+  // only safe thing is to send nothing (the game re-drives login from UpdateInternal) and say so.
+  if (state != nullptr && state->login_failed != nullptr) {
+    state->login_failed(user, kNevrNotReadyResponseCode, "nevr_identity_not_ready", json);
+    const LogKv fields[] = {{"op", "send", 0}, {"decision", "fail_closed", 0}, {"reason", "synthesized_without_nevr_login", 0}};
+    if (state->log != nullptr) state->log(Level::Warning, "quest_login_send", fields, 3);
+  } else {
+    const LogKv fields[] = {{"op", "send", 0}, {"decision", "withheld", 0}, {"reason", "no_login_failed_entry", 0}};
+    if (state != nullptr && state->log != nullptr) state->log(Level::Error, "quest_login_send", fields, 3);
+  }
 }
 
 // The hook's record: {thunk entry, handler} in the nevr_hook_records section, which is what the
@@ -297,6 +344,25 @@ bool ResolveCJson(const sentinel::ElfImage& image, CJsonApi& api) {
 // Proves the account-id global: the three instructions of CNSOVRUser::AccountID() are the
 // pinned ones (so base+0x70e3e0 is the address that function loads), and the address lies in
 // a writable PT_LOAD of the image. Returns nullptr unless both hold.
+// Resolves CNSOVRUser::LogInFailed for the pinned image: the export must equal base+0x1ec5d0.
+// nullptr (the fail-closed path then withholds the send rather than driving a failure) if it does
+// not, which is treated as a defect, not a reason to send synthesized values.
+LogInFailedFn ResolveLogInFailed(const sentinel::ElfImage& image) {
+  void* handle = dlopen(kPnsovr, RTLD_NOW | RTLD_NOLOAD);
+  if (handle == nullptr) return nullptr;
+  const std::uint64_t want = image.base + kLogInFailedVaddr;
+  if (reinterpret_cast<std::uint64_t>(dlsym(handle, kLogInFailedSymbol)) != want) return nullptr;
+  return reinterpret_cast<LogInFailedFn>(want);
+}
+
+// ReadyFn for the prerequisites: a real NEVR login is ready when the installed identity source
+// says so. A noexcept virtual call (IdentitySource::Ready); the default source answers false, so
+// an unwired source fails closed and nothing is synthesized.
+bool LoginIdentityReady() noexcept {
+  const State* state = g_published.load(std::memory_order_acquire);
+  return state != nullptr && state->source != nullptr && state->source->Ready();
+}
+
 std::uint64_t* ProveAccountIdGlobal(const sentinel::ElfImage& image) {
   std::uint32_t code[3];
   std::memcpy(code, reinterpret_cast<const void*>(image.base + kAccountIdFnVaddr), sizeof(code));
@@ -391,6 +457,7 @@ InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build,
   G().state.api = api;
   G().state.account_id_global = account_global;
   G().state.expected_vptr = reinterpret_cast<const void*>(image.base + kCNSOVRUserVptrVaddr);
+  G().state.login_failed = ResolveLogInFailed(image);
   g_published.store(&G().state, std::memory_order_release);
   LoginThunk::Arm(kLoginHook);
 
@@ -405,8 +472,9 @@ InstallState TryInstallLoginHook(IdentitySource* source, const BuildInfo& build,
     return refuse(InstallState::HookFailed, "got_backend");
   }
   // The four Oculus answers the game needs before it calls SendLogInRequest; installed here so
-  // they are in place before RadPluginMain issues the first requests. Logs its own summary.
-  InstallLoginPrerequisites(image);
+  // they are in place before RadPluginMain issues the first requests. Substitution is gated on the
+  // identity source being Ready (fail closed), logged by the install summary. Logs its own summary.
+  InstallLoginPrerequisites(image, &LoginIdentityReady);
   const LogKv fields[] = {{"op", "install", 0}, {"state", "installed", 0}, {"slot", "CNSUser::SendLogInRequest", 0}};
   log(Level::Info, "quest_login_install", fields, 3);
   return InstallState::Installed;

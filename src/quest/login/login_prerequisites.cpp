@@ -14,7 +14,8 @@ namespace QuestLogin {
 namespace {
 
 // One login callback in progress. Lives on the handler's stack while the game's callback runs;
-// the accessor handlers reach it through g_active.
+// the accessor handlers reach it through g_active. An attempt is published (claimed) only when
+// allow_synth is true, so the accessor handlers substitute only for a claimed attempt.
 struct Attempt {
   Prerequisite which;
   bool errored;          // the real ovr_Message_IsError said so
@@ -28,6 +29,7 @@ struct Attempt {
 struct Config {
   OvrErrorApi api;
   bool substitute;
+  ReadyFn ready;
 };
 
 Config g_config;
@@ -36,9 +38,11 @@ std::atomic<bool> g_configured{false};
 std::atomic<Attempt*> g_active{nullptr};
 std::atomic<const void*> g_active_message{nullptr};
 std::atomic<const void*> g_active_handle{nullptr};
+std::atomic<bool> g_synthesized{false};
 
 std::atomic<std::uint64_t> g_callbacks[kPrerequisiteCount] = {};
 std::atomic<std::uint64_t> g_requests[kPrerequisiteCount] = {};
+std::atomic<std::uint64_t> g_transient_passes[kPrerequisiteCount] = {};
 
 // Stand-ins for a handle Oculus did not give. Only their addresses matter; a fake handle is never
 // passed to a real Platform SDK function.
@@ -78,8 +82,31 @@ void MarkSubstituted(Attempt& attempt, const char* reason, const char* accessor)
   if (!attempt.substituted) {
     attempt.substituted = true;
     attempt.reason = reason;
+    g_synthesized.store(true, std::memory_order_release);
   }
   attempt.accessor = accessor;
+}
+
+// Scans an Oculus error message (JSON) for "is_transient" set true. The game reads the same signal
+// as the boolean path "error|is_transient" and re-requests when it is set (callbacks 0x1ece60 etc.);
+// a byte scan keeps this noexcept and allocation-free. Conservative: an absent or unreadable
+// message is not transient.
+bool IsTransient(const char* message) {
+  if (message == nullptr) return false;
+  const char* key = "is_transient";
+  for (const char* p = message; *p != '\0'; ++p) {
+    const char* k = key;
+    const char* q = p;
+    while (*k != '\0' && *q == *k) {
+      ++q;
+      ++k;
+    }
+    if (*k != '\0') continue;
+    // After the key, skip quotes/colon/spaces to the value and test for "true".
+    while (*q == '"' || *q == ':' || *q == ' ' || *q == '\t') ++q;
+    if (q[0] == 't' && q[1] == 'r' && q[2] == 'u' && q[3] == 'e') return true;
+  }
+  return false;
 }
 
 // First-level accessor (message -> handle) for `which`.
@@ -128,11 +155,15 @@ const char* PrerequisiteCall(Prerequisite which) {
   }
 }
 
-void ConfigurePrerequisites(const OvrErrorApi& api, bool substitute) noexcept {
+void ConfigurePrerequisites(const OvrErrorApi& api, bool substitute, ReadyFn ready) noexcept {
   g_config.api = api;
   g_config.substitute = substitute && api.message_is_error != nullptr;
+  g_config.ready = ready;
   g_configured.store(true, std::memory_order_release);
 }
+
+bool PrerequisitesSynthesizedSinceReset() noexcept { return g_synthesized.load(std::memory_order_acquire); }
+void ResetPrerequisitesSynthesisMark() noexcept { g_synthesized.store(false, std::memory_order_release); }
 
 void OnPrerequisiteCallback(Prerequisite which, GameCallback original, void* self, void* message) noexcept {
   if (!g_configured.load(std::memory_order_acquire) || message == nullptr) {
@@ -145,6 +176,7 @@ void OnPrerequisiteCallback(Prerequisite which, GameCallback original, void* sel
   Attempt attempt{which, false, false, false, "ok", ""};
   long long error_code = 0;
   long long http_code = 0;
+  bool transient = false;
   if (api.message_is_error != nullptr) {
     attempt.error_measured = true;
     attempt.errored = api.message_is_error(message);
@@ -155,10 +187,25 @@ void OnPrerequisiteCallback(Prerequisite which, GameCallback original, void* sel
     const void* error = api.message_get_error(message);
     if (error != nullptr && api.error_get_code != nullptr) error_code = api.error_get_code(error);
     if (error != nullptr && api.error_get_http_code != nullptr) http_code = api.error_get_http_code(error);
+    if (error != nullptr && api.error_get_message != nullptr) transient = IsTransient(api.error_get_message(error));
   }
 
+  // A transient error is passed through so the game's own re-request runs, up to a cap per
+  // prerequisite; after the cap a permanently-transient error is synthesized so login still
+  // proceeds. The pass is only counted when it is actually taken (ready and able to substitute),
+  // so a not-ready transient error does not burn the budget.
+  const bool ready = g_config.ready != nullptr && g_config.ready();
+  const bool could_substitute = g_config.substitute && ready;
+  bool transient_hold = false;
+  if (could_substitute && transient &&
+      g_transient_passes[Index(which)].load(std::memory_order_relaxed) < kMaxTransientPasses) {
+    g_transient_passes[Index(which)].fetch_add(1, std::memory_order_relaxed);
+    transient_hold = true;
+  }
+  const bool allow_synth = could_substitute && !transient_hold;
+
   bool claimed = false;
-  if (g_config.substitute) {
+  if (allow_synth) {
     Attempt* expected = nullptr;
     if (g_active.compare_exchange_strong(expected, &attempt, std::memory_order_acq_rel)) {
       g_active_message.store(message, std::memory_order_release);
@@ -177,18 +224,28 @@ void OnPrerequisiteCallback(Prerequisite which, GameCallback original, void* sel
   if (attempt.errored && !attempt.substituted) {
     // The game handled the error itself: say why nothing was substituted.
     attempt.reason = !g_config.substitute ? "substitution_unavailable"
+                     : !ready             ? "not_ready"
+                     : transient_hold     ? "transient_passthrough"
                      : !claimed           ? "busy"
                                           : "error_not_consulted";  // the game never asked IsError
   }
-  sentinel::LogFields(LevelFor(attempt), "quest_login_prerequisite",
-                      {{"call", PrerequisiteCall(which)},
-                       {"result", attempt.substituted ? "synthesized" : "real"},
-                       {"reason", attempt.reason},
-                       {"accessor", attempt.accessor},
-                       {"ovr_error", attempt.error_measured ? (attempt.errored ? 1 : 0) : -1},
-                       {"error_code", error_code},
-                       {"http_code", http_code},
-                       {"callback", call}});
+
+  // Cap the per-call log so a callback the game spins on cannot flood the sink; the counter above
+  // still counts every one.
+  if (call <= kCallbackLogLimit) {
+    sentinel::LogFields(LevelFor(attempt), "quest_login_prerequisite",
+                        {{"call", PrerequisiteCall(which)},
+                         {"result", attempt.substituted ? "synthesized" : "real"},
+                         {"reason", attempt.reason},
+                         {"accessor", attempt.accessor},
+                         {"ovr_error", attempt.error_measured ? (attempt.errored ? 1 : 0) : -1},
+                         {"error_code", error_code},
+                         {"http_code", http_code},
+                         {"callback", call}});
+  } else if (call == kCallbackLogLimit + 1) {
+    sentinel::LogFields(sentinel::LogLevel::kWarn, "quest_login_prerequisite",
+                        {{"call", PrerequisiteCall(which)}, {"status", "log_limit_reached"}, {"callback", call}});
+  }
 }
 
 bool OnMessageIsError(bool (*original)(const void*), const void* message) noexcept {
@@ -273,9 +330,11 @@ void ResetPrerequisitesForTest() noexcept {
   g_active.store(nullptr, std::memory_order_release);
   g_active_message.store(nullptr, std::memory_order_release);
   g_active_handle.store(nullptr, std::memory_order_release);
+  g_synthesized.store(false, std::memory_order_release);
   for (std::size_t i = 0; i < kPrerequisiteCount; ++i) {
     g_callbacks[i].store(0, std::memory_order_relaxed);
     g_requests[i].store(0, std::memory_order_relaxed);
+    g_transient_passes[i].store(0, std::memory_order_relaxed);
   }
 }
 

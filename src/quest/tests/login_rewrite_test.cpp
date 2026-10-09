@@ -919,9 +919,46 @@ void TestInvalidUtf8NameDoesNotThrow() {
   QCHECK(json.ToJson() == before);
 }
 
+// DecideSend is the login send hook's fail-closed rule: a Rewritten login always sends; a declining
+// rewrite sends the real Oculus login ONLY when nothing was synthesized, and fails closed (sends
+// nothing) when a prerequisite was synthesized, so a synthesized Oculus login never reaches the
+// wire. Every decline reason behaves the same way.
+void TestDecideSendFailsClosedOnlyWhenSynthesized() {
+  using QuestLogin::DecideSend;
+  using QuestLogin::Outcome;
+  using QuestLogin::SendDecision;
+  // Rewritten -> always send, synthesized or not.
+  QCHECK(DecideSend(Outcome::Rewritten, false) == SendDecision::SendOriginal);
+  QCHECK(DecideSend(Outcome::Rewritten, true) == SendDecision::SendOriginal);
+  const Outcome declines[] = {Outcome::NoIdentity,      Outcome::PlatformMismatch, Outcome::UserUnreadable,
+                              Outcome::ComposeFailed,    Outcome::JsonWriteFailed,  Outcome::AccountIdNotCarried,
+                              Outcome::Exception};
+  for (const Outcome o : declines) {
+    // Nothing synthesized: the real Oculus login still goes out, unchanged from before.
+    QCHECK(DecideSend(o, false) == SendDecision::SendOriginal);
+    // A prerequisite was synthesized: fail closed, send nothing.
+    QCHECK(DecideSend(o, true) == SendDecision::FailClosed);
+  }
+}
+
+// The synthesized org-id stand-in is never remembered as a real Oculus id, so a later declined
+// login cannot restore it as this device's id.
+void TestOculusIdMemoryNeverRemembersTheSynthesizedId() {
+  QuestLogin::OculusIdMemory mem;
+  QCHECK(!QuestLogin::OculusIdMemory::IsRealId(QuestLogin::kSynthesizedOrgScopedId));
+  QCHECK(!mem.NoteBeforeWrite(QuestLogin::kSynthesizedOrgScopedId, 777ULL));  // refused
+  std::uint64_t out = 0;
+  QCHECK(!mem.RestoreFor(777ULL, out));  // nothing was remembered to restore
+  // A real id is still remembered as before.
+  QCHECK(mem.NoteBeforeWrite(1234ULL, 777ULL));
+  QCHECK(mem.RestoreFor(777ULL, out) && out == 1234ULL);
+}
+
 }  // namespace
 
 int main() {
+  TestDecideSendFailsClosedOnlyWhenSynthesized();
+  TestOculusIdMemoryNeverRemembersTheSynthesizedId();
   TestComposeFailsClosed();
   TestComposedProfileMatchesPcvrBuilder();
   TestSerialRelay();

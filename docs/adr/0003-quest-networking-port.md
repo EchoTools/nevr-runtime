@@ -739,9 +739,32 @@ for the duration of the game's callback, and the accessor handlers act only on t
 (or the handle its real accessor returned): an Oculus error makes `ovr_Message_IsError` answer false
 and the accessors return a synthesized value; a usable real answer passes through unchanged; an
 unusable one (null, empty, `"?"`, an id of 0 or -1) is replaced. The game's own success path then
-writes its globals and continues. The synthesized values are not credentials; the login rewrite
-replaces `accountid`, `access_token`, `nonce` and `displayname`. Substitution is enabled only when
-all eight accessor hooks are installed; otherwise the callback hooks only measure.
+writes its globals and continues.
+
+Substitution is **fail-closed**. It is enabled only when all eight accessor hooks are installed AND
+the identity source reports a real NEVR login is ready (`IdentitySource::Ready`, default false, so
+an unwired source never synthesizes); otherwise the callback hooks only measure, the game's own
+Oculus login failure runs, and the game retries when a token arrives (#239's prompt is on the
+login-failed screen while `awaiting_user`). This matters because a synthesized Oculus answer is only
+safe when the rewrite at `SendLogInRequest` then replaces `accountid`, `access_token`, `nonce` and
+`displayname` with the NEVR identity: synthesizing without a ready NEVR login would send a shared
+constant account id (the XPID `OVR-ORG-1313166930`) that the unauthenticated server would look up by
+device link. A transient Oculus error (`error|is_transient`, read from `ovr_Error_GetMessage`) is
+passed through so the game re-requests, up to `kMaxTransientPasses` per prerequisite, then
+synthesized so a permanently-transient error still proceeds. The synthesized org id
+(`kSynthesizedOrgScopedId`) is excluded from `OculusIdMemory` so it is never remembered as a real
+Oculus id.
+
+The login send hook (`login_hook.cpp`) enforces the same rule a second time: after the rewrite it
+calls `DecideSend(outcome, synthesized)`. A `Rewritten` login sends; a declining rewrite with nothing
+synthesized sends the real Oculus login unchanged; a declining rewrite that saw a synthesized
+prerequisite sends nothing and drives the game's own failure (`CNSOVRUser::LogInFailed` `0x1ec5d0`),
+so a synthesized Oculus login never reaches the wire. `SetAccountId` overwrites the org-id global
+with the NEVR id before the send, so the wire account id and the post-login party records carry the
+NEVR id, not the synthesized stand-in. Two values the rewrite does not touch stay synthesized after a
+ready login and are logged once (`quest_login_prerequisites_residual`): the access-token CString read
+by the `CR15NetMatchmakerQueue` URLs, and the user-name buffer `0x70e470` read by
+`CrashReportUserName` and the party member records.
 
 Each callback logs one `quest_login_prerequisite` record (call, `result` real or synthesized,
 `reason`, `accessor`, `ovr_error`, `error_code`, `http_code`) and each request one

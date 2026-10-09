@@ -49,17 +49,20 @@ inline constexpr PinnedSlot kGetLoggedInUser{"ovr_User_GetLoggedInUser", RelocKi
 inline constexpr PinnedSlot kGetAccessToken{"ovr_User_GetAccessToken", RelocKind::kJumpSlot, 0x6dfa68, 0};
 inline constexpr PinnedSlot kGetUserProof{"ovr_User_GetUserProof", RelocKind::kJumpSlot, 0x6e15a8, 0};
 
-// Read, never hooked: what a callback handler uses to report the Oculus error code.
+// Read, never hooked: what a callback handler uses to report the Oculus error code and to tell a
+// transient error from a permanent one (ovr_Error_GetMessage returns the JSON the game reads
+// "error|is_transient" from).
 inline constexpr PinnedSlot kMessageGetError{"ovr_Message_GetError", RelocKind::kJumpSlot, 0x6df518, 0};
 inline constexpr PinnedSlot kErrorGetCode{"ovr_Error_GetCode", RelocKind::kJumpSlot, 0x6d9e78, 0};
 inline constexpr PinnedSlot kErrorGetHttpCode{"ovr_Error_GetHttpCode", RelocKind::kJumpSlot, 0x6df9f8, 0};
+inline constexpr PinnedSlot kErrorGetMessage{"ovr_Error_GetMessage", RelocKind::kJumpSlot, 0x6df270, 0};
 
 inline constexpr PinnedSlot kAll[] = {
     kOrgScopedIdCallback, kLoggedInUserCallback, kAccessTokenCallback, kUserProofCallback,
     kMessageIsError,      kMessageGetString,     kMessageGetOrgScopedId, kOrgScopedIdGetId,
     kMessageGetUser,      kUserGetOculusId,      kMessageGetUserProof,  kUserProofGetNonce,
     kGetOrgScopedId,      kGetLoggedInUser,      kGetAccessToken,       kGetUserProof,
-    kMessageGetError,     kErrorGetCode,         kErrorGetHttpCode,
+    kMessageGetError,     kErrorGetCode,         kErrorGetHttpCode,     kErrorGetMessage,
 };
 
 // The GotTarget for `slot`. With a load bias, a slot that names a function libpnsovr defines must
