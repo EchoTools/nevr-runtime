@@ -269,6 +269,17 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
         self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
 
+    def test_platform_compat_reports_a_failed_xmlhttp_creation_loudly(self):
+        # Issue #242: the pass-through line logged a failed CoCreateInstance (hr=0x80040154) at Info.
+        # A failure is Warning or higher; an observe-only hook that fails to attach is a Warning too.
+        source = (ROOT / "src/modules/platform-compat/src/platform_compat.cpp").read_text()
+        hook = extract_braced_function(source, "HRESULT WINAPI CoCreateInstanceHook(")
+        self.assertRegex(hook, r"Log\(SUCCEEDED\(hr\)\s*\?\s*EchoVR::LogLevel::Info\s*:\s*EchoVR::LogLevel::Warning")
+        install = extract_braced_function(source, "static bool InstallMsxml6PassThroughHook(")
+        attach_failure = install.split("Hooking::Attach", 1)[1].split("return false;", 1)[0]
+        self.assertIn("EchoVR::LogLevel::Warning", attach_failure)
+        self.assertNotIn("EchoVR::LogLevel::Error", attach_failure)
+
     def test_verify_server_supplies_a_config_when_the_install_has_none(self):
         # Issue #245: a server with no config.yaml gets no embedded defaults and refuses to boot without a
         # login bridge (#16), so every verify-server.sh flag set died at boot. The script deploys the
@@ -318,6 +329,13 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertIn("0x1A89F0", glue)
         self.assertRegex(glue, r"memcmp\(target, kPrologue")
         self.assertLess(glue.index("memcmp(target, kPrologue"), glue.index("PatchDetour("))
+
+    def test_both_registration_sites_use_the_shared_envelope_builder(self):
+        # Issue #46: the initial registration and the post-reconnect re-registration built the same
+        # envelope field by field in two places. Both go through BuildRegistrationEnvelope.
+        server = strip_comments((ROOT / "src/runtime/server/gameserver.cpp").read_text())
+        self.assertEqual(len(re.findall(r"GameServer::BuildRegistrationEnvelope\s*\(", server)), 2)
+        self.assertNotIn("mutable_game_server_registration()", server)
 
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches
