@@ -142,6 +142,12 @@ if(MINGW)
     "$<$<CONFIG:Release>:-O3>"
     "$<$<CONFIG:Release>:-DNDEBUG>"
   )
+  # The same commit built in two directories must give the same bytes: keep the source and build
+  # directories out of __FILE__, assertions and debug info.
+  add_compile_options(
+    "-ffile-prefix-map=${CMAKE_SOURCE_DIR}=."
+    "-ffile-prefix-map=${CMAKE_BINARY_DIR}=build"
+  )
   # C++-only warning suppressions
   add_compile_options(
     "$<$<COMPILE_LANGUAGE:CXX>:-Wno-conversion-null>"        # NULL to UINT64 conversions in legacy code
@@ -169,6 +175,9 @@ if(MINGW)
     -static
     -static-libgcc
     -static-libstdc++
+    # The PE header, export and debug directories carry a link-time timestamp; without this the same
+    # objects link to different bytes on every run.
+    -Wl,--no-insert-timestamp
   )
 endif()
 
