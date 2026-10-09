@@ -109,8 +109,8 @@ class ServerContext {
 
   // Resolves an entrant's session GUID to its entrant slot the way the game does for accepts
   // (echovr.exe 0x140603e20): the index of the lobby's player-session slot (lobby+0xC8, stride 0x28)
-  // whose GUID matches, valid only when that index also names a live entrant. Returns false when
-  // not initialized, the array is absent, or nothing matches.
+  // whose GUID matches and whose join state is 4 (accepted), within the entrant array's length. Returns
+  // false when not initialized, the array is absent, or nothing matches.
   bool FindEntrantSlotBySession(const GUID& session, uint64_t& slot) const;
 
   // ServerDB peer (exclusive lock for write)
