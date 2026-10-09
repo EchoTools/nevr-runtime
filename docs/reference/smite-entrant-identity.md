@@ -9,8 +9,10 @@ records what the game itself does with the id, from ReVault (`echovr.exe`), and 
 `entrant_id` is parsed as a UUID into a `GUID` (`ParseUuidToGuid`) and resolved by
 `ServerContext::FindEntrantSlotBySession` (`src/runtime/server/server_context.cpp`), which scans the
 lobby's player-session array (`EchoVR::Lobby::playerSessions`, `playerSessionCount`, `PlayerSessionSlot`
-in `src/abi/echovr.h`) for the item whose `guid` matches and returns its index. An index with no live
-entrant at `lobby+0x360` is not returned. The handler logs `Smite entrant not found in lobby` when nothing
+in `src/abi/echovr.h`) for the item whose `guid` matches and whose `joinState` is 4 (accepted), and returns its index, provided
+the index is inside the entrant array at `lobby+0x360`. Both arrays have the player limit as their length
+(`CNSLobby::StartSessionCBHost`), so the entrant count is capacity, not a live count; the join-state
+check is what separates a live slot from a departed one. The handler logs `Smite entrant not found in lobby` when nothing
 matches. `Lobby::EntrantData::userId` is an `XPlatformId`, so comparing a UUID with it can never match;
 `ServerContextSmite.EntrantUserIdBytesDoNotMatch` pins that.
 
@@ -48,10 +50,15 @@ The accept message is what the runtime builds in `EncodeLobbyEntrantsAccept`
 in `entrant_id` for a smite is the one the game already resolves for accepts: the `+0xC8` GUID array,
 index = slot.
 
+## Departures
+
+`RemoveEntrant` (`0x140610700`) resets the slot in place: the peer UUID goes back to the sentinel, the
+join state to 0 and the timeout to 60.0. The array is not compacted, so a slot index stays valid for the
+life of the session and a departed slot is recognised by join state 0 (ReVault comment on `0x140610700`).
+
 ## Not proven
 
-- Whether items in the `+0xC8` array are cleared or compacted when an entrant leaves (`RemoveEntrant`,
-  `0x140610700`, was not read), so an index may be stale after departures.
 - That nakama sends `entrant_id` as the same UUID it sends in accepts (issue #119 says no smite
   sender exists yet in nakama or nevr-server-rs).
+- The value of the sentinel GUID `RemoveEntrant` writes (`_DAT_142100b20`).
 - No run exercised a smite.
