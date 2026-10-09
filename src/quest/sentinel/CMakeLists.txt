@@ -34,6 +34,7 @@ set_target_properties(ovrplatformloader PROPERTIES OUTPUT_NAME ovrplatformloader
 
 target_include_directories(ovrplatformloader PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_SOURCE_DIR}/../..
   ${CMAKE_BINARY_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/../../../extern/breakpad/src)
 
