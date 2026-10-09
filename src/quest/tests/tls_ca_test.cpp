@@ -36,6 +36,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -561,17 +562,30 @@ TEST(questtokenauth_publishes_the_sign_in_prompt_on_the_prompt_board) {
   auto auth = QuestTokenAuth::Create(config, logs.Sink());
   CHECK(auth != nullptr);
   if (!auth) return;
-  const auto shown = [] {
+  const std::function<bool()> shown = [] {
     char text[board::kCapacity + 1];
-    return board::Copy(text, sizeof(text)) && std::string(text).find("ABCD-EFGH") != std::string::npos;
+    board::Mode mode = board::Mode::kNotice;
+    return board::Read(text, sizeof(text), &mode, nullptr) == board::ReadResult::kCopied &&
+           mode == board::Mode::kPrompt && std::string(text).find("ABCD-EFGH") != std::string::npos;
   };
   auth->Start();
   CHECK(WaitUntil(shown, 20000));
   CHECK(auth->Get().readiness == nevr::quest_auth::Readiness::AwaitingUser);
   auth->Stop();
   char after[board::kCapacity + 1];
-  CHECK(!board::Copy(after, sizeof(after)));  // withdrawn when the login ends
-  CHECK(logs.text.find(R"("mechanism":"game_error_text","result":"published")") != std::string::npos);
+  CHECK(board::Read(after, sizeof(after), nullptr, nullptr) == board::ReadResult::kEmpty);  // withdrawn on Stop
+  // One login_prompt line from the game-text presenter that says it published (keys in any order).
+  bool published = false;
+  for (size_t at = 0; at < logs.text.size();) {
+    const size_t end = logs.text.find('\n', at);
+    const std::string line = logs.text.substr(at, end == std::string::npos ? std::string::npos : end - at);
+    published = published || (line.find(R"("event":"login_prompt")") != std::string::npos &&
+                              line.find(R"("mechanism":"game_error_text")") != std::string::npos &&
+                              line.find(R"("result":"published")") != std::string::npos);
+    if (end == std::string::npos) break;
+    at = end + 1;
+  }
+  CHECK(published);
 }
 
 TEST(interrupt_during_a_stalled_request_returns_promptly) {
