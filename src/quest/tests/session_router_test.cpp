@@ -816,9 +816,15 @@ void TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin() {
   QCHECK(rig.logs.Has("first frame symbol=0x82869f0b37eb4378: matchmaker -> config"));
 }
 
-// Failure caught: lobby replies going to the login socket (or login replies to a matchmaker). An
-// STcpConnectionUnrequireEvent goes to a connection with a request outstanding (login first); with none
-// outstanding it follows the last message.
+// The login reply as nakama sends it: one frame, [LogInSuccess, Unrequire, LoginSettings].
+std::string LoginReplyFrame() {
+  return Msg(EvrCodec::kSymLoginSuccess, std::string(32, '\0')) + Msg(EvrCodec::kSymConnectionUnrequire, "") +
+         Msg(EvrCodec::kSymLoginSettings, "settings");
+}
+
+// Failure caught: lobby replies going to the login socket (or login replies to a matchmaker), and an
+// Unrequire reaching a connection that has nothing outstanding. The game's own count is 8 bits and wraps
+// below zero, which later raises "connection lost" on the login socket.
 void TestServerFramesRouteByRole() {
   Rig rig;
   OpenThree(rig);  // config 1, login 2, matchmaker 3 (provisional)
@@ -826,96 +832,140 @@ void TestServerFramesRouteByRole() {
   rig.router->OnRemoteOpen(login);
   rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest), true);
   rig.router->OnGameFrame(3, Msg(EvrCodec::kSymFindSessionRequest), true);
-  const std::string unrequire = Msg(EvrCodec::kSymConnectionUnrequire, "");
+  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymDocumentRequest), true);
   rig.router->OnRemoteFrame(login, Msg(kSymLobbySessionSuccess, "lobby"), true);                      // -> 3
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoggedInUserProfileSuccess, "profile"), true);   // -> 2
-  rig.router->OnRemoteFrame(login, unrequire, true);                                                  // login first -> 2
-  rig.router->OnRemoteFrame(login, unrequire, true);                                                  // matchmaker's find -> 3
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymDocumentSuccess, "doc"), true);                  // -> 2
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoggedInUserProfileSuccess, "profile"), true);   // -> 2, no Unrequire
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymDocumentSuccess, "doc"), true);                  // -> 2, then its Unrequire
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);                 // -> 2 (document outstanding)
   rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymOtherUserProfileSuccess, "other"), true);        // -> 2
   rig.router->OnRemoteFrame(login, Msg(kSymLobbySessionSuccess, "lobby2"), true);                     // -> 3
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);                 // bare: dropped
   const auto sent = rig.games.Sent();
-  const uint64_t expected[] = {3, 2, 2, 3, 2, 2, 3};
-  QCHECK(sent.size() == 7);
-  for (std::size_t i = 0; i < sent.size() && i < 7; ++i) QCHECK(sent[i].id == expected[i]);
+  const uint64_t expected[] = {3, 2, 2, 2, 2, 3};
+  QCHECK(sent.size() == 6);
+  for (std::size_t i = 0; i < sent.size() && i < 6; ++i) QCHECK(sent[i].id == expected[i]);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 1);
 }
 
 // Failure caught (#239 review M1): the service sends a reply and its Unrequire as separate frames, from
-// concurrent goroutines, so frames interleave. Routing an Unrequire to the socket of the previous message
-// gave the profile update's Unrequire to the matchmaker (which the ping had just reached). Each Unrequire
-// goes to a connection with a request outstanding; the one nothing is outstanding for (the ping's, which the
-// service started itself) follows the ping.
-void TestInterleavedUnrequiresReachTheConnectionThatAskedAndPingPairsFollowThePing() {
+// concurrent goroutines, so frames interleave: [UpdateProfileSuccess, ping, Unrequire, Unrequire]. Each
+// Unrequire goes to the connection that owes it, in the order the paired messages went out: the update's to
+// the login connection, the ping's to the matchmaker (which answered the ping and so has it outstanding).
+void TestInterleavedUnrequiresReachTheConnectionThatOwesThem() {
   Rig rig;
   OpenThree(rig);
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
   rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest), true);
-  rig.router->OnGameFrame(3, Msg(EvrCodec::kSymLobbyPingResponse), true);  // classifies it; raises no count
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoginSuccess, std::string(32, '\0')), true);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);  // the login's
+  rig.router->OnGameFrame(3, Msg(EvrCodec::kSymLobbyPingResponse), true);  // flagged on the matchmaker connection
+  rig.router->OnRemoteFrame(login, LoginReplyFrame(), true);                // -> 2; its Unrequire is inside
   rig.router->OnGameFrame(2, Msg(EvrCodec::kSymUpdateProfile, "update"), true);
   const std::string unrequire = Msg(EvrCodec::kSymConnectionUnrequire, "");
   rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymUpdateProfileSuccess, "ok"), true);  // goroutine A
   rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLobbyPingRequest, "ping"), true);    // goroutine B
-  rig.router->OnRemoteFrame(login, unrequire, true);                                       // A's
-  rig.router->OnRemoteFrame(login, unrequire, true);                                       // B's
+  rig.router->OnRemoteFrame(login, unrequire, true);                                       // A's -> 2
+  rig.router->OnRemoteFrame(login, unrequire, true);                                       // B's -> 3
   const auto sent = rig.games.Sent();
-  const uint64_t expected[] = {2, 2, 2, 3, 2, 3};
-  QCHECK(sent.size() == 6);
-  for (std::size_t i = 0; i < sent.size() && i < 6; ++i) QCHECK(sent[i].id == expected[i]);
+  const uint64_t expected[] = {2, 2, 3, 2, 3};
+  QCHECK(sent.size() == 5);
+  for (std::size_t i = 0; i < sent.size() && i < 5; ++i) QCHECK(sent[i].id == expected[i]);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 0);
 }
 
-// A message the service starts itself brings its own Unrequire, and nothing was requested for it: the
-// Unrequire follows that message even when another message went to a different connection in between.
-void TestAServiceStartedMessageBringsItsUnrequireToTheSameConnection() {
+// Failure caught (RE M2): ping discovery sends LobbyPingRequest on the login session right after the login
+// and an Unrequire after it. With no matchmaker connection the ping used to fall to the login connection, whose
+// count then went below zero. The ping and the Unrequire that follows it are dropped; the login connection's
+// count is untouched, so its own update's Unrequire still arrives.
+void TestPingDiscoveryAfterLoginWithoutAMatchmakerDoesNotWrapTheLoginCount() {
   Rig rig;
-  OpenThree(rig);
-  const RemoteId login = rig.remotes.Opens()[1].remote;
-  rig.router->OnRemoteOpen(login);
-  rig.router->OnGameFrame(3, Msg(EvrCodec::kSymLobbyPingResponse), true);
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLobbyPingRequest, "ping"), true);                // -> 3
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLoggedInUserProfileSuccess, "profile"), true);   // -> 2
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);                 // the ping's -> 3
-  const auto sent = rig.games.Sent();
-  QCHECK(sent.size() == 3 && sent[0].id == 3 && sent[1].id == 2 && sent[2].id == 3);
-}
-
-// Failure caught: a count driven below zero by Unrequires nothing asked for (the service's own pairs), which
-// would let a later one steal the next real request's Unrequire.
-void TestUnrequireNeverLowersACountBelowZero() {
-  Rig rig;
-  OpenThree(rig);
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
   rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest), true);
-  rig.router->OnGameFrame(3, Msg(EvrCodec::kSymLobbyPingResponse), true);  // matchmaker 3, no count
-  const std::string unrequire = Msg(EvrCodec::kSymConnectionUnrequire, "");
-  rig.router->OnRemoteFrame(login, unrequire, true);  // the login's: count 1 -> 0
-  rig.router->OnRemoteFrame(login, unrequire, true);  // nothing outstanding anywhere: follows the last message
-  rig.router->OnRemoteFrame(login, unrequire, true);
-  rig.router->OnGameFrame(3, Msg(EvrCodec::kSymFindSessionRequest, "find"), true);  // matchmaker count 1
-  rig.router->OnRemoteFrame(login, unrequire, true);  // must reach 3: the earlier extras did not leave a debt
+  rig.router->OnRemoteFrame(login, LoginReplyFrame(), true);                                 // -> 2, count 1 -> 0
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymLobbyPingRequest, "ping"), true);       // no matchmaker: dropped
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);        // the ping's: dropped
+  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymUpdateProfile, "update"), true);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymUpdateProfileSuccess, "ok"), true);     // -> 2
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);        // -> 2 (count 1 -> 0)
   const auto sent = rig.games.Sent();
-  QCHECK(!sent.empty() && sent.back().id == 3);
+  QCHECK(sent.size() == 3);
+  for (const auto& f : sent) QCHECK(f.id == 2);
+  QCHECK(!sent.empty() && EvrCodec::FirstSymbol(sent[0].data) == EvrCodec::kSymLoginSuccess);
+  QCHECK(sent.size() == 3 && EvrCodec::FirstSymbol(sent[1].data) == EvrCodec::kSymUpdateProfileSuccess);
+  QCHECK(sent.size() == 3 && EvrCodec::FirstSymbol(sent[2].data) == EvrCodec::kSymConnectionUnrequire);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 1);
+  QCHECK(rig.router->GetStats().droppedRemoteFrames == 1);  // the ping
 }
 
-// Failure caught: the service batches a login reply with its Unrequire into one frame (LoginSuccess,
-// Unrequire and GameSettings arrive together). The Unrequire in the frame lowers the count of the connection
-// the frame goes to, so a later standalone one is not given to the login connection again.
-void TestAnUnrequireInsideABatchedFrameLowersTheFrameTargetsCount() {
+// Failure caught (RE M2): ChannelInfoResponse is accepted on any peer by the game, so it went to the newest
+// connection, a matchmaker, while its Unrequire's count is on the login connection that sent the request.
+void TestChannelInfoResponseGoesToTheLoginConnectionWhileAMatchmakerExists() {
   Rig rig;
   OpenThree(rig);
   const RemoteId login = rig.remotes.Opens()[1].remote;
   rig.router->OnRemoteOpen(login);
   rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest), true);
   rig.router->OnGameFrame(3, Msg(EvrCodec::kSymFindSessionRequest), true);
-  const std::string batched = Msg(EvrCodec::kSymLoginSuccess, std::string(32, '\0')) +
-                              Msg(EvrCodec::kSymConnectionUnrequire, "") + Msg(kSymSomething, "settings");
-  rig.router->OnRemoteFrame(login, batched, true);  // -> 2, login count 1 -> 0
-  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);  // -> the find's: 3
+  rig.router->OnRemoteFrame(login, LoginReplyFrame(), true);
+  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymChannelInfoRequest, "channel"), true);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymChannelInfoResponse, "info"), true);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);
   const auto sent = rig.games.Sent();
-  QCHECK(sent.size() == 2 && sent[0].id == 2 && sent[1].id == 3);
+  QCHECK(sent.size() == 3);
+  for (const auto& f : sent) QCHECK(f.id == 2);  // nothing reaches the matchmaker
+  QCHECK(rig.router->GetStats().droppedUnrequires == 0);
+}
+
+// Failure caught: requests the game sends without the require flag (LogOut, TelemetryEvent, the matchmaker
+// status request) counted as outstanding, so an Unrequire nothing was owed reached the connection. And an
+// Unrequire after a paired reply to a connection with nothing outstanding (no request was made) is dropped.
+void TestUnflaggedRequestsDoNotCountAndAnExtraUnrequireIsDropped() {
+  Rig rig;
+  OpenThree(rig);
+  const RemoteId login = rig.remotes.Opens()[1].remote;
+  rig.router->OnRemoteOpen(login);
+  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLogOut), true);
+  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymTelemetryEvent), true);
+  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymRemoteLogSet), true);
+  rig.router->OnGameFrame(3, Msg(EvrCodec::kSymMatchmakerStatusRequest), true);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymDocumentSuccess, "doc"), true);   // -> 2; nothing was asked
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);  // dropped: nothing outstanding
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);  // dropped: nothing owed
+  QCHECK(rig.games.Sent().size() == 1);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 2);
+}
+
+// Failure caught: the Unrequire inside the login reply frame not lowering the login connection's count, so the
+// login request stayed outstanding and an Unrequire nothing was owed (after a document nobody asked for) went
+// through and wrapped the game's count.
+void TestTheUnrequireInsideTheLoginReplyFrameLowersTheLoginCount() {
+  Rig rig;
+  rig.router->OnGameOpen(1);
+  rig.router->OnGameOpen(2);
+  const RemoteId login = rig.remotes.Opens()[1].remote;
+  rig.router->OnRemoteOpen(login);
+  rig.router->OnGameFrame(2, Msg(EvrCodec::kSymLoginRequest), true);
+  rig.router->OnRemoteFrame(login, LoginReplyFrame(), true);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymDocumentSuccess, "doc"), true);
+  rig.router->OnRemoteFrame(login, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);
+  QCHECK(rig.games.Sent().size() == 2);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 1);
+}
+
+// The config connection has a remote of its own; its Unrequire follows the same rule with its own count.
+void TestConfigConnectionUnrequireNeverExceedsItsRequests() {
+  Rig rig;
+  OpenThree(rig);
+  const RemoteId config = rig.remotes.Opens()[0].remote;
+  rig.router->OnRemoteOpen(config);
+  rig.router->OnGameFrame(1, Msg(EvrCodec::kSymConfigRequest), true);
+  rig.router->OnRemoteFrame(config, Msg(0xb9cdaf586f7bd012ULL, "config"), true);
+  rig.router->OnRemoteFrame(config, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);  // delivered: 1 -> 0
+  rig.router->OnRemoteFrame(config, Msg(EvrCodec::kSymConnectionUnrequire, ""), true);  // dropped
+  QCHECK(rig.games.Sent().size() == 2);
+  QCHECK(rig.router->GetStats().droppedUnrequires == 1);
 }
 
 // Failure caught: an unlisted message on a matchmaker connection moving it to the login role and taking the
@@ -1221,10 +1271,12 @@ int main() {
   TestClassifyFirstFrameTable();
   TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin();
   TestServerFramesRouteByRole();
-  TestInterleavedUnrequiresReachTheConnectionThatAskedAndPingPairsFollowThePing();
-  TestAServiceStartedMessageBringsItsUnrequireToTheSameConnection();
-  TestUnrequireNeverLowersACountBelowZero();
-  TestAnUnrequireInsideABatchedFrameLowersTheFrameTargetsCount();
+  TestInterleavedUnrequiresReachTheConnectionThatOwesThem();
+  TestPingDiscoveryAfterLoginWithoutAMatchmakerDoesNotWrapTheLoginCount();
+  TestChannelInfoResponseGoesToTheLoginConnectionWhileAMatchmakerExists();
+  TestUnflaggedRequestsDoNotCountAndAnExtraUnrequireIsDropped();
+  TestConfigConnectionUnrequireNeverExceedsItsRequests();
+  TestTheUnrequireInsideTheLoginReplyFrameLowersTheLoginCount();
   TestUnknownFirstFrameKeepsTheProvisionalRole();
   TestReconnectedLoginConnectionTakesOverTheSession();
   TestLoginReplyWithoutALoginConnectionIsDropped();

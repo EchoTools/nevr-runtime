@@ -461,16 +461,23 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    (`CNSUser::ProfileSuccessCB` and the other login-peer checks), so login and profile replies,
    document and other-user-profile replies and the login settings (`IsLoginSessionReply`) go to the
    login connection, and are dropped (counted, logged) when it is gone. Lobby traffic goes to the newest
-   matchmaker connection, falling back to the login connection. An `STcpConnectionUnrequireEvent` lowers the outstanding-request
-   count of the connection it arrives on, and the service sends it as a frame of its own after the reply,
-   from concurrent goroutines, so frames interleave and the message before it is not necessarily its
-   request. The router counts the requests each connection sends on the shared login session
-   (`RequestRaisesRequireCount`: `LogInRequestv2`, the profile, document, other-user-profile, update
-   requests, `SNSConfigRequestv2` and the lobby requests; the lobby requests are counted without proof that
-   each sets the require flag) and gives each Unrequire to a connection with a request outstanding, the
-   login connection first, never taking a count below zero. An Unrequire inside a batched frame lowers the
-   count of the connection the frame goes to. With nothing outstanding the Unrequire belongs to a message
-   the service started itself (the pair of a `LobbyPingRequest`, else the last message's connection). `TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin` and
+   matchmaker connection, falling back to the login connection. An `STcpConnectionUnrequireEvent`
+   lowers the outstanding-request count of the connection it arrives on, and that count is 8 bits: an
+   Unrequire with none outstanding wraps it to 255 without a sound, and the login connection's later loss
+   then raises "connection lost" instead of being ignored. So the router keeps the game's own count per
+   connection (`RequestRaisesRequireCount`: every login-connection send but `LogOut`, `TelemetryEvent` and
+   `RemoteLogSetv3`; every matchmaker send but `MatchmakerStatusRequest`, the `PingResponse` included;
+   `SNSConfigRequestv2` on the config connection) and never delivers an Unrequire to a connection with
+   nothing outstanding; such an Unrequire is dropped and counted (`Stats::droppedUnrequires`). The service
+   pairs an Unrequire with `ChannelInfoResponse`, `DocumentSuccess`, `UpdateProfileSuccess`, config replies
+   and its own `LobbyPingRequest`; it sends the Unrequire as a frame of its own from a concurrent goroutine,
+   so frames interleave and the router queues, per paired message, the connection that message went to and
+   gives each standalone Unrequire to the queue's front. The login reply is one frame, [`LogInSuccess`,
+   Unrequire, `SNSLoginSettings`], delivered whole to the login connection; an Unrequire inside a frame lowers
+   the count of the connection the frame goes to. `ChannelInfoResponse` goes to the login connection (the
+   game accepts it on any peer, but its Unrequire has to land where the count is). A `LobbyPingRequest` goes
+   to the matchmaker connection and is dropped, with its Unrequire, when there is none: the ping discovery
+   sends one on the login session right after the login. `TestSmokeSequenceNewConfigSocketIsConfigAndProfileReplyReachesLogin` and
    `TestServerFramesRouteByRole` pin this.
 
    **A held login.** Before the player signs in there is no account token, and the login

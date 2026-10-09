@@ -61,12 +61,26 @@ inline constexpr uint64_t kSymServerProfileUpdateFailure = 0xd28c6c51aa7b9d63ULL
 inline constexpr uint64_t kSymConnectionUnrequire = 0x43e6963ac76beee4ULL;          // STcpConnectionUnrequireEvent
 // Requests that raise the connection's outstanding-request count (libr15 `SConnection+0x154` bits 2-9, raised
 // by a Send with the require flag), so the service's STcpConnectionUnrequireEvent for each has to reach the
-// connection that sent it. LogInRequestv2, SNSConfigRequestv2 and the lobby requests above are the others.
+// connection that sent it. LogInRequestv2, SNSConfigRequestv2 and the lobby requests above are the others
+// (every lobby request but MatchmakerStatusRequest, including the PingResponse to the service's ping).
 inline constexpr uint64_t kSymLoggedInUserProfileRequest = 0xfb772a4221fc8d70ULL;
 inline constexpr uint64_t kSymDocumentRequest = 0xfcced6f169822bb8ULL;              // SNSDocumentRequestv2
 inline constexpr uint64_t kSymOtherUserProfileRequest = 0x1231172031050cb2ULL;
 inline constexpr uint64_t kSymUpdateProfile = 0x6d54a19a3ff24415ULL;                // SNSUpdateProfile
 inline constexpr uint64_t kSymServerProfileUpdateRequest = 0xd2986849b36b9c72ULL;   // SNSUserServerProfileUpdateRequest
+// More login-connection requests that raise the count, and the ones that do not (RE, libpnsovr/libpnsrad
+// Send calls): LogOut, TelemetryEvent and RemoteLogSetv3 are sent without the require flag.
+inline constexpr uint64_t kSymChannelInfoRequest = 0x90758e58515724e0ULL;           // SNSChannelInfoRequest
+inline constexpr uint64_t kSymGenericMessage = 0x013e99cb47eb3669ULL;               // SNSGenericMessage
+inline constexpr uint64_t kSymMatchEnded = 0x80119c19ac72d695ULL;                   // SNSMatchEndedv5
+inline constexpr uint64_t kSymLeaderboardRequest = 0x5160e81e45abc6a4ULL;           // SNSLeaderboardRequestv2
+inline constexpr uint64_t kSymLogOut = 0x0e9e6e53d0b0c0f6ULL;                       // SNSLogOut (no require flag)
+inline constexpr uint64_t kSymTelemetryEvent = 0xf9bc2a364e230214ULL;               // (no require flag)
+inline constexpr uint64_t kSymRemoteLogSet = 0x244b47685187eae1ULL;                 // SNSRemoteLogSetv3 (no require flag)
+// The service's answer to SNSChannelInfoRequest; the service follows it with an Unrequire.
+inline constexpr uint64_t kSymChannelInfoResponse = 0x6c8f16cd9f8964c5ULL;          // SNSChannelInfoResponse
+// A config reply on the config connection's own remote.
+inline constexpr uint64_t kSymConfigFailure = 0x9e687a63dddd3870ULL;                // SNSConfigFailurev2
 // A message the service starts itself, followed by its own Unrequire (nakama's ping discovery).
 inline constexpr uint64_t kSymLobbyPingRequest = 0xfabf5f8719bfebf3ULL;             // SNSLobbyPingRequestv3
 

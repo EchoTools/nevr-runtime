@@ -16,7 +16,8 @@
 //   * server-to-game routing on the shared login session is by role, never to whichever socket spoke last:
 //     replies to login-connection requests (and the settings that follow a login) go to the login
 //     connection, lobby traffic to the newest matchmaker connection, and an STcpConnectionUnrequireEvent to
-//     a connection with a request outstanding (the login connection first; see ClaimUnrequireLocked).
+//     the connection whose reply it follows, only while that connection has a request outstanding (the game's
+//     own count wraps otherwise; see TakeUnrequireLocked); one with nothing to lower is dropped.
 //   * login injection: exactly once per login session, before any frame the game queued while the
 //     remote was still opening, from a caller-supplied builder (the router never sees a token).
 //   * ordering: frames reach the remote in the order they arrived; the login request is first.
@@ -83,8 +84,10 @@ enum class SendResult {
 Role ClassifyFirstFrame(uint64_t symbol);
 // True for the server-to-game messages that answer a request made on the login connection.
 bool IsLoginSessionReply(uint64_t symbol);
-// True for the game-to-server requests that raise the connection's outstanding-request count.
-bool RequestRaisesRequireCount(uint64_t symbol);
+// True when a message the game sends on a connection of role `role` raises the connection's
+// outstanding-request count (the game sends it with the require flag). The service's
+// STcpConnectionUnrequireEvent lowers it; the game's count is 8 bits and wraps below zero.
+bool RequestRaisesRequireCount(Role role, uint64_t symbol);
 
 class GameTransport {
  public:
@@ -162,6 +165,7 @@ struct Stats {
   int nextConnIdx = 0;
   uint64_t droppedGameFrames = 0;
   uint64_t droppedRemoteFrames = 0;
+  uint64_t droppedUnrequires = 0;  // Unrequires with no request outstanding to lower, or whose message was dropped
 };
 
 class Router {
@@ -242,8 +246,8 @@ class Router {
   bool ReleaseRemoteLocked(GameId game, Game& g, Effects& fx);
   void RecomputeActiveLocked();
   bool OnLoginSessionLocked(GameId id) const;
-  GameId RouteLoginSessionFrameLocked(const std::string& frame);
-  GameId ClaimUnrequireLocked();
+  GameId RouteLoginSessionFrameLocked(const std::string& frame, bool* quietDrop);
+  bool TakeUnrequireLocked(GameId target);
   void CountRequirementsLocked(Game& g, const std::string& frame);
   std::size_t LiveMatchmakersLocked() const;
   void FailSession(RemoteId remote, uint16_t code, const char* why, bool closeRemote);
@@ -265,8 +269,10 @@ class Router {
   RemoteId loginRemote_ = kNoRemote;
   GameId loginGame_ = kNoGame;
   GameId activeGame_ = kNoGame;   // the newest matchmaker connection on the login session
-  GameId lastReplyTarget_ = kNoGame;  // where the last non-Unrequire login-session frame went
-  GameId pendingPairTarget_ = kNoGame;  // where a service-initiated message that brings its own Unrequire went
+  // The connections that owe an Unrequire for the messages the service paired with one, in the order those
+  // messages went out (kNoGame: the message was dropped, so its Unrequire is too).
+  std::deque<GameId> owedUnrequires_;
+  uint64_t droppedUnrequires_ = 0;
   uint64_t droppedGameFrames_ = 0;
   uint64_t droppedRemoteFrames_ = 0;
   bool shutdown_ = false;
