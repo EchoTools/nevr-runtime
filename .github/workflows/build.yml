@@ -105,6 +105,12 @@ jobs:
         osslsigncode --version
         buf --version
 
+    # The pinned vcpkg revision's ixwebsocket port links `-lCrypt32`; Arch's MinGW package ships
+    # libcrypt32.a only, and ld on Linux is case-sensitive. The development machine carries the same
+    # symlink by hand (unowned by any package); the link step of the legacy gameserver fails without it.
+    - name: Provide libCrypt32.a (case-folded name the vcpkg ixwebsocket port links)
+      run: ln -s libcrypt32.a /usr/x86_64-w64-mingw32/lib/libCrypt32.a
+
     - name: Bootstrap vcpkg
       id: vcpkg
       run: |
