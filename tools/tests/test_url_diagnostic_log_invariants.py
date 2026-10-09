@@ -15,7 +15,8 @@ class UrlDiagnosticLogInvariantTest(unittest.TestCase):
                 self.assertIn(needle, source)
 
     def test_gameserver_url_diagnostics_use_full_redactor(self):
-        source = (REPO / "src/runtime/server/gameserver.cpp").read_text(encoding="utf-8")
+        source = "\n".join((REPO / "src/runtime/server" / name).read_text(encoding="utf-8")
+                           for name in ("gameserver.cpp", "gameserver_callbacks.cpp", "gameserver_telemetry.cpp", "gameserver_serverdb.cpp"))
         self.assertNotIn("RedactPasswordInUri", source)
         self.assertIn("[NEVR.GAMESERVER] constructed serverdb URI for token auth:", source)
         self.assertIn("[NEVR.GAMESERVER] failed to initiate WebSocket connection uri=", source)

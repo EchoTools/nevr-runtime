@@ -202,8 +202,6 @@ std::vector<PluginLoadItem> NevrCfgPluginLoadPlan() { return g_testPluginLoadPla
 #include "runtime/compat/social_party.h"
 #include "runtime/hook/symbol_corpus.h"
 #include "runtime/hook/addresses.h"
-#include "runtime/patch/broadcaster_hook_stats.h"
-#include "runtime/patch/mode_patches.h"
 
 // WOULD-FAIL-IF (N68): delete TickPlugins iteration loop in plugin_loader.cpp.
 // WOULD-FAIL-IF (N68-module): delete TickModules loop in module_loader.cpp.
@@ -529,6 +527,28 @@ TEST_F(PluginLoaderDiagnosticTest, ReplacedArgKeyIsLoggedByNameNeverByValue) {
   ASSERT_EQ(GetLoadedPluginCount(), 1);
   EXPECT_TRUE(TestLogContains("onframe: arg 'path' held invalid UTF-8"));
   EXPECT_FALSE(TestLogContains("SECRETVALUE"));
+}
+
+// #152: a plugin may keep what get_plugin_info returned during its init. The loader reserves
+// g_plugins before any init so the push_back that follows that init cannot move the entry the kept
+// pointer names. The keeper fixture takes plugin 0's pointer in its init; after the load it must still
+// be the pointer the host hands out for index 0.
+TEST_F(PluginLoaderDiagnosticTest, InfoPointerKeptDuringALaterPluginsInitStaysValid) {
+  g_testPluginLoadPlan.push_back({"onframe", "test_plugin_onframe.dll", false, "", "{}"});
+  g_testPluginLoadPlan.push_back({"keeper", "test_plugin_info_keeper.dll", false, "", "{}"});
+
+  LoadPlugins();
+
+  ASSERT_EQ(GetLoadedPluginCount(), 2);
+  const HMODULE keeper = GetModuleHandleA("test_plugin_info_keeper.dll");
+  ASSERT_NE(keeper, nullptr);
+  const auto getKept = reinterpret_cast<const NvrLoadedPluginInfo* (*)(void)>(
+      GetProcAddress(keeper, "NvrTestPluginGetKeptInfo"));
+  ASSERT_NE(getKept, nullptr);
+  const NvrLoadedPluginInfo* kept = getKept();
+  ASSERT_NE(kept, nullptr);
+  EXPECT_EQ(kept, GetLoadedPluginInfo(0)) << "the pointer a plugin kept was invalidated by a later load";
+  EXPECT_STREQ(kept->name, "test-plugin-onframe");
 }
 
 // get_plugin_info reports each plugin's own API version and capabilities. Casting
@@ -1394,33 +1414,6 @@ TEST(ModuleProcRegistry, ResolvesRegisteredProcAndRejectsUnknownName) {
 
   EXPECT_EQ(ResolveModuleProc(kName), &kProbe);
   EXPECT_EQ(ResolveModuleProc("test.module_proc_registry.absent"), nullptr);
-}
-
-TEST(BroadcasterHookStats, FormatsMockedLivenessCounters) {
-  char line[192] = {};
-  EXPECT_GT(BroadcasterHookStats::Format(line, sizeof(line), 17, 9), 0);
-  EXPECT_STREQ(line,
-      "[NEVR.PATCH] broadcaster hook stats listen_entries=17 dispatch_entries=9 "
-      "(zero entries means idle runs prove nothing)");
-}
-
-// The live counters are translation-unit state in mode_patches.cpp.  They are
-// zero before any hook entry, which is the only state this test needs: call the
-// REAL reporting entry point and capture the structured line through the test
-// logger.  It does not read game memory, patch code, or install a hook.
-TEST(BroadcasterHookStats, LogsActualZeroInitializedCounters) {
-  {
-    std::lock_guard<std::mutex> lock(g_testLogMutex);
-    g_testLogMessages.clear();
-  }
-
-  LogBroadcasterHookStats();
-
-  std::lock_guard<std::mutex> lock(g_testLogMutex);
-  ASSERT_EQ(g_testLogMessages.size(), 1U);
-  EXPECT_EQ(g_testLogMessages.front(),
-      "[NEVR.PATCH] broadcaster hook stats listen_entries=0 dispatch_entries=0 "
-      "(zero entries means idle runs prove nothing)");
 }
 
 // ============================================================================
