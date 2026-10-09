@@ -71,8 +71,9 @@ them. `src/quest/auth/` holds the Android adapters:
     across every device login of the session (renewals and recovery attempts alike; a sign-in
     resets it). The server does not rate-limit code requests, so this is the client's bound: per
     game start without a sign-in, at most six codes, at least 30 s apart. After the sixth the
-    player is told "Sign-in timed out. Restart the game to try again." and the login is `Failed`,
-    final.
+    player is told "Sign-in timed out. Restart the game to try again.", or "No sign-in code could
+    be shown. Restart the game to try again." when none of those codes could be shown, and the
+    login is `Failed`, final. The bound is checked before a device login sets `AwaitingUser`.
   - A poll that answers `verified` is taken even when it returns after the code's deadline: the
     server deletes the code when it hands out the tokens (`evr_device_auth.go`, the verified branch
     of the poll RPC).
@@ -102,7 +103,7 @@ when it fails and never the code:
 | Mechanism | What the player gets | Line |
 | --- | --- | --- |
 | `file` | `device_login.txt` (URL, code, instructions, expiry) under the external files dir | `written` / `write_failed` (with the page URL, not the code) |
-| `game_error_text` | the prompt as the game's own login-error screen | `published` (`what`: `code`, `signed_in`, `timed_out`) / `refused` / `withdrawn` |
+| `game_error_text` | the prompt as the game's own login-error screen | `published` (`what`: `code`, `signed_in`, `timed_out`, `no_code_shown`) / `refused` / `withdrawn` |
 
 There is no Android intent, toast or notification: the sentinel holds no `JavaVM` or activity
 object (it is loaded as a `DT_NEEDED` dependency, so its `JNI_OnLoad` is not called).
@@ -132,9 +133,12 @@ What the game does, measured on the pinned `libr15.so` and `libpnsovr.so`:
   names 2 "logging in", 3 "logged in", -94 "login failed", 0 "logged out". Entering -94 runs
   `ScheduleQuitOnError`, whose deferred `QuitOnError` (`0x12713f8`) takes one of three paths:
   - `[CR15Game+0x1f08]` set (`0x1271408`, `cbz` at `0x1271410`): it sets bit `0x200000` in the
-    flags word at `[CR15NetGame+0x2da0]` and returns (`0x1271414`-`0x1271420`); while that bit is
-    set and `[CR15Game+0x1f08]` is zero, `CR15NetGame::Update` schedules it again (`0x1294c4c`-
-    `0x1294c60`). No multiplayer is ended, no event sent, no quit requested.
+    flags word that the pointer at `CR15NetGame+0x2da0` points to (`0x1271404` loads the pointer,
+    `0x127140c` the word, `0x1271414`/`0x1271418` set the bit and store it) and returns. No
+    multiplayer is ended, no event sent, no quit requested. `CR15NetGame::Update` schedules it
+    again when bit 14 of that word is clear (`tbnz` at `0x1294c40`), its argument is 1
+    (`0x1294c44`/`0x1294c48`), bit `0x200000` is set and `[CR15Game+0x1f08]` is zero
+    (`0x1294c4c`-`0x1294c60`).
   - otherwise it ends multiplayer (`CR15Game::EndMultiplayer`, `0x127144c`), then with
     `[CR15Game+0x7af0]` set sends that game space a component event;
   - or, with it zero, stores 1 at `[*0x376ce08 + 0x16db8]`, the flag `CR15Game::UpdateGame` sets
@@ -171,22 +175,29 @@ How the prompt gets there (`auth/prompt_board.h`, `sentinel/login_prompt_hook.h`
   ban or a suspension, is never replaced) and the block holds that message, the instance is
   followed from then on and the game's block saved; if the board holds a `prompt` it is written
   over the block at once.
-- A GOT hook on `CR15NetGame::Update` (`0x1294b40`, `R_AARCH64_JUMP_SLOT` `0x36e05f8`, called once
-  per game update from `CR15Game::UpdateGame` at `0x11fb5cc`) rewrites the followed block while
+- A GOT hook on `CR15NetGame::Update` (`0x1294b40`, `R_AARCH64_JUMP_SLOT` `0x36e05f8`, called from
+  `CR15Game::UpdateGame` at `0x11fb5cc`, up to four times per game-loop iteration, see below)
+  rewrites the followed block while
   that instance is still in -94 and the board or the block has changed: a prompt published after
   the failure, a new code, the signed-in notice (only over a prompt), the timed-out text, or the
-  game's saved block when the board is withdrawn. Every frame it checks the block still holds
+  game's saved block when the board is withdrawn. On every call it checks the block still holds
   what the hook last left there. The game writes the same block for other errors (for example
   `CR15NetClientLobby::SwitchTo` from `0x123e950`, `LobbySessionFailureCB` `0x1240fa4`/
   `0x1240fcc`, `LobbyStatusNotifyCB` `0x125fa88`/`0x125fa9c`/`0x125fb58`, `CR15NetGame::SwitchTo`
   `0x125bba4`/`0x125bbe8`/`0x125bc44`, `OnGameSpaceUnloaded`/`Aborted` `0x12939f4`/`0x1293ad4`);
   a block another writer changed is left alone for good, unless it holds one of the local
-  login-failure texts again (a new failure), which is taken up as the game's text.
-- Both hooks run on one thread: `CncaGame::RunLoop` calls `CR15Game::Update` (vtable slot
-  `0x408`), which updates the login providers (`CNSProvider::Update`, `0x11fd858`-`0x11fd870`,
-  and `CR15NetGame::UpdateBroadcaster`, `0x11fd878`, where login failures are delivered) and then
-  `CncaGame::Update` (`0x11fd8ac`), which calls `CR15Game::UpdateGame` (slot `0x198`) and so
-  `CR15NetGame::Update`. That the login-failure callbacks run inside those provider and
+  login-failure texts again, which is taken up as the game's text and gets the prompt: a new local
+  failure the error hook could not take up (its writer flag was held), or one the error hook did
+  not take up because the game was not logging in at that moment (already in -94; that call also
+  counts `_text_not_local`).
+- Both hooks run on one thread: each `CncaGame::RunLoop` iteration calls `CR15Game::Update` (vtable
+  slot `0x408`) four times, with the arguments 0 to 3 (`0x17ec5ec`, `0x17ec5fc`, `0x17ec610`,
+  `0x17ec624`). Only the call with argument 0 updates the login providers (`cbz x1` at
+  `0x11fd838`; `CNSProvider::Update` at `0x11fd858`-`0x11fd870` and
+  `CR15NetGame::UpdateBroadcaster` at `0x11fd878`, where login failures are delivered); the calls
+  reach `CncaGame::Update` (`0x11fd8ac`), which calls `CR15Game::UpdateGame` (slot `0x198`), which
+  passes its argument on to `CR15NetGame::Update` (`0x11fb134` keeps it in `x19`, `0x11fb5c8`/
+  `0x11fb5cc`). So the Update hook runs up to four times per loop iteration. That the login-failure callbacks run inside those provider and
   broadcaster updates is inferred from the call chain, not traced instruction by instruction; the
   hooks' writer flag does not rely on it.
 - Neither hook logs or takes a lock. Their eight counters are `login_prompt_text_shown`,

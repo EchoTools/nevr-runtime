@@ -182,7 +182,8 @@ void HookedSetDelimitedErrorMessage(ErrorThunk::Fn original, CR15NetGameOpaque* 
   g_writing.clear(std::memory_order_release);
 }
 
-// Keeps the followed instance's block current. Runs once per game update, before the game's own.
+// Keeps the followed instance's block current. Runs on each CR15NetGame::Update call (up to four per
+// game-loop iteration), before the game's own.
 void Refresh(CR15NetGameOpaque* self) noexcept {
   const bool leftLoginFailed = State(self) != layout::kStateLoginFailed;
   if (g_writing.test_and_set(std::memory_order_acquire)) return;  // the other writer: next frame
@@ -191,8 +192,8 @@ void Refresh(CR15NetGameOpaque* self) noexcept {
     return;
   }
   unsigned char* block = Block(self);
-  // Nothing to do while the board and the block are as last left (checked every frame: the game can
-  // write the block again without the board changing, e.g. a new failure the error hook missed).
+  // Nothing to do while the board and the block are as last left (checked on every call: the game
+  // can write the block again without the board changing, e.g. a new failure the error hook missed).
   if (!leftLoginFailed && board::Version() == g_applied.load(std::memory_order_relaxed) &&
       SameBlock(block, g_written)) {
     g_writing.clear(std::memory_order_release);
@@ -203,8 +204,10 @@ void Refresh(CR15NetGameOpaque* self) noexcept {
     follow = false;  // the game left its error screen's state
   } else if (!SameBlock(block, g_written)) {
     if (HoldsLocalFailure(block)) {
-      // A new local failure the error hook could not take up (its writer flag was held): the game's
-      // own text, so start over from it.
+      // A local login-failure text the error hook did not take up: its writer flag was held, or the
+      // game was not logging in at that moment (a second failure while already in "login failed",
+      // which the error hook counted as not local). It is the game's own text: start over from it,
+      // so it gets the prompt.
       CopyBlock(g_saved, block);
       CopyBlock(g_written, block);
       g_kind = Kind::kGame;

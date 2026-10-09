@@ -72,7 +72,8 @@ using LibR15SetDelimitedErrorMessageThunk =
     CallbackThunk<LibR15SetDelimitedErrorMessageTag, SetDelimitedErrorMessageSig>;
 
 // NRadEngine::NRadGame::CR15NetGame::Update(unsigned long long), defined in libr15 at 0x1294b40,
-// called once per game update from CR15Game::UpdateGame (bl at 0x11fb5cc, the only call site;
+// called from CR15Game::UpdateGame (bl at 0x11fb5cc, the only call site, up to four times per
+// game-loop iteration with UpdateGame's own argument;
 // the caller does not read x0 afterwards: the next instruction loads x0 for CncaGame::UpdateGame).
 using CR15NetGameUpdateSig = void(CR15NetGameOpaque* self, std::uint64_t arg);
 struct LibR15NetGameUpdateTag {};
