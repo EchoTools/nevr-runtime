@@ -309,6 +309,31 @@ void ANewLocalFailureMissedByTheErrorHookIsTakenUpByUpdate() {
   QCHECK(Line(g_game, 0) == kLocal);
 }
 
+// A second local failure while the game is already in "login failed" (LogInFailedCB acts in any
+// state >= 0) is not taken up by the error hook, which only acts while the game is logging in; Update
+// finds the game's local text in the followed block and puts the prompt over it. Intended: the screen
+// shows a local login failure while the player still has to sign in.
+void ASecondLocalFailureWhileAlreadyInLoginFailedGetsThePromptToo() {
+  Publish(Prompt("SEC1-CODE"));
+  FailLocally(g_game);  // prompt shown, state -94
+  const lp::Counts before = lp::CurrentCounts();
+  ErrorEntry()(Obj(g_game), kLocal);  // the game is in -94, not logging in
+  QCHECK(BlockOf(g_game)[0] == 0 && Line(g_game, 0) == kLocal);
+  QCHECK(lp::CurrentCounts().not_local == before.not_local + 1);
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(Line(g_game, 0) == "Sign in to play: on a phone or computer, open");
+  QCHECK(Line(g_game, 2) == "and enter the code SEC1-CODE");
+  QCHECK(lp::CurrentCounts().not_ours == before.not_ours);
+  board::Withdraw();
+  UpdateEntry()(Obj(g_game), 16);
+  QCHECK(BlockOf(g_game)[0] == 0 && Line(g_game, 0) == kLocal);
+}
+
+// Not tested here: Refresh's re-check that the followed instance is still `self` after it takes the
+// writer flag (login_prompt_hook.cpp, Refresh). Update only calls Refresh for the followed instance,
+// and only another thread could change it between that check and the flag; both hooks run on the game
+// loop's thread (docs/adr/0003), so a test would need a second thread racing the hook.
+
 void AWithdrawnBoardKeepsNoCode() {
   Publish(Prompt("WIPE1-CODE"));
   QCHECK(board::NonZeroTextBytesForTest() == Prompt("WIPE1-CODE").size());
@@ -430,6 +455,7 @@ int main() {
   ABusyBoardIsCountedAndThePromptFollowsOnTheNextFrame();
   ANoticeNeverReplacesTheGameTextOfAScreenThatShowedNoPrompt();
   ANewLocalFailureMissedByTheErrorHookIsTakenUpByUpdate();
+  ASecondLocalFailureWhileAlreadyInLoginFailedGetsThePromptToo();
   AWithdrawnBoardKeepsNoCode();
   TheBoardRefusesWhatTheGameCouldNotShow();
   ConcurrentReadsAreNeverTorn();
