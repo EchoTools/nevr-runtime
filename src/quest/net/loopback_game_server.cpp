@@ -158,7 +158,12 @@ std::string LoopbackGameServer::LoopbackUri() const {
 }
 
 uint16_t LoopbackGameServer::Start() {
-  if (router_ == nullptr || listenFd_ >= 0) return 0;
+  const std::lock_guard<std::mutex> lifecycle(lifecycleMutex_);
+  if (router_ == nullptr) return 0;
+  // Already running (even with no live descriptor: after a failed restore the accept thread keeps
+  // retrying with listenFd_ < 0). Re-entry must not reassign acceptThread_ while it is joinable --
+  // that calls std::terminate -- so return the current port instead.
+  if (acceptThread_.joinable() || listenFd_.load(std::memory_order_acquire) >= 0) return port_;
   uint8_t raw[kTokenHexLength / 2];
   if (!RandomBytes(raw, sizeof(raw))) {
     nlohmann::json record = Record(kListenerEvent, "start_failed");
@@ -172,14 +177,15 @@ uint16_t LoopbackGameServer::Start() {
   struct stat st {};
   int err = 0;
   uint16_t port = 0;
-  listenFd_ = OpenListener(/*port=*/0, &st, &port, &err);  // ephemeral: never a fixed port
-  if (listenFd_ < 0) {
+  const int listenFd = OpenListener(/*port=*/0, &st, &port, &err);  // ephemeral: never a fixed port
+  if (listenFd < 0) {
     nlohmann::json record = Record(kListenerEvent, "start_failed");
     record["reason"] = "listen_failed";
     record["errno"] = err;
     Log(LogLevel::Error, Dump(record));
     return 0;
   }
+  listenFd_.store(listenFd, std::memory_order_release);
   listenIno_ = st.st_ino;
   listenDev_ = st.st_dev;
   port_ = port;
@@ -194,10 +200,12 @@ uint16_t LoopbackGameServer::Start() {
 }
 
 void LoopbackGameServer::Stop() {
-  if (listenFd_ < 0 && !acceptThread_.joinable()) return;
+  const std::lock_guard<std::mutex> lifecycle(lifecycleMutex_);
+  if (listenFd_.load(std::memory_order_acquire) < 0 && !acceptThread_.joinable()) return;
   stop_ = true;
   Poke(wakeFds_[1]);
   if (acceptThread_.joinable()) acceptThread_.join();
+  // The accept thread is joined, so listenFd_ is ours to read and close without a race.
   std::vector<std::shared_ptr<Conn>> all;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -211,9 +219,13 @@ void LoopbackGameServer::Stop() {
     CloseFd(conn->wake[0]);
     CloseFd(conn->wake[1]);
   }
-  CloseFd(listenFd_);
+  int listenFd = listenFd_.load(std::memory_order_acquire);
+  CloseFd(listenFd);                               // sets the local to -1
+  listenFd_.store(-1, std::memory_order_release);  // so a later Start() can run again
   CloseFd(wakeFds_[0]);
   CloseFd(wakeFds_[1]);
+  wakeFds_[0] = -1;
+  wakeFds_[1] = -1;
   nlohmann::json record = Record(kListenerEvent, "stopped");
   record["port"] = port_;
   Log(LogLevel::Info, Dump(record));
@@ -250,24 +262,40 @@ void LoopbackGameServer::AcceptLoop() {
   auto lastCheck = std::chrono::steady_clock::now();
   bool resourceBlocked = false;
   while (!stop_) {
+    const int lfd = listenFd_.load(std::memory_order_acquire);
     // poll() ignores a negative descriptor, so after a loss only the wake pipe and the timeout run. After
     // accept() ran out of descriptors the listener is watched for errors only: a queued connection would
     // otherwise report POLLIN on every pass and spin this thread.
     const short listenInterest = resourceBlocked ? 0 : POLLIN;
-    pollfd fds[2] = {{listenFd_, listenInterest, 0}, {wakeFds_[0], POLLIN, 0}};
+    pollfd fds[2] = {{lfd, listenInterest, 0}, {wakeFds_[0], POLLIN, 0}};
     const int ready = ::poll(fds, 2, 250);
+    const int pollErrno = ready < 0 ? errno : 0;
     Reap();
     if (stop_) break;
     const short revents = ready > 0 ? fds[0].revents : 0;
     if (ready > 0 && (fds[1].revents & POLLIN) != 0) Drain(wakeFds_[0]);
     const bool faulted = (revents & (POLLERR | POLLHUP | POLLNVAL)) != 0;
     int acceptErrno = 0;
+    bool identityLost = false;
     resourceBlocked = false;
-    if (listenFd_ >= 0 && !faulted && (revents & POLLIN) != 0) acceptErrno = AcceptPending(&resourceBlocked);
+    if (lfd >= 0 && !faulted && (revents & POLLIN) != 0) {
+      // Before accepting, confirm the descriptor is still our listening socket. If its number was
+      // reused by another socket, accept() here would take THAT socket's connections and answer them
+      // 403; CheckListener runs only periodically, so the window would be up to listenerCheckMs. The
+      // pre-check closes it: a replaced descriptor is never accepted on, it is handed to CheckListener.
+      if (ListenerStillOurs()) {
+        acceptErrno = AcceptPending(&resourceBlocked);
+      } else {
+        identityLost = true;
+      }
+    }
     const auto now = std::chrono::steady_clock::now();
-    if (faulted || acceptErrno != 0 || now - lastCheck >= std::chrono::milliseconds(config_.listenerCheckMs)) {
+    // Check the listener on a fault, an accept failure, a replaced descriptor, a poll() error (other
+    // than EINTR), or on the periodic timer.
+    if (faulted || identityLost || acceptErrno != 0 || (pollErrno != 0 && pollErrno != EINTR) ||
+        now - lastCheck >= std::chrono::milliseconds(config_.listenerCheckMs)) {
       lastCheck = now;
-      if (listenFd_ >= 0) {
+      if (listenFd_.load(std::memory_order_acquire) >= 0) {
         CheckListener(revents, acceptErrno);
       } else {
         TryRestoreListener();
@@ -276,9 +304,18 @@ void LoopbackGameServer::AcceptLoop() {
   }
 }
 
+bool LoopbackGameServer::ListenerStillOurs() const {
+  const int fd = listenFd_.load(std::memory_order_acquire);
+  if (fd < 0) return false;
+  struct stat st {};
+  if (::fstat(fd, &st) != 0) return false;
+  return S_ISSOCK(st.st_mode) && st.st_ino == listenIno_ && st.st_dev == listenDev_;
+}
+
 int LoopbackGameServer::AcceptPending(bool* resourceBlocked) {
+  const int listenFd = listenFd_.load(std::memory_order_acquire);
   for (;;) {
-    const int fd = ::accept4(listenFd_, nullptr, nullptr, SOCK_CLOEXEC);
+    const int fd = ::accept4(listenFd, nullptr, nullptr, SOCK_CLOEXEC);
     if (fd < 0) {
       const int err = errno;
       if (err == EAGAIN || err == EWOULDBLOCK || err == EINTR || err == ECONNABORTED) return 0;
@@ -336,11 +373,12 @@ int LoopbackGameServer::AcceptPending(bool* resourceBlocked) {
 }
 
 void LoopbackGameServer::CheckListener(short revents, int acceptErrno) {
+  const int listenFd = listenFd_.load(std::memory_order_acquire);
   const char* cls = nullptr;
   bool ours = false;
   int soError = 0;
   struct stat st {};
-  if (::fstat(listenFd_, &st) != 0) {
+  if (::fstat(listenFd, &st) != 0) {
     cls = "fd_closed";  // something in the process closed the descriptor underneath this class
   } else if (!S_ISSOCK(st.st_mode) || st.st_ino != listenIno_ || st.st_dev != listenDev_) {
     cls = "fd_replaced";  // closed, and the number reused by another file: that file is not ours to touch
@@ -348,10 +386,10 @@ void LoopbackGameServer::CheckListener(short revents, int acceptErrno) {
     ours = true;
     int accepting = 0;
     socklen_t len = sizeof(accepting);
-    if (::getsockopt(listenFd_, SOL_SOCKET, SO_ACCEPTCONN, &accepting, &len) != 0 || accepting == 0) {
+    if (::getsockopt(listenFd, SOL_SOCKET, SO_ACCEPTCONN, &accepting, &len) != 0 || accepting == 0) {
       cls = "not_listening";  // still our socket, but the kernel no longer listens on it (shut down or destroyed)
       socklen_t errLen = sizeof(soError);
-      if (::getsockopt(listenFd_, SOL_SOCKET, SO_ERROR, &soError, &errLen) != 0) soError = 0;
+      if (::getsockopt(listenFd, SOL_SOCKET, SO_ERROR, &soError, &errLen) != 0) soError = 0;
     }
   }
   if (cls == nullptr) return;
@@ -359,13 +397,13 @@ void LoopbackGameServer::CheckListener(short revents, int acceptErrno) {
   nlohmann::json record = Record(kListenerEvent, "lost");
   record["class"] = cls;
   record["port"] = port_;
-  record["fd"] = listenFd_;
+  record["fd"] = listenFd;
   record["revents"] = static_cast<int>(revents);
   record["accept_errno"] = acceptErrno;
   record["so_error"] = soError;
   Log(LogLevel::Error, Dump(record));
-  if (ours) ::close(listenFd_);
-  listenFd_ = -1;
+  if (ours) ::close(listenFd);
+  listenFd_.store(-1, std::memory_order_release);
   lastRestoreErrno_ = 0;
   TryRestoreListener();
 }
@@ -386,9 +424,9 @@ void LoopbackGameServer::TryRestoreListener() {
     }
     return;
   }
-  listenFd_ = fd;
   listenIno_ = st.st_ino;
   listenDev_ = st.st_dev;
+  listenFd_.store(fd, std::memory_order_release);
   lastRestoreErrno_ = 0;
   listenerRestores_.fetch_add(1);
   nlohmann::json record = Record(kListenerEvent, "restored");
