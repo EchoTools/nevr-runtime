@@ -29,6 +29,12 @@ class VcpkgPinTest(unittest.TestCase):
                 self.assertLess(text.index("actions/checkout"), text.index("Microsoft/vcpkg.git"),
                                 f"{workflow.name}: .vcpkg-commit is read before the checkout")
 
+    def test_the_workflows_that_link_provide_the_case_folded_crypt32(self):
+        # The pinned ixwebsocket port links -lCrypt32 and Arch ships libcrypt32.a only.
+        for name in ("build.yml", "defender-scan.yml"):
+            self.assertIn("ln -s libcrypt32.a /usr/x86_64-w64-mingw32/lib/libCrypt32.a",
+                          (WORKFLOWS / name).read_text(), name)
+
 
 if __name__ == "__main__":
     unittest.main()
