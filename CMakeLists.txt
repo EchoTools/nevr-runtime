@@ -175,6 +175,9 @@ if(MINGW)
     -static
     -static-libgcc
     -static-libstdc++
+    # The PE header, export and debug directories carry a link-time timestamp; without this the same
+    # objects link to different bytes on every run.
+    -Wl,--no-insert-timestamp
   )
 endif()
 
