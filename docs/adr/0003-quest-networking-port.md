@@ -1340,13 +1340,17 @@ libraries (`production_steps.cpp`). The sequence is policy over an abstract `Ste
 
 **Order.** (1) crash reporter; (2) configuration (`InitActivation`); (3) every counter of every hook
 that will be installed; (4) the single `StartReporter`; (5) the clock hook; (6) token auth on its own
-thread; (7) the sign-in prompt hook on libr15's `SetDelimitedErrorMessage` slot (#239), only where token
-auth runs, since token auth is what publishes the prompt; (8) the bridge (loopback listener and router);
-(9) the `CJson::TString` redirect on libr15; (10) the social facade; (11) the hook on libr15's `dlopen`
-slot, whose post-load login install also installs the login prerequisites (#240). Counters are
-registered only for hooks that will be installed: clock 2, redirect 10, dlopen 1, social 19, login
-prompt 3, 35 of the reporter's 48 slots (`integration_hooks_test` pins the total against the real
-registration functions). The login thunk and the login prerequisites register none (#237).
+thread; (7) the sign-in prompt hooks on libr15's `SetDelimitedErrorMessage` and `CR15NetGame::Update`
+slots (#239), wherever token auth is wanted, once it has started, since token auth is what publishes the
+prompt; (8) the bridge (loopback listener and router); (9) the `CJson::TString` redirect on libr15;
+(10) the social facade; (11) the hook on libr15's `dlopen` slot, whose post-load login install also
+installs the login prerequisites (#240). Counters are registered only for hooks that will be installed:
+clock 2, redirect 10, dlopen 1, social 19, login prompt 8, 40 of the reporter's 48 slots
+(`integration_hooks_test` runs the sequence against the real registration functions). The login thunk and
+the login prerequisites register none (#237). The production identity source answers the prerequisites'
+`IdentitySource::Ready()` with true exactly when its `Fetch` would return `Ok` (token auth Ready with an
+access token and a NEVR account), so a stand-in Oculus answer is given only when the NEVR rewrite will
+replace it (#240).
 
 **Dependencies.** A failed or skipped piece turns off what needs it and nothing else. Token auth
 failing turns off the login prompt, the bridge, the login hook, the social facade and the redirect; the bridge failing

@@ -12,8 +12,9 @@
 //   4  StartReporter                 ... the single StartReporter (the reporter refuses a later register)
 //   5  InstallClockHook              the always-on proof hook
 //   6  StartTokenAuth                needed by the bridge (the remote JWT) and the login rewrite
-//   7  InstallLoginPrompt            the sign-in prompt as the game's login-error text (#239), on libr15;
-//                                    login feature, needs token auth (its GameTextPresenter publishes it)
+//   7  InstallLoginPrompt            the sign-in prompt on the game's login-error screen (#239): two libr15
+//                                    slots (SetDelimitedErrorMessage, CR15NetGame::Update); wherever token
+//                                    auth is wanted, after it started (its GameTextPresenter publishes it)
 //   8  StartBridge                   loopback listener + router; the redirect needs its port
 //   9  InstallRedirect               CJson::TString thunks on libr15
 //  10  InstallSocial                 the NEVR social facade on libr15's CNSProvider::Social slot

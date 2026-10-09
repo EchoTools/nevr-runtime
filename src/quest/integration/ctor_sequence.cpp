@@ -116,13 +116,13 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
     } else {
       r.Skip(StepId::kRegisterSocialCounters, "social_off");
     }
-    // The sign-in prompt belongs to the login feature (#239), like the login hook it stands in for while
-    // the player signs in.
-    if (wantLogin) {
+    // The sign-in prompt (#239) is published by token auth, so its counters are registered wherever token
+    // auth is wanted (bridge or login), and only then.
+    if (wantTokenAuth) {
       promptCounters =
           r.Run(StepId::kRegisterLoginPromptCounters, [&] { return steps.RegisterLoginPromptCounters(); });
     } else {
-      r.Skip(StepId::kRegisterLoginPromptCounters, "login_off");
+      r.Skip(StepId::kRegisterLoginPromptCounters, "bridge_and_login_off");
     }
     r.Run(StepId::kStartReporter, [&] { return steps.StartReporter(); });
 
@@ -135,11 +135,11 @@ ConstructorReport RunConstructorSequence(Steps& steps) noexcept {
       r.Skip(StepId::kStartTokenAuth, "bridge_and_login_off");
     }
 
-    // The sign-in prompt in the game's login-error text (#239), behind the login feature. Token auth is
-    // what publishes the prompt (its GameTextPresenter), so without it the hook would only pass the game's
-    // message through and is not installed.
-    if (!wantLogin) {
-      r.Skip(StepId::kInstallLoginPrompt, "login_off");
+    // The sign-in prompt on the game's login-error screen (#239): installed once token auth has started
+    // (its GameTextPresenter publishes the prompt board) and only when the counters registered. Both slots
+    // are in libr15, so it does not wait for the dlopen hook and does not depend on the login hook.
+    if (!wantTokenAuth) {
+      r.Skip(StepId::kInstallLoginPrompt, "bridge_and_login_off");
     } else if (!promptCounters) {
       r.Skip(StepId::kInstallLoginPrompt, "counters_refused");
     } else if (!tokenOk) {

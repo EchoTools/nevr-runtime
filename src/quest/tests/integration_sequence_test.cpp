@@ -3,10 +3,12 @@
 // before the single reporter start, the isolation of one failing piece from the others, the post-load
 // policy, the identity source, the social switch and the frame tap. Fakes stand in for every library.
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "quest/integration/bridge_uri.h"
@@ -140,14 +142,14 @@ void TestFeatureGating() {
     QCHECK(s.Ran("redirect") && !s.Ran("token") && !s.Ran("bridge") && !s.Ran("social"));
     QCHECK(s.Ran("dlopen") && !s.loginArg && s.mmArg);
     QCHECK(s.Ran("reg_redirect") && s.Ran("reg_dlopen") && !s.Ran("reg_social"));
-    QCHECK(!s.Ran("reg_prompt") && !s.Ran("prompt"));  // the prompt belongs to the login feature
+    QCHECK(!s.Ran("reg_prompt") && !s.Ran("prompt"));  // no token auth: nothing would publish a prompt
   }
   {  // redirect + bridge, no login: token auth runs (the remote needs a JWT), no login install
     FakeSteps s = FakeSteps::With(true, true, false, false);
     RunConstructorSequence(s);
     QCHECK(s.Ran("token") && s.Ran("bridge") && s.Ran("redirect"));
     QCHECK(s.Ran("dlopen") && !s.loginArg && s.mmArg);
-    QCHECK(!s.Ran("reg_prompt") && !s.Ran("prompt"));  // token auth runs, but the login feature is off
+    QCHECK(s.Ran("reg_prompt") && s.Ran("prompt"));  // token auth runs, so its prompt can be shown
   }
   {  // login on: the sign-in prompt hook is registered and installed after token auth (#239)
     FakeSteps s = FakeSteps::With(true, true, true, false);
@@ -409,6 +411,34 @@ void TestIdentitySourceAnswers() {
   QCHECK(empty.Fetch(none) == QuestLogin::IdentityStatus::NotReady);
 }
 
+// #240 fail-closed: the login prerequisites stand in for an Oculus answer only while Ready() is true, and
+// IdentitySource's default Ready() is false. The production source answers true exactly when Fetch is Ok.
+void TestIdentitySourceReadyIsFetchOk() {
+  using nevr::quest_auth::Readiness;
+  int readyCount = 0;
+  for (Readiness r : {Readiness::Starting, Readiness::Refreshing, Readiness::AwaitingUser, Readiness::Ready,
+                      Readiness::Expired, Readiness::Failed, Readiness::Stopped}) {
+    for (const char* token : {"", "tok"}) {
+      for (std::uint64_t account : {std::uint64_t{0}, std::uint64_t{4242}}) {
+        const nevr::quest_auth::Snapshot snap = Snap(r, token, account, "p");
+        TokenIdentitySource source([snap] { return snap; });
+        QuestLogin::Identity id;
+        const bool fetchOk = source.Fetch(id) == QuestLogin::IdentityStatus::Ok;
+        const QuestLogin::IdentitySource& asBase = source;  // the prerequisites call it through the base
+        QCHECK(asBase.Ready() == fetchOk);
+        readyCount += asBase.Ready() ? 1 : 0;
+      }
+    }
+  }
+  QCHECK(readyCount == 1);  // only Ready + token + account
+  TokenIdentitySource ready([] { return Snap(Readiness::Ready, "tok", 4242, "p"); });
+  QCHECK(ready.Ready());
+  QCHECK(!TokenIdentitySource(nullptr).Ready());
+  TokenIdentitySource throwing([]() -> nevr::quest_auth::Snapshot { throw std::runtime_error("snapshot"); });
+  QCHECK(!throwing.Ready());  // contained: false, no exception
+  static_assert(noexcept(std::declval<const TokenIdentitySource&>().Ready()), "Ready must be noexcept");
+}
+
 // ---- frame tap -------------------------------------------------------------------------------------
 
 std::string LoginSuccessFrame(std::uint64_t account) { return EvrCodec::BuildLoginSuccess(EvrCodec::kBridgeLoginPlatform, account); }
@@ -550,6 +580,7 @@ int main() {
   TestPostLoadWithNoActionsIsInert();
   TestPostLoadAcceptsANullName();
   TestIdentitySourceAnswers();
+  TestIdentitySourceReadyIsFetchOk();
   TestFrameTapSignalsLoginSuccessOnlyFromTheServer();
   TestFrameTapContainsAThrowingConsumer();
   if (quest_test::Failures() != 0) {
