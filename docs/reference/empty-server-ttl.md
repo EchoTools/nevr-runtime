@@ -19,7 +19,7 @@ holds a request made while no player session is accepted (join state 4,
 - a player joins: the hold is dropped and the session continues;
 - a shutdown is pending (Ctrl+C, a shutdown command): the hold is dropped and the process exits as usual.
 
-The runtime's own call on a ServerDB `CODE_ENDED` (`gameserver.cpp`) goes through the same
+The runtime's own call on a ServerDB `CODE_ENDED` (`gameserver_callbacks.cpp`) goes through the same
 `ReturnToLobby::Request`, so it is held too.
 
 ## What it does not do

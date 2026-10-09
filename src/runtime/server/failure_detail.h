@@ -1,6 +1,6 @@
 #pragma once
 
-// Operator-facing cause text for the two ServerFatal sites in gameserver.cpp, which must say more
+// Operator-facing cause text for the two ServerFatal sites in gameserver_callbacks.cpp and gameserver_serverdb.cpp, which must say more
 // than "failed" (#35): the registration rejection and the ServerDB token acquisition. Pure functions: no
 // logging, no global state, no secrets (callers pass reasons built from HTTP status and curl codes,
 // never from credentials; URLs go through LogDiagnostics::RedactUrlForDiagnostics).

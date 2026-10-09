@@ -113,7 +113,7 @@ services:
 # Controls how the game server advertises itself to ServerDB and which
 # IP addresses it uses for peer-to-peer connections. All keys are optional.
 #
-# Reader: gamepatches config.cpp (LoadLocalConfigHook), gameserver.cpp
+# Reader: gamepatches config.cpp (LoadLocalConfigHook), gameserver_callbacks.cpp
 # ---------------------------------------------------------------------------
 
 network:
@@ -152,7 +152,7 @@ network:
 # These identify the server instance to the community infrastructure.
 # All keys are optional but a server without them will fail to register.
 #
-# Reader: gameserver.cpp (RequestRegistration), ws_bridge.cpp
+# Reader: gameserver_serverdb.cpp (RequestRegistration), ws_bridge.cpp
 # ---------------------------------------------------------------------------
 
 identity:
@@ -175,7 +175,7 @@ identity:
 # outbound WebSocket connection to the community relay.
 #
 # Reader: gamepatches config.cpp (RedirectServiceUrl, JsonValueAsStringHook),
-#         gamepatches token_auth.cpp, gameserver.cpp (AuthenticateServer),
+#         gamepatches token_auth.cpp, gameserver_serverdb.cpp (AuthenticateServer),
 #         ws_bridge.cpp
 # ---------------------------------------------------------------------------
 
@@ -216,7 +216,7 @@ auth:
 # in the ServerDB WebSocket URI.
 # Absent: no guild filter (server registers with all guilds).
 # Not a secret.
-# Reader: gameserver.cpp (RequestRegistration)
+# Reader: gameserver_serverdb.cpp (RequestRegistration)
 # ---------------------------------------------------------------------------
 # guilds: "guild-abc123,guild-def456"
 
@@ -228,7 +228,7 @@ auth:
 # parameter in the ServerDB WebSocket URI.
 # Absent: no region filter.
 # Not a secret.
-# Reader: gameserver.cpp (RequestRegistration)
+# Reader: gameserver_serverdb.cpp (RequestRegistration)
 # ---------------------------------------------------------------------------
 # regions: "us-west"
 
@@ -239,7 +239,7 @@ auth:
 # servers), the server streams match telemetry over a dedicated WebSocket
 # to a telemetry ingest server. Disable with "-notelemetry".
 #
-# Reader: gameserver.cpp (RequestRegistration, telemetry_streamer)
+# Reader: gameserver_serverdb.cpp (RequestRegistration), gameserver_telemetry.cpp (telemetry streamer)
 # ---------------------------------------------------------------------------
 
 telemetry:
