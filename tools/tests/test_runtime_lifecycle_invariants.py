@@ -249,6 +249,17 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertRegex(fallback, re.compile(
             r"token = wsToken;(?:(?!m_telemetry->Connect).)*?m_telemetry->SetBearerTokenRefresher\s*\(", re.S))
 
+    def test_console_handler_is_rearmed_after_the_game_installs_its_own(self):
+        # Issue #102: the game installs its console ctrl handler (echovr.exe 0x1400dcbb0, from
+        # CR15Game::InitRenderWindowFromEngineFlags) after our boot-time re-arm, so its handler sat in
+        # front and swallowed CTRL+C. The installer is hooked and our handler re-armed once it returns.
+        source = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
+        hook = extract_braced_function(source, "static INT64 GameConsoleHandlerInstallHook(")
+        self.assertRegex(hook, r"OriginalGameConsoleHandlerInstall\s*\(")
+        self.assertRegex(hook, r"\bRearmConsoleCtrlHandler\s*\(\s*\)")
+        install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
+        self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
+
     def test_shutdown_thread_never_touches_the_callback_registry(self):
         # Issue #44: the graceful-shutdown thread called self->Unregister(), which reaches
         # UnregisterAllCallbacks -> GetCallbackRegistry() and EchoVR::BroadcasterUnlisten. The

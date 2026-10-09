@@ -111,6 +111,16 @@ void InstallGameMainHook() {
 static volatile sig_atomic_t g_inSignalContext = 0;
 
 
+// N67 (re-opened 2026-07-26): these two flags are written from CreateProcessAHook, CreateProcessWHook,
+// ExitProcessHook and TerminateProcessHook — any thread — and read/written from
+// BreakpointVEH on the faulting thread. Plain `bool` gives no ordering guarantee and
+// permits the compiler to sink or reorder the stores, so the VEH can observe a stale
+// value and either skip an int3 it should have taken or take one it should not.
+// The earlier fix converted the copies in plugins/crash-handler/, which is not built
+// (plugins/CMakeLists.txt:12) — this is the path that ships.
+static std::atomic<bool> g_crashReporterSuppressed{false};
+static std::atomic<bool> g_justSuppressedCrash{false};
+
 /// <summary>
 /// Crash Reporter Suppression (CreateProcessA/W + ExitProcess + TerminateProcess + VEH)
 ///
@@ -136,12 +146,14 @@ BOOL WINAPI CreateProcessAHook(LPCSTR lpApplicationName, LPSTR lpCommandLine, LP
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] crash reporter launch blocked api=CreateProcessA match=application_name target=%s",
         lpApplicationName);
+    g_crashReporterSuppressed = true;  // same exit suppression as the CreateProcessW path
     return FALSE;  // Pretend the process failed to start
   }
   if (lpCommandLine && strstr(lpCommandLine, "BsSndRpt")) {
     Log(EchoVR::LogLevel::Info,
         "[NEVR.PATCH] crash reporter launch blocked api=CreateProcessA match=command_line target=%s",
         lpCommandLine);
+    g_crashReporterSuppressed = true;
     return FALSE;
   }
 
@@ -157,16 +169,6 @@ BOOL WINAPI CreateProcessAHook(LPCSTR lpApplicationName, LPSTR lpCommandLine, LP
 typedef BOOL(WINAPI* CreateProcessWFunc)(LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD,
                                          LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
 CreateProcessWFunc OriginalCreateProcessW = nullptr;
-
-// N67 (re-opened 2026-07-26): these two flags are written from CreateProcessWHook,
-// ExitProcessHook and TerminateProcessHook — any thread — and read/written from
-// BreakpointVEH on the faulting thread. Plain `bool` gives no ordering guarantee and
-// permits the compiler to sink or reorder the stores, so the VEH can observe a stale
-// value and either skip an int3 it should have taken or take one it should not.
-// The earlier fix converted the copies in plugins/crash-handler/, which is not built
-// (plugins/CMakeLists.txt:12) — this is the path that ships.
-static std::atomic<bool> g_crashReporterSuppressed{false};
-static std::atomic<bool> g_justSuppressedCrash{false};
 
 BOOL WINAPI CreateProcessWHook(LPCWSTR lpApplicationName, LPWSTR lpCommandLine,
                                LPSECURITY_ATTRIBUTES lpProcessAttributes, LPSECURITY_ATTRIBUTES lpThreadAttributes,
@@ -355,7 +357,7 @@ static void VehPrintf(const char* fmt, ...) {
 //
 // EnumProcessModules / GetModuleFileNameA / GetModuleInformation all serialise on
 // the loader lock. A fault raised while that lock is held — i.e. anywhere inside
-// LoadModule / LoadPlugins / the game's own CSysDLL_Load — would deadlock a handler
+// LoadPlugins / the game's own CSysDLL_Load — would deadlock a handler
 // that enumerates. Snapshot once at init; the handler reads the snapshot.
 
 struct CachedModule {
@@ -884,6 +886,40 @@ static long long StackDirectAllocProbe(void* self, long long request, long long 
   return OriginalStackDirectAlloc(self, request, align);
 }
 
+// The game installs its own console ctrl handler from CR15Game::InitRenderWindowFromEngineFlags, after
+// our boot-time RearmConsoleCtrlHandler(). Handlers run newest-first, so from then on the game's handler
+// returns TRUE before ours is reached and the shutdown never reports or hits the watchdog (#102: a
+// server that never logged in got SIGINT, only the game's "Console close signal received" appeared, and
+// the process then sat in the server hold). Re-arm the moment the game's installer returns.
+typedef INT64 (*GameConsoleHandlerInstallFunc)(void*);
+static GameConsoleHandlerInstallFunc OriginalGameConsoleHandlerInstall = nullptr;
+
+static INT64 GameConsoleHandlerInstallHook(void* arg) {
+  const INT64 result = OriginalGameConsoleHandlerInstall(arg);
+  Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] game console ctrl handler installed result=%lld", result);
+  RearmConsoleCtrlHandler();
+  return result;
+}
+
+static void InstallGameConsoleHandlerRearmHook() {
+  void* target = reinterpret_cast<void*>(EchoVR::g_GameBaseAddress + PatchAddresses::GAME_CONSOLE_HANDLER_INSTALL);
+  if (memcmp(target, PatchAddresses::GAME_CONSOLE_HANDLER_INSTALL_PROLOGUE,
+             sizeof(PatchAddresses::GAME_CONSOLE_HANDLER_INSTALL_PROLOGUE)) != 0) {
+    Log(EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] hook skipped name=GameConsoleHandlerInstall reason=prologue_mismatch — CTRL+C may be "
+        "consumed by the game's handler before ours");
+    return;
+  }
+  OriginalGameConsoleHandlerInstall = reinterpret_cast<GameConsoleHandlerInstallFunc>(target);
+  if (PatchDetour(&OriginalGameConsoleHandlerInstall, reinterpret_cast<PVOID>(GameConsoleHandlerInstallHook),
+                  "GameConsoleHandlerInstall")) {
+    Log(EchoVR::LogLevel::Info,
+        "[NEVR.PATCH] hooked name=GameConsoleHandlerInstall (re-arms our CTRL+C handler after the game's)");
+  } else {
+    Log(EchoVR::LogLevel::Warning, "[NEVR.PATCH] hook failed name=GameConsoleHandlerInstall");
+  }
+}
+
 void InstallCrashFilterInstrumentation() {
   PrepareCrashRecordPath();
   if (g_crashRecordPath[0] != '\0') {
@@ -1144,6 +1180,7 @@ void RearmConsoleCtrlHandler() {
 }
 
 void InstallConsoleCtrlHandler() {
+  InstallGameConsoleHandlerRearmHook();
   // Installed here, this handler sits BEHIND the game's (registered later, and
   // the chain is LIFO). It only becomes reachable once RearmConsoleCtrlHandler()
   // moves it to the front. Registering now still matters: it covers a CTRL+C

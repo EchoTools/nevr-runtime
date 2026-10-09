@@ -71,7 +71,7 @@ void ForceFatalExit(unsigned int code);
 /// Installs a fatal-error handler via SetFatalErrorHandler that routes fatal errors
 /// through a structured log + ForceFatalExit instead of blocking on MessageBoxA.
 /// Call AFTER g_isServer is known, BEFORE any code path that can hit FatalError
-/// (specifically, before LoadModule calls in PreprocessCommandLineHook).
+/// (specifically, before the module inits in PreprocessCommandLineHook).
 /// In client mode the handler is NOT installed — users at the screen should see
 /// the modal dialog so they know the game fatally failed.
 void InstallFatalErrorHandler();

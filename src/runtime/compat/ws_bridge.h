@@ -1,4 +1,7 @@
 #pragma once
+// winsock2.h must precede windows.h: windows.h without WIN32_LEAN_AND_MEAN pulls in
+// winsock.h, and a later winsock2.h then warns (MinGW -Wcpp) or errors (MSVC).
+#include <winsock2.h>
 #include <windows.h>
 #include <cstddef>
 #include <cstdint>
