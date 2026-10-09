@@ -17,6 +17,7 @@
 #include "quest/integration/bridge_uri.h"
 #include "quest/integration/ctor_sequence.h"
 #include "quest/integration/frame_tap.h"
+#include "quest/integration/drop_report.h"
 #include "quest/integration/identity_source.h"
 #include "quest/integration/post_load.h"
 #include "quest/integration/stage_log.h"
@@ -477,6 +478,16 @@ void TestIdentitySourcePublishesTheSharedAttemptGate() {
   QCHECK(!next.Ready());
 }
 
+// Dropped Unrequires are reported once per change, with the increase since the last report.
+void TestDropReportsOnlyChanges() {
+  std::uint64_t last = 0, delta = 0;
+  QCHECK(!DropsChanged(0, &last, &delta));
+  QCHECK(DropsChanged(3, &last, &delta) && last == 3 && delta == 3);
+  QCHECK(!DropsChanged(3, &last, &delta));
+  QCHECK(DropsChanged(4, &last, &delta) && last == 4 && delta == 1);
+  QCHECK(DropsChanged(1, &last, &delta) && last == 1 && delta == 1);  // a counter that went back reports itself
+}
+
 // #240 fail-closed: the login prerequisites stand in for an Oculus answer only while Ready() is true, and
 // IdentitySource's default Ready() is false. The production source's Ready() is one load of a flag that
 // Observe (token-auth state changes) and Fetch keep equal to (Classify(state) == Ok).
@@ -706,6 +717,7 @@ int main() {
   TestIdentitySourceAnswers();
   TestLoginGateFollowsTheIdentityAnswer();
   TestIdentitySourcePublishesTheSharedAttemptGate();
+  TestDropReportsOnlyChanges();
   TestIdentitySourceReadyFollowsObservedState();
   TestIdentitySourceReadyDoesNotAllocate();
   TestFrameTapSignalsLoginSuccessOnlyFromTheServer();

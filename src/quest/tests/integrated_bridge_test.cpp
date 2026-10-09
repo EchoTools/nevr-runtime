@@ -429,6 +429,10 @@ void TestHeldLoginSurvivesUntilSignInThenRoutesByRole() {
   loginConn->Push(profile);
   const std::string profileWire = BuildFrame(Opcode::Binary, profile);
   QCHECK(login.Read(profileWire.size()) == profileWire);  // the login connection's, not the newest socket's
+  // An Unrequire nothing is owed for is dropped, not delivered, and counted where production reads it.
+  QCHECK(bridge.DroppedUnrequires() == 0);
+  loginConn->Push(EvrCodec::BuildMessage(EvrCodec::kSymConnectionUnrequire, ""));
+  QCHECK(WaitFor([&] { return bridge.DroppedUnrequires() == 1; }));
   const std::string configReply = EvrCodec::BuildMessage(0xb9cdaf586f7bd012ULL, "config");
   configConn->Push(configReply);
   const std::string configWire = BuildFrame(Opcode::Binary, configReply);

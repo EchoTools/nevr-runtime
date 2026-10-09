@@ -468,7 +468,9 @@ prove it. Windows and Quest adapters call the same protocol and state functions.
    connection (`RequestRaisesRequireCount`: every login-connection send but `LogOut`, `TelemetryEvent` and
    `RemoteLogSetv3`; every matchmaker send but `MatchmakerStatusRequest`, the `PingResponse` included;
    `SNSConfigRequestv2` on the config connection) and never delivers an Unrequire to a connection with
-   nothing outstanding; such an Unrequire is dropped and counted (`Stats::droppedUnrequires`). The service
+   nothing outstanding; such an Unrequire is dropped and counted (`Stats::droppedUnrequires`; the token-auth poll logs
+   `router_unrequire_dropped` with the total and the increase each time it changed, because the reporter's
+   counter table is nearly full). The service
    pairs an Unrequire with `LoginFailure` (every login failure is a `LoginFailure` frame and then a standalone
    Unrequire), `ChannelInfoResponse`, `DocumentSuccess`, `UpdateProfileSuccess`, config replies
    and its own `LobbyPingRequest`; it sends the Unrequire as a frame of its own from a concurrent goroutine,

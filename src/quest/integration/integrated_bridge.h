@@ -78,6 +78,8 @@ class IntegratedBridge {
   // The loginGate's answer changed: opens or closes the held login connection. Cheap when nothing is held;
   // safe from any thread (the token-auth poll thread calls it).
   void ReevaluateLoginGate() { router_->ReevaluateHeldLogins(); }
+  // Unrequires the router dropped because the connection had nothing outstanding (production reports changes).
+  std::uint64_t DroppedUnrequires() const { return router_->GetStats().droppedUnrequires; }
   // Login connections currently held for the account (0 or 1 in practice).
   std::size_t HeldLogins() const { return router_->GetStats().heldRemotes; }
 

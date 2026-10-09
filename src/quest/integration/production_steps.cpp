@@ -23,6 +23,7 @@
 #include "quest/integration/ctor_sequence.h"
 #include "quest/integration/dlopen_hook.h"
 #include "quest/integration/entry_hooks.h"
+#include "quest/integration/drop_report.h"
 #include "quest/integration/identity_source.h"
 #include "quest/integration/integrated_bridge.h"
 #include "quest/integration/post_load.h"
@@ -130,12 +131,21 @@ nevr::quest_auth::Snapshot AuthSnapshot() {
 void PollTokenAuthState() {
   Runtime& rt = R();
   int last = -1;
+  std::uint64_t lastDropped = 0;
   for (;;) {
     const nevr::quest_auth::Snapshot snap = AuthSnapshot();
     // The login prerequisites' Ready() flag (#240) follows every observed state, including an access
     // token that ran out without a readiness change.
     if (rt.identity) rt.identity->Observe(snap);
     // The held login connection opens when the account appears and closes when it will not (router gate).
+    // One structured line each time the router has dropped more Unrequires (a drop is deliberate; see drop_report.h).
+    if (IntegratedBridge* const reporting = rt.bridge.load(std::memory_order_acquire)) {
+      std::uint64_t delta = 0;
+      if (DropsChanged(reporting->DroppedUnrequires(), &lastDropped, &delta)) {
+        sentinel::LogFields(sentinel::LogLevel::kWarn, "router_unrequire_dropped",
+                            {{"total", static_cast<long long>(lastDropped)}, {"since_last", static_cast<long long>(delta)}});
+      }
+    }
     const int gate = static_cast<int>(TokenIdentitySource::GateFor(snap));
     if (rt.loginGate.exchange(gate) != gate) {
       if (IntegratedBridge* const bridge = rt.bridge.load(std::memory_order_acquire)) bridge->ReevaluateLoginGate();
