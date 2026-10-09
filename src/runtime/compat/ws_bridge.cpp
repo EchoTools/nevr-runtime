@@ -103,6 +103,60 @@ std::optional<LoginFailureDiagnostic> ReadLoginFailureDiagnostic(const std::stri
   memcpy(&statusCode, frame.data() + kEnvelopeHeaderSize + 16, sizeof(statusCode));
   return LoginFailureDiagnostic{statusCode, payloadSize - kLoginFailureFixedPayloadSize};
 }
+
+// The server's NewLocationError (nakama server/evr_pipeline_login.go) puts the line
+// "Select code >>> NN <<<" last; the game's login-failure screen shows only the first lines, so the
+// player never sees the code (#201). When the frame is exactly one LoginFailure whose text has such a
+// line, return the frame with that line moved to the front and the rest of the text after it. Any other
+// frame or text returns nullopt and is forwarded byte-identical.
+std::optional<std::string> MoveCodeLineFirst(const std::string& frame) {
+  if (frame.size() < kEnvelopeHeaderSize + kLoginFailureFixedPayloadSize + 1) return std::nullopt;
+  uint64_t symbol = 0;
+  uint64_t payloadLength = 0;
+  memcpy(&symbol, frame.data() + 8, sizeof(symbol));
+  memcpy(&payloadLength, frame.data() + 16, sizeof(payloadLength));
+  if (symbol != kLoginFailureSymbol || payloadLength != frame.size() - kEnvelopeHeaderSize) return std::nullopt;
+  if (frame.back() != '\0') return std::nullopt;
+
+  const size_t textStart = kEnvelopeHeaderSize + kLoginFailureFixedPayloadSize;
+  const std::string text = frame.substr(textStart, frame.size() - 1 - textStart);
+  if (text.find('\0') != std::string::npos) return std::nullopt;
+
+  std::vector<std::string> lines;
+  size_t begin = 0;
+  while (true) {
+    const size_t end = text.find('\n', begin);
+    lines.push_back(text.substr(begin, end == std::string::npos ? std::string::npos : end - begin));
+    if (end == std::string::npos) break;
+    begin = end + 1;
+  }
+  static const std::string kPrefix = "Select code >>> ";
+  static const std::string kSuffix = " <<<";
+  size_t codeLine = lines.size();
+  for (size_t i = 0; i < lines.size(); ++i) {
+    const std::string& line = lines[i];
+    if (line.size() <= kPrefix.size() + kSuffix.size() || line.compare(0, kPrefix.size(), kPrefix) != 0 ||
+        line.compare(line.size() - kSuffix.size(), kSuffix.size(), kSuffix) != 0) {
+      continue;
+    }
+    const std::string code = line.substr(kPrefix.size(), line.size() - kPrefix.size() - kSuffix.size());
+    if (!code.empty() && code.find_first_not_of("0123456789") == std::string::npos) codeLine = i;
+  }
+  if (codeLine == lines.size() || codeLine == 0) return std::nullopt;
+
+  std::string reordered = lines[codeLine];
+  for (size_t i = 0; i < lines.size(); ++i) {
+    if (i == codeLine) continue;
+    reordered += '\n';
+    reordered += lines[i];
+  }
+  std::string out = frame.substr(0, textStart);
+  out += reordered;
+  out.push_back('\0');
+  const uint64_t newLength = out.size() - kEnvelopeHeaderSize;
+  memcpy(&out[16], &newLength, sizeof(newLength));
+  return out;
+}
 }  // namespace
 
 // ============================================================================
@@ -1315,10 +1369,20 @@ void InstallWebSocketBridge() {
                           LogSharedFrameDropped(rmsg->str.size());
                           break;
                         }
+                        std::optional<std::string> reordered;
+                        if (rmsg->binary && rsym == kLoginFailureSymbol) {
+                          reordered = MoveCodeLineFirst(rmsg->str);
+                          if (reordered.has_value()) {
+                            Log(EchoVR::LogLevel::Info,
+                                "[NEVR.WS] login failure text reordered: code line moved first bytes=%zu",
+                                reordered->size());
+                          }
+                        }
+                        const std::string& outFrame = reordered.has_value() ? *reordered : rmsg->str;
                         if (rmsg->binary) {
-                          target->sendBinary(rmsg->str);
+                          target->sendBinary(outFrame);
                         } else {
-                          target->sendText(rmsg->str);
+                          target->sendText(outFrame);
                         }
                       }
                       break;
@@ -1704,6 +1768,14 @@ bool TestHook_ReadLoginFailureDiagnostic(const std::string& frame, uint64_t* sta
   if (!diagnostic.has_value()) return false;
   *statusCode = diagnostic->statusCode;
   *messageBytes = diagnostic->messageBytes;
+  return true;
+}
+
+bool TestHook_MoveCodeLineFirst(const std::string& frame, std::string* out) {
+  if (out == nullptr) return false;
+  const std::optional<std::string> reordered = MoveCodeLineFirst(frame);
+  if (!reordered.has_value()) return false;
+  *out = *reordered;
   return true;
 }
 

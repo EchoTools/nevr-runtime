@@ -89,8 +89,8 @@ BOOL WINAPI CreateDirectoryWHook(LPCWSTR lpPathName, LPSECURITY_ATTRIBUTES lpSec
       GetCurrentDirectoryW(MAX_PATH, currentDir);
       _snwprintf(fixedPath, 512, L"%ls\\%ls", currentDir, lpPathName + 4);
       pathToUse = fixedPath;
-      // This bug has no counterpart on native Windows (see the CoCreateInstance
-      // hook comment below) — SystemInfo::Get().IsWine() makes that explicit
+      // This bug has no counterpart on native Windows —
+      // SystemInfo::Get().IsWine() makes that explicit
       // instead of leaving the branch looking like an unexplained ad hoc fix,
       // and flags the anomaly loudly if it's ever hit off Wine.
       static const bool s_isWine = SystemInfo::Get().IsWine();
@@ -179,7 +179,9 @@ HRESULT WINAPI CoCreateInstanceHook(REFCLSID rclsid, LPUNKNOWN pUnkOuter, DWORD 
     // The game drives this object through IXMLHTTPRequest2/3 (slot 3 Open, slot 4 Send); the
     // IWinHttpRequest-shaped stub wrote through arguments the game never passed (#133). The
     // system's object has the right layout, so the request goes to it.
-    Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] MSXML6 XMLHTTP CLSID passed through to the system object hr=0x%08lX",
+    // A failed creation is not a pass-through that worked: Warning, not Info.
+    Log(SUCCEEDED(hr) ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
+        "[NEVR.PATCH] MSXML6 XMLHTTP CLSID passed through to the system object hr=0x%08lX",
         static_cast<unsigned long>(hr));
   }
   return hr;
@@ -247,7 +249,7 @@ static bool InstallCreateDirectoryHooks() {
   return ok;
 }
 
-static bool InstallWinHTTPHook() {
+static bool InstallMsxml6PassThroughHook() {
   HMODULE hOle32 = GetModuleHandleA("ole32.dll");
   if (hOle32 == NULL) {
     hOle32 = LoadLibraryA("ole32.dll");
@@ -257,7 +259,7 @@ static bool InstallWinHTTPHook() {
     if (OriginalCoCreateInstance != NULL) {
       if (!Hooking::Attach(reinterpret_cast<PVOID*>(&OriginalCoCreateInstance),
                            reinterpret_cast<PVOID>(CoCreateInstanceHook))) {
-        Log(EchoVR::LogLevel::Error,
+        Log(EchoVR::LogLevel::Warning,
             "[NEVR.PATCH] failed to install CoCreateInstance hook: %s — the MSXML6 pass-through line will not be "
             "logged; the game still uses the system's XMLHTTP object",
             Hooking::LastAttachError());
@@ -306,12 +308,12 @@ NEVR_MODULE_API int platform_compat_Init(const NvrModuleContext* ctx) {
    * hook installs. */
   const bool tlsOk = InstallTLSHook();
   const bool dirOk = InstallCreateDirectoryHooks();
-  const bool httpOk = InstallWinHTTPHook();
+  const bool httpOk = InstallMsxml6PassThroughHook();
   const int okCount = (tlsOk ? 1 : 0) + (dirOk ? 1 : 0) + (httpOk ? 1 : 0);
 
   Log(okCount == 3 ? EchoVR::LogLevel::Info : EchoVR::LogLevel::Warning,
       "[NEVR.MODULE] platform_compat initialized: %d/3 hooks installed "
-      "(tls=%s createdir=%s winhttp=%s)",
+      "(tls=%s createdir=%s msxml6=%s)",
       okCount, tlsOk ? "ok" : "FAILED", dirOk ? "ok" : "FAILED",
       httpOk ? "ok" : "FAILED");
 

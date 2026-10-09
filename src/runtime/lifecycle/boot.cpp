@@ -200,7 +200,7 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
     moduleCtx.config_get = &NevrCfgGetFlat;
     SetModuleContext(&moduleCtx);
 
-    // Platform compat — Schannel TLS hooks, CreateDirectory fixes, WinHTTP bridge.
+    // Platform compat — Schannel TLS hooks, CreateDirectory fixes, MSXML6 pass-through hook.
     // Must load before any network-using code. Statically linked (2026-08-02).
     {
       uint32_t apiVer = platform_compat_ApiVersion();
@@ -475,8 +475,12 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   {
     const char* socketUri = NevrCfgGetFlat("nevr_socket_uri");
     const bool hasSocketUri = socketUri && socketUri[0] != '\0';
-    switch (BridgePolicy::Decide(hasSocketUri, g_isServer != FALSE,
-                                 BridgePolicy::IsTruthy(NevrCfgGetFlat("nevr_allow_offline_server")))) {
+    const char* allowOffline = NevrCfgGetFlat("nevr_allow_offline_server");
+    if (BridgePolicy::IsUnrecognized(allowOffline)) {
+      Log(EchoVR::LogLevel::Warning,
+          "[NEVR.WS] services.allow_offline_server is not a boolean (use true/false); treating it as false");
+    }
+    switch (BridgePolicy::Decide(hasSocketUri, g_isServer != FALSE, BridgePolicy::IsTruthy(allowOffline))) {
       case BridgePolicy::Outcome::Start:
         SetWebSocketBridgeTarget(socketUri);
         InstallWebSocketBridge();
@@ -508,12 +512,6 @@ void RunDeferredRuntimeBootstrap(PVOID pGame, const char* trigger) {
   // Crash frames in modules/plugins are unattributable without this (N85).
   RefreshModuleCache();
   ResolveShutdownDependencies();  // N62
-
-  // N87: re-arm the console ctrl handler so CTRL+C works in client mode.
-  // Our handler is installed behind the game's during Initialize(); this
-  // re-registers it at the front so it fires before the game's handler.
-  // The server path also calls it (GameServerLib::Terminate).
-  RearmConsoleCtrlHandler();
 
   Log(EchoVR::LogLevel::Info,
       "[NEVR.BOOT] runtime bootstrap complete early_config=%s bridge=%s port=%u",

@@ -32,7 +32,7 @@ The `platform_compat` and `token_auth` modules are statically linked into
 
 | Module | Linked into | Purpose |
 | ------ | ----------- | ------- |
-| `platform-compat` | `BugSplat64.dll` | Schannel TLS modernisation, WinHTTP→libcurl bridge, Wine `_temp` fix |
+| `platform-compat` | `BugSplat64.dll` | Schannel TLS modernisation, MSXML6 pass-through hook, Wine `_temp` fix |
 | `token-auth` | `BugSplat64.dll` | Device-code auth, token cache |
 
 The bridge is why the game never negotiates TLS for its WebSocket traffic: it

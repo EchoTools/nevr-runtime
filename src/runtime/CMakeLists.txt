@@ -53,6 +53,7 @@ set(PATCHES_SOURCES
     "patch/headless_graphics.cpp"
     "hook/symbol_corpus.cpp"
     "server/gameserver.cpp"
+    "server/registration_envelope.cpp"
     "server/messages.cpp"
     "server/server_context.cpp"
     "server/websocket_client.cpp"
@@ -90,6 +91,7 @@ set(PATCHES_HEADERS
     "lifecycle/crash_recovery.h"
     "lifecycle/crash_dump_format.h"
     "lifecycle/readable_memory.h"
+    "lifecycle/console_ctrl_policy.h"
     "lifecycle/crash_recovery_sites.h"
     "patch/resource_override.h"
     "patch/splash_texture.h"
@@ -121,6 +123,7 @@ set(PATCHES_HEADERS
     "patch/headless_graphics.h"
     "hook/symbol_corpus.h"
     "server/gameserver.h"
+    "server/registration_envelope.h"
     "server/server_context.h"
     "server/websocket_client.h"
     "server/websocket_frame.h"
@@ -132,6 +135,7 @@ set(PATCHES_HEADERS
     "server/serverdb_uri.h"
     "server/telemetry_streamer.h"
     "server/bearer_reconnect_auth.h"
+    "server/serialized_mint.h"
     "server/messages.h"
     "server/upnp.h"
     "server/constants.h"
@@ -192,7 +196,7 @@ set_source_files_properties(ext/plugin_load_plan.cpp PROPERTIES SKIP_PRECOMPILE_
 # #60: plugin_manifest.cpp builds the login's nevr_plugins array with nlohmann-json;
 # pure and PCH-free for the same reason as plugin_load_plan.cpp.
 set_source_files_properties(ext/plugin_manifest.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+set_source_files_properties(log/url_diagnostics.cpp server/bearer_reconnect_auth.cpp server/websocket_client.cpp server/websocket_frame.cpp server/protobuf_transport.cpp server/session_success_dispatch.cpp server/callback_unregistration.cpp server/session_unregister.cpp server/main_thread_handoff.cpp server/serverdb_uri.cpp server/telemetry_streamer.cpp server/upnp.cpp server/gameserver.cpp server/registration_envelope.cpp server/messages.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 # ws_bridge.cpp has no C-style casts (CPP-MINGW-ADDENDUM hard stop); keep it that way at compile time.
 # The property is directory-scoped, so the test target that compiles the same file gets it too.
@@ -235,8 +239,10 @@ if(MINGW)
   add_custom_command(
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/stubs"
-    COMMAND x86_64-w64-mingw32-dlltool -d "${CMAKE_CURRENT_SOURCE_DIR}/link/bcrypt_minimal.def"
-            -l "${CMAKE_CURRENT_BINARY_DIR}/stubs/libbcrypt.a"
+    # dlltool names the archive's import-name symbol after the -l argument as given, so an absolute
+    # path would put the build directory into the DLL: run it in the output directory with a bare name.
+    COMMAND x86_64-w64-mingw32-dlltool -d "${CMAKE_CURRENT_SOURCE_DIR}/link/bcrypt_minimal.def" -l libbcrypt.a
+    WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/stubs"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/link/bcrypt_minimal.def"
     COMMENT "Generating minimal bcrypt import library for nevr_runtime"
   )
@@ -311,13 +317,16 @@ if(BUILD_TESTING)
     target_link_libraries(test_websocket_frame PRIVATE GTest::gtest GTest::gtest_main)
     gtest_discover_tests(test_websocket_frame DISCOVERY_MODE PRE_TEST)
 
+    # test_registration_roundtrip.cpp (#46): the registration against a local fake ServerDB.
     add_executable(test_protobuf_transport
       tests/test_protobuf_transport.cpp
+      tests/test_registration_roundtrip.cpp
+      server/registration_envelope.cpp
       server/protobuf_transport.cpp
       server/websocket_frame.cpp
       log/url_diagnostics.cpp
       server/websocket_client.cpp)
-    set_source_files_properties(tests/test_protobuf_transport.cpp server/protobuf_transport.cpp log/url_diagnostics.cpp server/websocket_client.cpp
+    set_source_files_properties(tests/test_protobuf_transport.cpp tests/test_registration_roundtrip.cpp server/registration_envelope.cpp server/protobuf_transport.cpp log/url_diagnostics.cpp server/websocket_client.cpp
       PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_compile_definitions(test_protobuf_transport PRIVATE NEVR_TEST_HOOKS)
     target_include_directories(test_protobuf_transport PRIVATE ${CMAKE_SOURCE_DIR}/src)
