@@ -144,10 +144,6 @@ trap restore EXIT
 
 echo "=== Deploying from build/mingw-release/bin/ ===" | tee -a "$LOG"
 deploy build/mingw-release/bin/BugSplat64.dll "$GAME_DIR/BugSplat64.dll"
-if [ -d build/mingw-release/bin/modules ]; then
-  while IFS= read -r f; do deploy "$f" "$GAME_DIR/modules/${f#build/mingw-release/bin/modules/}"; done \
-    < <(find build/mingw-release/bin/modules -type f)
-fi
 if [ -d build/mingw-release/bin/plugins ]; then
   while IFS= read -r f; do deploy "$f" "$GAME_DIR/plugins/${f#build/mingw-release/bin/plugins/}"; done \
     < <(find build/mingw-release/bin/plugins -type f)
