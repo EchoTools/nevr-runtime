@@ -271,6 +271,22 @@ void TestInitializeChecksTheProviderIdentity() {
   QCHECK(CountLines("\"level\":\"warn\"") >= 1);
 }
 
+// Failure caught (smoke 4): a sampled INFO line every 600 calls from the per-frame slots put several
+// social_slot lines a second into logcat. A slot logs its first call once and counts the rest.
+void TestPerFrameSlotsLogOnlyTheirFirstCall() {
+  World w;
+  w.party.SetSelf(kSelf, "alice");
+  void* obj = w.Obj();
+  g_lines.clear();
+  for (int i = 0; i < 2500; ++i) {
+    SlotFn<U32_0>(obj, kFriendCount)(obj);
+    SlotFn<U32_0>(obj, kOnlineFriendCount)(obj);
+  }
+  QCHECK(CountLines("\"event\":\"social_slot\"") == 2);  // one first-call line per slot, nothing sampled
+  QCHECK(w.facade->SlotCalls(kFriendCount) == 2500 && w.facade->SlotCalls(kOnlineFriendCount) == 2500);
+  QCHECK(w.facade->SlotCalls(kSlotCount) == 0);
+}
+
 void TestInitializeAndShutdown() {
   World w;
   const auto callbacks = MakeCallbacks();
@@ -1504,6 +1520,7 @@ int main() {
   std::atexit(&CheckInstanceSurvivesExit);
   const sentinel::LogSink previous = sentinel::SetLogSink(&CaptureLog);
   TestObjectShape();
+  TestPerFrameSlotsLogOnlyTheirFirstCall();
   TestInitializeChecksTheProviderIdentity();
   TestInitializeAndShutdown();
   TestFriendRoster();

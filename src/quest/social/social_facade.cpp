@@ -25,8 +25,10 @@ using sentinel::LogFields;
 using sentinel::LogLevel;
 
 constexpr std::size_t kViewRing = 128;  // a name pointer the game reads stays valid this many Updates
-constexpr std::uint32_t kTraceFirstCalls = 8;
-constexpr std::uint32_t kTraceEvery = 600;
+// A slot's first call is logged once (the slot is live); every call is counted in Impl::slotCalls
+// (Facade::SlotCalls). The per-frame slots (counts and getters the UI polls) are called many times a second,
+// so nothing is sampled into the log.
+constexpr std::uint32_t kTraceFirstCalls = 1;
 // CNSOVRSocial::Update retries a failed create no sooner than 5 s after the last one: it compares whole
 // seconds (CSysTime::GetTick / GetTicksPerSecond) against the time stored at +0x340 with `cmp w8, #5; b.lo`
 // (libpnsovr 0x2045dc..0x2045f8). The lock retry uses the same interval.
@@ -795,7 +797,7 @@ void ReportFailure(Impl* impl, std::size_t index) {
 void TraceCall(Impl* impl, std::size_t index) {
   if (impl == nullptr) return;
   const std::uint32_t n = impl->slotCalls[index].fetch_add(1, std::memory_order_relaxed) + 1;
-  if (n <= kTraceFirstCalls || n % kTraceEvery == 0) {
+  if (n <= kTraceFirstCalls) {
     LogFields(LogLevel::kInfo, "social_slot", {{"slot", static_cast<long long>(index)}, {"name", kSlotNames[index]}, {"call", n}});
   }
 }
@@ -1345,6 +1347,9 @@ void* Facade::Object() noexcept { return impl_->object.data(); }
 
 std::uint32_t Facade::InitializeCalls() const noexcept { return impl_->initializeCalls.load(std::memory_order_relaxed); }
 std::uint32_t Facade::ShutdownCalls() const noexcept { return impl_->shutdownCalls.load(std::memory_order_relaxed); }
+std::uint32_t Facade::SlotCalls(std::size_t slot) const noexcept {
+  return slot < kSlotCount ? impl_->slotCalls[slot].load(std::memory_order_relaxed) : 0;
+}
 std::uint32_t Facade::SlotFailures() const noexcept { return impl_->slotFailures.load(std::memory_order_relaxed); }
 std::uint32_t Facade::CallbackCalls() const noexcept { return impl_->callbackCalls.load(std::memory_order_relaxed); }
 

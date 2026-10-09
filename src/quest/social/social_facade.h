@@ -103,6 +103,7 @@ class Facade {
   std::uint32_t InitializeCalls() const noexcept;
   std::uint32_t ShutdownCalls() const noexcept;
   std::uint32_t SlotFailures() const noexcept;  // slot calls that raised an exception
+  std::uint32_t SlotCalls(std::size_t slot) const noexcept;  // calls of one slot (0 for a slot out of range)
   std::uint32_t CallbackCalls() const noexcept; // callbacks delivered to the game
 
   struct Impl;  // opaque; named here so the slot functions in the .cpp can use it
