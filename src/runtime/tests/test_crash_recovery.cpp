@@ -3,6 +3,7 @@
 #include <set>
 #include <string>
 
+#include "runtime/lifecycle/console_ctrl_policy.h"
 #include "runtime/lifecycle/readable_memory.h"
 #include "runtime/lifecycle/crash_recovery_sites.h"
 #include "runtime/lifecycle/crash_dump_format.h"
@@ -96,4 +97,19 @@ TEST(StackAllocCheck, AHugeRequestIsReportedTheWayTheGameLogsIt) {
   const auto r = StackAllocCheck::Check(0x7000'0000ULL, 0x0100'0000ULL, 0x7000'1000ULL, 674'000'000ULL, 0);
   EXPECT_FALSE(r.fits);
   EXPECT_EQ(r.reported, (0x7000'0000ULL - 0x0100'0000ULL) + 0x7000'1000ULL + 674'000'000ULL);
+}
+
+// #241: a console event is deferred to the game's teardown only when that teardown can reach
+// GameServerLib::Terminate. A server that never started GameServerLib must shut down directly.
+TEST(ConsoleCtrlPolicy, DefersOnlyWhenGameHandlerIsBehindAndGameServerLibStarted) {
+  EXPECT_TRUE(ConsoleCtrlPolicy::ShouldDeferToGame(true, true));
+  EXPECT_FALSE(ConsoleCtrlPolicy::ShouldDeferToGame(true, false));
+  EXPECT_FALSE(ConsoleCtrlPolicy::ShouldDeferToGame(false, true));
+  EXPECT_FALSE(ConsoleCtrlPolicy::ShouldDeferToGame(false, false));
+}
+
+TEST(ConsoleCtrlPolicy, NoDeferReasonNamesTheMissingPrecondition) {
+  EXPECT_STREQ(ConsoleCtrlPolicy::NoDeferReason(true, false),
+               "GameServerLib never started, so the game teardown cannot reach Terminate");
+  EXPECT_STREQ(ConsoleCtrlPolicy::NoDeferReason(false, true), "no game console handler behind ours");
 }

@@ -146,4 +146,8 @@ dump.rdb
 !/modules/README.md
 
 # Local Claude Code assets (private hardening tooling) — never commit
-.claude/
+.claude/*
+# The merge-cleanup skill is the one tracked thing under .claude/.
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/merge-cleanup/
