@@ -272,6 +272,19 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         install = extract_braced_function(source, "void InstallConsoleCtrlHandler(")
         self.assertRegex(install, r"\bInstallGameConsoleHandlerRearmHook\s*\(\s*\)")
 
+    def test_getsymbol_hook_validates_its_prologue(self):
+        # Issue #254: the CSysDLL_GetSymbol detour (echovr.exe 0x1400eaef0) was written blind. Binary
+        # patches require prologue validation (AGENTS.md Guardrails); a mismatch marks the boot hook failed.
+        source = (ROOT / "src/runtime/lifecycle/initialize.cpp").read_text()
+        body = extract_braced_function(source, "static VOID InitializeAfterGameImageGuard(")
+        match = re.search(r"sym_target[^;]*;(?P<rest>.*?)hooked name=CSysDLL_GetSymbol", body, re.S)
+        self.assertIsNotNone(match)
+        rest = match.group("rest")
+        self.assertRegex(rest, r"memcmp\(\s*sym_target\s*,\s*kGetSymbolPrologue")
+        self.assertLess(rest.index("memcmp("), rest.index("MH_CreateHook("))
+        self.assertIn("prologue_mismatch", rest)
+        self.assertIn("g_bootHookFailed = true", rest.split("MH_CreateHook(")[0])
+
     def test_bridge_connection_lines_carry_the_connection_label(self):
         # Issue #48: only close/disconnect lines named the connection (config/login/matchmaker); the
         # open, login-injected and game-connected lines gave the bare number.
