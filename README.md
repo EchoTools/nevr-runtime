@@ -146,3 +146,4 @@ set(GAME_DIR "/path/to/echovr/bin/win10")
 add_custom_command(TARGET nevr_runtime POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nevr_runtime> "${GAME_DIR}/BugSplat64.dll")
 ```
+
