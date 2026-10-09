@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "core/auth_token.h"
+#include "core/bounded_retry.h"
 #include "auth_snapshot.h"
 #include "device_poll_response.h"
 #include "extension/module_interface.h"
@@ -1251,4 +1252,39 @@ TEST(CredentialCachePath, JoinHandlesTrailingAndMissingSeparators) {
   EXPECT_EQ(JoinCredentialPath("C:\\games\\bin\\", "_local"), "C:\\games\\bin\\_local");
   EXPECT_EQ(JoinCredentialPath("C:/games/bin/", "_local"), "C:/games/bin/_local");
   EXPECT_EQ(JoinCredentialPath("C:\\games\\bin", "_local"), "C:\\games\\bin\\_local");
+}
+
+// #202: a transient refresh failure must be retried, bounded, with pauses only between attempts.
+TEST(BoundedRetry, SucceedsOnTheSecondTryAndPausesOnce) {
+  int calls = 0;
+  std::vector<int> pauses;
+  const auto r = nevr::RetryBounded(3, 2000, [&] { return ++calls == 2; }, [&](int ms) { pauses.push_back(ms); });
+  EXPECT_TRUE(r.ok);
+  EXPECT_EQ(r.attempts, 2);
+  EXPECT_EQ(pauses, std::vector<int>({2000}));
+}
+
+TEST(BoundedRetry, GivesUpAfterTheLastAttemptWithoutAFinalPause) {
+  int calls = 0;
+  std::vector<int> pauses;
+  const auto r = nevr::RetryBounded(3, 2000, [&] { ++calls; return false; }, [&](int ms) { pauses.push_back(ms); });
+  EXPECT_FALSE(r.ok);
+  EXPECT_EQ(r.attempts, 3);
+  EXPECT_EQ(calls, 3);
+  EXPECT_EQ(pauses.size(), 2u);
+}
+
+TEST(BoundedRetry, FirstSuccessDoesNotPause) {
+  std::vector<int> pauses;
+  const auto r = nevr::RetryBounded(3, 2000, [] { return true; }, [&](int ms) { pauses.push_back(ms); });
+  EXPECT_TRUE(r.ok);
+  EXPECT_EQ(r.attempts, 1);
+  EXPECT_TRUE(pauses.empty());
+}
+
+TEST(BoundedRetry, ZeroAttemptsStillTriesOnce) {
+  int calls = 0;
+  const auto r = nevr::RetryBounded(0, 10, [&] { ++calls; return false; }, [](int) {});
+  EXPECT_FALSE(r.ok);
+  EXPECT_EQ(calls, 1);
 }

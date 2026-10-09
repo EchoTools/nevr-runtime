@@ -15,6 +15,7 @@
 
 #include "core/auth_token.h"
 #include "auth_token_refresh.h"
+#include "core/bounded_retry.h"
 #include "nevr_curl.h"
 #include "runtime/log/url_diagnostics.h"
 #include "runtime/log/security_diagnostics.h"
@@ -158,7 +159,16 @@ bool DeviceAuth::TryLoadCachedToken() {
 
     if (auth.HasValidRefreshToken() && m_configured) {
         Log(EchoVR::LogLevel::Debug, "[NEVR.AUTH] Access token expired, attempting refresh...");
-        if (RefreshAuthToken(auth, m_url, m_httpKey)) {
+        // One slow or dropped request must not throw away a good cached login: three tries, 2 s apart
+        // (each try is bounded by the request's own 10 s timeout). #202
+        const nevr::RetryResult refreshed = nevr::RetryBounded(3, 2000, [&] {
+            return RefreshAuthToken(auth, m_url, m_httpKey);
+        });
+        if (refreshed.attempts > 1) {
+            Log(EchoVR::LogLevel::Info, "[NEVR.AUTH] token refresh during cache load: %s after %d attempts",
+                refreshed.ok ? "succeeded" : "failed", refreshed.attempts);
+        }
+        if (refreshed.ok) {
             m_token = auth.token;
             m_tokenExpiry = auth.token_expiry;
             m_refreshToken = auth.refresh_token;
