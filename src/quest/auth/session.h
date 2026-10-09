@@ -123,7 +123,8 @@ struct SessionConfig {
   //    refresh RPC's own errors) or there is no usable cache: the device-code login runs.
   // After the pauses are used up, or on a held failure, the login is Failed and is attempted again
   // every recovery_period until it succeeds, a stop, or the player's own device login ends without
-  // a login (expired code, deadline, a refused poll), which is final.
+  // a login for a reason a new code does not fix (a refused poll, an undeliverable link), which is
+  // final. A code that runs out is replaced by a new one, and the prompt stays up meanwhile.
   std::vector<std::chrono::seconds> login_retry_delays = {std::chrono::seconds(5), std::chrono::seconds(15),
                                                           std::chrono::seconds(45), std::chrono::seconds(135),
                                                           std::chrono::seconds(300)};
@@ -159,13 +160,22 @@ class Session {
   // Held: a 4xx that says nothing about the token, keep the cache and do not prompt.
   enum class LoginResult { Ok, NeedDevice, Transient, Held };
   // Verified; RequestTransient / RequestRefused: the device-code request failed (nothing shown to
-  // the player); Ended: the flow ran and ended without a login (expired code, deadline, a poll
-  // the server refused, an undeliverable link) -- the player was involved, so it is final.
-  enum class DeviceResult { Verified, RequestTransient, RequestRefused, Ended };
+  // the player); CodeExpired: the code was shown and ran out (the server's "expired" or its
+  // deadline), which RunDeviceLogin answers with a new code; Ended: the flow ended without a login
+  // for a reason a new code does not fix (a poll the server refused, an undeliverable link, a
+  // stop) -- final.
+  enum class DeviceResult { Verified, RequestTransient, RequestRefused, CodeExpired, Ended };
+  // The shortest time between two device-code requests of one RunDeviceLogin, so a server that
+  // calls every code expired at once is not asked for codes in a tight loop.
+  static constexpr std::chrono::seconds kMinCodeInterval{30};
   // Ok; Stopped; Recoverable: Failed for now, try again later; Final: do not try again.
   enum class LoginEnd { Ok, Stopped, Recoverable, Final };
   LoginResult TryCachedLogin(CachedAuthToken& auth, int attempts);
+  // The device login: AwaitingUser, then one code after another (RunDeviceCode) until the player
+  // signs in or a code ends for a reason a new one does not fix. The prompt stays up throughout.
   DeviceResult RunDeviceLogin(CachedAuthToken& out);
+  // One device code: request, present, poll until it is verified or ends.
+  DeviceResult RunDeviceCode(CachedAuthToken& out);
   // Cached login (when use_cache) then device-code login; with_backoff retries transient
   // failures on login_retry_delays.
   LoginEnd EstablishLogin(CachedAuthToken& auth, bool use_cache, bool with_backoff);

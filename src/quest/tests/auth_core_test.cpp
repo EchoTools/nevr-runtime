@@ -1100,22 +1100,55 @@ TEST(session_an_outage_while_polling_is_waited_out_until_the_codes_own_deadline)
   s.Stop();
 }
 
-TEST(session_an_expired_device_code_is_final_and_does_not_re_prompt) {
+TEST(session_an_expired_device_code_is_replaced_and_the_prompt_stays_up_until_the_sign_in) {
   FakeClock clock;
   FakeHttp http;
   FakeStore store;
   FakePresenter presenter;
-  http.handler = [](const std::string& endpoint, const std::string&) -> HttpResponse {
-    return endpoint == "request" ? Ok({{"code", "C"}}) : Ok({{"status", "expired"}});
+  LogCapture log;
+  auto requests = std::make_shared<std::atomic<int>>(0);
+  http.handler = [requests](const std::string& endpoint, const std::string& body) -> HttpResponse {
+    if (endpoint == "request") return Ok({{"code", ++*requests == 1 ? "FIRSTCODE" : "SECONDCODE"}});
+    if (body.find("FIRSTCODE") != std::string::npos) return Ok({{"status", "expired"}});
+    return Ok({{"status", "verified"}, {"access_token", MakeJwt(kT0 + 3600)}, {"refresh_token", "rt"},
+               {"refresh_token_expires_in", 2592000}});
   };
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
+  s.Start();
+  // Poll wait (3 s): the server calls the first code expired. The next code is not asked for
+  // sooner than 30 s after the first (a 27 s wait), then one poll wait verifies it.
+  clock.Allow(3);
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK_EQ(http.Count("request"), 2);
+  CHECK_EQ(presenter.presented.load(), 2);
+  CHECK_EQ(presenter.last_prompt.code, std::string("SECONDCODE"));
+  CHECK_EQ(presenter.last_prompt.expires_unix, kT0 + 30 + 300);  // the new code's own five minutes
+  // Cleared at the start (a stale file) and when the login ended: never between the two codes.
+  CHECK_EQ(presenter.cleared.load(), 2);
+  CHECK_EQ(clock.Sleeps(), 3);
+  CHECK_EQ(log.Count(LogLevel::Info, "the device code ran out without a sign-in; requesting a new one (renewal 1)"),
+           size_t(1));
+  CHECK(log.All().find("FIRSTCODE") == std::string::npos);
+  CHECK(log.All().find("SECONDCODE") == std::string::npos);
+  s.Stop();
+}
+
+TEST(session_codes_keep_being_renewed_while_nobody_signs_in) {
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  FakePresenter presenter;
+  DeviceHandler(http, 1000000, kT0 + 3600);  // never verifies
   Session s(TestConfig(), http, clock, store, presenter, nullptr);
   s.Start();
-  clock.Allow(20);
-  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  CHECK_EQ(http.Count("request"), 1);
-  CHECK_EQ(presenter.presented.load(), 1);
+  // 100 poll waits of 3 s run the first code out at 300 s; the second code is asked for at once.
+  clock.Allow(100);
+  CHECK(WaitUntil([&] { return presenter.presented.load() == 2; }));
+  CHECK(s.Get().readiness == Readiness::AwaitingUser);
+  CHECK_EQ(http.Count("request"), 2);
+  CHECK_EQ(presenter.cleared.load(), 1);  // only the stale-file clear at start: the prompt is up
   s.Stop();
+  CHECK(presenter.cleared.load() >= 2);  // the stop takes it down
 }
 
 // ---------------------------------------------------------------- session: credentials that die
@@ -1730,8 +1763,10 @@ TEST(session_a_suspend_during_the_login_wait_stops_the_poll_of_a_dead_code) {
   CHECK(WaitUntil([&] { return presenter.presented.load() == 1; }));
   clock.Advance(400);  // the headset slept for longer than the code lives; BOOTTIME and wall time both moved
   clock.Allow(1);      // the poll wait that straddled the sleep ends
-  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  CHECK(WaitUntil([&] { return presenter.presented.load() == 2; }));  // a fresh code replaces the dead one
   CHECK_EQ(http.Count("poll"), 0);  // the dead code is not polled
+  CHECK_EQ(http.Count("request"), 2);
+  CHECK(s.Get().readiness == Readiness::AwaitingUser);
   CHECK(log.All().find("timed out after 5 minutes") != std::string::npos);
   s.Stop();
 }

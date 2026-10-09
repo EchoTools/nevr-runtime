@@ -291,14 +291,33 @@ Session::LoginResult Session::TryCachedLogin(CachedAuthToken& auth, int attempts
 Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
   quiet_ = false;  // a player prompt is always worth an Info line, also when it starts from recovery
   SetState(Readiness::AwaitingUser);
-  device_result_ = DeviceResult::Ended;
-  // The link file carries the device code: remove it however this function ends, including
-  // by an exception out of one of the operations below.
+  // The prompt carries the device code: remove it however this function ends, including by an
+  // exception out of one of the operations below. It is NOT removed between one code and the
+  // next, so what the player sees goes from the old code straight to the new one.
   struct ClearLink {
     LinkPresenter& presenter;
     ~ClearLink() { presenter.Clear(); }
   } clear_link{presenter_};
 
+  for (unsigned renewal = 0;; ++renewal) {
+    const auto requested_at = clock_.SteadyNow();
+    const DeviceResult r = RunDeviceCode(out);
+    if (r != DeviceResult::CodeExpired) return r;
+    if (StopRequested()) return DeviceResult::Ended;
+    // The player was shown a code and it ran out (the server's "expired", or its five minutes
+    // passed): the login is still wanted, so ask for a new code and show it in place of the old
+    // one. Codes are asked for no more often than once per kMinCodeInterval, whatever the server
+    // says about them.
+    const auto since = clock_.SteadyNow() - requested_at;
+    Log(LogLevel::Info, "[NEVR.AUTH] the device code ran out without a sign-in; requesting a new one (renewal " +
+                            std::to_string(renewal + 1) + ")");
+    if (since < kMinCodeInterval && clock_.SleepFor(kMinCodeInterval - since)) return DeviceResult::Ended;
+    if (StopRequested()) return DeviceResult::Ended;
+  }
+}
+
+Session::DeviceResult Session::RunDeviceCode(CachedAuthToken& out) {
+  device_result_ = DeviceResult::Ended;
   nevr::auth::DeviceFlowOps ops;
   ops.now = [this] { return clock_.SteadyNow(); };
   ops.request_device_code = [this]() -> std::string {
@@ -338,7 +357,10 @@ Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
     prompt.code = q == std::string::npos ? std::string() : link.substr(q + 6);
     const auto lifetime = std::chrono::duration_cast<std::chrono::seconds>(nevr::auth::kDeviceAuthLifetime);
     prompt.expires_unix = clock_.UnixNow() + static_cast<uint64_t>(lifetime.count());
-    return presenter_.Present(prompt);
+    const intptr_t delivered = presenter_.Present(prompt);
+    // A delivered code that ends without a sign-in ran out, unless the server refuses a poll.
+    if (delivered > nevr::auth::kBrowserOpenAcceptedAbove) device_result_ = DeviceResult::CodeExpired;
+    return delivered;
   };
   // Nobody can see a link that was not delivered: stop rather than wait out the code.
   ops.show_open_failure = [](const std::string&, const std::string&, intptr_t) { return 0; };
@@ -358,6 +380,7 @@ Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
       // read (HTML from a captive portal). Only the first is the server's answer.
       if (parsed.status != TokenAuth::DevicePollStatus::Error || BodyHasErrorKey(r.body)) {
         *consecutive_failures = 0;
+        if (parsed.status == TokenAuth::DevicePollStatus::Error) device_result_ = DeviceResult::Ended;
         return parsed;
       }
     }
@@ -376,6 +399,7 @@ Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
       response.status = TokenAuth::DevicePollStatus::Pending;
     } else {
       Log(LogLevel::Warning, "[NEVR.AUTH] device poll refused by the server; ending the login" + what);
+      device_result_ = DeviceResult::Ended;
       response.status = TokenAuth::DevicePollStatus::Error;
     }
     return response;
