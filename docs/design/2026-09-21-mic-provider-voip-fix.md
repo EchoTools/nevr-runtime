@@ -40,9 +40,7 @@ Two independent consumers call `Mic*`, both via dynamic dispatch through
 `NRadEngine::CPlatformService::MicRead` @ `0x14060cad0` (`GetMethodProc
 (provider_handle, "MicRead")`, same pattern for the other five exports).
 
-**`CaptureAndEncodeLocalVoice` @ `0x140d7bd90`** (renamed from a stale,
-wrong `ProcessTeamBalancing` — the old name described nothing in the
-function body), per-frame, per player slot with local voice active:
+**`CaptureAndEncodeLocalVoice` @ `0x140d7bd90`**, per-frame, per player slot with local voice active:
 
 1. `MicAvailable()` — how many samples are ready.
 2. `MicRead(buf, count)` — pulls them, **prepended** with any leftover

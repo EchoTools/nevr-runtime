@@ -361,10 +361,10 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertRegex(helper, r"std::lock_guard<std::mutex>")
 
     def test_console_defer_needs_gameserverlib_started(self):
-        # Issue #241: re-arming the handler used to set the defer flag unconditionally, so a server that
-        # never reached GameServerLib::Initialize deferred to a teardown that never ends (watchdog, exit 1).
-        # Only GameServerLib::Initialize marks the library started, and the boot sequence no longer
-        # re-arms before the game has installed its handler.
+        # Issue #241: re-arming the handler must not set the defer flag unconditionally, or a server that
+        # never reached GameServerLib::Initialize defers to a teardown that never ends (watchdog, exit 1).
+        # Only GameServerLib::Initialize marks the library started, and the boot sequence does not
+        # re-arm before the game has installed its handler.
         recovery = (ROOT / "src/runtime/lifecycle/crash_recovery.cpp").read_text()
         rearm = extract_braced_function(recovery, "void RearmConsoleCtrlHandler(")
         self.assertNotRegex(rearm, r"s_gameServerLibStarted")
@@ -418,6 +418,18 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         self.assertRegex(glue, r"memcmp\(target, kPrologue")
         self.assertLess(glue.index("memcmp(target, kPrologue"), glue.index("PatchDetour("))
 
+    def test_ttl_hold_is_dropped_when_the_detour_is_not_installed_and_logs_once_per_hold(self):
+        # Issue #310: a failed detour must leave no TTL behind (the runtime's own CODE_ENDED return
+        # would still be held), and the game's per-tick re-request must not log per tick.
+        glue = strip_comments((ROOT / "src/runtime/lifecycle/return_to_lobby.cpp").read_text())
+        configure = extract_braced_function(glue, "bool Configure(")
+        self.assertRegex(configure, r"if \(!armed\)[^}]*SetTtlMs\(0\)")
+        poll = extract_braced_function(glue, "void Poll(")
+        self.assertIn("PollIfActive(g_policy", poll, "Poll must stay a no-op at TTL 0")
+        self.assertNotIn("LiveEntrants()", poll)
+        request = extract_braced_function(glue, "void Request(")
+        self.assertRegex(request, r"RequestVerdict::Hold\)\s*\{\s*Log\(")
+
     def test_both_registration_sites_use_the_shared_envelope_builder(self):
         # Issue #46: the initial registration and the post-reconnect re-registration built the same
         # envelope field by field in two places. Both go through BuildRegistrationEnvelope.
@@ -436,7 +448,19 @@ class RuntimeLifecycleInvariantTest(unittest.TestCase):
         rotate = extract_braced_function(filt, "static void RotateIfNeeded(")
         self.assertNotIn("ReplayBootLines", rotate)
         replay = extract_braced_function(filt, "static void ReplayBootLines(")
-        self.assertIn("BootReplay::ParseRun(contents, GetRunId())", replay)
+        self.assertIn("BootReplay::ReadNew(path, GetRunId(), g_boot_cursor", replay)
+        self.assertRegex(replay, r"ReadNew\([^;]*\)\)\s*\{\s*BlfLog\(", "an unreadable boot file is reported, not skipped")
+        record = extract_braced_function(filt, "static void WriteFileRecord(")
+        self.assertEqual(len(re.findall(r"JsonEscape::AppendTo\(line, (ts|lvl)", record)), 2,
+                         "ts and level come from the parsed boot file and are escaped like the message")
+        # The tee stays open until initialize() closes it; the lines it writes after the main log
+        # opened are replayed once more, under the file lock, just before the tee closes.
+        tail = extract_braced_function(filt, "void BuiltinLogFilter::ReplayBootTail(")
+        self.assertIn("g_file_mutex", tail)
+        self.assertIn("ReplayBootLines()", tail)
+        init_cpp = strip_comments((ROOT / "src/runtime/lifecycle/initialize.cpp").read_text())
+        self.assertRegex(init_cpp, r"BootLogTee::Close\(\);\s*BuiltinLogFilter::ReplayBootTail\(\);",
+                         "the tail is read after Close(), when nothing can append any more")
         for forbidden in ("remove(", "DeleteFile", "unlink(", "trash"):
             self.assertNotIn(forbidden, replay, "the boot file is the crash spool and is never deleted")
         tee = strip_comments((ROOT / "src/runtime/log/boot_log_tee.cpp").read_text())

@@ -9,9 +9,11 @@ measurements recorded on the issue; no run was made for this document.
 `GameMainWrapperHook` (`src/runtime/lifecycle/crash_recovery.cpp`) calls the game's main loop. When the
 loop returns on a client it logs `[NEVR.PATCH] game loop returned: the client is exiting (no server hold
 outside server mode)` and returns, so the process exits through the game's normal teardown (the
-`[NEVR.PATCH] ExitProcess(0) called — not suppressed, process exiting` line). Only a server enters the
-`while (true) Sleep(1000)` hold. The crash-recovery hold above it is reached only after a recovered
-crash (`crashCount > 0`), which the exception handler arms for servers.
+`[NEVR.PATCH] ExitProcess(0) called — not suppressed, process exiting` line). A server that
+sees the loop return exits through `PerformGracefulShutdown`: code 0 when a console shutdown is
+pending, code 1 otherwise. The crash-recovery hold above it is reached only after a recovered crash
+(`crashCount > 0`), which the exception handler arms for servers; it sleeps until a console shutdown is
+pending and then exits with code 1.
 
 ## The game's part
 

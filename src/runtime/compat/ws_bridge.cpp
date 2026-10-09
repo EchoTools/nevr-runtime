@@ -710,8 +710,8 @@ static const char* PlatformPrefix(uint64_t platformCode) {
 // failed"). Platform 4 is what every URL-credential login already sent.
 static constexpr uint64_t kBridgeLoginPlatform = 4;  // OVR_ORG (game numbering)
 
-// Pure function — testable without config or globals. The arguments no longer influence the
-// result: -noovr (6) and the token-auth default (1) produced an identity the game
+// Pure function — testable without config or globals. The arguments do not influence the
+// result: -noovr (6) and the token-auth default (1) would be an identity the game
 // itself does not use.
 static uint64_t SelectPlatformCode(bool /*hasUrlCredentials*/, bool /*noOvr*/) {
   return kBridgeLoginPlatform;
