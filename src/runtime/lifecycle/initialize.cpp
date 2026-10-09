@@ -128,14 +128,13 @@ static void* CSysDLL_GetSymbolHook(void* dll_handle, const char* symbol_name) {
   // memory). They are recognised by the "Users" export they all define. The game's
   // unload path (0x14105ae30) null-checks the resolved symbol before calling it, so
   // answering null skips the call and teardown carries on. (The guard used to live
-  // in a second detour on this same address that MinHook never installed, #93/#94;
-  // it ended the process with exit(0), which ExitProcessHook suppresses in server
-  // mode.)
+  // in a second detour on this same address that never installed; it ended the
+  // process with exit(0), which ExitProcessHook suppresses in server mode.)
   if (g_isServer && symbol_name && strcmp(symbol_name, "RadPluginShutdown") == 0 &&
       g_original_GetSymbol(dll_handle, "Users") != nullptr) {
     static bool logged = false;
     if (!logged) {
-      BootLogTee::TeeFprintf("[NEVR.PATCH] RadPluginShutdown of a platform DLL skipped (server)\n");
+      Log(EchoVR::LogLevel::Info, "[NEVR.PATCH] RadPluginShutdown of a platform DLL skipped (server)");
       logged = true;
     }
     return nullptr;
@@ -294,6 +293,7 @@ static VOID InitializeAfterGameImageGuard() {
   if (!Hooking::Initialize()) {
     BootLogTee::TeeFprintf("[NEVR.PATCH] FATAL hooking init failed\n");
     g_bootHookFailed = true;
+    BootLogTee::Close();  // the boot phase ends here too: later callers must use Log(), not the tee
     return;
   }
   BootLogTee::TeeFprintf("[NEVR.PATCH] minhook initialized\n");
@@ -416,14 +416,15 @@ static VOID InitializeAfterGameImageGuard() {
   BootLogTee::TeeFprintf("[NEVR.PATCH] game hooks installed\n");
   // --- Platform compatibility hooks ---
   // InstallTLSHook() not needed — WebSocket bridge handles TLS via ixwebsocket.
-  // WinHTTP hook (InstallWinHTTPHook) handles TLS for HTTP/REST calls via curl.
+  // The game's HTTP/REST calls go through the system MSXML6 XMLHTTP object over Schannel;
+  // platform_compat only logs its creation (InstallMsxml6PassThroughHook).
   // WebSocket bridge (InstallWebSocketBridge) is started in PreprocessCommandLineHook
   // after config is loaded — it needs the wss:// URI from config.json.
   BootLogTee::TeeFprintf("[NEVR.PATCH] tls deferred=ws_bridge stage=boot\n");
   BootLogTee::TeeFprintf("[NEVR.BOOT] installing crash recovery hooks...\n");
   InstallCrashRecoveryHooks();
   BootLogTee::TeeFprintf("[NEVR.CRASH] crash recovery hooks installed\n");
-  // CreateDirectory + WinHTTP hooks moved to platform_compat module (loaded in boot.cpp)
+  // CreateDirectory + MSXML6 pass-through hooks live in the platform_compat module (loaded in boot.cpp)
   BootLogTee::TeeFprintf("[NEVR.PATCH] platform hooks deferred=platform_compat_module\n");
 
   // --- Server crash recovery hooks ---

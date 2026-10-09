@@ -90,7 +90,7 @@ B14@@boot@@Module cache built (crash attribution)@@module cache refreshed count=
 M01@@module@@Module loaded: platform_compat@@\[NEVR\.MODULE\] Loaded: platform_compat@@Failed to load platform_compat
 M02@@module@@platform_compat: all 3 hooks installed@@platform_compat initialized: 3/3 hooks installed@@platform_compat initialized: [012]/3 hooks installed
 M03@@module@@Schannel TLS 1.2/1.3 modernisation@@SSL/TLS moderni[sz]@@Failed to [a-z]+ AcquireCredentialsHandleW
-M04@@module@@WinHTTP COM to libcurl bridge@@winhttp=ok@@WinHTTP bridge NOT installed
+M04@@module@@MSXML6 CoCreateInstance pass-through hook@@msxml6=ok@@MSXML6 pass-through hook NOT installed
 M05@@module@@Wine _temp directory fix@@createdir=ok@@Failed to install CreateDirectory[AW] hook
 M06@@module@@Module loaded: token_auth@@token_auth initialized@@Failed to load token_auth
 P01@@plugin@@Plugin directory scanned or list read@@\[NEVR\.PLUGIN\] (Scanning for plugins in:|[0-9]+ plugin\(s\) configured; loading in list order)@@
@@ -154,7 +154,6 @@ C07@@client@@Cached token reused on restart@@Using cached credentials|Loaded cac
 C08@@client@@Access token refreshed@@Token refreshed successfully@@[Tt]oken refresh failed
 C09@@client@@Bearer token attached to connection@@Attaching Bearer token to remote connection@@Using URL credentials \(no Bearer token\)
 C10@@client@@Friends list subscribed@@FriendListSubscribeRequest sent@@
-C11@@client@@HTTP served through the curl bridge@@\[NEVR\.HTTP\] Response: 2[0-9][0-9]@@\[NEVR\.HTTP\] curl failed:
 C12@@client@@Loadout save round-tripped@@\[SAVE_SUCCESS\]@@\[SAVE_LOADOUT\] Not in active session|\[SAVE_LOADOUT\] No game base address
 C13@@client@@Current loadout read back@@\[CURRENT_LOADOUT\] Player:@@\[CURRENT_LOADOUT\] Empty response|\[CURRENT_LOADOUT\] Invalid
 EOF

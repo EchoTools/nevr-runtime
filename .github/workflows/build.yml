@@ -1,15 +1,22 @@
 name: Build
 
-# Build only when a release is created (drafted). The toolchain is reinstalled
-# from scratch every run (~29 billed minutes) and push/PR fired it on every
-# merge — a 21-second burst of 6 merges cost ~175 min. Local dev already gates
-# via `just`; GitHub only builds the release artifact.
+# Builds and runs `just verify` on every non-draft pull request, and builds the release artifact
+# when a release is created (drafted). The toolchain is reinstalled from scratch every run (~29
+# billed minutes), so a push to main does not trigger it (a burst of 6 merges cost ~175 min), a new
+# push to a PR cancels that PR's run still in flight, and a draft PR is skipped until it is ready.
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   release:
     types: [created]
 
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
+    if: github.event_name == 'release' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
     # The current toolchain, the same one development uses (#81): Arch's MinGW-w64 GCC and headers
     # from pacman, not Ubuntu's (ubuntu-24.04 ships GCC 13.2 / mingw-w64 11 with the win32 thread
@@ -64,11 +71,28 @@ jobs:
         cmake --build /tmp/osslsigncode/build
         cmake --install /tmp/osslsigncode/build
 
+    # Buf takes about a minute to compile from source; the binary is cached by Buf and Go version.
+    - name: Locate the Go bin directory
+      id: gobin
+      run: |
+        set -euo pipefail
+        echo "dir=$(go env GOPATH)/bin" >> "$GITHUB_OUTPUT"
+        echo "go=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Buf
+      id: buf_cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.gobin.outputs.dir }}/buf
+        key: buf-v1.47.2-${{ steps.gobin.outputs.go }}
+
     - name: Setup pinned Buf
       run: |
         set -euo pipefail
-        go install github.com/bufbuild/buf/cmd/buf@v1.47.2
-        echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+        if [ "${{ steps.buf_cache.outputs.cache-hit }}" != "true" ]; then
+          go install github.com/bufbuild/buf/cmd/buf@v1.47.2
+        fi
+        echo "${{ steps.gobin.outputs.dir }}" >> "$GITHUB_PATH"
 
     - name: Toolchain versions
       run: |
@@ -81,13 +105,54 @@ jobs:
         osslsigncode --version
         buf --version
 
-    - name: Setup vcpkg
+    - name: Bootstrap vcpkg
+      id: vcpkg
       run: |
+        set -euo pipefail
         git clone https://github.com/Microsoft/vcpkg.git "$HOME/.vcpkg"
         "$HOME/.vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+        echo "sha=$(git -C "$HOME/.vcpkg" rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        echo "gcc=$(pacman -Q mingw-w64-gcc | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+    # Building the dependencies from source is about 80% of a run (29.6 of 37.8 minutes in run
+    # 37872101662). vcpkg's file binary cache stores one archive per package, named by an ABI hash that
+    # covers the port files, its dependencies, the triplet and the compiler, so a changed or bumped
+    # dependency is rebuilt even when the cache is restored. The cache key and its restore keys both
+    # contain the hash of vcpkg.json: editing vcpkg.json misses the cache entirely and builds everything.
+    # Changing the vcpkg revision or the MinGW compiler starts a new entry seeded from the latest entry
+    # for the same vcpkg.json.
+    - name: Restore the vcpkg binary cache
+      id: vcpkg_cache
+      uses: actions/cache/restore@v4
+      with:
+        path: .vcpkg-binary-cache
+        key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
+        restore-keys: |
+          vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-
+          vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-
+
+    - name: Install vcpkg dependencies
+      run: |
+        set -euo pipefail
+        # $GITHUB_WORKSPACE, not ${{ github.workspace }}: in a container job the second is the host's
+        # path, which does not exist here, and vcpkg would write its archives where nothing saves them.
+        mkdir -p "$GITHUB_WORKSPACE/.vcpkg-binary-cache"
+        export VCPKG_BINARY_SOURCES="clear;files,$GITHUB_WORKSPACE/.vcpkg-binary-cache,readwrite"
+        echo "archives restored from the cache entry: $(find "$GITHUB_WORKSPACE/.vcpkg-binary-cache" -name '*.zip' | wc -l)"
         "$HOME/.vcpkg/vcpkg" install --triplet=x64-mingw-static --host-triplet=x64-linux \
           --x-manifest-root="$GITHUB_WORKSPACE" \
           --x-install-root="$GITHUB_WORKSPACE/build/mingw-release/vcpkg_installed"
+        count=$(find "$GITHUB_WORKSPACE/.vcpkg-binary-cache" -name '*.zip' | wc -l)
+        echo "archives in the binary cache now: $count"
+        test "$count" -gt 0
+
+    # Saved right after the install, so a failure in a later step does not lose the dependency build.
+    - name: Save the vcpkg binary cache
+      if: steps.vcpkg_cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: .vcpkg-binary-cache
+        key: vcpkg-bin2-${{ hashFiles('vcpkg.json') }}-${{ steps.vcpkg.outputs.gcc }}-${{ steps.vcpkg.outputs.sha }}
 
     - name: Generate pinned protobuf sources
       run: |
