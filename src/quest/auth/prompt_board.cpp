@@ -49,7 +49,8 @@ bool Publish(const char* text, std::size_t len, Mode mode) noexcept {
     if (text[i] == '\0') return false;
   }
   Exclusive([text, len, mode] {
-    for (std::size_t i = 0; i < len; ++i) g_text[i].store(text[i], std::memory_order_relaxed);
+    // The whole buffer is rewritten, so nothing of a longer earlier text (an older code) stays.
+    for (std::size_t i = 0; i < kCapacity; ++i) g_text[i].store(i < len ? text[i] : '\0', std::memory_order_relaxed);
     g_length.store(static_cast<std::uint32_t>(len), std::memory_order_relaxed);
     g_mode.store(static_cast<std::uint8_t>(mode), std::memory_order_relaxed);
   });
@@ -60,6 +61,9 @@ bool Withdraw() noexcept {
   bool had = false;
   Exclusive([&had] {
     had = g_length.load(std::memory_order_relaxed) != 0;
+    // The text may hold a device code: overwrite it, not just forget its length (atomic stores are
+    // not removed as dead stores).
+    for (std::size_t i = 0; i < kCapacity; ++i) g_text[i].store('\0', std::memory_order_relaxed);
     g_length.store(0, std::memory_order_relaxed);
     g_mode.store(0, std::memory_order_relaxed);
   });
@@ -91,6 +95,12 @@ ReadResult Read(char* out, std::size_t cap, Mode* mode, std::uint64_t* version) 
 }
 
 std::uint64_t Version() noexcept { return g_sequence.load(std::memory_order_acquire) / 2; }
+
+std::size_t NonZeroTextBytesForTest() noexcept {
+  std::size_t n = 0;
+  for (std::size_t i = 0; i < kCapacity; ++i) n += g_text[i].load(std::memory_order_relaxed) != '\0' ? 1 : 0;
+  return n;
+}
 
 void BeginWriteForTest() noexcept {
   pthread_mutex_lock(&g_writer);

@@ -61,12 +61,7 @@ void InstallBasicsHook() {
     sentinel::StartReporter(/*firstMs=*/1000, /*graceMs=*/10000, /*steadyMs=*/60000);
     ClockThunk::Arm(kClockHook);
     sentinel::InstallThunk<ClockThunk>(g_clockHook, sentinel::pinned::LibR15ClockGettime());
-    if (promptCounters) {
-        nevr_quest::login_prompt::Install();
-    } else {
-        sentinel::LogFields(sentinel::LogLevel::kError, "login_prompt_install",
-                            {{"result", "skipped"}, {"why", "counters_refused"}});
-    }
+    nevr_quest::login_prompt::InstallIfCounted(promptCounters);
 }
 
 }  // namespace

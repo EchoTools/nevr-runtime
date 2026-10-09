@@ -43,7 +43,8 @@ enum class ReadResult {
 // board unchanged when `text` is null, `len` is 0 or above kCapacity, or `text` holds a NUL.
 bool Publish(const char* text, std::size_t len, Mode mode) noexcept;
 
-// Removes the published text. Returns whether text was published.
+// Removes the published text and overwrites the buffer with zeros. Returns whether text was
+// published.
 bool Withdraw() noexcept;
 
 // Copies the published text, NUL-terminated, into `out` (`cap` must be at least kCapacity + 1;
@@ -53,6 +54,9 @@ ReadResult Read(char* out, std::size_t cap, Mode* mode, std::uint64_t* version) 
 // Changes so far (each publish or withdraw adds one). Read() reports the version it copied, so a
 // reader can tell whether what it applied is still current.
 std::uint64_t Version() noexcept;
+
+// Test support: how many bytes of the text buffer are not zero (a withdrawn board holds none).
+std::size_t NonZeroTextBytesForTest() noexcept;
 
 // Test support: holds the board in the "writer inside" state, so a reader deterministically gets
 // kBusy, until EndWriteForTest. Nothing in production calls these.

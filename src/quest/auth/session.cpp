@@ -307,28 +307,40 @@ Session::DeviceResult Session::RunDeviceLogin(CachedAuthToken& out) {
     }
   } clear_link{presenter_};
 
-  for (unsigned code = 1;; ++code) {
-    const auto requested_at = clock_.SteadyNow();
-    const DeviceResult r = RunDeviceCode(out);
-    if (r == DeviceResult::Verified) {
-      clear_link.Conclude(LoginOutcome::SignedIn);
-      return r;
-    }
-    if (r != DeviceResult::CodeExpired) return r;
-    if (StopRequested()) return DeviceResult::Ended;
-    if (code >= kMaxCodesPerLogin) {
-      Log(LogLevel::Warning, "[NEVR.AUTH] no sign-in after " + std::to_string(code) +
+  for (;;) {
+    // The bound is for the whole session, not one call: a code-request failure in between leads to a
+    // fresh call after the recovery period, and that must not start the count again.
+    if (unanswered_codes_ >= kMaxUnansweredCodes) {
+      Log(LogLevel::Warning, "[NEVR.AUTH] no sign-in after " + std::to_string(unanswered_codes_) +
                                  " device codes; no more are requested until the game restarts");
       clear_link.Conclude(LoginOutcome::TimedOut);
       return DeviceResult::Ended;
     }
+    const auto requested_at = clock_.SteadyNow();
+    const DeviceResult r = RunDeviceCode(out);
+    if (r == DeviceResult::Verified) {
+      unanswered_codes_ = 0;
+      clear_link.Conclude(LoginOutcome::SignedIn);
+      return r;
+    }
+    if (r == DeviceResult::Undelivered) {
+      // A code was issued but no mechanism could show it. Try again at the recovery period (the
+      // cause may pass: storage, a full disk); the code counts toward the bound.
+      ++unanswered_codes_;
+      return r;
+    }
+    if (r != DeviceResult::CodeExpired) return r;
+    ++unanswered_codes_;
+    if (StopRequested()) return DeviceResult::Ended;
+    if (unanswered_codes_ >= kMaxUnansweredCodes) continue;  // the bound, at the top of the loop
     // The player was shown a code and it ran out (the server's "expired", or its five minutes
     // passed): the login is still wanted, so ask for a new code and show it in place of the old
     // one. Codes are asked for no more often than once per kMinCodeInterval, whatever the server
     // says about them.
     const auto since = clock_.SteadyNow() - requested_at;
     Log(LogLevel::Info, "[NEVR.AUTH] the device code ran out without a sign-in; requesting a new one (code " +
-                            std::to_string(code + 1) + " of " + std::to_string(kMaxCodesPerLogin) + ")");
+                            std::to_string(unanswered_codes_ + 1) + " of " + std::to_string(kMaxUnansweredCodes) +
+                            ")");
     if (since < kMinCodeInterval && clock_.SleepFor(kMinCodeInterval - since)) return DeviceResult::Ended;
     if (StopRequested()) return DeviceResult::Ended;
   }
@@ -377,7 +389,11 @@ Session::DeviceResult Session::RunDeviceCode(CachedAuthToken& out) {
     prompt.expires_unix = clock_.UnixNow() + static_cast<uint64_t>(lifetime.count());
     const intptr_t delivered = presenter_.Present(prompt);
     // A delivered code that ends without a sign-in ran out, unless the server refuses a poll.
-    if (delivered > nevr::auth::kBrowserOpenAcceptedAbove) device_result_ = DeviceResult::CodeExpired;
+    device_result_ = delivered > nevr::auth::kBrowserOpenAcceptedAbove ? DeviceResult::CodeExpired
+                                                                         : DeviceResult::Undelivered;
+    if (device_result_ == DeviceResult::Undelivered) failure_class_ = "prompt_not_shown";
+    nevr::auth::WipeSecret(prompt.code);
+    nevr::auth::WipeSecret(prompt.link);
     return delivered;
   };
   // Nobody can see a link that was not delivered: stop rather than wait out the code.
@@ -466,7 +482,7 @@ Session::LoginEnd Session::EstablishLogin(CachedAuthToken& auth, bool use_cache,
       if (d == DeviceResult::Verified) return LoginEnd::Ok;
       if (StopRequested()) return LoginEnd::Stopped;
       if (d == DeviceResult::Ended) return LoginEnd::Final;
-      if (d == DeviceResult::RequestRefused) return LoginEnd::Recoverable;
+      if (d == DeviceResult::RequestRefused || d == DeviceResult::Undelivered) return LoginEnd::Recoverable;
       transient = true;  // RequestTransient
     }
     if (!with_backoff || round >= delays.size()) return LoginEnd::Recoverable;

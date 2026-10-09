@@ -84,7 +84,7 @@ struct LoginPrompt {
 // How a device login that showed the player a prompt ended, when that is worth telling them.
 enum class LoginOutcome {
   SignedIn,  // the player signed in
-  TimedOut,  // every code ran out (Session::kMaxCodesPerLogin); no more are requested
+  TimedOut,  // Session::kMaxUnansweredCodes codes went unanswered; no more are requested
 };
 
 // How the player is told where to log in. Present returns a value above
@@ -170,19 +170,22 @@ class Session {
   enum class LoginResult { Ok, NeedDevice, Transient, Held };
   // Verified; RequestTransient / RequestRefused: the device-code request failed (nothing shown to
   // the player); CodeExpired: the code was shown and ran out (the server's "expired" or its
-  // deadline), which RunDeviceLogin answers with a new code; Ended: the flow ended without a login
-  // for a reason a new code does not fix (a poll the server refused, an undeliverable link, a
-  // stop) -- final.
-  enum class DeviceResult { Verified, RequestTransient, RequestRefused, CodeExpired, Ended };
+  // deadline), which RunDeviceLogin answers with a new code; Undelivered: a code was issued but no
+  // presenter could show it (recoverable: tried again at the recovery period); Ended: the flow ended
+  // without a login for a reason a new code does not fix (a poll the server refused, the bound on
+  // unanswered codes, a stop) -- final.
+  enum class DeviceResult { Verified, RequestTransient, RequestRefused, CodeExpired, Undelivered, Ended };
   // The shortest time between two device-code requests of one RunDeviceLogin, so a server that
   // calls every code expired at once is not asked for codes in a tight loop.
   static constexpr std::chrono::seconds kMinCodeInterval{30};
 
  public:
-  // How many codes one device login shows before it stops asking (about 30 minutes of five-minute
-  // codes). The server does not rate-limit code requests, so the client bounds them; after the
-  // last one the player is told to restart the game and the login ends Failed (final).
-  static constexpr unsigned kMaxCodesPerLogin = 6;
+  // How many device codes a session issues without a sign-in before it stops asking, counted across
+  // every device login of the session (renewals and recovery attempts alike) and reset by a sign-in.
+  // The server does not rate-limit code requests, so the client bounds them: at most this many
+  // codes, at least kMinCodeInterval apart, per game start without a sign-in. After the last one
+  // the player is told to restart the game and the login ends Failed (final).
+  static constexpr unsigned kMaxUnansweredCodes = 6;
 
  private:
   // Ok; Stopped; Recoverable: Failed for now, try again later; Final: do not try again.
@@ -232,6 +235,7 @@ class Session {
   DeviceResult device_result_ = DeviceResult::Ended;
   std::string failure_class_;
   bool quiet_ = false;  // recovery attempts log state changes at Debug
+  unsigned unanswered_codes_ = 0;  // codes issued without a sign-in since the last one (kMaxUnansweredCodes)
 };
 
 }  // namespace nevr::quest_auth

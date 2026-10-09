@@ -787,17 +787,23 @@ TEST(session_stop_interrupts_a_login_that_is_waiting_for_the_player) {
   CHECK_EQ(store.SaveCount(), size_t(0));
 }
 
-TEST(session_undeliverable_login_link_ends_the_login_without_waiting_out_the_code) {
+TEST(session_a_code_no_mechanism_could_show_is_not_polled_and_a_new_one_is_tried_at_the_recovery_period) {
   FakeClock clock;
   FakeHttp http;
   FakeStore store;
   FakePresenter presenter;
+  LogCapture log;
   presenter.deliver = false;
   DeviceHandler(http, 0, kT0 + 3600);
-  Session s(TestConfig(), http, clock, store, presenter, nullptr);
+  Session s(TestConfig(), http, clock, store, presenter, log.Sink());
   s.Start();
   CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
-  CHECK_EQ(http.Count("poll"), 0);
+  CHECK_EQ(http.Count("poll"), 0);  // nobody can enter a code that was not shown
+  CHECK(log.All().find("login failed (prompt_not_shown); trying again every 300s") != std::string::npos);
+  presenter.deliver = true;  // the cause passed (storage came back)
+  clock.Allow(2);            // the recovery period, then the poll wait
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Ready; }));
+  CHECK_EQ(http.Count("request"), 2);
   s.Stop();
 }
 
@@ -1022,8 +1028,13 @@ TEST(the_fan_out_reaches_every_mechanism_even_when_one_throws) {
   // Nothing accepted: not delivered.
   FakePresenter refusing;
   refusing.deliver = false;
-  FanOutPresenter none({{"file", &broken}, {"game_error_text", &refusing}}, nullptr);
+  LogCapture none_log;
+  FanOutPresenter none({{"file", &broken}, {"game_error_text", &refusing}}, none_log.Sink());
   CHECK_EQ(none.Present(SamplePrompt()), intptr_t(0));
+  // One line says no mechanism could show the code, and what happens next; never the code.
+  CHECK_EQ(none_log.Count(LogLevel::Error, R"("mechanism":"all")"), size_t(1));
+  CHECK_EQ(none_log.Count(LogLevel::Error, R"("result":"not_shown")"), size_t(1));
+  CHECK(none_log.All().find("ABCD-EFGH") == std::string::npos);
 }
 
 TEST(while_the_player_is_asked_to_sign_in_the_game_text_holds_the_current_code_and_is_withdrawn_at_ready) {
@@ -1081,17 +1092,46 @@ TEST(when_no_code_is_entered_the_login_stops_after_six_codes_and_tells_the_playe
   FanOutPresenter fan({{"game_error_text", &game}}, log.Sink());
   Session s(TestConfig(), http, clock, store, fan, log.Sink());
   s.Start();
-  clock.Allow(100 * static_cast<int>(Session::kMaxCodesPerLogin));  // 100 poll waits run each code out
+  clock.Allow(100 * static_cast<int>(Session::kMaxUnansweredCodes));  // 100 poll waits run each code out
   CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  CHECK_EQ(http.Count("request"), static_cast<int>(Session::kMaxCodesPerLogin));  // and no more
+  CHECK_EQ(http.Count("request"), static_cast<int>(Session::kMaxUnansweredCodes));  // and no more
   CHECK_EQ(log.Count(LogLevel::Warning, "no sign-in after 6 device codes"), size_t(1));
   prompt_board::Mode mode = prompt_board::Mode::kNotice;
   CHECK_EQ(BoardText(&mode), std::string(kTimedOutText));  // shown at every later login failure
   CHECK(mode == prompt_board::Mode::kPrompt);
   clock.Allow(10);  // the recovery period passes: a final login does not come back
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
-  CHECK_EQ(http.Count("request"), static_cast<int>(Session::kMaxCodesPerLogin));
+  CHECK_EQ(http.Count("request"), static_cast<int>(Session::kMaxUnansweredCodes));
+  s.Stop();
+  prompt_board::Withdraw();
+}
+
+TEST(the_bound_on_unanswered_codes_holds_across_a_failed_code_request_and_the_recovery_after_it) {
+  prompt_board::Withdraw();
+  FakeClock clock;
+  FakeHttp http;
+  FakeStore store;
+  LogCapture log;
+  auto requests = std::make_shared<std::atomic<int>>(0);
+  http.handler = [requests](const std::string& endpoint, const std::string&) -> HttpResponse {
+    if (endpoint == "request") {
+      // The third request is refused: the login is Failed for a recovery period, then starts again.
+      return ++*requests == 3 ? Status(400) : Ok({{"code", "C" + std::to_string(requests->load())}});
+    }
+    return Ok({{"status", "expired"}});  // every code runs out at its first poll
+  };
+  GameTextPresenter game(log.Sink());
+  FanOutPresenter fan({{"game_error_text", &game}}, log.Sink());
+  Session s(TestConfig(), http, clock, store, fan, log.Sink());
+  s.Start();
+  clock.Allow(1000);
+  CHECK(WaitUntil([&] { return BoardText() == std::string(kTimedOutText); }));
+  CHECK(WaitUntil([&] { return s.Get().readiness == Readiness::Failed; }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  // Six codes were issued in all (and one request refused), not six per device login.
+  CHECK_EQ(http.Count("request"), static_cast<int>(Session::kMaxUnansweredCodes) + 1);
+  CHECK_EQ(log.Count(LogLevel::Warning, "no sign-in after 6 device codes"), size_t(1));
   s.Stop();
   prompt_board::Withdraw();
 }

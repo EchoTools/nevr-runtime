@@ -60,12 +60,14 @@ bool FormatGamePromptText(const LoginPrompt& prompt, std::string& out, std::stri
     why = "url_too_long";
     return false;
   }
-  const std::string line3 = kLine3Prefix + prompt.code;
+  std::string line3 = kLine3Prefix + prompt.code;
   if (line3.size() > prompt_board::kMaxLineChars) {
+    nevr::auth::WipeSecret(line3);
     why = "code_too_long";
     return false;
   }
   out = std::string(kLine1) + "\n" + url + "\n" + line3 + "\n" + kLine4;
+  nevr::auth::WipeSecret(line3);
   why.clear();
   return true;
 }
@@ -95,7 +97,9 @@ intptr_t GameTextPresenter::Present(const LoginPrompt& prompt) {
     Emit(log_, LogLevel::Error, LoginPromptLogLine("game_error_text", "refused", {{"what", "code"}, {"why", why}}));
     return 0;
   }
-  return Publish(text, prompt_board::Mode::kPrompt, "code") ? nevr::auth::kBrowserOpenAcceptedAbove + 1 : 0;
+  const bool published = Publish(text, prompt_board::Mode::kPrompt, "code");
+  nevr::auth::WipeSecret(text);  // the board holds the only copy this presenter needs
+  return published ? nevr::auth::kBrowserOpenAcceptedAbove + 1 : 0;
 }
 
 void GameTextPresenter::Clear() {
@@ -125,6 +129,15 @@ intptr_t FanOutPresenter::Present(const LoginPrompt& prompt) {
     } catch (const std::exception& e) {
       Emit(log_, LogLevel::Error, LoginPromptLogLine(m.name, "failed", {{"why", e.what()}}));
     }
+  }
+  if (!delivered) {
+    // Neither the file nor the game's screen can show this code: say so once, without the code.
+    Emit(log_, LogLevel::Error,
+         LoginPromptLogLine("all", "not_shown",
+                            {{"url", prompt.url},
+                             {"why", "no mechanism could show the code (see the lines above)"},
+                             {"next", "a new code is requested after the recovery period; restarting the game also "
+                                      "asks again"}}));
   }
   return delivered ? nevr::auth::kBrowserOpenAcceptedAbove + 1 : 0;
 }
