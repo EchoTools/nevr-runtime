@@ -876,6 +876,51 @@ TEST(OffThreadWait, QuickFlowNeedsNoPump) {
   EXPECT_EQ(r.pumpCalls, 0U);
 }
 
+// A transient poll failure (#202: curl_code=28) must not cost the session: the wait keeps polling and
+// completes when a later poll verifies; only a run of consecutive errors ends it.
+TEST(DeviceAuthFlow, TransientPollErrorsAreRetriedUntilVerified) {
+  FakeDeviceAuthFlow fake;
+  fake.browser_result = 33;
+  TokenAuth::DevicePollResponse error;
+  error.status = TokenAuth::DevicePollStatus::Error;
+  fake.poll_sequence = {error, error, error, error};
+  fake.poll_response = VerifiedPollResponse();
+
+  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+
+  EXPECT_TRUE(result.success);
+  EXPECT_EQ(fake.poll_calls, 5);
+  EXPECT_EQ(fake.save_calls, 1);
+}
+
+TEST(DeviceAuthFlow, ConsecutivePollErrorsEndTheWaitAfterTheLimit) {
+  FakeDeviceAuthFlow fake;
+  fake.browser_result = 33;
+  fake.poll_response.status = TokenAuth::DevicePollStatus::Error;
+
+  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+
+  EXPECT_FALSE(result.success);
+  EXPECT_EQ(fake.poll_calls, 5);
+  EXPECT_EQ(fake.save_calls, 0);
+}
+
+TEST(DeviceAuthFlow, AnAnsweredPollResetsTheErrorRun) {
+  FakeDeviceAuthFlow fake;
+  fake.browser_result = 33;
+  TokenAuth::DevicePollResponse error;
+  error.status = TokenAuth::DevicePollStatus::Error;
+  TokenAuth::DevicePollResponse pending;
+  pending.status = TokenAuth::DevicePollStatus::Pending;
+  fake.poll_sequence = {error, error, error, error, pending, error, error, error, error};
+  fake.poll_response = VerifiedPollResponse();
+
+  const auto result = TokenAuth::TestHook::RunDeviceAuthFlow(false, ExistingDeviceAuthState(), fake.Ops());
+
+  EXPECT_TRUE(result.success);
+  EXPECT_EQ(fake.poll_calls, 10);
+}
+
 TEST(DeviceAuthFlow, MalformedVerifiedCandidateDoesNotChangeStateOrSave) {
   const auto original = ExistingDeviceAuthState();
   const std::vector<std::string> malformedBodies = {
