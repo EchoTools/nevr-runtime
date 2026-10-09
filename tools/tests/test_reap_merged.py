@@ -169,7 +169,23 @@ class ReapMergedTest(unittest.TestCase):
         git(self.main, "push", "-q", "origin", ":refs/heads/gone-name")
         result = self.run_tool("--apply")
         self.assertFalse(wt.exists(), result.stdout + result.stderr)
-        self.assertIn("origin branch gone-name already gone", result.stdout)
+        self.assertIn("origin branch gone-name kept", result.stdout)
+
+    def test_another_agents_branch_built_on_the_tip_is_never_deleted_on_origin(self):
+        wt = self.add_worktree("mine")
+        tip = git(wt, "rev-parse", "HEAD").stdout.strip()
+        other = self.tmp / "other-agent"
+        git(self.tmp, "clone", "-q", str(self.origin), str(other))
+        git(other, "fetch", "-q", str(wt), "mine")
+        git(other, "checkout", "-q", "-b", "theirs", tip)
+        git(other, "commit", "-q", "--allow-empty", "-m", "their work on top of mine", "--no-gpg-sign")
+        git(other, "push", "-q", "origin", "theirs:refs/heads/theirs")
+        head = git(other, "rev-parse", "HEAD").stdout.strip()
+        self.gh_prs["theirs"] = [{"number": 21, "headRefOid": head, "state": "MERGED", "commits": [tip]}]
+        result = self.run_tool("--apply")
+        self.assertFalse(wt.exists(), result.stdout + result.stderr)
+        self.assertEqual(git(self.main, "ls-remote", "--heads", "origin", "theirs").stdout.split()[0], head)
+        self.assertIn("origin branch theirs kept", result.stdout)
 
     def test_main_merged_into_the_pr_branch_after_the_local_tip(self):
         wt = self.add_worktree("with-merge", push=True)
