@@ -32,6 +32,41 @@ function(set_project_version_from_git)
     return()
   endif()
 
+  # The version is computed here, at configure time. Re-run the configure whenever the checked-out
+  # commit changes (a branch switch, a commit, an amend, a reset), so `cmake --build` after any of
+  # them cannot embed the previous commit's version. HEAD changes on a switch, the HEAD reflog on
+  # every one of those; the branch's loose ref is added when it exists. Only existing files are
+  # listed: a missing dependency would make Ninja rerun the configure on every build.
+  # The dirty flag in GIT_DESCRIBE is not tracked: editing a file does not re-run the configure.
+  foreach(_git_state_path HEAD logs/HEAD)
+    execute_process(
+      COMMAND ${GIT_EXECUTABLE} rev-parse --path-format=absolute --git-path ${_git_state_path}
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      OUTPUT_VARIABLE _git_state_file
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+    if(_git_state_file AND EXISTS "${_git_state_file}")
+      set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_git_state_file}")
+    endif()
+  endforeach()
+  execute_process(
+    COMMAND ${GIT_EXECUTABLE} symbolic-ref -q HEAD
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE _git_head_ref
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+  if(_git_head_ref)
+    execute_process(
+      COMMAND ${GIT_EXECUTABLE} rev-parse --path-format=absolute --git-path ${_git_head_ref}
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      OUTPUT_VARIABLE _git_ref_file
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+    if(_git_ref_file AND EXISTS "${_git_ref_file}")
+      set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_git_ref_file}")
+    endif()
+  endif()
+
   # Get PROJECT_VERSION from git describe
   execute_process(
     COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=4 --long --match "v*"

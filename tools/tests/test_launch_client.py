@@ -20,6 +20,7 @@ import unittest
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "launch-client.sh"
 VERIFY_SERVER = REPO / "verify-server.sh"
+LAUNCH_SERVER = REPO / "launch-server.sh"
 LIB = REPO / "tools/lib/game_install.sh"
 ORIGINAL = b"original-dll"
 TEST_DLL = b"test-dll"
@@ -29,7 +30,7 @@ def install_scripts(checkout: pathlib.Path) -> None:
     """Copy the scripts under test and the helper they source into a fake checkout."""
     (checkout / "tools/lib").mkdir(parents=True, exist_ok=True)
     shutil.copy(LIB, checkout / "tools/lib/game_install.sh")
-    for script in (SCRIPT, VERIFY_SERVER):
+    for script in (SCRIPT, VERIFY_SERVER, LAUNCH_SERVER):
         shutil.copy(script, checkout / script.name)
 
 
@@ -238,7 +239,7 @@ class LaunchClientTest(unittest.TestCase):
             fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
             result = self.run_script("--dll", str(self.dll))
         self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
-        self.assertIn("another game run (launch-client.sh or verify-server.sh) holds", result.stderr)
+        self.assertIn("another game run (launch-client.sh, launch-server.sh or verify-server.sh) holds", result.stderr)
         self.assertEqual(self.deployed(), ORIGINAL)
 
     def test_the_lock_is_released_when_the_run_ends_even_if_a_child_outlives_it(self):
@@ -419,6 +420,60 @@ class VerifyServerTest(unittest.TestCase):
                                     text=True, timeout=60)
         self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
         self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
+
+
+class LaunchServerTest(unittest.TestCase):
+    """launch-server.sh (#171): finds the game install without a local echovr/, and shares the run lock."""
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="launch-server-test-", dir="/var/tmp"))
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.game_root = make_game_root(self.tmp / "main")
+        self.fake_bin = self.tmp / "bin"
+        make_fake_bin(self.fake_bin)
+        self.checkout = self.tmp / "checkout"
+        self.checkout.mkdir()
+        install_scripts(self.checkout)
+        bin_dir = self.checkout / "build/mingw-release/bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "BugSplat64.dll").write_bytes(TEST_DLL)
+        self.win10 = self.game_root / "echovr/bin/win10"
+        self.env = dict(
+            os.environ,
+            PATH=f"{self.fake_bin}:{os.environ['PATH']}",
+            NEVR_GAME_ROOT=str(self.game_root),
+            NEVR_LAUNCH_LOCK=str(self.tmp / "launch.lock"),
+            FAKE_EXPECT_DLL=str(bin_dir / "BugSplat64.dll"),
+        )
+        self.env.pop("FAKE_ECHOVR_PIDS", None)
+
+    def run_script(self, env=None):
+        return subprocess.run([str(self.checkout / "launch-server.sh")], env=env or self.env, cwd=self.checkout,
+                              capture_output=True, text=True, timeout=60)
+
+    def test_deploys_into_the_game_root_from_a_checkout_without_echovr(self):
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), TEST_DLL)
+        self.assertFalse((self.checkout / "echovr").exists())
+
+    def test_refuses_while_another_game_run_holds_the_lock(self):
+        with open(self.tmp / "launch.lock", "w") as held:
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = self.run_script()
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
+
+    def test_refuses_while_echovr_is_running(self):
+        result = self.run_script(dict(self.env, FAKE_ECHOVR_PIDS="4242"))
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertIn("echovr.exe is already running (pid 4242)", result.stderr)
+        self.assertEqual((self.win10 / "BugSplat64.dll").read_bytes(), ORIGINAL)
+
+    def test_a_missing_game_install_is_a_clear_error(self):
+        result = self.run_script(dict(self.env, NEVR_GAME_ROOT=str(self.tmp / "nowhere")))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("no game install", result.stderr)
 
 
 if __name__ == "__main__":
