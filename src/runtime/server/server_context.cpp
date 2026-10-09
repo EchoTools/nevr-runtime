@@ -1,5 +1,7 @@
 #include "runtime/server/server_context.h"
 
+#include <cstring>
+
 namespace GameServer {
 
 // CallbackRegistry implementation
@@ -203,6 +205,29 @@ uint64_t ServerContext::GetEntrantCount() const {
   // CNSLobby.cpp:473 frees the array and zeroes items and count together).
   const auto& entrants = m_lobby->entrantData;
   return entrants.items ? entrants.count : 0;
+}
+
+bool ServerContext::FindEntrantSlotBySession(const GUID& session, uint64_t& slot) const {
+  std::shared_lock lock(m_stateMutex);
+
+  if (m_state == ServerState::Uninitialized || m_state == ServerState::Terminated || !m_lobby) {
+    return false;
+  }
+
+  const auto& entrants = m_lobby->entrantData;
+  const auto* sessions = m_lobby->playerSessions;
+  if (!sessions || !entrants.items) {
+    return false;
+  }
+
+  const uint64_t limit = m_lobby->playerSessionCount < entrants.count ? m_lobby->playerSessionCount : entrants.count;
+  for (uint64_t i = 0; i < limit; i++) {
+    if (std::memcmp(&sessions[i].guid, &session, sizeof(GUID)) == 0) {
+      slot = i;
+      return true;
+    }
+  }
+  return false;
 }
 
 void ServerContext::SetServerDbPeer(const EchoVR::TcpPeer& peer) {

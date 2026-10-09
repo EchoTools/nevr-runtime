@@ -50,6 +50,13 @@ OFFLINE_CONFIG = """{
 """
 
 
+# A dedicated server without services.socket_uri refuses to start (#16). The rig has no service to log
+# in to, so it opts in to an offline boot explicitly.
+OFFLINE_CONFIG_YAML = """services:
+  allow_offline_server: true
+"""
+
+
 class EnvError(Exception):
     """The environment cannot run the test. Exit code 2."""
 
@@ -154,7 +161,9 @@ foreach ($d in '_data','content','sourcedb') {
     cfg.write_text(OFFLINE_CONFIG)
     g.put(cfg, f"{SMB_ROOT}/echovr/_local", "config.json")
     g.put(HERE / "enum_windows.ps1", f"{SMB_ROOT}/run", "enum_windows.ps1")
-    g.ps(rf"Remove-Item '{ROOT}\echovr\_local\config.yaml' -Force -ErrorAction SilentlyContinue")
+    yaml_cfg = tmp / "config.yaml"
+    yaml_cfg.write_text(OFFLINE_CONFIG_YAML)
+    g.put(yaml_cfg, f"{SMB_ROOT}/echovr/_local", "config.yaml")
 
 
 def deploy(g: Guest, dll: pathlib.Path) -> None:
